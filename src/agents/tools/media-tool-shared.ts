@@ -1,38 +1,61 @@
-import { type Api, type Model } from "@earendil-works/pi-ai";
+import path from "node:path";
+import { safeFileURLToPath } from "@openclaw/fs-safe/advanced";
+import { normalizeInboundPathRoots } from "@openclaw/media-core/inbound-path-policy";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import {
+  findCapabilityProviderById,
+  resolveCapabilityModelRefForProviders,
+} from "../../../packages/media-generation-core/src/capability-model-ref.js";
+import { parseGenerationModelRef } from "../../../packages/media-generation-core/src/model-ref.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
-import { getDefaultLocalRoots } from "../../media/web-media.js";
-import { readSnakeCaseParamRaw } from "../../param-key.js";
-import { loadCapabilityManifestSnapshot } from "../../plugins/capability-provider-runtime.js";
-import { listAvailableManifestContractValues } from "../../plugins/manifest-contract-eligibility.js";
+import { resolveChannelInboundAttachmentRootsForChannel } from "../../media/channel-inbound-roots.js";
+import { getDefaultLocalRootsCore } from "../../media/local-media-access.js";
 import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+  classifyMediaReferenceSource,
+  normalizeMediaReferenceSource,
+} from "../../media/media-reference.js";
+import { getMediaDir } from "../../media/store.js";
+import type { WebMediaResult } from "../../media/web-media.js";
+import { readSnakeCaseParamRaw } from "../../param-key.js";
+import {
+  listAvailableManifestContractValues,
+  loadManifestContractSnapshot,
+} from "../../plugins/manifest-contract-eligibility.js";
+import { resolveUserPath } from "../../utils.js";
+import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
-import { normalizeModelRef } from "../model-selection.js";
-import { normalizeProviderId } from "../provider-id.js";
+import {
+  createSandboxBridgeReadFile,
+  resolveSandboxedBridgeMediaPath,
+  type SandboxedBridgeMediaPathConfig,
+} from "../sandbox-media-paths.js";
+import type { ToolFsPolicy } from "../tool-fs-policy.js";
+import { normalizeWorkspaceDir } from "../workspace-dir.js";
 import {
   ToolInputError,
   readNumberParam,
+  readPositiveIntegerParam,
   readStringArrayParam,
-  readStringParam,
+  readToolStringParam,
 } from "./common.js";
-import type { ImageModelConfig } from "./image-tool.helpers.js";
+import type { decodeDataUrl } from "./image-tool.helpers.js";
 import {
+  capabilityAuthOperation,
   getCurrentCapabilityMetadataSnapshot,
   hasSnapshotCapabilityAvailability,
 } from "./manifest-capability-availability.js";
 import {
   buildToolModelConfigFromCandidates,
   coerceToolModelConfig,
-  hasAuthForProvider,
+  hasProviderAuthForTool,
   hasToolModelConfig,
   resolveDefaultModelRef,
   type ToolModelConfig,
 } from "./model-config.helpers.js";
-import { getApiKeyForModel, normalizeWorkspaceDir, requireApiKey } from "./tool-runtime.helpers.js";
 
 type TextToolAttempt = {
   provider: string;
@@ -47,88 +70,28 @@ type TextToolResult = {
   attempts: TextToolAttempt[];
 };
 
-type GenerationModelRef = {
-  provider: string;
-  model: string;
-};
+export const REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS = 120_000;
 
-type ParseGenerationModelRef = (raw: string | undefined) => GenerationModelRef | null;
+export const MEDIA_GENERATE_DESCRIPTIONS = {
+  action: '"generate" default, "status" active task, "list" providers/models.',
+  filename: "Output filename hint; basename preserved in managed media dir.",
+} as const;
 
-type MediaReferenceDetailEntry = {
-  rewrittenFrom?: string;
-};
-
-type TaskRunDetailHandle = {
-  taskId: string;
-  runId: string;
-};
-
-export function applyImageModelConfigDefaults(
-  cfg: OpenClawConfig | undefined,
-  imageModelConfig: ImageModelConfig,
-): OpenClawConfig | undefined {
-  return applyAgentDefaultModelConfig(cfg, "imageModel", imageModelConfig);
-}
-
-export function applyImageGenerationModelConfigDefaults(
-  cfg: OpenClawConfig | undefined,
-  imageGenerationModelConfig: ToolModelConfig,
-): OpenClawConfig | undefined {
-  return applyAgentDefaultModelConfig(cfg, "imageGenerationModel", imageGenerationModelConfig);
-}
-
-export function applyVideoGenerationModelConfigDefaults(
-  cfg: OpenClawConfig | undefined,
-  videoGenerationModelConfig: ToolModelConfig,
-): OpenClawConfig | undefined {
-  return applyAgentDefaultModelConfig(cfg, "videoGenerationModel", videoGenerationModelConfig);
-}
-
-export function applyMusicGenerationModelConfigDefaults(
-  cfg: OpenClawConfig | undefined,
-  musicGenerationModelConfig: ToolModelConfig,
-): OpenClawConfig | undefined {
-  return applyAgentDefaultModelConfig(cfg, "musicGenerationModel", musicGenerationModelConfig);
+export function readGenerationDurationSeconds(args: Record<string, unknown>): number | undefined {
+  const value = readNumberParam(args, "durationSeconds", {
+    positiveInteger: true,
+    strict: true,
+  });
+  if (value === undefined && readSnakeCaseParamRaw(args, "durationSeconds") !== undefined) {
+    throw new ToolInputError("durationSeconds must be a positive integer");
+  }
+  return value;
 }
 
 export function readGenerationTimeoutMs(args: Record<string, unknown>): number | undefined {
-  const timeoutMs = readNumberParam(args, "timeoutMs", {
-    integer: true,
-    strict: true,
+  return readPositiveIntegerParam(args, "timeoutMs", {
+    message: "timeoutMs must be a positive integer in milliseconds.",
   });
-  if (timeoutMs === undefined) {
-    return undefined;
-  }
-  if (timeoutMs <= 0) {
-    throw new ToolInputError("timeoutMs must be a positive integer in milliseconds.");
-  }
-  return timeoutMs;
-}
-
-export function resolveRemoteMediaSsrfPolicy(
-  cfg: OpenClawConfig | undefined,
-): SsrFPolicy | undefined {
-  return cfg?.tools?.web?.fetch?.ssrfPolicy;
-}
-
-function applyAgentDefaultModelConfig(
-  cfg: OpenClawConfig | undefined,
-  key: "imageModel" | "imageGenerationModel" | "videoGenerationModel" | "musicGenerationModel",
-  modelConfig: ToolModelConfig,
-): OpenClawConfig | undefined {
-  if (!cfg) {
-    return undefined;
-  }
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        [key]: modelConfig,
-      },
-    },
-  };
 }
 
 type CapabilityProvider = {
@@ -146,113 +109,85 @@ type GenerationCapabilityProviderKey =
   | "videoGenerationProviders"
   | "musicGenerationProviders";
 
-function findCapabilityProviderById<T extends CapabilityProvider>(params: {
-  providers: T[];
-  providerId?: string;
-}): T | undefined {
-  const selectedProvider = normalizeProviderId(params.providerId ?? "");
-  return params.providers.find(
-    (provider) =>
-      normalizeProviderId(provider.id) === selectedProvider ||
-      (provider.aliases ?? []).some((alias) => normalizeProviderId(alias) === selectedProvider),
-  );
-}
-
-function parseCapabilityModelRefForProviders(params: {
-  providers: CapabilityProvider[];
-  raw?: string;
-  parseModelRef: ParseGenerationModelRef;
-}): GenerationModelRef | null {
-  const raw = normalizeOptionalString(params.raw);
-  if (!raw) {
-    return null;
-  }
-  const parsed = params.parseModelRef(raw);
-  if (
-    parsed &&
-    findCapabilityProviderById({
-      providers: params.providers,
-      providerId: parsed.provider,
-    })
-  ) {
-    return parsed;
-  }
-  const provider = params.providers.find((candidate) => {
-    const models = [candidate.defaultModel, ...(candidate.models ?? [])];
-    return models.some((model) => normalizeOptionalString(model) === raw);
-  });
-  if (provider) {
-    return { provider: provider.id, model: raw };
-  }
-  return parsed;
-}
-
 export function isCapabilityProviderConfigured<T extends CapabilityProvider>(params: {
   providers: T[];
   provider?: T;
   providerId?: string;
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
 }): boolean {
   const provider =
     params.provider ??
     findCapabilityProviderById({
       providers: params.providers,
       providerId: params.providerId,
+      normalizeProviderId,
     });
-  if (!provider) {
-    return params.providerId
-      ? hasAuthForProvider({
-          provider: params.providerId,
-          agentDir: params.agentDir,
-          authStore: params.authStore,
-        })
-      : false;
+  const providerId = provider ? provider.id : params.providerId;
+  if (providerId === undefined || (!provider && !providerId)) {
+    return false;
   }
-  if (provider.isConfigured) {
+  if (provider?.isConfigured) {
     return provider.isConfigured({
       cfg: params.cfg,
       agentDir: params.agentDir,
     });
   }
-  return hasAuthForProvider({
-    provider: provider.id,
+  return hasProviderAuthForTool({
+    provider: providerId,
+    cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     authStore: params.authStore,
+    authProfileStoreSource: params.authProfileStoreSource,
   });
+}
+
+export function createCapabilityProviderRuntimeDeps<T extends CapabilityProvider>(
+  providers: readonly T[] | undefined,
+) {
+  const prepared = providers ? [...providers] : undefined;
+  return prepared
+    ? {
+        getProvider: (providerId?: string) =>
+          findCapabilityProviderById({ providers: prepared, providerId, normalizeProviderId }),
+        listProviders: () => prepared,
+      }
+    : undefined;
 }
 
 export function resolveSelectedCapabilityProvider<T extends CapabilityProvider>(params: {
   providers: T[];
   modelConfig: ToolModelConfig;
   modelOverride?: string;
-  parseModelRef: ParseGenerationModelRef;
 }): T | undefined {
-  const selectedRef =
-    parseCapabilityModelRefForProviders({
+  for (const raw of [params.modelOverride, params.modelConfig.primary]) {
+    const selectedRef = resolveCapabilityModelRefForProviders({
       providers: params.providers,
-      raw: params.modelOverride,
-      parseModelRef: params.parseModelRef,
-    }) ??
-    parseCapabilityModelRefForProviders({
-      providers: params.providers,
-      raw: params.modelConfig.primary,
-      parseModelRef: params.parseModelRef,
+      raw,
+      parseModelRef: parseGenerationModelRef,
+      normalizeProviderId,
     });
-  if (!selectedRef) {
-    return undefined;
+    if (selectedRef) {
+      return findCapabilityProviderById({
+        providers: params.providers,
+        providerId: selectedRef.provider,
+        normalizeProviderId,
+      });
+    }
   }
-  return findCapabilityProviderById({
-    providers: params.providers,
-    providerId: selectedRef.provider,
-  });
+  return undefined;
 }
 
 function resolveCapabilityModelCandidatesForTool(params: {
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
   providers: CapabilityProvider[];
 }): string[] {
   const providerDefaults = new Map<string, { ref: string; aliases: string[] }>();
@@ -264,11 +199,8 @@ function resolveCapabilityModelCandidatesForTool(params: {
       !modelId ||
       providerDefaults.has(providerId) ||
       !isCapabilityProviderConfigured({
-        providers: params.providers,
+        ...params,
         provider,
-        cfg: params.cfg,
-        agentDir: params.agentDir,
-        authStore: params.authStore,
       })
     ) {
       continue;
@@ -283,65 +215,43 @@ function resolveCapabilityModelCandidatesForTool(params: {
   const primaryProvider = resolveDefaultModelRef(params.cfg).provider;
   const normalizedPrimaryProvider = normalizeProviderId(primaryProvider);
   const providerIds = [...providerDefaults.keys()].toSorted();
-  const matchesPrimaryProvider = (providerId: string): boolean => {
-    const entry = providerDefaults.get(providerId);
-    return (
-      normalizeProviderId(providerId) === normalizedPrimaryProvider ||
-      (entry?.aliases ?? []).includes(normalizedPrimaryProvider)
-    );
-  };
+  const matchesPrimaryProvider = (providerId: string): boolean =>
+    normalizeProviderId(providerId) === normalizedPrimaryProvider ||
+    providerDefaults.get(providerId)!.aliases.includes(normalizedPrimaryProvider);
   const orderedProviders = [
     ...providerIds.filter(matchesPrimaryProvider),
     ...providerIds.filter((providerId) => !matchesPrimaryProvider(providerId)),
   ];
-  const orderedRefs: string[] = [];
-  const seen = new Set<string>();
-  for (const providerId of orderedProviders) {
-    const entry = providerDefaults.get(providerId);
-    if (!entry || seen.has(entry.ref)) {
-      continue;
-    }
-    seen.add(entry.ref);
-    orderedRefs.push(entry.ref);
-  }
-  return orderedRefs;
+  return uniqueStrings(orderedProviders.map((id) => providerDefaults.get(id)!.ref));
 }
 
+/**
+ * Builds the model config for a generation tool from explicit config first, then configured
+ * provider defaults ordered around the agent's primary provider.
+ */
 export function resolveCapabilityModelConfigForTool(params: {
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
   modelConfig?: AgentModelConfig;
+  modelOverride?: string;
   providers: CapabilityProviderSource;
 }): ToolModelConfig | null {
-  const explicit = coerceToolModelConfig(params.modelConfig);
+  const configured = coerceToolModelConfig(params.modelConfig);
+  const modelOverride = normalizeOptionalString(params.modelOverride);
+  const explicit = modelOverride ? { ...configured, primary: modelOverride } : configured;
   if (hasToolModelConfig(explicit)) {
     return explicit;
   }
-  let resolvedProviders: CapabilityProvider[] | undefined;
-  const getProviders = (): CapabilityProvider[] => {
-    resolvedProviders ??=
-      typeof params.providers === "function" ? params.providers() : params.providers;
-    return resolvedProviders;
-  };
+  const providers = typeof params.providers === "function" ? params.providers() : params.providers;
   return buildToolModelConfigFromCandidates({
+    ...params,
     explicit,
-    agentDir: params.agentDir,
-    authStore: params.authStore,
-    candidates: resolveCapabilityModelCandidatesForTool({
-      cfg: params.cfg,
-      agentDir: params.agentDir,
-      authStore: params.authStore,
-      providers: getProviders(),
-    }),
+    candidates: resolveCapabilityModelCandidatesForTool({ ...params, providers }),
     isProviderConfigured: (providerId) =>
-      isCapabilityProviderConfigured({
-        providers: getProviders(),
-        providerId,
-        cfg: params.cfg,
-        agentDir: params.agentDir,
-        authStore: params.authStore,
-      }),
+      isCapabilityProviderConfigured({ ...params, providers, providerId }),
   });
 }
 
@@ -350,6 +260,7 @@ export function hasGenerationToolAvailability(params: {
   agentDir?: string;
   workspaceDir?: string;
   authStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
   modelConfig?: AgentModelConfig;
   providers?: CapabilityProvider[] | (() => CapabilityProvider[]);
   providerKey: GenerationCapabilityProviderKey;
@@ -363,13 +274,7 @@ export function hasGenerationToolAvailability(params: {
   const providers = typeof params.providers === "function" ? params.providers() : params.providers;
   if (providers) {
     return providers.some((provider) =>
-      isCapabilityProviderConfigured({
-        providers,
-        provider,
-        cfg: params.cfg,
-        agentDir: params.agentDir,
-        authStore: params.authStore,
-      }),
+      isCapabilityProviderConfigured({ ...params, providers, provider }),
     );
   }
   const snapshot =
@@ -377,9 +282,9 @@ export function hasGenerationToolAvailability(params: {
       config: params.cfg,
       workspaceDir: params.workspaceDir,
     }) ??
-    loadCapabilityManifestSnapshot({
-      cfg: params.cfg,
-      workspaceDir: params.workspaceDir,
+    loadManifestContractSnapshot({
+      config: params.cfg,
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     });
   if (
     hasSnapshotCapabilityAvailability({
@@ -396,84 +301,45 @@ export function hasGenerationToolAvailability(params: {
     contract: params.providerKey,
     config: params.cfg,
   }).some((providerId) =>
-    hasAuthForProvider({
+    hasProviderAuthForTool({
       provider: providerId,
+      cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
       agentDir: params.agentDir,
       authStore: params.authStore,
+      authProfileStoreSource: params.authProfileStoreSource,
+      capability: capabilityAuthOperation(params.providerKey),
     }),
   );
 }
 
-function formatQuotedList(values: readonly string[]): string {
-  if (values.length === 1) {
-    return `"${values[0]}"`;
+export function resolveGenerateAction(
+  args: Record<string, unknown>,
+): "generate" | "status" | "list" {
+  const action = readToolStringParam(args, "action")?.toLowerCase() ?? "generate";
+  if (action === "generate" || action === "status" || action === "list") {
+    return action;
   }
-  if (values.length === 2) {
-    return `"${values[0]}" or "${values[1]}"`;
-  }
-  return `${values
-    .slice(0, -1)
-    .map((value) => `"${value}"`)
-    .join(", ")}, or "${values[values.length - 1]}"`;
+  throw new ToolInputError('action must be "generate", "status", or "list"');
 }
 
-export function resolveGenerateAction<TAction extends string>(params: {
-  args: Record<string, unknown>;
-  allowed: readonly TAction[];
-  defaultAction: TAction;
-}): TAction {
-  const raw = readStringParam(params.args, "action");
-  if (!raw) {
-    return params.defaultAction;
-  }
-  const normalized = normalizeOptionalLowercaseString(raw);
-  if (normalized && (params.allowed as readonly string[]).includes(normalized)) {
-    return normalized as TAction;
-  }
-  throw new ToolInputError(`action must be ${formatQuotedList(params.allowed)}`);
-}
-
-export function readBooleanToolParam(
-  params: Record<string, unknown>,
-  key: string,
-): boolean | undefined {
-  const raw = readSnakeCaseParamRaw(params, key);
-  if (typeof raw === "boolean") {
-    return raw;
-  }
-  if (typeof raw === "string") {
-    const normalized = normalizeOptionalLowercaseString(raw);
-    if (normalized === "true") {
-      return true;
-    }
-    if (normalized === "false") {
-      return false;
-    }
-  }
-  return undefined;
-}
-
+/**
+ * Normalizes singular/plural media references, preserving positions when requested.
+ */
 export function normalizeMediaReferenceInputs(params: {
   args: Record<string, unknown>;
   singularKey: string;
   pluralKey: string;
   maxCount: number;
   label: string;
+  dedupe?: boolean;
 }): string[] {
-  const single = readStringParam(params.args, params.singularKey);
+  const single = readToolStringParam(params.args, params.singularKey);
   const multiple = readStringArrayParam(params.args, params.pluralKey);
-  const combined = [...(single ? [single] : []), ...(multiple ?? [])];
-  const deduped: string[] = [];
-  const seen = new Set<string>();
-  for (const candidate of combined) {
-    const trimmed = candidate.trim();
-    const dedupe = trimmed.startsWith("@") ? trimmed.slice(1).trim() : trimmed;
-    if (!dedupe || seen.has(dedupe)) {
-      continue;
-    }
-    seen.add(dedupe);
-    deduped.push(trimmed);
-  }
+  const deduped = normalizeMediaReferenceList(
+    [...(single ? [single] : []), ...(multiple ?? [])],
+    params.dedupe,
+  );
   if (deduped.length > params.maxCount) {
     throw new ToolInputError(
       `Too many ${params.label}: ${deduped.length} provided, maximum is ${params.maxCount}.`,
@@ -482,28 +348,39 @@ export function normalizeMediaReferenceInputs(params: {
   return deduped;
 }
 
-export function buildMediaReferenceDetails<T extends MediaReferenceDetailEntry>(params: {
-  entries: readonly T[];
-  singleKey: string;
-  pluralKey: string;
-  getResolvedInput: (entry: T) => string | undefined;
-  singleRewriteKey?: string;
-}): Record<string, unknown> {
-  if (params.entries.length === 1) {
-    const entry = params.entries[0];
-    if (!entry) {
-      return {};
+// Keep the first spelling, but treat optional @ prefixes as the same reference.
+export function normalizeMediaReferenceList(candidates: string[], dedupe = true): string[] {
+  const deduped: string[] = [];
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    const trimmed = candidate.trim();
+    const key = trimmed.startsWith("@") ? trimmed.slice(1).trim() : trimmed;
+    if (!key || (dedupe && seen.has(key))) {
+      continue;
     }
-    const rewriteKey = params.singleRewriteKey ?? "rewrittenFrom";
+    seen.add(key);
+    deduped.push(trimmed);
+  }
+  return deduped;
+}
+
+export function buildMediaReferenceDetails(
+  entries: readonly { resolvedInput: string; rewrittenFrom?: string }[],
+  kind: "image" | "video" | "pdf",
+  options?: { includeEmpty?: boolean; singleRewriteKey?: string },
+): Record<string, unknown> {
+  const single = entries.length === 1 ? entries[0] : undefined;
+  if (single) {
+    const rewriteKey = options?.singleRewriteKey ?? "rewrittenFrom";
     return {
-      [params.singleKey]: params.getResolvedInput(entry),
-      ...(entry.rewrittenFrom ? { [rewriteKey]: entry.rewrittenFrom } : {}),
+      [kind]: single.resolvedInput,
+      ...(single.rewrittenFrom ? { [rewriteKey]: single.rewrittenFrom } : {}),
     };
   }
-  if (params.entries.length > 1) {
+  if (entries.length > 1 || options?.includeEmpty) {
     return {
-      [params.pluralKey]: params.entries.map((entry) => ({
-        [params.singleKey]: params.getResolvedInput(entry),
+      [`${kind}s`]: entries.map((entry) => ({
+        [kind]: entry.resolvedInput,
         ...(entry.rewrittenFrom ? { rewrittenFrom: entry.rewrittenFrom } : {}),
       })),
     };
@@ -511,30 +388,192 @@ export function buildMediaReferenceDetails<T extends MediaReferenceDetailEntry>(
   return {};
 }
 
-export function buildTaskRunDetails(
-  handle: TaskRunDetailHandle | null | undefined,
-): Record<string, unknown> {
-  return handle
-    ? {
-        task: {
-          taskId: handle.taskId,
-          runId: handle.runId,
-        },
-      }
-    : {};
+export async function resolveMediaToolReferenceAccess(params: {
+  input: string;
+  isDataUrl: boolean;
+  workspaceDir?: string;
+  cwd?: string;
+  fsPolicy?: ToolFsPolicy;
+  sandbox?: SandboxedBridgeMediaPathConfig | null;
+}): Promise<{ resolvedPath: string | null; localRoots: string[]; rewrittenFrom?: string }> {
+  const root = normalizeWorkspaceDir(
+    params.sandbox?.root ?? params.fsPolicy?.root ?? params.cwd ?? params.workspaceDir,
+  );
+  const cwd = normalizeWorkspaceDir(params.cwd) ?? root;
+  const hostRoots = [getMediaDir(), ...(root ? [root] : [])];
+  const workspaceOnly = params.fsPolicy?.workspaceOnly ?? params.sandbox?.workspaceOnly === true;
+  const reference = classifyMediaReferenceSource(params.input);
+  const resolveHostPath = () => {
+    if (reference.isFileUrl) {
+      return safeFileURLToPath(params.input);
+    }
+    if (reference.isHttpUrl || reference.isMediaStoreUrl || reference.looksLikeWindowsDrivePath) {
+      return params.input;
+    }
+    const input = params.input.startsWith("~") ? resolveUserPath(params.input) : params.input;
+    return cwd ? path.resolve(cwd, input) : input;
+  };
+  const pathInfo: { resolved: string; rewrittenFrom?: string } = params.isDataUrl
+    ? { resolved: "" }
+    : params.sandbox
+      ? await resolveSandboxedBridgeMediaPath({
+          sandbox: params.sandbox,
+          mediaPath: params.input,
+          inboundFallbackDir: "media/inbound",
+        })
+      : { resolved: resolveHostPath() };
+  return {
+    resolvedPath: params.isDataUrl ? null : pathInfo.resolved,
+    localRoots: uniqueStrings([
+      ...(workspaceOnly ? hostRoots : [...getDefaultLocalRootsCore(), ...hostRoots]),
+      ...(params.fsPolicy?.readOnlyRoots ?? []),
+    ]),
+    ...(pathInfo.rewrittenFrom ? { rewrittenFrom: pathInfo.rewrittenFrom } : {}),
+  };
 }
 
-export function resolveMediaToolLocalRoots(
-  workspaceDirRaw: string | undefined,
-  options?: { workspaceOnly?: boolean },
-  _mediaSources?: readonly string[],
-): string[] {
-  const workspaceDir = normalizeWorkspaceDir(workspaceDirRaw);
-  if (options?.workspaceOnly) {
-    return workspaceDir ? [workspaceDir] : [];
+type LoadedToolReferenceMedia = WebMediaResult | ReturnType<typeof decodeDataUrl>;
+
+export type LoadedMediaToolReference<T> = {
+  source: T;
+  resolvedInput: string;
+  rewrittenFrom?: string;
+};
+
+export type MediaToolSandbox = Pick<
+  SandboxedBridgeMediaPathConfig,
+  "root" | "bridge" | "stagedMediaPaths" | "readOnlyResourceMounts"
+>;
+
+export function resolveMediaToolSandboxConfig(
+  sandbox: MediaToolSandbox | null | undefined,
+  workspaceOnly: boolean | undefined,
+): SandboxedBridgeMediaPathConfig | null {
+  if (!sandbox) {
+    return null;
   }
-  const roots = getDefaultLocalRoots();
-  return workspaceDir ? Array.from(new Set([...roots, workspaceDir])) : [...roots];
+  const root = sandbox.root.trim();
+  return root ? { ...sandbox, root, workspaceOnly: workspaceOnly === true } : null;
+}
+
+/** Loads generation references while retaining each tool's distinct transport and sandbox policy. */
+export async function loadMediaToolReferences<T>(params: {
+  inputs: string[];
+  toolName: "image_generate" | "video_generate" | "music_generate";
+  expectedKind: "image" | "video" | "audio";
+  sandbox: SandboxedBridgeMediaPathConfig | null;
+  workspaceDir?: string;
+  cwd?: string;
+  fsPolicy?: ToolFsPolicy;
+  maxBytes: number;
+  ssrfPolicy?: SsrFPolicy;
+  signal?: AbortSignal;
+  mapMedia: (media: LoadedToolReferenceMedia) => T;
+  mapRemote?: (url: string) => T;
+}): Promise<LoadedMediaToolReference<T>[]> {
+  const loaded: LoadedMediaToolReference<T>[] = [];
+  for (const rawInput of params.inputs) {
+    params.signal?.throwIfAborted();
+    const input = normalizeMediaReferenceSource(rawInput.trim().replace(/^@\s*/, ""));
+    if (!input) {
+      throw new ToolInputError(`${params.expectedKind} required (empty string in array)`);
+    }
+    const reference = classifyMediaReferenceSource(input);
+    if (reference.hasUnsupportedScheme) {
+      throw new ToolInputError(
+        `Unsupported ${params.expectedKind} reference: ${rawInput}. Use a file path, a file:// URL, a data: URL, or an http(s) URL.`,
+      );
+    }
+    if (params.sandbox && reference.isHttpUrl) {
+      const label = params.toolName === "image_generate" ? "" : `${params.expectedKind} `;
+      throw new ToolInputError(`Sandboxed ${params.toolName} does not allow remote ${label}URLs.`);
+    }
+    const resolvedInput = !params.sandbox && input.startsWith("~") ? resolveUserPath(input) : input;
+    if (reference.isHttpUrl && params.mapRemote) {
+      loaded.push({ source: params.mapRemote(resolvedInput), resolvedInput });
+      continue;
+    }
+    const { resolvedPath, localRoots, rewrittenFrom } = await resolveMediaToolReferenceAccess({
+      input: resolvedInput,
+      isDataUrl: reference.isDataUrl,
+      workspaceDir: params.workspaceDir,
+      cwd: params.cwd,
+      fsPolicy: params.fsPolicy,
+      sandbox: params.sandbox,
+    });
+    params.signal?.throwIfAborted();
+    if (reference.isDataUrl && params.expectedKind !== "image") {
+      throw new ToolInputError(
+        `${params.expectedKind} data: URLs are not supported for ${params.toolName}.`,
+      );
+    }
+    let media: LoadedToolReferenceMedia;
+    if (reference.isDataUrl) {
+      const { decodeDataUrl } = await import("./image-tool.helpers.js");
+      params.signal?.throwIfAborted();
+      media = decodeDataUrl(resolvedInput, { maxBytes: params.maxBytes });
+    } else {
+      const { loadWebMedia } = await import("../../media/web-media.js");
+      params.signal?.throwIfAborted();
+      const timeout =
+        params.toolName === "music_generate" && !params.sandbox
+          ? buildTimeoutAbortSignal({
+              timeoutMs: 30_000,
+              operation: "music-generate.reference-fetch",
+              ...(params.signal ? { signal: params.signal } : {}),
+              ...(reference.isHttpUrl ? { url: resolvedPath ?? resolvedInput } : {}),
+            })
+          : undefined;
+      try {
+        media = await loadWebMedia(resolvedPath ?? resolvedInput, {
+          maxBytes: params.maxBytes,
+          ...(params.sandbox
+            ? {
+                sandboxValidated: true,
+                readFile: createSandboxBridgeReadFile({ sandbox: params.sandbox }),
+              }
+            : { localRoots, ssrfPolicy: params.ssrfPolicy }),
+          ...(params.toolName === "image_generate" && reference.isHttpUrl
+            ? { readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS }
+            : {}),
+          ...(timeout?.signal || params.signal
+            ? { requestInit: { signal: timeout?.signal ?? params.signal } }
+            : {}),
+        });
+      } finally {
+        timeout?.cleanup();
+      }
+    }
+    params.signal?.throwIfAborted();
+    if (media.kind !== params.expectedKind) {
+      const kind = params.toolName === "image_generate" ? media.kind : (media.kind ?? "unknown");
+      throw new ToolInputError(`Unsupported media type: ${kind}`);
+    }
+    const loadedReference = { source: params.mapMedia(media), resolvedInput };
+    loaded.push(rewrittenFrom ? { ...loadedReference, rewrittenFrom } : loadedReference);
+  }
+  return loaded;
+}
+
+/**
+ * Resolves channel-scoped inbound attachment roots separately from host-local roots.
+ */
+export function resolveMediaToolInboundRoots(options?: {
+  workspaceOnly?: boolean;
+  cfg?: OpenClawConfig;
+  channelId?: string | null;
+  accountId?: string | null;
+}): string[] {
+  if (options?.workspaceOnly || !options?.cfg || !options.channelId) {
+    return [];
+  }
+  return normalizeInboundPathRoots(
+    resolveChannelInboundAttachmentRootsForChannel({
+      cfg: options.cfg,
+      channelId: options.channelId,
+      accountId: options.accountId,
+    }),
+  );
 }
 
 export function resolvePromptAndModelOverride(
@@ -561,49 +600,9 @@ export function buildTextToolResult(
     details: {
       model: `${result.provider}/${result.model}`,
       ...extraDetails,
+      // Code Mode and Tool Search read details instead of rendered content.
+      text: result.text,
       attempts: result.attempts,
     },
   };
-}
-
-export function resolveModelFromRegistry(params: {
-  modelRegistry: { find: (provider: string, modelId: string) => unknown };
-  provider: string;
-  modelId: string;
-}): Model<Api> {
-  const resolvedRef = normalizeModelRef(params.provider, params.modelId, {
-    allowPluginNormalization: false,
-  });
-  let model = params.modelRegistry.find(
-    resolvedRef.provider,
-    resolvedRef.model,
-  ) as Model<Api> | null;
-  if (!model && !resolvedRef.model.includes("/")) {
-    model = params.modelRegistry.find(
-      resolvedRef.provider,
-      `${resolvedRef.provider}/${resolvedRef.model}`,
-    ) as Model<Api> | null;
-  }
-  if (!model) {
-    throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
-  }
-  return model;
-}
-
-export async function resolveModelRuntimeApiKey(params: {
-  model: Model<Api>;
-  cfg: OpenClawConfig | undefined;
-  agentDir: string;
-  authStorage: {
-    setRuntimeApiKey: (provider: string, apiKey: string) => void;
-  };
-}): Promise<string> {
-  const apiKeyInfo = await getApiKeyForModel({
-    model: params.model,
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-  });
-  const apiKey = requireApiKey(apiKeyInfo, params.model.provider);
-  params.authStorage.setRuntimeApiKey(params.model.provider, apiKey);
-  return apiKey;
 }

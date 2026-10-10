@@ -1,22 +1,26 @@
 ---
-summary: "Adds the Tlon channel surface for sending and receiving OpenClaw messages."
+summary: "OpenClaw Tlon/Urbit channel plugin for chat workflows."
 read_when:
   - You are installing, configuring, or auditing the tlon plugin
-title: "Tlon plugin"
+title: "Tlon plugin reference"
 ---
 
-# Tlon plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
-Adds the Tlon channel surface for sending and receiving OpenClaw messages.
+OpenClaw Tlon/Urbit channel plugin for chat workflows.
 
 ## Distribution
 
 - Package: `@openclaw/tlon`
-- Install route: npm; ClawHub
+- Install route: npm or ClawHub: `clawhub:@openclaw/tlon`
 
 ## Surface
 
-channels: tlon; contracts: tools; skills
+- Channels: `tlon`
+- Skills
 
 ## Related docs
 

@@ -8,62 +8,68 @@ describe("plugins cli lazy runtime boundary", () => {
 
   afterEach(() => {
     vi.doUnmock("./plugins-cli.runtime.js");
+    vi.doUnmock("./plugins-marketplace-list-command.js");
+    vi.doUnmock("./plugins-authoring-command.js");
     vi.resetModules();
   });
 
-  it("renders parent help without importing the plugins runtime", async () => {
+  it.each([
+    {
+      name: "plugins",
+      argv: ["plugins"],
+      description: "Manage OpenClaw plugins and extensions",
+    },
+    {
+      name: "plugins marketplace",
+      argv: ["plugins", "marketplace"],
+      description: "Inspect Claude-compatible plugin marketplaces",
+    },
+  ])("renders $name parent help successfully without importing the runtime", async (testCase) => {
     const runtimeLoaded = vi.fn();
     vi.doMock("./plugins-cli.runtime.js", () => {
       runtimeLoaded();
-      return {
-        runPluginMarketplaceListCommand: vi.fn(),
-        runPluginsDisableCommand: vi.fn(),
-        runPluginsDoctorCommand: vi.fn(),
-        runPluginsEnableCommand: vi.fn(),
-        runPluginsInstallAction: vi.fn(),
-        runPluginsRegistryCommand: vi.fn(),
-      };
+      return {};
+    });
+    vi.doMock("./plugins-marketplace-list-command.js", () => {
+      runtimeLoaded();
+      return {};
     });
 
     const { registerPluginsCli } = await import("./plugins-cli.js");
     const program = new Command();
+    const helpOutput: string[] = [];
     program.exitOverride();
     program.configureOutput({
-      writeErr: () => {},
-      writeOut: () => {},
+      writeErr: (value) => helpOutput.push(value),
+      writeOut: (value) => helpOutput.push(value),
     });
     registerPluginsCli(program);
 
-    await expect(program.parseAsync(["plugins", "--help"], { from: "user" })).rejects.toMatchObject(
-      {
-        exitCode: 0,
-      },
-    );
-    expect(runtimeLoaded).not.toHaveBeenCalled();
+    const originalExitCode = process.exitCode;
+    try {
+      process.exitCode = undefined;
+      await program.parseAsync(testCase.argv, { from: "user" });
+
+      expect(process.exitCode).toBe(0);
+      expect(helpOutput.join("")).toContain(testCase.description);
+      expect(runtimeLoaded).not.toHaveBeenCalled();
+    } finally {
+      process.exitCode = originalExitCode;
+    }
   });
 
-  it("loads the plugins runtime for runtime-backed actions", async () => {
-    const runPluginsRegistryCommand = vi.fn().mockResolvedValue(undefined);
-    const runtimeLoaded = vi.fn();
-    vi.doMock("./plugins-cli.runtime.js", () => {
-      runtimeLoaded();
-      return {
-        runPluginMarketplaceListCommand: vi.fn(),
-        runPluginsDisableCommand: vi.fn(),
-        runPluginsDoctorCommand: vi.fn(),
-        runPluginsEnableCommand: vi.fn(),
-        runPluginsInstallAction: vi.fn(),
-        runPluginsRegistryCommand,
-      };
-    });
+  it("forwards JSON mode to plugin validation", async () => {
+    const runPluginsValidateCommand = vi.fn().mockResolvedValue(undefined);
+    vi.doMock("./plugins-authoring-command.js", () => ({ runPluginsValidateCommand }));
 
     const { registerPluginsCli } = await import("./plugins-cli.js");
-    const program = new Command();
-    registerPluginsCli(program);
+    const validateProgram = new Command();
+    registerPluginsCli(validateProgram);
+    await validateProgram.parseAsync(["plugins", "validate", "--json"], { from: "user" });
 
-    await program.parseAsync(["plugins", "registry", "--json"], { from: "user" });
-
-    expect(runtimeLoaded).toHaveBeenCalledTimes(1);
-    expect(runPluginsRegistryCommand).toHaveBeenCalledWith(expect.objectContaining({ json: true }));
+    expect(runPluginsValidateCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ json: true }),
+      expect.any(Command),
+    );
   });
 });

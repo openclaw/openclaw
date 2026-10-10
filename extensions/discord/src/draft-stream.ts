@@ -1,11 +1,12 @@
-import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-lifecycle";
+import { Routes } from "discord-api-types/v10";
+import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
-  createChannelMessage,
   deleteChannelMessage,
   editChannelMessage,
   type RequestClient,
 } from "./internal/discord.js";
+import { withDiscordRequestAuthority } from "./internal/request-authority.js";
 import { resolveDiscordMessageFlags } from "./send.shared.js";
 
 /** Discord messages cap at 2000 characters. */
@@ -13,17 +14,8 @@ const DISCORD_STREAM_MAX_CHARS = 2000;
 const DEFAULT_THROTTLE_MS = 1200;
 const DISCORD_PREVIEW_ALLOWED_MENTIONS = { parse: [] };
 
-type DiscordDraftStream = {
-  update: (text: string) => void;
-  flush: () => Promise<void>;
-  messageId: () => string | undefined;
-  clear: () => Promise<void>;
-  discardPending: () => Promise<void>;
-  seal: () => Promise<void>;
-  stop: () => Promise<void>;
-  /** Reset internal state so the next update creates a new message instead of editing. */
-  forceNewMessage: () => void;
-};
+type DiscordDraftMessage = { channelId: string; messageId: string };
+type DiscordDraftUpdate = { text: string; complete: boolean; assertCurrent?: () => void };
 
 export function createDiscordDraftStream(params: {
   rest: RequestClient;
@@ -36,33 +28,29 @@ export function createDiscordDraftStream(params: {
   suppressEmbeds?: boolean;
   log?: (message: string) => void;
   warn?: (message: string) => void;
-}): DiscordDraftStream {
+}) {
   const maxChars = Math.min(params.maxChars ?? DISCORD_STREAM_MAX_CHARS, DISCORD_STREAM_MAX_CHARS);
   const throttleMs = Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS);
   const minInitialChars = params.minInitialChars;
-  const channelId = params.channelId;
+  let channelId = params.channelId;
   const rest = params.rest;
   const flags = resolveDiscordMessageFlags({ suppressEmbeds: params.suppressEmbeds });
-  const resolveReplyToMessageId = () =>
-    typeof params.replyToMessageId === "function"
-      ? params.replyToMessageId()
-      : params.replyToMessageId;
 
   const streamState = { stopped: false, final: false };
-  let streamMessageId: string | undefined;
+  let streamMessage: DiscordDraftMessage | undefined;
   let lastSentText = "";
 
-  const sendOrEditStreamMessage = async (text: string): Promise<boolean> => {
-    // Allow final flush even if stopped (e.g., after clear()).
-    if (streamState.stopped && !streamState.final) {
-      return false;
-    }
+  const sendOrEditStreamMessage = async ({
+    text,
+    complete,
+  }: DiscordDraftUpdate): Promise<boolean> => {
+    const generation = lifecycle.generation;
+    const targetChannelId = channelId;
     const trimmed = text.trimEnd();
     if (!trimmed) {
       return false;
     }
     if (trimmed.length > maxChars) {
-      // Discord messages cap at 2000 chars.
       // Stop streaming once we exceed the cap to avoid repeated API failures.
       streamState.stopped = true;
       params.warn?.(`discord stream preview stopped (text length ${trimmed.length} > ${maxChars})`);
@@ -73,78 +61,118 @@ export function createDiscordDraftStream(params: {
     }
 
     // Debounce first preview send for better push notification quality.
-    if (streamMessageId === undefined && minInitialChars != null && !streamState.final) {
+    if (streamMessage === undefined && minInitialChars != null && !streamState.final && !complete) {
       if (trimmed.length < minInitialChars) {
         return false;
       }
     }
 
-    lastSentText = trimmed;
     try {
-      if (streamMessageId !== undefined) {
-        // Edit existing message
-        await editChannelMessage(rest, channelId, streamMessageId, {
-          body: {
-            content: trimmed,
-            allowed_mentions: DISCORD_PREVIEW_ALLOWED_MENTIONS,
-            ...(flags ? { flags } : {}),
-          },
+      const body = {
+        content: trimmed,
+        allowed_mentions: DISCORD_PREVIEW_ALLOWED_MENTIONS,
+        ...(flags ? { flags } : {}),
+      };
+      if (streamMessage !== undefined) {
+        await editChannelMessage(rest, streamMessage.channelId, streamMessage.messageId, {
+          body,
         });
+        if (generation === lifecycle.generation) {
+          lastSentText = trimmed;
+        }
         return true;
       }
-      // Send new message
-      const replyToMessageId = resolveReplyToMessageId()?.trim();
+      const replyToMessageId = (
+        typeof params.replyToMessageId === "function"
+          ? params.replyToMessageId()
+          : params.replyToMessageId
+      )?.trim();
       const messageReference = replyToMessageId
         ? { message_id: replyToMessageId, fail_if_not_exists: false }
         : undefined;
-      const sent = await createChannelMessage<{ id?: string }>(rest, channelId, {
-        body: {
-          content: trimmed,
-          allowed_mentions: DISCORD_PREVIEW_ALLOWED_MENTIONS,
-          ...(flags ? { flags } : {}),
-          ...(messageReference ? { message_reference: messageReference } : {}),
+      return await lifecycle.createMessage(
+        async () => {
+          const sent = (await rest.post(Routes.channelMessages(targetChannelId), {
+            body: {
+              ...body,
+              ...(messageReference ? { message_reference: messageReference } : {}),
+            },
+          })) as { id?: string }; // SAFETY: The create response's ID is checked before use.
+          return typeof sent?.id === "string" && sent.id
+            ? { channelId: targetChannelId, messageId: sent.id }
+            : undefined;
         },
-      });
-      const sentMessageId = sent?.id;
-      if (typeof sentMessageId !== "string" || !sentMessageId) {
-        streamState.stopped = true;
-        params.warn?.("discord stream preview stopped (missing message id from send)");
-        return false;
-      }
-      streamMessageId = sentMessageId;
-      return true;
+        (message) => {
+          if (!message) {
+            streamState.stopped = true;
+            params.warn?.("discord stream preview stopped (missing message id from send)");
+            return false;
+          }
+          streamMessage = message;
+          lastSentText = trimmed;
+          return true;
+        },
+      );
     } catch (err) {
+      if (generation !== lifecycle.generation) {
+        return true;
+      }
       streamState.stopped = true;
       params.warn?.(`discord stream preview failed: ${formatErrorMessage(err)}`);
       return false;
     }
   };
 
-  const readMessageId = () => streamMessageId;
-  const clearMessageId = () => {
-    streamMessageId = undefined;
-  };
-  const isValidStreamMessageId = (value: unknown): value is string => typeof value === "string";
-  const deleteStreamMessage = async (messageId: string) => {
-    await deleteChannelMessage(rest, channelId, messageId);
-  };
-
-  const { loop, update, stop, clear, discardPending, seal } = createFinalizableDraftLifecycle({
+  const lifecycle = createFinalizableDraftLifecycle<DiscordDraftMessage, DiscordDraftUpdate>({
     throttleMs,
+    coalesceInFlight: true,
     state: streamState,
-    sendOrEditStreamMessage,
-    readMessageId,
-    clearMessageId,
-    isValidMessageId: isValidStreamMessageId,
-    deleteMessage: deleteStreamMessage,
+    sendOrEditStreamMessage: (update) =>
+      withDiscordRequestAuthority(update.assertCurrent, () => sendOrEditStreamMessage(update)),
+    emptyValue: { text: "", complete: false },
+    isEmpty: (value) => !value.text,
+    readMessageId: () => streamMessage,
+    clearMessageId: () => {
+      streamMessage = undefined;
+      lastSentText = "";
+      loop.resetThrottleWindow();
+    },
+    isValidMessageId: (value): value is DiscordDraftMessage => value !== undefined,
+    deleteMessage: (message) => deleteChannelMessage(rest, message.channelId, message.messageId),
     warn: params.warn,
     warnPrefix: "discord stream preview cleanup failed",
   });
+  const { loop, update: updateDraft, stop, discardPending, seal } = lifecycle;
+  const update = (text: string, options?: { complete?: boolean; assertCurrent?: () => void }) =>
+    updateDraft({
+      text,
+      complete: options?.complete === true,
+      assertCurrent: options?.assertCurrent,
+    });
 
-  const forceNewMessage = () => {
-    streamMessageId = undefined;
-    lastSentText = "";
-    loop.resetPending();
+  /** Move the draft to another channel, preserving its current text. */
+  const retarget = async (nextChannelId: string) => {
+    const normalized = nextChannelId.trim();
+    if (!normalized || normalized === channelId) {
+      return;
+    }
+    await loop.waitForInFlight();
+    const pending = loop.takePending();
+    const previousMessage = streamMessage;
+    const previousText = pending.text || lastSentText;
+    channelId = normalized;
+    lifecycle.reset();
+    if (previousText) {
+      update(previousText, { complete: pending.text ? pending.complete : true });
+      await loop.flush();
+    }
+    if (previousMessage) {
+      if (!streamMessage) {
+        await lifecycle.retire(previousMessage, { defer: true });
+        throw new Error("discord stream preview retarget replacement failed");
+      }
+      await lifecycle.retire(previousMessage);
+    }
   };
 
   params.log?.(`discord stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);
@@ -152,11 +180,20 @@ export function createDiscordDraftStream(params: {
   return {
     update,
     flush: loop.flush,
-    messageId: () => streamMessageId,
-    clear,
+    messageId: () => streamMessage?.messageId,
+    lastDeliveredText: () => lastSentText,
+    isStopped: () => streamState.stopped,
+    clear: () => lifecycle.retireCurrent(discardPending),
+    deleteCurrentMessage: () =>
+      lifecycle.retireCurrent(async () => {
+        loop.resetPending();
+        await loop.waitForInFlight();
+      }),
     discardPending,
     seal,
     stop,
-    forceNewMessage,
+    retarget,
+    cleanupPendingMessages: lifecycle.cleanupPending,
+    forceNewMessage: lifecycle.reset,
   };
 }

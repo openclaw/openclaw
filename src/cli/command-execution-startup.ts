@@ -1,43 +1,35 @@
+import type { StartupConfigPreflightOptions } from "../commands/startup-config-preflight.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { resolveCliArgvInvocation } from "./argv-invocation.js";
-import { ensureCliCommandBootstrap } from "./command-bootstrap.js";
-import { resolveCliStartupPolicy } from "./command-startup-policy.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import type { resolveCliStartupPolicy } from "./command-startup-policy.js";
+import { measureCliCommandStartup } from "./command-startup-timing.js";
+import { ensureCliPluginRegistryLoaded } from "./plugin-registry-loader.js";
 
 type CliStartupPolicy = ReturnType<typeof resolveCliStartupPolicy>;
 
-export function resolveCliExecutionStartupContext(params: {
-  argv: string[];
-  jsonOutputMode: boolean;
-  env?: NodeJS.ProcessEnv;
-  routeMode?: boolean;
-}) {
-  const invocation = resolveCliArgvInvocation(params.argv);
-  const { commandPath } = invocation;
-  return {
-    invocation,
-    commandPath,
-    startupPolicy: resolveCliStartupPolicy({
-      argv: params.argv,
-      commandPath,
-      jsonOutputMode: params.jsonOutputMode,
-      env: params.env,
-      routeMode: params.routeMode,
-    }),
-  };
-}
+const configGuardModuleLoader = createLazyImportLoader(() => import("./program/config-guard.js"));
+
+const hasJsonFlag = (argv: readonly string[]) =>
+  argv.some((arg) => arg === "--json" || arg.startsWith("--json="));
+
+const hasVersionFlag = (argv: readonly string[]) =>
+  argv.some((arg) => arg === "--version" || arg === "-V");
 
 export async function applyCliExecutionStartupPresentation(params: {
   argv?: string[];
-  routeLogsToStderrOnSuppress?: boolean;
   startupPolicy: CliStartupPolicy;
   showBanner?: boolean;
   version?: string;
 }) {
-  if (params.startupPolicy.suppressDoctorStdout && params.routeLogsToStderrOnSuppress !== false) {
+  // Machine-readable commands must route diagnostics away before startup can print.
+  if (params.startupPolicy.suppressDoctorStdout) {
     routeLogsToStderr();
   }
   if (params.startupPolicy.hideBanner || params.showBanner === false || !params.version) {
+    return;
+  }
+  if (params.argv && (hasJsonFlag(params.argv) || hasVersionFlag(params.argv))) {
     return;
   }
   const { emitCliBanner } = await import("./banner.js");
@@ -53,16 +45,60 @@ export async function ensureCliExecutionBootstrap(params: {
   commandPath: string[];
   startupPolicy: CliStartupPolicy;
   allowInvalid?: boolean;
+  beforeStatePreparation?: StartupConfigPreflightOptions["beforeStatePreparation"];
   loadPlugins?: boolean;
   skipConfigGuard?: boolean;
+  validateConfigOnly?: boolean;
 }) {
-  await ensureCliCommandBootstrap({
-    runtime: params.runtime,
-    commandPath: params.commandPath,
-    suppressDoctorStdout: params.startupPolicy.suppressDoctorStdout,
-    allowInvalid: params.allowInvalid,
-    loadPlugins: params.loadPlugins ?? params.startupPolicy.loadPlugins,
-    pluginRegistry: params.startupPolicy.pluginRegistry,
-    skipConfigGuard: params.skipConfigGuard ?? params.startupPolicy.skipConfigGuard,
-  });
+  const { runtime, commandPath, startupPolicy, allowInvalid, beforeStatePreparation } = params;
+  const { suppressDoctorStdout, pluginRegistry } = startupPolicy;
+  const loadPlugins = params.loadPlugins ?? startupPolicy.loadPlugins;
+  const skipConfigGuard = params.skipConfigGuard ?? startupPolicy.skipConfigGuard;
+  const validateConfigOnly = params.validateConfigOnly ?? startupPolicy.validateConfigOnly;
+  if (!skipConfigGuard) {
+    await measureCliCommandStartup("config-ready", async () => {
+      const { ensureConfigReady } = await measureCliCommandStartup("config-guard-import", () =>
+        configGuardModuleLoader.load(),
+      );
+      const runConfigGuard = () =>
+        ensureConfigReady({
+          runtime,
+          commandPath,
+          measure: (stage, run) => measureCliCommandStartup(stage, run),
+          ...(allowInvalid ? { allowInvalid: true } : {}),
+          ...(validateConfigOnly ? { validateConfigOnly: true } : {}),
+          ...(beforeStatePreparation ? { beforeStatePreparation } : {}),
+          ...(suppressDoctorStdout ? { suppressDoctorStdout: true } : {}),
+        });
+      const nativeGatewayBootstrap =
+        commandPath[0] === "gateway" &&
+        (commandPath.length === 1 || (commandPath.length === 2 && commandPath[1] === "run"));
+      if (nativeGatewayBootstrap && !validateConfigOnly) {
+        const [
+          { withConfigSnapshotPreparation },
+          { prepareHostConfigSnapshot },
+          { resolveConfigPath },
+        ] = await Promise.all([
+          import("../config/io.snapshot-preparation-scope.js"),
+          import("../config/io.snapshot-preparation.js"),
+          import("../config/paths.js"),
+        ]);
+        await withConfigSnapshotPreparation(
+          { configPath: resolveConfigPath(), prepare: prepareHostConfigSnapshot },
+          runConfigGuard,
+        );
+      } else {
+        await runConfigGuard();
+      }
+    });
+  }
+  if (!loadPlugins) {
+    return;
+  }
+  await measureCliCommandStartup("plugin-registry", () =>
+    ensureCliPluginRegistryLoaded({
+      scope: pluginRegistry.scope,
+      routeLogsToStderr: suppressDoctorStdout,
+    }),
+  );
 }

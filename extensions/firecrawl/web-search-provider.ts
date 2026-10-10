@@ -1,1 +1,4 @@
-export { createFirecrawlWebSearchProvider } from "./src/firecrawl-search-provider.js";
+export {
+  createFirecrawlFreeWebSearchProvider,
+  createFirecrawlWebSearchProvider,
+} from "./src/firecrawl-search-provider.js";

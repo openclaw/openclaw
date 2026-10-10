@@ -1,26 +1,30 @@
+/**
+ * Auth profile repair helpers.
+ * Migrates legacy provider:default OAuth config references to safer modern
+ * profile ids chosen from store metadata and auth order.
+ */
+import {
+  findNormalizedProviderKey,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import type { AuthProfileConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { findNormalizedProviderKey, normalizeProviderId } from "../provider-id.js";
 import { resolveAuthProfileMetadata } from "./identity.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
 import type { AuthProfileIdRepairResult, AuthProfileStore } from "./types.js";
 
+// Legacy OAuth setup used provider:default profile ids. Repair prefers a
+// matching email/lastGood/current OAuth profile instead of guessing broadly.
 function getProfileSuffix(profileId: string): string {
   const idx = profileId.indexOf(":");
-  if (idx < 0) {
-    return "";
-  }
-  return profileId.slice(idx + 1);
+  return idx < 0 ? "" : profileId.slice(idx + 1);
 }
 
 function isEmailLike(value: string): boolean {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return false;
-  }
-  return trimmed.includes("@") && trimmed.includes(".");
+  return value.includes("@") && value.includes(".");
 }
 
+/** Suggests a modern OAuth profile id for a legacy provider:default profile. */
 export function suggestOAuthProfileIdForLegacyDefault(params: {
   cfg?: OpenClawConfig;
   store: AuthProfileStore;
@@ -43,7 +47,8 @@ export function suggestOAuthProfileIdForLegacyDefault(params: {
   }
 
   const oauthProfiles = listProfilesForProvider(params.store, providerKey).filter(
-    (id) => params.store.profiles[id]?.type === "oauth",
+    (id) =>
+      params.store.profiles[id]?.type === "oauth" && !params.store.profiles[id]?.setup?.replacement,
   );
   if (oauthProfiles.length === 0) {
     return null;
@@ -75,13 +80,10 @@ export function suggestOAuthProfileIdForLegacyDefault(params: {
   }
 
   const emailLike = nonLegacy.filter((id) => isEmailLike(getProfileSuffix(id)));
-  if (emailLike.length === 1) {
-    return emailLike[0] ?? null;
-  }
-
-  return null;
+  return emailLike.length === 1 ? (emailLike[0] ?? null) : null;
 }
 
+/** Migrates config auth profile references away from a legacy OAuth default id. */
 export function repairOAuthProfileIdMismatch(params: {
   cfg: OpenClawConfig;
   store: AuthProfileStore;
@@ -91,13 +93,11 @@ export function repairOAuthProfileIdMismatch(params: {
   const legacyProfileId =
     params.legacyProfileId ?? `${normalizeProviderId(params.provider)}:default`;
   const legacyCfg = params.cfg.auth?.profiles?.[legacyProfileId];
-  if (!legacyCfg) {
-    return { config: params.cfg, changes: [], migrated: false };
-  }
-  if (legacyCfg.mode !== "oauth") {
-    return { config: params.cfg, changes: [], migrated: false };
-  }
-  if (normalizeProviderId(legacyCfg.provider) !== normalizeProviderId(params.provider)) {
+  if (
+    !legacyCfg ||
+    legacyCfg.mode !== "oauth" ||
+    normalizeProviderId(legacyCfg.provider) !== normalizeProviderId(params.provider)
+  ) {
     return { config: params.cfg, changes: [], migrated: false };
   }
 
@@ -111,15 +111,22 @@ export function repairOAuthProfileIdMismatch(params: {
     return { config: params.cfg, changes: [], migrated: false };
   }
 
+  // Skip repair if destination profile already exists as a separate
+  // user-configured account. Overwriting it would destroy the existing
+  // account's config (displayName, email, etc.) and collapse two distinct
+  // accounts into one. See #97522.
+  if (params.cfg.auth?.profiles?.[toProfileId]) {
+    return { config: params.cfg, changes: [], migrated: false };
+  }
+
   const { email: toEmail, displayName: toDisplayName } = resolveAuthProfileMetadata({
+    cfg: params.cfg,
     store: params.store,
     profileId: toProfileId,
   });
   const { email: _legacyEmail, displayName: _legacyDisplayName, ...legacyCfgRest } = legacyCfg;
 
-  const nextProfiles = {
-    ...params.cfg.auth?.profiles,
-  } as Record<string, AuthProfileConfig>;
+  const nextProfiles: Record<string, AuthProfileConfig> = { ...params.cfg.auth?.profiles };
   delete nextProfiles[legacyProfileId];
   nextProfiles[toProfileId] = {
     ...legacyCfgRest,

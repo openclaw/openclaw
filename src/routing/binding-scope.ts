@@ -1,22 +1,25 @@
+// Binding scope helpers normalize route binding scope values.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import type { AgentRouteBinding } from "../config/types.agents.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeAccountId, normalizeAgentId } from "./session-key.js";
 
-export type RouteBindingScopeConstraint = {
+// Route binding scopes constrain a configured agent/account binding to a guild,
+// team, group space, and optionally channel/platform role ids.
+type RouteBindingScopeConstraint = {
   guildId?: string | null;
   teamId?: string | null;
   roles?: string[] | null;
 };
 
-export type RouteBindingScope = {
+type RouteBindingScope = {
   guildId?: string | null;
   teamId?: string | null;
   groupSpace?: string | null;
   memberRoleIds?: Iterable<string> | null;
 };
 
-export type NormalizedRouteBindingMatch = {
+type NormalizedRouteBindingMatch = {
   agentId: string;
   accountId: string;
   channelId: string;
@@ -37,16 +40,14 @@ export function normalizeRouteBindingRoles(value: string[] | null | undefined): 
 }
 
 export function normalizeRouteBindingChannelId(raw?: string | null): string | null {
-  const normalized = normalizeChatChannelId(raw);
-  if (normalized) {
-    return normalized;
-  }
-  const fallback = normalizeLowercaseStringOrEmpty(raw);
-  return fallback || null;
+  return normalizeChatChannelId(raw) || normalizeLowercaseStringOrEmpty(raw) || null;
 }
 
+// Convert a binding match into the same canonical ids used by session routing.
+// Diagnostics include implicit defaults; outbound account selection requires explicit bindings.
 export function resolveNormalizedRouteBindingMatch(
   binding: AgentRouteBinding,
+  options?: { includeImplicitDefaultAccount?: boolean },
 ): NormalizedRouteBindingMatch | null {
   if (!binding || typeof binding !== "object") {
     return null;
@@ -59,8 +60,11 @@ export function resolveNormalizedRouteBindingMatch(
   if (!channelId) {
     return null;
   }
-  const accountId = typeof match.accountId === "string" ? match.accountId.trim() : "";
-  if (!accountId || accountId === "*") {
+  if (match.accountId !== undefined && typeof match.accountId !== "string") {
+    return null;
+  }
+  const accountId = match.accountId?.trim();
+  if (accountId === "*" || (!accountId && !options?.includeImplicitDefaultAccount)) {
     return null;
   }
   return {
@@ -68,17 +72,6 @@ export function resolveNormalizedRouteBindingMatch(
     accountId: normalizeAccountId(accountId),
     channelId,
   };
-}
-
-function scopeIdMatches(params: {
-  constraint: string | null | undefined;
-  exact: string;
-  groupSpace: string;
-}): boolean {
-  if (!params.constraint) {
-    return true;
-  }
-  return params.constraint === params.exact || params.constraint === params.groupSpace;
 }
 
 function hasRoleLookup(
@@ -97,6 +90,8 @@ function hasAnyRouteBindingRole(
   if (hasRoleLookup(memberRoleIds)) {
     return roles.some((role) => memberRoleIds.has(role));
   }
+  // Most callers pass a Set, but arrays/iterables from channel adapters are
+  // accepted to avoid forcing allocation at every routing call site.
   const memberRoleIdSet = new Set(memberRoleIds);
   return roles.some((role) => memberRoleIdSet.has(role));
 }
@@ -108,10 +103,10 @@ export function routeBindingScopeMatches(
   const guildId = normalizeRouteBindingId(scope.guildId);
   const teamId = normalizeRouteBindingId(scope.teamId);
   const groupSpace = normalizeRouteBindingId(scope.groupSpace);
-  if (!scopeIdMatches({ constraint: constraint.guildId, exact: guildId, groupSpace })) {
+  if (constraint.guildId && constraint.guildId !== guildId && constraint.guildId !== groupSpace) {
     return false;
   }
-  if (!scopeIdMatches({ constraint: constraint.teamId, exact: teamId, groupSpace })) {
+  if (constraint.teamId && constraint.teamId !== teamId && constraint.teamId !== groupSpace) {
     return false;
   }
 

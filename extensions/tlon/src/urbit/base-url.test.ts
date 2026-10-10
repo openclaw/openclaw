@@ -1,3 +1,4 @@
+// Tlon tests cover base url plugin behavior.
 import { describe, expect, it } from "vitest";
 import { validateUrbitBaseUrl } from "./base-url.js";
 
@@ -44,5 +45,15 @@ describe("validateUrbitBaseUrl", () => {
   it("preserves port in the normalized origin", () => {
     const result = expectValidBaseUrl("http://example.com:8080/~/login");
     expect(result.baseUrl).toBe("http://example.com:8080");
+  });
+
+  it.each([
+    ["http://[::1]:8080/~/login?token=ignored", "http://[::1]:8080"],
+    ["https://[2001:db8::1]/path#fragment", "https://[2001:db8::1]"],
+    ["[2001:db8::2]:8443/path", "https://[2001:db8::2]:8443"],
+  ])("preserves a usable IPv6 ship origin for %s", (raw, expectedOrigin) => {
+    const result = expectValidBaseUrl(raw);
+    expect(result.baseUrl).toBe(expectedOrigin);
+    expect(new URL("/~/login", result.baseUrl).origin).toBe(expectedOrigin);
   });
 });

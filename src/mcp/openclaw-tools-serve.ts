@@ -5,32 +5,102 @@
  * Or: bun src/mcp/openclaw-tools-serve.ts
  */
 import { pathToFileURL } from "node:url";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { resolveRequesterToolPolicies } from "../agents/requester-tool-policy.js";
+import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
+import { AUTOMATIONS_TOOL_NAME } from "../agents/tools/automations-tool-name.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { createCronTool } from "../agents/tools/cron-tool.js";
+import { createSystemAgentTool } from "../agents/tools/system-agent-tool.js";
+import type { SystemAgentToolOptions } from "../agents/tools/system-agent-tool.js";
+import { getRuntimeConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import {
+  OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV,
+  resolveToolsMcpAgentSessionKey as resolveOpenClawToolsMcpAgentSessionKey,
+  resolveToolsMcpAgentId,
+  resolveToolsMcpSessionContext,
+} from "./agent-session-env.js";
+import {
+  resolveOpenClawToolsMcpSystemAgentApproval,
+  resolveOpenClawToolsMcpSystemAgentSurface,
+  resolveOpenClawToolsMcpToolSelection,
+  type OpenClawToolsMcpToolId,
+} from "./openclaw-tools-serve-config.js";
 import { connectToolsMcpServerToStdio, createToolsMcpServer } from "./tools-stdio-server.js";
 
-export function resolveOpenClawToolsForMcp(): AnyAgentTool[] {
-  return [createCronTool()];
-}
+export {
+  OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_SURFACE_ENV,
+  OPENCLAW_TOOLS_MCP_TOOLS_ENV,
+} from "./openclaw-tools-serve-config.js";
 
-function createOpenClawToolsMcpServer(
+export { OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV } from "./agent-session-env.js";
+
+export { resolveOpenClawToolsMcpAgentSessionKey };
+
+export function resolveOpenClawToolsForMcp(
   params: {
-    tools?: AnyAgentTool[];
+    agentSessionKey?: string;
+    agentId?: string;
+    tools?: OpenClawToolsMcpToolId[];
+    systemAgentSurface?: SystemAgentToolOptions["surface"];
+    config?: OpenClawConfig;
   } = {},
-): Server {
-  const tools = params.tools ?? resolveOpenClawToolsForMcp();
-  return createToolsMcpServer({ name: "openclaw-tools", tools });
+): AnyAgentTool[] {
+  const selection = params.tools ?? resolveOpenClawToolsMcpToolSelection();
+  const agentSessionKey = (
+    params.agentSessionKey ?? resolveOpenClawToolsMcpAgentSessionKey()
+  )?.trim();
+  const tools = selection.map((tool) => {
+    if (tool === "openclaw") {
+      return createSystemAgentTool({
+        agentId: params.agentId,
+        surface: params.systemAgentSurface ?? resolveOpenClawToolsMcpSystemAgentSurface(),
+        ...resolveOpenClawToolsMcpSystemAgentApproval(),
+      });
+    }
+    if (!agentSessionKey) {
+      throw new Error(`${OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV} is required`);
+    }
+    const context = resolveToolsMcpSessionContext({ agentSessionKey, agentId: params.agentId });
+    return createCronTool({
+      agentSessionKey,
+      agentId: context.agentId,
+      // Same host-config resolution as plugin-tools-serve: the advertised cron
+      // surface must reflect this deployment's cron.triggers.enabled gate.
+      config: params.config ?? getRuntimeConfig(),
+      creatorToolAllowlist: [{ name: AUTOMATIONS_TOOL_NAME }],
+    });
+  });
+  if (!agentSessionKey) {
+    return tools;
+  }
+  const requesterPolicies = resolveRequesterToolPolicies({
+    config: params.config ?? getRuntimeConfig(),
+    agentId: params.agentId,
+    sessionKey: agentSessionKey,
+    senderPolicyMode: "never",
+  });
+  return tools.filter((tool) =>
+    isToolAllowedByPolicies(tool.name, [
+      requesterPolicies.groupPolicy,
+      requesterPolicies.senderPolicy,
+      requesterPolicies.subagentPolicy,
+      requesterPolicies.inheritedToolPolicy,
+    ]),
+  );
 }
 
 async function serveOpenClawToolsMcp(): Promise<void> {
-  const server = createOpenClawToolsMcpServer();
+  const server = createToolsMcpServer({
+    name: "openclaw-tools",
+    tools: resolveOpenClawToolsForMcp({ agentId: resolveToolsMcpAgentId() }),
+  });
   await connectToolsMcpServerToStdio(server);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  serveOpenClawToolsMcp().catch((err) => {
+  serveOpenClawToolsMcp().catch((err: unknown) => {
     process.stderr.write(`openclaw-tools-serve: ${formatErrorMessage(err)}\n`);
     process.exit(1);
   });

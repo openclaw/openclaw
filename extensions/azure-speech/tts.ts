@@ -1,30 +1,18 @@
-import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/provider-http";
 import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech-core";
-import { trimToUndefined } from "openclaw/plugin-sdk/speech-core";
 import {
-  fetchWithSsrFGuard,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname,
-} from "openclaw/plugin-sdk/ssrf-runtime";
+  asOptionalRecord,
+  normalizeOptionalString as trimToUndefined,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const DEFAULT_AZURE_SPEECH_VOICE = "en-US-JennyNeural";
 export const DEFAULT_AZURE_SPEECH_LANG = "en-US";
 export const DEFAULT_AZURE_SPEECH_AUDIO_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
 export const DEFAULT_AZURE_SPEECH_VOICE_NOTE_FORMAT = "ogg-24khz-16bit-mono-opus";
 export const DEFAULT_AZURE_SPEECH_TELEPHONY_FORMAT = "raw-8khz-8bit-mono-mulaw";
-
-type AzureSpeechVoiceEntry = {
-  ShortName?: string;
-  DisplayName?: string;
-  LocalName?: string;
-  Locale?: string;
-  Gender?: string;
-  Status?: string;
-  IsDeprecated?: boolean | string;
-  VoiceTag?: {
-    VoicePersonalities?: string[];
-    TailoredScenarios?: string[];
-  };
-};
+const DEFAULT_AZURE_SPEECH_MAX_BYTES = 16 * 1024 * 1024;
+// Voice discovery should fail boundedly instead of waiting forever when the
+// Azure Speech voices endpoint accepts the connection but never responds.
+const DEFAULT_AZURE_SPEECH_VOICE_LIST_TIMEOUT_MS = 30_000;
 
 export function normalizeAzureSpeechBaseUrl(params: {
   baseUrl?: string;
@@ -60,11 +48,7 @@ function escapeXmlAttr(value: string): string {
   return escapeXmlText(value).replace(/"/g, "&quot;").replace(/'/g, "&apos;");
 }
 
-export function buildAzureSpeechSsml(params: {
-  text: string;
-  voice: string;
-  lang?: string;
-}): string {
+function buildAzureSpeechSsml(params: { text: string; voice: string; lang?: string }): string {
   const lang = trimToUndefined(params.lang) ?? DEFAULT_AZURE_SPEECH_LANG;
   return (
     `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" ` +
@@ -102,15 +86,13 @@ export function isAzureSpeechVoiceCompatible(outputFormat: string): boolean {
   return normalized.startsWith("ogg-") && normalized.includes("opus");
 }
 
-function formatVoiceDescription(entry: AzureSpeechVoiceEntry): string | undefined {
-  const parts = [
-    ...(entry.VoiceTag?.TailoredScenarios ?? []),
-    ...(entry.VoiceTag?.VoicePersonalities ?? []),
-  ].filter((value) => trimToUndefined(value) !== undefined);
-  return parts.length > 0 ? parts.join(", ") : undefined;
+function readAzureVoiceTagStrings(value: unknown): string[] | undefined {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => trimToUndefined(entry) !== undefined)
+    : undefined;
 }
 
-function isDeprecatedVoice(entry: AzureSpeechVoiceEntry): boolean {
+function isDeprecatedVoice(entry: Record<string, unknown>): boolean {
   if (entry.IsDeprecated === true) {
     return true;
   }
@@ -129,6 +111,10 @@ export async function listAzureSpeechVoices(params: {
   timeoutMs?: number;
 }): Promise<SpeechVoiceOption[]> {
   const url = azureSpeechUrl({ ...params, path: "/cognitiveservices/voices/list" });
+  const { assertOkOrThrowProviderError, readProviderJsonResponse } =
+    await import("openclaw/plugin-sdk/provider-http");
+  const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
+    await import("openclaw/plugin-sdk/ssrf-runtime");
   const { response, release } = await fetchWithSsrFGuard({
     url,
     init: {
@@ -137,28 +123,36 @@ export async function listAzureSpeechVoices(params: {
         "Ocp-Apim-Subscription-Key": params.apiKey,
       },
     },
-    timeoutMs: params.timeoutMs,
+    timeoutMs: params.timeoutMs ?? DEFAULT_AZURE_SPEECH_VOICE_LIST_TIMEOUT_MS,
     policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(url),
     auditContext: "azure-speech.voices",
   });
 
   try {
     await assertOkOrThrowProviderError(response, "Azure Speech voices API error");
-    const voices = (await response.json()) as AzureSpeechVoiceEntry[];
+    const voices = await readProviderJsonResponse<unknown>(response, "azure-speech.voices");
     return Array.isArray(voices)
-      ? voices
-          .filter((voice) => !isDeprecatedVoice(voice))
-          .map((voice) => ({
-            id: trimToUndefined(voice.ShortName) ?? "",
-            name: trimToUndefined(voice.DisplayName) ?? trimToUndefined(voice.LocalName),
-            description: formatVoiceDescription(voice),
-            locale: trimToUndefined(voice.Locale),
-            gender: trimToUndefined(voice.Gender),
-            personalities: voice.VoiceTag?.VoicePersonalities?.filter(
-              (value): value is string => trimToUndefined(value) !== undefined,
-            ),
-          }))
-          .filter((voice) => voice.id.length > 0)
+      ? voices.flatMap((value) => {
+          const voice = asOptionalRecord(value);
+          const id = trimToUndefined(voice?.ShortName);
+          if (!voice || !id || isDeprecatedVoice(voice)) {
+            return [];
+          }
+          const voiceTag = asOptionalRecord(voice.VoiceTag);
+          const tailoredScenarios = readAzureVoiceTagStrings(voiceTag?.TailoredScenarios);
+          const personalities = readAzureVoiceTagStrings(voiceTag?.VoicePersonalities);
+          const description = [...(tailoredScenarios ?? []), ...(personalities ?? [])];
+          return [
+            {
+              id,
+              name: trimToUndefined(voice.DisplayName) ?? trimToUndefined(voice.LocalName),
+              description: description.length > 0 ? description.join(", ") : undefined,
+              locale: trimToUndefined(voice.Locale),
+              gender: trimToUndefined(voice.Gender),
+              personalities,
+            },
+          ];
+        })
       : [];
   } finally {
     await release();
@@ -175,10 +169,15 @@ export async function azureSpeechTTS(params: {
   lang?: string;
   outputFormat?: string;
   timeoutMs?: number;
+  maxBytes?: number;
 }): Promise<Buffer> {
   const voice = trimToUndefined(params.voice) ?? DEFAULT_AZURE_SPEECH_VOICE;
   const outputFormat = trimToUndefined(params.outputFormat) ?? DEFAULT_AZURE_SPEECH_AUDIO_FORMAT;
   const url = azureSpeechUrl({ ...params, path: "/cognitiveservices/v1" });
+  const { assertOkOrThrowProviderError, readProviderBinaryResponse } =
+    await import("openclaw/plugin-sdk/provider-http");
+  const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
+    await import("openclaw/plugin-sdk/ssrf-runtime");
   const { response, release } = await fetchWithSsrFGuard({
     url,
     init: {
@@ -202,7 +201,11 @@ export async function azureSpeechTTS(params: {
 
   try {
     await assertOkOrThrowProviderError(response, "Azure Speech TTS API error");
-    return Buffer.from(await response.arrayBuffer());
+    return await readProviderBinaryResponse(response, "Azure Speech TTS API error", "audio", {
+      maxBytes: params.maxBytes ?? DEFAULT_AZURE_SPEECH_MAX_BYTES,
+      onOverflow: ({ maxBytes }) =>
+        new Error(`Azure Speech TTS audio response exceeds ${maxBytes} bytes`),
+    });
   } finally {
     await release();
   }

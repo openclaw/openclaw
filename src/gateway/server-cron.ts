@@ -1,206 +1,236 @@
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { abortAndDrainEmbeddedPiRun } from "../agents/pi-embedded.js";
-import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
+import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
+import { retireSessionMcpRuntime } from "../agents/agent-bundle-mcp-tools.js";
+import { isAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
+import {
+  listAgentIds,
+  resolveAgentEntry,
+  tryResolveAmbientOwnerAgentId,
+} from "../agents/agent-scope-config.js";
+import { isEmbeddedAgentSessionHeldByOtherRun } from "../agents/embedded-agent-runner/runs.js";
+import { abortAndDrainEmbeddedAgentRun } from "../agents/embedded-agent.js";
+import { loadPreparedInboundPluginRegistry } from "../agents/prepared-model-runtime.inbound-registry.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { CliDeps } from "../cli/deps.types.js";
+import { DEFAULT_CRON_ENABLED } from "../config/cron-limits.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { resolveSessionStoreCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import {
   canonicalizeMainSessionAlias,
   resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
+  resolveSystemMainSessionTarget,
 } from "../config/sessions.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import {
+  listConfiguredSessionStoreAgentIds,
+  listKnownSessionStoreAgentIds,
+} from "../config/sessions/targets.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
+import { redactCronCommandSummaryForExternalDelivery } from "../cron/command-output-summary.js";
+import { runCronCommandJob } from "../cron/command-runner.js";
+import { resolveCronStoredDeliveryContext } from "../cron/delivery-context.js";
+import { reconcileHeartbeatMonitorJobs } from "../cron/heartbeat-monitor.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
-import {
-  appendCronRunLog,
-  resolveCronRunLogPath,
-  resolveCronRunLogPruneOptions,
-} from "../cron/run-log.js";
-import type { CronServiceContract } from "../cron/service-contract.js";
-import { CronService } from "../cron/service.js";
+import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
+import { toPublicCronJob } from "../cron/public-job.js";
+import { cronScriptFailureMetadata } from "../cron/script-failure.js";
+import { CronService, type CronEvent } from "../cron/service.js";
+import { applyJobPatch } from "../cron/service/jobs.js";
 import { resolveCronSessionTargetSessionKey } from "../cron/session-target.js";
-import { resolveCronStorePath } from "../cron/store.js";
+import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
+import { cronStreamScheduleKey } from "../cron/stream-schedule.js";
+import { createCronScriptRuntime } from "../cron/trigger-script.js";
 import type { CronJob } from "../cron/types.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
-import { requestHeartbeat } from "../infra/heartbeat-wake.js";
-import { enqueueSystemEvent } from "../infra/system-events.js";
-import { getChildLogger } from "../logging.js";
-import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { resolveMainScopedEventSessionKey } from "../infra/event-session-routing.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import {
+  resolveHeartbeatForWake,
+  resolveHeartbeatTimeoutOverrideSeconds,
+} from "../infra/heartbeat-config.js";
+import {
+  requestHeartbeat,
+  requestHeartbeatAndWait,
+  type HeartbeatWakeRequest,
+} from "../infra/heartbeat-wake.js";
+import { mergeSsrFPolicies } from "../infra/net/ssrf.js";
+import { listConfiguredMessageChannels } from "../infra/outbound/channel-selection.js";
+import { withSystemEventOwner } from "../infra/system-event-ownership.js";
+import { enqueueSystemEventWithReceipt } from "../infra/system-events.js";
+import { getChildLogger, getResolvedLoggerSettings, toPinoLikeLogger } from "../logging.js";
 import type {
   PluginHookCronChangedEvent,
-  PluginHookGatewayCronJob,
   PluginHookGatewayCronService,
   PluginHookGatewayContext,
-} from "../plugins/hook-types.js";
-import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
-import { defaultRuntime } from "../runtime.js";
+} from "../plugins/hook-gateway.types.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
+import {
+  getGatewaySuspendAdmissionPhase,
+  runWithGatewayIndependentRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
+import { getProcessSupervisor } from "../process/supervisor/index.js";
+import {
+  normalizeAgentId,
+  resolveEventSessionKey,
+  toAgentStoreSessionKey,
+} from "../routing/session-key.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { truncateUtf16WithEllipsis } from "../shared/text-truncate.js";
+import {
+  assertAgentDatabaseAdmitted,
+  readAgentDatabaseAdmissionRefusal,
+} from "../state/agent-database-admission.js";
+import {
+  createCronExitWatchers,
+  type CronExitWatcherHandlers,
+  type CronExitWatchers,
+} from "./cron-exit-watchers.js";
+import { createCronStreamWatchers, resolveStreamStopReason } from "./cron-stream-watchers.js";
+import {
+  createScheduledGatewayRunner,
+  fenceScheduledGatewayContextResolver,
+} from "./scheduled-run-gateway-context.js";
+import { finalizeCronCompletionAnnouncement, pickDefined } from "./server-cron-completion.js";
+import type { GatewayCronServiceContract } from "./server-cron-contract.js";
+import { drainGatewayCron } from "./server-cron-drain.js";
+import {
+  fireOnExitJob,
+  fireStreamJob,
+  formatOnExitRunSummary,
+} from "./server-cron-event-dispatch.js";
 import {
   dispatchGatewayCronFinishedNotifications,
+  sendGatewayCronWebhook,
   sendGatewayCronFailureAlert,
+  runGatewayCronFailureRepair,
 } from "./server-cron-notifications.js";
+import { toPluginCronJob } from "./server-cron-plugin-job.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
+import {
+  invalidateSessionAutomationIndex,
+  claimSessionAutomationEpoch,
+  registerSessionAutomationSource,
+  unregisterSessionAutomationSource,
+} from "./session-automation-index.js";
+import { getSessionRowProjection } from "./session-row-projection-access.js";
+
+export type GatewaySystemJobReconciliationResult = "converged" | "retry-scheduled" | "superseded";
+
+class GatewaySystemJobReconciliationSupersededError extends Error {}
 
 export type GatewayCronState = {
-  cron: CronServiceContract;
+  cron: GatewayCronServiceContract;
   storePath: string;
   cronEnabled: boolean;
+  prepareExitWatcherHandoff?: () => Promise<GatewayCronExitWatcherHandoff | undefined>;
+  // The lazy proxy must preserve system-job reconciliation on the serving config.
+  reconcileExitWatchers: () => Promise<void>;
+  reconcileStreamWatchers: () => Promise<void>;
+  stopStreamWatchers: () => Promise<void>;
+  reconcileSystemJobs: () => Promise<GatewaySystemJobReconciliationResult>;
 };
 
-/** Pick only the keys whose values are not `undefined` from an object. */
-function pickDefined<T extends Record<string, unknown>>(
-  obj: T,
-  keys: (keyof T)[],
-): Partial<Pick<T, (typeof keys)[number]>> {
-  const result: Partial<Pick<T, (typeof keys)[number]>> = {};
-  for (const k of keys) {
-    if (obj[k] !== undefined) {
-      (result as Record<string, unknown>)[k as string] = obj[k];
-    }
-  }
-  return result;
-}
-
-function omitExplicitHeartbeatDestination(
-  heartbeat: AgentDefaultsConfig["heartbeat"] | undefined,
-): AgentDefaultsConfig["heartbeat"] | undefined {
-  if (!heartbeat) {
-    return undefined;
-  }
-  return {
-    ...heartbeat,
-    to: undefined,
-    accountId: undefined,
-  };
-}
+export type GatewayCronExitWatcherHandoff = {
+  current: () => CronExitWatchers;
+  adopt: (watchers: CronExitWatchers) => Promise<void> | void;
+  stopOwner: () => Promise<void>;
+};
 
 function sanitizeCronHeartbeatOverride(
   heartbeat: AgentDefaultsConfig["heartbeat"] | undefined,
 ): AgentDefaultsConfig["heartbeat"] | undefined {
-  return heartbeat?.target === "last" ? omitExplicitHeartbeatDestination(heartbeat) : heartbeat;
-}
-
-/** Map internal CronJob to the public plugin SDK shape. */
-function toPluginCronJob(job: CronJob): PluginHookGatewayCronJob {
-  return {
-    id: job.id,
-    agentId: job.agentId,
-    name: job.name,
-    description: job.description,
-    enabled: job.enabled,
-    schedule: job.schedule ? structuredClone(job.schedule) : undefined,
-    sessionTarget: job.sessionTarget,
-    wakeMode: job.wakeMode,
-    payload: job.payload ? structuredClone(job.payload) : undefined,
-    state: {
-      nextRunAtMs: job.state.nextRunAtMs,
-      runningAtMs: job.state.runningAtMs,
-      lastRunAtMs: job.state.lastRunAtMs,
-      lastRunStatus: job.state.lastRunStatus,
-      lastError: job.state.lastError,
-      lastDurationMs: job.state.lastDurationMs,
-      lastDelivered: job.state.lastDelivered,
-      lastDeliveryStatus: job.state.lastDeliveryStatus,
-      lastDeliveryError: job.state.lastDeliveryError,
-      lastFailureNotificationDelivered: job.state.lastFailureNotificationDelivered,
-      lastFailureNotificationDeliveryStatus: job.state.lastFailureNotificationDeliveryStatus,
-      lastFailureNotificationDeliveryError: job.state.lastFailureNotificationDeliveryError,
-    },
-    createdAtMs: job.createdAtMs,
-    updatedAtMs: job.updatedAtMs,
-  };
+  return heartbeat?.target === "last"
+    ? { ...heartbeat, to: undefined, accountId: undefined }
+    : heartbeat;
 }
 
 export function buildGatewayCronService(params: {
+  scheduler: GatewayScheduler;
   cfg: OpenClawConfig;
   deps: CliDeps;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
+  env?: NodeJS.ProcessEnv;
+  resolveGatewayContext?: () => GatewayRequestContext | undefined;
+  resolvePluginRegistry?: () => PluginRegistry | undefined;
 }): GatewayCronState {
   const cronLogger = getChildLogger({ module: "cron" });
-  const storePath = resolveCronStorePath(params.cfg.cron?.store);
-  const cronEnabled = process.env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
-
-  const findAgentEntry = (cfg: OpenClawConfig, agentId: string) =>
-    Array.isArray(cfg.agents?.list)
-      ? cfg.agents.list.find(
-          (entry) =>
-            entry && typeof entry.id === "string" && normalizeAgentId(entry.id) === agentId,
-        )
-      : undefined;
-
-  const hasConfiguredAgent = (cfg: OpenClawConfig, agentId: string) =>
-    Boolean(findAgentEntry(cfg, agentId));
-
-  const mergeRuntimeAgentConfig = (runtimeConfig: OpenClawConfig, requestedAgentId: string) => {
-    if (hasConfiguredAgent(runtimeConfig, requestedAgentId)) {
-      return runtimeConfig;
-    }
-    const fallbackAgentEntry = findAgentEntry(params.cfg, requestedAgentId);
-    if (!fallbackAgentEntry) {
-      return runtimeConfig;
-    }
-    const startupAgents = params.cfg.agents;
-    const runtimeAgents = runtimeConfig.agents;
-    return {
-      ...runtimeConfig,
-      agents: {
-        ...startupAgents,
-        ...runtimeAgents,
-        defaults: {
-          ...startupAgents?.defaults,
-          ...runtimeAgents?.defaults,
-        },
-        list: [...(runtimeAgents?.list ?? []), fallbackAgentEntry],
-      },
-    };
-  };
+  const cronServiceLogger = toPinoLikeLogger(cronLogger, getResolvedLoggerSettings().level);
+  const scheduledGatewayContextResolver = fenceScheduledGatewayContextResolver(
+    params.resolveGatewayContext,
+  );
+  const runSchedulerOwned = createScheduledGatewayRunner(
+    scheduledGatewayContextResolver,
+    params.resolvePluginRegistry,
+  );
+  const env = params.env ?? process.env;
+  const storePath = resolveCronJobsStorePathFromConfig(params.cfg, env);
+  const cronEnabled =
+    env.OPENCLAW_SKIP_CRON !== "1" && (params.cfg.cron?.enabled ?? DEFAULT_CRON_ENABLED);
+  // Resolve once per cron service snapshot so every webhook route shares the
+  // same explicit opt-in while omitted config keeps the guard strict.
+  const webhookSsrfPolicy = mergeSsrFPolicies(params.cfg.cron?.webhookSsrfPolicy);
 
   const resolveCronAgent = (requested?: string | null) => {
     const runtimeConfig = getRuntimeConfig();
     const normalized =
       typeof requested === "string" && requested.trim() ? normalizeAgentId(requested) : undefined;
-    const effectiveConfig =
-      normalized !== undefined ? mergeRuntimeAgentConfig(runtimeConfig, normalized) : runtimeConfig;
-    const agentId =
-      normalized !== undefined && hasConfiguredAgent(effectiveConfig, normalized)
-        ? normalized
-        : resolveDefaultAgentId(effectiveConfig);
-    return { agentId, cfg: effectiveConfig };
+    const defaultAgentId = tryResolveAmbientOwnerAgentId(runtimeConfig);
+    if (
+      normalized !== undefined &&
+      normalized !== defaultAgentId &&
+      !resolveAgentEntry(runtimeConfig, normalized)
+    ) {
+      throw new Error(`cron job agent is unavailable: ${normalized}`);
+    }
+    const agentId = resolveCronJobEffectiveAgentId(
+      normalized ? { agentId: normalized } : {},
+      defaultAgentId,
+    );
+    if (isAgentDeletionBlocked(agentId)) {
+      throw new Error(`cron job agent is unavailable: ${agentId}`);
+    }
+    assertAgentDatabaseAdmitted(agentId, { env });
+    return { agentId, cfg: runtimeConfig };
   };
 
-  const resolveCronSessionKey = (params: {
+  const resolveCronSessionKey = (paramsValue: {
     runtimeConfig: OpenClawConfig;
     agentId: string;
     requestedSessionKey?: string | null;
   }) => {
-    const requested = params.requestedSessionKey?.trim();
-    if (!requested) {
-      return resolveAgentMainSessionKey({
-        cfg: params.runtimeConfig,
-        agentId: params.agentId,
-      });
-    }
+    const requested = paramsValue.requestedSessionKey?.trim();
     const candidate = toAgentStoreSessionKey({
-      agentId: params.agentId,
+      agentId: paramsValue.agentId,
       requestKey: requested,
-      mainKey: params.runtimeConfig.session?.mainKey,
+      mainKey: paramsValue.runtimeConfig.session?.mainKey,
     });
     const canonical = canonicalizeMainSessionAlias({
-      cfg: params.runtimeConfig,
-      agentId: params.agentId,
+      cfg: paramsValue.runtimeConfig,
+      agentId: paramsValue.agentId,
       sessionKey: candidate,
     });
     if (canonical !== "global") {
       const sessionAgentId = resolveAgentIdFromSessionKey(canonical);
-      if (normalizeAgentId(sessionAgentId) !== normalizeAgentId(params.agentId)) {
+      if (normalizeAgentId(sessionAgentId) !== normalizeAgentId(paramsValue.agentId)) {
         return resolveAgentMainSessionKey({
-          cfg: params.runtimeConfig,
-          agentId: params.agentId,
+          cfg: paramsValue.runtimeConfig,
+          agentId: paramsValue.agentId,
         });
       }
     }
-    return canonical;
+    return (
+      resolveMainScopedEventSessionKey({
+        cfg: paramsValue.runtimeConfig,
+        sessionKey: canonical,
+        agentId: paramsValue.agentId,
+      }) ?? canonical
+    );
   };
 
   const resolveCronTarget = (opts?: {
@@ -217,6 +247,10 @@ export function buildGatewayCronService(params: {
     if (opts?.preserveUntargeted && !requestedAgentId && !requestedSessionKey) {
       return { runtimeConfig: getRuntimeConfig(), agentId: undefined, sessionKey: undefined };
     }
+    if (!requestedAgentId && !requestedSessionKey) {
+      const runtimeConfig = getRuntimeConfig();
+      return { runtimeConfig, ...resolveSystemMainSessionTarget(runtimeConfig) };
+    }
 
     // Derive from canonical agent-prefixed keys only. Relative keys intentionally
     // fall through to the configured default instead of hardcoding "main".
@@ -224,50 +258,56 @@ export function buildGatewayCronService(params: {
       requestedSessionKey && parseAgentSessionKey(requestedSessionKey)
         ? resolveAgentIdFromSessionKey(requestedSessionKey)
         : undefined;
-    const { agentId: resolvedAgentId, cfg: runtimeConfig } = resolveCronAgent(
-      requestedAgentId ?? derivedAgentId,
-    );
-    const agentId = resolvedAgentId || undefined;
-    const sessionKey = agentId
-      ? resolveCronSessionKey({
-          runtimeConfig,
-          agentId,
-          requestedSessionKey,
-        })
-      : undefined;
+    const { agentId, cfg: runtimeConfig } = resolveCronAgent(requestedAgentId ?? derivedAgentId);
+    const resolvedSessionKey = resolveCronSessionKey({
+      runtimeConfig,
+      agentId,
+      requestedSessionKey,
+    });
+    const sessionKey =
+      resolvedSessionKey && runtimeConfig.session?.scope === "global"
+        ? resolveEventSessionKey(
+            resolvedSessionKey,
+            runtimeConfig.session?.mainKey,
+            runtimeConfig.session?.scope,
+          )
+        : resolvedSessionKey;
     return { runtimeConfig, agentId, sessionKey };
   };
 
-  const resolveCronHeartbeatOverride = (params: {
-    runtimeConfig: OpenClawConfig;
-    agentId?: string;
-    heartbeat?: AgentDefaultsConfig["heartbeat"];
-  }) => {
-    if (!params.heartbeat) {
-      return undefined;
-    }
-    const agentEntry =
-      params.agentId !== undefined
-        ? findAgentEntry(params.runtimeConfig, params.agentId)
-        : undefined;
-    const agentHeartbeat =
-      agentEntry && typeof agentEntry === "object" ? agentEntry.heartbeat : undefined;
-    const baseHeartbeat = {
-      ...params.runtimeConfig.agents?.defaults?.heartbeat,
-      ...agentHeartbeat,
+  const resolveCronHeartbeatWake = (opts: HeartbeatWakeRequest): HeartbeatWakeRequest => {
+    const { agentId, sessionKey } = resolveCronTarget({
+      ...opts,
+      preserveUntargeted: opts.source !== "manual",
+    });
+    // Untargeted monitor ticks resolve their configured session in the runner.
+    const useConfiguredSession = opts.source === "interval" && !opts.sessionKey?.trim();
+    return {
+      source: opts.source,
+      intent: opts.intent,
+      reason: opts.reason,
+      agentId,
+      sessionKey: useConfiguredSession ? undefined : sessionKey,
+      heartbeat: sanitizeCronHeartbeatOverride(opts.heartbeat),
+      ...(opts.scheduledEveryMs !== undefined ? { scheduledEveryMs: opts.scheduledEveryMs } : {}),
+      ...(opts.tasks?.length ? { tasks: opts.tasks } : {}),
     };
-    const heartbeatOverride = { ...baseHeartbeat, ...params.heartbeat };
-    return sanitizeCronHeartbeatOverride(heartbeatOverride);
   };
 
-  const defaultAgentId = resolveDefaultAgentId(params.cfg);
-  const runLogPrune = resolveCronRunLogPruneOptions(params.cfg.cron?.runLog);
+  const defaultAgentId = tryResolveAmbientOwnerAgentId(params.cfg);
   const resolveSessionStorePath = (agentId?: string) =>
-    resolveStorePath(params.cfg.session?.store, {
-      agentId: agentId ?? defaultAgentId,
+    resolveSessionStorePathCore(params.cfg.session?.store, {
+      agentId: agentId ?? resolveSessionStoreCompatibilityAgentId(getRuntimeConfig()),
     });
   const sessionStorePath = resolveSessionStorePath(defaultAgentId);
-  const warnedLegacyWebhookJobs = new Set<string>();
+  const cronTriggersEnabled = params.cfg.cron?.triggers?.enabled !== false;
+  const scriptRuntime = cronTriggersEnabled
+    ? createCronScriptRuntime({
+        config: params.cfg,
+        loadPluginRegistry: loadPreparedInboundPluginRegistry,
+        resolveGatewayContext: scheduledGatewayContextResolver,
+      })
+    : undefined;
 
   const runCronChangedHook = (evt: PluginHookCronChangedEvent) => {
     const hookRunner = getGlobalHookRunner();
@@ -278,98 +318,389 @@ export function buildGatewayCronService(params: {
       config: getRuntimeConfig(),
       getCron: () => cron as PluginHookGatewayCronService,
     };
-    void hookRunner.runCronChanged(evt, hookCtx).catch((err) => {
-      cronLogger.warn(
-        { err: formatErrorMessage(err), jobId: evt.jobId },
-        "cron_changed hook failed",
-      );
+    // Hook execution is detached from the cron mutation/tick that emitted it.
+    // Keep the whole plugin callback visible until its user-state effects settle.
+    void runInDetachedAsyncContext(() =>
+      runWithGatewayIndependentRootWorkAdmission(async () => {
+        await runSchedulerOwned(() => hookRunner.runCronChanged(evt, hookCtx));
+      }, "cron:changed-hook").catch((err: unknown) => {
+        cronLogger.warn(
+          { err: formatErrorMessage(err), jobId: evt.jobId },
+          "cron_changed hook failed",
+        );
+      }),
+    );
+  };
+
+  // Built after cron so watcher exit callbacks can call back into the service.
+  let exitWatchers: CronExitWatchers | undefined;
+  let exitWatcherReconciliations = 0;
+  let streamWatcherReconciliations = 0;
+  const terminalExitCompletionTokens = new Map<
+    string,
+    Parameters<CronService["updateWithPrecondition"]>[2]
+  >();
+  let exitWatcherGeneration = 0;
+  let exitWatcherMutationRevision = 0;
+  let exitWatchersStopped = false;
+  let exitWatcherHandoffReady: { result: Deferred<boolean>; settled: boolean } | undefined;
+  const settleExitWatcherHandoff = (ready: boolean, handoff = exitWatcherHandoffReady) => {
+    if (!handoff) {
+      return;
+    }
+    handoff.settled = true;
+    handoff.result.resolve(ready);
+    if (ready && exitWatcherHandoffReady === handoff) {
+      exitWatcherHandoffReady = undefined;
+    }
+  };
+  let streamWatcherGeneration = 0;
+  // Bumped when a direct watcher route begins; fences reconcile's async list
+  // snapshot against mutations that commit inside the list await.
+  let streamWatcherMutationRevision = 0;
+  let streamWatchersStopped = false;
+  const reconcileExitWatchers = async () => {
+    const revision = ++exitWatcherMutationRevision;
+    const generation = exitWatcherGeneration;
+    exitWatcherReconciliations += 1;
+    try {
+      if (!exitWatchers || exitWatchersStopped) {
+        return;
+      }
+      const jobs = await cron.list({ includeDisabled: true });
+      if (
+        exitWatchersStopped ||
+        generation !== exitWatcherGeneration ||
+        revision !== exitWatcherMutationRevision
+      ) {
+        return;
+      }
+      if (cronEnabled) {
+        exitWatchers.reconcile(jobs);
+      } else {
+        void exitWatchers.cancelAll();
+      }
+    } catch (err) {
+      cronLogger.warn({ err: String(err) }, "cron-exit: reconcile failed");
+    } finally {
+      exitWatcherReconciliations -= 1;
+    }
+  };
+  const reconcileStreamWatchers = async () => {
+    const generation = streamWatcherGeneration;
+    streamWatcherReconciliations += 1;
+    try {
+      const watchers = streamWatchers;
+      if (!watchers || streamWatchersStopped) {
+        return;
+      }
+      // The list snapshot is captured across an await; a direct mutation route
+      // that commits inside that window makes it stale, and reconciling a
+      // stale snapshot could stop a just-added owner as "removed" and retire
+      // its durable identity. Re-list until no route interleaved. Bounded:
+      // under pathological mutation churn we skip this sweep (every mutation
+      // was already routed directly) rather than loop forever.
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const revision = streamWatcherMutationRevision;
+        const jobs = await cron.list({ includeDisabled: true });
+        if (generation !== streamWatcherGeneration || streamWatchersStopped) {
+          return;
+        }
+        if (revision !== streamWatcherMutationRevision) {
+          continue;
+        }
+        await watchers.reconcile(jobs, cronEnabled && cronTriggersEnabled, cronTriggersEnabled);
+        return;
+      }
+      cronLogger.warn({}, "cron-stream: reconcile skipped after repeated concurrent mutations");
+    } catch (err) {
+      cronLogger.warn({ err: String(err) }, "cron-stream: reconcile failed");
+    } finally {
+      streamWatcherReconciliations -= 1;
+    }
+  };
+
+  const routeStreamWatcherMutation = async (
+    jobId: string,
+    job: CronJob | undefined,
+    action: "added" | "updated" | "removed" | "finished",
+  ) => {
+    const watchers = streamWatchers;
+    if (!watchers || streamWatchersStopped) {
+      return;
+    }
+    streamWatcherMutationRevision += 1;
+    streamWatcherReconciliations += 1;
+    try {
+      if (action === "removed") {
+        await watchers.stop(jobId, "removed");
+        return;
+      }
+      if (
+        job?.schedule.kind === "stream" &&
+        job.enabled &&
+        !job.state.streamRestartExhausted &&
+        cronEnabled &&
+        cronTriggersEnabled
+      ) {
+        await watchers.start(job);
+        return;
+      }
+      const reason = resolveStreamStopReason({
+        triggersEnabled: cronTriggersEnabled,
+        cronEnabled,
+        restartExhausted: job?.state.streamRestartExhausted === true,
+        isStream: job?.schedule.kind === "stream",
+      });
+      await watchers.stop(jobId, reason, job);
+    } finally {
+      streamWatcherReconciliations -= 1;
+    }
+  };
+
+  // Cron job changes flip session automation badges; push refreshed rows so
+  // subscribed session lists update without waiting for unrelated session events.
+  const broadcastCronBoundSessionChanges = (evt: CronEvent) => {
+    const job = evt.job ?? cron.getJob(evt.jobId);
+    if (!job) {
+      return;
+    }
+    const boundKeys = resolveCronJobBoundSessionKeys(job, {
+      cfg: getRuntimeConfig(),
+      defaultAgentId: cron.getDefaultAgentId(),
     });
+    for (const sessionKey of boundKeys) {
+      const context = scheduledGatewayContextResolver?.();
+      const projection = getSessionRowProjection(context);
+      const publish = () =>
+        params.broadcast(
+          "sessions.changed",
+          {
+            sessionKey,
+            reason: "cron-binding",
+            ts: Date.now(),
+          },
+          { dropIfSlow: true },
+        );
+      if (projection) {
+        void (async () => {
+          do {
+            await projection.ensureMaterialized();
+          } while (projection.needsMaterialization);
+          if (scheduledGatewayContextResolver?.() === context) {
+            publish();
+          }
+        })().catch((error: unknown) =>
+          cronLogger.warn({ error }, "Cron session publication failed"),
+        );
+      } else {
+        publish();
+      }
+    }
   };
 
   const cron = new CronService({
+    scheduler: params.scheduler,
     storePath,
     cronEnabled,
     cronConfig: params.cfg.cron,
-    defaultAgentId,
+    listConfiguredChannels: () => listConfiguredMessageChannels(getRuntimeConfig()),
+    ...(scriptRuntime ? { evaluateCronTrigger: scriptRuntime.evaluateTrigger } : {}),
+    ...(defaultAgentId ? { defaultAgentId } : {}),
+    resolveDefaultAgentId: () => tryResolveAmbientOwnerAgentId(getRuntimeConfig()),
+    resolveSessionStoreAgentIds: () => {
+      const cfg = getRuntimeConfig();
+      try {
+        return listKnownSessionStoreAgentIds(cfg, { env });
+      } catch (error) {
+        cronLogger.warn(
+          { err: formatErrorMessage(error) },
+          "cron: persisted session-store owner discovery failed",
+        );
+        return listConfiguredSessionStoreAgentIds(cfg);
+      }
+    },
+    isAgentAvailable: (agentId, database, facts) =>
+      !(facts?.deletionBlocked ?? isAgentDeletionBlocked(agentId, { env }, database)) &&
+      !readAgentDatabaseAdmissionRefusal(agentId, { env }) &&
+      listAgentIds(getRuntimeConfig()).some((id) => normalizeAgentId(id) === agentId),
     resolveSessionStorePath,
     sessionStorePath,
     enqueueSystemEvent: (text, opts) => {
-      const { sessionKey } = resolveCronTarget(opts);
-      if (!sessionKey) {
-        throw new Error("Cron system event target did not resolve a session key.");
+      const { agentId, sessionKey } = resolveCronTarget(opts);
+      if (!agentId || !sessionKey) {
+        throw new Error("Cron system event target did not resolve an owner and session key.");
       }
-      enqueueSystemEvent(text, {
-        sessionKey,
-        contextKey: opts?.contextKey,
-        forceSenderIsOwnerFalse: opts?.forceSenderIsOwnerFalse,
-        trusted: opts?.forceSenderIsOwnerFalse !== true,
-      });
+      const remove = enqueueSystemEventWithReceipt(
+        text,
+        withSystemEventOwner(
+          {
+            sessionKey,
+            contextKey: opts?.contextKey,
+            deliveryContext: opts?.deliveryContext,
+          },
+          agentId,
+        ),
+      );
+      return remove ? { accepted: true, remove } : { accepted: false };
     },
-    requestHeartbeat: (opts) => {
-      const { agentId, sessionKey } = resolveCronTarget({ ...opts, preserveUntargeted: true });
-      requestHeartbeat({
-        source: opts?.source ?? "cron",
-        intent: opts?.intent ?? "event",
-        reason: opts?.reason,
-        agentId,
-        sessionKey,
-        heartbeat: sanitizeCronHeartbeatOverride(opts?.heartbeat),
-      });
-    },
-    runHeartbeatOnce: async (opts) => {
-      const { runtimeConfig, agentId, sessionKey } = resolveCronTarget({
+    resolveOriginDeliveryContext: (opts) => {
+      // Resolve the wake target the same way the enqueue/heartbeat deps do,
+      // then read the channel-correct delivery context from that session's
+      // store entry (NOT by string-splitting the composite session key).
+      const { runtimeConfig, sessionKey } = resolveCronTarget({
         ...opts,
         preserveUntargeted: true,
       });
-      return await runHeartbeatOnce({
-        cfg: runtimeConfig,
-        source: opts?.source ?? "cron",
-        intent: opts?.intent ?? "event",
-        reason: opts?.reason,
-        agentId,
-        sessionKey,
-        heartbeat: resolveCronHeartbeatOverride({
-          runtimeConfig,
-          agentId,
-          heartbeat: opts?.heartbeat,
-        }),
-        deps: { ...params.deps, runtime: defaultRuntime },
-      });
+      if (!sessionKey) {
+        return undefined;
+      }
+      return resolveCronStoredDeliveryContext({ cfg: runtimeConfig, sessionKey });
     },
-    runIsolatedAgentJob: async ({
-      job,
-      message,
-      abortSignal,
-      onExecutionStarted,
-      onExecutionPhase,
-    }) => {
+    runSchedulerOwned,
+    requestHeartbeat: (opts) => requestHeartbeat(resolveCronHeartbeatWake(opts)),
+    requestHeartbeatAndWait: (opts, lifecycle) =>
+      requestHeartbeatAndWait(resolveCronHeartbeatWake(opts), lifecycle),
+    resolveHeartbeatTimeoutMs: (opts) => {
+      const { agentId, cfg: runtimeConfig } = resolveCronAgent(opts.agentId);
+      const heartbeat = resolveHeartbeatForWake({
+        cfg: runtimeConfig,
+        agentId,
+        requestedHeartbeat: opts.heartbeat,
+        source: opts.source,
+      });
+      const timeoutMs = finiteSecondsToTimerSafeMilliseconds(
+        resolveHeartbeatTimeoutOverrideSeconds(runtimeConfig, heartbeat),
+      );
+      return timeoutMs === 0 ? undefined : timeoutMs;
+    },
+    runIsolatedAgentJob: async (request) => {
+      const { job } = request;
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
       const sessionKey = resolveCronSessionTargetSessionKey(job.sessionTarget) ?? `cron:${job.id}`;
-      try {
-        return await runCronIsolatedAgentTurn({
-          cfg: runtimeConfig,
-          deps: params.deps,
-          job,
-          message,
-          abortSignal,
-          onExecutionStarted,
-          onExecutionPhase,
-          agentId,
-          sessionKey,
-          lane: "cron",
-        });
-      } finally {
-        await cleanupBrowserSessionsForLifecycleEnd({
-          sessionKeys: [sessionKey],
-          onWarn: (msg) => cronLogger.warn({ jobId: job.id }, msg),
-        });
+      return await runCronIsolatedAgentTurn({
+        ...request,
+        cfg: runtimeConfig,
+        deps: params.deps,
+        agentId,
+        sessionKey,
+        lane: "cron",
+      });
+    },
+    runCommandJob: async ({ job, abortSignal, deliveryAttemptFence }) => {
+      const result = await runCronCommandJob({
+        job,
+        abortSignal,
+        nowMs: Date.now,
+      });
+      const summaryIsSilent =
+        typeof result.summary === "string" && isSilentReplyText(result.summary, SILENT_REPLY_TOKEN);
+      const completion = await finalizeCronCompletionAnnouncement({
+        deliveryAttemptFence,
+        job,
+        suppressionReason: summaryIsSilent ? "silent" : undefined,
+        text:
+          !summaryIsSilent && typeof result.summary === "string" && result.summary.trim()
+            ? redactCronCommandSummaryForExternalDelivery(result.summary)
+            : undefined,
+        runStartedAtMs: job.state.runningAtMs,
+        abortSignal,
+        deps: params.deps,
+        resolveCronAgent,
+        logger: cronLogger,
+        label: "command",
+        traceResolvedFailure: true,
+      });
+      if (summaryIsSilent) {
+        const { summary: _summary, ...silentResult } = result;
+        return { ...silentResult, ...completion };
       }
+      return { ...result, ...completion };
+    },
+    sendCronWebhook: async ({ job, event, abortSignal, onDeliveryState, assertCurrent }) => {
+      return await sendGatewayCronWebhook({
+        job,
+        event,
+        abortSignal,
+        onDeliveryState,
+        assertCurrent,
+        webhookToken: params.cfg.cron?.webhookToken,
+        ssrfPolicy: webhookSsrfPolicy,
+      });
+    },
+    runScriptJob: async ({
+      job,
+      streamBatch,
+      abortSignal,
+      executionIdentity,
+      deliveryAttemptFence,
+    }) => {
+      if (!scriptRuntime || job.payload.kind !== "script") {
+        return {
+          status: "error",
+          error: "cron script payload executor is unavailable",
+          ...cronScriptFailureMetadata("payload", "runtime_unavailable"),
+        };
+      }
+      const execution = await scriptRuntime.executePayload({
+        job,
+        streamBatch,
+        abortSignal,
+        executionIdentity,
+        deliveryAttemptFence,
+      });
+      if (execution.kind === "error") {
+        return {
+          status: "error",
+          error: `cron script payload failed (${execution.code}): ${execution.error}`,
+          ...cronScriptFailureMetadata("payload", execution.code),
+        };
+      }
+      if (execution.nextCheck && !job.pacing) {
+        return {
+          status: "error",
+          error: "cron script payload returned nextCheck, but this job has no pacing bounds",
+          ...cronScriptFailureMetadata("payload", "invalid_input"),
+        };
+      }
+
+      const notify = execution.notify?.trim() ? execution.notify : undefined;
+      const base = {
+        status: "ok" as const,
+        notify,
+        wake: execution.wake,
+        stateChanged: execution.stateChanged,
+        ...(execution.stateChanged ? { state: execution.state } : {}),
+        nextCheck: execution.nextCheck,
+      };
+      const completion = await finalizeCronCompletionAnnouncement({
+        deliveryAttemptFence,
+        job,
+        text: job.sessionTarget === "main" ? undefined : notify,
+        runStartedAtMs: job.state.runningAtMs,
+        abortSignal,
+        deps: params.deps,
+        resolveCronAgent,
+        logger: cronLogger,
+        label: "script payload",
+      });
+      return { ...base, ...completion };
     },
     cleanupTimedOutAgentRun: async ({ job, execution }) => {
       if (!execution?.sessionId) {
         return;
       }
-      const result = await abortAndDrainEmbeddedPiRun({
+      if (
+        execution.runId &&
+        isEmbeddedAgentSessionHeldByOtherRun(execution.sessionId, execution.runId)
+      ) {
+        cronLogger.warn(
+          { jobId: job.id, sessionId: execution.sessionId, sessionKey: execution.sessionKey },
+          "cron: timed-out agent run already left its session; kept the current run",
+        );
+        return;
+      }
+      const result = await abortAndDrainEmbeddedAgentRun({
         sessionId: execution.sessionId,
         sessionKey: execution.sessionKey,
         settleMs: 15_000,
@@ -387,23 +718,63 @@ export function buildGatewayCronService(params: {
         },
         "cron: cleaned up timed-out agent run",
       );
+      await retireSessionMcpRuntime({
+        sessionId: execution.sessionId,
+        reason: "cron-timeout-cleanup",
+        onError: (error, sid) => {
+          cronLogger.warn(
+            { jobId: job.id, sessionId: sid },
+            `cron: failed to retire MCP runtime for timed-out session: ${String(error)}`,
+          );
+        },
+      }).catch(() => {});
     },
-    sendCronFailureAlert: async ({ job, text, channel, to, mode, accountId }) =>
+    onIsolatedAgentSetupTimeout: ({ job, error, timeoutMs }) => {
+      cronLogger.warn(
+        {
+          jobId: job.id,
+          jobName: job.name,
+          timeoutMs,
+          error,
+        },
+        "cron: isolated agent setup timed out before runner start; backing off job without gateway restart",
+      );
+    },
+    sendCronFailureAlert: async (alert) =>
       await sendGatewayCronFailureAlert({
+        ...alert,
         deps: params.deps,
-        logger: cronLogger,
+        logger: cronServiceLogger,
         resolveCronAgent,
         webhookToken: params.cfg.cron?.webhookToken,
-        job,
-        text,
-        channel,
-        to,
-        mode,
-        accountId,
+        ssrfPolicy: webhookSsrfPolicy,
       }),
-    log: getChildLogger({ module: "cron", storePath }),
+    runCronFailureRepair: (request) =>
+      runGatewayCronFailureRepair(request, scheduledGatewayContextResolver),
+    log: toPinoLikeLogger(
+      getChildLogger({ module: "cron", storeKey: storePath }),
+      getResolvedLoggerSettings().level,
+    ),
     onEvent: (evt) => {
-      params.broadcast("cron", evt, { dropIfSlow: true });
+      // Any job/store change can alter session automation bindings, including
+      // in-place enable flips during runs; the index publishes only binding deltas.
+      invalidateSessionAutomationIndex();
+      const jobSnapshot = evt.job ?? cron.getJob(evt.jobId);
+      const scopedSessionKey =
+        jobSnapshot?.owner?.sessionKey ??
+        (jobSnapshot && resolveCronSessionTargetSessionKey(jobSnapshot.sessionTarget)) ??
+        jobSnapshot?.sessionKey ??
+        evt.sessionKey;
+      const scopedAgentId = jobSnapshot?.owner?.agentId ?? jobSnapshot?.agentId;
+      params.broadcast("cron", evt.job ? { ...evt, job: toPublicCronJob(evt.job) } : evt, {
+        dropIfSlow: true,
+        ...(scopedSessionKey
+          ? {
+              sessionKeys: [scopedSessionKey],
+              ...(scopedAgentId ? { agentId: scopedAgentId } : {}),
+            }
+          : {}),
+      });
       // Build hook event from CronEvent. The job snapshot is carried on the
       // internal event so it's available even for "removed" actions where
       // getJob() would return undefined. `delivery` and `usage` are
@@ -412,8 +783,11 @@ export function buildGatewayCronService(params: {
       // Resolve job snapshot from the event or live service so top-level
       // convenience fields (sessionTarget, agentId) are always populated
       // when the job is known.
-      const jobSnapshot = evt.job ?? cron.getJob(evt.jobId);
       const pluginJob = jobSnapshot ? toPluginCronJob(jobSnapshot) : undefined;
+      const hookSummary =
+        jobSnapshot?.payload?.kind === "command" && typeof evt.summary === "string"
+          ? redactCronCommandSummaryForExternalDelivery(evt.summary)
+          : evt.summary;
       const hookEvt: PluginHookCronChangedEvent = {
         action: evt.action,
         jobId: evt.jobId,
@@ -425,11 +799,12 @@ export function buildGatewayCronService(params: {
           "runAtMs",
           "durationMs",
           "status",
+          "completionStatus",
           "error",
-          "summary",
           "delivered",
           "deliveryStatus",
           "deliveryError",
+          "deliverySuppressionReason",
           "sessionId",
           "sessionKey",
           "runId",
@@ -437,58 +812,529 @@ export function buildGatewayCronService(params: {
           "model",
           "provider",
         ]),
+        ...(hookSummary !== undefined ? { summary: hookSummary } : {}),
       };
       runCronChangedHook(hookEvt);
+      // Re-arm / cancel scheduler-owned process watchers when the job set changes.
+      if (evt.action === "added" || evt.action === "updated" || evt.action === "removed") {
+        broadcastCronBoundSessionChanges(evt);
+        void reconcileExitWatchers();
+        // cron.update and cron.add (including declarative convergence) route
+        // lifecycle after the mutation. Ignoring state-only update events keeps
+        // owner status/counter persistence from recursively restarting its process.
+        if (evt.action !== "updated") {
+          void routeStreamWatcherMutation(
+            evt.jobId,
+            evt.job ?? cron.getJob(evt.jobId),
+            evt.action,
+          ).catch((err: unknown) => {
+            cronLogger.warn(
+              { err: formatErrorMessage(err), jobId: evt.jobId },
+              "cron-stream: route failed",
+            );
+          });
+        }
+      } else if (evt.action === "finished") {
+        // Runs can flip enabled without an "updated" event (one-shot success,
+        // trigger.once, schedule-error auto-disable); refresh badges then too.
+        // Fully deleted jobs emit their own "removed" event instead.
+        const finishedJob = evt.job ?? cron.getJob(evt.jobId);
+        if (finishedJob?.enabled === false) {
+          broadcastCronBoundSessionChanges(evt);
+          void routeStreamWatcherMutation(evt.jobId, finishedJob, "finished").catch(
+            (err: unknown) => {
+              cronLogger.warn(
+                { err: formatErrorMessage(err), jobId: evt.jobId },
+                "cron-stream: route failed",
+              );
+            },
+          );
+        }
+      }
       if (evt.action === "finished") {
         const job = evt.job ?? cron.getJob(evt.jobId);
         dispatchGatewayCronFinishedNotifications({
           evt,
           job,
-          deps: params.deps,
-          logger: cronLogger,
-          resolveCronAgent,
+          logger: cronServiceLogger,
           webhookToken: params.cfg.cron?.webhookToken,
-          legacyWebhook: params.cfg.cron?.webhook,
-          globalFailureDestination: params.cfg.cron?.failureDestination,
-          warnedLegacyWebhookJobs,
-        });
-
-        const logPath = resolveCronRunLogPath({
-          storePath,
-          jobId: evt.jobId,
-        });
-        void appendCronRunLog(
-          logPath,
-          {
-            ts: Date.now(),
-            jobId: evt.jobId,
-            action: "finished",
-            status: evt.status,
-            error: evt.error,
-            summary: evt.summary,
-            diagnostics: evt.diagnostics,
-            delivered: evt.delivered,
-            deliveryStatus: evt.deliveryStatus,
-            deliveryError: evt.deliveryError,
-            failureNotificationDelivery: evt.failureNotificationDelivery,
-            delivery: evt.delivery,
-            sessionId: evt.sessionId,
-            sessionKey: evt.sessionKey,
-            runId: evt.runId,
-            runAtMs: evt.runAtMs,
-            durationMs: evt.durationMs,
-            nextRunAtMs: evt.nextRunAtMs,
-            model: evt.model,
-            provider: evt.provider,
-            usage: evt.usage,
-          },
-          runLogPrune,
-        ).catch((err) => {
-          cronLogger.warn({ err: String(err), logPath }, "cron: run log append failed");
+          ssrfPolicy: webhookSsrfPolicy,
         });
       }
     },
   });
 
-  return { cron, storePath, cronEnabled };
+  const exitWatcherHandlers = {
+    getDefaultAgentId: () => cron.getDefaultAgentId(),
+    getProcessSupervisor,
+    fireOnExit: async (job, exit, controls) => {
+      // Reload adopts children before draining the previous scheduler. Its
+      // global run cancellation must finish before this owner admits their exits.
+      if (
+        exitWatcherHandoffReady &&
+        !(await racePromiseWithAbortSignal(exitWatcherHandoffReady.result.promise, controls.signal))
+      ) {
+        throw new Error("cron on-exit replacement scheduler did not start");
+      }
+      controls.commitGuard();
+      if (getGatewaySuspendAdmissionPhase() === "draining") {
+        const completionToken: Parameters<CronService["updateWithPrecondition"]>[2] = (current) => {
+          controls.commitGuard();
+          if (!current.enabled || current.updatedAtMs !== job.updatedAtMs) {
+            throw new Error("cron on-exit job changed before completion");
+          }
+        };
+        terminalExitCompletionTokens.set(job.id, completionToken);
+        controls.onTerminalWriteStarted();
+        try {
+          // Consume an already-owned exit during drain without admitting a new payload.
+          await cron.updateWithPrecondition(job.id, { enabled: false }, completionToken, {
+            commitGuard: controls.commitGuard,
+          });
+          controls.onReserved();
+          controls.commitGuard();
+          throw new Error(
+            `cron on-exit run was not admitted: gateway draining\n\n${truncateUtf16WithEllipsis(formatOnExitRunSummary(exit), 2_000)}`,
+          );
+        } finally {
+          if (terminalExitCompletionTokens.get(job.id) === completionToken) {
+            terminalExitCompletionTokens.delete(job.id);
+          }
+          void reconcileExitWatchers();
+        }
+      }
+      await runWithGatewayIndependentRootWorkAdmission(
+        async () =>
+          fireOnExitJob(job, exit, {
+            run: (jobId, payload) =>
+              cron.runOnExit(jobId, {
+                schedule: job.schedule,
+                signal: controls.signal,
+                commitGuard: controls.commitGuard,
+                onReserved: controls.onReserved,
+                payload,
+              }),
+          }),
+        "cron:exit-hook",
+        controls.signal,
+      );
+    },
+    updateWatcherState: async (job, patch) =>
+      await runWithGatewayIndependentRootWorkAdmission(async () => {
+        try {
+          // A retired watch must not write failure state onto its replacement.
+          return await cron.updateWithPrecondition(job.id, { state: patch }, (current) => {
+            if (
+              !current.enabled ||
+              current.schedule.kind !== "on-exit" ||
+              current.updatedAtMs !== job.updatedAtMs
+            ) {
+              throw new Error("cron on-exit job changed before watcher-state write");
+            }
+          });
+        } catch {
+          // Stale watcher identity is a no-op, not an error to surface.
+          return undefined;
+        }
+      }, "cron:watcher-state"),
+    logger: cronServiceLogger,
+  } satisfies CronExitWatcherHandlers;
+  exitWatchers = createCronExitWatchers(exitWatcherHandlers, params.scheduler);
+  const streamWatchers = createCronStreamWatchers({
+    getDefaultAgentId: () => cron.getDefaultAgentId(),
+    scheduler: params.scheduler,
+    getProcessSupervisor,
+    updateState: async (jobId, patch, streamScheduleKey, streamSourceIdentity) => {
+      return await cron.updateExternalState(jobId, streamScheduleKey, streamSourceIdentity, patch);
+    },
+    retireSource: async (jobId, streamScheduleKey, streamSourceIdentity) =>
+      await cron.retireExternalStreamSource(jobId, streamScheduleKey, streamSourceIdentity),
+    updateCounters: async (jobId, counters) => {
+      await cron.updateExternalCounters(jobId, counters);
+    },
+    recordFailure: async (jobId, error, patch, streamScheduleKey, streamSourceIdentity) => {
+      await cron.recordExternalFailure(jobId, error, patch, {
+        scheduleKey: streamScheduleKey,
+        identity: streamSourceIdentity,
+      });
+    },
+    fireBatch: (job, batch, streamScheduleKey, streamSourceIdentity) =>
+      runWithGatewayIndependentRootWorkAdmission(
+        async () =>
+          fireStreamJob(job, {
+            run: async (jobId, onDisposition) => {
+              const result = await cron.run(jobId, "force", {
+                evaluateTrigger: true,
+                streamBatch: batch,
+                streamScheduleKey,
+                streamSourceIdentity,
+                onTriggerDisposition: onDisposition,
+              });
+              return { ...result, enabled: cron.getJob(jobId)?.enabled };
+            },
+          }),
+        "cron:stream-batch",
+      ),
+    logger: cronServiceLogger,
+  });
+  const queueStreamStopAfterValidation = (
+    current: CronJob,
+    patch: Parameters<CronService["update"]>[1],
+    nowMs: number,
+  ): Promise<void> | undefined => {
+    if (
+      current.schedule.kind !== "stream" ||
+      (patch.enabled !== false && patch.schedule === undefined)
+    ) {
+      return undefined;
+    }
+    // Validate before fencing the owner. A rejected conditional or malformed
+    // update must leave the live source and its buffered events untouched.
+    const validated = structuredClone(current);
+    applyJobPatch(validated, patch, {
+      defaultAgentId: cron.getDefaultAgentId(),
+      scheduleValidationNowMs: nowMs,
+      cronConfig: params.cfg.cron,
+    });
+    if (
+      validated.enabled &&
+      validated.schedule.kind === "stream" &&
+      cronStreamScheduleKey(validated.schedule) === cronStreamScheduleKey(current.schedule)
+    ) {
+      return undefined;
+    }
+    // Close admission synchronously, but drain outside the cron store lock.
+    // The caller observes rejection now and joins it after mutation settlement.
+    return streamWatchers?.stop(
+      current.id,
+      patch.schedule !== undefined ? "schedule-update" : "disabled",
+    );
+  };
+  const cancelDisabledExitWatcher = (job: CronJob) => {
+    if (job.enabled || job.schedule.kind !== "on-exit") {
+      return;
+    }
+    // An operator disable wins over a completion retained during owner handoff.
+    exitWatcherMutationRevision += 1;
+    exitWatchers?.cancel(job.id);
+  };
+  const addCron = cron.add.bind(cron);
+  cron.add = async (input, options) => {
+    const result = await addCron(input, options);
+    const addedJob = "job" in result ? result.job : result;
+    if (options?.enabledExplicit && !input.enabled) {
+      cancelDisabledExitWatcher(addedJob);
+    }
+    await routeStreamWatcherMutation(addedJob.id, addedJob, "added");
+    return result;
+  };
+  const settleStopAfterCommittedUpdate = async (
+    jobId: string,
+    lifecycleStop: Promise<PromiseSettledResult<void>[]> | undefined,
+  ) => {
+    const [settled] = (await lifecycleStop) ?? [];
+    if (settled?.status === "rejected") {
+      // The durable update already committed and the owner persisted its own
+      // terminal stream diagnostic. Failing the caller here would claim a
+      // rollback that never happened; routeLiveStreamJobLogged below retries teardown.
+      cronLogger.warn(
+        { jobId, err: String(settled.reason) },
+        "cron-stream: source teardown failed after committed update",
+      );
+    }
+  };
+  // Watcher routing after a committed mutation is lifecycle repair, not part
+  // of the mutation result: a stubborn child failing again must not turn an
+  // already-persisted change into a caller-visible error.
+  const routeLiveStreamJobLogged = async (jobId: string) => {
+    try {
+      const current = cron.getJob(jobId);
+      await routeStreamWatcherMutation(jobId, current, current ? "updated" : "removed");
+    } catch (error) {
+      cronLogger.warn(
+        { jobId, err: String(error) },
+        "cron-stream: post-commit lifecycle routing failed",
+      );
+    }
+  };
+  const updateCronWithPrecondition = cron.updateWithPrecondition.bind(cron);
+  const updateWithWatchers = async (
+    jobId: string,
+    patch: Parameters<CronService["update"]>[1],
+    opts?: Parameters<CronService["update"]>[2],
+    precondition?: Parameters<CronService["updateWithPrecondition"]>[2],
+  ) => {
+    let lifecycleStop: Promise<PromiseSettledResult<void>[]> | undefined;
+    const routeAfterValidation = (current: CronJob, nowMs: number) => {
+      const stop = queueStreamStopAfterValidation(current, patch, nowMs);
+      lifecycleStop = stop ? Promise.allSettled([stop]) : undefined;
+    };
+    const beforeUpdate = precondition
+      ? async (current: CronJob, nowMs: number) => {
+          await precondition(current, nowMs);
+          routeAfterValidation(current, nowMs);
+        }
+      : routeAfterValidation;
+    try {
+      const result = await updateCronWithPrecondition(jobId, patch, beforeUpdate, opts);
+      if (
+        patch.enabled === false &&
+        (!precondition || terminalExitCompletionTokens.get(jobId) !== precondition)
+      ) {
+        cancelDisabledExitWatcher(result);
+      }
+      await settleStopAfterCommittedUpdate(jobId, lifecycleStop);
+      await routeLiveStreamJobLogged(jobId);
+      return result;
+    } catch (error) {
+      await lifecycleStop;
+      if (lifecycleStop) {
+        await routeLiveStreamJobLogged(jobId);
+      }
+      throw error;
+    }
+  };
+  cron.update = (jobId, patch, opts) => updateWithWatchers(jobId, patch, opts);
+  cron.updateWithPrecondition = (jobId, patch, precondition, opts) =>
+    updateWithWatchers(jobId, patch, opts, precondition);
+  const removeCron = cron.remove.bind(cron);
+  cron.remove = async (jobId, opts) => {
+    const previous = cron.getJob(jobId);
+    try {
+      if (previous?.schedule.kind === "stream") {
+        await streamWatchers?.stop(jobId, "removed", previous);
+      }
+      const result = await removeCron(jobId, opts);
+      if (!result.removed) {
+        await routeLiveStreamJobLogged(jobId);
+      }
+      return result;
+    } catch (error) {
+      // Preserve the original stop/removal error; recovery routing is advisory.
+      await routeLiveStreamJobLogged(jobId);
+      throw error;
+    }
+  };
+  const getCronSuspensionBlockerCount = cron.getSuspensionBlockerCount.bind(cron);
+  cron.getSuspensionBlockerCount = () =>
+    getCronSuspensionBlockerCount() +
+    exitWatcherReconciliations +
+    streamWatcherReconciliations +
+    (exitWatchers?.activeJobIds().length ?? 0) +
+    (streamWatchers?.activeJobIds().length ?? 0);
+  // cron.stop begins cancellation synchronously; stopAndDrain joins this same
+  // settlement so a replacement owner cannot start over live predecessors.
+  let exitWatchersStopPromise: Promise<void> | undefined;
+  const stopExitWatchers = () => {
+    // Late completion cleanup can request reconciliation after shutdown.
+    // Fence new requests before cancellation so stopped children cannot respawn.
+    exitWatchersStopped = true;
+    exitWatcherGeneration += 1;
+    exitWatchersStopPromise ??= exitWatchers?.cancelAll() ?? Promise.resolve();
+  };
+  // cron.stop launches this teardown asynchronously and stopAndDrain awaits
+  // it; memoizing keeps that one drain instead of queueing every owner a
+  // second shutdown stop whose bounded wait could spuriously time out.
+  let streamWatchersStopPromise: Promise<void> | undefined;
+  const stopStreamWatchers = (): Promise<void> => {
+    if (streamWatchersStopPromise) {
+      return streamWatchersStopPromise;
+    }
+    const stopPromise = (async () => {
+      streamWatcherGeneration += 1;
+      streamWatchersStopped = true;
+      await streamWatchers?.stopAll("shutdown");
+    })();
+    streamWatchersStopPromise = stopPromise;
+    void stopPromise.catch(() => {
+      // Owners retain failed process handles so a later drain can retry them;
+      // only overlapping callers should share the rejected attempt.
+      if (streamWatchersStopPromise === stopPromise) {
+        streamWatchersStopPromise = undefined;
+      }
+    });
+    return stopPromise;
+  };
+  const automationSource = {
+    getJobs: () => cron.getLoadedJobs(),
+    getDefaultAgentId: () => cron.getDefaultAgentId(),
+  };
+  const automationEpoch = claimSessionAutomationEpoch();
+  const stopCron = cron.stop.bind(cron);
+  const stopCronLifecycle = (preserveExitWatchers = false) => {
+    settleExitWatcherHandoff(false);
+    try {
+      stopCron();
+      if (preserveExitWatchers) {
+        // A committed replacement owns these children; fence this scheduler
+        // without terminating the adopted manager.
+        exitWatchersStopped = true;
+        exitWatcherGeneration += 1;
+      } else {
+        stopExitWatchers();
+      }
+      stopSystemJobReconciliation();
+      void stopStreamWatchers().catch((err: unknown) => {
+        cronLogger.warn(
+          { err: formatErrorMessage(err) },
+          "cron-stream: asynchronous teardown failed",
+        );
+      });
+    } finally {
+      // Session rows must stop reporting automation from a stopped scheduler,
+      // but a reload's replacement service may already own the registration.
+      unregisterSessionAutomationSource(automationSource);
+    }
+  };
+  cron.stop = () => {
+    stopCronLifecycle();
+  };
+  const stopAndDrainCron = async (preserveExitWatchers = false) => {
+    stopCronLifecycle(preserveExitWatchers);
+    await drainGatewayCron({
+      settlements: [
+        cron.waitForIdle(),
+        systemJobScopeDrain,
+        systemJobReconcileTail,
+        exitWatchersStopPromise ?? Promise.resolve(),
+        stopStreamWatchers(),
+      ],
+      logger: cronLogger,
+    });
+  };
+  cron.stopAndDrain = async () => {
+    await stopAndDrainCron();
+  };
+  // Serialize accepted-config convergence; newer requests and stop supersede this tail.
+  let systemJobReconcileTail = Promise.resolve<GatewaySystemJobReconciliationResult>("converged");
+  let systemJobScope = params.scheduler.scope();
+  let systemJobScopeDrain = Promise.resolve();
+  const stopSystemJobReconciliation = () => {
+    // A retry can retire its own scope; only external shutdown joins its callback.
+    systemJobScopeDrain = Promise.all([systemJobScopeDrain, systemJobScope.stop()]).then(
+      () => undefined,
+    );
+  };
+  const reconcileSystemJobs = (): Promise<GatewaySystemJobReconciliationResult> => {
+    if (systemJobScope.signal.aborted) {
+      return Promise.resolve("superseded");
+    }
+    stopSystemJobReconciliation();
+    const scope = (systemJobScope = params.scheduler.scope());
+    const isCurrent = () => scope === systemJobScope && !scope.signal.aborted;
+    const pass = async (): Promise<GatewaySystemJobReconciliationResult> => {
+      const cfg = getRuntimeConfig();
+      const assertCurrent = () => {
+        if (!isCurrent() || cfg !== getRuntimeConfig()) {
+          throw new GatewaySystemJobReconciliationSupersededError();
+        }
+      };
+      try {
+        const { ok: converged } = await reconcileHeartbeatMonitorJobs({
+          cron,
+          cfg,
+          logger: cronServiceLogger,
+          commitGuard: assertCurrent,
+        });
+        assertCurrent();
+        if (!converged) {
+          scope.schedule({
+            id: `cron:${storePath}:system-jobs`,
+            delayMs: 30_000,
+            run: reconcileSystemJobs,
+          });
+        }
+        return converged ? "converged" : "retry-scheduled";
+      } catch (error) {
+        if (!(error instanceof GatewaySystemJobReconciliationSupersededError)) {
+          throw error;
+        }
+        // A no-op accepted replacement may not request another pass. Finish
+        // against its config; an explicit newer request or stop owns its own tail.
+        return isCurrent() ? await pass() : "superseded";
+      }
+    };
+    systemJobReconcileTail = systemJobReconcileTail.then(pass, pass);
+    return systemJobReconcileTail;
+  };
+  const startCron = cron.start.bind(cron);
+  cron.start = async () => {
+    if (exitWatcherHandoffReady?.settled) {
+      exitWatcherHandoffReady = { result: createDeferredCore<boolean>(), settled: false };
+    }
+    // A failed start keeps observed exits parked for retry; stop cancels them.
+    const handoff = exitWatcherHandoffReady;
+    const exitGeneration = exitWatcherGeneration;
+    const streamGeneration = streamWatcherGeneration;
+    const lifecycleChanged = () =>
+      exitGeneration !== exitWatcherGeneration || streamGeneration !== streamWatcherGeneration;
+    await exitWatchersStopPromise;
+    if (lifecycleChanged()) {
+      return;
+    }
+    await startCron();
+    if (lifecycleChanged()) {
+      return;
+    }
+    exitWatchersStopped = false;
+    streamWatchersStopped = false;
+    // A restart owns a fresh watcher lifecycle; the next stop must drain it.
+    exitWatchersStopPromise = undefined;
+    streamWatchersStopPromise = undefined;
+    streamWatchers?.resume();
+    if (lifecycleChanged()) {
+      return;
+    }
+    await reconcileStreamWatchers();
+    if (lifecycleChanged()) {
+      return;
+    }
+    if (systemJobScope.signal.aborted) {
+      systemJobScope = params.scheduler.scope();
+    }
+    await reconcileSystemJobs();
+    if (lifecycleChanged()) {
+      return;
+    }
+    // Register only once started, under the build-time epoch, so a stale lazy
+    // service resolving after a config reload cannot clobber the replacement.
+    registerSessionAutomationSource(automationSource, automationEpoch);
+    // Nudge subscribed clients into a canonical list refresh so automation
+    // badges match this scheduler's bindings — including clearing them when a
+    // reload lands on an empty or disabled store.
+    params.broadcast(
+      "sessions.changed",
+      { reason: "cron-bindings-loaded", ts: Date.now() },
+      { dropIfSlow: true },
+    );
+    if (handoff) {
+      settleExitWatcherHandoff(true, handoff);
+    }
+  };
+
+  return {
+    cron,
+    storePath,
+    cronEnabled,
+    prepareExitWatcherHandoff: async () => ({
+      current: () => exitWatchers!,
+      adopt: (watchers) => {
+        if (watchers !== exitWatchers) {
+          settleExitWatcherHandoff(false);
+          exitWatcherHandoffReady = { result: createDeferredCore<boolean>(), settled: false };
+          exitWatcherGeneration += 1;
+        }
+        exitWatchers = watchers;
+        return watchers.updateHandlers(exitWatcherHandlers);
+      },
+      stopOwner: async () => {
+        await stopAndDrainCron(true);
+      },
+    }),
+    reconcileExitWatchers,
+    reconcileStreamWatchers,
+    stopStreamWatchers,
+    reconcileSystemJobs,
+  };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

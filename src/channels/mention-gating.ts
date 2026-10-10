@@ -1,35 +1,4 @@
-/** @deprecated Prefer `resolveInboundMentionDecision({ facts, policy })`. */
-export type MentionGateParams = {
-  requireMention: boolean;
-  canDetectMention: boolean;
-  wasMentioned: boolean;
-  implicitMention?: boolean;
-  shouldBypassMention?: boolean;
-};
-
-/** @deprecated Prefer `InboundMentionDecision`. */
-export type MentionGateResult = {
-  effectiveWasMentioned: boolean;
-  shouldSkip: boolean;
-};
-
-/** @deprecated Prefer `resolveInboundMentionDecision({ facts, policy })`. */
-export type MentionGateWithBypassParams = {
-  isGroup: boolean;
-  requireMention: boolean;
-  canDetectMention: boolean;
-  wasMentioned: boolean;
-  implicitMention?: boolean;
-  hasAnyMention?: boolean;
-  allowTextCommands: boolean;
-  hasControlCommand: boolean;
-  commandAuthorized: boolean;
-};
-
-/** @deprecated Prefer `InboundMentionDecision`. */
-export type MentionGateWithBypassResult = MentionGateResult & {
-  shouldBypassMention: boolean;
-};
+import type { ChannelImplicitMentionsConfig } from "../config/types.channels.js";
 
 export type InboundImplicitMentionKind =
   | "reply_to_bot"
@@ -47,6 +16,7 @@ export type InboundMentionFacts = {
 export type InboundMentionPolicy = {
   isGroup: boolean;
   requireMention: boolean;
+  implicitMentions?: ChannelImplicitMentionsConfig;
   allowedImplicitMentionKinds?: readonly InboundImplicitMentionKind[];
   allowTextCommands: boolean;
   hasControlCommand: boolean;
@@ -65,7 +35,9 @@ export type ResolveInboundMentionDecisionParams =
   | ResolveInboundMentionDecisionFlatParams
   | ResolveInboundMentionDecisionNestedParams;
 
-export type InboundMentionDecision = MentionGateResult & {
+export type InboundMentionDecision = {
+  effectiveWasMentioned: boolean;
+  shouldSkip: boolean;
   implicitMention: boolean;
   matchedImplicitMentionKinds: InboundImplicitMentionKind[];
   shouldBypassMention: boolean;
@@ -78,100 +50,51 @@ export function implicitMentionKindWhen(
   return enabled ? [kind] : [];
 }
 
-function resolveMatchedImplicitMentionKinds(params: {
-  implicitMentionKinds?: readonly InboundImplicitMentionKind[];
-  allowedImplicitMentionKinds?: readonly InboundImplicitMentionKind[];
-}): InboundImplicitMentionKind[] {
-  const inputKinds = params.implicitMentionKinds ?? [];
-  if (inputKinds.length === 0) {
-    return [];
-  }
-  const allowedKinds = params.allowedImplicitMentionKinds
-    ? new Set(params.allowedImplicitMentionKinds)
-    : null;
-  const matched: InboundImplicitMentionKind[] = [];
-  for (const kind of inputKinds) {
-    if (allowedKinds && !allowedKinds.has(kind)) {
-      continue;
-    }
-    if (!matched.includes(kind)) {
-      matched.push(kind);
-    }
-  }
-  return matched;
-}
-
-function resolveMentionDecisionCore(params: {
+export function resolveBotThreadMentionPolicy(params: {
+  isBotOwnedThread: boolean;
+  requireMentionInBotThreads?: boolean;
   requireMention: boolean;
-  canDetectMention: boolean;
-  wasMentioned: boolean;
   implicitMentionKinds?: readonly InboundImplicitMentionKind[];
-  allowedImplicitMentionKinds?: readonly InboundImplicitMentionKind[];
-  shouldBypassMention: boolean;
-}): InboundMentionDecision {
-  const matchedImplicitMentionKinds = resolveMatchedImplicitMentionKinds({
-    implicitMentionKinds: params.implicitMentionKinds,
-    allowedImplicitMentionKinds: params.allowedImplicitMentionKinds,
-  });
-  const implicitMention = matchedImplicitMentionKinds.length > 0;
-  const effectiveWasMentioned =
-    params.wasMentioned || implicitMention || params.shouldBypassMention;
-  const shouldSkip = params.requireMention && params.canDetectMention && !effectiveWasMentioned;
-  return {
-    implicitMention,
-    matchedImplicitMentionKinds,
-    effectiveWasMentioned,
-    shouldBypassMention: params.shouldBypassMention,
-    shouldSkip,
-  };
-}
-
-function hasNestedMentionDecisionParams(
-  params: ResolveInboundMentionDecisionParams,
-): params is ResolveInboundMentionDecisionNestedParams {
-  return "facts" in params && "policy" in params;
-}
-
-function normalizeMentionDecisionParams(
-  params: ResolveInboundMentionDecisionParams,
-): ResolveInboundMentionDecisionNestedParams {
-  if (hasNestedMentionDecisionParams(params)) {
-    return params;
+}): {
+  requireMention: boolean;
+  implicitMentionKinds: readonly InboundImplicitMentionKind[] | undefined;
+} {
+  if (!params.isBotOwnedThread || params.requireMentionInBotThreads === undefined) {
+    return {
+      requireMention: params.requireMention,
+      implicitMentionKinds: params.implicitMentionKinds,
+    };
   }
-  const {
-    canDetectMention,
-    wasMentioned,
-    hasAnyMention,
-    implicitMentionKinds,
-    isGroup,
-    requireMention,
-    allowedImplicitMentionKinds,
-    allowTextCommands,
-    hasControlCommand,
-    commandAuthorized,
-  } = params;
   return {
-    facts: {
-      canDetectMention,
-      wasMentioned,
-      hasAnyMention,
-      implicitMentionKinds,
-    },
-    policy: {
-      isGroup,
-      requireMention,
-      allowedImplicitMentionKinds,
-      allowTextCommands,
-      hasControlCommand,
-      commandAuthorized,
-    },
+    requireMention: params.requireMentionInBotThreads,
+    implicitMentionKinds: params.requireMentionInBotThreads
+      ? params.implicitMentionKinds?.filter((kind) => kind === "native")
+      : params.implicitMentionKinds,
   };
+}
+
+/** Translates positive implicit-mention policy into the evaluator's kind allowlist. */
+export function allowedImplicitMentionKindsFromConfig(
+  config: ChannelImplicitMentionsConfig,
+): InboundImplicitMentionKind[] {
+  return [
+    ...implicitMentionKindWhen("reply_to_bot", config.replyToBot !== false),
+    ...implicitMentionKindWhen("quoted_bot", config.quotedBot !== false),
+    ...implicitMentionKindWhen("bot_thread_participant", config.threadParticipation !== false),
+    "native",
+  ];
 }
 
 export function resolveInboundMentionDecision(
   params: ResolveInboundMentionDecisionParams,
 ): InboundMentionDecision {
-  const { facts, policy } = normalizeMentionDecisionParams(params);
+  const { facts, policy } =
+    "facts" in params && "policy" in params ? params : { facts: params, policy: params };
+  const allowedImplicitMentionKinds =
+    policy.allowedImplicitMentionKinds ??
+    (policy.implicitMentions
+      ? allowedImplicitMentionKindsFromConfig(policy.implicitMentions)
+      : undefined);
   const shouldBypassMention =
     policy.isGroup &&
     policy.requireMention &&
@@ -180,53 +103,16 @@ export function resolveInboundMentionDecision(
     policy.allowTextCommands &&
     policy.commandAuthorized &&
     policy.hasControlCommand;
-  return resolveMentionDecisionCore({
-    requireMention: policy.requireMention,
-    canDetectMention: facts.canDetectMention,
-    wasMentioned: facts.wasMentioned,
-    implicitMentionKinds: facts.implicitMentionKinds,
-    allowedImplicitMentionKinds: policy.allowedImplicitMentionKinds,
+  const matchedImplicitMentionKinds = [...new Set(facts.implicitMentionKinds ?? [])].filter(
+    (kind) => !allowedImplicitMentionKinds || allowedImplicitMentionKinds.includes(kind),
+  );
+  const implicitMention = matchedImplicitMentionKinds.length > 0;
+  const effectiveWasMentioned = facts.wasMentioned || implicitMention || shouldBypassMention;
+  return {
+    implicitMention,
+    matchedImplicitMentionKinds,
+    effectiveWasMentioned,
     shouldBypassMention,
-  });
-}
-
-/** @deprecated Prefer `resolveInboundMentionDecision({ facts, policy })`. */
-export function resolveMentionGating(params: MentionGateParams): MentionGateResult {
-  const result = resolveMentionDecisionCore({
-    requireMention: params.requireMention,
-    canDetectMention: params.canDetectMention,
-    wasMentioned: params.wasMentioned,
-    implicitMentionKinds: implicitMentionKindWhen("native", params.implicitMention === true),
-    shouldBypassMention: params.shouldBypassMention === true,
-  });
-  return {
-    effectiveWasMentioned: result.effectiveWasMentioned,
-    shouldSkip: result.shouldSkip,
-  };
-}
-
-/** @deprecated Prefer `resolveInboundMentionDecision({ facts, policy })`. */
-export function resolveMentionGatingWithBypass(
-  params: MentionGateWithBypassParams,
-): MentionGateWithBypassResult {
-  const result = resolveInboundMentionDecision({
-    facts: {
-      canDetectMention: params.canDetectMention,
-      wasMentioned: params.wasMentioned,
-      hasAnyMention: params.hasAnyMention,
-      implicitMentionKinds: implicitMentionKindWhen("native", params.implicitMention === true),
-    },
-    policy: {
-      isGroup: params.isGroup,
-      requireMention: params.requireMention,
-      allowTextCommands: params.allowTextCommands,
-      hasControlCommand: params.hasControlCommand,
-      commandAuthorized: params.commandAuthorized,
-    },
-  });
-  return {
-    effectiveWasMentioned: result.effectiveWasMentioned,
-    shouldSkip: result.shouldSkip,
-    shouldBypassMention: result.shouldBypassMention,
+    shouldSkip: policy.requireMention && facts.canDetectMention && !effectiveWasMentioned,
   };
 }

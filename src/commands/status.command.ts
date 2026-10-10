@@ -1,66 +1,32 @@
-import { withProgress } from "../cli/progress.js";
+// Main `openclaw status` command orchestrator.
+// It routes all/json/deep modes, collects scan/runtime state, and delegates formatting to report builders.
+
 import {
   normalizePairingConnectRequestId,
   readConnectPairingRequiredMessage,
   readPairingConnectErrorDetails,
   type ConnectPairingRequiredReason,
-} from "../gateway/protocol/connect-error-details.js";
-import { readRestartSentinel } from "../infra/restart-sentinel.js";
-import { type RuntimeEnv } from "../runtime.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { sanitizeTerminalText } from "../terminal/safe-text.js";
-import { runStatusJsonCommand } from "./status-json-command.ts";
-import { buildStatusOverviewSurfaceFromScan } from "./status-overview-surface.ts";
+} from "../../packages/gateway-protocol/src/connect-error-details.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { withProgress } from "../cli/progress.js";
+import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
+import { readRestartSentinelReadOnly } from "../infra/restart-sentinel.js";
+import type { RuntimeEnv } from "../runtime.js";
+import { collectNodeRuntimeFindings } from "./node-runtime-diagnostics.js";
+import { assertStatusUsageAgentScope, runStatusJsonCommand } from "./status-json-command.ts";
 import {
-  loadStatusProviderUsageModule,
+  reportStatusScanFailure,
   resolveStatusGatewayHealth,
   resolveStatusSecurityAudit,
   resolveStatusRuntimeSnapshot,
   resolveStatusUsageSummary,
 } from "./status-runtime-shared.ts";
-import { formatUpdateRestartStatusValue } from "./status-update-restart.ts";
-import { buildStatusCommandReportData } from "./status.command-report-data.ts";
-import { buildStatusCommandReportLines } from "./status.command-report.ts";
+import { buildStatusUpdateRows } from "./status-update-restart.ts";
 import { logGatewayConnectionDetails } from "./status.gateway-connection.ts";
+import { createStatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
 
-const statusScanModuleLoader = createLazyImportLoader(() => import("./status.scan.js"));
-const statusScanFastJsonModuleLoader = createLazyImportLoader(
-  () => import("./status.scan.fast-json.js"),
-);
-const statusAllModuleLoader = createLazyImportLoader(() => import("./status-all.js"));
-const statusCommandTextRuntimeLoader = createLazyImportLoader(
-  () => import("./status.command.text-runtime.js"),
-);
-const statusGatewayConnectionRuntimeLoader = createLazyImportLoader(
-  () => import("./status.gateway-connection.runtime.js"),
-);
-const statusNodeModeModuleLoader = createLazyImportLoader(() => import("./status.node-mode.js"));
-
-function loadStatusScanModule() {
-  return statusScanModuleLoader.load();
-}
-
-function loadStatusScanFastJsonModule() {
-  return statusScanFastJsonModuleLoader.load();
-}
-
-function loadStatusAllModule() {
-  return statusAllModuleLoader.load();
-}
-
-function loadStatusCommandTextRuntime() {
-  return statusCommandTextRuntimeLoader.load();
-}
-
-function loadStatusGatewayConnectionRuntime() {
-  return statusGatewayConnectionRuntimeLoader.load();
-}
-
-function loadStatusNodeModeModule() {
-  return statusNodeModeModuleLoader.load();
-}
-
-export function resolvePairingRecoveryContext(params: {
+/** Extracts device-pairing recovery context from structured gateway errors or legacy message text. */
+function resolvePairingRecoveryContext(params: {
   error?: string | null;
   closeReason?: string | null;
   details?: unknown;
@@ -70,27 +36,46 @@ export function resolvePairingRecoveryContext(params: {
   remediationHint: string | null;
 } | null {
   const structured = readPairingConnectErrorDetails(params.details);
-  if (structured) {
-    return {
-      requestId: normalizePairingConnectRequestId(structured.requestId) ?? null,
-      reason: structured.reason ?? null,
-      remediationHint: structured.remediationHint
-        ? sanitizeTerminalText(structured.remediationHint)
-        : null,
-    };
-  }
-  const source = [params.error, params.closeReason]
-    .filter((part) => typeof part === "string" && part.trim().length > 0)
-    .join(" ");
-  const pairing = readConnectPairingRequiredMessage(source);
+  // Older gateways only exposed pairing details in close/error text; keep status recovery helpful there.
+  const pairing =
+    structured ??
+    readConnectPairingRequiredMessage(
+      [params.error, params.closeReason]
+        .filter((part) => typeof part === "string" && part.trim().length > 0)
+        .join(" "),
+    );
   if (!pairing) {
     return null;
   }
   return {
     requestId: normalizePairingConnectRequestId(pairing.requestId) ?? null,
     reason: pairing.reason ?? null,
-    remediationHint: null,
+    remediationHint: structured?.remediationHint
+      ? sanitizeTerminalText(structured.remediationHint)
+      : null,
   };
+}
+
+function resolveServiceWrapperContextHint(params: {
+  serviceWrapperPath?: string | null;
+  cliWrapperPath?: string | null;
+}): string | null {
+  const serviceWrapperPath = params.serviceWrapperPath?.trim();
+  if (!serviceWrapperPath) {
+    return null;
+  }
+  if (params.cliWrapperPath?.trim() === serviceWrapperPath) {
+    return null;
+  }
+  return `The installed gateway service uses ${OPENCLAW_WRAPPER_ENV_KEY} (${sanitizeTerminalText(serviceWrapperPath)}), but this CLI process is not running with that same wrapper. Missing-secret diagnostics may describe the current CLI process rather than the installed gateway service context.`;
+}
+
+function withStatusProgress<Input, Output>(
+  label: string,
+  resolve: (input: Input) => Promise<Output>,
+) {
+  return (input: Input) =>
+    withProgress({ label, indeterminate: true, enabled: true }, () => resolve(input));
 }
 
 export async function statusCommand(
@@ -98,62 +83,53 @@ export async function statusCommand(
     json?: boolean;
     deep?: boolean;
     usage?: boolean;
+    agent?: string;
     timeoutMs?: number;
     verbose?: boolean;
     all?: boolean;
   },
   runtime: RuntimeEnv,
 ) {
+  const probeBudget = createStatusGatewayProbeBudget(opts.timeoutMs);
+  assertStatusUsageAgentScope(opts);
+  for (const finding of await collectNodeRuntimeFindings()) {
+    const write = opts.json ? runtime.error : runtime.log;
+    write(
+      `[${finding.severity}] ${finding.message}${finding.fixHint ? `\n${finding.fixHint}` : ""}`,
+    );
+  }
   if (opts.all && !opts.json) {
-    await loadStatusAllModule().then(({ statusAllCommand }) =>
-      statusAllCommand(runtime, { timeoutMs: opts.timeoutMs }),
+    // Human `--all` has a dedicated report path; JSON `--all` stays on the JSON schema.
+    await import("./status-all.js").then(({ statusAllCommand }) =>
+      statusAllCommand(runtime, { ...opts, ...probeBudget }),
     );
     return;
   }
 
   if (opts.json) {
     await runStatusJsonCommand({
-      opts,
+      opts: { ...opts, ...probeBudget },
       runtime,
-      includeSecurityAudit: opts.all === true,
-      includePluginCompatibility: true,
-      suppressHealthErrors: true,
-      scanStatusJsonFast: async (scanOpts, runtimeForScan) =>
-        await loadStatusScanFastJsonModule().then(({ scanStatusJsonFast }) =>
-          scanStatusJsonFast(scanOpts, runtimeForScan),
-        ),
     });
     return;
   }
 
-  const scan = await loadStatusScanModule().then(({ scanStatus }) =>
-    scanStatus({ json: false, timeoutMs: opts.timeoutMs, all: opts.all, deep: opts.deep }, runtime),
-  );
+  const scan = await import("./status.scan.js")
+    .then(({ scanStatus }) => scanStatus({ ...probeBudget, deep: opts.deep }))
+    .catch((error: unknown) => reportStatusScanFailure(error, runtime, opts.timeoutMs));
 
-  const {
-    cfg,
-    osSummary,
-    tailscaleMode,
-    tailscaleDns,
-    tailscaleHttpsUrl,
-    update,
-    gatewayConnection,
-    remoteUrlMissing,
-    gatewayMode,
-    gatewayProbeAuth,
-    gatewayProbeAuthWarning,
-    gatewayProbe,
-    gatewayReachable,
-    gatewaySelf,
-    channelIssues,
-    agentStatus,
-    channels,
-    summary,
-    secretDiagnostics,
-    memory,
-    memoryPlugin,
-    pluginCompatibility,
-  } = scan;
+  const { cfg, update, gatewayProbe, gatewayReachable, configDiagnostics, secretDiagnostics, env } =
+    scan;
+
+  if (configDiagnostics) {
+    const { formatStatusConfigDiagnosticEntries, theme } =
+      await import("./status.command.text-runtime.js");
+    runtime.log(theme.warn("Config diagnostics:"));
+    for (const entry of formatStatusConfigDiagnosticEntries(configDiagnostics)) {
+      runtime.log(entry);
+    }
+    runtime.log("");
+  }
 
   const {
     securityAudit,
@@ -165,70 +141,42 @@ export async function statusCommand(
   } = await resolveStatusRuntimeSnapshot({
     config: scan.cfg,
     sourceConfig: scan.sourceConfig,
-    timeoutMs: opts.timeoutMs,
+    ...probeBudget,
+    ...(opts.agent ? { agentId: opts.agent } : {}),
     usage: opts.usage,
     deep: opts.deep,
     gatewayReachable,
+    ...(gatewayProbe?.startupPhase ? { gatewayStartupPhase: gatewayProbe.startupPhase } : {}),
+    ...(gatewayProbe?.error ? { gatewayProbeError: gatewayProbe.error } : {}),
     includeSecurityAudit: opts.all === true || opts.deep === true,
-    resolveSecurityAudit: async (input) =>
-      await withProgress(
-        {
-          label: "Running security audit…",
-          indeterminate: true,
-          enabled: true,
-        },
-        async () => await resolveStatusSecurityAudit(input),
-      ),
-    resolveUsage: async (input) =>
-      await withProgress(
-        {
-          label: "Fetching usage snapshot…",
-          indeterminate: true,
-          enabled: opts.json !== true,
-        },
-        async () => await resolveStatusUsageSummary(input),
-      ),
-    resolveHealth: async (input) =>
-      await withProgress(
-        {
-          label: "Checking gateway health…",
-          indeterminate: true,
-          enabled: opts.json !== true,
-        },
-        async () => await resolveStatusGatewayHealth(input),
-      ),
+    resolveSecurityAudit: withStatusProgress("Running security audit…", resolveStatusSecurityAudit),
+    resolveUsage: withStatusProgress("Fetching usage snapshot…", resolveStatusUsageSummary),
+    resolveHealth: withStatusProgress("Checking gateway health…", resolveStatusGatewayHealth),
   });
 
-  const rich = true;
+  // Structured probe failures belong to nonthrowing JSON; text status keeps failures loud.
+  if (health && "error" in health) {
+    throw new Error(health.error);
+  }
+
   const {
+    buildStatusCommandReportData,
+    buildStatusCommandReportLines,
     buildStatusUpdateSurface,
-    formatCliCommand,
-    formatHealthChannelLines,
-    formatKTokens,
-    formatPromptCacheCompact,
-    formatPluginCompatibilityNotice,
-    formatTimeAgo,
-    formatTokensCompact,
-    formatUpdateAvailableHint,
+    formatUsageReportLines,
     getTerminalTableWidth,
     info,
-    renderTable,
-    resolveMemoryCacheSummary,
-    resolveMemoryFtsState,
-    resolveMemoryVectorState,
-    shortenText,
     theme,
-  } = await loadStatusCommandTextRuntime();
-  const muted = (value: string) => (rich ? theme.muted(value) : value);
-  const ok = (value: string) => (rich ? theme.success(value) : value);
-  const warn = (value: string) => (rich ? theme.warn(value) : value);
+  } = await import("./status.command.text-runtime.js");
+  const { muted, success: ok, warn } = theme;
   const updateSurface = buildStatusUpdateSurface({
     updateConfigChannel: cfg.update?.channel,
     update,
   });
 
   if (opts.verbose) {
-    const { buildGatewayConnectionDetails } = await loadStatusGatewayConnectionRuntime();
+    // Verbose status prints the raw gateway target resolution before the report tables.
+    const { buildGatewayConnectionDetails } = await import("../gateway/call.js");
     const details = buildGatewayConnectionDetails({ config: scan.cfg });
     logGatewayConnectionDetails({
       runtime,
@@ -241,18 +189,27 @@ export async function statusCommand(
   const tableWidth = getTerminalTableWidth();
 
   if (secretDiagnostics.length > 0) {
+    // Secret diagnostics are already redacted by the scanner; show them before the main report.
     runtime.log(theme.warn("Secret diagnostics:"));
     for (const entry of secretDiagnostics) {
       runtime.log(`- ${entry}`);
     }
+    const wrapperContextHint = resolveServiceWrapperContextHint({
+      serviceWrapperPath: daemon.wrapperPath,
+      cliWrapperPath: process.env[OPENCLAW_WRAPPER_ENV_KEY],
+    });
+    if (wrapperContextHint) {
+      runtime.log(theme.warn(wrapperContextHint));
+    }
     runtime.log("");
   }
 
-  const nodeOnlyGateway = await loadStatusNodeModeModule().then(({ resolveNodeOnlyGatewayInfo }) =>
-    resolveNodeOnlyGatewayInfo({
-      daemon,
-      node: nodeDaemon,
-    }),
+  const nodeOnlyGateway = await import("./status.node-mode.js").then(
+    ({ resolveNodeOnlyGatewayInfo }) =>
+      resolveNodeOnlyGatewayInfo({
+        daemon,
+        node: nodeDaemon,
+      }),
   );
   const pairingRecovery = resolvePairingRecoveryContext({
     error: gatewayProbe?.error ?? null,
@@ -260,83 +217,40 @@ export async function statusCommand(
     details: gatewayProbe?.connectErrorDetails,
   });
 
-  const usageLines = usage
-    ? await loadStatusProviderUsageModule().then(({ formatUsageReportLines }) =>
-        formatUsageReportLines(usage),
-      )
-    : undefined;
-  const overviewSurface = buildStatusOverviewSurfaceFromScan({
-    scan: {
-      cfg,
-      update,
-      tailscaleMode,
-      tailscaleDns,
-      tailscaleHttpsUrl,
-      gatewayMode,
-      remoteUrlMissing,
-      gatewayConnection,
-      gatewayReachable,
-      gatewayProbe,
-      gatewayProbeAuth,
-      gatewayProbeAuthWarning,
-      gatewaySelf,
-    },
+  const usageLines = usage ? formatUsageReportLines(usage) : undefined;
+  const overviewSurface = {
+    ...scan,
     gatewayService: daemon,
     nodeService: nodeDaemon,
     nodeOnlyGateway,
-  });
-  const updateRestartValue = formatUpdateRestartStatusValue(
-    (await readRestartSentinel().catch(() => null))?.payload,
+  };
+  const updateRows = await buildStatusUpdateRows(
+    (await readRestartSentinelReadOnly().catch(() => null))?.payload,
     {
       ok,
       warn,
       muted,
-      formatTimeAgo,
+      localGatewayHealthy: scan.localGatewayHealthy,
+      gatewayServer: gatewayProbe?.server,
     },
   );
   const lines = await buildStatusCommandReportLines(
     await buildStatusCommandReportData({
+      ...scan,
+      env: env ?? {},
       opts,
       surface: overviewSurface,
-      osSummary,
-      summary,
       securityAudit,
       health,
       usageLines,
       lastHeartbeat,
-      agentStatus,
-      channels,
-      channelIssues,
-      memory,
-      memoryPlugin,
-      pluginCompatibility,
       pairingRecovery,
       tableWidth,
-      ok,
-      warn,
-      muted,
-      shortenText,
-      formatCliCommand,
-      formatTimeAgo,
-      formatKTokens,
-      formatTokensCompact,
-      formatPromptCacheCompact,
-      formatHealthChannelLines,
-      formatPluginCompatibilityNotice,
-      formatUpdateAvailableHint,
-      resolveMemoryVectorState,
-      resolveMemoryFtsState,
-      resolveMemoryCacheSummary,
-      accentDim: theme.accentDim,
-      theme,
-      renderTable,
       updateValue: updateSurface.updateAvailable
         ? warn(`available · ${updateSurface.updateLine}`)
         : updateSurface.updateLine,
-      updateRestartValue,
+      updateRows,
     }),
   );
-  for (const line of lines) {
-    runtime.log(line);
-  }
+  runtime.log(lines.join("\n"));
 }

@@ -1,3 +1,2 @@
-import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
-
-export { getChannelPlugin, normalizeChannelId };
+/** Runtime facade for group channel plugin lookup helpers. */
+export { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";

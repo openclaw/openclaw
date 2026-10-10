@@ -1,19 +1,7 @@
+import { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { normalizeMediaProviderId } from "./provider-id.js";
 
-type ConfigProvider = NonNullable<
-  NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string]
->;
-
-type ConfigProviderModel = NonNullable<ConfigProvider["models"]>[number];
-
-function hasImageCapableModel(providerCfg: ConfigProvider): boolean {
-  const models = providerCfg.models ?? [];
-  return models.some(
-    (model: ConfigProviderModel) => Array.isArray(model?.input) && model.input.includes("image"),
-  );
-}
-
+/** Finds configured model providers that can be auto-registered for image understanding. */
 export function resolveImageCapableConfigProviderIds(cfg?: OpenClawConfig): string[] {
   const configProviders = cfg?.models?.providers;
   if (!configProviders || typeof configProviders !== "object") {
@@ -22,10 +10,14 @@ export function resolveImageCapableConfigProviderIds(cfg?: OpenClawConfig): stri
 
   const providerIds: string[] = [];
   for (const [providerKey, providerCfg] of Object.entries(configProviders)) {
-    if (!providerKey?.trim() || !hasImageCapableModel(providerCfg)) {
-      continue;
+    if (
+      providerKey?.trim() &&
+      (providerCfg.models ?? []).some(
+        (model) => Array.isArray(model?.input) && model.input.includes("image"),
+      )
+    ) {
+      providerIds.push(normalizeMediaProviderId(providerKey));
     }
-    providerIds.push(normalizeMediaProviderId(providerKey));
   }
   return providerIds;
 }

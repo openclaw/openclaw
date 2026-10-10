@@ -1,5 +1,5 @@
 import path from "node:path";
-import { writeExternalFileWithinRoot } from "../sdk-security-runtime.js";
+import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { ensureOutputDirectory } from "./output-directories.js";
 
 export async function writeExternalFileWithinOutputRoot(params: {
@@ -22,8 +22,8 @@ export async function writeExternalFileWithinOutputRoot(params: {
     path: outputPath,
     write: params.write,
   }).catch((err: unknown) => {
-    if (err instanceof Error && /file not found/i.test(err.message)) {
-      throw new Error("output directory changed while writing file");
+    if (err instanceof Error && (err as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error("output directory changed while writing file", { cause: err });
     }
     throw err;
   });

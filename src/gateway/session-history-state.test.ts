@@ -1,151 +1,197 @@
+/**
+ * Completed history snapshots and incremental SSE transitions.
+ */
 import { createHash } from "node:crypto";
+import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 import { describe, expect, test, vi } from "vitest";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
-import { buildSessionHistorySnapshot, SessionHistorySseState } from "./session-history-state.js";
-import * as sessionUtils from "./session-utils.js";
+import type {
+  SessionHistoryReadParams,
+  SessionHistorySnapshot,
+} from "../config/sessions/session-history-types.js";
+import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
+import {
+  assistantTextMessage,
+  textContent,
+  userTextMessage,
+} from "./session-history-fixtures.test-support.js";
+import { SessionHistorySseState } from "./session-history-state.js";
+import * as sessionTranscriptReaders from "./session-transcript-readers.js";
+
+type StateOptions = Pick<SessionHistoryReadParams, "maxChars" | "limit" | "cursor"> &
+  Pick<SessionHistorySnapshot["history"], "windowReset"> &
+  Partial<
+    Pick<
+      SessionHistorySnapshot,
+      "rawTranscriptSeq" | "turnBoundaryPending" | "assistantErrorPending"
+    >
+  >;
+
+function newState(
+  messages: SessionHistorySnapshot["history"]["messages"],
+  options: StateOptions = {},
+) {
+  return SessionHistorySseState.fromSnapshot({
+    target: { sessionId: "sess-main", sessionKey: "agent:main:main" },
+    maxChars: options.maxChars,
+    limit: options.limit,
+    cursor: options.cursor,
+    snapshot: {
+      history: { items: messages, messages, hasMore: false, windowReset: options.windowReset },
+      rawTranscriptSeq: options.rawTranscriptSeq ?? messages.at(-1)?.["__openclaw"]?.seq ?? 0,
+      turnBoundaryPending: options.turnBoundaryPending ?? false,
+      assistantErrorPending: options.assistantErrorPending ?? false,
+    },
+  });
+}
+
+function newStateWithUserText(text: string): SessionHistorySseState {
+  return newState([userTextMessage(text, 1)]);
+}
+
+async function appendAssistantText(
+  state: SessionHistorySseState,
+  text: string,
+  messageSeq?: number,
+) {
+  return (
+    await state.prepareInlineMessage({
+      message: {
+        role: "assistant",
+        content: textContent(text),
+      },
+      ...(messageSeq === undefined ? {} : { messageSeq }),
+    })
+  )();
+}
 
 describe("SessionHistorySseState", () => {
-  test("uses the initial raw snapshot for both first history and seq seeding", () => {
-    const readSpy = vi.spyOn(sessionUtils, "readSessionMessagesAsync").mockResolvedValue([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "stale disk message" }],
-        __openclaw: { seq: 1 },
-      },
-    ]);
-    try {
-      const state = SessionHistorySseState.fromRawSnapshot({
-        target: { sessionId: "sess-main" },
-        rawMessages: [
-          {
-            role: "assistant",
-            content: [{ type: "text", text: "fresh snapshot message" }],
-            __openclaw: { seq: 2 },
-          },
-        ],
-      });
+  test("seeds inline sequence from the completed snapshot watermark", async () => {
+    const messages = [assistantTextMessage("fresh snapshot message", 2)];
+    const state = newState(messages, { rawTranscriptSeq: 4 });
 
-      expect(state.snapshot().messages).toHaveLength(1);
-      expect(
-        (
-          state.snapshot().messages[0] as {
-            content?: Array<{ text?: string }>;
-            __openclaw?: { seq?: number };
-          }
-        ).content?.[0]?.text,
-      ).toBe("fresh snapshot message");
-      expect(
-        (
-          state.snapshot().messages[0] as {
-            __openclaw?: { seq?: number };
-          }
-        ).__openclaw?.seq,
-      ).toBe(2);
+    expect(state.snapshot().messages).toEqual(messages);
+    expect((await appendAssistantText(state, "next message"))?.messageSeq).toBe(5);
+  });
 
-      const appended = state.appendInlineMessage({
+  test("carries inline user idempotency keys into history metadata", async () => {
+    const state = newState([]);
+
+    const appended = (
+      await state.prepareInlineMessage({
         message: {
-          role: "assistant",
-          content: [{ type: "text", text: "next message" }],
+          role: "user",
+          content: [{ type: "text", text: "optimistic turn" }],
+          idempotencyKey: "client-turn-2",
         },
-      });
+        messageId: "message-user-2",
+        messageSeq: 2,
+      })
+    )();
 
-      expect(appended?.messageSeq).toBe(3);
-      expect(readSpy).not.toHaveBeenCalled();
-    } finally {
-      readSpy.mockRestore();
-    }
+    expect(appended).toBeDefined();
+    expect(appended?.messageSeq).toBe(2);
+    expect(
+      (
+        appended!.message as {
+          __openclaw?: { id?: string; idempotencyKey?: string; seq?: number };
+        }
+      )["__openclaw"],
+    ).toMatchObject({
+      id: "message-user-2",
+      idempotencyKey: "client-turn-2",
+      seq: 2,
+    });
   });
 
-  test("reuses one canonical array for items and messages", () => {
-    const snapshot = buildSessionHistorySnapshot({
-      rawMessages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "first" }],
-          __openclaw: { seq: 1 },
-        },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "second" }],
-          __openclaw: { seq: 2 },
-        },
-      ],
-      limit: 1,
-    });
+  test("retains the recent projection without changing carried inline sequence", async () => {
+    const state = newState([
+      assistantTextMessage("first", 1),
+      assistantTextMessage("second", 2),
+      assistantTextMessage("third", 3),
+      assistantTextMessage("fourth", 4),
+    ]);
 
-    expect(snapshot.history.items).toBe(snapshot.history.messages);
-    expect(snapshot.history.messages[0]?.__openclaw?.seq).toBe(2);
-    expect(snapshot.rawTranscriptSeq).toBe(2);
+    const retained = state.retainRecentMessages(2);
+
+    expect(retained.items).toBe(retained.messages);
+    expect(retained.messages).toEqual([
+      assistantTextMessage("third", 3),
+      assistantTextMessage("fourth", 4),
+    ]);
+    expect(retained.hasMore).toBe(true);
+    expect(retained.nextCursor).toBe("3");
+
+    const appended = await appendAssistantText(state, "fifth", 5);
+    expect(appended?.messageSeq).toBe(5);
+    expect(appended?.message?.content).toEqual(textContent("fifth"));
+    expect(state.retainRecentMessages(2).messages).toEqual([
+      assistantTextMessage("fourth", 4),
+      assistantTextMessage("fifth", 5),
+    ]);
   });
 
-  test("uses carried sequence for inline SSE appends", () => {
-    const state = SessionHistorySseState.fromRawSnapshot({
-      target: { sessionId: "sess-main" },
-      rawMessages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "initial" }],
-          __openclaw: { seq: 2 },
-        },
-      ],
-    });
+  test("keeps the existing projection when it already fits the retention window", () => {
+    const state = newState([assistantTextMessage("first", 1)]);
+    const initialSnapshot = state.snapshot();
 
-    const appended = state.appendInlineMessage({
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "carried" }],
-      },
-      messageSeq: 9,
-    });
+    expect(state.retainRecentMessages(2)).toBe(initialSnapshot);
+  });
+
+  test("uses carried sequence for inline SSE appends", async () => {
+    const state = newState([assistantTextMessage("initial", 2)]);
+
+    const appended = await appendAssistantText(state, "carried", 9);
 
     expect(appended?.messageSeq).toBe(9);
-    expect(state.snapshot().messages.at(-1)?.__openclaw?.seq).toBe(9);
+    expect(state.snapshot().messages.at(-1)?.["__openclaw"]?.seq).toBe(9);
   });
 
-  test("requests refresh when inline TTS supplement merges into an existing assistant message", () => {
+  test("does not emit a no-op hidden inline control reply", async () => {
+    const state = newStateWithUserText("reply here");
+
+    const appended = await appendAssistantText(state, "NO_REPLY", 2);
+
+    expect(appended).toBeNull();
+    expect(state.snapshot().messages).toHaveLength(1);
+  });
+
+  test("requests refresh when inline TTS supplement merges into an existing assistant message", async () => {
     const visibleText = "Here is the answer.";
     const textSha256 = createHash("sha256").update(visibleText).digest("hex");
-    const state = SessionHistorySseState.fromRawSnapshot({
-      target: { sessionId: "sess-main" },
-      rawMessages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: visibleText }],
-          __openclaw: { seq: 2 },
-        },
-      ],
-    });
+    const state = newState([assistantTextMessage(visibleText, 2)]);
 
-    const appended = state.appendInlineMessage({
-      message: {
-        role: "assistant",
-        content: [
-          { type: "text", text: "Audio reply" },
-          {
-            type: "attachment",
-            attachment: {
-              url: "/tmp/tts.mp3",
-              kind: "audio",
-              label: "tts.mp3",
-              mimeType: "audio/mpeg",
+    const appended = (
+      await state.prepareInlineMessage({
+        message: {
+          role: "assistant",
+          content: [
+            { type: "text", text: "Audio reply" },
+            {
+              type: "attachment",
+              attachment: {
+                url: "/tmp/tts.mp3",
+                kind: "audio",
+                label: "tts.mp3",
+                mimeType: "audio/mpeg",
+              },
             },
-          },
-        ],
-        openclawTtsSupplement: { textSha256, spokenText: visibleText },
-      },
-      messageSeq: 3,
-    });
+          ],
+          openclawTtsSupplement: { textSha256, spokenText: visibleText },
+        },
+        messageSeq: 3,
+      })
+    )();
 
     expect(appended).toEqual({ shouldRefresh: true });
     expect(state.snapshot().messages).toEqual([
       {
         role: "assistant",
         content: [
-          { type: "text", text: visibleText },
+          textContent(visibleText)[0],
           {
             type: "attachment",
             attachment: {
-              url: "/tmp/tts.mp3",
               kind: "audio",
               label: "tts.mp3",
               mimeType: "audio/mpeg",
@@ -157,280 +203,235 @@ describe("SessionHistorySseState", () => {
     ]);
   });
 
-  test("requests refresh for non-monotonic carried inline sequence", () => {
-    const state = SessionHistorySseState.fromRawSnapshot({
-      target: { sessionId: "sess-main" },
-      rawMessages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "current" }],
-          __openclaw: { seq: 5 },
-        },
-      ],
-    });
+  test("requests refresh for non-monotonic carried inline sequence", async () => {
+    const state = newState([assistantTextMessage("current", 5)]);
 
-    const appended = state.appendInlineMessage({
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "rewound branch" }],
-      },
-      messageSeq: 3,
-    });
+    const appended = await appendAssistantText(state, "rewound branch", 3);
 
     expect(appended).toEqual({ shouldRefresh: true });
     expect(state.snapshot().messages).toHaveLength(1);
-    expect(state.snapshot().messages.at(-1)?.__openclaw?.seq).toBe(5);
+    expect(state.snapshot().messages.at(-1)?.["__openclaw"]?.seq).toBe(5);
   });
 
-  test("marks bounded tail snapshots as having older history", () => {
-    const snapshot = buildSessionHistorySnapshot({
-      rawMessages: [
+  test("requests refresh when later assistant content repairs an inline stream error", async () => {
+    const state = newState([userTextMessage("hello", 1)]);
+
+    const sentinel = (
+      await state.prepareInlineMessage({
+        message: {
+          role: "assistant",
+          content: textContent(STREAM_ERROR_FALLBACK_TEXT),
+          stopReason: "error",
+          errorMessage: "provider failed before content",
+        },
+        messageSeq: 2,
+      })
+    )();
+
+    expect(sentinel?.message).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "The agent run failed before producing a reply." }],
+      __openclaw: { seq: 2 },
+    });
+    expect(await appendAssistantText(state, "actual fallback response", 3)).toEqual({
+      shouldRefresh: true,
+    });
+  });
+
+  test("keeps an inline failed turn before a new forwarded inter-session turn", async () => {
+    const state = newState(
+      [
         {
           role: "assistant",
-          content: [{ type: "text", text: "tail" }],
-          __openclaw: { seq: 99 },
-        },
-      ],
-      limit: 1,
-      rawTranscriptSeq: 99,
-      totalRawMessages: 99,
-    });
-
-    expect(snapshot.history.hasMore).toBe(true);
-    expect(snapshot.history.nextCursor).toBe("99");
-    expect(snapshot.rawTranscriptSeq).toBe(99);
-  });
-
-  test("refreshes limited SSE history from bounded async tail reads", async () => {
-    const fullReadSpy = vi.spyOn(sessionUtils, "readSessionMessagesAsync").mockResolvedValue([]);
-    const tailReadSpy = vi
-      .spyOn(sessionUtils, "readRecentSessionMessagesWithStatsAsync")
-      .mockResolvedValueOnce({
-        messages: [
-          {
-            role: "assistant",
-            content: [{ type: "text", text: "tail two" }],
-            __openclaw: { seq: 8 },
-          },
-        ],
-        totalMessages: 8,
-      });
-    try {
-      const state = SessionHistorySseState.fromRawSnapshot({
-        target: { sessionId: "sess-main" },
-        rawMessages: [
-          {
-            role: "assistant",
-            content: [{ type: "text", text: "tail one" }],
-            __openclaw: { seq: 7 },
-          },
-        ],
-        rawTranscriptSeq: 7,
-        totalRawMessages: 7,
-        limit: 1,
-      });
-
-      expect(state.snapshot().messages[0]?.__openclaw?.seq).toBe(7);
-      const refreshed = await state.refreshAsync();
-
-      expect(refreshed.hasMore).toBe(true);
-      expect(refreshed.nextCursor).toBe("8");
-      expect(refreshed.messages[0]?.__openclaw?.seq).toBe(8);
-      expect(tailReadSpy).toHaveBeenCalledTimes(1);
-      expect(fullReadSpy).not.toHaveBeenCalled();
-    } finally {
-      fullReadSpy.mockRestore();
-      tailReadSpy.mockRestore();
-    }
-  });
-
-  test("strips legacy internal envelopes before exposing history", () => {
-    const snapshot = buildSessionHistorySnapshot({
-      rawMessages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: [
-                "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-                "secret runtime context",
-                "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-                "",
-                "visible ask",
-              ].join("\n"),
-            },
-          ],
+          content: textContent("The agent run failed before producing a reply."),
+          stopReason: "error",
           __openclaw: { seq: 1 },
         },
       ],
-    });
+      { assistantErrorPending: true },
+    );
 
-    expect(snapshot.history.messages).toHaveLength(1);
-    expect(
-      (
-        snapshot.history.messages[0] as {
-          content?: Array<{ text?: string }>;
-        }
-      ).content?.[0]?.text,
-    ).toBe("visible ask");
-  });
-
-  test("drops internal-only user messages after envelope stripping", () => {
-    const snapshot = buildSessionHistorySnapshot({
-      rawMessages: [
-        {
+    const forwarded = (
+      await state.prepareInlineMessage({
+        message: {
           role: "user",
-          content: [
-            {
-              type: "text",
-              text: [
-                "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-                "subagent completion payload",
-                "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-              ].join("\n"),
-            },
-          ],
-          __openclaw: { seq: 1 },
-        },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "visible answer" }],
-          __openclaw: { seq: 2 },
-        },
-      ],
-    });
-
-    expect(snapshot.history.messages).toEqual([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "visible answer" }],
-        __openclaw: { seq: 2 },
-      },
-    ]);
-  });
-
-  test("drops subagent announce inter-session user messages from projected history", () => {
-    const snapshot = buildSessionHistorySnapshot({
-      rawMessages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: [
-                "[Inter-session message] sourceSession=agent:main:subagent:child sourceChannel=webchat sourceTool=subagent_announce isUser=false",
-                "This content was routed by OpenClaw from another session or internal tool.",
-                "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-                "subagent completion payload",
-                "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-              ].join("\n"),
-            },
-          ],
+          content: textContent("forwarded update"),
           provenance: {
             kind: "inter_session",
-            sourceSessionKey: "agent:main:subagent:child",
-            sourceTool: "subagent_announce",
+            sourceSessionKey: "agent:main:webchat:source",
+            sourceTool: "sessions_send",
           },
-          __openclaw: { seq: 1 },
         },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "clean child result" }],
-          __openclaw: { seq: 2 },
-        },
-      ],
-    });
+        messageSeq: 2,
+      })
+    )();
 
-    expect(snapshot.history.messages).toEqual([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "clean child result" }],
-        __openclaw: { seq: 2 },
-      },
+    expect(forwarded?.message).toMatchObject({
+      role: "assistant",
+      content: textContent("forwarded update"),
+    });
+    expect(
+      (await appendAssistantText(state, "actual fallback response", 3))?.message,
+    ).toMatchObject({
+      role: "assistant",
+      content: textContent("actual fallback response"),
+    });
+    expect(state.snapshot().messages[0]?.content).toEqual([
+      { type: "text", text: "The agent run failed before producing a reply." },
     ]);
   });
 
-  test("hides heartbeat prompt and ok acknowledgements from visible history", () => {
-    const snapshot = buildSessionHistorySnapshot({
-      rawMessages: [
-        {
-          role: "user",
-          content: `${HEARTBEAT_PROMPT}\nWhen reading HEARTBEAT.md, use workspace file /tmp/HEARTBEAT.md (exact case). Do not read docs/heartbeat.md.`,
-          __openclaw: { seq: 1 },
-        },
+  test("requests refresh when initial SSE history ends with a repaired stream error", async () => {
+    const state = newState(
+      [
+        userTextMessage("hello", 1),
         {
           role: "assistant",
-          content: [{ type: "text", text: "HEARTBEAT_OK" }],
+          content: textContent("The agent run failed before producing a reply."),
+          stopReason: "error",
           __openclaw: { seq: 2 },
         },
-        {
-          role: "user",
-          content: HEARTBEAT_PROMPT,
-          __openclaw: { seq: 3 },
-        },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "Disk usage crossed 95 percent." }],
-          __openclaw: { seq: 4 },
-        },
       ],
-    });
+      { assistantErrorPending: true },
+    );
 
-    expect(snapshot.history.messages).toEqual([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "Disk usage crossed 95 percent." }],
-        __openclaw: { seq: 4 },
-      },
-    ]);
-    expect(snapshot.rawTranscriptSeq).toBe(4);
+    expect(await appendAssistantText(state, "actual fallback response", 3)).toEqual({
+      shouldRefresh: true,
+    });
   });
 
-  test("does not append heartbeat or internal-only SSE messages", () => {
-    const state = SessionHistorySseState.fromRawSnapshot({
-      target: { sessionId: "sess-main" },
-      rawMessages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "already visible" }],
-          __openclaw: { seq: 1 },
-        },
-      ],
+  test.each([
+    { name: "latest page", cursor: undefined, expectedSeq: 8, reset: undefined },
+    { name: "older cursor page", cursor: "8", expectedSeq: 7, reset: undefined },
+    { name: "initial reset", cursor: "8", expectedSeq: 8, reset: "initial" },
+    { name: "reset during refresh", cursor: "8", expectedSeq: 8, reset: "refresh" },
+  ])(
+    "refreshes limited SSE history from bounded async reads ($name)",
+    async ({ cursor, expectedSeq, reset }) => {
+      const fullReadSpy = vi
+        .spyOn(sessionTranscriptReaders, "readSessionMessagesWithSourceAsync")
+        .mockResolvedValue({ messages: [] });
+      const tailReadSpy = vi
+        .spyOn(sessionTranscriptReaders, "readRecentSessionMessagesWithStatsAsync")
+        .mockResolvedValue({
+          messages: [assistantTextMessage("tail two", expectedSeq)],
+          totalMessages: 8,
+        });
+      const pageReadSpy = vi
+        .spyOn(sessionTranscriptReaders, "readSessionMessagesPageWithStatsAsync")
+        .mockResolvedValue({
+          messages: [assistantTextMessage("tail two", expectedSeq)],
+          totalMessages: 8,
+        });
+      if (reset === "refresh") {
+        pageReadSpy.mockRejectedValueOnce(
+          new SessionTranscriptProjectionUnavailableError("sess-main", "window-changed"),
+        );
+      }
+      try {
+        const state = newState([assistantTextMessage("tail one", 7)], {
+          rawTranscriptSeq: 7,
+          limit: 1,
+          cursor,
+          windowReset: reset === "initial",
+        });
+
+        expect(state.snapshot().messages[0]?.["__openclaw"]?.seq).toBe(7);
+        const refreshed = await state.refreshAsync();
+
+        expect(refreshed.hasMore).toBe(true);
+        expect(refreshed.nextCursor).toBe(String(expectedSeq));
+        expect(refreshed.messages[0]?.["__openclaw"]?.seq).toBe(expectedSeq);
+        expect(tailReadSpy).toHaveBeenCalledTimes(!cursor || reset ? 1 : 0);
+        expect(pageReadSpy).toHaveBeenCalledTimes(cursor && reset !== "initial" ? 1 : 0);
+        if (reset) {
+          tailReadSpy.mockResolvedValueOnce({
+            messages: [assistantTextMessage("next tail", 9)],
+            totalMessages: 9,
+          });
+          expect((await state.refreshAsync()).messages).toEqual([
+            assistantTextMessage("next tail", 9),
+          ]);
+        }
+        expect(fullReadSpy).not.toHaveBeenCalled();
+      } finally {
+        fullReadSpy.mockRestore();
+        tailReadSpy.mockRestore();
+        pageReadSpy.mockRestore();
+      }
+    },
+  );
+
+  test("carries a hidden heartbeat boundary into the next visible SSE append", async () => {
+    const state = newState([assistantTextMessage("already visible", 1)], {
+      rawTranscriptSeq: 2,
+      turnBoundaryPending: true,
     });
 
-    expect(
-      state.appendInlineMessage({
+    expect(await appendAssistantText(state, "HEARTBEAT_OK", 3)).toBeNull();
+
+    const compaction = (
+      await state.prepareInlineMessage({
         message: {
-          role: "user",
-          content: HEARTBEAT_PROMPT,
+          role: "system",
+          content: textContent("Compaction summary"),
         },
-      }),
+        messageSeq: 4,
+      })
+    )();
+    expect(compaction?.message?.["__openclaw"]?.turnBoundary).toBeUndefined();
+
+    const appended = await appendAssistantText(state, "Disk usage crossed 95 percent.", 5);
+    expect(appended?.message).toMatchObject({
+      role: "assistant",
+      __openclaw: { seq: 5, turnBoundary: true },
+    });
+  });
+
+  test("does not append heartbeat or internal-only SSE messages", async () => {
+    const state = newState([assistantTextMessage("already visible", 1)]);
+
+    expect(
+      (
+        await state.prepareInlineMessage({
+          message: {
+            role: "user",
+            content: HEARTBEAT_PROMPT,
+          },
+        })
+      )(),
+    ).toBeNull();
+    expect(await appendAssistantText(state, "HEARTBEAT_OK")).toBeNull();
+    expect(
+      (
+        await state.prepareInlineMessage({
+          message: {
+            role: "custom",
+            customType: "openclaw.runtime-context",
+            content: "secret runtime context",
+            display: false,
+          },
+        })
+      )(),
     ).toBeNull();
     expect(
-      state.appendInlineMessage({
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "HEARTBEAT_OK" }],
-        },
-      }),
-    ).toBeNull();
-    expect(
-      state.appendInlineMessage({
-        message: {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: [
-                "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-                "runtime details",
-                "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-              ].join("\n"),
-            },
-          ],
-        },
-      }),
+      (
+        await state.prepareInlineMessage({
+          message: {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: [
+                  "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+                  "runtime details",
+                  "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+                ].join("\n"),
+              },
+            ],
+          },
+        })
+      )(),
     ).toBeNull();
     expect(state.snapshot().messages).toHaveLength(1);
   });

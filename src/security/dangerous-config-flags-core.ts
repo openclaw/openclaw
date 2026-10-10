@@ -1,3 +1,4 @@
+import { listAgentEntriesWithSource, type ListedAgentEntry } from "../agents/agent-scope-config.js";
 import { DANGEROUS_SANDBOX_DOCKER_BOOLEAN_KEYS } from "../agents/sandbox/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRecord } from "../utils.js";
@@ -26,25 +27,22 @@ type CollectPluginConfigContractMatches = (input: {
   root: Record<string, unknown>;
 }) => Iterable<PluginConfigContractMatch>;
 
-export type DangerousConfigFlagContractInputs = {
+/**
+ * Plugin config contract data used to extend core dangerous-flag detection.
+ * Tests and snapshot callers can inject prepared contracts to avoid manifest discovery.
+ */
+type DangerousConfigFlagContractInputs = {
   configContractsById?: ReadonlyMap<string, PluginConfigContractMetadata>;
   collectPluginConfigContractMatches?: CollectPluginConfigContractMatches;
 };
 
-function formatDangerousConfigFlagValue(value: DangerousFlagValue): string {
-  return value === null ? "null" : String(value);
-}
-
-function getAgentDangerousFlagPathSegment(agent: unknown, index: number): string {
-  const id =
-    agent &&
-    typeof agent === "object" &&
-    !Array.isArray(agent) &&
-    typeof (agent as { id?: unknown }).id === "string" &&
-    (agent as { id: string }).id.length > 0
-      ? (agent as { id: string }).id
-      : undefined;
-  return id ? `agents.list[id=${JSON.stringify(id)}]` : `agents.list[${index}]`;
+function getAgentDangerousFlagPathSegment(listed: ListedAgentEntry): string {
+  if (listed.source.kind === "entries") {
+    return `agents.entries.${listed.source.key}`;
+  }
+  return typeof listed.entry.id === "string" && listed.entry.id.length > 0
+    ? `agents.entries.${listed.entry.id}`
+    : `agents.list.${listed.source.index}`;
 }
 
 function collectExactPluginConfigContractMatches({
@@ -54,9 +52,14 @@ function collectExactPluginConfigContractMatches({
   pathPattern: string;
   root: Record<string, unknown>;
 }): PluginConfigContractMatch[] {
+  // Core fallback only understands exact config keys; manifest-aware callers inject
+  // the shared matcher so path patterns keep one implementation.
   return Object.hasOwn(root, pathPattern) ? [{ path: pathPattern, value: root[pathPattern] }] : [];
 }
 
+/**
+ * The returned strings are stable audit/report labels, not user-edited config paths.
+ */
 export function collectEnabledInsecureOrDangerousFlagsFromContracts(
   cfg: OpenClawConfig,
   inputs: DangerousConfigFlagContractInputs = {},
@@ -87,18 +90,15 @@ export function collectEnabledInsecureOrDangerousFlagsFromContracts(
     enabledFlags.push("tools.fs.workspaceOnly=false");
   }
   collectSandboxDockerDangerousFlags(
-    isRecord(cfg.agents?.defaults?.sandbox?.docker)
-      ? cfg.agents?.defaults?.sandbox?.docker
-      : undefined,
+    cfg.agents?.defaults?.sandbox?.docker,
     "agents.defaults.sandbox.docker",
   );
-  if (Array.isArray(cfg.agents?.list)) {
-    for (const [index, agent] of cfg.agents.list.entries()) {
-      collectSandboxDockerDangerousFlags(
-        isRecord(agent?.sandbox?.docker) ? agent.sandbox.docker : undefined,
-        `${getAgentDangerousFlagPathSegment(agent, index)}.sandbox.docker`,
-      );
-    }
+  for (const listed of listAgentEntriesWithSource(cfg)) {
+    const agent = listed.entry;
+    collectSandboxDockerDangerousFlags(
+      agent?.sandbox?.docker,
+      `${getAgentDangerousFlagPathSegment(listed)}.sandbox.docker`,
+    );
   }
 
   const pluginEntries = cfg.plugins?.entries;
@@ -127,9 +127,7 @@ export function collectEnabledInsecureOrDangerousFlagsFromContracts(
         if (!Object.is(match.value, flag.equals)) {
           continue;
         }
-        const rendered =
-          `plugins.entries.${pluginId}.config.${match.path}` +
-          `=${formatDangerousConfigFlagValue(flag.equals)}`;
+        const rendered = `plugins.entries.${pluginId}.config.${match.path}=${String(flag.equals)}`;
         if (seenFlags.has(rendered)) {
           continue;
         }

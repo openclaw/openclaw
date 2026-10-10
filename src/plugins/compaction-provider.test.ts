@@ -1,22 +1,28 @@
-import { afterEach, describe, expect, it } from "vitest";
-import {
-  clearCompactionProviders,
-  getCompactionProvider,
-  getRegisteredCompactionProvider,
-  listCompactionProviderIds,
-  listRegisteredCompactionProviders,
-  registerCompactionProvider,
-  restoreRegisteredCompactionProviders,
-  type CompactionProvider,
-} from "./compaction-provider.js";
+/** Covers canonical plugin compaction provider registration and runtime lookup. */
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, describe, expect, it, onTestFinished } from "vitest";
+import { createPluginRuntimeStore } from "../plugin-sdk/runtime-store.js";
+import { getCompactionProvider, type CompactionProvider } from "./compaction-provider.js";
+import { runPluginRegisterSyncInRegistry } from "./loader-module-runtime.js";
+import { createPluginRecord } from "./loader-records.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
+import { createTestPluginRegistry as createTestRegistry } from "./registry-runtime.test-helpers.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
+import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 
-const REGISTRY_KEY = Symbol.for("openclaw.compactionProviderRegistryState");
-
-/** Reset the process-global registry between tests. */
 afterEach(() => {
-  const g = globalThis as Record<symbol, unknown>;
-  delete g[REGISTRY_KEY];
+  resetPluginRuntimeStateForTest();
 });
+
+function createRecord(id: string) {
+  return createPluginRecord({
+    id,
+    source: `/plugins/${id}/index.ts`,
+    origin: "global",
+    enabled: true,
+    configSchema: false,
+  });
+}
 
 function makeProvider(id: string, label?: string): CompactionProvider {
   return {
@@ -28,126 +34,93 @@ function makeProvider(id: string, label?: string): CompactionProvider {
   };
 }
 
-function requireCompactionProvider(id: string): CompactionProvider {
-  const provider = getCompactionProvider(id);
-  if (!provider) {
-    throw new Error(`Expected compaction provider ${id}`);
-  }
-  return provider;
+function registerProvider(
+  builder: ReturnType<typeof createTestRegistry>,
+  pluginId: string,
+  provider: CompactionProvider,
+  initialize?: () => void,
+) {
+  const record = createRecord(pluginId);
+  const api = builder.createApi(record, { config: {} });
+  runPluginRegisterSyncInRegistry(
+    (registeredApi) => {
+      initialize?.();
+      registeredApi.registerCompactionProvider(provider);
+    },
+    api,
+    builder.registry,
+    pluginId,
+  );
+  builder.registry.plugins.push(record);
+  const instance = expectDefined(getPluginInstance(record), "compaction provider instance");
+  onTestFinished(async () => {
+    await instance.dispose();
+  });
+  return instance;
 }
 
 describe("compaction provider registry", () => {
-  it("starts empty", () => {
-    expect(listCompactionProviderIds()).toStrictEqual([]);
-    expect(listRegisteredCompactionProviders()).toStrictEqual([]);
+  it("reads providers registered through the plugin API from the active registry", async () => {
+    const pluginRegistry = createTestRegistry();
+    const provider = makeProvider("owned");
+    const owner = registerProvider(pluginRegistry, "owner", provider);
+    setActivePluginRegistry(pluginRegistry.registry);
+
+    expect(pluginRegistry.registry.compactionProviders).toEqual([
+      { provider, ownerPluginId: "owner" },
+    ]);
+    const resolved = getCompactionProvider("owned");
+    await expect(resolved?.summarize({ messages: [] })).resolves.toBe("summary-from-owned");
+    await owner.dispose();
+    expect(() => resolved?.summarize({ messages: [] })).toThrow(/reloaded|disabled|retiring/);
   });
 
-  it("returns undefined for an unknown id", () => {
-    expect(getCompactionProvider("nonexistent")).toBeUndefined();
-    expect(getRegisteredCompactionProvider("nonexistent")).toBeUndefined();
+  it("keeps the first provider when another plugin registers the same id", () => {
+    const pluginRegistry = createTestRegistry();
+    const first = makeProvider("shared", "first");
+    const second = makeProvider("shared", "second");
+    registerProvider(pluginRegistry, "first-owner", first);
+    registerProvider(pluginRegistry, "second-owner", second);
+
+    expect(pluginRegistry.registry.compactionProviders).toEqual([
+      { provider: first, ownerPluginId: "first-owner" },
+    ]);
+    expect(pluginRegistry.registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        pluginId: "second-owner",
+        message: "compaction provider already registered: shared (owner: first-owner)",
+      }),
+    );
   });
 
-  it("registers and retrieves a provider", () => {
-    const p = makeProvider("test-compactor");
-    registerCompactionProvider(p);
-
-    expect(getCompactionProvider("test-compactor")).toBe(p);
-  });
-
-  it("tracks ownerPluginId", () => {
-    const p = makeProvider("owned");
-    registerCompactionProvider(p, { ownerPluginId: "my-plugin" });
-
-    const entry = getRegisteredCompactionProvider("owned");
-    expect(entry?.provider).toBe(p);
-    expect(entry?.ownerPluginId).toBe("my-plugin");
-  });
-
-  it("lists registered provider ids", () => {
-    registerCompactionProvider(makeProvider("alpha"));
-    registerCompactionProvider(makeProvider("beta"));
-
-    expect(listCompactionProviderIds()).toEqual(["alpha", "beta"]);
-  });
-
-  it("lists registered entries with owner metadata", () => {
-    registerCompactionProvider(makeProvider("a"), { ownerPluginId: "plugin-a" });
-    registerCompactionProvider(makeProvider("b"));
-
-    const entries = listRegisteredCompactionProviders();
-    expect(entries).toHaveLength(2);
-    expect(entries[0]?.provider.id).toBe("a");
-    expect(entries[0]?.ownerPluginId).toBe("plugin-a");
-    expect(entries[1]?.provider.id).toBe("b");
-    expect(entries[1]?.ownerPluginId).toBeUndefined();
-  });
-
-  it("supports multiple providers", () => {
-    registerCompactionProvider(makeProvider("a"));
-    registerCompactionProvider(makeProvider("b"));
-    registerCompactionProvider(makeProvider("c"));
-
-    expect(getCompactionProvider("a")?.id).toBe("a");
-    expect(getCompactionProvider("b")?.id).toBe("b");
-    expect(getCompactionProvider("c")?.id).toBe("c");
-    expect(listCompactionProviderIds()).toHaveLength(3);
-  });
-
-  it("calls summarize and returns expected result", async () => {
-    registerCompactionProvider(makeProvider("my-compactor"));
-
-    const provider = requireCompactionProvider("my-compactor");
-    const result = await provider.summarize({ messages: [] });
-
-    expect(result).toBe("summary-from-my-compactor");
-  });
-
-  it("overwrites when re-registering the same id", () => {
-    const first = makeProvider("dup", "first-label");
-    const second = makeProvider("dup", "second-label");
-
-    registerCompactionProvider(first);
-    registerCompactionProvider(second);
-
-    expect(getCompactionProvider("dup")).toBe(second);
-    expect(getCompactionProvider("dup")?.label).toBe("second-label");
-    expect(listCompactionProviderIds()).toEqual(["dup"]);
-  });
-
-  describe("lifecycle (clear / restore)", () => {
-    it("clear removes all providers", () => {
-      registerCompactionProvider(makeProvider("a"));
-      registerCompactionProvider(makeProvider("b"));
-      expect(listCompactionProviderIds()).toHaveLength(2);
-
-      clearCompactionProviders();
-      expect(listCompactionProviderIds()).toStrictEqual([]);
-      expect(getCompactionProvider("a")).toBeUndefined();
-    });
-
-    it("restore replaces current entries with snapshot", () => {
-      const provA = makeProvider("a");
-      const provB = makeProvider("b");
-      registerCompactionProvider(provA, { ownerPluginId: "p-a" });
-      registerCompactionProvider(provB, { ownerPluginId: "p-b" });
-
-      const snapshot = listRegisteredCompactionProviders();
-
-      // Register a third provider to change state
-      registerCompactionProvider(makeProvider("c"));
-      expect(listCompactionProviderIds()).toHaveLength(3);
-
-      // Restore from snapshot — should have only a and b
-      restoreRegisteredCompactionProviders(snapshot);
-      expect(listCompactionProviderIds()).toEqual(["a", "b"]);
-      expect(getCompactionProvider("c")).toBeUndefined();
-      expect(getRegisteredCompactionProvider("a")?.ownerPluginId).toBe("p-a");
-    });
-
-    it("restore with empty array clears everything", () => {
-      registerCompactionProvider(makeProvider("x"));
-      restoreRegisteredCompactionProviders([]);
-      expect(listCompactionProviderIds()).toStrictEqual([]);
-    });
-  });
+  it.each(["another registry", "rejected duplicate"])(
+    "keeps the selected provider owner when a shared descriptor is adopted by %s",
+    async (registration) => {
+      const active = createTestRegistry();
+      const store = createPluginRuntimeStore<string>("compaction runtime missing");
+      const provider: CompactionProvider = {
+        id: "shared",
+        label: "Shared",
+        async summarize() {
+          expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(active.registry);
+          return store.getRuntime();
+        },
+      };
+      registerProvider(active, "first-owner", provider, () => store.setRuntime("first runtime"));
+      setActivePluginRegistry(active.registry);
+      const other = registration === "another registry" ? createTestRegistry() : active;
+      const otherOwner = registerProvider(other, "second-owner", provider, () =>
+        store.setRuntime("second runtime"),
+      );
+      expect(active.registry.compactionProviders[0]?.provider).toBe(provider);
+      await expect(getCompactionProvider("shared")?.summarize({ messages: [] })).resolves.toBe(
+        "first runtime",
+      );
+      await otherOwner.dispose();
+      await expect(getCompactionProvider("shared")?.summarize({ messages: [] })).resolves.toBe(
+        "first runtime",
+      );
+    },
+  );
 });

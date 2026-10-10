@@ -1,55 +1,28 @@
 package ai.openclaw.app.node
 
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.nonBlankString
 import android.content.Context
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 
-internal interface NotificationsStateProvider {
-  fun readSnapshot(context: Context): DeviceNotificationSnapshot
-
-  fun requestServiceRebind(context: Context)
-
-  fun executeAction(
-    context: Context,
-    request: NotificationActionRequest,
-  ): NotificationActionResult
-}
-
-private object SystemNotificationsStateProvider : NotificationsStateProvider {
-  override fun readSnapshot(context: Context): DeviceNotificationSnapshot {
-    val enabled = DeviceNotificationListenerService.isAccessEnabled(context)
-    if (!enabled) {
-      return DeviceNotificationSnapshot(
-        enabled = false,
-        connected = false,
-        notifications = emptyList(),
-      )
+class NotificationsHandler internal constructor(
+  appContext: Context,
+  private val readSnapshot: () -> DeviceNotificationSnapshot = {
+    if (DeviceNotificationListenerService.isAccessEnabled(appContext)) {
+      DeviceNotificationListenerService.snapshot(appContext, enabled = true)
+    } else {
+      DeviceNotificationSnapshot(enabled = false, connected = false, notifications = emptyList())
     }
-    return DeviceNotificationListenerService.snapshot(context, enabled = true)
-  }
-
-  override fun requestServiceRebind(context: Context) {
-    DeviceNotificationListenerService.requestServiceRebind(context)
-  }
-
-  override fun executeAction(
-    context: Context,
-    request: NotificationActionRequest,
-  ): NotificationActionResult = DeviceNotificationListenerService.executeAction(context, request)
-}
-
-class NotificationsHandler private constructor(
-  private val appContext: Context,
-  private val stateProvider: NotificationsStateProvider,
+  },
+  private val requestServiceRebind: () -> Unit = { DeviceNotificationListenerService.requestServiceRebind(appContext) },
+  private val executeAction: (NotificationActionRequest) -> NotificationActionResult = {
+    DeviceNotificationListenerService.executeAction(appContext, it)
+  },
 ) {
-  constructor(appContext: Context) : this(appContext = appContext, stateProvider = SystemNotificationsStateProvider)
-
+  /** Lists the current listener snapshot after nudging Android to reconnect if needed. */
   suspend fun handleNotificationsList(_paramsJson: String?): GatewaySession.InvokeResult {
     val snapshot = readSnapshotWithRebind()
     return GatewaySession.InvokeResult.ok(snapshotPayloadJson(snapshot))
@@ -59,45 +32,30 @@ class NotificationsHandler private constructor(
     readSnapshotWithRebind()
 
     val params =
-      parseParamsObject(paramsJson)
-        ?: return GatewaySession.InvokeResult.error(
-          code = "INVALID_REQUEST",
-          message = "INVALID_REQUEST: expected JSON object",
-        )
+      parseJsonParamsObject(paramsJson)
+        ?: return nodeInvokeError("INVALID_REQUEST", "expected JSON object")
     val key =
-      readString(params, "key")
-        ?: return GatewaySession.InvokeResult.error(
-          code = "INVALID_REQUEST",
-          message = "INVALID_REQUEST: key required",
-        )
+      params.nonBlankString("key")
+        ?: return nodeInvokeError("INVALID_REQUEST", "key required")
     val actionRaw =
-      readString(params, "action")?.lowercase()
-        ?: return GatewaySession.InvokeResult.error(
-          code = "INVALID_REQUEST",
-          message = "INVALID_REQUEST: action required (open|dismiss|reply)",
-        )
+      params.nonBlankString("action")?.lowercase()
+        ?: return nodeInvokeError("INVALID_REQUEST", "action required (open|dismiss|reply)")
+    // Keep accepted action names aligned with the cross-platform notification
+    // command contract rather than Android-specific PendingIntent labels.
     val action =
       when (actionRaw) {
         "open" -> NotificationActionKind.Open
         "dismiss" -> NotificationActionKind.Dismiss
         "reply" -> NotificationActionKind.Reply
-        else ->
-          return GatewaySession.InvokeResult.error(
-            code = "INVALID_REQUEST",
-            message = "INVALID_REQUEST: action must be open|dismiss|reply",
-          )
+        else -> return nodeInvokeError("INVALID_REQUEST", "action must be open|dismiss|reply")
       }
-    val replyText = readString(params, "replyText")
+    val replyText = params.nonBlankString("replyText")
     if (action == NotificationActionKind.Reply && replyText.isNullOrBlank()) {
-      return GatewaySession.InvokeResult.error(
-        code = "INVALID_REQUEST",
-        message = "INVALID_REQUEST: replyText required for reply action",
-      )
+      return nodeInvokeError("INVALID_REQUEST", "replyText required for reply action")
     }
 
     val result =
-      stateProvider.executeAction(
-        appContext,
+      executeAction(
         NotificationActionRequest(
           key = key,
           kind = action,
@@ -121,9 +79,10 @@ class NotificationsHandler private constructor(
   }
 
   private fun readSnapshotWithRebind(): DeviceNotificationSnapshot {
-    val snapshot = stateProvider.readSnapshot(appContext)
+    val snapshot = readSnapshot()
     if (snapshot.enabled && !snapshot.connected) {
-      stateProvider.requestServiceRebind(appContext)
+      // Access can be granted while Android has not rebound the listener yet.
+      requestServiceRebind()
     }
     return snapshot
   }
@@ -133,36 +92,6 @@ class NotificationsHandler private constructor(
       put("enabled", JsonPrimitive(snapshot.enabled))
       put("connected", JsonPrimitive(snapshot.connected))
       put("count", JsonPrimitive(snapshot.notifications.size))
-      put(
-        "notifications",
-        JsonArray(
-          snapshot.notifications.map { entry -> entry.toJsonObject() },
-        ),
-      )
+      put("notifications", JsonArray(snapshot.notifications.map { it.toJsonObject() }))
     }.toString()
-
-  private fun parseParamsObject(paramsJson: String?): JsonObject? {
-    if (paramsJson.isNullOrBlank()) return null
-    return try {
-      Json.parseToJsonElement(paramsJson).asObjectOrNull()
-    } catch (_: Throwable) {
-      null
-    }
-  }
-
-  private fun readString(
-    params: JsonObject,
-    key: String,
-  ): String? =
-    (params[key] as? JsonPrimitive)
-      ?.contentOrNull
-      ?.trim()
-      ?.takeIf { it.isNotEmpty() }
-
-  companion object {
-    internal fun forTesting(
-      appContext: Context,
-      stateProvider: NotificationsStateProvider,
-    ): NotificationsHandler = NotificationsHandler(appContext = appContext, stateProvider = stateProvider)
-  }
 }

@@ -1,11 +1,8 @@
-import type { AgentTool } from "@earendil-works/pi-agent-core";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TSchema } from "typebox";
-import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
-import { projectConfigOntoRuntimeSourceSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
-import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
   resolveProviderRuntimePluginHandle,
@@ -18,30 +15,24 @@ import {
   resolveProviderTextTransforms,
   transformProviderSystemPrompt,
 } from "../../plugins/provider-runtime.js";
-import { resolvePreparedExtraParams } from "../pi-embedded-runner/extra-params.js";
-import { classifyEmbeddedPiRunResultForModelFallback } from "../pi-embedded-runner/result-fallback-classifier.js";
+import { resolvePreparedExtraParams } from "../embedded-agent-runner/extra-params.js";
+import { classifyEmbeddedAgentRunResultForModelFallback } from "../embedded-agent-runner/result-fallback-classifier.js";
 import {
   logProviderToolSchemaDiagnostics,
   normalizeProviderToolSchemas,
-} from "../pi-embedded-runner/tool-schema-runtime.js";
+} from "../embedded-agent-runner/tool-schema-runtime.js";
+import type { AgentTool } from "../runtime/index.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { buildAgentRuntimeAuthPlan } from "./auth.js";
 import type {
   AgentRuntimeDeliveryPlan,
-  AgentRuntimeOutcomePlan,
   AgentRuntimePlan,
   BuildAgentRuntimeDeliveryPlanParams,
   BuildAgentRuntimePlanParams,
 } from "./types.js";
 
-function formatResolvedRef(params: { provider: string; modelId: string }): string {
-  return `${params.provider}/${params.modelId}`;
-}
-
 function asOpenClawConfig(value: unknown): OpenClawConfig | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as OpenClawConfig)
-    : undefined;
+  return asOptionalRecord(value) as OpenClawConfig | undefined;
 }
 
 function asProviderRuntimeModel(
@@ -50,50 +41,51 @@ function asProviderRuntimeModel(
   return value !== undefined ? (value as ProviderRuntimeModel) : undefined;
 }
 
-function asThinkLevel(value: BuildAgentRuntimePlanParams["thinkingLevel"]): ThinkLevel | undefined {
-  return value !== undefined ? (value as ThinkLevel) : undefined;
+type RuntimePlanMetadataParams = BuildAgentRuntimeDeliveryPlanParams & {
+  metadataSnapshot?: BuildAgentRuntimePlanParams["metadataSnapshot"];
+};
+type ToolContextOverrides = Parameters<AgentRuntimePlan["tools"]["logDiagnostics"]>[1];
+
+function resolvePreparedMetadataSnapshot(
+  params: RuntimePlanMetadataParams,
+): PluginMetadataSnapshot | undefined {
+  return params.metadataSnapshot as PluginMetadataSnapshot | undefined;
 }
 
-function isProviderRuntimePluginHandle(
-  value: BuildAgentRuntimePlanParams["providerRuntimeHandle"] | ProviderRuntimePluginHandle,
-): value is ProviderRuntimePluginHandle {
-  return value !== undefined && "plugin" in value;
-}
-
-function resolveProviderRuntimeHandleForPlugins(params: {
-  provider: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  runtimeHandle?: BuildAgentRuntimePlanParams["providerRuntimeHandle"];
-  resolveWhenMissing?: boolean;
-}): ProviderRuntimePluginHandle | undefined {
-  if (isProviderRuntimePluginHandle(params.runtimeHandle)) {
-    return params.runtimeHandle;
+export function resolvePreparedProviderRuntimeHandle(
+  params: RuntimePlanMetadataParams,
+): ProviderRuntimePluginHandle & { modelId: string; prepared: true } {
+  if (
+    params.providerRuntimeHandle?.prepared === true &&
+    params.providerRuntimeHandle.provider === params.provider &&
+    params.providerRuntimeHandle.modelId === params.modelId &&
+    params.providerRuntimeHandle.workspaceDir === params.workspaceDir
+  ) {
+    return params.providerRuntimeHandle as ProviderRuntimePluginHandle & {
+      modelId: string;
+      prepared: true;
+    };
   }
-  if (!params.runtimeHandle && !params.resolveWhenMissing) {
-    return undefined;
-  }
-  return resolveProviderRuntimePluginHandle({
-    provider: params.runtimeHandle?.provider ?? params.provider,
-    config: asOpenClawConfig(params.runtimeHandle?.config) ?? params.config,
-    workspaceDir: params.runtimeHandle?.workspaceDir ?? params.workspaceDir,
-    env: params.runtimeHandle?.env ?? process.env,
-    applyAutoEnable: params.runtimeHandle?.applyAutoEnable,
-    bundledProviderAllowlistCompat: params.runtimeHandle?.bundledProviderAllowlistCompat,
-    bundledProviderVitestCompat: params.runtimeHandle?.bundledProviderVitestCompat,
-  });
+  const metadataSnapshot = resolvePreparedMetadataSnapshot(params);
+  return {
+    ...resolveProviderRuntimePluginHandle({
+      provider: params.provider,
+      modelId: params.modelId,
+      config: asOpenClawConfig(params.config),
+      workspaceDir: params.workspaceDir,
+      env: process.env,
+      ...(metadataSnapshot ? { pluginMetadataSnapshot: metadataSnapshot } : {}),
+    }),
+    modelId: params.modelId,
+    prepared: true,
+  };
 }
 
 export function buildAgentRuntimeDeliveryPlan(
   params: BuildAgentRuntimeDeliveryPlanParams,
 ): AgentRuntimeDeliveryPlan {
   const config = asOpenClawConfig(params.config);
-  const providerRuntimeHandle = resolveProviderRuntimeHandleForPlugins({
-    provider: params.provider,
-    config,
-    workspaceDir: params.workspaceDir,
-    runtimeHandle: params.providerRuntimeHandle,
-  });
+  const providerRuntimeHandle = resolvePreparedProviderRuntimeHandle(params);
   return {
     isSilentPayload(payload): boolean {
       return (
@@ -124,46 +116,34 @@ export function buildAgentRuntimeDeliveryPlan(
   };
 }
 
-export function buildAgentRuntimeOutcomePlan(): AgentRuntimeOutcomePlan {
-  return {
-    classifyRunResult: classifyEmbeddedPiRunResultForModelFallback,
-  };
-}
-
 export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): AgentRuntimePlan {
   const config = asOpenClawConfig(params.config);
   const model = asProviderRuntimeModel(params.model);
   const modelApi = params.modelApi ?? params.model?.api ?? undefined;
   const transport = params.resolvedTransport;
-  const toolPlanningConfig = config ? projectConfigOntoRuntimeSourceSnapshot(config) : undefined;
-  let toolPlanningMetadataSnapshot: PluginMetadataSnapshot | undefined;
-  const loadToolPlanningMetadataSnapshot = () => {
-    toolPlanningMetadataSnapshot ??= loadManifestMetadataSnapshot({
-      config: toolPlanningConfig,
-      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-      env: process.env,
+  const toolPlanningMetadataSnapshot = resolvePreparedMetadataSnapshot(params);
+  const preparedPlanning = toolPlanningMetadataSnapshot
+    ? { metadataSnapshot: toolPlanningMetadataSnapshot }
+    : undefined;
+  const providerRuntimeHandleForPlugins = resolvePreparedProviderRuntimeHandle(params);
+  const auth =
+    params.preparedAuthPlan ??
+    buildAgentRuntimeAuthPlan({
+      provider: params.provider,
+      modelId: params.modelId,
+      authProfileProvider: params.authProfileProvider,
+      authProfileMode: params.authProfileMode,
+      sessionAuthProfileId: params.sessionAuthProfileId,
+      sessionAuthProfileSource: params.sessionAuthProfileSource,
+      sessionAuthProfileCandidateIds: params.sessionAuthProfileCandidateIds,
+      modelRoute: params.modelRoute,
+      config,
+      workspaceDir: params.workspaceDir,
+      metadataSnapshot: toolPlanningMetadataSnapshot,
+      harnessId: params.harnessId,
+      harnessRuntime: params.harnessRuntime,
+      allowHarnessAuthProfileForwarding: params.allowHarnessAuthProfileForwarding,
     });
-    return toolPlanningMetadataSnapshot;
-  };
-  const providerRuntimeHandleForPlugins = resolveProviderRuntimeHandleForPlugins({
-    provider: params.provider,
-    config,
-    workspaceDir: params.workspaceDir,
-    runtimeHandle: params.providerRuntimeHandle,
-    resolveWhenMissing: true,
-  });
-  const auth = buildAgentRuntimeAuthPlan({
-    provider: params.provider,
-    authProfileProvider: params.authProfileProvider,
-    authProfileMode: params.authProfileMode,
-    sessionAuthProfileId: params.sessionAuthProfileId,
-    sessionAuthProfileCandidateIds: params.sessionAuthProfileCandidateIds,
-    config,
-    workspaceDir: params.workspaceDir,
-    harnessId: params.harnessId,
-    harnessRuntime: params.harnessRuntime,
-    allowHarnessAuthProfileForwarding: params.allowHarnessAuthProfileForwarding,
-  });
   const resolvedRef = {
     provider: params.provider,
     modelId: params.modelId,
@@ -181,21 +161,15 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
     modelApi,
     model,
   };
-  const resolveToolContext = (overrides?: {
-    workspaceDir?: string;
-    modelApi?: string;
-    model?: BuildAgentRuntimePlanParams["model"];
-  }) => ({
+  const resolveToolContext = (overrides?: ToolContextOverrides) => ({
     ...toolContext,
     ...(overrides?.workspaceDir !== undefined ? { workspaceDir: overrides.workspaceDir } : {}),
     ...(overrides?.modelApi !== undefined ? { modelApi: overrides.modelApi } : {}),
     ...(overrides?.model !== undefined ? { model: asProviderRuntimeModel(overrides.model) } : {}),
   });
-  const resolveTranscriptRuntimePolicy = (overrides?: {
-    workspaceDir?: string;
-    modelApi?: string;
-    model?: BuildAgentRuntimePlanParams["model"];
-  }) =>
+  const resolveTranscriptRuntimePolicy = (
+    overrides?: Parameters<AgentRuntimePlan["transcript"]["resolvePolicy"]>[0],
+  ) =>
     resolveTranscriptPolicy({
       provider: params.provider,
       modelId: params.modelId,
@@ -205,6 +179,7 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
       runtimeHandle: providerRuntimeHandleForPlugins,
       modelApi: overrides?.modelApi ?? modelApi,
       model: asProviderRuntimeModel(overrides?.model) ?? model,
+      directApiKey: overrides?.directApiKey,
     });
   const resolveTransportExtraParams = (
     overrides: Parameters<AgentRuntimePlan["transport"]["resolveExtraParams"]>[0] = {},
@@ -216,22 +191,17 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
       agentDir: params.agentDir,
       workspaceDir: overrides.workspaceDir ?? params.workspaceDir,
       extraParamsOverride: overrides.extraParamsOverride ?? params.extraParamsOverride,
-      thinkingLevel: asThinkLevel(overrides.thinkingLevel ?? params.thinkingLevel),
+      thinkingLevel: overrides.thinkingLevel ?? params.thinkingLevel,
       agentId: overrides.agentId ?? params.agentId,
       model: asProviderRuntimeModel(overrides.model) ?? model,
       resolvedTransport: overrides.resolvedTransport ?? transport,
       providerRuntimeHandle: providerRuntimeHandleForPlugins,
+      auth: auth.selectedAuthMode
+        ? { mode: auth.selectedAuthMode, authFlow: auth.selectedAuthFlow }
+        : undefined,
     });
   let memoizedTranscriptPolicy: ReturnType<typeof resolveTranscriptRuntimePolicy> | undefined;
   let memoizedTransportExtraParams: ReturnType<typeof resolveTransportExtraParams> | undefined;
-  const resolveDefaultTranscriptPolicy = () => {
-    memoizedTranscriptPolicy ??= resolveTranscriptRuntimePolicy();
-    return memoizedTranscriptPolicy;
-  };
-  const resolveDefaultTransportExtraParams = () => {
-    memoizedTransportExtraParams ??= resolveTransportExtraParams();
-    return memoizedTransportExtraParams;
-  };
   const providerTextTransforms = resolveProviderTextTransforms({
     provider: params.provider,
     config,
@@ -274,30 +244,17 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
       },
     },
     tools: {
-      preparedPlanning: {
-        loadMetadataSnapshot: loadToolPlanningMetadataSnapshot,
-      },
+      preparedPlanning,
       normalize<TSchemaType extends TSchema = TSchema, TResult = unknown>(
         tools: AgentTool<TSchemaType, TResult>[],
-        overrides?: {
-          workspaceDir?: string;
-          modelApi?: string;
-          model?: BuildAgentRuntimePlanParams["model"];
-        },
+        overrides?: ToolContextOverrides,
       ): AgentTool<TSchemaType, TResult>[] {
         return normalizeProviderToolSchemas({
           ...resolveToolContext(overrides),
           tools,
         });
       },
-      logDiagnostics(
-        tools: AgentTool[],
-        overrides?: {
-          workspaceDir?: string;
-          modelApi?: string;
-          model?: BuildAgentRuntimePlanParams["model"];
-        },
-      ): void {
+      logDiagnostics(tools: AgentTool[], overrides?: ToolContextOverrides): void {
         logProviderToolSchemaDiagnostics({
           ...resolveToolContext(overrides),
           tools,
@@ -305,8 +262,9 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
       },
     },
     transcript: {
+      // Default getters memoize; override resolvers intentionally remain fresh.
       get policy() {
-        return resolveDefaultTranscriptPolicy();
+        return (memoizedTranscriptPolicy ??= resolveTranscriptRuntimePolicy());
       },
       resolvePolicy: resolveTranscriptRuntimePolicy,
     },
@@ -314,24 +272,17 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
       ...params,
       providerRuntimeHandle: providerRuntimeHandleForPlugins,
     }),
-    outcome: buildAgentRuntimeOutcomePlan(),
+    outcome: { classifyRunResult: classifyEmbeddedAgentRunResultForModelFallback },
     transport: {
       get extraParams() {
-        return resolveDefaultTransportExtraParams();
+        return (memoizedTransportExtraParams ??= resolveTransportExtraParams());
       },
       resolveExtraParams: resolveTransportExtraParams,
     },
     observability: {
-      resolvedRef: formatResolvedRef({
-        provider: params.provider,
-        modelId: params.modelId,
-      }),
-      provider: params.provider,
-      modelId: params.modelId,
-      ...(modelApi ? { modelApi } : {}),
-      ...(params.harnessId ? { harnessId: params.harnessId } : {}),
+      ...resolvedRef,
+      resolvedRef: `${params.provider}/${params.modelId}`,
       ...(auth.forwardedAuthProfileId ? { authProfileId: auth.forwardedAuthProfileId } : {}),
-      ...(transport ? { transport } : {}),
     },
   };
 }

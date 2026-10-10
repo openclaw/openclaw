@@ -1,5 +1,3 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-
 type RuntimeStatusFormatInput = {
   status?: string;
   pid?: number;
@@ -21,13 +19,14 @@ export function formatRuntimeStatusWithDetails({
   const normalizedState = state?.trim();
   if (
     normalizedState &&
-    normalizeLowercaseStringOrEmpty(normalizedState) !==
-      normalizeLowercaseStringOrEmpty(runtimeStatus)
+    // State often mirrors status from different process managers; suppressing
+    // case-only duplicates keeps restart/status output readable.
+    normalizedState.toLowerCase() !== runtimeStatus.toLowerCase()
   ) {
     fullDetails.push(`state ${normalizedState}`);
   }
   for (const detail of details) {
-    const normalizedDetail = detail.trim();
+    const normalizedDetail = detail.replace(/\s+/g, " ").trim();
     if (normalizedDetail) {
       fullDetails.push(normalizedDetail);
     }

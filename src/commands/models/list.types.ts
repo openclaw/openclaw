@@ -1,10 +1,3 @@
-export type ConfiguredEntry = {
-  key: string;
-  ref: { provider: string; model: string };
-  tags: Set<string>;
-  aliases: string[];
-};
-
 export type ModelRow = {
   key: string;
   name: string;
@@ -14,13 +7,12 @@ export type ModelRow = {
   local: boolean | null;
   available: boolean | null;
   tags: string[];
-  missing: boolean;
 };
 
 export type ProviderAuthOverview = {
   provider: string;
   effective: {
-    kind: "profiles" | "env" | "models.json" | "synthetic" | "missing";
+    kind: "profiles" | "env" | "models.json" | "synthetic" | "runtime" | "missing";
     detail: string;
   };
   profiles: {

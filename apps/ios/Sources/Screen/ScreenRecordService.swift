@@ -1,27 +1,203 @@
 import AVFoundation
 import OpenClawKit
+import os
 import ReplayKit
 
 final class ScreenRecordService: @unchecked Sendable {
+    typealias CaptureHandler = @Sendable (CMSampleBuffer, RPSampleBufferType, Error?) -> Void
+    typealias CaptureCompletion = @Sendable (Error?) -> Void
+    typealias StartCaptureAction = @MainActor @Sendable (
+        Bool,
+        @escaping CaptureHandler,
+        @escaping CaptureCompletion)
+        -> Void
+    typealias StopCaptureAction = @MainActor @Sendable (@escaping CaptureCompletion) -> Void
+
     private struct UncheckedSendableBox<T>: @unchecked Sendable {
         let value: T
     }
 
     private final class CaptureState: @unchecked Sendable {
-        private let lock = NSLock()
+        // The lock orders admission against finalization; writer state belongs to recordQueue.
+        private let admissionLock = NSLock()
         var writer: AVAssetWriter?
         var videoInput: AVAssetWriterInput?
         var audioInput: AVAssetWriterInput?
-        var started = false
         var sawVideo = false
         var lastVideoTime: CMTime?
         var handlerError: Error?
+        var acceptingSamples = true
 
-        func withLock<T>(_ body: (CaptureState) -> T) -> T {
-            self.lock.lock()
-            defer { lock.unlock() }
-            return body(self)
+        func withAdmissionLock(_ body: (CaptureState) -> Void) {
+            self.admissionLock.lock()
+            defer { self.admissionLock.unlock() }
+            body(self)
         }
+
+        func recordError(_ error: Error) {
+            if self.handlerError == nil { self.handlerError = error }
+        }
+    }
+
+    /// Owns cancellation only until ReplayKit resolves startup. A cancelled
+    /// pending start keeps its caller's capture lease until both start and the
+    /// one matching stop resolve, so late capture cannot escape into a new owner.
+    private final class CaptureStartOperation: @unchecked Sendable {
+        private typealias Completion = (CheckedContinuation<Void, Error>, Result<Void, Error>)
+
+        private enum Phase {
+            case idle
+            case starting
+            case cancelling
+            case cancelled
+            case finished
+        }
+
+        private struct State {
+            var phase: Phase = .idle
+            var continuation: CheckedContinuation<Void, Error>?
+            var stopRequested = false
+        }
+
+        private let state = OSAllocatedUnfairLock(initialState: State())
+        private let startAction: @MainActor @Sendable (@escaping CaptureCompletion) -> Void
+        private let stopAction: StopCaptureAction
+
+        init(
+            startAction: @escaping @MainActor @Sendable (@escaping CaptureCompletion) -> Void,
+            stopAction: @escaping StopCaptureAction)
+        {
+            self.startAction = startAction
+            self.stopAction = stopAction
+        }
+
+        @MainActor
+        func run() async throws {
+            try Task.checkCancellation()
+            try await withTaskCancellationHandler(operation: {
+                try await withCheckedThrowingContinuation { continuation in
+                    self.begin(continuation)
+                }
+            }, onCancel: {
+                self.cancel()
+            })
+        }
+
+        private func cancel() {
+            self.state.withLock { state in
+                switch state.phase {
+                case .idle:
+                    state.phase = .cancelled
+                case .starting:
+                    state.phase = .cancelling
+                case .cancelling, .cancelled, .finished:
+                    break
+                }
+            }
+        }
+
+        @MainActor
+        private func begin(_ continuation: CheckedContinuation<Void, Error>) {
+            let shouldStart = self.state.withLock { state -> Bool in
+                switch state.phase {
+                case .idle:
+                    state.phase = .starting
+                    state.continuation = continuation
+                    return true
+                case .cancelled:
+                    state.phase = .finished
+                    return false
+                case .starting, .cancelling, .finished:
+                    preconditionFailure("ReplayKit capture start operation can only run once")
+                }
+            }
+            guard shouldStart else {
+                continuation.resume(throwing: CancellationError())
+                return
+            }
+
+            self.startAction { [weak self] error in
+                self?.captureDidStart(error: error)
+            }
+        }
+
+        private func captureDidStart(error: Error?) {
+            let result: Result<Void, Error> = error.map(Result.failure) ?? .success(())
+            let (completion, shouldStop) = self.state.withLock { state -> (Completion?, Bool) in
+                switch state.phase {
+                case .starting:
+                    state.phase = .finished
+                    guard let continuation = state.continuation else { return (nil, false) }
+                    state.continuation = nil
+                    return ((continuation, result), false)
+                case .cancelling:
+                    if case .failure = result {
+                        return (Self.takeCancellationCompletion(state: &state), false)
+                    }
+                    guard !state.stopRequested else { return (nil, false) }
+                    state.stopRequested = true
+                    return (nil, true)
+                case .idle, .cancelled, .finished:
+                    return (nil, false)
+                }
+            }
+            if shouldStop {
+                Task { @MainActor in self.requestStop() }
+            }
+            Self.resume(completion)
+        }
+
+        @MainActor
+        private func requestStop() {
+            self.stopAction { [weak self] _ in
+                self?.captureStopDidComplete()
+            }
+        }
+
+        private func captureStopDidComplete() {
+            let completion = self.state.withLock { state -> Completion? in
+                guard state.phase == .cancelling else { return nil }
+                return Self.takeCancellationCompletion(state: &state)
+            }
+            Self.resume(completion)
+        }
+
+        private static func takeCancellationCompletion(
+            state: inout State) -> Completion?
+        {
+            guard let continuation = state.continuation else { return nil }
+
+            state.phase = .finished
+            state.continuation = nil
+            return (continuation, .failure(CancellationError()))
+        }
+
+        private static func resume(
+            _ completion: Completion?)
+        {
+            guard let (continuation, result) = completion else { return }
+            continuation.resume(with: result)
+        }
+    }
+
+    private let startReplayKitCaptureAction: StartCaptureAction
+    private let stopReplayKitCaptureAction: StopCaptureAction
+    private let recordQueue: DispatchQueue
+
+    init(
+        recordQueue: DispatchQueue = DispatchQueue(label: "ai.openclawfoundation.app.screenrecord"),
+        startReplayKitCaptureAction: @escaping StartCaptureAction = { includeAudio, handler, completion in
+            let recorder = RPScreenRecorder.shared()
+            recorder.isMicrophoneEnabled = includeAudio
+            recorder.startCapture(handler: handler, completionHandler: completion)
+        },
+        stopReplayKitCaptureAction: @escaping StopCaptureAction = { completion in
+            RPScreenRecorder.shared().stopCapture { error in completion(error) }
+        })
+    {
+        self.recordQueue = recordQueue
+        self.startReplayKitCaptureAction = startReplayKitCaptureAction
+        self.stopReplayKitCaptureAction = stopReplayKitCaptureAction
     }
 
     enum ScreenRecordError: LocalizedError {
@@ -33,9 +209,7 @@ final class ScreenRecordService: @unchecked Sendable {
             switch self {
             case let .invalidScreenIndex(idx):
                 "Invalid screen index \(idx)"
-            case let .captureFailed(msg):
-                msg
-            case let .writeFailed(msg):
+            case let .captureFailed(msg), let .writeFailed(msg):
                 msg
             }
         }
@@ -48,23 +222,38 @@ final class ScreenRecordService: @unchecked Sendable {
         includeAudio: Bool?,
         outPath: String?) async throws -> String
     {
-        let config = try self.makeRecordConfig(
-            screenIndex: screenIndex,
-            durationMs: durationMs,
-            fps: fps,
-            includeAudio: includeAudio,
-            outPath: outPath)
+        if let idx = screenIndex, idx != 0 {
+            throw ScreenRecordError.invalidScreenIndex(idx)
+        }
+        let outURL = if let outPath, !outPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            URL(fileURLWithPath: outPath)
+        } else {
+            FileManager().temporaryDirectory
+                .appendingPathComponent("openclaw-screen-record-\(UUID().uuidString).mp4")
+        }
+        let config = RecordConfig(
+            durationMs: CaptureRateLimits.clampDurationMs(durationMs),
+            fpsValue: Double(Int32(CaptureRateLimits.clampFps(fps, maxFps: 30).rounded())),
+            includeAudio: includeAudio ?? true,
+            outURL: outURL)
+        try? FileManager().removeItem(at: outURL)
 
         let state = CaptureState()
-        let recordQueue = DispatchQueue(label: "ai.openclaw.screenrecord")
-
-        try await self.startCapture(state: state, config: config, recordQueue: recordQueue)
-        try await Task.sleep(nanoseconds: UInt64(config.durationMs) * 1_000_000)
-        try await self.stopCapture()
-        try self.finalizeCapture(state: state)
-        try await self.finishWriting(state: state)
-
-        return config.outURL.path
+        do {
+            try await self.startCapture(state: state, config: config)
+            do {
+                try await Task.sleep(nanoseconds: UInt64(config.durationMs) * 1_000_000)
+            } catch {
+                try? await self.stopCapture()
+                throw error
+            }
+            try await self.stopCapture()
+            try await self.finishCapture(state: state)
+            return config.outURL.path
+        } catch {
+            await self.discardCapture(state: state, outputURL: config.outURL)
+            throw error
+        }
     }
 
     private struct RecordConfig {
@@ -74,90 +263,52 @@ final class ScreenRecordService: @unchecked Sendable {
         let outURL: URL
     }
 
-    private func makeRecordConfig(
-        screenIndex: Int?,
-        durationMs: Int?,
-        fps: Double?,
-        includeAudio: Bool?,
-        outPath: String?) throws -> RecordConfig
-    {
-        if let idx = screenIndex, idx != 0 {
-            throw ScreenRecordError.invalidScreenIndex(idx)
-        }
-
-        let durationMs = CaptureRateLimits.clampDurationMs(durationMs)
-        let fps = CaptureRateLimits.clampFps(fps, maxFps: 30)
-        let fpsInt = Int32(fps.rounded())
-        let fpsValue = Double(fpsInt)
-        let includeAudio = includeAudio ?? true
-
-        let outURL = self.makeOutputURL(outPath: outPath)
-        try? FileManager().removeItem(at: outURL)
-
-        return RecordConfig(
-            durationMs: durationMs,
-            fpsValue: fpsValue,
-            includeAudio: includeAudio,
-            outURL: outURL)
-    }
-
-    private func makeOutputURL(outPath: String?) -> URL {
-        if let outPath, !outPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return URL(fileURLWithPath: outPath)
-        }
-        return FileManager().temporaryDirectory
-            .appendingPathComponent("openclaw-screen-record-\(UUID().uuidString).mp4")
-    }
-
+    @MainActor
     private func startCapture(
         state: CaptureState,
-        config: RecordConfig,
-        recordQueue: DispatchQueue) async throws
+        config: RecordConfig) async throws
     {
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            let handler = self.makeCaptureHandler(
-                state: state,
-                config: config,
-                recordQueue: recordQueue)
-            let completion: @Sendable (Error?) -> Void = { error in
-                if let error { cont.resume(throwing: error) } else { cont.resume() }
-            }
-
-            Task { @MainActor in
-                startReplayKitCapture(
-                    includeAudio: config.includeAudio,
-                    handler: handler,
-                    completion: completion)
-            }
-        }
+        let handler = self.makeCaptureHandler(
+            state: state,
+            config: config)
+        let operation = CaptureStartOperation(
+            startAction: { completion in
+                self.startReplayKitCaptureAction(
+                    config.includeAudio,
+                    handler,
+                    completion)
+            },
+            stopAction: self.stopReplayKitCaptureAction)
+        try await operation.run()
     }
 
     private func makeCaptureHandler(
         state: CaptureState,
-        config: RecordConfig,
-        recordQueue: DispatchQueue) -> @Sendable (CMSampleBuffer, RPSampleBufferType, Error?) -> Void
+        config: RecordConfig) -> @Sendable (CMSampleBuffer, RPSampleBufferType, Error?) -> Void
     {
         { sample, type, error in
             let sampleBox = UncheckedSendableBox(value: sample)
             // ReplayKit can call the capture handler on a background queue.
-            // Serialize writes to avoid queue asserts.
-            recordQueue.async {
-                let sample = sampleBox.value
-                if let error {
-                    state.withLock { state in
-                        if state.handlerError == nil { state.handlerError = error }
+            // Enqueue under the state lock so closing capture forms a barrier:
+            // every accepted sample precedes finalization/discard, and none follow.
+            state.withAdmissionLock { captureState in
+                guard captureState.acceptingSamples else { return }
+                self.recordQueue.async {
+                    let sample = sampleBox.value
+                    if let error {
+                        state.recordError(error)
+                        return
                     }
-                    return
-                }
-                guard CMSampleBufferDataIsReady(sample) else { return }
+                    guard CMSampleBufferDataIsReady(sample) else { return }
 
-                switch type {
-                case .video:
-                    self.handleVideoSample(sample, state: state, config: config)
-                case .audioApp, .audioMic:
-                    self.handleAudioSample(sample, state: state, includeAudio: config.includeAudio)
-                @unknown default:
-                    break
+                    switch type {
+                    case .video:
+                        self.handleVideoSample(sample, state: state, config: config)
+                    case .audioApp, .audioMic:
+                        self.handleAudioSample(sample, state: state, includeAudio: config.includeAudio)
+                    @unknown default:
+                        break
+                    }
                 }
             }
         }
@@ -169,38 +320,22 @@ final class ScreenRecordService: @unchecked Sendable {
         config: RecordConfig)
     {
         let pts = CMSampleBufferGetPresentationTimeStamp(sample)
-        let shouldSkip = state.withLock { state in
-            if let lastVideoTime = state.lastVideoTime {
-                let delta = CMTimeSubtract(pts, lastVideoTime)
-                return delta.seconds < (1.0 / config.fpsValue)
-            }
-            return false
+        if let lastVideoTime = state.lastVideoTime,
+           CMTimeSubtract(pts, lastVideoTime).seconds < (1.0 / config.fpsValue)
+        {
+            return
         }
-        if shouldSkip { return }
 
-        if state.withLock({ $0.writer == nil }) {
+        if state.writer == nil {
             self.prepareWriter(sample: sample, state: state, config: config, pts: pts)
         }
 
-        let vInput = state.withLock { $0.videoInput }
-        let isStarted = state.withLock { $0.started }
-        guard let vInput, isStarted else { return }
-        if vInput.isReadyForMoreMediaData {
-            if vInput.append(sample) {
-                state.withLock { state in
-                    state.sawVideo = true
-                    state.lastVideoTime = pts
-                }
-            } else {
-                let err = state.withLock { $0.writer?.error }
-                if let err {
-                    state.withLock { state in
-                        if state.handlerError == nil {
-                            state.handlerError = ScreenRecordError.writeFailed(err.localizedDescription)
-                        }
-                    }
-                }
-            }
+        guard let vInput = state.videoInput, vInput.isReadyForMoreMediaData else { return }
+        if vInput.append(sample) {
+            state.sawVideo = true
+            state.lastVideoTime = pts
+        } else if let error = state.writer?.error {
+            state.recordError(ScreenRecordError.writeFailed(error.localizedDescription))
         }
     }
 
@@ -211,11 +346,7 @@ final class ScreenRecordService: @unchecked Sendable {
         pts: CMTime)
     {
         guard let imageBuffer = CMSampleBufferGetImageBuffer(sample) else {
-            state.withLock { state in
-                if state.handlerError == nil {
-                    state.handlerError = ScreenRecordError.captureFailed("Missing image buffer")
-                }
-            }
+            state.recordError(ScreenRecordError.captureFailed("Missing image buffer"))
             return
         }
         let width = CVPixelBufferGetWidth(imageBuffer)
@@ -239,9 +370,7 @@ final class ScreenRecordService: @unchecked Sendable {
                 aInput.expectsMediaDataInRealTime = true
                 if writer.canAdd(aInput) {
                     writer.add(aInput)
-                    state.withLock { state in
-                        state.audioInput = aInput
-                    }
+                    state.audioInput = aInput
                 }
             }
 
@@ -250,15 +379,10 @@ final class ScreenRecordService: @unchecked Sendable {
                     writer.error?.localizedDescription ?? "Failed to start writer")
             }
             writer.startSession(atSourceTime: pts)
-            state.withLock { state in
-                state.writer = writer
-                state.videoInput = vInput
-                state.started = true
-            }
+            state.writer = writer
+            state.videoInput = vInput
         } catch {
-            state.withLock { state in
-                if state.handlerError == nil { state.handlerError = error }
-            }
+            state.recordError(error)
         }
     }
 
@@ -267,84 +391,74 @@ final class ScreenRecordService: @unchecked Sendable {
         state: CaptureState,
         includeAudio: Bool)
     {
-        let aInput = state.withLock { $0.audioInput }
-        let isStarted = state.withLock { $0.started }
-        guard includeAudio, let aInput, isStarted else { return }
+        guard includeAudio, let aInput = state.audioInput, state.writer != nil else { return }
         if aInput.isReadyForMoreMediaData {
             _ = aInput.append(sample)
         }
     }
 
+    @MainActor
     private func stopCapture() async throws {
         let stopError = await withCheckedContinuation { cont in
-            Task { @MainActor in
-                stopReplayKitCapture { error in cont.resume(returning: error) }
+            self.stopReplayKitCaptureAction { error in
+                cont.resume(returning: error)
             }
         }
-        if let stopError { throw stopError }
+        if let stopError {
+            throw stopError
+        }
     }
 
-    private func finalizeCapture(state: CaptureState) throws {
-        if let handlerErrorSnapshot = state.withLock({ $0.handlerError }) {
-            throw handlerErrorSnapshot
-        }
-        let writerSnapshot = state.withLock { $0.writer }
-        let videoInputSnapshot = state.withLock { $0.videoInput }
-        let audioInputSnapshot = state.withLock { $0.audioInput }
-        let sawVideoSnapshot = state.withLock { $0.sawVideo }
-        guard let writerSnapshot, let videoInputSnapshot, sawVideoSnapshot else {
-            throw ScreenRecordError.captureFailed("No frames captured")
-        }
-
-        videoInputSnapshot.markAsFinished()
-        audioInputSnapshot?.markAsFinished()
-        _ = writerSnapshot
-    }
-
-    private func finishWriting(state: CaptureState) async throws {
-        guard let writerSnapshot = state.withLock({ $0.writer }) else {
-            throw ScreenRecordError.captureFailed("Missing writer")
-        }
-        let writerBox = UncheckedSendableBox(value: writerSnapshot)
+    private func finishCapture(state: CaptureState) async throws {
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            writerBox.value.finishWriting {
-                let writer = writerBox.value
-                if let err = writer.error {
-                    cont.resume(throwing: ScreenRecordError.writeFailed(err.localizedDescription))
-                } else if writer.status != .completed {
-                    cont.resume(throwing: ScreenRecordError.writeFailed("Failed to finalize video"))
-                } else {
+            // ReplayKit has stopped, so finalization can queue behind every pending sample.
+            // AVAssetWriter requires all append calls to return before finishWriting starts.
+            state.withAdmissionLock { captureState in
+                captureState.acceptingSamples = false
+                self.recordQueue.async {
+                    do {
+                        if let handlerError = state.handlerError {
+                            throw handlerError
+                        }
+                        guard let writer = state.writer, let videoInput = state.videoInput, state.sawVideo else {
+                            throw ScreenRecordError.captureFailed("No frames captured")
+                        }
+
+                        videoInput.markAsFinished()
+                        state.audioInput?.markAsFinished()
+                        let writerBox = UncheckedSendableBox(value: writer)
+                        writer.finishWriting {
+                            let writer = writerBox.value
+                            if let error = writer.error {
+                                cont.resume(throwing: ScreenRecordError.writeFailed(error.localizedDescription))
+                            } else if writer.status != .completed {
+                                cont.resume(throwing: ScreenRecordError.writeFailed("Failed to finalize video"))
+                            } else {
+                                cont.resume()
+                            }
+                        }
+                    } catch {
+                        cont.resume(throwing: error)
+                    }
+                }
+            }
+        }
+    }
+
+    private func discardCapture(state: CaptureState, outputURL: URL) async {
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            state.withAdmissionLock { captureState in
+                captureState.acceptingSamples = false
+                self.recordQueue.async {
+                    let writer = state.writer
+                    state.writer = nil
+                    state.videoInput = nil
+                    state.audioInput = nil
+                    writer?.cancelWriting()
+                    try? FileManager.default.removeItem(at: outputURL)
                     cont.resume()
                 }
             }
         }
     }
 }
-
-@MainActor
-private func startReplayKitCapture(
-    includeAudio: Bool,
-    handler: @escaping @Sendable (CMSampleBuffer, RPSampleBufferType, Error?) -> Void,
-    completion: @escaping @Sendable (Error?) -> Void)
-{
-    let recorder = RPScreenRecorder.shared()
-    recorder.isMicrophoneEnabled = includeAudio
-    recorder.startCapture(handler: handler, completionHandler: completion)
-}
-
-@MainActor
-private func stopReplayKitCapture(_ completion: @escaping @Sendable (Error?) -> Void) {
-    RPScreenRecorder.shared().stopCapture { error in completion(error) }
-}
-
-#if DEBUG
-extension ScreenRecordService {
-    nonisolated static func _test_clampDurationMs(_ ms: Int?) -> Int {
-        CaptureRateLimits.clampDurationMs(ms)
-    }
-
-    nonisolated static func _test_clampFps(_ fps: Double?) -> Double {
-        CaptureRateLimits.clampFps(fps, maxFps: 30)
-    }
-}
-#endif

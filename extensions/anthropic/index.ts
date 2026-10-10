@@ -3,9 +3,7 @@ import { registerAnthropicPlugin } from "./register.runtime.js";
 
 export default definePluginEntry({
   id: "anthropic",
-  name: "Anthropic Provider",
-  description: "Bundled Anthropic provider plugin",
-  register(api) {
-    return registerAnthropicPlugin(api);
-  },
+  name: "Anthropic",
+  description: "Anthropic models, Claude CLI, and native Claude session catalog",
+  register: registerAnthropicPlugin,
 });

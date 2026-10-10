@@ -1,3 +1,6 @@
+/**
+ * Contract suite for bundled web fetch provider registration and runtime behavior.
+ */
 import { describe, expect, it } from "vitest";
 import {
   pluginRegistrationContractRegistry,
@@ -18,6 +21,7 @@ function resolveWebFetchCredentialValue(provider: WebFetchProviderPlugin): unkno
   return envVar.toLowerCase().includes("api_key") ? `${provider.id}-test` : "sk-test";
 }
 
+/** Installs web fetch provider contract tests for all providers owned by one plugin. */
 export function describeWebFetchProviderContracts(pluginId: string) {
   const providerIds =
     pluginRegistrationContractRegistry.find((entry) => entry.pluginId === pluginId)
@@ -30,24 +34,15 @@ export function describeWebFetchProviderContracts(pluginId: string) {
         credentialValue: unknown;
       }>
     | undefined;
-  const resolveProviders = () => {
-    if (providerEntries) {
-      return providerEntries;
-    }
-    const publicArtifactProviders = resolveBundledExplicitWebFetchProvidersFromPublicArtifacts({
-      onlyPluginIds: [pluginId],
-    });
-    if (publicArtifactProviders) {
-      providerEntries = publicArtifactProviders.map((provider) => ({
+  const resolveProviders = () =>
+    (providerEntries ??=
+      resolveBundledExplicitWebFetchProvidersFromPublicArtifacts({
+        onlyPluginIds: [pluginId],
+      })?.map((provider) => ({
         pluginId: provider.pluginId,
         provider,
         credentialValue: resolveWebFetchCredentialValue(provider),
-      }));
-      return providerEntries;
-    }
-    providerEntries = resolveWebFetchProviderContractEntriesForPluginId(pluginId);
-    return providerEntries;
-  };
+      })) ?? resolveWebFetchProviderContractEntriesForPluginId(pluginId));
 
   describe(`${pluginId} web fetch provider contract registry load`, () => {
     it("loads bundled web fetch providers", () => {
@@ -57,25 +52,18 @@ export function describeWebFetchProviderContracts(pluginId: string) {
 
   for (const providerId of providerIds) {
     describe(`${pluginId}:${providerId} web fetch contract`, () => {
+      const resolveEntry = () => {
+        const entry = resolveProviders().find((candidate) => candidate.provider.id === providerId);
+        if (!entry) {
+          throw new Error(
+            `web fetch provider contract entry missing for ${pluginId}:${providerId}`,
+          );
+        }
+        return entry;
+      };
       installWebFetchProviderContractSuite({
-        provider: () => {
-          const entry = resolveProviders().find((provider) => provider.provider.id === providerId);
-          if (!entry) {
-            throw new Error(
-              `web fetch provider contract entry missing for ${pluginId}:${providerId}`,
-            );
-          }
-          return entry.provider;
-        },
-        credentialValue: () => {
-          const entry = resolveProviders().find((provider) => provider.provider.id === providerId);
-          if (!entry) {
-            throw new Error(
-              `web fetch provider contract entry missing for ${pluginId}:${providerId}`,
-            );
-          }
-          return entry.credentialValue;
-        },
+        provider: () => resolveEntry().provider,
+        credentialValue: () => resolveEntry().credentialValue,
         pluginId,
       });
     });

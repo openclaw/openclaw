@@ -1,0 +1,178 @@
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import type { Command } from "commander";
+import {
+  resolveAgentOperationAgentId,
+  resolveConfiguredAgentId,
+} from "../../agents/agent-scope-config.js";
+import { resolveAgentDir } from "../../agents/agent-scope.js";
+import {
+  listProfilesForProvider,
+  loadAuthProfileStoreForRuntime,
+} from "../../agents/auth-profiles.js";
+import {
+  getRuntimeConfig,
+  getRuntimeConfigSourceSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { defaultRuntime } from "../../runtime.js";
+import { getProviderEnvVarsCore } from "../../secrets/provider-env-vars.js";
+import { resolveModelRefOverride } from "../../shared/model-ref-override.js";
+import { resolveCommandConfigWithSecrets } from "../command-config-resolution.js";
+import { inheritOptionFromParent } from "../command-options.js";
+import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
+import type { CapabilityTransport } from "./metadata.js";
+
+export function resolveTransport(opts: {
+  local?: boolean;
+  gateway?: boolean;
+  defaultTransport: CapabilityTransport;
+}): CapabilityTransport {
+  if (opts.local && opts.gateway) {
+    throw new Error("Pass only one of --local or --gateway.");
+  }
+  if (opts.local) {
+    return "local";
+  }
+  if (opts.gateway) {
+    return "gateway";
+  }
+  return opts.defaultTransport;
+}
+
+function hasOwnKeys(value: unknown): boolean {
+  return Boolean(value && typeof value === "object" && Object.keys(value).length > 0);
+}
+
+export function resolveCapabilityProviderAgentId(
+  cfg: OpenClawConfig,
+  rawAgentId: string | undefined,
+  surface = "inference provider inspection",
+): string {
+  const requestedAgentId = rawAgentId?.trim();
+  if (rawAgentId !== undefined && !requestedAgentId) {
+    throw new Error("--agent must not be blank");
+  }
+  const agentId = resolveAgentOperationAgentId(cfg, requestedAgentId, {
+    surface,
+    hint: "Pass --agent <id> or set agents.defaults.systemAgent.agentId.",
+  });
+  return resolveConfiguredAgentId(cfg, agentId);
+}
+
+export function resolveCapabilityAgentOption(
+  command: Command | undefined,
+  rawAgentId: unknown,
+): string | undefined {
+  return typeof rawAgentId === "string"
+    ? rawAgentId
+    : inheritOptionFromParent<string>(command, "agent");
+}
+export function providerHasGenericConfig(params: {
+  cfg: OpenClawConfig;
+  providerId: string;
+  /** Omit only for aggregate/global callers that intentionally exclude agent auth stores. */
+  agentId?: string;
+  envVars?: string[];
+}): boolean {
+  const modelsProviders = params.cfg.models?.providers ?? {};
+  const pluginEntries = params.cfg.plugins?.entries ?? {};
+  const ttsProviders = params.cfg.tts?.providers ?? {};
+  const envVars =
+    params.envVars ??
+    getProviderEnvVarsCore(params.providerId, {
+      config: params.cfg,
+      includeUntrustedWorkspacePlugins: false,
+    });
+  const envConfigured = envVars.some((envVar) => Boolean(process.env[envVar]?.trim()));
+  return (
+    (params.agentId
+      ? listProfilesForProvider(
+          loadAuthProfileStoreForRuntime(resolveAgentDir(params.cfg, params.agentId)),
+          params.providerId,
+        ).length > 0
+      : false) ||
+    hasOwnKeys(modelsProviders[params.providerId]) ||
+    hasOwnKeys(pluginEntries[params.providerId]?.config) ||
+    hasOwnKeys(ttsProviders[params.providerId]) ||
+    envConfigured
+  );
+}
+
+export function requireProviderModelOverride(
+  raw: string | undefined,
+): { provider: string; model: string } | undefined {
+  const resolved = resolveModelRefOverride(raw);
+  if (!raw?.trim()) {
+    return undefined;
+  }
+  if (!resolved.provider || !resolved.model) {
+    throw new Error("Model overrides must use the form <provider/model>.");
+  }
+  return {
+    provider: resolved.provider,
+    model: resolved.model,
+  };
+}
+
+export function parseOptionalPositiveInteger(raw: unknown, label: string): number | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  const value = parseStrictPositiveInteger(raw);
+  if (value === undefined) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  return value;
+}
+
+export function parseOptionalTimeoutMs(raw: string | number | undefined): number | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  return parseTimeoutMsWithFallback(raw, 0, { invalidType: "error", flagName: "--timeout-ms" });
+}
+
+export async function resolveLocalCapabilityRuntimeConfig(params: {
+  commandName: string;
+  targetIds: Set<string>;
+  allowedPaths?: Set<string>;
+  forcedActivePaths?: Set<string>;
+  optionalActivePaths?: Set<string>;
+  config?: OpenClawConfig;
+}): Promise<OpenClawConfig> {
+  const cfg = params.config ?? getRuntimeConfig();
+  const { effectiveConfig } = await resolveCommandConfigWithSecrets({
+    config: cfg,
+    commandName: params.commandName,
+    targetIds: params.targetIds,
+    ...(params.allowedPaths ? { allowedPaths: params.allowedPaths } : {}),
+    ...(params.forcedActivePaths ? { forcedActivePaths: params.forcedActivePaths } : {}),
+    ...(params.optionalActivePaths ? { optionalActivePaths: params.optionalActivePaths } : {}),
+    runtime: defaultRuntime,
+    autoEnable: true,
+  });
+  pinRuntimeConfigSnapshot(effectiveConfig);
+  return effectiveConfig;
+}
+
+export async function resolveLocalCapabilityAgent(params: {
+  commandName: string;
+  targetIds: Set<string>;
+  agent?: string;
+  surface?: string;
+}) {
+  const cfg = await resolveLocalCapabilityRuntimeConfig(params);
+  const agentId = resolveCapabilityProviderAgentId(
+    cfg,
+    params.agent,
+    params.surface ?? params.commandName,
+  );
+  const { prepareLocalCapabilityAccountSecrets } = await import("./local-account-secrets.js");
+  await prepareLocalCapabilityAccountSecrets({ cfg, agentId });
+  return { cfg, agentId, agentDir: resolveAgentDir(cfg, agentId) };
+}
+
+export function pinRuntimeConfigSnapshot(config: OpenClawConfig): void {
+  setRuntimeConfigSnapshot(config, getRuntimeConfigSourceSnapshot() ?? undefined);
+}

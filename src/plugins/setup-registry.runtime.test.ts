@@ -1,38 +1,65 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
-  clearCurrentPluginMetadataSnapshot,
-  resolvePluginMetadataControlPlaneFingerprint,
-  setCurrentPluginMetadataSnapshot,
-} from "./current-plugin-metadata-snapshot.js";
+  clearBundledDiscoveryModeMemo,
+  prepareBundledDiscoveryMode,
+} from "./bundled-discovery-state.js";
+import { withPluginMetadataSnapshotScope } from "./current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
-import type { InstalledPluginIndex } from "./installed-plugin-index.js";
-import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import {
+  projectPluginMetadataSnapshot,
+  type PluginMetadataSnapshot,
+} from "./plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
 
-const loadPluginRegistrySnapshotMock = vi.hoisted(() => vi.fn());
-const loadPluginManifestRegistryForInstalledIndexMock = vi.hoisted(() => vi.fn());
 const loadPluginMetadataSnapshotMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./plugin-registry.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./plugin-registry.js")>()),
-  loadPluginRegistrySnapshot: loadPluginRegistrySnapshotMock,
-}));
-vi.mock("./manifest-registry-installed.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./manifest-registry-installed.js")>()),
-  loadPluginManifestRegistryForInstalledIndex: loadPluginManifestRegistryForInstalledIndexMock,
-}));
-vi.mock("./plugin-metadata-snapshot.js", () => ({
-  loadPluginMetadataSnapshot: loadPluginMetadataSnapshotMock,
-}));
+vi.mock("./plugin-metadata-snapshot.js", async (importOriginal) => {
+  const current = await import("./current-plugin-metadata-snapshot.js");
+  return {
+    ...(await importOriginal<typeof import("./plugin-metadata-snapshot.js")>()),
+    loadPluginMetadataSnapshot: loadPluginMetadataSnapshotMock,
+    resolvePluginMetadataSnapshot: (
+      params: Parameters<typeof current.getCurrentPluginMetadataSnapshot>[0] & {
+        allowWorkspaceScopedCurrent?: boolean;
+      },
+    ) =>
+      current.getCurrentPluginMetadataSnapshot({
+        config: params.config,
+        env: params.env,
+        workspaceDir: params.workspaceDir,
+        allowWorkspaceScopedSnapshot: params.allowWorkspaceScopedCurrent,
+      }) ?? loadPluginMetadataSnapshotMock(params),
+  };
+});
 
 afterEach(() => {
-  clearCurrentPluginMetadataSnapshot();
+  clearPluginMetadataLifecycleCaches();
   resetPluginRuntimeStateForTest();
-  loadPluginRegistrySnapshotMock.mockReset();
-  loadPluginManifestRegistryForInstalledIndexMock.mockReset();
   loadPluginMetadataSnapshotMock.mockReset();
+  vi.restoreAllMocks();
 });
+
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(() => {
+    for (const stateDir of tempDirs.dirs) {
+      closeOpenClawStateDatabaseByPath(
+        resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir }),
+      );
+    }
+    cleanup();
+  }),
+);
 
 function createCurrentSnapshot(params: {
   manifestHash: string;
@@ -40,148 +67,153 @@ function createCurrentSnapshot(params: {
   workspaceDir?: string;
 }): PluginMetadataSnapshot {
   const policyHash = resolveInstalledPluginIndexPolicyHash({});
-  const index: InstalledPluginIndex = {
-    version: 1,
-    hostContractVersion: "test-host",
-    compatRegistryVersion: "test-compat",
-    migrationVersion: 1,
-    policyHash,
-    generatedAtMs: 0,
-    installRecords: {},
-    plugins: [
-      {
-        pluginId: "openai",
-        manifestPath: `/tmp/openai-${params.manifestHash}/openclaw.plugin.json`,
-        manifestHash: params.manifestHash,
-        source: `/tmp/openai-${params.manifestHash}/index.ts`,
-        rootDir: `/tmp/openai-${params.manifestHash}`,
-        origin: "bundled",
-        enabled: true,
-        startup: {
-          sidecar: false,
-          memory: false,
-          deferConfiguredChannelFullLoadUntilAfterListen: false,
-          agentHarnesses: [],
-        },
-        compat: [],
-      },
-    ],
-    diagnostics: [],
-  };
-  return {
-    policyHash,
-    configFingerprint: resolvePluginMetadataControlPlaneFingerprint(
-      {},
-      {
-        env: process.env,
-        index,
-        policyHash,
-        workspaceDir: params.workspaceDir,
-      },
-    ),
-    workspaceDir: params.workspaceDir,
-    index,
+  const snapshot = createPluginMetadataSnapshotFixture({
     plugins: [
       {
         id: "openai",
-        origin: "bundled",
+        rootDir: `/tmp/openai-${params.manifestHash}`,
         cliBackends: params.cliBackends,
+        enabledByDefault: true,
       },
     ],
-  } as unknown as PluginMetadataSnapshot;
+  });
+  snapshot.index.policyHash = policyHash;
+  return {
+    ...snapshot,
+    policyHash,
+    configFingerprint: params.manifestHash,
+    workspaceDir: params.workspaceDir,
+  };
 }
 
-describe("setup-registry runtime fallback", () => {
-  it("uses bundled registry cliBackends when the setup-registry runtime is unavailable", async () => {
-    loadPluginMetadataSnapshotMock.mockReturnValue({
-      index: {
-        diagnostics: [],
-        plugins: [
-          {
-            pluginId: "openai",
-            origin: "bundled",
-            enabled: true,
-          },
-          {
-            pluginId: "disabled",
-            origin: "bundled",
-            enabled: false,
-          },
-          {
-            pluginId: "local",
-            origin: "workspace",
-            enabled: true,
-          },
-        ],
-      },
-      plugins: [
-        {
-          id: "openai",
-          origin: "bundled",
-          cliBackends: ["Codex-CLI", "legacy-openai-cli"],
-        },
-      ],
-    });
-
-    const { __testing, resolvePluginSetupCliBackendRuntime } =
+describe("setup-registry descriptor lookup", () => {
+  it("keeps prepared CLI activation in the caller's machine-state root", async () => {
+    const { resolvePluginSetupCliBackendDescriptor, resolvePluginSetupCliBackendIds } =
       await import("./setup-registry.runtime.js");
-    __testing.resetRuntimeState();
-    __testing.setRuntimeModuleForTest(null);
-
-    expect(resolvePluginSetupCliBackendRuntime({ backend: "codex-cli" })).toEqual({
-      pluginId: "openai",
-      backend: { id: "Codex-CLI" },
-    });
-    expect(resolvePluginSetupCliBackendRuntime({ backend: "local-cli" })).toBeUndefined();
-    expect(resolvePluginSetupCliBackendRuntime({ backend: "disabled-cli" })).toBeUndefined();
-    expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledTimes(3);
-    expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledWith({
-      config: {},
-      env: process.env,
-    });
+    const compatRoot = tempDirs.make("openclaw-cli-compat-");
+    const strictRoot = tempDirs.make("openclaw-cli-strict-");
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    const cache = createPluginCache();
+    try {
+      setTestEnvValue("OPENCLAW_STATE_DIR", strictRoot);
+      const compatEnv = { ...process.env, OPENCLAW_STATE_DIR: compatRoot };
+      const strictEnv = { ...process.env };
+      writeConfigMachineState("plugins.bundledDiscovery", "compat", { env: compatEnv });
+      writeConfigMachineState("plugins.bundledDiscovery", "allowlist", { env: strictEnv });
+      clearBundledDiscoveryModeMemo();
+      await withPluginCache(cache, async () => {
+        const snapshot = createPluginMetadataSnapshotFixture({
+          plugins: [
+            {
+              id: "bundled-cli-owner",
+              origin: "bundled",
+              providers: ["fixture-provider"],
+              cliBackends: ["scope-cli"],
+              enabledByDefault: true,
+            },
+          ],
+        });
+        snapshot.index.plugins[0]!.contributions = {
+          channels: [],
+          channelConfigs: [],
+          providers: snapshot.plugins[0]!.providers,
+          modelCatalogProviders: [],
+          modelSupportPrefixes: [],
+          modelSupportPatterns: [],
+          autoEnableProviderIds: [],
+          commandAliases: [],
+          contracts: {},
+        };
+        const config = { plugins: { allow: ["other-owner"] } };
+        await prepareBundledDiscoveryMode(compatEnv);
+        await prepareBundledDiscoveryMode(strictEnv);
+        const sql = observeMainThreadSql();
+        try {
+          sql.calibrate();
+          for (const env of [compatEnv, strictEnv, compatEnv]) {
+            const enabled = env === compatEnv;
+            const params = { config, env, metadataSnapshot: snapshot };
+            expect(
+              resolvePluginSetupCliBackendDescriptor({ ...params, backend: "scope-cli" }),
+            ).toEqual(
+              enabled ? { pluginId: "bundled-cli-owner", backend: { id: "scope-cli" } } : undefined,
+            );
+            expect(resolvePluginSetupCliBackendIds(params)).toEqual(enabled ? ["scope-cli"] : []);
+          }
+          sql.expectIdle();
+        } finally {
+          sql.restore();
+        }
+      });
+    } finally {
+      try {
+        await retirePluginCache(cache);
+      } finally {
+        envSnapshot.restore();
+      }
+    }
   });
 
-  it("refreshes bundled registry cliBackends when the current metadata snapshot changes", async () => {
-    const { __testing, resolvePluginSetupCliBackendRuntime } =
+  it("preserves declaration order across case-equivalent owners and setup contributions", async () => {
+    const { resolvePluginSetupCliBackendDescriptor, resolvePluginSetupCliBackendIds } =
       await import("./setup-registry.runtime.js");
-    __testing.resetRuntimeState();
-    __testing.setRuntimeModuleForTest(null);
-
-    setCurrentPluginMetadataSnapshot(
-      createCurrentSnapshot({
-        manifestHash: "alpha",
-        cliBackends: ["Codex-CLI"],
-      }),
-      { config: {}, env: process.env },
-    );
-
-    expect(resolvePluginSetupCliBackendRuntime({ backend: "codex-cli" })).toEqual({
-      pluginId: "openai",
-      backend: { id: "Codex-CLI" },
+    const snapshot = createPluginMetadataSnapshotFixture({
+      plugins: [
+        { id: "first-owner", cliBackends: ["Shared-CLI"] },
+        {
+          id: "second-owner",
+          cliBackends: ["shared-cli"],
+          setup: { cliBackends: ["shared-cli", "SHARED-CLI", "setup-cli"] },
+        },
+        { id: "third-owner", cliBackends: ["Shared-CLI"] },
+      ],
     });
-    expect(resolvePluginSetupCliBackendRuntime({ backend: "next-cli" })).toBeUndefined();
-
-    setCurrentPluginMetadataSnapshot(
-      createCurrentSnapshot({
-        manifestHash: "bravo",
-        cliBackends: ["Next-CLI"],
-      }),
-      { config: {}, env: process.env },
+    const config = { plugins: { entries: { "first-owner": { enabled: false } } } };
+    withPluginMetadataSnapshotScope(
+      snapshot,
+      () => {
+        expect(resolvePluginSetupCliBackendDescriptor({ backend: "SHARED-CLI", config })).toEqual({
+          pluginId: "second-owner",
+          backend: { id: "shared-cli" },
+        });
+        expect(resolvePluginSetupCliBackendIds({ config })).toEqual([
+          "shared-cli",
+          "shared-cli",
+          "SHARED-CLI",
+          "setup-cli",
+          "Shared-CLI",
+        ]);
+        expect(resolvePluginSetupCliBackendDescriptor({ backend: "SETUP-CLI", config })).toEqual({
+          pluginId: "second-owner",
+          backend: { id: "setup-cli" },
+        });
+      },
+      { trustConfigIdentity: true },
     );
+  });
 
-    expect(resolvePluginSetupCliBackendRuntime({ backend: "codex-cli" })).toBeUndefined();
-    expect(resolvePluginSetupCliBackendRuntime({ backend: "next-cli" })).toEqual({
-      pluginId: "openai",
-      backend: { id: "Next-CLI" },
+  it("keeps descriptors inside a narrower scoped view of the same metadata generation", async () => {
+    const { resolvePluginSetupCliBackendDescriptor } = await import("./setup-registry.runtime.js");
+    const snapshot = createCurrentSnapshot({
+      manifestHash: "scoped",
+      cliBackends: ["Scoped-CLI"],
     });
+    const narrowed = projectPluginMetadataSnapshot(snapshot, []);
+    const resolve = (view: PluginMetadataSnapshot) =>
+      withPluginMetadataSnapshotScope(
+        view,
+        () => resolvePluginSetupCliBackendDescriptor({ backend: "scoped-cli" }),
+        { trustConfigIdentity: true },
+      );
+
+    expect(resolve(snapshot)).toEqual({ pluginId: "openai", backend: { id: "Scoped-CLI" } });
+    expect(resolve(narrowed)).toBeUndefined();
+    expect(resolve(snapshot)).toEqual({ pluginId: "openai", backend: { id: "Scoped-CLI" } });
     expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
   });
 
   it("uses workspace-scoped current metadata through the active plugin runtime", async () => {
-    const { __testing, resolvePluginSetupCliBackendRuntime } =
-      await import("./setup-registry.runtime.js");
-    __testing.resetRuntimeState();
-    __testing.setRuntimeModuleForTest(null);
+    const { resolvePluginSetupCliBackendDescriptor } = await import("./setup-registry.runtime.js");
 
     setActivePluginRegistry(
       createEmptyPluginRegistry(),
@@ -189,97 +221,29 @@ describe("setup-registry runtime fallback", () => {
       "gateway-bindable",
       "/workspace/a",
     );
-    setCurrentPluginMetadataSnapshot(
-      createCurrentSnapshot({
-        manifestHash: "alpha",
-        cliBackends: ["Codex-CLI"],
-        workspaceDir: "/workspace/a",
-      }),
-      { config: {}, env: process.env },
-    );
+    for (const [manifestHash, backend, missing] of [
+      ["alpha", "Codex-CLI", "next-cli"],
+      ["bravo", "Next-CLI", "codex-cli"],
+    ] as const) {
+      setCurrentPluginMetadataSnapshot(
+        createCurrentSnapshot({
+          manifestHash,
+          cliBackends: [backend],
+          workspaceDir: "/workspace/a",
+        }),
+        { config: {}, env: process.env },
+      );
+      expect(
+        resolvePluginSetupCliBackendDescriptor({ backend: backend.toLowerCase(), config: {} }),
+      ).toEqual({
+        pluginId: "openai",
+        backend: { id: backend },
+      });
+      expect(
+        resolvePluginSetupCliBackendDescriptor({ backend: missing, config: {} }),
+      ).toBeUndefined();
+    }
 
-    expect(resolvePluginSetupCliBackendRuntime({ backend: "codex-cli", config: {} })).toEqual({
-      pluginId: "openai",
-      backend: { id: "Codex-CLI" },
-    });
-    expect(
-      resolvePluginSetupCliBackendRuntime({ backend: "next-cli", config: {} }),
-    ).toBeUndefined();
-
-    setCurrentPluginMetadataSnapshot(
-      createCurrentSnapshot({
-        manifestHash: "bravo",
-        cliBackends: ["Next-CLI"],
-        workspaceDir: "/workspace/a",
-      }),
-      { config: {}, env: process.env },
-    );
-
-    expect(
-      resolvePluginSetupCliBackendRuntime({ backend: "codex-cli", config: {} }),
-    ).toBeUndefined();
-    expect(resolvePluginSetupCliBackendRuntime({ backend: "next-cli", config: {} })).toEqual({
-      pluginId: "openai",
-      backend: { id: "Next-CLI" },
-    });
-    expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
-  });
-
-  it("does not reuse workspace-scoped current metadata without a workspace context", async () => {
-    loadPluginMetadataSnapshotMock.mockReturnValue({
-      index: {
-        diagnostics: [],
-        plugins: [],
-      },
-      plugins: [],
-    });
-
-    const { __testing, resolvePluginSetupCliBackendRuntime } =
-      await import("./setup-registry.runtime.js");
-    __testing.resetRuntimeState();
-    __testing.setRuntimeModuleForTest(null);
-
-    setCurrentPluginMetadataSnapshot(
-      createCurrentSnapshot({
-        manifestHash: "alpha",
-        cliBackends: ["Codex-CLI"],
-        workspaceDir: "/workspace/a",
-      }),
-      { config: {}, env: process.env },
-    );
-
-    expect(
-      resolvePluginSetupCliBackendRuntime({ backend: "codex-cli", config: {} }),
-    ).toBeUndefined();
-    expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledWith({
-      config: {},
-      env: process.env,
-    });
-  });
-
-  it("preserves fail-closed setup lookup when the runtime module explicitly declines to resolve", async () => {
-    loadPluginMetadataSnapshotMock.mockReturnValue({
-      index: {
-        diagnostics: [],
-        plugins: [
-          {
-            pluginId: "openai",
-            origin: "bundled",
-            enabled: true,
-          },
-        ],
-      },
-      plugins: [],
-    });
-
-    const { __testing, resolvePluginSetupCliBackendRuntime } =
-      await import("./setup-registry.runtime.js");
-    __testing.resetRuntimeState();
-    __testing.setRuntimeModuleForTest({
-      resolvePluginSetupCliBackend: () => undefined,
-    });
-
-    expect(resolvePluginSetupCliBackendRuntime({ backend: "codex-cli" })).toBeUndefined();
     expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
   });
 });

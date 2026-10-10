@@ -1,10 +1,2 @@
-import { collectChannelSecurityFindings as collectChannelSecurityFindingsImpl } from "./audit-channel.js";
-
-type CollectChannelSecurityFindings =
-  typeof import("./audit-channel.js").collectChannelSecurityFindings;
-
-export function collectChannelSecurityFindings(
-  ...args: Parameters<CollectChannelSecurityFindings>
-): ReturnType<CollectChannelSecurityFindings> {
-  return collectChannelSecurityFindingsImpl(...args);
-}
+// Runtime boundary for collecting channel security audit findings.
+export { collectChannelSecurityFindingsCore as collectChannelSecurityFindings } from "./audit-channel.js";

@@ -1,3 +1,3 @@
-import type { CliOutboundSendSource } from "./outbound-send-mapping.js";
+import type { OutboundSendDeps } from "../infra/outbound/send-deps.js";
 
-export type CliDeps = CliOutboundSendSource;
+export type CliDeps = OutboundSendDeps;

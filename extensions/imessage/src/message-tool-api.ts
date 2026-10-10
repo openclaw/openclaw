@@ -3,26 +3,23 @@ import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
 } from "openclaw/plugin-sdk/channel-contract";
+import { Type } from "typebox";
 import { resolveIMessageAccount } from "./accounts.js";
 import { IMESSAGE_ACTION_NAMES, IMESSAGE_ACTIONS } from "./actions-contract.js";
-import { getCachedIMessagePrivateApiStatus } from "./private-api-status.js";
+import {
+  getCachedIMessagePrivateApiStatus,
+  imessageRpcSupportsMethod,
+} from "./private-api-status.js";
+import { getCachedIMessageRemoteHost } from "./remote-host.js";
 import { inferIMessageTargetChatType } from "./targets.js";
 
-const PRIVATE_API_ACTIONS = new Set<ChannelMessageActionName>([
-  "react",
-  "edit",
-  "unsend",
-  "reply",
-  "sendWithEffect",
-  "renameGroup",
-  "setGroupIcon",
-  "addParticipant",
-  "removeParticipant",
-  "leaveGroup",
-  "sendAttachment",
-]);
-
-function isGroupTarget(raw?: string | null): boolean {
+function isGroupTarget(
+  raw?: string | null,
+  chatType?: "direct" | "group" | "channel" | null,
+): boolean {
+  if (chatType) {
+    return chatType !== "direct";
+  }
   if (!raw) {
     return false;
   }
@@ -32,6 +29,7 @@ function isGroupTarget(raw?: string | null): boolean {
 export function describeIMessageMessageTool({
   cfg,
   accountId,
+  chatType,
   currentChannelId,
 }: Parameters<NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>>[0]) {
   const account = resolveIMessageAccount({ cfg, accountId });
@@ -40,14 +38,20 @@ export function describeIMessageMessageTool({
   }
   const cliPath = account.config.cliPath?.trim() || "imsg";
   const privateApiStatus = getCachedIMessagePrivateApiStatus(cliPath);
+  const remote = Boolean(
+    getCachedIMessageRemoteHost({
+      cliPath,
+      remoteHost: account.config.remoteHost,
+    }),
+  );
   const gate = createActionGate(account.config.actions);
   const actions = new Set<ChannelMessageActionName>();
   for (const action of IMESSAGE_ACTION_NAMES) {
     const spec = IMESSAGE_ACTIONS[action];
-    if (!spec?.gate || !gate(spec.gate)) {
+    if (!gate(spec.gate)) {
       continue;
     }
-    if (privateApiStatus?.available === false && PRIVATE_API_ACTIONS.has(action)) {
+    if (privateApiStatus?.available === false) {
       continue;
     }
     if (
@@ -61,9 +65,34 @@ export function describeIMessageMessageTool({
     if (action === "unsend" && privateApiStatus?.selectors?.retractMessagePart !== true) {
       continue;
     }
+    // Keep first-dispatch discovery optimistic while the status cache is empty;
+    // handleAction probes lazily and enforces the exact selector before sending.
+    if (
+      action === "poll" &&
+      privateApiStatus?.selectors &&
+      !privateApiStatus.selectors.pollPayloadMessage
+    ) {
+      continue;
+    }
+    if (
+      action === "poll-vote" &&
+      privateApiStatus?.selectors &&
+      !privateApiStatus.selectors.pollVoteMessage
+    ) {
+      continue;
+    }
+    // The injected helper can outlive the selected imsg binary. Require both
+    // the native initializer and a binary new enough to advertise poll.vote.
+    if (
+      action === "poll-vote" &&
+      privateApiStatus &&
+      !imessageRpcSupportsMethod(privateApiStatus, "poll.vote")
+    ) {
+      continue;
+    }
     actions.add(action);
   }
-  if (!isGroupTarget(currentChannelId)) {
+  if (!isGroupTarget(currentChannelId, chatType)) {
     for (const action of IMESSAGE_ACTION_NAMES) {
       if ("groupOnly" in IMESSAGE_ACTIONS[action] && IMESSAGE_ACTIONS[action].groupOnly) {
         actions.delete(action);
@@ -73,5 +102,41 @@ export function describeIMessageMessageTool({
   if (actions.delete("sendAttachment")) {
     actions.add("upload-file");
   }
-  return { actions: Array.from(actions) };
+  return {
+    actions: Array.from(actions),
+    ...(actions.has("poll-vote")
+      ? {
+          schema: {
+            properties: {
+              ...(remote
+                ? {
+                    pollOptionId: Type.Optional(
+                      Type.String({
+                        description:
+                          "Stable iMessage poll option id. Required for Remote Mac over SSH accounts; copy it from the inbound poll options.",
+                      }),
+                    ),
+                    pollOptionIndex: Type.Optional(
+                      Type.Integer({
+                        minimum: 1,
+                        description:
+                          "Local iMessage accounts only. Remote Mac accounts must use pollOptionId.",
+                      }),
+                    ),
+                  }
+                : {}),
+              pollOptionText: Type.Optional(
+                Type.String({
+                  description: remote
+                    ? "Local iMessage accounts only. Remote Mac accounts must use pollOptionId."
+                    : "Exact iMessage poll option text.",
+                }),
+              ),
+            },
+            actions: ["poll-vote" as const],
+            visibility: "all-configured" as const,
+          },
+        }
+      : {}),
+  };
 }

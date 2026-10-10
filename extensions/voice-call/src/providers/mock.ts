@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
-  EndReason,
   GetCallStatusInput,
   GetCallStatusResult,
   HangupCallInput,
@@ -17,6 +16,7 @@ import type {
   WebhookContext,
   WebhookVerificationResult,
 } from "../types.js";
+import { createWebhookReplayCache, reserveWebhookReplay } from "../webhook-replay.js";
 import type { VoiceCallProvider } from "./base.js";
 
 /**
@@ -28,9 +28,15 @@ import type { VoiceCallProvider } from "./base.js";
  */
 export class MockProvider implements VoiceCallProvider {
   readonly name = "mock" as const;
+  private readonly replayCache = createWebhookReplayCache();
 
-  verifyWebhook(_ctx: WebhookContext): WebhookVerificationResult {
-    return { ok: true };
+  verifyWebhook(ctx: WebhookContext): WebhookVerificationResult {
+    const requestMaterial = `${ctx.method}\n${ctx.url}\n${ctx.rawBody}`;
+    const key = `mock:${crypto.createHash("sha256").update(requestMaterial).digest("hex")}`;
+    return {
+      ok: true,
+      ...reserveWebhookReplay(this.replayCache, key),
+    };
   }
 
   parseWebhookEvent(
@@ -40,16 +46,13 @@ export class MockProvider implements VoiceCallProvider {
     try {
       const payload = JSON.parse(ctx.rawBody);
       const events: NormalizedEvent[] = [];
-
-      if (Array.isArray(payload.events)) {
-        for (const evt of payload.events) {
-          const normalized = this.normalizeEvent(evt);
-          if (normalized) {
-            events.push(normalized);
-          }
-        }
-      } else if (payload.event) {
-        const normalized = this.normalizeEvent(payload.event);
+      const candidates = Array.isArray(payload.events)
+        ? payload.events
+        : payload.event
+          ? [payload.event]
+          : [];
+      for (const evt of candidates) {
+        const normalized = this.normalizeEvent(evt);
         if (normalized) {
           events.push(normalized);
         }
@@ -62,15 +65,19 @@ export class MockProvider implements VoiceCallProvider {
   }
 
   private normalizeEvent(evt: Partial<NormalizedEvent>): NormalizedEvent | null {
-    if (!evt.type || !evt.callId) {
+    if (!evt.type || typeof evt.callId !== "string" || !evt.callId) {
       return null;
     }
 
     const base = {
       id: evt.id ?? crypto.randomUUID(),
       callId: evt.callId,
-      providerCallId: evt.providerCallId,
+      providerCallId: typeof evt.providerCallId === "string" ? evt.providerCallId : undefined,
       timestamp: evt.timestamp ?? Date.now(),
+      direction:
+        evt.direction === "inbound" || evt.direction === "outbound" ? evt.direction : undefined,
+      from: typeof evt.from === "string" ? evt.from : undefined,
+      to: typeof evt.to === "string" ? evt.to : undefined,
     };
 
     switch (evt.type) {
@@ -80,66 +87,69 @@ export class MockProvider implements VoiceCallProvider {
       case "call.active":
         return { ...base, type: evt.type };
 
+      case "call.amd":
+        return evt.answeredBy ? { ...base, type: evt.type, answeredBy: evt.answeredBy } : null;
+
       case "call.speaking": {
-        const payload = evt as Partial<NormalizedEvent & { text?: string }>;
         return {
           ...base,
           type: evt.type,
-          text: payload.text ?? "",
+          text: evt.text ?? "",
+        };
+      }
+
+      case "call.assistant-speech": {
+        return {
+          ...base,
+          type: evt.type,
+          transcript: evt.transcript ?? "",
         };
       }
 
       case "call.speech": {
-        const payload = evt as Partial<
-          NormalizedEvent & {
-            transcript?: string;
-            isFinal?: boolean;
-            confidence?: number;
-          }
-        >;
+        const transcript = evt.transcript ?? "";
+        if (!transcript.trim()) {
+          return null;
+        }
         return {
           ...base,
           type: evt.type,
-          transcript: payload.transcript ?? "",
-          isFinal: payload.isFinal ?? true,
-          confidence: payload.confidence,
+          transcript,
+          isFinal: evt.isFinal ?? true,
+          confidence: evt.confidence,
         };
       }
 
       case "call.silence": {
-        const payload = evt as Partial<NormalizedEvent & { durationMs?: number }>;
         return {
           ...base,
           type: evt.type,
-          durationMs: payload.durationMs ?? 0,
+          durationMs: evt.durationMs ?? 0,
         };
       }
 
       case "call.dtmf": {
-        const payload = evt as Partial<NormalizedEvent & { digits?: string }>;
         return {
           ...base,
           type: evt.type,
-          digits: payload.digits ?? "",
+          digits: evt.digits ?? "",
         };
       }
 
       case "call.ended": {
-        const payload = evt as Partial<NormalizedEvent & { reason?: EndReason }>;
         return {
           ...base,
           type: evt.type,
-          reason: payload.reason ?? "completed",
+          reason: evt.reason ?? "completed",
         };
       }
 
       case "call.error": {
-        const payload = evt as Partial<NormalizedEvent & { error?: string; retryable?: boolean }>;
         return {
           ...base,
           type: evt.type,
-          error: payload.error ?? "unknown error",
-          retryable: payload.retryable,
+          error: evt.error ?? "unknown error",
+          retryable: evt.retryable,
         };
       }
 
@@ -155,25 +165,17 @@ export class MockProvider implements VoiceCallProvider {
     };
   }
 
-  async hangupCall(_input: HangupCallInput): Promise<void> {
-    // No-op for mock
-  }
+  async hangupCall(_input: HangupCallInput): Promise<void> {}
 
-  async playTts(_input: PlayTtsInput): Promise<void> {
-    // No-op for mock
-  }
+  async playTts(_input: PlayTtsInput): Promise<void> {}
 
-  async sendDtmf(_input: SendDtmfInput): Promise<void> {
-    // No-op for mock
-  }
+  async playMessageAndHangup(_input: PlayTtsInput): Promise<void> {}
 
-  async startListening(_input: StartListeningInput): Promise<void> {
-    // No-op for mock
-  }
+  async sendDtmf(_input: SendDtmfInput): Promise<void> {}
 
-  async stopListening(_input: StopListeningInput): Promise<void> {
-    // No-op for mock
-  }
+  async startListening(_input: StartListeningInput): Promise<void> {}
+
+  async stopListening(_input: StopListeningInput): Promise<void> {}
 
   async getCallStatus(input: GetCallStatusInput): Promise<GetCallStatusResult> {
     const id = normalizeLowercaseStringOrEmpty(input.providerCallId);

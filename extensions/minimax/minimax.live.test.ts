@@ -1,11 +1,14 @@
+import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-ffmpeg";
+// Minimax tests cover minimax plugin behavior.
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
+import { isProviderAuthProfileConfigured } from "openclaw/plugin-sdk/provider-auth";
+import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
-import { buildMinimaxSpeechProvider } from "./speech-provider.js";
+import { buildMinimaxSpeechProvider } from "./speech-provider-factory.js";
 import { createMiniMaxWebSearchProvider } from "./src/minimax-web-search-provider.js";
 
 const MINIMAX_API_KEY = process.env.MINIMAX_API_KEY?.trim() ?? "";
@@ -33,6 +36,20 @@ const registerMinimaxPlugin = () =>
     id: "minimax",
     name: "MiniMax Provider",
   });
+
+function hasTrustedFfmpegForLiveVoiceNote(): boolean {
+  try {
+    resolveFfmpegBin();
+    return true;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("ffmpeg not found in trusted system directories")) {
+      console.warn("[minimax:live] skip voice-note transcode: ffmpeg unavailable");
+      return false;
+    }
+    throw error;
+  }
+}
 
 describeLive("minimax plugin live", () => {
   it("runs MiniMax web search through the provider tool", async () => {
@@ -69,7 +86,11 @@ describeTtsLive("minimax tts live", () => {
   }, 120_000);
 
   it("synthesizes MiniMax TTS as an Opus voice note", async () => {
-    const provider = buildMinimaxSpeechProvider();
+    if (!hasTrustedFfmpegForLiveVoiceNote()) {
+      return;
+    }
+
+    const provider = buildMinimaxSpeechProvider({ isProviderAuthProfileConfigured });
 
     const voiceNote = await provider.synthesize({
       text: "OpenClaw MiniMax voice note test OK.",
@@ -91,7 +112,7 @@ describeTokenPlanTtsLive("minimax token plan tts live", () => {
     const savedApiKey = process.env.MINIMAX_API_KEY;
     delete process.env.MINIMAX_API_KEY;
     try {
-      const provider = buildMinimaxSpeechProvider();
+      const provider = buildMinimaxSpeechProvider({ isProviderAuthProfileConfigured });
 
       const audioFile = await provider.synthesize({
         text: "OpenClaw MiniMax Token Plan text to speech integration test OK.",

@@ -1,3 +1,4 @@
+// Legacy config tests cover channel plugin config compatibility and migration helpers.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { LegacyConfigRule } from "../../config/legacy.shared.js";
 
@@ -156,6 +157,35 @@ describe("collectChannelLegacyConfigRules", () => {
     expect(rules).toStrictEqual([]);
     expect(getBootstrapChannelPluginMock).not.toHaveBeenCalled();
     expect(listPluginDoctorLegacyConfigRulesMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps disabled channel migrations while excluding channel metadata and blank ids", () => {
+    loadBundledChannelDoctorContractApiMock.mockImplementation((channelId: string) => ({
+      legacyConfigRules: [
+        {
+          path: ["channels", channelId, "legacy"],
+          message: `legacy ${channelId} rule`,
+        },
+      ],
+    }));
+
+    const rules = collectChannelLegacyConfigRules({
+      plugins: { enabled: false },
+      channels: {
+        defaults: {},
+        modelByChannel: { discord: "openai/gpt-5.6-luna" },
+        " ": {},
+        discord: { enabled: false, legacy: true },
+      },
+    });
+
+    expect(rules).toEqual([
+      {
+        path: ["channels", "discord", "legacy"],
+        message: "legacy discord rule",
+      },
+    ]);
+    expect(loadBundledChannelDoctorContractApiMock).toHaveBeenCalledExactlyOnceWith("discord");
   });
 
   it("scopes channel legacy scans to touched channels during dry-run validation", () => {

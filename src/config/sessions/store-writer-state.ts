@@ -1,49 +1,20 @@
-import { clearSessionStoreCaches } from "./store-cache.js";
+// Shared session-store writer queue state.
+import {
+  clearStoreWriterQueuesForTest,
+  type StoreWriterQueue,
+} from "../../shared/store-writer-queue.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission-state.js";
+import { clearSessionSkillPromptRefCache } from "./skill-prompt-blobs.js";
 
-export type SessionStoreWriterTask = {
-  fn: () => Promise<unknown>;
-  resolve: (value: unknown) => void;
-  reject: (reason: unknown) => void;
-};
+export const WRITER_QUEUES = new Map<string, StoreWriterQueue>();
+// Teardown drains the canonical agent writer before closing SQLite handles.
 
-export type SessionStoreWriterQueue = {
-  running: boolean;
-  pending: SessionStoreWriterTask[];
-  drainPromise: Promise<void> | null;
-};
-
-export const WRITER_QUEUES = new Map<string, SessionStoreWriterQueue>();
-
+/** Clears session writer queues and prompt-blob caches for tests. */
 export function clearSessionStoreCacheForTest(): void {
-  clearSessionStoreCaches();
-  for (const queue of WRITER_QUEUES.values()) {
-    for (const task of queue.pending) {
-      task.reject(new Error("session store queue cleared for test"));
-    }
-  }
-  WRITER_QUEUES.clear();
-}
-
-export async function drainSessionStoreWriterQueuesForTest(): Promise<void> {
-  while (WRITER_QUEUES.size > 0) {
-    const queues = [...WRITER_QUEUES.values()];
-    for (const queue of queues) {
-      for (const task of queue.pending) {
-        task.reject(new Error("session store queue cleared for test"));
-      }
-      queue.pending.length = 0;
-    }
-    const activeDrains = queues.flatMap((queue) =>
-      queue.drainPromise ? [queue.drainPromise] : [],
-    );
-    if (activeDrains.length === 0) {
-      WRITER_QUEUES.clear();
-      return;
-    }
-    await Promise.allSettled(activeDrains);
-  }
-}
-
-export function getSessionStoreWriterQueueSizeForTest(): number {
-  return WRITER_QUEUES.size;
+  clearSessionSkillPromptRefCache();
+  clearStoreWriterQueuesForTest(WRITER_QUEUES, "session store queue cleared for test");
+  clearStoreWriterQueuesForTest(
+    SQLITE_SESSION_WRITER_QUEUES,
+    "SQLite session store queue cleared for test",
+  );
 }

@@ -1,0 +1,503 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { readEmbeddingVectors } from "../../packages/memory-host-sdk/src/host/embedding-vectors.js";
+import {
+  addEmbeddingErrorContext,
+  debugEmbeddingsLog,
+  embeddingResponseLogMeta,
+} from "../../packages/memory-host-sdk/src/host/embeddings-debug.js";
+import { extractEmbeddingUsage } from "../../packages/memory-host-sdk/src/host/embeddings-remote-fetch.js";
+import { withRemoteHttpResponse } from "../../packages/memory-host-sdk/src/host/remote-http.js";
+import { MEMORY_SEARCH_DEADLINE_CONTROL } from "../../packages/memory-host-sdk/src/host/search-deadline-control.js";
+import {
+  createProviderHttpError,
+  readProviderJsonResponse,
+} from "../agents/provider-http-errors.js";
+import type {
+  AcquireConfiguredProviderLocalService,
+  ConfiguredProviderLocalServiceTarget,
+} from "../agents/provider-local-service-target.js";
+import { redactProviderResponseErrorText } from "../agents/provider-request-header-redaction.js";
+import type { ModelProviderConfig } from "../config/types.models.js";
+import { normalizeResolvedSecretInputString } from "../config/types.secrets.js";
+import { readResponseTextPrefix } from "../infra/http-body.js";
+import { fetchWithRuntimeDispatcher } from "../infra/net/runtime-fetch.js";
+import { ssrfPolicyFromHttpBaseUrlAllowedHostname, type SsrFPolicy } from "../infra/net/ssrf.js";
+import { appendConfigPathSegment } from "../shared/dot-path.js";
+import type {
+  EmbeddingInput,
+  EmbeddingProvider,
+  EmbeddingProviderAdapter,
+  EmbeddingProviderCallOptions,
+  EmbeddingProviderCreateOptions,
+} from "./embedding-provider-types.js";
+
+/** Provider id for OpenAI-compatible remote embedding servers. */
+const OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID = "openai-compatible";
+const OPENAI_COMPATIBLE_MODEL_APIS = new Set(["openai-completions", "openai-responses"]);
+const EMBEDDING_ERROR_BODY_MAX_BYTES = 8 * 1024;
+const EMBEDDING_ERROR_BODY_MAX_CHARS = 1_000;
+const EMBEDDING_ERROR_TRUNCATED_SUFFIX = "... [truncated]";
+
+/** Normalized OpenAI-compatible embedding client configuration. */
+type OpenAICompatibleEmbeddingClient = {
+  providerId: string;
+  baseUrl: string;
+  endpointUrl: string;
+  headers: Record<string, string>;
+  ssrfPolicy?: SsrFPolicy;
+  model: string;
+  dimensions?: number;
+  inputType?: string;
+  queryInputType?: string;
+  documentInputType?: string;
+  localServiceTarget?: ConfiguredProviderLocalServiceTarget;
+  acquireLocalService?: AcquireConfiguredProviderLocalService;
+};
+
+type ConfiguredEmbeddingProvider = Partial<
+  Pick<ModelProviderConfig, "api" | "baseUrl" | "apiKey" | "headers" | "localService">
+>;
+
+type ResolvedConfiguredEmbeddingProvider = {
+  providerId: string;
+  config: ConfiguredEmbeddingProvider;
+};
+
+type LocalServiceAwareEmbeddingOptions = EmbeddingProviderCreateOptions & {
+  acquireLocalService?: AcquireConfiguredProviderLocalService;
+};
+
+function normalizeBaseUrl(value: string | undefined): string {
+  const baseUrl = value?.trim();
+  if (!baseUrl) {
+    throw new Error(
+      "openai-compatible embeddings: missing remote.baseUrl. Set it to your OpenAI-compatible embeddings server, for example http://127.0.0.1:11434/v1.",
+    );
+  }
+  return baseUrl.replace(/\/+$/u, "");
+}
+
+function normalizeModel(value: string | undefined, providerId: string | undefined): string {
+  const model = value?.trim();
+  if (!model) {
+    throw new Error(
+      "openai-compatible embeddings: missing model. Set it to the embedding model id your server expects.",
+    );
+  }
+  const prefixes = new Set(
+    [
+      providerId?.trim(),
+      normalizeProviderId(providerId ?? ""),
+      OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID,
+    ]
+      .filter((prefix): prefix is string => Boolean(prefix))
+      .map((prefix) => `${prefix}/`),
+  );
+  for (const prefix of prefixes) {
+    if (model.startsWith(prefix)) {
+      return model.slice(prefix.length);
+    }
+  }
+  return model;
+}
+
+function normalizeDimensions(value: number): number {
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error("openai-compatible embeddings: dimensions must be a positive integer.");
+  }
+  return value;
+}
+
+function resolveRequestInputType(
+  client: OpenAICompatibleEmbeddingClient,
+  kind: EmbeddingProviderCallOptions["inputType"] | undefined,
+): string | undefined {
+  if (kind === "query") {
+    return client.queryInputType ?? client.inputType;
+  }
+  if (kind === "document") {
+    return client.documentInputType ?? client.inputType;
+  }
+  return client.inputType;
+}
+
+function buildHeaders(params: {
+  apiKey: string | undefined;
+  provider: Record<string, unknown> | undefined;
+  remote: Record<string, unknown> | undefined;
+}): Record<string, string> {
+  const headers: Record<string, string> = {
+    accept: "application/json",
+    "content-type": "application/json",
+  };
+  for (const [path, extra] of [
+    ["models.providers.*.headers", params.provider],
+    ["memory.search.remote.headers", params.remote],
+  ] as const) {
+    for (const [name, rawValue] of Object.entries(extra ?? {})) {
+      const normalizedName = name.trim().toLowerCase();
+      if (!normalizedName) {
+        continue;
+      }
+      const value = normalizeResolvedSecretInputString({
+        value: rawValue,
+        path: `${path}.${normalizedName}`,
+      });
+      if (value) {
+        headers[normalizedName] = value;
+      }
+    }
+  }
+  if (params.apiKey && !headers.authorization) {
+    headers.authorization = `Bearer ${params.apiKey}`;
+  }
+  return headers;
+}
+
+function isSensitiveHeaderName(name: string): boolean {
+  return (
+    name === "authorization" ||
+    name === "proxy-authorization" ||
+    name.includes("api-key") ||
+    name.includes("token") ||
+    name.includes("secret")
+  );
+}
+
+function sanitizeCacheHeaders(headers: Record<string, string>): Record<string, string> | undefined {
+  const safeHeaders = Object.fromEntries(
+    Object.entries(headers).filter(([name]) => !isSensitiveHeaderName(name)),
+  );
+  return Object.keys(safeHeaders).length > 0 ? safeHeaders : undefined;
+}
+
+async function resolveConfiguredProviderApiKey(params: {
+  providerId: string;
+  options: EmbeddingProviderCreateOptions;
+  configuredProvider: ConfiguredEmbeddingProvider | undefined;
+}): Promise<string | undefined> {
+  const apiKey = normalizeResolvedSecretInputString({
+    value: params.configuredProvider?.apiKey,
+    path: `${appendConfigPathSegment("models.providers", params.providerId)}.apiKey`,
+  });
+  if (!apiKey) {
+    return undefined;
+  }
+  const { resolveAgentDir, tryResolveAmbientOwnerAgentId } =
+    await import("../agents/agent-scope-config.js");
+  const agentId = tryResolveAmbientOwnerAgentId(params.options.config);
+  const agentDir =
+    params.options.agentDir?.trim() ||
+    (agentId ? resolveAgentDir(params.options.config, agentId) : undefined);
+  // Without an owned auth store, a configured string retains its literal meaning.
+  if (!agentDir) {
+    return apiKey;
+  }
+  const { resolveScopedAuthProfileStore, resolveProviderEntryApiKeyAuth } =
+    await import("../agents/model-auth-provider.js");
+  const authParams = {
+    provider: params.providerId,
+    modelApi: params.configuredProvider?.api,
+    cfg: params.options.config,
+    agentDir,
+  };
+  const store = resolveScopedAuthProfileStore(authParams);
+  // Only explicit profile bindings enter model auth. General discovery would
+  // replace literal/runtime-resolved keys with unrelated profile or env credentials.
+  const auth = await resolveProviderEntryApiKeyAuth({ ...authParams, store });
+  return auth ? auth.apiKey : apiKey;
+}
+
+function isOpenAICompatibleProviderConfig(
+  id: string,
+  provider: ConfiguredEmbeddingProvider,
+): boolean {
+  return (
+    normalizeProviderId(id) === OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID ||
+    OPENAI_COMPATIBLE_MODEL_APIS.has(normalizeProviderId(provider.api ?? "")) ||
+    (!provider.api && typeof provider.baseUrl === "string" && provider.baseUrl.trim().length > 0)
+  );
+}
+
+function resolveConfiguredProvider(
+  options: EmbeddingProviderCreateOptions,
+): ResolvedConfiguredEmbeddingProvider | undefined {
+  const providers = options.config.models?.providers;
+  if (!providers) {
+    return undefined;
+  }
+  const providerId = options.provider?.trim() || OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID;
+  const normalizedProviderId = normalizeProviderId(providerId);
+  const direct = providers[providerId];
+  if (direct && isOpenAICompatibleProviderConfig(providerId, direct)) {
+    return { providerId, config: direct };
+  }
+  const normalizedEntry = Object.entries(providers).find(
+    ([candidateId]) => normalizeProviderId(candidateId) === normalizedProviderId,
+  );
+  if (!normalizedEntry) {
+    return undefined;
+  }
+  const [configuredProviderId, config] = normalizedEntry;
+  return isOpenAICompatibleProviderConfig(configuredProviderId, config)
+    ? { providerId: configuredProviderId, config }
+    : undefined;
+}
+
+function embeddingInputToText(input: EmbeddingInput): string {
+  if (typeof input === "string") {
+    return input;
+  }
+  if (!input.parts || input.parts.length === 0) {
+    return input.text;
+  }
+  const textParts: string[] = [];
+  for (const part of input.parts) {
+    if (part.type !== "text") {
+      throw new Error("openai-compatible embeddings only support text embedding inputs.");
+    }
+    textParts.push(part.text);
+  }
+  return textParts.join("");
+}
+
+async function createEmbeddingHttpError(
+  response: Response,
+  requestHeaders: HeadersInit,
+  errorPrefix: string,
+): Promise<Error> {
+  const prefix =
+    response.body && !response.bodyUsed
+      ? await readResponseTextPrefix(response, EMBEDDING_ERROR_BODY_MAX_BYTES).catch(
+          () => undefined,
+        )
+      : undefined;
+  const safeBody = prefix?.text
+    ? redactProviderResponseErrorText(prefix.text, requestHeaders, {
+        sourceTruncated: prefix.truncated,
+      })
+    : undefined;
+  const error = await createProviderHttpError(
+    new Response(safeBody, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    }),
+    errorPrefix,
+    { requestHeaders },
+  );
+  let snippet = safeBody;
+  if (snippet && snippet.length > EMBEDDING_ERROR_BODY_MAX_CHARS) {
+    snippet = `${truncateUtf16Safe(snippet, EMBEDDING_ERROR_BODY_MAX_CHARS)}${EMBEDDING_ERROR_TRUNCATED_SUFFIX}`;
+  } else if (snippet && prefix?.truncated) {
+    snippet = `${snippet}${EMBEDDING_ERROR_TRUNCATED_SUFFIX}`;
+  }
+  error.message = `${errorPrefix}: HTTP ${response.status}${snippet ? `: ${snippet}` : ""}`;
+  return error;
+}
+
+// The caller owns the deadline; Undici's defaults must not cut short a slow batch.
+const fetchWithCallerDeadline: typeof fetchWithRuntimeDispatcher = (url, init) =>
+  fetchWithRuntimeDispatcher(url, {
+    ...init,
+    dispatcher: init?.dispatcher?.compose(
+      (dispatch) => (options, handler) =>
+        dispatch({ ...options, headersTimeout: 0, bodyTimeout: 0 }, handler),
+    ),
+  });
+
+async function postEmbeddingRequest(params: {
+  client: OpenAICompatibleEmbeddingClient;
+  input: string[];
+  callOptions?: EmbeddingProviderCallOptions;
+}): Promise<number[][]> {
+  const { client, input, callOptions } = params;
+  const deadlineControl = callOptions?.[MEMORY_SEARCH_DEADLINE_CONTROL];
+  const errorPrefix = "openai-compatible embeddings failed";
+  const context = `${client.providerId} embeddings failed (model: ${client.model}, batch size: ${input.length})`;
+  const inputType = resolveRequestInputType(client, callOptions?.inputType);
+  const body = {
+    model: client.model,
+    input,
+    ...(typeof client.dimensions === "number" ? { dimensions: client.dimensions } : {}),
+    ...(inputType ? { input_type: inputType } : {}),
+  };
+  const localServiceLease =
+    client.localServiceTarget && client.acquireLocalService
+      ? await client.acquireLocalService(
+          {
+            ...client.localServiceTarget,
+            ...(deadlineControl
+              ? {
+                  onReadinessWait: (waiting: boolean) =>
+                    deadlineControl.report(waiting ? "pause" : "resume"),
+                }
+              : {}),
+          },
+          callOptions?.signal,
+        )
+      : undefined;
+  try {
+    debugEmbeddingsLog("memory embeddings: remote request", {
+      context,
+      inputCount: input.length,
+    });
+    return await withRemoteHttpResponse({
+      url: client.endpointUrl,
+      init: {
+        method: "POST",
+        headers: client.headers,
+        body: JSON.stringify(body),
+      },
+      signal: callOptions?.signal,
+      fetchImpl: callOptions?.signal ? fetchWithCallerDeadline : undefined,
+      ssrfPolicy: client.ssrfPolicy,
+      auditContext: "embedding-provider:openai-compatible",
+      onResponse: async (response) => {
+        debugEmbeddingsLog("memory embeddings: remote response", {
+          context,
+          ...embeddingResponseLogMeta(response),
+        });
+        try {
+          if (!response.ok) {
+            throw await createEmbeddingHttpError(response, client.headers, errorPrefix);
+          }
+          const payload = await readProviderJsonResponse<unknown>(response, errorPrefix);
+          const vectors = readEmbeddingVectors(
+            asOptionalRecord(payload)?.data,
+            input.length,
+            context,
+          );
+          callOptions?.onUsage?.(extractEmbeddingUsage(payload));
+          return vectors;
+        } catch (error) {
+          if (callOptions?.signal?.aborted) {
+            throw error;
+          }
+          throw addEmbeddingErrorContext(error, errorPrefix, context);
+        }
+      },
+    });
+  } finally {
+    localServiceLease?.release();
+  }
+}
+
+/** Creates a normalized OpenAI-compatible embedding client from runtime config. */
+async function createOpenAICompatibleEmbeddingClient(
+  options: EmbeddingProviderCreateOptions,
+): Promise<OpenAICompatibleEmbeddingClient> {
+  const resolvedProvider = resolveConfiguredProvider(options);
+  const configuredProvider = resolvedProvider?.config;
+  const providerId =
+    resolvedProvider?.providerId ??
+    options.provider?.trim() ??
+    OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID;
+  const remoteBaseUrl = normalizeOptionalString(options.remote?.baseUrl);
+  const providerBaseUrl = normalizeOptionalString(configuredProvider?.baseUrl);
+  const baseUrl = normalizeBaseUrl(remoteBaseUrl ?? providerBaseUrl);
+  // The embedding SDK also loads the provider registry; keep this shared policy edge lazy.
+  const { embeddingProviderOwnsDestination, resolveEmbeddingEndpointUrl } =
+    await import("../plugin-sdk/memory-core-host-engine-embeddings.js");
+  const providerOwnsDestination =
+    providerBaseUrl !== undefined && embeddingProviderOwnsDestination({ baseUrl, providerBaseUrl });
+  const model = normalizeModel(options.model, options.provider);
+  const inputType = normalizeOptionalString(options.inputType);
+  const queryInputType = normalizeOptionalString(options.queryInputType);
+  const documentInputType = normalizeOptionalString(options.documentInputType);
+  const headers = buildHeaders({
+    apiKey: normalizeResolvedSecretInputString({
+      value: options.remote?.apiKey,
+      path: "memory.search.remote.apiKey",
+    }),
+    provider: providerOwnsDestination ? configuredProvider?.headers : undefined,
+    remote: options.remote?.headers,
+  });
+  if (providerOwnsDestination && !headers.authorization) {
+    const providerApiKey = await resolveConfiguredProviderApiKey({
+      providerId,
+      options,
+      configuredProvider,
+    });
+    if (providerApiKey) {
+      headers.authorization = `Bearer ${providerApiKey}`;
+    }
+  }
+  const localServiceOptions = options as LocalServiceAwareEmbeddingOptions;
+  return {
+    providerId,
+    baseUrl,
+    endpointUrl: resolveEmbeddingEndpointUrl(baseUrl, "embeddings"),
+    headers,
+    ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
+    model,
+    ...(configuredProvider?.localService && !remoteBaseUrl
+      ? {
+          localServiceTarget: {
+            providerId,
+            baseUrl,
+            headers,
+          },
+          acquireLocalService: localServiceOptions.acquireLocalService,
+        }
+      : {}),
+    ...(options.dimensions !== undefined
+      ? { dimensions: normalizeDimensions(options.dimensions) }
+      : {}),
+    ...(inputType ? { inputType } : {}),
+    ...(queryInputType ? { queryInputType } : {}),
+    ...(documentInputType ? { documentInputType } : {}),
+  };
+}
+
+/** Embedding provider adapter for OpenAI-compatible remote embedding APIs. */
+export const openAICompatibleEmbeddingProviderAdapter: EmbeddingProviderAdapter = {
+  id: OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID,
+  transport: "remote",
+  create: async (options) => {
+    const client = await createOpenAICompatibleEmbeddingClient(options);
+    const embedBatch: EmbeddingProvider["embedBatch"] = async (inputs, callOptions) => {
+      if (inputs.length === 0) {
+        return [];
+      }
+      return await postEmbeddingRequest({
+        client,
+        input: inputs.map(embeddingInputToText),
+        callOptions,
+      });
+    };
+    const cacheHeaders = sanitizeCacheHeaders(client.headers);
+    return {
+      provider: {
+        id: OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID,
+        model: client.model,
+        ...(typeof client.dimensions === "number" ? { dimensions: client.dimensions } : {}),
+        embed: async (input, callOptions) => {
+          const [embedding] = await embedBatch([input], callOptions);
+          if (!embedding) {
+            throw new Error("openai-compatible embeddings failed: malformed JSON response");
+          }
+          return embedding;
+        },
+        embedBatch,
+      },
+      runtime: {
+        id: OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID,
+        inlineBatchTimeoutMs: 10 * 60_000,
+        cacheKeyData: {
+          provider: client.providerId,
+          baseUrl: client.baseUrl,
+          model: client.model,
+          ...(typeof client.dimensions === "number" ? { dimensions: client.dimensions } : {}),
+          ...(client.inputType ? { inputType: client.inputType } : {}),
+          ...(client.queryInputType ? { queryInputType: client.queryInputType } : {}),
+          ...(client.documentInputType ? { documentInputType: client.documentInputType } : {}),
+          ...(cacheHeaders ? { headers: cacheHeaders } : {}),
+        },
+      },
+    };
+  },
+};

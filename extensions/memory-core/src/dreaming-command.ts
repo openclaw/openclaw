@@ -1,64 +1,23 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveMemoryDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { OpenClawPluginApi, PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { asRecord } from "./dreaming-shared.js";
-import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
-
-function resolveMemoryCorePluginConfig(cfg: OpenClawConfig): Record<string, unknown> {
-  const entry = asRecord(cfg.plugins?.entries?.["memory-core"]);
-  return asRecord(entry?.config) ?? {};
-}
-
-function updateDreamingEnabledInConfig(cfg: OpenClawConfig, enabled: boolean): OpenClawConfig {
-  const entries = { ...cfg.plugins?.entries };
-  const existingEntry = asRecord(entries["memory-core"]) ?? {};
-  const existingConfig = asRecord(existingEntry.config) ?? {};
-  const existingSleep = asRecord(existingConfig.dreaming) ?? {};
-  entries["memory-core"] = {
-    ...existingEntry,
-    config: {
-      ...existingConfig,
-      dreaming: {
-        ...existingSleep,
-        enabled,
-      },
-    },
-  };
-
-  return {
-    ...cfg,
-    plugins: {
-      ...cfg.plugins,
-      entries,
-    },
-  };
-}
-
-function formatEnabled(value: boolean): string {
-  return value ? "on" : "off";
-}
-
-function formatPhaseGuide(): string {
-  return [
-    "- implementation detail: each sweep runs light -> REM -> deep.",
-    "- deep is the only stage that writes durable entries to MEMORY.md.",
-    "- DREAMS.md is for human-readable dreaming summaries and diary entries.",
-  ].join("\n");
-}
+import {
+  asNullableRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 function formatStatus(cfg: OpenClawConfig): string {
-  const pluginConfig = resolveMemoryCorePluginConfig(cfg);
+  const entry = asNullableRecord(cfg.plugins?.entries?.["memory-core"]);
   const dreaming = resolveMemoryDreamingConfig({
-    pluginConfig,
+    pluginConfig: asNullableRecord(entry?.config) ?? {},
     cfg,
   });
-  const deep = resolveShortTermPromotionDreamingConfig({ pluginConfig, cfg });
+  const deep = dreaming.phases.deep;
   const timezone = dreaming.timezone ? ` (${dreaming.timezone})` : "";
 
   return [
     "Dreaming status:",
-    `- enabled: ${formatEnabled(dreaming.enabled)}${timezone}`,
+    `- enabled: ${dreaming.enabled ? "on" : "off"}${timezone}`,
     `- sweep cadence: ${dreaming.frequency}`,
     `- promotion policy: score>=${deep.minScore}, recalls>=${deep.minRecallCount}, uniqueQueries>=${deep.minUniqueQueries}`,
   ].join("\n");
@@ -72,12 +31,20 @@ function formatUsage(includeStatus: string): string {
     includeStatus,
     "",
     "Phases:",
-    formatPhaseGuide(),
+    "- implementation detail: each sweep runs light -> REM -> deep.",
+    "- deep is the only stage that writes durable entries to MEMORY.md.",
+    "- DREAMS.md is for human-readable dreaming summaries and diary entries.",
   ].join("\n");
 }
 
-function requiresAdminToMutateDreaming(gatewayClientScopes?: readonly string[]): boolean {
-  return Array.isArray(gatewayClientScopes) && !gatewayClientScopes.includes("operator.admin");
+function lacksAdminOrOwnerForDreamingMutation(params: {
+  gatewayClientScopes?: readonly string[];
+  senderIsOwner?: boolean;
+}): boolean {
+  if (Array.isArray(params.gatewayClientScopes)) {
+    return !params.gatewayClientScopes.includes("operator.admin");
+  }
+  return params.senderIsOwner !== true;
 }
 
 export async function handleDreamingCommand(api: OpenClawPluginApi, ctx: PluginCommandContext) {
@@ -86,7 +53,7 @@ export async function handleDreamingCommand(api: OpenClawPluginApi, ctx: PluginC
     .split(/\s+/)
     .filter(Boolean)
     .map((token) => normalizeLowercaseStringOrEmpty(token));
-  const currentConfig = api.runtime.config.current() as OpenClawConfig;
+  const currentConfig = ctx.config;
 
   if (!firstToken || firstToken === "help" || firstToken === "options" || firstToken === "phases") {
     return { text: formatUsage(formatStatus(currentConfig)) };
@@ -97,15 +64,33 @@ export async function handleDreamingCommand(api: OpenClawPluginApi, ctx: PluginC
   }
 
   if (firstToken === "on" || firstToken === "off") {
-    if (requiresAdminToMutateDreaming(ctx.gatewayClientScopes)) {
-      return { text: "⚠️ /dreaming on|off requires operator.admin for gateway clients." };
+    if (lacksAdminOrOwnerForDreamingMutation(ctx)) {
+      return {
+        text: "⚠️ /dreaming on|off requires owner status for channel callers or operator.admin for gateway clients.",
+      };
     }
     const enabled = firstToken === "on";
     const committed = await api.runtime.config.mutateConfigFile({
       afterWrite: { mode: "auto" },
+      writeOptions: {
+        assertCurrent: Array.isArray(ctx.gatewayClientScopes) ? undefined : ctx.assertOwnerCurrent,
+      },
       mutate: (draft) => {
-        const nextConfig = updateDreamingEnabledInConfig(draft, enabled);
-        Object.assign(draft, nextConfig);
+        const entries = { ...draft.plugins?.entries };
+        const existingEntry = asNullableRecord(entries["memory-core"]) ?? {};
+        const existingConfig = asNullableRecord(existingEntry.config) ?? {};
+        const existingSleep = asNullableRecord(existingConfig.dreaming) ?? {};
+        entries["memory-core"] = {
+          ...existingEntry,
+          config: {
+            ...existingConfig,
+            dreaming: {
+              ...existingSleep,
+              enabled,
+            },
+          },
+        };
+        draft.plugins = { ...draft.plugins, entries };
       },
     });
     return {
@@ -118,13 +103,4 @@ export async function handleDreamingCommand(api: OpenClawPluginApi, ctx: PluginC
   }
 
   return { text: formatUsage(formatStatus(currentConfig)) };
-}
-
-export function registerDreamingCommand(api: OpenClawPluginApi): void {
-  api.registerCommand({
-    name: "dreaming",
-    description: "Enable or disable memory dreaming.",
-    acceptsArgs: true,
-    handler: async (ctx) => await handleDreamingCommand(api, ctx),
-  });
 }

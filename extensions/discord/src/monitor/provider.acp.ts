@@ -1,18 +1,12 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
-import { raceWithTimeout } from "./timeouts.js";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 
 type DiscordProviderSessionRuntimeModule = typeof import("./provider-session.runtime.js");
 
 const DISCORD_ACP_STATUS_PROBE_TIMEOUT_MS = 8_000;
 const DISCORD_ACP_STALE_RUNNING_ACTIVITY_MS = 2 * 60 * 1000;
-
-function isLegacyMissingSessionError(message: string): boolean {
-  return (
-    message.includes("Session is not ACP-enabled") ||
-    message.includes("ACP session metadata missing")
-  );
-}
 
 function classifyAcpStatusProbeError(params: {
   error: unknown;
@@ -22,12 +16,23 @@ function classifyAcpStatusProbeError(params: {
   status: "stale" | "uncertain";
   reason: string;
 } {
+  if (
+    params.isAcpRuntimeError(params.error) &&
+    ["SESSION_OWNER_MIGRATION_REQUIRED", "SESSION_OWNER_UNSUPPORTED"].includes(
+      params.error.detailCode ?? "",
+    )
+  ) {
+    return { status: "uncertain", reason: formatErrorMessage(params.error) };
+  }
   if (params.isAcpRuntimeError(params.error) && params.error.code === "ACP_SESSION_INIT_FAILED") {
     return { status: "stale", reason: "session-init-failed" };
   }
 
   const message = formatErrorMessage(params.error);
-  if (isLegacyMissingSessionError(message)) {
+  if (
+    message.includes("Session is not ACP-enabled") ||
+    message.includes("ACP session metadata missing")
+  ) {
     return { status: "stale", reason: "session-missing" };
   }
 
@@ -36,9 +41,27 @@ function classifyAcpStatusProbeError(params: {
     : { status: "uncertain", reason: "status-error" };
 }
 
+function resolveRunningActivityAgeMs(params: {
+  storedState?: "idle" | "running" | "error";
+  lastActivityAt?: number;
+}): number {
+  if (params.storedState !== "running") {
+    return 0;
+  }
+  const nowMs = asDateTimestampMs(Date.now());
+  if (nowMs === undefined) {
+    return 0;
+  }
+  const activityAtMs = asDateTimestampMs(params.lastActivityAt);
+  const boundedActivityAtMs =
+    activityAtMs === undefined ? 0 : Math.max(0, Math.floor(activityAtMs));
+  return Math.max(0, nowMs - boundedActivityAtMs);
+}
+
 export async function probeDiscordAcpBindingHealth(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
+  agentId?: string;
   storedState?: "idle" | "running" | "error";
   lastActivityAt?: number;
   providerSessionRuntime: DiscordProviderSessionRuntimeModule;
@@ -50,23 +73,22 @@ export async function probeDiscordAcpBindingHealth(params: {
     .getSessionStatus({
       cfg: params.cfg,
       sessionKey: params.sessionKey,
+      agentId: params.agentId,
       signal: statusProbeAbortController.signal,
     })
     .then((status) => ({ kind: "status" as const, status }))
     .catch((error: unknown) => ({ kind: "error" as const, error }));
 
-  const result = await raceWithTimeout({
-    promise: statusPromise,
-    timeoutMs: DISCORD_ACP_STATUS_PROBE_TIMEOUT_MS,
-    onTimeout: () => ({ kind: "timeout" as const }),
-  });
+  const result = await raceWithTimeout(
+    statusPromise,
+    DISCORD_ACP_STATUS_PROBE_TIMEOUT_MS,
+    () => ({ kind: "timeout" as const }),
+    { ref: false },
+  );
   if (result.kind === "timeout") {
     statusProbeAbortController.abort();
   }
-  const runningForMs =
-    params.storedState === "running" && Number.isFinite(params.lastActivityAt)
-      ? Date.now() - Math.max(0, Math.floor(params.lastActivityAt ?? 0))
-      : 0;
+  const runningForMs = resolveRunningActivityAgeMs(params);
   const isStaleRunning =
     params.storedState === "running" && runningForMs >= DISCORD_ACP_STALE_RUNNING_ACTIVITY_MS;
 
@@ -76,6 +98,7 @@ export async function probeDiscordAcpBindingHealth(params: {
       : { status: "uncertain", reason: "status-timeout" };
   }
   if (result.kind === "error") {
+    params.providerSessionRuntime.rethrowIncognitoSessionError(result.error);
     return classifyAcpStatusProbeError({
       error: result.error,
       isStaleRunning,

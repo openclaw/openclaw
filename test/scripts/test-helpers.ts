@@ -1,35 +1,85 @@
+// Test script helpers provide shared filesystem and process utilities for script tests.
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach } from "vitest";
+import { cleanupTempDirs } from "../helpers/temp-dir.js";
+
+export function copyOxlintConfigFixture(root: string): void {
+  fs.copyFileSync(".oxlintrc.json", path.join(root, ".oxlintrc.json"));
+  // Oxlint loads configured JS plugins even when the selected files are outside their scope.
+  fs.mkdirSync(path.join(root, "tools"), { recursive: true });
+  fs.symlinkSync(path.resolve("tools/solid-lint"), path.join(root, "tools/solid-lint"), "junction");
+}
+
+export function linkPnpmBootstrapShellTools(binDir: string): void {
+  // Omit package managers: absence must not depend on the host's installed tools.
+  for (const name of [
+    "bash",
+    "cp",
+    "date",
+    "dirname",
+    "env",
+    "grep",
+    "head",
+    "mkdir",
+    "mktemp",
+    "rm",
+  ]) {
+    const binary = ["/usr/bin", "/bin"].map((dir) => path.join(dir, name)).find(fs.existsSync);
+    if (!binary) {
+      throw new Error(`Missing system shell fixture tool: ${name}`);
+    }
+    fs.symlinkSync(binary, path.join(binDir, name));
+  }
+}
+
+export function writeNodeBackedJq(binDir: string): void {
+  const jqPath = path.join(binDir, "jq");
+  fs.writeFileSync(
+    jqPath,
+    `#!/usr/bin/env node
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+const query = args.at(-1) ?? "";
+const input = JSON.parse(fs.readFileSync(0, "utf8"));
+const print = (value) => process.stdout.write(String(value ?? "") + "\\n");
+
+if (query.includes("{id: .profileId")) {
+  const profiles = input.auth?.oauth?.profiles ?? [];
+  const profile = profiles.filter((item) => item.provider === "anthropic" && item.type === "oauth").sort((a, b) => (b.expiresAt ?? 0) - (a.expiresAt ?? 0))[0];
+  print(profile?.profileId ?? "none");
+} else if (query.includes(".auth.providers[]")) {
+  const counts = (input.auth?.providers ?? []).filter((item) => item.provider === "anthropic").map((item) => item.profiles?.apiKey ?? 0);
+  print(Math.max(0, ...counts));
+} else if (query.includes(".auth.oauth.profiles[]")) {
+  const profiles = (input.auth?.oauth?.profiles ?? []).filter((item) => item.provider === "anthropic" && item.type === "oauth");
+  print(Math.max(0, ...profiles.map((item) => item.expiresAt ?? 0)));
+} else {
+  process.stderr.write("unsupported jq query: " + query + "\\n");
+  process.exit(2);
+}
+`,
+  );
+  fs.chmodSync(jqPath, 0o755);
+}
 
 export function createScriptTestHarness() {
   const tempDirs: string[] = [];
 
-  afterEach(() => {
-    while (tempDirs.length > 0) {
-      const dir = tempDirs.pop();
-      if (dir) {
-        fs.rmSync(dir, { recursive: true, force: true });
-      }
-    }
-  });
+  afterEach(() => cleanupTempDirs(tempDirs));
 
   function createTempDir(prefix: string): string {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-    tempDirs.push(dir);
-    return dir;
+    return trackTempDir(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
   }
 
   async function createTempDirAsync(prefix: string): Promise<string> {
-    const dir = await fsPromises.mkdtemp(path.join(os.tmpdir(), prefix));
-    tempDirs.push(dir);
-    return dir;
+    return trackTempDir(await fsPromises.mkdtemp(path.join(os.tmpdir(), prefix)));
   }
 
   function trackTempDir(dir: string): string {
-    tempDirs.push(dir);
+    tempDirs.unshift(dir);
     return dir;
   }
 

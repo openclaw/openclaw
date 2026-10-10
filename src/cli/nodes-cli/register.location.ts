@@ -1,9 +1,15 @@
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
-import { randomIdempotencyKey } from "../../gateway/call.js";
 import { defaultRuntime } from "../../runtime.js";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { runNodesCommand } from "./cli-utils.js";
-import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
+import {
+  buildNodeInvokeParams,
+  callNodesGatewayCli,
+  nodesCallOpts,
+  parseOptionalNodeInteger,
+  resolveCliNodeId,
+} from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
 
 export function registerNodesLocationCommands(nodes: Command) {
@@ -23,8 +29,6 @@ export function registerNodesLocationCommands(nodes: Command) {
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 20000)", "20000")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("location get", async () => {
-          const nodeId = await resolveNodeId(opts, opts.node ?? "");
-          const maxAgeMs = opts.maxAge ? Number.parseInt(opts.maxAge, 10) : undefined;
           const desiredAccuracyRaw = normalizeOptionalLowercaseString(opts.accuracy);
           const desiredAccuracy =
             desiredAccuracyRaw === "coarse" ||
@@ -32,33 +36,27 @@ export function registerNodesLocationCommands(nodes: Command) {
             desiredAccuracyRaw === "precise"
               ? desiredAccuracyRaw
               : undefined;
-          const timeoutMs = opts.locationTimeout
-            ? Number.parseInt(opts.locationTimeout, 10)
-            : undefined;
-          const invokeTimeoutMs = opts.invokeTimeout
-            ? Number.parseInt(opts.invokeTimeout, 10)
-            : undefined;
+          if (opts.accuracy !== undefined && desiredAccuracy === undefined) {
+            throw new Error("invalid --accuracy (use coarse|balanced|precise)");
+          }
+          const maxAgeMs = parseOptionalNodeInteger(opts.maxAge, "--max-age", "non-negative");
+          const timeoutMs = parseOptionalNodeInteger(opts.locationTimeout, "--location-timeout");
+          const invokeTimeoutMs = parseOptionalNodeInteger(opts.invokeTimeout, "--invoke-timeout");
+          const nodeId = await resolveCliNodeId(opts, opts.node ?? "");
 
-          const invokeParams: Record<string, unknown> = {
+          const invokeParams = buildNodeInvokeParams({
             nodeId,
             command: "location.get",
             params: {
-              maxAgeMs: Number.isFinite(maxAgeMs) ? maxAgeMs : undefined,
+              maxAgeMs,
               desiredAccuracy,
-              timeoutMs: Number.isFinite(timeoutMs) ? timeoutMs : undefined,
+              timeoutMs,
             },
-            idempotencyKey: randomIdempotencyKey(),
-          };
-          if (typeof invokeTimeoutMs === "number" && Number.isFinite(invokeTimeoutMs)) {
-            invokeParams.timeoutMs = invokeTimeoutMs;
-          }
+            timeoutMs: invokeTimeoutMs,
+          });
 
-          const raw = await callGatewayCli("node.invoke", opts, invokeParams);
-          const res = typeof raw === "object" && raw !== null ? (raw as { payload?: unknown }) : {};
-          const payload =
-            res.payload && typeof res.payload === "object"
-              ? (res.payload as Record<string, unknown>)
-              : {};
+          const raw = await callNodesGatewayCli("node.invoke", opts, invokeParams);
+          const payload = asRecord(asRecord(raw).payload);
 
           if (opts.json) {
             defaultRuntime.writeJson(payload);

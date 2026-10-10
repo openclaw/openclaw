@@ -1,5 +1,6 @@
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { writeQaDockerHarnessFiles } from "./docker-harness.js";
 import {
   execCommand,
@@ -11,17 +12,59 @@ import {
   type FetchLike,
   type RunCommand,
 } from "./docker-runtime.js";
+import { shellQuote } from "./shell-quote.js";
 
-type QaDockerUpResult = {
-  outputDir: string;
-  composeFile: string;
-  qaLabUrl: string;
-  gatewayUrl: string;
-  stopCommand: string;
-};
+const QA_DOCKER_HEALTH_REQUEST_TIMEOUT_MS = 2_000;
 
-function resolveDefaultQaDockerDir(repoRoot: string) {
-  return path.resolve(repoRoot, ".artifacts/qa-docker");
+async function isQaLabDockerHealthReachable(url: string, fetchImpl: FetchLike) {
+  let response: Awaited<ReturnType<FetchLike>> | undefined;
+  try {
+    response = await fetchImpl(url, {
+      signal: AbortSignal.timeout(QA_DOCKER_HEALTH_REQUEST_TIMEOUT_MS),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  } finally {
+    try {
+      await response?.body?.cancel?.();
+    } catch {}
+  }
+}
+
+function isMissingCommandError(
+  error: unknown,
+  command: string,
+  seen = new Set<unknown>(),
+): boolean {
+  if (!error || seen.has(error)) {
+    return false;
+  }
+  seen.add(error);
+  if (typeof error !== "object") {
+    return formatErrorMessage(error).includes(`spawn ${command} ENOENT`);
+  }
+  const candidate = error as { cause?: unknown; code?: unknown; message?: unknown };
+  const message = typeof candidate.message === "string" ? candidate.message : "";
+  if (
+    candidate.code === "ENOENT" ||
+    message.includes(`spawn ${command} ENOENT`) ||
+    message.includes(`${command}: command not found`)
+  ) {
+    return true;
+  }
+  return isMissingCommandError(candidate.cause, command, seen);
+}
+
+async function runQaLabBuild(repoRoot: string, runCommand: RunCommand) {
+  try {
+    await runCommand("pnpm", ["qa:lab:build"], repoRoot);
+  } catch (error) {
+    if (!isMissingCommandError(error, "pnpm")) {
+      throw error;
+    }
+    await runCommand("corepack", ["pnpm", "qa:lab:build"], repoRoot);
+  }
 }
 
 export async function runQaDockerUp(
@@ -42,21 +85,26 @@ export async function runQaDockerUp(
     sleepImpl?: (ms: number) => Promise<unknown>;
     resolveHostPortImpl?: typeof resolveHostPort;
   },
-): Promise<QaDockerUpResult> {
+) {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
   const resolveHostPortImpl = deps?.resolveHostPortImpl ?? resolveHostPort;
-  const outputDir = path.resolve(params.outputDir ?? resolveDefaultQaDockerDir(repoRoot));
+  const outputDir = path.resolve(params.outputDir ?? path.join(repoRoot, ".artifacts/qa-docker"));
   const gatewayPort = await resolveHostPortImpl(
     params.gatewayPort ?? 18789,
     params.gatewayPort != null,
   );
   const qaLabPort = await resolveHostPortImpl(params.qaLabPort ?? 43124, params.qaLabPort != null);
+  if (gatewayPort === qaLabPort) {
+    throw new Error(
+      `QA Lab gateway and UI host ports must be different. Both resolved to ${gatewayPort}.`,
+    );
+  }
   const runCommand = deps?.runCommand ?? execCommand;
   const fetchImpl = deps?.fetchImpl ?? fetchHealthUrl;
   const sleepImpl = deps?.sleepImpl ?? sleep;
 
   if (!params.skipUiBuild) {
-    await runCommand("pnpm", ["qa:lab:build"], repoRoot);
+    await runQaLabBuild(repoRoot, runCommand);
   }
 
   await writeQaDockerHarnessFiles({
@@ -68,7 +116,6 @@ export async function runQaDockerUp(
     imageName: params.image,
     usePrebuiltImage: params.usePrebuiltImage,
     bindUiDist: params.bindUiDist,
-    includeQaLabUi: true,
   });
 
   const composeFile = path.join(outputDir, "docker-compose.qa.yml");
@@ -113,11 +160,7 @@ export async function runQaDockerUp(
     sleepImpl,
   );
   let gatewayUrl = hostGatewayUrl;
-  if (
-    !(await fetchImpl(`${hostGatewayUrl}healthz`)
-      .then((response) => response.ok)
-      .catch(() => false))
-  ) {
+  if (!(await isQaLabDockerHealthReachable(`${hostGatewayUrl}healthz`, fetchImpl))) {
     const containerGatewayUrl = await resolveComposeServiceUrl(
       "openclaw-qa-gateway",
       18789,
@@ -136,6 +179,6 @@ export async function runQaDockerUp(
     composeFile,
     qaLabUrl,
     gatewayUrl,
-    stopCommand: `docker compose -f ${composeFile} down`,
+    stopCommand: `docker compose -f ${shellQuote(composeFile)} down`,
   };
 }

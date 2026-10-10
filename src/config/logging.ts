@@ -1,8 +1,8 @@
 import fs from "node:fs";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { theme } from "../terminal/theme.js";
 import { displayPath } from "../utils.js";
-import { createConfigIO } from "./io.js";
+import { resolveConfigPath, resolveStateDir } from "./paths.js";
 
 type LogConfigUpdatedOptions = {
   path?: string;
@@ -10,24 +10,36 @@ type LogConfigUpdatedOptions = {
   suffix?: string;
 };
 
-export function formatConfigPath(path: string = createConfigIO().configPath): string {
+/** Formats a config path for operator-facing log output. */
+export function formatConfigFilePath(
+  path: string = resolveConfigPath(process.env, resolveStateDir()),
+): string {
   return displayPath(path);
 }
 
+/** Builds the config-updated log message, including backup detail only when it exists. */
 export function formatConfigUpdatedMessage(
   path: string,
   opts: LogConfigUpdatedOptions = {},
 ): string {
-  const displayConfigPath = theme.muted(formatConfigPath(path));
+  const displayConfigPath = theme.muted(formatConfigFilePath(path));
   const suffix = opts.suffix ? ` ${opts.suffix}` : "";
   const backupPath = opts.backupPath === undefined ? `${path}.bak` : opts.backupPath;
   const lines = [`Updated config: ${displayConfigPath}${suffix}`];
   if (backupPath && fs.existsSync(backupPath)) {
-    lines.push(`  Backup: ${theme.muted(formatConfigPath(backupPath))}`);
+    // Only mention backups that were actually written; callers can pass `false` for flows that
+    // intentionally skip backup creation.
+    lines.push(`  Backup: ${theme.muted(formatConfigFilePath(backupPath))}`);
   }
   return lines.join("\n");
 }
 
+/** Emits the standard config-updated message through the active runtime logger. */
 export function logConfigUpdated(runtime: RuntimeEnv, opts: LogConfigUpdatedOptions = {}): void {
-  runtime.log(formatConfigUpdatedMessage(opts.path ?? createConfigIO().configPath, opts));
+  runtime.log(
+    formatConfigUpdatedMessage(
+      opts.path ?? resolveConfigPath(process.env, resolveStateDir()),
+      opts,
+    ),
+  );
 }

@@ -1,19 +1,17 @@
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { durationUnitMs } from "../infra/format-time/duration-units.js";
 
-export type DurationMsParseOptions = {
+type DurationMsParseOptions = {
   defaultUnit?: "ms" | "s" | "m" | "h" | "d";
 };
 
-const DURATION_MULTIPLIERS: Record<string, number> = {
-  ms: 1,
-  s: 1000,
-  m: 60_000,
-  h: 3_600_000,
-  d: 86_400_000,
-};
+const DURATION_UNIT_MS = new Map<string, number>([
+  ["ms", durationUnitMs.millisecond],
+  ["s", durationUnitMs.second],
+  ["m", durationUnitMs.minute],
+  ["h", durationUnitMs.hour],
+  ["d", durationUnitMs.day],
+]);
 
 function invalidDuration(raw: string, reason?: string): Error {
   const value = raw.trim() ? `"${raw}"` : "empty value";
@@ -21,25 +19,37 @@ function invalidDuration(raw: string, reason?: string): Error {
   return new Error(`${prefix} Use values like 500ms, 30s, 5m, 2h, or 1h30m.`);
 }
 
+function parseDurationToken(raw: string, value: string, unit: string): number {
+  const multiplier = DURATION_UNIT_MS.get(unit);
+  if (multiplier === undefined || value.length + unit.length > 100) {
+    throw invalidDuration(raw);
+  }
+  const parsed = Number(value) * multiplier;
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw invalidDuration(raw);
+  }
+  return parsed;
+}
+
+function roundSafeDurationMs(raw: string, value: number): number {
+  const ms = Math.round(value);
+  if (!Number.isSafeInteger(ms)) {
+    throw invalidDuration(raw);
+  }
+  return ms;
+}
+
 export function parseDurationMs(raw: string, opts?: DurationMsParseOptions): number {
-  const trimmed = normalizeLowercaseStringOrEmpty(normalizeOptionalString(raw) ?? "");
+  const trimmed = normalizeLowercaseStringOrEmpty(raw);
   if (!trimmed) {
     throw invalidDuration(raw, "empty");
   }
 
-  // Fast path for a single token (supports default unit for bare numbers).
   const single = /^(\d+(?:\.\d+)?)(ms|s|m|h|d)?$/.exec(trimmed);
   if (single) {
-    const value = Number(single[1]);
-    if (!Number.isFinite(value) || value < 0) {
-      throw invalidDuration(raw);
-    }
-    const unit = (single[2] ?? opts?.defaultUnit ?? "ms") as "ms" | "s" | "m" | "h" | "d";
-    const ms = Math.round(value * DURATION_MULTIPLIERS[unit]);
-    if (!Number.isFinite(ms)) {
-      throw invalidDuration(raw);
-    }
-    return ms;
+    const value = single[1] ?? "";
+    const unit = single[2] ?? opts?.defaultUnit ?? "ms";
+    return roundSafeDurationMs(raw, parseDurationToken(raw, value, unit));
   }
 
   // Composite form (e.g. "1h30m", "2m500ms"); each token must include a unit.
@@ -55,25 +65,13 @@ export function parseDurationMs(raw: string, opts?: DurationMsParseOptions): num
     if (index !== consumed) {
       throw invalidDuration(raw, "each composite segment needs a unit");
     }
-    const value = Number(valueRaw);
-    if (!Number.isFinite(value) || value < 0) {
-      throw invalidDuration(raw);
-    }
-    const multiplier = DURATION_MULTIPLIERS[unitRaw];
-    if (!multiplier) {
-      throw invalidDuration(raw);
-    }
-    totalMs += value * multiplier;
+    totalMs += parseDurationToken(raw, valueRaw, unitRaw);
     consumed += full.length;
   }
 
-  if (consumed !== trimmed.length || consumed === 0) {
+  if (consumed !== trimmed.length) {
     throw invalidDuration(raw);
   }
 
-  const ms = Math.round(totalMs);
-  if (!Number.isFinite(ms)) {
-    throw invalidDuration(raw);
-  }
-  return ms;
+  return roundSafeDurationMs(raw, totalMs);
 }

@@ -1,10 +1,12 @@
-import type { OutputRuntimeEnv, RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+// Builds plugin runtime environment fixtures for plugin tests.
+import type { OutputRuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { vi } from "vitest";
 
 type RuntimeEnvOptions = {
   throwOnExit?: boolean;
 };
 
+/** Creates a plugin runtime env with test-safe defaults and optional exit throwing. */
 export function createRuntimeEnv(options?: RuntimeEnvOptions): OutputRuntimeEnv {
   const throwOnExit = options?.throwOnExit ?? true;
   return {
@@ -20,19 +22,6 @@ export function createRuntimeEnv(options?: RuntimeEnvOptions): OutputRuntimeEnv 
   };
 }
 
-export function createTypedRuntimeEnv<TRuntime extends RuntimeEnv = OutputRuntimeEnv>(
-  options?: RuntimeEnvOptions,
-  _runtimeShape?: (runtime: TRuntime) => void,
-): TRuntime {
-  return createRuntimeEnv(options) as unknown as TRuntime;
-}
-
 export function createNonExitingRuntimeEnv(): OutputRuntimeEnv {
   return createRuntimeEnv({ throwOnExit: false });
-}
-
-export function createNonExitingTypedRuntimeEnv<TRuntime extends RuntimeEnv = OutputRuntimeEnv>(
-  runtimeShape?: (runtime: TRuntime) => void,
-): TRuntime {
-  return createTypedRuntimeEnv<TRuntime>({ throwOnExit: false }, runtimeShape);
 }

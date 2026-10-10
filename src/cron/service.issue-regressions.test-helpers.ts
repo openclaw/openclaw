@@ -3,33 +3,19 @@ import {
   createDefaultIsolatedRunner,
   noopLogger,
   setupCronRegressionFixtures,
-  createAbortAwareIsolatedRunner,
-  createDueIsolatedJob,
-  createIsolatedRegressionJob,
-  createRunningCronServiceState,
-  createDeferred,
   topOfHourOffsetMs,
-  writeCronJobs,
-  writeCronStoreSnapshot,
 } from "../../test/helpers/cron/service-regression-fixtures.js";
+// Cron issue regression helpers share mocks for service regression tests.
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { CronService } from "./service.js";
 
 type CronServiceOptions = ConstructorParameters<typeof CronService>[0];
 
+/** Sets up temp store fixtures for cron service issue-regression tests. */
 export const setupCronIssueRegressionFixtures = () =>
   setupCronRegressionFixtures({ prefix: "cron-issues-" });
 
-export {
-  createAbortAwareIsolatedRunner,
-  createDueIsolatedJob,
-  createIsolatedRegressionJob,
-  createRunningCronServiceState,
-  createDeferred,
-  noopLogger,
-  topOfHourOffsetMs,
-  writeCronJobs,
-  writeCronStoreSnapshot,
-};
+export { topOfHourOffsetMs };
 
 export async function startCronForStore(params: {
   storePath: string;
@@ -46,6 +32,8 @@ export async function startCronForStore(params: {
   const runIsolatedAgentJob = params.runIsolatedAgentJob ?? createDefaultIsolatedRunner();
 
   const cron = new CronService({
+    scheduler: createTestGatewayScheduler(),
+    nowMs: () => Date.now(),
     cronEnabled: params.cronEnabled ?? true,
     storePath: params.storePath,
     log: noopLogger,

@@ -26,8 +26,8 @@ export {
   resolveWebCredsBackupPath,
   resolveWebCredsPath,
   restoreCredsFromBackupIfNeeded,
-  WA_WEB_AUTH_DIR,
   webAuthExists,
+  WA_WEB_AUTH_DIR,
   WHATSAPP_AUTH_UNSTABLE_CODE,
   WhatsAppAuthUnstableError,
   type WhatsAppWebAuthState,
@@ -45,12 +45,13 @@ export {
 export {
   extractContactContext,
   extractLocationData,
-  extractMediaPlaceholder,
   extractText,
   monitorWebInbox,
   resetWebInboundDedupe,
+  type WebInboundCallbackMessage,
   type WebInboundMessage,
   type WebListenerCloseReason,
+  type WhatsAppInboundAdmission,
 } from "./src/inbound.js";
 export { loginWeb } from "./src/login.js";
 export {

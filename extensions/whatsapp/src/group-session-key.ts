@@ -5,37 +5,27 @@ import {
   type ResolvedAgentRoute,
 } from "openclaw/plugin-sdk/routing";
 
-function resolveWhatsAppGroupAccountThreadId(accountId: string): string {
-  return `whatsapp-account-${normalizeAccountId(accountId)}`;
-}
-
-export function resolveWhatsAppLegacyGroupSessionKey(params: {
+export function resolveWhatsAppGroupSessionKey(params: {
   sessionKey: string;
   accountId?: string | null;
-}): string | null {
+}): string {
   const accountId = normalizeAccountId(params.accountId);
-  if (!accountId || accountId === DEFAULT_ACCOUNT_ID || !params.sessionKey.includes(":group:")) {
-    return null;
+  if (accountId === DEFAULT_ACCOUNT_ID || !params.sessionKey.includes(":group:")) {
+    return params.sessionKey;
   }
-  const suffix = `:thread:${resolveWhatsAppGroupAccountThreadId(accountId)}`;
-  return params.sessionKey.endsWith(suffix) ? params.sessionKey.slice(0, -suffix.length) : null;
+  return resolveThreadSessionKeys({
+    baseSessionKey: params.sessionKey,
+    threadId: `whatsapp-account-${accountId}`,
+  }).sessionKey;
 }
 
 export function resolveWhatsAppGroupSessionRoute(route: ResolvedAgentRoute): ResolvedAgentRoute {
-  if (route.accountId === DEFAULT_ACCOUNT_ID || !route.sessionKey.includes(":group:")) {
+  const sessionKey = resolveWhatsAppGroupSessionKey(route);
+  if (sessionKey === route.sessionKey) {
     return route;
   }
-  const scopedSession = resolveThreadSessionKeys({
-    baseSessionKey: route.sessionKey,
-    threadId: resolveWhatsAppGroupAccountThreadId(route.accountId),
-  });
   return {
     ...route,
-    sessionKey: scopedSession.sessionKey,
+    sessionKey,
   };
 }
-
-export const __testing = {
-  resolveWhatsAppGroupAccountThreadId,
-  resolveWhatsAppLegacyGroupSessionKey,
-};

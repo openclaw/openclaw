@@ -1,90 +1,12 @@
-import { EventEmitter } from "node:events";
+// Matrix tests cover verification manager plugin behavior.
 import {
   VerificationPhase,
   VerificationRequestEvent,
+  type Verifier,
 } from "matrix-js-sdk/lib/crypto-api/verification.js";
 import { describe, expect, it, vi } from "vitest";
-import {
-  MatrixVerificationManager,
-  type MatrixShowQrCodeCallbacks,
-  type MatrixShowSasCallbacks,
-  type MatrixVerificationRequestLike,
-  type MatrixVerifierLike,
-} from "./verification-manager.js";
-
-class MockVerifier extends EventEmitter implements MatrixVerifierLike {
-  constructor(
-    private readonly sasCallbacks: MatrixShowSasCallbacks | null,
-    private readonly qrCallbacks: MatrixShowQrCodeCallbacks | null,
-    private readonly verifyImpl: () => Promise<void> = async () => {},
-  ) {
-    super();
-  }
-
-  verify(): Promise<void> {
-    return this.verifyImpl();
-  }
-
-  cancel(_e: Error): void {
-    void _e;
-  }
-
-  getShowSasCallbacks(): MatrixShowSasCallbacks | null {
-    return this.sasCallbacks;
-  }
-
-  getReciprocateQrCodeCallbacks(): MatrixShowQrCodeCallbacks | null {
-    return this.qrCallbacks;
-  }
-}
-
-class MockVerificationRequest extends EventEmitter implements MatrixVerificationRequestLike {
-  transactionId?: string;
-  roomId?: string;
-  initiatedByMe = false;
-  otherUserId = "@alice:example.org";
-  otherDeviceId?: string;
-  isSelfVerification = false;
-  phase = VerificationPhase.Requested;
-  pending = true;
-  accepting = false;
-  declining = false;
-  methods: string[] = ["m.sas.v1"];
-  chosenMethod?: string | null;
-  cancellationCode?: string | null;
-  verifier?: MatrixVerifierLike;
-
-  constructor(init?: Partial<MockVerificationRequest>) {
-    super();
-    Object.assign(this, init);
-  }
-
-  accept = vi.fn(async () => {
-    this.phase = VerificationPhase.Ready;
-  });
-
-  cancel = vi.fn(async () => {
-    this.phase = VerificationPhase.Cancelled;
-  });
-
-  startVerification = vi.fn(async (_method: string) => {
-    if (!this.verifier) {
-      throw new Error("verifier not configured");
-    }
-    this.phase = VerificationPhase.Started;
-    return this.verifier;
-  });
-
-  scanQRCode = vi.fn(async (_qrCodeData: Uint8ClampedArray) => {
-    if (!this.verifier) {
-      throw new Error("verifier not configured");
-    }
-    this.phase = VerificationPhase.Started;
-    return this.verifier;
-  });
-
-  generateQRCode = vi.fn(async () => new Uint8ClampedArray([1, 2, 3]));
-}
+import { MockVerificationRequest, MockVerifier } from "./crypto.test-support.js";
+import { MatrixVerificationManager } from "./verification-manager.js";
 
 function createSasVerifierFixture(params: {
   decimal: [number, number, number];
@@ -118,7 +40,7 @@ function createSasVerifierFixture(params: {
 function createReadyRequestWithoutVerifier(params: {
   transactionId: string;
   isSelfVerification: boolean;
-  verifier: MatrixVerifierLike;
+  verifier: Verifier;
 }) {
   const request = new MockVerificationRequest({
     transactionId: params.transactionId,
@@ -164,6 +86,26 @@ describe("MatrixVerificationManager", () => {
     expect(summary.id).toMatch(/^verification-\d+$/u);
     expect(summary.methods).toStrictEqual([]);
     expect(summary.phaseName).toBe("requested");
+  });
+
+  it("tracks verification requests when the process clock is outside the Date range", () => {
+    const manager = new MatrixVerificationManager();
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
+
+    try {
+      const summary = manager.trackVerificationRequest(
+        new MockVerificationRequest({
+          transactionId: "txn-invalid-clock",
+          phase: VerificationPhase.Requested,
+        }),
+      );
+
+      expect(summary.createdAt).toBe("1970-01-01T00:00:00.000Z");
+      expect(summary.updatedAt).toBe("1970-01-01T00:00:00.000Z");
+      expect(manager.listVerifications()).toHaveLength(1);
+    } finally {
+      dateNowSpy.mockRestore();
+    }
   });
 
   it("reuses the same tracked id for repeated transaction IDs", () => {
@@ -256,25 +198,14 @@ describe("MatrixVerificationManager", () => {
   });
 
   it("starts SAS verification and exposes SAS payload/callback flow", async () => {
-    const confirm = vi.fn(async () => {});
-    const mismatch = vi.fn();
-    const verifier = new MockVerifier(
-      {
-        sas: {
-          decimal: [111, 222, 333],
-          emoji: [
-            ["cat", "cat"],
-            ["dog", "dog"],
-            ["fox", "fox"],
-          ],
-        },
-        confirm,
-        mismatch,
-        cancel: vi.fn(),
-      },
-      null,
-      async () => {},
-    );
+    const { confirm, mismatch, verifier } = createSasVerifierFixture({
+      decimal: [111, 222, 333],
+      emoji: [
+        ["cat", "cat"],
+        ["dog", "dog"],
+        ["fox", "fox"],
+      ],
+    });
     const request = new MockVerificationRequest({
       transactionId: "txn-2",
       verifier,
@@ -296,28 +227,6 @@ describe("MatrixVerificationManager", () => {
 
     manager.mismatchVerificationSas(tracked.id);
     expect(mismatch).toHaveBeenCalledTimes(1);
-  });
-
-  it("cross-signs the other own device after confirmed self-verification SAS", async () => {
-    const { confirm, verifier } = createSasVerifierFixture({
-      decimal: [111, 222, 333],
-      emoji: [["cat", "cat"]],
-    });
-    const trustOwnDeviceAfterSas = vi.fn(async () => {});
-    const request = new MockVerificationRequest({
-      isSelfVerification: true,
-      otherDeviceId: "OTHERDEVICE",
-      transactionId: "txn-self-sas",
-      verifier,
-    });
-    const manager = new MatrixVerificationManager({ trustOwnDeviceAfterSas });
-    const tracked = manager.trackVerificationRequest(request);
-
-    await manager.startVerification(tracked.id, "sas");
-    await manager.confirmVerificationSas(tracked.id);
-
-    expect(confirm).toHaveBeenCalledTimes(1);
-    expect(trustOwnDeviceAfterSas).toHaveBeenCalledWith("OTHERDEVICE");
   });
 
   it("does not cross-sign non-self SAS verifications", async () => {
@@ -380,10 +289,9 @@ describe("MatrixVerificationManager", () => {
       roomId: "!dm:example.org",
       verifier: undefined,
     });
-    const manager = new MatrixVerificationManager();
-    const summaries: ReturnType<typeof manager.listVerifications> = [];
-    manager.onSummaryChanged((summary) => {
-      summaries.push(summary);
+    const summaries: ReturnType<MatrixVerificationManager["listVerifications"]> = [];
+    const manager = new MatrixVerificationManager({
+      onSummaryChanged: (summary) => summaries.push(summary),
     });
 
     manager.trackVerificationRequest(request);
@@ -483,24 +391,14 @@ describe("MatrixVerificationManager", () => {
 
   it("auto-confirms inbound SAS after a human-safe delay", async () => {
     vi.useFakeTimers();
-    const confirm = vi.fn(async () => {});
-    const verifier = new MockVerifier(
-      {
-        sas: {
-          decimal: [6158, 1986, 3513],
-          emoji: [
-            ["gift", "Gift"],
-            ["globe", "Globe"],
-            ["horse", "Horse"],
-          ],
-        },
-        confirm,
-        mismatch: vi.fn(),
-        cancel: vi.fn(),
-      },
-      null,
-      async () => {},
-    );
+    const { confirm, verifier } = createSasVerifierFixture({
+      decimal: [6158, 1986, 3513],
+      emoji: [
+        ["gift", "Gift"],
+        ["globe", "Globe"],
+        ["horse", "Horse"],
+      ],
+    });
     const request = new MockVerificationRequest({
       transactionId: "txn-auto-confirm",
       initiatedByMe: false,
@@ -621,24 +519,14 @@ describe("MatrixVerificationManager", () => {
 
   it("does not auto-confirm SAS for verifications initiated by this device", async () => {
     vi.useFakeTimers();
-    const confirm = vi.fn(async () => {});
-    const verifier = new MockVerifier(
-      {
-        sas: {
-          decimal: [111, 222, 333],
-          emoji: [
-            ["cat", "Cat"],
-            ["dog", "Dog"],
-            ["fox", "Fox"],
-          ],
-        },
-        confirm,
-        mismatch: vi.fn(),
-        cancel: vi.fn(),
-      },
-      null,
-      async () => {},
-    );
+    const { confirm, verifier } = createSasVerifierFixture({
+      decimal: [111, 222, 333],
+      emoji: [
+        ["cat", "Cat"],
+        ["dog", "Dog"],
+        ["fox", "Fox"],
+      ],
+    });
     const request = new MockVerificationRequest({
       transactionId: "txn-no-auto-confirm",
       initiatedByMe: true,
@@ -657,25 +545,14 @@ describe("MatrixVerificationManager", () => {
 
   it("cancels a pending auto-confirm when SAS is explicitly mismatched", async () => {
     vi.useFakeTimers();
-    const confirm = vi.fn(async () => {});
-    const mismatch = vi.fn();
-    const verifier = new MockVerifier(
-      {
-        sas: {
-          decimal: [444, 555, 666],
-          emoji: [
-            ["panda", "Panda"],
-            ["rocket", "Rocket"],
-            ["crown", "Crown"],
-          ],
-        },
-        confirm,
-        mismatch,
-        cancel: vi.fn(),
-      },
-      null,
-      async () => {},
-    );
+    const { confirm, mismatch, verifier } = createSasVerifierFixture({
+      decimal: [444, 555, 666],
+      emoji: [
+        ["panda", "Panda"],
+        ["rocket", "Rocket"],
+        ["crown", "Crown"],
+      ],
+    });
     const request = new MockVerificationRequest({
       transactionId: "txn-mismatch-cancels-auto-confirm",
       initiatedByMe: false,

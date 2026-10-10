@@ -1,23 +1,27 @@
-import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
+import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
+import {
+  readGeneratedVideoAsset,
+  resolveGeneratedMediaMaxBytes,
+} from "openclaw/plugin-sdk/media-generation-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
+  pollProviderOperation,
   postJsonRequest,
-  resolveProviderHttpRequestConfig,
+  readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
-  sanitizeConfiguredModelProviderRequest,
   waitProviderOperationPollInterval,
 } from "openclaw/plugin-sdk/provider-http";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type {
-  GeneratedVideoAsset,
-  VideoGenerationProvider,
-  VideoGenerationRequest,
-  VideoGenerationSourceAsset,
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  selectSupportedVideoDuration,
+  type GeneratedVideoAsset,
+  type VideoGenerationProvider,
+  type VideoGenerationRequest,
+  type VideoGenerationSourceAsset,
 } from "openclaw/plugin-sdk/video-generation";
-import { OPENROUTER_BASE_URL } from "./provider-catalog.js";
+import { resolveOpenRouterGenerationRequestContext } from "./generation-request-context.js";
 import {
   fetchOpenRouterVideoGet,
   resolveOpenRouterVideoUrl,
@@ -62,16 +66,15 @@ type OpenRouterFrameImagePart = OpenRouterImagePart & {
   frame_type: "first_frame" | "last_frame";
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
 async function readOpenRouterVideoJson(response: Response): Promise<Record<string, unknown>> {
   let payload: unknown;
   try {
-    payload = await response.json();
-  } catch {
-    throw new Error(OPENROUTER_VIDEO_MALFORMED_RESPONSE);
+    payload = await readProviderJsonResponse<unknown>(response, "OpenRouter video generation");
+  } catch (error) {
+    if (error instanceof Error && error.message.endsWith(": malformed JSON response")) {
+      throw new Error(OPENROUTER_VIDEO_MALFORMED_RESPONSE, { cause: error });
+    }
+    throw error;
   }
   if (!isRecord(payload)) {
     throw new Error(OPENROUTER_VIDEO_MALFORMED_RESPONSE);
@@ -115,8 +118,7 @@ function readOpenRouterVideoResponse(payload: Record<string, unknown>): OpenRout
 
 function toDataUrl(asset: VideoGenerationSourceAsset): string {
   if (asset.buffer) {
-    const mimeType = normalizeOptionalString(asset.mimeType) ?? "image/png";
-    return `data:${mimeType};base64,${asset.buffer.toString("base64")}`;
+    return toImageDataUrl({ ...asset, buffer: asset.buffer, defaultMimeType: "image/png" });
   }
   const url = normalizeOptionalString(asset.url);
   if (url) {
@@ -140,8 +142,7 @@ function buildImageInputs(inputImages: VideoGenerationSourceAsset[] | undefined)
 } {
   const frameImages: OpenRouterFrameImagePart[] = [];
   const inputReferences: OpenRouterImagePart[] = [];
-  let hasFirstFrame = false;
-  let hasLastFrame = false;
+  const frameTypes = new Set<OpenRouterFrameImagePart["frame_type"]>();
 
   for (const image of inputImages ?? []) {
     const role = normalizeOptionalString(image.role);
@@ -151,22 +152,15 @@ function buildImageInputs(inputImages: VideoGenerationSourceAsset[] | undefined)
     }
 
     const frameType =
-      role === "last_frame"
-        ? "last_frame"
-        : role === "first_frame"
-          ? "first_frame"
-          : hasFirstFrame
-            ? "last_frame"
-            : "first_frame";
+      role === "first_frame" || role === "last_frame"
+        ? role
+        : frameTypes.has("first_frame")
+          ? "last_frame"
+          : "first_frame";
 
-    if (frameType === "first_frame" && !hasFirstFrame) {
-      frameImages.push({ ...toImagePart(image), frame_type: "first_frame" });
-      hasFirstFrame = true;
-      continue;
-    }
-    if (frameType === "last_frame" && !hasLastFrame) {
-      frameImages.push({ ...toImagePart(image), frame_type: "last_frame" });
-      hasLastFrame = true;
+    if (!frameTypes.has(frameType)) {
+      frameImages.push({ ...toImagePart(image), frame_type: frameType });
+      frameTypes.add(frameType);
       continue;
     }
     inputReferences.push(toImagePart(image));
@@ -188,22 +182,17 @@ function resolveDurationSeconds(
   if (durationSeconds === rounded && effectiveDurations.includes(rounded)) {
     return rounded;
   }
-  return effectiveDurations.reduce((best, current) => {
-    const currentDistance = Math.abs(current - rounded);
-    const bestDistance = Math.abs(best - rounded);
-    if (currentDistance < bestDistance) {
-      return current;
-    }
-    if (currentDistance === bestDistance && current > best) {
-      return current;
-    }
-    return best;
-  });
+  return selectSupportedVideoDuration(rounded, effectiveDurations);
 }
 
-function resolveResolution(resolution: VideoGenerationRequest["resolution"]): string | undefined {
-  const normalized = normalizeOptionalString(resolution);
-  return normalized ? normalized.toLowerCase() : undefined;
+function resolveSeed(seed: unknown): number | undefined {
+  if (typeof seed !== "number") {
+    return undefined;
+  }
+  if (!Number.isSafeInteger(seed)) {
+    throw new Error("OpenRouter video seed must be an integer");
+  }
+  return seed;
 }
 
 function buildRequestBody(req: VideoGenerationRequest, model: string): Record<string, unknown> {
@@ -221,7 +210,7 @@ function buildRequestBody(req: VideoGenerationRequest, model: string): Record<st
   if (duration != null) {
     body.duration = duration;
   }
-  const resolution = resolveResolution(req.resolution);
+  const resolution = normalizeOptionalString(req.resolution)?.toLowerCase();
   if (resolution) {
     body.resolution = resolution;
   }
@@ -243,9 +232,9 @@ function buildRequestBody(req: VideoGenerationRequest, model: string): Record<st
     body.input_references = inputReferences;
   }
 
-  const seed = typeof req.providerOptions?.seed === "number" ? req.providerOptions.seed : undefined;
-  if (seed != null) {
-    body.seed = Math.trunc(seed);
+  const seed = resolveSeed(req.providerOptions?.seed);
+  if (seed !== undefined) {
+    body.seed = seed;
   }
   const callbackUrl =
     typeof req.providerOptions?.callback_url === "string"
@@ -258,27 +247,17 @@ function buildRequestBody(req: VideoGenerationRequest, model: string): Record<st
   return body;
 }
 
-function isTerminalFailure(status: string | undefined): boolean {
-  return status === "failed" || status === "cancelled" || status === "expired";
-}
-
-async function fetchOpenRouterJson(params: {
-  url: string;
-  baseUrl: string;
-  headers: Headers;
-  timeoutMs: number;
-  allowPrivateNetwork: boolean;
-  dispatcherPolicy: OpenRouterVideoDispatcherPolicy;
-  errorContext: string;
-  auditContext: string;
-}): Promise<OpenRouterVideoResponse> {
-  const { response, release } = await fetchOpenRouterVideoGet(params);
-  try {
-    await assertOkOrThrowHttpError(response, params.errorContext);
-    return readOpenRouterVideoResponse(await readOpenRouterVideoJson(response));
-  } finally {
-    await release();
+function resolveVideoJobState(status: string | undefined): "active" | "completed" | "failure" {
+  if (status === "completed") {
+    return "completed";
   }
+  if (status === "failed" || status === "cancelled" || status === "expired") {
+    return "failure";
+  }
+  if (status && ["queued", "pending", "in_progress", "processing", "running"].includes(status)) {
+    return "active";
+  }
+  throw new Error(OPENROUTER_VIDEO_MALFORMED_RESPONSE);
 }
 
 async function pollOpenRouterVideo(params: {
@@ -294,59 +273,56 @@ async function pollOpenRouterVideo(params: {
     label: "OpenRouter video generation",
   });
 
-  for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt += 1) {
-    const payload = await fetchOpenRouterJson({
-      url: params.pollingUrl,
-      baseUrl: params.baseUrl,
-      headers: params.headers,
-      timeoutMs: resolveProviderOperationTimeoutMs({
-        deadline,
-        defaultTimeoutMs: DEFAULT_HTTP_TIMEOUT_MS,
-      }),
-      allowPrivateNetwork: params.allowPrivateNetwork,
-      dispatcherPolicy: params.dispatcherPolicy,
-      errorContext: "OpenRouter video status request failed",
-      auditContext: "openrouter-video-status",
-    });
-    const status = normalizeOptionalString(payload.status);
-    if (
-      !status ||
-      (!["queued", "pending", "processing", "running", "completed"].includes(status) &&
-        !isTerminalFailure(status))
-    ) {
-      throw new Error(OPENROUTER_VIDEO_MALFORMED_RESPONSE);
-    }
-    if (status === "completed") {
-      return payload;
-    }
-    if (isTerminalFailure(status)) {
-      throw new Error(
-        normalizeOptionalString(payload.error) ?? `OpenRouter video generation ${status}`,
-      );
-    }
-    await waitProviderOperationPollInterval({
-      deadline,
-      pollIntervalMs: POLL_INTERVAL_MS,
-    });
-  }
-
-  throw new Error("OpenRouter video generation did not finish in time");
+  return await pollProviderOperation({
+    maxAttempts: MAX_POLL_ATTEMPTS,
+    timeoutMessage: "OpenRouter video generation did not finish in time",
+    wait: () => waitProviderOperationPollInterval({ deadline, pollIntervalMs: POLL_INTERVAL_MS }),
+    read: async () => {
+      const { response, release } = await fetchOpenRouterVideoGet({
+        url: params.pollingUrl,
+        baseUrl: params.baseUrl,
+        headers: params.headers,
+        timeoutMs: resolveProviderOperationTimeoutMs({
+          deadline,
+          defaultTimeoutMs: DEFAULT_HTTP_TIMEOUT_MS,
+        }),
+        allowPrivateNetwork: params.allowPrivateNetwork,
+        dispatcherPolicy: params.dispatcherPolicy,
+        auditContext: "openrouter-video-status",
+      });
+      try {
+        await assertOkOrThrowHttpError(response, "OpenRouter video status request failed");
+        return readOpenRouterVideoResponse(await readOpenRouterVideoJson(response));
+      } finally {
+        await release();
+      }
+    },
+    isComplete: (payload) => resolveVideoJobState(payload.status) === "completed",
+    getFailureMessage: (payload) =>
+      resolveVideoJobState(payload.status) === "failure"
+        ? payload.error || `OpenRouter video generation ${payload.status}`
+        : undefined,
+  });
 }
 
-function resolveOpenRouterContentUrl(params: { baseUrl: string; jobId: string }): string {
-  return resolveOpenRouterVideoUrl(
-    `videos/${encodeURIComponent(params.jobId)}/content?index=0`,
-    params.baseUrl,
-  );
+function resolveDeliverableOpenRouterVideoUrl(value: string | undefined): string | undefined {
+  const normalized = normalizeOptionalString(value);
+  if (!normalized) {
+    return undefined;
+  }
+  const url = URL.parse(normalized);
+  return url?.protocol === "https:" || url?.protocol === "http:" ? normalized : undefined;
 }
 
 async function downloadOpenRouterVideo(params: {
   url: string;
+  deliveryUrl?: string;
   baseUrl: string;
   headers: Headers;
   timeoutMs: number;
   allowPrivateNetwork: boolean;
   dispatcherPolicy: OpenRouterVideoDispatcherPolicy;
+  maxBytes: number;
 }): Promise<GeneratedVideoAsset> {
   const { response, release } = await fetchOpenRouterVideoGet({
     ...params,
@@ -354,13 +330,13 @@ async function downloadOpenRouterVideo(params: {
   });
   try {
     await assertOkOrThrowHttpError(response, "OpenRouter generated video download failed");
-    const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
-    const buffer = Buffer.from(await response.arrayBuffer());
-    return {
-      buffer,
-      mimeType,
-      fileName: `video-1.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`,
-    };
+    return await readGeneratedVideoAsset(response, {
+      label: "OpenRouter generated video download",
+      maxBytes: params.maxBytes,
+      validateBinaryResponse: true,
+      overflowUrl: params.deliveryUrl,
+      readOptions: { chunkTimeoutMs: 0 },
+    });
   } finally {
     await release();
   }
@@ -372,8 +348,7 @@ export function buildOpenRouterVideoGenerationProvider(): VideoGenerationProvide
     label: "OpenRouter",
     defaultModel: DEFAULT_MODEL,
     models: [DEFAULT_MODEL],
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({ provider: "openrouter", agentDir }),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "openrouter", ...ctx }),
     resolveModelCapabilities: resolveOpenRouterVideoModelCapabilities,
     capabilities: {
       providerOptions: {
@@ -411,34 +386,14 @@ export function buildOpenRouterVideoGenerationProvider(): VideoGenerationProvide
         throw new Error("OpenRouter video generation does not support video reference inputs.");
       }
 
-      const auth = await resolveApiKeyForProvider({
-        provider: "openrouter",
-        cfg: req.cfg,
-        agentDir: req.agentDir,
-        store: req.authStore,
-      });
-      if (!auth.apiKey) {
-        throw new Error("OpenRouter API key missing");
-      }
-
       const model = normalizeOptionalString(req.model) ?? DEFAULT_MODEL;
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveProviderHttpRequestConfig({
-          baseUrl: req.cfg?.models?.providers?.openrouter?.baseUrl,
-          defaultBaseUrl: OPENROUTER_BASE_URL,
-          allowPrivateNetwork: false,
-          defaultHeaders: {
-            Authorization: `Bearer ${auth.apiKey}`,
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://openclaw.ai",
-            "X-OpenRouter-Title": "OpenClaw",
-          },
-          request: sanitizeConfiguredModelProviderRequest(
-            req.cfg?.models?.providers?.openrouter?.request,
-          ),
-          provider: "openrouter",
+        await resolveOpenRouterGenerationRequestContext({
+          cfg: req.cfg,
+          agentDir: req.agentDir,
+          authStore: req.authStore,
           capability: "video",
-          transport: "http",
+          jsonContentType: true,
         });
       const deadline = createProviderOperationDeadline({
         timeoutMs: req.timeoutMs,
@@ -461,27 +416,18 @@ export function buildOpenRouterVideoGenerationProvider(): VideoGenerationProvide
       try {
         await assertOkOrThrowHttpError(response, "OpenRouter video generation failed");
         const submitted = readOpenRouterVideoResponse(await readOpenRouterVideoJson(response));
-        const jobId = normalizeOptionalString(submitted.id);
-        const pollingUrl = normalizeOptionalString(submitted.polling_url);
+        const jobId = submitted.id;
+        const pollingUrl = submitted.polling_url;
         if (!jobId || !pollingUrl) {
           throw new Error("OpenRouter video generation response missing job details");
         }
-        const submittedStatus = normalizeOptionalString(submitted.status);
-        if (
-          submittedStatus &&
-          !["queued", "pending", "processing", "running", "completed"].includes(submittedStatus) &&
-          !isTerminalFailure(submittedStatus)
-        ) {
-          throw new Error(OPENROUTER_VIDEO_MALFORMED_RESPONSE);
-        }
-        if (isTerminalFailure(submittedStatus)) {
-          throw new Error(
-            normalizeOptionalString(submitted.error) ??
-              `OpenRouter video generation ${submittedStatus}`,
-          );
+        const submittedStatus = submitted.status;
+        const submittedState = submittedStatus ? resolveVideoJobState(submittedStatus) : "active";
+        if (submittedState === "failure") {
+          throw new Error(submitted.error ?? `OpenRouter video generation ${submittedStatus}`);
         }
         const completed =
-          submittedStatus === "completed"
+          submittedState === "completed"
             ? submitted
             : await pollOpenRouterVideo({
                 pollingUrl,
@@ -494,12 +440,17 @@ export function buildOpenRouterVideoGenerationProvider(): VideoGenerationProvide
                 allowPrivateNetwork,
                 dispatcherPolicy,
               });
-        const completedJobId = normalizeOptionalString(completed.id) ?? jobId;
+        const completedJobId = completed.id ?? jobId;
+        const unsignedUrl = completed.unsigned_urls?.[0];
         const videoUrl =
-          completed.unsigned_urls?.find((url) => normalizeOptionalString(url)) ??
-          resolveOpenRouterContentUrl({ baseUrl, jobId: completedJobId });
+          unsignedUrl ??
+          resolveOpenRouterVideoUrl(
+            `videos/${encodeURIComponent(completedJobId)}/content?index=0`,
+            baseUrl,
+          );
         const video = await downloadOpenRouterVideo({
           url: videoUrl,
+          deliveryUrl: resolveDeliverableOpenRouterVideoUrl(unsignedUrl),
           baseUrl,
           headers,
           timeoutMs: resolveProviderOperationTimeoutMs({
@@ -508,17 +459,16 @@ export function buildOpenRouterVideoGenerationProvider(): VideoGenerationProvide
           }),
           allowPrivateNetwork,
           dispatcherPolicy,
+          maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "video"),
         });
 
         return {
           videos: [video],
-          model: normalizeOptionalString(completed.model) ?? model,
+          model: completed.model ?? model,
           metadata: {
             jobId,
             status: completed.status,
-            ...(normalizeOptionalString(completed.generation_id)
-              ? { generationId: normalizeOptionalString(completed.generation_id) }
-              : {}),
+            ...(completed.generation_id ? { generationId: completed.generation_id } : {}),
             ...(completed.usage ? { usage: completed.usage } : {}),
           },
         };

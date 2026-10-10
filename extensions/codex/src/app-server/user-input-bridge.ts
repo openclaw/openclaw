@@ -1,131 +1,240 @@
+/** Owns per-turn Codex request_user_input and ordinary MCP elicitation lifecycles. */
 import {
+  agentHarnessStructuredInput as structuredInput,
   embeddedAgentLog,
-  type EmbeddedRunAttemptParams,
+  emptyAgentHarnessUserInputAnswers,
+  type AgentHarnessUserInputOption,
+  type AgentHarnessUserInputQuestion,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { formatCodexDisplayText } from "../command-formatters.js";
-import {
-  isJsonObject,
-  type CodexServerNotification,
-  type JsonObject,
-  type JsonValue,
-} from "./protocol.js";
+import { createCodexElicitationResponse } from "./elicitation-response.js";
+import type { JsonObject, JsonValue } from "./protocol.js";
+import { CodexServerRequestResolvedError } from "./server-requests.js";
 
-type PendingUserInput = {
-  requestId: number | string;
-  threadId: string;
-  turnId: string;
-  itemId: string;
-  questions: UserInputQuestion[];
-  resolve: (value: JsonValue) => void;
-  cleanup: () => void;
+const DEFAULT_USER_INPUT_TIMEOUT_MS = 15 * 60_000;
+// Codex omits a deadline for nonblocking requests, so bound gateway and secret paths alike.
+const NONBLOCKING_USER_INPUT_TIMEOUT_MS = 120_000;
+const MAX_USER_INPUT_QUESTIONS = 3;
+const MAX_USER_INPUT_OPTIONS = 4;
+const MAX_USER_INPUT_ID = 256;
+const MAX_USER_INPUT_HEADER = 64;
+const MAX_USER_INPUT_TEXT = 4_096;
+type StructuredInputCompileResult = ReturnType<typeof structuredInput.compileForm>;
+
+type InteractiveJob = {
+  cancelValue: JsonValue;
+  failureValue: JsonValue;
+  run: (signal: AbortSignal) => Promise<JsonValue | undefined>;
+  onResponse?: (value: JsonValue) => void;
 };
 
-type UserInputQuestion = {
-  id: string;
-  header: string;
-  question: string;
-  isOther: boolean;
-  isSecret: boolean;
-  options: UserInputOption[] | null;
-};
+type CodexInputRequest = { id: number | string; params?: JsonValue };
 
-type UserInputOption = {
-  label: string;
-  description: string;
-};
-
-type CodexUserInputBridge = {
-  handleRequest: (request: {
-    id: number | string;
-    params?: JsonValue;
-  }) => Promise<JsonValue | undefined>;
-  handleQueuedMessage: (text: string) => boolean;
-  handleNotification: (notification: CodexServerNotification) => void;
-  cancelPending: () => void;
-};
-
+/** Creates the single per-turn owner for Codex operator input. */
 export function createCodexUserInputBridge(params: {
   paramsForRun: EmbeddedRunAttemptParams;
   threadId: string;
   turnId: string;
   signal?: AbortSignal;
-}): CodexUserInputBridge {
-  let pending: PendingUserInput | undefined;
+  gatewayCall?: Parameters<typeof structuredInput.run>[0]["gatewayCall"];
+  /** Native MCP owner binds this exact elicitation to its originating runtime/view. */
+  prepareResourceContext?: (request: {
+    requestId: string | number;
+    snapshot: Record<string, unknown>;
+    signal: AbortSignal;
+  }) => Promise<{
+    context: NonNullable<
+      Parameters<typeof structuredInput.compileForm>[0]["options"]["resourceContext"]
+    >;
+    dispose: () => void | Promise<void>;
+  }>;
+  onOrdinaryResponse?: (result: {
+    itemId: string;
+    questions: readonly AgentHarnessUserInputQuestion[];
+    response: JsonValue;
+  }) => void;
+}) {
+  const cleanup = new AbortController();
+  const bridgeSignal = params.signal
+    ? AbortSignal.any([params.signal, cleanup.signal])
+    : cleanup.signal;
+  let completion = Promise.resolve();
+  const inputSessionKey = params.paramsForRun.sessionKey ?? params.paramsForRun.sessionId;
 
-  const resolvePending = (value: JsonValue) => {
-    const current = pending;
-    if (!current) {
-      return;
+  const enqueue = (job: InteractiveJob, requestSignal?: AbortSignal) => {
+    const signal = requestSignal ? AbortSignal.any([bridgeSignal, requestSignal]) : bridgeSignal;
+    if (signal.aborted) {
+      return Promise.resolve(job.cancelValue);
     }
-    pending = undefined;
-    current.cleanup();
-    current.resolve(value);
+    return new Promise<JsonValue>((resolve, reject) => {
+      const onAbort = () => resolve(job.cancelValue);
+      signal.addEventListener("abort", onAbort, { once: true });
+      completion = completion
+        .then(async () => {
+          signal.removeEventListener("abort", onAbort);
+          if (signal.aborted) {
+            return;
+          }
+          let value: JsonValue | undefined;
+          try {
+            value = await job.run(signal);
+          } catch (error) {
+            if (!signal.aborted) {
+              embeddedAgentLog.warn("failed to bridge codex operator input", { error });
+            }
+          }
+          const response = signal.aborted ? job.cancelValue : (value ?? job.failureValue);
+          if (!(signal.reason instanceof CodexServerRequestResolvedError)) {
+            job.onResponse?.(response);
+          }
+          resolve(response);
+        })
+        .catch(reject);
+    });
   };
 
+  const execute = (input: StructuredInputCompileResult, timeoutMs: number, signal: AbortSignal) =>
+    structuredInput.run({
+      input,
+      sessionKey: inputSessionKey,
+      agentId: params.paramsForRun.agentId,
+      runId: params.paramsForRun.runId,
+      timeoutMs,
+      gatewayCall: params.gatewayCall,
+      delivery: params.paramsForRun,
+      signal,
+      promptOptions: {
+        formatText: formatCodexDisplayText,
+        unsupportedIntro: "Codex input request could not be shown:",
+        urlIntro: "Codex needs confirmation:",
+      },
+    });
+
   return {
-    async handleRequest(request) {
+    async handleRequest(request: CodexInputRequest, requestSignal?: AbortSignal) {
       const requestParams = readUserInputParams(request.params);
-      if (!requestParams) {
-        return undefined;
-      }
-      if (requestParams.threadId !== params.threadId || requestParams.turnId !== params.turnId) {
+      if (
+        !requestParams ||
+        requestParams.threadId !== params.threadId ||
+        requestParams.turnId !== params.turnId
+      ) {
         return undefined;
       }
       if (requestParams.questions.length === 0) {
-        return emptyUserInputResponse();
+        return emptyAgentHarnessUserInputAnswers();
       }
-
-      resolvePending(emptyUserInputResponse());
-
-      return new Promise<JsonValue>((resolve) => {
-        const abortListener = () => resolvePending(emptyUserInputResponse());
-        const cleanup = () => params.signal?.removeEventListener("abort", abortListener);
-        pending = {
-          requestId: request.id,
-          threadId: requestParams.threadId,
-          turnId: requestParams.turnId,
-          itemId: requestParams.itemId,
-          questions: requestParams.questions,
-          resolve,
-          cleanup,
-        };
-        params.signal?.addEventListener("abort", abortListener, { once: true });
-        if (params.signal?.aborted) {
-          resolvePending(emptyUserInputResponse());
-          return;
-        }
-        void deliverUserInputPrompt(params.paramsForRun, requestParams.questions).catch((error) => {
-          embeddedAgentLog.warn("failed to deliver codex user input prompt", { error });
-        });
+      const timeoutMs = requestParams.isBlocking
+        ? (params.paramsForRun.timeoutMs ?? DEFAULT_USER_INPUT_TIMEOUT_MS)
+        : NONBLOCKING_USER_INPUT_TIMEOUT_MS;
+      const input = structuredInput.compileQuestions({
+        questions: requestParams.questions,
+        intro: "Codex needs input:",
       });
+      const cancelValue = emptyAgentHarnessUserInputAnswers();
+      return await enqueue(
+        {
+          cancelValue,
+          failureValue: cancelValue,
+          // Secret requests never enter the transcript, including cancelled or mixed forms.
+          onResponse: requestParams.questions.some((question) => question.isSecret)
+            ? undefined
+            : (response) =>
+                params.onOrdinaryResponse?.({
+                  itemId: requestParams.itemId,
+                  questions: requestParams.questions,
+                  response,
+                }),
+          run: async (signal) => {
+            const result = await execute(input, timeoutMs, signal);
+            return result.status === "answered"
+              ? gatewayAnswersToCodexResponse(result.answers)
+              : cancelValue;
+          },
+        },
+        requestSignal,
+      );
     },
-    handleQueuedMessage(text) {
-      const current = pending;
-      if (!current) {
-        return false;
+    async handleElicitationRequest(request: CodexInputRequest, requestSignal?: AbortSignal) {
+      if (readOwnDataString(request.params, "threadId") !== params.threadId) {
+        return undefined;
       }
-      resolvePending(buildUserInputResponse(current.questions, text));
-      return true;
-    },
-    handleNotification(notification) {
-      if (notification.method !== "serverRequest/resolved" || !pending) {
-        return;
-      }
-      const notificationParams = isJsonObject(notification.params)
-        ? notification.params
-        : undefined;
-      const requestId = notificationParams ? readRequestId(notificationParams) : undefined;
+      const mode = readOwnDataString(request.params, "mode");
+      const requestSnapshot = structuredInput.snapshot(request.params, {
+        richForm: mode === "openaiForm" || mode === "openai/form",
+      });
       if (
-        notificationParams &&
-        readString(notificationParams, "threadId") === pending.threadId &&
-        requestId !== undefined &&
-        String(requestId) === String(pending.requestId)
+        structuredInput.isRecord(requestSnapshot) &&
+        readOwnDataString(requestSnapshot, "threadId") !== params.threadId
       ) {
-        resolvePending(emptyUserInputResponse());
+        return undefined;
       }
+      const { compileCodexOrdinaryElicitation } = await import("./elicitation-input.js");
+      const compiled = structuredInput.isRecord(requestSnapshot)
+        ? compileCodexOrdinaryElicitation({ snapshot: requestSnapshot, turnId: params.turnId })
+        : {
+            kind: "compiled" as const,
+            input: {
+              kind: "unsupported" as const,
+              message: "OpenClaw declined a malformed or over-limit MCP elicitation request.",
+            },
+          };
+      if (compiled.kind === "ignored") {
+        return undefined;
+      }
+      const cancelValue = createCodexElicitationResponse("cancel");
+      const timeoutMs = params.paramsForRun.timeoutMs ?? DEFAULT_USER_INPUT_TIMEOUT_MS;
+      return await enqueue(
+        {
+          cancelValue,
+          failureValue: declineElicitation("OpenClaw could not handle this elicitation."),
+          run: async (signal) => {
+            const resource =
+              params.prepareResourceContext &&
+              structuredInput.isRecord(requestSnapshot) &&
+              hasResourceInput(requestSnapshot)
+                ? await params.prepareResourceContext({
+                    requestId: request.id,
+                    snapshot: requestSnapshot,
+                    signal,
+                  })
+                : undefined;
+            try {
+              signal.throwIfAborted();
+              const withResources =
+                resource && structuredInput.isRecord(requestSnapshot)
+                  ? compileCodexOrdinaryElicitation({
+                      snapshot: requestSnapshot,
+                      turnId: params.turnId,
+                      resourceContext: resource.context,
+                    })
+                  : compiled;
+              if (withResources.kind === "ignored") {
+                return cancelValue;
+              }
+              const result = await execute(withResources.input, timeoutMs, signal);
+              if (result.status === "answered") {
+                const content =
+                  compiled.input.kind === "ready" && compiled.input.plan.kind === "url"
+                    ? null
+                    : result.content;
+                return createCodexElicitationResponse("accept", content);
+              }
+              if (result.status === "declined" || result.status === "unsupported") {
+                return declineElicitation(result.message);
+              }
+              return cancelValue;
+            } finally {
+              await resource?.dispose();
+            }
+          },
+        },
+        requestSignal,
+      );
     },
-    cancelPending() {
-      resolvePending(emptyUserInputResponse());
+    async cancelPending() {
+      cleanup.abort(new Error("Codex operator input request cancelled"));
+      await completion;
     },
   };
 }
@@ -135,182 +244,135 @@ function readUserInputParams(value: JsonValue | undefined):
       threadId: string;
       turnId: string;
       itemId: string;
-      questions: UserInputQuestion[];
+      questions: AgentHarnessUserInputQuestion[];
+      isBlocking: boolean;
     }
   | undefined {
-  if (!isJsonObject(value)) {
+  const snapshot = structuredInput.snapshot(value);
+  if (!structuredInput.isRecord(snapshot)) {
     return undefined;
   }
-  const threadId = readString(value, "threadId");
-  const turnId = readString(value, "turnId");
-  const itemId = readString(value, "itemId");
-  const questionsRaw = value.questions;
-  if (!threadId || !turnId || !itemId || !Array.isArray(questionsRaw)) {
+  const threadId = readBoundedUserInputText(snapshot, "threadId", MAX_USER_INPUT_ID);
+  const turnId = readBoundedUserInputText(snapshot, "turnId", MAX_USER_INPUT_ID);
+  const itemId = readBoundedUserInputText(snapshot, "itemId", MAX_USER_INPUT_ID);
+  const questions = readValue(snapshot, "questions");
+  if (
+    !threadId ||
+    !turnId ||
+    !itemId ||
+    !Array.isArray(questions) ||
+    questions.length > MAX_USER_INPUT_QUESTIONS
+  ) {
     return undefined;
   }
-  const questions = questionsRaw
-    .map(readQuestion)
-    .filter((question): question is UserInputQuestion => Boolean(question));
-  return { threadId, turnId, itemId, questions };
+  const parsed: AgentHarnessUserInputQuestion[] = [];
+  for (const questionValue of questions) {
+    const question = readQuestion(questionValue);
+    if (!question) {
+      return undefined;
+    }
+    parsed.push(question);
+  }
+  return {
+    threadId,
+    turnId,
+    itemId,
+    questions: parsed,
+    isBlocking: readValue(snapshot, "isBlocking") !== false,
+  };
 }
 
-function readQuestion(value: JsonValue): UserInputQuestion | undefined {
-  if (!isJsonObject(value)) {
+function readQuestion(value: unknown): AgentHarnessUserInputQuestion | undefined {
+  if (!structuredInput.isRecord(value)) {
     return undefined;
   }
-  const id = readString(value, "id");
-  const header = readString(value, "header");
-  const question = readString(value, "question");
+  const id = readBoundedUserInputText(value, "id", MAX_USER_INPUT_ID);
+  const header = readBoundedUserInputText(value, "header", MAX_USER_INPUT_HEADER);
+  const question = readBoundedUserInputText(value, "question", MAX_USER_INPUT_TEXT);
   if (!id || !header || !question) {
+    return undefined;
+  }
+  const options = readOptions(readValue(value, "options"));
+  if (options === undefined) {
     return undefined;
   }
   return {
     id,
     header,
     question,
-    isOther: value.isOther === true,
-    isSecret: value.isSecret === true,
-    options: readOptions(value.options),
+    isOther: readValue(value, "isOther") === true,
+    isSecret: readValue(value, "isSecret") === true,
+    ...(readValue(value, "multiSelect") === true ? { multiSelect: true } : {}),
+    options,
   };
 }
 
-function readOptions(value: JsonValue | undefined): UserInputOption[] | null {
-  if (!Array.isArray(value)) {
+function readOptions(value: unknown): AgentHarnessUserInputOption[] | null | undefined {
+  if (value === undefined || value === null) {
     return null;
   }
-  const options = value
-    .map(readOption)
-    .filter((option): option is UserInputOption => Boolean(option));
-  return options.length > 0 ? options : null;
-}
-
-function readOption(value: JsonValue): UserInputOption | undefined {
-  if (!isJsonObject(value)) {
+  if (!Array.isArray(value) || value.length > MAX_USER_INPUT_OPTIONS) {
     return undefined;
   }
-  const label = readString(value, "label");
-  const description = readString(value, "description") ?? "";
-  return label ? { label, description } : undefined;
+  const options: AgentHarnessUserInputOption[] = [];
+  for (const entry of value) {
+    if (!structuredInput.isRecord(entry)) {
+      return undefined;
+    }
+    const label = readBoundedUserInputText(entry, "label", MAX_USER_INPUT_ID);
+    const description = readBoundedUserInputText(entry, "description", MAX_USER_INPUT_TEXT);
+    if (!label) {
+      return undefined;
+    }
+    options.push({ label, ...(description ? { description } : {}) });
+  }
+  return options;
 }
 
-async function deliverUserInputPrompt(
-  params: EmbeddedRunAttemptParams,
-  questions: UserInputQuestion[],
-): Promise<void> {
-  const text = formatUserInputPrompt(questions);
-  if (params.onBlockReply) {
-    await params.onBlockReply({ text });
-    return;
-  }
-  await params.onPartialReply?.({ text });
+function readValue(record: Record<string, unknown>, key: string): unknown {
+  return Object.hasOwn(record, key) ? record[key] : undefined;
 }
 
-function formatUserInputPrompt(questions: UserInputQuestion[]): string {
-  const lines = ["Codex needs input:"];
-  questions.forEach((question, index) => {
-    if (questions.length > 1) {
-      lines.push(
-        "",
-        `${index + 1}. ${formatCodexDisplayText(question.header)}`,
-        formatCodexDisplayText(question.question),
-      );
-    } else {
-      lines.push(
-        "",
-        formatCodexDisplayText(question.header),
-        formatCodexDisplayText(question.question),
-      );
-    }
-    if (question.isSecret) {
-      lines.push("This channel may show your reply to other participants.");
-    }
-    question.options?.forEach((option, optionIndex) => {
-      lines.push(
-        `${optionIndex + 1}. ${formatCodexDisplayText(option.label)}${
-          option.description ? ` - ${formatCodexDisplayText(option.description)}` : ""
-        }`,
-      );
-    });
-    if (question.isOther) {
-      lines.push("Other: reply with your own answer.");
-    }
-  });
-  return lines.join("\n");
+function readBoundedUserInputText(
+  record: Record<string, unknown>,
+  key: string,
+  maximum: number,
+): string | undefined {
+  const value = readValue(record, key);
+  return typeof value === "string" && value.length <= maximum && value.length > 0
+    ? value
+    : undefined;
 }
 
-function buildUserInputResponse(questions: UserInputQuestion[], inputText: string): JsonObject {
-  const answers: JsonObject = {};
-  if (questions.length === 1) {
-    const question = questions[0];
-    if (question) {
-      const answer = normalizeAnswer(inputText, question);
-      answers[question.id] = { answers: answer ? [answer] : [] };
-    }
-    return { answers };
-  }
-
-  const keyed = parseKeyedAnswers(inputText);
-  const fallbackLines = inputText
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  questions.forEach((question, index) => {
-    const key =
-      keyed.get(question.id.toLowerCase()) ??
-      keyed.get(question.header.toLowerCase()) ??
-      keyed.get(question.question.toLowerCase()) ??
-      keyed.get(String(index + 1));
-    const answer = key ?? fallbackLines[index] ?? "";
-    const normalized = answer ? normalizeAnswer(answer, question) : undefined;
-    answers[question.id] = { answers: normalized ? [normalized] : [] };
-  });
-  return { answers };
-}
-
-function normalizeAnswer(answer: string, question: UserInputQuestion): string | undefined {
-  const trimmed = answer.trim();
-  const options = question.options ?? [];
-  const optionIndex = /^\d+$/.test(trimmed) ? Number(trimmed) - 1 : -1;
-  const indexed = optionIndex >= 0 ? options[optionIndex] : undefined;
-  if (indexed) {
-    return indexed.label;
-  }
-  const exact = options.find((option) => option.label.toLowerCase() === trimmed.toLowerCase());
-  if (exact) {
-    return exact.label;
-  }
-  if (options.length > 0 && !question.isOther) {
+function readOwnDataString(value: unknown, key: string): string | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
-  return trimmed || undefined;
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  return descriptor && "value" in descriptor && typeof descriptor.value === "string"
+    ? descriptor.value
+    : undefined;
 }
 
-function parseKeyedAnswers(inputText: string): Map<string, string> {
-  const answers = new Map<string, string>();
-  for (const line of inputText.split(/\r?\n/)) {
-    const match = line.match(/^\s*([^:=-]+?)\s*[:=-]\s*(.+?)\s*$/);
-    if (!match) {
-      continue;
-    }
-    const key = match[1]?.trim().toLowerCase();
-    const value = match[2]?.trim();
-    if (key && value) {
-      answers.set(key, value);
-    }
-  }
-  return answers;
+function gatewayAnswersToCodexResponse(answers: Record<string, string[]>): JsonObject {
+  return {
+    answers: Object.fromEntries(
+      Object.entries(answers).map(([questionId, values]) => [questionId, { answers: values }]),
+    ),
+  };
 }
 
-function emptyUserInputResponse(): JsonObject {
-  return { answers: {} };
+function declineElicitation(message?: string) {
+  return createCodexElicitationResponse("decline", null, message ? { message } : null);
 }
 
-function readString(record: JsonObject, key: string): string | undefined {
-  const value = record[key];
-  return typeof value === "string" ? value : undefined;
-}
-
-function readRequestId(record: JsonObject): string | number | undefined {
-  const value = record.requestId;
-  return typeof value === "string" || typeof value === "number" ? value : undefined;
+function hasResourceInput(snapshot: Record<string, unknown>): boolean {
+  const schema = snapshot.requestedSchema;
+  const properties = structuredInput.isRecord(schema) ? schema.properties : undefined;
+  return (
+    structuredInput.isRecord(properties) &&
+    Object.values(properties).some(
+      (field) => structuredInput.isRecord(field) && Object.hasOwn(field, "x-openai-input"),
+    )
+  );
 }

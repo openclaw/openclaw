@@ -1,91 +1,55 @@
-import path from "node:path";
+// Vitest contract shared helpers build contract test project configuration.
 import { defineConfig } from "vitest/config";
-import { loadPatternListFromEnv, narrowIncludePatternsForCli } from "./vitest.pattern-file.ts";
+import {
+  channelConfigContractPatterns,
+  channelRegistryContractPatterns,
+  channelSessionContractPatterns,
+  channelSurfaceContractPatterns,
+  pluginContractPatterns,
+} from "./vitest.contracts-paths.mjs";
+import { databaseWorkerCoreTestFiles } from "./vitest.database-worker-core-paths.mjs";
+import { intersectIncludePatterns } from "./vitest.include-patterns.ts";
+import {
+  loadPatternListFromEnv,
+  matchesVitestGlob,
+  narrowIncludePatternsForCli,
+} from "./vitest.pattern-file.ts";
 import { nonIsolatedRunnerPath, sharedVitestConfig } from "./vitest.shared.config.ts";
+
+export {
+  channelConfigContractPatterns,
+  channelRegistryContractPatterns,
+  channelSessionContractPatterns,
+  channelSurfaceContractPatterns,
+  pluginContractPatterns,
+};
 
 const base = sharedVitestConfig as Record<string, unknown>;
 const baseTest = sharedVitestConfig.test ?? {};
-
-export const channelSurfaceContractPatterns = [
-  "src/channels/plugins/contracts/channel-catalog.contract.test.ts",
-  "src/channels/plugins/contracts/channel-import-guardrails.test.ts",
-  "src/channels/plugins/contracts/group-policy.fallback.contract.test.ts",
-  "src/channels/plugins/contracts/outbound-payload.contract.test.ts",
-  "src/channels/plugins/contracts/*-shard-a.contract.test.ts",
-  "src/channels/plugins/contracts/*-shard-e.contract.test.ts",
-];
-
-export const channelConfigContractPatterns = [
-  "src/channels/plugins/contracts/plugins-core.authorize-config-write.policy.contract.test.ts",
-  "src/channels/plugins/contracts/plugins-core.authorize-config-write.targets.contract.test.ts",
-  "src/channels/plugins/contracts/plugins-core.catalog.entries.contract.test.ts",
-  "src/channels/plugins/contracts/*-shard-b.contract.test.ts",
-  "src/channels/plugins/contracts/*-shard-f.contract.test.ts",
-];
-
-export const channelRegistryContractPatterns = [
-  "src/channels/plugins/contracts/plugins-core.catalog.paths.contract.test.ts",
-  "src/channels/plugins/contracts/plugins-core.loader.contract.test.ts",
-  "src/channels/plugins/contracts/plugins-core.registry.contract.test.ts",
-  "src/channels/plugins/contracts/*-shard-c.contract.test.ts",
-  "src/channels/plugins/contracts/*-shard-g.contract.test.ts",
-];
-
-export const channelSessionContractPatterns = [
-  "src/channels/plugins/contracts/plugins-core.resolve-config-writes.contract.test.ts",
-  "src/channels/plugins/contracts/registry.contract.test.ts",
-  "src/channels/plugins/contracts/session-binding.registry-backed.contract.test.ts",
-  "src/channels/plugins/contracts/*-shard-d.contract.test.ts",
-  "src/channels/plugins/contracts/*-shard-h.contract.test.ts",
-];
-
-export const pluginContractPatterns = ["src/plugins/contracts/**/*.test.ts"];
-
-export function loadContractsIncludePatternsFromEnv(
-  env: Record<string, string | undefined> = process.env,
-): string[] | null {
-  return loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
-}
-
-function narrowContractIncludePatterns(
-  includePatterns: string[],
-  candidatePatterns: string[] | null,
-): string[] | null {
-  if (!candidatePatterns) {
-    return null;
-  }
-
-  return [
-    ...new Set(
-      candidatePatterns.filter((candidate) =>
-        includePatterns.some(
-          (pattern) => path.matchesGlob(candidate, pattern) || path.matchesGlob(pattern, candidate),
-        ),
-      ),
-    ),
-  ];
-}
 
 export function createContractsVitestConfig(
   includePatterns: string[],
   env: Record<string, string | undefined> = process.env,
   argv: string[] = process.argv,
-  options: { name?: string } = {},
+  options: { name?: string; pool?: "forks" | "threads" } = {},
 ) {
   const cliIncludePatterns = narrowIncludePatternsForCli(includePatterns, argv);
-  const envIncludePatterns = narrowContractIncludePatterns(
+  const envIncludePatterns = intersectIncludePatterns(
     includePatterns,
-    loadContractsIncludePatternsFromEnv(env),
+    loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env),
+    matchesVitestGlob,
   );
   return defineConfig({
     ...base,
     test: {
       ...baseTest,
       name: options.name ?? "contracts",
+      pool: options.pool ?? baseTest.pool,
       isolate: false,
       runner: nonIsolatedRunnerPath,
       setupFiles: baseTest.setupFiles ?? [],
       include: envIncludePatterns ?? cliIncludePatterns ?? includePatterns,
+      exclude: [...(baseTest.exclude ?? []), ...databaseWorkerCoreTestFiles],
       passWithNoTests: true,
     },
   });

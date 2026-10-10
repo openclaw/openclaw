@@ -1,16 +1,98 @@
-export type BrowserTransport = "cdp" | "chrome-mcp";
-type BrowserHeadlessSource =
-  | "request"
-  | "env"
-  | "profile"
-  | "config"
-  | "linux-display-fallback"
-  | "default";
+import type { lookup as dnsLookupCb } from "node:dns";
+import type { BrowserEngineDescriptor, BrowserEngineId } from "./engines/types.js";
+import type { ManagedBrowserHeadlessSource } from "./profile.types.js";
+
+type BrowserCdpLookup = typeof dnsLookupCb;
+
+export type BrowserTransport = "cdp" | "chrome-mcp" | "extension";
+
+export type ProfileStatus = {
+  name: string;
+  transport?: BrowserTransport;
+  cdpPort: number | null;
+  cdpUrl: string | null;
+  color: string;
+  driver: "openclaw" | "existing-session" | "extension";
+  running: boolean;
+  tabCount: number;
+  isDefault: boolean;
+  isRemote: boolean;
+  missingFromConfig?: boolean;
+  reconcileReason?: string | null;
+};
+
+export type BrowserGraphicsAcceleration = "hardware" | "software" | "unknown";
+
+export type BrowserGraphicsDevice = {
+  vendorId: number;
+  deviceId: number;
+  vendor: string;
+  device: string;
+  driverVendor: string;
+  driverVersion: string;
+};
+
+type BrowserVideoDecodeCapability = {
+  profile: string;
+  minResolution: { width: number; height: number };
+  maxResolution: { width: number; height: number };
+};
+
+type BrowserVideoEncodeCapability = {
+  profile: string;
+  maxResolution: { width: number; height: number };
+  maxFramerateNumerator: number;
+  maxFramerateDenominator: number;
+};
+
+export type BrowserGraphicsDiagnostics =
+  | {
+      status: "available";
+      observedAt: number;
+      acceleration: BrowserGraphicsAcceleration;
+      renderer: string | null;
+      vendor: string | null;
+      version: string | null;
+      backend: string | null;
+      devices: BrowserGraphicsDevice[];
+      featureStatus: Record<string, string>;
+      disabledFeatures: Array<{ feature: string; status: string }>;
+      driverBugWorkarounds: string[];
+      videoDecoding: BrowserVideoDecodeCapability[];
+      videoEncoding: BrowserVideoEncodeCapability[];
+    }
+  | {
+      status: "unavailable";
+      observedAt: number;
+      reason: string;
+    };
+
+export type BrowserTabOwnership =
+  | {
+      status: "durable";
+      nativeTargetId: string;
+      profileFingerprint: string;
+      browserInstanceFingerprint: string;
+    }
+  | {
+      status: "non-durable";
+      reason:
+        | "explicit-cdp-url-required"
+        | "target-marker-not-unique"
+        | "target-marker-lookup-failed"
+        | "target-lookup-failed"
+        | "browser-identity-unavailable"
+        | "browser-identity-lookup-failed";
+    };
 
 export type BrowserStatus = {
   enabled: boolean;
   profile?: string;
-  driver?: "openclaw" | "existing-session";
+  driver?: "openclaw" | "existing-session" | "extension";
+  engine?: BrowserEngineId;
+  sessionScope?: BrowserEngineDescriptor["sessionScope"];
+  screenshotFidelity?: BrowserEngineDescriptor["screenshotFidelity"];
+  availableEngines?: BrowserEngineDescriptor[];
   transport?: BrowserTransport;
   running: boolean;
   cdpReady?: boolean;
@@ -32,32 +114,46 @@ export type BrowserStatus = {
   userDataDir: string | null;
   color: string;
   headless: boolean;
-  headlessSource?: BrowserHeadlessSource;
+  headlessSource?: ManagedBrowserHeadlessSource;
   noSandbox?: boolean;
   executablePath?: string | null;
   attachOnly: boolean;
+  /**
+   * Cached process-lifetime diagnostics for a locally launched managed browser.
+   * Passive status calls never launch a browser to populate this field.
+   */
+  graphics?: BrowserGraphicsDiagnostics | null;
 };
 
+/** Browser tab record exposed by tab listing and tab mutation endpoints. */
 export type BrowserTab = {
   /** Best handle for agents to pass back as targetId: label, then tabId, then raw targetId. */
   suggestedTargetId?: string;
   targetId: string;
   /** Stable, human-friendly tab handle for this profile runtime (for example t1). */
   tabId?: string;
+  /** Runtime-scoped native Chrome tab id exposed only by the browser-extension driver. */
+  webExtensionTabId?: number;
   /** Optional user-assigned tab label. */
   label?: string;
   title: string;
   url: string;
+  /** Listing-time observation; unavailable URLs stay redacted, not implicitly trusted. */
+  urlUnavailableReason?: "navigation_blocked" | "navigation_check_failed";
   wsUrl?: string;
+  /** Internal CDP lookup pin paired with wsUrl; omitted from model-facing summaries. */
+  wsLookup?: BrowserCdpLookup;
   type?: string;
 };
 
-export type SnapshotAriaNode = {
-  ref: string;
-  role: string;
-  name: string;
-  value?: string;
-  description?: string;
-  backendDOMNodeId?: number;
-  depth: number;
+export type BrowserTabsResult =
+  | { running: true; tabs: BrowserTab[] }
+  | { running: false; tabs: [] };
+
+/** Internal tab-open result. Browser tools must remove internal metadata before model output. */
+export type BrowserOpenResult = BrowserTab & {
+  ownership?: BrowserTabOwnership;
+  resolvedProfile?: string;
 };
+
+export type { AriaSnapshotNode as SnapshotAriaNode } from "./cdp-ax.js";

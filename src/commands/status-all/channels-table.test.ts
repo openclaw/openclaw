@@ -1,3 +1,4 @@
+// Status-all channels table tests verify gateway issue overlays and channel row rendering.
 import { describe, expect, it } from "vitest";
 import { buildStatusChannelsTableRows } from "./channels-table.js";
 
@@ -27,6 +28,7 @@ describe("buildStatusChannelsTableRows", () => {
           },
         ],
         channelIssues: [
+          { channel: "signal", message: "" },
           { channel: "signal", message: "signal-cli unreachable from gateway runtime" },
           { channel: "discord", message: "should not override off" },
         ],
@@ -41,7 +43,7 @@ describe("buildStatusChannelsTableRows", () => {
         Channel: "Signal",
         Enabled: "[ok:ON]",
         State: "[warn:WARN]",
-        Detail: "configured · [warn:gateway: signal-cli unreachab]",
+        Detail: "configured · [warn:gateway: ]",
       },
       {
         Channel: "Discord",

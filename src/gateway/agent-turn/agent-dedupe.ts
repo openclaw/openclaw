@@ -1,0 +1,224 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import type { GatewayRequestContext } from "../server-methods/types.js";
+import { setGatewayDedupeEntry } from "./agent-job.js";
+import type { AgentTurnIo } from "./types.js";
+
+export class AgentRequestReservationEndedError extends Error {
+  constructor() {
+    super("Agent request reservation is no longer active.");
+  }
+}
+
+export function resolveAgentDedupeKeys(params: {
+  idempotencyKey: string;
+  execApprovalFollowupApprovalId?: string;
+}): string[] {
+  const keys = [`agent:${params.idempotencyKey}`];
+  const approvalId = params.execApprovalFollowupApprovalId?.trim();
+  if (approvalId) {
+    keys.push(`agent:exec-approval-followup:${approvalId}`);
+  }
+  return uniqueStrings(keys);
+}
+
+export function readGatewayDedupeEntry(params: {
+  dedupe: GatewayRequestContext["dedupe"];
+  keys: readonly string[];
+}) {
+  for (const key of params.keys) {
+    const entry = params.dedupe.get(key);
+    if (entry) {
+      return entry;
+    }
+  }
+  return undefined;
+}
+
+export function isAcceptedAgentDedupePayload(payload: unknown): payload is {
+  acceptedAt?: unknown;
+  agentId?: unknown;
+  dedupeKeys?: unknown;
+  expiresAtMs?: unknown;
+  ownerConnId?: unknown;
+  ownerDeviceId?: unknown;
+  reservationId?: unknown;
+  runId?: unknown;
+  runtime?: unknown;
+  sessionKey?: unknown;
+  status: "accepted";
+} {
+  return (
+    typeof payload === "object" &&
+    payload !== null &&
+    (payload as { status?: unknown }).status === "accepted"
+  );
+}
+
+export function resolveAgentWaitSource(
+  context: Pick<GatewayRequestContext, "chatAbortControllers" | "dedupe">,
+  runId: string,
+): "agent" | "chat" | undefined {
+  const activeChatEntry = context.chatAbortControllers.get(runId);
+  if (activeChatEntry) {
+    return activeChatEntry.kind === "agent" ? "agent" : "chat";
+  }
+  // Cancellation can retire the controller before dispatch publishes its result;
+  // sessionless admissions also retain their RPC owner in the accepted dedupe.
+  return isAcceptedAgentDedupePayload(context.dedupe.get(`agent:${runId}`)?.payload)
+    ? "agent"
+    : undefined;
+}
+
+function isPreRegistrationAbortedAgentDedupePayload(payload: unknown): payload is {
+  agentId?: unknown;
+  runId?: unknown;
+  sessionKey?: unknown;
+  status: "timeout";
+  stopReason?: unknown;
+} {
+  const stopReason = (payload as { stopReason?: unknown } | null)?.stopReason;
+  return (
+    typeof payload === "object" &&
+    payload !== null &&
+    (payload as { status?: unknown }).status === "timeout" &&
+    (stopReason === "rpc" || stopReason === "stop")
+  );
+}
+
+export function isPreRegistrationAbortedAgentDedupeEntryForSession(params: {
+  entry: ReturnType<typeof readGatewayDedupeEntry> | undefined;
+  runId: string;
+  sessionKey?: string;
+  alternateSessionKeys?: Array<string | undefined>;
+  agentId?: string;
+}): boolean {
+  if (!params.entry?.ok || !isPreRegistrationAbortedAgentDedupePayload(params.entry.payload)) {
+    return false;
+  }
+  const payload = params.entry.payload;
+  const payloadRunId = normalizeOptionalString(payload.runId);
+  if (payloadRunId && payloadRunId !== params.runId) {
+    return false;
+  }
+  const payloadSessionKey = normalizeOptionalString(payload.sessionKey);
+  const payloadAgentId = normalizeOptionalString(payload.agentId);
+  if (params.agentId && payloadAgentId !== params.agentId) {
+    return false;
+  }
+  const expectedSessionKeys = new Set(
+    [params.sessionKey, ...(params.alternateSessionKeys ?? [])].filter((value): value is string =>
+      Boolean(value?.trim()),
+    ),
+  );
+  return (
+    !payloadSessionKey ||
+    expectedSessionKeys.size === 0 ||
+    expectedSessionKeys.has(payloadSessionKey)
+  );
+}
+
+export function setGatewayDedupeEntries(params: {
+  dedupe: GatewayRequestContext["dedupe"];
+  keys: readonly string[];
+  entry: Parameters<typeof setGatewayDedupeEntry>[0]["entry"];
+  startNewAttempt?: true;
+  session?: Parameters<typeof setGatewayDedupeEntry>[0]["session"];
+}): void {
+  for (const key of params.keys) {
+    setGatewayDedupeEntry({ ...params, key });
+  }
+}
+
+export function buildAbortedAgentPayload(
+  runId: string,
+  stopReason: string,
+  session?: { agentId?: string; sessionKey?: string },
+) {
+  return {
+    runId,
+    ...(session?.agentId ? { agentId: session.agentId } : {}),
+    ...(session?.sessionKey ? { sessionKey: session.sessionKey } : {}),
+    status: "timeout" as const,
+    summary: "aborted",
+    stopReason,
+    timeoutPhase: "queue" as const,
+    providerStarted: false,
+  };
+}
+
+export function setAbortedAgentDedupeEntries(params: {
+  dedupe: GatewayRequestContext["dedupe"];
+  keys: readonly string[];
+  agentId?: string;
+  sessionKey?: string;
+  runId: string;
+  stopReason: string;
+  session?: Parameters<typeof setGatewayDedupeEntry>[0]["session"];
+}): void {
+  setGatewayDedupeEntries({
+    ...params,
+    entry: {
+      ts: Date.now(),
+      ok: true,
+      payload: buildAbortedAgentPayload(params.runId, params.stopReason, params),
+    },
+  });
+}
+
+export function replayAgentTurnIfCached(params: {
+  acceptedOnly?: boolean;
+  preflight: { agentDedupeKeys: readonly string[]; runId: string };
+  context: Pick<GatewayRequestContext, "dedupe" | "chatAbortControllers">;
+  io: AgentTurnIo;
+}): boolean {
+  const { agentDedupeKeys, runId } = params.preflight;
+  const cached = readGatewayDedupeEntry({
+    dedupe: params.context.dedupe,
+    keys: agentDedupeKeys,
+  });
+  if (!cached) {
+    return false;
+  }
+  if (params.acceptedOnly && !(cached.ok && isAcceptedAgentDedupePayload(cached.payload))) {
+    return false;
+  }
+  if (
+    params.acceptedOnly &&
+    isAcceptedAgentDedupePayload(cached.payload) &&
+    !cached.payload.reservationId &&
+    !params.context.chatAbortControllers.has(runId)
+  ) {
+    // Durable private input owns recovery after the accepted controller is gone.
+    return false;
+  }
+  if (cached.ok && isAcceptedAgentDedupePayload(cached.payload)) {
+    const cachedRunId = normalizeOptionalString(cached.payload.runId) ?? runId;
+    const cachedSessionKey = normalizeOptionalString(cached.payload.sessionKey);
+    const cachedAgentId = normalizeOptionalString(cached.payload.agentId);
+    const cachedRuntime = asOptionalRecord(cached.payload.runtime);
+    const admissionPending = typeof cached.payload.reservationId === "string";
+    params.io.emitAcceptance(
+      [
+        true,
+        {
+          runId: cachedRunId,
+          status: "in_flight" as const,
+          ...(cachedSessionKey ? { sessionKey: cachedSessionKey } : {}),
+          ...(cachedAgentId ? { agentId: cachedAgentId } : {}),
+          ...(cachedRuntime ? { runtime: cachedRuntime } : {}),
+          ...(admissionPending ? { admissionPending: true } : {}),
+        },
+        undefined,
+      ],
+      { cached: true, runId: cachedRunId },
+    );
+  } else {
+    params.io.emitAcceptance([cached.ok, cached.payload, cached.error], {
+      cached: true,
+      ...(cached.incognito && cached.error ? { errorMessage: "Incognito agent error." } : {}),
+    });
+  }
+  return true;
+}

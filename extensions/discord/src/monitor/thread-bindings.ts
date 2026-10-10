@@ -8,7 +8,7 @@ export {
   formatThreadBindingDurationLabel,
   resolveThreadBindingIntroText,
   resolveThreadBindingThreadName,
-} from "./thread-bindings.messages.js";
+} from "openclaw/plugin-sdk/conversation-runtime";
 export {
   resolveThreadBindingPersona,
   resolveThreadBindingPersonaFromRecord,
@@ -21,7 +21,6 @@ export {
 } from "./thread-bindings.config.js";
 
 export {
-  isRecentlyUnboundThreadWebhookMessage,
   resolveThreadBindingIdleTimeoutMs,
   resolveThreadBindingInactivityExpiresAt,
   resolveThreadBindingMaxAgeExpiresAt,
@@ -34,15 +33,14 @@ export {
   listThreadBindingsForAccount,
   reconcileAcpThreadBindingsOnStartup,
   setThreadBindingIdleTimeoutBySessionKey,
+  setThreadBindingIdleTimeoutBySessionKeyAsync,
   setThreadBindingMaxAgeBySessionKey,
+  setThreadBindingMaxAgeBySessionKeyAsync,
   unbindThreadBindingsBySessionKey,
+  unbindThreadBindingsBySessionKeyAsync,
+  type AcpThreadBindingReconciliationResult,
 } from "./thread-bindings.lifecycle.js";
 
-export type { AcpThreadBindingReconciliationResult } from "./thread-bindings.lifecycle.js";
+export { createThreadBindingManager, getThreadBindingManager } from "./thread-bindings.manager.js";
 
-export {
-  __testing,
-  createNoopThreadBindingManager,
-  createThreadBindingManager,
-  getThreadBindingManager,
-} from "./thread-bindings.manager.js";
+export { createNoopThreadBindingManager } from "./thread-bindings.session-adapter.js";

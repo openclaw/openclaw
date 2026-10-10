@@ -1,33 +1,48 @@
-import {
-  definePluginEntry,
-  type ProviderResolveDynamicModelContext,
-  type ProviderRuntimeModel,
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type {
+  ProviderDefaultThinkingPolicyContext,
+  ProviderResolveDynamicModelContext,
+  ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { findNormalizedProviderValue } from "openclaw/plugin-sdk/provider-auth";
+import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import {
+  buildPassthroughGeminiSanitizingReplayPolicy,
   DEFAULT_CONTEXT_TOKENS,
-  PASSTHROUGH_GEMINI_REPLAY_HOOKS,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
-  getOpenRouterModelCapabilities,
+  getLoadedOpenRouterModelCapabilities,
   loadOpenRouterModelCapabilities,
 } from "openclaw/plugin-sdk/provider-stream-family";
+import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { buildOpenRouterImageGenerationProvider } from "./image-generation-provider.js";
 import { openrouterMediaUnderstandingProvider } from "./media-understanding-provider.js";
-import { buildOpenRouterMusicGenerationProvider } from "./music-generation-provider.js";
-import { applyOpenrouterConfig, OPENROUTER_DEFAULT_MODEL_REF } from "./onboard.js";
 import {
+  isOpenRouterMistralModelId,
+  normalizeOpenRouterApiModelId,
+  normalizeOpenRouterModelFamilyId,
+} from "./models.js";
+import { buildOpenRouterMusicGenerationProvider } from "./music-generation-provider.js";
+import { createOpenRouterOAuthAuthMethod } from "./oauth.js";
+import { applyOpenrouterConfig, OPENROUTER_DEFAULT_MODEL_REF } from "./onboard.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
+import {
+  buildOpenrouterLiveProvider,
   buildOpenrouterProvider,
   isOpenRouterProxyReasoningUnsupportedModel,
   normalizeOpenRouterBaseUrl,
   OPENROUTER_BASE_URL,
+  resolveOpenRouterApiBaseUrl,
 } from "./provider-catalog.js";
+import { resolveOpenRouterExtraParamsForTransport } from "./provider-routing.js";
 import { buildOpenRouterSpeechProvider } from "./speech-provider.js";
 import { wrapOpenRouterProviderStream } from "./stream.js";
-import {
-  resolveOpenRouterThinkingProfile,
-  supportsOpenRouterXHighThinking,
-} from "./thinking-policy.js";
+import { resolveOpenRouterThinkingProfile } from "./thinking-policy.js";
+import { inspectOpenRouterToolSchemas, normalizeOpenRouterToolSchemas } from "./tool-schemas.js";
+import { fetchOpenRouterUsage } from "./usage.js";
 import {
   buildOpenRouterVideoGenerationProvider,
   listOpenRouterVideoModelCatalog,
@@ -35,51 +50,219 @@ import {
 
 const PROVIDER_ID = "openrouter";
 const OPENROUTER_DEFAULT_MAX_TOKENS = 8192;
-const OPENROUTER_CACHE_TTL_MODEL_PREFIXES = [
-  "anthropic/",
-  "deepseek/",
-  "moonshot/",
-  "moonshotai/",
-  "zai/",
-] as const;
+const OPENROUTER_FUSION_MODEL_ID = "openrouter/fusion";
+const OPENROUTER_CACHE_TTL_MODEL_FAMILY = /^(?:anthropic|deepseek|moonshot(?:ai)?|z-?ai)\//;
+const MAX_PROMPT_MODEL_ID_DISPLAY_CHARS = 256;
+
+// Configured rows keep their sizing and opt-outs, but the OpenRouter model
+// catalog owns effort capabilities on its canonical transport.
+function isOpenRouterCatalogRoute(route: {
+  api?: string | null;
+  baseUrl?: string | null;
+}): boolean {
+  return (
+    (route.api == null || route.api === "openai-completions") &&
+    // Target-provider resolution may compare routes before normalizing a
+    // legacy URL, so only the exact catalog route can borrow its metadata.
+    (route.baseUrl == null || route.baseUrl === OPENROUTER_BASE_URL)
+  );
+}
+
+function withOpenRouterCatalogThinking(
+  ctx: ProviderDefaultThinkingPolicyContext,
+): ProviderDefaultThinkingPolicyContext {
+  if (
+    ctx.thinkingLevelMap ||
+    ctx.compat?.supportsReasoningEffort !== undefined ||
+    ctx.compat?.supportedReasoningEfforts !== undefined ||
+    !isOpenRouterCatalogRoute(ctx)
+  ) {
+    return ctx;
+  }
+  // Thinking profiles run on synchronous session reads, so they only consume
+  // catalog capabilities already loaded in memory.
+  const capabilities = getLoadedOpenRouterModelCapabilities(
+    normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId,
+  );
+  if (!capabilities?.compat && !capabilities?.thinkingLevelMap) {
+    return ctx;
+  }
+  return {
+    ...ctx,
+    compat: { ...capabilities.compat, ...ctx.compat },
+    ...(capabilities.thinkingLevelMap ? { thinkingLevelMap: capabilities.thinkingLevelMap } : {}),
+  };
+}
+
+type OpenRouterFusionPromptContext = {
+  config?: OpenClawConfig;
+  agentId?: string;
+  modelId: string;
+};
+
+type OpenRouterFusionPromptContribution = {
+  dynamicSuffix?: string;
+};
 
 function normalizeOpenRouterResolvedModel<T extends ProviderRuntimeModel>(model: T): T | undefined {
   const normalizedBaseUrl = normalizeOpenRouterBaseUrl(model.baseUrl);
+  const normalizedId = normalizeOpenRouterApiModelId(model.id);
   const reasoning = isOpenRouterProxyReasoningUnsupportedModel(model.id) ? false : model.reasoning;
   if (
     (!normalizedBaseUrl || normalizedBaseUrl === model.baseUrl) &&
+    (!normalizedId || normalizedId === model.id) &&
     reasoning === model.reasoning
   ) {
     return undefined;
   }
   return {
     ...model,
+    ...(normalizedId ? { id: normalizedId } : {}),
     ...(normalizedBaseUrl ? { baseUrl: normalizedBaseUrl } : {}),
     reasoning,
   };
 }
 
-export default definePluginEntry({
+function sanitizePromptModelId(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = truncateUtf16Safe(
+    value.replace(/[\p{Cc}\u2028\u2029]/gu, "").trim(),
+    MAX_PROMPT_MODEL_ID_DISPLAY_CHARS,
+  );
+  return normalized || undefined;
+}
+
+function openRouterModelConfigKey(modelId: string): string {
+  const providerPrefix = `${PROVIDER_ID}/`;
+  return modelId.trim().toLowerCase().startsWith(providerPrefix)
+    ? modelId
+    : `${PROVIDER_ID}/${modelId}`;
+}
+
+function findConfiguredOpenRouterModelParams(
+  ctx: OpenRouterFusionPromptContext,
+): Record<string, unknown> | undefined {
+  const configuredModels = ctx.config?.agents?.defaults?.models;
+  if (!configuredModels) {
+    return undefined;
+  }
+
+  const normalizedModelId = normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId;
+  const directKeys = [
+    openRouterModelConfigKey(ctx.modelId),
+    openRouterModelConfigKey(normalizedModelId),
+    `${PROVIDER_ID}/${ctx.modelId}`,
+    `${PROVIDER_ID}/${normalizedModelId}`,
+  ];
+  for (const key of directKeys) {
+    const params = readRecord(configuredModels[key]?.params);
+    if (params) {
+      return params;
+    }
+  }
+
+  for (const [rawKey, entry] of Object.entries(configuredModels)) {
+    const slashIndex = rawKey.indexOf("/");
+    if (slashIndex <= 0) {
+      continue;
+    }
+    const provider = rawKey.slice(0, slashIndex).trim().toLowerCase();
+    const modelId = rawKey.slice(slashIndex + 1);
+    const candidateModelId = normalizeOpenRouterApiModelId(modelId) ?? modelId;
+    if (
+      provider === PROVIDER_ID &&
+      candidateModelId.trim().toLowerCase() === normalizedModelId.trim().toLowerCase()
+    ) {
+      return readRecord(entry.params);
+    }
+  }
+
+  return undefined;
+}
+
+function resolveFusionExtraBody(
+  ctx: OpenRouterFusionPromptContext,
+): Record<string, unknown> | undefined {
+  const params = {
+    ...readRecord(ctx.config?.agents?.defaults?.params),
+    ...findConfiguredOpenRouterModelParams(ctx),
+    ...(ctx.agentId ? readRecord(resolveAgentConfig(ctx.config ?? {}, ctx.agentId)?.params) : {}),
+  };
+  if (Object.keys(params).length === 0) {
+    return undefined;
+  }
+  return readRecord(Object.hasOwn(params, "extra_body") ? params.extra_body : params.extraBody);
+}
+
+function resolveOpenRouterFusionPromptContribution(
+  ctx: OpenRouterFusionPromptContext,
+): OpenRouterFusionPromptContribution | undefined {
+  const normalizedModelId = normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId;
+  if (normalizedModelId !== OPENROUTER_FUSION_MODEL_ID) {
+    return undefined;
+  }
+
+  const extraBody = resolveFusionExtraBody(ctx);
+  const fusionPlugin = Array.isArray(extraBody?.plugins)
+    ? extraBody.plugins.map(readRecord).find((plugin) => plugin?.id === "fusion")
+    : undefined;
+  if (!fusionPlugin || fusionPlugin.enabled === false) {
+    return undefined;
+  }
+
+  const analysisModels = Array.isArray(fusionPlugin.analysis_models)
+    ? fusionPlugin.analysis_models
+        .map(sanitizePromptModelId)
+        .filter((model): model is string => Boolean(model))
+    : [];
+  const finalModel = sanitizePromptModelId(fusionPlugin.model);
+  const lines = [
+    "## OpenRouter Fusion Configuration",
+    "The active OpenRouter Fusion request is configured with these non-secret Fusion plugin fields.",
+    analysisModels.length > 0 ? `Analysis models: ${analysisModels.join(", ")}.` : undefined,
+    finalModel ? `Final Fusion model: ${finalModel}.` : undefined,
+  ].filter((line): line is string => Boolean(line));
+
+  return lines.length > 2 ? { dynamicSuffix: lines.join("\n") } : undefined;
+}
+
+export default defineSingleProviderPluginEntry({
   id: "openrouter",
   name: "OpenRouter Provider",
   description: "Bundled OpenRouter provider plugin",
-  register(api) {
+  manifest,
+  provider() {
     function buildDynamicOpenRouterModel(
       ctx: ProviderResolveDynamicModelContext,
     ): ProviderRuntimeModel {
-      const capabilities = getOpenRouterModelCapabilities(ctx.modelId);
+      const apiModelId = normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId;
+      const capabilities = getLoadedOpenRouterModelCapabilities(apiModelId);
       return {
         id: ctx.modelId,
         name: capabilities?.name ?? ctx.modelId,
         api: "openai-completions",
         provider: PROVIDER_ID,
-        baseUrl: OPENROUTER_BASE_URL,
+        baseUrl: resolveOpenRouterApiBaseUrl(
+          ctx.providerConfig?.baseUrl ?? ctx.config?.models?.providers?.openrouter?.baseUrl,
+        ),
         reasoning:
           (capabilities?.reasoning ?? false) &&
           !isOpenRouterProxyReasoningUnsupportedModel(ctx.modelId),
         input: capabilities?.input ?? ["text"],
-        ...(capabilities?.supportsTools !== undefined
-          ? { compat: { supportsTools: capabilities.supportsTools } }
+        ...(capabilities?.compat || capabilities?.supportsTools !== undefined
+          ? {
+              compat: {
+                ...capabilities.compat,
+                ...(capabilities.supportsTools !== undefined
+                  ? { supportsTools: capabilities.supportsTools }
+                  : {}),
+              },
+            }
+          : {}),
+        ...(capabilities?.thinkingLevelMap
+          ? { thinkingLevelMap: capabilities.thinkingLevelMap }
           : {}),
         cost: capabilities?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: capabilities?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
@@ -87,62 +270,70 @@ export default definePluginEntry({
       };
     }
 
-    function isOpenRouterCacheTtlModel(modelId: string): boolean {
-      return OPENROUTER_CACHE_TTL_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
-    }
-
-    api.registerProvider({
-      id: PROVIDER_ID,
+    return {
       label: "OpenRouter",
       docsPath: "/providers/models",
-      envVars: ["OPENROUTER_API_KEY"],
-      auth: [
-        createProviderApiKeyAuthMethod({
-          providerId: PROVIDER_ID,
-          methodId: "api-key",
-          label: "OpenRouter API key",
-          hint: "API key",
-          optionKey: "openrouterApiKey",
-          flagName: "--openrouter-api-key",
-          envVar: "OPENROUTER_API_KEY",
-          promptMessage: "Enter OpenRouter API key",
-          defaultModel: OPENROUTER_DEFAULT_MODEL_REF,
-          expectedProviders: ["openrouter"],
-          applyConfig: (cfg) => applyOpenrouterConfig(cfg),
-          wizard: {
-            choiceId: "openrouter-api-key",
-            choiceLabel: "OpenRouter API key",
-            groupId: "openrouter",
-            groupLabel: "OpenRouter",
-            groupHint: "API key",
-            onboardingScopes: ["text-inference", "music-generation"],
-          },
-        }),
-      ],
+      manifestAuth: {
+        hint: "API key",
+        defaultModel: OPENROUTER_DEFAULT_MODEL_REF,
+        applyConfig: applyOpenrouterConfig,
+      },
+      extraAuth: [createOpenRouterOAuthAuthMethod()],
       catalog: {
         order: "simple",
         run: async (ctx) => {
-          const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
+          const auth = ctx.resolveProviderApiKey(PROVIDER_ID);
+          const apiKey = auth.apiKey;
           if (!apiKey) {
             return null;
           }
-          return {
-            provider: {
-              ...buildOpenrouterProvider(),
-              apiKey,
-            },
-          };
+          const providerConfig = ctx.config.models?.providers?.openrouter;
+          return await runLiveProviderCatalog({
+            providerId: PROVIDER_ID,
+            profileId: auth.profileId,
+            run: async () => ({
+              provider: await buildOpenrouterLiveProvider({
+                apiKey,
+                discoveryApiKey: auth.discoveryApiKey,
+                baseUrl: providerConfig?.baseUrl,
+                request: providerConfig?.request,
+              }),
+            }),
+          });
+        },
+        staticRun: async (ctx) => {
+          // Configured OpenRouter models complete from this catalog through synchronous
+          // capability reads, and thinking levels are chosen from that row. Load capabilities
+          // first (persisted catalog, or one fetch) only when a caller selected OpenRouter.
+          if (ctx.providerIds?.includes(PROVIDER_ID)) {
+            await loadOpenRouterModelCapabilities(OPENROUTER_DEFAULT_MODEL_REF);
+          }
+          return { provider: buildOpenrouterProvider() };
         },
       },
-      staticCatalog: {
-        order: "simple",
-        run: async () => ({
-          provider: buildOpenrouterProvider(),
-        }),
+      resolveDynamicModel: buildDynamicOpenRouterModel,
+      // Resolve the catalog model even when a configured row already exists.
+      preferRuntimeResolvedModel: (ctx) => {
+        const configuredProvider = findNormalizedProviderValue(
+          ctx.config?.models?.providers,
+          PROVIDER_ID,
+        );
+        const requestedId = normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId;
+        const configuredModel = configuredProvider?.models?.find(
+          (model) => (normalizeOpenRouterApiModelId(model.id) ?? model.id) === requestedId,
+        );
+        return (
+          configuredModel !== undefined &&
+          isOpenRouterCatalogRoute({
+            api: configuredModel.api ?? configuredProvider?.api,
+            baseUrl: configuredModel.baseUrl ?? configuredProvider?.baseUrl,
+          })
+        );
       },
-      resolveDynamicModel: (ctx) => buildDynamicOpenRouterModel(ctx),
       prepareDynamicModel: async (ctx) => {
-        await loadOpenRouterModelCapabilities(ctx.modelId);
+        await loadOpenRouterModelCapabilities(
+          normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId,
+        );
       },
       normalizeConfig: ({ providerConfig }) => {
         const normalizedBaseUrl = normalizeOpenRouterBaseUrl(providerConfig.baseUrl);
@@ -151,23 +342,63 @@ export default definePluginEntry({
           : undefined;
       },
       normalizeResolvedModel: ({ model }) => normalizeOpenRouterResolvedModel(model),
-      normalizeTransport: ({ api, baseUrl }) => {
+      normalizeTransport: ({ api: apiLocal, baseUrl }) => {
         const normalizedBaseUrl = normalizeOpenRouterBaseUrl(baseUrl);
         return normalizedBaseUrl && normalizedBaseUrl !== baseUrl
           ? {
-              api,
+              api: apiLocal,
               baseUrl: normalizedBaseUrl,
             }
           : undefined;
       },
-      ...PASSTHROUGH_GEMINI_REPLAY_HOOKS,
+      classifyFailoverReason: ({ provider, errorMessage }) => {
+        if (provider?.trim().toLowerCase() !== PROVIDER_ID) {
+          return undefined;
+        }
+        if (
+          /\b(?:api\s+key\s+budget|key)\s+limit\s*(?:exceeded|reached|hit)\b/i.test(errorMessage)
+        ) {
+          return "billing";
+        }
+        return /provider returned error/i.test(errorMessage) ? "timeout" : undefined;
+      },
+      buildReplayPolicy: ({ modelId }) => ({
+        ...buildPassthroughGeminiSanitizingReplayPolicy(modelId),
+        // Mistral requires 9-character base62 tool-call ids even through OpenRouter (#58012).
+        ...(isOpenRouterMistralModelId(modelId)
+          ? { sanitizeToolCallIds: true, toolCallIdMode: "strict9" as const }
+          : {}),
+      }),
+      normalizeToolSchemas: normalizeOpenRouterToolSchemas,
+      inspectToolSchemas: inspectOpenRouterToolSchemas,
       resolveReasoningOutputMode: () => "native",
-      supportsXHighThinking: ({ modelId }) => supportsOpenRouterXHighThinking(modelId),
-      resolveThinkingProfile: ({ modelId }) => resolveOpenRouterThinkingProfile(modelId),
+      resolveThinkingProfile: (ctx) =>
+        resolveOpenRouterThinkingProfile(ctx.modelId, withOpenRouterCatalogThinking(ctx)),
       isModernModelRef: () => true,
+      resolveSystemPromptContribution: resolveOpenRouterFusionPromptContribution,
+      extraParamsForTransport: resolveOpenRouterExtraParamsForTransport,
       wrapStreamFn: wrapOpenRouterProviderStream,
-      isCacheTtlEligible: (ctx) => isOpenRouterCacheTtlModel(ctx.modelId),
-    });
+      wrapSimpleCompletionStreamFn: wrapOpenRouterProviderStream,
+      isCacheTtlEligible: ({ modelId }) =>
+        OPENROUTER_CACHE_TTL_MODEL_FAMILY.test(normalizeOpenRouterModelFamilyId(modelId) ?? ""),
+      resolveUsageAuth: async (ctx) => {
+        const apiKey = ctx.resolveApiKeyFromConfigAndStore({
+          envDirect: [ctx.env.OPENROUTER_API_KEY],
+        });
+        return apiKey ? { token: apiKey } : null;
+      },
+      fetchUsageSnapshot: async (ctx) =>
+        await fetchOpenRouterUsage({
+          token: ctx.token,
+          baseUrl: ctx.config.models?.providers?.openrouter?.baseUrl,
+          request: ctx.config.models?.providers?.openrouter?.request,
+          timeoutMs: ctx.timeoutMs,
+          signal: ctx.signal,
+          fetchFn: ctx.fetchFn,
+        }),
+    };
+  },
+  register(api) {
     api.registerMediaUnderstandingProvider(openrouterMediaUnderstandingProvider);
     api.registerImageGenerationProvider(buildOpenRouterImageGenerationProvider());
     api.registerMusicGenerationProvider(buildOpenRouterMusicGenerationProvider());

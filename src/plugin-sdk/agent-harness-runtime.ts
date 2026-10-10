@@ -2,64 +2,226 @@
 // Keep heavyweight tool construction out of this module so harness imports can
 // register quickly inside gateway startup and Docker e2e runs.
 
+import { shouldLoadRequesterScopedMcpHarnessRuntime } from "../agents/agent-bundle-mcp-runtime-shared.js";
+import {
+  mergeAgentRunAttemptTerminal,
+  normalizeAgentRunAttemptTerminal,
+  projectAgentRunAttemptTerminal,
+  setAgentRunAttemptTerminalFailure,
+} from "../agents/agent-run-terminal-outcome.js";
 import type {
   CodexBundleMcpThreadConfig,
   LoadCodexBundleMcpThreadConfigParams,
 } from "../agents/codex-mcp-config.types.js";
-import type { EmbeddedRunAttemptResult } from "../agents/pi-embedded-runner/run/types.js";
+import { resolveActiveEmbeddedRunSessionId } from "../agents/embedded-agent-runner/active-run-projections.js";
+import type {
+  EmbeddedRunAttemptParams as CoreEmbeddedRunAttemptParams,
+  EmbeddedRunAttemptResult,
+} from "../agents/embedded-agent-runner/run/types.js";
 import {
-  abortEmbeddedPiRun,
+  abortAndDrainEmbeddedAgentRun,
+  abortEmbeddedAgentRun,
   clearActiveEmbeddedRun,
-  queueEmbeddedPiMessageWithOutcome,
-  resolveActiveEmbeddedRunSessionId,
+  queueEmbeddedAgentMessageWithOutcome,
   setActiveEmbeddedRun,
-  type EmbeddedPiQueueMessageOptions,
-} from "../agents/pi-embedded-runner/runs.js";
-import { formatToolDetail, resolveToolDisplay } from "../agents/tool-display.js";
-import { redactToolDetail } from "../logging/redact.js";
-import { truncateUtf16Safe } from "../utils.js";
+  type EmbeddedAgentQueueMessageOptions,
+} from "../agents/embedded-agent-runner/runs.js";
+import { runStructuredInput } from "../agents/harness/structured-input-execution.js";
+import {
+  compileStructuredInputForm,
+  compileStructuredInputQuestions,
+  compileStructuredInputUrl,
+  isStructuredInputRecord,
+  snapshotStructuredInput,
+} from "../agents/harness/structured-input.js";
+import type { SandboxFsBridge } from "../agents/sandbox/fs-bridge.js";
+import { createToolPolicyMatcher } from "../agents/tool-policy-match.js";
+import { expandToolGroups } from "../agents/tool-policy-shared.js";
+import {
+  buildWatchedSessionsPromptLines,
+  prepareWatchedSessionsPrompt,
+  prepareWatchedSessionsPromptAsync,
+} from "../agents/watched-sessions-prompt.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveExecModePolicy } from "../infra/exec-approvals-core.js";
+import { maxAsk, minSecurity } from "../infra/exec-approvals-policy.js";
+import type { ImageContent } from "../llm/types.js";
+import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 
-export const TOOL_PROGRESS_OUTPUT_MAX_CHARS = 8_000;
+export type {
+  AgentExecutorBinding,
+  AgentExecutorContext,
+  AgentExecutorController,
+} from "../plugins/agent-executor-controller.types.js";
+export { resolveAgentExecutorController } from "../plugins/agent-executor-controller.js";
 
-export type { AgentMessage } from "@earendil-works/pi-agent-core";
+export { projectAgentActivityItem } from "../agents/agent-activity-presentation.js";
+export { projectAgentToolActivity } from "../infra/agent-activity-events.js";
+
+export {
+  formatToolProgressOutput,
+  TOOL_PROGRESS_OUTPUT_MAX_CHARS,
+} from "../agents/harness/projection-tool-output.js";
+
+/** Core exec mode algebra for plugin-owned policy adapters. */
+export const execPolicy = Object.freeze({ resolveExecModePolicy, minSecurity, maxAsk });
+
+/**
+ * Renders the Watched Sessions prompt block for plugin-owned harness prompts.
+ * Harness runtimes that assemble their own instruction layers (e.g. Codex)
+ * must surface the same watched-session facts as the embedded prompt, or the
+ * model keeps refusing cross-session questions on those runtimes (openclaw#114797).
+ * @deprecated Await prepareWatchedSessionsHarnessContext with current host authority.
+ */
+export function buildWatchedSessionsHarnessContext(params: {
+  config?: OpenClawConfig;
+  sessionKey?: string;
+  sandboxed?: boolean;
+  toolNames: Iterable<string>;
+  capabilityToolNames?: Iterable<string>;
+}): string | undefined {
+  const lines = buildWatchedSessionsPromptLines(
+    prepareWatchedSessionsPrompt({ enabled: true, ...params }),
+  );
+  return lines.length > 0 ? lines.join("\n").trimEnd() : undefined;
+}
+
+/** Prepares current watched-session facts through the worker before rendering them. */
+export async function prepareWatchedSessionsHarnessContext(
+  params: Parameters<typeof buildWatchedSessionsHarnessContext>[0] & {
+    assertCurrent: () => void;
+  },
+): Promise<string | undefined> {
+  const prepared = await prepareWatchedSessionsPromptAsync({ enabled: true, ...params });
+  params.assertCurrent();
+  const lines = buildWatchedSessionsPromptLines(prepared);
+  return lines.length > 0 ? lines.join("\n").trimEnd() : undefined;
+}
+
+export { FAST_MODE_AUTO_PROGRESS_KIND } from "../auto-reply/reply-payload.js";
+export { buildTemporalContextText } from "../agents/date-time.js";
+export { projectProgressCardChannelUpdate } from "../session-cards/progress-card-channel-summary.js";
+export {
+  isDeliveredMessageToolOnlySourceReplyResult,
+  isDeliveredMessagingToolResult,
+} from "../agents/embedded-agent-message-tool-source-reply.js";
+export { formatFastModeAutoProgressText, resolveFastModeForElapsed } from "../shared/fast-mode.js";
+export type { AgentMessage } from "../agents/runtime/index.js";
+export type { FastModeAutoProgressState } from "../shared/fast-mode.js";
 export type {
   AgentHarness,
+  AgentHarnessV2,
+  AgentHarnessAuthBindingFingerprintParams,
   AgentHarnessAttemptParams,
+  AgentHarnessAttemptParamsV2,
   AgentHarnessAttemptResult,
   AgentHarnessCompactParams,
   AgentHarnessCompactResult,
+  AgentHarnessNativeCompaction,
+  AgentHarnessNativeCompactionParams,
+  AgentHarnessNativeCompactionRequest,
+  AgentHarnessModelCatalogParams,
+  AgentHarnessRegistrationOptions,
   AgentHarnessDeliveryDefaults,
   AgentHarnessResultClassification,
+  AgentHarnessRuntimeArtifactBinding,
   AgentHarnessSideQuestionParams,
+  AgentHarnessSideQuestionParamsV2,
   AgentHarnessSideQuestionResult,
+  AgentHarnessSettledTurnFinalizationResult,
   AgentHarnessResetParams,
+  AgentHarnessSessionDeletionParams,
+  AgentHarnessSessionDeletionMutation,
+  AgentHarnessSessionForkFailureCode,
+  AgentHarnessSessionForkParams,
+  AgentHarnessSessionForkResult,
   AgentHarnessSupport,
   AgentHarnessSupportContext,
 } from "../agents/harness/types.js";
+export {
+  AgentHarnessPreflightError,
+  AgentHarnessSessionCleanupError,
+  AgentHarnessSessionSupersededError,
+} from "../agents/harness/errors.js";
+export { projectSettledTurnFinalizationAttemptResult } from "../agents/harness/settled-turn-finalization-result.js";
+export const agentHarnessAttemptTerminal = {
+  merge: mergeAgentRunAttemptTerminal,
+  normalize: normalizeAgentRunAttemptTerminal,
+  project: projectAgentRunAttemptTerminal,
+  setFailure: setAgentRunAttemptTerminalFailure,
+};
+export { projectAgentHarnessTranscriptMessageForDisplay } from "../agents/harness/transcript-visibility.js";
+export { isOpenClawRuntimeContextCustomMessage } from "../agents/internal-runtime-context.js";
+export { restorePreparedUserTurnOperationalMetaForRuntime } from "../sessions/user-turn-transcript.metadata.js";
+export { fingerprintResolvedAuthProfileCredential } from "../agents/execution-auth-binding.js";
 export type {
-  EmbeddedRunAttemptParams,
-  EmbeddedRunAttemptResult,
-} from "../agents/pi-embedded-runner/run/types.js";
+  AgentHarnessUserInputAnswers,
+  AgentHarnessUserInputOption,
+  AgentHarnessUserInputQuestion,
+} from "../agents/harness/user-input-types.js";
+export type { AgentHarnessUserInputPromptOptions } from "../agents/harness/user-input-bridge.js";
+export type { AgentHarnessQuestionGatewayCall } from "../agents/harness/gateway-question-dispatch.js";
+type EmbeddedRunAttemptParamsBase = Omit<
+  CoreEmbeddedRunAttemptParams,
+  | "admittedRunContext"
+  | "disableToolSearch"
+  | "sessionReadScopeKey"
+  | "authoredContextTokenCap"
+  | "contextEngineLogicalTurnLease"
+  | "onContextEngineTurnCandidate"
+  | "pluginHarnessToolPolicySafeDeniedTools"
+  | "trajectoryRecorder"
+> & {
+  /** Per-model context cap authored by the operator and forwarded to harness runtimes. */
+  authoredContextTokenCap?: number;
+  /** Audited exact denies that the plugin harness must enforce against native equivalents. */
+  pluginHarnessToolPolicySafeDeniedTools?: readonly string[];
+};
+/**
+ * @deprecated Use EmbeddedRunAttemptParamsV2. The optional capability keeps
+ * existing harness source compatible through 2026-10-12.
+ */
+export type EmbeddedRunAttemptParams = EmbeddedRunAttemptParamsBase & {
+  hostCapabilities?: import("../agents/harness/host-capability-types.js").AgentHarnessHostCapabilities;
+};
+/** Current host-prepared attempt contract for agent harnesses. */
+export type EmbeddedRunAttemptParamsV2 = EmbeddedRunAttemptParamsBase & {
+  hostCapabilities: import("../agents/harness/host-capability-types.js").AgentHarnessHostCapabilities;
+};
+export type { EmbeddedRunAttemptResult };
 export type {
   ContextEngine as HarnessContextEngine,
+  ContextEngineHostCapability,
+  ContextEngineOperation,
   ContextEngineProjection,
 } from "../context-engine/types.js";
-export type { CompactEmbeddedPiSessionParams } from "../agents/pi-embedded-runner/compact.js";
-export type { EmbeddedPiCompactResult } from "../agents/pi-embedded-runner/types.js";
+export type { CompactEmbeddedAgentSessionParams } from "../agents/embedded-agent-runner/compact.js";
+export type { EmbeddedAgentCompactResult } from "../agents/embedded-agent-runner/types.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
 export type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
-} from "../agents/pi-embedded-messaging.types.js";
+} from "../agents/embedded-agent-messaging.types.js";
 export type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
 export type { AgentApprovalEventData, AgentEventPayload } from "../infra/agent-events.js";
 export type { ExecApprovalDecision } from "../infra/exec-approvals.js";
+/**
+ * Plugin exec-review contract: low/medium-risk `allow-once` permits one run;
+ * `ask` routes to human approval. Consumers must handle `deny` explicitly:
+ * do not run or escalate, and return the rationale and rejection guidance to the
+ * agent. The configured exec reviewer maps provider failures, timeouts, and
+ * invalid responses to `ask`, and detected reviewer-directed injection to `deny`.
+ */
+export type {
+  ExecAutoReviewDecision,
+  ExecAutoReviewInput,
+  ExecAutoReviewer,
+} from "../infra/exec-auto-review.js";
 export type { NormalizedUsage } from "../agents/usage.js";
 export type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareContext,
   AgentToolResultMiddlewareEvent,
-  AgentToolResultMiddlewareHarness,
   AgentToolResultMiddlewareOptions,
   AgentToolResultMiddlewareResult,
   AgentToolResultMiddlewareRuntime,
@@ -85,12 +247,15 @@ export { formatApprovalDisplayPath } from "../infra/approval-display-paths.js";
 export { buildAgentHookContextChannelFields } from "../plugins/hook-agent-context.js";
 export { emitAgentEvent, onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 export { runAgentCleanupStep } from "../agents/run-cleanup-timeout.js";
-export { log as embeddedAgentLog } from "../agents/pi-embedded-runner/logger.js";
+export { resolveAgentRunAbortLifecycleFields } from "../agents/run-termination.js";
+export { isHostScopedAgentToolActive } from "../agents/agent-tools.ring-zero-context.js";
+export { log as embeddedAgentLog } from "../agents/embedded-agent-runner/logger.js";
 export { buildAgentRuntimePlan } from "../agents/runtime-plan/build.js";
-export { classifyEmbeddedPiRunResultForModelFallback } from "../agents/pi-embedded-runner/result-fallback-classifier.js";
-export { resolveEmbeddedAgentRuntime } from "../agents/pi-embedded-runner/runtime.js";
+export { prepareAgentRuntimeAuth } from "../agents/runtime-plan/prepare-auth.js";
+export { classifyEmbeddedAgentRunResultForModelFallback } from "../agents/embedded-agent-runner/result-fallback-classifier.js";
 export { resolveUserPath } from "../utils.js";
-export { callGatewayTool } from "../agents/tools/gateway.js";
+export { callGatewayTool, readGatewayToolOperatorScopes } from "../agents/tools/gateway.js";
+export { hasGatewayToolRoutingContext } from "../agents/tools/in-process-gateway.js";
 export type { NodeListNode } from "../agents/tools/nodes-utils.js";
 export {
   listNodes,
@@ -102,24 +267,90 @@ export {
   HEARTBEAT_RESPONSE_TOOL_NAME,
   normalizeHeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
-export { isMessagingTool, isMessagingToolSendAction } from "../agents/pi-embedded-messaging.js";
+export { isMessagingTool, isMessagingToolSendAction } from "../agents/embedded-agent-messaging.js";
+export {
+  projectPluginMessageDeliveryFact,
+  readEmbeddedMessageDeliveryFact,
+} from "../agents/embedded-agent-message-delivery.js";
+export {
+  extractMessagingToolSend,
+  extractMessagingToolSendResult,
+  extractMessagingToolSourceReplyPayload,
+  isDeliveredMessagingToolSendToCurrentSource,
+} from "../agents/embedded-agent-messaging-extraction.js";
+export { captureToolAuthoredSourceReply } from "../agents/embedded-agent-tool-authored-source-reply.js";
 export {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
-} from "../agents/pi-embedded-subscribe.tools.js";
-export { normalizeUsage } from "../agents/usage.js";
-export { resolveOpenClawAgentDir } from "./agent-dir-compat.js";
+} from "../agents/embedded-agent-tool-media.js";
 export {
-  resolveAgentDir,
-  resolveDefaultAgentDir,
-  resolveSessionAgentIds,
-} from "../agents/agent-scope.js";
+  extractToolErrorMessage,
+  sanitizeToolArgs,
+  sanitizeToolResult,
+} from "../agents/embedded-agent-tool-results.js";
+export {
+  formatToolExecutionErrorMessage,
+  isToolResultError,
+  resolveToolExecutionErrorKind,
+  resolveToolResultFailureKind,
+  type ToolResultFailureKind,
+} from "../agents/tool-result-error.js";
+export { readToolOperatorHint } from "../agents/tool-operator-hint.js";
+export { normalizeUsage } from "../agents/usage.js";
+export { resolveAgentDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
+export { resolveSessionAgentIds } from "./agent-scope-runtime.js";
 export { resolveModelAuthMode } from "../agents/model-auth.js";
 export { supportsModelTools } from "../agents/model-tool-support.js";
-export { resolveAttemptSpawnWorkspaceDir } from "../agents/pi-embedded-runner/run/attempt.thread-helpers.js";
-export { buildEmbeddedAttemptToolRunContext } from "../agents/pi-embedded-runner/run/attempt.tool-run-context.js";
+export { isAgentToolReplaySafe } from "../agents/tool-replay-safety.js";
+export { getChannelAgentToolMeta } from "../agents/channel-tool-metadata.js";
 export {
-  abortEmbeddedPiRun as abortAgentHarnessRun,
+  buildAgentHarnessUserInputAnswers,
+  deliverAgentHarnessUserInputPrompt,
+  emptyAgentHarnessUserInputAnswers,
+  formatAgentHarnessUserInputPrompt,
+  normalizeAgentHarnessUserInputAnswer,
+} from "../agents/harness/user-input-bridge.js";
+export {
+  cancelPendingAgentQuestionForSession,
+  claimPendingAgentQuestionAnswer,
+  runAgentHarnessGatewayQuestion,
+} from "../agents/harness/gateway-question.js";
+/** Bounded structured-input compilation and execution for native agent harnesses. */
+export const agentHarnessStructuredInput = Object.freeze({
+  compileForm: compileStructuredInputForm,
+  compileQuestions: compileStructuredInputQuestions,
+  compileUrl: compileStructuredInputUrl,
+  isRecord: isStructuredInputRecord,
+  run: runStructuredInput,
+  snapshot: snapshotStructuredInput,
+});
+export {
+  buildSkillWorkshopPromptSection,
+  SKILL_WORKSHOP_TOOL_NAME,
+} from "../agents/skill-workshop-prompt.js";
+export {
+  buildDelegationGuidanceSection,
+  resolveMainSessionDelegationMode,
+} from "../agents/delegation-guidance.js";
+export { buildHarnessVisibleReplyGuidance } from "../auto-reply/source-reply-delivery-mode.js";
+export { buildCredentialSafetyPrompt } from "../agents/credential-safety-prompt.js";
+export { buildUiPresentationPrompt } from "../agents/ui-presentation-prompt.js";
+export { normalizeQuestionTimeoutSeconds } from "../agents/tools/ask-user-tool-normalization.js";
+export { resolveAttemptFsWorkspaceOnly } from "../agents/embedded-agent-runner/run/attempt-prompt-helpers.js";
+export { resolveAttemptSpawnWorkspaceDir } from "../agents/embedded-agent-runner/run/attempt-thread-helpers.js";
+export { buildEmbeddedAttemptToolRunContext } from "../agents/embedded-agent-runner/run/attempt-tool-run-context.js";
+export {
+  applyEmbeddedAttemptToolsAllow,
+  resolveEmbeddedAttemptToolConstructionPlan,
+} from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
+export { getPluginToolMeta, getPluginToolSideEffectOwnerKey } from "../plugins/tool-metadata.js";
+export {
+  attachModelProviderRequestTransport,
+  getModelProviderRequestTransport,
+} from "../agents/provider-request-config.js";
+export {
+  abortAndDrainEmbeddedAgentRun as abortAndDrainAgentHarnessRun,
+  abortEmbeddedAgentRun as abortAgentHarnessRun,
   clearActiveEmbeddedRun,
   resolveActiveEmbeddedRunSessionId,
   setActiveEmbeddedRun,
@@ -134,45 +365,227 @@ export {
 export function queueAgentHarnessMessage(
   sessionId: string,
   text: string,
-  options?: EmbeddedPiQueueMessageOptions,
+  options?: EmbeddedAgentQueueMessageOptions,
 ): boolean {
-  return queueEmbeddedPiMessageWithOutcome(sessionId, text, options).queued;
+  return queueEmbeddedAgentMessageWithOutcome(sessionId, text, options).queued;
 }
+export { finalizeAgentToolAvailability } from "../agents/agent-tool-availability.js";
 export { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 export {
   logAgentRuntimeToolDiagnostics,
   normalizeAgentRuntimeTools,
 } from "../agents/runtime-plan/tools.js";
+export {
+  filterProviderNormalizableTools,
+  inspectRuntimeToolInputSchemas,
+  projectRuntimeToolInputSchema,
+  type RuntimeToolInputSchemaJson,
+  type RuntimeToolInputSchemaProjection,
+  type RuntimeToolSchemaDiagnostic,
+} from "../agents/tool-schema-projection.js";
 export type {
   CodexBundleMcpThreadConfig,
   LoadCodexBundleMcpThreadConfigParams,
 } from "../agents/codex-mcp-config.types.js";
-export { normalizeProviderToolSchemas } from "../agents/pi-embedded-runner/tool-schema-runtime.js";
+export { normalizeProviderToolSchemas } from "../agents/embedded-agent-runner/tool-schema-runtime.js";
 
+/** Detect prompt image references and load them through the same limits used by embedded runs. */
+export async function detectAndLoadAgentHarnessPromptImages(params: {
+  prompt: string;
+  userTurnTranscriptRecorder?: EmbeddedAgentQueueMessageOptions["userTurnTranscriptRecorder"];
+  workspaceDir: string;
+  agentWorkspaceDir?: string;
+  model: { input?: string[] };
+  existingImages?: ImageContent[];
+  imageOrder?: PromptImageOrderEntry[];
+  media?: import("../media/media-facts.js").MediaFact[];
+  config?: import("../config/types.openclaw.js").OpenClawConfig;
+  workspaceOnly?: boolean;
+  localRoots?: readonly string[];
+  sandbox?: { root: string; bridge: SandboxFsBridge };
+}): Promise<{
+  images: ImageContent[];
+  imageFactIndexes: Array<number | null>;
+  detectedRefs: Array<{ raw: string; resolved: string; type: "path" | "media-uri" }>;
+  loadedCount: number;
+  skippedCount: number;
+  failedMediaCount: number;
+}> {
+  const [{ resolveImageSanitizationLimits }, { detectAndLoadPromptImages }, { MAX_IMAGE_BYTES }] =
+    await Promise.all([
+      import("../agents/image-sanitization.js"),
+      import("../agents/embedded-agent-runner/run/images.js"),
+      import("@openclaw/media-core/constants"),
+    ]);
+
+  return detectAndLoadPromptImages({
+    prompt: params.prompt,
+    workspaceDir: params.workspaceDir,
+    agentWorkspaceDir: params.agentWorkspaceDir,
+    model: params.model,
+    existingImages: params.existingImages,
+    imageOrder: params.imageOrder,
+    media: params.media,
+    userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+    maxBytes: MAX_IMAGE_BYTES,
+    maxDimensionPx: resolveImageSanitizationLimits(params.config).maxDimensionPx,
+    workspaceOnly: params.workspaceOnly,
+    localRoots: params.localRoots,
+    sandbox: params.sandbox,
+  });
+}
+
+/** Load static MCP metadata without connecting transports or discovering tools. */
+export async function loadAgentHarnessMcpConfig(
+  params: Parameters<typeof import("../agents/bundle-mcp-config.js").loadStaticBundleMcpConfig>[0],
+): Promise<ReturnType<typeof import("../agents/bundle-mcp-config.js").loadStaticBundleMcpConfig>> {
+  const { loadStaticBundleMcpConfig } = await import("../agents/bundle-mcp-config.js");
+  return loadStaticBundleMcpConfig(params);
+}
+
+/** Load Codex bundle MCP thread config without forcing the heavy config module into SDK imports. */
 export async function loadCodexBundleMcpThreadConfig(
   params: LoadCodexBundleMcpThreadConfigParams,
 ): Promise<CodexBundleMcpThreadConfig> {
-  const { loadCodexBundleMcpThreadConfig: load } = await import("../agents/codex-mcp-config.js");
+  const { loadCodexBundleMcpThreadConfigCore: load } =
+    await import("../agents/codex-mcp-config.js");
   return load(params);
 }
+
+export { decodeHeaderEnvPlaceholder } from "../agents/bundle-mcp-adapter.js";
+
+/** Lazily load the strict MCP proxy client with core-owned framing, startup, and shutdown. */
+export const mcpStdioRuntime = Object.freeze({
+  async load() {
+    const { createMcpStdioClient } = await import("../agents/mcp-stdio-client.js");
+    return { createMcpStdioClient };
+  },
+});
+
+export type { McpToolCatalog, SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
+export { assignSafeServerNames as assignMcpCatalogSafeServerNames } from "../agents/agent-bundle-mcp-names.js";
+
+/**
+ * Materialize an MCP App view for a tool executed by a harness-native MCP client.
+ * The harness supplies a runtime adapter so the view keeps using that exact connection.
+ */
+export async function prepareHarnessNativeMcpAppPreview(params: {
+  runtime: import("../agents/agent-bundle-mcp-types.js").SessionMcpRuntime;
+  agentId?: string;
+  serverName: string;
+  toolName: string;
+  uiResourceUri: string;
+  toolCallId: string;
+  toolInput: unknown;
+  toolResult: import("@modelcontextprotocol/sdk/types.js").CallToolResult;
+  allowedAppToolNames: ReadonlySet<string>;
+  resultMetaState?: "unavailable";
+}): Promise<{ mcpAppPreview: unknown } | undefined> {
+  if (params.runtime.mcpAppsEnabled !== true) {
+    return undefined;
+  }
+  const { buildMcpAppCanvasPayload, fetchMcpAppView } =
+    await import("../agents/mcp-ui-resource.js");
+  const { prepareMcpAppFormUpload } = await import("../agents/mcp-form-resource-upload.js");
+  const view = await fetchMcpAppView({
+    runtime: params.runtime,
+    requesterId: params.runtime.appRequester?.profileId,
+    uploadResources:
+      params.agentId && params.runtime.sessionKey
+        ? await prepareMcpAppFormUpload({
+            runtime: params.runtime,
+            serverName: params.serverName,
+            agentId: params.agentId,
+            sessionKey: params.runtime.sessionKey,
+            assertCurrent: () => {
+              params.runtime.assertOwnerCurrent?.();
+            },
+          })
+        : undefined,
+    agentId: params.agentId,
+    serverName: params.serverName,
+    toolName: params.toolName,
+    uiResourceUri: params.uiResourceUri,
+    toolCallId: params.toolCallId,
+    toolInput: params.toolInput,
+    toolResult: params.toolResult,
+    allowedAppToolNames: params.allowedAppToolNames,
+  });
+  if (!view) {
+    return undefined;
+  }
+  return {
+    mcpAppPreview: buildMcpAppCanvasPayload({
+      ...view,
+      ...(params.runtime.sessionKey ? { originSessionKey: params.runtime.sessionKey } : {}),
+      ...(params.resultMetaState ? { resultMetaState: params.resultMetaState } : {}),
+    }),
+  };
+}
+
+/**
+ * Materialize requester-scoped MCP tools for a harness run (dynamic tools, not
+ * harness-native MCP config). Lazy-loaded so harness plugins avoid the MCP manager graph.
+ */
+export async function materializeRequesterScopedMcpToolsForHarnessRun(
+  params: Parameters<
+    typeof import("../agents/agent-bundle-mcp-harness.js").materializeRequesterScopedMcpToolsForHarnessRunCore
+  >[0],
+): Promise<
+  Awaited<
+    ReturnType<
+      typeof import("../agents/agent-bundle-mcp-harness.js").materializeRequesterScopedMcpToolsForHarnessRunCore
+    >
+  >
+> {
+  if (!shouldLoadRequesterScopedMcpHarnessRuntime(params)) {
+    return undefined;
+  }
+  const { materializeRequesterScopedMcpToolsForHarnessRunCore: materialize } =
+    await import("../agents/agent-bundle-mcp-harness.js");
+  return materialize(params);
+}
+
 export { resolveSandboxContext } from "../agents/sandbox.js";
-export { resolveBootstrapContextForRun } from "../agents/bootstrap-files.js";
-export type { EmbeddedContextFile } from "../agents/pi-embedded-helpers/types.js";
+export type { SandboxContext, SandboxWorkspaceAccess } from "../agents/sandbox.js";
+export { splitSandboxBindSpec } from "../agents/sandbox/bind-spec.js";
+export {
+  hasSandboxBindContainerPathAliases,
+  hasSandboxBindReadonlyHostShadows,
+  resolveWritableSandboxBindHostRoots,
+} from "../agents/sandbox/fs-paths.js";
+export {
+  resolveBootstrapContextForRun,
+  resolveBootstrapFilesForRun,
+} from "../agents/bootstrap-files.js";
+export { buildBootstrapContextForFiles } from "../agents/embedded-agent-helpers/bootstrap.js";
+export { prepareAgentWorkspaceContext } from "../agents/harness/workspace-context.js";
+export { buildAgentWorkspaceInstructionSnapshot } from "../agents/harness/workspace-instructions.js";
+export type { EmbeddedContextFile } from "../agents/embedded-agent-helpers/context-file.js";
 export { isSubagentSessionKey } from "../routing/session-key.js";
 export {
   acquireSessionWriteLock,
   resolveSessionWriteLockAcquireTimeoutMs,
   resolveSessionWriteLockOptions,
   type SessionWriteLockAcquireTimeoutConfig,
-} from "../agents/session-write-lock.js";
-export { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
-export { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+} from "./session-write-lock-runtime.js";
 export {
+  consumeAdjustedParamsForToolCall,
+  consumePreExecutionBlockedToolCall,
+  finalizeToolTerminalPresentation,
+  getBeforeToolCallFailureDisposition,
+  getBeforeToolCallPolicyDiagnosticState,
   hasBeforeToolCallPolicy,
   isToolWrappedWithBeforeToolCallHook,
+  requestDeferredPluginToolApproval,
   runBeforeToolCallHook,
+  setBeforeToolCallDiagnosticsEnabled,
   wrapToolWithBeforeToolCallHook,
-} from "../agents/pi-tools.before-tool-call.js";
+  type BeforeToolCallPolicyDiagnosticState,
+  type BeforeToolCallFailureDisposition,
+  type DeferredPluginToolApproval,
+} from "../agents/agent-tools.before-tool-call.js";
+export { isReplaySafeToolCall } from "../agents/tool-mutation.js";
 export {
   resolveAgentHarnessBeforePromptBuildResult,
   runAgentHarnessAfterCompactionHook,
@@ -180,6 +593,10 @@ export {
 } from "../agents/harness/prompt-compaction-hook-helpers.js";
 export { createCodexAppServerToolResultExtensionRunner } from "../agents/harness/codex-app-server-extensions.js";
 export { createAgentToolResultMiddlewareRunner } from "../agents/harness/tool-result-middleware.js";
+export {
+  assertContextEngineHostSupport,
+  CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
+} from "../context-engine/host-compat.js";
 export {
   assembleHarnessContextEngine,
   bootstrapHarnessContextEngine,
@@ -189,12 +606,35 @@ export {
   isActiveHarnessContextEngine,
   runHarnessContextEngineMaintenance,
 } from "../agents/harness/context-engine-lifecycle.js";
+// Plugin-owned compaction uses the embedded runner's host-resolved safety timeout.
+export {
+  compactWithSafetyTimeout,
+  compactContextEngineWithSafetyTimeout,
+  resolveCompactionTimeoutMs,
+} from "../agents/embedded-agent-runner/compaction-safety-timeout.js";
+export {
+  estimateRenderedLlmBoundaryTokenPressure,
+  formatPrePromptPrecheckLog,
+  PREEMPTIVE_OVERFLOW_ERROR_TEXT,
+  shouldPreemptivelyCompactBeforePrompt,
+  type LlmBoundaryTokenPressure,
+  type PreemptiveCompactionDecision,
+} from "../agents/embedded-agent-runner/run/preemptive-compaction.js";
 export { resolveContextEngineOwnerPluginId } from "../context-engine/registry.js";
 export {
   runAgentHarnessAfterToolCallHook,
   runAgentHarnessBeforeMessageWriteHook,
 } from "../agents/harness/hook-helpers.js";
 export {
+  awaitAgentEndSideEffects,
+  runAgentEndSideEffects,
+  runAgentEndSideEffectsAsync,
+} from "../agents/harness/agent-end-side-effects.js";
+export { buildEmbeddedForegroundPromptContext } from "../agents/embedded-agent-runner/run/agent-end-context.js";
+export type { EmbeddedForegroundPromptContext } from "../agents/embedded-agent-runner/run/params.js";
+export {
+  awaitAgentHarnessAgentEndHook,
+  getAgentHarnessHookRunner,
   runAgentHarnessBeforeAgentFinalizeHook,
   runAgentHarnessAgentEndHook,
   runAgentHarnessLlmInputHook,
@@ -204,43 +644,20 @@ export {
   buildNativeHookRelayCommand,
   hasNativeHookRelayInvocation,
   invokeNativeHookRelay,
-  __testing as nativeHookRelayTesting,
+  resolveNativeHookRelayDeferredToolApproval,
+  testing as nativeHookRelayTesting,
   registerNativeHookRelay,
 } from "../agents/harness/native-hook-relay.js";
 
 /**
- * Derive the same compact user-facing tool detail that Pi uses for progress logs.
+ * Derive the same compact user-facing tool detail that embedded OpenClaw uses for progress logs.
  */
 export type ToolProgressDetailMode = "explain" | "raw";
 
-export function inferToolMetaFromArgs(
-  toolName: string,
-  args: unknown,
-  options?: { detailMode?: ToolProgressDetailMode },
-): string | undefined {
-  const display = resolveToolDisplay({ name: toolName, args, detailMode: options?.detailMode });
-  return formatToolDetail(display);
-}
+/** Infer compact display metadata for one tool invocation from its name and arguments. */
+export { inferToolMetaFromArgsCore as inferToolMetaFromArgs } from "../agents/tool-display.js";
 
-/**
- * Prepare verbose tool output for user-facing progress messages.
- */
-export function formatToolProgressOutput(
-  output: string,
-  options?: { maxChars?: number },
-): string | undefined {
-  const trimmed = output.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const redacted = redactToolDetail(trimmed);
-  const maxChars = options?.maxChars ?? TOOL_PROGRESS_OUTPUT_MAX_CHARS;
-  if (redacted.length <= maxChars) {
-    return redacted;
-  }
-  return `${truncateUtf16Safe(redacted, maxChars)}\n...(truncated)...`;
-}
-
+/** Inputs used to classify a finished harness turn with little or no visible assistant output. */
 export type AgentHarnessTerminalOutcomeInput = {
   assistantTexts: readonly string[];
   reasoningText?: string | null;
@@ -249,6 +666,7 @@ export type AgentHarnessTerminalOutcomeInput = {
   turnCompleted: boolean;
 };
 
+/** Terminal fallback classification emitted by agent harness adapters. */
 export type AgentHarnessTerminalOutcomeClassification = NonNullable<
   EmbeddedRunAttemptResult["agentHarnessResultClassification"]
 >;
@@ -257,9 +675,6 @@ export type AgentHarnessTerminalOutcomeClassification = NonNullable<
  * Classify terminal harness turns that completed without assistant output that
  * should advance fallback. Deliberate silent replies such as NO_REPLY count as
  * intentional output, while whitespace-only text remains fallback-eligible.
- * This is intentionally SDK-level so plugin harness adapters such as Codex
- * preserve the same OpenClaw-owned fallback signals as the built-in PI path
- * without re-implementing terminal-result policy.
  */
 export function classifyAgentHarnessTerminalOutcome(
   params: AgentHarnessTerminalOutcomeInput,
@@ -267,7 +682,7 @@ export function classifyAgentHarnessTerminalOutcome(
   if (
     !params.turnCompleted ||
     (params.promptError !== undefined && params.promptError !== null) ||
-    hasVisibleAssistantText(params.assistantTexts)
+    params.assistantTexts.some((text) => text.trim().length > 0)
   ) {
     return undefined;
   }
@@ -280,6 +695,4 @@ export function classifyAgentHarnessTerminalOutcome(
   return "empty";
 }
 
-function hasVisibleAssistantText(assistantTexts: readonly string[]): boolean {
-  return assistantTexts.some((text) => text.trim().length > 0);
-}
+export const toolPolicy = Object.freeze({ createToolPolicyMatcher, expandToolGroups });

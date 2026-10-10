@@ -1,3 +1,6 @@
+/**
+ * Tests webhook memory guard counters, rate limits, and anomaly tracking.
+ */
 import { describe, expect, it } from "vitest";
 import {
   createBoundedCounter,
@@ -19,6 +22,20 @@ describe("createFixedWindowRateLimiter", () => {
     expect(limiter.isRateLimited("k", 1_001)).toBe(false);
     expect(limiter.isRateLimited("k", 1_002)).toBe(false);
     expect(limiter.isRateLimited("k", 1_003)).toBe(true);
+  });
+
+  it("falls back for non-finite fixed-window options", () => {
+    const limiter = createFixedWindowRateLimiter({
+      windowMs: Number.NaN,
+      maxRequests: Number.NaN,
+      maxTrackedKeys: Number.NaN,
+      pruneIntervalMs: Number.NaN,
+    });
+
+    for (let index = 0; index < WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests; index += 1) {
+      expect(limiter.isRateLimited("k", 1_000 + index)).toBe(false);
+    }
+    expect(limiter.isRateLimited("k", 2_000)).toBe(true);
   });
 
   it.each([
@@ -102,6 +119,20 @@ describe("createBoundedCounter", () => {
     counter.increment("fresh", 120);
     expect(counter.size()).toBe(1);
   });
+
+  it("falls back for non-finite counter options", () => {
+    const counter = createBoundedCounter({
+      maxTrackedKeys: Number.NaN,
+      ttlMs: Number.NaN,
+      pruneIntervalMs: Number.NaN,
+    });
+
+    for (let index = 0; index < WEBHOOK_ANOMALY_COUNTER_DEFAULTS.maxTrackedKeys + 1; index += 1) {
+      counter.increment(`k-${index}`, 1_000 + index);
+    }
+
+    expect(counter.size()).toBe(WEBHOOK_ANOMALY_COUNTER_DEFAULTS.maxTrackedKeys);
+  });
 });
 
 describe("defaults", () => {
@@ -118,7 +149,7 @@ describe("defaults", () => {
 });
 
 describe("createWebhookAnomalyTracker", () => {
-  it("increments only tracked status codes and logs at configured cadence", () => {
+  it("ignores untracked statuses and empty keys and logs tracked events at configured cadence", () => {
     const logs: string[] = [];
     const tracker = createWebhookAnomalyTracker({
       trackedStatusCodes: [401],
@@ -127,27 +158,51 @@ describe("createWebhookAnomalyTracker", () => {
 
     const counts = [
       {
+        key: "k",
         statusCode: 415,
         message: (count: number) => `ignored:${count}`,
       },
       {
+        key: "",
+        statusCode: 401,
+        message: (count: number) => `ignored:${count}`,
+      },
+      {
+        key: "k",
         statusCode: 401,
         message: (count: number) => `hit:${count}`,
       },
       {
+        key: "k",
         statusCode: 401,
         message: (count: number) => `hit:${count}`,
       },
-    ].map(({ statusCode, message }) =>
+    ].map(({ key, statusCode, message }) =>
       tracker.record({
-        key: "k",
+        key,
         statusCode,
         message,
         log: (msg) => logs.push(msg),
       }),
     );
 
-    expect(counts).toEqual([0, 1, 2]);
+    expect(counts).toEqual([0, 0, 1, 2]);
     expect(logs).toEqual(["hit:1", "hit:2"]);
+  });
+
+  it("falls back for non-finite anomaly logging cadence", () => {
+    const logs: string[] = [];
+    const tracker = createWebhookAnomalyTracker({ logEvery: Number.NaN });
+
+    for (let index = 0; index < WEBHOOK_ANOMALY_COUNTER_DEFAULTS.logEvery; index += 1) {
+      tracker.record({
+        key: "k",
+        statusCode: 401,
+        message: (count) => `hit:${count}`,
+        log: (message) => logs.push(message),
+      });
+    }
+
+    expect(logs).toEqual(["hit:1", `hit:${WEBHOOK_ANOMALY_COUNTER_DEFAULTS.logEvery}`]);
   });
 });

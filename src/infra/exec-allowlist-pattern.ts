@@ -1,6 +1,8 @@
-import fs from "node:fs";
+// Parses execution allowlist patterns for approval policy checks.
 import path from "node:path";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { safeRealpathSync } from "@openclaw/fs-safe/path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { escapeRegExp as escapeRegExpLiteral } from "../shared/regexp.js";
 import { expandHomePrefix } from "./home-dir.js";
 
 const GLOB_REGEX_CACHE_LIMIT = 512;
@@ -11,15 +13,16 @@ function normalizeMatchTarget(value: string): string {
     const stripped = value.replace(/^\\\\[?.]\\/, "");
     return normalizeLowercaseStringOrEmpty(stripped.replace(/\\/g, "/"));
   }
-  return value.replace(/\\\\/g, "/");
-}
-
-function tryRealpath(value: string): string | null {
-  try {
-    return fs.realpathSync(value);
-  } catch {
-    return null;
+  const normalized = value.replace(/\\\\/g, "/");
+  if (process.platform === "darwin") {
+    if (normalized === "/private/var") {
+      return "/var";
+    }
+    if (normalized.startsWith("/private/var/")) {
+      return normalized.slice("/private".length);
+    }
   }
+  return normalized;
 }
 
 function hasDotPathSegment(value: string): boolean {
@@ -35,10 +38,6 @@ function normalizeDotPathSegments(value: string): string {
   return normalizeMatchTarget(normalized);
 }
 
-function escapeRegExpLiteral(input: string): string {
-  return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 function compileGlobRegex(pattern: string): RegExp {
   const cacheKey = `${process.platform}:${pattern}`;
   const cached = globRegexCache.get(cacheKey);
@@ -46,32 +45,20 @@ function compileGlobRegex(pattern: string): RegExp {
     return cached;
   }
 
-  let regex = "^";
-  let i = 0;
-  while (i < pattern.length) {
-    const ch = pattern[i];
-    if (ch === "*") {
-      const next = pattern[i + 1];
-      if (next === "*") {
-        regex += ".*";
-        i += 2;
-        continue;
-      }
-      regex += "[^/]*";
-      i += 1;
-      continue;
+  const regex = pattern.replace(/\*\*|[*?]|[^*?]+/g, (token) => {
+    switch (token) {
+      case "**":
+        return ".*";
+      case "*":
+        return "[^/]*";
+      case "?":
+        return "[^/]";
+      default:
+        return escapeRegExpLiteral(token);
     }
-    if (ch === "?") {
-      regex += "[^/]";
-      i += 1;
-      continue;
-    }
-    regex += escapeRegExpLiteral(ch);
-    i += 1;
-  }
-  regex += "$";
+  });
 
-  const compiled = new RegExp(regex, process.platform === "win32" ? "i" : "");
+  const compiled = new RegExp(`^${regex}$`, process.platform === "win32" ? "i" : "");
   if (globRegexCache.size >= GLOB_REGEX_CACHE_LIMIT) {
     globRegexCache.clear();
   }
@@ -90,8 +77,8 @@ export function matchesExecAllowlistPattern(pattern: string, target: string): bo
   let normalizedPattern = expanded;
   let normalizedTarget = target;
   if (process.platform === "win32" && !hasWildcard) {
-    normalizedPattern = tryRealpath(expanded) ?? expanded;
-    normalizedTarget = tryRealpath(target) ?? target;
+    normalizedPattern = safeRealpathSync(expanded) ?? expanded;
+    normalizedTarget = safeRealpathSync(target) ?? target;
   }
   normalizedPattern = normalizeMatchTarget(normalizedPattern);
   normalizedTarget = normalizeMatchTarget(normalizedTarget);

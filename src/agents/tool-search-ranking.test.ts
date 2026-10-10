@@ -1,0 +1,505 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  createToolSearchCatalogRef,
+  registerHeadlessToolSearchCatalog,
+} from "./tool-search-catalog.js";
+import * as ranking from "./tool-search-ranking.js";
+import {
+  buildLexicalIndex,
+  readParameterText,
+  scoreLexical,
+  tokenizeDocument,
+  tokenizeQuery,
+} from "./tool-search-ranking.js";
+import { ToolSearchRuntime } from "./tool-search-runtime.js";
+import type { ToolSearchCatalogEntry } from "./tool-search-types.js";
+
+afterEach(() => vi.restoreAllMocks());
+
+function entry(partial: Partial<ToolSearchCatalogEntry>): ToolSearchCatalogEntry {
+  return {
+    id: partial.name ?? "id",
+    source: "openclaw",
+    name: "tool",
+    description: "",
+    tool: {} as never,
+    ...partial,
+  } as ToolSearchCatalogEntry;
+}
+
+const CATALOG = [
+  entry({ name: "web_search", description: "Search the web for current information" }),
+  entry({ name: "read_file", description: "Read a file from disk" }),
+  entry({ name: "cron_create", description: "Schedule a recurring task" }),
+  entry({ name: "spreadsheet_open", description: "Open a spreadsheet document" }),
+  entry({
+    name: "issue_create",
+    description: "Open a new issue",
+    parameters: {
+      type: "object",
+      properties: { repository: { type: "string", description: "Target repository" } },
+    },
+  }),
+];
+
+function runtime(catalog = CATALOG): ToolSearchRuntime {
+  const ctx = {
+    catalogRef: {
+      current: {
+        entries: catalog,
+        counterScope: "scope-1",
+        searchCount: 0,
+        describeCount: 0,
+        callCount: 0,
+      },
+    },
+  };
+  return new ToolSearchRuntime(ctx as never, {
+    enabled: true,
+    mode: "directory",
+    searchDefaultLimit: 10,
+    maxSearchLimit: 50,
+  });
+}
+
+describe("tokenizeQuery", () => {
+  it.each([
+    ["running", "run"],
+    ["runner", "run"],
+  ])("undoes the consonant English doubles before a suffix: %s", (inflected, root) => {
+    // Without undoubling, "running" stems to "runn" and can never meet "run".
+    expect(tokenizeDocument(inflected)).toEqual(tokenizeDocument(root));
+  });
+
+  it.each(["call", "process"])("keeps doubles that belong to the root: %s", (word) => {
+    expect(tokenizeDocument(`${word}ing`)).toEqual(tokenizeDocument(word));
+  });
+
+  it("fires expansions for -ies plurals of a trigger word", () => {
+    // "directories" must reach the directory/folder group, not stall at
+    // "directorie" and expand nothing.
+    expect(tokenizeQuery("list directories").map((term) => term.term)).toContain(
+      tokenizeDocument("file")[0],
+    );
+  });
+
+  it("keeps capability verbs that name real operations", () => {
+    // "get" looks like filler but names operations ("get_weather"); dropping it
+    // would reduce "get issue" to "issue" and let delete/update entries win.
+    expect(tokenizeQuery("get").map((term) => term.term)).not.toEqual([]);
+  });
+
+  it("expands intent words toward the vocabulary descriptions use", () => {
+    // "look up the price" shares no word with "Search the web", so without
+    // expansion a lexical index cannot connect them at all.
+    const terms = tokenizeQuery("look up the price");
+    const search = terms.find((term) => term.term === tokenizeDocument("search")[0]);
+
+    expect(search).toBeDefined();
+    // Discounted: an expansion is a guess about wording, not something typed.
+    expect(search?.weight).toBeLessThan(1);
+    expect(terms.find((term) => term.term === tokenizeDocument("price")[0])?.weight).toBe(1);
+  });
+
+  it("emits both the joined name and its parts", () => {
+    const terms = tokenizeDocument("web_search");
+    expect(terms).toContain("web_search");
+    expect(terms).toContain("web");
+  });
+
+  it.each(["news"])("keeps %s distinct from the word left by stripping its s", (word) => {
+    // "news" -> "new" would literal-match every "Create a new ..." tool, and
+    // literal matches are ranked ahead of the web tool the query meant.
+    expect(tokenizeDocument(word)).toEqual([word]);
+  });
+
+  it("does not let a singular/plural collision invent an intent", () => {
+    // "news" must not normalize to "new", or "open a new issue" acquires a
+    // web-search intent it never asked for.
+    expect(tokenizeQuery("open a new issue").map((term) => term.term)).not.toContain(
+      tokenizeDocument("search")[0],
+    );
+  });
+});
+
+describe("scoreLexical", () => {
+  it("includes empty documents in length normalization without creating search hits", () => {
+    const value = { id: "match" };
+    const index = buildLexicalIndex([
+      { value, terms: ["needle", "needle"] },
+      { value: { id: "empty" }, terms: [] },
+    ]);
+
+    expect(index.documentCount).toBe(2);
+    expect(index.averageLength).toBe(1);
+    const hits = scoreLexical(index, [{ term: "needle", weight: 1 }]);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.value).toBe(value);
+    expect(hits[0]?.matchedLiteral).toBe(true);
+    expect(hits[0]?.score).toBeCloseTo((Math.log(2) * 2 * 2.2) / (2 + 1.2 * 1.75));
+  });
+
+  it("returns nothing for a query with no usable terms", () => {
+    const index = buildLexicalIndex([{ value: "a", terms: tokenizeDocument("search the web") }]);
+
+    // Returning the whole catalog unranked would read as a ranked answer
+    // without being one, which is what the previous scorer did here.
+    expect(scoreLexical(index, tokenizeQuery("the and with"))).toEqual([]);
+    expect(scoreLexical(index, [])).toEqual([]);
+  });
+
+  it("indexes non-Latin text rather than discarding it", () => {
+    // The English-query instruction is guidance for the model, not a filter: a
+    // catalog may legitimately describe a tool in another script, and dropping
+    // those terms would make it permanently unreachable.
+    const index = buildLexicalIndex([{ value: "jp", terms: tokenizeDocument("価格 lookup") }]);
+
+    expect(scoreLexical(index, tokenizeQuery("価格")).map((hit) => hit.value)).toEqual(["jp"]);
+  });
+
+  it("marks literal overlap so callers can rank it ahead of expansion-only hits", () => {
+    // A common literal term carries little IDF, so a short document collecting
+    // two rare expansions can outscore it. The tier, not the weight, is what
+    // keeps a tool matching the typed word from being dropped by the limit.
+    const index = buildLexicalIndex([
+      { value: "weather-a", terms: tokenizeDocument("weather_now Report the weather") },
+      { value: "weather-b", terms: tokenizeDocument("weather_hourly Hourly weather") },
+      { value: "weather-c", terms: tokenizeDocument("weather_alerts Weather alerts") },
+      { value: "web", terms: tokenizeDocument("web_search Search the web") },
+    ]);
+
+    const hits = scoreLexical(index, tokenizeQuery("weather"));
+    const web = hits.find((hit) => hit.value === "web");
+
+    expect(hits.filter((hit) => hit.matchedLiteral).map((hit) => hit.value)).toContain("weather-a");
+    expect(web?.matchedLiteral).toBe(false);
+  });
+});
+
+describe("untrusted schemas", () => {
+  it.each(["client", "mcp"] as const)(
+    "never traverses parameters from the untrusted %s source",
+    async (source) => {
+      // compactToolSearchCatalogEntry already reports non-first-party parameters
+      // as "unknown"; indexing must respect the same boundary. A client can hand
+      // us a lazy object that throws on property access, and MCP-authored text
+      // must not become ranking input.
+      const hostile = entry({
+        source,
+        name: "client_pick_file",
+        description: "Ask the client to pick a file",
+        parameters: {
+          type: "object",
+          properties: new Proxy(
+            {},
+            {
+              ownKeys: () => {
+                throw new Error("client properties must remain deferred");
+              },
+            },
+          ),
+        },
+      });
+      const search = runtime([...CATALOG, hostile]);
+
+      // Reaching the schema at all throws, so surviving the query is the proof.
+      await expect(search.search("pick a file")).resolves.toBeDefined();
+      expect((await search.search("client_pick_file")).map((hit) => hit.name)).toContain(
+        "client_pick_file",
+      );
+    },
+  );
+});
+
+describe("ToolSearchRuntime.search", () => {
+  it.each(["anyOf", "oneOf", "allOf"])(
+    "finds parameter metadata inside %s branches and refreshes it after edits",
+    async (keyword) => {
+      const branch = {
+        type: "object",
+        properties: { orchard: { type: "string", description: "Collect apples" } },
+      };
+      const catalogRef = createToolSearchCatalogRef();
+      const tools = [
+        {
+          name: "indexed_resource",
+          label: "Resource",
+          description: "Inspect resources",
+          parameters: { [keyword]: [{ description: "Measure asteroids" }, branch] },
+          execute: async () => ({ content: [], details: {} }),
+        },
+      ];
+      registerHeadlessToolSearchCatalog({ catalogRef, tools });
+      const search = new ToolSearchRuntime(
+        { catalogRef },
+        {
+          enabled: true,
+          mode: "tools",
+          searchDefaultLimit: 10,
+          maxSearchLimit: 50,
+        },
+      );
+
+      for (const query of ["asteroids", "orchard", "apples"]) {
+        expect((await search.search(query)).map((hit) => hit.name)).toEqual(["indexed_resource"]);
+      }
+      branch.properties.orchard.description = "Observe meteors";
+      registerHeadlessToolSearchCatalog({ catalogRef, tools });
+      expect((await search.search("meteors")).map((hit) => hit.name)).toEqual(["indexed_resource"]);
+      expect(await search.search("apples")).toEqual([]);
+      expect(await search.search("orchard", { allowedIds: new Set() })).toEqual([]);
+    },
+  );
+
+  it("finds metadata through composed property and array-item schemas", async () => {
+    const search = runtime([
+      entry({
+        name: "indexed_resource",
+        parameters: {
+          type: "object",
+          properties: {
+            resources: {
+              anyOf: [
+                { type: "null" },
+                {
+                  type: "array",
+                  items: { allOf: [{ type: "string", description: "Observe meteors" }] },
+                },
+              ],
+            },
+          },
+        },
+      }),
+    ]);
+
+    expect((await search.search("meteors")).map((hit) => hit.name)).toEqual(["indexed_resource"]);
+  });
+
+  it("prepares search text and its revision once across warm searches and runtimes", async () => {
+    const catalog = CATALOG.map((item) => entry({ ...item, id: `warm-index:${item.id}` }));
+    const render = vi.spyOn(ranking, "readParameterText");
+    const build = vi.spyOn(ranking, "buildLexicalIndex");
+    const allowedIds = new Set(catalog.map(({ id }) => id));
+    for (let turn = 0; turn < 3; turn++) {
+      const search = runtime(catalog);
+      expect((await search.search("repository", { allowedIds })).map(({ name }) => name)).toEqual([
+        "issue_create",
+      ]);
+      expect((await search.search("read", { allowedIds })).map(({ name }) => name)).toEqual([
+        "read_file",
+      ]);
+    }
+    expect(render).toHaveBeenCalledTimes(catalog.length);
+    expect(build).toHaveBeenCalledTimes(1);
+    allowedIds.delete(catalog[4]!.id);
+    expect(await runtime(catalog).search("repository", { allowedIds })).toEqual([]);
+    allowedIds.add(catalog[4]!.id);
+    expect(
+      (await runtime(catalog).search("repository", { allowedIds })).map(({ name }) => name),
+    ).toEqual(["issue_create"]);
+    expect(render).toHaveBeenCalledTimes(catalog.length);
+    expect(build).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps BM25 population statistics scoped to the current visibility", async () => {
+    const search = runtime([
+      entry({ name: "first", description: "alpha alpha" }),
+      entry({ name: "second", description: "beta" }),
+      ...["third", "fourth", "fifth"].map((name) => entry({ name, description: "alpha" })),
+    ]);
+    const allowedIds = new Set(["first", "second"]);
+    expect((await search.search("alpha beta", { limit: 1 }))[0]?.name).toBe("second");
+    expect((await search.search("alpha beta", { allowedIds, limit: 1 }))[0]?.name).toBe("first");
+    allowedIds.add("third").add("fourth").add("fifth");
+    expect((await search.search("alpha beta", { allowedIds, limit: 1 }))[0]?.name).toBe("second");
+  });
+
+  it("shares one index across fresh turns and rebuilds for a changed tool-set revision", async () => {
+    const catalog = CATALOG.map((item) => entry({ ...item, id: `shared-index:${item.id}` }));
+    const build = vi.spyOn(ranking, "buildLexicalIndex");
+    for (const [query, expected] of [
+      ["repository", ["issue_create"]],
+      ["scheduling", ["cron_create"]],
+      ["read", ["read_file"]],
+    ] as const) {
+      const freshCatalog = catalog.map((item) => entry({ ...item, tool: {} as never }));
+      const hits = await runtime(freshCatalog).search(query, {
+        allowedIds: new Set(catalog.map(({ id }) => id)),
+      });
+      expect(hits.map(({ name }) => name)).toEqual(expected);
+    }
+    expect(build).toHaveBeenCalledTimes(1);
+
+    catalog[0]!.description = "Observe asteroids";
+    expect((await runtime(catalog).search("asteroids")).map(({ name }) => name)).toEqual([
+      "web_search",
+    ]);
+    expect(build).toHaveBeenCalledTimes(2);
+
+    await runtime([...catalog]).search("repository");
+    expect(build).toHaveBeenCalledTimes(2);
+
+    const allowedIds = new Set([catalog[0]!.id]);
+    expect(await runtime(catalog).search("repository", { allowedIds })).toEqual([]);
+    allowedIds.add(catalog[4]!.id);
+    expect(
+      (await runtime(catalog).search("repository", { allowedIds })).map(({ name }) => name),
+    ).toEqual(["issue_create"]);
+    expect(build).toHaveBeenCalledTimes(4);
+  });
+
+  it.each([
+    { encoding: "ASCII", padding: " ", suffix: "" },
+    { encoding: "Unicode", padding: " ", suffix: "価格 𐐀 \ud800" },
+    { encoding: "Unicode word", padding: "λ", suffix: "" },
+  ])(
+    "shares oversized $encoding revisions while their indexes remain live",
+    async ({ padding, suffix }) => {
+      const catalog = [
+        entry({
+          name: "oversized_revision",
+          description: `Retention ${padding.repeat(4 * 1024 * 1024)}${suffix}`,
+        }),
+      ];
+      // The spy retains built indexes, as another active catalog view would.
+      const build = vi.spyOn(ranking, "buildLexicalIndex");
+      for (let turn = 0; turn < 2; turn++) {
+        expect((await runtime(catalog).search("retention")).map(({ name }) => name)).toEqual([
+          "oversized_revision",
+        ]);
+      }
+      expect(build).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("projects shared index hits from the current catalog without retaining another run's metadata", async () => {
+    const first = entry({ name: "shared_revision", description: "Measure quasars" });
+    await runtime([first]).search("quasars");
+    const current = entry({ ...first, source: "mcp", sourceName: "current-server" });
+    expect(await runtime([current]).search("quasars")).toEqual([
+      expect.objectContaining({ source: "mcp", sourceName: "current-server", input: "unknown" }),
+    ]);
+  });
+
+  it.each(["listURL", "listUrl"])("prefers the exact catalog ID spelling for %s", async (name) => {
+    const search = runtime(
+      ["listURL", "listUrl"].map((toolName) =>
+        entry({
+          id: `mcp:accounting:${toolName}`,
+          name: toolName,
+          source: "mcp",
+          description: "Find overdue invoices",
+        }),
+      ),
+    );
+    expect(
+      (await search.search(`mcp:accounting:${name}`, { limit: 1 })).map((hit) => hit.id),
+    ).toEqual([`mcp:accounting:${name}`]);
+  });
+
+  it("preserves ranked exact-match order when the limit excludes other exact matches", async () => {
+    const search = runtime([
+      entry({ id: "z", name: "harvest", description: "Collect records" }),
+      entry({ id: "a", name: "harvest", description: "Collect records" }),
+      entry({ id: "m", name: "HARVEST", description: "Collect records" }),
+      entry({ name: "records", description: "harvest" }),
+    ]);
+
+    expect((await search.search("harvest", { limit: 2 })).map((hit) => hit.id)).toEqual(["a", "m"]);
+  });
+
+  it.each([
+    { query: "reminder", expected: "cron_create", why: "expanded toward schedule/cron" },
+    {
+      query: "look up the price",
+      expected: "web_search",
+      why: "intent expanded toward search/web",
+    },
+  ])("finds $expected for $query ($why)", async ({ query, expected }) => {
+    const hits = await runtime().search(query);
+    expect(hits.map((hit) => hit.name)).toContain(expected);
+  });
+
+  it.each([
+    ["cookies", "cookie"],
+    ["policies", "policy"],
+  ])("matches both readings of an -ies plural: %s", (plural, singular) => {
+    // "policies" is "policy" but "cookies" is "cookie"; one rule cannot serve
+    // both, so both stems are emitted and whichever the catalog uses matches.
+    const plurals = new Set(tokenizeDocument(plural));
+    expect(tokenizeDocument(singular).some((term) => plurals.has(term))).toBe(true);
+  });
+
+  it.each([
+    ["getURLs", "url"],
+    ["getOAuthToken", "auth"],
+  ])("keeps acronym and camelCase parts addressable: %s", (name, part) => {
+    // Splitting on case transitions alone cuts "URLs" into "UR"/"Ls".
+    expect(tokenizeDocument(name)).toContain(part);
+  });
+
+  it("returns a tool named exactly like a stopword", async () => {
+    const catalog = [
+      entry({ id: "z-local", name: "do", description: "Run a stored action" }),
+      entry({ id: "a-remote", source: "mcp", name: "DO", description: "Run a remote action" }),
+      entry({ id: "m-local", name: "do", description: "Run another stored action" }),
+      entry({ id: "other", name: "other", description: "Unrelated" }),
+    ];
+    const search = runtime(catalog);
+
+    // "do" tokenizes to nothing; exact matches still retain catalog order,
+    // with visibility applied before the result limit.
+    expect((await search.search(" DO ")).map((hit) => hit.id)).toEqual([
+      "z-local",
+      "a-remote",
+      "m-local",
+    ]);
+    expect((await search.search("do", { limit: 2 })).map((hit) => hit.id)).toEqual([
+      "z-local",
+      "a-remote",
+    ]);
+    expect(
+      (await search.search("do", { includeMcp: false, limit: 1 })).map((hit) => hit.id),
+    ).toEqual(["z-local"]);
+    expect(
+      (
+        await search.search("do", {
+          allowedIds: new Set(["a-remote", "m-local"]),
+          includeMcp: false,
+          limit: 1,
+        })
+      ).map((hit) => hit.id),
+    ).toEqual(["m-local"]);
+  });
+});
+
+describe("readParameterText", () => {
+  it("ignores boolean schemas and literal data while collecting composed metadata", () => {
+    expect(
+      readParameterText({
+        description: "visible",
+        const: { description: "literal" },
+        enum: [{ description: "literal" }],
+        anyOf: [true, false, { description: "branch" }],
+        oneOf: [],
+        allOf: [],
+      }),
+    ).toBe("visible branch");
+  });
+
+  it("reads metadata from tuple items", () => {
+    expect(
+      readParameterText({ items: [{ description: "first" }, { description: "second" }] }),
+    ).toBe("first second");
+  });
+
+  it("keeps cyclic composed schemas bounded", () => {
+    const schema: Record<string, unknown> = {
+      description: "visible",
+    };
+    schema.anyOf = [schema];
+
+    expect(readParameterText(schema).split(" ")).toEqual(Array(5).fill("visible"));
+    expect(readParameterText(schema, 5)).toBe("");
+  });
+});

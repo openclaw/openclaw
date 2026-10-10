@@ -1,10 +1,36 @@
+import { createRequire } from "node:module";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { resolveNpmRunner } from "../../scripts/npm-runner.mjs";
+import { afterEach, describe, expect, it } from "vitest";
+import { resolveNpmRunner } from "../../scripts/npm-runner.mts";
+
+const originalVersions = process.versions;
+afterEach(() => {
+  Object.defineProperty(process, "versions", { value: originalVersions });
+});
 
 describe("resolveNpmRunner", () => {
-  it("anchors npm staging to the active node toolchain when npm-cli.js exists", () => {
-    const execPath = "/Users/test/.nodenv/versions/24.13.0/bin/node";
+  it("runs bundled npm under the default Bun runtime without PATH Node", () => {
+    Object.defineProperty(process, "versions", { value: { ...originalVersions, bun: "1.4.3" } });
+    const packageJsonPath = createRequire(import.meta.url).resolve("npm/package.json");
+    expect(
+      resolveNpmRunner({
+        env: { PATH: "" },
+        npmArgs: ["pack", "space & literal"],
+      }),
+    ).toEqual({
+      command: process.execPath,
+      args: [
+        path.join(path.dirname(packageJsonPath), "bin", "npm-cli.js"),
+        "pack",
+        "space & literal",
+      ],
+      packageJsonPath,
+      shell: false,
+    });
+  });
+
+  it("uses the active node executable when its basename is not node", () => {
+    const execPath = "/Users/test/.toolchains/node-24/bin/node24";
     const expectedNpmCliPath = path.posix.resolve(
       path.posix.dirname(execPath),
       "../lib/node_modules/npm/bin/npm-cli.js",
@@ -14,12 +40,14 @@ describe("resolveNpmRunner", () => {
       execPath,
       env: {},
       existsSync: (candidate) => candidate === expectedNpmCliPath,
+      npmArgs: ["pack", "openclaw@beta"],
       platform: "darwin",
     });
 
     expect(runner).toEqual({
       command: execPath,
-      args: [expectedNpmCliPath],
+      args: [expectedNpmCliPath, "pack", "openclaw@beta"],
+      packageJsonPath: path.posix.resolve(expectedNpmCliPath, "../../package.json"),
       shell: false,
     });
   });
@@ -41,6 +69,7 @@ describe("resolveNpmRunner", () => {
     expect(runner).toEqual({
       command: execPath,
       args: [expectedNpmCliPath],
+      packageJsonPath: path.win32.resolve(expectedNpmCliPath, "../../package.json"),
       shell: false,
     });
   });
@@ -64,8 +93,12 @@ describe("resolveNpmRunner", () => {
     });
   });
 
-  it("wraps an adjacent npm.cmd via cmd.exe without enabling shell mode", () => {
-    const execPath = "C:\\nodejs\\node.exe";
+  it.each([
+    [
+      "C:\\Program Files\\nodejs\\node.exe",
+      '""C:\\Program Files\\nodejs\\npm.cmd" install --omit=dev"',
+    ],
+  ])("wraps the adjacent npm.cmd without shell mode for %s", (execPath, commandLine) => {
     const npmCmdPath = path.win32.resolve(path.win32.dirname(execPath), "npm.cmd");
 
     const runner = resolveNpmRunner({
@@ -79,7 +112,7 @@ describe("resolveNpmRunner", () => {
 
     expect(runner).toEqual({
       command: "C:\\Windows\\System32\\cmd.exe",
-      args: ["/d", "/s", "/c", `${npmCmdPath} install --omit=dev`],
+      args: ["/d", "/s", "/c", commandLine],
       shell: false,
       windowsVerbatimArguments: true,
     });
@@ -104,6 +137,24 @@ describe("resolveNpmRunner", () => {
       shell: false,
       windowsVerbatimArguments: true,
     });
+  });
+
+  it("ignores ambient ComSpec when wrapping an adjacent npm.cmd on Windows", () => {
+    const execPath = "C:\\nodejs\\node.exe";
+    const npmCmdPath = path.win32.resolve(path.win32.dirname(execPath), "npm.cmd");
+
+    const runner = resolveNpmRunner({
+      env: {
+        ComSpec: "C:\\Users\\test\\bin\\cmd.exe",
+        SystemRoot: "D:\\Windows",
+      },
+      execPath,
+      existsSync: (candidate) => candidate === npmCmdPath,
+      npmArgs: ["install"],
+      platform: "win32",
+    });
+
+    expect(runner.command).toBe("D:\\Windows\\System32\\cmd.exe");
   });
 
   it("prefixes PATH with the active node dir when falling back to bare npm", () => {

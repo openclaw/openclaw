@@ -1,0 +1,166 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  deliveryContextFromSession,
+  sessionDeliveryChannel,
+} from "../../utils/delivery-context.read.js";
+import { normalizeSessionRowChatType, normalizeText } from "./session-accessor.sqlite-normalize.js";
+import { bindSessionEntryProvenance } from "./session-accessor.sqlite-provenance.js";
+import { normalizeStatus } from "./session-accessor.sqlite-status.js";
+import type { SessionEntry } from "./types.js";
+
+export function normalizeSessionEntryTimestamp(entry: SessionEntry): SessionEntry {
+  const hasLegacyDeliveryFields = [
+    "route",
+    "deliveryContext",
+    "origin",
+    "channel",
+    "lastChannel",
+    "lastTo",
+    "lastAccountId",
+    "lastThreadId",
+  ].some((key) => key in entry);
+  const delivery =
+    entry.delivery ?? (hasLegacyDeliveryFields ? undefined : { kind: "none" as const });
+  if (asFiniteNumber(entry.updatedAt) !== undefined) {
+    if (entry.delivery === delivery) {
+      return entry;
+    }
+    return delivery ? { ...entry, delivery } : entry;
+  }
+  const updatedAt = asFiniteNumber(entry.sessionStartedAt) ?? Date.now();
+  return delivery ? { ...entry, delivery, updatedAt } : { ...entry, updatedAt };
+}
+
+export function bindSessionRoot(params: {
+  entry: SessionEntry;
+  sessionKey: string;
+  updatedAt: number;
+}) {
+  const updatedAt = Number.isFinite(params.entry.updatedAt)
+    ? params.entry.updatedAt
+    : params.updatedAt;
+  return {
+    session_id: params.entry.sessionId,
+    session_key: params.sessionKey,
+    reason: null,
+    created_at: resolveSqliteSessionCreatedAt(params.entry, updatedAt),
+    updated_at: updatedAt,
+    ...bindSessionEntryProvenance(params.entry),
+    ...bindSessionWindowEntryProjection(params),
+    primary_conversation_id: null,
+  };
+}
+
+export function bindSessionWindowEntryProjection(params: {
+  entry: SessionEntry;
+  sessionKey: string;
+}) {
+  return {
+    previous_session_id: normalizeText(params.entry.previousSessionId),
+    session_scope: resolveSqliteSessionScope(params.entry, params.sessionKey),
+    started_at: finiteSqliteNumber(params.entry.startedAt),
+    ended_at: finiteSqliteNumber(params.entry.endedAt),
+    status: normalizeStatus(params.entry.status),
+    chat_type: normalizeSessionRowChatType(params.entry.chatType),
+    channel: normalizeText(sessionDeliveryChannel(params.entry)),
+    account_id: normalizeText(deliveryContextFromSession(params.entry)?.accountId),
+    model_provider: normalizeText(params.entry.modelProvider),
+    model: normalizeText(params.entry.model),
+    agent_harness_id: normalizeText(params.entry.agentHarnessId),
+    parent_session_key: normalizeText(params.entry.parentSessionKey),
+    spawned_by: normalizeText(params.entry.spawnedBy),
+    display_name: resolveSqliteSessionDisplayName(params.entry),
+  };
+}
+
+/** Project canonical hot facts into the logical-node query columns. */
+export function bindSessionNode(params: {
+  entry: SessionEntry;
+  entryJson: string;
+  sessionKey: string;
+  updatedAt: number;
+}) {
+  const actor = params.entry.createdActor;
+  return {
+    session_key: params.sessionKey,
+    current_session_id: params.entry.sessionId,
+    entry_json: params.entryJson,
+    entry_valid: 1,
+    updated_at: params.updatedAt,
+    status: normalizeStatus(params.entry.status),
+    created_at: finiteSqliteNumber(params.entry.createdAt),
+    created_via: normalizeSqliteCreatedVia(params.entry.createdVia),
+    created_actor_type: normalizeSqliteCreatedActorType(actor?.type),
+    created_actor_id: normalizeText(actor?.id),
+    project_id: normalizeText(params.entry.projectId),
+    parent_session_key:
+      normalizeText(params.entry.parentSessionKey) ?? normalizeText(params.entry.spawnedBy),
+    spawned_by: normalizeText(params.entry.spawnedBy),
+    fork_source_session_key: normalizeText(params.entry.forkSource?.sessionKey),
+    fork_source_session_id: normalizeText(params.entry.forkSource?.sessionId),
+    fork_source_entry_id: normalizeText(params.entry.forkSource?.entryId),
+    label: normalizeText(params.entry.label),
+    display_name: normalizeText(params.entry.displayName),
+    category: normalizeText(params.entry.category),
+    icon: normalizeText(params.entry.icon),
+    pinned_at: finiteSqliteNumber(params.entry.pinnedAt),
+    archived_at: finiteSqliteNumber(params.entry.archivedAt),
+    last_read_at: finiteSqliteNumber(params.entry.lastReadAt),
+    last_interaction_at: finiteSqliteNumber(params.entry.lastInteractionAt),
+    last_activity_at: finiteSqliteNumber(params.entry.lastActivityAt),
+  };
+}
+
+function normalizeSqliteCreatedVia(value: SessionEntry["createdVia"]) {
+  return value === "operator" ||
+    value === "spawn" ||
+    value === "channel" ||
+    value === "cron" ||
+    value === "talk" ||
+    value === "run" ||
+    value === "plugin" ||
+    value === "internal"
+    ? value
+    : null;
+}
+
+function normalizeSqliteCreatedActorType(value: unknown) {
+  return value === "human" || value === "agent" || value === "system" ? value : null;
+}
+
+function resolveSqliteSessionScope(
+  entry: Pick<SessionEntry, "chatType">,
+  sessionKey: string,
+): "conversation" | "shared-main" | "group" | "channel" {
+  const chatType = normalizeSessionRowChatType(entry.chatType);
+  const normalizedKey = sessionKey.trim().toLowerCase();
+  if (chatType === "direct" && (normalizedKey === "main" || normalizedKey.endsWith(":main"))) {
+    return "shared-main";
+  }
+  if (chatType === "group" || chatType === "channel") {
+    return chatType;
+  }
+  return "conversation";
+}
+
+function resolveSqliteSessionCreatedAt(entry: SessionEntry, updatedAt: number): number {
+  for (const candidate of [entry.sessionStartedAt, entry.startedAt, entry.updatedAt, updatedAt]) {
+    if (typeof candidate === "number" && Number.isFinite(candidate) && candidate >= 0) {
+      return candidate;
+    }
+  }
+  return updatedAt;
+}
+
+function finiteSqliteNumber(value: unknown): number | null {
+  return asFiniteNumber(value) ?? null;
+}
+
+function resolveSqliteSessionDisplayName(entry: SessionEntry): string | null {
+  return (
+    normalizeText(entry.displayName) ??
+    normalizeText(entry.label) ??
+    normalizeText(entry.subject) ??
+    normalizeText(entry.groupId)
+  );
+}

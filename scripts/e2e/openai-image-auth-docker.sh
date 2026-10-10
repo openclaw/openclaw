@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 # Runs a mocked OpenAI image-generation auth smoke inside Docker against the
 # package-installed functional E2E image.
 set -euo pipefail
@@ -27,5 +31,5 @@ export OPENCLAW_SKIP_GMAIL_WATCHER=1
 export OPENCLAW_SKIP_CRON=1
 export OPENCLAW_SKIP_CANVAS_HOST=1
 
-tsx scripts/e2e/openai-image-auth-docker-client.ts
+tsx test/e2e/qa-lab/runtime/openai-image-auth-docker-client.ts
 '

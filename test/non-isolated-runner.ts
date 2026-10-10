@@ -1,19 +1,111 @@
-import fs from "node:fs";
+// Non-isolated runner helps execute tests without Vitest isolation.
 import path from "node:path";
-import { TestRunner, type RunnerTestSuite, vi } from "vitest";
+import { inspect } from "node:util";
+import type {
+  EvaluatedModuleNode as ViteEvaluatedModuleNode,
+  EvaluatedModules as ViteEvaluatedModules,
+} from "vite/module-runner";
+import {
+  TestRunner,
+  type RunnerTask,
+  type RunnerTestFile,
+  type TestTryOptions,
+  type VitestTestRunner,
+  vi,
+} from "vitest";
+import type { SessionMcpRuntimeManager } from "../src/agents/agent-bundle-mcp-types.js";
+import { resetAgentEventsForTest } from "../src/infra/agent-events.js";
+import { loggingState } from "../src/logging/state.js";
+import { clearNamedPluginRuntimeStoresForTest } from "../src/plugin-sdk/runtime-store-registry.js";
+import {
+  isGatewayWorkAdmissionClosed,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../src/process/gateway-work-admission.js";
+import { hasOpenClawAgentDatabaseAsyncResources } from "../src/state/openclaw-agent-db-resources.js";
+import { clearJsdomViewportFocus } from "./jsdom-compat.mjs";
+import {
+  type CustomElementTracking,
+  dropRepoOwnedCustomElements,
+  trackCustomElementRegistry,
+} from "./jsdom-custom-elements.ts";
+import { repositoryTestApiPublications } from "./repository-test-api-publications.ts";
+import {
+  closeLeakedSkillsWatchers,
+  rememberSkillsWatcherGenerations,
+  setSkillsWatcherCaptureBeforeReset,
+} from "./skills-watcher-test-lifecycle.ts";
+import {
+  drainSqliteTestAgentOwner,
+  drainSqliteTestSingletons,
+  hasRetainedSqliteTestCustody,
+  rememberSqliteTestAgentOwner,
+  retainSqliteTestCustody,
+  retireSqliteTestSingleton,
+  settleSqliteTestAgentCloses,
+  sqliteTestSingletonPublications,
+} from "./sqlite-test-lifecycle.ts";
 
-type EvaluatedModuleNode = {
-  promise?: unknown;
-  exports?: unknown;
-  evaluated?: boolean;
-  importers: Set<string>;
+type EvaluatedModuleNode = ViteEvaluatedModuleNode & {
+  mockedExports?: unknown;
 };
 
 type EvaluatedModules = {
   idToModuleMap: Map<string, EvaluatedModuleNode>;
+  invalidateModule: ViteEvaluatedModules["invalidateModule"];
+  [RETIRED_TEST_API_EXECUTIONS]?: WeakSet<ModuleExecution>;
+};
+
+// Vitest's public worker type leaves execution entries untyped; mirror the
+// evaluator's external flag without importing an unexported package subpath.
+type ModuleExecution = { external?: boolean };
+type ModuleExecutionInfo = Map<string, ModuleExecution>;
+
+type ModuleMocker = {
+  reset?: () => void;
+  pendingMockResolution: Promise<void>;
+};
+
+type TestRunnerInternals = {
+  moduleRunner?: { mocker?: ModuleMocker };
+  workerState: { evaluatedModules: unknown; moduleExecutionInfo: ModuleExecutionInfo };
 };
 
 const SHARED_TEST_SETUP = Symbol.for("openclaw.sharedTestSetup");
+const RETIRED_TEST_API_EXECUTIONS = Symbol.for("openclaw.retiredTestApiExecutions");
+const EMBEDDED_RUN_STATE = Symbol.for("openclaw.embeddedRunState");
+const REPLY_RUN_REGISTRY = Symbol.for("openclaw.replyRunRegistry");
+const DIAGNOSTIC_EVENTS_STATE = Symbol.for("openclaw.diagnosticEvents.state.v1");
+const DIAGNOSTIC_EVENT_LISTENER_PRESENCE = Symbol.for(
+  "openclaw.diagnosticEventListenerPresence.v1",
+);
+const SESSION_SUSPENSION_TEST_API = Symbol.for("openclaw.sessionSuspensionTestApi");
+const SECRET_REDACTION_TEST_API = Symbol.for("openclaw.secretRedactionRegistryTestApi");
+const SESSION_MCP_RUNTIME_MANAGER = Symbol.for("openclaw.sessionMcpRuntimeManager");
+const RETAINED_MCP_MANAGERS = Symbol.for("openclaw.nonIsolatedRetainedMcpManagers");
+const SUBAGENT_REGISTRY_TEST_API = Symbol.for("openclaw.subagentRegistryTestApi");
+// Shared-worker scoped: the registry lives on the worker global, not in the module graph.
+const CUSTOM_ELEMENT_TRACKING = Symbol.for("openclaw.nonIsolatedCustomElementTracking");
+const nativeConsoleMethods = {
+  log: console.log,
+  info: console.info,
+  warn: console.warn,
+  error: console.error,
+  debug: console.debug,
+  trace: console.trace,
+};
+// loggingState is keyed off globalThis precisely so it survives module reloads,
+// so vi.resetModules() below cannot undo what a file latched into it.
+const baselineLoggingState = { ...loggingState };
+const nativeTimerGlobals = {
+  setTimeout: globalThis.setTimeout,
+  clearTimeout: globalThis.clearTimeout,
+  setInterval: globalThis.setInterval,
+  clearInterval: globalThis.clearInterval,
+  setImmediate: globalThis.setImmediate,
+  clearImmediate: globalThis.clearImmediate,
+  Date: globalThis.Date,
+};
 
 function getSharedTestHome(): string | undefined {
   const globalState = globalThis as typeof globalThis & {
@@ -22,21 +114,55 @@ function getSharedTestHome(): string | undefined {
   return globalState[SHARED_TEST_SETUP]?.tempHome ?? process.env.OPENCLAW_TEST_HOME;
 }
 
-function resetEvaluatedModules(modules: EvaluatedModules, resetMocks: boolean) {
-  const skipPaths = [
-    /\/vitest\/dist\//,
-    /vitest-virtual-\w+\/dist/u,
-    /@vitest\/dist/u,
-    ...(resetMocks ? [] : [/^mock:/u]),
-  ];
+function resetEvaluatedModules(
+  modules: EvaluatedModules,
+  executions: ModuleExecutionInfo,
+  testFiles: string,
+) {
+  const skipPaths = [/\/vitest\/dist\//, /vitest-virtual-\w+\/dist/u, /@vitest\/dist/u];
+  const retainedSqlite = hasRetainedSqliteTestCustody();
+  // Vitest reuses the graph across runner instances. Weak marks prevent a past
+  // execution from owning a later mock-only slot without retaining any records
+  // or changing Vitest's timing/coverage data; each evaluation gets a new record.
+  const retiredExecutions = (modules[RETIRED_TEST_API_EXECUTIONS] ??= new WeakSet());
 
   modules.idToModuleMap.forEach((node, modulePath) => {
     if (skipPaths.some((pattern) => pattern.test(modulePath))) {
       return;
     }
-    node.promise = undefined;
-    node.exports = undefined;
-    node.evaluated = false;
+    // importActual can execute a source then replace its meta with a mock placeholder.
+    // Vitest's evaluator records each execution independently (including native ones),
+    // using the unprefixed id for automocks. Module resets preserve those records.
+    const key = repositoryTestApiPublications.get(node.file);
+    const sqliteKey = sqliteTestSingletonPublications.get(node.file);
+    const executionId = node.id.startsWith("mock:") ? node.id.slice(5) : node.id;
+    const execution = executions.get(executionId);
+    if (
+      (key || (sqliteKey && !retainedSqlite)) &&
+      execution &&
+      !execution.external &&
+      !retiredExecutions.has(execution)
+    ) {
+      retiredExecutions.add(execution);
+      const publication =
+        key === undefined ? undefined : Object.getOwnPropertyDescriptor(globalThis, key);
+      if (key && publication?.configurable && "value" in publication) {
+        Reflect.deleteProperty(globalThis, key);
+      }
+      if (sqliteKey && !retainedSqlite) {
+        retireSqliteTestSingleton(sqliteKey, testFiles);
+      }
+    }
+    // Mock metadata owns factories and cached exports after the registry resets.
+    // Retire those nodes while preserving ordinary transformed-code metadata.
+    if (modulePath.startsWith("mock:") || (node.meta && "mockedModule" in node.meta)) {
+      modules.invalidateModule(node);
+      node.mockedExports = undefined;
+    } else {
+      node.promise = undefined;
+      node.exports = undefined;
+      node.evaluated = false;
+    }
     node.importers.clear();
   });
 }
@@ -60,41 +186,509 @@ function restoreSharedTestHomeAfterEnvUnstub(testHomeRaw: string | undefined): v
   process.env.XDG_CACHE_HOME = path.join(testHome, ".cache");
 }
 
-export default class OpenClawNonIsolatedRunner extends TestRunner {
-  override onCollectStart(file: { filepath: string }) {
-    super.onCollectStart(file);
-    restoreSharedTestHomeAfterEnvUnstub(getSharedTestHome());
-    const orderLogPath = process.env.OPENCLAW_VITEST_FILE_ORDER_LOG?.trim();
-    if (orderLogPath) {
-      fs.appendFileSync(orderLogPath, `START ${file.filepath}\n`);
+function customElementTrackingStore(): Record<PropertyKey, unknown> & {
+  customElements?: CustomElementRegistry;
+  [CUSTOM_ELEMENT_TRACKING]?: CustomElementTracking;
+} {
+  return globalThis;
+}
+
+function installCustomElementTracking(): void {
+  const globalStore = customElementTrackingStore();
+  const registry = globalStore.customElements;
+  // Re-track when the lane switches back to a fresh jsdom window: the previous
+  // tracking would hold a dead definitions array and stop dropping stale classes.
+  if (!registry || globalStore[CUSTOM_ELEMENT_TRACKING]?.registry === registry) {
+    return;
+  }
+  globalStore[CUSTOM_ELEMENT_TRACKING] = trackCustomElementRegistry(registry);
+}
+
+function dropTrackedRepoOwnedCustomElements(): void {
+  const tracking = customElementTrackingStore()[CUSTOM_ELEMENT_TRACKING];
+  if (tracking) {
+    dropRepoOwnedCustomElements(tracking);
+  }
+}
+
+// The shared jsdom window keeps whatever the previous file mounted. Test helpers
+// that look up `document.body.querySelector(...)` then answer the earlier file's
+// leaked dialog instead of the one under test, and focus assertions read its stale
+// activeElement. File-scoped DOM has to die with the file, like the module graph.
+// `document.head` is left alone: externalized dependency styles register once per
+// worker and cannot be replayed.
+function resetSharedDocumentBody(): void {
+  const body = (globalThis as { document?: Document }).document?.body;
+  if (!body) {
+    return;
+  }
+  body.replaceChildren();
+  for (const attribute of body.getAttributeNames()) {
+    body.removeAttribute(attribute);
+  }
+  // jsdom can retain detached shadow focus even after the fixture removes its DOM.
+  // Focus body to clear it, then blur while focusable to restore fresh-document state.
+  body.tabIndex = -1;
+  body.focus();
+  body.blur();
+  body.removeAttribute("tabindex");
+  clearJsdomViewportFocus(body.ownerDocument);
+}
+
+function restoreRealTimers(): void {
+  if (vi.isFakeTimers()) {
+    vi.useRealTimers();
+  }
+}
+
+function restoreNativeTimerGlobals(): void {
+  Object.assign(globalThis, nativeTimerGlobals);
+}
+
+// enableConsoleCapture() swaps every console method for a forwarder and latches
+// routing that production only unwinds at process exit (stdio MCP servers, `--json`
+// one-shot commands), so a shared worker carries both into the next file. That
+// forwarder writes to process.stderr once forceConsoleToStderr is latched, and the
+// next file's console spy then records nothing.
+function restoreConsoleRoutingState(): void {
+  Object.assign(console, nativeConsoleMethods);
+  // The EPIPE handlers really are attached to the worker's stdout/stderr; resetting
+  // this flag would let the next enableConsoleCapture() stack a second pair.
+  const { streamErrorHandlersInstalled } = loggingState;
+  Object.assign(loggingState, baselineLoggingState, { streamErrorHandlersInstalled });
+}
+
+type CleanupAction = () => void;
+
+type EmbeddedRunHandle = {
+  abort?: () => void;
+  cancel?: (reason?: "user_abort" | "restart" | "superseded") => void;
+};
+
+type EmbeddedRunWaiter = {
+  timer?: NodeJS.Timeout;
+  resolve?: (ended: boolean) => void;
+};
+
+type EmbeddedRunStateForTest = {
+  activeRuns?: Map<unknown, EmbeddedRunHandle>;
+  snapshots?: Map<unknown, unknown>;
+  sessionIdsByKey?: Map<unknown, unknown>;
+  sessionIdsByFile?: Map<unknown, unknown>;
+  abandonedRunsBySessionId?: Map<unknown, unknown>;
+  abandonedRunSessionIdsByKey?: Map<unknown, unknown>;
+  abandonedRunSessionIdsByFile?: Map<unknown, unknown>;
+  waiters?: Map<unknown, Set<EmbeddedRunWaiter>>;
+  modelSwitchRequests?: Map<unknown, unknown>;
+};
+
+type ReplyRunWaiter = (ended: boolean) => void;
+
+type ReplyRunOperation = {
+  abortForRestart?: () => void;
+};
+
+type ReplyRunStateForTest = {
+  activeRunsByKey?: Map<unknown, ReplyRunOperation>;
+  activeKeysBySessionId?: Map<unknown, unknown>;
+  waitKeysBySessionId?: Map<unknown, unknown>;
+  waitersByKey?: Map<unknown, Set<ReplyRunWaiter>>;
+};
+
+type DiagnosticEventsStateForTest = {
+  listeners?: Set<unknown>;
+  trustedListeners?: Set<unknown>;
+  toolExecutionListeners?: Set<unknown>;
+  asyncQueue?: unknown[];
+};
+
+type SessionSuspensionTestApi = {
+  resetSessionSuspensionStateForTest?: () => void;
+};
+
+type SecretRedactionTestApi = {
+  resetSecretRedactionRegistryForTest?: () => void;
+};
+
+function runCleanupActions(actions: CleanupAction[]): unknown {
+  let firstError: unknown;
+  for (const action of actions) {
+    try {
+      action();
+    } catch (error) {
+      firstError ??= error;
+    }
+  }
+  return firstError;
+}
+
+function resetOpenClawGlobalRunState(): void {
+  const cleanupActions: CleanupAction[] = [];
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  const embeddedRunState = globalStore[EMBEDDED_RUN_STATE] as EmbeddedRunStateForTest | undefined;
+  for (const handle of embeddedRunState?.activeRuns?.values() ?? []) {
+    cleanupActions.push(() => {
+      if (handle.cancel) {
+        handle.cancel("restart");
+        return;
+      }
+      handle.abort?.();
+    });
+  }
+  for (const waiters of embeddedRunState?.waiters?.values() ?? []) {
+    for (const waiter of waiters) {
+      cleanupActions.push(() => {
+        if (waiter.timer) {
+          clearTimeout(waiter.timer);
+        }
+        waiter.resolve?.(true);
+      });
     }
   }
 
-  override async onAfterRunSuite(suite: RunnerTestSuite) {
-    await super.onAfterRunSuite(suite);
-    if (this.config.isolate || !("filepath" in suite) || typeof suite.filepath !== "string") {
+  const replyRunState = globalStore[REPLY_RUN_REGISTRY] as ReplyRunStateForTest | undefined;
+  for (const operation of replyRunState?.activeRunsByKey?.values() ?? []) {
+    cleanupActions.push(() => {
+      operation.abortForRestart?.();
+    });
+  }
+  for (const waiters of replyRunState?.waitersByKey?.values() ?? []) {
+    for (const waiter of waiters) {
+      cleanupActions.push(() => {
+        waiter(false);
+      });
+    }
+  }
+
+  const cleanupError = runCleanupActions(cleanupActions);
+  if (cleanupError) {
+    // oxlint-disable-next-line typescript/only-throw-error -- cleanup hooks may throw their original non-Error value; preserve that test-runner behavior.
+    throw cleanupError;
+  }
+
+  embeddedRunState?.activeRuns?.clear();
+  embeddedRunState?.snapshots?.clear();
+  embeddedRunState?.sessionIdsByKey?.clear();
+  embeddedRunState?.sessionIdsByFile?.clear();
+  embeddedRunState?.abandonedRunsBySessionId?.clear();
+  embeddedRunState?.abandonedRunSessionIdsByKey?.clear();
+  embeddedRunState?.abandonedRunSessionIdsByFile?.clear();
+  embeddedRunState?.waiters?.clear();
+  embeddedRunState?.modelSwitchRequests?.clear();
+
+  replyRunState?.activeRunsByKey?.clear();
+  replyRunState?.activeKeysBySessionId?.clear();
+  replyRunState?.waitKeysBySessionId?.clear();
+  replyRunState?.waitersByKey?.clear();
+}
+
+function resetOpenClawGlobalDiagnosticState(): void {
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  const state = globalStore[DIAGNOSTIC_EVENTS_STATE] as DiagnosticEventsStateForTest | undefined;
+  // The dispatcher intentionally survives module reloads. Mirror isolate mode
+  // without duplicating its private state defaults in the test runner.
+  state?.listeners?.clear();
+  state?.trustedListeners?.clear();
+  state?.toolExecutionListeners?.clear();
+  state?.asyncQueue?.splice(0);
+  Reflect.deleteProperty(globalStore, DIAGNOSTIC_EVENTS_STATE);
+  // The listener-presence mirror is a separate globalThis record; clearing the
+  // sets above without zeroing it leaves hasInternalDiagnosticEventListeners()
+  // true for the next file (e.g. an import-time registration like
+  // diagnostic-run-activity.ts whose stop handle died with the module registry).
+  const presence = globalStore[DIAGNOSTIC_EVENT_LISTENER_PRESENCE] as
+    | { internalCount?: number; trustedCount?: number }
+    | undefined;
+  if (presence) {
+    presence.internalCount = 0;
+    presence.trustedCount = 0;
+  }
+}
+
+function resetOpenClawSessionSuspensionState(): void {
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  const api = globalStore[SESSION_SUSPENSION_TEST_API] as SessionSuspensionTestApi | undefined;
+  api?.resetSessionSuspensionStateForTest?.();
+}
+
+function resetOpenClawSecretRedactionState(): void {
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  const api = globalStore[SECRET_REDACTION_TEST_API] as SecretRedactionTestApi | undefined;
+  api?.resetSecretRedactionRegistryForTest?.();
+}
+
+async function retireSessionMcpRuntimeManager(): Promise<void> {
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  const manager = globalStore[SESSION_MCP_RUNTIME_MANAGER] as SessionMcpRuntimeManager | undefined;
+  const retained = globalStore[RETAINED_MCP_MANAGERS] as Set<SessionMcpRuntimeManager> | undefined;
+  if (!manager || retained?.has(manager)) {
+    return;
+  }
+  try {
+    const { createAgentCleanupScope } = await vi.importActual<
+      typeof import("../src/agents/run-cleanup-timeout.js")
+    >("../src/agents/run-cleanup-timeout.js");
+    // Old manager modules and this scope share the process-global outcome carrier.
+    const scope = createAgentCleanupScope();
+    await scope.run(() => {
+      const dispose = manager.disposeAll;
+      if (vi.isMockFunction(dispose)) {
+        throw new Error("MCP test teardown cannot use a mocked disposer");
+      }
+      return dispose.call(manager);
+    });
+    if (scope.outcome !== "closed") {
+      throw new Error("MCP test teardown could not confirm cleanup");
+    }
+  } catch (error) {
+    // Reread after disposal: other cleanup may have retained another owner while we awaited.
+    const owners =
+      (globalStore[RETAINED_MCP_MANAGERS] as Set<SessionMcpRuntimeManager> | undefined) ??
+      new Set();
+    owners.add(manager);
+    globalStore[RETAINED_MCP_MANAGERS] = owners;
+    throw error;
+  }
+  if (globalStore[SESSION_MCP_RUNTIME_MANAGER] === manager) {
+    Reflect.deleteProperty(globalStore, SESSION_MCP_RUNTIME_MANAGER);
+  }
+}
+
+// Join the native owner's latest pass, including imports queued while cleanup waits.
+async function drainMockerResolveMocks(mocker: ModuleMocker | undefined): Promise<void> {
+  if (!mocker) {
+    return;
+  }
+  while (true) {
+    const tail = mocker.pendingMockResolution;
+    await tail;
+    if (mocker.pendingMockResolution === tail) {
       return;
     }
+  }
+}
 
-    const orderLogPath = process.env.OPENCLAW_VITEST_FILE_ORDER_LOG?.trim();
-    if (orderLogPath) {
-      fs.appendFileSync(orderLogPath, `END ${suite.filepath}\n`);
-    }
+export default class OpenClawNonIsolatedRunner extends TestRunner {
+  declare onTaskUpdate: VitestTestRunner["onTaskUpdate"];
 
-    // Mirror the missing cleanup from Vitest isolate mode so shared workers do
-    // not carry file-scoped timers, stubs, spies, or stale module state
-    // forward into the next file.
-    if (vi.isFakeTimers()) {
-      vi.useRealTimers();
+  override onCollectStart(file: RunnerTestFile) {
+    super.onCollectStart(file);
+    setSkillsWatcherCaptureBeforeReset(() => this.rememberSkillsWatchers());
+    if (!this.config.isolate) {
+      installCustomElementTracking();
     }
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
+    restoreRealTimers();
+    restoreNativeTimerGlobals();
+    restoreSharedTestHomeAfterEnvUnstub(getSharedTestHome());
+  }
+
+  override async onBeforeRunTask(test: RunnerTask) {
+    restoreRealTimers();
+    restoreNativeTimerGlobals();
+    // aroundEach setup and its fixtures run before the first attempt's try hook.
+    await settleSqliteTestAgentCloses();
+    await super.onBeforeRunTask(test);
+    this.rememberSqliteAgentOwner();
+    this.rememberSkillsWatchers();
+  }
+
+  onTaskFinished() {
+    this.rememberSqliteAgentOwner();
+    this.rememberSkillsWatchers();
+  }
+
+  private rememberSqliteAgentOwner() {
+    if (this.config.isolate) {
+      return;
+    }
+    const internals = this as unknown as TestRunnerInternals;
+    rememberSqliteTestAgentOwner(
+      (internals.workerState.evaluatedModules as EvaluatedModules).idToModuleMap.values(),
+      internals.workerState.moduleExecutionInfo,
+    );
+  }
+
+  private rememberSkillsWatchers() {
+    const internals = this as unknown as TestRunnerInternals;
+    rememberSkillsWatcherGenerations(
+      internals.workerState.evaluatedModules as ViteEvaluatedModules,
+      internals.workerState.moduleExecutionInfo,
+    );
+  }
+
+  // Teardown may only schedule agent database closes (the synchronous test closer does).
+  // Wait for that Worker retirement before each test (onBeforeRunTask) and retry attempt
+  // so a lease release never overlaps later work. Like the file drain, this waits
+  // without a deadline; the no-output watchdog owns real hangs.
+  // oxlint-disable-next-line typescript/no-misused-promises -- Vitest awaits this hook; its concrete TestRunner declaration narrows the return to void.
+  override async onBeforeTryTask(test: RunnerTask, options: TestTryOptions) {
+    restoreRealTimers();
+    restoreNativeTimerGlobals();
+    await settleSqliteTestAgentCloses();
+    super.onBeforeTryTask(test, options);
+  }
+
+  // Cross-file cleanup lives in onAfterRunFiles, not onAfterRunSuite: vitest
+  // early-returns runSuite for files that failed during collection (and for
+  // skipped file suites) without firing onAfterRunSuite, which used to leave
+  // the crashed file's evaluated real modules cached in the shared worker so
+  // the next file's vi.mock factories silently never applied. The worker loop
+  // calls startTests per file, so this hook runs after every file regardless
+  // of its collect/run outcome.
+  // oxlint-disable-next-line typescript/no-misused-promises -- Vitest awaits this hook; its concrete TestRunner declaration narrows the return to void.
+  override async onAfterRunFiles(files: RunnerTestFile[]) {
+    const testFiles = files
+      .map((file) => path.relative(this.config.root, file.filepath))
+      .join(", ");
+    const internals = this as unknown as TestRunnerInternals;
+    const failed = new Set<RunnerTestFile>();
+    const recordFailure = (phase: string, error: unknown) => {
+      const detail = inspect(error, { depth: null, customInspect: false, colors: false });
+      for (const file of files) {
+        const message = `${path.relative(this.config.root, file.filepath)}: ${phase} failed\n${detail}`;
+        file.result ??= { state: "fail" };
+        file.result.state = "fail";
+        (file.result.errors ??= []).push({
+          name: "TestTeardownError",
+          message,
+          stack: `TestTeardownError: ${message}`,
+        });
+        failed.add(file);
+      }
+    };
+    const clean = (phase: string, run: () => void) => {
+      try {
+        run();
+        return true;
+      } catch (error) {
+        recordFailure(phase, error);
+        return false;
+      }
+    };
+    const drain = async (phase: string, run: () => Promise<void>) => {
+      try {
+        await run();
+        return true;
+      } catch (error) {
+        recordFailure(phase, error);
+        return false;
+      }
+    };
+    const publishFailures = () =>
+      this.onTaskUpdate?.(
+        [...failed].map((file) => [file.id, file.result, file.meta]),
+        [],
+      );
+    clean("Vitest file completion", () => super.onAfterRunFiles(files));
+    await drain("mock resolution", () => drainMockerResolveMocks(internals.moduleRunner?.mocker));
+    // The last test's scheduled closes must finish before cleanup restores shared state.
+    await settleSqliteTestAgentCloses();
+    // Restore independent file state even when failed cancellation retains the runtime owners.
     const testHome = getSharedTestHome();
-    vi.unstubAllEnvs();
-    restoreSharedTestHomeAfterEnvUnstub(testHome);
-    vi.clearAllMocks();
-    vi.resetModules();
-    this.moduleRunner?.mocker?.reset?.();
-    resetEvaluatedModules(this.workerState.evaluatedModules as EvaluatedModules, true);
+    for (const [phase, run] of [
+      ["mock restoration", () => vi.restoreAllMocks()],
+      ["real timers", restoreRealTimers],
+      ["native timers", restoreNativeTimerGlobals],
+      ["console routing", restoreConsoleRoutingState],
+      ["global stubs", () => vi.unstubAllGlobals()],
+      ["environment stubs", () => vi.unstubAllEnvs()],
+      ["test home", () => restoreSharedTestHomeAfterEnvUnstub(testHome)],
+      ["mock history", () => vi.clearAllMocks()],
+    ] as const) {
+      clean(phase, run);
+    }
+    clean("Gateway drain admission", () => {
+      if (isGatewayWorkAdmissionClosed()) {
+        markGatewayRestartDraining();
+      }
+    });
+    if (!clean("run state", resetOpenClawGlobalRunState)) {
+      // Failed cancellation retains the run's runtime, storage and module generation.
+      retainSqliteTestCustody();
+      await publishFailures();
+      return;
+    }
+    if (
+      !this.config.isolate &&
+      !(await drain("MCP runtime custody", retireSessionMcpRuntimeManager))
+    ) {
+      retainSqliteTestCustody();
+    }
+
+    for (const [phase, run] of [
+      ["agent events", resetAgentEventsForTest],
+      ["diagnostic state", resetOpenClawGlobalDiagnosticState],
+      ["session suspension", resetOpenClawSessionSuspensionState],
+    ] as const) {
+      clean(phase, run);
+    }
+    // Retire this file's watchers before module invalidation can orphan them.
+    this.rememberSkillsWatchers();
+    await drain("skills watchers", async () => {
+      const leaked = await closeLeakedSkillsWatchers();
+      if (leaked > 0) {
+        throw new Error(
+          `left skills watchers open (${leaked} live watch entries); skills.status and skill snapshot preparation start real watchers, so close them in afterEach with closeSkillsWatchers(true) or disable watching with skills.load.watch: false`,
+        );
+      }
+    });
+    setSkillsWatcherCaptureBeforeReset(undefined);
+    if (
+      !(await drain("subagent registry", async () => {
+        const api = (globalThis as Record<PropertyKey, unknown>)[SUBAGENT_REGISTRY_TEST_API] as
+          | { resetSubagentRegistryForTests(options: { persist: false }): void | Promise<void> }
+          | undefined;
+        await api?.resetSubagentRegistryForTests({ persist: false });
+      }))
+    ) {
+      retainSqliteTestCustody();
+    }
+    if (!hasRetainedSqliteTestCustody()) {
+      const drained = await drain("agent database custody", async () => {
+        if (hasOpenClawAgentDatabaseAsyncResources()) {
+          const { closeOpenClawAgentDatabasesAsync } = await vi.importActual<
+            typeof import("../src/state/openclaw-agent-db-lifecycle.js")
+          >("../src/state/openclaw-agent-db-lifecycle.js");
+          await closeOpenClawAgentDatabasesAsync();
+        } else if (!this.config.isolate) {
+          await drainSqliteTestAgentOwner(
+            (internals.workerState.evaluatedModules as EvaluatedModules).idToModuleMap.values(),
+            internals.workerState.moduleExecutionInfo,
+            testFiles,
+          );
+        }
+      });
+      if (!drained) {
+        retainSqliteTestCustody();
+      }
+    }
+    if (!(await drain("singleton lifecycle", () => drainSqliteTestSingletons(recordFailure)))) {
+      retainSqliteTestCustody();
+    }
+    clean("secret redaction", resetOpenClawSecretRedactionState);
+    if (!this.config.isolate) {
+      for (const [phase, run] of [
+        ["plugin runtimes", clearNamedPluginRuntimeStoresForTest],
+        ["custom elements", dropTrackedRepoOwnedCustomElements],
+        ["document body", resetSharedDocumentBody],
+        ["Gateway admission", resetGatewayWorkAdmission],
+        ["module cache", () => vi.resetModules()],
+        ["module mocks", () => internals.moduleRunner?.mocker?.reset?.()],
+        [
+          "evaluated modules",
+          () =>
+            resetEvaluatedModules(
+              internals.workerState.evaluatedModules as EvaluatedModules,
+              internals.workerState.moduleExecutionInfo,
+              testFiles,
+            ),
+        ],
+      ] as const) {
+        clean(phase, run);
+      }
+    }
+    if (failed.size) {
+      await publishFailures();
+    }
   }
 }

@@ -1,4 +1,4 @@
-import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import {
   ensureAuthProfileStore,
   externalCliDiscoveryForProviderAuth,
@@ -8,73 +8,12 @@ import {
   type AuthProfileStore,
   type ProfileUsageStats,
 } from "../../agents/auth-profiles.js";
-import { normalizeProviderId } from "../../agents/model-selection.js";
+import { buildAuthProfileUnusableHint } from "../../agents/auth-profiles/oauth-refresh-failure.js";
+import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { shortenHomePath } from "../../utils.js";
 import { loadModelsConfig } from "./load-config.js";
-import { resolveKnownAgentId } from "./shared.js";
-
-type AuthProfileSummary = {
-  id: string;
-  provider: string;
-  type: AuthProfileCredential["type"];
-  label: string;
-  email?: string;
-  displayName?: string;
-  expiresAt?: string;
-  cooldownUntil?: string;
-  disabledUntil?: string;
-};
-
-function resolveProviderFilter(rawProvider: string | undefined): {
-  provider: string | undefined;
-  externalCliProvider: string | undefined;
-  matches: (profile: AuthProfileSummary) => boolean;
-} {
-  const provider = rawProvider?.trim() ? normalizeProviderId(rawProvider) : undefined;
-  if (!provider) {
-    return {
-      provider: undefined,
-      externalCliProvider: undefined,
-      matches: () => true,
-    };
-  }
-  if (provider === "openai") {
-    return {
-      provider,
-      externalCliProvider: "openai-codex",
-      matches: (profile) => profile.provider === "openai" || profile.provider === "openai-codex",
-    };
-  }
-  return {
-    provider,
-    externalCliProvider: provider,
-    matches: (profile) => profile.provider === provider,
-  };
-}
-
-function resolveTargetAgent(
-  cfg: Awaited<ReturnType<typeof loadModelsConfig>>,
-  raw?: string,
-): {
-  agentId: string;
-  agentDir: string;
-} {
-  const agentId = resolveKnownAgentId({ cfg, rawAgentId: raw }) ?? resolveDefaultAgentId(cfg);
-  const agentDir = resolveAgentDir(cfg, agentId);
-  return { agentId, agentDir };
-}
-
-function formatTimestamp(value: number | undefined): string | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return undefined;
-  }
-  return new Date(value).toISOString();
-}
-
-function resolveProfileExpiry(profile: AuthProfileCredential): string | undefined {
-  return profile.type === "api_key" ? undefined : formatTimestamp(profile.expires);
-}
+import { resolveModelsTargetAgent } from "./shared.js";
 
 function summarizeProfile(params: {
   cfg: Awaited<ReturnType<typeof loadModelsConfig>>;
@@ -82,13 +21,29 @@ function summarizeProfile(params: {
   profileId: string;
   profile: AuthProfileCredential;
   usage?: ProfileUsageStats;
-}): AuthProfileSummary {
-  const expiresAt = resolveProfileExpiry(params.profile);
-  const cooldownUntil = formatTimestamp(params.usage?.cooldownUntil);
-  const disabledUntil = formatTimestamp(params.usage?.disabledUntil);
+}) {
+  const expiresAt =
+    params.profile.type === "api_key" ? undefined : timestampMsToIsoString(params.profile.expires);
+  const cooldownUntil = timestampMsToIsoString(params.usage?.cooldownUntil);
+  const disabledUntil = timestampMsToIsoString(params.usage?.disabledUntil);
+  const disabledActive = Boolean(disabledUntil);
+  const reason = disabledActive
+    ? params.usage?.disabledReason
+    : cooldownUntil
+      ? params.usage?.cooldownReason
+      : undefined;
+  const recoveryHint =
+    disabledUntil || cooldownUntil
+      ? buildAuthProfileUnusableHint({
+          kind: disabledActive ? "disabled" : "cooldown",
+          reason,
+          provider: params.profile.provider,
+          profileId: params.profileId,
+        })
+      : undefined;
   return {
     id: params.profileId,
-    provider: normalizeProviderId(params.profile.provider),
+    provider: resolveProviderIdForAuth(params.profile.provider),
     type: params.profile.type,
     label: resolveAuthProfileDisplayLabel({
       cfg: params.cfg,
@@ -100,21 +55,30 @@ function summarizeProfile(params: {
     ...(expiresAt ? { expiresAt } : {}),
     ...(cooldownUntil ? { cooldownUntil } : {}),
     ...(disabledUntil ? { disabledUntil } : {}),
+    ...(params.usage?.cooldownReason ? { cooldownReason: params.usage.cooldownReason } : {}),
+    ...(params.usage?.cooldownClassification
+      ? { cooldownClassification: params.usage.cooldownClassification }
+      : {}),
+    ...(params.usage?.disabledReason ? { disabledReason: params.usage.disabledReason } : {}),
+    ...(recoveryHint ? { recoveryHint } : {}),
   };
 }
 
-function formatProfileLine(profile: AuthProfileSummary): string {
+function formatProfileLine(profile: ReturnType<typeof summarizeProfile>): string {
   const details = [`${profile.provider}/${profile.type}`];
   if (profile.expiresAt) {
     details.push(`expires ${profile.expiresAt}`);
   }
   if (profile.cooldownUntil) {
-    details.push(`cooldown until ${profile.cooldownUntil}`);
+    const diagnostic = profile.cooldownClassification ?? profile.cooldownReason;
+    details.push(`cooldown${diagnostic ? `:${diagnostic}` : ""} until ${profile.cooldownUntil}`);
   }
   if (profile.disabledUntil) {
-    details.push(`disabled until ${profile.disabledUntil}`);
+    details.push(
+      `disabled${profile.disabledReason ? `:${profile.disabledReason}` : ""} until ${profile.disabledUntil}`,
+    );
   }
-  return `- ${profile.label} [${details.join("; ")}]`;
+  return `- ${profile.label} [${details.join("; ")}]${profile.recoveryHint ? ` — ${profile.recoveryHint}` : ""}`;
 }
 
 export async function modelsAuthListCommand(
@@ -122,15 +86,15 @@ export async function modelsAuthListCommand(
   runtime: RuntimeEnv,
 ) {
   const cfg = await loadModelsConfig({ commandName: "models auth list", runtime });
-  const { agentId, agentDir } = resolveTargetAgent(cfg, opts.agent);
-  const providerFilter = resolveProviderFilter(opts.provider);
+  const { agentId, agentDir } = resolveModelsTargetAgent(cfg, opts.agent, { kind: "read" });
+  const provider = opts.provider?.trim() ? resolveProviderIdForAuth(opts.provider) : undefined;
   const store = ensureAuthProfileStore(
     agentDir,
-    providerFilter.externalCliProvider
+    provider
       ? {
           externalCli: externalCliDiscoveryForProviderAuth({
             cfg,
-            provider: providerFilter.externalCliProvider,
+            provider,
           }),
         }
       : undefined,
@@ -145,7 +109,7 @@ export async function modelsAuthListCommand(
         usage: store.usageStats?.[profileId],
       }),
     )
-    .filter((profile) => providerFilter.matches(profile))
+    .filter((profile) => !provider || profile.provider === provider)
     .toSorted((a, b) => a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id));
 
   if (opts.json) {
@@ -153,16 +117,16 @@ export async function modelsAuthListCommand(
       agentId,
       agentDir: shortenHomePath(agentDir),
       authStatePath: shortenHomePath(resolveAuthStatePathForDisplay(agentDir)),
-      provider: providerFilter.provider ?? null,
+      provider: provider || null,
       profiles,
     });
     return;
   }
 
   runtime.log(`Agent: ${agentId}`);
-  runtime.log(`Auth state file: ${shortenHomePath(resolveAuthStatePathForDisplay(agentDir))}`);
-  if (providerFilter.provider) {
-    runtime.log(`Provider: ${providerFilter.provider}`);
+  runtime.log(`Auth state store: ${shortenHomePath(resolveAuthStatePathForDisplay(agentDir))}`);
+  if (provider) {
+    runtime.log(`Provider: ${provider}`);
   }
   if (profiles.length === 0) {
     runtime.log("Profiles: (none)");

@@ -1,17 +1,15 @@
+/** Formats daemon runtime state into compact status lines for CLI output. */
 import { formatRuntimeStatusWithDetails } from "../infra/runtime-status.ts";
+import { getSystemdCgroupHygieneSummary, type GatewayServiceRuntime } from "./service-runtime.js";
 
-type ServiceRuntimeLike = {
-  status?: string;
-  state?: string;
-  subState?: string;
-  pid?: number;
-  lastExitStatus?: number;
-  lastExitReason?: string;
-  lastRunResult?: string;
-  lastRunTime?: string;
-  detail?: string;
-};
+export function formatServiceLabel(label: string, runtime?: GatewayServiceRuntime): string {
+  if (runtime?.inspectionReason === "service-manager-unavailable") {
+    return "no supported service manager detected";
+  }
+  return runtime?.systemd?.scope ? `systemd ${runtime.systemd.scope}` : label;
+}
 
+// Windows and systemd expose signal exits as numeric status codes.
 const SIGNAL_NAMES_BY_STATUS = new Map<number, string>([
   [129, "SIGHUP"],
   [130, "SIGINT"],
@@ -22,33 +20,24 @@ const SIGNAL_NAMES_BY_STATUS = new Map<number, string>([
 ]);
 
 function formatLastExitStatus(status: number): string {
+  // Service managers usually report signal exits as 128 + signal number.
   const signalName = SIGNAL_NAMES_BY_STATUS.get(status);
   return signalName ? `last exit ${status} (${signalName})` : `last exit ${status}`;
 }
 
-export function formatRuntimeStatus(runtime: ServiceRuntimeLike | undefined): string | null {
+export function formatRuntimeStatus(runtime: GatewayServiceRuntime | undefined): string | null {
   if (!runtime) {
     return null;
   }
-  const details: string[] = [];
-  if (runtime.subState) {
-    details.push(`sub ${runtime.subState}`);
-  }
-  if (runtime.lastExitStatus !== undefined) {
-    details.push(formatLastExitStatus(runtime.lastExitStatus));
-  }
-  if (runtime.lastExitReason) {
-    details.push(`reason ${runtime.lastExitReason}`);
-  }
-  if (runtime.lastRunResult) {
-    details.push(`last run ${runtime.lastRunResult}`);
-  }
-  if (runtime.lastRunTime) {
-    details.push(`last run time ${runtime.lastRunTime}`);
-  }
-  if (runtime.detail) {
-    details.push(runtime.detail);
-  }
+  const details = [
+    runtime.subState ? `sub ${runtime.subState}` : undefined,
+    runtime.lastExitStatus !== undefined ? formatLastExitStatus(runtime.lastExitStatus) : undefined,
+    runtime.lastExitReason ? `reason ${runtime.lastExitReason}` : undefined,
+    runtime.lastRunResult ? `last run ${runtime.lastRunResult}` : undefined,
+    runtime.lastRunTime ? `last run time ${runtime.lastRunTime}` : undefined,
+    getSystemdCgroupHygieneSummary(runtime.systemd),
+    runtime.detail,
+  ].filter((detail): detail is string => Boolean(detail));
   return formatRuntimeStatusWithDetails({
     status: runtime.status,
     pid: runtime.pid,

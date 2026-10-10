@@ -1,24 +1,10 @@
 import fs from "node:fs";
 
-/**
- * Detect whether the current process is running inside a container
- * (Docker, Podman, or Kubernetes).
- *
- * Uses two reliable heuristics:
- * - Presence of common container sentinel files.
- * - Container-related entries in /proc/1/cgroup.
- *
- * The result is cached after the first call so filesystem access happens at
- * most once per process lifetime.
- */
+// Container identity is process-stable; cache misses as well as detections.
 let containerEnvironmentCache: boolean | undefined;
 
 export function isContainerEnvironment(): boolean {
-  if (containerEnvironmentCache !== undefined) {
-    return containerEnvironmentCache;
-  }
-  containerEnvironmentCache = detectContainerEnvironment();
-  return containerEnvironmentCache;
+  return (containerEnvironmentCache ??= detectContainerEnvironment());
 }
 
 function detectContainerEnvironment(): boolean {
@@ -52,6 +38,6 @@ function detectContainerEnvironment(): boolean {
 }
 
 /** @internal test helper */
-export function __resetContainerEnvironmentCacheForTest(): void {
+export function resetContainerEnvironmentCacheForTest(): void {
   containerEnvironmentCache = undefined;
 }

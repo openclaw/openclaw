@@ -22,17 +22,6 @@ async function runKimiCatalog(params: {
   return catalogResult ?? null;
 }
 
-async function runKimiCatalogProvider(params: {
-  apiKey: string;
-  explicitProvider?: Record<string, unknown>;
-}) {
-  const result = await runKimiCatalog(params);
-  if (!result || !("provider" in result)) {
-    throw new Error("expected Kimi catalog to return one provider");
-  }
-  return result.provider;
-}
-
 describe("Kimi implicit provider (#22409)", () => {
   it("publishes the env vars used by core api-key auto-detection", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
@@ -44,8 +33,18 @@ describe("Kimi implicit provider (#22409)", () => {
     await expect(runKimiCatalog({})).resolves.toBeNull();
   });
 
-  it("publishes the Kimi provider when an API key is resolved", async () => {
-    const provider = await runKimiCatalogProvider({ apiKey: "test-key" });
+  it("publishes built-in defaults despite retired kimi-coding provider overrides", async () => {
+    const result = await runKimiCatalog({
+      apiKey: "test-key",
+      explicitProvider: {
+        baseUrl: "https://kimi.example.test/coding/",
+        headers: { "User-Agent": "custom-kimi-client/1.0" },
+      },
+    });
+    if (!result || !("provider" in result)) {
+      throw new Error("expected Kimi catalog to return one provider");
+    }
+    const { models, ...provider } = result.provider;
 
     expect(provider).toEqual({
       baseUrl: "https://api.kimi.com/coding/",
@@ -53,64 +52,14 @@ describe("Kimi implicit provider (#22409)", () => {
       headers: {
         "User-Agent": "claude-code/0.1.0",
       },
-      models: [
-        {
-          id: "kimi-for-coding",
-          name: "Kimi Code",
-          reasoning: true,
-          input: ["text", "image"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 262144,
-          maxTokens: 32768,
-        },
-        {
-          id: "kimi-code",
-          name: "Kimi Code (legacy kimi-code)",
-          reasoning: true,
-          input: ["text", "image"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 262144,
-          maxTokens: 32768,
-        },
-        {
-          id: "k2p5",
-          name: "Kimi Code (legacy k2p5)",
-          reasoning: true,
-          input: ["text", "image"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 262144,
-          maxTokens: 32768,
-        },
-      ],
       apiKey: "test-key",
     });
-  });
-
-  it("uses explicit legacy kimi-coding baseUrl when provided", async () => {
-    const provider = await runKimiCatalogProvider({
-      apiKey: "test-key",
-      explicitProvider: {
-        baseUrl: "https://kimi.example.test/coding/",
-      },
-    });
-
-    expect(provider.baseUrl).toBe("https://kimi.example.test/coding/");
-  });
-
-  it("merges explicit legacy kimi-coding headers on top of the built-in user agent", async () => {
-    const provider = await runKimiCatalogProvider({
-      apiKey: "test-key",
-      explicitProvider: {
-        headers: {
-          "User-Agent": "custom-kimi-client/1.0",
-          "X-Kimi-Tenant": "tenant-a",
-        },
-      },
-    });
-
-    expect(provider.headers).toEqual({
-      "User-Agent": "custom-kimi-client/1.0",
-      "X-Kimi-Tenant": "tenant-a",
-    });
+    // Credential-aware catalog assembly may prioritize the configured default.
+    expect(models.map((model) => model.id).toSorted()).toEqual([
+      "k3",
+      "k3-256k",
+      "kimi-for-coding",
+      "kimi-for-coding-highspeed",
+    ]);
   });
 });

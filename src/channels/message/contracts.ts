@@ -5,7 +5,6 @@ import type {
   DurableFinalDeliveryCapability,
   DurableFinalDeliveryRequirementMap,
   LivePreviewFinalizerCapability,
-  LivePreviewFinalizerCapabilityMap,
 } from "./types.js";
 import {
   channelMessageLiveCapabilities,
@@ -14,181 +13,53 @@ import {
   livePreviewFinalizerCapabilities,
 } from "./types.js";
 
-export type DurableFinalCapabilityProof = () => Promise<void> | void;
+type ContractProofs<TKey extends string> = Partial<Record<TKey, () => Promise<void> | void>>;
+type ProofStatus = "verified" | "not_declared";
+type CapabilityProofResult<TKey extends string> = { capability: TKey; status: ProofStatus };
 
-export type DurableFinalCapabilityProofMap = Partial<
-  Record<DurableFinalDeliveryCapability, DurableFinalCapabilityProof>
->;
-
-export type DurableFinalCapabilityProofResult = {
-  capability: DurableFinalDeliveryCapability;
-  status: "verified" | "not_declared";
-};
-
-export type LivePreviewFinalizerCapabilityProof = () => Promise<void> | void;
-
-export type ChannelMessageLiveCapabilityProof = () => Promise<void> | void;
-
-export type ChannelMessageReceiveAckPolicyProof = () => Promise<void> | void;
-
-export type LivePreviewFinalizerCapabilityProofMap = Partial<
-  Record<LivePreviewFinalizerCapability, LivePreviewFinalizerCapabilityProof>
->;
-
-export type ChannelMessageLiveCapabilityProofMap = Partial<
-  Record<ChannelMessageLiveCapability, ChannelMessageLiveCapabilityProof>
->;
-
-export type ChannelMessageReceiveAckPolicyProofMap = Partial<
-  Record<ChannelMessageReceiveAckPolicy, ChannelMessageReceiveAckPolicyProof>
->;
-
-export type LivePreviewFinalizerCapabilityProofResult = {
-  capability: LivePreviewFinalizerCapability;
-  status: "verified" | "not_declared";
-};
-
-export type ChannelMessageLiveCapabilityProofResult = {
-  capability: ChannelMessageLiveCapability;
-  status: "verified" | "not_declared";
-};
-
-export type ChannelMessageReceiveAckPolicyProofResult = {
-  policy: ChannelMessageReceiveAckPolicy;
-  status: "verified" | "not_declared";
-};
-
-export function listDeclaredDurableFinalCapabilities(
-  capabilities: DurableFinalDeliveryRequirementMap | undefined,
-): DurableFinalDeliveryCapability[] {
-  return durableFinalDeliveryCapabilities.filter(
-    (capability) => capabilities?.[capability] === true,
-  );
-}
-
-export function listDeclaredLivePreviewFinalizerCapabilities(
-  capabilities: LivePreviewFinalizerCapabilityMap | undefined,
-): LivePreviewFinalizerCapability[] {
-  return livePreviewFinalizerCapabilities.filter(
-    (capability) => capabilities?.[capability] === true,
-  );
-}
-
-export function listDeclaredChannelMessageLiveCapabilities(
-  capabilities: Partial<Record<ChannelMessageLiveCapability, boolean>> | undefined,
-): ChannelMessageLiveCapability[] {
-  return channelMessageLiveCapabilities.filter((capability) => capabilities?.[capability] === true);
-}
-
-export function listDeclaredReceiveAckPolicies(
-  receive: ChannelMessageAdapterShape["receive"] | undefined,
-): ChannelMessageReceiveAckPolicy[] {
-  const declared = receive?.supportedAckPolicies?.length
-    ? receive.supportedAckPolicies
-    : receive?.defaultAckPolicy
-      ? [receive.defaultAckPolicy]
-      : [];
-  return channelMessageReceiveAckPolicies.filter((policy) => declared.includes(policy));
+async function verifyContractProofs<TKey extends string, TResult>(params: {
+  keys: readonly TKey[];
+  isDeclared: (key: TKey) => boolean;
+  proofs: ContractProofs<TKey>;
+  missingProofError: (key: TKey) => string;
+  result: (key: TKey, status: ProofStatus) => TResult;
+}): Promise<TResult[]> {
+  const results: TResult[] = [];
+  for (const key of params.keys) {
+    if (!params.isDeclared(key)) {
+      results.push(params.result(key, "not_declared"));
+      continue;
+    }
+    const proof = params.proofs[key];
+    if (!proof) {
+      throw new Error(params.missingProofError(key));
+    }
+    await proof();
+    results.push(params.result(key, "verified"));
+  }
+  return results;
 }
 
 export async function verifyDurableFinalCapabilityProofs(params: {
   adapterName: string;
   capabilities?: DurableFinalDeliveryRequirementMap;
-  proofs: DurableFinalCapabilityProofMap;
-}): Promise<DurableFinalCapabilityProofResult[]> {
-  const results: DurableFinalCapabilityProofResult[] = [];
-  for (const capability of durableFinalDeliveryCapabilities) {
-    if (params.capabilities?.[capability] !== true) {
-      results.push({ capability, status: "not_declared" });
-      continue;
-    }
-    const proof = params.proofs[capability];
-    if (!proof) {
-      throw new Error(
-        `${params.adapterName} declares durable final capability "${capability}" without a contract proof`,
-      );
-    }
-    await proof();
-    results.push({ capability, status: "verified" });
-  }
-  return results;
-}
-
-export async function verifyLivePreviewFinalizerCapabilityProofs(params: {
-  adapterName: string;
-  capabilities?: LivePreviewFinalizerCapabilityMap;
-  proofs: LivePreviewFinalizerCapabilityProofMap;
-}): Promise<LivePreviewFinalizerCapabilityProofResult[]> {
-  const results: LivePreviewFinalizerCapabilityProofResult[] = [];
-  for (const capability of livePreviewFinalizerCapabilities) {
-    if (params.capabilities?.[capability] !== true) {
-      results.push({ capability, status: "not_declared" });
-      continue;
-    }
-    const proof = params.proofs[capability];
-    if (!proof) {
-      throw new Error(
-        `${params.adapterName} declares live preview finalizer capability "${capability}" without a contract proof`,
-      );
-    }
-    await proof();
-    results.push({ capability, status: "verified" });
-  }
-  return results;
-}
-
-export async function verifyChannelMessageLiveCapabilityProofs(params: {
-  adapterName: string;
-  capabilities?: Partial<Record<ChannelMessageLiveCapability, boolean>>;
-  proofs: ChannelMessageLiveCapabilityProofMap;
-}): Promise<ChannelMessageLiveCapabilityProofResult[]> {
-  const results: ChannelMessageLiveCapabilityProofResult[] = [];
-  for (const capability of channelMessageLiveCapabilities) {
-    if (params.capabilities?.[capability] !== true) {
-      results.push({ capability, status: "not_declared" });
-      continue;
-    }
-    const proof = params.proofs[capability];
-    if (!proof) {
-      throw new Error(
-        `${params.adapterName} declares live capability "${capability}" without a contract proof`,
-      );
-    }
-    await proof();
-    results.push({ capability, status: "verified" });
-  }
-  return results;
-}
-
-export async function verifyChannelMessageReceiveAckPolicyProofs(params: {
-  adapterName: string;
-  receive?: ChannelMessageAdapterShape["receive"];
-  proofs: ChannelMessageReceiveAckPolicyProofMap;
-}): Promise<ChannelMessageReceiveAckPolicyProofResult[]> {
-  const declared = new Set(listDeclaredReceiveAckPolicies(params.receive));
-  const results: ChannelMessageReceiveAckPolicyProofResult[] = [];
-  for (const policy of channelMessageReceiveAckPolicies) {
-    if (!declared.has(policy)) {
-      results.push({ policy, status: "not_declared" });
-      continue;
-    }
-    const proof = params.proofs[policy];
-    if (!proof) {
-      throw new Error(
-        `${params.adapterName} declares receive ack policy "${policy}" without a contract proof`,
-      );
-    }
-    await proof();
-    results.push({ policy, status: "verified" });
-  }
-  return results;
+  proofs: ContractProofs<DurableFinalDeliveryCapability>;
+}): Promise<CapabilityProofResult<DurableFinalDeliveryCapability>[]> {
+  return await verifyContractProofs({
+    keys: durableFinalDeliveryCapabilities,
+    isDeclared: (capability) => params.capabilities?.[capability] === true,
+    proofs: params.proofs,
+    missingProofError: (capability) =>
+      `${params.adapterName} declares durable final capability "${capability}" without a contract proof`,
+    result: (capability, status) => ({ capability, status }),
+  });
 }
 
 export async function verifyChannelMessageAdapterCapabilityProofs(params: {
   adapterName: string;
   adapter: Pick<ChannelMessageAdapterShape, "durableFinal">;
-  proofs: DurableFinalCapabilityProofMap;
-}): Promise<DurableFinalCapabilityProofResult[]> {
+  proofs: ContractProofs<DurableFinalDeliveryCapability>;
+}): Promise<CapabilityProofResult<DurableFinalDeliveryCapability>[]> {
   return await verifyDurableFinalCapabilityProofs({
     adapterName: params.adapterName,
     capabilities: params.adapter.durableFinal?.capabilities,
@@ -199,35 +70,57 @@ export async function verifyChannelMessageAdapterCapabilityProofs(params: {
 export async function verifyChannelMessageReceiveAckPolicyAdapterProofs(params: {
   adapterName: string;
   adapter: Pick<ChannelMessageAdapterShape, "receive">;
-  proofs: ChannelMessageReceiveAckPolicyProofMap;
-}): Promise<ChannelMessageReceiveAckPolicyProofResult[]> {
-  return await verifyChannelMessageReceiveAckPolicyProofs({
-    adapterName: params.adapterName,
-    receive: params.adapter.receive,
+  proofs: ContractProofs<ChannelMessageReceiveAckPolicy>;
+}): Promise<{ policy: ChannelMessageReceiveAckPolicy; status: ProofStatus }[]> {
+  const { adapterName } = params;
+  const receive = params.adapter.receive;
+  const declared = new Set(
+    receive?.supportedAckPolicies?.length
+      ? receive.supportedAckPolicies
+      : receive?.defaultAckPolicy
+        ? [receive.defaultAckPolicy]
+        : [],
+  );
+  return await verifyContractProofs({
+    keys: channelMessageReceiveAckPolicies,
+    isDeclared: (policy) => declared.has(policy),
     proofs: params.proofs,
+    missingProofError: (policy) =>
+      `${adapterName} declares receive ack policy "${policy}" without a contract proof`,
+    result: (policy, status) => ({ policy, status }),
   });
 }
 
 export async function verifyChannelMessageLiveFinalizerProofs(params: {
   adapterName: string;
   adapter: Pick<ChannelMessageAdapterShape, "live">;
-  proofs: LivePreviewFinalizerCapabilityProofMap;
-}): Promise<LivePreviewFinalizerCapabilityProofResult[]> {
-  return await verifyLivePreviewFinalizerCapabilityProofs({
-    adapterName: params.adapterName,
-    capabilities: params.adapter.live?.finalizer?.capabilities,
+  proofs: ContractProofs<LivePreviewFinalizerCapability>;
+}): Promise<CapabilityProofResult<LivePreviewFinalizerCapability>[]> {
+  const { adapterName } = params;
+  const capabilities = params.adapter.live?.finalizer?.capabilities;
+  return await verifyContractProofs({
+    keys: livePreviewFinalizerCapabilities,
+    isDeclared: (capability) => capabilities?.[capability] === true,
     proofs: params.proofs,
+    missingProofError: (capability) =>
+      `${adapterName} declares live preview finalizer capability "${capability}" without a contract proof`,
+    result: (capability, status) => ({ capability, status }),
   });
 }
 
 export async function verifyChannelMessageLiveCapabilityAdapterProofs(params: {
   adapterName: string;
   adapter: Pick<ChannelMessageAdapterShape, "live">;
-  proofs: ChannelMessageLiveCapabilityProofMap;
-}): Promise<ChannelMessageLiveCapabilityProofResult[]> {
-  return await verifyChannelMessageLiveCapabilityProofs({
-    adapterName: params.adapterName,
-    capabilities: params.adapter.live?.capabilities,
+  proofs: ContractProofs<ChannelMessageLiveCapability>;
+}): Promise<CapabilityProofResult<ChannelMessageLiveCapability>[]> {
+  const { adapterName } = params;
+  const capabilities = params.adapter.live?.capabilities;
+  return await verifyContractProofs({
+    keys: channelMessageLiveCapabilities,
+    isDeclared: (capability) => capabilities?.[capability] === true,
     proofs: params.proofs,
+    missingProofError: (capability) =>
+      `${adapterName} declares live capability "${capability}" without a contract proof`,
+    result: (capability, status) => ({ capability, status }),
   });
 }

@@ -1,0 +1,554 @@
+import path from "node:path";
+import { constants, DatabaseSync } from "node:sqlite";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
+import {
+  repairCanonicalSqliteIndexes,
+  verifyAndRepairCanonicalSqliteIndexes,
+} from "./sqlite-index-schema.js";
+
+const CANONICAL_SCHEMA = `
+  CREATE TABLE records (
+    id INTEGER PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    external_id TEXT,
+    active INTEGER NOT NULL
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_records_identity
+    ON records(
+      tenant_id COLLATE NOCASE,
+      IFNULL(external_id, '')
+    )
+    WHERE active = 1;
+  CREATE INDEX IF NOT EXISTS idx_records_active_lookup
+    ON records(active, tenant_id);
+  CREATE TABLE unindexed (id INTEGER PRIMARY KEY);
+`;
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function createDatabase(): DatabaseSync {
+  const db = new DatabaseSync(":memory:");
+  db.exec(CANONICAL_SCHEMA);
+  return db;
+}
+
+function traceSqlExecutions(
+  database: DatabaseSync,
+  onIndexSql?: (sql: string) => void,
+): {
+  database: DatabaseSync;
+  statements: string[];
+  readonly materializedIndexSqlBytes: number;
+} {
+  const statements: string[] = [];
+  let materializedIndexSqlBytes = 0;
+  function observe(row: unknown) {
+    if (
+      row &&
+      typeof row === "object" &&
+      "sql" in row &&
+      typeof row.sql === "string" &&
+      /^CREATE (?:UNIQUE )?INDEX\b/iu.test(row.sql)
+    ) {
+      materializedIndexSqlBytes += Buffer.byteLength(row.sql, "utf8");
+      onIndexSql?.(row.sql);
+    }
+  }
+  return {
+    database: new Proxy(database, {
+      get(target, property) {
+        if (property === "prepare") {
+          return (sql: string) => {
+            return new Proxy(target.prepare(sql), {
+              get(statement, method) {
+                if (method === "iterate") {
+                  return function* (...args: Parameters<typeof statement.iterate>) {
+                    const rows = statement.iterate(...args);
+                    statements.push(sql);
+                    for (const row of rows) {
+                      observe(row);
+                      yield row;
+                    }
+                  };
+                }
+                if (method === "get" || method === "all") {
+                  return (...args: unknown[]) => {
+                    statements.push(sql);
+                    const result = Reflect.apply(statement[method], statement, args);
+                    if (method === "all") {
+                      for (const row of result) {
+                        observe(row);
+                      }
+                    } else {
+                      observe(result);
+                    }
+                    return result;
+                  };
+                }
+                const value = Reflect.get(statement, method, statement) as unknown;
+                return typeof value === "function" ? value.bind(statement) : value;
+              },
+            });
+          };
+        }
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as DatabaseSync,
+    statements,
+    get materializedIndexSqlBytes() {
+      return materializedIndexSqlBytes;
+    },
+  };
+}
+
+describe("repairCanonicalSqliteIndexes", () => {
+  it("inspects one committed index snapshot and releases it before later repair writes", () => {
+    const filename = path.join(tempDirs.make("openclaw-index-snapshot-"), "state.sqlite");
+    const writer = new DatabaseSync(filename);
+    writer.exec(`PRAGMA journal_mode=WAL; ${CANONICAL_SCHEMA}`);
+    const reader = new DatabaseSync(filename);
+    let droppedIndex: string | undefined;
+    const traced = traceSqlExecutions(reader, (sql) => {
+      if (droppedIndex) {
+        return;
+      }
+      droppedIndex = sql.includes("idx_records_identity")
+        ? "idx_records_active_lookup"
+        : "idx_records_identity";
+      writer.exec(`DROP INDEX ${droppedIndex}`);
+    });
+    try {
+      expect(
+        repairCanonicalSqliteIndexes(traced.database, "test database", CANONICAL_SCHEMA),
+      ).toEqual([]);
+      expect(droppedIndex).toBeDefined();
+      expect(repairCanonicalSqliteIndexes(reader, "test database", CANONICAL_SCHEMA)).toEqual([
+        droppedIndex,
+      ]);
+      expect(reader.isTransaction).toBe(false);
+      expect(reader.prepare("PRAGMA integrity_check").all()).toEqual([{ integrity_check: "ok" }]);
+    } finally {
+      reader.close();
+      writer.close();
+    }
+  });
+
+  it("runs one whole-file integrity check for healthy indexes", () => {
+    const db = createDatabase();
+    try {
+      const traced = traceSqlExecutions(db);
+
+      verifyAndRepairCanonicalSqliteIndexes(traced.database, "test database", CANONICAL_SCHEMA);
+
+      expect(traced.statements.filter((sql) => sql.startsWith("PRAGMA integrity_check"))).toEqual([
+        "PRAGMA integrity_check;",
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it.each([
+    ["shared-table fixture", CANONICAL_SCHEMA],
+    ["agent schema", OPENCLAW_AGENT_SCHEMA_SQL],
+  ])("inspects canonical indexes with bounded SQL without rewriting them: %s", (_name, schema) => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      db.exec(schema);
+      const before = db.prepare("PRAGMA schema_version").get();
+      const indexes = db
+        .prepare("SELECT sql FROM main.sqlite_schema WHERE type = 'index' AND sql IS NOT NULL")
+        .all();
+      const indexSqlBytes = indexes.reduce((sum, row) => {
+        if (typeof row.sql !== "string") {
+          throw new Error("Expected fixture index DDL");
+        }
+        return sum + Buffer.byteLength(row.sql, "utf8");
+      }, 0);
+      const traced = traceSqlExecutions(db);
+
+      expect(
+        repairCanonicalSqliteIndexes(traced.database, "test database", schema, {
+          verifyPhysicalIntegrity: false,
+        }),
+      ).toEqual([]);
+
+      expect(db.prepare("PRAGMA schema_version").get()).toEqual(before);
+      expect(traced.materializedIndexSqlBytes).toBeLessThanOrEqual(indexSqlBytes);
+      expect(traced.statements.length).toBeLessThanOrEqual(6);
+    } finally {
+      db.close();
+    }
+  });
+
+  it.each([
+    [
+      "column order",
+      "CREATE UNIQUE INDEX idx_records_identity ON records(external_id, tenant_id) WHERE active = 1",
+    ],
+    [
+      "collation",
+      "CREATE UNIQUE INDEX idx_records_identity ON records(tenant_id, IFNULL(external_id, '')) WHERE active = 1",
+    ],
+    [
+      "expression",
+      "CREATE UNIQUE INDEX idx_records_identity ON records(tenant_id COLLATE NOCASE, external_id) WHERE active = 1",
+    ],
+    [
+      "partial predicate",
+      "CREATE UNIQUE INDEX idx_records_identity ON records(tenant_id COLLATE NOCASE, IFNULL(external_id, '')) WHERE active = 0",
+    ],
+    ["uniqueness", "CREATE INDEX idx_records_identity ON records(tenant_id, external_id)"],
+    ["wrong table", "CREATE INDEX idx_records_identity ON unindexed(id)"],
+  ])("repairs same-name %s drift", (_name, driftedSql) => {
+    const db = createDatabase();
+    try {
+      db.exec(`DROP INDEX idx_records_identity; ${driftedSql};`);
+
+      const traced = traceSqlExecutions(db);
+      expect(
+        repairCanonicalSqliteIndexes(traced.database, "test database", CANONICAL_SCHEMA),
+      ).toEqual(["idx_records_identity"]);
+      expect(
+        traced.statements.filter((sql) =>
+          /PRAGMA (?:integrity_check|foreign_key_check)/u.test(sql),
+        ),
+      ).toEqual([
+        "PRAGMA integrity_check;",
+        "PRAGMA foreign_key_check;",
+        "PRAGMA integrity_check;",
+        "PRAGMA foreign_key_check;",
+      ]);
+
+      const row = db
+        .prepare("SELECT sql FROM sqlite_schema WHERE name = 'idx_records_identity'")
+        .get() as { sql?: unknown };
+      expect(row.sql).toContain("tenant_id COLLATE NOCASE");
+      expect(row.sql).toContain("IFNULL(external_id, '')");
+      expect(row.sql).toContain("WHERE active = 1");
+      expect(() =>
+        db.exec(`
+          INSERT INTO records VALUES (1, 'Tenant', NULL, 1);
+          INSERT INTO records VALUES (2, 'tenant', NULL, 1);
+        `),
+      ).toThrow(/UNIQUE constraint failed/iu);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("rolls back without dropping the drifted index when canonical rows conflict", () => {
+    const db = createDatabase();
+    try {
+      db.exec(`
+        DROP INDEX idx_records_identity;
+        CREATE UNIQUE INDEX idx_records_identity ON records(id);
+        INSERT INTO records VALUES
+          (1, 'Tenant', NULL, 1),
+          (2, 'tenant', NULL, 1);
+      `);
+
+      expect(() => repairCanonicalSqliteIndexes(db, "test database", CANONICAL_SCHEMA)).toThrow(
+        /canonical index idx_records_identity failed.*UNIQUE constraint failed/iu,
+      );
+
+      expect(
+        db.prepare("SELECT sql FROM sqlite_schema WHERE name = 'idx_records_identity'").get(),
+      ).toEqual({
+        sql: "CREATE UNIQUE INDEX idx_records_identity ON records(id)",
+      });
+      expect(
+        db
+          .prepare(
+            "SELECT name FROM sqlite_schema WHERE type = 'index' AND name LIKE 'openclaw_probe_%'",
+          )
+          .all(),
+      ).toEqual([]);
+      expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("refuses physical unique-index damage until explicit Doctor repair", () => {
+    const db = createDatabase();
+    try {
+      db.exec(`
+        DROP INDEX idx_records_identity;
+        CREATE UNIQUE INDEX idx_records_identity ON records(id);
+        INSERT INTO records VALUES
+          (1, 'Tenant', NULL, 1),
+          (2, 'Other', NULL, 1);
+      `);
+      db.enableDefensive?.(false);
+      db.exec("PRAGMA writable_schema = ON;");
+      db.prepare("UPDATE sqlite_schema SET sql = ? WHERE name = 'idx_records_identity'").run(
+        `CREATE UNIQUE INDEX idx_records_identity
+           ON records(
+             tenant_id COLLATE NOCASE,
+             IFNULL(external_id, '')
+           )
+          WHERE active = 1`,
+      );
+      db.exec("PRAGMA writable_schema = OFF;");
+      const schemaVersion = db.prepare("PRAGMA schema_version").get() as {
+        schema_version?: unknown;
+      };
+      db.exec(`PRAGMA schema_version = ${Number(schemaVersion.schema_version) + 1};`);
+
+      expect(db.prepare("PRAGMA integrity_check('records')").all()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            integrity_check: expect.stringMatching(/missing from index idx_records_identity/),
+          }),
+        ]),
+      );
+      expect(
+        db
+          .prepare(
+            `SELECT id
+               FROM records INDEXED BY idx_records_identity
+              WHERE tenant_id = 'Tenant'
+                AND IFNULL(external_id, '') = ''
+                AND active = 1`,
+          )
+          .all(),
+      ).toEqual([]);
+
+      expect(() =>
+        verifyAndRepairCanonicalSqliteIndexes(db, "test database", CANONICAL_SCHEMA),
+      ).toThrow(/integrity_check failed.*openclaw doctor --fix/iu);
+      expect(db.prepare("PRAGMA integrity_check").get()?.integrity_check).not.toBe("ok");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("repairs same-name ordinary index definition drift", () => {
+    const db = createDatabase();
+    try {
+      db.exec(`
+        DROP INDEX idx_records_active_lookup;
+        CREATE INDEX idx_records_active_lookup ON records(tenant_id, active);
+      `);
+
+      repairCanonicalSqliteIndexes(db, "test database", CANONICAL_SCHEMA);
+
+      expect(
+        db.prepare("SELECT sql FROM sqlite_schema WHERE name = 'idx_records_active_lookup'").get(),
+      ).toEqual({
+        sql: "CREATE INDEX idx_records_active_lookup ON records(active, tenant_id)",
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("removes bogus uniqueness from a canonical ordinary index", () => {
+    const db = createDatabase();
+    try {
+      db.exec(`
+        DROP INDEX idx_records_active_lookup;
+        CREATE UNIQUE INDEX idx_records_active_lookup ON records(active, tenant_id);
+      `);
+
+      repairCanonicalSqliteIndexes(db, "test database", CANONICAL_SCHEMA);
+
+      expect(
+        (
+          db.prepare("PRAGMA index_list(records)").all() as Array<{
+            name: string;
+            unique: number;
+          }>
+        ).find((index) => index.name === "idx_records_active_lookup"),
+      ).toMatchObject({ unique: 0 });
+      expect(() =>
+        db.exec(`
+          INSERT INTO records VALUES (1, 'Tenant', 'one', 0);
+          INSERT INTO records VALUES (2, 'Tenant', 'two', 0);
+        `),
+      ).not.toThrow();
+    } finally {
+      db.close();
+    }
+  });
+
+  it("refuses physical ordinary-index damage until explicit Doctor repair", () => {
+    const db = createDatabase();
+    try {
+      db.exec(`
+        DROP INDEX idx_records_active_lookup;
+        CREATE INDEX idx_records_active_lookup ON records(id);
+        INSERT INTO records VALUES
+          (1, 'Tenant', NULL, 1),
+          (2, 'Other', NULL, 1);
+      `);
+      db.enableDefensive?.(false);
+      db.exec("PRAGMA writable_schema = ON;");
+      db.prepare("UPDATE sqlite_schema SET sql = ? WHERE name = 'idx_records_active_lookup'").run(
+        "CREATE INDEX idx_records_active_lookup ON records(active, tenant_id)",
+      );
+      db.exec("PRAGMA writable_schema = OFF;");
+      const schemaVersion = db.prepare("PRAGMA schema_version").get() as {
+        schema_version?: unknown;
+      };
+      db.exec(`PRAGMA schema_version = ${Number(schemaVersion.schema_version) + 1};`);
+
+      expect(db.prepare("PRAGMA integrity_check('records')").all()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            integrity_check: expect.stringMatching(/idx_records_active_lookup/),
+          }),
+        ]),
+      );
+      expect(
+        db
+          .prepare(
+            `SELECT id
+               FROM records INDEXED BY idx_records_active_lookup
+              WHERE active = 1 AND tenant_id = 'Tenant'`,
+          )
+          .all(),
+      ).toEqual([]);
+
+      expect(() => repairCanonicalSqliteIndexes(db, "test database", CANONICAL_SCHEMA)).toThrow(
+        /integrity_check failed.*openclaw doctor --fix/iu,
+      );
+      expect(db.prepare("PRAGMA integrity_check").get()?.integrity_check).not.toBe("ok");
+    } finally {
+      db.close();
+    }
+  });
+
+  it.each([
+    ["records", "idx_records_unexpected_unique"],
+    ["unindexed", "idx_records_unexpected_unique"],
+    ["unindexed", "idx_records_identity"],
+  ])("rejects an unexpected unique index on %s named %s", (table, name) => {
+    const db = createDatabase();
+    try {
+      db.exec(`DROP INDEX IF EXISTS ${name}; CREATE UNIQUE INDEX ${name} ON ${table}(id);`);
+
+      expect(() => repairCanonicalSqliteIndexes(db, "test database", CANONICAL_SCHEMA)).toThrow(
+        `unexpected unique index ${name}`,
+      );
+    } finally {
+      db.close();
+    }
+  });
+
+  it.each([
+    { deniedColumn: "sql", empty: false },
+    { deniedColumn: "tbl_name", empty: false },
+    { deniedColumn: "sql", empty: true },
+    { deniedColumn: "tbl_name", empty: true },
+  ])(
+    "preserves $deniedColumn authorization errors with absent indexes (empty=$empty)",
+    ({ deniedColumn, empty }) => {
+      const db = createDatabase();
+      try {
+        db.exec("DROP INDEX idx_records_identity; DROP INDEX idx_records_active_lookup;");
+        if (empty) {
+          db.exec("DROP TABLE records; DROP TABLE unindexed;");
+        }
+        db.setAuthorizer((action, table, column, schema) => {
+          if (
+            action === constants.SQLITE_READ &&
+            (table === "sqlite_master" || table === "sqlite_schema") &&
+            column === deniedColumn &&
+            schema === "main"
+          ) {
+            return constants.SQLITE_DENY;
+          }
+          return constants.SQLITE_OK;
+        });
+        expect(() =>
+          repairCanonicalSqliteIndexes(db, "test database", CANONICAL_SCHEMA, {
+            verifyPhysicalIntegrity: false,
+          }),
+        ).toThrow(/access to sqlite_(?:master|schema)\.(?:sql|tbl_name) is prohibited/iu);
+      } finally {
+        db.setAuthorizer(null);
+        db.close();
+      }
+    },
+  );
+
+  it("defers only indexes whose columns are owned by a pending migration", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      db.exec(`
+        CREATE TABLE records (
+          id INTEGER PRIMARY KEY,
+          tenant_id TEXT NOT NULL,
+          external_id TEXT
+        );
+        CREATE INDEX idx_records_active_lookup ON records(tenant_id);
+      `);
+
+      expect(() => repairCanonicalSqliteIndexes(db, "test database", CANONICAL_SCHEMA)).toThrow(
+        /no such column: active/iu,
+      );
+      expect(
+        repairCanonicalSqliteIndexes(db, "test database", CANONICAL_SCHEMA, {
+          allowMissingColumns: true,
+        }),
+      ).toEqual([]);
+      expect(
+        db.prepare("SELECT sql FROM sqlite_schema WHERE name = 'idx_records_active_lookup'").get(),
+      ).toEqual({ sql: "CREATE INDEX idx_records_active_lookup ON records(tenant_id)" });
+
+      db.exec("ALTER TABLE records ADD COLUMN active INTEGER NOT NULL DEFAULT 0;");
+      expect(
+        repairCanonicalSqliteIndexes(db, "test database", CANONICAL_SCHEMA, {
+          allowMissingColumns: true,
+        }),
+      ).toEqual(["idx_records_active_lookup", "idx_records_identity"]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it.each([false, true])(
+    "repairs only the main schema with a temporary same-name index (shadowed pragmas=%s)",
+    (shadowedPragmas) => {
+      const db = createDatabase();
+      try {
+        if (shadowedPragmas) {
+          db.exec(`
+            CREATE TEMP TABLE pragma_index_list (synthetic TEXT);
+            CREATE TEMP VIEW pragma_index_xinfo AS SELECT 'synthetic' AS name;
+          `);
+        }
+        db.exec(`
+          CREATE TEMP TABLE temp_records (id INTEGER PRIMARY KEY);
+          CREATE UNIQUE INDEX temp.idx_records_identity ON temp_records(id);
+          DROP INDEX main.idx_records_identity;
+          CREATE UNIQUE INDEX main.idx_records_identity ON records(id);
+        `);
+
+        repairCanonicalSqliteIndexes(db, "test database", CANONICAL_SCHEMA);
+
+        expect(
+          db
+            .prepare("SELECT sql FROM main.sqlite_schema WHERE name = 'idx_records_identity'")
+            .get(),
+        ).toEqual({
+          sql: expect.stringContaining("tenant_id COLLATE NOCASE"),
+        });
+        expect(
+          db
+            .prepare("SELECT sql FROM temp.sqlite_schema WHERE name = 'idx_records_identity'")
+            .get(),
+        ).toEqual({
+          sql: "CREATE UNIQUE INDEX idx_records_identity ON temp_records(id)",
+        });
+      } finally {
+        db.close();
+      }
+    },
+  );
+});

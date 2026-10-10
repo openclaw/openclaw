@@ -1,6 +1,6 @@
+// OC Path tests cover edit plugin behavior.
 import { describe, expect, it } from "vitest";
 import { setJsoncOcPath } from "../../jsonc/edit.js";
-import { emitJsonc } from "../../jsonc/emit.js";
 import { parseJsonc } from "../../jsonc/parse.js";
 import { parseOcPath } from "../../oc-path.js";
 
@@ -23,7 +23,7 @@ describe("setJsoncOcPath — value replacement", () => {
     });
     expect(r.ok).toBe(true);
     if (r.ok) {
-      const out = emitJsonc(r.ast);
+      const out = r.ast.raw;
       expect(JSON.parse(out)).toEqual({
         plugins: { entries: { github: { token: "new" } } },
       });
@@ -38,7 +38,7 @@ describe("setJsoncOcPath — value replacement", () => {
     });
     expect(r.ok).toBe(true);
     if (r.ok) {
-      expect(JSON.parse(emitJsonc(r.ast))).toEqual({
+      expect(JSON.parse(r.ast.raw)).toEqual({
         plugins: { entries: { gitlab: "tok" } },
       });
     }
@@ -52,8 +52,17 @@ describe("setJsoncOcPath — value replacement", () => {
     });
     expect(r.ok).toBe(true);
     if (r.ok) {
-      expect(JSON.parse(emitJsonc(r.ast))).toEqual({ limits: [10, 99, 30] });
+      expect(JSON.parse(r.ast.raw)).toEqual({ limits: [10, 99, 30] });
     }
+  });
+
+  it("reports unresolved for noncanonical array indexes", () => {
+    const { ast } = parseJsonc('{ "limits": [10, 20, 30] }');
+    const r = setJsoncOcPath(ast, parseOcPath("oc://config/limits.01"), {
+      kind: "number",
+      value: 99,
+    });
+    expect(r).toEqual({ ok: false, reason: "unresolved" });
   });
 
   it("reports unresolved when a key is missing", () => {
@@ -94,7 +103,7 @@ describe("setJsoncOcPath — $last positional", () => {
     });
     expect(r.ok).toBe(true);
     if (r.ok) {
-      expect(JSON.parse(emitJsonc(r.ast))).toEqual({ items: [10, 20, 99] });
+      expect(JSON.parse(r.ast.raw)).toEqual({ items: [10, 20, 99] });
     }
   });
 
@@ -132,7 +141,7 @@ describe("setJsoncOcPath — quoted segments (regression: resolve↔edit symmetr
     );
     expect(r.ok).toBe(true);
     if (r.ok) {
-      expect(JSON.parse(emitJsonc(r.ast))).toEqual({
+      expect(JSON.parse(r.ast.raw)).toEqual({
         agents: {
           defaults: {
             models: {

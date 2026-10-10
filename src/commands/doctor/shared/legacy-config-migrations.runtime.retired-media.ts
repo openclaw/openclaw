@@ -1,0 +1,320 @@
+// Media and voice compatibility migrations retired from canonical runtime config.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { getRecord } from "../../../config/legacy.shared.js";
+import {
+  deleteRetiredPath,
+  moveLegacyConfigKey,
+  visitAgentConfigScopes,
+  visitChannelEntries,
+} from "./legacy-config-record-shared.js";
+
+export function migrateDiscordVoice(raw: Record<string, unknown>, changes: string[]): void {
+  visitChannelEntries(raw, "discord", (entry, path) => {
+    const realtime = getRecord(getRecord(entry.voice)?.realtime);
+    moveLegacyConfigKey(realtime, "voice", "speakerVoice", `${path}.voice.realtime`, changes);
+  });
+}
+
+export function hasDiscordRealtimeVoice(value: unknown): boolean {
+  const discord = getRecord(value);
+  if (!discord) {
+    return false;
+  }
+  const hasAlias = (entry: unknown) => {
+    const realtime = getRecord(getRecord(getRecord(entry)?.voice)?.realtime);
+    return realtime ? Object.hasOwn(realtime, "voice") : false;
+  };
+  if (hasAlias(discord)) {
+    return true;
+  }
+  const accounts = getRecord(discord.accounts);
+  return accounts ? Object.values(accounts).some(hasAlias) : false;
+}
+
+function mapDeepgram(value: Record<string, unknown>): Record<string, unknown> {
+  const mapped: Record<string, unknown> = {};
+  if (typeof value.detectLanguage === "boolean") {
+    mapped.detect_language = value.detectLanguage;
+  }
+  if (typeof value.punctuate === "boolean") {
+    mapped.punctuate = value.punctuate;
+  }
+  if (typeof value.smartFormat === "boolean") {
+    mapped.smart_format = value.smartFormat;
+  }
+  return mapped;
+}
+
+function migrateDeepgramOwner(
+  owner: Record<string, unknown>,
+  path: string,
+  changes: string[],
+): void {
+  const legacy = getRecord(owner.deepgram);
+  if (!legacy) {
+    return;
+  }
+  const providerOptions = getRecord(owner.providerOptions) ?? {};
+  const canonical = getRecord(providerOptions.deepgram) ?? {};
+  providerOptions.deepgram = { ...mapDeepgram(legacy), ...canonical };
+  owner.providerOptions = providerOptions;
+  delete owner.deepgram;
+  changes.push(`Moved ${path}.deepgram → ${path}.providerOptions.deepgram.`);
+}
+
+export function migrateMediaDeepgram(raw: Record<string, unknown>, changes: string[]): void {
+  const media = getRecord(getRecord(raw.tools)?.media);
+  if (!media) {
+    return;
+  }
+  const migrateModels = (models: unknown, path: string) => {
+    if (!Array.isArray(models)) {
+      return;
+    }
+    models.forEach((value, index) => {
+      const model = getRecord(value);
+      if (model) {
+        migrateDeepgramOwner(model, `${path}[${index}]`, changes);
+      }
+    });
+  };
+  migrateModels(media.models, "tools.media.models");
+  for (const capability of ["audio", "image", "video"]) {
+    const entry = getRecord(media[capability]);
+    if (!entry) {
+      continue;
+    }
+    migrateDeepgramOwner(entry, `tools.media.${capability}`, changes);
+    migrateModels(entry.models, `tools.media.${capability}.models`);
+  }
+}
+
+export function hasMediaDeepgram(value: unknown): boolean {
+  const media = getRecord(value);
+  if (!media) {
+    return false;
+  }
+  const hasAlias = (entry: unknown) => {
+    const owner = getRecord(entry);
+    return owner ? Object.hasOwn(owner, "deepgram") : false;
+  };
+  const modelsHaveAlias = (models: unknown) => Array.isArray(models) && models.some(hasAlias);
+  if (modelsHaveAlias(media.models)) {
+    return true;
+  }
+  return ["audio", "image", "video"].some((capability) => {
+    const entry = getRecord(media[capability]);
+    return entry ? hasAlias(entry) || modelsHaveAlias(entry.models) : false;
+  });
+}
+
+const RETIRED_LOOP_DETECTION_PATHS = [
+  ["tools", "loopDetection", "genericRepeat"],
+  ["tools", "loopDetection", "knownPollNoProgress"],
+  ["tools", "loopDetection", "pingPong"],
+  ["tools", "loopDetection", "windowSize"],
+  ["tools", "loopDetection", "historySize"],
+  ["tools", "loopDetection", "warningThreshold"],
+  ["tools", "loopDetection", "unknownToolThreshold"],
+  ["tools", "loopDetection", "criticalThreshold"],
+  ["tools", "loopDetection", "globalCircuitBreakerThreshold"],
+  ["tools", "loopDetection", "detectors"],
+  ["tools", "loopDetection", "postCompactionGuard"],
+] as const;
+
+const RETIRED_MEMORY_SEARCH_PATHS = [
+  ["memory", "search", "chunking"],
+  ["memory", "search", "sync", "watchDebounceMs"],
+  ["memory", "search", "sync", "intervalMinutes"],
+  ["memory", "search", "query", "hybrid", "vectorWeight"],
+  ["memory", "search", "query", "hybrid", "textWeight"],
+  ["memory", "search", "query", "hybrid", "candidateMultiplier"],
+  ["memory", "search", "query", "hybrid", "mmr", "lambda"],
+  ["memory", "search", "query", "hybrid", "temporalDecay", "halfLifeDays"],
+  ["memory", "search", "cache", "maxEntries"],
+] as const;
+
+const RETIRED_TUNING_PATHS = [
+  ["systemAgent"],
+  ["marketplaces"],
+  ["cli", "banner", "taglineMode"],
+  ["commitments"],
+  ["auth", "cooldowns"],
+  ["secrets", "resolution"],
+  ["browser", "remoteCdpTimeoutMs"],
+  ["browser", "remoteCdpHandshakeTimeoutMs"],
+  ["browser", "localLaunchTimeoutMs"],
+  ["browser", "localCdpReadyTimeoutMs"],
+  ["browser", "actionTimeoutMs"],
+  ["browser", "cdpPortRangeStart"],
+  ["browser", "tabCleanup", "idleMinutes"],
+  ["browser", "tabCleanup", "maxTabsPerSession"],
+  ["browser", "tabCleanup", "sweepMinutes"],
+  ...RETIRED_LOOP_DETECTION_PATHS,
+  ["gateway", "handshakeTimeoutMs"],
+  ["gateway", "channelHealthCheckMinutes"],
+  ["gateway", "channelStaleEventThresholdMinutes"],
+  ["gateway", "channelMaxRestartsPerHour"],
+  ["gateway", "reload", "debounceMs"],
+  ["gateway", "reload", "deferralTimeoutMs"],
+  ["gateway", "http", "endpoints", "chatCompletions", "maxBodyBytes"],
+  ["gateway", "http", "endpoints", "chatCompletions", "maxImageParts"],
+  ["gateway", "http", "endpoints", "chatCompletions", "maxTotalImageBytes"],
+  ["gateway", "http", "endpoints", "responses", "maxBodyBytes"],
+  ["session", "typingIntervalSeconds"],
+  ["session", "writeLock"],
+  ["session", "agentToAgent", "maxPingPongTurns"],
+  ["cron", "maxConcurrentRuns"],
+  ["cron", "triggers", "minIntervalMs"],
+  ["cron", "retry"],
+  ["diagnostics", "stuckSessionWarnMs"],
+  ["diagnostics", "stuckSessionAbortMs"],
+  ["diagnostics", "memoryPressureSnapshot"],
+  ["diagnostics", "memoryPressureBundle"],
+  ["web", "heartbeatSeconds"],
+  ["web", "reconnect"],
+  ["web", "whatsapp"],
+  ["messages", "queue", "debounceMs"],
+  ["messages", "statusReactions", "timing"],
+  ["acp", "stream", "coalesceIdleMs"],
+  ["acp", "stream", "maxChunkChars"],
+  ["acp", "stream", "maxOutputChars"],
+  ["acp", "stream", "maxSessionUpdateChars"],
+  ["acp", "stream", "hiddenBoundarySeparator"],
+  ["acp", "maxConcurrentSessions"],
+  ["acp", "runtime", "ttlMinutes"],
+  ["worktrees"],
+  ["transcripts", "maxUtterances"],
+  ["hooks", "maxBodyBytes"],
+  ["update", "auto", "stableDelayHours"],
+  ["update", "auto", "stableJitterHours"],
+  ["update", "auto", "betaCheckIntervalHours"],
+  ...RETIRED_MEMORY_SEARCH_PATHS,
+  ["channels", "*", "streaming", "progress", "render"],
+  ["channels", "*", "accounts", "*", "streaming", "progress", "render"],
+] as const;
+
+const RETIRED_AGENT_TUNING_PATHS = [
+  ["compaction", "reserveTokens"],
+  ["compaction", "reserveTokensFloor"],
+  ["compaction", "maxHistoryShare"],
+  ["contextPruning", "keepLastAssistants"],
+  ["contextPruning", "softTrimRatio"],
+  ["contextPruning", "hardClearRatio"],
+  ["contextPruning", "minPrunableToolChars"],
+  ["contextPruning", "softTrim"],
+  ...RETIRED_MEMORY_SEARCH_PATHS,
+  ["runRetries"],
+  ...RETIRED_LOOP_DETECTION_PATHS,
+] as const;
+
+export function stripRetiredTuningKnobs(raw: Record<string, unknown>, changes?: string[]): boolean {
+  const removed: string[] = [];
+  for (const path of RETIRED_TUNING_PATHS) {
+    deleteRetiredPath(raw, path, removed);
+  }
+  visitAgentConfigScopes(raw, (agent, prefix) => {
+    for (const path of RETIRED_AGENT_TUNING_PATHS) {
+      deleteRetiredPath(agent, path, removed, `${prefix}.`);
+    }
+  });
+  if (removed.length > 0) {
+    changes?.push(
+      `Removed retired runtime tuning knobs: ${JSON.stringify(removed.join(", ")).slice(1, -1)}; built-in defaults now apply.`,
+    );
+  }
+  return removed.length > 0;
+}
+
+const MEDIA_CAPABILITIES = ["image", "audio", "video"] as const;
+function stableConfigValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(stableConfigValue);
+  }
+  const record = getRecord(value);
+  if (!record) {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.keys(record)
+      .toSorted()
+      .map((key) => [key, stableConfigValue(record[key])]),
+  );
+}
+
+function mediaModelSignature(model: Record<string, unknown>): string {
+  const { capabilities: _capabilities, ...rest } = model;
+  return JSON.stringify(stableConfigValue(rest));
+}
+
+function scopeLegacyMediaModel(
+  model: Record<string, unknown>,
+  capability: string,
+): Record<string, unknown> | undefined {
+  if (
+    Array.isArray(model.capabilities) &&
+    !model.capabilities.some((value) => value === capability)
+  ) {
+    return undefined;
+  }
+  return { ...model, capabilities: [capability] };
+}
+
+export function hasLegacyMediaCapabilityConfig(value: unknown): boolean {
+  const media = getRecord(value);
+  return MEDIA_CAPABILITIES.some((capability) => {
+    const config = getRecord(media?.[capability]);
+    return Array.isArray(config?.models);
+  });
+}
+
+export function consolidateMediaCapabilityConfig(
+  raw: Record<string, unknown>,
+  changes: string[],
+): void {
+  const media = getRecord(getRecord(raw.tools)?.media);
+  if (!media) {
+    return;
+  }
+  const sharedModels = Array.isArray(media.models) ? media.models.filter(isRecord) : [];
+  const migratedModels: Record<string, unknown>[] = [];
+  let changed = false;
+
+  for (const capability of MEDIA_CAPABILITIES) {
+    const config = getRecord(media[capability]);
+    if (!config) {
+      continue;
+    }
+    const legacyModels = Array.isArray(config.models) ? config.models.filter(isRecord) : [];
+    const migratedSignatures = new Set<string>();
+    for (const legacyModel of legacyModels) {
+      const migrated = scopeLegacyMediaModel(legacyModel, capability);
+      if (!migrated) {
+        continue;
+      }
+      const signature = mediaModelSignature(migrated);
+      if (migratedSignatures.has(signature)) {
+        continue;
+      }
+      migratedSignatures.add(signature);
+      migratedModels.push(migrated);
+    }
+    if (Object.hasOwn(config, "models")) {
+      delete config.models;
+      changed = true;
+    }
+    if (Object.keys(config).length === 0) {
+      delete media[capability];
+    }
+    changed = changed || legacyModels.length > 0;
+  }
+  const canonicalModels = [...migratedModels, ...sharedModels];
+  if (canonicalModels.length > 0) {
+    media.models = canonicalModels;
+  }
+  if (changed) {
+    changes.push(
+      "Consolidated tools.media image/audio/video model settings into capability-tagged tools.media.models entries.",
+    );
+  }
+}

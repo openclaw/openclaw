@@ -1,5 +1,7 @@
+// Cron delivery plan tests cover delivery target planning rules.
 import { describe, expect, it } from "vitest";
 import { resolveCronDeliveryPlan } from "./delivery-plan.js";
+import { hasExplicitCronDeliveryTarget } from "./delivery-target-validation.js";
 import { makeCronJob } from "./delivery.test-helpers.js";
 
 describe("resolveCronDeliveryPlan", () => {
@@ -27,5 +29,19 @@ describe("resolveCronDeliveryPlan", () => {
       source: "delivery",
       requested: false,
     });
+  });
+
+  it("treats numeric zero thread id as an explicit target", () => {
+    const plan = resolveCronDeliveryPlan(
+      makeCronJob({
+        delivery: {
+          mode: "none",
+          threadId: 0,
+        },
+      }),
+    );
+
+    expect(plan.threadId).toBe(0);
+    expect(hasExplicitCronDeliveryTarget(plan)).toBe(true);
   });
 });

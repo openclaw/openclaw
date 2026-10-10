@@ -36,8 +36,8 @@
     "target": "Heartbeat"
   },
   {
-    "source": "Mintlify",
-    "target": "Mintlify"
+    "source": "LINE",
+    "target": "LINE"
   },
   {
     "source": "Node",
@@ -74,5 +74,13 @@
   {
     "source": "Webhook",
     "target": "Webhook"
+  },
+  {
+    "source": "Pull request review flow",
+    "target": "풀 리퀘스트 리뷰 흐름"
+  },
+  {
+    "source": "CI pipeline",
+    "target": "CI 파이프라인"
   }
 ]

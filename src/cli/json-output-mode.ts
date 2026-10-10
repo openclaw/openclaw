@@ -1,0 +1,107 @@
+// Early JSON-output detection and console-log routing for parseable CLI stdout.
+import { withNoteOutput } from "../../packages/terminal-core/src/note-output.js";
+import { loggingState } from "../logging/state.js";
+import { isConfigSetJsonParseOnly } from "./config-output-mode.js";
+import { resolveCliParentCommandPath } from "./parent-command-path.js";
+
+let resolvedJsonOutputMode: boolean | null = null;
+let stderrRoutingScopes = 0;
+let stderrRoutingAfterScopes = false;
+
+function setConsoleRouting(stderr: boolean): void {
+  if (stderrRoutingScopes > 0) {
+    stderrRoutingAfterScopes = stderr;
+  }
+  loggingState.forceConsoleToStderr = stderr || stderrRoutingScopes > 0;
+}
+
+// Read at write time so preaction refinement and later routeLogsToStderr() calls also move notes.
+const noteOutputForConsoleRouting = () =>
+  loggingState.forceConsoleToStderr ? process.stderr : process.stdout;
+
+/** Detects CLI JSON mode before Commander parses options, stopping at the argv sentinel. */
+export function hasJsonOutputFlag(argv: readonly string[]): boolean {
+  for (const arg of argv) {
+    if (arg === "--") {
+      return false;
+    }
+    if (arg === "--json" || arg.startsWith("--json=")) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Uses Commander-resolved output ownership when available, then falls back to argv. */
+export function isJsonOutputModeActive(argv: readonly string[]): boolean {
+  return (
+    resolvedJsonOutputMode ??
+    (hasJsonOutputFlag(argv) &&
+      !(
+        resolveCliParentCommandPath(argv, "config")?.[1] === "set" && isConfigSetJsonParseOnly(argv)
+      ))
+  );
+}
+
+/** Keeps structured JSON stdout clean by routing incidental console logs and notes to stderr. */
+export async function withConsoleLogsRoutedToStderrForJson<T>(
+  argv: readonly string[],
+  run: () => Promise<T>,
+  options: {
+    machineOutput?: boolean;
+    restoreChanges?: boolean;
+    retainRoutingUntilProcessExit?: boolean;
+  } = {},
+): Promise<T> {
+  const forceStderr = hasJsonOutputFlag(argv) || options.machineOutput;
+  if (!forceStderr && !options.restoreChanges) {
+    return withNoteOutput(noteOutputForConsoleRouting, run);
+  }
+  const previousForceStderr =
+    stderrRoutingScopes > 0 ? stderrRoutingAfterScopes : loggingState.forceConsoleToStderr;
+  const previousEarlyRestore = loggingState.earlyConsoleRoutingRestore;
+  const previousJsonOutputMode = resolvedJsonOutputMode;
+  resolvedJsonOutputMode = null;
+  if (forceStderr) {
+    loggingState.earlyConsoleRoutingRestore = previousForceStderr;
+    setConsoleRouting(true);
+  }
+  try {
+    return await withNoteOutput(noteOutputForConsoleRouting, run);
+  } finally {
+    if (!options.retainRoutingUntilProcessExit) {
+      // Restore the process-wide logging switch so nested/serial CLI calls keep their own output mode.
+      setConsoleRouting(previousForceStderr);
+      loggingState.earlyConsoleRoutingRestore = previousEarlyRestore;
+      resolvedJsonOutputMode = previousJsonOutputMode;
+    }
+  }
+}
+
+/** Let resolved command metadata override conservative early literal-flag routing. */
+export function applyResolvedCommandOutputMode(
+  jsonOutputMode: boolean,
+  machineOutputMode = jsonOutputMode,
+): void {
+  resolvedJsonOutputMode = jsonOutputMode;
+  const restore = loggingState.earlyConsoleRoutingRestore;
+  if (!machineOutputMode && restore !== null) {
+    setConsoleRouting(restore);
+  }
+}
+
+/** Route startup diagnostics to stderr while a command's output mode is still being discovered. */
+export async function withConsoleLogsRoutedToStderr<T>(run: () => Promise<T>): Promise<T> {
+  if (stderrRoutingScopes++ === 0) {
+    stderrRoutingAfterScopes = loggingState.forceConsoleToStderr;
+  }
+  loggingState.forceConsoleToStderr = true;
+  try {
+    return await run();
+  } finally {
+    // Overlapping loads can finish in either order; only the last releases temporary routing.
+    if (--stderrRoutingScopes === 0) {
+      loggingState.forceConsoleToStderr = stderrRoutingAfterScopes;
+    }
+  }
+}

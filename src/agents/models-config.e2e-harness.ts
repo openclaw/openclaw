@@ -1,35 +1,44 @@
+/**
+ * Models-config test harness utilities. The helpers isolate HOME, config
+ * caches, plugin loader state, fetch mocks, and ambient provider env vars.
+ */
 import { afterEach, beforeEach } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { withTempHome as withTempHomeBase } from "../plugin-sdk/test-helpers/temp-home.js";
+import { withTempHomeCore as withTempHomeBase } from "../plugin-sdk/test-helpers/temp-home.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
-import { resetModelsJsonReadyCacheForTest } from "./models-config-state.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
+import { captureEnv } from "../test-utils/env.js";
+import { resetModelsJsonReadyCacheForTest } from "./models-config-state.test-support.js";
 
+/** Runs a models-config test with an isolated temp HOME and no session cleanup. */
 export function withModelsTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   // Models-config tests do not exercise session persistence; skip draining
   // unrelated session lock state during temp-home teardown.
-  return withTempHomeBase(fn, {
-    prefix: "openclaw-models-",
-    skipSessionCleanup: true,
-  });
+  return withTempHomeBase(
+    async (home) => {
+      try {
+        return await fn(home);
+      } finally {
+        await closeOpenClawAgentDatabasesAsync(home);
+      }
+    },
+    { prefix: "openclaw-models-", skipSessionCleanup: true },
+  );
 }
 
+/** Installs before/after hooks that reset config, plugin, env, and fetch state. */
 export function installModelsConfigTestHooks(opts?: {
   restoreFetch?: boolean;
   resetPluginLoaderState?: boolean;
 }) {
-  let previousHome: string | undefined;
-  let previousOpenClawAgentDir: string | undefined;
-  let previousPiCodingAgentDir: string | undefined;
+  let environment: ReturnType<typeof captureEnv> | undefined;
   const originalFetch = globalThis.fetch;
   const shouldResetPluginLoaderState = opts?.resetPluginLoaderState !== false;
 
   beforeEach(() => {
-    previousHome = process.env.HOME;
-    previousOpenClawAgentDir = process.env.OPENCLAW_AGENT_DIR;
-    previousPiCodingAgentDir = process.env.PI_CODING_AGENT_DIR;
+    environment = captureEnv(["HOME", "OPENCLAW_AGENT_DIR"]);
     delete process.env.OPENCLAW_AGENT_DIR;
-    delete process.env.PI_CODING_AGENT_DIR;
     clearRuntimeConfigSnapshot();
     clearConfigCache();
     if (shouldResetPluginLoaderState) {
@@ -39,17 +48,8 @@ export function installModelsConfigTestHooks(opts?: {
   });
 
   afterEach(() => {
-    process.env.HOME = previousHome;
-    if (previousOpenClawAgentDir === undefined) {
-      delete process.env.OPENCLAW_AGENT_DIR;
-    } else {
-      process.env.OPENCLAW_AGENT_DIR = previousOpenClawAgentDir;
-    }
-    if (previousPiCodingAgentDir === undefined) {
-      delete process.env.PI_CODING_AGENT_DIR;
-    } else {
-      process.env.PI_CODING_AGENT_DIR = previousPiCodingAgentDir;
-    }
+    environment?.restore();
+    environment = undefined;
     clearRuntimeConfigSnapshot();
     clearConfigCache();
     if (shouldResetPluginLoaderState) {
@@ -62,34 +62,25 @@ export function installModelsConfigTestHooks(opts?: {
   });
 }
 
+/** Restores selected environment variables after one async test body. */
 export async function withTempEnv<T>(vars: string[], fn: () => Promise<T>): Promise<T> {
-  const previous: Record<string, string | undefined> = {};
-  for (const envVar of vars) {
-    previous[envVar] = process.env[envVar];
-  }
-
+  const environment = captureEnv(vars);
   try {
     return await fn();
   } finally {
-    for (const envVar of vars) {
-      const value = previous[envVar];
-      if (value === undefined) {
-        delete process.env[envVar];
-      } else {
-        process.env[envVar] = value;
-      }
-    }
+    environment.restore();
   }
 }
 
+/** Deletes environment variables used by models-config provider discovery. */
 export function unsetEnv(vars: string[]) {
   for (const envVar of vars) {
     delete process.env[envVar];
   }
 }
 
+/** Ambient env vars cleared by implicit provider discovery tests. */
 export const MODELS_CONFIG_IMPLICIT_ENV_VARS = [
-  "OPENCLAW_TEST_ONLY_PROVIDER_PLUGIN_IDS",
   "VITEST",
   "NODE_ENV",
   "AI_GATEWAY_API_KEY",
@@ -108,9 +99,10 @@ export const MODELS_CONFIG_IMPLICIT_ENV_VARS = [
   "OPENCLAW_AGENT_DIR",
   "OPENAI_API_KEY",
   "OPENROUTER_API_KEY",
-  "PI_CODING_AGENT_DIR",
+  "OPENCLAW_AGENT_DIR",
   "QIANFAN_API_KEY",
   "QWEN_API_KEY",
+  "QWEN_TOKEN_PLAN_API_KEY",
   "MODELSTUDIO_API_KEY",
   "SYNTHETIC_API_KEY",
   "STEPFUN_API_KEY",
@@ -146,6 +138,7 @@ export const MODELS_CONFIG_IMPLICIT_ENV_VARS = [
   "AWS_SHARED_CREDENTIALS_FILE",
 ];
 
+/** Canonical custom proxy provider config used by models-config tests. */
 export const CUSTOM_PROXY_MODELS_CONFIG: OpenClawConfig = {
   models: {
     providers: {

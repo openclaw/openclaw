@@ -1,8 +1,10 @@
+// Spawned context tests cover metadata cleanup and workspace inheritance for
+// child runs launched from agent tools.
 import { describe, expect, it } from "vitest";
 import {
   mapToolContextToSpawnedRunMetadata,
   normalizeSpawnedRunMetadata,
-  resolveIngressWorkspaceOverrideForSpawnedRun,
+  resolveIngressWorkspaceOverrideForSessionRun,
   resolveSpawnedWorkspaceInheritance,
 } from "./spawned-context.js";
 
@@ -44,12 +46,14 @@ describe("mapToolContextToSpawnedRunMetadata", () => {
 });
 
 describe("resolveSpawnedWorkspaceInheritance", () => {
+  // Workspace inheritance prefers explicit caller intent, then target agent
+  // config, then requester context so child runs stay in the expected checkout.
   const config = {
     agents: {
-      list: [
-        { id: "main", workspace: "/tmp/workspace-main" },
-        { id: "ops", workspace: "/tmp/workspace-ops" },
-      ],
+      entries: {
+        main: { workspace: "/tmp/workspace-main" },
+        ops: { workspace: "/tmp/workspace-ops" },
+      },
     },
   };
 
@@ -89,19 +93,22 @@ describe("resolveSpawnedWorkspaceInheritance", () => {
   });
 });
 
-describe("resolveIngressWorkspaceOverrideForSpawnedRun", () => {
-  it("forwards workspace only for spawned runs", () => {
+describe("resolveIngressWorkspaceOverrideForSessionRun", () => {
+  it("uses inherited workspaces for spawned runs and managed cwd for dashboard worktrees", () => {
     expect(
-      resolveIngressWorkspaceOverrideForSpawnedRun({
+      resolveIngressWorkspaceOverrideForSessionRun({
         spawnedBy: "agent:main:subagent:parent",
         workspaceDir: "/tmp/ws",
+        cwd: "/tmp/task",
       }),
     ).toBe("/tmp/ws");
     expect(
-      resolveIngressWorkspaceOverrideForSpawnedRun({
+      resolveIngressWorkspaceOverrideForSessionRun({
         spawnedBy: "",
         workspaceDir: "/tmp/ws",
+        cwd: "/tmp/worktree",
       }),
-    ).toBeUndefined();
+    ).toBe("/tmp/worktree");
+    expect(resolveIngressWorkspaceOverrideForSessionRun()).toBeUndefined();
   });
 });

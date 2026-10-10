@@ -1,400 +1,50 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  buildTelegramRoutingTarget,
-  buildTelegramThreadParams,
-  buildTypingThreadParams,
-  describeReplyTarget,
-  expandTextLinks,
-  getTelegramTextParts,
-  hasBotMention,
-  isBinaryContent,
-  normalizeForwardedContext,
-  resolveTelegramDirectPeerId,
-  resolveTelegramForumFlag,
-  resolveTelegramForumThreadId,
-  resetTelegramForumFlagCacheForTest,
-  shouldUseTelegramDmThreadSession,
-} from "./helpers.js";
+// Telegram tests cover helpers plugin behavior.
+import type { Message as TelegramMessage, MessageEntity } from "grammy/types";
+import { markdownToIR } from "openclaw/plugin-sdk/text-chunking";
+import { describe, expect, it } from "vitest";
+import { describeReplyTarget, getTelegramTextParts, hasBotMention } from "./helpers.js";
+import { renderTelegramTextEntities } from "./inbound-text-entities.js";
 
-describe("resolveTelegramForumThreadId", () => {
-  it.each([
-    { isForum: false, messageThreadId: 42 },
-    { isForum: false, messageThreadId: undefined },
-    { isForum: undefined, messageThreadId: 99 },
-  ])("returns undefined for non-forum groups", (params) => {
-    // Reply threads in regular groups should not create separate sessions.
-    expect(resolveTelegramForumThreadId(params)).toBeUndefined();
-  });
-
-  it.each([
-    { isForum: true, messageThreadId: undefined, expected: 1 },
-    { isForum: true, messageThreadId: null, expected: 1 },
-    { isForum: true, messageThreadId: 99, expected: 99 },
-  ])("resolves forum topic ids", ({ expected, ...params }) => {
-    expect(resolveTelegramForumThreadId(params)).toBe(expected);
-  });
-});
-
-describe("resolveTelegramForumFlag", () => {
-  beforeEach(() => {
-    resetTelegramForumFlagCacheForTest();
-  });
-
-  it("keeps explicit forum metadata when Telegram already provides it", async () => {
-    const getChat = vi.fn(async () => ({ is_forum: false }));
-    await expect(
-      resolveTelegramForumFlag({
-        chatId: -100123,
-        chatType: "supergroup",
-        isGroup: true,
-        isForum: true,
-        getChat,
-      }),
-    ).resolves.toBe(true);
-    expect(getChat).not.toHaveBeenCalled();
-  });
-
-  it("falls back to getChat for supergroups when is_forum is omitted", async () => {
-    const getChat = vi.fn(async () => ({ is_forum: true }));
-    await expect(
-      resolveTelegramForumFlag({
-        chatId: -100789,
-        chatType: "supergroup",
-        isGroup: true,
-        getChat,
-      }),
-    ).resolves.toBe(true);
-    expect(getChat).toHaveBeenCalledWith(-100789);
-  });
-
-  it("reuses resolved forum metadata for later supergroup updates", async () => {
-    const getChat = vi.fn(async () => ({ is_forum: true }));
-    const params = {
-      chatId: -100456,
-      chatType: "supergroup" as const,
-      isGroup: true,
-      getChat,
-    };
-    await expect(resolveTelegramForumFlag(params)).resolves.toBe(true);
-    await expect(resolveTelegramForumFlag(params)).resolves.toBe(true);
-    expect(getChat).toHaveBeenCalledTimes(1);
-  });
-
-  it("refreshes cached forum metadata from explicit Telegram updates", async () => {
-    const getChat = vi.fn(async () => ({ is_forum: true }));
-    const params = {
-      chatId: -100654,
-      chatType: "supergroup" as const,
-      isGroup: true,
-      getChat,
-    };
-    await expect(resolveTelegramForumFlag(params)).resolves.toBe(true);
-    await expect(resolveTelegramForumFlag({ ...params, isForum: false })).resolves.toBe(false);
-    await expect(resolveTelegramForumFlag(params)).resolves.toBe(false);
-    expect(getChat).toHaveBeenCalledTimes(1);
-  });
-
-  it("returns false when forum lookup is unavailable", async () => {
-    const getChat = vi.fn(async () => {
-      throw new Error("lookup failed");
-    });
-    await expect(
-      resolveTelegramForumFlag({
-        chatId: -100999,
-        chatType: "supergroup",
-        isGroup: true,
-        getChat,
-      }),
-    ).resolves.toBe(false);
-  });
-});
-
-describe("buildTelegramThreadParams", () => {
-  it.each([
-    { input: { id: 1, scope: "forum" as const }, expected: undefined },
-    { input: { id: 99, scope: "forum" as const }, expected: { message_thread_id: 99 } },
-    { input: { id: 1, scope: "dm" as const }, expected: { message_thread_id: 1 } },
-    { input: { id: 2, scope: "dm" as const }, expected: { message_thread_id: 2 } },
-    { input: { id: 0, scope: "dm" as const }, expected: undefined },
-    { input: { id: -1, scope: "dm" as const }, expected: undefined },
-    { input: { id: 1.9, scope: "dm" as const }, expected: { message_thread_id: 1 } },
-    // id=0 should be included for forum and none scopes (not falsy)
-    { input: { id: 0, scope: "forum" as const }, expected: { message_thread_id: 0 } },
-    { input: { id: 0, scope: "none" as const }, expected: { message_thread_id: 0 } },
-  ])("builds thread params", ({ input, expected }) => {
-    expect(buildTelegramThreadParams(input)).toEqual(expected);
-  });
-});
-
-describe("shouldUseTelegramDmThreadSession", () => {
-  it("keeps incidental DM thread ids flat by default", () => {
-    expect(shouldUseTelegramDmThreadSession({ dmThreadId: 42 })).toBe(false);
-  });
-
-  it("uses DM thread sessions for explicit or topic-required configs", () => {
-    expect(
-      shouldUseTelegramDmThreadSession({
-        dmThreadId: 42,
-        directConfig: { threadReplies: "inbound" },
-      }),
-    ).toBe(true);
-    expect(
-      shouldUseTelegramDmThreadSession({
-        dmThreadId: 42,
-        directConfig: { requireTopic: true },
-      }),
-    ).toBe(true);
-    expect(
-      shouldUseTelegramDmThreadSession({
-        dmThreadId: 42,
-        topicConfig: { agentId: "support" },
-      }),
-    ).toBe(true);
-  });
-});
-
-describe("buildTelegramRoutingTarget", () => {
-  it.each([
-    {
-      name: "keeps General forum topic chat-scoped",
-      chatId: -100123,
-      thread: { id: 1, scope: "forum" as const },
-      expected: "telegram:-100123",
-    },
-    {
-      name: "includes real forum topic ids",
-      chatId: -100123,
-      thread: { id: 42, scope: "forum" as const },
-      expected: "telegram:-100123:topic:42",
-    },
-    {
-      name: "falls back to bare chat when thread is missing",
-      chatId: -100123,
-      thread: null,
-      expected: "telegram:-100123",
-    },
-  ])("$name", ({ chatId, thread, expected }) => {
-    expect(buildTelegramRoutingTarget(chatId, thread)).toBe(expected);
-  });
-});
-
-describe("buildTypingThreadParams", () => {
-  it.each([
-    { input: undefined, expected: undefined },
-    { input: 1, expected: { message_thread_id: 1 } },
-  ])("builds typing params", ({ input, expected }) => {
-    expect(buildTypingThreadParams(input)).toEqual(expected);
-  });
-});
-
-describe("resolveTelegramDirectPeerId", () => {
-  it("prefers sender id when available", () => {
-    expect(resolveTelegramDirectPeerId({ chatId: 777777777, senderId: 123456789 })).toBe(
-      "123456789",
-    );
-  });
-
-  it("falls back to chat id when sender id is missing", () => {
-    expect(resolveTelegramDirectPeerId({ chatId: 777777777, senderId: undefined })).toBe(
-      "777777777",
-    );
-  });
-});
-
-describe("thread id normalization", () => {
-  it.each([
-    {
-      build: () => buildTelegramThreadParams({ id: 42.9, scope: "forum" }),
-      expected: { message_thread_id: 42 },
-    },
-    {
-      build: () => buildTypingThreadParams(42.9),
-      expected: { message_thread_id: 42 },
-    },
-  ])("normalizes thread ids to integers", ({ build, expected }) => {
-    expect(build()).toEqual(expected);
-  });
-});
-
-describe("normalizeForwardedContext", () => {
-  it("handles forward_origin users", () => {
-    const ctx = normalizeForwardedContext({
-      forward_origin: {
-        type: "user",
-        sender_user: { first_name: "Ada", last_name: "Lovelace", username: "ada", id: 42 },
-        date: 123,
-      },
-    } as any);
-    expect(ctx?.from).toBe("Ada Lovelace (@ada)");
-    expect(ctx?.fromType).toBe("user");
-    expect(ctx?.fromId).toBe("42");
-    expect(ctx?.fromUsername).toBe("ada");
-    expect(ctx?.fromTitle).toBe("Ada Lovelace");
-    expect(ctx?.date).toBe(123);
-  });
-
-  it("handles hidden forward_origin names", () => {
-    const ctx = normalizeForwardedContext({
-      forward_origin: { type: "hidden_user", sender_user_name: "Hidden Name", date: 456 },
-    } as any);
-    expect(ctx?.from).toBe("Hidden Name");
-    expect(ctx?.fromType).toBe("hidden_user");
-    expect(ctx?.fromTitle).toBe("Hidden Name");
-    expect(ctx?.date).toBe(456);
-  });
-
-  it("handles forward_origin channel with author_signature and message_id", () => {
-    const ctx = normalizeForwardedContext({
-      forward_origin: {
-        type: "channel",
-        chat: {
-          title: "Tech News",
-          username: "technews",
-          id: -1001234,
-          type: "channel",
-        },
-        date: 500,
-        author_signature: "Editor",
-        message_id: 42,
-      },
-    } as any);
-    expect(ctx?.from).toBe("Tech News (Editor)");
-    expect(ctx?.fromType).toBe("channel");
-    expect(ctx?.fromId).toBe("-1001234");
-    expect(ctx?.fromUsername).toBe("technews");
-    expect(ctx?.fromTitle).toBe("Tech News");
-    expect(ctx?.fromSignature).toBe("Editor");
-    expect(ctx?.fromChatType).toBe("channel");
-    expect(ctx?.fromMessageId).toBe(42);
-    expect(ctx?.date).toBe(500);
-  });
-
-  it("handles forward_origin chat with sender_chat and author_signature", () => {
-    const ctx = normalizeForwardedContext({
-      forward_origin: {
-        type: "chat",
-        sender_chat: {
-          title: "Discussion Group",
-          id: -1005678,
-          type: "supergroup",
-        },
-        date: 600,
-        author_signature: "Admin",
-      },
-    } as any);
-    expect(ctx?.from).toBe("Discussion Group (Admin)");
-    expect(ctx?.fromType).toBe("chat");
-    expect(ctx?.fromId).toBe("-1005678");
-    expect(ctx?.fromTitle).toBe("Discussion Group");
-    expect(ctx?.fromSignature).toBe("Admin");
-    expect(ctx?.fromChatType).toBe("supergroup");
-    expect(ctx?.date).toBe(600);
-  });
-
-  it("uses author_signature from forward_origin", () => {
-    const ctx = normalizeForwardedContext({
-      forward_origin: {
-        type: "channel",
-        chat: { title: "My Channel", id: -100999, type: "channel" },
-        date: 700,
-        author_signature: "New Sig",
-        message_id: 1,
-      },
-    } as any);
-    expect(ctx?.fromSignature).toBe("New Sig");
-    expect(ctx?.from).toBe("My Channel (New Sig)");
-  });
-
-  it("returns undefined signature when author_signature is blank", () => {
-    const ctx = normalizeForwardedContext({
-      forward_origin: {
-        type: "channel",
-        chat: { title: "Updates", id: -100333, type: "channel" },
-        date: 860,
-        author_signature: "   ",
-        message_id: 1,
-      },
-    } as any);
-    expect(ctx?.fromSignature).toBeUndefined();
-    expect(ctx?.from).toBe("Updates");
-  });
-
-  it("handles forward_origin channel without author_signature", () => {
-    const ctx = normalizeForwardedContext({
-      forward_origin: {
-        type: "channel",
-        chat: { title: "News", id: -100111, type: "channel" },
-        date: 900,
-        message_id: 1,
-      },
-    } as any);
-    expect(ctx?.from).toBe("News");
-    expect(ctx?.fromSignature).toBeUndefined();
-    expect(ctx?.fromChatType).toBe("channel");
-  });
-});
+function asMalformedTelegramMessage(message: unknown): TelegramMessage {
+  return message as TelegramMessage;
+}
 
 describe("describeReplyTarget", () => {
-  it("returns null when no reply_to_message", () => {
-    const result = describeReplyTarget({
-      message_id: 1,
-      date: 1000,
-      chat: { id: 1, type: "private" },
-    } as any);
-    expect(result).toBeNull();
-  });
-
-  it("extracts basic reply info", () => {
-    const result = describeReplyTarget({
-      message_id: 2,
-      date: 1000,
-      chat: { id: 1, type: "private" },
-      reply_to_message: {
-        message_id: 1,
-        date: 900,
-        chat: { id: 1, type: "private" },
-        text: "Original message",
-        from: { id: 42, first_name: "Alice", is_bot: false },
-      },
-    } as any);
-    expect(result?.body).toBe("Original message");
-    expect(result?.sender).toBe("Alice");
-    expect(result?.id).toBe("1");
-    expect(result?.kind).toBe("reply");
-    expect(result?.source).toBe("reply_to_message");
-  });
-
   it("handles non-string reply text gracefully (issue #27201)", () => {
-    const result = describeReplyTarget({
-      message_id: 2,
-      date: 1000,
-      chat: { id: 1, type: "private" },
-      reply_to_message: {
-        message_id: 1,
-        date: 900,
-        chat: { id: 1, type: "private" },
-        // Simulate edge case where text is an unexpected non-string value
-        text: { some: "object" },
-        from: { id: 42, first_name: "Alice", is_bot: false },
-      },
-    } as any);
+    const result = describeReplyTarget(
+      asMalformedTelegramMessage({
+        message_id: 2,
+        date: 1000,
+        chat: { id: 1, type: "private", first_name: "Test" },
+        reply_to_message: {
+          message_id: 1,
+          date: 900,
+          chat: { id: 1, type: "private", first_name: "Test" },
+          // Simulate edge case where text is an unexpected non-string value
+          text: { some: "object" },
+          from: { id: 42, first_name: "Alice", is_bot: false },
+        },
+      }),
+    );
     expect(result).toBeNull();
   });
 
   it("falls back to caption when reply text is malformed", () => {
-    const result = describeReplyTarget({
-      message_id: 2,
-      date: 1000,
-      chat: { id: 1, type: "private" },
-      reply_to_message: {
-        message_id: 1,
-        date: 900,
-        chat: { id: 1, type: "private" },
-        text: { some: "object" },
-        caption: "Caption body",
-        from: { id: 42, first_name: "Alice", is_bot: false },
-      },
-    } as any);
+    const result = describeReplyTarget(
+      asMalformedTelegramMessage({
+        message_id: 2,
+        date: 1000,
+        chat: { id: 1, type: "private", first_name: "Test" },
+        reply_to_message: {
+          message_id: 1,
+          date: 900,
+          chat: { id: 1, type: "private", first_name: "Test" },
+          text: { some: "object" },
+          caption: "Caption body",
+          from: { id: 42, first_name: "Alice", is_bot: false },
+        },
+      }),
+    );
     expect(result?.body).toBe("Caption body");
     expect(result?.kind).toBe("reply");
   });
@@ -411,7 +61,7 @@ describe("describeReplyTarget", () => {
         caption: "PK\x00\x03\x04binary",
         from: { id: 42, first_name: "Alice", is_bot: false },
       },
-    } as any);
+    } as TelegramMessage);
     expect(result?.id).toBe("1");
     expect(result?.sender).toBe("Alice");
     expect(result?.body).toBeUndefined();
@@ -432,28 +82,30 @@ describe("describeReplyTarget", () => {
         text: "Original message",
         from: { id: 42, first_name: "Alice", is_bot: false },
       },
-    } as any);
+    } as TelegramMessage);
     expect(result?.body).toBe("Original message");
     expect(result?.kind).toBe("reply");
   });
 
   it("falls back to external reply text when external quote text is binary", () => {
-    const result = describeReplyTarget({
-      message_id: 5,
-      date: 1300,
-      chat: { id: 1, type: "private" },
-      text: "Comment on forwarded message",
-      external_reply: {
-        message_id: 4,
-        date: 1200,
+    const result = describeReplyTarget(
+      asMalformedTelegramMessage({
+        message_id: 5,
+        date: 1300,
         chat: { id: 1, type: "private" },
-        text: "Forwarded from elsewhere",
-        quote: {
-          text: "PK\x00\x03\x04binary quote",
+        text: "Comment on forwarded message",
+        external_reply: {
+          message_id: 4,
+          date: 1200,
+          chat: { id: 1, type: "private" },
+          text: "Forwarded from elsewhere",
+          quote: {
+            text: "PK\x00\x03\x04binary quote",
+          },
+          from: { id: 123, first_name: "Eve", is_bot: false },
         },
-        from: { id: 123, first_name: "Eve", is_bot: false },
-      },
-    } as any);
+      }),
+    );
     expect(result?.body).toBe("Forwarded from elsewhere");
     expect(result?.kind).toBe("reply");
   });
@@ -484,7 +136,7 @@ describe("describeReplyTarget", () => {
           date: 500,
         },
       },
-    } as any);
+    } as TelegramMessage);
     expect(result?.body).toBe("This is the forwarded content");
     expect(result?.id).toBe("2");
     expect(result?.forwardedFrom?.from).toBe("Bob Smith (@bobsmith)");
@@ -512,31 +164,33 @@ describe("describeReplyTarget", () => {
           author_signature: "Editor",
         },
       },
-    } as any);
+    } as TelegramMessage);
     expect(result?.forwardedFrom?.from).toBe("Tech News (Editor)");
     expect(result?.forwardedFrom?.fromType).toBe("channel");
     expect(result?.forwardedFrom?.fromMessageId).toBe(456);
   });
 
   it("marks top-level quote metadata on external replies as external targets", () => {
-    const result = describeReplyTarget({
-      message_id: 5,
-      date: 1300,
-      chat: { id: 1, type: "private" },
-      text: "Comment on forwarded message",
-      quote: {
-        text: "quoted slice",
-        position: 4,
-        entities: [{ type: "italic", offset: 0, length: 6 }],
-      },
-      external_reply: {
-        message_id: 4,
-        date: 1200,
+    const result = describeReplyTarget(
+      asMalformedTelegramMessage({
+        message_id: 5,
+        date: 1300,
         chat: { id: 1, type: "private" },
-        text: "Forwarded from elsewhere",
-        from: { id: 123, first_name: "Eve", is_bot: false },
-      },
-    } as any);
+        text: "Comment on forwarded message",
+        quote: {
+          text: "quoted slice",
+          position: 4,
+          entities: [{ type: "italic", offset: 0, length: 6 }],
+        },
+        external_reply: {
+          message_id: 4,
+          date: 1200,
+          chat: { id: 1, type: "private" },
+          text: "Forwarded from elsewhere",
+          from: { id: 123, first_name: "Eve", is_bot: false },
+        },
+      }),
+    );
 
     expect(result?.id).toBe("4");
     expect(result?.kind).toBe("quote");
@@ -547,57 +201,36 @@ describe("describeReplyTarget", () => {
   });
 
   it("extracts forwarded context from external_reply", () => {
-    const result = describeReplyTarget({
-      message_id: 5,
-      date: 1300,
-      chat: { id: 1, type: "private" },
-      text: "Comment on forwarded message",
-      external_reply: {
-        message_id: 4,
-        date: 1200,
+    const result = describeReplyTarget(
+      asMalformedTelegramMessage({
+        message_id: 5,
+        date: 1300,
         chat: { id: 1, type: "private" },
-        text: "Forwarded from elsewhere",
-        forward_origin: {
-          type: "user",
-          sender_user: {
-            id: 123,
-            first_name: "Eve",
-            last_name: "Stone",
-            username: "eve",
-            is_bot: false,
+        text: "Comment on forwarded message",
+        external_reply: {
+          message_id: 4,
+          date: 1200,
+          chat: { id: 1, type: "private" },
+          text: "Forwarded from elsewhere",
+          forward_origin: {
+            type: "user",
+            sender_user: {
+              id: 123,
+              first_name: "Eve",
+              last_name: "Stone",
+              username: "eve",
+              is_bot: false,
+            },
+            date: 700,
           },
-          date: 700,
         },
-      },
-    } as any);
+      }),
+    );
     expect(result?.id).toBe("4");
     expect(result?.forwardedFrom?.from).toBe("Eve Stone (@eve)");
     expect(result?.forwardedFrom?.fromType).toBe("user");
     expect(result?.forwardedFrom?.fromId).toBe("123");
     expect(result?.forwardedFrom?.date).toBe(700);
-  });
-});
-
-describe("isBinaryContent", () => {
-  it("returns false for normal user text", () => {
-    expect(isBinaryContent("Hello, world!")).toBe(false);
-  });
-
-  it("returns false for text with common whitespace (tabs, newlines)", () => {
-    expect(isBinaryContent("line one\nline two\ttab")).toBe(false);
-  });
-
-  it("returns true for string containing null bytes", () => {
-    expect(isBinaryContent("PK\x00\x03\x04")).toBe(true);
-  });
-
-  it("returns true for typical binary file header bytes", () => {
-    const mobiBinarySnippet = "\x00\x00\x00\x01BOOKMOBI\x00\x00\x02\x0E";
-    expect(isBinaryContent(mobiBinarySnippet)).toBe(true);
-  });
-
-  it("returns false for empty string", () => {
-    expect(isBinaryContent("")).toBe(false);
   });
 });
 
@@ -610,20 +243,9 @@ describe("getTelegramTextParts — binary caption filtering (#66647)", () => {
       chat: { id: 1, type: "private" },
       date: 1,
       message_id: 1,
-    } as any);
+    } as TelegramMessage);
     expect(result.text).toBe("");
     expect(result.entities).toStrictEqual([]);
-  });
-
-  it("preserves normal caption text", () => {
-    const result = getTelegramTextParts({
-      caption: "Here is my document",
-      caption_entities: [],
-      chat: { id: 1, type: "private" },
-      date: 1,
-      message_id: 1,
-    } as any);
-    expect(result.text).toBe("Here is my document");
   });
 
   it("strips binary content in msg.text as well", () => {
@@ -633,63 +255,23 @@ describe("getTelegramTextParts — binary caption filtering (#66647)", () => {
       chat: { id: 1, type: "private" },
       date: 1,
       message_id: 1,
-    } as any);
+    } as TelegramMessage);
     expect(result.text).toBe("");
     expect(result.entities).toStrictEqual([]);
   });
 });
 
 describe("hasBotMention", () => {
-  it("prefers caption text and caption entities when message text is absent", () => {
-    expect(
-      getTelegramTextParts({
-        caption: "@gaian hello",
-        caption_entities: [{ type: "mention", offset: 0, length: 6 }],
-        chat: { id: 1, type: "private" },
-        date: 1,
-        message_id: 1,
-      } as any),
-    ).toEqual({
-      text: "@gaian hello",
-      entities: [{ type: "mention", offset: 0, length: 6 }],
-    });
-  });
-
-  it("matches exact username mentions from plain text", () => {
-    expect(
-      hasBotMention(
-        {
-          text: "@gaian what is the group id?",
-          chat: { id: 1, type: "supergroup" },
-        } as any,
-        "gaian",
-      ),
-    ).toBe(true);
-  });
-
   it("does not match mention prefixes from longer bot usernames", () => {
     expect(
       hasBotMention(
         {
           text: "@GaianChat_Bot what is the group id?",
           chat: { id: 1, type: "supergroup" },
-        } as any,
+        } as TelegramMessage,
         "gaian",
       ),
     ).toBe(false);
-  });
-
-  it("still matches exact mention entities", () => {
-    expect(
-      hasBotMention(
-        {
-          text: "@GaianChat_Bot hi @gaian",
-          entities: [{ type: "mention", offset: 18, length: 6 }],
-          chat: { id: 1, type: "supergroup" },
-        } as any,
-        "gaian",
-      ),
-    ).toBe(true);
   });
 
   it("matches mention followed by punctuation", () => {
@@ -698,94 +280,179 @@ describe("hasBotMention", () => {
         {
           text: "@gaian, what's up?",
           chat: { id: 1, type: "supergroup" },
-        } as any,
+        } as TelegramMessage,
         "gaian",
       ),
     ).toBe(true);
   });
 
-  it("matches mention followed by space", () => {
+  it("matches a text_mention that targets the bot in a caption", () => {
     expect(
       hasBotMention(
-        {
-          text: "@gaian how are you",
+        asMalformedTelegramMessage({
+          caption: "Gaian look at this",
+          caption_entities: [
+            {
+              type: "text_mention",
+              offset: 0,
+              length: 5,
+              user: { id: 42, is_bot: true, first_name: "Gaian" },
+            },
+          ],
           chat: { id: 1, type: "supergroup" },
-        } as any,
+        }),
         "gaian",
+        42,
       ),
     ).toBe(true);
   });
 
-  it("does not match substring of a longer username", () => {
+  it("does not match (and does not throw) a text_mention entity with no user", () => {
     expect(
       hasBotMention(
-        {
-          text: "@gaianchat_bot hello",
+        asMalformedTelegramMessage({
+          text: "Gaian hello",
+          entities: [{ type: "text_mention", offset: 0, length: 5 }],
           chat: { id: 1, type: "supergroup" },
-        } as any,
+        }),
         "gaian",
-      ),
-    ).toBe(false);
-  });
-
-  it("does not match when mention is a prefix of another word", () => {
-    expect(
-      hasBotMention(
-        {
-          text: "@gaianbot do something",
-          chat: { id: 1, type: "supergroup" },
-        } as any,
-        "gaian",
+        42,
       ),
     ).toBe(false);
   });
 });
-describe("expandTextLinks", () => {
-  it("returns text unchanged when no entities are provided", () => {
-    expect(expandTextLinks("Hello world")).toBe("Hello world");
-    expect(expandTextLinks("Hello world", null)).toBe("Hello world");
-    expect(expandTextLinks("Hello world", [])).toBe("Hello world");
-  });
 
-  it("returns text unchanged when there are no text_link entities", () => {
+describe("renderTelegramTextEntities", () => {
+  it("renders Telegram formatting entities as markdown", () => {
+    const text = "bold italic code strike underline spoiler";
     const entities = [
-      { type: "mention", offset: 0, length: 5 },
-      { type: "bold", offset: 6, length: 5 },
-    ];
-    expect(expandTextLinks("@user hello", entities)).toBe("@user hello");
-  });
+      { type: "bold", offset: 0, length: 4 },
+      { type: "italic", offset: 5, length: 6 },
+      { type: "code", offset: 12, length: 4 },
+      { type: "strikethrough", offset: 17, length: 6 },
+      { type: "underline", offset: 24, length: 9 },
+      { type: "spoiler", offset: 34, length: 7 },
+    ] satisfies MessageEntity[];
 
-  it("expands a single text_link entity", () => {
-    const text = "Check this link for details";
-    const entities = [{ type: "text_link", offset: 11, length: 4, url: "https://example.com" }];
-    expect(expandTextLinks(text, entities)).toBe(
-      "Check this [link](https://example.com) for details",
+    expect(renderTelegramTextEntities(text, entities)).toBe(
+      "**bold** _italic_ `code` ~~strike~~ __underline__ ||spoiler||",
     );
   });
 
-  it("expands multiple text_link entities", () => {
-    const text = "Visit Google or GitHub for more";
+  it("renders pre entities with language fences", () => {
+    const text = "const value = 1;";
     const entities = [
-      { type: "text_link", offset: 6, length: 6, url: "https://google.com" },
-      { type: "text_link", offset: 16, length: 6, url: "https://github.com" },
-    ];
-    expect(expandTextLinks(text, entities)).toBe(
-      "Visit [Google](https://google.com) or [GitHub](https://github.com) for more",
+      { type: "pre", offset: 0, length: text.length, language: "ts" },
+    ] satisfies MessageEntity[];
+
+    expect(renderTelegramTextEntities(text, entities)).toBe("```ts\nconst value = 1;\n```");
+  });
+
+  it("uses a pre fence that cannot close inside content", () => {
+    const text = "before\n```\ninside";
+    const entities = [
+      { type: "pre", offset: 0, length: text.length, language: "md" },
+    ] satisfies MessageEntity[];
+
+    expect(renderTelegramTextEntities(text, entities)).toBe("````md\nbefore\n```\ninside\n````");
+  });
+
+  it("renders links and formatting from original offsets", () => {
+    const text = "Read docs now";
+    const entities = [
+      { type: "bold", offset: 5, length: 4 },
+      { type: "text_link", offset: 5, length: 4, url: "https://docs.example" },
+      { type: "italic", offset: 10, length: 3 },
+    ] satisfies MessageEntity[];
+
+    expect(renderTelegramTextEntities(text, entities)).toBe(
+      "Read **[docs](https://docs.example)** _now_",
     );
   });
 
-  it("handles adjacent text_link entities", () => {
-    const text = "AB";
-    const entities = [
-      { type: "text_link", offset: 0, length: 1, url: "https://a.example" },
-      { type: "text_link", offset: 1, length: 1, url: "https://b.example" },
-    ];
-    expect(expandTextLinks(text, entities)).toBe("[A](https://a.example)[B](https://b.example)");
+  it("uses UTF-16 Telegram offsets", () => {
+    const text = "Hi 😀 bold";
+    const entities = [{ type: "bold", offset: 6, length: 4 }] satisfies MessageEntity[];
+
+    expect(renderTelegramTextEntities(text, entities)).toBe("Hi 😀 **bold**");
   });
 
-  it("preserves offsets from the original string", () => {
-    const text = " Hello world";
-    const entities = [{ type: "text_link", offset: 1, length: 5, url: "https://example.com" }];
-    expect(expandTextLinks(text, entities)).toBe(" [Hello](https://example.com) world");
-  });
+  it.each([
+    {
+      description: "an unmatched closing parenthesis",
+      label: "docs",
+      url: "https://example.com/report)final",
+      expectedHref: "https://example.com/report)final",
+    },
+    {
+      description: "nested and trailing parentheses",
+      label: "docs",
+      url: "https://example.com/quarter(a)b)",
+      expectedHref: "https://example.com/quarter(a)b)",
+    },
+    {
+      description: "a literal destination backslash",
+      label: "docs",
+      url: String.raw`https://example.com/a\b)`,
+      expectedHref: "https://example.com/a%5Cb)",
+    },
+    {
+      description: "angle brackets and whitespace",
+      label: "docs",
+      url: "https://example.com/<report final>",
+      expectedHref: "https://example.com/%3Creport%20final%3E",
+    },
+    {
+      description: "a closing bracket in the linked label",
+      label: "docs]more",
+      url: "https://example.com/report)final",
+      expectedHref: "https://example.com/report)final",
+    },
+    {
+      description: "a literal backslash before a bracket in the linked label",
+      label: String.raw`docs\]more`,
+      url: "https://example.com/report)final",
+      expectedHref: "https://example.com/report)final",
+    },
+    {
+      description: "an opening bracket and UTF-16 emoji in the linked label",
+      label: "😀 [docs",
+      url: "https://example.com/report)final",
+      expectedHref: "https://example.com/report)final",
+    },
+    {
+      description: "a newline in a provider link destination",
+      label: "docs",
+      url: "https://example.com/report\nfinal",
+      expectedHref: "https://example.com/report%0Afinal",
+    },
+    {
+      description: "an already percent-encoded parenthesis",
+      label: "docs",
+      url: "https://example.com/report%29final",
+      expectedHref: "https://example.com/report%29final",
+    },
+  ])(
+    "preserves $description through the actual Markdown parser",
+    ({ label, url, expectedHref }) => {
+      const text = `Read ${label} now`;
+      const offset = "Read ".length;
+      const entities = [
+        { type: "bold", offset, length: label.length },
+        { type: "text_link", offset, length: label.length, url },
+      ] satisfies MessageEntity[];
+
+      const parsed = markdownToIR(renderTelegramTextEntities(text, entities));
+
+      expect(parsed.text).toBe(text);
+      expect(parsed.links).toEqual([
+        { start: offset, end: offset + label.length, href: expectedHref },
+      ]);
+      expect(parsed.styles).toContainEqual({
+        start: offset,
+        end: offset + label.length,
+        style: "bold",
+      });
+    },
+  );
 });

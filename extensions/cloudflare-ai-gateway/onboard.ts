@@ -1,6 +1,8 @@
 import {
   applyAgentDefaultModelPrimary,
   applyProviderConfigWithDefaultModel,
+  applyProviderConnectionConfig,
+  createAliasOnlyPresetAppliers,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
 import {
@@ -8,6 +10,11 @@ import {
   CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
   resolveCloudflareAiGatewayBaseUrl,
 } from "./models.js";
+
+const { applyProviderConfig: applyCloudflareAiGatewayAlias } = createAliasOnlyPresetAppliers({
+  modelRef: CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
+  alias: "Cloudflare AI Gateway",
+});
 
 export function buildCloudflareAiGatewayConfigPatch(params: {
   accountId: string;
@@ -40,15 +47,8 @@ export function applyCloudflareAiGatewayProviderConfig(
   cfg: OpenClawConfig,
   params?: { accountId?: string; gatewayId?: string },
 ): OpenClawConfig {
-  const models = { ...cfg.agents?.defaults?.models };
-  models[CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF] = {
-    ...models[CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF],
-    alias: models[CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF]?.alias ?? "Cloudflare AI Gateway",
-  };
-
-  const existingProvider = cfg.models?.providers?.["cloudflare-ai-gateway"] as
-    | { baseUrl?: unknown }
-    | undefined;
+  const withAlias = applyCloudflareAiGatewayAlias(cfg);
+  const existingProvider = cfg.models?.providers?.["cloudflare-ai-gateway"];
   const baseUrl =
     params?.accountId && params?.gatewayId
       ? resolveCloudflareAiGatewayBaseUrl({
@@ -59,20 +59,11 @@ export function applyCloudflareAiGatewayProviderConfig(
         ? existingProvider.baseUrl
         : undefined;
   if (!baseUrl) {
-    return {
-      ...cfg,
-      agents: {
-        ...cfg.agents,
-        defaults: {
-          ...cfg.agents?.defaults,
-          models,
-        },
-      },
-    };
+    return withAlias;
   }
 
   return applyProviderConfigWithDefaultModel(cfg, {
-    agentModels: models,
+    agentModels: withAlias.agents?.defaults?.models ?? {},
     providerId: "cloudflare-ai-gateway",
     api: "anthropic-messages",
     baseUrl,
@@ -86,6 +77,32 @@ export function applyCloudflareAiGatewayConfig(
 ): OpenClawConfig {
   return applyAgentDefaultModelPrimary(
     applyCloudflareAiGatewayProviderConfig(cfg, params),
+    CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
+  );
+}
+
+/** Registered setup keeps authored rows and seeds the default only in replace mode. */
+export function applyCloudflareAiGatewayProviderConnectionConfig(
+  cfg: OpenClawConfig,
+  params: { accountId: string; gatewayId: string },
+): OpenClawConfig {
+  return applyProviderConnectionConfig(cfg, {
+    providerId: "cloudflare-ai-gateway",
+    api: "anthropic-messages",
+    baseUrl: resolveCloudflareAiGatewayBaseUrl(params),
+    catalogModels: () => [buildCloudflareAiGatewayModelDefinition()],
+    aliases: [
+      { modelRef: CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF, alias: "Cloudflare AI Gateway" },
+    ],
+  });
+}
+
+export function applyCloudflareAiGatewayConnectionConfig(
+  cfg: OpenClawConfig,
+  params: { accountId: string; gatewayId: string },
+): OpenClawConfig {
+  return applyAgentDefaultModelPrimary(
+    applyCloudflareAiGatewayProviderConnectionConfig(cfg, params),
     CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
   );
 }

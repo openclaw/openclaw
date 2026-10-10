@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   createTalkEventSequencer,
   type TalkBrain,
@@ -9,22 +10,22 @@ import {
   type TalkTransport,
 } from "./talk-events.js";
 
-export type TalkTurnFailureReason = "no_active_turn" | "stale_turn";
+type TalkTurnFailureReason = "no_active_turn" | "stale_turn";
 
-export type TalkTurnSuccess = {
+type TalkTurnSuccess = {
   event: TalkEvent;
   ok: true;
   turnId: string;
 };
 
-export type TalkTurnFailure = {
+type TalkTurnFailure = {
   ok: false;
   reason: TalkTurnFailureReason;
 };
 
 export type TalkTurnResult = TalkTurnSuccess | TalkTurnFailure;
 
-export type TalkEnsureTurnResult = {
+type TalkEnsureTurnResult = {
   event?: TalkEvent;
   turnId: string;
 };
@@ -55,6 +56,10 @@ export type TalkSessionControllerOptions = {
   sequencer?: TalkEventSequencer;
 };
 
+function defaultTalkEventPayload(payload: unknown): unknown {
+  return payload === undefined ? {} : payload;
+}
+
 export function createTalkSessionController(
   params: TalkSessionControllerParams,
   options: TalkSessionControllerOptions = {},
@@ -66,24 +71,24 @@ export function createTalkSessionController(
   let outputAudioActive = false;
   let turnSeq = 0;
 
-  const remember = <TPayload>(event: TalkEvent<TPayload>): TalkEvent<TPayload> => {
-    recentEvents.push(event as TalkEvent);
+  const emit = <TPayload>(input: TalkEventInput<TPayload>): TalkEvent<TPayload> => {
+    const event = sequencer.next(input);
+    // Keep only recent events for diagnostics; the authoritative transcript lives with
+    // downstream observers/loggers, so this bounded buffer must not grow with session length.
+    recentEvents.push(event);
     if (recentEvents.length > maxRecentEvents) {
       recentEvents.splice(0, recentEvents.length - maxRecentEvents);
     }
     try {
-      options.onEvent?.(event as TalkEvent);
+      options.onEvent?.(event);
     } catch {
       // Diagnostics hooks must not break Talk delivery.
     }
     return event;
   };
 
-  const emit = <TPayload>(input: TalkEventInput<TPayload>): TalkEvent<TPayload> => {
-    return remember(sequencer.next(input));
-  };
-
   const resolveActiveTurn = (requestedTurnId: string | undefined): string | TalkTurnFailure => {
+    // Caller-supplied turn ids protect async output callbacks from closing a newer turn.
     if (!activeTurnId) {
       return { ok: false, reason: "no_active_turn" };
     }
@@ -110,7 +115,7 @@ export function createTalkSessionController(
       event: emit({
         type: "turn.started",
         turnId,
-        payload: startParams.payload ?? {},
+        payload: defaultTalkEventPayload(startParams.payload),
       }),
     };
   };
@@ -131,7 +136,7 @@ export function createTalkSessionController(
       event: emit({
         type,
         turnId,
-        payload: paramsForTurn.payload ?? {},
+        payload: defaultTalkEventPayload(paramsForTurn.payload),
         final: true,
       }),
     };
@@ -173,13 +178,15 @@ export function createTalkSessionController(
       return emit({
         type: "output.audio.done",
         turnId,
-        payload: paramsForOutput.payload ?? {},
+        payload: defaultTalkEventPayload(paramsForOutput.payload),
         final: true,
       });
     },
     startOutputAudio(paramsForOutput = {}) {
       const turn = ensureTurn({ turnId: paramsForOutput.turnId, payload: {} });
       if (outputAudioActive) {
+        // Providers can emit duplicate start notifications; return the active turn without
+        // emitting a second start event so observers see one output-audio span.
         return { turnId: turn.turnId };
       }
       outputAudioActive = true;
@@ -188,13 +195,16 @@ export function createTalkSessionController(
         event: emit({
           type: "output.audio.started",
           turnId: turn.turnId,
-          payload: paramsForOutput.payload ?? {},
+          payload: defaultTalkEventPayload(paramsForOutput.payload),
         }),
       };
     },
   };
 }
 
+/**
+ * Normalizes legacy realtime transport names into Talk transport families.
+ */
 export function normalizeTalkTransport(value: string | undefined): string | undefined {
   const normalized = normalizeOptionalString(value);
   if (!normalized) {
@@ -209,9 +219,4 @@ export function normalizeTalkTransport(value: string | undefined): string | unde
   return normalized;
 }
 
-export type { TalkBrain, TalkEvent, TalkEventContext, TalkEventInput, TalkMode, TalkTransport };
-
-function normalizeOptionalString(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}
+export type { TalkBrain, TalkEvent, TalkEventInput, TalkMode, TalkTransport };

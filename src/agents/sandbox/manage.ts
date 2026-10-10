@@ -1,13 +1,26 @@
 import { getRuntimeConfig } from "../../config/config.js";
-import { stopBrowserBridgeServer } from "../../plugin-sdk/browser-bridge.js";
-import { getSandboxBackendManager } from "./backend.js";
-import { BROWSER_BRIDGES } from "./browser-bridges.js";
+import { getSandboxBackendManager, usesSandboxRuntimeReservations } from "./backend.js";
+import type { SandboxBackendManager, SandboxBackendRuntimeInfo } from "./backend.types.js";
+import {
+  BROWSER_BRIDGES,
+  stopCachedBrowserBridgesForContainer,
+  stopCachedBrowserBridge,
+  type CachedBrowserBridge,
+} from "./browser-bridges.js";
+import { removeSandboxContainerRuntime } from "./container-lifecycle.js";
 import { dockerSandboxBackendManager } from "./docker-backend.js";
+import {
+  execContainer,
+  validateSandboxContainerEngineTarget,
+  type SandboxContainerEngine,
+} from "./docker.js";
 import {
   readBrowserRegistry,
   readRegistry,
   removeBrowserRegistryEntry,
   removeRegistryEntry,
+  removeSandboxRegistryRuntime,
+  removeSandboxRegistryGeneration,
   type SandboxBrowserRegistryEntry,
   type SandboxRegistryEntry,
 } from "./registry.js";
@@ -32,28 +45,30 @@ function toBrowserDockerRuntimeEntry(entry: SandboxBrowserRegistryEntry): Sandbo
   };
 }
 
-export async function listSandboxContainers(): Promise<SandboxContainerInfo[]> {
+async function listSandboxRuntimes<T extends SandboxRegistryEntry>(
+  read: () => Promise<{ entries: T[] }>,
+  resolveRuntime: (entry: T) => {
+    manager: SandboxBackendManager | null;
+    entry: SandboxRegistryEntry;
+  },
+  matches?: (entry: T) => boolean,
+): Promise<Array<T & { running: boolean; imageMatch: boolean }>> {
   const config = getRuntimeConfig();
-  const registry = await readRegistry();
-  const results: SandboxContainerInfo[] = [];
-
+  const registry = await read();
+  const results: Array<T & { running: boolean; imageMatch: boolean }> = [];
   for (const entry of registry.entries) {
-    const backendId = entry.backendId ?? "docker";
-    const manager = getSandboxBackendManager(backendId);
-    if (!manager) {
-      results.push({
-        ...entry,
-        running: false,
-        imageMatch: true,
-      });
+    // Select before probing: an unrelated backend may be unavailable or use another connection.
+    if (matches && !matches(entry)) {
       continue;
     }
-    const agentId = resolveSandboxAgentId(entry.sessionKey);
-    const runtime = await manager.describeRuntime({
-      entry,
-      config,
-      agentId,
-    });
+    const selected = resolveRuntime(entry);
+    const runtime: SandboxBackendRuntimeInfo = selected.manager
+      ? await selected.manager.describeRuntime({
+          entry: selected.entry,
+          config,
+          agentId: resolveSandboxAgentId(entry.sessionKey),
+        })
+      : { running: false, configLabelMatch: true };
     results.push({
       ...entry,
       image: runtime.actualConfigLabel ?? entry.image,
@@ -61,31 +76,101 @@ export async function listSandboxContainers(): Promise<SandboxContainerInfo[]> {
       imageMatch: runtime.configLabelMatch,
     });
   }
-
   return results;
 }
 
-export async function listSandboxBrowsers(): Promise<SandboxBrowserInfo[]> {
-  const config = getRuntimeConfig();
-  const registry = await readBrowserRegistry();
-  const results: SandboxBrowserInfo[] = [];
+export async function listSandboxContainers(
+  matches?: (entry: SandboxRegistryEntry) => boolean,
+): Promise<SandboxContainerInfo[]> {
+  return listSandboxRuntimes(
+    readRegistry,
+    (entry) => ({
+      manager: getSandboxBackendManager(entry.backendId ?? "docker"),
+      entry,
+    }),
+    matches,
+  );
+}
 
-  for (const entry of registry.entries) {
-    const agentId = resolveSandboxAgentId(entry.sessionKey);
-    const runtime = await dockerSandboxBackendManager.describeRuntime({
+export async function listSandboxBrowsers(
+  matches?: (entry: SandboxBrowserRegistryEntry) => boolean,
+): Promise<SandboxBrowserInfo[]> {
+  return listSandboxRuntimes(
+    readBrowserRegistry,
+    (entry) => ({
+      manager: dockerSandboxBackendManager,
       entry: toBrowserDockerRuntimeEntry(entry),
-      config,
-      agentId,
-    });
-    results.push({
-      ...entry,
-      image: runtime.actualConfigLabel ?? entry.image,
-      running: runtime.running,
-      imageMatch: runtime.configLabelMatch,
-    });
-  }
+    }),
+    matches,
+  );
+}
 
-  return results;
+/** Retire only the physical generation fenced by local workspace settlement. */
+export async function removeSandboxRuntimeGeneration(params: {
+  runtime: { assertCurrent: () => void } & (
+    | { kind: "container"; entry: SandboxRegistryEntry }
+    | { kind: "browser"; entry: SandboxBrowserRegistryEntry }
+  );
+  engine: SandboxContainerEngine;
+  id: string | null;
+  bridges: ReadonlyArray<readonly [string, CachedBrowserBridge]>;
+  assertCurrent: () => void;
+}): Promise<void> {
+  const { runtime, engine, id } = params;
+  const assertOwnerCurrent = () => {
+    params.assertCurrent();
+    if (
+      runtime.kind === "browser" &&
+      [...BROWSER_BRIDGES].some(
+        ([key, bridge]) =>
+          bridge.containerName === runtime.entry.containerName &&
+          !params.bridges.some(
+            ([capturedKey, captured]) => capturedKey === key && captured === bridge,
+          ),
+      )
+    ) {
+      throw new Error("Sandbox browser bridge generation changed during retirement");
+    }
+  };
+  const assertCurrent = () => {
+    assertOwnerCurrent();
+    runtime.assertCurrent();
+  };
+  if (id !== null && !/^[a-f0-9]{64}$/u.test(id)) {
+    throw new Error("Invalid sandbox runtime generation");
+  }
+  assertCurrent();
+  await validateSandboxContainerEngineTarget(
+    engine,
+    runtime.kind === "container" ? runtime.entry.backendTarget : undefined,
+  );
+  assertCurrent();
+  await removeSandboxContainerRuntime(engine, runtime.entry.containerName, { id, assertCurrent });
+  // A name can be rebound without a registry update. Never forget its replacement's
+  // metadata or bridge merely because the old physical ID was already absent.
+  const assertAbsent = async () => {
+    const named = await execContainer(
+      engine,
+      ["inspect", "-f", "{{.Id}}", runtime.entry.containerName],
+      { allowFailure: true },
+    );
+    assertCurrent();
+    if (named.code === 0 || !/no such (?:container|object)|does not exist/iu.test(named.stderr)) {
+      throw new Error(
+        "Sandbox runtime generation changed or removal is unconfirmed; custody retained",
+      );
+    }
+  };
+  await assertAbsent();
+  for (const [sessionKey, bridge] of params.bridges) {
+    assertCurrent();
+    await stopCachedBrowserBridge(sessionKey, bridge);
+    assertCurrent();
+  }
+  if (params.bridges.length) {
+    await assertAbsent();
+  }
+  await removeSandboxRegistryGeneration(runtime.kind, runtime.entry, assertOwnerCurrent);
 }
 
 export async function removeSandboxContainer(containerName: string): Promise<void> {
@@ -93,12 +178,24 @@ export async function removeSandboxContainer(containerName: string): Promise<voi
   const registry = await readRegistry();
   const entry = registry.entries.find((item) => item.containerName === containerName);
   if (entry) {
-    const manager = getSandboxBackendManager(entry.backendId ?? "docker");
-    await manager?.removeRuntime({
+    const backendId = entry.backendId ?? "docker";
+    const manager = getSandboxBackendManager(backendId);
+    if (!manager) {
+      throw new Error(
+        `Sandbox backend "${backendId}" is unavailable; enable its plugin before removing this runtime.`,
+      );
+    }
+    await removeSandboxRegistryRuntime(
       entry,
-      config,
-      agentId: resolveSandboxAgentId(entry.sessionKey),
-    });
+      (current) =>
+        manager.removeRuntime({
+          entry: current,
+          config,
+          agentId: resolveSandboxAgentId(current.sessionKey),
+        }),
+      { reserveRuntime: usesSandboxRuntimeReservations(backendId) },
+    );
+    return;
   }
   await removeRegistryEntry(containerName);
 }
@@ -107,6 +204,7 @@ export async function removeSandboxBrowserContainer(containerName: string): Prom
   const config = getRuntimeConfig();
   const registry = await readBrowserRegistry();
   const entry = registry.entries.find((item) => item.containerName === containerName);
+  await stopCachedBrowserBridgesForContainer(containerName);
   if (entry) {
     await dockerSandboxBackendManager.removeRuntime({
       entry: toBrowserDockerRuntimeEntry(entry),
@@ -114,11 +212,4 @@ export async function removeSandboxBrowserContainer(containerName: string): Prom
     });
   }
   await removeBrowserRegistryEntry(containerName);
-
-  for (const [sessionKey, bridge] of BROWSER_BRIDGES.entries()) {
-    if (bridge.containerName === containerName) {
-      await stopBrowserBridgeServer(bridge.bridge.server).catch(() => undefined);
-      BROWSER_BRIDGES.delete(sessionKey);
-    }
-  }
 }

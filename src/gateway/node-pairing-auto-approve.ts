@@ -1,16 +1,24 @@
+import type { DevicePairingPendingRequest } from "../infra/device-pairing.types.js";
 import { isTrustedProxyAddress } from "./net.js";
+import type { NodePairingAutoApproveClientIpSource } from "./node-pairing-auto-approve.types.js";
 
-export type NodePairingAutoApproveReason =
+type NodePairingAutoApproveReason =
   | "not-paired"
   | "role-upgrade"
   | "scope-upgrade"
   | "metadata-upgrade";
 
-type NodePairingAutoApproveClientIpSource =
-  | "direct"
-  | "trusted-proxy"
-  | "loopback-trusted-proxy"
-  | "none";
+/** Remote auto-approval may grant only the fresh, capability-free node request it proved. */
+export function isScopelessNodePairingRequest(
+  request: Pick<DevicePairingPendingRequest, "role" | "roles" | "scopes" | "isRepair">,
+): boolean {
+  return (
+    request.isRepair !== true &&
+    (request.scopes ?? []).length === 0 &&
+    (request.role === undefined || request.role === "node") &&
+    (request.roles ?? []).every((role) => role === "node")
+  );
+}
 
 export function resolveNodePairingClientIpSource(params: {
   reportedClientIp?: string;
@@ -27,7 +35,7 @@ export function resolveNodePairingClientIpSource(params: {
   return params.remoteIsLoopback ? "loopback-trusted-proxy" : "trusted-proxy";
 }
 
-export function shouldAutoApproveNodePairingFromTrustedCidrs(params: {
+export type FreshNodePairingEligibilityParams = {
   existingPairedDevice: boolean;
   role: string;
   reason: NodePairingAutoApproveReason;
@@ -37,30 +45,37 @@ export function shouldAutoApproveNodePairingFromTrustedCidrs(params: {
   isWebchat: boolean;
   reportedClientIpSource: NodePairingAutoApproveClientIpSource;
   reportedClientIp?: string;
-  autoApproveCidrs?: readonly string[];
-}): boolean {
-  if (params.existingPairedDevice) {
-    return false;
-  }
-  if (params.role !== "node") {
-    return false;
-  }
-  if (params.reason !== "not-paired") {
-    return false;
-  }
-  if (params.scopes.length > 0) {
-    return false;
-  }
-  if (params.hasBrowserOriginHeader || params.isControlUi || params.isWebchat) {
-    return false;
-  }
-  if (
-    params.reportedClientIpSource === "none" ||
-    params.reportedClientIpSource === "loopback-trusted-proxy"
-  ) {
-    return false;
-  }
-  if (!params.reportedClientIp) {
+};
+
+/**
+ * Shared floor for every non-interactive node pairing approval (trusted-CIDR,
+ * SSH-verified): only a fresh, scopeless, non-browser `role: node` request
+ * with a directly attributable client IP qualifies. Upgrades and spoofable
+ * loopback trusted-proxy header paths always stay on the manual prompt.
+ */
+export function isEligibleFreshNodePairingRequest(
+  params: FreshNodePairingEligibilityParams,
+): boolean {
+  return (
+    !params.existingPairedDevice &&
+    params.role === "node" &&
+    params.reason === "not-paired" &&
+    params.scopes.length === 0 &&
+    !params.hasBrowserOriginHeader &&
+    !params.isControlUi &&
+    !params.isWebchat &&
+    params.reportedClientIpSource !== "none" &&
+    params.reportedClientIpSource !== "loopback-trusted-proxy" &&
+    Boolean(params.reportedClientIp)
+  );
+}
+
+export function shouldAutoApproveNodePairingFromTrustedCidrs(
+  params: FreshNodePairingEligibilityParams & {
+    autoApproveCidrs?: readonly string[];
+  },
+): boolean {
+  if (!isEligibleFreshNodePairingRequest(params) || !params.reportedClientIp) {
     return false;
   }
 

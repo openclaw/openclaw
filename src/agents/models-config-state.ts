@@ -1,30 +1,33 @@
-const MODELS_JSON_STATE_KEY = Symbol.for("openclaw.modelsJsonState");
+// Process-wide models.json coordination state. Dynamic imports can load this
+// module multiple times, so Symbol.for keeps write locks and ready-cache shared.
+import type { RawModelCostConfig } from "@openclaw/llm-core";
+import type { ModelProviderConfig } from "../config/types.models.js";
+import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
-type ModelsJsonState = {
-  writeLocks: Map<string, Promise<void>>;
-  readyCache: Map<
-    string,
-    Promise<{ fingerprint: string; result: { agentDir: string; wrote: boolean } }>
-  >;
+export type ModelsJsonReadyResult = {
+  agentDir: string;
+  wrote: boolean;
 };
 
-export const MODELS_JSON_STATE = (() => {
-  const globalState = globalThis as typeof globalThis & {
-    [MODELS_JSON_STATE_KEY]?: ModelsJsonState;
-  };
-  if (!globalState[MODELS_JSON_STATE_KEY]) {
-    globalState[MODELS_JSON_STATE_KEY] = {
-      writeLocks: new Map<string, Promise<void>>(),
-      readyCache: new Map<
-        string,
-        Promise<{ fingerprint: string; result: { agentDir: string; wrote: boolean } }>
-      >(),
-    };
-  }
-  return globalState[MODELS_JSON_STATE_KEY];
-})();
+export type ModelKeyNormalizer = (provider: string, model: string) => string;
 
-export function resetModelsJsonReadyCacheForTest(): void {
-  MODELS_JSON_STATE.writeLocks.clear();
-  MODELS_JSON_STATE.readyCache.clear();
-}
+type ModelsJsonCostCache = {
+  providers: Record<string, ModelProviderConfig> | undefined;
+  entries: WeakMap<ModelKeyNormalizer, Map<string, RawModelCostConfig>>;
+};
+
+type ModelsJsonState = {
+  writeQueue: KeyedAsyncQueue;
+  readyCache: Map<string, Promise<ModelsJsonReadyResult>>;
+  costCache: Map<string, ModelsJsonCostCache>;
+};
+
+export const MODELS_JSON_STATE = resolveGlobalSingleton<ModelsJsonState>(
+  Symbol.for("openclaw.modelsJsonState"),
+  () => ({
+    writeQueue: new KeyedAsyncQueue(),
+    readyCache: new Map(),
+    costCache: new Map(),
+  }),
+);

@@ -1,28 +1,74 @@
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+import type { SessionProjectionState } from "../../packages/gateway-client/src/session-projection.js";
+import type { AgentSummary as GatewayAgentSummary } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+import type { SessionGoal } from "../config/sessions/types.js";
+import type { SessionScope } from "../config/types.base.js";
+import type { GatewayAgentRuntime } from "../shared/session-types.js";
+import type { TuiPendingSubmit } from "./tui-submit-state.js";
+
+/** Exact pre-probed Gateway target and its selection provenance for an in-process handoff. */
+export type TuiBoundGateway = {
+  url: string;
+  configuredRemote?: boolean;
+  token?: string;
+  password?: string;
+  tlsFingerprint?: string;
+};
+
 export type TuiOptions = {
   local?: boolean;
   url?: string;
   token?: string;
   password?: string;
+  tlsFingerprint?: string;
   session?: string;
   deliver?: boolean;
   thinking?: string;
   timeoutMs?: number;
   historyLimit?: number;
   message?: string;
+  /** Overrides timeoutMs only for the message sent automatically at startup. */
+  initialMessageTimeoutMs?: number;
+  /**
+   * Internal CLI guard: after the standalone TUI returns, force the child
+   * process out if imported runtime handles keep the event loop alive.
+   */
+  forceProcessExitOnReturn?: boolean;
 };
 
-export type TuiExitReason = "exit" | "return-to-crestodian";
+export type TuiGatewayConnectionOptions = Pick<
+  TuiOptions,
+  "url" | "token" | "password" | "tlsFingerprint"
+> & {
+  allowConfiguredAuthForExactTarget?: boolean;
+  suppressEnvAuthFallback?: boolean;
+};
+
+type TuiExitReason = "exit" | "return-to-system-agent";
 
 export type TuiResult = {
   exitReason: TuiExitReason;
-  crestodianMessage?: string;
+  systemAgentMessage?: string;
 };
+
+export type TuiHistoryRunOutcome =
+  | { state: "active"; runId: string }
+  | { state: "completed" | "interrupted" }
+  | { state: "failed"; errorMessage: string };
+
+export type TuiHistoryLoadResult =
+  | { loaded: true; runOutcome: TuiHistoryRunOutcome; activeRunIds?: string[] }
+  | { loaded: false };
 
 export type ChatEvent = {
   runId: string;
   sessionKey: string;
+  agentId?: string;
+  seq?: number;
   state: "delta" | "final" | "aborted" | "error";
   message?: unknown;
+  deltaText?: string;
+  replace?: boolean;
   errorMessage?: string;
 };
 
@@ -30,6 +76,7 @@ export type BtwEvent = {
   kind: "btw";
   runId?: string;
   sessionKey?: string;
+  agentId?: string;
   question: string;
   text: string;
   isError?: boolean;
@@ -37,46 +84,73 @@ export type BtwEvent = {
   ts?: number;
 };
 
+export type SessionChangedEvent = {
+  sessionKey?: string;
+  agentId?: string;
+  reason?: string;
+  phase?: string;
+  runId?: string;
+  clientRunId?: string;
+  sessionId?: string;
+  updatedAt?: number | null;
+  activeRunIds?: string[] | null;
+};
+
+export type SessionMessageEvent = {
+  sessionKey?: string;
+  agentId?: string;
+  sessionId?: string;
+  updatedAt?: number | null;
+  clientRunId?: string;
+  message?: unknown;
+  messageId?: string;
+  messageSeq?: number;
+};
+
 export type AgentEvent = {
   runId: string;
   stream: string;
   data?: Record<string, unknown>;
+  // Stamped by the gateway on every emitted payload (see infra/agent-events.ts).
+  // Lifecycle events always carry sessionKey, letting the TUI adopt
+  // system-injected runs that never went through the local submit path.
+  sessionKey?: string;
+  agentId?: string;
 };
 
-export type ResponseUsageMode = "on" | "off" | "tokens" | "full";
+type ResponseUsageMode = "on" | "off" | "tokens" | "full";
 
 export type SessionInfo = {
   thinkingLevel?: string;
   thinkingLevels?: Array<{ id: string; label: string }>;
-  fastMode?: boolean;
+  fastMode?: FastMode;
   verboseLevel?: string;
   traceLevel?: string;
   reasoningLevel?: string;
   model?: string;
   modelProvider?: string;
+  agentRuntime?: GatewayAgentRuntime;
   contextTokens?: number | null;
   inputTokens?: number | null;
   outputTokens?: number | null;
   totalTokens?: number | null;
+  /**
+   * True when `totalTokens` is a known-fresh value (e.g. 0 on a brand-new
+   * session) rather than an unknown/stale total. Lets the footer render `0`
+   * instead of `?` for fresh sessions, mirroring the `/status` fix in #93798.
+   */
+  totalTokensFresh?: boolean;
+  goal?: SessionGoal;
   responseUsage?: ResponseUsageMode;
+  /** Resolved effective usage mode (session override → channel config → default → off). Set by the gateway; the TUI uses this for no-arg toggle cycles so the cycle starts from the effective visible mode rather than the raw session value. */
+  effectiveResponseUsage?: ResponseUsageMode;
   updatedAt?: number | null;
   displayName?: string;
 };
 
-export type SessionScope = "per-sender" | "global";
+export type { SessionScope } from "../config/types.base.js";
 
-export type AgentSummary = {
-  id: string;
-  name?: string;
-};
-
-export type QueuedMessageMode = "steer" | "followUp";
-
-export type QueuedMessage = {
-  runId: string;
-  text: string;
-  mode: QueuedMessageMode;
-};
+export type AgentSummary = Pick<GatewayAgentSummary, "id" | "kind" | "name">;
 
 export type GatewayStatusSummary = {
   runtimeVersion?: string | null;
@@ -95,7 +169,7 @@ export type GatewayStatusSummary = {
       everyMs?: number | null;
     }>;
   };
-  providerSummary?: string[];
+  channelSummary?: string[];
   queuedSystemEvents?: string[];
   sessions?: {
     paths?: string[];
@@ -125,10 +199,10 @@ export type TuiStateAccess = {
   currentAgentId: string;
   currentSessionKey: string;
   currentSessionId: string | null;
+  sessionGeneration?: number;
+  sessionProjection?: SessionProjectionState;
   activeChatRunId: string | null;
-  pendingOptimisticUserMessage?: boolean;
-  pendingChatRunId?: string | null;
-  queuedMessages?: QueuedMessage[];
+  pendingSubmit: TuiPendingSubmit | null;
   historyLoaded: boolean;
   sessionInfo: SessionInfo;
   initialSessionApplied: boolean;

@@ -1,0 +1,176 @@
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { CLAUDE_CLI_BACKEND_ID, CLAUDE_MODEL_ID_ALIASES } from "./cli-constants.js";
+
+type ClaudeCliAnthropicModelRefs = {
+  selectedRef: string;
+  runtimeRefs: string[];
+  rewriteRef?: string;
+};
+
+export function splitTrailingModelAuthProfile(raw: string): { model: string; profile?: string } {
+  const trimmed = raw.trim();
+  const lastSlash = trimmed.lastIndexOf("/");
+  let delimiter = trimmed.indexOf("@", lastSlash + 1);
+  if (delimiter <= 0) {
+    return { model: trimmed };
+  }
+  if (/^\d{8}(?:@|$)/.test(trimmed.slice(delimiter + 1))) {
+    const nextDelimiter = trimmed.indexOf("@", delimiter + 9);
+    if (nextDelimiter < 0) {
+      return { model: trimmed };
+    }
+    delimiter = nextDelimiter;
+  }
+  const model = trimmed.slice(0, delimiter).trim();
+  const profile = trimmed.slice(delimiter + 1).trim();
+  return model && profile ? { model, profile } : { model: trimmed };
+}
+
+function attachModelAuthProfile(model: string, profile?: string): string {
+  return profile ? `${model}@${profile}` : model;
+}
+
+export function normalizeAnthropicProviderId(provider: string): string {
+  const normalized = normalizeLowercaseStringOrEmpty(provider);
+  if (normalized === "bedrock" || normalized === "aws-bedrock") {
+    return "amazon-bedrock";
+  }
+  return normalized;
+}
+
+export function parseAnthropicModelRef(
+  raw: string,
+): { provider: string; model: string; explicitProvider: boolean } | null {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const slashIndex = trimmed.indexOf("/");
+  if (slashIndex <= 0) {
+    return { provider: "anthropic", model: trimmed, explicitProvider: false };
+  }
+  const provider = trimmed.slice(0, slashIndex).trim();
+  const model = trimmed.slice(slashIndex + 1).trim();
+  if (!provider || !model) {
+    return null;
+  }
+  return {
+    provider: normalizeAnthropicProviderId(provider),
+    model,
+    explicitProvider: true,
+  };
+}
+
+function canonicalizeKnownClaudeCliModelId(modelId: string): string | null {
+  const { model, profile } = splitTrailingModelAuthProfile(modelId);
+  const normalized = normalizeLowercaseStringOrEmpty(model);
+  if (!normalized) {
+    return null;
+  }
+  const upgraded = upgradeOldClaudeModelId(normalized);
+  if (upgraded) {
+    return attachModelAuthProfile(upgraded, profile);
+  }
+  if (normalized.startsWith("claude-")) {
+    return attachModelAuthProfile(model, profile);
+  }
+  const aliasedModel = CLAUDE_MODEL_ID_ALIASES.get(normalized);
+  return aliasedModel ? attachModelAuthProfile(aliasedModel, profile) : null;
+}
+
+function upgradeOldClaudeModelId(normalized: string): string | null {
+  const retiredClaude4 = /^claude-(opus|sonnet)-4(?:$|[-.][015](?=$|[-.:@])|-20\d{6})/.exec(
+    normalized,
+  );
+  if (retiredClaude4) {
+    return retiredClaude4[1] === "opus" ? "claude-opus-5-5" : "claude-sonnet-4-6";
+  }
+  if (normalized.startsWith("claude-3") && normalized.includes("opus")) {
+    return "claude-opus-5-5";
+  }
+  if (
+    normalized.startsWith("claude-3") &&
+    (normalized.includes("sonnet") || normalized.includes("haiku"))
+  ) {
+    return "claude-sonnet-4-6";
+  }
+  if (["opus-4.5", "opus-4.1", "opus-4", "opus-3"].includes(normalized)) {
+    return "claude-opus-5-5";
+  }
+  if (
+    [
+      "sonnet-4.5",
+      "sonnet-4.1",
+      "sonnet-4.0",
+      "sonnet-4",
+      "sonnet-3.7",
+      "sonnet-3.5",
+      "sonnet-3",
+      "haiku-3.5",
+      "haiku-3",
+    ].includes(normalized)
+  ) {
+    return "claude-sonnet-4-6";
+  }
+  return null;
+}
+
+export function resolveClaudeCliAnthropicModelRefs(
+  raw: string,
+): ClaudeCliAnthropicModelRefs | null {
+  const parsed = parseAnthropicModelRef(raw);
+  if (!parsed) {
+    return null;
+  }
+  if (parsed.provider !== "anthropic" && parsed.provider !== CLAUDE_CLI_BACKEND_ID) {
+    return null;
+  }
+
+  const selectedRef = `anthropic/${parsed.model}`;
+  const runtimeRefs = new Set<string>([selectedRef]);
+  const canonicalModelId = canonicalizeKnownClaudeCliModelId(parsed.model);
+  if (!parsed.explicitProvider && !canonicalModelId) {
+    return null;
+  }
+  const rewriteRef =
+    canonicalModelId || parsed.provider === CLAUDE_CLI_BACKEND_ID
+      ? `anthropic/${canonicalModelId ?? parsed.model}`
+      : undefined;
+  if (rewriteRef) {
+    runtimeRefs.add(rewriteRef);
+  }
+
+  return {
+    selectedRef,
+    runtimeRefs: [...runtimeRefs],
+    ...(rewriteRef ? { rewriteRef } : {}),
+  };
+}
+
+export function resolveKnownAnthropicModelRef(raw?: string): string | null {
+  if (!raw) {
+    return null;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+  return resolveClaudeCliAnthropicModelRefs(trimmed)?.rewriteRef ?? trimmed;
+}
+
+export function modelEntryWithClaudeCliRuntime(entry: unknown): Record<string, unknown> {
+  const base = isRecord(entry) ? { ...entry } : {};
+  const currentRuntimeId = isRecord(base.agentRuntime) ? base.agentRuntime.id : undefined;
+  const currentRuntime = normalizeLowercaseStringOrEmpty(currentRuntimeId);
+  if (currentRuntime && currentRuntime !== "auto") {
+    return base;
+  }
+  base.agentRuntime = {
+    ...(isRecord(base.agentRuntime) ? base.agentRuntime : {}),
+    id: CLAUDE_CLI_BACKEND_ID,
+  };
+  return base;
+}

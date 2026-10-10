@@ -1,0 +1,595 @@
+// Shared assertions and exercises for the fake-backend TUI PTY harness.
+import { readFile } from "node:fs/promises";
+import { expect } from "vitest";
+import type { FixtureReceiptChannel } from "../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../test/helpers/promise.js";
+import { hasErrnoCode } from "../infra/errno.js";
+import { sleep } from "../utils/sleep.js";
+import { formatTuiFooter, sanitizeRenderableLine } from "./tui-formatters.js";
+import {
+  hasHistoricalSynchronizedFrameRow,
+  hasSynchronizedFrameRow,
+  synchronizedFrameLinks,
+  waitForSynchronizedFrameRows,
+} from "./tui-pty-terminal-evidence-test-support.js";
+import { type PtyRun, waitFor } from "./tui-pty-test-support.js";
+
+export {
+  hasHistoricalSynchronizedFrameRow,
+  synchronizedFrameRows,
+  waitForSynchronizedFrameRows,
+} from "./tui-pty-terminal-evidence-test-support.js";
+
+export type FixtureLogEntry = { method: string; payload?: unknown };
+type FixtureLogPredicate = (entry: FixtureLogEntry, index: number) => boolean;
+
+export const COMPACT_TERMINAL_SIZES = [
+  [64, 18],
+  [68, 18],
+  [72, 20],
+  [80, 20],
+] as const;
+
+export async function readFixtureLog(logPath: string): Promise<FixtureLogEntry[]> {
+  try {
+    const text = await readFile(logPath, "utf8");
+    // A concurrent append can expose an unfinished record; its newline commits it.
+    return text
+      .slice(0, text.lastIndexOf("\n") + 1)
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as FixtureLogEntry);
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT")) {
+      return [];
+    }
+    throw error;
+  }
+}
+
+export async function waitForFixtureLogEntry(
+  logPath: string,
+  predicate: FixtureLogPredicate,
+  { receipts, run, signal }: { receipts: FixtureReceiptChannel; run: PtyRun; signal: AbortSignal },
+) {
+  const readMatch = async () => (await readFixtureLog(logPath)).find(predicate);
+  const waiting = async () => {
+    for (;;) {
+      signal.throwIfAborted();
+      const entries = await readFixtureLog(logPath);
+      const match = entries.find(predicate);
+      if (match) {
+        return match;
+      }
+      await withinTest(receipts.waitFor(logPath, "", entries.length + 1), signal);
+    }
+  };
+  // Exit can overtake the receipt socket. The fixture commits its record before replying,
+  // so consult that record before treating an early exit as a missing callback.
+  const exited = run.exited.then(async () => {
+    const match = await readMatch();
+    if (match) {
+      return match;
+    }
+    throw new Error(
+      `timed out waiting for fixture log entry\n${JSON.stringify(await readFixtureLog(logPath), null, 2)}\n${run.output()}`,
+    );
+  });
+  return await withinTest(Promise.race([waiting(), exited]), signal);
+}
+
+export function objectFieldEquals(entry: FixtureLogEntry, field: string, value: unknown) {
+  if (typeof entry.payload !== "object" || entry.payload === null) {
+    return false;
+  }
+  const payload = entry.payload as Record<string, unknown>;
+  return Object.hasOwn(payload, field) && payload[field] === value;
+}
+
+type StartedTuiPtyFixture = {
+  run: PtyRun;
+  logPath: string;
+  waitForLogEntry: (
+    predicate: FixtureLogPredicate,
+    signal: AbortSignal,
+  ) => Promise<FixtureLogEntry>;
+  releaseReconnect: () => Promise<void>;
+  cleanup: () => Promise<void>;
+};
+export async function selectTuiFixtureSession(
+  fixture: StartedTuiPtyFixture,
+  sessionKey: string,
+  signal: AbortSignal,
+) {
+  const logOffset = (await readFixtureLog(fixture.logPath)).length;
+  await fixture.run.write(`/session ${sessionKey}\r`, { delay: false });
+  await fixture.waitForLogEntry(
+    (entry, index) =>
+      index >= logOffset &&
+      entry.method === "loadHistory" &&
+      objectFieldEquals(entry, "sessionKey", sessionKey),
+    signal,
+  );
+  await waitForSynchronizedFrameRows(
+    fixture.run,
+    (rows) =>
+      rows.some((row) => row.trim() === `session ${sessionKey}`) &&
+      rows.some((row) => row.includes("fixture-provider/fixture-model")),
+    2_000,
+  );
+}
+
+type TuiPtyFixtureOptions = { env?: NodeJS.ProcessEnv; holdReconnect?: boolean };
+export type StartTuiPtyFixture = (opts?: TuiPtyFixtureOptions) => Promise<StartedTuiPtyFixture>;
+type TerminalAttackPayload = {
+  text: string;
+  markers: string[];
+  attacks: string[];
+  expectedLine: string;
+};
+
+function buildCompactTerminalAttackPayload(tag: string, attack: string): TerminalAttackPayload {
+  const markers = [`${tag}a`, `${tag}b`, `${tag}c`, `${tag}d`];
+  const lineBreakAttack = `\r\n${markers[2]}`;
+  const tabAttack = "\tשלום";
+  return {
+    text: `${markers[0]}${attack}${markers[1]} café 東京 👩🏽‍💻${lineBreakAttack} مرحبا${tabAttack} ${markers[3]}`,
+    markers,
+    attacks: [attack, lineBreakAttack, tabAttack],
+    expectedLine: `${markers[0]}${markers[1]} café 東京 👩🏽‍💻 ${markers[2]} مرحبا שלום ${markers[3]}`,
+  };
+}
+
+function buildInlineTerminalAttackPayload(tag: string, attack: string): TerminalAttackPayload {
+  const markers = [`${tag}a`, `${tag}b`, `${tag}c`];
+  return {
+    text: `${markers[0]}${attack}${markers[1]} café 東京 👩🏽‍💻 مرحبا שלום ${markers[2]}`,
+    markers,
+    attacks: [attack],
+    expectedLine: `${markers[0]}${markers[1]} café 東京 👩🏽‍💻 مرحبا שלום ${markers[2]}`,
+  };
+}
+
+async function assertTerminalAttackSanitized(
+  fixture: StartedTuiPtyFixture,
+  payload: TerminalAttackPayload,
+  timeoutMs: number,
+) {
+  const observed = await fixture.run.waitForOutput(payload.markers.at(-1) ?? "", timeoutMs);
+  const visible = fixture.run.visibleOutput();
+  expect(payload.markers.every((marker) => visible.includes(marker))).toBe(true);
+  if (!hasSynchronizedFrameRow(observed, payload.markers, payload.expectedLine, fixture.run)) {
+    await waitFor({
+      timeoutMs,
+      read: () => {
+        const output = fixture.run.output();
+        return hasSynchronizedFrameRow(output, payload.markers, payload.expectedLine, fixture.run)
+          ? output
+          : null;
+      },
+      onTimeout: () => new Error(`expected completed synchronized row\n${fixture.run.output()}`),
+    });
+  }
+  const raw = fixture.run.output();
+  for (const attack of payload.attacks) {
+    expect(raw).not.toContain(attack);
+  }
+  expect(raw).not.toContain("\uFFFD");
+}
+
+async function assertHistoricalTerminalAttackSanitized(
+  fixture: StartedTuiPtyFixture,
+  payload: TerminalAttackPayload,
+  markers: string[],
+  expectedText: string,
+  timeoutMs: number,
+) {
+  const observed = await fixture.run.waitForOutput(markers.at(-1) ?? "", timeoutMs);
+  const matchesHistoricalFrame = (raw: string) =>
+    hasHistoricalSynchronizedFrameRow(raw, markers, expectedText, fixture.run);
+  const raw = matchesHistoricalFrame(observed)
+    ? observed
+    : await waitFor({
+        timeoutMs,
+        read: () => {
+          const output = fixture.run.output();
+          return matchesHistoricalFrame(output) ? output : null;
+        },
+        onTimeout: () =>
+          new Error(`expected historical completed synchronized row\n${fixture.run.output()}`),
+      });
+  const visible = fixture.run.visibleOutput();
+  expect(markers.every((marker) => visible.includes(marker))).toBe(true);
+  for (const attack of payload.attacks) {
+    expect(raw).not.toContain(attack);
+  }
+  expect(matchesHistoricalFrame(raw)).toBe(true);
+  expect(raw).not.toContain("\uFFFD");
+}
+
+async function assertTerminalAttackPrefixSanitized(
+  fixture: StartedTuiPtyFixture,
+  payload: TerminalAttackPayload,
+  timeoutMs: number,
+) {
+  const markers = payload.markers.slice(0, 2);
+  await assertHistoricalTerminalAttackSanitized(
+    fixture,
+    payload,
+    markers,
+    markers.join(""),
+    timeoutMs,
+  );
+}
+
+async function exerciseSelectorOutputSafety(
+  startFixture: StartTuiPtyFixture,
+  startupTimeoutMs: number,
+  signal: AbortSignal,
+) {
+  const modelValue = buildCompactTerminalAttackPayload("t08mv", "\x1b[777;888H");
+  const modelName = buildCompactTerminalAttackPayload("t08mn", "\x1b]52;c;t08_model_clipboard\x07");
+  const sessionTitle = buildCompactTerminalAttackPayload("t08st", "\x1b]0;t08_session_title\x07");
+  const sessionPreview = buildCompactTerminalAttackPayload(
+    "t08sp",
+    "\u009d0;t08_session_preview\u009c",
+  );
+  const sessionDisplay = buildCompactTerminalAttackPayload("t08sd", "\x1b[777\u0001m");
+  const sessionKey = buildCompactTerminalAttackPayload("t08sk", "\u009b777;888h");
+  const selectedModel = `fixture-provider/${modelValue.text}`;
+  const selectedSessionKey = `agent:main:${sessionKey.text}`;
+  const fixture = await startFixture({
+    env: {
+      OPENCLAW_TUI_PTY_COLS: "240",
+      OPENCLAW_TUI_PTY_ROWS: "24",
+      OPENCLAW_TUI_PTY_MODEL: "fixture-provider/fixture-model",
+      OPENCLAW_TUI_PTY_PICKER_FIXTURE: "1",
+      OPENCLAW_TUI_PTY_PICKER_MODEL_VALUE: selectedModel,
+      OPENCLAW_TUI_PTY_PICKER_MODEL_NAME: modelName.text,
+      OPENCLAW_TUI_PTY_PICKER_SESSION_KEY: selectedSessionKey,
+      OPENCLAW_TUI_PTY_PICKER_SESSION_TITLE: sessionTitle.text,
+      OPENCLAW_TUI_PTY_PICKER_SESSION_PREVIEW: sessionPreview.text,
+      OPENCLAW_TUI_PTY_PICKER_SESSION_DISPLAY_NAME: sessionDisplay.text,
+    },
+  });
+
+  try {
+    await fixture.run.waitForOutput("local ready", startupTimeoutMs);
+    await fixture.run.write("\u000c", { delay: false });
+    await fixture.waitForLogEntry((entry) => entry.method === "listModels", signal);
+    await assertTerminalAttackPrefixSanitized(fixture, modelValue, 5_000);
+    await assertTerminalAttackPrefixSanitized(fixture, modelName, 5_000);
+
+    await fixture.run.write("\x1b[B", { delay: false });
+    await fixture.run.write("\r", { delay: false });
+    const modelPatch = await fixture.waitForLogEntry(
+      (entry) =>
+        entry.method === "patchSession" && objectFieldEquals(entry, "model", selectedModel),
+      signal,
+    );
+    expect(modelPatch.payload).toMatchObject({ model: selectedModel });
+    await fixture.run.waitForOutput(
+      formatTuiFooter({
+        agentLabel: `main (${sessionDisplay.text})`,
+        sessionLabel: "main (Main)",
+        sessionInfo: { model: selectedModel, contextTokens: 128 },
+        deliver: false,
+      }),
+      5_000,
+    );
+    await assertTerminalAttackSanitized(fixture, modelValue, 5_000);
+
+    await fixture.run.write("\u0010", { delay: false });
+    await fixture.waitForLogEntry(
+      (entry) => entry.method === "listSessions" && objectFieldEquals(entry, "purpose", "picker"),
+      signal,
+    );
+    await assertTerminalAttackPrefixSanitized(fixture, sessionTitle, 5_000);
+    await assertTerminalAttackPrefixSanitized(fixture, sessionPreview, 5_000);
+
+    await fixture.run.write("\x1b[B", { delay: false });
+    await fixture.run.write("\r", { delay: false });
+    const historyLoad = await fixture.waitForLogEntry(
+      (entry) =>
+        entry.method === "loadHistory" &&
+        objectFieldEquals(entry, "sessionKey", selectedSessionKey),
+      signal,
+    );
+    expect(historyLoad.payload).toMatchObject({ sessionKey: selectedSessionKey });
+    await assertTerminalAttackSanitized(fixture, sessionKey, 5_000);
+    const expectedAgentLabel = `main (${sessionDisplay.text})`;
+    const expectedSessionLabel = `${sessionKey.text} (${sessionDisplay.text})`;
+    await fixture.run.waitForOutput(
+      sanitizeRenderableLine(
+        `openclaw tui pty fixture - pty-fixture://local - agent ${expectedAgentLabel} - session ${sessionKey.text}`,
+      ),
+      5_000,
+    );
+    await fixture.run.waitForOutput(
+      formatTuiFooter({
+        agentLabel: expectedAgentLabel,
+        sessionLabel: expectedSessionLabel,
+        sessionInfo: { model: selectedModel, contextTokens: 128 },
+        deliver: false,
+      }),
+      5_000,
+    );
+    await assertTerminalAttackSanitized(fixture, sessionDisplay, 5_000);
+    expect(fixture.run.output()).not.toContain("\uFFFD");
+  } finally {
+    await fixture.cleanup();
+  }
+}
+
+export async function exerciseNarrowTerminalRendering(
+  startFixture: StartTuiPtyFixture,
+  startupTimeoutMs: number,
+) {
+  const url =
+    "https://example.test/tui/copy-safe/very-long-path/with-query?mode=narrow&value=alpha%20beta#proof";
+  const message =
+    "terminal rendering proof Long output must wrap across several narrow terminal rows without " +
+    `losing text. Unicode stays intact: café 東京 👩🏽‍💻. Copy this URL exactly: ${url}`;
+  const fixture = await startFixture({
+    env: {
+      OPENCLAW_TUI_PTY_COLS: "28",
+      OPENCLAW_TUI_PTY_ROWS: "18",
+      OPENCLAW_TUI_PTY_INITIAL_MESSAGE: message,
+    },
+  });
+
+  try {
+    await fixture.run.waitForOutput("PTY_RESPONSE: terminal rendering proof", startupTimeoutMs);
+    await fixture.run.waitForOutput("café 東京 👩🏽‍💻", startupTimeoutMs);
+    // sendChat commits its log entry before emitting the response observed above.
+    const sent = (await readFixtureLog(fixture.logPath)).find(
+      (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", message),
+    );
+    expect(sent?.payload).toMatchObject({ message });
+    const links = await waitFor({
+      timeoutMs: startupTimeoutMs,
+      read: () => {
+        const current = synchronizedFrameLinks(fixture.run.output(), fixture.run);
+        return current.map((link) => link.text).join("") === url ? current : null;
+      },
+      onTimeout: () => new Error(`expected complete linked URL on screen\n${fixture.run.output()}`),
+    });
+    expect(new Set(links.map((link) => link.row)).size).toBeGreaterThan(1);
+    expect(links.every((link) => link.target === url)).toBe(true);
+    expect(fixture.run.output()).not.toContain("\uFFFD");
+  } finally {
+    await fixture.cleanup();
+  }
+}
+
+async function exerciseGatewayOutputSafety(
+  startFixture: StartTuiPtyFixture,
+  startupTimeoutMs: number,
+  signal: AbortSignal,
+) {
+  const systemAttacks = [
+    "\x1b[?7776h",
+    "\x1b[777;887H",
+    "\x1b]0;t08_system_title\x07",
+    "\x1b]52;c;t08_system_clipboard\x07",
+    "\u009b777;887H",
+    "\u009d0;t08_system_c1\u009c",
+  ];
+  const idlePayload = buildCompactTerminalAttackPayload("T08I", "\x1b[?7775h");
+  const fixture = await startFixture({
+    holdReconnect: true,
+    env: {
+      OPENCLAW_TUI_PTY_COLS: "120",
+      OPENCLAW_TUI_PTY_ROWS: "18",
+      OPENCLAW_TUI_PTY_GATEWAY_STATUS: systemAttacks.join(""),
+      OPENCLAW_TUI_PTY_DISCONNECT_REASON: idlePayload.text,
+    },
+  });
+
+  try {
+    await fixture.run.waitForOutput("local ready", startupTimeoutMs);
+    await fixture.run.write("/gateway-status\r", { delay: false });
+    await fixture.waitForLogEntry((entry) => entry.method === "disconnect", signal);
+    // Replay omits zero-width bidi isolates but preserves authenticated cells.
+    // The complete disconnect row must exist before reconnect replaces it.
+    await assertHistoricalTerminalAttackSanitized(
+      fixture,
+      idlePayload,
+      idlePayload.markers,
+      `local runtime stopped: ${idlePayload.expectedLine} | idle`,
+      startupTimeoutMs,
+    );
+    await waitForSynchronizedFrameRows(
+      fixture.run,
+      (rows) => rows.some((row) => row.includes("(no output)")),
+      startupTimeoutMs,
+    );
+    // Reconnect rebuilds history; release it only after both sanitized outputs were painted.
+    await fixture.releaseReconnect();
+    await waitForSynchronizedFrameRows(
+      fixture.run,
+      (rows) =>
+        rows.some((row) => row.includes("gateway reconnected after transport loss")) &&
+        rows.some((row) => row.includes("local ready | idle")),
+      startupTimeoutMs,
+    );
+    const raw = fixture.run.output();
+    for (const attack of [...systemAttacks, ...idlePayload.attacks]) {
+      expect(raw).not.toContain(attack);
+    }
+    expect(raw).not.toContain("\uFFFD");
+
+    const helpOffset = fixture.run.visibleOutput().length;
+    await fixture.run.write("/help\r", { delay: false });
+    await fixture.run.waitForOutput("Slash commands:", startupTimeoutMs);
+    await fixture.run.waitForOutput("/exit", startupTimeoutMs);
+    const helpOutput = fixture.run.visibleOutput().slice(helpOffset);
+    expect(helpOutput).toContain("/help");
+    expect(helpOutput).toContain("/exit");
+  } finally {
+    await fixture.cleanup();
+  }
+}
+
+async function exerciseMarkdownAndAutocompleteOutputSafety(
+  startFixture: StartTuiPtyFixture,
+  startupTimeoutMs: number,
+  signal: AbortSignal,
+) {
+  const inFlight = buildInlineTerminalAttackPayload("T08F", "\x1b]52;c;t08_inflight\x07");
+  const command = buildCompactTerminalAttackPayload("T08C", "\u009d0;t08_command\u009c");
+  const thinking = buildCompactTerminalAttackPayload("T08L", "\x1b[777;886H");
+  const fixture = await startFixture({
+    env: {
+      OPENCLAW_TUI_PTY_COLS: "140",
+      OPENCLAW_TUI_PTY_DYNAMIC_COMMAND_DESCRIPTION: command.text,
+      OPENCLAW_TUI_PTY_IN_FLIGHT_TEXT: `**${inFlight.text}** [copy-safe](https://example.test/t08-inflight)`,
+      OPENCLAW_TUI_PTY_ROWS: "22",
+      OPENCLAW_TUI_PTY_SAFE_THINKING_LABEL: "T08_SAFE_THINKING",
+      OPENCLAW_TUI_PTY_THINKING_LABEL: thinking.text,
+    },
+  });
+
+  try {
+    await fixture.run.waitForOutput("local ready", startupTimeoutMs);
+    await fixture.waitForLogEntry((entry) => entry.method === "listCommands", signal);
+    await fixture.run.write("\x14", { delay: false });
+    await assertHistoricalTerminalAttackSanitized(
+      fixture,
+      inFlight,
+      inFlight.markers,
+      inFlight.expectedLine,
+      5_000,
+    );
+
+    await fixture.run.write("/t08d", { delay: false });
+    await fixture.run.write("\x14", { delay: false });
+    await assertHistoricalTerminalAttackSanitized(
+      fixture,
+      command,
+      command.markers,
+      command.expectedLine,
+      5_000,
+    );
+
+    // Ctrl+U replaces the input without a lone Escape absorbing it as an Alt chord over SSH.
+    await fixture.run.write("\x15/think ", { delay: false });
+    await fixture.run.waitForOutput("T08_SAFE_THINKING", 5_000);
+    const raw = fixture.run.output();
+    expect(thinking.markers.some((marker) => raw.includes(marker))).toBe(false);
+    expect(thinking.attacks.some((attack) => raw.includes(attack))).toBe(false);
+  } finally {
+    await fixture.cleanup();
+  }
+}
+
+async function exerciseInteractiveOutputSafety(
+  startFixture: StartTuiPtyFixture,
+  startupTimeoutMs: number,
+  signal: AbortSignal,
+) {
+  const btwPayload = buildCompactTerminalAttackPayload("T08B", "\u009b776;889H");
+  const rawToolPayload = buildCompactTerminalAttackPayload("T08T", "\x1b]0;t08_tool_title\x07");
+  const toolPayload = {
+    ...rawToolPayload,
+    expectedLine: rawToolPayload.expectedLine.replace("café", "Café"),
+  };
+  const fixture = await startFixture({
+    env: {
+      OPENCLAW_TUI_PTY_BTW_QUESTION: btwPayload.text,
+      OPENCLAW_TUI_PTY_COLS: "120",
+      OPENCLAW_TUI_PTY_MODEL: "fixture-provider/fixture-model",
+      OPENCLAW_TUI_PTY_ROWS: "20",
+      OPENCLAW_TUI_PTY_TOOL_NAME: toolPayload.text,
+      OPENCLAW_TUI_PTY_VERBOSE_LEVEL: "on",
+    },
+  });
+
+  try {
+    await fixture.run.waitForOutput("local ready", startupTimeoutMs);
+    await fixture.run.write("/btw picker focus proof\r", { delay: false });
+    await fixture.waitForLogEntry((entry) => entry.method === "pickerSideResult", signal);
+    await assertTerminalAttackSanitized(fixture, btwPayload, startupTimeoutMs);
+    await fixture.run.write("\r", { delay: false });
+    await sleep(25);
+
+    await fixture.run.write("tool chronology proof\r", { delay: false });
+    await fixture.waitForLogEntry((entry) => entry.method === "toolChronologyComplete", signal);
+    await assertTerminalAttackSanitized(fixture, toolPayload, startupTimeoutMs);
+    await fixture.run.waitForOutput("PTY_AFTER_TOOL", startupTimeoutMs);
+  } finally {
+    await fixture.cleanup();
+  }
+}
+
+export async function exerciseTerminalOutputSafety(
+  startFixture: StartTuiPtyFixture,
+  startupTimeoutMs: number,
+  signal: AbortSignal,
+) {
+  const results = await Promise.allSettled([
+    exerciseGatewayOutputSafety(startFixture, startupTimeoutMs, signal),
+    exerciseInteractiveOutputSafety(startFixture, startupTimeoutMs, signal),
+    exerciseMarkdownAndAutocompleteOutputSafety(startFixture, startupTimeoutMs, signal),
+    exerciseSelectorOutputSafety(startFixture, startupTimeoutMs, signal),
+  ]);
+  const failure = results.find((result) => result.status === "rejected");
+  if (failure) {
+    throw failure.reason;
+  }
+}
+
+/** Proves fixture-local fragmentation preserves a Unicode prompt through the real TUI loop. */
+export async function exerciseFragmentedUnicodePrompt(
+  startFixture: StartTuiPtyFixture,
+  startupTimeoutMs: number,
+) {
+  const fixture = await startFixture({
+    env: { OPENCLAW_TUI_PTY_TYPE_CHUNK_SIZE: "1", OPENCLAW_TUI_PTY_TYPE_DELAY_MS: "1" },
+  });
+  const message = "hello 👋 from pty";
+
+  try {
+    await fixture.run.waitForOutput("local ready", startupTimeoutMs);
+    await fixture.run.write(`${message}\r`);
+    await fixture.run.waitForOutput(`PTY_RESPONSE: ${message}`);
+    // sendChat commits its log entry before emitting the response observed above.
+    expect(await readFixtureLog(fixture.logPath)).toContainEqual({
+      method: "sendChat",
+      payload: expect.objectContaining({ message }),
+    });
+  } finally {
+    await fixture.cleanup();
+  }
+}
+
+/** Approves a workspace skill using exact fragments that survive narrow-terminal wrapping. */
+export async function approveWorkspaceSkill(
+  fixture: {
+    run: PtyRun;
+    waitForLogEntry: (
+      predicate: (entry: FixtureLogEntry) => boolean,
+      signal: AbortSignal,
+    ) => Promise<FixtureLogEntry>;
+  },
+  message: string,
+  signal: AbortSignal,
+) {
+  await fixture.run.write(`${message}\r`);
+  await fixture.run.waitForOutput("plugin approval: Apply workspace skill proposal");
+  await fixture.run.waitForOutput("Plugin: workspace-skills");
+  // A compact PTY wraps the request; exact fragments avoid matching across terminal redraws.
+  await fixture.run.waitForOutput("Apply a pending workspace skill proposal");
+  await fixture.run.waitForOutput("into live workspace");
+  await fixture.run.waitForOutput("skills.");
+
+  await fixture.run.write("\x1b[A", { delay: false });
+  await fixture.run.write("\r");
+  await fixture.waitForLogEntry(
+    (entry) =>
+      entry.method === "resolvePluginApproval" &&
+      objectFieldEquals(entry, "decision", "allow-once"),
+    signal,
+  );
+  await fixture.run.waitForOutput("PTY_SKILL_APPROVAL_RESOLVED: allow-once");
+}

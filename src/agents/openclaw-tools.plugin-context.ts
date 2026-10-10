@@ -1,32 +1,51 @@
+import { normalizeConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeDeliveryContext } from "../utils/delivery-context.js";
-import type { GatewayMessageChannel } from "../utils/message-channel.js";
+import {
+  assertMemoryAudienceCurrent,
+  assertMemoryAudienceSession,
+} from "../plugins/memory-audience.js";
+import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
 import { modelKey } from "./model-ref-shared.js";
-import type { ToolFsPolicy } from "./tool-fs-policy.js";
+import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
-export type OpenClawPluginToolOptions = {
-  agentSessionKey?: string;
-  agentChannel?: GatewayMessageChannel;
-  agentAccountId?: string;
-  agentTo?: string;
-  agentThreadId?: string | number;
-  agentDir?: string;
-  workspaceDir?: string;
-  config?: OpenClawConfig;
-  fsPolicy?: ToolFsPolicy;
-  modelProvider?: string;
-  modelId?: string;
-  requesterSenderId?: string | null;
-  requesterAgentIdOverride?: string;
-  senderIsOwner?: boolean;
-  sessionId?: string;
-  sandboxBrowserBridgeUrl?: string;
-  allowHostBrowserControl?: boolean;
-  sandboxed?: boolean;
-  allowGatewaySubagentBinding?: boolean;
-};
+export type OpenClawPluginToolOptions = Pick<
+  OpenClawToolsOptions,
+  | "agentSessionKey"
+  | "runSessionKey"
+  | "runId"
+  | "assertInvocationCurrent"
+  | "assertInputCommitAllowed"
+  | "agentChannel"
+  | "agentAccountId"
+  | "agentTo"
+  | "currentMessagingTarget"
+  | "currentChannelId"
+  | "agentThreadId"
+  | "nativeChannelId"
+  | "messageActionTurnCapability"
+  | "agentDir"
+  | "workspaceDir"
+  | "config"
+  | "fsPolicy"
+  | "modelProvider"
+  | "modelId"
+  | "requesterSenderId"
+  | "senderIsOwner"
+  | "memoryAudience"
+  | "memoryFlush"
+  | "conversationReadOrigin"
+  | "requesterAgentIdOverride"
+  | "sessionId"
+  | "conversationRecall"
+  | "oneShotCliRun"
+  | "sandboxBrowserBridgeUrl"
+  | "allowHostBrowserControl"
+  | "sandboxed"
+  | "allowGatewaySubagentBinding"
+  | "toolBindings"
+> & { activeProjectKeys?: readonly string[] };
 
 export function resolveOpenClawPluginToolInputs(params: {
   options?: OpenClawPluginToolOptions;
@@ -35,8 +54,12 @@ export function resolveOpenClawPluginToolInputs(params: {
   getRuntimeConfig?: () => OpenClawConfig | undefined;
 }) {
   const { options, resolvedConfig, runtimeConfig, getRuntimeConfig } = params;
+  const sessionKey = options?.runSessionKey ?? options?.agentSessionKey;
+  if (options?.memoryAudience) {
+    assertMemoryAudienceSession(options.memoryAudience, sessionKey);
+  }
   const { sessionAgentId } = resolveSessionAgentIds({
-    sessionKey: options?.agentSessionKey,
+    sessionKey,
     config: resolvedConfig,
     agentId: options?.requesterAgentIdOverride,
   });
@@ -55,9 +78,11 @@ export function resolveOpenClawPluginToolInputs(params: {
           ...(modelProvider && modelId ? { modelRef: modelKey(modelProvider, modelId) } : {}),
         }
       : undefined;
+  // Delivery context is normalized once here so plugin tools receive the same
+  // channel/account/thread shape as gateway-delivered agent tools.
   const deliveryContext = normalizeDeliveryContext({
     channel: options?.agentChannel,
-    to: options?.agentTo,
+    to: options?.agentTo ?? options?.currentMessagingTarget ?? options?.currentChannelId,
     accountId: options?.agentAccountId,
     threadId: options?.agentThreadId,
   });
@@ -67,12 +92,16 @@ export function resolveOpenClawPluginToolInputs(params: {
       config: options?.config,
       runtimeConfig,
       getRuntimeConfig,
+      assertInputCommitAllowed: options?.assertInputCommitAllowed,
       fsPolicy: options?.fsPolicy,
       workspaceDir,
       agentDir: options?.agentDir,
       agentId: sessionAgentId,
-      sessionKey: options?.agentSessionKey,
+      sessionKey,
       sessionId: options?.sessionId,
+      toolBindings: options?.toolBindings,
+      activeProjectKeys: options?.activeProjectKeys,
+      conversationRecall: options?.conversationRecall,
       activeModel,
       browser: {
         sandboxBridgeUrl: options?.sandboxBrowserBridgeUrl,
@@ -81,9 +110,19 @@ export function resolveOpenClawPluginToolInputs(params: {
       messageChannel: options?.agentChannel,
       agentAccountId: options?.agentAccountId,
       deliveryContext,
+      nativeChannelId: options?.nativeChannelId,
       requesterSenderId: options?.requesterSenderId ?? undefined,
-      senderIsOwner: options?.senderIsOwner ?? undefined,
+      senderIsOwner: options?.senderIsOwner,
+      memoryAudience: options?.memoryAudience,
+      memoryFlush: options?.memoryFlush,
+      assertMemoryAudienceCurrent: options?.memoryAudience
+        ? () => assertMemoryAudienceCurrent(options.memoryAudience!)
+        : undefined,
+      conversationReadOrigin: normalizeConversationReadInvocationOrigin(
+        options?.conversationReadOrigin,
+      ),
       sandboxed: options?.sandboxed,
+      oneShotCliRun: options?.oneShotCliRun,
     },
     allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
   };

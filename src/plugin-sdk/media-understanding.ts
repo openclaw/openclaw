@@ -9,6 +9,10 @@ export type {
   ImagesDescriptionRequest,
   ImagesDescriptionResult,
   MediaUnderstandingProvider,
+  MediaUnderstandingProviderAuthContext,
+  MediaUnderstandingProviderAuthResult,
+  MediaUnderstandingProviderRequestAuth,
+  MediaUnderstandingProviderSyntheticAuthResult,
   StructuredExtractionImageInput,
   StructuredExtractionInput,
   StructuredExtractionRequest,
@@ -27,6 +31,7 @@ export {
 export {
   buildOpenAiCompatibleVideoRequestBody,
   coerceOpenAiCompatibleVideoText,
+  describeOpenAiCompatibleVideo,
   resolveMediaUnderstandingString,
   type OpenAiCompatibleVideoPayload,
 } from "../media-understanding/openai-compatible-video.ts";

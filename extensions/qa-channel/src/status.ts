@@ -1,8 +1,8 @@
-import { DEFAULT_ACCOUNT_ID } from "./accounts.js";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
-} from "./runtime-api.js";
+} from "openclaw/plugin-sdk/status-helpers";
+import { DEFAULT_ACCOUNT_ID } from "./accounts.js";
 import type { ResolvedQaChannelAccount } from "./types.js";
 
 export const qaChannelStatus = createComputedAccountStatusAdapter<ResolvedQaChannelAccount>({

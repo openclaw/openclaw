@@ -1,11 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { WhatsAppSendResult } from "../../inbound/send-result.js";
+import { createAcceptedWhatsAppSendResult } from "../../inbound/send-result.test-helper.js";
+import { createTestWebInboundMessage } from "../../inbound/test-message.test-helper.js";
 
-// Hoisted mocks used across tests so vi.mock factories can reference them.
 const {
   resolvePolicyMock,
   buildContextMock,
   isControlCommandMessageMock,
+  dispatchBufferedReplyMock,
+  replyPlanParamsMock,
+  runChannelInboundEventParamsMock,
   runMessageReceivedMock,
   shouldComputeCommandAuthorizedMock,
   trackBackgroundTaskMock,
@@ -13,19 +16,27 @@ const {
   resolvePolicyMock: vi.fn(),
   buildContextMock: vi.fn(),
   isControlCommandMessageMock: vi.fn(() => false),
+  dispatchBufferedReplyMock: vi.fn(async (_params?: unknown) => ({
+    queuedFinal: false,
+    counts: { tool: 0, block: 0, final: 0 },
+  })),
+  replyPlanParamsMock: vi.fn(),
+  runChannelInboundEventParamsMock: vi.fn(),
   runMessageReceivedMock: vi.fn(async () => undefined),
   shouldComputeCommandAuthorizedMock: vi.fn(() => false),
   trackBackgroundTaskMock: vi.fn(),
 }));
 
-function acceptedSendResult(kind: "media" | "text", id: string): WhatsAppSendResult {
+vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
   return {
-    kind,
-    messageId: id,
-    keys: [{ id }],
-    providerAccepted: true,
+    ...actual,
+    runChannelInboundEvent: async (params: Parameters<typeof actual.runChannelInboundEvent>[0]) => {
+      runChannelInboundEventParamsMock(params);
+      return await actual.runChannelInboundEvent(params);
+    },
   };
-}
+});
 
 vi.mock("../../inbound-policy.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../inbound-policy.js")>();
@@ -40,11 +51,27 @@ vi.mock("./inbound-dispatch.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./inbound-dispatch.js")>();
   return {
     ...actual,
-    buildWhatsAppInboundContext: buildContextMock,
-    dispatchWhatsAppBufferedReply: async () => ({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    }),
+    prepareWhatsAppInboundContext: async (
+      params: Parameters<typeof actual.prepareWhatsAppInboundContext>[0],
+    ) => {
+      const prepared = await actual.prepareWhatsAppInboundContext(params);
+      return {
+        ...prepared,
+        ctxPayload: buildContextMock(params),
+      };
+    },
+    createWhatsAppReplyPlan: (...args: unknown[]) => {
+      const params = args[0] as { replyResolver?: unknown };
+      replyPlanParamsMock(params);
+      void dispatchBufferedReplyMock(params);
+      return {
+        dispatcherOptions: {},
+        delivery: { deliver: async () => {} },
+        replyOptions: {},
+        replyResolver: params.replyResolver,
+        finalize: () => true,
+      };
+    },
     resolveWhatsAppDmRouteTarget: () => null,
     resolveWhatsAppResponsePrefix: () => undefined,
     updateWhatsAppMainLastRoute: () => {},
@@ -100,7 +127,7 @@ vi.mock("./inbound-context.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./inbound-context.js")>();
   return {
     ...actual,
-    resolveVisibleWhatsAppGroupHistory: () => [],
+    resolveVisibleWhatsAppGroupHistory: (params: { history: unknown[] }) => params.history,
     resolveVisibleWhatsAppReplyContext: () => null,
   };
 });
@@ -133,7 +160,7 @@ vi.mock("./runtime-api.js", async (importOriginal) => {
     normalizeE164: (v: string) => v,
     recordSessionMetaFromInbound: async () => {},
     resolveChannelContextVisibilityMode: () => "off",
-    resolveInboundSessionEnvelopeContext: () => ({
+    resolveInboundSessionEnvelopeContextAsync: async () => ({
       storePath: "/tmp",
       envelopeOptions: {},
       previousTimestamp: undefined,
@@ -146,11 +173,8 @@ vi.mock("./runtime-api.js", async (importOriginal) => {
 });
 
 import { clearInternalHooks, registerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
+import { attachWhatsAppIngressLifecycle } from "../../inbound/ingress-lifecycle.js";
 import { processMessage } from "./process-message.js";
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 function makeAccount(groups: Record<string, { systemPrompt?: string }> = {}): {
   accountId: string;
@@ -178,19 +202,45 @@ function makePolicy(account: ReturnType<typeof makeAccount>) {
 
 const GROUP_JID = "123@g.us";
 
-const baseMsg = {
-  id: "msg1",
-  from: GROUP_JID,
-  to: "+15550001111",
-  conversationId: GROUP_JID,
-  accountId: "default",
-  chatId: GROUP_JID,
-  chatType: "group" as const,
-  body: "hi",
-  sendComposing: async () => {},
-  reply: async () => acceptedSendResult("text", "r1"),
-  sendMedia: async () => acceptedSendResult("media", "m1"),
-};
+function makeBaseMsg(overrides: { body?: string; commandBody?: string } = {}) {
+  const body = overrides.body ?? "hi";
+  return createTestWebInboundMessage({
+    event: {
+      id: "msg1",
+      timestamp: 1710000000,
+    },
+    payload: {
+      body,
+      commandBody: overrides.commandBody,
+    },
+    platform: {
+      chatJid: GROUP_JID,
+      recipientJid: "+15550001111",
+      senderJid: "15550002222@s.whatsapp.net",
+      senderE164: "+15550002222",
+      senderName: "Alice",
+      sendComposing: async () => {},
+      reply: async () => createAcceptedWhatsAppSendResult("text", "r1"),
+      sendMedia: async () => createAcceptedWhatsAppSendResult("media", "m1"),
+    },
+    admission: {
+      accountId: "default",
+      conversation: {
+        kind: "group",
+        id: GROUP_JID,
+      },
+      sender: {
+        id: "+15550002222",
+      },
+      senderAccess: {
+        reasonCode: "group_policy_allowed",
+      },
+    },
+    group: {
+      subject: "Test Group",
+    },
+  });
+}
 
 const baseRoute = {
   agentId: "main",
@@ -202,24 +252,29 @@ const baseRoute = {
   matchedBy: "default",
 };
 
-function callProcessMessage(overrides: { cfg?: unknown; msg?: unknown } = {}) {
+function callProcessMessage(
+  overrides: {
+    cfg?: unknown;
+    dispatchReplyFromConfig?: Parameters<typeof processMessage>[0]["dispatchReplyFromConfig"];
+    groupHistories?: Map<string, unknown[]>;
+    msg?: unknown;
+  } = {},
+) {
   return processMessage({
     cfg: (overrides.cfg ?? {}) as never,
-    msg: (overrides.msg ?? baseMsg) as never,
+    msg: (overrides.msg ?? makeBaseMsg()) as never,
     route: baseRoute as never,
     groupHistoryKey: "whatsapp:default:group:123@g.us",
-    groupHistories: new Map(),
+    groupHistoryLimit: 20,
+    groupHistories: (overrides.groupHistories ?? new Map()) as never,
     groupMemberNames: new Map(),
     connectionId: "conn-1",
     verbose: false,
     maxMediaBytes: 1024,
+    dispatchReplyFromConfig: overrides.dispatchReplyFromConfig,
     replyResolver: (async () => undefined) as never,
     replyLogger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as never,
     backgroundTasks: new Set(),
-    rememberSentText: () => {},
-    echoHas: () => false,
-    echoForget: () => {},
-    buildCombinedEchoKey: ({ sessionKey }) => sessionKey,
   });
 }
 
@@ -234,16 +289,16 @@ function mockCallArg(mockFn: ReturnType<typeof vi.fn>, label: string, callIndex 
   return call[argIndex];
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
 describe("processMessage group system prompt wiring", () => {
   beforeEach(() => {
     buildContextMock.mockReset();
+    dispatchBufferedReplyMock.mockClear();
     isControlCommandMessageMock.mockReset();
     isControlCommandMessageMock.mockReturnValue(false);
     resolvePolicyMock.mockReset();
+    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
+    replyPlanParamsMock.mockClear();
+    runChannelInboundEventParamsMock.mockClear();
     runMessageReceivedMock.mockClear();
     shouldComputeCommandAuthorizedMock.mockReset();
     shouldComputeCommandAuthorizedMock.mockReturnValue(false);
@@ -277,185 +332,151 @@ describe("processMessage group system prompt wiring", () => {
     ).toBe("from config");
   });
 
-  it("marks detected WhatsApp slash messages as text command turns", async () => {
-    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
+  it("keeps generated media notices out of command input", async () => {
     isControlCommandMessageMock.mockReturnValue(true);
     shouldComputeCommandAuthorizedMock.mockReturnValue(true);
 
     await callProcessMessage({
-      msg: {
-        ...baseMsg,
-        body: "/status",
-      },
+      msg: makeBaseMsg({
+        body: "/reset\n\n[whatsapp attachment unavailable]",
+        commandBody: "/reset",
+      }),
     });
 
-    expect(shouldComputeCommandAuthorizedMock).toHaveBeenCalledWith("/status", {});
-    expect(isControlCommandMessageMock).toHaveBeenCalledWith("/status", {});
-    expect(buildContextMock.mock.calls[0][0]).toMatchObject({
-      commandBody: "/status",
-      commandAuthorized: true,
-      commandTurn: {
-        kind: "text-slash",
-        source: "text",
-        authorized: true,
-        body: "/status",
-      },
-      rawBody: "/status",
+    expect(shouldComputeCommandAuthorizedMock).toHaveBeenCalledWith("/reset", {});
+    expect(isControlCommandMessageMock).toHaveBeenCalledWith("/reset", {});
+    expect(mockCallArg(buildContextMock, "buildWhatsAppInboundContext")).toMatchObject({
+      bodyForAgent: "/reset\n\n[whatsapp attachment unavailable]",
+      command: { kind: "text-slash", authorized: true, body: "/reset" },
+      rawBody: "/reset",
     });
   });
 
-  it("checks auth for inline command tokens without marking them as command-source turns", async () => {
-    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
-    isControlCommandMessageMock.mockReturnValue(false);
-    shouldComputeCommandAuthorizedMock.mockReturnValue(true);
-
-    await callProcessMessage({
-      msg: {
-        ...baseMsg,
-        body: "please inspect `/tmp/foo`",
-      },
-    });
-
-    expect(buildContextMock.mock.calls[0][0]).toMatchObject({
-      commandBody: "please inspect `/tmp/foo`",
-      commandAuthorized: true,
-      commandTurn: {
-        kind: "normal",
-        source: "message",
-        authorized: false,
-        body: "please inspect `/tmp/foo`",
-      },
-      rawBody: "please inspect `/tmp/foo`",
-    });
-    expect(buildContextMock.mock.calls[0][0].commandSource).toBeUndefined();
-  });
-
-  it("fires message_received hooks with canonical WhatsApp correlation fields", async () => {
-    const internalReceived = vi.fn();
-    registerInternalHook("message:received", internalReceived);
-    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
-    buildContextMock.mockImplementationOnce(() => ({
-      Body: "hi",
-      BodyForCommands: "hi",
-      RawBody: "hi",
-      CommandBody: "hi",
-      From: GROUP_JID,
-      To: "+15550001111",
-      SessionKey: baseRoute.sessionKey,
-      AccountId: "default",
-      MessageSid: "msg1",
-      SenderId: "+15550002222",
-      SenderName: "Alice",
-      SenderE164: "+15550002222",
-      Timestamp: 1710000000,
-      Provider: "whatsapp",
-      Surface: "whatsapp",
-      OriginatingChannel: "whatsapp",
-      OriginatingTo: GROUP_JID,
-      GroupSubject: "Test Group",
-    }));
-
-    await callProcessMessage({
-      cfg: {
-        channels: {
-          whatsapp: {
-            pluginHooks: {
-              messageReceived: true,
-            },
-          },
-        },
-      },
-    });
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(runMessageReceivedMock).toHaveBeenCalledTimes(1);
-    expect(runMessageReceivedMock).toHaveBeenCalledWith(
+  it("passes pending history to context and clears it after dispatch", async () => {
+    const historyKey = "whatsapp:default:group:123@g.us";
+    const entries = [
       {
-        from: GROUP_JID,
-        content: "hi",
+        sender: "Alice (+15550002222)",
+        body: "quiet pending context",
         timestamp: 1710000000,
+        id: "quiet-msg-1",
+        senderJid: "15550002222@s.whatsapp.net",
+      },
+    ];
+    const groupHistories = new Map<string, unknown[]>([[historyKey, entries]]);
+
+    await callProcessMessage({ groupHistories });
+
+    expect(mockCallArg(buildContextMock, "buildWhatsAppInboundContext")).toMatchObject({
+      groupHistory: entries,
+    });
+    expect(groupHistories.get(historyKey)).toEqual([]);
+  });
+
+  it.each([true, false])(
+    "emits canonical WhatsApp hooks only with explicit opt-in: %s",
+    async (enabled) => {
+      const internalReceived = vi.fn();
+      registerInternalHook("message:received", internalReceived);
+      buildContextMock.mockImplementationOnce(() => ({
+        Body: "hi",
+        BodyForCommands: "hi",
+        RawBody: "hi",
+        CommandBody: "hi",
+        From: GROUP_JID,
+        To: "+15550001111",
+        SessionKey: baseRoute.sessionKey,
+        AccountId: "default",
+        MessageSid: "msg1",
+        SenderId: "+15550002222",
+        SenderName: "Alice",
+        SenderE164: "+15550002222",
+        Timestamp: 1710000000,
+        Provider: "whatsapp",
+        Surface: "whatsapp",
+        SuppressMessageReceivedHooks: true,
+        OriginatingChannel: "whatsapp",
+        OriginatingTo: GROUP_JID,
+        GroupSubject: "Test Group",
+      }));
+
+      await callProcessMessage({
+        cfg: enabled ? { channels: { whatsapp: { pluginHooks: { messageReceived: true } } } } : {},
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      if (!enabled) {
+        expect(runMessageReceivedMock).not.toHaveBeenCalled();
+        expect(internalReceived).not.toHaveBeenCalled();
+        return;
+      }
+      const metadata = {
+        to: "+15550001111",
+        provider: "whatsapp",
+        surface: "whatsapp",
         threadId: undefined,
-        messageId: "msg1",
         senderId: "+15550002222",
-        sessionKey: baseRoute.sessionKey,
-        runId: undefined,
-        metadata: {
-          to: "+15550001111",
-          provider: "whatsapp",
-          surface: "whatsapp",
+        senderName: "Alice",
+        senderUsername: undefined,
+        senderE164: "+15550002222",
+        guildId: undefined,
+        channelName: undefined,
+        topicName: undefined,
+      };
+      expect(runMessageReceivedMock).toHaveBeenCalledTimes(1);
+      expect(runMessageReceivedMock).toHaveBeenCalledWith(
+        {
+          from: GROUP_JID,
+          content: "hi",
+          timestamp: 1710000000,
           threadId: undefined,
-          originatingChannel: "whatsapp",
-          originatingTo: GROUP_JID,
           messageId: "msg1",
           senderId: "+15550002222",
-          senderName: "Alice",
-          senderUsername: undefined,
-          senderE164: "+15550002222",
-          guildId: undefined,
-          channelName: undefined,
-          topicName: undefined,
+          sessionKey: baseRoute.sessionKey,
+          runId: undefined,
+          metadata: {
+            ...metadata,
+            originatingChannel: "whatsapp",
+            originatingTo: GROUP_JID,
+            messageId: "msg1",
+          },
         },
-      },
-      {
-        channelId: "whatsapp",
-        accountId: "default",
-        conversationId: GROUP_JID,
-        sessionKey: baseRoute.sessionKey,
-        messageId: "msg1",
-        senderId: "+15550002222",
-      },
-    );
-    expect(internalReceived).toHaveBeenCalledTimes(1);
-    const internalEvent = mockCallArg(internalReceived, "internal message received") as Record<
-      string,
-      unknown
-    >;
-    expect(internalEvent.timestamp).toBeInstanceOf(Date);
-    expect({ ...internalEvent, timestamp: undefined }).toEqual({
-      type: "message",
-      action: "received",
-      sessionKey: baseRoute.sessionKey,
-      context: {
-        from: GROUP_JID,
-        content: "hi",
-        timestamp: 1710000000,
-        channelId: "whatsapp",
-        accountId: "default",
-        conversationId: GROUP_JID,
-        messageId: "msg1",
-        metadata: {
-          to: "+15550001111",
-          provider: "whatsapp",
-          surface: "whatsapp",
-          threadId: undefined,
+        {
+          channelId: "whatsapp",
+          accountId: "default",
+          conversationId: GROUP_JID,
+          sessionKey: baseRoute.sessionKey,
+          messageId: "msg1",
           senderId: "+15550002222",
-          senderName: "Alice",
-          senderUsername: undefined,
-          senderE164: "+15550002222",
-          guildId: undefined,
-          channelName: undefined,
-          topicName: undefined,
         },
-      },
-      timestamp: undefined,
-      messages: [],
-    });
-  });
+      );
+      expect(internalReceived).toHaveBeenCalledTimes(1);
+      const internalEvent = mockCallArg(internalReceived, "internal message received") as Record<
+        string,
+        unknown
+      >;
+      expect(internalEvent.timestamp).toBeInstanceOf(Date);
+      expect({ ...internalEvent, timestamp: undefined }).toEqual({
+        type: "message",
+        action: "received",
+        sessionKey: baseRoute.sessionKey,
+        context: {
+          from: GROUP_JID,
+          content: "hi",
+          timestamp: 1710000000,
+          channelId: "whatsapp",
+          accountId: "default",
+          conversationId: GROUP_JID,
+          messageId: "msg1",
+          metadata,
+        },
+        timestamp: undefined,
+        messages: [],
+      });
+    },
+  );
 
-  it("does not fire WhatsApp message_received hooks without explicit opt-in", async () => {
-    const internalReceived = vi.fn();
-    registerInternalHook("message:received", internalReceived);
-    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
-
-    await callProcessMessage();
-
-    expect(runMessageReceivedMock).not.toHaveBeenCalled();
-    expect(internalReceived).not.toHaveBeenCalled();
-  });
-
-  it("tracks session metadata writes as connection background tasks", async () => {
-    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
+  it("passes one lifecycle and owning dispatcher through the portable turn boundary", async () => {
     buildContextMock.mockImplementationOnce(() => ({
       Body: "hi",
       RawBody: "hi",
@@ -464,13 +485,74 @@ describe("processMessage group system prompt wiring", () => {
       Provider: "whatsapp",
       Surface: "whatsapp",
     }));
+    const lifecycle = {
+      abortSignal: new AbortController().signal,
+      onAdopted: vi.fn(async () => undefined),
+      onDeferred: vi.fn(),
+      onAbandoned: vi.fn(async () => undefined),
+    };
+    const dispatchReplyFromConfig = vi.fn(async () => ({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    }));
+    const msg = attachWhatsAppIngressLifecycle(makeBaseMsg(), lifecycle as never);
 
-    await callProcessMessage();
+    await callProcessMessage({ msg, dispatchReplyFromConfig });
 
+    const runParams = mockCallArg(runChannelInboundEventParamsMock, "runChannelInboundEvent") as {
+      raw?: unknown;
+      turnAdoptionLifecycle?: unknown;
+    };
+    const replyPlanParams = mockCallArg(replyPlanParamsMock, "createWhatsAppReplyPlan") as {
+      turnAdoptionLifecycle?: unknown;
+    };
+    expect(runParams.turnAdoptionLifecycle).toBe(replyPlanParams.turnAdoptionLifecycle);
+    expect(dispatchReplyFromConfig).toHaveBeenCalledOnce();
     expect(trackBackgroundTaskMock).toHaveBeenCalledTimes(1);
     expect(mockCallArg(trackBackgroundTaskMock, "trackBackgroundTask")).toBeInstanceOf(Set);
     expect(mockCallArg(trackBackgroundTaskMock, "trackBackgroundTask", 0, 1)).toBeInstanceOf(
       Promise,
     );
+    expect(runParams.raw).not.toHaveProperty("platform");
+    expect(runParams.raw).not.toHaveProperty("admission");
+  });
+
+  it("drops blocked admission before session record and reply dispatch", async () => {
+    buildContextMock.mockImplementationOnce(() => ({
+      Body: "hi",
+      RawBody: "hi",
+      CommandBody: "hi",
+      SessionKey: baseRoute.sessionKey,
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+    }));
+
+    const result = await callProcessMessage({
+      msg: createTestWebInboundMessage({
+        admission: {
+          ingress: {
+            admission: "drop",
+            decision: "block",
+            reasonCode: "dm_policy_not_allowlisted",
+          },
+          senderAccess: {
+            allowed: false,
+            decision: "block",
+            reasonCode: "dm_policy_not_allowlisted",
+          },
+          activationAccess: {
+            allowed: false,
+            shouldSkip: true,
+            reasonCode: "dm_policy_not_allowlisted",
+          },
+        },
+      }),
+    });
+
+    expect(result).toBe(false);
+    expect(buildContextMock).not.toHaveBeenCalled();
+    expect(trackBackgroundTaskMock).not.toHaveBeenCalled();
+    expect(dispatchBufferedReplyMock).not.toHaveBeenCalled();
+    expect(runMessageReceivedMock).not.toHaveBeenCalled();
   });
 });

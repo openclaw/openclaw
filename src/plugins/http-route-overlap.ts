@@ -1,44 +1,38 @@
-import { canonicalizePathVariant } from "../gateway/security-path.js";
+/** Detects conflicting plugin HTTP routes before Gateway registration accepts them. */
+import { getPluginHttpRouteCanonicalPath, prefixMatchPath } from "./http-path.js";
 import type { OpenClawPluginHttpRouteMatch } from "./types.js";
 
-type PluginHttpRouteLike = {
+type PluginHttpRouteRegistrationLike = {
   path: string;
   match: OpenClawPluginHttpRouteMatch;
+  auth: string;
 };
 
-function prefixMatchPath(pathname: string, prefix: string): boolean {
-  return (
-    pathname === prefix || pathname.startsWith(`${prefix}/`) || pathname.startsWith(`${prefix}%`)
-  );
-}
-
-function doPluginHttpRoutesOverlap(
-  a: Pick<PluginHttpRouteLike, "path" | "match">,
-  b: Pick<PluginHttpRouteLike, "path" | "match">,
-): boolean {
-  const aPath = canonicalizePathVariant(a.path);
-  const bPath = canonicalizePathVariant(b.path);
-
-  if (a.match === "exact" && b.match === "exact") {
-    return aPath === bPath;
+/** Resolves the collision classes shared by static and lifecycle route registration. */
+export function findPluginHttpRouteRegistrationConflicts<T extends PluginHttpRouteRegistrationLike>(
+  routes: readonly T[],
+  candidate: PluginHttpRouteRegistrationLike,
+): {
+  authOverlap: T | undefined;
+  canonicalMatches: T[];
+} {
+  const canonicalCandidatePath = getPluginHttpRouteCanonicalPath(candidate);
+  let authOverlap: T | undefined;
+  const canonicalMatches: T[] = [];
+  for (const route of routes) {
+    const routePath = getPluginHttpRouteCanonicalPath(route);
+    if (
+      !authOverlap &&
+      route.auth !== candidate.auth &&
+      (routePath === canonicalCandidatePath ||
+        (route.match === "prefix" && prefixMatchPath(canonicalCandidatePath, routePath)) ||
+        (candidate.match === "prefix" && prefixMatchPath(routePath, canonicalCandidatePath)))
+    ) {
+      authOverlap = route;
+    }
+    if (route.match === candidate.match && routePath === canonicalCandidatePath) {
+      canonicalMatches.push(route);
+    }
   }
-  if (a.match === "prefix" && b.match === "prefix") {
-    return prefixMatchPath(aPath, bPath) || prefixMatchPath(bPath, aPath);
-  }
-
-  const prefixRoute = a.match === "prefix" ? a : b;
-  const exactRoute = a.match === "exact" ? a : b;
-  return prefixMatchPath(
-    canonicalizePathVariant(exactRoute.path),
-    canonicalizePathVariant(prefixRoute.path),
-  );
-}
-
-export function findOverlappingPluginHttpRoute<
-  T extends {
-    path: string;
-    match: OpenClawPluginHttpRouteMatch;
-  },
->(routes: readonly T[], candidate: PluginHttpRouteLike): T | undefined {
-  return routes.find((route) => doPluginHttpRoutesOverlap(route, candidate));
+  return { authOverlap, canonicalMatches };
 }

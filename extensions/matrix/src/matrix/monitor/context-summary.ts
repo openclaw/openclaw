@@ -1,43 +1,42 @@
 import {
-  formatMatrixMessageText,
-  resolveMatrixMessageAttachment,
-  resolveMatrixMessageBody,
-} from "../media-text.js";
+  normalizeOptionalString,
+  readStringValue,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { formatMatrixMessageText, resolveMatrixReplacementContent } from "../media-text.js";
 import {
   formatPollAsText,
   isPollStartType,
-  parsePollStartContent,
+  parsePollStart,
   type PollStartContent,
 } from "../poll-types.js";
 import type { MatrixRawEvent } from "./types.js";
 
-export function trimMatrixMaybeString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
+const MAX_CONTEXT_BODY_LENGTH = 500;
+
+export function truncateMatrixContextBody(value: string): string {
+  if (value.length <= MAX_CONTEXT_BODY_LENGTH) {
+    return value;
   }
-  const trimmed = value.trim();
-  return trimmed || undefined;
+  return `${sliceUtf16Safe(value, 0, MAX_CONTEXT_BODY_LENGTH - 3)}...`;
 }
 
 export function summarizeMatrixMessageContextEvent(event: MatrixRawEvent): string | undefined {
   if (isPollStartType(event.type)) {
-    const pollSummary = parsePollStartContent(event.content as PollStartContent);
+    const pollSummary = parsePollStart(event.content as PollStartContent);
     if (pollSummary) {
       return formatPollAsText(pollSummary);
     }
   }
 
-  const content = event.content as { body?: unknown; filename?: unknown; msgtype?: unknown };
+  const content = (resolveMatrixReplacementContent(event) ?? event.content) as {
+    body?: unknown;
+    filename?: unknown;
+    msgtype?: unknown;
+  };
   return formatMatrixMessageText({
-    body: resolveMatrixMessageBody({
-      body: trimMatrixMaybeString(content.body),
-      filename: trimMatrixMaybeString(content.filename),
-      msgtype: trimMatrixMaybeString(content.msgtype),
-    }),
-    attachment: resolveMatrixMessageAttachment({
-      body: trimMatrixMaybeString(content.body),
-      filename: trimMatrixMaybeString(content.filename),
-      msgtype: trimMatrixMaybeString(content.msgtype),
-    }),
+    body: readStringValue(content.body),
+    filename: readStringValue(content.filename),
+    msgtype: normalizeOptionalString(content.msgtype),
   });
 }

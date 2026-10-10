@@ -1,12 +1,19 @@
 {
   "id": "vydra",
+  "categories": ["media"],
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "activation": {
     "onStartup": false
   },
   "enabledByDefault": true,
   "providers": ["vydra"],
-  "providerAuthEnvVars": {
-    "vydra": ["VYDRA_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "vydra",
+        "envVars": ["VYDRA_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

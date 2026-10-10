@@ -1,3 +1,8 @@
+/**
+ * Bundled channel package-root resolver.
+ *
+ * Computes cache scopes for generated channel metadata across source and packaged layouts.
+ */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
@@ -15,7 +20,6 @@ const OPENCLAW_PACKAGE_ROOT =
 
 export type BundledChannelRootScope = {
   packageRoot: string;
-  cacheKey: string;
   pluginsDir?: string;
 };
 
@@ -28,6 +32,9 @@ function derivePackageRootFromExtensionsDir(extensionsDir: string): string {
   return parentDir;
 }
 
+/**
+ * Resolves the package/cache scope used for bundled channel plugin metadata.
+ */
 export function resolveBundledChannelRootScope(
   env: NodeJS.ProcessEnv = process.env,
 ): BundledChannelRootScope {
@@ -35,16 +42,16 @@ export function resolveBundledChannelRootScope(
   if (!bundledPluginsDir) {
     return {
       packageRoot: OPENCLAW_PACKAGE_ROOT,
-      cacheKey: OPENCLAW_PACKAGE_ROOT,
     };
   }
   const resolvedPluginsDir = path.resolve(bundledPluginsDir);
+  // A direct extensions directory belongs to the package root; any other scan dir is its own
+  // cache scope so tests and packaged runtimes do not share stale metadata.
   return {
     packageRoot:
       path.basename(resolvedPluginsDir) === "extensions"
         ? derivePackageRootFromExtensionsDir(resolvedPluginsDir)
         : resolvedPluginsDir,
-    cacheKey: resolvedPluginsDir,
     pluginsDir: resolvedPluginsDir,
   };
 }

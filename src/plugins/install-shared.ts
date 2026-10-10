@@ -1,0 +1,434 @@
+import path from "node:path";
+import {
+  requestDeferredPackageDirInstall,
+  resolvePackageDirInstallTransaction,
+} from "../infra/install-package-dir.js";
+import type { InstallPolicySource } from "../security/install-policy.js";
+import { resolveUserPath } from "../utils.js";
+import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
+import type { InstallSecurityScanResult } from "./install-security-scan.js";
+import {
+  attachPluginInstallTransaction,
+  resolvePluginInstallTransactionRequest,
+} from "./install-transaction.js";
+import {
+  PLUGIN_INSTALL_ERROR_CODE,
+  type InstallPluginResult,
+  type PackageManifest,
+  type PluginInstallArtifactConsentHandler,
+  type PluginInstallErrorCode,
+  type PluginInstallFailureResult,
+  type PluginInstallLogger,
+  type PluginInstallPolicyRequest,
+} from "./install-types.js";
+import { resolvePackageExtensionEntries, type OpenClawPackageManifest } from "./manifest.js";
+import { satisfiesPluginApiRange, resolvePackagePluginApiRange } from "./package-compat.js";
+import {
+  emitPluginAuditSecurityEvent,
+  emitPluginInstallSecurityEvent,
+  pluginAuditOutcomeForReason,
+  type PluginSecuritySourceFamily,
+} from "./security-events.js";
+
+export async function loadPluginInstallRuntime() {
+  return await import("./install.runtime.js");
+}
+
+export type PluginInstallRuntime = Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
+type PluginCompatibilityRuntime = Pick<
+  PluginInstallRuntime,
+  "checkMinHostVersion" | "resolveCompatibilityHostVersion"
+>;
+
+export const defaultLogger: PluginInstallLogger = {};
+
+export function formatUnresolvedOpenClawPeerLinkError(packageName: string): string {
+  return `Installed plugin ${packageName} declares an openclaw dependency, but OpenClaw could not create a plugin-local node_modules/openclaw link. Run from a packaged OpenClaw install or reinstall OpenClaw, then retry.`;
+}
+
+const MISSING_EXTENSIONS_ERROR =
+  'package.json missing openclaw.extensions; update the plugin package to include openclaw.extensions (for example ["./dist/index.js"]). See https://docs.openclaw.ai/help/troubleshooting#plugin-install-fails-with-missing-openclaw-extensions';
+export function validateOpenClawPackageInstallCompatibility(params: {
+  runtime: PluginCompatibilityRuntime;
+  pluginId: string;
+  packageMetadata?: OpenClawPackageManifest;
+}): PluginInstallFailureResult | null {
+  const currentHostVersion = params.runtime.resolveCompatibilityHostVersion();
+  const minHostVersionCheck = params.runtime.checkMinHostVersion({
+    currentVersion: currentHostVersion,
+    minHostVersion: params.packageMetadata?.install?.minHostVersion,
+  });
+  if (!minHostVersionCheck.ok) {
+    if (minHostVersionCheck.kind === "invalid") {
+      return {
+        ok: false,
+        error: `invalid package.json openclaw.install.minHostVersion: ${minHostVersionCheck.error}`,
+        code: PLUGIN_INSTALL_ERROR_CODE.INVALID_MIN_HOST_VERSION,
+      };
+    }
+    if (minHostVersionCheck.kind === "unknown_host_version") {
+      return {
+        ok: false,
+        error: `plugin "${params.pluginId}" requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host version could not be determined. Re-run from a released build or set OPENCLAW_VERSION and retry.`,
+        code: PLUGIN_INSTALL_ERROR_CODE.UNKNOWN_HOST_VERSION,
+      };
+    }
+    return {
+      ok: false,
+      error: `plugin "${params.pluginId}" requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host is ${minHostVersionCheck.currentVersion}. Upgrade OpenClaw and retry.`,
+      code: PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_HOST_VERSION,
+    };
+  }
+
+  const pluginApiRangeCheck = resolvePackagePluginApiRange(params.packageMetadata);
+  if (!pluginApiRangeCheck.ok) {
+    return {
+      ok: false,
+      error: `invalid package.json openclaw.compat.pluginApi: ${pluginApiRangeCheck.error}`,
+      code: PLUGIN_INSTALL_ERROR_CODE.INVALID_PLUGIN_API,
+    };
+  }
+  const pluginApiRange = pluginApiRangeCheck.range;
+  if (pluginApiRange && !satisfiesPluginApiRange(currentHostVersion, pluginApiRange)) {
+    return {
+      ok: false,
+      error: `plugin "${params.pluginId}" requires plugin API ${pluginApiRange}, but this OpenClaw runtime exposes ${currentHostVersion}. Upgrade OpenClaw or install a compatible plugin version and retry.`,
+      code: PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API,
+    };
+  }
+  return null;
+}
+
+export async function readOptionalPackageManifest(params: {
+  runtime: PluginInstallRuntime;
+  packageDir: string;
+}): Promise<{ ok: true; manifest?: PackageManifest } | PluginInstallFailureResult> {
+  const manifestPath = path.join(params.packageDir, "package.json");
+  if (!(await params.runtime.fileExists(manifestPath))) {
+    return { ok: true };
+  }
+
+  try {
+    return {
+      ok: true,
+      manifest: await params.runtime.readJsonFile<PackageManifest>(manifestPath),
+    };
+  } catch (err) {
+    return { ok: false, error: `invalid package.json: ${String(err)}` };
+  }
+}
+
+export function ensureOpenClawExtensions(params: { manifest: PackageManifest }):
+  | {
+      ok: true;
+      entries: string[];
+    }
+  | {
+      ok: false;
+      error: string;
+      code: PluginInstallErrorCode;
+    } {
+  const resolved = resolvePackageExtensionEntries(params.manifest);
+  if (resolved.status === "missing") {
+    return {
+      ok: false,
+      error: MISSING_EXTENSIONS_ERROR,
+      code: PLUGIN_INSTALL_ERROR_CODE.MISSING_OPENCLAW_EXTENSIONS,
+    };
+  }
+  if (resolved.status === "empty") {
+    return {
+      ok: false,
+      error: "package.json openclaw.extensions is empty",
+      code: PLUGIN_INSTALL_ERROR_CODE.EMPTY_OPENCLAW_EXTENSIONS,
+    };
+  }
+  if (resolved.status === "invalid") {
+    return {
+      ok: false,
+      error: resolved.error,
+      code: PLUGIN_INSTALL_ERROR_CODE.INVALID_OPENCLAW_EXTENSIONS,
+    };
+  }
+  return {
+    ok: true,
+    entries: resolved.entries,
+  };
+}
+
+export function buildDirectoryInstallResult(
+  params: Pick<
+    Extract<InstallPluginResult, { ok: true }>,
+    "pluginId" | "targetDir" | "manifestName" | "version" | "extensions" | "setup"
+  >,
+): InstallPluginResult {
+  return {
+    ok: true,
+    pluginId: params.pluginId,
+    targetDir: params.targetDir,
+    manifestName: params.manifestName,
+    version: params.version,
+    extensions: params.extensions,
+    ...(params.setup ? { setup: params.setup } : {}),
+  };
+}
+
+export function emitSuccessfulPluginInstallSecurityEvent(
+  result: InstallPluginResult,
+  params: {
+    dryRun?: boolean;
+    mode: "install" | "update";
+    sourceFamily: PluginSecuritySourceFamily;
+    trustedSourceLinkedOfficialInstall?: boolean;
+  },
+) {
+  if (params.dryRun || !result.ok) {
+    return;
+  }
+  emitPluginInstallSecurityEvent({
+    pluginId: result.pluginId,
+    mode: params.mode,
+    sourceFamily: params.sourceFamily,
+    extensionCount: result.extensions.length,
+    hasVersion: Boolean(result.version),
+    trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
+  });
+}
+
+function buildBlockedInstallResult(params: {
+  blocked: NonNullable<NonNullable<InstallSecurityScanResult>["blocked"]>;
+}): Extract<InstallPluginResult, { ok: false }> {
+  return {
+    ok: false,
+    error: params.blocked.reason,
+    ...(params.blocked.installPolicyWarning
+      ? { installPolicyWarning: params.blocked.installPolicyWarning }
+      : {}),
+    ...(params.blocked.code === "security_scan_failed"
+      ? { code: PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED }
+      : params.blocked.code === "security_scan_blocked"
+        ? { code: PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED }
+        : {}),
+  };
+}
+
+export function sourceFamilyForInstallPolicyKind(
+  kind: PluginInstallPolicyRequest["kind"] | undefined,
+  fallback: PluginSecuritySourceFamily,
+): PluginSecuritySourceFamily {
+  switch (kind) {
+    case "plugin-archive":
+      return "archive";
+    case "plugin-dir":
+      return "directory";
+    case "plugin-git":
+      return "git";
+    case "plugin-npm":
+      return "npm";
+    default:
+      return fallback;
+  }
+}
+
+export function sourceFamilyForInstallPolicySource(
+  source: InstallPolicySource | undefined,
+  fallback: PluginSecuritySourceFamily,
+): PluginSecuritySourceFamily {
+  switch (source?.kind) {
+    case "archive":
+    case "file":
+    case "git":
+    case "npm":
+      return source.kind;
+    default:
+      return fallback;
+  }
+}
+
+export type PreparedInstallTarget = {
+  targetPath: string;
+  effectiveMode: "install" | "update";
+};
+
+export async function ensureInstallTargetAvailableForMode(params: {
+  runtime: PluginInstallRuntime;
+  targetPath: string;
+  mode: "install" | "update";
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  return await params.runtime.ensureInstallTargetAvailable({
+    mode: params.mode,
+    targetDir: params.targetPath,
+    alreadyExistsError: `plugin already exists: ${params.targetPath} (delete it first)`,
+  });
+}
+
+export async function resolvePreparedDirectoryInstallTarget(params: {
+  runtime: PluginInstallRuntime;
+  pluginId: string;
+  extensionsDir?: string;
+  requestedMode: "install" | "update";
+  nameEncoder?: (pluginId: string) => string;
+}): Promise<{ ok: true; target: PreparedInstallTarget } | { ok: false; error: string }> {
+  const extensionsDir = params.extensionsDir
+    ? resolveUserPath(params.extensionsDir)
+    : resolveDefaultPluginExtensionsDir();
+  const targetDirResult = await params.runtime.resolveCanonicalInstallTarget({
+    baseDir: extensionsDir,
+    id: params.pluginId,
+    invalidNameMessage: "invalid plugin name: path traversal detected",
+    boundaryLabel: "extensions directory",
+    nameEncoder: params.nameEncoder,
+  });
+  if (!targetDirResult.ok) {
+    return targetDirResult;
+  }
+  return {
+    ok: true,
+    target: {
+      targetPath: targetDirResult.targetDir,
+      effectiveMode: await resolveEffectiveInstallMode({
+        runtime: params.runtime,
+        requestedMode: params.requestedMode,
+        targetPath: targetDirResult.targetDir,
+      }),
+    },
+  };
+}
+
+export async function runInstallSourceScan(params: {
+  subject: string;
+  pluginId?: string;
+  mode?: "install" | "update";
+  sourceFamily?: PluginSecuritySourceFamily;
+  scan: () => Promise<InstallSecurityScanResult | undefined>;
+}): Promise<Extract<InstallPluginResult, { ok: false }> | null> {
+  try {
+    const scanResult = await params.scan();
+    if (scanResult?.blocked) {
+      const reason =
+        scanResult.blocked.code === "security_scan_failed"
+          ? "security_scan_failed"
+          : "security_scan_blocked";
+      emitPluginAuditSecurityEvent({
+        outcome: pluginAuditOutcomeForReason(reason),
+        reason,
+        pluginId: params.pluginId,
+        mode: params.mode,
+        sourceFamily: params.sourceFamily,
+      });
+      return buildBlockedInstallResult({ blocked: scanResult.blocked });
+    }
+    return null;
+  } catch (err) {
+    emitPluginAuditSecurityEvent({
+      outcome: "error",
+      reason: "security_scan_failed",
+      pluginId: params.pluginId,
+      mode: params.mode,
+      sourceFamily: params.sourceFamily,
+    });
+    return {
+      ok: false,
+      error: `${params.subject} installation blocked: code safety scan failed (${String(err)}). Run "openclaw security audit --deep" for details.`,
+      code: PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED,
+    };
+  }
+}
+
+export async function installPluginDirectoryIntoExtensions(
+  params: Parameters<typeof buildDirectoryInstallResult>[0] & {
+    sourceDir: string;
+    logger: PluginInstallLogger;
+    timeoutMs: number;
+    workTimeoutMs?: number | null;
+    mode: "install" | "update";
+    dryRun: boolean;
+    copyErrorPrefix: string;
+    hasDeps: boolean;
+    sourceHardlinks?: "package-manager" | "reject";
+    depsLogMessage: string;
+    afterInstall?: (
+      installedDir: string,
+    ) => Promise<Extract<InstallPluginResult, { ok: false }> | null>;
+    onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
+    beforePersistentApply?: () => void;
+  },
+): Promise<InstallPluginResult> {
+  const runtime = await loadPluginInstallRuntime();
+  const targetDir = params.targetDir;
+  const availability = await ensureInstallTargetAvailableForMode({
+    runtime,
+    targetPath: targetDir,
+    mode: params.mode,
+  });
+  if (!availability.ok) {
+    return availability;
+  }
+
+  if (params.dryRun) {
+    return buildDirectoryInstallResult({ ...params, targetDir });
+  }
+
+  let artifactConsentFailure: { error: unknown } | undefined;
+  const packageInstallParams = {
+    sourceDir: params.sourceDir,
+    targetDir,
+    mode: params.mode,
+    timeoutMs: params.timeoutMs,
+    workTimeoutMs: params.workTimeoutMs,
+    logger: params.logger,
+    copyErrorPrefix: params.copyErrorPrefix,
+    hasDeps: params.hasDeps,
+    omitOpenClawHostDependency: true,
+    sourceHardlinks: params.sourceHardlinks ?? "reject",
+    depsLogMessage: params.depsLogMessage,
+    beforePersistentApply: params.beforePersistentApply,
+    afterInstall: async (installedDir: string) => {
+      const postInstallResult = await params.afterInstall?.(installedDir);
+      if (postInstallResult) {
+        return postInstallResult;
+      }
+      try {
+        // Consent must bind to the final staged bytes, never their mutable source tree.
+        await params.onBeforePluginArtifactCommit?.({
+          pluginId: params.pluginId,
+          ...(params.mode === "update" ? { currentArtifactDir: targetDir } : {}),
+          stagedArtifactDir: installedDir,
+          mode: params.mode,
+        });
+      } catch (error) {
+        // installPackageDir converts hook failures into results; retain the typed rejection.
+        artifactConsentFailure = { error };
+        throw error;
+      }
+      return { ok: true as const };
+    },
+  };
+  const transactionRequest = resolvePluginInstallTransactionRequest(params);
+  const installRes = await runtime.installPackageDir(
+    transactionRequest
+      ? requestDeferredPackageDirInstall(packageInstallParams, transactionRequest.assertOwned)
+      : packageInstallParams,
+  );
+  if (!installRes.ok) {
+    if (artifactConsentFailure) {
+      throw artifactConsentFailure.error;
+    }
+    return installRes;
+  }
+
+  const result = buildDirectoryInstallResult({ ...params, targetDir });
+  const transaction = resolvePackageDirInstallTransaction(installRes);
+  return transaction ? attachPluginInstallTransaction(result, transaction) : result;
+}
+
+export async function resolveEffectiveInstallMode(params: {
+  runtime: PluginInstallRuntime;
+  requestedMode: "install" | "update";
+  targetPath: string;
+}): Promise<"install" | "update"> {
+  if (params.requestedMode !== "update") {
+    return "install";
+  }
+  return (await params.runtime.fileExists(params.targetPath)) ? "update" : "install";
+}

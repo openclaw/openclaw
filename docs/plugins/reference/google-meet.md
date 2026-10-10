@@ -1,22 +1,26 @@
 ---
-summary: "Join Google Meet calls through Chrome or Twilio transports."
+summary: "OpenClaw Google Meet participant plugin for joining calls through Chrome or Twilio transports."
 read_when:
   - You are installing, configuring, or auditing the google-meet plugin
-title: "Google Meet plugin"
+title: "Google Meet plugin reference"
 ---
 
-# Google Meet plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
-Join Google Meet calls through Chrome or Twilio transports.
+OpenClaw Google Meet participant plugin for joining calls through Chrome or Twilio transports.
 
 ## Distribution
 
 - Package: `@openclaw/google-meet`
-- Install route: npm; ClawHub
+- Install route: npm or ClawHub: `clawhub:@openclaw/google-meet`
 
 ## Surface
 
-contracts: tools
+- CLI commands: `openclaw googlemeet`
+- Contracts: `tools`, `transcriptSourceProviders`
 
 ## Related docs
 

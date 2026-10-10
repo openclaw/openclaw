@@ -1,12 +1,10 @@
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 
-export type IMessageReactionSystemEventDecision = {
+type IMessageReactionSystemEventDecision = {
   text: string;
   contextKey: string;
-  route: {
-    sessionKey: string;
-  };
+  route: Parameters<typeof enqueueRoutedSystemEvent>[1];
   reaction: {
     targetGuid?: string;
     action: "added" | "removed";
@@ -20,11 +18,8 @@ export function enqueueIMessageReactionSystemEvent(params: {
   logVerbose?: (message: string) => void;
 }): boolean {
   const { decision, runtime } = params;
-  const queued = enqueueSystemEvent(decision.text, {
-    sessionKey: decision.route.sessionKey,
+  const queued = enqueueRoutedSystemEvent(decision.text, decision.route, {
     contextKey: decision.contextKey,
-    forceSenderIsOwnerFalse: true,
-    trusted: false,
   });
   runtime.log?.(
     `imessage: reaction system event ${queued ? "queued" : "deduped"} session=${

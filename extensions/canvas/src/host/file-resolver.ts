@@ -3,12 +3,6 @@ import { root as fsRoot, FsSafeError } from "openclaw/plugin-sdk/security-runtim
 
 type CanvasOpenResult = Awaited<ReturnType<Awaited<ReturnType<typeof fsRoot>>["open"]>>;
 
-export function normalizeUrlPath(rawPath: string): string {
-  const decoded = decodeURIComponent(rawPath || "/");
-  const normalized = path.posix.normalize(decoded);
-  return normalized.startsWith("/") ? normalized : `/${normalized}`;
-}
-
 function pathEscapesRoot(decodedPath: string): boolean {
   let depth = 0;
   for (const segment of decodedPath.split("/")) {
@@ -41,6 +35,7 @@ function tryNormalizeUrlPath(rawPath: string): string | null {
   return normalized.startsWith("/") ? normalized : `/${normalized}`;
 }
 
+/** Opens a Canvas-hosted file only when the request stays inside the root. */
 export async function resolveFileWithinRoot(
   rootReal: string,
   urlPath: string,
@@ -55,35 +50,19 @@ export async function resolveFileWithinRoot(
   }
   const root = await fsRoot(rootReal);
 
-  const tryOpen = async (relative: string) => {
-    try {
-      return await root.open(relative);
-    } catch (err) {
-      if (err instanceof FsSafeError) {
-        return null;
-      }
-      throw err;
-    }
-  };
-
-  if (normalized.endsWith("/")) {
-    return await tryOpen(path.posix.join(rel, "index.html"));
-  }
-
   try {
+    if (normalized.endsWith("/")) {
+      return await root.open(path.posix.join(rel, "index.html"));
+    }
     const st = await root.stat(rel);
     if (st.isSymbolicLink) {
       return null;
     }
-    if (st.isDirectory) {
-      return await tryOpen(path.posix.join(rel, "index.html"));
-    }
+    return await root.open(st.isDirectory ? path.posix.join(rel, "index.html") : rel);
   } catch (err) {
     if (err instanceof FsSafeError) {
       return null;
     }
     throw err;
   }
-
-  return await tryOpen(rel);
 }

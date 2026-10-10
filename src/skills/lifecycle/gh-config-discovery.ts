@@ -1,0 +1,151 @@
+import { posix as posixPath, win32 as win32Path } from "node:path";
+
+function pathFor(platform: NodeJS.Platform) {
+  return platform === "win32" ? win32Path : posixPath;
+}
+
+// Redirected Gateway homes can hide an operator's existing gh login. Look for
+// the operator config before suggesting authentication under the service HOME.
+// See https://github.com/openclaw/openclaw/issues/78063.
+
+type GhConfigDiscoveryEnv = {
+  HOME?: string;
+  XDG_CONFIG_HOME?: string;
+  GH_CONFIG_DIR?: string;
+  APPDATA?: string;
+  SUDO_USER?: string;
+  USER?: string;
+  USERPROFILE?: string;
+};
+
+export type GhConfigDiscoveryInput = {
+  platform: NodeJS.Platform;
+  env: GhConfigDiscoveryEnv;
+  fileExists: (absolutePath: string) => boolean;
+  // Known operator homes; defaults to a small Linux/macOS set.
+  candidateOperatorHomes?: readonly string[];
+};
+
+type GhConfigDirMismatch = {
+  effectiveConfigDir: string;
+  alternateConfigDir: string;
+  alternateHostsFile: string;
+  alternateHomeHint?: string;
+  suggestedEnvValue: string;
+};
+
+export type GhConfigDiscoveryResult =
+  | { kind: "explicit-gh-config-dir-set"; ghConfigDir: string }
+  | { kind: "no-process-home" }
+  | { kind: "auth-discoverable"; effectiveConfigDir: string }
+  | { kind: "no-known-auth"; effectiveConfigDir: string }
+  | ({ kind: "mismatch" } & GhConfigDirMismatch);
+
+const HOSTS_FILE = "hosts.yml";
+
+// gh config-dir lookup order, matching `gh help environment`.
+function resolveEffectiveGhConfigDir(input: GhConfigDiscoveryInput): string | undefined {
+  const env = input.env;
+  const xdg = env.XDG_CONFIG_HOME?.trim();
+  if (xdg) {
+    return pathFor(input.platform).join(xdg, "gh");
+  }
+  if (input.platform === "win32") {
+    const appData = env.APPDATA?.trim();
+    if (appData) {
+      return pathFor(input.platform).join(appData, "GitHub CLI");
+    }
+    const profile = env.USERPROFILE?.trim();
+    if (profile) {
+      return pathFor(input.platform).join(profile, "AppData", "Roaming", "GitHub CLI");
+    }
+  }
+  const home = env.HOME?.trim();
+  if (!home) {
+    return undefined;
+  }
+  return pathFor(input.platform).join(home, ".config", "gh");
+}
+
+function defaultCandidateOperatorHomes(input: GhConfigDiscoveryInput): string[] {
+  const env = input.env;
+  const homes = new Set<string>();
+  // Common operator HOME on Linux servers running gateway as root.
+  if (input.platform !== "win32") {
+    homes.add("/root");
+  }
+  // sudo invocation: the original shell user's home is exposed through SUDO_USER.
+  if (env.SUDO_USER?.trim()) {
+    const sudoUser = env.SUDO_USER.trim();
+    homes.add(pathFor(input.platform).join("/home", sudoUser));
+    if (input.platform === "darwin") {
+      homes.add(pathFor(input.platform).join("/Users", sudoUser));
+    }
+  }
+  // USER fallback: works when HOME has been redirected but the login user is
+  // still on the env (e.g. systemd User= with PassEnvironment=USER).
+  if (env.USER?.trim()) {
+    const user = env.USER.trim();
+    if (user !== "root") {
+      if (input.platform === "darwin") {
+        homes.add(pathFor(input.platform).join("/Users", user));
+      } else if (input.platform !== "win32") {
+        homes.add(pathFor(input.platform).join("/home", user));
+      }
+    }
+  }
+  const processHome = env.HOME?.trim();
+  if (processHome) {
+    homes.delete(processHome);
+  }
+  return [...homes];
+}
+
+export function detectGhConfigDirMismatch(input: GhConfigDiscoveryInput): GhConfigDiscoveryResult {
+  const env = input.env;
+  if (env.GH_CONFIG_DIR && env.GH_CONFIG_DIR.trim()) {
+    return { kind: "explicit-gh-config-dir-set", ghConfigDir: env.GH_CONFIG_DIR.trim() };
+  }
+  const effective = resolveEffectiveGhConfigDir(input);
+  if (!effective) {
+    return { kind: "no-process-home" };
+  }
+  const effectiveHosts = pathFor(input.platform).join(effective, HOSTS_FILE);
+  if (input.fileExists(effectiveHosts)) {
+    return { kind: "auth-discoverable", effectiveConfigDir: effective };
+  }
+  const candidates = input.candidateOperatorHomes ?? defaultCandidateOperatorHomes(input);
+  for (const home of candidates) {
+    const candidateDir = pathFor(input.platform).join(home, ".config", "gh");
+    if (candidateDir === effective) {
+      continue;
+    }
+    const candidateHosts = pathFor(input.platform).join(candidateDir, HOSTS_FILE);
+    if (input.fileExists(candidateHosts)) {
+      return {
+        kind: "mismatch",
+        effectiveConfigDir: effective,
+        alternateConfigDir: candidateDir,
+        alternateHostsFile: candidateHosts,
+        alternateHomeHint: home,
+        suggestedEnvValue: candidateDir,
+      };
+    }
+  }
+  return { kind: "no-known-auth", effectiveConfigDir: effective };
+}
+
+export function formatGhConfigDirMismatchHint(mismatch: GhConfigDirMismatch): string[] {
+  const lines: string[] = [
+    "GitHub CLI auth was found at a different HOME than the one this OpenClaw process uses.",
+    `  Process gh config dir: ${mismatch.effectiveConfigDir}`,
+    `  Authenticated config:  ${mismatch.alternateConfigDir} (contains ${HOSTS_FILE})`,
+  ];
+  if (mismatch.alternateHomeHint) {
+    lines.push(`  Authenticated HOME:    ${mismatch.alternateHomeHint}`);
+  }
+  lines.push(
+    `  Fix: set GH_CONFIG_DIR=${mismatch.suggestedEnvValue} on the OpenClaw service environment, then restart the gateway.`,
+  );
+  return lines;
+}

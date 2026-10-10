@@ -1,8 +1,6 @@
+import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
+
+/** Read the optional optimistic-write base hash from a gateway method payload. */
 export function resolveBaseHashParam(params: unknown): string | null {
-  const raw = (params as { baseHash?: unknown })?.baseHash;
-  if (typeof raw !== "string") {
-    return null;
-  }
-  const trimmed = raw.trim();
-  return trimmed ? trimmed : null;
+  return normalizeNullableString((params as { baseHash?: unknown })?.baseHash);
 }

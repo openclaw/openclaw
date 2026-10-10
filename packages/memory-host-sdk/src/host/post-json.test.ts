@@ -1,6 +1,9 @@
+// Memory Host SDK tests cover post json behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withTestTimeout } from "../../../../test/helpers/promise.js";
 import { postJson } from "./post-json.js";
 import { withRemoteHttpResponse } from "./remote-http.js";
+import { createPendingResponse } from "./response-snippet.test-harness.js";
 
 vi.mock("./remote-http.js", () => ({
   withRemoteHttpResponse: vi.fn(),
@@ -9,21 +12,29 @@ vi.mock("./remote-http.js", () => ({
 const remoteHttpMock = vi.mocked(withRemoteHttpResponse);
 
 function jsonResponse(payload: unknown, status = 200): Response {
-  return {
-    ok: status >= 200 && status < 300,
-    status,
-    json: async () => payload,
-    text: async () => JSON.stringify(payload),
-  } as Response;
+  return new Response(JSON.stringify(payload), { status });
 }
 
 function textResponse(body: string, status: number): Response {
-  return {
-    ok: status >= 200 && status < 300,
-    status,
-    json: async () => JSON.parse(body) as unknown,
-    text: async () => body,
-  } as Response;
+  return new Response(body, { status });
+}
+
+function streamingTextResponse(params: {
+  body: string;
+  status: number;
+  headers?: HeadersInit;
+  onCancel: () => void;
+}): Response {
+  const encoded = new TextEncoder().encode(params.body);
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoded);
+    },
+    cancel() {
+      params.onCancel();
+    },
+  });
+  return new Response(stream, { status: params.status, headers: params.headers });
 }
 
 describe("postJson", () => {
@@ -31,8 +42,10 @@ describe("postJson", () => {
     vi.clearAllMocks();
   });
 
-  it("parses JSON payload on successful response", async () => {
+  it("forwards the abort signal and parses JSON on success", async () => {
+    const controller = new AbortController();
     remoteHttpMock.mockImplementationOnce(async (params) => {
+      expect(params.signal).toBe(controller.signal);
       return await params.onResponse(jsonResponse({ data: [{ embedding: [1, 2] }] }));
     });
 
@@ -40,6 +53,7 @@ describe("postJson", () => {
       url: "https://memory.example/v1/post",
       headers: { Authorization: "Bearer test" },
       body: { input: ["x"] },
+      signal: controller.signal,
       errorPrefix: "post failed",
       parse: (payload) => payload,
     });
@@ -47,45 +61,93 @@ describe("postJson", () => {
     expect(result).toEqual({ data: [{ embedding: [1, 2] }] });
   });
 
-  it("forwards abort signals to the remote HTTP request", async () => {
+  it.each([200, 429])("aborts response body reads for HTTP %s", async (status) => {
+    const fixture = createPendingResponse({ status });
     const controller = new AbortController();
+    const expected = new Error("body aborted");
     remoteHttpMock.mockImplementationOnce(async (params) => {
-      expect(params.signal).toBe(controller.signal);
-      return await params.onResponse(jsonResponse({ ok: true }));
+      return await params.onResponse(fixture.response);
     });
 
-    await postJson({
+    const read = postJson({
       url: "https://memory.example/v1/post",
       headers: {},
       body: {},
       signal: controller.signal,
       errorPrefix: "post failed",
-      parse: (payload) => payload,
+      parse: () => ({}),
     });
+    const settled = read.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    try {
+      await withTestTimeout(fixture.readStarted, 1_000, "POST JSON read did not start");
+      expect(fixture.response.body?.locked).toBe(true);
+      controller.abort(expected);
+
+      await expect(withTestTimeout(settled, 1_000, "POST JSON abort did not settle")).resolves.toBe(
+        expected,
+      );
+      expect(fixture.cancel).toHaveBeenCalledOnce();
+      expect(fixture.response.body?.locked).toBe(false);
+    } finally {
+      controller.abort(expected);
+      fixture.dispose();
+      await withTestTimeout(settled, 1_000, "POST JSON cleanup did not settle");
+    }
   });
 
-  it("attaches status to thrown error when requested", async () => {
+  it("preserves HTTP cooldown and structured quota metadata", async () => {
     remoteHttpMock.mockImplementationOnce(async (params) => {
-      return await params.onResponse(textResponse("bad gateway", 502));
+      return await params.onResponse(
+        new Response(
+          JSON.stringify({ error: { code: "insufficient_quota", message: "Quota exhausted" } }),
+          { status: 429, headers: { "Retry-After": "18" } },
+        ),
+      );
     });
 
-    let error: unknown;
-    try {
-      await postJson({
+    await expect(
+      postJson({
         url: "https://memory.example/v1/post",
         headers: {},
         body: {},
         errorPrefix: "post failed",
-        attachStatus: true,
         parse: () => ({}),
-      });
-    } catch (caught) {
-      error = caught;
-    }
+      }),
+    ).rejects.toMatchObject({
+      status: 429,
+      statusCode: 429,
+      errorCode: "insufficient_quota",
+      retryAfterMs: 18_000,
+    });
+  });
 
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toBe("post failed: 502 bad gateway");
-    expect((error as { status?: unknown }).status).toBe(502);
+  it("bounds non-ok response bodies before formatting the error", async () => {
+    let canceled = false;
+    remoteHttpMock.mockImplementationOnce(async (params) => {
+      return await params.onResponse(
+        streamingTextResponse({
+          body: "x".repeat(12_000),
+          status: 502,
+          onCancel: () => {
+            canceled = true;
+          },
+        }),
+      );
+    });
+
+    await expect(
+      postJson({
+        url: "https://memory.example/v1/post",
+        headers: {},
+        body: {},
+        errorPrefix: "post failed",
+        parse: () => ({}),
+      }),
+    ).rejects.toMatchObject({ status: 502, errorBody: `${"x".repeat(499)}…` });
+    expect(canceled).toBe(true);
   });
 
   it("wraps malformed success JSON with the request error prefix", async () => {
@@ -102,5 +164,82 @@ describe("postJson", () => {
         parse: () => ({}),
       }),
     ).rejects.toThrow("post failed: malformed JSON response");
+  });
+
+  it("rejects successful JSON responses with oversized content-length", async () => {
+    let canceled = false;
+    remoteHttpMock.mockImplementationOnce(async (params) => {
+      return await params.onResponse(
+        streamingTextResponse({
+          body: "{}",
+          status: 200,
+          headers: { "content-length": "00032" },
+          onCancel: () => {
+            canceled = true;
+          },
+        }),
+      );
+    });
+
+    await expect(
+      postJson({
+        url: "https://memory.example/v1/post",
+        headers: {},
+        body: {},
+        errorPrefix: "post failed",
+        maxResponseBytes: 8,
+        parse: () => ({}),
+      }),
+    ).rejects.toThrow("post failed: response body too large: 32 bytes (limit: 8 bytes)");
+    expect(canceled).toBe(true);
+  });
+
+  it("accepts leading-zero content-length values on successful JSON responses", async () => {
+    remoteHttpMock.mockImplementationOnce(async (params) => {
+      return await params.onResponse(
+        new Response("{}", {
+          status: 200,
+          headers: { "content-length": "0002" },
+        }),
+      );
+    });
+
+    const result = await postJson({
+      url: "https://memory.example/v1/post",
+      headers: {},
+      body: {},
+      errorPrefix: "post failed",
+      maxResponseBytes: 8,
+      parse: (payload) => payload,
+    });
+
+    expect(result).toEqual({});
+  });
+
+  it("cancels successful JSON responses that exceed the streaming byte cap", async () => {
+    let canceled = false;
+    remoteHttpMock.mockImplementationOnce(async (params) => {
+      return await params.onResponse(
+        streamingTextResponse({
+          body: `{"data":"${"x".repeat(32)}"}`,
+          status: 200,
+          onCancel: () => {
+            canceled = true;
+          },
+        }),
+      );
+    });
+
+    await expect(
+      postJson({
+        url: "https://memory.example/v1/post",
+        headers: {},
+        body: {},
+        errorPrefix: "post failed",
+        maxResponseBytes: 16,
+        parse: () => ({}),
+      }),
+    ).rejects.toThrow("post failed: response body too large");
+    expect(canceled).toBe(true);
   });
 });

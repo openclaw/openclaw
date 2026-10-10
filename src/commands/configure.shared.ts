@@ -2,54 +2,35 @@ import {
   confirm as clackConfirm,
   intro as clackIntro,
   outro as clackOutro,
+  password as clackPassword,
   select as clackSelect,
   text as clackText,
 } from "@clack/prompts";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
-import { stylePromptHint, stylePromptMessage, stylePromptTitle } from "../terminal/prompt-style.js";
-
-export const CONFIGURE_WIZARD_SECTIONS = [
-  "workspace",
-  "model",
-  "web",
-  "gateway",
-  "daemon",
-  "channels",
-  "plugins",
-  "skills",
-  "health",
-] as const;
-
-export type WizardSection = (typeof CONFIGURE_WIZARD_SECTIONS)[number];
+import { styleSelectParams } from "../../packages/terminal-core/src/prompt-select-styled-params.js";
+import {
+  stylePromptMessage,
+  stylePromptTitle,
+} from "../../packages/terminal-core/src/prompt-style.js";
 
 export function parseConfigureWizardSections(raw: unknown): {
   sections: WizardSection[];
   invalid: string[];
 } {
-  const sectionsRaw: string[] = Array.isArray(raw) ? normalizeStringEntries(raw) : [];
-  if (sectionsRaw.length === 0) {
-    return { sections: [], invalid: [] };
+  const sections: WizardSection[] = [];
+  const invalid: string[] = [];
+  for (const value of Array.isArray(raw) ? raw : []) {
+    const section = String(value).trim();
+    const known = CONFIGURE_WIZARD_SECTIONS.find((candidate) => candidate === section);
+    if (known) {
+      sections.push(known);
+    } else {
+      invalid.push(section);
+    }
   }
-
-  const invalid = sectionsRaw.filter((s) => !CONFIGURE_WIZARD_SECTIONS.includes(s as never));
-  const sections = sectionsRaw.filter((s): s is WizardSection =>
-    CONFIGURE_WIZARD_SECTIONS.includes(s as never),
-  );
   return { sections, invalid };
 }
 
-export type ChannelsWizardMode = "configure" | "remove";
-
-export type ConfigureWizardParams = {
-  command: "configure" | "update";
-  sections?: WizardSection[];
-};
-
-export const CONFIGURE_SECTION_OPTIONS: Array<{
-  value: WizardSection;
-  label: string;
-  hint: string;
-}> = [
+export const CONFIGURE_SECTION_OPTIONS = [
   { value: "workspace", label: "Workspace", hint: "Set workspace + sessions" },
   { value: "model", label: "Model", hint: "Pick provider + credentials" },
   { value: "web", label: "Web tools", hint: "Configure web search (Perplexity/Brave) + fetch" },
@@ -71,25 +52,21 @@ export const CONFIGURE_SECTION_OPTIONS: Array<{
     label: "Health check",
     hint: "Run gateway + channel checks",
   },
-];
+] as const;
+
+export type WizardSection = (typeof CONFIGURE_SECTION_OPTIONS)[number]["value"];
+export const CONFIGURE_WIZARD_SECTIONS = CONFIGURE_SECTION_OPTIONS.map((option) => option.value);
 
 export const intro = (message: string) => clackIntro(stylePromptTitle(message) ?? message);
 export const outro = (message: string) => clackOutro(stylePromptTitle(message) ?? message);
-export const text = (params: Parameters<typeof clackText>[0]) =>
-  clackText({
-    ...params,
-    message: stylePromptMessage(params.message),
-  });
-export const confirm = (params: Parameters<typeof clackConfirm>[0]) =>
-  clackConfirm({
-    ...params,
-    message: stylePromptMessage(params.message),
-  });
-export const select = <T>(params: Parameters<typeof clackSelect<T>>[0]) =>
-  clackSelect({
-    ...params,
-    message: stylePromptMessage(params.message),
-    options: params.options.map((opt) =>
-      opt.hint === undefined ? opt : { ...opt, hint: stylePromptHint(opt.hint) },
-    ),
-  });
+function stylePromptParams<Params extends { message: string }>(params: Params): Params {
+  return { ...params, message: stylePromptMessage(params.message) };
+}
+
+export const text: typeof clackText = (params) => clackText(stylePromptParams(params));
+/** Styled password prompt wrapper. Echoes bullets so secrets never appear in cleartext. */
+export const password: typeof clackPassword = (params) => clackPassword(stylePromptParams(params));
+export const confirm: typeof clackConfirm = (params) => clackConfirm(stylePromptParams(params));
+export const select = <T>(
+  params: Parameters<typeof clackSelect<T>>[0],
+): ReturnType<typeof clackSelect<T>> => clackSelect(styleSelectParams(params));

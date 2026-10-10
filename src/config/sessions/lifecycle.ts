@@ -1,114 +1,129 @@
-import fs from "node:fs";
+// Session lifecycle timestamps prefer store metadata and fall back to transcript headers.
 import {
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
-  type SessionFilePathOptions,
-} from "./paths.js";
-import type { SessionEntry } from "./types.js";
+  resolveTimestamp,
+  resolveSessionLifecycleTimestampsWithHeader,
+} from "./lifecycle-timestamps.js";
+import type { SessionLifecycleTimestamps } from "./lifecycle.types.js";
+import { canonicalizeMainSessionAlias } from "./main-session.js";
+import { loadTranscriptHeaderSync, readTranscriptMutationStateSync } from "./session-accessor.js";
+import { isTerminalSessionStatus, type SessionEntry, type SessionScope } from "./types.js";
+export {
+  createSessionWorkStartChangedError,
+  isSessionWorkStartInvalidatedError,
+  SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE,
+  SessionRestartRecoveryTombstoneError,
+  SessionWorkStartChangedError,
+  SessionWorkStartInvalidatedError,
+} from "./work-start-error.js";
 
-type SessionLifecycleEntry = Pick<
-  SessionEntry,
-  "sessionId" | "sessionFile" | "sessionStartedAt" | "lastInteractionAt" | "updatedAt"
->;
+export {
+  isRestartRecoveryTombstone,
+  resolveSessionWorkStartError,
+  SESSION_LIFECYCLE_CHANGED_ERROR_REASON,
+} from "./session-work-start.js";
 
-function resolveTimestamp(value: number | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
-}
+// Transcript headers are read lazily to recover startedAt without parsing full files.
 
-function parseTimestampMs(value: unknown): number | undefined {
-  if (typeof value === "number") {
-    return resolveTimestamp(value);
-  }
-  if (typeof value !== "string" || !value.trim()) {
-    return undefined;
-  }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
-}
-
-function readFirstLine(filePath: string): string | undefined {
-  try {
-    const fd = fs.openSync(filePath, "r");
-    try {
-      const buffer = Buffer.alloc(8192);
-      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
-      if (bytesRead <= 0) {
-        return undefined;
-      }
-      const chunk = buffer.subarray(0, bytesRead).toString("utf8");
-      const newline = chunk.indexOf("\n");
-      return newline >= 0 ? chunk.slice(0, newline) : chunk;
-    } finally {
-      fs.closeSync(fd);
-    }
-  } catch {
-    return undefined;
-  }
-}
-
-export function readSessionHeaderStartedAtMs(params: {
-  entry: SessionLifecycleEntry | undefined;
-  agentId?: string;
+type TerminalMainSessionTranscriptRegistryParams = {
+  entry: SessionEntry | undefined;
+  sessionScope?: SessionScope;
+  sessionKey?: string;
+  agentId: string;
+  mainKey?: string;
   storePath?: string;
-  pathOptions?: SessionFilePathOptions;
-}): number | undefined {
-  const sessionId = params.entry?.sessionId?.trim();
-  if (!sessionId) {
-    return undefined;
-  }
-  const pathOptions =
-    params.pathOptions ??
-    resolveSessionFilePathOptions({
-      agentId: params.agentId,
-      storePath: params.storePath,
-    });
-  let sessionFile: string;
-  try {
-    sessionFile = resolveSessionFilePath(sessionId, params.entry, pathOptions);
-  } catch {
-    return undefined;
-  }
-  const firstLine = readFirstLine(sessionFile);
-  if (!firstLine) {
-    return undefined;
-  }
-  try {
-    const header = JSON.parse(firstLine) as {
-      type?: unknown;
-      id?: unknown;
-      timestamp?: unknown;
-    };
-    if (header.type !== "session") {
-      return undefined;
-    }
-    if (typeof header.id === "string" && header.id.trim() && header.id !== sessionId) {
-      return undefined;
-    }
-    return parseTimestampMs(header.timestamp);
-  } catch {
-    return undefined;
-  }
+};
+
+type TerminalMainSessionTranscriptRegistryCheck = {
+  sessionId: string;
+  registryTimestampMs: number;
+};
+
+function resolvePositiveTimestamp(value: number | undefined): number | undefined {
+  const timestampMs = resolveTimestamp(value);
+  return timestampMs !== undefined && timestampMs > 0 ? timestampMs : undefined;
 }
 
 export function resolveSessionLifecycleTimestamps(params: {
-  entry: SessionLifecycleEntry | undefined;
+  entry: Parameters<typeof resolveSessionLifecycleTimestampsWithHeader>[0]["entry"];
   agentId?: string;
+  sessionKey?: string;
   storePath?: string;
-  pathOptions?: SessionFilePathOptions;
-}): { sessionStartedAt?: number; lastInteractionAt?: number } {
-  const entry = params.entry;
-  if (!entry) {
-    return {};
+  readHeader?: (sessionId: string) => unknown;
+}): SessionLifecycleTimestamps {
+  return resolveSessionLifecycleTimestampsWithHeader({
+    ...params,
+    readHeader: (scope) =>
+      params.readHeader ? params.readHeader(scope.sessionId) : loadTranscriptHeaderSync(scope),
+  });
+}
+
+function resolveTerminalMainSessionTranscriptRegistryCheck(
+  params: TerminalMainSessionTranscriptRegistryParams,
+): TerminalMainSessionTranscriptRegistryCheck | undefined {
+  if (!params.entry || !params.sessionKey) {
+    return undefined;
   }
-  return {
-    sessionStartedAt:
-      resolveTimestamp(entry.sessionStartedAt) ??
-      readSessionHeaderStartedAtMs({
-        entry,
-        agentId: params.agentId,
-        storePath: params.storePath,
-        pathOptions: params.pathOptions,
-      }),
-    lastInteractionAt: resolveTimestamp(entry.lastInteractionAt),
-  };
+  const configuredMainSessionKey = canonicalizeMainSessionAlias({
+    cfg: { session: { scope: params.sessionScope, mainKey: params.mainKey } },
+    agentId: params.agentId,
+    sessionKey: params.mainKey ?? "main",
+  });
+  const candidateSessionKey = canonicalizeMainSessionAlias({
+    cfg: { session: { scope: params.sessionScope, mainKey: params.mainKey } },
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+  });
+  if (candidateSessionKey !== configuredMainSessionKey) {
+    return undefined;
+  }
+  if (!isTerminalSessionStatus(params.entry.status)) {
+    return undefined;
+  }
+  if (params.entry.status === "done") {
+    // Successful rows stay reusable: transcript writes can land after registry
+    // updates without making the session stale.
+    return undefined;
+  }
+  if (params.entry.status === "failed") {
+    // Failed rows with a present transcript stay reusable for retry/recovery.
+    // Callers already rotate failed rows when the transcript is missing.
+    return undefined;
+  }
+  // updatedAt is touched after managed transcript appends; endedAt can predate
+  // healthy post-run transcript writes and would rotate valid sessions.
+  const registryTimestampMs = resolvePositiveTimestamp(params.entry.updatedAt);
+  if (registryTimestampMs === undefined) {
+    return undefined;
+  }
+  const sessionId = typeof params.entry.sessionId === "string" ? params.entry.sessionId.trim() : "";
+  if (!sessionId) {
+    return undefined;
+  }
+  return { sessionId, registryTimestampMs };
+}
+
+export function hasTerminalMainSessionTranscriptNewerThanRegistrySync(
+  params: TerminalMainSessionTranscriptRegistryParams,
+): boolean {
+  const check = resolveTerminalMainSessionTranscriptRegistryCheck(params);
+  if (!check) {
+    return false;
+  }
+  try {
+    // Runtime transcripts are SQLite-only. Legacy-looking sessionFile values still
+    // resolve through agent/session/store scope, so a file stat would read stale state.
+    const mutation = readTranscriptMutationStateSync({
+      agentId: params.agentId,
+      sessionId: check.sessionId,
+      storePath: params.storePath,
+    });
+    if (mutation.updatedAt === null) {
+      return false;
+    }
+    const transcriptMutationAtMs = Math.floor(mutation.updatedAt);
+    const registryTimestampMs = Math.floor(mutation.observedAt ?? check.registryTimestampMs);
+    return Number.isFinite(transcriptMutationAtMs) && transcriptMutationAtMs > registryTimestampMs;
+  } catch {
+    return false;
+  }
 }

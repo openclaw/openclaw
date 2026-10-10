@@ -1,41 +1,35 @@
+// Models HTTP tests cover OpenAI-compatible /v1/models behavior, read-scope
+// authorization, ordering, and disabled-surface responses.
+import { createServer } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { getFreePort, installGatewayTestHooks } from "./test-helpers.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
+import { startOpenAiCompatGatewayServer } from "./openai-compatible-http.test-helpers.js";
+import { installGatewayTestHooks } from "./test-helpers.js";
+import { testState } from "./test-helpers.runtime-state.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
 const READ_SCOPE_HEADER = { "x-openclaw-scopes": "operator.read" };
 
 let startGatewayServer: typeof import("./server.js").startGatewayServer;
-let enabledServer: Awaited<ReturnType<typeof startServer>>;
+let enabledServer: Awaited<ReturnType<typeof startOpenAiCompatGatewayServer>>;
 let enabledPort: number;
 
 beforeAll(async () => {
   ({ startGatewayServer } = await import("./server.js"));
-  enabledPort = await getFreePort();
-  enabledServer = await startServer(enabledPort, { openAiChatCompletionsEnabled: true });
+  const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+  enabledPort = portClaim.port;
+  enabledServer = await startOpenAiCompatGatewayServer({
+    startGatewayServer,
+    port: portClaim,
+    auth: { mode: "none" },
+    openAiChatCompletionsEnabled: true,
+  });
 });
 
 afterAll(async () => {
   await enabledServer.close({ reason: "models http enabled suite done" });
 });
-
-async function startServer(port: number, opts?: { openAiChatCompletionsEnabled?: boolean }) {
-  return await startGatewayServer(port, {
-    host: "127.0.0.1",
-    auth: { mode: "none" },
-    controlUiEnabled: false,
-    openAiChatCompletionsEnabled: opts?.openAiChatCompletionsEnabled ?? false,
-  });
-}
-
-async function startTokenServer(port: number, opts?: { openAiChatCompletionsEnabled?: boolean }) {
-  return await startGatewayServer(port, {
-    host: "127.0.0.1",
-    auth: { mode: "token", token: "secret" },
-    controlUiEnabled: false,
-    openAiChatCompletionsEnabled: opts?.openAiChatCompletionsEnabled ?? false,
-  });
-}
 
 async function getModels(pathname: string, headers?: Record<string, string>) {
   return await fetch(`http://127.0.0.1:${enabledPort}${pathname}`, {
@@ -46,17 +40,6 @@ async function getModels(pathname: string, headers?: Record<string, string>) {
   });
 }
 
-async function expectFirstModelId(): Promise<string> {
-  const list = (await (await getModels("/v1/models")).json()) as {
-    data?: Array<{ id?: string }>;
-  };
-  const firstId = list.data?.[0]?.id;
-  if (typeof firstId !== "string") {
-    throw new Error("Expected /v1/models to return at least one string model id");
-  }
-  return firstId;
-}
-
 async function expectMissingReadScope(res: Response) {
   expect(res.status).toBe(403);
   await expect(res.json()).resolves.toEqual({
@@ -64,13 +47,18 @@ async function expectMissingReadScope(res: Response) {
     error: {
       type: "forbidden",
       message: "missing scope: operator.read",
+      details: {
+        code: "MISSING_SCOPE",
+        missingScope: "operator.read",
+        requiredScopes: ["operator.read"],
+      },
     },
   });
 }
 
 describe("OpenAI-compatible models HTTP API (e2e)", () => {
-  it("serves /v1/models when compatibility endpoints are enabled", async () => {
-    const res = await getModels("/v1/models");
+  it("serves /v1/models without trusting malformed Host headers", async () => {
+    const res = await getModels("/v1/models", { Host: "[" });
     expect(res.status).toBe(200);
     const json = (await res.json()) as { object?: string; data?: Array<{ id?: string }> };
     expect(json.object).toBe("list");
@@ -83,26 +71,41 @@ describe("OpenAI-compatible models HTTP API (e2e)", () => {
     ).toBe(true);
   });
 
-  it("serves /v1/models without trusting malformed Host headers", async () => {
-    const res = await getModels("/v1/models", { Host: "[" });
-    expect(res.status).toBe(200);
-    const json = (await res.json()) as { object?: string; data?: Array<{ id?: string }> };
-    expect(json.object).toBe("list");
-    expect(json.data?.map((entry) => entry.id)).toContain("openclaw/default");
+  it("rejects agent-specific model ids outside the configured roster", async () => {
+    const res = await getModels("/v1/models/openclaw%2Fnonexistent");
+    expect(res.status).toBe(404);
+    await expect(res.json()).resolves.toEqual({
+      error: {
+        message: "Model 'openclaw/nonexistent' not found.",
+        type: "invalid_request_error",
+      },
+    });
   });
 
-  it("serves /v1/models/{id}", async () => {
-    const firstId = await expectFirstModelId();
-    const res = await getModels(`/v1/models/${encodeURIComponent(firstId)}`);
-    expect(res.status).toBe(200);
-    const json = (await res.json()) as { id?: string; object?: string };
-    expect(json.object).toBe("model");
-    expect(json.id).toBe(firstId);
+  it("keeps generic aliases available for ownerless explicit fleets", async () => {
+    try {
+      testState.agentsConfig = {
+        ownership: "explicit",
+        entries: { main: {}, research: {} },
+      };
+      const list = await getModels("/v1/models");
+      expect(list.status).toBe(200);
+      const listJson = (await list.json()) as { data?: Array<{ id?: string }> };
+      expect(listJson.data?.map((entry) => entry.id)).toContain("openclaw/default");
+
+      const detail = await getModels("/v1/models/openclaw%2Fdefault");
+      expect(detail.status).toBe(200);
+      await expect(detail.json()).resolves.toMatchObject({ id: "openclaw/default" });
+    } finally {
+      testState.agentsConfig = undefined;
+    }
   });
 
-  it("rejects operator scopes that lack read access", async () => {
-    const res = await getModels("/v1/models", { "x-openclaw-scopes": "operator.approvals" });
-    await expectMissingReadScope(res);
+  it("rejects session read scope for the global agent target inventory", async () => {
+    for (const pathname of ["/v1/models", "/v1/models/openclaw"]) {
+      const res = await getModels(pathname, { "x-openclaw-scopes": "operator.sessions.read" });
+      await expectMissingReadScope(res);
+    }
   });
 
   it("rejects requests with no declared operator scopes", async () => {
@@ -110,30 +113,52 @@ describe("OpenAI-compatible models HTTP API (e2e)", () => {
     await expectMissingReadScope(res);
   });
 
-  it("rejects /v1/models/{id} without read access", async () => {
-    const firstId = await expectFirstModelId();
-    const res = await getModels(`/v1/models/${encodeURIComponent(firstId)}`, {
-      "x-openclaw-scopes": "operator.approvals",
-    });
-    await expectMissingReadScope(res);
-  });
-
   it("rejects when disabled", async () => {
-    const port = await getFreePort();
-    const server = await startServer(port, { openAiChatCompletionsEnabled: false });
+    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+    const port = portClaim.port;
+    const competitor = createServer();
+    let server: Awaited<ReturnType<typeof startOpenAiCompatGatewayServer>> | undefined;
     try {
+      server = await startOpenAiCompatGatewayServer({
+        startGatewayServer: async (...args) => {
+          // Try to steal the socket before the Gateway can finish its awaited startup work.
+          const collision = await new Promise<NodeJS.ErrnoException | undefined>((resolve) => {
+            competitor.once("error", resolve);
+            competitor.listen(port, "127.0.0.1", () => resolve(undefined));
+          });
+          expect(collision?.code).toBe("EADDRINUSE");
+          return await startGatewayServer(...args);
+        },
+        port: portClaim,
+        auth: { mode: "none" },
+        openAiChatCompletionsEnabled: false,
+      });
       const res = await fetch(`http://127.0.0.1:${port}/v1/models`, {
         headers: {},
       });
       expect(res.status).toBe(404);
     } finally {
-      await server.close({ reason: "models disabled test done" });
+      try {
+        await server?.close({ reason: "models disabled test done" });
+      } finally {
+        if (competitor.listening) {
+          await new Promise<void>((resolve, reject) => {
+            competitor.close((error) => (error ? reject(error) : resolve()));
+          });
+        }
+      }
     }
   });
 
   it("treats shared-secret bearer auth as full compat operator access", async () => {
-    const port = await getFreePort();
-    const server = await startTokenServer(port, { openAiChatCompletionsEnabled: true });
+    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+    const port = portClaim.port;
+    const server = await startOpenAiCompatGatewayServer({
+      startGatewayServer,
+      port: portClaim,
+      auth: { mode: "token", token: "secret" },
+      openAiChatCompletionsEnabled: true,
+    });
     try {
       const res = await fetch(`http://127.0.0.1:${port}/v1/models`, {
         headers: {

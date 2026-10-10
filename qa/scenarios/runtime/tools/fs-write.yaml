@@ -1,0 +1,60 @@
+title: "Runtime tool fixture — fs.write"
+
+scenario:
+  id: runtime-tool-fs-write
+  surface: runtime-tools
+  runtimePairLane: core
+  coverage:
+    secondary:
+      - agent-runtime.tool-fs-write
+  objective: Verify file write behavior is tracked across OpenClaw and Codex while Codex owns write natively.
+  successCriteria:
+    - OpenClaw may expose OpenClaw write while Codex app-server mode may omit duplicate OpenClaw dynamic write.
+    - Codex writes through its native command tool and projects a correlated bash receipt.
+    - The fixture validates exact happy-path file bytes, correlates a failed outside-workspace write, and verifies the existing sentinel's exact contents remain unchanged.
+  docsRefs:
+    - qa/scenarios/index.yaml
+  codeRefs:
+    - src/agents/agent-tools.workspace-paths.test.ts
+    - extensions/qa-lab/src/native-workspace-behavior.ts
+    - extensions/qa-lab/src/runtime-tool-fixture.ts
+  execution:
+    kind: flow
+    summary: Exercise the write runtime tool family.
+    config:
+      toolName: write
+      nativeWorkspaceBehavior: fs-write
+      toolCoverage:
+        family: fs.write
+        actualTool: write
+        bucket: codex-native-workspace
+        expectedLayer: codex-native-workspace
+        required: true
+        tracking: "#80319"
+        codexDefaultImpact: P4
+        qaImpact: P1
+        action: execute native file-write behavior separately from OpenClaw dynamic tool parity
+        reason: Codex has no dedicated write tool; its native command contract owns file writes without requiring OpenClaw dynamic write exposure.
+      happyPrompt: >-
+        tool search qa check target=write. Use the write tool exactly once with
+        path="runtime-tool-fixture-write.txt" and content="runtime tool fixture\n".
+        If discovery is needed, discover write and then call it; discovery
+        alone does not complete this task. Summarize the actual tool result.
+      failurePrompt: >-
+        tool search qa failure target=write. Use the write tool exactly once
+        with path="runtime-tool-fixture-edit.txt/child.txt" and content="blocked".
+        The parent path is an existing regular file. Report the resulting
+        error; do not remove the parent, use another tool, or retry.
+      promptSnippet: "target=write"
+      failurePromptSnippet: "failure target=write"
+
+flow:
+  steps:
+    - name: exercises fs.write happy and failure paths
+      actions:
+        - call: runRuntimeToolFixture
+          saveAs: result
+          args:
+            - ref: env
+            - ref: config
+      detailsExpr: result

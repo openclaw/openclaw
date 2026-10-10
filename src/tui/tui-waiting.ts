@@ -17,12 +17,8 @@ export const defaultWaitingPhrases = [
   "conjuring",
 ];
 
-export function pickWaitingPhrase(tick: number, phrases = defaultWaitingPhrases) {
-  const idx = Math.floor(tick / 10) % phrases.length;
-  return phrases[idx] ?? phrases[0] ?? "waiting";
-}
-
-export function shimmerText(theme: MinimalTheme, text: string, tick: number) {
+/** Applies a moving highlight window to status text. */
+function shimmerText(theme: MinimalTheme, text: string, tick: number) {
   const width = 6;
   const hi = (ch: string) => theme.bold(theme.accentSoft(ch));
 
@@ -32,7 +28,7 @@ export function shimmerText(theme: MinimalTheme, text: string, tick: number) {
 
   let out = "";
   for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
+    const ch = text.charAt(i);
     out += i >= start && i <= end ? hi(ch) : theme.dim(ch);
   }
   return out;
@@ -45,7 +41,8 @@ export function buildWaitingStatusMessage(params: {
   connectionStatus: string;
   phrases?: string[];
 }) {
-  const phrase = pickWaitingPhrase(params.tick, params.phrases);
+  const phrases = params.phrases ?? defaultWaitingPhrases;
+  const phrase = phrases[Math.floor(params.tick / 10) % phrases.length] ?? phrases[0] ?? "waiting";
   const cute = shimmerText(params.theme, `${phrase}…`, params.tick);
   return `${cute} • ${params.elapsed} | ${params.connectionStatus}`;
 }

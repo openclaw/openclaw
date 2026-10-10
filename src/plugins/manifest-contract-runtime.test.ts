@@ -1,3 +1,4 @@
+/** Tests manifest contract runtime resolution across bundled and installed plugin metadata. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadPluginMetadataSnapshot = vi.hoisted(() => vi.fn());
@@ -55,14 +56,13 @@ describe("resolveManifestContractRuntimePluginResolution", () => {
         contract: "webSearchProviders",
         value: "search",
       }),
-    ).toEqual({
+    ).toMatchObject({
       pluginIds: ["bundled-search", "external-search"],
       bundledCompatPluginIds: ["bundled-search"],
     });
     expect(loadPluginMetadataSnapshot).toHaveBeenCalledWith({
       config: {},
       env: process.env,
-      preferPersisted: false,
     });
   });
 });

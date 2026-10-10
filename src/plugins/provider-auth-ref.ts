@@ -1,31 +1,26 @@
+/** Resolves provider auth secret refs from env, file, exec, and store-backed providers. */
+import {
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.js";
 import { isValidEnvSecretRefId, type SecretRef } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { encodeJsonPointerToken } from "../secrets/json-pointer.js";
-import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
+import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
 import {
   formatExecSecretRefIdValidationMessage,
   isValidExecSecretRefId,
   isValidFileSecretRefId,
   resolveDefaultSecretProviderAlias,
 } from "../secrets/ref-contract.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import {
-  normalizeOptionalString,
-  normalizeStringifiedOptionalString,
-} from "../shared/string-coerce.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-
-const secretResolveLoader = createLazyImportLoader(() => import("../secrets/resolve.js"));
-
-function loadSecretResolve() {
-  return secretResolveLoader.load();
-}
 
 const ENV_SOURCE_LABEL_RE = /(?:^|:\s)([A-Z][A-Z0-9_]*)$/;
 
-type SecretRefChoice = "env" | "provider"; // pragma: allowlist secret
+type SecretRefChoice = "env" | "store" | "provider"; // pragma: allowlist secret
 
+/** Copy overrides used while prompting for provider secret-ref setup. */
 export type SecretRefSetupPromptCopy = {
   sourceMessage?: string;
   envVarMessage?: string;
@@ -34,9 +29,14 @@ export type SecretRefSetupPromptCopy = {
   envVarMissingError?: (envVar: string) => string;
   noProvidersMessage?: string;
   envValidatedMessage?: (envVar: string) => string;
-  providerValidatedMessage?: (provider: string, id: string, source: "file" | "exec") => string;
+  providerValidatedMessage?: (
+    provider: string,
+    id: string,
+    source: "file" | "exec" | "store",
+  ) => string;
 };
 
+/** Extracts a trailing env var name from a human-facing secret source label. */
 export function extractEnvVarFromSourceLabel(source: string): string | undefined {
   const match = ENV_SOURCE_LABEL_RE.exec(source.trim());
   return match?.[1];
@@ -46,15 +46,11 @@ function resolveDefaultProviderEnvVar(
   provider: string,
   config?: OpenClawConfig,
 ): string | undefined {
-  const envVars = getProviderEnvVars(provider, {
+  const envVars = getProviderEnvVarsCore(provider, {
     ...(config ? { config } : {}),
     includeUntrustedWorkspacePlugins: false,
   });
   return envVars?.find((candidate) => normalizeOptionalString(candidate) !== undefined);
-}
-
-function resolveDefaultFilePointerId(provider: string): string {
-  return `/providers/${encodeJsonPointerToken(provider)}/apiKey`;
 }
 
 export function resolveRefFallbackInput(params: {
@@ -64,11 +60,7 @@ export function resolveRefFallbackInput(params: {
   env?: NodeJS.ProcessEnv;
 }): { ref: SecretRef; resolvedValue: string } {
   const fallbackEnvVar =
-    params.preferredEnvVar ??
-    getProviderEnvVars(params.provider, {
-      config: params.config,
-      includeUntrustedWorkspacePlugins: false,
-    }).find((candidate) => normalizeOptionalString(candidate) !== undefined);
+    params.preferredEnvVar ?? resolveDefaultProviderEnvVar(params.provider, params.config);
   if (!fallbackEnvVar) {
     throw new Error(
       `No default environment variable mapping found for provider "${params.provider}". Set a provider-specific env var, or re-run setup in an interactive terminal to configure a ref.`,
@@ -159,12 +151,13 @@ async function promptProviderSecretRefForSetup(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<{ ref: SecretRef; resolvedValue: string }> {
   const externalProviders = Object.entries(params.config.secrets?.providers ?? {}).filter(
-    ([, provider]) => provider?.source === "file" || provider?.source === "exec",
+    ([, provider]) =>
+      provider?.source === "file" || provider?.source === "exec" || provider?.source === "store",
   );
   if (externalProviders.length === 0) {
     await params.prompter.note(
       params.copy?.noProvidersMessage ??
-        "No file/exec secret providers are configured yet. Add one under secrets.providers, or select Environment variable.",
+        "No file/exec/store secret providers are configured yet. Add one under secrets.providers, or select a built-in source.",
       "No providers configured",
     );
     throw new Error("retry");
@@ -181,13 +174,23 @@ async function promptProviderSecretRefForSetup(params: {
     options: externalProviders.map(([providerName, provider]) => ({
       value: providerName,
       label: providerName,
-      hint: provider?.source === "exec" ? "Exec provider" : "File provider",
+      hint:
+        provider?.source === "exec"
+          ? "Exec provider"
+          : provider?.source === "store"
+            ? "Store provider"
+            : "File provider",
     })),
   });
   const providerEntry = params.config.secrets?.providers?.[selectedProvider];
-  if (!providerEntry || (providerEntry.source !== "file" && providerEntry.source !== "exec")) {
+  if (
+    !providerEntry ||
+    (providerEntry.source !== "file" &&
+      providerEntry.source !== "exec" &&
+      providerEntry.source !== "store")
+  ) {
     await params.prompter.note(
-      `Provider "${selectedProvider}" is not a file/exec provider.`,
+      `Provider "${selectedProvider}" is not a file/exec/store provider.`,
       "Invalid provider",
     );
     throw new Error("retry");
@@ -196,17 +199,26 @@ async function promptProviderSecretRefForSetup(params: {
   const idPrompt =
     providerEntry.source === "file"
       ? "Secret id (JSON pointer for json mode, or 'value' for singleValue mode)"
-      : "Secret id for the exec provider";
+      : providerEntry.source === "store"
+        ? "Secret store name"
+        : "Secret id for the exec provider";
   const idDefault =
     providerEntry.source === "file"
       ? providerEntry.mode === "singleValue"
         ? "value"
         : params.defaultFilePointer
-      : `${params.provider}/apiKey`;
+      : providerEntry.source === "store"
+        ? (resolveDefaultProviderEnvVar(params.provider, params.config) ?? "")
+        : `${params.provider}/apiKey`;
   const idRaw = await params.prompter.text({
     message: idPrompt,
     initialValue: idDefault,
-    placeholder: providerEntry.source === "file" ? "/providers/openai/apiKey" : "openai/api-key",
+    placeholder:
+      providerEntry.source === "file"
+        ? "/providers/openai/apiKey"
+        : providerEntry.source === "store"
+          ? "OPENAI_API_KEY"
+          : "openai/api-key",
     validate: (value) => {
       const candidate = value.trim();
       if (!candidate) {
@@ -229,6 +241,9 @@ async function promptProviderSecretRefForSetup(params: {
       if (providerEntry.source === "exec" && !isValidExecSecretRefId(candidate)) {
         return formatExecSecretRefIdValidationMessage();
       }
+      if (providerEntry.source === "store" && !isValidEnvSecretRefId(candidate)) {
+        return 'Use a store name like "OPENAI_API_KEY" (uppercase letters, numbers, underscores).';
+      }
       return undefined;
     },
   });
@@ -240,7 +255,7 @@ async function promptProviderSecretRefForSetup(params: {
   };
 
   try {
-    const { resolveSecretRefString } = await loadSecretResolve();
+    const { resolveSecretRefString } = await import("../secrets/resolve.js");
     const resolvedValue = await resolveSecretRefString(ref, {
       config: params.config,
       env: params.env ?? process.env,
@@ -274,7 +289,7 @@ export async function promptSecretRefForSetup(params: {
 }): Promise<{ ref: SecretRef; resolvedValue: string }> {
   const defaultEnvVar =
     params.preferredEnvVar ?? resolveDefaultProviderEnvVar(params.provider, params.config) ?? "";
-  const defaultFilePointer = resolveDefaultFilePointerId(params.provider);
+  const defaultFilePointer = `/providers/${encodeJsonPointerToken(params.provider)}/apiKey`;
   let sourceChoice: SecretRefChoice = "env"; // pragma: allowlist secret
 
   while (true) {
@@ -288,34 +303,62 @@ export async function promptSecretRefForSetup(params: {
           hint: "Reference a variable from your runtime environment",
         },
         {
+          value: "store",
+          label: "OpenClaw secret store",
+          hint: "Reference a team-scoped value in the shared state database",
+        },
+        {
           value: "provider",
           label: "Configured secret provider",
-          hint: "Use a configured file or exec secret provider",
+          hint: "Use a configured file, exec, or store secret provider",
         },
       ],
     });
-    const source: SecretRefChoice = sourceRaw === "provider" ? "provider" : "env";
+    const source: SecretRefChoice =
+      sourceRaw === "provider" ? "provider" : sourceRaw === "store" ? "store" : "env";
     sourceChoice = source;
 
     if (source === "env") {
       return await promptEnvSecretRefForSetup({
-        provider: params.provider,
-        config: params.config,
-        prompter: params.prompter,
+        ...params,
         defaultEnvVar,
-        copy: params.copy,
-        env: params.env,
       });
+    }
+
+    if (source === "store") {
+      const idRaw = await params.prompter.text({
+        message: "Secret store name",
+        initialValue: defaultEnvVar || undefined,
+        placeholder: "OPENAI_API_KEY",
+        validate: (value) =>
+          isValidEnvSecretRefId(value.trim())
+            ? undefined
+            : 'Use a store name like "OPENAI_API_KEY" (uppercase letters, numbers, underscores).',
+      });
+      const id = normalizeStringifiedOptionalString(idRaw) ?? defaultEnvVar;
+      const ref: SecretRef = {
+        source: "store",
+        provider: resolveDefaultSecretProviderAlias(params.config, "store", {
+          preferFirstProviderForSource: true,
+        }),
+        id,
+      };
+      const { resolveSecretRefString } = await import("../secrets/resolve.js");
+      const resolvedValue = await resolveSecretRefString(ref, {
+        config: params.config,
+        env: params.env ?? process.env,
+      });
+      await params.prompter.note(
+        `Validated store reference ${ref.provider}:${id}. OpenClaw will store a reference, not the value.`,
+        "Reference validated",
+      );
+      return { ref, resolvedValue };
     }
 
     try {
       return await promptProviderSecretRefForSetup({
-        provider: params.provider,
-        config: params.config,
-        prompter: params.prompter,
+        ...params,
         defaultFilePointer,
-        copy: params.copy,
-        env: params.env,
       });
     } catch (error) {
       if (error instanceof Error && error.message === "retry") {

@@ -1,5 +1,14 @@
 {
   "id": "browser",
+  "uiCapabilities": ["widget"],
+  "categories": ["web"],
+  "cliCommands": [
+    {
+      "name": "browser",
+      "description": "Manage OpenClaw's dedicated browser (Chrome/Chromium)",
+      "hasSubcommands": true
+    }
+  ],
   "enabledByDefault": true,
   "activation": {
     "onStartup": true,

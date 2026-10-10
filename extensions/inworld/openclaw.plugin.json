@@ -1,17 +1,38 @@
 {
   "id": "inworld",
+  "categories": ["voice"],
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "activation": {
     "onStartup": false
   },
   "enabledByDefault": true,
   "name": "Inworld",
   "description": "Inworld streaming text-to-speech (MP3, OGG_OPUS, PCM telephony).",
-  "providerAuthEnvVars": {
-    "inworld": ["INWORLD_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "inworld",
+        "envVars": ["INWORLD_API_KEY"]
+      }
+    ]
   },
   "contracts": {
     "speechProviders": ["inworld"]
   },
+  "configGroups": [
+    {
+      "id": "inworld-connection",
+      "title": "Inworld connection",
+      "order": 10,
+      "properties": ["apiKey", "baseUrl"]
+    },
+    {
+      "id": "voice-generation",
+      "title": "Voice generation",
+      "order": 20,
+      "properties": ["voiceId", "modelId", "temperature"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

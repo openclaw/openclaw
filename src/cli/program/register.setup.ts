@@ -1,67 +1,153 @@
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+// Setup command registration: system-agent chat for configured systems, onboarding otherwise.
 import type { Command } from "commander";
-import { setupWizardCommand } from "../../commands/onboard.js";
-import { setupCommand } from "../../commands/setup.js";
-import { defaultRuntime } from "../../runtime.js";
-import { formatDocsLink } from "../../terminal/links.js";
-import { theme } from "../../terminal/theme.js";
+import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
+import type { RuntimeEnv } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
-import { hasExplicitOptions } from "../command-options.js";
+import { hasExplicitOptions, listExplicitOptionFlagsExcept } from "../command-options.js";
+import { shouldStartLocalOnboarding } from "../fresh-install-config.js";
+import {
+  registerOnboardAuthOptions,
+  registerOnboardFlowOptions,
+  registerOnboardGatewayOptions,
+  registerOnboardRemoteOptions,
+  registerOnboardRuntimeOptions,
+  resolveOnboardCommandOptions,
+} from "./register.onboard.js";
 
-export function registerSetupCommand(program: Command) {
-  program
+const SYSTEM_AGENT_OPTION_NAMES = new Set(["message", "yes", "json"]);
+const BASELINE_OPTION_NAMES = new Set(["baseline", "workspace", "skipBootstrap", "json"]);
+
+async function runSystemAgentEntry(
+  options: Record<string, unknown>,
+  runtime: RuntimeEnv,
+): Promise<void> {
+  const { runSystemAgentWithInference } =
+    await import("../../commands/system-agent-with-inference.js");
+  await runSystemAgentWithInference(
+    {
+      message: readStringValue(options.message),
+      yes: Boolean(options.yes),
+      json: Boolean(options.json),
+    },
+    runtime,
+  );
+}
+
+async function runOnboardingEntry(
+  options: Record<string, unknown>,
+  commandRuntime: Command,
+  runtime: RuntimeEnv,
+): Promise<void> {
+  if (options.baseline) {
+    const unsupportedOptions = listExplicitOptionFlagsExcept(commandRuntime, BASELINE_OPTION_NAMES);
+    if (unsupportedOptions.length > 0) {
+      const { rejectOnboardingOption } = await import("../../commands/onboard-options.js");
+      const message = `--baseline cannot be combined with: ${unsupportedOptions.join(", ")}.`;
+      rejectOnboardingOption({ json: options.json === true }, runtime, message);
+      return;
+    }
+    const { setupCommand } = await import("../../commands/setup.js");
+    await setupCommand(
+      {
+        workspace: readStringValue(options.workspace),
+        skipBootstrap: options.skipBootstrap === true,
+        json: Boolean(options.json),
+      },
+      runtime,
+    );
+    return;
+  }
+  const onboardingOptions = await resolveOnboardCommandOptions(options, commandRuntime, runtime);
+  if (!onboardingOptions) {
+    return;
+  }
+  const { setupWizardCommand } = await import("../../commands/onboard.js");
+  await setupWizardCommand(onboardingOptions, runtime);
+}
+
+function addSystemAgentOptions(command: Command): Command {
+  return command
+    .option("-m, --message <text>", "Run one OpenClaw request")
+    .option("--yes", "Approve persistent config writes for one --message request", false)
+    .option("--json", "Output system overview or onboarding summary as JSON", false);
+}
+
+/** Register the canonical `setup` command and its hidden retired-name alias. */
+export function registerSetupCommand(program: Command): void {
+  const command = program
     .command("setup")
-    .description("Create baseline config/workspace files; use --wizard for full onboarding")
+    .description("Chat with OpenClaw; onboard when setup is incomplete")
     .addHelpText(
       "after",
       () =>
         `\n${theme.heading("Examples:")}\n` +
         `  ${theme.command("openclaw setup")}\n` +
-        `    ${theme.muted("Create config, workspace, and session folders.")}\n` +
+        `    ${theme.muted("Chat with OpenClaw, or onboard when setup is incomplete.")}\n` +
+        `  ${theme.command('openclaw setup -m "status"')}\n` +
+        `    ${theme.muted("Run one system-agent request.")}\n` +
         `  ${theme.command("openclaw setup --wizard")}\n` +
-        `    ${theme.muted("Run full onboarding for auth, models, Gateway, and channels.")}\n\n` +
+        `    ${theme.muted("Run full onboarding.")}\n\n` +
         `${theme.muted("Docs:")} ${formatDocsLink("/cli/setup", "docs.openclaw.ai/cli/setup")}\n`,
     )
     .option(
       "--workspace <dir>",
-      "Agent workspace directory (default: ~/.openclaw/workspace; stored as agents.defaults.workspace)",
+      "Workspace proposal for guided setup; persisted by baseline/classic/non-interactive setup",
     )
+    .option("--agent-name <name>", "Name for the first agent (or team coordinator)")
+    .option("--team", "Create a coordinator with researcher, writer, and reviewer specialists")
     .option("--wizard", "Run interactive onboarding", false)
-    .option("--non-interactive", "Run onboarding without prompts", false)
-    .option("--mode <mode>", "Onboard mode: local|remote")
-    .option("--import-from <provider>", "Migration provider to run during onboarding")
-    .option("--import-source <path>", "Source agent home for --import-from")
-    .option("--import-secrets", "Import supported secrets during onboarding migration", false)
-    .option("--remote-url <url>", "Remote Gateway WebSocket URL")
-    .option("--remote-token <token>", "Remote Gateway token (optional)")
-    .action(async (opts, command) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const hasWizardFlags = hasExplicitOptions(command, [
-          "wizard",
-          "nonInteractive",
-          "mode",
-          "importFrom",
-          "importSource",
-          "importSecrets",
-          "remoteUrl",
-          "remoteToken",
-        ]);
-        if (opts.wizard || hasWizardFlags) {
-          await setupWizardCommand(
-            {
-              workspace: opts.workspace as string | undefined,
-              nonInteractive: Boolean(opts.nonInteractive),
-              mode: opts.mode as "local" | "remote" | undefined,
-              importFrom: opts.importFrom as string | undefined,
-              importSource: opts.importSource as string | undefined,
-              importSecrets: Boolean(opts.importSecrets),
-              remoteUrl: opts.remoteUrl as string | undefined,
-              remoteToken: opts.remoteToken as string | undefined,
-            },
-            defaultRuntime,
-          );
-          return;
-        }
-        await setupCommand({ workspace: opts.workspace as string | undefined }, defaultRuntime);
-      });
+    .option(
+      "--baseline",
+      "Create baseline config/workspace/session folders without onboarding",
+      false,
+    )
+    .option(
+      "--reset",
+      "Reset config + credentials + sessions before running onboarding (workspace only with --reset-scope full)",
+    )
+    .option("--reset-scope <scope>", "Reset scope: config|config+creds+sessions|full")
+    .option("--non-interactive", "Run onboarding without prompts", false);
+  registerOnboardFlowOptions(command);
+
+  registerOnboardAuthOptions(command);
+  registerOnboardGatewayOptions(command);
+  registerOnboardRuntimeOptions(command, "setup");
+  registerOnboardRemoteOptions(command);
+
+  addSystemAgentOptions(command).action(async (rawOptions, commandRuntime: Command) => {
+    const { defaultRuntime } = await import("../../runtime.js");
+    await runCommandWithRuntime(defaultRuntime, async () => {
+      const options = rawOptions as Record<string, unknown>;
+      const hasOnboardingFlag =
+        listExplicitOptionFlagsExcept(commandRuntime, SYSTEM_AGENT_OPTION_NAMES).length > 0;
+      const hasSystemAgentRequest = hasExplicitOptions(commandRuntime, ["message", "yes"]);
+      let configured = false;
+      if (!hasOnboardingFlag && !hasSystemAgentRequest) {
+        const { readConfigFileSnapshot } = await import("../../config/config.js");
+        configured = !(await shouldStartLocalOnboarding(await readConfigFileSnapshot()));
+      }
+      if (
+        !hasOnboardingFlag &&
+        (hasSystemAgentRequest ||
+          (configured && ((process.stdin.isTTY && process.stdout.isTTY) || Boolean(options.json))))
+      ) {
+        await runSystemAgentEntry(options, defaultRuntime);
+        return;
+      }
+      await runOnboardingEntry(options, commandRuntime, defaultRuntime);
     });
+  });
+
+  addSystemAgentOptions(
+    program
+      .command("crestodian", { hidden: true }) // hidden alias
+      .description("Deprecated: use openclaw setup"),
+  ).action(async (options) => {
+    const { defaultRuntime } = await import("../../runtime.js");
+    await runCommandWithRuntime(defaultRuntime, async () => {
+      await runSystemAgentEntry(options as Record<string, unknown>, defaultRuntime);
+    });
+  });
 }

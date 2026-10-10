@@ -9,25 +9,33 @@ export function runModelsCommand(action: () => Promise<void>) {
   return runCommandWithRuntime(defaultRuntime, action);
 }
 
-export function resolveModelAgentOption(
-  command: Command | undefined,
-  opts?: { agent?: unknown },
-): string | undefined {
-  return (
-    resolveOptionFromCommand<string>(command, "agent") ??
-    (typeof opts?.agent === "string" ? opts.agent : undefined)
-  );
+export function resolveModelAgentOption(command: Command): string | undefined {
+  return resolveOptionFromCommand<string>(command, "agent");
 }
 
-export function rejectAgentScopedModelWrite(
+/** `models` subcommands that operate on global state only, never per-agent. */
+export type GlobalOnlyModelCommandName =
+  | "set"
+  | "set-image"
+  | "scan"
+  | "aliases list"
+  | "aliases add"
+  | "aliases remove"
+  | "refresh"
+  | `${"fallbacks" | "image-fallbacks"} ${"add" | "remove" | "clear"}`;
+
+export function rejectAgentScopedModelCommand(
   command: Command,
-  commandName: "set" | "set-image",
+  commandName: GlobalOnlyModelCommandName,
 ): void {
+  // None of these resolve an agent, so accepting --agent would imply a scope that
+  // does not exist. Kept scope-neutral: `scan --no-probe` returns after printing
+  // the catalog without writing config at all.
   const agent = resolveOptionFromCommand<string>(command, "agent");
-  if (!agent) {
+  if (agent === undefined) {
     return;
   }
   throw new Error(
-    `openclaw models ${commandName} does not support --agent; it only updates global model defaults. Remove --agent, or run ${formatCliCommand("openclaw agents list")} and set the per-agent model in agent config.`,
+    `openclaw models ${commandName} does not support --agent; it is global and never agent-scoped. Remove --agent, or run ${formatCliCommand("openclaw agents list")} and set the per-agent model in agent config.`,
   );
 }

@@ -1,0 +1,104 @@
+import {
+  hasAcceptedSessionSpawn,
+  type AcceptedSessionSpawn,
+} from "../../accepted-session-spawn.js";
+import { hasAnyNonEmptyString as hasAnyNonBlankString } from "../../delivery-evidence-values.js";
+import { hasCommittedMessagingToolDeliveryEvidence } from "../delivery-evidence.js";
+import { hasAsyncActivity } from "./attempt-terminal-evidence.js";
+import type { EmbeddedRunAttemptResult } from "./types.js";
+
+type AttemptTrajectoryTerminalStatus = "success" | "error" | "interrupted";
+
+/** Terminal error marker for runs that produced no user-visible delivery or durable progress. */
+const NON_DELIVERABLE_TERMINAL_TURN_REASON = "non_deliverable_terminal_turn";
+
+type AttemptTrajectoryTerminal = {
+  status: AttemptTrajectoryTerminalStatus;
+  terminalError?: typeof NON_DELIVERABLE_TERMINAL_TURN_REASON;
+};
+
+type ResolveAttemptTrajectoryTerminalParams = {
+  failed: boolean;
+  interrupted: boolean;
+  assistantTexts: string[];
+  toolMetas: EmbeddedRunAttemptResult["toolMetas"];
+  didSendViaMessagingTool: boolean;
+  didSendDeterministicApprovalPrompt: boolean;
+  messagingToolSentTexts: string[];
+  messagingToolSentMediaUrls: string[];
+  messagingToolSentTargets: unknown[];
+  successfulCronAdds: number;
+  synthesizedPayloadCount: number;
+  acceptedSessionSpawns?: readonly AcceptedSessionSpawn[];
+  heartbeatToolResponse?: unknown;
+  clientToolCalls?: Array<unknown>;
+  yieldDetected?: boolean;
+  lastToolError?: unknown;
+  silentExpected?: boolean;
+  emptyAssistantReplyIsSilent?: boolean;
+  lastAssistantStopReason?: string;
+  hasTerminalOutput?: boolean;
+};
+
+/**
+ * Chooses assistant text that can safely count as terminal output. Provider error
+ * and abort stop reasons cannot fall back to the raw last visible text because
+ * that text may describe an interrupted generation rather than a completed reply.
+ */
+export function resolveTerminalAssistantTexts(params: {
+  assistantTexts: string[];
+  lastAssistantStopReason?: string;
+  lastAssistantVisibleText?: string;
+}): string[] {
+  if (hasAnyNonBlankString(params.assistantTexts)) {
+    return params.assistantTexts;
+  }
+  if (params.lastAssistantStopReason === "error" || params.lastAssistantStopReason === "aborted") {
+    return params.assistantTexts;
+  }
+  const fallbackText = params.lastAssistantVisibleText?.trim();
+  return fallbackText ? [fallbackText] : params.assistantTexts;
+}
+
+/**
+ * Classifies the final attempt trajectory from visible output, durable side
+ * effects, and interruption state. Empty terminal turns are errors unless a
+ * caller proves a silent success, message delivery, spawned session, async task,
+ * or other durable progress.
+ */
+export function resolveAttemptTrajectoryTerminal(
+  params: ResolveAttemptTrajectoryTerminalParams,
+): AttemptTrajectoryTerminal {
+  if (params.interrupted || params.failed) {
+    return { status: params.interrupted ? "interrupted" : "error" };
+  }
+
+  // Messaging/tool-use attempts may not have assistant text; only committed
+  // delivery evidence or durable side effects can make those terminal turns
+  // successful.
+  const hasExplicitTerminalDelivery =
+    params.silentExpected === true ||
+    params.emptyAssistantReplyIsSilent === true ||
+    params.didSendDeterministicApprovalPrompt ||
+    hasCommittedMessagingToolDeliveryEvidence(params) ||
+    hasAcceptedSessionSpawn(params.acceptedSessionSpawns) ||
+    params.heartbeatToolResponse !== undefined ||
+    (params.clientToolCalls?.length ?? 0) > 0 ||
+    params.yieldDetected === true ||
+    params.lastToolError !== undefined ||
+    hasAsyncActivity(params.toolMetas);
+
+  // Tool-use turns need explicit delivery; length stops need delivered or visible
+  // output. Finalization can precede payload synthesis, so text itself counts.
+  const hasDeliverableOrProgress =
+    hasExplicitTerminalDelivery ||
+    (params.lastAssistantStopReason !== "toolUse" &&
+      (params.hasTerminalOutput ||
+        hasAnyNonBlankString(params.assistantTexts) ||
+        params.synthesizedPayloadCount > 0 ||
+        (params.lastAssistantStopReason !== "length" && params.successfulCronAdds > 0)));
+
+  return hasDeliverableOrProgress
+    ? { status: "success" }
+    : { status: "error", terminalError: NON_DELIVERABLE_TERMINAL_TURN_REASON };
+}

@@ -1,8 +1,9 @@
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { fetchWithSsrFGuard } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import {
-  __testing as googleAuthRuntimeTesting,
   getGoogleAuthTransport,
   loadGoogleAuthRuntime,
   resolveValidatedGoogleChatCredentials,
@@ -14,29 +15,15 @@ const CHAT_ISSUER = "chat@system.gserviceaccount.com";
 const ADDON_ISSUER_PATTERN = /^service-\d+@gcp-sa-gsuiteaddons\.iam\.gserviceaccount\.com$/;
 const CHAT_CERTS_URL =
   "https://www.googleapis.com/service_accounts/v1/metadata/x509/chat@system.gserviceaccount.com";
-
-async function readGoogleChatCertsResponse(response: Response): Promise<Record<string, string>> {
-  try {
-    return (await response.json()) as Record<string, string>;
-  } catch (cause) {
-    throw new Error("Google Chat cert fetch failed: malformed JSON response", { cause });
-  }
-}
+// Cert fetch shares the same deadline as outbound API calls. Without a timeout,
+// a stalled googleapis.com endpoint blocks webhook auth indefinitely, including
+// cold-start and every 10-minute cache refresh.
+const GOOGLECHAT_CERT_FETCH_TIMEOUT_MS = 30_000;
 
 // Size-capped to prevent unbounded growth in long-running deployments (#4948)
 const MAX_AUTH_CACHE_SIZE = 32;
-type GoogleAuthModule = typeof import("google-auth-library");
-type GoogleAuthRuntime = {
-  GoogleAuth: GoogleAuthModule["GoogleAuth"];
-  OAuth2Client: GoogleAuthModule["OAuth2Client"];
-};
+type GoogleAuthRuntime = Awaited<ReturnType<typeof loadGoogleAuthRuntime>>;
 type GoogleAuthInstance = InstanceType<GoogleAuthRuntime["GoogleAuth"]>;
-type GoogleAuthOptions = ConstructorParameters<GoogleAuthRuntime["GoogleAuth"]>[0];
-type GoogleAuthTransport = NonNullable<GoogleAuthOptions>["clientOptions"] extends {
-  transporter?: infer T;
-}
-  ? T
-  : never;
 type OAuth2ClientInstance = InstanceType<GoogleAuthRuntime["OAuth2Client"]>;
 
 const authCache = new Map<string, { key: string; auth: GoogleAuthInstance }>();
@@ -45,20 +32,14 @@ let cachedCerts: { fetchedAt: number; certs: Record<string, string> } | null = n
 let verifyClientPromise: Promise<OAuth2ClientInstance> | null = null;
 
 async function getVerifyClient(): Promise<OAuth2ClientInstance> {
-  if (!verifyClientPromise) {
-    verifyClientPromise = (async () => {
-      try {
-        const { OAuth2Client } = await loadGoogleAuthRuntime();
-        // google-auth-library types its transporter through gaxios' CJS surface,
-        // while the plugin imports the ESM entrypoint directly.
-        const transporter = (await getGoogleAuthTransport()) as unknown as GoogleAuthTransport;
-        return new OAuth2Client({ transporter });
-      } catch (error) {
-        verifyClientPromise = null;
-        throw error;
-      }
-    })();
-  }
+  verifyClientPromise ??= (async () => {
+    const { OAuth2Client } = await loadGoogleAuthRuntime();
+    const transporter = await getGoogleAuthTransport();
+    return new OAuth2Client({ transporter });
+  })().catch((error: unknown) => {
+    verifyClientPromise = null;
+    throw error;
+  });
   return await verifyClientPromise;
 }
 
@@ -78,21 +59,11 @@ async function getAuthInstance(account: ResolvedGoogleChatAccount): Promise<Goog
   if (cached && cached.key === key) {
     return cached.auth;
   }
-  const [{ GoogleAuth }, rawTransporter, credentials] = await Promise.all([
+  const [{ GoogleAuth }, transporter, credentials] = await Promise.all([
     loadGoogleAuthRuntime(),
     getGoogleAuthTransport(),
     resolveValidatedGoogleChatCredentials(account),
   ]);
-  const transporter = rawTransporter as unknown as GoogleAuthTransport;
-
-  const evictOldest = () => {
-    if (authCache.size > MAX_AUTH_CACHE_SIZE) {
-      const oldest = authCache.keys().next().value;
-      if (oldest !== undefined) {
-        authCache.delete(oldest);
-      }
-    }
-  };
 
   const auth = new GoogleAuth({
     ...(credentials ? { credentials } : {}),
@@ -100,7 +71,7 @@ async function getAuthInstance(account: ResolvedGoogleChatAccount): Promise<Goog
     scopes: [CHAT_SCOPE],
   });
   authCache.set(account.accountId, { key, auth });
-  evictOldest();
+  pruneMapToMaxSize(authCache, MAX_AUTH_CACHE_SIZE);
   return auth;
 }
 
@@ -125,12 +96,16 @@ async function fetchChatCerts(): Promise<Record<string, string>> {
   const { response, release } = await fetchWithSsrFGuard({
     url: CHAT_CERTS_URL,
     auditContext: "googlechat.auth.certs",
+    timeoutMs: GOOGLECHAT_CERT_FETCH_TIMEOUT_MS,
   });
   try {
     if (!response.ok) {
       throw new Error(`Failed to fetch Chat certs (${response.status})`);
     }
-    const certs = await readGoogleChatCertsResponse(response);
+    const certs = await readProviderJsonResponse<Record<string, string>>(
+      response,
+      "Google Chat cert fetch failed",
+    );
     cachedCerts = { fetchedAt: now, certs };
     return certs;
   } finally {
@@ -156,9 +131,12 @@ export async function verifyGoogleChatRequest(params: {
   }
   const audienceType = params.audienceType ?? null;
 
-  if (audienceType === "app-url") {
-    try {
-      const verifyClient = await getVerifyClient();
+  if (audienceType !== "app-url" && audienceType !== "project-number") {
+    return { ok: false, reason: "unsupported audience type" };
+  }
+  try {
+    const verifyClient = await getVerifyClient();
+    if (audienceType === "app-url") {
       const ticket = await verifyClient.verifyIdToken({
         idToken: bearer,
         audience,
@@ -188,30 +166,11 @@ export async function verifyGoogleChatRequest(params: {
         };
       }
       return { ok: true };
-    } catch (err) {
-      return { ok: false, reason: err instanceof Error ? err.message : "invalid token" };
     }
+    const certs = await fetchChatCerts();
+    await verifyClient.verifySignedJwtWithCertsAsync(bearer, certs, audience, [CHAT_ISSUER]);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, reason: err instanceof Error ? err.message : "invalid token" };
   }
-
-  if (audienceType === "project-number") {
-    try {
-      const verifyClient = await getVerifyClient();
-      const certs = await fetchChatCerts();
-      await verifyClient.verifySignedJwtWithCertsAsync(bearer, certs, audience, [CHAT_ISSUER]);
-      return { ok: true };
-    } catch (err) {
-      return { ok: false, reason: err instanceof Error ? err.message : "invalid token" };
-    }
-  }
-
-  return { ok: false, reason: "unsupported audience type" };
 }
-
-export const __testing = {
-  resetGoogleChatAuthForTests(): void {
-    authCache.clear();
-    cachedCerts = null;
-    verifyClientPromise = null;
-    googleAuthRuntimeTesting.resetGoogleAuthRuntimeForTests();
-  },
-};

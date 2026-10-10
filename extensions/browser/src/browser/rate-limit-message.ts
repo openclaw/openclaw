@@ -1,3 +1,6 @@
+/**
+ * Rate-limit message selection for Browser service providers.
+ */
 const BROWSER_SERVICE_RATE_LIMIT_MESSAGE =
   "Browser service rate limit reached. " +
   "Wait for the current session to complete, or retry later.";
@@ -14,14 +17,11 @@ function isBrowserbaseUrl(url: string): boolean {
   if (!isAbsoluteHttp(url)) {
     return false;
   }
-  try {
-    const host = new URL(url).hostname.trim().toLowerCase();
-    return host === "browserbase.com" || host.endsWith(".browserbase.com");
-  } catch {
-    return false;
-  }
+  const host = URL.parse(url)?.hostname.trim().toLowerCase() ?? "";
+  return host === "browserbase.com" || host.endsWith(".browserbase.com");
 }
 
+/** Returns the provider-specific rate-limit message for a browser service URL. */
 export function resolveBrowserRateLimitMessage(url: string): string {
   return isBrowserbaseUrl(url)
     ? BROWSERBASE_RATE_LIMIT_MESSAGE

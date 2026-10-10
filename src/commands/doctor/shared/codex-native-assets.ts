@@ -1,25 +1,21 @@
-import type { Dirent } from "node:fs";
+// Doctor scan for personal Codex CLI assets that native Codex-mode agents do not auto-load.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isRecord as hasRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/normalization-core/string-coerce";
 import { collectConfiguredAgentHarnessRuntimes } from "../../../agents/harness-runtimes.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 
-export type CodexNativeAssetHit = {
+type CodexNativeAssetHit = {
+  /** Native Codex asset category discovered under Codex or personal agent homes. */
   kind: "skill" | "plugin" | "config" | "hooks";
+  /** Absolute path to the asset or asset container. */
   path: string;
 };
 
 const MAX_SCAN_DEPTH = 6;
 const MAX_DISCOVERED_DIRS = 2000;
-
-function hasRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function normalizeString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
-}
 
 function resolveUserHome(env: NodeJS.ProcessEnv): string {
   return env.HOME?.trim() || os.homedir();
@@ -60,11 +56,10 @@ async function isDirectory(filePath: string): Promise<boolean> {
   }
 }
 
-async function safeReadDir(dir: string): Promise<Dirent[]> {
-  return await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
-}
-
-async function discoverSkillHits(root: string): Promise<CodexNativeAssetHit[]> {
+async function discoverDirectoryAssets(
+  root: string,
+  kind: "skill" | "plugin",
+): Promise<CodexNativeAssetHit[]> {
   if (!(await isDirectory(root))) {
     return [];
   }
@@ -73,14 +68,19 @@ async function discoverSkillHits(root: string): Promise<CodexNativeAssetHit[]> {
     if (hits.length >= MAX_DISCOVERED_DIRS || depth > MAX_SCAN_DEPTH) {
       return;
     }
-    if (depth === 1 && path.basename(dir) === ".system") {
+    if (kind === "skill" && depth === 1 && path.basename(dir) === ".system") {
+      // Built-in Codex system skills are not user assets that migration should promote.
       return;
     }
-    if (await exists(path.join(dir, "SKILL.md"))) {
-      hits.push({ kind: "skill", path: dir });
+    const marker =
+      kind === "skill"
+        ? path.join(dir, "SKILL.md")
+        : path.join(dir, ".codex-plugin", "plugin.json");
+    if (await exists(marker)) {
+      hits.push({ kind, path: dir });
       return;
     }
-    for (const entry of await safeReadDir(dir)) {
+    for (const entry of await fs.readdir(dir, { withFileTypes: true }).catch(() => [])) {
       if (entry.isDirectory()) {
         await visit(path.join(dir, entry.name), depth + 1);
       }
@@ -90,59 +90,28 @@ async function discoverSkillHits(root: string): Promise<CodexNativeAssetHit[]> {
   return hits;
 }
 
-async function discoverPluginHits(root: string): Promise<CodexNativeAssetHit[]> {
-  if (!(await isDirectory(root))) {
-    return [];
-  }
-  const hits = new Map<string, CodexNativeAssetHit>();
-  async function visit(dir: string, depth: number): Promise<void> {
-    if (hits.size >= MAX_DISCOVERED_DIRS || depth > MAX_SCAN_DEPTH) {
-      return;
-    }
-    if (await exists(path.join(dir, ".codex-plugin", "plugin.json"))) {
-      hits.set(dir, { kind: "plugin", path: dir });
-      return;
-    }
-    for (const entry of await safeReadDir(dir)) {
-      if (entry.isDirectory()) {
-        await visit(path.join(dir, entry.name), depth + 1);
-      }
-    }
-  }
-  await visit(root, 0);
-  return [...hits.values()];
-}
-
-function isCodexRuntimeConfigured(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
-  return collectConfiguredAgentHarnessRuntimes(cfg, env).includes("codex");
-}
-
 function isCodexPluginConfigured(cfg: OpenClawConfig): boolean {
   const plugins = cfg.plugins;
   if (plugins?.enabled === false) {
     return false;
   }
   const allow = plugins?.allow;
-  const allowList = Array.isArray(allow) ? allow.map((entry) => normalizeString(entry)) : undefined;
-  if (allowList && !allowList.includes("codex")) {
-    return false;
-  }
-  if (allowList?.includes("codex")) {
-    return true;
+  if (Array.isArray(allow)) {
+    return allow.some((entry) => normalizeString(entry) === "codex");
   }
   return hasRecord(plugins?.entries?.codex) && plugins.entries.codex.enabled !== false;
 }
 
-function shouldScanCodexNativeAssets(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
-  return isCodexRuntimeConfigured(cfg, env) || isCodexPluginConfigured(cfg);
-}
-
-export async function scanCodexNativeAssets(params: {
+/** Discover personal Codex skills, plugins, config, and hooks relevant to Codex-mode agents. */
+async function scanCodexNativeAssets(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): Promise<CodexNativeAssetHit[]> {
   const env = params.env ?? process.env;
-  if (!shouldScanCodexNativeAssets(params.cfg, env)) {
+  if (
+    !collectConfiguredAgentHarnessRuntimes(params.cfg).includes("codex") &&
+    !isCodexPluginConfigured(params.cfg)
+  ) {
     return [];
   }
   const codexHome = resolveCodexHome(env);
@@ -150,38 +119,29 @@ export async function scanCodexNativeAssets(params: {
   function record(hit: CodexNativeAssetHit): void {
     hits.set(`${hit.kind}:${hit.path}`, hit);
   }
-  for (const hit of await discoverSkillHits(path.join(codexHome, "skills"))) {
-    record(hit);
+  for (const [resolveRoot, kind] of [
+    [() => path.join(codexHome, "skills"), "skill"],
+    [() => resolvePersonalAgentSkillsDir(env), "skill"],
+    [() => path.join(codexHome, "plugins", "cache"), "plugin"],
+  ] as const) {
+    for (const hit of await discoverDirectoryAssets(resolveRoot(), kind)) {
+      record(hit);
+    }
   }
-  for (const hit of await discoverSkillHits(resolvePersonalAgentSkillsDir(env))) {
-    record(hit);
-  }
-  for (const hit of await discoverPluginHits(path.join(codexHome, "plugins", "cache"))) {
-    record(hit);
-  }
-  const configPath = path.join(codexHome, "config.toml");
-  if (await exists(configPath)) {
-    record({ kind: "config", path: configPath });
-  }
-  const hooksPath = path.join(codexHome, "hooks", "hooks.json");
-  if (await exists(hooksPath)) {
-    record({ kind: "hooks", path: hooksPath });
+  for (const [kind, relativePath] of [
+    ["config", "config.toml"],
+    ["hooks", path.join("hooks", "hooks.json")],
+  ] as const) {
+    const assetPath = path.join(codexHome, relativePath);
+    if (await exists(assetPath)) {
+      record({ kind, path: assetPath });
+    }
   }
   return [...hits.values()].toSorted((a, b) => a.path.localeCompare(b.path));
 }
 
-function countKind(
-  hits: readonly CodexNativeAssetHit[],
-  kind: CodexNativeAssetHit["kind"],
-): number {
-  return hits.filter((hit) => hit.kind === kind).length;
-}
-
-function plural(count: number, singular: string): string {
-  return `${count} ${singular}${count === 1 ? "" : "s"}`;
-}
-
-export async function collectCodexNativeAssetWarnings(params: {
+/** Build an informational doctor note when personal Codex CLI assets need migration review. */
+export async function collectCodexNativeAssetInfoNotes(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): Promise<string[]> {
@@ -190,18 +150,27 @@ export async function collectCodexNativeAssetWarnings(params: {
   if (hits.length === 0) {
     return [];
   }
-  const counts = [
-    plural(countKind(hits, "skill"), "skill"),
-    plural(countKind(hits, "plugin"), "plugin"),
-    plural(countKind(hits, "config"), "config file"),
-    plural(countKind(hits, "hooks"), "hook file"),
-  ];
+  const counts = (
+    [
+      ["skill", "skill"],
+      ["plugin", "plugin"],
+      ["config", "config file"],
+      ["hooks", "hook file"],
+    ] as const
+  ).map(([kind, label]) => {
+    const count = hits.filter((hit) => hit.kind === kind).length;
+    return `${count} ${label}${count === 1 ? "" : "s"}`;
+  });
   return [
     [
-      "- Personal Codex CLI assets were found, but native Codex-mode OpenClaw agents use isolated per-agent Codex homes.",
-      `- Sources: ${resolveCodexHome(env)} and ${resolvePersonalAgentSkillsDir(env)} (${counts.join(", ")}).`,
-      "- These assets will not be loaded by the Codex app-server child unless you intentionally promote them.",
-      "- Run `openclaw migrate codex --dry-run` to inventory them. Applying that migration copies skills into the current OpenClaw agent workspace; Codex plugins, hooks, and config stay manual-review only.",
+      `- Personal Codex CLI assets found (${counts.join(", ")}) in ${resolveCodexHome(env)} and ${resolvePersonalAgentSkillsDir(env)}; native Codex-mode agents use isolated per-agent homes and will not load them.`,
+      "- To review or promote them: install the Codex plugin (openclaw plugins install npm:@openclaw/codex), then run openclaw migrate plan codex.",
     ].join("\n"),
   ];
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.codexNativeAssetsTestApi")] = {
+    scanCodexNativeAssets,
+  };
 }

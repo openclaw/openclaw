@@ -1,9 +1,10 @@
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { formatErrorMessage } from "./errors.js";
-import { type RetryConfig, resolveRetryConfig, retryAsync } from "./retry.js";
+import { type RetryConfig, type RetryOptions, resolveRetryConfig, retryAsync } from "./retry.js";
 
 export type RetryRunner = <T>(fn: () => Promise<T>, label?: string) => Promise<T>;
 
+/** Default retry envelope for channel API operations that hit transient network edges. */
 export const CHANNEL_API_RETRY_DEFAULTS = {
   attempts: 3,
   minDelayMs: 400,
@@ -11,21 +12,24 @@ export const CHANNEL_API_RETRY_DEFAULTS = {
   jitter: 0.1,
 };
 
-const CHANNEL_API_RETRY_RE = /429|timeout|connect|reset|closed|unavailable|temporarily/i;
+const CHANNEL_API_RETRY_RE =
+  /429|421|timeout|connect|reset|closed|unavailable|temporarily|misdirected request/i;
 const log = createSubsystemLogger("retry-policy");
 
 function resolveChannelApiShouldRetry(params: {
-  shouldRetry?: (err: unknown) => boolean;
+  shouldRetry?: RetryOptions["shouldRetry"];
   strictShouldRetry?: boolean;
-}) {
+}): NonNullable<RetryOptions["shouldRetry"]> {
   if (!params.shouldRetry) {
     return (err: unknown) => CHANNEL_API_RETRY_RE.test(formatErrorMessage(err));
   }
   if (params.strictShouldRetry) {
     return params.shouldRetry;
   }
-  return (err: unknown) =>
-    params.shouldRetry?.(err) || CHANNEL_API_RETRY_RE.test(formatErrorMessage(err));
+  // Channel APIs often wrap network failures differently by provider. Keep the
+  // fallback regex unless callers opt into strict idempotency control.
+  return (err: unknown, attempt: number) =>
+    params.shouldRetry?.(err, attempt) || CHANNEL_API_RETRY_RE.test(formatErrorMessage(err));
 }
 
 function getChannelApiRetryAfterMs(err: unknown): number | undefined {
@@ -33,6 +37,8 @@ function getChannelApiRetryAfterMs(err: unknown): number | undefined {
     return undefined;
   }
   const candidate =
+    // Telegram-style clients may expose retry_after on the root error, response,
+    // or nested error object; keep all shapes aligned so rate-limit sleeps match.
     "parameters" in err && err.parameters && typeof err.parameters === "object"
       ? (err.parameters as { retry_after?: unknown }).retry_after
       : "response" in err &&
@@ -50,42 +56,13 @@ function getChannelApiRetryAfterMs(err: unknown): number | undefined {
   return typeof candidate === "number" && Number.isFinite(candidate) ? candidate * 1000 : undefined;
 }
 
-export function createRateLimitRetryRunner(params: {
-  retry?: RetryConfig;
-  configRetry?: RetryConfig;
-  verbose?: boolean;
-  defaults: Required<RetryConfig>;
-  logLabel: string;
-  shouldRetry: (err: unknown) => boolean;
-  retryAfterMs?: (err: unknown) => number | undefined;
-}): RetryRunner {
-  const retryConfig = resolveRetryConfig(params.defaults, {
-    ...params.configRetry,
-    ...params.retry,
-  });
-  return <T>(fn: () => Promise<T>, label?: string) =>
-    retryAsync(fn, {
-      ...retryConfig,
-      label,
-      shouldRetry: params.shouldRetry,
-      retryAfterMs: params.retryAfterMs,
-      onRetry: params.verbose
-        ? (info) => {
-            const labelText = info.label ?? "request";
-            const maxRetries = Math.max(1, info.maxAttempts - 1);
-            log.warn(
-              `${params.logLabel} ${labelText} rate limited, retry ${info.attempt}/${maxRetries} in ${info.delayMs}ms`,
-            );
-          }
-        : undefined,
-    });
-}
-
 export function createChannelApiRetryRunner(params: {
   retry?: RetryConfig;
   configRetry?: RetryConfig;
   verbose?: boolean;
-  shouldRetry?: (err: unknown) => boolean;
+  retryAfterMaxDelayMs?: number;
+  shouldRetry?: RetryOptions["shouldRetry"];
+  retryAfterMs?: RetryOptions["retryAfterMs"];
   /**
    * When true, the custom shouldRetry predicate is used exclusively —
    * the default channel API fallback regex is NOT OR'd in.
@@ -105,7 +82,10 @@ export function createChannelApiRetryRunner(params: {
       ...retryConfig,
       label,
       shouldRetry,
-      retryAfterMs: getChannelApiRetryAfterMs,
+      retryAfterMs: params.retryAfterMs ?? getChannelApiRetryAfterMs,
+      ...(params.retryAfterMaxDelayMs !== undefined
+        ? { retryAfterMaxDelayMs: params.retryAfterMaxDelayMs }
+        : {}),
       onRetry: params.verbose
         ? (info) => {
             const maxRetries = Math.max(1, info.maxAttempts - 1);

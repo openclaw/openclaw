@@ -1,0 +1,216 @@
+import type { Block } from "@slack/web-api";
+import {
+  normalizeMessagePresentation,
+  renderMessagePresentationChartFallbackText,
+  type MessagePresentationChartBlock,
+} from "openclaw/plugin-sdk/interactive-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
+import { renderSlackMessagePresentationChartFallbackText } from "./presentation-fallback.js";
+
+const SLACK_CHART_TITLE_MAX = 50;
+const SLACK_CHART_LABEL_MAX = 20;
+const SLACK_CHART_AXIS_LABEL_MAX = 50;
+const SLACK_CHART_SERIES_MAX = 12;
+const SLACK_CHART_DATA_POINTS_MAX = 20;
+// Slack's API rejects a third data_visualization block even though its public
+// reference does not currently document this per-message subtype limit.
+export const SLACK_DATA_VISUALIZATION_BLOCKS_MAX = 2;
+
+type SlackChartDatum = { label: string; value: number };
+
+type SlackPieChart = {
+  type: "pie";
+  segments: SlackChartDatum[];
+};
+
+type SlackSeriesChart = {
+  type: "bar" | "area" | "line";
+  series: Array<{ name: string; data: SlackChartDatum[] }>;
+  axis_config: {
+    categories: string[];
+    x_label?: string;
+    y_label?: string;
+  };
+};
+
+type SlackDataVisualizationBlock = Block & {
+  type: "data_visualization";
+  title: string;
+  chart: SlackPieChart | SlackSeriesChart;
+};
+
+/** Detect native chart blocks without depending on unreleased Slack SDK types. */
+export function hasSlackDataVisualizationBlock(blocks?: readonly unknown[]): boolean {
+  return blocks?.some((block) => asOptionalRecord(block)?.type === "data_visualization") ?? false;
+}
+
+function isStringWithin(value: unknown, maxLength: number): value is string {
+  return (
+    typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= maxLength
+  );
+}
+
+function hasUniqueStrings(values: readonly string[]): boolean {
+  return new Set(values).size === values.length;
+}
+
+export function buildSlackDataVisualizationBlock(
+  block: MessagePresentationChartBlock,
+): SlackDataVisualizationBlock | undefined {
+  if (!isStringWithin(block.title, SLACK_CHART_TITLE_MAX)) {
+    return undefined;
+  }
+  if (block.chartType === "pie") {
+    if (
+      block.segments.length < 1 ||
+      block.segments.length > SLACK_CHART_SERIES_MAX ||
+      !block.segments.every(
+        (segment) =>
+          isStringWithin(segment.label, SLACK_CHART_LABEL_MAX) &&
+          Number.isFinite(segment.value) &&
+          segment.value > 0,
+      )
+    ) {
+      return undefined;
+    }
+    return {
+      type: "data_visualization",
+      title: block.title,
+      chart: {
+        type: "pie",
+        segments: block.segments.map((segment) => ({ ...segment })),
+      },
+    };
+  }
+  if (
+    block.categories.length < 1 ||
+    block.categories.length > SLACK_CHART_DATA_POINTS_MAX ||
+    !block.categories.every((category) => isStringWithin(category, SLACK_CHART_LABEL_MAX)) ||
+    !hasUniqueStrings(block.categories) ||
+    block.series.length < 1 ||
+    block.series.length > SLACK_CHART_SERIES_MAX ||
+    !hasUniqueStrings(block.series.map((series) => series.name)) ||
+    (block.xLabel !== undefined && !isStringWithin(block.xLabel, SLACK_CHART_AXIS_LABEL_MAX)) ||
+    (block.yLabel !== undefined && !isStringWithin(block.yLabel, SLACK_CHART_AXIS_LABEL_MAX)) ||
+    !block.series.every(
+      (series) =>
+        isStringWithin(series.name, SLACK_CHART_LABEL_MAX) &&
+        series.values.length === block.categories.length &&
+        series.values.every((value) => Number.isFinite(value)),
+    )
+  ) {
+    return undefined;
+  }
+  return {
+    type: "data_visualization",
+    title: block.title,
+    chart: {
+      type: block.chartType,
+      series: block.series.map((series) => ({
+        name: series.name,
+        data: block.categories.map((label, index) => ({
+          label,
+          value: series.values[index]!,
+        })),
+      })),
+      axis_config: {
+        categories: [...block.categories],
+        ...(block.xLabel ? { x_label: block.xLabel } : {}),
+        ...(block.yLabel ? { y_label: block.yLabel } : {}),
+      },
+    },
+  };
+}
+
+function readSlackChartDatum(value: unknown): SlackChartDatum | undefined {
+  const record = asOptionalRecord(value);
+  const label = record?.label;
+  const datumValue = record?.value;
+  return typeof label === "string" && typeof datumValue === "number"
+    ? { label, value: datumValue }
+    : undefined;
+}
+
+function parseSlackDataVisualizationBlock(block: Record<string, unknown>) {
+  const title = block.title;
+  const chart = asOptionalRecord(block.chart);
+  if (typeof title !== "string" || !chart) {
+    return undefined;
+  }
+  if (chart.type === "pie") {
+    if (!Array.isArray(chart.segments)) {
+      return undefined;
+    }
+    const segments = chart.segments.map(readSlackChartDatum);
+    if (segments.some((segment) => !segment)) {
+      return undefined;
+    }
+    return { type: "chart", chartType: "pie", title, segments };
+  }
+  if (chart.type !== "bar" && chart.type !== "area" && chart.type !== "line") {
+    return undefined;
+  }
+  const axisConfig = asOptionalRecord(chart.axis_config);
+  const categories = axisConfig?.categories;
+  if (!Array.isArray(categories) || !categories.every((category) => typeof category === "string")) {
+    return undefined;
+  }
+  if (!Array.isArray(chart.series)) {
+    return undefined;
+  }
+  const series = chart.series.map((rawSeries) => {
+    const seriesRecord = asOptionalRecord(rawSeries);
+    if (typeof seriesRecord?.name !== "string" || !Array.isArray(seriesRecord.data)) {
+      return undefined;
+    }
+    const data = seriesRecord.data.map(readSlackChartDatum);
+    if (data.some((datum) => !datum) || data.length !== categories.length) {
+      return undefined;
+    }
+    const dataByLabel = new Map(data.map((datum) => [datum!.label, datum!.value]));
+    if (
+      dataByLabel.size !== data.length ||
+      categories.some((category) => !dataByLabel.has(category))
+    ) {
+      return undefined;
+    }
+    return {
+      name: seriesRecord.name,
+      values: categories.map((category) => dataByLabel.get(category)!),
+    };
+  });
+  if (series.some((entry) => !entry)) {
+    return undefined;
+  }
+  return {
+    type: "chart",
+    chartType: chart.type,
+    title,
+    categories,
+    series,
+    xLabel: axisConfig?.x_label,
+    yLabel: axisConfig?.y_label,
+  };
+}
+
+/** Extract an accessible summary, escaping mrkdwn control tokens when requested. */
+export function renderSlackDataVisualizationFallbackText(
+  value: unknown,
+  mrkdwnSafe = false,
+): string | undefined {
+  const block = asOptionalRecord(value);
+  if (block?.type !== "data_visualization") {
+    return undefined;
+  }
+  const parsed = normalizeMessagePresentation({
+    blocks: [parseSlackDataVisualizationBlock(block)],
+  })?.blocks[0];
+  if (parsed?.type === "chart") {
+    return mrkdwnSafe
+      ? renderSlackMessagePresentationChartFallbackText(parsed)
+      : renderMessagePresentationChartFallbackText(parsed);
+  }
+  const title = typeof block.title === "string" ? block.title.trim() : "";
+  return title ? (mrkdwnSafe ? escapeSlackMrkdwn(title) : title) : undefined;
+}

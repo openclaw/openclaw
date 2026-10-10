@@ -1,4 +1,7 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNullableRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type BrowserRequestProfileParams = {
   query?: Record<string, unknown>;
@@ -6,6 +9,15 @@ type BrowserRequestProfileParams = {
   profile?: string | null;
 };
 
+export function isManagedOnlyBrowserRequest(params: BrowserRequestProfileParams): boolean {
+  return (
+    params.query?.managedOnly === true ||
+    params.query?.managedOnly === "true" ||
+    asNullableRecord(params.body)?.managedOnly === true
+  );
+}
+
+/** Normalizes route paths so mutation-policy checks compare stable slash forms. */
 export function normalizeBrowserRequestPath(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -22,11 +34,30 @@ export function isPersistentBrowserProfileMutation(method: string, path: string)
   const normalizedPath = normalizeBrowserRequestPath(path);
   if (
     method === "POST" &&
-    (normalizedPath === "/profiles/create" || normalizedPath === "/reset-profile")
+    (normalizedPath === "/profiles/create" ||
+      normalizedPath === "/profiles/import" ||
+      normalizedPath === "/reset-profile")
   ) {
     return true;
   }
   return method === "DELETE" && /^\/profiles\/[^/]+$/.test(normalizedPath);
+}
+
+/**
+ * Returns true for routes that only make sense on the host that owns the local
+ * Keychain and Chrome-family profiles: system-profile listing and import. These
+ * must be dispatched host-local and never proxied to a browser node.
+ */
+export function isBrowserHostLocalRoute(method: string, path: string): boolean {
+  const normalizedPath = normalizeBrowserRequestPath(path);
+  return (
+    (method === "GET" &&
+      (normalizedPath === "/system-profiles" ||
+        normalizedPath === "/system-profile-import/status")) ||
+    (method === "POST" &&
+      (normalizedPath === "/profiles/import" ||
+        normalizedPath === "/system-profile-import/dismiss"))
+  );
 }
 
 export function resolveRequestedBrowserProfile(

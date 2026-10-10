@@ -1,4 +1,8 @@
-export { getAcpSessionManager, isAcpRuntimeError } from "openclaw/plugin-sdk/acp-runtime";
+export {
+  getAcpSessionManager,
+  isAcpRuntimeError,
+  rethrowIncognitoSessionError,
+} from "openclaw/plugin-sdk/acp-runtime";
 export {
   resolveThreadBindingIdleTimeoutMs,
   resolveThreadBindingMaxAgeMs,
@@ -7,6 +11,6 @@ export {
 export { createDiscordMessageHandler } from "./message-handler.js";
 export {
   createNoopThreadBindingManager,
-  createThreadBindingManager,
   reconcileAcpThreadBindingsOnStartup,
 } from "./thread-bindings.js";
+export { createThreadBindingManager } from "./thread-bindings.manager.js";

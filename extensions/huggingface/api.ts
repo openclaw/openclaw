@@ -1,5 +1,4 @@
 export {
-  buildHuggingfaceModelDefinition,
   discoverHuggingfaceModels,
   HUGGINGFACE_BASE_URL,
   HUGGINGFACE_MODEL_CATALOG,

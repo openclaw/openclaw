@@ -1,423 +1,368 @@
-import fs from "node:fs";
+/** Public cron store load/save API backed entirely by shared SQLite state. */
 import path from "node:path";
-import { expandHomePrefix } from "../infra/home-dir.js";
-import { replaceFileAtomic } from "../infra/replace-file.js";
-import { resolveConfigDir } from "../utils.js";
-import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
-import { tryCronScheduleIdentity } from "./schedule-identity.js";
+import type { DatabaseSync } from "node:sqlite";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
+import type { SqliteWorkerStore } from "../infra/sqlite-worker-store.js";
+import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { runCronRuntimeMutation } from "./service/runtime-mutation.js";
+import { invalidateCronJobNames, publishCronJobNames } from "./store/job-name.js";
+import { readCronJobNamesInDatabase } from "./store/job-name.kernel.js";
+import { cronStoreKey } from "./store/key.js";
+import { restoreCronLoadError } from "./store/load-error.js";
+import { resolveCronJobsStorePath } from "./store/paths.js";
+import { runCronStoreAuthorityOperation } from "./store/receipt-authority-operation.js";
+import {
+  assertCronStoreCanPersist,
+  readCronJobsFingerprint,
+  readCronStoreFingerprints,
+} from "./store/row-codec.js";
+import type { CronJobFamilyIdentity } from "./store/row-codec.js";
+import { prepareCronRunReceiptWriteSchema } from "./store/run-receipt-write-admission.js";
+import { CronJobsStoreChangedError, restoreCronSaveError } from "./store/save-error.js";
+import type {
+  CronStoreSaveWorkerOperations,
+  CronStoreWriteResult,
+} from "./store/save-worker.types.js";
+import {
+  isCronRuntimeOnlySave,
+  prepareCronStoreChanges,
+  saveCronStoreChangesInDatabase,
+  saveCronStoreInDatabase,
+} from "./store/save.kernel.js";
+import type { CronStoreChangesOptions, CronStoreSaveOptions } from "./store/save.types.js";
+import type {
+  CronAdmittedStoreTransactionHooks,
+  CronStoreTransactionHooks,
+} from "./store/transaction-hooks.types.js";
+import type { LoadedCronStore } from "./store/types.js";
 import type { CronStoreFile } from "./types.js";
+export { resolveCronJobsStorePath, resolveCronJobsStorePathFromConfig } from "./store/paths.js";
+export { loadCronJobsStoreWithConfigJobsReadOnly } from "./store/read-only.js";
+export { CronJobsStoreChangedError } from "./store/save-error.js";
+export type { LoadedCronStore } from "./store/types.js";
+export type { CronQuarantinedJob, QuarantinedCronConfigJob } from "./types-shared.js";
+export { loadCronQuarantinedJobs, saveCronQuarantinedJobs } from "./store/quarantine.js";
 
-type SerializedStoreCacheEntry = {
-  configJson?: string;
-  stateJson?: string;
-  needsSplitMigration: boolean;
-};
+const MAX_TRACKED_CRON_STORE_REVISIONS = 64;
+// Stale receipts must never equal a nonnegative publication fact, even after eviction.
+const STALE_CRON_STORE_REVISION = -1;
+const cronStoreRevisions = new Map<string, number>();
+let nextCronStoreRevision = 0;
 
-const serializedStoreCache = new Map<string, SerializedStoreCacheEntry>();
-
-function getSerializedStoreCache(storePath: string): SerializedStoreCacheEntry {
-  let entry = serializedStoreCache.get(storePath);
-  if (!entry) {
-    entry = { needsSplitMigration: false };
-    serializedStoreCache.set(storePath, entry);
-  }
-  return entry;
+/** Reads the process-local committed revision for one canonical SQLite partition. */
+export function getCronJobsStoreRevision(storePath: string): number {
+  // Eviction must not resurrect a snapshot's earlier revision.
+  return cronStoreRevisions.get(cronStoreKey(storePath)) ?? nextCronStoreRevision;
 }
 
-function resolveDefaultCronDir(): string {
-  return path.join(resolveConfigDir(), "cron");
+export function noteCronJobsStoreCommit(storeKey: string): void {
+  invalidateCronJobNames(storeKey);
+  // A bounded monotonic fact invalidates sibling service snapshots without
+  // polling SQLite or discarding the current scheduler's transient run state.
+  cronStoreRevisions.delete(storeKey);
+  cronStoreRevisions.set(storeKey, ++nextCronStoreRevision);
+  pruneMapToMaxSize(cronStoreRevisions, MAX_TRACKED_CRON_STORE_REVISIONS);
 }
 
-function resolveDefaultCronStorePath(): string {
-  return path.join(resolveDefaultCronDir(), "jobs.json");
-}
-
-function resolveStatePath(storePath: string): string {
-  if (storePath.endsWith(".json")) {
-    return storePath.replace(/\.json$/, "-state.json");
-  }
-  return `${storePath}-state.json`;
-}
-
-type CronStateFileEntry = {
-  updatedAtMs?: number;
-  scheduleIdentity?: string;
-  state?: Record<string, unknown>;
-};
-
-type CronStateFile = {
-  version: 1;
-  jobs: Record<string, CronStateFileEntry>;
-};
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
-function stripRuntimeOnlyCronFields(store: CronStoreFile): unknown {
-  return {
-    version: store.version,
-    jobs: store.jobs.map((job) => {
-      const { state: _state, updatedAtMs: _updatedAtMs, ...rest } = job;
-      return { ...rest, state: {} };
-    }),
-  };
-}
-
-function extractStateFile(store: CronStoreFile): CronStateFile {
-  const jobs: Record<string, CronStateFileEntry> = {};
-  for (const job of store.jobs) {
-    jobs[job.id] = {
-      updatedAtMs: job.updatedAtMs,
-      scheduleIdentity: tryCronScheduleIdentity(job as unknown as Record<string, unknown>),
-      state: job.state ?? {},
-    };
-  }
-  return { version: 1, jobs };
-}
-
-export function resolveCronStorePath(storePath?: string) {
-  if (storePath?.trim()) {
-    const raw = storePath.trim();
-    if (raw.startsWith("~")) {
-      return path.resolve(expandHomePrefix(raw));
-    }
-    return path.resolve(raw);
-  }
-  return resolveDefaultCronStorePath();
-}
-
-async function loadStateFile(statePath: string): Promise<CronStateFile | null> {
-  let raw: string;
+/** Loads cron jobs plus config/runtime sidecars from the SQLite-backed store. */
+export async function loadCronJobsStoreWithConfigJobs(storePath: string): Promise<LoadedCronStore> {
+  const storeKey = cronStoreKey(storePath);
+  const context = captureOpenClawStateWorkerContext();
+  let received = false;
   try {
-    raw = await fs.promises.readFile(statePath, "utf-8");
-  } catch (err) {
-    if ((err as { code?: unknown })?.code === "ENOENT") {
-      return null;
-    }
-    throw new Error(`Failed to read cron state at ${statePath}: ${String(err)}`, {
-      cause: err,
-    });
-  }
-
-  try {
-    const parsed = parseJsonWithJson5Fallback(raw);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return null;
-    }
-    const record = parsed as Record<string, unknown>;
-    if (
-      record.version !== 1 ||
-      typeof record.jobs !== "object" ||
-      record.jobs === null ||
-      Array.isArray(record.jobs)
-    ) {
-      return null;
-    }
-    return { version: 1, jobs: record.jobs as Record<string, CronStateFileEntry> };
-  } catch {
-    // Best-effort: if state file is corrupt, treat as absent.
-    return null;
-  }
-}
-
-function loadStateFileSync(statePath: string): CronStateFile | null {
-  let raw: string;
-  try {
-    raw = fs.readFileSync(statePath, "utf-8");
-  } catch (err) {
-    if ((err as { code?: unknown })?.code === "ENOENT") {
-      return null;
-    }
-    throw new Error(`Failed to read cron state at ${statePath}: ${String(err)}`, {
-      cause: err,
-    });
-  }
-
-  try {
-    const parsed = parseJsonWithJson5Fallback(raw);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return null;
-    }
-    const record = parsed as Record<string, unknown>;
-    if (
-      record.version !== 1 ||
-      typeof record.jobs !== "object" ||
-      record.jobs === null ||
-      Array.isArray(record.jobs)
-    ) {
-      return null;
-    }
-    return { version: 1, jobs: record.jobs as Record<string, CronStateFileEntry> };
-  } catch {
-    return null;
-  }
-}
-
-function hasInlineState(jobs: Array<Record<string, unknown> | null | undefined>): boolean {
-  return jobs.some(
-    (job) =>
-      job != null &&
-      isRecord(job.state) &&
-      Object.keys(job.state).length > 0,
-  );
-}
-
-function ensureJobStateObject(job: CronStoreFile["jobs"][number]): void {
-  if (!isRecord(job.state)) {
-    job.state = {} as never;
-  }
-}
-
-function backfillMissingRuntimeFields(job: CronStoreFile["jobs"][number]): void {
-  ensureJobStateObject(job);
-  if (typeof job.updatedAtMs !== "number") {
-    job.updatedAtMs = typeof job.createdAtMs === "number" ? job.createdAtMs : Date.now();
-  }
-}
-
-function resolveUpdatedAtMs(job: CronStoreFile["jobs"][number], updatedAtMs: unknown): number {
-  if (typeof updatedAtMs === "number" && Number.isFinite(updatedAtMs)) {
-    return updatedAtMs;
-  }
-  if (typeof job.updatedAtMs === "number" && Number.isFinite(job.updatedAtMs)) {
-    return job.updatedAtMs;
-  }
-  return typeof job.createdAtMs === "number" && Number.isFinite(job.createdAtMs)
-    ? job.createdAtMs
-    : Date.now();
-}
-
-function mergeStateFileEntry(job: CronStoreFile["jobs"][number], entry: unknown): void {
-  if (!isRecord(entry)) {
-    backfillMissingRuntimeFields(job);
-    return;
-  }
-  job.updatedAtMs = resolveUpdatedAtMs(job, entry.updatedAtMs);
-  job.state = isRecord(entry.state) ? (entry.state as never) : ({} as never);
-  if (
-    typeof entry.scheduleIdentity === "string" &&
-    entry.scheduleIdentity !== tryCronScheduleIdentity(job as unknown as Record<string, unknown>)
-  ) {
-    ensureJobStateObject(job);
-    job.state.nextRunAtMs = undefined;
-  }
-}
-
-export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
-  try {
-    const raw = await fs.promises.readFile(storePath, "utf-8");
-    let parsed: unknown;
-    try {
-      parsed = parseJsonWithJson5Fallback(raw);
-    } catch (err) {
-      throw new Error(`Failed to parse cron store at ${storePath}: ${String(err)}`, {
-        cause: err,
-      });
-    }
-    const parsedRecord =
-      parsed && typeof parsed === "object" && !Array.isArray(parsed)
-        ? (parsed as Record<string, unknown>)
-        : {};
-    const jobs = Array.isArray(parsedRecord.jobs)
-      ? (parsedRecord.jobs.filter(isRecord) as never[])
-      : [];
-    const store = {
-      version: 1 as const,
-      jobs: jobs.filter(Boolean) as never as CronStoreFile["jobs"],
-    };
-
-    // Load state file and merge.
-    const statePath = resolveStatePath(storePath);
-    const stateFile = await loadStateFile(statePath);
-    const hasLegacyInlineState =
-      !stateFile && hasInlineState(jobs as unknown as Array<Record<string, unknown>>);
-
-    if (stateFile) {
-      // State file exists: merge state by job ID. Inline state in jobs.json is ignored.
-      for (const job of store.jobs) {
-        const entry = stateFile.jobs[job.id];
-        if (entry) {
-          mergeStateFileEntry(job, entry);
-        } else {
-          backfillMissingRuntimeFields(job);
+    return await runCronStoreAuthorityOperation(context, async (scope) => {
+      const result = await scope.execute({ type: "cron.loadMutable", input: { storeKey } });
+      received = true;
+      for (let index = 0; index < result.repairCommits; index += 1) {
+        noteCronJobsStoreCommit(storeKey);
+      }
+      if (!result.ok) {
+        // Coordinator cleanup can fail after COMMIT but before a repair is reported.
+        if (result.repairCommits === 0) {
+          noteCronJobsStoreCommit(storeKey);
         }
+        throw restoreCronLoadError(result.error);
       }
-    } else if (!hasLegacyInlineState) {
-      // No state file, no inline state: fresh clone or first run.
-      for (const job of store.jobs) {
-        backfillMissingRuntimeFields(job);
-      }
-    }
-    // else: migration mode — no state file but jobs.json has inline state. Use as-is.
-
-    // Ensure every job has a state object (defensive).
-    for (const job of store.jobs) {
-      ensureJobStateObject(job);
-    }
-
-    const configJson = JSON.stringify(stripRuntimeOnlyCronFields(store), null, 2);
-    const stateJson = JSON.stringify(extractStateFile(store), null, 2);
-    serializedStoreCache.set(storePath, {
-      configJson,
-      stateJson,
-      needsSplitMigration: hasLegacyInlineState,
+      return result.loaded;
     });
-
-    return store;
-  } catch (err) {
-    if ((err as { code?: unknown })?.code === "ENOENT") {
-      serializedStoreCache.delete(storePath);
-      return { version: 1, jobs: [] };
+  } catch (error) {
+    // An unavailable result cannot certify that no repair committed.
+    if (!received) {
+      noteCronJobsStoreCommit(storeKey);
     }
-    throw err;
+    throw error;
   }
 }
 
-export function loadCronStoreSync(storePath: string): CronStoreFile {
-  try {
-    const raw = fs.readFileSync(storePath, "utf-8");
-    let parsed: unknown;
-    try {
-      parsed = parseJsonWithJson5Fallback(raw);
-    } catch (err) {
-      throw new Error(`Failed to parse cron store at ${storePath}: ${String(err)}`, {
-        cause: err,
-      });
-    }
-    const parsedRecord =
-      parsed && typeof parsed === "object" && !Array.isArray(parsed)
-        ? (parsed as Record<string, unknown>)
-        : {};
-    const jobs = Array.isArray(parsedRecord.jobs)
-      ? (parsedRecord.jobs.filter(isRecord) as never[])
-      : [];
-    const store = {
-      version: 1 as const,
-      jobs: jobs.filter(Boolean) as never as CronStoreFile["jobs"],
-    };
-
-    const stateFile = loadStateFileSync(resolveStatePath(storePath));
-    const hasLegacyInlineState =
-      !stateFile && hasInlineState(jobs as unknown as Array<Record<string, unknown>>);
-
-    if (stateFile) {
-      for (const job of store.jobs) {
-        const entry = stateFile.jobs[job.id];
-        if (entry) {
-          mergeStateFileEntry(job, entry);
-        } else {
-          backfillMissingRuntimeFields(job);
-        }
-      }
-    } else if (!hasLegacyInlineState) {
-      for (const job of store.jobs) {
-        backfillMissingRuntimeFields(job);
-      }
-    }
-
-    for (const job of store.jobs) {
-      ensureJobStateObject(job);
-    }
-
-    return store;
-  } catch (err) {
-    if ((err as { code?: unknown })?.code === "ENOENT") {
-      return { version: 1, jobs: [] };
-    }
-    throw err;
+export function assertCronJobsStoreUnchanged(
+  db: DatabaseSync,
+  storePath: string,
+  expectedJobsFingerprint: string,
+): undefined {
+  const resolvedStorePath = path.resolve(storePath);
+  if (readCronJobsFingerprint(db, cronStoreKey(resolvedStorePath)) !== expectedJobsFingerprint) {
+    throw new CronJobsStoreChangedError(resolvedStorePath);
   }
+}
+
+/** Removes an owned declarative job family left under obsolete absolute store keys. */
+export async function removeStaleCronJobFamilyRows(
+  storePath: string,
+  family: CronJobFamilyIdentity,
+  opts?: { commitGuard?: () => void },
+): Promise<number> {
+  const storeKey = cronStoreKey(path.resolve(storePath));
+  const context = captureOpenClawStateWorkerContext();
+  let removed = 0;
+  await runCronRuntimeMutation({
+    context,
+    type: "cron.removeStaleFamily",
+    input: { storeKey, family: { ...family } },
+    assertCurrent: () => opts?.commitGuard?.(),
+    prepare: () => ({ value: {}, assertCurrent() {} }),
+    publish: (outcome) => {
+      removed = outcome.removed;
+      if (removed > 0) {
+        invalidateCronJobNames();
+      }
+    },
+    onSettled(outcome) {
+      if (outcome === "unknown") {
+        invalidateCronJobNames();
+      }
+    },
+  });
+  return removed;
+}
+
+/** Loads only the persisted cron job store payload. */
+export async function loadCronJobsStore(storePath: string): Promise<CronStoreFile> {
+  return (await loadCronJobsStoreWithConfigJobs(storePath)).store;
 }
 
 type SaveCronStoreOptions = {
-  skipBackup?: boolean;
   stateOnly?: boolean;
 };
 
-async function setSecureFileMode(filePath: string): Promise<void> {
-  await fs.promises.chmod(filePath, 0o600).catch(() => undefined);
+type SaveCronJobsStoreOptions = CronStoreSaveOptions & {
+  transactionHooks?: CronStoreTransactionHooks;
+};
+
+type CronStoreCommit<Value> = {
+  value: Value;
+  revision: number;
+  jobsFingerprint?: string;
+  runtimeFingerprint?: string;
+};
+
+function publishCronStoreSaveRevision(storeKey: string, observedRevision: number): number {
+  const unchanged = getCronJobsStoreRevision(storeKey) === observedRevision;
+  noteCronJobsStoreCommit(storeKey);
+  // A host write across worker admission leaves the returned snapshot conservatively stale.
+  return unchanged ? nextCronStoreRevision : STALE_CRON_STORE_REVISION;
 }
 
-async function atomicWrite(filePath: string, content: string, dirMode = 0o700): Promise<void> {
-  await replaceFileAtomic({
-    filePath,
-    content,
-    dirMode,
-    mode: 0o600,
-    tempPrefix: ".openclaw-cron",
-    renameMaxRetries: 3,
-    copyFallbackOnPermissionError: true,
-  });
-}
-
-async function serializedFileNeedsWrite(
-  filePath: string,
-  expectedJson: string,
-  contentChanged: boolean,
-): Promise<boolean> {
-  if (contentChanged) {
-    return true;
-  }
+function commitCronStoreNative<Value>(
+  storeKey: string,
+  operation: (
+    database: OpenClawStateDatabase,
+    admittedHooks: CronAdmittedStoreTransactionHooks | undefined,
+  ) => Value,
+  hooks: CronStoreTransactionHooks | undefined,
+  operationLabel?: string,
+): CronStoreCommit<Value> {
+  const context = captureOpenClawStateWorkerContext();
+  const observedRevision = getCronJobsStoreRevision(storeKey);
+  let committed = false;
   try {
-    const diskJson = await fs.promises.readFile(filePath, "utf-8");
-    return diskJson !== expectedJson;
-  } catch (err) {
-    if ((err as { code?: unknown })?.code === "ENOENT") {
-      return true;
+    const result = runOpenClawStateWriteTransaction(
+      (database) => {
+        const admittedHooks = hooks
+          ? { hooks, receiptSchema: prepareCronRunReceiptWriteSchema(database.db) }
+          : undefined;
+        const value = operation(database, admittedHooks);
+        deferSqlitePostCommitPublication(database.db, () => {
+          committed = true;
+        });
+        return {
+          value,
+          names: readCronJobNamesInDatabase(database.db, undefined, storeKey),
+          ...readCronStoreFingerprints(database.db, storeKey),
+        };
+      },
+      {},
+      operationLabel ? { operationLabel } : undefined,
+    );
+    const revision = publishCronStoreSaveRevision(storeKey, observedRevision);
+    // Nested Doctor transactions have no acknowledged commit until their outer scope settles.
+    if (committed && revision !== STALE_CRON_STORE_REVISION) {
+      publishCronJobNames(storeKey, context, result.names);
     }
-    throw err;
+    hooks?.afterCommit?.();
+    return { ...result, revision };
+  } catch (error) {
+    if (committed) {
+      noteCronJobsStoreCommit(storeKey);
+    }
+    throw error;
   }
 }
 
+async function saveCronStoreWithWorker<Value>(
+  storeKey: string,
+  operation: (
+    scope: Pick<SqliteWorkerStore<CronStoreSaveWorkerOperations>, "execute">,
+  ) => Promise<CronStoreWriteResult<Value>>,
+): Promise<CronStoreCommit<Value>> {
+  const observedRevision = getCronJobsStoreRevision(storeKey);
+  const context = captureOpenClawStateWorkerContext();
+  let received = false;
+  try {
+    return await runCronStoreAuthorityOperation(context, async (scope) => {
+      const result = await operation(scope);
+      received = true;
+      const revision =
+        result.committed || !result.ok
+          ? publishCronStoreSaveRevision(storeKey, observedRevision)
+          : observedRevision;
+      if (!result.ok) {
+        throw restoreCronSaveError(result.error);
+      }
+      if (revision !== STALE_CRON_STORE_REVISION) {
+        publishCronJobNames(storeKey, context, result.names);
+      }
+      return {
+        value: result.value,
+        revision,
+        jobsFingerprint: result.jobsFingerprint,
+        runtimeFingerprint: result.runtimeFingerprint,
+      };
+    });
+  } catch (error) {
+    if (!received) {
+      // A missing result cannot certify that no write committed. Never replay the mutation.
+      noteCronJobsStoreCommit(storeKey);
+    }
+    throw error;
+  }
+}
+
+/** Maintenance hooks retain their owning synchronous database transaction. */
+function saveCronJobsStoreChangesNative(
+  storePath: string,
+  previous: CronStoreFile,
+  next: CronStoreFile,
+  opts?: CronStoreChangesOptions & { transactionHooks?: CronStoreTransactionHooks },
+): CronStoreFile {
+  assertCronStoreCanPersist(next);
+  const storeKey = cronStoreKey(path.resolve(storePath));
+  const prepared = prepareCronStoreChanges(previous, next);
+  if (prepared.changedIds.size === 0) {
+    return previous;
+  }
+  const { transactionHooks, ...options } = opts ?? {};
+  return commitCronStoreNative(
+    storeKey,
+    ({ db }, admittedHooks) =>
+      saveCronStoreChangesInDatabase(db, storeKey, storeKey, prepared, options, admittedHooks),
+    transactionHooks,
+    "cron.config-mutation",
+  ).value;
+}
+
+/** Commits maintenance changes against authoritative SQLite state. */
+export async function saveCronJobsStoreChanges(
+  storePath: string,
+  previous: CronStoreFile,
+  next: CronStoreFile,
+  opts?: CronStoreChangesOptions & { transactionHooks?: CronStoreTransactionHooks },
+): Promise<CronStoreFile> {
+  if (opts?.transactionHooks) {
+    return saveCronJobsStoreChangesNative(storePath, previous, next, opts);
+  }
+  assertCronStoreCanPersist(next);
+  const storeKey = cronStoreKey(path.resolve(storePath));
+  const prepared = prepareCronStoreChanges(previous, next);
+  if (prepared.changedIds.size === 0) {
+    return previous;
+  }
+  const { transactionHooks: _hooks, ...options } = opts ?? {};
+  const input = structuredClone({ storeKey, changes: prepared, options });
+  const committed = await saveCronStoreWithWorker(storeKey, (scope) =>
+    scope.execute({ type: "cron.saveChanges", input }),
+  );
+  return committed.value;
+}
+
+/** Doctor fingerprint hooks retain their owning synchronous database transaction. */
+function saveCronJobsStoreWithRevisionNative(
+  storePath: string,
+  store: CronStoreFile,
+  opts?: SaveCronJobsStoreOptions,
+): CronStoreCommit<undefined> {
+  const storeKey = cronStoreKey(path.resolve(storePath));
+  if (!isCronRuntimeOnlySave(opts)) {
+    assertCronStoreCanPersist(store);
+  }
+  const { transactionHooks, ...options } = opts ?? {};
+  return commitCronStoreNative(
+    storeKey,
+    (database, admittedHooks) => {
+      saveCronStoreInDatabase(database, storeKey, store, options, admittedHooks);
+      return undefined;
+    },
+    transactionHooks,
+  );
+}
+
+/** Persist cron data and return only this operation's publication revision. */
+export async function saveCronJobsStoreWithRevision(
+  storePath: string,
+  store: CronStoreFile,
+  opts?: SaveCronJobsStoreOptions,
+): Promise<CronStoreCommit<undefined>> {
+  if (opts?.transactionHooks) {
+    return saveCronJobsStoreWithRevisionNative(storePath, store, opts);
+  }
+  const storeKey = cronStoreKey(path.resolve(storePath));
+  if (!isCronRuntimeOnlySave(opts)) {
+    assertCronStoreCanPersist(store);
+  }
+  const { transactionHooks: _hooks, ...options } = opts ?? {};
+  const input = structuredClone({ storeKey, store, options });
+  return await saveCronStoreWithWorker(storeKey, (scope) =>
+    scope.execute({ type: "cron.save", input }),
+  );
+}
+
+/** Persists cron jobs, or only mutable runtime state when stateOnly is set. */
+export async function saveCronJobsStore(
+  storePath: string,
+  store: CronStoreFile,
+  opts?: SaveCronJobsStoreOptions,
+): Promise<void> {
+  await saveCronJobsStoreWithRevision(storePath, store, opts);
+}
+
+// Public plugin SDK seam; core callers use the SQLite-backed cron-jobs names above.
+/** Resolves the public plugin-SDK cron store path. */
+export function resolveCronStorePath(storePath?: string) {
+  return resolveCronJobsStorePath(storePath);
+}
+
+/** Plugin-SDK alias for loading the cron store. */
+export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
+  return await loadCronJobsStore(storePath);
+}
+
+/** Plugin-SDK alias for saving the cron store. */
 export async function saveCronStore(
   storePath: string,
   store: CronStoreFile,
   opts?: SaveCronStoreOptions,
 ) {
-  const stateOnly = opts?.stateOnly === true;
-  const configJson = JSON.stringify(stripRuntimeOnlyCronFields(store), null, 2);
-  const stateFile = extractStateFile(store);
-  const stateJson = JSON.stringify(stateFile, null, 2);
-
-  const statePath = resolveStatePath(storePath);
-  const cache = serializedStoreCache.get(storePath);
-
-  const configChanged = !stateOnly && cache?.configJson !== configJson;
-  const stateChanged = cache?.stateJson !== stateJson;
-  const migrating = cache?.needsSplitMigration === true;
-  const configNeedsWrite = stateOnly
-    ? false
-    : await serializedFileNeedsWrite(storePath, configJson, configChanged);
-  const stateNeedsWrite = await serializedFileNeedsWrite(statePath, stateJson, stateChanged);
-
-  if (
-    stateOnly ? !stateNeedsWrite && !migrating : !configNeedsWrite && !stateNeedsWrite && !migrating
-  ) {
-    return;
-  }
-
-  const updatedCache = getSerializedStoreCache(storePath);
-
-  // Write state first so migration never leaves stripped config without runtime state.
-  if (stateNeedsWrite || migrating) {
-    await atomicWrite(statePath, stateJson);
-    updatedCache.stateJson = stateJson;
-  }
-
-  if (!stateOnly && (configNeedsWrite || migrating)) {
-    // Determine backup need: only when config actually changed (not migration-only).
-    const skipBackup = opts?.skipBackup === true || !configChanged;
-    if (!skipBackup) {
-      try {
-        const backupPath = `${storePath}.bak`;
-        await fs.promises.copyFile(storePath, backupPath);
-        await setSecureFileMode(backupPath);
-      } catch {
-        // best-effort
-      }
-    }
-    await atomicWrite(storePath, configJson);
-    updatedCache.configJson = configJson;
-  }
-  updatedCache.needsSplitMigration = stateOnly && migrating;
+  await saveCronJobsStore(storePath, store, opts);
 }

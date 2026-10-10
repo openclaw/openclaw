@@ -1,0 +1,664 @@
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { parse } from "yaml";
+import { createGatewayTaskSupervisorProbe } from "../../src/daemon/schtasks.task-supervisor.native-test-support.js";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
+import { evaluateWorkflowExpression } from "./ci-workflow.test-support.js";
+
+const scriptPath = path.resolve("scripts/check-workflows.mts");
+const tempDirs: string[] = [];
+const testNodeExecPath = resolveTestNodeExecPath();
+
+type WorkflowStep = {
+  name: string;
+  id?: string;
+  if?: string;
+  uses?: string;
+  run?: string;
+  env?: Record<string, string | number | boolean>;
+  with?: Record<string, string | number | boolean>;
+  "timeout-minutes"?: number;
+  "continue-on-error"?: boolean | string;
+};
+
+type WorkflowJob = {
+  if?: string;
+  needs?: string | string[];
+  permissions?: Record<string, string>;
+  env?: Record<string, string>;
+  "runs-on": string;
+  "continue-on-error"?: boolean | string;
+  steps: WorkflowStep[];
+};
+
+function readWindowsProbe() {
+  const workflow = parse(readFileSync(".github/workflows/windows-testbox-probe.yml", "utf8")) as {
+    on: {
+      workflow_dispatch: {
+        inputs: Record<string, { default: unknown; type: string; description: string }>;
+      };
+    };
+    jobs: Record<string, WorkflowJob>;
+  };
+  const native = Object.values(workflow.jobs).find((job) =>
+    job.steps.some((step) => step.id === "native_schtasks"),
+  );
+  const probe = workflow.jobs.probe;
+  if (!probe || !native) {
+    throw new Error("Windows probe must declare both headless CI and native proof jobs");
+  }
+  return { workflow, probe, native };
+}
+
+afterEach(() => {
+  cleanupTempDirs(tempDirs);
+});
+
+describe("check-workflows", () => {
+  it("prints an actionable diagnostic when actionlint and go are unavailable", () => {
+    const result = spawnSync(testNodeExecPath, ["--import", "tsx", scriptPath], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: "",
+      },
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("missing workflow linter");
+    expect(result.stderr).toContain("install actionlint built from");
+    expect(result.stderr).toContain("011a6d15e749bb3f2d771eed9c7aa0e7e3e10ee7");
+  });
+
+  it.each([
+    { version: undefined, tool: "go" },
+    { version: "1.7.12", tool: "go" },
+    { version: "unknown", tool: "pre-commit" },
+    { version: "v1.7.13-0.20260419144658-011a6d15e749", tool: "installed" },
+    { version: "1.7.12", tool: "pre-commit", acquireStatus: 1 },
+    { version: "1.7.12", tool: "go", lintStatus: 7 },
+    { version: "1.7.12", tool: "unavailable", lintStatus: 1 },
+  ])(
+    "selects $tool actionlint for installed version $version ($acquireStatus/$lintStatus)",
+    ({ version, tool, acquireStatus = 0, lintStatus = 0 }) => {
+      const tempDir = makeTempDir(tempDirs, "check-workflows-");
+      const binDir = path.join(tempDir, "bin");
+      const markerPath = path.join(tempDir, "go-install.txt");
+      const binMarkerPath = path.join(tempDir, "go-bin.txt");
+      const pinnedMarkerPath = path.join(tempDir, "pinned-actionlint.txt");
+      const preCommitMarkerPath = path.join(tempDir, "pre-commit.txt");
+      const actionlintMarkerPath = path.join(tempDir, "actionlint.txt");
+      mkdirSync(binDir);
+      if (version) {
+        writeFileSync(
+          path.join(binDir, "actionlint"),
+          [
+            "#!/bin/sh",
+            `if [ "$1" = "--version" ]; then printf '%s\\n' '${version}'; exit 0; fi`,
+            'printf "%s\\n" "$*" > "$ACTIONLINT_MARKER"',
+            "",
+          ].join("\n"),
+          { mode: 0o755 },
+        );
+      }
+      if (tool === "go" || acquireStatus !== 0) {
+        writeFileSync(
+          path.join(binDir, "pinned-actionlint"),
+          [
+            "#!/bin/sh",
+            'printf "%s\\n" "$*" > "$PINNED_ACTIONLINT_MARKER"',
+            `exit ${lintStatus}`,
+            "",
+          ].join("\n"),
+          { mode: 0o755 },
+        );
+        writeFileSync(
+          path.join(binDir, "go"),
+          [
+            "#!/bin/sh",
+            'if [ "$1" = "version" ]; then exit 0; fi',
+            'if [ "$1" = "install" ]; then',
+            '  printf "%s\\n" "$*" > "$GO_FALLBACK_MARKER"',
+            '  printf "%s\\n" "$GOBIN" > "$GO_BIN_MARKER"',
+            `  if [ ${acquireStatus} != 0 ]; then exit ${acquireStatus}; fi`,
+            '  /bin/cp "$PINNED_ACTIONLINT" "$GOBIN/actionlint"',
+            "  exit 0",
+            "fi",
+            "exit 1",
+            "",
+          ].join("\n"),
+          { mode: 0o755 },
+        );
+      }
+      if (tool !== "unavailable") {
+        writeFileSync(
+          path.join(binDir, "pre-commit"),
+          [
+            "#!/bin/sh",
+            'if [ "$1" = "--version" ]; then exit 0; fi',
+            'printf "%s\\n" "$*" >> "$PRE_COMMIT_MARKER"',
+            "exit 0",
+            "",
+          ].join("\n"),
+          { mode: 0o755 },
+        );
+      }
+      for (const command of tool === "unavailable" ? ["node"] : ["python3", "node"]) {
+        writeFileSync(path.join(binDir, command), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      }
+
+      const result = spawnSync(testNodeExecPath, ["--import", "tsx", scriptPath], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          GO_FALLBACK_MARKER: markerPath,
+          GO_BIN_MARKER: binMarkerPath,
+          PINNED_ACTIONLINT: path.join(binDir, "pinned-actionlint"),
+          PINNED_ACTIONLINT_MARKER: pinnedMarkerPath,
+          PRE_COMMIT_MARKER: preCommitMarkerPath,
+          ACTIONLINT_MARKER: actionlintMarkerPath,
+          PATH: binDir,
+        },
+      });
+
+      expect(result.status).toBe(lintStatus);
+      expect(existsSync(actionlintMarkerPath)).toBe(tool === "installed");
+      const acquired = tool === "go" || acquireStatus !== 0;
+      expect(existsSync(markerPath)).toBe(acquired);
+      if (acquired) {
+        expect(readFileSync(markerPath, "utf8")).toContain(
+          "install github.com/rhysd/actionlint/cmd/actionlint@011a6d15e749bb3f2d771eed9c7aa0e7e3e10ee7",
+        );
+        expect(existsSync(readFileSync(binMarkerPath, "utf8").trim())).toBe(false);
+      } else if (tool === "installed") {
+        expect(readFileSync(actionlintMarkerPath, "utf8")).toContain(".github/workflows/ci.yml");
+      }
+      expect(existsSync(pinnedMarkerPath)).toBe(tool === "go");
+      if (tool === "go") {
+        expect(readFileSync(pinnedMarkerPath, "utf8")).toContain(".github/workflows/ci.yml");
+      }
+      if (lintStatus !== 0) {
+        expect(existsSync(preCommitMarkerPath)).toBe(false);
+        if (tool === "unavailable") {
+          expect(result.stderr).toContain(
+            "missing workflow linter: install actionlint built from 011a6d15e749bb3f2d771eed9c7aa0e7e3e10ee7",
+          );
+          expect(result.stderr).toContain("Go to acquire that revision, or a pre-commit runtime");
+        }
+        return;
+      }
+      const preCommitArgs = readFileSync(preCommitMarkerPath, "utf8");
+      expect(preCommitArgs.includes(" actionlint --files")).toBe(tool === "pre-commit");
+      expect(preCommitArgs).toContain("run --config .pre-commit-config.yaml zizmor --files");
+      expect(preCommitArgs).toContain(".github/workflows/ci.yml");
+      expect(preCommitArgs).toContain(".github/workflows/windows-testbox-probe.yml");
+    },
+  );
+
+  it.each([
+    { mode: "bootstrap", code: 0, errors: [] },
+    {
+      mode: "old-python",
+      code: 1,
+      errors: ["python3 is 3.9.6", "pre-commit 4.6.2 requires Python >=3.10"],
+    },
+    {
+      mode: "missing-venv",
+      code: 1,
+      errors: [
+        "python venv unavailable",
+        "missing pre-commit runtime for actionlint",
+        "Python venv support for pre-commit 4.6.2",
+      ],
+    },
+    { mode: "hook-failure", code: 13, errors: ["hook failed"] },
+  ])("handles $mode through the temporary Python runtime", ({ mode, code, errors }) => {
+    const tempDir = makeTempDir(tempDirs, "check-workflows-");
+    const binDir = path.join(tempDir, "bin");
+    const markerPath = path.join(tempDir, "python.txt");
+    const venvPath = path.join(tempDir, "venv-path.txt");
+    mkdirSync(binDir);
+    writeFileSync(path.join(binDir, "node"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    writeFileSync(
+      path.join(binDir, "python3"),
+      [
+        "#!/bin/sh",
+        `if [ "$1" = "--version" ]; then printf '%s\\n' '${mode === "old-python" ? "Python 3.9.6" : ""}'; exit 0; fi`,
+        'if [ "$1" = "-m" ] && [ "$2" = "pre_commit" ] && [ "$3" = "--version" ]; then exit 1; fi',
+        'printf "%s\\n" "$*" >> "$PYTHON_MARKER"',
+        'if [ "$1" = "-m" ] && [ "$2" = "venv" ]; then',
+        `  if [ '${mode}' = 'missing-venv' ]; then echo 'python venv unavailable' >&2; exit 1; fi`,
+        '  /bin/mkdir -p "$3/bin"',
+        '  /bin/cp "$0" "$3/bin/python"',
+        '  /bin/chmod +x "$3/bin/python"',
+        '  printf "%s\\n" "$3" > "$VENV_MARKER"',
+        "  exit 0",
+        "fi",
+        'if [ "$1" = "-m" ] && [ "$2" = "pip" ]; then exit 0; fi',
+        'if [ "$1" = "-m" ] && [ "$2" = "pre_commit" ]; then',
+        `  if [ '${mode}' = 'hook-failure' ]; then echo 'hook failed' >&2; exit 13; fi`,
+        "  exit 0",
+        "fi",
+        'if [ "$1" = "scripts/check-composite-action-input-interpolation.py" ]; then exit 0; fi',
+        "exit 1",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    const result = spawnSync(testNodeExecPath, ["--import", "tsx", scriptPath], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: binDir, PYTHON_MARKER: markerPath, VENV_MARKER: venvPath },
+    });
+    expect(result.status).toBe(code);
+    for (const error of errors) {
+      expect(result.stderr).toContain(error);
+    }
+    if (mode === "old-python") {
+      expect(existsSync(markerPath)).toBe(false);
+    } else if (mode === "bootstrap") {
+      const pythonArgs = readFileSync(markerPath, "utf8");
+      expect(pythonArgs).toContain("-m pip install --disable-pip-version-check pre-commit==4.6.2");
+      expect(pythonArgs).toContain(
+        "-m pre_commit run --config .pre-commit-config.yaml actionlint --files",
+      );
+      expect(pythonArgs).toContain(
+        "-m pre_commit run --config .pre-commit-config.yaml zizmor --files",
+      );
+    } else if (mode === "hook-failure") {
+      expect(existsSync(readFileSync(venvPath, "utf8").trim())).toBe(false);
+    }
+  });
+
+  it("keeps Windows WSL2 probe output normalized through the shared wrapper", () => {
+    const workflow = readFileSync(".github/workflows/windows-testbox-probe.yml", "utf8");
+
+    expect(workflow).toContain(
+      '$import = Invoke-WslText -Arguments @("--import", "UbuntuProbe", $wslRoot, $rootfs, "--version", "2")',
+    );
+    expect(workflow).toContain("function Resolve-UbuntuWslRootfsUrl");
+    expect(workflow).toContain('"x64" { $wslArch = "amd64" }');
+    expect(workflow).toContain('"arm64" { $wslArch = "arm64" }');
+    expect(workflow).toContain("ubuntu-noble-wsl-$wslArch-wsl.rootfs.tar.gz");
+    expect(workflow).toContain("ubuntu_wsl_rootfs_arch=$wslArch");
+    expect(workflow).toContain("-ConnectionTimeoutSeconds 15");
+    expect(workflow).toContain("-OperationTimeoutSeconds 120");
+    expect(workflow).toContain('Write-Host "wsl_import_exit=$($import.Code)"');
+    expect(workflow).toContain("wsl2_restart_required=true");
+    expect(workflow).toContain("import_ubuntu_wsl2=skipped_restart_required");
+    expect(workflow).toContain("wsl_exec_skipped=restart_required");
+    expect(workflow).toContain(
+      '"wsl2_restart_required=$($restartRequired.ToString().ToLowerInvariant())"',
+    );
+    expect(workflow).toContain(
+      '$exec = Invoke-WslText -Arguments @("-d", $distro, "--exec", "bash", "-lc"',
+    );
+    expect(workflow).toContain('Write-Host "wsl_exec_exit=$($exec.Code)"');
+    expect(workflow).not.toContain("wsl.exe --import UbuntuProbe");
+    expect(workflow).not.toContain("Microsoft-Hyper-V-All");
+  });
+
+  it("requests independent headless CI and native qualification without allowing either to fail", () => {
+    const { workflow, probe, native } = readWindowsProbe();
+    expect(workflow.on.workflow_dispatch.inputs.run_windows_ci).toMatchObject({
+      description:
+        "Run Windows CI and native Tasks, or installed native proof with a package binding",
+      default: false,
+      type: "boolean",
+    });
+    expect(workflow.on.workflow_dispatch.inputs.runner_label?.default).toBe(
+      "blacksmith-16vcpu-windows-2025",
+    );
+    expect(native).not.toBe(probe);
+    expect(native.if).toBe(
+      "${{ inputs.run_windows_ci && inputs.installed_startup_package == '' && !inputs.run_private_node_provisioning && !inputs.installed_repair_worker && inputs.windows_ci_replay == '' }}",
+    );
+    expect(native["runs-on"]).toBe("windows-2025");
+    expect(probe.if).toBeUndefined();
+    expect(probe["runs-on"]).toBe("${{ inputs.runner_label }}");
+    for (const job of [probe, native]) {
+      expect(job.needs).toBeUndefined();
+      for (const entry of [job, ...job.steps]) {
+        expect(entry["continue-on-error"]).toBeUndefined();
+      }
+    }
+    const ci = probe.steps.find((step) => step.name === "Run Windows CI tests")!;
+    expect(ci.if).toBe("${{ inputs.run_windows_ci && inputs.installed_startup_package == '' }}");
+    expect(ci.run).toContain("pnpm test:windows:ci");
+    expect(ci.env).toMatchObject({ OPENCLAW_VITEST_MAX_WORKERS: 1 });
+    expect(native.steps).not.toContainEqual(ci);
+    expect(probe.steps.some((step) => step.id?.startsWith("native_schtasks"))).toBe(false);
+    expect(
+      probe.steps.find((step) => step.name === "Keep runner alive for SSH inspection")?.if,
+    ).toBe(
+      "${{ always() && !cancelled() && !inputs.run_private_node_provisioning && inputs.windows_ci_replay == '' }}",
+    );
+    expect(probe.steps.find((step) => step.name === "Enforce WSL2 requirement")?.if).toBe(
+      "${{ always() && !cancelled() && inputs.require_wsl2 }}",
+    );
+
+    const isolation = native.steps[0]!;
+    expect(isolation.id).toBe("native_isolation");
+    expect(isolation.if).toBeUndefined();
+    expect(isolation.env).toEqual({
+      NATIVE_RUNNER_ENVIRONMENT: "${{ runner.environment }}",
+      EXPECTED_HEAD: "${{ inputs.target_ref }}",
+      NATIVE_ISOLATION_PROOF_NAME: "windows-schtasks-isolation.json",
+    });
+    const preflight = native.steps[1]!;
+    expect(preflight.name).toBe("Preflight native Scheduled Task session");
+    // The job excludes private proof and replay before allocation; native steps retain the CI opt-in.
+    expect(preflight.if).toBe("${{ inputs.run_windows_ci }}");
+    expect(preflight.run).toContain(
+      'if (-not [Environment]::UserInteractive) {\n  throw "Native Scheduled Task proof requires an interactive Windows runner session."\n}',
+    );
+    for (const diagnostic of [
+      "identity=",
+      "session_id=",
+      "user_interactive=",
+      "administrator=",
+      "query user",
+    ]) {
+      expect(preflight.run).toContain(diagnostic);
+    }
+    for (const name of [
+      "Checkout",
+      "Setup Node.js",
+      "Setup pnpm",
+      "Runtime versions",
+      "Capture node path",
+      "Install dependencies",
+    ]) {
+      const setup = probe.steps.find((step) => step.name === name)!;
+      expect(setup).toBeDefined();
+      expect(native.steps.find((step) => step.name === name)).toEqual(setup);
+    }
+    expect(native.steps.find((step) => step.name === "Checkout")?.with).toMatchObject({
+      ref: "${{ inputs.target_ref || github.ref }}",
+      "persist-credentials": false,
+    });
+    expect(native.steps.find((step) => step.name === "Setup Node.js")?.env).toMatchObject({
+      REQUESTED_NODE_VERSION:
+        "${{ inputs.windows_ci_replay != '' && env.OPENCLAW_WINDOWS_REPLAY_NODE_VERSION || inputs.installed_startup_package != '' && inputs.startup_node_version || '24.x' }}",
+    });
+    expect(native.steps.find((step) => step.name === "Setup pnpm")?.uses).toBe(
+      "./.github/actions/setup-pnpm-store-cache",
+    );
+    expect(native.steps.find((step) => step.name === "Install dependencies")?.run).toContain(
+      "pnpm install --frozen-lockfile --prefer-offline",
+    );
+  });
+
+  it("honors the Defender exclusion opt-out in every Windows proof job", () => {
+    const { workflow } = readWindowsProbe();
+    expect(workflow.on.workflow_dispatch.inputs.skip_defender_exclusions).toMatchObject({
+      default: false,
+      type: "boolean",
+    });
+    const cases = [
+      [false, false, "", false],
+      [false, true, "", true],
+      [false, false, "{}", true],
+      [false, true, "{}", true],
+      [true, false, "", false],
+      [true, true, "", false],
+      [true, false, "{}", false],
+      [true, true, "{}", false],
+    ] as const;
+    for (const jobName of ["probe", "native-schtasks", "native-schtasks-package"]) {
+      const condition = workflow.jobs[jobName]!.steps.find(
+        (step) => step.name === "Try to exclude workspace from Windows Defender (best-effort)",
+      )?.if;
+      expect(condition).toBeDefined();
+      for (const [skipDefenderExclusions, runWindowsCi, windowsCiReplay, expected] of cases) {
+        expect(
+          evaluateWorkflowExpression(condition, {
+            eventName: "workflow_dispatch",
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            skipDefenderExclusions,
+            runWindowsCi,
+            windowsCiReplay,
+          }),
+          `${jobName}: skip=${skipDefenderExclusions}, ci=${runWindowsCi}, replay=${windowsCiReplay}`,
+        ).toBe(expected);
+      }
+    }
+  });
+
+  it("keeps installed startup measurement opt-in and binds the package independently from tooling", () => {
+    const { workflow, probe, native } = readWindowsProbe();
+    expect(workflow.on.workflow_dispatch.inputs.installed_startup_package).toMatchObject({
+      default: "",
+      type: "string",
+    });
+    expect(workflow.on.workflow_dispatch.inputs.startup_node_version?.default).toBe("26.9.0");
+    expect(workflow.on.workflow_dispatch.inputs.installed_startup_cpu_diagnostic).toMatchObject({
+      default: false,
+      type: "boolean",
+    });
+    const validation = probe.steps.find((step) => step.id === "startup_input")!;
+    expect(validation.env).toMatchObject({
+      STARTUP_PACKAGE: "${{ inputs.installed_startup_package }}",
+      CPU_DIAGNOSTIC: "${{ inputs.installed_startup_cpu_diagnostic }}",
+    });
+    expect(validation.run).toContain("$producer.run_attempt");
+    expect(validation.run).toContain("$artifact.digest");
+    const install = probe.steps.find((step) => step.id === "installed_package")!;
+    expect(install.run).toContain(
+      "scripts/resolve-openclaw-package-candidate.mts --source artifact",
+    );
+    expect(install.run).toContain(
+      "npm install --prefix $installRoot --no-audit --no-fund --ignore-scripts=false",
+    );
+    expect(install.run).toContain("npm rebuild --prefix $installRoot --ignore-scripts=false");
+    expect(install.run).toContain(".openclaw-lifecycle-pending");
+    expect(install.run).toContain("dist/openclaw-install-guard");
+    const measure = probe.steps.find((step) => step.name === "Measure installed startup cohort")!;
+    expect(measure.if).toBe(
+      "${{ inputs.installed_startup_package != '' && !inputs.installed_repair_worker && !inputs.run_windows_ci }}",
+    );
+    expect(measure.run).toContain("scripts/bench-gateway-startup.ts --installed-cohort");
+    expect(measure.env).toMatchObject({
+      CPU_DIAGNOSTIC: "${{ inputs.installed_startup_cpu_diagnostic }}",
+    });
+    expect(measure.run).toContain('if ($env:CPU_DIAGNOSTIC -eq "true")');
+    expect(measure.run).toContain('@("--installed-cpu-diagnostic")');
+    expect(native.steps).not.toContainEqual(measure);
+    const upload = probe.steps.find((step) => step.name === "Upload installed startup evidence")!;
+    expect(upload.if).toBe("${{ always() && inputs.installed_startup_package != '' }}");
+    expect(upload.with?.path).toBe(
+      [
+        ".artifacts/windows-installed-startup/*.json",
+        "${{ runner.temp }}/windows-repair-isolation.json",
+        ".artifacts/windows-installed-startup/*.log",
+        ".artifacts/windows-installed-startup/results.json.profiles/*.cpuprofile",
+        ".artifacts/windows-installed-startup/results.json.profiles/*.json",
+        "",
+      ].join("\n"),
+    );
+    expect(upload.with?.["if-no-files-found"]).toBe("error");
+  });
+
+  it("keeps installed native proof on the same owner with a current-run read-only handoff", () => {
+    const { workflow, native } = readWindowsProbe();
+    const installed = workflow.jobs["native-schtasks-package"]!;
+    expect(installed.needs).toBe("probe");
+    expect(installed.permissions).toEqual({ contents: "read" });
+    expect(installed["runs-on"]).toBe("windows-2025");
+    expect(installed.steps).toBe(native.steps);
+    expect(installed.if).toContain("inputs.installed_startup_package != ''");
+    expect(native.if).toContain("inputs.installed_startup_package == ''");
+    expect(installed.env).toMatchObject({
+      NATIVE_PACKAGE_ID: "${{ needs.probe.outputs.native_package_id }}",
+      NATIVE_PACKAGE_DIGEST: "${{ needs.probe.outputs.native_package_digest }}",
+      NATIVE_MANIFEST_SHA256: "${{ needs.probe.outputs.native_manifest_sha256 }}",
+    });
+    const download = installed.steps.find(
+      (step) => step.name === "Download this run's verified native package",
+    )!;
+    expect(download.with).toMatchObject({
+      "artifact-ids": "${{ env.NATIVE_PACKAGE_ID }}",
+      "skip-decompress": true,
+      "digest-mismatch": "error",
+    });
+    for (const field of ["github-token", "repository", "run-id"]) {
+      expect(download.with?.[field]).toBeUndefined();
+    }
+    for (const entry of [installed, ...installed.steps]) {
+      expect(entry["continue-on-error"]).toBeUndefined();
+    }
+    let previousRetirement: string | undefined;
+    for (const suffix of ["fresh", "9_3", "9_4"]) {
+      const ids = ["prepare", "schtasks", "cleanup", "cell_proof", "retire"].map(
+        (phase) => `native_${phase}_${suffix}`,
+      );
+      const positions = ids.map((id) => installed.steps.findIndex((step) => step.id === id));
+      expect(positions.every((index) => index >= 0)).toBe(true);
+      expect(positions).toEqual(positions.toSorted((left, right) => left - right));
+      for (const index of positions) {
+        expect(installed.steps[index]?.if).toContain("inputs.installed_startup_package != ''");
+      }
+      const prepare = installed.steps[positions[0]!]!;
+      if (previousRetirement) {
+        expect(prepare.if).toContain(`steps.${previousRetirement}.outcome == 'success'`);
+      }
+      const retire = installed.steps[positions[4]!]!;
+      expect(retire.if).toContain(`steps.native_schtasks_${suffix}.outcome == 'success'`);
+      expect(retire.if).toContain(
+        `steps.native_cleanup_${suffix}.outputs.owned_package_cleanup == 'true'`,
+      );
+      expect(retire.if).toContain(`steps.native_cell_proof_${suffix}.outcome == 'success'`);
+      previousRetirement = retire.id;
+    }
+  });
+
+  it("admits repair workers through the existing native and installed-package owners", () => {
+    const { workflow, probe, native } = readWindowsProbe();
+    expect(workflow.on.workflow_dispatch.inputs.installed_repair_worker).toMatchObject({
+      default: false,
+      type: "boolean",
+    });
+    const isolation = probe.steps.find((step) => step.id === "repair_isolation")!;
+    const validation = probe.steps.find((step) => step.id === "startup_input")!;
+    const install = probe.steps.find((step) => step.id === "installed_package")!;
+    const published = probe.steps.find(
+      (step) => step.name === "Install authenticated published repair controllers",
+    )!;
+    const proof = probe.steps.find(
+      (step) => step.name === "Prove installed repair worker compatibility and cleanup",
+    )!;
+    for (const step of [isolation, validation, install, published, proof]) {
+      expect(step).toBeDefined();
+    }
+    expect(isolation.if).toBe("${{ inputs.installed_repair_worker }}");
+    expect(isolation.run).toBe(native.steps[0]?.run);
+    expect(probe.steps.indexOf(isolation)).toBeLessThan(probe.steps.indexOf(validation));
+    expect(probe.steps.indexOf(validation)).toBeLessThan(probe.steps.indexOf(install));
+    expect(probe.steps.indexOf(install)).toBeLessThan(probe.steps.indexOf(proof));
+    expect(validation.env).toMatchObject({
+      REPAIR_WORKER: "${{ inputs.installed_repair_worker }}",
+      WORKFLOW_SHA: "${{ github.workflow_sha }}",
+    });
+    expect(validation.run).toContain("$env:WORKFLOW_SHA -cne $toolingSha");
+    expect(validation.run).toContain('$env:RUNNER_LABEL -ne "windows-2025"');
+    expect(validation.run).toContain('$env:KEEPALIVE_MINUTES -ne "0"');
+    expect(published.if).toBe("${{ inputs.installed_repair_worker }}");
+    expect(published.run).toMatch(
+      /\$integrity -cne \$parent\.integrity[\s\S]*npm install --prefix \$prefix/u,
+    );
+    expect(proof.if).toBe("${{ inputs.installed_repair_worker }}");
+    expect(proof.run).toContain("scripts/windows-repair-worker-probe.mjs");
+    expect(proof.run).toContain("repair-results.json");
+    expect(proof["continue-on-error"]).toBeUndefined();
+  });
+
+  it("retains exact-source native proof and cleanup evidence even on failure", () => {
+    const { native } = readWindowsProbe();
+    const proof = native.steps.find((step) => step.id === "native_schtasks")!;
+    const cleanup = native.steps.find((step) => step.id === "native_cleanup")!;
+    const upload = native.steps.find((step) => step.id === "native_proof_upload")!;
+    const remove = native.steps.find(
+      (step) => step.name === "Remove retained native Scheduled Task evidence",
+    )!;
+    expect(proof["timeout-minutes"]).toBe(5);
+    expect(proof.if).toBe("${{ inputs.run_windows_ci && inputs.installed_startup_package == '' }}");
+    expect(proof.env).toMatchObject({
+      EXPECTED_HEAD: "${{ inputs.target_ref }}",
+      CI_WINDOWS_SCHTASKS_ROOT:
+        "${{ runner.temp }}\\openclaw-schtasks-${{ github.run_id }}-${{ github.run_attempt }}",
+      CI_WINDOWS_SCHTASKS_TEST_ID: "${{ github.run_id }}-${{ github.run_attempt }}",
+      CI_WINDOWS_SCHTASKS_PROOF_PATH:
+        "${{ github.workspace }}\\.artifacts\\windows-schtasks\\proof.json",
+    });
+    expect(proof.run).toContain('if [[ ! "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]; then');
+    expect(proof.run).toContain('CI_WINDOWS_SCHTASKS_HEAD="$(git rev-parse HEAD)"');
+    expect(proof.run).toContain('if [[ "$CI_WINDOWS_SCHTASKS_HEAD" != "$EXPECTED_HEAD" ]]; then');
+    expect(proof.run).toContain("export CI_WINDOWS_SCHTASKS_HEAD");
+    expect(proof.run).toContain("pnpm test:windows:schtasks:integration");
+    const enteredNativeStep = [
+      "native_schtasks",
+      "native_schtasks_fresh",
+      "native_schtasks_9_3",
+      "native_schtasks_9_4",
+    ]
+      .map(
+        (name) => `contains(fromJSON('["success","failure","cancelled"]'), steps.${name}.outcome)`,
+      )
+      .join(" || ");
+    expect(cleanup.if).toBe(
+      "${{ always() && inputs.run_windows_ci && steps.native_isolation.outcome == 'success' && (" +
+        enteredNativeStep +
+        ") }}",
+    );
+    expect(upload.if).toBe("${{ always() && inputs.run_windows_ci }}");
+    expect(cleanup.env).toEqual({
+      TEST_ID: proof.env?.CI_WINDOWS_SCHTASKS_TEST_ID,
+      TEST_ROOT: proof.env?.CI_WINDOWS_SCHTASKS_ROOT,
+      INSTALLED_PACKAGE_MODE: "${{ inputs.installed_startup_package != '' }}",
+    });
+    expect(remove.env).toEqual({
+      TEST_ID: proof.env?.CI_WINDOWS_SCHTASKS_TEST_ID,
+      TEST_ROOT: proof.env?.CI_WINDOWS_SCHTASKS_ROOT,
+    });
+    expect(cleanup.run).toContain('"proof_outcome=${{ steps.native_schtasks.outcome }}"');
+    expect(cleanup.run).toContain("schtasks.exe /Delete /F /TN $taskName");
+    expect(cleanup.run).toContain('$service = New-Object -ComObject "Schedule.Service"');
+    expect(cleanup.run).toContain('throw ($cleanupErrors -join " ")');
+    expect(upload.uses).toMatch(/^actions\/upload-artifact@[0-9a-f]{40}$/u);
+    expect(upload.with?.path).toContain(".artifacts/windows-schtasks/proof.json");
+    expect(upload.with?.path).toContain("windows-schtasks-isolation.json");
+    expect(upload.with?.path).toContain("failure-diagnostics.json");
+    expect(upload.with?.path).toContain("cleanup-summary.txt");
+    expect(upload.with?.path).not.toContain("task-before-cleanup.xml");
+    expect(cleanup.run).not.toContain("Copy-Item -LiteralPath $stateDir");
+    expect(remove.if).toBe(
+      "${{ always() && inputs.run_windows_ci && inputs.installed_startup_package == '' && steps.native_cleanup.outcome == 'success' && steps.native_proof_upload.outcome == 'success' }}",
+    );
+    const sourceStepOrder = [proof, cleanup, upload, remove].map((step) =>
+      native.steps.indexOf(step),
+    );
+    expect(sourceStepOrder).toEqual(sourceStepOrder.toSorted((left, right) => left - right));
+  });
+
+  it("identifies the producer's exact native probe before emergency process-tree cleanup", () => {
+    const { native } = readWindowsProbe();
+    const cleanup = native.steps.find((step) => step.id === "native_cleanup")!.run;
+    const probe = createGatewayTaskSupervisorProbe("probe-root");
+    expect(cleanup).toContain(
+      `$probePath = Join-Path $env:TEST_ROOT "${path.basename(probe.probePath)}"`,
+    );
+    expect(cleanup).toContain('$activePidPath = Join-Path $env:TEST_ROOT "active-pid.txt"');
+    expect(cleanup).toContain('$eventsPath = Join-Path $env:TEST_ROOT "runs.txt"');
+    expect(cleanup).toContain(
+      '$process.CommandLine -like "*$probePath*" -and\n        $process.CommandLine -like "*$eventsPath*"',
+    );
+    expect(cleanup).toContain(
+      'throw "Refusing to kill reused or unverifiable process id $probePid."',
+    );
+    expect(cleanup).toContain("taskkill.exe /F /T /PID $probePid");
+    expect(cleanup).toContain("[DateTime]::UtcNow.AddSeconds(30)");
+  });
+});

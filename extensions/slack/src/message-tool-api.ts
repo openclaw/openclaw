@@ -1,11 +1,9 @@
 import type {
   ChannelMessageActionAdapter,
-  ChannelMessageActionName,
   ChannelMessageToolDiscovery,
   ChannelMessageToolSchemaContribution,
 } from "openclaw/plugin-sdk/channel-contract";
 import { Type, type TSchema } from "typebox";
-import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
 import { listSlackMessageActions } from "./message-actions.js";
 
 const SLACK_MESSAGE_ID_ACTIONS = ["react", "reactions", "edit", "delete", "pin", "unpin"] as const;
@@ -21,9 +19,35 @@ function createSlackFileActionSchema(): Record<string, TSchema> {
   };
 }
 
+function createSlackReactionEmojiSchema(emojiListAvailable: boolean): Record<string, TSchema> {
+  const discoveryHint = emojiListAvailable
+    ? ' Discover workspace custom emoji with action:"emoji-list".'
+    : "";
+  return {
+    emoji: Type.Optional(
+      Type.String({
+        description:
+          'Slack standard or workspace custom emoji shortcode (for example "white_check_mark" or "+1") or common emoji character (for example "✅"). Colons are optional.' +
+          discoveryHint,
+      }),
+    ),
+  };
+}
+
+function createSlackForcedMediaSchema(): Record<string, TSchema> {
+  const description =
+    "Preserve original image bytes without image optimization. Slack still uploads a regular file; this does not convert it into a Slack document.";
+  return {
+    forceDocument: Type.Optional(Type.Boolean({ description })),
+    asDocument: Type.Optional(
+      Type.Boolean({ description: `Alias for forceDocument. ${description}` }),
+    ),
+  };
+}
+
 function createSlackMessageIdActionSchema(): Record<string, TSchema> {
   const description =
-    'Slack message timestamp/message id (for example "1777423717.666499"). Used by react, reactions, edit, delete, pin, and unpin actions. Not used by download-file, which requires fileId from event.files[].id.';
+    'Slack message timestamp/message id (for example "1777423717.666499"). Used by react, reactions, edit, delete, pin, and unpin actions. React defaults to the current inbound message when available. Not used by download-file, which requires fileId from event.files[].id.';
   return {
     messageId: Type.Optional(Type.String({ description })),
     message_id: Type.Optional(Type.String({ description: `${description} Alias for messageId.` })),
@@ -32,6 +56,7 @@ function createSlackMessageIdActionSchema(): Record<string, TSchema> {
 
 function createSlackSendActionSchema(): Record<string, TSchema> {
   return {
+    ...createSlackForcedMediaSchema(),
     topLevel: Type.Optional(
       Type.Boolean({
         description:
@@ -49,6 +74,7 @@ function createSlackSendActionSchema(): Record<string, TSchema> {
 
 function createSlackTopLevelActionSchema(): Record<string, TSchema> {
   return {
+    ...createSlackForcedMediaSchema(),
     topLevel: Type.Optional(
       Type.Boolean({
         description:
@@ -65,38 +91,38 @@ export function describeSlackMessageTool({
   NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>
 >[0]): ChannelMessageToolDiscovery {
   const actions = listSlackMessageActions(cfg, accountId);
-  const capabilities = new Set<"presentation">();
   const schema: ChannelMessageToolSchemaContribution[] = [];
-  if (actions.includes("send")) {
-    capabilities.add("presentation");
-  }
-  if (isSlackInteractiveRepliesEnabled({ cfg, accountId })) {
-    capabilities.add("presentation");
-  }
-  if (actions.includes("download-file")) {
+  if (actions.includes("conversation-open")) {
     schema.push({
-      properties: createSlackFileActionSchema(),
-      actions: ["download-file"],
+      actions: ["conversation-open"],
+      visibility: "all-configured",
+      properties: {
+        userIds: Type.Optional(
+          Type.Array(Type.String({ pattern: "^[UW][A-Z0-9]+$" }), {
+            minItems: 1,
+            maxItems: 8,
+            uniqueItems: true,
+            description:
+              'Slack conversation-open: 1-8 other member IDs. One opens a DM; multiple open or reuse a group DM. Exclude the calling account. Use the returned target with action="send". teamId defaults to the trusted current workspace for the selected account; detached Enterprise operations require it.',
+          }),
+        ),
+      },
     });
   }
-  if (actions.includes("send")) {
-    schema.push({
-      properties: createSlackSendActionSchema(),
-      actions: ["send"],
-    });
-  }
-  if (actions.includes("upload-file")) {
-    schema.push({
-      properties: createSlackTopLevelActionSchema(),
-      actions: ["upload-file"],
-    });
-  }
-  const messageIdActions: ChannelMessageActionName[] = [];
-  for (const action of SLACK_MESSAGE_ID_ACTIONS) {
+  for (const [action, createProperties] of [
+    ["download-file", createSlackFileActionSchema],
+    ["send", createSlackSendActionSchema],
+    ["upload-file", createSlackTopLevelActionSchema],
+    ["react", () => createSlackReactionEmojiSchema(actions.includes("emoji-list"))],
+  ] as const) {
     if (actions.includes(action)) {
-      messageIdActions.push(action);
+      schema.push({
+        properties: createProperties(),
+        actions: action === "react" ? ["react", "reactions"] : [action],
+      });
     }
   }
+  const messageIdActions = SLACK_MESSAGE_ID_ACTIONS.filter((action) => actions.includes(action));
   if (messageIdActions.length > 0) {
     schema.push({
       properties: createSlackMessageIdActionSchema(),
@@ -105,7 +131,7 @@ export function describeSlackMessageTool({
   }
   return {
     actions,
-    capabilities: Array.from(capabilities),
+    capabilities: actions.includes("send") ? ["presentation"] : [],
     schema: schema.length > 0 ? schema : null,
   };
 }

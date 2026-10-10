@@ -1,77 +1,108 @@
 ---
 name: clawhub
-description: "Search, install, update, sync, or publish agent skills with the ClawHub CLI and registry."
-metadata:
-  {
-    "openclaw":
-      {
-        "requires": { "bins": ["clawhub"] },
-        "install":
-          [
-            {
-              "id": "node",
-              "kind": "node",
-              "package": "clawhub",
-              "bins": ["clawhub"],
-              "label": "Install ClawHub CLI (npm)",
-            },
-          ],
-      },
-  }
+description: "Search ClawHub for plugins by default, or skills when explicitly requested; install, verify, update, uninstall, publish, or sync skills."
 ---
 
-# ClawHub CLI
+# ClawHub
 
-Install
+Prefer searching ClawHub for plugins unless the user explicitly asks for a skill.
+Search before claiming that a requested capability is unavailable.
+
+Use `openclaw skills` for explicitly requested skill discovery and for managing
+skills for the current OpenClaw agent. Use the standalone `clawhub` CLI to uninstall
+installed ClawHub skills and for publishing, syncing, and publisher account
+workflows.
+
+## Discover plugins (default)
+
+Use the `plugins` tool when available, with `action: "search"` and `query` set to
+the requested capability, to return native plugin search results. If the tool is
+unavailable, use the CLI:
+
+```bash
+openclaw plugins search "notion"
+```
+
+A discovery request does not authorize installation. Install only when the user
+asks.
+
+## Discover skills (explicit requests)
+
+When the user explicitly asks for a skill, search skills instead of plugins:
+
+```bash
+openclaw skills search "postgres backups"
+```
+
+Install when the user asks. Verify the selected skill first and report the result.
+
+```bash
+openclaw skills verify my-skill
+openclaw skills install my-skill
+openclaw skills install my-skill --version 1.2.3
+```
+
+## Manage installed skills
+
+```bash
+openclaw skills list
+openclaw skills check
+openclaw skills update my-skill
+openclaw skills update --all
+```
+
+Use `--global` with `install` or `update` to manage skills shared by all local
+agents.
+
+## Remove an installed skill
+
+Uninstall when the user asks. If the standalone ClawHub CLI is not
+installed, install it explicitly:
 
 ```bash
 npm i -g clawhub
+clawhub uninstall @owner/my-skill
 ```
 
-Auth (publish)
+The CLI asks for confirmation before removing the skill and its lockfile entry.
+Use the original agent workspace for agent-specific skills or the OpenClaw
+state directory for skills installed with `--global`:
 
 ```bash
+clawhub --workdir /path/to/agent-workspace uninstall @owner/my-skill
+clawhub --workdir ~/.openclaw uninstall @owner/my-skill
+```
+
+If `OPENCLAW_STATE_DIR` is set, use its value instead of `~/.openclaw`:
+
+```bash
+clawhub --workdir "$OPENCLAW_STATE_DIR" uninstall @owner/my-skill
+```
+
+The default skills watcher refreshes the available skills on the next agent
+turn. If watching is disabled, start a new session.
+
+## Publish skills
+
+Install the standalone ClawHub CLI for publisher workflows:
+
+```bash
+npm i -g clawhub
 clawhub login
 clawhub whoami
 ```
 
-Search
+Publish or sync skills:
 
 ```bash
-clawhub search "postgres backups"
+clawhub skill publish ./my-skill
+clawhub skill publish ./my-skill --version 1.2.3
+clawhub sync --all
 ```
 
-Install
+## Notes
 
-```bash
-clawhub install my-skill
-clawhub install my-skill --version 1.2.3
-```
-
-Update (hash-based match + upgrade)
-
-```bash
-clawhub update my-skill
-clawhub update my-skill --version 1.2.3
-clawhub update --all
-clawhub update my-skill --force
-clawhub update --all --no-input --force
-```
-
-List
-
-```bash
-clawhub list
-```
-
-Publish
-
-```bash
-clawhub publish ./my-skill --slug my-skill --name "My Skill" --version 1.2.0 --changelog "Fixes + docs"
-```
-
-Notes
-
-- Default registry: https://clawhub.com (override with CLAWHUB_REGISTRY or --registry)
-- Default workdir: cwd (falls back to OpenClaw workspace); install dir: ./skills (override with --workdir / --dir / CLAWHUB_WORKDIR)
-- Update command hashes local files, resolves matching version, and upgrades to latest unless --version is set
+- Public registry: https://clawhub.ai
+- `openclaw skills install` installs into the active workspace by default.
+- Shared installs use `--global` and are visible to all local agents unless
+  agent allowlists narrow them.

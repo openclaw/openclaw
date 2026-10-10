@@ -1,6 +1,14 @@
-import { randomBytes } from "node:crypto";
 import { inspect } from "node:util";
-import { serializeRequestBody } from "./rest-body.js";
+import { gunzipSync } from "node:zlib";
+import {
+  captureChannelReadAuthority,
+  captureEffectAuthority,
+} from "openclaw/plugin-sdk/fetch-runtime";
+import { clampTimerTimeoutMs, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { getDiscordEndpointRuntime, type DiscordEndpointRuntime } from "../endpoint-runtime.js";
+import { captureDiscordRequestAuthority } from "./request-authority.js";
+import { serializeRequestBody, type RequestData } from "./rest-body.js";
 import {
   DiscordError,
   RateLimitError,
@@ -9,72 +17,74 @@ import {
   readRetryAfter,
 } from "./rest-errors.js";
 import { appendQuery, createRouteKey } from "./rest-routes.js";
-import {
-  RestScheduler,
-  type RequestPriority as RestRequestPriority,
-  type RequestQuery,
-} from "./rest-scheduler.js";
+import { RestScheduler, type RequestPriority, type RequestQuery } from "./rest-scheduler.js";
 import { isDiscordRateLimitBody } from "./schemas.js";
 
-export { DiscordError, RateLimitError } from "./rest-errors.js";
-
-export type RuntimeProfile = "serverless" | "persistent";
-export type RequestPriority = RestRequestPriority;
-export type RequestSchedulerOptions = {
-  lanes?: Partial<
-    Record<RequestPriority, { maxQueueSize?: number; staleAfterMs?: number; weight?: number }>
-  >;
-  maxConcurrency?: number;
-  maxRateLimitRetries?: number;
-};
+export { DiscordError, isUnknownDiscordVoiceStateError, RateLimitError } from "./rest-errors.js";
 
 export type RequestClientOptions = {
-  tokenHeader?: "Bot" | "Bearer";
   baseUrl?: string;
-  apiVersion?: number;
-  userAgent?: string;
+  /** Complete versioned REST base supplied by the Discord endpoint override. */
+  apiBaseUrl?: string;
+  signal?: AbortSignal;
   timeout?: number;
   queueRequests?: boolean;
-  maxQueueSize?: number;
-  runtimeProfile?: RuntimeProfile;
-  scheduler?: RequestSchedulerOptions;
   fetch?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 };
 
-export type RequestData = {
-  body?: unknown;
-  multipartStyle?: "message" | "form";
-  rawBody?: boolean;
-  headers?: Record<string, string>;
+type NormalizedRequestClientOptions = RequestClientOptions & {
+  apiBaseUrl: string;
+  timeout: number;
 };
 
-export type QueuedRequest = {
-  method: string;
-  path: string;
+type RequestDispatchData = {
   data?: RequestData;
-  query?: RequestQuery;
-  resolve: (value?: unknown) => void;
-  reject: (reason?: unknown) => void;
-  routeKey: string;
+  assertCurrent?: () => void;
+  effect: ReturnType<typeof captureEffectAuthority>;
 };
 
 const defaultOptions = {
-  tokenHeader: "Bot" as const,
   baseUrl: "https://discord.com/api",
-  apiVersion: 10,
-  userAgent: "OpenClaw Discord",
   timeout: 15_000,
   queueRequests: true,
-  maxQueueSize: 1000,
-  runtimeProfile: "persistent" as RuntimeProfile,
 };
 
-const DEFAULT_MAX_CONCURRENT_WORKERS = 4;
-const defaultLaneOptions: Record<RestRequestPriority, { staleAfterMs?: number; weight: number }> = {
-  critical: { weight: 6 },
-  standard: { weight: 3 },
-  background: { staleAfterMs: 20_000, weight: 1 },
-};
+// Cap the REST response body well above any legitimate Discord JSON payload
+// (bulk message/member fetches stay in the low hundreds of KB) so a controlled
+// or hijacked endpoint cannot flood the body into an unbounded buffer (OOM).
+const DISCORD_REST_RESPONSE_BODY_MAX_BYTES = 8 * 1024 * 1024;
+const GZIP_MAGIC = [0x1f, 0x8b] as const;
+
+function createResponseBodyOverflowError(size: number | "decompressed output"): Error {
+  return new Error(
+    `Discord REST response body exceeds ${DISCORD_REST_RESPONSE_BODY_MAX_BYTES} bytes (received ${size})`,
+  );
+}
+
+async function readResponseBodyText(response: Response, idleTimeoutMs: number): Promise<string> {
+  const buffer = await readResponseWithLimit(response, DISCORD_REST_RESPONSE_BODY_MAX_BYTES, {
+    chunkTimeoutMs: idleTimeoutMs,
+    onOverflow: ({ size }) => createResponseBodyOverflowError(size),
+    onIdleTimeout: ({ chunkTimeoutMs }) =>
+      new Error(`Discord REST response stalled: no data received for ${chunkTimeoutMs}ms`),
+  });
+  if (!buffer.byteLength) {
+    return "";
+  }
+  if (buffer[0] === GZIP_MAGIC[0] && buffer[1] === GZIP_MAGIC[1]) {
+    try {
+      return gunzipSync(buffer, {
+        maxOutputLength: DISCORD_REST_RESPONSE_BODY_MAX_BYTES,
+      }).toString("utf8");
+    } catch (err: unknown) {
+      if (err instanceof RangeError && "code" in err && err.code === "ERR_BUFFER_TOO_LARGE") {
+        throw createResponseBodyOverflowError("decompressed output");
+      }
+      throw err;
+    }
+  }
+  return buffer.toString("utf8");
+}
 
 function coerceResponseBody(raw: string): unknown {
   if (!raw) {
@@ -87,146 +97,133 @@ function coerceResponseBody(raw: string): unknown {
   }
 }
 
-function escapeMultipartQuotedValue(value: string): string {
-  return value.replace(/["\r\n]/g, (ch) => (ch === '"' ? "%22" : ch === "\r" ? "%0D" : "%0A"));
-}
-
-async function formDataToMultipartBody(body: FormData, headers: Headers): Promise<BodyInit> {
-  const boundary = `----openclaw-discord-${randomBytes(12).toString("hex")}`;
-  headers.set("Content-Type", `multipart/form-data; boundary=${boundary}`);
-  const chunks: Buffer[] = [];
-  const push = (value: string | Buffer) => {
-    chunks.push(typeof value === "string" ? Buffer.from(value) : value);
-  };
-  for (const [key, value] of body.entries()) {
-    push(`--${boundary}\r\n`);
-    const escapedKey = escapeMultipartQuotedValue(key);
-    if (typeof value === "string") {
-      push(`Content-Disposition: form-data; name="${escapedKey}"\r\n\r\n`);
-      push(value);
-      push("\r\n");
-      continue;
-    }
-    const filename = (value as Blob & { name?: unknown }).name;
-    const escapedFilename = escapeMultipartQuotedValue(
-      typeof filename === "string" && filename.length > 0 ? filename : "blob",
-    );
-    push(`Content-Disposition: form-data; name="${escapedKey}"; filename="${escapedFilename}"\r\n`);
-    if (value.type) {
-      push(`Content-Type: ${value.type}\r\n`);
-    }
-    push("\r\n");
-    push(Buffer.from(await value.arrayBuffer()));
-    push("\r\n");
-  }
-  push(`--${boundary}--\r\n`);
-  return Buffer.concat(chunks) as unknown as BodyInit;
-}
-
-async function normalizeFetchBody(
-  body: BodyInit | undefined,
-  headers: Headers,
-): Promise<BodyInit | undefined> {
-  if (body instanceof FormData) {
-    return await formDataToMultipartBody(body, headers);
-  }
-  return body;
-}
-
 export class RequestClient {
-  readonly options: RequestClientOptions;
+  readonly options: NormalizedRequestClientOptions;
   protected token: string;
-  protected customFetch: RequestClientOptions["fetch"];
+  protected customFetch: DiscordEndpointRuntime["fetch"] | undefined;
+  private readonly guardedEndpoint: boolean;
   protected requestControllers = new Set<AbortController>();
-  private scheduler: RestScheduler<RequestData>;
+  private scheduler: RestScheduler<RequestDispatchData>;
 
   constructor(token: string, options?: RequestClientOptions) {
+    const endpoint = getDiscordEndpointRuntime();
+    const resolvedOptions = endpoint
+      ? {
+          ...options,
+          apiBaseUrl: endpoint.descriptor.restApiBaseUrl,
+          fetch: endpoint.fetch,
+        }
+      : options;
     this.token = token.replace(/^Bot\s+/i, "");
-    this.customFetch = options?.fetch;
-    this.options = { ...defaultOptions, ...options };
-    this.scheduler = new RestScheduler<RequestData>(
-      {
-        lanes: normalizeSchedulerLanes(
-          this.options.maxQueueSize ?? defaultOptions.maxQueueSize,
-          this.options.scheduler?.lanes,
-        ),
-        maxConcurrency: this.options.scheduler?.maxConcurrency ?? DEFAULT_MAX_CONCURRENT_WORKERS,
-        maxQueueSize: this.options.maxQueueSize ?? defaultOptions.maxQueueSize,
-        maxRateLimitRetries: this.options.scheduler?.maxRateLimitRetries ?? 3,
-      },
+    this.customFetch = resolvedOptions?.fetch;
+    this.guardedEndpoint = endpoint !== undefined;
+    this.options = normalizeRequestClientOptions(resolvedOptions);
+    this.scheduler = new RestScheduler<RequestDispatchData>(
       async (request) =>
         await this.executeRequest(
           request.method,
           request.path,
-          { data: request.data, query: request.query },
+          { data: request.data?.data, query: request.query },
           request.routeKey,
+          request.data?.assertCurrent,
+          request.data?.effect,
         ),
     );
   }
 
-  async get(path: string, query?: QueuedRequest["query"]): Promise<unknown> {
+  async get(path: string, query?: RequestQuery): Promise<unknown> {
     return await this.request("GET", path, { query });
   }
 
-  async post(path: string, data?: RequestData, query?: QueuedRequest["query"]): Promise<unknown> {
+  async post(path: string, data?: RequestData, query?: RequestQuery): Promise<unknown> {
     return await this.request("POST", path, { data, query });
   }
 
-  async patch(path: string, data?: RequestData, query?: QueuedRequest["query"]): Promise<unknown> {
+  async patch(path: string, data?: RequestData, query?: RequestQuery): Promise<unknown> {
     return await this.request("PATCH", path, { data, query });
   }
 
-  async put(path: string, data?: RequestData, query?: QueuedRequest["query"]): Promise<unknown> {
+  async put(path: string, data?: RequestData, query?: RequestQuery): Promise<unknown> {
     return await this.request("PUT", path, { data, query });
   }
 
-  async delete(path: string, data?: RequestData, query?: QueuedRequest["query"]): Promise<unknown> {
+  async delete(path: string, data?: RequestData, query?: RequestQuery): Promise<unknown> {
     return await this.request("DELETE", path, { data, query });
   }
 
   protected async request(
     method: string,
     path: string,
-    params: { data?: RequestData; query?: QueuedRequest["query"] },
+    params: { data?: RequestData; query?: RequestQuery },
   ): Promise<unknown> {
     const routeKey = createRouteKey(method, path);
+    // A shared scheduler can drain under another caller's async context. Capture
+    // both host action and read authority before queueing or rate-limit retries.
+    const assertActionAuthority = captureDiscordRequestAuthority();
+    const assertReadAuthority = captureChannelReadAuthority();
+    const effect = captureEffectAuthority();
+    const assertCurrent = assertActionAuthority
+      ? () => {
+          assertActionAuthority();
+          assertReadAuthority?.();
+        }
+      : assertReadAuthority;
+    assertCurrent?.();
     if (!this.options.queueRequests) {
-      return await this.executeRequest(method, path, params, routeKey);
+      return await this.executeRequest(method, path, params, routeKey, assertCurrent, effect);
     }
     return await this.scheduler.enqueue({
       method,
       path,
       priority: getRequestPriority(method, path),
-      ...params,
+      query: params.query,
+      data: { data: params.data, assertCurrent, effect },
     });
   }
 
   protected async executeRequest(
     method: string,
     path: string,
-    params: { data?: RequestData; query?: QueuedRequest["query"] },
+    params: { data?: RequestData; query?: RequestQuery },
     routeKey = createRouteKey(method, path),
+    assertCurrent?: () => void,
+    effect = captureEffectAuthority(),
   ): Promise<unknown> {
-    const url = `${this.options.baseUrl}/v${this.options.apiVersion}${appendQuery(path, params.query)}`;
+    const url = `${this.options.apiBaseUrl}${appendQuery(path, params.query)}`;
     const headers = new Headers({
-      "User-Agent": this.options.userAgent ?? defaultOptions.userAgent,
+      "User-Agent": "OpenClaw Discord",
     });
     if (this.token !== "webhook") {
-      headers.set("Authorization", `${this.options.tokenHeader ?? "Bot"} ${this.token}`);
+      headers.set("Authorization", `Bot ${this.token}`);
     }
     const body = serializeRequestBody(params.data, headers);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.options.timeout ?? 15_000);
+    const timeout = setTimeout(() => controller.abort(), this.options.timeout);
     timeout.unref?.();
+    const signal = this.options.signal
+      ? AbortSignal.any([this.options.signal, controller.signal])
+      : controller.signal;
     this.requestControllers.add(controller);
     try {
-      const response = await (this.customFetch ?? fetch)(url, {
-        method,
-        headers,
-        body: await normalizeFetchBody(body, headers),
-        signal: controller.signal,
-      });
-      const text = await response.text();
+      assertCurrent?.();
+      const init = { method, headers, body, signal };
+      const request = () => {
+        assertCurrent?.();
+        return this.customFetch && assertCurrent
+          ? this.customFetch(url, init, assertCurrent)
+          : (this.customFetch ?? fetch)(url, init);
+      };
+      const response = this.guardedEndpoint
+        ? await effect.run(request)
+        : await effect.initiate(request);
+      const text = await readResponseBodyText(response, this.options.timeout).catch(
+        (error: unknown) => {
+          if (response.ok) {
+            throw error;
+          }
+          return "";
+        },
+      );
       const parsed = coerceResponseBody(text);
       this.scheduler.recordResponse(routeKey, path, response, parsed);
       if (response.status === 204) {
@@ -246,9 +243,6 @@ export class RequestClient {
       }
       return parsed;
     } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") {
-        throw error;
-      }
       if (error instanceof Error) {
         throw error;
       }
@@ -267,10 +261,6 @@ export class RequestClient {
     return this.scheduler.queueSize;
   }
 
-  getSchedulerMetrics() {
-    return this.scheduler.getMetrics();
-  }
-
   abortAllRequests(): void {
     this.scheduler.abortPending();
     for (const controller of this.requestControllers) {
@@ -280,39 +270,19 @@ export class RequestClient {
   }
 }
 
-function normalizeSchedulerLanes(
-  maxQueueSize: number,
-  lanes?: RequestSchedulerOptions["lanes"],
-): Record<RestRequestPriority, { maxQueueSize: number; staleAfterMs?: number; weight: number }> {
-  const fallbackMaxQueueSize = Math.max(1, Math.floor(maxQueueSize));
+function normalizeRequestClientOptions(
+  options?: RequestClientOptions,
+): NormalizedRequestClientOptions {
+  const merged = { ...defaultOptions, ...options };
   return {
-    critical: normalizeSchedulerLane("critical", fallbackMaxQueueSize, lanes?.critical),
-    standard: normalizeSchedulerLane("standard", fallbackMaxQueueSize, lanes?.standard),
-    background: normalizeSchedulerLane("background", fallbackMaxQueueSize, lanes?.background),
+    ...merged,
+    apiBaseUrl: options?.apiBaseUrl ?? `${options?.baseUrl ?? defaultOptions.baseUrl}/v10`,
+    timeout:
+      clampTimerTimeoutMs(merged.timeout, 1) ?? resolveTimerTimeoutMs(defaultOptions.timeout, 1),
   };
 }
 
-function normalizeSchedulerLane(
-  lane: RestRequestPriority,
-  maxQueueSize: number,
-  options?: { maxQueueSize?: number; staleAfterMs?: number; weight?: number },
-): { maxQueueSize: number; staleAfterMs?: number; weight: number } {
-  const defaults = defaultLaneOptions[lane];
-  return {
-    maxQueueSize:
-      options?.maxQueueSize !== undefined
-        ? Math.max(1, Math.floor(options.maxQueueSize))
-        : maxQueueSize,
-    staleAfterMs:
-      options?.staleAfterMs !== undefined
-        ? Math.max(0, Math.floor(options.staleAfterMs))
-        : defaults.staleAfterMs,
-    weight:
-      options?.weight !== undefined ? Math.max(1, Math.floor(options.weight)) : defaults.weight,
-  };
-}
-
-function getRequestPriority(method: string, path: string): RestRequestPriority {
+function getRequestPriority(method: string, path: string): RequestPriority {
   const normalizedMethod = method.toUpperCase();
   const normalizedPath = path.toLowerCase();
   if (/^\/interactions\/\d+\/[^/]+\/callback$/.test(normalizedPath)) {

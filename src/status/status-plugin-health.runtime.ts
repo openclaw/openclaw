@@ -1,0 +1,270 @@
+import { listPersistedRuntimeToolSchemaQuarantines } from "../agents/tool-schema-quarantine-health.js";
+import { resolveReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
+// Runtime plugin health collection is isolated from pure status formatting so
+// ordinary status tests do not eagerly load plugin registry internals.
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { listContextEngineQuarantines } from "../context-engine/registry.js";
+import {
+  getActiveRuntimePluginRegistry,
+  listLoadedRuntimePluginIds,
+} from "../plugins/active-runtime-registry.js";
+import {
+  dedupeChannelPluginFailures,
+  dedupePluginDiagnostics,
+  isChannelPluginFailureDiagnostic,
+  mergeStatusPluginHealthSnapshots,
+} from "./status-plugin-health.js";
+import type {
+  ChannelPluginFailureRecord,
+  PluginCompatibilityHealthNotice,
+  PluginDiagnosticRecord,
+  PluginHealthRecord,
+  RuntimeToolQuarantineRecord,
+  StatusPluginHealthSnapshot,
+} from "./status-plugin-health.js";
+
+// Project only health fields, omitting absent values from registry records.
+function normalizeSnapshotPlugin(plugin: PluginHealthRecord): PluginHealthRecord {
+  return {
+    id: plugin.id,
+    ...(plugin.status !== undefined ? { status: plugin.status } : {}),
+    ...(plugin.enabled !== undefined ? { enabled: plugin.enabled } : {}),
+    ...(plugin.error !== undefined ? { error: plugin.error } : {}),
+    ...(plugin.dependencyStatus !== undefined ? { dependencyStatus: plugin.dependencyStatus } : {}),
+    ...(plugin.failurePhase !== undefined ? { failurePhase: plugin.failurePhase } : {}),
+  };
+}
+
+function normalizeDiagnostic(diagnostic: PluginDiagnosticRecord): PluginDiagnosticRecord {
+  return {
+    level: diagnostic.level,
+    message: diagnostic.message,
+    ...(diagnostic.pluginId ? { pluginId: diagnostic.pluginId } : {}),
+    ...(diagnostic.code ? { code: diagnostic.code } : {}),
+  };
+}
+
+function normalizeCompatibilityNotice(
+  notice: PluginCompatibilityHealthNotice,
+): PluginCompatibilityHealthNotice {
+  return {
+    pluginId: notice.pluginId,
+    severity: notice.severity,
+    message: notice.message,
+    ...(notice.code ? { code: notice.code } : {}),
+  };
+}
+
+function collectChannelPluginFailures(params: {
+  config?: OpenClawConfig;
+  diagnostics?: readonly PluginDiagnosticRecord[];
+  workspaceDir?: string;
+}): ChannelPluginFailureRecord[] {
+  const diagnosticFailures = (params.diagnostics ?? [])
+    .filter(isChannelPluginFailureDiagnostic)
+    .map((diagnostic) => {
+      const failure: ChannelPluginFailureRecord = {
+        channelId: diagnostic.pluginId ?? "unknown",
+        message: diagnostic.message,
+        source: "diagnostic",
+      };
+      if (diagnostic.pluginId) {
+        failure.pluginId = diagnostic.pluginId;
+      }
+      return failure;
+    });
+  if (!params.config) {
+    return dedupeChannelPluginFailures(diagnosticFailures);
+  }
+  try {
+    const resolution = resolveReadOnlyChannelPluginsForConfig(params.config, {
+      workspaceDir: params.workspaceDir,
+      activationSourceConfig: params.config,
+      includePersistedAuthState: false,
+      // Detailed status inspects the full surface, including setup-fallback
+      // plugins, so missing-channel detection matches what setup would load.
+      includeSetupFallbackPlugins: true,
+    });
+    const loadFailures = resolution.loadFailures.map((failure) => ({
+      channelId: failure.channelId,
+      pluginId: failure.pluginId,
+      message: failure.message,
+      ...(failure.source ? { source: failure.source } : {}),
+    }));
+    const concreteFailures = dedupeChannelPluginFailures([...diagnosticFailures, ...loadFailures]);
+    const failedChannelIds = new Set(concreteFailures.map((failure) => failure.channelId));
+    return [
+      ...concreteFailures,
+      ...resolution.missingConfiguredChannelIds
+        .filter((channelId) => !failedChannelIds.has(channelId))
+        .map((channelId) => ({
+          channelId,
+          message: "configured channel plugin is missing or unavailable",
+        })),
+    ];
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return [
+      ...diagnosticFailures,
+      {
+        channelId: "unknown",
+        message: `failed to inspect configured channel plugins: ${message}`,
+      },
+    ];
+  }
+}
+
+function filterRuntimeToolQuarantinesForRegistry(params: {
+  quarantines: readonly RuntimeToolQuarantineRecord[];
+  plugins: readonly PluginHealthRecord[];
+}): RuntimeToolQuarantineRecord[] {
+  const loadedPluginIds = new Set(
+    params.plugins
+      .filter((plugin) => plugin.enabled !== false && plugin.status !== "disabled")
+      .map((plugin) => plugin.id),
+  );
+  return params.quarantines.filter((quarantine) => {
+    const pluginId = quarantine.owner?.startsWith("plugin:")
+      ? quarantine.owner.slice("plugin:".length).trim()
+      : undefined;
+    return !pluginId || loadedPluginIds.has(pluginId);
+  });
+}
+
+// Compact status reads only the active registry and persisted health stores;
+// full config-driven channel inspection is reserved for the installed path.
+export async function collectRuntimePluginHealthSnapshot(): Promise<StatusPluginHealthSnapshot> {
+  const [contextEngineQuarantines, runtimeToolQuarantines] = await Promise.all([
+    listContextEngineQuarantines(),
+    listPersistedRuntimeToolSchemaQuarantines(),
+  ]);
+  const registry = getActiveRuntimePluginRegistry();
+  const diagnostics = (registry?.diagnostics ?? []).map(normalizeDiagnostic);
+  const plugins = (registry?.plugins ?? []).map(normalizeSnapshotPlugin);
+  const runtimeLoadedPluginIds = listLoadedRuntimePluginIds();
+  return {
+    plugins,
+    diagnostics,
+    contextEngineQuarantines,
+    runtimeToolQuarantines: filterRuntimeToolQuarantinesForRegistry({
+      quarantines: runtimeToolQuarantines,
+      plugins,
+    }),
+    channelPluginFailures: collectChannelPluginFailures({
+      diagnostics,
+    }),
+    runtimeLoadedPluginIds,
+  };
+}
+
+export async function collectInstalledPluginHealthSnapshot(params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+}): Promise<StatusPluginHealthSnapshot> {
+  const { buildPluginCompatibilityNotices, buildPluginSnapshotReport } =
+    await import("../plugins/status.js");
+  const runtime = await collectRuntimePluginHealthSnapshot();
+  const report = buildPluginSnapshotReport({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+  });
+  const installedDiagnostics = report.diagnostics.map(normalizeDiagnostic);
+  // Channel failures resolve once against the union of installed and runtime
+  // diagnostics so missing-channel entries cannot duplicate concrete failures
+  // that only one side observed.
+  const channelPluginFailures = collectChannelPluginFailures({
+    config: params.config,
+    diagnostics: dedupePluginDiagnostics([...installedDiagnostics, ...runtime.diagnostics]),
+    workspaceDir: params.workspaceDir,
+  });
+  const runtimeRegistry = getActiveRuntimePluginRegistry();
+  const runtimeCompatibilityNotices = runtimeRegistry
+    ? buildPluginCompatibilityNotices({
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        report: runtimeRegistry,
+      }).map(normalizeCompatibilityNotice)
+    : [];
+  const merged = mergeStatusPluginHealthSnapshots(
+    {
+      plugins: report.plugins.map(normalizeSnapshotPlugin),
+      diagnostics: installedDiagnostics,
+      contextEngineQuarantines: [],
+      channelPluginFailures,
+      compatibilityNotices: buildPluginCompatibilityNotices({
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        report,
+      }).map(normalizeCompatibilityNotice),
+    },
+    { ...runtime, compatibilityNotices: runtimeCompatibilityNotices },
+  );
+  const shouldRunPluginIds = await resolveShouldRunPluginIds(params);
+  const unregisteredMemoryEmbeddingProviders = await resolveUnregisteredMemoryEmbeddingProviders({
+    config: params.config,
+    registry: runtimeRegistry,
+  });
+  return {
+    ...merged,
+    ...(shouldRunPluginIds ? { shouldRunPluginIds } : {}),
+    ...(unregisteredMemoryEmbeddingProviders ? { unregisteredMemoryEmbeddingProviders } : {}),
+  };
+}
+
+// Detailed status needs a live registry to distinguish unavailable providers from
+// providers not yet loaded. Missing facts or failed resolution produce no signal.
+async function resolveUnregisteredMemoryEmbeddingProviders(params: {
+  config?: OpenClawConfig;
+  registry: ReturnType<typeof getActiveRuntimePluginRegistry>;
+}): Promise<Array<{ configuredId: string; source: "provider" | "fallback" }> | undefined> {
+  if (!params.config || !params.registry) {
+    return undefined;
+  }
+  try {
+    const {
+      collectRegisteredEmbeddingProviderIds,
+      collectUnregisteredConfiguredMemoryEmbeddingProviders,
+    } = await import("../plugins/gateway-startup-plugin-ids.js");
+    const unregistered = collectUnregisteredConfiguredMemoryEmbeddingProviders({
+      config: params.config,
+      registeredProviderIds: collectRegisteredEmbeddingProviderIds(params.registry),
+    });
+    return unregistered.length > 0 ? unregistered : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// Keep startup-plan loading off compact status; failed diagnostics never break status.
+async function resolveShouldRunPluginIds(params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+}): Promise<string[] | undefined> {
+  if (!params.config) {
+    return undefined;
+  }
+  try {
+    const { loadGatewayStartupPluginPlan } =
+      await import("../plugins/gateway-startup-plugin-ids.js");
+    const { resolvePluginActivationSourceConfig } =
+      await import("../plugins/activation-source-config.js");
+    const { resolveGatewayStartupPluginActivationConfig } =
+      await import("../gateway/plugin-activation-runtime-config.js");
+    // Reuse Gateway boot's source-config activation and runtime/default merge.
+    const sourceConfig = resolvePluginActivationSourceConfig({ config: params.config });
+    const effectiveConfig = resolveGatewayStartupPluginActivationConfig({
+      runtimeConfig: params.config,
+      activationSourceConfig: sourceConfig,
+      env: process.env,
+    });
+    const plan = loadGatewayStartupPluginPlan({
+      config: effectiveConfig,
+      activationSourceConfig: sourceConfig,
+      env: process.env,
+      ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+    });
+    return [...plan.pluginIds];
+  } catch {
+    return undefined;
+  }
+}

@@ -1,26 +1,57 @@
 import crypto from "node:crypto";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY,
+  type SystemRunExecutionContext,
+} from "../../packages/gateway-protocol/src/system-run-execution-context.js";
 import {
   describeInterpreterInlineEval,
   type InterpreterInlineEvalHit,
 } from "../infra/command-analysis/inline-eval.js";
-import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
+import { detectInlineEvalInSegments } from "../infra/command-analysis/risks.js";
+import { hasExactCommandDurableExecApproval } from "../infra/exec-approvals-allow-always.js";
 import {
   type ExecApprovalsFile,
+  type ExecAllowlistEntry,
   type ExecAsk,
+  type AllowAlwaysPersistenceDecision,
+  type ExecCommandSegment,
   type ExecSecurity,
   type SystemRunApprovalPlan,
-  evaluateShellAllowlist,
+  countObsoleteGeneratedExecApprovals,
+  evaluateShellAllowlistWithAuthorization,
   hasDurableExecApproval,
+  hasNodeCommandAllowAlwaysMarker,
   resolveExecApprovalsFromFile,
+  resolveAllowAlwaysPersistenceDecision,
+  resolveAllowAlwaysPatternCoverage,
+  type AllowAlwaysPattern,
 } from "../infra/exec-approvals.js";
+import {
+  hasPosixShellStartupBeforeInlineCommand,
+  isBlockedShellWrapperCommand,
+} from "../infra/exec-wrapper-resolution.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
-import { parsePreparedSystemRunPayload } from "../infra/system-run-approval-context.js";
-import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
-import { normalizeNullableString } from "../shared/string-coerce.js";
+import { buildExecRoutingEnv } from "../infra/openclaw-exec-env.js";
+import {
+  parsePreparedSystemRunPayload,
+  type PreparedRunExecPolicy,
+} from "../infra/system-run-approval-context.js";
+import {
+  extractShellCommandFromArgv,
+  resolveSystemRunCommandRequest,
+} from "../infra/system-run-command.js";
+import { resolveEligibleNodeFromList } from "../shared/node-resolve.js";
+import { resolveNodeAutoApprovalEligibility } from "./bash-tools.exec-host-node-approval-eligibility.js";
+import {
+  formatNodeInvokeFailureToolResult,
+  invokeNodeSystemRun,
+} from "./bash-tools.exec-host-node-failure.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
-import { renderExecOutputText } from "./bash-tools.exec-output.js";
+import { appendExecTimeoutRetryGuidance, renderExecUpdateText } from "./bash-tools.exec-output.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import { resolveNodeExecTimeouts } from "./exec-tool-timeout.js";
+import type { AgentToolResult } from "./runtime/index.js";
 import { callGatewayTool } from "./tools/gateway.js";
 import { listNodes, resolveNodeIdFromList } from "./tools/nodes-utils.js";
 
@@ -29,8 +60,10 @@ type NodeExecutionTarget = {
   platform?: string | null;
   argv: string[];
   env: Record<string, string> | undefined;
-  invokeTimeoutMs: number;
-  runTimeoutSec: number;
+  executionContext?: SystemRunExecutionContext;
+  invokeDeadlineMs: number;
+  invokeWaitMs: number;
+  runTimeoutMs: number;
   supportsSystemRunPrepare: boolean;
 };
 
@@ -41,53 +74,139 @@ type PreparedNodeRun = {
   cwd: string | undefined;
   agentId: string | undefined;
   sessionKey: string | undefined;
+  execPolicy?: PreparedRunExecPolicy;
+  allowAlwaysCoverage?: NodeAllowAlwaysCoverage;
 };
 
 type NodeApprovalAnalysis = {
   analysisOk: boolean;
   allowlistSatisfied: boolean;
   durableApprovalSatisfied: boolean;
+  nodeApprovalPolicyKnown: boolean;
+  nodeSecurity?: ExecSecurity;
+  nodeAsk?: ExecAsk;
   inlineEvalHit: InterpreterInlineEvalHit | null;
+  autoReviewBlockedByShellStartup: boolean;
+  autoReviewEligibility: ReturnType<typeof resolveNodeAutoApprovalEligibility>;
+  autoReviewArgv?: string[];
+  allowAlwaysPersistence: AllowAlwaysPersistenceDecision;
 };
 
-export function shouldSkipNodeApprovalPrepare(params: {
-  hostSecurity: ExecSecurity;
-  hostAsk: ExecAsk;
-  strictInlineEval?: boolean;
-}): boolean {
-  return (
-    params.hostSecurity === "full" && params.hostAsk === "off" && params.strictInlineEval !== true
-  );
+type NodePolicyCommandEval = {
+  command: string;
+  cwd: string | undefined;
+  allowlistEval: Awaited<ReturnType<typeof evaluateShellAllowlistWithAuthorization>>;
+};
+
+type NodeAllowAlwaysCoverage = {
+  complete: boolean;
+  patterns: AllowAlwaysPattern[];
+};
+
+function extractPreparedNodeShellPayload(argv: readonly string[]): string | null {
+  const extracted = extractShellCommandFromArgv([...argv]);
+  if (extracted) {
+    return extracted;
+  }
+  const executable = argv[0]?.split(/[\\/]/).pop()?.toLowerCase();
+  const flag = argv[1]?.trim();
+  const payload = argv[2]?.trim();
+  if (argv.length === 3 && executable === "sh" && flag === "-lc" && payload) {
+    return payload;
+  }
+  return null;
 }
 
-export function formatNodeRunToolResult(params: {
+function hasNodeAllowAlwaysCommandApproval(params: {
+  allowlist: readonly ExecAllowlistEntry[];
+  commandText: string;
+  segments: readonly ExecCommandSegment[];
+  cwd?: string;
+  env: NodeJS.ProcessEnv;
+  platform?: string | null;
+  strictInlineEval?: boolean;
+  nodeCoverage?: NodeAllowAlwaysCoverage;
+}): boolean {
+  const normalizedCommand = params.commandText.trim();
+  if (!normalizedCommand) {
+    return false;
+  }
+  if (params.segments.length === 0) {
+    return false;
+  }
+  if (
+    !hasNodeCommandAllowAlwaysMarker({
+      allowlist: params.allowlist,
+      commandText: normalizedCommand,
+    })
+  ) {
+    return false;
+  }
+  const matchingEntries = new Set<string>();
+  for (const entry of params.allowlist) {
+    if (entry.source !== "allow-always") {
+      continue;
+    }
+    matchingEntries.add(`${entry.pattern}\x00${entry.argPattern ?? ""}`);
+  }
+  const coverage =
+    params.nodeCoverage ??
+    resolveAllowAlwaysPatternCoverage({
+      segments: [...params.segments],
+      cwd: params.cwd,
+      env: params.env,
+      platform: params.platform,
+      strictInlineEval: params.strictInlineEval,
+    });
+  const expectedPatterns = coverage.patterns.map(
+    (pattern) => `${pattern.pattern}\x00${pattern.argPattern ?? ""}`,
+  );
+  if (!coverage.complete || expectedPatterns.length === 0) {
+    return false;
+  }
+  return expectedPatterns.every((pattern) => matchingEntries.has(pattern));
+}
+
+function formatNodeRunToolResult(params: {
   raw: unknown;
   startedAt: number;
   cwd: string | undefined;
+  nodeId: string;
+  warnings?: string[];
 }): AgentToolResult<ExecToolDetails> {
-  const payload =
-    params.raw && typeof params.raw === "object"
-      ? (params.raw as { payload?: unknown }).payload
-      : undefined;
-  const payloadObj =
-    payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
+  const payloadObj = asNullableRecord(asNullableRecord(params.raw)?.payload) ?? {};
   const stdout = typeof payloadObj.stdout === "string" ? payloadObj.stdout : "";
   const stderr = typeof payloadObj.stderr === "string" ? payloadObj.stderr : "";
   const errorText = typeof payloadObj.error === "string" ? payloadObj.error : "";
   const success = typeof payloadObj.success === "boolean" ? payloadObj.success : false;
   const exitCode = typeof payloadObj.exitCode === "number" ? payloadObj.exitCode : null;
+  const timedOut = payloadObj.timedOut === true;
+  // Failure must be visible in the text the model reads, matching the
+  // local/gateway host rendering — output alone reads as success.
+  const outcomeNote = timedOut
+    ? appendExecTimeoutRetryGuidance("Command timed out.", "overall-timeout")
+    : !success && exitCode !== null && exitCode !== 0
+      ? `(Command exited with code ${exitCode})`
+      : "";
+  const output = [stdout, stderr, errorText, outcomeNote].filter(Boolean).join("\n");
   return {
+    // Tool details are UI metadata; the model needs the execution target in content.
     content: [
       {
         type: "text",
-        text: renderExecOutputText(stdout || stderr || errorText),
+        text: `Node: ${params.nodeId}\n${renderExecUpdateText({
+          tailText: output,
+          warnings: params.warnings ?? [],
+        })}`,
       },
     ],
     details: {
       status: success ? "completed" : "failed",
       exitCode,
       durationMs: Date.now() - params.startedAt,
-      aggregated: [stdout, stderr, errorText].filter(Boolean).join("\n"),
+      aggregated: output,
+      nodeId: params.nodeId,
+      ...(timedOut ? { timedOut: true } : {}),
       cwd: params.cwd,
     } satisfies ExecToolDetails,
   };
@@ -96,126 +215,156 @@ export function formatNodeRunToolResult(params: {
 export async function resolveNodeExecutionTarget(
   params: ExecuteNodeHostCommandParams,
 ): Promise<NodeExecutionTarget> {
-  if (params.boundNode && params.requestedNode && params.boundNode !== params.requestedNode) {
-    throw new Error(`exec node not allowed (bound to ${params.boundNode})`);
-  }
-  const nodeQuery = params.boundNode || params.requestedNode;
   const nodes = await listNodes({});
   if (nodes.length === 0) {
     throw new Error(
       "exec host=node requires a paired node (none available). This requires a companion app or node host.",
     );
   }
-  let nodeId: string;
-  try {
-    nodeId = resolveNodeIdFromList(nodes, nodeQuery, !nodeQuery);
-  } catch (err) {
-    if (!nodeQuery && String(err).includes("node required")) {
+  // Canonicalize boundNode and requestedNode (which may be display names, IPs,
+  // or partial ID prefixes) to full device IDs before comparing.
+  const resolvedBoundNodeId = params.boundNode
+    ? resolveNodeIdFromList(nodes, params.boundNode)
+    : undefined;
+  let resolvedRequestedNodeId: string | undefined;
+  if (params.requestedNode) {
+    try {
+      resolvedRequestedNodeId = resolveNodeIdFromList(nodes, params.requestedNode);
+    } catch (err) {
       throw new Error(
-        "exec host=node requires a node id when multiple nodes are available (set tools.exec.node or exec.node).",
+        `requested node not found: ${params.requestedNode} (${err instanceof Error ? err.message : String(err)})`,
         { cause: err },
       );
     }
-    throw err;
   }
-  const nodeInfo = nodes.find((entry) => entry.nodeId === nodeId);
-  if (nodeInfo?.connected === false) {
+  if (
+    resolvedBoundNodeId &&
+    resolvedRequestedNodeId &&
+    resolvedBoundNodeId !== resolvedRequestedNodeId
+  ) {
     throw new Error(
-      `exec host=node requires a connected node (${nodeId} is currently disconnected). Start or reconnect the companion app or node host, or select a connected node.`,
+      `exec node not allowed (bound to ${resolvedBoundNodeId}, requested resolved to ${resolvedRequestedNodeId})`,
     );
   }
-  const declaredCommands = Array.isArray(nodeInfo?.commands) ? nodeInfo.commands : [];
-  const supportsSystemRun = declaredCommands.includes("system.run");
-  if (!supportsSystemRun) {
-    throw new Error(
-      "exec host=node requires a node that supports system.run (companion app or node host).",
-    );
-  }
+  const nodeInfo = resolveEligibleNodeFromList(
+    nodes,
+    resolvedBoundNodeId ?? resolvedRequestedNodeId,
+    (node) => node.connected === true && node.commands?.includes("system.run") === true,
+    {
+      ineligibleExact: (query, eligibleIds) =>
+        `exec host=node requires a connected node that supports system.run (${query} is not eligible; eligible node ids: ${eligibleIds}).`,
+      nameResolveFailed: (reason, eligibleIds) =>
+        `${reason} (eligible connected system.run node ids: ${eligibleIds})`,
+      noneEligible: () =>
+        "exec host=node requires a connected node that supports system.run (none available). Start or reconnect the companion app or node host.",
+      multipleEligible: (eligible) =>
+        `exec host=node requires a node when multiple executable nodes are connected: ${eligible
+          .map((node) => (node.displayName ? `${node.nodeId} (${node.displayName})` : node.nodeId))
+          .join(", ")}. Set exec.node, tools.exec.node, or /exec node=...`,
+    },
+  );
+  const executionContext = nodeInfo.caps?.includes(SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY)
+    ? params.executionContext
+    : undefined;
 
-  const runTimeoutSec =
-    typeof params.timeoutSec === "number" ? params.timeoutSec : params.defaultTimeoutSec;
-  const invokeBaseTimeoutSec = runTimeoutSec > 0 ? runTimeoutSec : params.defaultTimeoutSec;
   return {
-    nodeId,
-    platform: nodeInfo?.platform,
-    argv: buildNodeShellCommand(params.command, nodeInfo?.platform),
-    env: params.requestedEnv ? { ...params.requestedEnv } : undefined,
-    invokeTimeoutMs: Math.max(10_000, invokeBaseTimeoutSec * 1000 + 5_000),
-    runTimeoutSec,
-    supportsSystemRunPrepare: declaredCommands.includes("system.run.prepare"),
+    nodeId: nodeInfo.nodeId,
+    platform: nodeInfo.platform,
+    argv: buildNodeShellCommand(params.command, nodeInfo.platform),
+    // Peers without the capability retain the shipped env transport, including rejections.
+    env:
+      !executionContext && params.executionContext
+        ? { ...params.requestedEnv, ...buildExecRoutingEnv(params.executionContext) }
+        : params.requestedEnv
+          ? { ...params.requestedEnv }
+          : undefined,
+    executionContext,
+    ...resolveNodeExecTimeouts(params.timeoutSec, params.defaultTimeoutSec),
+    supportsSystemRunPrepare: nodeInfo.commands?.includes("system.run.prepare") === true,
   };
 }
 
 export function buildNodeSystemRunInvoke(params: {
   target: NodeExecutionTarget;
-  command: string[];
-  rawCommand: string;
-  cwd: string | undefined;
-  agentId: string | undefined;
-  sessionKey: string | undefined;
-  turnSourceChannel?: string;
-  turnSourceTo?: string;
-  turnSourceAccountId?: string;
-  turnSourceThreadId?: string | number;
+  prepared: PreparedNodeRun;
+  request: ExecuteNodeHostCommandParams;
   approved?: boolean;
   approvalDecision?: "allow-once" | "allow-always" | null;
+  approvalSource?: "ask-fallback";
   runId?: string;
   suppressNotifyOnExit?: boolean;
-  notifyOnExit?: boolean;
-  systemRunPlan?: SystemRunApprovalPlan;
 }): Record<string, unknown> {
-  const timeoutMs =
-    params.target.runTimeoutSec > 0 ? Math.floor(params.target.runTimeoutSec * 1000) : 0;
+  const { prepared, request } = params;
   const runId = params.runId ?? crypto.randomUUID();
   return {
     nodeId: params.target.nodeId,
     command: "system.run",
+    // Top-level timeout arms the Gateway invocation deadline; the nested value is
+    // the node program timer. Without this the Gateway falls back to a fixed 30s
+    // pending-invoke timer and discards a later node result as `ignored`.
+    timeoutMs: params.target.invokeDeadlineMs,
     params: {
-      command: params.command,
-      rawCommand: params.rawCommand,
-      ...(params.systemRunPlan ? { systemRunPlan: params.systemRunPlan } : {}),
-      ...(params.cwd != null ? { cwd: params.cwd } : {}),
+      command: prepared.argv,
+      rawCommand: prepared.rawCommand,
+      ...(prepared.plan ? { systemRunPlan: prepared.plan } : {}),
+      ...(prepared.cwd != null ? { cwd: prepared.cwd } : {}),
       env: params.target.env,
-      timeoutMs,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      ...(params.turnSourceChannel != null ? { turnSourceChannel: params.turnSourceChannel } : {}),
-      ...(params.turnSourceTo != null ? { turnSourceTo: params.turnSourceTo } : {}),
-      ...(params.turnSourceAccountId != null
-        ? { turnSourceAccountId: params.turnSourceAccountId }
+      executionContext: params.target.executionContext,
+      timeoutMs: params.target.runTimeoutMs,
+      agentId: prepared.agentId,
+      sessionKey: prepared.sessionKey,
+      ...(request.turnSourceChannel != null
+        ? { turnSourceChannel: request.turnSourceChannel }
         : {}),
-      ...(params.turnSourceThreadId != null
-        ? { turnSourceThreadId: params.turnSourceThreadId }
+      ...(request.turnSourceTo != null ? { turnSourceTo: request.turnSourceTo } : {}),
+      ...(request.turnSourceAccountId != null
+        ? { turnSourceAccountId: request.turnSourceAccountId }
+        : {}),
+      ...(request.turnSourceThreadId != null
+        ? { turnSourceThreadId: request.turnSourceThreadId }
         : {}),
       approved: params.approved,
       approvalDecision: params.approvalDecision ?? undefined,
+      approvalSource: params.approvalSource,
       runId,
       suppressNotifyOnExit:
-        params.suppressNotifyOnExit === true || params.notifyOnExit === false ? true : undefined,
+        params.suppressNotifyOnExit === true || request.notifyOnExit === false ? true : undefined,
     },
     idempotencyKey: crypto.randomUUID(),
   };
 }
 
-export async function invokeNodeSystemRunDirect(params: {
+export async function dispatchNodeSystemRun(params: {
   request: ExecuteNodeHostCommandParams;
   target: NodeExecutionTarget;
+  invoke: Record<string, unknown>;
+  scopes?: Parameters<typeof invokeNodeSystemRun>[0]["scopes"];
 }): Promise<AgentToolResult<ExecToolDetails>> {
   const startedAt = Date.now();
-  const raw = await callGatewayTool(
-    "node.invoke",
-    { timeoutMs: params.target.invokeTimeoutMs },
-    buildNodeSystemRunInvoke({
-      target: params.target,
-      command: params.target.argv,
-      rawCommand: params.request.command,
+  params.request.signal?.throwIfAborted();
+  const result = await invokeNodeSystemRun({
+    invokeWaitMs: params.target.invokeWaitMs,
+    invoke: params.invoke,
+    scopes: params.scopes,
+    signal: params.request.signal,
+  });
+  if (!result.ok) {
+    return formatNodeInvokeFailureToolResult({
+      failure: result.failure,
+      nodeId: params.target.nodeId,
+      command: params.request.command,
+      startedAt,
       cwd: params.request.workdir,
-      agentId: params.request.agentId,
-      sessionKey: params.request.sessionKey,
-      notifyOnExit: params.request.notifyOnExit,
-    }),
-  );
-  return formatNodeRunToolResult({ raw, startedAt, cwd: params.request.workdir });
+      warnings: [...params.request.warnings, ...(params.request.foregroundWarnings ?? [])],
+    });
+  }
+  return formatNodeRunToolResult({
+    raw: result.raw,
+    startedAt,
+    cwd: params.request.workdir,
+    nodeId: params.target.nodeId,
+    warnings: [...params.request.warnings, ...(params.request.foregroundWarnings ?? [])],
+  });
 }
 
 export async function prepareNodeSystemRun(params: {
@@ -223,7 +372,7 @@ export async function prepareNodeSystemRun(params: {
   target: NodeExecutionTarget;
 }): Promise<PreparedNodeRun> {
   if (!params.target.supportsSystemRunPrepare) {
-    return buildLocalPreparedNodeRun(params);
+    throw new Error("exec denied: node approval requires system.run.prepare support");
   }
 
   const prepareRaw = await callGatewayTool(
@@ -234,8 +383,13 @@ export async function prepareNodeSystemRun(params: {
       command: "system.run.prepare",
       params: {
         command: params.target.argv,
+        security: params.request.security,
+        ask: params.request.ask,
         rawCommand: params.request.command,
         ...(params.request.workdir != null ? { cwd: params.request.workdir } : {}),
+        ...(params.target.env !== undefined ? { env: params.target.env } : {}),
+        executionContext: params.target.executionContext,
+        ...(params.request.strictInlineEval === true ? { strictInlineEval: true } : {}),
         agentId: params.request.agentId,
         sessionKey: params.request.sessionKey,
       },
@@ -253,42 +407,8 @@ export async function prepareNodeSystemRun(params: {
     cwd: prepared.plan.cwd ?? params.request.workdir,
     agentId: prepared.plan.agentId ?? params.request.agentId,
     sessionKey: prepared.plan.sessionKey ?? params.request.sessionKey,
-  };
-}
-
-function buildLocalPreparedNodeRun(params: {
-  request: ExecuteNodeHostCommandParams;
-  target: NodeExecutionTarget;
-}): PreparedNodeRun {
-  const rawCommand = formatExecCommand(params.target.argv);
-  const command = resolveSystemRunCommandRequest({
-    command: params.target.argv,
-    rawCommand,
-  });
-  if (!command.ok) {
-    throw new Error(command.message);
-  }
-  if (command.argv.length === 0) {
-    throw new Error("command required");
-  }
-  const commandText = formatExecCommand(command.argv);
-  const previewText = params.request.command.trim() || command.previewText?.trim();
-  const commandPreview = previewText && previewText !== commandText ? previewText : null;
-  const plan = {
-    argv: [...command.argv],
-    cwd: normalizeNullableString(params.request.workdir),
-    commandText,
-    commandPreview,
-    agentId: normalizeNullableString(params.request.agentId),
-    sessionKey: normalizeNullableString(params.request.sessionKey),
-  } satisfies SystemRunApprovalPlan;
-  return {
-    plan,
-    argv: plan.argv,
-    rawCommand: plan.commandText,
-    cwd: plan.cwd ?? params.request.workdir,
-    agentId: plan.agentId ?? params.request.agentId,
-    sessionKey: plan.sessionKey ?? params.request.sessionKey,
+    ...(prepared.execPolicy ? { execPolicy: prepared.execPolicy } : {}),
+    allowAlwaysCoverage: prepared.allowAlwaysCoverage,
   };
 }
 
@@ -299,30 +419,93 @@ export async function analyzeNodeApprovalRequirement(params: {
   hostSecurity: ExecSecurity;
   hostAsk: ExecAsk;
 }): Promise<NodeApprovalAnalysis> {
-  const baseAllowlistEval = evaluateShellAllowlist({
-    command: params.request.command,
-    allowlist: [],
-    safeBins: new Set(),
-    cwd: params.request.workdir,
-    env: params.request.env,
-    platform: params.target.platform,
-    trustedSafeBinDirs: params.request.trustedSafeBinDirs,
+  const approvalCommand = params.prepared.rawCommand;
+  const approvalCwd = params.prepared.cwd ?? params.request.workdir;
+  // Bare-name resolution must not fall back to the Gateway's PATH during precheck.
+  const analysisEnv = { ...params.target.env, PATH: "", Path: "" };
+  const evaluateCommand = (
+    command: string,
+    cwd: string | undefined,
+    allowlist: ExecAllowlistEntry[] = [],
+  ) =>
+    evaluateShellAllowlistWithAuthorization({
+      command,
+      allowlist,
+      safeBins: new Set(),
+      cwd,
+      env: analysisEnv,
+      platform: params.target.platform,
+      trustedSafeBinDirs: params.request.trustedSafeBinDirs,
+    });
+  const baseAllowlistEval = await evaluateCommand(approvalCommand, approvalCwd);
+  const bindingCommandEvals: NodePolicyCommandEval[] = [
+    {
+      command: approvalCommand,
+      cwd: approvalCwd,
+      allowlistEval: baseAllowlistEval,
+    },
+  ];
+  const addCommandEval = async (
+    entries: NodePolicyCommandEval[],
+    command: string | null | undefined,
+    cwd: string | undefined,
+  ) => {
+    const normalizedCommand = command?.trim();
+    if (!normalizedCommand) {
+      return;
+    }
+    if (entries.some((entry) => entry.command.trim() === normalizedCommand && entry.cwd === cwd)) {
+      return;
+    }
+    entries.push({
+      command: normalizedCommand,
+      cwd,
+      allowlistEval: await evaluateCommand(normalizedCommand, cwd),
+    });
+  };
+  const preparedCommand = resolveSystemRunCommandRequest({
+    command: params.prepared.argv,
+    rawCommand: params.prepared.rawCommand,
   });
+  const preparedShellPayload =
+    extractPreparedNodeShellPayload(params.prepared.argv) ??
+    (preparedCommand.ok ? preparedCommand.shellPayload : null);
+  await addCommandEval(bindingCommandEvals, preparedShellPayload, approvalCwd);
+  const autoReviewBindingCommand = preparedShellPayload?.trim() || approvalCommand;
+  const autoReviewBindingEval =
+    bindingCommandEvals.find(
+      (entry) =>
+        entry.command.trim() === autoReviewBindingCommand.trim() && entry.cwd === approvalCwd,
+    )?.allowlistEval ?? baseAllowlistEval;
+  const policyCommandEvals = [...bindingCommandEvals];
+  await addCommandEval(policyCommandEvals, params.prepared.plan.commandPreview, approvalCwd);
+  await addCommandEval(policyCommandEvals, params.request.command, params.request.workdir);
   let analysisOk = baseAllowlistEval.analysisOk;
   let allowlistSatisfied = false;
   let durableApprovalSatisfied = false;
+  let nodeApprovalsFileKnown = false;
+  let obsoleteGeneratedApprovalCount = 0;
   const inlineEvalHit =
     params.request.strictInlineEval === true
-      ? detectPolicyInlineEval(baseAllowlistEval.segments)
+      ? (policyCommandEvals
+          .map((entry) => detectInlineEvalInSegments(entry.allowlistEval.segments))
+          .find((hit) => hit !== null) ?? null)
       : null;
   if (inlineEvalHit) {
     params.request.warnings.push(
-      `Warning: strict inline-eval mode requires explicit approval for ${describeInterpreterInlineEval(
+      `Warning: strict inline-eval mode requires reviewer or explicit approval for ${describeInterpreterInlineEval(
         inlineEvalHit,
       )}.`,
     );
   }
-  if ((params.hostAsk === "always" || params.hostSecurity === "allowlist") && analysisOk) {
+  if (
+    (params.hostAsk === "always" ||
+      params.hostSecurity === "allowlist" ||
+      params.prepared.execPolicy?.security === "allowlist" ||
+      params.prepared.execPolicy?.ask === "always" ||
+      params.request.autoReview === true) &&
+    analysisOk
+  ) {
     try {
       const approvalsSnapshot = await callGatewayTool<{ file: string }>(
         "exec.approvals.node.get",
@@ -334,38 +517,121 @@ export async function analyzeNodeApprovalRequirement(params: {
           ? approvalsSnapshot.file
           : undefined;
       if (approvalsFile && typeof approvalsFile === "object") {
+        nodeApprovalsFileKnown = true;
         const resolved = resolveExecApprovalsFromFile({
           file: approvalsFile as ExecApprovalsFile,
-          agentId: params.request.agentId,
+          agentId: params.prepared.agentId,
           overrides: { security: "full" },
         });
+        obsoleteGeneratedApprovalCount = countObsoleteGeneratedExecApprovals(resolved.file);
         // Allowlist-only precheck; safe bins are node-local and may diverge.
-        const allowlistEval = evaluateShellAllowlist({
-          command: params.request.command,
-          allowlist: resolved.allowlist,
-          safeBins: new Set(),
-          cwd: params.request.workdir,
-          env: params.request.env,
-          platform: params.target.platform,
-          trustedSafeBinDirs: params.request.trustedSafeBinDirs,
-        });
-        durableApprovalSatisfied = hasDurableExecApproval({
-          analysisOk: allowlistEval.analysisOk,
-          segmentAllowlistEntries: allowlistEval.segmentAllowlistEntries,
-          allowlist: resolved.allowlist,
-          commandText: params.prepared.rawCommand,
-        });
-        allowlistSatisfied = allowlistEval.allowlistSatisfied;
-        analysisOk = allowlistEval.analysisOk;
+        // POSIX node transport wraps commands, so mirror node policy by
+        // accepting either the prepared wrapper or its semantic inner command.
+        const allowlistEvals = await Promise.all(
+          bindingCommandEvals.map(async (entry) => {
+            const allowlistEval = await evaluateCommand(
+              entry.command,
+              entry.cwd,
+              resolved.allowlist,
+            );
+            return {
+              command: entry.command,
+              allowlistEligible:
+                !preparedShellPayload || entry.command.trim() === preparedShellPayload.trim(),
+              exactDurableApprovalSatisfied: hasExactCommandDurableExecApproval({
+                allowlist: resolved.allowlist,
+                commandText: entry.command,
+              }),
+              nodeCommandDurableApprovalSatisfied: hasNodeAllowAlwaysCommandApproval({
+                allowlist: resolved.allowlist,
+                commandText: params.prepared.rawCommand,
+                segments: entry.allowlistEval.segments,
+                cwd: entry.cwd,
+                env: analysisEnv,
+                platform: params.target.platform,
+                strictInlineEval: params.request.strictInlineEval,
+                nodeCoverage: params.prepared.allowAlwaysCoverage,
+              }),
+              allowlistEval,
+              durableApprovalSatisfied: hasDurableExecApproval({
+                analysisOk: allowlistEval.analysisOk,
+                segmentAllowlistEntries: allowlistEval.segmentAllowlistEntries,
+                allowlist: resolved.allowlist,
+                commandText: entry.command,
+              }),
+            };
+          }),
+        );
+        durableApprovalSatisfied = allowlistEvals.some(
+          (entry) =>
+            (entry.durableApprovalSatisfied &&
+              (entry.allowlistEligible || entry.exactDurableApprovalSatisfied)) ||
+            entry.nodeCommandDurableApprovalSatisfied,
+        );
+        allowlistSatisfied = allowlistEvals.some(
+          (entry) => entry.allowlistEligible && entry.allowlistEval.allowlistSatisfied,
+        );
+        analysisOk = allowlistEvals.some((entry) => entry.allowlistEval.analysisOk);
       }
     } catch {
       // Fall back to requiring approval if node approvals cannot be fetched.
     }
   }
+  const [autoReviewSegment] = autoReviewBindingEval.segments;
+  // Review the semantic node payload, not the ordinary outer transport shell.
+  const autoReviewArgv =
+    autoReviewBindingEval.segments.length === 1 &&
+    autoReviewSegment !== undefined &&
+    autoReviewSegment.resolution?.policyBlocked !== true &&
+    !isBlockedShellWrapperCommand(autoReviewSegment.argv) &&
+    (autoReviewSegment.raw === undefined ||
+      autoReviewSegment.raw.trim() === autoReviewBindingCommand.trim())
+      ? autoReviewSegment.argv
+      : undefined;
+  if (
+    (params.hostSecurity === "allowlist" || params.prepared.execPolicy?.security === "allowlist") &&
+    !allowlistSatisfied &&
+    obsoleteGeneratedApprovalCount > 0
+  ) {
+    params.request.warnings.push(
+      `${obsoleteGeneratedApprovalCount} older generated exec ${obsoleteGeneratedApprovalCount === 1 ? "approval is" : "approvals are"} inactive on this node because they are not tied to a working directory. Run "openclaw doctor --fix" on the node, then rerun the workflow and choose "Always allow here".`,
+    );
+  }
+  const autoReviewEligibility = resolveNodeAutoApprovalEligibility({
+    argv: params.prepared.argv,
+    shellPayload: preparedShellPayload,
+    platform: params.target.platform,
+    authorizationPlan: autoReviewBindingEval.authorizationPlan,
+    segmentSatisfiedBy: autoReviewBindingEval.segmentSatisfiedBy,
+  });
+  const autoReviewBlockedByShellStartup = autoReviewBindingEval.segments.some((segment) =>
+    hasPosixShellStartupBeforeInlineCommand(segment.argv),
+  );
   return {
     analysisOk,
     allowlistSatisfied,
     durableApprovalSatisfied,
+    nodeApprovalPolicyKnown: nodeApprovalsFileKnown && params.prepared.execPolicy !== undefined,
+    nodeSecurity: params.prepared.execPolicy?.security,
+    nodeAsk: params.prepared.execPolicy?.ask,
     inlineEvalHit,
+    autoReviewBlockedByShellStartup,
+    autoReviewEligibility,
+    allowAlwaysPersistence:
+      params.request.autoReview === true &&
+      (autoReviewBlockedByShellStartup || !autoReviewEligibility.eligible)
+        ? { kind: "one-shot", reasons: ["no-reusable-pattern"] }
+        : resolveAllowAlwaysPersistenceDecision({
+            segments: baseAllowlistEval.segments,
+            commandText: approvalCommand,
+            cwd: approvalCwd,
+            env: analysisEnv,
+            platform: params.target.platform,
+            strictInlineEval: params.request.strictInlineEval,
+            authorizationPlan: baseAllowlistEval.authorizationPlan,
+            runtimePayload: inlineEvalHit !== null,
+            preparedCoverage: params.prepared.allowAlwaysCoverage,
+          }),
+    autoReviewArgv,
   };
 }

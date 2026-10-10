@@ -1,0 +1,262 @@
+package ai.openclaw.wear
+
+import ai.openclaw.wear.shared.wearSha256Hex
+import android.Manifest
+import android.annotation.SuppressLint
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import android.util.Log
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.app.Person
+import androidx.core.app.RemoteInput
+import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
+
+internal class WearReplyNotifier(
+  private val context: Context,
+) {
+  fun show(inbound: WearInboundEvent) {
+    val event = parseWearChatEvent(inbound.payload) ?: return
+    if (event.state != "final") return
+    val message = event.message ?: return
+    if (message.role != "assistant") return
+    val sessionKey = event.sessionKey ?: return
+    val fallbackIdentity =
+      event.runId
+        ?: listOf(
+          "source:${inbound.sourceNodeId}",
+          "stream:${inbound.streamId ?: "legacy"}",
+          "sequence:${inbound.sequence}",
+        ).joinToString("\u0000")
+    val notificationTag = replyNotificationTag(sessionKey, message, fallbackIdentity)
+    notify(notificationTag) {
+      val replyAction = createReplyAction(sessionKey, notificationTag, inbound.sourceNodeId)
+      val agent = Person.Builder().setName("OpenClaw").build()
+      replyNotification(context.getString(R.string.notification_title), message.text)
+        .setOnlyAlertOnce(true)
+        .setStyle(
+          NotificationCompat
+            .MessagingStyle(agent)
+            .addMessage(message.text, message.timestamp ?: System.currentTimeMillis(), agent),
+        ).addAction(replyAction)
+        .build()
+    }
+  }
+
+  fun showReplyFailure(
+    sessionKey: String,
+    notificationTag: String,
+    phoneNodeId: String,
+  ) {
+    notify(notificationTag) {
+      replyNotification(
+        context.getString(R.string.notification_reply_failed_title),
+        context.getString(R.string.notification_reply_failed_text),
+      ).addAction(createReplyAction(sessionKey, notificationTag, phoneNodeId))
+        .build()
+    }
+  }
+
+  fun showPreferredPhoneChanged(notificationTag: String) {
+    notify(notificationTag) {
+      replyNotification(
+        context.getString(R.string.notification_phone_changed_title),
+        context.getString(R.string.notification_phone_changed_text),
+      ).build()
+    }
+  }
+
+  private fun replyNotification(
+    title: String,
+    text: String,
+  ): NotificationCompat.Builder =
+    NotificationCompat
+      .Builder(context, CHANNEL_ID)
+      .setSmallIcon(R.drawable.ic_notification)
+      .setContentTitle(title)
+      .setContentText(text)
+      .setContentIntent(
+        PendingIntent.getActivity(
+          context,
+          NOTIFICATION_ID,
+          Intent(context, MainActivity::class.java),
+          PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        ),
+      ).setAutoCancel(true)
+      .setLocalOnly(true)
+
+  private fun createReplyAction(
+    sessionKey: String,
+    notificationTag: String,
+    phoneNodeId: String,
+  ): NotificationCompat.Action {
+    val replyIntent =
+      Intent(context, WearReplyReceiver::class.java).apply {
+        action = replyPendingIntentAction(sessionKey, notificationTag)
+        putExtra(EXTRA_SESSION_KEY, sessionKey)
+        putExtra(EXTRA_NOTIFICATION_TAG, notificationTag)
+        putExtra(EXTRA_PHONE_NODE_ID, phoneNodeId)
+      }
+    val replyPendingIntent =
+      PendingIntent.getBroadcast(
+        context,
+        NOTIFICATION_ID,
+        replyIntent,
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_ONE_SHOT,
+      )
+    val remoteInput =
+      RemoteInput
+        .Builder(REPLY_RESULT_KEY)
+        .setLabel(context.getString(R.string.notification_reply))
+        .build()
+    return NotificationCompat.Action
+      .Builder(
+        R.drawable.ic_notification,
+        context.getString(R.string.notification_reply),
+        replyPendingIntent,
+      ).addRemoteInput(remoteInput)
+      .setAllowGeneratedReplies(true)
+      .build()
+  }
+
+  private fun notificationsAllowed(): Boolean =
+    Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+      ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+
+  @SuppressLint("MissingPermission")
+  private inline fun notify(
+    notificationTag: String,
+    build: () -> android.app.Notification,
+  ) {
+    if (!notificationsAllowed()) return
+    val manager = context.getSystemService(NotificationManager::class.java)
+    if (manager.getNotificationChannel(CHANNEL_ID) == null) {
+      manager.createNotificationChannel(
+        NotificationChannel(
+          CHANNEL_ID,
+          context.getString(R.string.notification_channel_name),
+          NotificationManager.IMPORTANCE_DEFAULT,
+        ),
+      )
+    }
+    val notification = build()
+    if (!notificationsAllowed()) return
+    try {
+      NotificationManagerCompat.from(context).notify(notificationTag, NOTIFICATION_ID, notification)
+    } catch (_: SecurityException) {
+      // Permission can be revoked between the explicit check and notify().
+    }
+  }
+
+  private companion object {
+    const val CHANNEL_ID = "openclaw_wear_replies"
+  }
+}
+
+class WearReplyReceiver : BroadcastReceiver() {
+  override fun onReceive(
+    context: Context,
+    intent: Intent,
+  ) {
+    val sessionKey = intent.getStringExtra(EXTRA_SESSION_KEY)?.takeIf { it.isNotBlank() } ?: return
+    val notificationTag = intent.getStringExtra(EXTRA_NOTIFICATION_TAG)?.takeIf { it.isNotBlank() } ?: return
+    val phoneNodeId = intent.getStringExtra(EXTRA_PHONE_NODE_ID)?.takeIf { it.isNotBlank() } ?: return
+    val reply =
+      RemoteInput
+        .getResultsFromIntent(intent)
+        ?.getCharSequence(REPLY_RESULT_KEY)
+        ?.toString()
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() } ?: return
+    val pendingResult = goAsync()
+    val app =
+      context.applicationContext as? WearApplication
+        ?: run {
+          pendingResult.finish()
+          return
+        }
+    app.processScope.launch {
+      try {
+        // Broadcast receivers have a short execution window. Bound discovery,
+        // transport, and response wait together so finish() always wins the race.
+        withTimeout(REPLY_BROADCAST_TIMEOUT_MS) {
+          app.gatewayRepository.send(
+            WearSendAttempt(
+              sessionKey = sessionKey,
+              message = reply,
+              idempotencyKey = notificationReplyIdempotencyKey(sessionKey, notificationTag, reply),
+              phoneNodeId = phoneNodeId,
+            ),
+          )
+        }
+        NotificationManagerCompat.from(context).cancel(notificationTag, NOTIFICATION_ID)
+      } catch (err: Throwable) {
+        if (err is CancellationException && err !is TimeoutCancellationException) throw err
+        val message = if (err is TimeoutCancellationException) "Wear notification reply timed out" else "Wear notification reply failed"
+        Log.w(LOG_TAG, message, err)
+        val notifier = WearReplyNotifier(context.applicationContext)
+        when (notificationReplyFailureAction(err)) {
+          NotificationReplyFailureAction.RetrySamePhone -> notifier.showReplyFailure(sessionKey, notificationTag, phoneNodeId)
+          NotificationReplyFailureAction.OpenApp -> notifier.showPreferredPhoneChanged(notificationTag)
+        }
+      } finally {
+        pendingResult.finish()
+      }
+    }
+  }
+}
+
+internal const val EXTRA_SESSION_KEY = "openclaw_wear_session_key"
+internal const val EXTRA_NOTIFICATION_TAG = "openclaw_wear_notification_tag"
+internal const val EXTRA_PHONE_NODE_ID = "openclaw_wear_phone_node_id"
+
+internal fun replyNotificationTag(
+  sessionKey: String,
+  message: WearChatMessage,
+  fallbackIdentity: String,
+): String {
+  val messageIdentity =
+    when {
+      message.id != null -> "id:${message.id}"
+      message.timestamp != null -> "timestamp:${message.timestamp}\u0000${message.role}\u0000${message.text}"
+      else -> "fallback:$fallbackIdentity"
+    }
+  return "ai.openclaw.wear.NOTIFICATION.${wearSha256Hex("$sessionKey\u0000$messageIdentity")}"
+}
+
+internal fun replyPendingIntentAction(
+  sessionKey: String,
+  notificationTag: String,
+): String = "ai.openclaw.wear.REPLY.${wearSha256Hex("$sessionKey\u0000$notificationTag")}"
+
+internal fun notificationReplyIdempotencyKey(
+  sessionKey: String,
+  notificationTag: String,
+  reply: String,
+): String = "wear-notification-${wearSha256Hex("$sessionKey\u0000$notificationTag\u0000$reply")}"
+
+internal enum class NotificationReplyFailureAction {
+  RetrySamePhone,
+  OpenApp,
+}
+
+internal fun notificationReplyFailureAction(error: Throwable): NotificationReplyFailureAction =
+  if (error is WearProxyException && error.code == "phone_changed") {
+    NotificationReplyFailureAction.OpenApp
+  } else {
+    NotificationReplyFailureAction.RetrySamePhone
+  }
+
+private const val LOG_TAG = "OpenClawWear"
+private const val NOTIFICATION_ID = 7301
+private const val REPLY_BROADCAST_TIMEOUT_MS = 5_000L

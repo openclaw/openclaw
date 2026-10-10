@@ -1,12 +1,51 @@
+// Nostr plugin module implements test fixtures behavior.
+import { vi } from "vitest";
 import type { ResolvedNostrAccount } from "./types.js";
+
+export const NOSTR_SANITIZER_CASES = [
+  {
+    name: "strips an internal tool-failure banner",
+    text: "Done.\n\u26a0\ufe0f \u{1f6e0}\ufe0f `search repos (agent)` failed",
+    expected: "Done.",
+  },
+  {
+    name: "strips internal tool-call XML",
+    text: '<tool_call>{"name":"read","arguments":{"path":"private"}}</tool_call>Done.',
+    expected: "Done.",
+  },
+  {
+    name: "strips multiline tool-response scaffolding",
+    text: ["Before", "<function_response>", "private output", "</function_response>", "After"].join(
+      "\n",
+    ),
+    expected: "Before\n\nAfter",
+  },
+  {
+    name: "suppresses an internal-trace-only reply",
+    text: "\u26a0\ufe0f \u{1f6e0}\ufe0f `search repos (agent)` failed",
+    expected: "",
+  },
+  {
+    name: "preserves ordinary visible prose",
+    text: "The relay has two active subscriptions.",
+    expected: "The relay has two active subscriptions.",
+  },
+];
+
+export function createMockNostrBus(eventId?: string) {
+  return {
+    sendDm: vi.fn(async () => eventId),
+    close: vi.fn(async () => {}),
+    publishProfile: vi.fn(),
+    getProfileState: vi.fn(async () => null),
+  };
+}
 
 export const TEST_HEX_PRIVATE_KEY =
   "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 export const TEST_HEX_PUBLIC_KEY =
   "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
-
-export const TEST_NSEC = "nsec1qypqxpq9qtpqscx7peytzfwtdjmcv0mrz5rjpej8vjppfkqfqy8skqfv3l";
 
 export const TEST_RELAY_URL = "wss://relay.example.com";
 export const TEST_SETUP_RELAY_URLS = ["wss://relay.damus.io", "wss://relay.primal.net"];

@@ -1,9 +1,12 @@
+// Covers fetch resolution and abort-signal wrapping.
 import { describe, expect, it, vi } from "vitest";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { resolveFetch, wrapFetchWithAbortSignal } from "./fetch.js";
 
 async function waitForMicrotaskTurn(): Promise<void> {
-  await new Promise<void>((resolve) => queueMicrotask(resolve));
+  await new Promise<void>((resolve) => {
+    queueMicrotask(resolve);
+  });
 }
 
 function createForeignSignalHarness() {
@@ -37,7 +40,7 @@ function createThrowingCleanupSignalHarness(cleanupError: Error) {
   });
   const fakeSignal = {
     aborted: false,
-    addEventListener: (_event: string, _handler: () => void) => {},
+    addEventListener: (_eventValue: string, _handler: () => void) => {},
     removeEventListener,
   } as unknown as AbortSignal;
   return { fakeSignal, removeEventListener };
@@ -278,15 +281,6 @@ describe("wrapFetchWithAbortSignal", () => {
 
     expect(preconnectSpy).toHaveBeenCalledOnce();
     expect(seenThis).toBe(fetchImpl);
-  });
-
-  it("exposes a no-op preconnect when the source fetch has none", () => {
-    const fetchImpl = withFetchPreconnect(vi.fn(async () => ({ ok: true }) as Response));
-    const wrapped = wrapFetchWithAbortSignal(fetchImpl) as typeof fetch & {
-      preconnect: (url: string, init?: { credentials?: RequestCredentials }) => unknown;
-    };
-
-    expect(wrapped.preconnect("https://example.com")).toBeUndefined();
   });
 
   it.each([

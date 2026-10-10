@@ -1,5 +1,5 @@
 import type { EventEmitter } from "node:events";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 
 type GatewayEmitter = Pick<EventEmitter, "on" | "removeListener">;
@@ -10,17 +10,14 @@ const INFO_DEBUG_MARKERS = [
   "Gateway forcing fresh IDENTIFY after",
 ];
 
-const shouldPromoteGatewayDebug = (message: string) =>
-  INFO_DEBUG_MARKERS.some((marker) => message.includes(marker));
-
 const formatGatewayMetrics = (metrics: unknown) => {
-  if (metrics === null || metrics === undefined) {
-    return String(metrics);
-  }
-  if (typeof metrics === "string") {
-    return metrics;
-  }
-  if (typeof metrics === "number" || typeof metrics === "boolean" || typeof metrics === "bigint") {
+  if (
+    metrics == null ||
+    typeof metrics === "string" ||
+    typeof metrics === "number" ||
+    typeof metrics === "boolean" ||
+    typeof metrics === "bigint"
+  ) {
     return String(metrics);
   }
   try {
@@ -42,13 +39,15 @@ export function attachDiscordGatewayLogging(params: {
   const onGatewayDebug = (msg: unknown) => {
     const message = String(msg);
     logVerbose(`discord gateway: ${message}`);
-    if (shouldPromoteGatewayDebug(message)) {
+    if (INFO_DEBUG_MARKERS.some((marker) => message.includes(marker))) {
       runtime.log?.(`discord gateway: ${message}`);
     }
   };
 
   const onGatewayWarning = (warning: unknown) => {
-    logVerbose(`discord gateway warning: ${String(warning)}`);
+    const message = `discord gateway warning: ${String(warning)}`;
+    logVerbose(message);
+    runtime.log?.(warn(message));
   };
 
   const onGatewayMetrics = (metrics: unknown) => {

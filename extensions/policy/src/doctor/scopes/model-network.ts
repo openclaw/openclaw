@@ -1,0 +1,96 @@
+// Policy doctor checks and findings for MCP, model provider, and network policy.
+import type { HealthFinding } from "openclaw/plugin-sdk/health";
+import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+import type { PolicyEvidence } from "../../policy-state.js";
+import { CHECK_IDS } from "../check-ids.js";
+import { policyEvidenceFinding } from "../policy-evidence-finding.js";
+import { readPolicyBoolean, readStringList } from "../utils.js";
+
+export function mcpServerFindings(
+  policy: unknown,
+  policyDocName: string,
+  evidence: PolicyEvidence,
+): readonly HealthFinding[] {
+  const denied = new Set(readStringList(policy, ["mcp", "servers", "deny"], { lowercase: false }));
+  const allowed = new Set(
+    readStringList(policy, ["mcp", "servers", "allow"], { lowercase: false }),
+  );
+  return evidence.mcpServers.flatMap((server) => {
+    const isDenied = denied.has(server.id);
+    if (!isDenied && (allowed.size === 0 || allowed.has(server.id))) {
+      return [];
+    }
+    return [
+      policyEvidenceFinding(server, {
+        checkId: isDenied ? CHECK_IDS.policyDeniedMcpServer : CHECK_IDS.policyUnapprovedMcpServer,
+        message: isDenied
+          ? `MCP server '${server.id}' is denied by policy.`
+          : `MCP server '${server.id}' is not in the policy allowlist.`,
+        requirement: `oc://${policyDocName}/mcp/servers/${isDenied ? "deny" : "allow"}`,
+        fixHint: isDenied
+          ? "Remove this configured MCP server or update the policy after review."
+          : "Use an approved MCP server or update the policy after review.",
+      }),
+    ];
+  });
+}
+
+export function modelProviderFindings(
+  policy: unknown,
+  policyDocName: string,
+  evidence: PolicyEvidence,
+): readonly HealthFinding[] {
+  const denied = new Set(readModelProviderPolicyList(policy, ["models", "providers", "deny"]));
+  const allowed = new Set(readModelProviderPolicyList(policy, ["models", "providers", "allow"]));
+  // Provider declarations precede model refs in the attested findings order.
+  return [...evidence.modelProviders, ...evidence.modelRefs].flatMap((entry) => {
+    const isModelRef = "ref" in entry;
+    const provider = isModelRef ? entry.provider : entry.id;
+    const isDenied = denied.has(provider);
+    if (!isDenied && (allowed.size === 0 || allowed.has(provider))) {
+      return [];
+    }
+    const message = isModelRef
+      ? `Model ref '${entry.ref}' uses ${isDenied ? "denied" : "unapproved"} provider '${provider}'.`
+      : `Model provider '${provider}' is ${isDenied ? "denied by policy" : "not in the policy allowlist"}.`;
+    return [
+      policyEvidenceFinding(entry, {
+        checkId: isDenied
+          ? CHECK_IDS.policyDeniedModelProvider
+          : CHECK_IDS.policyUnapprovedModelProvider,
+        message,
+        requirement: `oc://${policyDocName}/models/providers/${isDenied ? "deny" : "allow"}`,
+        fixHint: isModelRef
+          ? "Select an approved model provider or update the policy after review."
+          : isDenied
+            ? "Remove this configured provider or update the policy after review."
+            : "Use an approved model provider or update the policy after review.",
+      }),
+    ];
+  });
+}
+
+function readModelProviderPolicyList(policy: unknown, path: readonly string[]): readonly string[] {
+  return readStringList(policy, path).map((provider) => normalizeProviderId(provider));
+}
+
+export function networkFindings(
+  policy: unknown,
+  policyDocName: string,
+  evidence: PolicyEvidence,
+): readonly HealthFinding[] {
+  const allowPrivateNetwork = readPolicyBoolean(policy, ["network", "privateNetwork", "allow"]);
+  if (allowPrivateNetwork !== false) {
+    return [];
+  }
+  return evidence.network
+    .filter((setting) => setting.value)
+    .map((setting): HealthFinding => {
+      return policyEvidenceFinding(setting, {
+        checkId: CHECK_IDS.policyPrivateNetworkAccess,
+        message: `Network setting '${setting.id}' allows private-network access.`,
+        requirement: `oc://${policyDocName}/network/privateNetwork/allow`,
+        fixHint: "Disable this private-network access setting or update policy after review.",
+      });
+    });
+}

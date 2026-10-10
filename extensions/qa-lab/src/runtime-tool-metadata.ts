@@ -1,23 +1,15 @@
-import type { QaRuntimeParityTier, QaSeedScenarioWithSource } from "./scenario-catalog.js";
+import {
+  asBoolean as readBoolean,
+  isRecord,
+  normalizeOptionalString as readString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
-export type QaRuntimeToolBucket =
-  | "codex-native-workspace"
-  | "openclaw-dynamic-integration"
-  | "optional-profile-or-plugin";
+type QaRuntimeToolBucket = (typeof QA_RUNTIME_TOOL_BUCKETS)[number];
 
-export type QaRuntimeToolExpectedLayer =
-  | "codex-native-workspace"
-  | "openclaw-dynamic"
-  | "profile-or-plugin";
+type QaRuntimeToolExpectedLayer = (typeof QA_RUNTIME_TOOL_EXPECTED_LAYERS)[number];
 
-export type QaRuntimeCapabilityLayer =
-  | "codex-native-workspace"
-  | "openclaw-dynamic-direct"
-  | "openclaw-dynamic-searchable"
-  | "optional-profile-or-plugin"
-  | "structural-text";
-
-export type QaCodexToolLoading = "direct" | "searchable";
+type QaRuntimeCapabilityLayer = (typeof QA_RUNTIME_CAPABILITY_LAYERS)[number];
 
 export type RuntimeParityComparisonMode = "default" | "codex-native-workspace" | "outcome-only";
 
@@ -33,29 +25,24 @@ export type QaRuntimeToolCoverageMetadata = {
   action?: string;
 };
 
-export const QA_RUNTIME_TOOL_BUCKETS: readonly QaRuntimeToolBucket[] = [
+const QA_RUNTIME_TOOL_BUCKETS = [
   "codex-native-workspace",
   "openclaw-dynamic-integration",
   "optional-profile-or-plugin",
 ] as const;
 
-export const QA_RUNTIME_TOOL_EXPECTED_LAYERS: readonly QaRuntimeToolExpectedLayer[] = [
+const QA_RUNTIME_TOOL_EXPECTED_LAYERS = [
   "codex-native-workspace",
   "openclaw-dynamic",
   "profile-or-plugin",
 ] as const;
 
-export const QA_RUNTIME_CAPABILITY_LAYERS: readonly QaRuntimeCapabilityLayer[] = [
+const QA_RUNTIME_CAPABILITY_LAYERS = [
   "codex-native-workspace",
   "openclaw-dynamic-direct",
   "openclaw-dynamic-searchable",
   "optional-profile-or-plugin",
   "structural-text",
-] as const;
-
-export const QA_CODEX_TOOL_LOADING_MODES: readonly QaCodexToolLoading[] = [
-  "direct",
-  "searchable",
 ] as const;
 
 const DEFAULT_LAYER_BY_BUCKET: Record<QaRuntimeToolBucket, QaRuntimeToolExpectedLayer> = {
@@ -70,28 +57,21 @@ const DEFAULT_CAPABILITY_LAYER_BY_BUCKET: Record<QaRuntimeToolBucket, QaRuntimeC
   "optional-profile-or-plugin": "optional-profile-or-plugin",
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
-
-function readBoolean(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
-}
-
-function isQaRuntimeToolBucket(value: string): value is QaRuntimeToolBucket {
-  return QA_RUNTIME_TOOL_BUCKETS.includes(value as QaRuntimeToolBucket);
-}
-
-function isQaRuntimeToolExpectedLayer(value: string): value is QaRuntimeToolExpectedLayer {
-  return QA_RUNTIME_TOOL_EXPECTED_LAYERS.includes(value as QaRuntimeToolExpectedLayer);
-}
-
-function isQaRuntimeCapabilityLayer(value: string): value is QaRuntimeCapabilityLayer {
-  return QA_RUNTIME_CAPABILITY_LAYERS.includes(value as QaRuntimeCapabilityLayer);
+function readRuntimeToolEnum<T extends string>(
+  input: unknown,
+  values: readonly T[],
+  fallback: T,
+  label: string,
+): T {
+  const value = readString(input);
+  if (!value) {
+    return fallback;
+  }
+  const selected = values.find((candidate) => candidate === value);
+  if (selected === undefined) {
+    throw new Error(`unknown runtime tool ${label}: ${value}; expected ${values.join(", ")}`);
+  }
+  return selected;
 }
 
 export function readRuntimeToolCoverageConfig(
@@ -100,57 +80,35 @@ export function readRuntimeToolCoverageConfig(
   return isRecord(config?.toolCoverage) ? config.toolCoverage : undefined;
 }
 
-function inferRuntimeToolBucket(params: {
-  config?: Record<string, unknown>;
-  runtimeParityTier?: QaRuntimeParityTier;
-}): QaRuntimeToolBucket {
-  const toolCoverage = readRuntimeToolCoverageConfig(params.config);
-  const explicit = readString(toolCoverage?.bucket);
-  if (explicit) {
-    if (!isQaRuntimeToolBucket(explicit)) {
-      throw new Error(
-        `unknown runtime tool coverage bucket: ${explicit}; expected ${QA_RUNTIME_TOOL_BUCKETS.join(
-          ", ",
-        )}`,
-      );
-    }
-    return explicit;
-  }
-  if (params.runtimeParityTier === "optional" || params.config?.expectedAvailable === false) {
-    return "optional-profile-or-plugin";
-  }
-  return "openclaw-dynamic-integration";
-}
-
 export function readRuntimeToolCoverageMetadata(params: {
   config?: Record<string, unknown>;
-  runtimeParityTier?: QaRuntimeParityTier;
 }): QaRuntimeToolCoverageMetadata {
   const toolCoverage = readRuntimeToolCoverageConfig(params.config);
-  const bucket = inferRuntimeToolBucket(params);
-  const expectedLayerInput = readString(toolCoverage?.expectedLayer);
-  if (expectedLayerInput && !isQaRuntimeToolExpectedLayer(expectedLayerInput)) {
-    throw new Error(
-      `unknown runtime tool expectedLayer: ${expectedLayerInput}; expected ${QA_RUNTIME_TOOL_EXPECTED_LAYERS.join(
-        ", ",
-      )}`,
-    );
-  }
-  const expectedLayer = expectedLayerInput
-    ? (expectedLayerInput as QaRuntimeToolExpectedLayer)
-    : DEFAULT_LAYER_BY_BUCKET[bucket];
-  const capabilityLayerInput = readString(toolCoverage?.capabilityLayer);
-  if (capabilityLayerInput && !isQaRuntimeCapabilityLayer(capabilityLayerInput)) {
-    throw new Error(
-      `unknown runtime tool capabilityLayer: ${capabilityLayerInput}; expected ${QA_RUNTIME_CAPABILITY_LAYERS.join(
-        ", ",
-      )}`,
-    );
-  }
-  const capabilityLayer = capabilityLayerInput
-    ? (capabilityLayerInput as QaRuntimeCapabilityLayer)
-    : DEFAULT_CAPABILITY_LAYER_BY_BUCKET[bucket];
-  const required = readBoolean(toolCoverage?.required) ?? bucket !== "optional-profile-or-plugin";
+  const bucket = readRuntimeToolEnum(
+    toolCoverage?.bucket,
+    QA_RUNTIME_TOOL_BUCKETS,
+    params.config?.expectedAvailable === false
+      ? "optional-profile-or-plugin"
+      : "openclaw-dynamic-integration",
+    "coverage bucket",
+  );
+  const expectedLayer = readRuntimeToolEnum(
+    toolCoverage?.expectedLayer,
+    QA_RUNTIME_TOOL_EXPECTED_LAYERS,
+    DEFAULT_LAYER_BY_BUCKET[bucket],
+    "expectedLayer",
+  );
+  const capabilityLayer = readRuntimeToolEnum(
+    toolCoverage?.capabilityLayer,
+    QA_RUNTIME_CAPABILITY_LAYERS,
+    DEFAULT_CAPABILITY_LAYER_BY_BUCKET[bucket],
+    "capabilityLayer",
+  );
+  const explicitSearchableDynamic =
+    readString(toolCoverage?.capabilityLayer) === "openclaw-dynamic-searchable";
+  const required =
+    readBoolean(toolCoverage?.required) ??
+    (bucket !== "optional-profile-or-plugin" && !explicitSearchableDynamic);
   return {
     bucket,
     expectedLayer,
@@ -173,28 +131,5 @@ export function readScenarioRuntimeToolCoverageMetadata(
 ): QaRuntimeToolCoverageMetadata {
   return readRuntimeToolCoverageMetadata({
     config: scenario.execution.config,
-    runtimeParityTier: scenario.runtimeParityTier,
   });
-}
-
-export function runtimeToolComparisonModeForScenario(
-  scenario: QaSeedScenarioWithSource,
-): RuntimeParityComparisonMode {
-  const explicit = readString(scenario.execution.config?.runtimeParityComparison);
-  if (explicit) {
-    if (
-      explicit !== "default" &&
-      explicit !== "codex-native-workspace" &&
-      explicit !== "outcome-only"
-    ) {
-      throw new Error(
-        `unknown runtime parity comparison mode: ${explicit}; expected default, codex-native-workspace, outcome-only`,
-      );
-    }
-    return explicit;
-  }
-  return readScenarioRuntimeToolCoverageMetadata(scenario).expectedLayer ===
-    "codex-native-workspace"
-    ? "codex-native-workspace"
-    : "default";
 }

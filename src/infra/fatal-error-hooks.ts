@@ -1,16 +1,12 @@
-export type FatalErrorHookContext = {
+type FatalErrorHookContext = {
   reason: string;
   error?: unknown;
 };
 
-export type FatalErrorHook = (context: FatalErrorHookContext) => string | undefined | void;
+/** Hook that can return one extra diagnostic line for fatal error output. */
+type FatalErrorHook = (context: FatalErrorHookContext) => string | undefined | void;
 
 const hooks = new Set<FatalErrorHook>();
-
-function formatHookFailure(error: unknown): string {
-  const name = error instanceof Error && error.name ? error.name : "unknown";
-  return `fatal-error hook failed: ${name}`;
-}
 
 export function registerFatalErrorHook(hook: FatalErrorHook): () => void {
   hooks.add(hook);
@@ -28,12 +24,10 @@ export function runFatalErrorHooks(context: FatalErrorHookContext): string[] {
         messages.push(message);
       }
     } catch (err) {
-      messages.push(formatHookFailure(err));
+      // Fatal output must keep progressing even if a diagnostic hook itself throws.
+      const name = err instanceof Error && err.name ? err.name : "unknown";
+      messages.push(`fatal-error hook failed: ${name}`);
     }
   }
   return messages;
-}
-
-export function resetFatalErrorHooksForTest(): void {
-  hooks.clear();
 }

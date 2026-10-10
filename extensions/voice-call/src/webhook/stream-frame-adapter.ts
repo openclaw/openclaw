@@ -1,107 +1,97 @@
-export type StreamFrame =
+import {
+  asNullableRecord,
+  asOptionalObjectRecord,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
+import { canonicalizeVoiceCallMediaBase64 } from "../media-base64.js";
+
+/** Normalized inbound media stream frame. */
+type StreamFrame =
   | { kind: "start"; streamId: string; providerCallId: string }
   | {
       kind: "media";
       payloadBase64: string;
       timestampMs?: number;
-      track?: string;
     }
   | { kind: "mark"; name?: string }
   | { kind: "stop" }
   | { kind: "error"; code?: string; title?: string; detail?: string }
   | { kind: "ignored" };
 
-export interface StreamFrameAdapter {
-  readonly providerName: "twilio" | "telnyx";
-  parseInbound(rawMessage: string): StreamFrame;
-  serializeMedia(payloadBase64: string): string;
-  serializeClear(): string;
-  serializeMark(name: string): string;
-}
-
+/** Parse numeric timestamps sent as numbers or integer strings. */
 function parseTimestampMs(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
   }
-  if (typeof value === "string") {
-    const parsed = Number.parseInt(value, 10);
-    return Number.isFinite(parsed) ? parsed : undefined;
+  if (typeof value === "string" && /^[+-]?\d+$/.test(value.trim())) {
+    const parsed = Number(value.trim());
+    return Number.isSafeInteger(parsed) ? parsed : undefined;
   }
   return undefined;
 }
 
-function tryParseJson(rawMessage: string): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(rawMessage) as unknown;
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>;
-    }
-  } catch {
-    /* fall through */
+export class StreamFrameAdapter {
+  private streamSid: string | undefined;
+
+  constructor(private readonly provider: "twilio" | "telnyx") {
+    this.streamSid = provider === "twilio" ? "" : undefined;
   }
-  return null;
-}
-
-function normalizeBase64ForCompare(value: string): string {
-  return value.replace(/=+$/u, "").replace(/-/gu, "+").replace(/_/gu, "/");
-}
-
-function isValidBase64Payload(value: string): boolean {
-  const buffer = Buffer.from(value, "base64");
-  return normalizeBase64ForCompare(buffer.toString("base64")) === normalizeBase64ForCompare(value);
-}
-
-export class TwilioStreamFrameAdapter implements StreamFrameAdapter {
-  readonly providerName = "twilio" as const;
-  private streamSid = "";
 
   parseInbound(rawMessage: string): StreamFrame {
-    const msg = tryParseJson(rawMessage);
+    const msg = asNullableRecord(safeParseJson<unknown>(rawMessage));
     if (!msg) {
       return { kind: "ignored" };
     }
-    const event = msg.event;
-    if (event === "start") {
-      const startData =
-        typeof msg.start === "object" && msg.start !== null
-          ? (msg.start as Record<string, unknown>)
-          : undefined;
-      const streamSid = typeof startData?.streamSid === "string" ? startData.streamSid : "";
-      const callSid = typeof startData?.callSid === "string" ? startData.callSid : "";
-      if (!streamSid || !callSid) {
-        return { kind: "ignored" };
+    switch (msg.event) {
+      case "start": {
+        const start = asOptionalObjectRecord(msg.start);
+        const streamId = this.provider === "twilio" ? start?.streamSid : msg.stream_id;
+        const providerCallId = this.provider === "twilio" ? start?.callSid : start?.call_control_id;
+        if (
+          typeof streamId !== "string" ||
+          !streamId ||
+          typeof providerCallId !== "string" ||
+          !providerCallId
+        ) {
+          return { kind: "ignored" };
+        }
+        if (this.provider === "twilio") {
+          this.streamSid = streamId;
+        }
+        return { kind: "start", streamId, providerCallId };
       }
-      this.streamSid = streamSid;
-      return { kind: "start", streamId: streamSid, providerCallId: callSid };
-    }
-    if (event === "media") {
-      const mediaData =
-        typeof msg.media === "object" && msg.media !== null
-          ? (msg.media as Record<string, unknown>)
-          : undefined;
-      const payload = typeof mediaData?.payload === "string" ? mediaData.payload : undefined;
-      if (!payload || !isValidBase64Payload(payload)) {
-        return { kind: "ignored" };
+      case "media": {
+        const media = asOptionalObjectRecord(msg.media);
+        const payload = typeof media?.payload === "string" ? media.payload : undefined;
+        const payloadBase64 = payload ? canonicalizeVoiceCallMediaBase64(payload) : undefined;
+        return payloadBase64
+          ? { kind: "media", payloadBase64, timestampMs: parseTimestampMs(media?.timestamp) }
+          : { kind: "ignored" };
       }
-      return {
-        kind: "media",
-        payloadBase64: payload,
-        timestampMs: parseTimestampMs(mediaData?.timestamp),
-        track: typeof mediaData?.track === "string" ? mediaData.track : undefined,
-      };
+      case "mark": {
+        const mark = asOptionalObjectRecord(msg.mark);
+        return { kind: "mark", name: typeof mark?.name === "string" ? mark.name : undefined };
+      }
+      case "stop":
+        return { kind: "stop" };
+      case "error": {
+        if (this.provider !== "telnyx") {
+          return { kind: "ignored" };
+        }
+        const error = asOptionalObjectRecord(msg.payload);
+        return {
+          kind: "error",
+          code:
+            typeof error?.code === "string" || typeof error?.code === "number"
+              ? String(error.code)
+              : undefined,
+          title: typeof error?.title === "string" ? error.title : undefined,
+          detail: typeof error?.detail === "string" ? error.detail : undefined,
+        };
+      }
+      default:
+        return { kind: "ignored" };
     }
-    if (event === "mark") {
-      const markData =
-        typeof msg.mark === "object" && msg.mark !== null
-          ? (msg.mark as Record<string, unknown>)
-          : undefined;
-      const name = typeof markData?.name === "string" ? markData.name : undefined;
-      return { kind: "mark", name };
-    }
-    if (event === "stop") {
-      return { kind: "stop" };
-    }
-    return { kind: "ignored" };
   }
 
   serializeMedia(payloadBase64: string): string {
@@ -117,103 +107,6 @@ export class TwilioStreamFrameAdapter implements StreamFrameAdapter {
   }
 
   serializeMark(name: string): string {
-    return JSON.stringify({
-      event: "mark",
-      streamSid: this.streamSid,
-      mark: { name },
-    });
-  }
-}
-
-export class TelnyxStreamFrameAdapter implements StreamFrameAdapter {
-  readonly providerName = "telnyx" as const;
-
-  parseInbound(rawMessage: string): StreamFrame {
-    const msg = tryParseJson(rawMessage);
-    if (!msg) {
-      return { kind: "ignored" };
-    }
-    const event = msg.event;
-    const topLevelStreamId =
-      typeof msg.stream_id === "string" && msg.stream_id ? msg.stream_id : undefined;
-    if (event === "start") {
-      const startData =
-        typeof msg.start === "object" && msg.start !== null
-          ? (msg.start as Record<string, unknown>)
-          : undefined;
-      const providerCallId =
-        typeof startData?.call_control_id === "string" && startData.call_control_id
-          ? startData.call_control_id
-          : undefined;
-      if (!topLevelStreamId || !providerCallId) {
-        return { kind: "ignored" };
-      }
-      return {
-        kind: "start",
-        streamId: topLevelStreamId,
-        providerCallId,
-      };
-    }
-    if (event === "media") {
-      const mediaData =
-        typeof msg.media === "object" && msg.media !== null
-          ? (msg.media as Record<string, unknown>)
-          : undefined;
-      const payload = typeof mediaData?.payload === "string" ? mediaData.payload : undefined;
-      if (!payload || !isValidBase64Payload(payload)) {
-        return { kind: "ignored" };
-      }
-      return {
-        kind: "media",
-        payloadBase64: payload,
-        timestampMs: parseTimestampMs(mediaData?.timestamp),
-        track: typeof mediaData?.track === "string" ? mediaData.track : undefined,
-      };
-    }
-    if (event === "mark") {
-      const markData =
-        typeof msg.mark === "object" && msg.mark !== null
-          ? (msg.mark as Record<string, unknown>)
-          : undefined;
-      const name = typeof markData?.name === "string" ? markData.name : undefined;
-      return { kind: "mark", name };
-    }
-    if (event === "stop") {
-      return { kind: "stop" };
-    }
-    if (event === "error") {
-      const errorData =
-        typeof msg.payload === "object" && msg.payload !== null
-          ? (msg.payload as Record<string, unknown>)
-          : undefined;
-      return {
-        kind: "error",
-        code:
-          typeof errorData?.code === "string" || typeof errorData?.code === "number"
-            ? String(errorData.code)
-            : undefined,
-        title: typeof errorData?.title === "string" ? errorData.title : undefined,
-        detail: typeof errorData?.detail === "string" ? errorData.detail : undefined,
-      };
-    }
-    return { kind: "ignored" };
-  }
-
-  serializeMedia(payloadBase64: string): string {
-    return JSON.stringify({
-      event: "media",
-      media: { payload: payloadBase64 },
-    });
-  }
-
-  serializeClear(): string {
-    return JSON.stringify({ event: "clear" });
-  }
-
-  serializeMark(name: string): string {
-    return JSON.stringify({
-      event: "mark",
-      mark: { name },
-    });
+    return JSON.stringify({ event: "mark", streamSid: this.streamSid, mark: { name } });
   }
 }

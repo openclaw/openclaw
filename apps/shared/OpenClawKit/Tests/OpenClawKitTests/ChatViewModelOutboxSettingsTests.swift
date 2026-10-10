@@ -1,0 +1,398 @@
+import Foundation
+import OpenClawKit
+import Testing
+@testable import OpenClawChatUI
+
+private actor SettingsPatchCounter {
+    private var count = 0
+
+    func increment() {
+        self.count += 1
+    }
+
+    func current() -> Int {
+        self.count
+    }
+}
+
+struct ChatViewModelOutboxSettingsTests {
+    @Test func `background replay uses its command owned session settings`() async throws {
+        let (store, _, databaseDirectory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        let expectation = OpenClawChatSessionSettingsExpectation(
+            permissionMode: .guarded,
+            toolOverrides: OpenClawChatSessionToolOverrides(webSearch: false))
+        #expect(await store.enqueueCommand(outboxTestCommand(
+            id: "background-settings",
+            text: "use captured authority",
+            createdAt: Date().timeIntervalSince1970,
+            sessionKey: "background",
+            expectedSessionSettings: expectation)))
+        let transport = OutboxTestTransport(
+            healthy: true,
+            sessions: [
+                outboxSessionEntry(key: "main", thinkingLevels: ["off"], permissionMode: .full),
+                outboxSessionEntry(key: "background", thinkingLevels: ["off"], permissionMode: .guarded),
+            ],
+            supportsSessionSettingsCAS: true)
+        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
+
+        await MainActor.run { vm.load() }
+        await transport.state.waitForState { $0.sentMessages.count >= 1 }
+
+        #expect(await transport.state.sentMessages == ["use captured authority"])
+        #expect(await transport.state.sentSessionKeys == ["agent:main:background"])
+        #expect(await transport.state.sentSessionSettings.count == 1)
+        #expect(await transport.state.sentSessionSettings[0] == expectation)
+    }
+
+    @Test(arguments: [false, true])
+    func `settings failures remain retryable before outbox reload`(gatewayRejectsSettings: Bool) async throws {
+        let (store, _, databaseDirectory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        #expect(await store.enqueueCommand(outboxTestCommand(
+            id: "legacy-settings",
+            text: "review before replay",
+            createdAt: Date().timeIntervalSince1970,
+            expectedSessionSettings: gatewayRejectsSettings
+                ? OpenClawChatSessionSettingsExpectation(permissionMode: nil, toolOverrides: nil)
+                : nil)))
+        let outbox = ScriptedOutbox(base: store)
+        let transport = OutboxTestTransport(
+            healthy: false,
+            sessions: [outboxSessionEntry(key: "main", thinkingLevels: ["off"])],
+            supportsSessionSettingsCAS: true)
+        await transport.state.update { $0.sendSettingsChanged = gatewayRejectsSettings }
+        let vm = await makeOutboxViewModel(transport: transport, outbox: outbox)
+
+        await MainActor.run { vm.load() }
+        await vm.bootstrapTask?.value
+        await waitForObservedState { vm.hasRestoredOutboxMessages }
+        #expect(await MainActor.run { !vm.isLoading && vm.hasRestoredOutboxMessages })
+        await outbox.holdLoadAfterFailure()
+        await transport.goOnline()
+        await outbox.waitUntilSnapshotCaptured()
+        let flush = await vm.outboxFlushTask
+
+        do {
+            #expect(await transport.state.sentMessages.isEmpty)
+            let failed = try #require(await store.loadCommands().first)
+            #expect(failed.lastError == (gatewayRejectsSettings
+                    ? OpenClawChatSQLiteTranscriptCache.outboxSettingsChangedError
+                    : OpenClawChatSQLiteTranscriptCache.outboxSettingsReviewRequiredError))
+            if !gatewayRejectsSettings {
+                #expect(OpenClawChatSQLiteTranscriptCache.outboxDisplayError(failed.lastError) ==
+                    "Session settings were not captured. Review and retry this message.")
+            }
+            await transport.state.update { $0.sendSettingsChanged = false }
+
+            // A visible failure must authorize retry before any later reload can supply its version.
+            let messageID = try #require(await MainActor.run {
+                vm.messages.first { vm.outboxState(for: $0.id)?.isFailed == true }?.id
+            })
+            await MainActor.run { vm.retryOutboxMessage(messageID) }
+            await waitForObservedState { vm.outboxState(for: messageID) == .queued }
+            #expect(await store.loadCommands().first?.status == .queued)
+        } catch {
+            await outbox.releaseSnapshot()
+            await flush?.value
+            throw error
+        }
+        await outbox.releaseSnapshot()
+        await flush?.value
+        await transport.state.waitForState { $0.sentMessages.count >= 1 }
+        #expect(await transport.state.sentMessages == ["review before replay"])
+        #expect(await transport.state.sentSessionSettings == [
+            OpenClawChatSessionSettingsExpectation(permissionMode: nil, toolOverrides: nil),
+        ])
+    }
+
+    @Test(arguments: [OpenClawChatOutboxUpdateResult.updated, .unavailable, .confirmed, .superseded])
+    func `pre CAS parking honors the terminal write result`(
+        terminalResult: OpenClawChatOutboxUpdateResult) async throws
+    {
+        let (store, _, databaseDirectory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        let command = outboxTestCommand(
+            id: "pre-cas-settings",
+            text: "wait for gateway upgrade",
+            createdAt: Date().timeIntervalSince1970,
+            expectedSessionSettings: OpenClawChatSessionSettingsExpectation(
+                permissionMode: .guarded,
+                toolOverrides: nil))
+        #expect(await store.enqueueCommand(command))
+        let outbox = ScriptedOutbox(base: store)
+        await outbox.setTerminalWriteResult(terminalResult)
+        let terminalWrite = OutboxTestGate()
+        await outbox.setTerminalWriteGate(terminalWrite)
+        let transport = OutboxTestTransport(healthy: false, supportsSessionSettingsCAS: false)
+        let vm = await makeOutboxViewModel(transport: transport, outbox: outbox)
+
+        await MainActor.run { vm.load() }
+        await transport.goOnline()
+        await terminalWrite.waitUntilStarted()
+        let flush = await vm.outboxFlushTask
+        await terminalWrite.release()
+        try await #require(flush).value
+        // The held write coalesces reconnect triggers into a successor pass.
+        await vm.outboxFlushTask?.value
+        let commands = await store.loadCommands()
+        let storedResult = switch terminalResult {
+        case .updated: commands.first?.status == .failed
+        case .unavailable: commands.first?.status == .sending
+        case .confirmed, .missing: commands.isEmpty
+        case .superseded: commands.first?.status == .sending && commands.first?.attemptVersion == command
+            .attemptVersion + 1
+        }
+        #expect(storedResult)
+        #expect(await vm.outboxFlushTask == nil)
+        #expect(await MainActor.run { terminalResult != .unavailable || !vm.healthOK })
+        #expect(await transport.state.sentMessages.isEmpty)
+        if terminalResult == .updated {
+            #expect(await store.loadCommands().first?.lastError ==
+                OpenClawChatSQLiteTranscriptCache.outboxSettingsGatewayUpgradeRequiredError)
+        } else {
+            #expect(await MainActor.run {
+                vm.messages.allSatisfy { vm.outboxState(for: $0.id)?.isFailed != true }
+            })
+        }
+    }
+
+    @Test func `failed restrictive patch cannot release a later automatic flush`() async throws {
+        let (store, _, databaseDirectory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        let fullAccess = OpenClawChatSessionSettingsExpectation(permissionMode: .full, toolOverrides: nil)
+        #expect(await store.enqueueCommand(outboxTestCommand(
+            id: "failed-restriction",
+            text: "do not auto release",
+            createdAt: Date().timeIntervalSince1970,
+            expectedSessionSettings: fullAccess)))
+        let patchRelease = DeleteGate()
+        let patchStarted = DeleteGate()
+        let catalog = OpenClawChatComposerCapabilityCatalog(
+            sessionSettingsAvailable: true,
+            permissionMutationAvailable: true,
+            sessionSettingsCASAvailable: true)
+        let transport = OutboxTestTransport(
+            healthy: false,
+            sessions: [
+                outboxSessionEntry(
+                    key: "main",
+                    thinkingLevels: ["off"],
+                    sessionID: "session-main",
+                    permissionMode: .full),
+                outboxSessionEntry(key: "other", thinkingLevels: ["off"]),
+            ],
+            supportsSessionSettingsCAS: true,
+            composerCapabilityCatalog: catalog,
+            sessionSettingsPatchHook: {
+                await patchStarted.open()
+                await patchRelease.wait()
+                throw NSError(
+                    domain: "ChatViewModelOutboxSettingsTests",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "Restriction was not saved."])
+            })
+        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
+        await MainActor.run { vm.load() }
+        await vm.bootstrapTask?.value
+        await waitForObservedState { vm.hasRestoredOutboxMessages }
+        #expect(await vm.hasRestoredOutboxMessages)
+        await MainActor.run {
+            vm.sessions = [outboxSessionEntry(
+                key: "main",
+                thinkingLevels: ["off"],
+                sessionID: "session-main",
+                permissionMode: .full)]
+            vm.sessionId = "session-main"
+        }
+        await vm.loadComposerCapabilities()
+        let target = await vm.currentModelPatchTarget()
+        await MainActor.run { vm.selectComposerPermissionMode(.guarded) }
+        await patchStarted.wait()
+        #expect(await transport.state.sentMessages.isEmpty)
+        await MainActor.run { vm.switchSession(to: "other") }
+        await patchRelease.open()
+        await vm.waitForPendingSessionSettings(for: target)
+        #expect(await store.loadCommands().first?.status == .failed)
+
+        let reopened = await makeOutboxViewModel(transport: transport, outbox: store)
+        await MainActor.run {
+            reopened.load()
+            reopened.readySessionMetadataGeneration = reopened.sessionMetadataGeneration
+            reopened.reconciledOutboxBranchScopes.insert(
+                OpenClawChatOutboxScope(sessionKey: "main", agentID: "main"))
+            reopened.applyTransportHealth(true)
+            reopened.flushOutboxIfNeeded()
+        }
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await transport.state.sentMessages.isEmpty)
+        #expect(await store.loadCommands().first?.lastError ==
+            OpenClawChatSQLiteTranscriptCache.outboxSettingsChangedError)
+    }
+
+    @Test func `bulk settings failure immediately publishes failed bubble state`() async throws {
+        let (store, _, databaseDirectory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        #expect(await store.enqueueCommand(outboxTestCommand(
+            id: "visible-settings-failure",
+            text: "show the failure",
+            createdAt: Date().timeIntervalSince1970,
+            expectedSessionSettings: OpenClawChatSessionSettingsExpectation(
+                permissionMode: .guarded,
+                toolOverrides: nil))))
+        let transport = OutboxTestTransport(healthy: false)
+        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
+        await MainActor.run { vm.load() }
+        await vm.bootstrapTask?.value
+        await waitForObservedState {
+            vm.messages.contains { vm.outboxState(for: $0.id) == .queued }
+        }
+        #expect(await MainActor.run { vm.messages.contains { vm.outboxState(for: $0.id) == .queued } })
+
+        #expect(await store.parkQueuedCommands(
+            in: OpenClawChatOutboxScope(sessionKey: "main", agentID: "main"),
+            lastError: "Restriction was not saved."))
+        await waitForObservedState {
+            vm.messages.contains { vm.outboxState(for: $0.id)?.isFailed == true }
+        }
+        #expect(await MainActor.run { vm.messages.contains { vm.outboxState(for: $0.id)?.isFailed == true } })
+    }
+
+    @Test(arguments: [false, true])
+    @MainActor
+    func `settings parking revalidates the composer owner before dispatch`(switchSession: Bool) async throws {
+        let (store, _, databaseDirectory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        let parkingStarted = DeleteGate()
+        let parkingRelease = DeleteGate()
+        let outbox = ScriptedOutbox(base: store, parkingHook: {
+            await parkingStarted.open()
+            await parkingRelease.wait()
+        })
+        let patchCalls = SettingsPatchCounter()
+        let catalog = OpenClawChatComposerCapabilityCatalog(
+            sessionSettingsAvailable: true,
+            permissionMutationAvailable: true,
+            sessionSettingsCASAvailable: true)
+        let transport = OutboxTestTransport(
+            healthy: false,
+            composerCapabilityCatalog: catalog,
+            sessionSettingsPatchHook: { await patchCalls.increment() })
+        let vm = await makeOutboxViewModel(transport: transport, outbox: outbox)
+        defer { vm.detachTransport() }
+        vm.sessions = [outboxSessionEntry(
+            key: "main",
+            thinkingLevels: ["off"],
+            sessionID: "session-main",
+            permissionMode: .full)]
+        vm.sessionId = "session-main"
+        await vm.loadComposerCapabilities()
+        let target = vm.currentModelPatchTarget()
+
+        vm.selectComposerPermissionMode(.guarded)
+        await parkingStarted.wait()
+        if switchSession {
+            vm.switchSession(to: "other")
+        }
+        await parkingRelease.open()
+        await vm.waitForPendingSessionSettings(for: target)
+
+        #expect(await patchCalls.current() == (switchSession ? 0 : 1))
+        if !switchSession {
+            #expect(vm.composerPermissionMode == .guarded)
+        }
+    }
+
+    @Test func `settings mutation does not reach gateway when durable parking fails`() async throws {
+        let (store, _, databaseDirectory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        #expect(await store.enqueueCommand(outboxTestCommand(
+            id: "parking-unavailable",
+            text: "keep queued safely",
+            createdAt: Date().timeIntervalSince1970,
+            expectedSessionSettings: OpenClawChatSessionSettingsExpectation(
+                permissionMode: .full,
+                toolOverrides: nil))))
+        let scripted = ScriptedOutbox(base: store)
+        await scripted.setParkingAvailable(false)
+        let patchCalls = SettingsPatchCounter()
+        let catalog = OpenClawChatComposerCapabilityCatalog(
+            sessionSettingsAvailable: true,
+            permissionMutationAvailable: true,
+            sessionSettingsCASAvailable: true)
+        let transport = OutboxTestTransport(
+            healthy: false,
+            composerCapabilityCatalog: catalog,
+            sessionSettingsPatchHook: { await patchCalls.increment() })
+        let vm = await makeOutboxViewModel(transport: transport, outbox: scripted)
+        await MainActor.run {
+            vm.sessions = [outboxSessionEntry(
+                key: "main",
+                thinkingLevels: ["off"],
+                sessionID: "session-main",
+                permissionMode: .full)]
+            vm.sessionId = "session-main"
+        }
+        await vm.loadComposerCapabilities()
+
+        let target = await vm.currentModelPatchTarget()
+        await MainActor.run { vm.selectComposerPermissionMode(.guarded) }
+        await vm.waitForPendingSessionSettings(for: target)
+        #expect(await MainActor.run {
+            !vm.composerCapabilityMutationDisabled &&
+                vm.errorText == "Could not secure queued messages before changing session settings."
+        })
+
+        #expect(await patchCalls.current() == 0)
+        #expect(await store.loadCommands().first?.status == .queued)
+    }
+
+    @Test @MainActor
+    func `settings failure parking keeps replacement session errors`() async throws {
+        let (store, _, databaseDirectory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        let parkingCalls = SettingsPatchCounter()
+        let failureParkingStarted = DeleteGate()
+        let failureParkingRelease = DeleteGate()
+        let outbox = ScriptedOutbox(base: store, parkingHook: {
+            await parkingCalls.increment()
+            guard await parkingCalls.current() == 2 else { return }
+            await failureParkingStarted.open()
+            await failureParkingRelease.wait()
+        })
+        let catalog = OpenClawChatComposerCapabilityCatalog(
+            sessionSettingsAvailable: true,
+            permissionMutationAvailable: true,
+            sessionSettingsCASAvailable: true)
+        let transport = OutboxTestTransport(
+            healthy: false,
+            composerCapabilityCatalog: catalog,
+            sessionSettingsPatchHook: {
+                throw NSError(
+                    domain: "ChatViewModelOutboxSettingsTests",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "Restriction was not saved."])
+            })
+        let vm = await makeOutboxViewModel(transport: transport, outbox: outbox)
+        defer { vm.detachTransport() }
+        vm.sessions = [outboxSessionEntry(
+            key: "main", thinkingLevels: ["off"], sessionID: "session-main", permissionMode: .full)]
+        vm.sessionId = "session-main"
+        await vm.loadComposerCapabilities()
+        let target = vm.currentModelPatchTarget()
+
+        vm.selectComposerPermissionMode(.guarded)
+        await failureParkingStarted.wait()
+        vm.switchSession(to: "other")
+        await vm.bootstrapTask?.value
+        vm.errorText = "Other session error"
+        vm.composerCapabilityState.errorMessage = "Other capability error"
+        await failureParkingRelease.open()
+        await vm.waitForPendingSessionSettings(for: target)
+
+        #expect(vm.sessionKey == "other")
+        #expect(vm.errorText == "Other session error")
+        #expect(vm.composerCapabilityState.errorMessage == "Other capability error")
+    }
+}

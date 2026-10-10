@@ -1,0 +1,376 @@
+import { existsSync } from "node:fs";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import * as ts from "typescript/unstable/ast";
+import { createNativeTypeScriptParser } from "./native-typescript.mts";
+
+type RawCopyFinding = {
+  kind: "html-attribute" | "html-text" | "object-property";
+  name: string;
+  path: string;
+  text: string;
+};
+
+export type RawCopyBaselineEntry = {
+  count: number;
+  kind: RawCopyFinding["kind"];
+  name: string;
+  path: string;
+  text: string;
+};
+
+export type RawCopyBaseline = {
+  entries: RawCopyBaselineEntry[];
+  version: number;
+};
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const I18N_ASSETS_DIR = path.join(ROOT, "ui", "src", "i18n", ".i18n");
+const SOURCE_DIRS = [
+  path.join(ROOT, "ui", "src", "app"),
+  path.join(ROOT, "ui", "src", "components"),
+  path.join(ROOT, "ui", "src", "lib"),
+  path.join(ROOT, "ui", "src", "pages"),
+] as const;
+const BASELINE_PATH = path.join(I18N_ASSETS_DIR, "raw-copy-baseline.json");
+const BASELINE_VERSION = 1;
+const INTERPOLATION_MARKER = "\u0000";
+const RAW_COPY_ATTRIBUTE_NAMES = new Set(["alt", "aria-label", "placeholder", "title"]);
+
+function toRepoPath(filePath: string): string {
+  return path.relative(ROOT, filePath).split(path.sep).join("/");
+}
+
+function normalizeRawCopyText(raw: string): string {
+  return raw
+    .replace(/\\n/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/&middot;/giu, "·")
+    .trim();
+}
+
+function parseDoubleQuotedString(raw: string): string {
+  try {
+    return JSON.parse(`"${raw}"`) as string;
+  } catch {
+    return raw;
+  }
+}
+
+function pushRawCopyFinding(findings: RawCopyFinding[], params: RawCopyFinding) {
+  const text = normalizeRawCopyText(params.text);
+  if (!text || !/\p{L}/u.test(text)) {
+    return;
+  }
+  findings.push({ ...params, text });
+}
+
+function pushRawCopySegments(findings: RawCopyFinding[], params: RawCopyFinding) {
+  for (const text of params.text.split(INTERPOLATION_MARKER)) {
+    pushRawCopyFinding(findings, { ...params, text });
+  }
+}
+
+function collectStaticStringSegments(node: ts.Expression): string[] {
+  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+    return [node.text];
+  }
+  if (ts.isTemplateExpression(node)) {
+    return [node.head.text, ...node.templateSpans.map((span) => span.literal.text)];
+  }
+  if (ts.isParenthesizedExpression(node)) {
+    return collectStaticStringSegments(node.expression);
+  }
+  if (ts.isBinaryExpression(node)) {
+    if (node.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) {
+      return collectStaticStringSegments(node.right);
+    }
+    if (
+      node.operatorToken.kind === ts.SyntaxKind.PlusToken ||
+      node.operatorToken.kind === ts.SyntaxKind.BarBarToken ||
+      node.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken
+    ) {
+      return [
+        ...collectStaticStringSegments(node.left),
+        ...collectStaticStringSegments(node.right),
+      ];
+    }
+  }
+  if (ts.isConditionalExpression(node)) {
+    return [
+      ...collectStaticStringSegments(node.whenTrue),
+      ...collectStaticStringSegments(node.whenFalse),
+    ];
+  }
+  return [];
+}
+
+async function walkSourceFiles(dir: string): Promise<string[]> {
+  const entries = await readdir(dir, { withFileTypes: true });
+  const files: string[] = [];
+  for (const entry of entries) {
+    if (entry.name === "test-helpers") {
+      continue;
+    }
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...(await walkSourceFiles(fullPath)));
+      continue;
+    }
+    if (
+      entry.isFile() &&
+      /\.tsx?$/u.test(entry.name) &&
+      !/\.(?:test|browser\.test|node\.test)\.tsx?$/u.test(entry.name)
+    ) {
+      files.push(fullPath);
+    }
+  }
+  return files;
+}
+
+export function collectControlUiRawCopyFromSource(sourceFile: ts.SourceFile): RawCopyFinding[] {
+  const source = sourceFile.text;
+  const repoPath = toRepoPath(sourceFile.fileName);
+  const findings: RawCopyFinding[] = [];
+  const jsxRanges: { start: number; end: number }[] = [];
+  const attrPattern =
+    /\b(alt|aria-label|placeholder|title)\s*=\s*"((?:[^"\\]|\\.)*?\p{L}(?:[^"\\]|\\.)*?)"/gu;
+  const textPattern = />\s*([^<>{}]*?\p{L}[^<>{}]*?)\s*</gu;
+  const visit = (node: ts.Node, parent?: ts.Node) => {
+    if (ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node) || ts.isJsxFragment(node)) {
+      if (node.pos >= (jsxRanges.at(-1)?.end ?? 0)) {
+        jsxRanges.push({ start: node.pos, end: node.end });
+      }
+    }
+    if (ts.isJsxText(node)) {
+      pushRawCopyFinding(findings, {
+        kind: "html-text",
+        name: "text",
+        path: repoPath,
+        text: node.text,
+      });
+    } else if (ts.isJsxAttribute(node) && node.initializer) {
+      const name = ts.isIdentifier(node.name)
+        ? node.name.text
+        : node.name.namespace.text === "prop"
+          ? node.name.name.text
+          : undefined;
+      if (name && RAW_COPY_ATTRIBUTE_NAMES.has(name)) {
+        const value = ts.isJsxExpression(node.initializer)
+          ? node.initializer.expression
+          : node.initializer;
+        for (const text of value ? collectStaticStringSegments(value) : []) {
+          pushRawCopyFinding(findings, { kind: "html-attribute", name, path: repoPath, text });
+        }
+      }
+    } else if (
+      ts.isJsxExpression(node) &&
+      node.expression &&
+      parent &&
+      (ts.isJsxElement(parent) || ts.isJsxFragment(parent))
+    ) {
+      for (const text of collectStaticStringSegments(node.expression)) {
+        pushRawCopyFinding(findings, { kind: "html-text", name: "text", path: repoPath, text });
+      }
+    }
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      node.expression.name.text === "setAttribute"
+    ) {
+      const [nameArg, valueArg] = node.arguments;
+      if (
+        nameArg &&
+        valueArg &&
+        (ts.isStringLiteral(nameArg) || ts.isNoSubstitutionTemplateLiteral(nameArg)) &&
+        RAW_COPY_ATTRIBUTE_NAMES.has(nameArg.text)
+      ) {
+        for (const text of collectStaticStringSegments(valueArg)) {
+          pushRawCopyFinding(findings, {
+            kind: "html-attribute",
+            name: nameArg.text,
+            path: repoPath,
+            text,
+          });
+        }
+      }
+    }
+    if (ts.isTaggedTemplateExpression(node) && node.tag.getText(sourceFile) === "html") {
+      let logicalText: string;
+      if (ts.isNoSubstitutionTemplateLiteral(node.template)) {
+        logicalText = node.template.text;
+      } else {
+        logicalText = [
+          node.template.head.text,
+          ...node.template.templateSpans.map((span) => span.literal.text),
+        ].join(INTERPOLATION_MARKER);
+      }
+      for (const match of logicalText.matchAll(attrPattern)) {
+        const rawText = match[2];
+        if (rawText?.includes(INTERPOLATION_MARKER)) {
+          pushRawCopySegments(findings, {
+            kind: "html-attribute",
+            name: match[1] ?? "attribute",
+            path: repoPath,
+            text: parseDoubleQuotedString(rawText),
+          });
+        }
+      }
+      for (const match of logicalText.matchAll(textPattern)) {
+        const rawText = match[1];
+        if (rawText) {
+          pushRawCopySegments(findings, {
+            kind: "html-text",
+            name: "text",
+            path: repoPath,
+            text: rawText,
+          });
+        }
+      }
+    }
+    node.forEachChild((child) => visit(child, node));
+  };
+  visit(sourceFile);
+
+  const literalFindings: RawCopyFinding[] = [];
+  const staticAttrPattern =
+    /\b(alt|aria-label|placeholder|title)\s*=\s*"((?:(?!\$\{)[^"\\]|\\.)*?\p{L}(?:(?!\$\{)[^"\\]|\\.)*?)"/gu;
+  const propertyPattern =
+    /\b(label|title|subtitle|description|help|placeholder)\s*:\s*"((?:[^"\\]|\\.)*?\p{L}(?:[^"\\]|\\.)*?)"/gu;
+  for (const [pattern, kind, fallbackName] of [
+    [staticAttrPattern, "html-attribute", "attribute"],
+    [propertyPattern, "object-property", "property"],
+  ] as const) {
+    for (const match of source.matchAll(pattern)) {
+      const rawText = match[2];
+      // JSX owns its attributes, including excluding metadata and callback strings.
+      if (
+        rawText &&
+        (kind !== "html-attribute" ||
+          !jsxRanges.some(({ start, end }) => match.index >= start && match.index < end))
+      ) {
+        pushRawCopyFinding(literalFindings, {
+          kind,
+          name: match[1] ?? fallbackName,
+          path: repoPath,
+          text: parseDoubleQuotedString(rawText),
+        });
+      }
+    }
+  }
+  return [...literalFindings, ...findings];
+}
+
+async function collectFindings(): Promise<RawCopyFinding[]> {
+  const files = (await Promise.all(SOURCE_DIRS.map((dir) => walkSourceFiles(dir)))).flat();
+  const findings: RawCopyFinding[] = [];
+  const parser = createNativeTypeScriptParser({ cwd: ROOT });
+  try {
+    const sources: { fileName: string; text: string }[] = [];
+    for (const filePath of files.toSorted((left, right) => left.localeCompare(right))) {
+      sources.push({ fileName: filePath, text: await readFile(filePath, "utf8") });
+    }
+    for (const sourceFile of parser.parseSourceFiles(sources)) {
+      findings.push(...collectControlUiRawCopyFromSource(sourceFile));
+    }
+  } finally {
+    parser.close();
+  }
+  return findings;
+}
+
+function summarize(findings: RawCopyFinding[]): RawCopyBaselineEntry[] {
+  const counts = new Map<string, RawCopyBaselineEntry>();
+  for (const finding of findings) {
+    const key = [finding.path, finding.kind, finding.name, finding.text].join("\u0000");
+    const existing = counts.get(key);
+    if (existing) {
+      existing.count += 1;
+    } else {
+      counts.set(key, {
+        count: 1,
+        kind: finding.kind,
+        name: finding.name,
+        path: finding.path,
+        text: finding.text,
+      });
+    }
+  }
+  return [...counts.values()].toSorted(
+    (left, right) =>
+      left.path.localeCompare(right.path) ||
+      left.kind.localeCompare(right.kind) ||
+      left.name.localeCompare(right.name) ||
+      left.text.localeCompare(right.text),
+  );
+}
+
+function formatBaseline(entries: RawCopyBaselineEntry[]): string {
+  return `${JSON.stringify({ version: BASELINE_VERSION, entries } satisfies RawCopyBaseline, null, 2)}\n`;
+}
+
+function formatDiff(current: RawCopyBaselineEntry[], expected: RawCopyBaselineEntry[]): string {
+  const keyFor = (entry: RawCopyBaselineEntry) =>
+    [entry.path, entry.kind, entry.name, entry.text].join("\u0000");
+  const difference = (
+    entries: RawCopyBaselineEntry[],
+    other: RawCopyBaselineEntry[],
+    prefix: string,
+  ) => {
+    const otherByKey = new Map(other.map((entry) => [keyFor(entry), entry]));
+    const changed = entries.filter((entry) => {
+      const previous = otherByKey.get(keyFor(entry));
+      return !previous || previous.count !== entry.count;
+    });
+    return {
+      count: changed.length,
+      lines: changed
+        .slice(0, 20)
+        .map(
+          (entry) =>
+            `${prefix} ${entry.path} ${entry.kind}:${entry.name} x${entry.count} ${JSON.stringify(entry.text)}`,
+        ),
+    };
+  };
+  const added = difference(current, expected, "+");
+  const removed = difference(expected, current, "-");
+  const lines = [...added.lines, ...removed.lines];
+  const extra = added.count + removed.count - lines.length;
+  if (extra > 0) {
+    lines.push(`... ${extra} more baseline delta(s)`);
+  }
+  return lines.join("\n");
+}
+
+export async function syncControlUiRawCopyBaseline(options: {
+  checkOnly: boolean;
+  write: boolean;
+}) {
+  const entries = summarize(await collectFindings());
+  const expected = formatBaseline(entries);
+  const current = existsSync(BASELINE_PATH) ? await readFile(BASELINE_PATH, "utf8") : "";
+  if (!options.checkOnly && options.write && current !== expected) {
+    await mkdir(I18N_ASSETS_DIR, { recursive: true });
+    await writeFile(BASELINE_PATH, expected, "utf8");
+  }
+  if (options.checkOnly && current !== expected) {
+    let currentEntries: RawCopyBaselineEntry[] = [];
+    try {
+      const parsed = JSON.parse(current) as Partial<RawCopyBaseline>;
+      currentEntries = Array.isArray(parsed.entries) ? parsed.entries : [];
+    } catch {
+      // Invalid baseline reports as a full delta below.
+    }
+    throw new Error(
+      [
+        "control-ui raw-copy baseline drift detected.",
+        formatDiff(entries, currentEntries),
+        "Move user-facing strings into ui/src/i18n/locales/en.ts, or run `pnpm ui:i18n:baseline` when the raw string is intentional.",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
+  }
+  process.stdout.write(`control-ui-i18n: raw-copy: baseline entries=${entries.length}\n`);
+}

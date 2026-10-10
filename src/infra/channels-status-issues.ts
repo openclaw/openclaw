@@ -1,23 +1,119 @@
+import { Value } from "typebox/value";
+import { ChannelsStatusResultSchema } from "../../packages/gateway-protocol/src/schema/channels.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import type {
   ChannelAccountSnapshot,
+  ChannelId,
+  ChannelPlugin,
   ChannelStatusIssue,
 } from "../channels/plugins/types.public.js";
+import {
+  DEFAULT_CHANNEL_CONNECT_GRACE_MS,
+  DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
+  evaluateChannelHealth,
+} from "../gateway/channel-health-policy.js";
 
-export function collectChannelStatusIssues(payload: Record<string, unknown>): ChannelStatusIssue[] {
+const RUNTIME_ISSUE_MESSAGES = new Map([
+  ["not-running", "Channel is enabled and configured, but its runtime is not running."],
+  ["disconnected", "Channel reports running, but the runtime is disconnected."],
+  [
+    "stale-socket",
+    "Channel reports connected, but transport activity is stale; inbound delivery may be broken.",
+  ],
+  ["stuck", "Channel runtime appears stuck with stale run activity."],
+]);
+
+function resolveIssueAccountId(account: ChannelAccountSnapshot): string {
+  return typeof account.accountId === "string" && account.accountId.trim()
+    ? account.accountId
+    : "default";
+}
+
+function collectGenericRuntimeStatusIssues(
+  channel: ChannelId,
+  accounts: ChannelAccountSnapshot[],
+): ChannelStatusIssue[] {
+  const now = Date.now();
   const issues: ChannelStatusIssue[] = [];
-  const accountsByChannel = payload.channelAccounts as Record<string, unknown> | undefined;
-  for (const plugin of listChannelPlugins()) {
-    const collect = plugin.status?.collectStatusIssues;
-    if (!collect) {
+  for (const account of accounts) {
+    if (account.enabled === false || account.configured === false) {
       continue;
     }
+    const accountId = resolveIssueAccountId(account);
+    // Dead ingress outranks the restart-pending short-circuit: a pending restart
+    // cannot fix a channel whose inbound admission is unavailable, and hiding it
+    // behind "status may be stale" is how silent inbound loss stays invisible.
+    if (account.ingressUnavailable === true && !account.terminalDisconnect) {
+      issues.push({
+        channel,
+        accountId,
+        kind: "runtime",
+        message:
+          "Channel cannot admit inbound events; its durable ingress queue is unavailable. Outbound may still work.",
+        fix: "check openclaw logs for the ingress failure, then rerun openclaw doctor",
+      });
+      continue;
+    }
+    // Generic health issues are derived before plugin-specific checks so every
+    // channel gets the same stale/disconnected runtime warnings.
+    const health = evaluateChannelHealth(account, {
+      channelId: channel,
+      now,
+      channelConnectGraceMs: DEFAULT_CHANNEL_CONNECT_GRACE_MS,
+      staleEventThresholdMs: DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
+    });
+    if (health.healthy) {
+      continue;
+    }
+    // Older status snapshots can omit running; absence is not a stopped runtime.
+    if (health.reason === "not-running" && account.running !== false) {
+      continue;
+    }
+    const blocked = health.reason === "terminal-disconnect" || health.reason === "blocked";
+    const message = blocked
+      ? account.lastError || "Channel runtime is blocked and needs operator action."
+      : RUNTIME_ISSUE_MESSAGES.get(health.reason);
+    if (message === undefined) {
+      continue;
+    }
+    issues.push({
+      channel,
+      accountId,
+      kind: "runtime",
+      message,
+      fix: blocked
+        ? "resolve the reported channel error, then restart the channel"
+        : "restart the channel or gateway",
+    });
+  }
+  return issues;
+}
+
+/** Collects generic and plugin-specific issues from a channels status payload. */
+export function collectChannelStatusIssues(
+  payload: Record<string, unknown>,
+  plugins?: readonly Pick<ChannelPlugin, "id" | "status">[],
+): ChannelStatusIssue[] {
+  // The Gateway owns live diagnostics, including reload state unavailable to CLI readers.
+  if (
+    Array.isArray(payload.statusIssues) &&
+    Value.Check(ChannelsStatusResultSchema.properties.statusIssues, payload.statusIssues)
+  ) {
+    return payload.statusIssues;
+  }
+  const issues: ChannelStatusIssue[] = [];
+  const accountsByChannel = payload.channelAccounts as Record<string, unknown> | undefined;
+  for (const plugin of plugins ?? listChannelPlugins()) {
     const raw = accountsByChannel?.[plugin.id];
     if (!Array.isArray(raw)) {
       continue;
     }
-
-    issues.push(...collect(raw as ChannelAccountSnapshot[]));
+    const accounts = raw as ChannelAccountSnapshot[];
+    issues.push(...collectGenericRuntimeStatusIssues(plugin.id, accounts));
+    const collect = plugin.status?.collectStatusIssues;
+    if (collect) {
+      issues.push(...collect(accounts));
+    }
   }
   return issues;
 }

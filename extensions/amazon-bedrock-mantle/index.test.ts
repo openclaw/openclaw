@@ -39,10 +39,46 @@ describe("amazon-bedrock-mantle provider plugin", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("registers with correct provider ID and label", async () => {
+  it("returns raw discovery for the host to merge with materialized config", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: [
+            {
+              id: "anthropic.claude-opus-4-7",
+              object: "model",
+              input_modalities: ["text", "image"],
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
     const provider = await registerSingleProviderPlugin(bedrockMantlePlugin);
-    expect(provider.id).toBe("amazon-bedrock-mantle");
-    expect(provider.label).toBe("Amazon Bedrock Mantle (OpenAI-compatible)");
+
+    const result = await provider.catalog?.run({
+      config: {
+        models: {
+          providers: {
+            "amazon-bedrock-mantle": {
+              baseUrl: "https://explicit.example.test/v1",
+              models: [{ id: "anthropic.claude-opus-4-7", input: ["text"] }],
+            },
+          },
+        },
+      },
+      env: {
+        AWS_BEARER_TOKEN_BEDROCK: "test-token",
+        AWS_REGION: "us-east-1",
+      },
+    } as never);
+
+    if (!result || !("provider" in result)) {
+      throw new Error("expected single provider catalog result");
+    }
+    expect(result.provider.baseUrl).toBe("https://bedrock-mantle.us-east-1.api.aws/v1");
+    expect(result.provider.models[0]?.input).toEqual(["text", "image"]);
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it("classifies rate limit errors for failover", async () => {
@@ -84,4 +120,50 @@ describe("amazon-bedrock-mantle provider plugin", () => {
       } as never),
     ).toBeUndefined();
   });
+
+  it.each([
+    {
+      name: "Opus 5",
+      id: "claude-opus-5",
+      staleCost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      expectedCost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+    },
+    {
+      name: "Sonnet 5",
+      id: "claude-sonnet-5",
+      staleCost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+      expectedCost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+    },
+  ])(
+    "restores missing or stale $name pricing during runtime normalization",
+    async ({ name, id, staleCost, expectedCost }) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(Date.UTC(2026, 8, 1));
+      try {
+        const provider = await registerSingleProviderPlugin(bedrockMantlePlugin);
+        const model = {
+          id: `anthropic.${id}`,
+          name: `Claude ${name}`,
+          api: "anthropic-messages",
+          provider: "amazon-bedrock-mantle",
+          baseUrl: "https://bedrock-mantle.us-east-1.api.aws/anthropic",
+          reasoning: true,
+          input: ["text", "image"],
+          contextWindow: 1_000_000,
+          maxTokens: 128_000,
+          params: { canonicalModelId: id },
+        };
+        for (const cost of [undefined, staleCost]) {
+          const normalized = provider.normalizeResolvedModel?.({
+            provider: "amazon-bedrock-mantle",
+            modelId: model.id,
+            model: { ...model, cost },
+          } as never);
+          expect(normalized?.cost).toEqual(expectedCost);
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 });

@@ -1,0 +1,55 @@
+title: "Runtime tool fixture — fs.list"
+
+scenario:
+  id: runtime-tool-fs-list
+  surface: runtime-tools
+  runtimePairLane: core
+  coverage:
+    secondary:
+      - agent-runtime.tool-fs-list
+  objective: Verify directory inspection uses the existing OpenClaw ls tool across runtimes.
+  successCriteria:
+    - The ls tool lists the workspace directory and returns a linked successful result.
+    - A valid ls request for a missing directory returns a linked failure result.
+    - Provider plans alone do not count as execution evidence.
+  docsRefs:
+    - qa/scenarios/index.yaml
+  codeRefs:
+    - src/agents/sessions/tools/ls.ts
+    - extensions/codex/src/app-server/dynamic-tool-profile.ts
+    - extensions/qa-lab/src/runtime-tool-fixture.ts
+  execution:
+    kind: flow
+    summary: Exercise directory listing through the existing ls tool, including a missing-directory failure.
+    config:
+      toolName: ls
+      toolCoverage:
+        family: fs.list
+        actualTool: ls
+        bucket: openclaw-dynamic-integration
+        expectedLayer: openclaw-dynamic
+        required: true
+        codexDefaultImpact: P4
+        qaImpact: P2
+        action: require linked directory listing and missing-directory failure results
+        reason: OpenClaw exposes ls in the coding profile and Codex retains it as a dynamic tool.
+      happyPrompt: >-
+        tool search qa check target=ls. Call ls exactly once with path="."
+        to list the workspace directory, then summarize the actual tool result.
+      failurePrompt: >-
+        tool search qa failure target=ls. Call ls exactly once with
+        path="runtime-tool-fixture-missing-directory" to exercise the
+        missing-directory failure. Do not create the directory or retry.
+      promptSnippet: "target=ls"
+      failurePromptSnippet: "failure target=ls"
+
+flow:
+  steps:
+    - name: exercises fs.list happy and failure paths
+      actions:
+        - call: runRuntimeToolFixture
+          saveAs: result
+          args:
+            - ref: env
+            - ref: config
+      detailsExpr: result

@@ -1,13 +1,10 @@
+// File Transfer tests cover file fetch plugin behavior.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  FILE_FETCH_DEFAULT_MAX_BYTES,
-  FILE_FETCH_HARD_MAX_BYTES,
-  handleFileFetch,
-} from "./file-fetch.js";
+import { handleFileFetch } from "./file-fetch.js";
 
 let tmpRoot: string;
 
@@ -85,8 +82,8 @@ describe("handleFileFetch — fs errors", () => {
 });
 
 describe("handleFileFetch — zero-byte round-trip", () => {
-  it("fetches an empty file with size=0 and base64=''", async () => {
-    const target = path.join(tmpRoot, "empty.bin");
+  it("fetches an empty image-named file with extension-derived MIME", async () => {
+    const target = path.join(tmpRoot, "empty.png");
     await fs.writeFile(target, "");
 
     const r = await handleFileFetch({ path: target });
@@ -94,6 +91,7 @@ describe("handleFileFetch — zero-byte round-trip", () => {
       throw new Error(`expected ok, got ${r.code}: ${r.message}`);
     }
     expect(r.size).toBe(0);
+    expect(r.mimeType).toBe("image/png");
     expect(r.base64).toBe("");
     // SHA-256 of empty input.
     expect(r.sha256).toBe("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
@@ -135,18 +133,53 @@ describe("handleFileFetch — happy path", () => {
     expect(readFileSpy).not.toHaveBeenCalled();
   });
 
-  it("returns a sensible mime type for known extensions", async () => {
-    const target = path.join(tmpRoot, "readme.md");
-    await fs.writeFile(target, "# heading\n");
+  it.runIf(process.platform !== "win32")(
+    "rejects a retargeted path before reading file bytes",
+    async () => {
+      const first = path.join(tmpRoot, "first.txt");
+      const second = path.join(tmpRoot, "second.txt");
+      const link = path.join(tmpRoot, "current.txt");
+      await fs.writeFile(first, "approved");
+      await fs.writeFile(second, "not approved");
+      await fs.symlink(first, link);
 
-    const r = await handleFileFetch({ path: target });
-    if (!r.ok) {
-      throw new Error("expected ok");
-    }
-    // libmagic ("file" cli) typically reports text/plain or text/markdown for
-    // a one-line markdown file; the extension fallback yields text/markdown.
-    // Accept either.
-    expect(r.mimeType).toMatch(/^text\/(plain|markdown)$/);
+      const preflight = await handleFileFetch({
+        path: link,
+        followSymlinks: true,
+        preflightOnly: true,
+      });
+      expectSuccess(preflight);
+      await fs.unlink(link);
+      await fs.symlink(second, link);
+
+      const result = await handleFileFetch({
+        path: link,
+        followSymlinks: true,
+        expectedCanonicalPath: preflight.path,
+      });
+
+      expectFailureCode(result, "CANONICAL_PATH_CHANGED");
+      expect(result.canonicalPath).toBe(second);
+    },
+  );
+
+  it("rejects a replacement at the same canonical pathname before reading bytes", async () => {
+    const target = path.join(tmpRoot, "target.txt");
+    const moved = path.join(tmpRoot, "moved.txt");
+    await fs.writeFile(target, "approved");
+    const preflight = await handleFileFetch({ path: target, preflightOnly: true });
+    expectSuccess(preflight);
+    await fs.rename(target, moved);
+    await fs.writeFile(target, "not approved");
+
+    const result = await handleFileFetch({
+      path: target,
+      expectedCanonicalPath: preflight.path,
+      expectedBinding: preflight.binding,
+    });
+
+    expectFailureCode(result, "CANONICAL_PATH_CHANGED");
+    expect(await fs.readFile(target, "utf8")).toBe("not approved");
   });
 
   it("detects extensionless plain text as text/plain", async () => {
@@ -194,6 +227,51 @@ describe("handleFileFetch — happy path", () => {
 });
 
 describe("handleFileFetch — size enforcement", () => {
+  it("bounds bytes consumed when a file grows after the size check", async () => {
+    const target = path.join(tmpRoot, "growing.txt");
+    await fs.writeFile(target, "small");
+    const realOpen = fs.open.bind(fs);
+    let bytesRead = 0;
+    let grown = false;
+    const grow = async () => {
+      if (!grown) {
+        grown = true;
+        await fs.appendFile(target, Buffer.alloc(1024));
+      }
+    };
+    vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
+      const handle = await realOpen(file, flags, mode);
+      if (String(file) === target) {
+        const read = handle.read.bind(handle);
+        const readFile = handle.readFile.bind(handle);
+        // Keep real filesystem reads; append only after the handler has checked size.
+        handle.read = (async (
+          buffer: Buffer,
+          offset: number,
+          length: number,
+          position: number | null,
+        ) => {
+          await grow();
+          const result = await read(buffer, offset, length, position);
+          bytesRead += result.bytesRead;
+          return result;
+        }) as typeof handle.read;
+        handle.readFile = (async (...args: Parameters<typeof handle.readFile>) => {
+          await grow();
+          const result = await readFile(...args);
+          bytesRead += Buffer.byteLength(result);
+          return result;
+        }) as typeof handle.readFile;
+      }
+      return handle;
+    });
+
+    expectFailureCode(await handleFileFetch({ path: target, maxBytes: 8 }), "FILE_TOO_LARGE");
+    expect(grown).toBe(true);
+    expect(bytesRead).toBeGreaterThan(8);
+    expect(bytesRead).toBeLessThanOrEqual(9);
+  });
+
   it("returns FILE_TOO_LARGE when stat size exceeds the cap", async () => {
     const target = path.join(tmpRoot, "big.bin");
     const data = Buffer.alloc(2048, 0xab);
@@ -204,23 +282,25 @@ describe("handleFileFetch — size enforcement", () => {
   });
 
   it("clamps maxBytes to the hard ceiling", async () => {
-    expect(FILE_FETCH_HARD_MAX_BYTES).toBe(16 * 1024 * 1024);
-    expect(FILE_FETCH_DEFAULT_MAX_BYTES).toBeLessThanOrEqual(FILE_FETCH_HARD_MAX_BYTES);
+    const target = path.join(tmpRoot, "oversized.bin");
+    await fs.writeFile(target, "");
+    await fs.truncate(target, 16 * 1024 * 1024 + 1);
 
-    // A request asking for a maxBytes well above the hard ceiling should
-    // still be honored for a small file (no error).
-    const target = path.join(tmpRoot, "tiny.bin");
-    await fs.writeFile(target, Buffer.from([0x01, 0x02, 0x03]));
     const r = await handleFileFetch({ path: target, maxBytes: Number.MAX_SAFE_INTEGER });
-    expect(r.ok).toBe(true);
+    expectFailureCode(r, "FILE_TOO_LARGE");
+    expect(r.message).toContain("limit 16777216");
   });
 
   it("uses default cap when maxBytes is not finite or non-positive", async () => {
-    const target = path.join(tmpRoot, "small.bin");
-    await fs.writeFile(target, Buffer.from([0xff]));
-    expectSuccess(await handleFileFetch({ path: target, maxBytes: -1 }));
-    expectSuccess(await handleFileFetch({ path: target, maxBytes: Number.NaN }));
-    expectSuccess(await handleFileFetch({ path: target, maxBytes: "8" as unknown }));
+    const target = path.join(tmpRoot, "above-default.bin");
+    await fs.writeFile(target, "");
+    await fs.truncate(target, 8 * 1024 * 1024 + 1);
+
+    for (const maxBytes of [-1, Number.NaN, "8"] as unknown[]) {
+      const r = await handleFileFetch({ path: target, maxBytes });
+      expectFailureCode(r, "FILE_TOO_LARGE");
+      expect(r.message).toContain("limit 8388608");
+    }
   });
 });
 

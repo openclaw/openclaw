@@ -1,66 +1,141 @@
-import { loadManifestModelCatalog } from "../agents/model-catalog.js";
+// Local embedded Gateway request context.
+// Lets local agent paths reuse Gateway server methods without starting a server.
+import { listAgentIds } from "../agents/agent-scope-config.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { CronServiceContract } from "../cron/service-contract.js";
+import { withLocalAgentCronJobsRemoved } from "../cron/local-service.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  bindLegacyPluginSdkResourceHost,
+  getLegacyPluginSdkResourceHost,
+} from "../plugins/legacy-sdk-resource-host.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
+import { loadGatewayConfigRevisionProjector } from "./config-revision-token.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
+import { createChatRunState } from "./server-chat-state.js";
+import type { GatewayCronServiceContract } from "./server-cron-contract.js";
+import { readPreparedServerMethodModelCatalogs } from "./server-methods/optional-model-catalog.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
+import { registerGatewayModelCatalogPrivateAccess } from "./server-model-catalog-auth.js";
+import {
+  loadGatewayModelCatalog,
+  loadGatewayModelCatalogSnapshot,
+  loadPreparedGatewayModelCatalogSnapshot,
+  readPreparedGatewayModelCatalog,
+  readPreparedGatewayModelCatalogBatch,
+  readPreparedGatewayModelCatalogOwnerSnapshot,
+} from "./server-model-catalog.js";
+import { resolveSessionRequestTargets } from "./session-request-targets.js";
+import { bindSessionRowProjection } from "./session-row-projection-access.js";
+import type { SessionRowProjection } from "./session-row-projection.js";
 
+// Embedded/local agent calls need enough GatewayRequestContext to reuse server
+// methods without starting the full gateway. Unsupported subsystems fail loudly
+// so local command paths do not silently enqueue cron/channel work.
 type LocalGatewayRequestContextParams = {
   deps: CliDeps;
   getRuntimeConfig: () => OpenClawConfig;
 };
 
-type LocalGatewayScopeParams = LocalGatewayRequestContextParams;
-
-function cronUnavailable(): never {
+async function cronUnavailable(): Promise<never> {
   throw new Error("Cron is unavailable in local embedded agent gateway context.");
 }
 
-const unavailableCron: CronServiceContract = {
-  start: async () => {
-    cronUnavailable();
-  },
+const unavailableCron: GatewayCronServiceContract = {
+  start: cronUnavailable,
   stop: () => {},
-  status: async () => cronUnavailable(),
-  list: async () => cronUnavailable(),
-  listPage: async () => cronUnavailable(),
-  add: async () => cronUnavailable(),
-  update: async () => cronUnavailable(),
-  remove: async () => cronUnavailable(),
-  run: async () => cronUnavailable(),
-  enqueueRun: async () => cronUnavailable(),
+  pauseScheduling: () => {},
+  resumeScheduling: () => {},
+  status: cronUnavailable,
+  list: cronUnavailable,
+  listPage: cronUnavailable,
+  add: cronUnavailable,
+  update: cronUnavailable,
+  updateWithPrecondition: cronUnavailable,
+  remove: cronUnavailable,
+  removeStaleJobFamily: cronUnavailable,
+  removeAgentJobsTransactional: cronUnavailable,
+  quiesceJobs: cronUnavailable,
+  run: cronUnavailable,
+  enqueueRun: cronUnavailable,
+  waitForManualRun: cronUnavailable,
   getJob: () => undefined,
   readJob: async () => undefined,
+  readScratch: cronUnavailable,
+  writeScratch: cronUnavailable,
   getDefaultAgentId: () => undefined,
   wake: () => ({ ok: false, reason: "unwakeable-session-key" }),
 };
 
-export function createLocalGatewayRequestContext(
+/** Creates the minimal gateway context used by embedded local agent execution. */
+function createLocalGatewayRequestContext(
   params: LocalGatewayRequestContextParams,
 ): GatewayRequestContext {
   const logGateway = createSubsystemLogger("gateway/local");
+  const resourceHost = getLegacyPluginSdkResourceHost();
+  const cron: GatewayCronServiceContract = {
+    ...unavailableCron,
+    removeAgentJobsTransactional: async (agentId, commit) =>
+      await withLocalAgentCronJobsRemoved(agentId, params.getRuntimeConfig, commit),
+  };
   const sessionEvents = new Set<string>();
-  const chatRuns = new Map<string, { sessionKey: string; clientRunId: string }>();
-  return {
+  const chatRunState = createChatRunState();
+  const loadCatalogSnapshot: GatewayRequestContext["loadGatewayModelCatalogSnapshot"] = (
+    loadParams,
+  ) => loadGatewayModelCatalogSnapshot({ ...loadParams, getConfig: params.getRuntimeConfig });
+  registerGatewayModelCatalogPrivateAccess(loadCatalogSnapshot, {
+    loadDeferred: (loadParams) =>
+      loadPreparedGatewayModelCatalogSnapshot({
+        ...loadParams,
+        getConfig: params.getRuntimeConfig,
+      }),
+    readPrepared: (loadParams) =>
+      readPreparedGatewayModelCatalogOwnerSnapshot({
+        ...loadParams,
+        getConfig: params.getRuntimeConfig,
+      }),
+  });
+  const context: GatewayRequestContext = {
+    localEmbedded: true,
+    trackExecution: trackAsyncWork,
     deps: params.deps,
-    cron: unavailableCron,
+    configRevisionProjector: loadGatewayConfigRevisionProjector({ env: process.env }),
+    cron,
     cronStorePath: "",
     getRuntimeConfig: params.getRuntimeConfig,
-    loadGatewayModelCatalog: async () =>
-      loadManifestModelCatalog({ config: params.getRuntimeConfig() }),
+    resolveSessionRequestTargets: (request) =>
+      resolveSessionRequestTargets({ ...request, context }),
+    // Embedded calls have no running Gateway application owner.
+    isConfigReloadSettled: () => false,
+    resolveTerminalLaunchPolicy: () => ({ ok: false, block: { kind: "disabled" } }),
+    isTerminalEnabled: () => false,
+    loadGatewayModelCatalog: (loadParams) =>
+      loadGatewayModelCatalog({
+        ...loadParams,
+        getConfig: params.getRuntimeConfig,
+      }),
+    loadGatewayModelCatalogSnapshot: loadCatalogSnapshot,
+    readPreparedGatewayModelCatalog: (loadParams) =>
+      readPreparedGatewayModelCatalog({ ...loadParams, getConfig: params.getRuntimeConfig }),
+    readPreparedGatewayModelCatalogBatch: (agentIds) =>
+      readPreparedGatewayModelCatalogBatch(agentIds, { getConfig: params.getRuntimeConfig }),
+    readChatMetadata: async () => {
+      throw new Error("Chat metadata is unavailable in local embedded agent gateway context.");
+    },
     getHealthCache: () => null,
     refreshHealthSnapshot: async () =>
       ({}) as Awaited<ReturnType<GatewayRequestContext["refreshHealthSnapshot"]>>,
     logHealth: { error: (message) => logGateway.error(message) },
     logGateway,
-    incrementPresenceVersion: () => 0,
-    getHealthVersion: () => 0,
+    publishPresence: () => {},
+    getPresenceSnapshot: () => {
+      throw new Error("Presence requires a running Gateway connection.");
+    },
     broadcast: () => {},
     broadcastToConnIds: () => {},
     nodeSendToSession: () => {},
@@ -68,38 +143,22 @@ export function createLocalGatewayRequestContext(
     nodeSubscribe: () => {},
     nodeUnsubscribe: () => {},
     nodeUnsubscribeAll: () => {},
-    hasConnectedTalkNode: () => false,
+    hasConnectedTalkNode: async () => false,
     nodeRegistry: new NodeRegistry(),
     agentRunSeq: new Map(),
     chatAbortControllers: new Map(),
-    chatAbortedRuns: new Map(),
-    chatRunBuffers: new Map(),
-    chatDeltaSentAt: new Map(),
-    chatDeltaLastBroadcastLen: new Map(),
-    chatDeltaLastBroadcastText: new Map(),
-    agentDeltaSentAt: new Map(),
-    bufferedAgentEvents: new Map(),
-    addChatRun: (sessionId, entry) => {
-      chatRuns.set(sessionId, entry);
-    },
-    removeChatRun: (sessionId, clientRunId, sessionKey) => {
-      const entry = chatRuns.get(sessionId);
-      if (!entry || entry.clientRunId !== clientRunId) {
-        return undefined;
-      }
-      if (sessionKey !== undefined && entry.sessionKey !== sessionKey) {
-        return undefined;
-      }
-      chatRuns.delete(sessionId);
-      return entry;
-    },
+    chatQueuedTurns: new Map(),
+    chatRunState,
+    addChatRun: chatRunState.registry.add,
+    removeChatRun: chatRunState.registry.remove,
     subscribeSessionEvents: (connId) => {
       sessionEvents.add(connId);
     },
     unsubscribeSessionEvents: (connId) => {
       sessionEvents.delete(connId);
     },
-    subscribeSessionMessageEvents: () => {},
+    forgetConnectionAncestors: () => {},
+    subscribeSessionMessageEvents: () => undefined,
     unsubscribeSessionMessageEvents: () => {},
     unsubscribeAllSessionEvents: (connId) => {
       sessionEvents.delete(connId);
@@ -108,6 +167,7 @@ export function createLocalGatewayRequestContext(
     registerToolEventRecipient: () => {},
     dedupe: new Map(),
     wizardSessions: new Map(),
+    systemAgentSessions: new Map(),
     findRunningWizard: () => null,
     purgeWizardSession: () => {},
     getRuntimeSnapshot: () => ({}) as ChannelRuntimeSnapshot,
@@ -121,22 +181,72 @@ export function createLocalGatewayRequestContext(
     wizardRunner: async () => {
       throw new Error("Onboarding wizard is unavailable in local embedded agent gateway context.");
     },
+    channelWizardRunner: async () => {
+      throw new Error(
+        "Channel setup wizard is unavailable in local embedded agent gateway context.",
+      );
+    },
     broadcastVoiceWakeChanged: () => {},
     broadcastVoiceWakeRoutingChanged: () => {},
     unavailableGatewayMethods: new Set(),
   };
+  let projection: SessionRowProjection | undefined;
+  let initializing: Promise<void> | undefined;
+  bindSessionRowProjection(context, () => projection);
+  context.ensureSessionRowProjection = () => {
+    if (!initializing) {
+      // The same host retains embedded resources used by admitted work after its caller returns.
+      resourceHost.adopt(context, {
+        release: async () => {
+          await initializing?.catch(() => {});
+          projection?.dispose();
+          await projection?.ensureMaterialized();
+        },
+      });
+      initializing = import("./session-row-projection.js").then(
+        async ({ createSessionRowProjection }) => {
+          projection = await createSessionRowProjection({
+            cfg: params.getRuntimeConfig(),
+            getConfig: params.getRuntimeConfig,
+            getModelCatalog: () =>
+              readPreparedServerMethodModelCatalogs(
+                context,
+                listAgentIds(params.getRuntimeConfig()),
+              ),
+            context,
+          });
+        },
+      );
+    }
+    return initializing;
+  };
+  context.createAgentTurnFacade = async (principal) => {
+    const { createInternalAgentTurnFacade } =
+      await import("./agent-turn/internal-facade.runtime.js");
+    return createInternalAgentTurnFacade({ ...principal, getContext: () => context });
+  };
+  return context;
 }
 
-export function withLocalGatewayRequestScope<T>(params: LocalGatewayScopeParams, run: () => T): T {
+/** Runs code inside a local gateway request scope unless an outer scope already exists. */
+export function withLocalGatewayRequestScope<T>(
+  params: LocalGatewayRequestContextParams,
+  run: () => T,
+): T {
   const existing = getPluginRuntimeGatewayRequestScope();
-  if (existing?.context) {
+  if (existing?.context || existing?.resolveGatewayContext) {
     return run();
   }
   const context = createLocalGatewayRequestContext(params);
+  // Session admission retains the instance binding after dropping request context.
+  const resolveGatewayContext = () => context;
+  context.resolveGatewayContext = resolveGatewayContext;
+  bindLegacyPluginSdkResourceHost(resolveGatewayContext, getLegacyPluginSdkResourceHost());
   return withPluginRuntimeGatewayRequestScope(
     {
       ...existing,
       context,
+      resolveGatewayContext,
       isWebchatConnect: existing?.isWebchatConnect ?? (() => false),
     },
     run,

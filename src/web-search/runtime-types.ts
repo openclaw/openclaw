@@ -1,18 +1,15 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type {
-  PluginWebSearchProviderEntry,
-  WebSearchProviderToolDefinition,
-} from "../plugins/web-provider-types.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
 
-type WebSearchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
-  ? Web extends { search?: infer Search }
-    ? Search
-    : undefined
-  : undefined;
+// Shared web_search runtime contracts. Keep these in a types-only module so
+// provider registries and callers can import them without loading runtime code.
+export type RuntimeWebSearchConfig = NonNullable<
+  NonNullable<OpenClawConfig["tools"]>["web"]
+>["search"];
 
 export type ResolveWebSearchDefinitionParams = {
   config?: OpenClawConfig;
+  agentDir?: string;
   sandboxed?: boolean;
   runtimeWebSearch?: RuntimeWebSearchMetadata;
   providerId?: string;
@@ -23,17 +20,11 @@ export type ResolveWebSearchDefinitionParams = {
 export type RunWebSearchParams = ResolveWebSearchDefinitionParams & {
   args: Record<string, unknown>;
   signal?: AbortSignal;
+  /** Caller-owned synchronous authority check, repeated immediately before external requests. */
+  assertCurrent?: () => void;
 };
 
 export type RunWebSearchResult = {
   provider: string;
   result: Record<string, unknown>;
 };
-
-export type ListWebSearchProvidersParams = {
-  config?: OpenClawConfig;
-};
-
-export type RuntimeWebSearchProviderEntry = PluginWebSearchProviderEntry;
-export type RuntimeWebSearchToolDefinition = WebSearchProviderToolDefinition;
-export type RuntimeWebSearchConfig = WebSearchConfig;

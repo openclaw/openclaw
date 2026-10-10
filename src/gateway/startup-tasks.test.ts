@@ -1,3 +1,6 @@
+/**
+ * Tests startup task registration and gateway startup side effects.
+ */
 import { describe, expect, it, vi } from "vitest";
 import { runStartupTasks, type StartupTask } from "./startup-tasks.js";
 
@@ -41,14 +44,9 @@ describe("runStartupTasks", () => {
       },
     ];
 
-    const results = await runStartupTasks({ tasks, log });
+    await runStartupTasks({ tasks, log });
 
     expect(events).toEqual(["boot", "restart", "ops"]);
-    expect(results).toEqual([
-      { status: "skipped", reason: "missing" },
-      { status: "ran" },
-      { status: "failed", reason: "boom" },
-    ]);
     expect(log.debug).toHaveBeenCalledWith("startup task skipped", {
       source: "boot-md",
       agentId: "main",

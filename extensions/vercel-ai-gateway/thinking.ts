@@ -38,15 +38,6 @@ function stripTrustedUpstreamPrefix(modelId: string, prefix: string): string | n
   return upstreamModelId || null;
 }
 
-function resolveOpenAiThinkingProfile(modelId: string): ProviderThinkingProfile | undefined {
-  if (!matchesExactOrPrefix(modelId, VERCEL_OPENAI_XHIGH_MODEL_IDS)) {
-    return undefined;
-  }
-  return {
-    levels: [...BASE_OPENAI_THINKING_LEVELS, { id: "xhigh" }],
-  };
-}
-
 function hasVercelSpecificClaudeProfile(profile: ProviderThinkingProfile): boolean {
   return Boolean(
     profile.defaultLevel ||
@@ -61,7 +52,9 @@ export function resolveVercelAiGatewayThinkingProfile(
 ): ProviderThinkingProfile | undefined {
   const openAiModelId = stripTrustedUpstreamPrefix(modelId, UPSTREAM_OPENAI_PREFIX);
   if (openAiModelId) {
-    return resolveOpenAiThinkingProfile(openAiModelId);
+    return matchesExactOrPrefix(openAiModelId, VERCEL_OPENAI_XHIGH_MODEL_IDS)
+      ? { levels: [...BASE_OPENAI_THINKING_LEVELS, { id: "xhigh" }] }
+      : undefined;
   }
 
   const anthropicModelId = stripTrustedUpstreamPrefix(modelId, UPSTREAM_ANTHROPIC_PREFIX);

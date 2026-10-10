@@ -1,3 +1,6 @@
+/**
+ * Runtime SDK subpath for private secret file reads and atomic writes.
+ */
 export {
   DEFAULT_SECRET_FILE_MAX_BYTES,
   PRIVATE_SECRET_DIR_MODE,
@@ -7,4 +10,4 @@ export {
   writePrivateSecretFileAtomic,
   tryReadSecretFileSync,
 } from "../infra/secret-file.js";
-export type { SecretFileReadOptions, SecretFileReadResult } from "../infra/secret-file.js";
+export type { SecretFileReadResult } from "../infra/secret-file.js";

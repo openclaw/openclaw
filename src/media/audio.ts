@@ -1,12 +1,11 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { getFileExtension, normalizeMimeType } from "./mime.js";
+import { getFileExtension, normalizeMimeType } from "@openclaw/media-core/mime";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
-export const VOICE_MESSAGE_AUDIO_EXTENSIONS = new Set([".oga", ".ogg", ".opus", ".mp3", ".m4a"]);
+/** File extensions accepted by channel voice-message upload paths. */
+const VOICE_MESSAGE_AUDIO_EXTENSIONS = new Set([".oga", ".ogg", ".opus", ".mp3", ".m4a"]);
 
-/**
- * MIME types compatible with voice messages.
- */
-export const VOICE_MESSAGE_MIME_TYPES = new Set([
+/** MIME types compatible with voice-message upload paths. */
+const VOICE_MESSAGE_MIME_TYPES = new Set([
   "audio/ogg",
   "audio/opus",
   "audio/mpeg",
@@ -16,6 +15,7 @@ export const VOICE_MESSAGE_MIME_TYPES = new Set([
   "audio/m4a",
 ]);
 
+/** Checks whether MIME type or filename is compatible with voice-message delivery. */
 export function isVoiceMessageCompatibleAudio(opts: {
   contentType?: string | null;
   fileName?: string | null;
@@ -35,9 +35,5 @@ export function isVoiceMessageCompatibleAudio(opts: {
   return VOICE_MESSAGE_AUDIO_EXTENSIONS.has(ext);
 }
 
-export function isVoiceCompatibleAudio(opts: {
-  contentType?: string | null;
-  fileName?: string | null;
-}): boolean {
-  return isVoiceMessageCompatibleAudio(opts);
-}
+/** @deprecated Use isVoiceMessageCompatibleAudio. Retained for the plugin SDK. */
+export { isVoiceMessageCompatibleAudio as isVoiceCompatibleAudio };

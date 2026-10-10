@@ -1,16 +1,8 @@
+// Feishu tests cover sequential queue plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSequentialQueue } from "./sequential-queue.js";
-
-function createDeferred() {
-  let resolve: (() => void) | undefined;
-  const promise = new Promise<void>((res) => {
-    resolve = res;
-  });
-  if (!resolve) {
-    throw new Error("Expected deferred resolver to be initialized");
-  }
-  return { promise, resolve };
-}
 
 describe("createSequentialQueue", () => {
   afterEach(() => {
@@ -19,7 +11,7 @@ describe("createSequentialQueue", () => {
 
   it("serializes tasks for the same key", async () => {
     const enqueue = createSequentialQueue();
-    const gate = createDeferred();
+    const gate = createDeferred<void>();
     const order: string[] = [];
 
     const first = enqueue("feishu:default:chat-1", async () => {
@@ -43,8 +35,8 @@ describe("createSequentialQueue", () => {
 
   it("allows different keys to run concurrently", async () => {
     const enqueue = createSequentialQueue();
-    const gateA = createDeferred();
-    const gateB = createDeferred();
+    const gateA = createDeferred<void>();
+    const gateB = createDeferred<void>();
     const order: string[] = [];
 
     const first = enqueue("feishu:default:chat-1", async () => {
@@ -84,14 +76,12 @@ describe("createSequentialQueue", () => {
         }),
       ).rejects.toThrow("boom");
 
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       expect(unhandled).toStrictEqual([]);
 
-      await expect(
-        enqueue("feishu:default:chat-1", async () => {
-          return;
-        }),
-      ).resolves.toBeUndefined();
+      await expect(enqueue("feishu:default:chat-1", async () => {})).resolves.toBeUndefined();
     } finally {
       process.off("unhandledRejection", onUnhandledRejection);
     }
@@ -109,7 +99,7 @@ describe("createSequentialQueue", () => {
     const order: string[] = [];
 
     // Stuck task — never resolves until the test cleans up.
-    const stuckGate = createDeferred();
+    const stuckGate = createDeferred<void>();
     const stuck = enqueue("feishu:default:chat-stuck", async () => {
       order.push("stuck:start");
       await stuckGate.promise;
@@ -132,6 +122,25 @@ describe("createSequentialQueue", () => {
     await stuck;
   });
 
+  it("clamps oversized task timeouts before scheduling", async () => {
+    vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const enqueue = createSequentialQueue({
+      taskTimeoutMs: Number.MAX_SAFE_INTEGER,
+    });
+    const gate = createDeferred<void>();
+
+    const first = enqueue("feishu:default:chat-large-timeout", async () => {
+      await gate.promise;
+    });
+
+    await Promise.resolve();
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+
+    gate.resolve();
+    await first;
+  });
+
   it("disables the timeout cap when taskTimeoutMs is 0 (legacy behavior)", async () => {
     vi.useFakeTimers();
     const timeouts: Array<{ key: string; timeoutMs: number }> = [];
@@ -141,7 +150,7 @@ describe("createSequentialQueue", () => {
         timeouts.push({ key, timeoutMs });
       },
     });
-    const gate = createDeferred();
+    const gate = createDeferred<void>();
     const order: string[] = [];
 
     const first = enqueue("feishu:default:chat-1", async () => {

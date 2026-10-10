@@ -1,4 +1,5 @@
-import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { prefixMatchPath } from "../../../plugins/http-path-prefix.js";
 import {
   PROTECTED_PLUGIN_ROUTE_PREFIXES,
   canonicalizePathForSecurity,
@@ -21,15 +22,10 @@ function normalizeProtectedPrefix(prefix: string): string {
   return collapsed.replace(/\/+$/, "");
 }
 
-export function prefixMatchPath(pathname: string, prefix: string): boolean {
-  return (
-    pathname === prefix || pathname.startsWith(`${prefix}/`) || pathname.startsWith(`${prefix}%`)
-  );
-}
-
 const NORMALIZED_PROTECTED_PLUGIN_ROUTE_PREFIXES =
   PROTECTED_PLUGIN_ROUTE_PREFIXES.map(normalizeProtectedPrefix);
 
+/** Returns true when any decoded path candidate targets a protected route. */
 export function isProtectedPluginRoutePathFromContext(context: PluginRoutePathContext): boolean {
   if (
     context.candidates.some((candidate) =>
@@ -40,6 +36,11 @@ export function isProtectedPluginRoutePathFromContext(context: PluginRoutePathCo
   ) {
     return true;
   }
+  // An unresolved decode chain could still reveal a protected prefix on a later pass.
+  // Require auth rather than treating an intentionally over-encoded route as public.
+  if (context.decodePassLimitReached) {
+    return true;
+  }
   if (!context.malformedEncoding) {
     return false;
   }
@@ -48,6 +49,7 @@ export function isProtectedPluginRoutePathFromContext(context: PluginRoutePathCo
   );
 }
 
+/** Builds all security-relevant decoded path candidates for a request path. */
 export function resolvePluginRoutePathContext(pathname: string): PluginRoutePathContext {
   const canonical = canonicalizePathForSecurity(pathname);
   return {

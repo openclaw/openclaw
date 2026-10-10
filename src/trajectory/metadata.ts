@@ -1,4 +1,3 @@
-import type { SkillSnapshot } from "../agents/skills.js";
 import { resolveStateDir } from "../config/paths.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
@@ -10,13 +9,20 @@ import {
   sanitizeSupportSnapshotValue,
   type SupportRedactionContext,
 } from "../logging/diagnostic-support-redaction.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import {
+  loadPluginMetadataSnapshot,
+  type PluginMetadataSnapshot,
+} from "../plugins/plugin-metadata-snapshot.js";
 import { getActivePluginRegistry, listImportedRuntimePluginIds } from "../plugins/runtime.js";
+import type { SkillSnapshot } from "../skills/types.js";
 import { VERSION } from "../version.js";
 
+// Runtime metadata capture for trajectory events. This records enough config,
+// plugin, skill, and prompt context to explain a run after logs are exported.
 type BuildTrajectoryRunMetadataParams = {
   env?: NodeJS.ProcessEnv;
   config?: OpenClawConfig;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
   workspaceDir: string;
   sessionFile?: string;
   sessionKey?: string;
@@ -47,6 +53,7 @@ type BuildTrajectoryArtifactsParams = {
   idleTimedOut: boolean;
   timedOutDuringCompaction: boolean;
   timedOutDuringToolExecution: boolean;
+  timedOutByRunBudget: boolean;
   promptError?: string;
   promptErrorSource?: string | null;
   terminalError?: string;
@@ -54,13 +61,14 @@ type BuildTrajectoryArtifactsParams = {
   promptCache?: unknown;
   compactionCount: number;
   assistantTexts: string[];
+  stopReason?: string;
   finalPromptText?: string;
   itemLifecycle: {
     startedCount: number;
     completedCount: number;
     activeCount: number;
   };
-  toolMetas: Array<{ toolName: string; meta?: string }>;
+  toolMetas: Array<{ toolName: string; meta?: string; asyncStarted?: boolean }>;
   didSendViaMessagingTool: boolean;
   successfulCronAdds: number;
   messagingToolSentTexts: string[];
@@ -73,10 +81,10 @@ function toSortedUniqueStrings(values: readonly string[] | undefined): string[] 
   if (!values || values.length === 0) {
     return undefined;
   }
-  return [
-    ...new Set(values.filter((value) => typeof value === "string" && value.trim().length > 0)),
-  ]
+  return [...new Set(values)]
+    .filter((value) => typeof value === "string")
     .map((value) => value.trim())
+    .filter(Boolean)
     .toSorted((left, right) => left.localeCompare(right));
 }
 
@@ -126,7 +134,6 @@ function buildPluginsFromActiveRegistry() {
         musicGenerationProviderIds: toSortedUniqueStrings(plugin.musicGenerationProviderIds),
         webFetchProviderIds: toSortedUniqueStrings(plugin.webFetchProviderIds),
         webSearchProviderIds: toSortedUniqueStrings(plugin.webSearchProviderIds),
-        memoryEmbeddingProviderIds: toSortedUniqueStrings(plugin.memoryEmbeddingProviderIds),
         agentHarnessIds: toSortedUniqueStrings(plugin.agentHarnessIds),
       }))
       .toSorted((left, right) => left.id.localeCompare(right.id)),
@@ -135,14 +142,19 @@ function buildPluginsFromActiveRegistry() {
 
 function buildPluginsFromManifest(params: {
   config?: OpenClawConfig;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }) {
-  const snapshot = loadPluginMetadataSnapshot({
-    config: params.config ?? {},
-    workspaceDir: params.workspaceDir,
-    env: params.env ?? process.env,
-  });
+  // Startup captures can happen before runtime activation. Fall back to the
+  // manifest snapshot so exported runs still show configured plugin surfaces.
+  const snapshot =
+    params.pluginMetadataSnapshot ??
+    loadPluginMetadataSnapshot({
+      config: params.config ?? {},
+      workspaceDir: params.workspaceDir,
+      env: params.env ?? process.env,
+    });
   return {
     source: "manifest-registry",
     entries: snapshot.plugins
@@ -177,9 +189,15 @@ function buildSkillsCapture(
   if (!skillsSnapshot) {
     return undefined;
   }
+  const filteredResolvedSkills =
+    skillsSnapshot.resolvedSkills?.filter(
+      (skill) => typeof skill.name === "string" && skill.name.length > 0,
+    ) ?? [];
   const entries =
-    skillsSnapshot.resolvedSkills && skillsSnapshot.resolvedSkills.length > 0
-      ? skillsSnapshot.resolvedSkills.map((skill) => ({
+    // Prefer resolved skill files when available; older call sites may only
+    // have the summarized skill catalog, which is still useful for support.
+    filteredResolvedSkills.length > 0
+      ? filteredResolvedSkills.map((skill) => ({
           id: skill.name,
           name: skill.name,
           description: skill.description,
@@ -190,24 +208,19 @@ function buildSkillsCapture(
           disableModelInvocation: skill.disableModelInvocation,
           available: true,
         }))
-      : skillsSnapshot.skills.map((skill) => ({
-          id: skill.name,
-          name: skill.name,
-          primaryEnv: skill.primaryEnv,
-          requiredEnv: skill.requiredEnv,
-          available: true,
-        }));
+      : skillsSnapshot.skills
+          .filter((skill) => typeof skill.name === "string" && skill.name.length > 0)
+          .map((skill) => ({
+            id: skill.name,
+            name: skill.name,
+            primaryEnv: skill.primaryEnv,
+            requiredEnv: skill.requiredEnv,
+            available: true,
+          }));
   return {
     snapshotVersion: skillsSnapshot.version,
     skillFilter: toSortedUniqueStrings(skillsSnapshot.skillFilter),
-    entries: entries.toSorted((left, right) => left.name.localeCompare(right.name)),
-  };
-}
-
-function buildTrajectorySupportRedaction(env: NodeJS.ProcessEnv): SupportRedactionContext {
-  return {
-    env,
-    stateDir: resolveStateDir(env),
+    entries: entries.toSorted((left, right) => (left.name ?? "").localeCompare(right.name ?? "")),
   };
 }
 
@@ -215,12 +228,13 @@ export function buildTrajectoryRunMetadata(
   params: BuildTrajectoryRunMetadataParams,
 ): Record<string, unknown> {
   const env = params.env ?? process.env;
-  const redaction = buildTrajectorySupportRedaction(env);
+  const redaction: SupportRedactionContext = { env, stateDir: resolveStateDir(env) };
   const os = resolveOsSummary();
   const plugins =
     buildPluginsFromActiveRegistry() ??
     buildPluginsFromManifest({
       config: params.config,
+      pluginMetadataSnapshot: params.pluginMetadataSnapshot,
       workspaceDir: params.workspaceDir,
       env,
     });
@@ -294,33 +308,15 @@ export function buildTrajectoryRunMetadata(
   };
 }
 
+// Completion artifact schema mirrored into trajectory export artifacts.json.
+// Keep field names close to runtime event data to make bundle diffs readable.
 export function buildTrajectoryArtifacts(
   params: BuildTrajectoryArtifactsParams,
 ): Record<string, unknown> {
+  const { status, ...artifacts } = params;
   return {
     capturedAt: new Date().toISOString(),
-    finalStatus: params.status,
-    aborted: params.aborted,
-    externalAbort: params.externalAbort,
-    timedOut: params.timedOut,
-    idleTimedOut: params.idleTimedOut,
-    timedOutDuringCompaction: params.timedOutDuringCompaction,
-    timedOutDuringToolExecution: params.timedOutDuringToolExecution,
-    promptError: params.promptError,
-    promptErrorSource: params.promptErrorSource,
-    terminalError: params.terminalError,
-    usage: params.usage,
-    promptCache: params.promptCache,
-    compactionCount: params.compactionCount,
-    assistantTexts: params.assistantTexts,
-    finalPromptText: params.finalPromptText,
-    itemLifecycle: params.itemLifecycle,
-    toolMetas: params.toolMetas,
-    didSendViaMessagingTool: params.didSendViaMessagingTool,
-    successfulCronAdds: params.successfulCronAdds,
-    messagingToolSentTexts: params.messagingToolSentTexts,
-    messagingToolSentMediaUrls: params.messagingToolSentMediaUrls,
-    messagingToolSentTargets: params.messagingToolSentTargets,
-    lastToolError: params.lastToolError,
+    finalStatus: status,
+    ...artifacts,
   };
 }

@@ -1,6 +1,2 @@
-export {
-  deliverReplies,
-  emitInternalMessageSentHook,
-  emitTelegramMessageSentHooks,
-} from "./delivery.replies.js";
-export { resolveMedia } from "./delivery.resolve-media.js";
+export { emitTelegramMessageSentHooks } from "./delivery.hooks.js";
+export { deliverReplies, deliverStructuredReplies } from "./delivery.replies.js";

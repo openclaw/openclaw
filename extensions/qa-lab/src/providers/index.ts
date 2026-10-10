@@ -11,6 +11,8 @@ const PROVIDERS: readonly QaProviderDefinition[] = [
   liveFrontierProviderDefinition,
 ] as const;
 
+export const QA_DEFAULT_IMAGE_MODEL = "openai/gpt-image-1";
+
 export const DEFAULT_QA_PROVIDER_MODE: QaProviderMode = "mock-openai";
 export const DEFAULT_QA_LIVE_PROVIDER_MODE: QaProviderMode = "live-frontier";
 
@@ -35,12 +37,8 @@ export function getQaProvider(input: QaProviderModeInput): QaProviderDefinition 
   return provider;
 }
 
-function listQaProviderModes() {
-  return PROVIDERS.map((provider) => provider.mode);
-}
-
 export function formatQaProviderModeHelp() {
-  return `Provider mode: ${listQaProviderModes().join(", ")}`;
+  return `Provider mode: ${PROVIDERS.map((provider) => provider.mode).join(", ")}`;
 }
 
 export function listQaStandaloneProviderCommands() {

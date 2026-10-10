@@ -1,0 +1,173 @@
+import type { WorkerTranscriptMessage } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { WORKER_TRANSCRIPT_MAX_BATCH_MESSAGES } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { WorkerInferenceContext } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { WORKER_INFERENCE_MAX_CONTEXT_MESSAGES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import type { AgentMessage } from "../agents/runtime/index.js";
+import type { AgentSessionWriteSettlementRunner } from "../agents/sessions/agent-session.js";
+import { readAgentAssistantSource } from "../infra/agent-events.js";
+import {
+  hasRuntimeContextMarker,
+  isRuntimeContextMessage,
+  readRuntimeContextMetadata,
+  type Context,
+  type Message,
+} from "../llm/types.js";
+import { projectWorkerTextOrImageContent } from "./assistant-message-projection.js";
+import {
+  windowWorkerReplayMessages,
+  type WorkerReplayMessageWindowUnavailable,
+} from "./replay-message-window.js";
+import {
+  isWorkerTranscriptMessageFrameSafe,
+  toWorkerTranscriptMessage,
+  type WorkerMessageProjection,
+  type WorkerProviderReplayUnavailable,
+} from "./transcript-message.js";
+
+function toWorkerInferenceMessage(
+  message: Message,
+): WorkerMessageProjection<WorkerInferenceContext["messages"][number]> {
+  if (hasRuntimeContextMarker(message) && !isRuntimeContextMessage(message)) {
+    throw new Error(
+      "Cloud worker cannot preserve runtime context with media. Stop or reclaim the cloud worker, then retry locally.",
+    );
+  }
+  if (isRuntimeContextMessage(message)) {
+    return {
+      kind: "complete",
+      message: {
+        role: "user",
+        content: message.content,
+        timestamp: message.timestamp,
+        runtimeContext: readRuntimeContextMetadata(message),
+      },
+    };
+  }
+  if (message.role === "user") {
+    return {
+      kind: "complete",
+      message: {
+        role: "user",
+        content:
+          typeof message.content === "string"
+            ? message.content
+            : message.content.map(projectWorkerTextOrImageContent),
+        timestamp: message.timestamp,
+        ...(message.operatorMessage ? { operatorMessage: message.operatorMessage } : {}),
+      },
+    };
+  }
+  const projected = toWorkerTranscriptMessage(message, "inference");
+  if (!projected) {
+    throw new Error(`Unsupported inference message role: ${message.role}`);
+  }
+  return projected;
+}
+
+type WorkerInferenceContextProjection =
+  | { kind: "complete"; context: WorkerInferenceContext }
+  | {
+      kind: "provider-replay-unavailable";
+      details: WorkerProviderReplayUnavailable | WorkerReplayMessageWindowUnavailable;
+    };
+
+export function toWorkerInferenceContext(context: Context): WorkerInferenceContextProjection {
+  const windowed = windowWorkerReplayMessages(
+    context.messages,
+    WORKER_INFERENCE_MAX_CONTEXT_MESSAGES,
+  );
+  if (windowed.kind === "provider-replay-unavailable") {
+    return windowed;
+  }
+  const messages: WorkerInferenceContext["messages"] = [];
+  for (const message of windowed.messages) {
+    const projected = toWorkerInferenceMessage(message);
+    if (projected.kind === "provider-replay-unavailable") {
+      return projected;
+    }
+    messages.push(projected.message);
+  }
+  return {
+    kind: "complete",
+    context: {
+      ...(context.systemPrompt === undefined ? {} : { systemPrompt: context.systemPrompt }),
+      messages,
+      ...(context.tools
+        ? {
+            tools: context.tools.map((tool) => ({
+              name: tool.name,
+              description: tool.description,
+              parameters: structuredClone(tool.parameters),
+            })),
+          }
+        : {}),
+    },
+  };
+}
+
+export type WorkerTranscriptClient = {
+  commit: (messages: WorkerTranscriptMessage[]) => Promise<void>;
+};
+
+export function createWorkerTranscriptRuntime(
+  client: WorkerTranscriptClient,
+  signal?: AbortSignal,
+) {
+  const pendingTranscriptMessages: WorkerTranscriptMessage[] = [];
+  let failedCommit: { error: unknown } | undefined;
+  const onMessagePersisted = (message: AgentMessage) => {
+    const projected = toWorkerTranscriptMessage(message, "transcript");
+    if (!projected) {
+      return;
+    }
+    if (projected.kind === "provider-replay-unavailable") {
+      throw new Error(
+        `Worker transcript cannot persist authoritative provider replay: ${projected.details.reason}.`,
+      );
+    }
+    const itemId = readAgentAssistantSource(message)?.itemId;
+    if (projected.message.role === "assistant" && itemId) {
+      projected.message.itemId = itemId;
+    }
+    if (!isWorkerTranscriptMessageFrameSafe(projected.message)) {
+      throw new Error("Worker transcript message exceeds the protocol payload limit.");
+    }
+    pendingTranscriptMessages.push(projected.message);
+  };
+  const flushTranscript = async () => {
+    while (pendingTranscriptMessages.length > 0) {
+      if (signal?.aborted) {
+        // Unsubmitted output can stop; a submitted commit still needs a known outcome.
+        if (failedCommit) {
+          throw failedCommit.error;
+        }
+        return;
+      }
+      const batch = pendingTranscriptMessages.slice(0, WORKER_TRANSCRIPT_MAX_BATCH_MESSAGES);
+      try {
+        await client.commit(batch);
+      } catch (error) {
+        failedCommit = { error };
+        throw error;
+      }
+      failedCommit = undefined;
+      pendingTranscriptMessages.splice(0, batch.length);
+    }
+  };
+  let sessionWriteQueue: Promise<unknown> = Promise.resolve();
+  const withSessionWriteSettlement: AgentSessionWriteSettlementRunner = <T>(
+    operation: () => Promise<T> | T,
+  ): Promise<T> => {
+    const result = sessionWriteQueue.then(async () => {
+      const value = await operation();
+      await flushTranscript();
+      return value;
+    });
+    sessionWriteQueue = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  };
+  return { onMessagePersisted, withSessionWriteSettlement };
+}

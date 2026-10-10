@@ -1,24 +1,23 @@
+/** Config loader for model commands with command-scoped secret resolution. */
 import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolution.js";
-import type { RuntimeEnv } from "../../runtime.js";
+import { getModelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
 import {
   getRuntimeConfig,
   getRuntimeConfigSourceSnapshot,
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
-  getModelsCommandSecretTargetIds,
-} from "./load-config.runtime.js";
+} from "../../config/config.js";
+import type { RuntimeEnv } from "../../runtime.js";
 
-export type LoadedModelsConfig = {
-  sourceConfig: OpenClawConfig;
-  resolvedConfig: OpenClawConfig;
-  diagnostics: string[];
-};
-
+/** Loads config, resolves model command secrets, and preserves the source snapshot. */
 export async function loadModelsConfigWithSource(params: {
   commandName: string;
   runtime?: RuntimeEnv;
-}): Promise<LoadedModelsConfig> {
-  const runtimeConfig = getRuntimeConfig();
+  skipPluginValidation?: boolean;
+}) {
+  const runtimeConfig = getRuntimeConfig(
+    params.skipPluginValidation ? { skipPluginValidation: true } : undefined,
+  );
   const pinnedSourceConfig = getRuntimeConfigSourceSnapshot();
   const sourceConfig = pinnedSourceConfig ?? runtimeConfig;
   const { resolvedConfig, diagnostics } = await resolveCommandConfigWithSecrets({
@@ -27,11 +26,9 @@ export async function loadModelsConfigWithSource(params: {
     targetIds: getModelsCommandSecretTargetIds(),
     runtime: params.runtime,
   });
-  if (pinnedSourceConfig) {
-    setRuntimeConfigSnapshot(resolvedConfig, sourceConfig);
-  } else {
-    setRuntimeConfigSnapshot(resolvedConfig);
-  }
+  // Keep the original source snapshot pinned so later config writes do not
+  // accidentally serialize already-resolved secret values.
+  setRuntimeConfigSnapshot(resolvedConfig, sourceConfig);
   return {
     sourceConfig,
     resolvedConfig,
@@ -39,9 +36,8 @@ export async function loadModelsConfigWithSource(params: {
   };
 }
 
-export async function loadModelsConfig(params: {
-  commandName: string;
-  runtime?: RuntimeEnv;
-}): Promise<OpenClawConfig> {
+export async function loadModelsConfig(
+  params: Parameters<typeof loadModelsConfigWithSource>[0],
+): Promise<OpenClawConfig> {
   return (await loadModelsConfigWithSource(params)).resolvedConfig;
 }

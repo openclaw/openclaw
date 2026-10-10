@@ -1,10 +1,16 @@
 {
   "id": "vllm",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
   "enabledByDefault": true,
   "providers": ["vllm"],
+  "modelCatalog": {
+    "discovery": {
+      "vllm": "refreshable"
+    }
+  },
   "providerRequest": {
     "providers": {
       "vllm": {
@@ -22,8 +28,13 @@
       }
     }
   },
-  "providerAuthEnvVars": {
-    "vllm": ["VLLM_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "vllm",
+        "envVars": ["VLLM_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

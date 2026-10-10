@@ -3,17 +3,16 @@ import type {
   ConversationRef,
   SessionBindingRecord,
 } from "../../infra/outbound/session-binding-service.js";
-import type { ChannelConfiguredBindingConversationRef } from "./types.adapters.js";
 import type {
+  ChannelConfiguredBindingConversationRef,
   ChannelConfiguredBindingMatch,
   ChannelConfiguredBindingProvider,
 } from "./types.adapters.js";
 import type { ChannelId } from "./types.public.js";
 
-export type ConfiguredBindingConversation = ConversationRef;
-export type ConfiguredBindingChannel = ChannelId;
-export type ConfiguredBindingRuleConfig = AgentBinding;
-
+/**
+ * Stateful target descriptor produced by a binding consumer.
+ */
 export type StatefulBindingTargetDescriptor = {
   kind: "stateful";
   driverId: string;
@@ -22,32 +21,49 @@ export type StatefulBindingTargetDescriptor = {
   label?: string;
 };
 
+/**
+ * Materialized binding record plus the stateful target it points at.
+ */
 export type ConfiguredBindingRecordResolution = {
   record: SessionBindingRecord;
   statefulTarget: StatefulBindingTargetDescriptor;
 };
 
-export type ConfiguredBindingTargetFactory = {
-  driverId: string;
-  materialize: (params: {
-    accountId: string;
-    conversation: ChannelConfiguredBindingConversationRef;
-  }) => ConfiguredBindingRecordResolution;
-};
+export type StatefulBindingTargetResetResult =
+  | {
+      ok: true;
+      sessionKey?: string;
+      sessionId?: string;
+      lifecycleRevision?: string;
+      storePath?: string;
+    }
+  | { ok: false; skipped?: boolean; error?: string };
 
+/**
+ * Compiled binding rule with provider matcher, target factory, and static target facts.
+ */
 export type CompiledConfiguredBinding = {
-  channel: ConfiguredBindingChannel;
+  channel: ChannelId;
   accountPattern?: string;
-  binding: ConfiguredBindingRuleConfig;
+  binding: AgentBinding;
   bindingConversationId: string;
   target: ChannelConfiguredBindingConversationRef;
   agentId: string;
   provider: ChannelConfiguredBindingProvider;
-  targetFactory: ConfiguredBindingTargetFactory;
+  targetFactory: {
+    driverId: string;
+    materialize: (params: {
+      accountId: string;
+      conversation: ChannelConfiguredBindingConversationRef;
+    }) => ConfiguredBindingRecordResolution;
+  };
 };
 
+/**
+ * Full configured binding resolution used to rewrite routes and prepare target sessions.
+ */
 export type ConfiguredBindingResolution = ConfiguredBindingRecordResolution & {
-  conversation: ConfiguredBindingConversation;
+  conversation: ConversationRef;
   compiledBinding: CompiledConfiguredBinding;
   match: ChannelConfiguredBindingMatch;
 };

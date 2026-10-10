@@ -13,6 +13,10 @@ const CLOUDFLARE_AI_GATEWAY_DEFAULT_COST = {
   cacheWrite: 3.75,
 };
 
+/**
+ * Builds a provider model definition, allowing tests/catalog code to override
+ * the model id while preserving Cloudflare defaults.
+ */
 export function buildCloudflareAiGatewayModelDefinition(params?: {
   id?: string;
   name?: string;
@@ -31,6 +35,10 @@ export function buildCloudflareAiGatewayModelDefinition(params?: {
   };
 }
 
+/**
+ * Constructs the Anthropic Messages base URL for a Cloudflare account/gateway
+ * pair, returning an empty string for incomplete metadata.
+ */
 export function resolveCloudflareAiGatewayBaseUrl(params: {
   accountId: string;
   gatewayId: string;

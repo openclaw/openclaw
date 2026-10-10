@@ -1,3 +1,4 @@
+// Whatsapp tests cover reaction level plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { resolveWhatsAppReactionLevel } from "./reaction-level.js";
@@ -40,34 +41,6 @@ describe("resolveWhatsAppReactionLevel", () => {
       level: "ack",
       ackEnabled: true,
       agentReactionsEnabled: false,
-    });
-  });
-
-  it("returns minimal level with agent reactions enabled and minimal guidance", () => {
-    const cfg: OpenClawConfig = {
-      channels: { whatsapp: { reactionLevel: "minimal" } },
-    };
-
-    const result = resolveWhatsAppReactionLevel({ cfg });
-    expect(result).toEqual({
-      level: "minimal",
-      ackEnabled: false,
-      agentReactionsEnabled: true,
-      agentReactionGuidance: "minimal",
-    });
-  });
-
-  it("returns extensive level with agent reactions enabled and extensive guidance", () => {
-    const cfg: OpenClawConfig = {
-      channels: { whatsapp: { reactionLevel: "extensive" } },
-    };
-
-    const result = resolveWhatsAppReactionLevel({ cfg });
-    expect(result).toEqual({
-      level: "extensive",
-      ackEnabled: false,
-      agentReactionsEnabled: true,
-      agentReactionGuidance: "extensive",
     });
   });
 

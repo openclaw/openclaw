@@ -1,0 +1,60 @@
+title: "Runtime tool fixture — edit"
+
+scenario:
+  id: runtime-tool-edit
+  surface: runtime-tools
+  runtimePairLane: core
+  coverage:
+    secondary:
+      - agent-runtime.tool-edit
+  objective: Verify targeted edit behavior is tracked across OpenClaw and Codex while Codex owns edit natively.
+  successCriteria:
+    - OpenClaw may expose OpenClaw edit while Codex app-server mode may omit duplicate OpenClaw dynamic edit.
+    - Codex applies the happy edit through native apply_patch and projects a correlated FileChange receipt.
+    - The fixture validates exact file bytes and an outside-workspace rejection that leaves the sentinel unchanged.
+  docsRefs:
+    - qa/scenarios/index.yaml
+  codeRefs:
+    - src/agents/agent-tools.ts
+    - extensions/qa-lab/src/native-workspace-behavior.ts
+    - extensions/qa-lab/src/runtime-tool-fixture.ts
+  execution:
+    kind: flow
+    summary: Exercise the edit runtime tool family.
+    config:
+      toolName: edit
+      nativeWorkspaceBehavior: edit
+      toolCoverage:
+        family: edit
+        actualTool: edit
+        bucket: codex-native-workspace
+        expectedLayer: codex-native-workspace
+        required: true
+        tracking: "#80319"
+        codexDefaultImpact: P4
+        qaImpact: P1
+        action: execute native apply_patch behavior separately from OpenClaw dynamic tool parity
+        reason: Codex app-server intentionally owns edit natively; the fixture must not require OpenClaw dynamic edit exposure.
+      happyPrompt: >-
+        tool search qa check target=edit. Use the edit tool exactly once on
+        runtime-tool-fixture-edit.txt to replace "before edit" with "after edit".
+        If discovery is needed, discover edit and then call it; discovery alone
+        does not complete this task. Summarize the actual tool result.
+      failurePrompt: >-
+        tool search qa failure target=edit. Use the edit tool exactly once on
+        runtime-tool-fixture-edit.txt to replace "missing fixture text" with
+        "unreachable edit". Report the missing-match error; do not adjust the
+        match, use another tool, or retry.
+      promptSnippet: "target=edit"
+      failurePromptSnippet: "failure target=edit"
+
+flow:
+  steps:
+    - name: exercises edit happy and failure paths
+      actions:
+        - call: runRuntimeToolFixture
+          saveAs: result
+          args:
+            - ref: env
+            - ref: config
+      detailsExpr: result

@@ -1,0 +1,600 @@
+import { createHash } from "node:crypto";
+import type { IncomingHttpHeaders } from "node:http";
+import { asOptionalObjectRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  startMatrixQaFaultProxy,
+  type MatrixQaFaultProxyExchange,
+  type MatrixQaFaultProxyObserver,
+  type MatrixQaFaultProxyRule,
+  type MatrixQaFaultProxyRuleHandle,
+} from "./fault-proxy.js";
+import { normalizeMatrixQaRoute } from "./recording-proxy-internals.js";
+
+const MATRIX_QA_RECORDING_PROFILE = "matrix-qa-v1";
+const REDACTED_QUERY_VALUE = "[redacted]";
+type MatrixQaStateFamily = "backup" | "device" | "key" | "media" | "sync-token";
+
+type MatrixQaBodyShape =
+  | { kind: "binary" }
+  | { kind: "empty" }
+  | { kind: "json"; fields: string[] }
+  | { kind: "text" };
+
+type MatrixQaRecordedExchange = {
+  categories: MatrixQaStateFamily[];
+  request: {
+    body: MatrixQaBodyShape;
+    method: string;
+    query: Record<string, string>;
+    route: string;
+  };
+  response: {
+    body: MatrixQaBodyShape;
+    errcode?: string;
+    status: number;
+  };
+  scenarioId: string;
+  sequence: number;
+  sync?: {
+    continuity?: boolean;
+    nextBatch?: string;
+    since?: string;
+  };
+};
+
+type MatrixQaInternalRecordedExchange = MatrixQaRecordedExchange & {
+  operationFingerprint: string;
+};
+
+type MatrixQaRouteExpectation = {
+  count: number;
+  method: string;
+  route: string;
+  statuses: number[];
+};
+
+type MatrixQaOrderingExpectation = {
+  categories: MatrixQaStateFamily[];
+  count: number;
+  method: string;
+  requestBody: MatrixQaBodyShape;
+  responseBody: MatrixQaBodyShape;
+  route: string;
+  status: number;
+};
+
+type MatrixQaScenarioRouteStateExpectation = {
+  errors: Array<{
+    errcode?: string;
+    method: string;
+    route: string;
+    status: number;
+  }>;
+  ordering: MatrixQaOrderingExpectation[];
+  retries: Array<{
+    attempts: number;
+    kind: "retry";
+    method: string;
+    route: string;
+    statuses: number[];
+  }>;
+  routes: MatrixQaRouteExpectation[];
+  state: Record<MatrixQaStateFamily, string[]>;
+  syncTokens: {
+    continuityObserved: boolean;
+    incrementalRequests: number;
+    initialRequests: number;
+    responseTokens: number;
+  };
+};
+
+type MatrixQaRouteStateManifest = {
+  generatedAt: string;
+  phases: Record<string, MatrixQaScenarioRouteStateExpectation>;
+  profile: {
+    derivedFrom: "observed-request-response-traffic";
+    id: typeof MATRIX_QA_RECORDING_PROFILE;
+  };
+  requestedProfile: string;
+  scenarios: Record<string, MatrixQaScenarioRouteStateExpectation>;
+  substrate: {
+    id: string;
+    version: string;
+  };
+};
+
+export type MatrixQaRecordingProxy = MatrixQaFaultProxyObserver & {
+  baseUrl: string;
+  buildManifest(params: {
+    generatedAt?: string;
+    requestedProfile: string;
+    scenarioIds: string[];
+    substrate: MatrixQaRouteStateManifest["substrate"];
+  }): MatrixQaRouteStateManifest;
+  installFaultRule(rule: MatrixQaFaultProxyRule): MatrixQaFaultProxyRuleHandle;
+  records(): MatrixQaRecordedExchange[];
+  setScenarioId(scenarioId: string): void;
+  setTargetBaseUrl(targetBaseUrl: string): void;
+  stop(): Promise<void>;
+};
+
+function normalizeHeaderValue(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value.join(", ") : value;
+}
+
+function hasJsonContentType(headers: Headers | IncomingHttpHeaders) {
+  const raw = headers instanceof Headers ? headers.get("content-type") : headers["content-type"];
+  return (
+    normalizeHeaderValue(raw ?? undefined)
+      ?.toLowerCase()
+      .includes("json") === true
+  );
+}
+
+function normalizeJsonMapKey(key: string, prefix: string, route: string) {
+  if (route.endsWith("/sync") && prefix === "rooms") {
+    return key;
+  }
+  if (key.startsWith("!")) {
+    return "{roomId}";
+  }
+  if (key.startsWith("@")) {
+    return "{userId}";
+  }
+  if (key.startsWith("$")) {
+    return "{eventId}";
+  }
+  if (route.endsWith("/keys/signatures/upload") && prefix === "") {
+    return "{userId}";
+  }
+  if (route.endsWith("/keys/signatures/upload") && prefix === "{userId}") {
+    return "{deviceOrKeyId}";
+  }
+  if (route.endsWith("/keys/upload") && prefix === "one_time_keys") {
+    return "{keyId}";
+  }
+  if (/(?:^|\.)encrypted$/u.test(prefix)) {
+    return "{keyId}";
+  }
+  if (prefix === "failures" && /\/keys\/(?:claim|query)$/u.test(route)) {
+    return "{serverName}";
+  }
+  if (
+    !route.endsWith("/keys/upload") &&
+    /^(?:device_keys|master_keys|self_signing_keys|user_signing_keys)$/u.test(prefix)
+  ) {
+    return "{userId}";
+  }
+  if (/^(?:device_keys|devices|messages|one_time_keys)\.\{userId\}$/u.test(prefix)) {
+    return "{deviceId}";
+  }
+  if (!route.endsWith("/keys/upload") && prefix === "one_time_keys") {
+    return "{userId}";
+  }
+  if (
+    /^(?:device_keys\.)?\{userId\}\.\{deviceId\}\.(?:fallback_keys|keys|one_time_keys)$/u.test(
+      prefix,
+    ) ||
+    /^one_time_keys\.\{userId\}\.\{deviceId\}$/u.test(prefix) ||
+    /^(?:ed25519|curve25519|signed_curve25519):/u.test(key)
+  ) {
+    return "{keyId}";
+  }
+  if (/(?:^|\.)rooms$/u.test(prefix)) {
+    return "{roomId}";
+  }
+  if (/(?:^|\.)rooms\.\{roomId\}\.sessions$/u.test(prefix)) {
+    return "{sessionId}";
+  }
+  return key;
+}
+
+function collectJsonFields(value: unknown, route: string, prefix = "", depth = 0): string[] {
+  if (depth >= 8 || value === null || typeof value !== "object") {
+    return [];
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      return prefix ? [`${prefix}[]`] : [];
+    }
+    const arrayPrefix = prefix ? `${prefix}[]` : "[]";
+    return [
+      ...new Set(value.flatMap((entry) => collectJsonFields(entry, route, arrayPrefix, depth + 1))),
+    ].toSorted();
+  }
+  const fixedDeviceKeysObject =
+    prefix === "device_keys" &&
+    ["algorithms", "device_id", "keys", "signatures", "user_id"].some((key) => key in value);
+  return Object.entries(value)
+    .flatMap(([key, child]) => {
+      const safeKey = fixedDeviceKeysObject ? key : normalizeJsonMapKey(key, prefix, route);
+      const field = prefix ? `${prefix}.${safeKey}` : safeKey;
+      if (
+        /^(?:access_token|auth|body|ciphertext|content|file|formatted_body|password|recovery_key|session_data|token|unsigned)$/iu.test(
+          key,
+        )
+      ) {
+        return [field];
+      }
+      const nested = collectJsonFields(child, route, field, depth + 1);
+      return nested.length > 0 ? nested : [field];
+    })
+    .toSorted();
+}
+
+function parseJsonBody(body: Buffer, headers: Headers | IncomingHttpHeaders): unknown {
+  if (body.byteLength === 0) {
+    return undefined;
+  }
+  const text = body.toString("utf8");
+  const firstNonWhitespace = text.trimStart()[0];
+  if (!hasJsonContentType(headers) && firstNonWhitespace !== "[" && firstNonWhitespace !== "{") {
+    return undefined;
+  }
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+const MATRIX_QA_STATE_FIELD_MARKERS = new Set([
+  "backup",
+  "content_uri",
+  "device_id",
+  "device_keys",
+  "device_lists",
+  "device_one_time_keys_count",
+  "device_unused_fallback_key_types",
+  "mimetype",
+  "one_time_key",
+  "session_data",
+]);
+
+function collectStateFieldMarkers(value: unknown, depth = 0): string[] {
+  if (depth >= 8 || value === null || typeof value !== "object") {
+    return [];
+  }
+  if (Array.isArray(value)) {
+    return [...new Set(value.flatMap((entry) => collectStateFieldMarkers(entry, depth + 1)))];
+  }
+  const markers = new Set<string>();
+  for (const [key, child] of Object.entries(value)) {
+    const normalizedKey = key.toLowerCase();
+    if (MATRIX_QA_STATE_FIELD_MARKERS.has(normalizedKey)) {
+      markers.add(normalizedKey);
+    }
+    for (const marker of collectStateFieldMarkers(child, depth + 1)) {
+      markers.add(marker);
+    }
+  }
+  return [...markers];
+}
+
+function buildBodyShape(
+  body: Buffer,
+  headers: Headers | IncomingHttpHeaders,
+  route: string,
+  parsed: unknown,
+): MatrixQaBodyShape {
+  if (body.byteLength === 0) {
+    return { kind: "empty" };
+  }
+  if (parsed !== undefined) {
+    return { kind: "json", fields: collectJsonFields(parsed, route) };
+  }
+  const contentType =
+    headers instanceof Headers
+      ? headers.get("content-type")
+      : normalizeHeaderValue(headers["content-type"]);
+  return contentType?.toLowerCase().startsWith("text/") ? { kind: "text" } : { kind: "binary" };
+}
+
+function buildRedactedQuery(search: string, syncTokens: Map<string, string>) {
+  const result: Record<string, string> = {};
+  for (const [key, value] of new URLSearchParams(search)) {
+    if (key === "since") {
+      result[key] = syncTokens.get(value) ?? "sync-unknown";
+    } else if (key === "timeout" || key === "full_state" || key === "set_presence") {
+      result[key] = value;
+    } else {
+      result[key] = REDACTED_QUERY_VALUE;
+    }
+  }
+  return result;
+}
+
+const MATRIX_QA_STATE_FAMILIES: Array<[MatrixQaStateFamily, string[], string[]]> = [
+  ["sync-token", ["/sync"], []],
+  ["backup", ["/room_keys/", "/account_data/m.megolm_backup."], ["backup"]],
+  [
+    "key",
+    [
+      "/keys/",
+      "/sendtodevice/",
+      "/account_data/m.cross_signing.",
+      "/account_data/m.secret_storage.",
+    ],
+    [
+      "one_time_key",
+      "device_one_time_keys_count",
+      "device_unused_fallback_key_types",
+      "device_keys",
+      "session_data",
+    ],
+  ],
+  ["device", ["/devices"], ["device_id", "device_lists"]],
+  ["media", ["/media/"], ["content_uri", "mimetype"]],
+];
+
+function resolveStateFamilies(params: {
+  requestFields: string[];
+  responseFields: string[];
+  route: string;
+}) {
+  const fields = [...params.requestFields, ...params.responseFields].join(" ").toLowerCase();
+  const route = params.route.toLowerCase();
+  return MATRIX_QA_STATE_FAMILIES.filter(
+    ([, routes, markers]) =>
+      routes.some((marker) => route.includes(marker)) ||
+      markers.some((marker) => fields.includes(marker)),
+  )
+    .map(([family]) => family)
+    .toSorted();
+}
+
+function buildExpectation(
+  records: MatrixQaInternalRecordedExchange[],
+): MatrixQaScenarioRouteStateExpectation {
+  const orderedRecords = records.toSorted((left, right) => left.sequence - right.sequence);
+  const routeGroups = new Map<string, MatrixQaRouteExpectation>();
+  const ordering: MatrixQaOrderingExpectation[] = [];
+  const state = {
+    backup: new Set<string>(),
+    device: new Set<string>(),
+    key: new Set<string>(),
+    media: new Set<string>(),
+    "sync-token": new Set<string>(),
+  } satisfies Record<MatrixQaStateFamily, Set<string>>;
+
+  for (const record of orderedRecords) {
+    const routeKey = `${record.request.method} ${record.request.route}`;
+    const route = routeGroups.get(routeKey) ?? {
+      count: 0,
+      method: record.request.method,
+      route: record.request.route,
+      statuses: [],
+    };
+    route.count += 1;
+    if (!route.statuses.includes(record.response.status)) {
+      route.statuses.push(record.response.status);
+      route.statuses.sort((left, right) => left - right);
+    }
+    routeGroups.set(routeKey, route);
+    for (const category of record.categories) {
+      state[category].add(record.request.route);
+    }
+    const previous = ordering.at(-1);
+    if (
+      previous?.method === record.request.method &&
+      previous.route === record.request.route &&
+      previous.status === record.response.status &&
+      JSON.stringify(previous.requestBody) === JSON.stringify(record.request.body) &&
+      JSON.stringify(previous.responseBody) === JSON.stringify(record.response.body) &&
+      previous.categories.join("\0") === record.categories.join("\0")
+    ) {
+      previous.count += 1;
+    } else {
+      ordering.push({
+        categories: record.categories,
+        count: 1,
+        method: record.request.method,
+        requestBody: record.request.body,
+        responseBody: record.response.body,
+        route: record.request.route,
+        status: record.response.status,
+      });
+    }
+  }
+
+  const routes = [...routeGroups.values()].toSorted((left, right) =>
+    `${left.method} ${left.route}`.localeCompare(`${right.method} ${right.route}`),
+  );
+  const retries: MatrixQaScenarioRouteStateExpectation["retries"] = [];
+  for (let index = 0; index < orderedRecords.length; index += 1) {
+    const first = orderedRecords[index];
+    if (!first || first.response.status < 400 || first.request.route.endsWith("/sync")) {
+      continue;
+    }
+    let retryEndIndex = index + 1;
+    while (retryEndIndex < orderedRecords.length) {
+      const attempt = orderedRecords[retryEndIndex];
+      if (attempt?.operationFingerprint !== first.operationFingerprint) {
+        break;
+      }
+      retryEndIndex += 1;
+      if (attempt.response.status < 400) {
+        break;
+      }
+    }
+    const retryAttempts = orderedRecords.slice(index, retryEndIndex);
+    if (retryAttempts.length > 1) {
+      retries.push({
+        attempts: retryAttempts.length,
+        kind: "retry",
+        method: first.request.method,
+        route: first.request.route,
+        statuses: retryAttempts.map((attempt) => attempt.response.status),
+      });
+    }
+    index = retryEndIndex - 1;
+  }
+  const incrementalSyncRecords = orderedRecords.filter(
+    (record) => record.sync?.since !== undefined,
+  );
+  return {
+    errors: orderedRecords
+      .filter((record) => record.response.status >= 400)
+      .map((record) => {
+        const error: MatrixQaScenarioRouteStateExpectation["errors"][number] = {
+          method: record.request.method,
+          route: record.request.route,
+          status: record.response.status,
+        };
+        if (record.response.errcode) {
+          error.errcode = record.response.errcode;
+        }
+        return error;
+      }),
+    ordering,
+    retries,
+    routes,
+    state: Object.fromEntries(
+      Object.entries(state).map(([key, values]) => [key, [...values].toSorted()]),
+    ) as Record<MatrixQaStateFamily, string[]>,
+    syncTokens: {
+      continuityObserved:
+        incrementalSyncRecords.length > 0 &&
+        incrementalSyncRecords.every((record) => record.sync?.continuity === true),
+      incrementalRequests: incrementalSyncRecords.length,
+      initialRequests: orderedRecords.filter(
+        (record) => record.categories.includes("sync-token") && record.sync?.since === undefined,
+      ).length,
+      responseTokens: orderedRecords.filter((record) => record.sync?.nextBatch !== undefined)
+        .length,
+    },
+  };
+}
+
+export async function startMatrixQaRecordingProxy(params: {
+  targetBaseUrl: string;
+}): Promise<MatrixQaRecordingProxy> {
+  let scenarioId = "setup";
+  let sequence = 0;
+  const records: MatrixQaInternalRecordedExchange[] = [];
+  const syncTokensByPrincipal = new Map<string, Map<string, string>>();
+  const recordExchange = (exchange: MatrixQaFaultProxyExchange) => {
+    const context = asOptionalObjectRecord(exchange.context);
+    const exchangeSequence = typeof context?.sequence === "number" ? context.sequence : ++sequence;
+    const route = normalizeMatrixQaRoute(exchange.request.path);
+    const exchangeScenarioId = route.endsWith("/sync")
+      ? scenarioId
+      : typeof context?.scenarioId === "string"
+        ? context.scenarioId
+        : "unattributed";
+    const requestJson = parseJsonBody(exchange.request.body, exchange.request.headers);
+    const responseJson = parseJsonBody(exchange.response.body, exchange.response.headers);
+    const responseMetadata = asOptionalObjectRecord(responseJson);
+    const requestFields = collectStateFieldMarkers(requestJson);
+    const responseFields = collectStateFieldMarkers(responseJson);
+    const syncPrincipal = exchange.request.bearerToken ?? "anonymous";
+    const syncTokens = syncTokensByPrincipal.get(syncPrincipal) ?? new Map<string, string>();
+    syncTokensByPrincipal.set(syncPrincipal, syncTokens);
+    const sinceRaw = new URLSearchParams(exchange.request.search).get("since") ?? undefined;
+    const since = sinceRaw ? (syncTokens.get(sinceRaw) ?? "sync-unknown") : undefined;
+    const requestQuery = buildRedactedQuery(exchange.request.search, syncTokens);
+    const nextBatch = readStringField(responseMetadata, "next_batch");
+    if (nextBatch && !syncTokens.has(nextBatch)) {
+      syncTokens.set(nextBatch, `sync-${syncTokens.size + 1}`);
+    }
+    const nextBatchAlias = nextBatch ? syncTokens.get(nextBatch) : undefined;
+    const responseErrcode = readStringField(responseMetadata, "errcode");
+    const operationFingerprint = createHash("sha256")
+      .update(exchange.request.method)
+      .update("\0")
+      .update(exchange.request.path)
+      .update("\0")
+      .update(exchange.request.search)
+      .update("\0")
+      .update(exchange.request.body)
+      .update("\0")
+      .update(exchange.request.bearerToken ?? "anonymous")
+      .digest("hex");
+    records.push({
+      categories: resolveStateFamilies({ requestFields, responseFields, route }),
+      request: {
+        body: buildBodyShape(exchange.request.body, exchange.request.headers, route, requestJson),
+        method: exchange.request.method,
+        query: requestQuery,
+        route,
+      },
+      response: {
+        body: buildBodyShape(
+          exchange.response.body,
+          exchange.response.headers,
+          route,
+          responseJson,
+        ),
+        ...(responseErrcode ? { errcode: responseErrcode } : {}),
+        status: exchange.response.status,
+      },
+      scenarioId: exchangeScenarioId,
+      sequence: exchangeSequence,
+      operationFingerprint,
+      ...(route.endsWith("/sync")
+        ? {
+            sync: {
+              ...(since ? { since } : {}),
+              ...(nextBatchAlias ? { nextBatch: nextBatchAlias } : {}),
+              ...(since && nextBatchAlias ? { continuity: since !== "sync-unknown" } : {}),
+            },
+          }
+        : {}),
+    });
+  };
+  const observer: Required<MatrixQaFaultProxyObserver> = {
+    createExchangeContext: () => ({ scenarioId, sequence: ++sequence }),
+    onExchange: recordExchange,
+  };
+  const proxy = await startMatrixQaFaultProxy({
+    targetBaseUrl: params.targetBaseUrl,
+    rules: [],
+    ...observer,
+  });
+
+  return {
+    baseUrl: proxy.baseUrl,
+    ...observer,
+    buildManifest({ generatedAt, requestedProfile, scenarioIds, substrate }) {
+      const selectedIds = new Set(scenarioIds);
+      const byScenario = new Map<string, MatrixQaInternalRecordedExchange[]>();
+      for (const record of records) {
+        const entries = byScenario.get(record.scenarioId) ?? [];
+        entries.push(record);
+        byScenario.set(record.scenarioId, entries);
+      }
+      const scenarios = Object.fromEntries(
+        scenarioIds.map((id) => [id, buildExpectation(byScenario.get(id) ?? [])]),
+      );
+      const phases = Object.fromEntries(
+        [...byScenario.entries()]
+          .filter(([id]) => !selectedIds.has(id))
+          .toSorted(([left], [right]) => left.localeCompare(right))
+          .map(([id, entries]) => [id, buildExpectation(entries)]),
+      );
+      return {
+        generatedAt: generatedAt ?? new Date().toISOString(),
+        phases,
+        profile: {
+          derivedFrom: "observed-request-response-traffic",
+          id: MATRIX_QA_RECORDING_PROFILE,
+        },
+        requestedProfile,
+        scenarios,
+        substrate,
+      };
+    },
+    installFaultRule: proxy.installRule.bind(proxy),
+    records: () =>
+      structuredClone(
+        records
+          .toSorted((left, right) => left.sequence - right.sequence)
+          .map(({ operationFingerprint: _operationFingerprint, ...record }) => record),
+      ),
+    setScenarioId(nextScenarioId) {
+      scenarioId = nextScenarioId;
+    },
+    setTargetBaseUrl: proxy.setTargetBaseUrl.bind(proxy),
+    stop: proxy.stop.bind(proxy),
+  };
+}

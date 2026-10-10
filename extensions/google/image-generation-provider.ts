@@ -1,64 +1,41 @@
 import {
   generatedImageAssetFromBase64,
+  resolveInlineImageJsonResponseMaxBytes,
   type GeneratedImageAsset,
   type ImageGenerationProvider,
 } from "openclaw/plugin-sdk/image-generation";
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
   postJsonRequest,
+  readProviderJsonResponse,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import {
+  isRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeGoogleModelId, resolveGoogleGenerativeAiHttpRequestConfig } from "./api.js";
+import { toStandardGoogleProviderBase64 } from "./base64.js";
+import {
+  createGoogleImageGenerationProviderMetadata,
+  DEFAULT_GOOGLE_IMAGE_MODEL,
+  GOOGLE_MAX_IMAGE_RESULTS,
+} from "./generation-provider-metadata.js";
+import { resolveGoogleGenerativeAiHttpRequestConfig } from "./http-request.js";
+import { normalizeGoogleModelId } from "./model-id.js";
 
-const DEFAULT_GOOGLE_IMAGE_MODEL = "gemini-3.1-flash-image-preview";
 const DEFAULT_IMAGE_TIMEOUT_MS = 180_000;
 const DEFAULT_OUTPUT_MIME = "image/png";
-const GOOGLE_SUPPORTED_SIZES = [
-  "1024x1024",
-  "1024x1536",
-  "1536x1024",
-  "1024x1792",
-  "1792x1024",
-] as const;
-const GOOGLE_SUPPORTED_ASPECT_RATIOS = [
-  "1:1",
-  "2:3",
-  "3:2",
-  "3:4",
-  "4:3",
-  "4:5",
-  "5:4",
-  "9:16",
-  "16:9",
-  "21:9",
-] as const;
-
 const GOOGLE_IMAGE_MALFORMED_RESPONSE = "Google image generation response malformed";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function normalizeGoogleImageModel(model: string | undefined): string {
-  const trimmed = model?.trim();
-  return normalizeGoogleModelId(trimmed || DEFAULT_GOOGLE_IMAGE_MODEL);
-}
 
 function mapSizeToImageConfig(
   size: string | undefined,
 ): { aspectRatio?: string; imageSize?: "2K" | "4K" } | undefined {
-  const trimmed = size?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-
-  const normalized = normalizeLowercaseStringOrEmpty(trimmed);
+  const normalized = normalizeLowercaseStringOrEmpty(size);
   const mapping = new Map<string, string>([
     ["1024x1024", "1:1"],
     ["1024x1536", "2:3"],
@@ -69,8 +46,11 @@ function mapSizeToImageConfig(
   const aspectRatio = mapping.get(normalized);
 
   const [widthRaw, heightRaw] = normalized.split("x");
-  const width = Number.parseInt(widthRaw ?? "", 10);
-  const height = Number.parseInt(heightRaw ?? "", 10);
+  const width = parseStrictPositiveInteger(widthRaw);
+  const height = parseStrictPositiveInteger(heightRaw);
+  if (width === undefined || height === undefined) {
+    return undefined;
+  }
   const longestEdge = Math.max(width, height);
   const imageSize = longestEdge >= 3072 ? "4K" : longestEdge >= 1536 ? "2K" : undefined;
 
@@ -136,36 +116,8 @@ function googleInlineDataFromPart(part: unknown): Record<string, unknown> | unde
 
 export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
   return {
-    id: "google",
-    label: "Google",
-    defaultModel: DEFAULT_GOOGLE_IMAGE_MODEL,
-    models: [DEFAULT_GOOGLE_IMAGE_MODEL, "gemini-3-pro-image-preview"],
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({
-        provider: "google",
-        agentDir,
-      }),
-    capabilities: {
-      generate: {
-        maxCount: 4,
-        supportsSize: true,
-        supportsAspectRatio: true,
-        supportsResolution: true,
-      },
-      edit: {
-        enabled: true,
-        maxCount: 4,
-        maxInputImages: 5,
-        supportsSize: true,
-        supportsAspectRatio: true,
-        supportsResolution: true,
-      },
-      geometry: {
-        sizes: [...GOOGLE_SUPPORTED_SIZES],
-        aspectRatios: [...GOOGLE_SUPPORTED_ASPECT_RATIOS],
-        resolutions: ["1K", "2K", "4K"],
-      },
-    },
+    ...createGoogleImageGenerationProviderMetadata(),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "google", ...ctx }),
     async generateImage(req) {
       const auth = await resolveApiKeyForProvider({
         provider: "google",
@@ -177,7 +129,7 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
         throw new Error("Google API key missing");
       }
 
-      const model = normalizeGoogleImageModel(req.model);
+      const model = normalizeGoogleModelId(req.model?.trim() || DEFAULT_GOOGLE_IMAGE_MODEL);
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         resolveGoogleGenerativeAiHttpRequestConfig({
           apiKey: auth.apiKey,
@@ -229,8 +181,12 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
       try {
         await assertOkOrThrowHttpError(res, "Google image generation failed");
 
-        const payload = await res.json();
-        let imageIndex = 0;
+        const payload = await readProviderJsonResponse(res, "google.image-generation", {
+          maxBytes: resolveInlineImageJsonResponseMaxBytes(
+            GOOGLE_MAX_IMAGE_RESULTS,
+            resolveGeneratedMediaMaxBytes(req.cfg, "image"),
+          ),
+        });
         const images: GeneratedImageAsset[] = [];
         for (const part of googleResponseParts(payload)) {
           const inline = googleInlineDataFromPart(part);
@@ -241,9 +197,13 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
           if (!data) {
             throw new Error(GOOGLE_IMAGE_MALFORMED_RESPONSE);
           }
+          const standardData = toStandardGoogleProviderBase64(data);
+          if (!standardData) {
+            throw new Error(GOOGLE_IMAGE_MALFORMED_RESPONSE);
+          }
           const image = generatedImageAssetFromBase64({
-            base64: data,
-            index: imageIndex,
+            base64: standardData,
+            index: images.length,
             mimeType:
               normalizeOptionalString(inline.mimeType) ??
               normalizeOptionalString(inline.mime_type) ??
@@ -252,7 +212,6 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
           if (!image) {
             throw new Error(GOOGLE_IMAGE_MALFORMED_RESPONSE);
           }
-          imageIndex += 1;
           images.push(image);
         }
 

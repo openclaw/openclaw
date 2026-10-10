@@ -1,19 +1,14 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { coerceSecretRef, type SecretRef } from "../config/types.secrets.js";
-import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
+import { parseSecretRef } from "../config/types.secrets.js";
+import { canResolveEnvSecretRefInReadOnlyPath } from "../plugin-sdk/secret-ref-readonly.internal.js";
+import { isBuiltInDefaultSecretProviderRef } from "../secrets/ref-contract.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type {
   PluginManifestCapabilityProviderAuthSignal,
   PluginManifestCapabilityProviderConfigSignal,
 } from "./manifest.js";
-
-type ToolMetadata = NonNullable<PluginManifestRecord["toolMetadata"]>[string];
-export type ManifestConfigAvailabilitySignal = PluginManifestCapabilityProviderConfigSignal;
-export type ManifestAuthAvailabilitySignal = PluginManifestCapabilityProviderAuthSignal;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 function readPath(root: unknown, path: string | undefined): unknown {
   if (!path?.trim()) {
@@ -33,123 +28,79 @@ function readPath(root: unknown, path: string | undefined): unknown {
   return current;
 }
 
-function readStringAtPath(root: unknown, path: string): string | undefined {
-  const value = readPath(root, path);
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function readEffectiveConfig(params: {
-  config?: OpenClawConfig;
-  rootPath: string;
-  overlayPath?: string;
-}): Record<string, unknown> | undefined {
-  const root = readPath(params.config, params.rootPath);
-  if (!isRecord(root)) {
-    return undefined;
-  }
-  const overlay = readPath(root, params.overlayPath);
-  return isRecord(overlay) ? { ...root, ...overlay } : root;
-}
-
-function hasConfiguredSecretRefInConfigPath(params: {
-  config?: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  ref: SecretRef;
-}): boolean {
-  const providerConfig = params.config?.secrets?.providers?.[params.ref.provider];
-  if (params.ref.source !== "env") {
-    return Boolean(providerConfig && providerConfig.source === params.ref.source);
-  }
-  if (!providerConfig) {
-    return params.ref.provider === resolveDefaultSecretProviderAlias(params.config ?? {}, "env");
-  }
-  if (providerConfig.source !== "env") {
-    return false;
-  }
-  const allowlist = providerConfig.allowlist;
-  return !allowlist || allowlist.includes(params.ref.id);
-}
-
-function hasConfiguredValue(params: {
-  config?: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  value: unknown;
-}): boolean {
-  const secretRef = coerceSecretRef(params.value, params.config?.secrets?.defaults);
-  if (secretRef) {
-    return (
-      hasConfiguredSecretRefInConfigPath({
-        config: params.config,
-        env: params.env,
-        ref: secretRef,
-      }) &&
-      (secretRef.source !== "env" || Boolean(params.env[secretRef.id]?.trim()))
-    );
-  }
-  if (typeof params.value === "string") {
-    return params.value.trim().length > 0;
-  }
-  if (Array.isArray(params.value)) {
-    return params.value.length > 0;
-  }
-  if (isRecord(params.value)) {
-    return Object.keys(params.value).length > 0;
-  }
-  return params.value !== undefined && params.value !== null;
-}
-
 export function manifestConfigSignalPasses(params: {
   config?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-  signal: ManifestConfigAvailabilitySignal;
+  signal: PluginManifestCapabilityProviderConfigSignal;
 }): boolean {
-  const effectiveConfig = readEffectiveConfig({
-    config: params.config,
-    rootPath: params.signal.rootPath,
-    overlayPath: params.signal.overlayPath,
-  });
-  if (!effectiveConfig) {
+  const root = readPath(params.config, params.signal.rootPath);
+  if (!isRecord(root)) {
     return false;
   }
-  const modeSignal = params.signal.mode;
-  if (modeSignal) {
-    const modePath = modeSignal.path?.trim() || "mode";
-    const mode = readStringAtPath(effectiveConfig, modePath) ?? modeSignal.default;
-    if (!mode) {
-      return false;
+  const overlay = readPath(root, params.signal.overlayPath);
+  const baseConfig = isRecord(overlay) ? { ...root, ...overlay } : root;
+  const passes = (effectiveConfig: Record<string, unknown>): boolean => {
+    const modeSignal = params.signal.mode;
+    if (modeSignal) {
+      const modePath = modeSignal.path?.trim() || "mode";
+      const mode =
+        normalizeOptionalString(readPath(effectiveConfig, modePath)) ?? modeSignal.default;
+      if (!mode) {
+        return false;
+      }
+      if (modeSignal.allowed?.length && !modeSignal.allowed.includes(mode)) {
+        return false;
+      }
+      if (modeSignal.disallowed?.includes(mode)) {
+        return false;
+      }
     }
-    if (modeSignal.allowed?.length && !modeSignal.allowed.includes(mode)) {
-      return false;
-    }
-    if (modeSignal.disallowed?.includes(mode)) {
-      return false;
-    }
+    const hasValue = (path: string) => {
+      const value = readPath(effectiveConfig, path);
+      const secretRef = parseSecretRef(value, params.config?.secrets?.defaults);
+      if (secretRef?.source === "env") {
+        return (
+          canResolveEnvSecretRefInReadOnlyPath({
+            cfg: params.config,
+            provider: secretRef.provider,
+            id: secretRef.id,
+          }) && Boolean(params.env[secretRef.id]?.trim())
+        );
+      }
+      if (secretRef) {
+        const providerConfig = params.config?.secrets?.providers?.[secretRef.provider];
+        return (
+          providerConfig?.source === secretRef.source ||
+          isBuiltInDefaultSecretProviderRef(params.config ?? {}, secretRef)
+        );
+      }
+      if (typeof value === "string") {
+        return value.trim().length > 0;
+      }
+      if (Array.isArray(value)) {
+        return value.length > 0;
+      }
+      if (isRecord(value)) {
+        return Object.keys(value).length > 0;
+      }
+      return value !== undefined && value !== null;
+    };
+    const requiredAny = params.signal.requiredAny ?? [];
+    return (
+      (params.signal.required ?? []).every(hasValue) &&
+      (requiredAny.length === 0 || requiredAny.some(hasValue))
+    );
+  };
+  if (!params.signal.overlayMapPath?.trim()) {
+    return passes(baseConfig);
   }
-  for (const requiredPath of params.signal.required ?? []) {
-    if (
-      !hasConfiguredValue({
-        config: params.config,
-        env: params.env,
-        value: readPath(effectiveConfig, requiredPath),
-      })
-    ) {
-      return false;
-    }
-  }
-  const requiredAny = params.signal.requiredAny ?? [];
-  if (
-    requiredAny.length > 0 &&
-    !requiredAny.some((path) =>
-      hasConfiguredValue({
-        config: params.config,
-        env: params.env,
-        value: readPath(effectiveConfig, path),
-      }),
-    )
-  ) {
-    return false;
-  }
-  return true;
+  const overlayMap = readPath(baseConfig, params.signal.overlayMapPath);
+  return (
+    isRecord(overlayMap) &&
+    Object.entries(overlayMap)
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .some(([, mapOverlay]) => isRecord(mapOverlay) && passes({ ...baseConfig, ...mapOverlay }))
+  );
 }
 
 function normalizeBaseUrlForManifestGuard(value: string): string {
@@ -158,7 +109,7 @@ function normalizeBaseUrlForManifestGuard(value: string): string {
 
 export function manifestProviderBaseUrlGuardPasses(params: {
   config?: OpenClawConfig;
-  guard: ManifestAuthAvailabilitySignal["providerBaseUrl"];
+  guard: PluginManifestCapabilityProviderAuthSignal["providerBaseUrl"];
 }): boolean {
   const guard = params.guard;
   if (!guard) {
@@ -182,11 +133,7 @@ export function manifestPluginSetupProviderEnvVars(
   plugin: PluginManifestRecord,
   providerId: string,
 ): readonly string[] {
-  const direct = plugin.setup?.providers?.find((provider) => provider.id === providerId)?.envVars;
-  if (direct && direct.length > 0) {
-    return direct;
-  }
-  return plugin.providerAuthEnvVars?.[providerId] ?? [];
+  return plugin.setup?.providers?.find((provider) => provider.id === providerId)?.envVars ?? [];
 }
 
 export function hasNonEmptyManifestEnvCandidate(
@@ -199,61 +146,6 @@ export function hasNonEmptyManifestEnvCandidate(
   });
 }
 
-function listToolAuthSignals(metadata: ToolMetadata): ManifestAuthAvailabilitySignal[] {
-  if (metadata.authSignals?.length) {
-    return metadata.authSignals;
-  }
-  return [...(metadata.authProviders ?? []), ...(metadata.aliases ?? [])].map((provider) => ({
-    provider,
-  }));
-}
-
-function toolMetadataPasses(params: {
-  plugin: PluginManifestRecord;
-  metadata: ToolMetadata;
-  config?: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  hasAuthForProvider?: (providerId: string) => boolean;
-}): boolean {
-  const authSignals = listToolAuthSignals(params.metadata);
-  if (!params.metadata.configSignals?.length && authSignals.length === 0) {
-    return true;
-  }
-  if (
-    params.metadata.configSignals?.some((signal) =>
-      manifestConfigSignalPasses({
-        config: params.config,
-        env: params.env,
-        signal,
-      }),
-    )
-  ) {
-    return true;
-  }
-  for (const signal of authSignals) {
-    if (
-      !manifestProviderBaseUrlGuardPasses({
-        config: params.config,
-        guard: signal.providerBaseUrl,
-      })
-    ) {
-      continue;
-    }
-    if (params.hasAuthForProvider?.(signal.provider)) {
-      return true;
-    }
-    if (
-      hasNonEmptyManifestEnvCandidate(
-        params.env,
-        manifestPluginSetupProviderEnvVars(params.plugin, signal.provider),
-      )
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
 export function hasManifestToolAvailability(params: {
   plugin: PluginManifestRecord;
   toolNames: readonly string[];
@@ -261,22 +153,41 @@ export function hasManifestToolAvailability(params: {
   env: NodeJS.ProcessEnv;
   hasAuthForProvider?: (providerId: string) => boolean;
 }): boolean {
-  for (const toolName of params.toolNames) {
+  return params.toolNames.some((toolName) => {
     const metadata = params.plugin.toolMetadata?.[toolName];
     if (!metadata) {
       return true;
     }
+    const authSignals: PluginManifestCapabilityProviderAuthSignal[] = metadata.authSignals?.length
+      ? metadata.authSignals
+      : [...(metadata.authProviders ?? []), ...(metadata.aliases ?? [])].map((provider) => ({
+          provider,
+        }));
+    if (!metadata.configSignals?.length && authSignals.length === 0) {
+      return true;
+    }
     if (
-      toolMetadataPasses({
-        plugin: params.plugin,
-        metadata,
-        config: params.config,
-        env: params.env,
-        hasAuthForProvider: params.hasAuthForProvider,
-      })
+      metadata.configSignals?.some((signal) =>
+        manifestConfigSignalPasses({
+          config: params.config,
+          env: params.env,
+          signal,
+        }),
+      )
     ) {
       return true;
     }
-  }
-  return false;
+    return authSignals.some(
+      (signal) =>
+        manifestProviderBaseUrlGuardPasses({
+          config: params.config,
+          guard: signal.providerBaseUrl,
+        }) &&
+        (params.hasAuthForProvider?.(signal.provider) ||
+          hasNonEmptyManifestEnvCandidate(
+            params.env,
+            manifestPluginSetupProviderEnvVars(params.plugin, signal.provider),
+          )),
+    );
+  });
 }

@@ -1,10 +1,14 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";
-import type { SlackActionContext } from "./action-runtime.js";
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import type {
+  ChannelMessageActionAdapter,
+  ChannelMessageActionContext,
+} from "openclaw/plugin-sdk/channel-contract";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import type { SlackActionContext } from "./action-context.js";
 import { handleSlackMessageAction } from "./message-action-dispatch.js";
 import { extractSlackToolSend } from "./message-actions.js";
 import { describeSlackMessageTool } from "./message-tool-api.js";
-import { resolveSlackChannelId } from "./targets.js";
+import { parseSlackTarget } from "./target-parsing.js";
 
 type SlackActionInvoke = (
   action: Record<string, unknown>,
@@ -12,25 +16,45 @@ type SlackActionInvoke = (
   toolContext: unknown,
 ) => Promise<AgentToolResult<unknown>>;
 
-let slackActionRuntimePromise: Promise<typeof import("./action-runtime.runtime.js")> | undefined;
+const SLACK_TOOL_DELIVERY_ACTIONS = new Set([
+  "deleteMessage",
+  "editMessage",
+  "pinMessage",
+  "react",
+  "sendMessage",
+  "unpinMessage",
+  "uploadFile",
+]);
 
-async function loadSlackActionRuntime() {
-  slackActionRuntimePromise ??= import("./action-runtime.runtime.js");
-  return await slackActionRuntimePromise;
-}
+const loadSlackActionRuntime = createLazyRuntimeModule(() => import("./action-runtime.runtime.js"));
 
-function resolveSlackActionContext(params: {
-  toolContext: unknown;
-  mediaLocalRoots: readonly string[] | undefined;
-  mediaReadFile: ((filePath: string) => Promise<Buffer>) | undefined;
-}): SlackActionContext | undefined {
-  if (!params.toolContext && !params.mediaLocalRoots && !params.mediaReadFile) {
+function resolveSlackActionContext(
+  ctx: ChannelMessageActionContext,
+  toolContext: unknown,
+): SlackActionContext | undefined {
+  if (
+    !toolContext &&
+    !ctx.mediaAccess &&
+    !ctx.mediaLocalRoots &&
+    !ctx.mediaReadFile &&
+    !ctx.conversationReadOrigin &&
+    !ctx.requesterAccountId &&
+    !ctx.requesterSenderId &&
+    !ctx.assertDirectAdapterHandoff
+  ) {
     return undefined;
   }
   return {
-    ...(params.toolContext as SlackActionContext | undefined),
-    ...(params.mediaLocalRoots ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
-    ...(params.mediaReadFile ? { mediaReadFile: params.mediaReadFile } : {}),
+    ...(toolContext as SlackActionContext | undefined),
+    // Authority comes only from the host-owned action context. Overwrite any
+    // structurally compatible fields carried by generic tool context.
+    mediaAccess: ctx.mediaAccess,
+    mediaLocalRoots: ctx.mediaLocalRoots,
+    mediaReadFile: ctx.mediaReadFile,
+    conversationReadOrigin: ctx.conversationReadOrigin,
+    requesterAccountId: ctx.requesterAccountId ?? undefined,
+    requesterSenderId: ctx.requesterSenderId ?? undefined,
+    assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
   };
 }
 
@@ -39,21 +63,29 @@ export function createSlackActions(
   options?: { invoke?: SlackActionInvoke },
 ): ChannelMessageActionAdapter {
   return {
+    providerOwnedReadGates: true,
+    readAuthorityActions: [
+      "read",
+      "reactions",
+      "list-pins",
+      "member-info",
+      "emoji-list",
+      "download-file",
+    ],
     describeMessageTool: describeSlackMessageTool,
     extractToolSend: ({ args }) => extractSlackToolSend(args),
-    prepareSendPayload: ({ ctx, payload }) => (ctx.action === "send" ? payload : null),
+    isToolDeliveryAction: ({ args }) =>
+      typeof args.action === "string" && SLACK_TOOL_DELIVERY_ACTIONS.has(args.action),
+    prepareSendPayload: ({ ctx, to, payload }) =>
+      ctx.action === "send" && !shouldUseWorkspaceAwareSlackActionSend(to, ctx.toolContext)
+        ? payload
+        : null,
     handleAction: async (ctx) => {
       return await handleSlackMessageAction({
         providerId,
         ctx,
-        normalizeChannelId: resolveSlackChannelId,
-        includeReadThreadId: true,
         invoke: async (action, cfg, toolContext) => {
-          const actionContext = resolveSlackActionContext({
-            toolContext,
-            mediaLocalRoots: ctx.mediaLocalRoots,
-            mediaReadFile: ctx.mediaReadFile,
-          });
+          const actionContext = resolveSlackActionContext(ctx, toolContext);
           return await (options?.invoke
             ? options.invoke(action, cfg, actionContext)
             : (await loadSlackActionRuntime()).handleSlackAction(action, cfg, actionContext));
@@ -61,4 +93,28 @@ export function createSlackActions(
       });
     },
   };
+}
+
+function shouldUseWorkspaceAwareSlackActionSend(
+  rawTarget: string,
+  context: ChannelMessageActionContext["toolContext"],
+): boolean {
+  const target = parseSlackTarget(rawTarget, { defaultKind: "channel" });
+  if (!target || target.teamId) {
+    return false;
+  }
+  for (const rawCurrentTarget of [context?.currentChannelId, context?.currentMessagingTarget]) {
+    if (!rawCurrentTarget) {
+      continue;
+    }
+    const currentTarget = parseSlackTarget(rawCurrentTarget);
+    if (
+      currentTarget?.teamId &&
+      currentTarget.kind === target.kind &&
+      currentTarget.id.toLowerCase() === target.id.toLowerCase()
+    ) {
+      return true;
+    }
+  }
+  return false;
 }

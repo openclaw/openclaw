@@ -1,3 +1,6 @@
+import type { GatewayProbeResult } from "../../gateway/probe.js";
+
+/** Builds gateway config where local and remote auth values use environment SecretRefs. */
 export function createSecretRefGatewayConfig(params?: { gatewayMode?: "local" | "remote" }) {
   return {
     secrets: {
@@ -18,5 +21,24 @@ export function createSecretRefGatewayConfig(params?: { gatewayMode?: "local" | 
         password: { source: "env", provider: "default", id: "REMOTE_GATEWAY_PASSWORD" },
       },
     },
+  };
+}
+
+export function createUnreachableGatewayProbe(url: string, error: string): GatewayProbeResult {
+  return {
+    ok: false,
+    url,
+    connectLatencyMs: null,
+    error,
+    close: null,
+    auth: {
+      role: null,
+      scopes: [],
+      capability: "unknown",
+    },
+    health: null,
+    status: null,
+    presence: null,
+    configSnapshot: null,
   };
 }

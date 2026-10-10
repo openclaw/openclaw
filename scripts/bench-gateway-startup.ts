@@ -1,87 +1,97 @@
-import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { request } from "node:http";
-import { createServer } from "node:net";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { once } from "node:events";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
-import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
+import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
+import { delay, stopChild } from "./lib/gateway-bench-child.ts";
+import { getFreePort, readProcessRssMb, readProcessTreeCpuMs } from "./lib/gateway-bench-probes.ts";
+import {
+  BASE_GATEWAY_BENCH_CONFIG,
+  buildGatewayBenchChildArgs,
+  buildGatewayBenchCommand,
+  classifyGatewayReadyLog,
+  CliArgumentError,
+  collectOutputLines,
+  collectTraceLine,
+  createGatewayBenchEnv,
+  flushOutputLineBuffers,
+  formatMb,
+  formatMs,
+  formatStats,
+  hasHelpFlag,
+  parseGatewayBenchRuntimeOptions,
+  parseNonNegativeInt,
+  parsePositiveInt,
+  resolveCases as resolveGatewayBenchCases,
+  resolveEntry as resolveGatewayBenchEntry,
+  resolveOutputPath,
+  STALLED_CATALOG_MODEL_ID,
+  STALLED_CATALOG_PROVIDER_ID,
+  summarizeNumbers,
+  summarizeTraceStats,
+  type InitialProbeResult,
+  type GatewayBenchRuntimeOptions,
+  parseCliArgs,
+  writeGatewayBenchConfig,
+  writePluginFixtures,
+  waitForInitialProbe as waitForProbe,
+} from "./lib/gateway-bench-runtime.ts";
+import { selectSlowStartupTraceDurations } from "./lib/gateway-startup-trace-ranking.js";
 
 type GatewayBenchCase = {
+  agentTopology?: "incident-scale" | "single" | "shared-eleven-plus-distinct-one";
+  completionTracePhase?: string;
   config: Record<string, unknown>;
   env?: Record<string, string>;
   id: string;
+  incidentFixture?: "combined" | "database" | "null-metadata" | "packaged-plugins" | "workspace";
   name: string;
   pluginActivationOnStartup?: boolean;
   pluginCount?: number;
-};
-
-type ProbeResult = {
-  firstErrorKind: string | null;
-  firstRecoveryMs: number | null;
-  ms: number | null;
-  status: number | null;
-  transitions: ProbeTransition[];
-};
-
-type ProbeTransition = {
-  errorKind?: string;
-  ms: number;
-  status: number | null;
+  providerCatalogStallMs?: number;
+  providerStaticCatalogModelCount?: number;
+  providerStaticCatalogStallMs?: number;
+  runByDefault?: boolean;
 };
 
 type GatewaySample = {
+  completionMs: number | null;
   cpuCoreRatio: number | null;
   cpuMs: number | null;
+  exitedBeforeTeardown?: boolean;
   exitCode: number | null;
   firstOutputMs: number | null;
   gatewayReadyLogLine: string | null;
   gatewayReadyLogMs: number | null;
-  healthz: ProbeResult;
+  healthz: InitialProbeResult;
   httpListenLogLine: string | null;
   httpListenLogMs: number | null;
   maxRssMb: number | null;
   outputTail: string;
-  readyz: ProbeResult;
+  readyz: InitialProbeResult;
   signal: string | null;
   startupTrace: Record<string, number>;
 };
 
-type SummaryStats = {
-  avg: number;
-  max: number;
-  min: number;
-  p50: number;
-  p95: number;
-};
+type CaseResult = ReturnType<typeof summarizeCase>;
 
-type CaseResult = {
+type BenchmarkFailure = {
   id: string;
-  name: string;
-  samples: GatewaySample[];
-  summary: {
-    firstOutputMs: SummaryStats | null;
-    cpuCoreRatio: SummaryStats | null;
-    cpuMs: SummaryStats | null;
-    gatewayReadyLogMs: SummaryStats | null;
-    healthzMs: SummaryStats | null;
-    httpListenLogMs: SummaryStats | null;
-    maxRssMb: SummaryStats | null;
-    readyzMs: SummaryStats | null;
-    startupTrace: Record<string, SummaryStats>;
-  };
+  reason: string;
+  sampleIndex: number;
 };
 
-type PluginFixtureResult = {
-  pluginIds: string[];
-  pluginsDir: string;
-};
-
-type CliOptions = {
+type CliOptions = GatewayBenchRuntimeOptions & {
   cases: GatewayBenchCase[];
   cpuProfDir?: string;
   entry: string;
+  heapProfDir?: string;
+  installedCohort?: string;
+  installedChild: boolean;
+  installedCpuDiagnostic: boolean;
   json: boolean;
   output?: string;
   runs: number;
@@ -93,23 +103,64 @@ const DEFAULT_RUNS = 5;
 const DEFAULT_WARMUP = 1;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_ENTRY = "dist/entry.js";
+const INCIDENT_COMBINED_HEALTHZ_P95_MAX_MS = 30_000;
+const INCIDENT_COMBINED_READYZ_P95_MAX_MS = 60_000;
+const BOOLEAN_FLAGS = new Set([
+  "--help",
+  "-h",
+  "--json",
+  "--installed-child",
+  "--installed-cpu-diagnostic",
+]);
+const VALUE_FLAGS = new Set([
+  "--case",
+  "--cpu-prof-dir",
+  "--entry",
+  "--gateway-runtime",
+  "--gateway-cpus",
+  "--heap-prof-dir",
+  "--installed-cohort",
+  "--output",
+  "--runs",
+  "--timeout-ms",
+  "--warmup",
+]);
 
-const BASE_CONFIG = {
-  browser: { enabled: false },
-  gateway: {
-    mode: "local",
-    bind: "loopback",
-    auth: { mode: "none" },
-    controlUi: { enabled: false },
-    tailscale: { mode: "off" },
-  },
-  plugins: {
-    enabled: true,
-    entries: {
-      browser: { enabled: false },
+const BASE_CONFIG = BASE_GATEWAY_BENCH_CONFIG;
+const LARGE_PLUGIN_MODEL_AGENT_COUNT = 256;
+const LARGE_PLUGIN_MODEL_COUNT = 58;
+const LARGE_PLUGIN_MODEL_PROVIDER_IDS = ["openai", "google", "minimax"] as const;
+
+function buildLargePluginModelAgentEntries() {
+  const model = {
+    primary: `${LARGE_PLUGIN_MODEL_PROVIDER_IDS[0]}/model-01`,
+    fallbacks: Array.from({ length: LARGE_PLUGIN_MODEL_COUNT - 1 }, (_, offset) => {
+      const index = offset + 1;
+      const provider = LARGE_PLUGIN_MODEL_PROVIDER_IDS[index % 3];
+      return `${provider}/model-${String(index + 1).padStart(2, "0")}`;
+    }),
+  };
+  return Object.fromEntries(
+    Array.from({ length: LARGE_PLUGIN_MODEL_AGENT_COUNT }, (_, index) => [
+      `agent-${String(index + 1).padStart(4, "0")}`,
+      { model },
+    ]),
+  );
+}
+
+function preparedRuntimeConfig(): Record<string, unknown> {
+  const model = `${STALLED_CATALOG_PROVIDER_ID}/${STALLED_CATALOG_MODEL_ID}`;
+  return {
+    ...BASE_CONFIG,
+    agents: {
+      defaults: {
+        model: { primary: model },
+        modelPolicy: { allow: [model] },
+        models: { [model]: { agentRuntime: { id: "openclaw" } } },
+      },
     },
-  },
-} satisfies Record<string, unknown>;
+  };
+}
 
 const GATEWAY_CASES: readonly GatewayBenchCase[] = [
   {
@@ -122,6 +173,33 @@ const GATEWAY_CASES: readonly GatewayBenchCase[] = [
     name: "gateway, skip channels",
     env: { OPENCLAW_SKIP_CHANNELS: "1" },
     config: BASE_CONFIG,
+  },
+  {
+    id: "preparedRuntimeCatalogStall",
+    name: "gateway, prepared runtime with CPU-stalling live catalog",
+    env: { OPENCLAW_SKIP_CHANNELS: "1" },
+    providerCatalogStallMs: 2_000,
+    config: preparedRuntimeConfig(),
+  },
+  {
+    id: "preparedRuntimeScaleOne",
+    name: "gateway, prepared runtime scale with one agent",
+    agentTopology: "single",
+    completionTracePhase: "sidecars.ready",
+    env: { OPENCLAW_SKIP_CHANNELS: "1" },
+    providerStaticCatalogModelCount: 64,
+    providerStaticCatalogStallMs: 100,
+    config: preparedRuntimeConfig(),
+  },
+  {
+    id: "preparedRuntimeScaleMany",
+    name: "gateway, prepared runtime scale with 11 shared-workspace agents and one distinct",
+    agentTopology: "shared-eleven-plus-distinct-one",
+    completionTracePhase: "sidecars.ready",
+    env: { OPENCLAW_SKIP_CHANNELS: "1" },
+    providerStaticCatalogModelCount: 64,
+    providerStaticCatalogStallMs: 100,
+    config: preparedRuntimeConfig(),
   },
   {
     id: "oneInternalHook",
@@ -167,88 +245,122 @@ const GATEWAY_CASES: readonly GatewayBenchCase[] = [
     pluginCount: 50,
     config: BASE_CONFIG,
   },
+  {
+    id: "largePluginModelConfig",
+    name: `gateway, ${LARGE_PLUGIN_MODEL_AGENT_COUNT} agents with ${LARGE_PLUGIN_MODEL_COUNT} plugin-owned model refs each`,
+    completionTracePhase: "config.snapshot.auto-enable",
+    env: { OPENCLAW_SKIP_CHANNELS: "1" },
+    runByDefault: false,
+    config: {
+      ...BASE_CONFIG,
+      agents: {
+        ownership: "explicit",
+        entries: buildLargePluginModelAgentEntries(),
+      },
+      plugins: {
+        enabled: true,
+        allow: [...LARGE_PLUGIN_MODEL_PROVIDER_IDS],
+      },
+    },
+  },
+  {
+    id: "incidentDatabase",
+    name: "gateway, incident-scale database",
+    incidentFixture: "database",
+    runByDefault: false,
+    config: BASE_CONFIG,
+  },
+  {
+    id: "incidentNullMetadata",
+    name: "gateway, incident-scale NULL metadata repair",
+    incidentFixture: "null-metadata",
+    runByDefault: false,
+    config: BASE_CONFIG,
+  },
+  {
+    id: "incidentWorkspace",
+    name: "gateway, incident-scale workspace",
+    agentTopology: "incident-scale",
+    incidentFixture: "workspace",
+    runByDefault: false,
+    config: BASE_CONFIG,
+  },
+  {
+    id: "incidentPackagedPlugins",
+    name: "gateway, packaged plugin inventory",
+    env: { OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1" },
+    incidentFixture: "packaged-plugins",
+    runByDefault: false,
+    config: BASE_CONFIG,
+  },
+  {
+    id: "incidentCombined",
+    name: "gateway, incident-scale combined load",
+    agentTopology: "incident-scale",
+    env: { OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1" },
+    incidentFixture: "combined",
+    runByDefault: false,
+    config: BASE_CONFIG,
+  },
 ] as const;
 
-function parseFlagValue(flag: string): string | undefined {
-  const index = process.argv.indexOf(flag);
-  if (index === -1) {
-    return undefined;
-  }
-  return process.argv[index + 1];
-}
-
-function hasFlag(flag: string): boolean {
-  return process.argv.includes(flag);
-}
-
-function hasHelpFlag(): boolean {
-  return hasFlag("--help") || hasFlag("-h");
-}
-
-function parseRepeatableFlag(flag: string): string[] {
-  const values: string[] = [];
-  for (let index = 0; index < process.argv.length; index += 1) {
-    if (process.argv[index] === flag && process.argv[index + 1]) {
-      values.push(process.argv[index + 1]);
-    }
-  }
-  return values;
-}
-
-function parsePositiveInt(raw: string | undefined, fallback: number, label: string): number {
-  return parseStrictIntegerOption({ fallback, label, min: 1, raw });
-}
-
-function parseNonNegativeInt(raw: string | undefined, fallback: number, label: string): number {
-  return parseStrictIntegerOption({ fallback, label, min: 0, raw });
-}
-
-function resolveEntry(raw: string | undefined): string {
-  const entry = raw?.trim() || DEFAULT_ENTRY;
-  if (entry.includes("\0")) {
-    throw new Error("--entry must not contain NUL bytes");
-  }
-  if (entry.startsWith("-")) {
-    throw new Error(`--entry must be a file path, not a Node option: ${JSON.stringify(entry)}`);
-  }
-  return entry;
-}
-
-function resolveOutputPath(raw: string | undefined): string | undefined {
-  const output = raw?.trim();
-  if (!output) {
-    return undefined;
-  }
-  if (output.includes("\0")) {
-    throw new Error("--output must not contain NUL bytes");
-  }
-  return output;
-}
-
 function resolveCases(caseIds: string[]): GatewayBenchCase[] {
-  if (caseIds.length === 0) {
-    return [...GATEWAY_CASES];
-  }
-  const byId = new Map(GATEWAY_CASES.map((benchCase) => [benchCase.id, benchCase]));
-  return caseIds.map((id) => {
-    const benchCase = byId.get(id);
-    if (!benchCase) {
-      throw new Error(`Unknown --case "${id}"`);
-    }
-    return benchCase;
+  const defaultCases = GATEWAY_CASES.filter((benchCase) => benchCase.runByDefault !== false);
+  return resolveGatewayBenchCases(caseIds, caseIds.length === 0 ? defaultCases : GATEWAY_CASES, {
+    allByDefault: true,
+    validateDuplicatesFirst: true,
   });
 }
 
-function parseOptions(): CliOptions {
+function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
+  const flags = parseCliArgs(argv, {
+    booleanFlags: BOOLEAN_FLAGS,
+    repeatableValueFlags: new Set(["--case"]),
+    valueFlags: VALUE_FLAGS,
+  });
+  const installedCohort = flags.get("--installed-cohort")?.[0];
+  const installedChild = flags.has("--installed-child");
+  const installedCpuDiagnostic = flags.has("--installed-cpu-diagnostic");
+  if (installedChild && !installedCohort) {
+    throw new CliArgumentError("--installed-child requires --installed-cohort");
+  }
+  if (installedCpuDiagnostic && !installedCohort) {
+    throw new CliArgumentError("--installed-cpu-diagnostic requires --installed-cohort");
+  }
+  if (installedCohort) {
+    for (const flag of [
+      "--case",
+      "--entry",
+      "--gateway-runtime",
+      "--gateway-cpus",
+      "--runs",
+      "--warmup",
+      "--cpu-prof-dir",
+      "--heap-prof-dir",
+      "--timeout-ms",
+    ]) {
+      if (argv.includes(flag)) {
+        throw new CliArgumentError(`${flag} is not supported with --installed-cohort`);
+      }
+    }
+    if (!flags.get("--output")?.[0]) {
+      throw new CliArgumentError("--installed-cohort requires --output");
+    }
+  }
   return {
-    cases: resolveCases(parseRepeatableFlag("--case")),
-    cpuProfDir: parseFlagValue("--cpu-prof-dir"),
-    entry: resolveEntry(parseFlagValue("--entry")),
-    json: hasFlag("--json"),
-    output: resolveOutputPath(parseFlagValue("--output")),
-    runs: parsePositiveInt(parseFlagValue("--runs"), DEFAULT_RUNS, "--runs"),
-    timeoutMs: parsePositiveInt(parseFlagValue("--timeout-ms"), DEFAULT_TIMEOUT_MS, "--timeout-ms"),
-    warmup: parseNonNegativeInt(parseFlagValue("--warmup"), DEFAULT_WARMUP, "--warmup"),
+    ...parseGatewayBenchRuntimeOptions(flags),
+    cases: installedCohort ? [] : resolveCases(flags.get("--case") ?? []),
+    cpuProfDir: flags.get("--cpu-prof-dir")?.[0],
+    entry: resolveGatewayBenchEntry(flags.get("--entry")?.[0], DEFAULT_ENTRY),
+    heapProfDir: flags.get("--heap-prof-dir")?.[0],
+    installedCohort,
+    installedChild,
+    installedCpuDiagnostic,
+    json: flags.has("--json"),
+    output: resolveOutputPath(flags.get("--output")?.[0]),
+    runs: parsePositiveInt(flags.get("--runs")?.[0], DEFAULT_RUNS, "--runs"),
+    timeoutMs: parsePositiveInt(flags.get("--timeout-ms")?.[0], DEFAULT_TIMEOUT_MS, "--timeout-ms"),
+    warmup: parseNonNegativeInt(flags.get("--warmup")?.[0], DEFAULT_WARMUP, "--warmup"),
   };
 }
 
@@ -262,10 +374,15 @@ Usage:
 Options:
   --case <id>          Specific case id to run; repeatable
   --entry <path>       Gateway CLI entry file (default: ${DEFAULT_ENTRY})
+  --gateway-runtime <path> Gateway executable (default: the benchmark runtime)
+  --gateway-cpus <list> Linux Gateway-only CPU affinity (comma-separated CPU numbers)
   --runs <n>           Measured runs per case (default: ${DEFAULT_RUNS})
   --warmup <n>         Warmup runs per case (default: ${DEFAULT_WARMUP})
   --timeout-ms <ms>    Per-run timeout (default: ${DEFAULT_TIMEOUT_MS})
   --cpu-prof-dir <dir> Write one V8 CPU profile per run
+  --heap-prof-dir <dir> Write one V8 heap profile per run
+  --installed-cohort <path> Measure one fresh installed startup and eight retained-state restarts
+  --installed-cpu-diagnostic Profile one established startup after an unprofiled fresh prime; requires --installed-cohort
   --output <path>      Write machine-readable JSON to a file
   --json               Emit machine-readable JSON
   --help, -h           Show this text
@@ -275,115 +392,105 @@ Case ids:
 `);
 }
 
-function median(values: number[]): number {
-  const sorted = [...values].toSorted((a, b) => a - b);
-  const middle = Math.floor(sorted.length / 2);
-  if (sorted.length % 2 === 0) {
-    return (sorted[middle - 1] + sorted[middle]) / 2;
-  }
-  return sorted[middle] ?? 0;
-}
-
-function percentile(values: number[], p: number): number {
-  const sorted = [...values].toSorted((a, b) => a - b);
-  const index = Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length));
-  return sorted[index] ?? 0;
-}
-
-function summarizeNumbers(values: number[]): SummaryStats | null {
-  if (values.length === 0) {
-    return null;
-  }
-  const total = values.reduce((sum, value) => sum + value, 0);
-  return {
-    avg: total / values.length,
-    max: Math.max(...values),
-    min: Math.min(...values),
-    p50: median(values),
-    p95: percentile(values, 95),
-  };
-}
-
-function summarizeCase(benchCase: GatewayBenchCase, samples: GatewaySample[]): CaseResult {
-  const startupTraceKeys = new Set<string>();
-  for (const sample of samples) {
-    for (const key of Object.keys(sample.startupTrace)) {
-      startupTraceKeys.add(key);
-    }
-  }
-  const startupTrace: Record<string, SummaryStats> = {};
-  for (const key of [...startupTraceKeys].toSorted()) {
-    const stats = summarizeNumbers(
-      samples
-        .map((sample) => sample.startupTrace[key])
-        .filter((value): value is number => typeof value === "number"),
+function summarizeCase(benchCase: GatewayBenchCase, samples: GatewaySample[]) {
+  const startupTrace = summarizeTraceStats(samples, (sample) => sample.startupTrace);
+  const summarize = (read: (sample: GatewaySample) => number | null) =>
+    summarizeNumbers(
+      samples.map(read).filter((value): value is number => typeof value === "number"),
     );
-    if (stats) {
-      startupTrace[key] = stats;
-    }
-  }
   return {
     id: benchCase.id,
     name: benchCase.name,
     samples,
     summary: {
-      firstOutputMs: summarizeNumbers(
-        samples
-          .map((sample) => sample.firstOutputMs)
-          .filter((value): value is number => typeof value === "number"),
-      ),
-      cpuCoreRatio: summarizeNumbers(
-        samples
-          .map((sample) => sample.cpuCoreRatio)
-          .filter((value): value is number => typeof value === "number"),
-      ),
-      cpuMs: summarizeNumbers(
-        samples
-          .map((sample) => sample.cpuMs)
-          .filter((value): value is number => typeof value === "number"),
-      ),
-      gatewayReadyLogMs: summarizeNumbers(
-        samples
-          .map((sample) => sample.gatewayReadyLogMs)
-          .filter((value): value is number => typeof value === "number"),
-      ),
-      healthzMs: summarizeNumbers(
-        samples
-          .map((sample) => sample.healthz.ms)
-          .filter((value): value is number => typeof value === "number"),
-      ),
-      httpListenLogMs: summarizeNumbers(
-        samples
-          .map((sample) => sample.httpListenLogMs)
-          .filter((value): value is number => typeof value === "number"),
-      ),
-      maxRssMb: summarizeNumbers(
-        samples
-          .map((sample) => sample.maxRssMb)
-          .filter((value): value is number => typeof value === "number"),
-      ),
-      readyzMs: summarizeNumbers(
-        samples
-          .map((sample) => sample.readyz.ms)
-          .filter((value): value is number => typeof value === "number"),
-      ),
+      completionMs: summarize((sample) => sample.completionMs),
+      firstOutputMs: summarize((sample) => sample.firstOutputMs),
+      cpuCoreRatio: summarize((sample) => sample.cpuCoreRatio),
+      cpuMs: summarize((sample) => sample.cpuMs),
+      gatewayReadyLogMs: summarize((sample) => sample.gatewayReadyLogMs),
+      healthzMs: summarize((sample) => sample.healthz.ms),
+      httpListenLogMs: summarize((sample) => sample.httpListenLogMs),
+      maxRssMb: summarize((sample) => sample.maxRssMb),
+      readyzMs: summarize((sample) => sample.readyz.ms),
       startupTrace,
     },
   };
 }
 
-function formatMs(value: number | null): string {
-  if (value == null) {
-    return "n/a";
+function collectResultFailures(results: CaseResult[]): BenchmarkFailure[] {
+  const failures: BenchmarkFailure[] = [];
+  for (const result of results) {
+    result.samples.forEach((sample, index) => {
+      const missing: string[] = [];
+      if (sample.healthz.status !== 200 || sample.healthz.ms == null) {
+        missing.push("/healthz");
+      }
+      if (sample.readyz.status !== 200 || sample.readyz.ms == null) {
+        missing.push("/readyz");
+      }
+      if (sample.completionMs == null) {
+        missing.push("completion");
+      }
+      if (sample.cpuMs == null || sample.cpuCoreRatio == null) {
+        missing.push("cpu");
+      }
+      if (sample.maxRssMb == null) {
+        missing.push("rss");
+      }
+      if (missing.length > 0) {
+        failures.push({
+          id: result.id,
+          reason: `missing ${missing.join(", ")}`,
+          sampleIndex: index + 1,
+        });
+        return;
+      }
+      if (sample.exitedBeforeTeardown === true) {
+        failures.push({
+          id: result.id,
+          reason:
+            sample.signal == null
+              ? `child exited ${sample.exitCode ?? "before teardown"}`
+              : `child exited by ${sample.signal}`,
+          sampleIndex: index + 1,
+        });
+      }
+    });
+    if (result.id !== "incidentCombined") {
+      continue;
+    }
+    for (const [probe, stats, limit] of [
+      ["/healthz", result.summary.healthzMs, INCIDENT_COMBINED_HEALTHZ_P95_MAX_MS],
+      ["/readyz", result.summary.readyzMs, INCIDENT_COMBINED_READYZ_P95_MAX_MS],
+    ] as const) {
+      const p95 = stats?.p95;
+      if (p95 == null || p95 >= limit) {
+        failures.push({
+          id: result.id,
+          reason: `${probe} p95 ${p95 == null ? "missing" : formatMs(p95)} must be under ${formatMs(limit)}`,
+          sampleIndex: 0,
+        });
+      }
+    }
   }
-  return `${value.toFixed(1)}ms`;
+  return failures;
 }
 
-function formatMb(value: number | null): string {
-  if (value == null) {
-    return "n/a";
+function printBenchmarkFailures(failures: BenchmarkFailure[]): void {
+  if (failures.length === 0) {
+    return;
   }
-  return `${value.toFixed(1)}MB`;
+  console.error(
+    `[gateway-startup-bench] failed: ${failures.length} sample(s) did not produce ready probes or process metrics`,
+  );
+  for (const failure of failures.slice(0, 8)) {
+    console.error(
+      `[gateway-startup-bench] ${failure.id} ${failure.sampleIndex ? `run ${failure.sampleIndex}` : "summary"}: ${failure.reason}`,
+    );
+  }
+  if (failures.length > 8) {
+    console.error(`[gateway-startup-bench] ${failures.length - 8} more sample failure(s) omitted`);
+  }
 }
 
 function formatRatio(value: number | null): string {
@@ -393,553 +500,415 @@ function formatRatio(value: number | null): string {
   return value.toFixed(3);
 }
 
-function formatStats(stats: SummaryStats | null): string {
-  if (!stats) {
-    return "n/a";
-  }
-  return `p50=${formatMs(stats.p50)} avg=${formatMs(stats.avg)} min=${formatMs(stats.min)} max=${formatMs(stats.max)}`;
-}
-
-function formatMemoryStats(stats: SummaryStats | null): string {
-  if (!stats) {
-    return "n/a";
-  }
-  return `p50=${formatMb(stats.p50)} avg=${formatMb(stats.avg)} min=${formatMb(stats.min)} max=${formatMb(stats.max)}`;
-}
-
-function formatRatioStats(stats: SummaryStats | null): string {
-  if (!stats) {
-    return "n/a";
-  }
-  return `p50=${formatRatio(stats.p50)} avg=${formatRatio(stats.avg)} min=${formatRatio(stats.min)} max=${formatRatio(stats.max)}`;
-}
-
-function getStartupTraceStat(
-  startupTrace: Record<string, SummaryStats>,
-  key: string,
-): SummaryStats | null {
-  return startupTrace[key] ?? null;
-}
-
-async function getFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = createServer();
-    server.on("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        server.close(() => reject(new Error("failed to allocate port")));
-        return;
-      }
-      const { port } = address;
-      server.close(() => resolve(port));
-    });
-  });
-}
-
-async function waitForProbe(params: {
+async function waitForStartupTracePhase(params: {
   deadlineAt: number;
-  isDone?: () => boolean;
-  path: string;
-  port: number;
-  startAt: number;
-}): Promise<ProbeResult> {
-  let firstErrorKind: string | null = null;
-  let firstRecoveryMs: number | null = null;
-  let lastStatus: number | null = null;
-  let lastStateKey: string | null = null;
-  let sawUnreadyState = false;
-  const transitions: ProbeTransition[] = [];
+  isDone: () => boolean;
+  phase: string;
+  startupTrace: Record<string, number>;
+}): Promise<number | null> {
+  const totalKey = `${params.phase}.total`;
   while (performance.now() < params.deadlineAt) {
-    if (params.isDone?.()) {
-      break;
+    if (Object.hasOwn(params.startupTrace, totalKey)) {
+      return params.startupTrace[totalKey] ?? null;
     }
-    const attempt = await requestProbeStatus(params.port, params.path);
-    const now = performance.now();
-    const elapsedMs = now - params.startAt;
-    lastStatus = attempt.status;
-    const stateKey = `${attempt.status ?? "none"}:${attempt.errorKind ?? "ok"}`;
-    if (stateKey !== lastStateKey) {
-      transitions.push({
-        ms: elapsedMs,
-        status: attempt.status,
-        ...(attempt.errorKind ? { errorKind: attempt.errorKind } : {}),
-      });
-      lastStateKey = stateKey;
-    }
-    if (attempt.errorKind && firstErrorKind == null) {
-      firstErrorKind = attempt.errorKind;
-    }
-    if (attempt.status !== 200) {
-      sawUnreadyState = true;
-    }
-    if (attempt.status === 200) {
-      if (sawUnreadyState && firstRecoveryMs == null) {
-        firstRecoveryMs = elapsedMs;
-      }
-      return {
-        firstErrorKind,
-        firstRecoveryMs,
-        ms: elapsedMs,
-        status: attempt.status,
-        transitions,
-      };
+    if (params.isDone()) {
+      return null;
     }
     await delay(25);
   }
-  return { firstErrorKind, firstRecoveryMs, ms: null, status: lastStatus, transitions };
+  return null;
 }
 
-async function requestProbeStatus(
-  port: number,
-  pathname: string,
-): Promise<{ errorKind: string | null; status: number | null }> {
-  try {
-    const status = await requestStatus(port, pathname);
-    return {
-      errorKind: status === 200 ? null : `http-${status}`,
-      status,
-    };
-  } catch (error) {
-    return {
-      errorKind: classifyProbeErrorKind(error),
-      status: null,
-    };
+function buildBenchAgentList(
+  root: string,
+  topology: GatewayBenchCase["agentTopology"],
+): Array<{ id: string; workspace: string }> | undefined {
+  if (!topology) {
+    return undefined;
   }
-}
-
-function classifyProbeErrorKind(error: unknown): string {
-  if (typeof error === "object" && error !== null) {
-    const code = (error as { code?: unknown }).code;
-    if (typeof code === "string" && code.trim()) {
-      return code.trim().toLowerCase();
-    }
-    const message = (error as { message?: unknown }).message;
-    if (typeof message === "string" && message.toLowerCase().includes("probe timeout")) {
-      return "timeout";
-    }
-    const name = (error as { name?: unknown }).name;
-    if (typeof name === "string" && name.trim()) {
-      return name.trim().toLowerCase();
-    }
+  const sharedWorkspace = path.join(root, "shared-workspace");
+  const distinctWorkspace = path.join(root, "distinct-workspace");
+  mkdirSync(sharedWorkspace, { recursive: true });
+  if (topology === "single") {
+    return [{ id: "main", workspace: sharedWorkspace }];
   }
-  return "error";
+  if (topology === "incident-scale") {
+    return Array.from({ length: 8 }, (_, index) => ({
+      id: `incident-agent-${String(index + 1).padStart(2, "0")}`,
+      workspace: path.join(root, "workspaces", `agent-${String(index + 1).padStart(2, "0")}`),
+    }));
+  }
+  mkdirSync(distinctWorkspace, { recursive: true });
+  return Array.from({ length: 12 }, (_, index) => ({
+    id: `agent-${String(index + 1).padStart(2, "0")}`,
+    workspace: index === 11 ? distinctWorkspace : sharedWorkspace,
+  }));
 }
 
-function requestStatus(port: number, pathname: string): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const req = request(
-      { host: "127.0.0.1", method: "GET", path: pathname, port, timeout: 100 },
-      (res) => {
-        res.resume();
-        res.on("end", () => resolve(res.statusCode ?? 0));
-      },
-    );
-    req.on("error", reject);
-    req.on("timeout", () => {
-      req.destroy(new Error("probe timeout"));
-    });
-    req.end();
+const INCIDENT_AUDIT_ROW_COUNT = 200_000;
+const INCIDENT_WORKSPACE_FILE_BYTES = 10 * 1024;
+const INCIDENT_WORKSPACE_FILE_COUNT = 80_000;
+const INCIDENT_WORKSPACE_COUNT = 8;
+const INCIDENT_WORKSPACE_FILES_PER_DIRECTORY = 1_000;
+
+type IncidentFixtureOptions = {
+  auditRowCount?: number;
+  kind: NonNullable<GatewayBenchCase["incidentFixture"]>;
+  workspaceFileBytes?: number;
+  workspaceFileCount?: number;
+};
+
+function fixtureIncludesDatabase(kind: IncidentFixtureOptions["kind"]): boolean {
+  return kind === "combined" || kind === "database" || kind === "null-metadata";
+}
+
+function fixtureIncludesWorkspace(kind: IncidentFixtureOptions["kind"]): boolean {
+  return kind === "combined" || kind === "workspace";
+}
+
+function fixtureIncludesNullMetadata(kind: IncidentFixtureOptions["kind"]): boolean {
+  return kind === "combined" || kind === "null-metadata";
+}
+
+function fixtureIncludesPackagedPlugins(kind: IncidentFixtureOptions["kind"]): boolean {
+  return kind === "combined" || kind === "packaged-plugins";
+}
+
+function listIncidentPackagedPluginArtifacts(env = process.env): string[] {
+  return listBundledPluginPackArtifacts({
+    env: { ...env, OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: undefined },
   });
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function writePluginFixtures(
-  root: string,
-  count: number,
-  activationOnStartup?: boolean,
-): PluginFixtureResult {
-  const pluginIds: string[] = [];
-  const pluginsDir = path.join(root, "plugins");
-  mkdirSync(pluginsDir, { recursive: true });
-  for (let index = 0; index < count; index += 1) {
-    const id = `bench-plugin-${String(index + 1).padStart(2, "0")}`;
-    pluginIds.push(id);
-    const pluginDir = path.join(pluginsDir, id);
-    mkdirSync(pluginDir, { recursive: true });
-    const entry = path.join(pluginDir, "index.cjs");
-    writeFileSync(entry, `module.exports = { id: ${JSON.stringify(id)}, register() {} };\n`);
-    writeFileSync(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      `${JSON.stringify(
-        {
-          id,
-          ...(activationOnStartup === undefined
-            ? {}
-            : { activation: { onStartup: activationOnStartup } }),
-          configSchema: { type: "object", additionalProperties: false },
-        },
-        null,
-        2,
-      )}\n`,
+function assertIncidentPackagedPluginInventory(): void {
+  const missing = listIncidentPackagedPluginArtifacts().filter(
+    (artifact) => !existsSync(path.resolve(process.cwd(), artifact)),
+  );
+  if (missing.length > 0) {
+    throw new Error(
+      `Incident packaged-plugin benchmark requires a built plugin inventory; ${missing.length} required artifact(s) are missing. Run pnpm build first.`,
     );
   }
-  return { pluginIds, pluginsDir };
+}
+
+function createIncidentWorkspaces(root: string, options: IncidentFixtureOptions): void {
+  if (!fixtureIncludesWorkspace(options.kind)) {
+    return;
+  }
+  const fileCount = options.workspaceFileCount ?? INCIDENT_WORKSPACE_FILE_COUNT;
+  const fileBytes = options.workspaceFileBytes ?? INCIDENT_WORKSPACE_FILE_BYTES;
+  const contents = Buffer.alloc(fileBytes, "x");
+  for (let index = 0; index < fileCount; index += 1) {
+    const workspaceIndex = index % INCIDENT_WORKSPACE_COUNT;
+    const directoryIndex = Math.floor(index / INCIDENT_WORKSPACE_FILES_PER_DIRECTORY);
+    const directory = path.join(
+      root,
+      "workspaces",
+      `agent-${String(workspaceIndex + 1).padStart(2, "0")}`,
+      "incident-artifacts",
+      `batch-${String(directoryIndex).padStart(3, "0")}`,
+    );
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(path.join(directory, `artifact-${String(index).padStart(6, "0")}.bin`), contents);
+  }
+}
+
+function seedIncidentAuditRows(database: import("node:sqlite").DatabaseSync, count: number): void {
+  const payload = `fixture:${"x".repeat(1024)}`;
+  const insert = database.prepare(
+    `INSERT INTO audit_events (
+       event_id, source_id, source_sequence, occurred_at, kind, action, status, actor_type,
+       actor_id, agent_id, session_key, run_id, channel, target_ref
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  database.exec("BEGIN IMMEDIATE;");
+  try {
+    for (let index = 0; index < count; index += 1) {
+      const id = `incident-audit-${String(index).padStart(8, "0")}`;
+      insert.run(
+        id,
+        `source-${id}`,
+        index + 1,
+        1_750_000_000_000 + index,
+        "gateway.admission",
+        "accepted",
+        "ok",
+        "system",
+        "incident-fixture",
+        "incident-agent-01",
+        "agent:incident-agent-01:main",
+        `run-${id}`,
+        "fixture",
+        payload,
+      );
+    }
+    database.exec("COMMIT;");
+  } catch (error) {
+    database.exec("ROLLBACK;");
+    throw error;
+  }
+  // Retain half the rows after a large write so the fixture keeps the incident's
+  // high freelist pressure without storing any customer content.
+  database.prepare("DELETE FROM audit_events WHERE source_sequence % 2 = 0").run();
+}
+
+async function writeIncidentFixture(root: string, options: IncidentFixtureOptions): Promise<void> {
+  createIncidentWorkspaces(root, options);
+  if (!fixtureIncludesDatabase(options.kind)) {
+    return;
+  }
+  const env = { OPENCLAW_STATE_DIR: path.join(root, "state") };
+  const [{ DatabaseSync }, agentDatabase, stateDatabase] = await Promise.all([
+    import("node:sqlite"),
+    import("../src/state/openclaw-agent-db.js"),
+    import("../src/state/openclaw-state-db.js"),
+  ]);
+  const state = stateDatabase.openOpenClawStateDatabase({ env });
+  const agents = Array.from({ length: INCIDENT_WORKSPACE_COUNT }, (_, index) =>
+    agentDatabase.openOpenClawAgentDatabase({
+      agentId: `incident-agent-${String(index + 1).padStart(2, "0")}`,
+      env,
+    }),
+  );
+  const statePath = state.path;
+  const agentPaths = agents.map((agent) => agent.path);
+  try {
+    state.db.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+    agents.forEach((agent) => agent.db.exec("PRAGMA wal_checkpoint(TRUNCATE);"));
+  } finally {
+    agentDatabase.closeOpenClawAgentDatabasesForTest();
+    stateDatabase.closeOpenClawStateDatabaseForTest();
+  }
+  const stateHandle = new DatabaseSync(statePath);
+  try {
+    seedIncidentAuditRows(stateHandle, options.auditRowCount ?? INCIDENT_AUDIT_ROW_COUNT);
+    if (fixtureIncludesNullMetadata(options.kind)) {
+      stateHandle
+        .prepare("UPDATE schema_meta SET app_version = NULL WHERE meta_key = 'primary'")
+        .run();
+    }
+    stateHandle.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+  } finally {
+    stateHandle.close();
+  }
+  if (!fixtureIncludesNullMetadata(options.kind)) {
+    return;
+  }
+  for (const agentPath of agentPaths) {
+    const agent = new DatabaseSync(agentPath);
+    try {
+      agent.prepare("UPDATE schema_meta SET app_version = NULL WHERE meta_key = 'primary'").run();
+      agent.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+    } finally {
+      agent.close();
+    }
+  }
+}
+
+async function withGatewayBenchRoot<T>(run: (root: string) => Promise<T>): Promise<T> {
+  const root = mkdtempSync(path.join(tmpdir(), "openclaw-gateway-bench-"));
+  try {
+    return await run(root);
+  } finally {
+    rmSync(root, { force: true, maxRetries: 3, recursive: true, retryDelay: 100 });
+  }
 }
 
 function writeConfig(root: string, benchCase: GatewayBenchCase): string {
-  const pluginFixtures = benchCase.pluginCount
-    ? writePluginFixtures(root, benchCase.pluginCount, benchCase.pluginActivationOnStartup)
+  const hasCatalogFixture =
+    benchCase.providerCatalogStallMs !== undefined ||
+    benchCase.providerStaticCatalogStallMs !== undefined;
+  const pluginCount = hasCatalogFixture ? 1 : benchCase.pluginCount;
+  const pluginFixtures = pluginCount
+    ? writePluginFixtures(root, {
+        activationOnStartup: hasCatalogFixture ? true : benchCase.pluginActivationOnStartup,
+        count: pluginCount,
+        providerCatalogStallMs: benchCase.providerCatalogStallMs,
+        providerStaticCatalogModelCount: benchCase.providerStaticCatalogModelCount,
+        providerStaticCatalogStallMs: benchCase.providerStaticCatalogStallMs,
+      })
     : null;
-  const config = {
-    ...benchCase.config,
-    plugins: {
-      ...(benchCase.config.plugins as Record<string, unknown> | undefined),
-      ...(pluginFixtures
-        ? {
-            load: { paths: [pluginFixtures.pluginsDir] },
-            allow: pluginFixtures.pluginIds,
-          }
-        : {}),
-    },
-  };
-  const configPath = path.join(root, "openclaw.json");
-  writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
-  return configPath;
+  const agentList = buildBenchAgentList(root, benchCase.agentTopology);
+  return writeGatewayBenchConfig(root, benchCase.config, { agentList, pluginFixtures });
 }
 
-function sanitizedEnv(
-  root: string,
-  configPath: string,
-  benchCase: GatewayBenchCase,
-): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {
-    CI: process.env.CI ?? "1",
-    HOME: root,
-    LANG: process.env.LANG ?? "en_US.UTF-8",
-    LOGNAME: process.env.LOGNAME ?? "openclaw-bench",
-    NO_COLOR: "1",
-    PATH: process.env.PATH,
-    SHELL: process.env.SHELL,
-    TMPDIR: process.env.TMPDIR,
-    USER: process.env.USER ?? "openclaw-bench",
-    npm_config_update_notifier: "false",
-    OPENCLAW_CONFIG: configPath,
-    OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
-    OPENCLAW_HOME: root,
-    OPENCLAW_NO_RESPAWN: "1",
-    OPENCLAW_STATE_DIR: path.join(root, "state"),
-    OPENCLAW_TEST_DISABLE_UPDATE_CHECK: "1",
-    ...benchCase.env,
-  };
-  return env;
-}
-
-async function stopChild(child: ChildProcessWithoutNullStreams): Promise<{
-  exitCode: number | null;
-  signal: string | null;
-}> {
-  if (child.exitCode != null || child.signalCode != null) {
-    return { exitCode: child.exitCode, signal: child.signalCode };
-  }
-  const exited = new Promise<{ exitCode: number | null; signal: string | null }>((resolve) => {
-    child.once("exit", (exitCode, signal) => resolve({ exitCode, signal }));
-  });
-  killProcessTree(child, "SIGTERM");
-  const timeout = delay(2000).then(() => {
-    if (child.exitCode == null && child.signalCode == null) {
-      killProcessTree(child, "SIGKILL");
+async function runGatewaySample(
+  options: GatewayBenchRuntimeOptions & {
+    benchCase: GatewayBenchCase;
+    cpuProfDir?: string;
+    entry: string;
+    heapProfDir?: string;
+    sampleIndex: number;
+    timeoutMs: number;
+  },
+): Promise<GatewaySample> {
+  return await withGatewayBenchRoot(async (root) => {
+    const port = await getFreePort();
+    const configPath = writeConfig(root, options.benchCase);
+    const env = createGatewayBenchEnv(root, configPath, { caseEnv: options.benchCase.env });
+    if (options.benchCase.incidentFixture) {
+      await writeIncidentFixture(root, { kind: options.benchCase.incidentFixture });
+      if (fixtureIncludesPackagedPlugins(options.benchCase.incidentFixture)) {
+        assertIncidentPackagedPluginInventory();
+      }
     }
-    return exited;
-  });
-  return Promise.race([exited, timeout]);
-}
+    const startAt = performance.now();
+    const deadlineAt = startAt + options.timeoutMs;
+    const startupTrace: Record<string, number> = {};
+    const output: string[] = [];
+    const outputBuffers: Record<"stderr" | "stdout", string> = { stderr: "", stdout: "" };
+    let firstOutputMs: number | null = null;
+    let gatewayReadyLogLine: string | null = null;
+    let gatewayReadyLogMs: number | null = null;
+    let httpListenLogLine: string | null = null;
+    let httpListenLogMs: number | null = null;
+    let maxRssMb: number | null = null;
+    let childExited = false;
+    let child: ChildProcessWithoutNullStreams | undefined;
+    let rssTimer: ReturnType<typeof setInterval> | undefined;
 
-function killProcessTree(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
-  if (process.platform !== "win32" && child.pid !== undefined) {
     try {
-      process.kill(-child.pid, signal);
-      return;
-    } catch {
-      // Fall back to the direct child below.
-    }
-  }
-  child.kill(signal);
-}
-
-function collectStartupTrace(line: string, startupTrace: Record<string, number>): void {
-  const phaseMatch = /startup trace: ([^ ]+) ([0-9.]+)ms total=([0-9.]+)ms(?: (.*))?/u.exec(line);
-  if (phaseMatch) {
-    startupTrace[phaseMatch[1]] = Number(phaseMatch[2]);
-    startupTrace[`${phaseMatch[1]}.total`] = Number(phaseMatch[3]);
-    for (const metric of parseStartupTraceMetrics(phaseMatch[4] ?? "")) {
-      startupTrace[`${phaseMatch[1]}.${metric.key}`] = metric.value;
-    }
-    return;
-  }
-  const detailMatch = /startup trace: ([^ ]+) (.*)/u.exec(line);
-  if (!detailMatch) {
-    return;
-  }
-  for (const metric of parseStartupTraceMetrics(detailMatch[2])) {
-    startupTrace[`${detailMatch[1]}.${metric.key}`] = metric.value;
-  }
-}
-
-function classifyGatewayReadyLog(line: string): "gateway-ready" | "http-listen" | null {
-  if (line.includes("[gateway] http server listening (")) {
-    return "http-listen";
-  }
-  if (/\[gateway\] ready(?:\s*\(|\s*$)/.test(line)) {
-    return "gateway-ready";
-  }
-  return null;
-}
-
-function parseStartupTraceMetrics(raw: string): Array<{ key: string; value: number }> {
-  const metrics: Array<{ key: string; value: number }> = [];
-  for (const part of raw.trim().split(/\s+/u)) {
-    const metricMatch = /^([A-Za-z][A-Za-z0-9]*)=([0-9.]+)(?:ms)?$/u.exec(part);
-    if (!metricMatch) {
-      continue;
-    }
-    const key = metricMatch[1];
-    const value = Number(metricMatch[2]);
-    if (
-      !Number.isFinite(value) ||
-      (key !== "eventLoopMax" &&
-        !key.endsWith("Ms") &&
-        !key.endsWith("Mb") &&
-        !key.endsWith("Count"))
-    ) {
-      continue;
-    }
-    metrics.push({ key, value });
-  }
-  return metrics;
-}
-
-function readProcessRssMb(pid: number | undefined): number | null {
-  if (!pid || process.platform === "win32") {
-    return null;
-  }
-  const result = spawnSync("ps", ["-o", "rss=", "-p", String(pid)], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status !== 0) {
-    return null;
-  }
-  const rssKb = Number.parseInt(result.stdout.trim(), 10);
-  return Number.isFinite(rssKb) && rssKb > 0 ? rssKb / 1024 : null;
-}
-
-function parsePsCpuTimeMs(raw: string): number | null {
-  const parts = raw.trim().split(":").map(Number);
-  if (parts.some((part) => !Number.isFinite(part) || part < 0)) {
-    return null;
-  }
-  if (parts.length === 2) {
-    return Math.round((parts[0] * 60 + parts[1]) * 1000);
-  }
-  if (parts.length === 3) {
-    return Math.round((parts[0] * 60 * 60 + parts[1] * 60 + parts[2]) * 1000);
-  }
-  return null;
-}
-
-function readProcessTreeCpuMs(rootPid: number | undefined): number | null {
-  if (!rootPid || process.platform === "win32") {
-    return null;
-  }
-  const result = spawnSync("ps", ["-eo", "pid=,ppid=,time="], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status !== 0) {
-    return null;
-  }
-
-  const childrenByParent = new Map<number, number[]>();
-  const cpuByPid = new Map<number, number>();
-  for (const line of result.stdout.split("\n")) {
-    const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\S+)$/u);
-    if (!match) {
-      continue;
-    }
-    const pid = Number(match[1]);
-    const ppid = Number(match[2]);
-    const cpuMs = parsePsCpuTimeMs(match[3]);
-    if (!Number.isInteger(pid) || !Number.isInteger(ppid) || cpuMs === null) {
-      continue;
-    }
-    cpuByPid.set(pid, cpuMs);
-    const children = childrenByParent.get(ppid) ?? [];
-    children.push(pid);
-    childrenByParent.set(ppid, children);
-  }
-  if (!cpuByPid.has(rootPid)) {
-    return null;
-  }
-
-  let totalCpuMs = 0;
-  const seen = new Set<number>();
-  const stack = [rootPid];
-  while (stack.length > 0) {
-    const pid = stack.pop();
-    if (!pid || seen.has(pid)) {
-      continue;
-    }
-    seen.add(pid);
-    totalCpuMs += cpuByPid.get(pid) ?? 0;
-    for (const childPid of childrenByParent.get(pid) ?? []) {
-      stack.push(childPid);
-    }
-  }
-  return totalCpuMs;
-}
-
-async function runGatewaySample(options: {
-  benchCase: GatewayBenchCase;
-  cpuProfDir?: string;
-  entry: string;
-  sampleIndex: number;
-  timeoutMs: number;
-}): Promise<GatewaySample> {
-  const root = mkdtempSync(path.join(tmpdir(), "openclaw-gateway-bench-"));
-  const port = await getFreePort();
-  const configPath = writeConfig(root, options.benchCase);
-  const env = sanitizedEnv(root, configPath, options.benchCase);
-  const startAt = performance.now();
-  const deadlineAt = startAt + options.timeoutMs;
-  const startupTrace: Record<string, number> = {};
-  const output: string[] = [];
-  let firstOutputMs: number | null = null;
-  let gatewayReadyLogLine: string | null = null;
-  let gatewayReadyLogMs: number | null = null;
-  let httpListenLogLine: string | null = null;
-  let httpListenLogMs: number | null = null;
-  let maxRssMb: number | null = null;
-  let childExited = false;
-
-  const childArgs = [
-    ...(options.cpuProfDir
-      ? [
-          "--cpu-prof",
-          "--cpu-prof-dir",
-          options.cpuProfDir,
-          "--cpu-prof-name",
-          `openclaw-gateway-${options.benchCase.id}-${options.sampleIndex}-${Date.now()}.cpuprofile`,
-        ]
-      : []),
-    options.entry,
-    "gateway",
-    "run",
-    "--port",
-    String(port),
-    "--bind",
-    "loopback",
-    "--auth",
-    "none",
-    "--tailscale",
-    "off",
-    "--allow-unconfigured",
-  ];
-  const child = spawn(process.execPath, childArgs, {
-    cwd: process.cwd(),
-    detached: process.platform !== "win32",
-    env,
-  });
-  const cpuStartMs = readProcessTreeCpuMs(child.pid);
-  const sampleRss = () => {
-    const rssMb = readProcessRssMb(child.pid);
-    if (rssMb != null) {
-      maxRssMb = maxRssMb == null ? rssMb : Math.max(maxRssMb, rssMb);
-    }
-  };
-  sampleRss();
-  const rssTimer = setInterval(sampleRss, 100);
-  rssTimer.unref?.();
-  const childExitPromise = new Promise<{ exitCode: number | null; signal: string | null }>(
-    (resolve) => {
-      child.once("exit", (exitCode, signal) => {
-        childExited = true;
-        resolve({ exitCode, signal });
+      const nodeOptions = [
+        ...(options.cpuProfDir
+          ? [
+              "--cpu-prof",
+              "--cpu-prof-dir",
+              options.cpuProfDir,
+              "--cpu-prof-name",
+              `openclaw-gateway-${options.benchCase.id}-${options.sampleIndex}-${Date.now()}.cpuprofile`,
+            ]
+          : []),
+        ...(options.heapProfDir ? ["--heap-prof", "--heap-prof-dir", options.heapProfDir] : []),
+      ];
+      const childArgs = buildGatewayBenchChildArgs(options.entry, port, nodeOptions);
+      const command = buildGatewayBenchCommand(childArgs, options);
+      child = spawn(command.command, command.args, {
+        cwd: process.cwd(),
+        detached: process.platform !== "win32",
+        env,
+        stdio: ["pipe", "pipe", "pipe"],
       });
-    },
-  );
-
-  const onChunk = (chunk: Buffer) => {
-    if (firstOutputMs == null) {
-      firstOutputMs = performance.now() - startAt;
-    }
-    const text = chunk.toString("utf8");
-    output.push(text);
-    if (output.length > 20) {
-      output.splice(0, output.length - 20);
-    }
-    for (const line of text.split(/\r?\n/u)) {
-      const readyLogKind = classifyGatewayReadyLog(line);
-      if (readyLogKind === "http-listen" && httpListenLogMs == null) {
-        httpListenLogMs = performance.now() - startAt;
-        httpListenLogLine = line;
+      try {
+        await once(child, "spawn");
+      } catch (error) {
+        child = undefined;
+        throw error;
       }
-      if (readyLogKind === "gateway-ready" && gatewayReadyLogMs == null) {
-        gatewayReadyLogMs = performance.now() - startAt;
-        gatewayReadyLogLine = line;
+      const startedChild = child;
+      const cpuStartMs = readProcessTreeCpuMs(startedChild.pid);
+      const sampleRss = () => {
+        const rssMb = readProcessRssMb(startedChild.pid);
+        if (rssMb != null) {
+          maxRssMb = maxRssMb == null ? rssMb : Math.max(maxRssMb, rssMb);
+        }
+      };
+      sampleRss();
+      rssTimer = setInterval(sampleRss, 100);
+      rssTimer.unref?.();
+      startedChild.once("exit", () => {
+        childExited = true;
+      });
+
+      const onLine = (line: string, nowMs: number) => {
+        const readyLogKind = classifyGatewayReadyLog(line);
+        if (readyLogKind === "http-listen" && httpListenLogMs == null) {
+          httpListenLogMs = nowMs;
+          httpListenLogLine = line;
+        }
+        if (readyLogKind === "gateway-ready" && gatewayReadyLogMs == null) {
+          gatewayReadyLogMs = nowMs;
+          gatewayReadyLogLine = line;
+        }
+        collectTraceLine(line, "startup trace", startupTrace);
+      };
+      const onChunk = (stream: "stderr" | "stdout", chunk: Buffer) => {
+        if (firstOutputMs == null) {
+          firstOutputMs = performance.now() - startAt;
+        }
+        const text = chunk.toString("utf8");
+        output.push(text);
+        if (output.length > 20) {
+          output.splice(0, output.length - 20);
+        }
+        const parsed = collectOutputLines(outputBuffers[stream], text);
+        outputBuffers[stream] = parsed.carry;
+        const nowMs = performance.now() - startAt;
+        for (const line of parsed.lines) {
+          onLine(line, nowMs);
+        }
+      };
+      startedChild.stdout.on("data", (chunk: Buffer) => onChunk("stdout", chunk));
+      startedChild.stderr.on("data", (chunk: Buffer) => onChunk("stderr", chunk));
+
+      const probe = (probePath: string) =>
+        waitForProbe({
+          deadlineAt,
+          isDone: () => childExited,
+          path: probePath,
+          port,
+          startAt,
+        });
+      const [healthz, readyz] = await Promise.all([probe("/healthz"), probe("/readyz")]);
+      const completionMs = options.benchCase.completionTracePhase
+        ? await waitForStartupTracePhase({
+            deadlineAt,
+            isDone: () => childExited,
+            phase: options.benchCase.completionTracePhase,
+            startupTrace,
+          })
+        : performance.now() - startAt;
+      const completedAt = performance.now();
+      const cpuEndMs = readProcessTreeCpuMs(startedChild.pid);
+      const cpuMs =
+        cpuStartMs == null || cpuEndMs == null ? null : Math.max(0, cpuEndMs - cpuStartMs);
+      const cpuCoreRatio = cpuMs == null ? null : cpuMs / Math.max(1, completedAt - startAt);
+      const exit = await stopChild(startedChild);
+      sampleRss();
+      child = undefined;
+      flushOutputLineBuffers(outputBuffers, onLine, performance.now() - startAt, {
+        flushPartial: true,
+      });
+
+      return {
+        completionMs,
+        cpuCoreRatio,
+        cpuMs,
+        exitedBeforeTeardown: exit.exitedBeforeTeardown,
+        exitCode: exit.exitCode,
+        firstOutputMs,
+        gatewayReadyLogLine,
+        gatewayReadyLogMs,
+        healthz,
+        httpListenLogLine,
+        httpListenLogMs,
+        maxRssMb,
+        outputTail: output.join("").split(/\r?\n/u).slice(-20).join("\n"),
+        readyz,
+        signal: exit.signal,
+        startupTrace,
+      };
+    } finally {
+      if (rssTimer) {
+        clearInterval(rssTimer);
       }
-      collectStartupTrace(line, startupTrace);
+      if (child) {
+        await stopChild(child).catch(() => undefined);
+      }
     }
-  };
-  child.stdout.on("data", onChunk);
-  child.stderr.on("data", onChunk);
-
-  const [healthz, readyz] = await Promise.all([
-    waitForProbe({
-      deadlineAt,
-      isDone: () => childExited,
-      path: "/healthz",
-      port,
-      startAt,
-    }),
-    waitForProbe({
-      deadlineAt,
-      isDone: () => childExited,
-      path: "/readyz",
-      port,
-      startAt,
-    }),
-  ]);
-  const readyAt = performance.now();
-  const cpuEndMs = readProcessTreeCpuMs(child.pid);
-  const cpuMs = cpuStartMs == null || cpuEndMs == null ? null : Math.max(0, cpuEndMs - cpuStartMs);
-  const cpuCoreRatio = cpuMs == null ? null : cpuMs / Math.max(1, readyAt - startAt);
-  const exit = await stopChild(child);
-  clearInterval(rssTimer);
-  sampleRss();
-  await childExitPromise.catch(() => null);
-  rmSync(root, { force: true, maxRetries: 3, recursive: true, retryDelay: 100 });
-
-  return {
-    cpuCoreRatio,
-    cpuMs,
-    exitCode: exit.exitCode,
-    firstOutputMs,
-    gatewayReadyLogLine,
-    gatewayReadyLogMs,
-    healthz,
-    httpListenLogLine,
-    httpListenLogMs,
-    maxRssMb,
-    outputTail: output.join("").split(/\r?\n/u).slice(-20).join("\n"),
-    readyz,
-    signal: exit.signal,
-    startupTrace,
-  };
+  });
 }
 
-async function runCase(options: {
-  benchCase: GatewayBenchCase;
-  cpuProfDir?: string;
-  entry: string;
-  runs: number;
-  timeoutMs: number;
-  warmup: number;
-}): Promise<CaseResult> {
+async function runCase(
+  options: GatewayBenchRuntimeOptions & {
+    benchCase: GatewayBenchCase;
+    cpuProfDir?: string;
+    entry: string;
+    heapProfDir?: string;
+    runs: number;
+    timeoutMs: number;
+    warmup: number;
+  },
+): Promise<CaseResult> {
   const samples: GatewaySample[] = [];
   const total = options.runs + options.warmup;
   for (let index = 0; index < total; index += 1) {
@@ -947,6 +916,9 @@ async function runCase(options: {
       benchCase: options.benchCase,
       cpuProfDir: options.cpuProfDir,
       entry: options.entry,
+      gatewayRuntime: options.gatewayRuntime,
+      gatewayCpus: options.gatewayCpus,
+      heapProfDir: options.heapProfDir,
       sampleIndex: index + 1,
       timeoutMs: options.timeoutMs,
     });
@@ -954,8 +926,18 @@ async function runCase(options: {
       samples.push(sample);
       const heapUsedMb = sample.startupTrace["memory.ready.heapUsedMb"] ?? null;
       console.log(
-        `[gateway-startup-bench] ${options.benchCase.id} run ${samples.length}/${options.runs}: healthz=${formatMs(sample.healthz.ms)} readyz=${formatMs(sample.readyz.ms)} httpListen=${formatMs(sample.httpListenLogMs)} gatewayReady=${formatMs(sample.gatewayReadyLogMs)} cpu=${formatMs(sample.cpuMs)} cpuCore=${formatRatio(sample.cpuCoreRatio)} rss=${formatMb(sample.maxRssMb)} heap=${formatMb(heapUsedMb)}`,
+        `[gateway-startup-bench] ${options.benchCase.id} run ${samples.length}/${options.runs}: completion=${formatMs(sample.completionMs)} healthz=${formatMs(sample.healthz.ms)} readyz=${formatMs(sample.readyz.ms)} httpListen=${formatMs(sample.httpListenLogMs)} gatewayReady=${formatMs(sample.gatewayReadyLogMs)} cpu=${formatMs(sample.cpuMs)} cpuCore=${formatRatio(sample.cpuCoreRatio)} rss=${formatMb(sample.maxRssMb)} heap=${formatMb(heapUsedMb)}`,
       );
+      if (
+        sample.outputTail &&
+        (sample.completionMs == null ||
+          sample.healthz.status !== 200 ||
+          sample.readyz.status !== 200)
+      ) {
+        console.error(
+          `[gateway-startup-bench] ${options.benchCase.id} output tail:\n${sample.outputTail}`,
+        );
+      }
     } else {
       const heapUsedMb = sample.startupTrace["memory.ready.heapUsedMb"] ?? null;
       console.log(
@@ -968,24 +950,25 @@ async function runCase(options: {
 
 function printResult(result: CaseResult): void {
   console.log(`\n${result.name} (${result.id})`);
+  console.log(`  completion:   ${formatStats(result.summary.completionMs)}`);
   console.log(`  first output: ${formatStats(result.summary.firstOutputMs)}`);
   console.log(`  CPU:          ${formatStats(result.summary.cpuMs)}`);
-  console.log(`  CPU core:     ${formatRatioStats(result.summary.cpuCoreRatio)}`);
+  console.log(`  CPU core:     ${formatStats(result.summary.cpuCoreRatio, formatRatio)}`);
   console.log(`  /healthz:     ${formatStats(result.summary.healthzMs)}`);
   console.log(`  http listen:  ${formatStats(result.summary.httpListenLogMs)}`);
   console.log(`  gateway ready: ${formatStats(result.summary.gatewayReadyLogMs)}`);
   console.log(`  /readyz:      ${formatStats(result.summary.readyzMs)}`);
-  console.log(`  max RSS:      ${formatMemoryStats(result.summary.maxRssMb)}`);
+  console.log(`  max RSS:      ${formatStats(result.summary.maxRssMb, formatMb)}`);
   console.log(
-    `  ready memory: rss=${formatMemoryStats(getStartupTraceStat(result.summary.startupTrace, "memory.ready.rssMb"))} heap=${formatMemoryStats(getStartupTraceStat(result.summary.startupTrace, "memory.ready.heapUsedMb"))} external=${formatMemoryStats(getStartupTraceStat(result.summary.startupTrace, "memory.ready.externalMb"))}`,
+    `  ready memory: rss=${formatStats(result.summary.startupTrace["memory.ready.rssMb"], formatMb)} heap=${formatStats(result.summary.startupTrace["memory.ready.heapUsedMb"], formatMb)} external=${formatStats(result.summary.startupTrace["memory.ready.externalMb"], formatMb)}`,
   );
   console.log(
-    `  post-ready memory: rss=${formatMemoryStats(getStartupTraceStat(result.summary.startupTrace, "memory.post-ready.rssMb"))} heap=${formatMemoryStats(getStartupTraceStat(result.summary.startupTrace, "memory.post-ready.heapUsedMb"))} external=${formatMemoryStats(getStartupTraceStat(result.summary.startupTrace, "memory.post-ready.externalMb"))}`,
+    `  post-ready memory: rss=${formatStats(result.summary.startupTrace["memory.post-ready.rssMb"], formatMb)} heap=${formatStats(result.summary.startupTrace["memory.post-ready.heapUsedMb"], formatMb)} external=${formatStats(result.summary.startupTrace["memory.post-ready.externalMb"], formatMb)}`,
   );
-  const trace = Object.entries(result.summary.startupTrace)
-    .filter(([name]) => !name.endsWith(".total") && !name.startsWith("memory."))
-    .toSorted((a, b) => (b[1].avg ?? 0) - (a[1].avg ?? 0))
-    .slice(0, 8);
+  console.log(
+    `  prepared runtime: agents=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.agentCount"], String)} workspaces=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.workspaceGroupCount"], String)} configuredGroups=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.configuredFactsGroupCount"], String)} configuredModels=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.configuredRuntimeModelCount"], String)} generatedPlugins=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.generatedCatalogPluginCount"], String)} generatedReads=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.generatedCatalogReadCount"], String)} sources=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.catalogSourceCount"], String)} credentials=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.credentialGroupCount"], String)} catalogs=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.catalogGroupCount"], String)} registries=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.runtimeRegistryCount"], String)} workspaceFacts=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.workspaceFactsMs"])} runtimePlugins=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.runtimePluginMs"])} metadata=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.pluginMetadataMs"])} staticProviders=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.staticProviderCatalogMs"])} ambientAuth=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.ambientCredentialsMs"])} agentFacts=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.agentFactsMs"])} configuredProjection=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.configuredProjectionMs"])} sourceMs=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.catalogSourceMs"])} registryMs=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.registryMs"])} sourceLimit=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.sourceConcurrencyLimitCount"], String)} fullCatalogLimit=${formatStats(result.summary.startupTrace["sidecars.model-runtime-build.fullCatalogConcurrencyLimitCount"], String)} staticCatalog=${formatStats(result.summary.startupTrace["benchmark.preparedRuntimeStaticCatalogCallCount"], String)} pluginLoader=${formatStats(result.summary.startupTrace["sidecars.plugin-loader.callsCount"], String)} eventLoopMax=${formatStats(result.summary.startupTrace["sidecars.model-runtime.eventLoopMax"])}`,
+  );
+  const trace = selectSlowStartupTraceDurations(result.summary.startupTrace, 8);
   if (trace.length > 0) {
     console.log("  trace top:");
     for (const [name, stats] of trace) {
@@ -995,14 +978,29 @@ function printResult(result: CaseResult): void {
 }
 
 async function main() {
-  if (hasHelpFlag()) {
+  const argv = process.argv.slice(2);
+  if (hasHelpFlag(argv)) {
     printUsage();
     return;
   }
 
-  const options = parseOptions();
+  const options = parseOptions(argv);
+  if (options.installedCohort) {
+    const { runInstalledGatewayBenchmark } = await import("./lib/gateway-bench-installed.ts");
+    process.exitCode = await runInstalledGatewayBenchmark({
+      inputPath: options.installedCohort,
+      outputPath: options.output!,
+      child: options.installedChild,
+      diagnostic: options.installedCpuDiagnostic,
+      argv,
+    });
+    return;
+  }
   if (options.cpuProfDir) {
     mkdirSync(options.cpuProfDir, { recursive: true });
+  }
+  if (options.heapProfDir) {
+    mkdirSync(options.heapProfDir, { recursive: true });
   }
   const results: CaseResult[] = [];
   for (const benchCase of options.cases) {
@@ -1011,6 +1009,9 @@ async function main() {
         benchCase,
         cpuProfDir: options.cpuProfDir,
         entry: options.entry,
+        gatewayRuntime: options.gatewayRuntime,
+        gatewayCpus: options.gatewayCpus,
+        heapProfDir: options.heapProfDir,
         runs: options.runs,
         timeoutMs: options.timeoutMs,
         warmup: options.warmup,
@@ -1020,6 +1021,8 @@ async function main() {
 
   const payload = {
     entry: options.entry,
+    gatewayRuntime: options.gatewayRuntime,
+    gatewayCpus: options.gatewayCpus,
     generatedAt: new Date().toISOString(),
     results,
   };
@@ -1029,28 +1032,37 @@ async function main() {
   }
   if (options.json) {
     console.log(JSON.stringify(payload, null, 2));
-    return;
+  } else {
+    for (const result of results) {
+      printResult(result);
+    }
   }
-  for (const result of results) {
-    printResult(result);
+
+  const failures = collectResultFailures(results);
+  if (failures.length > 0) {
+    printBenchmarkFailures(failures);
+    process.exitCode = 1;
   }
 }
 
-export const __testing = {
-  classifyGatewayReadyLog,
-  classifyProbeErrorKind,
-  collectStartupTrace,
-  parseNonNegativeInt,
-  parsePositiveInt,
-  resolveEntry,
-  sanitizedEnv,
+export const testing = {
+  collectResultFailures,
+  listIncidentPackagedPluginArtifacts,
+  parseOptions,
   summarizeCase,
-  waitForProbe,
+  waitForStartupTracePhase,
+  withGatewayBenchRoot,
+  writeIncidentFixture,
   writeConfig,
 };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  main().catch((err) => {
+  main().catch((err: unknown) => {
+    if (err instanceof CliArgumentError) {
+      console.error(err.message);
+      process.exitCode = 1;
+      return;
+    }
     console.error(err instanceof Error ? err.stack : String(err));
     process.exitCode = 1;
   });

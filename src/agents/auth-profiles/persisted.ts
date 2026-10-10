@@ -1,211 +1,53 @@
-import { resolveOAuthPath } from "../../config/paths.js";
-import { coerceSecretRef } from "../../config/types.secrets.js";
-import { loadJsonFile } from "../../infra/json-file.js";
-import { normalizeProviderId } from "../provider-id.js";
-import { AUTH_STORE_VERSION, log } from "./constants.js";
+/**
+ * Canonical persisted auth profile loading, runtime metadata, and store merging.
+ */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
-  hasOAuthIdentity,
-  hasUsableOAuthCredential,
-  isSafeToAdoptMainStoreOAuthIdentity,
-  normalizeAuthEmailToken,
-  normalizeAuthIdentityToken,
-} from "./oauth-shared.js";
-import { resolveAuthStorePath, resolveLegacyAuthStorePath } from "./paths.js";
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+  readNonBlankString,
+} from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { coerceSecretRef, isLegacySecretRefWithoutProvider } from "../../config/types.secrets.js";
+import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
+import { AUTH_STORE_VERSION, authProfilesLog } from "./constants.js";
+import { hasUsableOAuthCredential } from "./credential-state.js";
+import { hasOidcRegistration, isSafeToCopyOAuthIdentity } from "./oauth-identity.js";
+import { hasOAuthIdentity, isSafeToAdoptMainStoreOAuthIdentity } from "./oauth-shared.js";
+import { normalizeRawCredentialEntry } from "./persisted-credential.js";
 import {
-  coerceAuthProfileState,
-  loadPersistedAuthProfileState,
-  mergeAuthProfileState,
-} from "./state.js";
+  getRuntimeExternalCliProfileIds,
+  removePersonalAuthProfileReferences,
+  setRuntimeExternalCliProfileIds,
+} from "./runtime-external-profile-references.js";
+import {
+  inspectAuthProfileJsonCellReadOnly,
+  readPersistedAuthProfileStateRaw,
+  readPersistedAuthProfileStoreRaw,
+  readPersistedSharedAuthProfileStateRaw,
+  readPersistedSharedAuthProfileStoreRaw,
+  type AuthProfileDatabase,
+} from "./sqlite.js";
+import { coerceAuthProfileState, mergeAuthProfileState } from "./state.js";
+import { AuthProfileStoreUnreadableError } from "./store-unreadable-error.js";
 import type {
   AuthProfileCredential,
-  AuthProfileFailureReason,
   AuthProfileSecretsStore,
   AuthProfileStore,
+  RuntimeAuthProfileStore,
   OAuthCredential,
-  OAuthCredentials,
-  ProfileUsageStats,
 } from "./types.js";
 
-export type LegacyAuthStore = Record<string, AuthProfileCredential>;
+type LoadPersistedAuthProfileStoreOptions = {
+  allowKeychainPrompt?: boolean;
+  database?: AuthProfileDatabase;
+};
 
 type CredentialRejectReason = "non_object" | "invalid_type" | "missing_provider";
 type RejectedCredentialEntry = { key: string; reason: CredentialRejectReason };
 
 const AUTH_PROFILE_TYPES = new Set<AuthProfileCredential["type"]>(["api_key", "oauth", "token"]);
-const LEGACY_OAUTH_REF_SOURCE = "openclaw-credentials";
-const LEGACY_OAUTH_REF_PROVIDER = "openai-codex";
-
-type LegacyOAuthRef = {
-  source: typeof LEGACY_OAUTH_REF_SOURCE;
-  provider: typeof LEGACY_OAUTH_REF_PROVIDER;
-  id: string;
-};
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
-function normalizeOptionalCredentialString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? value : undefined;
-}
-
-function isLegacyOAuthRef(value: unknown): value is LegacyOAuthRef {
-  if (!isRecord(value)) {
-    return false;
-  }
-  return (
-    value.source === LEGACY_OAUTH_REF_SOURCE &&
-    value.provider === LEGACY_OAUTH_REF_PROVIDER &&
-    typeof value.id === "string" &&
-    /^[a-f0-9]{32}$/.test(value.id)
-  );
-}
-
-function hasInlineOAuthTokenMaterial(credential: OAuthCredential): boolean {
-  return [credential.access, credential.refresh, credential.idToken].some(
-    (value) => typeof value === "string" && value.trim().length > 0,
-  );
-}
-
-function normalizeOptionalCredentialBoolean(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
-}
-
-function normalizeExpiryField(value: unknown): number | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
-}
-
-function normalizeCredentialMetadata(value: unknown): Record<string, string> | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const metadata: Record<string, string> = {};
-  for (const [key, entry] of Object.entries(value)) {
-    if (typeof entry === "string") {
-      metadata[key] = entry;
-    }
-  }
-  return Object.keys(metadata).length > 0 ? metadata : undefined;
-}
-
-function normalizeSecretBackedField(params: {
-  entry: Record<string, unknown>;
-  valueField: "key" | "token";
-  refField: "keyRef" | "tokenRef";
-}): void {
-  const value = params.entry[params.valueField];
-  if (value == null || typeof value === "string") {
-    return;
-  }
-  const ref = coerceSecretRef(value);
-  if (ref && !coerceSecretRef(params.entry[params.refField])) {
-    params.entry[params.refField] = ref;
-  }
-  delete params.entry[params.valueField];
-}
-
-function normalizeCommonCredentialFields(entry: Record<string, unknown>): Record<string, unknown> {
-  const normalized: Record<string, unknown> = {
-    provider: typeof entry.provider === "string" ? normalizeProviderId(entry.provider) : "",
-  };
-  const copyToAgents = normalizeOptionalCredentialBoolean(entry.copyToAgents);
-  if (copyToAgents !== undefined) {
-    normalized.copyToAgents = copyToAgents;
-  }
-  const email = normalizeOptionalCredentialString(entry.email);
-  if (email !== undefined) {
-    normalized.email = email;
-  }
-  const displayName = normalizeOptionalCredentialString(entry.displayName);
-  if (displayName !== undefined) {
-    normalized.displayName = displayName;
-  }
-  return normalized;
-}
-
-function normalizeRawCredentialEntry(raw: Record<string, unknown>): Partial<AuthProfileCredential> {
-  const entry = { ...raw } as Record<string, unknown>;
-  if (!("type" in entry) && typeof entry["mode"] === "string") {
-    entry["type"] = entry["mode"];
-  }
-  if (!("key" in entry) && typeof entry["apiKey"] === "string") {
-    entry["key"] = entry["apiKey"];
-  }
-  normalizeSecretBackedField({ entry, valueField: "key", refField: "keyRef" });
-  normalizeSecretBackedField({ entry, valueField: "token", refField: "tokenRef" });
-  if (entry.type === "api_key") {
-    const normalized: Record<string, unknown> = {
-      type: "api_key",
-      ...normalizeCommonCredentialFields(entry),
-    };
-    const key = normalizeOptionalCredentialString(entry.key);
-    const keyRef = coerceSecretRef(entry.keyRef);
-    const metadata = normalizeCredentialMetadata(entry.metadata);
-    if (key !== undefined) {
-      normalized.key = key;
-    }
-    if (keyRef) {
-      normalized.keyRef = keyRef;
-    }
-    if (metadata) {
-      normalized.metadata = metadata;
-    }
-    return normalized as Partial<AuthProfileCredential>;
-  }
-  if (entry.type === "token") {
-    const normalized: Record<string, unknown> = {
-      type: "token",
-      ...normalizeCommonCredentialFields(entry),
-    };
-    const token = normalizeOptionalCredentialString(entry.token);
-    const tokenRef = coerceSecretRef(entry.tokenRef);
-    const expires = normalizeExpiryField(entry.expires);
-    if (token !== undefined) {
-      normalized.token = token;
-    }
-    if (tokenRef) {
-      normalized.tokenRef = tokenRef;
-    }
-    if (expires !== undefined) {
-      normalized.expires = expires;
-    }
-    return normalized as Partial<AuthProfileCredential>;
-  }
-  if (entry.type === "oauth") {
-    const normalized: Record<string, unknown> = {
-      type: "oauth",
-      ...normalizeCommonCredentialFields(entry),
-    };
-    for (const field of [
-      "access",
-      "refresh",
-      "idToken",
-      "clientId",
-      "enterpriseUrl",
-      "projectId",
-      "accountId",
-      "chatgptPlanType",
-    ] as const) {
-      const value = normalizeOptionalCredentialString(entry[field]);
-      if (value !== undefined) {
-        normalized[field] = value;
-      }
-    }
-    const expires = normalizeExpiryField(entry.expires);
-    if (expires !== undefined) {
-      normalized.expires = expires;
-    }
-    return normalized;
-  }
-  return entry as Partial<AuthProfileCredential>;
-}
 
 function parseCredentialEntry(
   raw: unknown,
@@ -215,21 +57,31 @@ function parseCredentialEntry(
     return { ok: false, reason: "non_object" };
   }
   const typed = normalizeRawCredentialEntry(raw);
-  if (!AUTH_PROFILE_TYPES.has(typed.type as AuthProfileCredential["type"])) {
+  if (!typed) {
     return { ok: false, reason: "invalid_type" };
   }
-  const provider = typed.provider ?? fallbackProvider;
-  const normalizedProvider = typeof provider === "string" ? normalizeProviderId(provider) : "";
-  if (!normalizedProvider) {
+  const provider =
+    typed.provider ||
+    (typeof fallbackProvider === "string" ? normalizeProviderId(fallbackProvider) : "");
+  if (!provider) {
     return { ok: false, reason: "missing_provider" };
   }
   return {
     ok: true,
     credential: {
       ...typed,
-      provider: normalizedProvider,
+      provider,
     } as AuthProfileCredential,
   };
+}
+
+/** Parses canonical credential fields without importing retired encodings. */
+export function parseAuthProfileCredential(
+  raw: unknown,
+  fallbackProvider?: string,
+): AuthProfileCredential | null {
+  const parsed = parseCredentialEntry(raw, fallbackProvider);
+  return parsed.ok ? parsed.credential : null;
 }
 
 function warnRejectedCredentialEntries(source: string, rejected: RejectedCredentialEntry[]): void {
@@ -243,36 +95,16 @@ function warnRejectedCredentialEntries(source: string, rejected: RejectedCredent
     },
     {},
   );
-  log.warn("ignored invalid auth profile entries during store load", {
+  authProfilesLog.warn("ignored invalid auth profile entries during store load", {
     source,
     dropped: rejected.length,
     reasons,
+    ...(reasons.invalid_type ? { validTypes: [...AUTH_PROFILE_TYPES] } : {}),
     keys: rejected.slice(0, 10).map((entry) => entry.key),
   });
 }
 
-function coerceLegacyAuthStore(raw: unknown): LegacyAuthStore | null {
-  if (!isRecord(raw)) {
-    return null;
-  }
-  const record = raw;
-  if ("profiles" in record) {
-    return null;
-  }
-  const entries: LegacyAuthStore = {};
-  const rejected: RejectedCredentialEntry[] = [];
-  for (const [key, value] of Object.entries(record)) {
-    const parsed = parseCredentialEntry(value, key);
-    if (!parsed.ok) {
-      rejected.push({ key, reason: parsed.reason });
-      continue;
-    }
-    entries[key] = parsed.credential;
-  }
-  warnRejectedCredentialEntries("auth.json", rejected);
-  return Object.keys(entries).length > 0 ? entries : null;
-}
-
+/** Coerces a persisted auth profile store payload into the current store shape. */
 export function coercePersistedAuthProfileStore(raw: unknown): AuthProfileStore | null {
   if (!isRecord(raw)) {
     return null;
@@ -285,6 +117,43 @@ export function coercePersistedAuthProfileStore(raw: unknown): AuthProfileStore 
   const normalized: Record<string, AuthProfileCredential> = {};
   const rejected: RejectedCredentialEntry[] = [];
   for (const [key, value] of Object.entries(profiles)) {
+    const declaredType = isRecord(value)
+      ? Object.hasOwn(value, "type")
+        ? value.type
+        : value.mode
+      : undefined;
+    const supportedType =
+      declaredType === "apiKey" ||
+      declaredType === "api_key" ||
+      declaredType === "token" ||
+      declaredType === "oauth";
+    if (
+      supportedType &&
+      isRecord(value) &&
+      typeof value.provider === "string" &&
+      normalizeProviderId(value.provider) &&
+      (!Object.hasOwn(value, "type") ||
+        value.type === "apiKey" ||
+        (declaredType === "api_key" && isLegacySecretRefWithoutProvider(value.keyRef)) ||
+        (declaredType === "token" && isLegacySecretRefWithoutProvider(value.tokenRef)) ||
+        (declaredType === "api_key" &&
+          !coerceSecretRef(value.keyRef) &&
+          ((isRecord(value.key) && coerceSecretRef(value.key) !== null) ||
+            (!readNonBlankString(value.key) &&
+              !coerceSecretRef(value.key) &&
+              (readNonBlankString(value.apiKey) !== undefined ||
+                coerceSecretRef(value.apiKey) !== null ||
+                readNonBlankString(value.api_key) !== undefined ||
+                coerceSecretRef(value.api_key) !== null)))) ||
+        (declaredType === "token" &&
+          !coerceSecretRef(value.tokenRef) &&
+          isRecord(value.token) &&
+          coerceSecretRef(value.token) !== null))
+    ) {
+      throw new Error(
+        "Auth profile credential fields require migration; run openclaw doctor --fix.",
+      );
+    }
     const parsed = parseCredentialEntry(value);
     if (!parsed.ok) {
       rejected.push({ key, reason: parsed.reason });
@@ -301,32 +170,76 @@ export function coercePersistedAuthProfileStore(raw: unknown): AuthProfileStore 
   };
 }
 
-function mergeRecord<T>(
-  base?: Record<string, T>,
-  override?: Record<string, T>,
-): Record<string, T> | undefined {
-  if (!base && !override) {
+function groupProfileIdsByProvider(profiles: AuthProfileStore["profiles"]): Map<string, string[]> {
+  const grouped = new Map<string, string[]>();
+  for (const [profileId, credential] of Object.entries(profiles)) {
+    const providerKey = normalizeProviderId(credential.provider);
+    const profileIds = grouped.get(providerKey) ?? [];
+    profileIds.push(profileId);
+    grouped.set(providerKey, profileIds);
+  }
+  return grouped;
+}
+
+function findOrderEntryKey(
+  order: AuthProfileStore["order"] | undefined,
+  providerKey: string,
+): string | undefined {
+  return Object.keys(order ?? {}).find((key) => normalizeProviderId(key) === providerKey);
+}
+
+function mergeProfileOrderWithOverridePrecedence(params: {
+  baseOrder: AuthProfileStore["order"] | undefined;
+  overrideOrder: AuthProfileStore["order"] | undefined;
+  overrideProfiles: AuthProfileStore["profiles"];
+  mergedOrder: AuthProfileStore["order"] | undefined;
+}): AuthProfileStore["order"] | undefined {
+  const { mergedOrder } = params;
+  if (!mergedOrder) {
     return undefined;
   }
-  if (!base) {
-    return { ...override };
+
+  for (const [providerKey, overrideProfileIds] of groupProfileIdsByProvider(
+    params.overrideProfiles,
+  )) {
+    const baseOrderKey = findOrderEntryKey(params.baseOrder, providerKey);
+    const overrideOrderKey = findOrderEntryKey(params.overrideOrder, providerKey);
+    const mergedOrderKey = overrideOrderKey ?? baseOrderKey;
+    if (!mergedOrderKey) {
+      continue;
+    }
+    for (const provider of Object.keys(mergedOrder)) {
+      if (provider !== mergedOrderKey && normalizeProviderId(provider) === providerKey) {
+        delete mergedOrder[provider];
+      }
+    }
+    if (overrideOrderKey) {
+      mergedOrder[mergedOrderKey] = uniqueStrings(params.overrideOrder?.[overrideOrderKey] ?? []);
+      continue;
+    }
+    const baseOrderIds = baseOrderKey ? (params.baseOrder?.[baseOrderKey] ?? []) : [];
+    mergedOrder[mergedOrderKey] = uniqueStrings([
+      ...overrideProfileIds,
+      ...baseOrderIds,
+      ...(mergedOrder[mergedOrderKey] ?? []),
+    ]);
   }
-  if (!override) {
-    return { ...base };
-  }
-  return { ...base, ...override };
+
+  return mergedOrder;
 }
 
-function dedupeMergedProfileOrder(profileIds: string[]): string[] {
-  return Array.from(new Set(profileIds));
-}
-
+// Legacy OAuth profiles may be replaced by safer main-store profiles when the
+// main store has a newer compatible credential for the same provider identity.
 function hasComparableOAuthIdentityConflict(
   existing: OAuthCredential,
   candidate: OAuthCredential,
 ): boolean {
-  const existingAccountId = normalizeAuthIdentityToken(existing.accountId);
-  const candidateAccountId = normalizeAuthIdentityToken(candidate.accountId);
+  // Registered identities cannot use the legacy fallback for missing account fields.
+  if (hasOidcRegistration(existing) || hasOidcRegistration(candidate)) {
+    return !isSafeToCopyOAuthIdentity(existing, candidate);
+  }
+  const existingAccountId = normalizeOptionalString(existing.accountId);
+  const candidateAccountId = normalizeOptionalString(candidate.accountId);
   if (
     existingAccountId !== undefined &&
     candidateAccountId !== undefined &&
@@ -335,8 +248,8 @@ function hasComparableOAuthIdentityConflict(
     return true;
   }
 
-  const existingEmail = normalizeAuthEmailToken(existing.email);
-  const candidateEmail = normalizeAuthEmailToken(candidate.email);
+  const existingEmail = normalizeOptionalLowercaseString(existing.email);
+  const candidateEmail = normalizeOptionalLowercaseString(candidate.email);
   return (
     existingEmail !== undefined && candidateEmail !== undefined && existingEmail !== candidateEmail
   );
@@ -356,111 +269,7 @@ function isNewerUsableOAuthCredential(
   if (!hasUsableOAuthCredential(existing)) {
     return true;
   }
-  return (
-    Number.isFinite(candidate.expires) &&
-    (!Number.isFinite(existing.expires) || candidate.expires > existing.expires)
-  );
-}
-
-const AUTH_INVALIDATION_REASONS = new Set<AuthProfileFailureReason>([
-  "auth",
-  "auth_permanent",
-  "session_expired",
-]);
-
-function hasAuthInvalidationSignal(stats: ProfileUsageStats | undefined): boolean {
-  if (!stats) {
-    return false;
-  }
-  if (
-    (stats.cooldownReason && AUTH_INVALIDATION_REASONS.has(stats.cooldownReason)) ||
-    (stats.disabledReason && AUTH_INVALIDATION_REASONS.has(stats.disabledReason))
-  ) {
-    return true;
-  }
-  return Object.entries(stats.failureCounts ?? {}).some(
-    ([reason, count]) =>
-      AUTH_INVALIDATION_REASONS.has(reason as AuthProfileFailureReason) &&
-      typeof count === "number" &&
-      count > 0,
-  );
-}
-
-function isProfileReferencedByAuthState(store: AuthProfileStore, profileId: string): boolean {
-  if (Object.values(store.order ?? {}).some((profileIds) => profileIds.includes(profileId))) {
-    return true;
-  }
-  return Object.values(store.lastGood ?? {}).some((value) => value === profileId);
-}
-
-function resolveProviderAuthStateValue<T>(
-  values: Record<string, T> | undefined,
-  providerKey: string,
-): T | undefined {
-  if (!values) {
-    return undefined;
-  }
-  for (const [key, value] of Object.entries(values)) {
-    if (normalizeProviderId(key) === providerKey) {
-      return value;
-    }
-  }
-  return undefined;
-}
-
-function findMainStoreOAuthReplacementForInvalidatedProfile(params: {
-  base: AuthProfileStore;
-  override: AuthProfileStore;
-  profileId: string;
-  credential: OAuthCredential;
-}): string | undefined {
-  const providerKey = normalizeProviderId(params.credential.provider);
-  if (
-    providerKey !== "openai-codex" ||
-    !isProfileReferencedByAuthState(params.override, params.profileId) ||
-    !hasAuthInvalidationSignal(params.override.usageStats?.[params.profileId])
-  ) {
-    return undefined;
-  }
-
-  const candidates = Object.entries(params.base.profiles)
-    .flatMap(([profileId, credential]): Array<[string, OAuthCredential]> => {
-      if (
-        profileId === params.profileId ||
-        credential.type !== "oauth" ||
-        normalizeProviderId(credential.provider) !== providerKey ||
-        !hasUsableOAuthCredential(credential)
-      ) {
-        return [];
-      }
-      return [[profileId, credential]];
-    })
-    .toSorted(([leftId, leftCredential], [rightId, rightCredential]) => {
-      const leftExpires = Number.isFinite(leftCredential.expires) ? leftCredential.expires : 0;
-      const rightExpires = Number.isFinite(rightCredential.expires) ? rightCredential.expires : 0;
-      if (rightExpires !== leftExpires) {
-        return rightExpires - leftExpires;
-      }
-      return leftId.localeCompare(rightId);
-    });
-  if (candidates.length === 0) {
-    return undefined;
-  }
-
-  const candidateIds = new Set(candidates.map(([profileId]) => profileId));
-  const orderedProfileId = resolveProviderAuthStateValue(params.base.order, providerKey)?.find(
-    (profileId) => candidateIds.has(profileId),
-  );
-  if (orderedProfileId) {
-    return orderedProfileId;
-  }
-
-  const lastGoodProfileId = resolveProviderAuthStateValue(params.base.lastGood, providerKey);
-  if (lastGoodProfileId && candidateIds.has(lastGoodProfileId)) {
-    return lastGoodProfileId;
-  }
-
-  return candidates.length === 1 ? candidates[0]?.[0] : undefined;
+  return candidate.expires > existing.expires;
 }
 
 function findMainStoreOAuthReplacement(params: {
@@ -474,6 +283,7 @@ function findMainStoreOAuthReplacement(params: {
       if (
         profileId === params.legacyProfileId ||
         credential.type !== "oauth" ||
+        credential.setup?.replacement ||
         normalizeProviderId(credential.provider) !== providerKey
       ) {
         return [];
@@ -547,9 +357,7 @@ function replaceMergedProfileReferences(params: {
     ? Object.fromEntries(
         Object.entries(store.order).map(([provider, profileIds]) => [
           provider,
-          dedupeMergedProfileOrder(
-            profileIds.map((profileId) => replacements.get(profileId) ?? profileId),
-          ),
+          uniqueStrings(profileIds.map((profileId) => replacements.get(profileId) ?? profileId)),
         ]),
       )
     : undefined;
@@ -575,15 +383,20 @@ function replaceMergedProfileReferences(params: {
     }
   }
 
-  return {
+  const next = {
     ...store,
     profiles,
-    ...(order && Object.keys(order).length > 0 ? { order } : { order: undefined }),
-    ...(lastGood && Object.keys(lastGood).length > 0 ? { lastGood } : { lastGood: undefined }),
-    ...(usageStats && Object.keys(usageStats).length > 0
-      ? { usageStats }
-      : { usageStats: undefined }),
+    order: order && Object.keys(order).length > 0 ? order : undefined,
+    lastGood: lastGood && Object.keys(lastGood).length > 0 ? lastGood : undefined,
+    usageStats: usageStats && Object.keys(usageStats).length > 0 ? usageStats : undefined,
   };
+  setRuntimeExternalCliProfileIds(
+    next,
+    getRuntimeExternalCliProfileIds(store).map(
+      (profileId) => replacements.get(profileId) ?? profileId,
+    ),
+  );
+  return next;
 }
 
 function reconcileMainStoreOAuthProfileDrift(params: {
@@ -602,12 +415,7 @@ function reconcileMainStoreOAuthProfileDrift(params: {
           legacyProfileId: profileId,
           legacyCredential: credential,
         })
-      : findMainStoreOAuthReplacementForInvalidatedProfile({
-          base: params.base,
-          override: params.override,
-          profileId,
-          credential,
-        });
+      : undefined;
     if (replacementProfileId) {
       replacements.set(profileId, replacementProfileId);
     }
@@ -619,171 +427,250 @@ function reconcileMainStoreOAuthProfileDrift(params: {
   });
 }
 
+/** Merges two auth profile stores, preserving valid runtime external profile metadata. */
 export function mergeAuthProfileStores(
-  base: AuthProfileStore,
-  override: AuthProfileStore,
-): AuthProfileStore {
+  base: RuntimeAuthProfileStore,
+  override: RuntimeAuthProfileStore,
+  options?: { preserveBaseRuntimeExternalProfiles?: boolean },
+): RuntimeAuthProfileStore {
   if (
     Object.keys(override.profiles).length === 0 &&
     !override.order &&
     !override.lastGood &&
-    !override.usageStats
+    !override.usageStats &&
+    override.runtimePersistedProfileIds === undefined &&
+    override.runtimeLocalProfileIds === undefined &&
+    override.runtimeHasLocalOAuthProfiles === undefined &&
+    override.runtimeLocalOrderProviderIds === undefined &&
+    override.runtimeInheritsMainState === undefined &&
+    override.runtimeExternalProfileIds === undefined &&
+    override.runtimeExternalProfileIdsAuthoritative !== true &&
+    getRuntimeExternalCliProfileIds(override).length === 0
   ) {
     return base;
   }
+  const overrideProfileIds = new Set(Object.keys(override.profiles));
+  const overrideRuntimeExternalProfileIds = new Set(override.runtimeExternalProfileIds ?? []);
+  const removedRuntimeExternalProfileIds = new Set(
+    override.runtimeExternalProfileIdsAuthoritative === true &&
+      options?.preserveBaseRuntimeExternalProfiles !== true
+      ? (base.runtimeExternalProfileIds ?? []).filter(
+          (profileId) =>
+            !overrideRuntimeExternalProfileIds.has(profileId) && !overrideProfileIds.has(profileId),
+        )
+      : [],
+  );
+  const profiles = Object.fromEntries([
+    ...Object.entries(override.profiles),
+    ...Object.entries(base.profiles).filter(([profileId]) => !overrideProfileIds.has(profileId)),
+  ]);
+  // Authoritative runtime snapshots may remove stale external profiles that are
+  // no longer observed, unless the caller is intentionally preserving base ones.
+  for (const profileId of removedRuntimeExternalProfileIds) {
+    delete profiles[profileId];
+  }
+  const mergedState = mergeAuthProfileState(base, override);
+  const mergedOrder = mergeProfileOrderWithOverridePrecedence({
+    baseOrder: base.order,
+    overrideOrder: override.order,
+    overrideProfiles: override.profiles,
+    mergedOrder: mergedState.order,
+  });
+  const order = mergedOrder
+    ? Object.fromEntries(
+        Object.entries(mergedOrder)
+          .map(([provider, profileIds]) => [
+            provider,
+            profileIds.filter(
+              (profileId) =>
+                profiles[profileId] || !removedRuntimeExternalProfileIds.has(profileId),
+            ),
+          ])
+          .filter(([, profileIds]) => Array.isArray(profileIds) && profileIds.length > 0),
+      )
+    : undefined;
+  const lastGood = mergedState.lastGood
+    ? Object.fromEntries(
+        Object.entries(mergedState.lastGood).filter(([, profileId]) => profiles[profileId]),
+      )
+    : undefined;
+  const usageStats = mergedState.usageStats
+    ? Object.fromEntries(
+        Object.entries(mergedState.usageStats).filter(
+          ([profileId]) => profiles[profileId] || profileId.startsWith("inline-api-key:"),
+        ),
+      )
+    : undefined;
   const merged = {
     version: Math.max(base.version, override.version ?? base.version),
-    profiles: { ...base.profiles, ...override.profiles },
-    order: mergeRecord(base.order, override.order),
-    lastGood: mergeRecord(base.lastGood, override.lastGood),
-    usageStats: mergeRecord(base.usageStats, override.usageStats),
+    profiles,
+    order,
+    lastGood,
+    usageStats,
   };
-  return reconcileMainStoreOAuthProfileDrift({ base, override, merged });
+  const mergeRuntimeProfileIds = (baseIds: string[] = [], overrideIds: string[] = []) =>
+    [...baseIds.filter((profileId) => !overrideProfileIds.has(profileId)), ...overrideIds]
+      .filter((profileId) => merged.profiles[profileId])
+      .toSorted();
+  const runtimePersistedProfileIds = mergeRuntimeProfileIds(
+    base.runtimePersistedProfileIds,
+    override.runtimePersistedProfileIds,
+  );
+  const runtimeLocalProfileIds = override.runtimeLocalProfileIds
+    ?.filter((profileId) => merged.profiles[profileId])
+    .toSorted();
+  const runtimeExternalProfileIds = mergeRuntimeProfileIds(
+    override.runtimeExternalProfileIdsAuthoritative === true &&
+      options?.preserveBaseRuntimeExternalProfiles !== true
+      ? []
+      : base.runtimeExternalProfileIds,
+    override.runtimeExternalProfileIds,
+  );
+  const runtimeExternalProfileIdsAuthoritative =
+    base.runtimeExternalProfileIdsAuthoritative === true ||
+    override.runtimeExternalProfileIdsAuthoritative === true;
+  const runtimeExternalProfileMetadata =
+    runtimeExternalProfileIds.length > 0 || runtimeExternalProfileIdsAuthoritative
+      ? {
+          runtimeExternalProfileIds: [...new Set(runtimeExternalProfileIds)],
+          ...(runtimeExternalProfileIdsAuthoritative
+            ? { runtimeExternalProfileIdsAuthoritative: true }
+            : {}),
+        }
+      : {};
+  const runtimeExternalCliProfileIds = [
+    ...getRuntimeExternalCliProfileIds(base).filter(
+      (profileId) =>
+        !overrideProfileIds.has(profileId) && !removedRuntimeExternalProfileIds.has(profileId),
+    ),
+    ...getRuntimeExternalCliProfileIds(override),
+  ];
+  const result = reconcileMainStoreOAuthProfileDrift({
+    base,
+    override,
+    merged: {
+      ...merged,
+      ...(runtimePersistedProfileIds.length > 0
+        ? { runtimePersistedProfileIds: [...new Set(runtimePersistedProfileIds)] }
+        : {}),
+      ...(runtimeLocalProfileIds ? { runtimeLocalProfileIds } : {}),
+      ...(override.runtimeHasLocalOAuthProfiles !== undefined
+        ? { runtimeHasLocalOAuthProfiles: override.runtimeHasLocalOAuthProfiles }
+        : {}),
+      ...(override.runtimeLocalOrderProviderIds !== undefined
+        ? { runtimeLocalOrderProviderIds: [...override.runtimeLocalOrderProviderIds] }
+        : {}),
+      ...(override.runtimeInheritsMainState !== undefined
+        ? { runtimeInheritsMainState: override.runtimeInheritsMainState }
+        : {}),
+      ...runtimeExternalProfileMetadata,
+    },
+  }) as RuntimeAuthProfileStore;
+  setRuntimeExternalCliProfileIds(result, runtimeExternalCliProfileIds);
+  if (base.runtimeCredentialSources || override.runtimeCredentialSources) {
+    // Reconciliation can select main's OAuth row instead of the local override.
+    result.runtimeCredentialSources = Object.fromEntries(
+      Object.entries(result.profiles).flatMap(([profileId, credential]) => {
+        const source =
+          credential === override.profiles[profileId]
+            ? override.runtimeCredentialSources?.[profileId]
+            : credential === base.profiles[profileId]
+              ? base.runtimeCredentialSources?.[profileId]
+              : undefined;
+        return source ? [[profileId, source]] : [];
+      }),
+    );
+  }
+  return result;
 }
 
+/** Builds the persisted secrets store, stripping resolved literals when refs exist. */
 export function buildPersistedAuthProfileSecretsStore(
   store: AuthProfileStore,
   shouldPersistProfile?: (params: {
     profileId: string;
     credential: AuthProfileCredential;
   }) => boolean,
-  options?: { existingRaw?: unknown },
 ): AuthProfileSecretsStore {
-  const profiles = Object.fromEntries(
-    Object.entries(store.profiles).flatMap(([profileId, credential]) => {
-      if (shouldPersistProfile && !shouldPersistProfile({ profileId, credential })) {
-        return [];
-      }
-      if (credential.type === "api_key" && credential.keyRef && credential.key !== undefined) {
-        const sanitized = { ...credential } as Record<string, unknown>;
-        delete sanitized.key;
-        return [[profileId, sanitized]];
-      }
-      if (credential.type === "token" && credential.tokenRef && credential.token !== undefined) {
-        const sanitized = { ...credential } as Record<string, unknown>;
-        delete sanitized.token;
-        return [[profileId, sanitized]];
-      }
-      return [[profileId, credential]];
-    }),
-  ) as AuthProfileSecretsStore["profiles"];
+  const profiles = { ...store.profiles };
+  for (const [profileId, credential] of Object.entries(profiles)) {
+    if (
+      isUserModelAuthProfileId(profileId) ||
+      (shouldPersistProfile && !shouldPersistProfile({ profileId, credential }))
+    ) {
+      delete profiles[profileId];
+    } else if (credential.type === "api_key" && credential.keyRef && credential.key !== undefined) {
+      const { key: _key, ...sanitized } = credential;
+      profiles[profileId] = sanitized;
+    } else if (
+      credential.type === "token" &&
+      credential.tokenRef &&
+      credential.token !== undefined
+    ) {
+      const { token: _token, ...sanitized } = credential;
+      profiles[profileId] = sanitized;
+    }
+  }
 
-  const payload: AuthProfileSecretsStore = {
+  return {
     version: AUTH_STORE_VERSION,
     profiles,
   };
-  return preserveLegacyOAuthRefsForDoctorMigration(payload, options?.existingRaw);
 }
 
-function preserveLegacyOAuthRefsForDoctorMigration(
-  payload: AuthProfileSecretsStore,
-  existingRaw: unknown,
-): AuthProfileSecretsStore {
-  if (!isRecord(existingRaw) || !isRecord(existingRaw.profiles)) {
-    return payload;
-  }
-  let profiles: AuthProfileSecretsStore["profiles"] | undefined;
-  for (const [profileId, rawProfile] of Object.entries(existingRaw.profiles)) {
-    if (!isRecord(rawProfile) || !isLegacyOAuthRef(rawProfile.oauthRef)) {
-      continue;
-    }
-    const credential = payload.profiles[profileId];
-    if (
-      credential?.type !== "oauth" ||
-      normalizeProviderId(credential.provider) !== LEGACY_OAUTH_REF_PROVIDER ||
-      hasInlineOAuthTokenMaterial(credential)
-    ) {
-      continue;
-    }
-    // Removal-only retention for #79006: runtime must not load sidecar
-    // credentials, but doctor still needs the inert ref to migrate users back
-    // to inline auth-profiles.json OAuth credentials.
-    profiles ??= { ...payload.profiles };
-    profiles[profileId] = {
-      ...credential,
-      oauthRef: rawProfile.oauthRef,
-    } as AuthProfileCredential;
-  }
-  return profiles ? { ...payload, profiles } : payload;
-}
-
-export function applyLegacyAuthStore(store: AuthProfileStore, legacy: LegacyAuthStore): void {
-  for (const [provider, cred] of Object.entries(legacy)) {
-    const profileId = `${provider}:default`;
-    const credentialProvider = cred.provider ?? provider;
-    if (cred.type === "api_key") {
-      store.profiles[profileId] = {
-        type: "api_key",
-        provider: credentialProvider,
-        key: cred.key,
-        ...(cred.email ? { email: cred.email } : {}),
-      };
-      continue;
-    }
-    if (cred.type === "token") {
-      store.profiles[profileId] = {
-        type: "token",
-        provider: credentialProvider,
-        token: cred.token,
-        ...(typeof cred.expires === "number" ? { expires: cred.expires } : {}),
-        ...(cred.email ? { email: cred.email } : {}),
-      };
-      continue;
-    }
-    store.profiles[profileId] = {
-      type: "oauth",
-      provider: credentialProvider,
-      access: cred.access,
-      refresh: cred.refresh,
-      expires: cred.expires,
-      ...(cred.enterpriseUrl ? { enterpriseUrl: cred.enterpriseUrl } : {}),
-      ...(cred.projectId ? { projectId: cred.projectId } : {}),
-      ...(cred.accountId ? { accountId: cred.accountId } : {}),
-      ...(cred.email ? { email: cred.email } : {}),
-    };
-  }
-}
-
-export function mergeOAuthFileIntoStore(store: AuthProfileStore): boolean {
-  const oauthPath = resolveOAuthPath();
-  const oauthRaw = loadJsonFile(oauthPath);
-  if (!oauthRaw || typeof oauthRaw !== "object") {
-    return false;
-  }
-  const oauthEntries = oauthRaw as Record<string, OAuthCredentials>;
-  let mutated = false;
-  for (const [provider, creds] of Object.entries(oauthEntries)) {
-    if (!creds || typeof creds !== "object") {
-      continue;
-    }
-    const profileId = `${provider}:default`;
-    if (store.profiles[profileId]) {
-      continue;
-    }
-    store.profiles[profileId] = {
-      type: "oauth",
-      provider,
-      ...creds,
-    };
-    mutated = true;
-  }
-  return mutated;
-}
-
-export function loadPersistedAuthProfileStore(agentDir?: string): AuthProfileStore | null {
-  const authPath = resolveAuthStorePath(agentDir);
-  const raw = loadJsonFile(authPath);
+export function mergePersistedAuthProfileState(
+  raw: unknown,
+  readState: () => unknown,
+): AuthProfileStore | null {
   const store = coercePersistedAuthProfileStore(raw);
   if (!store) {
     return null;
   }
-  const merged = {
+  return removePersonalAuthProfileReferences({
     ...store,
-    ...mergeAuthProfileState(coerceAuthProfileState(raw), loadPersistedAuthProfileState(agentDir)),
-  };
-  return merged;
+    ...mergeAuthProfileState(store, coerceAuthProfileState(readState())),
+  });
 }
 
-export function loadLegacyAuthProfileStore(agentDir?: string): LegacyAuthStore | null {
-  return coerceLegacyAuthStore(loadJsonFile(resolveLegacyAuthStorePath(agentDir)));
+/** Loads the persisted auth profile store and merges runtime state. */
+export function loadPersistedAuthProfileStore(
+  agentDir?: string,
+  options?: LoadPersistedAuthProfileStoreOptions,
+): AuthProfileStore | null {
+  return mergePersistedAuthProfileState(
+    readPersistedAuthProfileStoreRaw(agentDir, options?.database),
+    () => readPersistedAuthProfileStateRaw(agentDir, options?.database),
+  );
+}
+
+/** Read an already selected owner without rediscovering an environment or opening a writer. */
+export function loadPersistedAuthProfileStoreAtDatabasePath(
+  databasePath: string,
+  kind: "agent" | "shared-state",
+): AuthProfileStore | null {
+  const target = { path: databasePath, kind };
+  const credentials = inspectAuthProfileJsonCellReadOnly(target, "store");
+  if (credentials.status === "missing") {
+    return null;
+  }
+  if (credentials.status === "unreadable") {
+    throw new AuthProfileStoreUnreadableError(databasePath);
+  }
+  const state = inspectAuthProfileJsonCellReadOnly(target, "state");
+  const store = mergePersistedAuthProfileState(credentials.raw, () =>
+    state.status === "readable" ? state.raw : null,
+  );
+  if (!store) {
+    throw new AuthProfileStoreUnreadableError(databasePath);
+  }
+  return store;
+}
+
+/** Load the shared auth store from an explicit state root. */
+export function loadPersistedSharedAuthProfileStore(
+  env: NodeJS.ProcessEnv,
+): AuthProfileStore | null {
+  return mergePersistedAuthProfileState(readPersistedSharedAuthProfileStoreRaw(env), () =>
+    readPersistedSharedAuthProfileStateRaw(env),
+  );
 }

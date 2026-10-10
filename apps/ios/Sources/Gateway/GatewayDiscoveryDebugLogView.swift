@@ -9,20 +9,22 @@ struct GatewayDiscoveryDebugLogView: View {
         List {
             if !self.debugLogsEnabled {
                 Text("Enable “Discovery Debug Logs” to start collecting events.")
+                    .font(OpenClawType.subhead)
                     .foregroundStyle(.secondary)
             }
 
             if self.gatewayController.discoveryDebugLog.isEmpty {
                 Text("No log entries yet.")
+                    .font(OpenClawType.subhead)
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(self.gatewayController.discoveryDebugLog) { entry in
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(Self.formatTime(entry.ts))
-                            .font(.caption)
+                        Text(Self.timeFormatter.string(from: entry.ts))
+                            .font(OpenClawType.caption)
                             .foregroundStyle(.secondary)
                         Text(entry.message)
-                            .font(.callout)
+                            .font(OpenClawType.callout)
                             .textSelection(.enabled)
                     }
                     .padding(.vertical, 4)
@@ -32,8 +34,11 @@ struct GatewayDiscoveryDebugLogView: View {
         .navigationTitle("Discovery Logs")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button("Copy") {
+                Button {
                     UIPasteboard.general.string = self.formattedLog()
+                } label: {
+                    Text("Copy")
+                        .font(OpenClawType.subheadSemiBold)
                 }
                 .disabled(self.gatewayController.discoveryDebugLog.isEmpty)
             }
@@ -42,7 +47,7 @@ struct GatewayDiscoveryDebugLogView: View {
 
     private func formattedLog() -> String {
         self.gatewayController.discoveryDebugLog
-            .map { "\(Self.formatISO($0.ts)) \($0.message)" }
+            .map { "\(Self.isoFormatter.string(from: $0.ts)) \($0.message)" }
             .joined(separator: "\n")
     }
 
@@ -57,12 +62,4 @@ struct GatewayDiscoveryDebugLogView: View {
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter
     }()
-
-    private static func formatTime(_ date: Date) -> String {
-        self.timeFormatter.string(from: date)
-    }
-
-    private static func formatISO(_ date: Date) -> String {
-        self.isoFormatter.string(from: date)
-    }
 }

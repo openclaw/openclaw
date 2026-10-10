@@ -4,41 +4,32 @@ read_when:
   - Debugging why an agent answered, failed, or called tools a certain way
   - Exporting a support bundle for an OpenClaw session
   - Investigating prompt context, tool calls, runtime errors, or usage metadata
-  - Disabling or relocating trajectory capture
+  - Disabling trajectory capture
 title: "Trajectory bundles"
 ---
 
 Trajectory capture is OpenClaw's per-session flight recorder. It records a
 structured timeline for each agent run, then `/export-trajectory` packages the
-current session into a redacted support bundle.
+current session into a redacted support bundle covering:
 
-Use it when you need to answer questions like:
+- The prompt, system prompt, and tools sent to the model
+- Which transcript messages and tool calls led to an answer
+- Whether the run timed out, aborted, compacted, or hit a provider error
+- Which model, plugins, skills, and runtime settings were active
+- Usage and prompt-cache metadata the provider returned
 
-- What prompt, system prompt, and tools were sent to the model?
-- Which transcript messages and tool calls led to this answer?
-- Did the run time out, abort, compact, or hit a provider error?
-- Which model, plugins, skills, and runtime settings were active?
-- What usage and prompt-cache metadata did the provider return?
-
-If you are filing a broad support report for a live Gateway issue, start with
-[`/diagnostics`](/gateway/diagnostics#chat-command). Diagnostics collects the
-sanitized Gateway bundle and, for OpenAI Codex harness sessions, can also send
-Codex feedback to OpenAI servers after approval. Use `/export-trajectory` when
-you specifically need the detailed per-session prompt, tool, and transcript
-timeline.
+For a broad Gateway support report, start with
+[`/diagnostics`](/gateway/diagnostics#chat-command) instead; it collects the
+sanitized Gateway bundle and, for OpenAI Codex harness sessions, can send Codex
+feedback to OpenAI after approval. Use `/export-trajectory` when you need the
+detailed per-session prompt, tool, and transcript timeline.
 
 ## Quick start
 
-Send this in the active session:
+Send in the active session (alias `/trajectory`):
 
 ```text
 /export-trajectory
-```
-
-Alias:
-
-```text
-/trajectory
 ```
 
 OpenClaw writes the bundle under the workspace:
@@ -47,33 +38,38 @@ OpenClaw writes the bundle under the workspace:
 .openclaw/trajectory-exports/openclaw-trajectory-<session>-<timestamp>/
 ```
 
-You can choose a relative output directory name:
+Pass a relative output directory name to override it:
 
 ```text
 /export-trajectory bug-1234
 ```
 
-The custom path is resolved inside `.openclaw/trajectory-exports/`. Absolute
-paths and `~` paths are rejected.
+The name resolves inside `.openclaw/trajectory-exports/`. Absolute paths and
+`~` paths are rejected.
 
 Trajectory bundles can contain prompts, model messages, tool schemas, tool
-results, runtime events, and local paths. The chat slash command therefore runs
-through exec approval every time. Approve the export once when you intend to
-create the bundle; do not use allow-all. In group chats, OpenClaw sends the
-approval prompt and export result to the owner privately instead of posting the
-trajectory details back to the shared room.
+results, runtime events, and local paths, so the chat command always runs
+through exec approval. Approve the export once when you intend to create the
+bundle; do not use allow-all. In group chats, OpenClaw sends the approval
+prompt and export result to the owner privately instead of posting trajectory
+details back to the shared room. The room receives only a status notice that
+distinguishes confirmed, pending, and suppressed private delivery.
 
-For local inspection or support workflows, you can also run the approved command
-path directly:
+For local inspection or support workflows, run the underlying CLI command
+directly:
 
 ```bash
 openclaw sessions export-trajectory --session-key "agent:main:telegram:direct:123" --workspace .
 ```
 
+Other flags: `--output <path>` (directory name inside
+`.openclaw/trajectory-exports`), `--store <path>` (session store override),
+`--agent <id>` (agent id for store resolution), `--json` (structured output).
+
 ## Access
 
 Trajectory export is an owner command. The sender must pass the normal command
-authorization checks and owner checks for the channel.
+authorization checks plus the owner check for the channel.
 
 ## What gets recorded
 
@@ -85,20 +81,16 @@ Runtime events include:
 - `trace.metadata`
 - `context.compiled`
 - `prompt.submitted`
-- `model.fallback_step`, including the source model, next model, failure reason/detail, chain position, and whether fallback advanced, succeeded, or exhausted the chain
+- `tool.call`, with the tool identity and sanitized arguments
+- `tool.result`, with the sanitized result and execution outcome
+- `model.fallback_step`, including the source model, next model, failure reason/detail, chain position, and whether the chain advanced, succeeded, or was exhausted
 - `model.completed`
 - `trace.artifacts`
 - `session.ended`
 
-Transcript events are also reconstructed from the active session branch:
-
-- user messages
-- assistant messages
-- tool calls
-- tool results
-- compactions
-- model changes
-- labels and custom session entries
+Transcript events are reconstructed from the active session branch: user
+messages, assistant messages, tool calls, tool results, compactions, model
+changes, labels, and custom session entries.
 
 Events are written as JSON Lines with this schema marker:
 
@@ -111,8 +103,6 @@ Events are written as JSON Lines with this schema marker:
 
 ## Bundle files
 
-An exported bundle can contain:
-
 | File                  | Contents                                                                                       |
 | --------------------- | ---------------------------------------------------------------------------------------------- |
 | `manifest.json`       | Bundle schema, source files, event counts, and generated file list                             |
@@ -124,68 +114,60 @@ An exported bundle can contain:
 | `system-prompt.txt`   | Latest compiled system prompt, when captured                                                   |
 | `tools.json`          | Tool definitions sent to the model, when captured                                              |
 
-`manifest.json` lists the files present in that bundle. Some files are omitted
-when the session did not capture the corresponding runtime data.
+`manifest.json` lists the files present in a given bundle; some files are
+omitted when the session did not capture the corresponding runtime data.
 
-## Capture location
+## Capture storage
 
-By default, runtime trajectory events are written beside the session file:
+Runtime trajectory events are stored with the session in the per-agent SQLite
+database. Active runs persist events in batches; cleanup drains the final batch.
+Queued events follow the same rolling byte limit while the database writer is busy.
+Exporting a trajectory materializes a redacted JSONL support bundle;
+the live runtime capture is not a session-adjacent JSONL sidecar.
 
-```text
-<session>.trajectory.jsonl
-```
+Each session keeps a rolling 10 MiB runtime window. Global retention removes
+complete runs older than 14 days, then the oldest remaining runs to target a
+512 MiB total. The session triggering cleanup is protected by its own rolling
+window. Global cleanup begins on first use and hourly thereafter, separately
+from appends. It selects bounded batches without holding the database writer
+and rechecks the selection before each deletion. Cleanup continues through
+bounded batches; concurrent changes defer a stale selection until a later
+append.
 
-OpenClaw also writes a best-effort pointer file beside the session:
-
-```text
-<session>.trajectory-path.json
-```
-
-Set `OPENCLAW_TRAJECTORY_DIR` to store runtime trajectory sidecars in a
-dedicated directory:
-
-```bash
-export OPENCLAW_TRAJECTORY_DIR=/var/lib/openclaw/trajectories
-```
-
-When this variable is set, OpenClaw writes one JSONL file per session id in that
-directory.
-
-Session maintenance removes trajectory sidecars when their owning session entry
-is pruned, capped, or evicted by the sessions disk budget. Runtime files outside
-the sessions directory are removed only when the pointer target still proves it
-belongs to that session.
+Runtime export reads the SQLite capture. Pre-July 2026 `.trajectory.jsonl` and
+`.trajectory-path.json` sidecars are no longer read or followed. Existing files
+can be removed after retaining any needed diagnostic data.
 
 ## Disable capture
-
-Set `OPENCLAW_TRAJECTORY=0` before starting OpenClaw:
 
 ```bash
 export OPENCLAW_TRAJECTORY=0
 ```
 
-This disables runtime trajectory capture. `/export-trajectory` can still export
-the transcript branch, but runtime-only files such as compiled context,
-provider artifacts, and prompt metadata may be missing.
+This disables runtime trajectory capture before starting OpenClaw.
+`/export-trajectory` can still export the transcript branch, but runtime-only
+data such as compiled context, provider artifacts, and prompt metadata may be
+missing.
 
 ## Tune flush timeout
 
-OpenClaw flushes runtime trajectory sidecars during agent cleanup. The default
-cleanup timeout is 10,000 ms. On slow disks or large stores, set
+OpenClaw drains any pending runtime trajectory rows during agent cleanup. The
+default cleanup timeout is 10,000 ms. On slow disks or large stores, set
 `OPENCLAW_TRAJECTORY_FLUSH_TIMEOUT_MS` before starting OpenClaw:
 
 ```bash
 export OPENCLAW_TRAJECTORY_FLUSH_TIMEOUT_MS=30000
 ```
 
-This controls when OpenClaw logs a `pi-trajectory-flush` timeout and continues.
-It does not change the trajectory size caps. To tune all agent cleanup steps
-that do not pass an explicit timeout, set `OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS`.
+This controls when OpenClaw logs an `openclaw-trajectory-flush` timeout and
+continues; it does not change the trajectory size caps. To tune all agent
+cleanup steps that do not pass an explicit timeout, set
+`OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS`.
 
 ## Privacy and limits
 
-Trajectory bundles are designed for support and debugging, not public posting.
-OpenClaw redacts sensitive values before writing export files:
+Trajectory bundles are for support and debugging, not public posting. OpenClaw
+redacts sensitive values before writing export files:
 
 - credentials and known secret-like payload fields
 - image data
@@ -195,11 +177,20 @@ OpenClaw redacts sensitive values before writing export files:
 
 The exporter also bounds input size:
 
-- runtime sidecar files: live capture stops at 10 MiB and records a truncation event when space remains; export accepts existing runtime sidecars up to 50 MiB
-- session files: 50 MiB
-- runtime events: 200,000
+- runtime capture: the live capture is a rolling window capped at 10 MiB, dropping the oldest events to make room for new ones; export accepts the SQLite runtime store up to 50 MiB
+- session (transcript) sources: 50 MiB, whether read from the SQLite transcript store or a session file
+- runtime events per export: 200,000
 - total exported events: 250,000
 - individual runtime event lines are truncated above 256 KiB
+
+The source byte limits are checked before parsing events. SQLite sources use
+UTF-8 JSONL size, including separators between rows, regardless of the database
+encoding. SQLite runtime event counts are also checked before loading rows.
+Oversized sources fail with a size error before an export bundle is created.
+
+These are per-source limits, not a bound on total process memory. Parsing,
+projection, redaction, and output serialization can retain additional copies;
+large exports can still require more memory than their source size.
 
 Review bundles before sharing them outside your team. Redaction is best-effort
 and cannot know every application-specific secret.
@@ -209,7 +200,6 @@ and cannot know every application-specific secret.
 If the export has no runtime events:
 
 - confirm OpenClaw was started without `OPENCLAW_TRAJECTORY=0`
-- check whether `OPENCLAW_TRAJECTORY_DIR` points to a writable directory
 - run another message in the session, then export again
 - inspect `manifest.json` for `runtimeEventCount`
 
@@ -219,11 +209,13 @@ If the command rejects the output path:
 - do not pass `/tmp/...` or `~/...`
 - keep the export inside `.openclaw/trajectory-exports/`
 
-If the export fails with a size error, the session or sidecar exceeded the
-export safety limits. Start a new session or export a smaller reproduction.
+If the export fails with a size error, a transcript or runtime source — the
+SQLite store or a file — exceeded the export safety limits above. Start a new
+session or export a smaller reproduction.
 
 ## Related
 
 - [Diffs](/tools/diffs)
 - [Session management](/concepts/session)
 - [Exec tool](/tools/exec)
+- [Codex harness runtime](/plugins/codex-harness-runtime)

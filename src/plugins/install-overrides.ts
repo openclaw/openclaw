@@ -1,10 +1,12 @@
-import path from "node:path";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { isRecord, resolveUserPath } from "../utils.js";
 
+/** Env var containing JSON plugin install override specs. */
 export const PLUGIN_INSTALL_OVERRIDES_ENV = "OPENCLAW_PLUGIN_INSTALL_OVERRIDES";
+/** Env var gate that must be enabled before install overrides are honored. */
 export const ALLOW_PLUGIN_INSTALL_OVERRIDES_ENV = "OPENCLAW_ALLOW_PLUGIN_INSTALL_OVERRIDES";
 
+/** Parsed plugin install override for tests and maintainer repair flows. */
 export type PluginInstallOverride =
   | {
       kind: "npm";
@@ -35,11 +37,12 @@ function parseOverrideSpec(raw: string): PluginInstallOverride | null {
     if (!rawPath) {
       return null;
     }
-    return { kind: "npm-pack", archivePath: path.resolve(resolveUserPath(rawPath)) };
+    return { kind: "npm-pack", archivePath: resolveUserPath(rawPath) };
   }
   return null;
 }
 
+/** Resolves a gated plugin install override from environment configuration. */
 export function resolvePluginInstallOverride(params: {
   pluginId: string;
   env?: NodeJS.ProcessEnv;

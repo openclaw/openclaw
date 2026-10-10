@@ -1,16 +1,12 @@
 import type {
-  GeneratedVideoAsset,
   VideoGenerationProvider,
   VideoGenerationSourceAsset,
 } from "openclaw/plugin-sdk/video-generation";
 import {
   DEFAULT_COMFY_MODEL,
-  _setComfyFetchGuardForTesting,
   isComfyCapabilityConfigured,
   runComfyWorkflow,
 } from "./workflow-runtime.js";
-
-export { _setComfyFetchGuardForTesting };
 
 function toComfyInputImage(inputImage?: VideoGenerationSourceAsset) {
   if (!inputImage) {
@@ -70,34 +66,15 @@ export function buildComfyVideoGenerationProvider(): VideoGenerationProvider {
       }
 
       const result = await runComfyWorkflow({
-        cfg: req.cfg,
-        agentDir: req.agentDir,
-        authStore: req.authStore,
-        prompt: req.prompt,
-        model: req.model,
-        timeoutMs: req.timeoutMs,
+        ...req,
         capability: "video",
-        outputKinds: ["gifs", "videos"],
         inputImage: toComfyInputImage(req.inputImages?.[0]),
       });
 
-      const videos: GeneratedVideoAsset[] = result.assets.map((asset) => ({
-        buffer: asset.buffer,
-        mimeType: asset.mimeType,
-        fileName: asset.fileName,
-        metadata: {
-          nodeId: asset.nodeId,
-          promptId: result.promptId,
-        },
-      }));
-
       return {
-        videos,
+        videos: result.assets,
         model: result.model,
-        metadata: {
-          promptId: result.promptId,
-          outputNodeIds: result.outputNodeIds,
-        },
+        metadata: result.metadata,
       };
     },
   };

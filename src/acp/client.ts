@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import * as readline from "node:readline";
@@ -11,8 +12,9 @@ import {
   type RequestPermissionRequest,
   type SessionNotification,
 } from "@agentclientprotocol/sdk";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { killProcessTree, signalProcessTree } from "../process/kill-tree.js";
 import {
   buildAcpClientStripKeys,
   resolveAcpClientSpawnEnv,
@@ -29,25 +31,46 @@ type AcpClientOptions = {
   verbose?: boolean;
 };
 
-type AcpClientHandle = {
-  client: ClientSideConnection;
-  agent: ChildProcess;
-  sessionId: string;
-};
+const ACP_SERVER_KILL_GRACE_MS = 1000;
+const ACP_SERVER_FORCE_KILL_TIMEOUT_MS = 1000;
 
-function toArgs(value: string[] | string | undefined): string[] {
-  if (!value) {
-    return [];
-  }
-  return Array.isArray(value) ? value : [value];
+function hasChildExited(child: ChildProcess): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
 }
 
-function buildServerArgs(opts: AcpClientOptions): string[] {
-  const args = ["acp", ...toArgs(opts.serverArgs)];
-  if (opts.serverVerbose && !args.includes("--verbose") && !args.includes("-v")) {
-    args.push("--verbose");
+async function waitForChildExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+  if (!hasChildExited(child)) {
+    await once(child, "exit", { signal: AbortSignal.timeout(timeoutMs) }).catch(() => {});
   }
-  return args;
+  return hasChildExited(child);
+}
+
+async function terminateAcpServer(child: ChildProcess): Promise<void> {
+  if (hasChildExited(child)) {
+    return;
+  }
+
+  if (child.pid) {
+    // This child is not detached, so Unix cleanup must stay on its direct PID.
+    // Windows still reaps descendants; both paths escalate if SIGTERM is ignored.
+    killProcessTree(child.pid, {
+      detached: false,
+      graceMs: ACP_SERVER_KILL_GRACE_MS,
+    });
+  } else {
+    child.kill("SIGTERM");
+  }
+
+  if (await waitForChildExit(child, ACP_SERVER_KILL_GRACE_MS + ACP_SERVER_FORCE_KILL_TIMEOUT_MS)) {
+    return;
+  }
+
+  if (child.pid) {
+    signalProcessTree(child.pid, "SIGKILL", { detached: false });
+  } else {
+    child.kill("SIGKILL");
+  }
+  await waitForChildExit(child, ACP_SERVER_FORCE_KILL_TIMEOUT_MS);
 }
 
 function resolveSelfEntryPath(): string | null {
@@ -71,10 +94,6 @@ function resolveSelfEntryPath(): string | null {
 
 function printSessionUpdate(notification: SessionNotification): void {
   const update = notification.update;
-  if (!("sessionUpdate" in update)) {
-    return;
-  }
-
   switch (update.sessionUpdate) {
     case "agent_message_chunk": {
       if (update.content?.type === "text") {
@@ -97,27 +116,28 @@ function printSessionUpdate(notification: SessionNotification): void {
       if (names) {
         console.log(`\n[commands] ${names}`);
       }
-      return;
     }
     default:
-      return;
   }
 }
 
-async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpClientHandle> {
+async function createAcpClient(opts: AcpClientOptions = {}) {
   const cwd = opts.cwd ?? process.cwd();
   const verbose = Boolean(opts.verbose);
   const log = verbose ? (msg: string) => console.error(`[acp-client] ${msg}`) : () => {};
 
   ensureOpenClawCliOnPath();
-  const serverArgs = buildServerArgs(opts);
+  const serverArgs = ["acp", ...(opts.serverArgs ?? [])];
+  if (opts.serverVerbose && !serverArgs.includes("--verbose") && !serverArgs.includes("-v")) {
+    serverArgs.push("--verbose");
+  }
 
   const entryPath = resolveSelfEntryPath();
   const defaultServerCommand = entryPath ? process.execPath : "openclaw";
   const defaultServerArgs = entryPath ? [entryPath, ...serverArgs] : serverArgs;
   const serverCommand = opts.serverCommand ?? defaultServerCommand;
   const effectiveArgs = opts.serverCommand || !entryPath ? serverArgs : defaultServerArgs;
-  const { getActiveSkillEnvKeys } = await import("../agents/skills/env-overrides.runtime.js");
+  const { getActiveSkillEnvKeysCore } = await import("../skills/runtime/env-overrides.js");
   const stripProviderAuthEnvVars = shouldStripProviderAuthEnvVarsForAcpServer({
     serverCommand,
     serverArgs: effectiveArgs,
@@ -126,7 +146,7 @@ async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpClientHa
   });
   const stripKeys = buildAcpClientStripKeys({
     stripProviderAuthEnvVars,
-    activeSkillEnvKeys: getActiveSkillEnvKeys(),
+    activeSkillEnvKeys: getActiveSkillEnvKeysCore(),
   });
   const spawnEnv = resolveAcpClientSpawnEnv(process.env, { stripKeys });
   const spawnInvocation = resolveAcpClientSpawnInvocation(
@@ -148,47 +168,56 @@ async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpClientHa
     windowsHide: spawnInvocation.windowsHide,
   });
 
-  if (!agent.stdin || !agent.stdout) {
-    throw new Error("Failed to create ACP stdio pipes");
+  agent.on("error", (err) => {
+    log(`agent error: ${String(err)}`);
+  });
+
+  try {
+    if (!agent.stdin || !agent.stdout) {
+      throw new Error("Failed to create ACP stdio pipes");
+    }
+
+    const input = Writable.toWeb(agent.stdin);
+    const output = Readable.toWeb(agent.stdout) as unknown as ReadableStream<Uint8Array>;
+    const stream = ndJsonStream(input, output);
+
+    const client = new ClientSideConnection(
+      () => ({
+        sessionUpdate: async (params: SessionNotification) => {
+          printSessionUpdate(params);
+        },
+        requestPermission: async (params: RequestPermissionRequest) => {
+          return resolvePermissionRequest(params, { cwd });
+        },
+      }),
+      stream,
+    );
+
+    log("initializing");
+    await client.initialize({
+      protocolVersion: PROTOCOL_VERSION,
+      clientCapabilities: {
+        fs: { readTextFile: true, writeTextFile: true },
+        terminal: true,
+      },
+      clientInfo: { name: "openclaw-acp-client", version: "1.0.0" },
+    });
+
+    log("creating session");
+    const session = await client.newSession({
+      cwd,
+      mcpServers: [],
+    });
+
+    return {
+      client,
+      agent,
+      sessionId: session.sessionId,
+    };
+  } catch (error) {
+    await terminateAcpServer(agent);
+    throw error;
   }
-
-  const input = Writable.toWeb(agent.stdin);
-  const output = Readable.toWeb(agent.stdout) as unknown as ReadableStream<Uint8Array>;
-  const stream = ndJsonStream(input, output);
-
-  const client = new ClientSideConnection(
-    () => ({
-      sessionUpdate: async (params: SessionNotification) => {
-        printSessionUpdate(params);
-      },
-      requestPermission: async (params: RequestPermissionRequest) => {
-        return resolvePermissionRequest(params, { cwd });
-      },
-    }),
-    stream,
-  );
-
-  log("initializing");
-  await client.initialize({
-    protocolVersion: PROTOCOL_VERSION,
-    clientCapabilities: {
-      fs: { readTextFile: true, writeTextFile: true },
-      terminal: true,
-    },
-    clientInfo: { name: "openclaw-acp-client", version: "1.0.0" },
-  });
-
-  log("creating session");
-  const session = await client.newSession({
-    cwd,
-    mcpServers: [],
-  });
-
-  return {
-    client,
-    agent,
-    sessionId: session.sessionId,
-  };
 }
 
 export async function runAcpClientInteractive(opts: AcpClientOptions = {}): Promise<void> {
@@ -203,38 +232,55 @@ export async function runAcpClientInteractive(opts: AcpClientOptions = {}): Prom
   console.log(`Session: ${sessionId}`);
   console.log('Type a prompt, or "exit" to quit.\n');
 
+  let quitting = false; // Only client-owned shutdown makes a signal stop successful.
+  const quit = async () => {
+    if (quitting || hasChildExited(agent)) {
+      return;
+    }
+    quitting = true;
+    await terminateAcpServer(agent);
+    rl.close();
+    process.exit(0);
+  };
+  rl.once("close", () => {
+    void quit();
+  });
   const prompt = () => {
-    rl.question("> ", async (input) => {
-      const text = input.trim();
-      if (!text) {
+    if (quitting) {
+      return;
+    }
+    rl.question("> ", (input) => {
+      void (async () => {
+        const text = input.trim();
+        if (!text) {
+          prompt();
+          return;
+        }
+        if (text === "exit" || text === "quit") {
+          await quit();
+          return;
+        }
+
+        try {
+          const response = await client.prompt({
+            sessionId,
+            prompt: [{ type: "text", text }],
+          });
+          console.log(`\n[${response.stopReason}]\n`);
+        } catch (err) {
+          console.error(`\n[error] ${String(err)}\n`);
+        }
+
         prompt();
-        return;
-      }
-      if (text === "exit" || text === "quit") {
-        agent.kill();
-        rl.close();
-        process.exit(0);
-      }
-
-      try {
-        const response = await client.prompt({
-          sessionId,
-          prompt: [{ type: "text", text }],
-        });
-        console.log(`\n[${response.stopReason}]\n`);
-      } catch (err) {
-        console.error(`\n[error] ${String(err)}\n`);
-      }
-
-      prompt();
+      })();
     });
   };
 
   prompt();
 
-  agent.on("exit", (code) => {
-    console.log(`\nAgent exited with code ${code ?? 0}`);
+  agent.on("exit", (code, signal) => {
+    console.log(`\nAgent exited with ${signal ? `signal ${signal}` : `code ${code}`}`);
     rl.close();
-    process.exit(code ?? 0);
+    process.exit(code ?? (quitting ? 0 : 1));
   });
 }

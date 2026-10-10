@@ -1,21 +1,98 @@
+// Gateway RPC helpers for node CLI commands, including lazy runtime loading and option parsing.
 import { randomUUID } from "node:crypto";
+import {
+  parseStrictFiniteNumber,
+  parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
+} from "@openclaw/normalization-core/number-coercion";
 import type { Command } from "commander";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../../packages/gateway-protocol/src/client-info.js";
+import { readConnectErrorDetailCode } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import { readMissingScopeError } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
+import type { OperatorScope } from "../../gateway/method-scopes.js";
+import { parseNodeList, parsePairingList } from "../../shared/node-list-parse.js";
+import type { NodeListNode } from "../../shared/node-list-types.js";
 import { resolveNodeFromNodeList } from "../../shared/node-resolve.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
-import { parseNodeList, parsePairingList } from "./format.js";
-import type { NodeListNode, NodesRpcOpts } from "./types.js";
+import { callGatewayFromCliWithTransport } from "../gateway-rpc.js";
+import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
+import type { NodesRpcOpts } from "./types.js";
 
-type NodesCliRpcRuntimeModule = typeof import("./rpc.runtime.js");
+const STORED_DEVICE_AUTH_FALLBACK_DETAIL_CODES = new Set([
+  "AUTH_REQUIRED",
+  "AUTH_UNAUTHORIZED",
+  "AUTH_TOKEN_MISMATCH",
+  "AUTH_DEVICE_TOKEN_MISMATCH",
+  "AUTH_SCOPE_MISMATCH",
+  "PAIRING_REQUIRED",
+]);
+const NODE_PAIR_APPROVAL_GATEWAY_METHODS = new Set<string>(["node.pair.list", "node.pair.approve"]);
+const DEFAULT_NODES_RPC_TIMEOUT_MS = 10_000;
 
-const nodesCliRpcRuntimeLoader = createLazyImportLoader<NodesCliRpcRuntimeModule>(
-  () => import("./rpc.runtime.js"),
-);
-
-async function loadNodesCliRpcRuntime(): Promise<NodesCliRpcRuntimeModule> {
-  return nodesCliRpcRuntimeLoader.load();
+function resolveNodesTransportTimeoutMs(
+  opts: NodesRpcOpts,
+  invokeTimeoutMs?: unknown,
+): number | null {
+  const transportTimeoutMs = parseTimeoutMsWithFallback(
+    opts.timeout,
+    DEFAULT_NODES_RPC_TIMEOUT_MS,
+    {
+      invalidType: "error",
+    },
+  );
+  if (invokeTimeoutMs === 0) {
+    // Zero disables the node deadline; null keeps Gateway startup bounded but the request unbounded.
+    return null;
+  }
+  if (
+    typeof invokeTimeoutMs !== "number" ||
+    !Number.isSafeInteger(invokeTimeoutMs) ||
+    invokeTimeoutMs <= 0
+  ) {
+    return transportTimeoutMs;
+  }
+  // Gateway transport starts before the node timer; retain one normal RPC timeout for forwarding.
+  return Math.max(transportTimeoutMs, invokeTimeoutMs + DEFAULT_NODES_RPC_TIMEOUT_MS);
 }
 
+function isDiagnosticsAuthFallbackError(value: unknown): value is Error {
+  if (
+    value instanceof Error &&
+    (value.name === "GatewayCredentialsRequiredError" ||
+      value.name === "GatewayStoredDeviceAuthUnavailableError" ||
+      value.name === "GatewayLocalBackendSharedAuthUnavailableError")
+  ) {
+    return true;
+  }
+  if (!(value instanceof Error) || value.name !== "GatewayClientRequestError") {
+    return false;
+  }
+  const details = (value as Error & { details?: unknown }).details;
+  const detailCode = readConnectErrorDetailCode(details);
+  if (detailCode !== null && STORED_DEVICE_AUTH_FALLBACK_DETAIL_CODES.has(detailCode)) {
+    return true;
+  }
+  return readMissingScopeError(value)?.missingScope === "operator.read";
+}
+
+function isUnknownGatewayMethodError(
+  value: unknown,
+  method: string,
+): value is GatewayClientRequestError {
+  return (
+    value instanceof GatewayClientRequestError &&
+    value.gatewayCode === "INVALID_REQUEST" &&
+    !value.retryable &&
+    value.message === `unknown method: ${method}` &&
+    (value.retryAfterMs === undefined ||
+      (Number.isInteger(value.retryAfterMs) && value.retryAfterMs >= 0))
+  );
+}
+
+/** Attach shared Gateway connection/json options to a node command. */
 export const nodesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =>
   cmd
     .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
@@ -23,20 +100,90 @@ export const nodesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =
     .option("--timeout <ms>", "Timeout in ms", String(defaults?.timeoutMs ?? 10_000))
     .option("--json", "Output JSON", false);
 
-export const callGatewayCli = async (
+/** Call a Gateway method through the lazily loaded node CLI RPC runtime. */
+export const callNodesGatewayCli = async (
   method: string,
   opts: NodesRpcOpts,
   params?: unknown,
-  callOpts?: { transportTimeoutMs?: number },
+  callOpts?: {
+    scopes?: OperatorScope[];
+    useStoredDeviceAuth?: boolean;
+    requiredStoredDeviceAuthScopes?: OperatorScope[];
+    useLocalBackendSharedAuth?: boolean;
+  },
 ) => {
-  const runtime = await loadNodesCliRpcRuntime();
-  return await runtime.callGatewayCliRuntime(method, opts, params, callOpts);
+  const invokeTimeoutMs =
+    method === "node.invoke" &&
+    params !== null &&
+    typeof params === "object" &&
+    !Array.isArray(params)
+      ? (params as { timeoutMs?: unknown }).timeoutMs
+      : undefined;
+  const useLocalBackendSharedAuth = callOpts?.useLocalBackendSharedAuth === true;
+  return await callGatewayFromCliWithTransport(method, opts, params, {
+    label: `Nodes ${method}`,
+    timeoutMs: resolveNodesTransportTimeoutMs(opts, invokeTimeoutMs),
+    scopes: callOpts?.scopes,
+    useStoredDeviceAuth: callOpts?.useStoredDeviceAuth,
+    requiredStoredDeviceAuthScopes: callOpts?.requiredStoredDeviceAuthScopes,
+    requireLocalBackendSharedAuth: useLocalBackendSharedAuth,
+    clientName: useLocalBackendSharedAuth
+      ? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT
+      : GATEWAY_CLIENT_NAMES.CLI,
+    mode: useLocalBackendSharedAuth ? GATEWAY_CLIENT_MODES.BACKEND : GATEWAY_CLIENT_MODES.CLI,
+    sharedStateMode: "read-only",
+  });
 };
 
+/** Read node diagnostics with pairing details when authorized, otherwise keep read-only access. */
+export const callNodeDiagnosticsGatewayCli = async (
+  method: "node.list" | "node.describe",
+  opts: NodesRpcOpts,
+  params?: unknown,
+) => {
+  for (const auth of [
+    {
+      useStoredDeviceAuth: true,
+      requiredStoredDeviceAuthScopes: ["operator.read", "operator.pairing"],
+    },
+    { scopes: ["operator.read", "operator.pairing"], useLocalBackendSharedAuth: true },
+  ] satisfies NonNullable<Parameters<typeof callNodesGatewayCli>[3]>[]) {
+    try {
+      return await callNodesGatewayCli(method, opts, params, auth);
+    } catch (error) {
+      if (!isDiagnosticsAuthFallbackError(error)) {
+        throw error;
+      }
+    }
+  }
+  return await callNodesGatewayCli(method, opts, params);
+};
+
+/** Call pairing approval methods with explicit operator scopes. */
+export const callNodePairApprovalGatewayCli = async (
+  method: "node.pair.list" | "node.pair.approve",
+  opts: NodesRpcOpts,
+  params: unknown,
+  callOpts: { scopes: OperatorScope[] },
+) => {
+  if (!NODE_PAIR_APPROVAL_GATEWAY_METHODS.has(method)) {
+    throw new Error(`unsupported node pair approval gateway method: ${method}`);
+  }
+  return await callGatewayFromCliWithTransport(method, opts, params, {
+    label: `Nodes ${method}`,
+    timeoutMs: resolveNodesTransportTimeoutMs(opts),
+    scopes: callOpts.scopes,
+    clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+    mode: GATEWAY_CLIENT_MODES.BACKEND,
+    sharedStateMode: "read-only",
+  });
+};
+
+/** Build a node.invoke payload with an idempotency key and optional timeout. */
 export function buildNodeInvokeParams(params: {
   nodeId: string;
   command: string;
-  params?: Record<string, unknown>;
+  params?: unknown;
   timeoutMs?: number;
   idempotencyKey?: string;
 }): Record<string, unknown> {
@@ -52,33 +199,81 @@ export function buildNodeInvokeParams(params: {
   return invokeParams;
 }
 
-export function unauthorizedHintForMessage(message: string): string | null {
-  const haystack = normalizeLowercaseStringOrEmpty(message);
-  if (
-    haystack.includes("unauthorizedclient") ||
-    haystack.includes("bridge client is not authorized") ||
-    haystack.includes("unsigned bridge clients are not allowed")
-  ) {
-    return [
-      "peekaboo bridge rejected the client.",
-      "sign the peekaboo CLI (TeamID Y5PE65HELJ) or launch the host with",
-      "PEEKABOO_ALLOW_UNSIGNED_SOCKET_CLIENTS=1 for local dev.",
-    ].join(" ");
+/** Parse an optional integer node CLI flag. */
+export function parseOptionalNodeInteger(
+  value: unknown,
+  flag: string,
+  kind: "positive" | "non-negative" = "positive",
+): number | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
   }
-  return null;
+  const parsed =
+    kind === "positive" ? parseStrictPositiveInteger(value) : parseStrictNonNegativeInteger(value);
+  if (parsed === undefined) {
+    throw new Error(`${flag} must be a ${kind} integer.`);
+  }
+  return parsed;
 }
 
-export async function resolveNodeId(opts: NodesRpcOpts, query: string) {
-  return (await resolveNode(opts, query)).nodeId;
+/** Parse an optional finite number node CLI flag with optional bounds. */
+export function parseOptionalNodeFiniteNumber(
+  value: unknown,
+  flag: string,
+  bounds?: {
+    minExclusive?: number;
+    minInclusive?: number;
+    maxInclusive?: number;
+  },
+): number | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  const parsed = parseStrictFiniteNumber(value);
+  if (parsed === undefined) {
+    throw new Error(`${flag} must be a finite number.`);
+  }
+  if (bounds?.minExclusive !== undefined && parsed <= bounds.minExclusive) {
+    throw new Error(`${flag} must be greater than ${bounds.minExclusive}.`);
+  }
+  if (bounds?.minInclusive !== undefined && parsed < bounds.minInclusive) {
+    throw new Error(`${flag} must be at least ${bounds.minInclusive}.`);
+  }
+  if (bounds?.maxInclusive !== undefined && parsed > bounds.maxInclusive) {
+    throw new Error(`${flag} must be at most ${bounds.maxInclusive}.`);
+  }
+  return parsed;
 }
 
-export async function resolveNode(opts: NodesRpcOpts, query: string): Promise<NodeListNode> {
-  let nodes: NodeListNode[] = [];
+/** Resolve a node query to a node id via live node list or paired-node fallback. */
+export async function resolveCliNodeId(opts: NodesRpcOpts, query: string) {
+  return (await resolveCliNode(opts, query)).nodeId;
+}
+
+/** Resolve a node through the pairing-aware diagnostics view when available. */
+export async function resolveNodeDiagnosticsId(opts: NodesRpcOpts, query: string) {
   try {
-    const res = await callGatewayCli("node.list", opts, {});
+    const res = await callNodeDiagnosticsGatewayCli("node.list", opts, {});
+    return resolveNodeFromNodeList(parseNodeList(res), query).nodeId;
+  } catch (error) {
+    if (!isUnknownGatewayMethodError(error, "node.list")) {
+      throw error;
+    }
+    return await resolveCliNodeId(opts, query);
+  }
+}
+
+/** Resolve a node query to the best available node record. */
+export async function resolveCliNode(opts: NodesRpcOpts, query: string): Promise<NodeListNode> {
+  let nodes: NodeListNode[];
+  try {
+    const res = await callNodesGatewayCli("node.list", opts, {});
     nodes = parseNodeList(res);
-  } catch {
-    const res = await callGatewayCli("node.pair.list", opts, {});
+  } catch (error) {
+    if (!isUnknownGatewayMethodError(error, "node.list")) {
+      throw error;
+    }
+    const res = await callNodesGatewayCli("node.pair.list", opts, {});
     const { paired } = parsePairingList(res);
     nodes = paired.map((n) => ({
       nodeId: n.nodeId,

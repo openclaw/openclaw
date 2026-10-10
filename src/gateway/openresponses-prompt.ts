@@ -1,8 +1,13 @@
 import {
   buildAgentMessageFromConversationEntries,
   type ConversationEntry,
+  IMAGE_ONLY_USER_MESSAGE,
+  renderConversationToolCall,
 } from "./agent-prompt.js";
 import type { ContentPart, ItemParam } from "./open-responses.schema.js";
+
+const FILE_ONLY_USER_MESSAGE = "User sent file(s) with no text.";
+type ResponseMessageItem = Extract<ItemParam, { type: "message" }>;
 
 function extractTextContent(content: string | ContentPart[]): string {
   if (typeof content === "string") {
@@ -10,10 +15,7 @@ function extractTextContent(content: string | ContentPart[]): string {
   }
   return content
     .map((part) => {
-      if (part.type === "input_text") {
-        return part.text;
-      }
-      if (part.type === "output_text") {
+      if (part.type === "input_text" || part.type === "output_text") {
         return part.text;
       }
       return "";
@@ -22,9 +24,37 @@ function extractTextContent(content: string | ContentPart[]): string {
     .join("\n");
 }
 
+function placeholderForActiveTurn(content: string | ContentPart[]): string {
+  if (typeof content === "string") {
+    return "";
+  }
+  if (content.some((part) => part.type === "input_image")) {
+    return IMAGE_ONLY_USER_MESSAGE;
+  }
+  if (content.some((part) => part.type === "input_file")) {
+    return FILE_ONLY_USER_MESSAGE;
+  }
+  return "";
+}
+
+/** A tool result starts its own turn and cannot inherit an earlier user's media. */
+function resolveActiveUserMessage(input: ItemParam[]): ResponseMessageItem | undefined {
+  for (let i = input.length - 1; i >= 0; i -= 1) {
+    const item = input[i];
+    if (item?.type === "function_call_output") {
+      return undefined;
+    }
+    if (item?.type === "message" && item.role === "user") {
+      return item;
+    }
+  }
+  return undefined;
+}
+
 export function buildAgentPrompt(input: string | ItemParam[]): {
   message: string;
   extraSystemPrompt?: string;
+  activeUserMessage?: ResponseMessageItem;
 } {
   if (typeof input === "string") {
     return { message: input };
@@ -32,16 +62,20 @@ export function buildAgentPrompt(input: string | ItemParam[]): {
 
   const systemParts: string[] = [];
   const conversationEntries: ConversationEntry[] = [];
+  const activeUserMessage = resolveActiveUserMessage(input);
 
   for (const item of input) {
     if (item.type === "message") {
       const content = extractTextContent(item.content).trim();
-      if (!content) {
+      // Preserve media-only active turns; historical media bytes are not replayed.
+      const body =
+        content || (item === activeUserMessage ? placeholderForActiveTurn(item.content) : "");
+      if (!body) {
         continue;
       }
 
       if (item.role === "system" || item.role === "developer") {
-        systemParts.push(content);
+        systemParts.push(body);
         continue;
       }
 
@@ -50,7 +84,15 @@ export function buildAgentPrompt(input: string | ItemParam[]): {
 
       conversationEntries.push({
         role: normalizedRole,
-        entry: { sender, body: content },
+        entry: { sender, body },
+      });
+    } else if (item.type === "function_call") {
+      conversationEntries.push({
+        role: "assistant",
+        entry: {
+          sender: "Assistant",
+          body: renderConversationToolCall({ ...item, id: item.call_id ?? item.id }),
+        },
       });
     } else if (item.type === "function_call_output") {
       conversationEntries.push({
@@ -58,7 +100,7 @@ export function buildAgentPrompt(input: string | ItemParam[]): {
         entry: { sender: `Tool:${item.call_id}`, body: item.output },
       });
     }
-    // Skip reasoning and item_reference for prompt building (Phase 1)
+    // Reasoning and item references are not user-visible prompt text in this adapter.
   }
 
   const message = buildAgentMessageFromConversationEntries(conversationEntries);
@@ -66,5 +108,6 @@ export function buildAgentPrompt(input: string | ItemParam[]): {
   return {
     message,
     extraSystemPrompt: systemParts.length > 0 ? systemParts.join("\n\n") : undefined,
+    activeUserMessage,
   };
 }

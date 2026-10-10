@@ -1,27 +1,30 @@
+// Coordinates native approval delivery routing and notices.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type {
   ChannelApprovalNativeDeliveryPlan,
   ChannelApprovalNativePlannedTarget,
 } from "./approval-native-delivery.js";
 import {
   describeApprovalDeliveryDestination,
+  resolveAmbiguousApprovalRouteNoticeText,
   resolveApprovalDeliveryFailedNoticeText,
   resolveApprovalRoutedElsewhereNoticeText,
 } from "./approval-native-route-notice.js";
 import { buildChannelApprovalNativeTargetKey } from "./approval-native-target-key.js";
-import type { ChannelApprovalKind } from "./approval-types.js";
-import type { ExecApprovalRequest } from "./exec-approvals.js";
-import type { PluginApprovalRequest } from "./plugin-approvals.js";
+import type {
+  ApprovalRequestInput as ApprovalRequest,
+  ApprovalRequestChannelRouteClass,
+  ChannelApprovalKind,
+} from "./approval-types.js";
 
 type GatewayRequestFn = <T = unknown>(
   method: string,
   params: Record<string, unknown>,
 ) => Promise<T>;
-
-type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
 
 type ApprovalRouteRuntimeRecord = {
   runtimeId: string;
@@ -30,26 +33,38 @@ type ApprovalRouteRuntimeRecord = {
   channelLabel?: string;
   accountId?: string | null;
   requestGateway: GatewayRequestFn;
+  shouldHandle: (request: ApprovalRequest) => boolean;
+  classifyRoute: (request: ApprovalRequest) => ApprovalRequestChannelRouteClass;
 };
+
+type ApprovalRouteSkipReason = "ambiguous-owner" | "ineligible" | "owner-unavailable";
 
 type ApprovalRouteReport = {
   runtimeId: string;
-  request: ApprovalRequest;
   channel?: string;
   channelLabel?: string;
   accountId?: string | null;
   deliveryPlan: ChannelApprovalNativeDeliveryPlan;
   deliveredTargets: readonly ChannelApprovalNativePlannedTarget[];
   requestGateway: GatewayRequestFn;
+  skipReason?: ApprovalRouteSkipReason;
 };
 
 type PendingApprovalRouteNotice = {
   request: ApprovalRequest;
   approvalKind: ChannelApprovalKind;
-  expectedRuntimeIds: Set<string>;
   reports: Map<string, ApprovalRouteReport>;
-  cleanupTimeout: NodeJS.Timeout | null;
-  finalized: boolean;
+  cleanupTimeout: NodeJS.Timeout;
+};
+
+type ApprovalRouteSelectionVerdict =
+  | { kind: "selected" }
+  | { kind: ApprovalRouteSkipReason }
+  | { kind: "selector-error"; error: unknown };
+
+type ApprovalRouteSelection = {
+  verdicts: Map<string, ApprovalRouteSelectionVerdict>;
+  cleanupTimeout: NodeJS.Timeout;
 };
 
 type RouteNoticeTarget = {
@@ -59,50 +74,141 @@ type RouteNoticeTarget = {
   threadId?: string | number | null;
 };
 
-const activeApprovalRouteRuntimes = new Map<string, ApprovalRouteRuntimeRecord>();
-const pendingApprovalRouteNotices = new Map<string, PendingApprovalRouteNotice>();
-let approvalRouteRuntimeSeq = 0;
-const MAX_APPROVAL_ROUTE_NOTICE_TTL_MS = 5 * 60_000;
+type ApprovalNativeRouteCoordinatorState = {
+  activeRuntimes: Map<string, ApprovalRouteRuntimeRecord>;
+  pendingNotices: Map<string, PendingApprovalRouteNotice>;
+  selections: Map<string, ApprovalRouteSelection>;
+  runtimeSeq: number;
+  closed: boolean;
+};
 
-function normalizeChannel(value?: string | null): string {
-  return normalizeLowercaseStringOrEmpty(value);
+function createApprovalNativeRouteCoordinatorState(): ApprovalNativeRouteCoordinatorState {
+  return {
+    activeRuntimes: new Map(),
+    pendingNotices: new Map(),
+    selections: new Map(),
+    runtimeSeq: 0,
+    closed: false,
+  };
 }
 
-function clearPendingApprovalRouteNotice(approvalId: string): void {
-  const entry = pendingApprovalRouteNotices.get(approvalId);
+function clearApprovalRouteEntry<T extends { cleanupTimeout: NodeJS.Timeout }>(
+  entries: Map<string, T>,
+  approvalId: string,
+): void {
+  const entry = entries.get(approvalId);
   if (!entry) {
     return;
   }
-  pendingApprovalRouteNotices.delete(approvalId);
-  if (entry.cleanupTimeout) {
-    clearTimeout(entry.cleanupTimeout);
-  }
+  entries.delete(approvalId);
+  clearTimeout(entry.cleanupTimeout);
 }
 
-function createPendingApprovalRouteNotice(params: {
-  request: ApprovalRequest;
-  approvalKind: ChannelApprovalKind;
-  expectedRuntimeIds?: Iterable<string>;
-}): PendingApprovalRouteNotice {
+function resolveApprovalRouteSelection(
+  state: ApprovalNativeRouteCoordinatorState,
+  params: { request: ApprovalRequest; approvalKind: ChannelApprovalKind },
+): ApprovalRouteSelection {
+  const existing = state.selections.get(params.request.id);
+  if (existing) {
+    return existing;
+  }
+  const runtimes = Array.from(state.activeRuntimes.values()).filter((runtime) =>
+    runtime.handledKinds.has(params.approvalKind),
+  );
+  const verdicts = new Map<string, ApprovalRouteSelectionVerdict>();
+  const groups = new Map<string, ApprovalRouteRuntimeRecord[]>();
+  for (const runtime of runtimes) {
+    const key = normalizeLowercaseStringOrEmpty(runtime.channel) || runtime.runtimeId;
+    groups.set(key, [...(groups.get(key) ?? []), runtime]);
+  }
+
+  for (const group of groups.values()) {
+    const candidates: ApprovalRouteRuntimeRecord[] = [];
+    for (const runtime of group) {
+      try {
+        if (runtime.shouldHandle(params.request)) {
+          candidates.push(runtime);
+        }
+      } catch (error) {
+        verdicts.set(runtime.runtimeId, { kind: "selector-error", error });
+      }
+    }
+    let routeClass: ApprovalRequestChannelRouteClass;
+    try {
+      routeClass = group[0]?.classifyRoute(params.request) ?? "unbound";
+    } catch (error) {
+      for (const runtime of group) {
+        verdicts.set(runtime.runtimeId, { kind: "selector-error", error });
+      }
+      continue;
+    }
+    if (routeClass === "bound-or-explicit" && candidates.length === 0) {
+      for (const runtime of group) {
+        if (!verdicts.has(runtime.runtimeId)) {
+          verdicts.set(runtime.runtimeId, { kind: "owner-unavailable" });
+        }
+      }
+    } else if (routeClass === "bound-or-explicit" || routeClass === "unbound") {
+      const kind =
+        routeClass === "bound-or-explicit" || candidates.length === 1
+          ? "selected"
+          : "ambiguous-owner";
+      for (const runtime of candidates) {
+        verdicts.set(runtime.runtimeId, { kind });
+      }
+    }
+  }
+
+  for (const runtime of runtimes) {
+    if (!verdicts.has(runtime.runtimeId)) {
+      verdicts.set(runtime.runtimeId, { kind: "ineligible" });
+    }
+  }
+
+  const timeoutMs = Math.min(Math.max(0, params.request.expiresAtMs - Date.now()), 0x7fffffff);
+  const cleanupTimeout = setTimeout(() => {
+    clearApprovalRouteEntry(state.selections, params.request.id);
+  }, timeoutMs);
+  cleanupTimeout.unref?.();
+  const selection: ApprovalRouteSelection = {
+    verdicts,
+    cleanupTimeout,
+  };
+  state.selections.set(params.request.id, selection);
+  return selection;
+}
+
+const defaultCoordinatorState = createApprovalNativeRouteCoordinatorState();
+const MAX_APPROVAL_ROUTE_NOTICE_TTL_MS = 5 * 60_000;
+
+function resolvePendingApprovalRouteNotice(
+  state: ApprovalNativeRouteCoordinatorState,
+  params: {
+    request: ApprovalRequest;
+    approvalKind: ChannelApprovalKind;
+  },
+): PendingApprovalRouteNotice {
+  const { request, approvalKind } = params;
+  const existing = state.pendingNotices.get(request.id);
+  if (existing) {
+    return existing;
+  }
   const timeoutMs = Math.min(
-    Math.max(0, params.request.expiresAtMs - Date.now()),
+    Math.max(0, request.expiresAtMs - Date.now()),
     MAX_APPROVAL_ROUTE_NOTICE_TTL_MS,
   );
   const cleanupTimeout = setTimeout(() => {
-    clearPendingApprovalRouteNotice(params.request.id);
+    void maybeFinalizeApprovalRouteNotice(state, request.id, { force: true });
   }, timeoutMs);
   cleanupTimeout.unref?.();
-  return {
-    request: params.request,
-    approvalKind: params.approvalKind,
-    // Snapshot siblings at first observation time so already-running runtimes
-    // can still aggregate one notice, while late-starting runtimes that cannot
-    // replay old gateway events never block the quorum.
-    expectedRuntimeIds: new Set(params.expectedRuntimeIds ?? []),
+  const entry: PendingApprovalRouteNotice = {
+    request,
+    approvalKind,
     reports: new Map(),
     cleanupTimeout,
-    finalized: false,
   };
+  state.pendingNotices.set(request.id, entry);
+  return entry;
 }
 
 function resolveRouteNoticeTargetFromRequest(request: ApprovalRequest): RouteNoticeTarget | null {
@@ -152,31 +258,32 @@ function didReportDeliverToOrigin(report: ApprovalRouteReport, originAccountId?:
   );
 }
 
-function hasPlannedNativeTargets(report: ApprovalRouteReport): boolean {
-  return report.deliveryPlan.targets.length > 0;
-}
-
 function readAllowedDecisionStrings(request: ApprovalRequest): string[] | undefined {
   const allowedDecisions =
     "allowedDecisions" in request.request ? request.request.allowedDecisions : undefined;
   if (!Array.isArray(allowedDecisions)) {
     return undefined;
   }
-  return allowedDecisions.filter((value): value is string => typeof value === "string");
+  return filterStringEntries(allowedDecisions);
 }
 
 function resolveApprovalRouteNotice(params: {
+  state: ApprovalNativeRouteCoordinatorState;
   approvalKind: ChannelApprovalKind;
   request: ApprovalRequest;
   reports: readonly ApprovalRouteReport[];
+  missingSelectedRuntime: boolean;
 }): { requestGateway: GatewayRequestFn; target: RouteNoticeTarget; text: string } | null {
   const explicitTarget = resolveRouteNoticeTargetFromRequest(params.request);
-  const originChannel = normalizeChannel(
+  const originChannel = normalizeLowercaseStringOrEmpty(
     explicitTarget?.channel ?? params.request.request.turnSourceChannel,
   );
   const fallbackTarget =
     params.reports
-      .filter((report) => normalizeChannel(report.channel) === originChannel || !originChannel)
+      .filter(
+        (report) =>
+          normalizeLowercaseStringOrEmpty(report.channel) === originChannel || !originChannel,
+      )
       .map(resolveFallbackRouteNoticeTarget)
       .find((target) => target !== null) ?? null;
   const target = explicitTarget
@@ -190,26 +297,44 @@ function resolveApprovalRouteNotice(params: {
   if (!target) {
     return null;
   }
+  const buildNotice = (buildText: () => string, allowActiveRuntimeFallback = false) => {
+    const requestGateway =
+      params.reports.find((report) => params.state.activeRuntimes.has(report.runtimeId))
+        ?.requestGateway ??
+      params.reports[0]?.requestGateway ??
+      (allowActiveRuntimeFallback
+        ? Array.from(params.state.activeRuntimes.values())[0]?.requestGateway
+        : undefined);
+    return requestGateway ? { requestGateway, target, text: buildText() } : null;
+  };
   const originAccountId = normalizeOptionalString(target.accountId);
   const deliveredAnyTarget = params.reports.some((report) => report.deliveredTargets.length > 0);
-  if (!deliveredAnyTarget && params.reports.some(hasPlannedNativeTargets)) {
-    return {
-      requestGateway:
-        params.reports.find((report) => activeApprovalRouteRuntimes.has(report.runtimeId))
-          ?.requestGateway ?? params.reports[0].requestGateway,
-      target,
-      text: resolveApprovalDeliveryFailedNoticeText({
-        approvalId: params.request.id,
-        approvalKind: params.approvalKind,
-        allowedDecisions: readAllowedDecisionStrings(params.request),
-      }),
-    };
+  const ambiguousOwner = params.reports.some((report) => report.skipReason === "ambiguous-owner");
+  const requiresManualFallback =
+    ambiguousOwner || params.reports.some((report) => report.skipReason === "owner-unavailable");
+  if (
+    !deliveredAnyTarget &&
+    (params.reports.some((report) => report.deliveryPlan.targets.length > 0) ||
+      requiresManualFallback ||
+      params.missingSelectedRuntime)
+  ) {
+    return buildNotice(
+      () =>
+        ambiguousOwner
+          ? resolveAmbiguousApprovalRouteNoticeText(params.approvalKind)
+          : resolveApprovalDeliveryFailedNoticeText({
+              approvalId: params.request.id,
+              approvalKind: params.approvalKind,
+              allowedDecisions: readAllowedDecisionStrings(params.request),
+            }),
+      true,
+    );
   }
 
   // If any same-channel runtime already delivered into the origin chat, every
   // other fallback delivery becomes supplemental and should not trigger a notice.
   const originDelivered = params.reports.some((report) => {
-    if (originChannel && normalizeChannel(report.channel) !== originChannel) {
+    if (originChannel && normalizeLowercaseStringOrEmpty(report.channel) !== originChannel) {
       return false;
     }
     return didReportDeliverToOrigin(report, originAccountId);
@@ -222,7 +347,7 @@ function resolveApprovalRouteNotice(params: {
     if (!report.channelLabel || report.deliveredTargets.length === 0) {
       return [];
     }
-    const reportChannel = normalizeChannel(report.channel);
+    const reportChannel = normalizeLowercaseStringOrEmpty(report.channel);
     if (
       originChannel &&
       reportChannel === originChannel &&
@@ -252,32 +377,33 @@ function resolveApprovalRouteNotice(params: {
     return null;
   }
 
-  const requestGateway =
-    params.reports.find((report) => activeApprovalRouteRuntimes.has(report.runtimeId))
-      ?.requestGateway ?? params.reports[0]?.requestGateway;
-  if (!requestGateway) {
-    return null;
-  }
-
-  return {
-    requestGateway,
-    target,
-    text,
-  };
+  return buildNotice(() => text);
 }
 
+/** Returns whether a native approval runtime is active for the requested channel/account scope. */
 export function hasActiveApprovalNativeRouteRuntime(params: {
   approvalKind: ChannelApprovalKind;
   channel?: string | null;
   accountId?: string | null;
 }): boolean {
-  const channel = normalizeChannel(params.channel);
+  return hasActiveApprovalNativeRouteRuntimeForState(defaultCoordinatorState, params);
+}
+
+function hasActiveApprovalNativeRouteRuntimeForState(
+  state: ApprovalNativeRouteCoordinatorState,
+  params: {
+    approvalKind: ChannelApprovalKind;
+    channel?: string | null;
+    accountId?: string | null;
+  },
+): boolean {
+  const channel = normalizeLowercaseStringOrEmpty(params.channel);
   const accountId = normalizeOptionalString(params.accountId);
-  return Array.from(activeApprovalRouteRuntimes.values()).some((runtime) => {
+  const matchingRuntimes = Array.from(state.activeRuntimes.values()).filter((runtime) => {
     if (!runtime.handledKinds.has(params.approvalKind)) {
       return false;
     }
-    if (channel && normalizeChannel(runtime.channel) !== channel) {
+    if (channel && normalizeLowercaseStringOrEmpty(runtime.channel) !== channel) {
       return false;
     }
     const runtimeAccountId = normalizeOptionalString(runtime.accountId);
@@ -285,27 +411,42 @@ export function hasActiveApprovalNativeRouteRuntime(params: {
       accountId === undefined || runtimeAccountId === undefined || runtimeAccountId === accountId
     );
   });
+  return accountId === undefined ? matchingRuntimes.length === 1 : matchingRuntimes.length > 0;
 }
 
-async function maybeFinalizeApprovalRouteNotice(approvalId: string): Promise<void> {
-  const entry = pendingApprovalRouteNotices.get(approvalId);
-  if (!entry || entry.finalized) {
+async function maybeFinalizeApprovalRouteNotice(
+  state: ApprovalNativeRouteCoordinatorState,
+  approvalId: string,
+  options?: { force?: boolean },
+): Promise<void> {
+  const entry = state.pendingNotices.get(approvalId);
+  if (!entry) {
     return;
   }
-  for (const runtimeId of entry.expectedRuntimeIds) {
-    if (!entry.reports.has(runtimeId)) {
-      return;
+  const selection = state.selections.get(approvalId);
+  if (!selection) {
+    return;
+  }
+  if (!options?.force) {
+    for (const runtimeId of selection.verdicts.keys()) {
+      if (!entry.reports.has(runtimeId)) {
+        return;
+      }
     }
   }
+  const missingSelectedRuntime = Array.from(selection.verdicts).some(
+    ([runtimeId, verdict]) => verdict.kind === "selected" && !entry.reports.has(runtimeId),
+  );
 
-  entry.finalized = true;
   const reports = Array.from(entry.reports.values());
   const notice = resolveApprovalRouteNotice({
+    state,
     approvalKind: entry.approvalKind,
     request: entry.request,
     reports,
+    missingSelectedRuntime,
   });
-  clearPendingApprovalRouteNotice(approvalId);
+  clearApprovalRouteEntry(state.pendingNotices, approvalId);
   if (!notice) {
     return;
   }
@@ -324,14 +465,18 @@ async function maybeFinalizeApprovalRouteNotice(approvalId: string): Promise<voi
   }
 }
 
-export function createApprovalNativeRouteReporter(params: {
-  handledKinds: ReadonlySet<ChannelApprovalKind>;
-  channel?: string;
-  channelLabel?: string;
-  accountId?: string | null;
-  requestGateway: GatewayRequestFn;
-}) {
-  const runtimeId = `native-approval-route:${++approvalRouteRuntimeSeq}`;
+/** Tracks native approval deliveries and sends origin-chat notices after all observed runtimes report. */
+export function createApprovalNativeRouteReporter(
+  params: Omit<ApprovalRouteRuntimeRecord, "runtimeId">,
+) {
+  return createApprovalNativeRouteReporterForState(defaultCoordinatorState, params);
+}
+
+function createApprovalNativeRouteReporterForState(
+  state: ApprovalNativeRouteCoordinatorState,
+  params: Omit<ApprovalRouteRuntimeRecord, "runtimeId">,
+) {
+  const runtimeId = `native-approval-route:${++state.runtimeSeq}`;
   let registered = false;
 
   const report = async (payload: {
@@ -339,108 +484,151 @@ export function createApprovalNativeRouteReporter(params: {
     request: ApprovalRequest;
     deliveryPlan: ChannelApprovalNativeDeliveryPlan;
     deliveredTargets: readonly ChannelApprovalNativePlannedTarget[];
+    skipReason?: ApprovalRouteSkipReason;
   }): Promise<void> => {
-    if (!registered || !params.handledKinds.has(payload.approvalKind)) {
+    if (state.closed || !registered || !params.handledKinds.has(payload.approvalKind)) {
       return;
     }
-    const entry =
-      pendingApprovalRouteNotices.get(payload.request.id) ??
-      createPendingApprovalRouteNotice({
-        request: payload.request,
-        approvalKind: payload.approvalKind,
-        expectedRuntimeIds: [runtimeId],
-      });
-    entry.expectedRuntimeIds.add(runtimeId);
+    const selection = resolveApprovalRouteSelection(state, payload);
+    if (!selection.verdicts.has(runtimeId)) {
+      return;
+    }
+    const entry = resolvePendingApprovalRouteNotice(state, payload);
     entry.reports.set(runtimeId, {
       runtimeId,
-      request: payload.request,
       channel: params.channel,
       channelLabel: params.channelLabel,
       accountId: params.accountId,
       deliveryPlan: payload.deliveryPlan,
       deliveredTargets: payload.deliveredTargets,
       requestGateway: params.requestGateway,
+      skipReason: payload.skipReason,
     });
-    pendingApprovalRouteNotices.set(payload.request.id, entry);
-    await maybeFinalizeApprovalRouteNotice(payload.request.id);
+    await maybeFinalizeApprovalRouteNotice(state, payload.request.id);
   };
 
   return {
-    observeRequest(payload: { approvalKind: ChannelApprovalKind; request: ApprovalRequest }): void {
-      if (!registered || !params.handledKinds.has(payload.approvalKind)) {
-        return;
+    selectRequest(payload: {
+      approvalKind: ChannelApprovalKind;
+      request: ApprovalRequest;
+    }): ApprovalRouteSelectionVerdict {
+      if (state.closed || !params.handledKinds.has(payload.approvalKind)) {
+        return { kind: "ineligible" };
       }
-      const entry =
-        pendingApprovalRouteNotices.get(payload.request.id) ??
-        createPendingApprovalRouteNotice({
-          request: payload.request,
-          approvalKind: payload.approvalKind,
-          expectedRuntimeIds: Array.from(activeApprovalRouteRuntimes.values())
-            .filter((runtime) => runtime.handledKinds.has(payload.approvalKind))
-            .map((runtime) => runtime.runtimeId),
-        });
-      entry.expectedRuntimeIds.add(runtimeId);
-      pendingApprovalRouteNotices.set(payload.request.id, entry);
+      if (!registered) {
+        try {
+          return params.shouldHandle(payload.request)
+            ? { kind: "selected" }
+            : { kind: "ineligible" };
+        } catch (error) {
+          return { kind: "selector-error", error };
+        }
+      }
+      const selection = resolveApprovalRouteSelection(state, payload);
+      resolvePendingApprovalRouteNotice(state, payload);
+      return selection.verdicts.get(runtimeId) ?? { kind: "ineligible" };
     },
     start(): void {
-      if (registered) {
+      if (state.closed || registered) {
         return;
       }
-      activeApprovalRouteRuntimes.set(runtimeId, {
+      state.activeRuntimes.set(runtimeId, {
         runtimeId,
         handledKinds: params.handledKinds,
         channel: params.channel,
         channelLabel: params.channelLabel,
         accountId: params.accountId,
         requestGateway: params.requestGateway,
+        shouldHandle: params.shouldHandle,
+        classifyRoute: params.classifyRoute,
       });
       registered = true;
     },
-    async reportSkipped(params: {
+    async reportSkipped(paramsValue: {
       approvalKind: ChannelApprovalKind;
       request: ApprovalRequest;
+      reason: ApprovalRouteSkipReason;
     }): Promise<void> {
       await report({
-        approvalKind: params.approvalKind,
-        request: params.request,
+        approvalKind: paramsValue.approvalKind,
+        request: paramsValue.request,
         deliveryPlan: {
           targets: [],
           originTarget: null,
           notifyOriginWhenDmOnly: false,
         },
         deliveredTargets: [],
+        skipReason: paramsValue.reason,
       });
     },
-    async reportDelivery(params: {
+    async reportDelivery(paramsLocal: {
       approvalKind: ChannelApprovalKind;
       request: ApprovalRequest;
       deliveryPlan: ChannelApprovalNativeDeliveryPlan;
       deliveredTargets: readonly ChannelApprovalNativePlannedTarget[];
     }): Promise<void> {
-      await report(params);
+      await report(paramsLocal);
+    },
+    completeRequest(approvalId: string): void {
+      clearApprovalRouteEntry(state.selections, approvalId);
+      clearApprovalRouteEntry(state.pendingNotices, approvalId);
     },
     async stop(): Promise<void> {
       if (!registered) {
         return;
       }
-      registered = false;
-      activeApprovalRouteRuntimes.delete(runtimeId);
-      for (const entry of pendingApprovalRouteNotices.values()) {
-        entry.expectedRuntimeIds.delete(runtimeId);
-        if (entry.expectedRuntimeIds.size === 0) {
-          clearPendingApprovalRouteNotice(entry.request.id);
-          continue;
+      for (const entry of Array.from(state.pendingNotices.values())) {
+        const selection = state.selections.get(entry.request.id);
+        if (selection?.verdicts.has(runtimeId) && !entry.reports.has(runtimeId)) {
+          await report({
+            request: entry.request,
+            approvalKind: entry.approvalKind,
+            deliveryPlan: { targets: [], originTarget: null, notifyOriginWhenDmOnly: false },
+            deliveredTargets: [],
+            skipReason:
+              selection.verdicts.get(runtimeId)?.kind === "selected"
+                ? "owner-unavailable"
+                : "ineligible",
+          });
         }
-        await maybeFinalizeApprovalRouteNotice(entry.request.id);
       }
+      registered = false;
+      state.activeRuntimes.delete(runtimeId);
     },
   };
 }
 
-export function clearApprovalNativeRouteStateForTest(): void {
-  for (const approvalId of Array.from(pendingApprovalRouteNotices.keys())) {
-    clearPendingApprovalRouteNotice(approvalId);
-  }
-  activeApprovalRouteRuntimes.clear();
-  approvalRouteRuntimeSeq = 0;
+export type ApprovalNativeRouteCoordinator = {
+  createReporter: typeof createApprovalNativeRouteReporter;
+  hasActiveRuntime: typeof hasActiveApprovalNativeRouteRuntime;
+  close: () => void;
+};
+
+/** Reads native route activity from the owning Gateway coordinator, else the process default. */
+export function hasActiveNativeApprovalRoute(
+  coordinator: ApprovalNativeRouteCoordinator | undefined,
+  params: Parameters<typeof hasActiveApprovalNativeRouteRuntime>[0],
+): boolean {
+  return coordinator?.hasActiveRuntime(params) ?? hasActiveApprovalNativeRouteRuntime(params);
+}
+
+/** Creates an instance-local route coordinator so Gateway runtimes cannot share account state. */
+export function createApprovalNativeRouteCoordinator(): ApprovalNativeRouteCoordinator {
+  const state = createApprovalNativeRouteCoordinatorState();
+  return {
+    createReporter: (params) => createApprovalNativeRouteReporterForState(state, params),
+    hasActiveRuntime: (params) => hasActiveApprovalNativeRouteRuntimeForState(state, params),
+    close: () => {
+      // Closing retires this Gateway-owned coordinator permanently. Delayed channel
+      // startup must not repopulate routes belonging to the retired instance.
+      state.closed = true;
+      for (const approvalId of Array.from(state.pendingNotices.keys())) {
+        clearApprovalRouteEntry(state.pendingNotices, approvalId);
+      }
+      for (const approvalId of Array.from(state.selections.keys())) {
+        clearApprovalRouteEntry(state.selections, approvalId);
+      }
+      state.activeRuntimes.clear();
+    },
+  };
 }

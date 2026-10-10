@@ -1,3 +1,4 @@
+/** Tests inactive core SecretRefs remain unresolved and diagnostic-only. */
 import { describe, expect, it } from "vitest";
 import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.ts";
 
@@ -17,15 +18,17 @@ describe("secrets runtime snapshot inactive core surfaces", () => {
   it("skips inactive core refs and emits diagnostics", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
-        agents: {
-          defaults: {
-            memorySearch: {
-              enabled: false,
-              remote: {
-                apiKey: { source: "env", provider: "default", id: "DISABLED_MEMORY_API_KEY" },
-              },
+        memory: {
+          search: {
+            enabled: false,
+            remote: {
+              apiKey: { source: "env", provider: "default", id: "DISABLED_MEMORY_API_KEY" },
             },
           },
+        },
+
+        agents: {
+          defaults: {},
         },
         gateway: {
           auth: {
@@ -39,9 +42,6 @@ describe("secrets runtime snapshot inactive core surfaces", () => {
       loadablePluginOrigins: new Map(),
     });
 
-    expectWarningPaths(snapshot, [
-      "agents.defaults.memorySearch.remote.apiKey",
-      "gateway.auth.password",
-    ]);
+    expectWarningPaths(snapshot, ["memory.search.remote.apiKey", "gateway.auth.password"]);
   });
 });

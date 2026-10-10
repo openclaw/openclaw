@@ -1,23 +1,28 @@
 ---
-summary: "Adds the Discord channel surface for sending and receiving OpenClaw messages."
+summary: "OpenClaw Discord channel plugin for channels, DMs, commands, and app events."
 read_when:
   - You are installing, configuring, or auditing the discord plugin
-title: "Discord plugin"
+title: "Discord plugin reference"
 ---
 
-# Discord plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
-Adds the Discord channel surface for sending and receiving OpenClaw messages.
+OpenClaw Discord channel plugin for channels, DMs, commands, and app events.
 
 ## Distribution
 
 - Package: `@openclaw/discord`
-- Install route: npm; ClawHub
+- Install route: npm or ClawHub: `clawhub:@openclaw/discord`
 
 ## Surface
 
-channels: discord
+- Channels: `discord`
+- Contracts: `transcriptSourceProviders`
+- Skills
 
 ## Related docs
 
-- [discord](/channels/discord)
+- [Discord](/channels/discord)

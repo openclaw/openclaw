@@ -5,93 +5,50 @@ import {
   TRUSTED_CLIENT_TOKEN,
   generateSecMsGecToken,
 } from "node-edge-tts/dist/drm.js";
-import { isVoiceCompatibleAudio } from "openclaw/plugin-sdk/media-runtime";
-import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/provider-http";
-import {
-  captureHttpExchange,
-  isDebugProxyGlobalFetchPatchInstalled,
-} from "openclaw/plugin-sdk/proxy-capture";
 import type {
   SpeechProviderConfig,
   SpeechProviderPlugin,
   SpeechVoiceOption,
 } from "openclaw/plugin-sdk/speech";
-import { asBoolean, asFiniteNumber, asObject, trimToUndefined } from "openclaw/plugin-sdk/speech";
 import {
-  fetchWithSsrFGuard,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname,
-} from "openclaw/plugin-sdk/ssrf-runtime";
-import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+  asBoolean,
+  asFiniteNumber,
+  asOptionalRecord,
+  filterStringRecord,
+  normalizeOptionalString as trimToUndefined,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { edgeTTS, inferEdgeExtension } from "./tts.js";
 
 const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
 const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
+const DEFAULT_MICROSOFT_VOICE_LIST_TIMEOUT_MS = 30_000;
 
-type MicrosoftProviderConfig = {
-  enabled: boolean;
-  voice: string;
-  lang: string;
-  outputFormat: string;
-  outputFormatConfigured: boolean;
-  pitch?: string;
-  rate?: string;
-  volume?: string;
-  saveSubtitles: boolean;
-  proxy?: string;
-  timeoutMs?: number;
-};
-
-type MicrosoftVoiceListEntry = {
-  ShortName?: string;
-  FriendlyName?: string;
-  Locale?: string;
-  Gender?: string;
-  VoiceTag?: {
-    ContentCategories?: string[];
-    VoicePersonalities?: string[];
-  };
-};
-
-function normalizeMicrosoftProviderConfig(
-  rawConfig: Record<string, unknown>,
-): MicrosoftProviderConfig {
-  const providers = asObject(rawConfig.providers);
-  const rawEdge = asObject(rawConfig.edge);
-  const rawMicrosoft = asObject(rawConfig.microsoft);
-  const rawProviderMicrosoft = asObject(providers?.microsoft);
+function normalizeMicrosoftProviderConfig(rawConfig: Record<string, unknown>) {
+  const providers = asOptionalRecord(rawConfig.providers);
+  const rawEdge = asOptionalRecord(rawConfig.edge);
+  const rawMicrosoft = asOptionalRecord(rawConfig.microsoft);
+  const rawProviderMicrosoft = asOptionalRecord(providers?.microsoft);
   const raw = { ...rawEdge, ...rawMicrosoft, ...rawProviderMicrosoft };
-  const outputFormat = trimToUndefined(raw.outputFormat);
-  return {
-    enabled: asBoolean(raw.enabled) ?? true,
-    voice: trimToUndefined(raw.voice) ?? DEFAULT_EDGE_VOICE,
-    lang: trimToUndefined(raw.lang) ?? DEFAULT_EDGE_LANG,
-    outputFormat: outputFormat ?? DEFAULT_EDGE_OUTPUT_FORMAT,
-    outputFormatConfigured: Boolean(outputFormat),
-    pitch: trimToUndefined(raw.pitch),
-    rate: trimToUndefined(raw.rate),
-    volume: trimToUndefined(raw.volume),
-    saveSubtitles: asBoolean(raw.saveSubtitles) ?? false,
-    proxy: trimToUndefined(raw.proxy),
-    timeoutMs: asFiniteNumber(raw.timeoutMs),
-  };
+  return readMicrosoftProviderConfig({
+    ...raw,
+    outputFormatConfigured: Boolean(trimToUndefined(raw.outputFormat)),
+  });
 }
 
-function readMicrosoftProviderConfig(config: SpeechProviderConfig): MicrosoftProviderConfig {
-  const defaults = normalizeMicrosoftProviderConfig({});
+function readMicrosoftProviderConfig(config: SpeechProviderConfig) {
   return {
-    enabled: asBoolean(config.enabled) ?? defaults.enabled,
-    voice: trimToUndefined(config.voice) ?? defaults.voice,
-    lang: trimToUndefined(config.lang) ?? defaults.lang,
-    outputFormat: trimToUndefined(config.outputFormat) ?? defaults.outputFormat,
-    outputFormatConfigured:
-      asBoolean(config.outputFormatConfigured) ?? defaults.outputFormatConfigured,
-    pitch: trimToUndefined(config.pitch) ?? defaults.pitch,
-    rate: trimToUndefined(config.rate) ?? defaults.rate,
-    volume: trimToUndefined(config.volume) ?? defaults.volume,
-    saveSubtitles: asBoolean(config.saveSubtitles) ?? defaults.saveSubtitles,
-    proxy: trimToUndefined(config.proxy) ?? defaults.proxy,
-    timeoutMs: asFiniteNumber(config.timeoutMs) ?? defaults.timeoutMs,
+    enabled: asBoolean(config.enabled) ?? true,
+    voice: trimToUndefined(config.voice) ?? DEFAULT_EDGE_VOICE,
+    lang: trimToUndefined(config.lang) ?? DEFAULT_EDGE_LANG,
+    outputFormat: trimToUndefined(config.outputFormat) ?? DEFAULT_EDGE_OUTPUT_FORMAT,
+    outputFormatConfigured: asBoolean(config.outputFormatConfigured) ?? false,
+    pitch: trimToUndefined(config.pitch),
+    rate: trimToUndefined(config.rate),
+    volume: trimToUndefined(config.volume),
+    saveSubtitles: asBoolean(config.saveSubtitles) ?? false,
+    proxy: trimToUndefined(config.proxy),
+    timeoutMs: asFiniteNumber(config.timeoutMs),
   };
 }
 
@@ -109,12 +66,13 @@ function buildMicrosoftVoiceHeaders(): Record<string, string> {
   };
 }
 
-function formatMicrosoftVoiceDescription(entry: MicrosoftVoiceListEntry): string | undefined {
-  const personalities = entry.VoiceTag?.VoicePersonalities?.filter(Boolean) ?? [];
-  return personalities.length > 0 ? personalities.join(", ") : undefined;
+function readMicrosoftVoiceTagStrings(value: unknown): string[] | undefined {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+    : undefined;
 }
 
-export function isCjkDominant(text: string): boolean {
+function isCjkDominant(text: string): boolean {
   const stripped = text.replace(/\s+/g, "");
   if (stripped.length === 0) {
     return false;
@@ -137,7 +95,17 @@ export function isCjkDominant(text: string): boolean {
 const DEFAULT_CHINESE_EDGE_VOICE = "zh-CN-XiaoxiaoNeural";
 const DEFAULT_CHINESE_EDGE_LANG = "zh-CN";
 
-export async function listMicrosoftVoices(): Promise<SpeechVoiceOption[]> {
+async function listMicrosoftVoices(
+  timeoutMs = DEFAULT_MICROSOFT_VOICE_LIST_TIMEOUT_MS,
+): Promise<SpeechVoiceOption[]> {
+  const { assertOkOrThrowProviderError, readProviderJsonResponse } =
+    await import("openclaw/plugin-sdk/provider-http");
+  const proxyCaptureSdk = await import("openclaw/plugin-sdk/proxy-capture");
+  // The shipped 2026.9.6 host lacks async diagnostics; remove optionality when the minimum advances.
+  const captureHost: Partial<Pick<typeof proxyCaptureSdk, "captureHttpExchangeAsync">> =
+    proxyCaptureSdk;
+  const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
+    await import("openclaw/plugin-sdk/ssrf-runtime");
   const url =
     "https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list" +
     `?trustedclienttoken=${TRUSTED_CLIENT_TOKEN}`;
@@ -149,37 +117,49 @@ export async function listMicrosoftVoices(): Promise<SpeechVoiceOption[]> {
     },
     policy: ssrfPolicyFromHttpBaseUrlAllowedHostname("https://speech.platform.bing.com"),
     auditContext: "microsoft.speech.voices",
+    timeoutMs,
   });
   try {
-    if (!isDebugProxyGlobalFetchPatchInstalled()) {
-      captureHttpExchange({
-        url,
-        method: "GET",
-        requestHeaders: headers,
-        response,
-        transport: "http",
-        meta: {
-          provider: "microsoft",
-          capability: "speech-voices",
-        },
-      });
+    if (!proxyCaptureSdk.isDebugProxyGlobalFetchPatchInstalled()) {
+      // Finalization retains capture failures; observe the Promise returned by the SDK view.
+      void captureHost
+        .captureHttpExchangeAsync?.({
+          url,
+          method: "GET",
+          requestHeaders: headers,
+          response,
+          transport: "http",
+          meta: {
+            provider: "microsoft",
+            capability: "speech-voices",
+          },
+        })
+        .catch(() => {});
     }
     await assertOkOrThrowProviderError(response, "Microsoft voices API error");
-    const voices = (await response.json()) as MicrosoftVoiceListEntry[];
+    const voices = await readProviderJsonResponse<unknown>(response, "microsoft.speech-voices");
     return Array.isArray(voices)
-      ? voices
-          .map((voice) => ({
-            id: voice.ShortName?.trim() ?? "",
-            name: trimToUndefined(voice.FriendlyName) ?? trimToUndefined(voice.ShortName),
-            category: voice.VoiceTag?.ContentCategories?.find((value) => value.trim().length > 0),
-            description: formatMicrosoftVoiceDescription(voice),
-            locale: trimToUndefined(voice.Locale),
-            gender: trimToUndefined(voice.Gender),
-            personalities: voice.VoiceTag?.VoicePersonalities?.filter(
-              (value): value is string => value.trim().length > 0,
-            ),
-          }))
-          .filter((voice) => voice.id.length > 0)
+      ? voices.flatMap((value) => {
+          const voice = asOptionalRecord(value);
+          const id = trimToUndefined(voice?.ShortName);
+          if (!voice || !id) {
+            return [];
+          }
+          const voiceTag = asOptionalRecord(voice.VoiceTag);
+          const categories = readMicrosoftVoiceTagStrings(voiceTag?.ContentCategories);
+          const personalities = readMicrosoftVoiceTagStrings(voiceTag?.VoicePersonalities);
+          return [
+            {
+              id,
+              name: trimToUndefined(voice.FriendlyName) ?? id,
+              category: categories?.[0],
+              description: personalities?.length ? personalities.join(", ") : undefined,
+              locale: trimToUndefined(voice.Locale),
+              gender: trimToUndefined(voice.Gender),
+              personalities,
+            },
+          ];
+        })
       : [];
   } finally {
     await release();
@@ -198,44 +178,35 @@ export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
       return {
         ...base,
         enabled: true,
-        ...(trimToUndefined(talkProviderConfig.voiceId) == null
-          ? {}
-          : { voice: trimToUndefined(talkProviderConfig.voiceId) }),
-        ...(trimToUndefined(talkProviderConfig.languageCode) == null
-          ? {}
-          : { lang: trimToUndefined(talkProviderConfig.languageCode) }),
-        ...(trimToUndefined(talkProviderConfig.outputFormat) == null
-          ? {}
-          : { outputFormat: trimToUndefined(talkProviderConfig.outputFormat) }),
-        ...(trimToUndefined(talkProviderConfig.pitch) == null
-          ? {}
-          : { pitch: trimToUndefined(talkProviderConfig.pitch) }),
-        ...(trimToUndefined(talkProviderConfig.rate) == null
-          ? {}
-          : { rate: trimToUndefined(talkProviderConfig.rate) }),
-        ...(trimToUndefined(talkProviderConfig.volume) == null
-          ? {}
-          : { volume: trimToUndefined(talkProviderConfig.volume) }),
-        ...(trimToUndefined(talkProviderConfig.proxy) == null
-          ? {}
-          : { proxy: trimToUndefined(talkProviderConfig.proxy) }),
+        ...filterStringRecord({
+          voice: trimToUndefined(talkProviderConfig.voiceId),
+          lang: trimToUndefined(talkProviderConfig.languageCode),
+          outputFormat: trimToUndefined(talkProviderConfig.outputFormat),
+          pitch: trimToUndefined(talkProviderConfig.pitch),
+          rate: trimToUndefined(talkProviderConfig.rate),
+          volume: trimToUndefined(talkProviderConfig.volume),
+          proxy: trimToUndefined(talkProviderConfig.proxy),
+        }),
         ...(asFiniteNumber(talkProviderConfig.timeoutMs) == null
           ? {}
           : { timeoutMs: asFiniteNumber(talkProviderConfig.timeoutMs) }),
       };
     },
-    resolveTalkOverrides: ({ params }) => ({
-      ...(trimToUndefined(params.voiceId) == null
-        ? {}
-        : { voice: trimToUndefined(params.voiceId) }),
-      ...(trimToUndefined(params.outputFormat) == null
-        ? {}
-        : { outputFormat: trimToUndefined(params.outputFormat) }),
-    }),
-    listVoices: async () => await listMicrosoftVoices(),
+    resolveTalkOverrides: ({ params }) =>
+      filterStringRecord({
+        voice: trimToUndefined(params.voiceId),
+        outputFormat: trimToUndefined(params.outputFormat),
+      }) ?? {},
+    listVoices: async (req) => {
+      const config = readMicrosoftProviderConfig(req.providerConfig ?? {});
+      return await listMicrosoftVoices(config.timeoutMs ?? req.timeoutMs);
+    },
     isConfigured: ({ providerConfig }) => readMicrosoftProviderConfig(providerConfig).enabled,
     synthesize: async (req) => {
       const config = readMicrosoftProviderConfig(req.providerConfig);
+      const { isVoiceMessageCompatibleAudio } = await import("openclaw/plugin-sdk/media-runtime");
+      const { tempWorkspace, resolvePreferredOpenClawTmpDir } =
+        await import("openclaw/plugin-sdk/temp-path");
       const temp = await tempWorkspace({
         rootDir: resolvePreferredOpenClawTmpDir(),
         prefix: "tts-microsoft-",
@@ -244,7 +215,7 @@ export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
       const overrideVoice = trimToUndefined(req.providerOverrides?.voice);
       let voice = overrideVoice ?? config.voice;
       let lang = config.lang;
-      let outputFormat =
+      const outputFormat =
         trimToUndefined(req.providerOverrides?.outputFormat) ?? config.outputFormat;
       const fallbackOutputFormat =
         outputFormat !== DEFAULT_EDGE_OUTPUT_FORMAT ? DEFAULT_EDGE_OUTPUT_FORMAT : undefined;
@@ -274,18 +245,17 @@ export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
             audioBuffer,
             outputFormat: format,
             fileExtension,
-            voiceCompatible: isVoiceCompatibleAudio({ fileName: outputPath }),
+            voiceCompatible: isVoiceMessageCompatibleAudio({ fileName: outputPath }),
           };
         };
 
         try {
           return await runEdge(outputFormat);
         } catch (error) {
-          if (!fallbackOutputFormat || fallbackOutputFormat === outputFormat) {
+          if (!fallbackOutputFormat) {
             throw error;
           }
-          outputFormat = fallbackOutputFormat;
-          return await runEdge(outputFormat);
+          return await runEdge(fallbackOutputFormat);
         }
       } finally {
         await temp.cleanup();

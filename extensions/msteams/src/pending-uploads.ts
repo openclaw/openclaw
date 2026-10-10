@@ -7,6 +7,7 @@
  */
 
 import crypto from "node:crypto";
+import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 
 export interface PendingUpload {
   id: string;
@@ -19,11 +20,22 @@ export interface PendingUpload {
   createdAt: number;
 }
 
-const pendingUploads = new Map<string, PendingUpload>();
-/** Timer handles keyed by upload ID, cleared on explicit removal to prevent ghost cleanup */
-const pendingUploadTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const { pendingUploads, pendingUploadTimers } = resolveGlobalSingleton(
+  Symbol.for("openclaw.msteams.pendingUploadState"),
+  () => ({
+    pendingUploads: new Map<string, PendingUpload>(),
+    /** Timer handles keyed by upload ID, cleared on explicit removal to prevent ghost cleanup. */
+    pendingUploadTimers: new Map<string, ReturnType<typeof setTimeout>>(),
+  }),
+  (state) => {
+    for (const timer of state.pendingUploadTimers.values()) {
+      clearTimeout(timer);
+    }
+    state.pendingUploadTimers.clear();
+    state.pendingUploads.clear();
+  },
+);
 
-/** TTL for pending uploads: 5 minutes */
 const PENDING_UPLOAD_TTL_MS = 5 * 60 * 1000;
 
 /**
@@ -39,7 +51,6 @@ export function storePendingUpload(upload: Omit<PendingUpload, "id" | "createdAt
   };
   pendingUploads.set(id, entry);
 
-  // Auto-cleanup after TTL; timer ref stored so removePendingUpload can cancel it
   const timer = setTimeout(() => {
     pendingUploads.delete(id);
     pendingUploadTimers.delete(id);
@@ -49,10 +60,6 @@ export function storePendingUpload(upload: Omit<PendingUpload, "id" | "createdAt
   return id;
 }
 
-/**
- * Retrieve a pending upload by ID.
- * Returns undefined if not found or expired.
- */
 export function getPendingUpload(id?: string): PendingUpload | undefined {
   if (!id) {
     return undefined;
@@ -64,12 +71,7 @@ export function getPendingUpload(id?: string): PendingUpload | undefined {
 
   // Check if expired (in case timeout hasn't fired yet)
   if (Date.now() - entry.createdAt > PENDING_UPLOAD_TTL_MS) {
-    pendingUploads.delete(id);
-    const timer = pendingUploadTimers.get(id);
-    if (timer !== undefined) {
-      clearTimeout(timer);
-      pendingUploadTimers.delete(id);
-    }
+    removePendingUpload(id);
     return undefined;
   }
 
@@ -91,31 +93,9 @@ export function removePendingUpload(id?: string): void {
   }
 }
 
-/**
- * Set the consent card activity ID on an existing pending upload.
- * Called after the FileConsentCard is sent and we know its activity ID.
- */
 export function setPendingUploadActivityId(uploadId: string, activityId: string): void {
   const entry = pendingUploads.get(uploadId);
   if (entry) {
     entry.consentCardActivityId = activityId;
   }
-}
-
-/**
- * Get the count of pending uploads (for monitoring/debugging).
- */
-export function getPendingUploadCount(): number {
-  return pendingUploads.size;
-}
-
-/**
- * Clear all pending uploads (for testing).
- */
-export function clearPendingUploads(): void {
-  for (const timer of pendingUploadTimers.values()) {
-    clearTimeout(timer);
-  }
-  pendingUploadTimers.clear();
-  pendingUploads.clear();
 }

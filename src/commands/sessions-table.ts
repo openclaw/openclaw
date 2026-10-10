@@ -1,43 +1,41 @@
+/**
+ * Shared table formatting helpers for session commands.
+ *
+ * Cleanup and listing share display labels; terminal-core owns column layout.
+ */
+import { splitGraphemes } from "../../packages/terminal-core/src/ansi.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
+import type { SessionActor } from "../config/sessions/session-entry-provenance.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
-import { theme } from "../terminal/theme.js";
 
-export type SessionDisplayRow = {
-  key: string;
-  updatedAt: number | null;
-  ageMs: number | null;
-  sessionId?: string;
-  systemSent?: boolean;
-  abortedLastRun?: boolean;
-  thinkingLevel?: string;
-  verboseLevel?: string;
-  traceLevel?: string;
-  reasoningLevel?: string;
-  elevatedLevel?: string;
-  responseUsage?: string;
-  groupActivation?: string;
-  inputTokens?: number;
-  outputTokens?: number;
-  totalTokens?: number;
-  totalTokensFresh?: boolean;
-  model?: string;
-  modelProvider?: string;
-  providerOverride?: string;
-  modelOverride?: string;
-  contextTokens?: number;
-};
-
-export const SESSION_KEY_PAD = 26;
-export const SESSION_AGE_PAD = 9;
-export const SESSION_MODEL_PAD = 14;
-
-export function toSessionDisplayRow(key: string, entry: SessionEntry): SessionDisplayRow {
+export function toSessionDisplayRow(key: string, entry: SessionEntry) {
   const updatedAt = entry?.updatedAt ?? null;
   return {
     key,
     updatedAt,
     ageMs: updatedAt ? Date.now() - updatedAt : null,
     sessionId: entry?.sessionId,
+    spawnedBy: entry?.spawnedBy,
+    spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
+    spawnedCwd: entry?.spawnedCwd,
+    parentSessionKey: entry?.parentSessionKey,
+    forkedFromParent: sessionEntryForkedFromParent(entry) ? true : undefined,
+    spawnDepth: entry?.spawnDepth,
+    subagentRole: entry?.subagentRole,
+    subagentControlScope: entry?.subagentControlScope,
+    sessionStartedAt: entry?.sessionStartedAt,
+    lastInteractionAt: entry?.lastInteractionAt,
+    label: entry?.label,
+    color: entry?.color,
+    status: entry?.status,
+    visibility: entry?.visibility ?? "shared",
+    createdActor: entry?.createdActor,
+    owner: entry?.owner,
+    participants: entry?.participants,
+    participantCount: entry?.participantCount,
     systemSent: entry?.systemSent,
     abortedLastRun: entry?.abortedLastRun,
     thinkingLevel: entry?.thinkingLevel,
@@ -51,6 +49,7 @@ export function toSessionDisplayRow(key: string, entry: SessionEntry): SessionDi
     outputTokens: entry?.outputTokens,
     totalTokens: entry?.totalTokens,
     totalTokensFresh: entry?.totalTokensFresh,
+    totalTokensVersion: entry?.totalTokensVersion,
     model: entry?.model,
     modelProvider: entry?.modelProvider,
     providerOverride: entry?.providerOverride,
@@ -59,34 +58,41 @@ export function toSessionDisplayRow(key: string, entry: SessionEntry): SessionDi
   };
 }
 
-export function toSessionDisplayRows(store: Record<string, SessionEntry>): SessionDisplayRow[] {
+export type SessionDisplayRow = ReturnType<typeof toSessionDisplayRow>;
+
+export function toSessionDisplayRows(store: Record<string, SessionEntry>) {
   return Object.entries(store)
     .map(([key, entry]) => toSessionDisplayRow(key, entry))
     .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
 }
 
 function truncateSessionKey(key: string): string {
-  if (key.length <= SESSION_KEY_PAD) {
+  const graphemes = splitGraphemes(key);
+  if (graphemes.length <= 26) {
     return key;
   }
-  const head = Math.max(4, SESSION_KEY_PAD - 10);
-  return `${key.slice(0, head)}...${key.slice(-6)}`;
+  // Keep both the stable prefix and suffix; the tail often contains direct
+  // recipient or runtime identifiers that distinguish otherwise similar keys.
+  return `${graphemes.slice(0, 16).join("")}...${graphemes.slice(-6).join("")}`;
 }
 
 export function formatSessionKeyCell(key: string, rich: boolean): string {
-  const label = truncateSessionKey(key).padEnd(SESSION_KEY_PAD);
+  const label = truncateSessionKey(sanitizeTerminalText(key));
   return rich ? theme.accent(label) : label;
 }
 
 export function formatSessionAgeCell(updatedAt: number | null | undefined, rich: boolean): string {
   const ageLabel = updatedAt ? formatTimeAgo(Date.now() - updatedAt) : "unknown";
-  const padded = ageLabel.padEnd(SESSION_AGE_PAD);
-  return rich ? theme.muted(padded) : padded;
+  return rich ? theme.muted(ageLabel) : ageLabel;
 }
 
 export function formatSessionModelCell(model: string | null | undefined, rich: boolean): string {
-  const label = (model ?? "unknown").padEnd(SESSION_MODEL_PAD);
+  const label = sanitizeTerminalText(model ?? "unknown");
   return rich ? theme.info(label) : label;
+}
+
+function formatSessionActor(actor: SessionActor): string {
+  return actor.label?.trim() || actor.id?.trim() || actor.type;
 }
 
 export function formatSessionFlagsCell(
@@ -102,9 +108,27 @@ export function formatSessionFlagsCell(
     | "systemSent"
     | "abortedLastRun"
     | "sessionId"
-  >,
+    | "visibility"
+    | "createdActor"
+    | "owner"
+    | "participants"
+    | "participantCount"
+  > & { runtimePolicySessionKey?: string },
   rich: boolean,
 ): string {
+  const owner = row.owner?.actor ?? row.createdActor;
+  // Match the canonical session-row participant preview bound.
+  const participants = (row.participants ?? [])
+    .slice(0, 4)
+    .map(({ identity, label }) => label?.trim() || `${identity.type}:${identity.id}`);
+  const remainingParticipants = Math.max(
+    0,
+    (row.participantCount ?? participants.length) - participants.length,
+  );
+  const participantSummary =
+    participants.length > 0
+      ? `${participants.join(",")}${remainingParticipants > 0 ? `,+${remainingParticipants}` : ""}`
+      : undefined;
   const flags = [
     row.thinkingLevel ? `think:${row.thinkingLevel}` : null,
     row.verboseLevel ? `verbose:${row.verboseLevel}` : null,
@@ -115,8 +139,12 @@ export function formatSessionFlagsCell(
     row.groupActivation ? `activation:${row.groupActivation}` : null,
     row.systemSent ? "system" : null,
     row.abortedLastRun ? "aborted" : null,
+    row.visibility ? `visibility:${row.visibility}` : null,
+    owner ? `owner:${formatSessionActor(owner)}` : null,
+    participantSummary ? `participants:${participantSummary}` : null,
+    row.runtimePolicySessionKey ? `policy:${row.runtimePolicySessionKey}` : null,
     row.sessionId ? `id:${row.sessionId}` : null,
   ].filter(Boolean);
-  const label = flags.join(" ");
+  const label = sanitizeTerminalText(flags.join(" "));
   return label.length === 0 ? "" : rich ? theme.muted(label) : label;
 }

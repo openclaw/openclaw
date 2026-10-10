@@ -1,54 +1,51 @@
+/**
+ * Activates and injects OpenAI/Codex native web-search tools when config,
+ * model API, and auth state allow it.
+ */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRecord } from "../utils.js";
 import { externalCliDiscoveryForProviderAuth } from "./auth-profiles/external-cli-discovery.js";
 import { listProfilesForProvider } from "./auth-profiles/profile-list.js";
-import { ensureAuthProfileStore } from "./auth-profiles/store.js";
+import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { resolveCodexNativeWebSearchConfig } from "./codex-native-web-search.shared.js";
 import {
-  type CodexNativeSearchMode,
-  resolveCodexNativeWebSearchConfig,
-} from "./codex-native-web-search.shared.js";
+  resolveWebSearchToolPolicy,
+  type WebSearchToolPolicyParams,
+} from "./web-search-tool-policy.js";
 
-type CodexNativeSearchActivation = {
-  globalWebSearchEnabled: boolean;
-  codexNativeEnabled: boolean;
-  codexMode: CodexNativeSearchMode;
-  nativeEligible: boolean;
-  hasRequiredAuth: boolean;
-  state: "managed_only" | "native_active";
-  inactiveReason?:
-    | "globally_disabled"
-    | "codex_not_enabled"
-    | "model_not_eligible"
-    | "codex_auth_missing";
-};
+export type NativeWebSearchToolPolicyParams = WebSearchToolPolicyParams;
 
-type CodexNativeSearchPayloadPatchResult = {
-  status: "payload_not_object" | "native_tool_already_present" | "injected";
-};
-
+/** Returns whether a model API can accept the native Codex web_search tool. */
 export function isCodexNativeSearchEligibleModel(params: {
   modelProvider?: string;
   modelApi?: string;
 }): boolean {
-  return params.modelProvider === "openai-codex" || params.modelApi === "openai-codex-responses";
+  return params.modelApi === "openai-chatgpt-responses";
 }
 
 function hasCodexNativeWebSearchTool(tools: unknown): boolean {
   if (!Array.isArray(tools)) {
     return false;
   }
-  return tools.some(
-    (tool) => isRecord(tool) && typeof tool.type === "string" && tool.type === "web_search",
-  );
+  return tools.some((tool) => isRecord(tool) && tool.type === "web_search");
 }
 
+/** Checks whether OpenAI/Codex auth is available for native web search. */
 export function hasAvailableCodexAuth(params: {
   config?: OpenClawConfig;
   agentDir?: string;
+  authStore?: AuthProfileStore;
 }): boolean {
+  if (params.authStore) {
+    return listProfilesForProvider(params.authStore, "openai").length > 0;
+  }
   if (
     Object.values(params.config?.auth?.profiles ?? {}).some(
-      (profile) => isRecord(profile) && profile.provider === "openai-codex",
+      (profile) =>
+        isRecord(profile) &&
+        profile.provider === "openai" &&
+        (profile.mode === "oauth" || profile.mode === "token"),
     )
   ) {
     return true;
@@ -56,17 +53,13 @@ export function hasAvailableCodexAuth(params: {
 
   if (params.agentDir) {
     try {
-      if (
-        listProfilesForProvider(
-          ensureAuthProfileStore(params.agentDir, {
-            externalCli: externalCliDiscoveryForProviderAuth({
-              cfg: params.config,
-              provider: "openai-codex",
-            }),
-          }),
-          "openai-codex",
-        ).length > 0
-      ) {
+      const store = ensureAuthProfileStore(params.agentDir, {
+        externalCli: externalCliDiscoveryForProviderAuth({
+          cfg: params.config,
+          provider: "openai",
+        }),
+      });
+      if (listProfilesForProvider(store, "openai").length > 0) {
         return true;
       }
     } catch {
@@ -76,76 +69,63 @@ export function hasAvailableCodexAuth(params: {
   return false;
 }
 
-export function resolveCodexNativeSearchActivation(params: {
-  config?: OpenClawConfig;
-  modelProvider?: string;
-  modelApi?: string;
-  agentDir?: string;
-}): CodexNativeSearchActivation {
-  const globalWebSearchEnabled = params.config?.tools?.web?.search?.enabled !== false;
+/** Resolves whether native search is active or why managed search should remain. */
+export function resolveCodexNativeSearchActivation(
+  params: Omit<
+    WebSearchToolPolicyParams,
+    | "sessionId"
+    | "inputProvenance"
+    | "trustedInternalHandoff"
+    | "scheduledToolPolicy"
+    | "runtimeToolAllowlist"
+  > &
+    Parameters<typeof hasAvailableCodexAuth>[0] & { modelApi?: string },
+) {
+  const globalWebSearchEnabled =
+    params.webSearchEnabled !== false && params.config?.tools?.web?.search?.enabled !== false;
   const codexConfig = resolveCodexNativeWebSearchConfig(params.config);
   const nativeEligible = isCodexNativeSearchEligibleModel(params);
-  const hasRequiredAuth = params.modelProvider !== "openai-codex" || hasAvailableCodexAuth(params);
-
-  if (!globalWebSearchEnabled) {
-    return {
-      globalWebSearchEnabled,
-      codexNativeEnabled: codexConfig.enabled,
-      codexMode: codexConfig.mode,
-      nativeEligible,
-      hasRequiredAuth,
-      state: "managed_only",
-      inactiveReason: "globally_disabled",
-    };
-  }
-
-  if (!codexConfig.enabled) {
-    return {
-      globalWebSearchEnabled,
-      codexNativeEnabled: false,
-      codexMode: codexConfig.mode,
-      nativeEligible,
-      hasRequiredAuth,
-      state: "managed_only",
-      inactiveReason: "codex_not_enabled",
-    };
-  }
-
-  if (!nativeEligible) {
-    return {
-      globalWebSearchEnabled,
-      codexNativeEnabled: true,
-      codexMode: codexConfig.mode,
-      nativeEligible: false,
-      hasRequiredAuth,
-      state: "managed_only",
-      inactiveReason: "model_not_eligible",
-    };
-  }
-
-  if (!hasRequiredAuth) {
-    return {
-      globalWebSearchEnabled,
-      codexNativeEnabled: true,
-      codexMode: codexConfig.mode,
-      nativeEligible: true,
-      hasRequiredAuth: false,
-      state: "managed_only",
-      inactiveReason: "codex_auth_missing",
-    };
-  }
+  const hasRequiredAuth =
+    params.modelApi !== "openai-chatgpt-responses" ||
+    params.modelProvider !== "openai" ||
+    hasAvailableCodexAuth(params);
+  const searchProvider = params.config?.tools?.web?.search?.provider?.trim().toLowerCase();
+  const managedProviderSelected = Boolean(
+    searchProvider && searchProvider !== "auto" && searchProvider !== "openai",
+  );
+  const inactiveReason = !globalWebSearchEnabled
+    ? ("globally_disabled" as const)
+    : !codexConfig.enabled
+      ? ("codex_not_enabled" as const)
+      : managedProviderSelected
+        ? ("managed_provider_selected" as const)
+        : !nativeEligible
+          ? ("model_not_eligible" as const)
+          : !hasRequiredAuth
+            ? ("codex_auth_missing" as const)
+            : !isNativeWebSearchAllowedByToolPolicy(params)
+              ? ("tool_policy_denied" as const)
+              : undefined;
 
   return {
     globalWebSearchEnabled,
-    codexNativeEnabled: true,
+    codexNativeEnabled: codexConfig.enabled,
     codexMode: codexConfig.mode,
-    nativeEligible: true,
-    hasRequiredAuth: true,
-    state: "native_active",
+    nativeEligible,
+    hasRequiredAuth,
+    state: inactiveReason ? ("managed_only" as const) : ("native_active" as const),
+    ...(inactiveReason ? { inactiveReason } : {}),
   };
 }
 
-export function buildCodexNativeWebSearchTool(
+export function isNativeWebSearchAllowedByToolPolicy(
+  params: NativeWebSearchToolPolicyParams,
+): boolean {
+  return resolveWebSearchToolPolicy(params).allowed;
+}
+
+/** Builds the OpenAI Responses `web_search` tool payload from config. */
+function buildCodexNativeWebSearchTool(
   config: OpenClawConfig | undefined,
 ): Record<string, unknown> {
   const nativeConfig = resolveCodexNativeWebSearchConfig(config);
@@ -174,30 +154,22 @@ export function buildCodexNativeWebSearchTool(
   return tool;
 }
 
+/** Injects a native Codex web-search tool into a mutable provider payload. */
 export function patchCodexNativeWebSearchPayload(params: {
   payload: unknown;
   config?: OpenClawConfig;
-}): CodexNativeSearchPayloadPatchResult {
+}) {
   if (!isRecord(params.payload)) {
-    return { status: "payload_not_object" };
+    return { status: "payload_not_object" as const };
   }
 
   const payload = params.payload;
   if (hasCodexNativeWebSearchTool(payload.tools)) {
-    return { status: "native_tool_already_present" };
+    return { status: "native_tool_already_present" as const };
   }
 
   const tools = Array.isArray(payload.tools) ? [...payload.tools] : [];
   tools.push(buildCodexNativeWebSearchTool(params.config));
   payload.tools = tools;
-  return { status: "injected" };
-}
-
-export function shouldSuppressManagedWebSearchTool(params: {
-  config?: OpenClawConfig;
-  modelProvider?: string;
-  modelApi?: string;
-  agentDir?: string;
-}): boolean {
-  return resolveCodexNativeSearchActivation(params).state === "native_active";
+  return { status: "injected" as const };
 }

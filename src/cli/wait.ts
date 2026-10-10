@@ -1,7 +1,6 @@
 export function waitForever() {
-  // Keep event loop alive via an unref'ed interval plus a pending promise.
-  const interval = setInterval(() => {}, 1_000_000);
-  interval.unref();
+  // A pending promise alone cannot keep Node alive; this interval owns the process lifetime.
+  setInterval(() => {}, 1_000_000);
   return new Promise<void>(() => {
     /* never resolve */
   });

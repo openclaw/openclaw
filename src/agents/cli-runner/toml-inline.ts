@@ -1,13 +1,11 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+
 function escapeTomlString(value: string): string {
   return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
 }
 
 function formatTomlKey(key: string): string {
   return /^[A-Za-z0-9_-]+$/.test(key) ? key : `"${escapeTomlString(key)}"`;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function serializeTomlInlineValue(value: unknown): string {
@@ -24,6 +22,8 @@ export function serializeTomlInlineValue(value: unknown): string {
     return `[${value.map((entry) => serializeTomlInlineValue(entry)).join(", ")}]`;
   }
   if (isRecord(value)) {
+    // Inline table key ordering follows Object.entries input order, which callers
+    // control when deterministic override output matters.
     return `{ ${Object.entries(value)
       .map(([key, entry]) => `${formatTomlKey(key)} = ${serializeTomlInlineValue(entry)}`)
       .join(", ")} }`;

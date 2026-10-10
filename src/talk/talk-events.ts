@@ -1,3 +1,9 @@
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
+import type { TalkEvent as ProtocolTalkEvent } from "../../packages/gateway-protocol/src/schema/channels.js";
+
+/**
+ * Canonical event names emitted by Talk sessions across realtime and STT/TTS flows.
+ */
 export const TALK_EVENT_TYPES = [
   "session.started",
   "session.ready",
@@ -31,50 +37,34 @@ export const TALK_EVENT_TYPES = [
 
 export type TalkEventType = (typeof TALK_EVENT_TYPES)[number];
 
-export type TalkMode = "realtime" | "stt-tts" | "transcription";
+export type TalkMode = ProtocolTalkEvent["mode"];
 
-export type TalkTransport = "webrtc" | "provider-websocket" | "gateway-relay" | "managed-room";
+export type TalkTransport = ProtocolTalkEvent["transport"];
 
-export type TalkBrain = "agent-consult" | "direct-tools" | "none";
+export type TalkBrain = ProtocolTalkEvent["brain"];
 
-export type TalkEventContext = {
-  sessionId: string;
-  mode: TalkMode;
-  transport: TalkTransport;
-  brain: TalkBrain;
-  provider?: string;
-};
+export type TalkEventContext = SchemaContract<
+  Pick<ProtocolTalkEvent, "sessionId" | "mode" | "transport" | "brain" | "provider">
+>;
 
-export type TalkEvent<TPayload = unknown> = TalkEventContext & {
-  id: string;
-  type: TalkEventType;
-  turnId?: string;
-  captureId?: string;
-  seq: number;
-  timestamp: string;
-  final?: boolean;
-  callId?: string;
-  itemId?: string;
-  parentId?: string;
+export type TalkEvent<TPayload = unknown> = SchemaContract<Omit<ProtocolTalkEvent, "payload">> & {
   payload: TPayload;
 };
 
-export type TalkEventInput<TPayload = unknown> = {
-  type: TalkEventType;
-  payload: TPayload;
-  turnId?: string;
-  captureId?: string;
+/** Session context, id, sequence, and the default timestamp are supplied by the sequencer. */
+export type TalkEventInput<TPayload = unknown> = Omit<
+  TalkEvent<TPayload>,
+  keyof TalkEventContext | "id" | "seq" | "timestamp"
+> & {
   timestamp?: string;
-  final?: boolean;
-  callId?: string;
-  itemId?: string;
-  parentId?: string;
 };
 
 export type TalkEventSequencer = {
   next<TPayload>(input: TalkEventInput<TPayload>): TalkEvent<TPayload>;
 };
 
+// Turn-scoped event names must carry turnId so mixed audio/text/tool streams can be
+// reconstructed without guessing from sequence order alone.
 const TURN_SCOPED_TALK_EVENT_TYPES = new Set<TalkEventType>([
   "turn.started",
   "turn.ended",
@@ -94,6 +84,7 @@ const TURN_SCOPED_TALK_EVENT_TYPES = new Set<TalkEventType>([
   "tool.error",
 ]);
 
+// Capture-scoped events describe microphone capture lifecycle, which can overlap turns.
 const CAPTURE_SCOPED_TALK_EVENT_TYPES = new Set<TalkEventType>([
   "capture.started",
   "capture.stopped",

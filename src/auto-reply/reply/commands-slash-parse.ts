@@ -1,48 +1,65 @@
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
-export type SlashCommandParseResult =
-  | { kind: "no-match" }
-  | { kind: "empty" }
-  | { kind: "invalid" }
-  | { kind: "parsed"; action: string; args: string };
+/** Splits trimmed command text without normalizing the remaining arguments. */
+export function splitCommandAction(trimmed: string, defaultAction = "") {
+  const actionEnd = trimmed.search(/\s/);
+  return {
+    action:
+      (actionEnd === -1 ? trimmed : trimmed.slice(0, actionEnd)).toLowerCase() || defaultAction,
+    args: actionEnd === -1 ? "" : trimmed.slice(actionEnd).trim(),
+  };
+}
 
-export type ParsedSlashCommand =
-  | { ok: true; action: string; args: string }
-  | { ok: false; message: string };
+/** Matches a whole, case-insensitive command token and preserves its argument text. */
+export function matchSlashCommandToken(raw: string, command: string): string | null {
+  const { action, args } = splitCommandAction(raw.trim());
+  return action === command ? args : null;
+}
 
-function parseSlashCommandActionArgs(raw: string, slash: string): SlashCommandParseResult {
-  const trimmed = raw.trim();
-  const slashLower = normalizeLowercaseStringOrEmpty(slash);
-  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith(slashLower)) {
-    return { kind: "no-match" };
-  }
-  const rest = trimmed.slice(slash.length).trim();
-  if (!rest) {
-    return { kind: "empty" };
-  }
-  const match = rest.match(/^(\S+)(?:\s+([\s\S]+))?$/);
+export function resolveSlashCommandName(commandBody: string): string | null {
+  const match = commandBody.trim().match(/^\/([^\s:]+)(?::|\s|$)/);
+  return normalizeLowercaseStringOrEmpty(match?.[1]) || null;
+}
+
+/** Parses a normalized send-policy command without importing command runtime state. */
+export function parseSendPolicyCommandBody(normalized: string): {
+  hasCommand: boolean;
+  mode?: "allow" | "deny" | "inherit";
+} {
+  const match = normalized.match(/^\/send(?:\s+([a-zA-Z]+))?\s*$/i);
   if (!match) {
-    return { kind: "invalid" };
+    return { hasCommand: false };
   }
-  const action = normalizeLowercaseStringOrEmpty(match[1]);
-  const args = (match[2] ?? "").trim();
-  return { kind: "parsed", action, args };
+  const token = normalizeLowercaseStringOrEmpty(match[1]);
+  if (!token) {
+    return { hasCommand: true };
+  }
+  if (token === "inherit" || token === "default" || token === "reset") {
+    return { hasCommand: true, mode: "inherit" };
+  }
+  const mode =
+    token === "allow" || token === "on"
+      ? "allow"
+      : token === "deny" || token === "off"
+        ? "deny"
+        : undefined;
+  return { hasCommand: true, mode };
 }
 
 export function parseSlashCommandOrNull(
   raw: string,
   slash: string,
-  opts: { invalidMessage: string; defaultAction?: string },
-): ParsedSlashCommand | null {
-  const parsed = parseSlashCommandActionArgs(raw, slash);
-  if (parsed.kind === "no-match") {
+  defaultAction = "show",
+): { action: string; args: string } | null {
+  const trimmed = raw.trim();
+  const slashLower = normalizeLowercaseStringOrEmpty(slash);
+  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith(slashLower)) {
     return null;
   }
-  if (parsed.kind === "invalid") {
-    return { ok: false, message: opts.invalidMessage };
+  // Longer command names such as `/config-check` belong to their own handler.
+  const charAfter = trimmed.charAt(slash.length);
+  if (charAfter && !/[\s:]/.test(charAfter)) {
+    return null;
   }
-  if (parsed.kind === "empty") {
-    return { ok: true, action: opts.defaultAction ?? "show", args: "" };
-  }
-  return { ok: true, action: parsed.action, args: parsed.args };
+  return splitCommandAction(trimmed.slice(slash.length).trim(), defaultAction);
 }

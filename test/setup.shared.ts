@@ -1,16 +1,22 @@
+// Native-loader projects replace execArgv, so their setup also owns SQLite admission.
+import "./vitest/vitest.sqlite-preload.mts";
 import { vi } from "vitest";
+import { installProcessWarningFilter } from "../src/infra/warning-filter.js";
+import { withIsolatedTestHome } from "./test-env.js";
 
-declare global {
-  // Optional per-test delegate for the shared OAuth mock.
-  var __OPENCLAW_TEST_REFRESH_OPENAI_CODEX_TOKEN__: ((...args: unknown[]) => unknown) | undefined;
-}
+const openAiCodexTokenRefreshTestHook = "__OPENCLAW_TEST_REFRESH_OPENAI_CODEX_TOKEN__";
+type GlobalWithOpenAiCodexTokenRefreshTestHook = typeof globalThis & {
+  [openAiCodexTokenRefreshTestHook]?: ((...args: unknown[]) => unknown) | undefined;
+};
 
-vi.mock("@earendil-works/pi-ai/oauth", () => ({
+vi.mock("../src/llm/oauth.js", () => ({
   getOAuthApiKey: () => undefined,
   getOAuthProviders: () => [],
   loginOpenAICodex: vi.fn(),
   refreshOpenAICodexToken: vi.fn((...args: unknown[]) =>
-    globalThis.__OPENCLAW_TEST_REFRESH_OPENAI_CODEX_TOKEN__?.(...args),
+    (globalThis as GlobalWithOpenAiCodexTokenRefreshTestHook)[openAiCodexTokenRefreshTestHook]?.(
+      ...args,
+    ),
   ),
 }));
 
@@ -46,9 +52,6 @@ const TEST_PROCESS_MAX_LISTENERS = 256;
 if (process.getMaxListeners() > 0 && process.getMaxListeners() < TEST_PROCESS_MAX_LISTENERS) {
   process.setMaxListeners(TEST_PROCESS_MAX_LISTENERS);
 }
-
-import { installProcessWarningFilter } from "../src/infra/warning-filter.js";
-import { withIsolatedTestHome } from "./test-env.js";
 
 type SharedTestSetupOptions = {
   loadProfileEnv?: boolean;
@@ -86,6 +89,7 @@ export function installSharedTestSetup(options?: SharedTestSetupOptions): {
         return;
       }
       cleaned = true;
+      process.removeListener("exit", handle.cleanup);
       testEnv.cleanup();
       delete globalState[SHARED_TEST_SETUP];
     },

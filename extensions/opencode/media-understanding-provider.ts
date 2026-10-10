@@ -1,32 +1,19 @@
-import type { ProviderStreamOptions } from "@earendil-works/pi-ai";
+import type { ProviderStreamOptions } from "openclaw/plugin-sdk/llm";
 import {
   describeImageWithModelPayloadTransform,
   describeImagesWithModelPayloadTransform,
   type MediaUnderstandingProvider,
 } from "openclaw/plugin-sdk/media-understanding";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-export function stripOpencodeDisabledResponsesReasoningPayload(payload: unknown): void {
+const stripDisabledResponsesReasoning: ProviderStreamOptions["onPayload"] = (payload) => {
   if (!isRecord(payload)) {
     return;
   }
   const reasoning = payload.reasoning;
-  if (reasoning === "none") {
+  if (reasoning === "none" || (isRecord(reasoning) && reasoning.effort === "none")) {
     delete payload.reasoning;
-    return;
   }
-  if (!isRecord(reasoning) || reasoning.effort !== "none") {
-    return;
-  }
-  delete payload.reasoning;
-}
-
-const stripDisabledResponsesReasoning: ProviderStreamOptions["onPayload"] = (payload) => {
-  stripOpencodeDisabledResponsesReasoningPayload(payload);
-  return undefined;
 };
 
 export const opencodeMediaUnderstandingProvider: MediaUnderstandingProvider = {

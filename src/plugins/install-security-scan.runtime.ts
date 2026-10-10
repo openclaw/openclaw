@@ -1,93 +1,97 @@
+// Runtime bridge for plugin install security scanning.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { walkDirectory } from "@openclaw/fs-safe/walk";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
 import { tryReadJson } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
-import { extensionUsesSkippedScannerPath, isPathInside } from "../security/scan-paths.js";
-import { scanDirectoryWithSummary } from "../security/skill-scanner.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { isPackageDependencyName } from "../infra/package-json.js";
 import {
-  findBlockedPackageDirectoryInPath,
-  findBlockedPackageFileAliasInPath,
-  findBlockedManifestDependencies,
-  findBlockedNodeModulesDirectory,
-  findBlockedNodeModulesFileAlias,
-} from "./dependency-denylist.js";
+  runInstallPolicy,
+  type InstallPolicyFinding,
+  type InstallPolicyOrigin,
+  type InstallPolicyRequestKind,
+  type InstallPolicySource,
+} from "../security/install-policy.js";
+import { isPathInside } from "../security/scan-paths.js";
 import { getGlobalHookRunner } from "./hook-runner-global.js";
+import type { PluginHookBeforeInstallPlugin, PluginHookBeforeInstallSkill } from "./hook-types.js";
 import { createBeforeInstallHookPayload } from "./install-policy-context.js";
-import type { InstallSafetyOverrides } from "./install-security-scan.types.js";
-import { listBuiltRuntimeEntryCandidates } from "./package-entrypoints.js";
+import type {
+  InstallSecurityScanResult,
+  SkillInstallSpecMetadata,
+} from "./install-security-scan.js";
+import type {
+  InstallPolicyWarningDetails,
+  InstallSafetyOverrides,
+} from "./install-security-scan.types.js";
 
 type InstallScanLogger = {
   warn?: (message: string) => void;
 };
 
-type InstallScanFinding = {
-  ruleId: string;
-  severity: "info" | "warn" | "critical";
-  file: string;
-  line: number;
-  message: string;
-  evidence?: string;
-};
+const FULL_GIT_COMMIT_PATTERN = /^[0-9a-f]{40}$/i;
+const INSTALL_POLICY_BLOCK_REASON_PREFIX = "blocked by install policy: ";
+const INSTALL_POLICY_ACKNOWLEDGEMENT_FLAG = "--acknowledge-install-policy-warning";
+const MAX_INSTALL_POLICY_NOTICE_CHARS = 4_000;
+const INSTALL_POLICY_REVIEW_GUIDANCE = [
+  "This invocation cannot approve install policy warnings.",
+  "To continue:",
+  "  • Run the matching direct `openclaw plugins ...` or `openclaw skills ...` command interactively.",
+  `  • For reviewed direct CLI automation, add ${INSTALL_POLICY_ACKNOWLEDGEMENT_FLAG}.`,
+  "  • If no equivalent direct command exists, change security.installPolicy to allow this reviewed request, then retry.",
+  "  • --force does not approve install policy warnings.",
+];
 
-type BuiltinInstallScan = {
-  status: "ok" | "error";
-  scannedFiles: number;
-  critical: number;
-  warn: number;
-  info: number;
-  findings: InstallScanFinding[];
-  error?: string;
-};
+type PluginInstallRequestKind = Exclude<InstallPolicyRequestKind, "skill-install">;
+
+function formatInstallPolicyFinding(finding: InstallPolicyFinding): string {
+  const location = finding.file
+    ? ` (${sanitizeTerminalText(finding.file)}${finding.line ? `:${finding.line}` : ""})`
+    : "";
+  const evidence = finding.evidence ? ` Evidence: ${sanitizeTerminalText(finding.evidence)}` : "";
+  return `[${finding.severity.toUpperCase()}] ${sanitizeTerminalText(finding.ruleId)}: ${sanitizeTerminalText(finding.message)}${location}${evidence}`;
+}
+
+function formatInstallPolicyNotice(params: {
+  decision: "warn" | "block";
+  findings?: InstallPolicyFinding[];
+  guidance?: string[];
+  reason: string;
+  targetName: string;
+  targetType: "skill" | "plugin";
+}): string {
+  const targetLabel = params.targetType === "skill" ? "Skill" : "Plugin";
+  const lines = [
+    params.decision === "warn" ? "Install requires approval" : "Install blocked by policy",
+    "",
+    `  ${targetLabel}: ${sanitizeTerminalText(params.targetName)}`,
+    `  Reason: ${sanitizeTerminalText(params.reason)}`,
+  ];
+  if (params.findings?.length) {
+    lines.push("  Findings:");
+    for (const finding of params.findings) {
+      lines.push(`    • ${formatInstallPolicyFinding(finding)}`);
+    }
+  }
+  if (params.guidance?.length) {
+    lines.push("", ...params.guidance);
+  }
+  return lines.join("\n");
+}
 
 type PackageManifest = {
-  name?: string;
   dependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
-  overrides?: unknown;
   peerDependencies?: Record<string, string>;
 };
 
-type PackageExecutableScanMetadata = {
-  runtimeExtensions?: readonly string[];
-  runtimeSetupEntry?: string;
-  setupEntry?: string;
-};
-
-const RUNTIME_GRAPH_SCAN_EXTENSIONS = [
-  ".js",
-  ".mjs",
-  ".cjs",
-  ".ts",
-  ".mts",
-  ".cts",
-  ".jsx",
-  ".tsx",
-];
-const RUNTIME_GRAPH_SCAN_MAX_FILES = 1000;
-const LOCAL_RUNTIME_IMPORT_PATTERN =
-  /\b(?:import|export)\s+(?:[^"']*?\s+from\s*)?["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)|\brequire\s*\(\s*["']([^"']+)["']\s*\)/g;
-
-type PackageManifestTraversalLimits = {
+type PackageTraversalLimits = {
   maxDepth: number;
   maxDirectories: number;
-  maxManifests: number;
-};
-
-type BlockedPackageDirectoryFinding = {
-  dependencyName: string;
-  directoryRelativePath: string;
-};
-
-type BlockedPackageFileFinding = {
-  dependencyName: string;
-  fileRelativePath: string;
-};
-
-type PackageManifestTraversalResult = {
-  blockedDirectoryFinding?: BlockedPackageDirectoryFinding;
-  blockedFileFinding?: BlockedPackageFileFinding;
-  packageManifestPaths: string[];
 };
 
 type InstalledPackageScanRoot = {
@@ -95,109 +99,89 @@ type InstalledPackageScanRoot = {
   realPath: string;
 };
 
-type PluginInstallRequestKind =
-  | "skill-install"
-  | "plugin-dir"
-  | "plugin-archive"
-  | "plugin-file"
-  | "plugin-npm"
-  | "plugin-git";
-
-type SkillInstallSpec = {
-  id?: string;
-  kind: "brew" | "node" | "go" | "uv" | "download";
-  label?: string;
-  bins?: string[];
-  os?: string[];
-  formula?: string;
-  package?: string;
-  module?: string;
-  url?: string;
-  archive?: string;
-  extract?: boolean;
-  stripComponents?: number;
-  targetDir?: string;
-};
-
-export type InstallSecurityScanResult = {
-  blocked?: {
-    code?: "security_scan_blocked" | "security_scan_failed";
-    reason: string;
-  };
-};
-
-function buildCriticalDetails(params: {
-  findings: Array<{ file: string; line: number; message: string; severity: string }>;
-}) {
-  return params.findings
-    .filter((finding) => finding.severity === "critical")
-    .map((finding) => `${finding.message} (${finding.file}:${finding.line})`)
-    .join("; ");
+function formatInstallPolicyFailure(params: {
+  result: Awaited<ReturnType<typeof runInstallPolicy>>;
+  targetName: string;
+  targetType: "skill" | "plugin";
+}): InstallSecurityScanResult | undefined {
+  if (params.result?.warning) {
+    const notice = formatInstallPolicyNotice({
+      decision: "warn",
+      findings: params.result.findings,
+      guidance: INSTALL_POLICY_REVIEW_GUIDANCE,
+      reason: params.result.warning.reason,
+      targetName: params.targetName,
+      targetType: params.targetType,
+    });
+    if (notice.length > MAX_INSTALL_POLICY_NOTICE_CHARS) {
+      return {
+        blocked: {
+          code: "security_scan_failed",
+          reason:
+            "install policy failed closed: policy review exceeds the 4,000-character display limit; reduce or coalesce the reason and findings",
+        },
+      };
+    }
+  }
+  return params.result?.blocked
+    ? formatBlockedInstallPolicyResult({
+        blocked: params.result.blocked,
+        findings: params.result.findings,
+        targetName: params.targetName,
+        targetType: params.targetType,
+      })
+    : undefined;
 }
 
-function buildCriticalBlockReason(params: {
-  findings: Array<{ file: string; line: number; message: string; severity: string }>;
-  targetLabel: string;
-}) {
-  return `${params.targetLabel} blocked: dangerous code patterns detected: ${buildCriticalDetails({ findings: params.findings })}`;
-}
-
-function buildScanFailureBlockReason(params: { error: string; targetLabel: string }) {
-  return `${params.targetLabel} blocked: code safety scan failed (${params.error}). Run "openclaw security audit --deep" for details.`;
-}
-
-function buildBlockedDependencyManifestLabel(params: {
-  manifestPackageName?: string;
-  manifestRelativePath: string;
-}) {
-  const manifestLabel =
-    typeof params.manifestPackageName === "string" && params.manifestPackageName.trim()
-      ? `${params.manifestPackageName.trim()} (${params.manifestRelativePath})`
-      : params.manifestRelativePath;
-  return manifestLabel;
-}
-
-function buildBlockedDependencyReason(params: {
-  findings: Array<{
-    dependencyName: string;
-    declaredAs?: string;
-    field: "dependencies" | "name" | "optionalDependencies" | "overrides" | "peerDependencies";
-  }>;
-  manifestPackageName?: string;
-  manifestRelativePath: string;
-  targetLabel: string;
-}) {
-  const manifestLabel = buildBlockedDependencyManifestLabel({
-    manifestPackageName: params.manifestPackageName,
-    manifestRelativePath: params.manifestRelativePath,
+function formatBlockedInstallPolicyResult(params: {
+  blocked: NonNullable<InstallSecurityScanResult["blocked"]>;
+  findings?: InstallPolicyFinding[];
+  targetName: string;
+  targetType: "skill" | "plugin";
+}): InstallSecurityScanResult {
+  if (
+    params.blocked.code !== "security_scan_blocked" ||
+    !params.blocked.reason.startsWith(INSTALL_POLICY_BLOCK_REASON_PREFIX)
+  ) {
+    return { blocked: params.blocked };
+  }
+  const reason = params.blocked.reason.slice(INSTALL_POLICY_BLOCK_REASON_PREFIX.length);
+  const notice = formatInstallPolicyNotice({
+    decision: "block",
+    findings: params.findings,
+    reason,
+    targetName: params.targetName,
+    targetType: params.targetType,
   });
-  const findingSummary = params.findings
-    .map((finding) =>
-      finding.field === "name"
-        ? `"${finding.dependencyName}" as package name`
-        : finding.declaredAs
-          ? `"${finding.dependencyName}" via alias "${finding.declaredAs}" in ${finding.field}`
-          : `"${finding.dependencyName}" in ${finding.field}`,
-    )
-    .join(", ");
-  return `${params.targetLabel} blocked: blocked dependencies ${findingSummary} declared in ${manifestLabel}.`;
+  if (notice.length > MAX_INSTALL_POLICY_NOTICE_CHARS) {
+    const compactNotice = `${formatInstallPolicyNotice({
+      decision: "block",
+      reason,
+      targetName: params.targetName,
+      targetType: params.targetType,
+    })}\n  Findings omitted: policy review exceeds the 4,000-character display limit.`;
+    return {
+      blocked: {
+        ...params.blocked,
+        reason:
+          compactNotice.length <= MAX_INSTALL_POLICY_NOTICE_CHARS
+            ? compactNotice
+            : "Install blocked by policy: review exceeds the 4,000-character display limit.",
+      },
+    };
+  }
+  return {
+    blocked: {
+      ...params.blocked,
+      reason: notice,
+    },
+  };
 }
 
-function buildBlockedDependencyDirectoryReason(params: {
-  dependencyName: string;
-  directoryRelativePath: string;
-  targetLabel: string;
-}) {
-  return `${params.targetLabel} blocked: blocked dependency directory "${params.dependencyName}" declared at ${params.directoryRelativePath}.`;
-}
-
-function buildBlockedDependencyFileReason(params: {
-  dependencyName: string;
-  fileRelativePath: string;
-  targetLabel: string;
-}) {
-  return `${params.targetLabel} blocked: blocked dependency file alias "${params.dependencyName}" declared at ${params.fileRelativePath}.`;
-}
+const DEFAULT_PACKAGE_TRAVERSAL_LIMITS: PackageTraversalLimits = {
+  maxDepth: 64,
+  maxDirectories: 10_000,
+};
 
 function pathContainsNodeModulesSegment(relativePath: string): boolean {
   return relativePath
@@ -271,15 +255,13 @@ async function inspectNodeModulesSymlinkTarget(params: {
   symlinkPath: string;
   symlinkRelativePath: string;
   trustedHostOpenClawRootRealPath: string | null;
-}): Promise<
-  Pick<PackageManifestTraversalResult, "blockedDirectoryFinding" | "blockedFileFinding">
-> {
+}): Promise<void> {
   let resolvedTargetPath: string;
   try {
     resolvedTargetPath = await fs.realpath(params.symlinkPath);
   } catch (error) {
     throw new Error(
-      `manifest dependency scan could not resolve symlink target ${params.symlinkRelativePath}: ${String(error)}`,
+      `dependency boundary scan could not resolve symlink target ${params.symlinkRelativePath}: ${String(error)}`,
       {
         cause: error,
       },
@@ -287,9 +269,6 @@ async function inspectNodeModulesSymlinkTarget(params: {
   }
 
   if (!isPathInside(params.rootRealPath, resolvedTargetPath)) {
-    // Workspace package managers can leave peer links back to the OpenClaw host
-    // package. Trust only the exact peer-link shapes and only when the resolved
-    // target stays inside the host package root.
     if (
       isTrustedOpenClawPeerSymlink({
         allowManagedNpmRootPackagePeerSymlinks: params.allowManagedNpmRootPackagePeerSymlinks,
@@ -300,91 +279,27 @@ async function inspectNodeModulesSymlinkTarget(params: {
         trustedHostOpenClawRootRealPath: params.trustedHostOpenClawRootRealPath,
       })
     ) {
-      return {};
+      return;
     }
     throw new Error(
-      `manifest dependency scan found node_modules symlink target outside install root at ${params.symlinkRelativePath}`,
+      `dependency boundary scan found node_modules symlink target outside install root at ${params.symlinkRelativePath}`,
     );
   }
-
-  const resolvedTargetStats = await fs.stat(resolvedTargetPath);
-  const resolvedTargetRelativePath = path.relative(params.rootRealPath, resolvedTargetPath);
-  const blockedDirectoryFinding = findBlockedPackageDirectoryInPath({
-    pathRelativeToRoot: resolvedTargetRelativePath,
-  });
-  return {
-    // File symlinks can point into a blocked package directory, for example
-    // vendor/node_modules/safe-name -> ../plain-crypto-js/dist/index.js.
-    blockedDirectoryFinding,
-    blockedFileFinding: resolvedTargetStats.isFile()
-      ? findBlockedPackageFileAliasInPath({
-          pathRelativeToRoot: resolvedTargetRelativePath,
-        })
-      : undefined,
-  };
 }
-
-function buildBuiltinScanFromError(error: unknown): BuiltinInstallScan {
-  return {
-    status: "error",
-    scannedFiles: 0,
-    critical: 0,
-    warn: 0,
-    info: 0,
-    findings: [],
-    error: String(error),
-  };
-}
-
-function buildBuiltinScanFromSummary(summary: {
-  scannedFiles: number;
-  critical: number;
-  warn: number;
-  info: number;
-  truncated: boolean;
-  findings: InstallScanFinding[];
-}): BuiltinInstallScan {
-  return {
-    status: "ok",
-    scannedFiles: summary.scannedFiles,
-    critical: summary.critical,
-    warn: summary.warn,
-    info: summary.info,
-    findings: summary.findings,
-  };
-}
-
-const DEFAULT_PACKAGE_MANIFEST_TRAVERSAL_LIMITS: PackageManifestTraversalLimits = {
-  maxDepth: 64,
-  maxDirectories: 10_000,
-  maxManifests: 10_000,
-};
 
 function readPositiveIntegerEnv(name: string, fallback: number): number {
-  const rawValue = process.env[name];
-  if (!rawValue) {
-    return fallback;
-  }
-  const parsedValue = Number.parseInt(rawValue, 10);
-  if (!Number.isFinite(parsedValue) || parsedValue < 1) {
-    return fallback;
-  }
-  return parsedValue;
+  return parseStrictPositiveInteger(process.env[name]) ?? fallback;
 }
 
-function resolvePackageManifestTraversalLimits(): PackageManifestTraversalLimits {
+function resolvePackageTraversalLimits(): PackageTraversalLimits {
   return {
     maxDepth: readPositiveIntegerEnv(
       "OPENCLAW_INSTALL_SCAN_MAX_DEPTH",
-      DEFAULT_PACKAGE_MANIFEST_TRAVERSAL_LIMITS.maxDepth,
+      DEFAULT_PACKAGE_TRAVERSAL_LIMITS.maxDepth,
     ),
     maxDirectories: readPositiveIntegerEnv(
       "OPENCLAW_INSTALL_SCAN_MAX_DIRECTORIES",
-      DEFAULT_PACKAGE_MANIFEST_TRAVERSAL_LIMITS.maxDirectories,
-    ),
-    maxManifests: readPositiveIntegerEnv(
-      "OPENCLAW_INSTALL_SCAN_MAX_MANIFESTS",
-      DEFAULT_PACKAGE_MANIFEST_TRAVERSAL_LIMITS.maxManifests,
+      DEFAULT_PACKAGE_TRAVERSAL_LIMITS.maxDirectories,
     ),
   };
 }
@@ -393,37 +308,17 @@ function isSamePathOrInside(parentPath: string, candidatePath: string): boolean 
   return parentPath === candidatePath || isPathInside(parentPath, candidatePath);
 }
 
-function getErrnoCode(error: unknown): string | undefined {
-  if (typeof error !== "object" || error === null || !("code" in error)) {
-    return undefined;
-  }
-  const code = (error as { code?: unknown }).code;
-  return typeof code === "string" ? code : undefined;
-}
-
-function isInstallScannableDependencyName(name: string): boolean {
-  if (name.startsWith("@")) {
-    const parts = name.split("/");
-    return (
-      parts.length === 2 && parts.every((part) => part.length > 0 && part !== "." && part !== "..")
-    );
-  }
-  return (
-    name.length > 0 && !name.includes("/") && !name.includes("\\") && name !== "." && name !== ".."
-  );
-}
-
 function collectManifestRuntimeDependencyNames(manifest: PackageManifest): string[] {
   const dependencyNames = new Set<string>();
   for (const dependencies of [manifest.dependencies, manifest.optionalDependencies]) {
     for (const dependencyName of Object.keys(dependencies ?? {})) {
-      if (isInstallScannableDependencyName(dependencyName)) {
+      if (isPackageDependencyName(dependencyName)) {
         dependencyNames.add(dependencyName);
       }
     }
   }
   for (const dependencyName of Object.keys(manifest.peerDependencies ?? {})) {
-    if (dependencyName !== "openclaw" && isInstallScannableDependencyName(dependencyName)) {
+    if (dependencyName !== "openclaw" && isPackageDependencyName(dependencyName)) {
       dependencyNames.add(dependencyName);
     }
   }
@@ -431,16 +326,18 @@ function collectManifestRuntimeDependencyNames(manifest: PackageManifest): strin
 }
 
 async function resolveInstalledPackageScanRoot(params: {
+  allowManagedNpmRootPackagePeerSymlinks?: boolean;
   boundaryRealPath: string;
   dependencyName: string;
   packageDir: string;
+  trustedHostOpenClawRootRealPath: string | null;
 }): Promise<InstalledPackageScanRoot | undefined> {
   const packageDir = path.join(params.packageDir, "node_modules", params.dependencyName);
   let stats: Awaited<ReturnType<typeof fs.stat>>;
   try {
     stats = await fs.stat(packageDir);
   } catch (error) {
-    if (getErrnoCode(error) === "ENOENT") {
+    if (hasErrnoCode(error, "ENOENT")) {
       return undefined;
     }
     throw error;
@@ -451,6 +348,16 @@ async function resolveInstalledPackageScanRoot(params: {
 
   const realPath = await fs.realpath(packageDir).catch(() => path.resolve(packageDir));
   if (!isSamePathOrInside(params.boundaryRealPath, realPath)) {
+    if (
+      params.allowManagedNpmRootPackagePeerSymlinks === true &&
+      params.dependencyName === "openclaw" &&
+      isTrustedHostOpenClawPath({
+        resolvedTargetPath: realPath,
+        trustedHostOpenClawRootRealPath: params.trustedHostOpenClawRootRealPath,
+      })
+    ) {
+      return undefined;
+    }
     throw new Error(
       `installed dependency scan found package outside install root at ${packageDir}`,
     );
@@ -460,12 +367,14 @@ async function resolveInstalledPackageScanRoot(params: {
 
 async function collectInstalledPackageScanRoots(params: {
   additionalPackageDirs?: string[];
+  allowManagedNpmRootPackagePeerSymlinks?: boolean;
   dependencyScanRootDir?: string;
   packageDir: string;
 }): Promise<string[]> {
-  const limits = resolvePackageManifestTraversalLimits();
+  const limits = resolvePackageTraversalLimits();
   const boundaryDir = params.dependencyScanRootDir ?? params.packageDir;
   const boundaryRealPath = await fs.realpath(boundaryDir).catch(() => path.resolve(boundaryDir));
+  const trustedHostOpenClawRootRealPath = await resolveTrustedHostOpenClawRootRealPath();
   const packageRealPath = await fs
     .realpath(params.packageDir)
     .catch(() => path.resolve(params.packageDir));
@@ -513,17 +422,21 @@ async function collectInstalledPackageScanRoots(params: {
     }
     for (const dependencyName of collectManifestRuntimeDependencyNames(manifest)) {
       const nestedCandidate = await resolveInstalledPackageScanRoot({
+        allowManagedNpmRootPackagePeerSymlinks: params.allowManagedNpmRootPackagePeerSymlinks,
         boundaryRealPath,
         dependencyName,
         packageDir: current.packageDir,
+        trustedHostOpenClawRootRealPath,
       });
       const candidate =
         nestedCandidate ??
         (params.dependencyScanRootDir
           ? await resolveInstalledPackageScanRoot({
+              allowManagedNpmRootPackagePeerSymlinks: params.allowManagedNpmRootPackagePeerSymlinks,
               boundaryRealPath,
               dependencyName,
               packageDir: params.dependencyScanRootDir,
+              trustedHostOpenClawRootRealPath,
             })
           : undefined);
       if (candidate && !visitedRealPaths.has(candidate.realPath)) {
@@ -547,492 +460,48 @@ async function collectNonOverlappingPackageScanRoots(packageDirs: string[]): Pro
   return selectedRoots.map((selectedRoot) => selectedRoot.packageDir);
 }
 
-async function collectPackageManifestPaths(params: {
+async function validatePackageDependencyBoundaries(params: {
   allowManagedNpmRootPackagePeerSymlinks?: boolean;
   rootDir: string;
-}): Promise<PackageManifestTraversalResult> {
-  const limits = resolvePackageManifestTraversalLimits();
+}): Promise<void> {
+  const limits = resolvePackageTraversalLimits();
   const rootDir = params.rootDir;
   const rootRealPath = await fs.realpath(rootDir).catch(() => rootDir);
   const trustedHostOpenClawRootRealPath = await resolveTrustedHostOpenClawRootRealPath();
-  const queue: Array<{ depth: number; dir: string }> = [{ depth: 0, dir: rootDir }];
-  const packageManifestPaths: string[] = [];
-  const visitedDirectories = new Set<string>();
-  let firstBlockedDirectoryFinding: BlockedPackageDirectoryFinding | undefined;
-  let firstBlockedFileFinding: BlockedPackageFileFinding | undefined;
-  let queueIndex = 0;
-
-  while (queueIndex < queue.length) {
-    const current = queue[queueIndex];
-    queueIndex += 1;
-    if (!current) {
-      continue;
-    }
-
-    if (current.depth > limits.maxDepth) {
-      throw new Error(
-        `manifest dependency scan exceeded max depth (${limits.maxDepth}) at ${current.dir}`,
-      );
-    }
-
-    const currentDir = current.dir;
-    const currentRealPath = await fs.realpath(currentDir).catch(() => currentDir);
-    if (visitedDirectories.has(currentRealPath)) {
-      continue;
-    }
-    visitedDirectories.add(currentRealPath);
-    if (visitedDirectories.size > limits.maxDirectories) {
-      throw new Error(
-        `manifest dependency scan exceeded max directories (${limits.maxDirectories}) under ${rootDir}`,
-      );
-    }
-
-    let entries: Array<{
-      name: string;
-      isDirectory(): boolean;
-      isFile(): boolean;
-      isSymbolicLink(): boolean;
-    }>;
-    try {
-      entries = await fs.readdir(currentDir, { encoding: "utf8", withFileTypes: true });
-    } catch (error) {
-      throw new Error(`manifest dependency scan could not read ${currentDir}: ${String(error)}`, {
-        cause: error,
-      });
-    }
-
-    // Intentionally walk vendored/node_modules trees so bundled transitive
-    // manifests cannot hide blocked packages from install-time policy checks.
-    for (const entry of entries.toSorted((left, right) => left.name.localeCompare(right.name))) {
-      const nextPath = path.join(currentDir, entry.name);
-      const relativeNextPath = path.relative(rootDir, nextPath) || entry.name;
-      if (entry.isSymbolicLink()) {
-        const blockedDirectoryFinding = findBlockedNodeModulesDirectory({
-          directoryRelativePath: relativeNextPath,
-        });
-        if (blockedDirectoryFinding) {
-          firstBlockedDirectoryFinding ??= blockedDirectoryFinding;
-        }
-        const blockedFileFinding = findBlockedNodeModulesFileAlias({
-          fileRelativePath: relativeNextPath,
-        });
-        if (blockedFileFinding) {
-          firstBlockedFileFinding ??= blockedFileFinding;
-        }
-        if (pathContainsNodeModulesSegment(relativeNextPath)) {
-          const symlinkTargetInspection = await inspectNodeModulesSymlinkTarget({
+  let directories = 1;
+  const { failedDirs } = await walkDirectory(rootDir, {
+    symlinks: "include",
+    include: (entry) =>
+      entry.kind === "symlink" && pathContainsNodeModulesSegment(entry.relativePath)
+        ? inspectNodeModulesSymlinkTarget({
             allowManagedNpmRootPackagePeerSymlinks: params.allowManagedNpmRootPackagePeerSymlinks,
             rootRealPath,
-            symlinkPath: nextPath,
-            symlinkRelativePath: relativeNextPath,
+            symlinkPath: entry.path,
+            symlinkRelativePath: entry.relativePath,
             trustedHostOpenClawRootRealPath,
-          });
-          if (symlinkTargetInspection.blockedDirectoryFinding) {
-            firstBlockedDirectoryFinding ??= symlinkTargetInspection.blockedDirectoryFinding;
-          }
-          if (symlinkTargetInspection.blockedFileFinding) {
-            firstBlockedFileFinding ??= symlinkTargetInspection.blockedFileFinding;
-          }
-        }
-        continue;
+          }).then(() => false)
+        : false,
+    descend: (entry) => {
+      if (entry.depth > limits.maxDepth) {
+        throw new Error(
+          `dependency boundary scan exceeded max depth (${limits.maxDepth}) at ${entry.path}`,
+        );
       }
-      if (entry.isDirectory()) {
-        const blockedDirectoryFinding = findBlockedNodeModulesDirectory({
-          directoryRelativePath: relativeNextPath,
-        });
-        if (blockedDirectoryFinding) {
-          firstBlockedDirectoryFinding ??= blockedDirectoryFinding;
-        }
-        queue.push({ depth: current.depth + 1, dir: nextPath });
-        continue;
+      if (++directories > limits.maxDirectories) {
+        throw new Error(
+          `dependency boundary scan exceeded max directories (${limits.maxDirectories}) under ${rootDir}`,
+        );
       }
-      if (entry.isFile()) {
-        const blockedFileFinding = findBlockedNodeModulesFileAlias({
-          fileRelativePath: relativeNextPath,
-        });
-        if (blockedFileFinding) {
-          firstBlockedFileFinding ??= blockedFileFinding;
-        }
-      }
-      if (entry.isFile() && entry.name === "package.json") {
-        packageManifestPaths.push(nextPath);
-        if (packageManifestPaths.length > limits.maxManifests) {
-          throw new Error(
-            `manifest dependency scan exceeded max manifests (${limits.maxManifests}) under ${rootDir}`,
-          );
-        }
-      }
-    }
-  }
-
-  return {
-    packageManifestPaths,
-    blockedDirectoryFinding: firstBlockedDirectoryFinding,
-    blockedFileFinding: firstBlockedFileFinding,
-  };
-}
-
-function formatPackageScanRelativePath(params: {
-  packageDir: string;
-  relativePath: string;
-  relativeRootDir?: string;
-}): string {
-  if (!params.relativeRootDir) {
-    return params.relativePath;
-  }
-  const packageRelativePath = path.relative(params.relativeRootDir, params.packageDir);
-  return packageRelativePath
-    ? path.join(packageRelativePath, params.relativePath)
-    : params.relativePath;
-}
-
-async function scanManifestDependencyDenylist(params: {
-  allowManagedNpmRootPackagePeerSymlinks?: boolean;
-  logger: InstallScanLogger;
-  packageDir: string;
-  relativeRootDir?: string;
-  targetLabel: string;
-}): Promise<InstallSecurityScanResult | undefined> {
-  const traversalResult = await collectPackageManifestPaths({
-    allowManagedNpmRootPackagePeerSymlinks: params.allowManagedNpmRootPackagePeerSymlinks,
-    rootDir: params.packageDir,
+      return true;
+    },
   });
-  const packageManifestPaths = traversalResult.packageManifestPaths;
-  for (const manifestPath of packageManifestPaths) {
-    const manifest = await tryReadJson<PackageManifest>(manifestPath);
-    if (!manifest) {
-      continue;
-    }
-
-    const blockedDependencies = findBlockedManifestDependencies(manifest);
-    if (blockedDependencies.length === 0) {
-      continue;
-    }
-
-    const manifestRelativePath = formatPackageScanRelativePath({
-      packageDir: params.packageDir,
-      relativePath: path.relative(params.packageDir, manifestPath) || "package.json",
-      relativeRootDir: params.relativeRootDir,
-    });
-    const reason = buildBlockedDependencyReason({
-      findings: blockedDependencies,
-      manifestPackageName: manifest.name,
-      manifestRelativePath,
-      targetLabel: params.targetLabel,
-    });
-    params.logger.warn?.(`WARNING: ${reason}`);
-    return {
-      blocked: {
-        code: "security_scan_blocked",
-        reason,
-      },
-    };
+  if (failedDirs.length > 0) {
+    const failure = failedDirs[0]!;
+    throw new Error(
+      `dependency boundary scan could not read ${failure.path}: ${String(failure.error)}`,
+      { cause: failure.error },
+    );
   }
-  // Prefer manifest evidence when available because it points at the exact
-  // package declaration. Directory/file findings catch stripped, symlinked, or
-  // otherwise hidden node_modules payloads that do not expose a usable manifest.
-  if (traversalResult.blockedDirectoryFinding) {
-    const reason = buildBlockedDependencyDirectoryReason({
-      dependencyName: traversalResult.blockedDirectoryFinding.dependencyName,
-      directoryRelativePath: formatPackageScanRelativePath({
-        packageDir: params.packageDir,
-        relativePath: traversalResult.blockedDirectoryFinding.directoryRelativePath,
-        relativeRootDir: params.relativeRootDir,
-      }),
-      targetLabel: params.targetLabel,
-    });
-    params.logger.warn?.(`WARNING: ${reason}`);
-    return {
-      blocked: {
-        code: "security_scan_blocked",
-        reason,
-      },
-    };
-  }
-  if (traversalResult.blockedFileFinding) {
-    const reason = buildBlockedDependencyFileReason({
-      dependencyName: traversalResult.blockedFileFinding.dependencyName,
-      fileRelativePath: formatPackageScanRelativePath({
-        packageDir: params.packageDir,
-        relativePath: traversalResult.blockedFileFinding.fileRelativePath,
-        relativeRootDir: params.relativeRootDir,
-      }),
-      targetLabel: params.targetLabel,
-    });
-    params.logger.warn?.(`WARNING: ${reason}`);
-    return {
-      blocked: {
-        code: "security_scan_blocked",
-        reason,
-      },
-    };
-  }
-  return undefined;
-}
-
-async function scanDirectoryTarget(params: {
-  deferBuiltinWarnings?: boolean;
-  excludeTestFiles?: boolean;
-  failOnTruncated?: boolean;
-  includeHiddenDirectories?: boolean;
-  includeNestedNodeModulesTestFiles?: boolean;
-  includeNodeModules?: boolean;
-  includeFiles?: string[];
-  logger: InstallScanLogger;
-  maxFiles?: number;
-  onlyIncludeFiles?: boolean;
-  path: string;
-  suppressBuiltinWarnings?: boolean;
-  suspiciousMessage: string;
-  targetName: string;
-  warningMessage: string;
-}): Promise<BuiltinInstallScan> {
-  try {
-    const scanSummary = await scanDirectoryWithSummary(params.path, {
-      excludeTestFiles: params.excludeTestFiles ?? true,
-      includeHiddenDirectories: params.includeHiddenDirectories,
-      includeNestedNodeModulesTestFiles: params.includeNestedNodeModulesTestFiles,
-      includeNodeModules: params.includeNodeModules,
-      includeFiles: params.includeFiles,
-      maxFiles: params.maxFiles,
-      onlyIncludeFiles: params.onlyIncludeFiles,
-    });
-    if (params.failOnTruncated && scanSummary.truncated) {
-      return buildBuiltinScanFromError(
-        `code safety scan reached file limit (${params.maxFiles ?? "configured limit"})`,
-      );
-    }
-    const builtinScan = buildBuiltinScanFromSummary(scanSummary);
-    if (params.suppressBuiltinWarnings || params.deferBuiltinWarnings) {
-      return builtinScan;
-    }
-    if (scanSummary.critical > 0) {
-      params.logger.warn?.(
-        `${params.warningMessage}: ${buildCriticalDetails({ findings: scanSummary.findings })}`,
-      );
-    } else if (scanSummary.warn > 0) {
-      params.logger.warn?.(
-        params.suspiciousMessage
-          .replace("{count}", String(scanSummary.warn))
-          .replace("{target}", params.targetName),
-      );
-    }
-    return builtinScan;
-  } catch (err) {
-    return buildBuiltinScanFromError(err);
-  }
-}
-
-function readStringList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .map((entry) => normalizeOptionalString(entry))
-    .filter((entry): entry is string => Boolean(entry));
-}
-
-function collectPackageExecutableScanEntries(params: {
-  extensions: string[];
-  packageMetadata?: PackageExecutableScanMetadata;
-}): string[] {
-  const entries: string[] = [];
-  const metadata = params.packageMetadata;
-  const runtimeExtensions = readStringList(metadata?.runtimeExtensions);
-  for (const [index, extensionEntry] of params.extensions.entries()) {
-    entries.push(extensionEntry);
-    const runtimeEntry = runtimeExtensions[index];
-    if (runtimeEntry) {
-      entries.push(runtimeEntry);
-      continue;
-    }
-    entries.push(...listBuiltRuntimeEntryCandidates(extensionEntry));
-  }
-
-  const setupEntry = normalizeOptionalString(metadata?.setupEntry);
-  if (setupEntry) {
-    entries.push(setupEntry);
-  }
-  const runtimeSetupEntry = normalizeOptionalString(metadata?.runtimeSetupEntry);
-  if (runtimeSetupEntry) {
-    entries.push(runtimeSetupEntry);
-  } else if (setupEntry) {
-    entries.push(...listBuiltRuntimeEntryCandidates(setupEntry));
-  }
-  return [...new Set(entries)];
-}
-
-async function resolveRuntimeGraphFileCandidate(filePath: string): Promise<string | undefined> {
-  const resolvedPath = path.resolve(filePath);
-  const ext = path.extname(resolvedPath).toLowerCase();
-  const candidates = ext
-    ? [resolvedPath]
-    : [
-        resolvedPath,
-        ...RUNTIME_GRAPH_SCAN_EXTENSIONS.map((runtimeExt) => `${resolvedPath}${runtimeExt}`),
-        ...RUNTIME_GRAPH_SCAN_EXTENSIONS.map((runtimeExt) =>
-          path.join(resolvedPath, `index${runtimeExt}`),
-        ),
-      ];
-
-  for (const candidate of candidates) {
-    let stat: Awaited<ReturnType<typeof fs.stat>>;
-    try {
-      stat = await fs.stat(candidate);
-    } catch {
-      continue;
-    }
-    if (stat.isFile() && RUNTIME_GRAPH_SCAN_EXTENSIONS.includes(path.extname(candidate))) {
-      return candidate;
-    }
-  }
-  return undefined;
-}
-
-function collectLocalRuntimeImportSpecifiers(source: string): string[] {
-  const specifiers: string[] = [];
-  for (const match of source.matchAll(LOCAL_RUNTIME_IMPORT_PATTERN)) {
-    const specifier = match[1] ?? match[2] ?? match[3];
-    if (specifier?.startsWith(".")) {
-      specifiers.push(specifier);
-    }
-  }
-  return specifiers;
-}
-
-async function collectPackageRuntimeGraphScanEntries(params: {
-  entryFiles: string[];
-  packageDir: string;
-}): Promise<string[]> {
-  const packageDir = path.resolve(params.packageDir);
-  const seen = new Set<string>();
-  const queue: string[] = [];
-  const out: string[] = [];
-
-  for (const entryFile of params.entryFiles) {
-    const resolvedEntry = await resolveRuntimeGraphFileCandidate(entryFile);
-    if (resolvedEntry && isPathInside(packageDir, resolvedEntry)) {
-      queue.push(resolvedEntry);
-    }
-  }
-
-  while (queue.length > 0 && out.length < RUNTIME_GRAPH_SCAN_MAX_FILES) {
-    const filePath = queue.shift();
-    if (!filePath) {
-      break;
-    }
-    const resolvedPath = path.resolve(filePath);
-    if (seen.has(resolvedPath) || !isPathInside(packageDir, resolvedPath)) {
-      continue;
-    }
-    seen.add(resolvedPath);
-    out.push(resolvedPath);
-
-    let source: string;
-    try {
-      source = await fs.readFile(resolvedPath, "utf-8");
-    } catch {
-      continue;
-    }
-    for (const specifier of collectLocalRuntimeImportSpecifiers(source)) {
-      const importedPath = path.resolve(path.dirname(resolvedPath), specifier);
-      if (!isPathInside(packageDir, importedPath)) {
-        continue;
-      }
-      const resolvedImport = await resolveRuntimeGraphFileCandidate(importedPath);
-      if (resolvedImport && !seen.has(path.resolve(resolvedImport))) {
-        queue.push(resolvedImport);
-      }
-    }
-  }
-
-  return out;
-}
-
-function buildBlockedScanResult(params: {
-  builtinScan: BuiltinInstallScan;
-  dangerouslyForceUnsafeInstall?: boolean;
-  trustedSourceLinkedOfficialInstall?: boolean;
-  targetLabel: string;
-}): InstallSecurityScanResult | undefined {
-  if (params.builtinScan.status === "error") {
-    return {
-      blocked: {
-        code: "security_scan_failed",
-        reason: buildScanFailureBlockReason({
-          error: params.builtinScan.error ?? "unknown error",
-          targetLabel: params.targetLabel,
-        }),
-      },
-    };
-  }
-  if (params.builtinScan.critical > 0) {
-    if (params.dangerouslyForceUnsafeInstall || params.trustedSourceLinkedOfficialInstall) {
-      return undefined;
-    }
-    return {
-      blocked: {
-        code: "security_scan_blocked",
-        reason: buildCriticalBlockReason({
-          findings: params.builtinScan.findings,
-          targetLabel: params.targetLabel,
-        }),
-      },
-    };
-  }
-  return undefined;
-}
-
-function logDangerousForceUnsafeInstall(params: {
-  findings: Array<{ file: string; line: number; message: string; severity: string }>;
-  logger: InstallScanLogger;
-  targetLabel: string;
-}) {
-  params.logger.warn?.(
-    `WARNING: ${params.targetLabel} forced despite dangerous code patterns via --dangerously-force-unsafe-install: ${buildCriticalDetails({ findings: params.findings })}`,
-  );
-}
-
-function resolveBuiltinScanDecision(
-  params: InstallSafetyOverrides & {
-    builtinScan: BuiltinInstallScan;
-    logger: InstallScanLogger;
-    targetLabel: string;
-  },
-): InstallSecurityScanResult | undefined {
-  const builtinBlocked = buildBlockedScanResult({
-    builtinScan: params.builtinScan,
-    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-    trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
-    targetLabel: params.targetLabel,
-  });
-  if (params.dangerouslyForceUnsafeInstall && params.builtinScan.critical > 0) {
-    logDangerousForceUnsafeInstall({
-      findings: params.builtinScan.findings,
-      logger: params.logger,
-      targetLabel: params.targetLabel,
-    });
-  }
-  return builtinBlocked;
-}
-
-async function scanFileTarget(params: {
-  logger: InstallScanLogger;
-  path: string;
-  suspiciousMessage: string;
-  targetName: string;
-  warningMessage: string;
-}): Promise<BuiltinInstallScan> {
-  const directory = path.dirname(params.path);
-  return await scanDirectoryTarget({
-    includeFiles: [params.path],
-    logger: params.logger,
-    onlyIncludeFiles: true,
-    path: directory,
-    suspiciousMessage: params.suspiciousMessage,
-    targetName: params.targetName,
-    warningMessage: params.warningMessage,
-  });
 }
 
 async function runBeforeInstallHook(params: {
@@ -1041,24 +510,14 @@ async function runBeforeInstallHook(params: {
   origin: string;
   sourcePath: string;
   sourcePathKind: "file" | "directory";
+  source?: InstallPolicySource;
   targetName: string;
   targetType: "skill" | "plugin";
-  requestKind: PluginInstallRequestKind;
+  requestKind: InstallPolicyRequestKind;
   requestMode: "install" | "update";
   requestedSpecifier?: string;
-  builtinScan: BuiltinInstallScan;
-  skill?: {
-    installId: string;
-    installSpec?: SkillInstallSpec;
-  };
-  plugin?: {
-    contentType: "bundle" | "package" | "file";
-    pluginId: string;
-    packageName?: string;
-    manifestId?: string;
-    version?: string;
-    extensions?: string[];
-  };
+  skill?: PluginHookBeforeInstallSkill;
+  plugin?: PluginHookBeforeInstallPlugin;
 }): Promise<InstallSecurityScanResult | undefined> {
   const hookRunner = getGlobalHookRunner();
   if (!hookRunner?.hasHooks("before_install")) {
@@ -1077,7 +536,6 @@ async function runBeforeInstallHook(params: {
         mode: params.requestMode,
         ...(params.requestedSpecifier ? { requestedSpecifier: params.requestedSpecifier } : {}),
       },
-      builtinScan: params.builtinScan,
       ...(params.skill ? { skill: params.skill } : {}),
       ...(params.plugin ? { plugin: params.plugin } : {}),
     });
@@ -1085,7 +543,7 @@ async function runBeforeInstallHook(params: {
     if (hookResult?.block) {
       const reason = hookResult.blockReason || "Installation blocked by plugin hook";
       params.logger.warn?.(`WARNING: ${params.installLabel} blocked by plugin hook: ${reason}`);
-      return { blocked: { reason } };
+      return { blocked: { code: "security_scan_blocked", reason } };
     }
     if (hookResult?.findings) {
       for (const finding of hookResult.findings) {
@@ -1096,285 +554,469 @@ async function runBeforeInstallHook(params: {
         }
       }
     }
-  } catch {
-    // Hook errors are non-fatal.
+  } catch (err) {
+    const reason = `Installation blocked because before_install hook failed: ${formatErrorMessage(err)}`;
+    params.logger.warn?.(
+      `WARNING: ${params.installLabel} blocked by plugin hook failure: ${reason}`,
+    );
+    return { blocked: { code: "security_scan_failed", reason } };
   }
 
   return undefined;
 }
 
-export async function scanBundleInstallSourceRuntime(
-  params: InstallSafetyOverrides & {
-    logger: InstallScanLogger;
-    pluginId: string;
-    sourceDir: string;
-    requestKind?: PluginInstallRequestKind;
-    requestedSpecifier?: string;
-    mode?: "install" | "update";
-    version?: string;
-  },
-): Promise<InstallSecurityScanResult | undefined> {
-  const dependencyBlocked = await scanManifestDependencyDenylist({
-    logger: params.logger,
-    packageDir: params.sourceDir,
-    targetLabel: `Bundle "${params.pluginId}" installation`,
-  });
-  if (dependencyBlocked) {
-    return dependencyBlocked;
+function formatInstallPolicyOriginForHook(origin: InstallPolicyOrigin): string {
+  const type = typeof origin.type === "string" ? origin.type : "unknown";
+  if (type === "upload") {
+    return "skill-upload";
+  }
+  const spec = typeof origin.spec === "string" ? origin.spec : undefined;
+  const slug = typeof origin.slug === "string" ? origin.slug : undefined;
+  return spec ?? slug ?? type;
+}
+
+function isMutableGitOrigin(origin: InstallPolicyOrigin | undefined): boolean {
+  const ref = typeof origin?.ref === "string" ? origin.ref : undefined;
+  return !FULL_GIT_COMMIT_PATTERN.test(ref ?? "");
+}
+
+function resolvePolicySource(params: {
+  requestKind: InstallPolicyRequestKind;
+  origin?: InstallPolicyOrigin;
+}): InstallPolicySource {
+  if (params.requestKind === "skill-install") {
+    switch (params.origin?.type) {
+      case "clawhub":
+        return { kind: "clawhub", authority: "openclaw", mutable: false, network: true };
+      case "git":
+        return {
+          kind: "git",
+          authority: "third-party",
+          mutable: isMutableGitOrigin(params.origin),
+          network: true,
+        };
+      case "path":
+        return { kind: "local-path", authority: "user", mutable: true, network: false };
+      case "upload":
+        return { kind: "upload", authority: "user", mutable: false, network: false };
+      case "openclaw-bundled":
+        return { kind: "bundled", authority: "openclaw", mutable: false, network: false };
+      case "openclaw-managed":
+      case "openclaw-extra":
+        return { kind: "managed", authority: "openclaw", mutable: false, network: false };
+      default:
+        return { kind: "workspace", authority: "user", mutable: true, network: false };
+    }
   }
 
-  const builtinScan = await scanDirectoryTarget({
-    logger: params.logger,
-    path: params.sourceDir,
-    suspiciousMessage: `Bundle "{target}" has {count} suspicious code pattern(s). Run "openclaw security audit --deep" for details.`,
-    targetName: params.pluginId,
-    warningMessage: `WARNING: Bundle "${params.pluginId}" contains dangerous code patterns`,
-  });
-  const builtinBlocked = resolveBuiltinScanDecision({
-    builtinScan,
-    logger: params.logger,
-    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-    targetLabel: `Bundle "${params.pluginId}" installation`,
-  });
+  switch (params.requestKind) {
+    case "plugin-archive":
+      return { kind: "archive", authority: "third-party", mutable: true, network: false };
+    case "plugin-file":
+      return { kind: "file", authority: "user", mutable: true, network: false };
+    case "plugin-git":
+      return { kind: "git", authority: "third-party", mutable: true, network: true };
+    case "plugin-npm":
+      return { kind: "npm", authority: "third-party", mutable: false, network: true };
+    case "plugin-dir":
+      return { kind: "local-path", authority: "user", mutable: true, network: false };
+  }
+  return { kind: "local-path", authority: "unknown", mutable: true, network: false };
+}
 
-  const hookResult = await runBeforeInstallHook({
+function shouldBypassOpenClawInstallFriction(params: {
+  source?: InstallPolicySource;
+  trustedSourceLinkedOfficialInstall?: boolean;
+}): boolean {
+  if (params.trustedSourceLinkedOfficialInstall === true) {
+    return true;
+  }
+  const source = params.source;
+  if (!source || source.mutable) {
+    return false;
+  }
+  if (source.authority === "official") {
+    return source.kind === "clawhub" || source.kind === "git" || source.kind === "npm";
+  }
+  return (
+    source.authority === "openclaw" && (source.kind === "bundled" || source.kind === "managed")
+  );
+}
+
+async function runOperatorInstallPolicy(
+  params: Omit<Parameters<typeof runBeforeInstallHook>[0], "installLabel" | "origin" | "plugin"> & {
+    config?: OpenClawConfig;
+    onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
+    origin: InstallPolicyOrigin;
+    plugin?: Omit<PluginHookBeforeInstallPlugin, "contentType"> & {
+      contentType: PluginHookBeforeInstallPlugin["contentType"] | "dependency-tree";
+    };
+  },
+): Promise<InstallSecurityScanResult | undefined> {
+  const request = {
+    targetName: params.targetName,
+    targetType: params.targetType,
+    sourcePath: params.sourcePath,
+    sourcePathKind: params.sourcePathKind,
+    ...(params.source ? { source: params.source } : {}),
+    origin: params.origin,
+    request: {
+      kind: params.requestKind,
+      mode: params.requestMode,
+      ...(params.requestedSpecifier ? { requestedSpecifier: params.requestedSpecifier } : {}),
+    },
+    ...(params.skill ? { skill: params.skill } : {}),
+    ...(params.plugin ? { plugin: params.plugin } : {}),
+  };
+  const evaluatePolicy = () =>
+    runInstallPolicy({
+      config: params.config,
+      logger: params.logger,
+      request,
+    });
+  const logPolicyResult = (result: Awaited<ReturnType<typeof evaluatePolicy>>) => {
+    if (result?.warning) {
+      params.logger.warn?.(
+        `${formatInstallPolicyNotice({
+          decision: "warn",
+          findings: result.findings,
+          reason: result.warning.reason,
+          targetName: params.targetName,
+          targetType: params.targetType,
+        })}\n`,
+      );
+      return;
+    }
+    const messages = (result?.findings ?? [])
+      .filter((finding) => finding.severity === "critical" || finding.severity === "warn")
+      .map((finding) => `Install policy: ${formatInstallPolicyFinding(finding)}`);
+    if (
+      messages.reduce((length, message) => length + message.length + 1, 0) <=
+      MAX_INSTALL_POLICY_NOTICE_CHARS
+    ) {
+      for (const message of messages) {
+        params.logger.warn?.(message);
+      }
+      return;
+    }
+    const omittedMessage =
+      "Install policy: additional findings omitted because the 4,000-character log limit was reached.";
+    let remaining = MAX_INSTALL_POLICY_NOTICE_CHARS - omittedMessage.length - 1;
+    for (const message of messages) {
+      if (message.length + 1 > remaining) {
+        continue;
+      }
+      params.logger.warn?.(message);
+      remaining -= message.length + 1;
+    }
+    params.logger.warn?.(omittedMessage);
+  };
+
+  let approvedWarning: { fingerprint: string } | undefined;
+  while (true) {
+    const result = await evaluatePolicy();
+    const policyFailure = formatInstallPolicyFailure({
+      result,
+      targetName: params.targetName,
+      targetType: params.targetType,
+    });
+    if (policyFailure) {
+      return policyFailure;
+    }
+    if (!result?.warning) {
+      logPolicyResult(result);
+      return undefined;
+    }
+    const installPolicyWarning: InstallPolicyWarningDetails = {
+      targetName: params.targetName,
+      targetType: params.targetType,
+      requestMode: params.requestMode,
+      reason: result.warning.reason,
+      ...(result.findings?.length ? { findings: result.findings } : {}),
+    };
+    // Approval admits only the warning just reviewed; a changed second result is terminal.
+    if (approvedWarning && approvedWarning.fingerprint === result.warning.fingerprint) {
+      return undefined;
+    }
+    if (approvedWarning || !params.onInstallPolicyWarning) {
+      return {
+        blocked: {
+          code: "security_scan_blocked",
+          installPolicyWarning,
+          reason: formatInstallPolicyNotice({
+            decision: "warn",
+            findings: result.findings,
+            guidance: approvedWarning
+              ? [
+                  "The policy warning changed after approval.",
+                  "Review the current warning and try again.",
+                ]
+              : INSTALL_POLICY_REVIEW_GUIDANCE,
+            reason: result.warning.reason,
+            targetName: params.targetName,
+            targetType: params.targetType,
+          }),
+        },
+      };
+    }
+    logPolicyResult(result);
+    const acknowledgement = await params.onInstallPolicyWarning({ ...installPolicyWarning });
+    if (acknowledgement.status !== "approved") {
+      return {
+        blocked: {
+          code: "security_scan_blocked",
+          installPolicyWarning,
+          reason: "Install cancelled: the install policy warning was not approved.",
+        },
+      };
+    }
+    approvedWarning = result.warning;
+  }
+}
+
+type InstallPolicyAndHookRequest = Omit<
+  Parameters<typeof runBeforeInstallHook>[0],
+  "installLabel" | "origin"
+> & {
+  config?: OpenClawConfig;
+  hookOrigin: string;
+  installLabel: string;
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
+  policyOrigin: InstallPolicyOrigin;
+  skipHook?: boolean;
+};
+
+async function runInstallPolicyAndHook(
+  params: InstallPolicyAndHookRequest,
+): Promise<InstallSecurityScanResult | undefined> {
+  const policyResult = await runOperatorInstallPolicy({
+    ...params,
+    origin: params.policyOrigin,
+  });
+  if (params.skipHook || policyResult?.blocked) {
+    return policyResult;
+  }
+  return await runBeforeInstallHook({
+    ...params,
+    origin: params.hookOrigin,
+  });
+}
+
+type PluginInstallPolicyParams = {
+  config?: OpenClawConfig;
+  logger: InstallScanLogger;
+  mode?: "install" | "update";
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
+  requestedSpecifier?: string;
+  source?: InstallPolicySource;
+};
+
+function pluginInstallPolicyRequest(params: PluginInstallPolicyParams, targetName: string) {
+  return {
+    config: params.config,
     logger: params.logger,
-    installLabel: `Bundle "${params.pluginId}" installation`,
-    origin: "plugin-bundle",
-    sourcePath: params.sourceDir,
-    sourcePathKind: "directory",
-    targetName: params.pluginId,
-    targetType: "plugin",
-    requestKind: params.requestKind ?? "plugin-dir",
-    requestMode: params.mode ?? "install",
+    onInstallPolicyWarning: params.onInstallPolicyWarning,
+    targetName,
+    targetType: "plugin" as const,
+    requestMode: params.mode ?? ("install" as const),
     requestedSpecifier: params.requestedSpecifier,
-    builtinScan,
-    plugin: {
-      contentType: "bundle",
-      pluginId: params.pluginId,
-      manifestId: params.pluginId,
+  };
+}
+
+type PluginArtifactScanParams = PluginInstallPolicyParams &
+  InstallSafetyOverrides & {
+    pluginId: string;
+    requestKind?: PluginInstallRequestKind;
+    version?: string;
+  };
+
+async function scanPluginArtifact(
+  params: PluginArtifactScanParams & { packageName?: string },
+  sourceDir: string,
+  plugin: PluginHookBeforeInstallPlugin & { contentType: "bundle" | "package" },
+): Promise<InstallSecurityScanResult | undefined> {
+  const requestKind = params.requestKind ?? "plugin-dir";
+  const source = params.source ?? resolvePolicySource({ requestKind });
+  const bundle = plugin.contentType === "bundle";
+  const origin = bundle ? "plugin-bundle" : "plugin-package";
+  await validatePackageDependencyBoundaries({ rootDir: sourceDir });
+  return await runInstallPolicyAndHook({
+    ...pluginInstallPolicyRequest(params, params.pluginId),
+    policyOrigin: {
+      type: origin,
+      ...(!bundle && params.packageName ? { packageName: params.packageName } : {}),
       ...(params.version ? { version: params.version } : {}),
     },
+    hookOrigin: origin,
+    installLabel: `${bundle ? "Bundle" : "Plugin"} "${params.pluginId}" installation`,
+    source,
+    sourcePath: sourceDir,
+    sourcePathKind: "directory",
+    requestKind,
+    plugin,
+    skipHook: shouldBypassOpenClawInstallFriction({
+      source: params.source,
+      trustedSourceLinkedOfficialInstall: bundle
+        ? undefined
+        : params.trustedSourceLinkedOfficialInstall,
+    }),
   });
-  return hookResult?.blocked ? hookResult : builtinBlocked;
+}
+
+export async function scanBundleInstallSourceRuntime(
+  params: PluginArtifactScanParams & { sourceDir: string },
+): Promise<InstallSecurityScanResult | undefined> {
+  return await scanPluginArtifact(params, params.sourceDir, {
+    contentType: "bundle",
+    pluginId: params.pluginId,
+    manifestId: params.pluginId,
+    ...(params.version ? { version: params.version } : {}),
+  });
 }
 
 export async function scanPackageInstallSourceRuntime(
-  params: InstallSafetyOverrides & {
+  params: PluginArtifactScanParams & {
     extensions: string[];
-    logger: InstallScanLogger;
     packageDir: string;
-    packageMetadata?: PackageExecutableScanMetadata;
-    pluginId: string;
-    requestKind?: PluginInstallRequestKind;
-    requestedSpecifier?: string;
-    mode?: "install" | "update";
     packageName?: string;
     manifestId?: string;
-    version?: string;
   },
 ): Promise<InstallSecurityScanResult | undefined> {
-  const dependencyBlocked = await scanManifestDependencyDenylist({
-    logger: params.logger,
-    packageDir: params.packageDir,
-    targetLabel: `Plugin "${params.pluginId}" installation`,
+  return await scanPluginArtifact(params, params.packageDir, {
+    contentType: "package",
+    pluginId: params.pluginId,
+    ...(params.packageName ? { packageName: params.packageName } : {}),
+    ...(params.manifestId ? { manifestId: params.manifestId } : {}),
+    ...(params.version ? { version: params.version } : {}),
+    extensions: params.extensions.slice(),
   });
-  if (dependencyBlocked) {
-    return dependencyBlocked;
-  }
-
-  const forcedScanEntries: string[] = [];
-  const executableEntries = collectPackageExecutableScanEntries({
-    extensions: params.extensions,
-    ...(params.packageMetadata ? { packageMetadata: params.packageMetadata } : {}),
-  });
-  for (const entry of executableEntries) {
-    const resolvedEntry = path.resolve(params.packageDir, entry);
-    if (!isPathInside(params.packageDir, resolvedEntry)) {
-      params.logger.warn?.(
-        `plugin executable entry escapes plugin directory and will not be scanned: ${entry}`,
-      );
-      continue;
-    }
-    if (extensionUsesSkippedScannerPath(entry)) {
-      params.logger.warn?.(
-        `plugin executable entry is in a hidden/node_modules path and will receive targeted scan coverage: ${entry}`,
-      );
-    }
-    forcedScanEntries.push(resolvedEntry);
-  }
-
-  const runtimeGraphScanEntries = await collectPackageRuntimeGraphScanEntries({
-    entryFiles: forcedScanEntries,
-    packageDir: params.packageDir,
-  });
-
-  const builtinScan = await scanDirectoryTarget({
-    includeFiles: runtimeGraphScanEntries,
-    logger: params.logger,
-    onlyIncludeFiles: true,
-    path: params.packageDir,
-    suppressBuiltinWarnings: params.trustedSourceLinkedOfficialInstall === true,
-    suspiciousMessage: `Plugin "{target}" has {count} suspicious code pattern(s). Run "openclaw security audit --deep" for details.`,
-    targetName: params.pluginId,
-    warningMessage: `WARNING: Plugin "${params.pluginId}" contains dangerous code patterns`,
-  });
-  const builtinBlocked = resolveBuiltinScanDecision({
-    builtinScan,
-    logger: params.logger,
-    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-    trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
-    targetLabel: `Plugin "${params.pluginId}" installation`,
-  });
-
-  const hookResult = await runBeforeInstallHook({
-    logger: params.logger,
-    installLabel: `Plugin "${params.pluginId}" installation`,
-    origin: "plugin-package",
-    sourcePath: params.packageDir,
-    sourcePathKind: "directory",
-    targetName: params.pluginId,
-    targetType: "plugin",
-    requestKind: params.requestKind ?? "plugin-dir",
-    requestMode: params.mode ?? "install",
-    requestedSpecifier: params.requestedSpecifier,
-    builtinScan,
-    plugin: {
-      contentType: "package",
-      pluginId: params.pluginId,
-      ...(params.packageName ? { packageName: params.packageName } : {}),
-      ...(params.manifestId ? { manifestId: params.manifestId } : {}),
-      ...(params.version ? { version: params.version } : {}),
-      extensions: params.extensions.slice(),
-    },
-  });
-  return hookResult?.blocked ? hookResult : builtinBlocked;
 }
 
 export async function scanInstalledPackageDependencyTreeRuntime(params: {
   additionalPackageDirs?: string[];
   allowManagedNpmRootPackagePeerSymlinks?: boolean;
-  dangerouslyForceUnsafeInstall?: boolean;
+  config?: OpenClawConfig;
   dependencyScanRootDir?: string;
   logger: InstallScanLogger;
+  mode?: "install" | "update";
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   packageDir: string;
   pluginId: string;
+  requestKind?: PluginInstallRequestKind;
+  requestedSpecifier?: string;
+  source?: InstallPolicySource;
   trustedSourceLinkedOfficialInstall?: boolean;
 }): Promise<InstallSecurityScanResult | undefined> {
+  const requestKind = params.requestKind ?? "plugin-npm";
   const scanRoots = await collectInstalledPackageScanRoots({
     ...(params.additionalPackageDirs
       ? { additionalPackageDirs: params.additionalPackageDirs }
       : {}),
     dependencyScanRootDir: params.dependencyScanRootDir,
+    allowManagedNpmRootPackagePeerSymlinks: params.allowManagedNpmRootPackagePeerSymlinks,
     packageDir: params.packageDir,
   });
-  const manifestScanRoots = await collectNonOverlappingPackageScanRoots(scanRoots);
-  for (const packageDir of manifestScanRoots) {
-    const dependencyBlocked = await scanManifestDependencyDenylist({
-      logger: params.logger,
-      packageDir,
+  const boundaryScanRoots = await collectNonOverlappingPackageScanRoots(scanRoots);
+  for (const rootDir of boundaryScanRoots) {
+    await validatePackageDependencyBoundaries({
+      rootDir,
       allowManagedNpmRootPackagePeerSymlinks: params.allowManagedNpmRootPackagePeerSymlinks,
-      relativeRootDir: params.dependencyScanRootDir ?? params.packageDir,
-      targetLabel: `Plugin "${params.pluginId}" installation`,
     });
-    if (dependencyBlocked) {
-      return dependencyBlocked;
-    }
   }
-
-  return undefined;
-}
-
-export async function scanFileInstallSourceRuntime(
-  params: InstallSafetyOverrides & {
-    filePath: string;
-    logger: InstallScanLogger;
-    mode?: "install" | "update";
-    pluginId: string;
-    requestedSpecifier?: string;
-  },
-): Promise<InstallSecurityScanResult | undefined> {
-  const builtinScan = await scanFileTarget({
-    logger: params.logger,
-    path: params.filePath,
-    suspiciousMessage: `Plugin file "{target}" has {count} suspicious code pattern(s). Run "openclaw security audit --deep" for details.`,
-    targetName: params.pluginId,
-    warningMessage: `WARNING: Plugin file "${params.pluginId}" contains dangerous code patterns`,
-  });
-  const builtinBlocked = resolveBuiltinScanDecision({
-    builtinScan,
-    logger: params.logger,
-    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-    targetLabel: `Plugin file "${params.pluginId}" installation`,
-  });
-
-  const hookResult = await runBeforeInstallHook({
-    logger: params.logger,
-    installLabel: `Plugin file "${params.pluginId}" installation`,
-    origin: "plugin-file",
-    sourcePath: params.filePath,
-    sourcePathKind: "file",
-    targetName: params.pluginId,
-    targetType: "plugin",
-    requestKind: "plugin-file",
-    requestMode: params.mode ?? "install",
-    requestedSpecifier: params.requestedSpecifier,
-    builtinScan,
+  return await runOperatorInstallPolicy({
+    ...pluginInstallPolicyRequest(params, params.pluginId),
+    origin: { type: "plugin-dependency-tree" },
+    source: params.source ?? resolvePolicySource({ requestKind }),
+    sourcePath: params.dependencyScanRootDir ?? params.packageDir,
+    sourcePathKind: "directory",
+    requestKind,
     plugin: {
-      contentType: "file",
+      contentType: "dependency-tree",
       pluginId: params.pluginId,
-      extensions: [path.basename(params.filePath)],
     },
   });
-  return hookResult?.blocked ? hookResult : builtinBlocked;
 }
 
-export async function scanSkillInstallSourceRuntime(params: {
-  dangerouslyForceUnsafeInstall?: boolean;
+export async function preflightPluginNpmInstallPolicyRuntime(
+  params: PluginInstallPolicyParams & {
+    packageName: string;
+    pluginId?: string;
+    sourcePath: string;
+    sourcePathKind: "file" | "directory";
+  },
+): Promise<InstallSecurityScanResult | undefined> {
+  const pluginId = params.pluginId ?? params.packageName;
+  return await runOperatorInstallPolicy({
+    ...pluginInstallPolicyRequest(params, pluginId),
+    origin: { type: "plugin-npm", packageName: params.packageName },
+    source: params.source ?? resolvePolicySource({ requestKind: "plugin-npm" }),
+    sourcePath: params.sourcePath,
+    sourcePathKind: params.sourcePathKind,
+    requestKind: "plugin-npm",
+    plugin: {
+      contentType: "package",
+      pluginId,
+      packageName: params.packageName,
+    },
+  });
+}
+
+export async function preflightPluginGitInstallPolicyRuntime(
+  params: PluginInstallPolicyParams & {
+    pluginId: string;
+    sourcePath: string;
+  },
+): Promise<InstallSecurityScanResult | undefined> {
+  return await runOperatorInstallPolicy({
+    ...pluginInstallPolicyRequest(params, params.pluginId),
+    origin: { type: "plugin-git" },
+    source: params.source ?? resolvePolicySource({ requestKind: "plugin-git" }),
+    sourcePath: params.sourcePath,
+    sourcePathKind: "directory",
+    requestKind: "plugin-git",
+    plugin: {
+      contentType: "package",
+      pluginId: params.pluginId,
+    },
+  });
+}
+
+export async function evaluateSkillInstallPolicyRuntime(params: {
+  config?: OpenClawConfig;
   installId: string;
-  installSpec?: SkillInstallSpec;
+  installSpec?: SkillInstallSpecMetadata;
   logger: InstallScanLogger;
-  origin: string;
+  mode?: "install" | "update";
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
+  origin: InstallPolicyOrigin;
+  requestedSpecifier?: string;
+  source?: InstallPolicySource;
   skillName: string;
   sourceDir: string;
 }): Promise<InstallSecurityScanResult | undefined> {
-  const builtinScan = await scanDirectoryTarget({
+  const source =
+    params.source ?? resolvePolicySource({ requestKind: "skill-install", origin: params.origin });
+  const skill = {
+    installId: params.installId,
+    ...(params.installSpec ? { installSpec: params.installSpec } : {}),
+  };
+  return await runInstallPolicyAndHook({
+    config: params.config,
     logger: params.logger,
-    path: params.sourceDir,
-    suspiciousMessage:
-      'Skill "{target}" has {count} suspicious code pattern(s). Run "openclaw security audit --deep" for details.',
-    targetName: params.skillName,
-    warningMessage: `WARNING: Skill "${params.skillName}" contains dangerous code patterns`,
-  });
-  const builtinBlocked = buildBlockedScanResult({
-    builtinScan,
-    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-    trustedSourceLinkedOfficialInstall: false,
-    targetLabel: `Skill "${params.skillName}" installation`,
-  });
-  if (params.dangerouslyForceUnsafeInstall && builtinScan.critical > 0) {
-    logDangerousForceUnsafeInstall({
-      findings: builtinScan.findings,
-      logger: params.logger,
-      targetLabel: `Skill "${params.skillName}" installation`,
-    });
-  }
-
-  const hookResult = await runBeforeInstallHook({
-    logger: params.logger,
+    onInstallPolicyWarning: params.onInstallPolicyWarning,
+    policyOrigin: params.origin,
+    hookOrigin: formatInstallPolicyOriginForHook(params.origin),
     installLabel: `Skill "${params.skillName}" installation`,
-    origin: params.origin,
+    source,
     sourcePath: params.sourceDir,
     sourcePathKind: "directory",
     targetName: params.skillName,
     targetType: "skill",
     requestKind: "skill-install",
-    requestMode: "install",
-    builtinScan,
-    skill: {
-      installId: params.installId,
-      ...(params.installSpec ? { installSpec: params.installSpec } : {}),
-    },
+    requestMode: params.mode ?? "install",
+    requestedSpecifier: params.requestedSpecifier,
+    skill,
+    skipHook: shouldBypassOpenClawInstallFriction({ source: params.source }),
   });
-  return hookResult?.blocked ? hookResult : builtinBlocked;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,0 +1,94 @@
+import {
+  splitSystemPromptCacheBoundary,
+  SYSTEM_PROMPT_CACHE_BOUNDARY,
+} from "@openclaw/ai/internal/shared";
+import type { buildConfiguredAgentSystemPrompt } from "../../system-prompt-config.js";
+
+export type SystemPromptRefresh = ((currentSystemPrompt: string) => string) & {
+  /** A prepared render is authoritative even when it restores the pinned bytes. */
+  freshlyRendered?: boolean;
+};
+type BuildAttemptSystemPromptParams = {
+  isRawModelRun: boolean;
+  embeddedSystemPrompt: Parameters<typeof buildConfiguredAgentSystemPrompt>[0];
+  transformSystemPrompt: (systemPrompt: string) => string;
+};
+
+const ATTEMPT_PROMPT_SECTION =
+  /<!-- openclaw:attempt:(STABLE|DYNAMIC|PERMISSION) -->[\s\S]*?<!-- \/openclaw:attempt:\1 -->/g;
+
+function renderAttemptPromptSection(section: "STABLE" | "DYNAMIC" | "PERMISSION", text: string) {
+  return `<!-- openclaw:attempt:${section} -->\n${text}\n<!-- /openclaw:attempt:${section} -->`;
+}
+
+export function extractAttemptPermissionNotice(systemPrompt: string) {
+  const permission =
+    /\n*<!-- openclaw:attempt:PERMISSION -->\n([\s\S]*?)\n<!-- \/openclaw:attempt:PERMISSION -->/;
+  return {
+    permissionNotice: systemPrompt.match(permission)?.[1],
+    systemPrompt: systemPrompt.replace(permission, ""),
+  };
+}
+
+/**
+ * Builds the embedded system prompt and applies provider-specific transforms
+ * unless this is a raw model run. Raw runs still keep `baseSystemPrompt` for
+ * diagnostics/cache boundaries, but submit an empty provider prompt.
+ */
+export async function buildAttemptSystemPrompt(params: BuildAttemptSystemPromptParams) {
+  const { buildConfiguredAgentSystemPrompt } = await import("../../system-prompt-config.js");
+  let renderedSkillsPrompt = "";
+  const baseSystemPrompt = buildConfiguredAgentSystemPrompt({
+    ...params.embeddedSystemPrompt,
+    onRenderedSkillsPrompt: (skillsPrompt) => {
+      renderedSkillsPrompt = skillsPrompt;
+      params.embeddedSystemPrompt.onRenderedSkillsPrompt?.(skillsPrompt);
+    },
+  });
+  const transformedSystemPrompt = params.isRawModelRun
+    ? ""
+    : params.transformSystemPrompt(baseSystemPrompt);
+  // Runtime additions at the cache boundary stay outside both owned regions;
+  // permission refreshes replace capability guidance without dropping that context.
+  const splitPrompt = splitSystemPromptCacheBoundary(transformedSystemPrompt);
+  const stablePrompt = renderAttemptPromptSection(
+    "STABLE",
+    splitPrompt?.stablePrefix ?? transformedSystemPrompt,
+  );
+  const dynamicPrompt = splitPrompt
+    ? renderAttemptPromptSection("DYNAMIC", splitPrompt.dynamicSuffix)
+    : "";
+  const systemPrompt = params.isRawModelRun
+    ? ""
+    : splitPrompt
+      ? `${stablePrompt}${SYSTEM_PROMPT_CACHE_BOUNDARY}${dynamicPrompt}` // nosemgrep: security.opengrep.ghsa-2qj5-gwg2-xwc4.openclaw.prompt-unsanitized-literal-interpolation -- These are complete prompts from trusted builders/transforms; path literals are sanitized at their producers, not by flattening prompt newlines here.
+      : stablePrompt;
+
+  return {
+    baseSystemPrompt,
+    systemPrompt,
+    skillsPrompt: params.isRawModelRun ? "" : renderedSkillsPrompt,
+    refreshSystemPrompt: (currentSystemPrompt: string, permissionNotice?: string) => {
+      if (params.isRawModelRun) {
+        return currentSystemPrompt;
+      }
+      const nextNotice = permissionNotice
+        ? renderAttemptPromptSection("PERMISSION", permissionNotice)
+        : undefined;
+      let replacedNotice = false;
+      // Hooks can return any older generation. Replace owned segments by identity,
+      // not their prior text; external additions and whole-prompt overrides survive.
+      const refreshed = currentSystemPrompt.replace(
+        ATTEMPT_PROMPT_SECTION,
+        (_match, section: string) => {
+          if (section === "PERMISSION") {
+            replacedNotice = true;
+            return nextNotice ?? _match;
+          }
+          return section === "STABLE" ? stablePrompt : dynamicPrompt;
+        },
+      );
+      return replacedNotice || !nextNotice ? refreshed : `${refreshed}\n\n${nextNotice}`;
+    },
+  };
+}

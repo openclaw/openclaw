@@ -1,76 +1,78 @@
+/** Route-aware auth checks for model-picker callers. */
+import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import { ensureAuthProfileStoreWithoutExternalProfiles } from "./auth-profiles.js";
 import {
-  externalCliDiscoveryForProviderAuth,
-  ensureAuthProfileStore,
-  ensureAuthProfileStoreWithoutExternalProfiles,
-  listProfilesForProvider,
-  type AuthProfileStore,
-} from "./auth-profiles.js";
-import { hasRuntimeAvailableProviderAuth } from "./model-auth.js";
+  createModelAuthAvailabilityResolver,
+  type ModelAuthAvailabilityEvaluation,
+  type ModelAuthAvailabilityRef,
+  type ModelAuthAvailabilityResolver,
+} from "./model-auth-availability.js";
+import { createRuntimeProviderAuthLookup } from "./model-auth.js";
 import { normalizeProviderId } from "./model-selection.js";
 
-export function hasAuthForModelProvider(params: {
-  provider: string;
-  cfg?: OpenClawConfig;
-  workspaceDir?: string;
-  agentDir?: string;
-  env?: NodeJS.ProcessEnv;
-  store?: AuthProfileStore;
-  allowPluginSyntheticAuth?: boolean;
-  discoverExternalCliAuth?: boolean;
-}): boolean {
-  const provider = normalizeProviderId(params.provider);
-  if (
-    hasRuntimeAvailableProviderAuth({
-      provider,
-      cfg: params.cfg,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-      allowPluginSyntheticAuth: params.allowPluginSyntheticAuth,
-    })
-  ) {
-    return true;
-  }
-  const store =
-    params.store ??
-    (params.discoverExternalCliAuth === false
-      ? ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
-          allowKeychainPrompt: false,
-        })
-      : ensureAuthProfileStore(params.agentDir, {
-          externalCli: externalCliDiscoveryForProviderAuth({ cfg: params.cfg, provider }),
-        }));
-  if (listProfilesForProvider(store, provider).length > 0) {
-    return true;
-  }
-  return false;
-}
+export type ProviderModelAuthChecker = ((
+  provider: string,
+  ref: ModelAuthAvailabilityRef,
+) => Promise<boolean>) & {
+  evaluateModelAuth(
+    provider: string,
+    ref: ModelAuthAvailabilityRef,
+  ): Promise<ModelAuthAvailabilityEvaluation>;
+};
 
+/** Creates a cached provider-auth evaluator bound to one agent/runtime context. */
 export function createProviderAuthChecker(params: {
   cfg?: OpenClawConfig;
+  agentId?: string;
   workspaceDir?: string;
   agentDir?: string;
   env?: NodeJS.ProcessEnv;
-  allowPluginSyntheticAuth?: boolean;
-  discoverExternalCliAuth?: boolean;
-}): (provider: string) => boolean {
-  const authCache = new Map<string, boolean>();
-  return (provider: string) => {
-    const key = normalizeProviderId(provider);
-    const cached = authCache.get(key);
-    if (cached !== undefined) {
-      return cached;
+}): ProviderModelAuthChecker {
+  const authCache = new Map<string, Promise<ModelAuthAvailabilityEvaluation>>();
+  let modelAuthResolver: ModelAuthAvailabilityResolver | undefined;
+  const resolveModelAuthResolver = () => {
+    if (modelAuthResolver) {
+      return modelAuthResolver;
     }
-    const value = hasAuthForModelProvider({
-      provider: key,
+    const authStore = ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
+      allowKeychainPrompt: false,
+    });
+    const runtimeAuthLookup = createRuntimeProviderAuthLookup({
       cfg: params.cfg,
       workspaceDir: params.workspaceDir,
-      agentDir: params.agentDir,
       env: params.env,
-      allowPluginSyntheticAuth: params.allowPluginSyntheticAuth,
-      discoverExternalCliAuth: params.discoverExternalCliAuth,
+      includePluginSyntheticAuth: true,
     });
-    authCache.set(key, value);
-    return value;
+    modelAuthResolver = createModelAuthAvailabilityResolver({
+      cfg: params.cfg ?? {},
+      agentId: params.agentId,
+      authStore,
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      syntheticAuthProviderRefs: runtimeAuthLookup.syntheticAuthProviderRefs,
+      externalCliProviderIds: ["openai"],
+    });
+    return modelAuthResolver;
   };
+  const evaluateModelAuth = (
+    provider: string,
+    ref: ModelAuthAvailabilityRef,
+  ): Promise<ModelAuthAvailabilityEvaluation> => {
+    const key = normalizeProviderId(provider);
+    const cacheKey = `${key}\0${hashRuntimeConfigValue(ref as unknown as OpenClawConfig)}`;
+    return getOrCreatePromise(
+      authCache,
+      cacheKey,
+      () => Promise.resolve().then(() => resolveModelAuthResolver().evaluateModelAuth(key, ref)),
+      { cacheRejections: false },
+    );
+  };
+  return Object.assign(
+    async (provider: string, ref: ModelAuthAvailabilityRef) =>
+      (await evaluateModelAuth(provider, ref)).availability === true,
+    { evaluateModelAuth },
+  );
 }

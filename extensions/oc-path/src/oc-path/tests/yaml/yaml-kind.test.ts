@@ -1,10 +1,10 @@
+// OC Path tests cover yaml kind plugin behavior.
 import { describe, expect, it } from "vitest";
 import { inferKind } from "../../dispatch.js";
 import { parseOcPath } from "../../oc-path.js";
 import { OcEmitSentinelError, REDACTED_SENTINEL } from "../../sentinel.js";
 import { resolveOcPath, setOcPath } from "../../universal.js";
 import { insertYamlOcPath, setYamlOcPath } from "../../yaml/edit.js";
-import { emitYaml } from "../../yaml/emit.js";
 import { parseYaml } from "../../yaml/parse.js";
 import { resolveYamlOcPath } from "../../yaml/resolve.js";
 
@@ -23,7 +23,7 @@ steps:
 describe("parseYaml — round-trip", () => {
   it("preserves bytes verbatim on round-trip", () => {
     const { ast } = parseYaml(LOBSTER);
-    expect(emitYaml(ast)).toBe(LOBSTER);
+    expect(ast.raw).toBe(LOBSTER);
   });
 
   it("exposes kind: yaml discriminator", () => {
@@ -34,7 +34,7 @@ describe("parseYaml — round-trip", () => {
   it("handles empty file", () => {
     const { ast } = parseYaml("");
     expect(ast.kind).toBe("yaml");
-    expect(emitYaml(ast)).toBe("");
+    expect(ast.raw).toBe("");
   });
 
   it("reports errors as diagnostics, not throws", () => {
@@ -60,6 +60,11 @@ describe("resolveYamlOcPath — direct", () => {
     if (m?.kind === "pair") {
       expect(m.value).toBe("fetch");
     }
+  });
+
+  it("does not resolve noncanonical sequence indexes", () => {
+    const { ast } = parseYaml(LOBSTER);
+    expect(resolveYamlOcPath(ast, parseOcPath("oc://workflow.lobster/steps.01.id"))).toBeNull();
   });
 
   it("returns root when no segments", () => {
@@ -90,6 +95,15 @@ describe("setYamlOcPath — direct", () => {
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(r.ast.raw).toContain("id: fetch-renamed");
+    }
+  });
+
+  it("reports unresolved for noncanonical sequence indexes", () => {
+    const { ast } = parseYaml(LOBSTER);
+    const r = setYamlOcPath(ast, parseOcPath("oc://workflow.lobster/steps.01.id"), "nope");
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toBe("unresolved");
     }
   });
 

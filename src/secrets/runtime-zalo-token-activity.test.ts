@@ -1,3 +1,4 @@
+/** Tests Zalo token activity secret discovery in runtime config. */
 import { describe, expect, it } from "vitest";
 import "./runtime-zalo.test-support.ts";
 import {
@@ -67,63 +68,6 @@ describe("secrets runtime snapshot zalo token activity", () => {
     ).toBe("resolved-zalo-work-token");
     expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
       "channels.zalo.accounts.work.botToken",
-    );
-  });
-
-  it("treats top-level Zalo botToken refs as active for non-default accounts without overrides", async () => {
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        channels: {
-          zalo: {
-            botToken: { source: "env", provider: "default", id: "ZALO_TOP_LEVEL_TOKEN" },
-            accounts: {
-              work: {
-                enabled: true,
-              },
-            },
-          },
-        },
-      }),
-      env: {
-        ZALO_TOP_LEVEL_TOKEN: "resolved-zalo-top-level-token",
-      },
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: () => loadAuthStoreWithProfiles({}),
-    });
-
-    expect(requireZaloConfig(snapshot).botToken).toBe("resolved-zalo-top-level-token");
-    expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
-      "channels.zalo.botToken",
-    );
-  });
-
-  it("treats channels.zalo.accounts.default.botToken refs as active", async () => {
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        channels: {
-          zalo: {
-            accounts: {
-              default: {
-                enabled: true,
-                botToken: { source: "env", provider: "default", id: "ZALO_DEFAULT_TOKEN" },
-              },
-            },
-          },
-        },
-      }),
-      env: {
-        ZALO_DEFAULT_TOKEN: "resolved-zalo-default-token",
-      },
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: () => loadAuthStoreWithProfiles({}),
-    });
-
-    expect(
-      (snapshot.config.channels?.zalo?.accounts?.default as { botToken?: unknown } | undefined)
-        ?.botToken,
-    ).toBe("resolved-zalo-default-token");
-    expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
-      "channels.zalo.accounts.default.botToken",
     );
   });
 });

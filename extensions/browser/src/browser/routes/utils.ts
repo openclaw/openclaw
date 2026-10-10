@@ -1,48 +1,94 @@
-import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
-import type { BrowserRequest, BrowserResponse, BrowserRouteHandler } from "./types.js";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isLocalManagedProfile } from "../config.js";
+import {
+  BrowserProfileUnavailableError,
+  type BrowserErrorResponse,
+  toBrowserErrorResponse,
+} from "../errors.js";
+import { isManagedOnlyBrowserRequest, resolveRequestedBrowserProfile } from "../request-policy.js";
+import {
+  type BrowserRouteContext,
+  type ProfileContext,
+  withProfileContextOperation,
+} from "../server-context.js";
+import { isProfileRestartRequiredError } from "../server-context.lifecycle.js";
+import type { BrowserRequest, BrowserResponse } from "./types.js";
 
-function normalizeOptionalString(value: string): string | undefined {
-  return value.trim() || undefined;
-}
-
-export function asyncBrowserRoute(handler: BrowserRouteHandler): BrowserRouteHandler {
-  return (req, res) => handler(req, res);
-}
-
-/**
- * Extract profile name from query string or body and get profile context.
- * Query string takes precedence over body for consistency with GET routes.
- */
+/** Resolve the profile context requested by query/profile parameters. */
 export function getProfileContext(
   req: BrowserRequest,
   ctx: BrowserRouteContext,
 ): ProfileContext | { error: string; status: number } {
-  let profileName: string | undefined;
-
-  // Check query string first (works for GET and POST)
-  if (typeof req.query.profile === "string") {
-    profileName = normalizeOptionalString(req.query.profile);
+  try {
+    const profile = ctx.forProfile(resolveRequestedBrowserProfile(req));
+    const managedOnly = isManagedOnlyBrowserRequest(req);
+    if (managedOnly && !isLocalManagedProfile(profile.profile)) {
+      return { error: "This dashboard requires a local managed browser profile", status: 400 };
+    }
+    return profile;
+  } catch (err) {
+    const mapped = toBrowserErrorResponse(err);
+    return mapped
+      ? { error: mapped.message, status: mapped.status }
+      : { error: String(err), status: 404 };
   }
+}
 
-  // Fall back to body for POST requests
-  if (!profileName && req.body && typeof req.body === "object") {
-    const body = req.body as Record<string, unknown>;
-    if (typeof body.profile === "string") {
-      profileName = normalizeOptionalString(body.profile);
+/** Run one profile-scoped route transaction, restarting an unhealthy owned browser once. */
+export async function runProfileRouteOperation<T>(params: {
+  profileCtx: ProfileContext;
+  signal?: AbortSignal;
+  assertCurrent?: BrowserRequest["assertCurrent"];
+  run: (signal: AbortSignal) => Promise<T>;
+}): Promise<T> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await withProfileContextOperation(params.profileCtx, params.signal, async (signal) => {
+        if (params.assertCurrent) {
+          await params.assertCurrent(params.profileCtx.profile);
+        }
+        signal.throwIfAborted();
+        return await params.run(signal);
+      });
+    } catch (err) {
+      if (!isProfileRestartRequiredError(err)) {
+        throw err;
+      }
+      if (attempt !== 0) {
+        throw new BrowserProfileUnavailableError(
+          `Browser profile "${params.profileCtx.profile.name}" could not stabilize after restart.`,
+        );
+      }
+      try {
+        await params.profileCtx.ensureBrowserAvailable({ signal: params.signal });
+      } catch (restartErr) {
+        if (isProfileRestartRequiredError(restartErr)) {
+          throw new BrowserProfileUnavailableError(
+            `Browser profile "${params.profileCtx.profile.name}" could not restart.`,
+          );
+        }
+        throw restartErr;
+      }
     }
   }
-
-  try {
-    return ctx.forProfile(profileName);
-  } catch (err) {
-    return { error: String(err), status: 404 };
-  }
+  throw new Error("browser profile could not stabilize");
 }
 
 export function jsonError(res: BrowserResponse, status: number, message: string) {
   res.status(status).json({ error: message });
 }
 
+/** Send a mapped browser-domain error while preserving validated metadata. */
+export function jsonBrowserError(res: BrowserResponse, error: BrowserErrorResponse) {
+  res.status(error.status).json({
+    error: error.message,
+    ...(error.code ? { code: error.code } : {}),
+    ...("reason" in error ? { reason: error.reason } : {}),
+    ...("details" in error ? { details: error.details } : {}),
+  });
+}
+
+/** Coerce route values to strings while treating nullish values as empty. */
 export function toStringOrEmpty(value: unknown) {
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
     return normalizeOptionalString(String(value)) ?? "";
@@ -50,18 +96,13 @@ export function toStringOrEmpty(value: unknown) {
   return "";
 }
 
-export function toNumber(value: unknown) {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  const normalized = typeof value === "string" ? normalizeOptionalString(value) : undefined;
-  if (normalized) {
-    const parsed = Number(normalized);
-    return Number.isFinite(parsed) ? parsed : undefined;
-  }
-  return undefined;
+/** Return a canonical HTTP origin, or null when the route value is absent or invalid. */
+export function readHttpOrigin(value: unknown): string | null {
+  const url = URL.parse(toStringOrEmpty(value));
+  return url?.protocol === "http:" || url?.protocol === "https:" ? url.origin : null;
 }
 
+/** Coerce route boolean values from booleans or common string forms. */
 export function toBoolean(value: unknown) {
   if (typeof value === "boolean") {
     return value;

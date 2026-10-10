@@ -1,4 +1,7 @@
 import "fake-indexeddb/auto";
+import { installFakeIndexedDbTransactionPruner } from "./fake-indexeddb-prune.js";
+
+installFakeIndexedDbTransactionPruner();
 
 export { MatrixCryptoBootstrapper } from "./crypto-bootstrap.js";
 export type { MatrixCryptoBootstrapResult } from "./crypto-bootstrap.js";

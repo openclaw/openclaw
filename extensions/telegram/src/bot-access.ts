@@ -1,15 +1,12 @@
-import {
-  firstDefined,
-  isSenderIdAllowed,
-  mergeDmAllowFromSources,
-} from "openclaw/plugin-sdk/allow-from";
+import { mergeDmAllowFromSources } from "openclaw/plugin-sdk/allow-from";
 import type {
   DmPolicy,
   TelegramDirectConfig,
   TelegramGroupConfig,
 } from "openclaw/plugin-sdk/config-contracts";
+import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type NormalizedAllowFrom = {
   entries: string[];
@@ -18,7 +15,8 @@ export type NormalizedAllowFrom = {
   invalidEntries: string[];
 };
 
-const warnedInvalidEntries = new Set<string>();
+// Telegram owns this process-local warning bound; authorization output stays unchanged.
+const warnedInvalidEntries = createDedupeCache({ ttlMs: 0, maxSize: 256 });
 const log = createSubsystemLogger("telegram/bot-access");
 
 function warnInvalidAllowFromEntries(entries: string[]) {
@@ -26,10 +24,9 @@ function warnInvalidAllowFromEntries(entries: string[]) {
     return;
   }
   for (const entry of entries) {
-    if (warnedInvalidEntries.has(entry)) {
+    if (warnedInvalidEntries.check(entry)) {
       continue;
     }
-    warnedInvalidEntries.add(entry);
     log.warn(
       [
         "Invalid allowFrom entry:",
@@ -52,7 +49,7 @@ export const normalizeAllowFrom = (list?: Array<string | number>): NormalizedAll
     .map((value) => value.replace(/^(telegram|tg):/i, ""));
   const invalidEntries = normalized.filter((value) => !/^\d+$/.test(value));
   if (invalidEntries.length > 0) {
-    warnInvalidAllowFromEntries([...new Set(invalidEntries)]);
+    warnInvalidAllowFromEntries(uniqueStrings(invalidEntries));
   }
   const ids = normalized.filter((value) => /^\d+$/.test(value));
   return {
@@ -79,14 +76,3 @@ export function resolveTelegramEffectiveDmPolicy(params: {
   }
   return params.dmPolicy ?? "pairing";
 }
-
-export const isSenderAllowed = (params: {
-  allow: NormalizedAllowFrom;
-  senderId?: string;
-  senderUsername?: string;
-}) => {
-  const { allow, senderId } = params;
-  return isSenderIdAllowed(allow, senderId, true);
-};
-
-export { firstDefined };

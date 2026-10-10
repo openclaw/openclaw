@@ -35,23 +35,11 @@ struct DiscoveryOptions {
 }
 
 struct DiscoveryOutput: Encodable {
-    struct Gateway: Encodable {
-        var displayName: String
-        var lanHost: String?
-        var tailnetDns: String?
-        var sshPort: Int
-        var gatewayPort: Int?
-        var cliPath: String?
-        var stableID: String
-        var debugID: String
-        var isLocal: Bool
-    }
-
     var status: String
     var timeoutMs: Int
     var includeLocal: Bool
     var count: Int
-    var gateways: [Gateway]
+    var gateways: [GatewayDiscoveryModel.DiscoveredGateway]
 }
 
 func runDiscover(_ args: [String]) async {
@@ -83,8 +71,7 @@ func runDiscover(_ args: [String]) async {
         model.start()
     }
 
-    let nanos = UInt64(max(100, opts.timeoutMs)) * 1_000_000
-    try? await Task.sleep(nanoseconds: nanos)
+    try? await Task.sleep(for: .milliseconds(max(100, opts.timeoutMs)))
 
     let gateways = await MainActor.run { model.gateways }
     let status = await MainActor.run { model.statusText }
@@ -99,35 +86,14 @@ func runDiscover(_ args: [String]) async {
             timeoutMs: opts.timeoutMs,
             includeLocal: opts.includeLocal,
             count: gateways.count,
-            gateways: gateways.map {
-                DiscoveryOutput.Gateway(
-                    displayName: $0.displayName,
-                    lanHost: $0.lanHost,
-                    tailnetDns: $0.tailnetDns,
-                    sshPort: $0.sshPort,
-                    gatewayPort: $0.gatewayPort,
-                    cliPath: $0.cliPath,
-                    stableID: $0.stableID,
-                    debugID: $0.debugID,
-                    isLocal: $0.isLocal)
-            })
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        if let data = try? encoder.encode(payload),
-           let json = String(data: data, encoding: .utf8)
-        {
-            print(json)
-        } else {
-            print("{\"error\":\"failed to encode JSON\"}")
-        }
+            gateways: gateways)
+        printCLIJSON(payload, fallback: "{\"error\":\"failed to encode JSON\"}")
         return
     }
 
     print("Gateway Discovery (macOS NWBrowser)")
     print("Status: \(status)")
     print("Found \(gateways.count) gateway(s)\(opts.includeLocal ? "" : " (local filtered)")")
-    if gateways.isEmpty { return }
-
     for gateway in gateways {
         let hosts = [gateway.tailnetDns, gateway.lanHost]
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -139,6 +105,8 @@ func runDiscover(_ args: [String]) async {
         if let port = gateway.gatewayPort {
             print("  gatewayPort: \(port)")
         }
+        print("  gatewayTls: \(gateway.gatewayTls)")
+        print("  gatewayDirectReachable: \(gateway.gatewayDirectReachable)")
         if let cliPath = gateway.cliPath {
             print("  cliPath: \(cliPath)")
         }

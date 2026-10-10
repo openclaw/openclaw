@@ -5,12 +5,7 @@ import type {
   MusicGenerationProvider,
 } from "./types.js";
 
-export function resolveMusicGenerationMode(params: {
-  inputImageCount?: number;
-}): MusicGenerationMode {
-  return (params.inputImageCount ?? 0) > 0 ? "edit" : "generate";
-}
-
+/** List modes supported by a provider in stable display order. */
 export function listSupportedMusicGenerationModes(
   provider: Pick<MusicGenerationProvider, "capabilities">,
 ): MusicGenerationMode[] {
@@ -22,6 +17,7 @@ export function listSupportedMusicGenerationModes(
   return modes;
 }
 
+/** Resolve the active mode and provider capability contract for one request. */
 export function resolveMusicGenerationModeCapabilities(params: {
   provider?: Pick<MusicGenerationProvider, "capabilities">;
   inputImageCount?: number;
@@ -29,19 +25,9 @@ export function resolveMusicGenerationModeCapabilities(params: {
   mode: MusicGenerationMode;
   capabilities: MusicGenerationModeCapabilities | MusicGenerationEditCapabilities | undefined;
 } {
-  const mode = resolveMusicGenerationMode(params);
-  const capabilities = params.provider?.capabilities;
-  if (!capabilities) {
-    return { mode, capabilities: undefined };
-  }
-  if (mode === "generate") {
-    return {
-      mode,
-      capabilities: capabilities.generate,
-    };
-  }
+  const mode = (params.inputImageCount ?? 0) > 0 ? "edit" : "generate";
   return {
     mode,
-    capabilities: capabilities.edit,
+    capabilities: params.provider?.capabilities?.[mode],
   };
 }

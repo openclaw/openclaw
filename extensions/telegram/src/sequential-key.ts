@@ -9,7 +9,36 @@ import {
   isAbortRequestText,
   isBtwRequestText,
 } from "openclaw/plugin-sdk/command-primitives-runtime";
-import { resolveTelegramForumThreadId } from "./bot/helpers.js";
+import { hasTelegramApprovalCallbackPrefix } from "./approval-callback-data.js";
+import {
+  getCachedTelegramForumFlag,
+  resolveTelegramBotHasTopicsEnabled,
+  resolveTelegramMessageForumFlagHint,
+  resolveTelegramMessageThreadSpec,
+  shouldUseTelegramDmThreadSession,
+} from "./bot/helpers.js";
+import { getPreparedTelegramPollAnswer } from "./poll-answer-context.js";
+import { hasTelegramQuestionCallbackPrefix } from "./question-callback-data.js";
+
+const TELEGRAM_READ_ONLY_COMMAND_KEYS = new Set([
+  "agents",
+  "commands",
+  "context",
+  "help",
+  "models",
+  "status",
+  "subagents",
+  "tasks",
+  "tools",
+  "whoami",
+]);
+
+// Control-lane admission is an inspection/interrupt privilege, not a restatement of
+// `activeRunSafe`. `activeRunSafe` only says a command may execute while a turn is
+// active; it also covers session-mutating commands (`/new`, `/reset`, `/think`) whose
+// writes must stay ordered behind their own topic's pending input. `/approve` belongs
+// here because the run that requested the approval is holding its own lane.
+const TELEGRAM_ACTIVE_RUN_CONTROL_COMMAND_KEYS = new Set(["approve", "queue", "steer"]);
 
 type TelegramSequentialKeyContext = {
   chat?: { id?: number };
@@ -24,73 +53,80 @@ type TelegramSequentialKeyContext = {
     channel_post?: Message;
     edited_channel_post?: Message;
     callback_query?: { message?: Message; data?: string };
-    message_reaction?: { chat?: { id?: number } };
+    message_reaction?: {
+      chat?: { id?: number; type?: string; is_forum?: boolean; is_direct_messages?: boolean };
+      message_id?: number;
+    };
+    poll_answer?: { poll_id?: string };
   };
 };
 
-function resolveStatusCommandControlLane(params: {
-  rawText?: string;
-  botUsername?: string;
-}): boolean {
-  // Only read-only status commands should bypass the per-topic lane. Commands
-  // like /export-session stay on the normal lane because they materialize
-  // session state to disk and should not interleave with an active turn.
-  const normalizedBody = normalizeCommandBody(
-    params.rawText?.trim() ?? "",
-    params.botUsername ? { botUsername: params.botUsername } : undefined,
-  );
-  const alias = maybeResolveTextAlias(normalizedBody);
-  if (!alias) {
-    return false;
+function getTelegramMessageReactionSequentialKey(
+  ctx: TelegramSequentialKeyContext,
+): string | undefined {
+  const reaction = ctx.update?.message_reaction;
+  if (
+    (reaction?.chat?.is_forum === true || reaction?.chat?.is_direct_messages === true) &&
+    typeof reaction.chat.id === "number" &&
+    typeof reaction.message_id === "number"
+  ) {
+    return `telegram:${reaction.chat.id}:message:${reaction.message_id}`;
   }
-  const command = listChatCommands().find((entry) =>
-    entry.textAliases.some((candidate) => candidate.trim().toLowerCase() === alias),
-  );
-  return command?.category === "status" && command.key !== "export-session";
+  const msg = getTelegramSequentialMessage(ctx);
+  const isForum = resolveTelegramMessageForumFlagHint({
+    chatType: msg?.chat?.type,
+    isForum: msg?.chat?.is_forum,
+    isTopicMessage: msg?.is_topic_message,
+  });
+  const isScopedMessage = isForum || msg?.chat.is_direct_messages === true;
+  return isScopedMessage && typeof msg?.chat.id === "number" && typeof msg.message_id === "number"
+    ? `telegram:${msg.chat.id}:message:${msg.message_id}`
+    : undefined;
 }
 
-function isTelegramTargetedStopCommand(rawText?: string, botUsername?: string): boolean {
-  const trimmed = rawText?.trim();
+function resolveTelegramCommandKeyForControlLane(params: {
+  rawText?: string;
+  botUsername?: string;
+}): string | undefined {
+  const trimmed = params.rawText?.trim();
   if (!trimmed) {
-    return false;
+    return undefined;
   }
-  // Isolated ingress may not have getMe() metadata yet. A targeted Telegram
-  // /stop@bot command still needs the control lane so it can cancel a busy turn.
-  const match = trimmed.match(/^\/stop@([A-Za-z0-9_]+)(?:$|\s|[.!?…,，。;；:：'"’”)\]}])/iu);
-  if (!match) {
-    return false;
+  const alias = maybeResolveTextAlias(
+    normalizeCommandBody(
+      trimmed,
+      params.botUsername ? { botUsername: params.botUsername } : undefined,
+    ),
+  );
+  if (!alias) {
+    return undefined;
   }
-  const normalizedBotUsername = botUsername?.trim().toLowerCase();
-  if (!normalizedBotUsername) {
-    return true;
-  }
-  return match[1]?.toLowerCase() === normalizedBotUsername;
+  return listChatCommands().find((entry) =>
+    entry.textAliases.some((candidate) => candidate.trim().toLowerCase() === alias),
+  )?.key;
 }
 
 export function isTelegramControlLaneText(params: {
   rawText?: string;
   botUsername?: string;
 }): boolean {
-  if (
-    isAbortRequestText(
-      params.rawText,
-      params.botUsername ? { botUsername: params.botUsername } : undefined,
-    )
-  ) {
+  // Live polling and webhook admission already have bot identity. In defensive pre-identity
+  // paths, accepting every @target admits foreign-bot commands; only canonical aborts fence.
+  const abortCommandOptions = params.botUsername
+    ? { botUsername: params.botUsername }
+    : { targetedCommandMode: "pre-identity" as const };
+  if (isAbortRequestText(params.rawText, abortCommandOptions)) {
     return true;
   }
-  if (isTelegramTargetedStopCommand(params.rawText, params.botUsername)) {
-    return true;
-  }
-  return resolveStatusCommandControlLane(params);
+  const key = resolveTelegramCommandKeyForControlLane(params);
+  return (
+    key !== undefined &&
+    (TELEGRAM_ACTIVE_RUN_CONTROL_COMMAND_KEYS.has(key) || TELEGRAM_READ_ONLY_COMMAND_KEYS.has(key))
+  );
 }
 
-export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): string {
-  const reaction = ctx.update?.message_reaction;
-  if (reaction?.chat?.id) {
-    return `telegram:${reaction.chat.id}`;
-  }
-  const msg =
+function getTelegramSequentialMessage(ctx: TelegramSequentialKeyContext): Message | undefined {
+  return (
     ctx.message ??
     ctx.channelPost ??
     ctx.editedMessage ??
@@ -98,43 +134,94 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
     ctx.update?.message ??
     ctx.update?.edited_message ??
     ctx.update?.channel_post ??
-    ctx.update?.edited_channel_post ??
-    ctx.update?.callback_query?.message;
+    ctx.update?.edited_channel_post
+  );
+}
+
+export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): string {
+  const reaction = ctx.update?.message_reaction;
+  if (reaction?.chat?.id) {
+    return `telegram:${reaction.chat.id}`;
+  }
+  const update = ctx.update;
+  const pollId = update?.poll_answer?.poll_id;
+  if (pollId) {
+    const prepared = getPreparedTelegramPollAnswer(update);
+    const entry = prepared?.entry;
+    if (entry) {
+      const threadId = "id" in entry.threadSpec ? entry.threadSpec.id : undefined;
+      return threadId == null
+        ? `telegram:${entry.chat.id}`
+        : `telegram:${entry.chat.id}:topic:${threadId}`;
+    }
+    // Missing historical registry entries do no work, but keep duplicate answers
+    // for the same unknown poll together while the handler records the miss.
+    return `telegram:poll:${pollId}`;
+  }
+  const msg = getTelegramSequentialMessage(ctx) ?? ctx.update?.callback_query?.message;
   const chatId = msg?.chat?.id ?? ctx.chat?.id;
+  const chatLane = typeof chatId === "number" ? `telegram:${chatId}` : "telegram";
   const rawText = msg?.text ?? msg?.caption;
   const botUsername = ctx.me?.username;
   if (isTelegramControlLaneText({ rawText, botUsername })) {
-    if (typeof chatId === "number") {
-      return `telegram:${chatId}:control`;
-    }
-    return "telegram:control";
+    return `${chatLane}:control`;
   }
   if (isBtwRequestText(rawText, botUsername ? { botUsername } : undefined)) {
     const messageId = msg?.message_id;
-    if (typeof chatId === "number" && typeof messageId === "number") {
-      return `telegram:${chatId}:btw:${messageId}`;
-    }
-    if (typeof chatId === "number") {
-      return `telegram:${chatId}:btw`;
-    }
-    return "telegram:btw";
+    return typeof chatId === "number" && typeof messageId === "number"
+      ? `${chatLane}:btw:${messageId}`
+      : `${chatLane}:btw`;
   }
   const callbackData = ctx.update?.callback_query?.data;
-  if (callbackData && parseExecApprovalCommandText(callbackData) !== null) {
-    if (typeof chatId === "number") {
-      return `telegram:${chatId}:approval`;
-    }
-    return "telegram:approval";
+  if (hasTelegramQuestionCallbackPrefix(callbackData)) {
+    return `${chatLane}:question`;
   }
-  const isGroup = msg?.chat?.type === "group" || msg?.chat?.type === "supergroup";
-  const messageThreadId = msg?.message_thread_id;
-  const isForum =
-    msg?.chat?.is_forum ?? (msg?.chat?.type === "supergroup" && msg?.is_topic_message === true);
-  const threadId = isGroup
-    ? resolveTelegramForumThreadId({ isForum, messageThreadId })
-    : messageThreadId;
+  if (
+    hasTelegramApprovalCallbackPrefix(callbackData) ||
+    (callbackData && parseExecApprovalCommandText(callbackData) !== null)
+  ) {
+    return `${chatLane}:approval`;
+  }
+  // Partial ingress updates use the unknown lane. General-topic messages can
+  // omit both forum flags; retain the cached hint to prevent a base-lane/topic:1 race.
+  const forumHint = msg?.chat
+    ? resolveTelegramMessageForumFlagHint({
+        chatType: msg.chat.type,
+        isForum: msg.chat.is_forum,
+        isTopicMessage: msg.is_topic_message,
+      })
+    : undefined;
+  const cachedForumFlag =
+    forumHint === undefined && msg?.chat?.type === "supergroup" && typeof msg.chat.id === "number"
+      ? getCachedTelegramForumFlag(msg.chat.id)
+      : undefined;
+  const threadSpec = msg?.chat
+    ? resolveTelegramMessageThreadSpec(msg, forumHint ?? cachedForumFlag)
+    : undefined;
+  const threadId =
+    threadSpec?.scope === "dm"
+      ? shouldUseTelegramDmThreadSession({
+          dmThreadId: threadSpec.id,
+          botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
+        })
+        ? threadSpec.id
+        : undefined
+      : threadSpec?.id;
   if (typeof chatId === "number") {
     return threadId != null ? `telegram:${chatId}:topic:${threadId}` : `telegram:${chatId}`;
   }
   return "telegram:unknown";
+}
+
+export function getTelegramSequentialConstraints(
+  ctx: TelegramSequentialKeyContext,
+): string | string[] {
+  const key = getTelegramSequentialKey(ctx);
+  const messageKey = getTelegramMessageReactionSequentialKey(ctx);
+  if (ctx.update?.message_reaction && messageKey) {
+    return messageKey;
+  }
+  // Scoped reactions read the topic fact recorded by the message update they target.
+  // Bridge that exact message without serializing unrelated topics.
+  return messageKey ? [key, messageKey] : key;
 }

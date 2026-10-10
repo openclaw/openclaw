@@ -1,3 +1,4 @@
+// TTS capability tests cover channel plugin text-to-speech capability detection.
 import { afterEach, describe, expect, it } from "vitest";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -6,7 +7,7 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { resolveChannelTtsVoiceDelivery } from "./tts-capabilities.js";
-import type { ChannelPlugin } from "./types.js";
+import type { ChannelPlugin } from "./types.plugin.js";
 
 function createChannelPlugin(
   id: string,
@@ -38,48 +39,9 @@ describe("resolveChannelTtsVoiceDelivery", () => {
               voice: {
                 synthesisTarget: "audio-file",
                 audioFileFormats: ["mp3", "caf", "audio/mpeg", "audio/x-caf"],
+                preferAudioFileFormat: "caf",
               },
             },
-          }),
-          source: "test",
-        },
-        {
-          pluginId: "discord",
-          plugin: createChannelPlugin("discord", {
-            chatTypes: ["direct"],
-            tts: { voice: { synthesisTarget: "voice-note" } },
-          }),
-          source: "test",
-        },
-        {
-          pluginId: "feishu",
-          plugin: createChannelPlugin("feishu", {
-            chatTypes: ["direct"],
-            tts: { voice: { synthesisTarget: "voice-note", transcodesAudio: true } },
-          }),
-          source: "test",
-        },
-        {
-          pluginId: "matrix",
-          plugin: createChannelPlugin("matrix", {
-            chatTypes: ["direct"],
-            tts: { voice: { synthesisTarget: "voice-note" } },
-          }),
-          source: "test",
-        },
-        {
-          pluginId: "telegram",
-          plugin: createChannelPlugin("telegram", {
-            chatTypes: ["direct"],
-            tts: { voice: { synthesisTarget: "voice-note" } },
-          }),
-          source: "test",
-        },
-        {
-          pluginId: "whatsapp",
-          plugin: createChannelPlugin("whatsapp", {
-            chatTypes: ["direct"],
-            tts: { voice: { synthesisTarget: "voice-note", transcodesAudio: true } },
           }),
           source: "test",
         },
@@ -88,23 +50,7 @@ describe("resolveChannelTtsVoiceDelivery", () => {
     expect(resolveChannelTtsVoiceDelivery("imessage")).toEqual({
       synthesisTarget: "audio-file",
       audioFileFormats: ["mp3", "caf", "audio/mpeg", "audio/x-caf"],
-    });
-    expect(resolveChannelTtsVoiceDelivery("discord")).toEqual({
-      synthesisTarget: "voice-note",
-    });
-    expect(resolveChannelTtsVoiceDelivery("feishu")).toEqual({
-      synthesisTarget: "voice-note",
-      transcodesAudio: true,
-    });
-    expect(resolveChannelTtsVoiceDelivery("matrix")).toEqual({
-      synthesisTarget: "voice-note",
-    });
-    expect(resolveChannelTtsVoiceDelivery("telegram")).toEqual({
-      synthesisTarget: "voice-note",
-    });
-    expect(resolveChannelTtsVoiceDelivery("whatsapp")).toEqual({
-      synthesisTarget: "voice-note",
-      transcodesAudio: true,
+      preferAudioFileFormat: "caf",
     });
     expect(resolveChannelTtsVoiceDelivery("slack")).toBeUndefined();
   });

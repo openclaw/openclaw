@@ -1,20 +1,23 @@
+// Loads fixture suites from disk for parametrized tests.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 
+/** Creates a temp fixture root with deterministic per-case subdirectories. */
 export function createFixtureSuite(rootPrefix: string) {
   let fixtureRoot = "";
   let fixtureCount = 0;
+  const fixtureRoots = new Set<string>();
 
   return {
     async setup(): Promise<void> {
-      fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), rootPrefix));
+      fixtureRoot = makeTempDir(fixtureRoots, rootPrefix);
     },
     async cleanup(): Promise<void> {
       if (!fixtureRoot) {
         return;
       }
-      await fs.rm(fixtureRoot, { recursive: true, force: true });
+      cleanupTempDirs(fixtureRoots);
       fixtureRoot = "";
     },
     async createCaseDir(prefix: string): Promise<string> {
@@ -22,7 +25,8 @@ export function createFixtureSuite(rootPrefix: string) {
         throw new Error("Fixture suite not initialized");
       }
       const dir = path.join(fixtureRoot, `${prefix}-${fixtureCount++}`);
-      await fs.mkdir(dir, { recursive: true });
+      await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+      await fs.chmod(dir, 0o700);
       return dir;
     },
   };

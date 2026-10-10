@@ -1,24 +1,22 @@
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { createProcessSupervisor } from "./supervisor.js";
 import type { ProcessSupervisor } from "./types.js";
 
-let singleton: ProcessSupervisor | null = null;
+const holder = resolveGlobalSingleton(
+  Symbol.for("openclaw.processSupervisorHolder"),
+  (): { current: ReturnType<typeof createProcessSupervisor> | null } => ({ current: null }),
+  async (value) => {
+    const supervisor = value.current;
+    await supervisor?.shutdown();
+    if (value.current === supervisor) {
+      value.current = null;
+    }
+  },
+);
 
+/** Return the process-wide supervisor used by runtime code that does not inject one. */
 export function getProcessSupervisor(): ProcessSupervisor {
-  if (singleton) {
-    return singleton;
-  }
-  singleton = createProcessSupervisor();
-  return singleton;
+  return (holder.current ??= createProcessSupervisor());
 }
 
-export { createProcessSupervisor } from "./supervisor.js";
-export type {
-  ManagedRun,
-  ProcessSupervisor,
-  RunExit,
-  RunRecord,
-  RunState,
-  SpawnInput,
-  SpawnMode,
-  TerminationReason,
-} from "./types.js";
+export type { ManagedRun, ProcessSupervisor } from "./types.js";

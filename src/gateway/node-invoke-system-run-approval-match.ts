@@ -1,3 +1,5 @@
+// Node system.run approval binding matcher.
+// Verifies command approvals against argv, cwd, session, agent, and env keys.
 import type { ExecApprovalRequestPayload } from "../infra/exec-approvals.js";
 import {
   buildSystemRunApprovalBinding,
@@ -13,23 +15,20 @@ type SystemRunApprovalBinding = {
   env?: unknown;
 };
 
-function requestMismatch(): SystemRunApprovalMatchResult {
-  return {
-    ok: false,
-    code: "APPROVAL_REQUEST_MISMATCH",
-    message: "approval id does not match request",
-  };
-}
-
 export { toSystemRunApprovalMismatchError } from "../infra/system-run-approval-binding.js";
 
+/** Evaluates whether a node system.run request matches the stored approval binding. */
 export function evaluateSystemRunApprovalMatch(params: {
   argv: string[];
   request: ExecApprovalRequestPayload;
   binding: SystemRunApprovalBinding;
 }): SystemRunApprovalMatchResult {
   if (params.request.host !== "node") {
-    return requestMismatch();
+    return {
+      ok: false,
+      code: "APPROVAL_REQUEST_MISMATCH",
+      message: "approval id does not match request",
+    };
   }
 
   const actualBinding = buildSystemRunApprovalBinding({

@@ -1,50 +1,44 @@
-import { normalizeAgentId } from "../../routing/session-key.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { truncateUtf16Safe } from "../../utils.js";
-import type { CronPayload } from "../types.js";
+import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
+/** Normalizes optional cron agent ids through the canonical session-key agent id rules. */
+export { normalizeOptionalAgentId } from "../../routing/session-key.js";
 
+/** Normalizes a required cron job name and throws the public validation error when absent. */
 export function normalizeRequiredName(raw: unknown) {
   if (typeof raw !== "string") {
-    throw new Error("cron job name is required");
+    throw new Error("automation name is required");
   }
   const name = raw.trim();
   if (!name) {
-    throw new Error("cron job name is required");
+    throw new Error("automation name is required");
   }
   return name;
 }
 
 function truncateText(input: string, maxLen: number) {
-  if (input.length <= maxLen) {
-    return input;
-  }
-  return `${truncateUtf16Safe(input, Math.max(0, maxLen - 1)).trimEnd()}…`;
+  return truncateWithMarker(input, maxLen, { marker: "…", reserve: 1, trimEnd: true });
 }
 
-export function normalizeOptionalAgentId(raw: unknown) {
-  const trimmed = normalizeOptionalString(raw);
-  if (!trimmed) {
-    return undefined;
-  }
-  return normalizeAgentId(trimmed);
-}
-
-export function inferLegacyName(job: {
+/** Infers a compact cron job name from payload text first, then schedule shape. */
+export function inferCronJobName(job: {
   schedule?: { kind?: unknown; everyMs?: unknown; expr?: unknown };
-  payload?: { kind?: unknown; text?: unknown; message?: unknown };
+  payload?: { kind?: unknown; text?: unknown; message?: unknown; argv?: unknown };
 }) {
   const text =
     job?.payload?.kind === "systemEvent" && typeof job.payload.text === "string"
       ? job.payload.text
       : job?.payload?.kind === "agentTurn" && typeof job.payload.message === "string"
         ? job.payload.message
-        : "";
+        : job?.payload?.kind === "command" && Array.isArray(job.payload.argv)
+          ? job.payload.argv.join(" ")
+          : "";
   const firstLine =
     text
       .split("\n")
       .map((l) => l.trim())
       .find(Boolean) ?? "";
   if (firstLine) {
+    // Names appear in CLI lists and alerts; keep them single-line and UTF-16
+    // safe so emoji/surrogate pairs are not split by truncation.
     return truncateText(firstLine, 60);
   }
 
@@ -58,17 +52,5 @@ export function inferLegacyName(job: {
   if (kind === "at") {
     return "One-shot";
   }
-  return "Cron job";
-}
-
-export function normalizePayloadToSystemText(payload: CronPayload) {
-  if (payload.kind === "systemEvent") {
-    const text = (payload as { text?: unknown }).text;
-    if (typeof text === "string") {
-      return text.trim();
-    }
-    const legacyMessage = (payload as { message?: unknown }).message;
-    return typeof legacyMessage === "string" ? legacyMessage.trim() : "";
-  }
-  return typeof payload.message === "string" ? payload.message.trim() : "";
+  return "Automation";
 }

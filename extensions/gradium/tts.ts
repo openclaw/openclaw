@@ -1,6 +1,6 @@
-import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/provider-http";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeGradiumBaseUrl } from "./shared.js";
+import { GRADIUM_API_HOSTNAME, normalizeGradiumBaseUrl } from "./shared.js";
+
+const DEFAULT_TTS_MAX_BYTES = 16 * 1024 * 1024;
 
 export async function gradiumTTS(params: {
   text: string;
@@ -9,11 +9,22 @@ export async function gradiumTTS(params: {
   voiceId: string;
   outputFormat: "wav" | "opus" | "ulaw_8000" | "pcm" | "pcm_24000" | "alaw_8000";
   timeoutMs: number;
+  maxBytes?: number;
 }): Promise<Buffer> {
-  const { text, apiKey, baseUrl, voiceId, outputFormat, timeoutMs } = params;
+  const {
+    text,
+    apiKey,
+    baseUrl,
+    voiceId,
+    outputFormat,
+    timeoutMs,
+    maxBytes = DEFAULT_TTS_MAX_BYTES,
+  } = params;
   const normalizedBaseUrl = normalizeGradiumBaseUrl(baseUrl);
   const url = `${normalizedBaseUrl}/api/post/speech/tts`;
-  const hostname = new URL(normalizedBaseUrl).hostname;
+  const { assertOkOrThrowProviderError, readProviderBinaryResponse } =
+    await import("openclaw/plugin-sdk/provider-http");
+  const { fetchWithSsrFGuard } = await import("openclaw/plugin-sdk/ssrf-runtime");
 
   const { response, release } = await fetchWithSsrFGuard({
     url,
@@ -32,14 +43,21 @@ export async function gradiumTTS(params: {
       }),
     },
     timeoutMs,
-    policy: { hostnameAllowlist: [hostname] },
+    requireHttps: true,
+    // Keep the transport boundary independent from config normalization so a
+    // future validator relaxation cannot silently widen credential egress.
+    policy: { hostnameAllowlist: [GRADIUM_API_HOSTNAME] },
     auditContext: "gradium.tts",
   });
 
   try {
     await assertOkOrThrowProviderError(response, "Gradium API error");
 
-    return Buffer.from(await response.arrayBuffer());
+    return await readProviderBinaryResponse(response, "Gradium API error", "audio", {
+      maxBytes,
+      onOverflow: ({ maxBytes: maxBytesLocal }) =>
+        new Error(`Gradium TTS audio response exceeds ${maxBytesLocal} bytes`),
+    });
   } finally {
     await release();
   }

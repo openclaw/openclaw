@@ -1,36 +1,41 @@
-import { AUTH_RATE_LIMIT_SCOPE_DEFAULT, normalizeRateLimitClientIp } from "./auth-rate-limit.js";
+import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
+import {
+  AUTH_RATE_LIMIT_SCOPE_DEFAULT,
+  isAuthRateLimitClientExempt,
+  normalizeRateLimitClientIp,
+  type AuthRateLimiter,
+} from "./auth-rate-limit.js";
 
-const pendingAttempts = new Map<string, Promise<void>>();
+const pendingAttempts = new KeyedAsyncQueue();
 
-function normalizeScope(scope: string | undefined): string {
-  return (scope ?? AUTH_RATE_LIMIT_SCOPE_DEFAULT).trim() || AUTH_RATE_LIMIT_SCOPE_DEFAULT;
-}
-
-function buildSerializationKey(ip: string | undefined, scope: string | undefined): string {
-  return `${normalizeScope(scope)}:${normalizeRateLimitClientIp(ip)}`;
-}
+/** Shared queue scope for auth attempts that evaluate shared and device credentials together. */
+const AUTH_CREDENTIAL_FALLBACK_SERIALIZATION_SCOPE = "credential-fallback";
 
 export async function withSerializedRateLimitAttempt<T>(params: {
   ip: string | undefined;
   scope: string | undefined;
   run: () => Promise<T>;
 }): Promise<T> {
-  const key = buildSerializationKey(params.ip, params.scope);
-  const previous = pendingAttempts.get(key) ?? Promise.resolve();
-  let releaseCurrent!: () => void;
-  const current = new Promise<void>((resolve) => {
-    releaseCurrent = resolve;
-  });
-  const tail = previous.catch(() => {}).then(() => current);
-  pendingAttempts.set(key, tail);
+  const scope =
+    (params.scope ?? AUTH_RATE_LIMIT_SCOPE_DEFAULT).trim() || AUTH_RATE_LIMIT_SCOPE_DEFAULT;
+  return await pendingAttempts.enqueue(
+    `${scope}:${normalizeRateLimitClientIp(params.ip)}`,
+    params.run,
+  );
+}
 
-  await previous.catch(() => {});
-  try {
+/** Serialize terminal credential fallbacks unless this limiter exempts the identity. */
+export async function withSerializedCredentialFallbackAttempt<T>(params: {
+  limiter: AuthRateLimiter;
+  ip: string | undefined;
+  run: () => Promise<T>;
+}): Promise<T> {
+  if (isAuthRateLimitClientExempt(params.limiter, params.ip)) {
     return await params.run();
-  } finally {
-    releaseCurrent();
-    if (pendingAttempts.get(key) === tail) {
-      pendingAttempts.delete(key);
-    }
   }
+  return await withSerializedRateLimitAttempt({
+    ip: params.ip,
+    scope: AUTH_CREDENTIAL_FALLBACK_SERIALIZATION_SCOPE,
+    run: params.run,
+  });
 }

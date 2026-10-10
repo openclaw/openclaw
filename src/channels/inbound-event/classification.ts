@@ -21,6 +21,8 @@ export function classifyChannelInboundEvent(
   if (params.conversation.kind !== "group" && params.conversation.kind !== "channel") {
     return "user_request";
   }
+  // Native commands, mentions, control commands, and aborts are explicit user intent even when
+  // unmentioned group traffic would otherwise be treated as passive room activity.
   if (
     params.wasMentioned === true ||
     params.hasControlCommand === true ||

@@ -1,6 +1,13 @@
+import { expectDefined } from "@openclaw/normalization-core";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeStringEntries,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
+import pLimit from "p-limit";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { isTailnetIPv4 } from "./tailnet.js";
+import { MAX_TCP_PORT, parseTcpPort } from "./tcp-port.js";
 import { resolveWideAreaDiscoveryDomain } from "./widearea-dns.js";
 
 export type GatewayBonjourBeacon = {
@@ -35,7 +42,13 @@ export function resolveGatewayDiscoveryEndpoint(
 ): GatewayDiscoveryResolvedEndpoint | null {
   const host = beacon.host?.trim();
   const port = beacon.port;
-  if (!host || typeof port !== "number" || !Number.isFinite(port) || port <= 0) {
+  if (
+    !host ||
+    typeof port !== "number" ||
+    !Number.isSafeInteger(port) ||
+    port <= 0 ||
+    port > MAX_TCP_PORT
+  ) {
     return null;
   }
   const gatewayTls = beacon.gatewayTls === true;
@@ -50,15 +63,7 @@ export function resolveGatewayDiscoveryEndpoint(
   };
 }
 
-export function pickResolvedGatewayHost(beacon: GatewayBonjourBeacon): string | null {
-  return resolveGatewayDiscoveryEndpoint(beacon)?.host ?? null;
-}
-
-export function pickResolvedGatewayPort(beacon: GatewayBonjourBeacon): number | null {
-  return resolveGatewayDiscoveryEndpoint(beacon)?.port ?? null;
-}
-
-export type GatewayBonjourDiscoverOpts = {
+type GatewayBonjourDiscoverOpts = {
   timeoutMs?: number;
   domains?: string[];
   wideAreaDomain?: string | null;
@@ -70,68 +75,32 @@ const DEFAULT_TIMEOUT_MS = 2000;
 const GATEWAY_SERVICE_TYPE = "_openclaw-gw._tcp";
 
 function decodeDnsSdEscapes(value: string): string {
-  let decoded = false;
-  const bytes: number[] = [];
-  let pending = "";
-
-  const flush = () => {
-    if (!pending) {
-      return;
+  const parts: Buffer[] = [];
+  let offset = 0;
+  for (const match of value.matchAll(/\\[0-9]{3}/g)) {
+    const byte = Number.parseInt(match[0].slice(1), 10);
+    if (byte > 255) {
+      continue;
     }
-    bytes.push(...Buffer.from(pending, "utf8"));
-    pending = "";
-  };
-
-  for (let i = 0; i < value.length; i += 1) {
-    const ch = value[i] ?? "";
-    if (ch === "\\" && i + 3 < value.length) {
-      const escaped = value.slice(i + 1, i + 4);
-      if (/^[0-9]{3}$/.test(escaped)) {
-        const byte = Number.parseInt(escaped, 10);
-        if (!Number.isFinite(byte) || byte < 0 || byte > 255) {
-          pending += ch;
-          continue;
-        }
-        flush();
-        bytes.push(byte);
-        decoded = true;
-        i += 3;
-        continue;
-      }
-    }
-    pending += ch;
+    parts.push(Buffer.from(value.slice(offset, match.index), "utf8"), Buffer.from([byte]));
+    offset = match.index + match[0].length;
   }
-
-  if (!decoded) {
+  if (offset === 0) {
     return value;
   }
-  flush();
-  return Buffer.from(bytes).toString("utf8");
-}
-
-function parseDigShortLines(stdout: string): string[] {
-  return stdout
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean);
+  parts.push(Buffer.from(value.slice(offset), "utf8"));
+  return Buffer.concat(parts).toString("utf8");
 }
 
 function parseDigTxt(stdout: string): string[] {
-  // dig +short TXT prints one or more lines of quoted strings:
-  // "k=v" "k2=v2"
-  const tokens: string[] = [];
-  for (const raw of stdout.split("\n")) {
-    const line = raw.trim();
-    if (!line) {
-      continue;
-    }
-    const matches = Array.from(line.matchAll(/"([^"]*)"/g), (m) => m[1] ?? "");
-    for (const m of matches) {
-      const unescaped = m.replaceAll("\\\\", "\\").replaceAll('\\"', '"').replaceAll("\\n", "\n");
-      tokens.push(unescaped);
-    }
-  }
-  return tokens;
+  // Each dig +short TXT line contains one or more quoted strings.
+  return stdout
+    .split("\n")
+    .flatMap((line) =>
+      Array.from(line.matchAll(/"([^"]*)"/g), (match) =>
+        (match[1] ?? "").replaceAll("\\\\", "\\").replaceAll('\\"', '"').replaceAll("\\n", "\n"),
+      ),
+    );
 }
 
 function parseDigSrv(stdout: string): { host: string; port: number } | null {
@@ -147,9 +116,9 @@ function parseDigSrv(stdout: string): { host: string; port: number } | null {
   if (parts.length < 4) {
     return null;
   }
-  const port = Number.parseInt(parts[2] ?? "", 10);
+  const port = parseTcpPort(parts[2]);
   const hostRaw = parts[3] ?? "";
-  if (!Number.isFinite(port) || port <= 0) {
+  if (port === null) {
     return null;
   }
   const host = hostRaw.replace(/\.$/, "");
@@ -191,15 +160,7 @@ function parseTailscaleStatusIPv4s(stdout: string): string[] {
     }
   }
 
-  return [...new Set(out)];
-}
-
-function parseIntOrNull(value: string | undefined): number | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) ? parsed : undefined;
+  return uniqueStrings(out);
 }
 
 function parseTxtTokens(tokens: string[]): Record<string, string> {
@@ -217,6 +178,23 @@ function parseTxtTokens(tokens: string[]): Record<string, string> {
     txt[key] = value;
   }
   return txt;
+}
+
+function applyBeaconTxt(beacon: GatewayBonjourBeacon, txt: Record<string, string>): void {
+  for (const field of ["tailnetDns", "cliPath", "role", "transport"] as const) {
+    if (txt[field]) {
+      beacon[field] = txt[field];
+    }
+  }
+  beacon.gatewayPort = parseTcpPort(txt.gatewayPort) ?? undefined;
+  beacon.sshPort = parseTcpPort(txt.sshPort) ?? undefined;
+  if (txt.gatewayTls) {
+    const raw = normalizeOptionalLowercaseString(txt.gatewayTls);
+    beacon.gatewayTls = raw === "1" || raw === "true" || raw === "yes";
+  }
+  if (txt.gatewayTlsSha256) {
+    beacon.gatewayTlsFingerprintSha256 = txt.gatewayTlsSha256;
+  }
 }
 
 function parseDnsSdBrowse(stdout: string): string[] {
@@ -237,7 +215,7 @@ function parseDnsSdBrowse(stdout: string): string[] {
   return Array.from(instances.values());
 }
 
-function parseDnsSdResolve(stdout: string, instanceName: string): GatewayBonjourBeacon | null {
+function parseDnsSdResolve(stdout: string, instanceName: string): GatewayBonjourBeacon {
   const decodedInstanceName = decodeDnsSdEscapes(instanceName);
   const beacon: GatewayBonjourBeacon = { instanceName: decodedInstanceName };
   let txt: Record<string, string> = {};
@@ -248,12 +226,12 @@ function parseDnsSdResolve(stdout: string, instanceName: string): GatewayBonjour
     }
 
     if (line.includes("can be reached at")) {
-      const match = line.match(/can be reached at\s+([^\s:]+):(\d+)/i);
+      const match = line.match(/can be reached at\s+([^\s:]+):([^\s]+)/i);
       if (match?.[1]) {
         beacon.host = match[1].replace(/\.$/, "");
       }
       if (match?.[2]) {
-        beacon.port = parseIntOrNull(match[2]);
+        beacon.port = parseTcpPort(match[2]) ?? undefined;
       }
       continue;
     }
@@ -271,27 +249,7 @@ function parseDnsSdResolve(stdout: string, instanceName: string): GatewayBonjour
   if (txt.lanHost) {
     beacon.lanHost = txt.lanHost;
   }
-  if (txt.tailnetDns) {
-    beacon.tailnetDns = txt.tailnetDns;
-  }
-  if (txt.cliPath) {
-    beacon.cliPath = txt.cliPath;
-  }
-  beacon.gatewayPort = parseIntOrNull(txt.gatewayPort);
-  beacon.sshPort = parseIntOrNull(txt.sshPort);
-  if (txt.gatewayTls) {
-    const raw = normalizeOptionalLowercaseString(txt.gatewayTls);
-    beacon.gatewayTls = raw === "1" || raw === "true" || raw === "yes";
-  }
-  if (txt.gatewayTlsSha256) {
-    beacon.gatewayTlsFingerprintSha256 = txt.gatewayTlsSha256;
-  }
-  if (txt.role) {
-    beacon.role = txt.role;
-  }
-  if (txt.transport) {
-    beacon.transport = txt.transport;
-  }
+  applyBeaconTxt(beacon, txt);
 
   if (!beacon.displayName) {
     beacon.displayName = decodedInstanceName;
@@ -313,10 +271,7 @@ async function discoverViaDnsSd(
     const resolved = await run(["dns-sd", "-L", instance, GATEWAY_SERVICE_TYPE, domain], {
       timeoutMs,
     });
-    const parsed = parseDnsSdResolve(resolved.stdout, instance);
-    if (parsed) {
-      results.push({ ...parsed, domain });
-    }
+    results.push({ ...parseDnsSdResolve(resolved.stdout, instance), domain });
   }
   return results;
 }
@@ -359,45 +314,31 @@ async function discoverWideAreaViaTailnetDns(
 
   const probeName = `${GATEWAY_SERVICE_TYPE}.${domain.replace(/\.$/, "")}`;
 
-  const concurrency = 6;
-  let nextIndex = 0;
   let nameserver: string | null = null;
   let ptrs: string[] = [];
 
-  const worker = async () => {
-    while (nameserver === null) {
-      const budget = remainingMs();
-      if (budget <= 0) {
-        return;
-      }
-      const i = nextIndex;
-      nextIndex += 1;
-      if (i >= ips.length) {
-        return;
-      }
-      const ip = ips[i] ?? "";
-      if (!ip) {
-        continue;
-      }
-      try {
-        const probe = await run(
-          ["dig", "+short", "+time=1", "+tries=1", `@${ip}`, probeName, "PTR"],
-          { timeoutMs: Math.max(1, Math.min(250, budget)) },
-        );
-        const lines = parseDigShortLines(probe.stdout);
-        if (lines.length === 0) {
-          continue;
-        }
+  await pLimit(6).map(ips, async (ip) => {
+    if (nameserver !== null) {
+      return;
+    }
+    const budget = remainingMs();
+    if (budget <= 0) {
+      return;
+    }
+    try {
+      const probe = await run(
+        ["dig", "+short", "+time=1", "+tries=1", `@${ip}`, probeName, "PTR"],
+        { timeoutMs: Math.max(1, Math.min(250, budget)) },
+      );
+      const lines = normalizeStringEntries(probe.stdout.split("\n"));
+      if (lines.length > 0) {
         nameserver = ip;
         ptrs = lines;
-        return;
-      } catch {
-        // ignore
       }
+    } catch {
+      // ignore
     }
-  };
-
-  await Promise.all(Array.from({ length: Math.min(concurrency, ips.length) }, () => worker()));
+  });
 
   if (!nameserver || ptrs.length === 0) {
     return [];
@@ -427,15 +368,16 @@ async function discoverWideAreaViaTailnetDns(
       continue;
     }
 
+    const beacon: GatewayBonjourBeacon = {
+      instanceName: instanceName || ptrName,
+      displayName: instanceName || ptrName,
+      domain,
+      host: srvParsed.host,
+      port: srvParsed.port,
+    };
+    results.push(beacon);
     const txtBudget = remainingMs();
     if (txtBudget <= 0) {
-      results.push({
-        instanceName: instanceName || ptrName,
-        displayName: instanceName || ptrName,
-        domain,
-        host: srvParsed.host,
-        port: srvParsed.port,
-      });
       continue;
     }
 
@@ -445,33 +387,11 @@ async function discoverWideAreaViaTailnetDns(
     const txtTokens = txt ? parseDigTxt(txt.stdout) : [];
     const txtMap = txtTokens.length > 0 ? parseTxtTokens(txtTokens) : {};
 
-    const beacon: GatewayBonjourBeacon = {
-      instanceName: instanceName || ptrName,
-      displayName: txtMap.displayName || instanceName || ptrName,
-      domain,
-      host: srvParsed.host,
-      port: srvParsed.port,
-      txt: Object.keys(txtMap).length ? txtMap : undefined,
-      gatewayPort: parseIntOrNull(txtMap.gatewayPort),
-      sshPort: parseIntOrNull(txtMap.sshPort),
-      tailnetDns: txtMap.tailnetDns || undefined,
-      cliPath: txtMap.cliPath || undefined,
-    };
-    if (txtMap.gatewayTls) {
-      const raw = normalizeOptionalLowercaseString(txtMap.gatewayTls);
-      beacon.gatewayTls = raw === "1" || raw === "true" || raw === "yes";
-    }
-    if (txtMap.gatewayTlsSha256) {
-      beacon.gatewayTlsFingerprintSha256 = txtMap.gatewayTlsSha256;
-    }
-    if (txtMap.role) {
-      beacon.role = txtMap.role;
-    }
-    if (txtMap.transport) {
-      beacon.transport = txtMap.transport;
-    }
-
-    results.push(beacon);
+    beacon.displayName = txtMap.displayName || beacon.displayName;
+    beacon.txt = Object.keys(txtMap).length ? txtMap : undefined;
+    beacon.tailnetDns = txtMap.tailnetDns || undefined;
+    beacon.cliPath = txtMap.cliPath || undefined;
+    applyBeaconTxt(beacon, txtMap);
   }
 
   return results;
@@ -518,13 +438,15 @@ function parseAvahiBrowse(stdout: string): GatewayBonjourBeacon[] {
     if (trimmed.startsWith("port =")) {
       const match = trimmed.match(/port\s*=\s*\[(\d+)\]/);
       if (match?.[1]) {
-        current.port = parseIntOrNull(match[1]);
+        current.port = parseTcpPort(match[1]) ?? undefined;
       }
       continue;
     }
 
     if (trimmed.startsWith("txt =")) {
-      const tokens = Array.from(trimmed.matchAll(/"([^"]*)"/g), (m) => m[1]);
+      const tokens = Array.from(trimmed.matchAll(/"([^"]*)"/g), (match) =>
+        expectDefined(match.at(1), "Bonjour TXT token"),
+      );
       const txt = parseTxtTokens(tokens);
       current.txt = Object.keys(txt).length ? txt : undefined;
       if (txt.displayName) {
@@ -533,27 +455,7 @@ function parseAvahiBrowse(stdout: string): GatewayBonjourBeacon[] {
       if (txt.lanHost) {
         current.lanHost = txt.lanHost;
       }
-      if (txt.tailnetDns) {
-        current.tailnetDns = txt.tailnetDns;
-      }
-      if (txt.cliPath) {
-        current.cliPath = txt.cliPath;
-      }
-      current.gatewayPort = parseIntOrNull(txt.gatewayPort);
-      current.sshPort = parseIntOrNull(txt.sshPort);
-      if (txt.gatewayTls) {
-        const raw = normalizeOptionalLowercaseString(txt.gatewayTls);
-        current.gatewayTls = raw === "1" || raw === "true" || raw === "yes";
-      }
-      if (txt.gatewayTlsSha256) {
-        current.gatewayTlsFingerprintSha256 = txt.gatewayTlsSha256;
-      }
-      if (txt.role) {
-        current.role = txt.role;
-      }
-      if (txt.transport) {
-        current.transport = txt.transport;
-      }
+      applyBeaconTxt(current, txt);
     }
   }
 
@@ -586,40 +488,31 @@ export async function discoverGatewayBeacons(
   const wideAreaDomain = resolveWideAreaDiscoveryDomain({ configDomain: opts.wideAreaDomain });
   const domainsRaw = Array.isArray(opts.domains) ? opts.domains : [];
   const defaultDomains = ["local.", ...(wideAreaDomain ? [wideAreaDomain] : [])];
-  const domains = (domainsRaw.length > 0 ? domainsRaw : defaultDomains)
-    .map((d) => d.trim())
-    .filter(Boolean)
-    .map((d) => (d.endsWith(".") ? d : `${d}.`));
+  const domains = normalizeStringEntries(domainsRaw.length > 0 ? domainsRaw : defaultDomains).map(
+    (d) => (d.endsWith(".") ? d : `${d}.`),
+  );
 
-  try {
-    if (platform === "darwin") {
-      const perDomain = await Promise.allSettled(
-        domains.map(async (domain) => await discoverViaDnsSd(domain, timeoutMs, run)),
-      );
-      const discovered = perDomain.flatMap((r) => (r.status === "fulfilled" ? r.value : []));
-
-      const wantsWideArea = wideAreaDomain ? domains.includes(wideAreaDomain) : false;
-      const hasWideArea = wideAreaDomain
-        ? discovered.some((b) => b.domain === wideAreaDomain)
-        : false;
-
-      if (wantsWideArea && !hasWideArea && wideAreaDomain) {
-        const fallback = await discoverWideAreaViaTailnetDns(wideAreaDomain, timeoutMs, run).catch(
-          () => [],
-        );
-        return [...discovered, ...fallback];
-      }
-
-      return discovered;
-    }
-    if (platform === "linux") {
-      const perDomain = await Promise.allSettled(
-        domains.map(async (domain) => await discoverViaAvahi(domain, timeoutMs, run)),
-      );
-      return perDomain.flatMap((r) => (r.status === "fulfilled" ? r.value : []));
-    }
-  } catch {
+  const discover =
+    platform === "darwin" ? discoverViaDnsSd : platform === "linux" ? discoverViaAvahi : undefined;
+  if (!discover) {
     return [];
   }
-  return [];
+  const perDomain = await Promise.allSettled(
+    domains.map((domain) => discover(domain, timeoutMs, run)),
+  );
+  const discovered = perDomain.flatMap((result) =>
+    result.status === "fulfilled" ? result.value : [],
+  );
+  if (
+    platform === "darwin" &&
+    wideAreaDomain &&
+    domains.includes(wideAreaDomain) &&
+    !discovered.some((beacon) => beacon.domain === wideAreaDomain)
+  ) {
+    const fallback = await discoverWideAreaViaTailnetDns(wideAreaDomain, timeoutMs, run).catch(
+      () => [],
+    );
+    return [...discovered, ...fallback];
+  }
+  return discovered;
 }

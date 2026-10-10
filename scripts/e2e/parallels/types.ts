@@ -1,3 +1,4 @@
+// Types script supports OpenClaw repository automation.
 export type Provider = "openai" | "anthropic" | "minimax";
 export type Mode = "fresh" | "upgrade" | "both";
 export type Platform = "macos" | "windows" | "linux";
@@ -14,7 +15,6 @@ export interface RunOptions {
   input?: string;
   timeoutMs?: number;
   check?: boolean;
-  quiet?: boolean;
 }
 
 export interface ProviderAuth {
@@ -23,6 +23,7 @@ export interface ProviderAuth {
   apiKeyEnv: string;
   apiKeyValue: string;
   modelId: string;
+  tokenProvider?: Provider;
 }
 
 export interface SnapshotInfo {
@@ -36,11 +37,25 @@ export interface PackageArtifact {
   version?: string;
   buildCommit?: string;
   buildCommitShort?: string;
+  registryPackages?: NpmRegistryPackage[];
 }
 
 export interface HostServer {
   hostIp: string;
   port: number;
+  registry?: Pick<NpmRegistryServer, "url" | "hostUrl">;
   urlFor(filePath: string): string;
+  stop(): Promise<void>;
+}
+
+export interface NpmRegistryPackage {
+  name: string;
+  version: string;
+  tarballPath: string;
+}
+
+export interface NpmRegistryServer {
+  hostUrl: string;
+  url: string;
   stop(): Promise<void>;
 }

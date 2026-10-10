@@ -1,3 +1,8 @@
+/**
+ * Outbound payload channel contract testkit.
+ *
+ * Installs reusable tests for text chunking and media payload delivery behavior.
+ */
 import { beforeEach, expect, it, type Mock } from "vitest";
 import type { ReplyPayload } from "../../../plugin-sdk/reply-payload.js";
 import { resetGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
@@ -50,16 +55,22 @@ export function installChannelOutboundPayloadContractSuite(params: {
     resetGlobalHookRunner();
   });
 
-  it("text-only delegates to sendText", async () => {
+  it.each([
+    { label: "plain text", text: "hello" },
+    {
+      label: "a bounded media failure receipt",
+      text: "⚠️ Media failed. Try sending a smaller supported file or a different format.",
+    },
+  ])("$label delegates to sendText", async ({ text }) => {
     const { run, sendMock, to } = await params.createHarness({
-      payload: { text: "hello" },
+      payload: { text },
     });
     const result = await run();
 
     expect(sendMock).toHaveBeenCalledTimes(1);
     const call = sendCall(sendMock, 0);
     expect(call[0]).toBe(to);
-    expect(call[1]).toBe("hello");
+    expect(call[1]).toBe(text);
     expect(call[2]).toBeDefined();
     expect(result.channel).toBe(params.channel);
   });

@@ -1,16 +1,108 @@
+// Memory Wiki tests cover import insights plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { listMemoryWikiImportInsights } from "./import-insights.js";
-import { renderWikiMarkdown } from "./markdown.js";
+import { compileMemoryWikiVault } from "./compile.js";
+import { loadMemoryWikiCompiledDashboards } from "./compiled-cache.js";
+import { projectMemoryWikiImportInsight } from "./import-insights.js";
+import { renderWikiMarkdown, scanWikiPageSummary } from "./markdown.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createVault } = createMemoryWikiTestHarness();
 
-describe("listMemoryWikiImportInsights", () => {
+function hasLoneSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) {
+        return true;
+      }
+      index += 1;
+      continue;
+    }
+    if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
+describe("projectMemoryWikiImportInsight", () => {
+  it.each([
+    {
+      name: "deduplicates before the four-signal cap without folding case",
+      preferences: ["same", "same", "Same", "third", "fourth", "fifth"],
+      corrections: ["You're right, use docs."],
+      expected: ["same", "Same", "third", "fourth"],
+      expectedCorrections: ["You're right, use docs."],
+    },
+    {
+      name: "deduplicates prefixed corrections against preferences in input order",
+      preferences: ["Correction detected: You're right, use docs.", "first"],
+      corrections: ["You're right, use docs.", "Bad assumption, reset."],
+      expected: [
+        "Correction detected: You're right, use docs.",
+        "first",
+        "Correction detected: Bad assumption, reset.",
+      ],
+      expectedCorrections: ["You're right, use docs.", "Bad assumption, reset."],
+    },
+    {
+      name: "does not backfill duplicate corrections beyond the upstream two-correction cap",
+      preferences: [],
+      corrections: ["You're right.", "You're right.", "Bad assumption."],
+      expected: ["Correction detected: You're right."],
+      expectedCorrections: ["You're right.", "You're right."],
+    },
+    {
+      name: "keeps empty input empty",
+      preferences: [],
+      corrections: [],
+      expected: [],
+      expectedCorrections: [],
+    },
+    {
+      name: "keeps withheld content out of all signal lists",
+      preferences: ["private preference"],
+      corrections: ["You're right, private correction."],
+      withheld: true,
+      expected: [],
+      expectedCorrections: [],
+    },
+  ])("$name", ({ preferences, corrections, withheld, expected, expectedCorrections }) => {
+    const scan = scanWikiPageSummary({
+      absolutePath: "/vault/sources/signals.md",
+      relativePath: "sources/signals.md",
+      raw: renderWikiMarkdown({
+        frontmatter: { pageType: "source", sourceType: "chatgpt-export", title: "Signals" },
+        body: [
+          "## Auto Digest",
+          ...(withheld ? ["- Auto digest withheld from durable-candidate generation."] : []),
+          "- Preference signals:",
+          ...preferences.map((value) => `  - ${value}`),
+          "## Active Branch Transcript",
+          ...corrections.flatMap((value) => ["### Assistant", value]),
+        ].join("\n"),
+      }),
+    });
+    if (scan.status !== "valid") {
+      throw new Error(`Expected valid source page, got ${scan.status}`);
+    }
+    expect(projectMemoryWikiImportInsight(scan.page, scan.parsed)).toMatchObject({
+      candidateSignals: expected,
+      correctionSignals: expectedCorrections,
+      preferenceSignals: withheld ? [] : preferences,
+      digestStatus: withheld ? "withheld" : "available",
+    });
+  });
+});
+
+describe("compiled import insights", () => {
   it("clusters ChatGPT import pages by topic and extracts digest fields", async () => {
     const { rootDir, config } = await createVault({
       prefix: "memory-wiki-import-insights-",
+      config: { render: { createBacklinks: false, createDashboards: false } },
       initialize: true,
     });
     await fs.mkdir(path.join(rootDir, "sources"), { recursive: true });
@@ -90,7 +182,13 @@ describe("listMemoryWikiImportInsights", () => {
       "utf8",
     );
 
-    const result = await listMemoryWikiImportInsights(config);
+    await compileMemoryWikiVault(config);
+    await Promise.all([
+      fs.unlink(path.join(rootDir, "sources", "chatgpt-travel.md")),
+      fs.unlink(path.join(rootDir, "sources", "chatgpt-health.md")),
+    ]);
+
+    const { importInsights: result } = await loadMemoryWikiCompiledDashboards(config);
 
     expect(result.sourceType).toBe("chatgpt");
     expect(result.totalItems).toBe(2);
@@ -137,5 +235,61 @@ describe("listMemoryWikiImportInsights", () => {
     expect(healthItem?.firstUserLine).toBeUndefined();
     expect(healthItem?.lastUserLine).toBeUndefined();
     expect(healthItem?.assistantOpener).toBeUndefined();
+  });
+
+  it("truncates import insight summaries without leaving lone surrogates", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-import-insights-surrogate-",
+      config: { render: { createBacklinks: false, createDashboards: false } },
+      initialize: true,
+    });
+    await fs.mkdir(path.join(rootDir, "sources"), { recursive: true });
+    const assistantOpener = `${"a".repeat(178)}😀${"b".repeat(20)}`;
+    await fs.writeFile(
+      path.join(rootDir, "sources", "chatgpt-emoji.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.chatgpt.emoji",
+          title: "ChatGPT Export: Emoji truncation",
+          sourceType: "chatgpt-export",
+          riskLevel: "low",
+          riskReasons: [],
+          labels: ["domain/work", "area/memory", "topic/memory"],
+          updatedAt: "2026-02-01T12:00:00.000Z",
+        },
+        body: [
+          "# ChatGPT Export: Emoji truncation",
+          "",
+          "## Auto Digest",
+          "- User messages: 1",
+          "- Assistant messages: 1",
+          "- First user line: summarize this",
+          "- Last user line: summarize this",
+          "- Preference signals:",
+          "  - prefers emoji-safe summaries",
+          "",
+          "## Active Branch Transcript",
+          "### User",
+          "",
+          "summarize this",
+          "",
+          "### Assistant",
+          "",
+          assistantOpener,
+          "",
+        ].join("\n"),
+      }),
+      "utf8",
+    );
+
+    await compileMemoryWikiVault(config);
+
+    const { importInsights: result } = await loadMemoryWikiCompiledDashboards(config);
+
+    const item = result.clusters[0]?.items[0];
+    expect(item?.summary).toBe(`${"a".repeat(178)}…`);
+    expect(hasLoneSurrogate(item?.summary ?? "")).toBe(false);
+    expect(item?.summary).not.toContain("�");
   });
 });

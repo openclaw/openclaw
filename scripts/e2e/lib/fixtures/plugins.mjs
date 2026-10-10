@@ -1,3 +1,4 @@
+// Plugin fixture writer commands for E2E scenarios.
 import path from "node:path";
 import { requireArg, write, writeJson } from "./common.mjs";
 
@@ -46,6 +47,38 @@ function writePlugin([dir, id, version, method, name]) {
   writePluginManifest(path.join(dir, "openclaw.plugin.json"), id);
 }
 
+function writePluginPack([dir, id, version, entryList]) {
+  for (const [value, label] of [
+    [dir, "dir"],
+    [id, "id"],
+    [version, "version"],
+  ]) {
+    requireArg(value, label);
+  }
+  const entries = entryList
+    ? entryList
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+    : ["one", "two"];
+  if (entries.length === 0) {
+    throw new Error("plugin-pack entries must not be empty");
+  }
+  writeJson(path.join(dir, "package.json"), {
+    name: `@openclaw/${id}`,
+    version,
+    openclaw: { extensions: entries.map((entry) => `./${entry}.js`) },
+  });
+  for (const entry of entries) {
+    const childId = `${id}/${entry}`;
+    write(
+      path.join(dir, `${entry}.js`),
+      `module.exports = { id: ${JSON.stringify(childId)}, name: ${JSON.stringify(childId)}, register(api) { api.registerGatewayMethod(${JSON.stringify(`${id}.${entry}`)}, async () => ({ version: ${JSON.stringify(version)} })); }, };\n`,
+    );
+  }
+  writePluginManifest(path.join(dir, "openclaw.plugin.json"), id);
+}
+
 function writePluginWithVendoredDependency([dir, id, version, method, name]) {
   writePlugin([dir, id, version, method, name]);
   const packageJsonPath = path.join(dir, "package.json");
@@ -62,7 +95,32 @@ function writePluginWithVendoredDependency([dir, id, version, method, name]) {
   writeFakeIsNumberPackage(path.join(dir, "node_modules", "is-number"));
 }
 
-function writePluginWithCli([dir, id, version, method, name, cliRoot, cliOutput]) {
+export function writeCliPlugin(
+  [dir, id, version, method, name, cliRoot, cliOutput],
+  gatewayReplyVersion = version,
+) {
+  if (!dir || !id || !version || !method || !name || !cliRoot || !cliOutput) {
+    throw new Error(
+      "usage: write-cli-plugin.mjs <dir> <id> <version> <method> <name> <cliRoot> <cliOutput>",
+    );
+  }
+
+  writeJson(path.join(dir, "package.json"), {
+    name: `@openclaw/${id}`,
+    version,
+    openclaw: { extensions: ["./index.js"] },
+  });
+  write(
+    path.join(dir, "index.js"),
+    `module.exports = { id: ${JSON.stringify(id)}, name: ${JSON.stringify(name)}, register(api) { api.registerGatewayMethod(${JSON.stringify(method)}, async () => ({ ok: true${gatewayReplyVersion === null ? "" : `, version: ${JSON.stringify(gatewayReplyVersion)}`} })); api.registerCli(({ program }) => { const root = program.command(${JSON.stringify(cliRoot)}).description(${JSON.stringify(`${name} fixture command`)}); root.command("ping").description("Print fixture ping output").action(() => { console.log(${JSON.stringify(cliOutput)}); }); }, { descriptors: [{ name: ${JSON.stringify(cliRoot)}, description: ${JSON.stringify(`${name} fixture command`)}, hasSubcommands: true }] }); }, };\n`,
+  );
+  writePluginManifest(path.join(dir, "openclaw.plugin.json"), id);
+}
+
+function writePluginWithCli(
+  [dir, id, version, method, name, cliRoot, cliOutput],
+  isNumberDependency = "file:./deps/is-number",
+) {
   for (const [value, label] of [
     [dir, "dir"],
     [id, "id"],
@@ -77,43 +135,12 @@ function writePluginWithCli([dir, id, version, method, name, cliRoot, cliOutput]
   writeJson(path.join(dir, "package.json"), {
     name: `@openclaw/${id}`,
     version,
-    dependencies: { "is-number": "file:./deps/is-number" },
+    dependencies: { "is-number": isNumberDependency },
     openclaw: { extensions: ["./index.js"] },
   });
-  writeFakeIsNumberPackage(path.join(dir, "deps", "is-number"));
-  write(
-    path.join(dir, "index.js"),
-    `const isNumber = require("is-number");\nmodule.exports = { id: ${JSON.stringify(id)}, name: ${JSON.stringify(name)}, register(api) { api.registerGatewayMethod(${JSON.stringify(method)}, async () => ({ ok: isNumber(42) })); api.registerCli(({ program }) => { const root = program.command(${JSON.stringify(cliRoot)}).description(${JSON.stringify(`${name} fixture command`)}); root.command("ping").description("Print fixture ping output").action(() => { console.log(${JSON.stringify(cliOutput)}); }); }, { descriptors: [{ name: ${JSON.stringify(cliRoot)}, description: ${JSON.stringify(`${name} fixture command`)}, hasSubcommands: true }] }); }, };\n`,
-  );
-  writePluginManifest(path.join(dir, "openclaw.plugin.json"), id);
-}
-
-function writePluginWithCliRegistryDependency([
-  dir,
-  id,
-  version,
-  method,
-  name,
-  cliRoot,
-  cliOutput,
-]) {
-  for (const [value, label] of [
-    [dir, "dir"],
-    [id, "id"],
-    [version, "version"],
-    [method, "method"],
-    [name, "name"],
-    [cliRoot, "cliRoot"],
-    [cliOutput, "cliOutput"],
-  ]) {
-    requireArg(value, label);
+  if (isNumberDependency === "file:./deps/is-number") {
+    writeFakeIsNumberPackage(path.join(dir, "deps", "is-number"));
   }
-  writeJson(path.join(dir, "package.json"), {
-    name: `@openclaw/${id}`,
-    version,
-    dependencies: { "is-number": "7.0.0" },
-    openclaw: { extensions: ["./index.js"] },
-  });
   write(
     path.join(dir, "index.js"),
     `const isNumber = require("is-number");\nmodule.exports = { id: ${JSON.stringify(id)}, name: ${JSON.stringify(name)}, register(api) { api.registerGatewayMethod(${JSON.stringify(method)}, async () => ({ ok: isNumber(42) })); api.registerCli(({ program }) => { const root = program.command(${JSON.stringify(cliRoot)}).description(${JSON.stringify(`${name} fixture command`)}); root.command("ping").description("Print fixture ping output").action(() => { console.log(${JSON.stringify(cliOutput)}); }); }, { descriptors: [{ name: ${JSON.stringify(cliRoot)}, description: ${JSON.stringify(`${name} fixture command`)}, hasSubcommands: true }] }); }, };\n`,
@@ -121,8 +148,50 @@ function writePluginWithCliRegistryDependency([
   writePluginManifest(path.join(dir, "openclaw.plugin.json"), id);
 }
 
-function writeClaudeBundle([root]) {
-  root = requireArg(root, "root");
+function writePluginWithCliRegistryDependency(args) {
+  writePluginWithCli(args, "7.0.0");
+}
+
+function writeBravePlugin() {
+  const root = process.env.FIXTURE_PACKAGE_DIR;
+  const version = process.env.FIXTURE_PACKAGE_VERSION;
+  if (!version) {
+    throw new Error("missing fixture package version");
+  }
+  writeJson(path.join(root, "package.json"), {
+    name: "@openclaw/brave-plugin",
+    version,
+    openclaw: { extensions: ["./index.js"] },
+  });
+  writeJson(path.join(root, "openclaw.plugin.json"), {
+    id: "brave",
+    activation: { onStartup: false },
+    setup: { providers: [{ id: "brave", envVars: ["BRAVE_API_KEY"] }] },
+    contracts: { webSearchProviders: ["brave"] },
+    configSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        webSearch: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            apiKey: { type: ["string", "object"] },
+            mode: { type: "string", enum: ["web", "llm-context"] },
+            baseUrl: { type: ["string", "object"] },
+          },
+        },
+      },
+    },
+  });
+  write(
+    path.join(root, "index.js"),
+    `module.exports = { id: "brave", name: "Brave Fixture", register() {} };\n`,
+  );
+}
+
+function writeClaudeBundle(args) {
+  const root = requireArg(args[0], "root");
   writeJson(path.join(root, ".claude-plugin", "plugin.json"), { name: "claude-bundle-e2e" });
   write(
     path.join(root, "commands", "office-hours.md"),
@@ -130,8 +199,8 @@ function writeClaudeBundle([root]) {
   );
 }
 
-function writePluginMarketplace([root]) {
-  root = requireArg(root, "root");
+function writePluginMarketplace(args) {
+  const root = requireArg(args[0], "root");
   writeJson(path.join(root, ".claude-plugin", "marketplace.json"), {
     name: "Fixture Marketplace",
     version: "1.0.0",
@@ -159,14 +228,14 @@ function writePluginMarketplace([root]) {
 }
 
 export const pluginCommands = {
+  "brave-plugin": writeBravePlugin,
   "plugin-demo": writePluginDemo,
   plugin: writePlugin,
+  "plugin-pack": writePluginPack,
   "plugin-vendored-dep": writePluginWithVendoredDependency,
   "plugin-cli": writePluginWithCli,
   "plugin-cli-registry-dep": writePluginWithCliRegistryDependency,
   "fake-is-number-package": ([dir]) => writeFakeIsNumberPackage(requireArg(dir, "dir")),
-  "plugin-manifest": ([file, id]) =>
-    writePluginManifest(requireArg(file, "file"), requireArg(id, "id")),
   "claude-bundle": writeClaudeBundle,
   marketplace: writePluginMarketplace,
 };

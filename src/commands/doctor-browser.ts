@@ -1,29 +1,42 @@
+import { note } from "../../packages/terminal-core/src/note.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadBundledPluginPublicSurfaceModuleSync } from "../plugin-sdk/facade-loader.js";
-import { note } from "../terminal/note.js";
+import { loadBundledPluginPublicSurfaceModuleSyncCore } from "../plugin-sdk/facade-loader.js";
 
 type BrowserDoctorDeps = {
-  platform?: NodeJS.Platform;
   noteFn?: typeof note;
-  env?: NodeJS.ProcessEnv;
-  getUid?: () => number;
-  resolveManagedExecutable?: (
-    resolved: unknown,
-    platform: NodeJS.Platform,
-  ) => { path: string } | null;
-  resolveChromeExecutable?: (platform: NodeJS.Platform) => { path: string } | null;
-  readVersion?: (executablePath: string) => string | null;
+};
+
+type BrowserNativeHostRepairResult = {
+  status?: "repaired" | "skipped" | "failed";
+  reason?: string;
+  changes: string[];
+  warnings: string[];
 };
 
 type BrowserDoctorSurface = {
   noteChromeMcpBrowserReadiness: (cfg: OpenClawConfig, deps?: BrowserDoctorDeps) => Promise<void>;
+  maybeRepairOwnedChromeExtensionNativeHosts?: () => Promise<BrowserNativeHostRepairResult>;
 };
 
 function loadBrowserDoctorSurface(): BrowserDoctorSurface {
-  return loadBundledPluginPublicSurfaceModuleSync<BrowserDoctorSurface>({
+  return loadBundledPluginPublicSurfaceModuleSyncCore<BrowserDoctorSurface>({
     dirName: "browser",
     artifactBasename: "browser-doctor.js",
   });
+}
+
+export async function maybeRepairOwnedChromeExtensionNativeHosts(): Promise<BrowserNativeHostRepairResult> {
+  try {
+    const repair = loadBrowserDoctorSurface().maybeRepairOwnedChromeExtensionNativeHosts;
+    return repair ? await repair() : { changes: [], warnings: [] };
+  } catch (error) {
+    return {
+      changes: [],
+      warnings: [
+        `Browser extension native-host repair is unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      ],
+    };
+  }
 }
 
 export async function noteChromeMcpBrowserReadiness(cfg: OpenClawConfig, deps?: BrowserDoctorDeps) {

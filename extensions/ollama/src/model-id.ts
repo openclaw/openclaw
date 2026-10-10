@@ -1,20 +1,18 @@
-import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-metadata";
+import { normalizeUniqueTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const OLLAMA_PROVIDER_ID = "ollama";
-
-function uniqueModelPrefixCandidates(providerId?: string): string[] {
-  const candidates = [providerId, normalizeProviderId(providerId ?? ""), OLLAMA_PROVIDER_ID]
-    .map((candidate) => candidate?.trim())
-    .filter((candidate): candidate is string => Boolean(candidate));
-  return [...new Set(candidates)];
-}
 
 export function normalizeOllamaWireModelId(modelId: string, providerId?: string): string {
   const trimmed = modelId.trim();
   if (!trimmed) {
     return trimmed;
   }
-  for (const candidate of uniqueModelPrefixCandidates(providerId)) {
+  for (const candidate of normalizeUniqueTrimmedStringList([
+    providerId,
+    normalizeProviderId(providerId ?? ""),
+    OLLAMA_PROVIDER_ID,
+  ])) {
     const prefix = `${candidate}/`;
     if (trimmed.startsWith(prefix)) {
       return trimmed.slice(prefix.length);

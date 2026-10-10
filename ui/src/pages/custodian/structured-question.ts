@@ -1,0 +1,56 @@
+import type { SystemAgentChatQuestion } from "@openclaw/gateway-protocol";
+import { normalizeNullableString as nonEmptyString } from "@openclaw/normalization-core/string-coerce";
+import type { SchemaContract } from "../../../../packages/gateway-protocol/src/schema-contract.js";
+
+export type CustodianStructuredQuestion = SchemaContract<
+  Omit<SystemAgentChatQuestion, "isOther"> & { isOther: boolean }
+>;
+
+/**
+ * Sanitize the typed `question` field from `openclaw.chat`. The gateway owns
+ * the schema, but this state renders buttons that send messages, so the page
+ * still enforces the card contract locally: 2-4 unique options, at most one
+ * recommended. Anything else degrades to the prose reply.
+ */
+export function parseCustodianQuestion(
+  value: SystemAgentChatQuestion | undefined,
+): CustodianStructuredQuestion | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const [id, header, question] = [value.id, value.header, value.question].map(nonEmptyString);
+  if (!id || !header || !question || !Array.isArray(value.options)) {
+    return null;
+  }
+  if (value.options.length < 2 || value.options.length > 4) {
+    return null;
+  }
+  const options: CustodianStructuredQuestion["options"] = [];
+  for (const option of value.options) {
+    const label = nonEmptyString(option?.label);
+    if (!label) {
+      return null;
+    }
+    const [description, reply] = [option.description, option.reply].map(nonEmptyString);
+    options.push({
+      label,
+      ...(description ? { description } : {}),
+      ...(option.recommended === true ? { recommended: true } : {}),
+      ...(reply ? { reply } : {}),
+    });
+  }
+  if (new Set(options.map((option) => option.label.toLocaleLowerCase())).size !== options.length) {
+    return null;
+  }
+  if (options.filter((option) => option.recommended).length > 1) {
+    return null;
+  }
+  return {
+    id,
+    header,
+    question,
+    options,
+    isOther: value.isOther === true,
+    ...(value.skipAction === "exit" ? { skipAction: "exit" as const } : {}),
+  };
+}

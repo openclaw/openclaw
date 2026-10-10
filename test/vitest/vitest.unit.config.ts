@@ -1,8 +1,9 @@
+// Vitest unit config wires the unit test shard.
 import fs from "node:fs";
 import path from "node:path";
 import { defineConfig } from "vitest/config";
 import { loadPatternListFromEnv, narrowIncludePatternsForCli } from "./vitest.pattern-file.ts";
-import { resolveVitestIsolation } from "./vitest.scoped-config.ts";
+import { shouldPassWithNoTestsForCliIncludes } from "./vitest.scoped-config.ts";
 import {
   nonIsolatedRunnerPath,
   repoRoot,
@@ -12,19 +13,13 @@ import {
 import { getUnitFastTestFiles } from "./vitest.unit-fast-paths.mjs";
 import {
   isBundledPluginDependentUnitTestFile,
-  isUnitConfigTestFile,
+  filterUnitConfigTestFiles,
   unitTestAdditionalExcludePatterns,
   unitTestIncludePatterns,
 } from "./vitest.unit-paths.mjs";
 
 const sharedTest = sharedVitestConfig.test ?? {};
 const exclude = sharedTest.exclude ?? [];
-
-export function loadIncludePatternsFromEnv(
-  env: Record<string, string | undefined> = process.env,
-): string[] | null {
-  return loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
-}
 
 export function loadExtraExcludePatternsFromEnv(
   env: Record<string, string | undefined> = process.env,
@@ -71,8 +66,8 @@ export function resolveDefaultUnitCoverageIncludePatterns(
   const fastTestFiles = new Set(unitFastTestFiles);
   const sourceFiles = new Set<string>();
   for (const root of defaultUnitCoverageRoots) {
-    for (const testFile of collectTestFiles(resolveRepoRootPath(root))) {
-      if (!isUnitConfigTestFile(testFile) || fastTestFiles.has(testFile)) {
+    for (const testFile of filterUnitConfigTestFiles(collectTestFiles(resolveRepoRootPath(root)))) {
+      if (fastTestFiles.has(testFile)) {
         continue;
       }
       const sourceFile = resolveSiblingSourceFile(testFile);
@@ -108,12 +103,11 @@ export function createUnitVitestConfigWithOptions(
     passWithNoTests?: boolean;
   } = {},
 ) {
-  const isolate = resolveVitestIsolation(env);
   const argv = options.argv ?? process.argv;
-  const unitFastTestFiles = getUnitFastTestFiles();
-  const envIncludePatterns = loadIncludePatternsFromEnv(env);
+  const envIncludePatterns = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
   const defaultIncludePatterns = options.includePatterns ?? unitTestIncludePatterns;
   const cliIncludePatterns = narrowIncludePatternsForCli(defaultIncludePatterns, argv);
+  const unitFastTestFiles = getUnitFastTestFiles(envIncludePatterns ?? cliIncludePatterns);
   const coverageIncludePatterns =
     isCoverageEnabledFromArgv(argv) &&
     options.includePatterns === undefined &&
@@ -131,13 +125,22 @@ export function createUnitVitestConfigWithOptions(
     return ![...protectedIncludeFiles].some((file) => pattern === file || pattern.endsWith("/**"));
   });
   const extraExcludePatterns = options.extraExcludePatterns ?? [];
+  const resolvedExcludePatterns = [
+    ...new Set([
+      ...exclude,
+      ...baseExcludePatterns,
+      ...unitFastTestFiles,
+      ...extraExcludePatterns,
+      ...loadExtraExcludePatternsFromEnv(env),
+    ]),
+  ];
   return defineConfig({
     ...sharedVitestConfig,
     test: {
       ...sharedTest,
       name: options.name ?? "unit",
-      isolate,
-      ...(isolate ? { runner: undefined } : { runner: nonIsolatedRunnerPath }),
+      isolate: false,
+      runner: nonIsolatedRunnerPath,
       setupFiles: [
         ...new Set(
           [...(sharedTest.setupFiles ?? []), "test/setup-openclaw-runtime.ts"].map(
@@ -146,15 +149,7 @@ export function createUnitVitestConfigWithOptions(
         ),
       ],
       include: envIncludePatterns ?? cliIncludePatterns ?? defaultIncludePatterns,
-      exclude: [
-        ...new Set([
-          ...exclude,
-          ...baseExcludePatterns,
-          ...unitFastTestFiles,
-          ...extraExcludePatterns,
-          ...loadExtraExcludePatternsFromEnv(env),
-        ]),
-      ],
+      exclude: resolvedExcludePatterns,
       coverage: {
         ...sharedTest.coverage,
         ...(coverageIncludePatterns !== null && coverageIncludePatterns.length > 0
@@ -168,7 +163,10 @@ export function createUnitVitestConfigWithOptions(
           ]),
         ],
       },
-      ...(options.passWithNoTests || cliIncludePatterns !== null ? { passWithNoTests: true } : {}),
+      ...(options.passWithNoTests ||
+      shouldPassWithNoTestsForCliIncludes(cliIncludePatterns, resolvedExcludePatterns)
+        ? { passWithNoTests: true }
+        : {}),
     },
   });
 }

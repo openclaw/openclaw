@@ -1,0 +1,333 @@
+import { spawn } from "node:child_process";
+import { Readable, type Writable } from "node:stream";
+import { formatErrorMessage } from "../infra/errors.js";
+import type { RuntimeLogger } from "../plugins/runtime/types.js";
+import { onDecodedOutput } from "../process/decoded-output.js";
+import { createSpeechThresholdGate, readPcm16AudioStats } from "../talk/audio-energy.js";
+import { truncateUtf8Suffix } from "../utils/utf8-truncate.js";
+import {
+  terminateMeetingBridgeProcess,
+  writeMeetingOutputChunk,
+  type MeetingOutputWriteWaiter,
+  type MeetingBridgeProcess,
+} from "./bridge-process.js";
+import { splitCommandArgv } from "./command-argv.js";
+import { createMeetingOutputLoopbackVerifier } from "./output-loopback-verifier.js";
+import type { MeetingRealtimeAudioFormat } from "./realtime-audio-format.js";
+import type { MeetingRealtimeAudioTransport } from "./realtime-audio-transport.js";
+
+const LOCAL_BRIDGE_TERMINATION_GRACE_MS = 1_000;
+
+type BridgeProcess = MeetingBridgeProcess & {
+  pid?: number;
+  killed?: boolean;
+  stdin?: Writable | null;
+  stdout?: {
+    on(event: "data", listener: (chunk: Buffer | string) => void): unknown;
+    on(event: "error", listener: (error: Error) => void): unknown;
+  } | null;
+  stderr?: {
+    on(event: "data", listener: (chunk: Buffer | string) => void): unknown;
+    on(event: "error", listener: (error: Error) => void): unknown;
+  } | null;
+  on(
+    event: "exit",
+    listener: (code: number | null, signal: NodeJS.Signals | null) => void,
+  ): unknown;
+  on(event: "error", listener: (error: Error) => void): unknown;
+};
+
+type MeetingRealtimeAudioSpawn = (
+  command: string,
+  args: string[],
+  options: { stdio: ["pipe" | "ignore", "pipe" | "ignore", "pipe" | "ignore"] },
+) => BridgeProcess;
+
+const STDERR_LINE_TRUNCATED_PREFIX = "[stderr line truncated] ";
+const MAX_STDERR_CHUNK_BYTES = 8 * 1024;
+
+function attachStderrLineLogger(params: {
+  stderr: BridgeProcess["stderr"];
+  logger: RuntimeLogger;
+  prefix: string;
+}): void {
+  if (!params.stderr) {
+    return;
+  }
+  if (!params.logger.debug) {
+    params.stderr.on("data", () => {});
+    return;
+  }
+  const debug = (message: string) => params.logger.debug?.(message);
+  if (!(params.stderr instanceof Readable)) {
+    // Injected adapters do not promise stream completion; retain their
+    // per-chunk behavior so diagnostics after child exit stay visible.
+    params.stderr.on("data", (chunk) => {
+      debug(`${params.prefix}: ${String(chunk).trim()}`);
+    });
+    return;
+  }
+  onDecodedOutput(params.stderr, (chunk) => {
+    const trimmed = chunk.trim();
+    if (!trimmed) {
+      return;
+    }
+    const truncated = Buffer.byteLength(trimmed, "utf8") > MAX_STDERR_CHUNK_BYTES;
+    const value = truncated ? truncateUtf8Suffix(trimmed, MAX_STDERR_CHUNK_BYTES) : trimmed;
+    debug(`${params.prefix}: ${truncated ? STDERR_LINE_TRUNCATED_PREFIX : ""}${value}`);
+  });
+}
+
+export function createLocalMeetingRealtimeAudioTransport(params: {
+  inputCommand: string[];
+  outputCommand: string[];
+  bargeInInputCommand?: string[];
+  bargeInRmsThreshold: number;
+  bargeInPeakThreshold: number;
+  bargeInCooldownMs: number;
+  logger: RuntimeLogger;
+  logScope: string;
+  audioFormat?: MeetingRealtimeAudioFormat;
+  spawn?: MeetingRealtimeAudioSpawn;
+}): MeetingRealtimeAudioTransport {
+  const input = splitCommandArgv(params.inputCommand, "audio bridge command");
+  const output = splitCommandArgv(params.outputCommand, "audio bridge command");
+  const spawnFn: MeetingRealtimeAudioSpawn =
+    params.spawn ?? ((command, args, options) => spawn(command, args, options));
+  const spawnOutputProcess = () =>
+    spawnFn(output.command, output.args, { stdio: ["pipe", "ignore", "pipe"] });
+  let outputProcess = spawnOutputProcess();
+  let inputProcess: BridgeProcess;
+  try {
+    inputProcess = spawnFn(input.command, input.args, {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (error) {
+    // Output spawn errors can arrive after input construction has already failed.
+    outputProcess.on("error", () => {});
+    void terminateMeetingBridgeProcess(outputProcess, {
+      graceMs: LOCAL_BRIDGE_TERMINATION_GRACE_MS,
+    });
+    throw error;
+  }
+  let bargeInInputProcess: BridgeProcess | undefined;
+  let stopped = false;
+  let inputStarted = false;
+  let fatalSignaled = false;
+  let fatalHandler: (() => void) | undefined;
+  let stopPromise: Promise<void> | undefined;
+  const retiredOutputStops = new Set<Promise<void>>();
+  const outputWriteWaiters = new Set<MeetingOutputWriteWaiter<BridgeProcess>>();
+  const outputLoopbackVerifier = createMeetingOutputLoopbackVerifier({
+    audioFormat: params.audioFormat ?? "pcm16-24khz",
+  });
+
+  const signalFatal = () => {
+    if (!fatalSignaled) {
+      fatalSignaled = true;
+      void stop().catch((error: unknown) => {
+        params.logger.warn(
+          `${params.logScope} failed audio transport cleanup: ${formatErrorMessage(error)}`,
+        );
+      });
+      fatalHandler?.();
+    }
+  };
+  const fail = (label: string) => (error: Error) => {
+    params.logger.warn(`${params.logScope} ${label} failed: ${formatErrorMessage(error)}`);
+    signalFatal();
+  };
+  const attachAudioProcessHandlers = (proc: BridgeProcess, role: "input" | "output") => {
+    const isCurrent = () => role === "input" || proc === outputProcess;
+    const onError =
+      (suffix = "") =>
+      (error: Error) => {
+        if (isCurrent()) {
+          fail(`audio ${role} command${suffix}`)(error);
+        }
+      };
+    proc.on("error", onError());
+    if (role === "output") {
+      proc.stdin?.on?.("error", onError());
+    } else {
+      proc.stdout?.on("error", onError(" stdout"));
+    }
+    proc.stderr?.on("error", onError(" stderr"));
+    proc.on("exit", (code, signal) => {
+      if (isCurrent() && !stopped) {
+        params.logger.warn(
+          `${params.logScope} audio ${role} command exited (${code ?? signal ?? "done"})`,
+        );
+        signalFatal();
+      }
+    });
+    attachStderrLineLogger({
+      stderr: proc.stderr,
+      logger: params.logger,
+      prefix: `${params.logScope} audio ${role}`,
+    });
+  };
+  const releaseOutputWriteWaiters = (proc?: BridgeProcess) => {
+    for (const waiter of outputWriteWaiters) {
+      if (!proc || waiter.process === proc) {
+        waiter.release();
+      }
+    }
+  };
+  const stop = () => {
+    stopPromise ??= (async () => {
+      stopped = true;
+      outputLoopbackVerifier.cancelOutput();
+      releaseOutputWriteWaiters();
+      await Promise.all([
+        terminateMeetingBridgeProcess(inputProcess, {
+          graceMs: LOCAL_BRIDGE_TERMINATION_GRACE_MS,
+        }),
+        terminateMeetingBridgeProcess(outputProcess, {
+          graceMs: LOCAL_BRIDGE_TERMINATION_GRACE_MS,
+        }),
+        terminateMeetingBridgeProcess(bargeInInputProcess, {
+          graceMs: LOCAL_BRIDGE_TERMINATION_GRACE_MS,
+        }),
+        ...retiredOutputStops,
+      ]);
+    })();
+    return stopPromise;
+  };
+  attachAudioProcessHandlers(outputProcess, "output");
+  attachAudioProcessHandlers(inputProcess, "input");
+
+  const transport: MeetingRealtimeAudioTransport = {
+    onFatal: (handler) => {
+      fatalHandler = handler;
+      if (fatalSignaled) {
+        handler();
+      }
+    },
+    startInput: (onAudio) => {
+      if (inputStarted) {
+        throw new Error("audio input transport already started");
+      }
+      inputStarted = true;
+      inputProcess.stdout?.on("data", (chunk) => {
+        if (!stopped) {
+          const audio = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          outputLoopbackVerifier.recordInput(audio);
+          onAudio(audio);
+        }
+      });
+    },
+    beginOutput: () => outputLoopbackVerifier.beginOutput(),
+    stop,
+    writeOutput: async (audio) => {
+      if (stopped) {
+        return;
+      }
+      const proc = outputProcess;
+      const stdin = proc.stdin;
+      if (!stdin) {
+        return;
+      }
+      outputLoopbackVerifier.recordOutput(audio);
+      try {
+        await writeMeetingOutputChunk(outputWriteWaiters, proc, stdin, audio);
+      } catch (error) {
+        if (stopped || proc !== outputProcess || fatalSignaled) {
+          return;
+        }
+        fail("audio output command")(
+          error instanceof Error ? error : new Error(formatErrorMessage(error)),
+        );
+      }
+    },
+    clearOutput: async () => {
+      if (stopped) {
+        return;
+      }
+      outputLoopbackVerifier.cancelOutput();
+      const previousOutput = outputProcess;
+      outputProcess = spawnOutputProcess();
+      attachAudioProcessHandlers(outputProcess, "output");
+      releaseOutputWriteWaiters(previousOutput);
+      params.logger.debug?.(
+        `${params.logScope} cleared realtime audio output buffer by restarting playback command`,
+      );
+      const retiredOutputStop = terminateMeetingBridgeProcess(previousOutput, {
+        graceMs: LOCAL_BRIDGE_TERMINATION_GRACE_MS,
+        initialSignal: "SIGKILL",
+      });
+      retiredOutputStops.add(retiredOutputStop);
+      void retiredOutputStop.finally(() => {
+        retiredOutputStops.delete(retiredOutputStop);
+      });
+    },
+    dispose: async () => {
+      await transport.stop();
+    },
+    getHealth: () => outputLoopbackVerifier.getHealth(),
+  };
+
+  if (!params.bargeInInputCommand) {
+    return transport;
+  }
+
+  return {
+    ...transport,
+    startBargeInMonitor: (onBargeIn) => {
+      if (bargeInInputProcess || stopped) {
+        return;
+      }
+      const command = splitCommandArgv(params.bargeInInputCommand ?? [], "audio bridge command");
+      const bargeInGate = createSpeechThresholdGate({
+        rmsThreshold: params.bargeInRmsThreshold,
+        peakThreshold: params.bargeInPeakThreshold,
+        cooldownMs: params.bargeInCooldownMs,
+      });
+      bargeInInputProcess = spawnFn(command.command, command.args, {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      bargeInInputProcess.stdout?.on("data", (chunk) => {
+        const audio = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        if (stopped) {
+          return;
+        }
+        const stats = readPcm16AudioStats(audio);
+        if (!bargeInGate.accept(stats, { nowMs: Date.now(), onTrigger: () => onBargeIn(audio) })) {
+          return;
+        }
+        params.logger.debug?.(
+          `${params.logScope} human barge-in detected by local input (rms=${Math.round(
+            stats.rms,
+          )}, peak=${stats.peak})`,
+        );
+      });
+      bargeInInputProcess.stdout?.on("error", (error: Error) => {
+        params.logger.warn(
+          `${params.logScope} human barge-in input stdout failed: ${formatErrorMessage(error)}`,
+        );
+      });
+      attachStderrLineLogger({
+        stderr: bargeInInputProcess.stderr,
+        logger: params.logger,
+        prefix: `${params.logScope} barge-in input`,
+      });
+      bargeInInputProcess.stderr?.on("error", (error: Error) => {
+        params.logger.warn(
+          `${params.logScope} human barge-in input stderr failed: ${formatErrorMessage(error)}`,
+        );
+      });
+      bargeInInputProcess.on("error", (error) => {
+        params.logger.warn(
+          `${params.logScope} human barge-in input failed: ${formatErrorMessage(error)}`,
+        );
+      });
+      bargeInInputProcess.on("exit", (code, signal) => {
+        if (!stopped) {
+          params.logger.debug?.(
+            `${params.logScope} human barge-in input exited (${code ?? signal ?? "done"})`,
+          );
+        }
+      });
+    },
+  };
+}

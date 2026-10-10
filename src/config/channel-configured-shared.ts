@@ -1,27 +1,11 @@
 import { getChannelEnvVars } from "../secrets/channel-env-vars.js";
-import { isRecord } from "../utils.js";
-import type { OpenClawConfig } from "./config.js";
+import {
+  hasMeaningfulChannelConfigShallow,
+  resolveChannelConfigRecord,
+} from "./channel-config-activation.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 
-export function resolveChannelConfigRecord(
-  cfg: OpenClawConfig,
-  channelId: string,
-): Record<string, unknown> | null {
-  const channels = cfg.channels as Record<string, unknown> | undefined;
-  const entry = channels?.[channelId];
-  return isRecord(entry) ? entry : null;
-}
-
-export function hasMeaningfulChannelConfigShallow(value: unknown): boolean {
-  if (!isRecord(value)) {
-    return false;
-  }
-  const keys = Object.keys(value);
-  if (keys.length === 1 && keys[0] === "enabled") {
-    return value.enabled === true;
-  }
-  return keys.some((key) => key !== "enabled");
-}
-
+/** Detects static channel configuration from known env vars or `channels.<id>` config. */
 export function isStaticallyChannelConfigured(
   cfg: OpenClawConfig,
   channelId: string,
@@ -32,5 +16,5 @@ export function isStaticallyChannelConfigured(
       return true;
     }
   }
-  return hasMeaningfulChannelConfigShallow(resolveChannelConfigRecord(cfg, channelId));
+  return hasMeaningfulChannelConfigShallow(resolveChannelConfigRecord(cfg, channelId), channelId);
 }

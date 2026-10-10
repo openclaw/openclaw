@@ -1,3 +1,4 @@
+/** Tests manifest owner availability policy for bundled, workspace, and installed plugins. */
 import { describe, expect, it } from "vitest";
 import { normalizePluginsConfig } from "./config-state.js";
 import {
@@ -55,9 +56,8 @@ describe("manifest owner policy", () => {
       passesManifestOwnerBasePolicy({
         plugin: { id: "disabled" },
         normalizedConfig: explicitlyTrustedDisabledConfig,
-        allowExplicitlyDisabled: true,
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       passesManifestOwnerBasePolicy({
         plugin: { id: "other" },
@@ -100,10 +100,9 @@ describe("manifest owner policy", () => {
       resolveManifestOwnerBasePolicyBlock({
         plugin: { id: "disabled" },
         normalizedConfig,
-        allowExplicitlyDisabled: true,
         allowRestrictiveAllowlistBypass: true,
       }),
-    ).toBeNull();
+    ).toBe("plugin-disabled");
   });
 
   it("detects explicit manifest owner trust from allowlist or explicit enablement", () => {

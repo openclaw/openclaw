@@ -1,0 +1,334 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+import {
+  createModelCatalogDecisions,
+  prepareModelCatalogDecisions,
+} from "../../agents/model-catalog-decisions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  clearUserProfileAuthLink,
+  connectUserModelAccount,
+} from "../../state/user-model-accounts.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { loadDeferredCatalog } from "../server-model-catalog-auth.js";
+import { buildModelsListResult } from "./models-list-result.js";
+import {
+  createModelsListTestContext,
+  listModels,
+  providerCatalogEntry,
+} from "./models-list-result.openai-routes.test-support.js";
+
+const config = {
+  agents: {
+    defaults: { model: { primary: "anthropic/claude-opus-5" } },
+    entries: {
+      main: {
+        models: {
+          "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } },
+        },
+      },
+    },
+  },
+} satisfies OpenClawConfig;
+
+async function listClaudeCliModel(
+  params: {
+    authenticated?: boolean;
+    providerApiKey?: boolean;
+    pluginDisabled?: boolean;
+    cfg?: OpenClawConfig;
+  } = {},
+) {
+  return await listModels({
+    catalog: [],
+    staticEntries: [providerCatalogEntry("anthropic", "claude-opus-5")],
+    cfg:
+      params.cfg ??
+      (params.pluginDisabled
+        ? { ...config, plugins: { entries: { anthropic: { enabled: false } } } }
+        : config),
+    preparedAuthModes: params.authenticated ? { "claude-cli": "api_key" } : {},
+    catalogComplete: true,
+    view: "configured",
+    includeDefaultModels: false,
+  });
+}
+
+describe("models.list CLI runtime availability", () => {
+  beforeEach(() => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "");
+    // Prepared runtime metadata must not cold-load the plugin's executable setup entry.
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "claude-cli",
+          modelProvider: "anthropic",
+          pluginId: "anthropic",
+          config: { command: "claude" },
+        },
+      ],
+    });
+  });
+
+  afterEach(() => {
+    cliBackendsTesting.resetDepsForTest();
+    vi.unstubAllEnvs();
+  });
+
+  it.each([
+    {
+      authenticated: true,
+      providerApiKey: false,
+      pluginDisabled: false,
+      available: true,
+      reason: undefined,
+    },
+    {
+      authenticated: false,
+      providerApiKey: true,
+      pluginDisabled: false,
+      available: false,
+      reason: "missing-auth",
+    },
+    {
+      authenticated: true,
+      providerApiKey: false,
+      pluginDisabled: true,
+      available: false,
+      reason: "missing-auth",
+    },
+  ])(
+    "reports native login=$authenticated, provider key=$providerApiKey, and plugin disabled=$pluginDisabled",
+    async (scenario) => {
+      vi.stubEnv("ANTHROPIC_API_KEY", scenario.providerApiKey ? "test-key" : "");
+      const result = await listClaudeCliModel(scenario);
+      expect(result).toEqual({
+        models: [expect.objectContaining({ id: "claude-opus-5", available: scenario.available })],
+      });
+      expect(result.models[0]?.unavailableReason).toBe(scenario.reason);
+      expect(result.models[0]?.unavailableUntil).toBeUndefined();
+    },
+  );
+
+  it("keeps every Claude CLI model listed as needing login before the full catalog arrives", async () => {
+    const pinned = ["claude-fable-5", "claude-opus-5", "claude-sonnet-5"];
+    const result = await listModels({
+      catalog: [...pinned, "claude-haiku-4-5"].map((id) => providerCatalogEntry("anthropic", id)),
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-5" },
+            models: Object.fromEntries(
+              pinned.map((id) => [`anthropic/${id}`, { agentRuntime: { id: "claude-cli" } }]),
+            ),
+          },
+        },
+      },
+      view: "configured",
+      includeDefaultModels: false,
+    });
+    expect(
+      result.models
+        .map(({ id, available, unavailableReason }) => ({ id, available, unavailableReason }))
+        .toSorted((left, right) => left.id.localeCompare(right.id)),
+    ).toEqual(pinned.map((id) => ({ id, available: false, unavailableReason: "missing-auth" })));
+  });
+
+  it.each([
+    { selection: "default", expired: false, sharedOrder: false },
+    { selection: "draft", expired: false, sharedOrder: true },
+    { selection: "draft", expired: true, sharedOrder: true },
+    { selection: "default", expired: true, sharedOrder: true },
+    { selection: "default", expired: true, sharedOrder: true, oauth: true },
+  ])(
+    "uses personal $selection auth instead of native login (expired=$expired, sharedOrder=$sharedOrder, oauth=$oauth)",
+    async ({ selection, expired, sharedOrder, oauth }) => {
+      await withOpenClawTestState(
+        { layout: "state-only", prefix: "personal-cli-model-catalog-" },
+        async (state) => {
+          const owner = ensureProfileForEmail("alice@example.test");
+          const { authProfileId } = connectUserModelAccount({
+            ownerProfileId: owner.id,
+            credential: oauth
+              ? {
+                  type: "oauth",
+                  provider: "anthropic",
+                  access: "synthetic-expired-access",
+                  refresh: "synthetic-refresh",
+                  expires: 1,
+                }
+              : {
+                  type: "token",
+                  provider: "anthropic",
+                  token: "synthetic-personal-token",
+                  expires: Date.now() + (expired ? -60_000 : 600_000),
+                },
+            assertCurrent() {},
+          });
+          if (selection === "draft") {
+            clearUserProfileAuthLink({ profileId: owner.id, provider: "anthropic" });
+          }
+          const cfg: OpenClawConfig = sharedOrder
+            ? { ...config, auth: { order: { anthropic: ["anthropic:shared"] } } }
+            : config;
+          if (sharedOrder) {
+            await state.writeAuthProfiles({
+              version: 1,
+              profiles: {
+                "anthropic:shared": {
+                  type: "token",
+                  provider: "anthropic",
+                  token: "synthetic-shared-token",
+                  expires: Date.now() + (expired ? 600_000 : -60_000),
+                },
+              },
+            });
+          }
+          const context = createModelsListTestContext({
+            cfg,
+            agentDir: state.agentDir(),
+            workspaceDir: state.workspaceDir,
+            catalog: [providerCatalogEntry("anthropic", "claude-opus-5")],
+            catalogComplete: true,
+            preparedAuthModes: expired ? { "claude-cli": "oauth" } : {},
+          });
+          const snapshot = await loadDeferredCatalog(context, "main", { readOnly: true });
+          const result = await buildModelsListResult({
+            source: { kind: "gateway", context },
+            agentId: "main",
+            requesterProfileId: owner.id,
+            params: { view: "configured", preparedOnly: true },
+            preloadedCatalog: { agentId: "main", config: cfg, snapshot },
+            preloadedOnly: true,
+            catalogProjector: await prepareModelCatalogDecisions({
+              cfg,
+              agentId: "main",
+              agentDir: state.agentDir(),
+              workspaceDir: state.workspaceDir,
+              snapshot,
+              metadataSnapshot: snapshot.metadataSnapshot,
+              preparedAuthStore: snapshot.authStore,
+              preparedRuntimeAuthModes: snapshot.authModes,
+              preparedSyntheticAuthComplete: snapshot.catalogComplete,
+              requesterProfileId: owner.id,
+              ...(selection === "draft"
+                ? { preferredProfileId: authProfileId, pinnedProfileId: authProfileId }
+                : {}),
+            }),
+          });
+
+          const model = result.models.find(
+            (entry) => entry.provider === "anthropic" && entry.id === "claude-opus-5",
+          );
+          expect(model).toMatchObject({
+            agentRuntime: expect.objectContaining({ id: "claude-cli" }),
+            available: !expired,
+          });
+          expect(model?.unavailableReason).toBe(expired && !oauth ? "auth-failed" : undefined);
+        },
+      );
+    },
+  );
+
+  it.each([
+    { scenario: "direct ready", available: true },
+    {
+      scenario: "direct unavailable",
+      expired: true,
+      unrefreshable: true,
+      available: false,
+      reason: "auth-failed",
+    },
+    { scenario: "direct refresh-needed", expired: true, available: false },
+    {
+      scenario: "canonical pin",
+      provider: "anthropic",
+      pinProvider: "anthropic",
+      expired: true,
+      available: true,
+    },
+    {
+      scenario: "CLI pin",
+      provider: "anthropic",
+      sharedProvider: "anthropic",
+      expired: true,
+      available: false,
+    },
+  ])("uses the selected execution owner for $scenario", async (scenario) => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "cli-pin-identity-" },
+      async (state) => {
+        const provider = scenario.provider ?? "claude-cli";
+        const pinProvider = scenario.pinProvider ?? "claude-cli";
+        const sharedProvider = scenario.sharedProvider ?? "claude-cli";
+        const modelId = "claude-haiku-4-5";
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: { model: { primary: `${provider}/${modelId}` } },
+            entries: { main: {} },
+          },
+          auth: {
+            profiles: {
+              selected: { provider: pinProvider, mode: "oauth" },
+              shared: { provider: sharedProvider, mode: "token" },
+            },
+            order: { [provider]: ["shared"] },
+          },
+        };
+        await state.writeAuthProfiles({
+          version: 1,
+          profiles: {
+            selected: {
+              type: "oauth",
+              provider: pinProvider,
+              access: "synthetic-access",
+              refresh: scenario.unrefreshable ? "" : "synthetic-refresh",
+              expires: scenario.expired ? 1 : Date.now() + 600_000,
+            },
+            shared: {
+              type: "token",
+              provider: sharedProvider,
+              token: "synthetic-shared",
+              expires: Date.now() + 600_000,
+            },
+          },
+        });
+        const context = createModelsListTestContext({
+          cfg,
+          agentDir: state.agentDir(),
+          workspaceDir: state.workspaceDir,
+          catalog: [providerCatalogEntry(provider, modelId)],
+          catalogComplete: true,
+          preparedAuthModes: { "claude-cli": "oauth" },
+        });
+        const snapshot = await loadDeferredCatalog(context, "main", { readOnly: true });
+        const result = await buildModelsListResult({
+          source: { kind: "gateway", context },
+          agentId: "main",
+          params: { view: "all", preparedOnly: true },
+          preloadedCatalog: { agentId: "main", config: cfg, snapshot },
+          preloadedOnly: true,
+          catalogProjector: createModelCatalogDecisions({
+            cfg,
+            agentId: "main",
+            agentDir: state.agentDir(),
+            workspaceDir: state.workspaceDir,
+            snapshot,
+            metadataSnapshot: snapshot.metadataSnapshot,
+            preparedAuthStore: snapshot.authStore,
+            preparedRuntimeAuthModes: snapshot.authModes,
+            preparedSyntheticAuthComplete: true,
+            preferredProfileId: "selected",
+            pinnedProfileId: "selected",
+          }),
+        });
+        const model = result.models.find(
+          (entry) => entry.provider === provider && entry.id === modelId,
+        );
+        expect(model).toMatchObject({ available: scenario.available });
+        expect(model?.unavailableReason).toBe(scenario.reason);
+      },
+    );
+  });
+});

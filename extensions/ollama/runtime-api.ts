@@ -3,7 +3,6 @@ export {
   buildOllamaChatRequest,
   createConfiguredOllamaCompatStreamWrapper,
   convertToOllamaMessages,
-  createConfiguredOllamaCompatNumCtxWrapper,
   createConfiguredOllamaStreamFn,
   createOllamaStreamFn,
   isOllamaCompatProvider,
@@ -13,7 +12,7 @@ export {
   resolveOllamaCompatNumCtxEnabled,
   shouldInjectOllamaCompatNumCtx,
   wrapOllamaCompatNumCtx,
-} from "./src/stream.js";
+} from "./src/stream-api.js";
 export {
   createOllamaEmbeddingProvider,
   DEFAULT_OLLAMA_EMBEDDING_MODEL,

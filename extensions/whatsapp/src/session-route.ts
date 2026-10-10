@@ -2,25 +2,23 @@ import {
   buildChannelOutboundSessionRoute,
   type ChannelOutboundSessionRouteParams,
 } from "openclaw/plugin-sdk/core";
-import {
-  isWhatsAppGroupJid,
-  isWhatsAppNewsletterJid,
-  normalizeWhatsAppTarget,
-} from "./normalize.js";
+import { resolveWhatsAppGroupSessionKey } from "./group-session-key.js";
+import { normalizeWhatsAppTarget } from "./normalize-target.js";
 
 export function resolveWhatsAppOutboundSessionRoute(params: ChannelOutboundSessionRouteParams) {
   const normalized = normalizeWhatsAppTarget(params.target);
   if (!normalized) {
     return null;
   }
-  const isGroup = isWhatsAppGroupJid(normalized);
-  const isNewsletter = isWhatsAppNewsletterJid(normalized);
+  const isGroup = normalized.endsWith("@g.us");
+  const isNewsletter = normalized.endsWith("@newsletter");
   const chatType = isGroup ? "group" : isNewsletter ? "channel" : "direct";
-  return buildChannelOutboundSessionRoute({
+  const route = buildChannelOutboundSessionRoute({
     cfg: params.cfg,
     agentId: params.agentId,
     channel: "whatsapp",
     accountId: params.accountId,
+    recipientSessionExact: true,
     peer: {
       kind: chatType,
       id: normalized,
@@ -29,4 +27,13 @@ export function resolveWhatsAppOutboundSessionRoute(params: ChannelOutboundSessi
     from: normalized,
     to: normalized,
   });
+  return isGroup
+    ? {
+        ...route,
+        sessionKey: resolveWhatsAppGroupSessionKey({
+          sessionKey: route.sessionKey,
+          accountId: params.accountId,
+        }),
+      }
+    : route;
 }

@@ -1,60 +1,47 @@
-import { normalizeProviderId } from "../agents/provider-id.js";
-import { normalizeGooglePreviewModelId } from "../plugin-sdk/provider-model-id-normalize.js";
+import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import {
-  normalizeLowercaseStringOrEmpty,
+  normalizeGooglePreviewModelId,
+  normalizeTogetherModelId,
+} from "@openclaw/model-catalog-core/provider-model-id-normalize";
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
+import {
   normalizeOptionalString,
   resolvePrimaryStringValue,
-} from "../shared/string-coerce.js";
-import type { AgentModelConfig } from "./types.agents-shared.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { AgentModelEntryConfig } from "./types.agent-defaults.js";
+import type { AgentModelConfig, AgentToolModelConfig } from "./types.agents-shared.js";
 
 type AgentModelListLike = {
   primary?: string;
   fallbacks?: string[];
-  timeoutMs?: number;
 };
 
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
+type AgentModelInput = AgentModelConfig | AgentToolModelConfig;
 
-function modelKeyForConfig(provider: string, model: string): string {
-  const providerId = provider.trim();
-  const modelId = model.trim();
-  if (!providerId) {
-    return modelId;
-  }
-  if (!modelId) {
-    return providerId;
-  }
-  return normalizeLowercaseStringOrEmpty(modelId).startsWith(
-    `${normalizeLowercaseStringOrEmpty(providerId)}/`,
-  )
-    ? modelId
-    : `${providerId}/${modelId}`;
-}
-
-export function resolveAgentModelPrimaryValue(model?: AgentModelConfig): string | undefined {
+/** Returns the primary model ref from either string or object-style agent model config. */
+export function resolveAgentModelPrimaryValue(model?: AgentModelInput): string | undefined {
   return resolvePrimaryStringValue(model);
 }
 
-export function resolveAgentModelFallbackValues(model?: AgentModelConfig): string[] {
+/** Returns configured fallback model refs, preserving their configured order. */
+export function resolveAgentModelFallbackValues(model?: AgentModelInput): string[] {
   if (!model || typeof model !== "object") {
     return [];
   }
   return Array.isArray(model.fallbacks) ? model.fallbacks : [];
 }
 
-export function resolveAgentModelTimeoutMsValue(model?: AgentModelConfig): number | undefined {
+/** Returns a positive finite tool timeout rounded down to whole milliseconds. */
+export function resolveAgentModelTimeoutMsValue(model?: AgentToolModelConfig): number | undefined {
   if (!model || typeof model !== "object") {
     return undefined;
   }
-  return typeof model.timeoutMs === "number" &&
-    Number.isFinite(model.timeoutMs) &&
-    model.timeoutMs > 0
-    ? Math.floor(model.timeoutMs)
-    : undefined;
+  const timeout = asPositiveFiniteNumber(model.timeoutMs);
+  return timeout === undefined ? undefined : Math.floor(timeout);
 }
 
+/** Converts legacy string model config into the object shape used by model patch helpers. */
 export function toAgentModelListLike(model?: AgentModelConfig): AgentModelListLike | undefined {
   if (typeof model === "string") {
     const primary = normalizeOptionalString(model);
@@ -66,19 +53,65 @@ export function toAgentModelListLike(model?: AgentModelConfig): AgentModelListLi
   return model;
 }
 
+const GOOGLE_PROVIDER_IDS = new Set(["google", "google-gemini-cli", "google-vertex"]);
+
+/** Applies existing Google/Together model fixes while preserving literal catalog namespaces. */
+export function normalizeProviderCatalogModelIdForConfig(provider: string, model: string): string {
+  if (GOOGLE_PROVIDER_IDS.has(provider) || model.startsWith("google/")) {
+    return normalizeGooglePreviewModelId(model);
+  }
+  return provider === "together" ? normalizeTogetherModelId(model) : model;
+}
+
+/** Canonicalizes provider/model refs before they are persisted to config. */
 export function normalizeAgentModelRefForConfig(model: string): string {
   const trimmed = model.trim();
-  const slash = trimmed.indexOf("/");
-  if (slash <= 0 || slash >= trimmed.length - 1) {
+  const parsed = parseModelCatalogRef(trimmed);
+  if (!parsed) {
     return trimmed;
   }
 
-  const provider = normalizeProviderId(trimmed.slice(0, slash));
-  const normalizedModel = normalizeGooglePreviewModelId(trimmed.slice(slash + 1));
-  return modelKeyForConfig(provider, normalizedModel);
+  const { provider, modelId: modelSuffix } = parsed;
+  const normalizedModel = normalizeProviderCatalogModelIdForConfig(provider, modelSuffix);
+  return `${provider}/${normalizedModel}`;
 }
 
-function mergeAgentModelEntryForConfig(existing: unknown, incoming: unknown): unknown {
+/** Normalizes primary/fallback refs without replacing unchanged config values. */
+export function normalizeAgentModelSelectionForConfig(value: unknown): unknown {
+  if (typeof value === "string") {
+    return normalizeAgentModelRefForConfig(value);
+  }
+  if (!isPlainRecord(value)) {
+    return value;
+  }
+
+  let next = value;
+  const assign = (key: string, candidate: unknown) => {
+    if (candidate !== next[key]) {
+      next = { ...next, [key]: candidate };
+    }
+  };
+  if (typeof value.primary === "string") {
+    assign("primary", normalizeAgentModelRefForConfig(value.primary));
+  }
+  if (Array.isArray(value.fallbacks)) {
+    const originalFallbacks = value.fallbacks;
+    const fallbacks = originalFallbacks.map((fallback) =>
+      typeof fallback === "string" ? normalizeAgentModelRefForConfig(fallback) : fallback,
+    );
+    if (fallbacks.some((fallback, index) => fallback !== originalFallbacks[index])) {
+      assign("fallbacks", fallbacks);
+    }
+  }
+  return next;
+}
+
+export function mergeAgentModelEntryForConfig(
+  existing: AgentModelEntryConfig | undefined,
+  incoming: AgentModelEntryConfig,
+): AgentModelEntryConfig;
+export function mergeAgentModelEntryForConfig(existing: unknown, incoming: unknown): unknown;
+export function mergeAgentModelEntryForConfig(existing: unknown, incoming: unknown): unknown {
   if (!isPlainRecord(existing) || !isPlainRecord(incoming)) {
     return incoming;
   }
@@ -94,14 +127,16 @@ function mergeAgentModelEntryForConfig(existing: unknown, incoming: unknown): un
   };
 }
 
+/** Normalizes model map keys and merges entries that collapse to the same canonical ref. */
 export function normalizeAgentModelMapForConfig<T extends Record<string, unknown>>(models: T): T {
   let mutated = false;
   const next: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(models)) {
     const normalizedKey = normalizeAgentModelRefForConfig(key);
-    if (normalizedKey !== key || Object.prototype.hasOwnProperty.call(next, normalizedKey)) {
+    if (normalizedKey !== key || Object.hasOwn(next, normalizedKey)) {
       mutated = true;
     }
+    // Later entries win, but nested params merge so provider defaults are not discarded.
     next[normalizedKey] = mergeAgentModelEntryForConfig(next[normalizedKey], entry);
   }
   return (mutated ? next : models) as T;

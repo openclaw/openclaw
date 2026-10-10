@@ -1,38 +1,25 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   ChannelRuntimeContextEvent,
   ChannelRuntimeContextKey,
   ChannelRuntimeContextRegistry,
 } from "../../channels/plugins/channel-runtime-surface.types.js";
 import { createSubsystemLogger } from "../../logging.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 type StoredRuntimeContext = {
   token: symbol;
   context: unknown;
-  normalizedKey: {
-    channelId: string;
-    accountId?: string;
-    capability: string;
-  };
 };
 
 const log = createSubsystemLogger("plugins/runtime-channel");
 
-function normalizeRuntimeContextString(value: string | null | undefined): string {
-  return normalizeOptionalString(value) ?? "";
-}
-
 function normalizeRuntimeContextKey(params: ChannelRuntimeContextKey): {
   mapKey: string;
-  normalizedKey: {
-    channelId: string;
-    accountId?: string;
-    capability: string;
-  };
+  normalizedKey: ChannelRuntimeContextEvent["key"];
 } | null {
-  const channelId = normalizeRuntimeContextString(params.channelId);
-  const capability = normalizeRuntimeContextString(params.capability);
-  const accountId = normalizeRuntimeContextString(params.accountId);
+  const channelId = normalizeOptionalString(params.channelId);
+  const capability = normalizeOptionalString(params.capability);
+  const accountId = normalizeOptionalString(params.accountId) ?? "";
   if (!channelId || !capability) {
     return null;
   }
@@ -44,29 +31,6 @@ function normalizeRuntimeContextKey(params: ChannelRuntimeContextKey): {
       ...(accountId ? { accountId } : {}),
     },
   };
-}
-
-function doesRuntimeContextWatcherMatch(params: {
-  watcher: {
-    channelId?: string;
-    accountId?: string;
-    capability?: string;
-  };
-  event: ChannelRuntimeContextEvent;
-}): boolean {
-  if (params.watcher.channelId && params.watcher.channelId !== params.event.key.channelId) {
-    return false;
-  }
-  if (
-    params.watcher.accountId !== undefined &&
-    params.watcher.accountId !== (params.event.key.accountId ?? "")
-  ) {
-    return false;
-  }
-  if (params.watcher.capability && params.watcher.capability !== params.event.key.capability) {
-    return false;
-  }
-  return true;
 }
 
 export function createChannelRuntimeContextRegistry(): ChannelRuntimeContextRegistry {
@@ -81,7 +45,12 @@ export function createChannelRuntimeContextRegistry(): ChannelRuntimeContextRegi
   }>();
   const emitRuntimeContextEvent = (event: ChannelRuntimeContextEvent) => {
     for (const watcher of runtimeContextWatchers) {
-      if (!doesRuntimeContextWatcherMatch({ watcher: watcher.filter, event })) {
+      const { channelId, accountId, capability } = watcher.filter;
+      if (
+        (channelId && channelId !== event.key.channelId) ||
+        (accountId !== undefined && accountId !== (event.key.accountId ?? "")) ||
+        (capability && capability !== event.key.capability)
+      ) {
         continue;
       }
       try {
@@ -100,10 +69,7 @@ export function createChannelRuntimeContextRegistry(): ChannelRuntimeContextRegi
   return {
     register: (params) => {
       const normalized = normalizeRuntimeContextKey(params);
-      if (!normalized) {
-        return { dispose: () => {} };
-      }
-      if (params.abortSignal?.aborted) {
+      if (!normalized || params.abortSignal?.aborted) {
         return { dispose: () => {} };
       }
       const token = Symbol(normalized.mapKey);
@@ -113,6 +79,9 @@ export function createChannelRuntimeContextRegistry(): ChannelRuntimeContextRegi
           return;
         }
         disposed = true;
+        // Detach before the token check: stale leases disposed after a replacement
+        // registered must still release their listener on long-lived signals.
+        params.abortSignal?.removeEventListener("abort", dispose);
         const current = runtimeContexts.get(normalized.mapKey);
         if (!current || current.token !== token) {
           return;
@@ -131,7 +100,6 @@ export function createChannelRuntimeContextRegistry(): ChannelRuntimeContextRegi
       runtimeContexts.set(normalized.mapKey, {
         token,
         context: params.context,
-        normalizedKey: normalized.normalizedKey,
       });
       if (disposed) {
         return { dispose };

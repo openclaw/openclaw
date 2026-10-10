@@ -44,4 +44,24 @@ class JpegSizeLimiterTest {
     assertEquals(600, result.height)
     assertEquals(90, result.quality)
   }
+
+  @Test
+  fun triesFinalScaledImageBeforeFailing() {
+    val result =
+      JpegSizeLimiter.compressToLimit(
+        initialWidth = 1326,
+        initialHeight = 1061,
+        startQuality = 90,
+        maxBytes = 100,
+        minSize = 1,
+        encode = { width, _, _ ->
+          if (width == 500) ByteArray(80) else ByteArray(120)
+        },
+      )
+
+    assertEquals(500, result.width)
+    assertEquals(400, result.height)
+    assertEquals(90, result.quality)
+    assertEquals(80, result.bytes.size)
+  }
 }

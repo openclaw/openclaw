@@ -1,219 +1,66 @@
-import fs from "node:fs";
-import os from "node:os";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { format } from "node:util";
 import type { Command } from "commander";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { sleep } from "../api.js";
-import { validateProviderConfig, type VoiceCallConfig } from "./config.js";
+import { MAX_TCP_PORT } from "openclaw/plugin-sdk/number-runtime";
+import {
+  isRecord,
+  normalizeOptionalLowercaseString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { CallBriefSchema, type CallBrief } from "./call-brief.js";
+import { registerVoiceCallLogs } from "./cli-call-log.js";
+import { parseCliInteger, writeCliJson, writeCliLine } from "./cli-command-io.js";
+import {
+  callVoiceCallGateway,
+  initiateVoiceCall,
+  isUnknownMethod,
+  pollContinueGateway,
+  resolveContinueTimeout,
+  resolveOperationTimeout,
+  runGatewayManagerCommand,
+} from "./cli-gateway-call.js";
+import {
+  resolveVoiceCallStreamExposurePaths,
+  validateProviderConfig,
+  type VoiceCallConfig,
+} from "./config.js";
+import { findCallInStore, loadActiveCallsFromStore } from "./manager/store.js";
+import { resolveVoiceCallAgentId } from "./resolve-call-agent-id.js";
+import { setVoiceCallStateRuntime, type VoiceCallStateRuntime } from "./runtime-state.js";
 import type { VoiceCallRuntime } from "./runtime.js";
+import { resolveDefaultVoiceCallStoreDir } from "./store-path.js";
 import { resolveUserPath } from "./utils.js";
 import { resolveWebhookExposureStatus } from "./webhook-exposure.js";
 import {
   cleanupTailscaleExposureRoute,
   getTailscaleSelfInfo,
-  setupTailscaleExposureRoute,
+  setupTailscaleExposureRoutes,
 } from "./webhook/tailscale.js";
 
-type Logger = {
-  info: (message: string) => void;
-  warn: (message: string) => void;
-  error: (message: string) => void;
-};
-
-type SetupCheck = {
-  id: string;
-  ok: boolean;
-  message: string;
-};
-
-type SetupStatus = {
-  ok: boolean;
-  checks: SetupCheck[];
-};
-
-type VoiceCallGatewayMethod =
-  | "voicecall.initiate"
-  | "voicecall.start"
-  | "voicecall.continue"
-  | "voicecall.continue.start"
-  | "voicecall.continue.result"
-  | "voicecall.speak"
-  | "voicecall.dtmf"
-  | "voicecall.end"
-  | "voicecall.status";
-
-type VoiceCallGatewayCallResult = { ok: true; payload: unknown } | { ok: false; error: unknown };
-
-const VOICE_CALL_GATEWAY_DEFAULT_TIMEOUT_MS = 5000;
-const VOICE_CALL_GATEWAY_OPERATION_TIMEOUT_MS = 30000;
-const VOICE_CALL_GATEWAY_TRANSCRIPT_BUFFER_MS = 10000;
-const VOICE_CALL_GATEWAY_POLL_INTERVAL_MS = 1000;
-
-const voiceCallCliDeps = {
-  callGatewayFromCli,
-};
-
-export const __testing = {
-  setCallGatewayFromCliForTests(next?: typeof callGatewayFromCli): void {
-    voiceCallCliDeps.callGatewayFromCli = next ?? callGatewayFromCli;
-  },
-  isGatewayUnavailableForLocalFallback,
-  parseVoiceCallIntOption,
-};
-
-function writeStdoutLine(...values: unknown[]): void {
-  process.stdout.write(`${format(...values)}\n`);
-}
-
-function writeStdoutJson(value: unknown): void {
-  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
-}
-
-function parseVoiceCallIntOption(
-  raw: string | undefined,
-  optionName: string,
-  opts?: { min?: number },
-): number {
-  const min = opts?.min ?? 0;
-  const parsed = Number(raw);
-  if (!Number.isInteger(parsed) || parsed < min) {
-    throw new Error(`Invalid numeric value for ${optionName}: ${raw ?? ""}`);
+async function readCliBrief(options: {
+  brief?: string;
+  briefFile?: string;
+}): Promise<CallBrief | undefined> {
+  if (options.brief && options.briefFile) {
+    throw new Error("Use either --brief or --brief-file");
   }
-  return parsed;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function isGatewayUnavailableForLocalFallback(err: unknown): boolean {
-  const message = formatErrorMessage(err);
-  return (
-    message.includes("ECONNREFUSED") ||
-    message.includes("ECONNRESET") ||
-    message.includes("EHOSTUNREACH") ||
-    message.includes("ENOTFOUND") ||
-    message.includes("gateway closed (1006") ||
-    message.includes("gateway not connected")
-  );
-}
-
-async function callVoiceCallGateway(
-  method: VoiceCallGatewayMethod,
-  params?: Record<string, unknown>,
-  opts?: { timeoutMs?: number },
-): Promise<VoiceCallGatewayCallResult> {
-  try {
-    const timeoutMs =
-      typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
-        ? Math.max(1, Math.ceil(opts.timeoutMs))
-        : VOICE_CALL_GATEWAY_DEFAULT_TIMEOUT_MS;
-    const payload = await voiceCallCliDeps.callGatewayFromCli(
-      method,
-      { json: true, timeout: String(timeoutMs) },
-      params,
-      { progress: false },
-    );
-    return { ok: true, payload };
-  } catch (err) {
-    if (isGatewayUnavailableForLocalFallback(err)) {
-      return { ok: false, error: err };
-    }
-    throw err;
+  const raw = options.briefFile
+    ? await readFile(resolveUserPath(options.briefFile), "utf8")
+    : options.brief;
+  if (raw === undefined) {
+    return undefined;
   }
-}
-
-function resolveGatewayOperationTimeoutMs(config: VoiceCallConfig): number {
-  return Math.max(VOICE_CALL_GATEWAY_OPERATION_TIMEOUT_MS, config.ringTimeoutMs + 5000);
-}
-
-function resolveGatewayContinueTimeoutMs(config: VoiceCallConfig): number {
-  return (
-    config.transcriptTimeoutMs +
-    VOICE_CALL_GATEWAY_OPERATION_TIMEOUT_MS +
-    VOICE_CALL_GATEWAY_TRANSCRIPT_BUFFER_MS
-  );
-}
-
-function isUnknownGatewayMethod(err: unknown, method: VoiceCallGatewayMethod): boolean {
-  return formatErrorMessage(err).includes(`unknown method: ${method}`);
-}
-
-function readGatewayOperationId(payload: unknown): string {
-  if (isRecord(payload) && typeof payload.operationId === "string" && payload.operationId) {
-    return payload.operationId;
+  if (raw.length > 16000) {
+    throw new Error("Brief input is too large");
   }
-  throw new Error("voicecall gateway response missing operationId");
+  const value =
+    options.briefFile || raw.trimStart().startsWith("{") || raw.trimStart().startsWith("[")
+      ? JSON.parse(raw)
+      : { task: raw };
+  return CallBriefSchema.parse(value);
 }
-
-function readGatewayPollTimeoutMs(payload: unknown, fallbackTimeoutMs: number): number {
-  if (isRecord(payload) && typeof payload.pollTimeoutMs === "number") {
-    return Math.max(1, Math.ceil(payload.pollTimeoutMs));
-  }
-  return fallbackTimeoutMs;
-}
-
-function readCompletedContinueResult(
-  payload: unknown,
-):
-  | { status: "pending" }
-  | { status: "completed"; result: unknown }
-  | { status: "failed"; error: string } {
-  if (!isRecord(payload)) {
-    throw new Error("voicecall gateway response missing operation status");
-  }
-  if (payload.status === "pending") {
-    return { status: "pending" };
-  }
-  if (payload.status === "failed") {
-    return {
-      status: "failed",
-      error: typeof payload.error === "string" ? payload.error : "continue failed",
-    };
-  }
-  if (payload.status === "completed") {
-    return { status: "completed", result: payload.result };
-  }
-  throw new Error("voicecall gateway response has unknown operation status");
-}
-
-async function pollVoiceCallContinueGateway(params: {
-  operationId: string;
-  timeoutMs: number;
-}): Promise<unknown> {
-  const deadlineMs = Date.now() + params.timeoutMs;
-
-  while (Date.now() <= deadlineMs) {
-    const gateway = await callVoiceCallGateway(
-      "voicecall.continue.result",
-      { operationId: params.operationId },
-      { timeoutMs: VOICE_CALL_GATEWAY_DEFAULT_TIMEOUT_MS },
-    );
-    if (!gateway.ok) {
-      throw new Error(
-        `gateway unavailable while waiting for voicecall continue result: ${formatErrorMessage(
-          gateway.error,
-        )}`,
-      );
-    }
-    const result = readCompletedContinueResult(gateway.payload);
-    if (result.status === "completed") {
-      return result.result;
-    }
-    if (result.status === "failed") {
-      throw new Error(result.error);
-    }
-    await sleep(
-      Math.min(VOICE_CALL_GATEWAY_POLL_INTERVAL_MS, Math.max(1, deadlineMs - Date.now())),
-    );
-  }
-
-  throw new Error("voicecall continue timed out waiting for gateway operation");
-}
-
 function resolveMode(input: string): "off" | "serve" | "funnel" {
   const raw = normalizeOptionalLowercaseString(input) ?? "";
   if (raw === "serve" || raw === "off") {
@@ -223,68 +70,16 @@ function resolveMode(input: string): "off" | "serve" | "funnel" {
 }
 
 function resolveDefaultStorePath(config: VoiceCallConfig): string {
-  const preferred = path.join(os.homedir(), ".openclaw", "voice-calls");
-  const resolvedPreferred = resolveUserPath(preferred);
-  const existing =
-    [resolvedPreferred].find((dir) => {
-      try {
-        return fs.existsSync(path.join(dir, "calls.jsonl")) || fs.existsSync(dir);
-      } catch {
-        return false;
-      }
-    }) ?? resolvedPreferred;
-  const base = config.store?.trim() ? resolveUserPath(config.store) : existing;
+  const base = config.store?.trim()
+    ? resolveUserPath(config.store)
+    : resolveDefaultVoiceCallStoreDir();
   return path.join(base, "calls.jsonl");
 }
 
-function percentile(values: number[], p: number): number {
-  if (values.length === 0) {
-    return 0;
-  }
-  const sorted = [...values].toSorted((a, b) => a - b);
-  const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil((p / 100) * sorted.length) - 1));
-  return sorted[idx] ?? 0;
-}
-
-function summarizeSeries(values: number[]): {
-  count: number;
-  minMs: number;
-  maxMs: number;
-  avgMs: number;
-  p50Ms: number;
-  p95Ms: number;
-} {
-  if (values.length === 0) {
-    return { count: 0, minMs: 0, maxMs: 0, avgMs: 0, p50Ms: 0, p95Ms: 0 };
-  }
-
-  const minMs = values.reduce(
-    (min, value) => (value < min ? value : min),
-    Number.POSITIVE_INFINITY,
-  );
-  const maxMs = values.reduce(
-    (max, value) => (value > max ? value : max),
-    Number.NEGATIVE_INFINITY,
-  );
-  const avgMs = values.reduce((sum, value) => sum + value, 0) / values.length;
-  return {
-    count: values.length,
-    minMs,
-    maxMs,
-    avgMs,
-    p50Ms: percentile(values, 50),
-    p95Ms: percentile(values, 95),
-  };
-}
-
-function resolveCallMode(mode?: string): "notify" | "conversation" | undefined {
-  return mode === "notify" || mode === "conversation" ? mode : undefined;
-}
-
-function buildSetupStatus(config: VoiceCallConfig): SetupStatus {
+function buildSetupStatus(config: VoiceCallConfig, coreConfig: OpenClawConfig) {
   const validation = validateProviderConfig(config);
   const webhookExposure = resolveWebhookExposureStatus(config);
-  const checks: SetupCheck[] = [
+  const checks = [
     {
       id: "plugin-enabled",
       ok: config.enabled,
@@ -324,104 +119,103 @@ function buildSetupStatus(config: VoiceCallConfig): SetupStatus {
               : "Notify/conversation calls use normal TTS/STT flow",
     },
   ];
+  try {
+    const agentId = resolveVoiceCallAgentId(config, coreConfig);
+    checks.push({ id: "agent-owner", ok: true, message: `Response agent: ${agentId}` });
+  } catch (error) {
+    checks.push({ id: "agent-owner", ok: false, message: formatErrorMessage(error) });
+  }
   return {
     ok: checks.every((check) => check.ok),
     checks,
   };
 }
 
-function writeSetupStatus(status: SetupStatus): void {
-  writeStdoutLine("Voice Call setup: %s", status.ok ? "OK" : "needs attention");
+function writeSetupStatus(status: ReturnType<typeof buildSetupStatus>): void {
+  writeCliLine("Voice Call setup: %s", status.ok ? "OK" : "needs attention");
   for (const check of status.checks) {
-    writeStdoutLine("%s %s: %s", check.ok ? "OK" : "FAIL", check.id, check.message);
+    writeCliLine("%s %s: %s", check.ok ? "OK" : "FAIL", check.id, check.message);
   }
 }
 
-async function initiateCallAndPrintId(params: {
-  runtime: VoiceCallRuntime;
-  to: string;
-  message?: string;
-  mode?: string;
-}) {
-  const result = await params.runtime.manager.initiateCall(params.to, undefined, {
-    message: params.message,
-    mode: resolveCallMode(params.mode),
-  });
-  if (!result.success) {
-    throw new Error(result.error || "initiate failed");
+async function runWithStandaloneRuntime(
+  createRuntime: () => Promise<VoiceCallRuntime>,
+  run: (ensureRuntime: () => Promise<VoiceCallRuntime>) => Promise<void>,
+): Promise<void> {
+  let runtime: Promise<VoiceCallRuntime> | undefined;
+  const interrupted = createDeferred();
+  let exitSignal: "SIGINT" | "SIGTERM" | undefined;
+  const interrupt = (signal: "SIGINT" | "SIGTERM") => {
+    exitSignal ??= signal;
+    process.exitCode = exitSignal === "SIGINT" ? 130 : 143;
+    interrupted.resolve();
+  };
+  const onSigint = () => interrupt("SIGINT");
+  const onSigterm = () => interrupt("SIGTERM");
+  try {
+    await run(async () => {
+      if (!runtime) {
+        process.on("SIGINT", onSigint);
+        process.on("SIGTERM", onSigterm);
+        runtime = createRuntime();
+      }
+      const active = await runtime;
+      if (exitSignal) {
+        throw new Error(`Voice call command interrupted by ${exitSignal}`);
+      }
+      return active;
+    });
+    // A standalone webhook continues serving after the call ID is printed.
+    // Retain its command owner so scheduler teardown cannot run at action return.
+    if (runtime) {
+      await interrupted.promise;
+    }
+  } finally {
+    try {
+      const active = await runtime?.catch(() => undefined);
+      await active?.stop();
+    } finally {
+      process.off("SIGINT", onSigint);
+      process.off("SIGTERM", onSigterm);
+    }
   }
-  writeStdoutJson({ callId: result.callId });
-}
-
-function writeGatewayCallId(payload: unknown): void {
-  if (isRecord(payload) && typeof payload.callId === "string") {
-    writeStdoutJson({ callId: payload.callId });
-    return;
-  }
-  if (isRecord(payload) && typeof payload.error === "string") {
-    throw new Error(payload.error);
-  }
-  throw new Error("voicecall gateway response missing callId");
-}
-
-async function initiateCallViaGatewayOrRuntime(params: {
-  ensureRuntime: () => Promise<VoiceCallRuntime>;
-  config: VoiceCallConfig;
-  method: "voicecall.initiate" | "voicecall.start";
-  to?: string;
-  message?: string;
-  mode?: string;
-}) {
-  const mode = resolveCallMode(params.mode);
-  const gateway = await callVoiceCallGateway(
-    params.method,
-    {
-      ...(params.to ? { to: params.to } : {}),
-      ...(params.message ? { message: params.message } : {}),
-      ...(mode ? { mode } : {}),
-    },
-    {
-      timeoutMs: resolveGatewayOperationTimeoutMs(params.config),
-    },
-  );
-  if (gateway.ok) {
-    writeGatewayCallId(gateway.payload);
-    return;
-  }
-
-  const rt = await params.ensureRuntime();
-  const to = params.to ?? rt.config.toNumber;
-  if (!to) {
-    throw new Error("Missing --to and no toNumber configured");
-  }
-  await initiateCallAndPrintId({
-    runtime: rt,
-    to,
-    message: params.message,
-    mode: params.mode,
-  });
 }
 
 export function registerVoiceCallCli(params: {
   program: Command;
   config: VoiceCallConfig;
+  coreConfig: OpenClawConfig;
   ensureRuntime: () => Promise<VoiceCallRuntime>;
-  logger: Logger;
+  stateRuntime?: VoiceCallStateRuntime["state"];
 }) {
-  const { program, config, ensureRuntime, logger } = params;
+  const { program, config, coreConfig, ensureRuntime: createRuntime, stateRuntime } = params;
+  const ensureHistoryStateRuntime = (): void => {
+    if (stateRuntime) {
+      setVoiceCallStateRuntime({ state: stateRuntime });
+    }
+  };
   const root = program
     .command("voicecall")
     .description("Voice call utilities")
     .addHelpText("after", () => `\nDocs: https://docs.openclaw.ai/cli/voicecall\n`);
+  const managerAction = (
+    command: Pick<
+      Parameters<typeof runGatewayManagerCommand>[0],
+      "gatewayCall" | "managerFallback" | "failureLabel" | "resolveGatewayPayload"
+    >,
+  ) =>
+    runWithStandaloneRuntime(createRuntime, (ensureRuntime) =>
+      runGatewayManagerCommand({ config, ensureRuntime, ...command }),
+    );
 
   root
     .command("setup")
     .description("Show Voice Call provider and webhook setup status")
     .option("--json", "Print machine-readable JSON")
     .action((options: { json?: boolean }) => {
-      const status = buildSetupStatus(config);
+      const status = buildSetupStatus(config, coreConfig);
       if (options.json) {
-        writeStdoutJson(status);
+        writeCliJson(status);
         return;
       }
       writeSetupStatus(status);
@@ -446,72 +240,76 @@ export function registerVoiceCallCli(params: {
         mode?: string;
         yes?: boolean;
         json?: boolean;
-      }) => {
-        const setup = buildSetupStatus(config);
-        if (!setup.ok) {
-          if (options.json) {
-            writeStdoutJson({ ok: false, setup });
-          } else {
-            writeSetupStatus(setup);
+      }) =>
+        runWithStandaloneRuntime(createRuntime, async (ensureRuntime) => {
+          const setup = buildSetupStatus(config, coreConfig);
+          if (!setup.ok) {
+            if (options.json) {
+              writeCliJson({ ok: false, setup });
+            } else {
+              writeSetupStatus(setup);
+            }
+            process.exitCode = 1;
+            return;
           }
-          process.exitCode = 1;
-          return;
-        }
-        if (!options.to) {
-          if (options.json) {
-            writeStdoutJson({ ok: true, setup, liveCall: false });
-          } else {
-            writeSetupStatus(setup);
-            writeStdoutLine("live-call: skipped (pass --to and --yes to place one)");
+          if (!options.to || !options.yes) {
+            if (options.json) {
+              writeCliJson({
+                ok: true,
+                setup,
+                liveCall: false,
+                ...(options.to ? { wouldCall: options.to } : {}),
+              });
+            } else {
+              writeSetupStatus(setup);
+              if (options.to) {
+                writeCliLine("live-call: dry run for %s (add --yes to place it)", options.to);
+              } else {
+                writeCliLine("live-call: skipped (pass --to and --yes to place one)");
+              }
+            }
+            return;
           }
-          return;
-        }
-        if (!options.yes) {
-          if (options.json) {
-            writeStdoutJson({ ok: true, setup, liveCall: false, wouldCall: options.to });
-          } else {
-            writeSetupStatus(setup);
-            writeStdoutLine("live-call: dry run for %s (add --yes to place it)", options.to);
-          }
-          return;
-        }
-        const mode = resolveCallMode(options.mode) ?? "notify";
-        const gateway = await callVoiceCallGateway(
-          "voicecall.start",
-          {
+          const callId = await initiateVoiceCall({
+            ensureRuntime,
+            config,
+            method: "voicecall.start",
             to: options.to,
-            ...(options.message ? { message: options.message } : {}),
-            mode,
-          },
-          {
-            timeoutMs: resolveGatewayOperationTimeoutMs(config),
-          },
-        );
-        let callId: unknown;
-        if (gateway.ok) {
-          callId = isRecord(gateway.payload) ? gateway.payload.callId : undefined;
-        } else {
-          const rt = await ensureRuntime();
-          const result = await rt.manager.initiateCall(options.to, undefined, {
             message: options.message,
-            mode,
+            mode: options.mode,
+            defaultMode: "notify",
+            failureMessage: "smoke call failed",
           });
-          if (!result.success) {
-            throw new Error(result.error || "smoke call failed");
+          if (options.json) {
+            writeCliJson({ ok: true, setup, liveCall: true, callId });
+            return;
           }
-          callId = result.callId;
-        }
-        if (typeof callId !== "string" || !callId) {
-          throw new Error("smoke call failed");
-        }
-        if (options.json) {
-          writeStdoutJson({ ok: true, setup, liveCall: true, callId });
-          return;
-        }
-        writeSetupStatus(setup);
-        writeStdoutLine("live-call: started %s", callId);
-      },
+          writeSetupStatus(setup);
+          writeCliLine("live-call: started %s", callId);
+        }),
     );
+
+  const callAction =
+    (method: "voicecall.initiate" | "voicecall.start") =>
+    async (options: {
+      to?: string;
+      message?: string;
+      mode?: string;
+      brief?: string;
+      briefFile?: string;
+    }) =>
+      runWithStandaloneRuntime(createRuntime, async (ensureRuntime) => {
+        const callId = await initiateVoiceCall({
+          ensureRuntime,
+          config,
+          method,
+          brief: await readCliBrief(options),
+          to: options.to,
+          message: options.message,
+          mode: options.mode,
+        });
+        writeCliJson({ callId });
+      });
 
   root
     .command("call")
@@ -526,16 +324,9 @@ export function registerVoiceCallCli(params: {
       "Call mode: notify (hangup after message) or conversation (stay open)",
       "conversation",
     )
-    .action(async (options: { message: string; to?: string; mode?: string }) => {
-      await initiateCallViaGatewayOrRuntime({
-        ensureRuntime,
-        config,
-        method: "voicecall.initiate",
-        to: options.to,
-        message: options.message,
-        mode: options.mode,
-      });
-    });
+    .option("--brief <text-or-json>", "Per-call task or structured JSON brief")
+    .option("--brief-file <path>", "Read a structured JSON brief from a file")
+    .action(callAction("voicecall.initiate"));
 
   root
     .command("start")
@@ -547,71 +338,37 @@ export function registerVoiceCallCli(params: {
       "Call mode: notify (hangup after message) or conversation (stay open)",
       "conversation",
     )
-    .action(async (options: { to: string; message?: string; mode?: string }) => {
-      await initiateCallViaGatewayOrRuntime({
-        ensureRuntime,
-        config,
-        method: "voicecall.start",
-        to: options.to,
-        message: options.message,
-        mode: options.mode,
-      });
-    });
+    .option("--brief <text-or-json>", "Per-call task or structured JSON brief")
+    .option("--brief-file <path>", "Read a structured JSON brief from a file")
+    .action(callAction("voicecall.start"));
 
   root
     .command("continue")
     .description("Speak a message and wait for a response")
     .requiredOption("--call-id <id>", "Call ID")
     .requiredOption("--message <text>", "Message to speak")
-    .action(async (options: { callId: string; message: string }) => {
-      let gateway: VoiceCallGatewayCallResult;
-      try {
-        gateway = await callVoiceCallGateway(
-          "voicecall.continue.start",
-          {
-            callId: options.callId,
-            message: options.message,
-          },
-          {
-            timeoutMs: resolveGatewayOperationTimeoutMs(config),
-          },
-        );
-      } catch (err) {
-        if (!isUnknownGatewayMethod(err, "voicecall.continue.start")) {
-          throw err;
-        }
-        gateway = await callVoiceCallGateway(
-          "voicecall.continue",
-          {
-            callId: options.callId,
-            message: options.message,
-          },
-          {
-            timeoutMs: resolveGatewayContinueTimeoutMs(config),
-          },
-        );
-      }
-      if (gateway.ok) {
-        if (isRecord(gateway.payload) && typeof gateway.payload.operationId === "string") {
-          const result = await pollVoiceCallContinueGateway({
-            operationId: readGatewayOperationId(gateway.payload),
-            timeoutMs: readGatewayPollTimeoutMs(
-              gateway.payload,
-              resolveGatewayContinueTimeoutMs(config),
-            ),
-          });
-          writeStdoutJson(result);
-          return;
-        }
-        writeStdoutJson(gateway.payload);
-        return;
-      }
-      const rt = await ensureRuntime();
-      const result = await rt.manager.continueCall(options.callId, options.message);
-      if (!result.success) {
-        throw new Error(result.error || "continue failed");
-      }
-      writeStdoutJson(result);
+    .action((options: { callId: string; message: string }) => {
+      const gatewayParams = { callId: options.callId, message: options.message };
+      const continueTimeoutMs = resolveContinueTimeout(config);
+      return managerAction({
+        gatewayCall: async () => {
+          try {
+            return await callVoiceCallGateway("voicecall.continue.start", gatewayParams, {
+              timeoutMs: resolveOperationTimeout(config),
+            });
+          } catch (err) {
+            if (!isUnknownMethod(err, "voicecall.continue.start")) {
+              throw err;
+            }
+            return callVoiceCallGateway("voicecall.continue", gatewayParams, {
+              timeoutMs: continueTimeoutMs,
+            });
+          }
+        },
+        resolveGatewayPayload: (payload) => pollContinueGateway(payload, continueTimeoutMs),
+        managerFallback: (manager) => manager.continueCall(options.callId, options.message),
+        failureLabel: "continue",
+      });
     });
 
   root
@@ -619,21 +376,37 @@ export function registerVoiceCallCli(params: {
     .description("Speak a message without waiting for response")
     .requiredOption("--call-id <id>", "Call ID")
     .requiredOption("--message <text>", "Message to speak")
-    .action(async (options: { callId: string; message: string }) => {
-      const gateway = await callVoiceCallGateway("voicecall.speak", {
+    .action((options: { callId: string; message: string }) =>
+      managerAction({
+        gatewayCall: () =>
+          callVoiceCallGateway("voicecall.speak", {
+            callId: options.callId,
+            message: options.message,
+          }),
+        managerFallback: (manager) => manager.speak(options.callId, options.message),
+        failureLabel: "speak",
+      }),
+    );
+
+  root
+    .command("steer")
+    .description("Steer an active realtime call through its owning Gateway")
+    .requiredOption("--call-id <id>", "Call ID")
+    .requiredOption("--message <text>", "Owner instruction")
+    .option("--mode <mode>", "guidance or say", "guidance")
+    .action(async (options: { callId: string; message: string; mode: string }) => {
+      if (options.mode !== "say" && options.mode !== "guidance") {
+        throw new Error("mode must be say or guidance");
+      }
+      const gateway = await callVoiceCallGateway("voicecall.steer", {
         callId: options.callId,
         message: options.message,
+        mode: options.mode,
       });
-      if (gateway.ok) {
-        writeStdoutJson(gateway.payload);
-        return;
+      if (!gateway.ok) {
+        throw new Error("Steering requires the running Gateway that owns the active call");
       }
-      const rt = await ensureRuntime();
-      const result = await rt.manager.speak(options.callId, options.message);
-      if (!result.success) {
-        throw new Error(result.error || "speak failed");
-      }
-      writeStdoutJson(result);
+      writeCliJson(gateway.payload);
     });
 
   root
@@ -641,42 +414,29 @@ export function registerVoiceCallCli(params: {
     .description("Send DTMF digits to an active call")
     .requiredOption("--call-id <id>", "Call ID")
     .requiredOption("--digits <digits>", "DTMF digits")
-    .action(async (options: { callId: string; digits: string }) => {
-      const gateway = await callVoiceCallGateway("voicecall.dtmf", {
-        callId: options.callId,
-        digits: options.digits,
-      });
-      if (gateway.ok) {
-        writeStdoutJson(gateway.payload);
-        return;
-      }
-      const rt = await ensureRuntime();
-      const result = await rt.manager.sendDtmf(options.callId, options.digits);
-      if (!result.success) {
-        throw new Error(result.error || "dtmf failed");
-      }
-      writeStdoutJson(result);
-    });
+    .action((options: { callId: string; digits: string }) =>
+      managerAction({
+        gatewayCall: () =>
+          callVoiceCallGateway("voicecall.dtmf", {
+            callId: options.callId,
+            digits: options.digits,
+          }),
+        managerFallback: (manager) => manager.sendDtmf(options.callId, options.digits),
+        failureLabel: "dtmf",
+      }),
+    );
 
   root
     .command("end")
     .description("Hang up an active call")
     .requiredOption("--call-id <id>", "Call ID")
-    .action(async (options: { callId: string }) => {
-      const gateway = await callVoiceCallGateway("voicecall.end", {
-        callId: options.callId,
-      });
-      if (gateway.ok) {
-        writeStdoutJson(gateway.payload);
-        return;
-      }
-      const rt = await ensureRuntime();
-      const result = await rt.manager.endCall(options.callId);
-      if (!result.success) {
-        throw new Error(result.error || "end failed");
-      }
-      writeStdoutJson(result);
-    });
+    .action((options: { callId: string }) =>
+      managerAction({
+        gatewayCall: () => callVoiceCallGateway("voicecall.end", { callId: options.callId }),
+        managerFallback: (manager) => manager.endCall(options.callId),
+        failureLabel: "end",
+      }),
+    );
 
   root
     .command("status")
@@ -691,123 +451,37 @@ export function registerVoiceCallCli(params: {
       if (gateway.ok) {
         if (options.callId && isRecord(gateway.payload)) {
           if (gateway.payload.found === true && "call" in gateway.payload) {
-            writeStdoutJson(gateway.payload.call);
+            writeCliJson(gateway.payload.call);
             return;
           }
           if (gateway.payload.found === false) {
-            writeStdoutJson({ found: false });
+            writeCliJson({ found: false });
             return;
           }
         }
-        writeStdoutJson(gateway.payload);
+        writeCliJson(gateway.payload);
         return;
       }
-      const rt = await ensureRuntime();
+      // Status is a read-only command. Starting the telephony runtime here would
+      // bind the webhook port and keep this one-shot CLI process alive.
+      ensureHistoryStateRuntime();
+      const storePath = path.dirname(resolveDefaultStorePath(config));
       if (options.callId) {
-        const call = rt.manager.getCall(options.callId);
-        writeStdoutJson(call ?? { found: false });
+        const call = await findCallInStore(storePath, options.callId);
+        writeCliJson(call ?? { found: false });
         return;
       }
-      writeStdoutJson({
+      writeCliJson({
         found: true,
-        calls: rt.manager.getActiveCalls(),
+        calls: Array.from((await loadActiveCallsFromStore(storePath)).activeCalls.values()),
       });
     });
 
-  root
-    .command("tail")
-    .description("Tail voice-call JSONL logs (prints new lines; useful during provider tests)")
-    .option("--file <path>", "Path to calls.jsonl", resolveDefaultStorePath(config))
-    .option("--since <n>", "Print last N lines first", "25")
-    .option("--poll <ms>", "Poll interval in ms", "250")
-    .action(async (options: { file: string; since?: string; poll?: string }) => {
-      const file = options.file;
-      const since = parseVoiceCallIntOption(options.since, "--since", { min: 0 });
-      const pollMs = parseVoiceCallIntOption(options.poll, "--poll", { min: 50 });
-
-      if (!fs.existsSync(file)) {
-        logger.error(`No log file at ${file}`);
-        process.exit(1);
-      }
-
-      const initial = fs.readFileSync(file, "utf8");
-      const lines = initial.split("\n").filter(Boolean);
-      for (const line of lines.slice(Math.max(0, lines.length - since))) {
-        writeStdoutLine(line);
-      }
-
-      let offset = Buffer.byteLength(initial, "utf8");
-
-      for (;;) {
-        try {
-          const stat = fs.statSync(file);
-          if (stat.size < offset) {
-            offset = 0;
-          }
-          if (stat.size > offset) {
-            const fd = fs.openSync(file, "r");
-            try {
-              const buf = Buffer.alloc(stat.size - offset);
-              fs.readSync(fd, buf, 0, buf.length, offset);
-              offset = stat.size;
-              const text = buf.toString("utf8");
-              for (const line of text.split("\n").filter(Boolean)) {
-                writeStdoutLine(line);
-              }
-            } finally {
-              fs.closeSync(fd);
-            }
-          }
-        } catch {
-          // ignore and retry
-        }
-        await sleep(pollMs);
-      }
-    });
-
-  root
-    .command("latency")
-    .description("Summarize turn latency metrics from voice-call JSONL logs")
-    .option("--file <path>", "Path to calls.jsonl", resolveDefaultStorePath(config))
-    .option("--last <n>", "Analyze last N records", "200")
-    .action(async (options: { file: string; last?: string }) => {
-      const file = options.file;
-      const last = parseVoiceCallIntOption(options.last, "--last", { min: 1 });
-
-      if (!fs.existsSync(file)) {
-        throw new Error("No log file at " + file);
-      }
-
-      const content = fs.readFileSync(file, "utf8");
-      const lines = content.split("\n").filter(Boolean).slice(-last);
-
-      const turnLatencyMs: number[] = [];
-      const listenWaitMs: number[] = [];
-
-      for (const line of lines) {
-        try {
-          const parsed = JSON.parse(line) as {
-            metadata?: { lastTurnLatencyMs?: unknown; lastTurnListenWaitMs?: unknown };
-          };
-          const latency = parsed.metadata?.lastTurnLatencyMs;
-          const listenWait = parsed.metadata?.lastTurnListenWaitMs;
-          if (typeof latency === "number" && Number.isFinite(latency)) {
-            turnLatencyMs.push(latency);
-          }
-          if (typeof listenWait === "number" && Number.isFinite(listenWait)) {
-            listenWaitMs.push(listenWait);
-          }
-        } catch {
-          // ignore malformed JSON lines
-        }
-      }
-
-      writeStdoutJson({
-        recordsScanned: lines.length,
-        turnLatency: summarizeSeries(turnLatencyMs),
-        listenWait: summarizeSeries(listenWaitMs),
-      });
-    });
+  registerVoiceCallLogs({
+    root,
+    defaultFile: resolveDefaultStorePath(config),
+    ensureHistoryStateRuntime,
+  });
 
   root
     .command("expose")
@@ -819,27 +493,44 @@ export function registerVoiceCallCli(params: {
     .action(
       async (options: { mode?: string; port?: string; path?: string; servePath?: string }) => {
         const mode = resolveMode(options.mode ?? "funnel");
-        const servePort = parseVoiceCallIntOption(
+        const servePort = parseCliInteger(
           options.port ?? String(config.serve.port ?? 3334),
           "--port",
-          { min: 1 },
+          { min: 1, max: MAX_TCP_PORT },
         );
         const servePath = options.servePath ?? config.serve.path ?? "/voice/webhook";
         const tsPath = options.path ?? config.tailscale?.path ?? servePath;
-
-        const localUrl = `http://127.0.0.1:${servePort}`;
+        const streamExposurePaths = resolveVoiceCallStreamExposurePaths(config, {
+          publicWebhookPath: tsPath,
+          localWebhookPath: servePath,
+        });
+        const streamPaths = streamExposurePaths.map(({ publicPath }) => publicPath);
+        const localUrl = `http://127.0.0.1:${servePort}${servePath}`;
 
         if (mode === "off") {
-          await cleanupTailscaleExposureRoute({ mode: "serve", path: tsPath });
-          await cleanupTailscaleExposureRoute({ mode: "funnel", path: tsPath });
-          writeStdoutJson({ ok: true, mode: "off", path: tsPath });
+          for (const exposurePath of [tsPath, ...streamPaths]) {
+            for (const tailscaleMode of ["serve", "funnel"] as const) {
+              await cleanupTailscaleExposureRoute({
+                mode: tailscaleMode,
+                port: config.tailscale.port,
+                path: exposurePath,
+              });
+            }
+          }
+          writeCliJson({ ok: true, mode: "off", path: tsPath, streamPaths });
           return;
         }
 
-        const publicUrl = await setupTailscaleExposureRoute({
+        const publicUrl = await setupTailscaleExposureRoutes({
           mode,
-          path: tsPath,
-          localUrl,
+          port: config.tailscale.port,
+          routes: [
+            { path: tsPath, localUrl },
+            ...streamExposurePaths.map(({ publicPath, localPath }) => ({
+              path: publicPath,
+              localUrl: `http://127.0.0.1:${servePort}${localPath}`,
+            })),
+          ],
         });
 
         const tsInfo = publicUrl ? null : await getTailscaleSelfInfo();
@@ -847,10 +538,11 @@ export function registerVoiceCallCli(params: {
           ? `https://login.tailscale.com/f/${mode}?node=${tsInfo.nodeId}`
           : null;
 
-        writeStdoutJson({
+        writeCliJson({
           ok: Boolean(publicUrl),
           mode,
           path: tsPath,
+          streamPaths,
           localUrl,
           publicUrl,
           hint: publicUrl

@@ -1,9 +1,9 @@
-import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
-import type { RuntimeEnv } from "../../runtime.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { RuntimeEnv } from "../../runtime.js";
+import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import { summarizeStringEntries } from "../../shared/string-sample.js";
 
 export type AllowlistUserResolutionLike = {
@@ -12,34 +12,27 @@ export type AllowlistUserResolutionLike = {
   id?: string;
 };
 
-function dedupeAllowlistEntries(entries: string[]): string[] {
-  const seen = new Set<string>();
-  const deduped: string[] = [];
-  for (const entry of entries) {
-    const normalized = entry.trim();
-    if (!normalized) {
-      continue;
-    }
-    const key = normalizeLowercaseStringOrEmpty(normalized);
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    deduped.push(normalized);
-  }
-  return deduped;
+function dedupeAllowlistEntries(
+  entries: string[],
+  entryKey: (entry: string) => string = normalizeLowercaseStringOrEmpty,
+): string[] {
+  return dedupeByKey(entries.map((entry) => entry.trim()).filter(Boolean), entryKey);
 }
 
 export function mergeAllowlist(params: {
   existing?: Array<string | number>;
   additions: string[];
 }): string[] {
-  return dedupeAllowlistEntries([...mapAllowFromEntries(params.existing), ...params.additions]);
+  return dedupeAllowlistEntries([...(params.existing ?? []).map(String), ...params.additions]);
 }
 
 export function buildAllowlistResolutionSummary<T extends AllowlistUserResolutionLike>(
   resolvedUsers: T[],
-  opts?: { formatResolved?: (entry: T) => string; formatUnresolved?: (entry: T) => string },
+  opts?: {
+    /** Return null to omit an entry from the logged mapping (e.g. identity lookups). */
+    formatResolved?: (entry: T) => string | null;
+    formatUnresolved?: (entry: T) => string;
+  },
 ): {
   resolvedMap: Map<string, T>;
   mapping: string[];
@@ -48,9 +41,16 @@ export function buildAllowlistResolutionSummary<T extends AllowlistUserResolutio
 } {
   const resolvedMap = new Map(resolvedUsers.map((entry) => [entry.input, entry]));
   const resolvedOk = (entry: T) => Boolean(entry.resolved && entry.id);
-  const formatResolved = opts?.formatResolved ?? ((entry: T) => `${entry.input}→${entry.id}`);
+  // An id that "resolves" to itself carries no information; skip it so startup
+  // summaries only mention lookups that actually translated something.
+  const formatResolved =
+    opts?.formatResolved ??
+    ((entry: T) => (entry.id === entry.input ? null : `${entry.input}→${entry.id}`));
   const formatUnresolved = opts?.formatUnresolved ?? ((entry: T) => entry.input);
-  const mapping = resolvedUsers.filter(resolvedOk).map(formatResolved);
+  const mapping = resolvedUsers
+    .filter(resolvedOk)
+    .map(formatResolved)
+    .filter((label): label is string => label !== null);
   const additions = resolvedUsers
     .filter(resolvedOk)
     .map((entry) => entry.id)
@@ -74,9 +74,14 @@ function resolveAllowlistIdAdditions<T extends AllowlistUserResolutionLike>(para
   return additions;
 }
 
+/** Replaces resolvable user entries with canonical ids while preserving unresolved entries and `*`. */
 export function canonicalizeAllowlistWithResolvedIds<
   T extends AllowlistUserResolutionLike,
->(params: { existing?: Array<string | number>; resolvedMap: Map<string, T> }): string[] {
+>(params: {
+  existing?: Array<string | number>;
+  resolvedMap: Map<string, T>;
+  entryKey?: (entry: string) => string;
+}): string[] {
   const canonicalized: string[] = [];
   for (const entry of params.existing ?? []) {
     const trimmed = normalizeOptionalString(entry) ?? "";
@@ -84,13 +89,14 @@ export function canonicalizeAllowlistWithResolvedIds<
       continue;
     }
     if (trimmed === "*") {
+      // Wildcard allowlists are a policy value, not a lookup target.
       canonicalized.push(trimmed);
       continue;
     }
     const resolved = params.resolvedMap.get(trimmed);
     canonicalized.push(resolved?.resolved && resolved.id ? resolved.id : trimmed);
   }
-  return dedupeAllowlistEntries(canonicalized);
+  return dedupeAllowlistEntries(canonicalized, params.entryKey);
 }
 
 export function patchAllowlistUsersInConfigEntries<
@@ -100,6 +106,7 @@ export function patchAllowlistUsersInConfigEntries<
   entries: TEntries;
   resolvedMap: Map<string, T>;
   strategy?: "merge" | "canonicalize";
+  entryKey?: (entry: string) => string;
 }): TEntries {
   const nextEntries: Record<string, unknown> = { ...params.entries };
   for (const [entryKey, entryConfig] of Object.entries(params.entries)) {
@@ -110,11 +117,13 @@ export function patchAllowlistUsersInConfigEntries<
     if (!Array.isArray(users) || users.length === 0) {
       continue;
     }
+    // `merge` keeps original user text and appends resolved ids; `canonicalize` replaces it.
     const resolvedUsers =
       params.strategy === "canonicalize"
         ? canonicalizeAllowlistWithResolvedIds({
             existing: users,
             resolvedMap: params.resolvedMap,
+            entryKey: params.entryKey,
           })
         : mergeAllowlist({
             existing: users,
@@ -131,6 +140,7 @@ export function patchAllowlistUsersInConfigEntries<
   return nextEntries as TEntries;
 }
 
+/** Collects concrete user lookup targets from one config entry, excluding wildcard policy entries. */
 export function addAllowlistUserEntriesFromConfigEntry(target: Set<string>, entry: unknown): void {
   if (!entry || typeof entry !== "object") {
     return;
@@ -153,14 +163,15 @@ export function summarizeMapping(
   unresolved: string[],
   runtime: RuntimeEnv,
 ): void {
-  const lines: string[] = [];
+  // One log call per line: the console logger only prefixes the first line of
+  // a message with timestamp/subsystem, so a joined multi-line summary leaves
+  // bare continuation lines in operator output.
   if (mapping.length > 0) {
-    lines.push(`${label} resolved: ${summarizeStringEntries({ entries: mapping, limit: 6 })}`);
+    runtime.log?.(`${label} resolved: ${summarizeStringEntries({ entries: mapping, limit: 6 })}`);
   }
   if (unresolved.length > 0) {
-    lines.push(`${label} unresolved: ${summarizeStringEntries({ entries: unresolved, limit: 6 })}`);
-  }
-  if (lines.length > 0) {
-    runtime.log?.(lines.join("\n"));
+    runtime.log?.(
+      `${label} unresolved: ${summarizeStringEntries({ entries: unresolved, limit: 6 })}`,
+    );
   }
 }

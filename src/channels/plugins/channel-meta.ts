@@ -3,7 +3,6 @@ import { resolveChannelExposure } from "./exposure.js";
 import type { ChannelMeta } from "./types.core.js";
 
 type ArrayFieldMode = "defined" | "non-empty";
-type OptionalStringMode = "defined" | "truthy";
 
 export function buildManifestChannelMeta(params: {
   id: string;
@@ -16,14 +15,9 @@ export function buildManifestChannelMeta(params: {
   detailLabel?: string;
   systemImage?: string;
   arrayFieldMode: ArrayFieldMode;
-  selectionDocsPrefixMode: OptionalStringMode;
 }): ChannelMeta {
   const hasArrayField = (value: readonly string[] | undefined) =>
     params.arrayFieldMode === "defined" ? value !== undefined : Boolean(value?.length);
-  const hasSelectionDocsPrefix =
-    params.selectionDocsPrefixMode === "defined"
-      ? params.channel.selectionDocsPrefix !== undefined
-      : Boolean(params.channel.selectionDocsPrefix);
 
   return {
     id: params.id,
@@ -34,7 +28,9 @@ export function buildManifestChannelMeta(params: {
     blurb: params.blurb,
     ...(hasArrayField(params.channel.aliases) ? { aliases: params.channel.aliases } : {}),
     ...(params.channel.order !== undefined ? { order: params.channel.order } : {}),
-    ...(hasSelectionDocsPrefix ? { selectionDocsPrefix: params.channel.selectionDocsPrefix } : {}),
+    ...(typeof params.channel.selectionDocsPrefix === "string"
+      ? { selectionDocsPrefix: params.channel.selectionDocsPrefix }
+      : {}),
     ...(params.channel.selectionDocsOmitLabel !== undefined
       ? { selectionDocsOmitLabel: params.channel.selectionDocsOmitLabel }
       : {}),
@@ -46,6 +42,8 @@ export function buildManifestChannelMeta(params: {
     ...(params.channel.markdownCapable !== undefined
       ? { markdownCapable: params.channel.markdownCapable }
       : {}),
+    // Exposure defaults and validation live in the shared exposure helper so setup and catalog
+    // metadata stay aligned across bundled and external channels.
     exposure: resolveChannelExposure(params.channel),
     ...(params.channel.quickstartAllowFrom !== undefined
       ? { quickstartAllowFrom: params.channel.quickstartAllowFrom }

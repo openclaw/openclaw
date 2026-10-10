@@ -1,0 +1,257 @@
+import {
+  bootstrapHarnessContextEngine,
+  buildAgentHookContextChannelFields,
+  buildHarnessContextEngineRuntimeContext,
+  CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
+  embeddedAgentLog,
+  getAgentHarnessHookRunner,
+  isHostScopedAgentToolActive,
+  resolveContextEngineOwnerPluginId,
+  runHarnessContextEngineMaintenance,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  buildCodexOpenClawPromptContext,
+  prepareCodexWatchedSessionsContext,
+  readMirroredSessionHistoryMessages,
+  renderCodexSkillsInstructions,
+} from "./attempt-context.js";
+import { buildCodexWorkspaceBootstrapContext } from "./attempt-workspace-context.js";
+import {
+  resolveCodexContextEngineProjectionMaxChars,
+  resolveCodexContinuityProjectionMaxChars,
+  type CodexProjectedContextRange,
+} from "./context-engine-projection.js";
+import { joinPresentSections } from "./developer-instruction-sections.js";
+import { isSystemAgentOnlyCodexDynamicToolAllowlist } from "./dynamic-tool-profile.js";
+import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
+import type { CodexAttemptTools } from "./run-attempt-tool-setup.js";
+import type { CodexContextEngineThreadBootstrapProjection } from "./thread-context-engine.js";
+import { buildDeveloperInstructions } from "./thread-prompt.js";
+
+export async function prepareCodexAttemptContext(
+  runtime: CodexAttemptRuntime,
+  attemptTools: CodexAttemptTools,
+) {
+  const {
+    connection,
+    runtimeParams,
+    effectiveContextWindowInfo,
+    effectiveContextTokenBudget,
+    effectiveRuntimeProviderId,
+    effectiveRuntimeModelId,
+    hookChannelId,
+  } = runtime;
+  const {
+    params,
+    sessionAgentId,
+    contextSessionKey,
+    activeContextEngine,
+    initialStartupBindingHadInactiveThreadBootstrap,
+    effectiveWorkspace,
+    effectiveCwd,
+    agentDir,
+    usesSupervisionConnection,
+    resolvedWorkspace,
+    sandbox,
+  } = connection;
+  const { toolBridge } = attemptTools;
+  const activeTranscriptTarget = {
+    agentId: sessionAgentId,
+    sessionFile: runtimeParams.sessionFile,
+    sessionId: runtimeParams.sessionId,
+    sessionKey: contextSessionKey,
+    sessionTarget: params.sessionTarget,
+  };
+  const readFencedHistory = async () => {
+    const transcriptReadFence = params.userTurnTranscriptRecorder?.getAdmissionReceipt();
+    const messages = await readMirroredSessionHistoryMessages({
+      ...activeTranscriptTarget,
+      signal: connection.runAbortController.signal,
+      contextTokenBudget: effectiveContextTokenBudget,
+      ...(transcriptReadFence ? { admission: transcriptReadFence } : {}),
+    });
+    connection.runAbortController.signal.throwIfAborted();
+    return await connection.withCurrent(() => {
+      connection.assertCurrent();
+      return messages;
+    });
+  };
+  const historyState = {
+    messages:
+      !activeContextEngine && initialStartupBindingHadInactiveThreadBootstrap
+        ? []
+        : ((await readFencedHistory()) ?? []),
+  };
+  const hadSessionTranscriptState = historyState.messages.length > 0;
+  const hookContextWindowFields = {
+    ...(effectiveContextWindowInfo?.tokens
+      ? { contextTokenBudget: effectiveContextWindowInfo.tokens }
+      : effectiveContextTokenBudget
+        ? { contextTokenBudget: effectiveContextTokenBudget }
+        : {}),
+    ...(effectiveContextWindowInfo?.source
+      ? { contextWindowSource: effectiveContextWindowInfo.source }
+      : {}),
+    ...(effectiveContextWindowInfo?.referenceTokens
+      ? { contextWindowReferenceTokens: effectiveContextWindowInfo.referenceTokens }
+      : {}),
+  };
+  const hookContext = {
+    runId: params.runId,
+    agentId: sessionAgentId,
+    sessionKey: contextSessionKey,
+    sessionId: params.sessionId,
+    workspaceDir: params.workspaceDir,
+    // Native-owned models are confirmed after startup; hooks must not publish
+    // stale bindings or private transport overrides as the selected model.
+    ...(!usesSupervisionConnection &&
+    connection.mutable.startupBinding?.preserveNativeModel !== true
+      ? { modelProviderId: params.provider, modelId: params.modelId }
+      : {}),
+    trigger: params.trigger,
+    inputProvenance: params.inputProvenance,
+    ...buildAgentHookContextChannelFields({
+      sessionKey: contextSessionKey,
+      messageChannel: params.messageChannel,
+      messageProvider: params.messageProvider,
+      currentChannelId: hookChannelId,
+      messageTo: params.messageTo,
+      senderId: params.senderId,
+      agentAccountId: params.agentAccountId,
+    }),
+    channelContext: params.channelContext,
+    // Prompt hooks (Active Memory recall) need the turn's host-resolved memory audience,
+    // as dynamic tools already receive it; the shared hook builder adds its currency guard.
+    ...(params.memoryAudience ? { memoryAudience: params.memoryAudience } : {}),
+    sandboxed: sandbox?.enabled === true,
+    ...hookContextWindowFields,
+  };
+  const hookRunner = getAgentHarnessHookRunner();
+  const buildActiveContextEngineRuntimeContext = () =>
+    buildHarnessContextEngineRuntimeContext({
+      attempt: { ...runtimeParams },
+      workspaceDir: effectiveWorkspace,
+      cwd: effectiveCwd,
+      agentDir,
+      activeAgentId: sessionAgentId,
+      contextEnginePluginId: resolveContextEngineOwnerPluginId(activeContextEngine),
+      tokenBudget: effectiveContextTokenBudget,
+    });
+  if (activeContextEngine) {
+    await bootstrapHarnessContextEngine({
+      hadSessionFile: hadSessionTranscriptState,
+      contextEngine: activeContextEngine,
+      sessionId: runtimeParams.sessionId,
+      sessionKey: contextSessionKey,
+      sessionFile: runtimeParams.sessionFile,
+      sessionTarget: params.sessionTarget,
+      runtimeContext: buildActiveContextEngineRuntimeContext(),
+      transcriptReadFence: params.userTurnTranscriptRecorder?.getAdmissionReceipt(),
+      contextEngineHostSupport: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
+      providerId: effectiveRuntimeProviderId,
+      requestedModelId: usesSupervisionConnection ? undefined : params.requestedModelId,
+      modelId: effectiveRuntimeModelId,
+      fallbackReason: usesSupervisionConnection ? undefined : params.fallbackReason,
+      degradedReason: usesSupervisionConnection ? undefined : params.degradedReason,
+      runMaintenance: runHarnessContextEngineMaintenance,
+      config: params.config,
+      warn: (message) => embeddedAgentLog.warn(message),
+    });
+    historyState.messages = (await readFencedHistory()) ?? historyState.messages;
+  }
+  // The admission fence intentionally excludes this logical turn's committed results.
+  historyState.messages.push(...(params.pluginRuntimeRefreshMessages ?? []));
+  const workspaceBootstrapContext = await buildCodexWorkspaceBootstrapContext({
+    params: runtimeParams,
+    agentWorkspaceDeveloperInstructions:
+      connection.mutable.startupBinding?.agentWorkspaceDeveloperInstructions,
+    resolvedWorkspace: runtimeParams.bootstrapWorkspaceDir ?? resolvedWorkspace,
+    executionWorkspace: resolvedWorkspace,
+    effectiveWorkspace,
+    sessionKey: contextSessionKey,
+    sessionAgentId,
+    tools: toolBridge.availableSpecs,
+    ringZeroActive:
+      isHostScopedAgentToolActive("openclaw") &&
+      isSystemAgentOnlyCodexDynamicToolAllowlist(runtimeParams.toolsAllow),
+    sandboxed: sandbox?.enabled === true,
+  });
+  const agentWorkspaceDeveloperInstructions = workspaceBootstrapContext.threadDeveloperInstructions;
+  const skillsInstructions = renderCodexSkillsInstructions({
+    attempt: runtimeParams,
+    skillsPrompt: params.skillsSnapshot?.prompt,
+    dynamicTools: toolBridge.availableSpecs,
+  });
+  // This section uses the existing native thread carrier only when there is no
+  // managed parent-local inference route; it is separate from immutable policy.
+  const refreshableInstructions =
+    joinPresentSections(
+      skillsInstructions,
+      workspaceBootstrapContext.sharedPersonaInstructions,
+      workspaceBootstrapContext.memoryInstructions,
+    ) || undefined;
+  const baseDeveloperInstructions = joinPresentSections(
+    buildDeveloperInstructions(runtimeParams, {
+      dynamicTools: toolBridge.availableSpecs,
+      nativeCodeModeOnlyEnabled:
+        runtime.nativeToolSurfaceEnabled && connection.appServer.codeModeOnly,
+    }),
+    agentWorkspaceDeveloperInstructions,
+  );
+  const watchedSessionsContext = await prepareCodexWatchedSessionsContext({
+    attempt: runtimeParams,
+    dynamicTools: toolBridge.availableSpecs,
+    sessionKey: contextSessionKey,
+    sandboxed: sandbox?.enabled === true,
+    assertCurrent: () => {
+      connection.runAbortController.signal.throwIfAborted();
+      connection.assertCurrent();
+    },
+  });
+  const buildOpenClawPromptContext = (includeWorkspaceReferences: boolean) =>
+    buildCodexOpenClawPromptContext({
+      params: runtimeParams,
+      workspacePromptContext: includeWorkspaceReferences
+        ? workspaceBootstrapContext.promptContext
+        : undefined,
+      watchedSessionsContext,
+    });
+  const promptState = {
+    promptText: params.prompt,
+    promptContextRange: undefined as CodexProjectedContextRange | undefined,
+    developerInstructions: baseDeveloperInstructions,
+    contextEngineProjection: undefined as CodexContextEngineThreadBootstrapProjection | undefined,
+    // Set by the no-engine continuity appliers; gates calibration recording so a
+    // dense direct or active-engine prompt can never persist a density sample
+    // that later shrinks continuity history it did not measure.
+    noEngineContinuityProjectionApplied: false,
+  };
+  const codexContextProjectionMaxChars = resolveCodexContextEngineProjectionMaxChars({
+    contextTokenBudget: effectiveContextTokenBudget,
+  });
+  const codexContinuityProjectionMaxChars = resolveCodexContinuityProjectionMaxChars({
+    contextTokenBudget: effectiveContextTokenBudget,
+    calibration: connection.mutable.continuityCalibration,
+  });
+  return {
+    runtime,
+    attemptTools,
+    activeTranscriptTarget,
+    historyState,
+    hookContext,
+    hookContextWindowFields,
+    hookRunner,
+    buildActiveContextEngineRuntimeContext,
+    workspaceBootstrapContext,
+    agentWorkspaceDeveloperInstructions,
+    baseDeveloperInstructions,
+    buildOpenClawPromptContext,
+    skillsInstructions,
+    refreshableInstructions,
+    promptState,
+    codexContextProjectionMaxChars,
+    codexContinuityProjectionMaxChars,
+  };
+}
+
+export type CodexAttemptContext = Awaited<ReturnType<typeof prepareCodexAttemptContext>>;

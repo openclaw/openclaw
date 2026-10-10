@@ -20,10 +20,12 @@ export function resolveChannelApprovalAdapter(
     !capability.render &&
     !capability.native
   ) {
+    // Auth-only capabilities are valid plugin metadata but do not form a delivery adapter.
     return undefined;
   }
   return {
     describeExecApprovalSetup: capability.describeExecApprovalSetup,
+    describePluginApprovalSetup: capability.describePluginApprovalSetup,
     delivery: capability.delivery,
     nativeRuntime: capability.nativeRuntime,
     render: capability.render,

@@ -1,12 +1,18 @@
 {
   "id": "fal",
+  "categories": ["media"],
   "activation": {
     "onStartup": false
   },
   "enabledByDefault": true,
   "providers": ["fal"],
-  "providerAuthEnvVars": {
-    "fal": ["FAL_KEY", "FAL_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "fal",
+        "envVars": ["FAL_KEY", "FAL_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {
@@ -28,6 +34,11 @@
     "imageGenerationProviders": ["fal"],
     "musicGenerationProviders": ["fal"],
     "videoGenerationProviders": ["fal"]
+  },
+  "videoGenerationProviderMetadata": {
+    "fal": {
+      "referenceAudioInputs": true
+    }
   },
   "configSchema": {
     "type": "object",

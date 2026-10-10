@@ -1,0 +1,147 @@
+// Parallels Update Job Timeout tests cover parallels update job timeout script behavior.
+import { spawnSync } from "node:child_process";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { runTimedUpdateJob } from "../../scripts/e2e/parallels/update-job-timeout.ts";
+import { scriptProcessEntrypoints } from "../../scripts/script-process-runtime.test-support.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
+
+describe("Parallels update job timeout", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("clamps oversized update job timers before scheduling", async () => {
+    const chunks: string[] = [];
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    try {
+      await expect(
+        runTimedUpdateJob({
+          append: (chunk) => chunks.push(chunk),
+          label: "Linux",
+          run: async () => undefined,
+          timeoutDescription: "oversized",
+          timeoutMs: Number.MAX_SAFE_INTEGER,
+        }),
+      ).resolves.toBe(0);
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
+  it("records update failures", async () => {
+    const chunks: string[] = [];
+
+    await expect(
+      runTimedUpdateJob({
+        append: (chunk) => chunks.push(chunk),
+        label: "Linux",
+        run: async () => {
+          throw new Error("package swap failed");
+        },
+        timeoutDescription: "1s",
+        timeoutMs: 1000,
+      }),
+    ).resolves.toBe(1);
+
+    expect(chunks).toEqual(["package swap failed\n"]);
+  });
+
+  it("lets the inner bounded operation settle before the backstop fires", async () => {
+    vi.useFakeTimers();
+    const chunks: string[] = [];
+
+    const result = runTimedUpdateJob({
+      append: (chunk) => chunks.push(chunk),
+      label: "macOS",
+      run: () =>
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, 1000);
+        }),
+      timeoutDescription: "1s plus cleanup backstop",
+      timeoutMs: 1200,
+    });
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await expect(result).resolves.toBe(0);
+    expect(chunks).toEqual([]);
+  });
+
+  it("waits for abort-aware cleanup before completing the job", async () => {
+    vi.useFakeTimers();
+    const events: string[] = [];
+
+    const result = runTimedUpdateJob({
+      abortSettleMs: 250,
+      append: (chunk) => events.push(chunk.trim()),
+      label: "macOS",
+      run: ({ signal }) =>
+        new Promise<void>((resolve) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              events.push("abort");
+              setTimeout(() => {
+                events.push("cleanup");
+                resolve();
+              }, 25);
+            },
+            { once: true },
+          );
+        }),
+      timeoutDescription: "1s plus cleanup backstop",
+      timeoutMs: 1000,
+    }).then((code) => {
+      events.push("complete");
+      return code;
+    });
+
+    await vi.advanceTimersByTimeAsync(1025);
+    await expect(result).resolves.toBe(1);
+    expect(events).toEqual([
+      "macOS update timed out after 1s plus cleanup backstop",
+      "abort",
+      "cleanup",
+      "complete",
+    ]);
+  });
+
+  it("keeps the process alive long enough to write logs for hung runners", () => {
+    const moduleUrl = resolveRuntimeWorkerUrl(scriptProcessEntrypoints.updateJobTimeout);
+    const probe = `
+import { runTimedUpdateJob } from ${JSON.stringify(moduleUrl.href)};
+const events = [];
+const result = await runTimedUpdateJob({
+  abortSettleMs: 25,
+  append: (chunk) => events.push(chunk.trim()),
+  label: "Linux",
+  run: () => new Promise(() => {}),
+  timeoutDescription: "10ms",
+  timeoutMs: 10,
+});
+console.log(JSON.stringify({ events, result }));
+`;
+
+    const child = spawnSync(
+      process.execPath,
+      [...resolveRuntimeWorkerArgv(moduleUrl).slice(0, -1), "--input-type=module", "--eval", probe],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        timeout: 5_000,
+      },
+    );
+
+    expect(child.stderr).toBe("");
+    expect(child.status).toBe(0);
+    expect(JSON.parse(child.stdout)).toEqual({
+      events: ["Linux update timed out after 10ms"],
+      result: 1,
+    });
+  });
+});

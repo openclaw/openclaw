@@ -1,80 +1,60 @@
 import { describe, expect, it } from "vitest";
-import { detectCronDenialToken, resolveCronPayloadOutcome } from "./isolated-agent/helpers.js";
+import {
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+  type ReplyPayload,
+} from "../auto-reply/reply-payload.js";
+import { resolveCronPayloadOutcome } from "./isolated-agent/helpers.js";
+import { resolveCronRunTimeoutOverrideMs } from "./isolated-agent/run-timeout.js";
 
-describe("detectCronDenialToken", () => {
-  it("matches host denial markers case-sensitively", () => {
-    expect(detectCronDenialToken("SYSTEM_RUN_DENIED: approval blocked")).toBe("SYSTEM_RUN_DENIED");
-    expect(detectCronDenialToken("INVALID_REQUEST: denied")).toBe("INVALID_REQUEST");
-    expect(detectCronDenialToken("system_run_denied: approval blocked")).toBeUndefined();
-    expect(detectCronDenialToken("invalid_request: denied")).toBeUndefined();
-  });
-
-  it("matches model-narrated denial phrases case-insensitively", () => {
-    expect(detectCronDenialToken("Approval Cannot Safely Bind this runtime command")).toBe(
-      "approval cannot safely bind",
-    );
-    expect(detectCronDenialToken("The runtime denied the operation.")).toBe("runtime denied");
-    expect(detectCronDenialToken("I could not run the script.")).toBe("could not run");
-    expect(detectCronDenialToken("The command did not run to completion.")).toBe("did not run");
-    expect(detectCronDenialToken("The request was denied by policy.")).toBe("was denied");
-  });
-
-  it("ignores empty and non-token text", () => {
-    expect(detectCronDenialToken(undefined)).toBeUndefined();
-    expect(
-      detectCronDenialToken("The denied claim was reviewed, then the job succeeded."),
-    ).toBeUndefined();
-  });
-});
+function createToolWarning(text: string, toolName: string): ReplyPayload {
+  return setReplyPayloadMetadata({ text, isError: true }, { toolErrorWarning: { toolName } });
+}
 
 describe("resolveCronPayloadOutcome", () => {
-  it("uses the last non-empty non-error payload as summary and output", () => {
+  it("keeps tool warnings fatal when terminal output is NO_REPLY", () => {
     const result = resolveCronPayloadOutcome({
-      payloads: [{ text: "first" }, { text: " " }, { text: " last " }],
+      payloads: [createToolWarning("⚠️ Bash failed: mount unavailable", "bash")],
+      finalAssistantVisibleText: "NO_REPLY",
+      preferFinalAssistantVisibleText: true,
     });
-
-    expect(result.summary).toBe("last");
-    expect(result.outputText).toBe("last");
-    expect(result.hasFatalErrorPayload).toBe(false);
-  });
-
-  it("returns a fatal error from the last error payload when no success follows", () => {
-    const result = resolveCronPayloadOutcome({
-      payloads: [
-        {
-          text: "⚠️ 🛠️ Exec failed: /bin/bash: line 1: python: command not found",
-          isError: true,
-        },
-      ],
-    });
-
     expect(result.hasFatalErrorPayload).toBe(true);
-    expect(result.embeddedRunError).toContain("command not found");
-    expect(result.summary).toContain("Exec failed");
+    expect(result.embeddedRunError).toContain("Bash failed");
   });
 
-  it("treats transient error payloads as non-fatal when a later success exists", () => {
+  it("keeps marked middleware warnings diagnostic after structured cron output", () => {
+    const mediaPayload = { mediaUrl: "file:///tmp/cron-report.png" };
+    const toolWarning = setReplyPayloadMetadata(
+      {
+        text: "⚠️ Exec failed",
+        isError: true,
+      },
+      { nonTerminalToolErrorWarning: true },
+    );
+
     const result = resolveCronPayloadOutcome({
-      payloads: [
-        { text: "⚠️ ✍️ Write: failed", isError: true },
-        { text: "Write completed successfully.", isError: false },
-      ],
+      payloads: [mediaPayload, toolWarning],
     });
 
     expect(result.hasFatalErrorPayload).toBe(false);
-    expect(result.summary).toBe("Write completed successfully.");
+    expect(result.embeddedRunError).toBeUndefined();
+    expect(result.summary).toBeUndefined();
+    expect(result.outputText).toBeUndefined();
+    expect(result.synthesizedText).toBeUndefined();
+    expect(result.deliveryPayloads).toEqual([mediaPayload]);
+    expect(result.deliveryPayloadHasStructuredContent).toBe(true);
   });
 
   it("treats trailing message delivery warnings as non-fatal when final assistant text exists", () => {
     const result = resolveCronPayloadOutcome({
-      payloads: [{ text: "Draft output" }, { text: "⚠️ ✉️ Message failed", isError: true }],
+      payloads: [{ text: "Draft output" }, createToolWarning("⚠️ Message failed", "message")],
       finalAssistantVisibleText: "Final cron report",
       preferFinalAssistantVisibleText: true,
     });
 
     expect(result.hasFatalErrorPayload).toBe(false);
     expect(result.embeddedRunError).toBeUndefined();
-    expect(result.pendingPresentationWarningError).toBe("⚠️ ✉️ Message failed");
+    expect(result.pendingPresentationWarningError).toBe("⚠️ Message failed");
     expect(result.summary).toBe("Final cron report");
     expect(result.outputText).toBe("Final cron report");
     expect(result.deliveryPayloads).toEqual([{ text: "Final cron report" }]);
@@ -82,168 +62,116 @@ describe("resolveCronPayloadOutcome", () => {
 
   it("keeps trailing canvas warnings fatal even when earlier assistant output exists", () => {
     const result = resolveCronPayloadOutcome({
-      payloads: [{ text: "Saved report to disk." }, { text: "⚠️ 🖼️ Canvas failed", isError: true }],
+      payloads: [
+        { text: "Saved report to disk." },
+        createToolWarning("⚠️ Canvas failed", "canvas"),
+      ],
+      finalAssistantVisibleText: "Saved report to disk.",
     });
 
     expect(result.hasFatalErrorPayload).toBe(true);
     expect(result.pendingPresentationWarningError).toBeUndefined();
-    expect(result.embeddedRunError).toBe("⚠️ 🖼️ Canvas failed");
-    expect(result.deliveryPayloads).toEqual([{ text: "⚠️ 🖼️ Canvas failed", isError: true }]);
+    expect(result.embeddedRunError).toBe("⚠️ Canvas failed");
+    expect(result.deliveryPayloads).toEqual([{ text: "⚠️ Canvas failed", isError: true }]);
   });
 
-  it("keeps standalone presentation warnings fatal when there is no cron output", () => {
-    const result = resolveCronPayloadOutcome({
-      payloads: [{ text: "⚠️ ✉️ Message failed", isError: true }],
-    });
+  it.each(["⚠️ 🛠️ Exec failed"])(
+    "keeps unmarked trailing error %s fatal despite earlier output",
+    (errorText) => {
+      const result = resolveCronPayloadOutcome({
+        payloads: [{ text: "Partial result" }, { text: errorText, isError: true }],
+        finalAssistantVisibleText: "Partial result",
+        preferFinalAssistantVisibleText: true,
+      });
 
-    expect(result.hasFatalErrorPayload).toBe(true);
-    expect(result.embeddedRunError).toBe("⚠️ ✉️ Message failed");
-    expect(result.deliveryPayloads).toEqual([{ text: "⚠️ ✉️ Message failed", isError: true }]);
-  });
+      expect(result.hasFatalErrorPayload).toBe(true);
+      expect(result.embeddedRunError).toBe(errorText);
+      expect(result.outputText).toBe(errorText);
+      expect(result.deliveryPayloads).toEqual([{ text: errorText, isError: true }]);
+    },
+  );
 
-  it("keeps real trailing errors fatal even when earlier assistant output exists", () => {
-    const result = resolveCronPayloadOutcome({
-      payloads: [{ text: "Partial result" }, { text: "model provider unreachable", isError: true }],
-      finalAssistantVisibleText: "Partial result",
-      preferFinalAssistantVisibleText: true,
-    });
-
-    expect(result.hasFatalErrorPayload).toBe(true);
-    expect(result.embeddedRunError).toBe("model provider unreachable");
-    expect(result.outputText).toBe("model provider unreachable");
-    expect(result.deliveryPayloads).toEqual([
-      { text: "model provider unreachable", isError: true },
-    ]);
-  });
-
-  it("keeps error payloads fatal when the run also reported a run-level error", () => {
-    const result = resolveCronPayloadOutcome({
-      payloads: [
-        { text: "Model context overflow", isError: true },
-        { text: "Partial assistant text before error" },
-      ],
-      runLevelError: { kind: "context_overflow", message: "exceeded context window" },
-    });
-
-    expect(result.hasFatalErrorPayload).toBe(true);
-    expect(result.embeddedRunError).toContain("Model context overflow");
-    expect(result.outputText).toBe("Model context overflow");
-    expect(result.deliveryPayloads).toEqual([{ text: "Model context overflow", isError: true }]);
-  });
-
-  it("treats standalone run-level errors as fatal and synthesizes delivery", () => {
-    const result = resolveCronPayloadOutcome({
-      payloads: [],
-      runLevelError: { kind: "provider_error", message: "model provider unreachable" },
-    });
-
-    expect(result.hasFatalErrorPayload).toBe(true);
-    expect(result.embeddedRunError).toBe("cron isolated run failed: model provider unreachable");
-    expect(result.summary).toBe("cron isolated run failed: model provider unreachable");
-    expect(result.outputText).toBe("cron isolated run failed: model provider unreachable");
-    expect(result.synthesizedText).toBe("cron isolated run failed: model provider unreachable");
-    expect(result.deliveryPayload).toEqual({
-      text: "cron isolated run failed: model provider unreachable",
-      isError: true,
-    });
-    expect(result.deliveryPayloads).toEqual([
-      { text: "cron isolated run failed: model provider unreachable", isError: true },
-    ]);
-    expect(result.deliveryPayloadHasStructuredContent).toBe(false);
-  });
-
-  it("uses string run-level errors when no error payload exists", () => {
-    const result = resolveCronPayloadOutcome({
-      payloads: [{ text: " " }],
-      runLevelError: "rate limit exceeded",
-    });
-
-    expect(result.hasFatalErrorPayload).toBe(true);
-    expect(result.embeddedRunError).toBe("cron isolated run failed: rate limit exceeded");
-    expect(result.deliveryPayloads).toEqual([
-      { text: "cron isolated run failed: rate limit exceeded", isError: true },
-    ]);
-  });
-
-  it("falls back to run-level error kind without exposing arbitrary objects", () => {
-    const result = resolveCronPayloadOutcome({
+  it.each([
+    { error: "rate limit exceeded", suffix: ": rate limit exceeded", payloads: [{ text: " " }] },
+    {
+      error: { kind: "retry_limit", detail: { provider: "example" } },
+      suffix: ": retry_limit",
       payloads: [{ text: "Partial assistant text before failure" }],
-      runLevelError: { kind: "retry_limit", detail: { provider: "example" } },
-    });
-
+    },
+    { error: { detail: { provider: "example" } }, suffix: "", payloads: [] },
+  ])("synthesizes safe delivery for run-level error $error", ({ error, suffix, payloads }) => {
+    const result = resolveCronPayloadOutcome({ payloads, runLevelError: error });
+    const text = `cron isolated run failed${suffix}`;
     expect(result.hasFatalErrorPayload).toBe(true);
-    expect(result.embeddedRunError).toBe("cron isolated run failed: retry_limit");
-    expect(result.outputText).toBe("cron isolated run failed: retry_limit");
-    expect(result.deliveryPayloads).toEqual([
-      { text: "cron isolated run failed: retry_limit", isError: true },
-    ]);
+    expect(result.embeddedRunError).toBe(text);
+    expect(result.outputText).toBe(text);
+    expect(result.deliveryPayloads).toEqual([{ text, isError: true }]);
   });
 
-  it("uses a generic run-level error for unrecognized objects", () => {
+  it.each([[`${"a".repeat(1999)}🦞`, `${"a".repeat(1999)}…`]])(
+    "bounds summaries without truncating the selected output",
+    (text, summary) => {
+      const result = resolveCronPayloadOutcome({
+        payloads: [{ text }],
+      });
+
+      expect(result.summary).toBe(summary);
+      expect(result.outputText).toBe(text);
+    },
+  );
+
+  it.each([
+    {
+      name: "matching final answer",
+      texts: ["Final report"],
+      finalText: "Final report",
+      speech: true,
+    },
+    {
+      name: "earlier matching answer",
+      texts: ["Final report", "Later answer"],
+      finalText: "Final report",
+      speech: false,
+    },
+    {
+      name: "matching recovered tool warning",
+      texts: ["⚠️ Exec failed"],
+      finalText: "⚠️ Exec failed",
+      speech: false,
+      isError: true,
+    },
+  ])("keeps only speech facts owned by the $name", ({ texts, finalText, speech, isError }) => {
+    const tts = { tagged: true as const, text: "Authored spoken report" };
+    const payloads = texts.map((text) =>
+      setReplyPayloadMetadata<ReplyPayload>(
+        { text, ...(isError ? { isError } : {}) },
+        {
+          tts,
+          ...(isError ? { toolErrorWarning: { toolName: "exec" } } : {}),
+          sourceReplyTranscriptMirror: { sessionKey: "agent:main:source" },
+          pendingFinalDeliveryCompletion: {
+            deliveryId: "delivery-1",
+            intentId: "intent-1",
+            sessionId: "session-1",
+            sessionKey: "agent:main:source",
+            storePath: "/tmp/cron-speech-test.sqlite",
+          },
+          deliverDespiteSourceReplySuppression: true,
+        },
+      ),
+    );
     const result = resolveCronPayloadOutcome({
-      payloads: [],
-      runLevelError: { detail: { provider: "example" } },
-    });
-
-    expect(result.hasFatalErrorPayload).toBe(true);
-    expect(result.embeddedRunError).toBe("cron isolated run failed");
-    expect(result.deliveryPayloads).toEqual([{ text: "cron isolated run failed", isError: true }]);
-  });
-
-  it("does not let later success clear a run-level error", () => {
-    const result = resolveCronPayloadOutcome({
-      payloads: [
-        { text: "Temporary provider failure", isError: true },
-        { text: "Partial success-looking text" },
-      ],
-      runLevelError: "retry limit exceeded",
-    });
-
-    expect(result.hasFatalErrorPayload).toBe(true);
-    expect(result.embeddedRunError).toBe("Temporary provider failure");
-    expect(result.outputText).toBe("Temporary provider failure");
-    expect(result.deliveryPayloads).toEqual([
-      { text: "Temporary provider failure", isError: true },
-    ]);
-  });
-
-  it("truncates long summaries", () => {
-    const result = resolveCronPayloadOutcome({
-      payloads: [{ text: "a".repeat(2001) }],
-    });
-
-    expect(result.summary ?? "").toMatch(/…$/);
-  });
-
-  it("preserves all successful deliverable payloads when no final assistant text is available", () => {
-    const result = resolveCronPayloadOutcome({
-      payloads: [
-        { text: "line 1" },
-        { text: "temporary error", isError: true },
-        { text: "line 2" },
-      ],
-    });
-
-    expect(result.deliveryPayloads).toEqual([{ text: "line 1" }, { text: "line 2" }]);
-    expect(result.deliveryPayload).toEqual({ text: "line 2" });
-  });
-
-  it("prefers finalAssistantVisibleText for text-only announce delivery", () => {
-    const result = resolveCronPayloadOutcome({
-      payloads: [
-        { text: "section 1" },
-        { text: "temporary error", isError: true },
-        { text: "section 2" },
-      ],
-      finalAssistantVisibleText: "section 1\nsection 2",
+      payloads,
+      finalAssistantVisibleText: finalText,
       preferFinalAssistantVisibleText: true,
     });
 
-    expect(result.summary).toBe("section 1\nsection 2");
-    expect(result.outputText).toBe("section 1\nsection 2");
-    expect(result.synthesizedText).toBe("section 1\nsection 2");
-    expect(result.deliveryPayloads).toEqual([{ text: "section 1\nsection 2" }]);
-    expect(result.deliveryPayload).toEqual({ text: "section 2" });
+    expect(result.deliveryPayloads).toEqual([{ text: finalText }]);
+    const metadata = getReplyPayloadMetadata(result.deliveryPayloads[0]!);
+    expect(metadata?.tts).toEqual(speech ? tts : undefined);
+    expect(metadata?.sourceReplyTranscriptMirror).toBeUndefined();
+    expect(metadata?.pendingFinalDeliveryCompletion).toBeUndefined();
+    expect(metadata?.deliverDespiteSourceReplySuppression).toBeUndefined();
   });
 
   it("keeps structured-content detection scoped to the last delivery payload", () => {
@@ -281,61 +209,25 @@ describe("resolveCronPayloadOutcome", () => {
     expect(result.deliveryPayloadHasStructuredContent).toBe(true);
   });
 
-  it("returns only the last error payload when all payloads are errors", () => {
+  it("removes an earlier heartbeat acknowledgement from a substantive final result", () => {
     const result = resolveCronPayloadOutcome({
-      payloads: [
-        { text: "first error", isError: true },
-        { text: "last error", isError: true },
-      ],
-      finalAssistantVisibleText: "Recovered final answer",
-      preferFinalAssistantVisibleText: true,
+      payloads: [{ text: "HEARTBEAT_OK" }, { text: "Critical deployment failure" }],
+      finalAssistantVisibleText: "Critical deployment failure",
     });
 
-    expect(result.outputText).toBe("last error");
-    expect(result.deliveryPayloads).toEqual([{ text: "last error", isError: true }]);
-    expect(result.deliveryPayload).toEqual({ text: "last error", isError: true });
+    expect(result.deliveryPayloads).toEqual([{ text: "Critical deployment failure" }]);
+    expect(result.deliveryDisposition).toEqual({ kind: "visible" });
   });
 
-  it("keeps multi-payload direct delivery when finalAssistantVisibleText is not preferred", () => {
+  it("keeps a terminal heartbeat acknowledgement intentionally quiet", () => {
+    const payloads = [{ text: "Checked inbox and calendar." }, { text: "HEARTBEAT_OK" }];
     const result = resolveCronPayloadOutcome({
-      payloads: [{ text: "Working on it..." }, { text: "Final weather summary" }],
-      finalAssistantVisibleText: "Final weather summary",
+      payloads,
+      finalAssistantVisibleText: "HEARTBEAT_OK",
     });
 
-    expect(result.outputText).toBe("Final weather summary");
-    expect(result.deliveryPayloads).toEqual([
-      { text: "Working on it..." },
-      { text: "Final weather summary" },
-    ]);
-  });
-
-  it("promotes narrated denial markers in summary text to fatal errors", () => {
-    const result = resolveCronPayloadOutcome({
-      payloads: [
-        {
-          text: "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
-        },
-      ],
-    });
-
-    expect(result.hasFatalErrorPayload).toBe(true);
-    expect(result.embeddedRunError).toBe(
-      'cron classifier: denial token "SYSTEM_RUN_DENIED" detected in summary',
-    );
-  });
-
-  it("promotes narrated denial markers from final assistant visible text", () => {
-    const result = resolveCronPayloadOutcome({
-      payloads: [{ text: "Working on it..." }],
-      finalAssistantVisibleText: "I could not run the requested script.",
-      preferFinalAssistantVisibleText: true,
-    });
-
-    expect(result.hasFatalErrorPayload).toBe(true);
-    expect(result.outputText).toBe("I could not run the requested script.");
-    expect(result.embeddedRunError).toBe(
-      'cron classifier: denial token "could not run" detected in summary',
-    );
+    expect(result.deliveryPayloads).toEqual(payloads);
+    expect(result.deliveryDisposition).toEqual({ kind: "heartbeat", controlOnly: false });
   });
 
   it("prefers typed failure signals over denial-token fallback", () => {
@@ -367,33 +259,11 @@ describe("resolveCronPayloadOutcome", () => {
     ]);
     expect(result.deliveryPayloadHasStructuredContent).toBe(false);
   });
+});
 
-  it("ignores non-fatal failure signal metadata", () => {
-    const result = resolveCronPayloadOutcome({
-      payloads: [{ text: "ordinary success" }],
-      failureSignal: {
-        kind: "execution_denied",
-        source: "tool",
-        message: "SYSTEM_RUN_DENIED: approval required",
-        fatalForCron: false,
-      },
-    });
-
-    expect(result.hasFatalErrorPayload).toBe(false);
-    expect(result.embeddedRunError).toBeUndefined();
-  });
-
-  it("keeps structured error payload reasons ahead of denial-token reasons", () => {
-    const result = resolveCronPayloadOutcome({
-      payloads: [
-        {
-          text: "Exec failed before SYSTEM_RUN_DENIED could be retried",
-          isError: true,
-        },
-      ],
-    });
-
-    expect(result.hasFatalErrorPayload).toBe(true);
-    expect(result.embeddedRunError).toBe("Exec failed before SYSTEM_RUN_DENIED could be retried");
+describe("resolveCronRunTimeoutOverrideMs", () => {
+  // Explicit payload timeouts must survive even when they equal the configured default.
+  it("preserves explicit payload timeoutSeconds even when it equals the agent default", () => {
+    expect(resolveCronRunTimeoutOverrideMs(300)).toBe(300_000);
   });
 });

@@ -1,17 +1,25 @@
+// Assertions for release scenario E2E packages and plugin state.
 import fs from "node:fs";
 import path from "node:path";
+import {
+  assertAgentReplyContainsMarker,
+  assertOpenAiRequestLogUsed,
+} from "../agent-turn-output.mjs";
+import {
+  assertNoLegacyPrimaryAuthRows,
+  assertOpenAiEnvAuthProfileStore,
+  readCanonicalAuthProfileStoreText,
+} from "../auth-profile-store-assertions.mjs";
+import { assert } from "../fixtures/common.mjs";
+import {
+  applyMockOpenAiModelConfig,
+  parseMockOpenAiPort,
+} from "../fixtures/mock-openai-config.mjs";
+import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
+import { hasExpectedPluginUninstallConfigState } from "../plugin-uninstall-assertions.mjs";
+import { assertFileContainsText, fileContainsText, readJson } from "../release-assertion-files.mjs";
 
 const command = process.argv[2];
-
-function assert(condition, message) {
-  if (!condition) {
-    throw new Error(message);
-  }
-}
-
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
-}
 
 function configPath() {
   return (
@@ -35,85 +43,113 @@ function authProfilesPath() {
   );
 }
 
+function stateDir() {
+  return process.env.OPENCLAW_STATE_DIR ?? path.dirname(configPath());
+}
+
 function readStateText() {
   const paths = [configPath(), authProfilesPath()].filter((file) => fs.existsSync(file));
-  return paths.map((file) => fs.readFileSync(file, "utf8")).join("\n");
+  return [
+    ...paths.map((file) => fs.readFileSync(file, "utf8")),
+    readCanonicalAuthProfileStoreText(stateDir()),
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function configureMockOpenAi() {
-  const mockPort = Number(process.argv[3]);
+  const mockPort = parseMockOpenAiPort(process.argv[3]);
   const cfg = readJson(configPath());
-  const cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-  cfg.models = {
-    ...cfg.models,
-    mode: "merge",
-    providers: {
-      ...cfg.models?.providers,
-      openai: {
-        ...cfg.models?.providers?.openai,
-        baseUrl: `http://127.0.0.1:${mockPort}/v1`,
-        apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-        api: "openai-responses",
-        request: { ...cfg.models?.providers?.openai?.request, allowPrivateNetwork: true },
-        models: [
-          {
-            id: "gpt-5.5",
-            name: "gpt-5.5",
-            api: "openai-responses",
-            reasoning: false,
-            input: ["text", "image"],
-            cost,
-            contextWindow: 128000,
-            contextTokens: 96000,
-            maxTokens: 4096,
-          },
-        ],
-      },
-    },
-  };
-  cfg.agents = {
-    ...cfg.agents,
-    defaults: {
-      ...cfg.agents?.defaults,
-      model: { primary: "openai/gpt-5.5" },
-      imageModel: { primary: "openai/gpt-5.5", timeoutMs: 30_000 },
-      imageGenerationModel: { primary: "openai/gpt-image-1", timeoutMs: 30_000 },
-      models: {
-        ...cfg.agents?.defaults?.models,
-        "openai/gpt-5.5": { params: { transport: "sse", openaiWsWarmup: false } },
-      },
-    },
-  };
-  cfg.plugins = {
-    ...cfg.plugins,
-    enabled: true,
-  };
+  applyMockOpenAiModelConfig(cfg, { mockPort, includeImageDefaults: true });
   writeConfig(cfg);
 }
 
 function assertOpenAiEnvRef() {
   const rawKey = process.argv[3];
-  const state = readStateText();
-  assert(state.includes("OPENAI_API_KEY"), "OpenAI env ref was not persisted");
-  assert(!state.includes(rawKey), "raw OpenAI key was persisted");
   assert(fs.existsSync(configPath()), "openclaw.json missing");
+  assertNoLegacyPrimaryAuthRows(stateDir());
+  assertOpenAiEnvAuthProfileStore(readCanonicalAuthProfileStoreText(stateDir()), {
+    missingMessage: "OpenAI env ref was not persisted",
+    envRefMessage: "OpenAI env ref was not persisted",
+    rawKeyMessage: "raw OpenAI key was persisted",
+    rawKeyNeedle: rawKey,
+  });
+  assert(!readStateText().includes(rawKey), "raw OpenAI key was persisted");
+}
+
+function summarizeKnownValue(value, knownValues) {
+  if (value === undefined) {
+    return "missing";
+  }
+  return knownValues.includes(value) ? value : "unexpected";
+}
+
+function summarizeBoolean(value) {
+  if (value === true || value === false) {
+    return value;
+  }
+  return value === undefined ? "missing" : "unexpected";
+}
+
+function sessionMemoryHookConfigProjection(cfg) {
+  const wizard = cfg?.wizard;
+  const hooks = cfg?.hooks;
+  const internal = hooks?.internal;
+  const sessionMemory = internal?.entries?.["session-memory"];
+  return {
+    wizard: {
+      present: wizard !== undefined,
+      lastRunCommand: summarizeKnownValue(wizard?.lastRunCommand, ["onboard", "configure"]),
+      lastRunMode: summarizeKnownValue(wizard?.lastRunMode, ["local", "remote"]),
+    },
+    hooks: {
+      present: hooks !== undefined,
+      internalPresent: internal !== undefined,
+      internalEnabled: summarizeBoolean(internal?.enabled),
+      sessionMemoryPresent: sessionMemory !== undefined,
+      sessionMemoryEnabled: summarizeBoolean(sessionMemory?.enabled),
+    },
+  };
+}
+
+function assertSessionMemoryHookEnabled() {
+  const cfg = readJson(configPath());
+  if (cfg?.hooks?.internal?.entries?.["session-memory"]?.enabled === true) {
+    return;
+  }
+  throw new Error(
+    `session-memory hook was not enabled. Onboarding config projection: ${JSON.stringify(
+      sessionMemoryHookConfigProjection(cfg),
+    )}`,
+  );
 }
 
 function assertAgentTurn() {
   const marker = process.argv[3];
   const outputPath = process.argv[4];
   const requestLogPath = process.argv[5];
-  const output = fs.readFileSync(outputPath, "utf8");
-  assert(output.includes(marker), `agent output did not contain ${marker}. Output: ${output}`);
-  const requestLog = fs.existsSync(requestLogPath) ? fs.readFileSync(requestLogPath, "utf8") : "";
-  assert(/\/v1\/(responses|chat\/completions)/u.test(requestLog), "mock OpenAI was not used");
+  assertAgentReplyContainsMarker(marker, outputPath);
+  assertOpenAiRequestLogUsed(requestLogPath, "mock OpenAI");
 }
 
 function assertFileContains() {
   const file = process.argv[3];
   const needle = process.argv[4];
-  const raw = fs.readFileSync(file, "utf8");
-  assert(raw.includes(needle), `${file} did not contain ${needle}. Output: ${raw}`);
+  assertFileContainsText(file, needle, assert);
+}
+
+function assertPackageVersion() {
+  const packageRoot = process.argv[3];
+  const expectedVersion = process.argv[4];
+  const label = process.argv[5] ?? "package";
+  assert(packageRoot, "missing package root");
+  assert(expectedVersion, "missing expected package version");
+  const packageJsonPath = path.join(packageRoot, "package.json");
+  const packageJson = readJson(packageJsonPath);
+  assert(
+    packageJson.version === expectedVersion,
+    `${label} package version mismatch: expected ${expectedVersion}, got ${packageJson.version}`,
+  );
 }
 
 function assertImageDescribe() {
@@ -125,8 +161,10 @@ function assertImageDescribe() {
   const output = payload.outputs?.[0];
   assert(output?.text?.includes("OPENCLAW_E2E_OK"), "image description marker missing");
   assert(output.provider === "openai", `unexpected image provider: ${output?.provider}`);
-  const requestLog = fs.existsSync(requestLogPath) ? fs.readFileSync(requestLogPath, "utf8") : "";
-  assert(requestLog.includes("/v1/responses"), "image describe did not hit Responses API");
+  assert(
+    fileContainsText(requestLogPath, "/v1/responses"),
+    "image describe did not hit Responses API",
+  );
 }
 
 function assertImageGenerate() {
@@ -139,8 +177,10 @@ function assertImageGenerate() {
   assert(output?.path && fs.existsSync(output.path), `generated image missing: ${output?.path}`);
   assert(output.mimeType === "image/png", `unexpected generated mime type: ${output.mimeType}`);
   assert(payload.provider === "openai", `unexpected generation provider: ${payload.provider}`);
-  const requestLog = fs.existsSync(requestLogPath) ? fs.readFileSync(requestLogPath, "utf8") : "";
-  assert(requestLog.includes("/v1/images/generations"), "image generation endpoint was not used");
+  assert(
+    fileContainsText(requestLogPath, "/v1/images/generations"),
+    "image generation endpoint was not used",
+  );
 }
 
 function assertMemorySearch() {
@@ -155,11 +195,12 @@ function assertPluginUninstalled() {
   const pluginId = process.argv[3];
   const cliRoot = process.argv[4];
   const cfg = readJson(configPath());
-  const recordsPath = path.join(process.env.HOME ?? "", ".openclaw", "plugins", "installs.json");
-  const records = fs.existsSync(recordsPath) ? readJson(recordsPath) : {};
-  const installRecords = records.installRecords ?? records.records ?? {};
+  const installRecords = readPluginInstallRecords({ configPath: configPath() });
   assert(!installRecords[pluginId], `install record still present for ${pluginId}`);
-  assert(!cfg.plugins?.entries?.[pluginId], `plugin config entry still present for ${pluginId}`);
+  assert(
+    hasExpectedPluginUninstallConfigState(cfg, pluginId),
+    `exact disabled uninstall marker missing for ${pluginId}`,
+  );
   const managedRoot = path.join(
     process.env.HOME ?? "",
     ".openclaw",
@@ -169,7 +210,7 @@ function assertPluginUninstalled() {
   );
   assert(!fs.existsSync(managedRoot), `managed plugin directory still present: ${managedRoot}`);
   if (cliRoot) {
-    const list = JSON.stringify(records);
+    const list = JSON.stringify(installRecords);
     assert(!list.includes(cliRoot), `install records still mention CLI root ${cliRoot}`);
   }
 }
@@ -177,8 +218,10 @@ function assertPluginUninstalled() {
 const commands = {
   "configure-mock-openai": configureMockOpenAi,
   "assert-openai-env-ref": assertOpenAiEnvRef,
+  "assert-session-memory-hook-enabled": assertSessionMemoryHookEnabled,
   "assert-agent-turn": assertAgentTurn,
   "assert-file-contains": assertFileContains,
+  "assert-package-version": assertPackageVersion,
   "assert-image-describe": assertImageDescribe,
   "assert-image-generate": assertImageGenerate,
   "assert-memory-search": assertMemorySearch,

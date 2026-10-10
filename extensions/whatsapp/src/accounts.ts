@@ -33,17 +33,16 @@ export type ResolvedWhatsAppAccount = {
   allowFrom?: string[];
   groupAllowFrom?: string[];
   groupPolicy?: GroupPolicy;
+  mentionPatterns?: WhatsAppAccountConfig["mentionPatterns"];
   dmPolicy?: DmPolicy;
   historyLimit?: number;
   textChunkLimit?: number;
-  chunkMode?: "length" | "newline";
+  streaming?: WhatsAppAccountConfig["streaming"];
   mediaMaxMb?: number;
-  blockStreaming?: boolean;
   ackReaction?: WhatsAppAccountConfig["ackReaction"];
   reactionLevel?: WhatsAppAccountConfig["reactionLevel"];
   groups?: WhatsAppAccountConfig["groups"];
   direct?: WhatsAppAccountConfig["direct"];
-  debounceMs?: number;
   replyToMode?: ReplyToMode;
 };
 
@@ -52,7 +51,7 @@ export const DEFAULT_WHATSAPP_MEDIA_MAX_MB = 50;
 export function listWhatsAppAuthDirs(cfg: OpenClawConfig): string[] {
   const oauthDir = resolveOAuthDir();
   const whatsappDir = path.join(oauthDir, "whatsapp");
-  const authDirs = new Set<string>([oauthDir, path.join(whatsappDir, DEFAULT_ACCOUNT_ID)]);
+  const authDirs = new Set<string>([path.join(whatsappDir, DEFAULT_ACCOUNT_ID)]);
 
   const accountIds = listConfiguredAccountIds(cfg);
   for (const accountId of accountIds) {
@@ -82,19 +81,6 @@ function resolveDefaultAuthDir(accountId: string): string {
   return path.join(resolveOAuthDir(), "whatsapp", normalizeAccountId(accountId));
 }
 
-function resolveLegacyAuthDir(): string {
-  // Legacy Baileys creds lived in the same directory as OAuth tokens.
-  return resolveOAuthDir();
-}
-
-function legacyAuthExists(authDir: string): boolean {
-  try {
-    return fs.existsSync(path.join(authDir, "creds.json"));
-  } catch {
-    return false;
-  }
-}
-
 export function resolveWhatsAppAuthDir(params: { cfg: OpenClawConfig; accountId: string }): {
   authDir: string;
   isLegacy: boolean;
@@ -106,15 +92,7 @@ export function resolveWhatsAppAuthDir(params: { cfg: OpenClawConfig; accountId:
     return { authDir: resolveUserPath(configured), isLegacy: false };
   }
 
-  const defaultDir = resolveDefaultAuthDir(accountId);
-  if (accountId === DEFAULT_ACCOUNT_ID) {
-    const legacyDir = resolveLegacyAuthDir();
-    if (legacyAuthExists(legacyDir) && !legacyAuthExists(defaultDir)) {
-      return { authDir: legacyDir, isLegacy: true };
-    }
-  }
-
-  return { authDir: defaultDir, isLegacy: false };
+  return { authDir: resolveDefaultAuthDir(accountId), isLegacy: false };
 }
 
 export function resolveWhatsAppAccount(params: {
@@ -136,7 +114,7 @@ export function resolveWhatsAppAccount(params: {
     name: normalizeOptionalString(merged.name),
     enabled,
     sendReadReceipts: merged.sendReadReceipts ?? true,
-    messagePrefix: merged.messagePrefix ?? params.cfg.messages?.messagePrefix,
+    messagePrefix: merged.responsePrefix,
     defaultTo: merged.defaultTo,
     authDir,
     isLegacyAuthDir: isLegacy,
@@ -145,16 +123,15 @@ export function resolveWhatsAppAccount(params: {
     allowFrom: merged.allowFrom,
     groupAllowFrom: merged.groupAllowFrom,
     groupPolicy: merged.groupPolicy,
+    mentionPatterns: merged.mentionPatterns,
     historyLimit: merged.historyLimit,
     textChunkLimit: merged.textChunkLimit,
-    chunkMode: merged.chunkMode,
+    streaming: merged.streaming,
     mediaMaxMb: merged.mediaMaxMb,
-    blockStreaming: merged.blockStreaming,
     ackReaction: merged.ackReaction,
     reactionLevel: merged.reactionLevel,
     groups: merged.groups,
     direct: merged.direct,
-    debounceMs: merged.debounceMs,
     replyToMode: merged.replyToMode,
   };
 }
@@ -166,7 +143,7 @@ export function resolveWhatsAppMediaMaxBytes(
     typeof account.mediaMaxMb === "number" && account.mediaMaxMb > 0
       ? account.mediaMaxMb
       : DEFAULT_WHATSAPP_MEDIA_MAX_MB;
-  return mediaMaxMb * 1024 * 1024;
+  return Math.floor(mediaMaxMb * 1024 * 1024);
 }
 
 export function listEnabledWhatsAppAccounts(cfg: OpenClawConfig): ResolvedWhatsAppAccount[] {

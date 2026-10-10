@@ -1,0 +1,710 @@
+import {
+  embeddedAgentLog,
+  type AgentHarnessRuntimeArtifactBinding,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createNativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
+import { captureSessionEntryCurrentCheck } from "openclaw/plugin-sdk/session-binding-runtime";
+import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
+import {
+  CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+  closeCodexStartupClientBestEffort,
+  unsubscribeCodexThreadBestEffort,
+} from "./attempt-client-cleanup.js";
+import { resolveCodexStartupTimeoutMs } from "./attempt-timeouts.js";
+import { protectCodexAppServerLiveThread } from "./client-runtime.js";
+import { resolveCodexAppServerClientInstanceId, type CodexAppServerClient } from "./client.js";
+import { shouldAutoApproveCodexAppServerApprovals } from "./config.js";
+import { CodexAppServerEventProjector } from "./event-projector.js";
+import { buildCodexHookRequester } from "./hook-requester.js";
+import { getCodexInferenceThreadQualification } from "./inference-routing.js";
+import {
+  buildCodexNativeHookRelayDisabledConfig,
+  buildCodexNativeHookRelayConfig,
+  CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS,
+  createCodexNativeHookRelay,
+  type CodexNativeHookRelay,
+} from "./native-hook-relay.js";
+import { createCodexNativePreToolUseFailureBuffer } from "./native-pre-tool-use-failures.js";
+import { CodexNativeProcessAuthority } from "./native-process-authority.js";
+import { createNativeSubagentAssignmentStore } from "./native-subagent-assignment-store.js";
+import { createCodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
+import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
+import type { CodexNativeSubagentSubmissionStore } from "./native-subagent-submission.js";
+import type { CodexSandboxPolicy, CodexTurnEnvironmentParams } from "./protocol.js";
+import {
+  reportCodexBackgroundCleanupFailure,
+  runCodexCleanupStep,
+} from "./run-attempt-lifecycle.js";
+import type { CodexAttemptPrompt } from "./run-attempt-prompt.js";
+import {
+  releaseCodexSandboxExecServerEnvironment,
+  type CodexSandboxExecEnvironment,
+} from "./sandbox-exec-server.js";
+import { matchesCodexNativeSubagentSubmissionBinding } from "./session-binding-record.js";
+import { clearCodexBindingForClient } from "./session-binding.js";
+import {
+  clearSharedCodexAppServerClientIfCurrentAndUnclaimed,
+  createIsolatedCodexAppServerClient,
+  retainSharedCodexAppServerClientIfCurrent,
+} from "./shared-client.js";
+import type {
+  CodexAppServerThreadLifecycleBinding,
+  CodexStartOrResumeThreadParams,
+  CodexThreadFinalConfigPatchDecision,
+} from "./thread-lifecycle-types.js";
+import {
+  isSameCodexAppServerThreadOwner,
+  retainCodexAppServerBindingSubscription,
+} from "./thread-ownership.js";
+import { isCodexNativeDelegationDisabledForRun } from "./thread-requests.js";
+import { createCodexTrajectoryRecorder } from "./trajectory.js";
+import type { CodexAppServerTurnRouter, CodexThreadRouteReservation } from "./turn-router.js";
+
+export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
+  const { context } = prompt;
+  const { runtime, attemptTools } = context;
+  const { connection, hookChannelId } = runtime;
+  const {
+    appServer,
+    params,
+    effectiveCwd,
+    sessionAgentId,
+    contextSessionKey,
+    runAbortController,
+    sandbox,
+    options,
+    nativeHookRelayEvents,
+  } = connection;
+  const modelAdmissionSource = runtime.nativeToolSurfaceEnabled
+    ? params.hostCapabilities.retainSourceAuthority?.()
+    : undefined;
+  let nativeModelAdmission: CodexStartOrResumeThreadParams["nativeModelAdmission"];
+  try {
+    nativeModelAdmission = modelAdmissionSource
+      ? modelAdmissionSource.modelPolicyRequired !== false
+        ? "required"
+        : options.nativeHookRelay?.enabled === false
+          ? "disabled"
+          : "optional"
+      : undefined;
+  } finally {
+    modelAdmissionSource?.release();
+  }
+  let nativeProcessAuthorityReleased = false;
+  // Cancellation still owes cleanup. Keep host/lineage authority until this
+  // resource owner closes, without inheriting the foreground abort signal.
+  const cleanupAuthority = createNativeSessionBindingAuthority(connection.authority.lineage, () => {
+    params.hostCapabilities.assertActive();
+    if (nativeProcessAuthorityReleased) {
+      throw new Error("Codex attempt cleanup authority has ended");
+    }
+  });
+  const clearThreadBinding = () =>
+    clearCodexBindingForClient(
+      connection.bindingStore,
+      connection.bindingIdentity,
+      state.thread,
+      cleanupAuthority,
+    );
+  const releaseNativeProcessAuthority = () => {
+    if (!nativeProcessAuthorityReleased) {
+      nativeProcessAuthorityReleased = true;
+      nativeProcessAuthority?.release();
+    }
+  };
+  const trajectoryRecorder = createCodexTrajectoryRecorder(params.hostCapabilities.trajectory);
+  const initialResourceState: {
+    sandboxExecEnvironment: CodexSandboxExecEnvironment | undefined;
+    executionDisconnectError: Error | undefined;
+    releaseInferenceContext: (() => void) | undefined;
+  } = {
+    sandboxExecEnvironment: undefined,
+    executionDisconnectError: undefined,
+    releaseInferenceContext: undefined,
+  };
+  const state = {
+    client: undefined as unknown as CodexAppServerClient,
+    thread: undefined as unknown as CodexAppServerThreadLifecycleBinding,
+    runtimeArtifact: undefined as AgentHarnessRuntimeArtifactBinding | undefined,
+    turnRouter: undefined as unknown as CodexAppServerTurnRouter,
+    turnRoute: undefined as CodexThreadRouteReservation | undefined,
+    routeActivated: false,
+    detachRouteAbort: (() => undefined) as () => void,
+    trajectoryEndRecorded: false,
+    nativeHookRelay: undefined as CodexNativeHookRelay | undefined,
+    nativeSpawnAdmissionInstalled: false,
+    nativeSubagentMonitor: undefined as
+      | Awaited<ReturnType<typeof codexNativeSubagentMonitorRuntime.register>>
+      | undefined,
+    runtimeContinuationStarted: false,
+    releaseSharedClientLease: undefined as (() => void) | undefined,
+    startupClientUnsafe: false,
+    turnStartAttempted: false,
+    nativeSettlementExpired: false,
+    sharedCodexClientRetiredForOneShotCleanup: false,
+    ...initialResourceState,
+    codexEnvironmentSelection: undefined as CodexTurnEnvironmentParams[] | undefined,
+    codexExecutionCwd: effectiveCwd,
+    codexSandboxPolicy: undefined as CodexSandboxPolicy | undefined,
+    restartContextEngineCodexThread: undefined as
+      | (() => Promise<CodexAppServerThreadLifecycleBinding>)
+      | undefined,
+  };
+  const projectorRef: { current?: CodexAppServerEventProjector } = {};
+  const nativePreToolUseFailures = createCodexNativePreToolUseFailureBuffer({
+    agentId: sessionAgentId,
+    sessionId: params.sessionId,
+    sessionKey: contextSessionKey,
+    runId: params.runId,
+    signal: runAbortController.signal,
+  });
+  const releaseSharedClientLeaseOnce = () => {
+    const release = state.releaseSharedClientLease;
+    if (!release) {
+      return;
+    }
+    state.releaseSharedClientLease = undefined;
+    release();
+  };
+  const retireSharedCodexClientForOneShotCleanup = async () => {
+    if (
+      params.cleanupBundleMcpOnRunEnd !== true ||
+      state.sharedCodexClientRetiredForOneShotCleanup
+    ) {
+      return;
+    }
+    state.sharedCodexClientRetiredForOneShotCleanup = true;
+    const retired = clearSharedCodexAppServerClientIfCurrentAndUnclaimed(state.client);
+    // Runs on every one-shot attempt teardown; routine retirement checks are
+    // diagnostic detail, not operator-facing info.
+    embeddedAgentLog.debug("codex app-server one-shot cleanup checked shared client retirement", {
+      runId: params.runId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      activeLeases: retired.activeLeases,
+      pendingAcquires: retired.pendingAcquires,
+      closed: retired.closed,
+      matchedSharedClient: retired.found,
+    });
+    // Retained peers prevent retirement; preserve their client without treating
+    // missing close evidence as a completed one-shot cleanup.
+    const result = retired.closed
+      ? await state.client.closeAndWait({ exitTimeoutMs: 2_000, forceKillDelayMs: 250 })
+      : undefined;
+    if (params.oneShotCliRun && result?.cleanup !== "closed") {
+      throw new Error("Codex one-shot client cleanup could not be confirmed");
+    }
+  };
+  const releaseSandboxExecEnvironment = async () => {
+    if (state.sandboxExecEnvironment) {
+      const environment = state.sandboxExecEnvironment;
+      state.sandboxExecEnvironment = undefined;
+      await releaseCodexSandboxExecServerEnvironment(sandbox, environment);
+    }
+  };
+  const releaseSharedClientLeaseAndRetireOneShotClient = async () => {
+    if (connection.attemptClientFactory === createIsolatedCodexAppServerClient) {
+      // Close the authorized node lease first; losing its socket first is a real disconnect.
+      await releaseSandboxExecEnvironment();
+      const ownedClient = state.releaseSharedClientLease ? state.client : undefined;
+      releaseSharedClientLeaseOnce();
+      if (ownedClient) {
+        const result = await ownedClient.closeAndWait({
+          exitTimeoutMs: 2_000,
+          forceKillDelayMs: 250,
+        });
+        if (params.oneShotCliRun && result.cleanup !== "closed") {
+          throw new Error("Codex isolated client cleanup could not be confirmed");
+        }
+      }
+      return;
+    }
+    releaseSharedClientLeaseOnce();
+    await retireSharedCodexClientForOneShotCleanup();
+  };
+  const runCleanupStep = (step: string, operation: () => Promise<void> | void | undefined) =>
+    runCodexCleanupStep(params, step, async () => {
+      await operation();
+    });
+  let nativeSubagentMonitorSettlement: Promise<void> | undefined;
+  let nativeSubagentMonitorGeneration = 0;
+  const unregisterNativeSubagentMonitor = async () => {
+    nativeSubagentMonitorGeneration += 1;
+    const registration = state.nativeSubagentMonitor;
+    state.nativeSubagentMonitor = undefined;
+    if (registration) {
+      nativeSubagentMonitorSettlement = registration.unregister();
+    }
+    await nativeSubagentMonitorSettlement;
+  };
+  const registerNativeSubagentMonitor = async (parentThreadId: string) => {
+    const { client, thread, nativeHookRelay, turnRoute } = state;
+    const sessionKey = params.sessionTarget?.sessionKey ?? params.sessionKey;
+    const storePath = params.sessionTarget?.storePath;
+    const parent =
+      sessionKey && storePath
+        ? await captureSessionEntryCurrentCheck({
+            agentId: params.sessionTarget?.agentId ?? sessionAgentId,
+            sessionKey,
+            storePath,
+            errorMessage: "Native submission session lifecycle is no longer current.",
+          })
+        : undefined;
+    await unregisterNativeSubagentMonitor();
+    connection.assertCurrent();
+    const generation = ++nativeSubagentMonitorGeneration;
+    const parentSession = parent?.entry;
+    const historyOwner = createCodexNativeSubagentHistoryOwner({
+      parentThreadId,
+      sessionId: params.sessionId,
+      ...(parentSession?.sessionId === params.sessionId
+        ? { lifecycleRevision: parentSession.lifecycleRevision }
+        : {}),
+      binding: thread,
+    });
+    const { bindingStore, bindingIdentity } = connection;
+    const assertParentSessionCurrent = () => {
+      parent?.assertCurrent();
+    };
+    const submissionStore: CodexNativeSubagentSubmissionStore | undefined =
+      historyOwner && thread.lifecycle.preserveExistingBinding !== true
+        ? {
+            assertCurrent: () => {
+              const current = bindingStore.read(bindingIdentity);
+              if (!current || !matchesCodexNativeSubagentSubmissionBinding(current, historyOwner)) {
+                throw new Error("Native submission binding is no longer current.");
+              }
+              assertParentSessionCurrent();
+            },
+            read: () => bindingStore.readNativeSubagentSubmissions(bindingIdentity, historyOwner),
+            record: (receipt, assertCurrent) =>
+              bindingStore.mutate(
+                bindingIdentity,
+                { kind: "record-native-subagent-submission", owner: historyOwner, receipt },
+                assertCurrent,
+              ),
+            consume: (receipt, assertCurrent) =>
+              bindingStore.mutate(
+                bindingIdentity,
+                { kind: "consume-native-subagent-submission", owner: historyOwner, receipt },
+                assertCurrent,
+              ),
+          }
+        : undefined;
+    const assignmentStore =
+      historyOwner && submissionStore
+        ? createNativeSubagentAssignmentStore({
+            bindingStore,
+            identity: bindingIdentity,
+            owner: historyOwner,
+            assertLifecycleCurrent: () => submissionStore.assertCurrent(),
+          })
+        : undefined;
+    const assertRegistrationCurrent = () => {
+      runAbortController.signal.throwIfAborted();
+      params.hostCapabilities.assertActive();
+      connection.assertCurrent();
+      if (submissionStore) {
+        submissionStore.assertCurrent();
+      } else {
+        assertParentSessionCurrent();
+      }
+      thread.liveThreadOwnership?.assertCurrent();
+      if (
+        generation !== nativeSubagentMonitorGeneration ||
+        state.client !== client ||
+        state.thread !== thread ||
+        state.nativeHookRelay !== nativeHookRelay ||
+        state.turnRoute !== turnRoute
+      ) {
+        throw new Error("Codex native subagent registration was superseded during setup");
+      }
+    };
+    const retainModelSource = params.hostCapabilities.retainSourceAuthority;
+    const modelSource = retainModelSource?.();
+    try {
+      const configurationQualification = getCodexInferenceThreadQualification(
+        client,
+        parentThreadId,
+      );
+      const registration = await codexNativeSubagentMonitorRuntime.register({
+        client,
+        parentThreadId,
+        ...(retainModelSource ? { modelSource } : {}),
+        configurationQualification,
+        unqualifiedModelExecution: modelSource && !configurationQualification ? true : undefined,
+        onUnqualifiedModelCancelled: connection.abortExplicitly,
+        requesterSessionKey: params.sessionKey,
+        completionScope: params.agentHarnessCompletionScope,
+        historyOwner,
+        submissionStore,
+        assignmentStore,
+        agentId: sessionAgentId,
+        assertCurrent: assertRegistrationCurrent,
+        isTurnYielded: () => attemptTools.toolState.yieldDetected,
+        retainClient: () => retainSharedCodexAppServerClientIfCurrent(client),
+        retainParentThread: (protectedThreadId) =>
+          protectCodexAppServerLiveThread(client, protectedThreadId),
+        claimDirectChild: (childThreadId) => nativeHookRelay?.claimDirectChild(childThreadId),
+        rejectPendingDirectChild: (childThreadId, reason) =>
+          nativeHookRelay?.rejectPendingDirectChild(childThreadId, reason),
+        ...(params.sessionKey && params.agentHarnessCompletionScope
+          ? {
+              onDirectChildAccepted: () => {
+                state.runtimeContinuationStarted = true;
+              },
+            }
+          : {}),
+      });
+      try {
+        await registration.ready;
+        assertRegistrationCurrent();
+        state.nativeSubagentMonitor = registration;
+      } catch (error) {
+        await registration.unregister();
+        throw error;
+      }
+    } catch (error) {
+      modelSource?.release();
+      throw error;
+    }
+  };
+  const releaseCurrentRoute = async () => {
+    state.releaseInferenceContext?.();
+    state.releaseInferenceContext = undefined;
+    state.detachRouteAbort();
+    state.detachRouteAbort = () => undefined;
+    state.turnRoute?.release();
+    state.turnRoute = undefined;
+    state.routeActivated = false;
+    await unregisterNativeSubagentMonitor();
+  };
+  // Startup transfers the claim with state.thread. Both pre-turn failure and
+  // active-turn cleanup settle it here; neither may unsubscribe a successor.
+  let subscriptionSettlement:
+    | { thread: CodexAppServerThreadLifecycleBinding; retained: boolean }
+    | undefined;
+  const retainThreadSubscription = async (): Promise<boolean> => {
+    const { client, thread } = state;
+    if (subscriptionSettlement?.thread === thread) {
+      return subscriptionSettlement.retained;
+    }
+    if (!thread || thread.clientId !== resolveCodexAppServerClientInstanceId(client)) {
+      return false;
+    }
+    const { bindingStore, bindingIdentity } = connection;
+    // Expired settlement cannot start optional retention or queue a row read.
+    if (state.nativeSettlementExpired) {
+      return false;
+    }
+    const retained = await bindingStore.withLease(bindingIdentity, async () => {
+      if (state.nativeSettlementExpired) {
+        return false;
+      }
+      let publicationStarted = false;
+      let pending: Promise<boolean> | undefined;
+      const publish = (rowFailure?: { error: unknown }) => {
+        publicationStarted = true;
+        if (
+          state.nativeSettlementExpired ||
+          thread.clientId !== resolveCodexAppServerClientInstanceId(client) ||
+          !isSameCodexAppServerThreadOwner(bindingStore.read(bindingIdentity), thread)
+        ) {
+          return;
+        }
+        // Decide at publication, after lease and any row-admission wait.
+        // Concrete native work may outlive the foreground row that created it.
+        if (!nativeProcessAuthority?.hasCurrentProcesses(client, thread.threadId)) {
+          if (rowFailure) {
+            throw rowFailure.error;
+          }
+          params.hostCapabilities.assertActive();
+          connection.assertCurrent();
+        }
+        if (!state.turnStartAttempted) {
+          runAbortController.signal.throwIfAborted();
+        }
+        thread.liveThreadOwnership?.assertCurrent();
+        pending = retainCodexAppServerBindingSubscription(client, thread.threadId, {
+          release: thread.liveThreadOwnership?.release,
+          configFingerprint: thread.liveThreadConfigFingerprint,
+          serviceTier: state.turnStartAttempted
+            ? connection.mutable.pluginAppServer.serviceTier
+            : thread.liveThreadOwnership?.serviceTier,
+          ephemeralPolicy: thread.liveThreadEphemeralPolicy,
+        });
+      };
+      if (nativeProcessAuthority?.hasCurrentProcesses(client, thread.threadId)) {
+        publish();
+      } else {
+        try {
+          await connection.withCurrent(() => publish());
+        } catch (error) {
+          // A process admitted during the row wait can still own cleanup.
+          // Never replay an effect if reader release failed after publication.
+          if (publicationStarted) {
+            await pending;
+            throw error;
+          }
+          publish({ error });
+        }
+      }
+      return pending ? await pending : false;
+    });
+    if (retained) {
+      subscriptionSettlement = { thread, retained: true };
+    }
+    return retained;
+  };
+  const releaseThreadSubscription = async (assertCurrent?: () => void): Promise<boolean> => {
+    const { client, thread } = state;
+    if (!thread || subscriptionSettlement?.thread === thread) {
+      return true;
+    }
+    // Record the attempted settlement before awaiting; failed acknowledgments
+    // retire the client, not a second unsubscribe from a competing cleanup path.
+    subscriptionSettlement = { thread, retained: false };
+    if (thread.liveThreadOwnership) {
+      try {
+        // This branded handle fences the exact physical client/thread/claim.
+        // Releasing it is required cleanup, not a new foreground-row operation.
+        await thread.liveThreadOwnership.release(thread.threadId);
+        return true;
+      } catch (error) {
+        await closeCodexStartupClientBestEffort(client);
+        throw error;
+      }
+    }
+    if (state.nativeSettlementExpired) {
+      // Untracked cleanup has no exact claim to prove release authority.
+      await closeCodexStartupClientBestEffort(client);
+      return false;
+    }
+    const released = await unsubscribeCodexThreadBestEffort(client, {
+      threadId: thread.threadId,
+      timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+      assertCurrent,
+      withCurrent: cleanupAuthority.withCurrent,
+    });
+    if (!released) {
+      await closeCodexStartupClientBestEffort(client);
+    }
+    return released;
+  };
+  const cleanupBeforeActiveTurn = async () => {
+    await runCleanupStep("codex-pre-turn-hook-fallback", () =>
+      nativePreToolUseFailures.activateFallback(runAbortController.signal.aborted),
+    );
+    await runCleanupStep("codex-pre-turn-subscription", async () => {
+      const { thread } = state;
+      if (!thread || subscriptionSettlement?.thread === thread || state.startupClientUnsafe) {
+        return;
+      }
+      let retained = false;
+      try {
+        // Only a pre-write failure may restore an unchanged warm claim. A
+        // rejected/ambiguous turn start keeps its existing release semantics.
+        retained = Boolean(
+          !state.turnStartAttempted &&
+          !runAbortController.signal.aborted &&
+          params.cleanupBundleMcpOnRunEnd !== true &&
+          thread.liveThreadOwnership &&
+          (await retainThreadSubscription()),
+        );
+      } finally {
+        if (!retained) {
+          try {
+            const bindingReleased =
+              !isIncognitoSessionKey(params.sessionKey) || (await clearThreadBinding());
+            if (bindingReleased) {
+              await releaseThreadSubscription();
+            }
+          } finally {
+            if (thread.liveThreadOwnership) {
+              await releaseThreadSubscription();
+            }
+          }
+        }
+      }
+    });
+    await runCleanupStep("codex-pre-turn-route-release", releaseCurrentRoute);
+    const relay = state.nativeHookRelay;
+    state.nativeHookRelay = undefined;
+    await runCleanupStep("codex-pre-turn-native-hook-relay", async () => {
+      relay?.unregister();
+      await relay?.drain();
+    });
+    await runCleanupStep("codex-pre-turn-sandbox-release", releaseSandboxExecEnvironment);
+    await runCleanupStep("codex-pre-turn-source-release", releaseNativeProcessAuthority);
+    await runCleanupStep("codex-pre-turn-trajectory-flush", () => trajectoryRecorder?.flush());
+    await runCleanupStep(
+      "codex-pre-turn-shared-client-release",
+      releaseSharedClientLeaseAndRetireOneShotClient,
+    );
+  };
+  const startupTimeoutMs = resolveCodexStartupTimeoutMs({
+    timeoutMs: params.timeoutMs,
+    requestTimeoutMs: appServer.requestTimeoutMs,
+    timeoutFloorMs: options.startupTimeoutFloorMs,
+  });
+  const requester = buildCodexHookRequester(params);
+  const buildNativeHookRelayFinalConfigPatch = async (
+    decision: CodexThreadFinalConfigPatchDecision,
+    relayClient: CodexAppServerClient,
+  ) => {
+    state.nativeSpawnAdmissionInstalled = false;
+    const previousRelay = state.nativeHookRelay;
+    previousRelay?.unregister();
+    await previousRelay?.drain();
+    connection.assertCurrent();
+    const requiresProcessAdmission =
+      nativeProcessAuthority?.requiresProcessAdmission && runtime.nativeToolSurfaceEnabled;
+    const requiresModelAdmission =
+      nativeModelAdmission !== undefined && decision.nativeModelInputTools !== undefined;
+    const requiresExecutionAdmission = requiresProcessAdmission || requiresModelAdmission;
+    const relayEvents =
+      requiresExecutionAdmission && !nativeHookRelayEvents.includes("pre_tool_use")
+        ? [...nativeHookRelayEvents, "pre_tool_use" as const]
+        : nativeHookRelayEvents;
+    if (params.pluginHarnessToolPolicyRestricted === true) {
+      state.nativeHookRelay = undefined;
+      return {
+        configPatch: buildCodexNativeHookRelayDisabledConfig(),
+        nativeHookRelayGeneration: undefined,
+      };
+    }
+    state.nativeHookRelay = createCodexNativeHookRelay({
+      options: requiresExecutionAdmission
+        ? { ...options.nativeHookRelay, enabled: true }
+        : options.nativeHookRelay,
+      generation:
+        decision.action === "resume" ? decision.binding.nativeHookRelayGeneration : undefined,
+      generationMismatchGraceMs:
+        decision.action === "resume" && !decision.binding.nativeHookRelayGeneration
+          ? CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS
+          : undefined,
+      events: relayEvents,
+      agentId: sessionAgentId,
+      sessionId: params.sessionId,
+      sessionKey: contextSessionKey,
+      config: params.config,
+      autoApproveMcpTools: shouldAutoApproveCodexAppServerApprovals(appServer),
+      projectedMcpServers: runtime.bundleMcpThreadConfig.configPatch?.mcp_servers,
+      runId: params.runId,
+      channelId: hookChannelId,
+      ...(requester ? { requester } : {}),
+      approvalContext: {
+        trigger: params.trigger,
+        approvalReviewerDeviceId: params.approvalReviewerDeviceId,
+        turnSourceChannel: params.messageChannel ?? params.messageProvider,
+        turnSourceTo: params.currentMessagingTarget ?? params.currentChannelId,
+        turnSourceAccountId: params.agentAccountId,
+        turnSourceThreadId: params.currentThreadTs,
+      },
+      attemptTimeoutMs: params.timeoutMs,
+      startupTimeoutMs,
+      turnStartTimeoutMs: params.timeoutMs,
+      loopDetectionPreToolUseRelay: appServer.loopDetectionPreToolUseRelay,
+      signal: runAbortController.signal,
+      hostCapabilities: params.hostCapabilities,
+      nativeProcessAuthority: requiresProcessAdmission
+        ? { owner: nativeProcessAuthority, client: () => state.client }
+        : undefined,
+      nativeModelAdmission: requiresModelAdmission
+        ? {
+            client: () => state.client,
+            threadId: () => state.thread?.threadId,
+            tools: decision.nativeModelInputTools,
+            readQualification: (threadId) =>
+              getCodexInferenceThreadQualification(state.client, threadId),
+          }
+        : undefined,
+      remoteCallback: appServer.nativeHookRelay && {
+        config: appServer.nativeHookRelay,
+        client: relayClient,
+        timeoutMs: appServer.requestTimeoutMs,
+        onCleanupFailure: (error) => reportCodexBackgroundCleanupFailure(params, error),
+      },
+      assertCurrent: () => {
+        connection.assertLegacyCurrent();
+        runtime.nativeExecutionPolicy.assertCurrent();
+      },
+      onPreToolUseFailure: (failure) => {
+        const projector = projectorRef.current;
+        if (projector) {
+          projector.recordNativeToolPreToolUseFailure(failure);
+        } else {
+          nativePreToolUseFailures.record(failure);
+        }
+      },
+    });
+    await state.nativeHookRelay?.prepareInvocation();
+    connection.assertCurrent();
+    state.nativeSpawnAdmissionInstalled = Boolean(
+      state.nativeHookRelay &&
+      requiresModelAdmission &&
+      decision.nativeModelInputTools?.includes("spawn_agent") &&
+      params.hostCapabilities.assertNativeSubagentSpawnAllowed,
+    );
+    if (!state.nativeSpawnAdmissionInstalled && !isCodexNativeDelegationDisabledForRun(params)) {
+      // A prior backend attempt may already have accepted another participant.
+      try {
+        params.hostCapabilities.assertNativeSubagentSpawnAllowed?.();
+      } catch (cause) {
+        // Revocation and ended-turn failures retain their own recovery guidance.
+        if (
+          !(cause instanceof Error) ||
+          !cause.message.startsWith("Several people have steered this turn:")
+        ) {
+          throw cause;
+        }
+        throw new Error(
+          "Several people have steered this turn, and this Codex setup cannot run native sub-agents safely for more than one person without native hook admission. Send the request again as a new message so it runs as its own turn.",
+          { cause },
+        );
+      }
+    }
+    return {
+      configPatch: state.nativeHookRelay
+        ? buildCodexNativeHookRelayConfig({
+            relay: state.nativeHookRelay,
+            events: relayEvents,
+            hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
+          })
+        : options.nativeHookRelay?.enabled === false
+          ? buildCodexNativeHookRelayDisabledConfig()
+          : undefined,
+      nativeHookRelayGeneration: state.nativeHookRelay?.generation,
+    };
+  };
+  const nativeProcessAuthority = params.hostCapabilities.retainSourceAuthority
+    ? new CodexNativeProcessAuthority(
+        params.hostCapabilities,
+        (error) => reportCodexBackgroundCleanupFailure(params, error),
+        Boolean(sandbox?.enabled && sandbox.backend),
+      )
+    : undefined;
+  return {
+    prompt,
+    trajectoryRecorder,
+    state,
+    projectorRef,
+    pendingNativePreToolUseFailures: nativePreToolUseFailures.pending,
+    nativeModelAdmission,
+    nativeProcessAuthority,
+    releaseNativeProcessAuthority,
+    releaseSharedClientLeaseAndRetireOneShotClient,
+    releaseSandboxExecEnvironment,
+    runCleanupStep,
+    registerNativeSubagentMonitor,
+    releaseCurrentRoute,
+    clearThreadBinding,
+    retainThreadSubscription,
+    releaseThreadSubscription,
+    cleanupBeforeActiveTurn,
+    startupTimeoutMs,
+    buildNativeHookRelayFinalConfigPatch,
+  };
+}
+
+export type CodexAttemptResources = ReturnType<typeof prepareCodexAttemptResources>;

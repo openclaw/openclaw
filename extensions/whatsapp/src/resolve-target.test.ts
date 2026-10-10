@@ -1,9 +1,11 @@
+// Whatsapp tests cover resolve target plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   isWhatsAppGroupJid,
   isWhatsAppNewsletterJid,
   looksLikeWhatsAppTargetId,
   isWhatsAppUserTarget,
+  normalizeWhatsAppAllowFromEntries,
   normalizeWhatsAppMessagingTarget,
   normalizeWhatsAppTarget,
 } from "./normalize-target.js";
@@ -116,6 +118,26 @@ describe("isWhatsAppGroupJid", () => {
 describe("normalizeWhatsAppMessagingTarget", () => {
   it("normalizes blank inputs to undefined", () => {
     expect(normalizeWhatsAppMessagingTarget("   ")).toBeUndefined();
+  });
+});
+
+describe("normalizeWhatsAppAllowFromEntries", () => {
+  it("normalizes prefixed numbers and preserves the wildcard", () => {
+    expect(
+      normalizeWhatsAppAllowFromEntries([" whatsapp:+49123 ", "*", "49124@s.whatsapp.net"]),
+    ).toEqual(["49123", "*", "49124"]);
+  });
+
+  it("deduplicates entries after WhatsApp target normalization", () => {
+    expect(
+      normalizeWhatsAppAllowFromEntries([
+        " +1 (555) 123-4567 ",
+        "15551234567@s.whatsapp.net",
+        15551234567,
+        " ",
+        "invalid",
+      ]),
+    ).toEqual(["15551234567"]);
   });
 });
 

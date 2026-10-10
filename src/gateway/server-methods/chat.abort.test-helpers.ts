@@ -1,12 +1,30 @@
+/**
+ * Shared helpers for chat abort gateway method tests.
+ */
 import { vi } from "vitest";
 import type { Mock } from "vitest";
+import { createChatRunState, type ChatRunState } from "../server-chat-state.js";
 import type { GatewayRequestHandler, RespondFn } from "./types.js";
+
+type TestChatRunRecord =
+  ReturnType<typeof createChatRunState>["runs"] extends Map<string, infer Record> ? Record : never;
+
+export function createAbortTestRunState(entries: Array<[string, Partial<TestChatRunRecord>]>) {
+  const state = createChatRunState();
+  for (const [runId, record] of entries) {
+    Object.assign(state.getOrCreate(runId), record);
+  }
+  return state;
+}
 
 export function createActiveRun(
   sessionKey: string,
   params: {
     sessionId?: string;
+    agentId?: string;
+    controlUiVisible?: boolean;
     owner?: { connId?: string; deviceId?: string };
+    turnKind?: "main" | "btw";
   } = {},
 ) {
   const now = Date.now();
@@ -14,27 +32,28 @@ export function createActiveRun(
     controller: new AbortController(),
     sessionId: params.sessionId ?? `${sessionKey}-session`,
     sessionKey,
+    agentId: params.agentId,
     startedAtMs: now,
     expiresAtMs: now + 30_000,
+    controlUiVisible: params.controlUiVisible,
     ownerConnId: params.owner?.connId,
     ownerDeviceId: params.owner?.deviceId,
+    turnKind: params.turnKind,
   };
 }
 
 type ChatAbortTestContext = Record<string, unknown> & {
   chatAbortControllers: Map<string, ReturnType<typeof createActiveRun>>;
-  chatRunBuffers: Map<string, string>;
-  chatDeltaSentAt: Map<string, number>;
-  chatDeltaLastBroadcastLen: Map<string, number>;
-  chatDeltaLastBroadcastText: Map<string, string>;
-  agentDeltaSentAt: Map<string, number>;
-  bufferedAgentEvents: Map<string, unknown>;
-  chatAbortedRuns: Map<string, number>;
-  removeChatRun: (...args: unknown[]) => { sessionKey: string; clientRunId: string } | undefined;
+  chatQueuedTurns: Map<string, import("../chat-queued-turns.js").QueuedChatTurnEntry>;
+  chatRunState: ChatRunState;
+  dedupe: Map<string, unknown>;
+  removeChatRun: (
+    ...args: unknown[]
+  ) => { sessionKey: string; agentId?: string; clientRunId: string } | undefined;
   agentRunSeq: Map<string, number>;
   broadcast: (...args: unknown[]) => void;
   nodeSendToSession: (...args: unknown[]) => void;
-  logGateway: { warn: (...args: unknown[]) => void };
+  logGateway: { info: (...args: unknown[]) => void; warn: (...args: unknown[]) => void };
 };
 
 type ChatAbortRespondMock = Mock<RespondFn>;
@@ -42,30 +61,38 @@ type ChatAbortRespondMock = Mock<RespondFn>;
 export function createChatAbortContext(
   overrides: Record<string, unknown> = {},
 ): ChatAbortTestContext {
-  return {
+  const chatRunState =
+    overrides.chatRunState && typeof overrides.chatRunState === "object"
+      ? (overrides.chatRunState as ChatRunState)
+      : createChatRunState();
+  const context = {
     chatAbortControllers: new Map(),
-    chatRunBuffers: new Map(),
-    chatDeltaSentAt: new Map(),
-    chatDeltaLastBroadcastLen: new Map(),
-    chatDeltaLastBroadcastText: new Map(),
-    agentDeltaSentAt: new Map(),
-    bufferedAgentEvents: new Map(),
-    chatAbortedRuns: new Map<string, number>(),
+    chatQueuedTurns: new Map(),
+    chatRunState,
+    dedupe: new Map(),
     removeChatRun: vi
       .fn()
       .mockImplementation((run: string) => ({ sessionKey: "main", clientRunId: run })),
     agentRunSeq: new Map<string, number>(),
+    getRuntimeConfig: () => ({}),
     broadcast: vi.fn(),
     nodeSendToSession: vi.fn(),
-    logGateway: { warn: vi.fn() },
+    logGateway: { info: vi.fn(), warn: vi.fn() },
     ...overrides,
-  };
+  } as ChatAbortTestContext;
+  return context;
 }
 
 export async function invokeChatAbortHandler(params: {
   handler: GatewayRequestHandler;
   context: ChatAbortTestContext;
-  request: { sessionKey: string; runId?: string };
+  request: {
+    sessionKey: string;
+    agentId?: string;
+    runId?: string;
+    preserveSideRuns?: boolean;
+    discardPendingInput?: boolean;
+  };
   client?: {
     connId?: string;
     connect?: {

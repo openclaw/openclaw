@@ -1,3 +1,4 @@
+// Security CLI tests cover security command registration and diagnostics output.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerSecurityCli } from "./security-cli.js";
@@ -7,7 +8,7 @@ const mocks = await vi.hoisted(async () => {
   const runtime = createCliRuntimeMock(vi);
   return {
     loadConfig: vi.fn(),
-    runSecurityAudit: vi.fn(),
+    runSecurityAuditCore: vi.fn(),
     fixSecurityFootguns: vi.fn(),
     resolveCommandSecretRefsViaGateway: vi.fn(),
     getSecurityAuditCommandSecretTargetIds: vi.fn(
@@ -19,7 +20,7 @@ const mocks = await vi.hoisted(async () => {
 
 const {
   loadConfig,
-  runSecurityAudit,
+  runSecurityAuditCore,
   fixSecurityFootguns,
   resolveCommandSecretRefsViaGateway,
   getSecurityAuditCommandSecretTargetIds,
@@ -36,7 +37,7 @@ vi.mock("../runtime.js", () => ({
 }));
 
 vi.mock("../security/audit.js", () => ({
-  runSecurityAudit: (opts: unknown) => mocks.runSecurityAudit(opts),
+  runSecurityAuditCore: (opts: unknown) => mocks.runSecurityAuditCore(opts),
 }));
 
 vi.mock("../security/fix.js", () => ({
@@ -67,7 +68,7 @@ function primeDeepAuditConfig(sourceConfig = { gateway: { mode: "local" } }) {
     targetStatesByPath: {},
     hadUnresolvedTargets: false,
   });
-  runSecurityAudit.mockResolvedValue({
+  runSecurityAuditCore.mockResolvedValue({
     ts: 0,
     summary: { critical: 0, warn: 0, info: 0 },
     findings: [],
@@ -81,7 +82,7 @@ function lastSecretResolverOptions(): Record<string, unknown> | undefined {
 }
 
 function lastSecurityAuditOptions(): Record<string, unknown> | undefined {
-  const calls = runSecurityAudit.mock.calls;
+  const calls = runSecurityAuditCore.mock.calls;
   return calls[calls.length - 1]?.[0] as Record<string, unknown> | undefined;
 }
 
@@ -89,7 +90,7 @@ describe("security CLI", () => {
   beforeEach(() => {
     runtimeLogs.length = 0;
     loadConfig.mockReset();
-    runSecurityAudit.mockReset();
+    runSecurityAuditCore.mockReset();
     fixSecurityFootguns.mockReset();
     resolveCommandSecretRefsViaGateway.mockReset();
     getSecurityAuditCommandSecretTargetIds.mockClear();
@@ -133,14 +134,14 @@ describe("security CLI", () => {
       targetStatesByPath: {},
       hadUnresolvedTargets: false,
     });
-    runSecurityAudit.mockResolvedValue({
+    runSecurityAuditCore.mockResolvedValue({
       ts: 0,
       summary: { critical: 0, warn: 1, info: 0 },
       findings: [
         {
           checkId: "gateway.probe_failed",
           severity: "warn",
-          title: "Gateway probe failed (deep)",
+          title: "Gateway check failed (deep)",
           detail: "connect failed: connect ECONNREFUSED 127.0.0.1:18789",
         },
       ],
@@ -165,16 +166,35 @@ describe("security CLI", () => {
     ]);
   });
 
+  it("reports an unexpected fixer failure instead of emitting a successful JSON audit", async () => {
+    primeDeepAuditConfig();
+    const failure = new Error("Fixture repair failed");
+    fixSecurityFootguns.mockRejectedValueOnce(failure);
+
+    await expect(
+      createProgram().parseAsync(["security", "audit", "--fix", "--json"], { from: "user" }),
+    ).rejects.toBe(failure);
+    expect(runtimeLogs).toEqual([]);
+  });
+
   it.each([
     {
       title: "forwards --token to deep probe auth without altering command-level resolver mode",
       argv: ["--token", "explicit-token"],
       deepProbeAuth: { token: "explicit-token" },
+      auditGatewayAuthOverride: undefined,
     },
     {
       title: "forwards --password to deep probe auth without altering command-level resolver mode",
       argv: ["--password", "explicit-password"],
       deepProbeAuth: { password: "explicit-password" },
+      auditGatewayAuthOverride: undefined,
+    },
+    {
+      title: "forwards --auth with explicit gateway password",
+      argv: ["--auth", "password", "--password", "explicit-password"],
+      deepProbeAuth: { password: "explicit-password" },
+      auditGatewayAuthOverride: { mode: "password", password: "explicit-password" },
     },
     {
       title: "forwards both --token and --password to deep probe auth",
@@ -183,8 +203,9 @@ describe("security CLI", () => {
         token: "explicit-token",
         password: "explicit-password",
       },
+      auditGatewayAuthOverride: undefined,
     },
-  ])("$title", async ({ argv, deepProbeAuth }) => {
+  ])("$title", async ({ argv, deepProbeAuth, auditGatewayAuthOverride }) => {
     primeDeepAuditConfig();
 
     await createProgram().parseAsync(["security", "audit", "--deep", ...argv, "--json"], {
@@ -194,5 +215,27 @@ describe("security CLI", () => {
     expect(lastSecretResolverOptions()?.mode).toBe("read_only_status");
     expect(lastSecurityAuditOptions()?.deep).toBe(true);
     expect(lastSecurityAuditOptions()?.deepProbeAuth).toEqual(deepProbeAuth);
+    expect(lastSecurityAuditOptions()?.auditGatewayAuthOverride).toEqual(auditGatewayAuthOverride);
   });
+
+  it.each([
+    {
+      argv: ["--auth", "token"],
+      message: /pass --token <token>/i,
+    },
+    {
+      argv: ["--auth", "password"],
+      message: /pass --password <password>/i,
+    },
+  ])(
+    "rejects shared-secret auth override without the matching secret",
+    async ({ argv, message }) => {
+      primeDeepAuditConfig();
+
+      await expect(
+        createProgram().parseAsync(["security", "audit", ...argv, "--json"], { from: "user" }),
+      ).rejects.toThrow(message);
+      expect(runSecurityAuditCore).not.toHaveBeenCalled();
+    },
+  );
 });

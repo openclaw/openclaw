@@ -1,30 +1,41 @@
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import type { SpawnedRunMetadata } from "../../agents/spawned-context.js";
-import type { PromptMode } from "../../agents/system-prompt.types.js";
-import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
+import type { PromptMode, SilentReplyPromptMode } from "../../agents/system-prompt.types.js";
+import type {
+  SourceReplyDeliveryMode,
+  TaskSuggestionDeliveryMode,
+} from "../../auto-reply/get-reply-options.types.js";
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
+import type { GatewayUiCommandTarget } from "../../gateway/ui-command-target.types.js";
+import type { ImageContent as LlmImageContent } from "../../llm/types.js";
+import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
+import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
+import type { RuntimePluginToolGrant } from "../../plugins/runtime/tool-grant.js";
+import type { CommandLaneConfiguration } from "../../process/lanes.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
+import type {
+  UserTurnInput,
+  UserTurnTranscriptRecorder,
+} from "../../sessions/user-turn-transcript.types.js";
+import type { ExecApprovalContinuationPromptRange } from "../bash-tools.exec-approval-output.js";
 import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
-import type { AgentStreamParams, ClientToolDefinition } from "./shared-types.js";
+import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
+import type { CliSessionBindingFacts } from "../cli-runner/session-binding.types.js";
+import type { CronCreatorAuthorityCapability } from "../cron-creator-authority-context.js";
+import type { RuntimeContextFragment } from "../internal-runtime-context.js";
+import type { MainSessionRecoveryOwnerLease } from "../main-session-recovery/main-session-recovery-store.js";
+import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
+import type { TrustedSubagentCompletionHandoff } from "../subagents/announce/subagent-announce-handoff.js";
+import type {
+  AgentRunTranscriptContext,
+  AgentStreamParams,
+  ClientToolDefinition,
+} from "./shared-types.js";
 
-/** Image content block for Claude API multimodal messages. */
-export type ImageContent = {
-  type: "image";
-  data: string;
-  mimeType: string;
-};
-export type { AgentStreamParams } from "./shared-types.js";
-
-export type AgentCommandResultMetaOverrides = {
-  transport?: "embedded";
-  fallbackFrom?: "gateway";
-  fallbackReason?: "gateway_timeout";
-  fallbackSessionId?: string;
-  fallbackSessionKey?: string;
-};
-
-export type AcpTurnSource = "manual_spawn";
+export type ImageContent = Pick<LlmImageContent, "type" | "data" | "mimeType">;
 
 export type AgentRunContext = {
   messageChannel?: string;
@@ -33,27 +44,37 @@ export type AgentRunContext = {
   groupChannel?: string | null;
   groupSpace?: string | null;
   currentChannelId?: string;
+  /** Transport-native chat/conversation ID for plugin hook identity context. */
+  chatId?: string;
+  /** Channel-specific sender/chat metadata for plugin hook identity context. */
+  channelContext?: PluginHookChannelContext;
   currentThreadTs?: string;
+  currentInboundAudio?: boolean;
+  senderId?: string | null;
   replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
 };
 
+/** Full trusted option surface for running an agent command. */
 export type AgentCommandOpts = {
   message: string;
   /** User-visible transcript body; defaults to message and excludes runtime-only context. */
   transcriptMessage?: string;
-  /** Optional image attachments for multimodal messages. */
+  /** Durable media metadata for the user-visible transcript turn. */
+  transcriptMedia?: UserTurnInput["media"];
   images?: ImageContent[];
   /** Original inline/offloaded attachment order for inbound images. */
   imageOrder?: PromptImageOrderEntry[];
+  /** Ordered facts represented by attachment text in this prompt. */
+  media?: MediaFact[];
   /** Optional client-provided tools (OpenResponses hosted tools). */
   clientTools?: ClientToolDefinition[];
   /** Agent id override (must exist in config). */
   agentId?: string;
-  /** Per-run provider override. */
   provider?: string;
-  /** Per-run model override. */
   model?: string;
+  /** Explicit ordered fallback chain for this run. Undefined uses normal selection policy. */
+  modelFallbacksOverride?: string[];
   to?: string;
   sessionId?: string;
   sessionKey?: string;
@@ -71,24 +92,48 @@ export type AgentCommandOpts = {
   replyAccountId?: string;
   /** Override delivery thread/topic id (separate from session routing). */
   threadId?: string | number;
-  /** Message channel context. */
   messageChannel?: string;
   /** Tool-policy/output surface context. Defaults to messageChannel. */
   messageProvider?: string;
-  /** Delivery channel. */
   channel?: string;
   /** Account ID for multi-account channel routing. */
   accountId?: string;
-  /** Context for embedded run routing (channel/account/thread). */
   runContext?: AgentRunContext;
+  /** Client capabilities captured by trusted Gateway ingress. */
+  clientCaps?: string[];
+  /** Exact Control UI destination captured by trusted Gateway ingress. */
+  gatewayUiCommandTarget?: GatewayUiCommandTarget;
+  /** Tool bindings admitted by the originating Gateway request. */
+  toolBindings?: Readonly<Record<string, unknown>>;
+  /** Follow-up task action sink admitted by the originating Gateway client. */
+  taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
+  /** Device-scoped operator session allowed to review approvals initiated by this run. */
+  approvalReviewerDeviceId?: string;
   /** Internal trusted exec approval follow-up elevated defaults. */
   bashElevated?: ExecElevatedDefaults;
-  /** Whether this caller is authorized for owner-only tools (defaults true for local CLI calls). */
+  /** Trusted span whose final cap is resolved with the selected model. */
+  execApprovalContinuationPromptRange?: ExecApprovalContinuationPromptRange;
+  /** Corresponding span in the undecorated transcript message. */
+  execApprovalContinuationTranscriptPromptRange?: ExecApprovalContinuationPromptRange;
+  /** Trusted sender identity bit for command/channel-action auth; defaults true for local CLI calls. */
   senderIsOwner?: boolean;
   /** Whether this caller is authorized to use provider/model per-run overrides. */
   allowModelOverride?: boolean;
   /** Optional runtime tool allow-list; when set, only these tools are exposed for this run. */
   toolsAllow?: string[];
+  /** Trusted owner-scoped plugin tool grant; normal policy and deny rules still apply. */
+  runtimePluginToolGrant?: RuntimePluginToolGrant;
+  /** Consumed in-process subagent-completion capability; never accepted from public RPC params. */
+  trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
+  /** Internal marker identifying a server-managed default cap. */
+  toolsAllowIsDefault?: boolean;
+  /** Trusted server-stamped authority for an explicitly capped scheduled run. */
+  scheduledToolPolicy?: ScheduledToolPolicyContext;
+  /** Host-authorized dashboard authoring without an originating inline renderer. */
+  pinnedWidgetAuthoring?: boolean;
+  /** Preserve the originating run's message-tool policy across internal continuation turns. */
+  requireExplicitMessageTarget?: boolean;
+  cliSessionBindingFacts?: CliSessionBindingFacts;
   /** Group/spawn metadata for subagent policy inheritance and routing context. */
   groupId?: SpawnedRunMetadata["groupId"];
   groupChannel?: SpawnedRunMetadata["groupChannel"];
@@ -97,45 +142,168 @@ export type AgentCommandOpts = {
   deliveryTargetMode?: ChannelOutboundTargetMode;
   bestEffortDeliver?: boolean;
   abortSignal?: AbortSignal;
+  /** Private source-owner fence; cancellation alone does not establish current authority. */
+  assertSourceCurrent?: import("../../auto-reply/command-owner-authority.js").CommandOwnerAssertion;
+  /** Original operator restriction; host-only and never accepted from public ingress. */
+  operatorAuthority?: import("../admitted-run-context.js").AdmittedRunOperatorAuthority;
   lane?: string;
+  swarmExecutionLane?: CommandLaneConfiguration;
   runId?: string;
+  /** Immutable gateway lifecycle ownership captured when this run was admitted. */
+  lifecycleGeneration?: string;
+  /** Startup awaits returned work; incidental synchronous return values are ignored. */
+  onExecutionStarted?: () => unknown;
   extraSystemPrompt?: string;
-  /** Bootstrap workspace context injection mode for this run. */
+  /** Conversation preparation owns silence guidance; required-reply enforcement is separate. */
+  silentReplyPromptMode?: SilentReplyPromptMode;
   bootstrapContextMode?: "full" | "lightweight";
-  /** Run kind hint for bootstrap context behavior. */
-  bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
+  bootstrapContextRunKind?: BootstrapContextRunKind;
   internalEvents?: AgentInternalEvent[];
+  runtimeContextFragments?: RuntimeContextFragment[];
   inputProvenance?: InputProvenance;
+  /** Internal runs can execute against a session without updating visible status/model/usage. */
+  sessionEffects?: "visible" | "internal";
+  /** Internal handoffs can write transcript turns without changing user-facing model/usage state. */
+  preserveUserFacingSessionModelState?: boolean;
+  /** Admitted private completion owes an internal result regardless of its channel origin. */
+  privateCompletion?: true;
   /** Visible source replies must be sent through the message tool when set. */
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** Internal runs can omit the channel message tool entirely. */
+  disableMessageTool?: boolean;
+  /** Collector children fail closed instead of emitting operator approval requests. */
+  swarmCollector?: boolean;
+  /** Synthetic structured_output input schema for collector children. */
+  swarmOutputSchema?: Record<string, unknown>;
+  /** Restrict this reconstructed run to restart-safe tools. */
+  forceRestartSafeTools?: boolean;
+  forceCodeModeTools?: boolean;
+  /** Invocation-owned Code Mode activation; limits still come from config. */
+  codeModeOverride?: boolean | "auto";
+  /** Host-owned exact media set for a scoped automatic recovery delivery. */
+  internalDeliveryMediaUrls?: string[];
+  internalDeliverySuppressText?: boolean;
+  /** Host-owned: deliver only authored output; runtime error payloads stay out of the chat. */
+  internalDeliverySuppressErrors?: boolean;
+  /** Gateway ingress that already persisted visible activity can skip the duplicate pre-run touch. */
+  skipInitialSessionTouch?: boolean;
   /** Per-call stream param overrides (best-effort). */
   streamParams?: AgentStreamParams;
+  /** Resolved per-run fast mode from channel/directive handling. */
+  fastMode?: FastMode;
+  /** Resolved per-run auto cutoff seconds for fast mode. */
+  fastModeAutoOnSeconds?: number;
   /** Explicit workspace directory override (for subagents to inherit parent workspace). */
   workspaceDir?: SpawnedRunMetadata["workspaceDir"];
+  /** Explicit task working directory for this run. Bootstrap still uses workspaceDir. */
+  cwd?: string;
   /** Force bundled MCP teardown when a one-shot local run completes. */
   cleanupBundleMcpOnRunEnd?: boolean;
   /** Force long-lived CLI live session teardown when a one-shot local run completes. */
   cleanupCliLiveSessionOnRunEnd?: boolean;
-  /** Internal local CLI callers can annotate result metadata before JSON/text output. */
-  resultMetaOverrides?: AgentCommandResultMetaOverrides;
+  /** Mark explicit one-shot local CLI runs so plugin tools can release resources promptly. */
+  oneShotCliRun?: boolean;
+  /** Gateway-owned runs can late-bind plugin subagent and node runtime helpers. */
+  allowGatewaySubagentBinding?: boolean;
+  /** Opaque foreground fence transferred by Gateway after atomic session admission. */
+  mainRestartRecoveryOwnerLease?: MainSessionRecoveryOwnerLease;
+  /** Gateway already consumed this automatic recovery run's durable reservation. */
+  mainRestartRecoveryAdmitted?: boolean;
+  /** Exact durable recovery attempt allowed to bind post-admission execution identity. */
+  mainRestartRecoveryAttempt?: number;
+  /** Private recovery correlation; public ingress callers cannot author identity evidence. */
+  executionIdentityAdmission?: ReturnType<
+    (typeof import("../admitted-run-context.js"))["createExecutionIdentityRecoveryAdmission"]
+  >;
+  /** Gateway-owned exact operational instance shared with its abort controller. */
+  operationalRunInstance?: import("../admitted-run-context.js").OperationalRunInstanceRef;
+  skillLibraryAuthoring?: import("../../skills/library/authoring.js").SkillLibraryAuthoringCapability;
+  /** Gateway-minted exact-run capability for late Codex creator-authority capture. */
+  cronCreatorAuthorityCapability?: CronCreatorAuthorityCapability;
+  /** Private exact-instance binding hook invoked after delegated authority admission. */
+  onAdmittedRunContext?: (
+    context: import("../admitted-run-context.js").AdmittedRunContext,
+  ) => void | Promise<void>;
+  /** Private owner binding hook invoked only after exact admission has resolved. */
+  onPostAdmittedRunContext?: (
+    context: import("../admitted-run-context.js").AdmittedRunContext,
+  ) => void | Promise<void>;
+  /** Gateway owns final media projection and joins transcript writes before delivery or cleanup. */
+  beforeTerminalDelivery?: (
+    reply?: {
+      payloads: ReplyPayload[];
+      sessionId: string;
+      lifecycleRevision?: string;
+      storePath?: string;
+    },
+    producerError?: unknown,
+  ) => Promise<void>;
+  /** Exact Gateway execution outcome; terminal cleanup retains its session admission. */
+  isTerminalOutcomeObserved?: () => boolean;
+  /** Gateway-owned preparation of runtime-appended assistant transcript messages. */
+  prepareAssistantTranscriptMessage?: AgentRunTranscriptContext["prepareAssistantTranscriptMessage"];
   /** Called when the actual run model is selected, including fallback retries. */
-  onActiveModelSelected?: (ctx: { provider: string; model: string }) => void;
+  onActiveModelSelected?: (ctx: { provider: string; model: string }) => void | Promise<void>;
+  onModelFallbackExhausted?: () => void;
+  /** Called before delivery projection when the raw run contains an error payload. */
+  onResultErrorPayload?: (message?: string) => void;
+  /** Called when compaction rotates the active run onto a successor session. */
+  onSessionIdChanged?: (sessionId: string) => void;
   /** Internal one-shot model probe mode: no tools, no workspace/chat prompt policy. */
   modelRun?: boolean;
   /** Internal prompt-mode override for trusted local/gateway callsites. */
   promptMode?: PromptMode;
   /** Internal ACP-ready session turn source. Manual spawn turns bypass only the dispatch gate. */
-  acpTurnSource?: AcpTurnSource;
+  acpTurnSource?: "manual_spawn";
   /** Internal handoffs can feed the model without writing the synthetic prompt to transcript. */
   suppressPromptPersistence?: boolean;
+  /** Gateway/channel ingress can provide a canonical user-turn persistence owner. */
+  userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
 };
 
+/** Public ingress clears the same host-owned fields its option type excludes. */
+export const AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS = Object.freeze({
+  clientCaps: undefined,
+  gatewayUiCommandTarget: undefined,
+  toolBindings: undefined,
+  taskSuggestionDeliveryMode: undefined,
+  runtimeContextFragments: undefined,
+  senderIsOwner: false,
+  mainRestartRecoveryOwnerLease: undefined,
+  mainRestartRecoveryAdmitted: undefined,
+  mainRestartRecoveryAttempt: undefined,
+  pinnedWidgetAuthoring: undefined,
+  executionIdentityAdmission: undefined,
+  operationalRunInstance: undefined,
+  assertSourceCurrent: undefined,
+  operatorAuthority: undefined,
+  privateCompletion: undefined,
+  skillLibraryAuthoring: undefined,
+  cronCreatorAuthorityCapability: undefined,
+  onAdmittedRunContext: undefined,
+  onPostAdmittedRunContext: undefined,
+  beforeTerminalDelivery: undefined,
+  isTerminalOutcomeObserved: undefined,
+  prepareAssistantTranscriptMessage: undefined,
+  internalDeliverySuppressErrors: undefined,
+} satisfies Partial<AgentCommandOpts>);
+
+type AgentCommandGatewayOnlyKey = Exclude<
+  keyof typeof AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS,
+  "senderIsOwner"
+>;
+
+/** Restricted option surface for external ingress callsites. */
 export type AgentCommandIngressOpts = Omit<
   AgentCommandOpts,
-  "senderIsOwner" | "allowModelOverride" | "resultMetaOverrides"
+  AgentCommandGatewayOnlyKey | "senderIsOwner" | "allowModelOverride"
 > & {
-  /** Ingress callsites must always pass explicit owner-tool authorization state. */
-  senderIsOwner: boolean;
+  /** @deprecated Public ingress ignores owner claims; use the host-injected channel runtime. */
+  senderIsOwner?: boolean;
   /** Ingress callsites must always pass explicit model-override authorization state. */
   allowModelOverride: boolean;
 };
+
+/** Gateway-only ingress extends the public Plugin SDK surface with private recovery correlation. */
+export type AgentCommandGatewayIngressOpts = AgentCommandIngressOpts &
+  Pick<AgentCommandOpts, AgentCommandGatewayOnlyKey>;

@@ -1,0 +1,103 @@
+/* @vitest-environment jsdom */
+
+import { describe, expect, it } from "vitest";
+import { i18n } from "../../i18n/index.ts";
+import { encodeTerminalUpload, quoteTerminalUploadPath } from "./terminal-file-upload.ts";
+
+const MAX_TERMINAL_UPLOAD_BYTES = 16 * 1024 * 1024;
+
+describe("terminal file upload", () => {
+  it("base64-encodes arbitrary browser files", async () => {
+    const file = new File([new Uint8Array([0, 1, 2, 255])], "scan.pdf");
+    await expect(encodeTerminalUpload(file)).resolves.toBe("AAEC/w==");
+  });
+
+  it("quotes paths for POSIX, PowerShell, and cmd terminals", () => {
+    expect(quoteTerminalUploadPath("/tmp/report.pdf", "/bin/zsh")).toBe("/tmp/report.pdf");
+    expect(quoteTerminalUploadPath("/tmp/report final.pdf", "/bin/zsh")).toBe(
+      "'/tmp/report final.pdf'",
+    );
+    expect(quoteTerminalUploadPath("/tmp/it's.pdf", "/bin/zsh")).toBe("'/tmp/it'\\''s.pdf'");
+    expect(quoteTerminalUploadPath("C:\\Temp\\report final.pdf", "pwsh.exe")).toBe(
+      "'C:\\Temp\\report final.pdf'",
+    );
+    expect(quoteTerminalUploadPath("C:\\Temp\\report.pdf", "cmd.exe")).toBe(
+      '"C:\\Temp\\report.pdf"',
+    );
+    expect(quoteTerminalUploadPath("C:\\Temp\\x$(touch pwned).txt", "C:\\Git\\bin\\bash.exe")).toBe(
+      "'C:\\Temp\\x$(touch pwned).txt'",
+    );
+  });
+
+  it("refuses Windows paths for shells with unknown quoting and path semantics", () => {
+    expect(() => quoteTerminalUploadPath("C:\\Temp\\x$(touch pwned).txt", "wsl.exe")).toThrow(
+      "unsupported shell: wsl.exe",
+    );
+    expect(() =>
+      quoteTerminalUploadPath("\\\\server\\profiles\\x$(touch pwned).txt", "wsl.exe"),
+    ).toThrow("unsupported shell: wsl.exe");
+  });
+
+  it("uses declared native CLI path syntax without treating a title as a shell", () => {
+    const shell = "claude --resume 12345678…";
+    expect(quoteTerminalUploadPath("/tmp/report.pdf", shell, "native")).toBe('"/tmp/report.pdf"');
+    expect(quoteTerminalUploadPath("/tmp/it's final.pdf", shell, "native")).toBe(
+      '"/tmp/it\'s final.pdf"',
+    );
+    expect(quoteTerminalUploadPath('/tmp/reviewer"s $notes`\\draft.pdf', shell, "native")).toBe(
+      '"/tmp/reviewer\\"s \\$notes\\`\\\\draft.pdf"',
+    );
+    for (const filePath of [
+      "C:\\Users\\O'Brien\\$cash%value!\\report final.pdf",
+      "\\\\server\\O'Brien\\report final.pdf",
+      "\\\\?\\C:\\Users\\O'Brien\\report.pdf",
+    ]) {
+      expect(quoteTerminalUploadPath(filePath, shell, "native")).toBe(`"${filePath}"`);
+    }
+    expect(() => quoteTerminalUploadPath("/tmp/report.pdf", shell)).toThrow("unsupported shell");
+  });
+
+  it.each(["relative.pdf", "/tmp/report\nnext.pdf", 'C:\\Temp\\bad"path.pdf'])(
+    "refuses an invalid native input path: %j",
+    (filePath) => {
+      expect(() => quoteTerminalUploadPath(filePath, "native CLI", "native")).toThrow(
+        "Cannot safely insert the uploaded native file path",
+      );
+    },
+  );
+
+  it.each(["C:\\Users\\%USERNAME%\\report.pdf", "C:\\Users\\bang!\\report.pdf"])(
+    "refuses cmd.exe expansion in the complete staged path: %s",
+    (filePath) => {
+      expect(() => quoteTerminalUploadPath(filePath, "cmd.exe")).toThrow(
+        "path containing % or ! into cmd.exe",
+      );
+    },
+  );
+
+  it("localizes upload validation while preserving file and shell details", async () => {
+    i18n.registerTranslation("pt-BR", {
+      terminal: {
+        uploadTooLarge: "O arquivo excede o limite de 16 MiB: {file}",
+        uploadUnsafeCmdPath: "O caminho enviado não é seguro para cmd.exe",
+        uploadUnsupportedShell: "Shell sem suporte para caminho enviado: {shell}",
+      },
+    });
+    await i18n.setLocale("pt-BR");
+    try {
+      const oversized = {
+        name: "archive.zip",
+        size: MAX_TERMINAL_UPLOAD_BYTES + 1,
+        arrayBuffer: () => Promise.reject(new Error("should not read")),
+      } as File;
+      await expect(encodeTerminalUpload(oversized)).rejects.toThrow(
+        "O arquivo excede o limite de 16 MiB: archive.zip",
+      );
+      expect(() => quoteTerminalUploadPath("/tmp/report.pdf", "nu")).toThrow(
+        "Shell sem suporte para caminho enviado: nu",
+      );
+    } finally {
+      await i18n.setLocale("en");
+    }
+  });
+});

@@ -1,4 +1,5 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 
 const MAX_ALLOWED_VALUES_HINT = 12;
 const MAX_ALLOWED_VALUE_CHARS = 160;
@@ -13,10 +14,14 @@ function truncateHintText(text: string, limit: number): string {
   if (text.length <= limit) {
     return text;
   }
-  return `${text.slice(0, limit)}... (+${text.length - limit} chars)`;
+  const truncated = truncateUtf16Safe(text, limit);
+  return `${truncated}... (+${text.length - truncated.length} chars)`;
 }
 
 function safeStringify(value: unknown): string {
+  if (value === undefined) {
+    return "";
+  }
   try {
     const serialized = JSON.stringify(value);
     if (serialized !== undefined) {
@@ -25,32 +30,13 @@ function safeStringify(value: unknown): string {
   } catch {
     // Fall back to string coercion when value is not JSON-serializable.
   }
-  return String(value);
-}
-
-function toAllowedValueLabel(value: unknown): string {
-  if (typeof value === "string") {
-    return JSON.stringify(truncateHintText(value, MAX_ALLOWED_VALUE_CHARS));
-  }
-  return truncateHintText(safeStringify(value), MAX_ALLOWED_VALUE_CHARS);
+  // This is the deliberate last-resort renderer; the assertion opts into
+  // String() semantics for non-JSON values without changing runtime behavior.
+  return String(value as string | number | boolean | bigint | symbol | null);
 }
 
 function toAllowedValueValue(value: unknown): string {
-  if (typeof value === "string") {
-    return value;
-  }
-  return safeStringify(value);
-}
-
-function toAllowedValueDedupKey(value: unknown): string {
-  if (value === null) {
-    return "null:null";
-  }
-  const kind = typeof value;
-  if (kind === "string") {
-    return `string:${value as string}`;
-  }
-  return `${kind}:${safeStringify(value)}`;
+  return typeof value === "string" ? value : safeStringify(value);
 }
 
 export function summarizeAllowedValues(
@@ -63,14 +49,18 @@ export function summarizeAllowedValues(
   const deduped: Array<{ value: string; label: string }> = [];
   const seenValues = new Set<string>();
   for (const item of values) {
-    const dedupeKey = toAllowedValueDedupKey(item);
+    // Preserve schema distinctions such as numeric 1 vs string "1" even when labels match.
+    const dedupeKey = `${item === null ? "null" : typeof item}:${toAllowedValueValue(item)}`;
     if (seenValues.has(dedupeKey)) {
       continue;
     }
     seenValues.add(dedupeKey);
     deduped.push({
       value: toAllowedValueValue(item),
-      label: toAllowedValueLabel(item),
+      label:
+        typeof item === "string"
+          ? JSON.stringify(truncateHintText(item, MAX_ALLOWED_VALUE_CHARS))
+          : truncateHintText(safeStringify(item), MAX_ALLOWED_VALUE_CHARS),
     });
   }
 
@@ -87,13 +77,9 @@ export function summarizeAllowedValues(
   };
 }
 
-function messageAlreadyIncludesAllowedValues(message: string): boolean {
-  const lower = normalizeLowercaseStringOrEmpty(message);
-  return lower.includes("(allowed:") || lower.includes("expected one of");
-}
-
 export function appendAllowedValuesHint(message: string, summary: AllowedValuesSummary): string {
-  if (messageAlreadyIncludesAllowedValues(message)) {
+  const lower = normalizeLowercaseStringOrEmpty(message);
+  if (lower.includes("(allowed:") || lower.includes("expected one of")) {
     return message;
   }
   return `${message} (allowed: ${summary.formatted})`;

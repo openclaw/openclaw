@@ -1,0 +1,44 @@
+import type { Snapshot } from "../../../packages/gateway-protocol/src/schema/snapshot.js";
+import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+
+type ProtocolHealth = Snapshot["health"];
+type ProtocolPlugin = NonNullable<ProtocolHealth["plugins"]>;
+type UnavailablePlugin = NonNullable<ProtocolPlugin["unavailable"]>[number];
+
+export type ChannelAccountHealthSummary = ChannelAccountSnapshot & {
+  authAgeMs?: number | null;
+  [key: string]: unknown;
+};
+
+export type ChannelHealthSummary = ChannelAccountHealthSummary & {
+  accounts?: Record<string, ChannelAccountHealthSummary>;
+};
+
+export type AgentHealthSummary = NonNullable<ProtocolHealth["agents"]>[number];
+
+export type PluginHealthErrorSummary = ProtocolPlugin["errors"][number];
+
+export type PluginHealthSummary = Omit<ProtocolPlugin, "unavailable"> & {
+  unavailable?: Array<
+    Omit<UnavailablePlugin, "diagnostic"> & {
+      diagnostic: Omit<UnavailablePlugin["diagnostic"], "reason"> & {
+        reason: import("../../plugins/runtime-degraded-state.js").PluginVerificationFailureReason;
+      };
+    }
+  >;
+};
+
+/** Full gateway health payload consumed by `openclaw health`. */
+export type HealthSummary = ProtocolHealth & {
+  modelRuntime?: import("../../agents/prepared-model-runtime.startup-status.js").PreparedModelRuntimeStartupStatus;
+  ok: true;
+  ts: number;
+  durationMs: number;
+  plugins?: PluginHealthSummary;
+  channels: Record<string, ChannelHealthSummary>;
+  channelOrder: string[];
+  channelLabels: Record<string, string>;
+  heartbeatSeconds: number;
+  agents: AgentHealthSummary[];
+  sessions: NonNullable<ProtocolHealth["sessions"]>;
+};

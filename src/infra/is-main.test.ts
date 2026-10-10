@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+// Tests module main-entry detection helpers.
+import { describe, expect, it, vi } from "vitest";
 import { isMainModule } from "./is-main.js";
 
 describe("isMainModule", () => {
@@ -13,15 +14,21 @@ describe("isMainModule", () => {
     ).toBe(true);
   });
 
-  it("returns true under PM2 when pm_exec_path matches current file", () => {
-    expect(
-      isMainModule({
-        currentFile: "/repo/dist/index.js",
-        argv: ["node", "/pm2/lib/ProcessContainerFork.js"],
-        cwd: "/repo",
-        env: { pm_exec_path: "/repo/dist/index.js", pm_id: "0" },
-      }),
-    ).toBe(true);
+  it("falls back to the current file directory when process.cwd is unavailable", () => {
+    const cwdSpy = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw Object.assign(new Error("uv_cwd"), { code: "ENOENT", syscall: "uv_cwd" });
+    });
+    try {
+      expect(
+        isMainModule({
+          currentFile: "/repo/dist/index.js",
+          argv: ["node", "/repo/dist/index.js"],
+          env: {},
+        }),
+      ).toBe(true);
+    } finally {
+      cwdSpy.mockRestore();
+    }
   });
 
   it("resolves relative pm_exec_path values against cwd", () => {

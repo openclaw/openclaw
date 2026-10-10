@@ -1,0 +1,60 @@
+title: "Runtime tool fixture — grep"
+
+scenario:
+  id: runtime-tool-grep
+  surface: runtime-tools
+  runtimePairLane: core
+  coverage:
+    secondary:
+      - agent-runtime.tool-grep
+  objective: Verify grep-style search behavior is tracked through command execution while Codex owns exec/process natively.
+  successCriteria:
+    - OpenClaw may expose OpenClaw exec while Codex app-server mode may omit duplicate OpenClaw dynamic exec/process.
+    - Codex performs the search through its native command tool and projects a correlated bash receipt with the matched line.
+    - The missing-match path produces a correlated failed command result.
+  docsRefs:
+    - qa/scenarios/index.yaml
+  codeRefs:
+    - src/agents/agent-tools.ts
+    - extensions/qa-lab/src/native-workspace-behavior.ts
+    - extensions/qa-lab/src/runtime-tool-fixture.ts
+  execution:
+    kind: flow
+    summary: Exercise grep coverage through the current exec tool surface.
+    config:
+      toolName: exec
+      nativeWorkspaceBehavior: grep
+      toolCoverage:
+        family: grep
+        actualTool: exec
+        bucket: codex-native-workspace
+        expectedLayer: codex-native-workspace
+        required: true
+        tracking: "#80319"
+        codexDefaultImpact: P4
+        qaImpact: P1
+        action: execute native search/command behavior separately from OpenClaw dynamic tool parity
+        reason: Codex has no dedicated grep tool; its native command contract owns grep-style searches without requiring OpenClaw dynamic exec exposure.
+      happyPrompt: >-
+        tool search qa check target=exec. Use the shell command tool exec to run
+        `grep -n 'before edit' runtime-tool-fixture-edit.txt` exactly once.
+        If discovery is needed, discover exec and then execute the shell
+        command; discovery alone does not complete this task. Report the match.
+      failurePrompt: >-
+        tool search qa failure target=exec. Use the shell command tool exec to
+        run `grep -n 'missing fixture text' runtime-tool-fixture-edit.txt`
+        exactly once. Report the nonzero no-match exit status; do not change
+        the pattern, use another tool, or retry.
+      promptSnippet: "target=exec"
+      failurePromptSnippet: "failure target=exec"
+
+flow:
+  steps:
+    - name: exercises grep happy and failure paths
+      actions:
+        - call: runRuntimeToolFixture
+          saveAs: result
+          args:
+            - ref: env
+            - ref: config
+      detailsExpr: result

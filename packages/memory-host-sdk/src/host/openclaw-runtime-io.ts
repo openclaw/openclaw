@@ -1,38 +1,29 @@
-export {
-  CHARS_PER_TOKEN_ESTIMATE,
-  DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES,
-  DEFAULT_SQLITE_WAL_TRUNCATE_INTERVAL_MS,
-  applyWindowsSpawnProgramPolicy,
-  configureSqliteWalMaintenance,
-  root,
-  createSubsystemLogger,
-  detectMime,
-  estimateStringChars,
-  installProcessWarningFilter,
-  materializeWindowsSpawnProgram,
-  redactSensitiveText,
-  resolveGlobalSingleton,
-  resolveUserPath,
-  resolveWindowsExecutablePath,
-  resolveWindowsSpawnProgram,
-  resolveWindowsSpawnProgramCandidate,
-  runTasksWithConcurrency,
-  shortenHomeInString,
-  shortenHomePath,
-  shouldIgnoreWarning,
-  splitShellArgs,
-  truncateUtf16Safe,
-} from "./openclaw-runtime.js";
+// Narrow IO/runtime facade re-exported for memory host helpers.
 
+export {
+  configureSqliteConnectionPragmas,
+  configureSqliteWalMaintenance,
+} from "../../../../src/infra/sqlite-wal.js";
 export type {
-  ProcessWarning,
-  ResolveWindowsSpawnProgramCandidateParams,
-  ResolveWindowsSpawnProgramParams,
+  SqliteConnectionPragmaOptions,
   SqliteWalMaintenance,
   SqliteWalMaintenanceOptions,
-  WindowsSpawnCandidateResolution,
-  WindowsSpawnInvocation,
-  WindowsSpawnProgram,
-  WindowsSpawnProgramCandidate,
-  WindowsSpawnResolution,
-} from "./openclaw-runtime.js";
+} from "../../../../src/infra/sqlite-wal.js";
+export { root } from "../../../../src/infra/fs-safe.js";
+export { createSubsystemLogger } from "../../../../src/logging/subsystem.js";
+export { detectMime } from "@openclaw/media-core/mime";
+export { installProcessWarningFilter } from "../../../../src/infra/warning-filter.js";
+export {
+  captureSensitiveTextRedactionSnapshot,
+  redactSensitiveText,
+} from "../../../../src/logging/redact.js";
+export { getSecretRedactionRegistryRevision } from "../../../../src/logging/secret-redaction-registry.js";
+export { resolveGlobalSingleton } from "../../../../src/shared/global-singleton.js";
+export { runTasksWithConcurrency } from "../../../../src/utils/run-with-concurrency.js";
+export { splitShellArgs } from "../../../../src/utils/shell-argv.js";
+export {
+  resolveUserPath,
+  shortenHomeInString,
+  shortenHomePath,
+  truncateUtf16Safe,
+} from "../../../../src/utils.js";

@@ -1,48 +1,295 @@
+// Gateway client bootstrap resolver.
+// Collects URL, auth, and handshake settings before constructing a GatewayClient.
+import { resolveGatewayPublicOrigin } from "../config/gateway-public-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveGatewayConnectionAuth } from "./connection-auth.js";
-import { buildGatewayConnectionDetailsWithResolvers } from "./connection-details.js";
-import type { ExplicitGatewayAuth } from "./credentials.js";
+import {
+  resolveGatewayInteractiveSurfaceAuth,
+  resolveGatewayProbeSurfaceAuth,
+} from "./auth-surface-resolution.js";
+import {
+  buildGatewayConnectionDetailsWithResolvers,
+  resolveGatewayDeviceAuthRoute,
+  type GatewayConnectionDetails,
+  type GatewaySshRoute,
+} from "./connection-details.js";
+import { normalizeControlUiBasePath } from "./control-ui-shared.js";
+import { resolveGatewayCredentialsWithSecretInputs } from "./credentials-secret-inputs.js";
+import {
+  resolveExplicitGatewayAuth,
+  trimToUndefined,
+  type ExplicitGatewayAuth,
+  type GatewayCredentialMode,
+} from "./credentials.js";
+import { resolveGatewayConnectionTlsFingerprint } from "./tls-fingerprint.js";
 
-export function resolveGatewayUrlOverrideSource(urlSource: string): "cli" | "env" | undefined {
-  if (urlSource === "cli --url") {
-    return "cli";
+export class GatewayExplicitAuthRequiredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GatewayExplicitAuthRequiredError";
   }
-  if (urlSource === "env OPENCLAW_GATEWAY_URL") {
-    return "env";
-  }
-  return undefined;
 }
 
+export async function ensureExplicitGatewayAuth(params: {
+  urlOverride?: string;
+  urlOverrideSource?: "cli" | "env";
+  explicitAuth?: ExplicitGatewayAuth;
+  resolvedAuth?: ExplicitGatewayAuth;
+  deviceAuthScope?: string;
+  allowStoredOriginAuth?: (scope: string) => boolean | Promise<boolean>;
+  errorHint: string;
+  configPath?: string;
+}): Promise<void> {
+  if (!params.urlOverride || !params.urlOverrideSource) {
+    return;
+  }
+  if (params.explicitAuth?.token || params.explicitAuth?.password) {
+    return;
+  }
+  if (
+    params.urlOverrideSource === "env" &&
+    (params.resolvedAuth?.token || params.resolvedAuth?.password)
+  ) {
+    return;
+  }
+  if (
+    params.deviceAuthScope &&
+    (await params.allowStoredOriginAuth?.(params.deviceAuthScope)) === true
+  ) {
+    return;
+  }
+  const sourceHint =
+    params.urlOverrideSource === "env"
+      ? "Set OPENCLAW_GATEWAY_TOKEN or OPENCLAW_GATEWAY_PASSWORD alongside OPENCLAW_GATEWAY_URL; config credentials are intentionally not reused."
+      : "For the default local or SSH-tunneled Gateway, remove --url to use the configured target.";
+  throw new GatewayExplicitAuthRequiredError(
+    [
+      "gateway url override requires explicit credentials",
+      params.errorHint,
+      sourceHint,
+      params.configPath ? `Config: ${params.configPath}` : undefined,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  );
+}
+
+type GatewayClientBootstrapAuthPolicy = "default" | "interactive" | "probe";
+
+type ConfiguredGatewayTargetIdentity = {
+  authSurface: "local" | "remote";
+  tlsSource?: "local loopback" | "config gateway.remote.url";
+};
+
+/** Resolve the only URL overrides allowed to displace configured Gateway targets. */
+export function resolveGatewayUrlOverride(params: {
+  gatewayUrl?: string;
+  env?: NodeJS.ProcessEnv;
+  ignoreEnvUrlOverride?: boolean;
+  localPortOverride?: number;
+}): { url?: string; source?: "cli" | "env" } {
+  const cliUrl = trimToUndefined(params.gatewayUrl);
+  if (cliUrl) {
+    return { url: cliUrl, source: "cli" };
+  }
+  if (params.ignoreEnvUrlOverride || params.localPortOverride !== undefined) {
+    return {};
+  }
+  const envUrl = trimToUndefined((params.env ?? process.env).OPENCLAW_GATEWAY_URL);
+  return envUrl ? { url: envUrl, source: "env" } : {};
+}
+
+/**
+ * Resolves the URL, auth material, and handshake tuning needed to start a GatewayClient.
+ */
 export async function resolveGatewayClientBootstrap(params: {
   config: OpenClawConfig;
   gatewayUrl?: string;
   explicitAuth?: ExplicitGatewayAuth;
   env?: NodeJS.ProcessEnv;
+  authPolicy?: GatewayClientBootstrapAuthPolicy;
+  /** Permit current-profile auth only after bootstrap proves an exact configured target match. */
+  allowConfiguredAuthForExactTarget?: boolean;
+  /** Ignore ambient shared-auth fallback while still resolving configured SecretRefs. */
+  suppressEnvAuthFallback?: boolean;
+  modeOverride?: GatewayCredentialMode;
+  ignoreEnvUrlOverride?: boolean;
+  localPortOverride?: number;
+  configPath?: string;
+  explicitTlsFingerprint?: string;
+  serviceTargetUrl?: string;
+  skipImplicitAuth?: boolean;
+  allowStoredOriginAuth?: (scope: string) => boolean | Promise<boolean>;
+  overrideAuthErrorHint?: string;
+  buildConnectionDetails?: (options: {
+    config: OpenClawConfig;
+    url?: string;
+    configPath?: string;
+    urlSource?: "cli" | "env";
+    ignoreEnvUrlOverride?: boolean;
+    localPortOverride?: number;
+    serviceTargetUrl?: string;
+  }) => GatewayConnectionDetails;
 }): Promise<{
   url: string;
   urlSource: string;
+  connectionDetails: GatewayConnectionDetails;
+  urlOverrideSource?: "cli" | "env";
+  deviceAuthScope?: string;
+  sshTunnel?: GatewaySshRoute;
+  authFailureReason?: string;
   preauthHandshakeTimeoutMs?: number;
+  tlsFingerprint?: string;
   auth: {
     token?: string;
     password?: string;
   };
 }> {
-  const connection = buildGatewayConnectionDetailsWithResolvers({
-    config: params.config,
-    url: params.gatewayUrl,
+  const env = params.env ?? process.env;
+  const explicitAuth = resolveExplicitGatewayAuth(params.explicitAuth);
+  const urlOverride = resolveGatewayUrlOverride({
+    gatewayUrl: params.gatewayUrl,
+    env,
+    ignoreEnvUrlOverride: params.ignoreEnvUrlOverride,
+    localPortOverride: params.localPortOverride,
   });
-  const urlOverrideSource = resolveGatewayUrlOverrideSource(connection.urlSource);
-  const auth = await resolveGatewayConnectionAuth({
+  const buildConnectionDetails =
+    params.buildConnectionDetails ?? buildGatewayConnectionDetailsWithResolvers;
+  const connection = buildConnectionDetails({
     config: params.config,
-    explicitAuth: params.explicitAuth,
-    env: params.env ?? process.env,
-    urlOverride: urlOverrideSource ? connection.url : undefined,
-    urlOverrideSource,
+    url: urlOverride.url,
+    ...(params.configPath ? { configPath: params.configPath } : {}),
+    ...(urlOverride.source ? { urlSource: urlOverride.source } : {}),
+    ignoreEnvUrlOverride: true,
+    ...(params.localPortOverride !== undefined
+      ? { localPortOverride: params.localPortOverride }
+      : {}),
+    ...(params.serviceTargetUrl ? { serviceTargetUrl: params.serviceTargetUrl } : {}),
   });
+  const detectedUrlOverrideSource =
+    connection.urlSource === "cli --url"
+      ? "cli"
+      : connection.urlSource === "env OPENCLAW_GATEWAY_URL"
+        ? "env"
+        : undefined;
+  const urlOverrideSource = urlOverride.source ?? detectedUrlOverrideSource;
+  let configuredTarget: ConfiguredGatewayTargetIdentity | undefined;
+  if (params.allowConfiguredAuthForExactTarget && urlOverrideSource === "cli") {
+    if (params.config.gateway?.mode === "remote") {
+      const remoteUrl = trimToUndefined(params.config.gateway.remote?.url);
+      if (remoteUrl && remoteUrl === connection.url) {
+        configuredTarget = { authSurface: "remote", tlsSource: "config gateway.remote.url" };
+      }
+    } else {
+      const localGateway = { ...params.config.gateway, mode: "local" as const };
+      delete localGateway.remote;
+      const localUrl = buildConnectionDetails({
+        config: { ...params.config, gateway: localGateway },
+        ignoreEnvUrlOverride: true,
+        ...(params.localPortOverride !== undefined
+          ? { localPortOverride: params.localPortOverride }
+          : {}),
+      }).url;
+      const basePath = normalizeControlUiBasePath(params.config.gateway?.controlUi?.basePath ?? "");
+      // Prefer the direct listener's TLS identity when publicOrigin names the same URL.
+      if (`${localUrl}${basePath}` === connection.url) {
+        configuredTarget = { authSurface: "local", tlsSource: "local loopback" };
+      } else {
+        const publicOrigin = resolveGatewayPublicOrigin(params.config);
+        if (
+          publicOrigin &&
+          `${publicOrigin.replace(/^https:/u, "wss:").replace(/^http:/u, "ws:")}${basePath}` ===
+            connection.url
+        ) {
+          // A reverse proxy can terminate a different certificate than the local listener.
+          configuredTarget = { authSurface: "local" };
+        }
+      }
+    }
+  }
+  const tlsUrlSource = configuredTarget?.tlsSource ?? connection.urlSource;
+  const tlsFingerprint = await resolveGatewayConnectionTlsFingerprint({
+    config: params.config,
+    url: connection.url,
+    urlSource: tlsUrlSource,
+    explicitTlsFingerprint: params.explicitTlsFingerprint,
+  });
+  // Only direct CLI/env URL overrides should constrain token/password fallback. Config-derived
+  // remote URLs are canonical config, not a caller override.
+  const surface =
+    configuredTarget?.authSurface ??
+    params.modeOverride ??
+    (params.localPortOverride !== undefined
+      ? "local"
+      : params.config.gateway?.mode === "remote"
+        ? "remote"
+        : "local");
+  let auth: { token?: string; password?: string; failureReason?: string };
+  if (params.skipImplicitAuth) {
+    auth = explicitAuth;
+  } else if (urlOverrideSource && !configuredTarget) {
+    auth = params.suppressEnvAuthFallback
+      ? explicitAuth
+      : await resolveGatewayCredentialsWithSecretInputs({
+          config: params.config,
+          explicitAuth,
+          env,
+          urlOverride: connection.url,
+          urlOverrideSource,
+          modeOverride: params.modeOverride,
+        });
+  } else if (params.authPolicy === "probe") {
+    auth = await resolveGatewayProbeSurfaceAuth({ config: params.config, env, surface });
+  } else if (params.authPolicy === "interactive") {
+    auth = await resolveGatewayInteractiveSurfaceAuth({
+      config: params.config,
+      env,
+      explicitAuth,
+      suppressEnvAuthFallback: params.suppressEnvAuthFallback,
+      surface,
+    });
+  } else {
+    auth = await resolveGatewayCredentialsWithSecretInputs({
+      config: params.config,
+      explicitAuth,
+      env,
+      urlOverride: urlOverrideSource ? connection.url : undefined,
+      urlOverrideSource,
+      modeOverride: surface,
+    });
+  }
+  const { deviceAuthScope, sshTunnel } = resolveGatewayDeviceAuthRoute({
+    config: params.config,
+    url: connection.url,
+    remote: Boolean(urlOverrideSource || connection.urlSource === "config gateway.remote.url"),
+    configuredRemote:
+      (!urlOverrideSource && connection.urlSource === "config gateway.remote.url") ||
+      configuredTarget?.authSurface === "remote",
+    tlsFingerprint,
+  });
+  if (params.overrideAuthErrorHint && !configuredTarget) {
+    await ensureExplicitGatewayAuth({
+      urlOverride: urlOverrideSource ? connection.url : undefined,
+      urlOverrideSource,
+      explicitAuth,
+      resolvedAuth: auth,
+      deviceAuthScope,
+      allowStoredOriginAuth: params.allowStoredOriginAuth,
+      errorHint: params.overrideAuthErrorHint,
+      configPath: params.configPath,
+    });
+  }
   return {
     url: connection.url,
     urlSource: connection.urlSource,
-    preauthHandshakeTimeoutMs: params.config.gateway?.handshakeTimeoutMs,
-    auth,
+    connectionDetails: connection,
+    ...(urlOverrideSource ? { urlOverrideSource } : {}),
+    ...(deviceAuthScope ? { deviceAuthScope } : {}),
+    ...(sshTunnel ? { sshTunnel } : {}),
+    ...(auth.failureReason ? { authFailureReason: auth.failureReason } : {}),
+    ...(tlsFingerprint ? { tlsFingerprint } : {}),
+    auth: {
+      token: auth.token,
+      password: auth.password,
+    },
   };
 }

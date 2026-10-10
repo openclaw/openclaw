@@ -4,14 +4,12 @@ import { parseReleaseVerifyBetaArgs, verifyBetaRelease } from "./lib/release-bet
 
 async function main() {
   const args = parseReleaseVerifyBetaArgs(process.argv.slice(2));
-  const lines = await verifyBetaRelease(args);
-  for (const line of lines) {
+  for (const line of await verifyBetaRelease(args)) {
     console.log(line);
   }
 }
 
 main().catch((error: unknown) => {
-  const message = error instanceof Error ? error.message : String(error);
-  console.error(message);
+  console.error(error instanceof Error ? error.message : String(error));
   process.exitCode = 1;
 });

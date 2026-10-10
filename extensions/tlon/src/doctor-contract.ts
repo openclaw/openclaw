@@ -1,4 +1,4 @@
-import { createLegacyPrivateNetworkDoctorContract } from "openclaw/plugin-sdk/ssrf-runtime";
+import { createLegacyPrivateNetworkDoctorContract } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 
 const contract = createLegacyPrivateNetworkDoctorContract({
   channelKey: "tlon",

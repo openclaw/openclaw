@@ -1,30 +1,16 @@
 import { ChannelType } from "discord-api-types/v10";
 import { logError } from "openclaw/plugin-sdk/logging-core";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import {
-  type AgentComponentContext,
-  type AgentComponentInteraction,
-  type AgentComponentMessageInteraction,
-  type ComponentInteractionContext,
-  type DiscordChannelContext,
+import { isDiscordThreadChannelType } from "../channel-type.js";
+import { replySilently } from "./agent-components-reply.js";
+import type {
+  AgentComponentContext,
+  AgentComponentInteraction,
+  ComponentInteractionContext,
+  DiscordChannelContext,
 } from "./agent-components.types.js";
 import { normalizeDiscordDisplaySlug, normalizeDiscordSlug } from "./allow-list.js";
 import { resolveDiscordChannelInfoSafe } from "./channel-access.js";
-
-function formatUsername(user: { username: string; discriminator?: string | null }): string {
-  if (user.discriminator && user.discriminator !== "0") {
-    return `${user.username}#${user.discriminator}`;
-  }
-  return user.username;
-}
-
-function isThreadChannelType(channelType: number | undefined): boolean {
-  return (
-    channelType === ChannelType.PublicThread ||
-    channelType === ChannelType.PrivateThread ||
-    channelType === ChannelType.AnnouncementThread
-  );
-}
 
 export function resolveAgentComponentRoute(params: {
   ctx: AgentComponentContext;
@@ -52,17 +38,18 @@ export function resolveAgentComponentRoute(params: {
 
 export async function ackComponentInteraction(params: {
   interaction: AgentComponentInteraction;
-  replyOpts: { ephemeral?: boolean };
   label: string;
 }) {
-  try {
-    await params.interaction.reply({
-      content: "✓",
-      ...params.replyOpts,
-    });
-  } catch (err) {
+  await replySilently(params.interaction, { content: "✓", ephemeral: true }, (err) => {
     logError(`${params.label}: failed to acknowledge interaction: ${String(err)}`);
-  }
+  });
+}
+
+export async function replyUnavailableComponentInteraction(
+  interaction: AgentComponentInteraction,
+  content: string,
+): Promise<void> {
+  await replySilently(interaction, { content, ephemeral: true });
 }
 
 export function resolveDiscordChannelContext(
@@ -74,18 +61,11 @@ export function resolveDiscordChannelContext(
   const channelSlug = channelName ? normalizeDiscordSlug(channelName) : "";
   const displayChannelSlug = channelName ? normalizeDiscordDisplaySlug(channelName) : "";
   const channelType = channelInfo.type;
-  const isThread = isThreadChannelType(channelType);
+  const isThread = isDiscordThreadChannelType(channelType);
 
-  let parentId: string | undefined;
-  let parentName: string | undefined;
-  let parentSlug = "";
-  if (isThread) {
-    parentId = channelInfo.parentId;
-    parentName = channelInfo.parentName;
-    if (parentName) {
-      parentSlug = normalizeDiscordSlug(parentName);
-    }
-  }
+  const parentId = isThread ? channelInfo.parentId : undefined;
+  const parentName = isThread ? channelInfo.parentName : undefined;
+  const parentSlug = parentName ? normalizeDiscordSlug(parentName) : "";
 
   return {
     channelName,
@@ -102,7 +82,6 @@ export function resolveDiscordChannelContext(
 export async function resolveComponentInteractionContext(params: {
   interaction: AgentComponentInteraction;
   label: string;
-  defer?: boolean;
 }): Promise<ComponentInteractionContext | null> {
   const { interaction, label } = params;
   const channelId = interaction.rawData.channel_id;
@@ -117,19 +96,10 @@ export async function resolveComponentInteractionContext(params: {
     return null;
   }
 
-  const shouldDefer = params.defer !== false && "defer" in interaction;
-  let didDefer = false;
-  if (shouldDefer) {
-    try {
-      await (interaction as AgentComponentMessageInteraction).defer({ ephemeral: true });
-      didDefer = true;
-    } catch (err) {
-      logError(`${label}: failed to defer interaction: ${String(err)}`);
-    }
-  }
-  const replyOpts = didDefer ? {} : { ephemeral: true };
-
-  const username = formatUsername(user);
+  const username =
+    user.discriminator && user.discriminator !== "0"
+      ? `${user.username}#${user.discriminator}`
+      : user.username;
   const userId = user.id;
   const rawGuildId = interaction.rawData.guild_id;
   const channelType = resolveDiscordChannelContext(interaction).channelType;
@@ -137,7 +107,7 @@ export async function resolveComponentInteractionContext(params: {
   const isDirectMessage =
     channelType === ChannelType.DM || (!rawGuildId && !isGroupDm && channelType == null);
   const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
-    ? interaction.rawData.member.roles.map((roleId: string) => roleId)
+    ? interaction.rawData.member.roles.slice()
     : [];
 
   return {
@@ -145,7 +115,6 @@ export async function resolveComponentInteractionContext(params: {
     user,
     username,
     userId,
-    replyOpts,
     rawGuildId,
     isDirectMessage,
     isGroupDm,

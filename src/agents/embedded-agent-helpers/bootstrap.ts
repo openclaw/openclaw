@@ -1,0 +1,460 @@
+/**
+ * Builds and sanitizes bootstrap context inserted into embedded-agent sessions.
+ */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { sliceUtf16Safe, truncateUtf16Safe } from "../../utils.js";
+import { resolveAgentConfig } from "../agent-scope.js";
+import type { WorkspaceBootstrapFile } from "../workspace.js";
+import type { EmbeddedContextFile } from "./context-file.js";
+export { sanitizeGoogleAssistantFirstOrdering as sanitizeGoogleTurnOrdering } from "../../shared/google-turn-ordering.js";
+
+type ContentBlockWithSignature = {
+  thought_signature?: unknown;
+  thoughtSignature?: unknown;
+  [key: string]: unknown;
+};
+
+type ThoughtSignatureSanitizeOptions = {
+  allowBase64Only?: boolean;
+  includeCamelCase?: boolean;
+};
+
+function isBase64Signature(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return false;
+  }
+  const compact = trimmed.replace(/\s+/g, "");
+  if (!/^[A-Za-z0-9+/=_-]+$/.test(compact)) {
+    return false;
+  }
+  const isUrl = compact.includes("-") || compact.includes("_");
+  try {
+    const buf = Buffer.from(compact, isUrl ? "base64url" : "base64");
+    if (buf.length === 0) {
+      return false;
+    }
+    const encoded = buf.toString(isUrl ? "base64url" : "base64");
+    const normalize = (input: string) => input.replace(/=+$/g, "");
+    return normalize(encoded) === normalize(compact);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Strips Claude-style thought_signature fields from content blocks.
+ *
+ * Gemini expects thought signatures as base64-encoded bytes, but Claude stores message ids
+ * like "msg_abc123...". We only strip "msg_*" to preserve any provider-valid signatures.
+ */
+export function stripThoughtSignatures<T>(
+  content: T,
+  options?: ThoughtSignatureSanitizeOptions,
+): T {
+  if (!Array.isArray(content)) {
+    return content;
+  }
+  const allowBase64Only = options?.allowBase64Only ?? false;
+  const includeCamelCase = options?.includeCamelCase ?? false;
+  const shouldStripSignature = (value: unknown): boolean => {
+    if (!allowBase64Only) {
+      return typeof value === "string" && value.startsWith("msg_");
+    }
+    return typeof value !== "string" || !isBase64Signature(value);
+  };
+  return content.map((block) => {
+    if (!block || typeof block !== "object") {
+      return block;
+    }
+    const rec = block as ContentBlockWithSignature;
+    const stripSnake = shouldStripSignature(rec.thought_signature);
+    const stripCamel = includeCamelCase ? shouldStripSignature(rec.thoughtSignature) : false;
+    if (!stripSnake && !stripCamel) {
+      return block;
+    }
+    const next = { ...rec };
+    if (stripSnake) {
+      delete next.thought_signature;
+    }
+    if (stripCamel) {
+      delete next.thoughtSignature;
+    }
+    return next;
+  }) as T;
+}
+
+const DEFAULT_BOOTSTRAP_MAX_CHARS = 20_000;
+const DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS = 60_000;
+// USER.md stays directive-sized so profile guidance cannot crowd out project
+// rules or durable facts from the shared bootstrap budget.
+export const USER_BOOTSTRAP_MAX_CHARS = 4_000;
+const MIN_BOOTSTRAP_FILE_BUDGET_CHARS = 64;
+// Ratios split `contentBudget` (= maxChars − marker.length − join separators), not `maxChars`.
+// The marker and "\n" separators are already reserved before this split runs; these ratios
+// only divide what's left between head and tail. Ratios sum to 1.0 — the iteration loop,
+// post-loop guard, and final `truncateUtf16Safe` clamp absorb any `Math.floor` residue.
+const BOOTSTRAP_HEAD_RATIO = 0.75;
+const BOOTSTRAP_TAIL_RATIO = 0.25;
+const MIN_BOOTSTRAP_TRIMMED_CONTENT_CHARS = 16;
+const AGENTS_BOOTSTRAP_FILENAME = "AGENTS.md";
+const USER_BOOTSTRAP_FILENAME = "USER.md";
+const AGENTS_POLICY_DIGEST_RATIO = 0.35;
+const AGENTS_POLICY_HEAD_RATIO = 0.45;
+const AGENTS_POLICY_TAIL_RATIO = 0.15;
+const AGENTS_POLICY_DIGEST_MAX_LINE_CHARS = 240;
+const AGENTS_POLICY_DIGEST_CANDIDATE_PATTERN =
+  /\b(?:AGENTS\.md|scoped|required|must|never|do not|before subtree|read scoped|owner|security|secret|credential|test|validation|command|commit|push|github|pr)\b|(?:🔴|禁止|嚴禁|不得|絕不|絕對不|切勿|必須|務必|一律|紅線)/iu;
+const AGENTS_POLICY_DIGEST_HIGH_PRIORITY_PATTERN =
+  /\b(?:AGENTS\.md|scoped|required|must|never|do not|before subtree|read scoped|security|secret|credential)\b|(?:🔴|禁止|嚴禁|不得|絕不|絕對不|切勿)/iu;
+
+type TrimBootstrapResult = {
+  content: string;
+  truncated: boolean;
+  maxChars: number;
+  originalLength: number;
+};
+
+type PolicyDigestCandidate = { text: string; highPriority: boolean };
+
+type PolicyDigest = {
+  text: string;
+  omittedLines: number;
+};
+
+function resolveBootstrapCharLimit(
+  cfg: OpenClawConfig | undefined,
+  agentId: string | null | undefined,
+  key: "bootstrapMaxChars" | "bootstrapTotalMaxChars",
+  fallback: number,
+): number {
+  const raw =
+    cfg && agentId
+      ? (resolveAgentConfig(cfg, agentId)?.[key] ?? cfg.agents?.defaults?.[key])
+      : cfg?.agents?.defaults?.[key];
+  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
+    return Math.floor(raw);
+  }
+  return fallback;
+}
+
+export function resolveBootstrapMaxChars(cfg?: OpenClawConfig, agentId?: string | null): number {
+  return resolveBootstrapCharLimit(cfg, agentId, "bootstrapMaxChars", DEFAULT_BOOTSTRAP_MAX_CHARS);
+}
+
+export function resolveBootstrapTotalMaxChars(
+  cfg?: OpenClawConfig,
+  agentId?: string | null,
+): number {
+  return resolveBootstrapCharLimit(
+    cfg,
+    agentId,
+    "bootstrapTotalMaxChars",
+    DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS,
+  );
+}
+
+function isPolicyDigestCandidate(line: string): boolean {
+  return (
+    /^(?:#{1,6}|\s*[-*+]|\s*\d+[.)])\s+\S/u.test(line) ||
+    AGENTS_POLICY_DIGEST_CANDIDATE_PATTERN.test(line)
+  );
+}
+
+function normalizePolicyDigestLine(line: string): string {
+  const normalized = line.trim().replace(/\s+/gu, " ");
+  if (normalized.length <= AGENTS_POLICY_DIGEST_MAX_LINE_CHARS) {
+    return normalized;
+  }
+  return `${truncateUtf16Safe(normalized, AGENTS_POLICY_DIGEST_MAX_LINE_CHARS - 1)}…`;
+}
+
+function buildAgentsPolicyDigest(
+  candidates: readonly PolicyDigestCandidate[],
+  budget: number,
+): PolicyDigest {
+  if (budget <= 0) {
+    return { text: "", omittedLines: 0 };
+  }
+
+  const selected = new Set<PolicyDigestCandidate>();
+  let used = 0;
+  const trySelect = (candidate: PolicyDigestCandidate) => {
+    const separatorChars = selected.size > 0 ? 1 : 0;
+    if (used + separatorChars + candidate.text.length > budget) {
+      return;
+    }
+    selected.add(candidate);
+    used += separatorChars + candidate.text.length;
+  };
+
+  for (const candidate of candidates) {
+    if (candidate.highPriority) {
+      trySelect(candidate);
+    }
+  }
+  for (const candidate of candidates) {
+    if (!selected.has(candidate)) {
+      trySelect(candidate);
+    }
+  }
+
+  const lines = candidates
+    .filter((candidate) => selected.has(candidate))
+    .map((candidate) => candidate.text);
+  return {
+    text: lines.join("\n"),
+    omittedLines: Math.max(0, candidates.length - selected.size),
+  };
+}
+
+function trimAgentsBootstrapContent(trimmed: string, maxChars: number): string {
+  let headChars = Math.floor(maxChars * AGENTS_POLICY_HEAD_RATIO);
+  let tailChars = Math.floor(maxChars * AGENTS_POLICY_TAIL_RATIO);
+  let digestBudget = Math.floor(maxChars * AGENTS_POLICY_DIGEST_RATIO);
+  // Budget refinement reselects these distinct source-ordered lines without reparsing them.
+  const candidates: PolicyDigestCandidate[] = [];
+  if (!(digestBudget <= 0)) {
+    let lastProseLine: string | null = null;
+    for (const sourceLine of trimmed.split(/\r?\n/u)) {
+      const line = normalizePolicyDigestLine(sourceLine);
+      if (line.length === 0) {
+        lastProseLine = null;
+        continue;
+      }
+      if (/^\s*(?:`{3,}|~{3,})/u.test(line)) {
+        // Framing cannot cross a fence boundary.
+        lastProseLine = null;
+      } else if (isPolicyDigestCandidate(line)) {
+        candidates.push({
+          // Select framing and its candidate as one indivisible text unit.
+          text: lastProseLine === null ? line : `${lastProseLine}\n${line}`,
+          highPriority: AGENTS_POLICY_DIGEST_HIGH_PRIORITY_PATTERN.test(line),
+        });
+        lastProseLine = null;
+      } else {
+        lastProseLine = line;
+      }
+    }
+  }
+  let digest = buildAgentsPolicyDigest(candidates, digestBudget);
+  const render = () =>
+    [
+      sliceUtf16Safe(trimmed, 0, headChars),
+      `[...truncated, read ${AGENTS_BOOTSTRAP_FILENAME} for full content...]`,
+      digest.text ? "[Policy digest from AGENTS.md]" : "",
+      digest.text,
+      digest.omittedLines > 0 ? `[...${digest.omittedLines} more policy lines omitted...]` : "",
+      `…(truncated ${AGENTS_BOOTSTRAP_FILENAME}: kept ${headChars}+policy ${digest.text.length}+${tailChars} chars of ${trimmed.length})…`,
+      tailChars > 0 ? sliceUtf16Safe(trimmed, -tailChars) : "",
+    ]
+      .filter((part) => part.length > 0)
+      .join("\n");
+
+  let rendered = render();
+  while (rendered.length > maxChars && (tailChars > 0 || headChars > 1 || digestBudget > 0)) {
+    const overflow = rendered.length - maxChars;
+    if (tailChars > 0) {
+      tailChars = Math.max(0, tailChars - overflow);
+    } else if (headChars > 1) {
+      headChars = Math.max(1, headChars - overflow);
+    } else {
+      digestBudget = Math.max(0, digestBudget - overflow);
+      digest = buildAgentsPolicyDigest(candidates, digestBudget);
+    }
+    rendered = render();
+  }
+
+  return rendered.length > maxChars ? truncateUtf16Safe(rendered, maxChars) : rendered;
+}
+
+function trimBootstrapContent(
+  content: string,
+  fileName: string,
+  maxChars: number,
+): TrimBootstrapResult {
+  const trimmed = content.trimEnd();
+  const finish = (value: string, truncated = true): TrimBootstrapResult => ({
+    content: value,
+    truncated,
+    maxChars,
+    originalLength: trimmed.length,
+  });
+  if (trimmed.length <= maxChars) {
+    return finish(trimmed, false);
+  }
+  if (fileName?.toLowerCase() === AGENTS_BOOTSTRAP_FILENAME.toLowerCase()) {
+    return finish(trimAgentsBootstrapContent(trimmed, maxChars));
+  }
+
+  const markerTemplate = (headChars: number, tailChars: number) =>
+    [
+      "",
+      `[...truncated, read ${fileName} for full content...]`,
+      `…(truncated ${fileName}: kept ${headChars}+${tailChars} chars of ${trimmed.length})…`,
+      "",
+    ].join("\n");
+  const compactMarkerTemplate = (headChars: number, tailChars: number) =>
+    `[…truncated ${headChars}+${tailChars}/${trimmed.length}]`;
+  const separatorCharsFor = (headCount: number, tailCount: number, markerContent: string) =>
+    markerContent.includes("\n") ? Number(headCount > 0) + Number(tailCount > 0) : 0;
+  const renderTruncatedContent = (head: string, markerContent: string, tail: string) =>
+    [head, markerContent, tail]
+      .filter((part) => part.length > 0)
+      .join(markerContent.includes("\n") ? "\n" : "");
+  const fullMarker = markerTemplate(0, 0);
+  const fullContentBudget = maxChars - fullMarker.length - separatorCharsFor(1, 1, fullMarker);
+  const resolvedMarkerTemplate =
+    fullContentBudget >= MIN_BOOTSTRAP_TRIMMED_CONTENT_CHARS
+      ? markerTemplate
+      : compactMarkerTemplate;
+  let headChars = 0;
+  let tailChars = 0;
+  let marker = resolvedMarkerTemplate(headChars, tailChars);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const contentBudget = Math.max(
+      0,
+      maxChars - marker.length - separatorCharsFor(headChars, tailChars, marker),
+    );
+    const nextHeadChars = Math.floor(contentBudget * BOOTSTRAP_HEAD_RATIO);
+    const nextTailChars = Math.floor(contentBudget * BOOTSTRAP_TAIL_RATIO);
+    const nextMarker = resolvedMarkerTemplate(nextHeadChars, nextTailChars);
+    if (
+      nextHeadChars === headChars &&
+      nextTailChars === tailChars &&
+      nextMarker.length === marker.length
+    ) {
+      break;
+    }
+    headChars = nextHeadChars;
+    tailChars = nextTailChars;
+    marker = nextMarker;
+  }
+  let renderedLength =
+    headChars + tailChars + marker.length + separatorCharsFor(headChars, tailChars, marker);
+  while (renderedLength > maxChars && (tailChars > 0 || headChars > 0)) {
+    const overflow = renderedLength - maxChars;
+    if (tailChars > 0) {
+      tailChars = Math.max(0, tailChars - overflow);
+    } else {
+      headChars = Math.max(0, headChars - overflow);
+    }
+    marker = resolvedMarkerTemplate(headChars, tailChars);
+    renderedLength =
+      headChars + tailChars + marker.length + separatorCharsFor(headChars, tailChars, marker);
+  }
+  if (headChars === 0 && tailChars === 0 && trimmed.length > 0) {
+    const singleHeadMarker = resolvedMarkerTemplate(1, 0);
+    const singleHeadLength =
+      1 + singleHeadMarker.length + separatorCharsFor(1, 0, singleHeadMarker);
+    if (singleHeadLength <= maxChars) {
+      headChars = 1;
+      marker = singleHeadMarker;
+    }
+  }
+  const head = sliceUtf16Safe(trimmed, 0, headChars);
+  const tail = tailChars > 0 ? sliceUtf16Safe(trimmed, -tailChars) : "";
+
+  const contentWithMarker = renderTruncatedContent(head, marker, tail);
+  const boundedContent =
+    contentWithMarker.length > maxChars
+      ? truncateUtf16Safe(contentWithMarker, maxChars)
+      : contentWithMarker;
+  return finish(boundedContent);
+}
+
+function clampToBudget(content: string, budget: number): string {
+  if (content.length <= budget) {
+    return content;
+  }
+  return budget <= 3
+    ? truncateUtf16Safe(content, budget)
+    : `${truncateUtf16Safe(content, budget - 1)}…`;
+}
+
+export function buildBootstrapContextFiles(
+  files: (Omit<WorkspaceBootstrapFile, "name"> & { name: string })[],
+  opts?: { warn?: (message: string) => void; maxChars?: number; totalMaxChars?: number },
+): EmbeddedContextFile[] {
+  const maxChars = opts?.maxChars ?? DEFAULT_BOOTSTRAP_MAX_CHARS;
+  const totalMaxChars = Math.max(
+    1,
+    Math.floor(opts?.totalMaxChars ?? Math.max(maxChars, DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS)),
+  );
+  let remainingTotalChars = totalMaxChars;
+  const result: EmbeddedContextFile[] = [];
+  for (const file of files) {
+    if (remainingTotalChars <= 0) {
+      break;
+    }
+    const pathValue = normalizeOptionalString(file.path) ?? "";
+    if (!pathValue) {
+      opts?.warn?.(
+        `skipping bootstrap file "${file.name}" — missing or invalid "path" field (hook may have used "filePath" instead)`,
+      );
+      continue;
+    }
+    const appendContext = (content: string, includePersonalUser = false) => {
+      remainingTotalChars = Math.max(0, remainingTotalChars - content.length);
+      result.push({
+        path: pathValue,
+        content,
+        ...(includePersonalUser && file.personalUser ? { personalUser: file.personalUser } : {}),
+      });
+    };
+    if (file.missing) {
+      const missingText = `[MISSING] Expected at: ${pathValue}`;
+      const cappedMissingText = clampToBudget(missingText, remainingTotalChars);
+      if (!cappedMissingText) {
+        break;
+      }
+      appendContext(cappedMissingText);
+      continue;
+    }
+    if (remainingTotalChars < MIN_BOOTSTRAP_FILE_BUDGET_CHARS) {
+      opts?.warn?.(
+        `remaining bootstrap budget is ${remainingTotalChars} chars (<${MIN_BOOTSTRAP_FILE_BUDGET_CHARS}); skipping additional bootstrap files`,
+      );
+      break;
+    }
+    const fileBudget =
+      file.name?.toLowerCase() === USER_BOOTSTRAP_FILENAME.toLowerCase()
+        ? Math.min(maxChars, USER_BOOTSTRAP_MAX_CHARS)
+        : maxChars;
+    const fileMaxChars = Math.max(1, Math.min(fileBudget, remainingTotalChars));
+    // Personal instructions are indivisible: never turn a cut-off directive into new policy.
+    if (file.personalUser && (file.content ?? "").trimEnd().length > fileMaxChars) {
+      opts?.warn?.("Personal USER.md exceeds the bootstrap budget; using shared defaults.");
+      continue;
+    }
+    const trimmed = trimBootstrapContent(file.content ?? "", file.name, fileMaxChars);
+    const contentWithinBudget = clampToBudget(trimmed.content, remainingTotalChars);
+    if (!contentWithinBudget) {
+      continue;
+    }
+    if (trimmed.truncated || contentWithinBudget.length < trimmed.content.length) {
+      opts?.warn?.(
+        `workspace bootstrap file ${file.name} is ${trimmed.originalLength} chars (limit ${trimmed.maxChars}); truncating in injected context`,
+      );
+    }
+    appendContext(contentWithinBudget, true);
+  }
+  return result;
+}
+
+/** Builds bounded context files from already-resolved bootstrap file metadata. */
+export function buildBootstrapContextForFiles(
+  bootstrapFiles: WorkspaceBootstrapFile[],
+  params: {
+    config?: OpenClawConfig;
+    agentId?: string | null;
+    warn?: (message: string) => void;
+  },
+): EmbeddedContextFile[] {
+  return buildBootstrapContextFiles(bootstrapFiles, {
+    maxChars: resolveBootstrapMaxChars(params.config, params.agentId),
+    totalMaxChars: resolveBootstrapTotalMaxChars(params.config, params.agentId),
+    warn: params.warn,
+  });
+}

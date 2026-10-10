@@ -1,5 +1,6 @@
 ---
-summary: "Browser-based control UI for the Gateway (chat, nodes, config)"
+doc-schema-version: 1
+summary: "Browser-based control UI for the Gateway (chat, activity, nodes, config)"
 read_when:
   - You want to operate the Gateway from a browser
   - You want Tailnet access without SSH tunnels
@@ -12,488 +13,419 @@ The Control UI is a small **Vite + Lit** single-page app served by the Gateway:
 - default: `http://<host>:18789/`
 - optional prefix: set `gateway.controlUi.basePath` (e.g. `/openclaw`)
 
+`gateway.controlUi.enabled` hot-applies. Disable it to stop serving dashboard
+pages and assets while bots and existing Gateway connections keep running.
+Re-enable it to resume serving; missing assets are prepared in the background.
+Changing the serving base path or asset root still requires a Gateway restart.
+
+For unmatched HTTP paths, the app-shell fallback respects the request's `Accept` header. An explicit HTML rejection such as `text/html;q=0, */*` overrides the broader wildcard, so the request reaches the startup `503` or final `404` response. Headerless and wildcard-only requests retain the browser navigation fallback.
+
 It speaks **directly to the Gateway WebSocket** on the same port.
+
+In **Settings → Appearance → Browser tab icon**, choose **Agent avatar** to use
+the selected agent’s image. The **Shape** row offers **Square**, **Rounded corners**,
+and **Circle**. Square preserves the full image; rounded and circular icons use a
+centered crop. The choice is saved with your tab-icon preference, and activity
+badges remain visible on every shape.
+
+After a Gateway restart, an agent may need a few minutes to prepare its database. The chat view shows "Starting up" and the sidebar stays quiet while preparation is pending. Both reload automatically when the agent is ready; an actual preparation failure still shows its diagnostic and repair instructions.
+
+Automatic read acknowledgements and identity refreshes pause while the Gateway reports a restart or suspension. Pending read acknowledgements are shared across repeated session updates. If an acknowledgement is rejected, later updates respect the server's retry delay and use randomized backoff instead of immediately sending another patch.
+
+Reconnect bootstrap reads also pause together: agent identity, session subscriptions, session groups, pending questions, and the session list. An announced restart or suspension holds these reads until readiness or a new connection resumes loading. If a restart rejection arrives without an announcement, one delayed probe at a time checks for recovery after at least a minute, in case the restart is canceled. Writes are never replayed by this mechanism.
+
+Agent identities are shared across views on the same connection and refresh after configuration or agent changes, including `IDENTITY.md` saves through the Gateway, rather than expiring while a tab is idle. Reload the tab to pick up direct filesystem edits to workspace `IDENTITY.md` or avatar image files.
+
+If the Gateway's request queue is full, automatic sidebar session discovery keeps the current rows and retries up to three times, respecting the server's retry delay. A persistent failure shows "The server is busy. Please try again in a moment." Other actions can show this message immediately; wait briefly, then retry the action.
+
+While the initial connection or a route loads, shimmer placeholders reserve the chat layout. Home and System busyness open directly in their destination panels, with working headers and Close controls while the content loads. Brief loads do not flash placeholders; slower loads show placeholders inside the panel, and load errors offer Retry in the same place. The rest of the page stays usable. Drag the System busyness title bar to move the panel; its position is remembered in this browser. You can also focus the title bar and use the arrow keys (Shift moves farther). Compact/expanded transitions animate briefly, respect reduced motion, and keep the panel inside the window. Loading indicators respect your theme and reduced-motion preference; Gateway startup progress remains visible when available.
+
+The selected chat loads before automatic sidebar session lists refresh. Live events remain subscribed during startup, and explicit sidebar actions remain available. Background lists resume after the transcript loads or reports an error.
+
+Session details share concurrent reads across the sidebar, chat, and resource panels. Returning to an unchanged session reuses its details on the same connection. Session changes, explicit refreshes, and reconnects fetch current details; failed reads remain retryable.
+
+Sidebar pull-request indicators reuse the last known snapshot. Opening a session, its progress card, or its Git activity requests current checkout facts; sidebar rows alone do not poll Git. Active panels detect branch and staged changes from Git metadata. Tool completion refreshes working-tree stats, with a five-minute fallback for edits made outside OpenClaw.
+
+Background pull-request comparisons use local Git objects and never fetch missing history or blobs. If a partial clone lacks objects needed for the comparison, statistics can remain unavailable until those objects are fetched. A timed-out comparison skips its dependent checks, keeps the branch visible without statistics or a Create PR link, and logs a warning to fetch repository history and retry.
+
+The sidebar’s **Online** list shows compact person rows with avatar presence indicators: solid green means active, amber means idle, and a hollow green ring means connected with activity unavailable. Names stay on one line and fade at the edge when space is tight. The indicators, hovercard, and accessible description preserve the activity distinctions. A compact group at the end of each row shows a theme-accent spinner and running count, then a small message-circle icon and muted open count. Each icon-number pair uses tabular digits and keeps its natural width, with a wider gap between running and open groups. The group rests at the right edge; names and counts share a text baseline, without fixed digit columns. Counts have no pill background at rest, with explanatory tooltips; hovering or keyboard-focusing the row reveals a subtle grouping pill without shifting the content. Reduced motion keeps the spinner still. Known zero counts are omitted. Open counts each person’s owned, unarchived conversations that you can access across configured agents, excluding hidden subagents, automation, system, and global/unknown sessions. Running counts each conversation once while its own agent turn executes or its delegated subagents remain active, including when the parent is waiting for their results. Queued direct turns without active delegated work do not count. Counts cover the matching sessions before pagination and do not change with your session-list filters. By default, all connected people remain visible, ordered Active, Idle, then Online with activity unavailable. Hover the **Online** block or focus it with the keyboard to reveal **Filter & sort**; the action stays available on touch devices. Its compact menu uses the existing dropdown controls: choose **All** or **Running**, and sort by **Active people first**, **Running sessions**, **Total sessions**, or **Name**. Mouse hover opens the choice submenus; selecting an option dismisses the menu. Count sorts put larger values first and unavailable counts last; **Total sessions** uses the open count above, not lifetime history. **Reset to defaults** appears only after a setting changes, below a single separator, and restores the default view. These controls only filter or order people; they do not change session-list queries or hide either counter. Unavailable counts show no placeholder; the row tooltip and accessible description identify them as unavailable rather than zero. A failed refresh keeps the last counts with a retry notice.
+
+Person hovercards keep their **Recent sessions** selection and order stable while open, so background activity does not move links under the pointer or keyboard focus. Reopening the card selects the latest sessions. Timestamps stay live, and sessions that leave the visible, eligible roster disappear without replacing them with other sessions. **Viewing now** continues to follow presence.
+
+Sidebar live narration pauses while the browser tab is hidden and resumes from current activity when you return. The selected chat and pending outbox keep their separately owned subscriptions.
+
+The sidebar’s **Unsent draft** pencil covers saved text, attachments, replies, and goals, including drafts saved in another tab or before a reload, without reopening the conversation. A newer edit or clear always replaces an older saved draft. Incognito conversations never show a saved-draft pencil. Outbox attention badges also count queued messages with attachments that need review once the connection finishes restoring.
+
+If this browser has saved drafts or messages that could not be restored to a chat, a **saved drafts** or **saved messages to review** notice shows their content and attachment names. Empty records are not counted. The original chat is named only when it can be identified from your available conversations. Choose **Review in this chat** in a non-Incognito chat with an empty message box and no pending messages; confirmation restores the saved copy without sending it. Messages with unconfirmed delivery stay paused—check the original chat before retrying. **Delete saved copy** asks for confirmation and removes only the saved draft, messages, and attachments shown together, not messages already sent to a chat.
+
+With sidebar previews enabled, running sessions show a small, static tool icon beside the progress text on the second row beneath the session name. The title row stays unchanged, and the tool name is available only in the icon’s tooltip and accessible label rather than repeated as visible text. The compact one-row sidebar and team roster add no tool icon or tool text, so tool changes do not shift the list. Tool progress uses only explicitly public progress text from the Gateway, never argument-derived metadata or raw command output. If a call’s progress becomes hidden, its displayed progress is withdrawn. Pending questions and other critical status keep their existing priority. The existing session indicator remains the only activity animation, and tool state clears when its live subscription ends.
+
+Live narration retains up to six visible running background sessions, plus the open session. Recency changes keep that window stable; when a session finishes or leaves the visible rows, the most recent eligible session fills its slot. Reconnecting selects a fresh window.
+
+If a narration subscription encounters a retryable failure or times out, it retries automatically with randomized exponential backoff, honoring the server's retry delay. Sidebar updates share the pending retry instead of sending more requests. Retries stop when that session leaves the narration window, the tab is hidden, or the connection closes; non-retryable errors wait for a new subscription intent or connection.
+
+Failed narration releases use the same backoff, including while the tab is hidden. If a session is needed again, its queued release is canceled and its subscription is renewed safely. Closing the Gateway connection cancels release retries.
+
+Closed Terminal, Browser, and Desktop panels initialize when you open them rather than during initial navigation. Home/Ask OpenClaw and System busyness keep lightweight frames ready and defer their conversation or diagnostic contents until opened. Home preserves its saved dock position and size throughout loading. Panels saved as open still restore after a reload. Settings does not automatically reopen Ask OpenClaw; its control and diagnostic actions can still open it explicitly.
+
+Hidden retained chats defer command and model metadata refreshes until you return to them. Returning to a recently opened chat reuses its completed metadata on the same connection until a Gateway change invalidates it. Concurrent readers share the same request. Session events with an unchanged model-selection revision retain the model catalog, and session-only changes retain agent commands. Native sessions without a model-selection revision wait for a 2.5-second quiet period after ordinary patches before refreshing the catalog and session facts. Explicit model, account, and runtime selections refresh promptly. Configuration and command changes refresh commands; catalog and session lifecycle changes refresh affected model choices. Repeated changes during a request share one trailing refresh instead of issuing overlapping requests.
+
+New Session keeps previously fetched model choices selectable while their catalog
+refreshes in the background. Before the first catalog arrives, it does not turn a
+configured default into a model option. Command palette model results use the same
+catalog cache and appear independently of slower search categories.
+
+Provider authentication status is shared across views and refreshes after account changes and near credential warning or expiry deadlines. Credentials without an expiry do not need periodic refreshes. Hidden tabs defer deadline refreshes until visible again.
+
+The sidebar loads automation status once per connection and refreshes after automation or configuration changes. Failed reads retry once per minute while the tab is visible and stop retrying after success. Sidebar health and Automations page refreshes pause during announced restarts or suspension and catch up when the Gateway is available again. Overdue warnings advance on a local deadline without polling the Gateway. Hidden tabs catch up when visible; returning to an unchanged tab does not poll automations. Command palette searches reuse their automation inventory on the same connection until one of those changes or a reconnect.
+
+Automation inputs appear as compact, collapsed activity rows instead of message bubbles. Expand a row to read the full prompt and access its message actions. Each automation input stays separate, even when several jobs run in the same conversation. The expanded **From** link opens that automation's History tab and highlights the originating run; open the run's transcript from History when needed.
+
+Thinking, speed, and context-window changes stay synchronized across panes showing the same session. While a change is pending, the latest selection remains visible. A rejected change restores the latest confirmed value. Delayed events from a replaced session leave the current transcript and unsent draft intact.
+
+While an agent works, completed commentary or preambles appear inline in the
+conversation when the model and runtime provide them. Narration keeps its
+formatting and position alongside tool activity; the working indicator remains
+a separate status for execution, startup, or approval. **Keep commentary** in
+the chat view menu controls whether commentary stays visible after the run,
+not whether the active run’s narration survives a history refresh. Completed
+dashboard turns collapse their narration and tool activity under **Worked for …**
+above the answer, with durations such as **Worked for 2 minutes, 3 seconds**.
+Expanding it restores the sequence with the existing tool-call groups and shows
+the total tool-call count. When no run duration is available, the heading reads
+**Worked** rather than estimating from message timestamps. Failures and other
+non-success outcomes remain visible even when collapsed, such as
+**Worked for 2 minutes, 3 seconds · 2 failed**.
+
+Still-streaming assistant text stays at the bottom of its run, below saved output, and
+takes its transcript position once saved.
+
+Accepted steering messages keep their saved transcript positions. Earlier saved
+output stays above the message; later answers and live output appear below it,
+including when the same run continues after steering. Reloading or reconnecting
+does not move the message to the end of that run. Unsaved assistant text remains
+one live tail until saved rows replace it; the UI does not split or rewrite
+stored assistant messages.
+
+Consecutive tool activity shares one expandable log, including when background
+work resumes in a new run. Visible messages, media, and conversation markers
+keep their place and separate logs; live response text and the working indicator
+stay outside the log. Grouping changes only the presentation, not the transcript.
+
+Inter-session messages appear as compact **updates from** activity rows instead
+of chat bubbles. Consecutive updates from the same source share one row; other
+messages and conversation markers keep them separate. Select the row to show
+the original messages and timestamps in one step, or select the source name to
+open that session. Search results and reply navigation reveal the matching
+messages. This changes only presentation, not stored messages or run ownership.
+
+When an incoming message causes an unstarted tool call to be skipped, its card
+and work summary show **Skipped**, including after reloading the conversation.
+Approval blocks and tool failures keep their separate outcomes.
+
+Open the parent conversation's side panel and select **Subagents** from its **+**
+menu to inspect child runs, including swarm workers. The panel loads all child
+pages automatically and groups running and finished work,
+keeping children waiting on their own descendants under **Running**. It shows
+elapsed time and available tool activity, and opens each child's existing
+view-only transcript beside the parent. Avatar-free child transcripts do not reserve
+empty avatar columns, and narrow panes use compact horizontal insets while wide
+transcripts retain the reading-width limit. It does not add rows to the left sidebar.
+The parallel-tasks view also shows aggregate swarm progress. A directly opened child page
+offers **Open parent session**. The `/subagents list`, `/subagents info <id|#>`,
+and `/subagents log <id|#>` commands remain available.
+
+Open **Processes** from the chat header's **Panels** menu or the side-panel **+**
+menu to inspect the conversation's background exec commands. It is separate from
+**Subagents**. Running and retained finished processes show status and elapsed
+time. **Finished** starts collapsed; click its heading to expand or collapse the
+list. Selecting a process opens its recent output. **Stop** targets that exact
+process, not the parent conversation or another command with the same name.
+Hidden panels stop refreshing. Output follows the process owner's temporary
+retention limits; viewing it does not drain output waiting for the agent.
+
+Select a session's title in the chat header to rename it. Enter saves the name;
+Escape cancels the edit. While an input method is composing text, Enter and
+Escape stay with composition. Finish composing before saving or canceling.
+Once the Gateway confirms a rename, the saved name stays visible while the session
+list refreshes, even if an older snapshot arrives late.
+
+Dragging a session between sidebar groups updates its placement immediately. A successful
+save keeps that placement even if the subsequent list refresh fails; the UI reports
+the refresh error separately. If a connection failure leaves the save unconfirmed,
+refresh and check the session's group before retrying. Other clients' newer group
+changes still reconcile through session events.
+
+The sidebar keeps unread child failures visible on their ancestors. These warnings
+name the child session that failed, even when its parent has finished or continues
+working. Select the warning to open the child session and acknowledge its failure;
+a subagent chat opens without adding a sidebar row.
+
+Choose **New agent** in the sidebar or Agents home to open the custodian chat.
+It recommends a chief of staff, researcher, writer, reviewer, or a small team
+with all four. Reply with a choice, or describe custom work and a name. Role
+choices use the same [role templates](/cli/agents#role-templates) as the CLI;
+creation waits for operator approval. For custom work, the approved purpose is
+saved in the new workspace's `AGENTS.md`; the normal identity ceremony still runs.
+With `skipBootstrap` enabled, only these requested instructions are seeded, without
+the generic identity or bootstrap files.
+Existing workspace instructions are never overwritten. If `AGENTS.md` already
+contains different instructions, choose a new workspace for the custom agent.
+Created agents appear in Agents home and
+the agent switcher.
+
+The sidebar agent menu uses horizontal rows with a bounded, scrollable list.
+With more than six agents, **Find an agent…** filters by display name or agent ID;
+matching names retain their existing pinned order. Duplicate names show their
+IDs underneath. New-agent, directory, capability, and settings actions stay outside
+the scrolling list. Reopening the menu clears the filter and brings the selected
+agent into view.
+Opening **New agent** keeps your existing Ask OpenClaw conversation. Finish any
+pending wizard or approval before opening the creation choices.
+If team creation stops partway through, the custodian reports the retained
+agents so you can inspect them before creating the missing members.
+
+## Take a photo in chat
+
+Choose **Add attachment → Take photo** in chat or New Session to open a camera
+preview. Allow camera access when your browser asks, then choose **Capture**,
+**Retake**, or **Use photo**. The chosen photo becomes a draft attachment; it does
+not send the message. The preview stays in your browser and does not request
+microphone access.
+
+The live preview requires HTTPS or localhost and a browser that supports camera
+access. On plain HTTP LAN addresses or browsers without the camera API, choose
+**Use device camera** to open the native capture picker instead. This preserves
+mobile camera capture without silently substituting a picker for the preview;
+your browser decides whether it shows a camera or a file picker. If access is denied,
+allow the site in your browser and operating-system camera settings and retry.
+The explicit **Use device camera** option also remains available after a preview
+request fails, including permission denial; it never opens automatically.
+If no camera is available, choose **Upload photo** instead.
+
+The camera stops when you capture a photo, close the dialog, or leave its draft.
+File and photo uploads remain available through their existing pickers, including
+the combined **Attach…** picker on iOS Safari.
+
+## Watch a desktop in Picture-in-Picture
+
+Connect the Desktop viewer, then choose **Open desktop in Picture-in-Picture** in
+its toolbar. The browser opens a view-only, always-on-top window so you can watch
+the remote computer while using other tabs or apps. The same action is available
+in the docked panel, chat side panel, and focused desktop window.
+
+This requires a secure context (HTTPS or localhost) and a desktop browser that
+exposes the Document Picture-in-Picture API, including supported Chrome and
+Firefox versions. The control is disabled when the API is unavailable or the
+desktop is not connected. Browser permissions can still deny the request; check
+those permissions and click the control again to retry. OpenClaw does not replace
+unsupported PiP with an ordinary popup.
+
+PiP mirrors the existing live connection without taking control or opening a
+second desktop connection. Closing PiP leaves the original viewer and remote task
+running. Disconnecting, changing the viewer's source or session, or closing the
+originating viewer closes PiP; it does not stop the remote task. Keep the opener
+tab open. A sleeping computer or a browser that suspends the entire page cannot
+continue streaming.
 
 ## Quick open (local)
 
-If the Gateway is running on the same computer, open:
-
-- [http://127.0.0.1:18789/](http://127.0.0.1:18789/) (or [http://localhost:18789/](http://localhost:18789/))
+If the Gateway is running on the same computer, open [http://127.0.0.1:18789/](http://127.0.0.1:18789/) (or [http://localhost:18789/](http://localhost:18789/)).
 
 If the page fails to load, start the Gateway first: `openclaw gateway`.
 
+<Note>
+On native Windows LAN binds, Windows Firewall or organization-managed Group Policy can still block the advertised LAN URL even when `127.0.0.1` works on the Gateway host. Run `openclaw gateway status --deep` on the Windows host; it reports likely-blocked ports, profile mismatches, and local firewall rules that policy may ignore.
+</Note>
+
 Auth is supplied during the WebSocket handshake via:
 
-- `connect.params.auth.token`
-- `connect.params.auth.password`
+- the configured shared secret in either `connect.params.auth.token` or
+  `connect.params.auth.password`; `gateway.auth.mode` selects the configured
+  value (`gateway.auth.token` or `gateway.auth.password`)
 - Tailscale Serve identity headers when `gateway.auth.allowTailscale: true`
 - trusted-proxy identity headers when `gateway.auth.mode: "trusted-proxy"`
 
-The dashboard settings panel keeps a token for the current browser tab session and selected gateway URL; passwords are not persisted. Onboarding usually generates a gateway token for shared-secret auth on first connect, but password auth works too when `gateway.auth.mode` is `"password"`.
-
-## Device pairing (first connection)
-
-When you connect to the Control UI from a new browser or device, the Gateway usually requires a **one-time pairing approval**. This is a security measure to prevent unauthorized access.
-
-**What you'll see:** "disconnected (1008): pairing required"
-
-<Steps>
-  <Step title="List pending requests">
-    ```bash
-    openclaw devices list
-    ```
-  </Step>
-  <Step title="Approve by request ID">
-    ```bash
-    openclaw devices approve <requestId>
-    ```
-  </Step>
-</Steps>
-
-If the browser retries pairing with changed auth details (role/scopes/public key), the previous pending request is superseded and a new `requestId` is created. Re-run `openclaw devices list` before approval.
-
-If the browser is already paired and you change it from read access to write/admin access, this is treated as an approval upgrade, not a silent reconnect. OpenClaw keeps the old approval active, blocks the broader reconnect, and asks you to approve the new scope set explicitly.
-
-Once approved, the device is remembered and won't require re-approval unless you revoke it with `openclaw devices revoke --device <id> --role <role>`. See [Devices CLI](/cli/devices) for token rotation and revocation.
-
-<Note>
-- Direct local loopback browser connections (`127.0.0.1` / `localhost`) are auto-approved.
-- Tailscale Serve can skip the pairing round trip for Control UI operator sessions when `gateway.auth.allowTailscale: true`, Tailscale identity verifies, and the browser presents its device identity.
-- Direct Tailnet binds, LAN browser connects, and browser profiles without device identity still require explicit approval.
-- Each browser profile generates a unique device ID, so switching browsers or clearing browser data will require re-pairing.
-
-</Note>
-
-## Personal identity (browser-local)
-
-The Control UI supports a per-browser personal identity (display name and avatar) attached to outgoing messages for attribution in shared sessions. It lives in browser storage, is scoped to the current browser profile, and is not synced to other devices or persisted server-side beyond the normal transcript authorship metadata on messages you actually send. Clearing site data or switching browsers resets it to empty.
-
-The same browser-local pattern applies to the assistant avatar override. Uploaded assistant avatars overlay the gateway-resolved identity on the local browser only and never round-trip through `config.patch`. The shared `ui.assistant.avatar` config field is still available for non-UI clients writing the field directly (such as scripted gateways or custom dashboards).
-
-## Runtime config endpoint
-
-The Control UI fetches its runtime settings from `/__openclaw/control-ui-config.json`. That endpoint is gated by the same gateway auth as the rest of the HTTP surface: unauthenticated browsers cannot fetch it, and a successful fetch requires either an already valid gateway token/password, Tailscale Serve identity, or a trusted-proxy identity.
-
-## Language support
-
-The Control UI can localize itself on first load based on your browser locale. To override it later, open **Overview -> Gateway Access -> Language**. The locale picker lives in the Gateway Access card, not under Appearance.
-
-- Supported locales: `en`, `zh-CN`, `zh-TW`, `pt-BR`, `de`, `es`, `ja-JP`, `ko`, `fr`, `ar`, `it`, `tr`, `uk`, `id`, `pl`, `th`, `vi`, `nl`, `fa`
-- Non-English translations are lazy-loaded in the browser.
-- The selected locale is saved in browser storage and reused on future visits.
-- Missing translation keys fall back to English.
-
-Docs translations are generated for the same non-English locale set, but the docs site's built-in Mintlify language picker is limited to the locale codes Mintlify accepts. Thai (`th`) and Persian (`fa`) docs are still generated in the publish repo; they may not appear in that picker until Mintlify supports those codes.
-
-## Appearance themes
-
-The Appearance panel keeps the built-in Claw, Knot, and Dash themes, plus one browser-local tweakcn import slot. To import a theme, open [tweakcn editor](https://tweakcn.com/editor/theme), choose or create a theme, click **Share**, and paste the copied theme link into Appearance. The importer also accepts `https://tweakcn.com/r/themes/<id>` registry URLs, editor URLs like `https://tweakcn.com/editor/theme?theme=amethyst-haze`, relative `/themes/<id>` paths, raw theme IDs, and default theme names such as `amethyst-haze`.
-
-Appearance also includes a browser-local Text size setting. The setting is stored with the rest of Control UI preferences, applies to chat text, composer text, tool cards, and chat sidebars, and keeps text inputs at least 16px so mobile Safari does not auto-zoom on focus.
-
-Imported themes are stored only in the current browser profile. They are not written to gateway config and do not sync across devices. Replacing the imported theme updates the one local slot; clearing it switches the active theme back to Claw if the imported theme was selected.
-
-## What it can do (today)
-
-<AccordionGroup>
-  <Accordion title="Chat and Talk">
-    - Chat with the model via Gateway WS (`chat.history`, `chat.send`, `chat.abort`, `chat.inject`).
-    - Chat history refreshes request a bounded recent window with per-message text caps so large sessions do not force the browser to render a full transcript payload before the chat becomes usable.
-    - Talk through browser realtime sessions. OpenAI uses direct WebRTC, Google Live uses a constrained one-use browser token over WebSocket, and backend-only realtime voice plugins use the Gateway relay transport. Client-owned provider sessions start with `talk.client.create`; Gateway relay sessions start with `talk.session.create`. The relay keeps provider credentials on the Gateway while the browser streams microphone PCM through `talk.session.appendAudio` and forwards `openclaw_agent_consult` provider tool calls through `talk.client.toolCall` for Gateway policy and the larger configured OpenClaw model.
-    - Stream tool calls + live tool output cards in Chat (agent events).
-
-  </Accordion>
-  <Accordion title="Channels, instances, sessions, dreams">
-    - Channels: built-in plus bundled/external plugin channels status, QR login, and per-channel config (`channels.status`, `web.login.*`, `config.patch`).
-    - Channel probe refreshes keep the previous snapshot visible while slow provider checks finish, and partial snapshots are labeled when a probe or audit exceeds its UI budget.
-    - Instances: presence list + refresh (`system-presence`).
-    - Sessions: list configured-agent sessions by default, fall back from stale unconfigured agent session keys, and apply per-session model/thinking/fast/verbose/trace/reasoning overrides (`sessions.list`, `sessions.patch`).
-    - Dreams: dreaming status, enable/disable toggle, and Dream Diary reader (`doctor.memory.status`, `doctor.memory.dreamDiary`, `config.patch`).
-
-  </Accordion>
-  <Accordion title="Cron, skills, nodes, exec approvals">
-    - Cron jobs: list/add/edit/run/enable/disable + run history (`cron.*`).
-    - Skills: status, enable/disable, install, API key updates (`skills.*`).
-    - Nodes: list + caps (`node.list`).
-    - Exec approvals: edit gateway or node allowlists + ask policy for `exec host=gateway/node` (`exec.approvals.*`).
-
-  </Accordion>
-  <Accordion title="Config">
-    - View/edit `~/.openclaw/openclaw.json` (`config.get`, `config.set`).
-    - Apply + restart with validation (`config.apply`) and wake the last active session.
-    - Writes include a base-hash guard to prevent clobbering concurrent edits.
-    - Writes (`config.set`/`config.apply`/`config.patch`) preflight active SecretRef resolution for refs in the submitted config payload; unresolved active submitted refs are rejected before write.
-    - Form saves discard stale redacted placeholders that cannot be restored from the saved config while preserving redacted values that still map to saved secrets.
-    - Schema + form rendering (`config.schema` / `config.schema.lookup`, including field `title` / `description`, matched UI hints, immediate child summaries, docs metadata on nested object/wildcard/array/composition nodes, plus plugin + channel schemas when available); Raw JSON editor is available only when the snapshot has a safe raw round-trip.
-    - If a snapshot cannot safely round-trip raw text, Control UI forces Form mode and disables Raw mode for that snapshot.
-    - Raw JSON editor "Reset to saved" preserves the raw-authored shape (formatting, comments, `$include` layout) instead of re-rendering a flattened snapshot, so external edits survive a reset when the snapshot can safely round-trip.
-    - Structured SecretRef object values are rendered read-only in form text inputs to prevent accidental object-to-string corruption.
-
-  </Accordion>
-  <Accordion title="Debug, logs, update">
-    - Debug: status/health/models snapshots + event log + manual RPC calls (`status`, `health`, `models.list`).
-    - The event log includes Control UI refresh/RPC timings, slow chat/config render timings, and browser responsiveness entries for long animation frames or long tasks when the browser exposes those PerformanceObserver entry types.
-    - Logs: live tail of gateway file logs with filter/export (`logs.tail`).
-    - Update: run a package/git update + restart (`update.run`) with a restart report, then poll `update.status` after reconnect to verify the running gateway version.
-
-  </Accordion>
-  <Accordion title="Cron jobs panel notes">
-    - For isolated jobs, delivery defaults to announce summary. You can switch to none if you want internal-only runs.
-    - Channel/target fields appear when announce is selected.
-    - Webhook mode uses `delivery.mode = "webhook"` with `delivery.to` set to a valid HTTP(S) webhook URL.
-    - For main-session jobs, webhook and none delivery modes are available.
-    - Advanced edit controls include delete-after-run, clear agent override, cron exact/stagger options, agent model/thinking overrides, and best-effort delivery toggles.
-    - Form validation is inline with field-level errors; invalid values disable the save button until fixed.
-    - Set `cron.webhookToken` to send a dedicated bearer token, if omitted the webhook is sent without an auth header.
-    - Deprecated fallback: stored legacy jobs with `notify: true` can still use `cron.webhook` until migrated.
-
-  </Accordion>
-</AccordionGroup>
-
-## Chat behavior
-
-<AccordionGroup>
-  <Accordion title="Send and history semantics">
-    - `chat.send` is **non-blocking**: it acks immediately with `{ runId, status: "started" }` and the response streams via `chat` events.
-    - Chat uploads accept images plus non-video files. Images keep the native image path; other files are stored as managed media and shown in history as attachment links.
-    - Re-sending with the same `idempotencyKey` returns `{ status: "in_flight" }` while running, and `{ status: "ok" }` after completion.
-    - `chat.history` responses are size-bounded for UI safety. When transcript entries are too large, Gateway may truncate long text fields, omit heavy metadata blocks, and replace oversized messages with a placeholder (`[chat.history omitted: message too large]`).
-    - Assistant/generated images are persisted as managed media references and served back through authenticated Gateway media URLs, so reloads do not depend on raw base64 image payloads staying in the chat history response.
-    - When rendering `chat.history`, the Control UI strips display-only inline directive tags from visible assistant text (for example `[[reply_to_*]]` and `[[audio_as_voice]]`), plain-text tool-call XML payloads (including `<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks), and leaked ASCII/full-width model control tokens, and omits assistant entries whose whole visible text is only the exact silent token `NO_REPLY` / `no_reply` or the heartbeat acknowledgement token `HEARTBEAT_OK`.
-    - During an active send and the final history refresh, the chat view keeps local optimistic user/assistant messages visible if `chat.history` briefly returns an older snapshot; the canonical transcript replaces those local messages once the Gateway history catches up.
-    - Live `chat` events are delivery state, while `chat.history` is rebuilt from the durable session transcript. After tool-final events the Control UI reloads history and merges only a small optimistic tail; the transcript boundary is documented in [WebChat](/web/webchat).
-    - `chat.inject` appends an assistant note to the session transcript and broadcasts a `chat` event for UI-only updates (no agent run, no channel delivery).
-    - The chat header shows the agent filter before the session picker, and the session picker is scoped by the selected agent. Switching agents shows only sessions tied to that agent and falls back to that agent's main session when it has no saved dashboard sessions yet.
-    - On desktop widths, chat controls stay on one compact row and collapse while scrolling down the transcript; scrolling up, returning to the top, or reaching the bottom restores the controls.
-    - Consecutive duplicate text-only messages render as one bubble with a count badge. Messages that carry images, attachments, tool output, or canvas previews are left uncollapsed.
-    - The chat header model and thinking pickers patch the active session immediately through `sessions.patch`; they are persistent session overrides, not one-turn-only send options.
-    - If you send a message while a model picker change for the same session is still saving, the composer waits for that session patch before calling `chat.send` so the send uses the selected model.
-    - Typing `/new` in the Control UI creates and switches to the same fresh dashboard session as New Chat, except when `session.dmScope: "main"` is configured and the current parent is the agent's main session; in that case it resets the main session in place. Typing `/reset` keeps the Gateway's explicit in-place reset for the current session.
-    - The chat model picker requests the Gateway's configured model view. If `agents.defaults.models` is present, that allowlist drives the picker, including `provider/*` entries that keep provider-scoped catalogs dynamic. Otherwise the picker shows explicit `models.providers.*.models` entries plus providers with usable auth. The full catalog stays available through the debug `models.list` RPC with `view: "all"`.
-    - When fresh Gateway session usage reports include current context tokens, the chat composer area shows a compact context usage indicator. It switches to warning styling at high context pressure and, at recommended compaction levels, shows a compact button that runs the normal session compaction path. Stale token snapshots are hidden until the Gateway reports fresh usage again.
-
-  </Accordion>
-  <Accordion title="Talk mode (browser realtime)">
-    Talk mode uses a registered realtime voice provider. Configure OpenAI with `talk.realtime.provider: "openai"` plus either `talk.realtime.providers.openai.apiKey`, `OPENAI_API_KEY`, or an `openai-codex` OAuth profile; configure Google with `talk.realtime.provider: "google"` plus `talk.realtime.providers.google.apiKey`. The browser never receives a standard provider API key. OpenAI receives an ephemeral Realtime client secret for WebRTC. Google Live receives a one-use constrained Live API auth token for a browser WebSocket session, with instructions and tool declarations locked into the token by the Gateway. Providers that only expose a backend realtime bridge run through the Gateway relay transport, so credentials and vendor sockets stay server-side while browser audio moves through authenticated Gateway RPCs. The Realtime session prompt is assembled by the Gateway; `talk.client.create` does not accept caller-provided instruction overrides.
-
-    The Chat composer includes a Talk options button next to the Talk start/stop button. The options apply to the next Talk session and can override provider, transport, model, voice, reasoning effort, VAD threshold, silence duration, and prefix padding. When an option is blank, the Gateway uses configured defaults where available or the provider default. Selecting Gateway relay forces the backend relay path; selecting WebRTC keeps the session client-owned and fails instead of silently falling back to relay if the provider cannot create a browser session.
-
-    In the Chat composer, the Talk control is the waves button next to the microphone dictation button. When Talk starts, the composer status row shows `Connecting Talk...`, then `Talk live` while audio is connected, or `Asking OpenClaw...` while a realtime tool call is consulting the configured larger model through `talk.client.toolCall`.
-
-    Maintainer live smoke: `OPENAI_API_KEY=... GEMINI_API_KEY=... node --import tsx scripts/dev/realtime-talk-live-smoke.ts` verifies the OpenAI backend WebSocket bridge, OpenAI browser WebRTC SDP exchange, Google Live constrained-token browser WebSocket setup, and the Gateway relay browser adapter with fake microphone media. The command prints provider status only and does not log secrets.
-
-  </Accordion>
-  <Accordion title="Stop and abort">
-    - Click **Stop** (calls `chat.abort`).
-    - While a run is active, normal follow-ups queue. Click **Steer** on a queued message to inject that follow-up into the running turn.
-    - Type `/stop` (or standalone abort phrases like `stop`, `stop action`, `stop run`, `stop openclaw`, `please stop`) to abort out-of-band.
-    - `chat.abort` supports `{ sessionKey }` (no `runId`) to abort all active runs for that session.
-
-  </Accordion>
-  <Accordion title="Abort partial retention">
-    - When a run is aborted, partial assistant text can still be shown in the UI.
-    - Gateway persists aborted partial assistant text into transcript history when buffered output exists.
-    - Persisted entries include abort metadata so transcript consumers can tell abort partials from normal completion output.
-
-  </Accordion>
-</AccordionGroup>
-
-## PWA install and web push
-
-The Control UI ships a `manifest.webmanifest` and a service worker, so modern browsers can install it as a standalone PWA. Web Push lets the Gateway wake the installed PWA with notifications even when the tab or browser window is not open.
-
-If the page shows **Protocol mismatch** right after an OpenClaw update, first reopen the dashboard with `openclaw dashboard` and hard-refresh the page. If it still fails, clear site data for the dashboard origin or test in a private browser window; an old tab or browser service-worker cache can keep running a pre-update Control UI bundle against the newer Gateway.
-
-| Surface                                               | What it does                                                       |
-| ----------------------------------------------------- | ------------------------------------------------------------------ |
-| `ui/public/manifest.webmanifest`                      | PWA manifest. Browsers offer "Install app" once it is reachable.   |
-| `ui/public/sw.js`                                     | Service worker that handles `push` events and notification clicks. |
-| `push/vapid-keys.json` (under the OpenClaw state dir) | Auto-generated VAPID keypair used to sign Web Push payloads.       |
-| `push/web-push-subscriptions.json`                    | Persisted browser subscription endpoints.                          |
-
-Override the VAPID keypair through env vars on the Gateway process when you want to pin keys (for multi-host deployments, secrets rotation, or tests):
-
-- `OPENCLAW_VAPID_PUBLIC_KEY`
-- `OPENCLAW_VAPID_PRIVATE_KEY`
-- `OPENCLAW_VAPID_SUBJECT` (defaults to `mailto:openclaw@localhost`)
-
-The Control UI uses these scope-gated Gateway methods to register and test browser subscriptions:
-
-- `push.web.vapidPublicKey` — fetches the active VAPID public key.
-- `push.web.subscribe` — registers an `endpoint` plus `keys.p256dh`/`keys.auth`.
-- `push.web.unsubscribe` — removes a registered endpoint.
-- `push.web.test` — sends a test notification to the caller's subscription.
-
-<Note>
-Web Push is independent of the iOS APNS relay path (see [Configuration](/gateway/configuration) for relay-backed push) and the existing `push.test` method, which target native mobile pairing.
-</Note>
-
-## Hosted embeds
-
-Assistant messages can render hosted web content inline with the `[embed ...]` shortcode. The iframe sandbox policy is controlled by `gateway.controlUi.embedSandbox`:
-
-<Tabs>
-  <Tab title="strict">
-    Disables script execution inside hosted embeds.
-  </Tab>
-  <Tab title="scripts (default)">
-    Allows interactive embeds while keeping origin isolation; this is the default and is usually enough for self-contained browser games/widgets.
-  </Tab>
-  <Tab title="trusted">
-    Adds `allow-same-origin` on top of `allow-scripts` for same-site documents that intentionally need stronger privileges.
-  </Tab>
-</Tabs>
-
-Example:
-
-```json5
-{
-  gateway: {
-    controlUi: {
-      embedSandbox: "scripts",
-    },
-  },
-}
-```
-
-<Warning>
-Use `trusted` only when the embedded document genuinely needs same-origin behavior. For most agent-generated games and interactive canvases, `scripts` is the safer choice.
-</Warning>
-
-Absolute external `http(s)` embed URLs stay blocked by default. If you intentionally want `[embed url="https://..."]` to load third-party pages, set `gateway.controlUi.allowExternalEmbedUrls: true`.
-
-## Chat message width
-
-Grouped chat messages use a readable default max-width. Wide-monitor deployments can override it without patching bundled CSS by setting `gateway.controlUi.chatMessageMaxWidth`:
-
-```json5
-{
-  gateway: {
-    controlUi: {
-      chatMessageMaxWidth: "min(1280px, 82%)",
-    },
-  },
-}
-```
-
-The value is validated before it reaches the browser. Supported values include plain lengths and percentages such as `960px` or `82%`, plus constrained `min(...)`, `max(...)`, `clamp(...)`, `calc(...)`, and `fit-content(...)` width expressions.
-
-## Tailnet access (recommended)
-
-<Tabs>
-  <Tab title="Integrated Tailscale Serve (preferred)">
-    Keep the Gateway on loopback and let Tailscale Serve proxy it with HTTPS:
-
-    ```bash
-    openclaw gateway --tailscale serve
-    ```
-
-    Open:
-
-    - `https://<magicdns>/` (or your configured `gateway.controlUi.basePath`)
-
-    By default, Control UI/WebSocket Serve requests can authenticate via Tailscale identity headers (`tailscale-user-login`) when `gateway.auth.allowTailscale` is `true`. OpenClaw verifies the identity by resolving the `x-forwarded-for` address with `tailscale whois` and matching it to the header, and only accepts these when the request hits loopback with Tailscale's `x-forwarded-*` headers. For Control UI operator sessions with browser device identity, this verified Serve path also skips the device-pairing round trip; device-less browsers and node-role connections still follow the normal device checks. Set `gateway.auth.allowTailscale: false` if you want to require explicit shared-secret credentials even for Serve traffic. Then use `gateway.auth.mode: "token"` or `"password"`.
-
-    For that async Serve identity path, failed auth attempts for the same client IP and auth scope are serialized before rate-limit writes. Concurrent bad retries from the same browser can therefore show `retry later` on the second request instead of two plain mismatches racing in parallel.
-
-    <Warning>
-    Tokenless Serve auth assumes the gateway host is trusted. If untrusted local code may run on that host, require token/password auth.
-    </Warning>
-
-  </Tab>
-  <Tab title="Bind to tailnet + token">
-    ```bash
-    openclaw gateway --bind tailnet --token "$(openssl rand -hex 32)"
-    ```
-
-    Then open:
-
-    - `http://<tailscale-ip>:18789/` (or your configured `gateway.controlUi.basePath`)
-
-    Paste the matching shared secret into the UI settings (sent as `connect.params.auth.token` or `connect.params.auth.password`).
-
-  </Tab>
-</Tabs>
-
-## Insecure HTTP
-
-If you open the dashboard over plain HTTP (`http://<lan-ip>` or `http://<tailscale-ip>`), the browser runs in a **non-secure context** and blocks WebCrypto. By default, OpenClaw **blocks** Control UI connections without device identity.
-
-Documented exceptions:
-
-- localhost-only insecure HTTP compatibility with `gateway.controlUi.allowInsecureAuth=true`
-- successful operator Control UI auth through `gateway.auth.mode: "trusted-proxy"`
-- break-glass `gateway.controlUi.dangerouslyDisableDeviceAuth=true`
-
-**Recommended fix:** use HTTPS (Tailscale Serve) or open the UI locally:
-
-- `https://<magicdns>/` (Serve)
-- `http://127.0.0.1:18789/` (on the gateway host)
-
-<AccordionGroup>
-  <Accordion title="Insecure-auth toggle behavior">
-    ```json5
-    {
-      gateway: {
-        controlUi: { allowInsecureAuth: true },
-        bind: "tailnet",
-        auth: { mode: "token", token: "replace-me" },
-      },
-    }
-    ```
-
-    `allowInsecureAuth` is a local compatibility toggle only:
-
-    - It allows localhost Control UI sessions to proceed without device identity in non-secure HTTP contexts.
-    - It does not bypass pairing checks.
-    - It does not relax remote (non-localhost) device identity requirements.
-
-  </Accordion>
-  <Accordion title="Break-glass only">
-    ```json5
-    {
-      gateway: {
-        controlUi: { dangerouslyDisableDeviceAuth: true },
-        bind: "tailnet",
-        auth: { mode: "token", token: "replace-me" },
-      },
-    }
-    ```
-
-    <Warning>
-    `dangerouslyDisableDeviceAuth` disables Control UI device identity checks and is a severe security downgrade. Revert quickly after emergency use.
-    </Warning>
-
-  </Accordion>
-  <Accordion title="Trusted-proxy note">
-    - Successful trusted-proxy auth can admit **operator** Control UI sessions without device identity.
-    - This does **not** extend to node-role Control UI sessions.
-    - Same-host loopback reverse proxies still do not satisfy trusted-proxy auth; see [Trusted proxy auth](/gateway/trusted-proxy-auth).
-
-  </Accordion>
-</AccordionGroup>
-
-See [Tailscale](/gateway/tailscale) for HTTPS setup guidance.
-
-## Content security policy
-
-The Control UI ships with a tight `img-src` policy: only **same-origin** assets, `data:` URLs, and locally generated `blob:` URLs are allowed. Remote `http(s)` and protocol-relative image URLs are rejected by the browser and do not issue network fetches.
-
-What this means in practice:
-
-- Avatars and images served under relative paths (for example `/avatars/<id>`) still render, including authenticated avatar routes that the UI fetches and converts into local `blob:` URLs.
-- Inline `data:image/...` URLs still render (useful for in-protocol payloads).
-- Local `blob:` URLs created by the Control UI still render.
-- Remote avatar URLs emitted by channel metadata are stripped at the Control UI's avatar helpers and replaced with the built-in logo/badge, so a compromised or malicious channel cannot force arbitrary remote image fetches from an operator browser.
-
-You do not need to change anything to get this behavior — it is always on and not configurable.
-
-## Avatar route auth
-
-When gateway auth is configured, the Control UI avatar endpoint requires the same gateway token as the rest of the API:
-
-- `GET /avatar/<agentId>` returns the avatar image only to authenticated callers. `GET /avatar/<agentId>?meta=1` returns the avatar metadata under the same rule.
-- Unauthenticated requests to either route are rejected (matching the sibling assistant-media route). This prevents the avatar route from leaking agent identity on hosts that are otherwise protected.
-- The Control UI itself forwards the gateway token as a bearer header when fetching avatars, and uses authenticated blob URLs so the image still renders in dashboards.
-
-If you disable gateway auth (not recommended on shared hosts), the avatar route also becomes unauthenticated, in line with the rest of the gateway.
-
-## Assistant media route auth
-
-When gateway auth is configured, assistant local-media previews use a two-step route:
-
-- `GET /__openclaw__/assistant-media?meta=1&source=<path>` requires the normal Control UI operator auth. The browser sends the gateway token as a bearer header when checking availability.
-- Successful metadata responses include a short-lived `mediaTicket` scoped to that exact source path.
-- Browser-rendered image, audio, video, and document URLs use `mediaTicket=<ticket>` instead of the active gateway token or password. The ticket expires quickly and cannot authorize a different source.
-
-This keeps normal media rendering compatible with browser-native media elements without putting reusable gateway credentials in visible media URLs.
-
-## Building the UI
-
-The Gateway serves static files from `dist/control-ui`. Build them with:
-
-```bash
-pnpm ui:build
-```
-
-Optional absolute base (when you want fixed asset URLs):
-
-```bash
-OPENCLAW_CONTROL_UI_BASE_PATH=/openclaw/ pnpm ui:build
-```
-
-For local development (separate dev server):
-
-```bash
-pnpm ui:dev
-```
-
-Then point the UI at your Gateway WS URL (e.g. `ws://127.0.0.1:18789`).
-
-## Blank Control UI page
-
-If the browser loads a blank dashboard and DevTools shows no useful error, an extension or early content script may have prevented the JavaScript module app from evaluating. The static page includes a plain HTML recovery panel that appears when `<openclaw-app>` is not registered after startup.
-
-Use the panel's **Try again** action after changing the browser environment, or reload manually after these checks:
-
-- Disable extensions that inject into all pages, especially extensions with `<all_urls>` content scripts.
-- Try a private window, a clean browser profile, or another browser.
-- Keep the Gateway running and verify the same dashboard URL after the browser change.
-
-## Debugging/testing: dev server + remote Gateway
-
-The Control UI is static files; the WebSocket target is configurable and can be different from the HTTP origin. This is handy when you want the Vite dev server locally but the Gateway runs elsewhere.
-
-<Steps>
-  <Step title="Start the UI dev server">
-    ```bash
-    pnpm ui:dev
-    ```
-  </Step>
-  <Step title="Open with gatewayUrl">
-    ```text
-    http://localhost:5173/?gatewayUrl=ws%3A%2F%2F<gateway-host>%3A18789
-    ```
-
-    Optional one-time auth (if needed):
-
-    ```text
-    http://localhost:5173/?gatewayUrl=wss%3A%2F%2F<gateway-host>%3A18789#token=<gateway-token>
-    ```
-
-  </Step>
-</Steps>
-
-<AccordionGroup>
-  <Accordion title="Notes">
-    - `gatewayUrl` is stored in localStorage after load and removed from the URL.
-    - If you pass a full `ws://` or `wss://` endpoint via `gatewayUrl`, URL-encode the `gatewayUrl` value so the browser parses the query string correctly.
-    - `token` should be passed via the URL fragment (`#token=...`) whenever possible. Fragments are not sent to the server, which avoids request-log and Referer leakage. Legacy `?token=` query params are still imported once for compatibility, but only as a fallback, and are stripped immediately after bootstrap.
-    - `password` is kept in memory only.
-    - When `gatewayUrl` is set, the UI does not fall back to config or environment credentials. Provide `token` (or `password`) explicitly. Missing explicit credentials is an error.
-    - Use `wss://` when the Gateway is behind TLS (Tailscale Serve, HTTPS proxy, etc.).
-    - `gatewayUrl` is only accepted in a top-level window (not embedded) to prevent clickjacking.
-    - Public non-loopback Control UI deployments must set `gateway.controlUi.allowedOrigins` explicitly (full origins). Private same-origin LAN/Tailnet loads from loopback, RFC1918/link-local, `.local`, `.ts.net`, or Tailscale CGNAT hosts are accepted without enabling Host-header fallback.
-    - Gateway startup may seed local origins such as `http://localhost:<port>` and `http://127.0.0.1:<port>` from the effective runtime bind and port, but remote browser origins still need explicit entries.
-    - Do not use `gateway.controlUi.allowedOrigins: ["*"]` except for tightly controlled local testing. It means allow any browser origin, not "match whatever host I am using."
-    - `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true` enables Host-header origin fallback mode, but it is a dangerous security mode.
-
-  </Accordion>
-</AccordionGroup>
-
-Example:
-
-```json5
-{
-  gateway: {
-    controlUi: {
-      allowedOrigins: ["http://localhost:5173"],
-    },
-  },
-}
-```
-
-Remote access setup details: [Remote access](/gateway/remote).
+Gateway auth runs before device pairing. A direct loopback connection does not bypass token or password auth. The login screen and **Settings → Gateway** use one **Gateway secret** field: paste the token or type the password. After a successful connection, the UI keeps the secret in session storage for the current browser tab and Gateway origin only when the Gateway reports token auth. Passwords stay in memory and are never persisted. After pairing, the browser can use its stored per-device token on later connections.
+
+If you paste a setup code from **Devices → Pair device → Copy setup code** into **Gateway secret**, the UI shows an inline hint before you connect. Paste that code into **Settings → Gateway** in the OpenClaw mobile app. For the Control UI, run `openclaw gateway auth-token --show` in an interactive terminal on the Gateway host and paste the shared token instead. If a connection with a setup code is rejected for a token or password mismatch, the login screen repeats this guidance.
+
+Local onboarding generates a Gateway secret in token mode by default, without a token/password picker, and preserves existing password mode. Use `--gateway-auth password` or `--gateway-password <value>` for explicit password setup; Tailscale Funnel requires password mode. If the Gateway starts in token mode without a configured token, it generates an ephemeral runtime token for that process instead. The runtime token is not written to config, so it cannot be recovered and a loopback browser without that token is rejected. Run `openclaw doctor --generate-gateway-token`, restart the Gateway, then run `openclaw gateway auth-token --show` in an interactive terminal and paste the output into **Gateway secret**.
+
+## Agents home
+
+Open **Agents** in the sidebar, choose **See all agents** in the agent menu, or
+visit `/agents` to see your configured agents as a roster. Each card shows the
+agent's identity, model, current work status, last activity, and a preview from its
+main chat. **Open chat** opens that agent's
+main session. Working agents appear first, followed by the most recently active.
+
+**Manage agents** opens `/settings/agents`. **New agent** opens the existing
+agent creation flow when available, or agent settings otherwise. `/agents` now
+opens the roster; agent configuration remains at `/settings/agents`.
+
+To browse sessions across agents, choose the **Show all** tile in the agent
+switcher. It appears with two or more agents and groups their own avatars: two
+overlap diagonally, three or four form a two-column grid, and five or more show
+three avatars plus a remaining-agent count. This enables **team mode**, a browser
+preference that is off by default. The top row becomes a workspace header with
+the configured Gateway display name, or **OpenClaw**, and a small static OpenClaw mark.
+Both modes use the same menu: agent tiles, **New agent**, **See all agents**, then
+a divider before **What can Harbor do?** and **Harbor settings**, named for the
+active agent. **See all agents** opens `/agents`; the named settings action opens
+that agent’s configuration. The selected tile has an avatar ring. Help and its
+links remain in the account menu. Pinned sessions stay in **Pages**, using their
+agent's avatar as the icon.
+Other sessions appear under collapsible agent headers in configured roster order,
+which stays stable as activity changes. **Home** disappears from Pages: click an agent header's avatar or name to
+open that agent's main chat. The separate collapse control only folds its sessions.
+The top **+**, labeled **New conversation**, opens an agent menu with avatars and names in
+the same order as the groups; choosing an agent opens New session for that agent.
+Each group's **+** does this directly, appearing on hover or keyboard focus and remaining visible on touch devices. Selecting a session switches the active
+agent for chat. Choose a named agent tile in the workspace menu to leave team
+mode with that agent selected, restoring the agent chip, Home row, and direct
+New session button.
+
+Choosing **Show all** defaults the shared page scope to **All agents**. That scope,
+including an explicit **All agents** selection, is saved in this browser for each
+gateway. It survives reloads and switching to another gateway and back, even if
+you open a different agent's chat in team mode. Choosing a named agent tile leaves
+team mode and scopes pages to that agent. You can still choose a narrower page
+scope while in team mode; navigating between pages does not reset that choice.
+Automations, Dashboards, Sessions, and Usage support all-agent views, with
+agent identity shown on mixed-agent rows. In Settings, choose an agent below the
+sidebar title to keep the same target across Agents, Models, Memory, and Skills.
+Global settings remain global. Skill Workshop uses the agent selected through
+chat; open an agent's main chat from its group header to select it. Chat actions
+always belong to the conversation's agent.
+
+Choose **All sessions** from an agent group’s options menu to open the Sessions
+page filtered to that agent. Open **Agents** in the sidebar to return to the roster
+page. See [Sidebar navigation](/web/control-ui/sessions-and-sidebar#sidebar-navigation)
+for group controls and filtering.
+
+Agent names and avatars follow agent and identity updates. While a configured avatar image loads,
+the avatar keeps its tinted background with no face or text. The image appears when ready;
+an emoji or generated face appears only when no image is configured or the image fails to load.
+Repeated views reuse prepared avatar thumbnails; updating the avatar refreshes its thumbnail.
+This behavior is shared by the roster, agent switcher, identity chips, settings, and chat.
+
+Activity and previews on the page and sidebar roster refresh on session events
+and Gateway reconnects. Reusing cached ancestry for the selected session does not
+trigger another list read. Events collect in a randomized four-to-five-second window
+that later events cannot postpone, spreading automatic reads across browsers.
+After an automatic read, the next waits three times its duration,
+bounded between five and 15 seconds. Navigation, reconnects, and explicit refreshes
+bypass that delay. When both are visible, they share one activity window and
+one refresh, so opening **Agents** while team mode is visible does not duplicate requests. Activity loading
+stops when neither roster is visible. Each refresh reads at most 300 sessions
+across agents, loading pinned sessions first and then the most recent sessions.
+Pinned sessions count toward that limit; sessions outside the window do not appear
+in the grouped sidebar or contribute to activity summaries, except that the open
+conversation remains visible so direct links keep a selected row. When a main session
+is absent from the window, its agent's most recent session supplies the preview.
+
+## What each page covers
+
+- [Connect and pair](/web/control-ui/connect-and-pair) — pair a browser or phone, reach the UI over Tailscale, and fix a blank page.
+- [Sessions and sidebar](/web/control-ui/sessions-and-sidebar) — sidebar zones, session menus, and the New session page.
+- [Systems workspace](/web/control-ui/sessions-and-sidebar#systems-workspace) — contextual machine navigation and a desktop-first workspace.
+- [Chat](/web/control-ui/chat) — composer controls, the session rail, transcript rendering, and hosted embeds.
+- [Panels and docks](/web/control-ui/panels) — Ask OpenClaw, the Home dock, the operator terminal, and the browser panel.
+- [Settings](/web/control-ui/settings) — identity, appearance, plugins, updates, MCP, activity, and meetings.
+- [Feature and RPC reference](/web/control-ui/feature-reference) — every capability with the Gateway RPC behind it.
+- [Offline and reconnect](/web/control-ui/offline-and-reconnect) — what survives a dropped connection.
+- [Security model](/web/control-ui/security-model) — content security policy, media route auth, and approval links.
+- [Build and develop](/web/control-ui/development) — build the UI and run the dev server against a Gateway.
+
+Running the Gateway in Docker? See [Using the Control UI browser](/install/docker#using-the-control-ui-browser) for the browser-equipped image and setup requirements.
+
+## Where each section moved
+
+Every section heading from the previous single-page version keeps its anchor here, so an existing link such as `/web/control-ui#chat-behavior` still resolves. Each entry points at the page that now holds the content.
+
+- <a id="session-rail-and-side-chat" />[Session rail and side chat](/web/control-ui/chat#session-rail-and-side-chat)
+- <a id="session-links-in-messages" />[Session links in messages](/web/control-ui/chat#session-links-in-messages)
+- <a id="composer-capability-menu" />[Composer capability menu](/web/control-ui/chat#composer-capability-menu)
+- <a id="chat-behavior" />[Chat behavior](/web/control-ui/chat#chat-behavior)
+- <a id="source-previews-and-copying-code" />[Source previews and copying code](/web/control-ui/chat#source-previews-and-copying-code)
+- <a id="markdown-tables" />[Markdown tables](/web/control-ui/chat#markdown-tables)
+- <a id="mermaid-diagrams" />[Mermaid diagrams](/web/control-ui/chat#mermaid-diagrams)
+- <a id="hosted-embeds" />[Hosted embeds](/web/control-ui/chat#hosted-embeds)
+- <a id="chat-transcript-layout" />[Chat transcript layout](/web/control-ui/chat#chat-transcript-layout)
+- <a id="chat-message-width" />[Chat message width](/web/control-ui/chat#chat-message-width)
+- <a id="send-and-history-semantics" />[send and history semantics](/web/control-ui/chat#send-and-history-semantics)
+- <a id="talk-mode-browser-realtime" />[talk mode browser realtime](/web/control-ui/chat#talk-mode-browser-realtime)
+- <a id="stop-and-abort" />[stop and abort](/web/control-ui/chat#stop-and-abort)
+- <a id="abort-partial-retention" />[abort partial retention](/web/control-ui/chat#abort-partial-retention)
+- <a id="strict" />[strict](/web/control-ui/chat#strict)
+- <a id="scripts-default" />[scripts default](/web/control-ui/chat#scripts-default)
+- <a id="trusted" />[trusted](/web/control-ui/chat#trusted)
+- <a id="device-pairing-(first-connection)" />[device pairing (first connection)](</web/control-ui/connect-and-pair#device-pairing-(first-connection)>)
+- <a id="pair-a-mobile-device" />[Pair a mobile device](/web/control-ui/connect-and-pair#pair-a-mobile-device)
+- <a id="runtime-config-endpoint" />[Runtime config endpoint](/web/control-ui/connect-and-pair#runtime-config-endpoint)
+- <a id="pwa-install-and-web-push" />[PWA install and web push](/web/control-ui/connect-and-pair#pwa-install-and-web-push)
+- <a id="tailnet-access-(recommended)" />[tailnet access (recommended)](</web/control-ui/connect-and-pair#tailnet-access-(recommended)>)
+- <a id="insecure-http" />[Insecure HTTP](/web/control-ui/connect-and-pair#insecure-http)
+- <a id="blank-control-ui-page" />[Blank Control UI page](/web/control-ui/connect-and-pair#blank-control-ui-page)
+- <a id="device-pairing-first-connection" />[Device pairing (first connection)](/web/control-ui/connect-and-pair#device-pairing-first-connection)
+- <a id="tailnet-access-recommended" />[Tailnet access (recommended)](/web/control-ui/connect-and-pair#tailnet-access-recommended)
+- <a id="list-pending-requests" />[list pending requests](/web/control-ui/connect-and-pair#list-pending-requests)
+- <a id="approve-by-request-id" />[approve by request id](/web/control-ui/connect-and-pair#approve-by-request-id)
+- <a id="open-mobile-pairing" />[open mobile pairing](/web/control-ui/connect-and-pair#open-mobile-pairing)
+- <a id="connect-the-phone" />[connect the phone](/web/control-ui/connect-and-pair#connect-the-phone)
+- <a id="confirm-the-connection" />[confirm the connection](/web/control-ui/connect-and-pair#confirm-the-connection)
+- <a id="trusted-proxy-note" />[trusted proxy note](/web/control-ui/connect-and-pair#trusted-proxy-note)
+- <a id="build-and-develop-the-ui" />[Build and develop the UI](/web/control-ui/development#build-and-develop-the-ui)
+- <a id="debugging%2Ftesting%3A-dev-server-%2B-remote-gateway" />[debugging%2Ftesting%3A dev server %2B remote gateway](/web/control-ui/development#debugging%2Ftesting%3A-dev-server-%2B-remote-gateway)
+- <a id="debugging/testing-dev-server-+-remote-gateway" />[debugging/testing dev server + remote gateway](/web/control-ui/development#debugging/testing-dev-server-+-remote-gateway)
+- <a id="start-the-ui-dev-server" />[start the ui dev server](/web/control-ui/development#start-the-ui-dev-server)
+- <a id="connect-the-remote-gateway" />[connect the remote gateway](/web/control-ui/development#connect-the-remote-gateway)
+- <a id="origin-security-notes" />[origin security notes](/web/control-ui/development#origin-security-notes)
+- <a id="feature-and-rpc-reference" />[Feature and RPC reference](/web/control-ui/feature-reference#feature-and-rpc-reference)
+- <a id="chat-and-talk" />[chat and talk](/web/control-ui/feature-reference#chat-and-talk)
+- <a id="channels-sessions-memory" />[channels sessions memory](/web/control-ui/feature-reference#channels-sessions-memory)
+- <a id="cron-tasks-plugins-skills-devices-exec-approvals" />[cron plugins skills devices exec approvals](/web/control-ui/feature-reference#cron-tasks-plugins-skills-devices-exec-approvals)
+- <a id="config" />[config](/web/control-ui/feature-reference#config)
+- <a id="usage" />[usage](/web/control-ui/feature-reference#usage)
+- <a id="debug-logs-update" />[debug logs update](/web/control-ui/feature-reference#debug-logs-update)
+- <a id="automations-panel-notes" />[automations panel notes](/web/control-ui/feature-reference#automations-panel-notes)
+- <a id="connection-loss-and-reconnect" />[Connection loss and reconnect](/web/control-ui/offline-and-reconnect#connection-loss-and-reconnect)
+- <a id="openclaw-system-care" />[OpenClaw system care](/web/control-ui/panels#openclaw-system-care)
+- <a id="home-dock" />[Home dock](/web/control-ui/panels#home-dock)
+- <a id="operator-terminal" />[Operator terminal](/web/control-ui/panels#operator-terminal)
+- <a id="browser-panel" />[Browser panel](/web/control-ui/panels#browser-panel)
+- <a id="content-security-policy" />[Content security policy](/web/control-ui/security-model#content-security-policy)
+- <a id="avatar-route-auth" />[Avatar route auth](/web/control-ui/security-model#avatar-route-auth)
+- <a id="assistant-media-route-auth" />[Assistant media route auth](/web/control-ui/security-model#assistant-media-route-auth)
+- <a id="approval-links" />[Approval links](/web/control-ui/security-model#approval-links)
+- <a id="new-session-names" />[New session names](/web/control-ui/sessions-and-sidebar#new-session-names)
+- <a id="new-session-preferences-and-recents" />[New-session preferences and recents](/web/control-ui/sessions-and-sidebar#new-session-preferences-and-recents)
+- <a id="sidebar-navigation" />[Sidebar navigation](/web/control-ui/sessions-and-sidebar#sidebar-navigation)
+- <a id="session-menu" />[Session menu](/web/control-ui/sessions-and-sidebar#session-menu)
+- <a id="session-placement" />[Session placement](/web/control-ui/sessions-and-sidebar#session-placement)
+- <a id="session-icons" />[Session icons](/web/control-ui/sessions-and-sidebar#session-icons)
+- <a id="session-colors" />[Session colors](/web/control-ui/sessions-and-sidebar#session-colors)
+- <a id="new-session-page" />[New session page](/web/control-ui/sessions-and-sidebar#new-session-page)
+- <a id="start-a-native-coding-cli" />[Start a native coding CLI](/web/control-ui/sessions-and-sidebar#start-a-native-coding-cli)
+- <a id="openclaw-chat-workspace-startup" />[OpenClaw Chat workspace startup](/web/control-ui/sessions-and-sidebar#openclaw-chat-workspace-startup)
+- <a id="environment-identity" />[Environment identity](/web/control-ui/settings#environment-identity)
+- <a id="community-invitation" />[Community invitation](/web/control-ui/settings#community-invitation)
+- <a id="personal-identity" />[Personal identity](/web/control-ui/settings#personal-identity)
+- <a id="gateway-host-status" />[Gateway host status](/web/control-ui/settings#gateway-host-status)
+- <a id="language-support" />[Language support](/web/control-ui/settings#language-support)
+- <a id="appearance-themes" />[Appearance themes](/web/control-ui/settings#appearance-themes)
+- <a id="manage-plugins" />[Manage plugins](/web/control-ui/settings#manage-plugins)
+- <a id="updates" />[Updates](/web/control-ui/settings#updates)
+- <a id="apps-and-extensions" />[Apps and extensions](/web/control-ui/settings#apps-and-extensions)
+- <a id="side-panel-keyboard-shortcuts" />[Side panel keyboard shortcuts](/web/control-ui/settings#side-panel-keyboard-shortcuts)
+- <a id="this-mac-(macos-app)" />[This device (macOS and iOS apps)](/web/control-ui/settings#this-mac-macos-app)
+- <a id="custom-plugin-ui" />[Custom plugin UI](/web/control-ui/settings#custom-plugin-ui)
+- <a id="import-assistant-memory" />[Import assistant memory](/web/control-ui/settings#import-assistant-memory)
+- <a id="mcp-page" />[MCP page](/web/control-ui/settings#mcp-page)
+- <a id="activity-tab" />[Activity tab](/web/control-ui/settings#activity-tab)
+- <a id="meetings-page" />[Meetings page](/web/control-ui/settings#meetings-page)
+- <a id="this-mac-macos-app" />[This Mac (macOS app)](/web/control-ui/settings#this-mac-macos-app)
 
 ## Related
 
@@ -501,3 +433,4 @@ Remote access setup details: [Remote access](/gateway/remote).
 - [Health Checks](/gateway/health) — gateway health monitoring
 - [TUI](/web/tui) — terminal user interface
 - [WebChat](/web/webchat) — browser-based chat interface
+- [Codex session catalog and supervision](/plugins/codex-supervision) — the Native Session Discovery settings surface

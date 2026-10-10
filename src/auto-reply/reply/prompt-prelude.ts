@@ -1,90 +1,38 @@
-import type { CurrentInboundPromptContext } from "../../agents/pi-embedded-runner/run/params.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { CurrentInboundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
+import { appendCurrentInboundContext } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
+import type { RuntimeContextFragment } from "../../agents/internal-runtime-context.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
+import { normalizeMediaFacts, type MediaFact } from "../../media/media-facts.js";
+import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../heartbeat.js";
-import { buildInboundMediaNote } from "../media-note.js";
+import { MEDIA_ONLY_USER_TEXT } from "../../sessions/user-turn-media.js";
+import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
+import { resolveInternalTurnTranscript } from "../internal-turn-source.js";
+import { buildInboundMediaNoteProjection } from "../media-note.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
-import { appendUntrustedContext } from "./untrusted-context.js";
+import { appendChannelPromptContext } from "./channel-prompt-context.js";
 
-const REPLY_MEDIA_HINT =
-  "To send an image back, prefer the message tool (media/path/filePath). If you must inline, use MEDIA:https://example.com/image.jpg (spaces ok, quote if needed) or a safe relative path like MEDIA:./image.jpg. Absolute and ~ paths only work when they stay inside your allowed file-read boundary; host file:// URLs are blocked. Keep caption in the text body.";
 const ROOM_EVENT_PROMPT = "[OpenClaw room event]";
-const ROOM_EVENT_VISIBLE_REPLY_CONTRACT = "message_tool_only";
+const ROOM_EVENT_PARTICIPATION_RULE =
+  "Treat this message as observed room activity, not a request. You were not explicitly tagged or mentioned in this room event. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking.";
+const RESUMABLE_ROOM_CONTEXT_OMITTED_PREFIXES = [
+  "Conversation context (chronological, selected for current message):",
+  "Chat history since last reply:",
+  "Recent chat history:",
+];
 
-export function buildReplyPromptBodies(params: {
-  ctx: MsgContext;
-  sessionCtx: TemplateContext;
-  effectiveBaseBody: string;
-  prefixedBody?: string;
-  transcriptBody?: string;
-  threadContextNote?: string;
-  systemEventBlocks?: string[];
-  inboundEventKind?: InboundEventKind;
-}): {
+type ReplyPromptEnvelope = ReplyPromptEnvelopeBase & {
   mediaNote?: string;
-  mediaReplyHint?: string;
+  media?: MediaFact[];
+  /** Original ctx.media positions; preprojected additions have no inbound index. */
+  inboundMediaIndexes: readonly number[];
   prefixedCommandBody: string;
   queuedBody: string;
   transcriptCommandBody: string;
-} {
-  const combinedEventsBlock = (params.systemEventBlocks ?? []).filter(Boolean).join("\n");
-  const prependEvents = (body: string) =>
-    combinedEventsBlock ? `${combinedEventsBlock}\n\n${body}` : body;
-  const rawPrefixedBody = params.prefixedBody ?? params.effectiveBaseBody;
-  const bodyWithEvents = prependEvents(params.effectiveBaseBody);
-  const prefixedBodyWithEvents = appendUntrustedContext(
-    prependEvents(rawPrefixedBody),
-    params.sessionCtx.UntrustedContext,
-  );
-  const prefixedBody = [params.threadContextNote, prefixedBodyWithEvents]
-    .filter(Boolean)
-    .join("\n\n");
-  const queueBodyBase = [params.threadContextNote, bodyWithEvents].filter(Boolean).join("\n\n");
-  const mediaNote = buildInboundMediaNote(params.ctx);
-  const mediaReplyHint = mediaNote ? REPLY_MEDIA_HINT : undefined;
-  const queuedBodyRaw = mediaNote
-    ? [mediaNote, mediaReplyHint, queueBodyBase].filter(Boolean).join("\n").trim()
-    : queueBodyBase;
-  const prefixedCommandBodyRaw = mediaNote
-    ? [mediaNote, mediaReplyHint, prefixedBody].filter(Boolean).join("\n").trim()
-    : prefixedBody;
-  const transcriptBody = params.transcriptBody ?? params.effectiveBaseBody;
-  const includeMediaOnlyTranscript = mediaNote && params.inboundEventKind !== "room_event";
-  const transcriptCommandBodyRaw = transcriptBody
-    ? mediaNote
-      ? [mediaNote, transcriptBody].filter(Boolean).join("\n").trim()
-      : transcriptBody
-    : includeMediaOnlyTranscript
-      ? mediaNote
-      : "";
-  return {
-    mediaNote,
-    mediaReplyHint,
-    prefixedCommandBody: annotateInterSessionPromptText(
-      prefixedCommandBodyRaw,
-      params.sessionCtx.InputProvenance,
-    ),
-    queuedBody: annotateInterSessionPromptText(queuedBodyRaw, params.sessionCtx.InputProvenance),
-    transcriptCommandBody: annotateInterSessionPromptText(
-      transcriptCommandBodyRaw,
-      params.sessionCtx.InputProvenance,
-    ),
-  };
-}
-
-export type ReplyPromptEnvelopeStartupAction = "new" | "reset";
-
-export type ReplyPromptEnvelope = ReturnType<typeof buildReplyPromptBodies> & {
-  /** Model-visible body before media, thread context, and inter-session annotation are applied. */
-  effectiveBaseBody: string;
-  /** User-visible body persisted to transcript before media/inter-session annotation. */
-  transcriptBody: string;
-  /** Runtime-only user context for backends that can carry it outside transcript text. */
-  currentInboundContext?: CurrentInboundPromptContext;
 };
 
-export type ReplyPromptEnvelopeBase = {
+type ReplyPromptEnvelopeBase = {
   /** Model-visible body before media, thread context, and inter-session annotation are applied. */
   effectiveBaseBody: string;
   /** User-visible body persisted to transcript before media/inter-session annotation. */
@@ -99,13 +47,15 @@ type ReplyPromptEnvelopeBaseParams = {
   baseBody: string;
   hasUserBody: boolean;
   inboundUserContext: string;
+  activeGoalContext?: string;
   inboundUserContextPromptJoiner?: CurrentInboundPromptContext["promptJoiner"];
   isBareSessionReset: boolean;
-  startupAction: ReplyPromptEnvelopeStartupAction;
+  startupAction: "new" | "reset";
   startupContextPrelude?: string | null;
   softResetTail?: string;
   isHeartbeat?: boolean;
   inboundEventKind?: InboundEventKind;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 };
 
 function formatRoomEventLine(ctx: TemplateContext, body: string): string {
@@ -120,29 +70,67 @@ function formatRoomEventLine(ctx: TemplateContext, body: string): string {
 }
 
 function resolveRoomEventBody(params: ReplyPromptEnvelopeBaseParams): string {
+  const hasBaseBody = Boolean(normalizeOptionalString(params.baseBody));
+  const hasCompletedAudioBody =
+    hasBaseBody &&
+    [params.ctx, params.sessionCtx].some(
+      (ctx) =>
+        ctx.MediaUnderstanding?.some((output) => output.kind === "audio.transcription") &&
+        params.baseBody === ctx.agentText,
+    );
+  // Command text intentionally excludes machine transcripts. Prefer the
+  // enriched body only when this event owns an audio output and the body is
+  // still one of its canonical agent-text projections.
   return (
-    normalizeOptionalString(params.ctx.BodyForCommands) ??
-    normalizeOptionalString(params.ctx.CommandBody) ??
-    normalizeOptionalString(params.ctx.RawBody) ??
-    normalizeOptionalString(params.sessionCtx.BodyForCommands) ??
-    normalizeOptionalString(params.sessionCtx.CommandBody) ??
-    normalizeOptionalString(params.sessionCtx.RawBody) ??
+    (hasCompletedAudioBody ? params.baseBody : undefined) ??
+    normalizeOptionalString(params.ctx.commandText) ??
+    normalizeOptionalString(params.sessionCtx.commandText) ??
     (params.hasUserBody ? params.baseBody.trim() : undefined) ??
-    "[User sent media without caption]"
+    MEDIA_ONLY_USER_TEXT
   );
 }
 
-function buildRoomEventContext(params: ReplyPromptEnvelopeBaseParams): string {
-  const roomEventBody = resolveRoomEventBody(params);
-  return [
-    "[OpenClaw room event]",
-    "inbound_event_kind: room_event",
-    `visible_reply_contract: ${ROOM_EVENT_VISIBLE_REPLY_CONTRACT}`,
-    params.inboundUserContext.trim() ? `Room context:\n${params.inboundUserContext.trim()}` : "",
-    `Current event:\n${formatRoomEventLine(params.sessionCtx, roomEventBody)}`,
-    "Treat this as observed room activity. Decide whether to act.",
-  ]
-    .filter(Boolean)
+function resolveRoomEventTranscriptBody(params: ReplyPromptEnvelopeBaseParams): string {
+  return (
+    normalizeOptionalString(params.sessionCtx.AmbientTranscriptBody) ??
+    normalizeOptionalString(params.ctx.AmbientTranscriptBody) ??
+    formatRoomEventLine(params.sessionCtx, resolveRoomEventBody(params))
+  );
+}
+
+function resolvePerTurnDeliveryDirective(params: {
+  inboundEventKind?: InboundEventKind;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+}): string | undefined {
+  if (params.inboundEventKind === "room_event") {
+    return params.sourceReplyDeliveryMode === "message_tool_only"
+      ? `${ROOM_EVENT_PARTICIPATION_RULE} To respond visibly, use message(action=send); your final text here stays private either way.`
+      : ROOM_EVENT_PARTICIPATION_RULE;
+  }
+  if (
+    params.inboundEventKind === "user_request" &&
+    params.sourceReplyDeliveryMode === "message_tool_only"
+  ) {
+    return MESSAGE_TOOL_ONLY_DELIVERY_HINT;
+  }
+  return undefined;
+}
+
+// The current event itself is the user turn body; the context block carries
+// only the marker, the room backlog, and the reply-policy directive so no
+// fact is stated twice in one request.
+function buildRoomEventContext(roomContext: string, deliveryDirective?: string): string {
+  const roomContextBlock = roomContext.trim() ? `Room context:\n${roomContext.trim()}` : "";
+  return [ROOM_EVENT_PROMPT, roomContextBlock, deliveryDirective].filter(Boolean).join("\n\n");
+}
+
+function buildResumableRoomContext(roomContext: string): string {
+  return roomContext
+    .split(/\n{2,}/u)
+    .filter(
+      (block) =>
+        !RESUMABLE_ROOM_CONTEXT_OMITTED_PREFIXES.some((prefix) => block.startsWith(prefix)),
+    )
     .join("\n\n");
 }
 
@@ -151,10 +139,14 @@ export function buildReplyPromptEnvelopeBase(
 ): ReplyPromptEnvelopeBase {
   const softResetTail = params.softResetTail?.trim() ?? "";
   const isRoomEvent = params.inboundEventKind === "room_event";
-  const roomEventContext = buildRoomEventContext(params);
+  const inboundUserContext = params.inboundUserContext.trim();
+  const deliveryDirective = resolvePerTurnDeliveryDirective(params);
+  const resumableRoomEventContext = isRoomEvent
+    ? buildRoomEventContext(buildResumableRoomContext(inboundUserContext), deliveryDirective)
+    : undefined;
   const currentInboundContextText = isRoomEvent
-    ? roomEventContext
-    : params.inboundUserContext.trim();
+    ? buildRoomEventContext(inboundUserContext, deliveryDirective)
+    : [inboundUserContext, deliveryDirective].filter(Boolean).join("\n\n");
   const resetModelBody = params.isBareSessionReset
     ? [
         params.inboundUserContext,
@@ -167,25 +159,37 @@ export function buildReplyPromptEnvelopeBase(
         .filter(Boolean)
         .join("\n\n")
     : params.baseBody;
-  const effectiveBaseBody = isRoomEvent
-    ? ROOM_EVENT_PROMPT
-    : params.hasUserBody
-      ? resetModelBody
-      : "[User sent media without caption]";
+  // Room-event turns and their transcript rows share one attributed chat line
+  // so the active turn replays byte-identically as history; the room-event
+  // marker and directive stay current-turn context only.
+  const roomEventBody = isRoomEvent ? resolveRoomEventTranscriptBody(params) : undefined;
+  const effectiveBaseBody =
+    roomEventBody ?? (params.hasUserBody ? resetModelBody : MEDIA_ONLY_USER_TEXT);
   const transcriptBody = params.isHeartbeat
-    ? HEARTBEAT_TRANSCRIPT_PROMPT
+    ? resolveInternalTurnTranscript({
+        InputProvenance: params.ctx.InputProvenance ?? params.sessionCtx.InputProvenance,
+        InternalTurnSource: params.ctx.InternalTurnSource ?? params.sessionCtx.InternalTurnSource,
+      }).text
     : params.isBareSessionReset
       ? softResetTail || `[OpenClaw session ${params.startupAction}]`
-      : isRoomEvent
-        ? ""
-        : params.hasUserBody
-          ? params.baseBody
-          : "[User sent media without caption]";
+      : effectiveBaseBody;
+  const fragments: RuntimeContextFragment[] = [
+    ...(isRoomEvent ? [{ kind: "runtime-instruction" as const, text: ROOM_EVENT_PROMPT }] : []),
+    ...(inboundUserContext
+      ? [{ kind: "conversation-data" as const, text: inboundUserContext }]
+      : []),
+    ...(deliveryDirective
+      ? [{ kind: "runtime-instruction" as const, text: deliveryDirective }]
+      : []),
+  ];
   const currentInboundContext: CurrentInboundPromptContext | undefined =
     !params.isBareSessionReset && currentInboundContextText
       ? {
           text: currentInboundContextText,
+          fragments,
+          ...(resumableRoomEventContext ? { resumableText: resumableRoomEventContext } : {}),
           promptJoiner: params.inboundUserContextPromptJoiner,
+          ...(params.activeGoalContext ? { injectedGoalContexts: [params.activeGoalContext] } : {}),
         }
       : undefined;
 
@@ -201,23 +205,44 @@ export function buildReplyPromptEnvelope(
     prefixedBody?: string;
     threadContextNote?: string;
     systemEventBlocks?: string[];
+    /** Facts whose model-facing projection is already present in the supplied body. */
+    media?: readonly MediaFact[];
   },
 ): ReplyPromptEnvelope {
   const base = buildReplyPromptEnvelopeBase(params);
-  const prefixedBody = params.prefixedBody ?? base.effectiveBaseBody;
-  const promptBodies = buildReplyPromptBodies({
-    ctx: params.ctx,
-    sessionCtx: params.sessionCtx,
-    effectiveBaseBody: base.effectiveBaseBody,
-    prefixedBody,
-    transcriptBody: base.transcriptBody,
-    threadContextNote: params.threadContextNote,
-    systemEventBlocks: params.systemEventBlocks,
-    inboundEventKind: params.inboundEventKind,
-  });
+  const generatedMedia = buildInboundMediaNoteProjection(params.ctx);
+  const mediaNote = generatedMedia.text;
+  const media = [...generatedMedia.media, ...normalizeMediaFacts(params.media)];
+  const prependMediaNote = (body: string): string =>
+    mediaNote ? [mediaNote, body].filter(Boolean).join("\n").trim() : body;
+  const transcriptCommandBody =
+    mediaNote && params.inboundEventKind !== "room_event"
+      ? base.transcriptBody
+        ? prependMediaNote(base.transcriptBody)
+        : mediaNote
+      : base.transcriptBody;
 
+  const sourceContext = [
+    params.threadContextNote,
+    ...(params.systemEventBlocks ?? []),
+    appendChannelPromptContext("", params.sessionCtx.ChannelPromptContext),
+  ].filter((text): text is string => Boolean(text?.trim()));
+  const currentInboundContext = sourceContext.length
+    ? appendCurrentInboundContext(
+        base.currentInboundContext,
+        sourceContext.map((text) => ({ kind: "conversation-data", text })),
+      )
+    : base.currentInboundContext;
+  const annotateBody = (body: string) =>
+    annotateInterSessionPromptText(prependMediaNote(body), params.sessionCtx.InputProvenance);
   return {
-    ...promptBodies,
+    mediaNote,
+    inboundMediaIndexes: generatedMedia.mediaIndexes,
+    ...(media.length > 0 ? { media } : {}),
+    prefixedCommandBody: annotateBody(params.prefixedBody ?? base.effectiveBaseBody),
+    queuedBody: annotateBody(base.effectiveBaseBody),
+    transcriptCommandBody,
     ...base,
+    currentInboundContext,
   };
 }

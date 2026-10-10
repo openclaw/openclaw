@@ -1,10 +1,37 @@
+// Covers native approval runtime delivery and resolution.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelApprovalNativeAdapter } from "../channels/plugins/types.adapters.js";
-import { clearApprovalNativeRouteStateForTest } from "./approval-native-route-coordinator.js";
-import {
-  createChannelNativeApprovalRuntime,
-  deliverApprovalRequestViaChannelNativePlan,
-} from "./approval-native-runtime.js";
+import { createChannelNativeApprovalRuntime as createChannelNativeApprovalRuntimeRaw } from "./approval-native-runtime.js";
+
+const hoisted = vi.hoisted(() => ({
+  callGatewayLeastPrivilege: vi.fn(async () => ({ ok: true })),
+  createOperatorApprovalsGatewayClient: vi.fn(
+    async (params: { onHelloOk?: (hello: unknown) => void }) => {
+      queueMicrotask(() => params.onHelloOk?.({ type: "hello-ok" }));
+      return {
+        request: vi.fn(async () => ({ ok: true })),
+        stop: vi.fn(),
+      };
+    },
+  ),
+  startGatewayClientWhenEventLoopReady: vi.fn(async () => ({
+    ready: true,
+    aborted: false,
+  })),
+}));
+
+vi.mock("../gateway/call.js", () => ({
+  callGatewayLeastPrivilege: hoisted.callGatewayLeastPrivilege,
+}));
+
+vi.mock("../gateway/operator-approvals-client.js", () => ({
+  createOperatorApprovalsGatewayClient: hoisted.createOperatorApprovalsGatewayClient,
+}));
+
+vi.mock("../../packages/gateway-client/src/readiness.js", () => ({
+  startGatewayClientWhenEventLoopReady: hoisted.startGatewayClientWhenEventLoopReady,
+}));
 
 const execRequest = {
   id: "approval-1",
@@ -15,25 +42,34 @@ const execRequest = {
   expiresAtMs: 120_000,
 };
 
-afterEach(() => {
-  clearApprovalNativeRouteStateForTest();
+const approvalRuntimes: Array<ReturnType<typeof createChannelNativeApprovalRuntimeRaw>> = [];
+
+function createChannelNativeApprovalRuntime(
+  params: Parameters<typeof createChannelNativeApprovalRuntimeRaw>[0],
+) {
+  const runtime = createChannelNativeApprovalRuntimeRaw(params);
+  approvalRuntimes.push(runtime);
+  return runtime;
+}
+
+afterEach(async () => {
+  await Promise.all(approvalRuntimes.splice(0).map((runtime) => runtime.stop()));
+  hoisted.callGatewayLeastPrivilege.mockClear();
+  hoisted.createOperatorApprovalsGatewayClient.mockClear();
+  hoisted.startGatewayClientWhenEventLoopReady.mockClear();
   vi.useRealTimers();
 });
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected a non-array record");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
 function mockCallArg(mock: ReturnType<typeof vi.fn>, index = 0): Record<string, unknown> {
   const arg = mock.mock.calls[index]?.[0];
   return requireRecord(arg);
 }
 
-describe("deliverApprovalRequestViaChannelNativePlan", () => {
+describe("createChannelNativeApprovalRuntime", () => {
   it("dedupes converged prepared targets", async () => {
+    vi.useFakeTimers();
     const adapter: ChannelApprovalNativeAdapter = {
       describeDeliveryCapabilities: () => ({
         enabled: true,
@@ -67,25 +103,35 @@ describe("deliverApprovalRequestViaChannelNativePlan", () => {
         }),
       );
     const onDuplicateSkipped = vi.fn();
+    const finalizeResolved = vi.fn(async () => undefined);
 
-    const result = await deliverApprovalRequestViaChannelNativePlan({
+    const runtime = createChannelNativeApprovalRuntime({
+      label: "test/native-runtime-dedupe",
+      clientDisplayName: "Test",
       cfg: {} as never,
-      approvalKind: "exec",
-      request: execRequest,
-      adapter,
+      nowMs: () => 0,
+      nativeAdapter: adapter,
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      buildPendingContent: () => "pending exec",
       prepareTarget,
       deliverTarget,
       onDuplicateSkipped,
+      finalizeResolved,
     });
+    await runtime.handleRequested(execRequest);
+    await runtime.handleResolved({ id: execRequest.id, decision: "allow-once", ts: 1 });
 
     expect(prepareTarget).toHaveBeenCalledTimes(2);
     expect(deliverTarget).toHaveBeenCalledTimes(1);
     expect(onDuplicateSkipped).toHaveBeenCalledTimes(1);
-    expect(result.entries).toEqual([{ channelId: "shared-dm" }]);
-    expect(result.deliveryPlan.notifyOriginWhenDmOnly).toBe(true);
+    expect(finalizeResolved).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ entries: [{ channelId: "shared-dm" }] }),
+    );
   });
 
   it("continues after per-target delivery failures", async () => {
+    vi.useFakeTimers();
     const adapter: ChannelApprovalNativeAdapter = {
       describeDeliveryCapabilities: () => ({
         enabled: true,
@@ -96,31 +142,95 @@ describe("deliverApprovalRequestViaChannelNativePlan", () => {
       resolveApproverDmTargets: async () => [{ to: "approver-1" }, { to: "approver-2" }],
     };
     const onDeliveryError = vi.fn();
-
-    const result = await deliverApprovalRequestViaChannelNativePlan({
-      cfg: {} as never,
-      approvalKind: "exec",
-      request: execRequest,
-      adapter,
-      prepareTarget: ({ plannedTarget }) => ({
-        dedupeKey: plannedTarget.target.to,
-        target: { channelId: plannedTarget.target.to },
-      }),
-      deliverTarget: async ({ preparedTarget }) => {
+    const finalizeResolved = vi.fn(async () => undefined);
+    const deliverTarget = vi
+      .fn()
+      .mockImplementation(async ({ preparedTarget }: { preparedTarget: { channelId: string } }) => {
         if (preparedTarget.channelId === "approver-1") {
           throw new Error("boom");
         }
         return { channelId: preparedTarget.channelId };
-      },
+      });
+
+    const runtime = createChannelNativeApprovalRuntime({
+      label: "test/native-runtime-delivery-failure",
+      clientDisplayName: "Test",
+      cfg: {} as never,
+      nowMs: () => 0,
+      nativeAdapter: adapter,
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      buildPendingContent: () => "pending exec",
+      prepareTarget: ({ plannedTarget }) => ({
+        dedupeKey: plannedTarget.target.to,
+        target: { channelId: plannedTarget.target.to },
+      }),
+      deliverTarget,
       onDeliveryError,
+      finalizeResolved,
     });
+    await runtime.handleRequested(execRequest);
+    await runtime.handleResolved({ id: execRequest.id, decision: "allow-once", ts: 1 });
 
     expect(onDeliveryError).toHaveBeenCalledTimes(1);
-    expect(result.entries).toEqual([{ channelId: "approver-2" }]);
+    expect(finalizeResolved).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ entries: [{ channelId: "approver-2" }] }),
+    );
   });
-});
 
-describe("createChannelNativeApprovalRuntime", () => {
+  it("selects and expires system-agent approval targets through the native lifecycle", async () => {
+    const deliverTarget = vi.fn().mockResolvedValue({ chatId: "123", messageId: "m1" });
+    const finalizeExpired = vi.fn().mockResolvedValue(undefined);
+    const runtime = createChannelNativeApprovalRuntime({
+      label: "test/system-agent-native-runtime",
+      clientDisplayName: "Test",
+      channel: "telegram",
+      channelLabel: "Telegram",
+      cfg: {} as never,
+      accountId: "default",
+      eventKinds: ["system-agent"],
+      nativeAdapter: {
+        describeDeliveryCapabilities: () => ({
+          enabled: true,
+          preferredSurface: "origin",
+          supportsOriginSurface: true,
+          supportsApproverDmSurface: false,
+        }),
+        resolveOriginTarget: () => ({ to: "123" }),
+      },
+      isConfigured: () => true,
+      shouldHandle: vi.fn().mockReturnValue(true),
+      buildPendingContent: vi.fn().mockResolvedValue({ text: "pending" }),
+      prepareTarget: ({ plannedTarget }) => ({
+        dedupeKey: plannedTarget.target.to,
+        target: { chatId: plannedTarget.target.to },
+      }),
+      deliverTarget,
+      finalizeResolved: vi.fn().mockResolvedValue(undefined),
+      finalizeExpired,
+    });
+
+    await runtime.handleRequested({
+      id: "system-agent:native-1",
+      request: {
+        title: "OpenClaw change",
+        description: "restart the Gateway",
+        command: "restart the Gateway",
+        proposalHash: "a".repeat(64),
+        allowedDecisions: ["allow-once", "deny"],
+        sessionId: "delegation-1",
+      },
+      createdAtMs: 0,
+      expiresAtMs: 2_000,
+    });
+
+    expect(deliverTarget).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalKind: "system-agent" }),
+    );
+    await runtime.handleExpired("system-agent:native-1");
+    expect(finalizeExpired).toHaveBeenCalledOnce();
+  });
+
   it("passes the resolved approval kind and pending content through native delivery hooks", async () => {
     const describeDeliveryCapabilities = vi.fn().mockReturnValue({
       enabled: true,
@@ -163,7 +273,7 @@ describe("createChannelNativeApprovalRuntime", () => {
     });
 
     await runtime.handleRequested({
-      id: "plugin:req-1",
+      id: "opaque-request-1",
       request: {
         title: "Plugin approval",
         description: "Allow access",
@@ -172,13 +282,13 @@ describe("createChannelNativeApprovalRuntime", () => {
       expiresAtMs: 60_000,
     });
     await runtime.handleResolved({
-      id: "plugin:req-1",
+      id: "opaque-request-1",
       decision: "allow-once",
       ts: 1,
     });
 
     const pendingCall = mockCallArg(buildPendingContent);
-    expect(requireRecord(pendingCall.request).id).toBe("plugin:req-1");
+    expect(requireRecord(pendingCall.request).id).toBe("opaque-request-1");
     expect(pendingCall.approvalKind).toBe("plugin");
     expect(typeof pendingCall.nowMs).toBe("number");
 
@@ -188,7 +298,7 @@ describe("createChannelNativeApprovalRuntime", () => {
       target: { to: "plugin:secondary" },
       reason: "preferred",
     });
-    expect(requireRecord(prepareCall.request).id).toBe("plugin:req-1");
+    expect(requireRecord(prepareCall.request).id).toBe("opaque-request-1");
     expect(prepareCall.approvalKind).toBe("plugin");
     expect(prepareCall.pendingContent).toBe("pending plugin");
 
@@ -199,7 +309,7 @@ describe("createChannelNativeApprovalRuntime", () => {
       reason: "preferred",
     });
     expect(deliverCall.preparedTarget).toEqual({ chatId: "plugin:secondary" });
-    expect(requireRecord(deliverCall.request).id).toBe("plugin:req-1");
+    expect(requireRecord(deliverCall.request).id).toBe("opaque-request-1");
     expect(deliverCall.approvalKind).toBe("plugin");
     expect(deliverCall.pendingContent).toBe("pending plugin");
 
@@ -207,22 +317,125 @@ describe("createChannelNativeApprovalRuntime", () => {
     expect(capabilitiesCall.cfg).toEqual({});
     expect(capabilitiesCall.accountId).toBe("secondary");
     expect(capabilitiesCall.approvalKind).toBe("plugin");
-    expect(requireRecord(capabilitiesCall.request).id).toBe("plugin:req-1");
+    expect(requireRecord(capabilitiesCall.request).id).toBe("opaque-request-1");
 
     const dmTargetsCall = mockCallArg(resolveApproverDmTargets);
     expect(dmTargetsCall.cfg).toEqual({});
     expect(dmTargetsCall.accountId).toBe("secondary");
     expect(dmTargetsCall.approvalKind).toBe("plugin");
-    expect(requireRecord(dmTargetsCall.request).id).toBe("plugin:req-1");
+    expect(requireRecord(dmTargetsCall.request).id).toBe("opaque-request-1");
 
     const resolvedCall = mockCallArg(finalizeResolved);
-    expect(requireRecord(resolvedCall.request).id).toBe("plugin:req-1");
+    expect(requireRecord(resolvedCall.request).id).toBe("opaque-request-1");
     expect(requireRecord(resolvedCall.resolved)).toEqual({
-      id: "plugin:req-1",
+      id: "opaque-request-1",
       decision: "allow-once",
       ts: 1,
     });
     expect(resolvedCall.entries).toEqual([{ chatId: "plugin:secondary", messageId: "m1" }]);
+  });
+
+  it("honors the deprecated approval kind compatibility override", async () => {
+    const resolveApprovalKind = vi.fn().mockReturnValue("exec");
+    const buildPendingContent = vi.fn().mockResolvedValue("pending");
+    const runtime = createChannelNativeApprovalRuntime({
+      label: "test/native-runtime-legacy-kind",
+      clientDisplayName: "Test",
+      cfg: {} as never,
+      resolveApprovalKind,
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      buildPendingContent,
+      prepareTarget: async () => null,
+      deliverTarget: async () => null,
+      finalizeResolved: async () => {},
+    });
+
+    const request = {
+      id: "legacy-owned-id",
+      request: {
+        title: "Plugin approval",
+        description: "Allow access",
+      },
+      createdAtMs: 0,
+      expiresAtMs: 60_000,
+    } as const;
+    const normalizedRequest = { ...request, approvalKind: "plugin" as const };
+    await runtime.handleRequested(request);
+
+    expect(resolveApprovalKind).toHaveBeenCalledWith(normalizedRequest);
+    expect(buildPendingContent).toHaveBeenCalledWith(
+      expect.objectContaining({ request: normalizedRequest, approvalKind: "exec" }),
+    );
+  });
+
+  it("sends route notices over least-privilege gateway calls", async () => {
+    const runtime = createChannelNativeApprovalRuntime({
+      label: "test/native-runtime-route-notice",
+      clientDisplayName: "Test",
+      channel: "slack",
+      channelLabel: "Slack",
+      cfg: { gateway: { auth: { token: "configured-token" } } } as never,
+      accountId: "default",
+      nativeAdapter: {
+        describeDeliveryCapabilities: () => ({
+          enabled: true,
+          preferredSurface: "approver-dm",
+          supportsOriginSurface: true,
+          supportsApproverDmSurface: true,
+          notifyOriginWhenDmOnly: true,
+        }),
+        resolveOriginTarget: async () => ({
+          to: "channel:C123",
+          threadId: "1712345678.123456",
+        }),
+        resolveApproverDmTargets: async () => [{ to: "user:owner" }],
+      },
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      buildPendingContent: async () => "pending exec",
+      prepareTarget: async ({ plannedTarget }) => ({
+        dedupeKey: plannedTarget.target.to,
+        target: { chatId: plannedTarget.target.to },
+      }),
+      deliverTarget: async () => ({ chatId: "user:owner", messageId: "m1" }),
+      finalizeResolved: async () => {},
+    });
+
+    await runtime.start();
+    try {
+      await runtime.handleRequested({
+        id: "approval-route-notice",
+        request: {
+          command: "echo hi",
+          turnSourceChannel: "slack",
+          turnSourceTo: "channel:C123",
+          turnSourceAccountId: "default",
+          turnSourceThreadId: "1712345678.123456",
+        },
+        createdAtMs: 0,
+        expiresAtMs: Date.now() + 60_000,
+      });
+    } finally {
+      await runtime.stop();
+    }
+
+    expect(hoisted.callGatewayLeastPrivilege).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: { gateway: { auth: { token: "configured-token" } } },
+        method: "send",
+        clientName: "gateway-client",
+        mode: "backend",
+        params: {
+          channel: "slack",
+          to: "channel:C123",
+          accountId: "default",
+          threadId: "1712345678.123456",
+          message: "Approval required. I sent the approval request to Slack DMs, not this chat.",
+          idempotencyKey: "approval-route-notice:approval-route-notice",
+        },
+      }),
+    );
   });
 
   it("runs expiration through the shared runtime factory", async () => {

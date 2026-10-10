@@ -1,0 +1,115 @@
+import type { ProviderAuthAliasLookupParams } from "openclaw/plugin-sdk/agent-runtime";
+import type { CodexAppServerCommandSource } from "./config-contracts.shared.js";
+import type { ParsedCodexPluginConfig, ParsedCodexSupervisionEndpoint } from "./config-parsing.js";
+import type {
+  CodexApprovalPolicy,
+  CodexApprovalsReviewer,
+  CodexSandboxMode,
+  CodexServiceTier,
+  JsonObject,
+} from "./protocol.js";
+
+export {
+  type CodexAppServerCommandSource,
+  type CodexPluginDestructiveApprovalMode,
+  type CodexPluginMarketplaceName,
+  type OpenClawExecApprovalFloorsForCodexAppServer,
+  type OpenClawExecMode,
+  type OpenClawExecPolicyForCodexAppServer,
+  type ResolvedCodexPluginPolicy,
+  type ResolvedCodexPluginsPolicy,
+} from "./config-contracts.shared.js";
+
+export type CodexAppServerTransportMode = "stdio" | "websocket" | "unix";
+export type CodexAppServerHomeScope = "agent" | "user";
+export type CodexAppServerPolicyMode = "yolo" | "guardian";
+export type CodexAppServerConnectionClass = "local-loopback" | "remote";
+export type ProviderAuthAliasConfig = NonNullable<ProviderAuthAliasLookupParams>["config"];
+export type CodexAppServerDefaultPolicy = {
+  mode: CodexAppServerPolicyMode;
+  approvalPolicy?: CodexAppServerManagedApprovalPolicy;
+  approvalsReviewer?: CodexApprovalsReviewer;
+  sandbox?: CodexSandboxMode;
+  dangerFullAccessAllowed?: boolean;
+};
+export type CodexAppServerApprovalPolicy = "never" | "on-request";
+export type CodexAppServerManagedApprovalPolicy = Extract<CodexApprovalPolicy, string>;
+export type CodexAppServerEffectiveApprovalPolicy = CodexApprovalPolicy;
+export type CodexManagedCommandOrder = "package-first" | "desktop-first" | "package-only";
+export type CodexDynamicToolsLoading = "searchable" | "direct";
+
+export const CODEX_PLUGINS_MARKETPLACE_NAME = "openai-curated";
+export const CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME = "workspace-directory";
+
+export type CodexComputerUseConfig = NonNullable<CodexPluginConfig["computerUse"]>;
+
+export type ResolvedCodexComputerUseConfig = Required<
+  Omit<CodexComputerUseConfig, "marketplaceSource" | "marketplacePath" | "marketplaceName">
+> &
+  Pick<CodexComputerUseConfig, "marketplaceSource" | "marketplacePath" | "marketplaceName">;
+
+export type CodexSupervisionEndpoint = ParsedCodexSupervisionEndpoint;
+
+export type CodexAppServerNetworkProxyConfig = NonNullable<
+  NonNullable<CodexPluginConfig["appServer"]>["networkProxy"]
+>;
+
+export type ResolvedCodexAppServerNetworkProxyConfig = {
+  profileName: string;
+  configFingerprint: string;
+  configPatch: JsonObject;
+};
+
+export type CodexAppServerStartOptions = {
+  transport: CodexAppServerTransportMode;
+  homeScope?: CodexAppServerHomeScope;
+  /** Lifecycle-captured local home; does not change requested home ownership. */
+  codexHome?: string;
+  command: string;
+  commandSource?: CodexAppServerCommandSource;
+  /** Desktop-first is reserved for the macOS app process that owns Computer Use permissions. */
+  managedCommandOrder?: CodexManagedCommandOrder;
+  /** Native plugin names checked at the final managed spawn boundary. */
+  managedComputerUsePluginNames?: string[];
+  managedFallbackCommandPaths?: string[];
+  args: string[];
+  /** Process working directory for shipped Supervisor stdio endpoint compatibility. */
+  cwd?: string;
+  url?: string;
+  authToken?: string;
+  headers: Record<string, string>;
+  env?: Record<string, string>;
+  clearEnv?: string[];
+};
+
+export type CodexAppServerRuntimeOptions = {
+  start: CodexAppServerStartOptions;
+  connectionClass: CodexAppServerConnectionClass;
+  remoteWorkspaceRoot?: string;
+  nativeHookRelay?: { url: string; credentialDirectory: string };
+  codeModeOnly: boolean;
+  loopDetectionPreToolUseRelay: boolean;
+  requestTimeoutMs: number;
+  approvalPolicy: CodexAppServerEffectiveApprovalPolicy;
+  sandbox: CodexSandboxMode;
+  approvalsReviewer: CodexApprovalsReviewer;
+  /** Prepared boundary for an explicit session permission mode. */
+  sessionRoot?: string;
+  serviceTier?: CodexServiceTier | null;
+  /** False disables Ultrafast; otherwise only an explicit shared selection can request it. */
+  enableUltrafast?: boolean;
+  networkProxy?: ResolvedCodexAppServerNetworkProxyConfig;
+};
+
+export type CodexModelBackedReviewerContext = {
+  modelProvider?: string;
+  model?: string;
+  config?: ProviderAuthAliasConfig;
+  env?: NodeJS.ProcessEnv;
+  agentDir?: string;
+  codexConfigToml?: string | null;
+  homeScope?: CodexAppServerHomeScope;
+  codexArgs?: readonly string[];
+};
+
+export type CodexPluginConfig = ParsedCodexPluginConfig;

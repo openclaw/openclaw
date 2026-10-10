@@ -6,13 +6,13 @@ read_when:
 title: "Help"
 ---
 
-Quick "get unstuck" path for the most common problems:
+Fastest path to unstuck, by symptom:
 
 - [Troubleshooting](/help/troubleshooting) - symptom-first decision tree
 - [Debugging](/help/debugging) - watch mode, raw streams, dev profile
 - [Install sanity](/install/node#troubleshooting) - Node / npm / PATH checks
 - [Gateway troubleshooting](/gateway/troubleshooting) - gateway-specific issues
-- [Doctor](/gateway/doctor) - automated repair + diagnostic bundle
+- [Doctor](/gateway/doctor) - `openclaw doctor`: health checks, config migrations, repair steps
 
 ## FAQ
 
@@ -24,13 +24,14 @@ Quick "get unstuck" path for the most common problems:
 
 - [Environment variables](/help/environment) - where OpenClaw loads env vars and precedence
 - [Diagnostics flags](/diagnostics/flags) - runtime diagnostics and verbose modes
-- [Node + tsx crash](/debug/node-issue) - specific Node / tsx runtime crash scenarios
+- [Node and tsx startup errors](/help/debugging#node-and-tsx-startup-errors) - capture runtime versions and the stack trace for startup failures
 
 ## Testing
 
 - [Testing](/help/testing) - test suites and Docker runners
 - [Update and plugin tests](/help/testing-updates-plugins) - package update, migration, and plugin install validation
 - [Live tests](/help/testing-live) - network-touching provider and CLI smokes
+- [Scripts](/help/scripts) - helper scripts under `scripts/` and when to prefer the CLI
 
 ## Community and meta
 

@@ -1,0 +1,313 @@
+import fs from "node:fs";
+import path from "node:path";
+import { isWindowsDrivePath } from "@openclaw/fs-safe/archive";
+import { isWithinDir } from "@openclaw/fs-safe/path";
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { sha256File } from "../../infra/crypto-digest.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { FsSafeError, root as fsRoot, type Root } from "../../infra/fs-safe.js";
+import { assertCanonicalPathWithinBase } from "../../infra/install-safe-path.js";
+import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
+import { withTempDownloadPath } from "../../infra/temp-download.js";
+import { ensureDir, resolveUserPath } from "../../utils.js";
+import { resolveSkillToolsRootDir } from "../runtime/tools-dir.js";
+import type { SkillInstallSpec } from "../types.js";
+import { formatInstallFailureMessage } from "./install-output.js";
+import type { SkillInstallResult } from "./install-types.js";
+
+// Skill downloads share ClawHub and marketplace's 256 MiB artifact ceiling;
+// changing this limit is a supported-artifact compatibility decision.
+const MAX_SKILL_DOWNLOAD_BYTES = 256 * 1024 * 1024;
+
+function resolveDownloadTargetDir(skillKey: string, spec: SkillInstallSpec): string {
+  const root = resolveSkillToolsRootDir(skillKey);
+  const raw = spec.targetDir?.trim();
+  if (!raw) {
+    return root;
+  }
+
+  // Treat non-absolute paths as relative to the per-skill tools root.
+  const resolved =
+    raw.startsWith("~") || path.isAbsolute(raw) || isWindowsDrivePath(raw)
+      ? resolveUserPath(raw)
+      : path.resolve(root, raw);
+
+  if (!isWithinDir(root, resolved)) {
+    throw new Error(
+      `Refusing to install outside the skill tools directory. targetDir="${raw}" resolves to "${resolved}". Allowed root: "${root}".`,
+    );
+  }
+  return resolved;
+}
+
+function resolveArchiveType(spec: SkillInstallSpec, filename: string): string | undefined {
+  const explicit = normalizeOptionalLowercaseString(spec.archive);
+  if (explicit) {
+    return explicit;
+  }
+  const lower = normalizeOptionalLowercaseString(filename);
+  if (!lower) {
+    return undefined;
+  }
+  if (lower.endsWith(".tar.gz") || lower.endsWith(".tgz")) {
+    return "tar.gz";
+  }
+  if (lower.endsWith(".tar.bz2") || lower.endsWith(".tbz2")) {
+    return "tar.bz2";
+  }
+  if (lower.endsWith(".zip")) {
+    return "zip";
+  }
+  return undefined;
+}
+
+async function downloadFile(params: {
+  url: string;
+  relativePath: string;
+  pinnedRoot: Root;
+  tempPath: string;
+  sha256?: string;
+  timeoutMs: number;
+}): Promise<number> {
+  const temporaryRoot = await fsRoot(path.dirname(params.tempPath));
+  const { response, release } = await fetchWithSsrFGuard({
+    url: params.url,
+    timeoutMs: Math.max(1_000, params.timeoutMs),
+  });
+  try {
+    if (!response.ok || !response.body) {
+      throw new Error(`Download failed (${response.status} ${response.statusText})`);
+    }
+    // Encoded Content-Length measures wire bytes, not the decoded stream we cap.
+    const contentEncoding = normalizeOptionalLowercaseString(
+      response.headers.get("content-encoding"),
+    );
+    const declaredBytes =
+      !contentEncoding || contentEncoding === "identity"
+        ? parseStrictNonNegativeInteger(response.headers.get("content-length"))
+        : undefined;
+    if (declaredBytes !== undefined && declaredBytes > MAX_SKILL_DOWNLOAD_BYTES) {
+      throw new Error(
+        `Skill download exceeds ${MAX_SKILL_DOWNLOAD_BYTES}-byte limit (declared ${declaredBytes} bytes)`,
+      );
+    }
+    const body = response.body;
+    let downloadedBytes = 0;
+    async function* chunks() {
+      // Delay reader acquisition until path admission; the fetch guard owns cancellation.
+      for await (const chunk of body.values({ preventCancel: true })) {
+        downloadedBytes += chunk.byteLength;
+        yield chunk;
+      }
+    }
+    await temporaryRoot.create(path.basename(params.tempPath), chunks(), {
+      maxBytes: MAX_SKILL_DOWNLOAD_BYTES,
+      mkdir: false,
+      durable: false,
+      mode: 0o666 & ~process.umask(),
+    });
+    if (params.sha256) {
+      const actual = await sha256File(params.tempPath);
+      if (actual !== params.sha256) {
+        const filename = path.basename(params.relativePath);
+        throw new Error(
+          `SHA-256 mismatch for ${filename}: expected ${params.sha256}, actual ${actual}. The download was discarded; verify the publisher checksum or update the skill manifest before retrying.`,
+        );
+      }
+    }
+    await params.pinnedRoot.copyIn(params.relativePath, params.tempPath);
+    return downloadedBytes;
+  } catch (error) {
+    if (error instanceof FsSafeError && error.code === "too-large") {
+      throw new Error(`Skill download exceeds ${MAX_SKILL_DOWNLOAD_BYTES}-byte limit`, {
+        cause: error,
+      });
+    }
+    throw error;
+  } finally {
+    await release();
+  }
+}
+
+async function publishExtractedTree(params: {
+  sourceDir: string;
+  targetRelativePath: string;
+  pinnedRoot: Root;
+}): Promise<void> {
+  if (params.targetRelativePath) {
+    await params.pinnedRoot.mkdir(params.targetRelativePath);
+  } else {
+    await params.pinnedRoot.ensureRoot();
+  }
+
+  const publishDirectory = async (relativeDir: string): Promise<void> => {
+    const sourceDir = path.join(params.sourceDir, relativeDir);
+    for (const entry of await fs.promises.readdir(sourceDir, { withFileTypes: true })) {
+      const relativePath = path.join(relativeDir, entry.name);
+      const sourcePath = path.join(params.sourceDir, relativePath);
+      const destinationPath = path.join(params.targetRelativePath, relativePath);
+      const sourceStat = await fs.promises.lstat(sourcePath);
+      try {
+        if (sourceStat.isDirectory()) {
+          await params.pinnedRoot.mkdir(destinationPath);
+          await publishDirectory(relativePath);
+          continue;
+        }
+        if (!sourceStat.isFile() || sourceStat.nlink !== 1) {
+          throw new Error(`archive staging contains unsupported entry: ${relativePath}`);
+        }
+        await params.pinnedRoot.copyIn(destinationPath, sourcePath, {
+          mode: sourceStat.mode & 0o777,
+          sourceHardlinks: "reject",
+        });
+      } catch (error) {
+        if (
+          error instanceof FsSafeError &&
+          (error.code === "symlink" || error.code === "path-alias")
+        ) {
+          throw new Error(`archive entry traverses symlink in destination: ${relativePath}`, {
+            cause: error,
+          });
+        }
+        throw error;
+      }
+    }
+  };
+  await publishDirectory("");
+}
+
+function downloadFailure(
+  message: string,
+  details: { stderr?: string; code?: number } = {},
+): SkillInstallResult {
+  return {
+    ok: false,
+    message,
+    stdout: "",
+    stderr: details.stderr ?? message,
+    code: details.code ?? null,
+  };
+}
+
+export async function installDownloadSpec(params: {
+  skillKey: string;
+  spec: SkillInstallSpec;
+  timeoutMs: number;
+}): Promise<SkillInstallResult> {
+  const { skillKey, spec, timeoutMs } = params;
+  const root = resolveSkillToolsRootDir(skillKey);
+  const url = spec.url?.trim();
+  if (!url) {
+    return downloadFailure("missing download url", { stderr: "" });
+  }
+
+  let filename;
+  try {
+    const parsed = new URL(url);
+    filename = path.basename(parsed.pathname);
+  } catch {
+    filename = path.basename(url);
+  }
+  if (!filename) {
+    filename = "download";
+  }
+
+  let canonicalRoot;
+  let targetDir;
+  let pinnedRoot: Root;
+  try {
+    await ensureDir(root);
+    await assertCanonicalPathWithinBase({
+      baseDir: root,
+      candidatePath: root,
+      boundaryLabel: "skill tools directory",
+    });
+    canonicalRoot = await fs.promises.realpath(root);
+    // Bind root identity before fetching so a concurrent replacement cannot redirect publication.
+    pinnedRoot = await fsRoot(canonicalRoot);
+
+    const requestedTargetDir = resolveDownloadTargetDir(skillKey, spec);
+    const targetRelativePath = path.relative(root, requestedTargetDir);
+    targetDir = path.join(canonicalRoot, targetRelativePath);
+  } catch (err) {
+    return downloadFailure(formatErrorMessage(err));
+  }
+
+  const archivePath = path.join(targetDir, filename);
+  const archiveRelativePath = path.relative(canonicalRoot, archivePath);
+  if (
+    !archiveRelativePath ||
+    archiveRelativePath === ".." ||
+    archiveRelativePath.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(archiveRelativePath)
+  ) {
+    return downloadFailure("invalid download archive path");
+  }
+  return await withTempDownloadPath({ prefix: "skill-download" }, async (tempArchivePath) => {
+    let downloaded;
+    try {
+      downloaded = await downloadFile({
+        url,
+        relativePath: archiveRelativePath,
+        pinnedRoot,
+        tempPath: tempArchivePath,
+        sha256: spec.sha256,
+        timeoutMs,
+      });
+    } catch (err) {
+      return downloadFailure(formatErrorMessage(err));
+    }
+
+    const archiveType = resolveArchiveType(spec, filename);
+    const shouldExtract = spec.extract ?? Boolean(archiveType);
+    if (!shouldExtract) {
+      return {
+        ok: true,
+        message: `Downloaded to ${archivePath}`,
+        stdout: `downloaded=${downloaded}`,
+        stderr: "",
+        code: 0,
+      };
+    }
+
+    if (!archiveType) {
+      return downloadFailure("extract requested but archive type could not be detected", {
+        stderr: "",
+      });
+    }
+
+    const stagingDir = path.join(path.dirname(tempArchivePath), "extracted");
+    try {
+      await fs.promises.mkdir(stagingDir, { mode: 0o700 });
+      const { extractSkillDownloadArchive } = await import("./install-extract.js");
+      const extractResult = await extractSkillDownloadArchive({
+        archivePath: tempArchivePath,
+        archiveType,
+        targetDir: stagingDir,
+        stripComponents: spec.stripComponents,
+        timeoutMs,
+      });
+      if (extractResult.code === 0) {
+        // Extraction never reopens the published archive or trusts its mutable destination path.
+        await publishExtractedTree({
+          sourceDir: stagingDir,
+          targetRelativePath: path.relative(canonicalRoot, targetDir),
+          pinnedRoot,
+        });
+      }
+      const success = extractResult.code === 0;
+      return {
+        ok: success,
+        message: success
+          ? `Downloaded and extracted to ${targetDir}`
+          : formatInstallFailureMessage(extractResult),
+        stdout: extractResult.stdout.trim(),
+        stderr: extractResult.stderr.trim(),
+        code: extractResult.code,
+      };
+    } catch (err) {
+      return downloadFailure(formatErrorMessage(err), { code: 1 });
+    }
+  });
+}

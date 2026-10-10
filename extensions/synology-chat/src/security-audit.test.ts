@@ -1,3 +1,4 @@
+// Synology Chat tests cover security audit plugin behavior.
 import { describe, expect, it } from "vitest";
 import { collectSynologyChatSecurityAuditFindings } from "./security-audit.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
@@ -11,6 +12,7 @@ function createAccount(params: {
     enabled: true,
     token: "t",
     incomingUrl: "https://nas.example.com/incoming",
+    webhookUrl: "https://gateway.example.com/webapi/entry.cgi",
     nasHost: "https://nas.example.com",
     webhookPath: "/webapi/entry.cgi",
     webhookPathSource: "explicit",

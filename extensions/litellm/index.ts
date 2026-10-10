@@ -5,10 +5,11 @@ import {
   type ProviderAuthMethodNonInteractiveContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
-  createProviderApiKeyAuthMethod,
+  findNormalizedProviderValue,
   normalizeOptionalSecretInput,
 } from "openclaw/plugin-sdk/provider-auth";
-import { buildSingleProviderApiKeyCatalog } from "openclaw/plugin-sdk/provider-catalog-shared";
+import { buildOpenAICompatibleProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-entry";
 import { buildLitellmImageGenerationProvider } from "./image-generation-provider.js";
 import { applyLitellmConfig, LITELLM_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildLitellmProvider } from "./provider-catalog.js";
@@ -55,7 +56,7 @@ export default definePluginEntry({
       envVar: "LITELLM_API_KEY",
       promptMessage: "Enter LiteLLM API key",
       defaultModel: LITELLM_DEFAULT_MODEL_REF,
-      applyConfig: (cfg) => applyLitellmConfig(cfg),
+      applyConfig: applyLitellmConfig,
       noteTitle: "LiteLLM",
       noteMessage: [
         "LiteLLM provides a unified API to 100+ LLM providers.",
@@ -94,13 +95,25 @@ export default definePluginEntry({
       ],
       catalog: {
         order: "simple",
-        run: (ctx) =>
-          buildSingleProviderApiKeyCatalog({
+        run: (ctx) => {
+          // LiteLLM serves models at both /models and /v1/models, and operators
+          // configure bases with or without /v1; the shared join does not dedupe it.
+          const explicitBaseUrl =
+            findNormalizedProviderValue(ctx.config.models?.providers, PROVIDER_ID)?.baseUrl ?? "";
+          const versionedBaseUrl = /\/v1\/*$/.test(explicitBaseUrl.trim());
+          return buildOpenAICompatibleProviderCatalog({
+            discoveryMode: "strict",
             ctx,
             providerId: PROVIDER_ID,
             buildProvider: buildLitellmProvider,
             allowExplicitBaseUrl: true,
-          }),
+            modelDiscovery: { endpointPath: versionedBaseUrl ? "models" : "v1/models" },
+          });
+        },
+      },
+      staticCatalog: {
+        order: "simple",
+        run: async () => ({ provider: buildLitellmProvider() }),
       },
     });
     api.registerImageGenerationProvider(buildLitellmImageGenerationProvider());

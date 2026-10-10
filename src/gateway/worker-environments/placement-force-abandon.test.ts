@@ -1,0 +1,264 @@
+import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  openOpenClawStateDatabase,
+  type OpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import {
+  createDispatchEnvironmentFixtures,
+  REQUEST,
+  seedActivePlacement,
+} from "./placement-dispatch-test-fixtures.js";
+import { forceAbandonWorkerEnvironment } from "./placement-force-abandon.js";
+import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
+
+async function createActiveAbandonmentFixture(database: OpenClawStateDatabase) {
+  const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
+  const { environmentId } = createDispatchEnvironmentFixtures();
+  seedAttachedPlacementEnvironment(database, {
+    environmentId,
+    sessionId: REQUEST.sessionId,
+    ownerEpoch: 2,
+  });
+  const active = await seedActivePlacement(store, { environmentId, ownerEpoch: 2 });
+  if (active.state !== "active") {
+    throw new Error("active placement fixture was not active");
+  }
+  return { store, environmentId, active };
+}
+
+describe("forced worker environment abandonment", () => {
+  let root: string;
+  let database: OpenClawStateDatabase;
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-force-worker-"));
+    database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+  });
+
+  afterEach(async () => {
+    await closeStateDatabaseForTest();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("drains nested operations before recording result loss and releasing the claim", async () => {
+    const { store, environmentId } = await createActiveAbandonmentFixture(database);
+    const claim = await store.claimTurn({
+      ...REQUEST,
+      claimId: "forced-claim",
+      runId: "forced-run",
+      owner: { kind: "worker", environmentId, ownerEpoch: 2 },
+    });
+    await store.markWorkspaceResultPending(claim);
+    const binding = claim;
+    await store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+    expect(
+      await store.beginWorkerSessionToolOperation({
+        claim: binding,
+        toolName: "sessions_send",
+        toolCallId: "forced-send",
+        requestDigest: "forced-send-digest",
+      }),
+    ).toMatchObject({ kind: "execute" });
+
+    const abandonment = forceAbandonWorkerEnvironment({
+      placements: store,
+      environmentId,
+      resolveWorkspace: async () => ({ kind: "local" as const, path: root }),
+    });
+
+    await vi.waitFor(() => {
+      expect(store.isWorkerTurnToolAuthorized(binding, "sessions_send")).toBe(false);
+    });
+    expect(store.get(REQUEST.sessionId)).toMatchObject({
+      state: "active",
+      turnClaim: { claimId: claim.claimId },
+    });
+    expect(
+      await store.completeWorkerSessionToolOperation({
+        sourceSessionId: claim.sessionId,
+        sourceClaimId: claim.claimId,
+        toolCallId: "forced-send",
+        requestDigest: "forced-send-digest",
+        resultJson: '{"status":"ok"}',
+      }),
+    ).toBe(true);
+    await abandonment;
+
+    expect(store.get(REQUEST.sessionId)).toMatchObject({
+      state: "failed",
+      turnClaim: null,
+      recoveryError: "Worker result abandoned by forced operator teardown",
+    });
+    expect(await store.listPendingWorkspaceResultsAsync()).toEqual([]);
+  });
+
+  it("releases a pending reclaim claim when its workspace is already gone", async () => {
+    const { store, environmentId, active } = await createActiveAbandonmentFixture(database);
+    await store.startDrain({
+      sessionId: active.sessionId,
+      environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+      expectedGeneration: active.generation,
+    });
+    const claim = await store.claimReclaimWorkspaceResult({
+      ...REQUEST,
+      claimId: "reclaim-forced-missing-workspace",
+      runId: "reclaim-forced-missing-workspace",
+      owner: { kind: "worker", environmentId, ownerEpoch: 2 },
+    });
+    await store.recordStagedWorkspaceResult(
+      claim,
+      "refs/openclaw/worker-results/reclaim-forced-missing-workspace",
+    );
+    const resolveWorkspace = vi.fn(async () => {
+      throw new Error("session-owned managed worktree is missing");
+    });
+
+    await forceAbandonWorkerEnvironment({ placements: store, environmentId, resolveWorkspace });
+
+    expect(store.get(REQUEST.sessionId)).toMatchObject({
+      state: "failed",
+      turnClaim: null,
+      recoveryError: "Worker result abandoned by forced operator teardown",
+    });
+    expect(await store.listPendingWorkspaceResultsAsync()).toEqual([]);
+    expect(resolveWorkspace).toHaveBeenCalledOnce();
+  });
+
+  it("deletes a stale journal without replaying it into the current workspace", async () => {
+    const { store, environmentId, active } = await createActiveAbandonmentFixture(database);
+    const owner = {
+      sessionId: active.sessionId,
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+      placementGeneration: active.generation,
+    };
+    await store.beginWorkspaceReconciliation(owner, {
+      version: 1,
+      temporaryNonce: "b".repeat(32),
+      baseManifestRef: active.workspaceBaseManifestRef,
+      currentManifestRef: `sha256:${"c".repeat(64)}`,
+      baseEntries: [],
+      appliedEntries: [],
+      baseTree: "f".repeat(40),
+      basePackSha256: createHash("sha256").update("").digest("hex"),
+      basePack: Buffer.alloc(0),
+    });
+    const draining = await store.startDrain({
+      sessionId: active.sessionId,
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+      expectedGeneration: active.generation,
+    });
+    if (draining.state !== "draining") {
+      throw new Error("draining placement fixture was not draining");
+    }
+    await store.startReconcile({
+      sessionId: draining.sessionId,
+      environmentId: draining.environmentId,
+      ownerEpoch: draining.activeOwnerEpoch,
+      expectedGeneration: draining.generation,
+    });
+    const resolveWorkspace = vi.fn(async () => ({ kind: "local" as const, path: root }));
+
+    await forceAbandonWorkerEnvironment({
+      placements: store,
+      environmentId,
+      resolveWorkspace,
+    });
+
+    expect(resolveWorkspace).not.toHaveBeenCalled();
+    expect(await store.listWorkspaceReconciliationOwners()).toEqual([]);
+    expect(store.get(REQUEST.sessionId)).toMatchObject({ state: "failed" });
+  });
+
+  it("retains a current journal when its best-effort rollback fails", async () => {
+    const { store, environmentId, active } = await createActiveAbandonmentFixture(database);
+    const owner = {
+      sessionId: active.sessionId,
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+      placementGeneration: active.generation,
+    };
+    await store.beginWorkspaceReconciliation(owner, {
+      version: 1,
+      temporaryNonce: "c".repeat(32),
+      baseManifestRef: active.workspaceBaseManifestRef,
+      currentManifestRef: `sha256:${"d".repeat(64)}`,
+      baseEntries: [],
+      appliedEntries: [],
+      baseTree: "f".repeat(40),
+      basePackSha256: createHash("sha256").update("").digest("hex"),
+      basePack: Buffer.alloc(0),
+    });
+    const onCleanupError = vi.fn();
+
+    const resolveWorkspace = vi.fn(async () => {
+      throw new Error("workspace temporarily unavailable");
+    });
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await forceAbandonWorkerEnvironment({
+        placements: store,
+        environmentId,
+        resolveWorkspace,
+        onCleanupError,
+      });
+    }
+
+    expect(store.get(REQUEST.sessionId)).toMatchObject({ state: "failed" });
+    expect(await store.listWorkspaceReconciliationOwners()).toEqual([owner]);
+    expect(resolveWorkspace).toHaveBeenCalledTimes(2);
+    expect(onCleanupError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "workspace temporarily unavailable" }),
+    );
+  });
+
+  it("retains a current journal when loading it fails", async () => {
+    const { store, environmentId, active } = await createActiveAbandonmentFixture(database);
+    const owner = {
+      sessionId: active.sessionId,
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+      placementGeneration: active.generation,
+    };
+    await store.beginWorkspaceReconciliation(owner, {
+      version: 1,
+      temporaryNonce: "d".repeat(32),
+      baseManifestRef: active.workspaceBaseManifestRef,
+      currentManifestRef: `sha256:${"e".repeat(64)}`,
+      baseEntries: [],
+      appliedEntries: [],
+      baseTree: "f".repeat(40),
+      basePackSha256: createHash("sha256").update("").digest("hex"),
+      basePack: Buffer.alloc(0),
+    });
+    const onCleanupError = vi.fn();
+    vi.spyOn(store, "loadWorkspaceReconciliation").mockImplementation(async () => {
+      throw new Error("journal temporarily unreadable");
+    });
+
+    const resolveWorkspace = vi.fn(async () => ({ kind: "local" as const, path: root }));
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await forceAbandonWorkerEnvironment({
+        placements: store,
+        environmentId,
+        resolveWorkspace,
+        onCleanupError,
+      });
+    }
+
+    expect(store.get(REQUEST.sessionId)).toMatchObject({ state: "failed" });
+    expect(await store.listWorkspaceReconciliationOwners()).toEqual([owner]);
+    expect(resolveWorkspace).not.toHaveBeenCalled();
+    expect(onCleanupError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "journal temporarily unreadable" }),
+    );
+  });
+});

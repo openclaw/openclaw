@@ -1,3 +1,5 @@
+// Test helpers for mocked web provider runtime dependencies.
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   PluginWebFetchProviderEntry,
@@ -10,11 +12,13 @@ type CommonWebProviderTestParams = {
   credentialPath: string;
   autoDetectOrder?: number;
   requiresCredential?: boolean;
+  authProviderId?: string;
   getCredentialValue?: (config?: Record<string, unknown>) => unknown;
   getConfiguredCredentialValue?: (config?: OpenClawConfig) => unknown;
-  getConfiguredCredentialFallback?:
-    | PluginWebSearchProviderEntry["getConfiguredCredentialFallback"]
-    | PluginWebFetchProviderEntry["getConfiguredCredentialFallback"];
+  getConfiguredCredentialFallback?: (
+    | PluginWebSearchProviderEntry
+    | PluginWebFetchProviderEntry
+  )["getConfiguredCredentialFallback"];
 };
 
 export type WebSearchTestProviderParams = CommonWebProviderTestParams & {
@@ -39,6 +43,7 @@ function createCommonProviderFields(params: CommonWebProviderTestParams) {
     credentialPath: params.credentialPath,
     autoDetectOrder: params.autoDetectOrder,
     requiresCredential: params.requiresCredential,
+    authProviderId: params.authProviderId,
     getCredentialValue: params.getCredentialValue ?? (() => undefined),
     setCredentialValue: () => {},
     getConfiguredCredentialValue: params.getConfiguredCredentialValue,
@@ -69,5 +74,25 @@ export function createWebFetchTestProvider(
   return {
     ...createCommonProviderFields(params),
     createTool: params.createTool ?? (() => createDefaultProviderTool(params.id)),
+  };
+}
+
+export function createOAuthAuthProfileStore(params: {
+  provider: string;
+  profileId: string;
+  access: string;
+  refresh: string;
+}): AuthProfileStore {
+  return {
+    version: 1,
+    profiles: {
+      [params.profileId]: {
+        type: "oauth",
+        provider: params.provider,
+        access: params.access,
+        refresh: params.refresh,
+        expires: Date.now() + 3_600_000,
+      },
+    },
   };
 }

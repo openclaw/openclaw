@@ -1,6 +1,9 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 
+// Probe target resolution converts configured gateway mode into the actual
+// reachable target. Remote mode falls back to local probing when no remote URL
+// exists so startup diagnostics can explain the missing URL.
 export type GatewayProbeTargetResolution = {
   gatewayMode: "local" | "remote";
   mode: "local" | "remote";

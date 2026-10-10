@@ -1,42 +1,41 @@
-type SharedIniFileLoader = {
-  loadSharedConfigFiles(init?: { ignoreCache?: boolean }): Promise<unknown>;
-};
+import type { BedrockRuntimeClientConfig } from "@aws-sdk/client-bedrock-runtime";
+import type { DefaultProviderInit, defaultProvider } from "@aws-sdk/credential-provider-node";
 
-let sharedIniFileLoaderForTest: SharedIniFileLoader | null | undefined;
-
-function hasStaticAwsCredentialEnv(env: NodeJS.ProcessEnv): boolean {
-  return Boolean(env.AWS_ACCESS_KEY_ID && env.AWS_SECRET_ACCESS_KEY);
+/** Keep shared-file refresh on the chain that actually signs the Bedrock request. */
+export function bedrockCredentialDefaultProvider(init: DefaultProviderInit) {
+  // Load credentials lazily so discovery/registration and bearer-token requests do
+  // not resolve AWS credentials. Each SDK client retains its own normal chain cache.
+  let provider: ReturnType<typeof defaultProvider> | undefined;
+  return async (...args: Parameters<ReturnType<typeof defaultProvider>>) => {
+    const { defaultProvider } = await import("@aws-sdk/credential-provider-node");
+    provider ??= defaultProvider({ ...init, ignoreCache: true });
+    return provider(...args);
+  };
 }
 
-export function shouldRefreshAwsSharedConfigCacheForBedrock(env: NodeJS.ProcessEnv): boolean {
-  if (env.AWS_BEDROCK_SKIP_AUTH === "1" || env.AWS_BEARER_TOKEN_BEDROCK) {
-    return false;
-  }
-  return !hasStaticAwsCredentialEnv(env);
-}
-
-async function loadSharedIniFileLoader(): Promise<SharedIniFileLoader> {
-  if (sharedIniFileLoaderForTest !== undefined) {
-    if (!sharedIniFileLoaderForTest) {
-      throw new Error("AWS shared INI file loader unavailable");
+/** Preserve explicit proxy and bearer authentication ahead of the default AWS chain. */
+export function resolveBedrockRuntimeAuth(
+  bearerToken?: string,
+): Pick<
+  BedrockRuntimeClientConfig,
+  "credentialDefaultProvider" | "credentials" | "token" | "authSchemePreference"
+> {
+  const config: ReturnType<typeof resolveBedrockRuntimeAuth> = {
+    credentialDefaultProvider: bedrockCredentialDefaultProvider,
+  };
+  if (process.env.AWS_BEDROCK_SKIP_AUTH === "1") {
+    if (process.versions?.node || process.versions?.bun) {
+      config.credentials = {
+        accessKeyId: "dummy-access-key",
+        secretAccessKey: "dummy-secret-key",
+      };
     }
-    return sharedIniFileLoaderForTest;
+  } else {
+    const token = bearerToken || process.env.AWS_BEARER_TOKEN_BEDROCK || undefined;
+    if (token !== undefined) {
+      config.token = { token };
+      config.authSchemePreference = ["httpBearerAuth"];
+    }
   }
-  return (await import("@smithy/shared-ini-file-loader")) as SharedIniFileLoader;
-}
-
-export async function refreshAwsSharedConfigCacheForBedrock(
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<void> {
-  if (!shouldRefreshAwsSharedConfigCacheForBedrock(env)) {
-    return;
-  }
-  const loader = await loadSharedIniFileLoader();
-  await loader.loadSharedConfigFiles({ ignoreCache: true });
-}
-
-export function setAwsSharedIniFileLoaderForTest(
-  loader: SharedIniFileLoader | null | undefined,
-): void {
-  sharedIniFileLoaderForTest = loader;
+  return config;
 }

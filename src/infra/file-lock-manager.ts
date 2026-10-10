@@ -1,7 +1,11 @@
-import "./fs-safe-defaults.js";
+// Exposes lifecycle-owned file lock managers with fs-safe defaults.
+import type { Root as FsSafeRoot } from "@openclaw/fs-safe/root";
 
-export {
-  createFileLockManager,
-  type FileLockHeldEntry,
-  type FileLockManager,
-} from "@openclaw/fs-safe/file-lock";
+// Process-local file lock manager used by code that needs explicit lifecycle
+// control instead of a one-shot withFileLock call.
+export { acquireFileLockSync, createFileLockManager } from "@openclaw/fs-safe/file-lock";
+
+/** Recover the full runtime Root type for core-only lockRoot use. */
+export function asFsSafeFileLockRoot(root: Omit<FsSafeRoot, "walk">): FsSafeRoot {
+  return root as FsSafeRoot;
+}

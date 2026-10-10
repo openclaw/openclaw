@@ -1,3 +1,4 @@
+// Inbound event classification tests cover message type and routing classification.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -42,12 +43,11 @@ describe("resolveUnmentionedGroupInboundPolicy", () => {
     const cfg = {
       messages: { groupChat: { unmentionedInbound: "user_request" } },
       agents: {
-        list: [
-          {
-            id: "room-agent",
+        entries: {
+          "room-agent": {
             groupChat: { unmentionedInbound: "room_event" },
           },
-        ],
+        },
       },
     } satisfies OpenClawConfig;
 

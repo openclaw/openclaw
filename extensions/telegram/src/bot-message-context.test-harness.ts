@@ -1,7 +1,16 @@
+// Telegram plugin module implements bot message context harness behavior.
+import { createHash } from "node:crypto";
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
-import type { BuildTelegramMessageContextParams, TelegramMediaRef } from "./bot-message-context.js";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import type {
+  BuildTelegramMessageContextParams,
+  TelegramMediaRef,
+  TelegramMessageContext,
+} from "./bot-message-context.js";
+import { setTelegramPluginStateRuntimeForTests } from "./runtime-state.test-support.js";
+import { getOptionalTelegramRuntime } from "./runtime.js";
 
-export const baseTelegramMessageContextConfig = {
+const baseTelegramMessageContextConfig = {
   agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" } },
   channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
   messages: { groupChat: { mentionPatterns: [] } },
@@ -12,44 +21,63 @@ type TelegramTestSessionRuntime = NonNullable<BuildTelegramMessageContextParams[
 type BuildTelegramMessageContextForTestParams = {
   message: Record<string, unknown>;
   allMedia?: TelegramMediaRef[];
+  replyChain?: BuildTelegramMessageContextParams["replyChain"];
+  promptContext?: BuildTelegramMessageContextParams["promptContext"];
   options?: BuildTelegramMessageContextParams["options"];
   cfg?: Record<string, unknown>;
-  accountId?: string;
   historyLimit?: number;
-  groupHistories?: Map<string, import("openclaw/plugin-sdk/reply-history").HistoryEntry[]>;
-  ackReactionScope?: BuildTelegramMessageContextParams["ackReactionScope"];
   botApi?: Record<string, unknown>;
-  runtime?: BuildTelegramMessageContextParams["runtime"];
-  sessionRuntime?: BuildTelegramMessageContextParams["sessionRuntime"] | null;
+  sendChatActionHandler?: BuildTelegramMessageContextParams["sendChatActionHandler"];
+  sessionRuntime?: null;
   resolveGroupActivation?: BuildTelegramMessageContextParams["resolveGroupActivation"];
-  resolveGroupRequireMention?: BuildTelegramMessageContextParams["resolveGroupRequireMention"];
   resolveTelegramGroupConfig?: BuildTelegramMessageContextParams["resolveTelegramGroupConfig"];
 };
 
-const telegramMessageContextSessionRuntimeForTest = {
-  buildChannelInboundEventContext,
-  readSessionUpdatedAt: () => undefined,
-  recordInboundSession: async () => undefined,
-  resolveInboundLastRouteSessionKey: ({ route, sessionKey }) =>
-    route.lastRoutePolicy === "main" ? route.mainSessionKey : sessionKey,
-  resolvePinnedMainDmOwnerFromAllowlist: () => null,
-  resolveStorePath: () => "/tmp/openclaw/session-store.json",
-} satisfies NonNullable<BuildTelegramMessageContextParams["sessionRuntime"]>;
+function resolveSessionStorePathForTest(testName: string | undefined): string {
+  const hash = createHash("sha256")
+    .update(`${process.pid}:${testName ?? "unknown"}`)
+    .digest("hex")
+    .slice(0, 16);
+  return `/tmp/openclaw/session-store-${hash}.json`;
+}
+
+function createTelegramMessageContextSessionRuntimeForTest(
+  storePath: string,
+): TelegramTestSessionRuntime {
+  return {
+    buildChannelInboundEventContext,
+    readAmbientTranscriptWatermark: () => undefined,
+    readSessionUpdatedAtAsync: async () => undefined,
+    recordInboundSession: async () => undefined,
+    resolveAmbientTranscriptWatermarkKey: ({ channel, accountId, conversationId, threadId }) =>
+      JSON.stringify([
+        channel,
+        accountId ?? "",
+        conversationId,
+        threadId === undefined ? "" : String(threadId),
+      ]),
+    resolveInboundLastRouteSessionKey: ({ route, sessionKey }) =>
+      route.lastRoutePolicy === "main" ? route.mainSessionKey : sessionKey,
+    resolvePinnedMainDmOwnerFromAllowlist: () => null,
+    resolveStorePath: () => storePath,
+  };
+}
 
 export async function buildTelegramMessageContextForTest(
   params: BuildTelegramMessageContextForTestParams,
-): Promise<
-  Awaited<ReturnType<typeof import("./bot-message-context.js").buildTelegramMessageContext>>
-> {
-  const { vi } = await loadVitestModule();
+): Promise<TelegramMessageContext | null> {
+  const { expect, vi } = await loadVitestModule();
+  // Standalone context tests need ingress authority; preserve a caller-owned runtime.
+  if (!getOptionalTelegramRuntime()) {
+    setTelegramPluginStateRuntimeForTests();
+  }
   const buildTelegramMessageContext = await loadBuildTelegramMessageContext();
   const sessionRuntime =
     params.sessionRuntime === null
       ? undefined
-      : {
-          ...telegramMessageContextSessionRuntimeForTest,
-          ...params.sessionRuntime,
-        };
+      : createTelegramMessageContextSessionRuntimeForTest(
+          resolveSessionStorePathForTest(expect.getState().currentTestName),
+        );
   return await buildTelegramMessageContext({
     primaryCtx: {
       message: {
@@ -62,6 +90,8 @@ export async function buildTelegramMessageContextForTest(
       me: { id: 7, username: "bot" },
     } as never,
     allMedia: params.allMedia ?? [],
+    replyChain: params.replyChain ?? [],
+    promptContext: params.promptContext ?? [],
     storeAllowFrom: [],
     options: params.options ?? {},
     bot: {
@@ -72,40 +102,35 @@ export async function buildTelegramMessageContextForTest(
       },
     } as never,
     cfg: (params.cfg ?? baseTelegramMessageContextConfig) as never,
-    loadFreshConfig: () => (params.cfg ?? baseTelegramMessageContextConfig) as never,
     runtime: {
       recordChannelActivity: () => undefined,
-      ...params.runtime,
     },
     sessionRuntime,
-    account: { accountId: params.accountId ?? "default" } as never,
+    account: { accountId: "default" } as never,
     historyLimit: params.historyLimit ?? 0,
-    groupHistories: params.groupHistories ?? new Map(),
+    dmHistoryLimit: 10,
     dmPolicy: "open",
     allowFrom: ["*"],
     groupAllowFrom: [],
-    ackReactionScope: params.ackReactionScope ?? "off",
+    ackReactionScope: "off",
     logger: { info: vi.fn() },
     resolveGroupActivation: params.resolveGroupActivation ?? (() => undefined),
-    resolveGroupRequireMention: params.resolveGroupRequireMention ?? (() => false),
+    resolveGroupRequireMention: () => false,
     resolveTelegramGroupConfig:
       params.resolveTelegramGroupConfig ??
       (() => ({
         groupConfig: { requireMention: false },
         topicConfig: undefined,
       })),
-    sendChatActionHandler: { sendChatAction: vi.fn() } as never,
+    sendChatActionHandler: params.sendChatActionHandler ?? ({ sendChatAction: vi.fn() } as never),
   });
 }
 
 let buildTelegramMessageContextLoader:
   | typeof import("./bot-message-context.js").buildTelegramMessageContext
   | undefined;
-let vitestModuleLoader: Promise<typeof import("vitest")> | undefined;
-let messageContextMocksInstalled = false;
 
 async function loadBuildTelegramMessageContext() {
-  await installMessageContextTestMocks();
   if (!buildTelegramMessageContextLoader) {
     ({ buildTelegramMessageContext: buildTelegramMessageContextLoader } =
       await import("./bot-message-context.js"));
@@ -113,14 +138,4 @@ async function loadBuildTelegramMessageContext() {
   return buildTelegramMessageContextLoader;
 }
 
-async function loadVitestModule() {
-  vitestModuleLoader ??= import("vitest");
-  return await vitestModuleLoader;
-}
-
-async function installMessageContextTestMocks() {
-  if (messageContextMocksInstalled) {
-    return;
-  }
-  messageContextMocksInstalled = true;
-}
+const loadVitestModule = createLazyRuntimeModule(() => import("vitest"));

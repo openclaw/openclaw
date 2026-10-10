@@ -1,62 +1,46 @@
-import type { TSchema } from "typebox";
+import { isDeepStrictEqual } from "node:util";
 import {
   cleanSchemaForGemini,
+  cleanSchemaForLlamacppGbnf,
+  findLlamacppGbnfSchemaViolations,
+  findOpenAIStrictSchemaViolations,
   GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS,
-} from "../agents/schema/clean-for-gemini.js";
+  normalizeOpenAIStrictCompatSchema,
+  stripUnsupportedSchemaKeywords,
+} from "@openclaw/ai/internal/tool-schema";
+import { isRecord as isSchemaRecord } from "@openclaw/normalization-core/record-coerce";
+// Provider tool helpers expose shared tool-call payload contracts for provider plugins.
+import type { TSchema } from "typebox";
+import {
+  mergeLiteralSchemas,
+  readLiteralSchemaValues,
+  schemaAnnotationsOnly,
+} from "../shared/json-schema-literals.js";
 import type {
   AnyAgentTool,
   ProviderNormalizeToolSchemasContext,
   ProviderToolSchemaDiagnostic,
 } from "./plugin-entry.js";
 
-// Shared provider-tool helpers for plugin-owned schema compatibility rewrites.
-export { cleanSchemaForGemini, GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS };
+export {
+  normalizeOpenAIStrictCompatSchema,
+  cleanSchemaForGemini,
+  cleanSchemaForLlamacppGbnf,
+  findLlamacppGbnfSchemaViolations,
+  findOpenAIStrictSchemaViolations,
+  GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS,
+  stripUnsupportedSchemaKeywords,
+};
 
-export function stripUnsupportedSchemaKeywords(
-  schema: unknown,
-  unsupportedKeywords: ReadonlySet<string>,
-): unknown {
-  if (!schema || typeof schema !== "object") {
-    return schema;
-  }
-  if (Array.isArray(schema)) {
-    return schema.map((entry) => stripUnsupportedSchemaKeywords(entry, unsupportedKeywords));
-  }
-  const obj = schema as Record<string, unknown>;
-  const cleaned: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(obj)) {
-    if (unsupportedKeywords.has(key)) {
-      continue;
-    }
-    if (key === "properties" && value && typeof value === "object" && !Array.isArray(value)) {
-      cleaned[key] = Object.fromEntries(
-        Object.entries(value as Record<string, unknown>).map(([childKey, childValue]) => [
-          childKey,
-          stripUnsupportedSchemaKeywords(childValue, unsupportedKeywords),
-        ]),
-      );
-      continue;
-    }
-    if (key === "items" && value && typeof value === "object") {
-      cleaned[key] = Array.isArray(value)
-        ? value.map((entry) => stripUnsupportedSchemaKeywords(entry, unsupportedKeywords))
-        : stripUnsupportedSchemaKeywords(value, unsupportedKeywords);
-      continue;
-    }
-    if ((key === "anyOf" || key === "oneOf" || key === "allOf") && Array.isArray(value)) {
-      cleaned[key] = value.map((entry) =>
-        stripUnsupportedSchemaKeywords(entry, unsupportedKeywords),
-      );
-      continue;
-    }
-    cleaned[key] = value;
-  }
-  return cleaned;
-}
-
+/**
+ * Finds unsupported JSON-schema keywords and reports their nested schema paths.
+ */
 export function findUnsupportedSchemaKeywords(
+  /** JSON schema node to inspect recursively. */
   schema: unknown,
+  /** Dot/bracket path prefix used in returned diagnostics. */
   path: string,
+  /** Schema keywords unsupported by the target provider family. */
   unsupportedKeywords: ReadonlySet<string>,
 ): string[] {
   if (!schema || typeof schema !== "object") {
@@ -69,12 +53,8 @@ export function findUnsupportedSchemaKeywords(
   }
   const record = schema as Record<string, unknown>;
   const violations: string[] = [];
-  const properties =
-    record.properties && typeof record.properties === "object" && !Array.isArray(record.properties)
-      ? (record.properties as Record<string, unknown>)
-      : undefined;
-  if (properties) {
-    for (const [key, value] of Object.entries(properties)) {
+  if (isSchemaRecord(record.properties)) {
+    for (const [key, value] of Object.entries(record.properties)) {
       violations.push(
         ...findUnsupportedSchemaKeywords(value, `${path}.properties.${key}`, unsupportedKeywords),
       );
@@ -96,7 +76,39 @@ export function findUnsupportedSchemaKeywords(
   return violations;
 }
 
+function normalizeToolSchemasIfChanged(
+  ctx: ProviderNormalizeToolSchemasContext,
+  normalizeSchema: (schema: unknown) => unknown,
+): AnyAgentTool[] {
+  return ctx.tools.map((tool) => {
+    if (!tool.parameters || typeof tool.parameters !== "object") {
+      return tool;
+    }
+    const parameters = normalizeSchema(tool.parameters);
+    return parameters === tool.parameters
+      ? tool
+      : {
+          ...tool,
+          parameters: parameters as TSchema,
+        };
+  });
+}
+
+function inspectToolSchemas(
+  ctx: ProviderNormalizeToolSchemasContext,
+  inspect: (schema: unknown, path: string) => string[],
+): ProviderToolSchemaDiagnostic[] {
+  return ctx.tools.flatMap((tool, toolIndex) => {
+    const violations = inspect(tool.parameters, `${tool.name}.parameters`);
+    return violations.length > 0 ? [{ toolName: tool.name, toolIndex, violations }] : [];
+  });
+}
+
+/**
+ * Rewrites tool schemas into Gemini-compatible JSON schema before provider dispatch.
+ */
 export function normalizeGeminiToolSchemas(
+  /** Provider tool-schema normalization context containing the active tool list. */
   ctx: ProviderNormalizeToolSchemasContext,
 ): AnyAgentTool[] {
   return ctx.tools.map((tool) => {
@@ -110,49 +122,51 @@ export function normalizeGeminiToolSchemas(
   });
 }
 
+/**
+ * Reports Gemini-incompatible schema keywords without mutating tool definitions.
+ */
 export function inspectGeminiToolSchemas(
+  /** Provider tool-schema inspection context containing the active tool list. */
   ctx: ProviderNormalizeToolSchemasContext,
 ): ProviderToolSchemaDiagnostic[] {
-  return ctx.tools.flatMap((tool, toolIndex) => {
-    const violations = findUnsupportedSchemaKeywords(
-      tool.parameters,
-      `${tool.name}.parameters`,
-      GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS,
-    );
-    if (violations.length === 0) {
-      return [];
-    }
-    return [{ toolName: tool.name, toolIndex, violations }];
-  });
+  return inspectToolSchemas(ctx, (schema, path) =>
+    findUnsupportedSchemaKeywords(schema, path, GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS),
+  );
 }
 
+/** Rewrites tool schemas into the JSON Schema subset accepted by llama.cpp GBNF. */
+export function normalizeLlamacppGbnfToolSchemas(
+  ctx: ProviderNormalizeToolSchemasContext,
+): AnyAgentTool[] {
+  return normalizeToolSchemasIfChanged(ctx, cleanSchemaForLlamacppGbnf);
+}
+
+/** Reports tool-schema constraints that llama.cpp GBNF cannot compile. */
+export function inspectLlamacppGbnfToolSchemas(
+  ctx: ProviderNormalizeToolSchemasContext,
+): ProviderToolSchemaDiagnostic[] {
+  return inspectToolSchemas(ctx, findLlamacppGbnfSchemaViolations);
+}
+
+/**
+ * Rewrites OpenAI-native tool schemas to satisfy strict object-schema requirements.
+ */
 export function normalizeOpenAIToolSchemas(
+  /** Provider tool-schema normalization context used to detect native OpenAI strict routes. */
   ctx: ProviderNormalizeToolSchemasContext,
 ): AnyAgentTool[] {
   if (!shouldApplyOpenAIToolCompat(ctx)) {
     return ctx.tools;
   }
   return ctx.tools.map((tool) => {
-    if (tool.parameters == null) {
-      return {
-        ...tool,
-        parameters: normalizeOpenAIStrictCompatSchema({}),
-      };
-    }
-    if (typeof tool.parameters !== "object") {
+    if (tool.parameters != null && typeof tool.parameters !== "object") {
       return tool;
     }
     return {
       ...tool,
-      parameters: normalizeOpenAIStrictCompatSchema(tool.parameters),
+      parameters: normalizeOpenAIStrictCompatSchema(tool.parameters ?? {}),
     };
   });
-}
-
-function normalizeOpenAIStrictCompatSchema(schema: unknown): TSchema {
-  return normalizeOpenAIStrictCompatSchemaRecursive(schema, {
-    promoteEmptyObject: true,
-  }) as TSchema;
 }
 
 function shouldApplyOpenAIToolCompat(ctx: ProviderNormalizeToolSchemasContext): boolean {
@@ -161,11 +175,15 @@ function shouldApplyOpenAIToolCompat(ctx: ProviderNormalizeToolSchemasContext): 
   const baseUrl = (ctx.model?.baseUrl ?? "").trim().toLowerCase();
 
   if (provider === "openai") {
-    return api === "openai-responses" && (!baseUrl || isOpenAIResponsesBaseUrl(baseUrl));
-  }
-  if (provider === "openai-codex") {
+    if (api === "openai-responses") {
+      // Strict-schema normalization is only safe for the native OpenAI endpoint;
+      // OpenAI-compatible proxies may accept broader schemas or define their own rules.
+      return !baseUrl || isOpenAIResponsesBaseUrl(baseUrl);
+    }
     return (
-      api === "openai-codex-responses" &&
+      api === "openai-chatgpt-responses" &&
+      // Codex/ChatGPT Responses uses the same strict object-schema contract as native
+      // OpenAI Responses, but only on the known first-party backend URLs.
       (!baseUrl || isOpenAIResponsesBaseUrl(baseUrl) || isOpenAICodexBaseUrl(baseUrl))
     );
   }
@@ -180,210 +198,11 @@ function isOpenAICodexBaseUrl(baseUrl: string): boolean {
   return /^https:\/\/chatgpt\.com\/backend-api(?:\/|$)/i.test(baseUrl);
 }
 
-type NormalizeOpenAIStrictCompatOptions = {
-  promoteEmptyObject: boolean;
-};
-
-const OPENAI_STRICT_COMPAT_SCHEMA_MAP_KEYS = new Set([
-  "$defs",
-  "definitions",
-  "dependentSchemas",
-  "patternProperties",
-  "properties",
-]);
-
-const OPENAI_STRICT_COMPAT_SCHEMA_NESTED_KEYS = new Set([
-  "additionalProperties",
-  "allOf",
-  "anyOf",
-  "contains",
-  "else",
-  "if",
-  "items",
-  "not",
-  "oneOf",
-  "prefixItems",
-  "propertyNames",
-  "then",
-  "unevaluatedItems",
-  "unevaluatedProperties",
-]);
-
-function normalizeOpenAIStrictCompatSchemaMap(schema: unknown): unknown {
-  if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
-    return schema;
-  }
-
-  let changed = false;
-  const normalized: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(schema as Record<string, unknown>)) {
-    const next = normalizeOpenAIStrictCompatSchemaRecursive(value, {
-      promoteEmptyObject: false,
-    });
-    normalized[key] = next;
-    changed ||= next !== value;
-  }
-  return changed ? normalized : schema;
-}
-
-function normalizeOpenAIStrictCompatSchemaRecursive(
-  schema: unknown,
-  options: NormalizeOpenAIStrictCompatOptions,
-): unknown {
-  if (Array.isArray(schema)) {
-    let changed = false;
-    const normalized = schema.map((entry) => {
-      const next = normalizeOpenAIStrictCompatSchemaRecursive(entry, {
-        promoteEmptyObject: false,
-      });
-      changed ||= next !== entry;
-      return next;
-    });
-    return changed ? normalized : schema;
-  }
-  if (!schema || typeof schema !== "object") {
-    return schema;
-  }
-
-  const record = schema as Record<string, unknown>;
-  let changed = false;
-  const normalized: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(record)) {
-    const next = OPENAI_STRICT_COMPAT_SCHEMA_MAP_KEYS.has(key)
-      ? normalizeOpenAIStrictCompatSchemaMap(value)
-      : OPENAI_STRICT_COMPAT_SCHEMA_NESTED_KEYS.has(key)
-        ? normalizeOpenAIStrictCompatSchemaRecursive(value, {
-            promoteEmptyObject: false,
-          })
-        : value;
-    normalized[key] = next;
-    changed ||= next !== value;
-  }
-
-  if (Object.keys(normalized).length === 0) {
-    if (!options.promoteEmptyObject) {
-      return schema;
-    }
-    return {
-      type: "object",
-      properties: {},
-      required: [],
-      additionalProperties: false,
-    };
-  }
-
-  const hasObjectShapeHints =
-    !("type" in normalized) &&
-    ((normalized.properties &&
-      typeof normalized.properties === "object" &&
-      !Array.isArray(normalized.properties)) ||
-      Array.isArray(normalized.required));
-  if (hasObjectShapeHints) {
-    normalized.type = "object";
-    changed = true;
-  }
-  if (normalized.type === "object" && !("properties" in normalized)) {
-    normalized.properties = {};
-    changed = true;
-  }
-
-  const hasEmptyProperties =
-    normalized.properties &&
-    typeof normalized.properties === "object" &&
-    !Array.isArray(normalized.properties) &&
-    Object.keys(normalized.properties as Record<string, unknown>).length === 0;
-
-  if (normalized.type === "object" && !Array.isArray(normalized.required) && hasEmptyProperties) {
-    normalized.required = [];
-    changed = true;
-  }
-
-  if (
-    normalized.type === "object" &&
-    hasEmptyProperties &&
-    !("additionalProperties" in normalized)
-  ) {
-    normalized.additionalProperties = false;
-    changed = true;
-  }
-
-  return changed ? normalized : schema;
-}
-
-export function findOpenAIStrictSchemaViolations(
-  schema: unknown,
-  path: string,
-  options?: { requireObjectRoot?: boolean },
-): string[] {
-  if (Array.isArray(schema)) {
-    if (options?.requireObjectRoot) {
-      return [`${path}.type`];
-    }
-    return schema.flatMap((item, index) =>
-      findOpenAIStrictSchemaViolations(item, `${path}[${index}]`),
-    );
-  }
-  if (!schema || typeof schema !== "object") {
-    if (options?.requireObjectRoot) {
-      return [`${path}.type`];
-    }
-    return [];
-  }
-
-  const record = schema as Record<string, unknown>;
-  const violations: string[] = [];
-  for (const key of ["anyOf", "oneOf", "allOf"] as const) {
-    if (Array.isArray(record[key])) {
-      violations.push(`${path}.${key}`);
-    }
-  }
-  if (Array.isArray(record.type)) {
-    violations.push(`${path}.type`);
-  }
-
-  const properties =
-    record.properties && typeof record.properties === "object" && !Array.isArray(record.properties)
-      ? (record.properties as Record<string, unknown>)
-      : undefined;
-
-  if (record.type === "object") {
-    if (record.additionalProperties !== false) {
-      violations.push(`${path}.additionalProperties`);
-    }
-    const required = Array.isArray(record.required)
-      ? record.required.filter((entry): entry is string => typeof entry === "string")
-      : undefined;
-    if (!required) {
-      violations.push(`${path}.required`);
-    } else if (properties) {
-      const requiredSet = new Set(required);
-      for (const key of Object.keys(properties)) {
-        if (!requiredSet.has(key)) {
-          violations.push(`${path}.required.${key}`);
-        }
-      }
-    }
-  }
-
-  if (properties) {
-    for (const [key, value] of Object.entries(properties)) {
-      violations.push(...findOpenAIStrictSchemaViolations(value, `${path}.properties.${key}`));
-    }
-  }
-
-  for (const [key, value] of Object.entries(record)) {
-    if (key === "properties") {
-      continue;
-    }
-    if (value && typeof value === "object") {
-      violations.push(...findOpenAIStrictSchemaViolations(value, `${path}.${key}`));
-    }
-  }
-
-  return violations;
-}
-
+/**
+ * Reports OpenAI strict-schema diagnostics for transports that enforce them before dispatch.
+ */
 export function inspectOpenAIToolSchemas(
+  /** Provider tool-schema inspection context used to detect native OpenAI strict routes. */
   ctx: ProviderNormalizeToolSchemasContext,
 ): ProviderToolSchemaDiagnostic[] {
   if (!shouldApplyOpenAIToolCompat(ctx)) {
@@ -394,17 +213,263 @@ export function inspectOpenAIToolSchemas(
   return [];
 }
 
-export type ProviderToolCompatFamily = "gemini" | "openai";
+/**
+ * DeepSeek rejects union keywords in tool schemas.
+ */
+export const DEEPSEEK_UNSUPPORTED_SCHEMA_KEYWORDS = new Set(["anyOf", "oneOf"]);
 
-export function buildProviderToolCompatFamilyHooks(family: ProviderToolCompatFamily): {
+function isNullSchemaVariant(schema: unknown): boolean {
+  if (!isSchemaRecord(schema)) {
+    return false;
+  }
+  return (
+    schema.type === "null" ||
+    (Array.isArray(schema.type) && schema.type.length === 1 && schema.type[0] === "null") ||
+    schema.const === null ||
+    (Array.isArray(schema.enum) && schema.enum.length === 1 && schema.enum[0] === null)
+  );
+}
+
+function normalizeDeepSeekSchema(schema: unknown): unknown {
+  if (Array.isArray(schema)) {
+    let changed = false;
+    const normalized = schema.map((entry) => {
+      const next = normalizeDeepSeekSchema(entry);
+      changed ||= next !== entry;
+      return next;
+    });
+    return changed ? normalized : schema;
+  }
+  if (!schema || typeof schema !== "object") {
+    return schema;
+  }
+
+  const record = schema as Record<string, unknown>;
+  const unionKey = Array.isArray(record.anyOf)
+    ? "anyOf"
+    : Array.isArray(record.oneOf)
+      ? "oneOf"
+      : undefined;
+
+  let changed = unionKey !== undefined;
+  const normalized = Object.fromEntries(
+    Object.entries(record)
+      .filter(([key]) => key !== unionKey)
+      .map(([key, value]) => {
+        const next = normalizeDeepSeekSchema(value);
+        changed ||= next !== value;
+        return [key, next];
+      }),
+  );
+
+  if (!unionKey) {
+    return changed ? normalized : schema;
+  }
+
+  const variants = record[unionKey] as unknown[];
+  const normalizedVariants = variants.map((entry) => normalizeDeepSeekSchema(entry));
+  const nonNullVariants = normalizedVariants.filter((entry) => !isNullSchemaVariant(entry));
+  const hasNullVariant =
+    nonNullVariants.length < normalizedVariants.length ||
+    nonNullVariants.some((entry) => {
+      if (
+        !isObjectSchemaVariant(entry) ||
+        !Array.isArray(entry.type) ||
+        !entry.type.includes("null")
+      ) {
+        return false;
+      }
+      const literals = readLiteralSchemaValues(entry);
+      return literals === undefined || literals.includes(null);
+    });
+
+  // Keep every string literal selectable when flattening the unsupported union.
+  if (nonNullVariants.length > 1 && nonNullVariants.every(isStringConstVariant)) {
+    return {
+      ...normalized,
+      type: "string",
+      enum: nonNullVariants.map((entry) => entry.const),
+      ...(hasNullVariant ? { nullable: true } : {}),
+    };
+  }
+
+  // Selecting the first object would make valid later branches fail local validation.
+  const selected =
+    nonNullVariants.length > 1 && nonNullVariants.every(isObjectSchemaVariant)
+      ? (flattenObjectVariants(nonNullVariants) ?? nonNullVariants[0])
+      : (nonNullVariants[0] ?? normalizedVariants[0]);
+  if (!isSchemaRecord(selected)) {
+    return normalized;
+  }
+
+  const nullableObject =
+    hasNullVariant && nonNullVariants.length > 0 && nonNullVariants.every(isObjectSchemaVariant);
+  let selectedSchema = selected;
+  if (nullableObject) {
+    // Lift branch constraints before applying the outer schema's restrictions.
+    selectedSchema = { ...selected, type: ["object", "null"] };
+    const literals = readLiteralSchemaValues(selected);
+    if (literals) {
+      selectedSchema.enum = literals.includes(null) ? literals : [...literals, null];
+      delete selectedSchema.const;
+    }
+  }
+  const merged = {
+    ...selectedSchema,
+    ...normalized,
+  };
+  if (hasNullVariant && !nullableObject) {
+    merged.nullable = true;
+  }
+  return merged;
+}
+
+function isStringConstVariant(entry: unknown): entry is { const: string } {
+  return isSchemaRecord(entry) && typeof entry.const === "string";
+}
+
+function isObjectSchemaVariant(entry: unknown): entry is Record<string, unknown> {
+  return (
+    isSchemaRecord(entry) &&
+    (entry.type === "object" ||
+      (Array.isArray(entry.type) &&
+        entry.type.includes("object") &&
+        entry.type.every((type) => type === "object" || type === "null")))
+  );
+}
+
+// Union properties and intersect required keys so every branch remains expressible.
+// Pool discriminating literals; retain the first conflicting non-literal constraint.
+function flattenObjectVariants(
+  variants: Record<string, unknown>[],
+): Record<string, unknown> | undefined {
+  // SAFETY: Object.create(null) is typed as any; every key written below is a schema keyword string.
+  const properties: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  let required: string[] | undefined;
+  for (const variant of variants) {
+    const variantProperties = variant.properties;
+    if (!isSchemaRecord(variantProperties)) {
+      return undefined;
+    }
+    for (const [key, value] of Object.entries(variantProperties)) {
+      // Schema properties may be named `constructor` or `toString`.
+      if (!Object.hasOwn(properties, key)) {
+        properties[key] = value;
+        continue;
+      }
+      const existing = properties[key];
+      if (isDeepStrictEqual(existing, value)) {
+        continue;
+      }
+      const pooled =
+        isSchemaRecord(existing) && isSchemaRecord(value)
+          ? mergeLiteralSchemas(existing, value)
+          : undefined;
+      if (pooled) {
+        properties[key] = pooled;
+      }
+      // Otherwise keep the first definition. Widening it would mean putting a
+      // union keyword back, which is the one thing DeepSeek will not accept.
+    }
+    const variantRequired = Array.isArray(variant.required)
+      ? variant.required.filter((key): key is string => typeof key === "string")
+      : [];
+    required =
+      required === undefined
+        ? variantRequired
+        : required.filter((key) => variantRequired.includes(key));
+  }
+  // Undeclared keys accepted by another branch must retain annotations without constraints.
+  for (const key of Object.keys(properties)) {
+    if (variants.some((variant) => acceptsUndeclaredKey(variant, key))) {
+      properties[key] = schemaAnnotationsOnly(properties[key]);
+    }
+  }
+  const flattened: Record<string, unknown> = { type: "object", properties };
+  if (required && required.length > 0) {
+    flattened.required = required;
+  }
+  return flattened;
+}
+
+// Pattern properties can accept an undeclared key even with additionalProperties: false.
+function acceptsUndeclaredKey(variant: Record<string, unknown>, key: string): boolean {
+  const declared = variant.properties;
+  if (isSchemaRecord(declared) && Object.hasOwn(declared, key)) {
+    return false;
+  }
+  if (variant.additionalProperties !== false) {
+    return true;
+  }
+  const patternProperties = variant.patternProperties;
+  if (!isSchemaRecord(patternProperties)) {
+    return false;
+  }
+  return Object.keys(patternProperties).some((pattern) => {
+    try {
+      return new RegExp(pattern).test(key);
+    } catch {
+      // An uncompilable pattern covers nothing, so it cannot widen acceptance
+      // and must not make the merge throw.
+      return false;
+    }
+  });
+}
+
+/**
+ * Rewrites DeepSeek-incompatible union schemas into the closest accepted shape.
+ */
+export function normalizeDeepSeekToolSchemas(
+  /** Provider tool-schema normalization context containing the active tool list. */
+  ctx: ProviderNormalizeToolSchemasContext,
+): AnyAgentTool[] {
+  return normalizeToolSchemasIfChanged(ctx, normalizeDeepSeekSchema);
+}
+
+/**
+ * Reports DeepSeek-incompatible union schema paths without mutating tool definitions.
+ */
+export function inspectDeepSeekToolSchemas(
+  /** Provider tool-schema inspection context containing the active tool list. */
+  ctx: ProviderNormalizeToolSchemasContext,
+): ProviderToolSchemaDiagnostic[] {
+  return inspectToolSchemas(ctx, (schema, path) =>
+    findUnsupportedSchemaKeywords(schema, path, DEEPSEEK_UNSUPPORTED_SCHEMA_KEYWORDS),
+  );
+}
+
+/**
+ * Supported provider tool-schema compatibility families.
+ */
+export type ProviderToolCompatFamily = "deepseek" | "gemini" | "llamacpp-gbnf" | "openai";
+
+/**
+ * Returns the normalizer and inspector pair for a provider tool-schema compatibility family.
+ */
+export function buildProviderToolCompatFamilyHooks(
+  /** Provider tool-schema compatibility family to route to normalizer/inspector hooks. */
+  family: ProviderToolCompatFamily,
+): {
+  /** Mutating-compatible hook that returns tool definitions accepted by the provider family. */
   normalizeToolSchemas: (ctx: ProviderNormalizeToolSchemasContext) => AnyAgentTool[];
+  /** Non-mutating hook that reports provider-family schema incompatibilities. */
   inspectToolSchemas: (ctx: ProviderNormalizeToolSchemasContext) => ProviderToolSchemaDiagnostic[];
 } {
   switch (family) {
+    case "deepseek":
+      return {
+        normalizeToolSchemas: normalizeDeepSeekToolSchemas,
+        inspectToolSchemas: inspectDeepSeekToolSchemas,
+      };
     case "gemini":
       return {
         normalizeToolSchemas: normalizeGeminiToolSchemas,
         inspectToolSchemas: inspectGeminiToolSchemas,
+      };
+    case "llamacpp-gbnf":
+      return {
+        normalizeToolSchemas: normalizeLlamacppGbnfToolSchemas,
+        inspectToolSchemas: inspectLlamacppGbnfToolSchemas,
       };
     case "openai":
       return {

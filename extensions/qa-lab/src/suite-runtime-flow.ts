@@ -2,233 +2,378 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { resolveModelRefFromString } from "openclaw/plugin-sdk/agent-runtime";
+import { formatErrorMessage as formatQaErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-host-core";
-import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { buildAgentSessionKey, resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { extractToolPayload as extractQaToolPayload } from "openclaw/plugin-sdk/tool-payload";
+import * as browserRuntime from "./browser-runtime.js";
+import * as cronRunWait from "./cron-run-wait.js";
+import * as discoveryEval from "./discovery-eval.js";
+import { QaSuiteScenarioSkipError } from "./errors.js";
 import {
-  callQaBrowserRequest,
-  qaBrowserAct,
-  qaBrowserOpenTab,
-  qaBrowserSnapshot,
-  waitForQaBrowserReady,
-} from "./browser-runtime.js";
-import { waitForCronRunCompletion } from "./cron-run-wait.js";
-import {
-  hasDiscoveryLabels,
-  reportsDiscoveryScopeLeak,
-  reportsMissingDiscoveryFiles,
-} from "./discovery-eval.js";
-import { extractQaToolPayload } from "./extract-tool-payload.js";
+  inspectQaExecutionIdentityStorage,
+  readNativeQaSubagentRuns,
+} from "./execution-identity-storage-inspection.js";
 import { assertNoGatewayLogSentinels, scanGatewayLogSentinels } from "./gateway-log-sentinel.js";
-import { hasModelSwitchContinuityEvidence } from "./model-switch-eval.js";
-import { qaChannelPlugin } from "./runtime-api.js";
-import { runRuntimeToolFixture } from "./runtime-tool-fixture.js";
+import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
+import { splitQaModelRef } from "./model-selection.js";
+import * as modelSwitchEval from "./model-switch-eval.js";
+import { runQaCli } from "./qa-cli-process.js";
+import * as runtimeToolFixture from "./runtime-tool-fixture.js";
+import {
+  formatToolSearchDiscoveryReceipt,
+  requireToolSearchDiscoveryEvidence,
+} from "./runtime-tool-search-evidence.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
-import { createQaScenarioRuntimeApi, type QaScenarioRuntimeEnv } from "./scenario-runtime-api.js";
+import { runScenarioFlow } from "./scenario-flow-runner.js";
+import { createQaScenarioRuntimeApi } from "./scenario-runtime-api.js";
+import * as suiteRuntimeAgentMedia from "./suite-runtime-agent-media.js";
+import * as suiteRuntimeAgentProcess from "./suite-runtime-agent-process.js";
+import * as suiteRuntimeAgentSession from "./suite-runtime-agent-session.js";
 import {
   callPluginToolsMcp,
-  createSession,
-  ensureImageGenerationConfigured,
-  extractMediaPathFromText,
   findSkill,
-  forceMemoryIndex,
-  findManagedDreamingCronJob,
   handleQaAction,
-  listCronJobs,
-  readDoctorMemoryStatus,
-  readEffectiveTools,
-  readRawQaSessionStore,
-  readSessionTranscriptSummary,
-  readSkillStatus,
-  resolveGeneratedImagePath,
-  runAgentPrompt,
-  runQaCli,
-  startAgentRun,
-  waitForAgentRun,
   writeWorkspaceSkill,
-} from "./suite-runtime-agent.js";
-import {
-  applyConfig,
-  fetchJson,
-  patchConfig,
-  readConfigSnapshot,
-  waitForConfigRestartSettle,
-  waitForGatewayHealthy,
-  waitForQaChannelReady,
-  waitForTransportReady,
-} from "./suite-runtime-gateway.js";
-import {
-  formatConversationTranscript,
-  formatTransportTranscript,
-  readTransportTranscript,
-  recentOutboundSummary,
-  waitForChannelOutboundMessage,
-  waitForNoOutbound,
-  waitForNoTransportOutbound,
-  waitForOutboundMessage,
-  waitForTransportOutboundMessage,
-} from "./suite-runtime-transport.js";
+} from "./suite-runtime-agent-tools.js";
+import * as suiteRuntimeGateway from "./suite-runtime-gateway.js";
+import * as suiteRuntimeTransport from "./suite-runtime-transport.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
-import {
-  qaWebEvaluate,
-  qaWebOpenPage,
-  qaWebSnapshot,
-  qaWebType,
-  qaWebWait,
-} from "./web-runtime.js";
+import type { QaSuiteScenarioResult, QaSuiteStep } from "./suite-types.js";
+import { resolveQaGatewayTimeoutWithGraceMs } from "./timer-timeouts.js";
+import { projectQaToolMessages } from "./tool-activity.js";
+import * as webRuntime from "./web-runtime.js";
 
 type QaSuiteScenarioFlowEnv = {
   lab: unknown;
   webSessionIds: Set<string>;
-  transport: QaSuiteRuntimeEnv["transport"] & QaScenarioRuntimeEnv["transport"];
-} & Omit<QaSuiteRuntimeEnv, "transport">;
+} & QaSuiteRuntimeEnv;
 
-type QaSuiteStep = {
-  name: string;
-  run: () => Promise<string | void>;
+const qaSuiteScenarioIdentityDeps = {
+  fs,
+  path,
+  sleep,
+  randomUUID,
+  projectQaToolMessages,
+  ...suiteRuntimeAgentMedia,
+  ...suiteRuntimeAgentProcess,
+  ...suiteRuntimeAgentSession,
+  callPluginToolsMcp,
+  findSkill,
+  handleQaAction,
+  writeWorkspaceSkill,
+  runQaCli,
+  inspectQaExecutionIdentityStorage,
+  readNativeQaSubagentRuns,
+  ...suiteRuntimeGateway,
+  ...suiteRuntimeTransport,
+  extractQaToolPayload,
+  waitForCronRunCompletion: cronRunWait.waitForCronRunCompletion,
+  hasDiscoveryLabels: discoveryEval.hasDiscoveryLabels,
+  reportsDiscoveryScopeLeak: discoveryEval.reportsDiscoveryScopeLeak,
+  reportsMissingDiscoveryFiles: discoveryEval.reportsMissingDiscoveryFiles,
+  hasModelSwitchContinuitySignal: modelSwitchEval.hasModelSwitchContinuitySignal,
+  formatMemoryDreamingDay,
+  resolveSessionTranscriptsDirForAgent,
+  buildAgentSessionKey,
+  resolveAgentRoute,
+  normalizeLowercaseStringOrEmpty,
+  formatToolSearchDiscoveryReceipt,
+  requireToolSearchDiscoveryEvidence,
 };
 
-type QaSuiteScenarioResult = {
-  name: string;
-  status: "pass" | "fail";
-  steps: Array<{
-    name: string;
-    status: "pass" | "fail" | "skip";
-    details?: string;
-  }>;
-  details?: string;
-};
+export async function runQaSuiteScenarioSteps(
+  name: string,
+  steps: QaSuiteStep[],
+): Promise<QaSuiteScenarioResult> {
+  const result: QaSuiteScenarioResult = { name, status: "pass", steps: [] };
+  for (const step of steps) {
+    try {
+      const outcome = await step.run();
+      const details = outcome?.details;
+      if (outcome?.timing) {
+        result.timing ??= {};
+        Object.assign(result.timing, outcome.timing);
+      }
+      if (outcome?.rttMeasurement) {
+        result.rttMeasurement = outcome.rttMeasurement;
+      }
+      if (result.rttMeasurement) {
+        result.timing ??= {};
+        result.timing.rttMs = result.rttMeasurement.finalMatchedReplyRttMs;
+      }
+      result.steps.push({
+        name: step.name,
+        status: "pass",
+        ...(details ? { details } : {}),
+      });
+    } catch (error) {
+      const details = formatQaErrorMessage(error);
+      const status = error instanceof QaSuiteScenarioSkipError ? "skip" : "fail";
+      result.steps.push({ name: step.name, status, details });
+      result.status = status;
+      result.details = details;
+      break;
+    }
+  }
+  return result;
+}
 
 type QaSuiteScenarioDepsParams = {
   env: QaSuiteScenarioFlowEnv;
   runScenario: (name: string, steps: QaSuiteStep[]) => Promise<QaSuiteScenarioResult>;
-  splitModelRef: (ref: string) => { provider: string; model: string } | null;
-  formatErrorMessage: (error: unknown) => string;
-  liveTurnTimeoutMs: (
-    env: Pick<QaSuiteRuntimeEnv, "providerMode" | "primaryModel" | "alternateModel">,
-    fallbackMs: number,
-  ) => number;
-  resolveQaLiveTurnTimeoutMs: (
-    env: Pick<QaSuiteRuntimeEnv, "providerMode" | "primaryModel" | "alternateModel">,
-    fallbackMs: number,
-  ) => number;
 };
 
 type QaSuiteScenarioFlowApiParams = QaSuiteScenarioDepsParams & {
   scenario: QaSeedScenarioWithSource;
-  constants: {
-    imageUnderstandingPngBase64: string;
-    imageUnderstandingLargePngBase64: string;
-    imageUnderstandingValidPngBase64: string;
-  };
+  constants: Parameters<typeof createQaScenarioRuntimeApi>[0]["constants"];
 };
 
-function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
+function createQaSuiteScenarioDeps(
+  params: QaSuiteScenarioDepsParams,
+  webOpenPage: ReturnType<typeof webRuntime.createQaWebPageOpener>,
+) {
+  const waitForAccountOutboundMessage: typeof suiteRuntimeTransport.waitForOutboundMessage = (
+    state,
+    predicate,
+    timeoutMs,
+    options,
+  ) =>
+    suiteRuntimeTransport.waitForOutboundMessage(state, predicate, timeoutMs, {
+      ...options,
+      accountId: params.env.transport.accountId,
+    });
+  const markLogs = params.env.gateway.markLogs;
+  const readLogsSince = params.env.gateway.readLogsSince;
+  let monotonicGatewayLogs =
+    typeof markLogs === "function" && typeof readLogsSince === "function"
+      ? { mark: markLogs, readSince: readLogsSince }
+      : undefined;
+  const isValidGatewayLogMark = (mark: number | undefined): mark is number =>
+    Number.isSafeInteger(mark) && (mark ?? -1) >= 0;
+  const fullLegacyGatewayLogSnapshotMark = -1;
+  const readGatewayLogs = (mark?: number) => {
+    if (monotonicGatewayLogs && isValidGatewayLogMark(mark)) {
+      return monotonicGatewayLogs.readSince(mark);
+    }
+    return params.env.gateway.logs?.() ?? "";
+  };
   return {
-    fs,
-    path,
-    sleep,
-    randomUUID,
+    ...qaSuiteScenarioIdentityDeps,
     runScenario: params.runScenario,
-    waitForOutboundMessage,
-    waitForTransportOutboundMessage,
-    waitForChannelOutboundMessage,
-    waitForNoOutbound,
-    waitForNoTransportOutbound,
-    recentOutboundSummary,
-    formatConversationTranscript,
-    readTransportTranscript,
-    formatTransportTranscript,
-    fetchJson,
-    waitForGatewayHealthy,
-    waitForTransportReady,
-    waitForQaChannelReady,
-    browserRequest: callQaBrowserRequest,
-    waitForBrowserReady: waitForQaBrowserReady,
-    browserOpenTab: qaBrowserOpenTab,
-    browserSnapshot: qaBrowserSnapshot,
-    browserAct: qaBrowserAct,
-    webOpenPage: async (webParams: Parameters<typeof qaWebOpenPage>[0]) => {
-      const opened = await qaWebOpenPage(webParams);
-      params.env.webSessionIds.add(opened.pageId);
-      return opened;
+    waitForOutboundMessage: waitForAccountOutboundMessage,
+    browserRequest: browserRuntime.callQaBrowserRequest,
+    waitForBrowserReady: browserRuntime.waitForQaBrowserReady,
+    browserOpenTab: browserRuntime.qaBrowserOpenTab,
+    browserSnapshot: browserRuntime.qaBrowserSnapshot,
+    browserAct: browserRuntime.qaBrowserAct,
+    webOpenPage,
+    webWait: webRuntime.qaWebWait,
+    webType: webRuntime.qaWebType,
+    webSnapshot: webRuntime.qaWebSnapshot,
+    webEvaluate: webRuntime.qaWebEvaluate,
+    readGatewayLogs,
+    markGatewayLogCursor: () => {
+      if (monotonicGatewayLogs) {
+        const mark = monotonicGatewayLogs.mark();
+        if (isValidGatewayLogMark(mark)) {
+          return mark;
+        }
+        monotonicGatewayLogs = undefined;
+        return fullLegacyGatewayLogSnapshotMark;
+      }
+      return fullLegacyGatewayLogSnapshotMark;
     },
-    webWait: qaWebWait,
-    webType: qaWebType,
-    webSnapshot: qaWebSnapshot,
-    webEvaluate: qaWebEvaluate,
-    waitForConfigRestartSettle,
-    patchConfig,
-    applyConfig,
-    readConfigSnapshot,
-    createSession,
-    readEffectiveTools,
-    readSkillStatus,
-    readRawQaSessionStore,
-    readGatewayLogs: () => params.env.gateway.logs?.() ?? "",
-    markGatewayLogCursor: () => (params.env.gateway.logs?.() ?? "").length,
     scanGatewayLogSentinels: (options?: Parameters<typeof scanGatewayLogSentinels>[1]) =>
-      scanGatewayLogSentinels(params.env.gateway.logs?.(), options),
+      scanGatewayLogSentinels(readGatewayLogs(options?.since), { ...options, since: 0 }),
     assertNoGatewayLogSentinels: (options?: Parameters<typeof assertNoGatewayLogSentinels>[1]) =>
-      assertNoGatewayLogSentinels(params.env.gateway.logs?.(), options),
-    readSessionTranscriptSummary,
-    runQaCli,
-    extractMediaPathFromText,
-    resolveGeneratedImagePath,
-    startAgentRun,
-    waitForAgentRun,
-    listCronJobs,
-    findManagedDreamingCronJob,
-    waitForCronRunCompletion,
-    readDoctorMemoryStatus,
-    forceMemoryIndex,
-    findSkill,
-    writeWorkspaceSkill,
-    callPluginToolsMcp,
-    runAgentPrompt,
-    ensureImageGenerationConfigured,
-    handleQaAction,
+      assertNoGatewayLogSentinels(readGatewayLogs(options?.since), { ...options, since: 0 }),
     runRuntimeToolFixture: async (
       envArg: QaSuiteScenarioFlowEnv,
       configArg: Record<string, unknown>,
     ) =>
-      runRuntimeToolFixture(envArg, configArg, {
-        createSession,
-        readEffectiveTools,
-        runAgentPrompt,
-        fetchJson,
-        ensureImageGenerationConfigured,
+      runtimeToolFixture.runRuntimeToolFixture(envArg, configArg, {
+        createSession: suiteRuntimeAgentSession.createSession,
+        readEffectiveTools: suiteRuntimeAgentSession.readEffectiveTools,
+        runAgentPrompt: suiteRuntimeAgentProcess.runAgentPrompt,
+        fetchJson: suiteRuntimeGateway.fetchJson,
+        ensureImageGenerationConfigured: suiteRuntimeAgentMedia.ensureImageGenerationConfigured,
       }),
-    extractQaToolPayload,
-    formatMemoryDreamingDay,
-    resolveSessionTranscriptsDirForAgent,
-    buildAgentSessionKey,
-    normalizeLowercaseStringOrEmpty,
-    formatErrorMessage: params.formatErrorMessage,
-    liveTurnTimeoutMs: params.liveTurnTimeoutMs,
-    resolveQaLiveTurnTimeoutMs: params.resolveQaLiveTurnTimeoutMs,
-    splitModelRef: params.splitModelRef,
-    qaChannelPlugin,
-    hasDiscoveryLabels,
-    reportsDiscoveryScopeLeak,
-    reportsMissingDiscoveryFiles,
-    hasModelSwitchContinuityEvidence,
+    formatErrorMessage: formatQaErrorMessage,
+    liveTurnTimeoutMs: resolveQaLiveTurnTimeoutMs,
+    resolveQaLiveTurnTimeoutMs,
+    normalizeModelRef: (raw: string) => {
+      const split = splitQaModelRef(raw);
+      return split
+        ? (resolveModelRefFromString({
+            cfg: params.env.cfg,
+            raw,
+            defaultProvider: split.provider,
+          })?.ref ?? null)
+        : null;
+    },
+    splitModelRef: splitQaModelRef,
   };
 }
 
-export function createQaSuiteScenarioFlowApi(params: QaSuiteScenarioFlowApiParams) {
-  return createQaScenarioRuntimeApi({
-    env: params.env,
-    scenario: params.scenario,
-    deps: createQaSuiteScenarioDeps({
+function createQaSuiteScenarioFlowApi(
+  params: QaSuiteScenarioFlowApiParams & { signal: AbortSignal },
+) {
+  const createWebPageOpener = (signal?: AbortSignal) => {
+    const open = webRuntime.createQaWebPageOpener(params.env.webSessionIds, signal);
+    return (webParams: webRuntime.QaWebOpenPageParams) =>
+      open({ ...webParams, repoRoot: params.env.repoRoot });
+  };
+  const api = {
+    ...createQaScenarioRuntimeApi({
       env: params.env,
-      runScenario: params.runScenario,
-      splitModelRef: params.splitModelRef,
-      formatErrorMessage: params.formatErrorMessage,
-      liveTurnTimeoutMs: params.liveTurnTimeoutMs,
-      resolveQaLiveTurnTimeoutMs: params.resolveQaLiveTurnTimeoutMs,
+      scenario: params.scenario,
+      deps: createQaSuiteScenarioDeps(params, createWebPageOpener(params.signal)),
+      constants: params.constants,
     }),
-    constants: params.constants,
+    signal: params.signal,
+  };
+  // DSL finally actions may need a new page after the scenario deadline.
+  // They share the suite owner and seal, but not the expired acquisition signal.
+  return { api, cleanupApi: { ...api, webOpenPage: createWebPageOpener() } };
+}
+
+function createQaScenarioDeadline(timeoutMs?: number, whenUnhealthy?: Promise<Error>) {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadlineTimeoutMs = resolveQaGatewayTimeoutWithGraceMs(timeoutMs);
+  let deadline: Promise<never> | undefined;
+  let disposed = false;
+  const transportFailure = whenUnhealthy?.then((error) => {
+    if (!disposed) {
+      controller.abort(error);
+    }
+    throw error;
   });
+  // Transport loss may precede the first step; run() still observes the rejection.
+  void transportFailure?.catch(() => {});
+  return {
+    signal: controller.signal,
+    run: async <T>(operation: () => Promise<T>) => {
+      controller.signal.throwIfAborted();
+      if (deadlineTimeoutMs !== undefined) {
+        deadline ??= new Promise<never>((_resolve, reject) => {
+          const timeoutError = new Error(`QA scenario flow timed out after ${timeoutMs}ms`);
+          // Start at this owner's first operation. Preparation has a separate
+          // budget and must not consume a scenario's complete observation window.
+          timer = setTimeout(() => {
+            controller.abort(timeoutError);
+            reject(timeoutError);
+          }, deadlineTimeoutMs);
+        });
+      }
+      // In-flight calls abort cooperatively. The flow runner fences later actions and
+      // preserves DSL finally cleanup; the suite owner then tears down runtime resources.
+      const pending = operation();
+      const bounded = deadline ? Promise.race([pending, deadline]) : pending;
+      return transportFailure ? await Promise.race([bounded, transportFailure]) : await bounded;
+    },
+    dispose: () => {
+      disposed = true;
+      clearTimeout(timer);
+    },
+  };
+}
+
+function createQaSuiteScenarioStepRunner(
+  env: QaSuiteScenarioFlowEnv,
+  scenario: QaSeedScenarioWithSource,
+  vars: Record<string, unknown>,
+  deadline: ReturnType<typeof createQaScenarioDeadline>,
+  runScenario: QaSuiteScenarioDepsParams["runScenario"],
+): QaSuiteScenarioDepsParams["runScenario"] {
+  const prepareFlow = env.transport.prepareFlow;
+  const execution = scenario.execution;
+  return async (name, steps) => {
+    const scenarioSteps = steps.map((step) =>
+      Object.assign({}, step, { run: async () => await deadline.run(step.run) }),
+    );
+    const preparedSteps =
+      prepareFlow && execution.kind === "flow"
+        ? [
+            {
+              name: `Prepare ${env.transport.label}`,
+              run: async () => {
+                const fallbackTimeoutMs = resolveQaLiveTurnTimeoutMs(env, 60_000);
+                const preparationDeadline = createQaScenarioDeadline(
+                  Math.max(execution.timeoutMs ?? 0, fallbackTimeoutMs),
+                  env.transport.whenUnhealthy,
+                );
+                try {
+                  const prepared = await preparationDeadline.run(() =>
+                    prepareFlow({
+                      signal: AbortSignal.any([preparationDeadline.signal, deadline.signal]),
+                      config: execution.config ?? {},
+                      gateway: env.gateway,
+                      outputDir: env.outputDir,
+                      primaryModel: env.primaryModel,
+                      scenarioId: scenario.id,
+                      scenarioTitle: scenario.title,
+                      timeoutMs: execution.timeoutMs ?? fallbackTimeoutMs,
+                      waitForConfigRestartSettle: async (options) =>
+                        await suiteRuntimeGateway.waitForConfigRestartSettle(
+                          env,
+                          options?.restartDelayMs,
+                          options?.timeoutMs,
+                        ),
+                    }),
+                  );
+                  preparationDeadline.signal.throwIfAborted();
+                  if (prepared) {
+                    Object.assign(vars, prepared);
+                  }
+                } finally {
+                  preparationDeadline.dispose();
+                }
+              },
+            },
+            ...scenarioSteps,
+          ]
+        : scenarioSteps;
+    return await runScenario(name, preparedSteps);
+  };
+}
+
+export async function runQaSuiteScenarioDefinition(params: QaSuiteScenarioFlowApiParams) {
+  if (params.scenario.execution.kind !== "flow") {
+    throw new Error(`scenario is not a flow: ${params.scenario.id}`);
+  }
+  if (!params.scenario.execution.flow) {
+    throw new Error(`scenario missing flow: ${params.scenario.id}`);
+  }
+  const vars: Record<string, unknown> = {};
+  const deadline = createQaScenarioDeadline(
+    params.scenario.execution.timeoutMs,
+    params.env.transport.whenUnhealthy,
+  );
+  try {
+    const { api, cleanupApi } = createQaSuiteScenarioFlowApi({
+      ...params,
+      signal: deadline.signal,
+      runScenario: createQaSuiteScenarioStepRunner(
+        params.env,
+        params.scenario,
+        vars,
+        deadline,
+        params.runScenario,
+      ),
+    });
+    return await runScenarioFlow({
+      api,
+      cleanupApi,
+      flow: params.scenario.execution.flow,
+      scenarioTitle: params.scenario.title,
+      vars,
+    });
+  } finally {
+    deadline.dispose();
+  }
 }

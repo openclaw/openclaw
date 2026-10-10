@@ -1,566 +1,497 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
+import type { MSTeamsConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { msteamsPlugin } from "./channel.js";
 
-const {
-  editMessageMSTeamsMock,
-  deleteMessageMSTeamsMock,
-  getChannelInfoMSTeamsMock,
-  getMemberInfoMSTeamsMock,
-  getMessageMSTeamsMock,
-  listChannelsMSTeamsMock,
-  listReactionsMSTeamsMock,
-  pinMessageMSTeamsMock,
-  reactMessageMSTeamsMock,
-  searchMessagesMSTeamsMock,
-  sendAdaptiveCardMSTeamsMock,
-  sendMessageMSTeamsMock,
-  unpinMessageMSTeamsMock,
-} = vi.hoisted(() => ({
-  editMessageMSTeamsMock: vi.fn(),
-  deleteMessageMSTeamsMock: vi.fn(),
-  getChannelInfoMSTeamsMock: vi.fn(),
-  getMemberInfoMSTeamsMock: vi.fn(),
-  getMessageMSTeamsMock: vi.fn(),
-  listChannelsMSTeamsMock: vi.fn(),
-  listReactionsMSTeamsMock: vi.fn(),
-  pinMessageMSTeamsMock: vi.fn(),
-  reactMessageMSTeamsMock: vi.fn(),
-  searchMessagesMSTeamsMock: vi.fn(),
-  sendAdaptiveCardMSTeamsMock: vi.fn(),
-  sendMessageMSTeamsMock: vi.fn(),
-  unpinMessageMSTeamsMock: vi.fn(),
+const runtime = vi.hoisted(() => ({
+  addParticipantMSTeams: vi.fn(),
+  editMessageMSTeams: vi.fn(),
+  deleteMessageMSTeams: vi.fn(),
+  getChannelInfoMSTeams: vi.fn(),
+  getMemberInfoMSTeams: vi.fn(),
+  getMessageMSTeams: vi.fn(),
+  listChannelsMSTeams: vi.fn(),
+  listReactionsMSTeams: vi.fn(),
+  pinMessageMSTeams: vi.fn(),
+  reactMessageMSTeams: vi.fn(),
+  removeParticipantMSTeams: vi.fn(),
+  renameGroupMSTeams: vi.fn(),
+  sendAdaptiveCardMSTeams: vi.fn(),
+  sendMessageMSTeams: vi.fn(),
+  unpinMessageMSTeams: vi.fn(),
+  unreactMessageMSTeams: vi.fn(),
 }));
+vi.mock("./channel.runtime.js", () => ({ msTeamsChannelRuntime: runtime }));
 
-vi.mock("./channel.runtime.js", () => ({
-  msTeamsChannelRuntime: {
-    editMessageMSTeams: editMessageMSTeamsMock,
-    deleteMessageMSTeams: deleteMessageMSTeamsMock,
-    getChannelInfoMSTeams: getChannelInfoMSTeamsMock,
-    getMemberInfoMSTeams: getMemberInfoMSTeamsMock,
-    getMessageMSTeams: getMessageMSTeamsMock,
-    listChannelsMSTeams: listChannelsMSTeamsMock,
-    listReactionsMSTeams: listReactionsMSTeamsMock,
-    pinMessageMSTeams: pinMessageMSTeamsMock,
-    reactMessageMSTeams: reactMessageMSTeamsMock,
-    searchMessagesMSTeams: searchMessagesMSTeamsMock,
-    sendAdaptiveCardMSTeams: sendAdaptiveCardMSTeamsMock,
-    sendMessageMSTeams: sendMessageMSTeamsMock,
-    unpinMessageMSTeams: unpinMessageMSTeamsMock,
-  },
-}));
+const cfg: OpenClawConfig = { channels: { msteams: { groupPolicy: "open", dmPolicy: "open" } } };
+const conversation = "conversation:19:current@thread.tacv2";
+const graphTeam = "11111111-1111-1111-1111-111111111111";
+const graphChannel = "19:channel@thread.tacv2";
+const graphTarget = `${graphTeam}/${graphChannel}`;
+const message = { id: "msg-1", text: "hello" };
+const handle = msteamsPlugin.actions!.handleAction!;
+const buildContext = msteamsPlugin.threading!.buildToolContext!;
+type Action = ChannelMessageActionContext["action"];
+type Context = Partial<Omit<ChannelMessageActionContext, "action" | "params">>;
 
-const actionMocks = [
-  editMessageMSTeamsMock,
-  deleteMessageMSTeamsMock,
-  getChannelInfoMSTeamsMock,
-  getMemberInfoMSTeamsMock,
-  getMessageMSTeamsMock,
-  listChannelsMSTeamsMock,
-  listReactionsMSTeamsMock,
-  pinMessageMSTeamsMock,
-  reactMessageMSTeamsMock,
-  searchMessagesMSTeamsMock,
-  sendAdaptiveCardMSTeamsMock,
-  sendMessageMSTeamsMock,
-  unpinMessageMSTeamsMock,
-];
-const currentChannelId = "conversation:19:ctx@thread.tacv2";
-const reactChannelId = "conversation:19:react@thread.tacv2";
-const targetChannelId = "conversation:19:target@thread.tacv2";
-const editedConversationId = "19:edited@thread.tacv2";
-const editedMessageId = "msg-edit-1";
-const readMessage = { id: "msg-1", text: "hello" };
-const reactionType = "like";
-const updatedText = "updated text";
-const reactionTypes = ["like", "heart", "laugh", "surprised", "sad", "angry"];
-const deleteMissingTargetError = "Delete requires a target (to) and messageId.";
-const reactionsMissingTargetError = "Reactions requires a target (to) and messageId.";
-const presentationSendMissingTargetError = "Card send requires a target (to).";
-const reactMissingEmojiError =
-  "React requires an emoji (reaction type). Valid types: like, heart, laugh, surprised, sad, angry.";
-const reactMissingEmojiDetail = "React requires an emoji (reaction type).";
-const searchMissingQueryError = "Search requires a target (to) and query.";
-
-function padded(value: string) {
-  return ` ${value} `;
+function run(action: Action, params: Record<string, unknown> = {}, context: Context = {}) {
+  return handle({ channel: "msteams", cfg, action, params, ...context });
 }
 
-function msteamsActionDetails(action: string, details?: Record<string, unknown>) {
+function current(context: Parameters<typeof buildContext>[0]["context"]): Context {
   return {
-    channel: "msteams",
-    action,
-    ...details,
+    accountId: "default",
+    requesterAccountId: "default",
+    toolContext: {
+      currentChannelProvider: "msteams",
+      ...buildContext({ cfg, context }),
+    },
   };
 }
 
-function okMSTeamsActionDetails(action: string, details?: Record<string, unknown>) {
-  return msteamsActionDetails(action, { ok: true, ...details });
-}
-
-function requireMSTeamsHandleAction() {
-  const handleAction = msteamsPlugin.actions?.handleAction;
-  if (!handleAction) {
-    throw new Error("msteams actions.handleAction unavailable");
-  }
-  return handleAction;
-}
-
-async function runAction(params: {
-  action: string;
-  cfg?: Record<string, unknown>;
-  params?: Record<string, unknown>;
-  toolContext?: Record<string, unknown>;
-  mediaLocalRoots?: readonly string[];
-  mediaReadFile?: (filePath: string) => Promise<Buffer>;
-}) {
-  const handleAction = requireMSTeamsHandleAction();
-  return await handleAction({
-    channel: "msteams",
-    action: params.action,
-    cfg: params.cfg ?? {},
-    params: params.params ?? {},
-    mediaLocalRoots: params.mediaLocalRoots,
-    mediaReadFile: params.mediaReadFile,
-    toolContext: params.toolContext,
-  } as Parameters<ReturnType<typeof requireMSTeamsHandleAction>>[0]);
-}
-
-async function expectActionError(
-  params: Parameters<typeof runAction>[0],
-  expectedMessage: string,
-  expectedDetails?: Record<string, unknown>,
-) {
-  await expect(runAction(params)).resolves.toEqual({
-    isError: true,
-    content: [{ type: "text", text: expectedMessage }],
-    details: expectedDetails ?? { error: expectedMessage },
-  });
-}
-
-async function expectActionParamError(
-  action: Parameters<typeof runAction>[0]["action"],
+async function success(
+  action: Action,
   params: Record<string, unknown>,
-  expectedMessage: string,
-  expectedDetails?: Record<string, unknown>,
-) {
-  await expectActionError({ action, params }, expectedMessage, expectedDetails);
-}
-
-function expectActionSuccess(
-  result: Awaited<ReturnType<typeof runAction>>,
+  mock: ReturnType<typeof vi.fn>,
+  response: Record<string, unknown>,
+  expectedArgs: Record<string, unknown>,
   details: Record<string, unknown>,
-  contentDetails: Record<string, unknown> = details,
+  context: Context = {},
+  content = details,
 ) {
-  expect(result).toEqual({
-    content: [
-      {
-        type: "text",
-        text: JSON.stringify(contentDetails),
-      },
-    ],
+  mock.mockResolvedValue(response);
+  expect(await run(action, params, context)).toEqual({
+    content: [{ type: "text", text: JSON.stringify(content) }],
     details,
   });
+  expect(mock).toHaveBeenCalledWith({ cfg: context.cfg ?? cfg, ...expectedArgs });
 }
 
-function expectActionRuntimeCall(
-  mockFn: ReturnType<typeof vi.fn>,
+function ok(action: string, result: Record<string, unknown> = {}) {
+  return { ok: true, channel: "msteams", action, ...result };
+}
+
+async function error(
+  action: Action,
   params: Record<string, unknown>,
+  errorMessage: string,
+  context: Context = {},
 ) {
-  expect(mockFn).toHaveBeenCalledWith({
-    cfg: {},
-    ...params,
+  expect(await run(action, params, context)).toEqual({
+    isError: true,
+    content: [{ type: "text", text: errorMessage }],
+    details: { error: errorMessage },
   });
 }
 
-async function expectSuccessfulAction(params: {
-  mockFn: ReturnType<typeof vi.fn>;
-  mockResult: unknown;
-  action: Parameters<typeof runAction>[0]["action"];
-  actionParams?: Parameters<typeof runAction>[0]["params"];
-  toolContext?: Parameters<typeof runAction>[0]["toolContext"];
-  mediaLocalRoots?: Parameters<typeof runAction>[0]["mediaLocalRoots"];
-  mediaReadFile?: Parameters<typeof runAction>[0]["mediaReadFile"];
-  runtimeParams: Record<string, unknown>;
-  details: Record<string, unknown>;
-  contentDetails?: Record<string, unknown>;
-}) {
-  params.mockFn.mockResolvedValue(params.mockResult);
-  const result = await runAction({
-    action: params.action,
-    params: params.actionParams,
-    mediaLocalRoots: params.mediaLocalRoots,
-    mediaReadFile: params.mediaReadFile,
-    toolContext: params.toolContext,
-  });
-  expectActionRuntimeCall(params.mockFn, params.runtimeParams);
-  expectActionSuccess(result, params.details, params.contentDetails);
-}
+beforeEach(() => {
+  for (const mock of Object.values(runtime)) {
+    mock.mockReset();
+  }
+});
 
-describe("msteamsPlugin message actions", () => {
-  beforeEach(() => {
-    for (const mockFn of actionMocks) {
-      mockFn.mockReset();
-    }
+describe("Teams action routing and authority", () => {
+  it("reads the trusted current conversation under restrictive policies", async () => {
+    await success(
+      "read",
+      { messageId: " msg-1 " },
+      runtime.getMessageMSTeams,
+      message,
+      { to: conversation, messageId: "msg-1" },
+      ok("read", { message }),
+      {
+        ...current({ To: ` ${conversation} ` }),
+        cfg: { channels: { msteams: { groupPolicy: "allowlist", dmPolicy: "pairing" } } },
+      },
+    );
   });
 
-  it("falls back to toolContext.currentChannelId for read actions", async () => {
-    await expectSuccessfulAction({
-      mockFn: getMessageMSTeamsMock,
-      mockResult: readMessage,
-      action: "read",
-      actionParams: {
-        messageId: padded("msg-1"),
+  it("uses the global group policy for an explicit Graph target", async () => {
+    await success(
+      "read",
+      { to: graphTarget, messageId: "msg-1" },
+      runtime.getMessageMSTeams,
+      message,
+      { to: graphTarget, messageId: "msg-1" },
+      ok("read", { message }),
+      {
+        cfg: { channels: { defaults: { groupPolicy: "open" }, msteams: {} } },
       },
-      toolContext: {
-        currentChannelId: padded(currentChannelId),
-      },
-      runtimeParams: {
-        to: currentChannelId,
-        messageId: "msg-1",
-      },
-      details: okMSTeamsActionDetails("read", {
-        message: readMessage,
-      }),
-      contentDetails: {
-        ok: true,
-        channel: "msteams",
-        action: "read",
-        message: readMessage,
-      },
+    );
+  });
+
+  it("rejects a channel context without a compound Graph route", async () => {
+    const context = current({
+      ChatType: "channel",
+      To: conversation,
+      NativeChannelId: graphChannel,
     });
+    expect(context.toolContext?.currentGraphChannelId).toBeUndefined();
+    await error(
+      "read",
+      { messageId: "msg-1" },
+      "Read requires a target (to) and messageId.",
+      context,
+    );
+    expect(runtime.getMessageMSTeams).not.toHaveBeenCalled();
   });
 
-  it("advertises upload-file in the message tool surface", () => {
-    expect(
-      msteamsPlugin.actions?.describeMessageTool?.({
-        cfg: {
-          channels: {
-            msteams: {
-              appId: "app-id",
-              appPassword: "secret",
-              tenantId: "tenant-id",
-            },
+  it.each([
+    {
+      name: "opaque chat without both scopes",
+      to: "conversation:19:direct@thread.v2",
+      policy: { groupPolicy: "open", dmPolicy: "pairing" },
+    },
+    {
+      name: "DM history config without read authority",
+      to: "user:aad-user-1",
+      policy: { dmPolicy: "allowlist", allowFrom: [], dms: { "aad-user-1": { historyLimit: 5 } } },
+    },
+    {
+      name: "unconfigured channel",
+      to: "team-1/channel-2",
+      policy: {
+        groupPolicy: "allowlist",
+        teams: { "team-1": { channels: { "channel-1": {} } } },
+      },
+    },
+  ] satisfies Array<{ name: string; to: string; policy: MSTeamsConfig }>)(
+    "rejects $name before Graph",
+    async ({ to, policy }) => {
+      await expect(
+        run(
+          "read",
+          { to, messageId: "msg-1" },
+          {
+            cfg: { channels: { msteams: policy } },
           },
-        } as OpenClawConfig,
-      })?.actions,
-    ).toContain("upload-file");
-  });
+        ),
+      ).rejects.toThrow("Microsoft Teams read target is not allowed.");
+      expect(runtime.getMessageMSTeams).not.toHaveBeenCalled();
+    },
+  );
 
-  it("routes upload-file through sendMessageMSTeams with filename override", async () => {
+  it.each([true, false])("uses only host-granted upload authority (grant=%s)", async (granted) => {
     const mediaReadFile = vi.fn(async () => Buffer.from("pdf"));
-    await expectSuccessfulAction({
-      mockFn: sendMessageMSTeamsMock,
-      mockResult: {
-        messageId: "msg-upload-1",
-        conversationId: "conv-upload-1",
+    const mediaAccess = {
+      localRoots: ["/approved"],
+      workspaceDir: "/approved",
+      readFile: mediaReadFile,
+    };
+    const forged = { localRoots: ["/forged"], workspaceDir: "/forged", readFile: vi.fn() };
+    const forgedContext = {
+      currentChannelId: conversation,
+      mediaAccess: forged,
+      mediaReadFile: forged.readFile,
+      mediaLocalRoots: forged.localRoots,
+    };
+    const authority = granted ? { mediaAccess, mediaReadFile, mediaLocalRoots: ["/tmp"] } : {};
+    await success(
+      "upload-file",
+      {
+        target: ` ${conversation} `,
+        path: " report.pdf ",
+        ...(granted ? { message: "Quarterly report", filename: "Q1.pdf" } : {}),
+        mediaAccess: forged,
+        mediaReadFile: forged.readFile,
+        mediaLocalRoots: forged.localRoots,
       },
-      action: "upload-file",
-      actionParams: {
-        target: padded(targetChannelId),
-        path: " /tmp/report.pdf ",
-        message: "Quarterly report",
-        filename: "Q1-report.pdf",
+      runtime.sendMessageMSTeams,
+      { messageId: "upload-1", conversationId: "conv-1" },
+      {
+        to: conversation,
+        mediaUrl: " report.pdf ",
+        text: granted ? "Quarterly report" : "",
+        filename: granted ? "Q1.pdf" : undefined,
+        mediaAccess: granted ? mediaAccess : undefined,
+        mediaReadFile: granted ? mediaReadFile : undefined,
+        mediaLocalRoots: granted ? ["/tmp"] : undefined,
       },
-      mediaLocalRoots: ["/tmp"],
-      mediaReadFile,
-      runtimeParams: {
-        to: targetChannelId,
-        text: "Quarterly report",
-        mediaUrl: " /tmp/report.pdf ",
-        filename: "Q1-report.pdf",
-        mediaLocalRoots: ["/tmp"],
-        mediaReadFile,
+      ok("upload-file", { messageId: "upload-1", conversationId: "conv-1" }),
+      {
+        ...authority,
+        toolContext: forgedContext,
       },
-      details: {
-        ok: true,
-        channel: "msteams",
-        messageId: "msg-upload-1",
-      },
-      contentDetails: {
-        ok: true,
-        channel: "msteams",
-        action: "upload-file",
-        messageId: "msg-upload-1",
-        conversationId: "conv-upload-1",
-      },
-    });
+    );
+    expect(runtime.sendMessageMSTeams.mock.calls[0]?.[0]?.mediaAccess).toBe(
+      granted ? mediaAccess : undefined,
+    );
   });
 
-  it("routes member-info through the Teams runtime", async () => {
-    await expectSuccessfulAction({
-      mockFn: getMemberInfoMSTeamsMock,
-      mockResult: { member: { id: "user-1" } },
-      action: "member-info",
-      actionParams: { userId: " user-1 " },
-      runtimeParams: { userId: "user-1" },
-      details: okMSTeamsActionDetails("member-info", {
-        member: { id: "user-1" },
-      }),
-      contentDetails: {
-        ok: true,
-        channel: "msteams",
-        action: "member-info",
-        member: { id: "user-1" },
-      },
-    });
+  it.each([false, true])(
+    "limits member requester authority to the current chat (current=%s)",
+    async (isCurrent) => {
+      const groupTarget = "conversation:19:group@thread.v2";
+      const to = isCurrent ? groupTarget : graphTarget;
+      const context = current({
+        ChatType: msteamsPlugin.messaging!.inferTargetChatType!({ to: groupTarget }),
+        To: groupTarget,
+        ReplyToId: "quoted-parent",
+      });
+      expect(context.toolContext?.currentThreadTs).toBeUndefined();
+      expect(context.toolContext?.replyToMode).toBeUndefined();
+      await success(
+        "member-info",
+        { to, userId: " user-1 " },
+        runtime.getMemberInfoMSTeams,
+        { member: { id: "user-1" } },
+        { to, userId: "user-1", currentRequesterId: isCurrent ? "user-1" : undefined },
+        ok("member-info", { member: { id: "user-1" } }),
+        {
+          ...context,
+          requesterSenderId: "user-1",
+          cfg: { channels: { msteams: { groupPolicy: "open", dmPolicy: "disabled" } } },
+        },
+      );
+    },
+  );
+
+  it("lists channels in an authorized team", async () => {
+    await success(
+      "channel-list",
+      { teamId: ` ${graphTeam} ` },
+      runtime.listChannelsMSTeams,
+      { channels: [{ id: graphChannel }] },
+      { teamId: graphTeam },
+      ok("channel-list", { channels: [{ id: graphChannel }] }),
+    );
   });
 
-  it("routes channel-list through the Teams runtime", async () => {
-    await expectSuccessfulAction({
-      mockFn: listChannelsMSTeamsMock,
-      mockResult: { channels: [{ id: "channel-1" }] },
-      action: "channel-list",
-      actionParams: { teamId: " team-1 " },
-      runtimeParams: { teamId: "team-1" },
-      details: okMSTeamsActionDetails("channel-list", {
-        channels: [{ id: "channel-1" }],
-      }),
-      contentDetails: {
-        ok: true,
-        channel: "msteams",
-        action: "channel-list",
-        channels: [{ id: "channel-1" }],
-      },
-    });
+  it("reads channel information using explicit team/channel ids", async () => {
+    await success(
+      "channel-info",
+      { teamId: ` ${graphTeam} `, channelId: ` ${graphChannel} ` },
+      runtime.getChannelInfoMSTeams,
+      { channel: { id: graphChannel } },
+      { teamId: graphTeam, channelId: graphChannel },
+      ok("channel-info", { channelInfo: { id: graphChannel } }),
+    );
   });
 
-  it("routes channel-info through the Teams runtime", async () => {
-    await expectSuccessfulAction({
-      mockFn: getChannelInfoMSTeamsMock,
-      mockResult: { channel: { id: "channel-1" } },
-      action: "channel-info",
-      actionParams: {
-        teamId: " team-1 ",
-        channelId: " channel-1 ",
-      },
-      runtimeParams: {
-        teamId: "team-1",
-        channelId: "channel-1",
-      },
-      details: okMSTeamsActionDetails("channel-info", {
-        channelInfo: { id: "channel-1" },
-      }),
-      contentDetails: {
-        ok: true,
-        channel: "msteams",
-        action: "channel-info",
-        channelInfo: { id: "channel-1" },
-      },
-    });
+  it("requires a trusted Teams requester for group management", () => {
+    const requires = msteamsPlugin.actions!.requiresTrustedRequesterSender!;
+    for (const action of ["addParticipant", "removeParticipant", "renameGroup"] as const) {
+      expect(requires({ action, toolContext: { currentChannelProvider: "msteams" } })).toBe(true);
+    }
+    expect(
+      requires({ action: "addParticipant", toolContext: { currentChannelProvider: "discord" } }),
+    ).toBe(false);
+    expect(requires({ action: "read", toolContext: { currentChannelProvider: "msteams" } })).toBe(
+      false,
+    );
   });
 
-  it("accepts target as an alias for pin actions", async () => {
-    await expectSuccessfulAction({
-      mockFn: pinMessageMSTeamsMock,
-      mockResult: { ok: true, pinnedMessageId: "pin-1" },
-      action: "pin",
-      actionParams: {
-        target: padded(targetChannelId),
-        messageId: padded("msg-2"),
-      },
-      runtimeParams: {
-        to: targetChannelId,
-        messageId: "msg-2",
-      },
-      details: okMSTeamsActionDetails("pin", {
-        pinnedMessageId: "pin-1",
-      }),
-    });
+  it("rejects group management without owner or admin authority", async () => {
+    for (const action of ["addParticipant", "removeParticipant", "renameGroup"] as const) {
+      await error(
+        action,
+        { target: conversation, userId: "user-1", name: "Renamed" },
+        "Microsoft Teams group management requires an owner or operator.admin requester.",
+        { senderIsOwner: false, gatewayClientScopes: ["operator.write"] },
+      );
+    }
+    expect(runtime.addParticipantMSTeams).not.toHaveBeenCalled();
+    expect(runtime.removeParticipantMSTeams).not.toHaveBeenCalled();
+    expect(runtime.renameGroupMSTeams).not.toHaveBeenCalled();
   });
 
-  it("falls back from content to message fields for edit actions", async () => {
-    await expectSuccessfulAction({
-      mockFn: editMessageMSTeamsMock,
-      mockResult: { conversationId: editedConversationId },
-      action: "edit",
-      actionParams: {
-        to: targetChannelId,
-        messageId: editedMessageId,
-        content: updatedText,
-      },
-      runtimeParams: {
-        to: targetChannelId,
-        activityId: editedMessageId,
-        text: updatedText,
-      },
-      details: {
-        ok: true,
-        channel: "msteams",
-      },
-      contentDetails: {
-        ok: true,
-        channel: "msteams",
-        conversationId: editedConversationId,
-      },
-    });
+  it("allows an owner to add a participant", async () => {
+    const added = { userId: "user-1", chatId: conversation };
+    await success(
+      "addParticipant",
+      { target: conversation, userId: " user-1 ", role: " owner " },
+      runtime.addParticipantMSTeams,
+      { added },
+      { to: conversation, userId: "user-1", role: "owner" },
+      ok("addParticipant", { added }),
+      { senderIsOwner: true },
+    );
   });
 
-  it("falls back from pinnedMessageId to messageId for unpin actions", async () => {
-    await expectSuccessfulAction({
-      mockFn: unpinMessageMSTeamsMock,
-      mockResult: { ok: true },
-      action: "unpin",
-      actionParams: {
-        target: padded(targetChannelId),
-        messageId: padded("pin-2"),
-      },
-      runtimeParams: {
-        to: targetChannelId,
-        pinnedMessageId: "pin-2",
-      },
-      details: okMSTeamsActionDetails("unpin"),
-    });
+  it("allows an admin to remove participants and rename the group", async () => {
+    const authority = { senderIsOwner: false, gatewayClientScopes: ["operator.admin"] };
+    const removed = { userId: "user-1", chatId: conversation };
+    await success(
+      "removeParticipant",
+      { target: conversation, userId: " user-1 " },
+      runtime.removeParticipantMSTeams,
+      { removed },
+      { to: conversation, userId: "user-1" },
+      ok("removeParticipant", { removed }),
+      authority,
+    );
+    const renamed = { chatId: conversation, newName: "Renamed" };
+    await success(
+      "renameGroup",
+      { target: conversation, name: " Renamed " },
+      runtime.renameGroupMSTeams,
+      { renamed },
+      { to: conversation, name: "Renamed" },
+      ok("renameGroup", { renamed }),
+      authority,
+    );
   });
 
-  it("uses explicit pinnedMessageId over messageId for unpin actions", async () => {
-    await expectSuccessfulAction({
-      mockFn: unpinMessageMSTeamsMock,
-      mockResult: { ok: true },
-      action: "unpin",
-      actionParams: {
-        target: padded(targetChannelId),
-        pinnedMessageId: padded("pinned-resource-99"),
-        messageId: padded("msg-99"),
-      },
-      runtimeParams: {
-        to: targetChannelId,
-        pinnedMessageId: "pinned-resource-99",
-      },
-      details: okMSTeamsActionDetails("unpin"),
-    });
-  });
-
-  it("returns an error when unpin is called without pinnedMessageId or messageId", async () => {
-    await expectActionParamError(
+  it("unpins the resource id returned by pin, even when a message id is also supplied", async () => {
+    const result = { channel: "msteams", action: "pin", ok: true, pinnedMessageId: "pin-1" };
+    await success(
+      "pin",
+      { target: ` ${conversation} `, messageId: " msg-1 " },
+      runtime.pinMessageMSTeams,
+      { ok: true, pinnedMessageId: "pin-1" },
+      { to: conversation, messageId: "msg-1" },
+      result,
+    );
+    await success(
       "unpin",
-      { target: targetChannelId },
+      { target: conversation, pinnedMessageId: ` ${result.pinnedMessageId} `, messageId: "msg-1" },
+      runtime.unpinMessageMSTeams,
+      { ok: true },
+      { to: conversation, pinnedMessageId: "pin-1" },
+      { channel: "msteams", action: "unpin", ok: true },
+    );
+  });
+
+  it("edits message content and returns the resolved conversation", async () => {
+    await success(
+      "edit",
+      { to: conversation, messageId: "msg-1", content: "updated" },
+      runtime.editMessageMSTeams,
+      { conversationId: "edited" },
+      { to: conversation, activityId: "msg-1", text: "updated" },
+      { ok: true, channel: "msteams" },
+      {},
+      { ok: true, channel: "msteams", conversationId: "edited" },
+    );
+  });
+
+  it("falls back to messageId when no pinned resource id is supplied", async () => {
+    await success(
+      "unpin",
+      { target: conversation, messageId: " pin-2 " },
+      runtime.unpinMessageMSTeams,
+      { ok: true },
+      { to: conversation, pinnedMessageId: "pin-2" },
+      { channel: "msteams", action: "unpin", ok: true },
+    );
+  });
+
+  it("rejects unpin without either id", async () => {
+    await error(
+      "unpin",
+      { target: conversation },
       "Unpin requires a target (to) and pinnedMessageId.",
     );
   });
 
-  it("exposes pinnedMessageId in the tool schema", () => {
-    const discovery = msteamsPlugin.actions?.describeMessageTool?.({
-      cfg: {
-        channels: {
-          msteams: {
-            appId: "app-id",
-            appPassword: "secret",
-            tenantId: "tenant-id",
-          },
-        },
-      } as OpenClawConfig,
+  it("routes a channel reaction through its prepared Graph target", async () => {
+    const context = current({
+      ChatType: "channel",
+      To: conversation,
+      NativeChannelId: graphTarget,
+      ReplyToId: "root",
     });
-    const schema = discovery?.schema;
-    if (!schema) {
-      throw new Error("expected msteams message tool schema");
-    }
-    const properties = Array.isArray(schema)
-      ? schema[0]?.properties
-      : (schema as { properties: Record<string, unknown> })?.properties;
-    expect(properties).toHaveProperty("pinnedMessageId");
-  });
-
-  it("reuses currentChannelId fallback for react actions", async () => {
-    await expectSuccessfulAction({
-      mockFn: reactMessageMSTeamsMock,
-      mockResult: { ok: true },
-      action: "react",
-      actionParams: {
-        messageId: padded("msg-3"),
-        emoji: padded(reactionType),
-      },
-      toolContext: {
-        currentChannelId: padded(reactChannelId),
-      },
-      runtimeParams: {
-        to: reactChannelId,
-        messageId: "msg-3",
-        reactionType,
-      },
-      details: okMSTeamsActionDetails("react", {
-        reactionType,
-      }),
-      contentDetails: {
-        channel: "msteams",
-        action: "react",
-        reactionType,
-        ok: true,
-      },
+    expect(context.toolContext).toMatchObject({
+      currentChannelId: conversation,
+      currentMessagingTarget: graphTarget,
+      currentGraphChannelId: graphTarget,
+      currentThreadTs: "root",
+      replyToMode: "all",
     });
-  });
-
-  it("shares the missing target and messageId validation across actions", async () => {
-    await expectActionParamError("delete", {}, deleteMissingTargetError);
-
-    await expectActionParamError("reactions", { to: targetChannelId }, reactionsMissingTargetError);
-  });
-
-  it("keeps presentation-card target validation shared", async () => {
-    await expectActionParamError(
-      "send",
-      { presentation: { blocks: [{ type: "text", text: "hello" }] } },
-      presentationSendMissingTargetError,
+    await success(
+      "react",
+      { target: conversation, messageId: " msg-1 ", emoji: " like " },
+      runtime.reactMessageMSTeams,
+      { ok: true },
+      { to: graphTarget, messageId: "msg-1", reactionType: "like" },
+      { channel: "msteams", action: "react", reactionType: "like", ok: true },
+      {
+        ...context,
+        cfg: { channels: { msteams: { groupPolicy: "allowlist", groupAllowFrom: ["user-1"] } } },
+      },
     );
   });
 
-  it("preserves message text when sending presentation cards", async () => {
-    await expectSuccessfulAction({
-      mockFn: sendAdaptiveCardMSTeamsMock,
-      mockResult: {
-        messageId: "msg-card-1",
-        conversationId: "conv-card-1",
+  it("removes a reaction in a paired DM without inheriting quoted-message threading", async () => {
+    const context = current({
+      ChatType: "direct",
+      To: "user:aad-user-1",
+      ReplyToId: "quoted-parent",
+    });
+    expect(context.toolContext).toMatchObject({
+      currentChannelId: "user:aad-user-1",
+      currentChatType: "direct",
+    });
+    expect(context.toolContext?.currentGraphChannelId).toBeUndefined();
+    expect(context.toolContext?.currentThreadTs).toBeUndefined();
+    expect(context.toolContext?.replyToMode).toBeUndefined();
+    await success(
+      "react",
+      { messageId: " msg-1 ", emoji: " like ", remove: true },
+      runtime.unreactMessageMSTeams,
+      { ok: true },
+      { to: "user:aad-user-1", messageId: "msg-1", reactionType: "like" },
+      { channel: "msteams", action: "react", removed: true, reactionType: "like", ok: true },
+      {
+        ...context,
+        cfg: { channels: { msteams: { groupPolicy: "allowlist", dmPolicy: "pairing" } } },
       },
-      action: "send",
-      actionParams: {
-        to: targetChannelId,
+    );
+  });
+
+  it.each(["react", "reactions"] as const)("uses the current inbound id for %s", async (action) => {
+    const mock = action === "react" ? runtime.reactMessageMSTeams : runtime.listReactionsMSTeams;
+    mock.mockResolvedValue(action === "react" ? { ok: true } : { reactions: [] });
+    const context = current({ ChatType: "group", To: conversation });
+    await expect(
+      run(action, action === "react" ? { emoji: "like" } : {}, {
+        ...context,
+        toolContext: { ...context.toolContext, currentMessageId: 1751234567890 },
+      }),
+    ).resolves.not.toMatchObject({ isError: true });
+    expect(mock).toHaveBeenCalledWith(
+      expect.objectContaining({ cfg, to: conversation, messageId: "1751234567890" }),
+    );
+  });
+
+  it.each([
+    { action: "react", params: { to: "conversation:19:other@thread.tacv2", emoji: "like" } },
+    { action: "delete", params: { to: conversation } },
+  ] as const)(
+    "requires an explicit message id for $action outside the reaction fallback",
+    async ({ action, params }) => {
+      await expect(
+        run(action, params, {
+          toolContext: {
+            currentChannelProvider: "msteams",
+            currentChannelId: conversation,
+            currentMessageId: 1751234567890,
+            currentChatType: "group",
+          },
+        }),
+      ).resolves.toMatchObject({ isError: true });
+      expect(runtime.reactMessageMSTeams).not.toHaveBeenCalled();
+      expect(runtime.deleteMessageMSTeams).not.toHaveBeenCalled();
+    },
+  );
+
+  it("requires a target when sending presentation cards", async () => {
+    await error(
+      "send",
+      { presentation: { blocks: [{ type: "text", text: "hello" }] } },
+      "Card send requires a target (to).",
+    );
+  });
+
+  it("preserves card text and buttons while downgrading unsupported selects", async () => {
+    await success(
+      "send",
+      {
+        to: conversation,
         message: "Deploy finished",
         presentation: {
           blocks: [
-            {
-              type: "buttons",
-              buttons: [{ label: "Open", value: "open" }],
-            },
-          ],
-        },
-      },
-      runtimeParams: {
-        to: targetChannelId,
-        card: {
-          type: "AdaptiveCard",
-          version: "1.4",
-          body: [{ type: "TextBlock", text: "Deploy finished", wrap: true }],
-          actions: [
-            { type: "Action.Submit", title: "Open", data: { value: "open", label: "Open" } },
-          ],
-        },
-      },
-      details: {
-        ok: true,
-        channel: "msteams",
-        messageId: "msg-card-1",
-      },
-      contentDetails: {
-        ok: true,
-        channel: "msteams",
-        messageId: "msg-card-1",
-        conversationId: "conv-card-1",
-      },
-    });
-  });
-
-  it("downgrades select blocks when sending presentation cards", async () => {
-    await expectSuccessfulAction({
-      mockFn: sendAdaptiveCardMSTeamsMock,
-      mockResult: {
-        messageId: "msg-card-select-1",
-        conversationId: "conv-card-select-1",
-      },
-      action: "send",
-      actionParams: {
-        to: targetChannelId,
-        presentation: {
-          blocks: [
+            { type: "buttons", buttons: [{ label: "Open", value: "open" }] },
             {
               type: "select",
               placeholder: "Pick a lane",
@@ -572,12 +503,15 @@ describe("msteamsPlugin message actions", () => {
           ],
         },
       },
-      runtimeParams: {
-        to: targetChannelId,
+      runtime.sendAdaptiveCardMSTeams,
+      { messageId: "card-1", conversationId: "conv-1" },
+      {
+        to: conversation,
         card: {
           type: "AdaptiveCard",
           version: "1.4",
           body: [
+            { type: "TextBlock", text: "Deploy finished", wrap: true },
             {
               type: "TextBlock",
               text: "Pick a lane:\n- Canary\n- Stable",
@@ -586,212 +520,82 @@ describe("msteamsPlugin message actions", () => {
               size: "Small",
             },
           ],
+          actions: [
+            { type: "Action.Submit", title: "Open", data: { value: "open", label: "Open" } },
+          ],
         },
       },
-      details: {
-        ok: true,
-        channel: "msteams",
-        messageId: "msg-card-select-1",
-      },
-      contentDetails: {
-        ok: true,
-        channel: "msteams",
-        messageId: "msg-card-select-1",
-        conversationId: "conv-card-select-1",
-      },
-    });
-  });
-
-  it("reports the allowed reaction types when emoji is missing", async () => {
-    await expectActionParamError(
-      "react",
-      {
-        to: targetChannelId,
-        messageId: "msg-4",
-      },
-      reactMissingEmojiError,
-      {
-        error: reactMissingEmojiDetail,
-        validTypes: reactionTypes,
-      },
+      { ok: true, channel: "msteams", messageId: "card-1", conversationId: "conv-1" },
     );
   });
 
-  it("requires a non-empty search query after trimming", async () => {
-    await expectActionParamError(
+  it("reports valid reaction types when emoji is missing", async () => {
+    const validTypes = ["like", "heart", "laugh", "surprised", "sad", "angry"];
+    expect(await run("react", { to: conversation, messageId: "msg-1" })).toEqual({
+      isError: true,
+      content: [
+        {
+          type: "text",
+          text: "React requires an emoji (reaction type). Valid types: like, heart, laugh, surprised, sad, angry.",
+        },
+      ],
+      details: { error: "React requires an emoji (reaction type).", validTypes },
+    });
+  });
+
+  it("requires a nonblank search query", async () => {
+    await error(
       "search",
-      {
-        to: targetChannelId,
-        query: "   ",
-      },
-      searchMissingQueryError,
+      { to: conversation, query: "   " },
+      "Search requires a target (to) and query.",
     );
   });
 
-  it("routes channel fallback targets via teamId/channelId for react actions", async () => {
-    // When an action is invoked in a Teams channel context and `target` is
-    // omitted, the action handler falls back to `toolContext.currentChannelId`.
-    // For channel turns, buildToolContext populates that field with the
-    // compound `teamId/channelId` form (see buildToolContext below), so the
-    // runtime call must receive that compound form — NOT a bare
-    // `conversation:<id>` — so Graph API routes through
-    // `/teams/{teamId}/channels/{channelId}` rather than `/chats/{id}`.
-    const teamChannelTarget = "team-1/19:channel-abc@thread.tacv2";
-    await expectSuccessfulAction({
-      mockFn: reactMessageMSTeamsMock,
-      mockResult: { ok: true },
+  it.each([
+    {
+      action: "edit",
+      params: { messageId: "msg-1", content: "updated" },
+      mock: runtime.editMessageMSTeams,
+    },
+    { action: "delete", params: { messageId: "msg-1" }, mock: runtime.deleteMessageMSTeams },
+    { action: "pin", params: { messageId: "msg-1" }, mock: runtime.pinMessageMSTeams },
+    { action: "unpin", params: { pinnedMessageId: "pin-1" }, mock: runtime.unpinMessageMSTeams },
+    {
       action: "react",
-      actionParams: {
-        messageId: "msg-channel-react",
-        emoji: reactionType,
-      },
-      toolContext: {
-        currentChannelId: "conversation:19:channel-abc@thread.tacv2",
-        currentGraphChannelId: teamChannelTarget,
-      },
-      runtimeParams: {
-        to: teamChannelTarget,
-        messageId: "msg-channel-react",
-        reactionType,
-      },
-      details: okMSTeamsActionDetails("react", {
-        reactionType,
-      }),
-      contentDetails: {
-        channel: "msteams",
-        action: "react",
-        reactionType,
-        ok: true,
-      },
-    });
-  });
+      params: { messageId: "msg-1", emoji: "like" },
+      mock: runtime.reactMessageMSTeams,
+    },
+  ] as const)(
+    "blocks $action outside the current authorized conversation",
+    async ({ action, params, mock }) => {
+      await expect(
+        run(
+          action,
+          { to: graphTarget, ...params },
+          {
+            ...current({ ChatType: "group", To: conversation }),
+            cfg: { channels: { msteams: { groupPolicy: "allowlist", dmPolicy: "pairing" } } },
+          },
+        ),
+      ).rejects.toThrow("Microsoft Teams read target is not allowed.");
+      expect(mock).not.toHaveBeenCalled();
+    },
+  );
 
-  it("preserves explicit teamId/channelId target over toolContext fallback", async () => {
-    // Even in a channel context with a compound currentChannelId, an
-    // explicit `target` param must take precedence.
-    const teamChannelTarget = "team-2/19:channel-def@thread.tacv2";
-    const explicitTarget = "team-explicit/19:other@thread.tacv2";
-    await expectSuccessfulAction({
-      mockFn: reactMessageMSTeamsMock,
-      mockResult: { ok: true },
-      action: "react",
-      actionParams: {
-        target: explicitTarget,
-        messageId: "msg-explicit",
-        emoji: reactionType,
+  it("preserves an explicit Graph target over the current channel", async () => {
+    await success(
+      "react",
+      { target: graphTarget, messageId: "msg-1", emoji: "like" },
+      runtime.reactMessageMSTeams,
+      { ok: true },
+      { to: graphTarget, messageId: "msg-1", reactionType: "like" },
+      { channel: "msteams", action: "react", reactionType: "like", ok: true },
+      {
+        toolContext: {
+          currentChannelId: "team-other/channel-other",
+          currentGraphChannelId: "team-other/channel-other",
+        },
       },
-      toolContext: {
-        currentChannelId: teamChannelTarget,
-        currentGraphChannelId: teamChannelTarget,
-      },
-      runtimeParams: {
-        to: explicitTarget,
-        messageId: "msg-explicit",
-        reactionType,
-      },
-      details: okMSTeamsActionDetails("react", {
-        reactionType,
-      }),
-      contentDetails: {
-        channel: "msteams",
-        action: "react",
-        reactionType,
-        ok: true,
-      },
-    });
-  });
-
-  it("keeps chat conversation fallback targets as-is for DM react actions", async () => {
-    // DM/group-chat turns continue to set currentChannelId to a
-    // `conversation:<id>` string (no `teamId/` prefix), which the runtime
-    // will resolve through `/chats/{id}`.
-    const dmFallback = "conversation:19:chat-dm@thread.skype";
-    await expectSuccessfulAction({
-      mockFn: reactMessageMSTeamsMock,
-      mockResult: { ok: true },
-      action: "react",
-      actionParams: {
-        messageId: "msg-dm-react",
-        emoji: reactionType,
-      },
-      toolContext: {
-        currentChannelId: dmFallback,
-      },
-      runtimeParams: {
-        to: dmFallback,
-        messageId: "msg-dm-react",
-        reactionType,
-      },
-      details: okMSTeamsActionDetails("react", {
-        reactionType,
-      }),
-      contentDetails: {
-        channel: "msteams",
-        action: "react",
-        reactionType,
-        ok: true,
-      },
-    });
-  });
-});
-
-describe("msteamsPlugin.threading.buildToolContext", () => {
-  function callBuildToolContext(context: {
-    To?: string;
-    NativeChannelId?: string;
-    ReplyToId?: string;
-  }) {
-    const build = msteamsPlugin.threading?.buildToolContext;
-    if (!build) {
-      throw new Error("msteams threading.buildToolContext unavailable");
-    }
-    return build({
-      cfg: {} as OpenClawConfig,
-      accountId: undefined,
-      context,
-    });
-  }
-
-  it("uses NativeChannelId for channel turns so actions route via teamId/channelId", () => {
-    // Teams channel inbound messages carry the compound `teamId/channelId`
-    // on NativeChannelId. buildToolContext must prefer it over the bare
-    // `conversation:<id>` in To so action fallbacks route via
-    // `/teams/{teamId}/channels/{channelId}`.
-    const result = callBuildToolContext({
-      To: "conversation:19:channel-abc@thread.tacv2",
-      NativeChannelId: "team-1/19:channel-abc@thread.tacv2",
-      ReplyToId: "reply-1",
-    });
-    expect(result?.currentChannelId).toBe("conversation:19:channel-abc@thread.tacv2");
-    expect(result?.currentGraphChannelId).toBe("team-1/19:channel-abc@thread.tacv2");
-    expect(result?.currentThreadTs).toBe("reply-1");
-  });
-
-  it("falls back to To for DM turns (no NativeChannelId)", () => {
-    const result = callBuildToolContext({
-      To: "user:aad-user-1",
-    });
-    expect(result?.currentChannelId).toBe("user:aad-user-1");
-    expect(result?.currentGraphChannelId).toBeUndefined();
-  });
-
-  it("falls back to To for group chat turns (no NativeChannelId)", () => {
-    const result = callBuildToolContext({
-      To: "conversation:19:groupchat@thread.v2",
-    });
-    expect(result?.currentChannelId).toBe("conversation:19:groupchat@thread.v2");
-    expect(result?.currentGraphChannelId).toBeUndefined();
-  });
-
-  it("ignores NativeChannelId that does not encode a teamId/channelId pair", () => {
-    // Safety: only compound forms (with "/") should preempt the To fallback.
-    // A bare native id without a team prefix must not accidentally route
-    // through channel Graph paths.
-    const result = callBuildToolContext({
-      To: "conversation:19:chat@thread.v2",
-      NativeChannelId: "19:chat@thread.v2",
-    });
-    expect(result?.currentChannelId).toBe("conversation:19:chat@thread.v2");
-    expect(result?.currentGraphChannelId).toBeUndefined();
+    );
   });
 });

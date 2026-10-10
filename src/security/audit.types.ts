@@ -1,4 +1,4 @@
-export type SecurityAuditSeverity = "info" | "warn" | "critical";
+type SecurityAuditSeverity = "info" | "warn" | "critical";
 
 export type SecurityAuditFinding = {
   checkId: string;

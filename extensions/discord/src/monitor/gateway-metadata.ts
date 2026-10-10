@@ -1,6 +1,8 @@
 import type { APIGatewayBotInfo } from "discord-api-types/v10";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { captureHttpExchange } from "openclaw/plugin-sdk/proxy-capture";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import * as proxyCaptureSdk from "openclaw/plugin-sdk/proxy-capture";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { Type } from "typebox";
@@ -8,12 +10,17 @@ import { Check, Errors } from "typebox/value";
 import { isDiscordRateLimitResponseBody, summarizeDiscordResponseBody } from "../error-body.js";
 import { withAbortTimeout } from "./timeouts.js";
 
+// The shipped 2026.9.6 host omits async capture; retire this check when the minimum advances.
+const captureSdk: Partial<Pick<typeof proxyCaptureSdk, "captureHttpExchangeAsync">> =
+  proxyCaptureSdk;
+
 const DISCORD_GATEWAY_BOT_URL = "https://discord.com/api/v10/gateway/bot";
 const DISCORD_API_HOST = "discord.com";
 const DEFAULT_DISCORD_GATEWAY_URL = "wss://gateway.discord.gg/";
 const DEFAULT_DISCORD_GATEWAY_INFO_TIMEOUT_MS = 30_000;
 const MAX_DISCORD_GATEWAY_INFO_TIMEOUT_MS = 120_000;
 const DISCORD_GATEWAY_INFO_TIMEOUT_ENV = "OPENCLAW_DISCORD_GATEWAY_INFO_TIMEOUT_MS";
+const DISCORD_GATEWAY_METADATA_MAX_BYTES = 4 * 1024 * 1024;
 const DISCORD_GATEWAY_METADATA_FALLBACK_LOG_INTERVAL_MS = 60_000;
 
 type DiscordGatewayMetadataResponse = Pick<Response, "ok" | "status" | "text">;
@@ -24,6 +31,10 @@ export type DiscordGatewayFetch = (
   input: string,
   init?: DiscordGatewayFetchInit,
 ) => Promise<DiscordGatewayMetadataResponse>;
+type DiscordGatewayMetadataFetchOptions = {
+  capture?: false | { flowId: string; meta: Record<string, unknown> };
+  proxyUrl?: string;
+};
 
 type DiscordGatewayMetadataError = Error & { transient?: boolean };
 
@@ -40,18 +51,15 @@ const discordGatewayBotInfoSchema = Type.Object({
 
 const gatewayMetadataFallbackLogLastAt = new WeakMap<RuntimeEnv, number>();
 
-function resolveFetchInputUrl(input: RequestInfo | URL): string {
-  if (typeof input === "string") {
-    return input;
-  }
-  if (input instanceof URL) {
-    return input.toString();
-  }
-  return input.url;
-}
-
 async function materializeGuardedResponse(response: Response): Promise<Response> {
-  const body = await response.arrayBuffer();
+  const body = new Uint8Array(
+    await readResponseWithLimit(response, DISCORD_GATEWAY_METADATA_MAX_BYTES, {
+      onOverflow: ({ size, maxBytes }) =>
+        new Error(
+          `Discord gateway metadata response body too large: ${size} bytes (limit: ${maxBytes} bytes)`,
+        ),
+    }),
+  );
   return new Response(body, {
     status: response.status,
     statusText: response.statusText,
@@ -59,39 +67,16 @@ async function materializeGuardedResponse(response: Response): Promise<Response>
   });
 }
 
-function normalizeGatewayInfoTimeoutMs(value: unknown): number | undefined {
-  const numeric =
-    typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
-  if (!Number.isFinite(numeric) || numeric <= 0) {
-    return undefined;
-  }
-  return Math.min(Math.floor(numeric), MAX_DISCORD_GATEWAY_INFO_TIMEOUT_MS);
-}
-
-export function resolveDiscordGatewayInfoTimeoutMs(params?: {
-  configuredTimeoutMs?: number;
-  env?: NodeJS.ProcessEnv;
-}): number {
-  return (
-    normalizeGatewayInfoTimeoutMs(params?.configuredTimeoutMs) ??
-    normalizeGatewayInfoTimeoutMs(params?.env?.[DISCORD_GATEWAY_INFO_TIMEOUT_ENV]) ??
-    DEFAULT_DISCORD_GATEWAY_INFO_TIMEOUT_MS
+export function resolveDiscordGatewayInfoTimeoutMs(params?: { env?: NodeJS.ProcessEnv }): number {
+  return Math.min(
+    parseStrictPositiveInteger(params?.env?.[DISCORD_GATEWAY_INFO_TIMEOUT_ENV]) ??
+      DEFAULT_DISCORD_GATEWAY_INFO_TIMEOUT_MS,
+    MAX_DISCORD_GATEWAY_INFO_TIMEOUT_MS,
   );
 }
 
-function summarizeGatewayResponseBody(body: string): string {
-  return summarizeDiscordResponseBody(body, { emptyText: "<empty>" }) ?? "<empty>";
-}
-
-function isDiscordGatewayRateLimitResponse(status: number, body: string): boolean {
-  return status === 429 && isDiscordRateLimitResponseBody(body);
-}
-
 function isTransientDiscordGatewayResponse(status: number, body: string): boolean {
-  if (status >= 500) {
-    return true;
-  }
-  if (isDiscordGatewayRateLimitResponse(status, body)) {
+  if (status >= 500 || (status === 429 && isDiscordRateLimitResponseBody(body))) {
     return true;
   }
   const normalized = body.toLowerCase();
@@ -122,23 +107,6 @@ function createGatewayMetadataError(params: {
   return error;
 }
 
-function isTransientGatewayMetadataError(error: unknown): boolean {
-  return Boolean((error as DiscordGatewayMetadataError | undefined)?.transient);
-}
-
-function createDefaultGatewayInfo(): APIGatewayBotInfo {
-  return {
-    url: DEFAULT_DISCORD_GATEWAY_URL,
-    shards: 1,
-    session_start_limit: {
-      total: 1,
-      remaining: 1,
-      reset_after: 0,
-      max_concurrency: 1,
-    },
-  };
-}
-
 function summarizeGatewaySchemaErrors(value: unknown): string {
   const errors = Errors(discordGatewayBotInfoSchema, value);
   if (errors.length === 0) {
@@ -150,7 +118,7 @@ function summarizeGatewaySchemaErrors(value: unknown): string {
     .join("; ");
 }
 
-export function parseDiscordGatewayInfoBody(body: string): APIGatewayBotInfo {
+function parseDiscordGatewayInfoBody(body: string): APIGatewayBotInfo {
   const parsed = JSON.parse(body) as unknown;
   if (!Check(discordGatewayBotInfoSchema, parsed)) {
     throw new Error(summarizeGatewaySchemaErrors(parsed));
@@ -158,30 +126,22 @@ export function parseDiscordGatewayInfoBody(body: string): APIGatewayBotInfo {
   return parsed;
 }
 
-export async function fetchDiscordGatewayInfo(params: {
+async function fetchDiscordGatewayInfo(params: {
   token: string;
+  gatewayBotUrl?: string;
   fetchImpl: DiscordGatewayFetch;
   fetchInit?: DiscordGatewayFetchInit;
 }): Promise<APIGatewayBotInfo> {
   let response: DiscordGatewayMetadataResponse;
+  let body: string;
   try {
-    response = await params.fetchImpl(DISCORD_GATEWAY_BOT_URL, {
+    response = await params.fetchImpl(params.gatewayBotUrl ?? DISCORD_GATEWAY_BOT_URL, {
       ...params.fetchInit,
       headers: {
         ...params.fetchInit?.headers,
         Authorization: `Bot ${params.token}`,
       },
     });
-  } catch (error) {
-    throw createGatewayMetadataError({
-      detail: formatErrorMessage(error),
-      transient: true,
-      cause: error,
-    });
-  }
-
-  let body: string;
-  try {
     body = await response.text();
   } catch (error) {
     throw createGatewayMetadataError({
@@ -190,7 +150,7 @@ export async function fetchDiscordGatewayInfo(params: {
       cause: error,
     });
   }
-  const summary = summarizeGatewayResponseBody(body);
+  const summary = summarizeDiscordResponseBody(body, { emptyText: "<empty>" }) ?? "<empty>";
   const transient = isTransientDiscordGatewayResponse(response.status, body);
 
   if (!response.ok) {
@@ -213,6 +173,7 @@ export async function fetchDiscordGatewayInfo(params: {
 
 export async function fetchDiscordGatewayInfoWithTimeout(params: {
   token: string;
+  gatewayBotUrl?: string;
   fetchImpl: DiscordGatewayFetch;
   fetchInit?: DiscordGatewayFetchInit;
   timeoutMs?: number;
@@ -228,8 +189,7 @@ export async function fetchDiscordGatewayInfoWithTimeout(params: {
       }),
     run: async (signal) =>
       await fetchDiscordGatewayInfo({
-        token: params.token,
-        fetchImpl: params.fetchImpl,
+        ...params,
         fetchInit: {
           ...params.fetchInit,
           signal,
@@ -242,7 +202,7 @@ export function resolveGatewayInfoWithFallback(params: { runtime?: RuntimeEnv; e
   info: APIGatewayBotInfo;
   usedFallback: boolean;
 } {
-  if (!isTransientGatewayMetadataError(params.error)) {
+  if (!(params.error as DiscordGatewayMetadataError | undefined)?.transient) {
     throw params.error;
   }
   const message = formatErrorMessage(params.error);
@@ -260,22 +220,46 @@ export function resolveGatewayInfoWithFallback(params: { runtime?: RuntimeEnv; e
     }
   }
   return {
-    info: createDefaultGatewayInfo(),
+    info: {
+      url: DEFAULT_DISCORD_GATEWAY_URL,
+      shards: 1,
+      session_start_limit: {
+        total: 1,
+        remaining: 1,
+        reset_after: 0,
+        max_concurrency: 1,
+      },
+    },
     usedFallback: true,
   };
 }
 
-export async function fetchDiscordGatewayMetadataDirect(
+export async function fetchDiscordGatewayMetadataGuarded(
   input: string,
   init?: DiscordGatewayFetchInit,
-  capture?: false | { flowId: string; meta: Record<string, unknown> },
+  options?: DiscordGatewayMetadataFetchOptions,
 ): Promise<Response> {
+  const requestInit = init as RequestInit | undefined;
+  const signal = requestInit?.signal ?? undefined;
   const guarded = await fetchWithSsrFGuard({
-    url: resolveFetchInputUrl(input),
-    init: init as RequestInit,
+    url: input,
+    init: requestInit,
+    // DNS and proxy preflight run before RequestInit reaches fetch. Surface the
+    // existing metadata watchdog here so the whole lookup shares one deadline.
+    ...(signal ? { signal } : {}),
     policy: { allowedHostnames: [DISCORD_API_HOST] },
     capture: false,
     auditContext: "discord.gateway.metadata",
+    ...(options?.proxyUrl
+      ? {
+          mode: "trusted_explicit_proxy" as const,
+          dispatcherPolicy: {
+            mode: "explicit-proxy" as const,
+            proxyUrl: options.proxyUrl,
+            allowPrivateProxy: true,
+          },
+        }
+      : {}),
   });
   let response: Response;
   try {
@@ -283,16 +267,19 @@ export async function fetchDiscordGatewayMetadataDirect(
   } finally {
     await guarded.release();
   }
-  if (capture) {
-    captureHttpExchange({
-      url: input,
-      method: (init?.method as string | undefined) ?? "GET",
-      requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
-      requestBody: (init as RequestInit & { body?: BodyInit | null })?.body ?? null,
-      response,
-      flowId: capture.flowId,
-      meta: capture.meta,
-    });
+  if (options?.capture) {
+    // Finalization retains capture failures; observe the Promise returned by the SDK view.
+    void captureSdk
+      .captureHttpExchangeAsync?.({
+        url: input,
+        method: (init?.method as string | undefined) ?? "GET",
+        requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
+        requestBody: (init as RequestInit & { body?: BodyInit | null })?.body ?? null,
+        response,
+        flowId: options.capture.flowId,
+        meta: options.capture.meta,
+      })
+      .catch(() => {});
   }
   return response;
 }

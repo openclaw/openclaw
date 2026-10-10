@@ -1,15 +1,41 @@
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { initSubagentRegistry } from "../agents/subagent-registry.js";
-import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
+import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
+import { validateConfiguredBindings } from "../channels/plugins/configured-binding-registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  collectConfiguredMemoryEmbeddingStartupProviderOwners,
+  collectRegisteredEmbeddingProviderIds,
+  collectUnregisteredConfiguredMemoryEmbeddingProviders,
+  listAmbientOnlyConfiguredChannelIds,
+} from "../plugins/channel-plugin-ids.js";
+import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
+import { getRegisteredEmbeddingProvider } from "../plugins/embedding-providers.js";
+import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
+import { getPluginMetadataSnapshotCache } from "../plugins/plugin-cache.js";
 import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import type { PluginRegistryParams } from "../plugins/registry-types.js";
+import {
+  completePluginMetadataSnapshot,
+  type PluginMetadataSnapshot,
+} from "../plugins/plugin-metadata-snapshot.js";
+import { resolveProviderPolicySurfaceForOwner } from "../plugins/provider-public-artifacts.js";
+import {
+  markPluginRegistryActive,
+  withPluginRegistryPreparationScope,
+} from "../plugins/registry-lifecycle.js";
+import type { PluginRegistry, PluginRegistryParams } from "../plugins/registry-types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
-import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
-import { listCoreGatewayMethodNames } from "./methods/core-descriptors.js";
-import { mergeActivationSectionsIntoRuntimeConfig } from "./plugin-activation-runtime-config.js";
+import { disposePluginRegistryInstances, getActivePluginRegistry } from "../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  getPluginRuntimeLoadContext,
+  setPluginRuntimeLoadContext,
+} from "../plugins/runtime/load-context.js";
+import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation-runtime-config.js";
 import { listGatewayMethods } from "./server-methods-list.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
+import type { GatewayPluginRuntimeClaim } from "./server-plugin-runtime-generation.js";
+import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
 
 type GatewayPluginBootstrapLog = {
   info: (message: string) => void;
@@ -18,153 +44,316 @@ type GatewayPluginBootstrapLog = {
   debug: (message: string) => void;
 };
 
-type GatewayStartupTrace = {
-  detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
-};
-
-export function resolveGatewayStartupMaintenanceConfig(params: {
-  cfgAtStart: OpenClawConfig;
-  startupRuntimeConfig: OpenClawConfig;
-}): OpenClawConfig {
-  return params.cfgAtStart.channels === undefined &&
-    params.startupRuntimeConfig.channels !== undefined
-    ? {
-        ...params.cfgAtStart,
-        channels: params.startupRuntimeConfig.channels,
+/** Best-effort repair runs under the Gateway's existing post-ready maintenance lifetime. */
+export async function runGatewayPostReadyStartupMaintenance(params: {
+  getConfig: () => OpenClawConfig;
+  getPluginRegistry: () => PluginRegistry;
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "registrySource">;
+  databases: readonly import("./server-startup-session-migration.js").PreparedStartupSessionDatabase[];
+  signal: AbortSignal;
+  log: Pick<GatewayPluginBootstrapLog, "info" | "warn">;
+  startupTrace?: GatewayStartupTrace;
+}): Promise<void> {
+  const tasks = [
+    [
+      "plugin-registry",
+      async () => {
+        if (params.pluginMetadataSnapshot?.registrySource !== "derived") {
+          return;
+        }
+        const [{ withPluginLifecycleLease }, { refreshPluginRegistryAfterConfigMutation }] =
+          await Promise.all([
+            import("../plugins/plugin-lifecycle-lease.js"),
+            import("../plugins/registry-refresh.js"),
+          ]);
+        await withPluginLifecycleLease(
+          {
+            signal: params.signal,
+            assertCurrent: () => params.signal.throwIfAborted(),
+            processBound: true,
+          },
+          (lease) =>
+            refreshPluginRegistryAfterConfigMutation({
+              reason: "source-changed",
+              lease,
+              invalidateRuntimeCache: false,
+              logger: params.log,
+            }),
+        );
+      },
+    ],
+    [
+      "channels",
+      async () => {
+        const { runChannelPluginStartupMaintenance } =
+          await import("../channels/plugins/lifecycle-startup.js");
+        params.signal.throwIfAborted();
+        await withPluginRuntimeRegistryScope(params.getPluginRegistry(), () =>
+          runChannelPluginStartupMaintenance({
+            cfg: params.getConfig(),
+            env: process.env,
+            log: params.log,
+          }),
+        );
+      },
+    ],
+    [
+      "sessions",
+      async () => {
+        const { runGatewaySessionStartupMaintenance } =
+          await import("./server-startup-session-migration.js");
+        params.signal.throwIfAborted();
+        await runGatewaySessionStartupMaintenance(params);
+      },
+    ],
+    [
+      "pairing",
+      async () => {
+        const { listLegacyPairingStoreFiles } = await import("../infra/pairing-files.js");
+        params.signal.throwIfAborted();
+        const files = await listLegacyPairingStoreFiles();
+        if (files.length > 0) {
+          params.log.warn(
+            `Legacy pairing stores require repair: ${files.join(", ")}. Stop the Gateway and run openclaw doctor --fix.`,
+          );
+        }
+      },
+    ],
+  ] as const;
+  await Promise.all(
+    tasks.map(async ([name, run]) => {
+      try {
+        params.signal.throwIfAborted();
+        await measureStartup(params.startupTrace, `startup.maintenance.${name}`, run);
+      } catch (error) {
+        if (!params.signal.aborted) {
+          params.log.warn(`Gateway post-ready ${name} maintenance failed: ${String(error)}`);
+        }
       }
-    : params.cfgAtStart;
+    }),
+  );
 }
 
+/** Builds plugin startup state and gateway method lists before the server binds. */
 export async function prepareGatewayPluginBootstrap(params: {
   cfgAtStart: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
-  startupRuntimeConfig: OpenClawConfig;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  workerProviderIds?: readonly string[];
   minimalTestGateway: boolean;
   log: GatewayPluginBootstrapLog;
-  loadRuntimePlugins?: boolean;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }) {
   const activationSourceConfig = params.activationSourceConfig ?? params.cfgAtStart;
-  const startupMaintenanceConfig = resolveGatewayStartupMaintenanceConfig({
-    cfgAtStart: params.cfgAtStart,
-    startupRuntimeConfig: params.startupRuntimeConfig,
-  });
 
-  const shouldRunStartupMaintenance =
-    !params.minimalTestGateway || startupMaintenanceConfig.channels !== undefined;
-  if (shouldRunStartupMaintenance) {
-    const { runChannelPluginStartupMaintenance } =
-      await import("../channels/plugins/lifecycle-startup.js");
-    const startupTasks = [
-      runChannelPluginStartupMaintenance({
-        cfg: startupMaintenanceConfig,
-        env: process.env,
-        log: params.log,
-      }),
-    ];
-    if (!params.minimalTestGateway) {
-      const { runStartupSessionMigration } = await import("./server-startup-session-migration.js");
-      startupTasks.push(
-        runStartupSessionMigration({
-          cfg: params.cfgAtStart,
-          env: process.env,
-          log: params.log,
-        }),
-      );
-    }
-    await Promise.all(startupTasks);
-  }
-
-  initSubagentRegistry();
-
+  // Activation uses the pre-runtime source so auto-enable policy cannot be skewed by
+  // defaults injected while loading runtime config; runtime-only plugin config still merges in.
   const gatewayPluginConfig = params.minimalTestGateway
     ? params.cfgAtStart
-    : mergeActivationSectionsIntoRuntimeConfig({
+    : resolveGatewayStartupPluginActivationConfig({
         runtimeConfig: params.cfgAtStart,
-        activationConfig: applyPluginAutoEnable({
-          config: activationSourceConfig,
-          env: process.env,
-          ...(params.pluginMetadataSnapshot?.manifestRegistry
-            ? { manifestRegistry: params.pluginMetadataSnapshot.manifestRegistry }
-            : {}),
-        }).config,
+        activationSourceConfig,
+        env: process.env,
+        ...(params.pluginMetadataSnapshot?.manifestRegistry
+          ? { manifestRegistry: params.pluginMetadataSnapshot.manifestRegistry }
+          : {}),
+        discovery: params.pluginMetadataSnapshot?.discovery,
+        ambientEnvTriggers: params.ambientEnvTriggers,
       });
   const pluginsGloballyDisabled = gatewayPluginConfig.plugins?.enabled === false;
-  const defaultAgentId = resolveDefaultAgentId(gatewayPluginConfig);
-  const defaultWorkspaceDir = resolveAgentWorkspaceDir(gatewayPluginConfig, defaultAgentId);
+  const pluginWorkspaceDir = tryResolveConfiguredAgentWorkspaceDir(gatewayPluginConfig);
+  const defaultWorkspaceDir = pluginWorkspaceDir ?? resolveDefaultAgentWorkspaceDir();
   const pluginLookUpTable =
     params.minimalTestGateway || pluginsGloballyDisabled
       ? undefined
       : loadPluginLookUpTable({
           config: gatewayPluginConfig,
-          workspaceDir: defaultWorkspaceDir,
+          workspaceDir: pluginWorkspaceDir,
           env: process.env,
           activationSourceConfig,
           metadataSnapshot: params.pluginMetadataSnapshot,
+          workerProviderIds: params.workerProviderIds ?? [],
+          ambientEnvTriggers: params.ambientEnvTriggers,
         });
-  const deferredConfiguredChannelPluginIds = [
-    ...(pluginLookUpTable?.startup.configuredDeferredChannelPluginIds ?? []),
-  ];
+  // Startup logging and lifecycle publication consume the process-stable metadata snapshot.
+  // Minimal gateways skip runtime lookup-table construction, not metadata ownership.
+  const pluginManifestRecords =
+    pluginLookUpTable?.manifestRegistry.plugins ??
+    params.pluginMetadataSnapshot?.manifestRegistry.plugins ??
+    [];
   const startupPluginIds = [...(pluginLookUpTable?.startup.pluginIds ?? [])];
+  const ambientAutostartSuppressedChannelIds =
+    params.ambientEnvTriggers === "suppress"
+      ? new Set(
+          listAmbientOnlyConfiguredChannelIds({
+            config: params.cfgAtStart,
+            activationSourceConfig,
+            env: process.env,
+            includePersistedAuthState: false,
+            manifestRecords: pluginManifestRecords,
+          }),
+        )
+      : new Set<string>();
 
   const baseMethods = listGatewayMethods();
-  const coreGatewayMethodNames = listCoreGatewayMethodNames();
+  // Core requests need a live local registry without displacing another Gateway's plugins.
   const emptyPluginRegistry = createEmptyPluginRegistry();
-  let pluginRegistry = emptyPluginRegistry;
-  let baseGatewayMethods = baseMethods;
-  const shouldLoadRuntimePlugins = params.loadRuntimePlugins !== false;
-
-  if (!params.minimalTestGateway && shouldLoadRuntimePlugins) {
-    ({ pluginRegistry, gatewayMethods: baseGatewayMethods } = await loadGatewayStartupPluginRuntime(
-      {
-        cfg: gatewayPluginConfig,
-        activationSourceConfig,
-        workspaceDir: defaultWorkspaceDir,
-        log: params.log,
-        baseMethods,
-        coreGatewayMethodNames,
-        startupPluginIds,
-        pluginLookUpTable,
-        preferSetupRuntimeForChannelPlugins: deferredConfiguredChannelPluginIds.length > 0,
-        suppressPluginInfoLogs: deferredConfiguredChannelPluginIds.length > 0,
-      },
-    ));
-  } else {
-    pluginRegistry = params.minimalTestGateway
+  markPluginRegistryActive(emptyPluginRegistry);
+  const pluginRegistry =
+    params.minimalTestGateway && !pluginsGloballyDisabled
       ? (getActivePluginRegistry() ?? emptyPluginRegistry)
       : emptyPluginRegistry;
-    setActivePluginRegistry(pluginRegistry);
-  }
+  const metadataSnapshot =
+    getGatewayPluginMetadataSnapshot() ??
+    completePluginMetadataSnapshot({
+      snapshot: pluginLookUpTable ?? params.pluginMetadataSnapshot,
+      config: activationSourceConfig,
+      env: process.env,
+      workspaceDir: defaultWorkspaceDir,
+    });
+  // Requests can reach this registry before runtime attachment (or without it).
+  // Carry the complete boot generation so cold capabilities never rediscover source plugins.
+  setPluginRuntimeLoadContext(pluginRegistry, {
+    rawConfig: params.cfgAtStart,
+    config: gatewayPluginConfig,
+    activationSourceConfig,
+    autoEnabledReasons: {},
+    workspaceDir: pluginWorkspaceDir,
+    env: process.env,
+    logger: params.log,
+    metadataSnapshot,
+    manifestRegistry: metadataSnapshot?.manifestRegistry,
+    installRecords: metadataSnapshot
+      ? extractPluginInstallRecordsFromInstalledPluginIndex(metadataSnapshot.index)
+      : undefined,
+    preferBuiltPluginArtifacts: true,
+  });
 
   return {
     gatewayPluginConfigAtStart: gatewayPluginConfig,
     defaultWorkspaceDir,
-    deferredConfiguredChannelPluginIds,
+    pluginWorkspaceDir,
     startupPluginIds,
+    pluginManifestRecords,
+    pluginMetadataSnapshot: metadataSnapshot,
     pluginLookUpTable,
     baseMethods,
     pluginRegistry,
-    baseGatewayMethods,
-    runtimePluginsLoaded: !params.minimalTestGateway && shouldLoadRuntimePlugins,
+    baseGatewayMethods: baseMethods,
+    ambientAutostartSuppressedChannelIds,
   };
 }
 
+/**
+ * Warn when `memory.search.provider` selects a memory embedding provider
+ * that no loaded plugin registered. Without the owning plugin, `active-memory`
+ * cannot embed and silently falls back to keyword/FTS-only recall.
+ */
+export function warnUnregisteredConfiguredMemoryEmbeddingProviders(params: {
+  config: OpenClawConfig;
+  pluginRegistry: Partial<Pick<PluginRegistry, "embeddingProviders">>;
+  log: Pick<GatewayPluginBootstrapLog, "warn">;
+}): void {
+  const unregistered = collectUnregisteredConfiguredMemoryEmbeddingProviders({
+    config: params.config,
+    registeredProviderIds: collectRegisteredEmbeddingProviderIds(params.pluginRegistry),
+  });
+  for (const provider of unregistered) {
+    const path = `memory.search.${provider.source}`;
+    params.log.warn(
+      `${path}="${provider.configuredId}" is configured, but no loaded plugin registered a memory embedding provider that can serve "${provider.configuredId}". Semantic memory recall will fall back to keyword/FTS-only search. Ensure the plugin that provides "${provider.configuredId}" is installed and enabled.`,
+    );
+  }
+}
+
+async function warnConfiguredMemoryEmbeddingProviderSetup(params: {
+  config: OpenClawConfig;
+  pluginRegistry: PluginRegistry;
+  pluginLookUpTable?: ReturnType<typeof loadPluginLookUpTable>;
+  log: Pick<GatewayPluginBootstrapLog, "warn">;
+}): Promise<void> {
+  const manifestRegistry = getPluginRuntimeLoadContext(params.pluginRegistry)?.manifestRegistry ??
+    params.pluginLookUpTable?.manifestRegistry ?? { plugins: [] };
+  await Promise.all(
+    collectConfiguredMemoryEmbeddingStartupProviderOwners(params.config).flatMap((provider) => {
+      const registered = [...provider.ownerIds]
+        .map((ownerId) => getRegisteredEmbeddingProvider(ownerId))
+        .find((entry) => entry !== undefined);
+      const owner = manifestRegistry.plugins.find(
+        (plugin) => plugin.id === registered?.ownerPluginId,
+      );
+      if (provider.agentIds.size === 0 || !owner) {
+        return [];
+      }
+      let policy: ReturnType<typeof resolveProviderPolicySurfaceForOwner>;
+      try {
+        policy = resolveProviderPolicySurfaceForOwner(owner);
+      } catch (error) {
+        params.log.warn(
+          `Memory embedding provider "${provider.configuredId}" setup could not be checked (${String(error)}). Run "openclaw doctor" to retry.`,
+        );
+        return [];
+      }
+      const inspectSetup = policy?.inspectEmbeddingProviderSetup;
+      if (!inspectSetup) {
+        return [];
+      }
+      return [...provider.agentIds].map(async (agentId) => {
+        try {
+          const setup = await inspectSetup({
+            config: params.config,
+            env: process.env,
+            agentId,
+            provider: provider.configuredId,
+          });
+          if (setup) {
+            params.log.warn(
+              `Agent "${agentId}": semantic memory recall is degraded (${provider.source}="${provider.configuredId}"). ${setup.reason}${setup.fixHint ? ` ${setup.fixHint}` : ""}`,
+            );
+          }
+        } catch (error) {
+          params.log.warn(
+            `Agent "${agentId}": memory embedding setup could not be checked (${String(error)}). Run "openclaw doctor" to retry.`,
+          );
+        }
+      });
+    }),
+  );
+}
+
+/** Loads startup plugin runtimes after the gateway listener binds. */
 export async function loadGatewayStartupPluginRuntime(params: {
   cfg: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
-  workspaceDir: string;
+  workspaceDir?: string;
   log: GatewayPluginBootstrapLog;
   baseMethods: string[];
   coreGatewayMethodNames?: readonly string[];
   hostServices?: PluginRegistryParams["hostServices"];
   startupPluginIds: string[];
   pluginLookUpTable?: ReturnType<typeof loadPluginLookUpTable>;
-  preferSetupRuntimeForChannelPlugins?: boolean;
-  suppressPluginInfoLogs?: boolean;
-  startupTrace?: GatewayStartupTrace;
+  startupTrace?: Pick<GatewayStartupTrace, "detail">;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
+  resolveGatewayContext?: GatewayContextResolver;
+  pluginRuntimeClaim?: GatewayPluginRuntimeClaim;
+  getCurrentPluginRegistry?: () => PluginRegistry;
 }) {
-  const { loadGatewayStartupPlugins } = await import("./server-plugin-bootstrap.js");
-  return loadGatewayStartupPlugins({
+  // Keep server-plugin-bootstrap behind one lazy boundary; startup config tests can exercise
+  // planning without importing plugin package runtimes.
+  const { prepareGatewayPluginLoad } = await import("./server-plugin-bootstrap.js");
+  await params.pluginRuntimeClaim?.waitForUnblocked();
+  if (params.pluginRuntimeClaim && !params.pluginRuntimeClaim.isCurrent()) {
+    const currentPluginRegistry = params.getCurrentPluginRegistry?.();
+    if (!currentPluginRegistry) {
+      throw new Error("superseded Gateway startup cannot resolve the current plugin runtime");
+    }
+    return {
+      pluginRegistry: currentPluginRegistry,
+      gatewayMethods: params.baseMethods,
+    };
+  }
+  const loaded = prepareGatewayPluginLoad({
+    loadIntent: "startup",
     cfg: params.cfg,
     activationSourceConfig: params.activationSourceConfig,
     workspaceDir: params.workspaceDir,
@@ -176,8 +365,49 @@ export async function loadGatewayStartupPluginRuntime(params: {
     }),
     pluginIds: params.startupPluginIds,
     pluginLookUpTable: params.pluginLookUpTable,
-    preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
-    suppressPluginInfoLogs: params.suppressPluginInfoLogs,
+    channelPluginLoadIntent: "full",
     startupTrace: params.startupTrace,
+    ambientEnvTriggers: params.ambientEnvTriggers,
+    ...(params.resolveGatewayContext
+      ? { resolveGatewayContext: params.resolveGatewayContext }
+      : {}),
   });
+  try {
+    withPluginRegistryPreparationScope(loaded.pluginRegistry, () =>
+      withPluginRuntimeRegistryScope(loaded.pluginRegistry, () =>
+        validateConfiguredBindings(loaded.resolvedConfig),
+      ),
+    );
+    warnUnregisteredConfiguredMemoryEmbeddingProviders({
+      config: loaded.resolvedConfig,
+      pluginRegistry: loaded.pluginRegistry,
+      log: params.log,
+    });
+    // Setup diagnostics may be asynchronous; a stalled provider must not hold startup.
+    void withPluginRuntimeRegistryScope(loaded.pluginRegistry, () =>
+      warnConfiguredMemoryEmbeddingProviderSetup({
+        config: loaded.resolvedConfig,
+        pluginRegistry: loaded.pluginRegistry,
+        pluginLookUpTable: params.pluginLookUpTable,
+        log: params.log,
+      }),
+    ).catch((error: unknown) => {
+      params.log.warn(`Memory embedding setup checks failed: ${String(error)}`);
+    });
+    const metadata = getPluginRuntimeLoadContext(loaded.pluginRegistry)?.metadataSnapshot;
+    const { settlePluginNativeAdmissions } =
+      await import("../plugins/plugin-native-admission-state.js");
+    await settlePluginNativeAdmissions(
+      metadata ? getPluginMetadataSnapshotCache(metadata) : undefined,
+    );
+    return loaded;
+  } catch (error) {
+    loaded.retireGatewayRuntimeBindings();
+    await disposePluginRegistryInstances(loaded.pluginRegistry).catch((cleanupError: unknown) => {
+      throw new AggregateError([error, cleanupError], "Startup plugin candidate cleanup failed", {
+        cause: error,
+      });
+    });
+    throw error;
+  }
 }

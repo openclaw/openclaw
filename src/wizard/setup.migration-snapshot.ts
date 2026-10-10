@@ -1,0 +1,306 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import crypto from "node:crypto";
+import { createReadStream } from "node:fs";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { pathExists } from "@openclaw/fs-safe/advanced";
+import { isNotFoundPathError } from "@openclaw/fs-safe/path";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { FILE_LOCK_TIMEOUT_ERROR_CODE, withFileLock } from "../infra/file-lock.js";
+import { readJsonFile } from "../infra/json-files.js";
+import type { MigrationPlan } from "../plugins/types.js";
+import { resolveUserPath } from "../utils.js";
+import { canonicalizeSetupMigrationValue } from "./setup.migration-canonical.js";
+
+const ONBOARDING_TARGET_LOCK_OPTIONS = {
+  retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
+  stale: 30 * 60 * 1000,
+  staleRecovery: "remove-if-unchanged" as const,
+};
+const activeSetupMigrationTargetLock = new AsyncLocalStorage<string>();
+const MEANINGFUL_CONFIG_IGNORED_KEYS = new Set(["$schema", "meta", "telemetry"]);
+const MEANINGFUL_WORKSPACE_ENTRIES = [
+  "AGENTS.md",
+  "SOUL.md",
+  "USER.md",
+  "IDENTITY.md",
+  "MEMORY.md",
+  "skills",
+] as const;
+const IMPORT_BLOCKING_STATE_ENTRIES = ["credentials", "sessions", "agents"] as const;
+
+export class SetupTargetLockedError extends Error {
+  readonly code = "setup_target_locked";
+
+  constructor(
+    public readonly holderPid: number | undefined,
+    profile: string | undefined,
+    cause: unknown,
+  ) {
+    const target = profile ? `profile ${profile}` : "the current profile";
+    const owner = holderPid === undefined ? "" : ` (pid ${holderPid})`;
+    super(
+      `Another onboarding/config operation is running for ${target}${owner}. Finish or abort it, then re-run.`,
+      { cause },
+    );
+    this.name = "SetupTargetLockedError";
+  }
+}
+
+async function hasDirectoryEntries(candidate: string): Promise<boolean> {
+  try {
+    return (await fs.readdir(candidate)).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+function buildSetupMigrationSnapshotConfig(config: OpenClawConfig): Record<string, unknown> {
+  const snapshot: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(config as Record<string, unknown>)) {
+    if (MEANINGFUL_CONFIG_IGNORED_KEYS.has(key)) {
+      continue;
+    }
+    if (key !== "wizard" || !value || typeof value !== "object" || Array.isArray(value)) {
+      snapshot[key] = value;
+      continue;
+    }
+    // Risk acknowledgement can be accepted between retries; freshness already ignores it.
+    const wizard = Object.fromEntries(
+      Object.entries(value).filter(([wizardKey]) => wizardKey !== "securityAcknowledgedAt"),
+    );
+    if (Object.keys(wizard).length > 0) {
+      snapshot[key] = wizard;
+    }
+  }
+  return snapshot;
+}
+
+export async function inspectSetupMigrationFreshness(params: {
+  baseConfig: OpenClawConfig;
+  stateDir: string;
+  workspaceDir: string;
+}): Promise<{ fresh: boolean; reasons: string[] }> {
+  const reasons: string[] = [];
+  if (Object.keys(buildSetupMigrationSnapshotConfig(params.baseConfig)).length > 0) {
+    reasons.push("existing config values are loaded");
+  }
+  for (const entry of MEANINGFUL_WORKSPACE_ENTRIES) {
+    if (await pathExists(path.join(params.workspaceDir, entry))) {
+      reasons.push(`workspace ${entry} exists`);
+    }
+  }
+  if (
+    reasons.every((reason) => !reason.startsWith("workspace ")) &&
+    (await hasDirectoryEntries(params.workspaceDir))
+  ) {
+    reasons.push("workspace directory is not empty");
+  }
+  for (const entry of IMPORT_BLOCKING_STATE_ENTRIES) {
+    if (await hasDirectoryEntries(path.join(params.stateDir, entry))) {
+      reasons.push(`state ${entry}/ exists`);
+    }
+  }
+  return { fresh: reasons.length === 0, reasons };
+}
+
+/** Preserve interactive consent decisions made before the import lock rereads config. */
+export function preserveSetupMigrationOnboardingConsents(
+  config: OpenClawConfig,
+  inMemoryConfig: OpenClawConfig,
+): OpenClawConfig {
+  const securityAcknowledgedAt = inMemoryConfig.wizard?.securityAcknowledgedAt;
+  const preserveSecurity = securityAcknowledgedAt && !config.wizard?.securityAcknowledgedAt;
+  const preserveTelemetry = inMemoryConfig.telemetry?.consentedAt && !config.telemetry?.consentedAt;
+  if (!preserveSecurity && !preserveTelemetry) {
+    return config;
+  }
+  return {
+    ...config,
+    ...(preserveSecurity ? { wizard: { ...config.wizard, securityAcknowledgedAt } } : {}),
+    ...(preserveTelemetry ? { telemetry: inMemoryConfig.telemetry } : {}),
+  };
+}
+
+async function hashSnapshotPath(
+  hash: crypto.Hash,
+  candidate: string,
+  snapshotPath: string,
+  symlinks: "record" | "follow",
+  followedRealPaths = new Set<string>(),
+): Promise<void> {
+  let stat: import("node:fs").Stats;
+  try {
+    stat = await fs.lstat(candidate);
+  } catch (error) {
+    if (isNotFoundPathError(error)) {
+      hash.update(`missing:${snapshotPath}\0`);
+      return;
+    }
+    throw error;
+  }
+  if (stat.isSymbolicLink()) {
+    hash.update(`symlink:${snapshotPath}\0${await fs.readlink(candidate)}\0`);
+    if (symlinks === "record") {
+      return;
+    }
+    let realPath: string;
+    try {
+      realPath = await fs.realpath(candidate);
+    } catch (error) {
+      hash.update(`unresolved:${(error as NodeJS.ErrnoException).code ?? "unknown"}\0`);
+      return;
+    }
+    if (followedRealPaths.has(realPath)) {
+      hash.update(`cycle:${snapshotPath}\0`);
+      return;
+    }
+    followedRealPaths.add(realPath);
+    await hashSnapshotPath(hash, realPath, `${snapshotPath}/referent`, symlinks, followedRealPaths);
+    followedRealPaths.delete(realPath);
+    return;
+  }
+  if (stat.isDirectory()) {
+    hash.update(`directory:${snapshotPath}\0`);
+    for (const entry of (await fs.readdir(candidate)).toSorted()) {
+      await hashSnapshotPath(
+        hash,
+        path.join(candidate, entry),
+        `${snapshotPath}/${entry}`,
+        symlinks,
+        followedRealPaths,
+      );
+    }
+    return;
+  }
+  if (stat.isFile()) {
+    hash.update(`file:${snapshotPath}\0${stat.size}\0`);
+    for await (const chunk of createReadStream(candidate)) {
+      hash.update(chunk);
+    }
+    hash.update("\0");
+    return;
+  }
+  hash.update(`other:${snapshotPath}\0`);
+}
+
+/** Hashes migration-owned target state without persisting raw paths or values. */
+export async function buildSetupMigrationTargetSnapshot(params: {
+  config: OpenClawConfig;
+  stateDir: string;
+  workspaceDir: string;
+}): Promise<string> {
+  const hash = crypto.createHash("sha256");
+  const targetConfig = buildSetupMigrationSnapshotConfig(params.config);
+  hash.update(`config:${JSON.stringify(canonicalizeSetupMigrationValue(targetConfig))}\0`);
+  await hashSnapshotPath(hash, params.workspaceDir, "workspace", "record");
+  for (const entry of IMPORT_BLOCKING_STATE_ENTRIES) {
+    await hashSnapshotPath(hash, path.join(params.stateDir, entry), `state/${entry}`, "record");
+  }
+  return hash.digest("hex");
+}
+
+/** Hashes only source paths represented by the provider's concrete migration plan. */
+export async function buildSetupMigrationPlanSourceSnapshot(plan: MigrationPlan): Promise<string> {
+  const hash = crypto.createHash("sha256");
+  const sources = [
+    ...new Set(
+      plan.items.flatMap((item) => {
+        const input = item.source?.trim();
+        if (!input) {
+          return [];
+        }
+        const source = path.resolve(resolveUserPath(input));
+        return path.extname(source) === ".db"
+          ? [source, `${source}-wal`, `${source}-shm`, `${source}-journal`]
+          : [source];
+      }),
+    ),
+  ].toSorted();
+  for (const [index, source] of sources.entries()) {
+    await hashSnapshotPath(hash, source, `source/${index}`, "follow");
+  }
+  return hash.digest("hex");
+}
+
+/** Rechecks planning inputs immediately before the provider-side-effect boundary. */
+export async function prepareSetupMigrationAttemptBoundary(params: {
+  currentConfig: OpenClawConfig;
+  stateDir: string;
+  workspaceDir: string;
+  plan: MigrationPlan;
+  expectedTargetSnapshotHash: string;
+  expectedSourceSnapshotHash: string;
+}): Promise<void> {
+  const currentTargetSnapshotHash = await buildSetupMigrationTargetSnapshot({
+    config: params.currentConfig,
+    stateDir: params.stateDir,
+    workspaceDir: params.workspaceDir,
+  });
+  if (currentTargetSnapshotHash !== params.expectedTargetSnapshotHash) {
+    throw new SetupMigrationTargetChangedError(
+      "Migration target changed while preparing the import. Review it and retry.",
+    );
+  }
+  const sourceSnapshotHash = await buildSetupMigrationPlanSourceSnapshot(params.plan);
+  if (sourceSnapshotHash !== params.expectedSourceSnapshotHash) {
+    throw new Error("Migration source changed while preparing the import. Review it and retry.");
+  }
+}
+
+/** Serializes onboarding writes that share one OpenClaw state target. */
+export async function withSetupMigrationTargetLock<T>(
+  stateDir: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const resolvedStateDir = path.resolve(stateDir);
+  const activeStateDir = activeSetupMigrationTargetLock.getStore();
+  if (activeStateDir) {
+    if (activeStateDir !== resolvedStateDir) {
+      throw new Error("nested onboarding target lock cannot switch the OpenClaw state directory");
+    }
+    return await fn();
+  }
+  const migrationDir = path.join(resolvedStateDir, "migration");
+  await fs.mkdir(migrationDir, { recursive: true, mode: 0o700 });
+  const lockTarget = path.join(migrationDir, "onboarding.lock-target");
+  let acquired = false;
+  try {
+    return await withFileLock(lockTarget, ONBOARDING_TARGET_LOCK_OPTIONS, async () => {
+      acquired = true;
+      return await activeSetupMigrationTargetLock.run(resolvedStateDir, fn);
+    });
+  } catch (error) {
+    if (acquired || (error as { code?: unknown }).code !== FILE_LOCK_TIMEOUT_ERROR_CODE) {
+      throw error;
+    }
+    const payload = await readJsonFile<{ pid?: unknown }>(`${lockTarget}.lock`, {
+      maxBytes: 1_024,
+    });
+    const pid = payload?.pid;
+    const holderPid =
+      typeof pid === "number" && Number.isSafeInteger(pid) && pid > 0 ? pid : undefined;
+    throw new SetupTargetLockedError(holderPid, process.env.OPENCLAW_PROFILE?.trim(), error);
+  }
+}
+
+export function assertFreshSetupMigrationTarget(freshness: {
+  fresh: boolean;
+  reasons: readonly string[];
+}): void {
+  if (freshness.fresh) {
+    return;
+  }
+  throw new SetupMigrationFreshnessError(
+    [
+      "Migration import during onboarding requires a fresh OpenClaw setup.",
+      "Create a fresh setup or reset config, credentials, sessions, and workspace before importing.",
+      "Backup plus overwrite/merge imports are feature-gated for now.",
+      "Existing setup:",
+      ...freshness.reasons.map((reason) => `- ${reason}`),
+    ].join("\n"),
+  );
+}
+
+export class SetupMigrationFreshnessError extends Error {}
+export class SetupMigrationTargetChangedError extends Error {}

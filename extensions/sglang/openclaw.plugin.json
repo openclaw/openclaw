@@ -1,10 +1,16 @@
 {
   "id": "sglang",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
   "enabledByDefault": true,
   "providers": ["sglang"],
+  "modelCatalog": {
+    "discovery": {
+      "sglang": "refreshable"
+    }
+  },
   "providerRequest": {
     "providers": {
       "sglang": {
@@ -22,8 +28,13 @@
       }
     }
   },
-  "providerAuthEnvVars": {
-    "sglang": ["SGLANG_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "sglang",
+        "envVars": ["SGLANG_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

@@ -1,369 +1,81 @@
-import { getAcpSessionManager } from "../../acp/control-plane/manager.js";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import {
-  abortEmbeddedPiRun,
-  resolveActiveEmbeddedRunSessionId,
-} from "../../agents/pi-embedded-runner/runs.js";
-import {
-  getLatestSubagentRunByChildSessionKey,
-  listSubagentRunsForController,
-  markSubagentRunTerminated,
-} from "../../agents/subagent-registry.js";
-import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
-import {
-  resolveInternalSessionKey,
-  resolveMainSessionAlias,
-} from "../../agents/tools/sessions-helpers.js";
-import {
-  loadSessionStore,
-  resolveSessionStoreEntry,
-  resolveStorePath,
-  type SessionEntry,
-  updateSessionStore,
-} from "../../config/sessions.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { logVerbose } from "../../globals.js";
-import { formatErrorMessage } from "../../infra/errors.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
+// Recognizes stop requests before loading active-run cancellation machinery.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
-import { resolveCommandAuthorization } from "../command-auth.js";
-import type { FinalizedMsgContext } from "../templating.js";
-import {
-  applyAbortCutoffToSessionEntry,
-  resolveAbortCutoffFromContext,
-  shouldPersistAbortCutoff,
-} from "./abort-cutoff.js";
-import {
-  getAbortMemory,
-  getAbortMemorySizeForTest,
-  isAbortRequestText,
-  isAbortTrigger,
-  resetAbortMemoryForTest,
-  setAbortMemory,
-} from "./abort-primitives.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { FinalizedRuntimeMsgContext } from "../templating.js";
+import { isAbortRequestText } from "./abort-primitives.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
-import { clearSessionQueues } from "./queue.js";
-import { replyRunRegistry } from "./reply-run-registry.js";
 
-export { resolveAbortCutoffFromContext, shouldSkipMessageByAbortCutoff } from "./abort-cutoff.js";
-export {
-  getAbortMemory,
-  getAbortMemorySizeForTest,
-  isAbortRequestText,
-  isAbortTrigger,
-  resetAbortMemoryForTest,
-  setAbortMemory,
+export type FastAbortRequestParams = {
+  ctx: FinalizedRuntimeMsgContext;
+  cfg: OpenClawConfig;
+  isCommandTargetCurrent?: () => boolean;
 };
 
-const defaultAbortDeps = {
-  getAcpSessionManager,
-  abortEmbeddedPiRun,
-  resolveActiveEmbeddedRunSessionId,
-  getLatestSubagentRunByChildSessionKey,
-  listSubagentRunsForController,
-  markSubagentRunTerminated,
+export type FastAbortResult = {
+  handled: boolean;
+  aborted: boolean;
+  rejectionReason?: "finalizing";
+  stoppedSubagents?: number;
+  failedSubagents?: number;
 };
 
-const abortDeps = {
-  ...defaultAbortDeps,
-};
-
-export const __testing = {
-  setDepsForTests(deps: Partial<typeof defaultAbortDeps> | undefined): void {
-    abortDeps.getAcpSessionManager =
-      deps?.getAcpSessionManager ?? defaultAbortDeps.getAcpSessionManager;
-    abortDeps.abortEmbeddedPiRun = deps?.abortEmbeddedPiRun ?? defaultAbortDeps.abortEmbeddedPiRun;
-    abortDeps.resolveActiveEmbeddedRunSessionId =
-      deps?.resolveActiveEmbeddedRunSessionId ?? defaultAbortDeps.resolveActiveEmbeddedRunSessionId;
-    abortDeps.getLatestSubagentRunByChildSessionKey =
-      deps?.getLatestSubagentRunByChildSessionKey ??
-      defaultAbortDeps.getLatestSubagentRunByChildSessionKey;
-    abortDeps.listSubagentRunsForController =
-      deps?.listSubagentRunsForController ?? defaultAbortDeps.listSubagentRunsForController;
-    abortDeps.markSubagentRunTerminated =
-      deps?.markSubagentRunTerminated ?? defaultAbortDeps.markSubagentRunTerminated;
-  },
-  resetDepsForTests(): void {
-    abortDeps.getAcpSessionManager = defaultAbortDeps.getAcpSessionManager;
-    abortDeps.abortEmbeddedPiRun = defaultAbortDeps.abortEmbeddedPiRun;
-    abortDeps.resolveActiveEmbeddedRunSessionId =
-      defaultAbortDeps.resolveActiveEmbeddedRunSessionId;
-    abortDeps.getLatestSubagentRunByChildSessionKey =
-      defaultAbortDeps.getLatestSubagentRunByChildSessionKey;
-    abortDeps.listSubagentRunsForController = defaultAbortDeps.listSubagentRunsForController;
-    abortDeps.markSubagentRunTerminated = defaultAbortDeps.markSubagentRunTerminated;
-  },
-};
-
-export function abortSessionRunTarget(params: { key?: string; sessionId?: string }): boolean {
-  const sessionIds = new Set<string>();
-  const key = normalizeOptionalString(params.key);
-  if (key) {
-    const activeSessionId = abortDeps.resolveActiveEmbeddedRunSessionId(key);
-    if (activeSessionId) {
-      sessionIds.add(activeSessionId);
-    }
-  }
-  const explicitSessionId = normalizeOptionalString(params.sessionId);
-  if (explicitSessionId) {
-    sessionIds.add(explicitSessionId);
-  }
-
-  let aborted = key ? replyRunRegistry.abort(key) : false;
-  for (const sessionId of sessionIds) {
-    aborted = abortDeps.abortEmbeddedPiRun(sessionId) || aborted;
-  }
-  return aborted;
-}
-
-export function formatAbortReplyText(stoppedSubagents?: number): string {
+export function formatAbortReplyText(
+  stoppedSubagents?: number,
+  rejectionReason?: "finalizing",
+  failedSubagents?: number,
+): string {
+  const failureSuffix =
+    typeof failedSubagents === "number" && failedSubagents > 0
+      ? ` Cancellation was incomplete for ${failedSubagents} sub-agent${failedSubagents === 1 ? "" : "s"}. Retry /stop.`
+      : "";
+  const base =
+    rejectionReason === "finalizing"
+      ? "Agent reply is already finalizing and can no longer be aborted."
+      : "⚙️ Agent was aborted.";
   if (typeof stoppedSubagents !== "number" || stoppedSubagents <= 0) {
-    return "⚙️ Agent was aborted.";
+    return `${base}${failureSuffix}`;
   }
   const label = stoppedSubagents === 1 ? "sub-agent" : "sub-agents";
-  return `⚙️ Agent was aborted. Stopped ${stoppedSubagents} ${label}.`;
+  return `${base} Stopped ${stoppedSubagents} ${label}.${failureSuffix}`;
 }
 
-export function resolveSessionEntryForKey(
-  store: Record<string, SessionEntry> | undefined,
-  sessionKey: string | undefined,
-): { entry?: SessionEntry; key?: string; legacyKeys?: string[] } {
-  if (!store || !sessionKey) {
-    return {};
-  }
-  const resolved = resolveSessionStoreEntry({ store, sessionKey });
-  if (resolved.existing) {
-    return resolved.legacyKeys.length > 0
-      ? {
-          entry: resolved.existing,
-          key: resolved.normalizedKey,
-          legacyKeys: resolved.legacyKeys,
-        }
-      : {
-          entry: resolved.existing,
-          key: resolved.normalizedKey,
-        };
-  }
-  return {};
-}
-
-function normalizeRequesterSessionKey(
-  cfg: OpenClawConfig,
-  key: string | undefined,
-): string | undefined {
-  const cleaned = normalizeOptionalString(key);
-  if (!cleaned) {
+/** Normalize ingress once; current authorization belongs to the loaded operation. */
+function resolveFastAbortRequest(params: FastAbortRequestParams) {
+  const { ctx, cfg } = params;
+  const commandSessionKey =
+    normalizeOptionalString(ctx.SessionKey) ?? normalizeOptionalString(ctx.ParentSessionKey);
+  const targetKey = normalizeOptionalString(ctx.CommandTargetSessionKey) ?? commandSessionKey;
+  const resolveTargetAgentId = () =>
+    resolveSessionAgentId({
+      sessionKey: targetKey ?? ctx.SessionKey ?? "",
+      config: cfg,
+      fallbackAgentId: ctx.AgentId,
+    });
+  const raw = stripStructuralPrefixes(ctx.commandText);
+  const isGroup = normalizeOptionalLowercaseString(ctx.ChatType) === "group";
+  const stripped = isGroup ? stripMentions(raw, ctx, cfg, resolveTargetAgentId()) : raw;
+  if (!isAbortRequestText(stripped)) {
     return undefined;
   }
-  const { mainKey, alias } = resolveMainSessionAlias(cfg);
-  return resolveInternalSessionKey({ key: cleaned, alias, mainKey });
+
+  return { commandSessionKey, targetKey, resolveTargetAgentId };
 }
 
-export function stopSubagentsForRequester(params: {
-  cfg: OpenClawConfig;
-  requesterSessionKey?: string;
-}): { stopped: number } {
-  const requesterKey = normalizeRequesterSessionKey(params.cfg, params.requesterSessionKey);
-  if (!requesterKey) {
-    return { stopped: 0 };
-  }
-  const dedupedRunsByChildKey = new Map<string, SubagentRunRecord>();
-  for (const run of abortDeps.listSubagentRunsForController(requesterKey)) {
-    const childKey = normalizeOptionalString(run.childSessionKey);
-    if (!childKey) {
-      continue;
-    }
-    const latest = abortDeps.getLatestSubagentRunByChildSessionKey(childKey);
-    if (!latest) {
-      const existing = dedupedRunsByChildKey.get(childKey);
-      if (!existing || run.createdAt >= existing.createdAt) {
-        dedupedRunsByChildKey.set(childKey, run);
-      }
-      continue;
-    }
-    const latestControllerSessionKey =
-      normalizeOptionalString(latest?.controllerSessionKey) ??
-      normalizeOptionalString(latest?.requesterSessionKey);
-    if (latest.runId !== run.runId || latestControllerSessionKey !== requesterKey) {
-      continue;
-    }
-    const existing = dedupedRunsByChildKey.get(childKey);
-    if (!existing || run.createdAt >= existing.createdAt) {
-      dedupedRunsByChildKey.set(childKey, run);
-    }
-  }
-  const runs = Array.from(dedupedRunsByChildKey.values());
-  if (runs.length === 0) {
-    return { stopped: 0 };
-  }
+export type PreparedFastAbortRequest = NonNullable<ReturnType<typeof resolveFastAbortRequest>>;
 
-  const storeCache = new Map<string, Record<string, SessionEntry>>();
-  const seenChildKeys = new Set<string>();
-  let stopped = 0;
-
-  for (const run of runs) {
-    const childKey = normalizeOptionalString(run.childSessionKey);
-    if (!childKey || seenChildKeys.has(childKey)) {
-      continue;
-    }
-    seenChildKeys.add(childKey);
-
-    if (!run.endedAt) {
-      const cleared = clearSessionQueues([childKey]);
-      const parsed = parseAgentSessionKey(childKey);
-      const storePath = resolveStorePath(params.cfg.session?.store, { agentId: parsed?.agentId });
-      let store = storeCache.get(storePath);
-      if (!store) {
-        store = loadSessionStore(storePath);
-        storeCache.set(storePath, store);
-      }
-      const entry = store[childKey];
-      const sessionId = replyRunRegistry.resolveSessionId(childKey) ?? entry?.sessionId;
-      const aborted = abortSessionRunTarget({ key: childKey, sessionId });
-      const markedTerminated =
-        abortDeps.markSubagentRunTerminated({
-          runId: run.runId,
-          childSessionKey: childKey,
-          reason: "killed",
-        }) > 0;
-
-      if (markedTerminated || aborted || cleared.followupCleared > 0 || cleared.laneCleared > 0) {
-        stopped += 1;
-      }
-    }
-
-    // Cascade: also stop any sub-sub-agents spawned by this child.
-    const cascadeResult = stopSubagentsForRequester({
-      cfg: params.cfg,
-      requesterSessionKey: childKey,
-    });
-    stopped += cascadeResult.stopped;
-  }
-
-  if (stopped > 0) {
-    logVerbose(`abort: stopped ${stopped} subagent run(s) for ${requesterKey}`);
-  }
-  return { stopped };
-}
-
-export async function tryFastAbortFromMessage(params: {
-  ctx: FinalizedMsgContext;
-  cfg: OpenClawConfig;
-}): Promise<{ handled: boolean; aborted: boolean; stoppedSubagents?: number }> {
-  const { ctx, cfg } = params;
-  const targetKey =
-    normalizeOptionalString(ctx.CommandTargetSessionKey) ?? normalizeOptionalString(ctx.SessionKey);
-  // Use RawBody/CommandBody for abort detection (clean message without structural context).
-  const raw = stripStructuralPrefixes(ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "");
-  const isGroup = normalizeOptionalLowercaseString(ctx.ChatType) === "group";
-  const stripped = isGroup
-    ? stripMentions(
-        raw,
-        ctx,
-        cfg,
-        resolveSessionAgentId({
-          sessionKey: targetKey ?? ctx.SessionKey ?? "",
-          config: cfg,
-        }),
-      )
-    : raw;
-  const abortRequested = isAbortRequestText(stripped);
-  if (!abortRequested) {
+export async function tryFastAbortFromMessage(
+  params: FastAbortRequestParams,
+): Promise<FastAbortResult> {
+  const request = resolveFastAbortRequest(params);
+  if (!request) {
     return { handled: false, aborted: false };
   }
-
-  const commandAuthorized = ctx.CommandAuthorized;
-  const auth = resolveCommandAuthorization({
-    ctx,
-    cfg,
-    commandAuthorized,
-  });
-  if (!auth.isAuthorizedSender) {
-    return { handled: false, aborted: false };
-  }
-
-  const agentId = resolveSessionAgentId({
-    sessionKey: targetKey ?? ctx.SessionKey ?? "",
-    config: cfg,
-  });
-  const abortKey = targetKey ?? auth.from ?? auth.to;
-  const requesterSessionKey = targetKey ?? ctx.SessionKey ?? abortKey;
-
-  if (targetKey) {
-    const storePath = resolveStorePath(cfg.session?.store, { agentId });
-    const store = loadSessionStore(storePath);
-    const { entry, key, legacyKeys } = resolveSessionEntryForKey(store, targetKey);
-    const resolvedTargetKey = key ?? targetKey;
-    const acpManager = abortDeps.getAcpSessionManager();
-    const acpResolution = acpManager.resolveSession({
-      cfg,
-      sessionKey: resolvedTargetKey,
-    });
-    if (acpResolution.kind !== "none") {
-      try {
-        await acpManager.cancelSession({
-          cfg,
-          sessionKey: resolvedTargetKey,
-          reason: "fast-abort",
-        });
-      } catch (error) {
-        logVerbose(
-          `abort: ACP cancel failed for ${resolvedTargetKey}: ${formatErrorMessage(error)}`,
-        );
-      }
-    }
-    const sessionId = replyRunRegistry.resolveSessionId(resolvedTargetKey) ?? entry?.sessionId;
-    const aborted = abortSessionRunTarget({ key: resolvedTargetKey, sessionId });
-    const cleared = clearSessionQueues([resolvedTargetKey, sessionId]);
-    if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
-      logVerbose(
-        `abort: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
-      );
-    }
-    const abortCutoff = shouldPersistAbortCutoff({
-      commandSessionKey: ctx.SessionKey,
-      targetSessionKey: resolvedTargetKey,
-    })
-      ? resolveAbortCutoffFromContext(ctx)
-      : undefined;
-    if (entry && key) {
-      entry.abortedLastRun = true;
-      applyAbortCutoffToSessionEntry(entry, abortCutoff);
-      entry.updatedAt = Date.now();
-      store[key] = entry;
-      for (const legacyKey of legacyKeys ?? []) {
-        if (legacyKey !== key) {
-          delete store[legacyKey];
-        }
-      }
-      await updateSessionStore(storePath, (nextStore) => {
-        const nextEntry = nextStore[key] ?? entry;
-        if (!nextEntry) {
-          return;
-        }
-        nextEntry.abortedLastRun = true;
-        applyAbortCutoffToSessionEntry(nextEntry, abortCutoff);
-        nextEntry.updatedAt = Date.now();
-        nextStore[key] = nextEntry;
-        for (const legacyKey of legacyKeys ?? []) {
-          if (legacyKey !== key) {
-            delete nextStore[legacyKey];
-          }
-        }
-      });
-    } else if (abortKey) {
-      setAbortMemory(abortKey, true);
-    }
-    const { stopped } = stopSubagentsForRequester({ cfg, requesterSessionKey });
-    return { handled: true, aborted, stoppedSubagents: stopped };
-  }
-
-  if (abortKey) {
-    setAbortMemory(abortKey, true);
-  }
-  const { stopped } = stopSubagentsForRequester({ cfg, requesterSessionKey });
-  return { handled: true, aborted: false, stoppedSubagents: stopped };
+  // Normalized ingress is not authority. The operation resolves authorization
+  // and retains current-target validation after loading cancellation machinery.
+  const { executeFastAbortRequest } = await import("./abort-operation.js");
+  return executeFastAbortRequest(params, request);
 }

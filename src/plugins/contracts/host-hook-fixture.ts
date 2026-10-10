@@ -1,3 +1,4 @@
+// Host hook fixtures provide reusable plugin host-hook doubles for contract tests.
 import type { OpenClawPluginApi } from "../types.js";
 
 export function registerHostHookFixture(api: OpenClawPluginApi) {
@@ -57,18 +58,4 @@ export function registerHostHookFixture(api: OpenClawPluginApi) {
   api.on("heartbeat_prompt_contribution", () => ({
     appendContext: "fixture heartbeat context",
   }));
-}
-
-export function registerTrustedHostHookFixture(api: OpenClawPluginApi) {
-  registerHostHookFixture(api);
-  api.registerTrustedToolPolicy({
-    id: "budget-policy",
-    description: "Generic budget/workspace policy gate fixture",
-    evaluate(event) {
-      if (event.toolName === "blocked_fixture_tool") {
-        return { block: true, blockReason: "blocked by fixture policy" };
-      }
-      return undefined;
-    },
-  });
 }

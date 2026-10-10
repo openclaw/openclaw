@@ -1,5 +1,9 @@
 import { runChannelPluginStartupMaintenance } from "../channels/plugins/lifecycle-startup.js";
+import { resolveDoctorChannelPreviewConfig } from "../commands/doctor/shared/preview-warnings.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { HealthFinding } from "./health-checks.js";
+
+const CHANNEL_PREVIEW_WARNINGS_CHECK_ID = "core/doctor/channel-preview-warnings";
 
 type DoctorStartupMaintenanceRuntime = {
   error: (message: string) => void;
@@ -8,6 +12,52 @@ type DoctorStartupMaintenanceRuntime = {
 
 type ChannelPluginStartupMaintenanceRunner = typeof runChannelPluginStartupMaintenance;
 
+function normalizeWarningMessage(warning: string): string {
+  return warning.replace(/^-\s*/, "").trim();
+}
+
+function warningPath(warning: string): string | undefined {
+  return warning.match(/^\s*-?\s*(channels\.[^\s:]+)/)?.[1];
+}
+
+/** Collect read-only channel doctor preview warnings as structured findings. */
+export async function collectChannelPreviewWarningHealthFindings(params: {
+  cfg: OpenClawConfig;
+  doctorFixCommand?: string;
+  env?: NodeJS.ProcessEnv;
+  allowExec?: boolean;
+}): Promise<readonly HealthFinding[]> {
+  const { collectChannelDoctorPreviewWarnings } =
+    await import("../commands/doctor/shared/channel-doctor.js");
+  const doctorFixCommand = params.doctorFixCommand ?? "openclaw doctor --fix";
+  const previewConfig = await resolveDoctorChannelPreviewConfig({
+    cfg: params.cfg,
+    env: params.env ?? process.env,
+    allowExec: params.allowExec,
+  });
+  const warnings = await collectChannelDoctorPreviewWarnings({
+    cfg: previewConfig.cfg,
+    doctorFixCommand,
+    env: params.env ?? process.env,
+  });
+  return warnings.map((warning): HealthFinding => {
+    const path = warningPath(warning);
+    return Object.assign(
+      {
+        checkId: CHANNEL_PREVIEW_WARNINGS_CHECK_ID,
+        severity: "warning",
+        message: normalizeWarningMessage(warning),
+      } satisfies HealthFinding,
+      path ? { path } : {},
+      {
+        requirement: "Configured channels should not emit doctor preview warnings.",
+        fixHint: `Run \`${doctorFixCommand}\` if the channel warning recommends repair, or update the affected channel config manually.`,
+      },
+    );
+  });
+}
+
+/** Runs channel plugin startup maintenance when doctor fix mode explicitly permits repairs. */
 export async function maybeRunDoctorStartupChannelMaintenance(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -23,6 +73,7 @@ export async function maybeRunDoctorStartupChannelMaintenance(params: {
   await runStartupMaintenance({
     cfg: params.cfg,
     env: params.env ?? process.env,
+    // Doctor maps startup warnings to terminal errors so repair output is visible.
     log: {
       info: (message) => params.runtime.log(message),
       warn: (message) => params.runtime.error(message),

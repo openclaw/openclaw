@@ -1,4 +1,4 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
   createActionGate,
   jsonResult,
@@ -25,10 +25,7 @@ export async function handleWhatsAppAction(
 
   if (action === "react") {
     const accountId = readStringParam(params, "accountId");
-    if (!whatsAppConfig) {
-      throw new Error("WhatsApp reactions are disabled.");
-    }
-    if (!isActionEnabled("reactions")) {
+    if (!whatsAppConfig || !isActionEnabled("reactions")) {
       throw new Error("WhatsApp reactions are disabled.");
     }
     const reactionLevelInfo = resolveWhatsAppReactionLevel({

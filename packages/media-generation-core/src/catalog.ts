@@ -1,0 +1,80 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+
+export type MediaGenerationCatalogKind =
+  | "image_generation"
+  | "video_generation"
+  | "music_generation";
+
+export type MediaGenerationCatalogSource = "static" | "live" | "cache" | "configured";
+
+export type MediaGenerationCatalogEntry<TCapabilities = unknown> = {
+  kind: MediaGenerationCatalogKind;
+  provider: string;
+  model: string;
+  label?: string;
+  source: MediaGenerationCatalogSource;
+  default?: boolean;
+  configured?: boolean;
+  capabilities?: TCapabilities;
+  modes?: readonly string[];
+  authEnvVars?: readonly string[];
+  docsPath?: string;
+  fetchedAt?: number;
+  expiresAt?: number;
+  warnings?: readonly string[];
+};
+
+/** Static catalog metadata that overrides provider defaults for one model. */
+export type MediaGenerationCatalogModelEntry<TCapabilities = unknown> = {
+  capabilities?: TCapabilities;
+  modes?: readonly string[];
+};
+
+/** Provider metadata used to synthesize static media generation catalog entries. */
+export type MediaGenerationCatalogProvider<TCapabilities = unknown> = {
+  id: string;
+  aliases?: readonly string[];
+  label?: string;
+  defaultModel?: string;
+  models?: readonly string[];
+  capabilities: TCapabilities;
+  catalogByModel?: Readonly<Record<string, MediaGenerationCatalogModelEntry<TCapabilities>>>;
+};
+
+export function synthesizeMediaGenerationCatalogEntries<TCapabilities>(params: {
+  kind: MediaGenerationCatalogKind;
+  provider: MediaGenerationCatalogProvider<TCapabilities>;
+  modes?: readonly string[];
+}): Array<MediaGenerationCatalogEntry<TCapabilities>> {
+  const defaultModel = normalizeOptionalString(params.provider.defaultModel);
+  return listMediaGenerationProviderModels(params.provider).map((model) => {
+    const modelCatalogEntry = params.provider.catalogByModel?.[model];
+    const entry: MediaGenerationCatalogEntry<TCapabilities> = {
+      kind: params.kind,
+      provider: params.provider.id,
+      model,
+      source: "static",
+      capabilities: modelCatalogEntry?.capabilities ?? params.provider.capabilities,
+    };
+    if (params.provider.label) {
+      entry.label = params.provider.label;
+    }
+    if (model === defaultModel) {
+      entry.default = true;
+    }
+    const modes = modelCatalogEntry?.modes ?? params.modes;
+    if (modes) {
+      entry.modes = modes;
+    }
+    return entry;
+  });
+}
+
+/** Return unique model ids exposed by a media generation provider. */
+export function listMediaGenerationProviderModels(provider: {
+  defaultModel?: string;
+  models?: readonly string[];
+}): string[] {
+  return normalizeUniqueTrimmedStringList([provider.defaultModel, ...(provider.models ?? [])]);
+}

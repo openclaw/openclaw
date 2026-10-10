@@ -1,37 +1,41 @@
 import { z } from "zod";
-import {
-  hasConfiguredSecretInput,
-  isSecretRef,
-  coerceSecretRef,
-  resolveSecretInputString,
-  normalizeResolvedSecretInputString,
-  normalizeSecretInputString,
-} from "../config/types.secrets.js";
-import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
-import { buildSecretInputSchema } from "./secret-input-schema.js";
-
-export type {
-  SecretInput,
-  SecretInputStringResolution,
-  SecretInputStringResolutionMode,
-} from "../config/types.secrets.js";
+import "../config/types.secrets.js";
+import "../secrets/ref-contract.js";
+import "../utils/normalize-secret-input.js";
+import { buildSecretInputSchema, registerSensitiveConfigSchema } from "./secret-input-schema.js";
 export {
-  buildSecretInputSchema,
-  coerceSecretRef,
   hasConfiguredSecretInput,
   isSecretRef,
+  coerceSecretRef,
   resolveSecretInputString,
   normalizeResolvedSecretInputString,
-  normalizeSecretInput,
   normalizeSecretInputString,
-};
+  type SecretInput,
+  type SecretInputStringResolution,
+  type SecretInputStringResolutionMode,
+} from "../config/types.secrets.js";
+export { isBuiltInDefaultSecretProviderRef, isValidSecretRef } from "../secrets/ref-contract.js";
+export { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 
-/** Optional version of the shared secret-input schema. */
+export {
+  readProviderEnvValue,
+  resolveNonEnvSecretRefApiKeyMarker,
+} from "../secrets/provider-credential-values.js";
+
+export { buildSecretInputSchema, registerSensitiveConfigSchema };
+
+/**
+ * Builds an optional secret-input schema for config fields that may be omitted.
+ * The inner schema stays shared so sensitive-path redaction still recognizes it.
+ */
 export function buildOptionalSecretInputSchema() {
   return buildSecretInputSchema().optional();
 }
 
-/** Array version of the shared secret-input schema. */
+/**
+ * Builds an array schema for provider/channel config that accepts multiple secret inputs.
+ * Each element uses the shared schema so plaintext and ref validation stay identical.
+ */
 export function buildSecretInputArraySchema() {
   return z.array(buildSecretInputSchema());
 }

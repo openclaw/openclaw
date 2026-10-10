@@ -1,3 +1,4 @@
+// Mattermost tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
 import { MattermostConfigSchema } from "./config-schema-core.js";
 
@@ -29,6 +30,32 @@ describe("MattermostConfigSchema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts per-chat-type reply threading", () => {
+    const result = MattermostConfigSchema.safeParse({
+      replyToModeByChatType: {
+        direct: "first",
+        group: "all",
+        channel: "off",
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects dmPolicy="open" without wildcard allowFrom', () => {
+    const result = MattermostConfigSchema.safeParse({
+      dmPolicy: "open",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts dmPolicy="open" with wildcard allowFrom', () => {
+    const result = MattermostConfigSchema.safeParse({
+      dmPolicy: "open",
+      allowFrom: ["*"],
+    });
+    expect(result.success).toBe(true);
+  });
+
   it("accepts documented streaming modes and progress config", () => {
     const result = MattermostConfigSchema.safeParse({
       streaming: {
@@ -37,25 +64,57 @@ describe("MattermostConfigSchema", () => {
           label: "Shelling",
           maxLines: 4,
           toolProgress: false,
+          commandText: "status",
         },
+        preview: { commandText: "raw" },
       },
       accounts: {
         quiet: {
-          streaming: "off",
+          streaming: { mode: "off" },
         },
       },
     });
     expect(result.success).toBe(true);
   });
 
-  it("accepts groups with requireMention", () => {
+  it("rejects retired scalar streaming and flat delivery keys", () => {
+    // Scalar/boolean streaming and the flat delivery keys are doctor-migrated
+    // legacy input; the runtime schema accepts the nested shape only.
+    expect(MattermostConfigSchema.safeParse({ streaming: "partial" }).success).toBe(false);
+    expect(MattermostConfigSchema.safeParse({ streaming: false }).success).toBe(false);
+    expect(MattermostConfigSchema.safeParse({ blockStreaming: true }).success).toBe(false);
+    expect(MattermostConfigSchema.safeParse({ chunkMode: "newline" }).success).toBe(false);
+  });
+
+  it.each([
+    { preview: { chunk: { minChars: 20 } } },
+    { progress: { commentary: true } },
+    { progress: { narration: true } },
+  ])("rejects unsupported streaming fields: %j", (streaming) => {
+    expect(MattermostConfigSchema.safeParse({ streaming }).success).toBe(false);
+  });
+
+  it("preserves root, account, and group thread mention overrides without defaults", () => {
     const result = MattermostConfigSchema.safeParse({
+      requireMentionInBotThreads: false,
       groups: {
-        "*": { requireMention: true },
-        "channel-123": { requireMention: false },
+        "*": { requireMention: true, requireMentionInBotThreads: false },
+        "channel-123": { requireMention: false, requireMentionInBotThreads: true },
       },
+      accounts: { work: { requireMentionInBotThreads: true }, inherited: {} },
     });
     expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).toMatchObject({
+        requireMentionInBotThreads: false,
+        groups: {
+          "*": { requireMention: true, requireMentionInBotThreads: false },
+          "channel-123": { requireMention: false, requireMentionInBotThreads: true },
+        },
+        accounts: { work: { requireMentionInBotThreads: true } },
+      });
+      expect(result.data.accounts?.inherited).not.toHaveProperty("requireMentionInBotThreads");
+    }
   });
 
   it("accepts groups on account", () => {
@@ -66,6 +125,30 @@ describe("MattermostConfigSchema", () => {
           groups: {
             "*": { requireMention: true },
           },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts account-scoped message read action toggles", () => {
+    const result = MattermostConfigSchema.safeParse({
+      actions: { messages: false },
+      accounts: {
+        reader: {
+          actions: { messages: true },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts implicit mention policy at root and account scope", () => {
+    const result = MattermostConfigSchema.safeParse({
+      implicitMentions: { threadParticipation: false },
+      accounts: {
+        main: {
+          implicitMentions: { replyToBot: false },
         },
       },
     });
@@ -90,10 +173,10 @@ describe("MattermostConfigSchema", () => {
     expect(result.success).toBe(false);
   });
 
-  it("rejects unsupported per-chat-type reply threading config", () => {
+  it("rejects unknown per-chat-type reply threading keys", () => {
     const result = MattermostConfigSchema.safeParse({
       replyToModeByChatType: {
-        direct: "all",
+        forum: "all",
       },
     });
     expect(result.success).toBe(false);

@@ -1,8 +1,8 @@
 import { requestHeartbeat } from "../../infra/heartbeat-wake.js";
-import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { formatNativeDependencyHint } from "./native-deps.js";
+import { enqueueSystemEventFromSdk } from "./system-events.js";
 import type { RunHeartbeatOnceOptions } from "./types-core.js";
 import type { PluginRuntime } from "./types.js";
 
@@ -14,6 +14,7 @@ const runHeartbeatOnceInternal = createLazyRuntimeMethod(
   (runtime) => runtime.runHeartbeatOnce,
 );
 
+/** Creates the plugin runtime system facade with heartbeat/event/process helpers. */
 export function createRuntimeSystem(): PluginRuntime["system"] {
   const requestHeartbeatNow: PluginRuntime["system"]["requestHeartbeatNow"] = (opts) =>
     requestHeartbeat({
@@ -27,7 +28,7 @@ export function createRuntimeSystem(): PluginRuntime["system"] {
     });
 
   return {
-    enqueueSystemEvent,
+    enqueueSystemEvent: enqueueSystemEventFromSdk,
     requestHeartbeat,
     requestHeartbeatNow,
     runHeartbeatOnce: (opts?: RunHeartbeatOnceOptions) => {

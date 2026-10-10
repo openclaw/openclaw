@@ -1,53 +1,38 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolvePositiveTimeoutSeconds } from "openclaw/plugin-sdk/provider-web-search";
+import { normalizeSecretInput } from "openclaw/plugin-sdk/secret-input";
+import { resolveReadOnlyEnvSecretRef } from "openclaw/plugin-sdk/secret-ref-readonly";
 import {
-  normalizeResolvedSecretInputString,
-  normalizeSecretInput,
-} from "openclaw/plugin-sdk/secret-input";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const DEFAULT_TAVILY_BASE_URL = "https://api.tavily.com";
-export const DEFAULT_TAVILY_SEARCH_TIMEOUT_SECONDS = 30;
-export const DEFAULT_TAVILY_EXTRACT_TIMEOUT_SECONDS = 60;
+const DEFAULT_TAVILY_SEARCH_TIMEOUT_SECONDS = 30;
+const DEFAULT_TAVILY_EXTRACT_TIMEOUT_SECONDS = 60;
+const TAVILY_API_KEY_ENV_VAR = "TAVILY_API_KEY";
+export const TAVILY_API_KEY_CONFIG_PATH = "plugins.entries.tavily.config.webSearch.apiKey";
 
-type TavilySearchConfig =
-  | {
-      apiKey?: unknown;
-      baseUrl?: string;
-    }
-  | undefined;
-
-type PluginEntryConfig = {
-  webSearch?: {
-    apiKey?: unknown;
-    baseUrl?: string;
-  };
-};
-
-export function resolveTavilySearchConfig(cfg?: OpenClawConfig): TavilySearchConfig {
-  const pluginConfig = cfg?.plugins?.entries?.tavily?.config as PluginEntryConfig;
-  const pluginWebSearch = pluginConfig?.webSearch;
-  if (pluginWebSearch && typeof pluginWebSearch === "object" && !Array.isArray(pluginWebSearch)) {
-    return pluginWebSearch;
-  }
-  return undefined;
-}
-
-function normalizeConfiguredSecret(value: unknown, path: string): string | undefined {
-  return normalizeSecretInput(
-    normalizeResolvedSecretInputString({
-      value,
-      path,
-    }),
-  );
+function resolveTavilySearchConfig(cfg?: OpenClawConfig) {
+  return asOptionalRecord(cfg?.plugins?.entries?.tavily?.config?.webSearch);
 }
 
 export function resolveTavilyApiKey(cfg?: OpenClawConfig): string | undefined {
   const search = resolveTavilySearchConfig(cfg);
-  return (
-    normalizeConfiguredSecret(search?.apiKey, "plugins.entries.tavily.config.webSearch.apiKey") ||
-    normalizeSecretInput(process.env.TAVILY_API_KEY) ||
-    undefined
-  );
+  const resolved = resolveReadOnlyEnvSecretRef({
+    value: search?.apiKey,
+    path: TAVILY_API_KEY_CONFIG_PATH,
+    cfg,
+    expectedEnvId: TAVILY_API_KEY_ENV_VAR,
+    normalizeValue: normalizeSecretInput,
+  });
+  if (resolved.status === "available") {
+    return resolved.value;
+  }
+  if (resolved.status === "blocked") {
+    return undefined;
+  }
+  return normalizeSecretInput(process.env.TAVILY_API_KEY) || undefined;
 }
 
 export function resolveTavilyBaseUrl(cfg?: OpenClawConfig): string {
@@ -60,15 +45,9 @@ export function resolveTavilyBaseUrl(cfg?: OpenClawConfig): string {
 }
 
 export function resolveTavilySearchTimeoutSeconds(override?: number): number {
-  if (typeof override === "number" && Number.isFinite(override) && override > 0) {
-    return Math.floor(override);
-  }
-  return DEFAULT_TAVILY_SEARCH_TIMEOUT_SECONDS;
+  return resolvePositiveTimeoutSeconds(override, DEFAULT_TAVILY_SEARCH_TIMEOUT_SECONDS);
 }
 
 export function resolveTavilyExtractTimeoutSeconds(override?: number): number {
-  if (typeof override === "number" && Number.isFinite(override) && override > 0) {
-    return Math.floor(override);
-  }
-  return DEFAULT_TAVILY_EXTRACT_TIMEOUT_SECONDS;
+  return resolvePositiveTimeoutSeconds(override, DEFAULT_TAVILY_EXTRACT_TIMEOUT_SECONDS);
 }

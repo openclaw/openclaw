@@ -1,3 +1,5 @@
+// Whatsapp plugin module implements access control harness behavior.
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { beforeEach, vi } from "vitest";
 import {
   type AsyncMock,
@@ -6,6 +8,7 @@ import {
   resetPairingSecurityMocks,
   upsertPairingRequestMock,
 } from "../pairing-security.test-harness.js";
+import { setWhatsAppRuntime } from "../runtime.js";
 
 export const sendMessageMock = vi.fn() as AsyncMock;
 export { readAllowFromStoreMock, upsertPairingRequestMock };
@@ -23,6 +26,7 @@ export function getAccessControlTestConfig(): Record<string, unknown> {
 
 export function setupAccessControlTestHarness(): void {
   beforeEach(() => {
+    setWhatsAppRuntime(createPluginRuntimeMock());
     config = {
       channels: {
         whatsapp: {

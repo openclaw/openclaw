@@ -1,26 +1,22 @@
 import {
-  asObject,
   createOpenAiCompatibleSpeechProvider,
   type SpeechProviderPlugin,
-} from "openclaw/plugin-sdk/speech";
-import { OPENROUTER_BASE_URL } from "./provider-catalog.js";
+} from "openclaw/plugin-sdk/speech-provider";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { OPENROUTER_BASE_URL } from "./provider-defaults.js";
 
 const DEFAULT_OPENROUTER_TTS_MODEL = "hexgrad/kokoro-82m";
 const DEFAULT_OPENROUTER_TTS_VOICE = "af_alloy";
 const OPENROUTER_TTS_MODELS = [
   DEFAULT_OPENROUTER_TTS_MODEL,
+  "elevenlabs/eleven-turbo-v2",
   "google/gemini-3.1-flash-tts-preview",
   "mistralai/voxtral-mini-tts-2603",
-  "elevenlabs/eleven-turbo-v2",
 ] as const;
 const OPENROUTER_TTS_RESPONSE_FORMATS = ["mp3", "pcm"] as const;
 
-type OpenRouterTtsExtraConfig = {
-  provider?: Record<string, unknown>;
-};
-
 export function buildOpenRouterSpeechProvider(): SpeechProviderPlugin {
-  return createOpenAiCompatibleSpeechProvider<OpenRouterTtsExtraConfig>({
+  return createOpenAiCompatibleSpeechProvider({
     id: "openrouter",
     label: "OpenRouter",
     autoSelectOrder: 35,
@@ -33,14 +29,10 @@ export function buildOpenRouterSpeechProvider(): SpeechProviderPlugin {
     responseFormats: OPENROUTER_TTS_RESPONSE_FORMATS,
     defaultResponseFormat: "mp3",
     voiceCompatibleResponseFormats: ["mp3"],
-    baseUrlPolicy: { kind: "canonical", aliases: ["https://openrouter.ai/v1"] },
-    extraHeaders: {
-      "HTTP-Referer": "https://openclaw.ai",
-      "X-OpenRouter-Title": "OpenClaw",
-    },
+    baseUrlPolicy: { kind: "canonical", aliases: ["https://openrouter.ai/v1"], allowCustom: true },
     apiErrorLabel: "OpenRouter TTS API error",
     missingApiKeyError: "OpenRouter API key missing",
-    readExtraConfig: (raw) => ({ provider: asObject(raw?.provider) }),
+    readExtraConfig: (raw) => ({ provider: asOptionalRecord(raw?.provider) }),
     extraJsonBodyFields: [{ configKey: "provider" }],
   });
 }

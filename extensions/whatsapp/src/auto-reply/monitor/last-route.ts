@@ -23,7 +23,7 @@ export function updateLastRouteInBackground(params: {
   to: string;
   accountId?: string;
   ctx?: MsgContext;
-  warn: (obj: unknown, msg: string) => void;
+  warn: (obj: object, msg: string) => void;
 }) {
   const storePath = resolveStorePath(params.cfg.session?.store, {
     agentId: params.storeAgentId,
@@ -37,7 +37,7 @@ export function updateLastRouteInBackground(params: {
       accountId: params.accountId,
     },
     ctx: params.ctx,
-  }).catch((err) => {
+  }).catch((err: unknown) => {
     params.warn(
       {
         error: formatError(err),
@@ -49,13 +49,4 @@ export function updateLastRouteInBackground(params: {
     );
   });
   trackBackgroundTask(params.backgroundTasks, task);
-}
-
-export function awaitBackgroundTasks(backgroundTasks: Set<Promise<unknown>>) {
-  if (backgroundTasks.size === 0) {
-    return Promise.resolve();
-  }
-  return Promise.allSettled(backgroundTasks).then(() => {
-    backgroundTasks.clear();
-  });
 }

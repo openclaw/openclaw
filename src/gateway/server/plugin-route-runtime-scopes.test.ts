@@ -1,5 +1,9 @@
+/**
+ * Plugin route runtime-scope regression tests for trusted-proxy headers.
+ */
 import type { IncomingMessage } from "node:http";
 import { describe, expect, it } from "vitest";
+import { createExpectedBroadOperatorScopes } from "../scope-expectations.test-support.js";
 import { resolvePluginRouteRuntimeOperatorScopes } from "./plugin-route-runtime-scopes.js";
 
 function createReq(headers: Record<string, string> = {}): IncomingMessage {
@@ -55,14 +59,7 @@ describe("resolvePluginRouteRuntimeOperatorScopes", () => {
         { authMethod: "token", trustDeclaredOperatorScopes: false },
         "trusted-operator",
       ),
-    ).toEqual([
-      "operator.admin",
-      "operator.read",
-      "operator.write",
-      "operator.approvals",
-      "operator.pairing",
-      "operator.talk.secrets",
-    ]);
+    ).toEqual(createExpectedBroadOperatorScopes());
   });
 
   it("restores trusted default operator scopes for trusted-proxy routes opting into trusted-operator when scopes header is absent", () => {
@@ -72,14 +69,7 @@ describe("resolvePluginRouteRuntimeOperatorScopes", () => {
         { authMethod: "trusted-proxy", trustDeclaredOperatorScopes: true },
         "trusted-operator",
       ),
-    ).toEqual([
-      "operator.admin",
-      "operator.read",
-      "operator.write",
-      "operator.approvals",
-      "operator.pairing",
-      "operator.talk.secrets",
-    ]);
+    ).toEqual(createExpectedBroadOperatorScopes());
   });
 
   it("preserves trusted-proxy declared scopes for routes opting into trusted-operator surface", () => {

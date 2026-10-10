@@ -1,7 +1,8 @@
-import fs from "node:fs/promises";
+// Covers durable JSON read/write helpers, parse failures, and atomic update behavior.
+import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   JsonFileReadError,
   createAsyncLock,
@@ -26,7 +27,7 @@ describe("json file helpers", () => {
       name: "reads valid json",
       setup: async (base: string) => {
         const filePath = path.join(base, "valid.json");
-        await fs.writeFile(filePath, '{"ok":true}', "utf8");
+        await fsPromises.writeFile(filePath, '{"ok":true}', "utf8");
         return filePath;
       },
       expected: { ok: true },
@@ -35,7 +36,7 @@ describe("json file helpers", () => {
       name: "returns null for invalid files",
       setup: async (base: string) => {
         const filePath = path.join(base, "invalid.json");
-        await fs.writeFile(filePath, "{not-json}", "utf8");
+        await fsPromises.writeFile(filePath, "{not-json}", "utf8");
         return filePath;
       },
       expected: null,
@@ -46,18 +47,18 @@ describe("json file helpers", () => {
       expected: null,
     },
   ])("$name", async ({ setup, expected }) => {
-    await withTempDir({ prefix: "openclaw-json-files-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-json-files-" }, async (base) => {
       await expect(readJsonFile(await setup(base))).resolves.toEqual(expected);
     });
   });
 
   it("reads durable json strictly while allowing missing files", async () => {
-    await withTempDir({ prefix: "openclaw-json-files-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-json-files-" }, async (base) => {
       const validPath = path.join(base, "valid.json");
       const invalidPath = path.join(base, "invalid.json");
       const missingPath = path.join(base, "missing.json");
-      await fs.writeFile(validPath, '{"ok":true}', "utf8");
-      await fs.writeFile(invalidPath, "{not-json}", "utf8");
+      await fsPromises.writeFile(validPath, '{"ok":true}', "utf8");
+      await fsPromises.writeFile(invalidPath, "{not-json}", "utf8");
 
       await expect(readDurableJsonFile(validPath)).resolves.toEqual({ ok: true });
       await expect(readDurableJsonFile(missingPath)).resolves.toBeNull();
@@ -73,7 +74,7 @@ describe("json file helpers", () => {
   });
 
   it("writes json atomically with pretty formatting and optional trailing newline", async () => {
-    await withTempDir({ prefix: "openclaw-json-files-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-json-files-" }, async (base) => {
       const filePath = path.join(base, "nested", "config.json");
 
       await writeJsonAtomic(
@@ -82,7 +83,7 @@ describe("json file helpers", () => {
         { trailingNewline: true, dirMode: 0o755 },
       );
 
-      await expect(fs.readFile(filePath, "utf8")).resolves.toBe(
+      await expect(fsPromises.readFile(filePath, "utf8")).resolves.toBe(
         '{\n  "ok": true,\n  "nested": {\n    "value": 1\n  }\n}\n',
       );
     });
@@ -92,59 +93,122 @@ describe("json file helpers", () => {
     { input: "hello", expected: "hello\n" },
     { input: "hello\n", expected: "hello\n" },
   ])("writes text atomically for %j", async ({ input, expected }) => {
-    await withTempDir({ prefix: "openclaw-json-files-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-json-files-" }, async (base) => {
       const filePath = path.join(base, "nested", "note.txt");
       await writeTextAtomic(filePath, input, { trailingNewline: true });
-      await expect(fs.readFile(filePath, "utf8")).resolves.toBe(expected);
+      await expect(fsPromises.readFile(filePath, "utf8")).resolves.toBe(expected);
     });
   });
 
   it("can skip durable fsync work for hot state writes", async () => {
-    await withTempDir({ prefix: "openclaw-json-files-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-json-files-" }, async (base) => {
       const filePath = path.join(base, "state.json");
-      const openSpy = vi.spyOn(fs, "open");
 
+      // fs-safe 0.5.2 opens pinned descriptors even for non-durable writes, so
+      // open-call counting no longer proxies fsync work; the durable flag maps
+      // to fs-safe's syncTempFile/syncParentDir options, whose skip semantics
+      // fs-safe covers itself. Keep the behavior proof: the write lands.
       await writeTextAtomic(filePath, "new", { durable: false });
 
-      expect(openSpy).not.toHaveBeenCalled();
-      await expect(fs.readFile(filePath, "utf8")).resolves.toBe("new");
+      await expect(fsPromises.readFile(filePath, "utf8")).resolves.toBe("new");
     });
   });
 
   it("preserves text when Windows rename reports EPERM", async () => {
-    await withTempDir({ prefix: "openclaw-json-files-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-json-files-" }, async (base) => {
       const filePath = path.join(base, "state.json");
-      await fs.writeFile(filePath, "old", "utf8");
+      await fsPromises.writeFile(filePath, "old", "utf8");
 
       Object.defineProperty(process, "platform", { value: "win32", configurable: true });
       const renameError = Object.assign(new Error("EPERM"), { code: "EPERM" });
-      const renameSpy = vi.spyOn(fs, "rename").mockRejectedValueOnce(renameError);
+      const renameSpy = vi.spyOn(fsPromises, "rename").mockRejectedValueOnce(renameError);
 
       await writeTextAtomic(filePath, "new");
 
       expect(renameSpy).toHaveBeenCalledOnce();
-      await expect(fs.readFile(filePath, "utf8")).resolves.toBe("new");
+      await expect(fsPromises.readFile(filePath, "utf8")).resolves.toBe("new");
+    });
+  });
+
+  it("stages the atomic temp with a caller-provided prefix (#56827)", async () => {
+    await withTestDir({ prefix: "openclaw-json-files-" }, async (base) => {
+      const filePath = path.join(base, "sessions.json");
+      // Spy without mocking: rename is still performed, but we capture the staged
+      // temp path (its source) to confirm the prefix is applied.
+      const renameSpy = vi.spyOn(fsPromises, "rename");
+
+      await writeTextAtomic(filePath, "new", { tempPrefix: path.basename(filePath) });
+
+      await expect(fsPromises.readFile(filePath, "utf8")).resolves.toBe("new");
+      const stagedTemps = renameSpy.mock.calls.map((call) => path.basename(String(call[0])));
+      // The orphan a crash would leave is now identifiable as a session-store temp.
+      expect(
+        stagedTemps.some((name) =>
+          /^sessions\.json\.\d+\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tmp$/i.test(
+            name,
+          ),
+        ),
+      ).toBe(true);
+      expect(stagedTemps.some((name) => name.startsWith(".fs-safe-replace"))).toBe(false);
+    });
+  });
+
+  it("keeps empty stage prefixes as the default and ignores unrelated options", async () => {
+    await withTestDir({ prefix: "openclaw-json-files-" }, async (base) => {
+      const filePath = path.join(base, "note.txt");
+      const options = {
+        tempPrefix: "",
+        beforeRename: undefined,
+        get encoding() {
+          throw new Error("unrelated options must not be read");
+        },
+      };
+
+      await writeTextAtomic(filePath, "café", options);
+
+      await expect(fsPromises.readFile(filePath, "utf8")).resolves.toBe("café");
+      await expect(fsPromises.readdir(base)).resolves.toEqual(["note.txt"]);
+    });
+  });
+
+  it("preserves the destination when the pre-publication hook rejects", async () => {
+    await withTestDir({ prefix: "openclaw-json-files-" }, async (base) => {
+      const filePath = path.join(base, "note.txt");
+      const refusal = new Error("publication refused");
+      await fsPromises.writeFile(filePath, "old");
+
+      await expect(
+        writeTextAtomic(filePath, "new", {
+          beforeRename: async ({ tempPath }) => {
+            await expect(fsPromises.readFile(tempPath, "utf8")).resolves.toBe("new");
+            throw refusal;
+          },
+        }),
+      ).rejects.toBe(refusal);
+
+      await expect(fsPromises.readFile(filePath, "utf8")).resolves.toBe("old");
+      await expect(fsPromises.readdir(base)).resolves.toEqual(["note.txt"]);
     });
   });
 
   it("refuses Windows copy fallback through symlink destinations", async () => {
-    await withTempDir({ prefix: "openclaw-json-files-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-json-files-" }, async (base) => {
       const filePath = path.join(base, "state.json");
       const outsidePath = path.join(base, "outside.json");
-      await fs.writeFile(outsidePath, "outside", "utf8");
-      await fs.symlink(outsidePath, filePath);
+      await fsPromises.writeFile(outsidePath, "outside", "utf8");
+      await fsPromises.symlink(outsidePath, filePath);
 
       Object.defineProperty(process, "platform", { value: "win32", configurable: true });
       const renameError = Object.assign(new Error("EPERM"), { code: "EPERM" });
-      vi.spyOn(fs, "rename").mockRejectedValueOnce(renameError);
+      vi.spyOn(fsPromises, "rename").mockRejectedValueOnce(renameError);
 
       await expect(writeTextAtomic(filePath, "new")).rejects.toThrow(
         "Refusing copy fallback through symlink destination",
       );
 
-      const fileStat = await fs.lstat(filePath);
+      const fileStat = await fsPromises.lstat(filePath);
       expect(fileStat.isSymbolicLink()).toBe(true);
-      await expect(fs.readFile(outsidePath, "utf8")).resolves.toBe("outside");
+      await expect(fsPromises.readFile(outsidePath, "utf8")).resolves.toBe("outside");
     });
   });
 

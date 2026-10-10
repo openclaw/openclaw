@@ -9,32 +9,21 @@ export function resolveTlonOutboundSessionRoute(params: ChannelOutboundSessionRo
   if (!parsed) {
     return null;
   }
-  if (parsed.kind === "group") {
-    return buildChannelOutboundSessionRoute({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      channel: "tlon",
-      accountId: params.accountId,
-      peer: {
-        kind: "group",
-        id: parsed.nest,
-      },
-      chatType: "group",
-      from: `tlon:group:${parsed.nest}`,
-      to: `tlon:${parsed.nest}`,
-    });
-  }
+  const isGroup = parsed.kind === "group";
+  const peerId = isGroup ? parsed.nest : parsed.ship;
+
   return buildChannelOutboundSessionRoute({
     cfg: params.cfg,
     agentId: params.agentId,
     channel: "tlon",
     accountId: params.accountId,
+    recipientSessionExact: true,
     peer: {
-      kind: "direct",
-      id: parsed.ship,
+      kind: isGroup ? "group" : "direct",
+      id: peerId,
     },
-    chatType: "direct",
-    from: `tlon:${parsed.ship}`,
-    to: `tlon:${parsed.ship}`,
+    chatType: isGroup ? "group" : "direct",
+    from: isGroup ? `tlon:group:${peerId}` : `tlon:${peerId}`,
+    to: `tlon:${peerId}`,
   });
 }

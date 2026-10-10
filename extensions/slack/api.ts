@@ -45,12 +45,8 @@ export {
   buildSlackPresentationBlocks,
   type SlackBlock,
 } from "./src/blocks-render.js";
+export { resolveSlackChannelType } from "./src/channel-type.js";
 export {
-  __resetSlackChannelTypeCacheForTest,
-  resolveSlackChannelType,
-} from "./src/channel-type.js";
-export {
-  clearSlackWriteClientCacheForTest,
   createSlackTokenCacheKey,
   createSlackWebClient,
   createSlackWriteClient,
@@ -74,11 +70,6 @@ export type {
   SlackInteractiveHandlerContext,
   SlackInteractiveHandlerRegistration,
 } from "./src/interactive-dispatch.js";
-export {
-  compileSlackInteractiveReplies,
-  isSlackInteractiveRepliesEnabled,
-  parseSlackOptionsLine,
-} from "./src/interactive-replies.js";
 export { extractSlackToolSend, listSlackMessageActions } from "./src/message-actions.js";
 export {
   resolveSlackGroupRequireMention,
@@ -86,8 +77,6 @@ export {
 } from "./src/group-policy.js";
 export {
   allowListMatches,
-  normalizeAllowList,
-  normalizeAllowListLower,
   normalizeSlackAllowOwnerEntry,
   normalizeSlackSlug,
   resolveSlackAllowListMatch,
@@ -111,4 +100,9 @@ export {
   type SlackTargetParseOptions,
 } from "./src/targets.js";
 export { buildSlackThreadingToolContext } from "./src/threading-tool-context.js";
-export { resolveSlackRuntimeGroupPolicy } from "./src/monitor/provider.js";
+export { resolveOpenProviderRuntimeGroupPolicy as resolveSlackRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
+
+export {
+  normalizeStringEntries as normalizeAllowList,
+  normalizeStringEntriesLower as normalizeAllowListLower,
+} from "openclaw/plugin-sdk/string-normalization-runtime";

@@ -1,23 +1,23 @@
 import { HEARTBEAT_TOKEN, isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 
-export const ANNOUNCE_SKIP_TOKEN = "ANNOUNCE_SKIP";
-export const REPLY_SKIP_TOKEN = "REPLY_SKIP";
-
-const NON_DELIVERABLE_REPLY_TOKENS = [
-  ANNOUNCE_SKIP_TOKEN,
-  REPLY_SKIP_TOKEN,
-  SILENT_REPLY_TOKEN,
-  HEARTBEAT_TOKEN,
-] as const;
-
-export function isAnnounceSkip(text?: string) {
-  return (text ?? "").trim() === ANNOUNCE_SKIP_TOKEN;
-}
-
-export function isReplySkip(text?: string) {
-  return (text ?? "").trim() === REPLY_SKIP_TOKEN;
-}
+const NON_DELIVERABLE_REPLY_TOKENS = [SILENT_REPLY_TOKEN, HEARTBEAT_TOKEN] as const;
 
 export function isNonDeliverableSessionsReply(text?: string) {
   return NON_DELIVERABLE_REPLY_TOKENS.some((token) => isSilentReplyText(text, token));
+}
+
+/** Selects a deliverable reply while allowing NO_REPLY to use captured fallback output. */
+export function selectDeliverableSessionsReply(
+  primary?: string | null,
+  fallback?: string | null,
+): string | undefined {
+  const primaryReply = primary?.trim();
+  if (primaryReply && !isNonDeliverableSessionsReply(primaryReply)) {
+    return primaryReply;
+  }
+  if (primaryReply && !isSilentReplyText(primaryReply, SILENT_REPLY_TOKEN)) {
+    return undefined;
+  }
+  const fallbackReply = fallback?.trim();
+  return fallbackReply && !isNonDeliverableSessionsReply(fallbackReply) ? fallbackReply : undefined;
 }

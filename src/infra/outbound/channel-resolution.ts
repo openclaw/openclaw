@@ -1,259 +1,212 @@
 import type { ChannelMessageAdapterShape } from "../../channels/message/types.js";
 import { getChannelPlugin, getLoadedChannelPlugin } from "../../channels/plugins/index.js";
-import { channelPluginHasNativeApprovalPromptUi } from "../../channels/plugins/native-approval-prompt.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
-import type {
-  ChannelAgentPromptAdapter,
-  ChannelAllowlistAdapter,
-  ChannelCapabilities,
-  ChannelCommandAdapter,
-  ChannelConfigAdapter,
-  ChannelConversationBindingSupport,
-  ChannelDirectoryAdapter,
-  ChannelGroupAdapter,
-  ChannelMessageActionAdapter,
-  ChannelMessagingAdapter,
-  ChannelOutboundAdapter,
-  ChannelPairingAdapter,
-  ChannelStreamingAdapter,
-  ChannelThreadingAdapter,
-} from "../../channels/plugins/types.public.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import {
+  INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
   normalizeMessageChannel,
-  type DeliverableMessageChannel,
 } from "../../utils/message-channel.js";
 import {
   bootstrapOutboundChannelPlugin,
-  resetOutboundChannelBootstrapStateForTests,
+  bootstrapOutboundChannelPluginAsync,
 } from "./channel-bootstrap.runtime.js";
+import { findChannelPluginInRegistry } from "./runtime-visible-channels.js";
 
-type ChannelTargetResolver = NonNullable<ChannelMessagingAdapter["targetResolver"]>;
-
-export type ChannelPromptRuntime = {
-  messageToolHints?: ChannelAgentPromptAdapter["messageToolHints"];
-  messageToolCapabilities?: ChannelAgentPromptAdapter["messageToolCapabilities"];
-  reactionGuidance?: ChannelAgentPromptAdapter["reactionGuidance"];
-  hasNativeApprovalPromptUi?: boolean;
-};
-
-export type OutboundChannelRuntime = {
-  id: string;
-  label: string;
-  chatTypes: NonNullable<ChannelCapabilities["chatTypes"]>;
-  preferSessionLookupForAnnounceTarget?: ChannelPlugin["meta"]["preferSessionLookupForAnnounceTarget"];
-  actions?: ChannelMessageActionAdapter;
-  approvalCapability?: ChannelPlugin["approvalCapability"];
-  conversationBindings?: ChannelConversationBindingSupport;
-  allowlist?: ChannelAllowlistAdapter;
-  pairing?: ChannelPairingAdapter;
-  commands?: ChannelCommandAdapter;
-  defaultAccountId?: ChannelConfigAdapter<unknown>["defaultAccountId"];
-  directory?: ChannelDirectoryAdapter;
-  promptRuntime?: ChannelPromptRuntime;
-  inferTargetChatType?: ChannelMessagingAdapter["inferTargetChatType"];
-  normalizeTarget?: ChannelMessagingAdapter["normalizeTarget"];
-  looksLikeTargetId?: ChannelTargetResolver["looksLikeId"];
-  targetResolverHint?: string;
-  resolveMessagingTargetFallback?: ChannelTargetResolver["resolveTarget"];
-  resolveSessionTarget?: ChannelMessagingAdapter["resolveSessionTarget"];
-  formatTargetDisplay?: ChannelMessagingAdapter["formatTargetDisplay"];
-  resolveOutboundSessionRoute?: ChannelMessagingAdapter["resolveOutboundSessionRoute"];
-  buildCrossContextPresentation?: ChannelMessagingAdapter["buildCrossContextPresentation"];
-  transformReplyPayload?: ChannelMessagingAdapter["transformReplyPayload"];
-  resolveAllowFrom?: ChannelConfigAdapter<unknown>["resolveAllowFrom"];
-  resolveDefaultTo?: ChannelConfigAdapter<unknown>["resolveDefaultTo"];
-  formatAllowFrom?: ChannelPlugin["config"]["formatAllowFrom"];
-  allowFromFallback?: NonNullable<ChannelPlugin["elevated"]>["allowFromFallback"];
-  resolveGroupRequireMention?: ChannelGroupAdapter["resolveRequireMention"];
-  resolveGroupToolPolicy?: ChannelGroupAdapter["resolveToolPolicy"];
-  queueDebounceMs?: NonNullable<NonNullable<ChannelPlugin["defaults"]>["queue"]>["debounceMs"];
-  buildThreadingToolContext?: ChannelThreadingAdapter["buildToolContext"];
-  resolveAutoThreadId?: ChannelThreadingAdapter["resolveAutoThreadId"];
-  resolveReplyToMode?: ChannelThreadingAdapter["resolveReplyToMode"];
-  resolveReplyTransport?: ChannelThreadingAdapter["resolveReplyTransport"];
-  outbound?: ChannelOutboundAdapter;
-  resolveTarget?: ChannelOutboundAdapter["resolveTarget"];
-  textChunkLimit?: ChannelOutboundAdapter["textChunkLimit"];
-  shouldTreatDeliveredTextAsVisible?: ChannelOutboundAdapter["shouldTreatDeliveredTextAsVisible"];
-  shouldTreatRoutedTextAsVisible?: ChannelOutboundAdapter["shouldTreatRoutedTextAsVisible"];
-  targetsMatchForReplySuppression?: ChannelOutboundAdapter["targetsMatchForReplySuppression"];
-  hasStructuredReplyPayload?: ChannelMessagingAdapter["hasStructuredReplyPayload"];
-  blockStreamingCoalesceDefaults?: ChannelStreamingAdapter["blockStreamingCoalesceDefaults"];
-};
-
-export function resetOutboundChannelResolutionStateForTest(): void {
-  resetOutboundChannelBootstrapStateForTests();
-}
-
-export function normalizeDeliverableOutboundChannel(
-  raw?: string | null,
-): DeliverableMessageChannel | undefined {
+/** Normalizes a raw channel id and rejects non-deliverable/internal channels. */
+export function normalizeDeliverableOutboundChannel(raw?: string | null): string | undefined {
   const normalized = normalizeMessageChannel(raw);
-  if (!normalized || !isDeliverableMessageChannel(normalized)) {
-    return undefined;
-  }
-  return normalized;
+  return normalized && isDeliverableMessageChannel(normalized) ? normalized : undefined;
 }
 
-function maybeBootstrapChannelPlugin(params: {
-  channel: DeliverableMessageChannel;
+function getOutboundRuntimeRegistry(): PluginRegistry | null {
+  return getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getActivePluginRegistry();
+}
+
+type OutboundChannelResolutionParams = {
+  channel: string;
   cfg?: OpenClawConfig;
-}): void {
-  bootstrapOutboundChannelPlugin(params);
+  agentId?: string;
+  allowBootstrap?: boolean;
+};
+
+type BootstrapRequest = Parameters<typeof bootstrapOutboundChannelPlugin>[0];
+
+function resolveSendCapableMessageAdapter(
+  plugin: ChannelPlugin | undefined,
+): ChannelMessageAdapterShape | undefined {
+  const message = plugin?.message;
+  return typeof message?.send?.text === "function" ? message : undefined;
 }
 
-function resolveDirectFromActiveRegistry(channel: string): ChannelPlugin | undefined {
-  const activeRegistry = getActivePluginRegistry();
-  if (!activeRegistry) {
-    return undefined;
-  }
-  for (const entry of activeRegistry.channels) {
-    const plugin = entry?.plugin;
-    if (plugin?.id === channel) {
-      return plugin;
+function hasOutboundSurface(
+  plugin: ChannelPlugin | undefined,
+  requireActivatedRuntime = false,
+): boolean {
+  return requireActivatedRuntime
+    ? Boolean(
+        plugin?.outbound?.sendText ||
+        plugin?.outbound?.deliveryMode === "gateway" ||
+        resolveSendCapableMessageAdapter(plugin),
+      )
+    : Boolean(plugin?.outbound ?? resolveSendCapableMessageAdapter(plugin));
+}
+
+function resolveRuntimeOutboundPluginCandidate(params: {
+  loaded?: ChannelPlugin;
+  runtime?: ChannelPlugin;
+  setupFallback?: ChannelPlugin;
+  bundled?: ChannelPlugin;
+  requireActivatedRuntime?: boolean;
+}): ChannelPlugin | undefined {
+  return (
+    [params.loaded, params.runtime, params.bundled].find((plugin) =>
+      hasOutboundSurface(plugin, params.requireActivatedRuntime),
+    ) ??
+    (params.requireActivatedRuntime
+      ? undefined
+      : (params.loaded ?? params.setupFallback ?? params.bundled))
+  );
+}
+
+function resolveOutboundPluginFromRuntimeRegistry(
+  channel: string,
+  registry: PluginRegistry | null | undefined = getOutboundRuntimeRegistry(),
+  requireActivatedRuntime = false,
+): ChannelPlugin | undefined {
+  const plugin = findChannelPluginInRegistry(registry, channel);
+  return hasOutboundSurface(plugin, requireActivatedRuntime) ? plugin : undefined;
+}
+
+function* resolveOutboundChannelPluginSteps(
+  params: OutboundChannelResolutionParams,
+): Generator<BootstrapRequest, ChannelPlugin | undefined, PluginRegistry | undefined> {
+  const channel = normalizeMessageChannel(params.channel);
+  let normalized = channel && isDeliverableMessageChannel(channel) ? channel : undefined;
+  let didBootstrap = false;
+  let bootstrapRegistry: PluginRegistry | undefined;
+  if (!normalized && channel && channel !== INTERNAL_MESSAGE_CHANNEL) {
+    const active = resolveOutboundPluginFromRuntimeRegistry(
+      channel,
+      getOutboundRuntimeRegistry() ?? undefined,
+      true,
+    );
+    if (active) {
+      normalized = active.id;
+    } else if (params.allowBootstrap === true) {
+      // External channel ids remain normalized before their runtime is registered.
+      // Bootstrap first, then let the runtime candidate lookup confirm sendability.
+      bootstrapRegistry = yield {
+        channel,
+        cfg: params.cfg,
+        agentId: params.agentId,
+      };
+      normalized =
+        resolveOutboundPluginFromRuntimeRegistry(channel, bootstrapRegistry, true)?.id ?? channel;
+      didBootstrap = true;
     }
   }
-  return undefined;
-}
-
-function toOutboundChannelRuntime(plugin: ChannelPlugin): OutboundChannelRuntime {
-  return {
-    id: plugin.id,
-    label: plugin.meta.label,
-    chatTypes: plugin.capabilities.chatTypes,
-    preferSessionLookupForAnnounceTarget: plugin.meta.preferSessionLookupForAnnounceTarget,
-    actions: plugin.actions,
-    approvalCapability: plugin.approvalCapability,
-    conversationBindings: plugin.conversationBindings,
-    allowlist: plugin.allowlist,
-    pairing: plugin.pairing,
-    commands: plugin.commands,
-    defaultAccountId: plugin.config.defaultAccountId,
-    directory: plugin.directory,
-    promptRuntime: {
-      messageToolHints: plugin.agentPrompt?.messageToolHints,
-      messageToolCapabilities: plugin.agentPrompt?.messageToolCapabilities,
-      reactionGuidance: plugin.agentPrompt?.reactionGuidance,
-      hasNativeApprovalPromptUi: channelPluginHasNativeApprovalPromptUi(plugin),
-    },
-    inferTargetChatType: plugin.messaging?.inferTargetChatType,
-    normalizeTarget: plugin.messaging?.normalizeTarget,
-    looksLikeTargetId: plugin.messaging?.targetResolver?.looksLikeId,
-    targetResolverHint: plugin.messaging?.targetResolver?.hint,
-    resolveMessagingTargetFallback: plugin.messaging?.targetResolver?.resolveTarget,
-    resolveSessionTarget: plugin.messaging?.resolveSessionTarget,
-    formatTargetDisplay: plugin.messaging?.formatTargetDisplay,
-    resolveOutboundSessionRoute: plugin.messaging?.resolveOutboundSessionRoute,
-    buildCrossContextPresentation: plugin.messaging?.buildCrossContextPresentation,
-    transformReplyPayload: plugin.messaging?.transformReplyPayload,
-    resolveAllowFrom: plugin.config?.resolveAllowFrom,
-    resolveDefaultTo: plugin.config?.resolveDefaultTo,
-    formatAllowFrom: plugin.config?.formatAllowFrom,
-    allowFromFallback: plugin.elevated?.allowFromFallback,
-    resolveGroupRequireMention: plugin.groups?.resolveRequireMention,
-    resolveGroupToolPolicy: plugin.groups?.resolveToolPolicy,
-    queueDebounceMs: plugin.defaults?.queue?.debounceMs,
-    buildThreadingToolContext: plugin.threading?.buildToolContext,
-    resolveAutoThreadId: plugin.threading?.resolveAutoThreadId,
-    resolveReplyToMode: plugin.threading?.resolveReplyToMode,
-    resolveReplyTransport: plugin.threading?.resolveReplyTransport,
-    outbound: plugin.outbound,
-    resolveTarget: plugin.outbound?.resolveTarget,
-    textChunkLimit: plugin.outbound?.textChunkLimit,
-    shouldTreatDeliveredTextAsVisible: plugin.outbound?.shouldTreatDeliveredTextAsVisible,
-    shouldTreatRoutedTextAsVisible: plugin.outbound?.shouldTreatRoutedTextAsVisible,
-    targetsMatchForReplySuppression: plugin.outbound?.targetsMatchForReplySuppression,
-    hasStructuredReplyPayload: plugin.messaging?.hasStructuredReplyPayload,
-    blockStreamingCoalesceDefaults: plugin.streaming?.blockStreamingCoalesceDefaults,
-  };
-}
-
-export function resolveOutboundChannelPlugin(params: {
-  channel: string;
-  cfg?: OpenClawConfig;
-  allowBootstrap?: boolean;
-}): ChannelPlugin | undefined {
-  const normalized = normalizeDeliverableOutboundChannel(params.channel);
   if (!normalized) {
     return undefined;
   }
 
-  const resolveLoaded = () => getLoadedChannelPlugin(normalized);
-  const resolve = () => getChannelPlugin(normalized);
-  const current = resolveLoaded();
-  if (current) {
-    return current;
-  }
-  const directCurrent = resolveDirectFromActiveRegistry(normalized);
-  if (directCurrent) {
-    return directCurrent;
-  }
-
-  if (params.allowBootstrap !== true) {
-    return resolve();
-  }
-
-  maybeBootstrapChannelPlugin({ channel: normalized, cfg: params.cfg });
-  return resolveLoaded() ?? resolveDirectFromActiveRegistry(normalized) ?? resolve();
-}
-
-export function resolveOutboundChannelMessageAdapter(params: {
-  channel: string;
-  cfg?: OpenClawConfig;
-  allowBootstrap?: boolean;
-}): ChannelMessageAdapterShape | undefined {
-  return resolveOutboundChannelPlugin(params)?.message;
-}
-
-export function resolveOutboundChannelPluginForRead(params: {
-  channel: string;
-  cfg?: OpenClawConfig;
-}): ChannelPlugin | undefined {
-  const normalized = normalizeMessageChannel(params.channel) ?? params.channel.trim();
-  if (!normalized) {
-    return undefined;
-  }
-  const channelId = normalized as Parameters<typeof getLoadedChannelPlugin>[0];
-  const current = getLoadedChannelPlugin(channelId);
-  if (current) {
-    return current;
-  }
-  const directCurrent = resolveDirectFromActiveRegistry(normalized);
-  if (directCurrent) {
-    return directCurrent;
-  }
-  const deliverable = normalizeDeliverableOutboundChannel(normalized);
-  if (deliverable) {
-    maybeBootstrapChannelPlugin({ channel: deliverable, cfg: params.cfg });
-    return (
-      getLoadedChannelPlugin(deliverable) ??
-      resolveDirectFromActiveRegistry(deliverable) ??
-      getChannelPlugin(deliverable)
+  const scopedPlugin = findChannelPluginInRegistry(
+    bootstrapRegistry ?? getPluginRuntimeGatewayRequestScope()?.pluginRegistry,
+    normalized,
+  );
+  if (scopedPlugin) {
+    // A selected registration owns absent capabilities too. Only explicit
+    // activation may replace a setup shell; never borrow a same-id sender.
+    if (params.allowBootstrap !== true || hasOutboundSurface(scopedPlugin, true)) {
+      return scopedPlugin;
+    }
+    if (didBootstrap) {
+      return undefined;
+    }
+    return resolveOutboundPluginFromRuntimeRegistry(
+      normalized,
+      yield { ...params, channel: normalized },
+      true,
     );
   }
-  return getChannelPlugin(channelId);
-}
 
-export function resolveOutboundChannelRuntime(params: {
-  channel: string;
-  cfg?: OpenClawConfig;
-}): OutboundChannelRuntime | undefined {
-  const plugin = resolveOutboundChannelPluginForRead(params);
-  return plugin ? toOutboundChannelRuntime(plugin) : undefined;
-}
+  const current = getLoadedChannelPlugin(normalized);
+  const requireActivatedRuntime = params.allowBootstrap === true;
+  const runtimeCurrent = resolveOutboundPluginFromRuntimeRegistry(
+    normalized,
+    bootstrapRegistry,
+    requireActivatedRuntime,
+  );
+  const setupFallback = findChannelPluginInRegistry(
+    bootstrapRegistry ?? getOutboundRuntimeRegistry(),
+    normalized,
+  );
+  const bundledCurrent = getChannelPlugin(normalized);
+  const candidate = resolveRuntimeOutboundPluginCandidate({
+    loaded: current,
+    runtime: runtimeCurrent,
+    setupFallback,
+    bundled: bundledCurrent,
+    requireActivatedRuntime,
+  });
+  if (candidate) {
+    return candidate;
+  }
 
-export function resolveLoadedOutboundChannelPluginForRead(params: {
-  channel: string;
-}): ChannelPlugin | undefined {
-  const normalized = normalizeMessageChannel(params.channel) ?? params.channel.trim();
-  if (!normalized) {
+  if (params.allowBootstrap !== true || didBootstrap) {
     return undefined;
   }
-  return (
-    getLoadedChannelPlugin(normalized as Parameters<typeof getLoadedChannelPlugin>[0]) ??
-    resolveDirectFromActiveRegistry(normalized)
-  );
+
+  const registry = yield {
+    channel: normalized,
+    cfg: params.cfg,
+    agentId: params.agentId,
+  };
+  return resolveRuntimeOutboundPluginCandidate({
+    loaded: getLoadedChannelPlugin(normalized),
+    runtime: resolveOutboundPluginFromRuntimeRegistry(normalized, registry, true),
+    bundled: getChannelPlugin(normalized),
+    requireActivatedRuntime: true,
+  });
+}
+
+/** Resolves a deliverable outbound channel plugin, optionally bootstrapping it. */
+export function resolveOutboundChannelPlugin(
+  params: OutboundChannelResolutionParams,
+): ChannelPlugin | undefined {
+  const steps = resolveOutboundChannelPluginSteps(params);
+  let step = steps.next();
+  while (!step.done) {
+    step = steps.next(bootstrapOutboundChannelPlugin(step.value));
+  }
+  return step.value;
+}
+
+async function resolveOutboundChannelPluginAsync(
+  params: OutboundChannelResolutionParams & { assertCurrent?: () => void },
+): Promise<ChannelPlugin | undefined> {
+  params.assertCurrent?.();
+  const steps = resolveOutboundChannelPluginSteps(params);
+  let step = steps.next();
+  while (!step.done) {
+    const registry = await bootstrapOutboundChannelPluginAsync({
+      ...step.value,
+      assertCurrent: params.assertCurrent,
+    });
+    params.assertCurrent?.();
+    step = steps.next(registry);
+  }
+  return step.value;
+}
+
+/** Resolves the message adapter after any required bootstrap metadata is ready. */
+export async function resolveOutboundChannelMessageAdapter(
+  params: OutboundChannelResolutionParams & { assertCurrent?: () => void },
+): Promise<ChannelMessageAdapterShape | undefined> {
+  const plugin = await resolveOutboundChannelPluginAsync(params);
+  params.assertCurrent?.();
+  return resolveSendCapableMessageAdapter(plugin);
 }

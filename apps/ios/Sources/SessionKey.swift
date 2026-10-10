@@ -8,16 +8,8 @@ enum SessionKey {
 
     static func makeAgentSessionKey(agentId: String, baseKey: String) -> String {
         let trimmedAgent = agentId.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedBase = baseKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmedAgent.isEmpty { return trimmedBase.isEmpty ? "main" : trimmedBase }
-        let normalizedBase = trimmedBase.isEmpty ? "main" : trimmedBase
+        let normalizedBase = self.normalizeMainKey(baseKey)
+        if trimmedAgent.isEmpty { return normalizedBase }
         return "agent:\(trimmedAgent):\(normalizedBase)"
-    }
-
-    static func isCanonicalMainSessionKey(_ value: String?) -> Bool {
-        let trimmed = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return false }
-        if trimmed == "global" { return true }
-        return trimmed.hasPrefix("agent:")
     }
 }

@@ -1,15 +1,48 @@
-import { randomUUID, createHash } from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
-import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
+import { createHash } from "node:crypto";
+import type {
+  OpenKeyedStoreOptions,
+  PluginStateKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
+import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { renderAgentCommand, splitCommandParts, type AcpxAgentCommand } from "./command-line.js";
+import { ACPX_PROCESS_LEASE_MAX_ENTRIES, ACPX_PROCESS_LEASE_NAMESPACE } from "./state.js";
 
-export const OPENCLAW_ACPX_LEASE_ID_ENV = "OPENCLAW_ACPX_LEASE_ID";
-export const OPENCLAW_GATEWAY_INSTANCE_ID_ENV = "OPENCLAW_GATEWAY_INSTANCE_ID";
 export const OPENCLAW_ACPX_LEASE_ID_ARG = "--openclaw-acpx-lease-id";
 export const OPENCLAW_GATEWAY_INSTANCE_ID_ARG = "--openclaw-gateway-instance-id";
+/** Synthetic session identity for generated-wrapper health probes. */
+export const ACPX_PROBE_LEASE_SESSION_KEY = "openclaw:acpx:probe";
 
-export type AcpxProcessLeaseState = "open" | "closing" | "closed" | "lost";
+export type AcpxProcessLeaseIdentity = {
+  leaseId: string;
+  gatewayInstanceId: string;
+};
 
+export function readAcpxProcessLeaseIdentity(
+  command: AcpxAgentCommand | undefined,
+): AcpxProcessLeaseIdentity | undefined {
+  // ps displays arguments verbatim. Parse only our fields so quotes and
+  // backslashes in unrelated arguments cannot swallow the lease identity.
+  const parts =
+    typeof command === "string"
+      ? Array.from(
+          command.matchAll(
+            /(?:^|\s)(--openclaw-(?:acpx-lease-id|gateway-instance-id))\s+(?:"([^"]*)"|'([^']*)'|(\S+))(?=\s|$)/g,
+          ),
+        ).flatMap((match) => [match[1]!, match[2] ?? match[3] ?? match[4]!])
+      : (command ?? []);
+  const leaseIndex = parts.lastIndexOf(OPENCLAW_ACPX_LEASE_ID_ARG);
+  const gatewayIndex = parts.lastIndexOf(OPENCLAW_GATEWAY_INSTANCE_ID_ARG);
+  const leaseId = leaseIndex >= 0 ? parts[leaseIndex + 1]?.trim() : "";
+  const gatewayInstanceId = gatewayIndex >= 0 ? parts[gatewayIndex + 1]?.trim() : "";
+  if (!leaseId || !gatewayInstanceId) {
+    return undefined;
+  }
+  return { leaseId, gatewayInstanceId };
+}
+
+type AcpxProcessLeaseState = "open" | "closing" | "closed" | "lost";
+
+/** Persisted identity and command metadata for one ACPX wrapper process. */
 export type AcpxProcessLease = {
   leaseId: string;
   gatewayInstanceId: string;
@@ -30,19 +63,10 @@ export type AcpxProcessLeaseStore = {
   markState(leaseId: string, state: AcpxProcessLeaseState): Promise<void>;
 };
 
-type LeaseFile = {
-  version: 1;
-  leases: AcpxProcessLease[];
-};
-
-const LEASE_FILE = "process-leases.json";
-
-function normalizeLease(value: unknown): AcpxProcessLease | undefined {
-  if (typeof value !== "object" || value === null) {
-    return undefined;
-  }
-  const record = value as Record<string, unknown>;
+export function normalizeAcpxProcessLease(value: unknown): AcpxProcessLease | undefined {
+  const record = asOptionalObjectRecord(value);
   if (
+    !record ||
     typeof record.leaseId !== "string" ||
     typeof record.gatewayInstanceId !== "string" ||
     typeof record.sessionKey !== "string" ||
@@ -69,111 +93,84 @@ function normalizeLease(value: unknown): AcpxProcessLease | undefined {
   };
 }
 
-async function readLeaseFile(filePath: string): Promise<LeaseFile> {
-  const { value } = await readJsonFileWithFallback<Partial<LeaseFile>>(filePath, {
-    version: 1,
-    leases: [],
+export function openAcpxProcessLeaseStateStore(
+  openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
+): PluginStateKeyedStore<AcpxProcessLease> {
+  return openKeyedStore<AcpxProcessLease>({
+    namespace: ACPX_PROCESS_LEASE_NAMESPACE,
+    maxEntries: ACPX_PROCESS_LEASE_MAX_ENTRIES,
+    overflowPolicy: "reject-new",
   });
-  const leases = Array.isArray(value.leases)
-    ? value.leases.map(normalizeLease).filter((lease): lease is AcpxProcessLease => !!lease)
-    : [];
-  return { version: 1, leases };
 }
 
-function writeLeaseFile(filePath: string, value: LeaseFile): Promise<void> {
-  return writeJsonFileAtomically(filePath, value);
-}
-
-export function createAcpxProcessLeaseStore(params: { stateDir: string }): AcpxProcessLeaseStore {
-  const filePath = path.join(params.stateDir, LEASE_FILE);
+export function createAcpxProcessLeaseStore(params: {
+  store: PluginStateKeyedStore<AcpxProcessLease>;
+}): AcpxProcessLeaseStore {
   let updateQueue: Promise<void> = Promise.resolve();
 
-  async function update(
-    mutator: (leases: AcpxProcessLease[]) => AcpxProcessLease[],
-  ): Promise<void> {
-    const run = updateQueue.then(async () => {
-      await fs.mkdir(params.stateDir, { recursive: true });
-      const current = await readLeaseFile(filePath);
-      await writeLeaseFile(filePath, {
-        version: 1,
-        leases: mutator(current.leases),
-      });
-    });
+  async function update(mutator: () => Promise<void>): Promise<void> {
+    const run = updateQueue.then(mutator);
     updateQueue = run.catch(() => {});
     await run;
   }
 
-  async function readCurrent(): Promise<LeaseFile> {
+  async function readCurrent(): Promise<AcpxProcessLease[]> {
     await updateQueue;
-    return await readLeaseFile(filePath);
+    const entries = await params.store.entries();
+    return entries
+      .map((entry) => normalizeAcpxProcessLease(entry.value))
+      .filter((lease): lease is AcpxProcessLease => Boolean(lease));
   }
 
   return {
     async load(leaseId) {
-      const current = await readCurrent();
-      return current.leases.find((lease) => lease.leaseId === leaseId);
+      await updateQueue;
+      return normalizeAcpxProcessLease(await params.store.lookup(leaseId));
     },
     async listOpen(gatewayInstanceId) {
-      const current = await readCurrent();
-      return current.leases.filter(
+      const leases = await readCurrent();
+      return leases.filter(
         (lease) =>
           (lease.state === "open" || lease.state === "closing") &&
           (!gatewayInstanceId || lease.gatewayInstanceId === gatewayInstanceId),
       );
     },
     async save(lease) {
-      await update((leases) => [
-        ...leases.filter((entry) => entry.leaseId !== lease.leaseId),
-        lease,
-      ]);
+      await update(async () => {
+        await params.store.register(lease.leaseId, lease);
+      });
     },
     async markState(leaseId, state) {
-      await update((leases) =>
-        leases.map((lease) => (lease.leaseId === leaseId ? { ...lease, state } : lease)),
-      );
+      await update(async () => {
+        if (state === "closed" || state === "lost") {
+          await params.store.delete(leaseId);
+          return;
+        }
+        const lease = normalizeAcpxProcessLease(await params.store.lookup(leaseId));
+        if (lease) {
+          await params.store.register(leaseId, { ...lease, state });
+        }
+      });
     },
   };
 }
 
-export function createAcpxProcessLeaseId(): string {
-  return randomUUID();
+/** Hash a wrapper command so process leases can detect command drift. */
+export function hashAcpxProcessCommand(command: AcpxAgentCommand): string {
+  return createHash("sha256").update(renderAgentCommand(command)).digest("hex");
 }
 
-export function hashAcpxProcessCommand(command: string): string {
-  return createHash("sha256").update(command).digest("hex");
-}
-
-function quoteEnvValue(value: string): string {
-  return /^[A-Za-z0-9_./:=@+-]+$/.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
-}
-
-function appendAcpxLeaseArgs(params: {
-  command: string;
+/** Append portable wrapper arguments without changing the executable or argument bytes. */
+export function withAcpxLeaseArgs(params: {
+  command: AcpxAgentCommand;
   leaseId: string;
   gatewayInstanceId: string;
-}): string {
+}): string[] {
   return [
-    params.command,
+    ...splitCommandParts(params.command),
     OPENCLAW_ACPX_LEASE_ID_ARG,
-    quoteEnvValue(params.leaseId),
+    params.leaseId,
     OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
-    quoteEnvValue(params.gatewayInstanceId),
-  ].join(" ");
-}
-
-export function withAcpxLeaseEnvironment(params: {
-  command: string;
-  leaseId: string;
-  gatewayInstanceId: string;
-  platform?: NodeJS.Platform;
-}): string {
-  if ((params.platform ?? process.platform) === "win32") {
-    return appendAcpxLeaseArgs(params);
-  }
-  return [
-    "env",
-    `${OPENCLAW_ACPX_LEASE_ID_ENV}=${quoteEnvValue(params.leaseId)}`,
-    `${OPENCLAW_GATEWAY_INSTANCE_ID_ENV}=${quoteEnvValue(params.gatewayInstanceId)}`,
-    appendAcpxLeaseArgs(params),
-  ].join(" ");
+    params.gatewayInstanceId,
+  ];
 }

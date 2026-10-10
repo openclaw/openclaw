@@ -1,9 +1,8 @@
-import { vi } from "vitest";
-import { __testing as queueCleanupTesting } from "../auto-reply/reply/queue/cleanup.js";
+// Shared subagent tool test harness for gateway/config dependency overrides.
+import { beforeEach, vi } from "vitest";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
-import { __testing as subagentAnnounceTesting } from "./subagent-announce.js";
-import { __testing as subagentControlTesting } from "./subagent-control.js";
+import { announceTesting as subagentAnnounceTesting } from "./subagents/announce/subagent-announce-overrides.test-support.js";
 
 type LoadedConfig = ReturnType<(typeof import("../config/config.js"))["getRuntimeConfig"]>;
 
@@ -21,6 +20,7 @@ let configOverride: LoadedConfig = defaultConfig;
 async function callGatewayForTest<T = Record<string, unknown>>(
   opts: CallGatewayOptions,
 ): Promise<T> {
+  // Preserve the gateway call shape while giving tests a single mock to assert.
   return (await callGatewayMock(opts)) as T;
 }
 
@@ -33,19 +33,13 @@ export function resetSubagentsConfigOverride() {
 }
 
 function applySharedSubagentTestDeps() {
-  subagentControlTesting.setDepsForTest({
-    callGateway: callGatewayForTest,
-  });
   subagentAnnounceTesting.setDepsForTest({
     callGateway: callGatewayForTest,
     getRuntimeConfig: () => configOverride,
   });
-  queueCleanupTesting.setDepsForTests({
-    resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-  });
 }
 
-applySharedSubagentTestDeps();
+beforeEach(applySharedSubagentTestDeps);
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: callGatewayForTest,

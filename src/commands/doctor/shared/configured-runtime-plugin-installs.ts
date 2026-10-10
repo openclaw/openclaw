@@ -1,17 +1,17 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   collectConfiguredAgentHarnessRuntimes,
   type ConfiguredAgentHarnessRuntimeOptions,
 } from "../../../agents/harness-runtimes.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import type { PluginPackageInstall } from "../../../plugins/manifest.js";
 
-export type ConfiguredRuntimePluginInstallCandidate = {
+type ConfiguredRuntimePluginInstallCandidate = {
   pluginId: string;
   label: string;
-  npmSpec?: string;
-  clawhubSpec?: string;
-  trustedSourceLinkedOfficialInstall?: boolean;
-  defaultChoice?: PluginPackageInstall["defaultChoice"];
+  npmSpec: string;
+  trustedSourceLinkedOfficialInstall: true;
+  /** Keep this official runtime package on the same release cohort as OpenClaw. */
+  versionBoundToOpenClaw?: boolean;
 };
 
 export const CONFIGURED_RUNTIME_PLUGIN_INSTALL_CANDIDATES: readonly ConfiguredRuntimePluginInstallCandidate[] =
@@ -28,9 +28,23 @@ export const CONFIGURED_RUNTIME_PLUGIN_INSTALL_CANDIDATES: readonly ConfiguredRu
       label: "Codex",
       npmSpec: "@openclaw/codex",
       trustedSourceLinkedOfficialInstall: true,
+      versionBoundToOpenClaw: true,
     },
   ];
 
+export const VERSION_BOUND_RUNTIME_PLUGIN_IDS: ReadonlySet<string> = new Set(
+  CONFIGURED_RUNTIME_PLUGIN_INSTALL_CANDIDATES.filter(
+    (candidate) => candidate.versionBoundToOpenClaw,
+  ).map((candidate) => candidate.pluginId),
+);
+
+export const VERSION_BOUND_RUNTIME_PLUGIN_POLICY_IDS_BY_SURFACE = {
+  allow: VERSION_BOUND_RUNTIME_PLUGIN_IDS,
+  deny: VERSION_BOUND_RUNTIME_PLUGIN_IDS,
+  entries: VERSION_BOUND_RUNTIME_PLUGIN_IDS,
+} as const;
+
+/** Resolve the official install candidate for a configured runtime id. */
 export function resolveConfiguredRuntimePluginInstallCandidate(
   runtimeId: string,
 ): ConfiguredRuntimePluginInstallCandidate | undefined {
@@ -39,27 +53,20 @@ export function resolveConfiguredRuntimePluginInstallCandidate(
   );
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function acpxRuntimeIsConfigured(cfg: OpenClawConfig): boolean {
-  const acp = asRecord(cfg.acp);
+export function acpxRuntimeIsConfigured(cfg: OpenClawConfig): boolean {
+  const acp = asOptionalRecord(cfg.acp);
   const backend = typeof acp?.backend === "string" ? acp.backend.trim().toLowerCase() : "";
-  return (
-    (backend === "acpx" || acp?.enabled === true || asRecord(acp?.dispatch)?.enabled === true) &&
-    (!backend || backend === "acpx")
-  );
+  return backend
+    ? backend === "acpx"
+    : acp?.enabled === true || asOptionalRecord(acp?.dispatch)?.enabled === true;
 }
 
-export function collectConfiguredRuntimePluginIds(
+/** Collect runtime ids without loading plugin metadata during startup planning. */
+export function collectConfiguredRuntimeIds(
   cfg: OpenClawConfig,
-  env: NodeJS.ProcessEnv,
   options?: ConfiguredAgentHarnessRuntimeOptions,
 ): string[] {
-  const ids = new Set(collectConfiguredAgentHarnessRuntimes(cfg, env, options));
+  const ids = new Set(collectConfiguredAgentHarnessRuntimes(cfg, options));
   if (acpxRuntimeIsConfigured(cfg)) {
     ids.add("acpx");
   }

@@ -1,52 +1,23 @@
-import Darwin
 import Foundation
-import UIKit
+import OpenClawKit
 
 /// Shared device and platform info for Settings, gateway node payloads, and device status.
 enum DeviceInfoHelper {
-    /// e.g. "iOS 18.0.0" or "iPadOS 18.0.0" by interface idiom. Use for gateway/device payloads.
-    @MainActor
-    static func platformString() -> String {
-        let v = ProcessInfo.processInfo.operatingSystemVersion
-        let name = switch UIDevice.current.userInterfaceIdiom {
-        case .pad:
-            "iPadOS"
-        case .phone:
-            "iOS"
-        default:
-            "iOS"
-        }
-        return "\(name) \(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
-    }
-
     /// Always "iOS X.Y.Z" for UI display (e.g. Settings), matching legacy behavior on iPad.
     static func platformStringForDisplay() -> String {
-        let v = ProcessInfo.processInfo.operatingSystemVersion
-        return "iOS \(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
+        "iOS \(self.iOSVersionStringForDisplay())"
     }
 
-    /// Device family for display: "iPad", "iPhone", or "iOS".
-    @MainActor
-    static func deviceFamily() -> String {
-        switch UIDevice.current.userInterfaceIdiom {
-        case .pad:
-            "iPad"
-        case .phone:
-            "iPhone"
-        default:
-            "iOS"
-        }
+    /// Version-only display string for About, e.g. "18.0.0".
+    static func iOSVersionStringForDisplay(
+        _ version: OperatingSystemVersion = ProcessInfo.processInfo.operatingSystemVersion) -> String
+    {
+        "\(version.majorVersion).\(version.minorVersion).\(version.patchVersion)"
     }
 
-    /// Machine model identifier from uname (e.g. "iPhone17,1").
+    /// Machine model identifier, or a compatibility-host description when running on a Mac.
     static func modelIdentifier() -> String {
-        var systemInfo = utsname()
-        uname(&systemInfo)
-        let machine = withUnsafeBytes(of: &systemInfo.machine) { ptr in
-            String(bytes: ptr.prefix { $0 != 0 }, encoding: .utf8)
-        }
-        let trimmed = machine?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? "unknown" : trimmed
+        InstanceIdentity.modelIdentifier ?? "unknown"
     }
 
     /// Canonical app version when present, otherwise the Apple marketing version.
@@ -70,5 +41,13 @@ enum DeviceInfoHelper {
             return version
         }
         return "\(version) (\(build))"
+    }
+
+    static func buildMetadata(
+        infoDictionary: [String: Any] = Bundle.main.infoDictionary ?? [:]) -> ArtifactBuildInfo
+    {
+        ArtifactBuildInfo(
+            infoDictionary: infoDictionary,
+            versionKeys: ["OpenClawCanonicalVersion", "CFBundleShortVersionString"])
     }
 }

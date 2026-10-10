@@ -1,63 +1,100 @@
-import { completeSimple, getModel, type Api, type Model } from "@earendil-works/pi-ai";
-
-type Usage = {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  totalTokens?: number;
-};
-
-type RunResult = {
-  durationMs: number;
-  usage?: Usage;
-};
+// Bench Model script supports OpenClaw repository automation.
+import { pathToFileURL } from "node:url";
+import type { Model } from "openclaw/plugin-sdk/llm";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import { CliArgumentError } from "./lib/error-format.mts";
+import { parseStrictIntegerOption } from "./lib/strict-integer-option.ts";
 
 const DEFAULT_PROMPT = "Reply with a single word: ok. No punctuation or extra text.";
 const DEFAULT_RUNS = 10;
 
-function parseArg(flag: string): string | undefined {
-  const idx = process.argv.indexOf(flag);
-  if (idx === -1) {
-    return undefined;
+function readValue(argv: string[], index: number, flag: string): string {
+  const value = argv[index + 1]?.trim() ?? "";
+  if (!value || value.startsWith("-")) {
+    throw new CliArgumentError(`${flag} requires a value`);
   }
-  return process.argv[idx + 1];
+  return value;
 }
 
-function parseRuns(raw: string | undefined): number {
-  if (!raw) {
-    return DEFAULT_RUNS;
+function parseArgs(argv = process.argv.slice(2)) {
+  let help = false;
+  const values = new Map<string, string>();
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index] ?? "";
+    if (arg === "--help" || arg === "-h") {
+      help = true;
+      continue;
+    }
+    if (arg === "--prompt" || arg === "--runs") {
+      if (values.has(arg)) {
+        throw new CliArgumentError(`${arg} was provided more than once`);
+      }
+      values.set(arg, readValue(argv, index, arg));
+      index += 1;
+      continue;
+    }
+    throw new CliArgumentError(`Unknown argument: ${arg}`);
   }
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return DEFAULT_RUNS;
-  }
-  return Math.floor(parsed);
+  return {
+    help,
+    prompt: values.get("--prompt") ?? DEFAULT_PROMPT,
+    runs: parseStrictIntegerOption({
+      fallback: DEFAULT_RUNS,
+      label: "--runs",
+      min: 1,
+      raw: values.get("--runs"),
+    }),
+  };
+}
+
+function printUsage(): void {
+  console.log(`OpenClaw model latency benchmark
+
+Usage:
+  node --import tsx scripts/bench-model.ts [options]
+
+Options:
+  --runs <n>      Runs per model (default: ${DEFAULT_RUNS})
+  --prompt <text> Prompt to send to each model
+  --help, -h      Show this text
+
+Environment:
+  ANTHROPIC_API_KEY
+  MINIMAX_API_KEY
+  MINIMAX_BASE_URL
+  MINIMAX_MODEL
+`);
 }
 
 function median(values: number[]): number {
   if (values.length === 0) {
     return 0;
   }
-  const sorted = [...values].toSorted((a, b) => a - b);
+  const sorted = values.toSorted((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
   if (sorted.length % 2 === 0) {
-    return Math.round((sorted[mid - 1] + sorted[mid]) / 2);
+    return Math.round(
+      (expectDefined(sorted[mid - 1], "lower middle model benchmark sample") +
+        expectDefined(sorted[mid], "upper middle model benchmark sample")) /
+        2,
+    );
   }
-  return sorted[mid];
+  return expectDefined(sorted[mid], "middle model benchmark sample");
 }
 
 async function runModel(opts: {
   label: string;
-  model: Model<Api>;
+  model: Model;
   apiKey: string;
   runs: number;
   prompt: string;
-}): Promise<RunResult[]> {
-  const results: RunResult[] = [];
+}): Promise<number[]> {
+  // Keep SDK initialization outside the measured model-call samples.
+  const { completeSimple } = await import("openclaw/plugin-sdk/llm");
+  const durations: number[] = [];
   for (let i = 0; i < opts.runs; i += 1) {
     const started = Date.now();
-    const res = await completeSimple(
+    await completeSimple(
       opts.model,
       {
         messages: [
@@ -71,15 +108,18 @@ async function runModel(opts: {
       { apiKey: opts.apiKey, maxTokens: 64 },
     );
     const durationMs = Date.now() - started;
-    results.push({ durationMs, usage: res.usage });
+    durations.push(durationMs);
     console.log(`${opts.label} run ${i + 1}/${opts.runs}: ${durationMs}ms`);
   }
-  return results;
+  return durations;
 }
 
-async function main(): Promise<void> {
-  const runs = parseRuns(parseArg("--runs"));
-  const prompt = parseArg("--prompt") ?? DEFAULT_PROMPT;
+async function main(argv = process.argv.slice(2)): Promise<void> {
+  const options = parseArgs(argv);
+  if (options.help) {
+    printUsage();
+    return;
+  }
 
   const anthropicKey = process.env.ANTHROPIC_API_KEY?.trim();
   const minimaxKey = process.env.MINIMAX_API_KEY?.trim();
@@ -105,29 +145,39 @@ async function main(): Promise<void> {
     contextWindow: 200000,
     maxTokens: 8192,
   };
-  const opusModel = getModel("anthropic", "claude-opus-4-6");
+  const opusModel: Model<"anthropic-messages"> = {
+    id: "claude-opus-4-6",
+    name: "Claude Opus 4.6",
+    api: "anthropic-messages",
+    provider: "anthropic",
+    baseUrl: "https://api.anthropic.com",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
+    contextWindow: 200000,
+    maxTokens: 32000,
+  };
 
-  console.log(`Prompt: ${prompt}`);
-  console.log(`Runs: ${runs}`);
+  console.log(`Prompt: ${options.prompt}`);
+  console.log(`Runs: ${options.runs}`);
   console.log("");
 
   const minimaxResults = await runModel({
     label: "minimax",
     model: minimaxModel,
     apiKey: minimaxKey,
-    runs,
-    prompt,
+    runs: options.runs,
+    prompt: options.prompt,
   });
   const opusResults = await runModel({
     label: "opus",
     model: opusModel,
     apiKey: anthropicKey,
-    runs,
-    prompt,
+    runs: options.runs,
+    prompt: options.prompt,
   });
 
-  const summarize = (label: string, results: RunResult[]) => {
-    const durations = results.map((r) => r.durationMs);
+  const summarize = (label: string, durations: number[]) => {
     const med = median(durations);
     const min = Math.min(...durations);
     const max = Math.max(...durations);
@@ -142,4 +192,18 @@ async function main(): Promise<void> {
   }
 }
 
-await main();
+export const testing = {
+  parseArgs,
+};
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  main().catch((err: unknown) => {
+    if (err instanceof CliArgumentError) {
+      console.error(err.message);
+      process.exitCode = 1;
+      return;
+    }
+    console.error(err instanceof Error ? err.stack : String(err));
+    process.exitCode = 1;
+  });
+}

@@ -1,0 +1,97 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { buildHostnameAllowlistPolicyFromSuffixAllowlist } from "openclaw/plugin-sdk/ssrf-policy";
+import {
+  normalizeOptionalString,
+  normalizeUniqueTrimmedStringList,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { JsonObject } from "./protocol.js";
+
+export type CodexWebSearchPlan = {
+  kind: "native-hosted" | "managed" | "disabled";
+  suppressManagedWebSearch: boolean;
+  threadConfig: JsonObject;
+  webFetchHostnameAllowlist?: string[];
+};
+
+export type CodexNativeWebSearchSupport = "supported" | "unsupported" | "unknown";
+
+const CODEX_NATIVE_WEB_SEARCH_DISABLED_CONFIG: JsonObject = {
+  "features.standalone_web_search": false,
+  web_search: "disabled",
+};
+
+export function buildCodexNativeWebSearchThreadConfig(
+  config: OpenClawConfig | undefined,
+): JsonObject {
+  const nativeConfig = config?.tools?.web?.search?.openaiCodex;
+  const threadConfig: JsonObject = {
+    // Production app-server traffic rejects standalone web.run's user-defined
+    // `web` namespace. Hosted web_search emits the same native search items.
+    "features.standalone_web_search": false,
+    // Codex treats cached as a preference and resolves it to live for
+    // unrestricted permission profiles.
+    web_search: nativeConfig?.mode === "live" ? "live" : "cached",
+  };
+  const allowedDomains = normalizeUniqueTrimmedStringList(nativeConfig?.allowedDomains);
+  if (allowedDomains.length > 0) {
+    threadConfig["tools.web_search.allowed_domains"] = allowedDomains;
+  }
+  if (nativeConfig?.contextSize) {
+    threadConfig["tools.web_search.context_size"] = nativeConfig.contextSize;
+  }
+  for (const key of ["country", "region", "city", "timezone"] as const) {
+    const value = normalizeOptionalString(nativeConfig?.userLocation?.[key]);
+    if (value) {
+      threadConfig[`tools.web_search.location.${key}`] = value;
+    }
+  }
+  return threadConfig;
+}
+
+export function resolveCodexWebSearchPlan(params: {
+  config?: OpenClawConfig;
+  disableTools?: boolean;
+  nativeToolSurfaceEnabled?: boolean;
+  nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
+  webSearchAllowed?: boolean;
+}): CodexWebSearchPlan {
+  const managedPlan = (suppressManagedWebSearch: boolean): CodexWebSearchPlan => ({
+    kind: suppressManagedWebSearch ? "disabled" : "managed",
+    suppressManagedWebSearch,
+    threadConfig: CODEX_NATIVE_WEB_SEARCH_DISABLED_CONFIG,
+  });
+  if (
+    params.disableTools === true ||
+    params.webSearchAllowed === false ||
+    params.config?.tools?.web?.search?.enabled === false
+  ) {
+    return managedPlan(true);
+  }
+  const nativeConfig = params.config?.tools?.web?.search?.openaiCodex;
+  const managedSearchExplicit =
+    normalizeOptionalString(params.config?.tools?.web?.search?.provider) !== undefined ||
+    nativeConfig?.enabled === false;
+  const nativeProviderSupportsSearch =
+    params.nativeProviderWebSearchSupport === undefined ||
+    params.nativeProviderWebSearchSupport === "supported";
+  const nativeSearchEnabled =
+    params.nativeToolSurfaceEnabled !== false &&
+    nativeProviderSupportsSearch &&
+    !managedSearchExplicit;
+  if (!nativeSearchEnabled) {
+    const suppressManagedWebSearch =
+      !managedSearchExplicit &&
+      normalizeUniqueTrimmedStringList(nativeConfig?.allowedDomains).length > 0;
+    return managedPlan(suppressManagedWebSearch);
+  }
+  return {
+    kind: "native-hosted",
+    // Native and managed search must stay mutually exclusive. In particular,
+    // exposing managed web_search here could bypass native allowed_domains.
+    suppressManagedWebSearch: true,
+    threadConfig: buildCodexNativeWebSearchThreadConfig(params.config),
+    webFetchHostnameAllowlist: buildHostnameAllowlistPolicyFromSuffixAllowlist(
+      nativeConfig?.allowedDomains,
+    )?.hostnameAllowlist,
+  };
+}

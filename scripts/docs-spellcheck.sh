@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 mode="${1:-}"
@@ -17,7 +21,7 @@ args=(
   scripts/codespell-dictionary.txt
   -I
   scripts/codespell-ignore.txt
-  "${write_flag[@]}"
+  ${write_flag[@]+"${write_flag[@]}"}
 )
 
 if command -v codespell >/dev/null 2>&1; then

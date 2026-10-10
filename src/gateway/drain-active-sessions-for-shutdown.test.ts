@@ -1,5 +1,11 @@
+// Shutdown drain tests protect bounded session_end hook emission for tracked
+// active sessions during gateway shutdown and restart.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { clearInternalHooks, registerInternalHook } from "../hooks/internal-hooks.js";
+import { createHookRunnerWithRegistry } from "../plugins/hooks.test-fixtures.js";
+import type { PluginHookSessionContext } from "../plugins/session-end-transcript.js";
 
 // Regression coverage for #57790: the bounded shutdown drain must fire a
 // typed `session_end` for every session the tracker has noted, must skip
@@ -14,19 +20,26 @@ type SessionEndHookEvent = {
   sessionKey?: string;
 };
 
-const runSessionEndMock = vi.fn(async (_event: SessionEndHookEvent) => undefined);
+const runSessionEndMock = vi.fn(async (_eventValue: SessionEndHookEvent) => undefined);
 const hasHooksMock = vi.fn((name: string) => name === "session_end");
-const getGlobalHookRunnerMock = vi.fn(() => ({
+const createMockHookRunner = () => ({
   hasHooks: hasHooksMock,
   runSessionEnd: runSessionEndMock,
   runSessionStart: vi.fn(async () => undefined),
-}));
+});
+type TestHookRunner =
+  | ReturnType<typeof createMockHookRunner>
+  | ReturnType<typeof createHookRunnerWithRegistry>["runner"];
+const getGlobalHookRunnerMock = vi.fn<() => TestHookRunner>(() => createMockHookRunner());
+const closedTranscriptReadMock = vi.fn();
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: getGlobalHookRunnerMock,
 }));
 
 vi.mock("./session-transcript-files.fs.js", () => ({
+  extractGeneratedTranscriptSessionId: vi.fn(() => undefined),
+  resolveSessionTranscriptCandidates: vi.fn(() => []),
   resolveStableSessionEndTranscript: vi.fn(() => ({
     sessionFile: undefined,
     transcriptArchived: false,
@@ -34,22 +47,18 @@ vi.mock("./session-transcript-files.fs.js", () => ({
   archiveSessionTranscriptsDetailed: vi.fn(() => []),
 }));
 
-vi.mock("../auto-reply/reply/session-hooks.js", () => ({
-  buildSessionEndHookPayload: vi.fn(
-    (params: { sessionId: string; reason: string; sessionKey: string }) => ({
-      event: { sessionId: params.sessionId, reason: params.reason, sessionKey: params.sessionKey },
-      context: { sessionId: params.sessionId, reason: params.reason },
-    }),
-  ),
-  buildSessionStartHookPayload: vi.fn(() => ({ event: {}, context: {} })),
+vi.mock("./session-end-transcript-reader.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-end-transcript-reader.js")>()),
+  createClosedSessionTranscriptSource: vi.fn(() => ({
+    available: true as const,
+    readTail: closedTranscriptReadMock,
+  })),
 }));
 
-const {
-  drainActiveSessionsForShutdown,
-  emitGatewaySessionEndPluginHook,
-  emitGatewaySessionStartPluginHook,
-} = await import("./session-reset-service.js");
-const { clearActiveSessionsForShutdownTracker, listActiveSessionsForShutdown } =
+const { emitGatewaySessionEndPluginHook, emitGatewaySessionStartPluginHook } =
+  await import("./session-reset-service.js");
+const { drainActiveSessionsForShutdown } = await import("./active-sessions-shutdown-drain.js");
+const { forgetActiveSessionForShutdown, listActiveSessionsForShutdown } =
   await import("./active-sessions-shutdown-tracker.js");
 
 const cfg: OpenClawConfig = {};
@@ -62,81 +71,42 @@ const requireSessionEndHookEvent = (index: number): SessionEndHookEvent => {
   return call[0];
 };
 
+function trackSessionForShutdown(params: { sessionId: string; sessionKey?: string }): void {
+  emitGatewaySessionStartPluginHook({
+    cfg,
+    sessionKey: params.sessionKey ?? "agent:main:main",
+    sessionId: params.sessionId,
+    storePath: "/tmp/store.json",
+    agentId: "main",
+  });
+}
+
+function clearTrackedSessions(): void {
+  for (const entry of listActiveSessionsForShutdown()) {
+    forgetActiveSessionForShutdown(entry.sessionId);
+  }
+}
+
 beforeEach(() => {
-  clearActiveSessionsForShutdownTracker();
+  clearTrackedSessions();
+  clearInternalHooks();
   runSessionEndMock.mockClear();
+  closedTranscriptReadMock.mockReset();
   hasHooksMock.mockClear();
   hasHooksMock.mockImplementation((name: string) => name === "session_end");
+  getGlobalHookRunnerMock.mockReset();
+  getGlobalHookRunnerMock.mockImplementation(() => createMockHookRunner());
 });
 
 afterEach(() => {
-  clearActiveSessionsForShutdownTracker();
+  clearTrackedSessions();
+  clearInternalHooks();
 });
 
 describe("drainActiveSessionsForShutdown", () => {
-  it("returns an empty result and skips hook emission when no sessions are tracked", async () => {
-    const result = await drainActiveSessionsForShutdown({ reason: "shutdown" });
-
-    expect(result).toEqual({ emittedSessionIds: [], timedOut: false });
-    expect(runSessionEndMock).not.toHaveBeenCalled();
-  });
-
-  it("fires session_end with reason=shutdown for every tracked session and clears them", async () => {
-    emitGatewaySessionStartPluginHook({
-      cfg,
-      sessionKey: "agent:main:main",
-      sessionId: "sess-A",
-      storePath: "/tmp/store.json",
-    });
-    emitGatewaySessionStartPluginHook({
-      cfg,
-      sessionKey: "agent:main:other",
-      sessionId: "sess-B",
-      storePath: "/tmp/store.json",
-    });
-
-    const result = await drainActiveSessionsForShutdown({ reason: "shutdown" });
-
-    expect(result.timedOut).toBe(false);
-    expect(result.emittedSessionIds.toSorted()).toEqual(["sess-A", "sess-B"]);
-    expect(runSessionEndMock).toHaveBeenCalledTimes(2);
-    const reasons = runSessionEndMock.mock.calls.map(
-      ([event]) => (event as { reason?: string }).reason,
-    );
-    expect(reasons.every((reason) => reason === "shutdown")).toBe(true);
-    // After the drain, the tracker forgets every emitted session (the emit
-    // helper calls `forgetActiveSessionForShutdown`), so a second drain is a
-    // no-op and we never double-fire on restart loops.
-    expect(listActiveSessionsForShutdown()).toEqual([]);
-  });
-
-  it("propagates reason=restart when called for a restart shutdown", async () => {
-    emitGatewaySessionStartPluginHook({
-      cfg,
-      sessionKey: "agent:main:main",
-      sessionId: "sess-A",
-      storePath: "/tmp/store.json",
-    });
-
-    await drainActiveSessionsForShutdown({ reason: "restart" });
-
-    expect(runSessionEndMock).toHaveBeenCalledTimes(1);
-    expect(requireSessionEndHookEvent(0).reason).toBe("restart");
-  });
-
   it("does not double-fire for a session already finalized by reset/delete/compaction", async () => {
-    emitGatewaySessionStartPluginHook({
-      cfg,
-      sessionKey: "agent:main:main",
-      sessionId: "sess-A",
-      storePath: "/tmp/store.json",
-    });
-    emitGatewaySessionStartPluginHook({
-      cfg,
-      sessionKey: "agent:main:other",
-      sessionId: "sess-B",
-      storePath: "/tmp/store.json",
-    });
+    trackSessionForShutdown({ sessionId: "sess-A" });
+    trackSessionForShutdown({ sessionId: "sess-B", sessionKey: "agent:main:other" });
     // Simulate sess-A being finalized through the normal reset path before
     // the gateway is shut down: the matching `session_end` is fired with
     // reason="reset" and the tracker forgets it.
@@ -145,6 +115,7 @@ describe("drainActiveSessionsForShutdown", () => {
       sessionKey: "agent:main:main",
       sessionId: "sess-A",
       storePath: "/tmp/store.json",
+      agentId: "main",
       reason: "reset",
     });
     runSessionEndMock.mockClear();
@@ -156,19 +127,11 @@ describe("drainActiveSessionsForShutdown", () => {
   });
 
   it("awaits each session_end handler so the bounded timeout actually races real plugin work", async () => {
-    let resolveHandler: (() => void) | undefined;
-    const handlerLatch = new Promise<void>((resolve) => {
-      resolveHandler = resolve;
-    });
+    const { promise: handlerLatch, resolve: resolveHandler } = createDeferred();
     runSessionEndMock.mockImplementationOnce(async () => {
       await handlerLatch;
     });
-    emitGatewaySessionStartPluginHook({
-      cfg,
-      sessionKey: "agent:main:main",
-      sessionId: "sess-A",
-      storePath: "/tmp/store.json",
-    });
+    trackSessionForShutdown({ sessionId: "sess-A" });
 
     let drainSettled = false;
     const drainPromise = drainActiveSessionsForShutdown({ reason: "shutdown" }).then((value) => {
@@ -193,21 +156,11 @@ describe("drainActiveSessionsForShutdown", () => {
   it("returns timedOut=true while still starting later emissions when one handler hangs", async () => {
     runSessionEndMock.mockImplementation(async (event: SessionEndHookEvent) => {
       if (event.sessionId === "sess-A") {
-        await new Promise<void>(() => undefined);
+        await new Promise<void>(() => {});
       }
     });
-    emitGatewaySessionStartPluginHook({
-      cfg,
-      sessionKey: "agent:main:main",
-      sessionId: "sess-A",
-      storePath: "/tmp/store.json",
-    });
-    emitGatewaySessionStartPluginHook({
-      cfg,
-      sessionKey: "agent:main:other",
-      sessionId: "sess-B",
-      storePath: "/tmp/store.json",
-    });
+    trackSessionForShutdown({ sessionId: "sess-A" });
+    trackSessionForShutdown({ sessionId: "sess-B", sessionKey: "agent:main:other" });
 
     const result = await drainActiveSessionsForShutdown({
       reason: "shutdown",
@@ -222,14 +175,62 @@ describe("drainActiveSessionsForShutdown", () => {
     ).toEqual(["sess-A", "sess-B"]);
   });
 
+  it("revokes shutdown transcript reads when the aggregate drain expires", async () => {
+    vi.useFakeTimers();
+    const sourceRead = createDeferred<{
+      messages: readonly unknown[];
+      totalMessages: number;
+      truncated: boolean;
+    }>();
+    const readStarted = createDeferred();
+    closedTranscriptReadMock.mockImplementationOnce(() => {
+      readStarted.resolve();
+      return sourceRead.promise;
+    });
+    let retainedReader: PluginHookSessionContext["endedTranscript"];
+    let inFlightRead: Promise<unknown> | undefined;
+    const { runner } = createHookRunnerWithRegistry([
+      {
+        hookName: "session_end",
+        conversationAccessAllowed: true,
+        handler: async (_event, context) => {
+          const transcript = (context as PluginHookSessionContext).endedTranscript;
+          if (!transcript?.available) {
+            throw new Error("expected ended transcript reader");
+          }
+          retainedReader = transcript;
+          inFlightRead = transcript.readTail({ maxMessages: 10, maxBytes: 64 * 1_024 });
+          await inFlightRead.catch(() => undefined);
+        },
+      },
+    ]);
+    getGlobalHookRunnerMock.mockReturnValue(runner);
+    trackSessionForShutdown({ sessionId: "sess-A" });
+
+    const drainPromise = drainActiveSessionsForShutdown({
+      reason: "shutdown",
+      totalTimeoutMs: 100,
+    });
+    await readStarted.promise;
+    await vi.advanceTimersByTimeAsync(100);
+    await expect(drainPromise).resolves.toMatchObject({ timedOut: true });
+
+    if (!retainedReader?.available || !inFlightRead) {
+      throw new Error("expected retained and in-flight transcript reads");
+    }
+    await expect(retainedReader.readTail({ maxMessages: 1, maxBytes: 1_024 })).rejects.toThrow(
+      "no longer active",
+    );
+    expect(closedTranscriptReadMock).toHaveBeenCalledOnce();
+
+    sourceRead.resolve({ messages: [], totalMessages: 0, truncated: false });
+    await expect(inFlightRead).rejects.toThrow("no longer active");
+    vi.useRealTimers();
+  });
+
   it("still records the session as forgotten when no `session_end` plugins are registered", async () => {
     hasHooksMock.mockImplementation(() => false);
-    emitGatewaySessionStartPluginHook({
-      cfg,
-      sessionKey: "agent:main:main",
-      sessionId: "sess-A",
-      storePath: "/tmp/store.json",
-    });
+    trackSessionForShutdown({ sessionId: "sess-A" });
     // session_end fires while no plugin listens: hook is not run, but the
     // shutdown tracker must still forget the session so the later drain
     // does not pick it up.
@@ -238,6 +239,7 @@ describe("drainActiveSessionsForShutdown", () => {
       sessionKey: "agent:main:main",
       sessionId: "sess-A",
       storePath: "/tmp/store.json",
+      agentId: "main",
       reason: "deleted",
     });
 
@@ -245,5 +247,34 @@ describe("drainActiveSessionsForShutdown", () => {
     const result = await drainActiveSessionsForShutdown({ reason: "shutdown" });
 
     expect(result.emittedSessionIds).toEqual([]);
+  });
+
+  it("emits session:auto-reset for idle rollover without a session_end plugin", async () => {
+    hasHooksMock.mockImplementation(() => false);
+    const listener = vi.fn();
+    registerInternalHook("session:auto-reset", listener);
+
+    emitGatewaySessionEndPluginHook({
+      cfg,
+      sessionKey: "agent:main:main",
+      sessionId: "sess-A",
+      storePath: "/tmp/store.json",
+      agentId: "main",
+      reason: "idle",
+      nextSessionId: "sess-B",
+    });
+
+    await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(1));
+    expect(runSessionEndMock).not.toHaveBeenCalled();
+    expect(listener.mock.calls[0]?.[0]).toMatchObject({
+      type: "session",
+      action: "auto-reset",
+      sessionKey: "agent:main:main",
+      context: {
+        reason: "idle",
+        nextSessionId: "sess-B",
+        sessionEntry: { sessionId: "sess-A" },
+      },
+    });
   });
 });

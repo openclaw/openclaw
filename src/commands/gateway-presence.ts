@@ -1,11 +1,24 @@
-import { readStringValue } from "../shared/string-coerce.js";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 
 type GatewaySelfPresence = {
   host?: string;
   ip?: string;
   version?: string;
   platform?: string;
+  deviceId?: string;
+  instanceId?: string;
 };
+
+function parseLegacyGatewaySelfText(text: string): Pick<GatewaySelfPresence, "host" | "ip"> {
+  const match = text.match(/^Gateway:\s*([^ (·]+)(?:\s*\(([^)]+)\))?/i);
+  if (!match) {
+    return {};
+  }
+  return {
+    host: readStringValue(match[1]),
+    ip: readStringValue(match[2]),
+  };
+}
 
 export function pickGatewaySelfPresence(presence: unknown): GatewaySelfPresence | null {
   if (!Array.isArray(presence)) {
@@ -20,10 +33,18 @@ export function pickGatewaySelfPresence(presence: unknown): GatewaySelfPresence 
   if (!self) {
     return null;
   }
-  return {
-    host: readStringValue(self.host),
-    ip: readStringValue(self.ip),
+  const legacy = typeof self.text === "string" ? parseLegacyGatewaySelfText(self.text) : {};
+  const result: GatewaySelfPresence = {
+    host: readStringValue(self.host) ?? legacy.host,
+    ip: readStringValue(self.ip) ?? legacy.ip,
     version: readStringValue(self.version),
     platform: readStringValue(self.platform),
   };
+  for (const field of ["deviceId", "instanceId"] as const) {
+    const value = readStringValue(self[field]);
+    if (value) {
+      result[field] = value;
+    }
+  }
+  return result;
 }

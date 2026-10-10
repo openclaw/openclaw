@@ -1,9 +1,10 @@
 import path from "node:path";
+import { tempWorkspaceSync, withTempWorkspace } from "@openclaw/fs-safe/temp";
+import { basenameFromAnyPath } from "@openclaw/media-core/file-name";
 import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
-import { withTempWorkspace } from "../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import { runFfmpeg } from "./ffmpeg-exec.js";
-import { basenameFromAnyPath } from "./file-name.js";
 
 const DEFAULT_OPUS_SAMPLE_RATE_HZ = 48_000;
 const DEFAULT_OPUS_BITRATE = "64k";
@@ -41,6 +42,17 @@ function normalizeOutputFileName(value?: string): string {
   return DEFAULT_OUTPUT_FILE_NAME;
 }
 
+function resolveMaxDurationSeconds(value?: number): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error("maxDurationSeconds must be a positive finite number");
+  }
+  return value;
+}
+
+/** Transcodes arbitrary audio input into mono Opus using a scoped temp workspace. */
 export async function transcodeAudioBufferToOpus(params: {
   audioBuffer: Buffer;
   inputExtension?: string;
@@ -51,7 +63,10 @@ export async function transcodeAudioBufferToOpus(params: {
   sampleRateHz?: number;
   bitrate?: string;
   channels?: number;
+  /** Maximum output duration passed to ffmpeg's `-t` option. */
+  maxDurationSeconds?: number;
 }): Promise<Buffer> {
+  const maxDurationSeconds = resolveMaxDurationSeconds(params.maxDurationSeconds);
   return await withTempWorkspace(
     {
       rootDir: resolvePreferredOpenClawTmpDir(),
@@ -78,6 +93,7 @@ export async function transcodeAudioBufferToOpus(params: {
               "-vn",
               "-sn",
               "-dn",
+              ...(maxDurationSeconds === undefined ? [] : ["-t", String(maxDurationSeconds)]),
               "-c:a",
               "libopus",
               "-b:a",
@@ -97,4 +113,84 @@ export async function transcodeAudioBufferToOpus(params: {
       return await workspace.read(outputFileName);
     },
   );
+}
+
+/** Outcome for lightweight container transcodes that may be unsupported or intentionally skipped. */
+type AudioContainerTranscodeOutcome =
+  | { ok: true; buffer: Buffer }
+  | {
+      ok: false;
+      reason:
+        | "platform-unsupported"
+        | "invalid-extension"
+        | "noop-same-container"
+        | "no-recipe"
+        | "transcoder-failed";
+      detail?: string;
+    };
+
+/** Transcodes known audio container pairs, currently using macOS afconvert recipes where needed. */
+export async function transcodeAudioBuffer(params: {
+  audioBuffer: Buffer;
+  sourceExtension: string;
+  targetExtension: string;
+  timeoutMs?: number;
+}): Promise<AudioContainerTranscodeOutcome> {
+  const source = normalizeContainerExt(params.sourceExtension);
+  const target = normalizeContainerExt(params.targetExtension);
+  if (!source || !target) {
+    return { ok: false, reason: "invalid-extension" };
+  }
+  if (source === target) {
+    return { ok: false, reason: "noop-same-container" };
+  }
+  if (target !== "caf") {
+    return { ok: false, reason: "no-recipe" };
+  }
+  if (process.platform !== "darwin") {
+    return { ok: false, reason: "platform-unsupported" };
+  }
+
+  // afconvert is macOS-only and writes native Messages-compatible voice containers.
+  const tmp = tempWorkspaceSync({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "tts-transcode-",
+  });
+  try {
+    const inPath = tmp.write(`in.${source}`, params.audioBuffer);
+    const outPath = tmp.path(`out.${target}`);
+    const failure = await runAfconvert(
+      // Opus-in-CAF matches native Messages voice memo attachments.
+      ["-f", "caff", "-d", "opus@24000", "-c", "1", inPath, outPath],
+      params.timeoutMs ?? 5000,
+    );
+    if (failure !== undefined) {
+      return { ok: false, reason: "transcoder-failed", detail: failure };
+    }
+    return { ok: true, buffer: tmp.read(`out.${target}`) };
+  } catch (err) {
+    return { ok: false, reason: "transcoder-failed", detail: (err as Error).message };
+  } finally {
+    tmp.cleanup();
+  }
+}
+
+function normalizeContainerExt(ext: string): string | undefined {
+  const trimmed = ext.trim().toLowerCase().replace(/^\./, "");
+  return /^[a-z0-9]{1,12}$/.test(trimmed) ? trimmed : undefined;
+}
+
+async function runAfconvert(args: string[], timeoutMs: number): Promise<string | undefined> {
+  try {
+    const result = await runCommandWithTimeout(["/usr/bin/afconvert", ...args], {
+      maxOutputBytes: 1024,
+      timeoutMs,
+    });
+    if (result.termination === "timeout") {
+      return `timeout-${timeoutMs}ms`;
+    }
+    return result.code === 0 ? undefined : `exit-${result.code ?? "unknown"}`;
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err);
+  }
 }

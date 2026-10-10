@@ -1,22 +1,15 @@
 #!/bin/bash
 
-# VibeTunnel Logging Utility
-# Simplifies access to VibeTunnel logs using macOS unified logging system
-
 set -euo pipefail
 
-# Configuration
 SUBSYSTEM="ai.openclaw"
-DEFAULT_LEVEL="info"
 
-# Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# Function to handle sudo password errors
 handle_sudo_error() {
     echo -e "\n${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "${YELLOW}⚠️  Password Required for Log Access${NC}"
@@ -32,21 +25,18 @@ handle_sudo_error() {
     exit 1
 }
 
-# Default values
 STREAM_MODE=false
-TIME_RANGE="5m"  # Default to last 5 minutes
+TIME_RANGE="5m"
 CATEGORY=""
-LOG_LEVEL="$DEFAULT_LEVEL"
+LOG_LEVEL="info"
 SEARCH_TEXT=""
 OUTPUT_FILE=""
 ERRORS_ONLY=false
-SERVER_ONLY=false
-TAIL_LINES=50  # Default number of lines to show
+TAIL_LINES=50
 SHOW_TAIL=true
-SHOW_HELP=false
 STYLE_JSON=false
+LIST_CATEGORIES=false
 
-# Function to show usage
 show_usage() {
     cat << EOF
 clawlog - OpenClaw Logging Utility
@@ -78,7 +68,7 @@ QUICK START:
 OPTIONS:
     -h, --help              Show this help message
     -f, --follow            Stream logs continuously (like tail -f)
-    -n, --lines NUM         Number of lines to show (default: 50)
+    -n, --lines NUM         Number of lines (or JSON records) to show (default: 50)
     -l, --last TIME         Time range to search (default: 5m)
                            Examples: 5m, 1h, 2d, 1w
     -c, --category CAT      Filter by category (e.g., ServerManager, SessionService)
@@ -88,8 +78,8 @@ OPTIONS:
     -o, --output FILE       Export logs to file
     --server                Show only server output logs
     --all                   Show all logs without tail limit
-    --list-categories       List all available log categories
-    --json                  Output in JSON format
+    --list-categories       List all available log categories (not with --json)
+    --json                  Output one JSON array (not with --follow or --list-categories)
 
 EXAMPLES:
     clawlog                   Show last 50 lines from past 5 minutes (default)
@@ -122,11 +112,9 @@ TIME FORMATS:
 EOF
 }
 
-# Function to list categories
 list_categories() {
     echo -e "${BLUE}Fetching VibeTunnel log categories from the last hour...${NC}\n"
 
-    # Get unique categories from recent logs
     log show --predicate "subsystem == \"$SUBSYSTEM\"" --last 1h 2>/dev/null | \
         grep -E "category: \"[^\"]+\"" | \
         sed -E 's/.*category: "([^"]+)".*/\1/' | \
@@ -146,13 +134,6 @@ escape_predicate_literal() {
     printf '%s' "$value"
 }
 
-# Show help if no arguments provided
-if [[ $# -eq 0 ]]; then
-    show_usage
-    exit 0
-fi
-
-# Parse command line arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
         -h|--help)
@@ -164,16 +145,18 @@ while [[ $# -gt 0 ]]; do
             SHOW_TAIL=false
             shift
             ;;
-        -n|--lines)
-            TAIL_LINES="$2"
-            shift 2
-            ;;
-        -l|--last)
-            TIME_RANGE="$2"
-            shift 2
-            ;;
-        -c|--category)
-            CATEGORY="$2"
+        -n|--lines|-l|--last|-c|--category|-s|--search|-o|--output)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}Error: $1 requires a value${NC}" >&2
+                exit 1
+            fi
+            case $1 in
+                -n|--lines) TAIL_LINES="$2" ;;
+                -l|--last) TIME_RANGE="$2" ;;
+                -c|--category) CATEGORY="$2" ;;
+                -s|--search) SEARCH_TEXT="$2" ;;
+                -o|--output) OUTPUT_FILE="$2" ;;
+            esac
             shift 2
             ;;
         -e|--errors)
@@ -184,22 +167,13 @@ while [[ $# -gt 0 ]]; do
             LOG_LEVEL="debug"
             shift
             ;;
-        -s|--search)
-            SEARCH_TEXT="$2"
-            shift 2
-            ;;
-        -o|--output)
-            OUTPUT_FILE="$2"
-            shift 2
-            ;;
         --server)
-            SERVER_ONLY=true
             CATEGORY="ServerOutput"
             shift
             ;;
         --list-categories)
-            list_categories
-            exit 0
+            LIST_CATEGORIES=true
+            shift
             ;;
         --json)
             STYLE_JSON=true
@@ -217,79 +191,109 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Build the predicate
+if [[ "$STYLE_JSON" == true ]] && [[ "$STREAM_MODE" == true || "$LIST_CATEGORIES" == true ]]; then
+    echo "Error: --json cannot be combined with --follow or --list-categories" >&2
+    exit 1
+fi
+
+if [[ "$LIST_CATEGORIES" == true ]]; then
+    list_categories
+    exit 0
+fi
+
 PREDICATE="subsystem == \"$SUBSYSTEM\""
 
-# Add category filter if specified
 if [[ -n "$CATEGORY" ]]; then
     ESCAPED_CATEGORY=$(escape_predicate_literal "$CATEGORY")
     PREDICATE="$PREDICATE AND category == \"$ESCAPED_CATEGORY\""
 fi
 
-# Add error filter if specified
 if [[ "$ERRORS_ONLY" == true ]]; then
     PREDICATE="$PREDICATE AND (eventType == \"error\" OR messageType == \"error\" OR eventMessage CONTAINS \"ERROR\" OR eventMessage CONTAINS \"[31m\")"
 fi
 
-# Add search filter if specified
 if [[ -n "$SEARCH_TEXT" ]]; then
     ESCAPED_SEARCH_TEXT=$(escape_predicate_literal "$SEARCH_TEXT")
     PREDICATE="$PREDICATE AND eventMessage CONTAINS[c] \"$ESCAPED_SEARCH_TEXT\""
 fi
 
-# Build the command as argv array to avoid shell eval injection
 LOG_CMD=(sudo log)
 if [[ "$STREAM_MODE" == true ]]; then
-    # Streaming mode
     LOG_CMD+=(stream --predicate "$PREDICATE" --level "$LOG_LEVEL" --info)
 
     echo -e "${GREEN}Streaming VibeTunnel logs continuously...${NC}"
     echo -e "${YELLOW}Press Ctrl+C to stop${NC}\n"
 else
-    # Show mode
     LOG_CMD+=(show --predicate "$PREDICATE")
 
-    # Add log level for show command
     if [[ "$LOG_LEVEL" == "debug" ]]; then
         LOG_CMD+=(--debug)
     else
         LOG_CMD+=(--info)
     fi
 
-    # Add time range
     LOG_CMD+=(--last "$TIME_RANGE")
 
-    if [[ "$SHOW_TAIL" == true ]]; then
-        echo -e "${GREEN}Showing last $TAIL_LINES log lines from the past $TIME_RANGE${NC}"
-    else
-        echo -e "${GREEN}Showing all logs from the past $TIME_RANGE${NC}"
-    fi
+    if [[ "$STYLE_JSON" == false ]]; then
+        if [[ "$SHOW_TAIL" == true ]]; then
+            echo -e "${GREEN}Showing last $TAIL_LINES log lines from the past $TIME_RANGE${NC}"
+        else
+            echo -e "${GREEN}Showing all logs from the past $TIME_RANGE${NC}"
+        fi
 
-    # Show applied filters
-    if [[ "$ERRORS_ONLY" == true ]]; then
-        echo -e "${RED}Filter: Errors only${NC}"
+        if [[ "$ERRORS_ONLY" == true ]]; then
+            echo -e "${RED}Filter: Errors only${NC}"
+        fi
+        if [[ -n "$CATEGORY" ]]; then
+            echo -e "${BLUE}Category: $CATEGORY${NC}"
+        fi
+        if [[ -n "$SEARCH_TEXT" ]]; then
+            echo -e "${YELLOW}Search: \"$SEARCH_TEXT\"${NC}"
+        fi
+        echo ""
     fi
-    if [[ -n "$CATEGORY" ]]; then
-        echo -e "${BLUE}Category: $CATEGORY${NC}"
-    fi
-    if [[ -n "$SEARCH_TEXT" ]]; then
-        echo -e "${YELLOW}Search: \"$SEARCH_TEXT\"${NC}"
-    fi
-    echo ""  # Empty line for readability
 fi
 
-# Add style arguments if specified
 if [[ "$STYLE_JSON" == true ]]; then
-    LOG_CMD+=(--style json)
-fi
+    LOG_CMD+=(--style ndjson)
+    sudo -n /usr/bin/log show --last 1s >/dev/null || exit $?
 
-# Execute the command
-if [[ -n "$OUTPUT_FILE" ]]; then
-    # First check if sudo works without password for the log command
-    if sudo -n /usr/bin/log show --last 1s 2>&1 | grep -q "password"; then
-        handle_sudo_error
+    if [[ -n "$OUTPUT_FILE" ]]; then
+        if [[ -d "$OUTPUT_FILE" ]]; then
+            echo "Error: output path is a directory: $OUTPUT_FILE" >&2
+            exit 1
+        fi
+        STAGED_OUTPUT=$(mktemp -- "${OUTPUT_FILE}.tmp.XXXXXX")
+    else
+        STAGED_OUTPUT=$(mktemp "${TMPDIR:-/tmp}/clawlog.XXXXXX")
+    fi
+    trap 'rm -f -- "$STAGED_OUTPUT"' EXIT
+
+    TAIL_ARGS=(-n "$TAIL_LINES")
+    if [[ "$SHOW_TAIL" == false ]]; then
+        TAIL_ARGS=(-n +1)
     fi
 
+    # macOS appends a documented "finished" metadata record after NDJSON events.
+    if "${LOG_CMD[@]}" | sed '$d' | tail "${TAIL_ARGS[@]}" | \
+        awk 'BEGIN { printf "[" } NR > 1 { printf "," } { printf "%s", $0 } END { print "]" }' > "$STAGED_OUTPUT"; then
+        if [[ -n "$OUTPUT_FILE" ]]; then
+            mv -f -- "$STAGED_OUTPUT" "$OUTPUT_FILE"
+        else
+            cat "$STAGED_OUTPUT"
+        fi
+    else
+        exit $?
+    fi
+    exit 0
+fi
+
+# First check if sudo works without password for the log command.
+if sudo -n /usr/bin/log show --last 1s 2>&1 | grep -q "password"; then
+    handle_sudo_error
+fi
+
+if [[ -n "$OUTPUT_FILE" ]]; then
     echo -e "${BLUE}Exporting logs to: $OUTPUT_FILE${NC}\n"
     if [[ "$SHOW_TAIL" == true ]] && [[ "$STREAM_MODE" == false ]]; then
         "${LOG_CMD[@]}" 2>&1 | tail -n "$TAIL_LINES" > "$OUTPUT_FILE"
@@ -297,7 +301,6 @@ if [[ -n "$OUTPUT_FILE" ]]; then
         "${LOG_CMD[@]}" > "$OUTPUT_FILE" 2>&1
     fi
 
-    # Check if file was created and has content
     if [[ -s "$OUTPUT_FILE" ]]; then
         LINE_COUNT=$(wc -l < "$OUTPUT_FILE" | tr -d ' ')
         echo -e "${GREEN}✓ Exported $LINE_COUNT lines to $OUTPUT_FILE${NC}"
@@ -305,14 +308,7 @@ if [[ -n "$OUTPUT_FILE" ]]; then
         echo -e "${YELLOW}⚠ No logs found matching the criteria${NC}"
     fi
 else
-    # Run interactively
-    # First check if sudo works without password for the log command
-    if sudo -n /usr/bin/log show --last 1s 2>&1 | grep -q "password"; then
-        handle_sudo_error
-    fi
-
     if [[ "$SHOW_TAIL" == true ]] && [[ "$STREAM_MODE" == false ]]; then
-        # Apply tail for non-streaming mode
         "${LOG_CMD[@]}" 2>&1 | tail -n "$TAIL_LINES"
         echo -e "\n${YELLOW}Showing last $TAIL_LINES lines. Use --all or -n to see more.${NC}"
     else

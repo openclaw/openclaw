@@ -2,33 +2,17 @@ import { describe, expect, it } from "vitest";
 import { resolvePreferredTtsVoice } from "./tts-provider-voice.js";
 
 describe("resolvePreferredTtsVoice", () => {
-  it("returns provider voice when present", () => {
+  it.each<{ provider: string; settings: Record<string, string>; expected: string }>([
+    { provider: "openai", settings: { speakerVoice: "coral" }, expected: "coral" },
+    { provider: "elevenlabs", settings: { speakerVoiceId: "voice-123" }, expected: "voice-123" },
+    {
+      provider: "openai",
+      settings: { voice: "legacy-voice", voiceId: "legacy-id" },
+      expected: "legacy-voice",
+    },
+  ])("resolves $provider voice $expected", ({ provider, settings, expected }) => {
     expect(
-      resolvePreferredTtsVoice({
-        tts: {
-          provider: "openai",
-          providers: {
-            openai: {
-              voice: "coral",
-            },
-          },
-        },
-      }),
-    ).toBe("coral");
-  });
-
-  it("falls back to voiceId for providers that use that field", () => {
-    expect(
-      resolvePreferredTtsVoice({
-        tts: {
-          provider: "elevenlabs",
-          providers: {
-            elevenlabs: {
-              voiceId: "voice-123",
-            },
-          },
-        },
-      }),
-    ).toBe("voice-123");
+      resolvePreferredTtsVoice({ tts: { provider, providers: { [provider]: settings } } }),
+    ).toBe(expected);
   });
 });

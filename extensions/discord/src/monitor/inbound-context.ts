@@ -1,3 +1,4 @@
+import { resolveInboundSupplementalSenderAllowed } from "openclaw/plugin-sdk/channel-inbound";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import {
   resolveDiscordMemberAllowed,
@@ -10,7 +11,7 @@ type DiscordSupplementalContextSender = {
   id?: string;
   name?: string;
   tag?: string;
-  memberRoleIds?: string[];
+  memberRoleIds?: readonly string[];
 };
 
 export function createDiscordSupplementalContextAccessChecker(params: {
@@ -19,50 +20,48 @@ export function createDiscordSupplementalContextAccessChecker(params: {
   allowNameMatching?: boolean;
   isGuild: boolean;
 }) {
-  return (sender: DiscordSupplementalContextSender): boolean => {
-    if (!params.isGuild) {
-      return true;
-    }
-    return resolveDiscordMemberAllowed({
-      userAllowList: params.channelConfig?.users ?? params.guildInfo?.users,
-      roleAllowList: params.channelConfig?.roles ?? params.guildInfo?.roles,
-      memberRoleIds: sender.memberRoleIds ?? [],
-      userId: sender.id ?? "",
-      userName: sender.name,
-      userTag: sender.tag,
-      allowNameMatching: params.allowNameMatching,
+  const userAllowList = params.channelConfig?.users ?? params.guildInfo?.users ?? [];
+  const roleAllowList = params.channelConfig?.roles ?? params.guildInfo?.roles ?? [];
+  const allowFrom = [...userAllowList, ...roleAllowList];
+  return (sender: DiscordSupplementalContextSender): boolean =>
+    resolveInboundSupplementalSenderAllowed({
+      isGroup: params.isGuild,
+      groupPolicy: allowFrom.length === 0 ? "open" : "allowlist",
+      allowFrom,
+      isSenderAllowed: () =>
+        resolveDiscordMemberAllowed({
+          userAllowList,
+          roleAllowList,
+          memberRoleIds: [...(sender.memberRoleIds ?? [])],
+          userId: sender.id ?? "",
+          userName: sender.name,
+          userTag: sender.tag,
+          allowNameMatching: params.allowNameMatching,
+        }),
     });
-  };
 }
 
 export function buildDiscordGroupSystemPrompt(
   channelConfig?: DiscordChannelConfigResolved | null,
 ): string | undefined {
-  const systemPromptParts = [channelConfig?.systemPrompt?.trim() || null].filter(
-    (entry): entry is string => Boolean(entry),
-  );
-  return systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
+  return channelConfig?.systemPrompt?.trim() || undefined;
 }
 
-export function buildDiscordUntrustedContext(params: {
+function buildDiscordChannelStructuredContext(params: {
   isGuild: boolean;
   channelTopic?: string;
-}): MsgContext["UntrustedStructuredContext"] | undefined {
-  if (!params.isGuild) {
+}): MsgContext["ChannelStructuredContext"] | undefined {
+  if (!params.isGuild || typeof params.channelTopic !== "string" || !params.channelTopic.trim()) {
     return undefined;
   }
-  const entries: NonNullable<MsgContext["UntrustedStructuredContext"]> = [];
-  if (typeof params.channelTopic === "string" && params.channelTopic.trim().length > 0) {
-    entries.push({
+  return [
+    {
       label: "Discord channel metadata",
       source: "discord",
       type: "channel_metadata",
-      payload: {
-        topic: params.channelTopic.trim(),
-      },
-    });
-  }
-  return entries.length > 0 ? entries : undefined;
+      payload: { topic: params.channelTopic.trim() },
+    },
+  ];
 }
 
 export function buildDiscordInboundAccessContext(params: {
@@ -81,15 +80,7 @@ export function buildDiscordInboundAccessContext(params: {
     groupSystemPrompt: params.isGuild
       ? buildDiscordGroupSystemPrompt(params.channelConfig)
       : undefined,
-    untrustedContext: buildDiscordUntrustedContext({
-      isGuild: params.isGuild,
-      channelTopic: params.channelTopic,
-    }),
-    ownerAllowFrom: resolveDiscordOwnerAllowFrom({
-      channelConfig: params.channelConfig,
-      guildInfo: params.guildInfo,
-      sender: params.sender,
-      allowNameMatching: params.allowNameMatching,
-    }),
+    channelStructuredContext: buildDiscordChannelStructuredContext(params),
+    ownerAllowFrom: resolveDiscordOwnerAllowFrom(params),
   };
 }

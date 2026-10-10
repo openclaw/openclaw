@@ -1,25 +1,7 @@
-import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { resolveFileModuleUrl, resolveFunctionModuleExport } from "./module-loader.js";
+import { resolveFunctionModuleExport } from "./module-loader.js";
 
 describe("hooks module loader helpers", () => {
-  it("builds a file URL without cache-busting by default", () => {
-    const modulePath = path.resolve("/tmp/hook-handler.js");
-    expect(resolveFileModuleUrl({ modulePath })).toBe(pathToFileURL(modulePath).href);
-  });
-
-  it("adds a cache-busting query when requested", () => {
-    const modulePath = path.resolve("/tmp/hook-handler.js");
-    expect(
-      resolveFileModuleUrl({
-        modulePath,
-        cacheBust: true,
-        nowMs: 123,
-      }),
-    ).toBe(`${pathToFileURL(modulePath).href}?t=123`);
-  });
-
   it("resolves explicit function exports", () => {
     const fn = () => "ok";
     const resolved = resolveFunctionModuleExport({

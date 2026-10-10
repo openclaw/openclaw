@@ -1,32 +1,40 @@
-import { resolveStorePath } from "../config/sessions/paths.js";
-import { loadSessionStore, updateSessionStore } from "../config/sessions/store.js";
+/**
+ * Resolves and persists live-session model switch requests.
+ */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveCollapsedSessionAuthPinSource } from "../config/sessions/auth-profile-override-provenance.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveSessionAgentId } from "./agent-scope.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import type { LiveSessionModelSelection } from "./live-model-switch-error.js";
 import {
   normalizeStoredOverrideModel,
   resolveDefaultModelForAgent,
   resolvePersistedSelectedModelRef,
 } from "./model-selection.js";
-import {
-  abortEmbeddedPiRun,
-  consumeEmbeddedRunModelSwitch,
-  requestEmbeddedRunModelSwitch,
-  type EmbeddedRunModelSwitchRequest,
-} from "./pi-embedded-runner/runs.js";
-export { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
-export type LiveSessionModelSelection = EmbeddedRunModelSwitchRequest;
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-export function resolveLiveSessionModelSelection(params: {
-  cfg?: { session?: { store?: string } } | undefined;
-  sessionKey?: string;
+import { resolveSessionRuntimeOverrideForProvider } from "./session-runtime-compat.js";
+export {
+  LiveSessionModelSwitchError,
+  type LiveSessionModelSelection,
+} from "./live-model-switch-error.js";
+
+/**
+ * Entry-snapshot variant of the selection resolver, so atomic patch callbacks
+ * can evaluate the persisted selection against the exact row they may rewrite.
+ */
+function resolveSelectionFromSessionEntry(params: {
+  cfg: OpenClawConfig;
+  entry: SessionEntry | undefined;
   agentId?: string;
   defaultProvider: string;
   defaultModel: string;
-}): LiveSessionModelSelection | null {
-  const sessionKey = normalizeOptionalString(params.sessionKey);
-  const cfg = params.cfg;
-  if (!cfg || !sessionKey) {
-    return null;
-  }
+}): LiveSessionModelSelection {
+  const { cfg, entry } = params;
   const agentId = normalizeOptionalString(params.agentId);
   const defaultModelRef = agentId
     ? resolveDefaultModelForAgent({
@@ -34,10 +42,6 @@ export function resolveLiveSessionModelSelection(params: {
         agentId,
       })
     : { provider: params.defaultProvider, model: params.defaultModel };
-  const storePath = resolveStorePath(cfg.session?.store, {
-    agentId,
-  });
-  const entry = loadSessionStore(storePath, { skipCache: true })[sessionKey];
   const normalizedSelection = normalizeStoredOverrideModel({
     providerOverride: entry?.providerOverride,
     modelOverride: entry?.modelOverride,
@@ -55,117 +59,92 @@ export function resolveLiveSessionModelSelection(params: {
     entry?.providerOverride?.trim() ??
     defaultModelRef.provider;
   const model = persisted?.model ?? defaultModelRef.model;
+  const agentRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
+    provider,
+    entry,
+    cfg,
+  });
   const authProfileId = normalizeOptionalString(entry?.authProfileOverride);
   return {
     provider,
     model,
+    ...(agentRuntimeOverride ? { agentRuntimeOverride } : {}),
     authProfileId,
-    authProfileIdSource: authProfileId ? entry?.authProfileOverrideSource : undefined,
+    authProfileIdSource: authProfileId ? resolveCollapsedSessionAuthPinSource(entry) : undefined,
   };
 }
 
-export function requestLiveSessionModelSwitch(params: {
-  sessionEntry?: Pick<SessionEntry, "sessionId">;
-  selection: LiveSessionModelSelection;
-}): boolean {
-  const sessionId = normalizeOptionalString(params.sessionEntry?.sessionId);
-  if (!sessionId) {
-    return false;
-  }
-  const aborted = abortEmbeddedPiRun(sessionId);
-  if (!aborted) {
-    return false;
-  }
-  requestEmbeddedRunModelSwitch(sessionId, params.selection);
-  return true;
+function isAlreadyAppliedOpenAICodexRuntimePromotion(
+  current: { provider: string; model: string },
+  next: LiveSessionModelSelection,
+): boolean {
+  // The embedded Codex runtime reports openai after applying a canonical
+  // openai selection. Other runtime aliases remain real live-switch targets.
+  return (
+    normalizeProviderId(current.provider) === "openai" &&
+    normalizeProviderId(next.provider) === "openai" &&
+    current.model === next.model
+  );
 }
 
-export function consumeLiveSessionModelSwitch(
-  sessionId: string,
-): LiveSessionModelSelection | undefined {
-  return consumeEmbeddedRunModelSwitch(sessionId);
-}
-
-export function hasDifferentLiveSessionModelSelection(
-  current: {
-    provider: string;
-    model: string;
-    authProfileId?: string;
+function hasDifferentLiveSessionModelSelection(
+  current: Omit<LiveSessionModelSelection, "authProfileIdSource"> & {
     authProfileIdSource?: string;
   },
-  next: LiveSessionModelSelection | null | undefined,
-): next is LiveSessionModelSelection {
-  if (!next) {
-    return false;
-  }
+  next: LiveSessionModelSelection,
+): boolean {
+  const modelSelectionDiffers =
+    (current.provider !== next.provider || current.model !== next.model) &&
+    !isAlreadyAppliedOpenAICodexRuntimePromotion(current, next);
   return (
-    current.provider !== next.provider ||
-    current.model !== next.model ||
+    modelSelectionDiffers ||
+    normalizeOptionalString(current.agentRuntimeOverride) !== next.agentRuntimeOverride ||
     normalizeOptionalString(current.authProfileId) !== next.authProfileId ||
     (normalizeOptionalString(current.authProfileId) ? current.authProfileIdSource : undefined) !==
       next.authProfileIdSource
   );
 }
 
-export function shouldTrackPersistedLiveSessionModelSelection(
-  current: {
-    provider: string;
-    model: string;
-    authProfileId?: string;
-    authProfileIdSource?: string;
-  },
-  persisted: LiveSessionModelSelection | null | undefined,
-): boolean {
-  return !hasDifferentLiveSessionModelSelection(current, persisted);
-}
-
 /**
- * Check whether a user-initiated live model switch is pending for the given
- * session.  Returns the persisted model selection when the session's
- * `liveModelSwitchPending` flag is `true` AND the persisted selection differs
- * from the currently running model; otherwise returns `undefined`.
- *
- * When the flag is set but the current model already matches the persisted
- * selection (e.g. the switch was applied as an override and the current
- * attempt is already using the new model), the flag is consumed (cleared)
- * eagerly to prevent it from persisting as stale state.
- *
- * **Deferral semantics:** The caller in `run.ts` only acts on the returned
- * selection when `canRestartForLiveSwitch` is `true`.  If the run cannot
- * restart (e.g. a tool call is in progress), the flag intentionally remains
- * set so the switch fires on the next clean retry opportunity — even if that
- * falls into a subsequent user turn.
- *
- * This replaces the previous approach that used an in-memory map
- * (`consumeEmbeddedRunModelSwitch`) which could not distinguish between
- * user-initiated `/model` switches and system-initiated fallback rotations.
+ * Return a pending user selection and eagerly clear switches already applied.
+ * The runner consumes an unapplied switch only when canRestartForLiveSwitch
+ * permits it; otherwise the flag survives tool execution and later user turns.
  */
-export function shouldSwitchToLiveModel(params: {
-  cfg?: { session?: { store?: string } } | undefined;
+export async function shouldSwitchToLiveModel(params: {
+  cfg?: OpenClawConfig | undefined;
   sessionKey?: string;
   agentId?: string;
+  sessionPersistence?: "durable" | "detached";
   defaultProvider: string;
   defaultModel: string;
   currentProvider: string;
   currentModel: string;
+  currentAgentRuntimeOverride?: string;
   currentAuthProfileId?: string;
   currentAuthProfileIdSource?: string;
-}): LiveSessionModelSelection | undefined {
+}): Promise<LiveSessionModelSelection | undefined> {
   const sessionKey = params.sessionKey?.trim();
   const cfg = params.cfg;
-  if (!cfg || !sessionKey) {
+  // A borrowed identity does not own the durable turn's pending switch.
+  if (!cfg || !sessionKey || params.sessionPersistence === "detached") {
     return undefined;
   }
-  const storePath = resolveStorePath(cfg.session?.store, {
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, {
     agentId: params.agentId?.trim(),
   });
-  const entry = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+  const entry = await readSessionEntryReadOnlyInWorker({
+    storePath,
+    sessionKey,
+    hydrateSkillPromptRefs: false,
+    clone: false,
+    readConsistency: "latest",
+  });
   if (!entry?.liveModelSwitchPending) {
     return undefined;
   }
-  const persisted = resolveLiveSessionModelSelection({
+  const persisted = resolveSelectionFromSessionEntry({
     cfg,
-    sessionKey,
+    entry,
     agentId: params.agentId,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
@@ -175,6 +154,7 @@ export function shouldSwitchToLiveModel(params: {
       {
         provider: params.currentProvider,
         model: params.currentModel,
+        agentRuntimeOverride: params.currentAgentRuntimeOverride,
         authProfileId: params.currentAuthProfileId,
         authProfileIdSource: params.currentAuthProfileIdSource,
       },
@@ -188,38 +168,126 @@ export function shouldSwitchToLiveModel(params: {
       cfg,
       sessionKey,
       agentId: params.agentId,
+      defaultProvider: params.defaultProvider,
+      defaultModel: params.defaultModel,
+      expectedSelection: persisted,
     }).catch(() => {
       /* best-effort — fs/lock errors are non-fatal here */
     });
     return undefined;
   }
-  return persisted ?? undefined;
+  return persisted;
 }
 
 /**
- * Clear the `liveModelSwitchPending` flag from the session entry on disk so
- * subsequent retry iterations do not re-trigger the switch.
+ * Completed runs, including CLI harness runs, consume their applied switch
+ * regardless of runtime/auth drift. Compare and clear atomically so a concurrent
+ * /model request cannot lose its newer selection.
  */
-export async function clearLiveModelSwitchPending(params: {
-  cfg?: { session?: { store?: string } } | undefined;
+export async function consolidateLiveModelSwitchAfterRun(params: {
+  cfg?: OpenClawConfig | undefined;
   sessionKey?: string;
   agentId?: string;
+  providerUsed?: string;
+  modelUsed?: string;
+  usageCommit?: {
+    storePath: string;
+    sessionKey: string;
+    entry: Pick<SessionEntry, "sessionId" | "lifecycleRevision" | "liveModelSwitchPending">;
+  };
+}): Promise<void> {
+  const sessionKey = normalizeOptionalString(params.sessionKey);
+  const cfg = params.cfg;
+  const providerUsed = normalizeOptionalString(params.providerUsed);
+  const modelUsed = normalizeOptionalString(params.modelUsed);
+  if (!cfg || !sessionKey || !providerUsed || !modelUsed) {
+    return;
+  }
+  // Store selection and default-model resolution both need the owning agent;
+  // derive it from the session key when the caller has none, so agent-scoped
+  // stores are targeted correctly and a completed /model default still
+  // consolidates when config overrides the library-wide defaults.
+  const agentId = resolveSessionAgentId({
+    sessionKey,
+    config: cfg,
+    agentId: params.agentId,
+  });
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
+  if (
+    params.usageCommit?.storePath === storePath &&
+    params.usageCommit.sessionKey === sessionKey &&
+    !params.usageCommit.entry.liveModelSwitchPending
+  ) {
+    // This completed turn owed no switch cleanup at its usage commit. A later
+    // /model request belongs to the next turn; these facts never authorize a write.
+    return;
+  }
+  await clearMatchingLiveModelSwitch(
+    {
+      cfg,
+      sessionKey,
+      storePath,
+      agentId,
+      defaultProvider: DEFAULT_PROVIDER,
+      defaultModel: DEFAULT_MODEL,
+    },
+    (persisted) =>
+      (providerUsed === persisted.provider && modelUsed === persisted.model) ||
+      isAlreadyAppliedOpenAICodexRuntimePromotion(
+        { provider: providerUsed, model: modelUsed },
+        persisted,
+      ),
+  );
+}
+
+/**
+ * Consume only the observed selection; a newer request may commit while this clear queues.
+ */
+export async function clearLiveModelSwitchPending(params: {
+  cfg?: OpenClawConfig;
+  sessionKey?: string;
+  agentId?: string;
+  defaultProvider: string;
+  defaultModel: string;
+  expectedSelection: LiveSessionModelSelection;
 }): Promise<void> {
   const sessionKey = params.sessionKey?.trim();
   const cfg = params.cfg;
   if (!cfg || !sessionKey) {
     return;
   }
-  const storePath = resolveStorePath(cfg.session?.store, {
-    agentId: params.agentId?.trim(),
-  });
-  if (!storePath) {
-    return;
-  }
-  await updateSessionStore(storePath, (store) => {
-    const entry = store[sessionKey];
-    if (entry) {
-      delete entry.liveModelSwitchPending;
-    }
-  });
+  const agentId = params.agentId?.trim();
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
+  await clearMatchingLiveModelSwitch(
+    { ...params, cfg, sessionKey, storePath, agentId },
+    (persisted) => !hasDifferentLiveSessionModelSelection(params.expectedSelection, persisted),
+  );
+}
+
+async function clearMatchingLiveModelSwitch(
+  params: Omit<Parameters<typeof resolveSelectionFromSessionEntry>[0], "entry"> & {
+    sessionKey: string;
+    storePath: string;
+  },
+  matches: (selection: LiveSessionModelSelection) => boolean,
+): Promise<void> {
+  await patchSessionEntryCore(
+    { storePath: params.storePath, sessionKey: params.sessionKey },
+    (entry) => {
+      if (
+        !entry.liveModelSwitchPending ||
+        !matches(resolveSelectionFromSessionEntry({ ...params, entry }))
+      ) {
+        return null;
+      }
+      const next = { ...entry };
+      delete next.liveModelSwitchPending;
+      return next;
+    },
+    {
+      replaceEntry: true,
+      workerGuard: {},
+      prepareIf: { kind: "live-model-switch-pending" },
+    },
+  );
 }

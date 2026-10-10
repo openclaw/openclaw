@@ -3,7 +3,6 @@ import {
   resolvePairLoopGuardSettings,
   type PairLoopGuardConfig,
   type PairLoopGuardResult,
-  type PairLoopGuardSnapshotEntry,
 } from "../../plugin-sdk/pair-loop-guard-runtime.js";
 
 export type ChannelBotLoopProtectionFacts = {
@@ -11,6 +10,7 @@ export type ChannelBotLoopProtectionFacts = {
   conversationId: string;
   senderId: string;
   receiverId: string;
+  eventId?: string;
   config?: PairLoopGuardConfig;
   defaultsConfig?: PairLoopGuardConfig;
   defaultEnabled: boolean;
@@ -27,6 +27,7 @@ export function recordChannelBotPairLoopAndCheckSuppression(
     conversationId: params.conversationId,
     senderId: params.senderId,
     receiverId: params.receiverId,
+    eventId: params.eventId,
     settings: resolvePairLoopGuardSettings({
       config: params.config,
       defaultsConfig: params.defaultsConfig,
@@ -34,12 +35,4 @@ export function recordChannelBotPairLoopAndCheckSuppression(
     }),
     nowMs: params.nowMs,
   });
-}
-
-export function clearChannelBotPairLoopGuardForTests(): void {
-  channelBotPairLoopGuard.clear();
-}
-
-export function listTrackedChannelBotPairsForTests(): PairLoopGuardSnapshotEntry[] {
-  return channelBotPairLoopGuard.snapshot();
 }

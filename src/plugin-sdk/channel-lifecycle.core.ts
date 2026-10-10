@@ -1,3 +1,4 @@
+// Channel lifecycle core contracts define account lifecycle snapshots and sync hooks.
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.core.js";
 import { createRunStateMachine, type RunStateStatusSink } from "../channels/run-state-machine.js";
 import { KeyedAsyncQueue } from "./keyed-async-queue.js";
@@ -13,18 +14,27 @@ type PassiveAccountLifecycleParams<Handle> = {
   onStop?: () => void | Promise<void>;
 };
 
+/** Runtime context passed to queued channel work. */
 export type ChannelRunQueueTaskContext = {
+  /** Signal tied to the channel/account lifecycle that owns the queued work. */
   lifecycleSignal?: AbortSignal;
 };
 
+/** Per-key async queue used by channel plugins to serialize account or thread work. */
 export type ChannelRunQueue = {
+  /** Enqueue work under a serialization key such as account id, thread id, or chat id. */
   enqueue: (key: string, task: (context: ChannelRunQueueTaskContext) => Promise<void>) => void;
+  /** Stop accepting meaningful work and mark the lifecycle as inactive. */
   deactivate: () => void;
 };
 
+/** Hooks used to wire channel queue state into runtime status and error reporting. */
 export type ChannelRunQueueParams = {
+  /** Receives busy/idle lifecycle snapshots from the shared run-state machine. */
   setStatus?: RunStateStatusSink;
+  /** Lifecycle signal propagated to queued tasks. */
   abortSignal?: AbortSignal;
+  /** Best-effort sink for task failures after enqueueing. */
   onError?: (error: unknown) => void;
 };
 
@@ -45,10 +55,17 @@ export function createAccountStatusSink(params: {
  */
 export function createChannelRunQueue(params: ChannelRunQueueParams): ChannelRunQueue {
   const queue = new KeyedAsyncQueue();
+  const runStarts = new Map<symbol, number>();
   const runState = createRunStateMachine({
-    setStatus: params.setStatus,
+    setStatus: (patch) => {
+      params.setStatus?.({
+        ...patch,
+        activeRunStartedAt: runStarts.size > 0 ? Math.min(...runStarts.values()) : null,
+      });
+    },
     abortSignal: params.abortSignal,
   });
+
   const reportError = (error: unknown) => {
     try {
       params.onError?.(error);
@@ -65,13 +82,17 @@ export function createChannelRunQueue(params: ChannelRunQueueParams): ChannelRun
           if (!runState.isActive()) {
             return;
           }
+          const runHandle = Symbol("channel-run");
+          runStarts.set(runHandle, Date.now());
           runState.onRunStart();
           try {
+            // Deactivation can happen while this key waited behind older work.
             if (!runState.isActive()) {
               return;
             }
             await task({ lifecycleSignal: params.abortSignal });
           } finally {
+            runStarts.delete(runHandle);
             runState.onRunEnd();
           }
         })
@@ -79,6 +100,10 @@ export function createChannelRunQueue(params: ChannelRunQueueParams): ChannelRun
     },
     deactivate: runState.deactivate,
   };
+}
+
+async function runAbortCleanup(onAbort: (() => void | Promise<void>) | undefined): Promise<void> {
+  return onAbort?.();
 }
 
 /**
@@ -93,7 +118,7 @@ export function waitUntilAbort(
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const complete = () => {
-      Promise.resolve(onAbort?.()).then(() => resolve(), reject);
+      void runAbortCleanup(onAbort).then(resolve, reject);
     };
     if (!signal) {
       return;
@@ -134,6 +159,10 @@ export async function keepHttpServerTaskAlive(params: {
   onAbort?: () => void | Promise<void>;
 }): Promise<void> {
   const { server, abortSignal, onAbort } = params;
+  // Subscribe before an already-aborted signal can synchronously close the server.
+  const closed = new Promise<void>((resolve) => {
+    server.once("close", () => resolve());
+  });
   let abortTask: Promise<void> = Promise.resolve();
   let abortTriggered = false;
 
@@ -142,27 +171,20 @@ export async function keepHttpServerTaskAlive(params: {
       return;
     }
     abortTriggered = true;
-    abortTask = Promise.resolve(onAbort?.()).then(() => undefined);
-  };
-
-  const onAbortSignal = () => {
-    triggerAbort();
+    abortTask = runAbortCleanup(onAbort);
+    // Cleanup can reject before close; retain that error for the task's final await.
+    void abortTask.catch(() => {});
   };
 
   if (abortSignal) {
     if (abortSignal.aborted) {
       triggerAbort();
     } else {
-      abortSignal.addEventListener("abort", onAbortSignal, { once: true });
+      abortSignal.addEventListener("abort", triggerAbort, { once: true });
     }
   }
 
-  await new Promise<void>((resolve) => {
-    server.once("close", () => resolve());
-  });
-
-  if (abortSignal) {
-    abortSignal.removeEventListener("abort", onAbortSignal);
-  }
+  await closed;
+  abortSignal?.removeEventListener("abort", triggerAbort);
   await abortTask;
 }

@@ -1,4 +1,5 @@
-import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-message";
+// Tlon tests cover channel.message adapter plugin behavior.
+import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 
@@ -25,6 +26,15 @@ const cfg = {
     },
   },
 } as OpenClawConfig;
+
+describe("tlon target classification", () => {
+  it("distinguishes ships from group nests", () => {
+    expect(tlonPlugin.messaging?.inferTargetChatType?.({ to: "~sampel-palnet" })).toBe("direct");
+    expect(
+      tlonPlugin.messaging?.inferTargetChatType?.({ to: "chat/~sampel-palnet/operators" }),
+    ).toBe("group");
+  });
+});
 
 describe("tlon channel message adapter", () => {
   beforeEach(() => {
@@ -130,6 +140,7 @@ describe("tlon channel message adapter", () => {
     expect(proofs).toStrictEqual([
       { capability: "text", status: "verified" },
       { capability: "media", status: "verified" },
+      { capability: "poll", status: "not_declared" },
       { capability: "payload", status: "not_declared" },
       { capability: "silent", status: "not_declared" },
       { capability: "replyTo", status: "verified" },

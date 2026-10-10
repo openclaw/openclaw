@@ -1,5 +1,6 @@
+// Memory Host SDK tests cover query keyword extraction behavior.
 import { describe, expect, it } from "vitest";
-import { expandQueryForFts, extractKeywords } from "./query-expansion.js";
+import { extractKeywords } from "./query-expansion.js";
 
 describe("extractKeywords", () => {
   it("extracts keywords from English conversational query", () => {
@@ -38,6 +39,11 @@ describe("extractKeywords", () => {
       "api",
       "design",
     ]);
+  });
+
+  it("keeps ASCII terms embedded in unspaced Chinese text", () => {
+    const keywords = extractKeywords("用react部署k8s集群");
+    expect(keywords).toStrictEqual(["react", "部", "署", "部署", "k8s", "集", "群", "集群"]);
   });
 
   it("returns specific technical terms", () => {
@@ -163,6 +169,11 @@ describe("extractKeywords", () => {
       expect(trigramKeywords).toStrictEqual(["之前讨论的那个方案"]);
     });
 
+    it("splits Han runs around embedded ASCII terms in trigram mode", () => {
+      const keywords = extractKeywords("用react部署方案", trigramOpts);
+      expect(keywords).toStrictEqual(["react", "部署方案"]);
+    });
+
     it("skips Japanese kanji bigrams in trigram mode", () => {
       const defaultKeywords = extractKeywords("経済政策について");
       const trigramKeywords = extractKeywords("経済政策について", trigramOpts);
@@ -178,35 +189,6 @@ describe("extractKeywords", () => {
     it("does not affect English keyword extraction", () => {
       const keywords = extractKeywords("that thing we discussed about the API", trigramOpts);
       expect(keywords).toStrictEqual(["discussed", "api"]);
-    });
-  });
-});
-
-describe("expandQueryForFts", () => {
-  it("returns original query and extracted keywords", () => {
-    const result = expandQueryForFts("that API we discussed");
-    expect(result).toStrictEqual({
-      original: "that API we discussed",
-      keywords: ["api", "discussed"],
-      expanded: "that API we discussed OR api OR discussed",
-    });
-  });
-
-  it("builds expanded OR query for FTS", () => {
-    const result = expandQueryForFts("the solution for bugs");
-    expect(result).toStrictEqual({
-      original: "the solution for bugs",
-      keywords: ["solution", "bugs"],
-      expanded: "the solution for bugs OR solution OR bugs",
-    });
-  });
-
-  it("returns original query when no keywords extracted", () => {
-    const result = expandQueryForFts("the");
-    expect(result).toStrictEqual({
-      original: "the",
-      keywords: [],
-      expanded: "the",
     });
   });
 });

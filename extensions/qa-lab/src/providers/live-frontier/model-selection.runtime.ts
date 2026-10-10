@@ -1,28 +1,13 @@
-import {
-  listProfilesForProvider,
-  loadAuthProfileStoreForRuntime,
-} from "openclaw/plugin-sdk/agent-runtime";
-import { resolveEnvApiKey } from "openclaw/plugin-sdk/provider-auth";
+const QA_LIVE_DEFAULT_MODEL = "openai/gpt-5.6-luna";
 
-const QA_CODEX_OAUTH_LIVE_MODEL = "openai/gpt-5.5";
-
-export function resolveQaLiveFrontierPreferredModel() {
-  if (resolveEnvApiKey("openai")?.apiKey) {
-    return undefined;
+export function resolveQaLiveFrontierAlternateModel(primaryModel: string) {
+  const normalized = primaryModel.toLowerCase();
+  if (normalized === QA_LIVE_DEFAULT_MODEL) {
+    return "openai/gpt-5.6-terra";
   }
-  try {
-    const store = loadAuthProfileStoreForRuntime(undefined, {
-      readOnly: true,
-      allowKeychainPrompt: false,
-      externalCliProviderIds: ["openai-codex"],
-    });
-    if (listProfilesForProvider(store, "openai").length > 0) {
-      return undefined;
-    }
-    return listProfilesForProvider(store, "openai-codex").length > 0
-      ? QA_CODEX_OAUTH_LIVE_MODEL
-      : undefined;
-  } catch {
-    return undefined;
-  }
+  return normalized === "openai/gpt-5.6" ||
+    normalized === "openai/gpt-5.6-sol" ||
+    normalized === "openai/gpt-5.6-terra"
+    ? QA_LIVE_DEFAULT_MODEL
+    : undefined;
 }

@@ -1,0 +1,243 @@
+import { resolveSessionIdentityFromMeta } from "@openclaw/acp-core/runtime/session-identity";
+import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { logVerbose } from "../../globals.js";
+import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
+import type { AcpRuntimeError } from "../runtime/errors.js";
+import type { AcpSessionControlBinding } from "../runtime/session-meta-control.types.js";
+import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
+import {
+  assertAcpRuntimeOwnerSupport,
+  isAcpOwnerRepairRequired,
+  persistedAcpRuntimeHandle,
+} from "./manager.runtime-owner.js";
+import type {
+  AcpSessionManagerDeps,
+  SessionAcpMeta,
+  WriteManagerSessionMeta,
+} from "./manager.types.js";
+
+export function isRecoverableManagerAcpxExitError(message: string): boolean {
+  return /^acpx exited with (code \d+|signal [a-z0-9]+)/i.test(message.trim());
+}
+
+const SESSION_RESUME_REQUIRED_DETAIL_CODE = "SESSION_RESUME_REQUIRED";
+
+// Backends wrap missing-session errors differently; the structured cause code
+// preserves recovery across their wording (#87830).
+function isRecoverableMissingManagerPersistentSessionError(error: AcpRuntimeError): boolean {
+  let current: unknown = error;
+  // Depth-capped to defend against self-referential cause cycles.
+  for (let depth = 0; current && depth < 8; depth += 1) {
+    if ((current as { detailCode?: unknown }).detailCode === SESSION_RESUME_REQUIRED_DETAIL_CODE) {
+      return true;
+    }
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+/** Prepares a one-time fresh-handle retry only before authoritative prompt submission. */
+export async function prepareFreshManagerRuntimeHandleRetry(params: {
+  attempt: number;
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  agentId: string;
+  error: AcpRuntimeError;
+  promptStarted: boolean;
+  sawTurnOutput: boolean;
+  runtime?: AcpRuntime;
+  meta?: SessionAcpMeta;
+  runtimeHandles: ManagerRuntimeHandleCache;
+  writeSessionMeta: WriteManagerSessionMeta;
+  isCurrentActor: () => boolean;
+}): Promise<boolean> {
+  if (
+    !params.isCurrentActor() ||
+    isAcpOwnerRepairRequired(params.error) ||
+    params.attempt > 0 ||
+    params.promptStarted ||
+    params.sawTurnOutput
+  ) {
+    return false;
+  }
+  if (isRecoverableManagerAcpxExitError(params.error.message)) {
+    params.runtimeHandles.clear(params);
+    logVerbose(
+      `acp-manager: retrying ${params.sessionKey} with a fresh runtime handle after early turn failure: ${params.error.message}`,
+    );
+    return true;
+  }
+  if (
+    !params.runtime ||
+    !params.meta ||
+    params.meta.mode !== "persistent" ||
+    !isRecoverableMissingManagerPersistentSessionError(params.error)
+  ) {
+    return false;
+  }
+  if (params.runtime.prepareFreshSession) {
+    if (!params.isCurrentActor()) {
+      return false;
+    }
+    try {
+      await params.runtime.prepareFreshSession({
+        persistedHandle: persistedAcpRuntimeHandle(params, params.meta),
+        sessionKey: params.sessionKey,
+        agentId: params.agentId,
+      });
+      if (!params.isCurrentActor()) {
+        return false;
+      }
+    } catch (error) {
+      if (isAcpOwnerRepairRequired(error)) {
+        throw error;
+      }
+      logVerbose(
+        `acp-manager: failed preparing a fresh persistent session for ${params.sessionKey}: ${formatErrorMessage(error)}`,
+      );
+      return false;
+    }
+  }
+  const cleared = await clearPersistedRuntimeResumeState({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+    writeSessionMeta: params.writeSessionMeta,
+    isCurrentActor: params.isCurrentActor,
+  });
+  if (!cleared || !params.isCurrentActor()) {
+    return false;
+  }
+  params.runtimeHandles.clear(params);
+  logVerbose(
+    `acp-manager: retrying ${params.sessionKey} with a fresh persistent session after missing backend resume target: ${params.error.message}`,
+  );
+  return true;
+}
+
+async function clearPersistedRuntimeResumeState(params: {
+  assertCommitAllowed?: () => void;
+  expectedControlBinding?: AcpSessionControlBinding;
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  agentId: string;
+  writeSessionMeta: WriteManagerSessionMeta;
+  isCurrentActor: () => boolean;
+  discardPersistentState?: boolean;
+}): Promise<boolean> {
+  const now = Date.now();
+  const updated = await params.writeSessionMeta({
+    assertCommitAllowed: params.assertCommitAllowed,
+    expectedControlBinding: params.expectedControlBinding,
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+    isCurrentActor: params.isCurrentActor,
+    mutate: (current, entry) => {
+      if (!params.isCurrentActor()) {
+        return undefined;
+      }
+      if (!entry || !current) {
+        return null;
+      }
+      const currentIdentity = resolveSessionIdentityFromMeta(current);
+      if (
+        !params.discardPersistentState &&
+        !currentIdentity?.acpxSessionId &&
+        !currentIdentity?.agentSessionId
+      ) {
+        return current;
+      }
+      const nextIdentity = currentIdentity
+        ? {
+            state: "pending" as const,
+            ...(currentIdentity.acpxRecordId ? { acpxRecordId: currentIdentity.acpxRecordId } : {}),
+            source: currentIdentity.source,
+            lastUpdatedAt: now,
+          }
+        : undefined;
+      return {
+        backend: current.backend,
+        agent: current.agent,
+        runtimeSessionName: current.runtimeSessionName,
+        ...(nextIdentity ? { identity: nextIdentity } : {}),
+        mode: current.mode,
+        ...(current.runtimeOptions ? { runtimeOptions: current.runtimeOptions } : {}),
+        ...(current.cwd ? { cwd: current.cwd } : {}),
+        state: params.discardPersistentState ? "idle" : current.state,
+        lastActivityAt: now,
+        ...(!params.discardPersistentState && current.lastError
+          ? { lastError: current.lastError }
+          : {}),
+      };
+    },
+    ...(params.discardPersistentState ? { failOnError: true } : {}),
+  });
+  if (!updated) {
+    if (!params.discardPersistentState) {
+      logVerbose(
+        `acp-manager: unable to clear persisted runtime resume state for ${params.sessionKey}`,
+      );
+    }
+    return false;
+  }
+  return true;
+}
+
+/** Clears persisted runtime resume identifiers while preserving the manager session shell. */
+export async function discardPersistedManagerRuntimeState(params: {
+  assertCommitAllowed?: () => void;
+  expectedControlBinding?: AcpSessionControlBinding;
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  agentId: string;
+  writeSessionMeta: WriteManagerSessionMeta;
+  isCurrentActor: () => boolean;
+}): Promise<void> {
+  await clearPersistedRuntimeResumeState({ ...params, discardPersistentState: true });
+}
+
+/** Every skipped reset records why, so retained backend history is visible to the caller. */
+export async function tryPrepareFreshManagerRuntimeSession(params: {
+  deps: Pick<AcpSessionManagerDeps, "getRuntimeBackend">;
+  cfg: OpenClawConfig;
+  meta: SessionAcpMeta;
+  sessionKey: string;
+  agentId: string;
+  logPrefix: string;
+  missingBackendError?: unknown;
+}): Promise<void> {
+  const configuredBackend = (params.meta.backend || params.cfg.acp?.backend || "").trim();
+  try {
+    const backend = params.deps.getRuntimeBackend(configuredBackend || undefined);
+    if (!backend) {
+      if (params.missingBackendError) {
+        throw toErrorObject(params.missingBackendError, "Non-Error thrown");
+      }
+      logVerbose(
+        `${params.logPrefix}: fresh-session preparation skipped for ${params.sessionKey}: ACP backend "${configuredBackend || "(default)"}" is not registered`,
+      );
+      return;
+    }
+    assertAcpRuntimeOwnerSupport(backend.runtime, params);
+    if (!backend.runtime.prepareFreshSession) {
+      logVerbose(
+        `${params.logPrefix}: fresh-session preparation skipped for ${params.sessionKey}: ACP backend "${backend.id}" does not support prepareFreshSession`,
+      );
+      return;
+    }
+    await backend.runtime.prepareFreshSession({
+      persistedHandle: persistedAcpRuntimeHandle(params, params.meta),
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+    });
+  } catch (error) {
+    if (isAcpOwnerRepairRequired(error)) {
+      throw error;
+    }
+    logVerbose(
+      `${params.logPrefix}: unable to prepare fresh session for ${params.sessionKey}: ${formatErrorMessage(error)}`,
+    );
+  }
+}

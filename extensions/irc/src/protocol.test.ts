@@ -1,10 +1,10 @@
+// Irc tests cover protocol plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   parseIrcLine,
   parseIrcPrefix,
   sanitizeIrcOutboundText,
   sanitizeIrcTarget,
-  splitIrcText,
 } from "./protocol.js";
 
 describe("irc protocol", () => {
@@ -26,23 +26,19 @@ describe("irc protocol", () => {
   });
 
   it("sanitizes outbound text to prevent command injection", () => {
-    expect(sanitizeIrcOutboundText("hello\\r\\nJOIN #oops")).toBe("hello JOIN #oops");
-    expect(sanitizeIrcOutboundText("\\u0001test\\u0000")).toBe("test");
+    expect(sanitizeIrcOutboundText("hello\r\nJOIN #oops")).toBe("hello JOIN #oops");
+    expect(sanitizeIrcOutboundText("\u0001test\u0000")).toBe("test");
+  });
+
+  it("keeps literal backslash sequences as message text", () => {
+    const text = String.raw`Run C:\tools\new.exe, printf("%d\n"), match \x41 or caf\u00e9`;
+    expect(sanitizeIrcOutboundText(text)).toBe(text);
   });
 
   it("validates targets and rejects control characters", () => {
     expect(sanitizeIrcTarget("#openclaw")).toBe("#openclaw");
-    expect(() => sanitizeIrcTarget("#bad\\nPING")).toThrow(/Invalid IRC target/);
+    expect(sanitizeIrcTarget(String.raw`\tom`)).toBe(String.raw`\tom`);
+    expect(() => sanitizeIrcTarget("#bad\nPING")).toThrow(/Invalid IRC target/);
     expect(() => sanitizeIrcTarget(" user")).toThrow(/Invalid IRC target/);
-  });
-
-  it("splits long text on boundaries", () => {
-    const chunks = splitIrcText("a ".repeat(300), 120);
-    expect(chunks.length).toBeGreaterThan(2);
-    expect(
-      chunks
-        .map((chunk, index) => ({ index, length: chunk.length }))
-        .filter((chunk) => chunk.length > 120),
-    ).toStrictEqual([]);
   });
 });

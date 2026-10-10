@@ -2,10 +2,11 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { authorizeSlackSystemEventSender } from "../auth.js";
 import { resolveSlackChannelLabel } from "../channel-config.js";
 import type { SlackMonitorContext } from "../context.js";
+import type { SlackEventScope } from "../event-scope.js";
 
 type SlackAuthorizedSystemEventContext = {
   channelLabel: string;
-  sessionKey: string;
+  route: { agentId: string; sessionKey: string };
 };
 
 export async function authorizeAndResolveSlackSystemEventContext(params: {
@@ -13,14 +14,19 @@ export async function authorizeAndResolveSlackSystemEventContext(params: {
   senderId?: string;
   channelId?: string;
   channelType?: string | null;
+  threadTs?: string;
   eventKind: string;
+  eventScope?: SlackEventScope;
 }): Promise<SlackAuthorizedSystemEventContext | undefined> {
-  const { ctx, senderId, channelId, channelType, eventKind } = params;
+  const { senderId, channelId, channelType, eventKind } = params;
+  const ctx = await params.ctx.readRuntimeContext();
   const auth = await authorizeSlackSystemEventSender({
     ctx,
     senderId,
     channelId,
     channelType,
+    eventScope: params.eventScope,
+    retryNameLookup: eventKind.startsWith("member-"),
   });
   if (!auth.allowed) {
     logVerbose(
@@ -33,13 +39,15 @@ export async function authorizeAndResolveSlackSystemEventContext(params: {
     channelId,
     channelName: auth.channelName,
   });
-  const sessionKey = ctx.resolveSlackSystemEventSessionKey({
+  const route = ctx.resolveSlackSystemEventRoute({
     channelId,
     channelType: auth.channelType,
     senderId,
+    threadTs: auth.channelType === "im" ? undefined : params.threadTs,
+    eventScope: params.eventScope,
   });
   return {
     channelLabel,
-    sessionKey,
+    route,
   };
 }

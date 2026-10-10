@@ -1,4 +1,5 @@
 export {
+  chunkByParagraph,
   chunkText,
   chunkTextWithMode,
   chunkMarkdownTextWithMode,

@@ -1,17 +1,12 @@
-import { normalizeLowercaseStringOrEmpty } from "./string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 export type SilentReplyPolicy = "allow" | "disallow";
 export type SilentReplyConversationType = "direct" | "group" | "internal";
-export type SilentReplyPolicyShape = Partial<
-  Record<Exclude<SilentReplyConversationType, "direct">, SilentReplyPolicy>
->;
-
-export const DEFAULT_SILENT_REPLY_POLICY: Record<SilentReplyConversationType, SilentReplyPolicy> = {
-  direct: "disallow",
-  group: "allow",
-  internal: "allow",
+export type SilentReplyPolicyShape = {
+  group?: SilentReplyPolicy;
 };
 
+/** Classifies a reply context for silent-reply policy from explicit type, session key, or surface. */
 export function classifySilentReplyConversationType(params: {
   sessionKey?: string;
   surface?: string;
@@ -39,12 +34,8 @@ export function resolveSilentReplyPolicyFromPolicies(params: {
   defaultPolicy?: SilentReplyPolicyShape;
   surfacePolicy?: SilentReplyPolicyShape;
 }): SilentReplyPolicy {
-  if (params.conversationType === "direct") {
+  if (params.conversationType !== "group") {
     return "disallow";
   }
-  return (
-    params.surfacePolicy?.[params.conversationType] ??
-    params.defaultPolicy?.[params.conversationType] ??
-    DEFAULT_SILENT_REPLY_POLICY[params.conversationType]
-  );
+  return params.surfacePolicy?.group ?? params.defaultPolicy?.group ?? "disallow";
 }

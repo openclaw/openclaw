@@ -1,19 +1,12 @@
-import {
-  assertOkOrThrowProviderError,
-  resolveProviderRequestHeaders,
-} from "openclaw/plugin-sdk/provider-http";
-import {
-  captureHttpExchange,
-  isDebugProxyGlobalFetchPatchInstalled,
-} from "openclaw/plugin-sdk/proxy-capture";
-import {
-  fetchWithSsrFGuard,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname,
-} from "openclaw/plugin-sdk/ssrf-runtime";
-
 export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
+const DEFAULT_TTS_MAX_BYTES = 16 * 1024 * 1024;
 
-export const OPENAI_TTS_MODELS = ["gpt-4o-mini-tts", "tts-1", "tts-1-hd"] as const;
+export const OPENAI_TTS_MODELS = [
+  "gpt-4o-mini-tts",
+  "gpt-4o-mini-tts-2025-12-15",
+  "tts-1",
+  "tts-1-hd",
+] as const;
 
 export const OPENAI_TTS_VOICES = [
   "alloy",
@@ -42,28 +35,28 @@ export function normalizeOpenAITtsBaseUrl(baseUrl?: string): string {
   return trimmed.replace(/\/+$/, "");
 }
 
-function isCustomOpenAIEndpoint(baseUrl?: string): boolean {
-  if (baseUrl != null) {
-    return normalizeOpenAITtsBaseUrl(baseUrl) !== DEFAULT_OPENAI_BASE_URL;
-  }
-  return normalizeOpenAITtsBaseUrl(process.env.OPENAI_TTS_BASE_URL) !== DEFAULT_OPENAI_BASE_URL;
+export function isCustomOpenAITtsBaseUrl(baseUrl?: string): boolean {
+  return (
+    normalizeOpenAITtsBaseUrl(baseUrl ?? process.env.OPENAI_TTS_BASE_URL) !==
+    DEFAULT_OPENAI_BASE_URL
+  );
 }
 
 export function isValidOpenAIModel(model: string, baseUrl?: string): boolean {
-  if (isCustomOpenAIEndpoint(baseUrl)) {
+  if (isCustomOpenAITtsBaseUrl(baseUrl)) {
     return true;
   }
-  return OPENAI_TTS_MODELS.includes(model as (typeof OPENAI_TTS_MODELS)[number]);
+  return OPENAI_TTS_MODELS.some((candidate) => candidate === model);
 }
 
 export function isValidOpenAIVoice(voice: string, baseUrl?: string): voice is OpenAiTtsVoice {
-  if (isCustomOpenAIEndpoint(baseUrl)) {
+  if (isCustomOpenAITtsBaseUrl(baseUrl)) {
     return true;
   }
-  return OPENAI_TTS_VOICES.includes(voice as OpenAiTtsVoice);
+  return OPENAI_TTS_VOICES.some((candidate) => candidate === voice);
 }
 
-export function resolveOpenAITtsInstructions(
+function resolveOpenAITtsInstructions(
   model: string,
   instructions?: string,
   baseUrl?: string,
@@ -72,7 +65,7 @@ export function resolveOpenAITtsInstructions(
   if (!next) {
     return undefined;
   }
-  if (baseUrl !== undefined && isCustomOpenAIEndpoint(baseUrl)) {
+  if (baseUrl !== undefined && isCustomOpenAITtsBaseUrl(baseUrl)) {
     return next;
   }
   return model.includes("gpt-4o-mini-tts") ? next : undefined;
@@ -89,7 +82,19 @@ function sanitizeExtraBodyRecord(value: Record<string, unknown>): Record<string,
   return sanitized;
 }
 
-export async function openaiTTS(params: {
+export async function openaiTTS({
+  text,
+  apiKey,
+  baseUrl,
+  model,
+  voice,
+  speed,
+  instructions,
+  responseFormat,
+  extraBody,
+  timeoutMs,
+  maxBytes = DEFAULT_TTS_MAX_BYTES,
+}: {
   text: string;
   apiKey: string;
   baseUrl: string;
@@ -100,19 +105,8 @@ export async function openaiTTS(params: {
   responseFormat: "mp3" | "opus" | "pcm" | "wav";
   extraBody?: Record<string, unknown>;
   timeoutMs: number;
+  maxBytes?: number;
 }): Promise<Buffer> {
-  const {
-    text,
-    apiKey,
-    baseUrl,
-    model,
-    voice,
-    speed,
-    instructions,
-    responseFormat,
-    extraBody,
-    timeoutMs,
-  } = params;
   const effectiveInstructions = resolveOpenAITtsInstructions(model, instructions, baseUrl);
 
   if (!isValidOpenAIModel(model, baseUrl)) {
@@ -121,6 +115,17 @@ export async function openaiTTS(params: {
   if (!isValidOpenAIVoice(voice, baseUrl)) {
     throw new Error(`Invalid voice: ${voice}`);
   }
+  const {
+    assertOkOrThrowProviderError,
+    readProviderBinaryResponse,
+    resolveProviderRequestHeaders,
+  } = await import("openclaw/plugin-sdk/provider-http");
+  const proxyCaptureSdk = await import("openclaw/plugin-sdk/proxy-capture");
+  // The shipped 2026.9.6 host lacks async diagnostics; remove optionality when the minimum advances.
+  const captureHost: Partial<Pick<typeof proxyCaptureSdk, "captureHttpExchangeAsync">> =
+    proxyCaptureSdk;
+  const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
+    await import("openclaw/plugin-sdk/ssrf-runtime");
 
   const requestHeaders = resolveProviderRequestHeaders({
     provider: "openai",
@@ -145,7 +150,7 @@ export async function openaiTTS(params: {
     ...(extraBody == null ? {} : sanitizeExtraBodyRecord(extraBody)),
   });
   const requestUrl = `${baseUrl}/audio/speech`;
-  const debugProxyFetchPatchInstalled = isDebugProxyGlobalFetchPatchInstalled();
+  const debugProxyFetchPatchInstalled = proxyCaptureSdk.isDebugProxyGlobalFetchPatchInstalled();
   const { response, release } = await fetchWithSsrFGuard({
     url: requestUrl,
     init: {
@@ -161,23 +166,30 @@ export async function openaiTTS(params: {
   });
   try {
     if (!debugProxyFetchPatchInstalled) {
-      captureHttpExchange({
-        url: requestUrl,
-        method: "POST",
-        requestHeaders,
-        requestBody,
-        response,
-        transport: "http",
-        meta: {
-          provider: "openai",
-          capability: "tts",
-        },
-      });
+      // Finalization retains capture failures; observe the Promise returned by the SDK view.
+      void captureHost
+        .captureHttpExchangeAsync?.({
+          url: requestUrl,
+          method: "POST",
+          requestHeaders,
+          requestBody,
+          response,
+          transport: "http",
+          meta: {
+            provider: "openai",
+            capability: "tts",
+          },
+        })
+        .catch(() => {});
     }
 
     await assertOkOrThrowProviderError(response, "OpenAI TTS API error");
 
-    return Buffer.from(await response.arrayBuffer());
+    return await readProviderBinaryResponse(response, "OpenAI TTS API error", "audio", {
+      maxBytes,
+      onOverflow: ({ maxBytes: maxBytesLocal }) =>
+        new Error(`OpenAI TTS audio response exceeds ${maxBytesLocal} bytes`),
+    });
   } finally {
     await release();
   }

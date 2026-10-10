@@ -1,0 +1,139 @@
+import OpenClawKit
+import Testing
+@testable import OpenClaw
+
+@MainActor
+struct QRScannerResultHandoffTests {
+    @Test func `queued result is delivered once after dismissal`() async throws {
+        let handoff = QRScannerResultHandoff(settlingNanoseconds: 0)
+        var deliveredResult: QRScannerResult?
+
+        let scanID = handoff.beginScan()
+        handoff.queue(.setupCode("review-demo"), scanID: scanID)
+        let task = try #require(handoff.processAfterDismissal { deliveredResult = $0 })
+        await task.value
+
+        #expect(deliveredResult == .setupCode("review-demo"))
+        #expect(handoff.processAfterDismissal { _ in } == nil)
+    }
+
+    @Test func `cancel prevents queued delivery`() async throws {
+        let handoff = QRScannerResultHandoff(settlingNanoseconds: 1_000_000_000)
+        var deliveredResult: QRScannerResult?
+
+        let scanID = handoff.beginScan()
+        handoff.queue(.setupCode("review-demo"), scanID: scanID)
+        let task = try #require(handoff.processAfterDismissal { deliveredResult = $0 })
+        handoff.cancel()
+        await task.value
+
+        #expect(deliveredResult == nil)
+    }
+
+    @Test func `beginning another scan clears stale result`() {
+        let handoff = QRScannerResultHandoff(settlingNanoseconds: 0)
+
+        let staleScanID = handoff.beginScan()
+        handoff.queue(.setupCode("stale"), scanID: staleScanID)
+        handoff.beginScan()
+
+        #expect(handoff.processAfterDismissal { _ in } == nil)
+    }
+
+    @Test func `late result from cancelled scan cannot replace newer input`() async throws {
+        let handoff = QRScannerResultHandoff(settlingNanoseconds: 0)
+        let staleScanID = handoff.beginScan()
+        handoff.cancel()
+        let currentScanID = handoff.beginScan()
+        var deliveredResult: QRScannerResult?
+
+        #expect(!handoff.queue(.setupCode("stale"), scanID: staleScanID))
+        #expect(handoff.queue(.setupCode("current"), scanID: currentScanID))
+        let task = try #require(handoff.processAfterDismissal { deliveredResult = $0 })
+        await task.value
+
+        #expect(deliveredResult == .setupCode("current"))
+    }
+
+    @Test func `first producer claims the active scan`() async throws {
+        let handoff = QRScannerResultHandoff(settlingNanoseconds: 0)
+        let scanID = handoff.beginScan()
+        var deliveredResult: QRScannerResult?
+
+        #expect(handoff.queue(.setupCode("camera"), scanID: scanID))
+        #expect(!handoff.isActive(scanID: scanID))
+        #expect(!handoff.queue(.setupCode("photo"), scanID: scanID))
+        let task = try #require(handoff.processAfterDismissal { deliveredResult = $0 })
+        await task.value
+
+        #expect(deliveredResult == .setupCode("camera"))
+    }
+}
+
+struct OnboardingQRCodeCompletionTests {
+    private static let link = GatewayConnectDeepLink(
+        host: "gateway.example.com",
+        port: 443,
+        tls: true,
+        contextPath: "/openclaw",
+        bootstrapToken: "bootstrap",
+        token: nil,
+        password: nil)
+
+    @Test func `matching scanned gateway completes directly into app`() {
+        var completion = OnboardingQRCodeCompletion()
+        completion.stage(Self.link)
+
+        #expect(completion.destination(
+            connectedStableID: "manual|gateway.example.com|443|/openclaw") == .mainUI)
+        #expect(completion.destination(
+            connectedStableID: "manual|gateway.example.com|443|/openclaw") == .successScreen)
+    }
+
+    @Test func `different gateway falls back to success screen and consumes scanned completion`() {
+        var completion = OnboardingQRCodeCompletion()
+        completion.stage(Self.link)
+
+        #expect(completion.destination(
+            connectedStableID: "manual|different.example.com|443") == .successScreen)
+        #expect(completion.destination(
+            connectedStableID: "manual|gateway.example.com|443|/openclaw") == .successScreen)
+    }
+
+    @Test func `cancelled scanned completion retains success screen for same gateway`() {
+        var completion = OnboardingQRCodeCompletion()
+        completion.stage(Self.link)
+        completion.cancel()
+
+        #expect(completion.destination(
+            connectedStableID: "manual|gateway.example.com|443|/openclaw") == .successScreen)
+    }
+
+    @Test func `manual connection retains success screen`() {
+        var completion = OnboardingQRCodeCompletion()
+
+        #expect(completion.destination(
+            connectedStableID: "manual|gateway.example.com|443") == .successScreen)
+    }
+}
+
+@MainActor
+struct GatewayPendingTargetSuppressionTests {
+    @Test func `new setup target cannot be released by stale scanner dismissal`() {
+        let appModel = NodeAppModel()
+        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+        var pending = GatewayPendingTargetSuppression()
+        let scannerLease = controller.cancelPendingConnectionAttempts()
+        pending.replace(owner: .qrScanner, lease: scannerLease)
+        let setupLease = controller.cancelPendingConnectionAttempts()
+        pending.replace(owner: .setupLink, lease: setupLease)
+
+        #expect(pending.take(ifOwnedBy: .qrScanner) == nil)
+        let activeLease = pending.take(ifOwnedBy: .setupLink)
+        #expect(activeLease != nil)
+        if let activeLease {
+            controller.releaseAutoConnectSuppression(after: activeLease)
+        }
+        #expect(!controller._test_isAutoConnectSuppressed())
+    }
+}

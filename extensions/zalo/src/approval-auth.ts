@@ -1,7 +1,4 @@
-import {
-  createResolvedApproverActionAuthAdapter,
-  resolveApprovalApprovers,
-} from "openclaw/plugin-sdk/approval-auth-runtime";
+import { createChannelApprovalAuth } from "openclaw/plugin-sdk/approval-auth-runtime";
 import { resolveZaloAccount } from "./accounts.js";
 
 function normalizeZaloApproverId(value: string | number): string | undefined {
@@ -12,14 +9,11 @@ function normalizeZaloApproverId(value: string | number): string | undefined {
   return /^\d+$/.test(normalized) ? normalized : undefined;
 }
 
-export const zaloApprovalAuth = createResolvedApproverActionAuthAdapter({
+export const zaloApprovalAuth = createChannelApprovalAuth({
   channelLabel: "Zalo",
-  resolveApprovers: ({ cfg, accountId }) => {
+  resolveInputs: ({ cfg, accountId }) => {
     const account = resolveZaloAccount({ cfg, accountId }).config;
-    return resolveApprovalApprovers({
-      allowFrom: account.allowFrom,
-      normalizeApprover: normalizeZaloApproverId,
-    });
+    return { allowFrom: account.allowFrom };
   },
-  normalizeSenderId: (value) => normalizeZaloApproverId(value),
-});
+  normalizeApprover: normalizeZaloApproverId,
+}).approvalAuth;

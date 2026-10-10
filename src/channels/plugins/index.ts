@@ -1,9 +1,11 @@
+// Runtime channel-plugin entrypoint for registry and config matching helpers.
+// Keep plugin-facing type exports narrow; broader SDK barrels live elsewhere.
 export {
   getChannelPlugin,
   getLoadedChannelPlugin,
-  getLoadedChannelPluginOrigin,
   listChannelPlugins,
   normalizeChannelId,
+  resolveChannelPluginRegistration,
 } from "./registry.js";
 export {
   applyChannelMatchMeta,
@@ -15,12 +17,12 @@ export {
   resolveNestedAllowlistDecision,
   type ChannelEntryMatch,
   type ChannelMatchSource,
-} from "./channel-config.js";
+} from "../channel-config.js";
 export {
   formatAllowlistMatchMeta,
   type AllowlistMatch,
   type AllowlistMatchSource,
-} from "./allowlist-match.js";
+} from "../allowlist-match.js";
 export type { ChannelId } from "./types.public.js";
 export type { ChannelPlugin } from "./types.plugin.js";
 export { resolveChannelApprovalAdapter, resolveChannelApprovalCapability } from "./approvals.js";

@@ -4,23 +4,19 @@ import android.os.Build
 import java.net.InetAddress
 import java.util.Locale
 
+/** Returns true only for loopback hosts safe to treat as local gateway origins. */
 internal fun isLoopbackGatewayHost(
   rawHost: String?,
   allowEmulatorBridgeAlias: Boolean = isAndroidEmulatorRuntime(),
 ): Boolean {
-  var host =
-    rawHost
-      ?.trim()
-      ?.lowercase(Locale.US)
-      ?.trim('[', ']')
-      .orEmpty()
-  if (host.endsWith(".")) {
-    host = host.dropLast(1)
-  }
+  val host = normalizePolicyHost(rawHost)
   val zoneIndex = host.indexOf('%')
+  // Scoped IPv6 literals are not stable origin identifiers; reject them for
+  // loopback trust instead of guessing which interface the zone names.
   if (zoneIndex >= 0) return false
   if (host.isEmpty()) return false
   if (host == "localhost") return true
+  // Android emulator maps host loopback through this bridge alias.
   if (allowEmulatorBridgeAlias && host == "10.0.2.2") return true
 
   parseIpv4Address(host)?.let { ipv4 ->
@@ -44,49 +40,49 @@ internal fun isLoopbackGatewayHost(
   return isMappedIpv4 && address[12] == 127.toByte()
 }
 
-internal fun isPrivateLanGatewayHost(
+/** Allows cleartext only for loopback, `.local`, and private/link-local network ranges. */
+internal fun isLocalCleartextGatewayHost(
   rawHost: String?,
   allowEmulatorBridgeAlias: Boolean = isAndroidEmulatorRuntime(),
 ): Boolean {
-  var host =
-    rawHost
-      ?.trim()
-      ?.lowercase(Locale.US)
-      ?.trim('[', ']')
-      .orEmpty()
-  if (host.endsWith(".")) {
-    host = host.dropLast(1)
-  }
+  var host = normalizePolicyHost(rawHost)
+  if (host.isEmpty()) return false
+  if (isLoopbackGatewayHost(host, allowEmulatorBridgeAlias = allowEmulatorBridgeAlias)) return true
+  if (isMdnsLocalHostname(host)) return true
+
   val zoneIndex = host.indexOf('%')
   if (zoneIndex >= 0) {
+    // Link-local cleartext policy is about the address range; strip the
+    // interface zone before InetAddress parsing rejects otherwise valid hosts.
     host = host.substring(0, zoneIndex)
   }
   if (host.isEmpty()) return false
-  if (isLoopbackGatewayHost(host, allowEmulatorBridgeAlias = allowEmulatorBridgeAlias)) return true
 
   parseIpv4Address(host)?.let { ipv4 ->
     val first = ipv4[0].toInt() and 0xff
     val second = ipv4[1].toInt() and 0xff
-    return when {
-      first == 10 -> true
-      first == 172 && second in 16..31 -> true
-      first == 192 && second == 168 -> true
-      first == 169 && second == 254 -> true
-      else -> false
-    }
+    return first == 10 ||
+      (first == 172 && second in 16..31) ||
+      (first == 192 && second == 168) ||
+      (first == 169 && second == 254)
   }
   if (!host.contains(':') || !host.all(::isIpv6LiteralChar)) return false
 
   val address = runCatching { InetAddress.getByName(host) }.getOrNull() ?: return false
-  return when {
-    address.isLinkLocalAddress -> true
-    address.isSiteLocalAddress -> true
-    else -> {
+  return address.isLinkLocalAddress || address.isSiteLocalAddress ||
+    run {
       val bytes = address.address
       bytes.size == 16 && (bytes[0].toInt() and 0xfe) == 0xfc
     }
-  }
 }
+
+private fun normalizePolicyHost(rawHost: String?): String =
+  rawHost
+    ?.trim()
+    ?.lowercase(Locale.US)
+    ?.trim('[', ']')
+    .orEmpty()
+    .removeSuffix(".")
 
 private fun isAndroidEmulatorRuntime(): Boolean {
   val fingerprint = Build.FINGERPRINT?.lowercase(Locale.US).orEmpty()
@@ -107,6 +103,7 @@ private fun isAndroidEmulatorRuntime(): Boolean {
     product.contains("simulator")
 }
 
+/** Parses strict dotted-quad IPv4, rejecting shorthand and out-of-range octets. */
 private fun parseIpv4Address(host: String): ByteArray? {
   val parts = host.split('.')
   if (parts.size != 4) return null
@@ -119,4 +116,18 @@ private fun parseIpv4Address(host: String): ByteArray? {
   return bytes
 }
 
+private fun isMdnsLocalHostname(host: String): Boolean {
+  if (host.length > 253) return false
+  if (!host.endsWith(".local")) return false
+  val labels = host.split('.')
+  return labels.dropLast(1).all(::isDnsHostnameLabel)
+}
+
+internal fun isDnsHostnameLabel(label: String): Boolean {
+  if (label.isEmpty() || label.length > 63) return false
+  if (label.first() == '-' || label.last() == '-') return false
+  return label.all { it in 'a'..'z' || it in '0'..'9' || it == '-' }
+}
+
+/** Cheap prefilter before handing potential IPv6 literals to InetAddress. */
 private fun isIpv6LiteralChar(char: Char): Boolean = char in '0'..'9' || char in 'a'..'f' || char == ':' || char == '.'

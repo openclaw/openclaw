@@ -1,0 +1,370 @@
+import { ensureRecord, getRecord } from "../../../config/legacy.shared.js";
+import { resolveExactExecModeFromPolicy } from "../../../infra/exec-approvals-core.js";
+import {
+  deleteRetiredPath,
+  visitAgentConfigScopes,
+  visitChannelEntries,
+} from "./legacy-config-record-shared.js";
+
+const TIER_EVAL_RETIRED_MEMORY_PATHS = [
+  ["memory", "search", "remote", "nonBatchConcurrency"],
+  ["memory", "search", "remote", "batch", "wait"],
+  ["memory", "search", "remote", "batch", "concurrency"],
+  ["memory", "search", "remote", "batch", "pollIntervalMs"],
+  ["memory", "search", "remote", "batch", "timeoutMinutes"],
+  ["memory", "search", "local", "contextSize"],
+  ["memory", "search", "local", "modelCacheDir"],
+  ["memory", "search", "store", "driver"],
+  ["memory", "search", "sync"],
+  ["memory", "search", "query", "hybrid"],
+] as const;
+
+const TIER_EVAL_RETIRED_ROOT_PATHS = [
+  ["cloudWorkers", "profiles", "*", "lifetime"],
+  ["meta", "lastTouchedAt"],
+  ["hooks", "internal", "installs"],
+  ["cron", "store"],
+  ["plugins", "bundledDiscovery"],
+  ["tts", "prefsPath"],
+  ["logging", "redactSensitive"],
+  ["commands", "useAccessGroups"],
+  ["gateway", "controlUi", "allowInsecureAuth"],
+  ...TIER_EVAL_RETIRED_MEMORY_PATHS,
+] as const;
+
+const TIER_EVAL_RETIRED_AGENT_PATHS = [
+  ["groupChat", "visibleReplies"],
+  ...TIER_EVAL_RETIRED_MEMORY_PATHS,
+  ["heartbeat", "ackMaxChars"],
+  ["heartbeat", "includeReasoning"],
+  ["heartbeat", "includeSystemPromptSection"],
+  ["heartbeat", "skipWhenBusy"],
+  ["heartbeat", "suppressToolErrorWarnings"],
+] as const;
+
+type LegacyExecPolicy = {
+  security: "deny" | "allowlist" | "full";
+  ask: "on-miss" | "always" | "off";
+};
+
+function resolveConfiguredExecPolicy(scope: Record<string, unknown>): LegacyExecPolicy | undefined {
+  const exec = getRecord(getRecord(scope.tools)?.exec);
+  if (!exec) {
+    return undefined;
+  }
+  switch (exec.mode) {
+    case "deny":
+      return { security: "deny", ask: "off" };
+    case "allowlist":
+      return { security: "allowlist", ask: "off" };
+    case "ask":
+    case "auto":
+      return { security: "allowlist", ask: "on-miss" };
+    case "full":
+      return { security: "full", ask: "off" };
+  }
+  const security =
+    exec.security === "deny" || exec.security === "allowlist" || exec.security === "full"
+      ? exec.security
+      : undefined;
+  const ask =
+    exec.ask === "on-miss" || exec.ask === "always" || exec.ask === "off" ? exec.ask : undefined;
+  return security && ask ? { security, ask } : undefined;
+}
+
+function migrateExecMode(
+  scope: Record<string, unknown>,
+  path: string,
+  changes: string[],
+  inheritedPolicy?: LegacyExecPolicy,
+): void {
+  const exec = getRecord(getRecord(scope.tools)?.exec);
+  if (!exec || (!Object.hasOwn(exec, "security") && !Object.hasOwn(exec, "ask"))) {
+    return;
+  }
+  if (exec.mode !== undefined) {
+    changes.push(`Removed ${path}.tools.exec.security/ask (${path}.tools.exec.mode already set).`);
+    delete exec.security;
+    delete exec.ask;
+    return;
+  }
+  const ownSecurity =
+    exec.security === "deny" || exec.security === "allowlist" || exec.security === "full"
+      ? exec.security
+      : undefined;
+  const ownAsk =
+    exec.ask === "on-miss" || exec.ask === "always" || exec.ask === "off" ? exec.ask : undefined;
+  if (
+    (Object.hasOwn(exec, "security") && !ownSecurity) ||
+    (Object.hasOwn(exec, "ask") && !ownAsk)
+  ) {
+    return;
+  }
+  const security = ownSecurity ?? inheritedPolicy?.security;
+  const ask = ownAsk ?? inheritedPolicy?.ask;
+  if (!security || !ask) {
+    return;
+  }
+  const mode = resolveExactExecModeFromPolicy({ security, ask });
+  if (!mode) {
+    return;
+  }
+  exec.mode = mode;
+  changes.push(`Moved ${path}.tools.exec.security/ask → ${path}.tools.exec.mode.`);
+  delete exec.security;
+  delete exec.ask;
+}
+
+function migrateSignalEndpoint(
+  entry: Record<string, unknown>,
+  path: string,
+  changes: string[],
+  inherited?: { httpUrl?: unknown; httpHost?: unknown; httpPort?: unknown },
+): void {
+  if (!Object.hasOwn(entry, "httpHost") && !Object.hasOwn(entry, "httpPort")) {
+    return;
+  }
+  if (entry.httpUrl === undefined && typeof inherited?.httpUrl === "string") {
+    delete entry.httpHost;
+    delete entry.httpPort;
+    changes.push(`Removed ${path}.httpHost/httpPort (inherited httpUrl already set).`);
+    return;
+  }
+  if (entry.httpUrl === undefined) {
+    const configuredHost = entry.httpHost ?? inherited?.httpHost;
+    const rawHost =
+      typeof configuredHost === "string" && configuredHost.trim()
+        ? configuredHost.trim()
+        : "127.0.0.1";
+    const host = rawHost.includes(":") && !rawHost.startsWith("[") ? `[${rawHost}]` : rawHost;
+    const effectivePort = entry.httpPort ?? inherited?.httpPort;
+    const port = typeof effectivePort === "number" ? effectivePort : 8080;
+    entry.httpUrl = `http://${host}:${port}`;
+    if (entry.autoStart === undefined) {
+      // Legacy host/port described the locally owned daemon bind, unlike an
+      // explicit httpUrl that points at an external service.
+      entry.autoStart = true;
+    }
+    changes.push(`Moved ${path}.httpHost/httpPort → ${path}.httpUrl.`);
+  } else {
+    changes.push(`Removed ${path}.httpHost/httpPort (${path}.httpUrl already set).`);
+  }
+  delete entry.httpHost;
+  delete entry.httpPort;
+}
+
+function migrateChannelAliases(raw: Record<string, unknown>, changes: string[]): void {
+  const signal = getRecord(getRecord(raw.channels)?.signal);
+  if (signal) {
+    const inherited = {
+      httpUrl: signal.httpUrl,
+      httpHost: signal.httpHost,
+      httpPort: signal.httpPort,
+    };
+    visitChannelEntries(raw, "signal", (entry, path) => {
+      migrateSignalEndpoint(entry, path, changes, inherited);
+    });
+  }
+  visitChannelEntries(raw, "googlechat", (entry, path) => {
+    if (!Object.hasOwn(entry, "serviceAccountRef")) {
+      return;
+    }
+    const hadServiceAccount = entry.serviceAccount !== undefined;
+    entry.serviceAccount = entry.serviceAccountRef;
+    delete entry.serviceAccountRef;
+    changes.push(
+      hadServiceAccount
+        ? `Moved ${path}.serviceAccountRef → ${path}.serviceAccount (SecretRef precedence preserved).`
+        : `Moved ${path}.serviceAccountRef → ${path}.serviceAccount.`,
+    );
+  });
+}
+
+const RESPONSE_PREFIX_CHANNELS = new Set([
+  "buzz",
+  "clickclack",
+  "discord",
+  "feishu",
+  "googlechat",
+  "imessage",
+  "irc",
+  "matrix",
+  "mattermost",
+  "msteams",
+  "nextcloud-talk",
+  "qa-channel",
+  "signal",
+  "slack",
+  "telegram",
+  "tlon",
+  "twitch",
+  "whatsapp",
+  "zalo",
+  "zalouser",
+  "line",
+]);
+
+function migrateMessagesResponsePrefix(raw: Record<string, unknown>, changes: string[]): void {
+  const messages = getRecord(raw.messages);
+  if (!messages || !Object.hasOwn(messages, "responsePrefix")) {
+    return;
+  }
+  const unsupported: string[] = [];
+  let copied = false;
+  for (const [channelId, value] of Object.entries(getRecord(raw.channels) ?? {})) {
+    const channel = getRecord(value);
+    if (channelId === "defaults" || !channel) {
+      continue;
+    }
+    if (!RESPONSE_PREFIX_CHANNELS.has(channelId)) {
+      unsupported.push(channelId);
+    } else if (channel.responsePrefix === undefined) {
+      channel.responsePrefix = messages.responsePrefix;
+      copied = true;
+    }
+  }
+  if (copied) {
+    changes.push(
+      `Copied messages.responsePrefix to supported channel blocks while retaining the implicit/custom fallback${unsupported.length > 0 ? ` for: ${unsupported.join(", ")}` : ""}.`,
+    );
+  }
+}
+
+function migratePresenceEnabled(raw: Record<string, unknown>, changes: string[]): boolean {
+  const wideArea = getRecord(getRecord(raw.discovery)?.wideArea);
+  if (!wideArea || !Object.hasOwn(wideArea, "enabled")) {
+    return false;
+  }
+  if (wideArea.enabled === false && typeof wideArea.domain === "string" && wideArea.domain.trim()) {
+    delete wideArea.domain;
+    changes.push(
+      "Removed disabled discovery.wideArea activation fields; domain presence now enables wide-area discovery.",
+    );
+  }
+  delete wideArea.enabled;
+  return true;
+}
+
+function migrateWebEnabled(raw: Record<string, unknown>, changes: string[]): boolean {
+  const web = getRecord(raw.web);
+  if (!web) {
+    return false;
+  }
+  if (Object.hasOwn(web, "enabled")) {
+    const whatsapp = ensureRecord(ensureRecord(raw, "channels"), "whatsapp");
+    if (web.enabled === false && whatsapp.enabled === true) {
+      changes.push("Removed web.enabled=false (channels.whatsapp.enabled already set).");
+    }
+    if (whatsapp.enabled === undefined) {
+      whatsapp.enabled = web.enabled;
+      changes.push("Moved web.enabled → channels.whatsapp.enabled.");
+    }
+  }
+  delete raw.web;
+  return true;
+}
+
+function stripPromptsFromTtsConfig(ttsValue: unknown, path: string, changes: string[]): void {
+  for (const [personaId, persona] of Object.entries(
+    getRecord(getRecord(ttsValue)?.personas) ?? {},
+  )) {
+    if (deleteRetiredPath(persona, ["prompt"])) {
+      changes.push(
+        `Removed ${path}.personas.${personaId}.prompt; move custom shaping into a speech provider prepareSynthesis implementation.`,
+      );
+    }
+  }
+}
+
+function stripTtsPersonaPrompts(raw: Record<string, unknown>, changes: string[]): void {
+  stripPromptsFromTtsConfig(raw.tts, "tts", changes);
+  visitAgentConfigScopes(raw, (scope, path) => {
+    stripPromptsFromTtsConfig(scope.tts, `${path}.tts`, changes);
+  });
+  for (const channelId of Object.keys(getRecord(raw.channels) ?? {})) {
+    visitChannelEntries(raw, channelId, (entry, path) => {
+      stripPromptsFromTtsConfig(entry.tts, `${path}.tts`, changes);
+      stripPromptsFromTtsConfig(getRecord(entry.voice)?.tts, `${path}.voice.tts`, changes);
+    });
+  }
+}
+
+function stripCompactionInstructionConfig(
+  scope: Record<string, unknown>,
+  path: string,
+  changes: string[],
+): void {
+  const compaction = getRecord(scope.compaction);
+  if (!compaction) {
+    return;
+  }
+  let stripped = false;
+  for (const [owner, keys] of [
+    [compaction, ["customInstructions", "identifierInstructions"]],
+    [compaction.memoryFlush, ["prompt", "systemPrompt"]],
+  ] as const) {
+    for (const key of keys) {
+      stripped = deleteRetiredPath(owner, [key]) || stripped;
+    }
+  }
+  if (compaction.identifierPolicy === "custom") {
+    compaction.identifierPolicy = "strict";
+    stripped = true;
+  }
+  if (stripped) {
+    changes.push(
+      `Removed ${path}.compaction custom prompt instructions; use a compaction provider summarize() implementation and before_prompt_build hooks.`,
+    );
+  }
+}
+
+export function migrateTierEvalTranche(raw: Record<string, unknown>, changes: string[]): void {
+  const initialChangeCount = changes.length;
+  let stripped = false;
+  stripTtsPersonaPrompts(raw, changes);
+  stripped = migratePresenceEnabled(raw, changes) || stripped;
+  migrateChannelAliases(raw, changes);
+  const session = getRecord(raw.session);
+  if (session && Object.hasOwn(session, "idleMinutes")) {
+    const existingReset = getRecord(session.reset);
+    const reset = existingReset ?? { mode: "idle" };
+    if (reset.idleMinutes === undefined) {
+      reset.idleMinutes = session.idleMinutes;
+      session.reset = reset;
+      changes.push("Moved session.idleMinutes → session.reset.idleMinutes.");
+    }
+    delete session.idleMinutes;
+    stripped = true;
+  }
+  const inheritedExecPolicy = resolveConfiguredExecPolicy(raw);
+  migrateExecMode(raw, "root", changes);
+  visitAgentConfigScopes(raw, (scope, path) => {
+    stripCompactionInstructionConfig(scope, path, changes);
+    // Agent entries inherit exec policy directly from root tools.exec. The
+    // agents.defaults schema has no tools.exec policy surface.
+    if (path !== "agents.defaults") {
+      migrateExecMode(scope, path, changes, inheritedExecPolicy);
+    }
+    for (const retiredPath of TIER_EVAL_RETIRED_AGENT_PATHS) {
+      stripped = deleteRetiredPath(scope, retiredPath) || stripped;
+    }
+  });
+  stripped = migrateWebEnabled(raw, changes) || stripped;
+  migrateMessagesResponsePrefix(raw, changes);
+  for (const retiredPath of TIER_EVAL_RETIRED_ROOT_PATHS) {
+    stripped = deleteRetiredPath(raw, retiredPath) || stripped;
+  }
+  for (const owner of [
+    ...Object.values(getRecord(getRecord(raw.secrets)?.providers) ?? {}),
+    getRecord(getRecord(raw.security)?.installPolicy)?.exec,
+  ]) {
+    for (const key of ["allowInsecurePath", "allowSymlinkCommand"]) {
+      stripped = deleteRetiredPath(owner, [key]) || stripped;
+    }
+  }
+  if (stripped || changes.length > initialChangeCount) {
+    changes.push(
+      "Applied tier-eval tranche retirements; canonical settings and built-in defaults now apply.",
+    );
+  }
+}

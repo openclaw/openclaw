@@ -1,3 +1,4 @@
+// Tests public package entrypoint exports and load behavior.
 import fs from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { applyTemplate, runLegacyCliEntry } from "./index.js";
@@ -15,7 +16,7 @@ describe("legacy root entry", () => {
     expect(packageJson.exports?.["."]).toBe("./dist/index.js");
   });
 
-  it("does not run CLI bootstrap when imported as a library dependency", async () => {
+  it("renders library templates and forwards explicit legacy CLI calls", async () => {
     const runCli = vi.fn(async () => undefined);
 
     expect(applyTemplate("Hello {{MessageSid}}", { MessageSid: "operator" })).toBe(
@@ -23,6 +24,22 @@ describe("legacy root entry", () => {
     );
 
     await runLegacyCliEntry(["openclaw", "status"], { runCli });
-    expect(runCli).toHaveBeenCalledWith(["openclaw", "status"]);
+    expect(runCli).toHaveBeenCalledWith(["openclaw", "status"], undefined);
+  });
+
+  it("forwards process-lifetime console routing for executable callers", async () => {
+    const runCli = vi.fn(async () => undefined);
+
+    await runLegacyCliEntry(
+      ["openclaw", "agent", "exec", "inspect", "--json"],
+      { runCli },
+      {
+        retainConsoleRoutingUntilProcessExit: true,
+      },
+    );
+
+    expect(runCli).toHaveBeenCalledWith(["openclaw", "agent", "exec", "inspect", "--json"], {
+      retainConsoleRoutingUntilProcessExit: true,
+    });
   });
 });

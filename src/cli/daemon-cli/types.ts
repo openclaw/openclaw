@@ -1,11 +1,8 @@
 import type { FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
+import type { GatewayRpcOpts as SharedGatewayRpcOpts } from "../gateway-rpc.types.js";
 
-export type GatewayRpcOpts = {
-  url?: string;
-  token?: string;
-  password?: string;
-  timeout?: string;
-  json?: boolean;
+export type GatewayRpcOpts = Omit<SharedGatewayRpcOpts, "expectFinal"> & {
+  localPortOverride?: number;
 };
 
 export type DaemonStatusOptions = {
@@ -18,8 +15,12 @@ export type DaemonStatusOptions = {
 export type DaemonInstallOptions = {
   port?: string | number;
   runtime?: string;
+  runtimePath?: string;
+  expectedRuntimePin?: string;
+  restoreServiceCli?: string;
   token?: string;
   wrapper?: string;
+  allowUnconfigured?: boolean;
   force?: boolean;
   json?: boolean;
 };
@@ -29,6 +30,7 @@ export type DaemonLifecycleOptions = {
   force?: boolean;
   safe?: boolean;
   skipDeferral?: boolean;
+  preserveDefinition?: boolean;
   wait?: string;
   disable?: boolean;
 };

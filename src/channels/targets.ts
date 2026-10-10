@@ -1,7 +1,8 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-
-export type { DirectoryConfigParams } from "./plugins/directory-types.js";
-export type { ChannelDirectoryEntry } from "./plugins/types.public.js";
+/**
+ * Shared messaging-target parsing primitives for channel plugins and SDK consumers.
+ * Channel-specific grammars stay in plugins; this file owns common target shapes and parse order.
+ */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 export type MessagingTargetKind = "user" | "channel";
 
@@ -17,10 +18,6 @@ export type MessagingTargetParseOptions = {
   ambiguousMessage?: string;
 };
 
-export function normalizeTargetId(kind: MessagingTargetKind, id: string): string {
-  return normalizeLowercaseStringOrEmpty(`${kind}:${id}`);
-}
-
 export function buildMessagingTarget(
   kind: MessagingTargetKind,
   id: string,
@@ -30,7 +27,7 @@ export function buildMessagingTarget(
     kind,
     id,
     raw,
-    normalized: normalizeTargetId(kind, id),
+    normalized: normalizeLowercaseStringOrEmpty(`${kind}:${id}`),
   };
 }
 
@@ -45,64 +42,7 @@ export function ensureTargetId(params: {
   return params.candidate;
 }
 
-export function parseTargetMention(params: {
-  raw: string;
-  mentionPattern: RegExp;
-  kind: MessagingTargetKind;
-}): MessagingTarget | undefined {
-  const match = params.raw.match(params.mentionPattern);
-  if (!match?.[1]) {
-    return undefined;
-  }
-  return buildMessagingTarget(params.kind, match[1], params.raw);
-}
-
-export function parseTargetPrefix(params: {
-  raw: string;
-  prefix: string;
-  kind: MessagingTargetKind;
-}): MessagingTarget | undefined {
-  if (!params.raw.startsWith(params.prefix)) {
-    return undefined;
-  }
-  const id = params.raw.slice(params.prefix.length).trim();
-  return id ? buildMessagingTarget(params.kind, id, params.raw) : undefined;
-}
-
-export function parseTargetPrefixes(params: {
-  raw: string;
-  prefixes: Array<{ prefix: string; kind: MessagingTargetKind }>;
-}): MessagingTarget | undefined {
-  for (const entry of params.prefixes) {
-    const parsed = parseTargetPrefix({
-      raw: params.raw,
-      prefix: entry.prefix,
-      kind: entry.kind,
-    });
-    if (parsed) {
-      return parsed;
-    }
-  }
-  return undefined;
-}
-
-export function parseAtUserTarget(params: {
-  raw: string;
-  pattern: RegExp;
-  errorMessage: string;
-}): MessagingTarget | undefined {
-  if (!params.raw.startsWith("@")) {
-    return undefined;
-  }
-  const candidate = params.raw.slice(1).trim();
-  const id = ensureTargetId({
-    candidate,
-    pattern: params.pattern,
-    errorMessage: params.errorMessage,
-  });
-  return buildMessagingTarget("user", id, params.raw);
-}
-
+/** Tries mention, explicit prefixes, then @user shorthand in deterministic order. */
 export function parseMentionPrefixOrAtUserTarget(params: {
   raw: string;
   mentionPattern: RegExp;
@@ -110,26 +50,27 @@ export function parseMentionPrefixOrAtUserTarget(params: {
   atUserPattern: RegExp;
   atUserErrorMessage: string;
 }): MessagingTarget | undefined {
-  const mentionTarget = parseTargetMention({
-    raw: params.raw,
-    mentionPattern: params.mentionPattern,
-    kind: "user",
-  });
-  if (mentionTarget) {
-    return mentionTarget;
+  const match = params.raw.match(params.mentionPattern);
+  if (match?.[1]) {
+    return buildMessagingTarget("user", match[1], params.raw);
   }
-  const prefixedTarget = parseTargetPrefixes({
-    raw: params.raw,
-    prefixes: params.prefixes,
-  });
-  if (prefixedTarget) {
-    return prefixedTarget;
+  for (const { prefix, kind } of params.prefixes) {
+    if (params.raw.startsWith(prefix)) {
+      const id = params.raw.slice(prefix.length).trim();
+      if (id) {
+        return buildMessagingTarget(kind, id, params.raw);
+      }
+    }
   }
-  return parseAtUserTarget({
-    raw: params.raw,
+  if (!params.raw.startsWith("@")) {
+    return undefined;
+  }
+  const id = ensureTargetId({
+    candidate: params.raw.slice(1).trim(),
     pattern: params.atUserPattern,
     errorMessage: params.atUserErrorMessage,
   });
+  return buildMessagingTarget("user", id, params.raw);
 }
 
 export function requireTargetKind(params: {

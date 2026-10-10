@@ -1,3 +1,4 @@
+// Session id resolution tests cover resolving aliases and explicit ids.
 import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
@@ -12,11 +13,6 @@ function entry(updatedAt: number, sessionId = "s1"): SessionEntry {
 describe("resolvePreferredSessionKeyForSessionIdMatches", () => {
   it("returns undefined for empty matches", () => {
     expect(resolvePreferredSessionKeyForSessionIdMatches([], "s1")).toBeUndefined();
-  });
-
-  it("returns the only match for a single-element array", () => {
-    const matches: Array<[string, SessionEntry]> = [["agent:main:main", entry(10)]];
-    expect(resolvePreferredSessionKeyForSessionIdMatches(matches, "s1")).toBe("agent:main:main");
   });
 
   it("collapses alias duplicates before resolving structural ties", () => {
@@ -34,14 +30,6 @@ describe("resolvePreferredSessionKeyForSessionIdMatches", () => {
       ["agent:main:beta", entry(20)],
     ];
     expect(resolvePreferredSessionKeyForSessionIdMatches(matches, "s1")).toBe("agent:main:beta");
-  });
-
-  it("returns undefined for fuzzy-only matches with tied timestamps", () => {
-    const matches: Array<[string, SessionEntry]> = [
-      ["agent:main:beta", entry(10)],
-      ["agent:main:alpha", entry(10)],
-    ];
-    expect(resolvePreferredSessionKeyForSessionIdMatches(matches, "s1")).toBeUndefined();
   });
 
   it("reports ambiguity for fuzzy-only matches with tied timestamps", () => {

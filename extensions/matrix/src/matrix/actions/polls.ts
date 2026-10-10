@@ -1,4 +1,8 @@
 import {
+  normalizeUniqueTrimmedStringList,
+  uniqueValues,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
   buildPollResponseContent,
   isPollStartType,
   parsePollStart,
@@ -11,13 +15,7 @@ function normalizeOptionIndexes(indexes: number[]): number[] {
   const normalized = indexes
     .map((index) => Math.trunc(index))
     .filter((index) => Number.isFinite(index) && index > 0);
-  return Array.from(new Set(normalized));
-}
-
-function normalizeOptionIds(optionIds: string[]): string[] {
-  return Array.from(
-    new Set(optionIds.map((optionId) => optionId.trim()).filter((optionId) => optionId.length > 0)),
-  );
+  return uniqueValues(normalized);
 }
 
 function resolveSelectedAnswerIds(params: {
@@ -30,7 +28,7 @@ function resolveSelectedAnswerIds(params: {
     throw new Error("Matrix poll vote requires a valid poll start event.");
   }
 
-  const selectedById = normalizeOptionIds(params.optionIds ?? []);
+  const selectedById = normalizeUniqueTrimmedStringList(params.optionIds);
   const selectedByIndex = normalizeOptionIndexes(params.optionIndexes ?? []).map((index) => {
     const answer = parsed.answers[index - 1];
     if (!answer) {
@@ -41,7 +39,7 @@ function resolveSelectedAnswerIds(params: {
     return answer.id;
   });
 
-  const answerIds = normalizeOptionIds([...selectedById, ...selectedByIndex]);
+  const answerIds = normalizeUniqueTrimmedStringList([...selectedById, ...selectedByIndex]);
   if (answerIds.length === 0) {
     throw new Error("Matrix poll vote requires at least one poll option id or index.");
   }

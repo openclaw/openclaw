@@ -8,14 +8,7 @@ import { parseBindingSpecs } from "./agents.bindings.js";
 
 const matrixBindingPlugin = createBindingResolverTestPlugin({
   id: "matrix",
-  resolveBindingAccountId: ({ accountId, agentId }) => {
-    const explicit = accountId?.trim();
-    if (explicit) {
-      return explicit;
-    }
-    const agent = agentId?.trim();
-    return agent || "default";
-  },
+  resolveBindingAccountId: ({ agentId }) => agentId.trim() || "default",
 });
 
 describe("agents bind matrix integration", () => {

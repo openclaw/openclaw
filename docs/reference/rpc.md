@@ -12,8 +12,8 @@ OpenClaw integrates external CLIs via JSON-RPC. Two patterns are used today.
 
 - `signal-cli` runs as a daemon with JSON-RPC over HTTP.
 - Event stream is SSE (`/api/v1/events`).
-- Health probe: `/api/v1/check`.
-- OpenClaw owns lifecycle when `channels.signal.autoStart=true`.
+- Health check: `/api/v1/check`.
+- OpenClaw owns lifecycle when `channels.signal.transport.kind="managed-native"` (the default).
 
 See [Signal](/channels/signal) for setup and endpoints.
 
@@ -28,9 +28,9 @@ Core methods used:
 - `watch.subscribe` → notifications (`method: "message"`)
 - `watch.unsubscribe`
 - `send`
-- `chats.list` (probe/diagnostics)
+- `chats.list` (check/diagnostics)
 
-See [iMessage](/channels/imessage) for legacy setup and addressing (`chat_id` preferred).
+See [iMessage](/channels/imessage) for setup and addressing (`chat_id` preferred over display strings).
 
 ## Adapter guidelines
 

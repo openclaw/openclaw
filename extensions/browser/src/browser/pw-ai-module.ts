@@ -1,11 +1,16 @@
-import { extractErrorCode, formatErrorMessage } from "../infra/errors.js";
+/**
+ * Lazily imports the Playwright-backed browser helpers while allowing routes to
+ * soft-fail when the dependency is unavailable in a gateway build.
+ */
+import { extractErrorCode, formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 
-export type PwAiModule = typeof import("./pw-ai.js");
+export type PwAiModule = (typeof import("./pw-ai.js"))["pwAi"];
 
 type PwAiLoadMode = "soft" | "strict";
 
 let pwAiModuleSoft: Promise<PwAiModule | null> | null = null;
 let pwAiModuleStrict: Promise<PwAiModule | null> | null = null;
+let loadedPwAiModule: PwAiModule | null | undefined;
 
 function isModuleNotFoundError(err: unknown): boolean {
   const code = extractErrorCode(err);
@@ -24,28 +29,27 @@ function isModuleNotFoundError(err: unknown): boolean {
 
 async function loadPwAiModule(mode: PwAiLoadMode): Promise<PwAiModule | null> {
   try {
-    return await import("./pw-ai.js");
+    const { pwAi } = await import("./pw-ai.js");
+    loadedPwAiModule = pwAi;
+    return pwAi;
   } catch (err) {
-    if (mode === "soft") {
-      return null;
-    }
-    if (isModuleNotFoundError(err)) {
+    if (mode === "soft" || isModuleNotFoundError(err)) {
+      loadedPwAiModule = null;
       return null;
     }
     throw err;
   }
 }
 
+/** Return the already-resolved module without yielding during lifecycle invalidation. */
+export function getLoadedPwAiModule(): PwAiModule | null | undefined {
+  return loadedPwAiModule;
+}
+
 export async function getPwAiModule(opts?: { mode?: PwAiLoadMode }): Promise<PwAiModule | null> {
   const mode: PwAiLoadMode = opts?.mode ?? "soft";
   if (mode === "soft") {
-    if (!pwAiModuleSoft) {
-      pwAiModuleSoft = loadPwAiModule("soft");
-    }
-    return await pwAiModuleSoft;
+    return await (pwAiModuleSoft ??= loadPwAiModule("soft"));
   }
-  if (!pwAiModuleStrict) {
-    pwAiModuleStrict = loadPwAiModule("strict");
-  }
-  return await pwAiModuleStrict;
+  return await (pwAiModuleStrict ??= loadPwAiModule("strict"));
 }

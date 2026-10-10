@@ -1,0 +1,71 @@
+/** Imports shipped cron quarantine sidecars only through the doctor migration boundary. */
+import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { CronQuarantinedJob } from "../../../cron/store.js";
+import { parseJsonWithJson5Fallback } from "../../../utils/parse-json-compat.js";
+
+export type LegacyCronQuarantine = {
+  path: string;
+  sourceSha256: string;
+  jobs: CronQuarantinedJob[];
+};
+
+/** Reads and validates a historical quarantine file without modifying its source. */
+export async function loadLegacyCronQuarantineForMigration(
+  storePath: string,
+): Promise<LegacyCronQuarantine | undefined> {
+  const quarantinePath = `${storePath.endsWith(".json") ? storePath.slice(0, -5) : storePath}-quarantine.json`;
+  let raw: string;
+  try {
+    raw = await fs.readFile(quarantinePath, "utf-8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
+
+  const parsed = parseJsonWithJson5Fallback(raw);
+  if (!isRecord(parsed) || parsed.version !== 1 || !Array.isArray(parsed.jobs)) {
+    throw new Error(`Unsupported cron quarantine file shape at ${quarantinePath}`);
+  }
+
+  const jobs = parsed.jobs.map((entry, index) => {
+    if (
+      !isRecord(entry) ||
+      typeof entry.reason !== "string" ||
+      (!isRecord(entry.job) && !("raw" in entry))
+    ) {
+      throw new Error(`Unsupported cron quarantine entry at ${quarantinePath} index ${index}`);
+    }
+    const quarantined: CronQuarantinedJob = {
+      quarantinedAtMs: asFiniteNumber(entry.quarantinedAtMs) ?? Date.now(),
+      sourceIndex: typeof entry.sourceIndex === "number" ? entry.sourceIndex : -1,
+      reason: entry.reason,
+    };
+    if (isRecord(entry.job)) {
+      quarantined.job = entry.job;
+    }
+    if ("raw" in entry) {
+      quarantined.raw = entry.raw;
+    }
+    if (isRecord(entry.state)) {
+      quarantined.state = entry.state;
+    }
+    if (typeof entry.updatedAtMs === "number" && Number.isFinite(entry.updatedAtMs)) {
+      quarantined.updatedAtMs = entry.updatedAtMs;
+    }
+    if (typeof entry.scheduleIdentity === "string") {
+      quarantined.scheduleIdentity = entry.scheduleIdentity;
+    }
+    return quarantined;
+  });
+
+  return {
+    path: quarantinePath,
+    sourceSha256: createHash("sha256").update(raw).digest("hex"),
+    jobs,
+  };
+}

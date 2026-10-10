@@ -1,0 +1,42 @@
+// Gateway maintenance-state test helper.
+// Builds minimal timer/health/chat state for maintenance tests.
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import type { HealthSummary } from "./health/types.js";
+import { createChatRunState } from "./server-chat-state.js";
+import type { GatewayClient } from "./server-methods/client-types.js";
+
+/** Create a Gateway maintenance-state stub with configurable health/presence versions. */
+export function createGatewayMaintenanceStateForTest(params?: {
+  healthSummary?: HealthSummary;
+  healthVersion?: number;
+  presenceVersion?: number;
+}) {
+  const config: OpenClawConfig = {};
+  const chatRunState = createChatRunState();
+  return {
+    scheduler: createTestGatewayScheduler("fake-timers"),
+    clients: new Set<GatewayClient>(),
+    broadcast: () => {},
+    nodeSendToAllSubscribed: () => {},
+    getPresenceVersion: () => params?.presenceVersion ?? 1,
+    getHealthVersion: () => params?.healthVersion ?? 1,
+    refreshGatewayHealthSnapshot: async () =>
+      params?.healthSummary ?? ({ ok: true } as HealthSummary),
+    logHealth: { info: () => {}, error: () => {} },
+    restartRunningChannels: async () => true,
+    activeWorkInspectors: {},
+    refreshPresence: () => {},
+    resetEventLoopHealth: () => {},
+    dedupe: new Map(),
+    chatAbortControllers: new Map(),
+    chatQueuedTurns: new Map(),
+    restartRecoveryCandidates: new Map(),
+    chatRunState,
+    removeChatRun: () => undefined,
+    agentRunSeq: new Map(),
+    nodeSendToSession: () => {},
+    getRuntimeConfig: () => config,
+    runDeliveryQueueMediaGc: async () => undefined,
+  };
+}

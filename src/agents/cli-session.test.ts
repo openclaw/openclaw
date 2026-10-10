@@ -1,16 +1,69 @@
+/**
+ * Regression coverage for CLI session persistence helpers.
+ * Verifies provider-keyed bindings, legacy cleanup, and reuse invalidation.
+ */
 import { describe, expect, it } from "vitest";
-import type { SessionEntry } from "../config/sessions.js";
+import type {
+  CliSessionBinding,
+  CliSessionReseedReceipt,
+  SessionEntry,
+} from "../config/sessions.js";
+import {
+  forkCliSessionBindings,
+  normalizeCliSessionReseedReceipt,
+  rebindCliSessionReseedReceiptsForReset,
+} from "../config/sessions/cli-session-binding.js";
 import {
   clearAllCliSessions,
   clearCliSession,
   getCliSessionBinding,
   hashCliSessionText,
+  isCliSessionInvalidatingFailoverReason,
+  resolveCliSessionClearReason,
   resolveCliSessionReuse,
   setCliSessionBinding,
+  shouldClearFailedCliSessionBinding,
 } from "./cli-session.js";
+import { FailoverError } from "./failover-error.js";
+
+const ordinaryPolicyHash = "3ae4a9801e78dd74aa01b3ccad9fb6ab5628c39000b88276f651ed7fb9bdb555";
+const explicitFalsePolicyHash = "92a8de91722cbb4fe1a7fd6892245e359c339d96cafe8db3a08738ffda913d71";
 
 describe("cli-session helpers", () => {
-  it("persists binding metadata alongside legacy session ids", () => {
+  it("persists binding metadata without recreating the retired Claude field", () => {
+    const entry: SessionEntry = {
+      sessionId: "openclaw-session",
+      updatedAt: Date.now(),
+    };
+
+    const binding = {
+      sessionId: "cli-session-1",
+      forceReuse: true,
+      authProfileId: "anthropic:work",
+      authEpoch: "auth-epoch",
+      authEpochVersion: 2,
+      extraSystemPromptHash: "prompt-hash",
+      messageToolPolicyHash: "message-policy-hash",
+      promptToolNamesHash: "prompt-tools-hash",
+      cwdHash: "cwd-hash",
+      mcpConfigHash: "mcp-hash",
+      mcpResumeHash: "mcp-resume-hash",
+      reseedReceipt: {
+        version: 1,
+        promptHash: "a".repeat(64),
+        localSessionId: "openclaw-session",
+        userTurnDisposition: "persisted",
+      },
+    } satisfies CliSessionBinding;
+    const expectedBinding = structuredClone(binding);
+    setCliSessionBinding(entry, "claude-cli", binding);
+
+    expect(entry.cliSessionIds?.["claude-cli"]).toBe("cli-session-1");
+    expect(entry).not.toHaveProperty("claudeCliSessionId");
+    expect(getCliSessionBinding(entry, "claude-cli")).toEqual(expectedBinding);
+  });
+
+  it("drops malformed reseed receipts while preserving the session binding", () => {
     const entry: SessionEntry = {
       sessionId: "openclaw-session",
       updatedAt: Date.now(),
@@ -18,27 +71,106 @@ describe("cli-session helpers", () => {
 
     setCliSessionBinding(entry, "claude-cli", {
       sessionId: "cli-session-1",
-      forceReuse: true,
-      authProfileId: "anthropic:work",
-      authEpoch: "auth-epoch",
-      authEpochVersion: 2,
-      extraSystemPromptHash: "prompt-hash",
-      mcpConfigHash: "mcp-hash",
-      mcpResumeHash: "mcp-resume-hash",
+      reseedReceipt: {
+        version: 1,
+        promptHash: "not-a-digest",
+        localSessionId: "openclaw-session",
+        userTurnDisposition: "persisted",
+      },
     });
 
-    expect(entry.cliSessionIds?.["claude-cli"]).toBe("cli-session-1");
-    expect(entry.claudeCliSessionId).toBe("cli-session-1");
     expect(getCliSessionBinding(entry, "claude-cli")).toEqual({
       sessionId: "cli-session-1",
-      forceReuse: true,
-      authProfileId: "anthropic:work",
-      authEpoch: "auth-epoch",
-      authEpochVersion: 2,
-      extraSystemPromptHash: "prompt-hash",
-      mcpConfigHash: "mcp-hash",
-      mcpResumeHash: "mcp-resume-hash",
+      authProfileId: undefined,
+      authEpoch: undefined,
+      authEpochVersion: undefined,
+      extraSystemPromptHash: undefined,
+      messageToolPolicyHash: undefined,
+      promptToolNamesHash: undefined,
+      cwdHash: undefined,
+      mcpConfigHash: undefined,
+      mcpResumeHash: undefined,
+      reseedReceipt: undefined,
     });
+  });
+
+  it("rejects reseed receipts without a local session owner", () => {
+    expect(
+      normalizeCliSessionReseedReceipt({
+        version: 1,
+        promptHash: "a".repeat(64),
+      } as CliSessionReseedReceipt),
+    ).toBeUndefined();
+  });
+
+  it("rejects reseed receipts without a user-turn disposition", () => {
+    expect(
+      normalizeCliSessionReseedReceipt({
+        version: 1,
+        promptHash: "a".repeat(64),
+        localSessionId: "openclaw-session",
+      } as CliSessionReseedReceipt),
+    ).toBeUndefined();
+  });
+
+  it("rebinds only omitted receipts across binding-preserving resets", () => {
+    const bindings = {
+      "claude-cli": {
+        sessionId: "claude-session",
+        reseedReceipt: {
+          version: 1 as const,
+          promptHash: "a".repeat(64),
+          localSessionId: "old-local-session",
+          userTurnDisposition: "omitted" as const,
+        },
+      },
+      "other-cli": {
+        sessionId: "other-session",
+        reseedReceipt: {
+          version: 1 as const,
+          promptHash: "b".repeat(64),
+          localSessionId: "old-local-session",
+          userTurnDisposition: "persisted" as const,
+        },
+      },
+    };
+
+    expect(rebindCliSessionReseedReceiptsForReset(bindings, "new-local-session")).toEqual({
+      "claude-cli": {
+        sessionId: "claude-session",
+        reseedReceipt: {
+          version: 1,
+          promptHash: "a".repeat(64),
+          localSessionId: "new-local-session",
+          userTurnDisposition: "omitted",
+        },
+      },
+      "other-cli": bindings["other-cli"],
+    });
+    expect(bindings["claude-cli"].reseedReceipt.localSessionId).toBe("old-local-session");
+  });
+
+  it("preserves receipts only while updating the same native CLI session", () => {
+    const entry: SessionEntry = {
+      sessionId: "openclaw-session",
+      updatedAt: Date.now(),
+    };
+    const receipt = {
+      version: 1 as const,
+      promptHash: "a".repeat(64),
+      localSessionId: "openclaw-session",
+      userTurnDisposition: "persisted" as const,
+    };
+
+    setCliSessionBinding(entry, "claude-cli", {
+      sessionId: "cli-session-1",
+      reseedReceipt: receipt,
+    });
+    setCliSessionBinding(entry, "claude-cli", { sessionId: "cli-session-1" });
+    expect(getCliSessionBinding(entry, "claude-cli")?.reseedReceipt).toEqual(receipt);
+
+    setCliSessionBinding(entry, "claude-cli", { sessionId: "cli-session-2" });
+    expect(getCliSessionBinding(entry, "claude-cli")?.reseedReceipt).toBeUndefined();
   });
 
   it("force-reuses explicitly attached CLI sessions despite metadata drift", () => {
@@ -63,10 +195,21 @@ describe("cli-session helpers", () => {
         mcpConfigHash: "mcp-config-b",
         mcpResumeHash: "mcp-resume-b",
       }),
-    ).toEqual({ sessionId: "cli-session-1" });
+    ).toEqual({ mode: "reuse", sessionId: "cli-session-1" });
   });
 
-  it("keeps legacy bindings reusable until richer metadata is persisted", () => {
+  it("leaves the Claude-only field to Doctor instead of selecting it for resume", () => {
+    const entry: SessionEntry = {
+      sessionId: "local-session",
+      updatedAt: 1,
+      claudeCliSessionId: "Legacy-Conversation",
+    };
+
+    expect(getCliSessionBinding(entry, " CLAUDE-CLI ")).toBeUndefined();
+    expect(entry.claudeCliSessionId).toBe("Legacy-Conversation");
+  });
+
+  it("keeps provider-keyed bindings reusable until richer metadata is persisted", () => {
     const entry: SessionEntry = {
       sessionId: "openclaw-session",
       updatedAt: Date.now(),
@@ -78,11 +221,12 @@ describe("cli-session helpers", () => {
       resolveCliSessionReuse({
         binding: getCliSessionBinding(entry, "claude-cli"),
         authEpochVersion: 2,
+        cwdHash: hashCliSessionText("/work/repo"),
       }),
-    ).toEqual({ sessionId: "legacy-session" });
+    ).toEqual({ mode: "reuse", sessionId: "legacy-session" });
   });
 
-  it("invalidates legacy bindings when auth, prompt, or MCP state changes", () => {
+  it("invalidates legacy bindings on mechanical changes and resumes on content drift", () => {
     const entry: SessionEntry = {
       sessionId: "openclaw-session",
       updatedAt: Date.now(),
@@ -97,21 +241,25 @@ describe("cli-session helpers", () => {
         authEpochVersion: 2,
         authProfileId: "anthropic:work",
       }),
-    ).toEqual({ invalidatedReason: "auth-profile" });
+    ).toEqual({ mode: "invalidate", invalidatedReason: "auth-profile" });
     expect(
       resolveCliSessionReuse({
         binding,
         authEpochVersion: 2,
         extraSystemPromptHash: "prompt-hash",
       }),
-    ).toEqual({ invalidatedReason: "system-prompt" });
+    ).toEqual({
+      mode: "reuse-with-drift",
+      sessionId: "legacy-session",
+      drift: { reasons: ["system-prompt"] },
+    });
     expect(
       resolveCliSessionReuse({
         binding,
         authEpochVersion: 2,
         mcpConfigHash: "mcp-hash",
       }),
-    ).toEqual({ invalidatedReason: "mcp" });
+    ).toEqual({ mode: "invalidate", invalidatedReason: "mcp" });
   });
 
   it("invalidates reuse when stored auth profile or prompt shape changes", () => {
@@ -123,47 +271,241 @@ describe("cli-session helpers", () => {
       extraSystemPromptHash: "prompt-a",
       mcpConfigHash: "mcp-a",
     };
+    const current = {
+      binding,
+      authProfileId: "anthropic:work",
+      authEpoch: "auth-epoch-a",
+      authEpochVersion: 2,
+      extraSystemPromptHash: "prompt-a",
+      mcpConfigHash: "mcp-a",
+    };
 
+    expect(
+      resolveCliSessionReuse({
+        ...current,
+        authProfileId: "anthropic:personal",
+        authEpoch: "auth-epoch-b",
+      }),
+    ).toEqual({ mode: "invalidate", invalidatedReason: "auth-profile" });
+    expect(
+      resolveCliSessionReuse({
+        ...current,
+        authEpoch: "auth-epoch-b",
+      }),
+    ).toEqual({ mode: "invalidate", invalidatedReason: "auth-epoch" });
+    expect(
+      resolveCliSessionReuse({
+        ...current,
+        extraSystemPromptHash: "prompt-b",
+      }),
+    ).toEqual({
+      mode: "reuse-with-drift",
+      sessionId: "cli-session-1",
+      drift: { reasons: ["system-prompt"] },
+    });
+    expect(
+      resolveCliSessionReuse({
+        ...current,
+        promptToolNamesHash: "prompt-tools-b",
+      }),
+    ).toEqual({
+      mode: "reuse-with-drift",
+      sessionId: "cli-session-1",
+      drift: { reasons: ["prompt-tools"] },
+    });
+    expect(
+      resolveCliSessionReuse({
+        ...current,
+        mcpConfigHash: "mcp-b",
+      }),
+    ).toEqual({ mode: "invalidate", invalidatedReason: "mcp" });
+  });
+
+  it("validates a forked binding against the child's account before resuming it", () => {
+    const forked = forkCliSessionBindings(
+      {
+        cliSessionBindings: {
+          "claude-cli": {
+            sessionId: "native-parent",
+            resumeCheckpointId: "parent-checkpoint",
+            forceReuse: true,
+            authProfileId: "anthropic:work",
+            authEpoch: "auth-epoch-a",
+            authEpochVersion: 2,
+          },
+        },
+      },
+      () => true,
+    );
+    const binding = forked?.["claude-cli"];
+
+    // The fork marker never bypasses the fingerprint checks.
+    expect(binding).toEqual({
+      sessionId: "native-parent",
+      resumeCheckpointId: "parent-checkpoint",
+      forkNextResume: true,
+      authProfileId: "anthropic:work",
+      authEpoch: "auth-epoch-a",
+      authEpochVersion: 2,
+    });
     expect(
       resolveCliSessionReuse({
         binding,
         authProfileId: "anthropic:personal",
         authEpoch: "auth-epoch-b",
         authEpochVersion: 2,
-        extraSystemPromptHash: "prompt-a",
-        mcpConfigHash: "mcp-a",
       }),
-    ).toEqual({ invalidatedReason: "auth-profile" });
+    ).toEqual({ mode: "invalidate", invalidatedReason: "auth-profile" });
     expect(
       resolveCliSessionReuse({
         binding,
         authProfileId: "anthropic:work",
         authEpoch: "auth-epoch-b",
         authEpochVersion: 2,
-        extraSystemPromptHash: "prompt-a",
-        mcpConfigHash: "mcp-a",
       }),
-    ).toEqual({ invalidatedReason: "auth-epoch" });
+    ).toEqual({ mode: "invalidate", invalidatedReason: "auth-epoch" });
     expect(
       resolveCliSessionReuse({
         binding,
         authProfileId: "anthropic:work",
         authEpoch: "auth-epoch-a",
         authEpochVersion: 2,
-        extraSystemPromptHash: "prompt-b",
-        mcpConfigHash: "mcp-a",
       }),
-    ).toEqual({ invalidatedReason: "system-prompt" });
+    ).toMatchObject({ mode: "reuse", sessionId: "native-parent" });
+  });
+
+  it("keeps content-drift bindings reusable for queued turns until hashes refresh", () => {
+    const binding = {
+      sessionId: "cli-session-1",
+      authEpochVersion: 2,
+      extraSystemPromptHash: "prompt-a",
+      mcpConfigHash: "mcp-a",
+    };
+    const current = {
+      binding,
+      authEpochVersion: 2,
+      extraSystemPromptHash: "prompt-b",
+      mcpConfigHash: "mcp-a",
+    };
+
+    expect(resolveCliSessionReuse(current)).toEqual({
+      mode: "reuse-with-drift",
+      sessionId: "cli-session-1",
+      drift: { reasons: ["system-prompt"] },
+    });
+    expect(resolveCliSessionReuse(current)).toEqual({
+      mode: "reuse-with-drift",
+      sessionId: "cli-session-1",
+      drift: { reasons: ["system-prompt"] },
+    });
+    expect(
+      resolveCliSessionReuse({
+        ...current,
+        binding: { ...binding, extraSystemPromptHash: "prompt-b" },
+      }),
+    ).toEqual({ mode: "reuse", sessionId: "cli-session-1" });
+  });
+
+  it("invalidates reuse when message-tool prompt policy changes", () => {
+    const binding = {
+      sessionId: "cli-session-1",
+      authEpochVersion: 2,
+      messageToolPolicyHash: "message-policy-a",
+    };
+
     expect(
       resolveCliSessionReuse({
         binding,
-        authProfileId: "anthropic:work",
-        authEpoch: "auth-epoch-a",
         authEpochVersion: 2,
-        extraSystemPromptHash: "prompt-a",
-        mcpConfigHash: "mcp-b",
+        messageToolPolicyHash: "message-policy-b",
       }),
-    ).toEqual({ invalidatedReason: "mcp" });
+    ).toEqual({ mode: "invalidate", invalidatedReason: "message-policy" });
+    expect(
+      resolveCliSessionReuse({
+        binding,
+        authEpochVersion: 2,
+        messageToolPolicyHash: "message-policy-a",
+      }),
+    ).toEqual({ mode: "reuse", sessionId: "cli-session-1" });
+  });
+
+  it.each([
+    ["tool-only delivery", "dd1ac522a78b476a0d590b59b030bc2782506da8411e21ab0a5c973320e0754d"],
+    [
+      "explicit message targets",
+      "d454cef8c2f11b7bda35560680cb87dc78286ac7d9c3ba02f5ab832a5db65cda",
+    ],
+    ["unknown policy", "unknown-policy-fingerprint"],
+  ])("does not normalize %s into the implicit ordinary policy", (_name, policyHash) => {
+    for (const ordinaryHash of [undefined, ordinaryPolicyHash, explicitFalsePolicyHash]) {
+      for (const [stored, current] of [
+        [ordinaryHash, policyHash],
+        [policyHash, ordinaryHash],
+      ]) {
+        expect(
+          resolveCliSessionReuse({
+            binding: { sessionId: "cli-session-1", messageToolPolicyHash: stored },
+            authEpochVersion: 7,
+            messageToolPolicyHash: current,
+          }),
+        ).toEqual({ mode: "invalidate", invalidatedReason: "message-policy" });
+      }
+    }
+  });
+
+  it.each([
+    {
+      reason: "auth-profile",
+      current: { authProfileId: "other-profile", authEpoch: "other-epoch" },
+    },
+    { reason: "auth-epoch", current: { authEpoch: "other-epoch" } },
+    { reason: "cwd", current: { cwdHash: "other-workspace" } },
+    { reason: "mcp", current: { mcpConfigHash: "other-mcp-topology" } },
+  ])("keeps the $reason boundary strict when upgrading implicit policy", ({ reason, current }) => {
+    const compatible = {
+      authProfileId: "profile-a",
+      authEpoch: "epoch-a",
+      authEpochVersion: 7,
+      cwdHash: "workspace-a",
+      mcpConfigHash: "mcp-topology-a",
+    };
+    for (const storedPolicy of [undefined, ordinaryPolicyHash, explicitFalsePolicyHash]) {
+      expect(
+        resolveCliSessionReuse({
+          ...compatible,
+          binding: {
+            ...compatible,
+            sessionId: "cli-session-1",
+            messageToolPolicyHash: storedPolicy,
+          },
+          messageToolPolicyHash: ordinaryPolicyHash,
+          ...current,
+        }),
+      ).toEqual({ mode: "invalidate", invalidatedReason: reason });
+    }
+  });
+
+  it("invalidates reuse when the task cwd changes", () => {
+    const binding = {
+      sessionId: "cli-session-1",
+      authEpochVersion: 2,
+      cwdHash: hashCliSessionText("/work/repo-a"),
+    };
+
+    expect(
+      resolveCliSessionReuse({
+        binding,
+        authEpochVersion: 2,
+        cwdHash: hashCliSessionText("/work/repo-b"),
+      }),
+    ).toEqual({ mode: "invalidate", invalidatedReason: "cwd" });
+    expect(
+      resolveCliSessionReuse({
+        binding,
+        authEpochVersion: 2,
+        cwdHash: hashCliSessionText("/work/repo-a"),
+      }),
+    ).toEqual({ mode: "reuse", sessionId: "cli-session-1" });
   });
 
   it("reuses when auth profile ids rotate but the versioned auth epoch is stable", () => {
@@ -185,7 +527,7 @@ describe("cli-session helpers", () => {
         extraSystemPromptHash: "prompt-a",
         mcpConfigHash: "mcp-a",
       }),
-    ).toEqual({ sessionId: "cli-session-1" });
+    ).toEqual({ mode: "reuse", sessionId: "cli-session-1" });
   });
 
   it("accepts unversioned auth epochs for binding upgrades", () => {
@@ -206,7 +548,7 @@ describe("cli-session helpers", () => {
         extraSystemPromptHash: "prompt-a",
         mcpConfigHash: "mcp-a",
       }),
-    ).toEqual({ sessionId: "cli-session-1" });
+    ).toEqual({ mode: "reuse", sessionId: "cli-session-1" });
   });
 
   it("accepts older auth epoch versions for binding upgrades", () => {
@@ -228,7 +570,7 @@ describe("cli-session helpers", () => {
         extraSystemPromptHash: "prompt-a",
         mcpConfigHash: "mcp-a",
       }),
-    ).toEqual({ sessionId: "cli-session-1" });
+    ).toEqual({ mode: "reuse", sessionId: "cli-session-1" });
   });
 
   it("accepts v3 bindings without authEpoch as binding upgrades to v4", () => {
@@ -255,29 +597,7 @@ describe("cli-session helpers", () => {
         extraSystemPromptHash: "prompt-a",
         mcpConfigHash: "mcp-a",
       }),
-    ).toEqual({ sessionId: "cli-session-1" });
-  });
-
-  it("does not treat model changes as a session mismatch", () => {
-    const binding = {
-      sessionId: "cli-session-1",
-      authProfileId: "anthropic:work",
-      authEpoch: "auth-epoch-a",
-      authEpochVersion: 2,
-      extraSystemPromptHash: "prompt-a",
-      mcpConfigHash: "mcp-a",
-    };
-
-    expect(
-      resolveCliSessionReuse({
-        binding,
-        authProfileId: "anthropic:work",
-        authEpoch: "auth-epoch-a",
-        authEpochVersion: 2,
-        extraSystemPromptHash: "prompt-a",
-        mcpConfigHash: "mcp-a",
-      }),
-    ).toEqual({ sessionId: "cli-session-1" });
+    ).toEqual({ mode: "reuse", sessionId: "cli-session-1" });
   });
 
   it("prefers the stable MCP resume hash over the raw MCP config hash", () => {
@@ -301,7 +621,7 @@ describe("cli-session helpers", () => {
         mcpConfigHash: "mcp-config-b",
         mcpResumeHash: "mcp-resume-a",
       }),
-    ).toEqual({ sessionId: "cli-session-1" });
+    ).toEqual({ mode: "reuse", sessionId: "cli-session-1" });
     expect(
       resolveCliSessionReuse({
         binding,
@@ -312,7 +632,7 @@ describe("cli-session helpers", () => {
         mcpConfigHash: "mcp-config-a",
         mcpResumeHash: "mcp-resume-b",
       }),
-    ).toEqual({ invalidatedReason: "mcp" });
+    ).toEqual({ mode: "invalidate", invalidatedReason: "mcp" });
   });
 
   it("falls back to legacy MCP config hashes when stored resume hashes are absent", () => {
@@ -335,7 +655,7 @@ describe("cli-session helpers", () => {
         mcpConfigHash: "mcp-config-a",
         mcpResumeHash: "mcp-resume-a",
       }),
-    ).toEqual({ sessionId: "cli-session-1" });
+    ).toEqual({ mode: "reuse", sessionId: "cli-session-1" });
     expect(
       resolveCliSessionReuse({
         binding,
@@ -346,7 +666,7 @@ describe("cli-session helpers", () => {
         mcpConfigHash: "mcp-config-b",
         mcpResumeHash: "mcp-resume-a",
       }),
-    ).toEqual({ invalidatedReason: "mcp" });
+    ).toEqual({ mode: "invalidate", invalidatedReason: "mcp" });
   });
 
   it("clears provider-scoped and global CLI session state", () => {
@@ -371,4 +691,50 @@ describe("cli-session helpers", () => {
     expect(hashCliSessionText("  keep this  ")).toBe(hashCliSessionText("keep this"));
     expect(hashCliSessionText("")).toBeUndefined();
   });
+
+  it("preserves reusable bindings for aborts and clears only invalid sessions", () => {
+    const abort = Object.assign(new Error("aborted"), { name: "AbortError" });
+
+    const binding = { sessionId: "reused" };
+    const forkBinding = { sessionId: "fork-source", forkNextResume: true as const };
+
+    expect(shouldClearFailedCliSessionBinding({ error: abort, binding })).toBe(false);
+    expect(shouldClearFailedCliSessionBinding({ error: abort, binding: forkBinding })).toBe(false);
+    expect(
+      shouldClearFailedCliSessionBinding({
+        error: abort,
+        binding: { sessionId: "replacement" },
+        bindingReplacedDuringRun: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldClearFailedCliSessionBinding({
+        error: new FailoverError("session expired", {
+          reason: "session_expired",
+          provider: "claude-cli",
+          model: "claude-opus-4-8",
+        }),
+        binding,
+        hasNewGeneratedMediaTask: true,
+      }),
+    ).toBe(false);
+    expect(resolveCliSessionClearReason(abort)).toBe("AbortError");
+    expect(
+      shouldClearFailedCliSessionBinding({ error: new Error("provider failed"), binding }),
+    ).toBe(false);
+    expect(shouldClearFailedCliSessionBinding({ error: abort })).toBe(false);
+  });
+
+  it.each(["format", "auth", "session_expired"] as const)(
+    "only clears binding for a provider-expired session: %s",
+    (reason) => {
+      const error = new FailoverError("failover", { reason, provider: "claude-cli" });
+      const invalidatesSession = reason === "session_expired";
+
+      expect(isCliSessionInvalidatingFailoverReason(reason)).toBe(invalidatesSession);
+      expect(shouldClearFailedCliSessionBinding({ error, binding: { sessionId: "reused" } })).toBe(
+        invalidatesSession,
+      );
+    },
+  );
 });

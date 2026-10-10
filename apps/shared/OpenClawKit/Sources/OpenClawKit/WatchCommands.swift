@@ -7,7 +7,15 @@ public enum OpenClawWatchCommand: String, Codable, Sendable {
 
 public enum OpenClawWatchPayloadType: String, Codable, Sendable, Equatable {
     case notify = "watch.notify"
+    case directNodeSetup = "watch.node.setup"
     case reply = "watch.reply"
+    case appSnapshot = "watch.app.snapshot"
+    case appSnapshotRequest = "watch.app.snapshotRequest"
+    case appCommand = "watch.app.command"
+    case chatCompletion = "watch.chat.completion"
+    case chatDeliveryCommand = "watch.chat.delivery.command"
+    case chatDeliveryReceipt = "watch.chat.delivery.receipt"
+    case chatDeliveryReceiptAck = "watch.chat.delivery.receiptAck"
     case execApprovalPrompt = "watch.execApproval.prompt"
     case execApprovalResolve = "watch.execApproval.resolve"
     case execApprovalResolved = "watch.execApproval.resolved"
@@ -35,7 +43,7 @@ public enum OpenClawWatchExecApprovalCloseReason: String, Codable, Sendable, Equ
     case resolved
 }
 
-public struct OpenClawWatchAction: Codable, Sendable, Equatable {
+public struct OpenClawWatchAction: Codable, Sendable, Equatable, Identifiable {
     public var id: String
     public var label: String
     public var style: String?
@@ -49,29 +57,35 @@ public struct OpenClawWatchAction: Codable, Sendable, Equatable {
 
 public struct OpenClawWatchExecApprovalItem: Codable, Sendable, Equatable, Identifiable {
     public var id: String
+    public var gatewayStableID: String?
     public var commandText: String
     public var commandPreview: String?
+    public var warningText: String?
     public var host: String?
     public var nodeId: String?
     public var agentId: String?
-    public var expiresAtMs: Int?
+    public var expiresAtMs: Int64?
     public var allowedDecisions: [OpenClawWatchExecApprovalDecision]
     public var risk: OpenClawWatchRisk?
 
     public init(
         id: String,
+        gatewayStableID: String? = nil,
         commandText: String,
         commandPreview: String? = nil,
+        warningText: String? = nil,
         host: String? = nil,
         nodeId: String? = nil,
         agentId: String? = nil,
-        expiresAtMs: Int? = nil,
+        expiresAtMs: Int64? = nil,
         allowedDecisions: [OpenClawWatchExecApprovalDecision] = [],
         risk: OpenClawWatchRisk? = nil)
     {
         self.id = id
+        self.gatewayStableID = gatewayStableID
         self.commandText = commandText
         self.commandPreview = commandPreview
+        self.warningText = warningText
         self.host = host
         self.nodeId = nodeId
         self.agentId = agentId
@@ -84,79 +98,97 @@ public struct OpenClawWatchExecApprovalItem: Codable, Sendable, Equatable, Ident
 public struct OpenClawWatchExecApprovalPromptMessage: Codable, Sendable, Equatable {
     public var type: OpenClawWatchPayloadType
     public var approval: OpenClawWatchExecApprovalItem
-    public var sentAtMs: Int?
-    public var deliveryId: String?
-    public var resetResolvingState: Bool?
+    public var sentAtMs: Int64?
+    public var resetResolutionAttemptId: String?
 
     public init(
         approval: OpenClawWatchExecApprovalItem,
-        sentAtMs: Int? = nil,
-        deliveryId: String? = nil,
-        resetResolvingState: Bool? = nil)
+        sentAtMs: Int64? = nil,
+        resetResolutionAttemptId: String? = nil)
     {
         self.type = .execApprovalPrompt
         self.approval = approval
         self.sentAtMs = sentAtMs
-        self.deliveryId = deliveryId
-        self.resetResolvingState = resetResolvingState
+        self.resetResolutionAttemptId = resetResolutionAttemptId
     }
 }
 
 public struct OpenClawWatchExecApprovalResolveMessage: Codable, Sendable, Equatable {
     public var type: OpenClawWatchPayloadType
     public var approvalId: String
+    public var gatewayStableID: String?
     public var decision: OpenClawWatchExecApprovalDecision
     public var replyId: String
-    public var sentAtMs: Int?
+    public var sentAtMs: Int64?
 
     public init(
         approvalId: String,
+        gatewayStableID: String? = nil,
         decision: OpenClawWatchExecApprovalDecision,
         replyId: String,
-        sentAtMs: Int? = nil)
+        sentAtMs: Int64? = nil)
     {
         self.type = .execApprovalResolve
         self.approvalId = approvalId
+        self.gatewayStableID = gatewayStableID
         self.decision = decision
         self.replyId = replyId
         self.sentAtMs = sentAtMs
     }
 }
 
+public enum OpenClawWatchExecApprovalOutcome: String, Codable, Sendable, Equatable {
+    case allowedOnce
+    case allowedAlways
+    case denied
+}
+
 public struct OpenClawWatchExecApprovalResolvedMessage: Codable, Sendable, Equatable {
     public var type: OpenClawWatchPayloadType
     public var approvalId: String
+    public var gatewayStableID: String?
     public var decision: OpenClawWatchExecApprovalDecision?
-    public var resolvedAtMs: Int?
+    public var outcome: OpenClawWatchExecApprovalOutcome?
+    public var resolvedAtMs: Int64?
     public var source: String?
+    public var outcomeText: String?
 
     public init(
         approvalId: String,
+        gatewayStableID: String? = nil,
         decision: OpenClawWatchExecApprovalDecision? = nil,
-        resolvedAtMs: Int? = nil,
-        source: String? = nil)
+        outcome: OpenClawWatchExecApprovalOutcome? = nil,
+        resolvedAtMs: Int64? = nil,
+        source: String? = nil,
+        outcomeText: String? = nil)
     {
         self.type = .execApprovalResolved
         self.approvalId = approvalId
+        self.gatewayStableID = gatewayStableID
         self.decision = decision
+        self.outcome = outcome
         self.resolvedAtMs = resolvedAtMs
         self.source = source
+        self.outcomeText = outcomeText
     }
 }
 
 public struct OpenClawWatchExecApprovalExpiredMessage: Codable, Sendable, Equatable {
     public var type: OpenClawWatchPayloadType
     public var approvalId: String
+    public var gatewayStableID: String?
     public var reason: OpenClawWatchExecApprovalCloseReason
-    public var expiredAtMs: Int?
+    public var expiredAtMs: Int64?
 
     public init(
         approvalId: String,
+        gatewayStableID: String? = nil,
         reason: OpenClawWatchExecApprovalCloseReason,
-        expiredAtMs: Int? = nil)
+        expiredAtMs: Int64? = nil)
     {
         self.type = .execApprovalExpired
         self.approvalId = approvalId
+        self.gatewayStableID = gatewayStableID
         self.reason = reason
         self.expiredAtMs = expiredAtMs
     }
@@ -165,29 +197,461 @@ public struct OpenClawWatchExecApprovalExpiredMessage: Codable, Sendable, Equata
 public struct OpenClawWatchExecApprovalSnapshotMessage: Codable, Sendable, Equatable {
     public var type: OpenClawWatchPayloadType
     public var approvals: [OpenClawWatchExecApprovalItem]
-    public var sentAtMs: Int?
+    public var gatewayStableID: String?
+    public var sentAtMs: Int64?
     public var snapshotId: String?
+    public var requestId: String?
+    public var requestGatewayStableID: String?
 
     public init(
         approvals: [OpenClawWatchExecApprovalItem],
-        sentAtMs: Int? = nil,
-        snapshotId: String? = nil)
+        gatewayStableID: String? = nil,
+        sentAtMs: Int64? = nil,
+        snapshotId: String? = nil,
+        requestId: String? = nil,
+        requestGatewayStableID: String? = nil)
     {
         self.type = .execApprovalSnapshot
         self.approvals = approvals
+        self.gatewayStableID = gatewayStableID
         self.sentAtMs = sentAtMs
         self.snapshotId = snapshotId
+        self.requestId = requestId
+        self.requestGatewayStableID = requestGatewayStableID
+    }
+}
+
+public struct OpenClawWatchExecApprovalSnapshotRequestItem: Codable, Sendable, Equatable {
+    public var approvalId: String
+    public var activeResolutionAttemptId: String?
+
+    public init(
+        approvalId: String,
+        activeResolutionAttemptId: String? = nil)
+    {
+        self.approvalId = approvalId
+        self.activeResolutionAttemptId = activeResolutionAttemptId
     }
 }
 
 public struct OpenClawWatchExecApprovalSnapshotRequestMessage: Codable, Sendable, Equatable {
     public var type: OpenClawWatchPayloadType
     public var requestId: String
-    public var sentAtMs: Int?
+    public var sentAtMs: Int64?
+    public var gatewayStableID: String?
+    public var heldApprovals: [OpenClawWatchExecApprovalSnapshotRequestItem]
 
-    public init(requestId: String, sentAtMs: Int? = nil) {
+    public init(
+        requestId: String,
+        sentAtMs: Int64? = nil,
+        gatewayStableID: String? = nil,
+        heldApprovals: [OpenClawWatchExecApprovalSnapshotRequestItem] = [])
+    {
         self.type = .execApprovalSnapshotRequest
         self.requestId = requestId
+        self.sentAtMs = sentAtMs
+        self.gatewayStableID = gatewayStableID
+        self.heldApprovals = heldApprovals
+    }
+}
+
+public struct OpenClawWatchChatItem: Codable, Sendable, Equatable, Identifiable {
+    public var id: String
+    public var role: String
+    public var text: String
+    public var timestampMs: Int64?
+
+    public init(
+        id: String,
+        role: String,
+        text: String,
+        timestampMs: Int64? = nil)
+    {
+        self.id = id
+        self.role = role
+        self.text = text
+        self.timestampMs = timestampMs
+    }
+}
+
+public struct OpenClawWatchChatCompletionMessage: Codable, Sendable, Equatable {
+    public var type: OpenClawWatchPayloadType
+    public var commandId: String
+    public var replyText: String
+    public var sentAtMs: Int64?
+
+    public init(commandId: String, replyText: String, sentAtMs: Int64? = nil) {
+        self.type = .chatCompletion
+        self.commandId = commandId
+        self.replyText = replyText
+        self.sentAtMs = sentAtMs
+    }
+}
+
+public enum OpenClawWatchAppStatusCode: String, Codable, Sendable, Equatable {
+    case gatewayConnected
+    case gatewayConnecting
+    case gatewayReconnecting
+    case gatewayOffline
+    case gatewayProblem
+    case gatewayProblemWithRequestID
+    case talkOff
+    case talkReady
+    case talkConnecting
+    case talkListening
+    case talkThinking
+    case talkSpeaking
+    case talkOffline
+    case talkPermissionRequired
+    case talkRequestingApproval
+    case talkApprovalRequested
+    case talkAPIKeyMissing
+    case talkFailure
+    case chatConnectIPhone
+    case chatNoMessages
+    case chatUnavailable
+    case legacy
+}
+
+public struct OpenClawWatchAppStatus: Codable, Sendable, Equatable {
+    public var code: OpenClawWatchAppStatusCode
+    public var localizationKey: String?
+    public var arguments: [String]
+    public var verbatim: String?
+
+    public init(
+        code: OpenClawWatchAppStatusCode,
+        localizationKey: String? = nil,
+        arguments: [String] = [],
+        verbatim: String? = nil)
+    {
+        self.code = code
+        self.localizationKey = localizationKey
+        self.arguments = arguments
+        self.verbatim = verbatim
+    }
+
+    public static func decode<Key: CodingKey>(
+        from container: KeyedDecodingContainer<Key>,
+        forKey key: Key,
+        fallbackText: String?) -> OpenClawWatchAppStatus?
+    {
+        if let status = try? container.decode(Self.self, forKey: key) {
+            return status
+        }
+        guard container.contains(key), let fallbackText, !fallbackText.isEmpty else { return nil }
+        return Self(code: .legacy, verbatim: fallbackText)
+    }
+
+    public static func decodeLegacyGateway(
+        text: String?,
+        connected: Bool) -> OpenClawWatchAppStatus
+    {
+        if connected {
+            return OpenClawWatchAppStatus(code: .gatewayConnected)
+        }
+        guard let text, !text.isEmpty else {
+            return OpenClawWatchAppStatus(code: .gatewayOffline)
+        }
+        return OpenClawWatchAppStatus(code: .legacy, verbatim: text)
+    }
+
+    public static func decodeLegacyTalk(
+        text: String?,
+        enabled: Bool,
+        listening: Bool,
+        speaking: Bool) -> OpenClawWatchAppStatus
+    {
+        if speaking {
+            return OpenClawWatchAppStatus(code: .talkSpeaking)
+        }
+        if listening {
+            return OpenClawWatchAppStatus(code: .talkListening)
+        }
+        if !enabled {
+            return OpenClawWatchAppStatus(code: .talkOff)
+        }
+        guard let text, !text.isEmpty else {
+            return OpenClawWatchAppStatus(code: .talkReady)
+        }
+        return OpenClawWatchAppStatus(code: .legacy, verbatim: text)
+    }
+
+    public static func decodeLegacyChat(
+        code: String?,
+        text: String?) -> OpenClawWatchAppStatus?
+    {
+        let statusCode: OpenClawWatchAppStatusCode? = switch code {
+        case "connectIPhone":
+            OpenClawWatchAppStatusCode.chatConnectIPhone
+        case "noMessages":
+            OpenClawWatchAppStatusCode.chatNoMessages
+        case "unavailable":
+            OpenClawWatchAppStatusCode.chatUnavailable
+        default:
+            nil
+        }
+        if let statusCode {
+            return OpenClawWatchAppStatus(code: statusCode)
+        }
+        guard let text, !text.isEmpty else { return nil }
+        return OpenClawWatchAppStatus(code: .legacy, verbatim: text)
+    }
+}
+
+public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
+    public var type: OpenClawWatchPayloadType
+    public var gatewayStatus: OpenClawWatchAppStatus
+    // iPhone and Watch updates are staggered; keep encoding the shipped text fields
+    // until every supported Watch build decodes semantic statuses.
+    public var gatewayStatusText: String
+    public var gatewayConnected: Bool
+    public var agentName: String
+    public var agentAvatarURL: String?
+    public var agentAvatarText: String?
+    public var sessionKey: String
+    public var gatewayStableID: String?
+    public var talkStatus: OpenClawWatchAppStatus
+    public var talkStatusText: String
+    public var talkEnabled: Bool
+    public var talkListening: Bool
+    public var talkSpeaking: Bool
+    public var pendingApprovalCount: Int
+    public var chatItems: [OpenClawWatchChatItem]?
+    public var chatStatus: OpenClawWatchAppStatus?
+    public var chatStatusText: String?
+    public var sentAtMs: Int64?
+    public var snapshotId: String?
+    public var chatDeliveryContext: OpenClawWatchChatDeliveryContext?
+
+    public init(
+        gatewayStatus: OpenClawWatchAppStatus,
+        gatewayStatusText: String,
+        gatewayConnected: Bool,
+        agentName: String,
+        agentAvatarURL: String? = nil,
+        agentAvatarText: String? = nil,
+        sessionKey: String,
+        gatewayStableID: String? = nil,
+        talkStatus: OpenClawWatchAppStatus,
+        talkStatusText: String,
+        talkEnabled: Bool,
+        talkListening: Bool,
+        talkSpeaking: Bool,
+        pendingApprovalCount: Int,
+        chatItems: [OpenClawWatchChatItem]? = nil,
+        chatStatus: OpenClawWatchAppStatus? = nil,
+        chatStatusText: String? = nil,
+        sentAtMs: Int64? = nil,
+        snapshotId: String? = nil,
+        chatDeliveryContext: OpenClawWatchChatDeliveryContext? = nil)
+    {
+        self.type = .appSnapshot
+        self.gatewayStatus = gatewayStatus
+        self.gatewayStatusText = gatewayStatusText
+        self.gatewayConnected = gatewayConnected
+        self.agentName = agentName
+        self.agentAvatarURL = agentAvatarURL
+        self.agentAvatarText = agentAvatarText
+        self.sessionKey = sessionKey
+        self.gatewayStableID = gatewayStableID
+        self.talkStatus = talkStatus
+        self.talkStatusText = talkStatusText
+        self.talkEnabled = talkEnabled
+        self.talkListening = talkListening
+        self.talkSpeaking = talkSpeaking
+        self.pendingApprovalCount = pendingApprovalCount
+        self.chatItems = chatItems
+        self.chatStatus = chatStatus
+        self.chatStatusText = chatStatusText ?? chatStatus.map(Self.legacyText)
+        self.sentAtMs = sentAtMs
+        self.snapshotId = snapshotId
+        self.chatDeliveryContext = chatDeliveryContext
+    }
+
+    public init(
+        gatewayStatusText: String,
+        gatewayConnected: Bool,
+        agentName: String,
+        agentAvatarURL: String? = nil,
+        agentAvatarText: String? = nil,
+        sessionKey: String,
+        gatewayStableID: String? = nil,
+        talkStatusText: String,
+        talkEnabled: Bool,
+        talkListening: Bool,
+        talkSpeaking: Bool,
+        pendingApprovalCount: Int,
+        chatItems: [OpenClawWatchChatItem]? = nil,
+        chatStatusText: String? = nil,
+        sentAtMs: Int64? = nil,
+        snapshotId: String? = nil,
+        chatDeliveryContext: OpenClawWatchChatDeliveryContext? = nil)
+    {
+        // Preserve the shipped source API while producers migrate to semantic statuses.
+        self.init(
+            gatewayStatus: OpenClawWatchAppStatus.decodeLegacyGateway(
+                text: gatewayStatusText,
+                connected: gatewayConnected),
+            gatewayStatusText: gatewayStatusText,
+            gatewayConnected: gatewayConnected,
+            agentName: agentName,
+            agentAvatarURL: agentAvatarURL,
+            agentAvatarText: agentAvatarText,
+            sessionKey: sessionKey,
+            gatewayStableID: gatewayStableID,
+            talkStatus: OpenClawWatchAppStatus.decodeLegacyTalk(
+                text: talkStatusText,
+                enabled: talkEnabled,
+                listening: talkListening,
+                speaking: talkSpeaking),
+            talkStatusText: talkStatusText,
+            talkEnabled: talkEnabled,
+            talkListening: talkListening,
+            talkSpeaking: talkSpeaking,
+            pendingApprovalCount: pendingApprovalCount,
+            chatItems: chatItems,
+            chatStatus: OpenClawWatchAppStatus.decodeLegacyChat(code: nil, text: chatStatusText),
+            chatStatusText: chatStatusText,
+            sentAtMs: sentAtMs,
+            snapshotId: snapshotId,
+            chatDeliveryContext: chatDeliveryContext)
+    }
+
+    private enum LegacyCodingKeys: String, CodingKey {
+        case chatStatusCode
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.type = try container.decode(OpenClawWatchPayloadType.self, forKey: .type)
+        self.gatewayConnected = try container.decode(Bool.self, forKey: .gatewayConnected)
+        self.agentName = try container.decode(String.self, forKey: .agentName)
+        self.agentAvatarURL = try container.decodeIfPresent(String.self, forKey: .agentAvatarURL)
+        self.agentAvatarText = try container.decodeIfPresent(String.self, forKey: .agentAvatarText)
+        self.sessionKey = try container.decode(String.self, forKey: .sessionKey)
+        self.gatewayStableID = try container.decodeIfPresent(String.self, forKey: .gatewayStableID)
+        self.talkEnabled = try container.decode(Bool.self, forKey: .talkEnabled)
+        self.talkListening = try container.decode(Bool.self, forKey: .talkListening)
+        self.talkSpeaking = try container.decode(Bool.self, forKey: .talkSpeaking)
+        self.pendingApprovalCount = try container.decode(Int.self, forKey: .pendingApprovalCount)
+        self.chatItems = try container.decodeIfPresent([OpenClawWatchChatItem].self, forKey: .chatItems)
+        self.sentAtMs = try container.decodeIfPresent(Int64.self, forKey: .sentAtMs)
+        self.snapshotId = try container.decodeIfPresent(String.self, forKey: .snapshotId)
+        self.chatDeliveryContext = try container.decodeIfPresent(
+            OpenClawWatchChatDeliveryContext.self, forKey: .chatDeliveryContext)
+
+        let gatewayStatusText = try container.decodeIfPresent(String.self, forKey: .gatewayStatusText)
+        if let gatewayStatus = OpenClawWatchAppStatus.decode(
+            from: container,
+            forKey: .gatewayStatus,
+            fallbackText: gatewayStatusText)
+        {
+            self.gatewayStatus = gatewayStatus
+        } else {
+            self.gatewayStatus = OpenClawWatchAppStatus.decodeLegacyGateway(
+                text: gatewayStatusText,
+                connected: self.gatewayConnected)
+        }
+        self.gatewayStatusText = gatewayStatusText ?? Self.legacyText(for: self.gatewayStatus)
+        let talkStatusText = try container.decodeIfPresent(String.self, forKey: .talkStatusText)
+        if let talkStatus = OpenClawWatchAppStatus.decode(
+            from: container,
+            forKey: .talkStatus,
+            fallbackText: talkStatusText)
+        {
+            self.talkStatus = talkStatus
+        } else {
+            self.talkStatus = OpenClawWatchAppStatus.decodeLegacyTalk(
+                text: talkStatusText,
+                enabled: self.talkEnabled,
+                listening: self.talkListening,
+                speaking: self.talkSpeaking)
+        }
+        self.talkStatusText = talkStatusText ?? Self.legacyText(for: self.talkStatus)
+        let chatStatusText = try container.decodeIfPresent(String.self, forKey: .chatStatusText)
+        let chatStatusCode = try decoder.container(keyedBy: LegacyCodingKeys.self)
+            .decodeIfPresent(String.self, forKey: .chatStatusCode)
+        self.chatStatus = (try? container.decode(
+            OpenClawWatchAppStatus.self,
+            forKey: .chatStatus)) ?? OpenClawWatchAppStatus.decodeLegacyChat(
+            code: chatStatusCode,
+            text: chatStatusText)
+        self.chatStatusText = chatStatusText ?? self.chatStatus.map(Self.legacyText)
+    }
+
+    private static func legacyText(for status: OpenClawWatchAppStatus) -> String {
+        let defaultText = switch status.code {
+        case .gatewayConnected: "Connected"
+        case .gatewayConnecting: "Connecting…"
+        case .gatewayReconnecting: "Reconnecting…"
+        case .gatewayOffline, .talkOffline: "Offline"
+        case .gatewayProblem, .gatewayProblemWithRequestID: "Gateway unavailable"
+        case .talkOff: "Off"
+        case .talkReady: "Ready"
+        case .talkConnecting: "Connecting"
+        case .talkListening: "Listening"
+        case .talkThinking: "Thinking"
+        case .talkSpeaking: "Speaking"
+        case .talkPermissionRequired: "Gateway permission required"
+        case .talkRequestingApproval: "Requesting Talk approval"
+        case .talkApprovalRequested: "Approval requested"
+        case .talkAPIKeyMissing: "API key missing"
+        case .talkFailure: "Talk unavailable"
+        case .chatConnectIPhone: "Connect iPhone chat to read messages"
+        case .chatNoMessages: "No chat messages yet"
+        case .chatUnavailable: "Chat unavailable"
+        case .legacy: "Unavailable"
+        }
+        return [status.verbatim, status.localizationKey]
+            .compactMap(\.self)
+            .first { !$0.isEmpty } ?? defaultText
+    }
+}
+
+public struct OpenClawWatchAppSnapshotRequestMessage: Codable, Sendable, Equatable {
+    public var type: OpenClawWatchPayloadType
+    public var requestId: String
+    public var sentAtMs: Int64?
+
+    public init(requestId: String, sentAtMs: Int64? = nil) {
+        self.type = .appSnapshotRequest
+        self.requestId = requestId
+        self.sentAtMs = sentAtMs
+    }
+}
+
+public enum OpenClawWatchAppCommand: String, Codable, Sendable, Equatable {
+    case refresh
+    case openChat = "open-chat"
+    case sendChat = "send-chat"
+    case startTalk = "start-talk"
+    case stopTalk = "stop-talk"
+}
+
+public struct OpenClawWatchAppCommandMessage: Codable, Sendable, Equatable {
+    public var type: OpenClawWatchPayloadType
+    public var command: OpenClawWatchAppCommand
+    public var commandId: String
+    public var sessionKey: String?
+    public var gatewayStableID: String?
+    public var text: String?
+    public var sentAtMs: Int64?
+
+    public init(
+        command: OpenClawWatchAppCommand,
+        commandId: String,
+        sessionKey: String? = nil,
+        gatewayStableID: String? = nil,
+        text: String? = nil,
+        sentAtMs: Int64? = nil)
+    {
+        self.type = .appCommand
+        self.command = command
+        self.commandId = commandId
+        self.sessionKey = sessionKey
+        self.gatewayStableID = gatewayStableID
+        self.text = text
         self.sentAtMs = sentAtMs
     }
 }
@@ -220,9 +684,10 @@ public struct OpenClawWatchNotifyParams: Codable, Sendable, Equatable {
     public var priority: OpenClawNotificationPriority?
     public var promptId: String?
     public var sessionKey: String?
+    public var gatewayStableID: String?
     public var kind: String?
     public var details: String?
-    public var expiresAtMs: Int?
+    public var expiresAtMs: Int64?
     public var risk: OpenClawWatchRisk?
     public var actions: [OpenClawWatchAction]?
 
@@ -232,9 +697,10 @@ public struct OpenClawWatchNotifyParams: Codable, Sendable, Equatable {
         priority: OpenClawNotificationPriority? = nil,
         promptId: String? = nil,
         sessionKey: String? = nil,
+        gatewayStableID: String? = nil,
         kind: String? = nil,
         details: String? = nil,
-        expiresAtMs: Int? = nil,
+        expiresAtMs: Int64? = nil,
         risk: OpenClawWatchRisk? = nil,
         actions: [OpenClawWatchAction]? = nil)
     {
@@ -243,6 +709,7 @@ public struct OpenClawWatchNotifyParams: Codable, Sendable, Equatable {
         self.priority = priority
         self.promptId = promptId
         self.sessionKey = sessionKey
+        self.gatewayStableID = gatewayStableID
         self.kind = kind
         self.details = details
         self.expiresAtMs = expiresAtMs

@@ -1,34 +1,40 @@
-import { spawnSync } from "node:child_process";
+// Prompt Snapshots tests cover prompt snapshots script behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
-  createFormattedPromptSnapshotFiles,
-  deleteStalePromptSnapshotFiles,
+  materializeCodexDynamicToolSnapshot,
+  materializeCodexPromptSnapshot,
+  materializeCodexPromptSnapshotDelta,
 } from "../../scripts/generate-prompt-snapshots.js";
+import { deleteStalePromptSnapshotFiles } from "../../scripts/prompt-snapshot-files.js";
 import {
+  CODEX_MODEL_PROMPT_FIXTURE_DIR as SYNC_CODEX_MODEL_PROMPT_FIXTURE_DIR,
   defaultCatalogPathCandidates,
   findDefaultCatalogPath,
   renderCodexModelInstructions,
   runCodexModelPromptFixtureSync,
 } from "../../scripts/sync-codex-model-prompt-fixture.js";
-import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertions.js";
-import { toRepoRelativePath } from "../../src/test-utils/repo-files.js";
+import { getPluginModuleLoaderStats } from "../../src/plugins/plugin-module-loader-cache.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../src/state/openclaw-state-db-contract.js";
+import { resolveOpenClawStateSqlitePath } from "../../src/state/openclaw-state-db.paths.js";
+import {
+  restoreStateDirEnv,
+  setStateDirEnv,
+  snapshotStateDirEnv,
+} from "../../src/test-helpers/state-dir-env.js";
+import { createHappyPathPromptSnapshotFiles } from "../helpers/agents/happy-path-prompt-snapshots.js";
 import {
   CODEX_MODEL_PROMPT_FIXTURE_DIR,
+  CODEX_PROMPT_SNAPSHOT_BASE_SCENARIO,
+  CODEX_PROMPT_SNAPSHOT_FILES,
   CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
-} from "../helpers/agents/happy-path-prompt-snapshots.js";
+} from "../helpers/agents/prompt-snapshot-paths.js";
 
-function requireGeneratedSnapshot(
-  generated: Array<{ path: string; content: string }>,
-  fileName: string,
-): string {
-  const match = generated.find((file) => file.path.endsWith(fileName));
-  if (!match) {
-    throw new Error(`Missing generated prompt snapshot ${fileName}`);
-  }
-  return match.content;
+function readCommittedSnapshot(fileName: string): string {
+  return fs.readFileSync(path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, fileName), "utf8");
 }
 
 function renderedPromptSection(content: string, heading: string, nextHeading: string): string {
@@ -40,101 +46,151 @@ function renderedPromptSection(content: string, heading: string, nextHeading: st
   return content.slice(start, end);
 }
 
-function listCommittedPromptSnapshotFiles(): string[] {
-  const externalFiles = listExternalCommittedPromptSnapshotFiles();
-  if (externalFiles) {
-    return externalFiles;
-  }
-  return fs
-    .readdirSync(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR)
-    .filter((entry) => entry.endsWith(".md") || entry.endsWith(".json"))
-    .map((entry) => path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, entry))
-    .toSorted();
-}
-
-function listExternalCommittedPromptSnapshotFiles(): string[] | null {
-  return listGitCommittedPromptSnapshotFiles() ?? listFindCommittedPromptSnapshotFiles();
-}
-
-function listGitCommittedPromptSnapshotFiles(): string[] | null {
-  const result = spawnSync(
-    "git",
-    ["ls-files", "--", CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR],
-    {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      maxBuffer: 1024 * 1024,
-      stdio: ["ignore", "pipe", "ignore"],
-    },
-  );
-  if (result.status !== 0) {
-    return null;
-  }
-  return result.stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.endsWith(".md") || line.endsWith(".json"))
-    .toSorted();
-}
-
-function listFindCommittedPromptSnapshotFiles(): string[] | null {
-  const result = spawnSync(
-    "find",
-    [
-      path.join(process.cwd(), CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR),
-      "-maxdepth",
-      "1",
-      "-type",
-      "f",
-      "(",
-      "-name",
-      "*.md",
-      "-o",
-      "-name",
-      "*.json",
-      ")",
-    ],
-    {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      maxBuffer: 1024 * 1024,
-      stdio: ["ignore", "pipe", "ignore"],
-    },
-  );
-  if (result.status !== 0) {
-    return null;
-  }
-  return result.stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .map((filePath) => toRepoRelativePath(process.cwd(), filePath))
-    .toSorted();
-}
+let generated: Awaited<ReturnType<typeof createHappyPathPromptSnapshotFiles>>;
+let pluginLoaderCallsBefore: number;
+let pluginLoaderCallsAfter: number;
+let poisonedStateRoot: string | undefined;
+const stateDirEnv = snapshotStateDirEnv();
 
 describe("happy path prompt snapshots", () => {
-  let generatedSnapshots: Awaited<ReturnType<typeof createFormattedPromptSnapshotFiles>>;
-
   beforeAll(async () => {
-    generatedSnapshots = await createFormattedPromptSnapshotFiles();
+    poisonedStateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-prompt-snapshot-poison-"));
+    const databasePath = resolveOpenClawStateSqlitePath({
+      ...process.env,
+      OPENCLAW_STATE_DIR: poisonedStateRoot,
+    });
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    const database = new DatabaseSync(databasePath);
+    try {
+      database.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
+    } finally {
+      database.close();
+    }
+    setStateDirEnv(poisonedStateRoot);
+
+    // Optional media credentials must not widen or cold-load the pinned tool catalog.
+    vi.stubEnv("OPENAI_API_KEY", "test-prompt-snapshot-openai");
+    vi.stubEnv("ZAI_API_KEY", "test-prompt-snapshot-zai");
+    pluginLoaderCallsBefore = getPluginModuleLoaderStats().calls;
+    generated = await createHappyPathPromptSnapshotFiles();
+    pluginLoaderCallsAfter = getPluginModuleLoaderStats().calls;
   }, 300_000);
 
-  it("lists committed Codex prompt snapshot artifacts without scanning directories in-process", () => {
-    expectNoReaddirSyncDuring(() => {
-      const committed = listCommittedPromptSnapshotFiles();
-
-      expect(committed.length).toBeGreaterThan(0);
-      expect(committed.every((file) => file.endsWith(".md") || file.endsWith(".json"))).toBe(true);
-    });
+  afterAll(() => {
+    vi.unstubAllEnvs();
+    restoreStateDirEnv(stateDirEnv);
+    if (poisonedStateRoot) {
+      fs.rmSync(poisonedStateRoot, { recursive: true, force: true });
+    }
   });
 
-  it("matches the committed Codex prompt snapshot artifacts", async () => {
-    const expectedPaths = new Set(generatedSnapshots.map((file) => file.path));
-    for (const file of generatedSnapshots) {
-      expect(fs.readFileSync(file.path, "utf8"), file.path).toBe(file.content);
+  it("reconstructs complete Codex tool catalogs from readable full-tool overrides", async () => {
+    const scenarios = [
+      { name: "telegram-direct", replacements: [] },
+      { name: "discord-group", replacements: ["sessions_spawn"] },
+      { name: "heartbeat-turn", replacements: ["openclaw_direct"] },
+    ];
+
+    for (const { name, replacements } of scenarios) {
+      const fileName = `codex-dynamic-tools.${name}.json`;
+      const expected = generated.find((file) => path.basename(file.path) === fileName);
+      expect(expected, `missing complete generated tool catalog for ${name}`).toBeDefined();
+
+      const committed = JSON.parse(readCommittedSnapshot(fileName)) as
+        | unknown[]
+        | {
+            base: string;
+            replace: Record<string, { name: string; inputSchema?: unknown; tools?: unknown[] }>;
+          };
+      if (Array.isArray(committed)) {
+        expect(replacements).toEqual([]);
+      } else {
+        expect(committed.base).toBe("codex-dynamic-tools.telegram-direct.json");
+        expect(Object.keys(committed.replace)).toEqual(replacements);
+        for (const [toolName, tool] of Object.entries(committed.replace)) {
+          expect(tool.name).toBe(toolName);
+          expect(tool.inputSchema !== undefined || Array.isArray(tool.tools)).toBe(true);
+        }
+      }
+
+      const materialized = await materializeCodexDynamicToolSnapshot(name);
+      expect(JSON.parse(materialized)).toEqual(JSON.parse(expected!.content));
+
+      if (name === "telegram-direct") {
+        const specs = JSON.parse(expected!.content) as Array<{
+          type: "function" | "namespace";
+          name: string;
+          deferLoading?: boolean;
+          tools?: Array<{ name: string; deferLoading?: boolean }>;
+        }>;
+        const directFunctions = specs.filter((spec) => spec.type === "function");
+        const searchableNamespace = specs.find(
+          (spec) => spec.type === "namespace" && spec.name === "openclaw",
+        );
+        expect(directFunctions).toEqual(
+          expect.arrayContaining([expect.objectContaining({ name: "sessions_spawn" })]),
+        );
+        expect(directFunctions.find((spec) => spec.name === "sessions_spawn")).not.toHaveProperty(
+          "deferLoading",
+        );
+        expect(searchableNamespace?.tools).toEqual(
+          expect.arrayContaining(
+            ["session_status", "web_fetch", "web_search"].map((toolName) =>
+              expect.objectContaining({ name: toolName, deferLoading: true }),
+            ),
+          ),
+        );
+        expect(directFunctions.map((spec) => spec.name)).not.toEqual(
+          expect.arrayContaining(["session_status", "web_fetch", "web_search"]),
+        );
+      }
     }
-    const committed = listCommittedPromptSnapshotFiles();
-    expect(committed.toSorted()).toEqual([...expectedPaths].toSorted());
+  });
+
+  it("rejects invalid Codex dynamic-tool materialization scenarios", async () => {
+    await expect(materializeCodexDynamicToolSnapshot("../outside")).rejects.toThrow(
+      "Invalid Codex dynamic-tool snapshot scenario",
+    );
+  });
+
+  it("rejects unknown and noncanonical Codex prompt deltas", async () => {
+    await expect(materializeCodexPromptSnapshot("../outside")).rejects.toThrow(
+      "Unknown Codex prompt snapshot scenario",
+    );
+    const scenario = "discord-group";
+    const fileName = CODEX_PROMPT_SNAPSHOT_FILES[scenario];
+    const base = readCommittedSnapshot(
+      CODEX_PROMPT_SNAPSHOT_FILES[CODEX_PROMPT_SNAPSHOT_BASE_SCENARIO],
+    );
+    const delta = readCommittedSnapshot(`${fileName}.diff`);
+    const corruptions = [
+      `${delta}\ntrailing text\n`,
+      delta.replace("\n", "\r\n"),
+      `${delta}\n${delta}`,
+      delta.replace(fileName, "wrong.md"),
+      delta.replace(/sha256=[a-f0-9]{64}/u, `sha256=${"0".repeat(64)}`),
+    ];
+    for (const corrupt of corruptions) {
+      expect(() => materializeCodexPromptSnapshotDelta({ scenario, base, delta: corrupt })).toThrow(
+        /Codex prompt snapshot/u,
+      );
+    }
+  });
+
+  it("generates snapshots without jiti plugin-loader fallbacks", async () => {
+    // Perf contract for the check-prompt-snapshots CI lane: scenario channel
+    // plugins are preloaded through the ambient module graph. A jiti
+    // plugin-loader call here means a scenario channel (or another plugin
+    // surface) fell back to source re-transpilation, which re-evaluates the
+    // core graph and stalls the lane by minutes.
+    expect(generated.length).toBeGreaterThan(0);
+    const stats = getPluginModuleLoaderStats();
+    expect(
+      pluginLoaderCallsAfter - pluginLoaderCallsBefore,
+      `prompt snapshot generation hit the jiti plugin loader; targets: ${stats.topSourceTransformTargets
+        .map((entry) => entry.target)
+        .join(", ")}`,
+    ).toBe(0);
   });
 
   it("deletes stale generated snapshot artifacts", async () => {
@@ -142,87 +198,130 @@ describe("happy path prompt snapshots", () => {
     try {
       const snapshotDir = path.join(root, CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR);
       fs.mkdirSync(snapshotDir, { recursive: true });
-      const stalePath = path.join(
-        CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
-        "stale-snapshot.md",
+      const stalePaths = ["stale-snapshot.md", "stale-snapshot.md.patch"].map((fileName) =>
+        path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, fileName),
       );
-      fs.writeFileSync(path.join(root, stalePath), "stale\n");
+      const currentPath = path.join(
+        CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
+        "current-snapshot.md.diff",
+      );
+      for (const stalePath of stalePaths) {
+        fs.writeFileSync(path.join(root, stalePath), "stale\n");
+      }
+      fs.writeFileSync(path.join(root, currentPath), "current\n");
 
-      const deleted = await deleteStalePromptSnapshotFiles(root, [
-        { path: path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, "current.md") },
-      ]);
+      const deleted = await deleteStalePromptSnapshotFiles(root, [{ path: currentPath }]);
 
-      expect(deleted).toEqual([stalePath]);
-      expect(fs.existsSync(path.join(root, stalePath))).toBe(false);
+      expect(deleted.toSorted()).toEqual(stalePaths.toSorted());
+      for (const stalePath of stalePaths) {
+        expect(fs.existsSync(path.join(root, stalePath))).toBe(false);
+      }
+      expect(fs.readFileSync(path.join(root, currentPath), "utf8")).toBe("current\n");
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it("renders the Codex model-bound prompt layers", async () => {
-    const telegram = requireGeneratedSnapshot(
-      generatedSnapshots,
-      "telegram-direct-codex-message-tool.md",
+  it("renders every additional-context value with its native role before the current input", () => {
+    const telegram = generated.find(
+      (file) =>
+        path.basename(file.path) ===
+        CODEX_PROMPT_SNAPSHOT_FILES[CODEX_PROMPT_SNAPSHOT_BASE_SCENARIO],
+    )!.content;
+    const turnSection = renderedPromptSection(
+      telegram,
+      "## Turn Start Params",
+      "## Reconstructed Model-Bound Prompt Layers",
     );
-
-    expect(telegram).toContain("## Reconstructed Model-Bound Prompt Layers");
-    expect(telegram).toContain("### System: Codex Model Instructions (gpt-5.5, pragmatic)");
-    expect(telegram).toContain("You are Codex, a coding agent based on GPT-5.");
-    expect(telegram).toContain("### Developer: Codex Permission Instructions");
-    expect(telegram).toContain(
-      "Approval policy is currently never. Do not provide the `sandbox_permissions`",
+    const turn = JSON.parse(turnSection.match(/```json\n([\s\S]*?)\n```/u)![1]!) as {
+      additionalContext: Record<string, { kind: "application" | "untrusted"; value: string }>;
+    };
+    expect(Object.keys(turn.additionalContext)).toEqual(
+      expect.arrayContaining(["openclaw_current_sender", "openclaw_temporal_context"]),
     );
-    expect(telegram).toContain(
-      "### User: Codex Config Instructions (OpenClaw Workspace Bootstrap Context)",
+    let previous = telegram.indexOf("### Developer: Codex Collaboration Mode Instructions");
+    const userInput = telegram.indexOf("### User: Turn Input Text");
+    const contextTexts: string[] = [];
+    // Canonical ASCII keys in Codex's BTreeMap order, independent of the renderer's sorter.
+    const keyOrder = [
+      "openclaw_active_computer",
+      "openclaw_current_sender",
+      "openclaw_source_delivery",
+      "openclaw_temporal_context",
+    ].filter((key) => Object.hasOwn(turn.additionalContext, key));
+    expect(keyOrder).toHaveLength(Object.keys(turn.additionalContext).length);
+    for (const key of keyOrder) {
+      const entry = turn.additionalContext[key]!;
+      const role = entry.kind === "application" ? "Developer" : "User";
+      const tag = entry.kind === "application" ? key : `external_${key}`;
+      const index = telegram.indexOf(`### ${role}: OpenClaw Additional Context (${key})`);
+      expect(index).toBeGreaterThan(previous);
+      expect(index).toBeLessThan(userInput);
+      const text = `<${tag}>${entry.value}</${tag}>`;
+      expect(telegram.slice(index, userInput)).toContain(text);
+      contextTexts.push(text);
+      previous = index;
+    }
+    const statsSection = renderedPromptSection(
+      telegram,
+      "### Rough Text Token Estimates",
+      "### System: Codex Model Instructions",
     );
-    expect(telegram).toContain("<SOUL.md contents will be here>");
-    expect(telegram).toContain("<TOOLS.md contents will be here>");
-    expect(telegram).toContain("<HEARTBEAT.md contents will be here>");
-    expect(telegram).toContain("Codex loads AGENTS.md natively");
-    expect(telegram).toContain("### Tools: Dynamic Tool Catalog");
+    const stats = JSON.parse(statsSection.match(/```json\n([\s\S]*?)\n```/u)![1]!) as {
+      additionalContext: { chars: number };
+    };
+    expect(stats.additionalContext.chars).toBe(contextTexts.join("\n\n").length);
   });
 
-  it("keeps heartbeat guidance in heartbeat collaboration mode only", async () => {
-    const direct = requireGeneratedSnapshot(
-      generatedSnapshots,
-      "telegram-direct-codex-message-tool.md",
-    );
-    const group = requireGeneratedSnapshot(
-      generatedSnapshots,
-      "discord-group-codex-message-tool.md",
-    );
-    const heartbeat = requireGeneratedSnapshot(
-      generatedSnapshots,
-      "telegram-heartbeat-codex-tool.md",
-    );
-    const heartbeatPhrase = "Use heartbeats to create useful proactive progress";
-
-    expect(direct).toContain('"collaborationMode": {');
-    expect(direct).toContain('"developer_instructions": null');
-    expect(group).toContain('"collaborationMode": {');
-    expect(group).toContain('"developer_instructions": null');
-    expect(direct).not.toContain(heartbeatPhrase);
-    expect(group).not.toContain(heartbeatPhrase);
-
-    expect(heartbeat).toContain('"collaborationMode": {');
-    expect(heartbeat).toContain('"developer_instructions": "This is an OpenClaw heartbeat turn.');
-    const openClawRuntimeInstructions = renderedPromptSection(
-      heartbeat,
-      "### Developer: OpenClaw Runtime Instructions",
-      "### Developer: Codex Collaboration Mode Instructions",
-    );
-    const collaborationModeInstructions = renderedPromptSection(
-      heartbeat,
-      "### Developer: Codex Collaboration Mode Instructions",
-      "### User: Turn Input Text",
-    );
-
-    expect(openClawRuntimeInstructions).not.toContain(heartbeatPhrase);
-    expect(collaborationModeInstructions).toContain(heartbeatPhrase);
-    expect(collaborationModeInstructions.split(heartbeatPhrase)).toHaveLength(2);
+  it("keeps managed persona outside native collaboration and user-input history", async () => {
+    for (const scenario of ["telegram-direct", "discord-group", "heartbeat-turn"]) {
+      const snapshot = await materializeCodexPromptSnapshot(scenario);
+      const turnSection = renderedPromptSection(
+        snapshot,
+        "## Turn Start Params",
+        "## Reconstructed Model-Bound Prompt Layers",
+      );
+      const turn = JSON.parse(turnSection.match(/```json\n([\s\S]*?)\n```/u)![1]!) as {
+        collaborationMode: { settings: { developer_instructions: string | null } };
+      };
+      expect(turn.collaborationMode.settings.developer_instructions).toBeNull();
+      const parentLocal = renderedPromptSection(
+        snapshot,
+        "### Request Instructions: OpenClaw Parent-Local Context",
+        "### Developer: Codex Permission Instructions",
+      );
+      expect(parentLocal).toContain("## OpenClaw Agent Soul");
+      for (const name of ["SOUL.md", "IDENTITY.md", "USER.md"]) {
+        expect(parentLocal).toContain("<" + name + " contents will be here>");
+      }
+      const shared = renderedPromptSection(
+        snapshot,
+        "### Developer: OpenClaw Runtime Instructions",
+        "### Developer: Codex Collaboration Mode Instructions",
+      );
+      const collaboration = renderedPromptSection(
+        snapshot,
+        "### Developer: Codex Collaboration Mode Instructions",
+        "### User: Turn Input Text",
+      );
+      const input = renderedPromptSection(
+        snapshot,
+        "### User: Turn Input Text",
+        "### Tools: Dynamic Tool Catalog",
+      );
+      for (const nativeHistory of [shared, collaboration, input]) {
+        expect(nativeHistory).not.toContain("<SOUL.md contents will be here>");
+        expect(nativeHistory).not.toContain("<IDENTITY.md contents will be here>");
+        expect(nativeHistory).not.toContain("<USER.md contents will be here>");
+      }
+      expect(collaboration).not.toContain("HEARTBEAT.md");
+      expect(snapshot).not.toContain("Heartbeat = useful proactive progress");
+      expect(snapshot).not.toContain("This is an OpenClaw heartbeat turn.");
+      expect(snapshot).not.toContain("simulatedHeartbeatWorkspaceFile");
+    }
   });
-
   it("keeps the Codex model prompt fixture next to its source metadata", () => {
+    expect(SYNC_CODEX_MODEL_PROMPT_FIXTURE_DIR).toBe(CODEX_MODEL_PROMPT_FIXTURE_DIR);
     expect(
       fs.existsSync(path.join(CODEX_MODEL_PROMPT_FIXTURE_DIR, "gpt-5.5.pragmatic.instructions.md")),
     ).toBe(true);
@@ -301,6 +400,63 @@ describe("happy path prompt snapshots", () => {
 
       expect(result.status).toBe("skipped");
       expect(chunks.join("")).toContain("No Codex model catalog/cache found");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("writes Codex model prompt fixtures from an explicit catalog", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-catalog-write-"));
+    try {
+      const catalogPath = path.join(root, "models_cache.json");
+      const outputDir = path.join(root, "out");
+      fs.writeFileSync(
+        catalogPath,
+        JSON.stringify({
+          models: [
+            {
+              slug: "gpt-6-astra",
+              model_messages: {
+                instructions_template: "System\n{{ personality }}\nEnd",
+                instructions_variables: {
+                  personality_pragmatic: "Use terse engineering judgement.",
+                },
+              },
+            },
+          ],
+        }),
+      );
+
+      const result = await runCodexModelPromptFixtureSync([
+        "--catalog",
+        catalogPath,
+        "--source-label",
+        "<test-catalog>",
+        "--catalog-git-head",
+        "abc123",
+        "--out-dir",
+        outputDir,
+      ]);
+
+      expect(result.status).toBe("written");
+      expect(
+        fs.readFileSync(path.join(outputDir, "gpt-6-astra.pragmatic.instructions.md"), "utf8"),
+      ).toBe("System\nUse terse engineering judgement.\nEnd\n");
+      expect(
+        JSON.parse(
+          fs.readFileSync(path.join(outputDir, "gpt-6-astra.pragmatic.source.json"), "utf8"),
+        ),
+      ).toEqual({
+        model: "gpt-6-astra",
+        personality: "pragmatic",
+        source: {
+          catalogPath: "<test-catalog>",
+          catalogKind: "models_cache",
+          catalogGitHead: "abc123",
+          field:
+            "model_messages.instructions_template + model_messages.instructions_variables.personality_pragmatic",
+        },
+      });
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

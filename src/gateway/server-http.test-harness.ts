@@ -1,10 +1,18 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
+// Gateway HTTP test harness.
+// Builds fake requests/responses and dispatches them through Gateway HTTP servers.
+import { EventEmitter } from "node:events";
+import { IncomingMessage, type ServerResponse } from "node:http";
+import { Socket } from "node:net";
 import { expect, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
+import { loadGatewayConfigRevisionProjector } from "./config-revision-token.js";
 import { createGatewayRequest, createHooksConfig } from "./hooks-test-helpers.js";
-import { canonicalizePathVariant } from "./security-path.js";
 import { createGatewayHttpServer } from "./server-http.js";
+import { createGatewayRequestContext } from "./server-request-context.js";
+import { makeContextParams } from "./server-request-context.test-support.js";
 import { createHooksRequestHandler } from "./server/hooks-request-handler.js";
 import { withTempConfig } from "./test-temp-config.js";
 
@@ -27,6 +35,7 @@ export const AUTH_TOKEN: ResolvedGatewayAuth = {
   allowTailscale: false,
 };
 
+/** Build an IncomingMessage-like request for gateway HTTP handler tests. */
 export function createRequest(params: {
   path: string;
   authorization?: string;
@@ -45,6 +54,7 @@ export function createRequest(params: {
   });
 }
 
+/** Build a pre-authenticated hook POST request for hook HTTP tests. */
 export function createHookRequest(params?: {
   authorization?: string;
   remoteAddress?: string;
@@ -61,6 +71,7 @@ export function createHookRequest(params?: {
   });
 }
 
+/** Build a ServerResponse-like mock and body reader for handler tests. */
 export function createResponse(): {
   res: ServerResponse;
   setHeader: ReturnType<typeof vi.fn>;
@@ -69,11 +80,10 @@ export function createResponse(): {
 } {
   const setHeader = vi.fn();
   let body = "";
-  let resolveEnd!: () => void;
-  const ended = new Promise<void>((resolve) => {
-    resolveEnd = resolve;
-  });
+  const { promise: ended, resolve: resolveEnd } = createDeferred();
   const end = vi.fn((chunk?: unknown) => {
+    res.writableFinished = true;
+    res.emit("finish");
     if (typeof chunk === "string") {
       body = chunk;
       resolveEnd();
@@ -87,21 +97,25 @@ export function createResponse(): {
     body = JSON.stringify(chunk);
     resolveEnd();
   });
-  const res = {
+  const res = Object.assign(new EventEmitter(), {
+    req: new IncomingMessage(new Socket()),
+    writableFinished: false,
     headersSent: false,
     statusCode: 200,
     setHeader,
+    removeHeader: vi.fn(),
     end,
-  } as unknown as ServerResponse;
-  responseEndPromises.set(res, ended);
+  });
+  responseEndPromises.set(res as unknown as ServerResponse, ended);
   return {
-    res,
+    res: res as unknown as ServerResponse,
     setHeader,
     end,
     getBody: () => body,
   };
 }
 
+/** Emit one request through a gateway HTTP server and wait for response completion. */
 export async function dispatchRequest(
   server: GatewayHttpServer,
   req: IncomingMessage,
@@ -111,7 +125,10 @@ export async function dispatchRequest(
   server.emit("request", req, res);
   try {
     await Promise.race([
-      responseEndPromises.get(res) ?? new Promise((resolve) => setImmediate(resolve)),
+      responseEndPromises.get(res) ??
+        new Promise((resolve) => {
+          setImmediate(resolve);
+        }),
       new Promise((_, reject) => {
         timeout = setTimeout(() => {
           reject(new Error(`gateway test request timed out: ${req.method ?? "GET"} ${req.url}`));
@@ -140,6 +157,11 @@ export function createTestGatewayServer(options: {
   resolvedAuth: ResolvedGatewayAuth;
   overrides?: GatewayServerOptions;
 }): GatewayHttpServer {
+  const context = createGatewayRequestContext({
+    ...makeContextParams(),
+    configRevisionProjector: loadGatewayConfigRevisionProjector(),
+  });
+  context.resolveGatewayContext = () => context;
   return createGatewayHttpServer({
     clients: new Set(),
     controlUiEnabled: false,
@@ -147,6 +169,8 @@ export function createTestGatewayServer(options: {
     openAiChatCompletionsEnabled: false,
     openResponsesEnabled: false,
     handleHooksRequest: async () => false,
+    getGatewayRequestContext: context.resolveGatewayContext,
+    httpRequestLifetime: context,
     ...options.overrides,
     resolvedAuth: options.resolvedAuth,
   });
@@ -175,6 +199,7 @@ export async function sendRequest(
     method?: string;
     remoteAddress?: string;
     host?: string;
+    headers?: Record<string, string>;
   },
 ): Promise<ReturnType<typeof createResponse>> {
   const response = createResponse();
@@ -190,20 +215,6 @@ export function expectUnauthorizedResponse(
   expect(response.getBody(), label).toContain("Unauthorized");
 }
 
-export function createCanonicalizedChannelPluginHandler() {
-  return vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
-    const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
-    const canonicalPath = canonicalizePathVariant(pathname);
-    if (canonicalPath !== "/api/channels/nostr/default/profile") {
-      return false;
-    }
-    res.statusCode = 200;
-    res.setHeader("Content-Type", "application/json; charset=utf-8");
-    res.end(JSON.stringify({ ok: true, route: "channel-canonicalized" }));
-    return true;
-  });
-}
-
 export function createHooksHandler(
   params:
     | string
@@ -215,8 +226,10 @@ export function createHooksHandler(
       },
 ) {
   const options = typeof params === "string" ? { bindHost: params } : params;
+  const hooksConfig = createHooksConfig();
   return createHooksRequestHandler({
-    getHooksConfig: () => createHooksConfig(),
+    scheduler: createTestGatewayScheduler("fake-timers"),
+    getHooksConfig: () => hooksConfig,
     bindHost: options.bindHost ?? "127.0.0.1",
     port: 18789,
     logHooks: {
@@ -226,8 +239,14 @@ export function createHooksHandler(
       error: vi.fn(),
     } as unknown as ReturnType<typeof createSubsystemLogger>,
     getClientIpConfig: options.getClientIpConfig,
-    dispatchWakeHook: options.dispatchWakeHook ?? (() => {}),
-    dispatchAgentHook: options.dispatchAgentHook ?? (() => "run-1"),
+    dispatchWakeHook: options.dispatchWakeHook ?? (() => ({ eventOutcome: "queued" })),
+    dispatchAgentHook:
+      options.dispatchAgentHook ??
+      (() => ({
+        ok: true,
+        runId: "run-1",
+        completion: Promise.resolve({ status: "ok", replyDisposition: "empty" }),
+      })),
   });
 }
 
@@ -235,47 +254,6 @@ type RouteVariant = {
   label: string;
   path: string;
 };
-
-export const CANONICAL_UNAUTH_VARIANTS: RouteVariant[] = [
-  { label: "case-variant", path: "/API/channels/nostr/default/profile" },
-  { label: "encoded-slash", path: "/api/channels%2Fnostr%2Fdefault%2Fprofile" },
-  {
-    label: "encoded-slash-4x",
-    path: "/api%2525252fchannels%2525252fnostr%2525252fdefault%2525252fprofile",
-  },
-  { label: "encoded-segment", path: "/api/%63hannels/nostr/default/profile" },
-  { label: "dot-traversal-encoded-slash", path: "/api/foo/..%2fchannels/nostr/default/profile" },
-  {
-    label: "dot-traversal-encoded-dotdot-slash",
-    path: "/api/foo/%2e%2e%2fchannels/nostr/default/profile",
-  },
-  {
-    label: "dot-traversal-double-encoded",
-    path: "/api/foo/%252e%252e%252fchannels/nostr/default/profile",
-  },
-  { label: "duplicate-slashes", path: "/api/channels//nostr/default/profile" },
-  { label: "trailing-slash", path: "/api/channels/nostr/default/profile/" },
-  { label: "malformed-short-percent", path: "/api/channels%2" },
-  { label: "malformed-double-slash-short-percent", path: "/api//channels%2" },
-];
-
-export const CANONICAL_AUTH_VARIANTS: RouteVariant[] = [
-  { label: "auth-case-variant", path: "/API/channels/nostr/default/profile" },
-  {
-    label: "auth-encoded-slash-4x",
-    path: "/api%2525252fchannels%2525252fnostr%2525252fdefault%2525252fprofile",
-  },
-  { label: "auth-encoded-segment", path: "/api/%63hannels/nostr/default/profile" },
-  { label: "auth-duplicate-trailing-slash", path: "/api/channels//nostr/default/profile/" },
-  {
-    label: "auth-dot-traversal-encoded-slash",
-    path: "/api/foo/..%2fchannels/nostr/default/profile",
-  },
-  {
-    label: "auth-dot-traversal-double-encoded",
-    path: "/api/foo/%252e%252e%252fchannels/nostr/default/profile",
-  },
-];
 
 export function buildChannelPathFuzzCorpus(): RouteVariant[] {
   const variants = [
@@ -304,20 +282,5 @@ export async function expectUnauthorizedVariants(params: {
   for (const variant of params.variants) {
     const response = await sendRequest(params.server, { path: variant.path });
     expectUnauthorizedResponse(response, variant.label);
-  }
-}
-
-export async function expectAuthorizedVariants(params: {
-  server: GatewayHttpServer;
-  variants: RouteVariant[];
-  authorization: string;
-}) {
-  for (const variant of params.variants) {
-    const response = await sendRequest(params.server, {
-      path: variant.path,
-      authorization: params.authorization,
-    });
-    expect(response.res.statusCode, variant.label).toBe(200);
-    expect(response.getBody(), variant.label).toContain('"route":"channel-canonicalized"');
   }
 }

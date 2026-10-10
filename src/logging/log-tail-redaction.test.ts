@@ -1,34 +1,23 @@
+// Log tail redaction tests cover scrubbing sensitive data from tailed logs.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { readConfiguredLogTail } from "./log-tail.js";
 
-const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
-let tempDirs: string[] = [];
-
-async function makeTempDir(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-log-tail-redaction-"));
-  tempDirs.push(dir);
-  return dir;
-}
+const tempDirs = createTempDirTracker();
 
 afterEach(async () => {
-  if (originalConfigPath === undefined) {
-    delete process.env.OPENCLAW_CONFIG_PATH;
-  } else {
-    process.env.OPENCLAW_CONFIG_PATH = originalConfigPath;
-  }
   setLoggerOverride(null);
   resetLogger();
-  await Promise.all(tempDirs.map((dir) => fs.rm(dir, { force: true, recursive: true })));
-  tempDirs = [];
+  tempDirs.cleanup();
 });
 
 describe("readConfiguredLogTail redaction", () => {
   it("redacts raw auth headers before returning log lines", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-log-tail-redaction-");
     const logFile = path.join(dir, "openclaw.log");
     const configFile = path.join(dir, "openclaw.json");
     const basicSecret = "c2VjcmV0OnBhc3M=";
@@ -47,13 +36,15 @@ describe("readConfiguredLogTail redaction", () => {
         `X-OpenClaw-Token: ${openClawToken}`,
         `x-pomerium-jwt-assertion: ${pomeriumJwt}`,
         "normal diagnostic line",
-      ].join("\n"),
+      ].join("\n") + "\n",
       "utf8",
     );
-    process.env.OPENCLAW_CONFIG_PATH = configFile;
     setLoggerOverride({ file: logFile });
 
-    const payload = await readConfiguredLogTail({ limit: 10 });
+    const payload = await withEnvAsync(
+      { OPENCLAW_CONFIG_PATH: configFile },
+      async () => await readConfiguredLogTail({ limit: 10 }),
+    );
     const text = payload.lines.join("\n");
 
     expect(text).toContain("Authorization: Basic ***");

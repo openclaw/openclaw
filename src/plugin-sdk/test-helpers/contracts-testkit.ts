@@ -1,22 +1,27 @@
+/**
+ * Core plugin SDK contract-test fixture builders and registration helpers.
+ */
+import type { OpenClawConfig } from "../../config/config.js";
 import type { PluginRegistryParams } from "../../plugins/registry-types.js";
-import type { OpenClawPluginApi } from "../plugin-entry.js";
+import { createPluginRegistry, type PluginRecord } from "../../plugins/registry.js";
+import { createPluginRuntime } from "../../plugins/runtime/index.js";
+import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import {
-  createPluginRecord,
-  createPluginRegistry,
   registerProviderPlugins as registerProviders,
   requireRegisteredProvider as requireProvider,
-  type OpenClawConfig,
-  type PluginRecord,
-  type PluginRuntime,
-} from "../testing.js";
+} from "../../test-utils/plugin-registration.js";
+import type { OpenClawPluginApi } from "../plugin-entry.js";
 export { assertNoImportTimeSideEffects } from "./import-side-effects.js";
-import { uniqueSortedStrings } from "./string-utils.js";
 
-export { registerProviders, requireProvider, uniqueSortedStrings };
+export { registerProviders, requireProvider };
 
+/** Creates a minimal plugin registry fixture with quiet logger defaults. */
 export function createPluginRegistryFixture(
   config = {} as OpenClawConfig,
-  params: { hostServices?: PluginRegistryParams["hostServices"] } = {},
+  params: {
+    allowProcessHomeSessionCatalogs?: boolean;
+    hostServices?: PluginRegistryParams["hostServices"];
+  } = {},
 ) {
   return {
     config,
@@ -27,12 +32,14 @@ export function createPluginRegistryFixture(
         error() {},
         debug() {},
       },
-      runtime: {} as PluginRuntime,
+      runtime: createPluginRuntime(),
+      allowProcessHomeSessionCatalogs: params.allowProcessHomeSessionCatalogs ?? true,
       ...(params.hostServices ? { hostServices: params.hostServices } : {}),
     }),
   };
 }
 
+/** Registers one plugin record against a registry fixture and invokes its register hook. */
 export function registerTestPlugin(params: {
   registry: ReturnType<typeof createPluginRegistry>;
   config: OpenClawConfig;
@@ -43,10 +50,12 @@ export function registerTestPlugin(params: {
   params.register(
     params.registry.createApi(params.record, {
       config: params.config,
+      hookPolicy: params.config.plugins?.entries?.[params.record.id]?.hooks,
     }),
   );
 }
 
+/** Registers a virtual plugin record for tests that do not need a real package path. */
 export function registerVirtualTestPlugin(params: {
   registry: ReturnType<typeof createPluginRegistry>;
   config: OpenClawConfig;

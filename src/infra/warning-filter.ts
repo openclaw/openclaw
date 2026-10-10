@@ -2,7 +2,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 const warningFilterKey = Symbol.for("openclaw.warning-filter");
 
-export type ProcessWarning = {
+type ProcessWarning = {
   code?: string;
   name?: string;
   message?: string;
@@ -12,20 +12,13 @@ type ProcessWarningInstallState = {
   installed: boolean;
 };
 
-export function shouldIgnoreWarning(warning: ProcessWarning): boolean {
-  if (warning.code === "DEP0040" && warning.message?.includes("punycode")) {
-    return true;
-  }
-  if (warning.code === "DEP0060" && warning.message?.includes("util._extend")) {
-    return true;
-  }
-  if (
-    warning.name === "ExperimentalWarning" &&
-    warning.message?.includes("SQLite is an experimental feature")
-  ) {
-    return true;
-  }
-  return false;
+function shouldIgnoreWarning(warning: ProcessWarning): boolean {
+  return Boolean(
+    (warning.code === "DEP0040" && warning.message?.includes("punycode")) ||
+    (warning.code === "DEP0060" && warning.message?.includes("util._extend")) ||
+    (warning.name === "ExperimentalWarning" &&
+      warning.message?.includes("SQLite is an experimental feature")),
+  );
 }
 
 function normalizeWarningArgs(args: unknown[]): ProcessWarning {
@@ -64,6 +57,7 @@ function normalizeWarningArgs(args: unknown[]): ProcessWarning {
   return { name, code, message };
 }
 
+/** Installs the global process warning filter once for the current JS realm. */
 export function installProcessWarningFilter(): void {
   const state = resolveGlobalSingleton<ProcessWarningInstallState>(warningFilterKey, () => ({
     installed: false,
@@ -77,6 +71,8 @@ export function installProcessWarningFilter(): void {
     if (shouldIgnoreWarning(normalizeWarningArgs(args))) {
       return;
     }
+    // Node does not emit Error + options warnings through the same path after wrapping; preserve
+    // visibility by re-emitting a normalized warning object for unsuppressed cases.
     if (
       args[0] instanceof Error &&
       args[1] &&
@@ -92,7 +88,6 @@ export function installProcessWarningFilter(): void {
       return;
     }
     Reflect.apply(originalEmitWarning, process, args);
-    return;
   }) as typeof process.emitWarning;
 
   process.emitWarning = wrappedEmitWarning;

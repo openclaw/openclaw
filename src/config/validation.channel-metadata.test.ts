@@ -1,344 +1,326 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
   validateConfigObjectRawWithPlugins,
   validateConfigObjectWithPlugins,
 } from "./validation.js";
 
 const mockLoadPluginManifestRegistry = vi.hoisted(() =>
-  vi.fn(
-    (): PluginManifestRegistry => ({
-      diagnostics: [],
-      plugins: [],
-    }),
-  ),
+  vi.fn((): PluginManifestRegistry => ({ diagnostics: [], plugins: [] })),
 );
 
-function createTelegramSchemaRegistry(): PluginManifestRegistry {
-  return {
-    diagnostics: [],
-    plugins: [
-      createPluginManifestRecord({
-        id: "telegram",
-        channels: ["telegram"],
-        channelCatalogMeta: {
-          id: "telegram",
-          label: "Telegram",
-          blurb: "Telegram channel",
-        },
-        channelConfigs: {
-          telegram: {
-            schema: {
-              type: "object",
-              properties: {
-                dmPolicy: {
-                  type: "string",
-                  enum: ["pairing", "allowlist"],
-                  default: "pairing",
-                },
-              },
-              // validateConfigObjectWithPlugins starts from the core validated
-              // config, which can already include bundled runtime defaults for
-              // the channel. Keep this mock schema focused on the plugin-owned
-              // default under test instead of rejecting unrelated core fields.
-              additionalProperties: true,
-            },
-            uiHints: {},
-          },
-        },
-      }),
-    ],
-  };
-}
-
-function createPluginConfigSchemaRegistry(): PluginManifestRegistry {
-  return {
-    diagnostics: [],
-    plugins: [
-      createPluginManifestRecord({
-        id: "opik",
-        configSchema: {
-          type: "object",
-          properties: {
-            workspace: {
-              type: "string",
-              default: "default-workspace",
-            },
-          },
-          required: ["workspace"],
-          additionalProperties: true,
-        },
-      }),
-    ],
-  };
-}
-
-function createExternalFeishuSchemaRegistry(): PluginManifestRegistry {
-  return {
-    diagnostics: [],
-    plugins: [
-      createPluginManifestRecord({
-        id: "openclaw-lark",
-        origin: "global",
-        channels: ["feishu"],
-        channelConfigs: {
-          feishu: {
-            schema: {
-              type: "object",
-              properties: {
-                appId: { type: "string" },
-                appSecret: { type: "string" },
-                replyMode: { type: "string", enum: ["thread", "direct"] },
-                footer: { type: "string" },
-              },
-              required: ["appId", "appSecret"],
-              additionalProperties: false,
-            },
-            uiHints: {},
-          },
-        },
-      }),
-    ],
-  };
-}
-
-function createCompatPluginConfigSchemaRegistry(): PluginManifestRegistry {
-  return {
-    diagnostics: [],
-    plugins: [
-      createPluginManifestRecord({
-        id: "opik",
-        configSchema: {
-          type: "object",
-          additionalProperties: true,
-        },
-      }),
-      createPluginManifestRecord({
-        id: "brave-search",
-        contracts: {
-          webSearchProviders: ["brave"],
-        },
-      }),
-    ],
-  };
-}
-
-function createPluginManifestRecord(
+function plugin(
   overrides: Partial<PluginManifestRecord> & Pick<PluginManifestRecord, "id">,
 ): PluginManifestRecord {
   return {
     channels: [],
     cliBackends: [],
     hooks: [],
-    manifestPath: `/tmp/${overrides.id}/openclaw.plugin.json`,
     origin: "bundled",
     providers: [],
-    rootDir: `/tmp/${overrides.id}`,
     skills: [],
-    source: `/tmp/${overrides.id}/index.js`,
+    manifestPath: "/tmp/" + overrides.id + "/openclaw.plugin.json",
+    rootDir: "/tmp/" + overrides.id,
+    source: "/tmp/" + overrides.id + "/index.js",
     ...overrides,
   };
 }
 
+function registry(...plugins: PluginManifestRecord[]): PluginManifestRegistry {
+  return { diagnostics: [], plugins };
+}
+
+function accountSchema() {
+  return { type: "object", properties: { appId: { type: "string" } }, additionalProperties: false };
+}
+
+function feishuSchema(): Record<string, unknown> {
+  return {
+    type: "object",
+    properties: {
+      appId: { type: "string" },
+      appSecret: { type: "string" },
+      replyMode: { type: "string", enum: ["thread", "direct"] },
+      footer: { type: "string" },
+      accounts: { type: "object", additionalProperties: accountSchema() },
+    },
+    required: ["appId", "appSecret"],
+    additionalProperties: false,
+  };
+}
+
+function feishuPlugin(schema = feishuSchema(), id = "openclaw-lark") {
+  return plugin({
+    id,
+    origin: "global",
+    channels: ["feishu"],
+    channelConfigs: { feishu: { schema, uiHints: {} } },
+  });
+}
+
+function validateFeishu(config: Record<string, unknown>) {
+  return validateConfigObjectRawWithPlugins({
+    channels: { feishu: { appId: "app-id", appSecret: "secret", ...config } },
+  });
+}
+
+function pluginDefaultsRegistry() {
+  return registry(
+    plugin({
+      id: "opik",
+      configSchema: {
+        type: "object",
+        properties: { workspace: { type: "string", default: "default-workspace" } },
+        required: ["workspace"],
+        additionalProperties: true,
+      },
+    }),
+  );
+}
+
+const enabledOpik = { plugins: { allow: ["opik"], entries: { opik: { enabled: true } } } };
+
 vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: () => mockLoadPluginManifestRegistry(),
+  loadPluginManifestRegistryCore: () => mockLoadPluginManifestRegistry(),
   resolveManifestContractPluginIds: () => [],
 }));
-
 vi.mock("../plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry: () => mockLoadPluginManifestRegistry(),
 }));
-
-vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
-  loadPluginMetadataSnapshot: () => ({
-    manifestRegistry: mockLoadPluginManifestRegistry(),
-  }),
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
+  loadPluginMetadataSnapshot: () => ({ manifestRegistry: mockLoadPluginManifestRegistry() }),
+  resolvePluginMetadataSnapshot: () => ({ manifestRegistry: mockLoadPluginManifestRegistry() }),
 }));
-
 vi.mock("../plugins/doctor-contract-registry.js", () => ({
+  collectDoctorConfigRepairPluginIds: () => [],
   collectRelevantDoctorPluginIds: () => [],
   listPluginDoctorLegacyConfigRules: () => [],
   applyPluginDoctorCompatibilityMigrations: () => ({ next: null, changes: [] }),
 }));
-
 vi.mock("../secrets/target-registry-data.js", () => ({
+  buildSecretTargetRegistryFromPlugins: () => [],
   getCoreSecretTargetRegistry: () => [],
   getSecretTargetRegistry: () => [],
 }));
-
 vi.mock("../channels/plugins/legacy-config.js", () => ({
   collectChannelLegacyConfigRules: () => [],
 }));
-
 vi.mock("./zod-schema.js", () => ({
-  OpenClawSchema: {
-    safeParse: (raw: unknown) => ({ success: true, data: raw }),
-  },
+  OpenClawSchema: { safeParse: (raw: unknown) => ({ success: true, data: raw }) },
 }));
 
-function setupTelegramSchemaWithDefault() {
-  mockLoadPluginManifestRegistry.mockReturnValue(createTelegramSchemaRegistry());
-}
-
-function setupPluginSchemaWithRequiredDefault() {
-  mockLoadPluginManifestRegistry.mockReturnValue(createPluginConfigSchemaRegistry());
-}
-
 beforeEach(() => {
-  mockLoadPluginManifestRegistry.mockClear();
+  clearPluginMetadataLifecycleCaches();
+  mockLoadPluginManifestRegistry.mockReset().mockReturnValue(registry());
 });
 
-describe("validateConfigObjectWithPlugins channel metadata (applyDefaults: true)", () => {
-  it("applies bundled channel defaults from plugin-owned schema metadata", () => {
-    setupTelegramSchemaWithDefault();
-
-    const result = validateConfigObjectWithPlugins({
-      channels: {
-        telegram: {},
-      },
-    });
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.config.channels?.telegram?.dmPolicy).toBe("pairing");
-    }
-  });
-});
-
-describe("validateConfigObjectRawWithPlugins channel metadata", () => {
-  it("still injects channel AJV defaults even in raw mode — persistence safety is handled by io.ts", () => {
-    // Channel and plugin AJV validation always runs with applyDefaults: true
-    // (hardcoded) to avoid breaking schemas that mark defaulted fields as
-    // required.
-    //
-    // The actual protection against leaking these defaults to disk lives in
-    // writeConfigFile (io.ts), which uses persistCandidate (the pre-validation
-    // merge-patched value) instead of validated.config.
-    setupTelegramSchemaWithDefault();
-
-    const result = validateConfigObjectRawWithPlugins({
-      channels: {
-        telegram: {},
-      },
-    });
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      // AJV defaults ARE injected into validated.config even in raw mode.
-      // This is intentional — see comment above.
-      expect(result.config.channels?.telegram?.dmPolicy).toBe("pairing");
-    }
-  });
-
-  it("uses external plugin channel schemas for raw validation", () => {
-    mockLoadPluginManifestRegistry.mockReturnValue(createExternalFeishuSchemaRegistry());
-
-    const result = validateConfigObjectRawWithPlugins({
-      channels: {
-        feishu: {
-          appId: "app-id",
-          appSecret: "secret",
-          replyMode: "thread",
-          footer: "OpenClaw",
-        },
-      },
-    });
-
-    expect(result.ok).toBe(true);
-  });
-});
-
-describe("validateConfigObjectRawWithPlugins plugin config defaults", () => {
-  it("does not inject plugin AJV defaults in raw mode for plugin-owned config", () => {
-    setupPluginSchemaWithRequiredDefault();
-
-    const result = validateConfigObjectRawWithPlugins({
-      plugins: {
-        entries: {
-          opik: {
-            enabled: true,
+describe("config validation metadata", () => {
+  it("loads catalog defaults before materialization when plugin validation is skipped", () => {
+    const source = {
+      plugins: { enabled: true },
+      models: {
+        providers: {
+          fixture: {
+            baseUrl: "https://models.example/v1",
+            models: [{ id: "vision-model", name: "Authored model", contextWindow: 64_000 }],
           },
         },
       },
-    });
+    };
+    const original = structuredClone(source);
+    const cost = { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0.2 };
+    mockLoadPluginManifestRegistry.mockReturnValue(
+      registry(
+        plugin({
+          id: "fixture",
+          providers: ["fixture"],
+          modelCatalog: {
+            providers: {
+              fixture: {
+                models: [
+                  {
+                    id: "vision-model",
+                    name: "Catalog model",
+                    reasoning: true,
+                    input: ["text", "image"],
+                    cost,
+                    contextWindow: 128_000,
+                    maxTokens: 16_000,
+                  },
+                ],
+              },
+            },
+          },
+        }),
+      ),
+    );
+    const result = validateConfigObjectWithPlugins(source, { pluginValidation: "skip" });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.models?.providers?.fixture?.models).toMatchObject([
+        {
+          id: "vision-model",
+          name: "Authored model",
+          reasoning: true,
+          input: ["text", "image"],
+          cost,
+          contextWindow: 64_000,
+          maxTokens: 16_000,
+        },
+      ]);
+    }
+    expect(source).toEqual(original);
+    expect(mockLoadPluginManifestRegistry).toHaveBeenCalledOnce();
+  });
 
+  it("applies channel schema defaults even in raw mode", () => {
+    mockLoadPluginManifestRegistry.mockReturnValue(
+      registry(
+        plugin({
+          id: "telegram",
+          channels: ["telegram"],
+          channelCatalogMeta: { id: "telegram", label: "Telegram", blurb: "Telegram channel" },
+          channelConfigs: {
+            telegram: {
+              schema: {
+                type: "object",
+                properties: {
+                  dmPolicy: { type: "string", enum: ["pairing", "allowlist"], default: "pairing" },
+                },
+                additionalProperties: true,
+              },
+              uiHints: {},
+            },
+          },
+        }),
+      ),
+    );
+    const result = validateConfigObjectRawWithPlugins({ channels: { telegram: {} } });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.channels?.telegram?.dmPolicy).toBe("pairing");
+    }
+  });
+
+  it("normalizes composed local references without changing shared definitions", () => {
+    const account = accountSchema();
+    const schema = {
+      type: "object",
+      properties: {
+        appId: { type: "string" },
+        appSecret: { type: "string" },
+        accounts: {
+          type: "object",
+          properties: { default: { $ref: "#/$defs/Account" } },
+          patternProperties: { "^work-": { $ref: "#/$defs/Account" } },
+          additionalProperties: { $ref: "#/$defs/Account" },
+        },
+      },
+      required: ["appId", "appSecret"],
+      additionalProperties: false,
+    };
+    const root = { anyOf: [schema] };
+    const external = { $ref: "#/$defs/Root", $defs: { Root: root, Account: account } };
+    const original = structuredClone(external);
+    mockLoadPluginManifestRegistry.mockReturnValue(registry(feishuPlugin(external)));
+    const config = {
+      heartbeatVisibility: { showOk: true },
+      accounts: {
+        default: { heartbeatVisibility: { showOk: true } },
+        "work-qa": { heartbeatVisibility: { useIndicator: false } },
+        work: { heartbeatVisibility: { showAlerts: false } },
+      },
+    };
+    expect(validateFeishu(config).ok).toBe(true);
+    expect(
+      validateFeishu({
+        ...config,
+        accounts: { work: { heartbeatVisibility: { showAlerts: 0 } } },
+      }).ok,
+    ).toBe(false);
+    expect(external).toEqual(original);
+  });
+
+  it("replaces stale heartbeat declarations while preserving open custom fields", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        heartbeatVisibility: false,
+        accounts: { type: "object", additionalProperties: true },
+      },
+      additionalProperties: true,
+    };
+    mockLoadPluginManifestRegistry.mockReturnValue(registry(feishuPlugin(schema)));
+    const base = {
+      customChannelField: true,
+      heartbeatVisibility: { showOk: true },
+      accounts: { work: { customAccountField: true, heartbeatVisibility: { showAlerts: false } } },
+    };
+    expect(validateFeishu(base).ok).toBe(true);
+    for (const config of [
+      { ...base, heartbeatVisibility: "enabled" },
+      { ...base, accounts: { work: { heartbeatVisibility: { showOk: "yes" } } } },
+    ]) {
+      expect(validateFeishu(config).ok).toBe(false);
+    }
+  });
+
+  it("keeps schema ownership when closer root metadata shadows a later schema", () => {
+    mockLoadPluginManifestRegistry.mockReturnValue(
+      registry(
+        feishuPlugin(feishuSchema(), "openclaw" + String.fromCharCode(10, 27) + "[31m-lark"),
+        plugin({ id: "workspace-channel-labels", origin: "workspace", channels: ["feishu"] }),
+        feishuPlugin(
+          {
+            type: "object",
+            properties: { otherField: { type: "string" } },
+            additionalProperties: false,
+          },
+          "other-global-feishu",
+        ),
+      ),
+    );
+    const result = validateFeishu({ unsupportedField: true });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({
+          path: "channels.feishu",
+          message:
+            'invalid config for plugin openclaw-lark: must not have additional properties: "unsupportedField"',
+        }),
+      );
+      expect(result.issues.map((issue) => issue.message)).not.toContain(
+        'invalid config for plugin other-global-feishu: must not have additional properties: "unsupportedField"',
+      );
+    }
+  });
+
+  it("does not inject plugin config defaults in raw mode", () => {
+    mockLoadPluginManifestRegistry.mockReturnValue(pluginDefaultsRegistry());
+    const result = validateConfigObjectRawWithPlugins({
+      plugins: { entries: { opik: { enabled: true } } },
+    });
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.config.plugins?.entries?.opik?.config).toBeUndefined();
     }
   });
-});
 
-describe("validateConfigObjectWithPlugins bundled allowlist compatibility", () => {
-  it("reuses the manifest registry loaded for compatibility during plugin validation", () => {
-    mockLoadPluginManifestRegistry.mockReturnValue(createCompatPluginConfigSchemaRegistry());
-
-    const result = validateConfigObjectWithPlugins({
-      plugins: {
-        allow: ["opik"],
-        entries: {
-          opik: {
-            enabled: true,
-          },
-        },
-      },
-    });
-
+  it("loads a metadata snapshot once and applies its plugin defaults", () => {
+    const loadPluginMetadataSnapshot = vi.fn((_config: unknown) => ({
+      manifestRegistry: pluginDefaultsRegistry(),
+    }));
+    const result = validateConfigObjectWithPlugins(enabledOpik, { loadPluginMetadataSnapshot });
     expect(result.ok).toBe(true);
-    expect(mockLoadPluginManifestRegistry).toHaveBeenCalledOnce();
-  });
-
-  it("uses a provided plugin metadata snapshot during plugin validation", () => {
-    const result = validateConfigObjectWithPlugins(
-      {
-        plugins: {
-          allow: ["opik"],
-          entries: {
-            opik: {
-              enabled: true,
-            },
-          },
-        },
-      },
-      {
-        pluginMetadataSnapshot: {
-          manifestRegistry: createPluginConfigSchemaRegistry(),
-        },
-      },
-    );
-
-    expect(result.ok).toBe(true);
+    expect(loadPluginMetadataSnapshot).toHaveBeenCalledOnce();
     expect(mockLoadPluginManifestRegistry).not.toHaveBeenCalled();
     if (result.ok) {
       expect(result.config.plugins?.entries?.opik?.config).toEqual({
         workspace: "default-workspace",
       });
     }
-  });
-
-  it("loads a plugin metadata snapshot once during plugin validation", () => {
-    const loadPluginMetadataSnapshot = vi.fn((_config: unknown) => ({
-      manifestRegistry: createPluginConfigSchemaRegistry(),
-    }));
-
-    const result = validateConfigObjectWithPlugins(
-      {
-        plugins: {
-          allow: ["opik"],
-          entries: {
-            opik: {
-              enabled: true,
-            },
-          },
-        },
-      },
-      {
-        loadPluginMetadataSnapshot,
-      },
-    );
-
-    expect(result.ok).toBe(true);
-    expect(loadPluginMetadataSnapshot).toHaveBeenCalledOnce();
-    expect(mockLoadPluginManifestRegistry).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,5 @@
-import type { APIStringSelectComponent } from "discord-api-types/v10";
-import { ButtonStyle } from "discord-api-types/v10";
 import { logDebug, logError } from "openclaw/plugin-sdk/logging-core";
+import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import {
   Button,
   StringSelectMenu,
@@ -9,207 +8,128 @@ import {
   type StringSelectMenuInteraction,
 } from "../internal/discord.js";
 import {
-  AGENT_BUTTON_KEY,
-  AGENT_SELECT_KEY,
   ackComponentInteraction,
-  ensureAgentComponentInteractionAllowed,
-  parseAgentComponentData,
+  replyUnavailableComponentInteraction,
   resolveAgentComponentRoute,
-  resolveInteractionContextWithDmAuth,
-  type AgentComponentContext,
-} from "./agent-components-helpers.js";
-import { enqueueSystemEvent } from "./agent-components.deps.runtime.js";
+} from "./agent-components-context.js";
+import { parseAgentComponentData } from "./agent-components-data.js";
+import { resolveInteractionContextWithDmAuth } from "./agent-components-dm-auth.js";
+import { ensureAgentComponentInteractionAllowed } from "./agent-components-guild-auth.js";
+import { resolveAgentComponentPolicyContext } from "./agent-components-live-policy.js";
+import type {
+  AgentComponentContext,
+  AgentComponentMessageInteraction,
+} from "./agent-components.types.js";
 
-export class AgentComponentButton extends Button {
-  override label = AGENT_BUTTON_KEY;
-  customId = `${AGENT_BUTTON_KEY}:seed=1`;
-  override style = ButtonStyle.Primary;
-  private ctx: AgentComponentContext;
+const AGENT_BUTTON_KEY = "agent";
+const AGENT_SELECT_KEY = "agentsel";
 
-  constructor(ctx: AgentComponentContext) {
-    super();
-    this.ctx = ctx;
+type AgentSystemControlParams = {
+  ctx: AgentComponentContext;
+  interaction: AgentComponentMessageInteraction;
+  data: ComponentData;
+  kind: "button" | "select";
+  formatEventText: (params: { componentId: string; username: string; userId: string }) => string;
+};
+
+async function runAgentSystemControlInteraction(params: AgentSystemControlParams): Promise<void> {
+  const label = `agent ${params.kind}`;
+  const componentLabel = params.kind === "button" ? "button" : "select menu";
+  const parsed = parseAgentComponentData(params.data);
+  if (!parsed) {
+    logError(`${label}: failed to parse component data`);
+    await replyUnavailableComponentInteraction(
+      params.interaction,
+      `This ${componentLabel} is no longer valid.`,
+    );
+    return;
   }
 
-  override async run(interaction: ButtonInteraction, data: ComponentData): Promise<void> {
-    const parsed = parseAgentComponentData(data);
-    if (!parsed) {
-      logError("agent button: failed to parse component data");
-      try {
-        await interaction.reply({
-          content: "This button is no longer valid.",
-          ephemeral: true,
-        });
-      } catch {
-        // Interaction may have expired
-      }
-      return;
-    }
-
-    const { componentId } = parsed;
-
-    const interactionCtx = await resolveInteractionContextWithDmAuth({
-      ctx: this.ctx,
-      interaction,
-      label: "agent button",
-      componentLabel: "button",
-      defer: false,
-    });
-    if (!interactionCtx) {
-      return;
-    }
-    const {
-      channelId,
-      user,
-      username,
-      userId,
-      replyOpts,
-      rawGuildId,
-      isDirectMessage,
-      isGroupDm,
-      memberRoleIds,
-    } = interactionCtx;
-
-    const allowed = await ensureAgentComponentInteractionAllowed({
-      ctx: this.ctx,
-      interaction,
-      channelId,
-      rawGuildId,
-      memberRoleIds,
-      user,
-      replyOpts,
-      componentLabel: "button",
-      unauthorizedReply: "You are not authorized to use this button.",
-    });
-    if (!allowed) {
-      return;
-    }
-    const { parentId } = allowed;
-
-    const route = resolveAgentComponentRoute({
-      ctx: this.ctx,
-      rawGuildId,
-      memberRoleIds,
-      isDirectMessage,
-      isGroupDm,
-      userId,
-      channelId,
-      parentId,
-    });
-
-    const eventText = `[Discord component: ${componentId} clicked by ${username} (${userId})]`;
-
-    logDebug(`agent button: enqueuing event for channel ${channelId}: ${eventText}`);
-
-    enqueueSystemEvent(eventText, {
-      sessionKey: route.sessionKey,
-      contextKey: `discord:agent-button:${channelId}:${componentId}:${userId}`,
-      forceSenderIsOwnerFalse: true,
-      trusted: false,
-    });
-
-    await ackComponentInteraction({ interaction, replyOpts, label: "agent button" });
+  const { componentId } = parsed;
+  const ctx = await resolveAgentComponentPolicyContext(params);
+  if (!ctx) {
+    return;
   }
-}
+  const interactionCtx = await resolveInteractionContextWithDmAuth({
+    ctx,
+    interaction: params.interaction,
+    label,
+    componentLabel,
+  });
+  if (!interactionCtx) {
+    return;
+  }
+  const { channelId, username, userId } = interactionCtx;
 
-export class AgentSelectMenu extends StringSelectMenu {
-  customId = `${AGENT_SELECT_KEY}:seed=1`;
-  options: APIStringSelectComponent["options"] = [];
-  private ctx: AgentComponentContext;
-
-  constructor(ctx: AgentComponentContext) {
-    super();
-    this.ctx = ctx;
+  const allowed = await ensureAgentComponentInteractionAllowed({
+    ...params,
+    ...interactionCtx,
+    ctx,
+    componentLabel: params.kind,
+    unauthorizedReply: `You are not authorized to use this ${componentLabel}.`,
+  });
+  if (!allowed) {
+    return;
   }
 
-  override async run(interaction: StringSelectMenuInteraction, data: ComponentData): Promise<void> {
-    const parsed = parseAgentComponentData(data);
-    if (!parsed) {
-      logError("agent select: failed to parse component data");
-      try {
-        await interaction.reply({
-          content: "This select menu is no longer valid.",
-          ephemeral: true,
-        });
-      } catch {
-        // Interaction may have expired
-      }
-      return;
-    }
+  const route = resolveAgentComponentRoute({
+    ctx,
+    ...interactionCtx,
+    parentId: allowed.parentId,
+  });
 
-    const { componentId } = parsed;
+  const eventText = params.formatEventText({ componentId, username, userId });
+  logDebug(`${label}: enqueuing event for channel ${channelId}: ${eventText}`);
 
-    const interactionCtx = await resolveInteractionContextWithDmAuth({
-      ctx: this.ctx,
-      interaction,
-      label: "agent select",
-      componentLabel: "select menu",
-      defer: false,
-    });
-    if (!interactionCtx) {
-      return;
-    }
-    const {
-      channelId,
-      user,
-      username,
-      userId,
-      replyOpts,
-      rawGuildId,
-      isDirectMessage,
-      isGroupDm,
-      memberRoleIds,
-    } = interactionCtx;
+  enqueueRoutedSystemEvent(eventText, route, {
+    // The immutable interaction ID identifies one occurrence, preserving repeat clicks while
+    // deduplicating gateway replays of that same occurrence.
+    contextKey: `discord:agent-${params.kind}:${channelId}:${componentId}:${userId}:${params.interaction.id}`,
+  });
 
-    const allowed = await ensureAgentComponentInteractionAllowed({
-      ctx: this.ctx,
-      interaction,
-      channelId,
-      rawGuildId,
-      memberRoleIds,
-      user,
-      replyOpts,
-      componentLabel: "select",
-      unauthorizedReply: "You are not authorized to use this select menu.",
-    });
-    if (!allowed) {
-      return;
-    }
-    const { parentId } = allowed;
-
-    const values = interaction.values ?? [];
-    const valuesText = values.length > 0 ? ` (selected: ${values.join(", ")})` : "";
-
-    const route = resolveAgentComponentRoute({
-      ctx: this.ctx,
-      rawGuildId,
-      memberRoleIds,
-      isDirectMessage,
-      isGroupDm,
-      userId,
-      channelId,
-      parentId,
-    });
-
-    const eventText = `[Discord select menu: ${componentId} interacted by ${username} (${userId})${valuesText}]`;
-
-    logDebug(`agent select: enqueuing event for channel ${channelId}: ${eventText}`);
-
-    enqueueSystemEvent(eventText, {
-      sessionKey: route.sessionKey,
-      contextKey: `discord:agent-select:${channelId}:${componentId}:${userId}`,
-      forceSenderIsOwnerFalse: true,
-      trusted: false,
-    });
-
-    await ackComponentInteraction({ interaction, replyOpts, label: "agent select" });
-  }
+  await ackComponentInteraction({
+    interaction: params.interaction,
+    label,
+  });
 }
 
 export function createAgentComponentButton(ctx: AgentComponentContext): Button {
-  return new AgentComponentButton(ctx);
+  return new (class extends Button {
+    override label = AGENT_BUTTON_KEY;
+    customId = `${AGENT_BUTTON_KEY}:seed=1`;
+
+    override async run(interaction: ButtonInteraction, data: ComponentData): Promise<void> {
+      await runAgentSystemControlInteraction({
+        ctx,
+        interaction,
+        data,
+        kind: "button",
+        formatEventText: ({ componentId, username, userId }) =>
+          `[Discord component: ${componentId} clicked by ${username} (${userId})]`,
+      });
+    }
+  })();
 }
 
 export function createAgentSelectMenu(ctx: AgentComponentContext): StringSelectMenu {
-  return new AgentSelectMenu(ctx);
+  return new (class extends StringSelectMenu {
+    customId = `${AGENT_SELECT_KEY}:seed=1`;
+    options = [];
+
+    override async run(
+      interaction: StringSelectMenuInteraction,
+      data: ComponentData,
+    ): Promise<void> {
+      const values = interaction.values ?? [];
+      const valuesText = values.length > 0 ? ` (selected: ${values.join(", ")})` : "";
+      await runAgentSystemControlInteraction({
+        ctx,
+        interaction,
+        data,
+        kind: "select",
+        formatEventText: ({ componentId, username, userId }) =>
+          `[Discord select menu: ${componentId} interacted by ${username} (${userId})${valuesText}]`,
+      });
+    }
+  })();
 }

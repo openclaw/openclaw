@@ -1,16 +1,13 @@
+// Tests root logger formatting and file output behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { theme } from "../packages/terminal-core/src/theme.js";
 import { isVerbose, isYes, logVerbose, setVerbose, setYes } from "./globals.js";
-import { logDebug, logError, logInfo, logSuccess, logWarn } from "./logger.js";
-import {
-  resetLogger,
-  setLoggerOverride,
-  stripRedundantSubsystemPrefixForConsole,
-} from "./logging.js";
+import { logDebug, logError, logInfo, logWarn } from "./logger.js";
+import { flushLogger, resetLogger, setLoggerOverride } from "./logging/logger.js";
 import type { RuntimeEnv } from "./runtime.js";
-import { theme } from "./terminal/theme.js";
-import { withTempDirSync } from "./test-helpers/temp-dir.js";
+import { withTestDir } from "./test-helpers/temp-dir.js";
 
 describe("logger helpers", () => {
   afterEach(() => {
@@ -27,51 +24,40 @@ describe("logger helpers", () => {
 
     logInfo("info", runtime);
     logWarn("warn", runtime);
-    logSuccess("ok", runtime);
     logError("bad", runtime);
 
-    expect(log).toHaveBeenCalledTimes(3);
+    expect(log).toHaveBeenCalledTimes(2);
     expect(error).toHaveBeenCalledTimes(1);
   });
 
   it("only logs debug when verbose is enabled", () => {
-    const logVerbose = vi.spyOn(console, "log").mockImplementation(() => {});
+    const logVerboseLocal = vi.spyOn(console, "log").mockImplementation(() => {});
     setVerbose(false);
     logDebug("quiet");
-    expect(logVerbose).not.toHaveBeenCalled();
+    expect(logVerboseLocal).not.toHaveBeenCalled();
 
     setVerbose(true);
-    logVerbose.mockClear();
+    logVerboseLocal.mockClear();
     logDebug("loud");
-    expect(logVerbose).toHaveBeenCalled();
-    logVerbose.mockRestore();
+    expect(logVerboseLocal).toHaveBeenCalled();
+    logVerboseLocal.mockRestore();
   });
 
-  it("writes to configured log file at configured level", () => {
-    withTempDirSync({ prefix: "openclaw-log-test-" }, (dir) => {
-      const logPath = path.join(dir, "openclaw.log");
-      setLoggerOverride({ level: "info", file: logPath });
-      fs.writeFileSync(logPath, "");
-      logInfo("hello");
-      logDebug("debug-only"); // may be filtered depending on level mapping
-      const content = fs.readFileSync(logPath, "utf-8");
-      expect(content.length).toBeGreaterThan(0);
-    });
-  });
-
-  it("filters messages below configured level", () => {
-    withTempDirSync({ prefix: "openclaw-log-test-" }, (dir) => {
+  it("filters messages below configured level", async () => {
+    await withTestDir({ prefix: "openclaw-log-test-" }, async (dir) => {
       const logPath = path.join(dir, "openclaw.log");
       setLoggerOverride({ level: "warn", file: logPath });
       logInfo("info-only");
       logWarn("warn-only");
+      // The file transport appends asynchronously; drain it before reading.
+      await flushLogger();
       const content = fs.readFileSync(logPath, "utf-8");
       expect(content).toContain("warn-only");
     });
   });
 
-  it("uses daily rolling log files and prunes old ones", () => {
-    withTempDirSync({ prefix: "openclaw-log-test-" }, (dir) => {
+  it("uses daily rolling log files and prunes old ones", async () => {
+    await withTestDir({ prefix: "openclaw-log-test-" }, async (dir) => {
       resetLogger();
       const today = localDateString(new Date());
       const todayPath = path.join(dir, `openclaw-${today}.log`);
@@ -83,6 +69,8 @@ describe("logger helpers", () => {
       fs.utimesSync(oldPath, new Date(0), new Date(0));
 
       logInfo("roll-me");
+      // The file transport appends asynchronously; drain it before reading.
+      await flushLogger();
 
       expect(fs.existsSync(todayPath)).toBe(true);
       expect(fs.readFileSync(todayPath, "utf-8")).toContain("roll-me");
@@ -115,27 +103,6 @@ describe("globals", () => {
     expect(isYes()).toBe(true);
     setYes(false);
     expect(isYes()).toBe(false);
-  });
-});
-
-describe("stripRedundantSubsystemPrefixForConsole", () => {
-  it.each([
-    { input: "discord: hello", subsystem: "discord", expected: "hello" },
-    { input: "WhatsApp: hello", subsystem: "whatsapp", expected: "hello" },
-    { input: "discord gateway: closed", subsystem: "discord", expected: "gateway: closed" },
-    {
-      input: "[discord] connection stalled",
-      subsystem: "discord",
-      expected: "connection stalled",
-    },
-  ] as const)("drops known subsystem prefix for $input", ({ input, subsystem, expected }) => {
-    expect(stripRedundantSubsystemPrefixForConsole(input, subsystem)).toBe(expected);
-  });
-
-  it("keeps messages that do not start with the subsystem", () => {
-    expect(stripRedundantSubsystemPrefixForConsole("discordant: hello", "discord")).toBe(
-      "discordant: hello",
-    );
   });
 });
 

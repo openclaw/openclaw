@@ -1,3 +1,7 @@
+/**
+ * Method allowlist for Admin HTTP RPC. Only methods listed here can cross the
+ * trusted operator HTTP surface.
+ */
 const ADMIN_HTTP_RPC_ALLOWED_METHOD_GROUPS = {
   gateway: [
     "health",
@@ -6,6 +10,9 @@ const ADMIN_HTTP_RPC_ALLOWED_METHOD_GROUPS = {
     "usage.status",
     "usage.cost",
     "gateway.restart.request",
+    "gateway.suspend.prepare",
+    "gateway.suspend.status",
+    "gateway.suspend.resume",
   ],
   discovery: ["commands.list"],
   config: [
@@ -17,6 +24,7 @@ const ADMIN_HTTP_RPC_ALLOWED_METHOD_GROUPS = {
     "config.apply",
   ],
   channels: ["channels.status", "channels.start", "channels.stop", "channels.logout"],
+  web: ["web.login.start", "web.login.wait"],
   models: ["models.list", "models.authStatus"],
   agents: ["agents.list", "agents.create", "agents.update", "agents.delete"],
   approvals: [
@@ -45,7 +53,6 @@ const ADMIN_HTTP_RPC_ALLOWED_METHOD_GROUPS = {
     "node.pair.remove",
     "node.rename",
   ],
-  tasks: ["tasks.list", "tasks.get", "tasks.cancel"],
   diagnostics: ["doctor.memory.status", "update.status"],
 } as const satisfies Record<string, readonly string[]>;
 

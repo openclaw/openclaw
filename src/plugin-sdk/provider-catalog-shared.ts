@@ -1,174 +1,220 @@
-// Shared provider catalog helpers for provider plugins.
-//
-// Keep provider-owned exports out of this subpath so plugin loaders can import it
-// without recursing through provider-specific facades.
-
 import { createHash } from "node:crypto";
+import { addAbortListener } from "node:events";
+import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider-id";
+import {
+  isFutureDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "../../packages/normalization-core/src/number-coercion.js";
 import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
-import { findNormalizedProviderKey } from "../agents/provider-id.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeModelCatalog } from "../model-catalog/normalize.js";
-import type {
-  ModelCatalogCost,
-  ModelCatalogModel,
-  ModelCatalogTieredCost,
-} from "../model-catalog/types.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
+import {
+  consumeLiveCatalogRefresh,
+  recordLiveCatalogExpiry,
+} from "../plugins/provider-catalog-expiry.js";
+import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import type { ModelProviderConfig } from "./provider-model-shared.js";
 
-export type { ProviderCatalogContext, ProviderCatalogResult } from "../plugins/types.js";
+export { normalizeOpenRouterModelReasoning } from "@openclaw/model-catalog-core/model-catalog-normalize";
+
+export type {
+  ProviderCatalogContext,
+  ProviderCatalogOutcome,
+  ProviderCatalogResult,
+} from "../plugins/types.js";
+
+export { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 
 export {
-  buildPairedProviderApiKeyCatalog,
+  buildManifestModelProviderConfig,
+  buildManifestProviderCatalogFamily,
   buildSingleProviderApiKeyCatalog,
   findCatalogTemplate,
+  readManifestProviderDefaultModelRef,
+  resolveFirstProviderCatalogAuth,
+  type ManifestProviderCatalogEntry,
 } from "../plugins/provider-catalog.js";
 
+/**
+ * Normalized model row read from user config for provider catalog augmentation.
+ */
 export type ConfiguredProviderCatalogEntry = {
+  /** Normalized model id as exposed through provider catalog discovery. */
   id: string;
+  /** Display name from config, falling back to the normalized id. */
   name: string;
+  /** Published provider id attached to this catalog entry. */
   provider: string;
+  /** Optional context window copied from the configured model row when positive. */
   contextWindow?: number;
+  /** Whether the configured model advertises reasoning support. */
   reasoning?: boolean;
+  /** Runtime input modalities retained from the configured model row. */
   input?: Array<"text" | "image" | "audio" | "video" | "document">;
 };
 
 type LiveCatalogCacheEntry<T> = {
   expiresAt: number;
   value: Promise<T>;
+  controller: AbortController;
+  consumers: number;
+  settled: boolean;
+  retained: boolean;
+  waiters?: Set<Deferred<T>>;
 };
 
-const liveCatalogCache = new Map<string, LiveCatalogCacheEntry<unknown>>();
+const LIVE_CATALOG_CACHE_MAX_ENTRIES = 100;
+const liveCatalogCache = new Map<string, unknown>();
+
+async function consumeLiveCatalog<T>(entry: LiveCatalogCacheEntry<T>, signal?: AbortSignal) {
+  signal?.throwIfAborted();
+  entry.controller.signal.throwIfAborted();
+  entry.consumers += 1;
+  const pending = signal && !entry.settled ? createDeferredCore<T>() : undefined;
+  if (pending) {
+    (entry.waiters ??= new Set()).add(pending);
+  }
+  let released = false;
+  const release = () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    if (pending) {
+      entry.waiters?.delete(pending);
+    }
+    entry.consumers -= 1;
+    // A shared load belongs to all its callers, never the first caller's deadline.
+    if (!entry.settled && entry.consumers === 0) {
+      entry.controller.abort(signal?.reason);
+    }
+  };
+  let listener: Disposable | undefined;
+  try {
+    if (signal && pending) {
+      // Match throwIfAborted(): cancellation preserves arbitrary caller-owned reasons.
+      listener = addAbortListener(signal, () => {
+        // Release before a same-turn completion can retain an abandoned load.
+        release();
+        pending.reject(signal.reason);
+      });
+    }
+    // Promise.race keeps a canceled caller's reactions until the shared load settles.
+    // Removable waiters release its reason and async context while other callers wait.
+    const value = await (pending?.promise ?? entry.value);
+    if (entry.retained) {
+      recordLiveCatalogExpiry(entry.expiresAt);
+    }
+    return value;
+  } finally {
+    listener?.[Symbol.dispose]();
+    release();
+  }
+}
 
 function buildLiveCatalogCacheKey(parts: readonly unknown[]): string {
   return createHash("sha256").update(JSON.stringify(parts)).digest("hex");
 }
 
+/**
+ * Shares pending loads and caches successful values for a short TTL after completion.
+ */
 export async function getCachedLiveCatalogValue<T>(params: {
+  /** Stable JSON-serializable values that identify one provider/config catalog load. */
   keyParts: readonly unknown[];
-  load: () => Promise<T>;
+  /** Loader for the live catalog value when no fresh cache entry exists. */
+  load: (signal?: AbortSignal) => Promise<T>;
+  /** Cancels this consumer; shared I/O stops only when its last consumer leaves. */
+  signal?: AbortSignal;
+  /** Optional predicate for values that are healthy enough to retain. */
+  shouldCache?: (value: T) => boolean;
+  /** Successful-value cache lifetime in milliseconds; defaults to a short discovery TTL. */
   ttlMs?: number;
+  /** Test hook for deterministic cache expiry. */
   now?: () => number;
 }): Promise<T> {
-  const now = params.now?.() ?? Date.now();
+  params.signal?.throwIfAborted();
+  const rawNow = params.now?.() ?? Date.now();
   const ttlMs = params.ttlMs ?? 30_000;
+  const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: rawNow });
+  // Uncached callers must neither reuse nor disturb an existing entry.
+  if (expiresAt === undefined) {
+    return await params.load(params.signal);
+  }
   const key = buildLiveCatalogCacheKey(params.keyParts);
+  const refresh = consumeLiveCatalogRefresh(key);
   const existing = liveCatalogCache.get(key) as LiveCatalogCacheEntry<T> | undefined;
-  if (existing && existing.expiresAt > now) {
-    return await existing.value;
-  }
-  const value = params.load();
-  liveCatalogCache.set(key, {
-    expiresAt: now + ttlMs,
-    value,
-  });
-  try {
-    return await value;
-  } catch (err) {
+  if (existing) {
+    // An abandoned load may ignore abort; a new caller must not inherit its cancellation.
+    if (
+      !existing.controller.signal.aborted &&
+      (!refresh || !existing.settled) &&
+      isFutureDateTimestampMs(existing.expiresAt, { nowMs: rawNow })
+    ) {
+      return await consumeLiveCatalog(existing, params.signal);
+    }
     liveCatalogCache.delete(key);
-    throw err;
   }
+  const completion = createDeferredCore<T>();
+  // Signaled callers observe their own waiter; an abandoned shared rejection still needs an owner.
+  void completion.promise.catch(() => undefined);
+  const entry: LiveCatalogCacheEntry<T> = {
+    expiresAt,
+    controller: new AbortController(),
+    consumers: 0,
+    settled: false,
+    retained: false,
+    value: completion.promise,
+  };
+  // Auth-scoped catalogs vary by token. Bound retained entries without rejecting
+  // new catalogs or canceling consumers of an evicted load.
+  pruneMapToMaxSize(liveCatalogCache, LIVE_CATALOG_CACHE_MAX_ENTRIES - 1);
+  liveCatalogCache.set(key, entry);
+  const consumed = consumeLiveCatalog(entry, params.signal);
+  void (async () => {
+    let retain = false;
+    try {
+      entry.controller.signal.throwIfAborted();
+      const resolved = await params.load(entry.controller.signal);
+      retain = !entry.controller.signal.aborted && (params.shouldCache?.(resolved) ?? true);
+      if (retain) {
+        // A slow success gets a complete TTL without reviving an evicted entry.
+        const completedExpiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, {
+          nowMs: params.now?.() ?? Date.now(),
+        });
+        retain = completedExpiresAt !== undefined;
+        if (completedExpiresAt !== undefined) {
+          entry.expiresAt = completedExpiresAt;
+        }
+      }
+      completion.resolve(resolved);
+      for (const waiter of entry.waiters ?? []) {
+        waiter.resolve(resolved);
+      }
+    } catch (error) {
+      completion.reject(error);
+      for (const waiter of entry.waiters ?? []) {
+        waiter.reject(error);
+      }
+    } finally {
+      entry.waiters = undefined;
+      entry.retained = retain;
+      entry.settled = true;
+      if (!retain && liveCatalogCache.get(key) === entry) {
+        liveCatalogCache.delete(key);
+      }
+    }
+  })();
+  return await consumed;
 }
 
+/**
+ * Clears the process-local live catalog cache for tests and isolated plugin probes.
+ */
 export function clearLiveCatalogCacheForTests(): void {
   liveCatalogCache.clear();
-}
-
-function countRawManifestCatalogModels(catalog: unknown): number | undefined {
-  if (!catalog || typeof catalog !== "object") {
-    return undefined;
-  }
-  const models = (catalog as { models?: unknown }).models;
-  return Array.isArray(models) ? models.length : undefined;
-}
-
-function cloneManifestCatalogTieredCost(
-  tier: ModelCatalogTieredCost,
-): NonNullable<ModelDefinitionConfig["cost"]["tieredPricing"]>[number] {
-  return {
-    input: tier.input,
-    output: tier.output,
-    cacheRead: tier.cacheRead,
-    cacheWrite: tier.cacheWrite,
-    range: tier.range.length === 1 ? [tier.range[0]] : [tier.range[0], tier.range[1]],
-  };
-}
-
-function cloneManifestCatalogCost(cost: ModelCatalogCost): ModelDefinitionConfig["cost"] {
-  return {
-    input: cost.input ?? 0,
-    output: cost.output ?? 0,
-    cacheRead: cost.cacheRead ?? 0,
-    cacheWrite: cost.cacheWrite ?? 0,
-    ...(cost.tieredPricing
-      ? { tieredPricing: cost.tieredPricing.map(cloneManifestCatalogTieredCost) }
-      : {}),
-  };
-}
-
-function buildManifestCatalogModelInput(model: ModelCatalogModel): ModelDefinitionConfig["input"] {
-  if (model.input?.includes("document")) {
-    throw new Error(
-      `Manifest modelCatalog row ${model.id} uses unsupported runtime input document`,
-    );
-  }
-  return model.input?.filter((item): item is "text" | "image" => item !== "document") ?? ["text"];
-}
-
-function buildManifestCatalogModel(
-  providerId: string,
-  model: ModelCatalogModel,
-): ModelDefinitionConfig {
-  if (model.contextWindow === undefined) {
-    throw new Error(`Manifest modelCatalog row ${model.id} is missing contextWindow`);
-  }
-  if (model.maxTokens === undefined) {
-    throw new Error(`Manifest modelCatalog row ${model.id} is missing maxTokens`);
-  }
-  const id = normalizeConfiguredProviderCatalogModelId(providerId, model.id, {
-    allowManifestNormalization: false,
-  });
-  return {
-    id,
-    name: model.name ?? id,
-    ...(model.api ? { api: model.api } : {}),
-    ...(model.baseUrl ? { baseUrl: model.baseUrl } : {}),
-    reasoning: model.reasoning ?? false,
-    input: buildManifestCatalogModelInput(model),
-    cost: cloneManifestCatalogCost(model.cost ?? {}),
-    contextWindow: model.contextWindow,
-    ...(model.contextTokens !== undefined ? { contextTokens: model.contextTokens } : {}),
-    maxTokens: model.maxTokens,
-    ...(model.headers ? { headers: { ...model.headers } } : {}),
-    ...(model.compat ? { compat: { ...model.compat } } : {}),
-  };
-}
-
-export function buildManifestModelProviderConfig(params: {
-  providerId: string;
-  catalog: unknown;
-}): ModelProviderConfig {
-  const catalog = normalizeModelCatalog(
-    { providers: { [params.providerId]: params.catalog } },
-    { ownedProviders: new Set([params.providerId]) },
-  )?.providers?.[params.providerId];
-  if (!catalog) {
-    throw new Error(`Missing modelCatalog.providers.${params.providerId}`);
-  }
-  if (!catalog.baseUrl) {
-    throw new Error(`Missing modelCatalog.providers.${params.providerId}.baseUrl`);
-  }
-  const rawModelCount = countRawManifestCatalogModels(params.catalog);
-  if (rawModelCount !== undefined && rawModelCount !== catalog.models.length) {
-    throw new Error(`Invalid modelCatalog.providers.${params.providerId}.models`);
-  }
-  return {
-    baseUrl: catalog.baseUrl,
-    ...(catalog.api ? { api: catalog.api } : {}),
-    ...(catalog.headers ? { headers: { ...catalog.headers } } : {}),
-    models: catalog.models.map((model) => buildManifestCatalogModel(params.providerId, model)),
-  };
 }
 
 function normalizeConfiguredCatalogModelInput(
@@ -207,9 +253,15 @@ function resolveConfiguredProviderModels(
   return Array.isArray(providerConfig.models) ? providerConfig.models : [];
 }
 
+/**
+ * Reads user-configured provider models as catalog entries for plugin discovery output.
+ */
 export function readConfiguredProviderCatalogEntries(params: {
+  /** Runtime config containing optional user-defined provider model rows. */
   config?: OpenClawConfig;
+  /** Provider id used to locate configured model rows. */
   providerId: string;
+  /** Provider id to publish on emitted catalog entries when it differs from lookup id. */
   publishedProviderId?: string;
 }): ConfiguredProviderCatalogEntry[] {
   const provider = params.publishedProviderId ?? params.providerId;
@@ -267,8 +319,13 @@ function withStreamingUsageCompat(provider: ModelProviderConfig): ModelProviderC
   return changed ? { ...provider, models } : provider;
 }
 
+/**
+ * Returns whether a provider transport can report native usage while streaming.
+ */
 export function supportsNativeStreamingUsageCompat(params: {
+  /** Provider id used for transport capability lookup. */
   providerId: string;
+  /** Provider endpoint URL used to detect native streaming usage behavior. */
   baseUrl: string | undefined;
 }): boolean {
   return resolveProviderRequestCapabilities({
@@ -280,8 +337,13 @@ export function supportsNativeStreamingUsageCompat(params: {
   }).supportsNativeStreamingUsageCompat;
 }
 
+/**
+ * Marks models as streaming-usage compatible when provider transport capabilities allow it.
+ */
 export function applyProviderNativeStreamingUsageCompat(params: {
+  /** Provider id used for transport capability lookup. */
   providerId: string;
+  /** Runtime provider config whose model compat flags may be filled in. */
   providerConfig: ModelProviderConfig;
 }): ModelProviderConfig {
   return supportsNativeStreamingUsageCompat({

@@ -1,3 +1,6 @@
+/**
+ * Public SDK subpath for temporary file and workspace helpers.
+ */
 export {
   buildRandomTempFilePath,
   createTempDownloadTarget,
@@ -6,11 +9,14 @@ export {
   withTempDownloadPath,
 } from "../infra/temp-download.js";
 export {
-  tempWorkspace,
   tempWorkspaceSync,
-  type TempWorkspace,
   type TempWorkspaceOptions,
   type TempWorkspaceSync,
-  withTempWorkspace,
   withTempWorkspaceSync,
-} from "../infra/private-temp-workspace.js";
+} from "@openclaw/fs-safe/temp";
+
+export {
+  tempWorkspace,
+  withTempWorkspace,
+  type CompatibleTempWorkspace as TempWorkspace,
+} from "../infra/fs-safe-compat.js";

@@ -1,3 +1,4 @@
+/** Guardrail tests for channel contract secret surfaces. */
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -45,10 +46,6 @@ const CORE_SECRET_SURFACE_GUARDS = [
       /\bresolveIMessageConfigDefaultTo\b/,
       /\bformatWhatsAppConfigAllowFromEntries\b/,
     ],
-  },
-  {
-    path: "src/plugin-sdk/command-auth.ts",
-    forbiddenPatterns: [/\bpluginId:\s*"telegram"/],
   },
   {
     path: "src/gateway/channel-health-policy.ts",

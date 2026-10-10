@@ -1,250 +1,485 @@
-import path from "node:path";
+import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
+// Delivery queue storage persists replayable outbound send intents and tracks
+// platform-send recovery state in the shared SQLite queue.
 import {
-  ackJsonDurableQueueEntry,
-  ensureJsonDurableQueueDirs,
-  loadJsonDurableQueueEntry,
-  loadPendingJsonDurableQueueEntries,
-  moveJsonDurableQueueEntryToFailed,
-  readJsonDurableQueueEntry,
-  resolveJsonDurableQueueEntryPaths,
-  writeJsonDurableQueueEntry,
-} from "@openclaw/fs-safe/store";
-import type { ReplyPayload } from "../../auto-reply/types.js";
-import type { RenderedMessageBatchPlanItem } from "../../channels/message/types.js";
-import { resolveStateDir } from "../../config/paths.js";
-import type { ReplyToMode } from "../../config/types.js";
+  hydrateOpenClawStateWorkerError,
+  retainOpenClawStateWorkerErrorPayload,
+} from "../../state/openclaw-state-worker-error.js";
+import type { InitialDeliveryProducerClaim } from "../delivery-queue-sqlite-claim.kernel.js";
+import {
+  captureDeliveryQueueStateContext,
+  type DeliveryQueueStateContext,
+  loadDeliveryQueueEntries,
+} from "../delivery-queue-sqlite.js";
+import { executeDeliveryQueueOperation } from "../delivery-queue-worker-store.js";
+import type { DeliveryQueueWorkerOperations } from "../delivery-queue.worker-contract.js";
 import { generateSecureUuid } from "../secure-random.js";
-import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
-import type { OutboundIdentity } from "./identity.js";
-import type { OutboundMirror } from "./mirror.js";
-import type { OutboundSessionContext } from "./session-context.js";
-import type { OutboundChannel } from "./targets.js";
+import { createSqliteWorkerOperationAdmission } from "../sqlite-worker-operation-admission.js";
+import type { SqliteWorkerOperationSettlement } from "../sqlite-worker-operation-settlement.js";
+import { OutboundDeliveryError, PlatformMessageNotDispatchedError } from "./deliver-types.js";
+import { failPendingDelivery } from "./delivery-queue-ack.js";
+import { collectEntrySpoolPaths } from "./delivery-queue-media-spool.js";
+import {
+  LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
+  OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
+  OUTBOUND_DELIVERY_QUEUE_NAME,
+  OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
+} from "./delivery-queue-media-staging.js";
+import { StableDeliveryPreparationLostError } from "./delivery-queue-preparation.js";
+import {
+  decodeOutboundDeliverySnapshot,
+  encodeOutboundDeliverySnapshot,
+  projectOutboundDelivery,
+  projectQueuedDeliveryOptions,
+} from "./delivery-queue-projection.js";
+import type { StableDeliveryPreparation } from "./delivery-queue-storage.types.js";
+import type {
+  LegacyQueuedDelivery,
+  LegacyQueuedDeliveryPreparation,
+  DeliveryFailureSettlement,
+  QueuedDelivery,
+  QueuedDeliveryPayload,
+} from "./delivery-queue-types.js";
+import {
+  preparedOutboundPayloads,
+  createUnmodifiedPreparedOutboundBatch,
+  projectPreparedOutboundBatchForStorage,
+  type PreparedOutboundBatch,
+} from "./prepared-batch.js";
 
-const QUEUE_DIRNAME = "delivery-queue";
-const FAILED_DIRNAME = "failed";
-const QUEUE_TEMP_PREFIX = ".delivery-queue";
+export { ackDelivery } from "./delivery-queue-ack.js";
 
-export type QueuedRenderedMessageBatchPlan = {
-  payloadCount: number;
-  textCount: number;
-  mediaCount: number;
-  voiceCount: number;
-  presentationCount: number;
-  interactiveCount: number;
-  channelDataCount: number;
-  items: readonly RenderedMessageBatchPlanItem[];
-};
+export type {
+  LegacyQueuedDelivery,
+  LegacyQueuedDeliveryPreparation,
+  QueuedDelivery,
+  QueuedReplyPayloadSendingHook,
+} from "./delivery-queue-types.js";
 
-export type QueuedDeliveryPayload = {
-  channel: Exclude<OutboundChannel, "none">;
-  to: string;
-  accountId?: string;
-  /**
-   * Original payloads before plugin hooks. On recovery, hooks re-run on these
-   * payloads — this is intentional since hooks are stateless transforms and
-   * should produce the same result on replay.
-   */
-  payloads: ReplyPayload[];
-  /** Replayable projection summary captured when the durable send intent is created. */
-  renderedBatchPlan?: QueuedRenderedMessageBatchPlan;
-  threadId?: string | number | null;
-  replyToId?: string | null;
-  replyToMode?: ReplyToMode;
-  formatting?: OutboundDeliveryFormattingOptions;
-  identity?: OutboundIdentity;
-  bestEffort?: boolean;
-  gifPlayback?: boolean;
-  forceDocument?: boolean;
-  silent?: boolean;
-  mirror?: OutboundMirror;
-  /** Session context needed to preserve outbound media policy on recovery. */
-  session?: OutboundSessionContext;
-  /** Gateway caller scopes at enqueue time, preserved for recovery replay. */
-  gatewayClientScopes?: readonly string[];
-};
-
-export interface QueuedDelivery extends QueuedDeliveryPayload {
-  id: string;
-  enqueuedAt: number;
-  retryCount: number;
-  lastAttemptAt?: number;
-  lastError?: string;
-  platformSendStartedAt?: number;
-  recoveryState?: "send_attempt_started" | "unknown_after_send";
-}
-
-export function resolveQueueDir(stateDir?: string): string {
-  const base = stateDir ?? resolveStateDir();
-  return path.join(base, QUEUE_DIRNAME);
-}
-
-function resolveFailedDir(stateDir?: string): string {
-  return path.join(resolveQueueDir(stateDir), FAILED_DIRNAME);
-}
-
-function resolveQueueEntryPaths(
+export async function findDeliveryIntentOwner(
   id: string,
   stateDir?: string,
-): {
-  jsonPath: string;
-  deliveredPath: string;
-} {
-  return resolveJsonDurableQueueEntryPaths(resolveQueueDir(stateDir), id);
+  context?: DeliveryQueueStateContext,
+) {
+  const [owner] = await findDeliveryIntentOwners([id], stateDir, context);
+  return owner ?? null;
 }
 
-async function writeQueueEntry(filePath: string, entry: QueuedDelivery): Promise<void> {
-  await writeJsonDurableQueueEntry({
-    filePath,
-    entry,
-    tempPrefix: QUEUE_TEMP_PREFIX,
+/** Resolve one ordered batch without reopening the store for each intent. */
+export async function findDeliveryIntentOwners(
+  ids: readonly string[],
+  stateDir?: string,
+  context?: DeliveryQueueStateContext,
+) {
+  if (ids.length === 0) {
+    return [];
+  }
+  const captured = context ?? captureDeliveryQueueStateContext(stateDir);
+  const owners = await executeDeliveryQueueOperation(captured, stateDir, {
+    type: "deliveryQueue.findIntentOwners",
+    input: { ids: [...ids] },
   });
+  captured.workerContext.admission.assertCurrent();
+  return owners;
 }
 
-async function readQueueEntry(filePath: string): Promise<QueuedDelivery> {
-  return await readJsonDurableQueueEntry<QueuedDelivery>(filePath);
+function preparedBatchFromLowLevelInput(params: QueuedDeliveryPayload): PreparedOutboundBatch {
+  if (params.preparedBatch) {
+    return params.preparedBatch;
+  }
+  if (!params.payloads) {
+    throw new Error("Delivery queue entry requires a prepared payload batch");
+  }
+  return createUnmodifiedPreparedOutboundBatch(params.payloads);
 }
 
-function normalizeLegacyQueuedDeliveryEntry(entry: QueuedDelivery): {
-  entry: QueuedDelivery;
-  migrated: boolean;
-} {
-  const hasAttemptTimestamp =
-    typeof entry.lastAttemptAt === "number" &&
-    Number.isFinite(entry.lastAttemptAt) &&
-    entry.lastAttemptAt > 0;
-  if (hasAttemptTimestamp || entry.retryCount <= 0) {
-    return { entry, migrated: false };
-  }
-  const hasEnqueuedTimestamp =
-    typeof entry.enqueuedAt === "number" &&
-    Number.isFinite(entry.enqueuedAt) &&
-    entry.enqueuedAt > 0;
-  if (!hasEnqueuedTimestamp) {
-    return { entry, migrated: false };
-  }
+type QueuedDeliveryAdmissionPayload = QueuedDeliveryPayload & {
+  initialProducerClaim?: InitialDeliveryProducerClaim;
+};
+
+function createQueuedDelivery(
+  params: QueuedDeliveryAdmissionPayload,
+  id: string,
+  retainOnFailure: boolean,
+): QueuedDelivery {
   return {
-    entry: {
-      ...entry,
-      lastAttemptAt: entry.enqueuedAt,
-    },
-    migrated: true,
+    id,
+    enqueuedAt: Date.now(),
+    ...projectQueuedDeliveryOptions(params),
+    queuePolicy: params.queuePolicy,
+    requireUnknownSendReconciliation: params.requireUnknownSendReconciliation,
+    ...(params.initialProducerClaim ??
+      (params.requiresProducerClaim === true ? { requiresProducerClaim: true } : {})),
+    preparedBatch: projectPreparedOutboundBatchForStorage(preparedBatchFromLowLevelInput(params)),
+    reply: params.reply,
+    sessionGeneration: params.sessionGeneration,
+    deliveryCompletion: params.deliveryCompletion,
+    completionRetention: params.completionRetention,
+    ...(retainOnFailure ? { retainOnFailure: true as const } : {}),
+    legacyUnknownSendReconciliation: params.legacyUnknownSendReconciliation,
+    legacyPreparedContentUnavailable: params.legacyPreparedContentUnavailable,
+    maxRetries: params.maxRetries,
+    retryCount: 0,
+    attemptCount: 0,
   };
 }
 
-/** Ensure the queue directory (and failed/ subdirectory) exist. */
-export async function ensureQueueDir(stateDir?: string): Promise<string> {
-  const queueDir = resolveQueueDir(stateDir);
-  await ensureJsonDurableQueueDirs({
-    queueDir,
-    failedDir: resolveFailedDir(stateDir),
-  });
-  return queueDir;
+/** Keep uncertain publication with recovery even when the broker returns a cleanup error. */
+async function enqueueQueuedDelivery(
+  input: DeliveryQueueWorkerOperations["deliveryQueue.enqueue"]["input"],
+  stateDir: string | undefined,
+  context: DeliveryQueueStateContext | undefined,
+) {
+  let settlement: Promise<SqliteWorkerOperationSettlement> | undefined;
+  let result: DeliveryQueueWorkerOperations["deliveryQueue.enqueue"]["output"];
+  try {
+    result = await executeDeliveryQueueOperation(
+      context,
+      stateDir,
+      {
+        type: "deliveryQueue.enqueue",
+        input,
+      },
+      {
+        createAdmission: (retained) => {
+          settlement = retained.settled;
+          return {
+            nativeLocations: [],
+            // This operation observes native settlement; it grants no additional authority.
+            admission: createSqliteWorkerOperationAdmission(() => {
+              throw new Error("Delivery enqueue does not request host transaction admission");
+            }),
+          };
+        },
+      },
+    );
+  } catch (cause) {
+    if (settlement && (await settlement).kind !== "not-entered") {
+      const error = new OutboundDeliveryError("Delivery queue publication could not be confirmed", {
+        cause,
+      });
+      // Even a completed rejection may follow COMMIT and coordinator cleanup.
+      error.queueCustody = "held";
+      throw error;
+    }
+    throw cause;
+  }
+  if (typeof result !== "string") {
+    const error = new Error("Delivery queue publication failed");
+    retainOpenClawStateWorkerErrorPayload(error, result.error);
+    // A full rollback result proves nonpublication; do not reclassify it as uncertain execution.
+    const failure = new OutboundDeliveryError(
+      "Delivery queue admission rejected before publication",
+      {
+        cause: new PlatformMessageNotDispatchedError("Delivery was not queued or sent", {
+          cause: hydrateOpenClawStateWorkerError(error, { includeOrdinary: true }),
+        }),
+        stage: "queue",
+      },
+    );
+    failure.queueCustody = "released";
+    throw failure;
+  }
+  if (result === (input.kind === "prepared" ? "staging-missing" : "missing")) {
+    throw new Error(`Delivery queue media stage expired before enqueue: ${input.mediaStageId}`);
+  }
+  return result;
 }
 
-/** Persist a delivery entry to disk before attempting send. Returns the entry ID. */
+/** Persist a delivery entry before attempting send. Returns the entry ID. */
 export async function enqueueDelivery(
-  params: QueuedDeliveryPayload,
+  params: QueuedDeliveryAdmissionPayload,
   stateDir?: string,
+  mediaStageId?: string,
+  context?: DeliveryQueueStateContext,
 ): Promise<string> {
-  const queueDir = await ensureQueueDir(stateDir);
+  const captured = context ?? captureDeliveryQueueStateContext(stateDir);
   const id = generateSecureUuid();
-  await writeQueueEntry(path.join(queueDir, `${id}.json`), {
+  const entry = createQueuedDelivery(
+    params,
     id,
-    enqueuedAt: Date.now(),
-    channel: params.channel,
-    to: params.to,
-    accountId: params.accountId,
-    payloads: params.payloads,
-    renderedBatchPlan: params.renderedBatchPlan,
-    threadId: params.threadId,
-    replyToId: params.replyToId,
-    replyToMode: params.replyToMode,
-    formatting: params.formatting,
-    identity: params.identity,
-    bestEffort: params.bestEffort,
-    gifPlayback: params.gifPlayback,
-    forceDocument: params.forceDocument,
-    silent: params.silent,
-    mirror: params.mirror,
-    session: params.session,
-    gatewayClientScopes: params.gatewayClientScopes,
-    retryCount: 0,
-  });
+    params.deliveryCompletion !== undefined || params.completionRetention !== undefined,
+  );
+  const result = await enqueueQueuedDelivery(
+    { kind: "random", entryJson: JSON.stringify(entry), mediaStageId },
+    stateDir,
+    captured,
+  );
+  if (result === "existing") {
+    throw new Error(`Delivery queue entry already exists: ${OUTBOUND_DELIVERY_QUEUE_NAME}/${id}`);
+  }
   return id;
 }
 
-/** Remove a successfully delivered entry from the queue.
- *
- * Uses a two-phase approach so that a crash between delivery and cleanup
- * does not cause the message to be replayed on the next recovery scan:
- *   Phase 1: atomic rename  {id}.json → {id}.delivered
- *   Phase 2: unlink the .delivered marker
- * If the process dies between phase 1 and phase 2 the marker is cleaned up
- * by {@link loadPendingDeliveries} on the next startup without re-sending.
- */
-export async function ackDelivery(id: string, stateDir?: string): Promise<void> {
-  await ackJsonDurableQueueEntry(resolveQueueEntryPaths(id, stateDir));
-}
-
-/** Update a queue entry after a failed delivery attempt. */
-export async function failDelivery(id: string, error: string, stateDir?: string): Promise<void> {
-  const filePath = path.join(resolveQueueDir(stateDir), `${id}.json`);
-  const entry = await readQueueEntry(filePath);
-  entry.retryCount += 1;
-  entry.lastAttemptAt = Date.now();
-  entry.lastError = error;
-  await writeQueueEntry(filePath, entry);
-}
-
-export async function markDeliveryPlatformSendAttemptStarted(
+/** Inserts one stable queue id without replacing prior pending or completed ownership. */
+export async function enqueueDeliveryOnce(
+  params: QueuedDeliveryAdmissionPayload,
   id: string,
   stateDir?: string,
-): Promise<void> {
-  const filePath = path.join(resolveQueueDir(stateDir), `${id}.json`);
-  const entry = await readQueueEntry(filePath);
-  entry.platformSendStartedAt = entry.platformSendStartedAt ?? Date.now();
-  entry.recoveryState = "send_attempt_started";
-  await writeQueueEntry(filePath, entry);
+  mediaStageId?: string,
+  context?: DeliveryQueueStateContext,
+): Promise<{ id: string; created: boolean }> {
+  const normalizedId = id.trim();
+  if (!normalizedId) {
+    throw new Error("Stable delivery queue id is required");
+  }
+  const captured = context ?? captureDeliveryQueueStateContext(stateDir);
+  const entry = createQueuedDelivery(params, normalizedId, true);
+  const result = await enqueueQueuedDelivery(
+    { kind: "stable", entryJson: JSON.stringify(entry), mediaStageId },
+    stateDir,
+    captured,
+  );
+  return { id: normalizedId, created: result === "created" };
 }
+
+/** Atomically replaces a payload-free stable preparation owner with prepared custody. */
+export async function enqueuePreparedDeliveryOnce(
+  params: QueuedDeliveryAdmissionPayload,
+  id: string,
+  preparation: StableDeliveryPreparation,
+  stateDir?: string,
+  mediaStageId?: string,
+  context?: DeliveryQueueStateContext,
+): Promise<{ id: string; created: boolean }> {
+  const normalizedId = id.trim();
+  if (!normalizedId || normalizedId !== preparation.id) {
+    throw new Error("Stable delivery preparation id is invalid");
+  }
+  const captured = context ?? captureDeliveryQueueStateContext(stateDir);
+  const entry = createQueuedDelivery(params, normalizedId, true);
+  const result = await enqueueQueuedDelivery(
+    {
+      kind: "prepared",
+      entryJson: JSON.stringify(entry),
+      preparationJson: JSON.stringify(preparation),
+      mediaStageId,
+    },
+    stateDir,
+    captured,
+  );
+  if (result !== "moved") {
+    throw new StableDeliveryPreparationLostError(normalizedId);
+  }
+  return { id: normalizedId, created: true };
+}
+
+export { hasActiveDeliveryOwner } from "./delivery-queue-types.js";
+
+/** Update retry evidence on the queue worker's exact namespace and claim. */
+function deliveryFailureRecorder(kind: "fail" | "fail-before-send" | "fail-after-send") {
+  return async (
+    id: string,
+    error: string,
+    stateDir?: string,
+    expectedPlatformSendAttemptId?: string | null,
+    context?: DeliveryQueueStateContext,
+  ): Promise<void> => {
+    await executeDeliveryQueueOperation(context, stateDir, {
+      type: "deliveryQueue.mutateOutbound",
+      input: { kind, id, error, expectedPlatformSendAttemptId },
+    });
+  };
+}
+
+export const failDelivery = deliveryFailureRecorder("fail");
+export const failDeliveryBeforePlatformSend = deliveryFailureRecorder("fail-before-send");
+export const failDeliveryAfterPlatformSend = deliveryFailureRecorder("fail-after-send");
+
+export { claimDeliveryPlatformSendAttempt } from "./delivery-queue-platform-lease.js";
+
+export async function reserveDeliveryAttempt(
+  id: string,
+  maxAttempts: number,
+  stateDir?: string,
+  expectedPlatformSendAttemptId?: string,
+  context?: DeliveryQueueStateContext,
+) {
+  return await executeDeliveryQueueOperation(context, stateDir, {
+    type: "deliveryQueue.reserveOutbound",
+    input: { id, maxAttempts, expectedPlatformSendAttemptId },
+  });
+}
+
+/** Restore only the exact reserved attempt before recipient-visible dispatch. */
+export async function restoreDeliveryAttemptBeforeDispatch(
+  entry: QueuedDelivery,
+  reservedAttemptCount: number,
+  stateDir?: string,
+  claimedAttemptId?: string,
+  context?: DeliveryQueueStateContext,
+): Promise<void> {
+  await executeDeliveryQueueOperation(context, stateDir, {
+    type: "deliveryQueue.restoreOutbound",
+    input: { entry: encodeOutboundDeliverySnapshot(entry), reservedAttemptCount, claimedAttemptId },
+  });
+}
+
+function deliveryPlatformSendRecorder(kind: "start" | "dispatch") {
+  return async (
+    id: string,
+    stateDir?: string,
+    route?: { replyToId?: string | null },
+    expectedPlatformSendAttemptId?: string | null,
+    context?: DeliveryQueueStateContext,
+  ): Promise<void> => {
+    await executeDeliveryQueueOperation(context, stateDir, {
+      type: "deliveryQueue.mutateOutbound",
+      input: {
+        kind,
+        id,
+        route: route && ("replyToId" in route ? { replyToId: route.replyToId } : {}),
+        expectedPlatformSendAttemptId,
+      },
+    });
+  };
+}
+
+export const markDeliveryPlatformSendAttemptStarted: (
+  id: string,
+  stateDir?: string,
+  route?: { replyToId?: string | null },
+  producerClaimId?: string,
+  context?: DeliveryQueueStateContext,
+) => Promise<void> = deliveryPlatformSendRecorder("start");
+export const markDeliveryPlatformSendDispatched = deliveryPlatformSendRecorder("dispatch");
 
 export async function markDeliveryPlatformOutcomeUnknown(
   id: string,
   stateDir?: string,
+  expectedPlatformSendAttemptId?: string | null,
+  context?: DeliveryQueueStateContext,
 ): Promise<void> {
-  const filePath = path.join(resolveQueueDir(stateDir), `${id}.json`);
-  const entry = await readQueueEntry(filePath);
-  entry.platformSendStartedAt = entry.platformSendStartedAt ?? Date.now();
-  entry.recoveryState = "unknown_after_send";
-  await writeQueueEntry(filePath, entry);
+  await executeDeliveryQueueOperation(context, stateDir, {
+    type: "deliveryQueue.mutateOutbound",
+    input: { kind: "unknown", id, expectedPlatformSendAttemptId },
+  });
 }
 
-/** Load a single pending delivery entry by ID from the queue directory. */
-export async function loadPendingDelivery(
-  id: string,
+async function readOutboundDeliveries(
+  input: { id?: string; mode: "pending" | "unfinished" },
   stateDir?: string,
-): Promise<QueuedDelivery | null> {
-  return await loadJsonDurableQueueEntry({
-    paths: resolveQueueEntryPaths(id, stateDir),
-    tempPrefix: QUEUE_TEMP_PREFIX,
-    read: async (entry) => normalizeLegacyQueuedDeliveryEntry(entry),
+  context?: DeliveryQueueStateContext,
+): Promise<QueuedDelivery[]> {
+  const captured = context ?? captureDeliveryQueueStateContext(stateDir);
+  const reply = await executeExistingOpenClawStateRead(
+    {
+      path: captured.workerContext.admission.databasePath,
+      env: captured.workerContext.environment,
+    },
+    { type: "deliveryQueue.outbound", ...input },
+    { context: captured.workerContext, current: true },
+  );
+  captured.workerContext.admission.assertCurrent();
+  if (!reply) {
+    return [];
+  }
+  if (!reply.ok || reply.type !== "deliveryQueue.outbound") {
+    throw new Error("Unexpected outbound queue read result");
+  }
+  return reply.entries.map(({ queueName, entry }) => projectOutboundDelivery(queueName, entry));
+}
+
+function outboundDeliveryReader(mode: "pending" | "unfinished") {
+  return async (
+    id: string,
+    stateDir?: string,
+    context?: DeliveryQueueStateContext,
+  ): Promise<QueuedDelivery | null> =>
+    (await readOutboundDeliveries({ id, mode }, stateDir, context))[0] ?? null;
+}
+
+export const loadPendingDelivery = outboundDeliveryReader("pending");
+export const loadUnfinishedDelivery = outboundDeliveryReader("unfinished");
+
+/** Includes unfinished settlement in FIFO order across both executable formats. */
+export async function loadUnfinishedDeliveries(
+  stateDir?: string,
+  context?: DeliveryQueueStateContext,
+): Promise<QueuedDelivery[]> {
+  return await readOutboundDeliveries({ mode: "unfinished" }, stateDir, context);
+}
+
+/** Close send custody before awaiting completion projection; retain its restart work. */
+export async function stageDeliveryFailureSettlement(
+  entry: QueuedDelivery,
+  settlement: DeliveryFailureSettlement,
+  stateDir?: string,
+  claimedAttemptId?: string,
+  context?: DeliveryQueueStateContext,
+): Promise<QueuedDelivery | undefined> {
+  const staged = await executeDeliveryQueueOperation(context, stateDir, {
+    type: "deliveryQueue.stageFailure",
+    input: {
+      entry: encodeOutboundDeliverySnapshot(entry),
+      settlementEntry: encodeOutboundDeliverySnapshot({ ...entry, settlement }),
+      claimedAttemptId,
+    },
+  });
+  return staged && decodeOutboundDeliverySnapshot(staged);
+}
+
+export async function finalizeDeliveryFailureSettlement(
+  entry: QueuedDelivery,
+  stateDir?: string,
+  context?: DeliveryQueueStateContext,
+): Promise<boolean> {
+  return await executeDeliveryQueueOperation(context, stateDir, {
+    type: "deliveryQueue.finalizeFailure",
+    input: { entry: encodeOutboundDeliverySnapshot(entry) },
   });
 }
 
-/** Load all pending delivery entries from the queue directory. */
-export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDelivery[]> {
-  const queueDir = resolveQueueDir(stateDir);
-  return await loadPendingJsonDurableQueueEntries({
-    queueDir,
-    tempPrefix: QUEUE_TEMP_PREFIX,
-    read: async (entry) => normalizeLegacyQueuedDeliveryEntry(entry),
-  });
+/** One-time migration inventory; normal recovery never reads the legacy namespace. */
+export function loadLegacyPendingDeliveries(stateDir?: string): LegacyQueuedDelivery[] {
+  return loadDeliveryQueueEntries(
+    LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
+    stateDir,
+  ) as LegacyQueuedDelivery[];
 }
 
-/** Move a queue entry to the failed/ subdirectory. */
-export async function moveToFailed(id: string, stateDir?: string): Promise<void> {
-  await moveJsonDurableQueueEntryToFailed({
-    queueDir: resolveQueueDir(stateDir),
-    failedDir: resolveFailedDir(stateDir),
-    id,
-  });
+/** Prepared legacy rows awaiting media staging and canonical publication. */
+export function loadPendingDeliveryMigrations(stateDir?: string): QueuedDelivery[] {
+  return loadDeliveryQueueEntries(
+    OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
+    stateDir,
+  ) as QueuedDelivery[];
+}
+
+/** Claimed pre-D4 rows whose modifying policy has not safely published yet. */
+export function loadPendingLegacyDeliveryPreparations(
+  stateDir?: string,
+): LegacyQueuedDeliveryPreparation[] {
+  return loadDeliveryQueueEntries(
+    OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
+    stateDir,
+  ) as LegacyQueuedDeliveryPreparation[];
+}
+
+/** Move a queue entry out of the pending retry set. */
+export async function moveToFailed(
+  id: string,
+  requestedStateDir?: string,
+  expectedPlatformSendAttemptId?: string | null,
+  context?: DeliveryQueueStateContext,
+): Promise<string[]> {
+  const stateDir = context?.stateDir ?? requestedStateDir;
+  const entry = await loadPendingDelivery(id, stateDir, context);
+  if (!entry) {
+    throw new Error(`No pending outbound delivery queue entry ${id}`);
+  }
+  const result = await failPendingDelivery(
+    {
+      id,
+      entry,
+      retainSpoolArtifacts: true,
+      ...(expectedPlatformSendAttemptId !== undefined ? { expectedPlatformSendAttemptId } : {}),
+    },
+    stateDir,
+    context,
+  );
+  if (result.status !== "failed") {
+    throw new Error(`Delivery platform claim was lost: ${id}`);
+  }
+  return collectEntrySpoolPaths(preparedOutboundPayloads(entry.preparedBatch), stateDir);
 }

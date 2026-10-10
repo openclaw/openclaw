@@ -1,32 +1,31 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { runQaManualLane } from "./manual-lane.runtime.js";
+import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import {
+  filterStringEntries,
+  normalizeUniqueStringEntries,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { formatDurationCompact } from "openclaw/plugin-sdk/time-runtime";
+import { createQaArtifactRunId } from "./artifact-run-id.js";
 import { isQaFastModeModelRef, type QaProviderMode } from "./model-selection.js";
 import {
-  QA_FRONTIER_CHARACTER_EVAL_MODELS,
-  QA_FRONTIER_CHARACTER_JUDGE_MODEL_OPTIONS,
-  QA_FRONTIER_CHARACTER_JUDGE_MODELS,
-  QA_FRONTIER_CHARACTER_THINKING_BY_MODEL,
+  QA_FRONTIER_CHARACTER_EVAL_MODELS as DEFAULT_CHARACTER_EVAL_MODELS,
+  QA_FRONTIER_CHARACTER_JUDGE_MODEL_OPTIONS as DEFAULT_JUDGE_MODEL_OPTIONS,
+  QA_FRONTIER_CHARACTER_JUDGE_MODELS as DEFAULT_JUDGE_MODELS,
+  QA_FRONTIER_CHARACTER_THINKING_BY_MODEL as DEFAULT_CHARACTER_THINKING_BY_MODEL,
 } from "./providers/live-frontier/character-eval.js";
-import { type QaThinkingLevel } from "./qa-gateway-config.js";
+import type { QaThinkingLevel } from "./qa-gateway-config.js";
 import { extractQaVisibleReplyLeakText } from "./reply-failure.js";
-import { runQaSuiteFromRuntime } from "./suite-launch.runtime.js";
+import { readQaSuiteFailedScenarioCountFromFile } from "./suite-summary.js";
 import type { QaSuiteResult } from "./suite.js";
 
 const DEFAULT_CHARACTER_SCENARIO_ID = "character-vibes-gollum";
-const DEFAULT_CHARACTER_EVAL_MODELS = QA_FRONTIER_CHARACTER_EVAL_MODELS;
 const DEFAULT_CHARACTER_THINKING: QaThinkingLevel = "high";
 const DEFAULT_CHARACTER_EVAL_CONCURRENCY = 16;
-const DEFAULT_CHARACTER_THINKING_BY_MODEL: Readonly<Record<string, QaThinkingLevel>> =
-  QA_FRONTIER_CHARACTER_THINKING_BY_MODEL;
-const DEFAULT_JUDGE_MODELS = QA_FRONTIER_CHARACTER_JUDGE_MODELS;
 const DEFAULT_JUDGE_THINKING: QaThinkingLevel = "xhigh";
 const DEFAULT_JUDGE_TIMEOUT_MS = 300_000;
-const DEFAULT_JUDGE_MODEL_OPTIONS: Readonly<Record<string, QaCharacterModelOptions>> =
-  QA_FRONTIER_CHARACTER_JUDGE_MODEL_OPTIONS;
-
-type QaCharacterRunStatus = "pass" | "fail";
 
 export type QaCharacterModelOptions = {
   thinkingDefault?: QaThinkingLevel;
@@ -35,7 +34,7 @@ export type QaCharacterModelOptions = {
 
 type QaCharacterEvalRun = {
   model: string;
-  status: QaCharacterRunStatus;
+  status: "pass" | "fail";
   durationMs: number;
   outputDir: string;
   thinkingDefault: QaThinkingLevel;
@@ -52,21 +51,13 @@ type QaCharacterEvalRun = {
   error?: string;
 };
 
-export type QaCharacterEvalJudgment = {
+type QaCharacterEvalJudgment = {
   model: string;
   rank: number;
   score: number;
   summary: string;
   strengths: string[];
   weaknesses: string[];
-};
-
-type QaCharacterEvalResult = {
-  outputDir: string;
-  reportPath: string;
-  summaryPath: string;
-  runs: QaCharacterEvalRun[];
-  judgments: QaCharacterEvalJudgeResult[];
 };
 
 type QaCharacterEvalJudgeResult = {
@@ -102,7 +93,7 @@ type RunJudgeFn = (params: {
   timeoutMs: number;
 }) => Promise<string | null>;
 
-export type QaCharacterEvalParams = {
+type QaCharacterEvalParams = {
   repoRoot?: string;
   outputDir?: string;
   models: string[];
@@ -111,9 +102,7 @@ export type QaCharacterEvalParams = {
   candidateThinkingDefault?: QaThinkingLevel;
   candidateThinkingByModel?: Record<string, QaThinkingLevel>;
   candidateModelOptions?: Record<string, QaCharacterModelOptions>;
-  judgeModel?: string;
   judgeModels?: string[];
-  judgeThinkingDefault?: QaThinkingLevel;
   judgeModelOptions?: Record<string, QaCharacterModelOptions>;
   judgeTimeoutMs?: number;
   judgeBlindModels?: boolean;
@@ -124,86 +113,22 @@ export type QaCharacterEvalParams = {
   progress?: QaCharacterEvalProgressLogger;
 };
 
-function normalizeModelRefs(models: readonly string[]) {
-  return [...new Set(models.map((model) => model.trim()).filter((model) => model.length > 0))];
-}
-
-function resolveCandidateThinkingDefault(params: {
-  model: string;
-  candidateThinkingDefault?: QaThinkingLevel;
-  candidateThinkingByModel?: Record<string, QaThinkingLevel>;
-  candidateModelOptions?: Record<string, QaCharacterModelOptions>;
-}) {
-  return (
-    params.candidateModelOptions?.[params.model]?.thinkingDefault ??
-    params.candidateThinkingByModel?.[params.model] ??
-    params.candidateThinkingDefault ??
-    DEFAULT_CHARACTER_THINKING_BY_MODEL[params.model] ??
-    DEFAULT_CHARACTER_THINKING
-  );
-}
-
-function resolveCandidateFastMode(params: {
-  model: string;
-  candidateFastMode?: boolean;
-  candidateModelOptions?: Record<string, QaCharacterModelOptions>;
-}) {
-  return (
-    params.candidateModelOptions?.[params.model]?.fastMode ??
-    params.candidateFastMode ??
-    isQaFastModeModelRef(params.model)
-  );
-}
-
-function resolveJudgeOptions(params: {
-  model: string;
-  judgeThinkingDefault?: QaThinkingLevel;
-  judgeModelOptions?: Record<string, QaCharacterModelOptions>;
-}) {
-  const modelDefaults = DEFAULT_JUDGE_MODEL_OPTIONS[params.model];
-  const modelOptions = params.judgeModelOptions?.[params.model];
+function resolveCandidateOptions(params: QaCharacterEvalParams, model: string) {
+  const modelOptions = params.candidateModelOptions?.[model];
   return {
     thinkingDefault:
       modelOptions?.thinkingDefault ??
-      params.judgeThinkingDefault ??
-      modelDefaults?.thinkingDefault ??
-      DEFAULT_JUDGE_THINKING,
-    fastMode: modelOptions?.fastMode ?? modelDefaults?.fastMode ?? false,
+      params.candidateThinkingByModel?.[model] ??
+      params.candidateThinkingDefault ??
+      DEFAULT_CHARACTER_THINKING_BY_MODEL[model] ??
+      DEFAULT_CHARACTER_THINKING,
+    fastMode: modelOptions?.fastMode ?? params.candidateFastMode ?? isQaFastModeModelRef(model),
   };
 }
 
 function sanitizePathPart(value: string) {
   const sanitized = value.replace(/[^a-z0-9._-]+/gi, "-").replace(/^-+|-+$/g, "");
   return sanitized || "model";
-}
-
-function normalizeConcurrency(value: number | undefined, fallback = 1) {
-  if (value === undefined) {
-    return fallback;
-  }
-  if (!Number.isFinite(value)) {
-    return fallback;
-  }
-  return Math.max(1, Math.floor(value));
-}
-
-async function mapWithConcurrency<T, U>(
-  items: readonly T[],
-  concurrency: number,
-  mapper: (item: T, index: number) => Promise<U>,
-) {
-  const results = Array.from<U>({ length: items.length });
-  let nextIndex = 0;
-  const workerCount = Math.min(normalizeConcurrency(concurrency), items.length);
-  const workers = Array.from({ length: workerCount }, async () => {
-    while (nextIndex < items.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      results[index] = await mapper(items[index], index);
-    }
-  });
-  await Promise.all(workers);
-  return results;
 }
 
 function extractTranscript(result: QaSuiteResult) {
@@ -256,17 +181,8 @@ function formatDuration(ms: number) {
   if (!Number.isFinite(ms) || ms < 0) {
     return "unknown";
   }
-  if (ms < 1_000) {
-    return `${Math.round(ms)}ms`;
-  }
-  if (ms < 60_000) {
-    const seconds = ms / 1_000;
-    return `${seconds >= 10 ? Math.round(seconds) : Number(seconds.toFixed(1))}s`;
-  }
-  const totalSeconds = Math.round(ms / 1_000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`;
+  const roundedMs = ms < 1000 ? Math.round(ms) : Math.round(ms / 1000) * 1000;
+  return formatDurationCompact(roundedMs, { showYears: true, spaced: true }) ?? "0ms";
 }
 
 function logCharacterEvalProgress(
@@ -290,10 +206,6 @@ function summarizeRunStats(run: QaCharacterEvalRun) {
   ].join(" ");
 }
 
-function formatBlindCandidateLabel(index: number) {
-  return `candidate-${String(index + 1).padStart(2, "0")}`;
-}
-
 function buildJudgePrompt(params: {
   scenarioId: string;
   runs: readonly QaCharacterEvalRun[];
@@ -302,7 +214,9 @@ function buildJudgePrompt(params: {
   const labelToModel = new Map<string, string>();
   const runBlocks = params.runs
     .map((run, index) => {
-      const label = params.blindModels ? formatBlindCandidateLabel(index) : run.model;
+      const label = params.blindModels
+        ? `candidate-${String(index + 1).padStart(2, "0")}`
+        : run.model;
       labelToModel.set(label, run.model);
       return `## CANDIDATE ${label}
 
@@ -367,15 +281,11 @@ function normalizeJudgment(value: unknown, allowedModels: Set<string>): QaCharac
       if (!allowedModels.has(model)) {
         return null;
       }
-      const rank = typeof record.rank === "number" ? record.rank : Number(record.rank);
-      const score = typeof record.score === "number" ? record.score : Number(record.score);
+      const rank = Number(record.rank);
+      const score = Number(record.score);
       const summary = typeof record.summary === "string" ? record.summary : "";
-      const strengths = Array.isArray(record.strengths)
-        ? record.strengths.filter((item): item is string => typeof item === "string")
-        : [];
-      const weaknesses = Array.isArray(record.weaknesses)
-        ? record.weaknesses.filter((item): item is string => typeof item === "string")
-        : [];
+      const strengths = filterStringEntries(record.strengths);
+      const weaknesses = filterStringEntries(record.weaknesses);
       if (!Number.isFinite(rank) || !Number.isFinite(score)) {
         return null;
       }
@@ -399,17 +309,18 @@ function parseJudgeReply(reply: string | null, allowedModels: Set<string>) {
   if (rankings.length === 0) {
     throw new Error("judge reply did not contain valid rankings");
   }
+  if (
+    rankings.length !== allowedModels.size ||
+    new Set(rankings.map(({ model }) => model)).size !== allowedModels.size ||
+    rankings.some(({ rank }, index) => rank !== index + 1)
+  ) {
+    throw new Error("judge reply must rank every candidate exactly once with consecutive ranks");
+  }
   return rankings;
 }
 
-async function defaultRunJudge(params: {
-  repoRoot: string;
-  judgeModel: string;
-  judgeThinkingDefault: QaThinkingLevel;
-  judgeFastMode: boolean;
-  prompt: string;
-  timeoutMs: number;
-}) {
+async function defaultRunJudge(params: Parameters<RunJudgeFn>[0]) {
+  const { runQaManualLane } = await import("./manual-lane.runtime.js");
   const result = await runQaManualLane({
     repoRoot: params.repoRoot,
     providerMode: "live-frontier",
@@ -421,6 +332,11 @@ async function defaultRunJudge(params: {
     timeoutMs: params.timeoutMs,
   });
   return result.reply;
+}
+
+async function defaultRunSuite(params: Parameters<RunSuiteFn>[0]) {
+  const { runQaFlowSuiteFromRuntime } = await import("./suite-launch.runtime.js");
+  return await runQaFlowSuiteFromRuntime(params);
 }
 
 function renderCharacterEvalReport(params: {
@@ -504,7 +420,7 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
   const startedAt = new Date();
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
   const scenarioId = params.scenarioId?.trim() || DEFAULT_CHARACTER_SCENARIO_ID;
-  const models = normalizeModelRefs(
+  const models = normalizeUniqueStringEntries(
     params.models.length > 0 ? params.models : DEFAULT_CHARACTER_EVAL_MODELS,
   );
   if (models.length === 0) {
@@ -513,92 +429,92 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
 
   const outputDir =
     params.outputDir ??
-    path.join(repoRoot, ".artifacts", "qa-e2e", `character-eval-${Date.now().toString(36)}`);
+    path.join(repoRoot, ".artifacts", "qa-e2e", `character-eval-${createQaArtifactRunId()}`);
   const runsDir = path.join(outputDir, "runs");
   await fs.mkdir(runsDir, { recursive: true });
 
-  const runSuite = params.runSuite ?? runQaSuiteFromRuntime;
-  const candidateConcurrency = normalizeConcurrency(
+  const runSuite = params.runSuite ?? defaultRunSuite;
+  const candidateConcurrency = resolveIntegerOption(
     params.candidateConcurrency,
     DEFAULT_CHARACTER_EVAL_CONCURRENCY,
+    { min: 1 },
   );
   logCharacterEvalProgress(
     params.progress,
     `start scenario=${scenarioId} candidates=${models.length} candidateConcurrency=${candidateConcurrency} output=${outputDir}`,
   );
   const candidatesStartedAt = Date.now();
-  const runs = await mapWithConcurrency(models, candidateConcurrency, async (model, index) => {
-    const thinkingDefault = resolveCandidateThinkingDefault({
-      model,
-      candidateThinkingDefault: params.candidateThinkingDefault,
-      candidateThinkingByModel: params.candidateThinkingByModel,
-      candidateModelOptions: params.candidateModelOptions,
-    });
-    const fastMode = resolveCandidateFastMode({
-      model,
-      candidateFastMode: params.candidateFastMode,
-      candidateModelOptions: params.candidateModelOptions,
-    });
-    const modelOutputDir = path.join(runsDir, sanitizePathPart(model));
-    const runStartedAt = Date.now();
-    logCharacterEvalProgress(
-      params.progress,
-      `candidate start ${formatEvalIndex(index, models.length)} model=${model} thinking=${thinkingDefault} fast=${fastMode ? "on" : "off"}`,
-    );
-    try {
-      const result = await runSuite({
-        repoRoot,
-        outputDir: modelOutputDir,
-        providerMode: "live-frontier",
-        primaryModel: model,
-        alternateModel: model,
-        fastMode,
-        thinkingDefault,
-        scenarioIds: [scenarioId],
-      });
-      const transcript = extractTranscript(result);
-      const transcriptFailure = detectTranscriptFailure(transcript);
-      const status =
-        result.scenarios.some((scenario) => scenario.status === "fail") || transcriptFailure
-          ? "fail"
-          : "pass";
-      const run = {
-        model,
-        status,
-        durationMs: Date.now() - runStartedAt,
-        outputDir: modelOutputDir,
-        thinkingDefault,
-        fastMode,
-        reportPath: result.reportPath,
-        summaryPath: result.summaryPath,
-        transcript,
-        stats: collectTranscriptStats(transcript),
-        ...(transcriptFailure ? { error: transcriptFailure } : {}),
-      } satisfies QaCharacterEvalRun;
+  const { results: runs } = await runTasksWithConcurrency({
+    tasks: models.map((model, index) => async () => {
+      const { thinkingDefault, fastMode } = resolveCandidateOptions(params, model);
+      const modelOutputDir = path.join(runsDir, `${index + 1}-${sanitizePathPart(model)}`);
+      const runStartedAt = Date.now();
+      const complete = <T extends QaCharacterEvalRun>(run: T) => {
+        logCharacterEvalProgress(
+          params.progress,
+          `candidate done ${formatEvalIndex(index, models.length)} model=${model} ${summarizeRunStats(run)}`,
+        );
+        return run;
+      };
       logCharacterEvalProgress(
         params.progress,
-        `candidate done ${formatEvalIndex(index, models.length)} model=${model} ${summarizeRunStats(run)}`,
+        `candidate start ${formatEvalIndex(index, models.length)} model=${model} thinking=${thinkingDefault} fast=${fastMode ? "on" : "off"}`,
       );
-      return run;
-    } catch (error) {
-      const transcript = "";
-      const run = {
-        model,
-        status: "fail",
-        durationMs: Date.now() - runStartedAt,
-        outputDir: modelOutputDir,
-        thinkingDefault,
-        fastMode,
-        transcript,
-        stats: collectTranscriptStats(transcript),
-        error: formatErrorMessage(error),
-      } satisfies QaCharacterEvalRun;
-      logCharacterEvalProgress(
-        params.progress,
-        `candidate done ${formatEvalIndex(index, models.length)} model=${model} ${summarizeRunStats(run)}`,
-      );
-      return run;
-    }
+      try {
+        const result = await runSuite({
+          repoRoot,
+          outputDir: modelOutputDir,
+          providerMode: "live-frontier",
+          primaryModel: model,
+          alternateModel: model,
+          fastMode,
+          thinkingDefault,
+          scenarioIds: [scenarioId],
+        });
+        const transcript = extractTranscript(result);
+        const stats = collectTranscriptStats(transcript);
+        // Character capture tolerates missed turns, so a passing scenario alone
+        // cannot prove this candidate ever delivered an assistant reply.
+        const transcriptFailure =
+          detectTranscriptFailure(transcript) ??
+          (stats.assistantTurns === 0
+            ? "candidate transcript did not contain an assistant reply"
+            : undefined);
+        const failedScenarioCount = await readQaSuiteFailedScenarioCountFromFile(
+          result.summaryPath,
+        );
+        const status = failedScenarioCount > 0 || transcriptFailure ? "fail" : "pass";
+        return complete({
+          model,
+          status,
+          durationMs: Date.now() - runStartedAt,
+          outputDir: modelOutputDir,
+          thinkingDefault,
+          fastMode,
+          reportPath: result.reportPath,
+          summaryPath: result.summaryPath,
+          transcript,
+          stats,
+          ...(transcriptFailure ? { error: transcriptFailure } : {}),
+        });
+      } catch (error) {
+        const transcript = "";
+        return complete({
+          model,
+          status: "fail",
+          durationMs: Date.now() - runStartedAt,
+          outputDir: modelOutputDir,
+          thinkingDefault,
+          fastMode,
+          transcript,
+          stats: collectTranscriptStats(transcript),
+          error: formatErrorMessage(error),
+        });
+      }
+    }),
+    limit: candidateConcurrency,
+    errorMode: "stop",
+    throwOnError: true,
   });
   const failedCandidateCount = runs.filter((run) => run.status === "fail").length;
   logCharacterEvalProgress(
@@ -606,17 +522,14 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
     `candidates done pass=${runs.length - failedCandidateCount} fail=${failedCandidateCount} duration=${formatDuration(Date.now() - candidatesStartedAt)}`,
   );
 
-  const judgeModels = normalizeModelRefs(
-    params.judgeModels && params.judgeModels.length > 0
-      ? params.judgeModels
-      : params.judgeModel
-        ? [params.judgeModel]
-        : DEFAULT_JUDGE_MODELS,
+  const judgeModels = normalizeUniqueStringEntries(
+    params.judgeModels?.length ? params.judgeModels : DEFAULT_JUDGE_MODELS,
   );
   const runJudge = params.runJudge ?? defaultRunJudge;
-  const judgeConcurrency = normalizeConcurrency(
+  const judgeConcurrency = resolveIntegerOption(
     params.judgeConcurrency,
     DEFAULT_CHARACTER_EVAL_CONCURRENCY,
+    { min: 1 },
   );
   const judgeTimeoutMs = params.judgeTimeoutMs ?? DEFAULT_JUDGE_TIMEOUT_MS;
   logCharacterEvalProgress(
@@ -624,21 +537,19 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
     `judges start judges=${judgeModels.length} judgeConcurrency=${judgeConcurrency} timeout=${formatDuration(judgeTimeoutMs)} labels=${params.judgeBlindModels === true ? "blind" : "visible"}`,
   );
   const judgesStartedAt = Date.now();
-  const judgments = await mapWithConcurrency(
-    judgeModels,
-    judgeConcurrency,
-    async (judgeModel, index) => {
-      const judgeOptions = resolveJudgeOptions({
-        model: judgeModel,
-        judgeThinkingDefault: params.judgeThinkingDefault,
-        judgeModelOptions: params.judgeModelOptions,
-      });
+  const { results: judgments } = await runTasksWithConcurrency({
+    tasks: judgeModels.map((judgeModel, index) => async () => {
+      const defaults = DEFAULT_JUDGE_MODEL_OPTIONS[judgeModel];
+      const options = params.judgeModelOptions?.[judgeModel];
+      const thinkingDefault =
+        options?.thinkingDefault ?? defaults?.thinkingDefault ?? DEFAULT_JUDGE_THINKING;
+      const fastMode = options?.fastMode ?? defaults?.fastMode ?? false;
       let rankings: QaCharacterEvalJudgment[] = [];
       let judgeError: string | undefined;
       const judgeStartedAt = Date.now();
       logCharacterEvalProgress(
         params.progress,
-        `judge start ${formatEvalIndex(index, judgeModels.length)} model=${judgeModel} thinking=${judgeOptions.thinkingDefault} fast=${judgeOptions.fastMode ? "on" : "off"} timeout=${formatDuration(judgeTimeoutMs)}`,
+        `judge start ${formatEvalIndex(index, judgeModels.length)} model=${judgeModel} thinking=${thinkingDefault} fast=${fastMode ? "on" : "off"} timeout=${formatDuration(judgeTimeoutMs)}`,
       );
       try {
         const judgePrompt = buildJudgePrompt({
@@ -649,14 +560,14 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
         const rawReply = await runJudge({
           repoRoot,
           judgeModel,
-          judgeThinkingDefault: judgeOptions.thinkingDefault,
-          judgeFastMode: judgeOptions.fastMode,
+          judgeThinkingDefault: thinkingDefault,
+          judgeFastMode: fastMode,
           prompt: judgePrompt.prompt,
           timeoutMs: judgeTimeoutMs,
         });
         rankings = parseJudgeReply(rawReply, new Set(judgePrompt.labelToModel.keys())).map(
           (ranking) =>
-            Object.assign({}, ranking, {
+            Object.assign(ranking, {
               model: judgePrompt.labelToModel.get(ranking.model) ?? ranking.model,
             }),
         );
@@ -666,8 +577,8 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
 
       const judgment = {
         model: judgeModel,
-        thinkingDefault: judgeOptions.thinkingDefault,
-        fastMode: judgeOptions.fastMode,
+        thinkingDefault,
+        fastMode,
         blindModels: params.judgeBlindModels === true,
         timeoutMs: judgeTimeoutMs,
         durationMs: Date.now() - judgeStartedAt,
@@ -679,8 +590,11 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
         `judge done ${formatEvalIndex(index, judgeModels.length)} model=${judgeModel} rankings=${rankings.length} duration=${formatDuration(judgment.durationMs)}${judgeError ? ` error="${judgeError}"` : ""}`,
       );
       return judgment;
-    },
-  );
+    }),
+    limit: judgeConcurrency,
+    errorMode: "stop",
+    throwOnError: true,
+  });
   const failedJudgeCount = judgments.filter((judgment) => judgment.rankings.length === 0).length;
   logCharacterEvalProgress(
     params.progress,
@@ -722,5 +636,5 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
     summaryPath,
     runs,
     judgments,
-  } satisfies QaCharacterEvalResult;
+  };
 }

@@ -1,7 +1,4 @@
-import {
-  hasMediaNormalizationEntry,
-  normalizeDurationToClosestMax,
-} from "../media-generation/runtime-shared.js";
+import { normalizeDurationToClosestMax } from "../media-generation/runtime-shared.js";
 import { resolveMusicGenerationModeCapabilities } from "./capabilities.js";
 import type {
   MusicGenerationIgnoredOverride,
@@ -20,14 +17,7 @@ type ResolvedMusicGenerationOverrides = {
   normalization?: MusicGenerationNormalization;
 };
 
-function resolveModelBooleanSupport(
-  model: string,
-  defaultSupport: boolean | undefined,
-  supportByModel: Readonly<Record<string, boolean>> | undefined,
-): boolean {
-  return supportByModel?.[model] ?? defaultSupport === true;
-}
-
+/** Sanitize caller overrides against provider capabilities before invoking a provider. */
 export function resolveMusicGenerationOverrides(params: {
   provider: MusicGenerationProvider;
   model: string;
@@ -43,10 +33,7 @@ export function resolveMusicGenerationOverrides(params: {
   });
   const ignoredOverrides: MusicGenerationIgnoredOverride[] = [];
   const normalization: MusicGenerationNormalization = {};
-  let lyrics = params.lyrics;
-  let instrumental = params.instrumental;
-  let durationSeconds = params.durationSeconds;
-  let format = params.format;
+  let { lyrics, instrumental, durationSeconds, format } = params;
 
   if (!caps) {
     return {
@@ -60,7 +47,7 @@ export function resolveMusicGenerationOverrides(params: {
 
   if (
     lyrics?.trim() &&
-    !resolveModelBooleanSupport(params.model, caps.supportsLyrics, caps.supportsLyricsByModel)
+    !(caps.supportsLyricsByModel?.[params.model] ?? caps.supportsLyrics === true)
   ) {
     ignoredOverrides.push({ key: "lyrics", value: lyrics });
     lyrics = undefined;
@@ -68,11 +55,7 @@ export function resolveMusicGenerationOverrides(params: {
 
   if (
     typeof instrumental === "boolean" &&
-    !resolveModelBooleanSupport(
-      params.model,
-      caps.supportsInstrumental,
-      caps.supportsInstrumentalByModel,
-    )
+    !(caps.supportsInstrumentalByModel?.[params.model] ?? caps.supportsInstrumental === true)
   ) {
     ignoredOverrides.push({ key: "instrumental", value: instrumental });
     instrumental = undefined;
@@ -101,6 +84,7 @@ export function resolveMusicGenerationOverrides(params: {
   if (format) {
     const supportedFormats =
       caps.supportedFormatsByModel?.[params.model] ?? caps.supportedFormats ?? [];
+    // An empty supportedFormats list means the provider validates formats internally.
     if (
       !caps.supportsFormat ||
       (supportedFormats.length > 0 && !supportedFormats.includes(format))
@@ -116,8 +100,6 @@ export function resolveMusicGenerationOverrides(params: {
     durationSeconds,
     format,
     ignoredOverrides,
-    normalization: hasMediaNormalizationEntry(normalization.durationSeconds)
-      ? normalization
-      : undefined,
+    normalization: normalization.durationSeconds ? normalization : undefined,
   };
 }

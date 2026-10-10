@@ -1,12 +1,507 @@
-import { describe, expect, it } from "vitest";
-import { __testing } from "./chrome.js";
+// Google Meet tests cover chrome plugin behavior.
+import { runInNewContext } from "node:vm";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { describe, expect, it, vi } from "vitest";
+import { resolveGoogleMeetConfig } from "../config.js";
+import { GoogleMeetRuntime } from "../runtime.js";
+import { MEET_URL, MEET_URL_EN } from "../test-support/fixtures.test-helpers.js";
+import {
+  launchChromeMeet,
+  leaveChromeMeet,
+  readChromeMeetTranscript,
+  recoverCurrentMeetTab,
+} from "./chrome.js";
+
+const logger = {
+  info() {},
+  warn() {},
+  error() {},
+  debug() {},
+};
+
+type TestGatewayRequest = (
+  method: string,
+  params: Record<string, unknown>,
+  options?: unknown,
+) => Promise<unknown>;
+
+function browserRuntime(
+  request: TestGatewayRequest,
+  nodes?: Pick<PluginRuntime["nodes"], "list" | "invoke">,
+): PluginRuntime {
+  const gateway: PluginRuntime["gateway"] = {
+    isAvailable: async () => true,
+    subscribeSessionChanges() {
+      throw new Error("Unexpected session change subscription");
+    },
+    async readSessionFacts() {
+      throw new Error("Unexpected session facts request");
+    },
+    async withSessionFacts() {
+      throw new Error("Unexpected session read scope");
+    },
+    async openPluginPanel() {
+      throw new Error("Unexpected plugin panel request");
+    },
+    request: async <T = unknown>(
+      method: string,
+      params?: Record<string, unknown>,
+      options?: unknown,
+    ) => (await request(method, params ?? {}, options)) as T,
+  };
+  return { gateway, ...(nodes ? { nodes } : {}) } as PluginRuntime;
+}
+
+function recoveryGateway(
+  tabs: Array<{ targetId: string; title: string; url: string }>,
+  result = JSON.stringify({ inCall: true, micMuted: true, url: MEET_URL_EN }),
+) {
+  const statusScripts: string[] = [];
+  const gatewayRequest = vi.fn(async (_method: string, params: Record<string, unknown>) => {
+    if (params.path === "/tabs") {
+      return { tabs };
+    }
+    if (params.path === "/tabs/focus") {
+      return { ok: true };
+    }
+    if (params.path === "/act") {
+      const fn = (params.body as { fn?: unknown } | undefined)?.fn;
+      if (typeof fn === "string") {
+        statusScripts.push(fn);
+      }
+      return { result };
+    }
+    throw new Error(`unexpected browser request path ${String(params.path)}`);
+  });
+  return { gatewayRequest, statusScripts };
+}
+
+function meetTab(targetId: string, url = MEET_URL_EN) {
+  return { targetId, title: "Meet", url };
+}
 
 describe("google meet chrome transport", () => {
-  it("wraps malformed browser status JSON", () => {
-    expect(() =>
-      __testing.parseMeetBrowserStatusForTest({
-        result: "{not json",
+  it.each([
+    { mode: "agent" as const, fullConfig: { transcripts: { enabled: false } }, capture: false },
+    { mode: "bidi" as const, fullConfig: undefined, capture: true },
+    { mode: "transcribe" as const, fullConfig: { transcripts: { enabled: false } }, capture: true },
+  ])(
+    "prefers a meeting tab over login ($mode, captions $capture)",
+    async ({ mode, fullConfig, capture }) => {
+      const { gatewayRequest, statusScripts } = recoveryGateway([
+        {
+          targetId: "google-login-tab",
+          title: "Sign in - Google Accounts",
+          url: "https://accounts.google.com/signin",
+        },
+        meetTab("meet-tab"),
+      ]);
+
+      const recovered = await recoverCurrentMeetTab({
+        runtime: browserRuntime(gatewayRequest),
+        config: resolveGoogleMeetConfig({}),
+        fullConfig,
+        mode,
+        readOnly: true,
+      });
+
+      expect(recovered).toMatchObject({ transport: "chrome", found: true, targetId: "meet-tab" });
+      expect(Object.hasOwn(recovered, "nodeId")).toBe(false);
+      expect(statusScripts).toHaveLength(1);
+      expect(statusScripts[0]).toContain(`const captureCaptions = ${capture}`);
+    },
+  );
+
+  it("prefers the tracked target for an unchanged Google Meet URL", async () => {
+    const { gatewayRequest } = recoveryGateway([
+      meetTab("other-meet-tab"),
+      meetTab("tracked-meet-tab"),
+    ]);
+
+    const recovered = await recoverCurrentMeetTab({
+      runtime: browserRuntime(gatewayRequest),
+      config: resolveGoogleMeetConfig({}),
+      mode: "transcribe",
+      readOnly: true,
+      trackedMeetingUrl: "https://meet.google.com/abc-defg-hij?authuser=0",
+      trackedTargetId: "tracked-meet-tab",
+      url: "https://meet.google.com/abc-defg-hij?hl=en",
+    });
+
+    expect(recovered).toMatchObject({ found: true, targetId: "tracked-meet-tab" });
+    expect(gatewayRequest).toHaveBeenCalledWith(
+      "browser.request",
+      expect.objectContaining({
+        path: "/act",
+        body: expect.objectContaining({ targetId: "tracked-meet-tab" }),
       }),
-    ).toThrow("Google Meet browser status JSON is malformed.");
+      expect.objectContaining({ scopes: ["operator.admin"] }),
+    );
   });
+
+  it("falls back from a tracked target that identifies another meeting", async () => {
+    const { gatewayRequest } = recoveryGateway([
+      meetTab("matching-meet-tab"),
+      meetTab("tracked-meet-tab", "https://meet.google.com/xyz-abcd-efg?hl=en"),
+    ]);
+
+    const recovered = await recoverCurrentMeetTab({
+      runtime: browserRuntime(gatewayRequest),
+      config: resolveGoogleMeetConfig({}),
+      mode: "transcribe",
+      readOnly: true,
+      trackedMeetingUrl: "https://meet.google.com/abc-defg-hij?authuser=0",
+      trackedTargetId: "tracked-meet-tab",
+      url: "https://meet.google.com/abc-defg-hij?hl=en",
+    });
+
+    expect(recovered).toMatchObject({ found: true, targetId: "matching-meet-tab" });
+  });
+
+  it("wraps malformed browser status JSON through tab recovery", async () => {
+    const { gatewayRequest } = recoveryGateway([meetTab("meet-tab")], "{not json");
+    const runtime = browserRuntime(gatewayRequest);
+
+    await expect(
+      recoverCurrentMeetTab({
+        runtime,
+        config: resolveGoogleMeetConfig({}),
+        mode: "transcribe",
+        readOnly: true,
+      }),
+    ).rejects.toThrow("Google Meet browser status JSON is malformed.");
+  });
+
+  it.each([
+    [10_000, 15_000],
+    [Number.MAX_SAFE_INTEGER, MAX_TIMER_TIMEOUT_MS],
+  ])("caps browser gateway timeout padding for %s ms", async (joinTimeoutMs, expectedTimeoutMs) => {
+    const gatewayRequest = vi.fn(async (_method, params) => {
+      if (params.path === "/tabs/open") {
+        return {
+          targetId: "meet-tab",
+          title: "Meet",
+          url: "https://meet.google.com/abc-defg-hij?hl=en",
+        };
+      }
+      if (params.path === "/act") {
+        return {
+          result: JSON.stringify({
+            manualAction: {
+              reason: "meet-admission-required",
+              message: "Waiting for admission",
+            },
+          }),
+        };
+      }
+      throw new Error(`unexpected browser request path ${String(params.path)}`);
+    });
+    const baseConfig = resolveGoogleMeetConfig({});
+
+    await launchChromeMeet({
+      runtime: browserRuntime(gatewayRequest),
+      config: {
+        ...baseConfig,
+        chrome: {
+          ...baseConfig.chrome,
+          joinTimeoutMs,
+          reuseExistingTab: false,
+        },
+      },
+      fullConfig: {},
+      meetingSessionId: "session-1",
+      mode: "transcribe",
+      url: "https://meet.google.com/abc-defg-hij",
+      logger,
+    });
+
+    expect(gatewayRequest).toHaveBeenCalledWith(
+      "browser.request",
+      expect.objectContaining({ path: "/tabs/open", timeoutMs: joinTimeoutMs }),
+      { timeoutMs: expectedTimeoutMs, scopes: ["operator.admin"] },
+    );
+  });
+
+  it.each(["pinned-node", ""])(
+    "leaves through a pinned node %j before yielding to inventory",
+    async (nodeId) => {
+      const requests: Parameters<PluginRuntime["nodes"]["invoke"]>[0][] = [];
+      const runtime = browserRuntime(
+        async () => {
+          throw new Error("Pinned node leave must not use the local browser");
+        },
+        {
+          list: async () => {
+            throw new Error("Pinned node leave must not resolve inventory");
+          },
+          invoke: async (request) => {
+            requests.push(request);
+            return { payload: { result: { tabs: [] } } };
+          },
+        },
+      );
+      const leaving = leaveChromeMeet({
+        transport: "chrome-node",
+        runtime,
+        config: resolveGoogleMeetConfig({ chromeNode: { node: "different-configured-node" } }),
+        nodeId,
+        meetingSessionId: "pinned-session",
+        meetingUrl: MEET_URL,
+        tab: { targetId: "pinned-tab", openedByPlugin: false },
+      });
+      const beforeYield = [...requests];
+      const result = await leaving;
+
+      expect(result).toStrictEqual({ left: true, note: "Meet tab is already closed." });
+      expect(beforeYield).toStrictEqual([
+        {
+          nodeId,
+          command: "browser.proxy",
+          params: { method: "GET", path: "/tabs", body: undefined, timeoutMs: 5_000 },
+          timeoutMs: 10_000,
+          scopes: ["operator.admin"],
+        },
+      ]);
+    },
+  );
+
+  it.each(["chrome", "chrome-node"] as const)(
+    "preserves %s route failures before launch-disabled leave",
+    async (transport) => {
+      const failure = new Error("route unavailable");
+      const events: string[] = [];
+      const runtime = browserRuntime(
+        async () => {
+          throw new Error("Disabled leave must not dispatch a local browser request");
+        },
+        {
+          list: async () => {
+            events.push("inventory");
+            throw failure;
+          },
+          invoke: async () => {
+            throw new Error("Disabled leave must not invoke a node");
+          },
+        },
+      );
+      runtime.gateway.isAvailable = async () => {
+        events.push("availability");
+        throw failure;
+      };
+      const leaving = leaveChromeMeet({
+        ...(transport === "chrome-node" ? { transport } : {}),
+        runtime,
+        config: resolveGoogleMeetConfig({ chrome: { launch: false } }),
+        meetingSessionId: "disabled-session",
+        meetingUrl: MEET_URL,
+        tab: { targetId: "disabled-tab", openedByPlugin: false },
+      });
+
+      if (transport === "chrome-node") {
+        await expect(leaving).rejects.toMatchObject({
+          message: "Google Meet node inventory unavailable",
+          cause: failure,
+        });
+        expect(events).toStrictEqual(["inventory"]);
+      } else {
+        await expect(leaving).rejects.toBe(failure);
+        expect(events).toStrictEqual(["availability"]);
+      }
+    },
+  );
+
+  it("re-resolves configured recovery nodes and preserves node response identity", async () => {
+    const invocations: Parameters<PluginRuntime["nodes"]["invoke"]>[0][] = [];
+    const config = resolveGoogleMeetConfig({ chromeNode: { node: "first-host" } });
+    const runtime = browserRuntime(
+      async () => {
+        throw new Error("Node recovery must not fall back to the local browser");
+      },
+      {
+        list: async () => ({
+          nodes: ["first", "second"].map((id) => ({
+            nodeId: `${id}-node`,
+            displayName: `${id}-host`,
+            connected: true,
+            commands: ["googlemeet.chrome", "browser.proxy"],
+          })),
+        }),
+        invoke: async (request) => {
+          invocations.push(request);
+          return { payload: { result: { tabs: [] } } };
+        },
+      },
+    );
+    const meet = new GoogleMeetRuntime({ runtime, config, fullConfig: {}, logger });
+    const first = await meet.recoverCurrentTab({ transport: "chrome-node" });
+    config.chromeNode.node = "second-host";
+    const second = await meet.recoverCurrentTab({ transport: "chrome-node" });
+
+    for (const [result, nodeId] of [
+      [first, "first-node"],
+      [second, "second-node"],
+    ] as const) {
+      expect(Object.hasOwn(result, "nodeId")).toBe(true);
+      expect(result).toStrictEqual({
+        transport: "chrome-node",
+        nodeId,
+        found: false,
+        tab: undefined,
+        message: "No existing Meet tab found on the selected Chrome node.",
+      });
+    }
+    expect(invocations).toStrictEqual(
+      ["first-node", "second-node"].map((nodeId) => ({
+        nodeId,
+        command: "browser.proxy",
+        params: { method: "GET", path: "/tabs", body: undefined, timeoutMs: 5_000 },
+        timeoutMs: 10_000,
+        scopes: ["operator.admin"],
+      })),
+    );
+  });
+
+  it.each([
+    { transport: "chrome" as const, finalize: undefined, joinTimeoutMs: 1_234, timeoutMs: 1_234 },
+    { transport: "chrome-node" as const, finalize: false, joinTimeoutMs: 1, timeoutMs: 1_000 },
+    { transport: "chrome-node" as const, finalize: true, joinTimeoutMs: 30_000, timeoutMs: 10_000 },
+  ])(
+    "reads $transport captions with finalize=$finalize and bounded envelope",
+    async ({ transport, finalize, joinTimeoutMs, timeoutMs }) => {
+      const committed = {
+        at: "2026-09-01T00:00:00.000Z",
+        speaker: "First",
+        text: "Completed caption",
+        source: {
+          id: "caption-1",
+          epoch: "caption-epoch",
+          revision: "2",
+          finalized: true,
+          ownEcho: false,
+        },
+      };
+      const visible = {
+        at: "2026-09-01T00:00:01.000Z",
+        speaker: "Second",
+        text: "Progressive caption",
+        source: { id: "caption-2", epoch: "caption-epoch", revision: "1", finalized: false },
+      };
+      const captionState = {
+        sessionId: "transcript-session",
+        epoch: "caption-epoch",
+        droppedLines: 0,
+        lines: [committed],
+        visible: [visible],
+        settleTimer: undefined,
+      };
+      const browserCalls: Array<{
+        method: string;
+        params: Record<string, unknown>;
+        options: unknown;
+      }> = [];
+      const nodeCalls: Parameters<PluginRuntime["nodes"]["invoke"]>[0][] = [];
+      const evaluate = (params: Record<string, unknown>) => {
+        const body = params.body as { fn: string };
+        return {
+          result: runInNewContext(`(${body.fn})()`, {
+            JSON,
+            URL,
+            location: { href: MEET_URL_EN },
+            window: { __openclawMeetCaptions: captionState },
+            clearTimeout,
+          }),
+        };
+      };
+      const runtime = browserRuntime(
+        async (method, params, options) => {
+          browserCalls.push({ method, params, options });
+          return evaluate(params);
+        },
+        {
+          list: async () => {
+            throw new Error("Pinned transcript read must not resolve inventory");
+          },
+          invoke: async (request) => {
+            nodeCalls.push(request);
+            return { payload: { result: evaluate(request.params as Record<string, unknown>) } };
+          },
+        },
+      );
+      const now = vi.spyOn(performance, "now").mockReturnValue(1_000_000);
+      try {
+        // Finalization replaces the source inside the page VM; expect an independent wire value.
+        const finalizedVisible = {
+          ...visible,
+          source: { ...visible.source, revision: "2", finalized: true },
+        };
+        const expectedLines = finalize === true ? [committed, finalizedVisible] : [committed];
+        // Legacy page rows have no envelope: host parsing must preserve the known row
+        // facts while keeping native attribution unknown, even with ownEcho: false.
+        const unknownProvenance = {
+          observer: "google-meet",
+          epoch: "caption-epoch",
+          self: "unknown",
+        };
+        const expectedCommitted = {
+          ...committed,
+          provenance: {
+            ...unknownProvenance,
+            observedAt: committed.at,
+            speaker: committed.speaker,
+          },
+        };
+        const expectedVisible = {
+          ...(finalize === true ? finalizedVisible : visible),
+          provenance: { ...unknownProvenance, observedAt: visible.at, speaker: visible.speaker },
+        };
+        const result = await readChromeMeetTranscript({
+          runtime,
+          config: resolveGoogleMeetConfig({ chrome: { joinTimeoutMs } }),
+          ...(transport === "chrome-node" ? { transport, nodeId: "transcript-node" } : {}),
+          ...(finalize === undefined ? {} : { finalize }),
+          meetingUrl: MEET_URL,
+          meetingSessionId: "transcript-session",
+          tab: { targetId: "transcript-tab", openedByPlugin: false },
+        });
+        expect(result).toStrictEqual({
+          droppedLines: 0,
+          epoch: "caption-epoch",
+          lines: finalize === true ? [expectedCommitted, expectedVisible] : [expectedCommitted],
+          pendingLines: finalize === true ? [] : [expectedVisible],
+        });
+        expect(captionState.lines).toEqual(expectedLines);
+        expect(captionState.visible).toEqual(finalize === true ? [] : [visible]);
+        const params = {
+          method: "POST",
+          path: "/act",
+          body: { kind: "evaluate", targetId: "transcript-tab", fn: expect.any(String) },
+          timeoutMs,
+        };
+        if (transport === "chrome-node") {
+          expect(browserCalls).toStrictEqual([]);
+          expect(nodeCalls).toStrictEqual([
+            {
+              nodeId: "transcript-node",
+              command: "browser.proxy",
+              params,
+              timeoutMs: timeoutMs + 5_000,
+              scopes: ["operator.admin"],
+            },
+          ]);
+        } else {
+          expect(nodeCalls).toStrictEqual([]);
+          expect(browserCalls).toStrictEqual([
+            {
+              method: "browser.request",
+              params,
+              options: { timeoutMs: timeoutMs + 5_000, scopes: ["operator.admin"] },
+            },
+          ]);
+        }
+      } finally {
+        now.mockRestore();
+      }
+    },
+  );
 });

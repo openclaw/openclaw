@@ -1,3 +1,4 @@
+// Legacy model metadata tests cover doctor migration that adds model metadata.
 import { describe, expect, it } from "vitest";
 import type { ModelDefinitionConfig } from "../../../config/types.models.js";
 import { isLegacyModelsAddCodexMetadataModel } from "./legacy-models-add-metadata.js";
@@ -5,7 +6,7 @@ import { isLegacyModelsAddCodexMetadataModel } from "./legacy-models-add-metadat
 function buildLegacyModel(id: string): Partial<ModelDefinitionConfig> {
   return {
     id,
-    api: "openai-codex-responses",
+    api: "openai-chatgpt-responses",
     reasoning: true,
     input: ["text", "image"],
     cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },

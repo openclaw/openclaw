@@ -1,23 +1,26 @@
+// Tests heartbeat runner guardrails for subagent sessions.
 import fs from "node:fs/promises";
-import { describe, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import { withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
+import {
+  enqueueSystemEvent,
+  peekSystemEventEntries,
+  resetSystemEventsForTest,
+} from "./system-events.js";
 
 installHeartbeatRunnerTestRuntime();
 
-function requireFirstMockCall<T>(mock: { mock: { calls: T[][] } }, label: string): T[] {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call;
-}
+afterEach(() => {
+  resetSystemEventsForTest();
+});
 
 describe("runHeartbeatOnce", () => {
-  it("falls back to the main session when a subagent session key is forced", async () => {
+  it("routes single-owner dmScope=main direct event wakes to the main session", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg: OpenClawConfig = {
         agents: {
@@ -25,16 +28,16 @@ describe("runHeartbeatOnce", () => {
             workspace: tmpDir,
             heartbeat: {
               every: "5m",
-              target: "whatsapp",
+              target: "telegram",
             },
           },
         },
         channels: {
-          whatsapp: {
-            allowFrom: ["*"],
+          telegram: {
+            allowFrom: ["123"],
           },
         },
-        session: { store: storePath },
+        session: { store: storePath, dmScope: "main" },
       };
 
       const mainSessionKey = resolveMainSessionKey(cfg);
@@ -44,46 +47,41 @@ describe("runHeartbeatOnce", () => {
           [mainSessionKey]: {
             sessionId: "sid-main",
             updatedAt: Date.now(),
-            lastChannel: "whatsapp",
-            lastProvider: "whatsapp",
-            lastTo: "120363401234567890@g.us",
+            lastChannel: "telegram",
+            lastProvider: "telegram",
+            lastTo: "123",
           },
-          "agent:main:subagent:demo": {
-            sessionId: "sid-subagent",
+          "agent:main:telegram:default:direct:123": {
+            sessionId: "sid-orphan",
             updatedAt: Date.now(),
-            lastChannel: "whatsapp",
-            lastProvider: "whatsapp",
-            lastTo: "120363409999999999@g.us",
+            lastChannel: "telegram",
+            lastProvider: "telegram",
+            lastTo: "456",
           },
         }),
       );
-
-      replySpy.mockResolvedValue({ text: "Final alert" });
-      const sendWhatsApp = vi.fn().mockResolvedValue({
-        messageId: "m1",
-        toJid: "jid",
+      enqueueSystemEvent("Exec completed (run-dm, code 0)", {
+        sessionKey: mainSessionKey,
       });
+      replySpy.mockResolvedValue({ text: "NO_REPLY" });
 
       await runHeartbeatOnce({
         cfg,
-        sessionKey: "agent:main:subagent:demo",
+        sessionKey: "agent:main:telegram:default:direct:123",
+        source: "exec-event",
         deps: {
           getReplyFromConfig: replySpy,
-          whatsapp: sendWhatsApp,
+          telegram: vi.fn().mockResolvedValue({ messageId: "m1", chatId: "123" }),
           getQueueSize: () => 0,
           nowMs: () => 0,
         },
       });
 
       expect(replySpy).toHaveBeenCalledTimes(1);
-      const [replyParams, _replyRuntime, replyConfig] = requireFirstMockCall(
-        replySpy,
-        "reply",
-      ) as Parameters<typeof replySpy>;
+      const [replyParams] = expectDefined(replySpy.mock.calls[0], "reply call");
       expect(replyParams?.SessionKey).toBe(mainSessionKey);
-      expect(replyParams?.OriginatingChannel).toBeUndefined();
-      expect(replyParams?.OriginatingTo).toBeUndefined();
-      expect(replyConfig).toBe(cfg);
+      expect(replyParams?.Body).toContain("async command completion event");
+      expect(peekSystemEventEntries(mainSessionKey)).toStrictEqual([]);
     });
   });
 });

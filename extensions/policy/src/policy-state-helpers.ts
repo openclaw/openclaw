@@ -1,0 +1,54 @@
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { getPolicyPath } from "./policy-value.js";
+
+export function ocPathSegment(value: string): string {
+  if (/^(?:[A-Za-z0-9_-]+|#\d+)$/.test(value)) {
+    return value;
+  }
+  if (value.includes('"') || value.includes("\\")) {
+    return value;
+  }
+  return `"${value}"`;
+}
+
+export function readBooleanPath(value: unknown, path: readonly string[]): boolean | undefined {
+  const current = getPolicyPath(value, path);
+  return typeof current === "boolean" ? current : undefined;
+}
+
+export function collectPolicyConfiguredAgents(agents: Record<string, unknown>) {
+  const entries = agents.entries;
+  if (Object.hasOwn(agents, "entries") && entries !== undefined) {
+    return isRecord(entries)
+      ? Object.entries(entries)
+          .toSorted(([a], [b]) => a.localeCompare(b))
+          .map(([agentId, value]) => ({
+            agentId,
+            sourceBase: `oc://openclaw.config/agents/entries/${ocPathSegment(agentId)}`,
+            value,
+          }))
+      : [];
+  }
+  return Array.isArray(agents.list)
+    ? agents.list.map((value, index) => ({
+        agentId:
+          isRecord(value) && typeof value.id === "string" && value.id.trim() !== ""
+            ? value.id.trim()
+            : `agent-${index}`,
+        sourceBase: `oc://openclaw.config/agents/list/#${index}`,
+        value,
+      }))
+    : [];
+}
+
+export function resolvePolicyValue<T extends string | boolean>(
+  local: T | undefined,
+  inherited: T | undefined,
+  fallback: T,
+) {
+  return {
+    value: local ?? inherited ?? fallback,
+    explicit: local !== undefined || inherited !== undefined,
+    inherited: local === undefined && inherited !== undefined,
+  };
+}

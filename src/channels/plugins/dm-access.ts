@@ -1,6 +1,8 @@
-import { normalizeStringEntries } from "../../shared/string-normalization.js";
+import { asNullableRecord as asObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 
 export type ChannelDmAllowFromMode = "topOnly" | "topOrNested" | "nestedOnly";
+
 export type ChannelDmPolicy = "pairing" | "allowlist" | "open" | "disabled";
 
 export type ChannelDmAccess = {
@@ -12,9 +14,11 @@ export type DmAccessRecord = Record<string, unknown>;
 
 type DmFieldKind = "policy" | "allowFrom";
 
+type DmFieldPath = readonly [string] | readonly [string, string];
+
 type DmFieldPaths = {
-  canonicalPath: readonly string[];
-  legacyPath: readonly string[];
+  canonicalPath: DmFieldPath;
+  legacyPath: DmFieldPath;
 };
 
 export type CompatMutationResult = {
@@ -28,20 +32,11 @@ export function normalizeChannelDmPolicy(value: string | undefined): ChannelDmPo
     : undefined;
 }
 
-function asObjectRecord(value: unknown): DmAccessRecord | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as DmAccessRecord)
-    : null;
-}
-
-function cloneDm(entry: DmAccessRecord): DmAccessRecord | null {
-  const dm = asObjectRecord(entry.dm);
-  return dm ? { ...dm } : null;
-}
-
 function resolveDmFieldPaths(mode: ChannelDmAllowFromMode, kind: DmFieldKind): DmFieldPaths {
   const topKey = kind === "policy" ? "dmPolicy" : "allowFrom";
   const nestedKey = kind === "policy" ? "policy" : "allowFrom";
+  // Some channels kept DM access under `dm.*`, while newer config uses top
+  // fields. Resolve both names here so read/write/migration logic stays paired.
   if (mode === "nestedOnly") {
     return {
       canonicalPath: ["dm", nestedKey],
@@ -66,35 +61,38 @@ function readPath(entry: DmAccessRecord | null | undefined, path: readonly strin
   return current;
 }
 
-function deletePath(entry: DmAccessRecord, path: readonly string[]): boolean {
-  if (path.length === 1) {
-    if (entry[path[0]] === undefined) {
+function deletePath(entry: DmAccessRecord, path: DmFieldPath): boolean {
+  const [head, tail] = path;
+  if (tail === undefined) {
+    if (entry[head] === undefined) {
       return false;
     }
-    delete entry[path[0]];
+    delete entry[head];
     return true;
   }
-  const parent = asObjectRecord(entry[path[0]]);
-  if (!parent || parent[path[1]] === undefined) {
+  const parent = asObjectRecord(entry[head]);
+  if (!parent || parent[tail] === undefined) {
     return false;
   }
-  delete parent[path[1]];
+  delete parent[tail];
   if (Object.keys(parent).length === 0) {
-    delete entry[path[0]];
+    delete entry[head];
   } else {
-    entry[path[0]] = parent;
+    entry[head] = parent;
   }
   return true;
 }
 
-function writePath(entry: DmAccessRecord, path: readonly string[], value: unknown): void {
-  if (path.length === 1) {
-    entry[path[0]] = value;
+function writePath(entry: DmAccessRecord, path: DmFieldPath, value: unknown): void {
+  const [head, tail] = path;
+  if (tail === undefined) {
+    entry[head] = value;
     return;
   }
-  const parent = asObjectRecord(entry[path[0]]) ? { ...(entry[path[0]] as DmAccessRecord) } : {};
-  parent[path[1]] = value;
-  entry[path[0]] = parent;
+  const existingParent = asObjectRecord(entry[head]);
+  const parent = existingParent ? { ...existingParent } : {};
+  parent[tail] = value;
+  entry[head] = parent;
 }
 
 function allowFromListsMatch(left: unknown, right: unknown): boolean {
@@ -184,76 +182,53 @@ export function normalizeLegacyDmAliases(params: {
   changes: string[];
   promoteAllowFrom?: boolean;
 }): CompatMutationResult {
-  let changed = false;
-  let updated: DmAccessRecord = params.entry;
-  const rawDm = updated.dm;
-  const dm = cloneDm(updated);
-  let dmChanged = false;
-
-  const topDmPolicy = updated.dmPolicy;
-  const legacyDmPolicy = dm?.policy;
-  if (topDmPolicy === undefined && legacyDmPolicy !== undefined) {
-    updated = { ...updated, dmPolicy: legacyDmPolicy };
-    changed = true;
-    if (dm) {
-      delete dm.policy;
-      dmChanged = true;
-    }
-    params.changes.push(`Moved ${params.pathPrefix}.dm.policy → ${params.pathPrefix}.dmPolicy.`);
-  } else if (
-    topDmPolicy !== undefined &&
-    legacyDmPolicy !== undefined &&
-    topDmPolicy === legacyDmPolicy
-  ) {
-    if (dm) {
-      delete dm.policy;
-      dmChanged = true;
-      params.changes.push(`Removed ${params.pathPrefix}.dm.policy (dmPolicy already set).`);
-    }
+  const rawDm = asObjectRecord(params.entry.dm);
+  if (!rawDm) {
+    return { entry: params.entry, changed: false };
   }
-
-  if (params.promoteAllowFrom !== false) {
-    const topAllowFrom = updated.allowFrom;
-    const legacyAllowFrom = dm?.allowFrom;
-    if (topAllowFrom === undefined && legacyAllowFrom !== undefined) {
-      updated = { ...updated, allowFrom: legacyAllowFrom };
-      changed = true;
-      if (dm) {
-        delete dm.allowFrom;
-        dmChanged = true;
-      }
+  const dm = { ...rawDm };
+  let updated = { ...params.entry };
+  let changed = false;
+  // Canonical values win; equal aliases are removed so Doctor repairs are idempotent.
+  // Some channels still use nested allowlists and opt out of their promotion.
+  for (const [topKey, legacyKey] of [
+    ["dmPolicy", "policy"],
+    ["allowFrom", "allowFrom"],
+  ] as const) {
+    if (topKey === "allowFrom" && params.promoteAllowFrom === false) {
+      continue;
+    }
+    const canonical = updated[topKey];
+    const legacy = dm[legacyKey];
+    if (legacy === undefined) {
+      continue;
+    }
+    if (canonical === undefined) {
+      updated[topKey] = legacy;
       params.changes.push(
-        `Moved ${params.pathPrefix}.dm.allowFrom → ${params.pathPrefix}.allowFrom.`,
+        `Moved ${params.pathPrefix}.dm.${legacyKey} → ${params.pathPrefix}.${topKey}.`,
       );
     } else if (
-      topAllowFrom !== undefined &&
-      legacyAllowFrom !== undefined &&
-      allowFromListsMatch(topAllowFrom, legacyAllowFrom)
+      topKey === "dmPolicy" ? canonical === legacy : allowFromListsMatch(canonical, legacy)
     ) {
-      if (dm) {
-        delete dm.allowFrom;
-        dmChanged = true;
-        params.changes.push(`Removed ${params.pathPrefix}.dm.allowFrom (allowFrom already set).`);
-      }
-    }
-  }
-
-  if (dm && asObjectRecord(rawDm) && dmChanged) {
-    const keys = Object.keys(dm);
-    if (keys.length === 0) {
-      if (updated.dm !== undefined) {
-        const { dm: _ignored, ...rest } = updated;
-        updated = rest;
-        changed = true;
-        params.changes.push(`Removed empty ${params.pathPrefix}.dm after migration.`);
-      }
+      params.changes.push(`Removed ${params.pathPrefix}.dm.${legacyKey} (${topKey} already set).`);
     } else {
-      updated = { ...updated, dm };
-      changed = true;
+      continue;
     }
+    delete dm[legacyKey];
+    changed = true;
   }
-
-  return { entry: updated, changed };
+  if (!changed) {
+    return { entry: params.entry, changed: false };
+  }
+  if (Object.keys(dm).length === 0) {
+    const { dm: _ignored, ...rest } = updated;
+    updated = rest;
+    params.changes.push(`Removed empty ${params.pathPrefix}.dm after migration.`);
+  } else {
+    updated = { ...updated, dm };
+  }
+  return { entry: updated, changed: true };
 }
 
 function hasWildcard(list?: Array<string | number>) {
@@ -277,6 +252,8 @@ export function ensureOpenDmPolicyAllowFromWildcard(params: {
   const policyPaths = resolveDmFieldPaths(params.mode, "policy");
   const canonicalPolicy = readPath(params.entry, policyPaths.canonicalPath);
   const legacyPolicy = readPath(params.entry, policyPaths.legacyPath);
+  // Open policy may have arrived through the legacy nested path; move it before
+  // adding the wildcard so all repair output points at canonical config.
   if (canonicalPolicy === undefined && legacyPolicy === "open") {
     writePath(params.entry, policyPaths.canonicalPath, "open");
     deletePath(params.entry, policyPaths.legacyPath);
@@ -294,29 +271,26 @@ export function ensureOpenDmPolicyAllowFromWildcard(params: {
       ? (legacyAllowFrom as Array<string | number>)
       : undefined;
 
-  if (hasWildcard(sourceAllowFrom)) {
-    if (canonicalAllowFrom === undefined && sourceAllowFrom) {
-      setCanonicalDmAllowFrom({
-        entry: params.entry,
-        mode: params.mode,
-        allowFrom: sourceAllowFrom,
-        pathPrefix: params.pathPrefix,
-        changes: params.changes,
-        reason: `moved wildcard allowlist from ${formatPath(params.pathPrefix, allowPaths.legacyPath)}`,
-      });
+  let allowFrom: Array<string | number>;
+  const sourceHasWildcard = hasWildcard(sourceAllowFrom);
+  if (sourceHasWildcard) {
+    if (canonicalAllowFrom !== undefined || !sourceAllowFrom) {
+      return;
     }
-    return;
+    allowFrom = sourceAllowFrom;
+  } else {
+    allowFrom = [...(sourceAllowFrom ?? []), "*"];
   }
-
-  const nextAllowFrom = [...(sourceAllowFrom ?? []), "*"];
   setCanonicalDmAllowFrom({
     entry: params.entry,
     mode: params.mode,
-    allowFrom: nextAllowFrom,
+    allowFrom,
     pathPrefix: params.pathPrefix,
     changes: params.changes,
-    reason: Array.isArray(sourceAllowFrom)
-      ? 'added "*" (required by dmPolicy="open")'
-      : 'set to ["*"] (required by dmPolicy="open")',
+    reason: sourceHasWildcard
+      ? `moved wildcard allowlist from ${formatPath(params.pathPrefix, allowPaths.legacyPath)}`
+      : Array.isArray(sourceAllowFrom)
+        ? 'added "*" (required by dmPolicy="open")'
+        : 'set to ["*"] (required by dmPolicy="open")',
   });
 }

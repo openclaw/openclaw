@@ -1,0 +1,549 @@
+import type { AgentRunTimeoutPhase } from "@openclaw/normalization-core/agent-run-terminal-outcome";
+import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
+/**
+ * Subscribes to embedded-agent sessions and streams formatted replies/events.
+ */
+import { formatToolAggregate } from "../auto-reply/tool-meta.js";
+import { createAbortError } from "../infra/abort-signal.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import { parseInlineDirectives } from "../utils/directive-tags.js";
+import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
+import { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
+import { MAX_MESSAGING_HISTORY_ENTRIES } from "./embedded-agent-messaging-history.js";
+import { hasCommittedMessagingToolDeliveryEvidence } from "./embedded-agent-runner/delivery-evidence.js";
+import { mergeEmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
+import { installToolAuthoredSourceReplyTerminalHook } from "./embedded-agent-runner/run/message-tool-terminal.js";
+import { consumeEmbeddedToolReceipt } from "./embedded-agent-runner/tool-send-receipts.js";
+import type { EmbeddedRunLivenessState } from "./embedded-agent-runner/types.js";
+import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
+import { createEmbeddedAgentSessionEventHandler } from "./embedded-agent-subscribe.handlers.js";
+import { readPendingToolMediaReply } from "./embedded-agent-subscribe.handlers.messages.replies.js";
+import { cleanupRunToolStartData } from "./embedded-agent-subscribe.handlers.tools.start.js";
+import type {
+  EmbeddedAgentSubscribeContext,
+  EmbeddedAgentSubscribeState,
+} from "./embedded-agent-subscribe.handlers.types.js";
+import { createEmbeddedModelState } from "./embedded-agent-subscribe.model-state.js";
+import { createReplyDelivery } from "./embedded-agent-subscribe.reply-delivery.js";
+import { createEmbeddedAgentSubscribeState } from "./embedded-agent-subscribe.run-state.js";
+import { createStreamRendering } from "./embedded-agent-subscribe.stream-rendering.js";
+import { createEmbeddedToolLifecycleRunner } from "./embedded-agent-subscribe.tool-lifecycle.js";
+import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
+import {
+  extractToolResultMediaArtifact,
+  filterToolResultMediaUrls,
+} from "./embedded-agent-tool-media.js";
+import { stripDowngradedToolCallText } from "./embedded-agent-utils.js";
+import { sessionManagerReadTranscriptStart } from "./sessions/session-manager-current-turn.js";
+import { setSessionModelUsageSink } from "./sessions/session-model-usage.js";
+
+const embeddedLog = createSubsystemLogger("agent/embedded");
+
+function resolveEmbeddedAgentSessionLogger(messageChannel?: string) {
+  const normalizedChannel = normalizeMessageChannel(messageChannel);
+  if (normalizedChannel && isDeliverableMessageChannel(normalizedChannel)) {
+    return createSubsystemLogger(`gateway/channels/${normalizedChannel}`);
+  }
+  return embeddedLog;
+}
+
+export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessionParams) {
+  let params = input;
+  const onAgentEvent = params.onAgentEvent;
+  if (onAgentEvent) {
+    let transcriptStartPublished = false;
+    const sessionManager = params.session.sessionManager;
+    params = {
+      ...params,
+      onAgentEvent: (event) => {
+        if (
+          transcriptStartPublished ||
+          (event.stream === "lifecycle" && typeof event.data.phase !== "string")
+        ) {
+          return onAgentEvent(event);
+        }
+        const transcriptStart = sessionManager[sessionManagerReadTranscriptStart]();
+        transcriptStartPublished = true;
+        return onAgentEvent({
+          ...event,
+          transcriptStart,
+        });
+      },
+    };
+  }
+  const log = resolveEmbeddedAgentSessionLogger(params.messageChannel);
+  const toolResultFormat = params.toolResultFormat ?? "markdown";
+  const useMarkdown = toolResultFormat === "markdown";
+  const state: EmbeddedAgentSubscribeState = createEmbeddedAgentSubscribeState(params);
+  const {
+    captureModelEvent,
+    recordAuxiliaryUsage,
+    getUsageTotals,
+    getLastAssistantUsage,
+    getCurrentAttemptAssistant,
+    hasSuccessfulModelResponse,
+  } = createEmbeddedModelState(params, log);
+  let compactionCount = 0;
+  let compactionRetry: Deferred | undefined;
+  const assistantTexts = state.assistantTexts;
+  const toolMetas = state.toolMetas;
+  const toolMetaById = state.toolMetaById;
+  const toolSummaryById = state.toolSummaryById;
+  const messagingToolSentTexts = state.messagingToolSentTexts;
+  const messagingToolSentTextsNormalized = state.messagingToolSentTextsNormalized;
+  const messagingToolSentTargets = state.messagingToolSentTargets;
+  const messagingToolSentMediaUrls = state.messagingToolSentMediaUrls;
+  const messagingToolSourceReplyPayloads = state.messagingToolSourceReplyPayloads;
+  const didSendViaMessagingTool = () =>
+    hasCommittedMessagingToolDeliveryEvidence({
+      messagingToolSentTexts,
+      messagingToolSentMediaUrls,
+      messagingToolSentTargets,
+    });
+  const replyDelivery = createReplyDelivery({ params, state, log });
+  const {
+    clearAssistantStream,
+    clearDeferredBlockReplies,
+    emitAssistantStreamData,
+    emitBlockReply,
+    finalizeAssistantTexts,
+    flushAssistantStream,
+    noteLastAssistant,
+    releaseDeferredReplies,
+  } = replyDelivery;
+
+  // Suppress duplicate block replies only after confirmed messaging-tool delivery.
+  const trimMessagingToolSent = () => {
+    if (messagingToolSentTexts.length > MAX_MESSAGING_HISTORY_ENTRIES) {
+      const overflow = messagingToolSentTexts.length - MAX_MESSAGING_HISTORY_ENTRIES;
+      messagingToolSentTexts.splice(0, overflow);
+      messagingToolSentTextsNormalized.splice(0, overflow);
+    }
+    for (const history of [
+      state.currentSourceMessagingToolSentTextsNormalized,
+      messagingToolSentTargets,
+      messagingToolSentMediaUrls,
+      messagingToolSourceReplyPayloads,
+    ]) {
+      if (history.length > MAX_MESSAGING_HISTORY_ENTRIES) {
+        history.splice(0, history.length - MAX_MESSAGING_HISTORY_ENTRIES);
+      }
+    }
+  };
+
+  const ensureCompactionPromise = () => {
+    if (!compactionRetry) {
+      // One wait covers both active compaction and queued retries.
+      compactionRetry = createDeferredCore();
+      // Prevent unhandled rejection if rejected after all consumers have resolved
+      compactionRetry.promise.catch((err: unknown) => {
+        log.debug(`compaction promise rejected (no waiter): ${String(err)}`);
+      });
+    }
+  };
+
+  const noteCompactionRetry = () => {
+    state.pendingCompactionRetry += 1;
+    ensureCompactionPromise();
+  };
+
+  const maybeResolveCompactionWait = () => {
+    if (state.pendingCompactionRetry !== 0 || state.compactionInFlight) {
+      return;
+    }
+    compactionRetry?.resolve();
+    compactionRetry = undefined;
+  };
+
+  const resolveCompactionRetry = () => {
+    if (state.pendingCompactionRetry <= 0) {
+      return;
+    }
+    state.pendingCompactionRetry -= 1;
+    maybeResolveCompactionWait();
+  };
+
+  const incrementCompactionCount = () => {
+    compactionCount += 1;
+  };
+  const noteCompactionTokensAfter = (value: unknown) => {
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+      return;
+    }
+    state.lastCompactionTokensAfter = Math.floor(value);
+  };
+
+  const blockChunking = params.blockReplyChunking;
+  const blockChunker = new EmbeddedBlockChunker(blockChunking);
+  // KNOWN: Provider streams are not strictly once-only or perfectly ordered.
+  // `text_end` can repeat full content; late `text_end` can arrive after `message_end`.
+  // Tests: `src/agents/embedded-agent-subscribe.test.ts` (e.g. late text_end cases).
+  const shouldEmitToolResult = () =>
+    typeof params.shouldEmitToolResult === "function"
+      ? params.shouldEmitToolResult()
+      : params.verboseLevel === "on" || params.verboseLevel === "full";
+  const shouldEmitToolOutput = () =>
+    typeof params.shouldEmitToolOutput === "function"
+      ? params.shouldEmitToolOutput()
+      : params.verboseLevel === "full";
+  const emitToolResultMessage = (
+    toolName: string | undefined,
+    message: string,
+    result?: unknown,
+  ) => {
+    if (!params.onToolResult) {
+      return;
+    }
+    const parsed = parseInlineDirectives(message, {
+      stripAudioTag: true,
+      stripReplyTags: true,
+    });
+    const mediaArtifact = result ? extractToolResultMediaArtifact(result) : undefined;
+    const filteredMediaUrls = filterToolResultMediaUrls(
+      toolName,
+      mediaArtifact?.mediaUrls ?? [],
+      result,
+      params.trustedLocalMediaToolNames,
+    );
+    if (
+      params.sourceReplyDeliveryMode === "message_tool_only" &&
+      parsed.text &&
+      filteredMediaUrls.length === 0 &&
+      didSendViaMessagingTool()
+    ) {
+      return;
+    }
+    if (!parsed.text && filteredMediaUrls.length === 0) {
+      return;
+    }
+    runBestEffortCallback({
+      label: "tool result",
+      log,
+      callback: () =>
+        params.onToolResult?.({
+          text: parsed.text,
+          mediaUrls: filteredMediaUrls.length ? filteredMediaUrls : undefined,
+          ...(mediaArtifact?.audioAsVoice ? { audioAsVoice: true } : {}),
+        }),
+    });
+  };
+  const emitToolSummary = (
+    toolName: string | undefined,
+    meta: string | undefined,
+    commandBearing: boolean,
+  ) => {
+    const visibleMeta = params.verboseLevel === "full" || !commandBearing ? meta : undefined;
+    const agg = formatToolAggregate(toolName, visibleMeta ? [visibleMeta] : undefined, {
+      markdown: useMarkdown,
+    });
+    emitToolResultMessage(toolName, agg);
+  };
+  const emitToolOutput = (toolName?: string, meta?: string, output?: string, result?: unknown) => {
+    if (!output) {
+      return;
+    }
+    const agg = formatToolAggregate(toolName, meta ? [meta] : undefined, {
+      markdown: useMarkdown,
+    });
+    const trimmed = output.trim();
+    const formattedOutput = trimmed
+      ? useMarkdown
+        ? `\`\`\`txt\n${trimmed}\n\`\`\``
+        : trimmed
+      : "(no output)";
+    const message = `${agg}\n${formattedOutput}`;
+    emitToolResultMessage(toolName, message, result);
+  };
+
+  const streamRendering = createStreamRendering({
+    params,
+    state,
+    log,
+    blockChunker,
+    emitBlockReply: replyDelivery.emitBlockReply,
+    flushAssistantStream,
+    pendingBlockReplyTasks: replyDelivery.pendingBlockReplyTasks,
+    pushAssistantText: replyDelivery.pushAssistantText,
+    shouldSkipAssistantText: replyDelivery.shouldSkipAssistantText,
+  });
+
+  const resetForCompactionRetry = () => {
+    state.hadDeterministicSideEffect =
+      state.hadDeterministicSideEffect === true ||
+      didSendViaMessagingTool() ||
+      state.successfulCronAdds > 0 ||
+      state.acceptedSessionSpawns.length > 0 ||
+      state.visibleBlockReplyCount > 0;
+    assistantTexts.length = 0;
+    state.answerSegments.length = 0;
+    state.inputAnswer = undefined;
+    state.keptAnswer = undefined;
+    state.lastAssistant = undefined;
+    state.lastAssistantTextMessageIndex = -1;
+    state.lastAssistantTextContentIndex = undefined;
+    state.lastAssistantTextItemId = undefined;
+    state.lastAssistantTextNormalized = undefined;
+    state.lastAssistantTextTrimmed = undefined;
+    toolMetas.length = 0;
+    toolMetaById.clear();
+    toolSummaryById.clear();
+    state.liveEditDiffStateById.clear();
+    state.itemActiveIds.clear();
+    state.itemStartedCount = 0;
+    state.itemCompletedCount = 0;
+    // Compaction retries restart presentation state, not attempt-wide mutation truth.
+    // Retain unresolved side effects so the retry cannot falsely finish as success.
+    if (state.lastToolError?.mutatingAction !== true) {
+      state.lastToolError = undefined;
+    }
+    messagingToolSentTexts.length = 0;
+    messagingToolSentTextsNormalized.length = 0;
+    state.currentSourceMessagingToolSentTextsNormalized.length = 0;
+    messagingToolSentTargets.length = 0;
+    messagingToolSentMediaUrls.length = 0;
+    state.pendingToolMediaUrls = [];
+    state.pendingToolMediaAttachments = [];
+    state.pendingToolMediaTrustByUrl.clear();
+    state.toolAutoDeliveryMediaUrls.clear();
+    state.pendingToolAudioAsVoice = false;
+    state.pendingToolMediaDeliveryFailed = false;
+    state.visibleBlockReplyCount = 0;
+    state.deferBlockReplyDelivery =
+      typeof params.onBeforeTerminalDelivery === "function" &&
+      params.deferTerminalDelivery !== false;
+    clearAssistantStream();
+    clearDeferredBlockReplies();
+    state.deterministicApprovalPromptPending = false;
+    state.deterministicApprovalPromptSent = false;
+    state.lastDeliveredBlockReplyText = undefined;
+    state.lastReasoningSent = undefined;
+    state.toolExecutionSinceLastBlockReply = false;
+    state.replayState = mergeEmbeddedRunReplayState(state.replayState, params.initialReplayState);
+    state.livenessState = "working";
+    streamRendering.resetAssistantMessageState(0);
+  };
+
+  // Settlement calls this only for the final, failure-free run-budget terminal.
+  // Retain and re-filter the full buffer so queued suffixes keep hidden-tag
+  // context; replace live chunks instead of appending cumulative text twice.
+  const flushPartialAssistantText = () => {
+    const text = state.deltaBuffer;
+    if (!text) {
+      return;
+    }
+    if (state.deltaBufferIsCommentary) {
+      state.hasFlushedPartialText = false;
+      return;
+    }
+    // Re-filter the full raw buffer; live scanner state may hide an interrupted prefix.
+    const visibleText = stripDowngradedToolCallText(
+      streamRendering.stripBlockTags(
+        text,
+        {
+          thinking: false,
+          final: false,
+          inlineCode: createInlineCodeState(),
+        },
+        { final: true },
+      ),
+    ).trimEnd();
+    if (assistantTexts.length > state.assistantTextBaseline || state.hasFlushedPartialText) {
+      replyDelivery.replaceCurrentAssistantText(visibleText);
+    } else if (visibleText) {
+      replyDelivery.pushAssistantText(visibleText);
+    }
+    state.hasFlushedPartialText = Boolean(visibleText);
+  };
+
+  const ctx: EmbeddedAgentSubscribeContext = {
+    ...streamRendering,
+    params,
+    state,
+    log,
+    blockChunking,
+    blockChunker,
+    hookRunner: params.hookRunner,
+    builtinToolNames: params.builtinToolNames,
+    trustedLocalMediaToolNames: params.trustedLocalMediaToolNames,
+    noteLastAssistant,
+    shouldEmitToolResult,
+    shouldEmitToolOutput,
+    emitToolSummary,
+    emitToolOutput,
+    emitAssistantStreamData,
+    emitBlockReply,
+    flushAssistantStream,
+    releaseDeferredReplies,
+    clearAssistantStream,
+    clearDeferredBlockReplies,
+    resetForCompactionRetry,
+    finalizeAssistantTexts,
+    trimMessagingToolSent,
+    consumeToolSendReceipt: (toolCallId) =>
+      consumeEmbeddedToolReceipt(params.session.sessionManager, toolCallId),
+    ensureCompactionPromise,
+    noteCompactionRetry,
+    resolveCompactionRetry,
+    maybeResolveCompactionWait,
+    captureModelEvent,
+    incrementCompactionCount,
+    noteCompactionTokensAfter,
+    getUsageTotals,
+    getLastAssistantUsage,
+    getCompactionCount: () => compactionCount,
+    getLastCompactionTokensAfter: () => state.lastCompactionTokensAfter,
+  };
+
+  const removeSourceReplyTerminalHook = installToolAuthoredSourceReplyTerminalHook({
+    agent: params.session.agent,
+    sourceReplyCapableToolNames: params.sourceReplyCapableToolNames,
+    idempotencyScope: params.runId,
+    onSourceReplies: (payloads) => {
+      state.messagingToolSourceReplyPayloads.push(...payloads);
+    },
+  });
+  const sessionUnsubscribe = params.session.subscribe(createEmbeddedAgentSessionEventHandler(ctx));
+  setSessionModelUsageSink(params.session.sessionManager, recordAuxiliaryUsage);
+
+  const unsubscribe = () => {
+    if (state.unsubscribed) {
+      return;
+    }
+    // Mark as unsubscribed FIRST to prevent waitForCompactionRetry from creating
+    // new un-resolvable promises during teardown.
+    state.unsubscribed = true;
+    removeSourceReplyTerminalHook();
+    clearAssistantStream();
+    cleanupRunToolStartData(params.runId);
+    state.liveEditDiffStateById.clear();
+    // Reject pending compaction wait to unblock awaiting code.
+    // Don't resolve, as that would incorrectly signal "compaction complete" when it's still in-flight.
+    if (compactionRetry) {
+      log.debug(`unsubscribe: rejecting compaction wait runId=${params.runId}`);
+      const { reject } = compactionRetry;
+      compactionRetry = undefined;
+      reject(createAbortError("Unsubscribed during compaction"));
+    }
+    // Cancel any in-flight compaction to prevent resource leaks when unsubscribing.
+    // Only abort if compaction is actually running to avoid unnecessary work.
+    if (params.session.isCompacting) {
+      log.debug(`unsubscribe: aborting in-flight compaction runId=${params.runId}`);
+      try {
+        params.session.abortCompaction();
+      } catch (err) {
+        log.warn(`unsubscribe: compaction abort failed runId=${params.runId} err=${String(err)}`);
+      }
+    }
+    setSessionModelUsageSink(params.session.sessionManager, null);
+    sessionUnsubscribe();
+  };
+
+  return {
+    assistantTexts,
+    answerSegments: state.answerSegments,
+    getCurrentAttemptAssistant,
+    getKeptAnswer: () => state.keptAnswer,
+    hasSuccessfulModelResponse,
+    getLastAssistantTextMessageIndex: () =>
+      state.lastAssistantTextMessageIndex >= 0 ? state.lastAssistantTextMessageIndex : undefined,
+    toolMetas,
+    getAcceptedSessionSpawns: () => state.acceptedSessionSpawns.slice(),
+    getLatestMcpAppChannelView: () =>
+      state.latestMcpAppChannelView ? { ...state.latestMcpAppChannelView } : undefined,
+    getLatestMcpConnectAction: () =>
+      state.latestMcpConnectAction ? { ...state.latestMcpConnectAction } : undefined,
+    runToolLifecycle: createEmbeddedToolLifecycleRunner(ctx),
+    unsubscribe,
+    setTerminalLifecycleMeta: (meta: {
+      replayInvalid?: boolean;
+      livenessState?: EmbeddedRunLivenessState;
+      stopReason?: string;
+      yielded?: boolean;
+      timeoutPhase?: AgentRunTimeoutPhase;
+      providerStarted?: boolean;
+      aborted?: boolean;
+    }) => {
+      if (typeof meta.replayInvalid === "boolean") {
+        state.replayState = { ...state.replayState, replayInvalid: meta.replayInvalid };
+      }
+      if (meta.livenessState) {
+        state.livenessState = meta.livenessState;
+      }
+      if (typeof meta.stopReason === "string") {
+        state.terminalStopReason = meta.stopReason;
+      }
+      if (typeof meta.yielded === "boolean") {
+        state.yielded = meta.yielded;
+      }
+      if (meta.timeoutPhase) {
+        state.timeoutPhase = meta.timeoutPhase;
+      }
+      if (typeof meta.providerStarted === "boolean") {
+        state.providerStarted = meta.providerStarted;
+      }
+      if (typeof meta.aborted === "boolean") {
+        state.terminalAborted = meta.aborted;
+      }
+    },
+    isCompacting: () => state.compactionInFlight || state.pendingCompactionRetry > 0,
+    isCompactionInFlight: () => state.compactionInFlight,
+    getMessagingToolSentTexts: () => messagingToolSentTexts.slice(),
+    getMessagingToolSentMediaUrls: () => messagingToolSentMediaUrls.slice(),
+    getMessagingToolSentTargets: () => messagingToolSentTargets.slice(),
+    getMessagingToolSourceReplyPayloads: () => messagingToolSourceReplyPayloads.slice(),
+    getSourceReplyDelivered: () => state.sourceReplyDelivered,
+    getSourceReplyDeliveryState: () => state.sourceReplyDeliveryState,
+    endsWithSourceProgress: () => state.lastToolTurnOnlySourceProgress === true,
+    getHeartbeatToolResponse: () =>
+      state.heartbeatToolResponse ? { ...state.heartbeatToolResponse } : undefined,
+    getPendingToolMediaReply: () => readPendingToolMediaReply(state),
+    getToolAutoDeliveryMediaUrls: () => [...state.toolAutoDeliveryMediaUrls],
+    hasToolMediaBlockReply: () => state.hasToolMediaBlockReply,
+    getVisibleBlockReplyCount: () => state.visibleBlockReplyCount,
+    getSuccessfulCronAdds: () => state.successfulCronAdds,
+    getReplayState: () => ({ ...state.replayState }),
+    // Returns true if any messaging tool successfully sent a message.
+    // Used to suppress agent's confirmation text (e.g., "Respondi no Telegram!")
+    // which is generated AFTER the tool sends the actual answer.
+    didSendViaMessagingTool,
+    didSendDeterministicApprovalPrompt: () => state.deterministicApprovalPromptSent,
+    getLastToolError: () => (state.lastToolError ? { ...state.lastToolError } : undefined),
+    getUsageTotals,
+    getLastAssistantUsage,
+    getCompactionCount: () => compactionCount,
+    getLastCompactionTokensAfter: () => state.lastCompactionTokensAfter,
+    getAssistantTurnCount: () => state.assistantTurnCount,
+    waitForPendingEvents: replyDelivery.waitForPendingEvents,
+    flushPartialAssistantText,
+    getItemLifecycle: () => ({
+      startedCount: state.itemStartedCount,
+      completedCount: state.itemCompletedCount,
+      activeCount: state.itemActiveIds.size,
+    }),
+    waitForCompactionRetry: () => {
+      // Reject after unsubscribe so callers treat it as cancellation, not success
+      if (state.unsubscribed) {
+        return Promise.reject(createAbortError("Unsubscribed during compaction wait"));
+      }
+      if (state.compactionInFlight || state.pendingCompactionRetry > 0) {
+        ensureCompactionPromise();
+        return compactionRetry?.promise ?? Promise.resolve();
+      }
+      return new Promise<void>((resolve, reject) => {
+        queueMicrotask(() => {
+          if (state.unsubscribed) {
+            reject(createAbortError("Unsubscribed during compaction wait"));
+            return;
+          }
+          if (state.compactionInFlight || state.pendingCompactionRetry > 0) {
+            ensureCompactionPromise();
+            void (compactionRetry?.promise ?? Promise.resolve()).then(resolve, reject);
+          } else {
+            resolve();
+          }
+        });
+      });
+    },
+  };
+}

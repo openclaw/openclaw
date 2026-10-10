@@ -1,56 +1,62 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveModelRuntimePolicy } from "../model-runtime-policy.js";
+import type { ProviderRouteOverridePresence } from "../../plugin-sdk/provider-model-types.js";
 import {
-  isOpenAICodexProvider,
-  openAIProviderUsesCodexRuntimeByDefault,
-} from "../openai-codex-routing.js";
-import {
-  normalizeEmbeddedAgentRuntime,
+  AUTO_AGENT_RUNTIME_ID,
   type EmbeddedAgentRuntime,
-} from "../pi-embedded-runner/runtime.js";
+  normalizeOptionalAgentRuntimeId,
+} from "../agent-runtime-id.js";
+import {
+  resolveModelRuntimePolicy,
+  type AgentRuntimePolicyScope,
+} from "../model-runtime-policy.js";
+import { resolveOpenAIImplicitAgentRuntime } from "../openai-routing.js";
 
 export type AgentHarnessPolicy = {
   runtime: EmbeddedAgentRuntime;
   runtimeSource?: "model" | "provider" | "implicit";
+  forcedByEnvironment?: true;
 };
 
-export function resolveAgentHarnessPolicy(params: {
-  provider?: string;
-  modelId?: string;
-  config?: OpenClawConfig;
-  agentId?: string;
-  sessionKey?: string;
-  env?: NodeJS.ProcessEnv;
-}): AgentHarnessPolicy {
-  const configured = resolveModelRuntimePolicy({
-    config: params.config,
-    provider: params.provider,
-    modelId: params.modelId,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-  });
-  const configuredRuntime = configured.policy?.id?.trim();
-  const runtimeSource = configured.source ?? "implicit";
+export function resolveAgentHarnessPolicy(
+  params: {
+    provider?: string;
+    modelId?: string;
+    modelApi?: string | null;
+    modelBaseUrl?: unknown;
+    requestTransportOverrides?: ProviderRouteOverridePresence;
+    config?: OpenClawConfig;
+    env?: NodeJS.ProcessEnv;
+  } & AgentRuntimePolicyScope,
+  // Configured selectors can reuse a normalized lookup without losing their route input.
+  configured = resolveModelRuntimePolicy(params),
+): AgentHarnessPolicy {
+  // The required worker owns runtime selection, before implicit provider harness routing.
+  // Explicit session overrides are rejected at session mutation and run admission.
+  if (params.config?.cloudWorkers?.requiredProfile) {
+    return { runtime: "openclaw", runtimeSource: "implicit" };
+  }
+  const configuredRuntime = normalizeOptionalAgentRuntimeId(configured.policy?.id);
   const runtime =
     configuredRuntime && configuredRuntime !== "default"
-      ? normalizeEmbeddedAgentRuntime(configuredRuntime)
-      : "auto";
-  if (
-    openAIProviderUsesCodexRuntimeByDefault({ provider: params.provider, config: params.config })
-  ) {
-    if (runtime === "auto") {
-      return { runtime: "codex", runtimeSource };
-    }
-    return { runtime, runtimeSource };
+      ? configuredRuntime
+      : AUTO_AGENT_RUNTIME_ID;
+  const runtimeSource =
+    runtime === AUTO_AGENT_RUNTIME_ID ? "implicit" : (configured.source ?? "implicit");
+  if (runtime !== "auto") {
+    return {
+      runtime,
+      runtimeSource,
+      ...(configured.forcedByEnvironment ? { forcedByEnvironment: true } : {}),
+    };
   }
-  if (isOpenAICodexProvider(params.provider)) {
-    if (runtime === "auto") {
-      return { runtime: "codex", runtimeSource };
-    }
-    return { runtime, runtimeSource };
-  }
+  const openAIImplicitRuntime = resolveOpenAIImplicitAgentRuntime({
+    ...params,
+    runtimePolicy: configured,
+    api: params.modelApi,
+    baseUrl: params.modelBaseUrl,
+  });
   return {
-    runtime,
+    runtime: openAIImplicitRuntime || runtime,
     runtimeSource,
   };
 }

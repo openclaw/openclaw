@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { setCommandJsonMode } from "../cli/program/json-mode.js";
 import {
   findCommandGroupEntry,
   getCommandGroupNames,
@@ -6,24 +7,19 @@ import {
   removeCommandGroupNames,
   type CommandGroupEntry,
 } from "../cli/program/register-command-groups.js";
-import type { OpenClawPluginCliCommandDescriptor, PluginLogger } from "./types.js";
+import type { OpenClawPluginCliRootCommandDescriptor, PluginLogger } from "./types.js";
 
-export type PluginCliCommandGroupEntry = CommandGroupEntry & {
+type PluginCliCommandGroupEntry = CommandGroupEntry & {
   pluginId: string;
   parentPath?: readonly string[];
+  placeholders: readonly OpenClawPluginCliRootCommandDescriptor[];
 };
-
-export type PluginCliCommandGroupMode = "eager" | "lazy";
 
 function canRegisterPluginCliLazily(entry: PluginCliCommandGroupEntry): boolean {
   if (entry.placeholders.length === 0) {
     return false;
   }
-  const descriptorNames = new Set(
-    (entry.placeholders as readonly OpenClawPluginCliCommandDescriptor[]).map(
-      (descriptor) => descriptor.name,
-    ),
-  );
+  const descriptorNames = new Set(entry.placeholders.map((descriptor) => descriptor.name));
   return getCommandGroupNames(entry).every((command) => descriptorNames.has(command));
 }
 
@@ -41,15 +37,29 @@ function findCommandByPath(program: Command, path: readonly string[]): Command |
   return current;
 }
 
-function commandNamesFor(program: Command): Set<string> {
-  return new Set(program.commands.flatMap((command) => [command.name(), ...command.aliases()]));
+function applyMachineOutputMode(
+  program: Command,
+  descriptor: OpenClawPluginCliRootCommandDescriptor,
+): void {
+  if (!descriptor.machineOutput) {
+    return;
+  }
+  const command = program.commands.find((candidate) => candidate.name() === descriptor.name);
+  if (!command) {
+    return;
+  }
+  setCommandJsonMode(
+    command,
+    "output",
+    ({ argv, stdoutIsTTY }) => descriptor.machineOutput?.({ argv, stdoutIsTTY }) === true,
+  );
 }
 
 export async function registerPluginCliCommandGroups(
   program: Command,
   entries: readonly PluginCliCommandGroupEntry[],
   params: {
-    mode: PluginCliCommandGroupMode;
+    mode: "eager" | "lazy";
     primary?: string;
     existingCommands: Set<string>;
     logger: PluginLogger;
@@ -67,9 +77,16 @@ export async function registerPluginCliCommandGroups(
       continue;
     }
     const existingCommands =
-      parentPath.length === 0 ? params.existingCommands : commandNamesFor(targetProgram);
+      parentPath.length === 0
+        ? params.existingCommands
+        : new Set(
+            targetProgram.commands.flatMap((command) => [command.name(), ...command.aliases()]),
+          );
     const registerEntry = async () => {
       await entry.register(targetProgram);
+      for (const descriptor of entry.placeholders) {
+        applyMachineOutputMode(targetProgram, descriptor);
+      }
       for (const command of getCommandGroupNames(entry)) {
         existingCommands.add(command);
       }
@@ -97,7 +114,12 @@ export async function registerPluginCliCommandGroups(
     try {
       if (params.mode === "lazy" && canRegisterPluginCliLazily(entry)) {
         for (const placeholder of entry.placeholders) {
-          registerLazyCommandGroup(targetProgram, entry, placeholder);
+          registerLazyCommandGroup(
+            targetProgram,
+            { ...entry, register: registerEntry },
+            placeholder,
+          );
+          applyMachineOutputMode(targetProgram, placeholder);
         }
         continue;
       }

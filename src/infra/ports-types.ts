@@ -1,3 +1,4 @@
+/** Process metadata for one listener on a port. */
 export type PortListener = {
   pid?: number;
   ppid?: number;
@@ -9,12 +10,14 @@ export type PortListener = {
 
 export type PortConnectionDirection = "client" | "server" | "unknown";
 
+/** Listener plus inferred client/server direction. */
 export type PortConnection = PortListener & {
   direction: PortConnectionDirection;
 };
 
 export type PortUsageStatus = "free" | "busy" | "unknown";
 
+/** Port usage summary returned by port probes. */
 export type PortUsage = {
   port: number;
   status: PortUsageStatus;
@@ -24,8 +27,9 @@ export type PortUsage = {
   errors?: string[];
 };
 
-export type PortListenerKind = "gateway" | "ssh" | "unknown";
+export type PortListenerKind = "gateway" | "ssh" | "non_gateway" | "unknown";
 
+/** Connection list for a single port probe. */
 export type PortConnections = {
   port: number;
   connections: PortConnection[];

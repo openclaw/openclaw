@@ -1,24 +1,41 @@
+import { createLlmRuntime, type LlmRuntime } from "@openclaw/ai";
+import type { OpenAICompletionsOptions } from "@openclaw/ai/internal/openai";
+import { getEnvApiKey } from "@openclaw/ai/internal/runtime";
+import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
-  type Context,
-  complete,
-  getEnvApiKey,
-  getModel,
-  type Model,
-  type OpenAICompletionsOptions,
-  type Tool,
-} from "@earendil-works/pi-ai";
-import { Type } from "typebox";
-import { formatErrorMessage } from "../infra/errors.js";
-import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
+  asDateTimestampMs,
+  asFiniteNumber,
+  asPositiveSafeInteger,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
-import { normalizeProviderId } from "./provider-id.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import pMap from "p-map";
+import { Type } from "typebox";
+import { formatErrorMessage } from "../infra/errors.js";
+import { cancelUnreadResponseBody } from "../infra/http-body.js";
+/**
+ * Scans remote provider model catalogs for configured providers.
+ */
+import "../llm/ai-transport-host.js";
+import type { Context, Model, Tool } from "../llm/types.js";
+import { runAbortableTimeout } from "../node-host/with-timeout.js";
+import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
+import { readProviderJsonArrayFieldResponse } from "./provider-http-errors.js";
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const DEFAULT_TIMEOUT_MS = 12_000;
 const DEFAULT_CONCURRENCY = 3;
+// The OpenRouter /models catalog is a provider-controlled, runtime-fetched body
+// (already >100 KB and growing). Read it under a byte cap before JSON.parse so a
+// faulty or hostile provider cannot stream an unbounded document and exhaust
+// process memory. OpenRouter capability data is cached within its provider.
+const OPENROUTER_MODELS_BODY_MAX_BYTES = 16 * 1024 * 1024;
 
 const BASE_IMAGE_PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X3mIAAAAASUVORK5CYII=";
@@ -29,19 +46,10 @@ const TOOL_PING: Tool = {
   parameters: Type.Object({}),
 };
 
-type OpenRouterModelMeta = {
-  id: string;
-  name: string;
-  contextLength: number | null;
-  maxCompletionTokens: number | null;
-  supportedParameters: string[];
-  supportedParametersCount: number;
-  supportsToolsMeta: boolean;
-  modality: string | null;
-  inferredParamB: number | null;
-  createdAtMs: number | null;
-  pricing: OpenRouterModelPricing | null;
-};
+type OpenRouterModelMeta = Omit<
+  ModelScanResult,
+  "provider" | "modelRef" | "isFree" | "tool" | "image"
+>;
 
 type OpenRouterModelPricing = {
   prompt: number;
@@ -98,38 +106,18 @@ function normalizeCreatedAtMs(value: unknown): number | null {
   if (value <= 0) {
     return null;
   }
-  if (value > 1e12) {
-    return Math.round(value);
-  }
-  return Math.round(value * 1000);
+  const timestampMs = value > 1e12 ? Math.round(value) : Math.round(value * 1000);
+  return asDateTimestampMs(timestampMs) ?? null;
 }
 
 function parseModality(modality: string | null): Array<"text" | "image"> {
-  if (!modality) {
-    return ["text"];
-  }
-  const normalized = normalizeLowercaseStringOrEmpty(modality);
-  const parts = normalized.split(/[^a-z]+/).filter(Boolean);
-  const hasImage = parts.includes("image");
-  return hasImage ? ["text", "image"] : ["text"];
+  const parts = normalizeLowercaseStringOrEmpty(modality).split(/[^a-z]+/);
+  return parts.includes("image") ? ["text", "image"] : ["text"];
 }
 
 function parseNumberString(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const num = Number(trimmed);
-  if (!Number.isFinite(num)) {
-    return null;
-  }
-  return num;
+  const normalized = typeof value === "string" ? normalizeOptionalString(value) : value;
+  return asFiniteNumber(typeof normalized === "string" ? Number(normalized) : normalized) ?? null;
 }
 
 function parseOpenRouterPricing(value: unknown): OpenRouterModelPricing | null {
@@ -167,122 +155,123 @@ function isFreeOpenRouterModel(entry: OpenRouterModelMeta): boolean {
   return entry.pricing.prompt === 0 && entry.pricing.completion === 0;
 }
 
-async function withTimeout<T>(
-  timeoutMs: number,
-  fn: (signal: AbortSignal) => Promise<T>,
-): Promise<T> {
-  const controller = new AbortController();
-  const timer = setTimeout(controller.abort.bind(controller), timeoutMs);
-  try {
-    return await fn(controller.signal);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 async function fetchOpenRouterModels(
   fetchImpl: typeof fetch,
   timeoutMs: number,
 ): Promise<OpenRouterModelMeta[]> {
-  const res = await withTimeout(timeoutMs, (signal) =>
-    fetchImpl(OPENROUTER_MODELS_URL, {
-      headers: { Accept: "application/json" },
-      signal,
-    }),
-  );
-  if (!res.ok) {
-    throw new Error(`OpenRouter /models failed: HTTP ${res.status}`);
+  let res: Response | undefined;
+  try {
+    // fetch resolves after headers, so keep the shared timeout active until
+    // the provider-controlled catalog body has been consumed.
+    return await runAbortableTimeout(
+      async (signal) => {
+        res = await fetchImpl(OPENROUTER_MODELS_URL, {
+          headers: { Accept: "application/json" },
+          signal,
+        });
+        if (!res.ok) {
+          throw new Error(`OpenRouter /models failed: HTTP ${res.status}`);
+        }
+        const entries = await readProviderJsonArrayFieldResponse(
+          res,
+          "OpenRouter /models",
+          "data",
+          {
+            maxBytes: OPENROUTER_MODELS_BODY_MAX_BYTES,
+            chunkTimeoutMs: timeoutMs,
+            onIdleTimeout: ({ chunkTimeoutMs }) =>
+              new Error(`OpenRouter /models response stalled after ${chunkTimeoutMs}ms`),
+          },
+        );
+
+        return entries
+          .map((entry) => {
+            if (!entry || typeof entry !== "object") {
+              return null;
+            }
+            const obj = entry as Record<string, unknown>;
+            const id = normalizeOptionalString(obj.id) ?? "";
+            if (!id) {
+              return null;
+            }
+            const name = normalizeOptionalString(obj.name) ?? id;
+            const topProvider = asOptionalRecord(obj.top_provider);
+
+            const contextLength =
+              asPositiveSafeInteger(topProvider?.context_length) ??
+              asPositiveSafeInteger(obj.context_length) ??
+              null;
+
+            const maxCompletionTokens =
+              asPositiveSafeInteger(topProvider?.max_completion_tokens) ??
+              asPositiveSafeInteger(obj.max_completion_tokens) ??
+              asPositiveSafeInteger(obj.max_output_tokens) ??
+              null;
+
+            const supportedParameters = normalizeTrimmedStringList(obj.supported_parameters);
+
+            return {
+              id,
+              name,
+              contextLength,
+              maxCompletionTokens,
+              supportedParametersCount: supportedParameters.length,
+              supportsToolsMeta: supportedParameters.includes("tools"),
+              modality: normalizeOptionalString(obj.modality) ?? null,
+              inferredParamB: inferParamBFromIdOrName(`${id} ${name}`),
+              createdAtMs: normalizeCreatedAtMs(obj.created_at),
+              pricing: parseOpenRouterPricing(obj.pricing),
+            } satisfies OpenRouterModelMeta;
+          })
+          .filter((entry): entry is OpenRouterModelMeta => Boolean(entry));
+      },
+      timeoutMs,
+      "OpenRouter model scan",
+    );
+  } finally {
+    await cancelUnreadResponseBody(res);
   }
-  const payload = (await res.json()) as { data?: unknown };
-  const entries = Array.isArray(payload.data) ? payload.data : [];
-
-  return entries
-    .map((entry) => {
-      if (!entry || typeof entry !== "object") {
-        return null;
-      }
-      const obj = entry as Record<string, unknown>;
-      const id = normalizeOptionalString(obj.id) ?? "";
-      if (!id) {
-        return null;
-      }
-      const name = typeof obj.name === "string" && obj.name.trim() ? obj.name.trim() : id;
-
-      const contextLength =
-        typeof obj.context_length === "number" && Number.isFinite(obj.context_length)
-          ? obj.context_length
-          : null;
-
-      const maxCompletionTokens =
-        typeof obj.max_completion_tokens === "number" && Number.isFinite(obj.max_completion_tokens)
-          ? obj.max_completion_tokens
-          : typeof obj.max_output_tokens === "number" && Number.isFinite(obj.max_output_tokens)
-            ? obj.max_output_tokens
-            : null;
-
-      const supportedParameters = Array.isArray(obj.supported_parameters)
-        ? obj.supported_parameters
-            .filter((value): value is string => typeof value === "string")
-            .map((value) => value.trim())
-            .filter(Boolean)
-        : [];
-
-      const supportedParametersCount = supportedParameters.length;
-      const supportsToolsMeta = supportedParameters.includes("tools");
-
-      const modality =
-        typeof obj.modality === "string" && obj.modality.trim() ? obj.modality.trim() : null;
-
-      const inferredParamB = inferParamBFromIdOrName(`${id} ${name}`);
-      const createdAtMs = normalizeCreatedAtMs(obj.created_at);
-      const pricing = parseOpenRouterPricing(obj.pricing);
-
-      return {
-        id,
-        name,
-        contextLength,
-        maxCompletionTokens,
-        supportedParameters,
-        supportedParametersCount,
-        supportsToolsMeta,
-        modality,
-        inferredParamB,
-        createdAtMs,
-        pricing,
-      } satisfies OpenRouterModelMeta;
-    })
-    .filter((entry): entry is OpenRouterModelMeta => Boolean(entry));
 }
 
-async function probeTool(
+async function probeModel(
   model: OpenAIModel,
   apiKey: string,
   timeoutMs: number,
+  complete: LlmRuntime["complete"],
+  kind: "tool" | "image",
 ): Promise<ProbeResult> {
   const context: Context = {
     messages: [
       {
         role: "user",
-        content: "Call the ping tool with {} and nothing else.",
+        content:
+          kind === "tool"
+            ? "Call the ping tool with {} and nothing else."
+            : [
+                { type: "text", text: "Reply with OK." },
+                { type: "image", data: BASE_IMAGE_PNG, mimeType: "image/png" },
+              ],
         timestamp: Date.now(),
       },
     ],
-    tools: [TOOL_PING],
+    ...(kind === "tool" ? { tools: [TOOL_PING] } : {}),
   };
   const startedAt = Date.now();
   try {
-    const message = await withTimeout(timeoutMs, (signal) =>
-      complete(model, context, {
-        apiKey,
-        maxTokens: 256,
-        temperature: 0,
-        toolChoice: "required",
-        signal,
-      } satisfies OpenAICompletionsOptions),
+    const message = await runAbortableTimeout(
+      (signal) =>
+        complete(model, context, {
+          apiKey,
+          maxTokens: kind === "tool" ? 256 : 16,
+          temperature: 0,
+          ...(kind === "tool" ? { toolChoice: "required" as const } : {}),
+          signal,
+        } satisfies OpenAICompletionsOptions),
+      timeoutMs,
+      `model ${kind} check`,
     );
 
-    const hasToolCall = message.content.some((block) => block.type === "toolCall");
-    if (!hasToolCall) {
+    if (kind === "tool" && !message.content.some((block) => block.type === "toolCall")) {
       return {
         ok: false,
         latencyMs: Date.now() - startedAt,
@@ -300,112 +289,6 @@ async function probeTool(
   }
 }
 
-async function probeImage(
-  model: OpenAIModel,
-  apiKey: string,
-  timeoutMs: number,
-): Promise<ProbeResult> {
-  const context: Context = {
-    messages: [
-      {
-        role: "user",
-        content: [
-          { type: "text", text: "Reply with OK." },
-          { type: "image", data: BASE_IMAGE_PNG, mimeType: "image/png" },
-        ],
-        timestamp: Date.now(),
-      },
-    ],
-  };
-  const startedAt = Date.now();
-  try {
-    await withTimeout(timeoutMs, (signal) =>
-      complete(model, context, {
-        apiKey,
-        maxTokens: 16,
-        temperature: 0,
-        signal,
-      } satisfies OpenAICompletionsOptions),
-    );
-    return { ok: true, latencyMs: Date.now() - startedAt };
-  } catch (err) {
-    return {
-      ok: false,
-      latencyMs: Date.now() - startedAt,
-      error: formatErrorMessage(err),
-    };
-  }
-}
-
-function ensureImageInput(model: OpenAIModel): OpenAIModel {
-  if (model.input?.includes("image")) {
-    return model;
-  }
-  return {
-    ...model,
-    input: Array.from(new Set([...(model.input ?? []), "image"])),
-  };
-}
-
-function buildOpenRouterScanResult(params: {
-  entry: OpenRouterModelMeta;
-  isFree: boolean;
-  tool: ProbeResult;
-  image: ProbeResult;
-}): ModelScanResult {
-  const { entry, isFree } = params;
-  return {
-    id: entry.id,
-    name: entry.name,
-    provider: "openrouter",
-    modelRef: `openrouter/${entry.id}`,
-    contextLength: entry.contextLength,
-    maxCompletionTokens: entry.maxCompletionTokens,
-    supportedParametersCount: entry.supportedParametersCount,
-    supportsToolsMeta: entry.supportsToolsMeta,
-    modality: entry.modality,
-    inferredParamB: entry.inferredParamB,
-    createdAtMs: entry.createdAtMs,
-    pricing: entry.pricing,
-    isFree,
-    tool: params.tool,
-    image: params.image,
-  };
-}
-
-async function mapWithConcurrency<T, R>(
-  items: T[],
-  concurrency: number,
-  fn: (item: T, index: number) => Promise<R>,
-  opts?: { onProgress?: (completed: number, total: number) => void },
-): Promise<R[]> {
-  const limit = Math.max(1, Math.floor(concurrency));
-  const results: R[] = Array.from({ length: items.length }, () => undefined as R);
-  let nextIndex = 0;
-  let completed = 0;
-
-  const worker = async () => {
-    while (true) {
-      const current = nextIndex;
-      nextIndex += 1;
-      if (current >= items.length) {
-        return;
-      }
-      results[current] = await fn(items[current], current);
-      completed += 1;
-      opts?.onProgress?.(completed, items.length);
-    }
-  };
-
-  if (items.length === 0) {
-    opts?.onProgress?.(0, 0);
-    return results;
-  }
-
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
-  return results;
-}
-
 export async function scanOpenRouterModels(
   options: OpenRouterScanOptions = {},
 ): Promise<ModelScanResult[]> {
@@ -414,17 +297,19 @@ export async function scanOpenRouterModels(
   const apiKey = options.apiKey?.trim() || getEnvApiKey("openrouter") || "";
   if (probe && !apiKey) {
     throw new Error(
-      "Missing OpenRouter API key. Free OpenRouter models still require OPENROUTER_API_KEY for live probes and inference; call with probe:false to list public catalog metadata.",
+      "Missing OpenRouter API key. Free OpenRouter models still require OPENROUTER_API_KEY for live checks and inference; call with probe:false to list public catalog metadata.",
     );
   }
 
-  const timeoutMs = Math.max(1, Math.floor(options.timeoutMs ?? DEFAULT_TIMEOUT_MS));
+  const timeoutMs = resolveTimerTimeoutMs(options.timeoutMs, DEFAULT_TIMEOUT_MS);
   const concurrency = Math.max(1, Math.floor(options.concurrency ?? DEFAULT_CONCURRENCY));
   const minParamB = Math.max(0, Math.floor(options.minParamB ?? 0));
   const maxAgeDays = Math.max(0, Math.floor(options.maxAgeDays ?? 0));
   const providerFilter = normalizeProviderId(options.providerFilter ?? "");
 
   const catalog = await fetchOpenRouterModels(fetchImpl, timeoutMs);
+  const llmRuntime = createLlmRuntime();
+  registerBuiltInApiProviders(llmRuntime.registry);
   const now = Date.now();
 
   const filtered = catalog.filter((entry) => {
@@ -453,7 +338,18 @@ export async function scanOpenRouterModels(
     return true;
   });
 
-  const baseModel = getModel("openrouter", "openrouter/auto") as OpenAIModel;
+  const baseModel: OpenAIModel = {
+    id: "openrouter/auto",
+    name: "OpenRouter Auto",
+    api: "openai-completions",
+    provider: "openrouter",
+    baseUrl: "https://openrouter.ai/api/v1",
+    reasoning: false,
+    input: ["text", "image"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 16_384,
+  };
 
   options.onProgress?.({
     phase: "probe",
@@ -461,49 +357,38 @@ export async function scanOpenRouterModels(
     total: filtered.length,
   });
 
-  return mapWithConcurrency(
+  let completed = 0;
+  return pMap(
     filtered,
-    concurrency,
     async (entry) => {
-      const isFree = isFreeOpenRouterModel(entry);
-      if (!probe) {
-        return buildOpenRouterScanResult({
-          entry,
-          isFree,
-          tool: { ok: false, latencyMs: null, skipped: true },
-          image: { ok: false, latencyMs: null, skipped: true },
-        });
+      let tool: ProbeResult = { ok: false, latencyMs: null, skipped: true };
+      let image: ProbeResult = { ok: false, latencyMs: null, skipped: true };
+      if (probe) {
+        const model: OpenAIModel = {
+          ...baseModel,
+          id: entry.id,
+          name: entry.name,
+          contextWindow: entry.contextLength ?? baseModel.contextWindow,
+          maxTokens: entry.maxCompletionTokens ?? baseModel.maxTokens,
+          input: parseModality(entry.modality),
+        };
+
+        tool = await probeModel(model, apiKey, timeoutMs, llmRuntime.complete, "tool");
+        if (model.input.includes("image")) {
+          image = await probeModel(model, apiKey, timeoutMs, llmRuntime.complete, "image");
+        }
       }
-
-      const model: OpenAIModel = {
-        ...baseModel,
-        id: entry.id,
-        name: entry.name || entry.id,
-        contextWindow: entry.contextLength ?? baseModel.contextWindow,
-        maxTokens: entry.maxCompletionTokens ?? baseModel.maxTokens,
-        input: parseModality(entry.modality),
-        reasoning: baseModel.reasoning,
+      completed += 1;
+      options.onProgress?.({ phase: "probe", completed, total: filtered.length });
+      return {
+        ...entry,
+        provider: "openrouter",
+        modelRef: `openrouter/${entry.id}`,
+        isFree: true,
+        tool,
+        image,
       };
-
-      const toolResult = await probeTool(model, apiKey, timeoutMs);
-      const imageResult = model.input?.includes("image")
-        ? await probeImage(ensureImageInput(model), apiKey, timeoutMs)
-        : { ok: false, latencyMs: null, skipped: true };
-
-      return buildOpenRouterScanResult({
-        entry,
-        isFree,
-        tool: toolResult,
-        image: imageResult,
-      });
     },
-    {
-      onProgress: (completed, total) =>
-        options.onProgress?.({
-          phase: "probe",
-          completed,
-          total,
-        }),
-    },
+    { concurrency, stopOnError: true },
   );
 }

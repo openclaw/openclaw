@@ -1,0 +1,406 @@
+import path from "node:path";
+import {
+  buildSessionEndHookPayload,
+  buildSessionStartHookPayload,
+} from "../../auto-reply/reply/session-hooks.js";
+import {
+  formatSqliteSessionFileMarker,
+  parseSqliteSessionFileMarker,
+} from "../../config/sessions/legacy-sqlite-marker.js";
+import {
+  patchSessionEntryCore,
+  type SessionTranscriptRuntimeTarget,
+} from "../../config/sessions/session-accessor.js";
+import type { SessionAdmissionTransition } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
+import {
+  readSessionEntryReadOnlyInWorker,
+  readSessionEntrySummariesInWorker,
+} from "../../config/sessions/session-entry-read-runtime.js";
+import {
+  sessionEntryCommitGuardOptions,
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
+import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
+import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { CompactResult } from "../../context-engine/types.js";
+import {
+  forgetActiveSessionForShutdown,
+  noteActiveSessionForShutdown,
+} from "../../gateway/active-sessions-shutdown-tracker.js";
+import { createClosedSessionTranscriptSource } from "../../gateway/session-end-transcript-reader.js";
+import { resolveStableSessionEndTranscript } from "../../gateway/session-transcript-files.fs.js";
+import { logVerbose } from "../../globals.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { retireSessionMcpRuntime } from "../agent-bundle-mcp-manager-api.js";
+import { resolveAgentRunSessionTarget } from "../run-session-target.js";
+import { captureSessionPlacementCompactionSuccessorAssertion } from "../session-placement-admission.js";
+import { resolveLegacyCompactionSessionKey } from "./legacy-compaction-session-key.js";
+import { log } from "./logger.js";
+
+/** Resolve a context engine's successor without letting it cross the active store binding. */
+export async function resolveContextEngineCompactionSuccessor(params: {
+  config?: OpenClawConfig;
+  currentSessionFile: string;
+  currentTarget: SessionTranscriptRuntimeTarget;
+  result: CompactResult;
+}) {
+  const current = { ...params.currentTarget };
+  const result = params.result.result;
+  const target = result?.sessionTarget;
+  const successorId = target?.sessionId ?? result?.sessionId;
+  const successorFile = result?.sessionFile;
+  // Shipped pre-sessionTarget engines report rotation via the deprecated
+  // sessionFile field; honor it when no typed target is present.
+  if (target) {
+    if (result?.sessionId && target.sessionId && target.sessionId !== result.sessionId) {
+      throw new Error("Context-engine successor identity is inconsistent");
+    }
+    const resolvedTarget = await resolveAgentRunSessionTarget({
+      agentId: target.agentId ?? current.agentId,
+      config: params.config,
+      missingSessionKey: "resolve-existing",
+      sessionId: target.sessionId ?? successorId ?? current.sessionId,
+      sessionFile: successorFile,
+      sessionKey: target.sessionKey ?? current.sessionKey,
+      sessionTarget: {
+        ...target,
+        storePath: target.storePath ?? current.storePath,
+      },
+    });
+    assertSameSessionBinding(current, resolvedTarget, "Context-engine");
+    return {
+      sessionId: resolvedTarget.sessionId,
+      sessionFile: resolvedTarget.sessionKey,
+      sessionTarget: {
+        ...resolvedTarget,
+        ...(target.threadId !== undefined ? { threadId: target.threadId } : {}),
+      },
+    };
+  }
+
+  if (successorFile) {
+    const marker = parseSqliteSessionFileMarker(successorFile);
+    if (
+      marker &&
+      (marker.agentId !== current.agentId || (successorId && marker.sessionId !== successorId))
+    ) {
+      throw new Error("Legacy context-engine successor identity is inconsistent");
+    }
+    const isSessionKey = successorFile.startsWith("agent:");
+    const keyedEntry = isSessionKey
+      ? await readSessionEntryReadOnlyInWorker({
+          agentId: current.agentId,
+          sessionKey: successorFile,
+          storePath: current.storePath,
+        })
+      : undefined;
+    if (
+      isSessionKey &&
+      (resolveAgentIdFromSessionKey(successorFile) !== current.agentId ||
+        !keyedEntry?.sessionId ||
+        (successorId && keyedEntry.sessionId !== successorId))
+    ) {
+      throw new Error("Legacy context-engine successor identity is inconsistent");
+    }
+    const keyedSessionId = isSessionKey ? (successorId ?? keyedEntry?.sessionId) : undefined;
+    const markerEntries = marker
+      ? await readSessionEntrySummariesInWorker({
+          agentId: marker.agentId,
+          storePath: marker.storePath,
+        })
+      : [];
+    const markerSessionKey = marker
+      ? resolveLegacyCompactionSessionKey(
+          markerEntries,
+          marker.sessionId,
+          current,
+          current.sessionKey,
+        )
+      : undefined;
+    const legacyTarget = marker
+      ? markerSessionKey
+        ? { ...marker, sessionId: marker.sessionId, sessionKey: markerSessionKey }
+        : undefined
+      : keyedSessionId
+        ? { ...current, sessionId: keyedSessionId, sessionKey: successorFile }
+        : undefined;
+    if (!legacyTarget) {
+      throw new Error(
+        "Legacy context-engine successor files are unsupported; return a structured sessionTarget",
+      );
+    }
+    const resolvedTarget = await resolveAgentRunSessionTarget({
+      agentId: legacyTarget.agentId,
+      config: params.config,
+      missingSessionKey: "resolve-existing",
+      sessionId: legacyTarget.sessionId,
+      sessionKey: legacyTarget.sessionKey,
+      sessionTarget: legacyTarget,
+    });
+    assertSameSessionBinding(current, resolvedTarget, "Legacy context-engine");
+    return {
+      sessionId: resolvedTarget.sessionId,
+      sessionFile: marker
+        ? formatSqliteSessionFileMarker(resolvedTarget)
+        : resolvedTarget.sessionKey,
+      sessionTarget: resolvedTarget,
+    };
+  }
+
+  return {
+    sessionId: successorId ?? current.sessionId,
+    sessionFile: params.currentSessionFile,
+    sessionTarget: successorId ? { ...current, sessionId: successorId } : current,
+  };
+}
+
+export type AcceptedCompactionSuccessor = Awaited<
+  ReturnType<typeof resolveContextEngineCompactionSuccessor>
+> & {
+  entry: InternalSessionEntry;
+  previousSessionId?: string;
+  readonly admissionTransition?: SessionAdmissionTransition;
+};
+
+type CompactionWriterClaim = Readonly<{
+  sessionId: InternalSessionEntry["sessionId"];
+  lifecycleRevision: InternalSessionEntry["lifecycleRevision"];
+  activeWriterRunId: InternalSessionEntry["activeWriterRunId"];
+}>;
+
+export function requireCompactionWriterEntry(
+  entry: InternalSessionEntry | null | undefined,
+  expected: CompactionWriterClaim,
+): InternalSessionEntry {
+  if (
+    !entry ||
+    entry.sessionId !== expected.sessionId ||
+    entry.lifecycleRevision !== expected.lifecycleRevision ||
+    entry.activeWriterRunId !== expected.activeWriterRunId
+  ) {
+    throw new SessionTranscriptWriterClaimReboundError();
+  }
+  return entry;
+}
+
+/** Accepts a declared successor under the predecessor's exact host-owned claim. */
+export async function acceptCompactionSuccessor(params: {
+  result: CompactResult;
+  currentTarget: SessionTranscriptRuntimeTarget;
+  currentSessionFile?: string;
+  expectedEntry: CompactionWriterClaim;
+  assertActive: SessionSourceAssertion;
+  config?: OpenClawConfig;
+  onCommitted?: (accepted: AcceptedCompactionSuccessor) => void;
+}): Promise<AcceptedCompactionSuccessor> {
+  const currentTarget = { ...params.currentTarget };
+  const expected = { ...params.expectedEntry };
+  const assertPlacement = captureSessionPlacementCompactionSuccessorAssertion();
+  params.assertActive();
+  if (currentTarget.sessionId !== expected.sessionId) {
+    throw new SessionTranscriptWriterClaimReboundError();
+  }
+  const successor = await resolveContextEngineCompactionSuccessor({
+    config: params.config,
+    currentSessionFile: params.currentSessionFile ?? currentTarget.sessionKey,
+    currentTarget,
+    result: params.result,
+  });
+  params.assertActive();
+  const previousEntry = requireCompactionWriterEntry(
+    await readSessionEntryReadOnlyInWorker(
+      { ...currentTarget, readConsistency: "latest" },
+      params.assertActive,
+    ),
+    expected,
+  );
+  params.assertActive();
+  if (successor.sessionId === currentTarget.sessionId) {
+    return { ...successor, entry: previousEntry };
+  }
+  if (!params.result.ok || !params.result.compacted) {
+    throw new Error("Cannot accept a successor without a successful completed compaction");
+  }
+  const assertCommitAllowed = composeSessionSourceAssertion(
+    [params.assertActive],
+    (assertSource) => {
+      assertSource();
+      assertPlacement({ currentTarget, successorSessionId: successor.sessionId });
+    },
+  );
+  assertCommitAllowed();
+  let committed: AcceptedCompactionSuccessor | undefined;
+  try {
+    await patchSessionEntryCore(
+      currentTarget,
+      (entry) => {
+        requireCompactionWriterEntry(entry, expected);
+        return { sessionId: successor.sessionId };
+      },
+      {
+        skipMaintenance: true,
+        ...sessionEntryCommitGuardOptions(assertCommitAllowed),
+        onCommitted: (entry) => {
+          // Capture the actual commit before identity observers can abort the caller.
+          // This sink records facts only; no authority checks or lifecycle hooks.
+          committed = {
+            ...successor,
+            entry,
+            previousSessionId: currentTarget.sessionId,
+            admissionTransition: Object.freeze({
+              previous: Object.freeze({
+                sessionId: expected.sessionId,
+                lifecycleRevision: expected.lifecycleRevision,
+              }),
+              current: Object.freeze({
+                sessionId: entry.sessionId,
+                lifecycleRevision: entry.lifecycleRevision,
+              }),
+            }),
+          };
+          params.onCommitted?.(committed);
+        },
+      },
+    );
+    if (!committed) {
+      throw new SessionTranscriptWriterClaimReboundError();
+    }
+    return committed;
+  } catch (error) {
+    if (!committed) {
+      params.assertActive();
+      throw error;
+    }
+    log.warn(`compaction successor committed but publication failed: ${String(error)}`);
+    return committed;
+  } finally {
+    if (committed) {
+      await retireSessionMcpRuntime({
+        sessionId: currentTarget.sessionId,
+        reason: "compaction-session-end",
+        retainAcrossReuse: true,
+        preserveActiveLeases: true,
+      });
+    }
+    if (committed && params.config) {
+      try {
+        emitCompactionSessionLifecycleHooks({
+          agentId: currentTarget.agentId,
+          cfg: params.config,
+          sessionKey: currentTarget.sessionKey,
+          storePath: currentTarget.storePath,
+          previousEntry,
+          nextEntry: committed.entry,
+        });
+      } catch (error) {
+        log.warn(`compaction successor lifecycle notification failed: ${String(error)}`);
+      }
+    }
+  }
+}
+
+function emitCompactionSessionLifecycleHooks(params: {
+  agentId?: string;
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  storePath?: string;
+  previousEntry: InternalSessionEntry;
+  nextEntry: InternalSessionEntry;
+}) {
+  const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
+  if (params.previousEntry.sessionId) {
+    forgetActiveSessionForShutdown(params.previousEntry.sessionId);
+  }
+  if (params.nextEntry.sessionId && params.storePath) {
+    noteActiveSessionForShutdown({
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+      sessionId: params.nextEntry.sessionId,
+      storePath: params.storePath,
+      sessionFile: params.sessionKey,
+      agentId,
+    });
+  }
+  const hookRunner = getGlobalHookRunner();
+  if (!hookRunner) {
+    return;
+  }
+  if (hookRunner.hasHooks("session_end")) {
+    const storePath =
+      agentId && params.storePath
+        ? resolveSessionStorePathForScope({
+            agentId,
+            sessionKey: params.sessionKey,
+            storePath: params.storePath,
+          })
+        : params.storePath;
+    const transcript = resolveStableSessionEndTranscript({
+      sessionId: params.previousEntry.sessionId,
+      storePath,
+      agentId,
+    });
+    const payload = buildSessionEndHookPayload({
+      sessionId: params.previousEntry.sessionId,
+      sessionKey: params.sessionKey,
+      agentId,
+      reason: "compaction",
+      sessionFile:
+        transcript.sessionFile ??
+        (agentId && storePath
+          ? formatSqliteSessionFileMarker({
+              agentId,
+              sessionId: params.previousEntry.sessionId,
+              storePath,
+            })
+          : undefined),
+      transcriptArchived: transcript.transcriptArchived,
+      nextSessionId: params.nextEntry.sessionId,
+      endedTranscript:
+        agentId && storePath
+          ? createClosedSessionTranscriptSource({
+              agentId,
+              sessionId: params.previousEntry.sessionId,
+              sessionKey: params.sessionKey,
+              storePath,
+            })
+          : { available: false, reason: "unsupported-source" },
+    });
+    void runWithGatewayDetachedWorkContinuation(async () => {
+      await hookRunner.runSessionEnd(payload.event, payload.context);
+    }, "hooks:session-end").catch((error: unknown) => {
+      logVerbose(`session_end hook failed: ${String(error)}`);
+    });
+  }
+  if (hookRunner.hasHooks("session_start")) {
+    const payload = buildSessionStartHookPayload({
+      sessionId: params.nextEntry.sessionId,
+      sessionKey: params.sessionKey,
+      agentId,
+      resumedFrom: params.previousEntry.sessionId,
+    });
+    void runWithGatewayDetachedWorkContinuation(async () => {
+      await hookRunner.runSessionStart(payload.event, payload.context);
+    }, "hooks:session-start").catch((error: unknown) => {
+      logVerbose(`session_start hook failed: ${String(error)}`);
+    });
+  }
+}
+
+function assertSameSessionBinding(
+  currentTarget: SessionTranscriptRuntimeTarget,
+  successorTarget: SessionTranscriptRuntimeTarget,
+  label: string,
+): void {
+  if (
+    successorTarget.agentId !== currentTarget.agentId ||
+    successorTarget.sessionKey !== currentTarget.sessionKey ||
+    path.resolve(successorTarget.storePath) !== path.resolve(currentTarget.storePath)
+  ) {
+    throw new Error(`${label} successor target changed the active session binding`);
+  }
+}

@@ -1,5 +1,7 @@
+// Discord helper module supports native command helpers behavior.
 import { ChannelType } from "discord-api-types/v10";
 import { vi } from "vitest";
+import type { resolveDiscordNativeInteractionRouteState } from "./native-command-route.js";
 
 export type MockCommandInteraction = {
   user: { id: string; username: string; globalName: string };
@@ -11,7 +13,9 @@ export type MockCommandInteraction = {
     getNumber: ReturnType<typeof vi.fn>;
     getBoolean: ReturnType<typeof vi.fn>;
   };
+  responseState: "unacknowledged" | "deferred" | "deferred-update" | "replied";
   defer: ReturnType<typeof vi.fn>;
+  deleteReply: ReturnType<typeof vi.fn>;
   reply: ReturnType<typeof vi.fn>;
   followUp: ReturnType<typeof vi.fn>;
   client: object;
@@ -35,7 +39,7 @@ export function createMockCommandInteraction(
   const guildId = params.guildId;
   const guild =
     guildId === null || guildId === undefined ? null : { id: guildId, name: params.guildName };
-  return {
+  const interaction: MockCommandInteraction = {
     user: {
       id: params.userId ?? "owner",
       username: params.username ?? "tester",
@@ -56,9 +60,40 @@ export function createMockCommandInteraction(
       getNumber: vi.fn().mockReturnValue(null),
       getBoolean: vi.fn().mockReturnValue(null),
     },
-    defer: vi.fn().mockResolvedValue(undefined),
+    responseState: "unacknowledged",
+    defer: vi.fn(async () => {
+      interaction.responseState = "deferred";
+    }),
+    deleteReply: vi.fn(async () => {
+      interaction.responseState = "replied";
+    }),
     reply: vi.fn().mockResolvedValue({ ok: true }),
     followUp: vi.fn().mockResolvedValue({ ok: true }),
     client: {},
+  };
+  return interaction;
+}
+
+type NativeRouteState = ReturnType<typeof resolveDiscordNativeInteractionRouteState>;
+export function createRouteState(params: {
+  sessionKey: string;
+  agentId?: string;
+  accountId?: string;
+  bound?: boolean;
+}): NativeRouteState {
+  const agentId = params.agentId ?? "main";
+  const route: NativeRouteState["effectiveRoute"] = {
+    agentId,
+    channel: "discord",
+    accountId: params.accountId ?? "default",
+    sessionKey: params.sessionKey,
+    mainSessionKey: `agent:${agentId}:main`,
+    lastRoutePolicy: "session",
+    matchedBy: params.bound ? "binding.channel" : "default",
+  };
+  return {
+    effectiveRoute: route,
+    boundSessionKey: params.bound ? params.sessionKey : undefined,
+    configuredBinding: null,
   };
 }

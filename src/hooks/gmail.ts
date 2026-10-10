@@ -1,10 +1,19 @@
 import { randomBytes } from "node:crypto";
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   type OpenClawConfig,
   DEFAULT_GATEWAY_PORT,
   type HooksGmailTailscaleMode,
   resolveGatewayPort,
 } from "../config/config.js";
+import { resolveExecutable } from "../infra/executable-path.js";
+import {
+  buildWindowsCmdExeCommandLine,
+  isWindowsBatchCommand,
+  resolveTrustedWindowsCmdExe,
+} from "../process/windows-command.js";
 
 export const DEFAULT_GMAIL_LABEL = "INBOX";
 export const DEFAULT_GMAIL_TOPIC = "gog-gmail-watch";
@@ -15,19 +24,12 @@ export const DEFAULT_GMAIL_SERVE_PATH = "/gmail-pubsub";
 export const DEFAULT_GMAIL_MAX_BYTES = 20_000;
 export const DEFAULT_GMAIL_RENEW_MINUTES = 12 * 60;
 const DEFAULT_HOOKS_PATH = "/hooks";
+// OpenClaw handles inbound mail; override gog's narrower SPAM,TRASH default.
+const GMAIL_WATCH_EXCLUDED_LABELS = "SPAM,TRASH,DRAFT,SENT";
 const GMAIL_WATCH_SENSITIVE_FLAGS = new Set(["--token", "--hook-url", "--hook-token"]);
+let gogBin: string | undefined;
 
-export type GmailHookOverrides = {
-  account?: string;
-  label?: string;
-  topic?: string;
-  subscription?: string;
-  pushToken?: string;
-  hookToken?: string;
-  hookUrl?: string;
-  includeBody?: boolean;
-  maxBytes?: number;
-  renewEveryMinutes?: number;
+export type GmailHookOverrides = Partial<Omit<GmailHookRuntimeConfig, "serve" | "tailscale">> & {
   serveBind?: string;
   servePort?: number;
   servePath?: string;
@@ -63,8 +65,13 @@ export function generateHookToken(bytes = 24): string {
   return randomBytes(bytes).toString("hex");
 }
 
+/** Resolve the per-message body byte bound gog is provisioned with (`--max-bytes`). */
+export function resolveGmailHookMaxBytes(raw: number | undefined): number {
+  return Math.floor(asPositiveFiniteNumber(raw) ?? DEFAULT_GMAIL_MAX_BYTES);
+}
+
 export function mergeHookPresets(existing: string[] | undefined, preset: string): string[] {
-  const next = new Set((existing ?? []).map((item) => item.trim()).filter(Boolean));
+  const next = new Set(normalizeUniqueStringEntries(existing));
   next.add(preset);
   return Array.from(next);
 }
@@ -94,8 +101,9 @@ export function buildDefaultHookUrl(
   port: number = DEFAULT_GATEWAY_PORT,
 ): string {
   const basePath = normalizeHooksPath(hooksPath);
-  const baseUrl = `http://127.0.0.1:${port}`;
-  return joinUrl(baseUrl, `${basePath}/gmail`);
+  const url = new URL(`http://127.0.0.1:${port}`);
+  url.pathname = `${basePath}/gmail`;
+  return url.toString();
 }
 
 export function resolveGmailHookRuntimeConfig(
@@ -133,40 +141,25 @@ export function resolveGmailHookRuntimeConfig(
 
   const includeBody = overrides.includeBody ?? gmail?.includeBody ?? true;
 
-  const maxBytesRaw = overrides.maxBytes ?? gmail?.maxBytes;
-  const maxBytes =
-    typeof maxBytesRaw === "number" && Number.isFinite(maxBytesRaw) && maxBytesRaw > 0
-      ? Math.floor(maxBytesRaw)
-      : DEFAULT_GMAIL_MAX_BYTES;
+  const maxBytes = resolveGmailHookMaxBytes(overrides.maxBytes ?? gmail?.maxBytes);
 
-  const renewEveryMinutesRaw = overrides.renewEveryMinutes ?? gmail?.renewEveryMinutes;
-  const renewEveryMinutes =
-    typeof renewEveryMinutesRaw === "number" &&
-    Number.isFinite(renewEveryMinutesRaw) &&
-    renewEveryMinutesRaw > 0
-      ? Math.floor(renewEveryMinutesRaw)
-      : DEFAULT_GMAIL_RENEW_MINUTES;
+  const renewEveryMinutes = Math.floor(
+    asPositiveFiniteNumber(overrides.renewEveryMinutes ?? gmail?.renewEveryMinutes) ??
+      DEFAULT_GMAIL_RENEW_MINUTES,
+  );
 
   const serveBind = overrides.serveBind ?? gmail?.serve?.bind ?? DEFAULT_GMAIL_SERVE_BIND;
-  const servePortRaw = overrides.servePort ?? gmail?.serve?.port;
-  const servePort =
-    typeof servePortRaw === "number" && Number.isFinite(servePortRaw) && servePortRaw > 0
-      ? Math.floor(servePortRaw)
-      : DEFAULT_GMAIL_SERVE_PORT;
-  const servePathRaw = overrides.servePath ?? gmail?.serve?.path;
-  const normalizedServePathRaw =
-    typeof servePathRaw === "string" && servePathRaw.trim().length > 0
-      ? normalizeServePath(servePathRaw)
-      : DEFAULT_GMAIL_SERVE_PATH;
+  const servePort = Math.floor(
+    asPositiveFiniteNumber(overrides.servePort ?? gmail?.serve?.port) ?? DEFAULT_GMAIL_SERVE_PORT,
+  );
+  const normalizedServePathRaw = normalizeServePath(
+    normalizeOptionalString(overrides.servePath ?? gmail?.serve?.path),
+  );
   const tailscaleTargetRaw = overrides.tailscaleTarget ?? gmail?.tailscale?.target;
 
   const tailscaleMode = overrides.tailscaleMode ?? gmail?.tailscale?.mode ?? "off";
   const tailscaleTarget =
-    tailscaleMode !== "off" &&
-    typeof tailscaleTargetRaw === "string" &&
-    tailscaleTargetRaw.trim().length > 0
-      ? tailscaleTargetRaw.trim()
-      : undefined;
+    tailscaleMode !== "off" ? normalizeOptionalString(tailscaleTargetRaw) : undefined;
   // Tailscale strips the public path before proxying, so listen on "/" when on.
   const servePath = normalizeServePath(
     tailscaleMode !== "off" && !tailscaleTarget ? "/" : normalizedServePathRaw,
@@ -245,6 +238,7 @@ export function buildGogWatchServeArgs(cfg: GmailHookRuntimeConfig): string[] {
   if (cfg.includeBody) {
     args.push("--include-body");
   }
+  args.push("--exclude-labels", GMAIL_WATCH_EXCLUDED_LABELS);
   if (cfg.maxBytes > 0) {
     args.push("--max-bytes", String(cfg.maxBytes));
   }
@@ -259,6 +253,28 @@ export function buildGogWatchServeLogArgs(cfg: GmailHookRuntimeConfig): string[]
   );
 }
 
+export function resolveGogExecutable(): string {
+  return (gogBin ??= resolveExecutable("gog"));
+}
+
+export function resolveGogServeInvocation(args: string[]): {
+  args: string[];
+  command: string;
+  windowsHide?: true;
+  windowsVerbatimArguments?: true;
+} {
+  const command = resolveGogExecutable();
+  if (!isWindowsBatchCommand(command)) {
+    return { command, args, windowsHide: process.platform === "win32" ? true : undefined };
+  }
+  return {
+    command: resolveTrustedWindowsCmdExe(),
+    args: ["/d", "/s", "/c", buildWindowsCmdExeCommandLine(command, args)],
+    windowsHide: true,
+    windowsVerbatimArguments: true,
+  };
+}
+
 export function buildTopicPath(projectId: string, topicName: string): string {
   return `projects/${projectId}/topics/${topicName}`;
 }
@@ -269,12 +285,4 @@ export function parseTopicPath(topic: string): { projectId: string; topicName: s
     return null;
   }
   return { projectId: match[1] ?? "", topicName: match[2] ?? "" };
-}
-
-function joinUrl(base: string, path: string): string {
-  const url = new URL(base);
-  const basePath = url.pathname.replace(/\/+$/, "");
-  const extra = path.startsWith("/") ? path : `/${path}`;
-  url.pathname = `${basePath}${extra}`;
-  return url.toString();
 }

@@ -1,18 +1,31 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   envInvocationUsesModifiers,
   parseEnvInvocationPrelude,
   unwrapEnvInvocation,
 } from "./command-carriers.js";
 import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
-
-export { unwrapEnvInvocation } from "./command-carriers.js";
+import { parseInlineOptionToken } from "./inline-option-token.js";
 
 export const MAX_DISPATCH_WRAPPER_DEPTH = 4;
 
 const NICE_OPTIONS_WITH_VALUE = new Set(["-n", "--adjustment", "--priority"]);
 const CAFFEINATE_OPTIONS_WITH_VALUE = new Set(["-t", "-w"]);
+const CAFFEINATE_FLAG_OPTIONS = new Set(["-d", "-i", "-m", "-s", "-u"]);
 const STDBUF_OPTIONS_WITH_VALUE = new Set(["-i", "--input", "-o", "--output", "-e", "--error"]);
+const FLOCK_SHORT_FLAG_OPTIONS = new Set(["-e", "-F", "-n", "-o", "-s", "-x"]);
+const FLOCK_LONG_FLAG_OPTIONS = new Set([
+  "--close",
+  "--exclusive",
+  "--nb",
+  "--no-fork",
+  "--nonblock",
+  "--shared",
+  "--verbose",
+]);
+const FLOCK_SHORT_OPTIONS_WITH_VALUE = new Set(["-E", "-w"]);
+const FLOCK_LONG_OPTIONS_WITH_VALUE = new Set(["--conflict-exit-code", "--timeout", "--wait"]);
 const TIME_FLAG_OPTIONS = new Set([
   "-a",
   "--append",
@@ -45,11 +58,6 @@ const XCRUN_FLAG_OPTIONS = new Set([
   "-v",
   "--verbose",
 ]);
-
-function isArchSelectorToken(token: string): boolean {
-  return /^-[A-Za-z0-9_]+$/.test(token);
-}
-
 function isKnownArchSelectorToken(token: string): boolean {
   return (
     token === "-arm64" ||
@@ -58,10 +66,6 @@ function isKnownArchSelectorToken(token: string): boolean {
     token === "-x86_64" ||
     token === "-x86_64h"
   );
-}
-
-function isKnownArchNameToken(token: string): boolean {
-  return isKnownArchSelectorToken(`-${token}`);
 }
 
 type WrapperScanDirective = "continue" | "consume-next" | "stop" | "invalid";
@@ -132,24 +136,38 @@ export function extractEnvAssignmentKeysFromDispatchWrappers(
     }
     current = unwrap.argv;
   }
-  return Array.from(new Set(assignmentKeys)).toSorted((a, b) => a.localeCompare(b));
+  return sortUniqueStrings(assignmentKeys);
 }
 
 function unwrapDashOptionInvocation(
   argv: string[],
   params: {
-    onFlag: (flag: string, lowerToken: string) => WrapperScanDirective;
+    onFlag?: (flag: string, token: string) => WrapperScanDirective;
+    flagOptions?: ReadonlySet<string>;
+    optionsWithValue?: ReadonlySet<string>;
+    caseSensitive?: boolean;
+    allowDoubleDash?: boolean;
     adjustCommandIndex?: (commandIndex: number, argv: string[]) => number | null;
   },
 ): string[] | null {
   return scanWrapperInvocation(argv, {
-    separators: new Set(["--"]),
+    separators: params.allowDoubleDash === false ? undefined : new Set(["--"]),
     onToken: (token, lower) => {
       if (!token.startsWith("-") || token === "-") {
         return "stop";
       }
-      const [flag] = lower.split("=", 2);
-      return params.onFlag(flag, lower);
+      const comparableToken = params.caseSensitive ? token : lower;
+      const { name: flag } = parseInlineOptionToken(comparableToken);
+      if (params.onFlag) {
+        return params.onFlag(flag, comparableToken);
+      }
+      if (params.flagOptions?.has(flag)) {
+        return "continue";
+      }
+      if (params.optionsWithValue?.has(flag)) {
+        return comparableToken.includes("=") ? "continue" : "consume-next";
+      }
+      return "invalid";
     },
     adjustCommandIndex: params.adjustCommandIndex,
   });
@@ -172,91 +190,89 @@ function unwrapNiceInvocation(argv: string[]): string[] | null {
   });
 }
 
-function unwrapCaffeinateInvocation(argv: string[]): string[] | null {
-  return unwrapDashOptionInvocation(argv, {
-    onFlag: (flag, lower) => {
-      if (flag === "-d" || flag === "-i" || flag === "-m" || flag === "-s" || flag === "-u") {
-        return "continue";
-      }
-      if (CAFFEINATE_OPTIONS_WITH_VALUE.has(flag)) {
-        return lower !== flag || lower.includes("=") ? "continue" : "consume-next";
-      }
-      return "invalid";
-    },
-  });
-}
-
 function unwrapNohupInvocation(argv: string[]): string[] | null {
-  return scanWrapperInvocation(argv, {
-    separators: new Set(["--"]),
-    onToken: (token, lower) => {
-      if (!token.startsWith("-") || token === "-") {
-        return "stop";
-      }
-      return lower === "--help" || lower === "--version" ? "continue" : "invalid";
-    },
+  return unwrapDashOptionInvocation(argv, {
+    onFlag: (_flag, token) =>
+      token === "--help" || token === "--version" ? "continue" : "invalid",
   });
 }
 
-function unwrapSandboxExecInvocation(argv: string[]): string[] | null {
-  return unwrapDashOptionInvocation(argv, {
-    onFlag: (flag, lower) => {
-      if (SANDBOX_EXEC_OPTIONS_WITH_VALUE.has(flag)) {
-        return lower !== flag || lower.includes("=") ? "continue" : "consume-next";
-      }
-      return "invalid";
-    },
-  });
+function isFlockShortFlagCluster(token: string): boolean {
+  return /^-[eFnsxo]+$/.test(token);
 }
 
-function unwrapStdbufInvocation(argv: string[]): string[] | null {
+function unwrapFlockInvocation(argv: string[]): string[] | null {
   return unwrapDashOptionInvocation(argv, {
-    onFlag: (flag, lower) => {
-      if (!STDBUF_OPTIONS_WITH_VALUE.has(flag)) {
-        return "invalid";
-      }
-      return lower.includes("=") ? "continue" : "consume-next";
-    },
-  });
-}
-
-function unwrapTimeInvocation(argv: string[]): string[] | null {
-  return unwrapDashOptionInvocation(argv, {
-    onFlag: (flag, lower) => {
-      if (TIME_FLAG_OPTIONS.has(flag)) {
+    caseSensitive: true,
+    onFlag: (flag, token) => {
+      const lowerFlag = flag.toLowerCase();
+      if (
+        FLOCK_LONG_FLAG_OPTIONS.has(lowerFlag) ||
+        isFlockShortFlagCluster(token) ||
+        FLOCK_SHORT_FLAG_OPTIONS.has(flag)
+      ) {
         return "continue";
       }
-      if (TIME_OPTIONS_WITH_VALUE.has(flag)) {
-        return lower.includes("=") ? "continue" : "consume-next";
-      }
-      return "invalid";
-    },
-  });
-}
-
-function supportsScriptPositionalCommand(platform: NodeJS.Platform = process.platform): boolean {
-  return platform === "darwin" || platform === "freebsd";
-}
-
-function unwrapScriptInvocation(argv: string[]): string[] | null {
-  if (!supportsScriptPositionalCommand()) {
-    return null;
-  }
-  return scanWrapperInvocation(argv, {
-    separators: new Set(["--"]),
-    onToken: (token, lower) => {
-      if (!lower.startsWith("-") || lower === "-") {
-        return "stop";
-      }
-      const [flag] = token.split("=", 2);
-      if (BSD_SCRIPT_OPTIONS_WITH_VALUE.has(flag)) {
+      if (
+        FLOCK_LONG_OPTIONS_WITH_VALUE.has(lowerFlag) ||
+        FLOCK_SHORT_OPTIONS_WITH_VALUE.has(flag)
+      ) {
         return token.includes("=") ? "continue" : "consume-next";
       }
-      if (BSD_SCRIPT_FLAG_OPTIONS.has(flag)) {
-        return "continue";
-      }
       return "invalid";
     },
+    adjustCommandIndex: (commandIndex, currentArgv) => {
+      // The first non-option token is the lock target; only the next token can be
+      // the wrapped executable. Shell-string and fd-only forms stay blocked.
+      const wrappedCommandIndex = commandIndex + 1;
+      const wrappedCommand = currentArgv[wrappedCommandIndex]?.trim() ?? "";
+      return wrappedCommand && (!wrappedCommand.startsWith("-") || wrappedCommand === "-")
+        ? wrappedCommandIndex
+        : null;
+    },
+  });
+}
+
+function timeInvocationWritesOutputFile(argv: string[]): boolean {
+  let expectsOptionValue = false;
+  for (let idx = 1; idx < argv.length; idx += 1) {
+    const token = argv[idx]?.trim() ?? "";
+    if (!token) {
+      continue;
+    }
+    if (expectsOptionValue) {
+      expectsOptionValue = false;
+      continue;
+    }
+    if (token === "--") {
+      return false;
+    }
+    if (!token.startsWith("-") || token === "-") {
+      return false;
+    }
+    const lower = normalizeLowercaseStringOrEmpty(token);
+    const { name: flag } = parseInlineOptionToken(lower);
+    if (flag === "-o" || flag === "--output") {
+      return true;
+    }
+    if (TIME_OPTIONS_WITH_VALUE.has(flag) && !lower.includes("=")) {
+      expectsOptionValue = true;
+    }
+  }
+  return false;
+}
+
+function unwrapScriptInvocation(
+  argv: string[],
+  platform: NodeJS.Platform = process.platform,
+): string[] | null {
+  if (platform !== "darwin" && platform !== "freebsd") {
+    return null;
+  }
+  return unwrapDashOptionInvocation(argv, {
+    caseSensitive: true,
+    optionsWithValue: BSD_SCRIPT_OPTIONS_WITH_VALUE,
+    flagOptions: BSD_SCRIPT_FLAG_OPTIONS,
     adjustCommandIndex: (commandIndex, currentArgv) => {
       let sawTranscript = false;
       for (let idx = commandIndex; idx < currentArgv.length; idx += 1) {
@@ -277,15 +293,8 @@ function unwrapScriptInvocation(argv: string[]): string[] | null {
 
 function unwrapTimeoutInvocation(argv: string[]): string[] | null {
   return unwrapDashOptionInvocation(argv, {
-    onFlag: (flag, lower) => {
-      if (TIMEOUT_FLAG_OPTIONS.has(flag)) {
-        return "continue";
-      }
-      if (TIMEOUT_OPTIONS_WITH_VALUE.has(flag)) {
-        return lower.includes("=") ? "continue" : "consume-next";
-      }
-      return "invalid";
-    },
+    flagOptions: TIMEOUT_FLAG_OPTIONS,
+    optionsWithValue: TIMEOUT_OPTIONS_WITH_VALUE,
     adjustCommandIndex: (commandIndex, currentArgv) => {
       const wrappedCommandIndex = commandIndex + 1;
       return wrappedCommandIndex < currentArgv.length ? wrappedCommandIndex : null;
@@ -299,7 +308,7 @@ function unwrapArchInvocation(argv: string[]): string[] | null {
     onToken: (token, lower) => {
       if (expectsArchName) {
         expectsArchName = false;
-        return isKnownArchNameToken(lower) ? "continue" : "invalid";
+        return isKnownArchSelectorToken(`-${lower}`) ? "continue" : "invalid";
       }
       if (!token.startsWith("-") || token === "-") {
         return "stop";
@@ -315,71 +324,112 @@ function unwrapArchInvocation(argv: string[]): string[] | null {
       if (lower === "-c" || lower === "-d" || lower === "-e" || lower === "-h") {
         return "invalid";
       }
-      return isArchSelectorToken(token) && isKnownArchSelectorToken(lower) ? "continue" : "invalid";
+      return isKnownArchSelectorToken(lower) ? "continue" : "invalid";
     },
   });
 }
 
-function supportsArchDispatchWrapper(platform: NodeJS.Platform = process.platform): boolean {
-  return platform === "darwin";
-}
-
-function supportsXcrunDispatchWrapper(platform: NodeJS.Platform = process.platform): boolean {
+function supportsDarwinDispatchWrapper(platform: NodeJS.Platform = process.platform): boolean {
   return platform === "darwin";
 }
 
 function unwrapXcrunInvocation(argv: string[]): string[] | null {
-  return scanWrapperInvocation(argv, {
-    onToken: (token, lower) => {
-      if (!token.startsWith("-") || token === "-") {
-        return "stop";
-      }
-      if (XCRUN_FLAG_OPTIONS.has(lower)) {
-        return "continue";
-      }
-      return "invalid";
-    },
+  return unwrapDashOptionInvocation(argv, {
+    allowDoubleDash: false,
+    onFlag: (_flag, token) => (XCRUN_FLAG_OPTIONS.has(token) ? "continue" : "invalid"),
   });
 }
 
 type DispatchWrapperSpec = {
   name: string;
   unwrap?: (argv: string[], platform?: NodeJS.Platform) => string[] | null;
+  dashOptions?: Parameters<typeof unwrapDashOptionInvocation>[1];
   transparentUsage?: boolean | ((argv: string[], platform?: NodeJS.Platform) => boolean);
+  changesExecutableLookup?: true;
 };
 
 const DISPATCH_WRAPPER_SPECS: readonly DispatchWrapperSpec[] = [
   {
     name: "arch",
     unwrap: (argv, platform) =>
-      supportsArchDispatchWrapper(platform) ? unwrapArchInvocation(argv) : null,
-    transparentUsage: (_argv, platform) => supportsArchDispatchWrapper(platform),
+      supportsDarwinDispatchWrapper(platform) ? unwrapArchInvocation(argv) : null,
+    transparentUsage: (_argv, platform) => supportsDarwinDispatchWrapper(platform),
   },
-  { name: "caffeinate", unwrap: unwrapCaffeinateInvocation, transparentUsage: true },
+  {
+    name: "caffeinate",
+    dashOptions: {
+      flagOptions: CAFFEINATE_FLAG_OPTIONS,
+      optionsWithValue: CAFFEINATE_OPTIONS_WITH_VALUE,
+    },
+    transparentUsage: true,
+  },
+  { name: "bwrap" },
+  { name: "catchsegv" },
   { name: "chrt" },
+  { name: "chroot" },
+  { name: "cpulimit" },
   { name: "doas" },
+  { name: "eatmydata" },
   {
     name: "env",
     unwrap: unwrapEnvInvocation,
     transparentUsage: (argv) => !envInvocationUsesModifiers(argv),
   },
+  { name: "firejail" },
+  { name: "flock", unwrap: unwrapFlockInvocation, transparentUsage: true },
+  { name: "gosu" },
   { name: "ionice" },
+  { name: "linux32" },
+  { name: "linux64" },
   { name: "nice", unwrap: unwrapNiceInvocation, transparentUsage: true },
+  { name: "nsenter" },
   { name: "nohup", unwrap: unwrapNohupInvocation, transparentUsage: true },
-  { name: "sandbox-exec", unwrap: unwrapSandboxExecInvocation, transparentUsage: true },
-  { name: "script", unwrap: unwrapScriptInvocation, transparentUsage: true },
+  { name: "numactl" },
+  { name: "pkexec" },
+  { name: "proot" },
+  { name: "proxychains" },
+  { name: "proxychains4" },
+  { name: "runuser" },
+  {
+    name: "sandbox-exec",
+    dashOptions: { optionsWithValue: SANDBOX_EXEC_OPTIONS_WITH_VALUE },
+    transparentUsage: true,
+  },
+  { name: "script", unwrap: unwrapScriptInvocation, transparentUsage: false },
+  { name: "setarch" },
   { name: "setsid" },
-  { name: "stdbuf", unwrap: unwrapStdbufInvocation, transparentUsage: true },
+  { name: "setpriv" },
+  {
+    name: "stdbuf",
+    dashOptions: { optionsWithValue: STDBUF_OPTIONS_WITH_VALUE },
+    transparentUsage: true,
+  },
+  { name: "su" },
   { name: "sudo" },
+  { name: "systemd-run" },
   { name: "taskset" },
-  { name: "time", unwrap: unwrapTimeInvocation, transparentUsage: true },
+  {
+    name: "time",
+    dashOptions: {
+      flagOptions: TIME_FLAG_OPTIONS,
+      optionsWithValue: TIME_OPTIONS_WITH_VALUE,
+    },
+    transparentUsage: (argv) => !timeInvocationWritesOutputFile(argv),
+  },
   { name: "timeout", unwrap: unwrapTimeoutInvocation, transparentUsage: true },
+  { name: "torify" },
+  { name: "torsocks" },
+  { name: "unbuffer" },
+  { name: "unshare" },
+  { name: "watch" },
   {
     name: "xcrun",
+    changesExecutableLookup: true,
     unwrap: (argv, platform) =>
-      supportsXcrunDispatchWrapper(platform) ? unwrapXcrunInvocation(argv) : null,
-    transparentUsage: (_argv, platform) => supportsXcrunDispatchWrapper(platform),
+      supportsDarwinDispatchWrapper(platform) ? unwrapXcrunInvocation(argv) : null,
+    transparentUsage: (_argv, platform) => supportsDarwinDispatchWrapper(platform),
   },
+  { name: "xvfb-run" },
 ];
 
 const DISPATCH_WRAPPER_SPEC_BY_NAME = new Map(
@@ -392,24 +442,15 @@ type DispatchWrapperUnwrapResult =
   | { kind: "unwrapped"; wrapper: string; argv: string[] };
 
 type DispatchWrapperTrustPlan = {
+  dispatchChainComplete: boolean;
   argv: string[];
   wrappers: string[];
+  wrapperInvocations: DispatchWrapperInvocation[];
   policyBlocked: boolean;
   blockedWrapper?: string;
 };
 
-function blockDispatchWrapper(wrapper: string): DispatchWrapperUnwrapResult {
-  return { kind: "blocked", wrapper };
-}
-
-function unwrapDispatchWrapper(
-  wrapper: string,
-  unwrapped: string[] | null,
-): DispatchWrapperUnwrapResult {
-  return unwrapped
-    ? { kind: "unwrapped", wrapper, argv: unwrapped }
-    : blockDispatchWrapper(wrapper);
-}
+export type DispatchWrapperInvocation = { wrapper: string; sourceArgv: string[] };
 
 export function isDispatchWrapperExecutable(token: string): boolean {
   return DISPATCH_WRAPPER_SPEC_BY_NAME.has(normalizeExecutableToken(token));
@@ -428,9 +469,10 @@ export function unwrapKnownDispatchWrapperInvocation(
   if (!spec) {
     return { kind: "not-wrapper" };
   }
-  return spec.unwrap
-    ? unwrapDispatchWrapper(wrapper, spec.unwrap(argv, platform))
-    : blockDispatchWrapper(wrapper);
+  const unwrapped = spec.dashOptions
+    ? unwrapDashOptionInvocation(argv, spec.dashOptions)
+    : spec.unwrap?.(argv, platform);
+  return unwrapped ? { kind: "unwrapped", wrapper, argv: unwrapped } : { kind: "blocked", wrapper };
 }
 
 export function unwrapDispatchWrappersForResolution(
@@ -448,7 +490,7 @@ function isSemanticDispatchWrapperUsage(
   platform: NodeJS.Platform = process.platform,
 ): boolean {
   const spec = DISPATCH_WRAPPER_SPEC_BY_NAME.get(wrapper);
-  if (!spec?.unwrap) {
+  if (!spec?.unwrap && !spec?.dashOptions) {
     return true;
   }
   const transparentUsage = spec.transparentUsage;
@@ -458,19 +500,6 @@ function isSemanticDispatchWrapperUsage(
   return transparentUsage !== true;
 }
 
-function blockedDispatchWrapperPlan(params: {
-  argv: string[];
-  wrappers: string[];
-  blockedWrapper: string;
-}): DispatchWrapperTrustPlan {
-  return {
-    argv: params.argv,
-    wrappers: params.wrappers,
-    policyBlocked: true,
-    blockedWrapper: params.blockedWrapper,
-  };
-}
-
 export function resolveDispatchWrapperTrustPlan(
   argv: string[],
   maxDepth = MAX_DISPATCH_WRAPPER_DEPTH,
@@ -478,39 +507,45 @@ export function resolveDispatchWrapperTrustPlan(
 ): DispatchWrapperTrustPlan {
   let current = argv;
   const wrappers: string[] = [];
+  const wrapperInvocations: DispatchWrapperInvocation[] = [];
+  const blocked = (blockedWrapper: string): DispatchWrapperTrustPlan => ({
+    argv: current,
+    wrappers,
+    wrapperInvocations,
+    policyBlocked: true,
+    dispatchChainComplete: false,
+    blockedWrapper,
+  });
   for (let depth = 0; depth < maxDepth; depth += 1) {
     const unwrap = unwrapKnownDispatchWrapperInvocation(current, platform);
     if (unwrap.kind === "blocked") {
-      return blockedDispatchWrapperPlan({
-        argv: current,
-        wrappers,
-        blockedWrapper: unwrap.wrapper,
-      });
+      return blocked(unwrap.wrapper);
     }
     if (unwrap.kind !== "unwrapped" || unwrap.argv.length === 0) {
       break;
     }
     wrappers.push(unwrap.wrapper);
+    wrapperInvocations.push({ wrapper: unwrap.wrapper, sourceArgv: [...current] });
     if (isSemanticDispatchWrapperUsage(unwrap.wrapper, current, platform)) {
-      return blockedDispatchWrapperPlan({
-        argv: current,
-        wrappers,
-        blockedWrapper: unwrap.wrapper,
-      });
+      return blocked(unwrap.wrapper);
     }
     current = unwrap.argv;
   }
   if (wrappers.length >= maxDepth) {
     const overflow = unwrapKnownDispatchWrapperInvocation(current, platform);
     if (overflow.kind === "blocked" || overflow.kind === "unwrapped") {
-      return blockedDispatchWrapperPlan({
-        argv: current,
-        wrappers,
-        blockedWrapper: overflow.wrapper,
-      });
+      return blocked(overflow.wrapper);
     }
   }
-  return { argv: current, wrappers, policyBlocked: false };
+  return {
+    argv: current,
+    wrappers,
+    wrapperInvocations,
+    policyBlocked: false,
+    dispatchChainComplete: wrappers.every(
+      (wrapper) => !DISPATCH_WRAPPER_SPEC_BY_NAME.get(wrapper)?.changesExecutableLookup,
+    ),
+  };
 }
 
 export function hasDispatchEnvManipulation(argv: string[]): boolean {

@@ -1,54 +1,26 @@
+import { decodeHtmlEntities } from "openclaw/plugin-sdk/html-entity-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { RoomMessageEventContent } from "./types.js";
 
-const HTML_ENTITY_REPLACEMENTS: Readonly<Record<string, string>> = {
-  amp: "&",
-  apos: "'",
-  gt: ">",
-  lt: "<",
-  nbsp: " ",
-  quot: '"',
-};
-const MAX_UNICODE_SCALAR_VALUE = 0x10ffff;
+const MATRIX_HTML_ENTITY_RE = /&(?:#x?[0-9a-f]+|amp|apos|gt|lt|nbsp|quot);/gi;
 
-function decodeNumericHtmlEntity(match: string, rawValue: string, radix: 10 | 16): string {
-  const codePoint = Number.parseInt(rawValue, radix);
-  if (
-    !Number.isSafeInteger(codePoint) ||
-    codePoint < 0 ||
-    codePoint > MAX_UNICODE_SCALAR_VALUE ||
-    (codePoint >= 0xd800 && codePoint <= 0xdfff)
-  ) {
-    return match;
-  }
-  return String.fromCodePoint(codePoint);
-}
-
-function decodeHtmlEntities(value: string): string {
-  return value.replace(/&(#x?[0-9a-f]+|\w+);/gi, (match, entity: string) => {
-    const normalized = normalizeLowercaseStringOrEmpty(entity);
-    if (normalized.startsWith("#x")) {
-      return decodeNumericHtmlEntity(match, normalized.slice(2), 16);
-    }
-    if (normalized.startsWith("#")) {
-      return decodeNumericHtmlEntity(match, normalized.slice(1), 10);
-    }
-    return HTML_ENTITY_REPLACEMENTS[normalized] ?? match;
+function decodeVisibleHtmlEntities(value: string): string {
+  return value.replace(MATRIX_HTML_ENTITY_RE, (entity) => {
+    const decoded = decodeHtmlEntities(entity.startsWith("&#") ? entity : entity.toLowerCase());
+    return decoded === "\u00a0" ? " " : decoded;
   });
 }
 
-function normalizeVisibleMentionText(value: string): string {
+function extractVisibleMentionText(value?: string): string {
   return normalizeLowercaseStringOrEmpty(
-    decodeHtmlEntities(
-      value.replace(/<[^>]+>/g, " ").replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g, ""),
+    decodeVisibleHtmlEntities(
+      (value ?? "")
+        .replace(/<[^>]+>/g, " ")
+        .replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g, ""),
     ).replace(/\s+/g, " "),
   );
-}
-
-function extractVisibleMentionText(value?: string): string {
-  return normalizeVisibleMentionText(value ?? "");
 }
 
 function resolveMatrixUserLocalpart(userId: string): string | null {
@@ -63,6 +35,21 @@ function resolveMatrixUserLocalpart(userId: string): string | null {
   return trimmed.slice(1, colonIndex).trim() || null;
 }
 
+function hasVisibleNativeMatrixUserMention(text: string | undefined, userId: string): boolean {
+  const localpart = resolveMatrixUserLocalpart(userId);
+  if (!text || !localpart) {
+    return false;
+  }
+
+  // Historical localparts can end in any punctuation, so shorthand must stay
+  // bare; colon plus visible whitespace is safe because localparts forbid colon.
+  const pattern = new RegExp(
+    String.raw`(?:^|\p{White_Space})(?:${escapeRegExp(userId)}(?=$|\p{White_Space}|:\p{White_Space}|[,!?;](?=$|\p{White_Space}))|${escapeRegExp(`@${localpart}`)}(?=$|\p{White_Space}|:\p{White_Space}))`,
+    "u",
+  );
+  return pattern.test(text);
+}
+
 function resolveMatrixMentionPrefixCandidates(params: {
   userId?: string | null;
   displayName?: string | null;
@@ -70,45 +57,36 @@ function resolveMatrixMentionPrefixCandidates(params: {
   const candidates: string[] = [];
   const seen = new Set<string>();
 
-  const append = (candidate?: string | null) => {
+  const localpart = params.userId ? resolveMatrixUserLocalpart(params.userId) : null;
+  for (const candidate of [
+    params.userId,
+    localpart ? `@${localpart}` : null,
+    params.displayName,
+    params.displayName ? `@${params.displayName}` : null,
+    params.displayName ? `@[${params.displayName}]` : null,
+  ]) {
     const trimmed = candidate?.trim();
     if (!trimmed) {
-      return;
+      continue;
     }
     const normalized = normalizeLowercaseStringOrEmpty(trimmed);
     if (seen.has(normalized)) {
-      return;
+      continue;
     }
     seen.add(normalized);
     candidates.push(trimmed);
-  };
-
-  append(params.userId);
-  const localpart = params.userId ? resolveMatrixUserLocalpart(params.userId) : null;
-  append(localpart ? `@${localpart}` : null);
-  append(params.displayName);
-  append(params.displayName ? `@${params.displayName}` : null);
+  }
 
   return candidates;
 }
 
-function stripMatchedMatrixMentionPrefix(text: string, pattern: RegExp): string | null {
-  const match = text.match(pattern);
-  if (!match) {
-    return null;
-  }
-  return text.slice(match[0].length).trimStart();
-}
-
-function stripNativeMatrixMentionPrefix(text: string, candidate: string): string | null {
-  const pattern = new RegExp(`^\\s*${escapeRegExp(candidate)}(?:\\s*[:,])?(?:\\s+|$)`, "i");
-  return stripMatchedMatrixMentionPrefix(text, pattern);
-}
-
-function stripRegexMatrixMentionPrefix(text: string, pattern: RegExp): string | null {
-  const flags = pattern.flags.replace(/[gy]/g, "");
-  const anchored = new RegExp(`^\\s*(?:${pattern.source})(?:\\s*[:,])?(?:\\s+|$)`, flags);
-  return stripMatchedMatrixMentionPrefix(text, anchored);
+function stripMatchedMatrixMentionPrefix(
+  text: string,
+  source: string,
+  flags: string,
+): string | null {
+  const match = text.match(new RegExp(`^\\s*${source}(?:\\s*[:,])?(?:\\s+|$)`, flags));
+  return match ? text.slice(match[0].length).trimStart() : null;
 }
 
 export function stripMatrixMentionPrefix(params: {
@@ -123,13 +101,17 @@ export function stripMatrixMentionPrefix(params: {
   }
 
   for (const candidate of resolveMatrixMentionPrefixCandidates(params)) {
-    const stripped = stripNativeMatrixMentionPrefix(text, candidate);
+    const stripped = stripMatchedMatrixMentionPrefix(text, escapeRegExp(candidate), "i");
     if (stripped !== null) {
       return stripped;
     }
   }
   for (const pattern of params.mentionRegexes ?? []) {
-    const stripped = stripRegexMatrixMentionPrefix(text, pattern);
+    const stripped = stripMatchedMatrixMentionPrefix(
+      text,
+      `(?:${pattern.source})`,
+      pattern.flags.replace(/[gy]/g, ""),
+    );
     if (stripped !== null) {
       return stripped;
     }
@@ -157,6 +139,7 @@ function isVisibleMentionLabel(params: {
     localpart ? extractVisibleMentionText(`@${localpart}`) : null,
     params.displayName ? extractVisibleMentionText(params.displayName) : null,
     params.displayName ? extractVisibleMentionText(`@${params.displayName}`) : null,
+    params.displayName ? extractVisibleMentionText(`@[${params.displayName}]`) : null,
   ].filter((value): value is string => Boolean(value));
   return candidates.includes(cleaned);
 }
@@ -230,7 +213,6 @@ export function resolveMentions(params: {
   const visibleRoomMention =
     hasVisibleRoomMention(params.text) || hasVisibleRoomMention(params.content.formatted_body);
 
-  // Check formatted_body for matrix.to mention links (legacy/alternative mention format)
   const mentionedInFormattedBody = params.userId
     ? checkFormattedBodyMention({
         formattedBody: params.content.formatted_body,
@@ -239,13 +221,14 @@ export function resolveMentions(params: {
         mentionRegexes: params.mentionRegexes,
       })
     : false;
-  // Matrix clients can mention users through m.mentions metadata plus a visible
-  // Matrix URI label in formatted_body. Keep the visible-mention requirement so
-  // hidden metadata-only mentions do not trigger the handler.
+  // Native mentions may use visible plain-text Matrix IDs without HTML. Keep
+  // exact metadata ownership and visibility so forged mentions stay inert.
   const metadataBackedUserMention = Boolean(
     params.userId &&
     mentionedUsers.has(params.userId) &&
-    (mentionedInFormattedBody || textMentioned),
+    (mentionedInFormattedBody ||
+      textMentioned ||
+      hasVisibleNativeMatrixUserMention(params.text, params.userId)),
   );
   const metadataBackedRoomMention = Boolean(mentions?.room) && visibleRoomMention;
   const explicitMention =

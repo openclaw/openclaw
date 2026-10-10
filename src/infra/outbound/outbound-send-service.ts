@@ -1,59 +1,45 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { projectPluginMessageDeliveryFact } from "../../agents/embedded-agent-message-delivery.js";
+import type { AgentToolResult } from "../../agents/runtime/index.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
-import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
+import type { ChatType } from "../../channels/chat-type.js";
+import type { OutboundReplyFacts } from "../../channels/message/types.js";
+import { normalizeConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
-import type {
-  ChannelId,
-  ChannelMessageActionContext,
-  ChannelThreadingToolContext,
-} from "../../channels/plugins/types.public.js";
+import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
+import { isChannelPartialDeliveryError } from "../../channels/turn/partial-delivery-error.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { OutboundMediaAccess, OutboundMediaReadFile } from "../../media/load-options.js";
+import { getOwnedSessionTranscriptWriterFence } from "../../config/sessions/transcript-write-context.js";
+import {
+  normalizeMessagePresentation,
+  renderMessagePresentationFallbackText,
+} from "../../interactive/payload.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
-import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
+import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
+import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
-import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
-import type { OutboundSendDeps } from "./deliver.js";
+import type { NormalizedOutboundPayload } from "./deliver.js";
+import {
+  createChannelActionContext,
+  type ResolvedActionContext,
+} from "./message-action-contracts.js";
+import { collectActionMediaSourceHints } from "./message-action-params.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import { sendMessage, sendPoll } from "./message.js";
 import type { OutboundMirror } from "./mirror.js";
-import { extractToolPayload } from "./tool-payload.js";
 
-export type OutboundGatewayContext = {
-  url?: string;
-  token?: string;
-  timeoutMs?: number;
-  clientName: GatewayClientName;
-  clientDisplayName?: string;
-  mode: GatewayClientMode;
-};
+const log = createSubsystemLogger("outbound/send-service");
 
-export type OutboundSendContext = {
-  cfg: OpenClawConfig;
-  channel: ChannelId;
-  params: Record<string, unknown>;
-  /** Active agent id for per-agent outbound media root scoping. */
-  agentId?: string;
-  sessionKey?: string;
-  requesterAccountId?: string;
-  requesterSenderId?: string;
-  requesterSenderName?: string;
-  requesterSenderUsername?: string;
-  requesterSenderE164?: string;
+type OutboundSendContext = Omit<ResolvedActionContext, "mediaAccess"> & {
   mediaAccess?: OutboundMediaAccess;
-  mediaReadFile?: OutboundMediaReadFile;
-  accountId?: string | null;
-  senderIsOwner?: boolean;
-  sessionId?: string;
-  inboundEventKind?: InboundEventKind;
-  gateway?: OutboundGatewayContext;
-  toolContext?: ChannelThreadingToolContext;
-  deps?: OutboundSendDeps;
-  dryRun: boolean;
+  conversationType?: ChatType;
   mirror?: OutboundMirror;
-  abortSignal?: AbortSignal;
   silent?: boolean;
+  /** The caller resends proven-not-sent payloads itself, so recovery must not. */
+  deliveryRetryOwner?: "caller";
+  /** Commits the route after platform evidence, before either delivery mirror. */
+  onSendAccepted?: () => Promise<void>;
 };
 
 type PluginHandledResult = {
@@ -62,115 +48,84 @@ type PluginHandledResult = {
   toolResult: AgentToolResult<unknown>;
 };
 
-type SendMessageParams = Parameters<typeof sendMessage>[0];
+export function materializeMessagePresentationFallback(params: {
+  payload: Pick<ReplyPayload, "presentation" | "text">;
+  text?: string;
+}): string {
+  const presentation = normalizeMessagePresentation(params.payload.presentation);
+  const text = (params.text ?? params.payload.text ?? "").trim();
+  const fallback = presentation ? renderMessagePresentationFallbackText({ presentation }) : "";
+  return !fallback || text.includes(fallback)
+    ? text
+    : [text, fallback].filter(Boolean).join("\n\n");
+}
 
-async function sendCoreMessage(params: {
+export function hasCorePresentationDelivery(outbound?: ChannelOutboundAdapter): boolean {
+  return Boolean(outbound?.sendPayload || outbound?.sendText || outbound?.sendFormattedText);
+}
+
+type SendActionParams = {
   ctx: OutboundSendContext;
   to: string;
   message: string;
+  payload?: ReplyPayload;
   mediaUrl?: string;
   mediaUrls?: string[];
+  buffer?: string;
+  filename?: string;
+  contentType?: string;
   asVoice?: boolean;
   gifPlayback?: boolean;
   forceDocument?: boolean;
   bestEffort?: boolean;
-  replyToId?: string;
+  reply?: OutboundReplyFacts;
   threadId?: string | number;
-  queuePolicy: NonNullable<SendMessageParams["queuePolicy"]>;
-  payloads?: SendMessageParams["payloads"];
-}): Promise<MessageSendResult> {
-  return await sendMessage({
-    cfg: params.ctx.cfg,
-    to: params.to,
-    content: params.message,
-    ...(params.payloads ? { payloads: params.payloads } : {}),
-    agentId: params.ctx.agentId,
-    requesterSessionKey: params.ctx.sessionKey,
-    requesterAccountId: params.ctx.requesterAccountId ?? params.ctx.accountId ?? undefined,
-    requesterSenderId: params.ctx.requesterSenderId,
-    requesterSenderName: params.ctx.requesterSenderName,
-    requesterSenderUsername: params.ctx.requesterSenderUsername,
-    requesterSenderE164: params.ctx.requesterSenderE164,
-    mediaUrl: params.mediaUrl || undefined,
-    mediaUrls: params.mediaUrls,
-    asVoice: params.asVoice,
-    channel: params.ctx.channel || undefined,
-    accountId: params.ctx.accountId ?? undefined,
-    replyToId: params.replyToId,
-    threadId: params.threadId,
-    gifPlayback: params.gifPlayback,
-    forceDocument: params.forceDocument,
-    dryRun: params.ctx.dryRun,
-    bestEffort: params.bestEffort ?? undefined,
-    queuePolicy: params.queuePolicy,
-    deps: params.ctx.deps,
-    gateway: params.ctx.gateway,
-    mirror: params.ctx.mirror,
-    abortSignal: params.ctx.abortSignal,
-    silent: params.ctx.silent,
-    mediaAccess: params.ctx.mediaAccess,
-  });
-}
-
-function collectActionMediaSources(params: Record<string, unknown>): string[] {
-  const sources: string[] = [];
-  for (const key of ["media", "mediaUrl", "path", "filePath", "fileUrl"] as const) {
-    const value = params[key];
-    if (typeof value === "string" && value.trim()) {
-      sources.push(value);
-    }
-  }
-  return sources;
-}
+};
 
 async function tryHandleWithPluginAction(params: {
   ctx: OutboundSendContext;
   action: "send" | "poll";
-  onHandled?: () => Promise<void> | void;
+  reply?: OutboundReplyFacts;
+  onHandled?: (outcome: { partialDelivery: boolean }) => Promise<void> | void;
 }): Promise<PluginHandledResult | null> {
   if (params.ctx.dryRun) {
     return null;
   }
+  // Plugin actions receive media access scoped to the same requester/session
+  // policy as core delivery so custom handlers cannot widen file reads.
   const mediaAccess = resolveAgentScopedOutboundMediaAccess({
     cfg: params.ctx.cfg,
     agentId: params.ctx.agentId ?? params.ctx.mirror?.agentId,
-    mediaSources: collectActionMediaSources(params.ctx.params),
-    sessionKey: params.ctx.sessionKey,
-    messageProvider: params.ctx.sessionKey ? undefined : params.ctx.channel,
+    mediaSources: collectActionMediaSourceHints(params.ctx.params, undefined, {
+      structuredAttachments: params.action === "send" ? "all" : undefined,
+    }),
+    sessionKey: params.ctx.input.sessionKey,
+    messageProvider: params.ctx.input.sessionKey ? undefined : params.ctx.channel,
     accountId:
-      (params.ctx.sessionKey
-        ? (params.ctx.requesterAccountId ?? params.ctx.accountId)
+      (params.ctx.input.sessionKey
+        ? (params.ctx.input.requesterAccountId ?? params.ctx.accountId)
         : params.ctx.accountId) ?? undefined,
-    requesterSenderId: params.ctx.requesterSenderId,
-    requesterSenderName: params.ctx.requesterSenderName,
-    requesterSenderUsername: params.ctx.requesterSenderUsername,
-    requesterSenderE164: params.ctx.requesterSenderE164,
+    requesterSenderId: params.ctx.input.requesterSenderId ?? undefined,
+    requesterSenderName: params.ctx.input.requesterSenderName ?? undefined,
+    requesterSenderUsername: params.ctx.input.requesterSenderUsername ?? undefined,
+    requesterSenderE164: params.ctx.input.requesterSenderE164 ?? undefined,
     mediaAccess: params.ctx.mediaAccess,
-    mediaReadFile: params.ctx.mediaReadFile,
   });
-  const handled = await dispatchChannelMessageAction({
-    channel: params.ctx.channel,
-    action: params.action,
-    cfg: params.ctx.cfg,
-    params: params.ctx.params,
-    mediaAccess,
-    mediaLocalRoots: mediaAccess.localRoots,
-    mediaReadFile: mediaAccess.readFile,
-    accountId: params.ctx.accountId ?? undefined,
-    requesterSenderId: params.ctx.requesterSenderId,
-    senderIsOwner: params.ctx.senderIsOwner,
-    sessionKey: params.ctx.sessionKey,
-    sessionId: params.ctx.sessionId,
-    inboundEventKind: params.ctx.inboundEventKind,
-    agentId: params.ctx.agentId,
-    gateway: params.ctx.gateway,
-    toolContext: params.ctx.toolContext,
-    dryRun: params.ctx.dryRun,
-  });
+  const handled = await dispatchChannelMessageAction(
+    createChannelActionContext({
+      ctx: params.ctx,
+      action: params.action,
+      mediaAccess,
+      reply: params.reply,
+    }),
+  );
   if (!handled) {
     return null;
   }
-  await params.onHandled?.();
+  const deliveryFact = projectPluginMessageDeliveryFact(handled);
+  if (!deliveryFact || deliveryFact.status === "settled") {
+    await params.onHandled?.({ partialDelivery: deliveryFact?.partialDelivery === true });
+  }
   return {
     handledBy: "plugin",
     payload: extractToolPayload(handled),
@@ -178,78 +133,11 @@ async function tryHandleWithPluginAction(params: {
   };
 }
 
-function createChannelActionContext(params: {
-  ctx: OutboundSendContext;
-  action: "send" | "poll";
-  mediaAccess?: ReturnType<typeof resolveAgentScopedOutboundMediaAccess>;
-}): ChannelMessageActionContext {
-  const mediaAccess = params.mediaAccess ?? params.ctx.mediaAccess;
-  return {
-    channel: params.ctx.channel,
-    action: params.action,
-    cfg: params.ctx.cfg,
-    params: params.ctx.params,
-    ...(mediaAccess ? { mediaAccess } : {}),
-    mediaLocalRoots: mediaAccess?.localRoots ?? params.ctx.mediaAccess?.localRoots,
-    mediaReadFile: mediaAccess?.readFile ?? params.ctx.mediaReadFile,
-    accountId: params.ctx.accountId ?? undefined,
-    requesterSenderId: params.ctx.requesterSenderId,
-    senderIsOwner: params.ctx.senderIsOwner,
-    sessionKey: params.ctx.sessionKey,
-    sessionId: params.ctx.sessionId,
-    inboundEventKind: params.ctx.inboundEventKind,
-    agentId: params.ctx.agentId,
-    gateway: params.ctx.gateway,
-    toolContext: params.ctx.toolContext,
-    dryRun: params.ctx.dryRun,
-  };
-}
-
-async function tryPreparePluginSendPayload(params: {
-  ctx: OutboundSendContext;
-  to: string;
-  payload: ReplyPayload;
-  replyToId?: string;
-  threadId?: string | number;
-}): Promise<ReplyPayload | null> {
-  const plugin = resolveOutboundChannelPlugin({
-    channel: params.ctx.channel,
-    cfg: params.ctx.cfg,
-  });
-  if (!plugin?.outbound) {
-    return null;
-  }
-  const prepareSendPayload = plugin?.actions?.prepareSendPayload;
-  if (!prepareSendPayload) {
-    return null;
-  }
-  return (
-    (await prepareSendPayload({
-      ctx: createChannelActionContext({ ctx: params.ctx, action: "send" }),
-      to: params.to,
-      payload: params.payload,
-      replyToId: params.replyToId,
-      threadId: params.threadId,
-    })) ?? null
-  );
-}
-
-export async function executeSendAction(params: {
-  ctx: OutboundSendContext;
-  to: string;
-  message: string;
-  payload?: ReplyPayload;
-  mediaUrl?: string;
-  mediaUrls?: string[];
-  asVoice?: boolean;
-  gifPlayback?: boolean;
-  forceDocument?: boolean;
-  bestEffort?: boolean;
-  replyToId?: string;
-  threadId?: string | number;
-}): Promise<{
+export async function executeSendAction(params: SendActionParams): Promise<{
   handledBy: "plugin" | "core";
   payload: unknown;
+  /** Exact text handed to the direct transport after core normalization and hooks. */
+  deliveredText?: string;
   toolResult?: AgentToolResult<unknown>;
   sendResult?: MessageSendResult;
 }> {
@@ -260,64 +148,198 @@ export async function executeSendAction(params: {
     mediaUrls: params.mediaUrls,
     audioAsVoice: params.asVoice === true,
   };
-  const queuePolicy = params.bestEffort === false ? "required" : "best_effort";
-  const preparedPayload = await tryPreparePluginSendPayload({
-    ctx: params.ctx,
-    to: params.to,
-    payload: defaultPayload,
-    replyToId: params.replyToId,
-    threadId: params.threadId,
-  });
-  if (preparedPayload) {
-    throwIfAborted(params.ctx.abortSignal);
-    const result = await sendCoreMessage({
-      ...params,
-      queuePolicy,
-      payloads: [preparedPayload],
-    });
-
-    return {
-      handledBy: "core",
-      payload: result,
-      sendResult: result,
-    };
-  }
-
-  const pluginHandled = await tryHandleWithPluginAction({
-    ctx: params.ctx,
-    action: "send",
-    onHandled: async () => {
-      if (!params.ctx.mirror) {
-        return;
-      }
-      const mirrorText = params.ctx.mirror.text ?? params.message;
-      const mirrorMediaUrls =
-        params.ctx.mirror.mediaUrls ??
-        params.mediaUrls ??
-        (params.mediaUrl ? [params.mediaUrl] : undefined);
-      await appendAssistantMessageToSessionTranscript({
-        agentId: params.ctx.mirror.agentId,
-        sessionKey: params.ctx.mirror.sessionKey,
-        text: mirrorText,
-        mediaUrls: mirrorMediaUrls,
-        idempotencyKey: params.ctx.mirror.idempotencyKey,
-        config: params.ctx.cfg,
+  const queuePolicy =
+    params.bestEffort === false || params.ctx.input.requireQueuePersistence
+      ? "required"
+      : "best_effort";
+  // Queue persistence cannot be guaranteed by provider-native action handlers.
+  // Treat the guarantee as forcing the one core path at every dispatch gate.
+  const requiresCoreDelivery =
+    params.ctx.input.forceCoreDelivery === true ||
+    params.ctx.input.requireQueuePersistence === true;
+  const channelPlugin = params.ctx.channelPlugin;
+  const prepareSendPayload =
+    !requiresCoreDelivery && channelPlugin?.outbound
+      ? channelPlugin.actions?.prepareSendPayload
+      : undefined;
+  const preparedPayload = prepareSendPayload
+    ? await prepareSendPayload({
+        ctx: createChannelActionContext({ ctx: params.ctx, action: "send", reply: params.reply }),
+        to: params.to,
+        payload: defaultPayload,
+        replyToId: params.reply?.replyToId,
+        replyToIdSource: params.reply?.source,
+        threadId: params.threadId,
+      })
+    : undefined;
+  const presentation = normalizeMessagePresentation(defaultPayload.presentation);
+  // A hook that declines owns the plugin action path, including presentations.
+  const corePayload = requiresCoreDelivery
+    ? defaultPayload
+    : preparedPayload ||
+      (!prepareSendPayload && presentation && hasCorePresentationDelivery(channelPlugin?.outbound)
+        ? defaultPayload
+        : null);
+  if (!corePayload) {
+    const pluginMessage = presentation
+      ? materializeMessagePresentationFallback({ payload: defaultPayload, text: params.message })
+      : params.message;
+    const pluginCtx =
+      pluginMessage === params.message
+        ? params.ctx
+        : {
+            ...params.ctx,
+            params: { ...params.ctx.params, message: pluginMessage },
+          };
+    let pluginHandled: PluginHandledResult | null;
+    try {
+      pluginHandled = await tryHandleWithPluginAction({
+        ctx: pluginCtx,
+        action: "send",
+        reply: params.reply,
+        onHandled: async ({ partialDelivery }) => {
+          // The accepted-send commit must precede the transcript mirror below:
+          // first-contact outbound routes create their session row in it.
+          await params.ctx.onSendAccepted?.();
+          if (partialDelivery || !params.ctx.mirror) {
+            return;
+          }
+          const mirrorText =
+            pluginMessage !== params.message
+              ? pluginMessage
+              : params.ctx.mirror.text?.trim() || pluginMessage;
+          const mirrorMediaUrls =
+            params.ctx.mirror.mediaUrls ??
+            params.mediaUrls ??
+            (params.mediaUrl ? [params.mediaUrl] : undefined);
+          try {
+            const writerFence = getOwnedSessionTranscriptWriterFence({
+              sessionKey: params.ctx.mirror.sessionKey,
+            });
+            const mirrorResult = await appendAssistantMessageToSessionTranscript({
+              agentId: params.ctx.mirror.agentId,
+              sessionKey: params.ctx.mirror.sessionKey,
+              expectedSessionId: params.ctx.mirror.expectedSessionId,
+              ...(writerFence?.expectedLifecycleRevision !== undefined
+                ? { expectedLifecycleRevision: writerFence.expectedLifecycleRevision }
+                : {}),
+              ...(writerFence ? { expectedWriterRunId: writerFence.expectedWriterRunId } : {}),
+              text: mirrorText,
+              mediaUrls: mirrorMediaUrls,
+              idempotencyKey: params.ctx.mirror.idempotencyKey,
+              deliveryMirror: params.ctx.mirror.deliveryMirror,
+              config: params.ctx.cfg,
+            });
+            if (!mirrorResult.ok) {
+              log.warn(
+                `failed to mirror plugin-handled delivery; channel send already succeeded: ${mirrorResult.reason}`,
+              );
+            }
+          } catch (error) {
+            log.warn(
+              `failed to mirror plugin-handled delivery; channel send already succeeded: ${formatErrorMessage(error)}`,
+            );
+          }
+        },
       });
-    },
-  });
-  if (pluginHandled) {
-    return pluginHandled;
+    } catch (error) {
+      if (isChannelPartialDeliveryError(error)) {
+        // A partial receipt proves the first-contact route even though it does
+        // not prove which requested content is safe to mirror as delivered.
+        await params.ctx.onSendAccepted?.();
+      }
+      throw error;
+    }
+    if (pluginHandled) {
+      return pluginHandled;
+    }
   }
 
   throwIfAborted(params.ctx.abortSignal);
-  const result = await sendCoreMessage({
-    ...params,
+  // Prepared payloads and presentations share core queueing, hooks, and mirrors.
+  // The legacy gateway send RPC accepts text/media, so materialize its fallback.
+  const message =
+    corePayload &&
+    normalizeMessagePresentation(corePayload.presentation) &&
+    channelPlugin?.outbound?.deliveryMode === "gateway"
+      ? materializeMessagePresentationFallback({ payload: corePayload, text: params.message })
+      : params.message;
+  const deliveredPayloads: NormalizedOutboundPayload[] = [];
+  const result = await sendMessage({
+    cfg: params.ctx.cfg,
+    to: params.to,
+    content: message,
+    ...(corePayload ? { payloads: [corePayload] } : {}),
+    agentId: params.ctx.agentId,
+    requesterSessionKey: params.ctx.input.sessionKey,
+    requesterAccountId: params.ctx.input.requesterAccountId ?? params.ctx.accountId ?? undefined,
+    requesterSenderId: params.ctx.input.requesterSenderId ?? undefined,
+    requesterSenderName: params.ctx.input.requesterSenderName ?? undefined,
+    requesterSenderUsername: params.ctx.input.requesterSenderUsername ?? undefined,
+    requesterSenderE164: params.ctx.input.requesterSenderE164 ?? undefined,
+    mediaUrl: params.mediaUrl || undefined,
+    mediaUrls: params.mediaUrls,
+    buffer: params.buffer,
+    filename: params.filename,
+    contentType: params.contentType,
+    asVoice: params.asVoice,
+    channel: params.ctx.channel || undefined,
+    accountId: params.ctx.accountId ?? undefined,
+    conversationType: params.ctx.conversationType,
+    conversationReadOrigin: normalizeConversationReadInvocationOrigin(
+      params.ctx.input.conversationReadOrigin,
+    ),
+    reply: params.reply,
+    threadId: params.threadId,
+    gifPlayback: params.gifPlayback,
+    forceDocument: params.forceDocument,
+    dryRun: params.ctx.dryRun,
+    bestEffort: params.bestEffort ?? undefined,
     queuePolicy,
+    deps: params.ctx.input.deps,
+    gateway: params.ctx.gateway,
+    idempotencyKey: params.ctx.idempotencyKey,
+    runId: params.ctx.input.runId,
+    executionIdentityToken: params.ctx.input.executionIdentityToken,
+    mirror: params.ctx.mirror,
+    abortSignal: params.ctx.abortSignal,
+    silent: params.ctx.silent,
+    mediaAccess: params.ctx.mediaAccess,
+    preparedMessageId: params.ctx.input.preparedMessageId,
+    preparedPlugin: params.ctx.channelPlugin,
+    gatewayOwnedDelivery: params.ctx.input.gatewayOwnedDelivery,
+    deliveryIntentId: params.ctx.input.deliveryIntentId,
+    deliveryCompletion: params.ctx.input.deliveryCompletion,
+    conversationDeliveryTarget: params.ctx.input.conversationDeliveryTarget,
+    deliveryRetryOwner: params.ctx.deliveryRetryOwner,
+    requireUnknownSendReconciliation: params.ctx.input.requireQueuePersistence ? false : undefined,
+    onDeliveryIntent: params.ctx.input.onDeliveryIntent,
+    onDeliveryAttempt: params.ctx.input.onDeliveryAttempt,
+    withDirectAdapterHandoff: params.ctx.input.withDirectAdapterHandoff,
+    onDeliveryResult: async (evidence) => {
+      await params.ctx.onSendAccepted?.();
+      await params.ctx.input.onDeliveryResult?.(evidence);
+    },
+    onPlatformSendDispatch: params.ctx.input.onPlatformSendDispatch,
+    assertDirectAdapterHandoff: params.ctx.input.assertDirectAdapterHandoff,
+    skipQueue: params.ctx.input.skipQueue,
+    onDeliveredPayload: (payload) => deliveredPayloads.push(payload),
   });
+  const deliveredText =
+    result.deliveryStatus === "sent" &&
+    deliveredPayloads.every(
+      (payload) => payload.mediaUrls.length === 0 && payload.audioAsVoice !== true,
+    )
+      ? deliveredPayloads
+          .map((payload) => payload.text)
+          .filter((text) => text.trim())
+          .join("\n")
+      : "";
 
   return {
     handledBy: "core",
     payload: result,
+    ...(deliveredText ? { deliveredText } : {}),
     sendResult: result,
   };
 }
@@ -327,6 +349,7 @@ export async function executePollAction(params: {
   resolveCorePoll: () => {
     to: string;
     question: string;
+    content?: string;
     options: string[];
     maxSelections: number;
     durationSeconds?: number;
@@ -350,20 +373,20 @@ export async function executePollAction(params: {
 
   const corePoll = params.resolveCorePoll();
   const result: MessagePollResult = await sendPoll({
+    ...corePoll,
     cfg: params.ctx.cfg,
-    to: corePoll.to,
-    question: corePoll.question,
-    options: corePoll.options,
-    maxSelections: corePoll.maxSelections,
-    durationSeconds: corePoll.durationSeconds ?? undefined,
-    durationHours: corePoll.durationHours ?? undefined,
     channel: params.ctx.channel,
     accountId: params.ctx.accountId ?? undefined,
-    threadId: corePoll.threadId ?? undefined,
     silent: params.ctx.silent ?? undefined,
-    isAnonymous: corePoll.isAnonymous ?? undefined,
     dryRun: params.ctx.dryRun,
     gateway: params.ctx.gateway,
+    idempotencyKey: params.ctx.idempotencyKey,
+    preparedPlugin: params.ctx.channelPlugin,
+    gatewayOwnedDelivery: params.ctx.input.gatewayOwnedDelivery,
+    sessionKey: params.ctx.input.sessionKey,
+    inboundEventKind: params.ctx.input.inboundEventKind,
+    onPlatformSendDispatch: params.ctx.input.onPlatformSendDispatch,
+    assertDirectAdapterHandoff: params.ctx.input.assertDirectAdapterHandoff,
   });
 
   return {

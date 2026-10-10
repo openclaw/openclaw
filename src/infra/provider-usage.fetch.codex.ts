@@ -1,9 +1,7 @@
+import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+// Fetches Codex provider usage windows.
 import { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
-import {
-  buildUsageHttpErrorSnapshot,
-  fetchJson,
-  readUsageJson,
-} from "./provider-usage.fetch.shared.js";
+import { fetchUsageJson } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
 
@@ -58,82 +56,79 @@ export async function fetchCodexUsage(
   timeoutMs: number,
   fetchFn: typeof fetch,
 ): Promise<ProviderUsageSnapshot> {
+  const version = process.env.OPENCLAW_VERSION?.trim();
   const defaultHeaders: Record<string, string> = {
     Authorization: `Bearer ${token}`,
     Accept: "application/json",
+    originator: "openclaw",
+    ...(version ? { version } : {}),
+    "User-Agent": `openclaw/${version || "dev"}`,
   };
   if (accountId) {
     defaultHeaders["ChatGPT-Account-Id"] = accountId;
   }
   const headers =
     resolveProviderRequestHeaders({
-      provider: "openai-codex",
+      provider: "openai",
       baseUrl: "https://chatgpt.com/backend-api/wham/usage",
       capability: "other",
       transport: "http",
       defaultHeaders,
     }) ?? defaultHeaders;
 
-  const res = await fetchJson(
-    "https://chatgpt.com/backend-api/wham/usage",
-    { method: "GET", headers },
+  const parsed = await fetchUsageJson({
+    provider: "openai",
+    url: "https://chatgpt.com/backend-api/wham/usage",
+    init: { method: "GET", headers },
     timeoutMs,
     fetchFn,
-  );
-
-  if (!res.ok) {
-    return buildUsageHttpErrorSnapshot({
-      provider: "openai-codex",
-      status: res.status,
-      tokenExpiredStatuses: [401, 403],
-    });
-  }
-
-  const parsed = await readUsageJson("openai-codex", res);
+    tokenExpiredStatuses: [401, 403],
+  });
   if (!parsed.ok) {
     return parsed.snapshot;
   }
   const data = parsed.data as CodexUsageResponse;
   const windows: UsageWindow[] = [];
 
-  if (data.rate_limit?.primary_window) {
-    const pw = data.rate_limit.primary_window;
-    const windowHours = Math.round((pw.limit_window_seconds || 10800) / 3600);
+  for (const kind of ["primary_window", "secondary_window"] as const) {
+    const window = data.rate_limit?.[kind];
+    if (!window) {
+      continue;
+    }
+    const primary = kind === "primary_window";
+    const windowHours = Math.round(
+      (window.limit_window_seconds || (primary ? 10800 : 86400)) / 3600,
+    );
     windows.push({
-      label: `${windowHours}h`,
-      usedPercent: clampPercent(pw.used_percent || 0),
-      resetAt: pw.reset_at ? pw.reset_at * 1000 : undefined,
+      label: primary
+        ? `${windowHours}h`
+        : resolveSecondaryWindowLabel({
+            windowHours,
+            primaryResetAt: data.rate_limit?.primary_window?.reset_at,
+            secondaryResetAt: window.reset_at,
+          }),
+      usedPercent: clampPercent(window.used_percent || 0),
+      resetAt: window.reset_at ? window.reset_at * 1000 : undefined,
     });
   }
 
-  if (data.rate_limit?.secondary_window) {
-    const sw = data.rate_limit.secondary_window;
-    const windowHours = Math.round((sw.limit_window_seconds || 86400) / 3600);
-    const label = resolveSecondaryWindowLabel({
-      windowHours,
-      primaryResetAt: data.rate_limit?.primary_window?.reset_at,
-      secondaryResetAt: sw.reset_at,
-    });
-    windows.push({
-      label,
-      usedPercent: clampPercent(sw.used_percent || 0),
-      resetAt: sw.reset_at ? sw.reset_at * 1000 : undefined,
-    });
-  }
-
-  let plan = data.plan_type;
+  const plan = data.plan_type;
+  let billing: ProviderUsageSnapshot["billing"];
   if (data.credits?.balance !== undefined && data.credits.balance !== null) {
     const balance =
       typeof data.credits.balance === "number"
         ? data.credits.balance
-        : Number.parseFloat(data.credits.balance) || 0;
-    plan = plan ? `${plan} ($${balance.toFixed(2)})` : `$${balance.toFixed(2)}`;
+        : parseStrictFiniteNumber(data.credits.balance);
+    if (balance !== undefined && balance >= 0) {
+      billing = [{ type: "balance", amount: balance, unit: "credits" }];
+    }
   }
 
   return {
-    provider: "openai-codex",
-    displayName: PROVIDER_LABELS["openai-codex"],
+    provider: "openai",
+    displayName: PROVIDER_LABELS.openai,
     windows,
     plan,
+    ...(billing ? { billing } : {}),
   };
 }

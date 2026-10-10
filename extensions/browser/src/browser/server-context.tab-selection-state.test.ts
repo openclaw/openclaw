@@ -1,10 +1,12 @@
+import { lookup as dnsLookup } from "node:dns";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withBrowserFetchPreconnect } from "../../test-fetch.js";
 import "../test-support/browser-security.mock.js";
 import "./server-context.chrome-test-harness.js";
 import { CDP_JSON_NEW_TIMEOUT_MS } from "./cdp-timeouts.js";
-import * as cdpHelpersModule from "./cdp.helpers.js";
-import * as cdpModule from "./cdp.js";
+import * as cdpHelpers from "./cdp.helpers.js";
+import * as cdp from "./cdp.js";
+import { BrowserTargetAmbiguousError } from "./errors.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
 import {
   createTestBrowserRouteContext,
@@ -12,388 +14,617 @@ import {
   makeState,
   originalFetch,
 } from "./server-context.remote-tab-ops.harness.js";
+import { mockLaunchedChrome } from "./server-context.test-harness.js";
+import {
+  volatileSessionTabTargetKey,
+  volatileTabsBySession,
+  type VolatileSessionTab,
+} from "./session-tab-process-state.js";
+import * as sessionTabStore from "./session-tab-store.js";
 
 afterEach(async () => {
   const { closePlaywrightBrowserConnection } = await import("./pw-session.js");
   await closePlaywrightBrowserConnection().catch(() => {});
   globalThis.fetch = originalFetch;
+  vi.useRealTimers();
   vi.restoreAllMocks();
+  volatileTabsBySession().delete("agent:main:eviction");
 });
 
-function seedRunningProfileState(
-  state: ReturnType<typeof makeState>,
-  profileName = "openclaw",
-): void {
-  (state.profiles as Map<string, unknown>).set(profileName, {
-    profile: { name: profileName },
-    running: { pid: 1234, proc: { on: vi.fn() } },
-    lastTargetId: null,
-  });
+function mockCreatedTarget(targetId: string, finalUrl: string) {
+  return vi.spyOn(cdp, "createTargetViaCdp").mockResolvedValue({ targetId, finalUrl });
 }
 
-async function expectOldManagedTabClose(fetchMock: ReturnType<typeof vi.fn>): Promise<void> {
-  await vi.waitFor(() => {
-    expect(fetchCallUrls(fetchMock).filter((url) => url.includes("/json/close/OLD1"))).not.toEqual(
-      [],
-    );
-  });
+type DurableTabRecord = Awaited<
+  ReturnType<typeof sessionTabStore.readBrowserDashboardTabs>
+>[number];
+
+function retainedDashboardRecord(targetId: string): DurableTabRecord {
+  return {
+    version: 1,
+    sessionKey: "agent:main:main",
+    nativeTargetId: targetId,
+    profile: "openclaw",
+    profileFingerprint: "profile",
+    browserInstanceFingerprint: "browser",
+    interactionTargetKind: "native",
+    trackedAt: 1,
+    lastUsedAt: 1,
+    storageKey: `retained-${targetId.toLowerCase()}`,
+    dashboard: {
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      name: "service",
+      instanceId: "widget-one",
+      url: "http://service.example/",
+      state: "active",
+    },
+  };
 }
 
-function fetchCallUrls(fetchMock: ReturnType<typeof vi.fn>): string[] {
-  return fetchMock.mock.calls.map(([url]) => String(url));
-}
-
-function fetchJsonCall(fetchJson: ReturnType<typeof vi.fn>, index: number): unknown[] {
-  const call = fetchJson.mock.calls[index];
-  if (!call) {
-    throw new Error(`expected fetchJson call ${index + 1}`);
+function seedVolatileTabActivity(entries: Array<{ targetId: string; lastUsedAt: number }>) {
+  const sessionKey = "agent:main:eviction";
+  const sessions = volatileTabsBySession();
+  const tabs = sessions.get(sessionKey) ?? new Map<string, VolatileSessionTab>();
+  for (const { targetId, lastUsedAt } of entries) {
+    const identity = {
+      sessionKey,
+      targetId,
+      route: { kind: "browser-control" } as const,
+      profile: "openclaw",
+    };
+    tabs.set(volatileSessionTabTargetKey(identity), {
+      ...identity,
+      kind: "volatile",
+      registration: {},
+      trackedAt: lastUsedAt,
+      lastUsedAt,
+    });
   }
-  return call;
+  sessions.set(sessionKey, tabs);
 }
 
-function createOldTabCleanupFetchMock(
-  existingTabs: ReturnType<typeof makeManagedTabsWithNew>,
-  params?: { rejectNewTabClose?: boolean },
-): ReturnType<typeof vi.fn> {
-  return vi.fn(async (url: unknown) => {
-    const value = String(url);
-    if (value.includes("/json/list")) {
-      return { ok: true, json: async () => existingTabs } as unknown as Response;
+function page(id: string, url = "about:blank", title = id) {
+  return {
+    id,
+    title,
+    url,
+    webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/" + id,
+    type: "page",
+  };
+}
+
+function setup(
+  fetcher: (url: string, init?: RequestInit) => Promise<Response>,
+  state = makeState("openclaw"),
+) {
+  const fetchMock = vi.fn(async (url: unknown, init?: RequestInit) => fetcher(String(url), init));
+  globalThis.fetch = withBrowserFetchPreconnect(fetchMock);
+  const openclaw = createTestBrowserRouteContext({ getState: () => state }).forProfile("openclaw");
+  return { state, openclaw, runtime: state.profiles.get("openclaw")!, fetchMock };
+}
+
+function listOnly(tabs: () => ReturnType<typeof page>[]) {
+  return setup(async (url) => {
+    if (url.includes("/json/list")) {
+      return Response.json(tabs());
     }
-    if (value.includes("/json/close/OLD1")) {
-      return { ok: true, json: async () => ({}) } as unknown as Response;
-    }
-    if (params?.rejectNewTabClose && value.includes("/json/close/NEW")) {
-      throw new Error("cleanup must not close NEW");
-    }
-    throw new Error(`unexpected fetch: ${value}`);
+    throw new Error("unexpected fetch: " + url);
   });
 }
 
-function createManagedTabListFetchMock(params: {
-  existingTabs: ReturnType<typeof makeManagedTabsWithNew>;
-  onClose: (url: string) => Response | Promise<Response>;
-}): ReturnType<typeof vi.fn> {
-  return vi.fn(async (url: unknown) => {
-    const value = String(url);
-    if (value.includes("/json/list")) {
-      return { ok: true, json: async () => params.existingTabs } as unknown as Response;
+async function labeled() {
+  const harness = setup(async (url) => {
+    if (url.includes("/json/list")) {
+      return Response.json([page("ABCDEF123456"), page("ABC999")]);
     }
-    if (value.includes("/json/close/")) {
-      return await params.onClose(value);
+    if (url.includes("/json/activate/") || url.includes("/json/close/")) {
+      return new Response();
     }
-    throw new Error(`unexpected fetch: ${value}`);
+    throw new Error("unexpected fetch: " + url);
   });
+  await harness.openclaw.labelTab("ABCDEF123456", "docs");
+  await harness.openclaw.labelTab("ABC999", "app");
+  return harness;
 }
 
-async function openManagedTabWithRunningProfile(params: {
-  fetchMock: ReturnType<typeof vi.fn>;
-  url?: string;
-}) {
-  global.fetch = withBrowserFetchPreconnect(params.fetchMock);
-  const state = makeState("openclaw");
-  seedRunningProfileState(state);
-  const ctx = createTestBrowserRouteContext({ getState: () => state });
-  const openclaw = ctx.forProfile("openclaw");
-  return await openclaw.openTab(params.url ?? "http://127.0.0.1:3009");
-}
-
-describe("browser server-context tab selection state", () => {
-  it("updates lastTargetId when openTab is created via CDP", async () => {
-    const createTargetViaCdp = vi
-      .spyOn(cdpModule, "createTargetViaCdp")
-      .mockResolvedValue({ targetId: "CREATED" });
-
-    const fetchMock = vi.fn(async (url: unknown) => {
-      const u = String(url);
-      if (!u.includes("/json/list")) {
-        throw new Error(`unexpected fetch: ${u}`);
+describe("browser tab selection and ownership", () => {
+  it("preserves a disappeared sticky alias when a newly discovered tab is blocked", async () => {
+    const create = vi
+      .spyOn(cdp, "createTargetViaCdp")
+      .mockResolvedValueOnce({ targetId: "GOOD", finalUrl: "about:blank" })
+      .mockResolvedValueOnce({ targetId: "BLOCKED", finalUrl: "https://example.com" });
+    const closeRequests: string[] = [];
+    const { openclaw, state, runtime } = setup(async (url) => {
+      if (url.includes("/json/list")) {
+        return Response.json([
+          create.mock.calls.length === 1 ? page("GOOD") : page("BLOCKED", "http://127.0.0.1:9/"),
+        ]);
       }
-      return {
-        ok: true,
-        json: async () => [
-          {
-            id: "CREATED",
-            title: "New Tab",
-            url: "http://127.0.0.1:8080",
-            webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/CREATED",
-            type: "page",
-          },
-        ],
-      } as unknown as Response;
-    });
-
-    global.fetch = withBrowserFetchPreconnect(fetchMock);
-    const state = makeState("openclaw");
-    const ctx = createTestBrowserRouteContext({ getState: () => state });
-    const openclaw = ctx.forProfile("openclaw");
-
-    const opened = await openclaw.openTab("http://127.0.0.1:8080");
-    expect(opened.targetId).toBe("CREATED");
-    expect(state.profiles.get("openclaw")?.lastTargetId).toBe("CREATED");
-    expect(createTargetViaCdp).toHaveBeenCalledWith({
-      cdpUrl: "http://127.0.0.1:18800",
-      url: "http://127.0.0.1:8080",
-      ssrfPolicy: undefined,
-    });
-  });
-
-  it("can bootstrap a managed loopback tab under strict SSRF because CDP control stays local", async () => {
-    const createTargetViaCdp = vi
-      .spyOn(cdpModule, "createTargetViaCdp")
-      .mockResolvedValue({ targetId: "CREATED" });
-
-    let listCount = 0;
-    const fetchMock = vi.fn(async (url: unknown) => {
-      const u = String(url);
-      if (!u.includes("/json/list")) {
-        throw new Error(`unexpected fetch: ${u}`);
+      if (url.includes("/json/close/")) {
+        closeRequests.push(url);
+        return new Response();
       }
-      listCount += 1;
-      return {
-        ok: true,
-        json: async () =>
-          listCount === 1
-            ? []
-            : [
-                {
-                  id: "CREATED",
-                  title: "New Tab",
-                  url: "about:blank",
-                  webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/CREATED",
-                  type: "page",
-                },
-              ],
-      } as unknown as Response;
+      throw new Error("unexpected fetch: " + url);
     });
-
-    global.fetch = withBrowserFetchPreconnect(fetchMock);
-    const state = makeState("openclaw");
     state.resolved.ssrfPolicy = {};
-    const ctx = createTestBrowserRouteContext({ getState: () => state });
-    const openclaw = ctx.forProfile("openclaw");
+    await openclaw.openTab("about:blank", { label: "good" });
+    const aliases = structuredClone(runtime.tabAliases);
+    await expect(openclaw.openTab("https://example.com", { label: "blocked" })).rejects.toThrow(
+      /private|blocked|ssrf/i,
+    );
+    expect(runtime.lastTargetId).toBe("GOOD");
+    expect(runtime.tabAliases).toEqual(aliases);
+    expect(runtime.tabAliases?.byTargetId).toEqual({
+      GOOD: { tabId: "t1", label: "good", url: "about:blank" },
+    });
+    expect(closeRequests).toEqual(["http://127.0.0.1:18800/json/close/BLOCKED"]);
+  });
 
-    const selected = await openclaw.ensureTabAvailable();
-    expect(selected.targetId).toBe("CREATED");
-    expect(createTargetViaCdp).toHaveBeenCalledWith({
-      cdpUrl: "http://127.0.0.1:18800",
-      url: "about:blank",
-      ssrfPolicy: undefined,
+  it("returns an undiscovered target without adopting or cleaning it", async () => {
+    vi.useFakeTimers();
+    mockCreatedTarget("UNDISCOVERED", "https://example.com/final");
+    const { openclaw, runtime, fetchMock } = listOnly(() => [page("GOOD")]);
+    runtime.running = mockLaunchedChrome(vi.fn(), 1234);
+    await openclaw.listTabs();
+    runtime.lastTargetId = "GOOD";
+    const aliases = structuredClone(runtime.tabAliases);
+    const opening = openclaw.openTab("https://example.com/start", { label: "undiscovered" });
+    await vi.advanceTimersByTimeAsync(2_100);
+    await expect(opening).resolves.toEqual({
+      targetId: "UNDISCOVERED",
+      title: "",
+      url: "https://example.com/final",
+      type: "page",
+      ownership: { status: "non-durable", reason: "browser-identity-lookup-failed" },
+    });
+    expect(runtime.lastTargetId).toBe("GOOD");
+    expect(runtime.tabAliases).toEqual(aliases);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/json/close/"))).toBe(false);
+    await expect(openclaw.ensureTabAvailable()).resolves.toMatchObject({
+      targetId: "GOOD",
+      tabId: "t1",
     });
   });
 
-  it("opens a real tab when only browser-internal CDP targets are listed", async () => {
-    const createTargetViaCdp = vi
-      .spyOn(cdpModule, "createTargetViaCdp")
-      .mockResolvedValue({ targetId: "REAL" });
-
-    let listCount = 0;
-    const fetchMock = vi.fn(async (url: unknown) => {
-      const u = String(url);
-      if (!u.includes("/json/list")) {
-        throw new Error(`unexpected fetch: ${u}`);
+  it.each(["CDP", "HTTP"] as const)(
+    "does not adopt a %s target without a committed navigation",
+    async (transport) => {
+      const create = vi.spyOn(cdp, "createTargetViaCdp");
+      if (transport === "CDP") {
+        create.mockResolvedValue({ targetId: "UNSETTLED" });
+      } else {
+        create.mockRejectedValue(new Error("cdp unavailable"));
+        vi.spyOn(cdp, "waitForCdpCommittedNavigationUrl").mockResolvedValue(undefined);
+        vi.spyOn(cdpHelpers, "fetchJson").mockResolvedValueOnce(
+          page("UNSETTLED", "https://example.com"),
+        );
       }
-      listCount += 1;
-      return {
-        ok: true,
-        json: async () =>
-          listCount <= 2
-            ? [
-                {
-                  id: "OMNI",
-                  title: "Omnibox Popup",
-                  url: "chrome://omnibox-popup.top-chrome/",
-                  webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OMNI",
-                  type: "page",
-                },
-              ]
-            : [
-                {
-                  id: "OMNI",
-                  title: "Omnibox Popup",
-                  url: "chrome://omnibox-popup.top-chrome/",
-                  webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OMNI",
-                  type: "page",
-                },
-                {
-                  id: "REAL",
-                  title: "New Tab",
-                  url: "about:blank",
-                  webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/REAL",
-                  type: "page",
-                },
-              ],
-      } as unknown as Response;
-    });
+      const { openclaw, runtime, fetchMock } = setup(async () => {
+        throw new Error("unexpected discovery or cleanup");
+      });
+      runtime.running = mockLaunchedChrome(vi.fn(), 1234);
+      runtime.lastTargetId = "GOOD";
+      runtime.tabAliases = {
+        nextTabNumber: 2,
+        byTargetId: { GOOD: { tabId: "t1", label: "good", url: "about:blank" } },
+      };
+      const aliases = structuredClone(runtime.tabAliases);
+      await expect(
+        openclaw.openTab("https://example.com", { label: "unsettled" }),
+      ).resolves.toEqual({
+        targetId: "UNSETTLED",
+        title: transport === "CDP" ? "" : "UNSETTLED",
+        ...(transport === "HTTP" ? { wsUrl: "ws://127.0.0.1:18800/devtools/page/UNSETTLED" } : {}),
+        url: "https://example.com",
+        type: "page",
+        ownership: { status: "non-durable", reason: "browser-identity-lookup-failed" },
+      });
+      expect(runtime.lastTargetId).toBe("GOOD");
+      expect(runtime.tabAliases).toEqual(aliases);
+      expect(fetchMock).toHaveBeenCalledOnce();
+    },
+  );
 
-    global.fetch = withBrowserFetchPreconnect(fetchMock);
-    const state = makeState("openclaw");
-    const ctx = createTestBrowserRouteContext({ getState: () => state });
-    const openclaw = ctx.forProfile("openclaw");
-
-    const selected = await openclaw.ensureTabAvailable();
-    expect(selected.targetId).toBe("REAL");
-    expect(state.profiles.get("openclaw")?.lastTargetId).toBe("REAL");
-    expect(createTargetViaCdp).toHaveBeenCalledWith({
-      cdpUrl: "http://127.0.0.1:18800",
-      url: "about:blank",
-      ssrfPolicy: undefined,
-    });
+  it("rejects invalid labels before any browser mutation", async () => {
+    const create = vi.spyOn(cdp, "createTargetViaCdp");
+    const { openclaw, runtime, fetchMock } = listOnly(() => []);
+    await expect(openclaw.openTab("about:blank", { label: "not allowed" })).rejects.toThrow(
+      /tab label/i,
+    );
+    expect(create).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(runtime.tabAliases).toBeUndefined();
   });
 
-  it("closes excess managed tabs after opening a new tab", async () => {
-    vi.spyOn(cdpModule, "createTargetViaCdp").mockResolvedValue({ targetId: "NEW" });
-    const existingTabs = makeManagedTabsWithNew();
-    const fetchMock = createOldTabCleanupFetchMock(existingTabs);
-
-    const opened = await openManagedTabWithRunningProfile({ fetchMock });
-    expect(opened.targetId).toBe("NEW");
-    await expectOldManagedTabClose(fetchMock);
-  });
-
-  it("never closes the just-opened managed tab during cap cleanup", async () => {
-    vi.spyOn(cdpModule, "createTargetViaCdp").mockResolvedValue({ targetId: "NEW" });
-    const existingTabs = makeManagedTabsWithNew({ newFirst: true });
-    const fetchMock = createOldTabCleanupFetchMock(existingTabs, { rejectNewTabClose: true });
-
-    const opened = await openManagedTabWithRunningProfile({ fetchMock });
-    expect(opened.targetId).toBe("NEW");
-    await expectOldManagedTabClose(fetchMock);
-    expect(fetchCallUrls(fetchMock).filter((url) => url.includes("/json/close/NEW"))).toEqual([]);
-  });
-
-  it("does not fail tab open when managed-tab cleanup list fails", async () => {
-    vi.spyOn(cdpModule, "createTargetViaCdp").mockResolvedValue({ targetId: "NEW" });
-
-    let listCount = 0;
-    const fetchMock = vi.fn(async (url: unknown) => {
-      const value = String(url);
-      if (value.includes("/json/list")) {
-        listCount += 1;
-        if (listCount === 1) {
-          return {
-            ok: true,
-            json: async () => [
-              {
-                id: "NEW",
-                title: "New Tab",
-                url: "http://127.0.0.1:3009",
-                webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/NEW",
-                type: "page",
-              },
-            ],
-          } as unknown as Response;
-        }
-        throw new Error("/json/list timeout");
+  it("retains dashboard and just-opened tabs when evicting excess managed tabs", async () => {
+    vi.spyOn(sessionTabStore, "readBrowserDashboardTabs").mockResolvedValue([
+      retainedDashboardRecord("OLD1"),
+    ]);
+    mockCreatedTarget("NEW", "http://127.0.0.1:3009");
+    const closed: string[] = [];
+    const cleanup = Promise.withResolvers<void>();
+    const { openclaw, runtime } = setup(async (url) => {
+      if (url.includes("/json/list")) {
+        return Response.json(makeManagedTabsWithNew({ newFirst: true }));
       }
-      throw new Error(`unexpected fetch: ${value}`);
+      if (url.includes("/json/version")) {
+        return Response.json({
+          webSocketDebuggerUrl:
+            "ws://127.0.0.1:18800/devtools/browser/MANAGED-BROWSER?auth=fixture-value",
+        });
+      }
+      if (url.includes("/json/close/")) {
+        closed.push(url);
+        cleanup.resolve();
+        return new Response();
+      }
+      throw new Error("unexpected fetch: " + url);
     });
-
-    global.fetch = withBrowserFetchPreconnect(fetchMock);
-    const state = makeState("openclaw");
-    seedRunningProfileState(state);
-    const ctx = createTestBrowserRouteContext({ getState: () => state });
-    const openclaw = ctx.forProfile("openclaw");
-
+    runtime.running = mockLaunchedChrome(vi.fn(), 1234);
     const opened = await openclaw.openTab("http://127.0.0.1:3009");
-    expect(opened.targetId).toBe("NEW");
-  });
-
-  it("does not run managed tab cleanup in attachOnly mode", async () => {
-    vi.spyOn(cdpModule, "createTargetViaCdp").mockResolvedValue({ targetId: "NEW" });
-    const existingTabs = makeManagedTabsWithNew();
-    const fetchMock = createManagedTabListFetchMock({
-      existingTabs,
-      onClose: () => {
-        throw new Error("should not close tabs in attachOnly mode");
+    expect(opened).toMatchObject({
+      targetId: "NEW",
+      ownership: {
+        status: "durable",
+        nativeTargetId: "NEW",
+        profileFingerprint: expect.stringMatching(/^sha256:/),
+        browserInstanceFingerprint: expect.stringMatching(/^sha256:/),
       },
     });
+    expect(runtime.lastTargetId).toBe("NEW");
+    await cleanup.promise;
+    // Chrome lists targets most-recently-activated first, so the eviction
+    // walks from the stale end: OLD1 is dashboard-retained, OLD8 is the
+    // least recently used of the rest, and the fresh NEW tab is kept.
+    expect(closed).toEqual(["http://127.0.0.1:18800/json/close/OLD8"]);
+  });
 
-    global.fetch = withBrowserFetchPreconnect(fetchMock);
+  it("orders managed eviction by recorded activity, not CDP listing position", async () => {
+    vi.spyOn(sessionTabStore, "readBrowserDashboardTabs").mockResolvedValue([
+      retainedDashboardRecord("OLD1"),
+    ]);
+    mockCreatedTarget("NEW", "http://127.0.0.1:3009");
+    const closed: string[] = [];
+    const cleanup = Promise.withResolvers<void>();
+    seedVolatileTabActivity(
+      Array.from({ length: 7 }, (_, index) => ({
+        targetId: `OLD${index + 2}`,
+        lastUsedAt: 2_000 + index,
+      })),
+    );
+    const { openclaw, runtime } = setup(async (url) => {
+      if (url.includes("/json/list")) {
+        return Response.json(makeManagedTabsWithNew({ newFirst: true }));
+      }
+      if (url.includes("/json/version")) {
+        return Response.json({
+          webSocketDebuggerUrl:
+            "ws://127.0.0.1:18800/devtools/browser/MANAGED-BROWSER?auth=fixture-value",
+        });
+      }
+      if (url.includes("/json/close/")) {
+        closed.push(url);
+        cleanup.resolve();
+        return new Response();
+      }
+      throw new Error("unexpected fetch: " + url);
+    });
+    runtime.running = mockLaunchedChrome(vi.fn(), 1234);
+    await openclaw.openTab("http://127.0.0.1:3009");
+    await cleanup.promise;
+    // OLD1 is dashboard-retained; among the rest OLD2 carries the oldest
+    // recorded activity, so it is evicted even though OLD8 sits last in the
+    // CDP listing. Losing the activity read would close OLD8 instead.
+    expect(closed).toEqual(["http://127.0.0.1:18800/json/close/OLD2"]);
+  });
+
+  it("evicts untracked managed tabs ahead of recently tracked ones", async () => {
+    vi.spyOn(sessionTabStore, "readBrowserDashboardTabs").mockResolvedValue([
+      retainedDashboardRecord("OLD1"),
+    ]);
+    mockCreatedTarget("NEW", "http://127.0.0.1:3009");
+    const closed: string[] = [];
+    const cleanup = Promise.withResolvers<void>();
+    seedVolatileTabActivity(
+      Array.from({ length: 5 }, (_, index) => ({
+        targetId: `OLD${index + 4}`,
+        lastUsedAt: 5_000 + index,
+      })),
+    );
+    const { openclaw, runtime } = setup(async (url) => {
+      if (url.includes("/json/list")) {
+        return Response.json(makeManagedTabsWithNew({ newFirst: true }));
+      }
+      if (url.includes("/json/version")) {
+        return Response.json({
+          webSocketDebuggerUrl:
+            "ws://127.0.0.1:18800/devtools/browser/MANAGED-BROWSER?auth=fixture-value",
+        });
+      }
+      if (url.includes("/json/close/")) {
+        closed.push(url);
+        cleanup.resolve();
+        return new Response();
+      }
+      throw new Error("unexpected fetch: " + url);
+    });
+    runtime.running = mockLaunchedChrome(vi.fn(), 1234);
+    await openclaw.openTab("http://127.0.0.1:3009");
+    await cleanup.promise;
+    // OLD2 and OLD3 carry no recorded activity, so OLD3 (ahead of OLD2 in the
+    // reversed CDP listing) is evicted before any tracked tab.
+    expect(closed).toEqual(["http://127.0.0.1:18800/json/close/OLD3"]);
+  });
+
+  it("does not block opening on an ordinary managed-tab cleanup close", async () => {
+    mockCreatedTarget("NEW", "http://127.0.0.1:3009");
+    const started = Promise.withResolvers<void>();
+    const closed = Promise.withResolvers<Response>();
+    const requests: string[] = [];
+    const { openclaw, runtime } = setup(async (url) => {
+      if (url.includes("/json/list")) {
+        return Response.json(makeManagedTabsWithNew());
+      }
+      if (url.includes("/json/close/OLD8")) {
+        requests.push(url);
+        started.resolve();
+        return closed.promise;
+      }
+      throw new Error("unexpected fetch: " + url);
+    });
+    runtime.running = mockLaunchedChrome(vi.fn(), 1234);
+    try {
+      expect((await openclaw.openTab("http://127.0.0.1:3009")).targetId).toBe("NEW");
+      await started.promise;
+      expect(requests).toEqual(["http://127.0.0.1:18800/json/close/OLD8"]);
+    } finally {
+      closed.resolve(new Response());
+    }
+  });
+
+  it("does not clean up tabs in an attach-only browser", async () => {
+    mockCreatedTarget("NEW", "about:blank");
     const state = makeState("openclaw");
     state.resolved.attachOnly = true;
-    const ctx = createTestBrowserRouteContext({ getState: () => state });
-    const openclaw = ctx.forProfile("openclaw");
-
-    const opened = await openclaw.openTab("http://127.0.0.1:3009");
-    expect(opened.targetId).toBe("NEW");
-    expect(fetchCallUrls(fetchMock).filter((url) => url.includes("/json/close/"))).toEqual([]);
-  });
-
-  it("does not block openTab on slow best-effort cleanup closes", async () => {
-    vi.spyOn(cdpModule, "createTargetViaCdp").mockResolvedValue({ targetId: "NEW" });
-    const existingTabs = makeManagedTabsWithNew();
-    const fetchMock = createManagedTabListFetchMock({
-      existingTabs,
-      onClose: (url) => {
-        if (url.includes("/json/close/OLD1")) {
-          return new Promise<Response>(() => {});
-        }
-        throw new Error(`unexpected fetch: ${url}`);
-      },
-    });
-
-    let timeout: NodeJS.Timeout | undefined;
-    const opened = await Promise.race([
-      openManagedTabWithRunningProfile({ fetchMock }),
-      new Promise<never>((_, reject) => {
-        timeout = setTimeout(() => reject(new Error("openTab timed out waiting for cleanup")), 300);
-      }),
-    ]).finally(() => {
-      if (timeout) {
-        clearTimeout(timeout);
+    const { openclaw, runtime, fetchMock } = setup(async (url) => {
+      if (url.includes("/json/list")) {
+        return Response.json(makeManagedTabsWithNew());
       }
-    });
-
-    expect(opened.targetId).toBe("NEW");
+      throw new Error("unexpected fetch: " + url);
+    }, state);
+    runtime.running = mockLaunchedChrome(vi.fn(), 1234);
+    expect((await openclaw.openTab("about:blank")).targetId).toBe("NEW");
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/json/close/"))).toBe(false);
   });
 
-  it("blocks unsupported non-network URLs before any HTTP tab-open fallback", async () => {
-    const fetchMock = vi.fn(async () => {
-      throw new Error("unexpected fetch");
-    });
-
-    global.fetch = withBrowserFetchPreconnect(fetchMock);
-    const state = makeState("openclaw");
-    const ctx = createTestBrowserRouteContext({ getState: () => state });
-    const openclaw = ctx.forProfile("openclaw");
-
+  it("blocks file URLs before HTTP tab creation", async () => {
+    const { openclaw, fetchMock } = listOnly(() => []);
     await expect(openclaw.openTab("file:///etc/passwd")).rejects.toBeInstanceOf(
       InvalidBrowserNavigationUrlError,
     );
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("uses the loopback CDP control policy for /json/new fallback requests", async () => {
-    vi.spyOn(cdpModule, "createTargetViaCdp").mockRejectedValue(new Error("cdp unavailable"));
-    const fetchJson = vi.spyOn(cdpHelpersModule, "fetchJson");
-    fetchJson.mockRejectedValueOnce(new Error("HTTP 405")).mockResolvedValueOnce({
-      id: "NEW",
-      title: "New Tab",
-      url: "https://example.com",
-      webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/NEW",
-      type: "page",
-    });
-
-    const state = makeState("openclaw");
+  it("adopts the committed target after the HTTP 405 creation fallback", async () => {
+    vi.spyOn(cdp, "createTargetViaCdp").mockRejectedValue(new Error("cdp unavailable"));
+    const committed = vi
+      .spyOn(cdp, "waitForCdpCommittedNavigationUrl")
+      .mockResolvedValue("https://example.com");
+    const fetchJson = vi
+      .spyOn(cdpHelpers, "fetchJson")
+      .mockRejectedValueOnce(new Error("HTTP 405"))
+      .mockResolvedValueOnce(page("NEW", "https://example.com"));
+    const { state, openclaw, runtime } = listOnly(() => []);
     state.resolved.ssrfPolicy = {};
-    const ctx = createTestBrowserRouteContext({ getState: () => state });
-    const openclaw = ctx.forProfile("openclaw");
+    await expect(openclaw.openTab("https://example.com", { label: "raw" })).resolves.toMatchObject({
+      targetId: "NEW",
+      tabId: "t1",
+      label: "raw",
+      suggestedTargetId: "raw",
+    });
+    expect(runtime.lastTargetId).toBe("NEW");
+    expect(committed).toHaveBeenCalledWith(
+      expect.objectContaining({ requestedUrl: "https://example.com" }),
+    );
+    const endpoint = "http://127.0.0.1:18800/json/new?https%3A%2F%2Fexample.com";
+    expect(fetchJson.mock.calls.slice(0, 2)).toEqual([
+      [endpoint, CDP_JSON_NEW_TIMEOUT_MS, { method: "PUT" }, undefined],
+      [endpoint, CDP_JSON_NEW_TIMEOUT_MS, undefined, undefined],
+    ]);
+  });
 
-    const opened = await openclaw.openTab("https://example.com");
-    expect(opened.targetId).toBe("NEW");
-    const jsonNewEndpoint = "http://127.0.0.1:18800/json/new?https%3A%2F%2Fexample.com";
-    expect(fetchJsonCall(fetchJson, 0)).toEqual([
-      jsonNewEndpoint,
-      CDP_JSON_NEW_TIMEOUT_MS,
-      { method: "PUT" },
-      undefined,
+  it("rejects a raw target whose committed URL is blocked", async () => {
+    vi.spyOn(cdp, "createTargetViaCdp").mockRejectedValue(new Error("cdp unavailable"));
+    vi.spyOn(cdp, "waitForCdpCommittedNavigationUrl").mockResolvedValue(
+      "http://127.0.0.1:9/blocked",
+    );
+    vi.spyOn(cdpHelpers, "fetchJson").mockResolvedValue(page("RAW_BLOCKED", "https://example.com"));
+    const { state, openclaw, runtime } = listOnly(() => []);
+    state.resolved.ssrfPolicy = {};
+    await expect(openclaw.openTab("https://example.com", { label: "blocked" })).rejects.toThrow(
+      /private|blocked|ssrf/i,
+    );
+    expect(runtime.lastTargetId).toBeNull();
+    expect(runtime.tabAliases).toBeUndefined();
+  });
+
+  it("preserves the opened WebSocket lookup when the same-target relist omits it", async () => {
+    vi.spyOn(cdp, "createTargetViaCdp").mockRejectedValue(new Error("raw create failed"));
+    vi.spyOn(cdp, "waitForCdpCommittedNavigationUrl").mockResolvedValue(undefined);
+    let listCalls = 0;
+    vi.spyOn(cdpHelpers, "fetchJson").mockImplementation(async (url) => {
+      if (url.includes("/json/list")) {
+        return ++listCalls === 1
+          ? []
+          : [{ id: "NEW", title: "Listed", url: "about:blank", type: "page" }];
+      }
+      if (url.includes("/json/new")) {
+        return {
+          ...page("NEW"),
+          title: "Opened",
+          webSocketDebuggerUrl: "ws://127.0.0.1:18800/devtools/page/NEW",
+        };
+      }
+      throw new Error("unexpected fetchJson: " + url);
+    });
+    const dns = { lookup: dnsLookup };
+    const lookup = vi.spyOn(dns, "lookup").mockImplementation(() => {});
+    vi.spyOn(cdpHelpers, "assertCdpEndpointAllowed").mockResolvedValue({
+      hostname: "browser.example",
+      addresses: ["127.0.0.1"],
+      lookup: dns.lookup,
+    });
+    const { state, openclaw } = listOnly(() => []);
+    state.resolved.ssrfPolicy = {};
+    const selected = await openclaw.ensureTabAvailable();
+    expect(selected).toMatchObject({
+      targetId: "NEW",
+      title: "Listed",
+      url: "about:blank",
+      wsUrl: "ws://127.0.0.1:18800/devtools/page/NEW",
+    });
+    expect(selected.wsLookup).toBeTypeOf("function");
+    selected.wsLookup?.("browser.example", {}, () => {});
+    expect(lookup).toHaveBeenCalledWith("browser.example", {}, expect.any(Function));
+  });
+
+  it("expires ambiguous duplicate-URL aliases but preserves a later one-for-one replacement", async () => {
+    const same = "https://app.example/same";
+    let targets = [page("OLD_LEFT", same), page("OLD_RIGHT", same)];
+    const { openclaw, runtime } = listOnly(() => targets);
+    expect((await openclaw.listTabs()).map((tab) => [tab.targetId, tab.tabId])).toEqual([
+      ["OLD_LEFT", "t1"],
+      ["OLD_RIGHT", "t2"],
     ]);
-    expect(fetchJsonCall(fetchJson, 1)).toEqual([
-      jsonNewEndpoint,
-      CDP_JSON_NEW_TIMEOUT_MS,
-      undefined,
-      undefined,
+    await openclaw.labelTab("t1", "left");
+    await openclaw.labelTab("t2", "right");
+    runtime.lastTargetId = "OLD_LEFT";
+    targets = [page("NEW_RIGHT", same), page("NEW_LEFT", same)];
+    await expect(openclaw.listTabs()).resolves.toEqual([
+      expect.objectContaining({ targetId: "NEW_RIGHT", tabId: "t3", suggestedTargetId: "t3" }),
+      expect.objectContaining({ targetId: "NEW_LEFT", tabId: "t4", suggestedTargetId: "t4" }),
     ]);
+    expect(runtime.lastTargetId).toBe("OLD_LEFT");
+    await expect(openclaw.ensureTabAvailable("left")).rejects.toThrow(/tab not found/i);
+    await expect(openclaw.ensureTabAvailable()).rejects.toThrow(/tab not found/i);
+    await openclaw.labelTab("t3", "fresh-right");
+    targets = [page("NEW_LEFT", same), page("NEWER_RIGHT", same)];
+    await expect(openclaw.listTabs()).resolves.toEqual([
+      expect.objectContaining({ targetId: "NEW_LEFT", tabId: "t4" }),
+      expect.objectContaining({
+        targetId: "NEWER_RIGHT",
+        tabId: "t3",
+        label: "fresh-right",
+        suggestedTargetId: "fresh-right",
+      }),
+    ]);
+  });
+
+  it("rejects non-durable dashboard ownership and closes through the captured endpoint", async () => {
+    mockCreatedTarget("CREATED", "http://127.0.0.1:8080");
+    const closed: string[] = [];
+    const { state, openclaw, fetchMock } = setup(async (url) => {
+      if (url.includes("/json/list")) {
+        return Response.json([page("CREATED", "http://127.0.0.1:8080")]);
+      }
+      if (url.includes("/json/version")) {
+        state.resolved.profiles.openclaw = {
+          driver: "existing-session",
+          cdpUrl: "http://127.0.0.1:19999",
+          color: "#FF4500",
+        };
+        return Response.json({});
+      }
+      if (url.includes("/json/close/CREATED")) {
+        closed.push(url);
+        return new Response();
+      }
+      throw new Error("unexpected fetch: " + url);
+    });
+    await expect(
+      openclaw.openTab("http://127.0.0.1:8080", { requireDurableOwnership: true }),
+    ).rejects.toThrow(/could not verify durable ownership/);
+    expect(closed).toEqual(["http://127.0.0.1:18800/json/close/CREATED"]);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes(":19999"))).toBe(false);
+  });
+
+  it("propagates abort through the ownership probe even when cleanup fails", async () => {
+    mockCreatedTarget("CREATED", "http://127.0.0.1:8080");
+    const started = Promise.withResolvers<void>();
+    let versionSignal: AbortSignal | null | undefined;
+    const closed: string[] = [];
+    const { openclaw } = setup(async (url, init) => {
+      if (url.includes("/json/list")) {
+        return Response.json([page("CREATED", "http://127.0.0.1:8080")]);
+      }
+      if (url.includes("/json/version")) {
+        versionSignal = init?.signal;
+        started.resolve();
+        return new Promise<Response>((_resolve, reject) => {
+          versionSignal?.addEventListener(
+            "abort",
+            () =>
+              reject(
+                versionSignal?.reason instanceof Error
+                  ? versionSignal.reason
+                  : new Error("ownership probe aborted"),
+              ),
+            { once: true },
+          );
+        });
+      }
+      if (url.includes("/json/close/CREATED")) {
+        closed.push(url);
+        throw new Error("close request failed");
+      }
+      throw new Error("unexpected fetch: " + url);
+    });
+    const controller = new AbortController();
+    const error = new Error("caller aborted managed ownership probe");
+    const opening = openclaw.openTab("http://127.0.0.1:8080", { signal: controller.signal });
+    await started.promise;
+    controller.abort(error);
+    expect(versionSignal?.aborted).toBe(true);
+    await expect(opening).rejects.toBe(error);
+    expect(closed).toEqual(["http://127.0.0.1:18800/json/close/CREATED"]);
+  });
+
+  it("resolves a case-insensitive raw prefix at every operation boundary", async () => {
+    const label = await labeled();
+    expect((await label.openclaw.labelTab("abcdef", "parity")).targetId).toBe("ABCDEF123456");
+    const ensure = await labeled();
+    expect((await ensure.openclaw.ensureTabAvailable("abcdef")).targetId).toBe("ABCDEF123456");
+    const focus = await labeled();
+    await focus.openclaw.focusTab("abcdef");
+    expect(
+      focus.fetchMock.mock.calls.some(([url]) =>
+        String(url).endsWith("/json/activate/ABCDEF123456"),
+      ),
+    ).toBe(true);
+    const close = await labeled();
+    expect(await close.openclaw.closeTab("abcdef")).toBe("ABCDEF123456");
+    expect(
+      close.fetchMock.mock.calls.some(([url]) => String(url).endsWith("/json/close/ABCDEF123456")),
+    ).toBe(true);
+  });
+
+  it("rejects ambiguous raw prefixes at every operation boundary", async () => {
+    const label = await labeled();
+    await expect(label.openclaw.labelTab("ABC", "parity")).rejects.toBeInstanceOf(
+      BrowserTargetAmbiguousError,
+    );
+    const ensure = await labeled();
+    await expect(ensure.openclaw.ensureTabAvailable("ABC")).rejects.toBeInstanceOf(
+      BrowserTargetAmbiguousError,
+    );
+    const focus = await labeled();
+    await expect(focus.openclaw.focusTab("ABC")).rejects.toBeInstanceOf(
+      BrowserTargetAmbiguousError,
+    );
+    const close = await labeled();
+    await expect(close.openclaw.closeTab("ABC")).rejects.toBeInstanceOf(
+      BrowserTargetAmbiguousError,
+    );
   });
 });

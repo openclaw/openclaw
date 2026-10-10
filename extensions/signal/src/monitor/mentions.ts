@@ -1,6 +1,12 @@
+import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { SignalMention } from "./event-handler.types.js";
 
 const OBJECT_REPLACEMENT = "\uFFFC";
+
+type SignalNativeMentionIdentity = {
+  account?: string | null;
+  accountUuid?: string | null;
+};
 
 function isValidMention(mention: SignalMention | null | undefined): mention is SignalMention {
   if (!mention) {
@@ -23,6 +29,58 @@ function clampBounds(start: number, length: number, textLength: number) {
   const safeLength = Math.max(0, Math.trunc(length));
   const safeEnd = Math.min(textLength, safeStart + safeLength);
   return { start: safeStart, end: safeEnd };
+}
+
+function isValidStructuredMention(
+  message: string,
+  mention: SignalMention | null | undefined,
+): mention is SignalMention {
+  if (!mention || !(mention.uuid || mention.number)) {
+    return false;
+  }
+  const { start, length } = mention;
+  if (typeof start !== "number" || typeof length !== "number") {
+    return false;
+  }
+  return (
+    Number.isInteger(start) &&
+    Number.isInteger(length) &&
+    start >= 0 &&
+    length > 0 &&
+    start + length <= message.length
+  );
+}
+
+function normalizeAccountPhone(account?: string | null) {
+  const trimmed = account?.trim();
+  return trimmed ? normalizeE164(trimmed) : undefined;
+}
+
+export function resolveSignalMentionFacts(
+  identity: SignalNativeMentionIdentity,
+  message: string,
+  mentions?: SignalMention[] | null,
+) {
+  const validMentions = (mentions ?? []).filter((mention) =>
+    isValidStructuredMention(message, mention),
+  );
+  const botUuid = identity.accountUuid?.trim();
+  const botPhone = normalizeAccountPhone(identity.account);
+  const canDetectBotMention = Boolean(botUuid || botPhone);
+  const mentionsBot = validMentions.some((mention) => {
+    const mentionUuid = mention.uuid?.trim();
+    if (botUuid && mentionUuid === botUuid) {
+      return true;
+    }
+    const mentionNumber = mention.number?.trim();
+    return Boolean(botPhone && mentionNumber && normalizeE164(mentionNumber) === botPhone);
+  });
+
+  return {
+    canDetectBotMention,
+    hasAnyMention: validMentions.length > 0,
+    mentionsBot,
+  };
 }
 
 export function renderSignalMentions(message: string, mentions?: SignalMention[] | null) {

@@ -1,6 +1,24 @@
-import type { OperatorScope } from "../operator-scopes.js";
+import { normalizePluginGatewayMethodScope } from "../../shared/gateway-method-policy.js";
+import { ADMIN_SCOPE, type OperatorScope } from "../operator-scopes.js";
+import type { GatewayClient } from "../server-methods/client-types.js";
 
+export type GatewayReadSharing = {
+  /** Null keeps request-local reads out of response sharing. */
+  shareKey: (
+    caller: {
+      client: GatewayClient | null;
+      read?: { shareable?: boolean };
+    },
+    params: Record<string, unknown>,
+  ) => string | null;
+  shareInvalidationEvents: readonly string[];
+  /** Absolute lifetime, including computation; the host also enforces its safety ceiling. */
+  shareMaxAgeMs: number;
+};
+
+/** Scope marker for methods that only authenticated node clients may call. */
 export const NODE_GATEWAY_METHOD_SCOPE = "node" as const;
+/** Scope marker for methods whose handler derives the required operator scope at runtime. */
 export const DYNAMIC_GATEWAY_METHOD_SCOPE = "dynamic" as const;
 
 export type GatewayMethodScope =
@@ -14,31 +32,81 @@ export type GatewayMethodOwner =
   | { kind: "channel"; channelId: string }
   | { kind: "aux"; area: string };
 
-export type GatewayMethodStartupAvailability = "available" | "unavailable-until-sidecars";
+/** Startup availability flag exposed to clients as retryable startup-unavailable errors. */
+type GatewayMethodStartupAvailability = "available" | "unavailable-until-sidecars";
+export type GatewayMethodProfileAccess = "independent" | "required";
+
+/** A plugin operation addresses one existing session through the shared participation policy. */
+export type GatewayMethodSessionAccess = {
+  mode: "write";
+  allowOwnSessionScope?: boolean;
+  /** Reuse the complete effective session tool policy for this capability. */
+  requiredTool?: string;
+};
 
 export type GatewayMethodHandler = (opts: never) => unknown;
 
-export type GatewayMethodDescriptor = {
+export type GatewayMethodDescriptor = Partial<GatewayReadSharing> & {
   name: string;
   handler: GatewayMethodHandler;
   scope: GatewayMethodScope;
   owner: GatewayMethodOwner;
+  profileAccess: GatewayMethodProfileAccess;
+  sessionAccess?: GatewayMethodSessionAccess;
+  since?: string;
   startup?: GatewayMethodStartupAvailability;
+  /** Observes another owner's result; cancelled on requester disconnect and restart drain. */
+  lifetime?: "observation";
   controlPlaneWrite?: boolean;
   advertise?: boolean;
   description?: string;
 };
 
-export type GatewayMethodDescriptorInput = Omit<GatewayMethodDescriptor, "name"> & {
-  name: string;
+/** Input descriptor shape before registry normalization trims and validates the method name. */
+export type GatewayMethodDescriptorInput = Omit<GatewayMethodDescriptor, "profileAccess"> & {
+  profileAccess?: GatewayMethodProfileAccess;
 };
 
+export function createPluginGatewayMethodDescriptor(
+  params: {
+    pluginId: string;
+    name: string;
+    handler: GatewayMethodHandler;
+    scope?: OperatorScope;
+    profileAccess?: GatewayMethodProfileAccess;
+    sessionAccess?: GatewayMethodSessionAccess;
+  } & Partial<GatewayReadSharing>,
+): GatewayMethodDescriptor {
+  const normalizedScope = normalizePluginGatewayMethodScope(params.name, params.scope).scope;
+  return {
+    name: params.name,
+    handler: params.handler,
+    owner: { kind: "plugin", pluginId: params.pluginId },
+    profileAccess: params.profileAccess ?? "required",
+    ...(params.sessionAccess ? { sessionAccess: params.sessionAccess } : {}),
+    ...(params.shareKey
+      ? {
+          shareKey: params.shareKey,
+          shareInvalidationEvents: params.shareInvalidationEvents,
+          shareMaxAgeMs: params.shareMaxAgeMs,
+        }
+      : {}),
+    scope: normalizedScope ?? ADMIN_SCOPE,
+  };
+}
+
 export type GatewayMethodRegistryView = {
+  /** Opaque registry handle carried into request scope by the gateway composition root. */
+  pluginRegistry?: object;
   getHandler: (name: string) => GatewayMethodHandler | undefined;
   listMethods: () => string[];
   listAdvertisedMethods: () => string[];
   getScope: (name: string) => GatewayMethodScope | undefined;
+  getSessionAccess?: (name: string) => GatewayMethodSessionAccess | undefined;
+  getReadSharing?: (name: string) => GatewayReadSharing | undefined;
   isStartupUnavailable: (name: string) => boolean;
+  isObservation: (name: string) => boolean;
   isControlPlaneWrite: (name: string) => boolean;
+  requiresAuthenticatedProfile: (name: string) => boolean;
   descriptors: () => readonly GatewayMethodDescriptor[];
 };

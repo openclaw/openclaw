@@ -1,0 +1,59 @@
+title: "Runtime tool fixture — fs.read"
+
+scenario:
+  id: runtime-tool-fs-read
+  surface: runtime-tools
+  runtimePairLane: core
+  coverage:
+    secondary:
+      - agent-runtime.tool-fs-read
+  objective: Verify file read behavior is tracked across OpenClaw and Codex while Codex owns read natively.
+  successCriteria:
+    - OpenClaw may expose OpenClaw read while Codex app-server mode may omit duplicate OpenClaw dynamic read.
+    - Codex reads through its native command tool and projects a correlated bash receipt with the file marker.
+    - The missing-file path produces a correlated failed command result.
+  docsRefs:
+    - qa/scenarios/index.yaml
+  codeRefs:
+    - src/agents/agent-tools.read.ts
+    - extensions/qa-lab/src/native-workspace-behavior.ts
+    - extensions/qa-lab/src/runtime-tool-fixture.ts
+  execution:
+    kind: flow
+    summary: Exercise the read runtime tool family.
+    config:
+      toolName: read
+      nativeWorkspaceBehavior: fs-read
+      toolCoverage:
+        family: fs.read
+        actualTool: read
+        bucket: codex-native-workspace
+        expectedLayer: codex-native-workspace
+        required: true
+        tracking: "#80319"
+        codexDefaultImpact: P4
+        qaImpact: P2
+        action: execute native file-read behavior separately from OpenClaw dynamic tool parity
+        reason: Codex has no dedicated read tool; its native command contract owns file reads without requiring OpenClaw dynamic read exposure.
+      happyPrompt: >-
+        tool search qa check target=read. Use the read tool exactly once with
+        path="QA_KICKOFF_TASK.md", then summarize its contents. If discovery is
+        needed, discover read and then call it; discovery alone does not
+        complete this task. Do not use a shell command to read the file.
+      failurePrompt: >-
+        tool search qa failure target=read. Use the read tool exactly once with
+        path="runtime-tool-fixture-missing.txt", then report the missing-file
+        error. Do not create the file, use another tool, or retry.
+      promptSnippet: "target=read"
+      failurePromptSnippet: "failure target=read"
+
+flow:
+  steps:
+    - name: exercises fs.read happy and failure paths
+      actions:
+        - call: runRuntimeToolFixture
+          saveAs: result
+          args:
+            - ref: env
+            - ref: config
+      detailsExpr: result

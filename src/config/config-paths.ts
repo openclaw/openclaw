@@ -1,20 +1,27 @@
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { isPlainObject } from "../utils.js";
-import { isBlockedObjectKey } from "./prototype-keys.js";
+import { normalizeConfigModelSelectionParent } from "./model-input-normalization.js";
 
 type PathNode = Record<string, unknown>;
 
-export function parseConfigPath(raw: string): {
-  ok: boolean;
-  path?: string[];
-  error?: string;
-} {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return {
-      ok: false,
-      error: "Invalid path. Use dot notation (e.g. foo.bar).",
-    };
+function setOwnConfigProperty(node: PathNode, key: string, value: unknown): void {
+  if (Object.hasOwn(node, key)) {
+    node[key] = value;
+    return;
   }
+  Object.defineProperty(node, key, {
+    configurable: true,
+    enumerable: true,
+    value,
+    writable: true,
+  });
+}
+
+/** Parses CLI/config dot-notation paths and rejects unsafe object-key segments. */
+export function parseConfigPath(
+  raw: string,
+): { ok: true; path: string[] } | { ok: false; error: string } {
+  const trimmed = raw.trim();
   const parts = trimmed.split(".").map((part) => part.trim());
   if (parts.some((part) => !part)) {
     return {
@@ -22,6 +29,8 @@ export function parseConfigPath(raw: string): {
       error: "Invalid path. Use dot notation (e.g. foo.bar).",
     };
   }
+  // These helpers mutate plain objects; block prototype-bearing keys before any setter can create
+  // or traverse them.
   if (parts.some((part) => isBlockedObjectKey(part))) {
     return { ok: false, error: "Invalid path segment." };
   }
@@ -29,23 +38,40 @@ export function parseConfigPath(raw: string): {
 }
 
 export function setConfigValueAtPath(root: PathNode, path: string[], value: unknown): void {
-  let cursor: PathNode = root;
-  for (let idx = 0; idx < path.length - 1; idx += 1) {
-    const key = path[idx];
-    const next = cursor[key];
-    if (!isPlainObject(next)) {
-      cursor[key] = {};
-    }
-    cursor = cursor[key] as PathNode;
+  const leafKey = path.at(-1);
+  if (leafKey === undefined) {
+    throw new Error("Config path must contain at least one segment");
   }
-  cursor[path[path.length - 1]] = value;
+  let cursor: PathNode = root;
+  for (const [index, key] of path.slice(0, -1).entries()) {
+    const existing = Object.hasOwn(cursor, key) ? cursor[key] : undefined;
+    const next: PathNode = isPlainObject(existing)
+      ? existing
+      : (normalizeConfigModelSelectionParent(existing, path, index) ?? {});
+    if (next !== existing) {
+      setOwnConfigProperty(cursor, key, next);
+    }
+    cursor = next;
+  }
+  setOwnConfigProperty(cursor, leafKey, value);
 }
 
-export function unsetConfigValueAtPath(root: PathNode, path: string[]): boolean {
+/** Removes a value at a config path and prunes empty parent objects created by setters. */
+export function unsetConfigValueAtPath(
+  root: PathNode,
+  path: string[],
+  preserveEmptyParentsFrom?: PathNode,
+): boolean {
+  const leafKey = path.at(-1);
+  if (leafKey === undefined) {
+    return false;
+  }
   const stack: Array<{ node: PathNode; key: string }> = [];
   let cursor: PathNode = root;
-  for (let idx = 0; idx < path.length - 1; idx += 1) {
-    const key = path[idx];
+  for (const key of path.slice(0, -1)) {
+    if (!Object.hasOwn(cursor, key)) {
+      return false;
+    }
     const next = cursor[key];
     if (!isPlainObject(next)) {
       return false;
@@ -53,16 +79,22 @@ export function unsetConfigValueAtPath(root: PathNode, path: string[]): boolean 
     stack.push({ node: cursor, key });
     cursor = next;
   }
-  const leafKey = path[path.length - 1];
-  if (!(leafKey in cursor)) {
+  if (!Object.hasOwn(cursor, leafKey)) {
     return false;
   }
   delete cursor[leafKey];
-  for (let idx = stack.length - 1; idx >= 0; idx -= 1) {
-    const { node, key } = stack[idx];
+  // Keep config writes tidy: removing foo.bar should also remove foo when it became empty, while
+  // preserving any parent that still carries sibling config.
+  for (const { node, key } of stack.toReversed()) {
     const child = node[key];
-    if (isPlainObject(child) && Object.keys(child).length === 0) {
+    if (
+      isPlainObject(child) &&
+      Object.keys(child).length === 0 &&
+      (!preserveEmptyParentsFrom ||
+        getConfigValueAtPath(preserveEmptyParentsFrom, path.slice(0, stack.length)) === undefined)
+    ) {
       delete node[key];
+      stack.pop();
     } else {
       break;
     }
@@ -73,7 +105,7 @@ export function unsetConfigValueAtPath(root: PathNode, path: string[]): boolean 
 export function getConfigValueAtPath(root: PathNode, path: string[]): unknown {
   let cursor: unknown = root;
   for (const key of path) {
-    if (!isPlainObject(cursor)) {
+    if (!isPlainObject(cursor) || !Object.hasOwn(cursor, key)) {
       return undefined;
     }
     cursor = cursor[key];

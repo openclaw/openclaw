@@ -1,39 +1,64 @@
-import crypto from "node:crypto";
-import {
-  callGatewayTool,
-  listNodes,
-  resolveNodeIdFromList,
-  type AnyAgentTool,
-  type NodeListNode,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
-import { appendFileTransferAudit } from "../shared/audit.js";
-import { throwFromNodePayload } from "../shared/errors.js";
-import { readClampedInt, readGatewayCallOptions, readTrimmedString } from "../shared/params.js";
+import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import { textResult } from "openclaw/plugin-sdk/tool-results";
+import { readClampedInt } from "../shared/params.js";
 import {
   DIR_LIST_DEFAULT_MAX_ENTRIES,
   DIR_LIST_HARD_MAX_ENTRIES,
   DIR_LIST_TOOL_DESCRIPTOR,
 } from "./descriptors.js";
+import { renderDirectoryText } from "./directory-text.js";
+import { invokeNodeToolPayload, readRequiredNodePath } from "./node-tool-invoke.js";
+
+function directoryListingText(
+  canonicalPath: string,
+  entries: Array<Record<string, unknown>>,
+  pageToken: string | undefined,
+  nextPageToken: string | undefined,
+  truncated: boolean,
+): string {
+  const offset = parseStrictNonNegativeInteger(pageToken) ?? 0;
+  const header = JSON.stringify({ path: canonicalPath, returnedCount: entries.length }).slice(
+    0,
+    -1,
+  );
+  return renderDirectoryText({
+    entries,
+    project: ({ name, isDir, size }) => ({ name, isDir, size }),
+    render: (visible) => {
+      const limited = visible.length < entries.length;
+      const continuation = limited
+        ? visible.length > 0
+          ? String(offset + visible.length)
+          : undefined
+        : nextPageToken;
+      const tail = JSON.stringify({ truncated: limited || truncated, nextPageToken: continuation });
+      const listing = `${header},"displayedCount":${visible.length},"entries":[${visible.join(",")}],${tail.slice(1)}`;
+      // Keep normal continuation guidance the same size on the last page.
+      const note =
+        limited && visible.length === 0
+          ? "No entries displayed: the next complete entry or directory metadata exceeds the text budget or contains reserved markers. Pagination cannot advance; use available node-local directory capabilities."
+          : (limited || truncated) && !continuation
+            ? "More entries available; the node supplied no continuation token."
+            : "If present, pass nextPageToken as pageToken; keep node and path.";
+      return { manifest: listing, text: `${listing}\n${note}` };
+    },
+    fallback:
+      "Directory listing omitted: the canonical path or continuation metadata cannot be represented safely within the 8192-byte text limit. No usable paths or continuation token are shown; use available node-local directory capabilities.",
+  });
+}
 
 export function createDirListTool(): AnyAgentTool {
   return {
     ...DIR_LIST_TOOL_DESCRIPTOR,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const node = readTrimmedString(params, "node");
-      const dirPath = readTrimmedString(params, "path");
-      if (!node) {
-        throw new Error("node required");
-      }
-      if (!dirPath) {
-        throw new Error("path required");
-      }
+      const { node, requestedPath: dirPath } = readRequiredNodePath(params);
 
       const maxEntries = readClampedInt({
         input: params,
         key: "maxEntries",
         defaultValue: DIR_LIST_DEFAULT_MAX_ENTRIES,
-        hardMin: 1,
         hardMax: DIR_LIST_HARD_MAX_ENTRIES,
       });
 
@@ -42,55 +67,17 @@ export function createDirListTool(): AnyAgentTool {
           ? params.pageToken.trim()
           : undefined;
 
-      const gatewayOpts = readGatewayCallOptions(params);
-      const nodes: NodeListNode[] = await listNodes(gatewayOpts);
-      const nodeId = resolveNodeIdFromList(nodes, node, false);
-      const nodeMeta = nodes.find((n) => n.nodeId === nodeId);
-      const nodeDisplayName = nodeMeta?.displayName ?? node;
-      const startedAt = Date.now();
-
-      const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
-        nodeId,
+      const { audit, payload } = await invokeNodeToolPayload({
+        node,
+        params,
         command: "dir.list",
-        params: {
+        commandParams: {
           path: dirPath,
           pageToken,
           maxEntries,
         },
-        idempotencyKey: crypto.randomUUID(),
+        requestedPath: dirPath,
       });
-
-      const payload =
-        raw?.payload && typeof raw.payload === "object" && !Array.isArray(raw.payload)
-          ? (raw.payload as Record<string, unknown>)
-          : null;
-      if (!payload) {
-        await appendFileTransferAudit({
-          op: "dir.list",
-          nodeId,
-          nodeDisplayName,
-          requestedPath: dirPath,
-          decision: "error",
-          errorMessage: "invalid payload",
-          durationMs: Date.now() - startedAt,
-        });
-        throw new Error("invalid dir.list payload");
-      }
-      if (payload.ok === false) {
-        await appendFileTransferAudit({
-          op: "dir.list",
-          nodeId,
-          nodeDisplayName,
-          requestedPath: dirPath,
-          canonicalPath:
-            typeof payload.canonicalPath === "string" ? payload.canonicalPath : undefined,
-          decision: "error",
-          errorCode: typeof payload.code === "string" ? payload.code : undefined,
-          errorMessage: typeof payload.message === "string" ? payload.message : undefined,
-          durationMs: Date.now() - startedAt,
-        });
-        throwFromNodePayload("dir.list", payload);
-      }
 
       const canonicalPath = typeof payload.path === "string" ? payload.path : dirPath;
 
@@ -101,30 +88,20 @@ export function createDirListTool(): AnyAgentTool {
       const nextPageToken =
         typeof payload.nextPageToken === "string" ? payload.nextPageToken : undefined;
 
-      const fileCount = entries.filter((e) => !e.isDir).length;
-      const dirCount = entries.filter((e) => e.isDir).length;
-      const truncatedNote = truncated ? " (more entries available — pass nextPageToken)" : "";
-      const summary = `Listed ${canonicalPath}: ${fileCount} file${fileCount !== 1 ? "s" : ""}, ${dirCount} subdir${dirCount !== 1 ? "s" : ""}${truncatedNote}`;
-
-      await appendFileTransferAudit({
-        op: "dir.list",
-        nodeId,
-        nodeDisplayName,
-        requestedPath: dirPath,
+      await audit({
         canonicalPath,
         decision: "allowed",
-        durationMs: Date.now() - startedAt,
       });
 
-      return {
-        content: [{ type: "text" as const, text: summary }],
-        details: {
+      return textResult(
+        directoryListingText(canonicalPath, entries, pageToken, nextPageToken, truncated),
+        {
           path: canonicalPath,
           entries,
           nextPageToken,
           truncated,
         },
-      };
+      );
     },
   };
 }

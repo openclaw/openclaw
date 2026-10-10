@@ -1,15 +1,13 @@
-import { normalizeProviderId } from "../agents/provider-id.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+// Resolves provider auth tokens from plugin-owned auth configuration.
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
-export const ANTHROPIC_SETUP_TOKEN_PREFIX = "sk-ant-oat01-";
+const ANTHROPIC_SETUP_TOKEN_PREFIX = "sk-ant-oat01-";
 const ANTHROPIC_SETUP_TOKEN_MIN_LENGTH = 80;
 const DEFAULT_TOKEN_PROFILE_NAME = "default";
 
 function normalizeTokenProfileName(raw: string): string {
   const trimmed = raw.trim();
-  if (!trimmed) {
-    return DEFAULT_TOKEN_PROFILE_NAME;
-  }
   const slug = normalizeLowercaseStringOrEmpty(trimmed)
     .replace(/[^a-z0-9._-]+/g, "-")
     .replace(/-+/g, "-")

@@ -1,0 +1,508 @@
+// Covers fail-closed Doctor import of the retired Web Push JSON stores.
+import fs from "node:fs";
+import fsp from "node:fs/promises";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { acquireGatewayLock } from "./gateway-lock.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import {
+  hashWebPushEndpoint,
+  listWebPushSubscriptions,
+  readPersistedVapidKeyPair,
+  DEFAULT_WEB_PUSH_VAPID_SUBJECT,
+  type VapidKeyPair,
+  type WebPushSubscription,
+} from "./push-web-store.js";
+import {
+  webPushSubscriptionToRow,
+  WEB_PUSH_VAPID_STATE_KEY,
+  type WebPushDatabase,
+} from "./push-web-store.records.js";
+import {
+  detectLegacyStateMigrations,
+  runLegacyStateMigrations,
+} from "./state-migrations.doctor.js";
+import { detectLegacyWebPush, migrateLegacyWebPush } from "./state-migrations.web-push.js";
+
+describe("legacy Web Push Doctor migration", () => {
+  let envSnapshot: ReturnType<typeof captureEnv> | undefined;
+  const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+    afterEach(async () => {
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+      envSnapshot?.restore();
+      envSnapshot = undefined;
+      cleanup();
+    });
+  });
+
+  function useStateDir(): string {
+    const stateDir = tempDirs.make("openclaw-web-push-migration-");
+    envSnapshot ??= captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_VAPID_SUBJECT"]);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    return stateDir;
+  }
+
+  function subscription(overrides: Partial<WebPushSubscription> = {}): WebPushSubscription {
+    return {
+      subscriptionId: "c0a80101-0000-4000-8000-000000000001",
+      endpoint: "https://push.example.com/send/legacy",
+      keys: { p256dh: "legacy-p256dh", auth: "legacy-auth" },
+      createdAtMs: 1_000,
+      updatedAtMs: 2_000,
+      ...overrides,
+    };
+  }
+
+  function vapidKeys(overrides: Partial<VapidKeyPair> = {}): VapidKeyPair {
+    return {
+      publicKey: "legacy-public-key",
+      privateKey: "legacy-private-key",
+      subject: "https://openclaw.ai",
+      ...overrides,
+    };
+  }
+
+  async function writeLegacyState(params: {
+    stateDir: string;
+    subscriptions?: unknown;
+    vapid?: unknown;
+  }): Promise<{ subscriptionsPath?: string; vapidKeysPath?: string }> {
+    const pushDir = path.join(params.stateDir, "push");
+    await fsp.mkdir(pushDir, { recursive: true });
+    const result: { subscriptionsPath?: string; vapidKeysPath?: string } = {};
+    if (params.subscriptions !== undefined) {
+      result.subscriptionsPath = path.join(pushDir, "web-push-subscriptions.json");
+      const subscriptionsByEndpointHash = Array.isArray(params.subscriptions)
+        ? Object.fromEntries(
+            (params.subscriptions as readonly WebPushSubscription[]).map((entry) => [
+              hashWebPushEndpoint(entry.endpoint),
+              entry,
+            ]),
+          )
+        : params.subscriptions;
+      await fsp.writeFile(
+        result.subscriptionsPath,
+        JSON.stringify({ subscriptionsByEndpointHash }, null, 2),
+        "utf8",
+      );
+    }
+    if (params.vapid !== undefined) {
+      result.vapidKeysPath = path.join(pushDir, "vapid-keys.json");
+      await fsp.writeFile(result.vapidKeysPath, JSON.stringify(params.vapid, null, 2), "utf8");
+    }
+    return result;
+  }
+
+  function seedSubscription(endpointHash: string, value: WebPushSubscription): void {
+    const database = openOpenClawStateDatabase();
+    executeSqliteQuerySync(
+      database.db,
+      getNodeSqliteKysely<WebPushDatabase>(database.db)
+        .insertInto("web_push_subscriptions")
+        .values(webPushSubscriptionToRow({ endpointHash, subscription: value })),
+    );
+  }
+
+  function seedVapid(value: VapidKeyPair): void {
+    writeConfigMachineState(WEB_PUSH_VAPID_STATE_KEY, value);
+  }
+
+  function migrate(
+    stateDir: string,
+    options: Omit<Parameters<typeof migrateLegacyWebPush>[0], "stateDir" | "detected"> = {},
+  ) {
+    return migrateLegacyWebPush({
+      detected: detectLegacyWebPush({ stateDir, doctorOnlyStateMigrations: true }),
+      stateDir,
+      ...options,
+    });
+  }
+
+  it("detects original and interrupted-claim files only for explicit Doctor repair", async () => {
+    const stateDir = useStateDir();
+    const { subscriptionsPath } = await writeLegacyState({
+      stateDir,
+      subscriptions: [],
+    });
+    expect(detectLegacyWebPush({ stateDir }).hasLegacy).toBe(false);
+    expect(detectLegacyWebPush({ stateDir, doctorOnlyStateMigrations: true }).hasLegacy).toBe(true);
+
+    await fsp.rename(subscriptionsPath!, `${subscriptionsPath}.doctor-importing`);
+    expect(detectLegacyWebPush({ stateDir, doctorOnlyStateMigrations: true }).hasLegacy).toBe(true);
+  });
+
+  it("requires exclusive state ownership before reading or committing legacy state", async () => {
+    const stateDir = useStateDir();
+    const { subscriptionsPath } = await writeLegacyState({
+      stateDir,
+      subscriptions: [subscription()],
+    });
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const gatewayLock = await acquireGatewayLock({
+      allowInTests: true,
+      env,
+      pollIntervalMs: 10,
+      port: 18_789,
+      timeoutMs: 100,
+    });
+    if (!gatewayLock) {
+      throw new Error("expected test Gateway lock");
+    }
+
+    let blocked: Awaited<ReturnType<typeof migrateLegacyWebPush>>;
+    try {
+      blocked = await migrate(stateDir, { env });
+    } finally {
+      await gatewayLock.release();
+    }
+
+    expect(blocked.warnings[0]).toContain("OpenClaw state database is busy");
+    expect(fs.existsSync(subscriptionsPath!)).toBe(true);
+    expect(await listWebPushSubscriptions(stateDir)).toEqual([]);
+
+    const retry = await migrate(stateDir, { env });
+    expect(retry.warnings).toEqual([]);
+    expect(await listWebPushSubscriptions(stateDir)).toEqual([subscription()]);
+    expect(fs.existsSync(subscriptionsPath!)).toBe(false);
+  });
+
+  it("routes explicit Doctor repair through the Web Push SQLite importer", async () => {
+    const stateDir = useStateDir();
+    const cfg: OpenClawConfig = {
+      agents: { entries: { "worker-1": {} } },
+      session: { mainKey: "desk" },
+    };
+    const env = {
+      ...process.env,
+      HOME: stateDir,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+      OPENCLAW_AGENT_DIR: undefined,
+      PI_CODING_AGENT_DIR: undefined,
+    };
+    const expectedSubscription = subscription();
+    const expectedVapid = vapidKeys();
+    const paths = await writeLegacyState({
+      stateDir,
+      subscriptions: [expectedSubscription],
+      vapid: expectedVapid,
+    });
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => stateDir,
+      doctorOnlyStateMigrations: true,
+      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+    });
+    expect(detected.webPush.hasLegacy).toBe(true);
+    expect(detected.preview).toContain(
+      "- Web Push subscriptions and VAPID identity: legacy JSON → shared SQLite state",
+    );
+
+    const result = await runLegacyStateMigrations({
+      detected,
+      config: cfg,
+      env,
+      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(await listWebPushSubscriptions(stateDir)).toStrictEqual([expectedSubscription]);
+    expect(await readPersistedVapidKeyPair(stateDir)).toStrictEqual(expectedVapid);
+    expect(fs.existsSync(paths.subscriptionsPath!)).toBe(false);
+    expect(fs.existsSync(paths.vapidKeysPath!)).toBe(false);
+  });
+
+  it.each([
+    ["blank injected subject", undefined, "   ", DEFAULT_WEB_PUSH_VAPID_SUBJECT],
+    [
+      "padded injected subject",
+      undefined,
+      "  mailto:injected@example.com  ",
+      "mailto:injected@example.com",
+    ],
+    [
+      "padded legacy subject",
+      "  mailto:legacy@example.com  ",
+      "mailto:injected@example.com",
+      "mailto:legacy@example.com",
+    ],
+  ])("normalizes a %s", async (_label, legacySubject, injectedSubject, expectedSubject) => {
+    const stateDir = useStateDir();
+    setTestEnvValue("OPENCLAW_VAPID_SUBJECT", "mailto:ambient@example.com");
+    const legacyKeys = vapidKeys({ subject: legacySubject ?? "" });
+    if (legacySubject === undefined) {
+      delete (legacyKeys as Partial<VapidKeyPair>).subject;
+    }
+    await writeLegacyState({ stateDir, vapid: legacyKeys });
+
+    const result = await migrate(stateDir, {
+      env: { ...process.env, OPENCLAW_VAPID_SUBJECT: injectedSubject },
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect((await readPersistedVapidKeyPair(stateDir))?.subject).toBe(expectedSubject);
+  });
+
+  it("rejects a present non-string legacy VAPID subject", async () => {
+    const stateDir = useStateDir();
+    const paths = await writeLegacyState({
+      stateDir,
+      vapid: { ...vapidKeys(), subject: 42 },
+    });
+
+    const result = await migrate(stateDir, {
+      env: { ...process.env, OPENCLAW_VAPID_SUBJECT: "mailto:fallback@example.com" },
+    });
+
+    expect(result.warnings[0]).toContain("VAPID keys are invalid");
+    expect(await readPersistedVapidKeyPair(stateDir)).toBeNull();
+    expect(fs.existsSync(paths.vapidKeysPath!)).toBe(true);
+  });
+
+  it("rejects either malformed file without importing its valid pair", async () => {
+    const stateDir = useStateDir();
+    const paths = await writeLegacyState({
+      stateDir,
+      subscriptions: [subscription()],
+      vapid: { publicKey: "incomplete" },
+    });
+
+    const result = await migrate(stateDir);
+
+    expect(result.warnings[0]).toContain("VAPID keys are invalid");
+    expect(await listWebPushSubscriptions(stateDir)).toEqual([]);
+    expect(await readPersistedVapidKeyPair(stateDir)).toBeNull();
+    expect(fs.existsSync(paths.subscriptionsPath!)).toBe(true);
+    expect(fs.existsSync(paths.vapidKeysPath!)).toBe(true);
+  });
+
+  it("rejects a forged endpoint hash and duplicate subscription ids", async () => {
+    const stateDir = useStateDir();
+    const pushDir = path.join(stateDir, "push");
+    await fsp.mkdir(pushDir, { recursive: true });
+    const sourcePath = path.join(pushDir, "web-push-subscriptions.json");
+    await fsp.writeFile(
+      sourcePath,
+      JSON.stringify({ subscriptionsByEndpointHash: { forged: subscription() } }),
+      "utf8",
+    );
+    let result = await migrate(stateDir);
+    expect(result.warnings[0]).toContain("subscription is invalid");
+
+    const first = subscription();
+    const second = subscription({ endpoint: "https://push.example.com/send/second" });
+    await fsp.writeFile(
+      sourcePath,
+      JSON.stringify({
+        subscriptionsByEndpointHash: {
+          [hashWebPushEndpoint(first.endpoint)]: first,
+          [hashWebPushEndpoint(second.endpoint)]: second,
+        },
+      }),
+      "utf8",
+    );
+    result = await migrate(stateDir);
+    expect(result.warnings[0]).toContain("duplicate subscription id");
+    expect(await listWebPushSubscriptions(stateDir)).toEqual([]);
+  });
+
+  it("keeps newer SQLite fields while preserving the earliest creation time", async () => {
+    const stateDir = useStateDir();
+    const legacy = subscription({ createdAtMs: 100, updatedAtMs: 200 });
+    const canonical = subscription({
+      keys: { p256dh: "canonical-p256dh", auth: "canonical-auth" },
+      createdAtMs: 150,
+      updatedAtMs: 300,
+    });
+    seedSubscription(hashWebPushEndpoint(canonical.endpoint), canonical);
+    await writeLegacyState({ stateDir, subscriptions: [legacy] });
+
+    const result = await migrate(stateDir);
+
+    expect(result.warnings).toEqual([]);
+    expect(await listWebPushSubscriptions(stateDir)).toEqual([{ ...canonical, createdAtMs: 100 }]);
+  });
+
+  it("retries a committed newer-row merge after normalizing its creation time", async () => {
+    const stateDir = useStateDir();
+    const canonical = subscription({ createdAtMs: 100, updatedAtMs: 200 });
+    const legacy = subscription({
+      keys: { p256dh: "newer-p256dh", auth: "newer-auth" },
+      createdAtMs: 500,
+      updatedAtMs: 600,
+    });
+    seedSubscription(hashWebPushEndpoint(canonical.endpoint), canonical);
+    const { subscriptionsPath, vapidKeysPath } = await writeLegacyState({
+      stateDir,
+      subscriptions: [legacy],
+      vapid: vapidKeys(),
+    });
+
+    const first = await migrate(stateDir, {
+      removeSource: () => {
+        throw new Error("simulated unlink failure");
+      },
+    });
+    expect(first.warnings[0]).toContain("legacy cleanup failed");
+    expect(fs.existsSync(`${subscriptionsPath}.doctor-importing`)).toBe(true);
+    expect(fs.existsSync(`${vapidKeysPath}.doctor-importing`)).toBe(true);
+    expect(await listWebPushSubscriptions(stateDir)).toEqual([{ ...legacy, createdAtMs: 100 }]);
+
+    const retry = await migrate(stateDir);
+    expect(retry.warnings).toEqual([]);
+    expect(await listWebPushSubscriptions(stateDir)).toEqual([{ ...legacy, createdAtMs: 100 }]);
+    expect(fs.existsSync(`${subscriptionsPath}.doctor-importing`)).toBe(false);
+    expect(fs.existsSync(`${vapidKeysPath}.doctor-importing`)).toBe(false);
+    expect(await readPersistedVapidKeyPair(stateDir)).toEqual(vapidKeys());
+  });
+
+  it("rolls back equal-timestamp divergence and VAPID identity conflicts", async () => {
+    const stateDir = useStateDir();
+    const canonical = subscription({ keys: { p256dh: "canonical", auth: "canonical" } });
+    seedSubscription(hashWebPushEndpoint(canonical.endpoint), canonical);
+    seedVapid({
+      publicKey: "canonical-public",
+      privateKey: "canonical-private",
+      subject: "https://openclaw.ai",
+    });
+    const paths = await writeLegacyState({
+      stateDir,
+      subscriptions: [subscription()],
+      vapid: vapidKeys(),
+    });
+
+    const result = await migrate(stateDir);
+
+    expect(result.warnings[0]).toContain("diverges at the same timestamp");
+    expect(await listWebPushSubscriptions(stateDir)).toEqual([canonical]);
+    expect((await readPersistedVapidKeyPair(stateDir))?.publicKey).toBe("canonical-public");
+    expect(fs.existsSync(paths.subscriptionsPath!)).toBe(true);
+    expect(fs.existsSync(paths.vapidKeysPath!)).toBe(true);
+    expect(fs.existsSync(`${paths.subscriptionsPath}.doctor-importing`)).toBe(false);
+    expect(fs.existsSync(`${paths.vapidKeysPath}.doctor-importing`)).toBe(false);
+  });
+
+  it("rolls back subscription changes when only VAPID conflicts", async () => {
+    const stateDir = useStateDir();
+    seedVapid({
+      publicKey: "canonical-public",
+      privateKey: "canonical-private",
+      subject: "https://openclaw.ai",
+    });
+    await writeLegacyState({
+      stateDir,
+      subscriptions: [subscription()],
+      vapid: vapidKeys(),
+    });
+
+    const result = await migrate(stateDir);
+
+    expect(result.warnings[0]).toContain("VAPID identity conflicts");
+    expect(await listWebPushSubscriptions(stateDir)).toEqual([]);
+  });
+
+  it("rejects a subscription id already owned by another endpoint", async () => {
+    const stateDir = useStateDir();
+    const canonical = subscription({ endpoint: "https://push.example.com/canonical" });
+    const legacy = subscription({ endpoint: "https://push.example.com/legacy" });
+    seedSubscription(hashWebPushEndpoint(canonical.endpoint), canonical);
+    const { subscriptionsPath } = await writeLegacyState({
+      stateDir,
+      subscriptions: [legacy],
+    });
+
+    const result = await migrate(stateDir);
+
+    expect(result.warnings[0]).toContain("subscription id conflicts");
+    expect(await listWebPushSubscriptions(stateDir)).toEqual([canonical]);
+    expect(fs.existsSync(subscriptionsPath!)).toBe(true);
+  });
+
+  it("fails before database mutation when a source changes after parsing", async () => {
+    const stateDir = useStateDir();
+    const { subscriptionsPath } = await writeLegacyState({
+      stateDir,
+      subscriptions: [subscription()],
+    });
+
+    const result = await migrate(stateDir, {
+      beforeVerify: () => fs.appendFileSync(subscriptionsPath!, "\n"),
+    });
+
+    expect(result.warnings[0]).toContain("source changed");
+    expect(await listWebPushSubscriptions(stateDir)).toEqual([]);
+    expect(fs.existsSync(subscriptionsPath!)).toBe(true);
+  });
+
+  it("restores claimed sources without database mutation when claim verification fails", async () => {
+    const stateDir = useStateDir();
+    const { subscriptionsPath } = await writeLegacyState({
+      stateDir,
+      subscriptions: [subscription()],
+    });
+
+    const result = await migrate(stateDir, {
+      beforeClaim: () => fs.appendFileSync(subscriptionsPath!, "\n"),
+    });
+
+    expect(result.warnings[0]).toContain("source changed before doctor could claim it");
+    expect(await listWebPushSubscriptions(stateDir)).toEqual([]);
+    expect(fs.existsSync(subscriptionsPath!)).toBe(true);
+    expect(fs.existsSync(`${subscriptionsPath}.doctor-importing`)).toBe(false);
+  });
+
+  it("refuses symlinked sources", async () => {
+    const stateDir = useStateDir();
+    const outside = path.join(stateDir, "outside.json");
+    await fsp.writeFile(outside, JSON.stringify({ subscriptionsByEndpointHash: {} }), "utf8");
+    const sourcePath = path.join(stateDir, "push", "web-push-subscriptions.json");
+    await fsp.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fsp.symlink(outside, sourcePath);
+
+    const result = await migrate(stateDir);
+
+    expect(result.warnings[0]).toContain("Failed reading legacy Web Push state");
+    expect(fs.lstatSync(sourcePath).isSymbolicLink()).toBe(true);
+    expect(await listWebPushSubscriptions(stateDir)).toEqual([]);
+  });
+
+  it("refuses a legacy store reached through a symlinked state-directory ancestor", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const stateDir = useStateDir();
+    const outside = tempDirs.make("openclaw-web-push-outside-");
+    const legacy = subscription();
+    const sourcePath = path.join(outside, "web-push-subscriptions.json");
+    await fsp.writeFile(
+      sourcePath,
+      JSON.stringify({
+        subscriptionsByEndpointHash: {
+          [hashWebPushEndpoint(legacy.endpoint)]: legacy,
+        },
+      }),
+      "utf8",
+    );
+    await fsp.mkdir(stateDir, { recursive: true });
+    await fsp.symlink(outside, path.join(stateDir, "push"));
+
+    const result = await migrate(stateDir);
+
+    expect(result.warnings[0]).toContain("Failed reading legacy Web Push state");
+    expect(fs.existsSync(sourcePath)).toBe(true);
+    expect(await listWebPushSubscriptions(stateDir)).toEqual([]);
+  });
+});

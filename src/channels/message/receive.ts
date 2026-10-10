@@ -1,11 +1,13 @@
+import { formatErrorMessage } from "../../infra/errors.js";
 import type { ChannelMessageReceiveAckPolicy } from "./types.js";
 
 export type MessageAckPolicy = ChannelMessageReceiveAckPolicy;
 
-export type MessageAckStage = "receive_record" | "agent_dispatch" | "durable_send" | "manual";
+type MessageAckStage = "receive_record" | "agent_dispatch" | "durable_send" | "manual";
 
-export type MessageAckState = "pending" | "acked" | "nacked";
+type MessageAckState = "pending" | "acked" | "nacked";
 
+/** Mutable receive context passed through durable inbound message processing. */
 export type MessageReceiveContext<TMessage = unknown> = {
   id: string;
   channel: string;
@@ -24,27 +26,14 @@ export type MessageReceiveContext<TMessage = unknown> = {
 
 const neverAbortedSignal = new AbortController().signal;
 
-export function shouldAckMessageAfterStage(
-  policy: MessageAckPolicy,
-  stage: MessageAckStage,
-): boolean {
-  switch (policy) {
-    case "after_receive_record":
-      return stage === "receive_record";
-    case "after_agent_dispatch":
-      return stage === "agent_dispatch";
-    case "after_durable_send":
-      return stage === "durable_send";
-    case "manual":
-      return false;
-  }
-  return false;
-}
+const ackStages: Record<MessageAckPolicy, MessageAckStage | undefined> = {
+  after_receive_record: "receive_record",
+  after_agent_dispatch: "agent_dispatch",
+  after_durable_send: "durable_send",
+  manual: undefined,
+};
 
-function normalizeAckErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
+/** Creates a receive context with idempotent ack and explicit nack state transitions. */
 export function createMessageReceiveContext<TMessage>(params: {
   id: string;
   channel: string;
@@ -56,6 +45,7 @@ export function createMessageReceiveContext<TMessage>(params: {
   onAck?: () => Promise<void> | void;
   onNack?: (error: unknown) => Promise<void> | void;
 }): MessageReceiveContext<TMessage> {
+  let nackInFlight: Promise<void> | undefined;
   const ctx: MessageReceiveContext<TMessage> = {
     id: params.id,
     channel: params.channel,
@@ -65,8 +55,9 @@ export function createMessageReceiveContext<TMessage>(params: {
     ackState: "pending",
     receivedAt: params.receivedAt ?? Date.now(),
     signal: params.signal ?? neverAbortedSignal,
-    shouldAckAfter: (stage) => shouldAckMessageAfterStage(ctx.ackPolicy, stage),
+    shouldAckAfter: (stage) => ackStages[ctx.ackPolicy] === stage,
     ack: async () => {
+      // Ack callbacks must be idempotent because receive pipelines may revisit completed stages.
       if (ctx.ackState === "acked") {
         return;
       }
@@ -76,9 +67,24 @@ export function createMessageReceiveContext<TMessage>(params: {
       delete ctx.nackErrorMessage;
     },
     nack: async (error) => {
-      await params.onNack?.(error);
-      ctx.ackState = "nacked";
-      ctx.nackErrorMessage = normalizeAckErrorMessage(error);
+      // Share overlapping callbacks; clear rejected work so a later call can retry.
+      if (ctx.ackState === "nacked") {
+        return;
+      }
+      if (nackInFlight) {
+        await nackInFlight;
+        return;
+      }
+      nackInFlight = (async () => {
+        await params.onNack?.(error);
+        ctx.ackState = "nacked";
+        ctx.nackErrorMessage = formatErrorMessage(error);
+      })();
+      try {
+        await nackInFlight;
+      } finally {
+        nackInFlight = undefined;
+      }
     },
   };
   return ctx;

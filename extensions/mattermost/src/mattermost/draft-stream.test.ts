@@ -1,17 +1,35 @@
+// Mattermost tests cover draft stream plugin behavior.
+import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  createChannelProgressDraftCompositor,
+  createLivePreviewLifecycle,
+} from "openclaw/plugin-sdk/channel-outbound";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { MattermostClient } from "./client.js";
-import { buildMattermostToolStatusText, createMattermostDraftStream } from "./draft-stream.js";
+import { createMattermostDraftStream } from "./draft-stream.js";
+import { deliverMattermostReplyWithDraftPreview } from "./monitor-draft-delivery.js";
 
 type RequestRecord = {
   path: string;
   init?: RequestInit;
 };
 
-function createMockClient(): {
+type DraftStreamOptions = Omit<
+  Parameters<typeof createMattermostDraftStream>[0],
+  "client" | "channelId"
+> & {
+  request?: MattermostClient["request"];
+};
+
+function createDraftStreamFixture(options: DraftStreamOptions = {}): {
   client: MattermostClient;
   calls: RequestRecord[];
-  requestMock: ReturnType<typeof vi.fn>;
+  requestMock: ReturnType<typeof vi.fn<MattermostClient["request"]>>;
+  stream: ReturnType<typeof createMattermostDraftStream>;
 } {
+  const { request, ...streamOptions } = options;
   const calls: RequestRecord[] = [];
   let nextId = 1;
   const requestImpl: MattermostClient["request"] = async <T>(
@@ -27,7 +45,7 @@ function createMockClient(): {
     }
     return {} as T;
   };
-  const requestMock = vi.fn(requestImpl);
+  const requestMock = vi.fn(request ?? requestImpl);
   const client: MattermostClient = {
     baseUrl: "https://chat.example.com",
     apiBaseUrl: "https://chat.example.com/api/v4",
@@ -35,7 +53,13 @@ function createMockClient(): {
     request: requestMock as MattermostClient["request"],
     fetchImpl: vi.fn() as MattermostClient["fetchImpl"],
   };
-  return { client, calls, requestMock };
+  const stream = createMattermostDraftStream({
+    client,
+    channelId: "channel-1",
+    throttleMs: 0,
+    ...streamOptions,
+  });
+  return { client, calls, requestMock, stream };
 }
 
 function parseRequestJson(init: RequestInit | undefined): Record<string, unknown> {
@@ -49,15 +73,46 @@ function parseRequestJson(init: RequestInit | undefined): Record<string, unknown
   return parsed as Record<string, unknown>;
 }
 
+function createProviderPostFixture(
+  options: {
+    beforeDelete?: (id: string) => Promise<void>;
+    warn?: (message: string) => void;
+  } = {},
+) {
+  const posts = new Map<string, string>();
+  let nextId = 1;
+  const request: MattermostClient["request"] = async <T>(
+    path: string,
+    init?: RequestInit,
+  ): Promise<T> => {
+    if (path === "/posts" && init?.method === "POST") {
+      const id = `post-${nextId++}`;
+      const message = String(parseRequestJson(init).message);
+      posts.set(id, message);
+      return { id, message } as T;
+    }
+    const id = path.slice("/posts/".length).replace(/\/patch$/, "");
+    if (init?.method === "DELETE") {
+      await options.beforeDelete?.(id);
+      posts.delete(id);
+      return undefined as T;
+    }
+    if (init?.method === "PUT") {
+      if (!posts.has(id)) {
+        throw new Error("Mattermost API 404 Not Found");
+      }
+      const message = String(parseRequestJson(init).message);
+      posts.set(id, message);
+      return { id, message } as T;
+    }
+    throw new Error(`Unexpected Mattermost request: ${init?.method} ${path}`);
+  };
+  return { ...createDraftStreamFixture({ request, warn: options.warn }), posts };
+}
+
 describe("createMattermostDraftStream", () => {
   it("creates a preview post and updates it on later changes", async () => {
-    const { client, calls } = createMockClient();
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      rootId: "root-1",
-      throttleMs: 0,
-    });
+    const { calls, stream } = createDraftStreamFixture({ rootId: "root-1" });
 
     stream.update("Running `read`…");
     await stream.flush();
@@ -75,74 +130,182 @@ describe("createMattermostDraftStream", () => {
     expect(stream.postId()).toBe("post-1");
   });
 
-  it("does not resend identical updates", async () => {
-    const { client, calls } = createMockClient();
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      throttleMs: 0,
+  it.each([
+    { timing: "immediately after retraction", delayFirstPublication: false },
+    { timing: "while deletion is pending", delayFirstPublication: false },
+    {
+      timing: "after the retiring publication completes",
+      delayFirstPublication: true,
+    },
+  ])("keeps the identical plan replacement $timing", async ({ timing, delayFirstPublication }) => {
+    const deleteStarted = createDeferred<void>();
+    const releaseDelete = createDeferred<void>();
+    const firstPublicationVisible = createDeferred<void>();
+    const releaseFirstPublication = createDeferred<void>();
+    let firstUpdate = true;
+    const { stream, posts } = createProviderPostFixture({
+      beforeDelete: async () => {
+        deleteStarted.resolve();
+        await releaseDelete.promise;
+      },
     });
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: false } } },
+      mode: "progress",
+      active: true,
+      seed: "plan-retraction",
+      update: async (text, options) => {
+        const delayCompletion = firstUpdate && delayFirstPublication;
+        firstUpdate = false;
+        stream.update(text);
+        if (options?.flush) {
+          await stream.flush();
+        }
+        if (delayCompletion) {
+          firstPublicationVisible.resolve();
+          await releaseFirstPublication.promise;
+        }
+      },
+      deleteCurrent: () => stream.deleteCurrentMessage(),
+    });
+    let firstPublication: Promise<boolean> | undefined;
+    let retraction: Promise<boolean> | undefined;
+    let replacementPublication: Promise<boolean> | undefined;
+    try {
+      firstPublication = progress.pushPlanProgress([{ step: "Inspect", status: "in_progress" }]);
+      if (delayFirstPublication) {
+        await firstPublicationVisible.promise;
+      } else {
+        await firstPublication;
+      }
+      expect([...posts.values()]).toEqual([expect.stringContaining("Inspect")]);
 
-    stream.update("Working...");
-    await stream.flush();
-    stream.update("Working...");
-    await stream.flush();
+      retraction = progress.pushPlanProgress([]);
+      if (timing !== "immediately after retraction") {
+        await deleteStarted.promise;
+      }
+      if (delayFirstPublication) {
+        releaseFirstPublication.resolve();
+        await firstPublication;
+      }
+      replacementPublication = progress.pushPlanProgress([
+        { step: "Inspect", status: "in_progress" },
+      ]);
+      await deleteStarted.promise;
+      releaseDelete.resolve();
+      await Promise.all([retraction, replacementPublication]);
+      await stream.flush();
 
-    expect(calls).toHaveLength(1);
+      expect([...posts.values()]).toEqual([expect.stringContaining("Inspect")]);
+      expect(posts.has(stream.postId() ?? "")).toBe(true);
+    } finally {
+      releaseFirstPublication.resolve();
+      releaseDelete.resolve();
+      await Promise.allSettled([firstPublication, retraction, replacementPublication]);
+      progress.cancel();
+      await stream.clear();
+    }
   });
 
-  it("clears the preview post when no final reply is delivered", async () => {
-    const { client, calls } = createMockClient();
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      rootId: "root-1",
-      throttleMs: 0,
+  it.each([false, true])(
+    "retries retired preview cleanup at stop while preserving the final (retry fails: %s)",
+    async (retryFails) => {
+      const warn = vi.fn();
+      const deleteAttempts: string[] = [];
+      const { client, stream, posts } = createProviderPostFixture({
+        warn,
+        beforeDelete: async (id) => {
+          deleteAttempts.push(id);
+          if (deleteAttempts.length === 1 || retryFails) {
+            throw new Error("temporary delete failure");
+          }
+        },
+      });
+      const deliverPayload = vi.fn(async () => {
+        throw new Error("the final should edit its preview in place");
+      });
+      try {
+        stream.update("Retired plan");
+        await stream.flush();
+        const retiredId = stream.postId();
+        await stream.deleteCurrentMessage();
+        stream.update("Replacement plan");
+        await stream.flush();
+        const finalId = stream.postId();
+        const result = await deliverMattermostReplyWithDraftPreview({
+          payload: { text: "Final answer" },
+          info: { kind: "final" },
+          kind: "direct",
+          client,
+          previewLifecycle: createLivePreviewLifecycle<ReplyPayload, string>({
+            draft: { ...stream, id: stream.postId },
+          }),
+          resolvePreviewFinalText: (text) => ({ editText: text, alreadyDelivered: false }),
+          logVerboseMessage: vi.fn(),
+          deliverPayload,
+        });
+        expect(result.visibleReplySent).toBe(true);
+        expect(result.messageIds).toEqual([finalId]);
+        expect(posts.get(finalId ?? "")).toBe("Final answer");
+        expect(deliverPayload).not.toHaveBeenCalled();
+
+        await stream.stop();
+
+        expect(posts.get(finalId ?? "")).toBe("Final answer");
+        expect(deleteAttempts).not.toContain(finalId);
+        expect(deleteAttempts).toEqual([retiredId, retiredId]);
+        expect(warn).toHaveBeenCalledTimes(retryFails ? 2 : 1);
+        expect(warn).toHaveBeenCalledWith(
+          "mattermost stream preview cleanup failed: temporary delete failure",
+        );
+        expect([...posts.values()]).toEqual(
+          retryFails ? ["Retired plan", "Final answer"] : ["Final answer"],
+        );
+      } finally {
+        await stream.seal();
+      }
+    },
+  );
+
+  it("retains a failed current-post deletion across stop until another clear", async () => {
+    const warn = vi.fn();
+    const deleteAttempts: string[] = [];
+    const { stream, posts } = createProviderPostFixture({
+      warn,
+      beforeDelete: async (id) => {
+        deleteAttempts.push(id);
+        if (deleteAttempts.length === 1) {
+          throw new Error("temporary delete failure");
+        }
+      },
     });
+    try {
+      stream.update("Current preview");
+      await stream.flush();
+      const currentId = stream.postId();
+      await stream.clear();
+      await stream.stop();
+      expect(stream.postId()).toBe(currentId);
+      expect([...posts.values()]).toEqual(["Current preview"]);
+      expect(deleteAttempts).toEqual([currentId]);
+      expect(warn).toHaveBeenCalledTimes(1);
 
-    stream.update("Working...");
-    await stream.flush();
-    await stream.clear();
-
-    expect(calls).toHaveLength(2);
-    expect(calls[1]?.path).toBe("/posts/post-1");
-    expect(calls[1]?.init?.method).toBe("DELETE");
-    expect(stream.postId()).toBeUndefined();
-  });
-
-  it("discardPending keeps the preview post but ignores later updates", async () => {
-    const { client, calls } = createMockClient();
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      rootId: "root-1",
-      throttleMs: 0,
-    });
-
-    stream.update("Working...");
-    await stream.flush();
-    await stream.discardPending();
-    stream.update("Late update");
-    await stream.flush();
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.path).toBe("/posts");
-    expect(stream.postId()).toBe("post-1");
+      await stream.clear();
+      expect(posts.size).toBe(0);
+      expect(deleteAttempts).toEqual([currentId, currentId]);
+    } finally {
+      await stream.seal();
+    }
   });
 
   it("seal keeps the preview post and cancels pending final overwrites", async () => {
-    const { client, calls } = createMockClient();
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      rootId: "root-1",
-      throttleMs: 0,
-    });
+    const { calls, stream } = createDraftStreamFixture({ rootId: "root-1" });
 
     stream.update("Working...");
     await stream.flush();
     stream.update("Stale final draft");
     await stream.seal();
+    await stream.forceNewMessage();
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.path).toBe("/posts");
@@ -150,13 +313,7 @@ describe("createMattermostDraftStream", () => {
   });
 
   it("stop flushes the last pending update and ignores later ones", async () => {
-    const { client, calls } = createMockClient();
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      rootId: "root-1",
-      throttleMs: 1000,
-    });
+    const { calls, stream } = createDraftStreamFixture({ rootId: "root-1", throttleMs: 1000 });
 
     stream.update("Working...");
     await stream.flush();
@@ -167,41 +324,64 @@ describe("createMattermostDraftStream", () => {
 
     expect(calls).toHaveLength(2);
     expect(calls[0]?.path).toBe("/posts");
-    expect(calls[1]?.path).toBe("/posts/post-1");
+    expect(calls[1]?.path).toBe("/posts/post-1/patch");
     expect(parseRequestJson(calls[1]?.init)).toEqual({
       id: "post-1",
       message: "Stale partial",
     });
   });
 
-  it("warns and stops when preview creation fails", async () => {
+  it("retains an accepted preview failure after its background flush has settled", async () => {
     const warn = vi.fn();
-    const requestImpl: MattermostClient["request"] = async () => {
-      throw new Error("boom");
-    };
-    const requestMock = vi.fn(requestImpl);
-    const client: MattermostClient = {
-      baseUrl: "https://chat.example.com",
-      apiBaseUrl: "https://chat.example.com/api/v4",
-      token: "token",
-      request: requestMock as MattermostClient["request"],
-      fetchImpl: vi.fn() as MattermostClient["fetchImpl"],
-    };
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      throttleMs: 0,
-      warn,
-    });
+    const { requestMock, stream } = createDraftStreamFixture({ warn });
+    requestMock.mockResolvedValueOnce({ message: "already visible" });
 
-    stream.update("Working...");
-    await stream.flush();
-    stream.update("Still working...");
+    stream.update("Already delivered");
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledOnce());
+
+    let caught: unknown;
+    try {
+      await stream.flush();
+    } catch (error) {
+      caught = error;
+    }
+    expect(isChannelPartialDeliveryError(caught)).toBe(true);
+    expect(requestMock).toHaveBeenCalledOnce();
+    expect(requestMock.mock.calls[0]?.[0]).toBe("/posts");
+    stream.update("Must not create another accepted post");
+    await expect(stream.flush()).rejects.toThrow("did not include a post id");
+    expect(requestMock).toHaveBeenCalledOnce();
+    for (const finish of [
+      () => stream.discardPending(),
+      () => stream.clear(),
+      () => stream.seal(),
+      () => stream.stop(),
+      () => stream.forceNewMessage(),
+      () => stream.settleBoundaries(),
+    ]) {
+      await expect(finish()).rejects.toThrow("did not include a post id");
+    }
+    expect(requestMock).toHaveBeenCalledOnce();
+  });
+
+  it("truncates on a code-point boundary so a straddling emoji is dropped whole", async () => {
+    // maxChars=12 => cut point is maxChars-3=9. The emoji 😀 occupies UTF-16
+    // indices 8-9, so a raw slice(0,9) would keep the lone high surrogate at
+    // index 8 and drop its low surrogate at index 9, leaking a dangling half.
+    const { calls, stream } = createDraftStreamFixture({ maxChars: 12 });
+
+    const input = `${"a".repeat(8)}\u{1F600}${"b".repeat(5)}`;
+    stream.update(input);
     await stream.flush();
 
-    expect(warn).toHaveBeenCalled();
-    expect(requestMock).toHaveBeenCalledTimes(1);
-    expect(stream.postId()).toBeUndefined();
+    expect(calls).toHaveLength(1);
+    const message = parseRequestJson(calls[0]?.init).message;
+    expect(typeof message).toBe("string");
+    const sent = message as string;
+    // The straddling emoji must be dropped whole, leaving no dangling surrogate half.
+    expect(/[\uD800-\uDFFF]/u.test(sent)).toBe(false);
+    expect(sent.length).toBeLessThanOrEqual(12);
+    expect(sent).toBe("aaaaaaaa...");
   });
 
   it("does not resend after an update failure followed by stop", async () => {
@@ -216,7 +396,7 @@ describe("createMattermostDraftStream", () => {
       if (path === "/posts") {
         return { id: "post-1" } as T;
       }
-      if (path === "/posts/post-1") {
+      if (path === "/posts/post-1/patch") {
         if (failNextPatch) {
           failNextPatch = false;
           throw new Error("patch failed");
@@ -225,20 +405,7 @@ describe("createMattermostDraftStream", () => {
       }
       return {} as T;
     };
-    const requestMock = vi.fn(requestImpl);
-    const client: MattermostClient = {
-      baseUrl: "https://chat.example.com",
-      apiBaseUrl: "https://chat.example.com/api/v4",
-      token: "token",
-      request: requestMock as MattermostClient["request"],
-      fetchImpl: vi.fn() as MattermostClient["fetchImpl"],
-    };
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      throttleMs: 1000,
-      warn,
-    });
+    const { stream } = createDraftStreamFixture({ request: requestImpl, throttleMs: 1000, warn });
 
     stream.update("Working...");
     await stream.flush();
@@ -249,33 +416,276 @@ describe("createMattermostDraftStream", () => {
     expect(warn).toHaveBeenCalledWith("mattermost stream preview failed: patch failed");
     expect(calls).toHaveLength(2);
     expect(calls[0]?.path).toBe("/posts");
-    expect(calls[1]?.path).toBe("/posts/post-1");
+    expect(calls[1]?.path).toBe("/posts/post-1/patch");
   });
 });
 
-describe("buildMattermostToolStatusText", () => {
-  it("renders a status with the shared tool label", () => {
-    expect(buildMattermostToolStatusText({ name: "read" })).toBe("📖 Read");
+describe("createMattermostDraftStream forceNewMessage", () => {
+  it("propagates an accepted background failure that settles during boundary rotation", async () => {
+    const { requestMock, stream } = createDraftStreamFixture();
+    let releaseCreate: (() => void) | undefined;
+    const createReady = new Promise<void>((resolve) => {
+      releaseCreate = resolve;
+    });
+    requestMock.mockImplementationOnce(async () => {
+      await createReady;
+      return { message: "already visible" };
+    });
+
+    stream.update("Accepted background preview");
+    await vi.waitFor(() => expect(requestMock).toHaveBeenCalledOnce());
+    const boundary = stream.forceNewMessage();
+    releaseCreate?.();
+
+    await expect(boundary).rejects.toThrow("did not include a post id");
+    await expect(stream.flush()).rejects.toThrow("did not include a post id");
+    expect(requestMock).toHaveBeenCalledOnce();
   });
 
-  it("honors raw exec detail mode", () => {
-    expect(
-      buildMattermostToolStatusText({
-        name: "exec",
-        args: { command: "pnpm test -- --watch=false" },
-        detailMode: "raw",
-      }),
-    ).toBe("🛠️ run tests, `pnpm test -- --watch=false`");
+  it("restores and chunks an already-flushed over-limit block before rotating", async () => {
+    const firstChunk = "a".repeat(10);
+    const secondChunk = "b".repeat(10);
+    const chunkText = vi.fn(() => [firstChunk, secondChunk]);
+    const { calls, stream: configuredStream } = createDraftStreamFixture({
+      maxChars: 10,
+      chunkText,
+    });
+
+    configuredStream.update(`${firstChunk}${secondChunk}`);
+    await configuredStream.flush();
+    expect(parseRequestJson(calls[0]?.init)?.message).toBe("aaaaaaa...");
+
+    await configuredStream.forceNewMessage();
+    expect(configuredStream.postId()).toBeUndefined();
+    configuredStream.update("tool");
+    await configuredStream.flush();
+
+    expect(calls.map((call) => call.path)).toEqual([
+      "/posts",
+      "/posts/post-1/patch",
+      "/posts",
+      "/posts",
+    ]);
+    expect(calls.map((call) => call.init?.method)).toEqual(["POST", "PUT", "POST", "POST"]);
+    const finalizedChunks = [
+      parseRequestJson(calls[1]?.init)?.message,
+      parseRequestJson(calls[2]?.init)?.message,
+    ];
+    expect(chunkText).toHaveBeenCalledWith(`${firstChunk}${secondChunk}`);
+    expect(finalizedChunks).toEqual([firstChunk, secondChunk]);
+    expect(finalizedChunks.join("")).toBe(`${firstChunk}${secondChunk}`);
+    expect(parseRequestJson(calls[3]?.init)?.message).toBe("tool");
+    expect(configuredStream.postId()).toBe("post-3");
   });
 
-  it("can hide raw exec detail from status text", () => {
+  it("publishes overlapping fire-and-forget boundaries in generation order", async () => {
+    const calls: RequestRecord[] = [];
+    let nextId = 1;
+    let releaseFirstCreate: (() => void) | undefined;
+    let releaseBoundaryPatch: (() => void) | undefined;
+    let releaseSecondCreate: (() => void) | undefined;
+    const firstCreateInFlight = new Promise<void>((resolve) => {
+      releaseFirstCreate = resolve;
+    });
+    const boundaryPatchInFlight = new Promise<void>((resolve) => {
+      releaseBoundaryPatch = resolve;
+    });
+    const secondCreateInFlight = new Promise<void>((resolve) => {
+      releaseSecondCreate = resolve;
+    });
+    let createdCount = 0;
+    const requestImpl: MattermostClient["request"] = async <T>(
+      path: string,
+      init?: RequestInit,
+    ): Promise<T> => {
+      calls.push({ path, init });
+      if (path === "/posts") {
+        createdCount += 1;
+        if (createdCount === 1) {
+          await firstCreateInFlight;
+        }
+        if (createdCount === 2) {
+          await secondCreateInFlight;
+        }
+        return { id: `post-${nextId++}` } as T;
+      }
+      if (path.startsWith("/posts/")) {
+        await boundaryPatchInFlight;
+        return { id: "patched" } as T;
+      }
+      return {} as T;
+    };
+    const { stream } = createDraftStreamFixture({ request: requestImpl });
+
+    stream.update("tool start");
+    stream.update("tool complete");
+    const firstBoundary = stream.forceNewMessage();
+    stream.update("assistant progress");
+    const secondBoundary = stream.forceNewMessage();
+    stream.update("final answer");
+    const flush = stream.flush();
+    releaseFirstCreate?.();
+
+    await vi.waitFor(() => {
+      expect(calls.map((c) => c.path)).toEqual(["/posts", "/posts/post-1/patch"]);
+    });
+    releaseBoundaryPatch?.();
+    await vi.waitFor(() => {
+      expect(calls.map((c) => c.path)).toEqual(["/posts", "/posts/post-1/patch", "/posts"]);
+    });
+    releaseSecondCreate?.();
+    await Promise.all([firstBoundary, secondBoundary, flush]);
+
+    expect(calls.map((c) => c.path)).toEqual(["/posts", "/posts/post-1/patch", "/posts", "/posts"]);
+    expect(parseRequestJson(calls[0]?.init)?.message).toBe("tool start");
+    expect(parseRequestJson(calls[1]?.init)?.message).toBe("tool complete");
+    expect(parseRequestJson(calls[2]?.init)?.message).toBe("assistant progress");
+    expect(parseRequestJson(calls[3]?.init)?.message).toBe("final answer");
+    expect(stream.postId()).toBe("post-3");
+  });
+
+  it("resolves a cumulative terminal reply to the current confirmed generation", async () => {
+    const { stream } = createDraftStreamFixture();
+
+    stream.updateAssistantText("First block");
+    await stream.flush();
+    await stream.forceNewMessage();
+    stream.updateAssistantText("Second block");
+    await stream.flush();
+
+    expect(stream.resolveFinalText("First block\n\nSecond block complete")).toEqual({
+      kind: "remaining",
+      text: "Second block complete",
+      publishedParts: [{ messageId: "post-1", content: "First block" }],
+    });
+    expect(stream.resolveFinalText("Second block complete")).toEqual({
+      kind: "full",
+      text: "Second block complete",
+      publishedParts: [{ messageId: "post-1", content: "First block" }],
+    });
+    expect(stream.resolveFinalText("First block extended")).toEqual({
+      kind: "full",
+      text: "First block extended",
+      publishedParts: [{ messageId: "post-1", content: "First block" }],
+    });
+  });
+
+  it("strips confirmed assistant blocks but not transient progress generations", async () => {
+    const { stream } = createDraftStreamFixture();
+
+    stream.updateAssistantText("First block");
+    await stream.flush();
+    await stream.forceNewMessage();
+    stream.update("Running tool…");
+    await stream.flush();
+    await stream.forceNewMessage();
+    await stream.settleBoundaries();
+
+    expect(stream.resolveFinalText("First block\n\nFinal after tool")).toEqual({
+      kind: "remaining",
+      text: "Final after tool",
+      publishedParts: [{ messageId: "post-1", content: "First block" }],
+    });
+    expect(stream.resolveFinalText("First block extended")).toEqual({
+      kind: "full",
+      text: "First block extended",
+      publishedParts: [{ messageId: "post-1", content: "First block" }],
+    });
+    expect(stream.resolveFinalText("First block")).toEqual({
+      kind: "already-delivered",
+      publishedParts: [{ messageId: "post-1", content: "First block" }],
+    });
+    expect(stream.resolveFinalText("")).toEqual({
+      kind: "full",
+      text: "",
+      publishedParts: [{ messageId: "post-1", content: "First block" }],
+    });
+  });
+
+  it("keeps the canonical final when an assistant boundary fails to publish", async () => {
+    const { requestMock, stream } = createDraftStreamFixture();
+
+    stream.updateAssistantText("First block");
+    await stream.flush();
+    requestMock.mockRejectedValueOnce(new Error("boundary failed"));
+    stream.updateAssistantText("First block complete");
+    await stream.forceNewMessage();
+
+    const finalText = "First block complete\n\nFinal after failure";
+    expect(stream.resolveFinalText(finalText)).toEqual({
+      kind: "remaining",
+      text: "complete\n\nFinal after failure",
+      publishedParts: [{ messageId: "post-1", content: "First block" }],
+    });
+  });
+
+  it("does not strip a requested prefix rewritten by the provider", async () => {
+    const { requestMock, stream } = createDraftStreamFixture({
+      chunkText: () => ["First half", "Second half"],
+    });
+
+    stream.updateAssistantText("First half Second half");
+    await stream.flush();
+    requestMock
+      .mockResolvedValueOnce({ id: "post-1", message: "Provider rewrite" })
+      .mockRejectedValueOnce(new Error("second chunk failed"));
+    await stream.forceNewMessage();
+
+    const finalText = "First half Second half\n\nFinal after failure";
+    expect(stream.resolveFinalText(finalText)).toEqual({
+      kind: "full",
+      text: finalText,
+      publishedParts: [{ messageId: "post-1", content: "Provider rewrite" }],
+    });
+  });
+
+  it("publishes the known prefix before an IDless failure warning re-enters", async () => {
+    const finalText = "First Second Third\n\nFinal after failure";
+    let resolutionAtWarning: unknown;
+    let reenteredBoundary: Promise<void> | undefined;
+    const warn = vi.fn(() => {
+      resolutionAtWarning = stream.resolveFinalText(finalText);
+      stream.update("must not publish twice");
+      reenteredBoundary = stream.forceNewMessage();
+      void reenteredBoundary.catch(() => {});
+    });
+    const { requestMock, stream } = createDraftStreamFixture({
+      chunkText: () => ["First", "Second", "Third"],
+      warn,
+    });
+
+    stream.updateAssistantText("First Second Third");
+    await stream.flush();
+    requestMock
+      .mockResolvedValueOnce({ id: "post-1", message: "First" })
+      .mockResolvedValueOnce({ id: "post-2", message: "Second" })
+      .mockResolvedValueOnce({ message: "Third" });
+
+    await expect(stream.forceNewMessage()).rejects.toThrow("did not include a post id");
+    await expect(reenteredBoundary).rejects.toThrow("did not include a post id");
+
+    const expectedResolution = {
+      kind: "remaining",
+      text: "Third\n\nFinal after failure",
+      publishedParts: [
+        { messageId: "post-1", content: "First" },
+        { messageId: "post-2", content: "Second" },
+      ],
+    };
+    expect(warn).toHaveBeenCalledOnce();
+    expect(resolutionAtWarning).toEqual(expectedResolution);
+    expect(stream.resolveFinalText(finalText)).toEqual(expectedResolution);
     expect(
-      buildMattermostToolStatusText({
-        name: "exec",
-        args: { command: "pnpm test -- --watch=false" },
-        detailMode: "raw",
-        config: { streaming: { preview: { commandText: "status" } } },
-      }),
-    ).toBe("🛠️ Exec");
+      requestMock.mock.calls.map(([requestPath, init]) => ({
+        path: requestPath,
+        method: init?.method,
+        message: parseRequestJson(init).message,
+      })),
+    ).toEqual([
+      { path: "/posts", method: "POST", message: "First Second Third" },
+      { path: "/posts/post-1/patch", method: "PUT", message: "First" },
+      { path: "/posts", method: "POST", message: "Second" },
+      { path: "/posts", method: "POST", message: "Third" },
+    ]);
   });
 });

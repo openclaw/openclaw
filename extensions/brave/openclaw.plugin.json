@@ -1,16 +1,15 @@
 {
   "id": "brave",
+  "categories": ["web"],
+  "name": "Brave",
+  "description": "OpenClaw Brave Search provider plugin for web search.",
   "activation": {
     "onStartup": false
-  },
-  "providerAuthEnvVars": {
-    "brave": ["BRAVE_API_KEY"]
   },
   "setup": {
     "providers": [
       {
         "id": "brave",
-        "authMethods": ["api-key"],
         "envVars": ["BRAVE_API_KEY"]
       }
     ]
@@ -34,9 +33,14 @@
   "contracts": {
     "webSearchProviders": ["brave"]
   },
-  "configContracts": {
-    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
-  },
+  "configGroups": [
+    {
+      "id": "web-search",
+      "title": "Web search",
+      "order": 10,
+      "properties": ["webSearch"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

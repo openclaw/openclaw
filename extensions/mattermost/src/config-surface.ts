@@ -1,4 +1,4 @@
-import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-primitives";
+import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
 import { MattermostConfigSchema } from "./config-schema-core.js";
 import { mattermostChannelConfigUiHints } from "./config-ui-hints.js";
 

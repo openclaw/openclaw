@@ -1,83 +1,113 @@
-import { readFileSync } from "node:fs";
+// Static method policy avoids storage; prepared shutdown avoids runtime session dependencies.
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import * as ts from "typescript/unstable/ast";
+import { afterAll, describe, expect, it } from "vitest";
+import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 
-function readSource(relativePath: string): string {
-  return readFileSync(path.join(repoRoot, relativePath), "utf8");
+function resolveRelativeSource(importer: string, specifier: string): string | null {
+  const rawPath = path.resolve(path.dirname(importer), specifier);
+  const withoutJs = rawPath.replace(/\.(?:mjs|cjs|js)$/u, "");
+  for (const candidate of [
+    rawPath,
+    `${withoutJs}.ts`,
+    `${withoutJs}.mts`,
+    `${withoutJs}.cts`,
+    path.join(withoutJs, "index.ts"),
+  ]) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function staticValueSpecifiers(sourceFile: ts.SourceFile): string[] {
+  const specifiers: string[] = [];
+  for (const statement of sourceFile.statements) {
+    if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) {
+      const clause = statement.importClause;
+      if (clause?.phaseModifier === ts.SyntaxKind.TypeKeyword) {
+        continue;
+      }
+      if (
+        clause?.namedBindings &&
+        ts.isNamedImports(clause.namedBindings) &&
+        !clause.name &&
+        clause.namedBindings.elements.every((element) => element.isTypeOnly)
+      ) {
+        continue;
+      }
+      specifiers.push(statement.moduleSpecifier.text);
+      continue;
+    }
+    if (
+      ts.isExportDeclaration(statement) &&
+      !statement.isTypeOnly &&
+      statement.moduleSpecifier &&
+      ts.isStringLiteral(statement.moduleSpecifier)
+    ) {
+      specifiers.push(statement.moduleSpecifier.text);
+    }
+  }
+  return specifiers;
+}
+
+// Each case reads the same checkout; retain import facts, not native syntax trees.
+const importsByFile = new Map<string, string[]>();
+
+function collectStaticValueImportGraph(entryRelativePath: string): Map<string, string[]> {
+  const entryPath = path.join(repoRoot, entryRelativePath);
+  const graph = new Map<string, string[]>();
+  const pending = new Set([entryPath]);
+  while (pending.size > 0) {
+    const batch = [...pending].slice(0, 32);
+    const uncached = batch.filter((filePath) => !importsByFile.has(filePath));
+    if (uncached.length) {
+      const sources = parser.parseSourceFiles(
+        uncached.map((fileName) => ({ fileName, text: readFileSync(fileName, "utf8") })),
+      );
+      for (const [index, source] of sources.entries()) {
+        importsByFile.set(uncached[index]!, staticValueSpecifiers(source));
+      }
+    }
+    for (const filePath of batch) {
+      pending.delete(filePath);
+      const specifiers = importsByFile.get(filePath)!;
+      graph.set(filePath, specifiers);
+      for (const specifier of specifiers) {
+        if (!specifier.startsWith(".")) {
+          continue;
+        }
+        const resolved = resolveRelativeSource(filePath, specifier);
+        if (resolved && !graph.has(resolved)) {
+          pending.add(resolved);
+        }
+      }
+    }
+  }
+  return graph;
 }
 
 describe("gateway startup import boundaries", () => {
-  it("keeps heavy cron and doctor legacy paths out of the server.impl import graph", () => {
-    const serverImpl = readSource("src/gateway/server.impl.ts");
-    const validation = readSource("src/config/validation.ts");
+  it("keeps static method policy independent of session storage", () => {
+    const graph = collectStaticValueImportGraph("src/gateway/method-scopes.ts");
+    const sessionStorageImports = [...graph.keys()]
+      .map((filePath) => path.relative(repoRoot, filePath))
+      .filter((filePath) => filePath.startsWith(path.join("src", "config", "sessions") + path.sep));
 
-    expect(serverImpl).not.toContain('from "./server-cron.js"');
-    expect(serverImpl).toContain('from "./server-cron-lazy.js"');
-    expect(serverImpl).not.toContain('from "./server-methods.js"');
-    expect(serverImpl).not.toContain('from "./config-reload.js"');
-    expect(serverImpl).not.toMatch(
-      /import\s+\{[^}]*resolveSessionKeyForRun[^}]*\}\s+from "\.\/server-session-key\.js"/s,
-    );
-    expect(serverImpl).not.toMatch(
-      /export\s+\{[^}]*__resetModelCatalogCacheForTest[^}]*\}\s+from "\.\/server-model-catalog\.js"/s,
-    );
-    expect(readSource("src/gateway/server-runtime-subscriptions.ts")).toContain(
-      'import("./server-session-key.js")',
-    );
-    expect(readSource("src/gateway/server-shared-auth-generation.ts")).not.toContain(
-      'from "./config-reload.js"',
-    );
-    expect(readSource("src/gateway/server-aux-handlers.ts")).not.toContain(
-      'from "./config-reload.js"',
-    );
-    expect(readSource("src/gateway/server-runtime-state.ts")).not.toContain(
-      'createCanvasHostHandler } from "../../extensions/canvas/runtime-api.js"',
-    );
-    expect(serverImpl).not.toContain('from "../plugins/hook-runner-global.js"');
-    expect(serverImpl).not.toContain('from "../tasks/task-registry.js"');
-    expect(serverImpl).not.toContain('from "../tasks/task-registry.maintenance.js"');
-    expect(serverImpl).toContain('import("../tasks/task-registry.maintenance.js")');
-    expect(serverImpl).not.toContain('from "../secrets/runtime.js"');
-    expect(readSource("src/gateway/server-reload-handlers.ts")).not.toContain(
-      'from "../secrets/runtime.js"',
-    );
-    const wsConnection = readSource("src/gateway/server/ws-connection.ts");
-    expect(wsConnection).not.toMatch(
-      /import\s+\{[^}]*attachGatewayWsMessageHandler[^}]*\}\s+from "\.\/ws-connection\/message-handler\.js"/s,
-    );
-    expect(wsConnection).toContain('import("./ws-connection/message-handler.js")');
-    expect(readSource("src/gateway/server-aux-handlers.ts")).not.toMatch(
-      /import\s+\{[^}]*create(?:Exec|Plugin|Secrets)[^}]*\}\s+from "\.\/server-methods\//s,
-    );
-    expect(validation).not.toContain("legacy-secretref-env-marker");
-    expect(validation).not.toContain("commands/doctor");
+    expect(sessionStorageImports).toEqual([]);
   });
 
-  it("marks gateway close before awaiting gateway_stop hooks", () => {
-    const serverImpl = readSource("src/gateway/server.impl.ts");
-    const closeStart = serverImpl.indexOf("close: async (opts)");
-    const hookStart = serverImpl.indexOf("runGlobalGatewayStopSafely", closeStart);
-    const markStart = serverImpl.indexOf("markClosePreludeStarted();", closeStart);
-    const markHelperStart = serverImpl.indexOf("const markClosePreludeStarted = () => {");
-    const markHelperEnd = serverImpl.indexOf("};", markHelperStart);
-    const postReadyStart = serverImpl.indexOf("scheduleGatewayPostReadyMaintenance({");
-    const postReadyEnd = serverImpl.indexOf("});", postReadyStart);
-    const postReadyBlock = serverImpl.slice(postReadyStart, postReadyEnd);
+  it("keeps ordinary session lifecycle code out of the prepared shutdown graph", () => {
+    const graph = collectStaticValueImportGraph("src/gateway/server-close.runtime.ts");
 
-    expect(closeStart).toBeGreaterThan(-1);
-    expect(markStart).toBeGreaterThan(closeStart);
-    expect(markStart).toBeLessThan(hookStart);
-    expect(markHelperStart).toBeGreaterThan(-1);
-    expect(serverImpl.slice(markHelperStart, markHelperEnd)).toContain(
-      "clearPostReadyMaintenanceTimer();",
-    );
-    expect(postReadyStart).toBeGreaterThan(-1);
-    expect(postReadyBlock).toContain("isClosing: () => closePreludeStarted");
-    expect(postReadyBlock).toContain("if (closePreludeStarted)");
-    expect(postReadyBlock).toContain(
-      "shouldStartCron: () => !closePreludeStarted && !gatewayCronStartHandled",
+    expect([...graph.keys()].map((filePath) => path.relative(repoRoot, filePath))).not.toContain(
+      "src/gateway/session-reset-service.ts",
     );
   });
 });

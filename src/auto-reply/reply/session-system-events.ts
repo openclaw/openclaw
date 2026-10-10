@@ -1,3 +1,7 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveUserTimezone } from "../../agents/date-time.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildChannelSummary } from "../../infra/channel-summary.js";
@@ -6,157 +10,136 @@ import {
   formatZonedTimestamp,
   resolveTimezone,
 } from "../../infra/format-time/format-datetime.ts";
-import { isExecCompletionEvent } from "../../infra/heartbeat-events-filter.js";
+import { isExecCompletionSystemEvent } from "../../infra/heartbeat-events-filter.js";
+import {
+  isSystemEventStoreCurrent,
+  resolveSystemEventQueueKey,
+} from "../../infra/system-event-ownership.js";
 import {
   consumeSelectedSystemEventEntries,
+  isSystemEventTurnOwned,
   peekSystemEventEntries,
   type SystemEvent,
 } from "../../infra/system-events.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+import { SESSION_CREATED_NOTICE_CONTEXT_PREFIX } from "../../sessions/session-state-event-kinds.js";
+import { acknowledgeSessionStateNotices } from "../../sessions/session-state-events.js";
+import { decodeSessionStateNoticeContextKey } from "../../sessions/session-state-notices.js";
 
-const selectGenericSystemEvents = (events: readonly SystemEvent[]): SystemEvent[] => {
-  const selected: SystemEvent[] = [];
-  for (const event of events) {
-    if (!isExecCompletionEvent(event.text)) {
-      selected.push(event);
-    }
+function compactSystemEvent(event: SystemEvent): string | null {
+  const trimmed = event.text.trim();
+  if (!trimmed) {
+    return null;
   }
-  return selected;
-};
-
-export type FormattedSystemEventBlock = {
-  text: string;
-  forceSenderIsOwnerFalse: boolean;
-};
-
-/** Drain queued system events, format as `System:` lines, return the block with authority metadata. */
-export async function drainFormattedSystemEventBlock(params: {
-  cfg: OpenClawConfig;
-  sessionKey: string;
-  isMainSession: boolean;
-  isNewSession: boolean;
-}): Promise<FormattedSystemEventBlock | undefined> {
-  const compactSystemEvent = (line: string): string | null => {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      return null;
-    }
-    const lower = normalizeLowercaseStringOrEmpty(trimmed);
-    if (lower.includes("reason periodic")) {
-      return null;
-    }
-    // Filter out the actual heartbeat prompt, but not cron jobs that mention "heartbeat".
-    // The heartbeat prompt starts with "Read HEARTBEAT.md" - cron payloads won't match this.
-    if (lower.startsWith("read heartbeat.md")) {
-      return null;
-    }
-    if (lower.includes("heartbeat poll") || lower.includes("heartbeat wake")) {
-      return null;
-    }
-    if (trimmed.startsWith("Node:")) {
-      return trimmed.replace(/ · last input [^·]+/i, "").trim();
-    }
+  // Creation metadata may mention heartbeat work; it is not a retired wake prompt.
+  if (event.contextKey?.startsWith(SESSION_CREATED_NOTICE_CONTEXT_PREFIX)) {
     return trimmed;
-  };
+  }
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
+  // Keep retired heartbeat prompts out of replayed legacy system events.
+  if (
+    lower.includes("reason periodic") ||
+    lower.startsWith("read heartbeat.md") ||
+    lower.includes("heartbeat poll") ||
+    lower.includes("heartbeat wake")
+  ) {
+    return null;
+  }
+  if (trimmed.startsWith("Node:")) {
+    return trimmed.replace(/ · last input [^·]+/i, "").trim();
+  }
+  return trimmed;
+}
 
-  const resolveSystemEventTimezone = (cfg: OpenClawConfig) => {
-    const raw = normalizeOptionalString(cfg.agents?.defaults?.envelopeTimezone);
-    if (!raw) {
-      return { mode: "local" as const };
-    }
-    const lowered = normalizeLowercaseStringOrEmpty(raw);
-    if (lowered === "utc" || lowered === "gmt") {
-      return { mode: "utc" as const };
-    }
-    if (lowered === "local" || lowered === "host") {
-      return { mode: "local" as const };
-    }
-    if (lowered === "user") {
-      return {
-        mode: "iana" as const,
-        timeZone: resolveUserTimezone(cfg.agents?.defaults?.userTimezone),
-      };
-    }
-    const explicit = resolveTimezone(raw);
-    return explicit ? { mode: "iana" as const, timeZone: explicit } : { mode: "local" as const };
-  };
+function resolveSystemEventTimezone(cfg: OpenClawConfig) {
+  const raw = normalizeOptionalString(cfg.agents?.defaults?.userTimezone);
+  const lowered = normalizeLowercaseStringOrEmpty(raw);
+  if (lowered === "utc" || lowered === "gmt") {
+    return { mode: "utc" as const };
+  }
+  if (!raw || lowered === "local" || lowered === "host") {
+    return { mode: "local" as const };
+  }
+  const timeZone =
+    lowered === "user"
+      ? resolveUserTimezone(cfg.agents?.defaults?.userTimezone)
+      : resolveTimezone(raw);
+  return timeZone ? { mode: "iana" as const, timeZone } : { mode: "local" as const };
+}
 
-  const formatSystemEventTimestamp = (ts: number, cfg: OpenClawConfig) => {
-    const date = new Date(ts);
-    if (Number.isNaN(date.getTime())) {
-      return "unknown-time";
-    }
-    const zone = resolveSystemEventTimezone(cfg);
-    if (zone.mode === "utc") {
-      return formatUtcTimestamp(date, { displaySeconds: true });
-    }
-    if (zone.mode === "local") {
-      return formatZonedTimestamp(date, { displaySeconds: true }) ?? "unknown-time";
-    }
-    return (
-      formatZonedTimestamp(date, { timeZone: zone.timeZone, displaySeconds: true }) ??
-      "unknown-time"
-    );
-  };
-
-  const summaryLines: string[] = [];
-  const systemLines: string[] = [];
-  let forceSenderIsOwnerFalse = false;
-  // Exec completions have a dedicated heartbeat prompt; leave those entries queued
-  // so the heartbeat path can consume and deliver them.
-  const queued = consumeSelectedSystemEventEntries(
-    params.sessionKey,
-    selectGenericSystemEvents(peekSystemEventEntries(params.sessionKey)),
+function formatSystemEventTimestamp(ts: number, cfg: OpenClawConfig) {
+  const date = new Date(ts);
+  if (Number.isNaN(date.getTime())) {
+    return "unknown-time";
+  }
+  const zone = resolveSystemEventTimezone(cfg);
+  if (zone.mode === "utc") {
+    return formatUtcTimestamp(date, { displaySeconds: true });
+  }
+  return (
+    formatZonedTimestamp(date, {
+      ...(zone.mode === "iana" ? { timeZone: zone.timeZone } : {}),
+      displaySeconds: true,
+    }) ?? "unknown-time"
   );
-  for (const event of queued) {
-    const compacted = compactSystemEvent(event.text);
-    if (!compacted) {
-      continue;
-    }
-    if (event.forceSenderIsOwnerFalse === true) {
-      forceSenderIsOwnerFalse = true;
-    }
-    const timestamp = `[${formatSystemEventTimestamp(event.ts, params.cfg)}]`;
-    let index = 0;
-    for (const subline of compacted.split("\n")) {
-      systemLines.push(`System: ${index === 0 ? `${timestamp} ` : ""}${subline}`);
-      index += 1;
-    }
-  }
-  if (params.isMainSession && params.isNewSession) {
-    const summary = await buildChannelSummary(params.cfg);
-    if (summary.length > 0) {
-      for (const line of summary) {
-        for (const subline of line.split("\n")) {
-          summaryLines.push(`System: ${subline}`);
-        }
-      }
-    }
-  }
-  if (summaryLines.length === 0 && systemLines.length === 0) {
-    return undefined;
-  }
-
-  // Each sub-line gets its own prefix so continuation lines can't be mistaken
-  // for regular user content.
-  return {
-    text:
-      summaryLines.length > 0
-        ? [...summaryLines, ...systemLines].join("\n")
-        : systemLines.join("\n"),
-    forceSenderIsOwnerFalse,
-  };
 }
 
 /** Drain queued system events, format as `System:` lines, return the block text (or undefined). */
 export async function drainFormattedSystemEvents(params: {
   cfg: OpenClawConfig;
+  agentId: string;
   sessionKey: string;
   isMainSession: boolean;
   isNewSession: boolean;
+  events?: readonly SystemEvent[];
+  deferredEventIds?: readonly string[];
+  onEventsAdmitted?: (events: readonly SystemEvent[]) => void;
 }): Promise<string | undefined> {
-  return (await drainFormattedSystemEventBlock(params))?.text;
+  const systemLines: string[] = [];
+  const queueKey = resolveSystemEventQueueKey(params.sessionKey, params.agentId);
+  // Claimed turns and legacy exec wakes retain their own execution and delivery owner.
+  const queued = consumeSelectedSystemEventEntries(
+    queueKey,
+    (params.events ?? peekSystemEventEntries(queueKey)).filter(
+      (event) => !isSystemEventTurnOwned(queueKey, event) && !isExecCompletionSystemEvent(event),
+    ),
+    { deferredEventIds: params.deferredEventIds },
+  );
+  params.onEventsAdmitted?.(queued);
+  const sessionStateNotices = queued.flatMap((event) => {
+    const targetSessionKey = event.contextKey
+      ? decodeSessionStateNoticeContextKey(event.contextKey)
+      : undefined;
+    return targetSessionKey === undefined
+      ? []
+      : [{ targetSessionKey, watcherStorePath: event.sessionStorePath ?? null }];
+  });
+  if (sessionStateNotices.length > 0) {
+    await acknowledgeSessionStateNotices(params.sessionKey, sessionStateNotices);
+  }
+  for (const event of queued) {
+    // A same-store resolver handoff does not retire already-consumed events.
+    if (!isSystemEventStoreCurrent(params.sessionKey, event.sessionStorePath, params.agentId)) {
+      continue;
+    }
+    const compacted = compactSystemEvent(event);
+    if (!compacted) {
+      continue;
+    }
+    const timestamp = `[${formatSystemEventTimestamp(event.ts, params.cfg)}]`;
+    // Inbound text is deliberately not rewritten to neutralize look-alike `System:` lines.
+    // Role separation plus external-content wrapping is the boundary.
+    // This is an explicit product decision.
+    for (const [index, subline] of compacted.split("\n").entries()) {
+      systemLines.push(`System: ${index === 0 ? `${timestamp} ` : ""}${subline}`);
+    }
+  }
+  // Each sub-line gets its own prefix so continuation lines can't be mistaken
+  // for regular user content.
+  const summaryLines =
+    params.isMainSession && params.isNewSession
+      ? (await buildChannelSummary(params.cfg)).flatMap((line) =>
+          line.split("\n").map((subline) => `System: ${subline}`),
+        )
+      : [];
+  return [...summaryLines, ...systemLines].join("\n") || undefined;
 }

@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes } from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 
 const TRACEPARENT_VERSION = "00";
 const DEFAULT_TRACE_FLAGS = "01";
@@ -27,38 +28,19 @@ type DiagnosticTraceContextInput = Partial<DiagnosticTraceContext> & {
 
 type DiagnosticTraceScopeState = {
   marker: symbol;
-  storage: AsyncLocalStorage<DiagnosticTraceContext>;
+  storage: AsyncLocalStorage<DiagnosticTraceContext | undefined>;
 };
-
-function randomHex(bytes: number): string {
-  return randomBytes(bytes).toString("hex");
-}
 
 function isNonZeroHex(value: string): boolean {
   return !/^0+$/.test(value);
 }
 
-function randomTraceId(): string {
-  let traceId = randomHex(16);
-  while (!isNonZeroHex(traceId)) {
-    traceId = randomHex(16);
+function randomNonZeroHex(bytes: number): string {
+  let value = randomBytes(bytes).toString("hex");
+  while (!isNonZeroHex(value)) {
+    value = randomBytes(bytes).toString("hex");
   }
-  return traceId;
-}
-
-function randomSpanId(): string {
-  let spanId = randomHex(8);
-  while (!isNonZeroHex(spanId)) {
-    spanId = randomHex(8);
-  }
-  return spanId;
-}
-
-function createDiagnosticTraceScopeState(): DiagnosticTraceScopeState {
-  return {
-    marker: DIAGNOSTIC_TRACE_SCOPE_STATE_KEY,
-    storage: new AsyncLocalStorage<DiagnosticTraceContext>(),
-  };
+  return value;
 }
 
 function isDiagnosticTraceScopeState(value: unknown): value is DiagnosticTraceScopeState {
@@ -78,7 +60,10 @@ function getDiagnosticTraceScopeState(): DiagnosticTraceScopeState {
   if (isDiagnosticTraceScopeState(existing)) {
     return existing;
   }
-  const state = createDiagnosticTraceScopeState();
+  const state: DiagnosticTraceScopeState = {
+    marker: DIAGNOSTIC_TRACE_SCOPE_STATE_KEY,
+    storage: new AsyncLocalStorage<DiagnosticTraceContext | undefined>(),
+  };
   Object.defineProperty(globalThis, DIAGNOSTIC_TRACE_SCOPE_STATE_KEY, {
     configurable: true,
     enumerable: false,
@@ -88,42 +73,33 @@ function getDiagnosticTraceScopeState(): DiagnosticTraceScopeState {
   return state;
 }
 
+/** Returns whether a value is a non-zero W3C trace id. */
 export function isValidDiagnosticTraceId(value: unknown): value is string {
   return typeof value === "string" && TRACE_ID_RE.test(value) && isNonZeroHex(value);
 }
 
+/** Returns whether a value is a non-zero W3C span id. */
 export function isValidDiagnosticSpanId(value: unknown): value is string {
   return typeof value === "string" && SPAN_ID_RE.test(value) && isNonZeroHex(value);
 }
 
+/** Returns whether a value is a valid W3C trace-flags byte. */
 export function isValidDiagnosticTraceFlags(value: unknown): value is string {
   return typeof value === "string" && TRACE_FLAGS_RE.test(value);
 }
 
-function normalizeTraceId(value: unknown): string | undefined {
+function normalizeTraceField(
+  value: unknown,
+  isValid: (value: unknown) => boolean,
+): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
   const normalized = value.toLowerCase();
-  return isValidDiagnosticTraceId(normalized) ? normalized : undefined;
+  return isValid(normalized) ? normalized : undefined;
 }
 
-function normalizeSpanId(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.toLowerCase();
-  return isValidDiagnosticSpanId(normalized) ? normalized : undefined;
-}
-
-function normalizeTraceFlags(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.toLowerCase();
-  return isValidDiagnosticTraceFlags(normalized) ? normalized : undefined;
-}
-
+/** Parses a W3C `traceparent` header into a normalized diagnostic trace context. */
 export function parseDiagnosticTraceparent(
   traceparent: string | undefined,
 ): DiagnosticTraceContext | undefined {
@@ -131,65 +107,77 @@ export function parseDiagnosticTraceparent(
     return undefined;
   }
   const parts = traceparent.trim().toLowerCase().split("-");
-  if (!parts || parts.length < 4) {
+  if (parts.length < 4) {
     return undefined;
   }
   const [version, traceId, spanId, traceFlags] = parts;
   if (
-    !TRACEPARENT_VERSION_RE.test(version) ||
+    !TRACEPARENT_VERSION_RE.test(expectDefined(version, "diagnostic trace context version")) ||
     version === "ff" ||
     (version === TRACEPARENT_VERSION && parts.length !== 4)
   ) {
     return undefined;
   }
-  const normalizedTraceId = normalizeTraceId(traceId);
-  const normalizedSpanId = normalizeSpanId(spanId);
-  const normalizedTraceFlags = normalizeTraceFlags(traceFlags);
-  if (!normalizedTraceId || !normalizedSpanId || !normalizedTraceFlags) {
+  if (
+    !isValidDiagnosticTraceId(traceId) ||
+    !isValidDiagnosticSpanId(spanId) ||
+    !isValidDiagnosticTraceFlags(traceFlags)
+  ) {
     return undefined;
   }
-  return {
-    traceId: normalizedTraceId,
-    spanId: normalizedSpanId,
-    traceFlags: normalizedTraceFlags,
-  };
+  return { traceId, spanId, traceFlags };
 }
 
+/** Formats a diagnostic trace context as a W3C `traceparent` header. */
 export function formatDiagnosticTraceparent(
   context: DiagnosticTraceContext | undefined,
 ): string | undefined {
   if (!context?.spanId) {
     return undefined;
   }
-  const traceId = normalizeTraceId(context.traceId);
-  const spanId = normalizeSpanId(context.spanId);
-  const traceFlags = normalizeTraceFlags(context.traceFlags) ?? DEFAULT_TRACE_FLAGS;
+  const traceId = normalizeTraceField(context.traceId, isValidDiagnosticTraceId);
+  const spanId = normalizeTraceField(context.spanId, isValidDiagnosticSpanId);
+  const traceFlags =
+    normalizeTraceField(context.traceFlags, isValidDiagnosticTraceFlags) ?? DEFAULT_TRACE_FLAGS;
   if (!traceId || !spanId) {
     return undefined;
   }
   return `${TRACEPARENT_VERSION}-${traceId}-${spanId}-${traceFlags}`;
 }
 
+/** Creates a normalized trace context from explicit fields, traceparent, or generated ids. */
 export function createDiagnosticTraceContext(
   input: DiagnosticTraceContextInput = {},
 ): DiagnosticTraceContext {
   const parsed = parseDiagnosticTraceparent(input.traceparent);
-  const traceId = normalizeTraceId(input.traceId) ?? parsed?.traceId ?? randomTraceId();
-  const spanId = normalizeSpanId(input.spanId) ?? parsed?.spanId ?? randomSpanId();
-  const parentSpanId = normalizeSpanId(input.parentSpanId);
+  const traceId =
+    normalizeTraceField(input.traceId, isValidDiagnosticTraceId) ??
+    parsed?.traceId ??
+    randomNonZeroHex(16);
+  const spanId =
+    normalizeTraceField(input.spanId, isValidDiagnosticSpanId) ??
+    parsed?.spanId ??
+    randomNonZeroHex(8);
+  const parentSpanId = normalizeTraceField(input.parentSpanId, isValidDiagnosticSpanId);
   return {
     traceId,
     spanId,
     ...(parentSpanId && parentSpanId !== spanId ? { parentSpanId } : {}),
-    traceFlags: normalizeTraceFlags(input.traceFlags) ?? parsed?.traceFlags ?? DEFAULT_TRACE_FLAGS,
+    traceFlags:
+      normalizeTraceField(input.traceFlags, isValidDiagnosticTraceFlags) ??
+      parsed?.traceFlags ??
+      DEFAULT_TRACE_FLAGS,
   };
 }
 
+/** Creates a child context that preserves the parent trace id and records the parent span id. */
 export function createChildDiagnosticTraceContext(
   parent: DiagnosticTraceContext,
   input: Omit<DiagnosticTraceContextInput, "traceId" | "traceparent"> = {},
 ): DiagnosticTraceContext {
-  const parentSpanId = normalizeSpanId(input.parentSpanId) ?? normalizeSpanId(parent.spanId);
+  const parentSpanId =
+    normalizeTraceField(input.parentSpanId, isValidDiagnosticSpanId) ??
+    normalizeTraceField(parent.spanId, isValidDiagnosticSpanId);
   return createDiagnosticTraceContext({
     traceId: parent.traceId,
     spanId: input.spanId,
@@ -198,6 +186,7 @@ export function createChildDiagnosticTraceContext(
   });
 }
 
+/** Creates a child of the active trace scope, or a new root context when no scope is active. */
 export function createDiagnosticTraceContextFromActiveScope(
   input: Omit<DiagnosticTraceContextInput, "traceId" | "traceparent"> = {},
 ): DiagnosticTraceContext {
@@ -208,6 +197,7 @@ export function createDiagnosticTraceContextFromActiveScope(
   return createChildDiagnosticTraceContext(active, input);
 }
 
+/** Returns an immutable defensive copy of a trace context. */
 export function freezeDiagnosticTraceContext(
   context: DiagnosticTraceContext,
 ): DiagnosticTraceContext {
@@ -219,17 +209,18 @@ export function freezeDiagnosticTraceContext(
   });
 }
 
+/** Returns the trace context bound to the current async scope. */
 export function getActiveDiagnosticTraceContext(): DiagnosticTraceContext | undefined {
   return getDiagnosticTraceScopeState().storage.getStore();
 }
 
+/** Runs a callback with a frozen trace context, or explicitly without a trace. */
 export function runWithDiagnosticTraceContext<T>(
-  trace: DiagnosticTraceContext,
+  trace: DiagnosticTraceContext | undefined,
   callback: () => T,
 ): T {
-  return getDiagnosticTraceScopeState().storage.run(freezeDiagnosticTraceContext(trace), callback);
-}
-
-export function resetDiagnosticTraceContextForTest(): void {
-  getDiagnosticTraceScopeState().storage.disable();
+  return getDiagnosticTraceScopeState().storage.run(
+    trace === undefined ? undefined : freezeDiagnosticTraceContext(trace),
+    callback,
+  );
 }

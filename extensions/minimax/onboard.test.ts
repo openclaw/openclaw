@@ -1,3 +1,4 @@
+// Minimax tests cover onboard plugin behavior.
 import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
 import {
   expectProviderOnboardMergedLegacyConfig,
@@ -14,17 +15,12 @@ describe("minimax onboard", () => {
       baseUrl: "https://api.minimax.io/anthropic",
       api: "anthropic-messages",
       authHeader: true,
-      models: [buildMinimaxApiModelDefinition("MiniMax-M2.7")],
+      models: [buildMinimaxApiModelDefinition("MiniMax-M3")],
     });
-    expect(cfg.agents?.defaults?.models?.["minimax/MiniMax-M2.7"]).toEqual({
+    expect(cfg.agents?.defaults?.models?.["minimax/MiniMax-M3"]).toEqual({
       alias: "Minimax",
     });
-    expect(cfg.agents?.defaults?.model).toEqual({ primary: "minimax/MiniMax-M2.7" });
-  });
-
-  it("keeps reasoning enabled for MiniMax-M2.7", () => {
-    const cfg = applyMinimaxApiConfig({}, "MiniMax-M2.7");
-    expect(cfg.models?.providers?.minimax?.models[0]?.reasoning).toBe(true);
+    expect(cfg.agents?.defaults?.model).toEqual({ primary: "minimax/MiniMax-M3" });
   });
 
   it("keeps MiniMax chat models text-only so image tools use MiniMax-VL-01", () => {
@@ -73,34 +69,58 @@ describe("minimax onboard", () => {
       legacyApi: "openai-completions",
     });
     expect(provider?.authHeader).toBe(true);
-    expect(provider?.models.map((m) => m.id)).toEqual(["old-model", "MiniMax-M2.7"]);
+    expect(provider?.models.map((m) => m.id)).toEqual(["old-model", "MiniMax-M3"]);
   });
 
-  it("preserves other providers when adding minimax", () => {
+  it("drops placeholder apiKey while preserving provider timeout", () => {
     const cfg = applyMinimaxApiConfig({
       models: {
         providers: {
-          anthropic: {
-            baseUrl: "https://api.anthropic.com",
-            apiKey: "anthropic-key",
+          minimax: {
+            baseUrl: "https://api.minimax.io/anthropic",
+            apiKey: "minimax",
             api: "anthropic-messages",
-            models: [
-              {
-                id: "claude-opus-4-5",
-                name: "Claude Opus 4.5",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 15, output: 75, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 200000,
-                maxTokens: 8192,
-              },
-            ],
+            timeoutSeconds: 900,
+            models: [buildMinimaxApiModelDefinition("MiniMax-M2.7")],
           },
         },
       },
     });
-    expect(cfg.models?.providers).toHaveProperty("anthropic");
-    expect(cfg.models?.providers).toHaveProperty("minimax");
+
+    expect(cfg.models?.providers?.minimax?.apiKey).toBeUndefined();
+    expect(cfg.models?.providers?.minimax?.timeoutSeconds).toBe(900);
+    expect(cfg.models?.providers?.minimax?.models.map((m) => m.id)).toEqual([
+      "MiniMax-M2.7",
+      "MiniMax-M3",
+    ]);
+  });
+
+  it("preserves models from a non-canonical provider key", () => {
+    const cfg = applyMinimaxApiConfig({
+      models: {
+        providers: {
+          MiniMax: {
+            baseUrl: "https://api.minimax.io/anthropic",
+            api: "anthropic-messages",
+            apiKey: { source: "env", provider: "default", id: "MINIMAX_API_KEY" },
+            timeoutSeconds: 900,
+            models: [buildMinimaxApiModelDefinition("MiniMax-M2.7")],
+          },
+        },
+      },
+    });
+
+    expect(Object.keys(cfg.models?.providers ?? {})).toEqual(["minimax"]);
+    expect(cfg.models?.providers?.minimax?.apiKey).toEqual({
+      source: "env",
+      provider: "default",
+      id: "MINIMAX_API_KEY",
+    });
+    expect(cfg.models?.providers?.minimax?.timeoutSeconds).toBe(900);
+    expect(cfg.models?.providers?.minimax?.models.map((model) => model.id)).toEqual([
+      "MiniMax-M2.7",
+      "MiniMax-M3",
+    ]);
   });
 
   it("preserves existing models mode", () => {

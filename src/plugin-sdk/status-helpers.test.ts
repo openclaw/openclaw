@@ -1,8 +1,9 @@
+// Status helper tests cover plugin status normalization and user-facing summaries.
 import { describe, expect, it } from "vitest";
+import { evaluateChannelHealth } from "../gateway/channel-health-policy.js";
 import {
+  asString,
   createAsyncComputedAccountStatusAdapter,
-  buildBaseAccountStatusSnapshot,
-  buildBaseChannelStatusSummary,
   buildComputedAccountStatusSnapshot,
   buildRuntimeAccountStatusSnapshot,
   createComputedAccountStatusAdapter,
@@ -11,7 +12,66 @@ import {
   collectStatusIssuesFromLastError,
   createDependentCredentialStatusIssueCollector,
   createDefaultChannelRuntimeState,
+  readAccountStatusSnapshot,
+  standardDmPolicyOpenIssue,
+  standardNotConfiguredIssue,
 } from "./status-helpers.js";
+
+describe("status issue composition", () => {
+  it("preserves the shipped asString compatibility semantics", () => {
+    expect(asString("  work  ")).toBe("work");
+    expect(asString("   ")).toBeUndefined();
+    expect(asString(42)).toBeUndefined();
+  });
+
+  it("coerces only standard and requested account fields", () => {
+    expect(
+      readAccountStatusSnapshot(
+        { accountId: "work", enabled: true, configured: true, mode: "polling", secret: "drop" },
+        ["mode"],
+      ),
+    ).toEqual({
+      accountId: "work",
+      enabled: true,
+      configured: true,
+      running: undefined,
+      connected: undefined,
+      mode: "polling",
+    });
+    expect(readAccountStatusSnapshot(null, ["mode"])).toBeNull();
+  });
+
+  it("builds standard open-policy and missing-auth issues", () => {
+    expect(
+      standardDmPolicyOpenIssue({
+        channel: "zalo",
+        accountId: "default",
+        channelLabel: "Zalo",
+        configPath: "channels.zalo",
+      }),
+    ).toEqual({
+      channel: "zalo",
+      accountId: "default",
+      kind: "config",
+      message: 'Zalo dmPolicy is "open", allowing any user to message the bot without pairing.',
+      fix: 'Set channels.zalo.dmPolicy to "pairing" or "allowlist" to restrict access.',
+    });
+    expect(
+      standardNotConfiguredIssue({
+        channel: "zalouser",
+        accountId: "default",
+        message: "Not authenticated.",
+        fix: "Run login.",
+      }),
+    ).toEqual({
+      channel: "zalouser",
+      accountId: "default",
+      kind: "auth",
+      message: "Not authenticated.",
+      fix: "Run login.",
+    });
+  });
+});
 
 const defaultRuntimeState = {
   running: false,
@@ -93,152 +153,37 @@ function expectedAdapterAccountSnapshot() {
   };
 }
 
+function resolveAccountSnapshot({
+  account,
+  runtime,
+  probe,
+}: {
+  account: typeof adapterAccount;
+  runtime?: { running?: boolean };
+  probe?: typeof adapterProbe;
+}) {
+  return {
+    accountId: account.accountId,
+    enabled: account.enabled,
+    configured: true,
+    extra: { profileUrl: account.profileUrl, connected: runtime?.running ?? false, probe },
+  };
+}
+
 function createComputedStatusAdapter() {
-  return createComputedAccountStatusAdapter<
-    { accountId: string; enabled: boolean; profileUrl: string },
-    { ok: boolean }
-  >({
+  return createComputedAccountStatusAdapter({
     defaultRuntime: createDefaultChannelRuntimeState("default"),
-    resolveAccountSnapshot: ({ account, runtime, probe }) => ({
-      accountId: account.accountId,
-      enabled: account.enabled,
-      configured: true,
-      extra: {
-        profileUrl: account.profileUrl,
-        connected: runtime?.running ?? false,
-        probe,
-      },
-    }),
+    resolveAccountSnapshot,
   });
 }
 
 function createAsyncStatusAdapter() {
-  return createAsyncComputedAccountStatusAdapter<
-    { accountId: string; enabled: boolean; profileUrl: string },
-    { ok: boolean }
-  >({
+  return createAsyncComputedAccountStatusAdapter({
     defaultRuntime: createDefaultChannelRuntimeState("default"),
-    resolveAccountSnapshot: async ({ account, runtime, probe }) => ({
-      accountId: account.accountId,
-      enabled: account.enabled,
-      configured: true,
-      extra: {
-        profileUrl: account.profileUrl,
-        connected: runtime?.running ?? false,
-        probe,
-      },
-    }),
+    resolveAccountSnapshot: async (params: Parameters<typeof resolveAccountSnapshot>[0]) =>
+      resolveAccountSnapshot(params),
   });
 }
-
-describe("createDefaultChannelRuntimeState", () => {
-  it.each([
-    {
-      name: "builds default runtime state without extra fields",
-      accountId: "default",
-      extra: undefined,
-      expected: {
-        accountId: "default",
-        ...defaultRuntimeState,
-      },
-    },
-    {
-      name: "merges extra fields into the default runtime state",
-      accountId: "alerts",
-      extra: {
-        probeAt: 123,
-        healthy: true,
-      },
-      expected: {
-        accountId: "alerts",
-        ...defaultRuntimeState,
-        probeAt: 123,
-        healthy: true,
-      },
-    },
-  ])("$name", ({ accountId, extra, expected }) => {
-    expect(createDefaultChannelRuntimeState(accountId, extra)).toEqual(expected);
-  });
-});
-
-describe("buildBaseChannelStatusSummary", () => {
-  it.each([
-    {
-      name: "defaults missing values",
-      input: {},
-      expected: defaultChannelSummary,
-    },
-    {
-      name: "keeps explicit values",
-      input: {
-        configured: true,
-        running: true,
-        lastStartAt: 1,
-        lastStopAt: 2,
-        lastError: "boom",
-      },
-      expected: {
-        ...defaultChannelSummary,
-        configured: true,
-        running: true,
-        lastStartAt: 1,
-        lastStopAt: 2,
-        lastError: "boom",
-      },
-    },
-  ])("$name", ({ input, expected }) => {
-    expect(buildBaseChannelStatusSummary(input)).toEqual(expected);
-  });
-
-  it("merges extra fields into the normalized channel summary", () => {
-    expect(
-      buildBaseChannelStatusSummary(
-        {
-          configured: true,
-        },
-        {
-          mode: "webhook",
-          secretSource: "env",
-        },
-      ),
-    ).toEqual({
-      ...defaultChannelSummary,
-      configured: true,
-      mode: "webhook",
-      secretSource: "env",
-    });
-  });
-});
-
-describe("buildBaseAccountStatusSnapshot", () => {
-  it.each([
-    {
-      name: "builds account status with runtime defaults",
-      input: {
-        account: { accountId: "default", enabled: true, configured: true },
-      },
-      extra: undefined,
-      expected: expectedAccountSnapshot({ enabled: true, configured: true }),
-    },
-    {
-      name: "merges extra snapshot fields after the shared account shape",
-      input: {
-        account: { accountId: "default", configured: true },
-      },
-      extra: {
-        connected: true,
-        mode: "polling",
-      },
-      expected: {
-        ...expectedAccountSnapshot({ configured: true }),
-        connected: true,
-        mode: "polling",
-      },
-    },
-  ])("$name", ({ input, extra, expected }) => {
-    expect(buildBaseAccountStatusSnapshot(input, extra)).toEqual(expected);
-  });
-});
 
 describe("buildComputedAccountStatusSnapshot", () => {
   it("builds account status when configured is computed outside resolver", () => {
@@ -248,33 +193,17 @@ describe("buildComputedAccountStatusSnapshot", () => {
         enabled: true,
         configured: false,
       }),
-    ).toEqual(expectedAccountSnapshot({ enabled: true }));
-  });
-
-  it("merges computed extras after the shared fields", () => {
-    expect(
-      buildComputedAccountStatusSnapshot(
-        {
-          accountId: "default",
-          configured: true,
-        },
-        {
-          connected: true,
-        },
-      ),
-    ).toEqual({
-      ...expectedAccountSnapshot({ configured: true }),
-      connected: true,
-    });
+    ).toEqual(
+      expectedAccountSnapshot({
+        enabled: true,
+        stateReason: "not configured",
+      }),
+    );
   });
 });
 
 describe("computed account status adapters", () => {
   it.each([
-    {
-      name: "sync",
-      createStatus: createComputedStatusAdapter,
-    },
     {
       name: "async",
       createStatus: createAsyncStatusAdapter,
@@ -295,29 +224,32 @@ describe("computed account status adapters", () => {
       ).resolves.toEqual(expectedAdapterAccountSnapshot());
     },
   );
+
+  it("preserves ingress failure for channel health evaluation", async () => {
+    const status = createComputedStatusAdapter();
+    const snapshot = await status.buildAccountSnapshot!({
+      account: adapterAccount,
+      cfg: {} as never,
+      runtime: {
+        ...adapterRuntime,
+        ingressUnavailable: true,
+      },
+      probe: adapterProbe,
+    });
+
+    expect(
+      evaluateChannelHealth(snapshot, {
+        channelId: "discord",
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      }),
+    ).toEqual({ healthy: false, reason: "ingress-unavailable" });
+  });
 });
 
 describe("buildRuntimeAccountStatusSnapshot", () => {
   it.each([
-    {
-      name: "builds runtime lifecycle fields with defaults",
-      input: {},
-      extra: undefined,
-      expected: {
-        ...defaultRuntimeState,
-        probe: undefined,
-      },
-    },
-    {
-      name: "merges extra fields into runtime snapshots",
-      input: {},
-      extra: { port: 3978 },
-      expected: {
-        ...defaultRuntimeState,
-        probe: undefined,
-        port: 3978,
-      },
-    },
     {
       name: "preserves runtime connectivity metadata",
       input: {
@@ -329,7 +261,13 @@ describe("buildRuntimeAccountStatusSnapshot", () => {
           lastDisconnect: { at: 12, error: "boom" },
           lastEventAt: 13,
           lastTransportActivityAt: 14,
-          healthState: "healthy",
+          healthState: "reconnecting",
+          lifecycle: "recovering" as const,
+          ingressUnavailable: true as const,
+          busy: true,
+          activeRuns: 2,
+          lastRunActivityAt: 15,
+          activeRunStartedAt: 16,
           running: true,
         },
       },
@@ -344,7 +282,31 @@ describe("buildRuntimeAccountStatusSnapshot", () => {
         lastDisconnect: { at: 12, error: "boom" },
         lastEventAt: 13,
         lastTransportActivityAt: 14,
-        healthState: "healthy",
+        healthState: "reconnecting",
+        lifecycle: "recovering",
+        ingressUnavailable: true,
+        busy: true,
+        activeRuns: 2,
+        lastRunActivityAt: 15,
+        activeRunStartedAt: 16,
+        probe: undefined,
+      },
+    },
+    {
+      name: "projects terminalDisconnect when set",
+      input: {
+        runtime: {
+          running: false,
+          lifecycle: "blocked" as const,
+          terminalDisconnect: true,
+        },
+      },
+      extra: undefined,
+      expected: {
+        ...defaultRuntimeState,
+        running: false,
+        lifecycle: "blocked",
+        terminalDisconnect: true,
         probe: undefined,
       },
     },

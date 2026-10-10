@@ -1,3 +1,4 @@
+// Elevenlabs tests cover elevenlabs plugin behavior.
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
@@ -7,11 +8,10 @@ import {
   runRealtimeSttLiveTest,
   synthesizeElevenLabsLiveSpeech,
 } from "openclaw/plugin-sdk/provider-test-contracts";
-import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
+import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 import { elevenLabsMediaUnderstandingProvider } from "./media-understanding-provider.js";
-import { buildElevenLabsRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
 
 const ELEVENLABS_KEY = process.env.ELEVENLABS_API_KEY ?? "";
 const LIVE = isLiveTestEnabled(["ELEVENLABS_LIVE_TEST"]);
@@ -65,7 +65,8 @@ describeLive("elevenlabs plugin live", () => {
   }, 90_000);
 
   it("streams realtime STT through the registered transcription provider", async () => {
-    const provider = buildElevenLabsRealtimeTranscriptionProvider();
+    const { realtimeTranscriptionProviders } = await registerElevenLabsPlugin();
+    const provider = requireRegisteredProvider(realtimeTranscriptionProviders, "elevenlabs");
     const phrase = "Testing OpenClaw ElevenLabs realtime transcription integration OK.";
     const speech = await synthesizeElevenLabsLiveSpeech({
       text: phrase,

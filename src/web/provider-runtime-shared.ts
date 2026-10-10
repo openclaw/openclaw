@@ -1,19 +1,32 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeSecretInputString, resolveSecretInputRef } from "../config/types.secrets.js";
+import {
+  coerceSecretRef,
+  isLegacySecretRefEnvMarker,
+  normalizeSecretInputString,
+} from "../config/types.secrets.js";
+import type { PluginWebSearchProviderEntry } from "../plugins/web-provider-types.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 
-type RuntimeWebProviderMetadata = {
-  providerConfigured?: string;
-  selectedProvider?: string;
+type WebProviderConfigSource = {
+  tools?: {
+    web?: {
+      search?: unknown;
+      fetch?: unknown;
+    };
+  };
 };
 
-type ProviderWithCredential = {
-  envVars: string[];
-  requiresCredential?: boolean;
-};
+export type WebProviderWithCredential = Pick<
+  PluginWebSearchProviderEntry,
+  | "envVars"
+  | "authProviderId"
+  | "requiresCredential"
+  | "getConfiguredCredentialValue"
+  | "getConfiguredCredentialFallback"
+>;
 
 export function resolveWebProviderConfig(
-  cfg: OpenClawConfig | undefined,
+  cfg: WebProviderConfigSource | undefined,
   kind: "search" | "fetch",
 ): Record<string, unknown> | undefined {
   const webConfig = cfg?.tools?.web;
@@ -41,153 +54,58 @@ export function readWebProviderEnvValue(
 }
 
 export function providerRequiresCredential(
-  provider: Pick<ProviderWithCredential, "requiresCredential">,
+  provider: Pick<WebProviderWithCredential, "requiresCredential">,
 ): boolean {
   return provider.requiresCredential !== false;
 }
 
-export function hasWebProviderEntryCredential<
-  TProvider extends ProviderWithCredential,
-  TConfig extends Record<string, unknown> | undefined,
->(params: {
-  provider: TProvider;
-  config: OpenClawConfig | undefined;
-  toolConfig: TConfig;
-  resolveRawValue: (params: {
-    provider: TProvider;
-    config: OpenClawConfig | undefined;
-    toolConfig: TConfig;
-  }) => unknown;
-  resolveFallbackRawValue?: (params: {
-    provider: TProvider;
-    config: OpenClawConfig | undefined;
-    toolConfig: TConfig;
-  }) => unknown;
-  resolveEnvValue: (params: {
-    provider: TProvider;
-    configuredEnvVarId?: string;
-  }) => string | undefined;
+export function hasWebProviderEntryCredential(params: {
+  provider: WebProviderWithCredential;
+  config?: OpenClawConfig;
+  resolveEnvValue: (configuredEnvVarId?: string) => string | undefined;
+  resolveProviderAuthValue?: (providerId: string) => boolean;
 }): boolean {
   if (!providerRequiresCredential(params.provider)) {
     return true;
   }
-  const rawValue = params.resolveRawValue({
-    provider: params.provider,
-    config: params.config,
-    toolConfig: params.toolConfig,
-  });
-  const configuredRef = resolveSecretInputRef({
-    value: rawValue,
-  }).ref;
+  const rawValue = params.provider.getConfiguredCredentialValue?.(params.config);
+  if (isLegacySecretRefEnvMarker(rawValue)) {
+    return false;
+  }
+  const configuredRef = coerceSecretRef(rawValue);
   if (configuredRef && configuredRef.source !== "env") {
     return true;
   }
-  const fromConfig = normalizeSecretInput(normalizeSecretInputString(rawValue));
+  const fromConfig = configuredRef
+    ? ""
+    : normalizeSecretInput(normalizeSecretInputString(rawValue));
   if (fromConfig) {
     return true;
   }
   if (
-    params.resolveEnvValue({
-      provider: params.provider,
-      configuredEnvVarId: configuredRef?.source === "env" ? configuredRef.id : undefined,
-    })
+    params.provider.authProviderId &&
+    params.resolveProviderAuthValue?.(params.provider.authProviderId)
   ) {
     return true;
   }
-  const fallbackRawValue = params.resolveFallbackRawValue?.({
-    provider: params.provider,
-    config: params.config,
-    toolConfig: params.toolConfig,
-  });
-  const fallbackRef = resolveSecretInputRef({ value: fallbackRawValue }).ref;
+  if (params.resolveEnvValue(configuredRef?.source === "env" ? configuredRef.id : undefined)) {
+    return true;
+  }
+  const fallbackRawValue = params.provider.getConfiguredCredentialFallback?.(params.config)?.value;
+  if (isLegacySecretRefEnvMarker(fallbackRawValue)) {
+    return false;
+  }
+  const fallbackRef = coerceSecretRef(fallbackRawValue);
   if (fallbackRef && fallbackRef.source !== "env") {
     return true;
   }
-  const fallbackConfig = normalizeSecretInput(normalizeSecretInputString(fallbackRawValue));
+  const fallbackConfig = fallbackRef
+    ? ""
+    : normalizeSecretInput(normalizeSecretInputString(fallbackRawValue));
   if (fallbackConfig) {
     return true;
   }
   return Boolean(
-    fallbackRef?.source === "env"
-      ? params.resolveEnvValue({
-          provider: params.provider,
-          configuredEnvVarId: fallbackRef.id,
-        })
-      : undefined,
+    fallbackRef?.source === "env" ? params.resolveEnvValue(fallbackRef.id) : undefined,
   );
-}
-
-export function resolveWebProviderDefinition<
-  TProvider extends { id: string },
-  TConfig extends Record<string, unknown> | undefined,
-  TRuntimeMetadata extends RuntimeWebProviderMetadata,
-  TDefinition,
->(params: {
-  config: OpenClawConfig | undefined;
-  toolConfig: TConfig;
-  runtimeMetadata: TRuntimeMetadata | undefined;
-  sandboxed?: boolean;
-  providerId?: string;
-  providers: TProvider[];
-  resolveEnabled: (params: { toolConfig: TConfig; sandboxed?: boolean }) => boolean;
-  resolveAutoProviderId: (params: {
-    config: OpenClawConfig | undefined;
-    toolConfig: TConfig;
-    providers: TProvider[];
-  }) => string;
-  resolveFallbackProviderId?: (params: {
-    config: OpenClawConfig | undefined;
-    toolConfig: TConfig;
-    providers: TProvider[];
-    providerId: string;
-  }) => string | undefined;
-  createTool: (params: {
-    provider: TProvider;
-    config: OpenClawConfig | undefined;
-    toolConfig: TConfig;
-    runtimeMetadata: TRuntimeMetadata | undefined;
-  }) => TDefinition | null;
-}): { provider: TProvider; definition: TDefinition } | null {
-  if (!params.resolveEnabled({ toolConfig: params.toolConfig, sandboxed: params.sandboxed })) {
-    return null;
-  }
-  const providers = params.providers.filter(Boolean);
-  if (providers.length === 0) {
-    return null;
-  }
-  const autoProviderId = params.resolveAutoProviderId({
-    config: params.config,
-    toolConfig: params.toolConfig,
-    providers,
-  });
-  const providerId =
-    params.providerId ?? params.runtimeMetadata?.selectedProvider ?? autoProviderId;
-  if (!providerId) {
-    return null;
-  }
-  const provider =
-    providers.find((entry) => entry.id === providerId) ??
-    providers.find(
-      (entry) =>
-        entry.id ===
-        params.resolveFallbackProviderId?.({
-          config: params.config,
-          toolConfig: params.toolConfig,
-          providers,
-          providerId,
-        }),
-    );
-  if (!provider) {
-    return null;
-  }
-  const definition = params.createTool({
-    provider,
-    config: params.config,
-    toolConfig: params.toolConfig,
-    runtimeMetadata: params.runtimeMetadata,
-  });
-  if (!definition) {
-    return null;
-  }
-  return { provider, definition };
 }

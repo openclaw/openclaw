@@ -1,21 +1,11 @@
 import {
   createPluginRegistryFixture,
   registerTestPlugin,
-  registerVirtualTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
-import { afterEach, describe, expect, it } from "vitest";
-import { clearMemoryEmbeddingProviders } from "./memory-embedding-providers.js";
-import {
-  _resetMemoryPluginState,
-  getMemoryCapabilityRegistration,
-  getMemoryRuntime,
-} from "./memory-state.js";
-import { createPluginRecord } from "./status.test-helpers.js";
-
-afterEach(() => {
-  _resetMemoryPluginState();
-  clearMemoryEmbeddingProviders();
-});
+import { describe, expect, it } from "vitest";
+import { resolveMemoryCapabilityRegistration } from "./memory-state.js";
+import type { MemoryPluginCapability } from "./registry-contribution-types.js";
+import { createPluginRecord } from "./status.test-fixtures.js";
 
 function createStubMemoryRuntime() {
   return {
@@ -28,118 +18,167 @@ function createStubMemoryRuntime() {
   };
 }
 
-function requireMemoryRuntime() {
-  const runtime = getMemoryRuntime();
-  if (!runtime) {
-    throw new Error("expected memory runtime registration");
-  }
-  return runtime;
-}
-
-describe("dual-kind memory registration gate", () => {
-  it("blocks memory runtime registration for dual-kind plugins not selected for memory slot", () => {
-    const { config, registry } = createPluginRegistryFixture();
-
-    registerVirtualTestPlugin({
+function fixture() {
+  const { config, registry } = createPluginRegistryFixture();
+  const add = (
+    id: string,
+    capability: MemoryPluginCapability,
+    fields: Partial<Parameters<typeof createPluginRecord>[0]> = {},
+  ) => {
+    const record = createPluginRecord({ id, kind: "memory", ...fields });
+    registerTestPlugin({
       registry,
       config,
-      id: "dual-plugin",
-      name: "Dual Plugin",
-      kind: ["memory", "context-engine"],
+      record,
       register(api) {
-        api.registerMemoryRuntime(createStubMemoryRuntime());
+        api.registerMemoryCapability(capability);
       },
     });
+    return record;
+  };
+  const selected = () => resolveMemoryCapabilityRegistration(registry.registry.memoryCapabilities);
+  return { config, registry, add, selected };
+}
 
-    expect(getMemoryRuntime()).toBeUndefined();
+describe("memory capability ownership", () => {
+  it("blocks memory registration for an unselected dual-kind plugin", () => {
+    const { registry, add } = fixture();
+    add(
+      "dual-plugin",
+      { runtime: createStubMemoryRuntime() },
+      { kind: ["memory", "context-engine"] },
+    );
+    expect(registry.registry.memoryCapabilities).toEqual([]);
     expect(registry.registry.diagnostics).toEqual([
-      {
+      expect.objectContaining({
         pluginId: "dual-plugin",
         level: "warn",
-        source: "/virtual/dual-plugin/index.ts",
         message:
-          "dual-kind plugin not selected for memory slot; skipping memory runtime registration",
-      },
+          "dual-kind plugin not selected for memory slot; skipping memory capability registration",
+      }),
     ]);
   });
 
-  it("allows memory runtime registration for dual-kind plugins selected for memory slot", () => {
-    const { config, registry } = createPluginRegistryFixture();
-
+  it("layers public artifacts over a selected dual-kind plugin's runtime capability", async () => {
+    const { config, registry, selected } = fixture();
     registerTestPlugin({
       registry,
       config,
       record: createPluginRecord({
-        id: "dual-plugin",
-        name: "Dual Plugin",
-        kind: ["memory", "context-engine"],
-        memorySlotSelected: true,
-      }),
-      register(api) {
-        api.registerMemoryRuntime(createStubMemoryRuntime());
-      },
-    });
-
-    expect(
-      requireMemoryRuntime().resolveMemoryBackendConfig({ cfg: {} as never, agentId: "main" }),
-    ).toEqual({ backend: "builtin" });
-    expect(
-      registry.registry.diagnostics.filter(
-        (d) => d.pluginId === "dual-plugin" && d.level === "warn",
-      ),
-    ).toHaveLength(0);
-  });
-
-  it("allows memory runtime registration for single-kind memory plugins without memorySlotSelected", () => {
-    const { config, registry } = createPluginRegistryFixture();
-
-    registerVirtualTestPlugin({
-      registry,
-      config,
-      id: "memory-only",
-      name: "Memory Only",
-      kind: "memory",
-      register(api) {
-        api.registerMemoryRuntime(createStubMemoryRuntime());
-      },
-    });
-
-    expect(
-      requireMemoryRuntime().resolveMemoryBackendConfig({ cfg: {} as never, agentId: "main" }),
-    ).toEqual({ backend: "builtin" });
-  });
-
-  it("allows selected dual-kind plugins to register the unified memory capability", () => {
-    const { config, registry } = createPluginRegistryFixture();
-    const runtime = createStubMemoryRuntime();
-    const promptBuilder = () => ["memory capability"];
-
-    registerTestPlugin({
-      registry,
-      config,
-      record: createPluginRecord({
-        id: "dual-plugin",
-        name: "Dual Plugin",
+        id: "memory-core",
         kind: ["memory", "context-engine"],
         memorySlotSelected: true,
       }),
       register(api) {
         api.registerMemoryCapability({
-          runtime,
-          promptBuilder,
+          runtime: createStubMemoryRuntime(),
+          promptBuilder: () => ["memory capability"],
+          flushPlanResolver: () => null,
         });
+        api.registerMemoryCapability({ publicArtifacts: { listArtifacts: async () => [] } });
       },
     });
-
-    expect(getMemoryCapabilityRegistration()).toEqual({
-      pluginId: "dual-plugin",
-      capability: {
-        runtime,
-        promptBuilder,
-      },
-    });
+    const owner = selected();
+    expect(owner?.pluginId).toBe("memory-core");
+    expect(owner?.memorySlotSelected).toBe(true);
     expect(
-      requireMemoryRuntime().resolveMemoryBackendConfig({ cfg: {} as never, agentId: "main" }),
+      owner?.capability.runtime?.resolveMemoryBackendConfig({ cfg: config, agentId: "main" }),
     ).toEqual({ backend: "builtin" });
+    await expect(
+      owner?.capability.runtime?.getMemorySearchManager({ cfg: config, agentId: "main" }),
+    ).resolves.toEqual({ manager: null, error: "missing" });
+    expect(owner?.capability.promptBuilder?.({ availableTools: new Set() })).toEqual([
+      "memory capability",
+    ]);
+    expect(owner?.capability.flushPlanResolver?.({ cfg: config })).toBeNull();
+    await expect(
+      owner?.capability.publicArtifacts?.listArtifacts({ cfg: config }),
+    ).resolves.toEqual([]);
+    expect(registry.registry.diagnostics).toEqual([]);
+  });
+
+  it("preserves an earlier capability when an artifact bridge fails", () => {
+    const { config, registry, add, selected } = fixture();
+    add(
+      "memory-core",
+      { runtime: createStubMemoryRuntime(), flushPlanResolver: () => null },
+      { memorySlotSelected: true },
+    );
+    const bridge = createPluginRecord({ id: "memory-bridge", kind: "memory" });
+    expect(() =>
+      registerTestPlugin({
+        registry,
+        config,
+        record: bridge,
+        register(api) {
+          api.registerMemoryCapability({ publicArtifacts: { listArtifacts: async () => [] } });
+          throw new Error("bridge failed");
+        },
+      }),
+    ).toThrow("bridge failed");
+    registry.rollbackPluginGlobalSideEffects(bridge.id, bridge);
+    expect(registry.registry.memoryCapabilities).toHaveLength(1);
+    const owner = selected();
+    expect(owner?.pluginId).toBe("memory-core");
+    expect(owner?.memorySlotSelected).toBe(true);
+    expect(owner?.capability.publicArtifacts).toBeUndefined();
+    expect(
+      owner?.capability.runtime?.resolveMemoryBackendConfig({ cfg: config, agentId: "main" }),
+    ).toEqual({ backend: "builtin" });
+    expect(owner?.capability.flushPlanResolver?.({ cfg: config })).toBeNull();
+  });
+
+  it("keeps last-registration-wins behavior when neither registration owns the slot", () => {
+    const promptBuilder = () => ["replacement prompt"];
+    expect(
+      resolveMemoryCapabilityRegistration([
+        { pluginId: "memory-first", capability: { runtime: createStubMemoryRuntime() } },
+        { pluginId: "memory-second", capability: { promptBuilder } },
+      ]),
+    ).toEqual({
+      pluginId: "memory-second",
+      capability: { promptBuilder },
+      memorySlotSelected: undefined,
+    });
+  });
+
+  it("merges sidecar consolidation without lending its recall authorization to the slot owner", async () => {
+    const { config, add, selected } = fixture();
+    add(
+      "acme-memory",
+      { runtime: createStubMemoryRuntime(), recallToolNames: ["acme_recall"] },
+      { memorySlotSelected: true },
+    );
+    add("memory-core", {
+      runtime: createStubMemoryRuntime(),
+      providerRuntime: {
+        async open() {
+          return { provider: null };
+        },
+      },
+      recallToolNames: ["memory_search", "memory_get"],
+      deterministicRecallToolName: "memory_search",
+      supportsPrivateTranscriptRecall: true,
+      promptBuilder: () => ["sidecar prompt"],
+      flushPlanResolver: () => null,
+      publicArtifacts: { listArtifacts: async () => [] },
+    });
+    const owner = selected();
+    expect(owner?.pluginId).toBe("acme-memory");
+    expect(owner?.memorySlotSelected).toBe(true);
+    expect(owner?.capability.providerRuntime).toBeUndefined();
+    expect(owner?.capability.deterministicRecallToolName).toBeUndefined();
+    expect(owner?.capability.recallToolNames).toEqual(["acme_recall"]);
+    expect(owner?.capability.supportsPrivateTranscriptRecall).toBeUndefined();
+    await expect(
+      owner?.capability.runtime?.getMemorySearchManager({ cfg: config, agentId: "main" }),
+    ).resolves.toEqual({ manager: null, error: "missing" });
+    expect(owner?.capability.promptBuilder?.({ availableTools: new Set() })).toEqual([
+      "sidecar prompt",
+    ]);
+    expect(owner?.capability.flushPlanResolver?.({ cfg: config })).toBeNull();
+    await expect(
+      owner?.capability.publicArtifacts?.listArtifacts({ cfg: config }),
+    ).resolves.toEqual([]);
   });
 });

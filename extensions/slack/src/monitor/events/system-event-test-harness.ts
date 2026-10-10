@@ -1,14 +1,19 @@
+// Slack plugin module implements system event test harness behavior.
+import type { AllMiddlewareArgs } from "@slack/bolt";
+import { installSlackTestRuntime } from "../../test-runtime.test-support.js";
 import type { SlackMonitorContext } from "../context.js";
 
 export type SlackSystemEventHandler = (args: {
   event: Record<string, unknown>;
   body: unknown;
+  context?: AllMiddlewareArgs["context"];
+  client?: AllMiddlewareArgs["client"];
 }) => Promise<void>;
 
 export type SlackSystemEventTestOverrides = {
   dmPolicy?: "open" | "pairing" | "allowlist" | "disabled";
   allowFrom?: string[];
-  channelType?: "im" | "channel";
+  channelType?: "im" | "channel" | "group" | "mpim";
   channelUsers?: string[];
   reactionMode?: "off" | "own" | "all" | "allowlist";
   reactionAllowlist?: Array<string | number>;
@@ -16,6 +21,7 @@ export type SlackSystemEventTestOverrides = {
 };
 
 export function createSlackSystemEventTestHarness(overrides?: SlackSystemEventTestOverrides) {
+  installSlackTestRuntime();
   const handlers: Record<string, SlackSystemEventHandler> = {};
   const channelType = overrides?.channelType ?? "im";
   const app = {
@@ -28,6 +34,8 @@ export function createSlackSystemEventTestHarness(overrides?: SlackSystemEventTe
     runtime: { error: () => {} },
     botUserId: "U_BOT",
     botId: "B_BOT",
+    teamId: "T_TEST",
+    installationIdentity: { kind: "workspace", teamId: "T_TEST" },
     dmEnabled: true,
     dmPolicy: overrides?.dmPolicy ?? "open",
     defaultRequireMention: true,
@@ -46,6 +54,8 @@ export function createSlackSystemEventTestHarness(overrides?: SlackSystemEventTe
     reactionAllowlist: overrides?.reactionAllowlist ?? [],
     shouldDropMismatchedSlackEvent: () => false,
     isChannelAllowed: () => true,
+    rememberSlackChannelType: () => {},
+    recallSlackChannelType: () => undefined,
     resolveChannelName: async () => ({
       name: channelType === "im" ? "direct" : "general",
       type: channelType,
@@ -53,9 +63,14 @@ export function createSlackSystemEventTestHarness(overrides?: SlackSystemEventTe
     resolveUserName: async (userId: string) => ({
       name: overrides?.userNames?.[userId] ?? "alice",
     }),
-    resolveSlackSystemEventSessionKey: () => "agent:main:main",
+    resolveSlackSystemEventRoute: () => ({ agentId: "main", sessionKey: "agent:main:main" }),
+    getSlackAssistantThreadContext: () => undefined,
+    isSlackManagedViewThread: async () => false,
+    isSlackAgentView: async () => true,
   } as unknown as SlackMonitorContext;
 
+  ctx.readRuntimeContext = async () => ctx;
+  ctx.isRuntimePolicyCurrent = () => true;
   return {
     ctx,
     getHandler(name: string): SlackSystemEventHandler | null {

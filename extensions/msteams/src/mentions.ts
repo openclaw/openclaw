@@ -1,11 +1,3 @@
-/**
- * MS Teams mention handling utilities.
- *
- * Mentions in Teams require:
- * 1. Text containing <at>Name</at> tags
- * 2. entities array with mention metadata
- */
-
 type MentionEntity = {
   type: "mention";
   text: string;
@@ -13,13 +5,6 @@ type MentionEntity = {
     id: string;
     name: string;
   };
-};
-
-type MentionInfo = {
-  /** User/bot ID (e.g., "28:xxx" or AAD object ID) */
-  id: string;
-  /** Display name */
-  name: string;
 };
 
 /**
@@ -39,32 +24,26 @@ function isValidTeamsId(id: string): boolean {
 }
 
 /**
- * Parse mentions from text in the format @[Name](id).
- * Example: "Hello @[John Doe](28:xxx-yyy-zzz)!"
- *
+ * Convert @[Name](id) into matching <at> text and mention entities.
  * Only matches where the id looks like a real Teams user/bot ID are treated
  * as mentions. This avoids false positives from documentation or code samples
  * embedded in the message (e.g. `@[表示名](ユーザーID)` in backticks).
- *
- * Returns both the formatted text with <at> tags and the entities array.
  */
 export function parseMentions(text: string): {
   text: string;
   entities: MentionEntity[];
 } {
-  const mentionPattern = /@\[([^\]]+)\]\(([^)]+)\)/g;
+  const mentionPattern = /@\[((?:\\[\s\S]|[^\]\\])+)\]\(([^)]+)\)/g;
   const entities: MentionEntity[] = [];
 
-  // Replace @[Name](id) with <at>Name</at> only for valid Teams IDs
   const formattedText = text.replace(mentionPattern, (match, name, id) => {
     const trimmedId = id.trim();
 
-    // Skip matches where the id doesn't look like a real Teams identifier
     if (!isValidTeamsId(trimmedId)) {
       return match;
     }
 
-    const trimmedName = name.trim();
+    const trimmedName = name.replace(/\\([\\[\]])/g, "$1").trim();
     const mentionTag = `<at>${trimmedName}</at>`;
     entities.push({
       type: "mention",
@@ -81,34 +60,4 @@ export function parseMentions(text: string): {
     text: formattedText,
     entities,
   };
-}
-
-/**
- * Build mention entities array from a list of mentions.
- * Use this when you already have the mention info and formatted text.
- */
-export function buildMentionEntities(mentions: MentionInfo[]): MentionEntity[] {
-  return mentions.map((mention) => ({
-    type: "mention",
-    text: `<at>${mention.name}</at>`,
-    mentioned: {
-      id: mention.id,
-      name: mention.name,
-    },
-  }));
-}
-
-/**
- * Format text with mentions using <at> tags.
- * This is a convenience function when you want to manually format mentions.
- */
-export function formatMentionText(text: string, mentions: MentionInfo[]): string {
-  let formatted = text;
-  for (const mention of mentions) {
-    // Replace @Name or @name with <at>Name</at>
-    const escapedName = mention.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const namePattern = new RegExp(`@${escapedName}`, "gi");
-    formatted = formatted.replace(namePattern, `<at>${mention.name}</at>`);
-  }
-  return formatted;
 }

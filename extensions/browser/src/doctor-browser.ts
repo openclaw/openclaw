@@ -1,14 +1,25 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import fs from "node:fs";
+import path from "node:path";
+import { formatCliCommand, note } from "openclaw/plugin-sdk/cli-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
-  parseBrowserMajorVersion,
-  readBrowserVersion,
+  asNullableRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { CONFIG_DIR } from "openclaw/plugin-sdk/text-utility-runtime";
+import { parseBrowserMajorVersion, readBrowserVersion } from "./browser/chrome.executable-probe.js";
+import {
   resolveBrowserExecutableForPlatform,
   resolveGoogleChromeExecutableForPlatform,
 } from "./browser/chrome.executables.js";
-import { resolveBrowserConfig } from "./browser/config.js";
-import type { OpenClawConfig } from "./config/config.js";
-import { asRecord } from "./record-shared.js";
-import { note } from "./sdk-setup-tools.js";
+import {
+  getManagedBrowserMissingDisplayError,
+  isLocalManagedProfile,
+  resolveBrowserConfig,
+  resolveProfile,
+  type ResolvedBrowserConfig,
+} from "./browser/config.js";
+import { getBrowserProfileCapabilities } from "./browser/profile-capabilities.js";
 
 const CHROME_MCP_MIN_MAJOR = 144;
 const REMOTE_DEBUGGING_PAGES = [
@@ -17,113 +28,103 @@ const REMOTE_DEBUGGING_PAGES = [
   "edge://inspect/#remote-debugging",
 ].join(", ");
 
-type ExistingSessionProfile = {
-  name: string;
-  userDataDir?: string;
-};
-
-type ManagedProfile = {
-  name: string;
-};
-
-function collectChromeMcpProfiles(cfg: OpenClawConfig): ExistingSessionProfile[] {
-  const browser = asRecord(cfg.browser);
-  if (!browser) {
-    return [];
+function collectBrowserDoctorProfiles(cfg: OpenClawConfig, resolved: ResolvedBrowserConfig) {
+  const browser = asNullableRecord(cfg.browser);
+  const names = new Set(Object.keys(asNullableRecord(browser?.profiles) ?? {}));
+  const defaultProfile = normalizeOptionalString(browser?.defaultProfile);
+  if (defaultProfile) {
+    names.add(defaultProfile);
   }
-
-  const profiles = new Map<string, ExistingSessionProfile>();
-  const defaultProfile = normalizeOptionalString(browser.defaultProfile) ?? "";
-  if (defaultProfile === "user") {
-    profiles.set("user", { name: "user" });
-  }
-
-  const configuredProfiles = asRecord(browser.profiles);
-  if (!configuredProfiles) {
-    return [...profiles.values()].toSorted((a, b) => a.name.localeCompare(b.name));
-  }
-
-  for (const [profileName, rawProfile] of Object.entries(configuredProfiles)) {
-    const profile = asRecord(rawProfile);
-    const driver = normalizeOptionalString(profile?.driver) ?? "";
-    if (driver === "existing-session") {
-      profiles.set(profileName, {
-        name: profileName,
-        userDataDir: normalizeOptionalString(profile?.userDataDir),
-      });
-    }
-  }
-
-  return [...profiles.values()].toSorted((a, b) => a.name.localeCompare(b.name));
-}
-
-function collectManagedProfiles(cfg: OpenClawConfig): ManagedProfile[] {
-  const browser = asRecord(cfg.browser);
-  if (!browser) {
-    return [];
-  }
-
-  const profiles = new Map<string, ManagedProfile>();
-  const defaultProfile = normalizeOptionalString(browser.defaultProfile) ?? "";
-  if (defaultProfile && defaultProfile !== "user") {
-    profiles.set(defaultProfile, { name: defaultProfile });
-  }
-
-  const configuredProfiles = asRecord(browser.profiles);
-  if (!configuredProfiles) {
-    return [...profiles.values()].toSorted((a, b) => a.name.localeCompare(b.name));
-  }
-
-  for (const [profileName, rawProfile] of Object.entries(configuredProfiles)) {
-    const profile = asRecord(rawProfile);
-    const driver = normalizeOptionalString(profile?.driver) ?? "openclaw";
-    if (driver !== "existing-session") {
-      profiles.set(profileName, { name: profileName });
-    }
-  }
-
-  return [...profiles.values()].toSorted((a, b) => a.name.localeCompare(b.name));
+  const profiles = [...names]
+    .flatMap((name) => {
+      const profile = resolveProfile(resolved, name);
+      return profile ? [profile] : [];
+    })
+    .toSorted((left, right) => left.name.localeCompare(right.name));
+  return {
+    managed: profiles.filter(isLocalManagedProfile),
+    chromeMcp: profiles.filter(
+      (profile) => getBrowserProfileCapabilities(profile).usesChromeMcp && !profile.cdpUrl,
+    ),
+  };
 }
 
 export async function noteChromeMcpBrowserReadiness(
   cfg: OpenClawConfig,
   deps?: {
-    platform?: NodeJS.Platform;
     noteFn?: typeof note;
-    env?: NodeJS.ProcessEnv;
-    getUid?: () => number;
-    resolveManagedExecutable?: typeof resolveBrowserExecutableForPlatform;
-    resolveChromeExecutable?: (platform: NodeJS.Platform) => { path: string } | null;
-    readVersion?: (executablePath: string) => string | null;
   },
 ) {
   const noteFn = deps?.noteFn ?? note;
-  const platform = deps?.platform ?? process.platform;
-  const env = deps?.env ?? process.env;
-  const getUid = deps?.getUid ?? (() => process.getuid?.() ?? -1);
-  const resolveManagedExecutable =
-    deps?.resolveManagedExecutable ?? resolveBrowserExecutableForPlatform;
-  const resolveChromeExecutable =
-    deps?.resolveChromeExecutable ?? resolveGoogleChromeExecutableForPlatform;
-  const readVersion = deps?.readVersion ?? readBrowserVersion;
-  const managedProfiles = collectManagedProfiles(cfg);
-  const managedProfileLabel = managedProfiles.map((profile) => profile.name).join(", ");
+  const platform = process.platform;
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
-  const browserExecutable =
-    managedProfiles.length > 0 ? resolveManagedExecutable(resolved, platform) : null;
-  const missingDisplay =
-    platform === "linux" &&
-    managedProfiles.length > 0 &&
-    !resolved.headless &&
-    !normalizeOptionalString(env.DISPLAY) &&
-    !normalizeOptionalString(env.WAYLAND_DISPLAY);
-  const shouldWarnRootNoSandbox =
-    platform === "linux" && managedProfiles.length > 0 && !resolved.noSandbox && getUid() === 0;
-
-  if (!browserExecutable && managedProfiles.length > 0) {
+  const { managed: managedProfiles, chromeMcp: profiles } = collectBrowserDoctorProfiles(
+    cfg,
+    resolved,
+  );
+  const managedProfileLabel = managedProfiles.map((profile) => profile.name).join(", ");
+  if (resolved.enabled && resolved.extensionRelay.allowLegacyAuth) {
     noteFn(
       [
-        `- OpenClaw-managed browser profile(s) are configured: ${managedProfileLabel}.`,
+        "- Legacy Browser Relay Authentication is enabled (browser.extensionRelay.allowLegacyAuth=true).",
+        "- Update paired Chrome extensions and external CDP clients to Browser Relay Authentication v2, then set browser.extensionRelay.allowLegacyAuth=false.",
+        "- V2 clients never downgrade to legacy authentication.",
+      ].join("\n"),
+      "Browser relay authentication",
+    );
+  }
+  // General Doctor also runs unattended inside the Gateway. Profile discovery can
+  // block on OS permission prompts, so leave it to explicit browser commands.
+  if (fs.existsSync(path.join(CONFIG_DIR, "browser", "chrome-extension"))) {
+    noteFn(
+      [
+        "- Chrome extension native bootstrap was not inspected; registration status is unavailable in Doctor.",
+        `- Run ${formatCliCommand("openclaw browser extension status --json")} to inspect it explicitly; this may request browser profile access.`,
+        `- Run ${formatCliCommand("openclaw browser extension install")} if setup or repair is needed.`,
+      ].join("\n"),
+      "Browser extension bootstrap",
+    );
+  }
+  if (platform === "darwin") {
+    const importEnabled = cfg.browser?.allowSystemProfileImport !== false;
+    noteFn(
+      [
+        `- System browser profile cookie import is ${importEnabled ? "enabled" : "disabled"} (browser.allowSystemProfileImport).`,
+        "- System browser profile discovery skipped by Doctor; importable cookie database count is unavailable.",
+        "- Doctor does not access the macOS Keychain; importing asks for consent separately.",
+      ].join("\n"),
+      "Browser",
+    );
+  }
+  const managedExecutables = new Map<
+    string | undefined,
+    ReturnType<typeof resolveBrowserExecutableForPlatform>
+  >();
+  const missingExecutableProfiles = managedProfiles.filter((profile) => {
+    const executablePath = profile.executablePath;
+    if (!managedExecutables.has(executablePath)) {
+      managedExecutables.set(
+        executablePath,
+        resolveBrowserExecutableForPlatform({ ...resolved, executablePath }, platform),
+      );
+    }
+    return !managedExecutables.get(executablePath);
+  });
+  const missingDisplay = managedProfiles
+    .map((profile) =>
+      getManagedBrowserMissingDisplayError(resolved, profile, { platform, env: process.env }),
+    )
+    .filter((error) => error !== null);
+  const shouldWarnRootNoSandbox =
+    platform === "linux" &&
+    managedProfiles.length > 0 &&
+    !resolved.noSandbox &&
+    process.getuid?.() === 0;
+
+  if (missingExecutableProfiles.length > 0) {
+    noteFn(
+      [
+        `- OpenClaw-managed browser profile(s) are configured: ${missingExecutableProfiles.map((profile) => profile.name).join(", ")}.`,
         "- No Chromium-based browser executable was found on this host for OpenClaw-managed launch.",
         "- Install Chrome, Chromium, Brave, Edge, or set browser.executablePath explicitly.",
       ].join("\n"),
@@ -131,11 +132,15 @@ export async function noteChromeMcpBrowserReadiness(
     );
   }
 
-  if (missingDisplay || shouldWarnRootNoSandbox) {
+  if (missingDisplay.length > 0 || shouldWarnRootNoSandbox) {
     const lines = [`- OpenClaw-managed browser profile(s) are configured: ${managedProfileLabel}.`];
-    if (missingDisplay) {
+    if (missingDisplay.length > 0) {
       lines.push(
-        "- No DISPLAY or WAYLAND_DISPLAY is set, and browser.headless is false. Managed browser launch needs a desktop session, Xvfb, or browser.headless: true.",
+        ...(missingDisplay.every((error) => error.headlessSource === "config")
+          ? [
+              "- No DISPLAY or WAYLAND_DISPLAY is set, and browser.headless is false. Managed browser launch needs a desktop session, Xvfb, or browser.headless: true.",
+            ]
+          : missingDisplay.map((error) => `- ${error.message}`)),
       );
     }
     if (shouldWarnRootNoSandbox) {
@@ -146,7 +151,6 @@ export async function noteChromeMcpBrowserReadiness(
     noteFn(lines.join("\n"), "Browser");
   }
 
-  const profiles = collectChromeMcpProfiles(cfg);
   if (profiles.length === 0) {
     return;
   }
@@ -154,74 +158,71 @@ export async function noteChromeMcpBrowserReadiness(
   const explicitProfiles = profiles.filter((profile) => profile.userDataDir);
   const autoConnectProfiles = profiles.filter((profile) => !profile.userDataDir);
   const profileLabel = profiles.map((profile) => profile.name).join(", ");
+  const autoConnect = autoConnectProfiles.length > 0;
+  const chrome = autoConnect ? resolveGoogleChromeExecutableForPlatform(platform) : null;
+  const lines = [`- Chrome MCP existing-session is configured for profile(s): ${profileLabel}.`];
 
-  if (autoConnectProfiles.length === 0) {
-    noteFn(
-      [
-        `- Chrome MCP existing-session is configured for profile(s): ${profileLabel}.`,
-        "- These profiles use an explicit Chromium user data directory instead of Chrome's default auto-connect path.",
-        `- Verify the matching Chromium-based browser is version ${CHROME_MCP_MIN_MAJOR}+ on the same host as the Gateway or node.`,
-        `- Enable remote debugging in that browser's inspect page (${REMOTE_DEBUGGING_PAGES}).`,
-        "- Keep the browser running and accept the attach consent prompt the first time OpenClaw connects.",
-      ].join("\n"),
-      "Browser",
+  if (!autoConnect) {
+    lines.push(
+      "- These profiles use an explicit Chromium user data directory instead of Chrome's default auto-connect path.",
+      `- Verify the matching Chromium-based browser is version ${CHROME_MCP_MIN_MAJOR}+ on the same host as the Gateway or node.`,
     );
-    return;
-  }
-
-  const chrome = resolveChromeExecutable(platform);
-  const autoProfileLabel = autoConnectProfiles.map((profile) => profile.name).join(", ");
-
-  if (!chrome) {
-    const lines = [
-      `- Chrome MCP existing-session is configured for profile(s): ${profileLabel}.`,
+  } else if (!chrome) {
+    const autoProfileLabel = autoConnectProfiles.map((profile) => profile.name).join(", ");
+    lines.push(
       `- Google Chrome was not found on this host for auto-connect profile(s): ${autoProfileLabel}. OpenClaw does not bundle Chrome.`,
       `- Install Google Chrome ${CHROME_MCP_MIN_MAJOR}+ on the same host as the Gateway or node, or set browser.profiles.<name>.userDataDir for a different Chromium-based browser.`,
-      `- Enable remote debugging in the browser inspect page (${REMOTE_DEBUGGING_PAGES}).`,
-      "- Keep the browser running and accept the attach consent prompt the first time OpenClaw connects.",
-      "- Docker, headless, and sandbox browser flows stay on raw CDP; this check only applies to host-local Chrome MCP attach.",
-    ];
-    if (explicitProfiles.length > 0) {
-      lines.push(
-        `- Profiles with explicit userDataDir skip Chrome auto-detection: ${explicitProfiles
-          .map((profile) => profile.name)
-          .join(", ")}.`,
-      );
-    }
-    noteFn(lines.join("\n"), "Browser");
-    return;
-  }
-
-  const versionRaw = readVersion(chrome.path);
-  const major = parseBrowserMajorVersion(versionRaw);
-  const lines = [
-    `- Chrome MCP existing-session is configured for profile(s): ${profileLabel}.`,
-    `- Chrome path: ${chrome.path}`,
-  ];
-
-  if (!versionRaw || major === null) {
-    lines.push(
-      `- Could not determine the installed Chrome version. Chrome MCP requires Google Chrome ${CHROME_MCP_MIN_MAJOR}+ on this host.`,
-    );
-  } else if (major < CHROME_MCP_MIN_MAJOR) {
-    lines.push(
-      `- Detected Chrome ${versionRaw}, which is too old for Chrome MCP existing-session attach. Upgrade to Chrome ${CHROME_MCP_MIN_MAJOR}+.`,
     );
   } else {
-    lines.push(`- Detected Chrome ${versionRaw}.`);
+    const versionRaw = readBrowserVersion(chrome.path);
+    const major = parseBrowserMajorVersion(versionRaw);
+    lines.push(`- Chrome path: ${chrome.path}`);
+    if (!versionRaw || major === null) {
+      lines.push(
+        `- Could not determine the installed Chrome version. Chrome MCP requires Google Chrome ${CHROME_MCP_MIN_MAJOR}+ on this host.`,
+      );
+    } else if (major < CHROME_MCP_MIN_MAJOR) {
+      lines.push(
+        `- Detected Chrome ${versionRaw}, which is too old for Chrome MCP existing-session attach. Upgrade to Chrome ${CHROME_MCP_MIN_MAJOR}+.`,
+      );
+    } else {
+      lines.push(`- Detected Chrome ${versionRaw}.`);
+    }
   }
 
-  lines.push(`- Enable remote debugging in the browser inspect page (${REMOTE_DEBUGGING_PAGES}).`);
   lines.push(
+    `- Enable remote debugging in ${autoConnect ? "the browser inspect page" : "that browser's inspect page"} (${REMOTE_DEBUGGING_PAGES}).`,
     "- Keep the browser running and accept the attach consent prompt the first time OpenClaw connects.",
   );
-  if (explicitProfiles.length > 0) {
+  if (autoConnect && !chrome) {
     lines.push(
-      `- Profiles with explicit userDataDir still need manual validation of the matching Chromium-based browser: ${explicitProfiles
+      "- Docker, headless, and sandbox browser flows stay on raw CDP; this check only applies to host-local Chrome MCP attach.",
+    );
+  }
+  if (autoConnect && explicitProfiles.length > 0) {
+    lines.push(
+      `- Profiles with explicit userDataDir ${chrome ? "still need manual validation of the matching Chromium-based browser" : "skip Chrome auto-detection"}: ${explicitProfiles
         .map((profile) => profile.name)
         .join(", ")}.`,
     );
   }
 
   noteFn(lines.join("\n"), "Browser");
+}
+
+/** Leave discovery-dependent native-host repair to explicit extension setup. */
+export async function maybeRepairOwnedChromeExtensionNativeHosts(): Promise<{
+  status: "skipped";
+  reason: string;
+  changes: string[];
+  warnings: string[];
+}> {
+  return {
+    status: "skipped",
+    reason: "Doctor does not inspect personal browser profiles",
+    changes: [],
+    warnings: [
+      `Chrome extension native-host repair skipped: Doctor does not inspect personal browser profiles. Run ${formatCliCommand("openclaw browser extension install")} to repair explicitly.`,
+    ],
+  };
 }

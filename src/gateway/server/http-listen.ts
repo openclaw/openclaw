@@ -1,3 +1,4 @@
+// Gateway HTTP server listen helper with retry and lock-aware errors.
 import type { Server as HttpServer } from "node:http";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { sleep } from "../../utils.js";
@@ -15,14 +16,26 @@ async function closeServerQuietly(httpServer: HttpServer): Promise<void> {
   });
 }
 
+/** Listen on the configured gateway host/port, retrying transient EADDRINUSE windows. */
 export async function listenGatewayHttpServer(params: {
   httpServer: HttpServer;
   bindHost: string;
   port: number;
+  retryEaddrinuse?: boolean;
+  serviceName?: string;
+  endpointScheme?: "http" | "https" | "ws" | "wss";
 }) {
-  const { httpServer, bindHost, port } = params;
+  const {
+    httpServer,
+    bindHost,
+    port,
+    retryEaddrinuse = true,
+    serviceName = "gateway",
+    endpointScheme = "ws",
+  } = params;
+  const maxRetries = retryEaddrinuse ? EADDRINUSE_MAX_RETRIES : 0;
 
-  for (let attempt = 0; ; attempt++) {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       await new Promise<void>((resolve, reject) => {
         const onError = (err: NodeJS.ErrnoException) => {
@@ -35,12 +48,18 @@ export async function listenGatewayHttpServer(params: {
         };
         httpServer.once("error", onError);
         httpServer.once("listening", onListening);
-        httpServer.listen(port, bindHost);
+        try {
+          httpServer.listen(port, bindHost);
+        } catch (error) {
+          httpServer.off("error", onError);
+          httpServer.off("listening", onListening);
+          throw error;
+        }
       });
-      return; // bound successfully
+      return;
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
-      if (code === "EADDRINUSE" && attempt < EADDRINUSE_MAX_RETRIES) {
+      if (code === "EADDRINUSE" && attempt < maxRetries) {
         // Port may still be in TIME_WAIT after a recent process exit; retry.
         await closeServerQuietly(httpServer);
         await sleep(EADDRINUSE_RETRY_INTERVAL_MS);
@@ -48,12 +67,12 @@ export async function listenGatewayHttpServer(params: {
       }
       if (code === "EADDRINUSE") {
         throw new GatewayLockError(
-          `another gateway instance is already listening on ws://${bindHost}:${port}`,
+          `another ${serviceName} instance is already listening on ${endpointScheme}://${bindHost}:${port}`,
           err,
         );
       }
       throw new GatewayLockError(
-        `failed to bind gateway socket on ws://${bindHost}:${port}: ${String(err)}`,
+        `failed to bind ${serviceName} socket on ${endpointScheme}://${bindHost}:${port}: ${String(err)}`,
         err,
       );
     }

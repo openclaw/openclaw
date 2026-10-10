@@ -1,7 +1,9 @@
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { isLoopbackHost } from "./net.js";
 
 type HostSource = string | null | undefined;
 
+/** Inputs used to infer the externally reachable plugin surface URL. */
 export type HostedPluginSurfaceUrlParams = {
   port?: number;
   hostOverride?: HostSource;
@@ -13,14 +15,8 @@ export type HostedPluginSurfaceUrlParams = {
 };
 
 const normalizeHost = (value: HostSource, rejectLoopback: boolean) => {
-  if (!value) {
-    return "";
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "";
-  }
-  if (rejectLoopback && isLoopbackHost(trimmed)) {
+  const trimmed = value?.trim();
+  if (!trimmed || (rejectLoopback && isLoopbackHost(trimmed))) {
     return "";
   }
   return trimmed;
@@ -35,24 +31,17 @@ const parseHostHeader = (value: HostSource): ParsedHostHeader => {
   if (!value) {
     return { host: "" };
   }
-  try {
-    const parsed = new URL(`http://${value.trim()}`);
-    const portRaw = parsed.port.trim();
-    const port = portRaw ? Number.parseInt(portRaw, 10) : undefined;
-    return {
-      host: parsed.hostname,
-      port: Number.isFinite(port) ? port : undefined,
-    };
-  } catch {
-    return { host: "" };
-  }
+  const parsed = URL.parse(`http://${value.trim()}`);
+  return parsed
+    ? {
+        host: parsed.hostname,
+        port: parseStrictPositiveInteger(parsed.port),
+      }
+    : { host: "" };
 };
 
 const parseForwardedProto = (value: HostSource | HostSource[]) => {
-  if (Array.isArray(value)) {
-    return value[0];
-  }
-  return value;
+  return Array.isArray(value) ? value[0] : value;
 };
 
 const parseForwardedHost = (value: HostSource | HostSource[]) => {
@@ -60,6 +49,7 @@ const parseForwardedHost = (value: HostSource | HostSource[]) => {
   return raw?.split(",")[0]?.trim();
 };
 
+/** Resolve the URL that plugins should advertise for hosted node surfaces. */
 export function resolveHostedPluginSurfaceUrl(params: HostedPluginSurfaceUrlParams) {
   const port = params.port;
   if (!port) {
@@ -73,8 +63,8 @@ export function resolveHostedPluginSurfaceUrl(params: HostedPluginSurfaceUrlPara
   const forwardedHostRaw = parseForwardedHost(params.forwardedHost);
   const parsedForwardedHost = parseHostHeader(forwardedHostRaw);
   const parsedRequestHost = parseHostHeader(params.requestHost);
-  const requestHost = normalizeHost(parsedRequestHost.host, !!override);
-  const forwardedHost = normalizeHost(parsedForwardedHost.host, !!override);
+  const requestHost = normalizeHost(parsedRequestHost.host, Boolean(override));
+  const forwardedHost = normalizeHost(parsedForwardedHost.host, Boolean(override));
   const advertisedHost = forwardedHost ? parsedForwardedHost : parsedRequestHost;
   const localAddress = normalizeHost(
     params.localAddress,
@@ -87,7 +77,10 @@ export function resolveHostedPluginSurfaceUrl(params: HostedPluginSurfaceUrlPara
   }
 
   let exposedPort = port;
-  if (!override && (forwardedHost || requestHost) && port === 18789) {
+  if (!override && (forwardedHost || requestHost)) {
+    // Advertise the port the browser used, not the Gateway listener port. This
+    // keeps plugin surfaces reachable when any custom Gateway port sits behind
+    // a TLS terminator or tunnel on the protocol's default public port.
     if (advertisedHost.port && advertisedHost.port > 0) {
       exposedPort = advertisedHost.port;
     } else if (scheme === "https") {
@@ -97,6 +90,7 @@ export function resolveHostedPluginSurfaceUrl(params: HostedPluginSurfaceUrlPara
     }
   }
 
-  const formatted = host.includes(":") ? `[${host}]` : host;
+  const formatted =
+    host.includes(":") && !(host.startsWith("[") && host.endsWith("]")) ? `[${host}]` : host;
   return `${scheme}://${formatted}:${exposedPort}`;
 }

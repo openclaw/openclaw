@@ -1,3 +1,4 @@
+// Channel MCP shutdown tests cover unhandled rejection behavior during shutdown.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const transportState = vi.hoisted(() => ({
@@ -46,7 +47,8 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfig: vi.fn(() => ({})),
 }));
 
-vi.mock("../version.js", () => ({
+vi.mock("../version.js", async () => ({
+  ...(await vi.importActual<typeof import("../version.js")>("../version.js")),
   VERSION: "test",
 }));
 
@@ -109,7 +111,7 @@ describe("serveOpenClawChannelMcp shutdown", () => {
     bridgeState.handleClaudePermissionRequest.mockClear();
   });
 
-  it("does not leak unhandled rejections when shutdown close fails", async () => {
+  it("rejects without leaking unhandled rejections and attempts every cleanup owner", async () => {
     process.on("unhandledRejection", onUnhandledRejection);
     const { serveOpenClawChannelMcp } = await import("./channel-server.js");
 
@@ -117,10 +119,31 @@ describe("serveOpenClawChannelMcp shutdown", () => {
     const transport = await waitForTransport();
 
     transport.onclose?.();
-    await servePromise;
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await expect(servePromise).rejects.toThrow("close boom");
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect(unhandledRejections).toStrictEqual([]);
     expect(bridgeState.close).toHaveBeenCalledTimes(1);
+    expect(serverState.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("aggregates bridge and MCP server close failures", async () => {
+    serverState.close.mockRejectedValueOnce(new Error("server close boom"));
+    const { serveOpenClawChannelMcp } = await import("./channel-server.js");
+
+    const servePromise = serveOpenClawChannelMcp({ verbose: false });
+    const transport = await waitForTransport();
+    transport.onclose?.();
+
+    const error = await servePromise.catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as AggregateError).errors).toEqual([
+      expect.objectContaining({ message: "close boom" }),
+      expect.objectContaining({ message: "server close boom" }),
+    ]);
+    expect(bridgeState.close).toHaveBeenCalledTimes(1);
+    expect(serverState.close).toHaveBeenCalledTimes(1);
   });
 });

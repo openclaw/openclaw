@@ -1,134 +1,88 @@
 import crypto from "node:crypto";
-import { callGateway } from "../../gateway/call.js";
+import { getRuntimeConfig } from "../../config/config.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
+import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
-import { retireSessionMcpRuntimeForSessionKey } from "../pi-bundle-mcp-tools.js";
-import { waitForAgentRunAndReadUpdatedAssistantReply } from "../run-wait.js";
+import { waitForAgentRunReply } from "../run-wait.js";
+import {
+  callAgentToolGatewayRequest,
+  type AgentToolGatewayRequestCaller as GatewayCaller,
+} from "./in-process-gateway.js";
 
-export { readLatestAssistantReply } from "../run-wait.js";
-
-type GatewayCaller = typeof callGateway;
-type AgentCommandRunner = typeof import("../../commands/agent.js").agentCommandFromIngress;
-
-const defaultAgentStepDeps = {
-  agentCommandFromIngress: (async (...args) => {
-    const { agentCommandFromIngress } = await import("../../commands/agent.js");
-    return await agentCommandFromIngress(...args);
-  }) as AgentCommandRunner,
-  callGateway,
+export type AgentStepSession = {
+  sessionId: string;
+  lifecycleRevision?: string;
 };
 
-let agentStepDeps: {
-  agentCommandFromIngress: AgentCommandRunner;
-  callGateway: GatewayCaller;
-} = defaultAgentStepDeps;
-
-function extractAgentCommandReply(result: unknown): string | undefined {
-  const payloads = (result as { payloads?: unknown } | undefined)?.payloads;
-  if (!Array.isArray(payloads)) {
-    return undefined;
-  }
-  const texts = payloads
-    .map((payload) =>
-      payload &&
-      typeof payload === "object" &&
-      typeof (payload as { text?: unknown }).text === "string"
-        ? (payload as { text: string }).text
-        : "",
-    )
-    .filter((text) => text.trim().length > 0);
-  return texts.length > 0 ? texts.join("\n\n") : undefined;
-}
-
 export async function runAgentStep(params: {
+  agentId?: string;
   sessionKey: string;
   message: string;
   extraSystemPrompt: string;
   timeoutMs: number;
-  channel?: string;
-  lane?: string;
-  transcriptMessage?: string;
+  sourceAgentId?: string;
   sourceSessionKey?: string;
-  sourceChannel?: string;
   sourceTool?: string;
-}): Promise<string | undefined> {
+  sourceRole?: "subagent";
+  callGateway?: GatewayCaller;
+  deliveryContext?: DeliveryContext;
+  expectedSession?: AgentStepSession;
+}): Promise<void> {
+  const promptedAt = Date.now();
   const stepIdem = crypto.randomUUID();
   const inputProvenance = {
     kind: "inter_session" as const,
     sourceSessionKey: params.sourceSessionKey,
-    sourceChannel: params.sourceChannel,
     sourceTool: params.sourceTool ?? "sessions_send",
+    ...(params.sourceRole ? { sourceRole: params.sourceRole } : {}),
   };
-  const message = annotateInterSessionPromptText(params.message, inputProvenance);
-  const lane = params.lane ?? resolveNestedAgentLaneForSession(params.sessionKey);
-  const channel = params.channel ?? INTERNAL_MESSAGE_CHANNEL;
-  if (params.transcriptMessage !== undefined) {
-    const result = await agentStepDeps.agentCommandFromIngress({
-      message,
-      transcriptMessage: params.transcriptMessage,
-      sessionKey: params.sessionKey,
-      deliver: false,
-      channel,
-      lane,
-      runId: stepIdem,
-      extraSystemPrompt: params.extraSystemPrompt,
-      inputProvenance,
-      senderIsOwner: false,
-      allowModelOverride: false,
-    });
-    await retireSessionMcpRuntimeForSessionKey({
-      sessionKey: params.sessionKey,
-      reason: "nested-agent-step-complete",
-    });
-    return extractAgentCommandReply(result);
-  }
-  const response = await agentStepDeps.callGateway({
+  const gatewayCall = params.callGateway ?? callAgentToolGatewayRequest;
+  const response = await gatewayCall({
     method: "agent",
     params: {
-      message,
+      message: annotateInterSessionPromptText(params.message, inputProvenance),
+      ...(params.agentId ? { agentId: params.agentId } : {}),
       sessionKey: params.sessionKey,
-      idempotencyKey: stepIdem,
       deliver: false,
-      channel,
-      lane,
+      sourceReplyDeliveryMode: "message_tool_only",
+      channel: params.deliveryContext?.channel ?? INTERNAL_MESSAGE_CHANNEL,
+      lane: resolveNestedAgentLaneForSession(params.sessionKey),
       extraSystemPrompt: params.extraSystemPrompt,
       inputProvenance,
+      idempotencyKey: stepIdem,
+      expectedExistingSessionId: params.expectedSession?.sessionId,
+      expectedExistingSessionLifecycleRevision: params.expectedSession
+        ? (params.expectedSession.lifecycleRevision ?? null)
+        : undefined,
+      accountId: params.deliveryContext?.accountId,
+      to: params.deliveryContext?.to,
+      threadId: stringifyRouteThreadId(params.deliveryContext?.threadId),
     },
     timeoutMs: 10_000,
   });
 
-  const stepRunId = typeof response?.runId === "string" && response.runId ? response.runId : "";
-  const resolvedRunId = stepRunId || stepIdem;
-  const result = await waitForAgentRunAndReadUpdatedAssistantReply({
-    runId: resolvedRunId,
-    sessionKey: params.sessionKey,
-    timeoutMs: Math.min(params.timeoutMs, 60_000),
-  });
-  if (result.status === "ok" || result.status === "error") {
-    await retireSessionMcpRuntimeForSessionKey({
+  if (params.sourceAgentId && params.agentId) {
+    recordSessionParticipantBestEffort({
+      identity: { type: "agent", id: params.sourceAgentId },
+      agentId: params.agentId,
       sessionKey: params.sessionKey,
-      reason: "nested-agent-step-complete",
+      storePath: resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
+        agentId: params.agentId,
+      }),
+      promptedAt,
     });
   }
-  if (result.status !== "ok") {
-    return undefined;
-  }
-  return result.replyText;
-}
 
-export const __testing = {
-  setDepsForTest(
-    overrides?: Partial<{
-      agentCommandFromIngress: AgentCommandRunner;
-      callGateway: GatewayCaller;
-    }>,
-  ) {
-    agentStepDeps = overrides
-      ? {
-          ...defaultAgentStepDeps,
-          ...overrides,
-        }
-      : defaultAgentStepDeps;
-  },
-};
+  const resolvedRunId =
+    typeof response?.runId === "string" && response.runId ? response.runId : stepIdem;
+  await waitForAgentRunReply({
+    runId: resolvedRunId,
+    timeoutMs: Math.min(params.timeoutMs, 60_000),
+    callGateway: gatewayCall,
+    untilTerminal: true,
+  });
+}

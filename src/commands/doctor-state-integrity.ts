@@ -1,84 +1,161 @@
+/** Doctor checks and repairs for state dir durability, sessions, transcripts, and credentials. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { listAgentEntries, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { note } from "../../packages/terminal-core/src/note.js";
+import { isSharedAuthStoreOwner } from "../agents/agent-delete-safety.js";
+import { readAgentRosterProperty } from "../agents/agent-scope-config.js";
+import {
+  listAgentIds,
+  resolveDefaultAgentDir,
+  tryResolveDefaultAgentId,
+} from "../agents/agent-scope.js";
+import {
+  resolveSharedAuthStoreOwnership,
+  resolveSharedAuthStorePath,
+} from "../agents/auth-profiles/path-resolve.js";
+import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import {
   clearWedgedSubagentRecoveryAbort,
   formatSubagentRecoveryWedgedReason,
   isSubagentRecoveryWedgedEntry,
-} from "../agents/subagent-recovery-state.js";
+} from "../agents/subagents/registry/subagent-recovery-state.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { resolveSessionStoreCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
+import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
 import {
-  formatSessionArchiveTimestamp,
-  isPrimarySessionTranscriptFileName,
-} from "../config/sessions/artifacts.js";
-import { resolveMainSessionKey } from "../config/sessions/main-session.js";
-import {
-  resolveSessionFilePath,
+  resolveSessionFilePathCore,
   resolveSessionFilePathOptions,
   resolveSessionTranscriptsDirForAgent,
-  resolveStorePath,
+  resolveSessionStorePathCore,
 } from "../config/sessions/paths.js";
-import { loadSessionStore } from "../config/sessions/store-load.js";
-import { updateSessionStore } from "../config/sessions/store.js";
+import {
+  applySessionEntryReplacements,
+  loadExactSessionEntryReadOnly,
+  scanDoctorSessionEntriesStrict,
+} from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import {
+  resolveConfiguredAgentDatabaseTargets,
+  resolveSessionStoreTargets,
+  type SessionStoreTarget,
+} from "../config/sessions/targets.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
+import { readDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
+import { preserveDeferredPluginSessionSource } from "../infra/deferred-plugin-session-sources.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
-import { resolveMemoryBackendConfig } from "../memory-host-sdk/engine-storage.js";
-import { resolveOpenClawAgentDir } from "../plugin-sdk/agent-dir-compat.js";
+import { existsDir, migrationFileExists as existsFile } from "../infra/state-migrations.fs.js";
+import {
+  loadLegacySessionStore,
+  updateLegacySessionStore,
+} from "../infra/state-migrations.legacy-session-store.js";
 import { listConfiguredChannelIdsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
-import { asNullableObjectRecord } from "../shared/record-coerce.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import { note } from "../terminal/note.js";
+import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
+import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
+import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { shortenHomePath } from "../utils.js";
 import { repairHeartbeatPoisonedMainSession } from "./doctor-heartbeat-main-session-repair.js";
 import { describeHeartbeatSessionTargetIssues } from "./doctor-heartbeat-session-target.js";
-import { runPluginSessionStateDoctorRepairs } from "./doctor-session-state-providers.js";
+import {
+  inspectMainSessionRecoveryEntry,
+  noteMainSessionRecoveryIntegrity,
+  type MainSessionRecoveryIntegrityCandidate,
+} from "./doctor-main-session-recovery.js";
+import type { DoctorPrompter } from "./doctor-prompter.js";
+import {
+  createPluginSessionStateDoctorScanner,
+  runPluginSessionStateDoctorRepairs,
+} from "./doctor-session-state-providers.js";
+import { countLabel, type OrphanAgentDir } from "./doctor-state-integrity-format.js";
+import {
+  detectLinuxSdBackedStateDir,
+  detectLinuxVolatileStateDir,
+  detectMacCloudSyncedStateDir,
+  detectWindowsCloudSyncedStateDir,
+  formatLinuxSdBackedStateDirWarning,
+  formatLinuxVolatileStateDirWarning,
+  formatWindowsCloudSyncedStateDirWarning,
+} from "./doctor-state-storage-platform.js";
+import { collectRetainedUnconfiguredAgentDatabaseWarnings } from "./doctor-unconfigured-agent-databases.js";
+import { iterateDoctorSessionKeyBatches } from "./doctor/shared/session-entry-rewrite.js";
 
-type DoctorPrompterLike = {
-  confirmRuntimeRepair: (params: {
-    message: string;
-    initialValue?: boolean;
-    requiresInteractiveConfirmation?: boolean;
-  }) => Promise<boolean>;
+const STATE_INTEGRITY_CHECK_ID = "core/doctor/state-integrity";
+
+type DoctorPrompterLike = Pick<DoctorPrompter, "confirmRuntimeRepair"> & {
   note?: typeof note;
 };
 
-function countLabel(count: number, singular: string, plural = `${singular}s`): string {
-  return `${count} ${count === 1 ? singular : plural}`;
-}
+type RuntimeDirLabel = "Sessions dir" | "Session store dir" | "OAuth dir";
 
-function formatFilePreview(paths: string[], limit = 3): string {
-  const names = paths.slice(0, limit).map((filePath) => path.basename(filePath));
-  const remaining = paths.length - names.length;
-  if (remaining > 0) {
-    return `${names.join(", ")}, and ${remaining} more`;
+function resolveSessionRuntimeDirectories(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  homedir: () => string,
+): Map<string, RuntimeDirLabel> {
+  const directories = new Map<string, RuntimeDirLabel>();
+  const agentId = tryResolveDefaultAgentId(cfg);
+  if (agentId) {
+    directories.set(resolveSessionTranscriptsDirForAgent(agentId, env, homedir), "Sessions dir");
+    directories.set(
+      path.dirname(resolveSessionStorePathCore(cfg.session?.store, { agentId, env })),
+      "Session store dir",
+    );
   }
-  return names.join(", ");
+  return directories;
 }
 
-function existsDir(dir: string): boolean {
-  try {
-    return fs.existsSync(dir) && fs.statSync(dir).isDirectory();
-  } catch {
-    return false;
-  }
-}
-
-function existsFile(filePath: string): boolean {
-  try {
-    return fs.existsSync(filePath) && fs.statSync(filePath).isFile();
-  } catch {
-    return false;
-  }
-}
-
-type OrphanAgentDir = {
-  dirName: string;
-  agentId: string;
-};
+export type StateIntegrityHealthIssue = { path: string } & (
+  | {
+      kind: "mac-cloud-state-dir";
+      storage: string;
+    }
+  | {
+      kind: "windows-cloud-state-dir";
+      storage: string;
+    }
+  | {
+      kind: "linux-sd-state-dir";
+      mountPoint: string;
+      fsType: string;
+      source: string;
+    }
+  | {
+      kind: "linux-volatile-state-dir";
+      mountPoint: string;
+      fsType: string;
+    }
+  | {
+      kind: "missing-state-dir";
+    }
+  | {
+      kind: "state-dir-not-writable";
+      hint?: string;
+    }
+  | {
+      kind: "state-dir-too-open";
+      mode: number;
+    }
+  | {
+      kind: "config-file-too-open";
+      mode: number;
+    }
+  | {
+      kind: "missing-runtime-dir";
+      label: "OAuth dir";
+    }
+  | {
+      kind: "runtime-dir-not-writable";
+      label: RuntimeDirLabel;
+      hint?: string;
+    }
+);
 
 function tryResolveNativeRealPath(targetPath: string): string | null {
   try {
@@ -86,10 +163,6 @@ function tryResolveNativeRealPath(targetPath: string): string | null {
   } catch {
     return null;
   }
-}
-
-function resolveComparableTranscriptPath(filePath: string): string {
-  return tryResolveNativeRealPath(filePath) ?? path.resolve(filePath);
 }
 
 function areComparablePathsEqual(leftPath: string, rightPath: string): boolean {
@@ -108,58 +181,43 @@ function isReachableConfiguredAgentDir(params: {
   }
   const rawDir = path.join(params.agentsRoot, params.dirName, "agent");
   const normalizedDir = path.join(params.agentsRoot, params.agentId, "agent");
-  const rawRealPath = tryResolveNativeRealPath(rawDir);
-  const normalizedRealPath = tryResolveNativeRealPath(normalizedDir);
-  return rawRealPath !== null && rawRealPath === normalizedRealPath;
-}
-
-function formatOrphanAgentDirLabel(entry: OrphanAgentDir): string {
-  return entry.dirName === entry.agentId ? entry.agentId : `${entry.dirName} (id ${entry.agentId})`;
-}
-
-function formatOrphanAgentDirPreview(entries: OrphanAgentDir[], limit = 3): string {
-  const labels = entries.slice(0, limit).map(formatOrphanAgentDirLabel);
-  const remaining = entries.length - labels.length;
-  if (remaining > 0) {
-    return `${labels.join(", ")}, and ${remaining} more`;
-  }
-  return labels.join(", ");
+  return areComparablePathsEqual(rawDir, normalizedDir);
 }
 
 function listOrphanAgentDirs(cfg: OpenClawConfig, stateDir: string): OrphanAgentDir[] {
-  const configuredIds = new Set<string>();
-  configuredIds.add(normalizeAgentId(resolveDefaultAgentId(cfg)));
-  for (const entry of listAgentEntries(cfg)) {
-    configuredIds.add(normalizeAgentId(entry.id));
-  }
+  const configuredIds = new Set(listAgentIds(cfg));
+  const sharedAuthOwnership = resolveSharedAuthStoreOwnership();
+  const sharedAuthDbPath = resolveSharedAuthStorePath();
+  const defaultAgentId = tryResolveDefaultAgentId(cfg);
 
   const agentsRoot = path.join(stateDir, "agents");
-  const liveCompatibilityAgentDir = resolveOpenClawAgentDir();
+  const liveDefaultAgentDir = defaultAgentId ? resolveDefaultAgentDir(cfg) : undefined;
   try {
     const entries = fs.readdirSync(agentsRoot, { withFileTypes: true });
     return entries
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => ({
-        dirName: entry.name,
-        agentId: normalizeAgentId(entry.name),
-      }))
-      .filter(({ dirName, agentId }) => {
+      .flatMap((entry) => {
+        if (!entry.isDirectory()) {
+          return [];
+        }
+        const dirName = entry.name;
+        const agentId = normalizeAgentId(dirName);
         const nestedAgentDir = path.join(agentsRoot, dirName, "agent");
-        const hasNestedAgentDir = existsDir(nestedAgentDir);
-        if (!hasNestedAgentDir) {
-          return false;
+        // Reserved system ids own state but cannot appear in the configured roster.
+        if (
+          !existsDir(nestedAgentDir) ||
+          isReservedSystemAgentId(agentId) ||
+          isSharedAuthStoreOwner({
+            ownership: sharedAuthOwnership,
+            agentAuthDbPath: resolveAuthProfileDatabasePath(nestedAgentDir),
+            sharedAuthDbPath,
+          }) ||
+          (liveDefaultAgentDir && areComparablePathsEqual(nestedAgentDir, liveDefaultAgentDir)) ||
+          (configuredIds.has(agentId) &&
+            isReachableConfiguredAgentDir({ agentsRoot, dirName, agentId }))
+        ) {
+          return [];
         }
-        if (areComparablePathsEqual(nestedAgentDir, liveCompatibilityAgentDir)) {
-          return false;
-        }
-        if (!configuredIds.has(agentId)) {
-          return true;
-        }
-        return !isReachableConfiguredAgentDir({
-          agentsRoot,
-          dirName,
-          agentId,
-        });
+        return [{ dirName, agentId }];
       })
       .toSorted(
         (left, right) =>
@@ -205,331 +263,47 @@ function dirPermissionHint(dir: string): string | null {
   return null;
 }
 
-function addUserRwx(mode: number): number {
-  const perms = mode & 0o777;
-  return perms | 0o700;
+function readGroupOrWorldAccessibleMode(targetPath: string): number | null {
+  const linkStat = fs.lstatSync(targetPath);
+  const isSymlink = linkStat.isSymbolicLink();
+  // Symlink permissions describe the link, not the target. Immutable stores cannot be repaired.
+  const stat = isSymlink ? fs.statSync(targetPath) : linkStat;
+  const resolvedPath = isSymlink ? fs.realpathSync(targetPath) : targetPath;
+  return !resolvedPath.startsWith("/nix/store/") && (stat.mode & 0o077) !== 0 ? stat.mode : null;
 }
 
 function countJsonlLines(filePath: string): number {
+  let fd: number;
   try {
-    const raw = fs.readFileSync(filePath, "utf-8");
-    if (!raw) {
-      return 0;
-    }
+    fd = fs.openSync(filePath, "r");
+  } catch {
+    return 0;
+  }
+  try {
+    const chunk = Buffer.alloc(64 * 1024);
     let count = 0;
-    for (let i = 0; i < raw.length; i += 1) {
-      if (raw[i] === "\n") {
-        count += 1;
+    let endsWithNewline = true;
+    for (;;) {
+      const bytesRead = fs.readSync(fd, chunk, 0, chunk.length, null);
+      if (bytesRead <= 0) {
+        break;
+      }
+      endsWithNewline = chunk[bytesRead - 1] === 0x0a;
+      for (let index = 0; index < bytesRead; index += 1) {
+        if (chunk[index] === 0x0a) {
+          count += 1;
+        }
       }
     }
-    if (!raw.endsWith("\n")) {
+    if (!endsWithNewline) {
       count += 1;
     }
     return count;
   } catch {
     return 0;
+  } finally {
+    fs.closeSync(fd);
   }
-}
-
-function findOtherStateDirs(stateDir: string): string[] {
-  const resolvedState = path.resolve(stateDir);
-  const roots =
-    process.platform === "darwin" ? ["/Users"] : process.platform === "linux" ? ["/home"] : [];
-  const found: string[] = [];
-  for (const root of roots) {
-    let entries: fs.Dirent[] = [];
-    try {
-      entries = fs.readdirSync(root, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const entry of entries) {
-      if (!entry.isDirectory()) {
-        continue;
-      }
-      if (entry.name.startsWith(".")) {
-        continue;
-      }
-      const candidates = [".openclaw"].map((dir) => path.resolve(root, entry.name, dir));
-      for (const candidate of candidates) {
-        if (candidate === resolvedState) {
-          continue;
-        }
-        if (existsDir(candidate)) {
-          found.push(candidate);
-        }
-      }
-    }
-  }
-  return found;
-}
-
-function isPathUnderRoot(targetPath: string, rootPath: string): boolean {
-  const normalizedTarget = path.resolve(targetPath);
-  const normalizedRoot = path.resolve(rootPath);
-  const rootToken = path.parse(normalizedRoot).root;
-  if (normalizedRoot === rootToken) {
-    return normalizedTarget.startsWith(rootToken);
-  }
-  return (
-    normalizedTarget === normalizedRoot ||
-    normalizedTarget.startsWith(`${normalizedRoot}${path.sep}`)
-  );
-}
-
-function tryResolveRealPath(targetPath: string): string | null {
-  try {
-    return fs.realpathSync(targetPath);
-  } catch {
-    return null;
-  }
-}
-
-function decodeMountInfoPath(value: string): string {
-  return value.replace(/\\([0-7]{3})/g, (_, octal: string) =>
-    String.fromCharCode(Number.parseInt(octal, 8)),
-  );
-}
-
-function escapeControlCharsForTerminal(value: string): string {
-  let escaped = "";
-  for (const char of value) {
-    if (char === "\u001b") {
-      escaped += "\\x1b";
-      continue;
-    }
-    if (char === "\r") {
-      escaped += "\\r";
-      continue;
-    }
-    if (char === "\n") {
-      escaped += "\\n";
-      continue;
-    }
-    if (char === "\t") {
-      escaped += "\\t";
-      continue;
-    }
-    const code = char.charCodeAt(0);
-    if ((code >= 0 && code <= 8) || code === 11 || code === 12 || (code >= 14 && code <= 31)) {
-      escaped += `\\x${code.toString(16).padStart(2, "0")}`;
-      continue;
-    }
-    if (code === 127) {
-      escaped += "\\x7f";
-      continue;
-    }
-    escaped += char;
-  }
-  return escaped;
-}
-
-type LinuxMountInfoEntry = {
-  mountPoint: string;
-  fsType: string;
-  source: string;
-};
-
-export type LinuxSdBackedStateDir = {
-  path: string;
-  mountPoint: string;
-  fsType: string;
-  source: string;
-};
-
-function parseLinuxMountInfo(rawMountInfo: string): LinuxMountInfoEntry[] {
-  const entries: LinuxMountInfoEntry[] = [];
-  for (const line of rawMountInfo.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
-    }
-    const separatorIndex = trimmed.indexOf(" - ");
-    if (separatorIndex === -1) {
-      continue;
-    }
-
-    const left = trimmed.slice(0, separatorIndex);
-    const right = trimmed.slice(separatorIndex + 3);
-    const leftFields = left.split(" ");
-    const rightFields = right.split(" ");
-    if (leftFields.length < 5 || rightFields.length < 2) {
-      continue;
-    }
-
-    entries.push({
-      mountPoint: decodeMountInfoPath(leftFields[4]),
-      fsType: rightFields[0],
-      source: decodeMountInfoPath(rightFields[1]),
-    });
-  }
-  return entries;
-}
-
-function isPathUnderRootWithPathOps(
-  targetPath: string,
-  rootPath: string,
-  pathOps: Pick<typeof path, "resolve" | "sep" | "parse">,
-): boolean {
-  const normalizedTarget = pathOps.resolve(targetPath);
-  const normalizedRoot = pathOps.resolve(rootPath);
-  const rootToken = pathOps.parse(normalizedRoot).root;
-  if (normalizedRoot === rootToken) {
-    return normalizedTarget.startsWith(rootToken);
-  }
-  return (
-    normalizedTarget === normalizedRoot ||
-    normalizedTarget.startsWith(`${normalizedRoot}${pathOps.sep}`)
-  );
-}
-
-function findLinuxMountInfoEntryForPath(
-  targetPath: string,
-  entries: LinuxMountInfoEntry[],
-  pathOps: Pick<typeof path, "resolve" | "sep" | "parse">,
-): LinuxMountInfoEntry | null {
-  const normalizedTarget = pathOps.resolve(targetPath);
-  let bestMatch: LinuxMountInfoEntry | null = null;
-  for (const entry of entries) {
-    if (!isPathUnderRootWithPathOps(normalizedTarget, entry.mountPoint, pathOps)) {
-      continue;
-    }
-    if (
-      !bestMatch ||
-      pathOps.resolve(entry.mountPoint).length > pathOps.resolve(bestMatch.mountPoint).length
-    ) {
-      bestMatch = entry;
-    }
-  }
-  return bestMatch;
-}
-
-function isMmcDevicePath(devicePath: string, pathOps: Pick<typeof path, "basename">): boolean {
-  const name = pathOps.basename(devicePath);
-  return /^mmcblk\d+(?:p\d+)?$/.test(name);
-}
-
-function tryReadLinuxMountInfo(): string | null {
-  try {
-    return fs.readFileSync("/proc/self/mountinfo", "utf8");
-  } catch {
-    return null;
-  }
-}
-
-export function detectLinuxSdBackedStateDir(
-  stateDir: string,
-  deps?: {
-    platform?: NodeJS.Platform;
-    mountInfo?: string;
-    resolveRealPath?: (targetPath: string) => string | null;
-    resolveDeviceRealPath?: (targetPath: string) => string | null;
-  },
-): LinuxSdBackedStateDir | null {
-  const platform = deps?.platform ?? process.platform;
-  if (platform !== "linux") {
-    return null;
-  }
-  const linuxPath = path.posix;
-
-  const resolveRealPath = deps?.resolveRealPath ?? tryResolveRealPath;
-  const resolvedStatePath = resolveRealPath(stateDir) ?? linuxPath.resolve(stateDir);
-  const mountInfo = deps?.mountInfo ?? tryReadLinuxMountInfo();
-  if (!mountInfo) {
-    return null;
-  }
-
-  const mountEntry = findLinuxMountInfoEntryForPath(
-    resolvedStatePath,
-    parseLinuxMountInfo(mountInfo),
-    linuxPath,
-  );
-  if (!mountEntry) {
-    return null;
-  }
-
-  const sourceCandidates = [mountEntry.source];
-  if (mountEntry.source.startsWith("/dev/")) {
-    const resolvedDevicePath = (deps?.resolveDeviceRealPath ?? tryResolveRealPath)(
-      mountEntry.source,
-    );
-    if (resolvedDevicePath) {
-      sourceCandidates.push(linuxPath.resolve(resolvedDevicePath));
-    }
-  }
-  if (!sourceCandidates.some((candidate) => isMmcDevicePath(candidate, linuxPath))) {
-    return null;
-  }
-
-  return {
-    path: linuxPath.resolve(resolvedStatePath),
-    mountPoint: linuxPath.resolve(mountEntry.mountPoint),
-    fsType: mountEntry.fsType,
-    source: mountEntry.source,
-  };
-}
-
-export function formatLinuxSdBackedStateDirWarning(
-  displayStateDir: string,
-  linuxSdBackedStateDir: LinuxSdBackedStateDir,
-): string {
-  const displayMountPoint =
-    linuxSdBackedStateDir.mountPoint === "/"
-      ? "/"
-      : shortenHomePath(linuxSdBackedStateDir.mountPoint);
-  const safeSource = escapeControlCharsForTerminal(linuxSdBackedStateDir.source);
-  const safeFsType = escapeControlCharsForTerminal(linuxSdBackedStateDir.fsType);
-  const safeMountPoint = escapeControlCharsForTerminal(displayMountPoint);
-  return [
-    `- State directory appears to be on SD/eMMC storage (${displayStateDir}; device ${safeSource}, fs ${safeFsType}, mount ${safeMountPoint}).`,
-    "- SD/eMMC media can be slower for random I/O and wear faster under session/log churn.",
-    "- For better startup and state durability, prefer SSD/NVMe (or USB SSD on Raspberry Pi) for OPENCLAW_STATE_DIR.",
-  ].join("\n");
-}
-
-export function detectMacCloudSyncedStateDir(
-  stateDir: string,
-  deps?: {
-    platform?: NodeJS.Platform;
-    homedir?: string;
-    resolveRealPath?: (targetPath: string) => string | null;
-  },
-): {
-  path: string;
-  storage: "iCloud Drive" | "CloudStorage provider";
-} | null {
-  const platform = deps?.platform ?? process.platform;
-  if (platform !== "darwin") {
-    return null;
-  }
-
-  // Cloud-sync roots should always be anchored to the OS account home on macOS.
-  // OPENCLAW_HOME can relocate app data defaults, but iCloud/CloudStorage remain under the OS home.
-  const homedir = deps?.homedir ?? os.homedir();
-  const roots = [
-    {
-      storage: "iCloud Drive" as const,
-      root: path.join(homedir, "Library", "Mobile Documents", "com~apple~CloudDocs"),
-    },
-    {
-      storage: "CloudStorage provider" as const,
-      root: path.join(homedir, "Library", "CloudStorage"),
-    },
-  ];
-  const realPath = (deps?.resolveRealPath ?? tryResolveRealPath)(stateDir);
-  // Prefer the resolved target path when available so symlink prefixes do not
-  // misclassify local state dirs as cloud-synced.
-  const candidates = realPath ? [path.resolve(realPath)] : [path.resolve(stateDir)];
-
-  for (const candidate of candidates) {
-    for (const { storage, root } of roots) {
-      if (isPathUnderRoot(candidate, root)) {
-        return { path: candidate, storage };
-      }
-    }
-  }
-
-  return null;
 }
 
 function isPairingPolicy(value: unknown): boolean {
@@ -541,32 +315,11 @@ function hasPairingPolicy(value: unknown): boolean {
   if (!record) {
     return false;
   }
-  if (isPairingPolicy(record.dmPolicy)) {
-    return true;
-  }
-  const dm = asNullableObjectRecord(record.dm);
-  if (dm && isPairingPolicy(dm.policy)) {
-    return true;
-  }
-  const accounts = asNullableObjectRecord(record.accounts);
-  if (!accounts) {
-    return false;
-  }
-  for (const accountCfg of Object.values(accounts)) {
-    if (hasPairingPolicy(accountCfg)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function isSlashRoutingSessionKey(sessionKey: string): boolean {
-  const raw = normalizeOptionalLowercaseString(sessionKey);
-  if (!raw) {
-    return false;
-  }
-  const scoped = parseAgentSessionKey(raw)?.rest ?? raw;
-  return /^[^:]+:slash:[^:]+(?:$|:)/.test(scoped);
+  return (
+    isPairingPolicy(record.dmPolicy) ||
+    isPairingPolicy(asNullableObjectRecord(record.dm)?.policy) ||
+    Object.values(asNullableObjectRecord(record.accounts) ?? {}).some(hasPairingPolicy)
+  );
 }
 
 function shouldRequireOAuthDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
@@ -593,9 +346,11 @@ function shouldRequireOAuthDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boo
   if ([...withPersistedAuth].some((channelId) => !withoutPersistedAuth.has(channelId))) {
     return true;
   }
-  // Pairing allowlists are persisted under credentials/<channel>-allowFrom.json.
+  // Pairing allowlists are persisted under credentials/<channel>-allowFrom.json, so a
+  // channel id with no effective plugin owner can never pair and must not require the dir.
   for (const [channelId, channelCfg] of Object.entries(channels)) {
-    if (channelId === "defaults" || channelId === "modelByChannel") {
+    const scopedChannelId = normalizeOptionalLowercaseString(channelId);
+    if (!scopedChannelId || !withPersistedAuth.has(scopedChannelId)) {
       continue;
     }
     if (hasPairingPolicy(channelCfg)) {
@@ -605,15 +360,229 @@ function shouldRequireOAuthDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boo
   return false;
 }
 
-function shouldSuppressOrphanTranscriptWarning(cfg: OpenClawConfig, agentId: string): boolean {
-  const backendConfig = resolveMemoryBackendConfig({ cfg, agentId });
-  return backendConfig?.backend === "qmd" && backendConfig.qmd?.sessions.enabled === true;
+export function detectStateIntegrityHealthIssues(
+  cfg: OpenClawConfig,
+  params?: {
+    configPath?: string;
+    env?: NodeJS.ProcessEnv;
+    homedir?: () => string;
+  },
+): StateIntegrityHealthIssue[] {
+  const issues: StateIntegrityHealthIssue[] = [];
+  const appendDetectedIssue = (issue: StateIntegrityHealthIssue | null) => {
+    if (issue) {
+      issues.push(issue);
+    }
+  };
+  const env = params?.env ?? process.env;
+  const homedir = () => resolveRequiredHomeDir(env, params?.homedir ?? os.homedir);
+  const stateDir = resolveStateDir(env, homedir);
+  const oauthDir = resolveOAuthDir(env, stateDir);
+  const dirCandidates = resolveSessionRuntimeDirectories(cfg, env, homedir);
+  const requireOAuthDir = shouldRequireOAuthDir(cfg, env);
+
+  const macCloud = detectMacCloudSyncedStateDir(stateDir);
+  appendDetectedIssue(macCloud && { kind: "mac-cloud-state-dir", ...macCloud });
+
+  const windowsCloud = detectWindowsCloudSyncedStateDir(stateDir, env);
+  appendDetectedIssue(windowsCloud && { kind: "windows-cloud-state-dir", ...windowsCloud });
+
+  const linuxSd = detectLinuxSdBackedStateDir(stateDir);
+  appendDetectedIssue(linuxSd && { kind: "linux-sd-state-dir", ...linuxSd });
+
+  const linuxVolatile = detectLinuxVolatileStateDir(stateDir);
+  appendDetectedIssue(linuxVolatile && { kind: "linux-volatile-state-dir", ...linuxVolatile });
+
+  const stateDirExists = existsDir(stateDir);
+  if (!stateDirExists) {
+    issues.push({ kind: "missing-state-dir", path: stateDir });
+  }
+
+  if (stateDirExists && !canWriteDir(stateDir)) {
+    const hint = dirPermissionHint(stateDir);
+    issues.push({
+      kind: "state-dir-not-writable",
+      path: stateDir,
+      ...(hint ? { hint } : {}),
+    });
+  }
+
+  if (stateDirExists && process.platform !== "win32") {
+    try {
+      const mode = readGroupOrWorldAccessibleMode(stateDir);
+      if (mode !== null) {
+        issues.push({ kind: "state-dir-too-open", path: stateDir, mode });
+      }
+    } catch {
+      // Legacy noteStateIntegrity reports stat failures. Structured findings
+      // are limited to actionable state that can be inspected safely.
+    }
+  }
+
+  if (params?.configPath && existsFile(params.configPath) && process.platform !== "win32") {
+    try {
+      const mode = readGroupOrWorldAccessibleMode(params.configPath);
+      if (mode !== null) {
+        issues.push({ kind: "config-file-too-open", path: params.configPath, mode });
+      }
+    } catch {
+      // See state-dir stat handling above.
+    }
+  }
+
+  if (stateDirExists) {
+    if (requireOAuthDir) {
+      dirCandidates.set(oauthDir, "OAuth dir");
+    }
+    for (const [dir, label] of dirCandidates) {
+      if (!existsDir(dir)) {
+        if (label === "OAuth dir") {
+          issues.push({ kind: "missing-runtime-dir", label, path: dir });
+          continue;
+        }
+        // Transcript-archive writers create session dirs lazily (session-accessor.sqlite-archive.ts),
+        // and readers tolerate ENOENT, so absence is healthy on fresh profiles.
+        continue;
+      }
+      if (!canWriteDir(dir)) {
+        const hint = dirPermissionHint(dir);
+        issues.push({
+          kind: "runtime-dir-not-writable",
+          label,
+          path: dir,
+          ...(hint ? { hint } : {}),
+        });
+      }
+    }
+  }
+
+  return issues;
 }
 
+export function stateIntegrityIssueToHealthFinding(
+  issue: StateIntegrityHealthIssue,
+): HealthFinding {
+  const finding = (
+    message: string,
+    fixHint: string,
+    severity: HealthFinding["severity"] = "warning",
+    target?: string,
+  ): HealthFinding => ({
+    checkId: STATE_INTEGRITY_CHECK_ID,
+    severity,
+    message,
+    path: issue.path,
+    ...(target !== undefined ? { target } : {}),
+    fixHint,
+  });
+  switch (issue.kind) {
+    case "mac-cloud-state-dir":
+      return finding(
+        `State directory is under macOS cloud-synced storage (${issue.storage}), which can cause slow I/O and sync races.`,
+        "Move OPENCLAW_STATE_DIR to local non-synced storage such as ~/.openclaw.",
+      );
+    case "windows-cloud-state-dir":
+      return finding(
+        `State directory is under Windows cloud-synced storage (${issue.storage}), which can cause slow I/O, sync races, and Files On-Demand dehydration.`,
+        "Move OPENCLAW_STATE_DIR to local non-synced storage such as %USERPROFILE%\\.openclaw.",
+      );
+    case "linux-sd-state-dir":
+      return finding(
+        `State directory appears to be on SD/eMMC storage (${issue.source}, ${issue.fsType}), which can hurt startup and durability.`,
+        "Move OPENCLAW_STATE_DIR to SSD/NVMe-backed storage.",
+        "warning",
+        issue.mountPoint,
+      );
+    case "linux-volatile-state-dir":
+      return finding(
+        `State directory is on volatile ${issue.fsType} storage and may disappear on reboot.`,
+        "Move OPENCLAW_STATE_DIR to persistent local storage.",
+        "warning",
+        issue.mountPoint,
+      );
+    case "missing-state-dir":
+      return finding(
+        "State directory is missing. Sessions, credentials, logs, and config are stored there.",
+        "Run `openclaw doctor --fix` to create the state directory.",
+        "error",
+      );
+    case "state-dir-not-writable":
+      return finding(
+        issue.hint
+          ? `State directory is not writable. ${issue.hint}`
+          : "State directory is not writable.",
+        "Run `openclaw doctor --fix` to repair state directory permissions.",
+        "error",
+      );
+    case "state-dir-too-open":
+      return finding(
+        "State directory permissions are too open. Recommend chmod 700.",
+        "Run `openclaw doctor --fix` to tighten state directory permissions.",
+      );
+    case "config-file-too-open":
+      return finding(
+        "Config file is group/world readable. Recommend chmod 600.",
+        "Run `openclaw doctor --fix` to tighten config file permissions.",
+      );
+    case "missing-runtime-dir":
+      return finding(
+        `${issue.label} is missing.`,
+        "Run `openclaw doctor --fix` to create missing runtime state directories.",
+        "error",
+      );
+    case "runtime-dir-not-writable":
+      return finding(
+        issue.hint
+          ? `${issue.label} is not writable. ${issue.hint}`
+          : `${issue.label} is not writable.`,
+        "Run `openclaw doctor --fix` to repair runtime state directory permissions.",
+        "error",
+      );
+  }
+  return assertNeverStateIntegrityIssue(issue);
+}
+
+export function stateIntegrityIssueToRepairEffect(
+  issue: StateIntegrityHealthIssue,
+): HealthRepairEffect {
+  const effect = (
+    action: string,
+    dryRunSafe = false,
+    kind: HealthRepairEffect["kind"] = "state",
+  ): HealthRepairEffect => ({ kind, action, target: issue.path, dryRunSafe });
+  switch (issue.kind) {
+    case "mac-cloud-state-dir":
+    case "windows-cloud-state-dir":
+    case "linux-sd-state-dir":
+    case "linux-volatile-state-dir":
+      return effect("would-recommend-moving-state-dir", true);
+    case "missing-state-dir":
+      return effect("would-create-state-dir");
+    case "state-dir-not-writable":
+    case "state-dir-too-open":
+      return effect("would-repair-state-dir-permissions");
+    case "config-file-too-open":
+      return effect("would-tighten-config-file-permissions", false, "file");
+    case "missing-runtime-dir":
+      return effect("would-create-runtime-state-dir");
+    case "runtime-dir-not-writable":
+      return effect("would-repair-runtime-state-dir-permissions");
+  }
+  return assertNeverStateIntegrityIssue(issue);
+}
+
+function assertNeverStateIntegrityIssue(issue: never): never {
+  throw new Error(
+    `Unhandled state integrity issue kind: ${String((issue as { kind?: unknown }).kind)}`,
+  );
+}
+
+/** Emits state integrity warnings and applies selected runtime repairs. */
 export async function noteStateIntegrity(
   cfg: OpenClawConfig,
   prompter: DoctorPrompterLike,
   configPath?: string,
+  options?: { stateDirExistedAtStart?: boolean },
 ) {
   const warnings: string[] = [];
   const changes: string[] = [];
@@ -623,20 +592,68 @@ export async function noteStateIntegrity(
   const stateDir = resolveStateDir(env, homedir);
   const defaultStateDir = path.join(homedir(), ".openclaw");
   const oauthDir = resolveOAuthDir(env, stateDir);
-  const agentId = resolveDefaultAgentId(cfg);
-  const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId, env, homedir);
-  const storePath = resolveStorePath(cfg.session?.store, { agentId });
-  const storeDir = path.dirname(storePath);
-  const absoluteStorePath = path.resolve(storePath);
+  const dirCandidates = resolveSessionRuntimeDirectories(cfg, env, homedir);
   const displayStateDir = shortenHomePath(stateDir);
   const displayOauthDir = shortenHomePath(oauthDir);
-  const displaySessionsDir = shortenHomePath(sessionsDir);
-  const displayStoreDir = shortenHomePath(storeDir);
   const displayConfigPath = configPath ? shortenHomePath(configPath) : undefined;
   const requireOAuthDir = shouldRequireOAuthDir(cfg, env);
   const cloudSyncedStateDir = detectMacCloudSyncedStateDir(stateDir);
+  const windowsCloudSyncedStateDir = detectWindowsCloudSyncedStateDir(stateDir);
   const linuxSdBackedStateDir = detectLinuxSdBackedStateDir(stateDir);
-  const suppressOrphanTranscriptWarning = shouldSuppressOrphanTranscriptWarning(cfg, agentId);
+  const linuxVolatileStateDir = detectLinuxVolatileStateDir(stateDir);
+  const repairWritableDirectory = async (
+    dir: string,
+    displayDir: string,
+    label?: RuntimeDirLabel,
+  ) => {
+    if (canWriteDir(dir)) {
+      return;
+    }
+    warnings.push(`- ${label ?? "State directory"} not writable (${displayDir}).`);
+    const hint = dirPermissionHint(dir);
+    if (hint) {
+      warnings.push(`  ${hint}`);
+    }
+    if (
+      await prompter.confirmRuntimeRepair({
+        message: `Repair permissions on ${label ?? displayDir}?`,
+        initialValue: true,
+      })
+    ) {
+      try {
+        fs.chmodSync(dir, (fs.statSync(dir).mode & 0o777) | 0o700);
+        changes.push(`- Repaired permissions on ${label ? `${label}: ` : ""}${displayDir}`);
+      } catch (err) {
+        warnings.push(`- Failed to repair ${displayDir}: ${String(err)}`);
+      }
+    }
+  };
+  const tightenPermissions = async (
+    targetPath: string,
+    displayPath: string,
+    mode: number,
+    warning: string,
+    failureLabel: string,
+  ) => {
+    const octalMode = mode.toString(8);
+    try {
+      if (readGroupOrWorldAccessibleMode(targetPath) === null) {
+        return;
+      }
+      warnings.push(warning);
+      if (
+        await prompter.confirmRuntimeRepair({
+          message: `Tighten permissions on ${displayPath} to ${octalMode}?`,
+          initialValue: true,
+        })
+      ) {
+        fs.chmodSync(targetPath, mode);
+        changes.push(`- Tightened permissions on ${displayPath} to ${octalMode}`);
+      }
+    } catch (err) {
+      warnings.push(`- Failed to read ${failureLabel}: ${String(err)}`);
+    }
+  };
 
   if (cloudSyncedStateDir) {
     warnings.push(
@@ -648,11 +665,24 @@ export async function noteStateIntegrity(
       ].join("\n"),
     );
   }
+  if (windowsCloudSyncedStateDir) {
+    warnings.push(
+      formatWindowsCloudSyncedStateDirWarning(displayStateDir, windowsCloudSyncedStateDir),
+    );
+  }
   if (linuxSdBackedStateDir) {
     warnings.push(formatLinuxSdBackedStateDirWarning(displayStateDir, linuxSdBackedStateDir));
   }
+  if (linuxVolatileStateDir) {
+    warnings.push(formatLinuxVolatileStateDirWarning(displayStateDir, linuxVolatileStateDir));
+  }
 
   let stateDirExists = existsDir(stateDir);
+  if (stateDirExists && options?.stateDirExistedAtStart === false) {
+    warnings.push(
+      `- State directory was missing at doctor start and was initialized during startup checks (${displayStateDir}).`,
+    );
+  }
   if (!stateDirExists) {
     warnings.push(
       `- CRITICAL: state directory missing (${displayStateDir}). Sessions, credentials, logs, and config are stored there.`,
@@ -677,88 +707,30 @@ export async function noteStateIntegrity(
     }
   }
 
-  if (stateDirExists && !canWriteDir(stateDir)) {
-    warnings.push(`- State directory not writable (${displayStateDir}).`);
-    const hint = dirPermissionHint(stateDir);
-    if (hint) {
-      warnings.push(`  ${hint}`);
-    }
-    const repair = await prompter.confirmRuntimeRepair({
-      message: `Repair permissions on ${displayStateDir}?`,
-      initialValue: true,
-    });
-    if (repair) {
-      try {
-        const stat = fs.statSync(stateDir);
-        const target = addUserRwx(stat.mode);
-        fs.chmodSync(stateDir, target);
-        changes.push(`- Repaired permissions on ${displayStateDir}`);
-      } catch (err) {
-        warnings.push(`- Failed to repair ${displayStateDir}: ${String(err)}`);
-      }
-    }
+  if (stateDirExists) {
+    await repairWritableDirectory(stateDir, displayStateDir);
   }
   if (stateDirExists && process.platform !== "win32") {
-    try {
-      const dirLstat = fs.lstatSync(stateDir);
-      const isDirSymlink = dirLstat.isSymbolicLink();
-      // For symlinks, check the resolved target permissions instead of the
-      // symlink itself (which always reports 777). Skip the warning only when
-      // the target lives in a known immutable store (e.g. /nix/store/).
-      const stat = isDirSymlink ? fs.statSync(stateDir) : dirLstat;
-      const resolvedDir = isDirSymlink ? fs.realpathSync(stateDir) : stateDir;
-      const isImmutableStore = resolvedDir.startsWith("/nix/store/");
-      if (!isImmutableStore && (stat.mode & 0o077) !== 0) {
-        warnings.push(
-          `- State directory permissions are too open (${displayStateDir}). Recommend chmod 700.`,
-        );
-        const tighten = await prompter.confirmRuntimeRepair({
-          message: `Tighten permissions on ${displayStateDir} to 700?`,
-          initialValue: true,
-        });
-        if (tighten) {
-          fs.chmodSync(stateDir, 0o700);
-          changes.push(`- Tightened permissions on ${displayStateDir} to 700`);
-        }
-      }
-    } catch (err) {
-      warnings.push(`- Failed to read ${displayStateDir} permissions: ${String(err)}`);
-    }
+    await tightenPermissions(
+      stateDir,
+      displayStateDir,
+      0o700,
+      `- State directory permissions are too open (${displayStateDir}). Recommend chmod 700.`,
+      `${displayStateDir} permissions`,
+    );
   }
 
   if (configPath && existsFile(configPath) && process.platform !== "win32") {
-    try {
-      const configLstat = fs.lstatSync(configPath);
-      const isSymlink = configLstat.isSymbolicLink();
-      // For symlinks, check the resolved target permissions. Skip the warning
-      // only when the target lives in an immutable store (e.g. /nix/store/).
-      const stat = isSymlink ? fs.statSync(configPath) : configLstat;
-      const resolvedConfig = isSymlink ? fs.realpathSync(configPath) : configPath;
-      const isImmutableConfig = resolvedConfig.startsWith("/nix/store/");
-      if (!isImmutableConfig && (stat.mode & 0o077) !== 0) {
-        warnings.push(
-          `- Config file is group/world readable (${displayConfigPath ?? configPath}). Recommend chmod 600.`,
-        );
-        const tighten = await prompter.confirmRuntimeRepair({
-          message: `Tighten permissions on ${displayConfigPath ?? configPath} to 600?`,
-          initialValue: true,
-        });
-        if (tighten) {
-          fs.chmodSync(configPath, 0o600);
-          changes.push(`- Tightened permissions on ${displayConfigPath ?? configPath} to 600`);
-        }
-      }
-    } catch (err) {
-      warnings.push(
-        `- Failed to read config permissions (${displayConfigPath ?? configPath}): ${String(err)}`,
-      );
-    }
+    await tightenPermissions(
+      configPath,
+      displayConfigPath ?? configPath,
+      0o600,
+      `- Config file is group/world readable (${displayConfigPath ?? configPath}). Recommend chmod 600.`,
+      `config permissions (${displayConfigPath ?? configPath})`,
+    );
   }
 
   if (stateDirExists) {
-    const dirCandidates = new Map<string, string>();
-    dirCandidates.set(sessionsDir, "Sessions dir");
-    dirCandidates.set(storeDir, "Session store dir");
     if (requireOAuthDir) {
       dirCandidates.set(oauthDir, "OAuth dir");
     } else if (!existsDir(oauthDir)) {
@@ -766,22 +738,12 @@ export async function noteStateIntegrity(
         `- OAuth dir not present (${displayOauthDir}). Skipping create because no WhatsApp/pairing channel config is active.`,
       );
     }
-    const displayDirFor = (dir: string) => {
-      if (dir === sessionsDir) {
-        return displaySessionsDir;
-      }
-      if (dir === storeDir) {
-        return displayStoreDir;
-      }
-      if (dir === oauthDir) {
-        return displayOauthDir;
-      }
-      return shortenHomePath(dir);
-    };
-
     for (const [dir, label] of dirCandidates) {
-      const displayDir = displayDirFor(dir);
+      const displayDir = shortenHomePath(dir);
       if (!existsDir(dir)) {
+        if (label !== "OAuth dir") {
+          continue;
+        }
         warnings.push(`- CRITICAL: ${label} missing (${displayDir}).`);
         const create = await prompter.confirmRuntimeRepair({
           message: `Create ${label} at ${displayDir}?`,
@@ -797,44 +759,16 @@ export async function noteStateIntegrity(
         }
         continue;
       }
-      if (!canWriteDir(dir)) {
-        warnings.push(`- ${label} not writable (${displayDir}).`);
-        const hint = dirPermissionHint(dir);
-        if (hint) {
-          warnings.push(`  ${hint}`);
-        }
-        const repair = await prompter.confirmRuntimeRepair({
-          message: `Repair permissions on ${label}?`,
-          initialValue: true,
-        });
-        if (repair) {
-          try {
-            const stat = fs.statSync(dir);
-            const target = addUserRwx(stat.mode);
-            fs.chmodSync(dir, target);
-            changes.push(`- Repaired permissions on ${label}: ${displayDir}`);
-          } catch (err) {
-            warnings.push(`- Failed to repair ${displayDir}: ${String(err)}`);
-          }
-        }
-      }
+      await repairWritableDirectory(dir, displayDir, label);
     }
   }
 
-  const extraStateDirs = new Set<string>();
-  if (path.resolve(stateDir) !== path.resolve(defaultStateDir)) {
-    if (existsDir(defaultStateDir)) {
-      extraStateDirs.add(defaultStateDir);
-    }
-  }
-  for (const other of findOtherStateDirs(stateDir)) {
-    extraStateDirs.add(other);
-  }
-  if (extraStateDirs.size > 0) {
+  // Compare only the effective home's default; other accounts do not share this history.
+  if (path.resolve(stateDir) !== path.resolve(defaultStateDir) && existsDir(defaultStateDir)) {
     warnings.push(
       [
         "- Multiple state directories detected. This can split session history.",
-        ...Array.from(extraStateDirs).map((dir) => `  - ${shortenHomePath(dir)}`),
+        `  - ${shortenHomePath(defaultStateDir)}`,
         `  Active state dir: ${displayStateDir}`,
       ].join("\n"),
     );
@@ -842,207 +776,262 @@ export async function noteStateIntegrity(
 
   const orphanAgentDirs = listOrphanAgentDirs(cfg, stateDir);
   if (orphanAgentDirs.length > 0) {
+    const labels = orphanAgentDirs
+      .slice(0, 3)
+      .map(({ dirName, agentId }) =>
+        dirName === agentId ? agentId : `${dirName} (id ${agentId})`,
+      );
+    const remaining = orphanAgentDirs.length - labels.length;
+    const authoredAgentRosterPath =
+      readAgentRosterProperty(cfg)?.kind === "list" ? "agents.list" : "agents.entries";
     warnings.push(
       [
-        `- Found ${countLabel(orphanAgentDirs.length, "agent directory", "agent directories")} on disk without a matching agents.list entry.`,
+        `- Found ${countLabel(orphanAgentDirs.length, "agent directory", "agent directories")} on disk without a matching ${authoredAgentRosterPath} entry.`,
         "  These agents can still have sessions/auth state on disk, but config-driven routing, identity, and model selection will ignore them.",
-        `  Examples: ${formatOrphanAgentDirPreview(orphanAgentDirs)}`,
-        `  Restore the missing agents.list entries or remove stale dirs after confirming they are no longer needed: ${shortenHomePath(path.join(stateDir, "agents"))}`,
+        `  Examples: ${labels.join(", ")}${remaining > 0 ? `, and ${remaining} more` : ""}`,
+        `  Restore the missing ${authoredAgentRosterPath} entries or remove stale dirs after confirming they are no longer needed: ${shortenHomePath(path.join(stateDir, "agents"))}`,
       ].join("\n"),
     );
   }
-
-  const store = loadSessionStore(storePath);
-  const sessionPathOpts = resolveSessionFilePathOptions({ agentId, storePath });
-  const entries = Object.entries(store).filter(([, entry]) => entry && typeof entry === "object");
-  if (entries.length > 0) {
-    const recent = entries
-      .slice()
-      .toSorted((a, b) => {
-        const aUpdated = typeof a[1].updatedAt === "number" ? a[1].updatedAt : 0;
-        const bUpdated = typeof b[1].updatedAt === "number" ? b[1].updatedAt : 0;
-        return bUpdated - aUpdated;
-      })
-      .slice(0, 5);
-    const recentTranscriptCandidates = recent.filter(([key]) => !isSlashRoutingSessionKey(key));
-    const missing = recentTranscriptCandidates.filter(([, entry]) => {
-      const sessionId = entry.sessionId;
-      if (!sessionId) {
-        return false;
-      }
-      const transcriptPath = resolveSessionFilePath(sessionId, entry, sessionPathOpts);
-      return !existsFile(transcriptPath);
-    });
-    if (missing.length > 0) {
-      warnings.push(
-        [
-          `- ${missing.length}/${recentTranscriptCandidates.length} recent sessions are missing transcripts.`,
-          `  Verify sessions in store: ${formatCliCommand(`openclaw sessions --store "${absoluteStorePath}"`)}`,
-          `  Preview cleanup impact: ${formatCliCommand(`openclaw sessions cleanup --store "${absoluteStorePath}" --dry-run`)}`,
-          `  Prune missing entries: ${formatCliCommand(`openclaw sessions cleanup --store "${absoluteStorePath}" --enforce --fix-missing`)}`,
-        ].join("\n"),
-      );
-    }
-
-    const wedgedSubagentSessions = entries.filter(([, entry]) =>
-      isSubagentRecoveryWedgedEntry(entry),
-    );
-    if (wedgedSubagentSessions.length > 0) {
-      const wedgedCount = countLabel(wedgedSubagentSessions.length, "wedged subagent session");
-      warnings.push(
-        [
-          `- Found ${wedgedCount} with automatic restart recovery tombstoned.`,
-          "  OpenClaw will not auto-resume these child sessions on restart; reconcile their task records instead.",
-          `  Examples: ${wedgedSubagentSessions
-            .slice(0, 3)
-            .map(([key]) => key)
-            .join(", ")}`,
-          `  Fix: ${formatCliCommand("openclaw tasks maintenance --apply")}`,
-        ].join("\n"),
-      );
-      const repairWedged = await prompter.confirmRuntimeRepair({
-        message: `Clear stale aborted recovery flags for ${wedgedCount}?`,
-        initialValue: true,
-      });
-      if (repairWedged) {
-        let repaired = 0;
-        const repairedAt = Date.now();
-        await updateSessionStore(absoluteStorePath, (currentStore) => {
-          for (const [key] of wedgedSubagentSessions) {
-            const current = currentStore[key];
-            if (current && clearWedgedSubagentRecoveryAbort(current, repairedAt)) {
-              repaired += 1;
-              currentStore[key] = current;
-            }
-          }
-        });
-        if (repaired > 0) {
-          changes.push(
-            `- Cleared aborted restart-recovery flags for ${countLabel(
-              repaired,
-              "wedged subagent session",
-            )}.`,
-          );
-        }
-      }
-
-      const wedgedReasons = wedgedSubagentSessions
-        .map(([, entry]) => formatSubagentRecoveryWedgedReason(entry))
-        .filter((reason, index, all) => all.indexOf(reason) === index)
-        .slice(0, 2);
-      if (wedgedReasons.length > 0) {
-        warnings.push(wedgedReasons.map((reason) => `  Reason: ${reason}`).join("\n"));
-      }
-    }
-
-    await runPluginSessionStateDoctorRepairs({
-      cfg,
-      store,
-      absoluteStorePath,
-      prompter,
-      env,
-      warnings,
-      changes,
-    });
-
-    await repairHeartbeatPoisonedMainSession({
-      cfg,
-      store,
-      absoluteStorePath,
-      stateDir,
-      sessionPathOpts,
-      prompter,
-      warnings,
-      changes,
-    });
-
-    for (const warning of describeHeartbeatSessionTargetIssues(cfg)) {
-      warnings.push(warning);
-    }
-
-    const mainKey = resolveMainSessionKey(cfg);
-    const mainEntry = store[mainKey];
-    if (mainEntry?.sessionId) {
-      const transcriptPath = resolveSessionFilePath(
-        mainEntry.sessionId,
-        mainEntry,
-        sessionPathOpts,
-      );
-      if (!existsFile(transcriptPath)) {
-        warnings.push(
-          `- Main session transcript missing (${shortenHomePath(transcriptPath)}). History will appear to reset.`,
-        );
-      } else {
-        const lineCount = countJsonlLines(transcriptPath);
-        if (lineCount <= 1) {
-          warnings.push(
-            `- Main session transcript has only ${lineCount} line. Session history may not be appending.`,
-          );
-        }
-      }
-    }
+  if (stateDirExists) {
+    warnings.push(...collectRetainedUnconfiguredAgentDatabaseWarnings({ cfg, env }));
   }
 
-  if (existsDir(sessionsDir)) {
-    const referencedTranscriptPaths = new Set<string>();
-    for (const [, entry] of entries) {
-      if (!entry?.sessionId) {
+  const compatibilityAgentId = resolveSessionStoreCompatibilityAgentId(cfg);
+  const pending = readDeferredPluginMigrations({ env });
+  const isRetained = createRetainedAgentDatabaseMatcher(env, () =>
+    resolveConfiguredAgentDatabaseTargets(cfg, { env }),
+  );
+  const sessionTargets = resolveSessionStoreTargets(cfg, { allAgents: true }, { env }).toSorted(
+    (left, right) =>
+      left.agentId === compatibilityAgentId ? -1 : right.agentId === compatibilityAgentId ? 1 : 0,
+  );
+
+  const inspectAgentSessionIntegrity = async (
+    target: SessionStoreTarget,
+    inspectLegacyStore: boolean,
+  ) => {
+    const { agentId, storePath } = target;
+    const absoluteStorePath = path.resolve(storePath);
+
+    const sqliteStorePath = resolveSqliteTargetFromSessionStorePath(absoluteStorePath, {
+      agentId,
+      defaultAgentId: compatibilityAgentId,
+      env,
+    }).path;
+    if (isRetained(sqliteStorePath, agentId)) {
+      return;
+    }
+    const legacyStore =
+      inspectLegacyStore &&
+      existsFile(absoluteStorePath) &&
+      !preserveDeferredPluginSessionSource({ cfg, env, target, pending })
+        ? loadLegacySessionStore(absoluteStorePath)
+        : {};
+    const legacyEntries = Object.entries(legacyStore).filter(
+      (candidate): candidate is [string, SessionEntry] =>
+        candidate[1] != null && typeof candidate[1] === "object",
+    );
+    const legacySessionKeys = new Set(legacyEntries.map(([sessionKey]) => sessionKey));
+    const sqliteSessionKeys = new Set<string>();
+    const isSessionKeyOccupied = (sessionKey: string) =>
+      sqliteSessionKeys.has(sessionKey) || legacySessionKeys.has(sessionKey);
+    const mainKey = resolveCanonicalMainSessionKey({
+      agentId,
+      mainKey: cfg.session?.mainKey,
+      sessionScope: cfg.session?.scope,
+    });
+    const mainRecoveryWedged: MainSessionRecoveryIntegrityCandidate[] = [];
+    const wedgedSubagentSessions: Array<{ key: string; reason: string }> = [];
+    const sqlitePluginStateScanner = createPluginSessionStateDoctorScanner({ agentId, cfg, env });
+    const legacyPluginStateScanner = createPluginSessionStateDoctorScanner({ agentId, cfg, env });
+    let mainEntry: SessionEntry | undefined;
+    const inspectMergedEntry = (sessionKey: string, entry: SessionEntry) => {
+      if (sessionKey === mainKey) {
+        mainEntry = entry;
+      }
+      if (isSubagentRecoveryWedgedEntry(entry)) {
+        wedgedSubagentSessions.push({
+          key: sessionKey,
+          reason: formatSubagentRecoveryWedgedReason(entry),
+        });
+      }
+    };
+    const sqliteEntryCount = scanDoctorSessionEntriesStrict(
+      { agentId, storePath: sqliteStorePath },
+      ({ entry, sessionKey }) => {
+        sqliteSessionKeys.add(sessionKey);
+        sqlitePluginStateScanner.scanEntry(sessionKey, entry);
+        inspectMergedEntry(sessionKey, entry);
+        const recovery = inspectMainSessionRecoveryEntry(sessionKey, entry);
+        if (recovery) {
+          mainRecoveryWedged.push(recovery);
+        }
+      },
+    );
+    for (const [sessionKey, entry] of legacyEntries) {
+      if (sqliteSessionKeys.has(sessionKey)) {
         continue;
       }
-      try {
-        referencedTranscriptPaths.add(
-          resolveComparableTranscriptPath(
-            resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts),
-          ),
-        );
-      } catch {
-        // ignore invalid legacy paths
-      }
+      legacyPluginStateScanner.scanEntry(sessionKey, entry);
+      inspectMergedEntry(sessionKey, entry);
     }
-    const sessionDirEntries = fs.readdirSync(sessionsDir, { withFileTypes: true });
-    const orphanTranscriptPaths = sessionDirEntries
-      .filter((entry) => entry.isFile() && isPrimarySessionTranscriptFileName(entry.name))
-      .map((entry) => path.join(sessionsDir, entry.name))
-      .filter(
-        (filePath) => !referencedTranscriptPaths.has(resolveComparableTranscriptPath(filePath)),
-      );
-    if (orphanTranscriptPaths.length > 0 && !suppressOrphanTranscriptWarning) {
-      const orphanCount = countLabel(orphanTranscriptPaths.length, "orphan transcript file");
-      const orphanPreview = formatFilePreview(orphanTranscriptPaths);
-      warnings.push(
-        [
-          `- Found ${orphanCount} in ${displaySessionsDir}.`,
-          "  These .jsonl files are no longer referenced by sessions.json, so they are not part of any active session history.",
-          "  Doctor can archive them safely by renaming each file to *.deleted.<timestamp>.",
-          `  Examples: ${orphanPreview}`,
-        ].join("\n"),
-      );
-      const archiveOrphans = await prompter.confirmRuntimeRepair({
-        message: `Archive ${orphanCount} in ${displaySessionsDir}? This only renames them to *.deleted.<timestamp>.`,
-        initialValue: false,
-        requiresInteractiveConfirmation: true,
-      });
-      if (archiveOrphans) {
-        let archived = 0;
-        const archivedAt = formatSessionArchiveTimestamp();
-        for (const orphanPath of orphanTranscriptPaths) {
-          const archivedPath = `${orphanPath}.deleted.${archivedAt}`;
-          try {
-            fs.renameSync(orphanPath, archivedPath);
-            archived += 1;
-          } catch (err) {
-            warnings.push(
-              `- Failed to archive orphan transcript ${shortenHomePath(orphanPath)}: ${String(err)}`,
+    const sessionPathOpts = resolveSessionFilePathOptions({ agentId, storePath });
+    await noteMainSessionRecoveryIntegrity({
+      storePath: sqliteStorePath,
+      wedged: mainRecoveryWedged,
+      warnings,
+      changes,
+      confirmRepair: (params) => prompter.confirmRuntimeRepair(params),
+    });
+    // Session SQLite migration owns legacy transcript validation and archival.
+    // Repeating it here turns healthy pending imports into integrity warnings.
+    if (sqliteEntryCount > 0 || legacyEntries.length > 0) {
+      if (wedgedSubagentSessions.length > 0) {
+        const wedgedCount = countLabel(wedgedSubagentSessions.length, "wedged subagent session");
+        warnings.push(
+          [
+            `- Found ${wedgedCount} with automatic restart recovery tombstoned.`,
+            "  OpenClaw will not auto-resume these child sessions on restart; use Doctor to repair stale native subagent recovery state.",
+            `  Examples: ${wedgedSubagentSessions
+              .slice(0, 3)
+              .map(({ key }) => key)
+              .join(", ")}`,
+            `  Fix: ${formatCliCommand("openclaw doctor --fix")}`,
+          ].join("\n"),
+        );
+        const repairWedged = await prompter.confirmRuntimeRepair({
+          message: `Clear stale aborted recovery flags for ${wedgedCount}?`,
+          initialValue: true,
+        });
+        if (repairWedged) {
+          let repaired = 0;
+          const repairedAt = Date.now();
+          const sqliteKeys = wedgedSubagentSessions
+            .map(({ key }) => key)
+            .filter((key) => sqliteSessionKeys.has(key));
+          for (const sessionKeys of iterateDoctorSessionKeyBatches(sqliteKeys)) {
+            repaired += await applySessionEntryReplacements<number>({
+              agentId,
+              sessionKeys,
+              storePath: sqliteStorePath,
+              update: (currentEntries) => {
+                const replacements = currentEntries.filter(({ entry }) =>
+                  clearWedgedSubagentRecoveryAbort(entry, repairedAt),
+                );
+                return { replacements, result: replacements.length };
+              },
+            });
+          }
+          const legacyKeys = wedgedSubagentSessions
+            .map(({ key }) => key)
+            .filter((key) => !sqliteSessionKeys.has(key));
+          if (legacyKeys.length > 0 && existsFile(absoluteStorePath)) {
+            await updateLegacySessionStore(absoluteStorePath, (currentStore) => {
+              for (const key of legacyKeys) {
+                const current = currentStore[key];
+                if (current && clearWedgedSubagentRecoveryAbort(current, repairedAt)) {
+                  repaired += 1;
+                  currentStore[key] = current;
+                }
+              }
+            });
+          }
+          if (repaired > 0) {
+            changes.push(
+              `- Cleared aborted restart-recovery flags for ${countLabel(
+                repaired,
+                "wedged subagent session",
+              )}.`,
             );
           }
         }
-        if (archived > 0) {
-          changes.push(
-            `- Archived ${countLabel(archived, "orphan transcript file")} in ${displaySessionsDir} as .deleted timestamped backups.`,
+
+        const wedgedReasons = wedgedSubagentSessions.map(({ reason }) => reason);
+        const visibleWedgedReasons = uniqueStrings(wedgedReasons).slice(0, 2);
+        if (visibleWedgedReasons.length > 0) {
+          warnings.push(visibleWedgedReasons.map((reason) => `  Reason: ${reason}`).join("\n"));
+        }
+      }
+
+      await runPluginSessionStateDoctorRepairs({
+        scan: sqlitePluginStateScanner.result(),
+        store: { kind: "sqlite", agentId, path: sqliteStorePath },
+        prompter,
+        warnings,
+        changes,
+      });
+      await runPluginSessionStateDoctorRepairs({
+        scan: legacyPluginStateScanner.result(),
+        store: { kind: "legacy", path: absoluteStorePath },
+        prompter,
+        warnings,
+        changes,
+      });
+      if (sqliteSessionKeys.has(mainKey)) {
+        mainEntry = loadExactSessionEntryReadOnly({
+          agentId,
+          sessionKey: mainKey,
+          storePath: sqliteStorePath,
+        })?.entry;
+      }
+
+      const heartbeatMainMoved = await repairHeartbeatPoisonedMainSession({
+        mainKey,
+        mainEntry,
+        isSessionKeyOccupied,
+        store: sqliteSessionKeys.has(mainKey)
+          ? { kind: "sqlite", agentId, path: sqliteStorePath }
+          : { kind: "legacy", path: absoluteStorePath },
+        stateDir,
+        sessionPathOpts,
+        prompter,
+        warnings,
+        changes,
+      });
+
+      // SQLite-owned transcripts live in the agent DB after import.
+      // Do not require the archived legacy JSONL for those sessions.
+      if (!heartbeatMainMoved && mainEntry?.sessionId && !sqliteSessionKeys.has(mainKey)) {
+        const transcriptPath = resolveSessionFilePathCore(
+          mainEntry.sessionId,
+          mainEntry,
+          sessionPathOpts,
+        );
+        if (!existsFile(transcriptPath)) {
+          warnings.push(
+            `- Main session transcript missing (${shortenHomePath(transcriptPath)}). History will appear to reset.`,
           );
+        } else {
+          const lineCount = countJsonlLines(transcriptPath);
+          if (lineCount <= 1) {
+            warnings.push(
+              `- Main session transcript has only ${lineCount} line. Session history may not be appending.`,
+            );
+          }
         }
       }
     }
+  };
+
+  // A fixed store can map to several agent-owned SQLite targets but only one legacy JSON file.
+  // Scan that file once under the compatibility owner so full-store work is not repeated.
+  const inspectedLegacyStores = new Set<string>();
+  for (const target of sessionTargets) {
+    if (
+      isRetained(target.storePath, target.agentId) ||
+      readAgentDatabaseAdmissionRefusal(target.agentId, { env })
+    ) {
+      continue;
+    }
+    const legacyStorePath = path.resolve(target.storePath);
+    const inspectLegacyStore =
+      !legacyStorePath.endsWith(".sqlite") && !inspectedLegacyStores.has(legacyStorePath);
+    await inspectAgentSessionIntegrity(target, inspectLegacyStore);
+    inspectedLegacyStores.add(legacyStorePath);
+  }
+  for (const warning of await describeHeartbeatSessionTargetIssues(cfg)) {
+    warnings.push(warning);
   }
 
   if (warnings.length > 0) {
@@ -1053,20 +1042,4 @@ export async function noteStateIntegrity(
   }
 }
 
-export function noteWorkspaceBackupTip(workspaceDir: string) {
-  if (!existsDir(workspaceDir)) {
-    return;
-  }
-  const gitMarker = path.join(workspaceDir, ".git");
-  if (fs.existsSync(gitMarker)) {
-    return;
-  }
-  note(
-    [
-      "- Tip: back up the workspace in a private git repo (GitHub or GitLab).",
-      "- Keep ~/.openclaw out of git; it contains credentials and session history.",
-      "- Details: /concepts/agent-workspace#git-backup-recommended",
-    ].join("\n"),
-    "Workspace",
-  );
-}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

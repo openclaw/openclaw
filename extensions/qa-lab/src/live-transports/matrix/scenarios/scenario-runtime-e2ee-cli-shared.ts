@@ -1,0 +1,280 @@
+import { randomUUID } from "node:crypto";
+import { chmod, mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
+import type { MatrixVerificationSummary } from "@openclaw/matrix/test-api.js";
+import { z } from "zod";
+import { createMatrixQaClient } from "../substrate/client.js";
+import type { MatrixQaE2eeScenarioId } from "./scenario-contract.js";
+import {
+  formatMatrixQaCliCommand,
+  redactMatrixQaCliOutput,
+  type MatrixQaCliRunResult,
+} from "./scenario-runtime-cli.js";
+import {
+  createMatrixQaE2eeAccountClient,
+  formatMatrixQaSasEmoji,
+  registerMatrixQaE2eeScenarioAccount,
+} from "./scenario-runtime-e2ee-shared.js";
+import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
+
+const matrixQaCliVerificationStatusSchema = z.looseObject({
+  backup: z
+    .looseObject({
+      decryptionKeyCached: z.boolean().nullish(),
+      keyLoadError: z.string().nullish(),
+      matchesDecryptionKey: z.boolean().nullish(),
+      trusted: z.boolean().nullish(),
+    })
+    .optional(),
+  backupVersion: z.string().nullish(),
+  crossSigningVerified: z.boolean().optional(),
+  encryptionEnabled: z.boolean().optional(),
+  pendingVerifications: z.number().optional(),
+  error: z.string().optional(),
+  recoveryKeyAccepted: z.boolean().optional(),
+  backupUsable: z.boolean().optional(),
+  deviceOwnerVerified: z.boolean().optional(),
+  recoveryKeyStored: z.boolean().optional(),
+  serverDeviceKnown: z.boolean().nullish(),
+  verified: z.boolean().optional(),
+  signedByOwner: z.boolean().optional(),
+  success: z.boolean().optional(),
+  deviceId: z.string().nullish(),
+  userId: z.string().nullish(),
+  imported: z.number().optional(),
+  loadedFromSecretStorage: z.boolean().optional(),
+  total: z.number().optional(),
+});
+export type MatrixQaCliVerificationStatus = z.infer<typeof matrixQaCliVerificationStatusSchema>;
+export type MatrixQaCliEncryptionSetupStatus = {
+  accountId?: string;
+  bootstrap?: {
+    error?: string;
+    success?: boolean;
+  };
+  configPath?: string;
+  encryptionChanged?: boolean;
+  status?: MatrixQaCliVerificationStatus;
+  success?: boolean;
+};
+export type MatrixQaCliAccountAddStatus = {
+  accountId?: string;
+  configPath?: string;
+  encryptionEnabled?: boolean;
+  verificationBootstrap?: {
+    attempted?: boolean;
+    backupVersion?: string | null;
+    error?: string;
+    success?: boolean;
+  };
+};
+export type MatrixQaCliBackupRestoreStatus = Pick<
+  MatrixQaCliVerificationStatus,
+  | "success"
+  | "backup"
+  | "backupVersion"
+  | "error"
+  | "imported"
+  | "loadedFromSecretStorage"
+  | "total"
+>;
+
+export function isMatrixQaCliBackupUsable(
+  backup: MatrixQaCliVerificationStatus["backup"],
+  opts: { allowUntrustedMatchingKey?: boolean } = {},
+): boolean {
+  return Boolean(
+    (backup?.trusted || opts.allowUntrustedMatchingKey === true) &&
+    backup?.matchesDecryptionKey &&
+    backup.decryptionKeyCached &&
+    !backup.keyLoadError,
+  );
+}
+
+export function parseMatrixQaCliJson(result: MatrixQaCliRunResult): unknown {
+  const stdout = result.stdout.trim();
+  const stderr = result.stderr.trim();
+  // Nonempty stdout is authoritative, including malformed failure payloads.
+  const payload = stdout || stderr;
+  if (!payload) {
+    throw new Error(`${formatMatrixQaCliCommand(result.args)} did not print JSON`);
+  }
+  try {
+    return JSON.parse(payload) as unknown;
+  } catch (error) {
+    throw new Error(
+      `${formatMatrixQaCliCommand(result.args)} printed invalid JSON: ${
+        error instanceof Error ? error.message : String(error)
+      }\n${stdout ? "stdout" : "stderr"}:\n${redactMatrixQaCliOutput(payload)}`,
+      { cause: error },
+    );
+  }
+}
+
+export function parseMatrixQaCliVerificationStatus(result: MatrixQaCliRunResult) {
+  return matrixQaCliVerificationStatusSchema.parse(parseMatrixQaCliJson(result));
+}
+
+export function buildMatrixQaPluginActivationConfig() {
+  return {
+    plugins: {
+      allow: ["matrix"],
+      entries: {
+        matrix: { enabled: true },
+      },
+    },
+  };
+}
+
+export function buildMatrixQaEmptyMatrixCliConfig() {
+  return {
+    ...buildMatrixQaPluginActivationConfig(),
+    channels: {
+      matrix: {
+        enabled: true,
+        accounts: {},
+      },
+    },
+  };
+}
+
+export async function registerMatrixQaCliE2eeAccount(params: {
+  context: MatrixQaScenarioContext;
+  deviceName: string;
+  scenarioId: MatrixQaE2eeScenarioId;
+}) {
+  return await registerMatrixQaE2eeScenarioAccount({ ...params, kind: "cli" });
+}
+
+export async function loginMatrixQaCliDevice(
+  baseUrl: string,
+  account: { password: string; userId: string },
+  deviceName: string,
+  label: string,
+) {
+  const device = await createMatrixQaClient({ baseUrl }).loginWithPassword({
+    deviceName,
+    password: account.password,
+    userId: account.userId,
+  });
+  if (!device.deviceId) {
+    throw new Error(`${label} login did not return a device id`);
+  }
+  return { ...device, deviceId: device.deviceId };
+}
+
+export async function createMatrixQaE2eeCliOwnerClient(params: {
+  account: Awaited<ReturnType<typeof registerMatrixQaCliE2eeAccount>>;
+  context: MatrixQaScenarioContext;
+  scenarioId: MatrixQaE2eeScenarioId;
+}) {
+  return await createMatrixQaE2eeAccountClient(params.context, {
+    accessToken: params.account.accessToken,
+    actorId: `cli-owner-${randomUUID().slice(0, 8)}`,
+    deviceId: params.account.deviceId,
+    password: params.account.password,
+    scenarioId: params.scenarioId,
+    userId: params.account.userId,
+  });
+}
+
+export function parseMatrixQaCliSasText(
+  text: string,
+  label: string,
+): { kind: "emoji"; value: string } | { kind: "decimal"; value: string } {
+  const emoji = text.match(/^SAS emoji:\s*(.+)$/m)?.[1]?.trim();
+  if (emoji) {
+    return { kind: "emoji", value: emoji };
+  }
+  const decimal = text.match(/^SAS decimals:\s*(.+)$/m)?.[1]?.trim();
+  if (decimal) {
+    return { kind: "decimal", value: decimal };
+  }
+  throw new Error(`${label} did not print SAS emoji or decimals`);
+}
+
+export function parseMatrixQaCliSummaryField(text: string, field: string): string | null {
+  const escaped = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return text.match(new RegExp(`^${escaped}:\\s*(.+)$`, "m"))?.[1]?.trim() ?? null;
+}
+
+export async function writeMatrixQaCliOutputArtifacts(params: {
+  label: string;
+  result: MatrixQaCliRunResult;
+  rootDir: string;
+}) {
+  await mkdir(params.rootDir, { mode: 0o700, recursive: true });
+  await chmod(params.rootDir, 0o700).catch(() => undefined);
+  const prefix = params.label.replace(/[^A-Za-z0-9_-]/g, "-");
+  const stdoutPath = path.join(params.rootDir, `${prefix}.stdout.txt`);
+  const stderrPath = path.join(params.rootDir, `${prefix}.stderr.txt`);
+  await Promise.all([
+    writeFile(stdoutPath, redactMatrixQaCliOutput(params.result.stdout), { mode: 0o600 }),
+    writeFile(stderrPath, redactMatrixQaCliOutput(params.result.stderr), { mode: 0o600 }),
+  ]);
+  return { stderrPath, stdoutPath };
+}
+
+export async function runMatrixQaSetupCliJson(
+  cli: {
+    rootDir: string;
+    run: (args: string[], timeoutMs?: number, stdin?: string) => Promise<MatrixQaCliRunResult>;
+  },
+  label: string,
+  ...args: Parameters<typeof cli.run>
+) {
+  const result = await cli.run(...args);
+  const artifacts = await writeMatrixQaCliOutputArtifacts({ label, result, rootDir: cli.rootDir });
+  return { artifacts, payload: parseMatrixQaCliJson(result), result };
+}
+
+export function assertMatrixQaCliSasMatches(params: {
+  cliSas: ReturnType<typeof parseMatrixQaCliSasText>;
+  owner: MatrixVerificationSummary;
+}) {
+  const emoji = params.cliSas.kind === "emoji";
+  const kind = emoji ? "emoji" : "decimals";
+  const ownerSas = emoji
+    ? formatMatrixQaSasEmoji(params.owner).join(" | ")
+    : params.owner.sas?.decimal?.join(" ");
+  if (!ownerSas) {
+    throw new Error(`Matrix owner client did not expose SAS ${kind}`);
+  }
+  if (params.cliSas.value !== ownerSas) {
+    throw new Error(`Matrix CLI SAS ${kind} did not match the owner client`);
+  }
+  return emoji ? ownerSas.split(" | ") : [ownerSas];
+}
+
+export function isMatrixQaCliOwnerSelfVerification(params: {
+  cliDeviceId?: string;
+  ownerUserId: string;
+  requireCompleted?: boolean;
+  requirePending?: boolean;
+  requireSas?: boolean;
+  summary: MatrixVerificationSummary;
+  transactionId?: string;
+}) {
+  const summary = params.summary;
+  if (
+    !summary.isSelfVerification ||
+    summary.initiatedByMe ||
+    summary.otherUserId !== params.ownerUserId
+  ) {
+    return false;
+  }
+  if (params.transactionId) {
+    if (summary.transactionId !== params.transactionId) {
+      return false;
+    }
+  } else if (params.cliDeviceId && summary.otherDeviceId !== params.cliDeviceId) {
+    return false;
+  }
+  if (params.requirePending === true && !summary.pending) {
+    return false;
+  }
+  if (params.requireSas === true && !summary.hasSas) {
+    return false;
+  }
+  return params.requireCompleted !== true || summary.completed;
+}

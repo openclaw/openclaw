@@ -1,5 +1,8 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import {
   externalCliDiscoveryForProviderAuth,
   ensureAuthProfileStore,
@@ -8,12 +11,12 @@ import {
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
 import { isStoredCredentialCompatibleWithAuthProvider } from "./auth-profiles/order.js";
+import { readCodexCliCredentialsCached } from "./cli-credentials.js";
 import {
-  readClaudeCliCredentialsCached,
-  readCodexCliCredentialsCached,
-} from "./cli-credentials.js";
-import { resolveEnvApiKey, resolveUsableCustomProviderApiKey } from "./model-auth.js";
-import { normalizeProviderId } from "./model-selection.js";
+  resolveEnvApiKey,
+  resolveProviderEntryApiKeyProfileReference,
+  resolveUsableCustomProviderApiKey,
+} from "./model-auth.js";
 
 export function resolveModelAuthLabel(params: {
   provider?: string;
@@ -21,6 +24,7 @@ export function resolveModelAuthLabel(params: {
   sessionEntry?: Partial<Pick<SessionEntry, "authProfileOverride">>;
   agentDir?: string;
   workspaceDir?: string;
+  codexCliCredentialsHome?: string;
   includeExternalProfiles?: boolean;
   acceptedProviderIds?: readonly string[];
 }): string | undefined {
@@ -30,34 +34,31 @@ export function resolveModelAuthLabel(params: {
   }
 
   const providerKey = normalizeProviderId(resolvedProvider);
+  const profileOverride = params.sessionEntry?.authProfileOverride?.trim();
   const store =
     params.includeExternalProfiles === false
-      ? loadAuthProfileStoreWithoutExternalProfiles(params.agentDir)
+      ? loadAuthProfileStoreWithoutExternalProfiles(params.agentDir, { profileId: profileOverride })
       : ensureAuthProfileStore(params.agentDir, {
+          profileId: profileOverride,
           externalCli: externalCliDiscoveryForProviderAuth({
             cfg: params.cfg,
             provider: providerKey,
-            preferredProfile: params.sessionEntry?.authProfileOverride,
+            preferredProfile: profileOverride,
           }),
         });
-  const profileOverride = params.sessionEntry?.authProfileOverride?.trim();
-  const acceptedProviderKeys = [
-    ...new Set(
-      [...(params.acceptedProviderIds ?? []).map(normalizeProviderId), providerKey].filter(Boolean),
+  const acceptedProviderKeys = uniqueStrings(
+    [...(params.acceptedProviderIds ?? []).map(normalizeProviderId), providerKey].filter(Boolean),
+  );
+  const order = uniqueStrings(
+    acceptedProviderKeys.flatMap((acceptedProvider) =>
+      resolveAuthProfileOrder({
+        cfg: params.cfg,
+        store,
+        provider: acceptedProvider,
+        preferredProfile: profileOverride,
+      }),
     ),
-  ];
-  const order = [
-    ...new Set(
-      acceptedProviderKeys.flatMap((acceptedProvider) =>
-        resolveAuthProfileOrder({
-          cfg: params.cfg,
-          store,
-          provider: acceptedProvider,
-          preferredProfile: profileOverride,
-        }),
-      ),
-    ),
-  ];
+  );
   const candidates = [profileOverride, ...order].filter(Boolean) as string[];
 
   for (const profileId of candidates) {
@@ -74,18 +75,44 @@ export function resolveModelAuthLabel(params: {
     ) {
       continue;
     }
+    // Status can be visible to collaborators; personal credential metadata stays private.
+    const label = isUserModelAuthProfileId(profileId)
+      ? "personal account"
+      : resolveAuthProfileDisplayLabel({ cfg: params.cfg, store, profileId });
+    const mode = profile.type === "api_key" ? "api-key" : profile.type;
+    return `${mode}${label ? ` (${label})` : ""}`;
+  }
+
+  const providerEntryProfileRef = resolveProviderEntryApiKeyProfileReference({
+    cfg: params.cfg,
+    provider: providerKey,
+    store,
+  });
+  if (providerEntryProfileRef.kind === "profile") {
     const label = resolveAuthProfileDisplayLabel({
       cfg: params.cfg,
       store,
-      profileId,
+      profileId: providerEntryProfileRef.profileId,
     });
-    if (profile.type === "oauth") {
-      return `oauth${label ? ` (${label})` : ""}`;
-    }
-    if (profile.type === "token") {
-      return `token${label ? ` (${label})` : ""}`;
-    }
-    return `api-key${label ? ` (${label})` : ""}`;
+    const mode = providerEntryProfileRef.mode === "token" ? "token" : "api-key";
+    return `${mode}${label ? ` (${label})` : ""}`;
+  }
+  if (providerEntryProfileRef.kind === "profile-incompatible") {
+    // Preserve the fact that config pointed at a profile while avoiding a
+    // misleading auth mode for an incompatible provider/profile pairing.
+    return "unknown";
+  }
+
+  if (
+    params.codexCliCredentialsHome &&
+    (providerKey === "openai" || providerKey === "codex") &&
+    readCodexCliCredentialsCached({
+      codexHome: params.codexCliCredentialsHome,
+      ttlMs: 5_000,
+      allowKeychainPrompt: false,
+    })
+  ) {
+    return "oauth (codex-cli)";
   }
 
   const envKey = resolveEnvApiKey(providerKey, process.env, {
@@ -93,10 +120,8 @@ export function resolveModelAuthLabel(params: {
     workspaceDir: params.workspaceDir,
   });
   if (envKey?.apiKey) {
-    if (envKey.source.includes("OAUTH_TOKEN")) {
-      return `oauth (${envKey.source})`;
-    }
-    return `api-key (${envKey.source})`;
+    const mode = envKey.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key";
+    return `${mode} (${envKey.source})`;
   }
 
   if (
@@ -105,11 +130,8 @@ export function resolveModelAuthLabel(params: {
   ) {
     return "oauth (codex-cli)";
   }
-  if (
-    providerKey === "claude-cli" &&
-    readClaudeCliCredentialsCached({ ttlMs: 5_000, allowKeychainPrompt: false })
-  ) {
-    return "oauth (claude-cli)";
+  if (providerKey === "claude-cli") {
+    return "native (claude-cli)";
   }
 
   const customKey = resolveUsableCustomProviderApiKey({

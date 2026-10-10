@@ -1,116 +1,128 @@
 import type { Chat, Message } from "grammy/types";
+import { firstDefined, isSenderIdAllowed } from "openclaw/plugin-sdk/allow-from";
 import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
-import {
-  resolveCommandAuthorization,
-  type CommandAuthorization,
-} from "openclaw/plugin-sdk/command-auth-native";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type {
   OpenClawConfig,
-  TelegramAccountConfig,
+  DmPolicy,
   TelegramDirectConfig,
   TelegramGroupConfig,
-  TelegramDmThreadReplies,
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
+import {
+  asDateTimestampMs,
+  parseStrictPositiveInteger,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { expandTelegramAllowFromWithAccessGroups } from "../access-groups.js";
-import { firstDefined, normalizeAllowFrom, type NormalizedAllowFrom } from "../bot-access.js";
-import { normalizeTelegramReplyToMessageId } from "../outbound-params.js";
-import { resolveTelegramPreviewStreamMode } from "../preview-streaming.js";
+import {
+  normalizeAllowFrom,
+  resolveTelegramEffectiveDmPolicy,
+  type NormalizedAllowFrom,
+} from "../bot-access.js";
+import type { TelegramThreadSpec } from "../thread-spec.js";
+import { buildTelegramConversationId } from "../topic-conversation.js";
 import {
   buildSenderLabel,
   buildSenderName,
-  expandTextLinks,
   extractTelegramLocation,
   getTelegramTextParts,
   hasBotMention,
   isBinaryContent,
+  joinTelegramTextParts,
   normalizeForwardedContext,
+  resolveTelegramPrimaryMedia,
+  resolveTelegramRichMessageBody,
   resolveTelegramTextContent,
-  resolveTelegramMediaPlaceholder,
   type TelegramForwardedContext,
+  type TelegramMediaKind,
   type TelegramTextEntity,
 } from "./body-helpers.js";
-import type { TelegramGetChat, TelegramStreamMode } from "./types.js";
+import type { TelegramGetChat } from "./types.js";
 
-export type { TelegramForwardedContext, TelegramTextEntity } from "./body-helpers.js";
+export { resolveTelegramPreviewStreamMode as resolveTelegramStreamMode } from "../preview-streaming.js";
+export { normalizeTelegramReplyToMessageId as resolveTelegramReplyId } from "../outbound-params.js";
+
+export type {
+  TelegramForwardedContext,
+  TelegramMediaKind,
+  TelegramTextEntity,
+} from "./body-helpers.js";
+export type { TelegramThreadSpec } from "../thread-spec.js";
 export {
   buildSenderLabel,
   buildSenderName,
-  expandTextLinks,
   extractTelegramLocation,
   getTelegramTextParts,
   hasBotMention,
   isBinaryContent,
+  joinTelegramTextParts,
   normalizeForwardedContext,
-  resolveTelegramMediaPlaceholder,
+  resolveTelegramPrimaryMedia,
 };
 
-const TELEGRAM_GENERAL_TOPIC_ID = 1;
+export const TELEGRAM_GENERAL_TOPIC_ID = 1;
 const TELEGRAM_FORUM_FLAG_CACHE_MAX_CHATS = 1024;
 const TELEGRAM_FORUM_FLAG_CACHE_TTL_MS = 10 * 60_000;
 const telegramForumFlagByChatId = new Map<string, { expiresAtMs: number; isForum: boolean }>();
 
-export function resetTelegramForumFlagCacheForTest(): void {
-  telegramForumFlagByChatId.clear();
-}
-
 function cacheTelegramForumFlag(chatId: string | number, isForum: boolean, nowMs = Date.now()) {
   const cacheKey = String(chatId);
-  if (
-    !telegramForumFlagByChatId.has(cacheKey) &&
-    telegramForumFlagByChatId.size >= TELEGRAM_FORUM_FLAG_CACHE_MAX_CHATS
-  ) {
-    const oldestKey = telegramForumFlagByChatId.keys().next().value;
-    if (oldestKey !== undefined) {
-      telegramForumFlagByChatId.delete(oldestKey);
-    }
+  const expiresAtMs = resolveExpiresAtMsFromDurationMs(TELEGRAM_FORUM_FLAG_CACHE_TTL_MS, {
+    nowMs,
+  });
+  if (expiresAtMs === undefined) {
+    telegramForumFlagByChatId.delete(cacheKey);
+    return;
   }
   telegramForumFlagByChatId.set(cacheKey, {
-    expiresAtMs: nowMs + TELEGRAM_FORUM_FLAG_CACHE_TTL_MS,
+    expiresAtMs,
     isForum,
   });
+  pruneMapToMaxSize(telegramForumFlagByChatId, TELEGRAM_FORUM_FLAG_CACHE_MAX_CHATS);
+}
+
+export function getCachedTelegramForumFlag(
+  chatId: string | number,
+  nowMs?: number,
+): boolean | undefined {
+  const cacheKey = String(chatId);
+  const cached = telegramForumFlagByChatId.get(cacheKey);
+  if (!cached) {
+    return undefined;
+  }
+  const effectiveNow = nowMs ?? Date.now();
+  if (cached.expiresAtMs <= effectiveNow) {
+    return undefined;
+  }
+  return cached.isForum;
 }
 
 function hadUnsafeTelegramText(raw: unknown, sanitized: string): boolean {
   return typeof raw === "string" && raw.trim().length > 0 && sanitized.trim().length === 0;
 }
 
-export type TelegramThreadSpec = {
-  id?: number;
-  scope: "dm" | "forum" | "none";
+type TelegramThreadParams = {
+  direct_messages_topic_id?: number;
+  message_thread_id?: number;
 };
-
-function normalizeTelegramDmThreadReplies(value: unknown): TelegramDmThreadReplies | undefined {
-  return value === "off" || value === "inbound" || value === "always" ? value : undefined;
-}
-
-export function resolveTelegramDmThreadReplies(params: {
-  accountConfig?: TelegramAccountConfig;
-  directConfig?: TelegramDirectConfig;
-}): TelegramDmThreadReplies {
-  return (
-    normalizeTelegramDmThreadReplies(params.directConfig?.threadReplies) ??
-    normalizeTelegramDmThreadReplies(params.accountConfig?.dm?.threadReplies) ??
-    "off"
-  );
-}
 
 export function shouldUseTelegramDmThreadSession(params: {
   dmThreadId?: number;
-  accountConfig?: TelegramAccountConfig;
-  directConfig?: TelegramDirectConfig;
-  topicConfig?: TelegramTopicConfig;
+  botHasTopicsEnabled?: boolean;
 }): boolean {
-  if (params.dmThreadId == null) {
-    return false;
-  }
-  if (params.directConfig?.requireTopic === true || params.topicConfig) {
-    return true;
-  }
-  return resolveTelegramDmThreadReplies(params) !== "off";
+  return params.dmThreadId != null && params.botHasTopicsEnabled === true;
+}
+
+export function resolveTelegramBotHasTopicsEnabled(me: unknown): boolean {
+  return (
+    me !== null &&
+    typeof me === "object" &&
+    "has_topics_enabled" in me &&
+    me.has_topics_enabled === true
+  );
 }
 
 export function extractTelegramForumFlag(value: unknown): boolean | undefined {
@@ -121,34 +133,52 @@ export function extractTelegramForumFlag(value: unknown): boolean | undefined {
   return typeof forum === "boolean" ? forum : undefined;
 }
 
+export function resolveTelegramMessageForumFlagHint(params: {
+  chatType?: Chat["type"];
+  isForum?: boolean;
+  isTopicMessage?: boolean;
+}): boolean | undefined {
+  if (params.chatType === "supergroup" && params.isTopicMessage === true) {
+    return true;
+  }
+  return typeof params.isForum === "boolean" ? params.isForum : undefined;
+}
+
 export async function resolveTelegramForumFlag(params: {
   chatId: string | number;
   chatType?: Chat["type"];
   isGroup: boolean;
   isForum?: boolean;
+  isTopicMessage?: boolean;
   getChat?: TelegramGetChat;
 }): Promise<boolean> {
-  if (typeof params.isForum === "boolean") {
+  const forumHint = resolveTelegramMessageForumFlagHint(params);
+  if (typeof forumHint === "boolean") {
     if (params.isGroup && params.chatType === "supergroup") {
-      cacheTelegramForumFlag(params.chatId, params.isForum);
+      cacheTelegramForumFlag(params.chatId, forumHint);
     }
-    return params.isForum;
+    return forumHint;
   }
   if (!params.isGroup || params.chatType !== "supergroup" || !params.getChat) {
     return false;
   }
   const cacheKey = String(params.chatId);
-  const nowMs = Date.now();
+  const rawNowMs = Date.now();
+  const nowMs = asDateTimestampMs(rawNowMs);
   const cached = telegramForumFlagByChatId.get(cacheKey);
-  if (cached && cached.expiresAtMs > nowMs) {
-    return cached.isForum;
-  }
   if (cached) {
+    if (
+      nowMs !== undefined &&
+      asDateTimestampMs(cached.expiresAtMs) !== undefined &&
+      cached.expiresAtMs > nowMs
+    ) {
+      return cached.isForum;
+    }
     telegramForumFlagByChatId.delete(cacheKey);
   }
   try {
     const resolved = extractTelegramForumFlag(await params.getChat(params.chatId)) === true;
-    cacheTelegramForumFlag(params.chatId, resolved, nowMs);
+    cacheTelegramForumFlag(params.chatId, resolved, rawNowMs);
     return resolved;
   } catch {
     return false;
@@ -174,23 +204,32 @@ export function withResolvedTelegramForumFlag<T extends { chat: object }>(
 }
 
 export async function resolveTelegramGroupAllowFromContext(params: {
-  cfg?: OpenClawConfig;
+  cfg: OpenClawConfig;
   chatId: string | number;
   accountId?: string;
+  dmPolicy?: DmPolicy;
+  allowFrom?: Array<string | number>;
   senderId?: string;
   isGroup?: boolean;
   isForum?: boolean;
   messageThreadId?: number | null;
+  threadSpec?: TelegramThreadSpec;
   groupAllowFrom?: Array<string | number>;
+  // Set when the caller has already authorized the sender by some other config
+  // path (e.g. commands.allowFrom) and the pairing-store outcome cannot change
+  // the decision. Lets command auth survive transient store I/O failures.
+  skipPairingStoreRead?: boolean;
   readChannelAllowFromStore?: typeof readChannelAllowFromStore;
   resolveTelegramGroupConfig: (
     chatId: string | number,
-    messageThreadId?: number,
+    messageThreadId: number | undefined,
+    cfg: OpenClawConfig,
   ) => {
     groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
     topicConfig?: TelegramTopicConfig;
   };
 }): Promise<{
+  threadSpec: TelegramThreadSpec;
   resolvedThreadId?: number;
   dmThreadId?: number;
   storeAllowFrom: string[];
@@ -201,25 +240,57 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   hasGroupAllowOverride: boolean;
 }> {
   const accountId = normalizeAccountId(params.accountId);
-  // Use resolveTelegramThreadSpec to handle both forum groups AND DM topics
-  const threadSpec = resolveTelegramThreadSpec({
-    isGroup: params.isGroup ?? false,
-    isForum: params.isForum,
-    messageThreadId: params.messageThreadId,
-  });
-  const resolvedThreadId = threadSpec.scope === "forum" ? threadSpec.id : undefined;
+  const threadSpec =
+    params.threadSpec ??
+    resolveTelegramThreadSpec({
+      isGroup: params.isGroup ?? false,
+      isForum: params.isForum,
+      messageThreadId: params.messageThreadId,
+    });
+  const resolvedThreadId =
+    threadSpec.scope === "forum" || threadSpec.scope === "direct-messages"
+      ? threadSpec.id
+      : undefined;
   const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
   const threadIdForConfig = resolvedThreadId ?? dmThreadId;
-  const storeAllowFrom = await (params.readChannelAllowFromStore ?? readChannelAllowFromStore)(
-    "telegram",
-    process.env,
-    accountId,
-  ).catch(() => []);
   const { groupConfig, topicConfig } = params.resolveTelegramGroupConfig(
     params.chatId,
     threadIdForConfig,
+    params.cfg,
   );
   const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
+  const effectiveDmPolicy = resolveTelegramEffectiveDmPolicy({
+    isGroup: params.isGroup ?? false,
+    groupConfig,
+    dmPolicy: params.dmPolicy,
+  });
+  const configuredAllowFrom = groupAllowOverride ?? params.allowFrom;
+  let needsPairingStore =
+    !params.skipPairingStoreRead && !params.isGroup && effectiveDmPolicy === "pairing";
+  if (needsPairingStore && configuredAllowFrom?.length) {
+    const configuredAllow = normalizeAllowFrom(
+      await expandTelegramAllowFromWithAccessGroups({
+        ...params,
+        accountId,
+        allowFrom: configuredAllowFrom,
+      }),
+    );
+    needsPairingStore =
+      !configuredAllow.hasEntries || !isSenderIdAllowed(configuredAllow, params.senderId, true);
+  }
+  let storeAllowFrom: string[] = [];
+  if (needsPairingStore) {
+    try {
+      storeAllowFrom = await (params.readChannelAllowFromStore ?? readChannelAllowFromStore)(
+        "telegram",
+        process.env,
+        accountId,
+      );
+    } catch (cause) {
+      throw new TelegramPairingStoreReadError(cause);
+    }
+  }
+
   const expandedGroupAllowFrom = await expandTelegramAllowFromWithAccessGroups({
     cfg: params.cfg,
     allowFrom: groupAllowOverride ?? params.groupAllowFrom,
@@ -231,6 +302,7 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   const effectiveGroupAllow = normalizeAllowFrom(expandedGroupAllowFrom);
   const hasGroupAllowOverride = groupAllowOverride !== undefined;
   return {
+    threadSpec,
     resolvedThreadId,
     dmThreadId,
     storeAllowFrom,
@@ -242,25 +314,21 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   };
 }
 
-/**
- * Resolve the thread ID for Telegram forum topics.
- * For non-forum groups, returns undefined even if messageThreadId is present
- * (reply threads in regular groups should not create separate sessions).
- * For forum groups, returns the topic ID (or General topic ID=1 if unspecified).
- */
+export class TelegramPairingStoreReadError extends Error {
+  override readonly cause: unknown;
+  constructor(cause: unknown) {
+    super(`Telegram pairing store read failed: ${String(cause)}`);
+    this.name = "TelegramPairingStoreReadError";
+    this.cause = cause;
+  }
+}
+
+// Reply threads in non-forum groups must not create separate sessions.
 export function resolveTelegramForumThreadId(params: {
   isForum?: boolean;
   messageThreadId?: number | null;
 }) {
-  // Non-forum groups: ignore message_thread_id (reply threads are not real topics)
-  if (!params.isForum) {
-    return undefined;
-  }
-  // Forum groups: use the topic ID, defaulting to General topic
-  if (params.messageThreadId == null) {
-    return TELEGRAM_GENERAL_TOPIC_ID;
-  }
-  return params.messageThreadId;
+  return params.isForum ? (params.messageThreadId ?? TELEGRAM_GENERAL_TOPIC_ID) : undefined;
 }
 
 export function resolveTelegramThreadSpec(params: {
@@ -269,14 +337,8 @@ export function resolveTelegramThreadSpec(params: {
   messageThreadId?: number | null;
 }): TelegramThreadSpec {
   if (params.isGroup) {
-    const id = resolveTelegramForumThreadId({
-      isForum: params.isForum,
-      messageThreadId: params.messageThreadId,
-    });
-    return {
-      id,
-      scope: params.isForum ? "forum" : "none",
-    };
+    const id = resolveTelegramForumThreadId(params);
+    return id === undefined ? { scope: "none" } : { id, scope: "forum" };
   }
   if (params.messageThreadId == null) {
     return { scope: "dm" };
@@ -287,28 +349,50 @@ export function resolveTelegramThreadSpec(params: {
   };
 }
 
-/**
- * Build thread params for Telegram API calls (messages, media).
- *
- * IMPORTANT: Thread IDs behave differently based on chat type:
- * - DMs (private chats): Include message_thread_id when present (DM topics)
- * - Forum topics: Skip thread_id=1 (General topic), include others
- * - Regular groups: Thread IDs are ignored by Telegram
- *
- * General forum topic (id=1) must be treated like a regular supergroup send:
- * Telegram rejects sendMessage/sendMedia with message_thread_id=1 ("thread not found").
- *
- * @param thread - Thread specification with ID and scope
- * @returns API params object or undefined if thread_id should be omitted
- */
-export function buildTelegramThreadParams(thread?: TelegramThreadSpec | null) {
+export function resolveTelegramMessageThreadSpec(
+  message: Message,
+  isForum?: boolean,
+): TelegramThreadSpec {
+  if (message.chat.is_direct_messages === true) {
+    const id = parseStrictPositiveInteger(message.direct_messages_topic?.topic_id);
+    return id === undefined ? { scope: "none" } : { id, scope: "direct-messages" };
+  }
+  const isGroup = message.chat.type === "group" || message.chat.type === "supergroup";
+  return resolveTelegramThreadSpec({
+    isGroup,
+    isForum:
+      isForum ??
+      resolveTelegramMessageForumFlagHint({
+        chatType: message.chat.type,
+        isForum: message.chat.is_forum,
+        isTopicMessage: message.is_topic_message,
+      }),
+    messageThreadId: message.message_thread_id,
+  });
+}
+
+export function buildTelegramThreadParams(
+  thread?: TelegramThreadSpec | null,
+): TelegramThreadParams | undefined {
   if (thread?.id == null) {
     return undefined;
   }
   const normalized = Math.trunc(thread.id);
 
+  if (!Number.isFinite(normalized)) {
+    return undefined;
+  }
+
   if (thread.scope === "dm") {
     return normalized > 0 ? { message_thread_id: normalized } : undefined;
+  }
+
+  if (thread.scope === "direct-messages") {
+    return normalized > 0 ? { direct_messages_topic_id: normalized } : undefined;
+  }
+
+  if (thread.scope === "none") {
+    return undefined;
   }
 
   // Telegram rejects message_thread_id=1 for General forum topic
@@ -319,30 +403,33 @@ export function buildTelegramThreadParams(thread?: TelegramThreadSpec | null) {
   return { message_thread_id: normalized };
 }
 
-/**
- * Build a Telegram routing target that keeps real topic/thread ids in-band.
- *
- * This is used by generic reply plumbing that may not always carry a separate
- * `threadId` field through every hop. General forum topic stays chat-scoped
- * because Telegram rejects `message_thread_id=1` for message sends.
- */
+// Generic reply plumbing may omit threadId, so keep sendable topic IDs in-band.
 export function buildTelegramRoutingTarget(
   chatId: number | string,
   thread?: TelegramThreadSpec | null,
 ): string {
   const base = `telegram:${chatId}`;
   const threadParams = buildTelegramThreadParams(thread);
-  const messageThreadId = threadParams?.message_thread_id;
-  if (typeof messageThreadId !== "number") {
-    return base;
+  if (threadParams?.direct_messages_topic_id != null) {
+    return `${base}:direct-topic:${threadParams.direct_messages_topic_id}`;
   }
-  return `${base}:topic:${messageThreadId}`;
+  return threadParams?.message_thread_id != null
+    ? `${base}:topic:${threadParams.message_thread_id}`
+    : base;
 }
 
-/**
- * Build thread params for typing indicators (sendChatAction).
- * Empirically, General topic (id=1) needs message_thread_id for typing to appear.
- */
+// Bot-private thread IDs remain metadata-only for queued follow-up routing.
+export function buildTelegramInboundOriginTarget(
+  chatId: number | string,
+  thread?: TelegramThreadSpec | null,
+): string {
+  if (thread?.scope !== "forum" && thread?.scope !== "direct-messages") {
+    return `telegram:${chatId}`;
+  }
+  return buildTelegramRoutingTarget(chatId, thread);
+}
+
+// Unlike sends, typing in General topic needs message_thread_id=1 to appear.
 export function buildTypingThreadParams(messageThreadId?: number) {
   if (messageThreadId == null) {
     return undefined;
@@ -350,38 +437,19 @@ export function buildTypingThreadParams(messageThreadId?: number) {
   return { message_thread_id: Math.trunc(messageThreadId) };
 }
 
-export function resolveTelegramStreamMode(telegramCfg?: {
-  streaming?: unknown;
-  streamMode?: unknown;
-}): TelegramStreamMode {
-  return resolveTelegramPreviewStreamMode(telegramCfg);
+export function buildTelegramGroupPeerId(
+  chatId: number | string,
+  thread?: number | TelegramThreadSpec,
+) {
+  const threadSpec = typeof thread === "number" ? { id: thread, scope: "forum" as const } : thread;
+  return buildTelegramConversationId({ chatId, thread: threadSpec ?? { scope: "none" } });
 }
 
-export function buildTelegramGroupPeerId(chatId: number | string, messageThreadId?: number) {
-  return messageThreadId != null ? `${chatId}:topic:${messageThreadId}` : String(chatId);
-}
-
-/**
- * Resolve the direct-message peer identifier for Telegram routing/session keys.
- *
- * In some Telegram DM deliveries (for example certain business/chat bridge flows),
- * `chat.id` can differ from the actual sender user id. Prefer sender id when present
- * so per-peer DM scopes isolate users correctly.
- */
-export function resolveTelegramDirectPeerId(params: {
-  chatId: number | string;
-  senderId?: number | string | null;
-}) {
-  const senderId =
-    params.senderId != null ? (normalizeOptionalString(String(params.senderId)) ?? "") : "";
-  if (senderId) {
-    return senderId;
-  }
-  return String(params.chatId);
-}
-
-export function buildTelegramGroupFrom(chatId: number | string, messageThreadId?: number) {
-  return `telegram:group:${buildTelegramGroupPeerId(chatId, messageThreadId)}`;
+export function buildTelegramGroupFrom(
+  chatId: number | string,
+  thread?: number | TelegramThreadSpec,
+) {
+  return `telegram:group:${buildTelegramGroupPeerId(chatId, thread)}`;
 }
 
 export function isTelegramCommandsAllowFromConfigured(cfg: OpenClawConfig): boolean {
@@ -393,40 +461,7 @@ export function isTelegramCommandsAllowFromConfigured(cfg: OpenClawConfig): bool
   );
 }
 
-export function resolveTelegramCommandAuthorization(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  chatId: number;
-  isGroup: boolean;
-  resolvedThreadId?: number;
-  senderId?: string;
-  senderUsername?: string;
-}): CommandAuthorization {
-  return resolveCommandAuthorization({
-    ctx: {
-      Provider: "telegram",
-      Surface: "telegram",
-      OriginatingChannel: "telegram",
-      AccountId: params.accountId,
-      ChatType: params.isGroup ? "group" : "direct",
-      From: params.isGroup
-        ? buildTelegramGroupFrom(params.chatId, params.resolvedThreadId)
-        : `telegram:${params.chatId}`,
-      SenderId: params.senderId || undefined,
-      SenderUsername: params.senderUsername || undefined,
-    },
-    cfg: params.cfg,
-    commandAuthorized: false,
-  });
-}
-
-/**
- * Build parentPeer for forum topic binding inheritance.
- * When a message comes from a forum topic, the peer ID includes the topic suffix
- * (e.g., `-1001234567890:topic:99`). To allow bindings configured for the base
- * group ID to match, we provide the parent group as `parentPeer` so the routing
- * layer can fall back to it when the exact peer doesn't match.
- */
+// Topic routes inherit bindings from the base group when no exact topic binding matches.
 export function buildTelegramParentPeer(params: {
   isGroup: boolean;
   resolvedThreadId?: number;
@@ -447,16 +482,13 @@ export function buildGroupLabel(msg: Message, chatId: number | string, messageTh
   return `group:${chatId}${topicSuffix}`;
 }
 
-export function resolveTelegramReplyId(raw?: string): number | undefined {
-  return normalizeTelegramReplyToMessageId(raw);
-}
-
 export type TelegramReplyTarget = {
   id?: string;
   sender: string;
   senderId?: string;
   senderUsername?: string;
   body?: string;
+  mediaType?: TelegramMediaKind;
   kind: "reply" | "quote";
   source: "reply_to_message" | "external_reply";
   quoteText?: string;
@@ -475,46 +507,44 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
     msg.quote ?? (externalReply as (Message & { quote?: Message["quote"] }) | undefined)?.quote;
   const rawQuoteText = quote?.text;
   const quoteText = resolveTelegramTextContent(rawQuoteText);
-  let body = "";
-  let kind: TelegramReplyTarget["kind"] = "reply";
+  let body = quoteText.trim();
+  const kind: TelegramReplyTarget["kind"] = body ? "quote" : "reply";
   const filteredQuoteText = hadUnsafeTelegramText(rawQuoteText, quoteText);
 
-  body = quoteText.trim();
-  if (body) {
-    kind = "quote";
-  }
-
   const replyLike = reply ?? externalReply;
+  const externalOrigin = reply ? undefined : msg.external_reply?.origin;
+  const senderMessage =
+    replyLike && externalOrigin?.type === "user"
+      ? { ...replyLike, from: externalOrigin.sender_user }
+      : replyLike;
+  const replyMedia = resolveTelegramPrimaryMedia(replyLike);
   const rawReplyText =
     replyLike && typeof replyLike.text === "string"
       ? replyLike.text
       : replyLike && typeof replyLike.caption === "string"
         ? replyLike.caption
         : undefined;
-  const safeReplyText = resolveTelegramTextContent(rawReplyText);
-  const replyTextParts = replyLike && safeReplyText ? getTelegramTextParts(replyLike) : undefined;
+  const replyTextParts = replyLike ? getTelegramTextParts(replyLike) : undefined;
+  const safeReplyText = replyTextParts?.text ?? "";
   let filteredReplyText = false;
   if (!body && replyLike) {
-    const replyBody = safeReplyText.trim();
+    const replyBody = safeReplyText.trim() || resolveTelegramRichMessageBody(replyLike) || "";
     filteredReplyText = hadUnsafeTelegramText(rawReplyText, replyBody);
     body = replyBody;
     if (!body) {
-      body = resolveTelegramMediaPlaceholder(replyLike) ?? "";
-      if (!body) {
-        const locationData = extractTelegramLocation(replyLike);
-        if (locationData) {
-          body = formatLocationText(locationData);
-        }
+      const locationData = extractTelegramLocation(replyLike);
+      if (locationData) {
+        body = formatLocationText(locationData);
       }
     }
   }
   if (!body && !replyLike) {
     return null;
   }
-  if (!body && !filteredQuoteText && !filteredReplyText) {
+  if (!body && !replyMedia && !filteredQuoteText && !filteredReplyText) {
     return null;
   }
-  const sender = replyLike ? buildSenderName(replyLike) : undefined;
+  const sender = senderMessage ? buildSenderName(senderMessage) : undefined;
   const senderLabel = sender ?? "unknown sender";
   const source = reply ? "reply_to_message" : "external_reply";
   const quotePosition =
@@ -524,15 +554,15 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
   const quoteEntities =
     kind === "quote" && Array.isArray(quote?.entities) ? quote.entities : undefined;
 
-  // Extract forward context from the resolved reply target (reply_to_message or external_reply).
   const forwardedFrom = replyLike ? (normalizeForwardedContext(replyLike) ?? undefined) : undefined;
 
   return {
     id: replyLike?.message_id ? String(replyLike.message_id) : undefined,
     sender: senderLabel,
-    senderId: replyLike?.from?.id != null ? String(replyLike.from.id) : undefined,
-    senderUsername: replyLike?.from?.username ?? undefined,
+    senderId: senderMessage?.from?.id != null ? String(senderMessage.from.id) : undefined,
+    senderUsername: senderMessage?.from?.username ?? undefined,
     body: body || undefined,
+    mediaType: replyMedia?.kind,
     kind,
     source,
     quoteText: kind === "quote" ? quoteText : undefined,

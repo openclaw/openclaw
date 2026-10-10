@@ -3,13 +3,10 @@ import Foundation
 import Swabble
 
 @MainActor
-struct TailLogCommand: ParsableCommand {
+struct TailLogCommand: CLICommand {
     static var commandDescription: CommandDescription {
         CommandDescription(commandName: "tail-log", abstract: "Tail recent transcripts")
     }
-
-    init() {}
-    init(parsed: ParsedValues) {}
 
     mutating func run() async throws {
         let latest = await TranscriptsStore.shared.latest()

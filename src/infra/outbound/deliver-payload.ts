@@ -1,0 +1,307 @@
+import { copyReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
+import type { ReplyPayload } from "../../auto-reply/types.js";
+import type { ChannelOutboundTargetRef } from "../../channels/plugins/types.adapters.js";
+import { hasReplyPayloadContent, type ReplyPayloadDeliveryPin } from "../../interactive/payload.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { OutboundMediaAccess } from "../../media/load-options.js";
+import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
+import { formatErrorMessage } from "../errors.js";
+import type {
+  ChannelHandler,
+  ChannelHandlerParams,
+  DeliverOutboundPayloadsCoreParams,
+  NormalizedPayloadForChannelDelivery,
+} from "./deliver-contracts.js";
+import type { OutboundDeliveryResult, OutboundPayloadDeliveryKind } from "./deliver-types.js";
+import { payloadMediaSources } from "./delivery-queue-media-paths.js";
+import { flattenMarkdownDetails } from "./markdown-details.js";
+import type { NormalizedOutboundPayload } from "./payloads.js";
+import { stripInternalRuntimeScaffolding } from "./protocol-scaffolding.js";
+import type { OutboundPayloadPlan } from "./reply-payload-parts.js";
+
+const log = createSubsystemLogger("outbound/deliver");
+
+export function deliveryKindForPayload(
+  payload: ReplyPayload,
+  payloadSummary: NormalizedOutboundPayload,
+): OutboundPayloadDeliveryKind {
+  if (payloadSummary.mediaUrls.length > 0 || payload.mediaUrl || payload.mediaUrls?.length) {
+    return "media";
+  }
+  if (payload.presentation || payload.interactive || payload.channelData || payload.audioAsVoice) {
+    return "other";
+  }
+  return "text";
+}
+
+export function normalizeEmptyPayloadForDelivery(payload: ReplyPayload): ReplyPayload | null {
+  const text = typeof payload.text === "string" ? payload.text : "";
+  if (text.trim()) {
+    return payload;
+  }
+  if (!hasReplyPayloadContent({ ...payload, text }, { extraContent: payload.location != null })) {
+    return null;
+  }
+  return text ? copyReplyPayloadMetadata(payload, { ...payload, text: "" }) : payload;
+}
+
+export function normalizeTransformedPayloadForDelivery(
+  payload: ReplyPayload,
+  handler: ChannelHandler,
+  copyMetadata: (source: ReplyPayload, payload: ReplyPayload) => ReplyPayload,
+): ReplyPayload | null {
+  const normalizedPayload = handler.normalizePayload ? handler.normalizePayload(payload) : payload;
+  if (!normalizedPayload) {
+    return null;
+  }
+  const normalized = copyMetadata(payload, normalizedPayload);
+  return normalizeEmptyPayloadForDelivery(stripInternalRuntimeScaffoldingFromPayload(normalized));
+}
+
+export function normalizePayloadsForChannelDelivery(
+  plan: readonly OutboundPayloadPlan[],
+  handler: ChannelHandler,
+  copyPayloadMetadata?: (source: ReplyPayload, payload: ReplyPayload) => ReplyPayload,
+): NormalizedPayloadForChannelDelivery[] {
+  const copyMetadata = copyPayloadMetadata ?? copyReplyPayloadMetadata;
+  const normalizedPayloads: NormalizedPayloadForChannelDelivery[] = [];
+  for (const entry of plan) {
+    let sanitizedPayload = stripInternalRuntimeScaffoldingFromPayload(entry.payload);
+    const replaceText = (text: string): void => {
+      if (text !== sanitizedPayload.text) {
+        sanitizedPayload = copyMetadata(sanitizedPayload, {
+          ...sanitizedPayload,
+          text,
+        });
+      }
+    };
+    if (!handler.preserveMarkdownDetails && sanitizedPayload.text) {
+      replaceText(flattenMarkdownDetails(sanitizedPayload.text));
+    }
+    if (
+      handler.sanitizeText &&
+      sanitizedPayload.text &&
+      !handler.shouldSkipPlainTextSanitization?.(sanitizedPayload)
+    ) {
+      replaceText(handler.sanitizeText(sanitizedPayload));
+    }
+    const normalized = normalizeTransformedPayloadForDelivery(
+      sanitizedPayload,
+      handler,
+      copyMetadata,
+    );
+    if (normalized) {
+      normalizedPayloads.push({ index: entry.sourceIndex, payload: normalized });
+    }
+  }
+  if (!handler.normalizePayloadBatch) {
+    return normalizedPayloads;
+  }
+  const sources = copyPayloadMetadata
+    ? new Map(normalizedPayloads.map((entry) => [entry.index, entry.payload]))
+    : undefined;
+  const batch = handler.normalizePayloadBatch(normalizedPayloads);
+  if (!copyPayloadMetadata || !sources) {
+    return batch;
+  }
+  return batch.map((entry) => {
+    const source = sources.get(entry.index);
+    return source
+      ? { index: entry.index, payload: copyPayloadMetadata(source, entry.payload) }
+      : entry;
+  });
+}
+
+function stripInternalRuntimeScaffoldingFromValue(value: unknown): unknown {
+  if (typeof value === "string") {
+    return stripInternalRuntimeScaffolding(value);
+  }
+  if (Array.isArray(value)) {
+    let changed = false;
+    const next = value.map((entry) => {
+      const stripped = stripInternalRuntimeScaffoldingFromValue(entry);
+      changed ||= stripped !== entry;
+      return stripped;
+    });
+    return changed ? next : value;
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) {
+    return value;
+  }
+  let changed = false;
+  const entries = Object.entries(value);
+  for (const entry of entries) {
+    const stripped = stripInternalRuntimeScaffoldingFromValue(entry[1]);
+    changed ||= stripped !== entry[1];
+    entry[1] = stripped;
+  }
+  return changed ? Object.fromEntries(entries) : value;
+}
+
+/** Every media reference a payload set carries, in payload order. */
+export function collectPayloadMediaSources(payloads: readonly ReplyPayload[]): string[] {
+  return payloads.flatMap(payloadMediaSources);
+}
+
+/**
+ * Resolves the media read capability for one send. Queue staging and the live
+ * send must resolve it identically: staging copies exactly the bytes the send is
+ * already allowed to read, so a narrower gate here would reject media the send
+ * would have delivered, and a wider one would widen read authority.
+ */
+export function resolveOutboundMediaAccessForSend(
+  params: DeliverOutboundPayloadsCoreParams,
+  mediaSources: readonly string[],
+): OutboundMediaAccess {
+  if (mediaSources.length === 0) {
+    return params.mediaAccess ?? {};
+  }
+  return resolveAgentScopedOutboundMediaAccess({
+    cfg: params.cfg,
+    agentId: params.session?.agentId ?? params.mirror?.agentId,
+    mediaSources,
+    mediaAccess: params.mediaAccess,
+    sessionKey: params.session?.policyKey ?? params.session?.key,
+    messageProvider: params.session?.key ? undefined : params.channel,
+    accountId: params.session?.requesterAccountId ?? params.accountId,
+    requesterSenderId: params.session?.requesterSenderId,
+    requesterSenderName: params.session?.requesterSenderName,
+    requesterSenderUsername: params.session?.requesterSenderUsername,
+    requesterSenderE164: params.session?.requesterSenderE164,
+  });
+}
+
+export function resolveChannelHandlerParams(
+  params: DeliverOutboundPayloadsCoreParams,
+  reply: DeliverOutboundPayloadsCoreParams["reply"],
+  mediaSources: readonly string[],
+): ChannelHandlerParams {
+  return {
+    cfg: params.cfg,
+    agentId: params.session?.agentId,
+    channel: params.channel,
+    to: params.to,
+    deps: params.deps,
+    accountId: params.accountId,
+    replyToId: reply?.replyToId,
+    replyToMode: reply?.source === "implicit" ? reply.mode : undefined,
+    formatting: params.formatting,
+    threadId: params.threadId,
+    identity: params.identity,
+    gifPlayback: params.gifPlayback,
+    forceDocument: params.forceDocument,
+    silent: params.silent,
+    mediaAccess: resolveOutboundMediaAccessForSend(params, mediaSources),
+    gatewayClientScopes: params.gatewayClientScopes,
+    conversationReadOrigin: params.conversationReadOrigin,
+    preparedMessageId: params.preparedMessageId,
+    requiredUnknownSendReconciliation: params.requiredUnknownSendReconciliation,
+  };
+}
+
+export function stripInternalRuntimeScaffoldingFromPayload(payload: ReplyPayload): ReplyPayload {
+  const stripped = stripInternalRuntimeScaffoldingFromValue(payload);
+  return stripped !== payload &&
+    stripped &&
+    typeof stripped === "object" &&
+    !Array.isArray(stripped)
+    ? copyReplyPayloadMetadata(payload, stripped as ReplyPayload)
+    : payload;
+}
+
+export { summarizeOutboundPayloadForTransport as buildPayloadSummary } from "./payloads.js";
+
+function normalizeDeliveryPin(payload: ReplyPayload): ReplyPayloadDeliveryPin | undefined {
+  const pin = payload.delivery?.pin;
+  if (pin === true) {
+    return { enabled: true };
+  }
+  if (!pin || typeof pin !== "object" || Array.isArray(pin) || !pin.enabled) {
+    return undefined;
+  }
+  return {
+    enabled: true,
+    ...(pin.notify === true ? { notify: true } : {}),
+    ...(pin.required === true ? { required: true } : {}),
+  };
+}
+
+export async function maybePinDeliveredMessage(params: {
+  handler: ChannelHandler;
+  payload: ReplyPayload;
+  target: ChannelOutboundTargetRef;
+  messageId?: string;
+  gatewayClientScopes?: readonly string[];
+  assertDirectAdapterHandoff?: () => void;
+}): Promise<void> {
+  const pin = normalizeDeliveryPin(params.payload);
+  if (!pin) {
+    return;
+  }
+  if (!params.messageId || !params.handler.pinDeliveredMessage) {
+    const missingMessageId = !params.messageId;
+    const message = missingMessageId
+      ? "Delivery pin requested, but no delivered message id was returned."
+      : "Delivery pin requested, but channel does not support pinning delivered messages.";
+    if (pin.required) {
+      throw new Error(
+        missingMessageId
+          ? message
+          : `Delivery pin is not supported by channel: ${params.target.channel}`,
+      );
+    }
+    log.warn(message, {
+      channel: params.target.channel,
+      to: params.target.to,
+    });
+    return;
+  }
+  try {
+    params.assertDirectAdapterHandoff?.();
+    await params.handler.pinDeliveredMessage({
+      target: params.target,
+      messageId: params.messageId,
+      pin,
+      gatewayClientScopes: params.gatewayClientScopes,
+      assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
+    });
+  } catch (err) {
+    if (pin.required) {
+      throw err;
+    }
+    log.warn("Delivery pin requested, but channel failed to pin delivered message.", {
+      channel: params.target.channel,
+      to: params.target.to,
+      messageId: params.messageId,
+      error: formatErrorMessage(err),
+    });
+  }
+}
+
+export async function maybeNotifyAfterDeliveredPayload(params: {
+  handler: ChannelHandler;
+  payload: ReplyPayload;
+  target: ChannelOutboundTargetRef;
+  results: readonly OutboundDeliveryResult[];
+}): Promise<void> {
+  if (!params.handler.afterDeliverPayload || params.results.length === 0) {
+    return;
+  }
+  try {
+    await params.handler.afterDeliverPayload({
+      target: params.target,
+      payload: params.payload,
+      results: params.results,
+    });
+  } catch (err) {
+    log.warn("Plugin outbound adapter after-delivery hook failed.", {
+      channel: params.target.channel,
+      to: params.target.to,
+      error: formatErrorMessage(err),
+    });
+  }
+}

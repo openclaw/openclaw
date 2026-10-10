@@ -1,3 +1,6 @@
+/**
+ * Tests allow-from parsing and normalization helpers.
+ */
 import { describe, expect, it } from "vitest";
 import {
   formatAllowFromLowercase,
@@ -5,6 +8,8 @@ import {
   isAllowedParsedChatSender,
   isNormalizedSenderAllowed,
   mapAllowlistResolutionInputs,
+  parseAllowFromEntries,
+  resolveBasicAllowFromEntries,
 } from "./allow-from.js";
 
 function parseAllowTarget(
@@ -193,6 +198,43 @@ describe("formatNormalizedAllowFromEntries", () => {
     },
   ])("$name", ({ input, expected }) => {
     expect(formatNormalizedAllowFromEntries(input)).toEqual(expected);
+  });
+});
+
+describe("parseAllowFromEntries", () => {
+  it("preserves wildcard entries and returns the first parser error", () => {
+    const parse = (raw: string) =>
+      parseAllowFromEntries(raw, (entry) =>
+        entry === "bad" ? { error: "invalid" } : { value: entry.toLowerCase() },
+      );
+
+    expect(parse(" Alice, *, alice ")).toEqual({ entries: ["alice", "*"] });
+    expect(parse("ok; bad; later")).toEqual({ entries: [], error: "invalid" });
+  });
+});
+
+describe("resolveBasicAllowFromEntries", () => {
+  it("uses unresolved records without a token and canonicalizes resolved ids", async () => {
+    const resolveEntries = async ({ entries }: { token: string; entries: string[] }) =>
+      entries.map((input) => ({
+        input,
+        resolved: true,
+        id: input === "missing" ? undefined : "1",
+      }));
+
+    await expect(
+      resolveBasicAllowFromEntries({ entries: ["alice"], resolveEntries }),
+    ).resolves.toEqual([{ input: "alice", resolved: false, id: null }]);
+    await expect(
+      resolveBasicAllowFromEntries({
+        token: " token ",
+        entries: ["alice", "missing"],
+        resolveEntries,
+      }),
+    ).resolves.toEqual([
+      { input: "alice", resolved: true, id: "1" },
+      { input: "missing", resolved: true, id: null },
+    ]);
   });
 });
 

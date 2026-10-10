@@ -1,1 +1,1 @@
-export { collectFeishuSecurityAuditFindings } from "./src/security-audit-shared.js";
+export { collectFeishuSecurityAuditFindings } from "./src/security-audit.js";

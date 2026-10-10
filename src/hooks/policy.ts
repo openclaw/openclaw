@@ -1,6 +1,7 @@
-import type { OpenClawConfig, HookConfig } from "../config/config.js";
+import type { HookConfig } from "../config/types.hooks.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveHookKey } from "./frontmatter.js";
-import type { HookEntry, HookSource } from "./types.js";
+import type { HookPolicyEntry, HookSource } from "./types.js";
 
 export type HookEnableStateReason = "disabled in config" | "workspace hook (disabled by default)";
 
@@ -9,54 +10,18 @@ type HookEnableState = {
   reason?: HookEnableStateReason;
 };
 
-type HookSourcePolicy = {
-  precedence: number;
-  trustedLocalCode: boolean;
-  defaultEnableMode: "default-on" | "explicit-opt-in";
-  canOverride: HookSource[];
-  canBeOverriddenBy: HookSource[];
-};
-
-type HookResolutionCollision = {
+type HookResolutionCollision<T> = {
   name: string;
-  kept: HookEntry;
-  ignored: HookEntry;
+  kept: T;
+  ignored: T;
 };
 
-const HOOK_SOURCE_POLICIES: Record<HookSource, HookSourcePolicy> = {
-  "openclaw-bundled": {
-    precedence: 10,
-    trustedLocalCode: true,
-    defaultEnableMode: "default-on",
-    canOverride: ["openclaw-bundled"],
-    canBeOverriddenBy: ["openclaw-managed", "openclaw-plugin"],
-  },
-  "openclaw-plugin": {
-    precedence: 20,
-    trustedLocalCode: true,
-    defaultEnableMode: "default-on",
-    canOverride: ["openclaw-bundled", "openclaw-plugin"],
-    canBeOverriddenBy: ["openclaw-managed"],
-  },
-  "openclaw-managed": {
-    precedence: 30,
-    trustedLocalCode: true,
-    defaultEnableMode: "default-on",
-    canOverride: ["openclaw-bundled", "openclaw-managed", "openclaw-plugin"],
-    canBeOverriddenBy: ["openclaw-managed"],
-  },
-  "openclaw-workspace": {
-    precedence: 40,
-    trustedLocalCode: true,
-    defaultEnableMode: "explicit-opt-in",
-    canOverride: ["openclaw-workspace"],
-    canBeOverriddenBy: ["openclaw-workspace"],
-  },
+const HOOK_SOURCE_PRECEDENCE: Record<HookSource, number> = {
+  "openclaw-bundled": 10,
+  "openclaw-plugin": 20,
+  "openclaw-managed": 30,
+  "openclaw-workspace": 40,
 };
-
-function getHookSourcePolicy(source: HookSource): HookSourcePolicy {
-  return HOOK_SOURCE_POLICIES[source];
-}
 
 export function resolveHookConfig(
   config: OpenClawConfig | undefined,
@@ -73,8 +38,9 @@ export function resolveHookConfig(
   return entry;
 }
 
+/** Resolve whether a hook is enabled before runtime requirement checks. */
 export function resolveHookEnableState(params: {
-  entry: HookEntry;
+  entry: HookPolicyEntry;
   config?: OpenClawConfig;
   hookConfig?: HookConfig;
 }): HookEnableState {
@@ -89,46 +55,37 @@ export function resolveHookEnableState(params: {
     return { enabled: false, reason: "disabled in config" };
   }
 
-  const sourcePolicy = getHookSourcePolicy(entry.hook.source);
-  if (sourcePolicy.defaultEnableMode === "explicit-opt-in" && hookConfig?.enabled !== true) {
+  if (entry.hook.source === "openclaw-workspace" && hookConfig?.enabled !== true) {
     return { enabled: false, reason: "workspace hook (disabled by default)" };
   }
 
   return { enabled: true };
 }
 
-function canOverrideHook(candidate: HookEntry, existing: HookEntry): boolean {
-  const candidatePolicy = getHookSourcePolicy(candidate.hook.source);
-  const existingPolicy = getHookSourcePolicy(existing.hook.source);
-  return (
-    candidatePolicy.canOverride.includes(existing.hook.source) &&
-    existingPolicy.canBeOverriddenBy.includes(candidate.hook.source)
-  );
-}
-
-export function resolveHookEntries(
-  entries: HookEntry[],
+export function resolveHookEntries<T extends HookPolicyEntry>(
+  entries: T[],
   opts?: {
-    onCollisionIgnored?: (collision: HookResolutionCollision) => void;
+    onCollisionIgnored?: (collision: HookResolutionCollision<T>) => void;
   },
-): HookEntry[] {
-  const ordered = entries
-    .map((entry, index) => ({ entry, index }))
-    .toSorted((a, b) => {
-      const precedenceDelta =
-        getHookSourcePolicy(a.entry.hook.source).precedence -
-        getHookSourcePolicy(b.entry.hook.source).precedence;
-      return precedenceDelta !== 0 ? precedenceDelta : a.index - b.index;
-    });
+): T[] {
+  const ordered = entries.toSorted(
+    (a, b) => HOOK_SOURCE_PRECEDENCE[a.hook.source] - HOOK_SOURCE_PRECEDENCE[b.hook.source],
+  );
 
-  const merged = new Map<string, HookEntry>();
-  for (const { entry } of ordered) {
+  const merged = new Map<string, T>();
+  for (const entry of ordered) {
     const existing = merged.get(entry.hook.name);
     if (!existing) {
       merged.set(entry.hook.name, entry);
       continue;
     }
-    if (canOverrideHook(entry, existing)) {
+    // Precedence orders sources, but workspace code is isolated and bundled/plugin ties keep the first entry.
+    const sameSource = entry.hook.source === existing.hook.source;
+    if (
+      entry.hook.source === "openclaw-workspace"
+        ? sameSource
+        : !sameSource || entry.hook.source === "openclaw-managed"
+    ) {
       merged.set(entry.hook.name, entry);
       continue;
     }

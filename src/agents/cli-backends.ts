@@ -1,45 +1,43 @@
-import type { CliBackendConfig } from "../config/types.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
-import { resolvePluginSetupCliBackend } from "../plugins/setup-registry.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import {
+  resolvePluginSetupCliBackend,
+  resolvePluginSetupRegistry,
+} from "../plugins/setup-registry.js";
 import { resolveRuntimeTextTransforms } from "../plugins/text-transforms.runtime.js";
-import type {
-  CliBackendAuthEpochMode,
-  CliBackendNormalizeConfigContext,
-  CliBundleMcpMode,
-  CliBackendPlugin,
-  CliBackendNativeToolMode,
-  PluginTextTransforms,
-} from "../plugins/types.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import { normalizeProviderId } from "./model-selection.js";
+import type { CliBackendNormalizeConfigContext, CliBackendPlugin } from "../plugins/types.js";
 import { mergePluginTextTransforms } from "./plugin-text-transforms.js";
 
-type CliBackendsDeps = {
-  resolvePluginSetupCliBackend: typeof resolvePluginSetupCliBackend;
-  resolveRuntimeCliBackends: typeof resolveRuntimeCliBackends;
-};
-
-const defaultCliBackendsDeps: CliBackendsDeps = {
-  resolvePluginSetupCliBackend,
-  resolveRuntimeCliBackends,
-};
-
-let cliBackendsDeps: CliBackendsDeps = defaultCliBackendsDeps;
-
-export type ResolvedCliBackend = {
-  id: string;
-  config: CliBackendConfig;
+export type ResolvedCliBackend = Pick<
+  CliBackendPlugin,
+  | "id"
+  | "modelProvider"
+  | "config"
+  | "bundleMcpMode"
+  | "transformSystemPrompt"
+  | "textTransforms"
+  | "defaultAuthProfileId"
+  | "authEpochMode"
+  | "autoSelectAuthProfile"
+  | "contextEngineHostCapabilities"
+  | "ownsNativeCompaction"
+  | "manualCompaction"
+  | "prepareExecution"
+  | "resolveExecutionArgs"
+  | "resolveModelId"
+  | "parseJsonlEvent"
+  | "parseJsonlLifecycleEvent"
+  | "toolAvailabilityEnforcement"
+  | "projectNativeToolAuthority"
+  | "nativeToolMode"
+  | "hostOwnedTools"
+  | "sideQuestionToolMode"
+  | "runtimeArtifact"
+> & {
   bundleMcp: boolean;
-  bundleMcpMode?: CliBundleMcpMode;
   pluginId?: string;
-  transformSystemPrompt?: CliBackendPlugin["transformSystemPrompt"];
-  textTransforms?: PluginTextTransforms;
-  defaultAuthProfileId?: string;
-  authEpochMode?: CliBackendAuthEpochMode;
-  prepareExecution?: CliBackendPlugin["prepareExecution"];
-  resolveExecutionArgs?: CliBackendPlugin["resolveExecutionArgs"];
-  nativeToolMode?: CliBackendNativeToolMode;
 };
 
 type ResolvedCliBackendLiveTest = {
@@ -50,145 +48,147 @@ type ResolvedCliBackendLiveTest = {
   dockerBinaryName?: string;
 };
 
-type FallbackCliBackendPolicy = {
-  bundleMcp: boolean;
-  bundleMcpMode?: CliBundleMcpMode;
-  baseConfig?: CliBackendConfig;
-  normalizeConfig?: (
-    config: CliBackendConfig,
-    context?: CliBackendNormalizeConfigContext,
-  ) => CliBackendConfig;
-  transformSystemPrompt?: CliBackendPlugin["transformSystemPrompt"];
-  textTransforms?: PluginTextTransforms;
-  defaultAuthProfileId?: string;
-  authEpochMode?: CliBackendAuthEpochMode;
-  prepareExecution?: CliBackendPlugin["prepareExecution"];
-  resolveExecutionArgs?: CliBackendPlugin["resolveExecutionArgs"];
-  nativeToolMode?: CliBackendNativeToolMode;
+type CliRuntimeModelBackendBinding = {
+  provider: string;
+  runtime: string;
 };
 
-const FALLBACK_CLI_BACKEND_POLICIES: Record<string, FallbackCliBackendPolicy> = {};
-
-function normalizeBundleMcpMode(
-  mode: CliBundleMcpMode | undefined,
-  enabled: boolean,
-): CliBundleMcpMode | undefined {
-  if (!enabled) {
-    return undefined;
-  }
-  return mode ?? "claude-config-file";
+function resolveCliBackendModelProvider(
+  backend: Pick<CliBackendPlugin, "modelProvider">,
+): string | undefined {
+  const provider = backend.modelProvider?.trim();
+  return provider ? normalizeProviderId(provider) : undefined;
 }
 
-function resolveSetupCliBackendPolicy(provider: string): FallbackCliBackendPolicy | undefined {
-  const entry = cliBackendsDeps.resolvePluginSetupCliBackend({
-    backend: provider,
+function addCliRuntimeModelBinding(
+  bindings: Map<string, CliRuntimeModelBackendBinding>,
+  backend: Pick<CliBackendPlugin, "id" | "modelProvider">,
+): void {
+  const provider = resolveCliBackendModelProvider(backend);
+  const runtime = normalizeProviderId(backend.id);
+  if (!provider || !runtime) {
+    return;
+  }
+  bindings.set(`${provider}:${runtime}`, {
+    provider,
+    runtime,
   });
-  if (!entry) {
-    return undefined;
+}
+
+export function listCliRuntimeModelBackendBindings(
+  params: {
+    config?: OpenClawConfig;
+    env?: NodeJS.ProcessEnv;
+    includeSetupRegistry?: boolean;
+  } = {},
+): CliRuntimeModelBackendBinding[] {
+  const bindings = new Map<string, CliRuntimeModelBackendBinding>();
+  for (const backend of resolveRuntimeCliBackends("metadata")) {
+    addCliRuntimeModelBinding(bindings, backend);
   }
-  return {
-    // Setup-registered backends keep narrow CLI paths generic even when the
-    // runtime plugin registry has not booted yet.
-    bundleMcp: entry.backend.bundleMcp === true,
-    bundleMcpMode: normalizeBundleMcpMode(
-      entry.backend.bundleMcpMode,
-      entry.backend.bundleMcp === true,
-    ),
-    baseConfig: entry.backend.config,
-    normalizeConfig: entry.backend.normalizeConfig,
-    transformSystemPrompt: entry.backend.transformSystemPrompt,
-    textTransforms: entry.backend.textTransforms,
-    defaultAuthProfileId: entry.backend.defaultAuthProfileId,
-    authEpochMode: entry.backend.authEpochMode,
-    prepareExecution: entry.backend.prepareExecution,
-    resolveExecutionArgs: entry.backend.resolveExecutionArgs,
-    nativeToolMode: entry.backend.nativeToolMode,
-  };
-}
-
-function resolveFallbackCliBackendPolicy(provider: string): FallbackCliBackendPolicy | undefined {
-  return FALLBACK_CLI_BACKEND_POLICIES[provider] ?? resolveSetupCliBackendPolicy(provider);
-}
-
-function normalizeBackendKey(key: string): string {
-  return normalizeProviderId(key);
-}
-
-function pickBackendConfig(
-  config: Record<string, CliBackendConfig>,
-  normalizedId: string,
-): CliBackendConfig | undefined {
-  const directKey = Object.keys(config).find(
-    (key) => normalizeOptionalLowercaseString(key) === normalizedId,
-  );
-  if (directKey) {
-    return config[directKey];
-  }
-  for (const [key, entry] of Object.entries(config)) {
-    if (normalizeBackendKey(key) === normalizedId) {
-      return entry;
+  if (params.includeSetupRegistry === true) {
+    for (const entry of resolvePluginSetupRegistry({
+      config: params.config,
+      env: params.env,
+    }).cliBackends) {
+      addCliRuntimeModelBinding(bindings, entry.backend);
     }
   }
-  return undefined;
+  return [...bindings.values()].toSorted((left, right) =>
+    left.provider === right.provider
+      ? left.runtime.localeCompare(right.runtime)
+      : left.provider.localeCompare(right.provider),
+  );
 }
 
-function resolveRegisteredBackend(provider: string) {
-  const normalized = normalizeBackendKey(provider);
-  return cliBackendsDeps
-    .resolveRuntimeCliBackends()
-    .find((entry) => normalizeBackendKey(entry.id) === normalized);
+export function listCliRuntimeProviderIds(
+  params: {
+    config?: OpenClawConfig;
+    env?: NodeJS.ProcessEnv;
+    includeSetupRegistry?: boolean;
+  } = {},
+): string[] {
+  // Only CLI backends with a canonical modelProvider are runtime aliases that
+  // should be hidden from model-provider pickers. Standalone CLI backends own
+  // direct refs such as acme-cli/model and must remain selectable.
+  return [
+    ...new Set(listCliRuntimeModelBackendBindings(params).map((binding) => binding.runtime)),
+  ].toSorted();
 }
 
-function mergeBackendConfig(base: CliBackendConfig, override?: CliBackendConfig): CliBackendConfig {
-  if (!override) {
-    return { ...base };
+function resolveCliRuntimeBinding(
+  runtime: string,
+  provider: string | undefined,
+  resolveSetup: () => ReturnType<typeof resolvePluginSetupCliBackend>,
+): CliRuntimeModelBackendBinding | undefined {
+  if (!runtime) {
+    return undefined;
   }
-  const baseFresh = base.reliability?.watchdog?.fresh ?? {};
-  const baseResume = base.reliability?.watchdog?.resume ?? {};
-  const baseOutputLimits = base.reliability?.outputLimits ?? {};
-  const overrideFresh = override.reliability?.watchdog?.fresh ?? {};
-  const overrideResume = override.reliability?.watchdog?.resume ?? {};
-  const overrideOutputLimits = override.reliability?.outputLimits ?? {};
-  return {
-    ...base,
-    ...override,
-    args: override.args ?? base.args,
-    env: { ...base.env, ...override.env },
-    modelAliases: { ...base.modelAliases, ...override.modelAliases },
-    clearEnv: Array.from(new Set([...(base.clearEnv ?? []), ...(override.clearEnv ?? [])])),
-    sessionIdFields: override.sessionIdFields ?? base.sessionIdFields,
-    sessionArgs: override.sessionArgs ?? base.sessionArgs,
-    resumeArgs: override.resumeArgs ?? base.resumeArgs,
-    reliability: {
-      ...base.reliability,
-      ...override.reliability,
-      outputLimits: {
-        ...baseOutputLimits,
-        ...overrideOutputLimits,
-      },
-      watchdog: {
-        ...base.reliability?.watchdog,
-        ...override.reliability?.watchdog,
-        fresh: {
-          ...baseFresh,
-          ...overrideFresh,
-        },
-        resume: {
-          ...baseResume,
-          ...overrideResume,
-        },
-      },
-    },
-  };
+  const matchesProvider = (candidate: string) =>
+    provider === undefined || candidate === provider || runtime === provider;
+  const runtimeBinding = listCliRuntimeModelBackendBindings().find(
+    (binding) => binding.runtime === runtime && matchesProvider(binding.provider),
+  );
+  if (runtimeBinding) {
+    return runtimeBinding;
+  }
+  const setupBackend = resolveSetup();
+  const setupProvider = setupBackend && resolveCliBackendModelProvider(setupBackend.backend);
+  return setupProvider && matchesProvider(setupProvider)
+    ? { provider: setupProvider, runtime }
+    : undefined;
+}
+
+export function resolveCliRuntimeCanonicalProvider(params: {
+  runtime: string | undefined;
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  includeSetupRegistry?: boolean;
+  metadataSnapshot?: PluginMetadataSnapshot | null;
+}): string | undefined {
+  const runtime = normalizeProviderId(params.runtime ?? "");
+  return resolveCliRuntimeBinding(runtime, undefined, () =>
+    params.includeSetupRegistry === true && params.metadataSnapshot !== null
+      ? resolvePluginSetupCliBackend({
+          backend: runtime,
+          config: params.config,
+          env: params.env,
+          metadataSnapshot: params.metadataSnapshot,
+        })
+      : undefined,
+  )?.provider;
+}
+
+export function resolveCliRuntimeModelBackendBinding(params: {
+  provider: string | undefined;
+  runtime: string | undefined;
+  config?: OpenClawConfig;
+}): CliRuntimeModelBackendBinding | undefined {
+  const provider = normalizeProviderId(params.provider ?? "");
+  const runtime = normalizeProviderId(params.runtime ?? "");
+  if (!provider || !runtime) {
+    return undefined;
+  }
+  return resolveCliRuntimeBinding(runtime, provider, () =>
+    params.config === undefined
+      ? undefined
+      : resolvePluginSetupCliBackend({ backend: runtime, config: params.config }),
+  );
+}
+
+export function isCliRuntimeModelBackendForProvider(params: {
+  provider: string | undefined;
+  runtime: string | undefined;
+  config?: OpenClawConfig;
+}): boolean {
+  return resolveCliRuntimeModelBackendBinding(params) !== undefined;
 }
 
 export function resolveCliBackendLiveTest(provider: string): ResolvedCliBackendLiveTest | null {
-  const normalized = normalizeBackendKey(provider);
+  const normalized = normalizeProviderId(provider);
   const entry =
-    cliBackendsDeps.resolvePluginSetupCliBackend({ backend: normalized }) ??
-    cliBackendsDeps
-      .resolveRuntimeCliBackends()
-      .find((backend) => normalizeBackendKey(backend.id) === normalized);
+    resolvePluginSetupCliBackend({ backend: normalized }) ??
+    resolveRuntimeCliBackends().find((backend) => normalizeProviderId(backend.id) === normalized);
   if (!entry) {
     return null;
   }
@@ -202,114 +202,66 @@ export function resolveCliBackendLiveTest(provider: string): ResolvedCliBackendL
   };
 }
 
+/** Whether the backend can branch a native session at a recorded checkpoint. */
+export function cliBackendSupportsSessionFork(provider: string, cfg?: OpenClawConfig): boolean {
+  const config = resolveCliBackendConfig(provider, cfg)?.config;
+  return Boolean(config?.forkArg && config.resumeAtArg);
+}
+
 export function resolveCliBackendConfig(
   provider: string,
   cfg?: OpenClawConfig,
   options: { agentId?: string } = {},
 ): ResolvedCliBackend | null {
-  const normalized = normalizeBackendKey(provider);
+  const normalized = normalizeProviderId(provider);
   const normalizeContext: CliBackendNormalizeConfigContext = {
     backendId: normalized,
     ...(options.agentId ? { agentId: options.agentId } : {}),
     ...(cfg ? { config: cfg } : {}),
   };
   const runtimeTextTransforms = resolveRuntimeTextTransforms();
-  const configured = cfg?.agents?.defaults?.cliBackends ?? {};
-  const override = pickBackendConfig(configured, normalized);
-  const registered = resolveRegisteredBackend(normalized);
-  if (registered) {
-    const merged = mergeBackendConfig(registered.config, override);
-    const config = registered.normalizeConfig
-      ? registered.normalizeConfig(merged, normalizeContext)
-      : merged;
-    const command = config.command?.trim();
-    if (!command) {
-      return null;
-    }
-    return {
-      id: normalized,
-      config: { ...config, command },
-      bundleMcp: registered.bundleMcp === true,
-      bundleMcpMode: normalizeBundleMcpMode(
-        registered.bundleMcpMode,
-        registered.bundleMcp === true,
-      ),
-      pluginId: registered.pluginId,
-      transformSystemPrompt: registered.transformSystemPrompt,
-      textTransforms: mergePluginTextTransforms(runtimeTextTransforms, registered.textTransforms),
-      defaultAuthProfileId: registered.defaultAuthProfileId,
-      authEpochMode: registered.authEpochMode,
-      prepareExecution: registered.prepareExecution,
-      resolveExecutionArgs: registered.resolveExecutionArgs,
-      nativeToolMode: registered.nativeToolMode,
-    };
+  const registered = resolveRuntimeCliBackends().find(
+    (entry) => normalizeProviderId(entry.id) === normalized,
+  );
+  const backend = registered ?? resolvePluginSetupCliBackend({ backend: normalized })?.backend;
+  if (!backend) {
+    return null;
   }
-
-  const fallbackPolicy = resolveFallbackCliBackendPolicy(normalized);
-  if (!override) {
-    if (!fallbackPolicy?.baseConfig) {
-      return null;
-    }
-    const baseConfig = fallbackPolicy.normalizeConfig
-      ? fallbackPolicy.normalizeConfig(fallbackPolicy.baseConfig, normalizeContext)
-      : fallbackPolicy.baseConfig;
-    const command = baseConfig.command?.trim();
-    if (!command) {
-      return null;
-    }
-    return {
-      id: normalized,
-      config: { ...baseConfig, command },
-      bundleMcp: fallbackPolicy.bundleMcp,
-      bundleMcpMode: fallbackPolicy.bundleMcpMode,
-      transformSystemPrompt: fallbackPolicy.transformSystemPrompt,
-      textTransforms: mergePluginTextTransforms(
-        runtimeTextTransforms,
-        fallbackPolicy.textTransforms,
-      ),
-      defaultAuthProfileId: fallbackPolicy.defaultAuthProfileId,
-      authEpochMode: fallbackPolicy.authEpochMode,
-      prepareExecution: fallbackPolicy.prepareExecution,
-      resolveExecutionArgs: fallbackPolicy.resolveExecutionArgs,
-      nativeToolMode: fallbackPolicy.nativeToolMode,
-    };
-  }
-  const mergedFallback = fallbackPolicy?.baseConfig
-    ? mergeBackendConfig(fallbackPolicy.baseConfig, override)
-    : override;
-  const config = fallbackPolicy?.normalizeConfig
-    ? fallbackPolicy.normalizeConfig(mergedFallback, normalizeContext)
-    : mergedFallback;
+  const baseConfig = registered ? { ...backend.config } : backend.config;
+  const config = backend.normalizeConfig
+    ? backend.normalizeConfig(baseConfig, normalizeContext)
+    : baseConfig;
   const command = config.command?.trim();
   if (!command) {
     return null;
   }
+  const modelProvider = resolveCliBackendModelProvider(backend);
+  const bundleMcp = backend.bundleMcp === true;
   return {
     id: normalized,
+    ...(modelProvider ? { modelProvider } : {}),
     config: { ...config, command },
-    bundleMcp: fallbackPolicy?.bundleMcp === true,
-    bundleMcpMode: fallbackPolicy?.bundleMcpMode,
-    transformSystemPrompt: fallbackPolicy?.transformSystemPrompt,
-    textTransforms: mergePluginTextTransforms(
-      runtimeTextTransforms,
-      fallbackPolicy?.textTransforms,
-    ),
-    defaultAuthProfileId: fallbackPolicy?.defaultAuthProfileId,
-    authEpochMode: fallbackPolicy?.authEpochMode,
-    prepareExecution: fallbackPolicy?.prepareExecution,
-    resolveExecutionArgs: fallbackPolicy?.resolveExecutionArgs,
-    nativeToolMode: fallbackPolicy?.nativeToolMode,
+    bundleMcp,
+    bundleMcpMode: bundleMcp ? (backend.bundleMcpMode ?? "claude-config-file") : undefined,
+    ...(registered ? { pluginId: registered.pluginId } : {}),
+    transformSystemPrompt: backend.transformSystemPrompt,
+    textTransforms: mergePluginTextTransforms(runtimeTextTransforms, backend.textTransforms),
+    defaultAuthProfileId: backend.defaultAuthProfileId,
+    authEpochMode: backend.authEpochMode,
+    autoSelectAuthProfile: backend.autoSelectAuthProfile,
+    contextEngineHostCapabilities: backend.contextEngineHostCapabilities,
+    ownsNativeCompaction: backend.ownsNativeCompaction,
+    manualCompaction: backend.manualCompaction,
+    prepareExecution: backend.prepareExecution,
+    resolveExecutionArgs: backend.resolveExecutionArgs,
+    resolveModelId: backend.resolveModelId,
+    parseJsonlEvent: backend.parseJsonlEvent,
+    parseJsonlLifecycleEvent: backend.parseJsonlLifecycleEvent,
+    toolAvailabilityEnforcement: backend.toolAvailabilityEnforcement,
+    projectNativeToolAuthority: backend.projectNativeToolAuthority,
+    nativeToolMode: backend.nativeToolMode,
+    hostOwnedTools: backend.hostOwnedTools,
+    sideQuestionToolMode: backend.sideQuestionToolMode,
+    runtimeArtifact: backend.runtimeArtifact,
   };
 }
-
-export const __testing = {
-  resetDepsForTest(): void {
-    cliBackendsDeps = defaultCliBackendsDeps;
-  },
-  setDepsForTest(deps: Partial<CliBackendsDeps>): void {
-    cliBackendsDeps = {
-      ...defaultCliBackendsDeps,
-      ...deps,
-    };
-  },
-} as const;

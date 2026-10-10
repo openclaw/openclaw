@@ -13,17 +13,16 @@ function ensureRecord(target: Record<string, unknown>, key: string): Record<stri
 export const FIRECRAWL_WEB_FETCH_PROVIDER_SHARED = {
   id: "firecrawl",
   label: "Firecrawl",
-  hint: "Fetch pages with Firecrawl for JS-heavy or bot-protected sites.",
+  hint: "Fetch pages with keyless starter access; add a key for higher limits.",
+  requiresCredential: false,
+  credentialLabel: "Firecrawl API key (optional)",
   envVars: ["FIRECRAWL_API_KEY"],
   placeholder: "fc-...",
   signupUrl: "https://www.firecrawl.dev/",
   docsUrl: "https://docs.firecrawl.dev",
   autoDetectOrder: 50,
   credentialPath: "plugins.entries.firecrawl.config.webFetch.apiKey",
-  inactiveSecretPaths: [
-    "plugins.entries.firecrawl.config.webFetch.apiKey",
-    "tools.web.fetch.firecrawl.apiKey",
-  ],
+  inactiveSecretPaths: ["plugins.entries.firecrawl.config.webFetch.apiKey"],
   getCredentialValue: (fetchConfig) => {
     if (!fetchConfig || typeof fetchConfig !== "object") {
       return undefined;
@@ -58,10 +57,10 @@ export const FIRECRAWL_WEB_FETCH_PROVIDER_SHARED = {
         };
   },
   setConfiguredCredentialValue: (configTarget, value) => {
-    const plugins = ensureRecord(configTarget as unknown as Record<string, unknown>, "plugins");
-    const entries = ensureRecord(plugins, "entries");
-    const firecrawlEntry = ensureRecord(entries, "firecrawl");
-    const pluginConfig = ensureRecord(firecrawlEntry, "config");
+    const plugins = (configTarget.plugins ??= {});
+    const entries = (plugins.entries ??= {});
+    const firecrawlEntry = (entries.firecrawl ??= {});
+    const pluginConfig = (firecrawlEntry.config ??= {});
     const webFetch = ensureRecord(pluginConfig, "webFetch");
     webFetch.apiKey = value;
   },

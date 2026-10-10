@@ -1,50 +1,37 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import {
   authorizeConfigWriteShared,
   canBypassConfigWritePolicyShared,
   formatConfigWriteDeniedMessageShared,
-  resolveChannelConfigWritesShared,
   resolveConfigWriteTargetFromPathShared,
   resolveExplicitConfigWriteTargetShared,
   type ConfigWriteAuthorizationResultLike,
   type ConfigWriteScopeLike,
   type ConfigWriteTargetLike,
 } from "./config-write-policy-shared.js";
-import type { ChannelId } from "./types.core.js";
-export type ConfigWriteScope = ConfigWriteScopeLike;
+
 export type ConfigWriteTarget = ConfigWriteTargetLike;
-export type ConfigWriteAuthorizationResult = ConfigWriteAuthorizationResultLike;
 
-function isInternalConfigWriteMessageChannel(channel?: string | null): boolean {
-  return normalizeLowercaseStringOrEmpty(channel) === "webchat";
-}
-
-export function resolveChannelConfigWrites(params: {
+export const authorizeConfigWrite: (params: {
   cfg: OpenClawConfig;
-  channelId?: ChannelId | null;
-  accountId?: string | null;
-}): boolean {
-  return resolveChannelConfigWritesShared(params);
-}
-
-export function authorizeConfigWrite(params: {
-  cfg: OpenClawConfig;
-  origin?: ConfigWriteScope;
+  origin?: ConfigWriteScopeLike;
   target?: ConfigWriteTarget;
   allowBypass?: boolean;
-}): ConfigWriteAuthorizationResult {
-  return authorizeConfigWriteShared(params);
-}
+}) => ConfigWriteAuthorizationResultLike = authorizeConfigWriteShared;
 
-export function resolveExplicitConfigWriteTarget(scope: ConfigWriteScope): ConfigWriteTarget {
-  return resolveExplicitConfigWriteTargetShared(scope);
-}
+export const resolveExplicitConfigWriteTarget: (scope: ConfigWriteScopeLike) => ConfigWriteTarget =
+  resolveExplicitConfigWriteTargetShared;
+
+export const formatConfigWriteDeniedMessage: (params: {
+  result: Exclude<ConfigWriteAuthorizationResultLike, { allowed: true }>;
+  fallbackChannelId?: string | null;
+}) => string = formatConfigWriteDeniedMessageShared;
 
 export function resolveConfigWriteTargetFromPath(path: string[]): ConfigWriteTarget {
   return resolveConfigWriteTargetFromPathShared({
     path,
-    normalizeChannelId: (raw) => normalizeLowercaseStringOrEmpty(raw) as ChannelId,
+    normalizeChannelId: normalizeLowercaseStringOrEmpty,
   });
 }
 
@@ -54,13 +41,6 @@ export function canBypassConfigWritePolicy(params: {
 }): boolean {
   return canBypassConfigWritePolicyShared({
     ...params,
-    isInternalMessageChannel: isInternalConfigWriteMessageChannel,
+    isInternalMessageChannel: (channel) => normalizeLowercaseStringOrEmpty(channel) === "webchat",
   });
-}
-
-export function formatConfigWriteDeniedMessage(params: {
-  result: Exclude<ConfigWriteAuthorizationResult, { allowed: true }>;
-  fallbackChannelId?: ChannelId | null;
-}): string {
-  return formatConfigWriteDeniedMessageShared(params);
 }

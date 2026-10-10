@@ -1,21 +1,12 @@
-import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
-import {
-  normalizePluginsConfigWithResolver,
-  resolveEffectivePluginActivationState,
-  resolveMemorySlotDecision,
-} from "../plugins/config-policy.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { hasKind } from "../plugins/slots.js";
-import { isPathInsideWithRealpath } from "../security/scan-paths.js";
-
-const log = createSubsystemLogger("hooks");
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { iteratePluginRootContributions } from "../plugins/plugin-root-contributions.js";
 
 type PluginHookDirEntry = {
   dir: string;
   pluginId: string;
+  rootDir: string;
 };
 
 export function resolvePluginHookDirs(params: {
@@ -26,9 +17,9 @@ export function resolvePluginHookDirs(params: {
   if (!workspaceDir) {
     return [];
   }
-  const metadataSnapshot = loadPluginMetadataSnapshot({
+  const metadataSnapshot = resolvePluginMetadataSnapshot({
     workspaceDir,
-    config: params.config ?? {},
+    config: params.config,
     env: process.env,
   });
   const registry = metadataSnapshot.manifestRegistry;
@@ -36,56 +27,20 @@ export function resolvePluginHookDirs(params: {
     return [];
   }
 
-  const normalizedPlugins = normalizePluginsConfigWithResolver(
-    params.config?.plugins,
-    metadataSnapshot.normalizePluginId,
-  );
-  const memorySlot = normalizedPlugins.slots.memory;
-  let selectedMemoryPluginId: string | null = null;
   const seen = new Set<string>();
   const resolved: PluginHookDirEntry[] = [];
 
-  for (const record of registry.plugins) {
-    if (!record.hooks || record.hooks.length === 0) {
-      continue;
-    }
-    const activationState = resolveEffectivePluginActivationState({
-      id: record.id,
-      origin: record.origin,
-      config: normalizedPlugins,
-      rootConfig: params.config,
-    });
-    if (!activationState.activated) {
-      continue;
-    }
-
-    const memoryDecision = resolveMemorySlotDecision({
-      id: record.id,
-      kind: record.kind,
-      slot: memorySlot,
-      selectedId: selectedMemoryPluginId,
-    });
-    if (!memoryDecision.enabled) {
-      continue;
-    }
-    if (memoryDecision.selected && hasKind(record.kind, "memory")) {
-      selectedMemoryPluginId = record.id;
-    }
-
-    for (const raw of record.hooks) {
+  for (const { record, roots } of iteratePluginRootContributions({
+    metadataSnapshot,
+    config: params.config,
+    contribution: "hooks",
+  })) {
+    for (const raw of roots) {
       const trimmed = raw.trim();
       if (!trimmed) {
         continue;
       }
       const candidate = path.resolve(record.rootDir, trimmed);
-      if (!fs.existsSync(candidate)) {
-        log.warn(`plugin hook path not found (${record.id}): ${candidate}`);
-        continue;
-      }
-      if (!isPathInsideWithRealpath(record.rootDir, candidate, { requireRealpath: true })) {
-        log.warn(`plugin hook path escapes plugin root (${record.id}): ${candidate}`);
-        continue;
-      }
       if (seen.has(candidate)) {
         continue;
       }
@@ -93,6 +48,7 @@ export function resolvePluginHookDirs(params: {
       resolved.push({
         dir: candidate,
         pluginId: record.id,
+        rootDir: record.rootDir,
       });
     }
   }

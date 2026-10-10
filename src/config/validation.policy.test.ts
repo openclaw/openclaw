@@ -1,42 +1,40 @@
 import { describe, expect, it, vi } from "vitest";
-import { validateConfigObjectRaw } from "./validation.js";
-
-vi.mock("../channels/plugins/legacy-config.js", () => ({
-  collectChannelLegacyConfigRules: () => [],
-}));
-
-vi.mock("../plugins/doctor-contract-registry.js", () => ({
-  collectRelevantDoctorPluginIds: () => [],
-  listPluginDoctorLegacyConfigRules: () => [],
-}));
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import {
+  validateConfigObjectRaw,
+  validateConfigObjectRawWithPlugins,
+  validateConfigObjectWithPlugins,
+} from "./validation.js";
 
 vi.mock("../secrets/unsupported-surface-policy.js", async () => {
   const { isRecord } = await import("../utils.js");
 
   return {
-    collectUnsupportedSecretRefConfigCandidates: (raw: unknown) => {
-      if (!isRecord(raw)) {
-        return [];
-      }
-      const candidates: Array<{ path: string; value: unknown }> = [];
+    unsupportedSecretRefSurfacePolicy: {
+      collectConfigCandidates: (raw: unknown) => {
+        if (!isRecord(raw)) {
+          return [];
+        }
+        const candidates: Array<{ path: string; value: unknown }> = [];
 
-      const hooks = isRecord(raw.hooks) ? raw.hooks : null;
-      if (hooks) {
-        candidates.push({ path: "hooks.token", value: hooks.token });
-      }
+        const hooks = isRecord(raw.hooks) ? raw.hooks : null;
+        if (hooks) {
+          candidates.push({ path: "hooks.token", value: hooks.token });
+        }
 
-      const channels = isRecord(raw.channels) ? raw.channels : null;
-      const discord = channels && isRecord(channels.discord) ? channels.discord : null;
-      const threadBindings =
-        discord && isRecord(discord.threadBindings) ? discord.threadBindings : null;
-      if (threadBindings) {
-        candidates.push({
-          path: "channels.discord.threadBindings.webhookToken",
-          value: threadBindings.webhookToken,
-        });
-      }
+        const channels = isRecord(raw.channels) ? raw.channels : null;
+        const discord = channels && isRecord(channels.discord) ? channels.discord : null;
+        const threadBindings =
+          discord && isRecord(discord.threadBindings) ? discord.threadBindings : null;
+        if (threadBindings) {
+          candidates.push({
+            path: "channels.discord.threadBindings.webhookToken",
+            value: threadBindings.webhookToken,
+          });
+        }
 
-      return candidates;
+        return candidates;
+      },
     },
   };
 });
@@ -49,18 +47,68 @@ function requireIssue<T extends { path: string }>(issues: T[], path: string): T 
   return issue;
 }
 
-describe("config validation SecretRef policy guards", () => {
-  it("surfaces a policy error for hooks.token SecretRef objects", () => {
-    const result = validateConfigObjectRaw({
-      hooks: {
-        token: {
-          source: "env",
-          provider: "default",
-          id: "HOOK_TOKEN",
+const secretFixturePlugin: PluginManifestRecord = {
+  id: "secret-fixture",
+  channels: [],
+  cliBackends: [],
+  configContracts: {
+    secretInputs: { paths: [{ path: "credential", expected: "string" }] },
+  },
+  configSchema: { type: "object", additionalProperties: true },
+  hooks: [],
+  manifestPath: "/tmp/secret-fixture/openclaw.plugin.json",
+  origin: "bundled",
+  providers: [],
+  rootDir: "/tmp/secret-fixture",
+  skills: [],
+  source: "/tmp/secret-fixture/index.js",
+};
+
+function validateCredential(source: "env" | "exec", strict: boolean, defaultAlias = false) {
+  return validateConfigObjectRawWithPlugins(
+    {
+      plugins: {
+        entries: {
+          "secret-fixture": {
+            enabled: false,
+            config: { credential: { source, provider: "shared", id: "PLUGIN_PRIVATE_CREDENTIAL" } },
+          },
         },
       },
-    });
+      secrets: {
+        defaults: defaultAlias ? { [source]: "shared" } : undefined,
+        providers: { shared: { source: "file", path: "/tmp/unused-secrets.json", mode: "json" } },
+      },
+    },
+    {
+      semanticValidation: strict ? "strict" : undefined,
+      pluginMetadataSnapshot: {
+        manifestRegistry: { diagnostics: [], plugins: [secretFixturePlugin] },
+      },
+    },
+  );
+}
 
+describe("config validation SecretRef policy", () => {
+  it("rejects impossible inactive plugin SecretRefs in strict mode without leaking their IDs", () => {
+    const result = validateCredential("exec", true);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(
+        requireIssue(result.issues, "plugins.entries.secret-fixture.config.credential").message,
+      ).toContain('Secret provider "shared" has source "file" but ref requests "exec"');
+      expect(JSON.stringify(result.issues)).not.toContain("PLUGIN_PRIVATE_CREDENTIAL");
+    }
+  });
+
+  it("allows a built-in default alias to shadow another-source provider", () => {
+    expect(validateCredential("env", true, true).ok).toBe(true);
+  });
+
+  it("replaces hooks.token schema errors with SecretRef policy guidance", () => {
+    const result = validateConfigObjectRaw({
+      hooks: { token: { source: "env", provider: "default", id: "HOOK_TOKEN" } },
+    });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       const issue = requireIssue(result.issues, "hooks.token");
@@ -79,61 +127,20 @@ describe("config validation SecretRef policy guards", () => {
   });
 
   it("keeps standard schema errors for non-SecretRef objects", () => {
-    const result = validateConfigObjectRaw({
-      hooks: {
-        token: {
-          unexpected: "value",
-        },
-      },
-    });
-
+    const result = validateConfigObjectRaw({ hooks: { token: { unexpected: "value" } } });
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      const issue = requireIssue(result.issues, "hooks.token");
-      expect(issue.message).toBe("Invalid input: expected string, received object");
+      expect(requireIssue(result.issues, "hooks.token").message).toBe(
+        "Invalid input: expected string, received object",
+      );
     }
   });
 
-  it("allows env-template strings on unsupported mutable paths", () => {
-    const result = validateConfigObjectRaw({
-      hooks: {
-        token: "${HOOK_TOKEN}",
-      },
-    });
-
-    expect(result.ok).toBe(true);
+  it("allows env-template strings on mutable paths", () => {
+    expect(validateConfigObjectRaw({ hooks: { token: "${HOOK_TOKEN}" } }).ok).toBe(true);
   });
 
-  it("leaves legacy secretref-env marker migration to doctor", () => {
-    const result = validateConfigObjectRaw({
-      secrets: {
-        defaults: {
-          env: "gateway-env",
-        },
-      },
-      channels: {
-        discord: {
-          token: "secretref-env:DISCORD_BOT_TOKEN",
-        },
-      },
-    });
-
-    expect(result.ok).toBe(true);
-  });
-
-  it("does not reject invalid legacy secretref-env markers during raw validation", () => {
-    const result = validateConfigObjectRaw({
-      channels: {
-        discord: {
-          token: "secretref-env:not-valid",
-        },
-      },
-    });
-
-    expect(result.ok).toBe(true);
-  });
-
-  it("replaces derived unrecognized-key errors with policy guidance for discord thread binding webhookToken", () => {
+  it.each([false, true])("filters only the policy-owned unknown key (typo=%s)", (typo) => {
     const result = validateConfigObjectRaw({
       channels: {
         discord: {
@@ -143,62 +150,94 @@ describe("config validation SecretRef policy guards", () => {
               provider: "default",
               id: "DISCORD_THREAD_BINDING_WEBHOOK_TOKEN",
             },
+            ...(typo ? { webhookTokne: "typo" } : {}),
           },
         },
       },
     });
-
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      const policyIssue = requireIssue(
-        result.issues,
-        "channels.discord.threadBindings.webhookToken",
-      );
-      expect(policyIssue.message).toContain(
+      expect(
+        requireIssue(result.issues, "channels.discord.threadBindings.webhookToken").message,
+      ).toContain(
         "SecretRef objects are not supported at channels.discord.threadBindings.webhookToken",
       );
-      expect(
-        result.issues.some(
-          (entry) =>
-            entry.path === "channels.discord.threadBindings" &&
-            entry.message.includes('Unrecognized key: "webhookToken"'),
-        ),
-      ).toBe(false);
+      if (typo) {
+        const issue = requireIssue(result.issues, "channels.discord.threadBindings");
+        expect(issue.message).toContain("webhookTokne");
+        expect(issue.message).not.toContain("webhookToken");
+      } else {
+        expect(
+          result.issues.some(
+            (issue) =>
+              issue.path === "channels.discord.threadBindings" &&
+              issue.message.includes('Unrecognized key: "webhookToken"'),
+          ),
+        ).toBe(false);
+      }
     }
   });
+});
 
-  it("preserves unrelated unknown-key errors when policy and typos coexist", () => {
-    const result = validateConfigObjectRaw({
-      channels: {
-        discord: {
-          threadBindings: {
-            webhookToken: {
-              source: "env",
-              provider: "default",
-              id: "DISCORD_THREAD_BINDING_WEBHOOK_TOKEN",
-            },
-            webhookTokne: "typo",
-          },
-        },
-      },
-    });
-
+it("enforces the gateway TCP port range", () => {
+  for (const port of [0, 65_536]) {
+    const result = validateConfigObjectRaw({ gateway: { port } });
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(
-        result.issues.some(
-          (entry) =>
-            entry.path === "channels.discord.threadBindings.webhookToken" &&
-            entry.message.includes("SecretRef objects are not supported"),
-        ),
-      ).toBe(true);
-      expect(
-        result.issues.some(
-          (entry) =>
-            entry.path === "channels.discord.threadBindings" &&
-            entry.message.includes("webhookTokne"),
-        ),
-      ).toBe(true);
+      const issue = requireIssue(result.issues, "gateway.port");
+      if (port === 0) {
+        expect(issue.message).toContain("expected number to be >=1");
+      } else {
+        expect(issue.message).toBeDefined();
+      }
     }
+  }
+  for (const port of [1, 65_535]) {
+    expect(validateConfigObjectRaw({ gateway: { port } }).ok).toBe(true);
+  }
+});
+
+describe("ambient heartbeat ownership", () => {
+  function warnings(agents: unknown) {
+    const result = validateConfigObjectWithPlugins(
+      { agents },
+      {
+        pluginMetadataSnapshot: { manifestRegistry: { diagnostics: [], plugins: [] } },
+      },
+    );
+    expect(result.ok).toBe(true);
+    return result.warnings.filter(
+      (warning) => warning.path === "agents.defaults.heartbeat.agentId",
+    );
+  }
+
+  it("warns that an ownerless explicit multi-agent roster keeps heartbeats disabled", () => {
+    expect(warnings({ ownership: "explicit", entries: { main: {}, ops: {} } })).toEqual([
+      {
+        path: "agents.defaults.heartbeat.agentId",
+        message:
+          "Multi-agent config has no ambient heartbeat owner; heartbeats stay disabled until agents.defaults.heartbeat.agentId or agents.defaults.systemAgent.agentId is set.",
+      },
+    ]);
+  });
+
+  it.each([
+    {
+      name: "per-agent heartbeat",
+      agents: {
+        ownership: "explicit",
+        entries: { main: {}, ops: { heartbeat: { every: "30m" } } },
+      },
+    },
+    {
+      name: "broadcast heartbeat",
+      agents: {
+        ownership: "explicit",
+        entries: { main: {}, ops: {} },
+        defaults: { heartbeat: { every: "30m" } },
+      },
+    },
+  ])("does not warn for a $name", ({ agents }) => {
+    expect(warnings(agents)).toEqual([]);
   });
 });

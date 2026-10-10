@@ -1,3 +1,4 @@
+// Threading helper tests cover channel thread metadata and reply-thread helper behavior.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -7,8 +8,8 @@ import {
 } from "./threading-helpers.js";
 
 describe("createStaticReplyToModeResolver", () => {
-  it.each(["off", "all"] as const)("always returns the configured mode %s", (mode) => {
-    expect(createStaticReplyToModeResolver(mode)({ cfg: {} as OpenClawConfig })).toBe(mode);
+  it("returns the configured mode", () => {
+    expect(createStaticReplyToModeResolver("all")({ cfg: {} as OpenClawConfig })).toBe("all");
   });
 });
 

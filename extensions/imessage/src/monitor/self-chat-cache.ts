@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { formatIMessageChatTarget } from "../targets.js";
 
 type SelfChatCacheKeyParts = {
@@ -11,6 +12,13 @@ type SelfChatCacheKeyParts = {
 type SelfChatLookup = SelfChatCacheKeyParts & {
   text?: string;
   createdAt?: number;
+  allowCreatedAtSkew?: boolean;
+};
+
+type SelfChatCacheEntry = {
+  createdAt: number;
+  createdAtSkewToleranceMs: number;
+  rememberedAt: number;
 };
 
 export type SelfChatCache = {
@@ -19,6 +27,7 @@ export type SelfChatCache = {
 };
 
 const SELF_CHAT_TTL_MS = 10_000;
+const SELF_CHAT_CREATED_AT_TOLERANCE_MS = 1_000;
 const MAX_SELF_CHAT_CACHE_ENTRIES = 512;
 const CLEANUP_MIN_INTERVAL_MS = 1_000;
 
@@ -47,34 +56,63 @@ function buildScope(parts: SelfChatCacheKeyParts): string {
 }
 
 class DefaultSelfChatCache implements SelfChatCache {
-  private cache = new Map<string, number>();
+  private cache = new Map<string, Set<SelfChatCacheEntry>>();
+  private insertionOrder = new Map<SelfChatCacheEntry, string>();
   private lastCleanupAt = 0;
 
-  private buildKey(lookup: SelfChatLookup): string | null {
+  private buildBucketKey(lookup: SelfChatLookup): string | null {
     const text = normalizeText(lookup.text);
-    if (!text || !isUsableTimestamp(lookup.createdAt)) {
+    if (!text) {
       return null;
     }
-    return `${buildScope(lookup)}:${lookup.createdAt}:${digestText(text)}`;
+    return `${buildScope(lookup)}:${digestText(text)}`;
   }
 
   remember(lookup: SelfChatLookup): void {
-    const key = this.buildKey(lookup);
-    if (!key) {
+    const key = this.buildBucketKey(lookup);
+    if (!key || !isUsableTimestamp(lookup.createdAt)) {
       return;
     }
-    this.cache.set(key, Date.now());
+    const entries = this.cache.get(key) ?? new Set<SelfChatCacheEntry>();
+    const entry = {
+      createdAt: lookup.createdAt,
+      createdAtSkewToleranceMs: lookup.allowCreatedAtSkew ? SELF_CHAT_CREATED_AT_TOLERANCE_MS : 0,
+      rememberedAt: Date.now(),
+    };
+    entries.add(entry);
+    this.cache.set(key, entries);
+    this.insertionOrder.set(entry, key);
     this.maybeCleanup();
   }
 
   has(lookup: SelfChatLookup): boolean {
     this.maybeCleanup();
-    const key = this.buildKey(lookup);
-    if (!key) {
+    const key = this.buildBucketKey(lookup);
+    if (!key || !isUsableTimestamp(lookup.createdAt)) {
       return false;
     }
-    const timestamp = this.cache.get(key);
-    return typeof timestamp === "number" && Date.now() - timestamp <= SELF_CHAT_TTL_MS;
+    const entries = this.cache.get(key);
+    if (!entries) {
+      return false;
+    }
+    const now = Date.now();
+    const createdAt = lookup.createdAt;
+    return [...entries.values()].some((entry) => {
+      const createdAtDelta = Math.abs(entry.createdAt - createdAt);
+      return (
+        now - entry.rememberedAt <= SELF_CHAT_TTL_MS &&
+        (createdAtDelta === 0 || createdAtDelta < entry.createdAtSkewToleranceMs)
+      );
+    });
+  }
+
+  private removeEntry(entry: SelfChatCacheEntry, key: string): void {
+    this.insertionOrder.delete(entry);
+    const entries = this.cache.get(key);
+    entries?.delete(entry);
+    if (entries?.size === 0) {
+      this.cache.delete(key);
+    }
   }
 
   private maybeCleanup(): void {
@@ -83,17 +121,17 @@ class DefaultSelfChatCache implements SelfChatCache {
       return;
     }
     this.lastCleanupAt = now;
-    for (const [key, timestamp] of this.cache.entries()) {
-      if (now - timestamp > SELF_CHAT_TTL_MS) {
-        this.cache.delete(key);
+    for (const [entry, key] of this.insertionOrder) {
+      if (now - entry.rememberedAt > SELF_CHAT_TTL_MS) {
+        this.removeEntry(entry, key);
       }
     }
-    while (this.cache.size > MAX_SELF_CHAT_CACHE_ENTRIES) {
-      const oldestKey = this.cache.keys().next().value;
-      if (typeof oldestKey !== "string") {
-        break;
-      }
-      this.cache.delete(oldestKey);
+    while (this.insertionOrder.size > MAX_SELF_CHAT_CACHE_ENTRIES) {
+      const [entry, key] = expectDefined(
+        this.insertionOrder.entries().next().value,
+        "oldest iMessage self-chat cache entry",
+      );
+      this.removeEntry(entry, key);
     }
   }
 }

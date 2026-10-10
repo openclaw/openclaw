@@ -1,43 +1,67 @@
-import { execFileSync } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { SUPPORTED_NODE_VERSIONS } from "../../node-version.mjs";
+import type { GatewayDaemonRuntime } from "../commands/daemon-runtime.js";
+import { resolveBrewOpenClawPath } from "../infra/brew.js";
+import { resolveRuntimeArgs } from "../infra/runtime-worker-url.js";
 import {
   buildGatewayDistEntrypointCandidates,
+  buildGatewayInstallEntrypointCandidates,
   findFirstAccessibleGatewayEntrypoint,
   isGatewayDistEntrypointPath,
 } from "./gateway-entrypoint.js";
-import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
+import { resolveGatewayHeapExecArgv } from "./gateway-heap.js";
+import type { GatewayServiceCommandConfig } from "./service-types.js";
 
 type GatewayProgramArgs = {
   programArguments: string[];
   workingDirectory?: string;
 };
 
-type GatewayRuntimePreference = "auto" | "node" | "bun";
-
 export const OPENCLAW_WRAPPER_ENV_KEY = "OPENCLAW_WRAPPER";
 
-async function resolveCliEntrypointPathForService(): Promise<string> {
-  const argv1 = process.argv[1];
+const canAccessEntrypoint = (candidate: string) =>
+  fs.access(candidate).then(
+    () => true,
+    () => false,
+  );
+
+async function resolveCliEntrypointPathForService(argv1 = process.argv[1]): Promise<string> {
   if (!argv1) {
     throw new Error("Unable to resolve CLI entrypoint path");
   }
 
   const normalized = path.resolve(argv1);
-  const resolvedPath = await resolveRealpathSafe(normalized);
+  const resolvedPath = await fs.realpath(normalized).catch(() => normalized);
+  if (resolvedPath.includes(`${path.sep}.pnpm${path.sep}`)) {
+    const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");
+    const { resolvePnpmGlobalInstallOwner } = await import("../infra/update-global.js");
+    const packageRoot = await resolveOpenClawPackageRoot({ argv1: normalized });
+    const owner = packageRoot ? await resolvePnpmGlobalInstallOwner(packageRoot) : null;
+    if (
+      packageRoot &&
+      owner &&
+      (await fs.realpath(owner.packageRoot).catch(() => null)) ===
+        (await fs.realpath(packageRoot).catch(() => undefined))
+    ) {
+      // Persist the verified package link, never the replaceable store generation.
+      const stableEntrypoint = await findFirstAccessibleGatewayEntrypoint(
+        buildGatewayInstallEntrypointCandidates(owner.packageRoot),
+        canAccessEntrypoint,
+      );
+      if (stableEntrypoint) {
+        return stableEntrypoint;
+      }
+    }
+  }
   const looksLikeDist = isGatewayDistEntrypointPath(resolvedPath);
   if (looksLikeDist) {
+    // Existing installed command lines may point at versioned pnpm realpaths.
+    // Repair prefers stable package symlink paths when they still exist.
     const preferredDistEntrypoint = await findFirstAccessibleGatewayEntrypoint(
       buildGatewayDistEntrypointCandidates(normalized, resolvedPath),
-      async (candidate) => {
-        try {
-          await fs.access(candidate);
-          return true;
-        } catch {
-          return false;
-        }
-      },
+      canAccessEntrypoint,
     );
     if (preferredDistEntrypoint) {
       return preferredDistEntrypoint;
@@ -47,27 +71,24 @@ async function resolveCliEntrypointPathForService(): Promise<string> {
     // since symlinks like node_modules/openclaw -> .pnpm/openclaw@X.Y.Z/...
     // are automatically updated by pnpm, while the resolved path contains
     // version-specific directories that break after updates.
-    const normalizedLooksLikeDist = isGatewayDistEntrypointPath(normalized);
-    if (normalizedLooksLikeDist && normalized !== resolvedPath) {
-      try {
-        await fs.access(normalized);
-        return normalized;
-      } catch {
-        // Fall through to return resolvedPath
-      }
+    if (
+      isGatewayDistEntrypointPath(normalized) &&
+      normalized !== resolvedPath &&
+      (await canAccessEntrypoint(normalized))
+    ) {
+      return normalized;
     }
     return resolvedPath;
   }
 
   const distCandidates = buildDistCandidates(resolvedPath, normalized);
 
-  for (const candidate of distCandidates) {
-    try {
-      await fs.access(candidate);
-      return candidate;
-    } catch {
-      // keep going
-    }
+  const entrypoint = await findFirstAccessibleGatewayEntrypoint(
+    distCandidates,
+    canAccessEntrypoint,
+  );
+  if (entrypoint) {
+    return entrypoint;
   }
 
   throw new Error(
@@ -75,65 +96,19 @@ async function resolveCliEntrypointPathForService(): Promise<string> {
   );
 }
 
-async function resolveRealpathSafe(inputPath: string): Promise<string> {
-  try {
-    return await fs.realpath(inputPath);
-  } catch {
-    return inputPath;
-  }
-}
-
 function buildDistCandidates(...inputs: string[]): string[] {
-  const candidates: string[] = [];
-  const seen = new Set<string>();
-
+  const roots: string[] = [];
   for (const inputPath of inputs) {
-    if (!inputPath) {
-      continue;
-    }
     const baseDir = path.dirname(inputPath);
-    appendDistCandidates(candidates, seen, path.resolve(baseDir, ".."));
-    appendDistCandidates(candidates, seen, baseDir);
-    appendNodeModulesBinCandidates(candidates, seen, inputPath);
-  }
-
-  return candidates;
-}
-
-function appendDistCandidates(candidates: string[], seen: Set<string>, baseDir: string): void {
-  const distDir = path.resolve(baseDir, "dist");
-  const distEntries = [
-    path.join(distDir, "index.js"),
-    path.join(distDir, "index.mjs"),
-    path.join(distDir, "entry.js"),
-    path.join(distDir, "entry.mjs"),
-  ];
-  for (const entry of distEntries) {
-    if (seen.has(entry)) {
-      continue;
+    roots.push(path.resolve(baseDir, ".."), baseDir);
+    const parts = inputPath.split(path.sep);
+    const binIndex = parts.lastIndexOf(".bin");
+    if (binIndex > 0 && parts[binIndex - 1] === "node_modules") {
+      // node_modules/.bin commands select the package root sibling.
+      roots.push(path.join(parts.slice(0, binIndex).join(path.sep), path.basename(inputPath)));
     }
-    seen.add(entry);
-    candidates.push(entry);
   }
-}
-
-function appendNodeModulesBinCandidates(
-  candidates: string[],
-  seen: Set<string>,
-  inputPath: string,
-): void {
-  const parts = inputPath.split(path.sep);
-  const binIndex = parts.lastIndexOf(".bin");
-  if (binIndex <= 0) {
-    return;
-  }
-  if (parts[binIndex - 1] !== "node_modules") {
-    return;
-  }
-  const binName = path.basename(inputPath);
-  const nodeModulesDir = parts.slice(0, binIndex).join(path.sep);
-  const packageRoot = path.join(nodeModulesDir, binName);
-  appendDistCandidates(candidates, seen, packageRoot);
+  return [...new Set(roots.flatMap(buildGatewayInstallEntrypointCandidates))];
 }
 
 function resolveRepoRootForDev(): string {
@@ -150,36 +125,6 @@ function resolveRepoRootForDev(): string {
   return parts.slice(0, srcIndex).join(path.sep);
 }
 
-async function resolveBunPath(): Promise<string> {
-  const bunPath = await resolveBinaryPath("bun");
-  return bunPath;
-}
-
-async function resolveNodePath(): Promise<string> {
-  const nodePath = await resolveBinaryPath("node");
-  return nodePath;
-}
-
-async function resolveBinaryPath(binary: string): Promise<string> {
-  const cmd = process.platform === "win32" ? "where" : "which";
-  try {
-    const output = execFileSync(cmd, [binary], { encoding: "utf8" }).trim();
-    const resolved = output.split(/\r?\n/)[0]?.trim();
-    if (!resolved) {
-      throw new Error("empty");
-    }
-    await fs.access(resolved);
-    return resolved;
-  } catch {
-    if (binary === "bun") {
-      throw new Error("Bun not found in PATH. Install bun: https://bun.sh");
-    }
-    throw new Error(
-      "Node not found in PATH. Install Node 24 (recommended) or Node 22 LTS (22.16+).",
-    );
-  }
-}
-
 export async function resolveOpenClawWrapperPath(
   inputPath: string | undefined,
 ): Promise<string | undefined> {
@@ -193,6 +138,8 @@ export async function resolveOpenClawWrapperPath(
     if (!stat.isFile()) {
       throw new Error("not a regular file");
     }
+    // Wrappers replace the runtime executable, so require execute permission up
+    // front rather than generating a service that fails at boot.
     await fs.access(resolved, fsConstants.X_OK);
   } catch (error) {
     const detail = error instanceof Error ? ` (${error.message})` : "";
@@ -205,10 +152,11 @@ export async function resolveOpenClawWrapperPath(
 }
 
 async function resolveCliProgramArguments(params: {
+  cliEntrypoint?: string;
   args: string[];
   dev?: boolean;
-  runtime?: GatewayRuntimePreference;
-  nodePath?: string;
+  runtime: GatewayDaemonRuntime;
+  runtimePath?: string;
   wrapperPath?: string;
 }): Promise<GatewayProgramArgs> {
   const wrapperPath = await resolveOpenClawWrapperPath(params.wrapperPath);
@@ -216,107 +164,95 @@ async function resolveCliProgramArguments(params: {
     return { programArguments: [wrapperPath, ...params.args] };
   }
 
-  const execPath = process.execPath;
-  const runtime = params.runtime ?? "auto";
-
-  if (runtime === "node") {
-    const nodePath =
-      params.nodePath ?? (isNodeRuntime(execPath) ? execPath : await resolveNodePath());
-    const cliEntrypointPath = await resolveCliEntrypointPathForService();
-    return {
-      programArguments: [nodePath, cliEntrypointPath, ...params.args],
-    };
+  if (!params.runtimePath?.trim()) {
+    throw new Error(
+      params.runtime === "bun"
+        ? "No supported Bun runtime was selected for the daemon. Install Bun 1.4 or newer with WAL-reset-safe node:sqlite, then retry."
+        : `No supported Node runtime was selected for the daemon. Install Node ${SUPPORTED_NODE_VERSIONS}, then retry.`,
+    );
   }
+  const runtimePath = params.runtimePath;
 
-  if (runtime === "bun") {
-    if (params.dev) {
-      const repoRoot = resolveRepoRootForDev();
-      const devCliPath = path.join(repoRoot, "src", "entry.ts");
-      await fs.access(devCliPath);
-      const bunPath = isBunRuntime(execPath) ? execPath : await resolveBunPath();
-      return {
-        programArguments: [bunPath, devCliPath, ...params.args],
-        workingDirectory: repoRoot,
-      };
-    }
-
-    const bunPath = isBunRuntime(execPath) ? execPath : await resolveBunPath();
-    const cliEntrypointPath = await resolveCliEntrypointPathForService();
+  if (params.dev) {
+    const repoRoot = resolveRepoRootForDev();
+    const devCliPath = path.join(repoRoot, "src", "entry.ts");
+    await fs.access(devCliPath);
     return {
-      programArguments: [bunPath, cliEntrypointPath, ...params.args],
-    };
-  }
-
-  if (!params.dev) {
-    try {
-      const cliEntrypointPath = await resolveCliEntrypointPathForService();
-      return {
-        programArguments: [execPath, cliEntrypointPath, ...params.args],
-      };
-    } catch (error) {
-      // If running under bun or another runtime that can execute TS directly
-      if (!isNodeRuntime(execPath)) {
-        return { programArguments: [execPath, ...params.args] };
-      }
-      throw error;
-    }
-  }
-
-  // Dev mode: use bun to run TypeScript directly
-  const repoRoot = resolveRepoRootForDev();
-  const devCliPath = path.join(repoRoot, "src", "entry.ts");
-  await fs.access(devCliPath);
-
-  // If already running under bun, use current execPath
-  if (isBunRuntime(execPath)) {
-    return {
-      programArguments: [execPath, devCliPath, ...params.args],
+      programArguments:
+        params.runtime === "bun"
+          ? [runtimePath, ...resolveRuntimeArgs(params.runtime), devCliPath, ...params.args]
+          : [runtimePath, "--import", "tsx", devCliPath, ...params.args],
       workingDirectory: repoRoot,
     };
   }
 
-  // Otherwise resolve bun from PATH
-  const bunPath = await resolveBunPath();
+  const cliEntrypointPath = await resolveCliEntrypointPathForService(params.cliEntrypoint);
   return {
-    programArguments: [bunPath, devCliPath, ...params.args],
-    workingDirectory: repoRoot,
+    programArguments: [
+      runtimePath,
+      ...resolveRuntimeArgs(params.runtime),
+      (await resolveBrewOpenClawPath(cliEntrypointPath)) ?? cliEntrypointPath,
+      ...params.args,
+    ],
   };
 }
 
 export async function resolveGatewayProgramArguments(params: {
+  /** Retained CLI entrypoint to plan for instead of this process's argv[1]. */
+  cliEntrypoint?: string;
   port: number;
+  allowUnconfigured?: boolean;
   dev?: boolean;
-  runtime?: GatewayRuntimePreference;
-  nodePath?: string;
+  runtime: GatewayDaemonRuntime;
+  runtimePath?: string;
   wrapperPath?: string;
+  existingCommand?: GatewayServiceCommandConfig | null;
 }): Promise<GatewayProgramArgs> {
   const gatewayArgs = ["gateway", "--port", String(params.port)];
-  return resolveCliProgramArguments({
+  if (params.allowUnconfigured) {
+    gatewayArgs.push("--allow-unconfigured");
+  }
+  const result = await resolveCliProgramArguments({
+    ...params,
     args: gatewayArgs,
-    dev: params.dev,
-    runtime: params.runtime,
-    nodePath: params.nodePath,
-    wrapperPath: params.wrapperPath,
   });
+  if (params.runtime === "node" && !params.wrapperPath?.trim()) {
+    // Size only the managed Gateway, before Node loads its entrypoint. Keeping
+    // automatic flags out of NODE_OPTIONS leaves ordinary spawned Node children alone.
+    result.programArguments.splice(1, 0, ...resolveGatewayHeapExecArgv(params.existingCommand));
+  }
+  return result;
 }
 
 export async function resolveNodeProgramArguments(params: {
   host: string;
   port: number;
+  contextPath?: string;
   tls?: boolean;
   tlsFingerprint?: string;
   nodeId?: string;
   displayName?: string;
+  installedAppsSharing?: boolean;
+  commands?: string[];
+  allCommands?: boolean;
   dev?: boolean;
-  runtime?: GatewayRuntimePreference;
-  nodePath?: string;
+  runtime: GatewayDaemonRuntime;
+  runtimePath?: string;
+  wrapperPath?: string;
 }): Promise<GatewayProgramArgs> {
   const args = ["node", "run", "--host", params.host, "--port", String(params.port)];
-  if (params.tls || params.tlsFingerprint) {
+  if (params.tls === false && !params.tlsFingerprint) {
+    // Managed services must carry plaintext explicitly; omission would let the
+    // node runtime re-inherit TLS from the operator's global Gateway config.
+    args.push("--no-tls");
+  } else if (params.tls || params.tlsFingerprint) {
     args.push("--tls");
   }
   if (params.tlsFingerprint) {
     args.push("--tls-fingerprint", params.tlsFingerprint);
+  }
+  if (params.contextPath) {
+    args.push("--context-path", params.contextPath);
   }
   if (params.nodeId) {
     args.push("--node-id", params.nodeId);
@@ -324,10 +260,13 @@ export async function resolveNodeProgramArguments(params: {
   if (params.displayName) {
     args.push("--display-name", params.displayName);
   }
-  return resolveCliProgramArguments({
-    args,
-    dev: params.dev,
-    runtime: params.runtime,
-    nodePath: params.nodePath,
-  });
+  if (params.installedAppsSharing !== undefined) {
+    args.push(params.installedAppsSharing ? "--share-installed-apps" : "--no-share-installed-apps");
+  }
+  if (params.allCommands) {
+    args.push("--all-commands");
+  } else if (params.commands !== undefined) {
+    args.push("--commands", params.commands.join(","));
+  }
+  return resolveCliProgramArguments({ ...params, args });
 }

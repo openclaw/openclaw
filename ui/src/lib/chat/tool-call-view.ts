@@ -1,0 +1,344 @@
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import { unwrapToolCallForDisplay } from "../../../../src/agents/tool-display-call.js";
+import { resolveExecCode, resolveExecTitle } from "../../../../src/agents/tool-display-exec.js";
+import {
+  buildWriteDiffLines,
+  computeLineDiff,
+  joinDiffSections,
+  parseDiffDetailsString,
+  splitDiffLines,
+  type DiffLine,
+  type DiffStat,
+} from "./tool-call-diff.ts";
+import { parsePatchView, type PatchFileOperation } from "./tool-call-patch.ts";
+
+type ToolCallKind = "command" | "read" | "edit" | "write" | "search" | "fetch" | "generic";
+
+type ToolCallViewSource = {
+  name: string;
+  args?: unknown;
+  details?: unknown;
+};
+
+export type ToolCallView = {
+  kind: ToolCallKind;
+  /** Agent-supplied purpose for execution tools; does not describe their outcome. */
+  title?: string;
+  /** Full command text for `command` rows (first line shown collapsed). */
+  command?: string;
+  /** JavaScript source for code-mode execution, rendered without shell highlighting. */
+  code?: string;
+  /** File basename or primary target shown bold in the row. */
+  target?: string;
+  /** Dimmed secondary detail (directory, query scope, URL host…). */
+  targetDetail?: string;
+  diff?: DiffLine[];
+  stat?: DiffStat;
+  /** Producer-recorded operations for patch rows. */
+  fileOperations?: PatchFileOperation[];
+};
+
+const COMMAND_TOOL_NAMES = new Set(["bash", "exec", "shell", "run_command", "run_terminal_cmd"]);
+const TEXT_EDITOR_TOOL_NAMES = new Set(["str_replace_editor", "str_replace_based_edit_tool"]);
+const PATCH_TOOL_NAMES = new Set(["apply_patch", "applypatch", "patch"]);
+const TOOL_KINDS: ReadonlyArray<readonly [ToolCallKind, ReadonlySet<string>]> = [
+  ["command", COMMAND_TOOL_NAMES],
+  ["read", new Set(["read", "read_file", "readfile", "notebookread", "notebook_read"])],
+  [
+    "edit",
+    new Set([
+      "edit",
+      "edit_file",
+      "multiedit",
+      "multi_edit",
+      "notebookedit",
+      "notebook_edit",
+      ...PATCH_TOOL_NAMES,
+    ]),
+  ],
+  ["write", new Set(["write", "write_file", "create_file"])],
+  ["search", new Set(["grep", "find", "glob", "ls", "list", "codebase_search"])],
+  ["fetch", new Set(["web_fetch", "webfetch", "fetch"])],
+];
+
+function resolvePathArg(args: Record<string, unknown> | null): string | undefined {
+  return (
+    readNonBlankString(args?.path) ??
+    readNonBlankString(args?.file_path) ??
+    readNonBlankString(args?.filePath) ??
+    readNonBlankString(args?.file) ??
+    readNonBlankString(args?.filepath) ??
+    readNonBlankString(args?.filename) ??
+    readNonBlankString(args?.notebook_path)
+  );
+}
+
+function splitPathForDisplay(path: string): { base: string; dir?: string } {
+  const normalized = path.replace(/\\/g, "/").replace(/\/+$/, "");
+  const slash = normalized.lastIndexOf("/");
+  if (slash <= 0) {
+    return { base: normalized || path };
+  }
+  return { base: normalized.slice(slash + 1), dir: normalized.slice(0, slash) };
+}
+
+type ResolvedEditDiff = { diff: DiffLine[]; stat?: DiffStat };
+
+const MAX_LOCAL_DIFF_PAIRS = 8;
+const MAX_LOCAL_DIFF_INPUT_CHARS = 120_000;
+
+function resolveEditDiff(args: Record<string, unknown> | null): ResolvedEditDiff | null {
+  if (!args) {
+    return null;
+  }
+  const pairs: { oldText: string; newText: string }[] = [];
+  let inputChars = 0;
+  let truncated = false;
+  const edits = Array.isArray(args.edits) ? args.edits : [args];
+  for (const [index, entry] of edits.entries()) {
+    if (index >= MAX_LOCAL_DIFF_PAIRS) {
+      truncated = true;
+      break;
+    }
+    const record = asRecord(entry);
+    if (!record) {
+      continue;
+    }
+    const oldText = record.oldText ?? record.old_string ?? record.oldString ?? record.old_str;
+    const newText = record.newText ?? record.new_string ?? record.newString ?? record.new_str;
+    if (typeof oldText === "string" && typeof newText === "string") {
+      const pairChars = oldText.length + newText.length;
+      if (inputChars + pairChars > MAX_LOCAL_DIFF_INPUT_CHARS) {
+        truncated = true;
+        break;
+      }
+      inputChars += pairChars;
+      pairs.push({ oldText, newText });
+    }
+  }
+  if (pairs.length === 0) {
+    return truncated ? { diff: [{ kind: "skip", text: "" }] } : null;
+  }
+  const sections = pairs.map((pair) => computeLineDiff(pair.oldText, pair.newText));
+  const result = joinDiffSections(sections, { truncated });
+  if (result.lines.length === 0) {
+    return null;
+  }
+  return {
+    diff: result.lines,
+    ...(result.kind === "complete" ? { stat: result.stat } : {}),
+  };
+}
+
+function readDetailsDiff(details: unknown): ResolvedEditDiff | null {
+  const record = asRecord(details);
+  const diffText = readNonBlankString(record?.diff);
+  if (!diffText) {
+    return null;
+  }
+  const lines = parseDiffDetailsString(diffText);
+  if (!lines) {
+    return null;
+  }
+  return {
+    diff: lines.lines,
+    ...(lines.kind === "complete" ? { stat: lines.stat } : {}),
+  };
+}
+
+function resolveInsertionDiff(args: Record<string, unknown> | null): ResolvedEditDiff | null {
+  const insertText = readNonBlankString(args?.insert_text);
+  if (!insertText) {
+    return null;
+  }
+  const lines = computeLineDiff("", insertText).lines;
+  // The text is known, but its surrounding file context is not. Omit an exact
+  // stat rather than implying this preview represents the final placement.
+  return lines.length > 0 ? { diff: lines } : null;
+}
+
+function resolvePatchView(args: Record<string, unknown> | null): ToolCallView | null {
+  const patch = parsePatchView(args);
+  if (!patch) {
+    return null;
+  }
+  const view: ToolCallView = {
+    kind: "edit",
+    fileOperations: patch.fileOperations,
+    diff: patch.lines,
+    stat: patch.stat,
+  };
+  if (patch.paths.length > 1) {
+    return { ...view, target: `${patch.paths.length} files` };
+  }
+  if (patch.move) {
+    const from = splitPathForDisplay(patch.move.from);
+    const to = splitPathForDisplay(patch.move.to);
+    const commonDir = from.dir === to.dir ? from.dir : undefined;
+    return {
+      ...view,
+      target: commonDir ? `${from.base} → ${to.base}` : `${patch.move.from} → ${patch.move.to}`,
+      targetDetail: commonDir,
+    };
+  }
+  const pathParts = patch.paths[0] ? splitPathForDisplay(patch.paths[0]) : null;
+  return {
+    ...view,
+    target: pathParts?.base,
+    targetDetail: pathParts?.dir,
+  };
+}
+
+function resolveToolCallKind(
+  key: string,
+  args: Record<string, unknown> | null,
+  editorCommand: string | undefined,
+): ToolCallKind {
+  if (TEXT_EDITOR_TOOL_NAMES.has(key)) {
+    switch (editorCommand) {
+      case "view":
+        return "read";
+      case "str_replace":
+      case "insert":
+      case "undo_edit":
+        return "edit";
+      case "create":
+        return "write";
+      default:
+        return "generic";
+    }
+  }
+  for (const [kind, names] of TOOL_KINDS) {
+    if (names.has(key)) {
+      return kind;
+    }
+  }
+  // Arg-shape fallback for harness-specific command tools.
+  if (args && typeof args.command === "string" && Object.keys(args).length <= 3) {
+    return "command";
+  }
+  return "generic";
+}
+
+// Cache entries remember which details object they were built from: live tool
+// rows first render with args only and gain result `details` (e.g. the edit
+// diff) later on the same args identity, which must invalidate the cache.
+const toolCallViewCache = new WeakMap<
+  object,
+  { details: unknown; name: string; view: ToolCallView }
+>();
+
+export function resolveToolCallView(source: ToolCallViewSource): ToolCallView {
+  const call = unwrapToolCallForDisplay(source);
+  const args = asRecord(call.args);
+  const cacheKey = args ?? asRecord(source.details);
+  const name = call.name.trim().toLowerCase();
+  if (cacheKey) {
+    const cached = toolCallViewCache.get(cacheKey);
+    if (cached && cached.details === source.details && cached.name === name) {
+      return cached.view;
+    }
+  }
+  const view = buildToolCallView(source, args, name);
+  if (cacheKey) {
+    toolCallViewCache.set(cacheKey, { details: source.details, name, view });
+  }
+  return view;
+}
+
+function buildToolCallView(
+  source: ToolCallViewSource,
+  args: Record<string, unknown> | null,
+  key: string,
+): ToolCallView {
+  const editorCommand = TEXT_EDITOR_TOOL_NAMES.has(key)
+    ? readNonBlankString(args?.command)?.trim().toLowerCase()
+    : undefined;
+  const kind = resolveToolCallKind(key, args, editorCommand);
+
+  if (kind === "command") {
+    const command = readNonBlankString(args?.command);
+    // Display the inner command from a harness's sh -lc wrapper.
+    const shellWrapper = command?.match(
+      /^\s*(?:\/(?:usr\/)?bin\/)?(?:ba|z|da)?sh\s+-l?c\s+(['"])([\s\S]+)\1\s*$/,
+    );
+    return {
+      kind,
+      title: COMMAND_TOOL_NAMES.has(key) ? resolveExecTitle(args) : undefined,
+      command: shellWrapper?.[2] ?? command,
+      code: resolveExecCode(args),
+    };
+  }
+
+  if (kind === "edit" && PATCH_TOOL_NAMES.has(key)) {
+    return resolvePatchView(args) ?? { kind: "generic" };
+  }
+
+  if (kind === "read" || kind === "edit" || kind === "write") {
+    const path = resolvePathArg(args);
+    if (!path) {
+      return { kind: "generic" };
+    }
+    const { base, dir } = splitPathForDisplay(path);
+    const view: ToolCallView = { kind, target: base, targetDetail: dir };
+    if (kind === "read") {
+      return view;
+    }
+
+    const authoritativeDiff = readDetailsDiff(source.details);
+    if (authoritativeDiff) {
+      return { ...view, ...authoritativeDiff };
+    }
+    if (kind === "edit") {
+      const diff =
+        editorCommand === "insert"
+          ? resolveInsertionDiff(args)
+          : editorCommand === "undo_edit"
+            ? null
+            : resolveEditDiff(args);
+      return { ...view, ...diff };
+    }
+    const details = asRecord(source.details);
+    if (details?.changed === false) {
+      return view;
+    }
+    const content = readNonBlankString(
+      args?.[editorCommand === "create" ? "file_text" : "content"],
+    );
+    if (!content) {
+      return view;
+    }
+    const diff = buildWriteDiffLines(content);
+    return {
+      ...view,
+      diff,
+      // Present details need created=true before zero removals are authoritative.
+      ...(details && details.created !== true
+        ? {}
+        : { stat: { added: splitDiffLines(content).length, removed: 0 } }),
+    };
+  }
+
+  if (kind === "search") {
+    const pattern =
+      readNonBlankString(args?.pattern) ??
+      readNonBlankString(args?.query) ??
+      readNonBlankString(args?.glob);
+    const path = resolvePathArg(args);
+    if (!pattern && !path) {
+      return { kind: "generic" };
+    }
+    return { kind, target: pattern ?? path, targetDetail: pattern ? path : undefined };
+  }
+
+  if (kind === "fetch") {
+    const url = readNonBlankString(args?.url);
+    if (!url) {
+      return { kind: "generic" };
+    }
+    return { kind, target: url };
+  }
+
+  return { kind: "generic" };
+}

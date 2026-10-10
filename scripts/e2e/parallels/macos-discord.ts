@@ -1,28 +1,34 @@
+// Macos Discord script supports OpenClaw repository automation.
+import { randomUUID } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { MacosGuest } from "./guest-transports.ts";
 import { run, say, shellQuote, warn } from "./host-command.ts";
 
-export type DiscordSmokePhase = "fresh" | "upgrade";
+type DiscordSmokePhase = "fresh" | "upgrade";
 
-export interface MacosDiscordConfig {
+interface MacosDiscordConfig {
   channelId: string;
   guildId: string;
   token: string;
 }
 
+type MacosDiscordSmokeInput = {
+  config: MacosDiscordConfig;
+  guest: MacosGuest;
+  guestNode: string;
+  guestOpenClaw: string;
+  guestOpenClawEntry: string;
+  runDir: string;
+  vmName: string;
+};
+
 export class MacosDiscordSmoke {
-  constructor(
-    private input: {
-      config: MacosDiscordConfig;
-      guest: MacosGuest;
-      guestNode: string;
-      guestOpenClaw: string;
-      guestOpenClawEntry: string;
-      runDir: string;
-      vmName: string;
-    },
-  ) {}
+  private input: MacosDiscordSmokeInput;
+
+  constructor(input: MacosDiscordSmokeInput) {
+    this.input = input;
+  }
 
   configure(): void {
     const guilds = JSON.stringify({
@@ -41,12 +47,23 @@ ${this.input.guestNode} ${this.input.guestOpenClawEntry} config set channels.dis
 ${this.input.guestNode} ${this.input.guestOpenClawEntry} config set channels.discord.groupPolicy allowlist
 ${this.input.guestNode} ${this.input.guestOpenClawEntry} config set channels.discord.guilds ${shellQuote(guilds)} --strict-json
 ${this.input.guestNode} ${this.input.guestOpenClawEntry} doctor --fix --yes --non-interactive
+${this.input.guestNode} - <<'JS'
+const fs = require("node:fs");
+const path = require("node:path");
+const configPath = path.join(process.env.HOME || "", ".openclaw", "openclaw.json");
+const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+config.plugins = config.plugins && typeof config.plugins === "object" ? config.plugins : {};
+const allow = Array.isArray(config.plugins.allow) ? config.plugins.allow : [];
+config.plugins.allow = Array.from(new Set([...allow, "discord"]));
+fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\\n");
+JS
+${this.input.guestNode} ${this.input.guestOpenClawEntry} plugins enable discord
 ${this.input.guestNode} ${this.input.guestOpenClawEntry} gateway restart
 ${this.input.guestNode} ${this.input.guestOpenClawEntry} channels status --probe --json`);
   }
 
   async runRoundtrip(phase: DiscordSmokePhase): Promise<void> {
-    const nonce = `${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+    const nonce = randomUUID();
     const outboundNonce = `${phase}-out-${nonce}`;
     const inboundNonce = `${phase}-in-${nonce}`;
     const outboundLog = path.join(this.input.runDir, `${phase}.discord-send.json`);
@@ -99,7 +116,6 @@ ${this.input.guestNode} ${this.input.guestOpenClawEntry} channels status --probe
     say(`Stop ${this.input.vmName} after successful Discord smoke`);
     const result = run("prlctl", ["stop", this.input.vmName], {
       check: false,
-      quiet: true,
       timeoutMs: 120_000,
     });
     if (result.status !== 0) {
@@ -123,6 +139,10 @@ ${this.input.guestNode} ${this.input.guestOpenClawEntry} channels status --probe
   private async discordApi(method: string, apiPath: string, payload?: unknown): Promise<string> {
     const args = [
       "-fsS",
+      "--connect-timeout",
+      "10",
+      "--max-time",
+      "30",
       "-X",
       method,
       "-H",
@@ -132,7 +152,8 @@ ${this.input.guestNode} ${this.input.guestOpenClawEntry} channels status --probe
         : ["-H", "Content-Type: application/json", "--data", JSON.stringify(payload)]),
       `https://discord.com/api/v10${apiPath}`,
     ];
-    return run("curl", args, { quiet: true }).stdout;
+    // Keep smoke phase deadlines enforceable even if curl itself fails to terminate promptly.
+    return run("curl", args, { timeoutMs: 45_000 }).stdout;
   }
 
   private async waitForHostVisibility(nonce: string, messageId: string): Promise<void> {
@@ -152,7 +173,7 @@ ${this.input.guestNode} ${this.input.guestOpenClawEntry} channels status --probe
       if (recent.includes(nonce)) {
         return;
       }
-      run("sleep", ["2"], { quiet: true });
+      run("sleep", ["2"]);
     }
     throw new Error("Discord host visibility timed out");
   }
@@ -194,7 +215,7 @@ ${this.input.guestNode} ${this.input.guestOpenClawEntry} channels status --probe
       if (result.status === 0 && result.stdout.includes(nonce)) {
         return;
       }
-      run("sleep", ["3"], { quiet: true });
+      run("sleep", ["3"]);
     }
     throw new Error("Discord guest readback timed out");
   }

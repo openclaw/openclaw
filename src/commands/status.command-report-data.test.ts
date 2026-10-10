@@ -1,97 +1,118 @@
-import { describe, expect, it } from "vitest";
-import { buildStatusCommandReportData } from "./status.command-report-data.ts";
-import { createStatusCommandReportDataParams } from "./status.test-support.ts";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { createDeferred } from "../../test/helpers/promise.js";
+import * as backupRunRecords from "../state/backup-run-records.js";
+import { createSqliteWalHealth } from "./sqlite-wal-health.test-support.js";
+import { buildStatusCommandReportData } from "./status.command-report-data.js";
+import { createStatusCommandReportDataParams } from "./status.test-support.js";
 
-describe("buildStatusCommandReportData", () => {
-  it("builds report inputs from shared status surfaces", async () => {
-    const baseParams = createStatusCommandReportDataParams();
-    const result = await buildStatusCommandReportData(
+beforeEach(() => {
+  vi.stubEnv("OPENCLAW_PROFILE", undefined);
+  vi.stubEnv("OPENCLAW_CONTAINER_HINT", undefined);
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+});
+
+it.each([
+  {
+    channel: "quietchat",
+    accountId: "acct",
+    expected: "ok-token · 5m ago · quietchat · account acct",
+  },
+  { channel: undefined, accountId: undefined, expected: "ok-token · 5m ago" },
+])(
+  "formats heartbeat age and optional metadata: $expected",
+  async ({ channel, accountId, expected }) => {
+    const now = Date.parse("2026-09-01T12:00:00.000Z");
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const report = await buildStatusCommandReportData(
       createStatusCommandReportDataParams({
-        surface: {
-          ...baseParams.surface,
-          gatewayProbe: { connectLatencyMs: 123, error: null },
-        },
-        summary: {
-          ...baseParams.summary,
-          sessions: {
-            ...baseParams.summary.sessions,
-            recent: [
-              {
-                ...baseParams.summary.sessions.recent[0],
-                key: "session-key",
-                kind: "direct",
-                updatedAt: 1,
-                age: 5_000,
-                model: "gpt-5.4",
-              },
-            ],
-          },
-        },
+        lastHeartbeat: { ts: now - 300_000, status: "ok-token", channel, accountId },
       }),
     );
-
-    expect(result.overviewRows[0]).toEqual({
-      Item: "OS",
-      Value: "macOS · node " + process.versions.node,
-    });
-    expect(result.taskMaintenanceHint).toBe(
-      "Task maintenance: cmd:openclaw tasks maintenance --apply",
+    const row = expectDefined(
+      report.overviewRows.find(({ Item }) => Item === "Last heartbeat"),
+      "heartbeat row",
     );
-    expect(result.pluginCompatibilityLines).toEqual(["  warn(WARN) legacy"]);
-    expect(result.pairingRecoveryLines[0]).toBe("warn(Gateway pairing approval required.)");
-    expect(result.channelsRows[0]?.Channel).toBe("QuietChat");
-    expect(result.sessionsRows[0]?.Cache).toBe("cache ok");
-    expect(result.healthRows?.[0]).toEqual({
-      Item: "Gateway",
-      Status: "ok(reachable)",
-      Detail: "42ms",
-    });
-    expect(result.footerLines.at(-1)).toBe("  Need to test channels? cmd:openclaw status --deep");
+    expect(stripAnsi(row.Value)).toBe(expected);
+  },
+);
+
+it("awaits backup freshness before assembling the overview", async () => {
+  const freshness = createDeferred<backupRunRecords.BackupRunFreshness>();
+  vi.spyOn(backupRunRecords, "readBackupRunFreshness").mockReturnValueOnce(freshness.promise);
+  const pending = buildStatusCommandReportData(createStatusCommandReportDataParams());
+  freshness.resolve({
+    latest: {
+      id: "failed-backup",
+      createdAt: Date.now(),
+      archivePath: "/backups/archive.tar.gz",
+      status: "failed",
+      kind: "archive",
+    },
   });
+  expect((await pending).overviewRows.find(({ Item }) => Item === "Backups")?.Value).toBe(
+    "last attempt failed just now (archive)",
+  );
+});
 
-  it("shows skipped audit text when fast status omits the security audit", async () => {
-    const result = await buildStatusCommandReportData(
-      createStatusCommandReportDataParams({
-        securityAudit: undefined,
-      }),
-    );
-
-    expect(result.securityAuditLines).toEqual([
-      "muted(Skipped in fast status. Full report: cmd:openclaw security audit)",
-      "muted(Deep probe: cmd:openclaw status --deep)",
-    ]);
+it("keeps pending startup guidance distinct from reachability failure", async () => {
+  const params = createStatusCommandReportDataParams();
+  const report = await buildStatusCommandReportData({
+    ...params,
+    surface: {
+      ...params.surface,
+      gatewayReachable: false,
+      gatewayProbe: { startupPhase: "plugins", error: null },
+    },
+    health: undefined,
+    lastHeartbeat: null,
   });
+  expect(
+    stripAnsi(report.overviewRows.find(({ Item }) => Item === "Last heartbeat")?.Value ?? ""),
+  ).toBe("not checked (gateway still starting; phase plugins)");
+  expect(report.footerLines.at(-1)).toBe("  Retry after startup: openclaw status --deep");
+  expect(report.footerLines.join("\n")).not.toContain("Fix reachability first");
+});
 
-  it("adds model-pricing degradation from gateway probe health to overview rows", async () => {
-    const baseParams = createStatusCommandReportDataParams();
-    const result = await buildStatusCommandReportData(
-      createStatusCommandReportDataParams({
-        surface: {
-          ...baseParams.surface,
-          gatewayProbe: {
-            connectLatencyMs: 123,
-            error: null,
-            health: {
-              ok: true,
-              modelPricing: {
-                state: "degraded",
-                detail: "OpenRouter pricing fetch failed: TypeError: fetch failed",
-                sources: [{ source: "openrouter", state: "degraded" }],
-              },
-            },
-          },
-        },
-        health: undefined,
-      }),
-    );
+it("shows skipped audit text when fast status omits the security audit", async () => {
+  const report = await buildStatusCommandReportData(
+    createStatusCommandReportDataParams({ securityAudit: undefined }),
+  );
+  expect(report.securityAuditLines.map(stripAnsi)).toEqual([
+    "Skipped in fast status. Full report: openclaw security audit",
+    "Deep check: openclaw status --deep",
+  ]);
+});
 
-    const modelPricingIndex = result.overviewRows.findIndex((row) => row.Item === "Model pricing");
-    expect(modelPricingIndex).toBeGreaterThanOrEqual(0);
-    expect(result.overviewRows[modelPricingIndex]).toStrictEqual({
-      Item: "Model pricing",
-      Value:
-        "warn(warning · optional pricing refresh degraded · OpenRouter pricing fetch failed: TypeError: fetch failed)",
-    });
-    expect(result.overviewRows[modelPricingIndex + 1]?.Item).toBe("Memory");
+it("renders the recorded SQLite checkpoint warning in deep status", async () => {
+  const params = createStatusCommandReportDataParams();
+  const sqliteWal = createSqliteWalHealth({
+    state: "blocked",
+    warning: true,
+    consecutiveBlocked: 2,
+    observedAtMs: Date.parse("2026-09-13T12:00:00.000Z"),
+    walBytes: 128 * 1024 * 1024,
+    checkpointedFrames: 100,
+    lastCompletedAtMs: Date.parse("2026-09-13T11:00:00.000Z"),
   });
+  const report = await buildStatusCommandReportData({
+    ...params,
+    summary: { ...params.summary, sqliteWal },
+    opts: { deep: true },
+  });
+  const row = expectDefined(
+    report.healthRows?.find(({ Item }) => Item === "SQLite WAL"),
+    "SQLite WAL warning",
+  );
+  expect(stripAnsi(row.Status)).toBe("WARN");
+  expect(row.Detail).toContain("checkpoint blocked");
+  expect(row.Detail).toContain("WAL 128.0 MiB");
+  expect(row.Detail).toContain("frames 100/4000 checkpointed");
+  expect(row.Detail).toContain("last complete 2026-09-13T11:00:00.000Z");
+  expect(row.Detail).toContain("observed 2026-09-13T12:00:00.000Z");
+  expect(row.Detail).toContain("openclaw gateway restart");
 });

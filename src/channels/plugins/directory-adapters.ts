@@ -14,12 +14,11 @@ export function createChannelDirectoryAdapter(
   } = {},
 ): ChannelDirectoryAdapter {
   return {
-    self: params.self ?? nullChannelDirectorySelf,
     ...params,
+    self: params.self ?? nullChannelDirectorySelf,
   };
 }
 
-/** Build the common empty directory surface for channels without directory support. */
 export function createEmptyChannelDirectoryAdapter(): ChannelDirectoryAdapter {
   return createChannelDirectoryAdapter({
     listPeers: emptyChannelDirectoryList,

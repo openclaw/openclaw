@@ -1,32 +1,69 @@
+// Telegram tests cover telegram outbound plugin behavior.
 import { describe, expect, it } from "vitest";
-import { markdownToTelegramHtmlChunks, splitTelegramHtmlChunks } from "./format.js";
 import { telegramOutbound } from "./outbound-adapter.js";
-import { clearTelegramRuntime } from "./runtime.js";
+import { clearTelegramRuntimeForTest as clearTelegramRuntime } from "./runtime.test-support.js";
 
 describe("telegramPlugin outbound", () => {
-  it("uses static outbound contract when Telegram runtime is uninitialized", () => {
-    clearTelegramRuntime();
-    const text = `${"hello\n".repeat(1200)}tail`;
-    const expected = markdownToTelegramHtmlChunks(text, 4000);
-
-    expect(telegramOutbound.chunker?.(text, 4000)).toEqual(expected);
-    expect(telegramOutbound.deliveryMode).toBe("direct");
-    expect(telegramOutbound.chunkerMode).toBe("markdown");
-    expect(telegramOutbound.chunkedTextFormatting).toEqual({ parseMode: "HTML" });
-    expect(telegramOutbound.textChunkLimit).toBe(4000);
-    expect(telegramOutbound.sanitizeText).toBeUndefined();
-    expect(telegramOutbound.pollMaxOptions).toBe(10);
+  it("resolves the rich-message delivery limit", () => {
+    const resolveLimit = telegramOutbound.resolveEffectiveTextChunkLimit;
+    expect(resolveLimit?.({ cfg: {}, accountId: "default", fallbackLimit: 4000 })).toBe(4000);
+    expect(
+      resolveLimit?.({
+        cfg: { channels: { telegram: { richMessages: true } } },
+        accountId: "default",
+        fallbackLimit: 4000,
+      }),
+    ).toBe(32768);
   });
 
-  it("preserves explicit HTML parse mode before chunking", () => {
-    clearTelegramRuntime();
-    const text = "<b>hi</b>";
+  it("preserves an explicitly configured lower rich-message limit", () => {
+    expect(
+      telegramOutbound.resolveEffectiveTextChunkLimit?.({
+        cfg: {
+          channels: { telegram: { richMessages: true, textChunkLimit: 1200 } },
+        },
+        accountId: "default",
+        fallbackLimit: 4000,
+      }),
+    ).toBe(1200);
+  });
 
-    expect(telegramOutbound.chunker?.(text, 4000, { formatting: { parseMode: "HTML" } })).toEqual(
-      splitTelegramHtmlChunks(text, 4000),
-    );
-    expect(telegramOutbound.chunker?.(text, 4000)).toEqual(
-      markdownToTelegramHtmlChunks(text, 4000),
-    );
+  it("uses the selected account's rich-message limit", () => {
+    expect(
+      telegramOutbound.resolveEffectiveTextChunkLimit?.({
+        cfg: {
+          channels: {
+            telegram: {
+              richMessages: false,
+              accounts: { rich: { richMessages: true } },
+            },
+          },
+        },
+        accountId: "rich",
+        fallbackLimit: 4000,
+      }),
+    ).toBe(32768);
+  });
+
+  it("preserves a selected account's lower rich-message limit", () => {
+    expect(
+      telegramOutbound.resolveEffectiveTextChunkLimit?.({
+        cfg: {
+          channels: {
+            telegram: {
+              accounts: { rich: { richMessages: true, textChunkLimit: 1200 } },
+            },
+          },
+        },
+        accountId: "rich",
+        fallbackLimit: 4000,
+      }),
+    ).toBe(1200);
+  });
+  it("strips assistant-visible tool traces before outbound delivery", () => {
+    clearTelegramRuntime();
+    const text = 'Done.\n⚠️ 🛠️ `search "Pipeline" in ~/.openclaw/workspace-* (agent)` failed';
+
+    expect(telegramOutbound.sanitizeText?.({ text, payload: { text } })).toBe("Done.");
   });
 });

@@ -1,61 +1,100 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// Covers generation-scoped suppression and reuse of the manifest resolver.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const mocks = vi.hoisted(() => ({
   buildManifestBuiltInModelSuppressionResolver: vi.fn(),
-  resolveManifestBuiltInModelSuppression: vi.fn(),
 }));
 
 vi.mock("../plugins/manifest-model-suppression.js", () => ({
   buildManifestBuiltInModelSuppressionResolver: mocks.buildManifestBuiltInModelSuppressionResolver,
-  resolveManifestBuiltInModelSuppression: mocks.resolveManifestBuiltInModelSuppression,
 }));
 
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import {
-  buildShouldSuppressBuiltInModel,
-  shouldSuppressBuiltInModel,
+  buildShouldSuppressBuiltInModelCore,
+  resolveBuiltInModelSuppressionFromManifest,
 } from "./model-suppression.js";
 
 describe("model suppression", () => {
   beforeEach(() => {
+    clearPluginMetadataLifecycleCaches();
     mocks.buildManifestBuiltInModelSuppressionResolver.mockReset();
-    mocks.resolveManifestBuiltInModelSuppression.mockReset();
   });
 
-  it("uses manifest suppression", () => {
-    mocks.resolveManifestBuiltInModelSuppression.mockReturnValueOnce({
-      suppress: true,
-      errorMessage: "manifest suppression",
+  afterEach(() => {
+    setCurrentPluginMetadataSnapshot(undefined);
+  });
+
+  it("reads each concurrent generation's suppression rules across A/B/A interleaving", async () => {
+    const config = {} satisfies OpenClawConfig;
+    const snapshotA = createPluginMetadataSnapshot({
+      config,
+      manifestRegistry: { plugins: [], diagnostics: [] },
     });
-
-    expect(
-      shouldSuppressBuiltInModel({
+    const snapshotB = createPluginMetadataSnapshot({
+      config,
+      manifestRegistry: { plugins: [], diagnostics: [] },
+    });
+    setCurrentPluginMetadataSnapshot(snapshotB, { config });
+    mocks.buildManifestBuiltInModelSuppressionResolver.mockImplementation(() => {
+      const snapshot = getCurrentPluginMetadataSnapshot({ config, env: process.env });
+      return () =>
+        snapshot === snapshotA ? { suppress: true, errorMessage: "generation A" } : undefined;
+    });
+    let releaseA!: () => void;
+    let markAReady!: () => void;
+    const holdA = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+    const aReady = new Promise<void>((resolve) => {
+      markAReady = resolve;
+    });
+    const resultA = withPluginRuntimeGenerationScope({ metadataSnapshot: snapshotA }, async () => {
+      const result = resolveBuiltInModelSuppressionFromManifest({
         provider: "openai",
-        id: "gpt-5.3-codex-spark",
-        config: {},
-      }),
-    ).toBe(true);
+        id: "generation-model",
+        config,
+      })?.suppress;
+      markAReady();
+      await holdA;
+      return [
+        result,
+        resolveBuiltInModelSuppressionFromManifest({
+          provider: "openai",
+          id: "generation-model",
+          config,
+        })?.suppress,
+      ];
+    });
+    await aReady;
 
-    expect(mocks.resolveManifestBuiltInModelSuppression).toHaveBeenCalledOnce();
+    const resultB = await withPluginRuntimeGenerationScope(
+      { metadataSnapshot: snapshotB },
+      async () =>
+        resolveBuiltInModelSuppressionFromManifest({
+          provider: "openai",
+          id: "generation-model",
+          config,
+        })?.suppress,
+    );
+    releaseA();
+
+    await expect(resultA).resolves.toEqual([true, true]);
+    expect(resultB).toBeUndefined();
+    expect(mocks.buildManifestBuiltInModelSuppressionResolver).toHaveBeenCalledTimes(3);
   });
 
-  it("does not run deprecated runtime suppression hooks", () => {
-    expect(
-      shouldSuppressBuiltInModel({
-        provider: "openai",
-        id: "gpt-5.3-codex-spark",
-        config: {},
-      }),
-    ).toBe(false);
-
-    expect(mocks.resolveManifestBuiltInModelSuppression).toHaveBeenCalledOnce();
-  });
-
-  describe("buildShouldSuppressBuiltInModel", () => {
+  describe("buildShouldSuppressBuiltInModelCore", () => {
     beforeEach(() => {
       mocks.buildManifestBuiltInModelSuppressionResolver.mockReset();
     });
 
-    it("creates a reusable manifest resolver with normalized provider and model ids", () => {
+    it("reuses the manifest owner for repeated model decisions", () => {
       const resolver = vi
         .fn()
         .mockReturnValueOnce({ suppress: true, errorMessage: "manifest suppression" })
@@ -63,7 +102,7 @@ describe("model suppression", () => {
       const config = {};
       mocks.buildManifestBuiltInModelSuppressionResolver.mockReturnValueOnce(resolver);
 
-      const shouldSuppress = buildShouldSuppressBuiltInModel({ config });
+      const shouldSuppress = buildShouldSuppressBuiltInModelCore({ config });
 
       expect(shouldSuppress({ provider: "bedrock", id: "Claude-3" })).toBe(true);
       expect(shouldSuppress({ provider: "aws-bedrock", id: "claude-4" })).toBe(false);
@@ -72,25 +111,6 @@ describe("model suppression", () => {
         config,
         env: process.env,
       });
-      expect(resolver).toHaveBeenNthCalledWith(1, {
-        provider: "amazon-bedrock",
-        id: "claude-3",
-      });
-      expect(resolver).toHaveBeenNthCalledWith(2, {
-        provider: "amazon-bedrock",
-        id: "claude-4",
-      });
-    });
-
-    it("does not call the manifest resolver for empty provider or model ids", () => {
-      const resolver = vi.fn();
-      mocks.buildManifestBuiltInModelSuppressionResolver.mockReturnValueOnce(resolver);
-
-      const shouldSuppress = buildShouldSuppressBuiltInModel({});
-
-      expect(shouldSuppress({ provider: "openai", id: "" })).toBe(false);
-      expect(shouldSuppress({ provider: "", id: "gpt-5.5" })).toBe(false);
-      expect(resolver).not.toHaveBeenCalled();
     });
   });
 });

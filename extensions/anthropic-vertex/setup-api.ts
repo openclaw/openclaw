@@ -1,3 +1,7 @@
+/**
+ * Lightweight Anthropic Vertex setup entry. It exposes provider auth detection
+ * without importing the stream runtime or Vertex SDK.
+ */
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveAnthropicVertexConfigApiKey } from "./region.js";
 

@@ -1,4 +1,5 @@
 const DEFAULT_GRADIUM_BASE_URL = "https://api.gradium.ai";
+export const GRADIUM_API_HOSTNAME = "api.gradium.ai";
 export const DEFAULT_GRADIUM_VOICE_ID = "YTpq7expH9539ERJ";
 
 export const GRADIUM_VOICES = [
@@ -12,6 +13,23 @@ export const GRADIUM_VOICES = [
 ] as const;
 
 export function normalizeGradiumBaseUrl(baseUrl?: string): string {
-  const trimmed = baseUrl?.trim();
-  return trimmed?.replace(/\/+$/, "") || DEFAULT_GRADIUM_BASE_URL;
+  const raw = baseUrl?.trim() || DEFAULT_GRADIUM_BASE_URL;
+  const url = URL.parse(raw);
+  if (!url) {
+    throw new Error("Gradium baseUrl must be a valid https URL");
+  }
+
+  url.username = "";
+  url.password = "";
+  url.search = "";
+  url.hash = "";
+
+  if (url.protocol !== "https:") {
+    throw new Error("Gradium baseUrl must use https");
+  }
+  if (url.hostname.toLowerCase() !== GRADIUM_API_HOSTNAME) {
+    throw new Error("Gradium baseUrl must target api.gradium.ai");
+  }
+
+  return url.toString().replace(/\/+$/, "");
 }

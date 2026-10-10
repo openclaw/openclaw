@@ -1,0 +1,668 @@
+import { asNullableObjectRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeNullableString as toTrimmedString } from "@openclaw/normalization-core/string-coerce";
+import { Value } from "typebox/value";
+import { AgentActivityItemSchema } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import {
+  MAX_TOOL_APPROVAL_REVIEWS,
+  normalizeToolApprovalReview,
+} from "../../../../src/shared/tool-approval-reviews.js";
+import type { ChatGuardianNotice, ToolApprovalReview } from "../../lib/chat/chat-types.ts";
+import {
+  readToolApprovalReviewOutcome,
+  readToolApprovalReviews,
+  resolveToolApprovalReviewOutcome,
+  withToolApprovalReviews,
+} from "../../lib/chat/tool-approval-reviews.ts";
+import { readLiveDiffStat } from "../../lib/chat/tool-call-diff.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
+import { formatUnknownText, truncateText } from "../../lib/format.ts";
+import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
+import { updateChatReasoning } from "./chat-reasoning.ts";
+import { reconcileChatRunStartup } from "./chat-run-startup.ts";
+import { getChatRunOwner, getChatRunProjection } from "./history-merge.ts";
+import { observedRunInputSendId } from "./stream-causal-boundary.ts";
+import type { AgentEventPayload, ToolStreamEntry, ToolStreamHost } from "./tool-stream-contract.ts";
+import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
+import { handlePreambleProgress } from "./tool-stream-preamble.ts";
+import { cancelToolStreamSync, syncToolStreamMessages } from "./tool-stream-state.ts";
+import { handleStreamStatus, acceptsToolStreamSession } from "./tool-stream-status.ts";
+
+// How far a cyber notice has settled. A lower value never replaces a higher one
+// for the same run, which keeps reroutes and blocks safe from a late review
+// update and makes an automatic Daybreak escalation terminal.
+const PROVIDER_POLICY_PRECEDENCE = {
+  buffering: 0,
+  fallback: 1,
+  blocked: 2,
+  escalated: 3,
+  unavailable: 3,
+} as const;
+const TOOL_STREAM_LIMIT = 50;
+const RUN_USAGE_LIMIT = 50;
+const TOOL_STREAM_THROTTLE_MS = 80;
+const TOOL_OUTPUT_CHAR_LIMIT = 120_000;
+
+function isPolicyState(value: unknown): value is keyof typeof PROVIDER_POLICY_PRECEDENCE {
+  return typeof value === "string" && Object.hasOwn(PROVIDER_POLICY_PRECEDENCE, value);
+}
+
+function extractToolOutputText(value: unknown): string | null {
+  const record = readRecord(value);
+  if (!record) {
+    return null;
+  }
+  if (typeof record.text === "string") {
+    return record.text;
+  }
+  if (!Array.isArray(record.content)) {
+    return null;
+  }
+  const parts: string[] = [];
+  for (const content of record.content) {
+    const entry = readRecord(content);
+    if (entry?.type === "text" && typeof entry.text === "string" && entry.text) {
+      parts.push(entry.text);
+    }
+  }
+  return parts.length > 0 ? parts.join("\n") : null;
+}
+
+function formatToolOutput(value: unknown): string | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  const contentText = extractToolOutputText(value);
+  let text: string;
+  if (typeof value === "string") {
+    text = value;
+  } else if (contentText) {
+    text = contentText;
+  } else {
+    try {
+      text = JSON.stringify(value, null, 2);
+    } catch {
+      text = formatUnknownText(value);
+    }
+  }
+  const truncated = truncateText(text, TOOL_OUTPUT_CHAR_LIMIT);
+  if (!truncated.truncated) {
+    return truncated.text;
+  }
+  return `${truncated.text}\n\n… truncated (${truncated.total} chars, showing first ${truncated.text.length}).`;
+}
+
+function refreshSessionStatusModel(host: ToolStreamHost, data: Record<string, unknown>) {
+  const details = readRecord(readRecord(data.result)?.details);
+  if (details?.changedModel !== true) {
+    return;
+  }
+  const targetSessionKey = toTrimmedString(details.sessionKey) ?? host.sessionKey;
+  const agentId = toTrimmedString(details.agentId);
+  if (!agentId || !uiSessionEventMatches(host, targetSessionKey, agentId)) {
+    return;
+  }
+  // Results can be replayed from history; read current truth without replacing pending UI intent.
+  void host.sessions.reconcileMutation(agentId);
+}
+
+function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown> {
+  const itemEnded = entry.activity?.some(
+    (item) =>
+      (item.toolCallId ?? item.itemId) === entry.toolCallId &&
+      item.phase === "end" &&
+      !item.suppressChannelProgress,
+  );
+  const content: Array<Record<string, unknown>> = [];
+  content.push({
+    type: "toolcall",
+    name: entry.name,
+    arguments: entry.args ?? {},
+    ...(entry.parentToolCallId ? { parentToolCallId: entry.parentToolCallId } : {}),
+    ...(entry.details !== undefined ? { details: entry.details } : {}),
+  });
+  // Emit the result block whenever a result landed, even with empty output;
+  // otherwise a completed no-stdout command keeps its running state in the UI.
+  if (entry.output || entry.resultReceived) {
+    content.push({
+      type: "toolresult",
+      name: entry.name,
+      text: entry.output ?? "",
+      ...(entry.parentToolCallId ? { parentToolCallId: entry.parentToolCallId } : {}),
+      ...(entry.details !== undefined ? { details: entry.details } : {}),
+      ...(entry.isError !== undefined ? { isError: entry.isError } : {}),
+      ...(entry.exitCode !== undefined ? { exitCode: entry.exitCode } : {}),
+    });
+  }
+  return {
+    role: "assistant",
+    toolCallId: entry.toolCallId,
+    runId: entry.runId,
+    ...(entry.activity ? { activity: entry.activity } : {}),
+    content,
+    timestamp: entry.startedAt,
+    // Running-state markers: only live tool-stream cards may show a spinner,
+    // and completion comes from a result or live item end, never partial output
+    // or a status-less history placeholder. Transcript messages never carry these,
+    // so historical output-less calls (aborted runs) stay inert.
+    __openclawToolStreamLive: true,
+    __openclawToolStreamResultReceived: entry.resultReceived === true,
+    __openclawToolStreamItemEnded: itemEnded === true,
+    ...(entry.resultReceived !== true && !itemEnded && entry.liveDiffStat
+      ? { __openclawToolStreamDiffStat: entry.liveDiffStat }
+      : {}),
+    __openclawToolStreamReceivedAt: entry.receivedAt,
+    ...(entry.afterUserSendId ? { openclawToolStreamAfterSendId: entry.afterUserSendId } : {}),
+  };
+}
+
+function flushToolStreamSync(host: ToolStreamHost) {
+  cancelToolStreamSync(host);
+  syncToolStreamMessages(host);
+}
+
+function publishToolStreamEntry(host: ToolStreamHost, entry: ToolStreamEntry, force: boolean) {
+  entry.message = buildToolStreamMessage(entry);
+  if (host.toolStreamOrder.length > TOOL_STREAM_LIMIT) {
+    const overflow = host.toolStreamOrder.length - TOOL_STREAM_LIMIT;
+    for (const id of host.toolStreamOrder.splice(0, overflow)) {
+      host.toolStreamById.delete(id);
+    }
+  }
+  if (force) {
+    flushToolStreamSync(host);
+    return;
+  }
+  if (host.toolStreamSyncTimer != null) {
+    return;
+  }
+  host.toolStreamSyncTimer = window.setTimeout(() => {
+    flushToolStreamSync(host);
+    // The initial event rendered before this deferred projection existed.
+    host.requestUpdate?.();
+  }, TOOL_STREAM_THROTTLE_MS);
+}
+
+function toolActivityIdentity(runId: string, toolCallId: string): string {
+  return `tool:${buildToolStreamIdentity(runId, toolCallId)}`;
+}
+
+function toolReviewSequenceIdentity(ownerIdentity: string, reviewId: string): string {
+  return `${ownerIdentity}:review:${JSON.stringify(reviewId)}`;
+}
+
+function acceptActivityEvent(host: ToolStreamHost, payload: AgentEventPayload): boolean {
+  const seq = Number.isSafeInteger(payload.seq) ? payload.seq : 0;
+  let identity: string;
+  let resultOwner: string | undefined;
+  if (payload.stream === "tool") {
+    const toolCallId = toTrimmedString(payload.data?.toolCallId);
+    if (!toolCallId) {
+      return true;
+    }
+    const ownerIdentity = toolActivityIdentity(payload.runId, toolCallId);
+    const terminalIdentity = `${ownerIdentity}:result`;
+    const terminalSeq = host.activityEventSeqById?.get(terminalIdentity);
+    const phase = toTrimmedString(payload.data?.phase);
+    if (phase !== "result" && terminalSeq !== undefined && seq <= terminalSeq) {
+      return false;
+    }
+    const reviewId =
+      phase === "review" ? toTrimmedString(readRecord(payload.data.review)?.id) : undefined;
+    const reviewFloor = host.activityEventSeqById?.get(`${ownerIdentity}:review-floor`);
+    if (reviewId && reviewFloor !== undefined && seq <= reviewFloor) {
+      return false;
+    }
+    identity = reviewId ? toolReviewSequenceIdentity(ownerIdentity, reviewId) : ownerIdentity;
+    if (phase === "result") {
+      resultOwner = ownerIdentity;
+    }
+  } else {
+    const terminalLifecycle =
+      payload.stream === "lifecycle" &&
+      (payload.data?.phase === "end" || payload.data?.phase === "error");
+    if (payload.stream === "compaction" || terminalLifecycle) {
+      // One visible compaction per run: older items and retry completions must
+      // not replace a newer operation restored or received on the live stream.
+      identity = `compaction:${payload.runId}`;
+    } else if (payload.stream === "thinking") {
+      identity = `thinking:${payload.runId}`;
+    } else if (payload.stream === "item") {
+      const itemId =
+        toTrimmedString(payload.data.itemId) ?? toTrimmedString(payload.data.id) ?? "latest";
+      identity = `item:${payload.runId}:${itemId}`;
+    } else {
+      return true;
+    }
+  }
+  const previous = host.activityEventSeqById?.get(identity);
+  if (previous !== undefined && seq <= previous) {
+    return false;
+  }
+  const sequences = (host.activityEventSeqById ??= new Map());
+  sequences.set(identity, seq);
+  if (resultOwner) {
+    sequences.set(`${resultOwner}:result`, seq);
+    for (const key of sequences.keys()) {
+      if (key.startsWith(`${resultOwner}:review:`)) {
+        sequences.delete(key);
+      }
+    }
+  }
+  return true;
+}
+
+function handleUsageEvent(host: ToolStreamHost, payload: AgentEventPayload): boolean {
+  if (payload.stream !== "usage") {
+    return false;
+  }
+  const sessionKey = toTrimmedString(payload.sessionKey);
+  if (sessionKey) {
+    if (!uiSessionEventMatches(host, sessionKey, toTrimmedString(payload.agentId))) {
+      return true;
+    }
+  } else if (!host.chatRunId || payload.runId !== host.chatRunId) {
+    return true;
+  }
+  const rawOutputTokens = payload.data?.outputTokens;
+  if (typeof rawOutputTokens !== "number" || !Number.isFinite(rawOutputTokens)) {
+    return true;
+  }
+  const outputTokens = Math.floor(rawOutputTokens);
+  if (outputTokens < 0) {
+    return true;
+  }
+  const current = host.chatRunUsageById?.get(payload.runId);
+  if (current && payload.seq <= current.seq) {
+    return true;
+  }
+  // Keep the sequence with its count across stream resets and terminal events:
+  // recovery snapshots must not overwrite newer live usage or erase the recap.
+  const usageByRun = new Map(host.chatRunUsageById);
+  usageByRun.delete(payload.runId);
+  usageByRun.set(payload.runId, { outputTokens, seq: payload.seq });
+  for (const staleRunId of [...usageByRun.keys()].slice(0, -RUN_USAGE_LIMIT)) {
+    usageByRun.delete(staleRunId);
+  }
+  host.chatRunUsageById = usageByRun;
+  return true;
+}
+
+function handleNoticeEvent(host: ToolStreamHost, payload: AgentEventPayload): boolean {
+  const systemNotice = payload.stream === "notice";
+  if (!systemNotice && payload.stream !== "codex_app_server.guardian") {
+    return false;
+  }
+  if (!acceptsToolStreamSession(host, payload)) {
+    return true;
+  }
+  const data = payload.data ?? {};
+  const phase = toTrimmedString(data.phase);
+  if (systemNotice && phase === "provider_policy") {
+    if (data.category !== "cyber" || data.provider !== "openai") {
+      return true;
+    }
+    const state = data.state;
+    if (state !== "cleared" && !isPolicyState(state)) {
+      return true;
+    }
+    const owner = host.chatRunId ?? getChatRunOwner(host) ?? host.providerPolicyNotice?.runId;
+    const pendingSend = host.chatQueue?.some(
+      (item) =>
+        item.sendState === "sending" &&
+        item.sendRunId === payload.runId &&
+        item.sessionKey &&
+        uiSessionEventMatches(host, item.sessionKey, item.agentId),
+    );
+    if (owner !== payload.runId && !pendingSend) {
+      return true;
+    }
+    const identity = `provider-policy:${payload.runId}`;
+    const previous = Math.max(
+      host.activityEventSeqById?.get(identity) ?? -1,
+      host.providerPolicyNotice?.runId === payload.runId ? host.providerPolicyNotice.seq : -1,
+    );
+    if (!Number.isSafeInteger(payload.seq) || payload.seq <= previous) {
+      return true;
+    }
+    (host.activityEventSeqById ??= new Map()).set(identity, payload.seq);
+    if (state === "cleared") {
+      if (
+        host.providerPolicyNotice?.runId === payload.runId &&
+        host.providerPolicyNotice.state === "buffering"
+      ) {
+        host.providerPolicyNotice = null;
+      }
+      return true;
+    }
+    const currentNotice = host.providerPolicyNotice;
+    if (
+      currentNotice?.runId === payload.runId &&
+      PROVIDER_POLICY_PRECEDENCE[state] < PROVIDER_POLICY_PRECEDENCE[currentNotice.state]
+    ) {
+      return true;
+    }
+    const model = toTrimmedString(data.model);
+    const fallbackModel = toTrimmedString(data.fallbackModel);
+    host.providerPolicyNotice = {
+      runId: payload.runId,
+      seq: payload.seq,
+      state,
+      ...(model ? { model: formatUiExternalText(truncateText(model, 256).text) } : {}),
+      ...(fallbackModel
+        ? { fallbackModel: formatUiExternalText(truncateText(fallbackModel, 256).text) }
+        : {}),
+    };
+    return true;
+  }
+  const status = toTrimmedString(data.status);
+  const reviewId = toTrimmedString(data.reviewId);
+  const threadId = toTrimmedString(data.threadId);
+  const turnId = toTrimmedString(data.turnId);
+  const correlationId =
+    reviewId ??
+    (threadId && turnId && typeof data.startedAtMs === "number" && Number.isFinite(data.startedAtMs)
+      ? data.startedAtMs
+      : payload.seq);
+  const noticeKey =
+    `${systemNotice ? "system" : "guardian"}:${payload.runId}:` +
+    (phase === "warning"
+      ? `warning:${payload.seq}`
+      : `${threadId ?? "thread"}:${turnId ?? "turn"}:${correlationId}`);
+  const current = host.guardianNotices ?? [];
+  const kind =
+    phase === "strict_review_required"
+      ? "strict-review-required"
+      : phase === "warning"
+        ? "warning"
+        : phase === "started" && status === "inProgress"
+          ? "reviewing"
+          : phase === "completed" && status === "approved"
+            ? "approved"
+            : phase === "completed" && ["denied", "timedOut", "aborted"].includes(status ?? "")
+              ? "denied"
+              : null;
+  if (!kind) {
+    return true;
+  }
+  const targetItemId = toTrimmedString(data.targetItemId);
+  if ((phase === "started" || phase === "completed") && targetItemId) {
+    // Targeted decisions arrive again as generic tool-review metadata. Keep
+    // vendor notices only for strict-review requirements and targetless reviews.
+    if (phase === "completed") {
+      host.guardianNotices = current.filter((candidate) => candidate.key !== noticeKey);
+    }
+    return true;
+  }
+  const notice: ChatGuardianNotice = {
+    key: noticeKey,
+    runId: payload.runId,
+    timestamp: payload.ts,
+    kind,
+  };
+  if (systemNotice) {
+    notice.source = "system";
+  }
+  for (const field of ["command", "riskLevel", "rationale", "message"] as const) {
+    const value = toTrimmedString(data[field]);
+    if (value) {
+      notice[field] = value;
+    }
+  }
+  const existingIndex = current.findIndex((candidate) => candidate.key === notice.key);
+  host.guardianNotices =
+    existingIndex === -1
+      ? [...current.slice(-49), notice]
+      : current.map((candidate, index) => (index === existingIndex ? notice : candidate));
+  return true;
+}
+
+function applyToolReviewEvent(
+  host: ToolStreamHost,
+  payload: AgentEventPayload,
+  entry: ToolStreamEntry,
+  review: ToolApprovalReview,
+) {
+  const ownerIdentity = toolActivityIdentity(payload.runId, entry.toolCallId);
+  const sequences = (host.activityEventSeqById ??= new Map());
+  const sequenceFor = (candidate: ToolApprovalReview) =>
+    sequences.get(toolReviewSequenceIdentity(ownerIdentity, candidate.id)) ?? 0;
+  const reviewFloorKey = `${ownerIdentity}:review-floor`;
+  const currentReviews = readToolApprovalReviews(entry.details);
+  const newestReviewSeq = Math.max(
+    sequences.get(reviewFloorKey) ?? 0,
+    ...currentReviews.map(sequenceFor),
+  );
+  const reviews = [
+    ...currentReviews.filter((candidate) => candidate.id !== review.id),
+    review,
+  ].toSorted((left, right) => sequenceFor(left) - sequenceFor(right));
+  const evicted = reviews.slice(0, -MAX_TOOL_APPROVAL_REVIEWS);
+  const retainedReviews = reviews.slice(-MAX_TOOL_APPROVAL_REVIEWS);
+  if (evicted.length > 0) {
+    sequences.set(
+      reviewFloorKey,
+      Math.max(sequences.get(reviewFloorKey) ?? 0, ...evicted.map(sequenceFor)),
+    );
+    for (const candidate of evicted) {
+      sequences.delete(toolReviewSequenceIdentity(ownerIdentity, candidate.id));
+    }
+  }
+  const reportedOutcome = readToolApprovalReviewOutcome(payload.data);
+  const derivedOutcome = resolveToolApprovalReviewOutcome(retainedReviews);
+  const currentOutcome = readToolApprovalReviewOutcome(entry.details);
+  const nextOutcome =
+    currentOutcome === "denied" ? "denied" : (reportedOutcome ?? derivedOutcome ?? undefined);
+  entry.details = withToolApprovalReviews(
+    entry.details,
+    retainedReviews,
+    nextOutcome && payload.seq >= newestReviewSeq ? nextOutcome : currentOutcome,
+  );
+}
+
+export function handleAgentEvent(
+  host: ToolStreamHost,
+  payload?: AgentEventPayload,
+  source: "live" | "history" = "live",
+): boolean {
+  if (!payload) {
+    return false;
+  }
+
+  // Filter the shared activity stream by session first. Chat-linked events use
+  // the client run id, but spawned and session-replayed events may not own the
+  // active chat run; individual run-owned projections apply their own match.
+  const sessionKey = typeof payload.sessionKey === "string" ? payload.sessionKey : undefined;
+  if (sessionKey && !uiSessionEventMatches(host, sessionKey, toTrimmedString(payload.agentId))) {
+    return false;
+  }
+  // History can replay an older active-run snapshot after newer live activity.
+  // Fence activity by Gateway sequence so restore fills gaps
+  // without regressing a result or newer progress already rendered by this pane.
+  if (!acceptActivityEvent(host, payload)) {
+    return false;
+  }
+  if (payload.stream === "lifecycle" || payload.stream === "tool") {
+    const runId = toTrimmedString(payload.runId);
+    if (runId) {
+      (host.knownAgentRunIds ??= new Set()).add(runId);
+    }
+  }
+
+  if (payload.stream === "thinking") {
+    const run = getChatRunProjection(host, payload.runId);
+    const ownsRun =
+      host.chatRunId === payload.runId ||
+      (!host.chatRunId &&
+        host.chatQueue?.some(
+          (item) => item.sendState === "sending" && item.sendRunId === payload.runId,
+        ));
+    if (
+      !ownsRun ||
+      !acceptsToolStreamSession(host, payload) ||
+      (run && run.status !== "streaming")
+    ) {
+      return false;
+    }
+    const changed = updateChatReasoning(host, payload);
+    if (changed && payload.data.phase !== "persisted") {
+      reconcileChatRunStartup(host, { state: "activity", runId: payload.runId, seq: payload.seq });
+    }
+    return changed;
+  }
+
+  if (
+    handleUsageEvent(host, payload) ||
+    handleNoticeEvent(host, payload) ||
+    handleStreamStatus(host, payload) ||
+    handlePreambleProgress(host, payload, source)
+  ) {
+    return true;
+  }
+
+  const activityItem =
+    payload.stream === "item"
+      ? Value.Clean(AgentActivityItemSchema, { ...payload.data })
+      : undefined;
+  if (Value.Check(AgentActivityItemSchema, activityItem)) {
+    // Analysis items (Codex reasoning, context compaction) are not tool calls;
+    // a tool card would show a fabricated empty input and a completion.
+    if (!acceptsToolStreamSession(host, payload) || activityItem.kind === "analysis") {
+      return true;
+    }
+    const item = activityItem;
+    const toolCallId = item.toolCallId ?? item.itemId;
+    const identity = buildToolStreamIdentity(payload.runId, toolCallId);
+    let entry = host.toolStreamById.get(identity);
+    if (!entry) {
+      entry = {
+        toolCallId,
+        runId: payload.runId,
+        sessionKey,
+        name: item.name ?? item.title,
+        startedAt: item.startedAt ?? payload.ts,
+        receivedAt: Date.now(),
+        afterUserSendId:
+          source === "live" ? observedRunInputSendId(host.chatMessages, payload.runId) : undefined,
+        message: {},
+      };
+      host.toolStreamById.set(identity, entry);
+      host.toolStreamOrder.push(identity);
+    }
+    entry.activity = [
+      ...(entry.activity ?? []).filter((previous) => previous.itemId !== item.itemId),
+      item,
+    ];
+    publishToolStreamEntry(host, entry, item.phase === "end");
+    return true;
+  }
+
+  if (payload.stream !== "tool") {
+    return false;
+  }
+
+  const data = payload.data ?? {};
+  const toolCallId = typeof data.toolCallId === "string" ? data.toolCallId : "";
+  if (!toolCallId) {
+    return false;
+  }
+  const toolStreamIdentity = buildToolStreamIdentity(payload.runId, toolCallId);
+  let entry = host.toolStreamById.get(toolStreamIdentity);
+  const phase = typeof data.phase === "string" ? data.phase : "";
+  const approvalReview = phase === "review" ? normalizeToolApprovalReview(data.review) : null;
+  if (phase === "review" && !approvalReview) {
+    return true;
+  }
+  // A started call owns its concrete identity even when later events omit or
+  // contradict it; an unnamed placeholder can still adopt its first real name.
+  const name =
+    phase !== "start" && entry?.name && entry.name !== "tool"
+      ? entry.name
+      : (toTrimmedString(data.name) ?? entry?.name ?? "tool");
+  if (payload.runId === host.chatRunId) {
+    reconcileChatRunStartup(host, { state: "activity", runId: payload.runId, seq: payload.seq });
+  }
+  const args = phase === "start" ? data.args : undefined;
+  const parentToolCallId = toTrimmedString(data.parentToolCallId) ?? undefined;
+  const output =
+    phase === "update"
+      ? formatToolOutput(data.partialResult)
+      : phase === "result"
+        ? formatToolOutput(data.result)
+        : undefined;
+  const resultRecord = phase === "result" ? readRecord(data.result) : undefined;
+  const resultDetails = resultRecord?.details;
+  const resultApprovalReviewOutcome =
+    readToolApprovalReviewOutcome(data) ?? readToolApprovalReviewOutcome(resultDetails);
+  const initialResultDetails = resultApprovalReviewOutcome
+    ? withToolApprovalReviews(resultDetails, [], resultApprovalReviewOutcome)
+    : resultDetails;
+  const resultIsError =
+    phase === "result" && typeof data.isError === "boolean" ? data.isError : undefined;
+  const resultExitCode = resultRecord?.exitCode;
+  const exitCode =
+    typeof resultExitCode === "number" && Number.isInteger(resultExitCode)
+      ? resultExitCode
+      : undefined;
+  const liveDiffStat = phase === "input_delta" ? readLiveDiffStat(data.diff) : undefined;
+  if (name === "session_status" && phase === "result") {
+    refreshSessionStatusModel(host, data);
+  }
+
+  const now = Date.now();
+  if (!entry) {
+    // Tool execution can overlap an unfinished assistant message. Only message
+    // persistence and user boundaries may retire its stream, never tool arrival.
+    entry = {
+      toolCallId,
+      runId: payload.runId,
+      sessionKey,
+      name,
+      startedAt: typeof payload.ts === "number" ? payload.ts : now,
+      receivedAt: now,
+      afterUserSendId:
+        source === "live" ? observedRunInputSendId(host.chatMessages, payload.runId) : undefined,
+      message: {},
+    };
+    host.toolStreamById.set(toolStreamIdentity, entry);
+    host.toolStreamOrder.push(toolStreamIdentity);
+  }
+  entry.name = name;
+  entry.parentToolCallId ??= parentToolCallId;
+  if (args !== undefined) {
+    entry.args = args;
+  }
+  if (output !== undefined) {
+    entry.output = output || undefined;
+  }
+  if (resultDetails !== undefined || resultApprovalReviewOutcome) {
+    const currentOutcome = readToolApprovalReviewOutcome(entry.details);
+    const outcome =
+      currentOutcome === "denied" ? "denied" : (resultApprovalReviewOutcome ?? currentOutcome);
+    const reviews = readToolApprovalReviews(entry.details);
+    entry.details = reviews.length
+      ? withToolApprovalReviews(resultDetails, reviews, outcome)
+      : initialResultDetails;
+  }
+  if (resultIsError !== undefined) {
+    entry.isError = resultIsError;
+  }
+  if (exitCode !== undefined) {
+    entry.exitCode = exitCode;
+  }
+  if (liveDiffStat) {
+    entry.liveDiffStat = liveDiffStat;
+  }
+  if (phase === "result") {
+    entry.liveDiffStat = undefined;
+    entry.resultReceived = true;
+  }
+
+  if (approvalReview) {
+    applyToolReviewEvent(host, payload, entry, approvalReview);
+  }
+  publishToolStreamEntry(host, entry, phase === "result" || approvalReview !== null);
+  return true;
+}

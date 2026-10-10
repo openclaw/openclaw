@@ -58,14 +58,9 @@ const INTERPRETER_LIKE_SAFE_BINS = new Set([
   "zsh",
 ]);
 
-const INTERPRETER_LIKE_PATTERNS = [
-  /^python\d+(?:\.\d+)?$/,
-  /^ruby\d+(?:\.\d+)?$/,
-  /^perl\d+(?:\.\d+)?$/,
-  /^php\d+(?:\.\d+)?$/,
-  /^node\d+(?:\.\d+)?$/,
-];
+const VERSIONED_INTERPRETER_PATTERN = /^(?:python|ruby|perl|php|node)\d+(?:\.\d+)?$/;
 
+/** Returns true for safeBins that can interpret scripts or execute broad embedded programs. */
 export function isInterpreterLikeSafeBin(raw: string): boolean {
   const normalized = normalizeSafeBinName(raw);
   if (!normalized) {
@@ -74,7 +69,7 @@ export function isInterpreterLikeSafeBin(raw: string): boolean {
   if (INTERPRETER_LIKE_SAFE_BINS.has(normalized)) {
     return true;
   }
-  return INTERPRETER_LIKE_PATTERNS.some((pattern) => pattern.test(normalized));
+  return VERSIONED_INTERPRETER_PATTERN.test(normalized);
 }
 
 export function listInterpreterLikeSafeBins(entries: Iterable<string>): string[] {
@@ -84,6 +79,7 @@ export function listInterpreterLikeSafeBins(entries: Iterable<string>): string[]
     .toSorted();
 }
 
+/** Merges global and local safe-bin profile fixtures, with local definitions winning. */
 export function resolveMergedSafeBinProfileFixtures(params: {
   global?: ExecSafeBinConfigScope | null;
   local?: ExecSafeBinConfigScope | null;
@@ -134,12 +130,7 @@ export function resolveExecSafeBinRuntimePolicy(params: {
   );
   if (params.onWarning) {
     for (const hit of writableTrustedSafeBinDirs) {
-      const scope =
-        hit.worldWritable || hit.groupWritable
-          ? hit.worldWritable
-            ? "world-writable"
-            : "group-writable"
-          : "writable";
+      const scope = hit.worldWritable ? "world-writable" : "group-writable";
       params.onWarning(
         `exec: safeBinTrustedDirs includes ${scope} directory '${hit.dir}'; remove trust or tighten permissions (for example chmod 755).`,
       );

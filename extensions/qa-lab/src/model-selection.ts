@@ -1,12 +1,14 @@
 import {
   DEFAULT_QA_LIVE_PROVIDER_MODE,
   getQaProvider,
+  type QaProviderMode,
   type QaProviderModeInput,
 } from "./providers/index.js";
+import type { RuntimeId } from "./runtime-id.js";
 
 export type { QaProviderMode, QaProviderModeInput } from "./providers/index.js";
 
-export type QaModelSelection = {
+type QaModelSelection = {
   primaryModel: string;
   alternateModel: string;
 };
@@ -42,4 +44,17 @@ export function isQaFastModeEnabled(selection: QaModelSelection) {
   return (
     isQaFastModeModelRef(selection.primaryModel) || isQaFastModeModelRef(selection.alternateModel)
   );
+}
+
+export function remapModelRefForForcedRuntime(params: {
+  modelRef: string;
+  providerMode: QaProviderMode;
+  forcedRuntime?: RuntimeId;
+}) {
+  const split = splitQaModelRef(params.modelRef);
+  return params.forcedRuntime === "codex" &&
+    params.providerMode === "mock-openai" &&
+    split?.provider === "mock-openai"
+    ? `openai/${split.model}`
+    : params.modelRef;
 }

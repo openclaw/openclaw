@@ -1,4 +1,6 @@
+import { resolveExpiresAtMsFromDurationMs } from "openclaw/plugin-sdk/number-runtime";
 import { generateSecureToken } from "openclaw/plugin-sdk/secure-random-runtime";
+import { pruneExpiredMapEntries } from "./lru-map-cache.js";
 
 const SLACK_EXTERNAL_ARG_MENU_TOKEN_BYTES = 18;
 const SLACK_EXTERNAL_ARG_MENU_TOKEN_LENGTH = Math.ceil(
@@ -18,19 +20,8 @@ type SlackExternalArgMenuEntry = {
   expiresAt: number;
 };
 
-function pruneSlackExternalArgMenuStore(
-  store: Map<string, SlackExternalArgMenuEntry>,
-  now: number,
-): void {
-  for (const [token, entry] of store.entries()) {
-    if (entry.expiresAt <= now) {
-      store.delete(token);
-    }
-  }
-}
-
 function createSlackExternalArgMenuToken(store: Map<string, SlackExternalArgMenuEntry>): string {
-  let token = "";
+  let token;
   do {
     token = generateSecureToken(SLACK_EXTERNAL_ARG_MENU_TOKEN_BYTES);
   } while (store.has(token));
@@ -45,13 +36,18 @@ export function createSlackExternalArgMenuStore() {
       params: { choices: SlackExternalArgMenuChoice[]; userId: string },
       now = Date.now(),
     ): string {
-      pruneSlackExternalArgMenuStore(store, now);
+      pruneExpiredMapEntries(store, now);
       const token = createSlackExternalArgMenuToken(store);
-      store.set(token, {
-        choices: params.choices,
-        userId: params.userId,
-        expiresAt: now + SLACK_EXTERNAL_ARG_MENU_TTL_MS,
+      const expiresAt = resolveExpiresAtMsFromDurationMs(SLACK_EXTERNAL_ARG_MENU_TTL_MS, {
+        nowMs: now,
       });
+      if (expiresAt !== undefined) {
+        store.set(token, {
+          choices: params.choices,
+          userId: params.userId,
+          expiresAt,
+        });
+      }
       return token;
     },
     readToken(raw: unknown): string | undefined {
@@ -62,7 +58,7 @@ export function createSlackExternalArgMenuStore() {
       return SLACK_EXTERNAL_ARG_MENU_TOKEN_PATTERN.test(token) ? token : undefined;
     },
     get(token: string, now = Date.now()): SlackExternalArgMenuEntry | undefined {
-      pruneSlackExternalArgMenuStore(store, now);
+      pruneExpiredMapEntries(store, now);
       return store.get(token);
     },
   };

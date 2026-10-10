@@ -1,3 +1,4 @@
+// Discord tests cover gateway lifecycle plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayHeartbeatTimers } from "./gateway-lifecycle.js";
 
@@ -58,34 +59,6 @@ describe("GatewayHeartbeatTimers", () => {
 
     vi.advanceTimersByTime(45_000);
     expect(onAckTimeout).toHaveBeenCalledTimes(1);
-
-    timers.stop();
-  });
-
-  it("sends heartbeats at regular intervals after the initial random delay", () => {
-    vi.useFakeTimers();
-
-    const timers = new GatewayHeartbeatTimers();
-    const onHeartbeat = vi.fn();
-    const onAckTimeout = vi.fn();
-
-    timers.start({
-      intervalMs: 10_000,
-      isAcked: () => true,
-      onAckTimeout,
-      onHeartbeat,
-      random: () => 0.5,
-    });
-
-    vi.advanceTimersByTime(5_000);
-    expect(onHeartbeat).toHaveBeenCalledTimes(1);
-
-    vi.advanceTimersByTime(10_000);
-    expect(onHeartbeat).toHaveBeenCalledTimes(2);
-
-    vi.advanceTimersByTime(10_000);
-    expect(onHeartbeat).toHaveBeenCalledTimes(3);
-    expect(onAckTimeout).not.toHaveBeenCalled();
 
     timers.stop();
   });

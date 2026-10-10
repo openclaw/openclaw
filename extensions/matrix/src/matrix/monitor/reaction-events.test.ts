@@ -1,27 +1,94 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  clearMatrixApprovalReactionTargetsForTest,
-  registerMatrixApprovalReactionTarget,
-  resolveMatrixApprovalReactionTarget,
+  enqueueSystemEvent,
+  peekSystemEventEntries,
+} from "openclaw/plugin-sdk/system-event-runtime";
+import { resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  registerMatrixApprovalReactionTarget as registerMatrixApprovalReactionTargetRaw,
+  resolveMatrixApprovalReactionTargetWithPersistence as resolveMatrixApprovalReactionTargetWithPersistenceRaw,
+  unregisterMatrixApprovalReactionTarget,
 } from "../../approval-reactions.js";
 import type { CoreConfig } from "../../types.js";
 import { handleInboundMatrixReaction } from "./reaction-events.js";
 
+type RegisterTargetParams = Parameters<typeof registerMatrixApprovalReactionTargetRaw>[0];
+type ResolveTargetParams = Parameters<
+  typeof resolveMatrixApprovalReactionTargetWithPersistenceRaw
+>[0];
+const touchedTargets = new Map<
+  string,
+  Parameters<typeof unregisterMatrixApprovalReactionTarget>[0]
+>();
+
+const defaultApprovalTarget: RegisterTargetParams = {
+  accountId: "default",
+  roomId: "!ops:example.org",
+  eventId: "$approval-msg",
+  approvalId: "req-123",
+  approvalKind: "exec",
+  allowedDecisions: ["allow-once", "deny"],
+};
+
+async function registerMatrixApprovalReactionTarget(
+  params: Partial<RegisterTargetParams>,
+): Promise<void> {
+  const { accountId, ...target } = { ...defaultApprovalTarget, ...params };
+  const targetRef = { accountId, roomId: target.roomId, eventId: target.eventId };
+  touchedTargets.set(JSON.stringify(targetRef), targetRef);
+  await registerMatrixApprovalReactionTargetRaw({ ...target, accountId });
+}
+
+function resolveMatrixApprovalReactionTargetWithPersistence(
+  params: Omit<ResolveTargetParams, "accountId"> & { accountId?: string },
+) {
+  const { accountId = "default", ...target } = params;
+  return resolveMatrixApprovalReactionTargetWithPersistenceRaw({
+    ...target,
+    accountId,
+  });
+}
+
 const resolveMatrixApproval = vi.fn();
+const editMessageMatrix = vi.fn();
 type MatrixReactionParams = Parameters<typeof handleInboundMatrixReaction>[0];
 type MatrixReactionClient = MatrixReactionParams["client"];
 type MatrixReactionCore = MatrixReactionParams["core"];
 type MatrixReactionEvent = MatrixReactionParams["event"];
 
-vi.mock("../../exec-approval-resolver.js", () => ({
-  isApprovalNotFoundError: (err: unknown) =>
-    err instanceof Error && /unknown or expired approval id/i.test(err.message),
-  resolveMatrixApproval: (...args: unknown[]) => resolveMatrixApproval(...args),
+vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
+  resolveApprovalOverGateway: (...args: unknown[]) => resolveMatrixApproval(...args),
+}));
+vi.mock("openclaw/plugin-sdk/error-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/error-runtime")>(
+    "openclaw/plugin-sdk/error-runtime",
+  );
+  return {
+    ...actual,
+    isApprovalNotFoundError: (err: unknown) =>
+      err instanceof Error && /unknown or expired approval id/i.test(err.message),
+  };
+});
+
+vi.mock("../send.js", () => ({
+  editMessageMatrix: (...args: unknown[]) => editMessageMatrix(...args),
 }));
 
 beforeEach(() => {
-  resolveMatrixApproval.mockReset();
-  clearMatrixApprovalReactionTargetsForTest();
+  resetSystemEventsForTest();
+  resolveMatrixApproval.mockReset().mockResolvedValue({
+    applied: true,
+    approval: { id: "req-123", status: "allowed", decision: "allow-once" },
+  });
+  editMessageMatrix.mockReset().mockResolvedValue("$edit");
+});
+
+afterEach(async () => {
+  resetSystemEventsForTest();
+  for (const target of touchedTargets.values()) {
+    await unregisterMatrixApprovalReactionTarget(target);
+  }
+  touchedTargets.clear();
 });
 
 function buildConfig(): CoreConfig {
@@ -44,6 +111,7 @@ function buildConfig(): CoreConfig {
 
 function buildCore() {
   return {
+    system: { enqueueSystemEvent },
     channel: {
       routing: {
         resolveAgentRoute: vi.fn().mockReturnValue({
@@ -53,9 +121,6 @@ function buildCore() {
           matchedBy: "peer",
         }),
       },
-    },
-    system: {
-      enqueueSystemEvent: vi.fn(),
     },
   } as unknown as Parameters<typeof handleInboundMatrixReaction>[0]["core"];
 }
@@ -96,6 +161,7 @@ async function handleReaction(params: {
   cfg?: CoreConfig;
   targetEventId?: string;
   reactionKey?: string;
+  logVerboseMessage?: (message: string) => void;
 }): Promise<void> {
   await handleInboundMatrixReaction({
     client: params.client,
@@ -111,43 +177,11 @@ async function handleReaction(params: {
     senderLabel: "Owner",
     selfUserId: "@bot:example.org",
     isDirectMessage: false,
-    logVerboseMessage: vi.fn(),
+    logVerboseMessage: params.logVerboseMessage ?? vi.fn<(message: string) => void>(),
   });
 }
 
 describe("matrix approval reactions", () => {
-  it("resolves approval reactions instead of enqueueing a generic reaction event", async () => {
-    const core = buildCore();
-    const cfg = buildConfig();
-    registerMatrixApprovalReactionTarget({
-      roomId: "!ops:example.org",
-      eventId: "$approval-msg",
-      approvalId: "req-123",
-      allowedDecisions: ["allow-once", "allow-always", "deny"],
-    });
-    const client = createReactionClient(
-      vi.fn().mockResolvedValue({
-        event_id: "$approval-msg",
-        sender: "@bot:example.org",
-        content: { body: "approval prompt" },
-      }),
-    );
-
-    await handleReaction({
-      client,
-      core,
-      cfg,
-    });
-
-    expect(resolveMatrixApproval).toHaveBeenCalledWith({
-      cfg,
-      approvalId: "req-123",
-      decision: "allow-once",
-      senderId: "@owner:example.org",
-    });
-    expect(core.system.enqueueSystemEvent).not.toHaveBeenCalled();
-  });
-
   it("keeps ordinary reactions on bot messages as generic reaction events", async () => {
     const core = buildCore();
     const client = createReactionClient(
@@ -168,13 +202,12 @@ describe("matrix approval reactions", () => {
     });
 
     expect(resolveMatrixApproval).not.toHaveBeenCalled();
-    expect(core.system.enqueueSystemEvent).toHaveBeenCalledWith(
-      "Matrix reaction added: 👍 by Owner on msg $msg-1",
-      {
-        sessionKey: "agent:main:matrix:channel:!ops:example.org",
+    expect(peekSystemEventEntries("agent:main:matrix:channel:!ops:example.org")).toEqual([
+      expect.objectContaining({
+        text: "Matrix reaction added: 👍 by Owner on msg $msg-1",
         contextKey: "matrix:reaction:add:!ops:example.org:$msg-1:@owner:example.org:👍",
-      },
-    );
+      }),
+    ]);
   });
 
   it("still resolves approval reactions when generic reaction notifications are off", async () => {
@@ -185,10 +218,7 @@ describe("matrix approval reactions", () => {
       throw new Error("matrix config missing");
     }
     matrixCfg.reactionNotifications = "off";
-    registerMatrixApprovalReactionTarget({
-      roomId: "!ops:example.org",
-      eventId: "$approval-msg",
-      approvalId: "req-123",
+    await registerMatrixApprovalReactionTarget({
       allowedDecisions: ["deny"],
     });
     const client = createReactionClient(
@@ -209,18 +239,18 @@ describe("matrix approval reactions", () => {
     expect(resolveMatrixApproval).toHaveBeenCalledWith({
       cfg,
       approvalId: "req-123",
+      approvalKind: "exec",
       decision: "deny",
+      channel: "matrix",
+      accountId: "default",
       senderId: "@owner:example.org",
     });
-    expect(core.system.enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(peekSystemEventEntries("agent:main:matrix:channel:!ops:example.org")).toEqual([]);
   });
 
   it("resolves registered approval reactions without fetching the target event", async () => {
     const core = buildCore();
-    registerMatrixApprovalReactionTarget({
-      roomId: "!ops:example.org",
-      eventId: "$approval-msg",
-      approvalId: "req-123",
+    await registerMatrixApprovalReactionTarget({
       allowedDecisions: ["allow-once"],
     });
     const client = createReactionClient(vi.fn().mockRejectedValue(new Error("boom")));
@@ -234,10 +264,13 @@ describe("matrix approval reactions", () => {
     expect(resolveMatrixApproval).toHaveBeenCalledWith({
       cfg: buildConfig(),
       approvalId: "req-123",
+      approvalKind: "exec",
       decision: "allow-once",
+      channel: "matrix",
+      accountId: "default",
       senderId: "@owner:example.org",
     });
-    expect(core.system.enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(peekSystemEventEntries("agent:main:matrix:channel:!ops:example.org")).toEqual([]);
   });
 
   it("resolves plugin approval reactions through the same Matrix reaction path", async () => {
@@ -248,11 +281,10 @@ describe("matrix approval reactions", () => {
       throw new Error("matrix config missing");
     }
     matrixCfg.dm = { allowFrom: ["@owner:example.org"] };
-    registerMatrixApprovalReactionTarget({
-      roomId: "!ops:example.org",
+    await registerMatrixApprovalReactionTarget({
       eventId: "$plugin-approval-msg",
       approvalId: "plugin:req-123",
-      allowedDecisions: ["allow-once", "deny"],
+      approvalKind: "plugin",
     });
     const client = createReactionClient();
 
@@ -267,10 +299,13 @@ describe("matrix approval reactions", () => {
     expect(resolveMatrixApproval).toHaveBeenCalledWith({
       cfg,
       approvalId: "plugin:req-123",
+      approvalKind: "plugin",
       decision: "allow-once",
+      channel: "matrix",
+      accountId: "default",
       senderId: "@owner:example.org",
     });
-    expect(core.system.enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(peekSystemEventEntries("agent:main:matrix:channel:!ops:example.org")).toEqual([]);
   });
 
   it("unregisters stale approval anchors after not-found resolution", async () => {
@@ -278,10 +313,7 @@ describe("matrix approval reactions", () => {
     resolveMatrixApproval.mockRejectedValueOnce(
       new Error("unknown or expired approval id req-123"),
     );
-    registerMatrixApprovalReactionTarget({
-      roomId: "!ops:example.org",
-      eventId: "$approval-msg",
-      approvalId: "req-123",
+    await registerMatrixApprovalReactionTarget({
       allowedDecisions: ["deny"],
     });
     const client = createReactionClient();
@@ -294,12 +326,150 @@ describe("matrix approval reactions", () => {
 
     expect(client.getEvent).not.toHaveBeenCalled();
     expect(
-      resolveMatrixApprovalReactionTarget({
+      await resolveMatrixApprovalReactionTargetWithPersistence({
         roomId: "!ops:example.org",
         eventId: "$approval-msg",
         reactionKey: "❌",
       }),
     ).toBeNull();
+  });
+
+  it("retains approval anchors and propagates transient Gateway failures for replay", async () => {
+    const core = buildCore();
+    const cfg = buildConfig();
+    await registerMatrixApprovalReactionTarget({
+      allowedDecisions: ["allow-once"],
+    });
+    const client = createReactionClient();
+    resolveMatrixApproval.mockRejectedValueOnce(new Error("gateway 503"));
+
+    await expect(handleReaction({ client, core, cfg })).rejects.toThrow("gateway 503");
+    expect(
+      await resolveMatrixApprovalReactionTargetWithPersistence({
+        accountId: "default",
+        roomId: "!ops:example.org",
+        eventId: "$approval-msg",
+        reactionKey: "✅",
+      }),
+    ).not.toBeNull();
+
+    await handleReaction({ client, core, cfg });
+
+    expect(
+      await resolveMatrixApprovalReactionTargetWithPersistence({
+        accountId: "default",
+        roomId: "!ops:example.org",
+        eventId: "$approval-msg",
+        reactionKey: "✅",
+      }),
+    ).toBeNull();
+    expect(resolveMatrixApproval).toHaveBeenCalledTimes(2);
+    expect(resolveMatrixApproval).toHaveBeenLastCalledWith({
+      cfg,
+      approvalId: "req-123",
+      approvalKind: "exec",
+      decision: "allow-once",
+      channel: "matrix",
+      accountId: "default",
+      senderId: "@owner:example.org",
+    });
+    expect(peekSystemEventEntries("agent:main:matrix:channel:!ops:example.org")).toEqual([]);
+  });
+
+  it("terminalizes every sibling prompt when this surface wins", async () => {
+    const core = buildCore();
+    const cfg = buildConfig();
+    await registerMatrixApprovalReactionTarget({});
+    await registerMatrixApprovalReactionTarget({
+      roomId: "!approvals:example.org",
+      eventId: "$approval-dm",
+    });
+    const client = createReactionClient();
+
+    await handleReaction({ client, core, cfg, reactionKey: "✅" });
+
+    expect(
+      await resolveMatrixApprovalReactionTargetWithPersistence({
+        roomId: "!ops:example.org",
+        eventId: "$approval-msg",
+        reactionKey: "✅",
+      }),
+    ).toBeNull();
+    expect(
+      await resolveMatrixApprovalReactionTargetWithPersistence({
+        roomId: "!approvals:example.org",
+        eventId: "$approval-dm",
+        reactionKey: "✅",
+      }),
+    ).toBeNull();
+    expect(editMessageMatrix).toHaveBeenCalledTimes(2);
+    expect(editMessageMatrix).toHaveBeenCalledWith(
+      "!ops:example.org",
+      "$approval-msg",
+      "Resolved: Allowed once\n\nID: req-123",
+      { cfg, accountId: "default", client },
+    );
+    expect(editMessageMatrix).toHaveBeenCalledWith(
+      "!approvals:example.org",
+      "$approval-dm",
+      "Resolved: Allowed once\n\nID: req-123",
+      { cfg, accountId: "default", client },
+    );
+  });
+
+  it("unregisters losing surfaces and reports the canonical terminal decision", async () => {
+    const core = buildCore();
+    const cfg = buildConfig();
+    const logVerboseMessage = vi.fn();
+    resolveMatrixApproval.mockResolvedValueOnce({
+      applied: false,
+      approval: { id: "req-123", status: "denied", decision: "deny" },
+    });
+    await registerMatrixApprovalReactionTarget({});
+    await registerMatrixApprovalReactionTarget({
+      roomId: "!approvals:example.org",
+      eventId: "$approval-dm",
+    });
+    const client = createReactionClient();
+
+    await handleReaction({
+      client,
+      core,
+      cfg,
+      reactionKey: "✅",
+      logVerboseMessage,
+    });
+
+    expect(
+      await resolveMatrixApprovalReactionTargetWithPersistence({
+        roomId: "!ops:example.org",
+        eventId: "$approval-msg",
+        reactionKey: "✅",
+      }),
+    ).toBeNull();
+    expect(
+      await resolveMatrixApprovalReactionTargetWithPersistence({
+        roomId: "!approvals:example.org",
+        eventId: "$approval-dm",
+        reactionKey: "✅",
+      }),
+    ).toBeNull();
+    expect(editMessageMatrix).toHaveBeenCalledTimes(2);
+    expect(editMessageMatrix).toHaveBeenCalledWith(
+      "!ops:example.org",
+      "$approval-msg",
+      "Already resolved: Denied\n\nID: req-123",
+      { cfg, accountId: "default", client },
+    );
+    expect(editMessageMatrix).toHaveBeenCalledWith(
+      "!approvals:example.org",
+      "$approval-dm",
+      "Already resolved: Denied\n\nID: req-123",
+      { cfg, accountId: "default", client },
+    );
+    expect(logVerboseMessage).toHaveBeenCalledWith(
+      "matrix: approval reaction resolved id=req-123 sender=@owner:example.org applied=false status=denied decision=deny",
+    );
   });
 
   it("skips target fetches for ordinary reactions when notifications are off", async () => {
@@ -322,6 +492,6 @@ describe("matrix approval reactions", () => {
 
     expect(client.getEvent).not.toHaveBeenCalled();
     expect(resolveMatrixApproval).not.toHaveBeenCalled();
-    expect(core.system.enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(peekSystemEventEntries("agent:main:matrix:channel:!ops:example.org")).toEqual([]);
   });
 });

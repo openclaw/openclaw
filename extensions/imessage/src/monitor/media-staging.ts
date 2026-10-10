@@ -1,29 +1,32 @@
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
-import { isInboundPathAllowed } from "openclaw/plugin-sdk/media-runtime";
+import type { ChannelInboundMediaInput } from "openclaw/plugin-sdk/channel-inbound";
+import { readFileHandleBounded } from "openclaw/plugin-sdk/file-access-runtime";
+import { isInboundPathAllowed, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
-import { buildRandomTempFilePath } from "openclaw/plugin-sdk/temp-path";
+import { FsSafeError, openLocalFileSafely } from "openclaw/plugin-sdk/security-runtime";
+import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
+import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import type { IMessageAttachment } from "./types.js";
 
-const execFileAsync = promisify(execFile);
-
-const HEIC_CONVERSION_TIMEOUT_MS = 15_000;
-const HEIC_CONVERSION_MAX_BUFFER_BYTES = 64 * 1024;
-
-export type StagedIMessageAttachment = {
-  path: string;
-  contentType?: string;
+type StagedIMessageAttachments = {
+  attachments: ChannelInboundMediaInput[];
+  unavailableCount: number;
 };
-
-type SaveMediaBufferImpl = typeof saveMediaBuffer;
 
 type StageIMessageAttachmentsDeps = {
-  saveMediaBuffer?: SaveMediaBufferImpl;
+  saveMediaBuffer?: typeof saveMediaBuffer;
   convertHeicToJpeg?: (sourcePath: string, maxBytes: number) => Promise<Buffer>;
+  openLocalFileSafely?: typeof openLocalFileSafely;
   logVerbose?: (message: string) => void;
 };
+
+function createTypeOnlyIMessageAttachment(
+  attachment: IMessageAttachment,
+): ChannelInboundMediaInput {
+  const contentType = attachment.mime_type?.trim() || undefined;
+  return { contentType, kind: kindFromMime(contentType) ?? "unknown" };
+}
 
 function isHeicAttachment(attachmentPath: string, mimeType?: string | null): boolean {
   const normalizedMime = mimeType?.toLowerCase();
@@ -34,82 +37,6 @@ function isHeicAttachment(attachmentPath: string, mimeType?: string | null): boo
   return ext === ".heic" || ext === ".heif";
 }
 
-function jpegFilenameForAttachment(attachmentPath: string): string {
-  const parsed = path.parse(attachmentPath);
-  return `${parsed.name || "imessage-attachment"}.jpg`;
-}
-
-function hasWildcardSegment(root: string): boolean {
-  return root.replaceAll("\\", "/").split("/").includes("*");
-}
-
-async function canonicalizeAllowedRoots(roots: readonly string[]): Promise<string[]> {
-  const canonicalRoots: string[] = [];
-  for (const root of roots) {
-    canonicalRoots.push(root);
-    if (hasWildcardSegment(root)) {
-      continue;
-    }
-    const canonicalRoot = await fs.realpath(root).catch(() => undefined);
-    if (canonicalRoot && canonicalRoot !== root) {
-      canonicalRoots.push(canonicalRoot);
-    }
-  }
-  return canonicalRoots;
-}
-
-async function resolveAllowedCanonicalAttachmentPath(params: {
-  attachmentPath: string;
-  allowedRoots?: readonly string[];
-}): Promise<string> {
-  if (!params.allowedRoots) {
-    return params.attachmentPath;
-  }
-  const canonicalPath = await fs.realpath(params.attachmentPath);
-  const canonicalRoots = await canonicalizeAllowedRoots(params.allowedRoots);
-  if (!isInboundPathAllowed({ filePath: canonicalPath, roots: canonicalRoots })) {
-    throw new Error("attachment path resolves outside allowed roots");
-  }
-  return canonicalPath;
-}
-
-async function convertHeicToJpegWithSips(sourcePath: string, maxBytes: number): Promise<Buffer> {
-  const tempPath = buildRandomTempFilePath({
-    prefix: "openclaw-imessage",
-    extension: "jpg",
-  });
-  try {
-    await execFileAsync(
-      "sips",
-      [
-        "-s",
-        "format",
-        "jpeg",
-        "-s",
-        "formatOptions",
-        "90",
-        "-Z",
-        "4096",
-        sourcePath,
-        "--out",
-        tempPath,
-      ],
-      {
-        timeout: HEIC_CONVERSION_TIMEOUT_MS,
-        maxBuffer: HEIC_CONVERSION_MAX_BUFFER_BYTES,
-        killSignal: "SIGKILL",
-      },
-    );
-    const stat = await fs.stat(tempPath);
-    if (stat.size > maxBytes) {
-      throw new Error(`converted media exceeds ${Math.round(maxBytes / (1024 * 1024))}MB limit`);
-    }
-    return await fs.readFile(tempPath);
-  } finally {
-    await fs.rm(tempPath, { force: true }).catch(() => {});
-  }
-}
-
 async function readAttachmentBuffer(params: {
   attachmentPath: string;
   mimeType?: string | null;
@@ -117,36 +44,61 @@ async function readAttachmentBuffer(params: {
   allowedRoots?: readonly string[];
   deps: StageIMessageAttachmentsDeps;
 }): Promise<{ buffer: Buffer; contentType?: string; originalFilename?: string }> {
-  const stat = await fs.lstat(params.attachmentPath);
-  if (stat.isSymbolicLink()) {
-    throw new Error("attachment path is a symlink");
-  }
-  if (!stat.isFile()) {
-    throw new Error("attachment path is not a file");
-  }
-  if (stat.size > params.maxBytes) {
-    throw new Error(`attachment exceeds ${Math.round(params.maxBytes / (1024 * 1024))}MB limit`);
-  }
-
-  const canonicalPath = await resolveAllowedCanonicalAttachmentPath({
-    attachmentPath: params.attachmentPath,
-    allowedRoots: params.allowedRoots,
+  await using opened = await (params.deps.openLocalFileSafely ?? openLocalFileSafely)({
+    filePath: params.attachmentPath,
   });
-  const canonicalStat = await fs.stat(canonicalPath);
-  if (!canonicalStat.isFile()) {
-    throw new Error("attachment path is not a file");
-  }
-  if (canonicalStat.size > params.maxBytes) {
+  if (opened.stat.size > params.maxBytes) {
     throw new Error(`attachment exceeds ${Math.round(params.maxBytes / (1024 * 1024))}MB limit`);
   }
+  if (params.allowedRoots) {
+    const canonicalRoots: string[] = [];
+    for (const root of params.allowedRoots) {
+      canonicalRoots.push(root);
+      if (root.replaceAll("\\", "/").split("/").includes("*")) {
+        continue;
+      }
+      const canonicalRoot = await fs.realpath(root).catch(() => undefined);
+      if (canonicalRoot && canonicalRoot !== root) {
+        canonicalRoots.push(canonicalRoot);
+      }
+    }
+    if (!isInboundPathAllowed({ filePath: opened.realPath, roots: canonicalRoots })) {
+      throw new Error("attachment path resolves outside allowed roots");
+    }
+  }
+  // The inode can grow after the pinned open; keep the allocation bounded as well as the stat.
+  const buffer = await readFileHandleBounded(opened.handle, params.maxBytes).catch(
+    (error: unknown) => {
+      if (error instanceof FsSafeError && error.code === "too-large") {
+        throw new Error(
+          `attachment exceeds ${Math.round(params.maxBytes / (1024 * 1024))}MB limit`,
+        );
+      }
+      throw error;
+    },
+  );
 
   if (isHeicAttachment(params.attachmentPath, params.mimeType)) {
     try {
-      const convert = params.deps.convertHeicToJpeg ?? convertHeicToJpegWithSips;
+      const convert = params.deps.convertHeicToJpeg;
+      const converted = await withTempWorkspace(
+        { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-imessage-heic-" },
+        async (workspace) => {
+          const pinnedPath = await workspace.write("attachment.heic", buffer);
+          return convert
+            ? {
+                buffer: await convert(pinnedPath, params.maxBytes),
+              }
+            : await loadWebMedia(pinnedPath, {
+                maxBytes: params.maxBytes,
+                localRoots: [workspace.dir],
+              });
+        },
+      );
       return {
-        buffer: await convert(canonicalPath, params.maxBytes),
+        buffer: converted.buffer,
         contentType: "image/jpeg",
-        originalFilename: jpegFilenameForAttachment(params.attachmentPath),
+        originalFilename: `${path.parse(params.attachmentPath).name || "imessage-attachment"}.jpg`,
       };
     } catch (err) {
       params.deps.logVerbose?.(
@@ -156,7 +108,7 @@ async function readAttachmentBuffer(params: {
   }
 
   return {
-    buffer: await fs.readFile(canonicalPath),
+    buffer,
     contentType: params.mimeType ?? undefined,
     originalFilename: path.basename(params.attachmentPath),
   };
@@ -169,14 +121,17 @@ export async function stageIMessageAttachments(
     allowedRoots?: readonly string[];
     deps?: StageIMessageAttachmentsDeps;
   },
-): Promise<StagedIMessageAttachment[]> {
+): Promise<StagedIMessageAttachments> {
   const deps = params.deps ?? {};
   const save = deps.saveMediaBuffer ?? saveMediaBuffer;
-  const staged: StagedIMessageAttachment[] = [];
+  const staged: ChannelInboundMediaInput[] = [];
+  let unavailableCount = 0;
 
   for (const attachment of attachments) {
     const attachmentPath = attachment.original_path?.trim();
     if (!attachmentPath || attachment.missing) {
+      unavailableCount += 1;
+      staged.push(createTypeOnlyIMessageAttachment(attachment));
       continue;
     }
 
@@ -195,11 +150,18 @@ export async function stageIMessageAttachments(
         params.maxBytes,
         media.originalFilename,
       );
-      staged.push({ path: saved.path, contentType: saved.contentType });
+      const contentType = saved.contentType ?? media.contentType;
+      staged.push({
+        path: saved.path,
+        contentType,
+        kind: kindFromMime(contentType) ?? "unknown",
+      });
     } catch (err) {
+      unavailableCount += 1;
+      staged.push(createTypeOnlyIMessageAttachment(attachment));
       deps.logVerbose?.(`imessage: failed to stage inbound attachment: ${String(err)}`);
     }
   }
 
-  return staged;
+  return { attachments: staged, unavailableCount };
 }

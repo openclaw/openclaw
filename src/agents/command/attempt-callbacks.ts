@@ -1,0 +1,72 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import type { AgentMessage } from "../runtime/index.js";
+
+export type AgentAttemptLifecycleState = {
+  currentTurnUserMessagePersisted: boolean;
+  lifecycleError?: string;
+  lifecycleErrorObservation?: Record<string, unknown>;
+  lifecycleFinishing: boolean;
+  lifecycleEnded: boolean;
+};
+
+export function resetAgentAttemptLifecycle(state: AgentAttemptLifecycleState): void {
+  state.lifecycleError = undefined;
+  state.lifecycleErrorObservation = undefined;
+  state.lifecycleFinishing = false;
+  state.lifecycleEnded = false;
+}
+
+type AgentAttemptLifecycleEvent = {
+  stream: string;
+  data?: Record<string, unknown>;
+  sessionKey?: string;
+};
+
+export function emitAgentAttemptRuntimeStart(
+  info: { phase: string },
+  onAgentEvent: (evt: AgentAttemptLifecycleEvent) => void | Promise<void>,
+): void {
+  // CLI preparation and child launch do not prove a native turn. Parsed
+  // assistant/tool activity does, even when the backend omits lifecycle events.
+  if (info.phase === "assistant_output_started" || info.phase === "tool_execution_started") {
+    void onAgentEvent({ stream: "lifecycle", data: { phase: "start" } });
+  }
+}
+
+export function createAgentAttemptLifecycleCallbacks(
+  state: AgentAttemptLifecycleState,
+  onRuntimeTurnStarted?: () => void | Promise<void>,
+): {
+  onUserMessagePersisted: (message: Extract<AgentMessage, { role: "user" }>) => void;
+  onAgentEvent: (evt: AgentAttemptLifecycleEvent) => void | Promise<void>;
+} {
+  return {
+    onUserMessagePersisted: () => {
+      state.currentTurnUserMessagePersisted = true;
+    },
+    onAgentEvent: (evt) => {
+      if (evt.stream !== "lifecycle" || typeof evt.data?.phase !== "string") {
+        return;
+      }
+      if (evt.data.phase === "start") {
+        // A same-candidate retry replaces deferred terminal state from the
+        // preceding attempt; retaining it would abort a recovered run.
+        resetAgentAttemptLifecycle(state);
+        return onRuntimeTurnStarted?.();
+      }
+      if (typeof evt.data.error === "string" && evt.data.error.trim()) {
+        state.lifecycleError = evt.data.error;
+        state.lifecycleErrorObservation = asOptionalRecord(evt.data.errorObservation);
+      }
+      // Finishing means output ended but transcript/session persistence may still
+      // need to run; end/error means the runtime lifecycle is complete.
+      if (evt.data.phase === "finishing") {
+        state.lifecycleFinishing = true;
+        return;
+      }
+      if (evt.data.phase === "end" || evt.data.phase === "error") {
+        state.lifecycleEnded = true;
+      }
+    },
+  };
+}

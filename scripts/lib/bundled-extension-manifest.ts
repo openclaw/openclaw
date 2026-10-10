@@ -1,4 +1,4 @@
-import { validateMinHostVersion } from "../../src/plugins/min-host-version.ts";
+import { checkMinHostVersion } from "../../src/plugins/min-host-version.ts";
 import { isRecord } from "../../src/utils.js";
 
 export type ExtensionPackageJson = {
@@ -34,7 +34,17 @@ export function collectBundledExtensionManifestErrors(extensions: BundledExtensi
         `bundled extension '${extension.id}' manifest invalid | openclaw.install.npmSpec must be a non-empty string`,
       );
     }
-    const minHostVersionError = validateMinHostVersion(install?.minHostVersion);
+    const minHostVersionCheck =
+      install?.minHostVersion === undefined
+        ? null
+        : checkMinHostVersion({
+            currentVersion: "0.0.0",
+            minHostVersion: install.minHostVersion,
+          });
+    const minHostVersionError =
+      minHostVersionCheck && !minHostVersionCheck.ok && minHostVersionCheck.kind === "invalid"
+        ? minHostVersionCheck.error
+        : null;
     if (minHostVersionError) {
       errors.push(`bundled extension '${extension.id}' manifest invalid | ${minHostVersionError}`);
     }

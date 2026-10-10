@@ -1,8 +1,26 @@
+// Provides shared fixtures for exec approval tests.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { afterEach } from "vitest";
+import { cleanupTempDirs } from "../../test/helpers/temp-dir.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { CommandResolution, ExecutableResolution } from "./exec-command-resolution.js";
 
+const tempDirs = new Set<string>();
+
+afterEach(async () => {
+  for (const tempDir of tempDirs) {
+    await closeOpenClawStateDatabaseByPathAsync(
+      resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: tempDir }),
+    );
+  }
+  cleanupTempDirs(tempDirs);
+});
+
+// Shared exec-approval fixtures keep parser, allowlist, and wrapper tests on
+// the same mock resolution shape.
 export function makePathEnv(binDir: string): NodeJS.ProcessEnv {
   if (process.platform !== "win32") {
     return { PATH: binDir };
@@ -10,10 +28,25 @@ export function makePathEnv(binDir: string): NodeJS.ProcessEnv {
   return { PATH: binDir, PATHEXT: ".EXE;.CMD;.BAT;.COM" };
 }
 
-export function makeTempDir(): string {
-  return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-approvals-")));
+/** Create a real temp directory for exec-approval tests that need filesystem paths. */
+export function makeExecApprovalsTempDir(): string {
+  const tempDir = fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-approvals-")),
+  );
+  tempDirs.add(tempDir);
+  return tempDir;
 }
 
+/** Create an executable file in a test bin directory. */
+export function makeExecutable(dir: string, name: string): string {
+  const fileName = process.platform === "win32" ? `${name}.exe` : name;
+  const exe = path.join(dir, fileName);
+  fs.writeFileSync(exe, "");
+  fs.chmodSync(exe, 0o755);
+  return exe;
+}
+
+/** Build a minimal executable resolution for command-policy tests. */
 export function makeMockExecutableResolution(params: {
   rawExecutable: string;
   executableName: string;
@@ -21,6 +54,7 @@ export function makeMockExecutableResolution(params: {
   resolvedRealPath?: string;
 }): ExecutableResolution {
   return {
+    kind: "executable",
     rawExecutable: params.rawExecutable,
     resolvedPath: params.resolvedPath,
     resolvedRealPath: params.resolvedRealPath,
@@ -28,6 +62,7 @@ export function makeMockExecutableResolution(params: {
   };
 }
 
+/** Build a command resolution for command-policy tests. */
 export function makeMockCommandResolution(params: {
   execution: ExecutableResolution;
   policy?: ExecutableResolution;
@@ -36,32 +71,15 @@ export function makeMockCommandResolution(params: {
   policyBlocked?: boolean;
   blockedWrapper?: string;
 }): CommandResolution {
-  const policy = params.policy ?? params.execution;
-  const resolution: CommandResolution = {
+  return {
+    kind: "command",
     execution: params.execution,
-    policy,
+    policy: params.policy ?? params.execution,
     effectiveArgv: params.effectiveArgv,
     wrapperChain: params.wrapperChain,
     policyBlocked: params.policyBlocked,
     blockedWrapper: params.blockedWrapper,
   };
-  return Object.defineProperties(resolution, {
-    rawExecutable: {
-      get: () => params.execution.rawExecutable,
-    },
-    resolvedPath: {
-      get: () => params.execution.resolvedPath,
-    },
-    resolvedRealPath: {
-      get: () => params.execution.resolvedRealPath,
-    },
-    executableName: {
-      get: () => params.execution.executableName,
-    },
-    policyResolution: {
-      get: () => (policy === params.execution ? undefined : policy),
-    },
-  });
 }
 
 type ShellParserParityFixtureCase = {
@@ -96,6 +114,7 @@ export function loadShellParserParityFixtureCases(): ShellParserParityFixtureCas
   return fixture.cases;
 }
 
+/** Load wrapper resolution parity cases generated from shell-parser fixtures. */
 export function loadWrapperResolutionParityFixtureCases(): WrapperResolutionParityFixtureCase[] {
   const fixturePath = path.join(
     process.cwd(),

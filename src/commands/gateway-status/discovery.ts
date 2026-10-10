@@ -1,29 +1,17 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayBonjourBeacon } from "../../infra/bonjour-discovery.js";
 import {
   buildGatewayDiscoveryTarget,
   serializeGatewayDiscoveryBeacon,
 } from "../../infra/gateway-discovery-targets.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 export function inferSshTargetFromRemoteUrl(rawUrl?: string | null): string | null {
-  if (typeof rawUrl !== "string") {
-    return null;
-  }
-  const trimmed = normalizeOptionalString(rawUrl) ?? "";
+  const trimmed = normalizeOptionalString(rawUrl);
   if (!trimmed) {
     return null;
   }
-  let host: string | null = null;
-  try {
-    host = new URL(trimmed).hostname || null;
-  } catch {
-    return null;
-  }
-  if (!host) {
-    return null;
-  }
-  const user = normalizeOptionalString(process.env.USER) ?? "";
-  return user ? `${user}@${host}` : host;
+  const host = URL.parse(trimmed)?.hostname;
+  return host ? buildSshTarget({ user: process.env.USER, host }) : null;
 }
 
 function buildSshTarget(input: { user?: string; host?: string; port?: number }): string | null {
@@ -40,16 +28,15 @@ function buildSshTarget(input: { user?: string; host?: string; port?: number }):
   return base;
 }
 
+/** Resolves an SSH target through ssh-config while preserving explicit identity choices. */
 export async function resolveSshTarget(params: {
   rawTarget: string;
   identity: string | null;
   overallTimeoutMs: number;
-  loadSshConfigModule: () => Promise<typeof import("../../infra/ssh-config.js")>;
-  loadSshTunnelModule: () => Promise<typeof import("../../infra/ssh-tunnel.js")>;
 }): Promise<{ target: string; identity?: string } | null> {
   const [{ resolveSshConfig }, { parseSshTarget }] = await Promise.all([
-    params.loadSshConfigModule(),
-    params.loadSshTunnelModule(),
+    import("../../infra/ssh-config.js"),
+    import("../../infra/ssh-tunnel.js"),
   ]);
   const parsed = parseSshTarget(params.rawTarget);
   if (!parsed) {

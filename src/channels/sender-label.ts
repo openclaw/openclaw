@@ -1,4 +1,4 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 export type SenderLabelParams = {
   name?: string;
@@ -8,49 +8,20 @@ export type SenderLabelParams = {
   id?: string;
 };
 
-function normalizeSenderLabelParams(params: SenderLabelParams) {
-  return {
-    name: normalizeOptionalString(params.name),
-    username: normalizeOptionalString(params.username),
-    tag: normalizeOptionalString(params.tag),
-    e164: normalizeOptionalString(params.e164),
-    id: normalizeOptionalString(params.id),
-  };
-}
+// Matches opaque profile/device UUIDs. A phone number or handle in the id
+// position disambiguates a human label; a UUID is machine noise, so it never
+// belongs in a display label suffix.
+const OPAQUE_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
 export function resolveSenderLabel(params: SenderLabelParams): string | null {
-  const { name, username, tag, e164, id } = normalizeSenderLabelParams(params);
-
-  const display = name ?? username ?? tag ?? "";
-  const idPart = e164 ?? id ?? "";
-  if (display && idPart && display !== idPart) {
+  const display =
+    normalizeOptionalString(params.name) ??
+    normalizeOptionalString(params.username) ??
+    normalizeOptionalString(params.tag) ??
+    "";
+  const idPart = normalizeOptionalString(params.e164) ?? normalizeOptionalString(params.id) ?? "";
+  if (display && idPart && display !== idPart && !OPAQUE_UUID_RE.test(idPart)) {
     return `${display} (${idPart})`;
   }
   return display || idPart || null;
-}
-
-export function listSenderLabelCandidates(params: SenderLabelParams): string[] {
-  const candidates = new Set<string>();
-  const { name, username, tag, e164, id } = normalizeSenderLabelParams(params);
-
-  if (name) {
-    candidates.add(name);
-  }
-  if (username) {
-    candidates.add(username);
-  }
-  if (tag) {
-    candidates.add(tag);
-  }
-  if (e164) {
-    candidates.add(e164);
-  }
-  if (id) {
-    candidates.add(id);
-  }
-  const resolved = resolveSenderLabel(params);
-  if (resolved) {
-    candidates.add(resolved);
-  }
-  return Array.from(candidates);
 }

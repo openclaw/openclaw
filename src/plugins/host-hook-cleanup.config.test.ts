@@ -1,3 +1,4 @@
+// Covers host hook cleanup behavior controlled by plugin config.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runPluginHostCleanup } from "./host-hook-cleanup.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
@@ -18,7 +19,6 @@ describe("plugin host cleanup config fallback", () => {
   it("records session store config failures while continuing runtime cleanup", async () => {
     const registry = createEmptyPluginRegistry();
     const cleanup = vi.fn();
-    registry.runtimeLifecycles ??= [];
     registry.runtimeLifecycles.push({
       pluginId: "cleanup-plugin",
       pluginName: "Cleanup Plugin",

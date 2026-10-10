@@ -1,3 +1,4 @@
+// Public config facade for IO, mutation, runtime snapshots, paths, and shared config types.
 export {
   clearConfigCache,
   ConfigRuntimeRefreshError,
@@ -11,6 +12,7 @@ export {
   projectConfigOntoRuntimeSourceSnapshot,
   loadConfig,
   readBestEffortConfig,
+  readBestEffortConfigSnapshot,
   readSourceConfigBestEffort,
   parseConfigJson5,
   promoteConfigSnapshotToLastKnownGood,
@@ -30,9 +32,12 @@ export {
   writeConfigFile,
 } from "./io.js";
 export {
+  getRuntimeConfigAppliedHash,
   hashRuntimeConfigValue,
   resolveConfigWriteAfterWrite,
   resolveConfigWriteFollowUp,
+  setAppliedRuntimeConfigSnapshot,
+  setRuntimeConfigAppliedHash,
 } from "./runtime-snapshot.js";
 export type {
   ConfigWriteAfterWrite,
@@ -40,6 +45,8 @@ export type {
   RuntimeConfigSnapshotMetadata,
 } from "./runtime-snapshot.js";
 export type {
+  BestEffortConfigSnapshot,
+  ConfigSnapshotReadOptions,
   ConfigWriteNotification,
   ConfigWriteResult,
   ReadConfigFileSnapshotWithPluginMetadataResult,
@@ -51,6 +58,7 @@ export {
   replaceConfigFile,
   transformConfigFile,
   transformConfigFileWithRetry,
+  withConfigMutationExclusive,
 } from "./mutate.js";
 export type {
   ConfigMutationCommit,
@@ -66,8 +74,9 @@ export type {
 } from "./mutate.js";
 export {
   assertConfigWriteAllowedInCurrentMode,
+  ConfigReadOnlyError,
   NixModeConfigMutationError,
-} from "./nix-mode-write-guard.js";
+} from "./config-write-guard.js";
 export * from "./paths.js";
 export * from "./recovery-policy.js";
 export * from "./runtime-overrides.js";

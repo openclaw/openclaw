@@ -1,11 +1,8 @@
+// `openclaw plugins list`: builds registry reports and defers terminal-only formatting modules.
 import { getRuntimeConfig } from "../config/config.js";
-import { formatPluginSourceForTable, resolvePluginSourceRoots } from "../plugins/source-display.js";
+import type { PluginRecord } from "../plugins/registry.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
-import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
-import { theme } from "../terminal/theme.js";
-import { formatCliCommand } from "./command-format.js";
-import { quietPluginJsonLogger } from "./plugins-command-helpers.js";
-import { formatPluginLine } from "./plugins-list-format.js";
+import { quietPluginJsonLogger } from "./plugins-json-logger.js";
 
 export type PluginsListOptions = {
   json?: boolean;
@@ -13,12 +10,20 @@ export type PluginsListOptions = {
   verbose?: boolean;
 };
 
+function toPluginListJsonRecord(plugin: PluginRecord): Omit<PluginRecord, "agentHarnessIds"> {
+  // Snapshot listing never imports plugin runtimes, so it cannot observe harness registrations.
+  // Omit the field instead of serializing the registry-compatible empty placeholder.
+  const { agentHarnessIds: _agentHarnessIds, ...record } = plugin;
+  return record;
+}
+
 export async function runPluginsListCommand(
   opts: PluginsListOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
-  const { buildPluginRegistrySnapshotReport } = await import("../plugins/status.js");
-  const cfg = getRuntimeConfig();
+  const { buildPluginRegistrySnapshotReport } = await import("../plugins/status-snapshot.js");
+  // The inventory projector owns plugin metadata validation from the installed index.
+  const cfg = getRuntimeConfig({ skipPluginValidation: true });
   const report = buildPluginRegistrySnapshotReport({
     config: cfg,
     ...(opts.json ? { logger: quietPluginJsonLogger } : {}),
@@ -28,27 +33,60 @@ export async function runPluginsListCommand(
   if (opts.json) {
     const payload = {
       workspaceDir: report.workspaceDir,
+      workspaceScope: report.workspaceScope,
       registry: {
         source: report.registrySource,
         diagnostics: report.registryDiagnostics,
       },
-      plugins: list,
+      plugins: list.map(toPluginListJsonRecord),
       diagnostics: report.diagnostics,
     };
     writeRuntimeJson(runtime, payload);
     return;
   }
 
+  const [
+    { formatPluginSourceForTable, resolvePluginSourceRoots },
+    { getTerminalTableWidth, renderTable },
+    { theme },
+    { formatCliCommand },
+    { formatPluginLine, formatPluginStatus },
+  ] = await Promise.all([
+    import("../plugins/source-display.js"),
+    import("../../packages/terminal-core/src/table.js"),
+    import("../../packages/terminal-core/src/theme.js"),
+    import("./command-format.js"),
+    import("./plugins-list-format.js"),
+  ]);
+
+  const diagnostics = [...report.diagnostics, ...report.registryDiagnostics].filter(
+    (diagnostic) =>
+      diagnostic.level !== "info" &&
+      (diagnostic.level !== "error" ||
+        !list.some((plugin) => plugin.status === "error" && plugin.error === diagnostic.message)),
+  );
+  for (const { level, message } of diagnostics) {
+    const format = level === "error" ? theme.error : theme.warn;
+    runtime.log(format(`${level === "error" ? "Error" : "Warning"}: ${message}`));
+  }
+  if (diagnostics.length > 0) {
+    runtime.log("");
+  }
+
   if (list.length === 0) {
-    runtime.log(
-      theme.muted(
-        `No plugins found. Run ${formatCliCommand("openclaw plugins install <plugin>")} to add one, or ${formatCliCommand("openclaw plugins list --json")} to inspect raw discovery state.`,
-      ),
-    );
+    const message =
+      opts.enabled && report.plugins.length > 0
+        ? `${
+            cfg.plugins?.enabled === false
+              ? "No enabled plugins found. Plugins are globally disabled."
+              : "No enabled plugins found."
+          } Run ${formatCliCommand("openclaw plugins list")} to inspect installed plugins.`
+        : `No plugins found. Run ${formatCliCommand("openclaw plugins install <plugin>")} to add one, or ${formatCliCommand("openclaw plugins list --json")} to inspect raw discovery state.`;
+    runtime.log(theme.muted(message));
     return;
   }
 
-  const enabled = list.filter((p) => p.enabled).length;
+  const enabled = list.reduce((count, plugin) => count + (plugin.enabled ? 1 : 0), 0);
   runtime.log(`${theme.heading("Plugins")} ${theme.muted(`(${enabled}/${list.length} enabled)`)}`);
 
   if (!opts.verbose) {
@@ -58,23 +96,18 @@ export async function runPluginsListCommand(
     });
     const usedRoots = new Set<keyof typeof sourceRoots>();
     const rows = list.map((plugin) => {
-      const desc = plugin.description ? theme.muted(plugin.description) : "";
+      const error = plugin.status === "error" && plugin.error;
+      const desc = error ? theme.error(error) : theme.muted(plugin.description ?? "");
       const formattedSource = formatPluginSourceForTable(plugin, sourceRoots);
       if (formattedSource.rootKey) {
         usedRoots.add(formattedSource.rootKey);
       }
-      const sourceLine = desc ? `${formattedSource.value}\n${desc}` : formattedSource.value;
       return {
         Name: plugin.name || plugin.id,
         ID: plugin.name && plugin.name !== plugin.id ? plugin.id : "",
         Format: plugin.format ?? "openclaw",
-        Status:
-          plugin.status === "error"
-            ? theme.error("error")
-            : plugin.enabled
-              ? theme.success("enabled")
-              : theme.warn("disabled"),
-        Source: sourceLine,
+        Status: formatPluginStatus(plugin),
+        Source: desc ? `${formattedSource.value}\n${desc}` : formattedSource.value,
         Version: plugin.version ?? "",
       };
     });
@@ -111,10 +144,5 @@ export async function runPluginsListCommand(
     return;
   }
 
-  const lines: string[] = [];
-  for (const plugin of list) {
-    lines.push(formatPluginLine(plugin, true));
-    lines.push("");
-  }
-  runtime.log(lines.join("\n").trim());
+  runtime.log(list.map(formatPluginLine).join("\n\n").trim());
 }

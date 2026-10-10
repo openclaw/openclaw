@@ -1,1 +1,1 @@
-export { deleteTelegramUpdateOffset } from "./src/update-offset-store.runtime.js";
+export { deleteTelegramUpdateOffset } from "./src/update-offset-store.js";

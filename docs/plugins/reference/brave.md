@@ -1,22 +1,25 @@
 ---
-summary: "Adds web search provider support."
+summary: "OpenClaw Brave Search provider plugin for web search."
 read_when:
   - You are installing, configuring, or auditing the brave plugin
-title: "Brave plugin"
+title: "Brave plugin reference"
 ---
 
-# Brave plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
-Adds web search provider support.
+OpenClaw Brave Search provider plugin for web search.
 
 ## Distribution
 
 - Package: `@openclaw/brave-plugin`
-- Install route: npm; ClawHub
+- Install route: npm or ClawHub: `clawhub:@openclaw/brave-plugin`
 
 ## Surface
 
-contracts: webSearchProviders
+- Contracts: `webSearchProviders`
 
 ## Related docs
 

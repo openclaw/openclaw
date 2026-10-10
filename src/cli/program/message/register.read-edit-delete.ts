@@ -1,4 +1,4 @@
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import type { MessageCliHelpers } from "./helpers.js";
 
 export function registerMessageReadEditDeleteCommands(
@@ -6,47 +6,35 @@ export function registerMessageReadEditDeleteCommands(
   helpers: MessageCliHelpers,
 ) {
   helpers
-    .withMessageBase(
-      helpers.withRequiredMessageTarget(
-        message.command("read").description("Read recent messages"),
-      ),
-    )
+    .withMessageBase(message.command("read").description("Read recent messages"), "required")
     .option("--limit <n>", "Result limit")
     .option("--message-id <id>", "Read a specific message id")
     .option("--before <id>", "Read/search before id")
     .option("--after <id>", "Read/search after id")
     .option("--around <id>", "Read around id")
     .option("--thread-id <id>", "Thread id (Slack thread timestamp)")
-    .option("--include-thread", "Include thread replies (Discord)", false)
-    .action(async (opts) => {
-      await helpers.runMessageAction("read", opts);
-    });
+    .addOption(new Option("--include-thread").hideHelp())
+    .action((opts) => helpers.runMessageAction("read", opts));
 
   helpers
     .withMessageBase(
-      helpers.withRequiredMessageTarget(
-        message
-          .command("edit")
-          .description("Edit a message")
-          .requiredOption("--message-id <id>", "Message id")
-          .requiredOption("-m, --message <text>", "Message body"),
-      ),
+      message
+        .command("edit")
+        .description("Edit a message")
+        .requiredOption("--message-id <id>", "Message id")
+        .requiredOption("-m, --message <text>", "Message body"),
+      "required",
     )
     .option("--thread-id <id>", "Thread id (Telegram forum thread)")
-    .action(async (opts) => {
-      await helpers.runMessageAction("edit", opts);
-    });
+    .action((opts) => helpers.runMessageAction("edit", opts));
 
   helpers
     .withMessageBase(
-      helpers.withRequiredMessageTarget(
-        message
-          .command("delete")
-          .description("Delete a message")
-          .requiredOption("--message-id <id>", "Message id"),
-      ),
+      message
+        .command("delete")
+        .description("Delete a message")
+        .requiredOption("--message-id <id>", "Message id"),
+      "required",
     )
-    .action(async (opts) => {
-      await helpers.runMessageAction("delete", opts);
-    });
+    .action((opts) => helpers.runMessageAction("delete", opts));
 }

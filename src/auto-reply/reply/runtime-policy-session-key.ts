@@ -1,3 +1,8 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -5,16 +10,13 @@ import {
   buildAgentPeerSessionKey,
   normalizeAgentId,
   normalizeMainKey,
-  resolveAgentIdFromSessionKey,
+  parseAgentSessionKey,
 } from "../../routing/session-key.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import type { MsgContext } from "../templating.js";
 
 type RuntimePolicyContext = Pick<
   MsgContext,
+  | "AgentId"
   | "AccountId"
   | "ChatType"
   | "CommandTargetSessionKey"
@@ -33,11 +35,9 @@ type RuntimePolicyContext = Pick<
 >;
 
 function resolvePolicyChannel(ctx?: RuntimePolicyContext): string | undefined {
-  const raw = normalizeOptionalString(ctx?.OriginatingChannel ?? ctx?.Provider ?? ctx?.Surface);
-  if (!raw) {
-    return undefined;
-  }
-  const channel = normalizeLowercaseStringOrEmpty(raw);
+  const channel = normalizeLowercaseStringOrEmpty(
+    ctx?.OriginatingChannel ?? ctx?.Provider ?? ctx?.Surface,
+  );
   return channel && channel !== "webchat" ? channel : undefined;
 }
 
@@ -64,19 +64,11 @@ function isMainSessionAlias(params: {
   }
   const agentId = normalizeAgentId(params.agentId);
   const mainKey = normalizeMainKey(params.cfg?.session?.mainKey);
-  const agentMainSessionKey = buildAgentMainSessionKey({
-    agentId,
-    mainKey,
-  });
-  const agentMainAliasKey = buildAgentMainSessionKey({
-    agentId,
-    mainKey: "main",
-  });
   return (
     raw === "main" ||
     raw === mainKey ||
-    raw === agentMainSessionKey ||
-    raw === agentMainAliasKey ||
+    raw === buildAgentMainSessionKey({ agentId, mainKey }) ||
+    raw === buildAgentMainSessionKey({ agentId, mainKey: "main" }) ||
     raw === buildAgentMainSessionKey({ agentId: "main", mainKey }) ||
     raw === buildAgentMainSessionKey({ agentId: "main", mainKey: "main" }) ||
     (params.cfg?.session?.scope === "global" && raw === "global")
@@ -84,6 +76,7 @@ function isMainSessionAlias(params: {
 }
 
 export function resolveRuntimePolicySessionKey(params: {
+  agentId?: string;
   cfg?: OpenClawConfig;
   ctx?: RuntimePolicyContext;
   sessionKey?: string | null;
@@ -99,12 +92,20 @@ export function resolveRuntimePolicySessionKey(params: {
     return undefined;
   }
 
-  const agentId = resolveAgentIdFromSessionKey(sessionKey);
-  if (!isMainSessionAlias({ cfg: params.cfg, agentId, sessionKey })) {
-    return sessionKey;
-  }
-
-  if (normalizeChatType(params.ctx?.ChatType) !== "direct") {
+  const agentId = params.cfg
+    ? resolveSessionAgentId({
+        config: params.cfg,
+        sessionKey,
+        agentId: params.agentId ?? normalizeOptionalString(params.ctx?.AgentId),
+      })
+    : (parseAgentSessionKey(sessionKey)?.agentId ??
+      normalizeOptionalString(params.agentId) ??
+      normalizeOptionalString(params.ctx?.AgentId));
+  if (
+    !agentId ||
+    !isMainSessionAlias({ cfg: params.cfg, agentId, sessionKey }) ||
+    normalizeChatType(params.ctx?.ChatType) !== "direct"
+  ) {
     return sessionKey;
   }
   const channel = resolvePolicyChannel(params.ctx);
@@ -113,6 +114,7 @@ export function resolveRuntimePolicySessionKey(params: {
     return sessionKey;
   }
 
+  // Direct main-session replies use a peer-scoped key so policy does not leak across DMs.
   return buildAgentPeerSessionKey({
     agentId,
     channel,

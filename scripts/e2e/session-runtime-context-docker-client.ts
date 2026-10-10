@@ -5,11 +5,13 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { DatabaseSync } from "node:sqlite";
+import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
-  queueRuntimeContextForNextTurn,
+  buildRuntimeContextCustomMessage,
   resolveRuntimeContextPromptParts,
-} from "../../dist/agents/pi-embedded-runner/run/runtime-context-prompt.js";
+} from "../../dist/agents/embedded-agent-runner/run/runtime-context-prompt.js";
 
 type TranscriptEntry = {
   type?: string;
@@ -22,18 +24,22 @@ type TranscriptEntry = {
   };
 };
 
+type MigrationManifest = {
+  completedAt?: string;
+  failedAt?: string;
+  targets: {
+    completedMoves: { kind: string; sourcePath: string; archivePath: string }[];
+  }[];
+};
+
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
     throw new Error(message);
   }
 }
 
-async function readJsonl(filePath: string): Promise<TranscriptEntry[]> {
-  const raw = await fs.readFile(filePath, "utf-8");
-  return raw
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as TranscriptEntry);
+function setEnvValue(key: string, value: string): void {
+  Reflect.set(process.env, key, value);
 }
 
 function messageText(content: unknown): string {
@@ -52,42 +58,50 @@ function messageText(content: unknown): string {
     .join("");
 }
 
-async function verifyRuntimeContextTranscriptShape(root: string) {
-  const sessionFile = path.join(root, ".openclaw", "agents", "main", "sessions", "runtime.jsonl");
-  await fs.mkdir(path.dirname(sessionFile), { recursive: true });
-  const sessionManager = SessionManager.open(sessionFile);
-  const effectivePrompt = [
-    "visible ask",
-    "",
-    "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-    "secret docker context",
-    "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-  ].join("\n");
+async function readJsonl(filePath: string): Promise<TranscriptEntry[]> {
+  return (await fs.readFile(filePath, "utf8"))
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as TranscriptEntry);
+}
+
+async function verifyRuntimeContextTranscriptShape() {
+  const sessionManager = SessionManager.inMemory();
+  const inputMode =
+    process.env.OPENCLAW_FROZEN_TARGET_RUNTIME_CONTEXT_INPUT_MODE ?? "producer-fragments";
+  assert(
+    inputMode === "producer-fragments" || inputMode === "legacy-marked-prompt",
+    `invalid runtime-context input mode: ${inputMode}`,
+  );
+  const fragments = [{ kind: "conversation-data" as const, text: "secret docker context" }];
+  const effectivePrompt =
+    inputMode === "legacy-marked-prompt"
+      ? [
+          "visible ask",
+          "",
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+          "secret docker context",
+          "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+        ].join("\n")
+      : "visible ask";
   const promptSubmission = resolveRuntimeContextPromptParts({
     effectivePrompt,
     transcriptPrompt: "visible ask",
+    ...(inputMode === "producer-fragments" ? { fragments } : {}),
   });
 
   assert(promptSubmission.prompt === "visible ask", "visible prompt was not preserved");
   assert(
     promptSubmission.runtimeContext?.includes("secret docker context"),
-    "runtime context was not extracted",
+    "producer runtime context was not preserved",
   );
 
-  await queueRuntimeContextForNextTurn({
-    runtimeContext: promptSubmission.runtimeContext,
-    session: {
-      sendCustomMessage: async (message, options) => {
-        assert(options?.deliverAs === "nextTurn", "runtime context was not queued for next turn");
-        sessionManager.appendCustomMessageEntry(
-          message.customType,
-          message.content,
-          message.display,
-          message.details,
-        );
-      },
-    },
-  });
+  const runtimeContextMessage = buildRuntimeContextCustomMessage(
+    promptSubmission.runtimeContext,
+    inputMode === "producer-fragments" ? fragments : undefined,
+  );
+  assert(runtimeContextMessage, "runtime custom message was not built");
   sessionManager.appendMessage({
     role: "user",
     content: promptSubmission.prompt,
@@ -99,13 +113,16 @@ async function verifyRuntimeContextTranscriptShape(root: string) {
     timestamp: Date.now() + 1,
   });
 
-  const entries = await readJsonl(sessionFile);
+  const entries = sessionManager.getEntries() as TranscriptEntry[];
   const customEntry = entries.find((entry) => entry.type === "custom_message");
-  assert(customEntry, "hidden runtime custom message was not persisted");
-  assert(customEntry.customType === "openclaw.runtime-context", "unexpected custom message type");
-  assert(customEntry.display === false, "runtime custom message should be hidden");
+  assert(!customEntry, "runtime custom message should not be persisted without its user turn");
   assert(
-    customEntry.content?.includes("secret docker context"),
+    runtimeContextMessage.customType === "openclaw.runtime-context",
+    "unexpected custom message type",
+  );
+  assert(!runtimeContextMessage.display, "runtime custom message should be hidden");
+  assert(
+    runtimeContextMessage.content.includes("secret docker context"),
     "runtime custom message lost context",
   );
 
@@ -193,6 +210,8 @@ async function verifyDoctorRepair(root: string) {
   const stateDir = path.join(root, ".openclaw");
   const configPath = path.join(stateDir, "openclaw.json");
   const sessionFile = await seedBrokenSession(stateDir);
+  const originalSessionPath = await fs.realpath(sessionFile);
+  const originalSessionBytes = await fs.readFile(sessionFile);
   await fs.mkdir(path.dirname(configPath), { recursive: true });
   await fs.writeFile(configPath, JSON.stringify({ plugins: { enabled: false } }, null, 2));
 
@@ -223,34 +242,101 @@ async function verifyDoctorRepair(root: string) {
     result.status === 0,
     `doctor --fix failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
   );
-  const entries = await readJsonl(sessionFile);
-  const ids = entries.map((entry) => (entry as { id?: string }).id).filter(Boolean);
+  const legacyJsonlRepair = process.env.OPENCLAW_FROZEN_TARGET_SESSION_REPAIR_MODE === "jsonl";
+  let entries: TranscriptEntry[];
+  if (legacyJsonlRepair) {
+    entries = await readJsonl(sessionFile);
+  } else {
+    const databasePath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    const database = new DatabaseSync(databasePath, { readOnly: true });
+    let migratedSessionId: string | undefined;
+    try {
+      const row = database
+        .prepare("SELECT current_session_id AS session_id FROM session_nodes WHERE session_key = ?")
+        .get("agent:main:qa:docker-runtime-context");
+      if (typeof row?.session_id === "string") {
+        migratedSessionId = row.session_id;
+      }
+    } finally {
+      database.close();
+    }
+    assert(migratedSessionId, "doctor did not migrate session");
+    entries = (await readSessionTranscriptEvents({
+      agentId: "main",
+      sessionId: migratedSessionId,
+      sessionKey: "agent:main:qa:docker-runtime-context",
+    })) as TranscriptEntry[];
+  }
+  const ids = entries.map((entryValue) => (entryValue as { id?: string }).id).filter(Boolean);
+  const expectedIds = legacyJsonlRepair
+    ? ["broken-session", "parent", "plain-user", "plain-assistant"]
+    : ["broken", "parent", "plain-user", "plain-assistant"];
   assert(
-    JSON.stringify(ids) ===
-      JSON.stringify(["broken-session", "parent", "plain-user", "plain-assistant"]),
+    JSON.stringify(ids) === JSON.stringify(expectedIds),
     `doctor kept wrong active branch: ${JSON.stringify(ids)}`,
   );
   assert(
     entries.every(
-      (entry) => !messageText(entry.message?.content).includes("secret doctor context"),
+      (entryLocal) => !messageText(entryLocal.message?.content).includes("secret doctor context"),
     ),
     "doctor repair left runtime context in active transcript",
   );
-  const backups = (await fs.readdir(path.dirname(sessionFile))).filter((name) =>
-    name.includes(".pre-doctor-branch-repair-"),
+  if (legacyJsonlRepair) {
+    const backups = (await fs.readdir(path.dirname(sessionFile))).filter((name) =>
+      name.includes(".pre-doctor-branch-repair-"),
+    );
+    assert(backups.length === 1, `expected one doctor backup, got ${backups.length}`);
+    return;
+  }
+  const migrationRunsDir = path.join(stateDir, "session-sqlite-migration-runs");
+  const manifests = await Promise.all(
+    (await fs.readdir(migrationRunsDir))
+      .filter((name) => name.endsWith(".json") && !name.endsWith(".failure.json"))
+      .map(async (name) => {
+        const manifest = JSON.parse(
+          await fs.readFile(path.join(migrationRunsDir, name), "utf-8"),
+        ) as MigrationManifest;
+        assert(manifest.completedAt && !manifest.failedAt, "doctor migration did not complete");
+        return manifest;
+      }),
   );
-  assert(backups.length === 1, `expected one doctor backup, got ${backups.length}`);
+  const archivedTranscripts = manifests.flatMap((manifest) =>
+    manifest.targets.flatMap((target) =>
+      target.completedMoves.filter(
+        (move) => move.kind === "transcript" && move.sourcePath === originalSessionPath,
+      ),
+    ),
+  );
+  const [archivedTranscript] = archivedTranscripts;
+  assert(
+    archivedTranscripts.length === 1 && archivedTranscript,
+    `expected one archived original transcript, got ${archivedTranscripts.length}`,
+  );
+  assert(
+    (await fs.readFile(archivedTranscript.archivePath)).equals(originalSessionBytes),
+    "doctor archive did not preserve the original transcript bytes",
+  );
+  assert(
+    await fs.lstat(sessionFile).then(
+      () => false,
+      (error: unknown) => error instanceof Error && "code" in error && error.code === "ENOENT",
+    ),
+    "doctor did not retire the imported transcript source",
+  );
 }
 
 async function main() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-runtime-context-"));
-  process.env.HOME = root;
-  process.env.OPENCLAW_STATE_DIR = path.join(root, ".openclaw");
-  process.env.OPENCLAW_CONFIG_PATH = path.join(process.env.OPENCLAW_STATE_DIR, "openclaw.json");
+  const stateDir = path.join(root, ".openclaw");
+  setEnvValue("HOME", root);
+  setEnvValue("OPENCLAW_STATE_DIR", stateDir);
+  setEnvValue("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
   try {
-    await verifyRuntimeContextTranscriptShape(root);
+    await verifyRuntimeContextTranscriptShape();
     await verifyDoctorRepair(root);
-    console.log("session runtime context Docker E2E passed");
+    console.log(
+      `session runtime context Docker E2E passed (${process.env.OPENCLAW_FROZEN_TARGET_RUNTIME_CONTEXT_INPUT_MODE ?? "producer-fragments"})`,
+    );
   } finally {
     if (process.env.OPENCLAW_SESSION_RUNTIME_CONTEXT_KEEP_ARTIFACTS !== "1") {
       await fs.rm(root, { recursive: true, force: true });

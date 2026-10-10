@@ -1,453 +1,270 @@
 ---
 summary: "Plugin hooks: intercept agent, tool, message, session, and Gateway lifecycle events"
 title: "Plugin hooks"
+doc-schema-version: 1
 read_when:
   - You are building a plugin that needs before_tool_call, before_agent_reply, message hooks, or lifecycle hooks
   - You need to block, rewrite, or require approval for tool calls from a plugin
   - You are deciding between internal hooks and plugin hooks
+  - You are projecting OpenClaw cron wakes into an external host scheduler
 ---
 
-Plugin hooks are in-process extension points for OpenClaw plugins. Use them
-when a plugin needs to inspect or change agent runs, tool calls, message flow,
-session lifecycle, subagent routing, installs, or Gateway startup.
+Plugin hooks let a native OpenClaw plugin observe or change agent runs, tool
+calls, message delivery, and lifecycle events. Register a typed handler with
+`api.on("hook_name", handler)` and return the result documented for that hook.
 
-Use [internal hooks](/automation/hooks) instead when you want a small
-operator-installed `HOOK.md` script for command and Gateway events such as
-`/new`, `/reset`, `/stop`, `agent:bootstrap`, or `gateway:startup`.
+There are three different hook systems:
+
+| You want to…                                                                        | Use                                                                                                             |
+| ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Change prompts, gate tools, customize replies, or integrate plugin lifecycle        | Typed plugin hooks on this page: `api.on("before_tool_call", ...)`                                              |
+| Run an operator-installed script for `/new`, `/reset`, `/stop`, or bootstrap events | [Internal hooks](/automation/hooks): `HOOK.md` and colon event names such as `command:new` or `agent:bootstrap` |
+| Trigger an agent from an external service over HTTP                                 | [Webhooks](/automation/cron-jobs#webhooks): Gateway HTTP endpoints                                              |
+
+Plugins can also register internal hooks with `api.registerHook(...)`. That is
+not the typed API: registering an underscore name such as `before_tool_call`
+there produces a warning, and the typed runner never invokes that registration.
+Use `api.on(...)` for every hook in the [hook
+catalog](/plugins/hooks/reference#hook-catalog).
 
 ## Quick start
 
-Register typed plugin hooks with `api.on(...)` from your plugin entry:
+This example replies to a user message containing `hook-demo-check` without
+calling the model.
+It assumes you already have a working Gateway and can send it a normal chat
+message. For package metadata, publishing, and install options, see
+[Building plugins](/plugins/building-plugins) and [Plugin manifest](/plugins/manifest).
 
-```typescript
+Create a local `hook-demo` directory with these files:
+
+```json package.json
+{
+  "name": "hook-demo",
+  "version": "1.0.0",
+  "type": "module",
+  "openclaw": { "extensions": ["./index.ts"] }
+}
+```
+
+```json openclaw.plugin.json
+{
+  "id": "hook-demo",
+  "name": "Hook Demo",
+  "activation": { "onStartup": true },
+  "configSchema": { "type": "object", "additionalProperties": false }
+}
+```
+
+```typescript index.ts
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 
 export default definePluginEntry({
-  id: "tool-preflight",
-  name: "Tool Preflight",
+  id: "hook-demo",
+  name: "Hook Demo",
+  description: "Reply to a hook check without a model call.",
   register(api) {
     api.on(
-      "before_tool_call",
-      async (event) => {
-        if (event.toolName !== "web_search") {
-          return;
+      "before_agent_reply",
+      (event) => {
+        if (event.cleanedBody.includes("hook-demo-check")) {
+          return { handled: true, reply: { text: "Hook is working." } };
         }
-
-        return {
-          requireApproval: {
-            title: "Run web search",
-            description: `Allow search query: ${String(event.params.query ?? "")}`,
-            severity: "info",
-            timeoutMs: 60_000,
-            timeoutBehavior: "deny",
-          },
-        };
       },
-      { priority: 50 },
+      { eligibleTriggers: ["user"] },
     );
   },
 });
 ```
 
-Hook handlers run sequentially in descending `priority`. Same-priority hooks
-keep registration order.
+Review local plugin code before loading it: native plugins run in the Gateway
+process. Link and enable the directory (`--force` acknowledges installing from
+a local source):
 
-`api.on(name, handler, opts?)` accepts:
+```bash
+openclaw plugins install --link ./hook-demo --force
+openclaw plugins enable hook-demo
+```
 
-- `priority` - handler ordering (higher runs first).
-- `timeoutMs` - optional per-hook budget. When set, the hook runner aborts that
-  handler after the budget elapses and continues with the next one, instead of
-  letting slow setup or recall work consume the caller's configured model
-  timeout. Omit it to use the default observation/decision timeout that the
-  hook runner applies generically.
-
-Operators can also set hook budgets without patching plugin code:
+Grant this plugin access to conversation hooks in `openclaw.json`:
 
 ```json
 {
   "plugins": {
     "entries": {
-      "my-plugin": {
-        "hooks": {
-          "timeoutMs": 30000,
-          "timeouts": {
-            "before_prompt_build": 90000,
-            "agent_end": 60000
-          }
-        }
+      "hook-demo": {
+        "enabled": true,
+        "hooks": { "allowConversationAccess": true }
       }
     }
   }
 }
 ```
 
-`hooks.timeouts.<hookName>` overrides `hooks.timeoutMs`, which overrides the
-plugin-authored `api.on(..., { timeoutMs })` value. Each configured value must
-be a positive integer no greater than 600000 milliseconds. Prefer per-hook
-overrides for known slow hooks so one plugin does not get a longer budget
-everywhere.
+Merge that entry into your existing config, then let the default hybrid reload
+mode apply it and inspect:
 
-Each hook receives `event.context.pluginConfig`, the resolved config for the
-plugin that registered that handler. Use it for hook decisions that need
-current plugin options; OpenClaw injects it per handler without mutating the
-shared event object seen by other plugins.
-
-## Hook catalog
-
-Hooks are grouped by the surface they extend. Names in **bold** accept a
-decision result (block, cancel, override, or require approval); all others are
-observation-only.
-
-**Agent turn**
-
-- `before_model_resolve` - override provider or model before session messages load
-- `agent_turn_prepare` - consume queued plugin turn injections and add same-turn context before prompt hooks
-- `before_prompt_build` - add dynamic context or system-prompt text before the model call
-- `before_agent_start` - compatibility-only combined phase; prefer the two hooks above
-- **`before_agent_run`** - inspect the final prompt and session messages before model submission and optionally block the run
-- **`before_agent_reply`** - short-circuit the model turn with a synthetic reply or silence
-- **`before_agent_finalize`** - inspect the natural final answer and request one more model pass
-- `agent_end` - observe final messages, success state, and run duration
-- `heartbeat_prompt_contribution` - add heartbeat-only context for background monitor and lifecycle plugins
-
-**Conversation observation**
-
-- `model_call_started` / `model_call_ended` - observe sanitized provider/model call metadata, timing, outcome, and bounded request-id hashes without prompt or response content
-- `llm_input` - observe provider input (system prompt, prompt, history)
-- `llm_output` - observe provider output, usage, and the resolved `contextTokenBudget` when available
-
-**Tools**
-
-- **`before_tool_call`** - rewrite tool params, block execution, or require approval
-- `after_tool_call` - observe tool results, errors, and duration
-- **`tool_result_persist`** - rewrite the assistant message produced from a tool result
-- **`before_message_write`** - inspect or block an in-progress message write (rare)
-
-**Messages and delivery**
-
-- **`inbound_claim`** - claim an inbound message before agent routing (synthetic replies)
-- `message_received` - observe inbound content, sender, thread, and metadata
-- **`message_sending`** - rewrite outbound content or cancel delivery
-- `message_sent` - observe outbound delivery success or failure
-- **`before_dispatch`** - inspect or rewrite an outbound dispatch before channel handoff
-- **`reply_dispatch`** - participate in the final reply-dispatch pipeline
-
-**Sessions and compaction**
-
-- `session_start` / `session_end` - track session lifecycle boundaries. The event's `reason` is one of `new`, `reset`, `idle`, `daily`, `compaction`, `deleted`, `shutdown`, `restart`, or `unknown`. The `shutdown` and `restart` values fire from the gateway shutdown finalizer when the process is stopped or restarted while sessions are still active, so downstream plugins (such as memory or transcript stores) can finalize ghost rows that would otherwise be left in an open state across restarts. The finalizer is bounded so a slow plugin cannot block SIGTERM/SIGINT.
-- `before_compaction` / `after_compaction` - observe or annotate compaction cycles
-- `before_reset` - observe session-reset events (`/reset`, programmatic resets)
-
-**Subagents**
-
-- `subagent_spawning` / `subagent_delivery_target` / `subagent_spawned` / `subagent_ended` - coordinate subagent routing and completion delivery
-
-**Lifecycle**
-
-- `gateway_start` / `gateway_stop` - start or stop plugin-owned services with the Gateway
-- `deactivate` - deprecated compatibility alias for `gateway_stop`; use `gateway_stop` in new plugins
-- `cron_changed` - observe gateway-owned cron lifecycle changes (added, updated, removed, started, finished, scheduled)
-- **`before_install`** - inspect skill or plugin install scans and optionally block
-
-## Debug runtime hooks
-
-Use `before_model_resolve` when a plugin needs to switch the provider or model
-for an agent turn. It runs before model resolution; `llm_output` only runs after
-a model attempt produces assistant output.
-
-For proof of the effective session model, inspect runtime registrations, then
-use `openclaw sessions` or the Gateway session/status surfaces. When debugging
-provider payloads, start the Gateway with `--raw-stream` and
-`--raw-stream-path <path>`; those flags write raw model stream events to a jsonl
-file.
-
-## Tool call policy
-
-`before_tool_call` receives:
-
-- `event.toolName`
-- `event.params`
-- optional `event.derivedPaths`, containing best-effort host-derived target path
-  hints for well-known tool envelopes such as `apply_patch`; when present,
-  these paths may be incomplete or may over-approximate what the tool will
-  actually touch (for example, with malformed or partial inputs)
-- optional `event.runId`
-- optional `event.toolCallId`
-- context fields such as `ctx.agentId`, `ctx.sessionKey`, `ctx.sessionId`,
-  `ctx.runId`, `ctx.jobId` (set on cron-driven runs), and diagnostic `ctx.trace`
-
-It can return:
-
-```typescript
-type BeforeToolCallResult = {
-  params?: Record<string, unknown>;
-  block?: boolean;
-  blockReason?: string;
-  requireApproval?: {
-    title: string;
-    description: string;
-    severity?: "info" | "warning" | "critical";
-    timeoutMs?: number;
-    timeoutBehavior?: "allow" | "deny";
-    pluginId?: string;
-    onResolution?: (
-      decision: "allow-once" | "allow-always" | "deny" | "timeout" | "cancelled",
-    ) => Promise<void> | void;
-  };
-};
+```bash
+openclaw plugins inspect hook-demo --runtime --json
 ```
 
-Hook guard behavior for typed lifecycle hooks:
+Send `hook-demo-check` as a normal chat message. Expect `Hook is working.`; other
+messages continue through the normal agent path. If the hook does not run,
+see [Troubleshooting](/plugins/hooks#troubleshooting).
 
-- `block: true` is terminal and skips lower-priority handlers.
-- `block: false` is treated as no decision.
-- `params` rewrites the tool parameters for execution.
-- `requireApproval` pauses the agent run and asks the user through plugin
-  approvals. The `/approve` command can approve both exec and plugin approvals.
-- A lower-priority `block: true` can still block after a higher-priority hook
-  requested approval.
-- `onResolution` receives the resolved approval decision - `allow-once`,
-  `allow-always`, `deny`, `timeout`, or `cancelled`.
+Despite its name, `cleanedBody` is the prepared run prompt and can contain
+channel context. The example matches a distinctive marker instead of assuming
+the field is only the sender's raw text.
 
-Bundled plugins that need host-level policy can register trusted tool policies
-with `api.registerTrustedToolPolicy(...)`. These run before ordinary
-`before_tool_call` hooks and before external plugin decisions. Use them only
-for host-trusted gates such as workspace policy, budget enforcement, or
-reserved workflow safety. External plugins should use normal `before_tool_call`
-hooks.
+### Permissions and scope
 
-### Tool result persistence
+Hook registration does not bypass plugin loading rules. The plugin must be
+loaded and enabled; `plugins.enabled`, `plugins.allow`, and `plugins.deny` still
+apply. Run `openclaw plugins reload <id>` after changing plugin code. With the default hybrid
+reload mode, hook policy changes hot-reload the existing plugin runtime.
 
-Tool results can include structured `details` for UI rendering, diagnostics,
-media routing, or plugin-owned metadata. Treat `details` as runtime metadata,
-not prompt content:
+- Non-bundled plugins need explicit
+  `plugins.entries.<id>.hooks.allowConversationAccess: true` for
+  `before_model_resolve`, `agent_turn_prepare`, `before_prompt_build`,
+  `before_agent_reply`, `llm_input`, `llm_output`, `before_agent_finalize`,
+  `agent_end`, and `before_agent_run`. Bundled plugins are allowed unless this
+  option is explicitly `false`.
+- `session_end` remains available as a metadata-only lifecycle hook without
+  that grant. Its bounded `ctx.endedTranscript` reader is available only when
+  the effective conversation-access policy allows it; see the
+  [session lifecycle contract](/plugins/hooks/reference#hook-catalog).
+- `allowPromptInjection: false` blocks `agent_turn_prepare`,
+  `before_prompt_build`, `heartbeat_prompt_contribution`, and durable next-turn
+  injections. It defaults to allowed, but does not grant conversation access.
+  The first two hooks therefore need both permissions.
+- These are specific registration gates, not a sandbox or a universal filter
+  for every hook that can see message data. Install only plugins you trust.
 
-- OpenClaw strips `toolResult.details` before provider replay and compaction
-  input so metadata does not become model context.
-- Persisted session entries keep only bounded `details`. Oversized details are
-  replaced with a compact summary and `persistedDetailsTruncated: true`.
-- `tool_result_persist` and `before_message_write` run before the final
-  persistence cap. Hooks should still keep returned `details` small and avoid
-  placing prompt-relevant text only in `details`; put model-visible tool output
-  in `content`.
+Incognito sessions do not dispatch `llm_input` or `llm_output` observations.
+Their `agent_end` hooks still receive run identity, success, and duration for
+cleanup and settlement, but receive empty `messages` and no `error` text.
+Policy, provider, approval, and explicitly invoked tool hooks remain active.
+This boundary does not sandbox plugins or disable native harness telemetry.
 
-## Prompt and model hooks
+A typed handler receives `(event, ctx)`. The event describes the operation;
+the second argument carries hook-specific context. Fields such as
+`ctx.agentId`, `ctx.sessionKey`, and `ctx.runId` are optional on many hooks and
+may be absent for the emitting path. A registration is not automatically
+scoped to one agent or session: check the context in your handler when needed.
 
-Use the phase-specific hooks for new plugins:
+Read your plugin's resolved settings from `api.pluginConfig` inside the
+registration closure. Typed hooks do not receive a universal
+`event.context.pluginConfig` field; that field belongs to the internal
+`api.registerHook(...)` event contract.
+By default in hybrid reload mode, editing `plugins.entries.<id>.config` replaces the
+plugin instance and reruns registration with the new settings.
 
-- `before_model_resolve`: receives only the current prompt and attachment
-  metadata. Return `providerOverride` or `modelOverride`.
-- `agent_turn_prepare`: receives the current prompt, prepared session messages,
-  and any exactly-once queued injections drained for this session. Return
-  `prependContext` or `appendContext`.
-- `before_prompt_build`: receives the current prompt and session messages.
-  Return `prependContext`, `appendContext`, `systemPrompt`,
-  `prependSystemContext`, or `appendSystemContext`.
-- `heartbeat_prompt_contribution`: runs only for heartbeat turns and returns
-  `prependContext` or `appendContext`. It is intended for background monitors
-  that need to summarize current state without changing user-initiated turns.
+### Choose a hook
 
-`before_agent_start` remains for compatibility. Prefer the explicit hooks above
-so your plugin does not depend on a legacy combined phase.
+| Task                                               | Hook                                                                        |
+| -------------------------------------------------- | --------------------------------------------------------------------------- |
+| Reply without a model call                         | `before_agent_reply` → `{ handled: true, reply }`; omit `reply` for silence |
+| Add context or narrow tools for a turn             | `before_prompt_build`                                                       |
+| Gate model input on a supported runner             | `before_agent_run` → `{ outcome: "block", reason, message? }`               |
+| Block a tool or request approval                   | `before_tool_call`                                                          |
+| Rewrite the full outgoing reply, including media   | `reply_payload_sending`                                                     |
+| Rewrite outgoing text or cancel a send             | `message_sending`                                                           |
+| Collect model timing without raw conversation text | `model_call_started` / `model_call_ended`                                   |
+| Flush state after a turn or at shutdown            | `agent_end` / `gateway_stop`                                                |
 
-`before_agent_run` runs after prompt construction and before any model input,
-including prompt-local image loading and `llm_input` observation. It receives
-the current user input as `prompt`, plus loaded session history in `messages`
-and the active system prompt. Return `{ outcome: "block", reason, message? }`
-to stop the run before the model can read the prompt. `reason` is internal;
-`message` is the user-facing replacement. The only supported outcomes are
-`pass` and `block`; unsupported decision shapes fail closed.
+The catalog is the registration API, not a promise that every runtime emits
+every hook. For example, `before_agent_run` is implemented by the embedded and
+CLI runners and by Gateway admission for OpenClaw node worker turns. Node admission
+supplies the Gateway's triggering prompt and loaded history before persisting the
+user message or launching the worker. Blocks and hook failures persist only the
+redacted block message. Node admission omits `systemPrompt`: the node assembles its
+bootstrap and skill context afterward. Policies that require that final context
+must use a supported local runner. Do not rely on this hook as a Codex or Copilot input gate. Native tool,
+transcript, and compaction boundaries also differ. See
+[Codex hook boundaries](/plugins/codex-harness-runtime#hook-boundaries) and
+[Agent harness plugins](/plugins/sdk-agent-harness).
 
-When a run is blocked, OpenClaw stores only the replacement text in
-`message.content` plus non-sensitive block metadata such as the blocking plugin
-id and timestamp. The original user text is not retained in transcript or future
-context. Internal block reasons are treated as sensitive and excluded from
-transcript, history, broadcast, log, and diagnostics payloads. Observability
-should use sanitized fields such as blocker id, outcome, timestamp, or a safe
-category.
+## Troubleshooting
 
-`before_agent_start` and `agent_end` include `event.runId` when OpenClaw can
-identify the active run. The same value is also available on `ctx.runId`.
-Cron-driven runs also expose `ctx.jobId` (the originating cron job id) so
-plugin hooks can scope metrics, side effects, or state to a specific scheduled
-job.
-
-For channel-originated runs, `ctx.messageProvider` is the provider surface such
-as `discord` or `telegram`, while `ctx.channelId` is the conversation target
-identifier when OpenClaw can derive one from the session key or delivery
-metadata.
-
-`agent_end` is an observation hook and runs fire-and-forget after the turn. The
-hook runner applies a 30 second timeout so a wedged plugin or embedding
-endpoint cannot leave the hook promise pending forever. A timeout is logged and
-OpenClaw continues; it does not cancel plugin-owned network work unless the
-plugin also uses its own abort signal.
-
-Use `model_call_started` and `model_call_ended` for provider-call telemetry
-that should not receive raw prompts, history, responses, headers, request
-bodies, or provider request IDs. These hooks include stable metadata such as
-`runId`, `callId`, `provider`, `model`, optional `api`/`transport`, terminal
-`durationMs`/`outcome`, and `upstreamRequestIdHash` when OpenClaw can derive a
-bounded provider request-id hash. When the runtime has resolved context-window
-metadata, the hook event and context also include `contextTokenBudget`, the
-effective token budget after model/config/agent caps, plus
-`contextWindowSource` and `contextWindowReferenceTokens` when a lower cap was
-applied.
-
-`before_agent_finalize` runs only when a harness is about to accept a natural
-final assistant answer. It is not the `/stop` cancellation path and does not
-run when the user aborts a turn. Return `{ action: "revise", reason }` to ask
-the harness for one more model pass before finalization, `{ action:
-"finalize", reason? }` to force finalization, or omit a result to continue.
-Codex native `Stop` hooks are relayed into this hook as OpenClaw
-`before_agent_finalize` decisions.
-
-When returning `action: "revise"`, plugins can include `retry` metadata to make
-the extra model pass bounded and replay-safe:
-
-```typescript
-type BeforeAgentFinalizeRetry = {
-  instruction: string;
-  idempotencyKey?: string;
-  maxAttempts?: number;
-};
-```
-
-`instruction` is appended to the revision reason sent to the harness.
-`idempotencyKey` lets the host count retries for the same plugin request across
-equivalent finalize decisions, and `maxAttempts` caps how many extra passes the
-host will allow before continuing with the natural final answer.
-
-Non-bundled plugins that need raw conversation hooks (`before_model_resolve`,
-`before_agent_reply`, `llm_input`, `llm_output`, `before_agent_finalize`,
-`agent_end`, or `before_agent_run`) must set:
-
-```json
-{
-  "plugins": {
-    "entries": {
-      "my-plugin": {
-        "hooks": {
-          "allowConversationAccess": true
-        }
-      }
-    }
-  }
-}
-```
-
-Prompt-mutating hooks and durable next-turn injections can be disabled per plugin
-with `plugins.entries.<id>.hooks.allowPromptInjection=false`.
-
-### Session extensions and next-turn injections
-
-Workflow plugins can persist small JSON-compatible session state with
-`api.registerSessionExtension(...)` and update it through the Gateway
-`sessions.pluginPatch` method. Session rows project registered extension state
-through `pluginExtensions`, letting Control UI and other clients render
-plugin-owned status without learning plugin internals.
-
-Use `api.enqueueNextTurnInjection(...)` when a plugin needs durable context to
-reach the next model turn exactly once. OpenClaw drains queued injections before
-prompt hooks, drops expired injections, and deduplicates by `idempotencyKey`
-per plugin. This is the right seam for approval resumes, policy summaries,
-background monitor deltas, and command continuations that should be visible to
-the model on the next turn but should not become permanent system prompt text.
-
-Cleanup semantics are part of the contract. Session extension cleanup and
-runtime lifecycle cleanup callbacks receive `reset`, `delete`, `disable`, or
-`restart`. The host removes the owning plugin's persistent session extension
-state and pending next-turn injections for reset/delete/disable; restart keeps
-durable session state while cleanup callbacks let plugins release scheduler
-jobs, run context, and other out-of-band resources for the old runtime
-generation.
-
-## Message hooks
-
-Use message hooks for channel-level routing and delivery policy:
-
-- `message_received`: observe inbound content, sender, `threadId`, `messageId`,
-  `senderId`, optional run/session correlation, and metadata.
-- `message_sending`: rewrite `content` or return `{ cancel: true }`.
-- `message_sent`: observe final success or failure.
-
-For audio-only TTS replies, `content` may contain the hidden spoken transcript
-even when the channel payload has no visible text/caption. Rewriting that
-`content` updates the hook-visible transcript only; it is not rendered as a
-media caption.
-
-Message hook contexts expose stable correlation fields when available:
-`ctx.sessionKey`, `ctx.runId`, `ctx.messageId`, `ctx.senderId`, `ctx.trace`,
-`ctx.traceId`, `ctx.spanId`, `ctx.parentSpanId`, and `ctx.callDepth`. Prefer
-these first-class fields before reading legacy metadata.
-
-Prefer typed `threadId` and `replyToId` fields before using channel-specific
-metadata.
-
-Decision rules:
-
-- `message_sending` with `cancel: true` is terminal.
-- `message_sending` with `cancel: false` is treated as no decision.
-- Rewritten `content` continues to lower-priority hooks unless a later hook
-  cancels delivery.
-- `message_sending` can return `cancelReason` and bounded `metadata` with a
-  cancellation. New message lifecycle APIs expose this as a suppressed delivery
-  outcome with reason `cancelled_by_message_sending_hook`; legacy direct
-  delivery keeps returning an empty result array for compatibility.
-- `message_sent` is observation-only. Handler failures are logged and do not
-  change the delivery result.
-
-## Install hooks
-
-`before_install` runs after the built-in scan for skill and plugin installs.
-Return additional findings or `{ block: true, blockReason }` to stop the
-install.
-
-`block: true` is terminal. `block: false` is treated as no decision.
-
-## Gateway lifecycle
-
-Use `gateway_start` for plugin services that need Gateway-owned state. The
-context exposes `ctx.config`, `ctx.workspaceDir`, and `ctx.getCron?.()` for
-cron inspection and updates. Use `gateway_stop` to clean up long-running
-resources.
-
-Do not rely on the internal `gateway:startup` hook for plugin-owned runtime
-services.
-
-`cron_changed` fires for gateway-owned cron lifecycle events with a typed
-event payload covering `added`, `updated`, `removed`, `started`, `finished`,
-and `scheduled` reasons. The event carries a `PluginHookGatewayCronJob`
-snapshot (including `state.nextRunAtMs`, `state.lastRunStatus`, and
-`state.lastError` when present) plus a `PluginHookGatewayCronDeliveryStatus`
-of `not-requested` | `delivered` | `not-delivered` | `unknown`. Removed
-events still carry the deleted job snapshot so external schedulers can
-reconcile state. Use `ctx.getCron?.()` and `ctx.config` from the runtime
-context when syncing external wake schedulers, and keep OpenClaw as the
-source of truth for due checks and execution.
+| Symptom                                    | Check                                                                                                                                                                                                                                                          |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Plugin loads but the handler never runs    | Use `api.on` for typed names, inspect `openclaw plugins inspect <id> --runtime --json`, and check diagnostics for blocked registrations. Runtime inspection loads the plugin in the inspecting process; use `openclaw plugins reload <id>` after code changes. |
+| Conversation hook is blocked               | Set `plugins.entries.<id>.hooks.allowConversationAccess: true`; for prompt hooks, also check that `allowPromptInjection` is not `false`. These keys belong under `hooks`, not the plugin's `config`.                                                           |
+| Hook works for one runtime or trigger only | Check the runtime boundary and `eligibleTriggers`. Missing context fields are not proof of a different sender, agent, or authorization state.                                                                                                                  |
+| Persistence rewrite has no effect          | Return `{ message }` synchronously. An `async` handler's result is ignored.                                                                                                                                                                                    |
+| A timed-out hook still performs work       | Timeout ends the host's await, not plugin work. Pass available abort signals through I/O and bound plugin-owned work yourself.                                                                                                                                 |
+| One plugin's rewrite disappears            | Check the hook's merge rule and priority. `message_sending` uses the last returned content; `reply_payload_sending` passes each updated payload onward.                                                                                                        |
 
 ## Upcoming deprecations
 
-A few hook-adjacent surfaces are deprecated but still supported. Migrate
-before the next major release:
+A few hook-adjacent surfaces are deprecated but still supported. Removal
+eligibility is tracked per surface in the plugin compatibility registry, as a
+`removeAfter` date or an explicit removal gate, not at a major-version
+boundary. Migrate now:
 
 - **Plaintext channel envelopes** in `inbound_claim` and `message_received`
-  handlers. Read `BodyForAgent` and the structured user-context blocks
-  instead of parsing flat envelope text. See
-  [Plaintext channel envelopes → BodyForAgent](/plugins/sdk-migration#active-deprecations).
-- **`before_agent_start`** remains for compatibility. New plugins should use
-  `before_model_resolve` and `before_prompt_build` instead of the combined
-  phase.
-- **`deactivate`** remains as a deprecated cleanup compatibility alias until
-  after 2026-08-16. New plugins should use `gateway_stop`.
+  handlers. Prefer typed fields instead of parsing flat envelope text:
+  `inbound_claim` exposes `event.bodyForAgent`; `message_received` exposes
+  `event.content` and structured metadata, not a `BodyForAgent` field. See
+  [Plaintext channel envelopes → BodyForAgent](/plugins/sdk-migration#removal-timeline).
 - **`onResolution` in `before_tool_call`** now uses the typed
   `PluginApprovalResolution` union (`allow-once` / `allow-always` / `deny` /
   `timeout` / `cancelled`) instead of a free-form `string`.
+- **`api.registerSessionExtension` / `api.enqueueNextTurnInjection`** remain
+  as top-level compatibility aliases. New plugins should use
+  `api.session.state.registerSessionExtension(...)` and
+  `api.session.workflow.enqueueNextTurnInjection(...)`.
 
 For the full list - memory capability registration, provider thinking
 profile, external auth providers, provider discovery types, task runtime
 accessors, and the `command-auth` → `command-status` rename - see
-[Plugin SDK migration → Active deprecations](/plugins/sdk-migration#active-deprecations).
+[Plugin SDK migration → Active deprecations](/plugins/sdk-migration#removal-timeline).
+
+## Where each section moved
+
+Every section of the single-page version now lives on this page or on one of
+the five child pages below. The anchors from the single-page version still
+resolve here.
+
+### Hook reference
+
+[Hook reference](/plugins/hooks/reference) — Registration rules, execution contracts, per-handler budgets, and the complete typed hook catalog.
+
+- <a id="registration-and-execution"></a>[Registration and execution](/plugins/hooks/reference#registration-and-execution)
+- <a id="hook-catalog"></a>[Hook catalog](/plugins/hooks/reference#hook-catalog)
+- <a id="skill-lifecycle-and-evaluation"></a>[Skill lifecycle](/plugins/hooks/reference#skill-lifecycle)
+- <a id="channel-pairing-requests"></a>[Channel pairing requests](/plugins/hooks/reference#channel-pairing-requests)
+
+### Tool call policy hooks
+
+[Tool call policy hooks](/plugins/hooks/tool-policy) — Parameter rewrites, blocks, approvals, exec environment contributions, and transcript persistence.
+
+- <a id="tool-call-policy"></a>[Tool call policy](/plugins/hooks/tool-policy#tool-call-policy)
+- <a id="sender-aware-policy-in-one-file"></a>[Sender-aware policy in one file](/plugins/hooks/tool-policy#sender-aware-policy-in-one-file)
+- <a id="exec-environment-hook"></a>[Exec environment hook](/plugins/hooks/tool-policy#exec-environment-hook)
+- <a id="tool-result-persistence"></a>[Tool result persistence](/plugins/hooks/tool-policy#tool-result-persistence)
+
+### Prompt and session hooks
+
+[Prompt and session hooks](/plugins/hooks/prompt-and-session) — Model resolution, prompt construction, finalization, and durable plugin-owned session state.
+
+- <a id="debug-runtime-hooks"></a>[Debug runtime hooks](/plugins/hooks/prompt-and-session#debug-runtime-hooks)
+- <a id="prompt-and-model-hooks"></a>[Prompt and model hooks](/plugins/hooks/prompt-and-session#prompt-and-model-hooks)
+- <a id="authorized-prompt-enrichment"></a>[Authorized prompt enrichment](/plugins/hooks/prompt-and-session#authorized-prompt-enrichment)
+- <a id="session-extensions-and-next-turn-injections"></a>[Session extensions and next-turn injections](/plugins/hooks/prompt-and-session#session-extensions-and-next-turn-injections)
+
+### Message and delivery hooks
+
+[Message and delivery hooks](/plugins/hooks/messages) — Inbound interception, reply takeover, and outbound delivery policy.
+
+- <a id="message-hooks"></a>[Message hooks](/plugins/hooks/messages#message-hooks)
+
+### Gateway and install lifecycle hooks
+
+[Gateway and install lifecycle hooks](/plugins/hooks/lifecycle) — Install-time checks, Gateway service lifecycle, and safe external cron projection.
+
+- <a id="install-hooks"></a>[Install hooks](/plugins/hooks/lifecycle#install-hooks)
+- <a id="gateway-lifecycle"></a>[Gateway lifecycle](/plugins/hooks/lifecycle#gateway-lifecycle)
+- <a id="safe-external-cron-projection"></a>[Safe external cron projection](/plugins/hooks/lifecycle#safe-external-cron-projection)
 
 ## Related
 
@@ -456,4 +273,5 @@ accessors, and the `command-auth` → `command-status` rename - see
 - [Plugin SDK overview](/plugins/sdk-overview)
 - [Plugin entry points](/plugins/sdk-entrypoints)
 - [Internal hooks](/automation/hooks)
+- [Webhooks](/automation/cron-jobs#webhooks)
 - [Plugin architecture internals](/plugins/architecture-internals)

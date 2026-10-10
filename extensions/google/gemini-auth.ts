@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parseGoogleOauthApiKey } from "./oauth-token-shared.js";
 
 export function parseGeminiAuth(apiKey: string): { headers: Record<string, string> } {
@@ -17,4 +18,11 @@ export function parseGeminiAuth(apiKey: string): { headers: Record<string, strin
       "Content-Type": "application/json",
     },
   };
+}
+
+export function resolveGoogleEnvApiKey(): string | undefined {
+  return (
+    normalizeOptionalString(process.env.GEMINI_API_KEY) ??
+    normalizeOptionalString(process.env.GOOGLE_API_KEY)
+  );
 }

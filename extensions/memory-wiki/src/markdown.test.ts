@@ -1,11 +1,30 @@
+// Memory Wiki tests cover markdown plugin behavior.
 import { createHash } from "node:crypto";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   createWikiPageFilename,
+  extractHumanNotesBlock,
+  parseWikiMarkdown,
+  preserveHumanNotesBlock,
   renderWikiMarkdown,
+  scanWikiPageSummary,
   slugifyWikiSegment,
   toWikiPageSummary,
+  WIKI_RAW_SOURCE_MARKER,
 } from "./markdown.js";
+
+function scanWikiLinkTargets(markdown: string, relativePath: string): string[] {
+  const result = scanWikiPageSummary({
+    absolutePath: path.join("/tmp/wiki", relativePath),
+    relativePath,
+    raw: markdown,
+  });
+  if (result.status !== "valid") {
+    throw new Error(`Expected valid wiki page scan, got ${result.status}`);
+  }
+  return result.page.linkTargets;
+}
 
 describe("slugifyWikiSegment", () => {
   it("preserves Unicode letters and numbers in wiki slugs", () => {
@@ -48,7 +67,264 @@ describe("slugifyWikiSegment", () => {
   });
 });
 
+describe("human Notes blocks", () => {
+  const startMarker = "<!-- openclaw:human:start -->";
+  const endMarker = "<!-- openclaw:human:end -->";
+  const rendered = ["# Source", "", "## Notes", startMarker, endMarker, ""].join("\n");
+
+  it("extracts and preserves complete human Notes blocks", () => {
+    const existing = rendered.replace(
+      `${startMarker}\n${endMarker}`,
+      `${startMarker}\nDurable human annotation\n${endMarker}`,
+    );
+
+    expect(extractHumanNotesBlock(existing)).toBe(
+      `${startMarker}\nDurable human annotation\n${endMarker}`,
+    );
+    expect(preserveHumanNotesBlock(rendered, existing)).toBe(existing);
+    expect(extractHumanNotesBlock(rendered)).toBeNull();
+  });
+
+  it("leaves pages without human Notes markers unchanged", () => {
+    const existing = "# Source\n\nGenerated content only.\n";
+
+    expect(extractHumanNotesBlock(existing)).toBeNull();
+    expect(preserveHumanNotesBlock(rendered, existing)).toBe(rendered);
+    expect(preserveHumanNotesBlock(existing, rendered)).toBe(existing);
+  });
+
+  it.each([
+    {
+      name: "closing",
+      lines: [startMarker, "Durable human annotation"],
+      missingMarker: endMarker,
+    },
+    {
+      name: "opening",
+      lines: ["Durable human annotation", endMarker],
+      missingMarker: startMarker,
+    },
+  ])(
+    "rejects a missing $name marker before extracting or replacing Notes",
+    ({ lines, missingMarker }) => {
+      const malformed = ["# Source", "", "## Notes", ...lines, ""].join("\n");
+      const expectedError = `Memory Wiki human Notes are missing ${missingMarker}; restore the missing marker before updating or removing this page`;
+
+      expect(() => extractHumanNotesBlock(malformed)).toThrow(expectedError);
+      expect(() => preserveHumanNotesBlock(rendered, malformed)).toThrow(expectedError);
+      expect(() => preserveHumanNotesBlock(malformed, rendered)).toThrow(expectedError);
+    },
+  );
+
+  it.each([startMarker, endMarker])(
+    "ignores a standalone marker inside fenced source content",
+    (marker) => {
+      const existing = ["# Source", "", "## Content", "```text", marker, "```", ""].join("\n");
+
+      expect(extractHumanNotesBlock(existing)).toBeNull();
+      expect(preserveHumanNotesBlock(rendered, existing)).toBe(rendered);
+    },
+  );
+
+  it("preserves marker comments embedded in complete human Notes", () => {
+    const notes = [
+      "Before copied markers",
+      startMarker,
+      "Between copied markers",
+      endMarker,
+      "After copied markers",
+    ].join("\n");
+    const existing = rendered.replace(
+      `${startMarker}\n${endMarker}`,
+      `${startMarker}\n${notes}\n${endMarker}`,
+    );
+
+    expect(extractHumanNotesBlock(existing)).toBe(`${startMarker}\n${notes}\n${endMarker}`);
+    expect(preserveHumanNotesBlock(rendered, existing)).toBe(existing);
+  });
+
+  it("ignores source-body marker pairs when extracting and preserving actual Notes", () => {
+    const sourceWithMarkers = [
+      "# Source",
+      "",
+      "## Content",
+      "```text",
+      startMarker,
+      "Generated source annotation",
+      endMarker,
+      "```",
+      "",
+      "## Notes",
+      startMarker,
+      "Durable human annotation",
+      endMarker,
+      "",
+    ].join("\n");
+
+    expect(extractHumanNotesBlock(sourceWithMarkers)).toBe(
+      `${startMarker}\nDurable human annotation\n${endMarker}`,
+    );
+    expect(preserveHumanNotesBlock(rendered, sourceWithMarkers)).toBe(
+      rendered.replace(
+        `${startMarker}\n${endMarker}`,
+        `${startMarker}\nDurable human annotation\n${endMarker}`,
+      ),
+    );
+  });
+});
+
 describe("toWikiPageSummary", () => {
+  it("can omit link extraction without changing parsed content or other metadata", () => {
+    const params = {
+      absolutePath: "/tmp/wiki/sources/alpha.md",
+      relativePath: "sources/alpha.md",
+      raw: renderWikiMarkdown({
+        frontmatter: {
+          title: "Alpha",
+          sourceType: "memory-bridge",
+          bridgeAgentIds: ["main"],
+          privacyTier: "private",
+          claims: [{ text: "Cobalt lantern", evidence: [{ sourceId: "source.alpha" }] }],
+        },
+        body: "[[concepts/visible]]\n`[[concepts/inline]]`\n```\n[[concepts/fenced]]\n```\n",
+      }),
+    };
+    const full = scanWikiPageSummary(params);
+    expect(full.status).toBe("valid");
+    if (full.status !== "valid") {
+      throw new Error("Expected a valid page");
+    }
+    expect(full.page.linkTargets).toEqual(["concepts/visible"]);
+    expect(scanWikiPageSummary({ ...params, includeLinks: false })).toEqual({
+      ...full,
+      page: { ...full.page, linkTargets: [] },
+    });
+    expect(toWikiPageSummary(params)).toEqual(full.page);
+  });
+
+  it("marks raw and generated source body metadata", () => {
+    function sourceSummary(fileName: string, raw: string) {
+      return toWikiPageSummary({
+        absolutePath: `/tmp/wiki/sources/${fileName}.md`,
+        relativePath: `sources/${fileName}.md`,
+        raw,
+      });
+    }
+    const emptyNotes = "## Notes\n<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->\n";
+    const sourceBody = (title: string, metadata: string) =>
+      `# ${title}\n\n${metadata}\n\n## Content\nalpha\n\n${emptyNotes}`;
+    const bridgeBody = sourceBody("Memory Bridge: Alpha", "## Bridge Source");
+    const localBody = sourceBody(
+      "Alpha",
+      "## Source\n- Type: `local-file`\n- Path: `/tmp/source.md`",
+    );
+    const rawSource = sourceSummary(
+      "raw-alpha",
+      `# Raw Alpha Source\n\n${WIKI_RAW_SOURCE_MARKER}\n\nRaw source notes.\n`,
+    );
+    const rawSourceWithImportWords = sourceSummary(
+      "raw-import-words",
+      "# Raw Source\n\nsourceType: memory-bridge\n\n## Bridge Source\n",
+    );
+    const rawSourceWithIndentedMarker = sourceSummary(
+      "raw-indented-marker",
+      `# Raw Source\n\n    ${WIKI_RAW_SOURCE_MARKER}\n`,
+    );
+    const rawSourceWithQuotedWrapper = sourceSummary(
+      "raw-quoted-wrapper",
+      `# Raw Source\n\nCopied import example:\n\n${bridgeBody}`,
+    );
+    const rawSourceWithQuotedLocalFileWrapper = sourceSummary(
+      "raw-quoted-local-file-wrapper",
+      `# Raw Source\n\n${WIKI_RAW_SOURCE_MARKER}\n\nCopied local-file import example:\n\n## Source\n- Type: \`local-file\`\n\n## Content\nalpha\n\n${emptyNotes}`,
+    );
+    const bridgeSource = sourceSummary("bridge-alpha", bridgeBody);
+    const unsafeLocalSource = sourceSummary(
+      "unsafe-local-alpha",
+      sourceBody("Unsafe Local Import: alpha.md", "## Unsafe Local Source"),
+    );
+    const localFileSource = sourceSummary("local-alpha", localBody);
+    const markedLocalFileSource = sourceSummary(
+      "local-marked-alpha",
+      localBody.replace("# Alpha\n", `# Alpha\n\n${WIKI_RAW_SOURCE_MARKER}\n`),
+    );
+    const leadingMarkedLocalFileSource = sourceSummary(
+      "local-leading-marked-alpha",
+      `${WIKI_RAW_SOURCE_MARKER}\n\n${localBody}`,
+    );
+    const partialFrontmatterLocalFileSource = sourceSummary(
+      "local-partial-frontmatter-alpha",
+      renderWikiMarkdown({
+        frontmatter: { id: "source.partial", title: "Partial Source" },
+        body: `${WIKI_RAW_SOURCE_MARKER}\n\n${localBody}`,
+      }),
+    );
+    const chatGptSource = sourceSummary(
+      "chatgpt-alpha",
+      `# ChatGPT Export: Alpha\n\n## Source\n- Conversation id: \`abc123\`\n- Export file: \`/tmp/conversations.json\`\n\n## Active Branch Transcript\n### User\nalpha\n\n${emptyNotes}`,
+    );
+    const structuredSource = sourceSummary(
+      "structured-alpha",
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.alpha", title: "Alpha Source" },
+        body: "# Alpha Source\n",
+      }),
+    );
+    const rawSourceWithNativeFrontmatter = sourceSummary(
+      "native-frontmatter",
+      `---\ntags:\n  - alpha\n---\n\n# Native Frontmatter\n\n${WIKI_RAW_SOURCE_MARKER}\n\nRaw notes.\n`,
+    );
+    const wikiSourceWithRawMarker = sourceSummary(
+      "wiki-frontmatter",
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", title: "Damaged Wiki Source" },
+        body: `# Damaged Wiki Source\n\n${WIKI_RAW_SOURCE_MARKER}\n`,
+      }),
+    );
+    const crlfStructuredSource = sourceSummary(
+      "crlf-structured-alpha",
+      "---\r\npageType: source\r\nid: source.crlf\r\ntitle: CRLF Source\r\n---\r\n\r\n# CRLF Source\r\n",
+    );
+
+    expect(rawSource?.hasFrontmatter).toBe(false);
+    expect(rawSource?.importedSourceBody).toBeUndefined();
+    expect(rawSource?.generatedSourceBody).toBeUndefined();
+    expect(rawSource?.unmanagedRawSourceBody).toBe(true);
+    expect(rawSourceWithImportWords?.importedSourceBody).toBeUndefined();
+    expect(rawSourceWithImportWords?.generatedSourceBody).toBeUndefined();
+    expect(rawSourceWithImportWords?.unmanagedRawSourceBody).toBeUndefined();
+    expect(rawSourceWithIndentedMarker?.unmanagedRawSourceBody).toBeUndefined();
+    expect(rawSourceWithQuotedWrapper?.importedSourceBody).toBeUndefined();
+    expect(rawSourceWithQuotedWrapper?.generatedSourceBody).toBeUndefined();
+    expect(rawSourceWithQuotedWrapper?.unmanagedRawSourceBody).toBeUndefined();
+    expect(rawSourceWithQuotedLocalFileWrapper?.generatedSourceBody).toBeUndefined();
+    expect(rawSourceWithQuotedLocalFileWrapper?.unmanagedRawSourceBody).toBe(true);
+    expect(bridgeSource?.hasFrontmatter).toBe(false);
+    expect(bridgeSource?.importedSourceBody).toBe("bridge");
+    expect(bridgeSource?.generatedSourceBody).toBe("bridge");
+    expect(unsafeLocalSource?.hasFrontmatter).toBe(false);
+    expect(unsafeLocalSource?.importedSourceBody).toBe("unsafe-local");
+    expect(unsafeLocalSource?.generatedSourceBody).toBe("unsafe-local");
+    expect(localFileSource?.generatedSourceBody).toBe("local-file");
+    expect(markedLocalFileSource?.generatedSourceBody).toBe("local-file");
+    expect(markedLocalFileSource?.unmanagedRawSourceBody).toBeUndefined();
+    expect(leadingMarkedLocalFileSource?.generatedSourceBody).toBe("local-file");
+    expect(leadingMarkedLocalFileSource?.unmanagedRawSourceBody).toBeUndefined();
+    expect(partialFrontmatterLocalFileSource?.generatedSourceBody).toBe("local-file");
+    expect(partialFrontmatterLocalFileSource?.unmanagedRawSourceBody).toBeUndefined();
+    expect(chatGptSource?.generatedSourceBody).toBe("chatgpt-export");
+    expect(structuredSource?.hasFrontmatter).toBe(true);
+    expect(structuredSource?.importedSourceBody).toBeUndefined();
+    expect(structuredSource?.generatedSourceBody).toBeUndefined();
+    expect(structuredSource?.unmanagedRawSourceBody).toBeUndefined();
+    expect(rawSourceWithNativeFrontmatter?.hasFrontmatter).toBe(true);
+    expect(rawSourceWithNativeFrontmatter?.unmanagedRawSourceBody).toBe(true);
+    expect(wikiSourceWithRawMarker?.hasFrontmatter).toBe(true);
+    expect(wikiSourceWithRawMarker?.unmanagedRawSourceBody).toBeUndefined();
+    expect(crlfStructuredSource?.hasFrontmatter).toBe(true);
+    expect(crlfStructuredSource?.pageType).toBe("source");
+  });
+
   it("normalizes agent-facing people wiki metadata", () => {
     const raw = renderWikiMarkdown({
       frontmatter: {
@@ -144,5 +420,157 @@ describe("toWikiPageSummary", () => {
         privacyTier: "local-private",
       },
     ]);
+  });
+
+  it("reports and excludes unparsable frontmatter from page scans (#96125)", () => {
+    const raw = [
+      "---",
+      "pageType: synthesis",
+      "id: synthesis.test",
+      "sourceIds:",
+      '  - **MEMORY.md line 235**:"some quoted, value"',
+      "---",
+      "",
+      "# Test Title",
+      "",
+      "Body text that should be preserved.",
+    ].join("\n");
+
+    const params = {
+      absolutePath: "/tmp/wiki/syntheses/test.md",
+      relativePath: "syntheses/test.md",
+      raw,
+    };
+    const result = scanWikiPageSummary(params);
+    if (result.status !== "invalid-frontmatter") {
+      throw new Error("expected invalid frontmatter result");
+    }
+
+    expect(result.error.relativePath).toBe("syntheses/test.md");
+    expect(result.error.message).toContain("Unexpected scalar");
+    expect(toWikiPageSummary(params)).toBeNull();
+    expect(() => parseWikiMarkdown(raw)).toThrow("Unexpected scalar");
+  });
+
+  it.each([
+    { name: "sequence", frontmatter: "- pageType: synthesis" },
+    { name: "scalar", frontmatter: "synthesis" },
+  ])("reports and excludes $name frontmatter roots from page scans", ({ frontmatter }) => {
+    const raw = ["---", frontmatter, "---", "", "# Invalid Root"].join("\n");
+    const params = {
+      absolutePath: "/tmp/wiki/syntheses/invalid-root.md",
+      relativePath: "syntheses/invalid-root.md",
+      raw,
+    };
+    const result = scanWikiPageSummary(params);
+    if (result.status !== "invalid-frontmatter") {
+      throw new Error("expected invalid frontmatter result");
+    }
+
+    expect(result.error.message).toBe("Wiki frontmatter must be a YAML mapping");
+    expect(toWikiPageSummary(params)).toBeNull();
+    expect(() => parseWikiMarkdown(raw)).toThrow("Wiki frontmatter must be a YAML mapping");
+  });
+
+  it("preserves frontmatter and body for valid YAML (#96125 control)", () => {
+    const raw = [
+      "---",
+      "pageType: synthesis",
+      "id: synthesis.healthy",
+      "sourceIds:",
+      "  - source.alpha",
+      "---",
+      "",
+      "# Healthy Page",
+      "",
+      "Healthy body.",
+    ].join("\n");
+
+    const summary = toWikiPageSummary({
+      absolutePath: "/tmp/wiki/syntheses/healthy.md",
+      relativePath: "syntheses/healthy.md",
+      raw,
+    });
+    if (!summary) {
+      throw new Error("expected wiki summary");
+    }
+
+    expect(summary.hasFrontmatter).toBe(true);
+    expect(summary.title).toBe("Healthy Page");
+    expect(summary.id).toBe("synthesis.healthy");
+    expect(summary.sourceIds).toEqual(["source.alpha"]);
+    expect(summary.pageType).toBe("synthesis");
+  });
+});
+
+describe("scanWikiPageSummary linkTargets", () => {
+  it("accepts a closing fence longer than the opening fence (#97945)", () => {
+    // CommonMark allows the closing fence to be the same or longer than the
+    // opening fence.  A `` ``` `` opener with a `` ```` `` closer must still
+    // strip the block so the Scala generic inside is not extracted.
+    const markdown = [
+      "# Longer Close",
+      "",
+      "```scala",
+      "def handle(req: Request[A]): Future[Option[User]] = ???",
+      "````",
+      "",
+      "Prose: [[RealTarget]]",
+    ].join("\n");
+    const links = scanWikiLinkTargets(markdown, "entities/test.md");
+    expect(links).toEqual(["RealTarget"]);
+  });
+
+  it("does not leak [[…]] when a shorter fence-like line appears inside a longer fenced block (#97945)", () => {
+    // A 6-backtick block containing a shorter 3-backtick line before the real
+    // 6-backtick close must not cause the scanner to exit early.
+    const markdown = [
+      "# Long Fence With Shorter Inner Line",
+      "",
+      "``````bash",
+      "some code",
+      "```",
+      "[[not-a-link]]",
+      "``````",
+      "",
+      "After fence: [[RealPage]]",
+    ].join("\n");
+    const links = scanWikiLinkTargets(markdown, "entities/test.md");
+    expect(links).toEqual(["RealPage"]);
+  });
+
+  it.each([
+    {
+      name: "an invalid backtick info string",
+      markdown: "```lang`oops\n[[RealPage]]",
+      expected: ["RealPage"],
+    },
+    {
+      name: "an unmatched backtick run",
+      markdown: "```foo``\n[[RealPage]]",
+      expected: ["RealPage"],
+    },
+    {
+      name: "a fenced block inside a blockquote",
+      markdown: "> ```bash\n> [[not-a-link]]\n> ```\n\n[[RealPage]]",
+      expected: ["RealPage"],
+    },
+    {
+      name: "a fenced block inside a list",
+      markdown: "- ```bash\n  [[not-a-link]]\n  ```\n\n[[RealPage]]",
+      expected: ["RealPage"],
+    },
+    {
+      name: "a multiline code span",
+      markdown: "``\n[[not-a-link]]\n`` and [[RealPage]]",
+      expected: ["RealPage"],
+    },
+    {
+      name: "separate multi-backtick code spans",
+      markdown: "``code`` [[RealPage]] ``more``",
+      expected: ["RealPage"],
+    },
+  ])("handles $name without hiding prose links", ({ markdown, expected }) => {
+    expect(scanWikiLinkTargets(markdown, "entities/test.md")).toEqual(expected);
   });
 });

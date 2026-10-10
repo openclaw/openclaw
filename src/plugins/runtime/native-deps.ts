@@ -1,4 +1,4 @@
-export type NativeDependencyHintParams = {
+type NativeDependencyHintParams = {
   packageName: string;
   manager?: "pnpm" | "npm" | "yarn";
   rebuildCommand?: string;
@@ -10,11 +10,7 @@ export function formatNativeDependencyHint(params: NativeDependencyHintParams): 
   const manager = params.manager ?? "pnpm";
   const rebuildCommand =
     params.rebuildCommand ??
-    (manager === "npm"
-      ? `npm rebuild ${params.packageName}`
-      : manager === "yarn"
-        ? `yarn rebuild ${params.packageName}`
-        : `pnpm rebuild ${params.packageName}`);
+    `${manager === "npm" || manager === "yarn" ? manager : "pnpm"} rebuild ${params.packageName}`;
   const approveBuildsCommand =
     params.approveBuildsCommand ??
     (manager === "pnpm" ? `pnpm approve-builds (select ${params.packageName})` : undefined);

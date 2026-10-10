@@ -1,32 +1,115 @@
-import {
-  isSilentReplyPayloadText,
-  isSilentReplyText,
-  SILENT_REPLY_TOKEN,
-  startsWithSilentToken,
-  stripLeadingSilentToken,
-  stripSilentToken,
-} from "../tokens.js";
-import { stripInternalMetadataForDisplay } from "./display-text-sanitize.js";
+import type { DurableDeliveryCompletion } from "../../infra/outbound/delivery-queue-types.js";
+import { normalizeReplyPayloadsForDelivery } from "../../infra/outbound/payloads.js";
+import { getReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
+import { normalizeReplyPayload } from "./normalize-reply.js";
+import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery-state.js";
 
-export function sanitizePendingFinalDeliveryText(text: string): string {
-  let stripped = stripInternalMetadataForDisplay(text).trim();
-  if (isSilentReplyPayloadText(stripped, SILENT_REPLY_TOKEN)) {
-    return "";
-  }
-  if (stripped && !isSilentReplyText(stripped, SILENT_REPLY_TOKEN)) {
-    const hasLeadingSilentToken = startsWithSilentToken(stripped, SILENT_REPLY_TOKEN);
-    if (hasLeadingSilentToken) {
-      stripped = stripLeadingSilentToken(stripped, SILENT_REPLY_TOKEN);
+/** Normalize raw final payloads into the channel-agnostic sendable set recovery can mark. */
+export function normalizePendingFinalDeliveryPayloads(
+  payloads: readonly ReplyPayload[],
+): ReplyPayload[] {
+  return normalizeReplyPayloadsForDelivery(normalizePendingFinalRecoveryPayloads(payloads));
+}
+
+/** Normalize raw final payloads for durable recovery without stripping delivery directives. */
+export function normalizePendingFinalRecoveryPayloads(
+  payloads: readonly ReplyPayload[],
+): ReplyPayload[] {
+  return payloads.flatMap(
+    (payload) => normalizeReplyPayload(payload, { applyChannelTransforms: false }) ?? [],
+  );
+}
+
+/** Build durable recovery text only for payload shapes this marker can replay without loss. */
+export function buildRecoverablePendingFinalDeliveryText(
+  payloads: readonly ReplyPayload[],
+): string | undefined {
+  const sendablePayloads: ReplyPayload[] = [];
+  for (const payload of payloads) {
+    if (payload.isReasoning === true) {
+      continue;
+    }
+    const recoveryPayload =
+      payload.replyToId && getReplyPayloadMetadata(payload)?.replyToIdExplicit !== true
+        ? { ...payload, replyToId: undefined }
+        : payload;
+    const deliveryPayloads = normalizeReplyPayloadsForDelivery([recoveryPayload]);
+    if (deliveryPayloads.length === 0) {
+      continue;
     }
     if (
-      hasLeadingSilentToken ||
-      stripped.toLowerCase().includes(SILENT_REPLY_TOKEN.toLowerCase())
+      hasUnsupportedDurableRecoveryShape(recoveryPayload) ||
+      deliveryPayloads.some(hasUnrecoverableNormalizedDeliveryShape)
     ) {
-      stripped = stripSilentToken(stripped, SILENT_REPLY_TOKEN);
+      return undefined;
     }
+    sendablePayloads.push(...deliveryPayloads);
   }
-  if (!stripped.trim()) {
-    return "";
+  if (
+    sendablePayloads.length > 1 &&
+    sendablePayloads.some(
+      (payload) => hasDurableMedia(payload) || /^\s*MEDIA:/imu.test(payload.text ?? ""),
+    )
+  ) {
+    return undefined;
   }
-  return isSilentReplyPayloadText(stripped, SILENT_REPLY_TOKEN) ? "" : stripped.trim();
+
+  const recoveryText = sendablePayloads
+    .map((payload) =>
+      [payload.text, ...(payload.mediaUrls ?? []).map((mediaUrl) => `MEDIA:${mediaUrl}`)]
+        .filter((value): value is string => Boolean(value?.trim()))
+        .join("\n"),
+    )
+    .filter(Boolean);
+  return sanitizePendingFinalDeliveryText(recoveryText.join("\n\n")) || undefined;
+}
+
+export function resolvePendingFinalDeliveryCompletion(
+  payloads: readonly ReplyPayload[] | undefined,
+): Extract<DurableDeliveryCompletion, { kind: "pending-final" }> | undefined {
+  const metadata = payloads
+    ?.map(getReplyPayloadMetadata)
+    .find((candidate) => candidate?.pendingFinalDeliveryCompletion);
+  const completion = metadata?.pendingFinalDeliveryCompletion;
+  return completion
+    ? {
+        kind: "pending-final",
+        ...completion,
+        ...(metadata.sessionWriterDeliveryAuthority
+          ? { sessionWriterDeliveryAuthority: metadata.sessionWriterDeliveryAuthority }
+          : {}),
+      }
+    : undefined;
+}
+
+function hasUnsupportedDurableRecoveryShape(payload: ReplyPayload): boolean {
+  const hasMedia = hasDurableMedia(payload);
+  return (
+    payload.sensitiveMedia === true ||
+    payload.trustedLocalMedia === true ||
+    payload.presentation !== undefined ||
+    payload.interactive !== undefined ||
+    payload.btw !== undefined ||
+    payload.delivery !== undefined ||
+    payload.channelData !== undefined ||
+    payload.location !== undefined ||
+    hasUnrecoverableNormalizedDeliveryShape(payload) ||
+    payload.spokenText !== undefined ||
+    payload.ttsSupplement !== undefined ||
+    (hasMedia && (payload.isCommentary === true || payload.isStatusNotice === true))
+  );
+}
+
+function hasDurableMedia(payload: ReplyPayload): boolean {
+  return Boolean(payload.mediaUrl?.trim() || payload.mediaUrls?.some((url) => url.trim()));
+}
+
+function hasUnrecoverableNormalizedDeliveryShape(payload: ReplyPayload): boolean {
+  return (
+    payload.replyToCurrent === true ||
+    payload.replyToTag === true ||
+    payload.replyToId !== undefined ||
+    payload.audioAsVoice === true ||
+    payload.videoAsNote === true
+  );
 }

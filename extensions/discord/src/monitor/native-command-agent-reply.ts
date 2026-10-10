@@ -1,125 +1,160 @@
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
-import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";
-import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-streaming";
+import {
+  dispatchChannelInboundTurn,
+  hasVisibleInboundReplyDispatch,
+  isChannelPartialDeliveryError,
+} from "openclaw/plugin-sdk/channel-inbound";
+import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
-import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
-import type { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
-import type {
-  ButtonInteraction,
-  CommandInteraction,
-  StringSelectMenuInteraction,
-} from "../internal/discord.js";
+import {
+  PLUGIN_COMMAND_DISPATCH,
+  type PluginCommandCatalogDecision,
+} from "openclaw/plugin-sdk/plugin-command-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
+import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
+import { logVerbose, type createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import type { BaseComponentInteraction, CommandInteraction } from "../internal/discord.js";
 import type { DiscordChannelConfigResolved } from "./allow-list.js";
 import type { buildDiscordNativeCommandContext } from "./native-command-context.js";
 import {
   DISCORD_EMPTY_VISIBLE_REPLY_WARNING,
   deliverDiscordInteractionReply,
-  isDiscordUnknownInteraction,
+  resolveDiscordInteractionReplyOptions,
   safeDiscordInteractionCall,
+  settleDiscordInteractionWithoutVisibleReply,
 } from "./native-command-reply.js";
-import { nativeCommandRuntime } from "./native-command.runtime.js";
-import type { DiscordConfig } from "./native-command.types.js";
-
-type NativeCommandEffectiveRoute = {
-  accountId: string;
-  agentId: string;
-};
+import type { DiscordConfig, DiscordDispatchReplyFromConfig } from "./native-command.types.js";
 
 export async function dispatchDiscordNativeAgentReply(params: {
   cfg: OpenClawConfig;
   discordConfig: DiscordConfig;
   accountId: string;
-  interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
-  ctxPayload: ReturnType<typeof buildDiscordNativeCommandContext>;
-  effectiveRoute: NativeCommandEffectiveRoute;
+  interaction: CommandInteraction | BaseComponentInteraction;
+  ctxPayload: Awaited<ReturnType<typeof buildDiscordNativeCommandContext>>;
+  effectiveRoute: Pick<ResolvedAgentRoute, "accountId" | "agentId" | "sessionKey">;
   channelConfig: DiscordChannelConfigResolved | null;
   mediaLocalRoots: ReturnType<typeof getAgentScopedMediaLocalRoots>;
   preferFollowUp: boolean;
   responseEphemeral?: boolean;
   suppressReplies?: boolean;
+  dispatchReplyFromConfig?: DiscordDispatchReplyFromConfig;
   log: ReturnType<typeof createSubsystemLogger>;
-}): Promise<void> {
-  const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
-    cfg: params.cfg,
-    agentId: params.effectiveRoute.agentId,
-    channel: "discord",
-    accountId: params.effectiveRoute.accountId,
-  });
+  pluginCommandDispatch: PluginCommandCatalogDecision;
+}) {
   const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(params.discordConfig);
 
   let didReply = false;
-  const dispatchResult = await nativeCommandRuntime.dispatchReplyWithDispatcher({
-    ctx: params.ctxPayload,
+  let finalReplyOutcome: "accepted" | "failed" | "suppressed" | undefined;
+  let hiddenFinalReply: ReplyPayload | undefined;
+  const turnResult = await dispatchChannelInboundTurn({
     cfg: params.cfg,
-    dispatcherOptions: {
-      ...replyPipeline,
-      humanDelay: resolveHumanDelayConfig(params.cfg, params.effectiveRoute.agentId),
+    channel: "discord",
+    accountId: params.effectiveRoute.accountId,
+    route: {
+      agentId: params.effectiveRoute.agentId,
+      sessionKey: params.ctxPayload.SessionKey ?? params.effectiveRoute.sessionKey,
+    },
+    ctxPayload: params.ctxPayload,
+    dispatchReplyFromConfig: params.dispatchReplyFromConfig,
+    delivery: {
       deliver: async (payload) => {
         if (params.suppressReplies) {
-          return;
+          return {
+            visibleReplySent: false,
+            suppression: { reason: "channel_transform" as const },
+          };
         }
-        try {
-          await deliverDiscordInteractionReply({
-            interaction: params.interaction,
-            payload,
-            mediaLocalRoots: params.mediaLocalRoots,
-            textLimit: resolveTextChunkLimit(params.cfg, "discord", params.accountId, {
-              fallbackLimit: 2000,
-            }),
-            maxLinesPerMessage: resolveDiscordMaxLinesPerMessage({
-              cfg: params.cfg,
-              discordConfig: params.discordConfig,
-              accountId: params.accountId,
-            }),
-            preferFollowUp: params.preferFollowUp || didReply,
-            responseEphemeral: params.responseEphemeral,
-            chunkMode: resolveChunkMode(params.cfg, "discord", params.accountId),
-          });
-        } catch (error) {
-          if (isDiscordUnknownInteraction(error)) {
-            logVerbose("discord: interaction reply skipped (interaction expired)");
-            return;
-          }
-          throw error;
+        const payloadDelivered = await deliverDiscordInteractionReply({
+          interaction: params.interaction,
+          payload,
+          componentRoute: {
+            accountId: params.effectiveRoute.accountId,
+            agentId: params.effectiveRoute.agentId,
+            sessionKey:
+              params.ctxPayload.CommandTargetSessionKey ?? params.effectiveRoute.sessionKey,
+          },
+          mediaLocalRoots: params.mediaLocalRoots,
+          ...resolveDiscordInteractionReplyOptions(params),
+          preferFollowUp: params.preferFollowUp || didReply,
+          responseEphemeral: params.responseEphemeral,
+        });
+        didReply ||= payloadDelivered;
+        return payloadDelivered
+          ? { visibleReplySent: true }
+          : {
+              visibleReplySent: false,
+              suppression: { reason: "no_visible_result" as const },
+            };
+      },
+      onDelivered: (payload, info, result) => {
+        // Hidden picker dispatch reuses only a real core final suppressed by this adapter.
+        if (
+          params.suppressReplies &&
+          info.kind === "final" &&
+          result?.suppression?.reason === "channel_transform" &&
+          payload.text?.trim()
+        ) {
+          hiddenFinalReply = payload;
         }
-        didReply = true;
+        // A failed final outweighs later suppression until Discord accepts a final.
+        if (
+          info.kind === "final" &&
+          result?.visibleReplySent !== undefined &&
+          (result.visibleReplySent || finalReplyOutcome !== "failed")
+        ) {
+          finalReplyOutcome = result.visibleReplySent ? "accepted" : "suppressed";
+        }
       },
       onError: (err, info) => {
+        const partialDelivery = isChannelPartialDeliveryError(err);
+        if (partialDelivery) {
+          // Preserve failed delivery accounting while preventing an empty fallback from
+          // obscuring the prefix that Discord already accepted for this payload.
+          didReply = true;
+          logVerbose("discord: interaction reply partially delivered before expiry");
+        }
+        if (info.kind === "final") {
+          finalReplyOutcome = partialDelivery ? "accepted" : "failed";
+        }
         const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
         params.log.error(`discord slash ${info.kind} reply failed: ${message}`);
       },
     },
+    replyPipeline: {},
+    dispatcherOptions: {
+      humanDelay: resolveHumanDelayConfig(params.cfg, params.effectiveRoute.agentId),
+    },
     replyOptions: {
       skillFilter: params.channelConfig?.skills,
+      [PLUGIN_COMMAND_DISPATCH]: params.pluginCommandDispatch,
       disableBlockStreaming:
         typeof blockStreamingEnabled === "boolean" ? !blockStreamingEnabled : undefined,
-      onModelSelected,
     },
   });
-
-  if (
+  const shouldSettleWithoutVisibleReply =
     params.suppressReplies ||
-    didReply ||
-    dispatchResult.queuedFinal ||
-    dispatchResult.counts.final !== 0 ||
-    dispatchResult.counts.block !== 0 ||
-    dispatchResult.counts.tool !== 0
-  ) {
-    return;
-  }
+    finalReplyOutcome === "suppressed" ||
+    (turnResult.dispatched &&
+      (turnResult.dispatchResult.deliberateSilentTerminalReply === true ||
+        turnResult.dispatchResult.deferredToActiveRun !== undefined));
+  const dispatchResult = {
+    dispatched: turnResult.dispatched,
+    ...(hiddenFinalReply ? { hiddenFinalReply } : {}),
+  };
 
-  await safeDiscordInteractionCall("interaction empty fallback", async () => {
-    const payload = {
-      content: DISCORD_EMPTY_VISIBLE_REPLY_WARNING,
-      ephemeral: true,
-    };
-    if (params.preferFollowUp) {
-      await params.interaction.followUp(payload);
-      return;
-    }
-    await params.interaction.reply(payload);
-  });
+  if (!didReply && shouldSettleWithoutVisibleReply) {
+    await settleDiscordInteractionWithoutVisibleReply(params.interaction);
+  } else if (
+    !didReply &&
+    !(turnResult.dispatched && hasVisibleInboundReplyDispatch(turnResult.dispatchResult))
+  ) {
+    await safeDiscordInteractionCall("interaction empty fallback", () =>
+      params.interaction[params.preferFollowUp ? "followUp" : "reply"]({
+        content: DISCORD_EMPTY_VISIBLE_REPLY_WARNING,
+        ephemeral: true,
+      }),
+    );
+  }
+  return dispatchResult;
 }

@@ -1,10 +1,6 @@
-import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+export { normalizeNullableString as normalizeNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 
-export function normalizeNonEmptyString(value: unknown): string | null {
-  return typeof value === "string" ? (normalizeOptionalString(value) ?? null) : null;
-}
-
+/** Coerces array entries to allow-list strings while rejecting non-array inputs. */
 export function normalizeStringArray(value: unknown): string[] {
-  return Array.isArray(value) ? mapAllowFromEntries(value) : [];
+  return Array.isArray(value) ? value.map(String) : [];
 }

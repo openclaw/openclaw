@@ -1,3 +1,4 @@
+// Music Generation Providers.Live.Test.Ts tests cover music generation providers plugin behavior.
 import {
   resolveApiKeyForProvider,
   resolveDefaultAgentDir,
@@ -7,13 +8,7 @@ import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
-  DEFAULT_LIVE_MUSIC_MODELS,
-  collectProviderApiKeys,
-  encodePngRgba,
-  fillPixel,
-  getShellEnvAppliedKeys,
   isAuthErrorMessage,
   isBillingErrorMessage,
   isLiveProfileKeyModeEnabled,
@@ -23,13 +18,20 @@ import {
   isServerErrorMessage,
   isTimeoutErrorMessage,
   isTruthyEnvValue,
+  readLiveTestConfig,
+} from "openclaw/plugin-sdk/test-live";
+import { collectProviderApiKeys, getShellEnvAppliedKeys } from "openclaw/plugin-sdk/test-live-auth";
+import {
+  DEFAULT_LIVE_MUSIC_MODELS,
+  encodePngRgba,
+  fillPixel,
   parseCsvFilter,
   parseProviderModelMap,
   redactLiveApiKey,
   resolveConfiguredLiveMusicModels,
   resolveLiveMusicAuthStore,
-} from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it } from "vitest";
+} from "openclaw/plugin-sdk/test-media-generation";
+import { describe, expect, it, vi } from "vitest";
 import falPlugin from "./fal/index.js";
 import googlePlugin from "./google/index.js";
 import minimaxPlugin from "./minimax/index.js";
@@ -127,6 +129,32 @@ function maybeLoadShellEnvForMusicProviders(providerIds: string[]): void {
   maybeLoadShellEnvForGenerationProviders(providerIds);
 }
 
+function formatProviderFilter(filter: Set<string> | null): string {
+  return filter ? [...filter].toSorted((a, b) => a.localeCompare(b)).join(", ") : "";
+}
+
+function expectMusicLiveSweepPassed(params: {
+  attempted: string[];
+  failures: string[];
+  providerFilter: Set<string> | null;
+  skip: (note: string) => void;
+  skipped: string[];
+}): void {
+  if (params.attempted.length === 0) {
+    expect(params.failures).toStrictEqual([]);
+    if (params.providerFilter && params.providerFilter.size > 0) {
+      throw new Error(
+        `[live:music-generation] requested provider filter produced no live attempts: ${formatProviderFilter(params.providerFilter)}; skipped=${params.skipped.join(", ") || "none"}`,
+      );
+    }
+    params.skip(
+      `[live:music-generation] no live music attempt completed; skipped=${params.skipped.join(", ") || "none"}`,
+    );
+    return;
+  }
+  expect(params.failures).toStrictEqual([]);
+}
+
 function resolveLiveLyrics(providerId: string): string | undefined {
   if (providerId !== "minimax") {
     return undefined;
@@ -170,8 +198,8 @@ function resolveLiveMusicSkipReason(providerId: string, error: unknown): string 
 describeLive("music generation provider live", () => {
   it(
     "covers generate plus declared edit paths with shell/profile auth",
-    async () => {
-      const cfg = withPluginsEnabled(getRuntimeConfig());
+    async ({ skip }) => {
+      const cfg = withPluginsEnabled(await readLiveTestConfig());
       const configuredModels = resolveConfiguredLiveMusicModels(cfg);
       const agentDir = resolveDefaultAgentDir(cfg as never);
       const attempted: string[] = [];
@@ -195,7 +223,7 @@ describeLive("music generation provider live", () => {
           requireProfileKeys: REQUIRE_PROFILE_KEYS,
           hasLiveKeys,
         });
-        let authLabel = "unresolved";
+        let authLabel;
         try {
           const auth = await resolveApiKeyForProvider({
             provider: testCase.providerId,
@@ -231,10 +259,12 @@ describeLive("music generation provider live", () => {
             cfg,
             agentDir,
             authStore,
-            ...(generateCaps?.supportsDuration ? { durationSeconds: 12 } : {}),
-            ...(generateCaps?.supportsFormat ? { format: "mp3" as const } : {}),
-            ...(liveLyrics ? { lyrics: liveLyrics } : {}),
-            ...(generateCaps?.supportsInstrumental && !liveLyrics ? { instrumental: true } : {}),
+            ...(generateCaps?.supportsDuration ? { durationSeconds: 12 } : undefined),
+            ...(generateCaps?.supportsFormat ? { format: "mp3" as const } : undefined),
+            ...(liveLyrics ? { lyrics: liveLyrics } : undefined),
+            ...(generateCaps?.supportsInstrumental && !liveLyrics
+              ? { instrumental: true }
+              : undefined),
           });
 
           expect(result.tracks.length).toBeGreaterThan(0);
@@ -298,13 +328,40 @@ describeLive("music generation provider live", () => {
         `[live:music-generation] attempted=${attempted.join(", ") || "none"} skipped=${skipped.join(", ") || "none"} failures=${failures.join(" | ") || "none"} shellEnv=${getShellEnvAppliedKeys().join(", ") || "none"}`,
       );
 
-      if (attempted.length === 0) {
-        expect(failures).toStrictEqual([]);
-        console.warn("[live:music-generation] no provider had usable auth; skipping assertions");
-        return;
-      }
-      expect(failures).toStrictEqual([]);
+      expectMusicLiveSweepPassed({ attempted, failures, providerFilter, skip, skipped });
     },
     10 * 60_000,
   );
+});
+
+describe("music generation live provider filter coverage", () => {
+  it("skips unfiltered sweeps when no provider is attempted", () => {
+    const skip = vi.fn();
+    expect(() =>
+      expectMusicLiveSweepPassed({
+        attempted: [],
+        failures: [],
+        providerFilter: null,
+        skip,
+        skipped: ["minimax: no usable auth", "google: no model configured"],
+      }),
+    ).not.toThrow();
+    expect(skip).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("minimax: no usable auth, google: no model configured"),
+    );
+  });
+
+  it("fails filtered sweeps when no requested provider is attempted", () => {
+    const skip = vi.fn();
+    expect(() =>
+      expectMusicLiveSweepPassed({
+        attempted: [],
+        failures: [],
+        providerFilter: new Set(["minimax"]),
+        skip,
+        skipped: ["minimax: no usable auth"],
+      }),
+    ).toThrow(/requested provider filter produced no live attempts: minimax/u);
+    expect(skip).not.toHaveBeenCalled();
+  });
 });

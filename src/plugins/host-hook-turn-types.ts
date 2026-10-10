@@ -1,10 +1,13 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { PluginJsonValue } from "./host-hook-json.js";
 
-export type PluginNextTurnInjectionPlacement = "prepend_context" | "append_context";
+/** Placement for context injected into the next agent turn. */
+type PluginNextTurnInjectionPlacement = "prepend_context" | "append_context";
 
+/** Plugin request to inject text into the next turn for a session. */
 export type PluginNextTurnInjection = {
   sessionKey: string;
+  /** Selected owner when the session key is unscoped, such as global. */
+  agentId?: string;
   text: string;
   idempotencyKey?: string;
   placement?: PluginNextTurnInjectionPlacement;
@@ -12,7 +15,11 @@ export type PluginNextTurnInjection = {
   metadata?: PluginJsonValue;
 };
 
-export type PluginNextTurnInjectionRecord = Omit<PluginNextTurnInjection, "sessionKey"> & {
+/** Stored next-turn injection after session/plugin metadata is attached. */
+export type PluginNextTurnInjectionRecord = Omit<
+  PluginNextTurnInjection,
+  "sessionKey" | "agentId"
+> & {
   id: string;
   pluginId: string;
   pluginName?: string;
@@ -20,29 +27,34 @@ export type PluginNextTurnInjectionRecord = Omit<PluginNextTurnInjection, "sessi
   placement: PluginNextTurnInjectionPlacement;
 };
 
+/** Result returned after enqueueing a next-turn injection. */
 export type PluginNextTurnInjectionEnqueueResult = {
   enqueued: boolean;
   id: string;
   sessionKey: string;
 };
 
+/** Event passed to plugins before an agent turn is prepared. */
 export type PluginAgentTurnPrepareEvent = {
   prompt: string;
-  messages: AgentMessage[] | unknown[];
+  messages: unknown[];
   queuedInjections: PluginNextTurnInjectionRecord[];
 };
 
+/** Plugin contribution to prepend or append context for a prepared agent turn. */
 export type PluginAgentTurnPrepareResult = {
   prependContext?: string;
   appendContext?: string;
 };
 
+/** Event passed to plugins that contribute heartbeat prompt context. */
 export type PluginHeartbeatPromptContributionEvent = {
   sessionKey?: string;
   agentId?: string;
   heartbeatName?: string;
 };
 
+/** Plugin contribution to heartbeat prompt context. */
 export type PluginHeartbeatPromptContributionResult = {
   prependContext?: string;
   appendContext?: string;

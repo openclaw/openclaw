@@ -1,13 +1,16 @@
 ---
-summary: "Adds memory embedding provider support. Adds agent-callable tools."
+summary: "Adds agent-callable tools."
 read_when:
   - You are installing, configuring, or auditing the memory-core plugin
-title: "Memory Core plugin"
+title: "Memory Core plugin reference"
 ---
 
-# Memory Core plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
-Adds memory embedding provider support. Adds agent-callable tools.
+Adds agent-callable tools.
 
 ## Distribution
 
@@ -16,4 +19,6 @@ Adds memory embedding provider support. Adds agent-callable tools.
 
 ## Surface
 
-contracts: memoryEmbeddingProviders, tools
+- CLI commands: `openclaw memory`
+- Slash commands: `/dreaming`
+- Contracts: `tools`

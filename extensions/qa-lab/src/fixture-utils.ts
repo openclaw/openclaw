@@ -1,0 +1,296 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { asOptionalObjectRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { withTimeout } from "openclaw/plugin-sdk/time-runtime";
+
+export type QaFixtureFetchJsonOptions = {
+  fetchImpl?: (url: string, init: RequestInit) => Promise<Response>;
+  maxBodyBytes?: number;
+  timeoutMs?: number;
+};
+
+const DEFAULT_FETCH_BODY_MAX_BYTES = 1024 * 1024;
+const DEFAULT_FETCH_TIMEOUT_MS = 5_000;
+
+export function readPositiveIntEnv(name: string, fallback: number, env: NodeJS.ProcessEnv) {
+  const raw = env[name] ?? fallback;
+  const text = raw == null ? "unset" : String(raw).trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`invalid ${name}: ${text}`);
+  }
+  const value = Number(text);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`invalid ${name}: ${text}`);
+  }
+  return value;
+}
+
+function timeoutError(message: string) {
+  return Object.assign(new Error(message), { code: "ETIMEDOUT" });
+}
+
+async function readBoundedResponseText(params: {
+  response: Response;
+  url: string;
+  maxBytes: number;
+  signal: AbortSignal;
+}) {
+  const tooLargeError = () =>
+    Object.assign(new Error(`HTTP response from ${params.url} exceeded ${params.maxBytes} bytes`), {
+      code: "ETOOBIG",
+    });
+  const contentLength = params.response.headers.get("content-length");
+  if (contentLength && /^\d+$/u.test(contentLength) && Number(contentLength) > params.maxBytes) {
+    void params.response.body?.cancel().catch(() => undefined);
+    throw tooLargeError();
+  }
+  if (!params.response.body) {
+    return "";
+  }
+
+  const bytes = await readResponseWithLimit(params.response, params.maxBytes, {
+    signal: params.signal,
+    onOverflow: tooLargeError,
+  });
+  return new TextDecoder().decode(bytes);
+}
+
+export async function fetchQaFixtureJson(
+  url: string,
+  init: RequestInit = {},
+  options: QaFixtureFetchJsonOptions = {},
+): Promise<unknown> {
+  const timeoutMs = resolveTimerTimeoutMs(options.timeoutMs, DEFAULT_FETCH_TIMEOUT_MS);
+  const maxBodyBytes = Math.max(1, options.maxBodyBytes ?? DEFAULT_FETCH_BODY_MAX_BYTES);
+  const controller = new AbortController();
+  const error = timeoutError(`HTTP request to ${url} timed out after ${timeoutMs}ms`);
+  const { response, text } = await withTimeout(
+    Promise.resolve().then(async () => {
+      const fetchedResponse = await (options.fetchImpl ?? fetch)(url, {
+        ...init,
+        signal: controller.signal,
+      });
+      const responseText = await readBoundedResponseText({
+        response: fetchedResponse,
+        url,
+        maxBytes: maxBodyBytes,
+        signal: controller.signal,
+      });
+      return { response: fetchedResponse, text: responseText };
+    }),
+    timeoutMs,
+    {
+      createError: () => {
+        controller.abort(error);
+        return error;
+      },
+    },
+  );
+  let parsed: unknown;
+  try {
+    parsed = text ? JSON.parse(text) : {};
+  } catch {
+    parsed = text;
+  }
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status} from ${url}: ${text}`);
+  }
+  return parsed;
+}
+
+export function outputToolNames(response: unknown): string[] {
+  const output = (response as { output?: Array<{ type?: unknown; name?: unknown }> }).output;
+  if (!Array.isArray(output)) {
+    return [];
+  }
+  return output.flatMap((item) =>
+    item.type === "function_call" && typeof item.name === "string" ? [item.name] : [],
+  );
+}
+
+export function outputText(response: unknown): string {
+  const output = (response as { output?: Array<{ type?: unknown; content?: unknown }> }).output;
+  if (!Array.isArray(output)) {
+    return "";
+  }
+  return output
+    .flatMap((item) => {
+      if (item.type !== "message" || !Array.isArray(item.content)) {
+        return [];
+      }
+      return item.content.flatMap((piece) => {
+        const text = readStringField(asOptionalObjectRecord(piece), "text");
+        return text === undefined ? [] : [text];
+      });
+    })
+    .join("\n");
+}
+
+function readContentText(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content
+    .map((item) => readStringField(asOptionalObjectRecord(item), "text") ?? "")
+    .join("\n");
+}
+
+export function countSystemPromptChars(body: unknown): number {
+  if (!body || typeof body !== "object") {
+    return 0;
+  }
+  const record = body as { instructions?: unknown; input?: unknown };
+  let total = typeof record.instructions === "string" ? record.instructions.length : 0;
+  if (Array.isArray(record.input)) {
+    for (const item of record.input) {
+      if (!item || typeof item !== "object") {
+        continue;
+      }
+      const inputRecord = item as { role?: unknown; content?: unknown };
+      if (inputRecord.role === "system" || inputRecord.role === "developer") {
+        total += readContentText(inputRecord.content).length;
+      }
+    }
+  }
+  return total;
+}
+
+const TOOL_IDENTIFIER_CHARACTERS =
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-";
+
+function countOccurrences(haystack: string, needle: string, exactIdentifier = false): number {
+  if (!needle) {
+    return 0;
+  }
+  let count = 0;
+  let offset = 0;
+  for (;;) {
+    const next = haystack.indexOf(needle, offset);
+    if (next < 0) {
+      return count;
+    }
+    const before = haystack[next - 1];
+    const after = haystack[next + needle.length];
+    if (
+      !exactIdentifier ||
+      ((before === undefined || !TOOL_IDENTIFIER_CHARACTERS.includes(before)) &&
+        (after === undefined || !TOOL_IDENTIFIER_CHARACTERS.includes(after)))
+    ) {
+      count += 1;
+    }
+    offset = next + needle.length;
+  }
+}
+
+/** Counts exact ASCII tool identifiers in diagnostic text without interpreting regex syntax. */
+export function countToolIdentifierMentions(text: string, identifier: string): number {
+  return countOccurrences(text, identifier, true);
+}
+
+function recordRole(record: unknown): string | undefined {
+  const candidate = asOptionalObjectRecord(record);
+  return (
+    readStringField(candidate, "role") ??
+    readStringField(asOptionalObjectRecord(candidate?.message), "role")
+  );
+}
+
+function collectStringLeaves(value: unknown, output: string[]) {
+  if (typeof value === "string") {
+    output.push(value);
+    return;
+  }
+  if (!value || typeof value !== "object") {
+    return;
+  }
+  for (const item of Array.isArray(value) ? value : Object.values(value)) {
+    collectStringLeaves(item, output);
+  }
+}
+
+function sessionLogScanText(line: string): string | null {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    const record = JSON.parse(trimmed) as unknown;
+    if (recordRole(record) === "user") {
+      return null;
+    }
+    const strings: string[] = [];
+    collectStringLeaves(record, strings);
+    return strings.join("\n");
+  } catch {
+    return line;
+  }
+}
+
+function resolveAgentSqlitePathFromSessionsDir(sessionsDir: string): string | null {
+  if (path.basename(sessionsDir) !== "sessions") {
+    return null;
+  }
+  return path.join(path.dirname(sessionsDir), "agent", "openclaw-agent.sqlite");
+}
+
+async function visitSessionLogEvents(
+  sessionsDir: string,
+  visit: (eventJson: string) => void,
+): Promise<void> {
+  const files = await fs.readdir(sessionsDir, { recursive: true }).catch(() => []);
+  for (const file of files) {
+    if (!file.endsWith(".jsonl")) {
+      continue;
+    }
+    const text = await fs.readFile(path.join(sessionsDir, file), "utf8").catch(() => "");
+    for (const line of text.split(/\r?\n/u)) {
+      visit(line);
+    }
+  }
+
+  const sqlitePath = resolveAgentSqlitePathFromSessionsDir(sessionsDir);
+  if (!sqlitePath) {
+    return;
+  }
+  try {
+    const { visitQaSqliteTranscriptEvents } = await import("openclaw/plugin-sdk/qa-runtime");
+    await visitQaSqliteTranscriptEvents(sqlitePath, visit);
+  } catch {
+    // Missing or unreadable stores contribute no events.
+  }
+}
+
+export async function countSessionLogMentions(params: {
+  identifierKeys?: ReadonlySet<string>;
+  sessionsDir: string;
+  needles: Record<string, string>;
+}): Promise<Record<string, number>> {
+  const counts = Object.fromEntries(Object.keys(params.needles).map((key) => [key, 0]));
+  await visitSessionLogEvents(params.sessionsDir, (eventJson) => {
+    const scanText = sessionLogScanText(eventJson);
+    if (scanText === null) {
+      return;
+    }
+    for (const [key, needle] of Object.entries(params.needles)) {
+      const count = params.identifierKeys?.has(key)
+        ? countToolIdentifierMentions(scanText, needle)
+        : countOccurrences(scanText, needle);
+      counts[key] = (counts[key] ?? 0) + count;
+    }
+  });
+  return counts;
+}
+
+export function subtractMentionCounts(
+  after: Record<string, number>,
+  before: Record<string, number>,
+): Record<string, number> {
+  return Object.fromEntries(
+    Object.entries(after).map(([key, count]) => [key, count - (before[key] ?? 0)]),
+  );
+}

@@ -6,18 +6,21 @@ read_when:
 title: "Health checks"
 ---
 
-Short guide to verify channel connectivity without guessing.
+Short guide to verify Gateway and channel health without guessing. It covers the
+CLI health checks, the HTTP check endpoints, the dedicated `health` command, and
+uptime monitoring.
 
 ## Quick checks
 
-- `openclaw status` — local summary: gateway reachability/mode, update hint, linked channel auth age, sessions + recent activity.
-- `openclaw status --all` — full local diagnosis (read-only, color, safe to paste for debugging).
-- `openclaw status --deep` — asks the running gateway for a live health probe (`health` with `probe:true`), including per-account channel probes when supported.
-- `openclaw health` — asks the running gateway for its health snapshot (WS-only; no direct channel sockets from the CLI).
-- `openclaw health --verbose` — forces a live health probe and prints gateway connection details.
-- `openclaw health --json` — machine-readable health snapshot output.
-- Send `/status` as a standalone message in WhatsApp/WebChat to get a status reply without invoking the agent.
-- Logs: tail `/tmp/openclaw/openclaw-*.log` and filter for `web-heartbeat`, `web-reconnect`, `web-auto-reply`, `web-inbound`.
+- `openclaw status` - local summary: gateway reachability/mode, update hint, linked channel auth age, sessions + recent activity.
+- `openclaw status --all` - full local diagnosis (read-only, color, safe to paste for debugging).
+- `openclaw status --deep` - asks the running gateway for a live check (`health` with `probe:true`), including per-account channel checks when supported.
+- `openclaw status --usage` - show model provider usage/quota snapshots.
+- `openclaw health` - asks the running gateway for its health snapshot (WS-only; no direct channel sockets from the CLI).
+- `openclaw health --verbose` (alias `--debug`) - forces a live health check and prints gateway connection details.
+- `openclaw health --json` - machine-readable health snapshot output.
+- Send `/status` as a standalone chat command in any channel to get a status reply without invoking the agent.
+- Logs: run `openclaw logs --follow` (or `openclaw --profile <profile> logs --follow`) and filter for `web-heartbeat`, `web-reconnect`, `web-auto-reply`, `web-inbound`.
 
 For Discord and other chat providers, session rows are not socket liveness.
 `openclaw sessions`, Gateway `sessions.list`, and the agent `sessions_list` tool
@@ -25,49 +28,227 @@ read stored conversation state. A provider can reconnect and show healthy channe
 status before any new session row is materialized. Use the channel status and
 health commands above for live connectivity checks.
 
+Per-agent session counts and recent activity include only that agent's sessions,
+even when agents share a SQLite session store. Status counts each physical store
+once in its aggregate. The top-level health session summary represents the
+default agent, or the first configured agent when there is no default; it is not
+a fleet total. A running Gateway serves clean health and status session summaries
+from its resident session-row projection. Store hydration and exact dirty-row
+refreshes retain the existing read-only SQLite fallback.
+
 ## Deep diagnostics
 
+`openclaw health --json` reports `modelRuntime.degraded: true` when a large
+fleet's model preparation exceeds the startup budget. `pendingAgents` names the
+agents still preparing and `stage` identifies the current acquisition phase.
+The Gateway remains running and completed agents remain usable. Background
+preparation clears the degraded status when all runtimes are ready.
+
+Health and status collection groups fast session-store reads into short work
+slices, keeping busy background preparation from delaying every individual read.
+Slow reads finish their transaction before yielding to other Gateway work.
+
 - Creds on disk: `ls -l ~/.openclaw/credentials/whatsapp/<accountId>/creds.json` (mtime should be recent).
-- Session store: `ls -l ~/.openclaw/agents/<agentId>/sessions/sessions.json` (path can be overridden in config). Count and recent recipients are surfaced via `status`.
-- Relink flow: `openclaw channels logout && openclaw channels login --verbose` when status codes 409–515 or `loggedOut` appear in logs. (Note: the QR login flow auto-restarts once for status 515 after pairing.)
-- Diagnostics are enabled by default. The gateway records operational facts unless `diagnostics.enabled: false` is set. Memory events record RSS/heap byte counts, threshold pressure, and growth pressure. Critical memory pressure logs through the gateway logger. When `diagnostics.memoryPressureSnapshot: true` is set, critical memory pressure also writes a pre-OOM stability bundle with V8 heap stats, Linux cgroup counters when available, active resource counts, and the largest session/transcript files by redacted relative path. Liveness warnings record event-loop delay, event-loop utilization, CPU-core ratio, and active/waiting/queued session counts when the process is running but saturated. Oversized-payload events record what was rejected, truncated, or chunked, plus sizes and limits when available. They do not record the message text, attachment contents, webhook body, raw request or response body, tokens, cookies, or secret values. The same heartbeat starts the bounded stability recorder, which is available through `openclaw gateway stability` or the `diagnostics.stability` Gateway RPC. Fatal Gateway exits, shutdown timeouts, and restart startup failures persist the latest recorder snapshot under `~/.openclaw/logs/stability/` when events exist; critical memory pressure does too only when `diagnostics.memoryPressureSnapshot: true` is set. Inspect the newest saved bundle with `openclaw gateway stability --bundle latest`.
-- For bug reports, run `openclaw gateway diagnostics export` and attach the generated zip. The export combines a Markdown summary, the newest stability bundle, sanitized log metadata, sanitized Gateway status/health snapshots, and config shape. It is meant to be shared: chat text, webhook bodies, tool outputs, credentials, cookies, account/message identifiers, and secret values are omitted or redacted. See [Diagnostics Export](/gateway/diagnostics).
+- Session store: `ls -l ~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`. Count and recent recipients are surfaced via `status`.
+- Relink flow: `openclaw channels logout && openclaw channels login --verbose` when status codes 409-515 or `loggedOut` appear in logs. The QR login flow auto-restarts once for status 515 after pairing.
+- Diagnostics are enabled by default (`diagnostics.enabled: false` disables them). Memory events record RSS/heap byte counts and threshold/growth pressure. Liveness warnings record event-loop delay/utilization, CPU-core ratio, and active/waiting/queued session counts when the process is running but saturated. Oversized-payload events record what was rejected/truncated/chunked plus sizes and limits, never message text, attachment contents, webhook bodies, raw request/response bodies, tokens, cookies, or secret values.
+- The same heartbeat drives the bounded stability recorder: `openclaw gateway stability` (or the `diagnostics.stability` Gateway RPC). Fatal Gateway exits, shutdown timeouts, and restart startup failures persist the latest snapshot under `~/.openclaw/logs/stability/`. Inspect the newest bundle with `openclaw gateway stability --bundle latest`.
+- For bug reports, run `openclaw gateway diagnostics export` and attach the generated zip: a Markdown summary, the newest stability bundle, sanitized log metadata, sanitized Gateway status/health snapshots, and config shape. Chat text, webhook bodies, tool outputs, credentials, cookies, account/message identifiers, and secret values are omitted or redacted. See [Diagnostics Export](/gateway/diagnostics).
 
 ## Health monitor config
 
-- `gateway.channelHealthCheckMinutes`: how often the gateway checks channel health. Default: `5`. Set `0` to disable health-monitor restarts globally.
-- `gateway.channelStaleEventThresholdMinutes`: how long a connected channel can stay idle before the health monitor treats it as stale and restarts it. Default: `30`. Keep this greater than or equal to `gateway.channelHealthCheckMinutes`.
-- `gateway.channelMaxRestartsPerHour`: rolling one-hour cap for health-monitor restarts per channel/account. Default: `10`.
 - `channels.<provider>.healthMonitor.enabled`: disable health-monitor restarts for a specific channel while leaving global monitoring enabled.
 - `channels.<provider>.accounts.<accountId>.healthMonitor.enabled`: multi-account override that wins over the channel-level setting.
-- These per-channel overrides apply to the built-in channel monitors that expose them today: Discord, Google Chat, iMessage, Microsoft Teams, Signal, Slack, Telegram, and WhatsApp.
+- These per-channel overrides apply to the channels that expose them today: Discord, Google Chat, iMessage, IRC, Microsoft Teams, Signal, Slack, Telegram, and WhatsApp.
+- A crashing channel is recovered by its own auto-restart backoff first (`auto-restart attempt N/10` in the logs). The health monitor stays out of the way until that ladder ends with `giving up after 10 restart attempts`, then takes over as the last restart owner.
+
+## Inbound ingress health
+
+Channel connectivity and inbound admission are separate failure domains. A channel can hold a healthy transport connection — sending replies normally — while its durable ingress queue is unavailable, so not a single inbound message is admitted.
+
+- When a channel cannot open its durable ingress queue, its start fails and the gateway records the account as unable to receive. `openclaw channels status` reports `Channel cannot admit inbound events; its durable ingress queue is unavailable. Outbound may still work.`
+- Such an account is **unhealthy** regardless of transport state, and readiness reports it as failing. Previously it reported `health: healthy` and the health monitor never touched it.
+- Recovery stays automatic. The ingress verdict describes the account's last start attempt and is cleared by the next one, so the ordinary restart path is also how a transient queue-open failure recovers. Those restarts log as `health-monitor: restarting (reason: ingress-unavailable)` instead of the generic `stuck`.
+- If the restarts keep repeating, the cause is not transient. Check the logged ingress failure: a plugin denied the `openChannelIngressQueue` capability, for example, needs operator action rather than another restart.
+- Channels that never report ingress state are unaffected: absence means "no signal", never "broken". There is no traffic-staleness heuristic, so a genuinely quiet channel is never marked unhealthy for having received nothing.
+
+<a id="http-probes" />
+
+## HTTP checks
+
+The Gateway exposes three unauthenticated `GET`/`HEAD` check pairs:
+
+| Endpoints               | Meaning                                                                                                                                                                      | Use                                               |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| `/health`, `/healthz`   | The HTTP server is live.                                                                                                                                                     | Process liveness and restart decisions.           |
+| `/startup`, `/startupz` | Startup sidecars and agent database inspection/preparation have settled, and the Gateway is not draining. Channel health is not consulted.                                   | Startup-phase monitoring and update verification. |
+| `/ready`, `/readyz`     | Startup sidecars have settled, the Gateway is not draining, required agent databases have no confirmed failures, and configured channel accounts pass deep readiness checks. | Traffic admission and operator monitoring.        |
+
+`/startupz` returns `503` with `status: "starting"` while startup sidecars or agent database inspection/preparation are pending, `503` with `status: "draining"` during drain, and `200` with `status: "started"` otherwise. After sidecars settle, pending inspection for any agent, including an optional agent, reports `pendingReason: "agent-database-inspection"`. This lets `openclaw update` candidate verification wait within its startup budget before checking readiness. A settled inspection failure does not keep startup pending; readiness and per-agent admission report the failure.
+
+A default or system agent database with a confirmed admission failure keeps readiness false, with `failing: ["agent-database:<id>"]` and the exact admission reason and repair hint in `agentDatabases`. Pending startup inspection is reported there with code `agent-database-inspection-pending` while the Gateway can report ready and serve the Control UI and healthy agents. Agent-scoped `sessions.list`, plus `sessions.resolve`, `sessions.describe`, and `models.list`, wait up to 20 seconds for their selected agents to finish startup preparation, then recheck request authorization before reading. Requests targeting healthy agents proceed independently. Unscoped session lists continue returning admitted agents while other stores prepare. Writes still require completed admission. RPC requests refused for pending inspection return `UNAVAILABLE` with `retryable: true` and `retryAfterMs: 250`; callers can retry the same request after that delay. Inspection failures and ownership mismatches remain non-retryable. A refused optional agent can remain isolated while healthy agents serve requests. Gateway ready announcements use the same readiness decision.
+
+A broken Telegram or other channel account can also make `/readyz` return `503` while `/startupz` remains started. Neither check replaces the other: startup completion alone does not certify agent or channel availability.
+
+Disabled, unconfigured, and ordinarily unlinked accounts do not fail channel readiness. An enabled, configured account with a recorded terminal disconnect, blocked lifecycle, or unavailable ingress still fails its health check even if it becomes unlinked. For example, a terminal WhatsApp logout makes `/readyz` return `503` with `failing: ["whatsapp"]` in detailed responses. Terminal disconnects and blocked accounts require operator action; the health monitor does not restart them.
+
+Remote unauthenticated startup responses contain only `ok` and `status`. Local-direct and authenticated callers also receive `version`, `uptimeMs`, and `pendingReason` while startup is pending. Readiness details follow the same local-or-authenticated gate because they can name failing subsystems.
+
+### Shared-state integrity failure
+
+A terminal shared-state admission failure immediately makes `/ready` and `/readyz`
+return `503`, including failures discovered by a SQLite worker after startup.
+Detailed responses include `failing: ["state-database"]` and `stateDatabase.reason`
+with the recorded refusal. This bypasses cached channel health;
+checks read the admission owner's recorded result without querying SQLite.
+
+`/healthz` still reports HTTP liveness. Supervisors that need to detect a Gateway
+that is running but cannot admit work must monitor `/readyz`.
+
+### Plugin replacement recovery
+
+During plugin replacement or recovery, `/readyz` returns `503`. Detailed responses
+include `failing: ["plugin-reload"]` and a `pluginReload` object with the affected
+`pluginIds`, the current `phase` (`reloading`, `recovering`, or `failed`), and any
+recovery `deadlineAtMs` and actionable `reason`. These owner-reported facts bypass
+the channel readiness cache, so a failed replacement cannot appear as only a
+generic channel outage or stale healthy result.
+
+The health monitor does not spend channel restart attempts while replacement
+holds channel admission paused. After successful rollback, the previous plugin
+configuration restarts its channels and ordinary readiness checks resume. If
+automatic recovery reaches its deadline, `phase: "failed"` retains the failure
+reason and next action. Admission pauses are released, allowing the monitor to
+restart callable channels; a plugin whose admitted work or cleanup still owns
+resources requires the reported repair or retry before it can restart. See
+[Config hot reload](/gateway/configuration/hot-reload) for the recovery contract.
+
+### CPU pressure and event-loop delay
+
+Detailed readiness can include the latest completed `eventLoop` diagnostic
+snapshot. The sampler owns observation windows; health reads do not reset a
+pending measurement. No snapshot is available until the first window completes. Its
+`cpuCoreRatio` measures user and system CPU time across the whole Gateway process,
+including worker and native threads, divided by elapsed wall time. The unit is
+core equivalents: `1` means one CPU core fully occupied over the interval, and
+parallel work can produce values above `1`. It is not a percentage of the host's
+total CPU capacity.
+
+The `health` RPC also reads the latest completed sample when returning a cached
+summary or publishing a newly collected one. Slow channel checks do not freeze
+its CPU and delay readings. If the sampler resets, health responses omit
+`eventLoop` until a new window completes instead of reviving a cached sample.
+
+The optional `cpuBreakdown` separates independent native counters:
+
+- `hostUtilization` is the busy fraction of the host CPU time reported by
+  `os.cpus()`, from `0` to `1` across `hostCpuCount` logical CPUs. This includes
+  other processes and is not the Gateway's CPU quota or container allowance.
+- `mainThreadCoreRatio` measures the Gateway main thread with
+  `process.threadCpuUsage()`, not event-loop utilization.
+- `workerCoreRatio` sums `Worker.cpuUsage()` counters for workers owned by the
+  task pools and SQLite broker. It does not include subprocesses, remote workers,
+  or workers created outside those owners.
+- `otherThreadsCoreRatio` is an **estimated residual**: process CPU minus the
+  measured main and tracked worker CPU, clamped at zero. It includes untracked
+  workers and native threads, not a measured worker category.
+
+Thread values use the same core-equivalent unit as `cpuCoreRatio`. Worker reads
+are asynchronous and must complete within 100 ms of each sampling boundary;
+these are not atomic cross-thread measurements. The residual can vary with
+measurement skew. A timed-out request never delays the event-loop sample, and
+at most one native request is outstanding per tracked worker, even across
+monitor resets. Startup, worker creation/exit, host CPU topology changes, counter
+resets, and collection failures require fresh baselines before publishing the
+affected rates. Missing fields mean unavailable, not zero.
+
+The main-thread and host counters are collected independently on Node and Bun.
+Tracked worker CPU and the residual are omitted on Bun: its worker API can
+report zero when native counter collection fails. Unsupported or failed native
+APIs on any platform leave the corresponding field absent.
+
+The Control UI's **CPU** box reads the same sampler through `system.info.eventLoop`.
+Its detail overlay shows host usage separately from the process and thread
+breakdown. Process and thread percentages use `100%` for one fully occupied
+core; host usage uses `100%` for all reported logical CPUs. Values show a dash
+until their first complete measurement, or while unavailable.
+
+Event-loop delay and utilization describe the main thread separately. A `cpu`
+degradation reason reports process CPU pressure with delay co-evidence; it does
+not identify the thread consuming CPU or prove a main-thread hang. Inspect the
+delay measurements alongside CPU pressure. The `eventLoop` diagnostic does not
+change the readiness result by itself.
+
+## Uptime monitoring
+
+External uptime monitoring services should use the dedicated `/health` endpoint, not `/v1/chat/completions`.
+
+- **DO use:** `GET /health` - instant response, no session created, no LLM call, returns `{"ok":true,"status":"live"}`
+- **DON'T use:** `/v1/chat/completions` for health checks - each request creates a full agent session with skill snapshot, context assembly, and LLM calls
+
+When no `x-openclaw-session-key` header or `user` field is provided, `/v1/chat/completions` generates a new random session for each request. Monitoring services that ping every 15 minutes create ~96 sessions/day, each consuming 4-22KB. Over time this causes session store bloat and can lead to context window overflow.
+
+### Monitoring service setup examples
+
+- **BetterStack:** Set health check URL to `https://<your-gateway-host>:<port>/health`
+- **UptimeRobot:** Add a new HTTP monitor with URL `https://<your-gateway-host>:<port>/health`
+- **Generic:** Any HTTP GET to `/health` returns 200 with `{"ok":true,"status":"live"}` while the gateway's HTTP server is live
 
 ## When something fails
 
-- `logged out` or status 409–515 → relink with `openclaw channels logout` then `openclaw channels login`.
-- Gateway unreachable → start it: `openclaw gateway --port 18789` (use `--force` if the port is busy).
-- No inbound messages → confirm linked phone is online and the sender is allowed (`channels.whatsapp.allowFrom`); for group chats, ensure allowlist + mention rules match (`channels.whatsapp.groups`, `agents.list[].groupChat.mentionPatterns`).
+- `logged out` or status 409-515 -> relink with `openclaw channels logout` then `openclaw channels login`.
+- Gateway unreachable -> start it: `openclaw gateway --port 18789` (use `--force` if the port is busy).
+- No inbound messages -> confirm linked phone is online and the sender is allowed (`channels.whatsapp.allowFrom`); for group chats, ensure allowlist + mention rules match (`channels.whatsapp.groups`, `agents.entries.*.groupChat.mentionPatterns`).
 
 ## Dedicated "health" command
 
 `openclaw health` asks the running gateway for its health snapshot (no direct channel
-sockets from the CLI). By default it can return a fresh cached gateway snapshot; the
-gateway then refreshes that cache in the background. `openclaw health --verbose` forces
-a live probe instead. The command reports linked creds/auth age when available,
-per-channel probe summaries, session-store summary, and a probe duration. It exits
-non-zero if the gateway is unreachable or the probe fails/timeouts.
+sockets from the CLI). By default it returns a fresh cached gateway snapshot and the
+gateway refreshes that cache in the background; `--verbose` forces a live check instead.
+Connections and cached health reads share a one-minute background refresh cadence, so
+repeated diagnostic connections do not each rebuild the health snapshot. Explicit live
+checks and refreshes for missing or stale health still run immediately.
+Snapshots describe loaded and configured channels. Stored credentials alone do not
+activate a channel or add it to Gateway health; use channel setup to enable it.
+The command reports linked creds/auth age when available, per-channel check summaries,
+session-store summary, and check duration. Live checks use bounded account concurrency
+and a Gateway-owned deadline, so one slow account returns a structured timeout while
+completed sibling results remain available. The command exits non-zero if the gateway is
+unreachable or the Gateway call itself times out.
+
+### Queue warnings
+
+A successful health RPC reports top-level `ok: true`. That value means the Gateway
+produced the snapshot; it does not mean every delivery queue is clear. Check
+`deliveryQueues.ingressPressure` for durable inbound lanes that may be blocking later
+events. The field is omitted when no pressured lanes are found.
+
+Ingress pressure uses conservative built-in diagnostic thresholds, not authoritative
+retry or claim policy for any plugin. A durable lane appears only when an active pending
+or claimed row has either reached at least eight attempts and has a recorded delivery
+error, or a claimed row has not refreshed its claim for 30 minutes. Ordinary retries
+1-7 are absent. Claim-recovery increments without a recorded error are also absent,
+while live claims stay absent because their claim timestamp is refreshed. Rows without
+a durable lane key are omitted because they cannot prove that later events are blocked;
+runtime persists a derived lane after a real derived-lane retry.
+
+Each result is grouped by channel account and reports pressured lane, pending, claimed,
+and blocked counts plus the oldest affected receive time. All active rows in a pressured
+lane contribute to those counts. The snapshot never includes lane IDs, event IDs,
+payloads, claim owners or tokens, recorded errors, or session and target identifiers.
 
 Options:
 
 - `--json`: machine-readable JSON output
-- `--timeout <ms>`: override the default 10s probe timeout
-- `--verbose`: force a live probe and print gateway connection details
+- `--timeout <ms>`: override the default 10s Gateway connection timeout; it does not widen the Gateway's internal live-check deadline
+- `--verbose`: force a live check and print gateway connection details
 - `--debug`: alias for `--verbose`
 
-The health snapshot includes: `ok` (boolean), `ts` (timestamp), `durationMs` (probe time), per-channel status, agent availability, and session-store summary.
+The health snapshot includes: `ok` (boolean), `ts` (timestamp), `durationMs` (check time), per-channel status, agent availability, session-store summary, and optional delivery-queue warnings.
 
 ## Related
 
 - [Gateway runbook](/gateway)
 - [Diagnostics export](/gateway/diagnostics)
 - [Gateway troubleshooting](/gateway/troubleshooting)
+- [`openclaw health`](/cli/health) — request this snapshot over RPC from the CLI

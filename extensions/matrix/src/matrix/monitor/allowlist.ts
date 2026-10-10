@@ -5,10 +5,6 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-normalization-runtime";
 
-function normalizeAllowList(list?: Array<string | number>) {
-  return normalizeStringEntries(list);
-}
-
 function normalizeMatrixUser(raw?: string | null): string {
   const value = (raw ?? "").trim();
   if (!value) {
@@ -17,17 +13,7 @@ function normalizeMatrixUser(raw?: string | null): string {
   if (!value.startsWith("@") || !value.includes(":")) {
     return normalizeLowercaseStringOrEmpty(value);
   }
-  const withoutAt = value.slice(1);
-  const splitIndex = withoutAt.indexOf(":");
-  if (splitIndex === -1) {
-    return normalizeLowercaseStringOrEmpty(value);
-  }
-  const localpart = normalizeLowercaseStringOrEmpty(withoutAt.slice(0, splitIndex));
-  const server = normalizeLowercaseStringOrEmpty(withoutAt.slice(splitIndex + 1));
-  if (!server) {
-    return normalizeLowercaseStringOrEmpty(value);
-  }
-  return `@${localpart}:${server}`;
+  return value;
 }
 
 export function normalizeMatrixUserId(raw?: string | null): string {
@@ -64,7 +50,7 @@ function normalizeMatrixAllowListEntry(raw: string): string {
 }
 
 export function normalizeMatrixAllowList(list?: Array<string | number>) {
-  return normalizeAllowList(list).map((entry) => normalizeMatrixAllowListEntry(entry));
+  return normalizeStringEntries(list).map(normalizeMatrixAllowListEntry);
 }
 
 type MatrixAllowListMatch = AllowlistMatch<"wildcard" | "id" | "prefixed-id" | "prefixed-user">;

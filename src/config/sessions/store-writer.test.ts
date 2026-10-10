@@ -1,59 +1,54 @@
+// Session store writer tests cover serialized session writes and cleanup.
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  clearSessionStoreCacheForTest,
-  getSessionStoreWriterQueueSizeForTest,
-  withSessionStoreWriterForTest,
-} from "./store.js";
-
-const createDeferred = <T>() => {
-  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
-  let reject: ((reason?: unknown) => void) | undefined;
-  const promise = new Promise<T>((nextResolve, nextReject) => {
-    resolve = nextResolve;
-    reject = nextReject;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred callbacks to be initialized");
-  }
-  return { promise, resolve, reject };
-};
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { clearSessionStoreCacheForTest } from "./store-writer-state.js";
+import { runExclusiveSessionStoreWrite } from "./store-writer.js";
 
 describe("session store writer", () => {
   afterEach(() => {
     clearSessionStoreCacheForTest();
   });
 
-  it("serializes runtime writes through one in-process writer", async () => {
+  it("does not leak active writer state to async children after the writer returns", async () => {
     const storePath = "/tmp/openclaw-store.json";
-    const firstStarted = createDeferred<void>();
-    const releaseFirst = createDeferred<void>();
     const order: string[] = [];
+    const childReleased = createDeferred();
+    let child: Promise<string> = Promise.resolve("not-started");
 
-    const first = withSessionStoreWriterForTest(storePath, async () => {
-      order.push("first:start");
-      firstStarted.resolve();
-      await releaseFirst.promise;
-      order.push("first:end");
+    await runExclusiveSessionStoreWrite(storePath, async () => {
+      child = (async () => {
+        await childReleased.promise;
+        return await runExclusiveSessionStoreWrite(storePath, async () => {
+          order.push("child");
+          return "child-result";
+        });
+      })();
     });
-    const second = withSessionStoreWriterForTest(storePath, async () => {
-      order.push("second");
+
+    const blockerReleased = createDeferred();
+    const blockerStarted = createDeferred();
+    const blocker = runExclusiveSessionStoreWrite(storePath, async () => {
+      order.push("blocker:start");
+      blockerStarted.resolve();
+      await blockerReleased.promise;
+      order.push("blocker:end");
     });
+    await blockerStarted.promise;
 
-    await firstStarted.promise;
-    expect(getSessionStoreWriterQueueSizeForTest()).toBe(1);
-    expect(order).toEqual(["first:start"]);
+    childReleased.resolve();
+    await Promise.resolve();
+    expect(order).toEqual(["blocker:start"]);
 
-    releaseFirst.resolve();
-    await Promise.all([first, second]);
+    blockerReleased.resolve();
+    await Promise.all([blocker, child]);
 
-    expect(order).toEqual(["first:start", "first:end", "second"]);
-    expect(getSessionStoreWriterQueueSizeForTest()).toBe(0);
+    expect(order).toEqual(["blocker:start", "blocker:end", "child"]);
+    expect(await child).toBe("child-result");
   });
 
   it("rejects empty store paths before enqueuing work", async () => {
-    await expect(withSessionStoreWriterForTest("", async () => undefined)).rejects.toThrow(
+    await expect(runExclusiveSessionStoreWrite("", async () => undefined)).rejects.toThrow(
       /storePath must be a non-empty string/,
     );
-    expect(getSessionStoreWriterQueueSizeForTest()).toBe(0);
   });
 });

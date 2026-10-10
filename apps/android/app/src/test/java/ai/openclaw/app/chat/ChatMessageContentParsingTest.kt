@@ -1,0 +1,683 @@
+package ai.openclaw.app.chat
+
+import ai.openclaw.app.gateway.GatewayCanvasHostRoute
+import ai.openclaw.app.ui.chat.completedToolDisplayName
+import ai.openclaw.app.ui.chat.readBoundedWidgetDocument
+import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import okio.Buffer
+import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Test
+
+class ChatMessageContentParsingTest {
+  @Test
+  fun dispatcherCallsDisplayTheCalledToolWithoutChangingCallIdentity() {
+    val cases =
+      listOf(
+        Triple("web_search", "web_search", "Web Search"),
+        Triple("mcp:github:search_issues", "search_issues", "Search Issues"),
+        Triple(" openclaw:core:web_search ", "web_search", "Web Search"),
+        Triple("client:client:exec", "exec", "Exec"),
+        Triple("custom:tool", "custom:tool", "Custom:tool"),
+      )
+    for ((id, name, title) in cases) {
+      val content =
+        Json.parseToJsonElement(
+          """{"type":"toolCall","id":"call-1","name":" TOOL_CALL ","arguments":{"id":"$id","query":"outer query","args":{"query":"OpenClaw release notes October 2026","token":"hidden"}}}""",
+        )
+      val tool = checkNotNull(parseChatMessageContent(content)?.toolActivity)
+      assertEquals("call-1", tool.toolCallId)
+      assertEquals(name, tool.name)
+      assertEquals(title, completedToolDisplayName(tool.name))
+      assertEquals("query: OpenClaw release notes October 2026", tool.detail)
+      assertEquals(Json.parseToJsonElement("""{"query":"OpenClaw release notes October 2026"}"""), tool.arguments)
+    }
+  }
+
+  @Test
+  fun invalidDispatcherIdsKeepTheOriginalDisplayArguments() {
+    for (idField in listOf("", "\"id\":\"\",", "\"id\":\" \",", "\"id\":3,", "\"id\":null,", "\"id\":{},", "\"id\":[],")) {
+      val tool =
+        checkNotNull(
+          parseChatMessageContent(
+            Json.parseToJsonElement("""{"type":"toolCall","id":"call-1","name":"tool_call","arguments":{$idField"query":"outer query","args":{"query":"no id"}}}"""),
+          )?.toolActivity,
+        )
+      assertEquals("tool_call", tool.name)
+      assertEquals("Tool Call", completedToolDisplayName(tool.name))
+      assertEquals("query: outer query", tool.detail)
+      assertEquals(Json.parseToJsonElement("""{"query":"outer query"}"""), tool.arguments)
+    }
+  }
+
+  @Test
+  fun ordinaryToolsDoNotInterpretDispatcherShapedArguments() {
+    for (name in listOf("web_search", "tool_search", "tool_describe")) {
+      val tool =
+        checkNotNull(
+          parseChatMessageContent(
+            Json.parseToJsonElement("""{"type":"toolCall","id":"call-1","name":"$name","arguments":{"id":"read","query":"outer query","args":{"path":"README.md"}}}"""),
+          )?.toolActivity,
+        )
+      assertEquals(name, tool.name)
+      assertEquals("query: outer query", tool.detail)
+      assertEquals(Json.parseToJsonElement("""{"query":"outer query"}"""), tool.arguments)
+    }
+  }
+
+  @Test
+  fun boundedWidgetDocumentReadAcceptsAtMostLimitAndRejectsOverflow() {
+    assertArrayEquals(
+      byteArrayOf(1, 2),
+      readBoundedWidgetDocument(Buffer().write(byteArrayOf(1, 2)), maxBytes = 3),
+    )
+    assertArrayEquals(
+      byteArrayOf(1, 2, 3),
+      readBoundedWidgetDocument(Buffer().write(byteArrayOf(1, 2, 3)), maxBytes = 3),
+    )
+    assertNull(readBoundedWidgetDocument(Buffer().write(byteArrayOf(1, 2, 3, 4)), maxBytes = 3))
+  }
+
+  @Test
+  fun projectsToolResultsIntoBoundedDisplayActivity() {
+    val content =
+      Json.parseToJsonElement(
+        """{"type":"toolResult","toolCallId":"call-1","name":"read","content":"useful output"}""",
+      )
+
+    assertEquals(
+      ChatMessageContent(
+        type = "toolResult",
+        toolActivity = ChatToolActivity("call-1", "read", null, "useful output", false),
+      ),
+      parseChatMessageContent(content),
+    )
+  }
+
+  @Test
+  fun preservesWebToolNameAndCallIdentityAliases() {
+    for (nameKey in listOf("toolName", "tool_name")) {
+      for (idKey in listOf("toolUseId", "tool_use_id", "callId")) {
+        val parsed =
+          parseChatMessageContent(
+            Json.parseToJsonElement(
+              """{"type":"toolResult","name":" ","toolCallId":" ","$nameKey":"bash","$idKey":"call-1","content":"output"}""",
+            ),
+          )
+        assertEquals(ChatToolActivity("call-1", "bash", null, "output", false), parsed?.toolActivity)
+      }
+    }
+  }
+
+  @Test
+  fun browserPresentationRequiresSuccessfulBrowserResultAndCompleteRoute() {
+    val host = """{"target":"host","profile":"openclaw","targetId":"t1","title":"Travel checklist","url":"https://example.test/travel"}"""
+    val node = """{"target":"node","node":"workstation","profile":"work","targetId":"t2"}"""
+
+    fun parse(
+      tab: String,
+      name: String = "browser",
+      type: String = "toolResult",
+      error: Boolean = false,
+    ) = parseChatMessageContent(
+      Json.parseToJsonElement("""{"type":"$type","toolName":"$name","toolCallId":"browser-1","isError":$error,"details":{"browserTab":$tab},"content":"https://example.test/travel"}"""),
+    )?.toolActivity?.browserTab
+
+    assertEquals(ChatBrowserTab("host", null, "openclaw", "t1", "https://example.test/travel", "Travel checklist"), parse(host))
+    assertEquals(ChatBrowserTab("node", "workstation", "work", "t2", null, null), parse(node))
+    for (invalid in listOf(
+      """{"target":"host","targetId":"t1"}""",
+      """{"target":"node","profile":"work","targetId":"t1"}""",
+      """{"target":"host","node":"workstation","profile":"work","targetId":"t1"}""",
+      """{"target":"host","profile":"work","targetId":" "}""",
+      """{"target":"sandbox","profile":"work","targetId":"t1"}""",
+    )) {
+      assertNull(parse(invalid))
+    }
+    assertNull(parse(host, name = "web_fetch"))
+    assertNull(parse(host, type = "toolCall"))
+    assertNull(parse(host, error = true))
+    val dispatched =
+      checkNotNull(
+        parseChatMessageContent(
+          Json.parseToJsonElement("""{"type":"toolResult","name":"tool_call","toolCallId":"browser-1","arguments":{"id":"browser","args":{}},"details":{"browserTab":$host},"content":"raw result","isError":false}"""),
+        )?.toolActivity,
+      )
+    assertEquals("browser", dispatched.name)
+    assertEquals("raw result", dispatched.result)
+    assertEquals(false, dispatched.isError)
+    assertNull(dispatched.browserTab)
+  }
+
+  @Test
+  fun preservesUnnamedResultsForMatchingWithoutInventingCallIdentity() {
+    val parsed =
+      parseChatMessageContent(
+        Json.parseToJsonElement("""{"type":"tool_result","tool_use_id":"call-1","content":"failure details","isError":true}"""),
+      )
+    assertEquals(ChatToolActivity("call-1", "tool", null, "failure details", true), parsed?.toolActivity)
+    assertNull(parseChatMessageContent(Json.parseToJsonElement("""{"type":"toolResult","content":""}""")))
+  }
+
+  @Test
+  fun boundsToolResultTextAndOnlyProjectsMeaningfulArguments() {
+    val longResult = "x".repeat(2_100)
+    val result =
+      parseChatMessageContent(
+        Json.parseToJsonElement(
+          """{"type":"toolResult","toolCallId":"call-1","name":"exec","content":"$longResult","details":{"secret":"hidden"}}""",
+        ),
+      )
+    val call =
+      parseChatMessageContent(
+        Json.parseToJsonElement(
+          """{"type":"toolCall","id":"call-1","name":"exec","arguments":{"command":"./gradlew test","token":"hidden"}}""",
+        ),
+      )
+
+    assertEquals(2_001, result?.toolActivity?.result?.length)
+    assertEquals("command: ./gradlew test", call?.toolActivity?.detail)
+    assertEquals(null, call?.toolActivity?.result)
+  }
+
+  @Test
+  fun toolResultsKeepAllMeaningfulTextBlocksInOrderWithinTheDisplayLimit() {
+    val parsed =
+      parseChatMessageContent(
+        Json.parseToJsonElement(
+          """{"type":"toolResult","toolCallId":"call-1","content":[{"text":" "},{"text":"first"},{"type":"image","data":"hidden"},{"text":"second"}]}""",
+        ),
+      )
+    assertEquals("first\nsecond", parsed?.toolActivity?.result)
+    val bounded =
+      parseChatMessageContent(
+        Json.parseToJsonElement(
+          """{"type":"toolResult","toolCallId":"call-1","content":[{"text":"${"x".repeat(1_999)}"},{"text":"second"}]}""",
+        ),
+      )
+    assertEquals("x".repeat(1_999) + "…", bounded?.toolActivity?.result)
+  }
+
+  @Test
+  fun progressPresentationRejectsUnknownAndUnboundedPlanStatuses() {
+    val parsed =
+      parseChatMessageContent(
+        Json.parseToJsonElement(
+          """{"type":"toolCall","id":"progress-1","name":"progress_card","arguments":{"plan":[{"step":"Ready","status":"pending"},{"step":"Working","status":"in_progress"},{"step":"Done","status":"completed"},{"step":"Invalid","status":"${"x".repeat(10_000)}"}]}}""",
+        ),
+      )
+    assertEquals(
+      Json.parseToJsonElement("""[{"step":"Ready","status":"pending"},{"step":"Working","status":"in_progress"},{"step":"Done","status":"completed"}]"""),
+      parsed?.toolActivity?.arguments?.get("plan"),
+    )
+  }
+
+  @Test
+  fun parsesCodexTextBlocksAsVisibleText() {
+    val content =
+      Json.parseToJsonElement(
+        """{"type":"output_text","text":"Done."}""",
+      )
+
+    assertEquals(ChatMessageContent(type = "text", text = "Done."), parseChatMessageContent(content))
+  }
+
+  @Test
+  fun parsesCapabilityGatedCanvasWidgets() {
+    val content =
+      Json.parseToJsonElement(
+        """{"type":"canvas","preview":{"kind":"canvas","surface":"assistant_message","render":"url","title":"Status","preferredHeight":240,"url":"/__openclaw__/canvas/documents/widget-1/index.html","sandbox":"scripts"}}""",
+      )
+
+    assertEquals(
+      ChatMessageContent(
+        type = "canvas",
+        widget =
+          ChatWidgetPreview(
+            title = "Status",
+            path = "/__openclaw__/canvas/documents/widget-1/index.html",
+            preferredHeight = 240,
+            sandbox = "scripts",
+          ),
+      ),
+      parseChatMessageContent(content),
+    )
+  }
+
+  @Test
+  fun dropsCanvasBlocksWithoutWidgetSandbox() {
+    val content =
+      Json.parseToJsonElement(
+        """{"type":"canvas","preview":{"kind":"canvas","surface":"assistant_message","render":"url","url":"/__openclaw__/canvas/documents/widget-1/index.html"}}""",
+      )
+
+    assertNull(parseChatMessageContent(content))
+  }
+
+  @Test
+  fun dropsCanvasBlocksWithUntrustedWidgetTargets() {
+    val content =
+      Json.parseToJsonElement(
+        """{"type":"canvas","preview":{"kind":"canvas","surface":"assistant_message","render":"url","url":"https://attacker.example/widget.html","sandbox":"scripts"}}""",
+      )
+
+    assertNull(parseChatMessageContent(content))
+  }
+
+  @Test
+  fun resolvesOnlyCapabilityScopedWidgetDocuments() {
+    val surface = "https://gateway.example/__openclaw__/cap/token"
+
+    assertEquals(
+      "https://gateway.example/__openclaw__/cap/token/__openclaw__/canvas/documents/widget-1/index.html",
+      ChatWidgetUrlResolver.resolve(surface, "/__openclaw__/canvas/documents/widget-1/index.html"),
+    )
+    assertEquals(
+      "https://gateway.example/__openclaw__/cap/token/__openclaw__/canvas/documents/widget-1/index.html",
+      ChatWidgetUrlResolver.resolve(
+        "HTTPS://gateway.example/__openclaw__/cap/token",
+        "/__openclaw__/canvas/documents/widget-1/index.html",
+      ),
+    )
+    assertNull(ChatWidgetUrlResolver.resolve("https://gateway.example", "/__openclaw__/canvas/documents/widget-1/index.html"))
+    assertNull(ChatWidgetUrlResolver.resolve(surface, "https://attacker.example/widget.html"))
+    assertNull(ChatWidgetUrlResolver.resolve(surface, "/__openclaw__/a2ui/index.html"))
+    assertNull(ChatWidgetUrlResolver.resolve(surface, "/__openclaw__/canvas/documents/%252e%252e/index.html"))
+  }
+
+  @Test
+  fun initialResolutionUsesOperatorFallbackWhenNodeUnavailable() {
+    val target = "/__openclaw__/canvas/documents/widget-1/index.html"
+    val fallbackSurface = "https://operator.example/__openclaw__/cap/fallback"
+    val surfaces =
+      ChatWidgetSurfaceUrls(
+        node = null,
+        operator = GatewayCanvasHostRoute(url = fallbackSurface, tlsFingerprintSha256 = null),
+      )
+
+    val resolved = ChatWidgetUrlResolver.resolvePreferred(surfaces, target, excluding = null)
+
+    assertEquals(ChatWidgetUrlResolver.resolve(fallbackSurface, target), resolved?.url)
+  }
+
+  @Test
+  fun usesReplacementRouteAfterCapabilityRefreshLosesItsLease() =
+    runTest {
+      val target = "/__openclaw__/canvas/documents/widget-1/index.html"
+      val oldSurface = "https://gateway.example/__openclaw__/cap/old"
+      val newSurface = "https://gateway.example/__openclaw__/cap/new"
+      val oldPin = "aa".repeat(32)
+      val newPin = "bb".repeat(32)
+      val failedUrl = ChatWidgetUrlResolver.resolve(oldSurface, target)
+      val failedResource = ChatWidgetResource(url = requireNotNull(failedUrl), tlsFingerprintSha256 = oldPin, surfaceRole = ChatWidgetSurfaceRole.NODE)
+      var current =
+        ChatWidgetSurfaceUrls(
+          node = GatewayCanvasHostRoute(url = oldSurface, tlsFingerprintSha256 = oldPin),
+          operator = null,
+        )
+
+      val resolved =
+        ChatWidgetUrlResolver.resolveAfterFailure(
+          target = target,
+          failedResource = failedResource,
+          currentSurfaceUrls = { current },
+          refreshNodeSurface = {
+            current =
+              ChatWidgetSurfaceUrls(
+                node = GatewayCanvasHostRoute(url = newSurface, tlsFingerprintSha256 = newPin),
+                operator = null,
+              )
+            null
+          },
+          refreshOperatorSurface = { null },
+        )
+
+      assertEquals(ChatWidgetUrlResolver.resolve(newSurface, target), resolved?.url)
+      assertEquals(newPin, resolved?.tlsFingerprintSha256)
+    }
+
+  @Test
+  fun acceptsSameUrlReplacementWhenTlsPinChanged() =
+    runTest {
+      val target = "/__openclaw__/canvas/documents/widget-1/index.html"
+      val surface = "https://gateway.example/__openclaw__/cap/token"
+      val oldPin = "aa".repeat(32)
+      val newPin = "bb".repeat(32)
+      val url = requireNotNull(ChatWidgetUrlResolver.resolve(surface, target))
+      val failedResource = ChatWidgetResource(url = url, tlsFingerprintSha256 = oldPin, surfaceRole = ChatWidgetSurfaceRole.NODE)
+      var current =
+        ChatWidgetSurfaceUrls(
+          node = GatewayCanvasHostRoute(url = surface, tlsFingerprintSha256 = oldPin),
+          operator = null,
+        )
+
+      val resolved =
+        ChatWidgetUrlResolver.resolveAfterFailure(
+          target = target,
+          failedResource = failedResource,
+          currentSurfaceUrls = { current },
+          refreshNodeSurface = {
+            current =
+              ChatWidgetSurfaceUrls(
+                node = GatewayCanvasHostRoute(url = surface, tlsFingerprintSha256 = newPin),
+                operator = null,
+              )
+            null
+          },
+          refreshOperatorSurface = { null },
+        )
+
+      assertEquals(url, resolved?.url)
+      assertEquals(newPin, resolved?.tlsFingerprintSha256)
+    }
+
+  @Test
+  fun refreshesNodeOnceBeforeTryingOperatorFallback() =
+    runTest {
+      val target = "/__openclaw__/canvas/documents/widget-1/index.html"
+      val oldSurface = "https://gateway.example/__openclaw__/cap/old"
+      val newSurface = "https://gateway.example/__openclaw__/cap/new"
+      val fallbackSurface = "https://operator.example/__openclaw__/cap/fallback"
+      var refreshCount = 0
+      var current =
+        ChatWidgetSurfaceUrls(
+          node = GatewayCanvasHostRoute(url = oldSurface, tlsFingerprintSha256 = null),
+          operator = GatewayCanvasHostRoute(url = fallbackSurface, tlsFingerprintSha256 = null),
+        )
+      val initialNode = ChatWidgetUrlResolver.resolvePreferred(current, target, excluding = null)
+
+      val refreshedNode =
+        ChatWidgetUrlResolver.resolveAfterFailure(
+          target = target,
+          failedResource = requireNotNull(initialNode),
+          currentSurfaceUrls = { current },
+          refreshNodeSurface = {
+            refreshCount += 1
+            current = current.copy(node = GatewayCanvasHostRoute(url = newSurface, tlsFingerprintSha256 = null))
+            null
+          },
+          refreshOperatorSurface = { null },
+        )
+
+      assertEquals(ChatWidgetUrlResolver.resolve(newSurface, target), refreshedNode?.url)
+
+      val fallback =
+        ChatWidgetUrlResolver.resolveAfterFailure(
+          target = target,
+          failedResource = requireNotNull(refreshedNode),
+          currentSurfaceUrls = { current },
+          refreshNodeSurface = {
+            refreshCount += 1
+            null
+          },
+          refreshOperatorSurface = { null },
+        )
+
+      assertEquals(ChatWidgetUrlResolver.resolve(fallbackSurface, target), fallback?.url)
+      assertEquals(1, refreshCount)
+    }
+
+  @Test
+  fun refreshesOperatorCapabilityWhenNodeUnavailable() =
+    runTest {
+      val target = "/__openclaw__/canvas/documents/widget-1/index.html"
+      val oldSurface = "https://operator.example/__openclaw__/cap/old"
+      val newSurface = "https://operator.example/__openclaw__/cap/new"
+      val failedResource =
+        ChatWidgetResource(
+          url = requireNotNull(ChatWidgetUrlResolver.resolve(oldSurface, target)),
+          tlsFingerprintSha256 = null,
+          surfaceRole = ChatWidgetSurfaceRole.OPERATOR,
+        )
+      var operatorRefreshCount = 0
+      var current =
+        ChatWidgetSurfaceUrls(
+          node = null,
+          operator = GatewayCanvasHostRoute(url = oldSurface, tlsFingerprintSha256 = null),
+        )
+
+      val resolved =
+        ChatWidgetUrlResolver.resolveAfterFailure(
+          target = target,
+          failedResource = failedResource,
+          currentSurfaceUrls = { current },
+          refreshNodeSurface = { null },
+          refreshOperatorSurface = {
+            operatorRefreshCount += 1
+            GatewayCanvasHostRoute(url = newSurface, tlsFingerprintSha256 = null).also {
+              current = current.copy(operator = it)
+            }
+          },
+        )
+
+      assertEquals(ChatWidgetUrlResolver.resolve(newSurface, target), resolved?.url)
+      assertEquals(1, operatorRefreshCount)
+    }
+
+  @Test
+  fun parsesInlineAndManagedImageBlocks() {
+    val image =
+      Json.parseToJsonElement(
+        """{"type":"image","mimeType":"image/png","fileName":"chart.png","content":"abc123"}""",
+      )
+    val managedImage =
+      Json.parseToJsonElement(
+        """{"type":"image","artifactId":"artifact_managed_image_11111111-1111-4111-8111-111111111111","mimeType":"image/png","fileName":"chart.png","url":"/api/chat/media/outgoing/main/id","openUrl":"/api/chat/media/outgoing/main/id","alt":"Chart","width":1200,"height":800,"sizeBytes":2048}""",
+      )
+
+    assertEquals(
+      ChatMessageContent(type = "image", mimeType = "image/png", fileName = "chart.png", base64 = "abc123"),
+      parseChatMessageContent(image),
+    )
+    assertEquals(
+      ChatMessageContent(
+        type = "image",
+        mimeType = "image/png",
+        fileName = "chart.png",
+        artifactId = "artifact_managed_image_11111111-1111-4111-8111-111111111111",
+        url = "/api/chat/media/outgoing/main/id",
+        openUrl = "/api/chat/media/outgoing/main/id",
+        alt = "Chart",
+        width = 1200,
+        height = 800,
+        sizeBytes = 2048,
+      ),
+      parseChatMessageContent(managedImage),
+    )
+  }
+
+  @Test
+  fun derivesArtifactIdentityForShippedManagedImageBlocks() {
+    val image =
+      Json.parseToJsonElement(
+        """{"type":"image","mimeType":"image/png","url":"/api/chat/media/outgoing/main/11111111-1111-4111-8111-111111111111/full"}""",
+      )
+
+    assertEquals(
+      "artifact_managed_image_11111111-1111-4111-8111-111111111111",
+      parseChatMessageContent(image)?.artifactId,
+    )
+  }
+
+  @Test
+  fun derivesArtifactIdentityForManagedAudioAndVideoBlocks() {
+    val attachmentId = "22222222-2222-4222-8222-222222222222"
+    val url = "/api/chat/media/outgoing/main/$attachmentId/full"
+
+    assertEquals("artifact_managed_media_$attachmentId", managedMediaArtifactId(url))
+    assertEquals(
+      "artifact_managed_media_$attachmentId",
+      parseChatMessageContent(Json.parseToJsonElement("""{"type":"video","mimeType":"video/mp4","url":"$url"}"""))?.artifactId,
+    )
+  }
+
+  @Test
+  fun parsesSupportedPlaybackRenditions() {
+    val direct =
+      Json.parseToJsonElement(
+        """{"type":"video","mimeType":"video/mp4","playback":"transcode"}""",
+      )
+    val attachment =
+      Json.parseToJsonElement(
+        """{"type":"attachment","attachment":{"kind":"audio","mimeType":"audio/mp4","playback":"native"}}""",
+      )
+    val unsupported =
+      Json.parseToJsonElement(
+        """{"type":"video","mimeType":"video/mp4","playback":"future"}""",
+      )
+
+    assertEquals("transcode", parseChatMessageContent(direct)?.playback)
+    assertEquals("native", parseChatMessageContent(attachment)?.playback)
+    assertEquals(null, parseChatMessageContent(unsupported)?.playback)
+  }
+
+  @Test
+  fun dropsOversizedInlineImageContentBeforeRendering() {
+    val oversized = "A".repeat(CHAT_IMAGE_MAX_BASE64_CHARS + 1)
+    val image =
+      Json.parseToJsonElement(
+        """{"type":"image","mimeType":"image/png","fileName":"large.png","content":"$oversized"}""",
+      )
+
+    assertEquals(
+      ChatMessageContent(type = "image", mimeType = "image/png", fileName = "large.png", base64 = null),
+      parseChatMessageContent(image),
+    )
+  }
+
+  @Test
+  fun dropsInlineAudioAndVideoContentThatRequiresManagedArtifacts() {
+    val audio = Json.parseToJsonElement("""{"type":"audio","mimeType":"audio/mpeg","content":"audio-bytes"}""")
+    val video = Json.parseToJsonElement("""{"type":"video","mimeType":"video/mp4","content":"video-bytes"}""")
+
+    assertEquals(ChatMessageContent(type = "audio", mimeType = "audio/mpeg"), parseChatMessageContent(audio))
+    assertEquals(ChatMessageContent(type = "video", mimeType = "video/mp4"), parseChatMessageContent(video))
+  }
+
+  @Test
+  fun preservesFlatGatewayDocumentAttachment() {
+    val attachment =
+      Json.parseToJsonElement(
+        """{"type":"attachment","name":"report.txt","url":"https://example.test/report.txt"}""",
+      )
+
+    assertEquals(
+      ChatMessageContent(type = "file", fileName = "report.txt", url = "https://example.test/report.txt"),
+      parseChatMessageContent(attachment),
+    )
+  }
+
+  @Test
+  fun preservesNestedGatewayDocumentAttachment() {
+    val attachment =
+      Json.parseToJsonElement(
+        """{"type":"attachment","attachment":{"kind":"document","label":"pasted-note.txt","mimeType":"text/plain","sizeBytes":48,"url":"/__openclaw__/pasted-note.txt"}}""",
+      )
+
+    assertEquals(
+      ChatMessageContent(
+        type = "file",
+        mimeType = "text/plain",
+        fileName = "pasted-note.txt",
+        url = "/__openclaw__/pasted-note.txt",
+        sizeBytes = 48,
+      ),
+      parseChatMessageContent(attachment),
+    )
+  }
+
+  @Test
+  fun preservesHistoricalFileAttachment() {
+    val attachment =
+      Json.parseToJsonElement(
+        """{"type":"file","fileName":"summary.pdf","mimeType":"application/pdf","url":"/files/summary.pdf"}""",
+      )
+
+    assertEquals(
+      ChatMessageContent(
+        type = "file",
+        mimeType = "application/pdf",
+        fileName = "summary.pdf",
+        url = "/files/summary.pdf",
+      ),
+      parseChatMessageContent(attachment),
+    )
+  }
+
+  @Test
+  fun dropsUnknownAttachmentKinds() {
+    val attachment =
+      Json.parseToJsonElement(
+        """{"type":"attachment","attachment":{"kind":"future","label":"unknown.bin"}}""",
+      )
+
+    assertNull(parseChatMessageContent(attachment))
+  }
+
+  @Test
+  fun parsesDirectAndAttachmentAudioVideoBlocks() {
+    val direct =
+      Json.parseToJsonElement(
+        """{"type":"audio","mimeType":"audio/mp4","fileName":"voice.m4a"}""",
+      )
+    val attachment =
+      Json.parseToJsonElement(
+        """{"type":"attachment","attachment":{"kind":"audio","mimeType":"audio/mpeg","label":"reply.mp3","artifactId":"artifact_managed_media_33333333-3333-4333-8333-333333333333","url":"/api/chat/media/outgoing/main/33333333-3333-4333-8333-333333333333/full","sizeBytes":4096,"durationMs":2100}}""",
+      )
+    val video =
+      Json.parseToJsonElement(
+        """{"type":"attachment","attachment":{"kind":"video","mimeType":"video/mp4","fileName":"demo.mp4","artifactId":"artifact_managed_media_44444444-4444-4444-8444-444444444444","url":"/api/chat/media/outgoing/main/44444444-4444-4444-8444-444444444444/full","sizeBytes":8192,"durationMs":5300,"width":1920,"height":1080}}""",
+      )
+
+    assertEquals(
+      ChatMessageContent(type = "audio", mimeType = "audio/mp4", fileName = "voice.m4a"),
+      parseChatMessageContent(direct),
+    )
+    assertEquals(
+      ChatMessageContent(
+        type = "audio",
+        mimeType = "audio/mpeg",
+        fileName = "reply.mp3",
+        artifactId = "artifact_managed_media_33333333-3333-4333-8333-333333333333",
+        url = "/api/chat/media/outgoing/main/33333333-3333-4333-8333-333333333333/full",
+        sizeBytes = 4096,
+        durationMs = 2100,
+      ),
+      parseChatMessageContent(attachment),
+    )
+    assertEquals(
+      ChatMessageContent(
+        type = "video",
+        mimeType = "video/mp4",
+        fileName = "demo.mp4",
+        artifactId = "artifact_managed_media_44444444-4444-4444-8444-444444444444",
+        url = "/api/chat/media/outgoing/main/44444444-4444-4444-8444-444444444444/full",
+        width = 1920,
+        height = 1080,
+        sizeBytes = 8192,
+        durationMs = 5300,
+      ),
+      parseChatMessageContent(video),
+    )
+  }
+
+  @Test
+  fun parsesTranscriptAudioMediaFieldsAlongsideCaption() {
+    val message =
+      Json
+        .parseToJsonElement(
+          """{"content":[{"type":"text","text":"See attached."}],"MediaPaths":["media/inbound/voice.m4a"],"MediaTypes":["audio/x-m4a"]}""",
+        ).jsonObject
+
+    assertEquals(
+      listOf(
+        ChatMessageContent(type = "text", text = "See attached."),
+        ChatMessageContent(type = "audio", mimeType = "audio/x-m4a", fileName = "voice.m4a"),
+      ),
+      parseChatMessageContents(message),
+    )
+  }
+}

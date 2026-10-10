@@ -27,7 +27,7 @@ type MSTeamsActivity = {
   locale?: string;
   serviceUrl?: string;
   channelData?: {
-    team?: { id?: string; name?: string };
+    team?: { id?: string; aadGroupId?: string; name?: string };
     channel?: { id?: string; name?: string };
     tenant?: { id?: string };
     [key: string]: unknown;
@@ -44,16 +44,31 @@ type MSTeamsActivity = {
   name?: string;
   membersAdded?: Array<{ id?: string; name?: string }>;
   membersRemoved?: Array<{ id?: string; name?: string }>;
+  reactionsAdded?: Array<{ type?: string }>;
+  reactionsRemoved?: Array<{ type?: string }>;
   replyToId?: string;
   [key: string]: unknown;
 };
 
+/** Structural alias for ActivityParams — avoids tsgo resolution bugs with the bundled @microsoft/teams.api package. */
+type MSTeamsActivityParams = { type?: string; [key: string]: unknown };
+export type MSTeamsActivityLike = MSTeamsActivityParams | string;
+
+type MSTeamsStreamer = {
+  emit(activity: MSTeamsActivityParams | string): void;
+  update(text: string): void;
+  clearText(): void;
+  close(): Promise<unknown>;
+  readonly canceled: boolean;
+};
+
 export type MSTeamsTurnContext = {
   activity: MSTeamsActivity;
-  sendActivity: (textOrActivity: string | object) => Promise<unknown>;
-  sendActivities: (
-    activities: Array<{ type: string } & Record<string, unknown>>,
-  ) => Promise<unknown>;
-  updateActivity: (activity: object) => Promise<{ id?: string } | void>;
+  sendActivity: (activity: MSTeamsActivityLike) => Promise<unknown>;
+  sendActivities: (activities: Array<MSTeamsActivityParams>) => Promise<unknown>;
+  updateActivity: (activity: MSTeamsActivityParams) => Promise<{ id?: string } | void>;
   deleteActivity: (activityId: string) => Promise<void>;
+  /** Resolve Bot Framework team metadata through this activity's regional service URL. */
+  getTeamDetails?: (teamId: string) => Promise<{ aadGroupId?: string }>;
+  stream?: MSTeamsStreamer;
 };

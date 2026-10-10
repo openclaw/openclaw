@@ -1,18 +1,66 @@
+import type { DaemonRuntimePinUpdate } from "./runtime-pin-types.js";
+import type { ServiceInspectionReason } from "./service-inspection-error.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
+import type { GatewayServiceDefinitionTransactionHooks } from "./service-stage.js";
 
 export type GatewayServiceEnv = Record<string, string | undefined>;
 
+/** Platform service adapter contract shared by inspection and lifecycle owners. */
+export type GatewayService = {
+  label: string;
+  loadedText: string;
+  notLoadedText: string;
+  /** Diagnostic guidance only; this does not establish service absence. */
+  unsupportedReason?: string;
+  stage: (args: GatewayServiceInstallArgs) => Promise<void>;
+  install: (args: GatewayServiceInstallArgs) => Promise<void>;
+  uninstall: (args: GatewayServiceManageArgs) => Promise<void>;
+  start: (args: GatewayServiceControlArgs) => Promise<void>;
+  stop: (args: GatewayServiceControlArgs) => Promise<void>;
+  restart: (args: GatewayServiceControlArgs) => Promise<GatewayServiceRestartResult>;
+  isLoaded: (args: GatewayServiceEnvArgs) => Promise<boolean>;
+  isEnabled?: (args: GatewayServiceEnvArgs) => Promise<boolean>;
+  hasInstalledDefinition?: (args: GatewayServiceEnvArgs) => Promise<boolean>;
+  isAbsent?: (args: GatewayServiceEnvArgs & { strictCommandAbsent?: true }) => Promise<boolean>;
+  readDefinitionMutationCapability?: (
+    args: GatewayServiceEnvArgs & {
+      environment?: GatewayServiceEnv;
+      requireLoaded?: boolean;
+      systemdReadBinding?: GatewayServiceReadOptions["systemdReadBinding"];
+      systemdReadTarget?: GatewayServiceReadOptions["systemdReadTarget"];
+    },
+  ) => Promise<ServiceDefinitionMutationCapability>;
+  readCommand: (
+    env: GatewayServiceEnv,
+    opts?: GatewayServiceReadOptions,
+  ) => Promise<GatewayServiceCommandConfig | null>;
+  readRuntime: (
+    env: GatewayServiceEnv,
+    opts?: GatewayServiceReadOptions,
+  ) => Promise<GatewayServiceRuntime>;
+};
+
 export type GatewayServiceInstallArgs = {
+  /** Required by managed writers when explicit runtime intent is already stored. */
+  runtimePinUpdate?: DaemonRuntimePinUpdate;
+  /** Preserve the existing enable policy during an update-owned definition rebind. */
+  preserveAutoStart?: boolean;
+  beforeMutation?: () => Promise<void>;
+  /** Live caller authority, retained at every native write boundary. */
+  assertCurrent?: () => void;
   env: GatewayServiceEnv;
   stdout: NodeJS.WritableStream;
+  warn?: (message: string) => void;
   programArguments: string[];
   workingDirectory?: string;
   environment?: GatewayServiceEnv;
   environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
   description?: string;
+  // Verified before a config rewrite; Windows uses this to bridge a transient
+  // listener gap while replacing a Startup-folder fallback.
+  startupFallbackTakeoverRuntime?: GatewayServiceRuntime;
+  definitionTransaction?: GatewayServiceDefinitionTransactionHooks;
 };
-
-export type GatewayServiceStageArgs = GatewayServiceInstallArgs;
 
 export type GatewayServiceManageArgs = {
   env: GatewayServiceEnv;
@@ -20,44 +68,388 @@ export type GatewayServiceManageArgs = {
 };
 
 export type GatewayServiceControlArgs = {
+  /** Retained POSIX recovery observes attempts before a native restart can accept writes. */
+  onRestartAttempted?: () => void;
+  /** Correlation only: native stop needs live update authority and transferred helpers also revalidate their lease. */
+  updateHandoff?: { root: string; runId: string };
+  /** Revalidate captured binding after native lock and config admission, before effects. */
+  beforeMutation?: () => Promise<void>;
   stdout: NodeJS.WritableStream;
   env?: GatewayServiceEnv;
   disable?: boolean;
+  preserveDefinition?: boolean;
+  /** Start the captured manager without changing its separately restored enable policy. */
+  preserveAutoStart?: boolean;
+  /** Original live caller fence, rechecked at native mutation boundaries. */
+  assertCurrent?: () => void;
+  /** Complete owner handoff after native inspection, before dispatch. */
+  prepareEffect?: () => Promise<void>;
+  /** State that intentionally changes after this native effect; checked only before dispatch. */
+  beforeEffect?: () => void;
+  /** Native identity captured before stopping; activation must revalidate it. */
+  systemdIdentity?: SystemdServiceIdentity;
+  warn?: (message: string) => void;
+  onMutation?: (mutation: GatewayLifecycleMutation) => void;
+};
+
+/** In-memory native evidence; never reconstructed from readiness or persisted state. */
+export type SystemdServiceIdentity = {
+  scope: "user" | "system";
+  unitName: string;
+  unitPath: string;
+  bus: { address: string } | { machine: string };
+  busId: string;
+  managerOwner: string;
+  managerUid: number;
+  serviceUser: string;
+  /** Explicit adopted non-root account, inspected by a root update executor. */
+  rootServiceAccount?: string;
+};
+
+export type GatewayLifecycleMutationMode =
+  | "enable"
+  | "bootstrap"
+  | "kickstart"
+  | "bootout"
+  | "disable"
+  | "disable-bootout"
+  | "handoff-kickstart"
+  | "handoff-reload"
+  | "systemctl-start"
+  | "systemctl-stop"
+  | "systemctl-restart"
+  | "startup-entry-start"
+  | "startup-entry-stop"
+  | "startup-entry-restart"
+  | "schtasks-start"
+  | "schtasks-stop"
+  | "schtasks-end"
+  | "schtasks-restart"
+  | "sigterm"
+  | "sigusr1"
+  | "rpc"
+  | "launchd-bootstrap"
+  | "service-repair"
+  | "scheduled"
+  | "deferred"
+  | "coalesced"
+  | "reload"
+  | "start-after-exit";
+
+export type GatewayLifecycleMutation = {
+  mode: GatewayLifecycleMutationMode;
 };
 
 export type GatewayServiceRestartResult = { outcome: "completed" } | { outcome: "scheduled" };
 
 export type GatewayServiceEnvArgs = {
   env?: GatewayServiceEnv;
+  // Bounds service-manager probes (e.g. `systemctl`) so a wedged daemon socket
+  // cannot hang status reads indefinitely. Only status read paths set this;
+  // control/install paths leave it unset to preserve their existing behavior.
+  timeoutMs?: number;
+  /** Strict observation must retain unavailable definition evidence as unknown. */
+  requireEffective?: boolean;
+};
+
+export type GatewayServiceLoadStateReader = Pick<GatewayService, "isLoaded">;
+
+/** Live recovery custody, never reconstructed from a saved record alone. Loading
+ * permits native definition inspection, not enablement, start, or readiness. */
+export type GatewayServiceUnitInspection = {
+  managerUid: number;
+  /** Full current-claim authority immediately around a possible LoadUnit. */
+  assertCurrent: () => void;
+  /** Live exclusion for passive queries; omitted callers retain the full check. */
+  assertReadCurrent?: () => void;
+};
+
+/** Operation-local transport evidence, never serialized or a mutation grant. */
+export type SystemdServiceReadBinding = {
+  readonly unit: string;
+  readonly managerUid: number;
+  readonly destination: string;
+  verify: () => void;
+  query: (
+    args: string[],
+    signatures: string[],
+    deadline: number,
+    inspection?: GatewayServiceUnitInspection,
+  ) => Promise<unknown[] | null>;
+  close: () => Promise<void>;
+};
+
+export type GatewayServiceCommandInspection =
+  | { kind: "absent" }
+  | { kind: "present"; command?: GatewayServiceCommandConfig }
+  | { kind: "unavailable"; error: unknown };
+
+/** Selected native unit for one inspection; never a service mutation grant. */
+export type SystemdServiceReadTarget = Pick<
+  SystemdServiceIdentity,
+  "scope" | "unitName" | "unitPath"
+>;
+
+/** Both installed scopes must remain visible so callers can diagnose competing supervisors. */
+export type SystemdGatewayInstallation =
+  | { kind: "none" }
+  | { kind: "user"; user: SystemdServiceReadTarget }
+  | { kind: "system"; system: SystemdServiceReadTarget }
+  | {
+      kind: "dueling";
+      user: SystemdServiceReadTarget;
+      system: SystemdServiceReadTarget;
+    };
+
+/** Bounded service inspection; strict reads reject unverified commands/environments and return null only for proven absence. */
+export type GatewayServiceReadOptions = {
+  systemdReadTarget?: SystemdServiceReadTarget;
+  systemdReadBinding?: SystemdServiceReadBinding;
+  timeoutMs?: number;
+  requireEffective?: boolean;
+  /** Carry the command reader's verdict into runtime inspection without repeating it. */
+  commandInspection?: GatewayServiceCommandInspection;
+  onCommandInspection?: (inspection: GatewayServiceCommandInspection) => void;
+  /** Command inspection must not load an unloaded native unit. */
+  requireLoaded?: boolean;
+  loadForInspection?: GatewayServiceUnitInspection;
+};
+
+export type ReadGatewayServiceStateArgs = GatewayServiceEnvArgs & {
+  windowsStartupEntry?: string;
+  systemdReadTarget?: GatewayServiceReadOptions["systemdReadTarget"];
+  systemdInstallation?: GatewayServiceState["systemdInstallation"];
+  requireEffective?: boolean;
+  requireLoadedCommand?: boolean;
+  loadForInspection?: GatewayServiceReadOptions["loadForInspection"];
+  systemdReadBinding?: GatewayServiceReadOptions["systemdReadBinding"];
+  validateEnvBeforeStatusRead?: (env: GatewayServiceEnv) => void;
 };
 
 export type GatewayServiceEnvironmentValueSource = "inline" | "file" | "inline-and-file";
 
-export type GatewayServiceCommandConfig = {
+export type GatewayServiceLoadState =
+  | { status: "loaded" }
+  | { status: "not-loaded" }
+  | { status: "unknown"; detail: string; inspectionReason?: ServiceInspectionReason };
+
+const SERVICE_DEFINITION_ARTIFACTS = {
+  "service-directory":
+    "service directory (~/.config/systemd/user) or its nearest existing ancestor",
+  "state-directory": "service state directory or its nearest existing ancestor",
+  "definition-directory": "loaded service definition directory",
+  "service-file": "service file",
+} as const;
+
+const SERVICE_DEFINITION_REASONS = {
+  "unsafe-permissions":
+    "is group/world-writable. Inspect ownership and permissions locally. If the path is yours and not intentionally shared, remove group/other write access with chmod go-w <path>, then retry. Use 0700 for private directories; ask the deployment owner about shared paths. Do not use recursive chmod or sudo to bypass this check.",
+  "invalid-artifact":
+    "has an unexpected file type. Inspect the service directories and files locally; have their owner repair the layout before retrying. Changing permissions alone will not repair it.",
+  symlink:
+    "is a symbolic link. Ask the deployment owner to replace the managed file through the deployment process; OpenClaw will not rewrite the link or its target.",
+  "foreign-owner":
+    "belongs to another account. Ask the privileged deployment owner to repair or replace it; do not take ownership or use --force to bypass this check.",
+  "sealed-mount":
+    "cannot be replaced on its mount. Ask the deployment owner to update the mounted artifact or deployment; chmod and --force cannot make it replaceable.",
+  "system-owned":
+    "is owned by a system service. Ask the privileged deployment owner to update it; do not create a competing user service.",
+  "system-ownership-unverified":
+    "has unverifiable system-service ownership. Restore system service-manager and filesystem inspection access from the service account, then retry; do not create a competing user service.",
+  "inspection-failed":
+    "cannot be safely inspected. Inspect service definition access and native service-manager availability from the service account, then retry. Do not share config or environment contents.",
+} as const;
+
+export type ServiceDefinitionMutationArtifact = keyof typeof SERVICE_DEFINITION_ARTIFACTS;
+export type ServiceDefinitionMutationCapability =
+  | { kind: "writable" }
+  | {
+      kind: "sealed" | "unknown";
+      reason: keyof typeof SERVICE_DEFINITION_REASONS;
+      artifact?: ServiceDefinitionMutationArtifact;
+      path?: string;
+    };
+
+export function assertServiceDefinitionWritable(capability: ServiceDefinitionMutationCapability) {
+  if (capability.kind === "writable") {
+    return;
+  }
+  // Native errors and extra fields can contain secrets; only recorded artifact paths are diagnostic.
+  const reason = Object.hasOwn(SERVICE_DEFINITION_REASONS, capability.reason)
+    ? capability.reason
+    : "inspection-failed";
+  const artifact =
+    capability.artifact && Object.hasOwn(SERVICE_DEFINITION_ARTIFACTS, capability.artifact)
+      ? SERVICE_DEFINITION_ARTIFACTS[capability.artifact]
+      : "service definition";
+  // Update recovery recognizes these prefixes to preserve a protected definition.
+  const code =
+    capability.kind === "sealed" ? "SERVICE_DEFINITION_SEALED" : "SERVICE_DEFINITION_UNKNOWN";
+  const location = capability.path ? ` ${JSON.stringify(capability.path)}` : "";
+  throw new Error(
+    `${code}: [${reason}] The ${artifact}${location} ${SERVICE_DEFINITION_REASONS[reason]}`,
+  );
+}
+
+export type GatewayServiceCommandSnapshot = {
   programArguments: string[];
   workingDirectory?: string;
   environment?: Record<string, string>;
   environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource>;
-  sourcePath?: string;
 };
 
+export type GatewayServiceManagedOverrides = {
+  launcher?: "command" | "working-directory";
+  environment?: true | { keys?: string[]; resetInline?: true; resetFiles?: true };
+};
+
+/** Effective platform command with its authored base and inspected override metadata. */
+export type GatewayServiceCommandConfig = GatewayServiceCommandSnapshot & {
+  sourcePath?: string;
+  definitionPaths?: string[];
+  /** Selected login items observed with the Scheduled Task registration missing. */
+  startupEntryPaths?: string[];
+  managedDefinition?: GatewayServiceCommandSnapshot;
+  managedOverrides?: GatewayServiceManagedOverrides;
+  reloadPending?: true;
+};
+
+export function resolveManagedGatewayServiceCommand(
+  command: GatewayServiceCommandConfig | null | undefined,
+): GatewayServiceCommandSnapshot | null {
+  return command?.managedDefinition ?? command ?? null;
+}
+
+/** Empty inspected overrides are ordinary metadata; a base without inspection is unknown. */
+export function hasGatewayServiceDefinitionOverrides(
+  command: GatewayServiceCommandConfig | null | undefined,
+): boolean {
+  return command?.managedOverrides
+    ? Object.keys(command.managedOverrides).length > 0
+    : Boolean(command?.managedDefinition);
+}
+
+/** Operator-owned launcher overrides cannot be repaired by rewriting the managed base. */
+export function hasGatewayServiceLauncherOverride(
+  command: GatewayServiceCommandConfig | null | undefined,
+  options?: { includeWorkingDirectory?: boolean },
+): boolean {
+  const managedOverrides = command?.managedOverrides;
+  const includeWorkingDirectory = options?.includeWorkingDirectory !== false;
+  if (managedOverrides) {
+    return Boolean(
+      managedOverrides.launcher &&
+      (includeWorkingDirectory || managedOverrides.launcher !== "working-directory"),
+    );
+  }
+  const managedDefinition = command?.managedDefinition;
+  return Boolean(
+    managedDefinition &&
+    ((includeWorkingDirectory && managedDefinition.workingDirectory !== command.workingDirectory) ||
+      managedDefinition.programArguments.join("\0") !== command.programArguments.join("\0")),
+  );
+}
+
+export function hasGatewayServiceEnvironmentOverride(
+  command: GatewayServiceCommandConfig | null | undefined,
+  keys: readonly string[],
+  options?: {
+    normalizeKey?: (key: string) => string | null;
+    environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
+    ignoreResets?: boolean;
+  },
+): boolean {
+  const managedOverrides = command?.managedOverrides;
+  if (!managedOverrides) {
+    return hasGatewayServiceEnvironmentDifference(command, keys);
+  }
+  const environment = managedOverrides.environment;
+  if (environment === true || !environment) {
+    return environment === true && keys.length > 0;
+  }
+  const normalize = options?.normalizeKey ?? ((key: string) => key);
+  const ownedKeys = new Set(environment.keys?.map(normalize));
+  const sources =
+    options?.environmentValueSources ?? command.managedDefinition?.environmentValueSources;
+  return keys.some((key) => {
+    const normalized = normalize(key);
+    if (normalized !== null && ownedKeys.has(normalized)) {
+      return true;
+    }
+    if (options?.ignoreResets) {
+      return false;
+    }
+    const source =
+      sources?.[key] ??
+      (options?.normalizeKey &&
+        Object.entries(sources ?? {}).find(([rawKey]) => normalize(rawKey) === normalized)?.[1]) ??
+      "inline";
+    return Boolean(
+      (environment.resetInline && source !== "file") ||
+      (environment.resetFiles && source !== "inline"),
+    );
+  });
+}
+
+export function hasGatewayServiceEnvironmentDifference(
+  command: GatewayServiceCommandConfig | null | undefined,
+  keys: readonly string[],
+): boolean {
+  const managedDefinition = command?.managedDefinition;
+  return Boolean(
+    managedDefinition &&
+    keys.some(
+      (key) =>
+        command.environment?.[key] !== managedDefinition.environment?.[key] ||
+        (command.environmentValueSources?.[key] ?? "inline") !==
+          (managedDefinition.environmentValueSources?.[key] ?? "inline"),
+    ),
+  );
+}
+
+/** Remove inherited operator overrides before a managed definition is rewritten. */
+export function resolveManagedGatewayServiceProcessEnv(
+  command: GatewayServiceCommandConfig | null | undefined,
+  processEnv: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv | null {
+  const overrides = command?.managedOverrides?.environment;
+  if (overrides === true || overrides?.resetInline || overrides?.resetFiles) {
+    return null;
+  }
+  const managedEnvironment = resolveManagedGatewayServiceCommand(command)?.environment;
+  const environment = { ...processEnv, ...managedEnvironment };
+  for (const key of [...Object.keys(command?.environment ?? {}), ...(overrides?.keys ?? [])]) {
+    if (!Object.hasOwn(managedEnvironment ?? {}, key)) {
+      delete environment[key];
+    }
+  }
+  return environment;
+}
+
 export type GatewayServiceState = {
+  systemdInstallation?: SystemdGatewayInstallation;
+  inspectionReason?: ServiceInspectionReason;
   installed: boolean;
-  loaded: boolean;
+  loadState: GatewayServiceLoadState;
   running: boolean;
   env: GatewayServiceEnv;
   command: GatewayServiceCommandConfig | null;
+  definitionMutationCapability?: ServiceDefinitionMutationCapability;
   runtime?: GatewayServiceRuntime;
 };
 
 export type GatewayServiceStartRepairIssue = {
-  code: "missing-program" | "temporary-program" | "version-mismatch";
+  code: "missing-program" | "port-mismatch" | "temporary-program";
   message: string;
 };
 
 export type GatewayServiceStartResult =
+  | {
+      outcome: "already-running";
+      state: GatewayServiceState;
+      issues: GatewayServiceStartRepairIssue[];
+    }
   | { outcome: "started"; state: GatewayServiceState }
-  | { outcome: "scheduled"; state: GatewayServiceState }
   | { outcome: "missing-install"; state: GatewayServiceState }
   | {
       outcome: "repair-required";

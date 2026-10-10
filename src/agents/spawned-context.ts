@@ -1,7 +1,16 @@
+/**
+ * Spawned run metadata helpers.
+ *
+ * Projects tool runtime context into persisted lineage, group routing, workspace, and inherited policy metadata.
+ */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
+import type { DelegatedToolPolicyContext } from "./delegated-tool-policy.js";
+import type { ModelRef } from "./model-ref-shared.js";
+import type { PreparedSessionPermissionPolicy } from "./tool-fs-policy.types.js";
 
 export type SpawnedRunMetadata = {
   spawnedBy?: string | null;
@@ -11,14 +20,17 @@ export type SpawnedRunMetadata = {
   workspaceDir?: string | null;
 };
 
-export type SpawnedToolContext = {
+export type SpawnedToolContext = DelegatedToolPolicyContext & {
   agentGroupId?: string | null;
   agentGroupChannel?: string | null;
   agentGroupSpace?: string | null;
   agentMemberRoleIds?: string[];
   workspaceDir?: string;
-  inheritedToolAllowlist?: string[];
-  inheritedToolDenylist?: string[];
+  /** Effective parent-turn level, including one-shot overrides, for child inheritance. */
+  requesterThinkingLevel?: ThinkLevel;
+  /** Effective parent-turn model; saved preferences may describe a later turn. */
+  requesterModel?: ModelRef;
+  sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
 };
 
 type NormalizedSpawnedRunMetadata = {
@@ -29,6 +41,7 @@ type NormalizedSpawnedRunMetadata = {
   workspaceDir?: string;
 };
 
+/** Normalize optional spawn metadata fields from persisted or tool-provided input. */
 export function normalizeSpawnedRunMetadata(
   value?: SpawnedRunMetadata | null,
 ): NormalizedSpawnedRunMetadata {
@@ -41,6 +54,7 @@ export function normalizeSpawnedRunMetadata(
   };
 }
 
+/** Project tool runtime context down to the persisted spawned-run metadata shape. */
 export function mapToolContextToSpawnedRunMetadata(
   value?: SpawnedToolContext | null,
 ): Pick<NormalizedSpawnedRunMetadata, "groupId" | "groupChannel" | "groupSpace" | "workspaceDir"> {
@@ -52,6 +66,7 @@ export function mapToolContextToSpawnedRunMetadata(
   };
 }
 
+/** Resolve which workspace a spawned run should inherit. */
 export function resolveSpawnedWorkspaceInheritance(params: {
   config: OpenClawConfig;
   targetAgentId?: string;
@@ -71,9 +86,19 @@ export function resolveSpawnedWorkspaceInheritance(params: {
   return agentId ? resolveAgentWorkspaceDir(params.config, normalizeAgentId(agentId)) : undefined;
 }
 
-export function resolveIngressWorkspaceOverrideForSpawnedRun(
-  metadata?: Pick<SpawnedRunMetadata, "spawnedBy" | "workspaceDir"> | null,
+/** Resolve the persisted workspace used when a session re-enters an agent runtime. */
+export function resolveIngressWorkspaceOverrideForSessionRun(
+  metadata?:
+    | (Pick<SpawnedRunMetadata, "spawnedBy" | "workspaceDir"> & {
+        cwd?: string | null;
+      })
+    | null,
 ): string | undefined {
   const normalized = normalizeSpawnedRunMetadata(metadata);
-  return normalized.spawnedBy ? normalized.workspaceDir : undefined;
+  if (normalized.spawnedBy && normalized.workspaceDir) {
+    return normalized.workspaceDir;
+  }
+  // Visible children can record lineage without an inherited workspace.
+  // Their managed cwd must remain the sandbox workspace on later turns too.
+  return normalizeOptionalString(metadata?.cwd);
 }

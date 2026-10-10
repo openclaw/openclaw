@@ -1,9 +1,10 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
-import { withEnvAsync } from "../test-utils/env.js";
+import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
 import { runCapability } from "./runner.js";
 import { withVideoFixture } from "./runner.test-utils.js";
+import type { MediaUnderstandingProvider } from "./types.js";
 
 vi.mock("../media/channel-inbound-roots.js", () => ({
   resolveChannelInboundAttachmentRoots: () => undefined,
@@ -22,155 +23,80 @@ vi.mock("../plugins/capability-provider-runtime.js", async () => {
   return createEmptyCapabilityProviderMockModule();
 });
 
-type CapabilityResult = Awaited<ReturnType<typeof runCapability>>;
+vi.mock("../agents/model-auth.js", async () => {
+  const { createAvailableModelAuthMockModule } = await import("./runner.test-mocks.js");
+  return createAvailableModelAuthMockModule();
+});
 
-function requireCapabilityOutput(result: CapabilityResult, index: number) {
-  const output = result.outputs[index];
-  if (!output) {
-    throw new Error(`expected media-understanding output at index ${index}`);
-  }
-  return output;
+function videoConfig(models?: MediaUnderstandingModelConfig[]): OpenClawConfig {
+  return {
+    models: {
+      providers: {
+        moonshot: { baseUrl: "https://video.example/v1", apiKey: "test-key", models: [] },
+      },
+    },
+    tools: { media: { models, video: { enabled: true } } },
+  };
 }
 
-describe("runCapability video provider wiring", () => {
-  it("merges video baseUrl and headers with entry precedence", async () => {
-    let seenBaseUrl: string | undefined;
-    let seenHeaders: Record<string, string> | undefined;
-
-    await withTempDir({ prefix: "openclaw-video-auth-" }, async (isolatedAgentDir) => {
-      await withVideoFixture("openclaw-video-merge", async ({ ctx, media, cache }) => {
-        const cfg = {
-          models: {
-            providers: {
-              moonshot: {
-                auth: "api-key",
-                apiKey: "provider-key", // pragma: allowlist secret
-                baseUrl: "https://provider.example/v1",
-                headers: { "X-Provider": "1" },
-                models: [],
-              },
-            },
-          },
-          tools: {
-            media: {
-              video: {
-                enabled: true,
-                baseUrl: "https://config.example/v1",
-                headers: { "X-Config": "2" },
-                models: [
-                  {
-                    provider: "moonshot",
-                    model: "kimi-k2.5",
-                    baseUrl: "https://entry.example/v1",
-                    headers: { "X-Entry": "3" },
-                  },
-                ],
-              },
-            },
-          },
-        } as unknown as OpenClawConfig;
-
-        const result = await runCapability({
-          capability: "video",
-          cfg,
-          ctx,
-          agentDir: isolatedAgentDir,
-          attachments: cache,
-          media,
-          providerRegistry: new Map([
-            [
-              "moonshot",
-              {
-                id: "moonshot",
-                capabilities: ["video"],
-                describeVideo: async (req) => {
-                  seenBaseUrl = req.baseUrl;
-                  seenHeaders = req.headers;
-                  return { text: "video ok", model: req.model };
-                },
-              },
-            ],
-          ]),
-        });
-
-        const output = requireCapabilityOutput(result, 0);
-        expect(output.text).toBe("video ok");
-        expect(output.provider).toBe("moonshot");
-        expect(seenBaseUrl).toBe("https://entry.example/v1");
-        expect(seenHeaders).toEqual({
-          "X-Provider": "1",
-          "X-Config": "2",
-          "X-Entry": "3",
-        });
-      });
+async function runVideo(
+  provider: MediaUnderstandingProvider,
+  cfg: OpenClawConfig,
+  activeModel?: Parameters<typeof runCapability>[0]["activeModel"],
+) {
+  let result: Awaited<ReturnType<typeof runCapability>> | undefined;
+  await withVideoFixture("openclaw-video", async ({ ctx, media, cache }) => {
+    result = await runCapability({
+      capability: "video",
+      cfg,
+      ctx,
+      attachments: cache,
+      media,
+      providerRegistry: new Map([[provider.id, provider]]),
+      activeModel,
     });
   });
+  return expectDefined(result, "video result");
+}
 
-  it("auto-selects moonshot for video when google is unavailable", async () => {
-    await withTempDir({ prefix: "openclaw-video-agent-" }, async (isolatedAgentDir) => {
-      await withEnvAsync(
-        {
-          GEMINI_API_KEY: undefined,
-          GOOGLE_API_KEY: undefined,
-          MOONSHOT_API_KEY: undefined,
-          OPENCLAW_AGENT_DIR: isolatedAgentDir,
-          PI_CODING_AGENT_DIR: isolatedAgentDir,
+describe("runCapability video", () => {
+  it("truncates provider output without splitting a boundary emoji", async () => {
+    const prefix = "v".repeat(79);
+    const result = await runVideo(
+      {
+        id: "moonshot",
+        capabilities: ["video"],
+        describeVideo: async (req) => ({
+          text: `${prefix}${String.fromCodePoint(0x1f600)}tail`,
+          model: req.model,
+        }),
+      },
+      videoConfig([{ provider: "moonshot", model: "kimi-k2.5", maxChars: 80 }]),
+    );
+    const output = expectDefined(result.outputs[0], "media output 0");
+    expect(output.text).toBe(prefix);
+    expect(output.text).not.toContain(String.fromCharCode(0xd83d));
+  });
+
+  it("resolves active video provider defaults", async () => {
+    let seenModel: string | undefined;
+    const result = await runVideo(
+      {
+        id: "moonshot",
+        capabilities: ["video"],
+        describeVideo: async (req) => {
+          seenModel = req.model;
+          return { text: "moonshot", model: req.model ?? "provider-default" };
         },
-        async () => {
-          await withVideoFixture("openclaw-video-auto-moonshot", async ({ ctx, media, cache }) => {
-            const cfg = {
-              models: {
-                providers: {
-                  moonshot: {
-                    auth: "api-key",
-                    apiKey: "moonshot-key", // pragma: allowlist secret
-                    models: [],
-                  },
-                },
-              },
-              tools: {
-                media: {
-                  video: {
-                    enabled: true,
-                  },
-                },
-              },
-            } as unknown as OpenClawConfig;
-
-            const result = await runCapability({
-              capability: "video",
-              cfg,
-              ctx,
-              agentDir: isolatedAgentDir,
-              attachments: cache,
-              media,
-              providerRegistry: new Map([
-                [
-                  "google",
-                  {
-                    id: "google",
-                    capabilities: ["video"],
-                    describeVideo: async () => ({ text: "google" }),
-                  },
-                ],
-                [
-                  "moonshot",
-                  {
-                    id: "moonshot",
-                    capabilities: ["video"],
-                    describeVideo: async () => ({ text: "moonshot", model: "kimi-k2.5" }),
-                  },
-                ],
-              ]),
-            });
-
-            expect(result.decision.outcome).toBe("success");
-            const output = requireCapabilityOutput(result, 0);
-            expect(output.provider).toBe("moonshot");
-            expect(output.text).toBe("moonshot");
-          });
-        },
-      );
+      },
+      videoConfig(),
+      { provider: "moonshot" },
+    );
+    expect(result.decision.outcome).toBe("success");
+    expect(result.outputs[0]).toMatchObject({
+      provider: "moonshot",
+      model: "provider-default",
     });
+    expect(seenModel).toBeUndefined();
   });
 });

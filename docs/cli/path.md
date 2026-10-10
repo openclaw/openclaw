@@ -9,58 +9,60 @@ title: "Path"
 
 # `openclaw path`
 
-Plugin-provided shell access to the `oc://` addressing substrate: one
-kind-dispatched path scheme for inspecting and editing addressable workspace
-files (markdown, jsonc, jsonl, yaml/yml/lobster). Self-hosters, plugin
-authors, and editor extensions use it to read, find, or update a narrow
-location without hand-rolling per-file parsers.
+Shell access to the `oc://` addressing scheme: one kind-dispatched path syntax
+for inspecting and editing addressable workspace files (markdown, jsonc,
+jsonl, yaml/yml/lobster). Self-hosters, plugin authors, and editor extensions
+use it to read, find, or update a narrow location without hand-rolling a
+per-file parser.
 
-The CLI mirrors the substrate's public verbs:
-
-- `resolve` is concrete and single-match.
-- `find` is the multi-match verb for wildcards, unions, predicates, and
-  positional expansion.
-- `set` only accepts concrete paths or insertion markers; wildcard patterns are
-  rejected before writing.
-
-`path` is provided by the bundled optional `oc-path` plugin. Enable it before
-first use:
+`path` is provided by the bundled optional [`oc-path` plugin](/plugins/oc-path).
+Enable it before first use:
 
 ```bash
 openclaw plugins enable oc-path
 ```
 
+The CLI verbs mirror the addressing model:
+
+- `resolve` is concrete and single-match.
+- `find` is the multi-match verb for wildcards, unions, predicates, and
+  positional expansion.
+- `set` only accepts concrete paths or insertion markers; wildcard patterns
+  are rejected before writing.
+- `validate` parses a path with no filesystem access.
+- `emit` round-trips a file through parse + emit (byte-fidelity diagnostic).
+
 ## Why use it
 
-OpenClaw state is spread across human-edited markdown, commented JSONC config,
-append-only JSONL logs, and YAML workflow/spec files. Shell scripts, hooks,
+OpenClaw state is spread across human-edited markdown, commented JSONC
+config, append-only JSONL logs, and YAML workflow/spec files. Scripts, hooks,
 and agents often need one small value from those files: a frontmatter key, a
-plugin setting, a log record field, a YAML step, or a bullet item under a named
-section.
+plugin setting, a log record field, a YAML step, or a bullet item under a
+named section.
 
-`openclaw path` gives those callers a stable address instead of a one-off grep,
-regex, or parser for each file kind. The same `oc://` path can be validated,
-resolved, searched, dry-run, and written from the terminal, which makes narrow
-automation easier to review and safer to replay. It is especially useful when
-you want to update one leaf while preserving the rest of the file's comments,
-line endings, and surrounding formatting.
+`openclaw path` gives those callers a stable address instead of a one-off
+grep, regex, or parser per file kind. The same `oc://` path can be validated,
+resolved, searched, dry-run, and written from the terminal, which keeps narrow
+automation reviewable and replayable. It preserves the rest of the file, so
+writing one leaf does not disturb its comments, line endings, or nearby
+formatting.
 
-Use it when the thing you want has a logical address, but the physical file
-shape varies:
+Use it when the thing you want has a logical address, but the file shape
+varies:
 
-- A hook wants to read one setting from commented JSONC without losing comments
-  when it writes the value back.
-- A maintenance script wants to find every matching event field in a JSONL log
+- A hook reads one setting from commented JSONC without losing comments when
+  it writes the value back.
+- A maintenance script finds every matching event field in a JSONL log
   without loading the whole log into a custom parser.
-- An editor extension wants to jump to a markdown section or bullet item by
-  slug, then render the exact line it resolved to.
-- An agent wants to dry-run a tiny workspace edit before applying it, with the
+- An editor jumps to a markdown section or bullet item by slug, then renders
+  the exact line it resolved to.
+- An agent dry-runs a small workspace edit before applying it, with the
   changed bytes visible in review.
 
-You probably do not need `openclaw path` for ordinary whole-file edits, rich
-config migrations, or memory-specific writes. Those should use the owner
-command or plugin. `path` is for small, addressable file operations where a
-repeatable terminal command is clearer than another bespoke parser.
+Skip `openclaw path` for ordinary whole-file edits, rich config migrations, or
+memory-specific writes; those should use the owner command or plugin. `path`
+is for small, addressable file operations where a repeatable terminal command
+beats another bespoke parser.
 
 ## How it is used
 
@@ -89,30 +91,29 @@ number:
 openclaw path resolve 'oc://AGENTS.md/runtime-safety/openclaw-gateway'
 ```
 
-Validate a path in CI or a preflight script before the script reads or writes:
+Validate a path in CI or a preflight script before the script reads or
+writes:
 
 ```bash
 openclaw path validate 'oc://AGENTS.md/tools/$last/risk'
 ```
 
-Those commands are meant to be copyable into shell scripts. Use `--json` when a
-caller needs structured output and `--human` when a person is inspecting the
-result.
+These commands are meant to be copyable into shell scripts. Use `--json` when
+a caller needs structured output and `--human` when a person is inspecting
+the result.
 
 ## How it works
 
-`openclaw path` does four things:
-
-1. Parses the `oc://` address into slots: file, section, item, field, and
-   optional session.
+1. Parses the `oc://` address into slots: file, section, item, field, and an
+   optional session query.
 2. Chooses the file-kind adapter from the target extension (`.md`, `.jsonc`,
-   `.jsonl`, `.yaml`, `.yml`, `.lobster`, and related aliases).
-3. Resolves the slots against that file kind's AST: markdown headings/items,
-   JSONC object keys/array indexes, JSONL line records, or YAML map/sequence
-   nodes.
-4. For `set`, emits edited bytes through the same adapter so the untouched
-   parts of the file keep their comments, line endings, and nearby formatting
-   where the kind supports it.
+   `.json`, `.jsonl`, `.ndjson`, `.yaml`, `.yml`, `.lobster`).
+3. Resolves the slots against that file kind's structure: markdown
+   headings/items, JSONC object keys/array indexes, JSONL line records, or
+   YAML map/sequence nodes.
+4. For `set`, emits edited bytes through the same adapter so untouched parts
+   of the file keep their comments, line endings, and nearby formatting where
+   the kind supports it.
 
 `resolve` and `set` require one concrete target. `find` is the exploratory
 verb: it expands wildcards, unions, predicates, and ordinals into the concrete
@@ -120,99 +121,120 @@ matches you can inspect before choosing one to write.
 
 ## Subcommands
 
-| Subcommand              | Purpose                                                                      |
-| ----------------------- | ---------------------------------------------------------------------------- |
-| `resolve <oc-path>`     | Print the concrete match at the path (or "not found").                       |
-| `find <pattern>`        | Enumerate matches for a wildcard / union / predicate path.                   |
-| `set <oc-path> <value>` | Write a leaf or insertion target at a concrete path. Supports `--dry-run`.   |
-| `validate <oc-path>`    | Parse-only; print structural breakdown (file / section / item / field).      |
-| `emit <file>`           | Round-trip a file through `parseXxx` + `emitXxx` (byte-fidelity diagnostic). |
+| Subcommand              | Purpose                                                                     |
+| ----------------------- | --------------------------------------------------------------------------- |
+| `resolve <oc-path>`     | Print the concrete match at the path (or "not found").                      |
+| `find <pattern>`        | Enumerate matches for a wildcard / union / predicate path.                  |
+| `set <oc-path> <value>` | Write a leaf or insertion target at a concrete path. Supports `--dry-run`.  |
+| `validate <oc-path>`    | Parse-only; print the structural breakdown (file / section / item / field). |
+| `emit <file>`           | Round-trip a file through parse + emit (byte-fidelity diagnostic).          |
 
 ## Global flags
 
-| Flag            | Purpose                                                                  |
-| --------------- | ------------------------------------------------------------------------ |
-| `--cwd <dir>`   | Resolve the file slot against this directory (default: `process.cwd()`). |
-| `--file <path>` | Override the file slot's resolved path (absolute access).                |
-| `--json`        | Force JSON output (default when stdout is not a TTY).                    |
-| `--human`       | Force human output (default when stdout is a TTY).                       |
-| `--dry-run`     | (only on `set`) print the bytes that would be written without writing.   |
-| `--diff`        | (with `set --dry-run`) print a unified diff instead of the full bytes.   |
+| Flag            | Applies to                       | Purpose                                                                  |
+| --------------- | -------------------------------- | ------------------------------------------------------------------------ |
+| `--cwd <dir>`   | `resolve`, `find`, `set`, `emit` | Resolve the file slot against this directory (default: `process.cwd()`). |
+| `--file <path>` | `resolve`, `find`, `set`, `emit` | Override the file slot's resolved path (absolute access).                |
+| `--json`        | all                              | Force JSON output (default when stdout is not a TTY).                    |
+| `--human`       | all                              | Force human output (default when stdout is a TTY).                       |
+| `--value-json`  | `set`                            | Parse `<value>` as JSON for JSON/JSONC/JSONL leaf replacement.           |
+| `--dry-run`     | `set`                            | Print the bytes that would be written without writing.                   |
+| `--diff`        | `set` (requires `--dry-run`)     | Print a unified diff instead of the full bytes.                          |
+
+`validate` takes only `--json` / `--human`; it does no filesystem access, so
+`--cwd` and `--file` do not apply.
 
 ## `oc://` syntax
 
-```
+```text
 oc://FILE/SECTION/ITEM/FIELD?session=SCOPE
 ```
 
-Slot rules: `field` requires `item`, and `item` requires `section`. Across all
-four slots:
+Slot rules: `field` requires `item`, and `item` requires `section`. Across
+all four slots:
 
-- **Quoted segments** — `"a/b.c"` survives `/` and `.` separators.
-  Content is byte-literal; `"` and `\` are not allowed inside quotes.
-  The file slot is also quote-aware: `oc://"skills/email-drafter"/Tools/$last`
-  treats `skills/email-drafter` as a single file path.
-- **Predicates** — `[k=v]`, `[k!=v]`, `[k<v]`, `[k<=v]`, `[k>v]`,
-  `[k>=v]`. Numeric ops require both sides to coerce to finite numbers.
+- **Quoted segments** — `"a/b.c"` survives `/` and `.` separators. Content is
+  byte-literal; `"` and `\` are not allowed inside quotes. The file slot is
+  also quote-aware: `oc://"skills/email-drafter"/Tools/$last` treats
+  `skills/email-drafter` as a single file path.
+- **Predicates** — `[k=v]`, `[k!=v]`, `[k<v]`, `[k<=v]`, `[k>v]`, `[k>=v]`.
+  Numeric operators require both sides to coerce to finite numbers.
 - **Unions** — `{a,b,c}` matches any of the alternatives.
 - **Wildcards** — `*` (single sub-segment) and `**` (zero-or-more,
   recursive). `find` accepts these; `resolve` and `set` reject them as
   ambiguous.
 - **Positional** — `$first` / `$last` resolve to the first / last index or
   declared key.
-- **Ordinal** — `#N` for Nth match by document order.
-- **Insertion markers** — `+`, `+key`, `+nnn` for keyed / indexed
-  insertion (use with `set`).
-- **Session scope** — `?session=cron-daily` etc. Orthogonal to slot
-  nesting. Session values are raw, not percent-decoded; they may not contain
-  control characters or reserved query delimiters (`?`, `&`, `%`).
+- **Ordinal** — `#N` for the Nth match by document order.
+- **Insertion markers** — `+`, `+key`, `+nnn` for keyed / indexed insertion
+  (use with `set`).
+- **Session scope** — `?session=cron-daily` etc. Orthogonal to slot nesting.
+  Session values are raw, not percent-decoded; they may not contain control
+  characters or reserved query delimiters (`?`, `&`, `%`).
 
 Reserved characters (`?`, `&`, `%`) outside quoted, predicate, or union
-segments are rejected. Control characters (U+0000-U+001F, U+007F) are rejected
-anywhere, including the `session` query value.
+segments are rejected. Control characters (U+0000-U+001F, U+007F) are
+rejected anywhere, including the `session` query value.
 
 `formatOcPath(parseOcPath(path)) === path` is guaranteed for canonical paths.
 Non-canonical query parameters are ignored except for the first non-empty
 `session=` value.
 
+Hard limits: a path caps at 4096 bytes, at most 4 slots (file/section/item/
+field), at most 64 dotted sub-segments per slot, and at most 256 nested
+traversal levels for deep JSON paths. Separately, every file input over 16 MiB
+is refused before parsing for any verb that loads the file. JSONC/JSON keeps
+the `OC_JSONC_INPUT_TOO_LARGE` diagnostic; other file kinds use
+`OC_PATH_INPUT_TOO_LARGE`.
+
 ## Addressing by file kind
 
-| Kind              | Addressing model                                                                                    |
-| ----------------- | --------------------------------------------------------------------------------------------------- |
-| Markdown          | H2 sections by slug, bullet items by slug or `#N`, frontmatter via `[frontmatter]`.                 |
-| JSONC/JSON        | Object keys and array indexes; dots split nested sub-segments unless quoted.                        |
-| JSONL             | Top-level line addresses (`L1`, `L2`, `$first`, `$last`), then JSONC-style descent inside the line. |
-| YAML/YML/.lobster | Map keys and sequence indexes; comments and flow style are handled by the YAML document API.        |
+| Kind          | File extensions             | Addressing model                                                                                    |
+| ------------- | --------------------------- | --------------------------------------------------------------------------------------------------- |
+| Markdown      | `.md`                       | H2 sections by slug, bullet items by slug or `#N`, frontmatter via `[frontmatter]`.                 |
+| JSONC/JSON    | `.jsonc`, `.json`           | Object keys and array indexes; dots split nested sub-segments unless quoted.                        |
+| JSONL         | `.jsonl`, `.ndjson`         | Top-level line addresses (`L1`, `L2`, `$first`, `$last`), then JSONC-style descent inside the line. |
+| YAML/.lobster | `.yaml`, `.yml`, `.lobster` | Map keys and sequence indexes; comments and flow style are handled by the YAML document API.        |
 
 `resolve` returns a structured match: `root`, `node`, `leaf`, or
-`insertion-point`, with a 1-based line number. Leaf values are surfaced as text
-plus a `leafType` so plugin authors can render previews without depending on
-the per-kind AST shape.
+`insertion-point`, with a 1-based line number. Leaf values are surfaced as
+text plus a `leafType` so plugin authors can render previews without
+depending on the per-kind AST shape.
 
 ## Mutation contract
 
 `set` writes one concrete target:
 
-- Markdown frontmatter values and `- key: value` item fields are string leaves.
-  Markdown insertions append sections, frontmatter keys, or section items and
-  render a canonical markdown shape for the changed file.
+- Markdown frontmatter values and `- key: value` item fields are string
+  leaves. Values are literal, including `$1`, `$&`, and `$$`. Markdown
+  insertions append sections, frontmatter keys, or section items and render a
+  canonical Markdown shape for the changed file. Section bodies are not
+  writable as a whole through `set`.
 - JSONC leaf writes coerce the string value to the existing leaf type
-  (`string`, finite `number`, `true`/`false`, or `null`). JSONC object and array
-  insertions parse `<value>` as JSON and use the `jsonc-parser` edit path for
-  ordinary leaf writes, preserving comments and nearby formatting.
-- JSONL leaf writes coerce like JSONC inside a line. Whole-line replacement and
-  append parse `<value>` as JSON. Rendered JSONL preserves the file's dominant
-  LF/CRLF line-ending convention.
+  (`string`, finite `number`, `true`/`false`, or `null`). Use `--value-json`
+  when a JSONC/JSON/JSONL leaf replacement should parse `<value>` as JSON and
+  may change shape, such as replacing a string secret-ref shorthand with an
+  object. JSONC object and array insertions parse `<value>` as JSON and use
+  the `jsonc-parser` edit path for ordinary leaf writes, preserving comments
+  and nearby formatting.
+- JSONL leaf writes coerce like JSONC inside a line. Whole-line replacement
+  and append parse `<value>` as JSON. Rendered JSONL preserves the file's
+  dominant LF/CRLF line-ending convention (majority vote across the file's
+  newlines, so a mostly-CRLF file stays CRLF even with a few stray LFs).
 - YAML leaf writes coerce to the existing scalar type (`string`, finite
   `number`, `true`/`false`, or `null`). YAML insertions use the bundled
   `yaml` package's document API for map/sequence updates. Malformed YAML
-  documents with parser errors are refused before mutation with `parse-error`.
+  documents with parser errors are refused before mutation with
+  `parse-error`.
 
-Use `--dry-run` before user-visible writes when the exact bytes matter. The
-substrate preserves byte-identical output for parse/emit round-trips, but a
-mutation can canonicalize the edited region or file depending on kind.
-Add `--diff` when you want the preview as a focused before/after patch instead
-of the full rendered file.
+Use `--dry-run` before user-visible writes when the exact bytes matter. JSONC
+and YAML edits patch the existing document (via `jsonc-parser` or the `yaml`
+document API), so untouched bytes usually survive; markdown rebuilds the file
+from its parsed structure on any edit, which can normalize incidental
+formatting outside the changed leaf. Add `--diff` when you want the preview
+as a focused before/after patch instead of the full rendered file.
+The patch records line-ending changes and missing final newlines, so applying
+it produces the same bytes as the write.
 
 ## Examples
 
@@ -244,6 +266,12 @@ More grammar examples:
 ```bash
 # Quote keys containing / or .
 openclaw path resolve 'oc://config.jsonc/agents.defaults.models/"anthropic/claude-opus-4-7"/alias'
+
+# Deep JSON/JSONC paths can use slash segments; they normalize to dotted subsegments
+openclaw path set 'oc://openclaw.json/agents/list/0/tools/exec/security' 'allowlist' --dry-run
+
+# Replace a JSONC leaf with a parsed object
+openclaw path set 'oc://openclaw.json/gateway/auth/token' '{"source":"file","provider":"secrets","id":"/test"}' --value-json --dry-run
 
 # Predicate search over JSONC children
 openclaw path find 'oc://config.jsonc/plugins/[enabled=true]/id'
@@ -281,8 +309,8 @@ openclaw path validate 'oc://AGENTS.md/Tools/$last/risk?session=cron-daily'
 
 ## Recipes by file kind
 
-The same five verbs work across kinds; the addressing scheme dispatches on the
-file extension. The examples below use the fixtures from the PR description.
+The same five verbs work across kinds; the addressing scheme dispatches on
+the file extension.
 
 ### Markdown
 
@@ -315,7 +343,7 @@ $ openclaw path find 'oc://x.md/tools/*' --file frontmatter.md --human
 
 The `[frontmatter]` predicate addresses the YAML frontmatter block; `tools`
 matches the `## Tools` heading via slug, and item leaves keep their slug form
-even when the source uses underscores (`send_email` → `send-email`).
+even when the source uses underscores (`send_email` becomes `send-email`).
 
 ### JSONC
 
@@ -345,6 +373,7 @@ $ openclaw path set 'oc://config.jsonc/plugins/slack/enabled' 'true' --file conf
 
 JSONC edits go through `jsonc-parser`, so comments and whitespace survive a
 `set`. Run with `--dry-run` first to inspect the bytes before committing.
+`.json` files use the same adapter and edit path as `.jsonc`.
 
 ### JSONL
 
@@ -363,8 +392,9 @@ $ openclaw path resolve 'oc://session.jsonl/L2/ts' --file session.jsonl --human
 leaf @ L2: "2" (number)
 ```
 
-Each line is a record. Address by predicate (`[event=action]`) when you do not
-know the line number, or by the canonical `LN` segment when you do.
+Each line is a record. Address by predicate (`[event=action]`) when you do
+not know the line number, or by the canonical `LN` segment when you do.
+`.ndjson` files use the same adapter as `.jsonl`.
 
 ### YAML
 
@@ -392,10 +422,10 @@ steps:
     command: openclaw.invoke
 ```
 
-YAML uses the `yaml` package's `Document` API rather than a hand-rolled parser,
-so ordinary parse/emit round-trips preserve comments and authoring shape while
-resolved paths use the same map-key / sequence-index model as JSONC. The same
-adapter handles `.yaml`, `.yml`, and `.lobster` files.
+YAML uses the `yaml` package's `Document` API rather than a hand-rolled
+parser, so ordinary parse/emit round-trips preserve comments and authoring
+shape while resolved paths use the same map-key / sequence-index model as
+JSONC. The same adapter handles `.yaml`, `.yml`, and `.lobster` files.
 
 ## Subcommand reference
 
@@ -414,8 +444,7 @@ openclaw path resolve 'oc://gateway.jsonc/server/port' --json
 
 Enumerate every match for a wildcard / predicate / union pattern. Exits `0`
 on at least one match, `1` on zero. File-slot wildcards are rejected with
-`OC_PATH_FILE_WILDCARD_UNSUPPORTED` — pass a concrete file (multi-file
-globbing is a follow-up feature).
+`OC_PATH_FILE_WILDCARD_UNSUPPORTED` and exit `2` — pass a concrete file path.
 
 ```bash
 openclaw path find 'oc://AGENTS.md/tools/**/risk'
@@ -438,7 +467,8 @@ openclaw path set 'oc://AGENTS.md/Tools/+gh/risk' 'low'
 ```
 
 The `+key` insertion marker creates the named child if it does not already
-exist; `+nnn` and bare `+` work for indexed and append insertion respectively.
+exist; `+nnn` and bare `+` work for indexed and append insertion
+respectively.
 
 ### `validate <oc-path>`
 
@@ -454,13 +484,13 @@ valid: oc://AGENTS.md/tools/gh
   item:    gh
 ```
 
-Exits `0` when valid, `1` when invalid (with a structured `code` and
-`message`), `2` on argument errors.
+Exits `0` when valid and `1` when invalid (with a structured `code` and
+`message`). Missing required arguments are rejected by Commander with exit `1`.
 
 ### `emit <file>`
 
 Round-trip a file through the per-kind parser and emitter. The output should
-be byte-identical to the input on a sound file — divergence indicates a
+be byte-identical to the input on a sound file; divergence indicates a
 parser bug or a sentinel hit. Useful for debugging substrate behavior on
 real-world inputs.
 
@@ -471,11 +501,11 @@ openclaw path emit ./gateway.jsonc --json
 
 ## Exit codes
 
-| Code | Meaning                                                                    |
-| ---- | -------------------------------------------------------------------------- |
-| `0`  | Success. (`resolve` / `find`: at least one match. `set`: write succeeded.) |
-| `1`  | No match, or `set` rejected by the substrate (no system-level error).      |
-| `2`  | Argument or parse error.                                                   |
+| Code | Meaning                                                                                             |
+| ---- | --------------------------------------------------------------------------------------------------- |
+| `0`  | Success. (`resolve` / `find`: at least one match. `set`: write succeeded.)                          |
+| `1`  | No match, invalid `validate` input, missing required arguments, or `set` rejected by the substrate. |
+| `2`  | Path or file parse error, refused pattern, or invalid mutation options.                             |
 
 ## Output mode
 
@@ -485,18 +515,20 @@ auto-detection.
 
 ## Notes
 
-- `set` writes bytes through the substrate's emit path, which applies the
-  redaction-sentinel guard automatically. A leaf carrying
-  `__OPENCLAW_REDACTED__` (verbatim or as a substring) is refused at write
-  time.
+- `set` refuses string leaf values containing `__OPENCLAW_REDACTED__`
+  (verbatim or as a substring) before a write or dry-run preview. This includes
+  Markdown insertion values for frontmatter, items, and headings. Ordinary
+  edits retain unrelated pre-existing marker text.
 - JSONC parsing and leaf edits use the plugin-local `jsonc-parser`
   dependency, so comments and formatting are preserved on ordinary leaf
   writes instead of going through a hand-rolled parser/re-render path.
-- `path` does not know about LKG. If the file is LKG-tracked, the next
-  observe call decides whether to promote / recover. `set --batch` for
-  atomic multi-set through the LKG promote/recover lifecycle is planned
-  alongside the LKG-recovery substrate.
+- `path` is not aware of last-known-good (LKG) config tracking or recovery;
+  that lifecycle is owned elsewhere. If a file you edit through `path` is
+  also LKG-tracked, the next config read decides whether to promote or
+  recover it; treat a `path` edit the same as any other direct write to
+  that file.
 
 ## Related
 
 - [CLI reference](/cli)
+- [OC Path plugin](/plugins/oc-path)

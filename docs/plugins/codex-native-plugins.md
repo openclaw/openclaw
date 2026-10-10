@@ -1,37 +1,61 @@
 ---
-summary: "Configure migrated native Codex plugins for Codex-mode OpenClaw agents"
+summary: "Configure native Codex plugins for Codex-mode OpenClaw agents"
 title: "Native Codex plugins"
 read_when:
   - You want Codex-mode OpenClaw agents to use native Codex plugins
   - You are migrating source-installed openai-curated Codex plugins
+  - You are discovering or installing a Codex marketplace plugin
   - You are troubleshooting codexPlugins, app inventory, destructive actions, or plugin app diagnostics
+  - You need the precedence of OpenClaw policy, native app defaults, and per-tool overrides
 ---
 
 Native Codex plugin support lets a Codex-mode OpenClaw agent use Codex
 app-server's own app and plugin capabilities inside the same Codex thread that
-handles the OpenClaw turn.
+handles the OpenClaw turn. Plugin calls stay in the native Codex transcript;
+Codex app-server owns app-backed MCP execution. OpenClaw does not translate
+Codex plugins into synthetic `codex_plugin_*` OpenClaw dynamic tools.
 
-OpenClaw does not translate Codex plugins into synthetic `codex_plugin_*`
-OpenClaw dynamic tools. Plugin calls stay in the native Codex transcript, and
-Codex app-server owns the app-backed MCP execution.
-
-Use this page after the base [Codex harness](/plugins/codex-harness) is working.
+Use this page after the base [Codex harness](/plugins/codex-harness) is
+working.
 
 ## Requirements
 
-- The selected OpenClaw agent runtime must be the native Codex harness.
-- `plugins.entries.codex.enabled` must be true.
-- `plugins.entries.codex.config.codexPlugins.enabled` must be true.
-- V1 supports only `openai-curated` plugins that migration observed as
-  source-installed in the source Codex home.
-- The target Codex app-server must be able to see the expected marketplace,
-  plugin, and app inventory.
+- The agent runtime must be the native Codex harness.
+- `plugins.entries.codex.enabled` is `true`.
+- `plugins.entries.codex.config.codexPlugins.enabled` is `true`.
+- Codex app-server reports `0.149.0` or newer. The official plugin ships
+  `@openai/codex` `0.160.0`; newer custom, remote, and macOS desktop-owned
+  binaries continue with a compatibility warning and normal runtime validation.
+- The target Codex app-server can see the expected marketplace, plugin, and
+  app inventory.
+- Migration supports only `openai-curated` plugins that it observed as
+  source-installed in the source Codex home. Codex serves the same catalog to
+  API-key and Bedrock accounts under the `openai-api-curated` wire name;
+  OpenClaw treats both names as the one curated catalog, so configured
+  `openai-curated` plugins resolve from either.
+- Native runtime support also includes other marketplaces already available to
+  Codex, such as `openai-bundled`, `openai-primary-runtime`,
+  `workspace-directory`, and marketplace manifests in the current repository.
+  Plugins remain unavailable until an owner or `operator.admin` explicitly
+  installs or enables their marketplace-qualified identity.
+- OpenClaw excludes the `visualize@openai-bundled` skill from Codex threads.
+  That skill emits Codex-specific inline visualization directives, while
+  OpenClaw visualizations use the `show_widget` tool on supported surfaces.
 
-`codexPlugins` has no effect on PI runs, normal OpenAI provider runs, ACP
-conversation bindings, or other harnesses because those paths do not create
-Codex app-server threads with native `apps` config.
+`codexPlugins` has no effect on OpenClaw-provider runs, ACP conversation
+bindings, or other harnesses, because those paths never create Codex
+app-server threads with native `apps` config.
+
+OpenAI-side Codex account, app availability, and workspace app/plugin controls
+come from the signed-in Codex account. See
+[Using Codex with your ChatGPT plan](https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan)
+for the OpenAI account and admin model.
 
 ## Quickstart
+
+The source Codex home is the Codex CLI state directory you are migrating from:
+`~/.codex` by default, or `CODEX_HOME` when that variable is set. See
+[`openclaw migrate`](/cli/migrate) to point at a different one with `--from`.
 
 Preview migration from the source Codex home:
 
@@ -39,8 +63,9 @@ Preview migration from the source Codex home:
 openclaw migrate codex --dry-run
 ```
 
-Use strict source app verification when you want migration to check source app
-accessibility before planning native plugin activation:
+Add `--verify-plugin-apps` to make migration read the source installed app
+snapshot and app metadata, requiring every owned app to be present, enabled,
+and accessible before planning native activation:
 
 ```bash
 openclaw migrate codex --dry-run --verify-plugin-apps
@@ -52,8 +77,8 @@ Apply the migration when the plan looks right:
 openclaw migrate apply codex --yes
 ```
 
-Migration writes explicit `codexPlugins` entries for eligible plugins and calls
-Codex app-server `plugin/install` for selected plugins. A typical migrated
+Migration writes explicit `codexPlugins` entries for eligible plugins and
+calls Codex app-server `plugin/install` for selected plugins. A migrated
 config looks like this:
 
 ```json5
@@ -81,166 +106,691 @@ config looks like this:
 }
 ```
 
-After changing `codexPlugins`, use `/new`, `/reset`, or restart the gateway so
-future Codex harness sessions start with the updated app set.
+Migration remains limited to `openai-curated`. To find another plugin that
+Codex can already see, list the available marketplace catalog and install the
+exact marketplace-qualified identity:
+
+```text
+/codex plugins available
+/codex plugins install security-review@company-tools
+/codex plugins status security-review@company-tools
+```
+
+Codex discovers repository marketplaces from
+`.agents/plugins/marketplace.json` in the current conversation workspace. An
+owner does not need to add that marketplace to OpenClaw configuration before
+listing or installing its plugins. Official bundled, primary-runtime, curated,
+workspace, shared, and personal marketplaces depend on the signed-in Codex
+account and upstream feature or administrator policies.
+When Codex requires marketplace sources to be explicitly configured or
+allowlisted, those requirements still apply; OpenClaw does not bypass them.
+
+Installation writes an explicit configuration entry such as:
+
+```json5
+{
+  plugins: {
+    entries: {
+      codex: {
+        enabled: true,
+        config: {
+          codexPlugins: {
+            enabled: true,
+            plugins: {
+              "security-review@company-tools": {
+                enabled: true,
+                marketplaceName: "company-tools",
+                pluginName: "security-review",
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+The install command checks the authenticated owner or administrator before it
+calls Codex `plugin/install`. Codex continues to enforce marketplace source,
+workspace administrator, account, and connector-authentication policies.
+Remote plugins that require a Codex installation interstitial, or do not
+report whether one is required, must be installed in Codex first; rerun the
+OpenClaw install command afterward to authorize the already-installed plugin.
+OpenClaw keeps apps hidden when the response omits the exact marketplace,
+plugin identity, detail identity, or app-readiness evidence. If a connector
+requires additional sign-in, complete that authorization before expecting the
+plugin's tools to become available.
+
+Installing the plugin bundle and configuring OpenClaw app access do not confirm
+hosted app connections. When installation returns apps that still need sign-in,
+OpenClaw provides **Open &lt;app&gt; in ChatGPT** links to the app pages returned by
+Codex. Sign in with the same ChatGPT account and workspace used by the Codex
+harness. Opening a link does not verify the connection or make its tools callable
+in the current conversation. If the browser shows a directory instead of the app,
+or no safe link is available, run `/apps` in Codex CLI and select the app there.
+Responses show up to five app links and explicitly report additional apps to
+review in Codex CLI. These links are for hosted ChatGPT apps; native MCP server
+setup remains separate.
+
+An app can also request sign-in when you first use one of its tools. In the
+Control UI, choose **Open link** to open the requested page in a separate tab.
+The question stays pending while you sign in. After completing the browser step,
+select **I've completed this step** and submit to let Codex refresh and retry.
+Opening the link alone does not resume the tool or confirm a connection. Clients
+without a link action still show the URL to open manually before answering.
+
+For setup completed outside an active Codex sign-in prompt, refresh hosted app
+inventory for the current Codex account/runtime:
+
+```text
+/codex plugins refresh
+```
+
+This refresh covers all hosted apps in that runtime; it is not a per-plugin
+backend refresh. A plugin's **Refresh hosted apps** button runs this command.
+The separate **Check status** button inspects only that plugin without refreshing
+hosted tools. Neither action changes authorization or the current conversation's
+app policy. Use `/new` or `/reset` after connecting, then inspect status in the new
+conversation.
+
+After a `codexPlugins` change, new Codex conversations pick up the updated
+app set automatically. Run `/new` or `/reset` to refresh the current
+conversation. A gateway restart is not required for plugin enable/disable
+changes.
+
+## Scheduled automations
+
+When an authenticated owner creates an automation from a Codex turn, OpenClaw
+captures the app IDs and approval limits callable on that exact Codex thread.
+The stored authority is bound to the creator's prepared Codex profile and
+account. Scheduled runs intersect that cap with current Codex policy and app
+availability. They never gain new app IDs or a broader destructive,
+open-world, or approval ceiling. Tools added later within an already captured
+app may run only when both the stored ceiling and current policy allow them.
+
+Scheduled app calls are unattended. Only actions explicitly allowed both when
+the job was created and when it runs can proceed without a prompt. An action
+that still requires approval or elicitation is declined. A changed account,
+runtime, revoked app, narrower policy, or unavailable inventory stops before
+app execution and reports how to restore access or reauthorize the automation.
+Model fallbacks cannot move this authority to another runtime or account.
+
+This path is stricter than an ordinary interactive turn. OpenClaw generates
+per-tool `enabled` and `approval_mode` values from current tool metadata and
+the captured authority. An explicit native `enabled: true` cannot override a
+captured or current destructive/open-world restriction on a scheduled run.
+Approval intersections keep `"prompt"` if either side requires it;
+`"approve"` defers to the other side. Combining `"auto"` with `"writes"`
+produces `"prompt"`, because their annotation-dependent rules are not totally
+ordered.
+
+Jobs created before app authority capture may keep their ordinary OpenClaw
+tool cap and continue non-app work, but cannot recover Codex app access
+automatically. Recreate or reauthorize only a job that needs app access, from a
+fresh authenticated owner turn. See
+[Automations](/automation/cron-jobs#codex-apps-in-scheduled-automations).
+Ordinary edits preserve captured app authority. Explicitly replacing a job's
+`toolsAllow` cap without a fresh authenticated Codex authority capture clears
+that authority; the next run reports that app access requires reauthorization.
+An update from a fresh authenticated owner turn can instead capture and store a
+new app ceiling for the updated job.
+
+## Manage plugins from chat
+
+`/codex plugins` inspects or changes configured native Codex plugins from the
+same chat where you operate the Codex harness:
+
+```text
+/codex plugins
+/codex plugins list
+/codex plugins available
+/codex plugins available security
+/codex plugins available --page 2
+/codex plugins install security-review@company-tools
+/codex plugins status security-review@company-tools
+/codex plugins refresh
+/codex plugins disable google-calendar
+/codex plugins enable google-calendar
+/codex plugins disable security-review@company-tools
+```
+
+`/codex plugins` is an alias for `/codex plugins list`. The list shows each
+configured plugin's key, on/off state, Codex plugin name, and marketplace
+from `plugins.entries.codex.config.codexPlugins.plugins`.
+
+`available [query] [--page <n>]` requires an owner or `operator.admin`. It reads
+Codex's marketplace catalogs using the bound workspace, including repository-local
+plugins, without installing or enabling them. Search matches names, display titles, publishers, marketplaces,
+and descriptions case-insensitively across the full returned catalog before
+showing ten results per page. **Next page** and **Previous page** preserve your
+search; channels without buttons show the commands to send. Search text is limited
+to 100 characters. Use `--` before literal search text containing `--page`.
+
+Results show display titles, publishers, and descriptions when supplied by Codex,
+with explicit placeholders for missing publishers or descriptions. They retain
+marketplace-qualified identities and availability restrictions; display titles
+and publisher names do not change installation identity.
+This searches Codex catalogs, not OpenClaw's plugin registry or every ChatGPT
+connection. The owner-scoped `codex_plugins` model tool uses the same search
+matching and is also read-only: it can recommend an exact install command but
+cannot install, enable, or add a marketplace.
+
+`status <name>@<marketplace> [page]` inspects exactly one configured plugin and
+requires an owner or `operator.admin`. The qualified identity is required;
+bare `status` or an unqualified name returns usage guidance pointing to `list`.
+
+Status shows bundle installation, marketplace restrictions, Codex enablement, and
+shared OpenClaw app access separately. Changes to OpenClaw app access take effect
+on the next message; they do not install or enable the Codex bundle.
+
+App results show at most five apps per page. A ChatGPT app-page link requires
+confirmed hosted-app runtime support, an available plugin under its catalog
+policy, and matching authorized metadata from `app/read`. A plugin's app
+declaration or setup URL alone does not establish that access. OpenClaw app
+access can be disabled while an eligible ChatGPT page remains available;
+opening that page does not enable OpenClaw app access. Plugins without hosted
+apps receive no ChatGPT connection or setup guidance. Status does not assess
+their skills or native MCP server readiness.
+
+The selected agent, auth profile, conversation workspace, and account email/plan
+are shown when available. ChatGPT workspace identity remains unknown when
+Codex does not report it; use the same account and workspace in the browser
+when opening an eligible hosted app page.
+
+Status uses `app/read` for app metadata and displays the `enabled` and `callable`
+flags returned by `app/installed`. The runtime scope is the bound Codex thread
+when available, or the account otherwise. These flags reflect effective Codex
+configuration and the current runtime tool snapshot; they are separate from
+OpenClaw app access. Status does not infer a separate connection state. Missing
+app records and failed reads are reported explicitly instead of becoming false
+flags.
+
+`/codex plugins refresh` requires owner or `operator.admin` authority and confirmed
+hosted-app support in the selected Codex account/runtime. It works without a
+configured plugin. It invalidates that runtime's OpenClaw app cache, calls
+Codex `app/installed` with `forceRefresh: true` and no `threadId`, and reads
+metadata for the returned apps. It does not refresh marketplace catalogs,
+reinstall plugin bundles, or reload native MCP servers.
+
+After refreshing, use `/codex plugins status <name>@<marketplace>` to inspect
+one plugin. Status never forces a hosted refresh. Disabled or blocked plugins
+remain disabled or blocked, but do not prevent an otherwise permitted hosted
+refresh.
+
+A completed request does not prove that Codex replaced its snapshot or that a
+live tool call will succeed. Refresh never installs, enables, authenticates,
+or replaces a thread, and does not reload other conversations. After connecting,
+use `/new` or `/reset` and inspect status again. Browser setup does not change
+OpenClaw app access; local app-access changes take effect on the next message.
+Unsupported methods, cancellation, and refresh failures provide a retry action
+without treating the previous inventory as confirmed.
+
+`install`, `enable`, and `disable` require the owner or a gateway client with
+the `operator.admin` scope. OpenClaw's reserved `/codex` command is dispatched
+before agent invocation, so a model-generated recommendation does not count as
+installation approval. For a plugin that Codex has not installed yet, `install`
+calls the Codex app-server and records the explicit plugin policy only after
+installation succeeds. If Codex confirms that the plugin is already installed
+and enabled, the same command records its authorization without installing it
+again. `enable` and `disable` change OpenClaw's persisted policy; qualified
+identities and existing configuration keys are both accepted.
+
+Installing or enabling a configured plugin also turns on the global
+`codexPlugins.enabled` switch without enabling `allow_all_plugins`. If a plugin
+reports `auth_required`, authorize the app in Codex before starting a new
+conversation. Authorization remains in effect for later conversations until
+the plugin is disabled or the upstream account or workspace revokes access.
+
+Only install plugins you trust. A Codex plugin can contribute skills, apps,
+MCP servers, and hooks. Some hooks can participate in permission decisions,
+so explicit installation trusts the selected plugin's code; it is not a
+security review or an isolation boundary.
 
 ## How native plugin setup works
 
-The integration has three separate states:
+The integration tracks three states:
 
-- Installed: Codex has the local plugin bundle in the target app-server runtime.
-- Enabled: OpenClaw config is willing to make the plugin available to Codex
-  harness turns.
-- Accessible: Codex app-server confirms the plugin's app entries are available
-  for the active account and can be mapped to the migrated plugin identity.
+| State      | Meaning                                                                                                                            |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Installed  | Codex has the plugin bundle in the target app-server runtime.                                                                      |
+| Enabled    | Codex reports the plugin enabled, and OpenClaw config allows it for Codex harness turns.                                           |
+| Accessible | Codex app-server confirms the plugin's app entries are available for the active account and map to the configured plugin identity. |
 
-Migration is the durable install/eligibility step. During planning, OpenClaw
-reads source Codex `plugin/read` details and checks that the source Codex
-app-server account response is a ChatGPT subscription account. Non-ChatGPT or
-missing account responses skip app-backed plugins with
-`codex_subscription_required`. By default, migration does not call source
-`app/list`; app-backed source plugins that pass the account gate are planned
-without source app accessibility verification, and account lookup transport
-failures skip with `codex_account_unavailable`. With `--verify-plugin-apps`,
-migration takes a fresh source `app/list` snapshot and requires every owned app
-to be present, enabled, and accessible before planning native activation. In
-that mode, account lookup transport failures fall through to the source
-app-inventory gate. Runtime app inventory is the target-session accessibility
-check after migration. Codex harness session setup then computes a restrictive
-thread app config for the enabled and accessible plugin apps.
+For `openai-curated` plugins, migration is the durable install/eligibility
+step:
 
-Thread app config is computed when OpenClaw establishes a Codex harness session
-or replaces a stale Codex thread binding. It is not recomputed on every turn.
+- During planning, OpenClaw reads source Codex `plugin/read` details and
+  checks the source Codex app-server account. `codex_subscription_required`
+  means `account/read` positively identified an API-key or other
+  non-ChatGPT account; a missing account is not evidence that a subscription
+  is absent.
+- By default, migration skips source app inventory calls: app-backed source
+  plugins that pass the account gate are planned without source app
+  accessibility verification. A missing account or failed `account/read`
+  skips them with `codex_account_unavailable`.
+- With `--verify-plugin-apps`, migration takes a fresh source `app/installed`
+  snapshot, fetches authenticated metadata with `app/read`, and requires every
+  owned app to be present, enabled, and accessible in the source Codex account
+  before planning native activation. If `account/read` is missing or fails,
+  strict verification can still prove access through the source app-server's
+  configured bearer or header authentication. A positively identified
+  non-ChatGPT account remains ineligible.
 
-## V1 support boundary
+For explicitly approved plugins from any discovered marketplace, OpenClaw uses
+its `plugin/installed` snapshot and `plugin/read` details to establish the
+exact marketplace-qualified identity and app ownership. The installed-only
+check during ordinary thread setup is read-only; apps from disabled or
+unapproved plugins stay denied. Owner-issued installation is the explicit
+mutation path. Missing or ambiguous ownership fails closed instead of granting
+account-wide access.
 
-V1 is intentionally narrow:
+Runtime app inventory is the target-session accessibility check for both
+migrated curated plugins and manually configured workspace plugins. Before
+enabled-policy turns, including warm reuse and cold resume, the Codex harness
+rebuilds the restrictive thread app policy from current native settings while
+reusing its app inventory and plugin metadata caches.
 
-- Only `openai-curated` plugins that were already installed in the source Codex
+## Support boundary
+
+- Only `openai-curated` plugins already installed in the source Codex
   app-server inventory are migration-eligible.
-- App-backed source plugins must pass the migration-time subscription gate.
-  `--verify-plugin-apps` adds the source app-inventory gate. Subscription-gated
-  accounts plus, in verification mode, inaccessible, disabled, missing source
-  apps or source app-inventory refresh failures are reported as skipped manual
-  items instead of enabled config entries. Unreadable plugin details are skipped
-  before the source app-inventory gate.
-- Migration writes explicit plugin identities with `marketplaceName` and
-  `pluginName`; it does not write local `marketplacePath` cache paths.
-- `codexPlugins.enabled` is the global enablement switch.
-- There is no `plugins["*"]` wildcard and no config key that grants arbitrary
-  install authority.
-- Unsupported marketplaces, cached plugin bundles, hooks, and Codex config files
-  are preserved in the migration report for manual review.
+- Runtime supports explicitly approved plugins from Codex-discovered official,
+  workspace, personal, shared, and repository-local marketplaces. A missing
+  marketplace, plugin, ownership detail, or app readiness evidence exposes no
+  plugin app.
+- Positively identified non-ChatGPT source accounts fail the subscription gate.
+  Missing or unreadable source accounts are unavailable by default.
+  `--verify-plugin-apps` can instead establish access through authenticated
+  source app inventory, including bearer- or header-authenticated app-servers.
+  Inaccessible, disabled, or missing source apps and inventory refresh failures
+  remain skipped manual items. Unreadable plugin details are skipped before the
+  app-inventory gate.
+- Migration writes explicit plugin identities (`marketplaceName` and
+  `pluginName`); it does not write local `marketplacePath` cache paths.
+- `codexPlugins.enabled` is the only global enablement switch; there is no
+  `plugins["*"]` wildcard or config key that grants arbitrary install
+  authority.
+- Migration does not automatically import non-curated marketplaces, cached
+  plugin bundles, hooks, or Codex config files. Use `/codex plugins available`
+  and an owner-issued `/codex plugins install <plugin>@<marketplace>` command
+  to opt into an additional discovered plugin.
+- OpenClaw does not add new Git or local marketplace sources in this flow.
+  Additional sources must already be configured in Codex or be discoverable
+  from the bound repository.
 
 ## App inventory and ownership
 
-OpenClaw reads Codex app inventory through app-server `app/list`, caches it for
-one hour, and refreshes stale or missing entries asynchronously. The cache is
-in memory only; restarting the CLI or gateway drops it, and OpenClaw rebuilds it
-from the next `app/list` read.
+OpenClaw first reads and caches one `plugin/installed` snapshot scoped to the
+target Codex app-server and configured workspace. That snapshot covers plugins
+from the marketplaces visible in that scope, including disabled plugin
+identities; failed or incomplete snapshots are never cached. Conversations in
+the same runtime and workspace share this metadata, and owner installation
+invalidates it for all of them. App readiness remains specific to each thread.
+`plugin/read` is
+limited to exact configured plugin details required to establish ownership.
+Explicit discovery queries `plugin/list` with the conversation workspace to
+find repository marketplaces. Routine setup retains its existing curated
+recovery behavior; additional marketplace installation requires the explicit
+owner or administrator command.
+
+Codex owns skill, hook, and MCP refresh after plugin installation. OpenClaw
+refreshes its plugin and app inventories without reloading unrelated threads.
+Use `/new` or `/reset` if an older custom Codex runtime does not make a newly
+installed plugin available in an existing conversation.
+
+OpenClaw reads installed app runtime state through `app/installed` and fetches
+canonical app metadata with `app/read` in batches of at most 100 app IDs. The
+first read force-refreshes a cold installed runtime snapshot. When multiple
+configured curated plugins are installed, OpenClaw combines their cache
+invalidations into a single app-inventory refresh. Ordinary cached reads do
+not force a connector refresh for every new thread. OpenClaw caches the
+combined inventory in memory for one hour and refreshes stale or missing
+entries asynchronously. The cache is process-local; restarting the CLI or
+gateway drops it.
+
+Missing inventory methods, authentication errors, transport failures, and
+connector refresh failures do not admit app tools. Ordinary turns, including
+those using `allow_destructive_actions: "ask"`, can continue with native apps
+disabled when inventory exceeds its startup budget. Scheduled runs stop if
+their captured app policy cannot be revalidated within that budget.
 
 Migration and runtime use separate cache keys:
 
-- Source migration verification uses the source Codex home and source app-server
-  start options. This runs only when `--verify-plugin-apps` is set, and it
-  forces a fresh source `app/list` traversal for that planning run.
-- Target runtime setup uses the target agent's Codex app-server identity when it
-  builds the Codex thread app config. Plugin activation invalidates that target
-  cache key and then force-refreshes it after `plugin/install`.
+- Source migration verification uses the source Codex home and start
+  options. It runs only with `--verify-plugin-apps` and forces a fresh
+  source runtime snapshot and metadata read for that planning run.
+- Target runtime setup uses the target agent's Codex app-server identity when
+  building and verifying the thread app config. Curated plugin activation
+  invalidates that target cache key, then force-refreshes it after
+  `plugin/install`. Explicit marketplace installation refreshes the same
+  target runtime state before subsequent conversations use the plugin.
 
-A plugin app is exposed only when OpenClaw can map it back to the migrated
-plugin through stable ownership:
+A plugin app is exposed only when OpenClaw can map it back to the configured
+plugin through stable ownership: an exact app id from plugin detail, a known
+MCP server name, or unique stable metadata. Display-name-only or ambiguous
+ownership is excluded until the next inventory refresh proves ownership.
 
-- exact app id from plugin detail
-- known MCP server name
-- unique stable metadata
+Missing plugins and marketplaces remain in saved settings for future discovery,
+but are omitted from the effective runtime plugin policy. OpenClaw logs an error
+and continues with healthy plugins and connected account apps. A missing entry's
+permissions do not apply to other apps, even when their display names match.
+The entry is reconsidered on the next normal inventory refresh; no saved settings
+are removed. Found plugins disabled by an administrator retain their restrictions.
 
-Display-name-only or ambiguous ownership is excluded until the next inventory
-refresh proves ownership.
+## Connected account apps
+
+Owner-operated agents can opt into every app already connected to their Codex
+account without requiring a matching plugin package:
+
+```json5
+{
+  plugins: {
+    entries: {
+      codex: {
+        enabled: true,
+        config: {
+          codexPlugins: {
+            enabled: true,
+            allow_all_plugins: true,
+            allow_destructive_actions: "auto",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+`allow_all_plugins: true` reads the installed app snapshot and authenticated
+metadata when a new native Codex thread is established. It admits only
+account-accessible apps. Codex must also confirm each admitted app is enabled
+and callable for that thread. OpenClaw does not install, authenticate, or enable
+apps globally. Existing threads keep their persisted app set; use `/new`,
+`/reset`, or restart the gateway to pick up newly connected or revoked apps.
+
+An explicitly disabled configured plugin found in the inventory overrides account-wide app
+access. Because Codex `app/read` omits a disabled workspace plugin's display
+names, OpenClaw uses its `plugin/installed` snapshot and reads only that exact
+configured plugin's details to reserve its owned app IDs. This narrow,
+read-only check does not discover unrelated marketplaces, activate the plugin,
+or grant its apps. If the disabled plugin's ownership cannot be established,
+the account-wide app selection fails closed.
+
+Account apps inherit the global `codexPlugins.allow_destructive_actions` value,
+which accepts `true`, `false`, `"auto"`, or `"ask"`. Explicit per-plugin policy
+overrides the global policy for overlapping app ids. Inventory failures fail
+closed instead of falling back to an unrestricted default.
 
 ## Thread app config
 
 OpenClaw injects a restrictive `config.apps` patch for the Codex thread:
-`_default` is disabled and only apps owned by enabled migrated plugins are
-enabled.
+`_default` is disabled, and only apps owned by enabled configured plugins or
+accessible account apps admitted by `allow_all_plugins` are enabled.
 
-OpenClaw sets app-level `destructive_enabled` from the effective global or
-per-plugin `allow_destructive_actions` policy and lets Codex enforce
-destructive tool metadata from its native app tool annotations. The `_default`
-app config is disabled with `open_world_enabled: false`. Enabled plugin apps
-are emitted with `open_world_enabled: true`; OpenClaw does not expose a separate
-plugin open-world policy knob and does not maintain per-plugin destructive
-tool-name deny lists.
+An app can be installed and authenticated but non-callable in the account-wide
+snapshot while `_default` is disabled. OpenClaw provisionally admits only
+ownership-proven, policy-allowed apps, creates the restrictive thread, and then
+rereads `app/installed` once with the resulting thread ID and
+`forceRefresh: false`. If the snapshot reports an app missing, disabled, or
+non-callable, OpenClaw logs one warning listing the unavailable apps and
+continues with the remaining tools. Codex still enforces the thread's effective
+app, managed, workspace, and tool policies. An unavailable optional app does
+not block unrelated chat or heartbeat runs.
 
-Tool approval mode is automatic by default for plugin apps so non-destructive
-read tools can run without a same-thread approval UI. Destructive tools remain
-controlled by each app's `destructive_enabled` policy.
+If the snapshot request itself fails, the provisional thread is never bound
+or used. OpenClaw deletes a failed persistent provisional thread, unsubscribes
+a failed ephemeral thread, and retires the app-server connection if safe
+cleanup cannot be confirmed.
+
+`destructive_enabled` on each app comes from the effective global or
+per-plugin `allow_destructive_actions` policy; `true`, `"auto"`, and `"ask"`
+all set `destructive_enabled: true`, and `false` sets it `false`. Codex still
+evaluates native tool enablement and annotations in the order below.
+`_default` is disabled with `open_world_enabled: false`; enabled plugin apps
+get `open_world_enabled: true`. OpenClaw does not expose a separate
+plugin-level open-world policy knob and does not maintain per-plugin
+destructive tool-name deny lists.
+
+## Approval decision order
+
+For an ordinary interactive Codex turn, follow these decisions in order:
+
+1. **Admission:** OpenClaw selects the plugin/app identities allowed on this
+   thread. Unavailable inventory or unproven ownership does not grant access.
+2. **Thread configuration:** OpenClaw overlays its app policy on the target
+   app-server's native configuration. Codex administrative requirements still
+   apply.
+3. **Tool enablement:** Codex decides whether the particular tool is callable.
+   A disabled tool cannot be made callable by approving a prompt.
+4. **Approval mode and reviewer:** Codex decides whether the call needs review
+   and whether to use its automatic reviewer or send a user approval request.
+5. **OpenClaw response:** When a plugin approval request reaches OpenClaw, its
+   elicitation bridge applies the effective `allow_destructive_actions` value.
+
+These are separate decisions. `enabled: true` does not mean automatic approval,
+and `approval_mode: "approve"` does not enable a disabled tool. OpenClaw dynamic
+tools, ordinary MCP forms, and native shell permissions have their own flows;
+see [Native permissions and MCP elicitations](/plugins/codex-harness-runtime/permissions).
+
+### Which configuration owns each setting
+
+| Setting                                                                         | Owner and purpose                                                                                                                                                    |
+| ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `plugins.entries.codex.config.codexPlugins`                                     | OpenClaw's admission and plugin elicitation policy.                                                                                                                  |
+| `codexPlugins.allow_destructive_actions`                                        | Shared OpenClaw default for configured plugins and admitted account apps.                                                                                            |
+| `codexPlugins.plugins.<key>.allow_destructive_actions`                          | Explicit override for that configured plugin.                                                                                                                        |
+| Native `apps._default`, `apps.<appId>`, and `apps.<appId>.tools`                | Codex app defaults and per-tool settings, after configuration layers and the OpenClaw thread patch are combined.                                                     |
+| `plugins.entries.codex.config.appServer.approvalPolicy` and `approvalsReviewer` | General Codex approval posture and reviewer, distinct from app/tool policy. See [Approval and sandbox modes](/plugins/codex-harness-reference/approval-and-sandbox). |
+
+OpenClaw resolves the destructive-action setting as:
+
+```text
+per-plugin value ?? codexPlugins shared value ?? true
+```
+
+Omitting a per-plugin value inherits the shared value. Explicit `false`,
+`true`, `"auto"`, and `"ask"` all override it. In particular, a generated
+per-plugin `"auto"` overrides a shared `false`; `"auto"` is a policy value,
+not an instruction to inherit.
+
+The shared default lives in the same OpenClaw configuration as the plugin
+entries. It requires no separate host-wide configuration file. Native Codex
+settings belong to the app-server that runs the tools: the default managed
+local server uses an agent-scoped Codex home; a remote server uses its own
+configuration. Starting Codex from OpenClaw or a deployment manager
+does not remove this native configuration layer. OpenClaw's thread patches
+do not rewrite saved native settings.
+
+### Native tool enablement
+
+After OpenClaw's admission patch, Codex evaluates an app tool in this order:
+
+1. A disabled app blocks all its tools, including explicitly enabled tools.
+   Managed app disablement remains authoritative.
+2. An explicit `apps.<appId>.tools.<tool>.enabled` wins for that tool.
+3. Otherwise, an explicit `apps.<appId>.default_tools_enabled` wins.
+4. Otherwise, Codex checks `destructive_enabled` and `open_world_enabled`
+   against the tool's annotations. Each category setting falls back from the
+   app to `apps._default`, then to `true`. Missing annotations are treated as
+   destructive/open-world for this eligibility check.
+
+For tool configuration, an exact tool-name entry wins over a tool-title entry.
+Codex selects the whole entry first; it does not fill missing fields from the
+title entry. Omit `enabled` to inherit; TOML has no `null` value.
+
+For example, on an admitted app with `destructive_enabled: false`, an omitted
+tool `enabled` leaves destructive tools blocked. Explicit `enabled: true`
+allows that particular tool through this native eligibility check, while
+`enabled: false` blocks it even if the app allows destructive tools. The call
+still has to pass approval and execution checks. This is an exception to an
+app default, not a way to enable an unadmitted app or widen scheduled authority.
+
+### Native approval mode
+
+For an enabled tool, Codex selects the first applicable approval mode:
+
+1. Managed per-tool approval requirement.
+2. The selected native tool entry's `approval_mode`.
+3. The selected connected account's
+   `apps.<appId>.links.<linkId>.default_tools_approval_mode`.
+4. `apps.<appId>.default_tools_approval_mode`.
+5. `apps._default.default_tools_approval_mode`.
+6. `"auto"`.
+
+The account link is the connected account used for this call, not the
+OpenClaw conversation. The following modes decide whether review is needed;
+they do not themselves promise an OpenClaw prompt:
+
+| Native mode | Approval requirement                                                                                                                                                                                  |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `"approve"` | No tool approval request. Other access and execution restrictions still apply.                                                                                                                        |
+| `"prompt"`  | Requires approval, including for read-only tools.                                                                                                                                                     |
+| `"writes"`  | Requires approval unless the tool explicitly declares itself read-only.                                                                                                                               |
+| `"auto"`    | Uses annotations: explicitly destructive tools require approval; otherwise explicitly read-only tools do not. Remaining tools require approval when destructive/open-world hints are true or missing. |
+
+Reviewer selection is separate: the connected account's reviewer overrides
+the app reviewer, then `apps._default.approvals_reviewer`, then the thread
+reviewer. Codex only accepts a configured reviewer allowed by administrative
+requirements; otherwise it uses the thread reviewer. A model-specific
+requirement for automatic review takes precedence. Strict automatic review
+can also require review when a tool's mode would otherwise skip it.
+
+Unless OpenClaw policy is explicitly `"ask"`, admitted apps retain their
+native approval mode and reviewer, including app defaults and saved account-link
+or tool overrides. This also applies when resuming a thread or asking a `/btw`
+side question. With no native approval setting, Codex falls back to `"auto"`.
+
+Use OpenClaw `allow_destructive_actions: "auto"` to route native human approval
+requests through OpenClaw consent. Native `"prompt"` with the `"auto_review"`
+reviewer stays in Codex's automatic review flow. OpenClaw `true` preserves the
+native mode too, but auto-accepts supported approval requests that reach the
+bridge, as described below.
+
+OpenClaw `"ask"` also overlays saved approval fields for current non-read-only
+tool names/aliases and connected accounts, selecting native `"auto"` and a
+human app/account reviewer. It preserves tool enablement. If tool summaries
+are unavailable, it targets all saved tool approval entries. Thus `"ask"`
+requires one-shot consent for the actions Codex sends for approval; it does
+not mean native `"prompt"` for every read. Other apps retain their reviewer.
+
+On ordinary native-plugin turns and `/btw` side questions with bound apps,
+OpenClaw enables MCP elicitation delegation even when the general
+`appServer.approvalPolicy` is `"never"`; this does not enable unrelated shell
+approval categories. The app mode, reviewer, and bridge response still
+determine the outcome. General approval policy is not a replacement for the
+per-app/tool settings above.
 
 ## Destructive action policy
 
-Destructive plugin elicitations are allowed by default for migrated Codex
-plugins, while unsafe schemas and ambiguous ownership still fail closed:
+Destructive plugin elicitations are allowed by default for configured Codex
+plugins, while unsafe schemas and ambiguous ownership fail closed:
 
 - Global `allow_destructive_actions` defaults to `true`.
-- Per-plugin `allow_destructive_actions` overrides the global policy for that
-  plugin.
-- When policy is `false`, OpenClaw returns a deterministic decline.
-- When policy is `true`, OpenClaw auto-accepts only safe schemas it can map to
-  an approval response, such as a boolean approve field.
-- Missing plugin identity, ambiguous ownership, a missing turn id, a wrong turn
-  id, or an unsafe elicitation schema declines instead of prompting.
+- Per-plugin `allow_destructive_actions` overrides the global policy for
+  that plugin.
+- `false`: OpenClaw sets native `destructive_enabled: false`; tool eligibility
+  follows the native defaults and explicit exceptions described above. Approval
+  requests for eligible hosted app tools still go through OpenClaw consent,
+  including permitted reads and `/btw` side questions. The bridge does not
+  classify tools again or blanket-decline their requests. Plugin-provided MCP
+  server approval requests still receive a deterministic decline.
+- `true`: OpenClaw auto-accepts only safe schemas it can map to an approval
+  response, such as a boolean approve field.
+- `"auto"`: OpenClaw exposes destructive plugin actions to Codex, then
+  turns ownership-proven MCP approval elicitations into OpenClaw plugin
+  approvals before returning the Codex approval response.
+- `"ask"`: OpenClaw uses the same Codex write/destructive gating as
+  `"auto"`, applies the tool/account approval overlays described above, and
+  offers only one-shot approval or denial. Saved native settings stay unchanged,
+  and user-config reloads preserve the thread's approval policy. These checks
+  also run before reusing a thread or answering a
+  `/btw` side question. Changed override keys rebuild the thread with current policy.
+- Missing plugin identity, ambiguous ownership, a missing or mismatched
+  turn id, or an unsafe elicitation schema declines instead of prompting.
+
+Apps outside the admitted policy stay disabled even if native Codex settings
+enable them. Native settings must be verified before an enabled policy can admit
+app tools. When no app can be admitted, Codex's app tool surface is disabled
+without reading native app settings. Disabling plugin apps also skips app
+inventory discovery. Active legacy managed app settings outrank native thread
+configuration and prevent app admission; move those app settings to a supported
+user or project configuration layer. Native administrative requirements remain
+authoritative.
+
+### Approval examples
+
+Assume an admitted, authenticated app, no conflicting managed requirement,
+and a human reviewer for calls that need approval. The read tools below declare
+`readOnlyHint: true` and `destructiveHint: false`:
+
+| Configuration                                                                                 | Observable result on an ordinary turn                                                                                                                               |
+| --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| OpenClaw shared `false`, per-plugin `"auto"`                                                  | The plugin override wins. Destructive tools are eligible; approval elicitations that reach OpenClaw request consent.                                                |
+| OpenClaw `"auto"`, native app default `"prompt"`, no tool/link override, non-destructive read | Native `"prompt"` survives. The read requests consent; Allow once permits the call and Deny blocks it.                                                              |
+| OpenClaw `"auto"`, native read-tool `approval_mode: "prompt"`                                 | The per-tool mode survives. The read requests consent; Allow once permits the call and Deny blocks it.                                                              |
+| OpenClaw `false`, native app default `"prompt"`, no tool/link override, non-destructive read  | Native eligibility allows the read, and OpenClaw requests consent. Allow once permits the call and Deny blocks it.                                                  |
+| OpenClaw `false`, destructive tool explicitly `enabled: true` and `approval_mode: "approve"`  | The native tool exception bypasses the category default and requires no tool approval request. The bridge's decline path is not an execution-time category ceiling. |
+| OpenClaw `"ask"`, saved non-read-only tool approval `"approve"`                               | The thread overlay replaces that saved approval with native `"auto"`; calls needing approval use one-shot consent.                                                  |
+
+If the reviewer in the native `"prompt"` examples is `"auto_review"` instead
+of `"user"`, Codex performs automatic review rather than displaying an
+OpenClaw consent prompt. Neither reviewer choice enables a tool that failed
+the eligibility check.
+
+Remembered approval and explicit enablement are different settings. Codex's
+persistent app-tool approval writes `approval_mode: "approve"`, not
+`enabled: true`; Allow once does not persist either setting. Recheck both when
+explaining why a tool ran or why no prompt appeared.
 
 ## Troubleshooting
 
-**`auth_required`:** migration installed the plugin, but one of its apps still
-needs authentication. The explicit plugin entry is written disabled until you
-reauthorize and enable it.
+| Code                                              | Meaning                                                                                                                              | Fix                                                                                                                    |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| `auth_required`                                   | Migration installed the plugin, but one of its apps still needs authentication. The entry is written disabled until you reauthorize. | Reauthorize the app in Codex, then enable the plugin in OpenClaw.                                                      |
+| `app_inaccessible`, `app_disabled`, `app_missing` | With `--verify-plugin-apps`, the source Codex app inventory did not show all owned apps as present, enabled, and accessible.         | Reauthorize or enable the app in Codex, then rerun migration with `--verify-plugin-apps`.                              |
+| `app_inventory_unavailable`                       | Strict source app verification was requested but the source Codex app inventory refresh failed.                                      | Fix source Codex app-server access, or retry without `--verify-plugin-apps` to accept the faster account-gated plan.   |
+| `codex_subscription_required`                     | The source app-server positively identified an API-key or other non-ChatGPT account.                                                 | Log in to the Codex app with subscription auth, then rerun migration.                                                  |
+| `codex_account_unavailable`                       | The source account was missing or `account/read` failed without strict app verification.                                             | Restore source account access, or use `--verify-plugin-apps` when authenticated source app inventory can prove access. |
+| `marketplace_missing`, `plugin_missing`           | The exact marketplace or configured plugin is unavailable in the installed snapshot; plugin apps fail closed.                        | Verify the target app-server's `plugin/installed` response and exact configured plugin identity.                       |
+| `plugin_detail_unavailable`                       | OpenClaw could not read the exact configured plugin's ownership details.                                                             | Inspect the target app-server's `plugin/installed` and `plugin/read` responses.                                        |
+| `plugin_disabled`                                 | Codex reports the plugin installed but disabled.                                                                                     | Enable the plugin in Codex, or have the owner explicitly install and authorize it again.                               |
+| `plugin_activation_failed`                        | Plugin activation did not complete.                                                                                                  | Use the attached diagnostic to distinguish marketplace, auth, refresh, or workspace-readiness failures.                |
+| `app_inventory_missing`, `app_inventory_stale`    | App readiness came from an empty or stale cache.                                                                                     | OpenClaw schedules an async refresh automatically; plugin apps stay excluded until ownership and readiness are known.  |
+| `app_ownership_ambiguous`                         | App inventory only matched by display name.                                                                                          | The app stays hidden from the Codex thread until a later refresh proves ownership.                                     |
 
-**`app_inaccessible`, `app_disabled`, or `app_missing`:**
-migration did not install the plugin because the source Codex app inventory did
-not show all owned apps as present, enabled, and accessible while
-`--verify-plugin-apps` was set. Reauthorize or enable the app in Codex, then
-rerun migration with `--verify-plugin-apps`.
+**Workspace plugin is installed but not visible:** confirm the workspace
+`plugin/installed` snapshot reports the exact configured ID as installed and
+enabled, then confirm `app/installed` returns every owned app for the same
+Codex account and `app/read` returns its metadata. An app disabled only by the
+account-wide default can become callable after OpenClaw starts and verifies
+its explicitly configured thread. Revoked auth, missing metadata, disabled
+workspace plugins, and Codex managed or workspace restrictions still block
+access. Reauthorize or repair those upstream conditions before starting a new
+thread. If you changed that state after the gateway cached app inventory, run
+`/codex plugins refresh`, then use `/new` or `/reset`.
+OpenClaw does not authenticate plugin apps on the owner's behalf.
 
-**`app_inventory_unavailable`:** migration did not install the plugin because
-strict source app verification was requested and source Codex app inventory
-refresh failed. Fix source Codex app-server access or retry without
-`--verify-plugin-apps` if you accept the faster account-gated plan.
+For `plugin_detail_unavailable`, verify that the exact installed marketplace
+and plugin identity select a matching `plugin/read` result. OpenClaw keeps
+owned apps hidden when that selector or ownership detail is unavailable. For
+`plugin_activation_failed`, inspect the marketplace, app authorization, and
+post-install refresh diagnostics. An explicitly approved plugin must be
+installed, enabled, and authenticated before its apps can appear in a thread.
 
-**`codex_subscription_required`:** migration did not install the app-backed
-plugin because the source Codex app-server account was not logged in with a
-ChatGPT subscription account. Log in to the Codex app with subscription auth,
-then rerun migration.
-
-**`codex_account_unavailable`:** migration did not install the app-backed plugin
-because the source Codex app-server account could not be read. Fix source Codex
-app-server auth or rerun with `--verify-plugin-apps` if you want source app
-inventory to decide eligibility when account lookup fails.
-
-**`marketplace_missing` or `plugin_missing`:** the target Codex app-server
-cannot see the expected `openai-curated` marketplace or plugin. Rerun migration
-against the target runtime or inspect Codex app-server plugin status.
-
-**`app_inventory_missing` or `app_inventory_stale`:** app readiness came from an
-empty or stale cache. OpenClaw schedules an async refresh and excludes plugin
-apps until ownership and readiness are known.
-
-**`app_ownership_ambiguous`:** app inventory only matched by display name, so
-the app is not exposed to the Codex thread.
-
-**Config changed but the agent cannot see the plugin:** use `/new`, `/reset`, or
-restart the gateway. Existing Codex thread bindings keep the app config they
-started with until OpenClaw establishes a new harness session or replaces a
-stale binding.
+**Config changed but the agent cannot see the plugin:** run `/codex plugins
+list` to confirm the configured state, then `/new` or `/reset`. Existing
+Codex thread bindings keep the app config they started with until OpenClaw
+establishes a new harness session or replaces a stale binding.
 
 **Destructive action is declined:** check the global and per-plugin
-`allow_destructive_actions` values. Even when policy is true, unsafe elicitation
-schemas and ambiguous plugin identity still fail closed.
+`allow_destructive_actions` values. Even with `true`, `"auto"`, or `"ask"`,
+unsafe elicitation schemas and ambiguous plugin identity still fail closed.
 
 ## Related
 
 - [Codex harness](/plugins/codex-harness)
 - [Codex harness reference](/plugins/codex-harness-reference)
 - [Codex harness runtime](/plugins/codex-harness-runtime)
-- [Configuration reference](/gateway/configuration-reference#codex-harness-plugin-config)
+- [Configuration reference](/gateway/config-extensions#codex-harness-plugin-config)
 - [Migrate CLI](/cli/migrate)

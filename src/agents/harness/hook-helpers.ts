@@ -1,10 +1,15 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { cloneHookIsolationValue } from "../../plugins/hook-isolation.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { consumeAdjustedParamsForToolCall } from "../pi-tools.before-tool-call.js";
+import { applyTranscriptSenderIdentityToWrite } from "../../sessions/user-turn-transcript.metadata.js";
+import { extractAssistantTranscriptSourceText } from "../../shared/chat-message-content.js";
+import { consumeAdjustedParamsForToolCall } from "../agent-tools.before-tool-call.js";
+import type { AgentMessage } from "../runtime/index.js";
 
 const log = createSubsystemLogger("agents/harness");
 
+/** Runs best-effort after-tool-call hooks for a completed tool invocation. */
 export async function runAgentHarnessAfterToolCallHook(params: {
   toolName: string;
   toolCallId: string;
@@ -18,23 +23,26 @@ export async function runAgentHarnessAfterToolCallHook(params: {
   error?: string;
   startedAt?: number;
 }): Promise<void> {
+  const adjustedArgs = consumeAdjustedParamsForToolCall(params.toolCallId, params.runId);
+  // Hooks should see adjusted tool params when before_tool_call rewrote them.
+  const resolvedArgs =
+    adjustedArgs && typeof adjustedArgs === "object"
+      ? (adjustedArgs as Record<string, unknown>)
+      : params.startArgs;
   const hookRunner = getGlobalHookRunner();
   if (!hookRunner?.hasHooks("after_tool_call")) {
     return;
   }
-  const adjustedArgs = consumeAdjustedParamsForToolCall(params.toolCallId, params.runId);
-  const eventArgs =
-    adjustedArgs && typeof adjustedArgs === "object"
-      ? (adjustedArgs as Record<string, unknown>)
-      : params.startArgs;
   try {
+    const eventArgs = structuredClone(resolvedArgs);
+    const eventResult = cloneHookIsolationValue("after_tool_call", params.result);
     await hookRunner.runAfterToolCall(
       {
         toolName: params.toolName,
         params: eventArgs,
         ...(params.runId ? { runId: params.runId } : {}),
         toolCallId: params.toolCallId,
-        ...(params.result ? { result: params.result } : {}),
+        ...(eventResult ? { result: eventResult } : {}),
         ...(params.error ? { error: params.error } : {}),
         ...(params.startedAt != null ? { durationMs: Date.now() - params.startedAt } : {}),
       },
@@ -53,24 +61,37 @@ export async function runAgentHarnessAfterToolCallHook(params: {
   }
 }
 
+/** Runs before-message-write hooks and returns the possibly rewritten message. */
 export function runAgentHarnessBeforeMessageWriteHook(params: {
   message: AgentMessage;
   agentId?: string;
   sessionKey?: string;
+  prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
+  skipBeforeMessageWriteHooks?: boolean;
 }): AgentMessage | null {
+  // A hook can mutate the original object or replace it. Only the runtime's
+  // original reply belongs to delivery; newly inserted references remain prose.
+  const sourceText =
+    params.prepareAssistantTranscriptMessage &&
+    params.message.role === "assistant" &&
+    Reflect.get(params.message, "display") !== false
+      ? extractAssistantTranscriptSourceText(params.message)
+      : undefined;
   const hookRunner = getGlobalHookRunner();
-  if (!hookRunner?.hasHooks("before_message_write")) {
-    return params.message;
-  }
-  const result = hookRunner.runBeforeMessageWrite(
-    { message: params.message },
-    {
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-    },
-  );
-  if (result?.block) {
-    return null;
-  }
-  return result?.message ?? params.message;
+  const message =
+    !params.skipBeforeMessageWriteHooks && hookRunner?.hasHooks("before_message_write")
+      ? (applyTranscriptSenderIdentityToWrite(params.message, () => {
+          const result = hookRunner.runBeforeMessageWrite(
+            { message: params.message },
+            { agentId: params.agentId, sessionKey: params.sessionKey },
+          );
+          return result?.block ? null : (result?.message ?? params.message);
+        }) ?? null)
+      : params.message;
+  return message?.role === "assistant" &&
+    Reflect.get(message, "display") !== false &&
+    sourceText !== undefined &&
+    params.prepareAssistantTranscriptMessage
+    ? params.prepareAssistantTranscriptMessage(message, sourceText)
+    : message;
 }

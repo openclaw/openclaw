@@ -1,22 +1,17 @@
-import type { RenderTableOptions } from "../../terminal/table.js";
+import type { buildChannelsTable } from "./channels.js";
 import { formatTimeAgo } from "./format.js";
-import type { StatusReportSection } from "./text-report.js";
 
 type AgentStatusLike = {
   agents: Array<{
     id: string;
+    status?: "degraded";
+    admissionRefusal?: { reason: string; repairHint: string };
     name?: string | null;
     bootstrapPending?: boolean | null;
     sessionsCount: number;
     lastActiveAgeMs?: number | null;
     sessionsPath: string;
   }>;
-};
-
-type ChannelDetailLike = {
-  title: string;
-  columns: string[];
-  rows: Array<Record<string, string>>;
 };
 
 export const statusOverviewTableColumns = [
@@ -38,34 +33,37 @@ export function buildStatusAgentTableRows(params: {
   warn: (text: string) => string;
 }) {
   return params.agentStatus.agents.map((agent) => ({
-    Agent: agent.name?.trim() ? `${agent.id} (${agent.name.trim()})` : agent.id,
+    Agent: `${agent.name?.trim() ? `${agent.id} (${agent.name.trim()})` : agent.id}${agent.status === "degraded" ? params.warn(" (degraded)") : ""}`,
     BootstrapFile:
       agent.bootstrapPending === true
         ? params.warn("PRESENT")
         : agent.bootstrapPending === false
           ? params.ok("ABSENT")
           : "unknown",
-    Sessions: String(agent.sessionsCount),
-    Active: agent.lastActiveAgeMs != null ? formatTimeAgo(agent.lastActiveAgeMs) : "unknown",
-    Store: agent.sessionsPath,
+    Sessions: agent.status === "degraded" ? "unavailable" : String(agent.sessionsCount),
+    Active:
+      agent.status === "degraded"
+        ? params.warn("refused")
+        : agent.lastActiveAgeMs != null
+          ? formatTimeAgo(agent.lastActiveAgeMs)
+          : "unknown",
+    Store: agent.admissionRefusal
+      ? `${agent.sessionsPath}\n${agent.admissionRefusal.reason}\n${agent.admissionRefusal.repairHint}`
+      : agent.sessionsPath,
   }));
 }
 
 export function buildStatusChannelDetailSections(params: {
-  details: ChannelDetailLike[];
-  width: number;
-  renderTable: (input: RenderTableOptions) => string;
+  details: Awaited<ReturnType<typeof buildChannelsTable>>["details"];
   ok: (text: string) => string;
   warn: (text: string) => string;
-}): StatusReportSection[] {
+}) {
   return params.details.map((detail) => ({
-    kind: "table" as const,
     title: detail.title,
-    width: params.width,
-    renderTable: params.renderTable,
     columns: detail.columns.map((column) => ({
       key: column,
       header: column,
+      // Notes can include file paths and credential source summaries; give them remaining width.
       flex: column === "Notes",
       minWidth: column === "Notes" ? 28 : 10,
     })),

@@ -20,6 +20,8 @@ export async function resolveTargetsWithOptionalToken<TResult>(params: {
 }): Promise<ChannelResolveResult[]> {
   const token = params.token?.trim();
   if (!token) {
+    // Preserve one output row per input so setup UIs can show which entries
+    // could not be resolved while credentials are missing.
     return buildUnresolvedTargetResults(params.inputs, params.missingTokenNote);
   }
   const resolved = await params.resolveWithToken({

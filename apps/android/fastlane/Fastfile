@@ -1,0 +1,650 @@
+require "fileutils"
+require "json"
+require "open3"
+require "shellwords"
+require "supply"
+require "tmpdir"
+
+default_platform(:android)
+
+ANDROID_FASTLANE_ROOT = File.expand_path(__dir__, Dir.pwd)
+DEFAULT_PLAY_PACKAGE_NAME = "ai.openclaw.app"
+DEFAULT_PLAY_TRACK = "internal"
+DEFAULT_PLAY_RELEASE_STATUS = "completed"
+ANDROID_RELEASE_SIGNING_GRADLE_PROPERTIES = [
+  "OPENCLAW_ANDROID_STORE_FILE",
+  "OPENCLAW_ANDROID_STORE_PASSWORD",
+  "OPENCLAW_ANDROID_KEY_ALIAS",
+  "OPENCLAW_ANDROID_KEY_PASSWORD"
+].freeze
+
+def each_android_property(path)
+  File.foreach(path) do |line|
+    stripped = line.strip
+    next if stripped.empty? || stripped.start_with?("#")
+
+    key, value = stripped.split("=", 2)
+    next if key.nil? || key.empty? || value.nil?
+
+    yield key, value
+  end
+end
+
+def load_env_file(path)
+  return unless File.exist?(path)
+
+  each_android_property(path) do |key, value|
+    ENV[key] = value if ENV[key].nil? || ENV[key].strip.empty?
+  end
+end
+
+def env_present?(value)
+  !value.nil? && !value.strip.empty?
+end
+
+def android_root
+  File.expand_path("..", ANDROID_FASTLANE_ROOT)
+end
+
+def repo_root
+  File.expand_path("../..", android_root)
+end
+
+def android_release_signing_script
+  File.join(repo_root, "scripts", "android-release-signing.mjs")
+end
+
+def android_release_signing_materialized_properties_path
+  File.join(android_root, "build", "release-signing", "gradle.properties")
+end
+
+def play_package_name
+  raw = ENV["GOOGLE_PLAY_PACKAGE_NAME"].to_s.strip
+  raw.empty? ? DEFAULT_PLAY_PACKAGE_NAME : raw
+end
+
+def play_track
+  raw = ENV["GOOGLE_PLAY_TRACK"].to_s.strip
+  raw.empty? ? DEFAULT_PLAY_TRACK : raw
+end
+
+def wear_play_track
+  "wear:#{play_track}"
+end
+
+def play_release_status
+  raw = ENV["GOOGLE_PLAY_RELEASE_STATUS"].to_s.strip
+  raw.empty? ? DEFAULT_PLAY_RELEASE_STATUS : raw
+end
+
+def play_validate_only?
+  ENV["GOOGLE_PLAY_VALIDATE_ONLY"] == "1"
+end
+
+def play_metadata_upload_requested?
+  ENV["SUPPLY_UPLOAD_METADATA"] == "1"
+end
+
+def play_screenshot_upload_requested?
+  ENV["SUPPLY_UPLOAD_SCREENSHOTS"] == "1"
+end
+
+def play_image_upload_requested?
+  ENV["SUPPLY_UPLOAD_IMAGES"] == "1"
+end
+
+def play_auth_options
+  json_key = ENV["GOOGLE_PLAY_JSON_KEY"].to_s.strip
+  json_key = ENV["SUPPLY_JSON_KEY"].to_s.strip if json_key.empty?
+  json_key = ENV["GOOGLE_PLAY_JSON_KEY_PATH"].to_s.strip if json_key.empty?
+  return { json_key: json_key } unless json_key.empty?
+
+  json_key_data = ENV["GOOGLE_PLAY_JSON_KEY_DATA"].to_s.strip
+  json_key_data = ENV["SUPPLY_JSON_KEY_DATA"].to_s.strip if json_key_data.empty?
+  return { json_key_data: json_key_data } unless json_key_data.empty?
+
+  UI.user_error!("Missing Google Play API credentials. Set GOOGLE_PLAY_JSON_KEY or GOOGLE_PLAY_JSON_KEY_DATA.")
+end
+
+def android_release_plan_path
+  plan_path = ENV["OPENCLAW_ANDROID_RELEASE_PLAN"].to_s
+  UI.user_error!("Missing saved Android release plan. Use `pnpm android:release:upload`.") unless env_present?(plan_path)
+  File.expand_path(plan_path, repo_root)
+end
+
+def android_play_state(client)
+  # Include APKs and AABs from every track; allocation and public identities belong to the planner.
+  codes = (client.aab_version_codes + client.apks_version_codes).map do |value|
+    text = value.to_s
+    UI.user_error!("Google Play returned an invalid versionCode: #{text.inspect}.") unless text.match?(/\A[1-9][0-9]*\z/)
+    Integer(text, 10)
+  end
+  tracks = client.tracks("production", "wear:production").map do |track|
+    {
+      track: track.track,
+      releases: Array(track.releases).map do |release|
+        { status: release.status, versionCodes: Array(release.version_codes).map(&:to_s) }
+      end
+    }
+  end
+  { uploadedVersionCodes: codes, tracks: tracks }
+end
+
+def android_release_plan_command(command, client)
+  args = [
+    "node", "--import", File.join(repo_root, "scripts", "tsx.mjs"),
+    File.join(repo_root, "scripts", "android-release-plan.ts"), command, "--root", repo_root
+  ]
+  args.push("--plan", android_release_plan_path) unless command == "plan"
+  stdout, stderr, status = Open3.capture3(*args, stdin_data: JSON.generate(android_play_state(client)), chdir: repo_root)
+  unless status.success?
+    detail = stderr.to_s.strip
+    detail = stdout.to_s.strip if detail.empty?
+    UI.user_error!("Android release #{command} failed: #{detail}")
+  end
+  stdout
+end
+
+def validate_play_auth!(version_metadata: nil, release_baselines: false)
+  client = nil
+  begin
+    client = Supply::Client.make_from_config(params: play_auth_options)
+    client.begin_edit(package_name: play_package_name)
+    if version_metadata
+      android_release_plan_command("validate", client)
+    elsif release_baselines
+      android_release_plan_command("validate-baselines", client)
+    end
+  rescue FastlaneCore::Interface::FastlaneError
+    raise
+  rescue => e
+    UI.user_error!("Google Play API credentials are invalid for #{play_package_name}: #{e.message}")
+  ensure
+    if client&.current_edit
+      begin
+        client.abort_current_edit
+      rescue => e
+        UI.user_error!("Google Play API credentials opened a validation edit but could not close it: #{e.message}")
+      end
+    end
+  end
+end
+
+def plan_android_release!
+  client = nil
+  begin
+    client = Supply::Client.make_from_config(params: play_auth_options)
+    client.begin_edit(package_name: play_package_name)
+    JSON.parse(android_release_plan_command("plan", client))
+  ensure
+    client.abort_current_edit if client&.current_edit
+  end
+end
+
+def read_android_version_metadata
+  stdout, stderr, status = Open3.capture3(
+    "node",
+    "--import",
+    "tsx",
+    File.join(repo_root, "scripts", "android-version.ts"),
+    "--for-build",
+    "--json",
+    "--root",
+    repo_root
+  )
+  unless status.success?
+    detail = stderr.to_s.strip
+    detail = stdout.to_s.strip if detail.empty?
+    UI.user_error!("Failed to read Android version metadata: #{detail}")
+  end
+
+  parsed = JSON.parse(stdout)
+  version = parsed.fetch("canonicalVersion").to_s
+  version_code = parsed.fetch("versionCode").to_i
+  wear_version_code = parsed.fetch("wearVersionCode").to_i
+  UI.user_error!("Android version helper returned incomplete metadata.") if version.empty? || version_code <= 0 || wear_version_code <= version_code
+
+  ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_VERSION_NAME"] = version
+  ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_VERSION_CODE"] = version_code.to_s
+  ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_WEAR_VERSION_CODE"] = wear_version_code.to_s
+
+  { version: version, version_code: version_code, wear_version_code: wear_version_code }
+rescue JSON::ParserError => e
+  UI.user_error!("Invalid JSON from Android version helper: #{e.message}")
+end
+
+def sync_android_versioning!(for_upload: true)
+  version = read_android_version_metadata
+  if for_upload || env_present?(ENV["OPENCLAW_ANDROID_RELEASE_PLAN"])
+    %w(phone wear).each { |audience| render_android_release_notes!(version, audience) }
+  else
+    sh(["node", "--import", "tsx", File.join(repo_root, "scripts", "android-sync-versioning.ts"), "--check", "--root", repo_root].shelljoin)
+  end
+end
+
+def render_android_release_notes!(version_metadata, audience)
+  stdout, stderr, status = Open3.capture3(
+    "node", "--import", File.join(repo_root, "scripts", "tsx.mjs"),
+    File.join(repo_root, "scripts", "mobile-release-notes.ts"), "render",
+    "--platform", "android", "--version", version_metadata.fetch(:version),
+    "--build", version_metadata.fetch(:version_code).to_s, "--audience", audience,
+    chdir: repo_root
+  )
+  UI.user_error!("Invalid generated Android #{audience} release notes: #{stderr.strip}") unless status.success?
+  UI.user_error!("Generated Android #{audience} release notes are empty.") unless env_present?(stdout)
+  stdout.chomp
+end
+
+def play_metadata_languages
+  Dir.children(play_metadata_path)
+    .select { |language| File.directory?(File.join(play_metadata_path, language)) }
+    .reject { |language| language.start_with?(".") }
+    .sort
+end
+
+def update_play_track!(client, track_name:, version_code:, version_name:, release_notes:)
+  release = AndroidPublisher::TrackRelease.new(
+    name: version_name,
+    status: play_release_status,
+    version_codes: [version_code],
+    release_notes: [AndroidPublisher::LocalizedText.new(language: "en-US", text: release_notes)]
+  )
+  track = client.tracks(track_name).first || AndroidPublisher::Track.new(track: track_name)
+  # Google preserves older releases when the edit replaces this list with the newest release.
+  track.releases = [release]
+  # Supply::Client owns the active edit; its public API takes (track_name, track_object).
+  client.update_track(track_name, track)
+end
+
+def upload_play_listing_assets!(client, upload_metadata:, upload_images:, upload_screenshots:)
+  play_metadata_languages.each do |language|
+    language_path = File.join(play_metadata_path, language)
+    if upload_metadata
+      metadata_fields = Supply::AVAILABLE_METADATA_FIELDS.select { |field| File.exist?(File.join(language_path, "#{field}.txt")) }
+      unless metadata_fields.empty?
+        # This returns Supply::Listing, whose save writes through the same active edit.
+        listing = client.listing_for_language(language)
+        metadata_fields.each do |field|
+          listing.public_send("#{field}=", File.read(File.join(language_path, "#{field}.txt"), encoding: "UTF-8"))
+        end
+        listing.save
+      end
+    end
+
+    if upload_images
+      Supply::IMAGES_TYPES.each do |image_type|
+        path = Dir.glob(File.join(language_path, "images", "#{image_type}.{png,jpg,jpeg}"), File::FNM_CASEFOLD).sort.last
+        client.upload_image(image_path: path, image_type: image_type, language: language) if path
+      end
+    end
+
+    next unless upload_screenshots
+
+    Supply::SCREENSHOT_TYPES.each do |screenshot_type|
+      paths = Dir.glob(File.join(language_path, "images", screenshot_type, "*.{png,jpg,jpeg}"), File::FNM_CASEFOLD).sort
+      next if paths.empty?
+
+      client.clear_screenshots(image_type: screenshot_type, language: language)
+      paths.each { |path| client.upload_image(image_path: path, image_type: screenshot_type, language: language) }
+    end
+  end
+end
+
+def fastlane_boolean_env(name, default:)
+  value = ENV[name]
+  return default if value.nil?
+
+  normalized = value.downcase
+  return true if ["1", "yes", "true", "on"].include?(normalized)
+  return false if ["0", "no", "false", "off"].include?(normalized)
+
+  UI.user_error!("#{name} must be true/false, yes/no, on/off, or 1/0.")
+end
+
+def upload_play_builds_atomically!(phone_artifact_path:, wear_artifact_path:, version_metadata:, upload_metadata:, upload_images:, upload_screenshots:)
+  phone_notes = render_android_release_notes!(version_metadata, "phone")
+  wear_notes = render_android_release_notes!(version_metadata, "wear")
+  internal_track = play_track == "internal"
+  previous_supply_config = Supply.config
+  client = nil
+  begin
+    Supply.config = {
+      ack_bundle_installation_warning: fastlane_boolean_env("ACK_BUNDLE_INSTALLATION_WARNING", default: false),
+      # Play rejects this parameter for automatic internal review; nil omits it, false still sends it.
+      changes_not_sent_for_review: internal_track ? nil : fastlane_boolean_env("SUPPLY_CHANGES_NOT_SENT_FOR_REVIEW", default: false),
+      rescue_changes_not_sent_for_review: !internal_track && fastlane_boolean_env("SUPPLY_RESCUE_CHANGES_NOT_SENT_FOR_REVIEW", default: true)
+    }
+    client = Supply::Client.make_from_config(params: play_auth_options.merge(timeout: (ENV["SUPPLY_TIMEOUT"] || "300").to_i))
+    client.begin_edit(package_name: play_package_name)
+    android_release_plan_command("validate", client)
+    mobile_release_ref_command("initialize-android") unless play_validate_only?
+
+    phone_version_code = client.upload_bundle(phone_artifact_path)
+    wear_version_code_value = client.upload_bundle(wear_artifact_path)
+    expected_phone_version_code = version_metadata.fetch(:version_code)
+    expected_wear_version_code = version_metadata.fetch(:wear_version_code)
+    UI.user_error!("Uploaded phone AAB versionCode #{phone_version_code}, expected #{expected_phone_version_code}.") unless phone_version_code.to_i == expected_phone_version_code
+    UI.user_error!("Uploaded Wear AAB versionCode #{wear_version_code_value}, expected #{expected_wear_version_code}.") unless wear_version_code_value.to_i == expected_wear_version_code
+
+    update_play_track!(
+      client,
+      track_name: play_track,
+      version_code: phone_version_code,
+      version_name: version_metadata.fetch(:version),
+      release_notes: phone_notes
+    )
+    update_play_track!(
+      client,
+      track_name: wear_play_track,
+      version_code: wear_version_code_value,
+      version_name: version_metadata.fetch(:version),
+      release_notes: wear_notes
+    )
+    upload_play_listing_assets!(
+      client,
+      upload_metadata: upload_metadata,
+      upload_images: upload_images,
+      upload_screenshots: upload_screenshots
+    )
+
+    if play_validate_only?
+      client.validate_current_edit!
+      UI.success("Successfully validated the atomic phone and Wear upload.")
+    else
+      client.commit_current_edit!
+      UI.success("Successfully committed the atomic phone and Wear upload.")
+    end
+  ensure
+    if client&.current_edit
+      begin
+        client.abort_current_edit
+      rescue => error
+        UI.important("Could not abort Google Play edit after failure: #{error.message}")
+      end
+    end
+    Supply.config = previous_supply_config
+  end
+end
+
+def play_metadata_path
+  File.join(ANDROID_FASTLANE_ROOT, "metadata", "android")
+end
+
+def play_screenshot_paths_for_type(screenshot_type)
+  Dir[File.join(play_metadata_path, "**", "images", screenshot_type, "*.{png,jpg,jpeg}")]
+end
+
+def validate_android_screenshots!
+  return unless play_screenshot_upload_requested?
+
+  required_types = %w(phoneScreenshots wearScreenshots)
+  missing_types = required_types.select { |screenshot_type| play_screenshot_paths_for_type(screenshot_type).empty? }
+  unless missing_types.empty?
+    UI.user_error!("SUPPLY_UPLOAD_SCREENSHOTS=1 but no screenshots were found for: #{missing_types.join(', ')}.")
+  end
+end
+
+def play_release_artifact_paths(version)
+  %w(play wear).map do |flavor|
+    File.join(android_root, "build", "release-artifacts", "openclaw-#{version}-#{flavor}-release.aab")
+  end
+end
+
+def build_release_artifacts!
+  sh(["bun", File.join(android_root, "scripts", "build-release-artifacts.ts")].shelljoin)
+end
+
+def capture_android_screenshots!
+  sh(["bash", File.join(repo_root, "scripts", "android-screenshots.sh")].shelljoin)
+end
+
+def mobile_release_ref_script
+  File.join(repo_root, "scripts", "mobile-release-ref.ts")
+end
+
+def release_git_sha
+  stdout, stderr, status = Open3.capture3("git", "rev-parse", "HEAD", chdir: repo_root)
+  UI.user_error!("Unable to resolve release Git SHA: #{stderr.strip}") unless status.success?
+  stdout.strip
+end
+
+def mobile_release_ref_command(command)
+  args = [
+    "node",
+    "--import",
+    File.join(repo_root, "scripts", "tsx.mjs"),
+    mobile_release_ref_script,
+    command,
+    "--plan",
+    android_release_plan_path,
+    "--root",
+    repo_root,
+  ]
+  sh(args.shelljoin)
+end
+
+def read_android_release_signing_properties!(path)
+  UI.user_error!("Missing materialized Android release signing properties at #{path}.") unless File.exist?(path)
+
+  properties = {}
+  each_android_property(path) { |key, value| properties[key] = value.strip }
+
+  missing = ANDROID_RELEASE_SIGNING_GRADLE_PROPERTIES.reject { |key| env_present?(properties[key]) }
+  UI.user_error!("Materialized Android release signing properties are missing: #{missing.join(', ')}.") unless missing.empty?
+
+  properties
+end
+
+def export_android_release_signing_properties!(path)
+  read_android_release_signing_properties!(path).each do |key, value|
+    ENV["ORG_GRADLE_PROJECT_#{key}"] = value
+  end
+end
+
+def sync_android_release_signing!
+  sh(["node", android_release_signing_script, "--mode", "sync-pull"].shelljoin)
+  export_android_release_signing_properties!(android_release_signing_materialized_properties_path)
+end
+
+def prepare_android_release_signing!
+  if env_present?(ENV["MATCH_PASSWORD"])
+    sync_android_release_signing!
+  elsif File.exist?(android_release_signing_materialized_properties_path)
+    export_android_release_signing_properties!(android_release_signing_materialized_properties_path)
+  end
+end
+
+def validate_android_release_signing!
+  build_commit = release_git_sha
+  build_timestamp = Time.now.utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+  Dir.chdir(android_root) do
+    sh([
+      "./gradlew",
+      ":app:validateSigningPlayRelease",
+      ":wear:validateSigningRelease",
+      "-PopenclawBuildCommit=#{build_commit}",
+      "-PopenclawBuildTimestamp=#{build_timestamp}"
+    ].shelljoin)
+  end
+end
+
+def print_android_release_plan!(version_metadata)
+  UI.message("Android Play release plan:")
+  UI.message("  package: #{play_package_name}")
+  UI.message("  track: #{play_track}")
+  UI.message("  Wear track: #{wear_play_track}")
+  UI.message("  release_status: #{play_release_status}")
+  UI.message("  validate_only: #{play_validate_only?}")
+  UI.message("  versionName: #{version_metadata.fetch(:version)}")
+  UI.message("  phone versionCode: #{version_metadata.fetch(:version_code)}")
+  UI.message("  Wear versionCode: #{version_metadata.fetch(:wear_version_code)}")
+end
+
+def validate_android_release_preflight!(version_metadata)
+  validate_play_auth!(version_metadata: version_metadata)
+  prepare_android_release_signing!
+  validate_android_release_signing!
+  %w(phone wear).each { |audience| render_android_release_notes!(version_metadata, audience) }
+  print_android_release_plan!(version_metadata)
+end
+
+def upload_play_store_metadata!(version_metadata)
+  validate_android_screenshots!
+  phone_code = version_metadata.fetch(:version_code)
+  notes = {
+    phone_code => render_android_release_notes!(version_metadata, "phone"),
+    version_metadata.fetch(:wear_version_code) => render_android_release_notes!(version_metadata, "wear")
+  }
+  validate_play_auth!(release_baselines: true)
+
+  Dir.mktmpdir("openclaw-android-metadata") do |metadata_path|
+    FileUtils.cp_r(File.join(play_metadata_path, "."), metadata_path)
+    Dir[File.join(metadata_path, "*", "changelogs")].each { |directory| FileUtils.rm_rf(directory) }
+    changelogs = File.join(metadata_path, "en-US", "changelogs")
+    FileUtils.mkdir_p(changelogs)
+    notes.each { |code, text| File.write(File.join(changelogs, "#{code}.txt"), text) }
+    upload_to_play_store(
+      **play_auth_options,
+      package_name: play_package_name,
+      track: play_track,
+      version_code: phone_code,
+      metadata_path: metadata_path,
+      skip_upload_apk: true,
+      skip_upload_aab: true,
+      skip_upload_metadata: !play_metadata_upload_requested?,
+      skip_upload_changelogs: false,
+      skip_upload_images: !play_image_upload_requested?,
+      skip_upload_screenshots: !play_screenshot_upload_requested?,
+      validate_only: play_validate_only?
+    )
+  end
+end
+
+def upload_play_store_build!(version_metadata, upload_metadata: false, upload_images: false, upload_screenshots: false)
+  mobile_release_ref_command("preflight")
+  ENV["SUPPLY_UPLOAD_SCREENSHOTS"] = "1" if upload_screenshots
+  validate_android_screenshots!
+  artifact_paths = play_release_artifact_paths(version_metadata.fetch(:version))
+  missing_artifacts = artifact_paths.reject { |path| File.exist?(path) }
+  unless missing_artifacts.empty?
+    UI.user_error!("Missing Play release artifacts at #{missing_artifacts.join(', ')}. Run pnpm android:release:archive first.")
+  end
+
+  phone_artifact_path, wear_artifact_path = artifact_paths
+  upload_play_builds_atomically!(
+    phone_artifact_path: phone_artifact_path,
+    wear_artifact_path: wear_artifact_path,
+    version_metadata: version_metadata,
+    upload_metadata: upload_metadata,
+    upload_images: upload_images,
+    upload_screenshots: upload_screenshots
+  )
+
+  unless play_validate_only?
+    mobile_release_ref_command("record")
+  end
+end
+
+load_env_file(File.join(ANDROID_FASTLANE_ROOT, ".env"))
+
+platform :android do
+  desc "Plan the next Android phone and Wear build numbers from Google Play"
+  lane :release_plan do |options|
+    output_path = options[:output_path].to_s.strip
+    UI.user_error!("release_plan requires output_path.") if output_path.empty?
+    plan = plan_android_release!
+    File.write(File.expand_path(output_path), "#{JSON.pretty_generate(plan)}\n")
+    UI.success("Planned Android #{plan.fetch('version')}: phone #{plan.fetch('versionCode')}, Wear #{plan.fetch('wearVersionCode')}.")
+  end
+
+  desc "Validate Google Play API credentials"
+  lane :auth_check do
+    validate_play_auth!
+    UI.success("Google Play API credentials are valid.")
+  end
+
+  desc "Print the Android release signing plan"
+  lane :signing_plan do
+    sh(["node", android_release_signing_script, "--mode", "plan"].shelljoin)
+  end
+
+  desc "Pull encrypted Android release signing assets and validate Gradle release signing"
+  lane :signing_check do
+    sync_android_release_signing!
+    validate_android_release_signing!
+    UI.success("Android release signing assets are available locally.")
+  end
+
+  desc "Pull encrypted Android release signing assets from the shared signing repo"
+  lane :signing_sync_pull do
+    sync_android_release_signing!
+    UI.success("Pulled Android release signing assets.")
+  end
+
+  desc "Create or refresh encrypted Android release signing assets in the shared signing repo"
+  lane :signing_sync_push do
+    sh(["node", android_release_signing_script, "--mode", "sync-push"].shelljoin)
+    UI.success("Pushed Android release signing assets.")
+  end
+
+  desc "Validate Android Play release auth, signing, versioning, and release notes"
+  lane :release_preflight do
+    sync_android_versioning!
+    version_metadata = read_android_version_metadata
+    validate_android_release_preflight!(version_metadata)
+    UI.success("Android Play release preflight passed for #{version_metadata[:version]} (#{version_metadata[:version_code]}).")
+  end
+
+  desc "Upload Google Play metadata, changelog, and optional screenshots"
+  lane :metadata do
+    sync_android_versioning!
+    version_metadata = read_android_version_metadata
+    ENV["SUPPLY_UPLOAD_METADATA"] = "1" unless ENV.key?("SUPPLY_UPLOAD_METADATA")
+    upload_play_store_metadata!(version_metadata)
+    UI.success("Uploaded Android Play metadata for #{version_metadata[:version]} (#{version_metadata[:version_code]}).")
+  end
+
+  desc "Build signed Android release artifacts locally without uploading"
+  lane :play_store_archive do
+    sync_android_versioning!(for_upload: false)
+    prepare_android_release_signing!
+    build_release_artifacts!
+  end
+
+  desc "Generate deterministic Android screenshots for Google Play metadata"
+  lane :screenshots do
+    capture_android_screenshots!
+  end
+
+  desc "Upload the signed Play AAB to Google Play"
+  lane :play_store do
+    sync_android_versioning!
+    version_metadata = read_android_version_metadata
+    upload_play_store_build!(version_metadata)
+    UI.success("Uploaded Android Play build to #{play_track}: version=#{version_metadata[:version]} code=#{version_metadata[:version_code]}")
+  end
+
+  desc "Build and upload Android phone and Wear bundles, with store assets for play-store releases"
+  lane :release_upload do |options|
+    destination = options.fetch(:destination, "play-store").to_s
+    UI.user_error!("Android release destination must be play-store or internal.") unless %w(play-store internal).include?(destination)
+    internal = destination == "internal"
+    if internal
+      ENV["GOOGLE_PLAY_TRACK"] = "internal"
+      ENV["GOOGLE_PLAY_RELEASE_STATUS"] = "completed"
+      %w(METADATA SCREENSHOTS IMAGES).each { |kind| ENV["SUPPLY_UPLOAD_#{kind}"] = "0" }
+    end
+    sync_android_versioning!
+    version_metadata = read_android_version_metadata
+    validate_android_release_preflight!(version_metadata)
+    unless internal
+      screenshots
+      ENV["SUPPLY_UPLOAD_METADATA"] = "1"
+      ENV["SUPPLY_UPLOAD_SCREENSHOTS"] = "1"
+    end
+    build_release_artifacts!
+    upload_play_store_build!(version_metadata, upload_metadata: !internal, upload_screenshots: !internal)
+    UI.success("Uploaded Android Play build to #{play_track}: version=#{version_metadata[:version]} code=#{version_metadata[:version_code]}")
+    UI.important("Production promotion remains manual in Google Play Console.")
+  end
+end

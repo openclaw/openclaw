@@ -20,15 +20,4 @@ describe("sglang provider plugin", () => {
     });
     expect(policy).not.toHaveProperty("dropReasoningFromHistory");
   });
-
-  it("still drops historical reasoning for Gemma 4 chat-completions models", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-    const policy = provider.buildReplayPolicy?.({
-      provider: "sglang",
-      modelApi: "openai-completions",
-      modelId: "google/gemma-4-26b-a4b-it",
-    } as never);
-
-    expect(policy).toHaveProperty("dropReasoningFromHistory", true);
-  });
 });

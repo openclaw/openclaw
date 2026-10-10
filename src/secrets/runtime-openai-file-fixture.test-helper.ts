@@ -1,3 +1,4 @@
+/** Test helper for OpenAI file-backed secret fixtures. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect } from "vitest";
@@ -22,8 +23,6 @@ export const OPENAI_FILE_KEY_REF = {
 
 export const EMPTY_LOADABLE_PLUGIN_ORIGINS: ReadonlyMap<string, PluginOrigin> = new Map();
 export type SecretsRuntimeEnvSnapshot = ReturnType<typeof captureEnv>;
-
-const allowInsecureTempSecretFile = process.platform === "win32";
 
 export function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
@@ -85,7 +84,6 @@ export function createOpenAIFileRuntimeConfig(secretFile: string): OpenClawConfi
           source: "file",
           path: secretFile,
           mode: "json",
-          ...(allowInsecureTempSecretFile ? { allowInsecurePath: true } : {}),
         },
       },
     },

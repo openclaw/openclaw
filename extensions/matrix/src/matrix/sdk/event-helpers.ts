@@ -1,35 +1,51 @@
 import type { MatrixEvent } from "matrix-js-sdk/lib/matrix.js";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseJson, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { MatrixRawEvent } from "./types.js";
 
 type MatrixEventContentMode = "current" | "original";
+const matrixEventProjections = new WeakMap<
+  object,
+  {
+    decryptionFailure: boolean;
+    originalContent: Record<string, unknown>;
+  }
+>();
+
+export function getMatrixEventProjection(event: object) {
+  return matrixEventProjections.get(event);
+}
 
 export function matrixEventToRaw(
   event: MatrixEvent,
   opts: { contentMode?: MatrixEventContentMode } = {},
 ): MatrixRawEvent {
-  const unsigned = (event.getUnsigned?.() ?? {}) as {
-    age?: number;
-    redacted_because?: unknown;
-  };
-  const eventWithOriginalContent = event as {
-    getOriginalContent?: () => Record<string, unknown>;
-  };
+  const originalContent = event.getOriginalContent<Record<string, unknown>>();
   const content =
-    opts.contentMode === "original"
-      ? (eventWithOriginalContent.getOriginalContent?.() ?? event.getContent?.() ?? {})
-      : (event.getContent?.() ?? eventWithOriginalContent.getOriginalContent?.() ?? {});
+    opts.contentMode === "original" ? originalContent : event.getContent<Record<string, unknown>>();
+  const relation = originalContent["m.relates_to"] || event.getWireContent()["m.relates_to"];
+  const normalizedContent =
+    relation && !Object.hasOwn(content, "m.relates_to")
+      ? { ...content, "m.relates_to": relation }
+      : content;
   const raw: MatrixRawEvent = {
     event_id: event.getId() ?? "",
     sender: event.getSender() ?? "",
     type: event.getType() ?? "",
     origin_server_ts: event.getTs() ?? 0,
-    content: content || {},
-    unsigned,
+    content: normalizedContent,
+    unsigned: event.getUnsigned(),
   };
-  const stateKey = resolveMatrixStateKey(event);
+  const stateKey = event.getStateKey() ?? event.getWireStateKey();
   if (typeof stateKey === "string") {
     raw.state_key = stateKey;
   }
+  // Keep native facts off wire-shaped objects. getContent may reflect a cached
+  // replacement, while mutation baselines need this event's original content.
+  matrixEventProjections.set(raw, {
+    decryptionFailure: event.isDecryptionFailure(),
+    originalContent,
+  });
   return raw;
 }
 
@@ -38,9 +54,14 @@ export function parseMxc(url: string): { server: string; mediaId: string } | nul
   if (!match) {
     return null;
   }
+  const server = match[1];
+  const mediaId = match[2];
+  if (!server || !mediaId) {
+    return null;
+  }
   return {
-    server: match[1],
-    mediaId: match[2],
+    server,
+    mediaId,
   };
 }
 
@@ -50,34 +71,8 @@ export function buildHttpError(
 ): Error & { statusCode: number } {
   let message = `Matrix HTTP ${statusCode}`;
   if (bodyText.trim()) {
-    try {
-      const parsed = JSON.parse(bodyText) as { error?: string };
-      if (typeof parsed.error === "string" && parsed.error.trim()) {
-        message = parsed.error.trim();
-      } else {
-        message = bodyText.slice(0, 500);
-      }
-    } catch {
-      message = bodyText.slice(0, 500);
-    }
+    const parsed = safeParseJson<{ error?: unknown }>(bodyText);
+    message = normalizeOptionalString(parsed?.error) ?? truncateUtf16Safe(bodyText, 500);
   }
   return Object.assign(new Error(message), { statusCode });
-}
-
-function resolveMatrixStateKey(event: MatrixEvent): string | undefined {
-  const direct = event.getStateKey?.();
-  if (typeof direct === "string") {
-    return direct;
-  }
-  const wireContent = (
-    event as { getWireContent?: () => { state_key?: unknown } }
-  ).getWireContent?.();
-  if (wireContent && typeof wireContent.state_key === "string") {
-    return wireContent.state_key;
-  }
-  const rawEvent = (event as { event?: { state_key?: unknown } }).event;
-  if (rawEvent && typeof rawEvent.state_key === "string") {
-    return rawEvent.state_key;
-  }
-  return undefined;
 }

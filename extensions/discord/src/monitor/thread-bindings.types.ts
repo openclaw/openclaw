@@ -13,26 +13,16 @@ export type ThreadBindingRecord = {
   boundBy: string;
   boundAt: number;
   lastActivityAt: number;
-  /** Inactivity timeout window in milliseconds (0 disables inactivity auto-unfocus). */
+  /** Inactivity timeout window in milliseconds (0 disables idle expiry). */
   idleTimeoutMs?: number;
   /** Hard max-age window in milliseconds from bind time (0 disables hard cap). */
   maxAgeMs?: number;
   metadata?: Record<string, unknown>;
 };
 
-export type PersistedThreadBindingRecord = ThreadBindingRecord & {
-  sessionKey?: string;
-  /** @deprecated Legacy absolute expiry timestamp; migrated on load. */
-  expiresAt?: number;
-};
-
-export type PersistedThreadBindingsPayload = {
-  version: 1;
-  bindings: Record<string, PersistedThreadBindingRecord>;
-};
-
 export type ThreadBindingManager = {
   accountId: string;
+  isStopping: () => boolean;
   getIdleTimeoutMs: () => number;
   getMaxAgeMs: () => number;
   getByThreadId: (threadId: string) => ThreadBindingRecord | undefined;
@@ -43,8 +33,13 @@ export type ThreadBindingManager = {
     threadId: string;
     at?: number;
     persist?: boolean;
-  }) => ThreadBindingRecord | null;
+  }) => Promise<ThreadBindingRecord | null>;
+  /** @deprecated Generic SDK synchronous touch compatibility. */
+  touchThreadSync: (
+    params: Parameters<ThreadBindingManager["touchThread"]>[0],
+  ) => ThreadBindingRecord | null;
   bindTarget: (params: {
+    assertCurrent?: () => void;
     threadId?: string | number;
     channelId?: string;
     createThread?: boolean;
@@ -60,24 +55,29 @@ export type ThreadBindingManager = {
     metadata?: Record<string, unknown>;
   }) => Promise<ThreadBindingRecord | null>;
   unbindThread: (params: {
+    assertCurrent?: () => void;
     threadId: string;
+    expected?: ThreadBindingRecord;
+    persist?: boolean;
     reason?: string;
     sendFarewell?: boolean;
     farewellText?: string;
-  }) => ThreadBindingRecord | null;
+  }) => Promise<ThreadBindingRecord | null>;
   unbindBySessionKey: (params: {
     targetSessionKey: string;
     targetKind?: ThreadBindingTargetKind;
     reason?: string;
     sendFarewell?: boolean;
     farewellText?: string;
-  }) => ThreadBindingRecord[];
-  stop: () => void;
+  }) => Promise<ThreadBindingRecord[]>;
+  notifyUnbound: (
+    record: ThreadBindingRecord,
+    params: { reason?: string; sendFarewell?: boolean; farewellText?: string },
+  ) => void;
+  stop: () => Promise<void>;
 };
 
-export const THREAD_BINDINGS_VERSION = 1 as const;
 export const THREAD_BINDINGS_SWEEP_INTERVAL_MS = 120_000;
 export const DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1000; // 24h
 export const DEFAULT_THREAD_BINDING_MAX_AGE_MS = 0; // disabled
 export const DISCORD_UNKNOWN_CHANNEL_ERROR_CODE = 10_003;
-export const RECENT_UNBOUND_WEBHOOK_ECHO_WINDOW_MS = 30_000;

@@ -1,12 +1,15 @@
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export function hasModelSwitchContinuityEvidence(text: string) {
+export function hasModelSwitchContinuitySignal(text: string) {
   const lower = normalizeLowercaseStringOrEmpty(text);
   const mentionsHandoff =
-    lower.includes("handoff") || lower.includes("model switch") || lower.includes("switched");
+    lower.includes("handoff") ||
+    lower.includes("handed off the model") ||
+    lower.includes("model switch") ||
+    lower.includes("switched");
   const mentionsKickoffTask =
     lower.includes("qa_kickoff_task") ||
-    lower.includes("qa/scenarios/index.md") ||
+    lower.includes("qa/scenarios/index.yaml") ||
     lower.includes("scenario pack") ||
     lower.includes("kickoff task") ||
     lower.includes("kickoff note") ||

@@ -1,10 +1,16 @@
 {
   "id": "perplexity",
+  "categories": ["web"],
   "activation": {
     "onStartup": false
   },
-  "providerAuthEnvVars": {
-    "perplexity": ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "perplexity",
+        "envVars": ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"]
+      }
+    ]
   },
   "uiHints": {
     "webSearch.apiKey": {
@@ -25,9 +31,14 @@
   "contracts": {
     "webSearchProviders": ["perplexity"]
   },
-  "configContracts": {
-    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
-  },
+  "configGroups": [
+    {
+      "id": "web-search",
+      "title": "Web search",
+      "order": 10,
+      "properties": ["webSearch"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

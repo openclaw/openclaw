@@ -1,5 +1,8 @@
+// Shared-auth websocket test helpers.
+// Opens authenticated gateway sockets and reads config snapshots in tests.
 import { expect } from "vitest";
-import { WebSocket } from "ws";
+import { WebSocket } from "../../packages/gateway-client/src/websocket.js";
+import { acquireGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
 import { connectOk, rpcReq, trackConnectChallengeNonce } from "./test-helpers.js";
 
 export async function openAuthenticatedGatewayWs(
@@ -9,39 +12,10 @@ export async function openAuthenticatedGatewayWs(
 ): Promise<WebSocket> {
   const ws = new WebSocket(`ws://127.0.0.1:${port}`);
   trackConnectChallengeNonce(ws);
-  await new Promise<void>((resolve, reject) => {
-    const cleanup = () => {
-      clearTimeout(timer);
-      ws.off("open", onOpen);
-      ws.off("error", onError);
-      ws.off("close", onClose);
-    };
-    const onOpen = () => {
-      cleanup();
-      resolve();
-    };
-    const onError = (error: unknown) => {
-      cleanup();
-      reject(error instanceof Error ? error : new Error(String(error)));
-    };
-    const onClose = (code: number, reason: Buffer) => {
-      cleanup();
-      reject(new Error(`gateway websocket closed before open (${code}: ${reason.toString()})`));
-    };
-    const timer = setTimeout(() => {
-      cleanup();
-      ws.close();
-      reject(new Error(`gateway websocket did not open within ${timeoutMs}ms`));
-    }, timeoutMs);
-    timer.unref?.();
-    ws.once("open", onOpen);
-    ws.once("error", onError);
-    ws.once("close", onClose);
-  });
-  await connectOk(ws, { token });
-  return ws;
+  return await acquireGatewayTestWebSocket(ws, timeoutMs, () => connectOk(ws, { token }));
 }
 
+/** Waits for a gateway websocket to close and returns the close details. */
 export async function waitForGatewayWsClose(
   ws: WebSocket,
   timeoutMs = 10_000,
@@ -62,6 +36,7 @@ export async function waitForGatewayWsClose(
   });
 }
 
+/** Loads the current config through the gateway RPC API for mutation tests. */
 export async function loadGatewayConfig(ws: WebSocket): Promise<{
   hash: string;
   config: Record<string, unknown>;

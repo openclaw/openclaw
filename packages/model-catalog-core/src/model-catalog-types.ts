@@ -1,0 +1,289 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  MODEL_DATA_APIS,
+  MODEL_DATA_THINKING_FORMATS,
+  MODEL_DATA_THINKING_LEVELS,
+  type ModelDataCostRates,
+  type ModelDataImageInputConfig,
+  type ModelDataMediaInputConfig,
+  type ModelDataRawPricingTier,
+  type ModelDataThinkingLevelMap,
+  type ModelRoutingMaxPrice,
+  type ModelRoutingPercentiles,
+  type ModelRoutingSortConfig,
+} from "../../llm-core/src/model-data.js";
+
+export const MODEL_CATALOG_APIS = [...MODEL_DATA_APIS] as const;
+
+export type ModelCatalogApi = (typeof MODEL_CATALOG_APIS)[number];
+
+export const MODEL_CATALOG_THINKING_FORMATS = [...MODEL_DATA_THINKING_FORMATS] as const;
+
+export type ModelCatalogThinkingFormat = (typeof MODEL_CATALOG_THINKING_FORMATS)[number];
+
+export function isModelCatalogThinkingFormat(value: string): value is ModelCatalogThinkingFormat {
+  return (MODEL_CATALOG_THINKING_FORMATS as readonly string[]).includes(value);
+}
+
+export type ModelCatalogCompatConfig = {
+  supportsStore?: boolean;
+  supportsDeveloperRole?: boolean;
+  supportsReasoningEffort?: boolean;
+  /** Whether the model accepts the temperature parameter (GPT-5.6 family rejects it). */
+  supportsTemperature?: boolean;
+  /** Whether the provider honors top-level `instructions` on Responses requests. */
+  supportsInstructions?: boolean;
+  supportsUsageInStreaming?: boolean;
+  supportsStrictMode?: boolean;
+  supportsJsonSchemaResponseFormat?: boolean;
+  maxTokensField?: "max_completion_tokens" | "max_tokens";
+  requiresToolResultName?: boolean;
+  requiresAssistantAfterToolResult?: boolean;
+  requiresThinkingAsText?: boolean;
+  requiresReasoningContentOnAssistantMessages?: boolean;
+  openRouterRouting?: ModelCatalogOpenRouterRouting;
+  vercelGatewayRouting?: ModelCatalogVercelGatewayRouting;
+  zaiToolStream?: boolean;
+  cacheControlFormat?: "anthropic";
+  sendSessionAffinityHeaders?: boolean;
+  sendSessionIdHeader?: boolean;
+  supportsEagerToolInputStreaming?: boolean;
+  supportsLongCacheRetention?: boolean;
+  supportsPromptCacheKey?: boolean;
+  /** Explicit per-model opt-in for HTTP continuation on a custom/proxy OpenAI-Responses-compatible endpoint. */
+  supportsResponsesContinuation?: boolean;
+  supportsTools?: boolean;
+  /** Code-mode tier consumed by `tools.codeMode.enabled: "auto"`; absent means "capable". */
+  codeMode?: "preferred" | "capable";
+  requiresStringContent?: boolean;
+  strictMessageKeys?: boolean;
+  toolSchemaProfile?: string;
+  unsupportedToolSchemaKeywords?: string[];
+  toolCallArgumentsEncoding?: string;
+  requiresOpenAiAnthropicToolPayload?: boolean;
+  thinkingFormat?: ModelCatalogThinkingFormat;
+  supportedReasoningEfforts?: string[];
+  reasoningEffortMap?: Record<string, string>;
+  visibleReasoningDetailTypes?: string[];
+};
+
+/** OpenRouter routing preferences copied into request metadata. */
+export type ModelCatalogOpenRouterRouting = {
+  allow_fallbacks?: boolean;
+  require_parameters?: boolean;
+  data_collection?: "deny" | "allow";
+  zdr?: boolean;
+  enforce_distillable_text?: boolean;
+  order?: string[];
+  only?: string[];
+  ignore?: string[];
+  quantizations?: string[];
+  sort?: string | ModelRoutingSortConfig;
+  max_price?: ModelRoutingMaxPrice;
+  preferred_min_throughput?: number | ModelRoutingPercentiles;
+  preferred_max_latency?: number | ModelRoutingPercentiles;
+};
+
+export type ModelCatalogVercelGatewayRouting = {
+  only?: string[];
+  order?: string[];
+};
+
+export type ModelCatalogImageInputConfig = ModelDataImageInputConfig;
+
+export type ModelCatalogMediaInputConfig = ModelDataMediaInputConfig;
+
+export type ModelCatalogInput = "text" | "image" | "document";
+export const MODEL_CATALOG_THINKING_LEVELS = [...MODEL_DATA_THINKING_LEVELS] as const;
+export type ModelCatalogThinkingLevel = (typeof MODEL_CATALOG_THINKING_LEVELS)[number];
+export type ModelCatalogThinkingLevelMap = ModelDataThinkingLevelMap;
+
+const OPENAI_THINKING_APIS = new Set([
+  "openai-completions",
+  "openai-responses",
+  "openai-chatgpt-responses",
+  "azure-openai-responses",
+]);
+
+/** Managed API aliases retain the source adapter's reasoning contract. */
+export function resolveOpenAIThinkingApi(api: unknown): string | undefined {
+  if (typeof api !== "string") {
+    return undefined;
+  }
+  const sourceApi = api.replace(/^openclaw-(.+)-transport$/u, "$1");
+  return OPENAI_THINKING_APIS.has(sourceApi) ? sourceApi : undefined;
+}
+
+/** Map keys describe logical choices; provider-native values retain their spelling. */
+export function listMappedModelThinkingLevels(model: {
+  api?: string | null;
+  compat?: unknown;
+}): ModelCatalogThinkingLevel[] {
+  const compat = asOptionalRecord(model.compat);
+  const efforts = compat?.supportedReasoningEfforts;
+  const api = resolveOpenAIThinkingApi(model.api);
+  const format = compat?.thinkingFormat;
+  const binaryOnly = format === "qwen" || format === "qwen-chat-template" || format === "zai";
+  if (
+    !api ||
+    (api === "openai-completions" && binaryOnly) ||
+    compat?.supportsReasoningEffort === false ||
+    (Array.isArray(efforts) && efforts.length === 0)
+  ) {
+    return [];
+  }
+  const mapping = asOptionalRecord(compat?.reasoningEffortMap);
+  const mapped = new Set(
+    Object.entries(mapping ?? {}).flatMap(([level, effort]) =>
+      typeof effort === "string" && effort.trim() ? [level.trim().toLowerCase()] : [],
+    ),
+  );
+  return MODEL_CATALOG_THINKING_LEVELS.filter((level) => mapped.has(level));
+}
+
+export type ModelCatalogDiscovery = "static" | "refreshable" | "runtime";
+export type ModelCatalogStatus = "available" | "preview" | "deprecated" | "disabled";
+export type ModelCatalogSource =
+  | "manifest"
+  | "provider-index"
+  | "cache"
+  | "config"
+  | "runtime-refresh";
+
+export type UnifiedModelCatalogKind =
+  | "text"
+  | "voice"
+  | "image_generation"
+  | "video_generation"
+  | "music_generation";
+
+export type UnifiedModelCatalogSource =
+  | "manifest"
+  | "provider-index"
+  | "static"
+  | "live"
+  | "cache"
+  | "configured"
+  | "runtime-refresh";
+
+/** Unified model catalog entry for provider/model pickers. */
+export type UnifiedModelCatalogEntry<TCapabilities = unknown> = {
+  kind: UnifiedModelCatalogKind;
+  provider: string;
+  model: string;
+  label?: string;
+  source: UnifiedModelCatalogSource;
+  default?: boolean;
+  configured?: boolean;
+  capabilities?: TCapabilities;
+  modes?: readonly string[];
+  authEnvVars?: readonly string[];
+  docsPath?: string;
+  fetchedAt?: number;
+  expiresAt?: number;
+  warnings?: readonly string[];
+};
+
+export type ModelCatalogTieredCost = ModelDataRawPricingTier;
+
+export type ModelCatalogCost = Partial<ModelDataCostRates> & {
+  tieredPricing?: ModelCatalogTieredCost[];
+};
+
+/** Bounded provider-declared context-window choice for one model. */
+export type ModelCatalogContextWindowOption = {
+  id: string;
+  label: string;
+  contextWindow: number;
+};
+
+export const MODEL_CATALOG_MAX_CONTEXT_WINDOWS = 16;
+
+export type ModelCatalogModel = {
+  id: string;
+  name?: string;
+  api?: ModelCatalogApi;
+  baseUrl?: string;
+  headers?: Record<string, string>;
+  input?: ModelCatalogInput[];
+  reasoning?: boolean;
+  contextWindow?: number;
+  contextWindows?: ModelCatalogContextWindowOption[];
+  contextWindowDefault?: string;
+  contextTokens?: number;
+  maxTokens?: number;
+  thinkingLevelMap?: ModelCatalogThinkingLevelMap;
+  cost?: ModelCatalogCost;
+  compat?: ModelCatalogCompatConfig;
+  /**
+   * Provider/model ref of the same upstream model in another bundled catalog,
+   * for vendors reachable through several provider ids under different model
+   * ids. Authoring metadata only: normalization drops it, and the shared-model
+   * contract test uses it to keep `compat` capability tiers from drifting apart.
+   */
+  upstreamModel?: string;
+  mediaInput?: ModelCatalogMediaInputConfig;
+  status?: ModelCatalogStatus;
+  statusReason?: string;
+  replaces?: string[];
+  replacedBy?: string;
+  tags?: string[];
+};
+
+export type ModelCatalogProvider = {
+  baseUrl?: string;
+  api?: ModelCatalogApi;
+  headers?: Record<string, string>;
+  /** Provider-recommended primary model id. */
+  defaultModel?: string;
+  /** Provider-recommended small model id for short internal utility tasks. */
+  defaultUtilityModel?: string;
+  /**
+   * Hosted catalog v2 projection of the curated global list onto this provider's
+   * model ids, best first; reserved for picker ordering and not yet used.
+   */
+  recommendedModels?: string[];
+  models: ModelCatalogModel[];
+};
+
+export type ModelCatalogAlias = {
+  provider: string;
+  api?: ModelCatalogApi;
+  baseUrl?: string;
+};
+
+/** Suppression rule for hiding a provider/model under matching config. */
+export type ModelCatalogSuppression = {
+  provider: string;
+  model: string;
+  reason?: string;
+  /** Explicit retirement and optional provider-local successor; otherwise doctor clears overrides. */
+  retirement?: { replacedBy?: string };
+  when?: {
+    baseUrlHosts?: string[];
+    providerConfigApiIn?: string[];
+  };
+};
+
+/** Raw model catalog manifest shape. */
+export type ModelCatalog = {
+  /** Publication-time opt-in: owned OpenClaw provider id -> models.dev provider id. */
+  modelsDev?: Record<string, string>;
+  providers?: Record<string, ModelCatalogProvider>;
+  aliases?: Record<string, ModelCatalogAlias>;
+  suppressions?: ModelCatalogSuppression[];
+  discovery?: Record<string, ModelCatalogDiscovery>;
+  runtimeAugment?: boolean;
+};
+
+/** Normalized model catalog row used by runtime lookup and UI surfaces. */
+export type NormalizedModelCatalogRow = Omit<ModelCatalogModel, "upstreamModel"> & {
+  provider: string;
+  ref: string;
+  mergeKey: string;
+  name: string;
+  source: ModelCatalogSource;
+  input: ModelCatalogInput[];
+  reasoning: boolean;
+  status: ModelCatalogStatus;
+};

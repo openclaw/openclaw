@@ -1,4 +1,10 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
+import type { Model } from "openclaw/plugin-sdk/llm";
+import { withProviderAcceptanceObserver } from "openclaw/plugin-sdk/provider-transport-runtime";
+import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -8,6 +14,8 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
+import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
+import { OLLAMA_INCOMPLETE_STREAM_ERROR } from "./stream-contract.js";
 import {
   buildOllamaChatRequest,
   createConfiguredOllamaCompatStreamWrapper,
@@ -16,1271 +24,513 @@ import {
   convertToOllamaMessages,
   buildAssistantMessage,
   parseNdjsonStream,
-  resolveOllamaBaseUrlForRun,
-} from "./stream.js";
+} from "./stream.runtime.js";
 
-type GuardedFetchCall = {
-  url: string;
-  init?: RequestInit;
-  policy?: unknown;
-  signal?: AbortSignal;
-  timeoutMs?: number;
-  auditContext?: string;
-};
+type GuardedFetchCall = Parameters<typeof fetchWithSsrFGuard>[0];
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
-function requireHeaders(value: unknown): Record<string, string> {
-  return requireRecord(value, "request headers") as Record<string, string>;
-}
-
-function expectToolCallContent(
-  value: unknown,
-  expected: { name: string; arguments: Record<string, unknown> },
+function convertAssistantContent(
+  content: Array<Record<string, unknown>>,
+  options?: Parameters<typeof convertToOllamaMessages>[2],
 ) {
-  const content = requireRecord(value, "tool call content");
-  expect(content.type).toBe("toolCall");
-  expect(content.name).toBe(expected.name);
-  expect(content.arguments).toEqual(expected.arguments);
+  return convertToOllamaMessages([{ role: "assistant", content }] as never, undefined, options);
 }
 
-function expectIteratorEvent(
-  value: unknown,
-  expected: { type?: string; delta?: string; content?: string; done: boolean },
-) {
-  const result = requireRecord(value, "iterator result");
-  expect(result.done).toBe(expected.done);
-  if (expected.type !== undefined) {
-    const event = requireRecord(result.value, "iterator result value");
-    expect(event.type).toBe(expected.type);
-    if (expected.delta !== undefined) {
-      expect(event.delta).toBe(expected.delta);
-    }
-    if (expected.content !== undefined) {
-      expect(event.content).toBe(expected.content);
-    }
-  } else {
-    expect(result.value).toBeUndefined();
-  }
+type AssistantResponse = Parameters<typeof buildAssistantMessage>[0];
+type AssistantResponseMessage = AssistantResponse["message"];
+
+function createAssistantResponse(
+  message: Omit<AssistantResponseMessage, "role">,
+  overrides: Partial<Omit<AssistantResponse, "message">> = {},
+): AssistantResponse {
+  return {
+    model: "qwen3:32b",
+    created_at: "2026-01-01T00:00:00Z",
+    message: { role: "assistant", ...message },
+    done: true,
+    ...overrides,
+  };
 }
+
+function ndjson(
+  message: Partial<AssistantResponseMessage> = {},
+  response: Partial<Omit<AssistantResponse, "message">> = {},
+): string {
+  return JSON.stringify(
+    createAssistantResponse({ content: "", ...message }, { done: false, ...response }),
+  );
+}
+
+const hiddenReasoning =
+  "I should think privately and not leak this planning text in the answer. I need to keep deciding what to say next.";
 
 afterEach(() => {
   fetchWithSsrFGuardMock.mockReset();
 });
 
-describe("buildOllamaChatRequest", () => {
-  it("omits tools when none are provided", () => {
-    expect(
-      buildOllamaChatRequest({
-        modelId: "qwen3.5:9b",
-        messages: [{ role: "user", content: "hello" }],
-        options: { num_ctx: 65536 },
-      }),
-    ).toEqual({
-      model: "qwen3.5:9b",
-      messages: [{ role: "user", content: "hello" }],
-      stream: true,
-      options: { num_ctx: 65536 },
-    });
-  });
-
-  it("strips the ollama/ prefix from chat model ids", () => {
-    const request = buildOllamaChatRequest({
-      modelId: "ollama/qwen3:14b-q8_0",
-      messages: [{ role: "user", content: "hello" }],
-    });
-    expect(request.model).toBe("qwen3:14b-q8_0");
-  });
-
-  it("strips the active custom provider prefix from chat model ids", () => {
-    const request = buildOllamaChatRequest({
-      modelId: "ollama-spark/qwen3:32b",
-      providerId: "ollama-spark",
-      messages: [{ role: "user", content: "hello" }],
-    });
-    expect(request.model).toBe("qwen3:32b");
-  });
-
-  it("keeps unrelated slash-containing Ollama model ids intact", () => {
-    const request = buildOllamaChatRequest({
-      modelId: "library/qwen3:32b",
-      providerId: "ollama-spark",
-      messages: [{ role: "user", content: "hello" }],
-    });
-    expect(request.model).toBe("library/qwen3:32b");
-  });
-});
+async function compatPayload(
+  id: string,
+  params: Record<string, unknown>,
+  payload: Record<string, unknown>,
+) {
+  const model: Model = {
+    id,
+    name: id,
+    api: "openai-completions",
+    provider: "ollama",
+    baseUrl: "http://ollama-host:11434",
+    input: ["text"],
+    reasoning: true,
+    contextWindow: 262144,
+    maxTokens: 8192,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    params,
+  };
+  let patched: unknown;
+  const wrapped = expectDefined(
+    createConfiguredOllamaCompatStreamWrapper({
+      provider: "ollama",
+      modelId: id,
+      model,
+      thinkingLevel: "high",
+      streamFn: (_model, _context, options) => {
+        options?.onPayload?.(payload, model);
+        return createAssistantMessageEventStream();
+      },
+    }),
+    "compat wrapper",
+  );
+  await wrapped(
+    model,
+    { messages: [] },
+    {
+      onPayload: (value) => {
+        patched = value;
+      },
+    },
+  );
+  return requireRecord(patched, "patched payload");
+}
 
 describe("createConfiguredOllamaCompatStreamWrapper", () => {
-  it("adds Moonshot thinking config for Ollama cloud Kimi compat requests", async () => {
-    let patchedPayload: Record<string, unknown> | undefined;
-    const baseStreamFn = vi.fn((_model, _context, options) => {
-      options?.onPayload?.({ tool_choice: "auto" });
-      return (async function* () {})();
+  it("builds a bare request with default streaming and an unprefixed model id", () => {
+    expect(buildOllamaChatRequest({ modelId: "ollama/qwen3", messages: [] })).toEqual({
+      model: "qwen3",
+      messages: [],
+      stream: true,
     });
-    const model = {
-      api: "openai-completions",
-      provider: "ollama",
+  });
+
+  it.each([
+    {
+      name: "Kimi thinking and configured context",
       id: "kimi-k2.5:cloud",
-      contextWindow: 262144,
       params: { num_ctx: 65536 },
-    };
-
-    const wrapped = createConfiguredOllamaCompatStreamWrapper({
-      provider: "ollama",
-      modelId: "kimi-k2.5:cloud",
-      model,
-      streamFn: baseStreamFn,
-      thinkingLevel: "high",
-      extraParams: {},
-    } as never);
-
-    await wrapped?.(
-      model as never,
-      { messages: [] } as never,
-      {
-        onPayload: (payload: unknown) => {
-          patchedPayload = payload as Record<string, unknown>;
-        },
-      } as never,
-    );
-
-    const payload = requireRecord(patchedPayload, "patched payload");
-    expect(payload.thinking).toEqual({ type: "enabled" });
-    expect(payload.options).toEqual({ num_ctx: 65536 });
-  });
-
-  it("falls back to contextWindow when configured num_ctx is invalid", async () => {
-    let patchedPayload: Record<string, unknown> | undefined;
-    const baseStreamFn = vi.fn((_model, _context, options) => {
-      options?.onPayload?.({});
-      return (async function* () {})();
-    });
-    const model = {
-      api: "openai-completions",
-      provider: "ollama",
-      id: "qwen3:32b",
-      contextWindow: 131072,
+      payload: { tool_choice: "auto" },
+      expected: { thinking: { type: "enabled" }, options: { num_ctx: 65536 } },
+    },
+    {
+      name: "serialized replay arguments and fallback context",
+      id: "glm-5.2:cloud",
       params: { num_ctx: 0 },
-    };
-
-    const wrapped = createConfiguredOllamaCompatStreamWrapper({
-      provider: "ollama",
-      modelId: "qwen3:32b",
-      model,
-      streamFn: baseStreamFn,
-    } as never);
-
-    await wrapped?.(
-      model as never,
-      { messages: [] } as never,
-      {
-        onPayload: (payload: unknown) => {
-          patchedPayload = payload as Record<string, unknown>;
-        },
-      } as never,
-    );
-
-    const payload = requireRecord(patchedPayload, "patched payload");
-    expect(payload.options).toEqual({ num_ctx: 131072 });
+      payload: {
+        messages: [
+          {
+            role: "assistant",
+            function_call: { name: "legacy_gateway", arguments: '{"action":"config.get"}' },
+            tool_calls: [
+              {
+                id: "call_gateway",
+                type: "function",
+                function: {
+                  name: "gateway",
+                  arguments: '{"action":"config.get","path":"gateway.port"}',
+                },
+              },
+            ],
+          },
+        ],
+      },
+      expected: {
+        options: { num_ctx: 262144 },
+        messages: [
+          {
+            role: "assistant",
+            function_call: { name: "legacy_gateway", arguments: '{"action":"config.get"}' },
+            tool_calls: [
+              {
+                id: "call_gateway",
+                type: "function",
+                function: {
+                  name: "gateway",
+                  arguments: '{"action":"config.get","path":"gateway.port"}',
+                },
+              },
+            ],
+          },
+        ],
+      },
+    },
+  ])("preserves compat $name", async ({ id, params, payload, expected }) => {
+    const result = await compatPayload(id, params, payload);
+    for (const [key, value] of Object.entries(expected)) {
+      expect(result[key]).toEqual(value);
+    }
   });
 
-  it("forwards think=false on native Ollama chat requests when thinking is off", async () => {
-    await withMockNdjsonFetch(
-      [
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
-      ],
-      async (fetchMock) => {
-        const baseStreamFn = createOllamaStreamFn("http://ollama-host:11434");
+  it.each([
+    ["off", "off", {}, false],
+    ["configured", "off", { params: { thinking: "medium" } }, "medium"],
+    [
+      "non-reasoning configured",
+      "off",
+      { params: { thinking: "medium" }, reasoning: false },
+      undefined,
+    ],
+    ["non-reasoning runtime", "low", { reasoning: false }, undefined],
+    ["native low", "low", {}, "low"],
+    ["native high", "high", {}, "high"],
+    ["local max fallback", "max", {}, "high"],
+    ["cloud max", "max", { provider: "ollama-cloud", id: "glm-5.2" }, "max"],
+    ["new cloud max", "max", { provider: "ollama-cloud", id: "glm-5.3" }, "max"],
+    [
+      "new cloud configured max",
+      "off",
+      { provider: "ollama-cloud", id: "glm-5.3", params: { thinking: "max" } },
+      "max",
+    ],
+    ["cloud max fallback", "max", { provider: "ollama-cloud", id: "kimi-k2.5" }, "high"],
+  ] as const)(
+    "forwards native thinking: %s",
+    async (_name, thinkingLevel, overrides, expectedThink) => {
+      await withSuccessfulOllamaFetch(async (fetchMock) => {
         const model = {
           api: "ollama",
           provider: "ollama",
           id: "qwen3:32b",
+          input: ["text"],
           contextWindow: 131072,
+          ...overrides,
         };
-
-        const wrapped = createConfiguredOllamaCompatStreamWrapper({
-          provider: "ollama",
-          modelId: "qwen3:32b",
-          model,
-          streamFn: baseStreamFn,
-          thinkingLevel: "off",
-        } as never);
-        if (!wrapped) {
-          throw new Error("Expected wrapped Ollama stream function");
-        }
-
-        const stream = await Promise.resolve(
-          wrapped(
+        const wrapped = expectDefined(
+          createConfiguredOllamaCompatStreamWrapper({
+            provider: model.provider,
+            modelId: model.id,
+            model,
+            streamFn: createOllamaStreamFn("http://ollama-host:11434"),
+            thinkingLevel,
+          } as never),
+          "wrapped Ollama stream function",
+        );
+        await collectStreamEvents(
+          await wrapped(
             model as never,
-            {
-              messages: [{ role: "user", content: "hello" }],
-            } as never,
-            {} as never,
+            { messages: [{ role: "user", content: "hello" }] } as never,
+            {},
           ),
         );
-
-        await collectStreamEvents(stream);
-
-        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
-        if (typeof requestInit.body !== "string") {
-          throw new Error("Expected string request body");
-        }
-        const requestBody = JSON.parse(requestInit.body) as {
-          think?: boolean;
-          options?: { think?: boolean; num_ctx?: number };
-        };
-        expect(requestBody.think).toBe(false);
-        expect(requestBody.options?.think).toBeUndefined();
-        expect(requestBody.options?.num_ctx).toBeUndefined();
-      },
-    );
-  });
-
-  it("does not overwrite configured native Ollama params.thinking with implicit off", async () => {
-    await withMockNdjsonFetch(
-      [
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
-      ],
-      async (fetchMock) => {
-        const baseStreamFn = createOllamaStreamFn("http://ollama-host:11434");
-        const model = {
-          api: "ollama",
-          provider: "ollama",
-          id: "qwen3:32b",
-          contextWindow: 131072,
-          params: { thinking: "medium" },
-        };
-
-        const wrapped = createConfiguredOllamaCompatStreamWrapper({
-          provider: "ollama",
-          modelId: "qwen3:32b",
-          model,
-          streamFn: baseStreamFn,
-          thinkingLevel: "off",
-        } as never);
-        if (!wrapped) {
-          throw new Error("Expected wrapped Ollama stream function");
-        }
-
-        const stream = await Promise.resolve(
-          wrapped(
-            model as never,
-            {
-              messages: [{ role: "user", content: "hello" }],
-            } as never,
-            {} as never,
-          ),
-        );
-
-        await collectStreamEvents(stream);
-
-        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
-        if (typeof requestInit.body !== "string") {
-          throw new Error("Expected string request body");
-        }
-        const requestBody = JSON.parse(requestInit.body) as { think?: string };
-        expect(requestBody.think).toBe("medium");
-      },
-    );
-  });
-
-  it("does not forward truthy configured native Ollama thinking for non-reasoning models", async () => {
-    await withMockNdjsonFetch(
-      [
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
-      ],
-      async (fetchMock) => {
-        const baseStreamFn = createOllamaStreamFn("http://ollama-host:11434");
-        const model = {
-          api: "ollama",
-          provider: "ollama",
-          id: "llama3.2:latest",
-          contextWindow: 8192,
-          reasoning: false,
-          params: { thinking: "medium" },
-        };
-
-        const wrapped = createConfiguredOllamaCompatStreamWrapper({
-          provider: "ollama",
-          modelId: "llama3.2:latest",
-          model,
-          streamFn: baseStreamFn,
-          thinkingLevel: "off",
-        } as never);
-        if (!wrapped) {
-          throw new Error("Expected wrapped Ollama stream function");
-        }
-
-        const stream = await Promise.resolve(
-          wrapped(
-            model as never,
-            {
-              messages: [{ role: "user", content: "hello" }],
-            } as never,
-            {} as never,
-          ),
-        );
-
-        await collectStreamEvents(stream);
-
-        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
-        if (typeof requestInit.body !== "string") {
-          throw new Error("Expected string request body");
-        }
-        const requestBody = JSON.parse(requestInit.body) as {
-          think?: string;
-          options?: { think?: string };
-        };
-        expect(requestBody.think).toBeUndefined();
-        expect(requestBody.options?.think).toBeUndefined();
-      },
-    );
-  });
-
-  it("does not forward runtime native Ollama thinking for non-reasoning models", async () => {
-    await withMockNdjsonFetch(
-      [
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
-      ],
-      async (fetchMock) => {
-        const baseStreamFn = createOllamaStreamFn("http://ollama-host:11434");
-        const model = {
-          api: "ollama",
-          provider: "ollama",
-          id: "llama3.2:latest",
-          contextWindow: 8192,
-          reasoning: false,
-        };
-
-        const wrapped = createConfiguredOllamaCompatStreamWrapper({
-          provider: "ollama",
-          modelId: "llama3.2:latest",
-          model,
-          streamFn: baseStreamFn,
-          thinkingLevel: "low",
-        } as never);
-        if (!wrapped) {
-          throw new Error("Expected wrapped Ollama stream function");
-        }
-
-        const stream = await Promise.resolve(
-          wrapped(
-            model as never,
-            {
-              messages: [{ role: "user", content: "hello" }],
-            } as never,
-            {} as never,
-          ),
-        );
-
-        await collectStreamEvents(stream);
-
-        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
-        if (typeof requestInit.body !== "string") {
-          throw new Error("Expected string request body");
-        }
-        const requestBody = JSON.parse(requestInit.body) as {
-          think?: string;
-          options?: { think?: string };
-        };
-        expect(requestBody.think).toBeUndefined();
-        expect(requestBody.options?.think).toBeUndefined();
-      },
-    );
-  });
-
-  it("forwards the native think effort on native Ollama chat requests when thinking is enabled", async () => {
-    await withMockNdjsonFetch(
-      [
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
-      ],
-      async (fetchMock) => {
-        const baseStreamFn = createOllamaStreamFn("http://ollama-host:11434");
-        const model = {
-          api: "ollama",
-          provider: "ollama",
-          id: "qwen3:32b",
-          contextWindow: 131072,
-        };
-
-        const wrapped = createConfiguredOllamaCompatStreamWrapper({
-          provider: "ollama",
-          modelId: "qwen3:32b",
-          model,
-          streamFn: baseStreamFn,
-          thinkingLevel: "low",
-        } as never);
-        if (!wrapped) {
-          throw new Error("Expected wrapped Ollama stream function");
-        }
-
-        const stream = await Promise.resolve(
-          wrapped(
-            model as never,
-            {
-              messages: [{ role: "user", content: "hello" }],
-            } as never,
-            {} as never,
-          ),
-        );
-
-        await collectStreamEvents(stream);
-
-        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
-        if (typeof requestInit.body !== "string") {
-          throw new Error("Expected string request body");
-        }
-        const requestBody = JSON.parse(requestInit.body) as {
-          think?: boolean | string;
-          options?: { think?: boolean | string; num_ctx?: number };
-        };
-        expect(requestBody.think).toBe("low");
-        expect(requestBody.options?.think).toBeUndefined();
-        expect(requestBody.options?.num_ctx).toBeUndefined();
-      },
-    );
-  });
-
-  it("passes resolved provider request timeouts to native Ollama chat fetches", async () => {
-    await withMockNdjsonFetch(
-      [
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
-      ],
-      async (fetchMock) => {
-        const stream = await createOllamaTestStream({
-          baseUrl: "http://ollama-host:11434",
-          model: { requestTimeoutMs: 450_000 },
-        });
-
-        await collectStreamEvents(stream);
-
-        expect(getGuardedFetchCall(fetchMock).timeoutMs).toBe(450_000);
-      },
-    );
-  });
-
-  it("passes caller abort signals at guard level when a timeout is present", async () => {
-    await withMockNdjsonFetch(
-      [
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
-      ],
-      async (fetchMock) => {
-        const signal = new AbortController().signal;
-        const stream = await createOllamaTestStream({
-          baseUrl: "http://ollama-host:11434",
-          options: { signal, timeoutMs: 123_456 },
-        });
-
-        await collectStreamEvents(stream);
-
-        const request = getGuardedFetchCall(fetchMock);
-        expect(request.timeoutMs).toBe(123_456);
-        expect(request.signal).toBe(signal);
-        expect(request.init?.signal).toBeUndefined();
-      },
-    );
-  });
-
-  it("maps native Ollama max thinking to think=high on the wire", async () => {
-    await withMockNdjsonFetch(
-      [
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
-      ],
-      async (fetchMock) => {
-        const baseStreamFn = createOllamaStreamFn("http://ollama-host:11434");
-        const model = {
-          api: "ollama",
-          provider: "ollama",
-          id: "gpt-oss:20b",
-          contextWindow: 131072,
-        };
-
-        const wrapped = createConfiguredOllamaCompatStreamWrapper({
-          provider: "ollama",
-          modelId: "gpt-oss:20b",
-          model,
-          streamFn: baseStreamFn,
-          thinkingLevel: "max",
-        } as never);
-        if (!wrapped) {
-          throw new Error("Expected wrapped Ollama stream function");
-        }
-
-        const stream = await Promise.resolve(
-          wrapped(
-            model as never,
-            {
-              messages: [{ role: "user", content: "hello" }],
-            } as never,
-            {} as never,
-          ),
-        );
-
-        await collectStreamEvents(stream);
-
-        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
-        if (typeof requestInit.body !== "string") {
-          throw new Error("Expected string request body");
-        }
-        const requestBody = JSON.parse(requestInit.body) as {
-          think?: boolean | string;
-          options?: { think?: boolean | string; num_ctx?: number };
-        };
-        expect(requestBody.think).toBe("high");
-        expect(requestBody.options?.think).toBeUndefined();
-        expect(requestBody.options?.num_ctx).toBeUndefined();
-      },
-    );
-  });
+        const body = getGuardedFetchJsonBody(fetchMock);
+        expect(body.think).toBe(expectedThink);
+        expect(body.options).not.toHaveProperty("think");
+        expect(body.options).not.toHaveProperty("num_ctx");
+      });
+    },
+  );
 
   it("sends custom-provider Ollama chat requests with the bare Ollama model id", async () => {
-    await withMockNdjsonFetch(
-      [
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
-      ],
-      async (fetchMock) => {
-        const streamFn = createOllamaStreamFn("http://ollama-host:11434");
-        const model = {
-          api: "ollama",
-          provider: "ollama-spark",
-          id: "ollama-spark/qwen3:32b",
-          contextWindow: 131072,
-        };
-
-        const stream = await Promise.resolve(
-          streamFn(
-            model as never,
-            {
-              messages: [{ role: "user", content: "hello" }],
-            } as never,
-            {} as never,
-          ),
-        );
-
-        await collectStreamEvents(stream);
-
-        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
-        if (typeof requestInit.body !== "string") {
-          throw new Error("Expected string request body");
-        }
-        const requestBody = JSON.parse(requestInit.body) as { model?: string };
-        expect(requestBody.model).toBe("qwen3:32b");
+    await expectSuccessfulOllamaRequest(
+      {
+        model: { provider: "ollama-spark", id: "ollama-spark/qwen3:32b" },
       },
-    );
-  });
-
-  it("adds direct type hints to native Ollama tool schemas before sending them", async () => {
-    await withMockNdjsonFetch(
-      [
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
-      ],
-      async (fetchMock) => {
-        const streamFn = createOllamaStreamFn("http://ollama-host:11434");
-        const model = {
-          api: "ollama",
-          provider: "ollama",
-          id: "qwen3:32b",
-          contextWindow: 131072,
-        };
-
-        const stream = await Promise.resolve(
-          streamFn(
-            model as never,
-            {
-              messages: [{ role: "user", content: "hello" }],
-              tools: [
-                {
-                  name: "search",
-                  description: "search",
-                  parameters: {
-                    properties: {
-                      query: {
-                        anyOf: [{ type: "string" }, { type: "null" }],
-                      },
-                      tags: {
-                        items: { type: "string" },
-                      },
-                    },
-                    required: ["query"],
-                  },
-                },
-              ],
-            } as never,
-            {} as never,
-          ),
-        );
-
-        await collectStreamEvents(stream);
-
-        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
-        if (typeof requestInit.body !== "string") {
-          throw new Error("Expected string request body");
-        }
-        const requestBody = JSON.parse(requestInit.body) as {
-          tools?: Array<{
-            function?: {
-              parameters?: {
-                type?: string;
-                properties?: Record<string, { type?: string }>;
-              };
-            };
-          }>;
-        };
-        const parameters = requestBody.tools?.[0]?.function?.parameters;
-        expect(parameters?.type).toBe("object");
-        expect(parameters?.properties?.query?.type).toBe("string");
-        expect(parameters?.properties?.tags?.type).toBe("array");
-      },
+      ({ body }) => expect(body.model).toBe("qwen3:32b"),
     );
   });
 });
 
 describe("convertToOllamaMessages", () => {
-  it("converts user text messages", () => {
-    const messages = [{ role: "user", content: "hello" }];
-    const result = convertToOllamaMessages(messages);
-    expect(result).toEqual([{ role: "user", content: "hello" }]);
+  it.each([
+    {
+      name: "legacy tool text",
+      messages: [{ role: "tool", content: "output" }],
+      system: undefined,
+      expected: [{ role: "tool", content: "output" }],
+    },
+    {
+      name: "system prompt",
+      messages: [{ role: "user", content: "hello" }],
+      system: "You are helpful.",
+      expected: [
+        { role: "system", content: "You are helpful." },
+        { role: "user", content: "hello" },
+      ],
+    },
+  ])("converts $name without inventing metadata", ({ messages, system, expected }) => {
+    expect(convertToOllamaMessages(messages, system)).toEqual(expected);
   });
 
-  it("converts user messages with content parts", () => {
-    const messages = [
-      {
-        role: "user",
-        content: [
-          { type: "text", text: "describe this" },
-          { type: "image", data: "base64data" },
-        ],
-      },
-    ];
-    const result = convertToOllamaMessages(messages);
-    expect(result).toEqual([{ role: "user", content: "describe this", images: ["base64data"] }]);
-  });
-
-  it("prepends system message when provided", () => {
-    const messages = [{ role: "user", content: "hello" }];
-    const result = convertToOllamaMessages(messages, "You are helpful.");
-    expect(result[0]).toEqual({ role: "system", content: "You are helpful." });
-    expect(result[1]).toEqual({ role: "user", content: "hello" });
-  });
-
-  it("converts assistant messages with toolCall content blocks", () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [
-          { type: "text", text: "Let me check." },
-          { type: "toolCall", id: "call_1", name: "bash", arguments: { command: "ls" } },
-        ],
-      },
-    ];
-    const result = convertToOllamaMessages(messages);
-    expect(result[0].role).toBe("assistant");
-    expect(result[0].content).toBe("Let me check.");
-    expect(result[0].tool_calls).toEqual([
-      { function: { name: "bash", arguments: { command: "ls" } } },
-    ]);
-  });
-
-  it("normalizes provider-prefixed tool-call names before Ollama replay", () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [
-          { type: "toolCall", id: "call_1", name: "functions.exec", arguments: { command: "pwd" } },
-          { type: "tool_use", id: "call_2", name: "tools/read", input: { path: "README.md" } },
-        ],
-      },
-    ];
-    const result = convertToOllamaMessages(messages);
-    expect(result[0].tool_calls).toEqual([
-      { function: { name: "exec", arguments: { command: "pwd" } } },
-      { function: { name: "read", arguments: { path: "README.md" } } },
-    ]);
-  });
-
-  it("preserves exact allowlisted tool-prefix names before Ollama replay", () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [
-          { type: "toolCall", id: "call_1", name: "tool_a", arguments: { value: 1 } },
-          { type: "tool_use", id: "call_2", name: "tools_invoke_test", input: { value: 2 } },
-          { type: "toolCall", id: "call_3", name: "function-run", arguments: { value: 3 } },
-        ],
-      },
-    ];
-    const result = convertToOllamaMessages(messages, undefined, {
-      availableToolNames: new Set(["tool_a", "tools_invoke_test", "function-run"]),
-    });
-    expect(result[0].tool_calls).toEqual([
-      { function: { name: "tool_a", arguments: { value: 1 } } },
-      { function: { name: "tools_invoke_test", arguments: { value: 2 } } },
-      { function: { name: "function-run", arguments: { value: 3 } } },
-    ]);
-  });
-
-  it("strips underscore and dash provider prefixes only when the suffix is allowlisted", () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [
-          { type: "toolCall", id: "call_1", name: "tools_exec", arguments: { command: "pwd" } },
-          { type: "tool_use", id: "call_2", name: "function-read", input: { path: "." } },
-          { type: "toolCall", id: "call_3", name: "tool_missing", arguments: {} },
-        ],
-      },
-    ];
-    const result = convertToOllamaMessages(messages, undefined, {
-      availableToolNames: new Set(["exec", "read"]),
-    });
-    expect(result[0].tool_calls).toEqual([
-      { function: { name: "exec", arguments: { command: "pwd" } } },
-      { function: { name: "read", arguments: { path: "." } } },
-      { function: { name: "tool_missing", arguments: {} } },
-    ]);
-  });
-
-  it("keeps non-prefixed Ollama replay tool names intact", () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [
-          { type: "toolCall", id: "call_1", name: "functionshell", arguments: {} },
-          { type: "toolCall", id: "call_2", name: "tooling", arguments: {} },
-          { type: "toolCall", id: "call_3", name: "tools", arguments: {} },
-          { type: "toolCall", id: "call_4", name: "tool_a", arguments: {} },
-        ],
-      },
-    ];
-    const result = convertToOllamaMessages(messages);
-    expect(result[0].tool_calls).toEqual([
-      { function: { name: "functionshell", arguments: {} } },
-      { function: { name: "tooling", arguments: {} } },
-      { function: { name: "tools", arguments: {} } },
-      { function: { name: "tool_a", arguments: {} } },
-    ]);
-  });
-
-  it("deserializes string arguments back to objects for Ollama (round-trip fix)", () => {
-    // When tool calls round-trip through OpenAI-format storage, arguments
-    // are serialized as a JSON string.  Ollama expects an object.
-    const messages = [
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            id: "call_2",
-            name: "Read",
-            arguments: '{"file_path":"/tmp/test.txt"}',
-          },
-        ],
-      },
-    ];
-    const result = convertToOllamaMessages(messages);
-    expect(result[0].tool_calls).toEqual([
-      { function: { name: "Read", arguments: { file_path: "/tmp/test.txt" } } },
-    ]);
-  });
-
-  it("handles tool_use blocks with string input (Anthropic format round-trip)", () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [
-          { type: "tool_use", id: "toolu_1", name: "exec", input: '{"command":"echo hello"}' },
-        ],
-      },
-    ];
-    const result = convertToOllamaMessages(messages);
-    expect(result[0].tool_calls).toEqual([
-      { function: { name: "exec", arguments: { command: "echo hello" } } },
-    ]);
-  });
-
-  it("preserves unsafe integers as strings when replay args are deserialized", () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            id: "call_3",
-            name: "read",
-            arguments: '{"path":9223372036854775807,"nested":{"thread":1234567890123456789}}',
-          },
-        ],
-      },
-    ];
-    const result = convertToOllamaMessages(messages);
-    expect(result[0].tool_calls).toEqual([
-      {
-        function: {
+  it.each([
+    {
+      name: "thinking alongside text",
+      content: [
+        { type: "thinking", thinking: "Check the directory.\n" },
+        { type: "thinking", thinking: "Then report its contents." },
+        { type: "thinking", thinking: "redacted reasoning", redacted: true },
+        { type: "text", text: "Let me check." },
+        { type: "toolCall", id: "call_1", name: "bash", arguments: { command: "ls" } },
+      ],
+      text: "Let me check.",
+      thinking: "Check the directory.\nThen report its contents.",
+      expected: [{ id: "call_1", function: { name: "bash", arguments: { command: "ls" } } }],
+    },
+    {
+      name: "provider prefixes",
+      content: [
+        { type: "toolCall", id: "call_1", name: "functions.exec", arguments: { command: "pwd" } },
+        { type: "tool_use", id: "call_2", name: "tools/read", input: '{"path":"README.md"}' },
+        { type: "toolCall", id: "call_3", name: "tool_a", arguments: {} },
+      ],
+      expected: [
+        { id: "call_1", function: { name: "exec", arguments: { command: "pwd" } } },
+        { id: "call_2", function: { name: "read", arguments: { path: "README.md" } } },
+        { id: "call_3", function: { name: "tool_a", arguments: {} } },
+      ],
+    },
+    {
+      name: "allowlisted underscore and dash suffixes",
+      content: [
+        { type: "toolCall", id: "call_1", name: "tools_exec", arguments: { command: "pwd" } },
+        { type: "tool_use", id: "call_2", name: "function-read", input: { path: "." } },
+        { type: "toolCall", id: "call_3", name: "tool_missing", arguments: {} },
+        { type: "toolCall", id: "call_4", name: "tool_a", arguments: {} },
+      ],
+      options: { availableToolNames: new Set(["exec", "read", "tool_a"]) },
+      expected: [
+        { id: "call_1", function: { name: "exec", arguments: { command: "pwd" } } },
+        { id: "call_2", function: { name: "read", arguments: { path: "." } } },
+        { id: "call_3", function: { name: "tool_missing", arguments: {} } },
+        { id: "call_4", function: { name: "tool_a", arguments: {} } },
+      ],
+    },
+    {
+      name: "unsafe integer strings",
+      content: [
+        {
+          type: "toolCall",
+          id: "call_3",
           name: "read",
-          arguments: {
-            path: "9223372036854775807",
-            nested: { thread: "1234567890123456789" },
+          arguments: '{"path":9223372036854775807,"nested":{"thread":1234567890123456789}}',
+        },
+      ],
+      expected: [
+        {
+          id: "call_3",
+          function: {
+            name: "read",
+            arguments: {
+              path: "9223372036854775807",
+              nested: { thread: "1234567890123456789" },
+            },
           },
         },
-      },
-    ]);
-  });
-  it("converts tool result messages with 'tool' role", () => {
-    const messages = [{ role: "tool", content: "file1.txt\nfile2.txt" }];
+      ],
+    },
+  ])(
+    "replays assistant tool calls with $name",
+    ({ content, options, expected, text, thinking }) => {
+      expect(convertAssistantContent(content, options)[0]).toEqual({
+        role: "assistant",
+        content: text ?? "",
+        ...(thinking ? { thinking } : {}),
+        tool_calls: expected,
+      });
+    },
+  );
+  const budgetedText = `${"file row with significant trailing spaces   \n".repeat(370)}😀\n[Use offset=225 to continue.]\n`;
+  it.each([
+    {
+      name: "producer-budgeted text and continuation",
+      messages: [
+        {
+          role: "toolResult",
+          toolCallId: "call_ws",
+          toolName: "read",
+          content: [{ type: "text", text: budgetedText }],
+        },
+      ],
+      expected: [
+        { role: "tool", content: budgetedText, tool_call_id: "call_ws", tool_name: "read" },
+      ],
+    },
+    {
+      name: "structured output, images, and errors",
+      messages: [
+        {
+          role: "toolResult",
+          toolCallId: "call_inspect",
+          toolName: "inspect",
+          isError: true,
+          content: [
+            { type: "text", text: "inspection failed" },
+            { type: "json", value: { retry: false } },
+            { type: "image", mimeType: "image/png", data: "aW1hZ2U=" },
+            { type: "audio", mimeType: "audio/wav", data: "YXVkaW8=" },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_empty_error",
+          toolName: "inspect",
+          isError: true,
+          content: [],
+        },
+      ],
+      expected: [
+        {
+          role: "tool",
+          content:
+            '[tool error] inspection failed\n{"type":"json","value":{"retry":false}}\n[unsupported tool-result audio omitted]',
+          images: ["aW1hZ2U="],
+          tool_call_id: "call_inspect",
+          tool_name: "inspect",
+        },
+        {
+          role: "tool",
+          content: "[tool error] (no tool output)",
+          tool_call_id: "call_empty_error",
+          tool_name: "inspect",
+        },
+      ],
+    },
+  ])("preserves $name in tool results", ({ messages, expected }) => {
     const result = convertToOllamaMessages(messages);
-    expect(result).toEqual([{ role: "tool", content: "file1.txt\nfile2.txt" }]);
-  });
-
-  it("converts SDK 'toolResult' role to Ollama 'tool' role", () => {
-    const messages = [{ role: "toolResult", content: "command output here" }];
-    const result = convertToOllamaMessages(messages);
-    expect(result).toEqual([{ role: "tool", content: "command output here" }]);
-  });
-
-  it("includes tool_name from SDK toolResult messages", () => {
-    const messages = [{ role: "toolResult", content: "file contents here", toolName: "read" }];
-    const result = convertToOllamaMessages(messages);
-    expect(result).toEqual([{ role: "tool", content: "file contents here", tool_name: "read" }]);
-  });
-
-  it("omits tool_name when not provided in toolResult", () => {
-    const messages = [{ role: "toolResult", content: "output" }];
-    const result = convertToOllamaMessages(messages);
-    expect(result).toEqual([{ role: "tool", content: "output" }]);
-    expect(result[0]).not.toHaveProperty("tool_name");
-  });
-
-  it("handles empty messages array", () => {
-    const result = convertToOllamaMessages([]);
-    expect(result).toStrictEqual([]);
+    expect(result).toEqual(expected);
+    expect(result[0]?.content).not.toContain("YXVkaW8=");
   });
 });
 
 describe("buildAssistantMessage", () => {
   const modelInfo = { api: "ollama", provider: "ollama", id: "qwen3:32b" };
 
-  it("builds text-only response", () => {
-    const response = {
-      model: "qwen3:32b",
-      created_at: "2026-01-01T00:00:00Z",
-      message: { role: "assistant" as const, content: "Hello!" },
-      done: true,
-      prompt_eval_count: 10,
-      eval_count: 5,
-    };
-    const result = buildAssistantMessage(response, modelInfo);
-    expect(result.role).toBe("assistant");
-    expect(result.content).toEqual([{ type: "text", text: "Hello!" }]);
+  const emojiAnswer =
+    "This is a normal Kimi cloud answer with enough length to cross the prefix threshold and no hidden reasoning leak. ☀️sunshine should remain visible to the user.";
+  it.each([
+    [
+      "reasoning-only output",
+      modelInfo.id,
+      { content: "", reasoning: "Reasoning output" },
+      [{ type: "thinking", thinking: "Reasoning output" }],
+    ],
+    [
+      "provider-qualified Kimi inline reasoning",
+      "ollama/kimi-k2.6:cloud",
+      { content: `${hiddenReasoning} ️ OK.` },
+      [{ type: "text", text: "OK." }],
+    ],
+    [
+      "Kimi emoji variation selectors",
+      "kimi-k2.6:cloud",
+      { content: emojiAnswer },
+      [{ type: "text", text: emojiAnswer }],
+    ],
+  ] as const)("preserves visible content for %s", (_name, id, message, expected) => {
+    const result = buildAssistantMessage(createAssistantResponse(message), { ...modelInfo, id });
     expect(result.stopReason).toBe("stop");
-    expect(result.usage.input).toBe(10);
-    expect(result.usage.output).toBe(5);
-    expect(result.usage.totalTokens).toBe(15);
+    expect(result.content).toEqual(expected);
   });
 
-  it("keeps thinking-only output when content is empty", () => {
-    const response = {
-      model: "qwen3:32b",
-      created_at: "2026-01-01T00:00:00Z",
-      message: {
-        role: "assistant" as const,
-        content: "",
-        thinking: "Thinking output",
-      },
-      done: true,
-    };
-    const result = buildAssistantMessage(response, modelInfo);
-    expect(result.stopReason).toBe("stop");
-    expect(result.content).toEqual([{ type: "thinking", thinking: "Thinking output" }]);
-  });
-
-  it("keeps reasoning-only output when content and thinking are empty", () => {
-    const response = {
-      model: "qwen3:32b",
-      created_at: "2026-01-01T00:00:00Z",
-      message: {
-        role: "assistant" as const,
-        content: "",
-        reasoning: "Reasoning output",
-      },
-      done: true,
-    };
-    const result = buildAssistantMessage(response, modelInfo);
-    expect(result.stopReason).toBe("stop");
-    expect(result.content).toEqual([{ type: "thinking", thinking: "Reasoning output" }]);
-  });
-
-  it("estimates usage when Ollama omits eval counters", () => {
-    const response = {
-      model: "qwen3:32b",
-      created_at: "2026-01-01T00:00:00Z",
-      message: { role: "assistant" as const, content: "Estimated output" },
-      done: true,
-    };
-    const result = buildAssistantMessage(response, modelInfo, { input: 11, output: 4 });
-    expect(result.usage.input).toBe(11);
-    expect(result.usage.output).toBe(4);
-    expect(result.usage.totalTokens).toBe(15);
-  });
-
-  it("preserves explicit zero usage counters from Ollama", () => {
-    const response = {
-      model: "qwen3:32b",
-      created_at: "2026-01-01T00:00:00Z",
-      message: { role: "assistant" as const, content: "" },
-      done: true,
-      prompt_eval_count: 0,
-      eval_count: 0,
-    };
-    const result = buildAssistantMessage(response, modelInfo, { input: 11, output: 4 });
-    expect(result.usage.input).toBe(0);
-    expect(result.usage.output).toBe(0);
-    expect(result.usage.totalTokens).toBe(0);
-  });
-
-  it("builds response with tool calls", () => {
-    const response = {
-      model: "qwen3:32b",
-      created_at: "2026-01-01T00:00:00Z",
-      message: {
-        role: "assistant" as const,
-        content: "",
-        tool_calls: [{ function: { name: "bash", arguments: { command: "ls -la" } } }],
-      },
-      done: true,
-      prompt_eval_count: 20,
-      eval_count: 10,
-    };
-    const result = buildAssistantMessage(response, modelInfo);
-    expect(result.stopReason).toBe("toolUse");
-    expect(result.content.length).toBe(1); // toolCall only (empty content is skipped)
-    expect(result.content[0].type).toBe("toolCall");
-    const toolCall = result.content[0] as {
-      type: "toolCall";
-      id: string;
-      name: string;
-      arguments: Record<string, unknown>;
-    };
-    expect(toolCall.name).toBe("bash");
-    expect(toolCall.arguments).toEqual({ command: "ls -la" });
-    expect(toolCall.id).toMatch(/^ollama_call_[0-9a-f-]{36}$/);
-  });
-
-  it("normalizes provider-prefixed tool-call names in Ollama responses", () => {
-    const response = {
-      model: "qwen3:32b",
-      created_at: "2026-01-01T00:00:00Z",
-      message: {
-        role: "assistant" as const,
-        content: "",
-        tool_calls: [
-          { function: { name: "functions.exec", arguments: { command: "pwd" } } },
-          { function: { name: "tools/read", arguments: { path: "README.md" } } },
-        ],
-      },
-      done: true,
-    };
-    const result = buildAssistantMessage(response, modelInfo);
-    expect(result.content).toHaveLength(2);
-    expectToolCallContent(result.content[0], { name: "exec", arguments: { command: "pwd" } });
-    expectToolCallContent(result.content[1], { name: "read", arguments: { path: "README.md" } });
-  });
-
-  it("preserves exact allowlisted tool-prefix names in Ollama responses", () => {
-    const response = {
-      model: "qwen3:32b",
-      created_at: "2026-01-01T00:00:00Z",
-      message: {
-        role: "assistant" as const,
-        content: "",
-        tool_calls: [
-          { function: { name: "tool_a", arguments: { value: 1 } } },
-          { function: { name: "tools_invoke_test", arguments: { value: 2 } } },
-          { function: { name: "function-run", arguments: { value: 3 } } },
-        ],
-      },
-      done: true,
-    };
-    const result = buildAssistantMessage(response, modelInfo, undefined, {
-      availableToolNames: new Set(["tool_a", "tools_invoke_test", "function-run"]),
-    });
-    expect(result.content).toHaveLength(3);
-    expectToolCallContent(result.content[0], { name: "tool_a", arguments: { value: 1 } });
-    expectToolCallContent(result.content[1], {
-      name: "tools_invoke_test",
-      arguments: { value: 2 },
-    });
-    expectToolCallContent(result.content[2], { name: "function-run", arguments: { value: 3 } });
-  });
-
-  it("keeps non-prefixed Ollama response tool names intact", () => {
-    const response = {
-      model: "qwen3:32b",
-      created_at: "2026-01-01T00:00:00Z",
-      message: {
-        role: "assistant" as const,
-        content: "",
-        tool_calls: [
-          { function: { name: "functionshell", arguments: {} } },
-          { function: { name: "tooling", arguments: {} } },
-          { function: { name: "tools", arguments: {} } },
-          { function: { name: "tool_a", arguments: {} } },
-        ],
-      },
-      done: true,
-    };
-    const result = buildAssistantMessage(response, modelInfo);
-    expect(result.content).toHaveLength(4);
-    expectToolCallContent(result.content[0], { name: "functionshell", arguments: {} });
-    expectToolCallContent(result.content[1], { name: "tooling", arguments: {} });
-    expectToolCallContent(result.content[2], { name: "tools", arguments: {} });
-    expectToolCallContent(result.content[3], { name: "tool_a", arguments: {} });
-  });
-
-  it("parses stringified tool call arguments from Ollama responses", () => {
-    const response = {
-      model: "qwen3:32b",
-      created_at: "2026-01-01T00:00:00Z",
-      message: {
-        role: "assistant" as const,
-        content: "",
-        tool_calls: [{ function: { name: "bash", arguments: '{"command":"ls","path":"/tmp"}' } }],
-      },
-      done: true,
-    };
-    const result = buildAssistantMessage(response, modelInfo);
-    expectToolCallContent(result.content[0], {
-      name: "bash",
-      arguments: { command: "ls", path: "/tmp" },
-    });
-  });
-
-  it("preserves unsafe integers in stringified tool call arguments", () => {
-    const response = {
-      model: "qwen3:32b",
-      created_at: "2026-01-01T00:00:00Z",
-      message: {
-        role: "assistant" as const,
-        content: "",
-        tool_calls: [
-          {
-            function: {
-              name: "send",
-              arguments: '{"target":9223372036854775807,"nested":{"thread":1234567890123456789}}',
-            },
-          },
-        ],
-      },
-      done: true,
-    };
-    const result = buildAssistantMessage(response, modelInfo);
-    expectToolCallContent(result.content[0], {
-      name: "send",
-      arguments: {
-        target: "9223372036854775807",
-        nested: { thread: "1234567890123456789" },
-      },
-    });
-  });
-
-  it("falls back to empty arguments for malformed stringified tool call arguments", () => {
-    const response = {
-      model: "qwen3:32b",
-      created_at: "2026-01-01T00:00:00Z",
-      message: {
-        role: "assistant" as const,
-        content: "",
-        tool_calls: [{ function: { name: "bash", arguments: '{"command":"ls"' } }],
-      },
-      done: true,
-    };
-    const result = buildAssistantMessage(response, modelInfo);
-    expectToolCallContent(result.content[0], { name: "bash", arguments: {} });
-  });
-
-  it("sets all costs to zero for local models", () => {
-    const response = {
-      model: "qwen3:32b",
-      created_at: "2026-01-01T00:00:00Z",
-      message: { role: "assistant" as const, content: "ok" },
-      done: true,
-    };
-    const result = buildAssistantMessage(response, modelInfo);
-    expect(result.usage.cost).toEqual({
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      total: 0,
-    });
-  });
+  it.each([0, 6])(
+    "accounts for %s cached prompt tokens without changing the total",
+    (cacheRead) => {
+      const response = createAssistantResponse(
+        { content: "ok" },
+        {
+          prompt_eval_count: 10,
+          prompt_eval_cached_count: cacheRead,
+          eval_count: 2,
+        },
+      );
+      const result = buildAssistantMessage(response, modelInfo);
+      expect(result.usage).toMatchObject({
+        input: 10 - cacheRead,
+        output: 2,
+        cacheRead,
+        cacheWrite: 0,
+        totalTokens: 12,
+        cacheTelemetry: { state: "available" },
+      });
+    },
+  );
 });
 
-// Helper: build a ReadableStreamDefaultReader from NDJSON lines
-function mockNdjsonReader(lines: string[]): ReadableStreamDefaultReader<Uint8Array> {
+function createPendingCancelNdjsonStream(lines: string[]) {
   const encoder = new TextEncoder();
-  const payload = lines.join("\n") + "\n";
-  let consumed = false;
-  return {
-    read: async () => {
-      if (consumed) {
-        return { done: true as const, value: undefined };
-      }
-      consumed = true;
-      return { done: false as const, value: encoder.encode(payload) };
+  const { promise: cancelStarted, resolve: markCancelStarted } = Promise.withResolvers<void>();
+  const { promise: cancelPending, resolve: settleCancel } = Promise.withResolvers<void>();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(`${lines.join("\n")}\n`));
     },
-    releaseLock: () => {},
-    cancel: async () => {},
-    closed: Promise.resolve(undefined),
-  } as unknown as ReadableStreamDefaultReader<Uint8Array>;
-}
-
-async function expectDoneEventContent(lines: string[], expectedContent: unknown) {
-  await withMockNdjsonFetch(lines, async () => {
-    const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
-    const events = await collectStreamEvents(stream);
-
-    const doneEvent = events.at(-1);
-    if (!doneEvent || doneEvent.type !== "done") {
-      throw new Error("Expected done event");
-    }
-
-    expect(doneEvent.message.content).toEqual(expectedContent);
+    cancel() {
+      markCancelStarted();
+      return cancelPending;
+    },
   });
+  return {
+    cancelPending,
+    cancelStarted,
+    reader: stream.getReader(),
+    settleCancel,
+    stream,
+  };
 }
 
 describe("parseNdjsonStream", () => {
-  it("parses text-only streaming chunks", async () => {
-    const reader = mockNdjsonReader([
-      '{"model":"m","created_at":"t","message":{"role":"assistant","content":"Hello"},"done":false}',
-      '{"model":"m","created_at":"t","message":{"role":"assistant","content":" world"},"done":false}',
-      '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":5,"eval_count":2}',
+  it("unlocks a real stream before pending cancellation settles on early break", async () => {
+    const source = createPendingCancelNdjsonStream([
+      '{"model":"m","created_at":"t","message":{"role":"assistant","content":"one"},"done":false}',
+      '{"model":"m","created_at":"t","message":{"role":"assistant","content":"two"},"done":true}',
     ]);
-    const chunks = [];
-    for await (const chunk of parseNdjsonStream(reader)) {
-      chunks.push(chunk);
-    }
-    expect(chunks).toHaveLength(3);
-    expect(chunks[0].message.content).toBe("Hello");
-    expect(chunks[1].message.content).toBe(" world");
-    expect(chunks[2].done).toBe(true);
-  });
+    let iterationFinished = false;
 
-  it("parses tool_calls from intermediate chunk (not final)", async () => {
-    // Ollama sends tool_calls in done:false chunk, final done:true has no tool_calls
-    const reader = mockNdjsonReader([
-      '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"bash","arguments":{"command":"ls"}}}]},"done":false}',
-      '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":10,"eval_count":5}',
-    ]);
-    const chunks = [];
-    for await (const chunk of parseNdjsonStream(reader)) {
-      chunks.push(chunk);
-    }
-    expect(chunks).toHaveLength(2);
-    expect(chunks[0].done).toBe(false);
-    expect(chunks[0].message.tool_calls).toHaveLength(1);
-    expect(chunks[0].message.tool_calls![0].function.name).toBe("bash");
-    expect(chunks[1].done).toBe(true);
-    expect(chunks[1].message.tool_calls).toBeUndefined();
-  });
-
-  it("accumulates tool_calls across multiple intermediate chunks", async () => {
-    const reader = mockNdjsonReader([
-      '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"read","arguments":{"path":"/tmp/a"}}}]},"done":false}',
-      '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"bash","arguments":{"command":"ls"}}}]},"done":false}',
-      '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true}',
-    ]);
-
-    // Simulate the accumulation logic from createOllamaStreamFn
-    const accumulatedToolCalls: Array<{
-      function: { name: string; arguments: unknown };
-    }> = [];
-    const chunks = [];
-    for await (const chunk of parseNdjsonStream(reader)) {
-      chunks.push(chunk);
-      if (chunk.message?.tool_calls) {
-        accumulatedToolCalls.push(...chunk.message.tool_calls);
+    const iteration = (async () => {
+      for await (const chunk of parseNdjsonStream(source.reader)) {
+        expect(chunk.message.content).toBe("one");
+        break;
       }
-    }
-    expect(accumulatedToolCalls).toHaveLength(2);
-    expect(accumulatedToolCalls[0].function.name).toBe("read");
-    expect(accumulatedToolCalls[1].function.name).toBe("bash");
-    // Final done:true chunk has no tool_calls
-    expect(chunks[2].message.tool_calls).toBeUndefined();
-  });
+      iterationFinished = true;
+    })();
 
-  it("preserves unsafe integer tool arguments as exact strings", async () => {
-    const reader = mockNdjsonReader([
-      '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"send","arguments":{"target":1234567890123456789,"nested":{"thread":9223372036854775807}}}}]},"done":false}',
-    ]);
+    await source.cancelStarted;
+    await iteration;
+    expect(iterationFinished).toBe(true);
+    expect(source.stream.locked).toBe(false);
 
-    const chunks = [];
-    for await (const chunk of parseNdjsonStream(reader)) {
-      chunks.push(chunk);
-    }
-
-    const args = chunks[0]?.message.tool_calls?.[0]?.function.arguments as
-      | { target?: unknown; nested?: { thread?: unknown } }
-      | undefined;
-    expect(args?.target).toBe("1234567890123456789");
-    expect(args?.nested?.thread).toBe("9223372036854775807");
-  });
-
-  it("keeps safe integer tool arguments as numbers", async () => {
-    const reader = mockNdjsonReader([
-      '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"send","arguments":{"retries":3,"delayMs":2500}}}]},"done":false}',
-    ]);
-
-    const chunks = [];
-    for await (const chunk of parseNdjsonStream(reader)) {
-      chunks.push(chunk);
-    }
-
-    const args = chunks[0]?.message.tool_calls?.[0]?.function.arguments as
-      | { retries?: unknown; delayMs?: unknown }
-      | undefined;
-    expect(args?.retries).toBe(3);
-    expect(args?.delayMs).toBe(2500);
+    source.settleCancel();
+    await source.cancelPending;
   });
 });
 
-async function withMockNdjsonFetch(
-  lines: string[],
+function mockResponse(body: BodyInit | null, init?: ResponseInit) {
+  const release = vi.fn(async () => undefined);
+  fetchWithSsrFGuardMock.mockResolvedValue({ response: new Response(body, init), release });
+  return release;
+}
+
+async function withSuccessfulOllamaFetch(
   run: (fetchMock: typeof fetchWithSsrFGuardMock) => Promise<void>,
 ): Promise<void> {
-  fetchWithSsrFGuardMock.mockImplementation(async () => {
-    const payload = lines.join("\n");
-    return {
-      response: new Response(`${payload}\n`, {
-        status: 200,
-        headers: { "Content-Type": "application/x-ndjson" },
-      }),
-      release: vi.fn(async () => undefined),
-    };
-  });
+  mockResponse(
+    [
+      ndjson({ content: "ok" }),
+      ndjson({}, { done: true, prompt_eval_count: 1, eval_count: 1 }),
+    ].join("\n") + "\n",
+    { headers: { "Content-Type": "application/x-ndjson" } },
+  );
   await run(fetchWithSsrFGuardMock);
 }
 
-function createControlledNdjsonFetch(): {
-  fetchImpl: () => Promise<{ response: Response; release: () => Promise<void> }>;
-  pushLine: (line: string) => void;
-  close: () => void;
-} {
+function createControlledNdjsonFetch() {
   const encoder = new TextEncoder();
   let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
   const body = new ReadableStream<Uint8Array>({
@@ -1288,13 +538,18 @@ function createControlledNdjsonFetch(): {
       controller = streamController;
     },
   });
+  const release = vi.fn(async () => undefined);
+  const refreshTimeout = vi.fn();
   return {
+    release,
+    refreshTimeout,
     fetchImpl: async () => ({
       response: new Response(body, {
         status: 200,
         headers: { "Content-Type": "application/x-ndjson" },
       }),
-      release: vi.fn(async () => undefined),
+      release,
+      refreshTimeout,
     }),
     pushLine(line: string) {
       if (!controller) {
@@ -1315,33 +570,72 @@ function getGuardedFetchCall(fetchMock: typeof fetchWithSsrFGuardMock): GuardedF
   return (fetchMock.mock.calls.at(0)?.[0] as GuardedFetchCall | undefined) ?? { url: "" };
 }
 
-async function createOllamaTestStream(params: {
-  baseUrl: string;
-  defaultHeaders?: Record<string, string>;
-  model?: Record<string, unknown>;
-  options?: {
-    apiKey?: string;
-    maxTokens?: number;
-    temperature?: number;
-    signal?: AbortSignal;
-    timeoutMs?: number;
-    headers?: Record<string, string>;
-  };
-}) {
-  const streamFn = createOllamaStreamFn(params.baseUrl, params.defaultHeaders);
+function getGuardedFetchJsonBody(
+  fetchMock: typeof fetchWithSsrFGuardMock,
+): Record<string, unknown> {
+  const body = getGuardedFetchCall(fetchMock).init?.body;
+  if (typeof body !== "string") {
+    throw new Error("Expected string request body");
+  }
+  return requireRecord(JSON.parse(body), "Ollama request body");
+}
+
+async function createOllamaTestStream(
+  params: {
+    baseUrl?: string;
+    configured?: Parameters<typeof createConfiguredOllamaStreamFn>[0];
+    defaultHeaders?: Record<string, string>;
+    model?: Record<string, unknown>;
+    context?: Record<string, unknown>;
+    options?: Parameters<ReturnType<typeof createOllamaStreamFn>>[2] &
+      Partial<
+        Record<"timeoutMs" | "topP" | "seed" | "frequencyPenalty" | "presencePenalty", number>
+      >;
+  } = {},
+) {
+  const streamFn = params.configured
+    ? createConfiguredOllamaStreamFn(params.configured)
+    : createOllamaStreamFn(params.baseUrl ?? "http://ollama-host:11434", params.defaultHeaders);
   return streamFn(
     {
       id: "qwen3:32b",
       api: "ollama",
       provider: "custom-ollama",
+      input: ["text"],
       contextWindow: 131072,
       ...params.model,
     } as unknown as Parameters<typeof streamFn>[0],
-    {
+    (params.context ?? {
       messages: [{ role: "user", content: "hello" }],
-    } as unknown as Parameters<typeof streamFn>[1],
+    }) as unknown as Parameters<typeof streamFn>[1],
     (params.options ?? {}) as unknown as Parameters<typeof streamFn>[2],
   );
+}
+
+type OllamaLocalService = NonNullable<
+  Parameters<typeof createConfiguredOllamaStreamFn>[0]["localService"]
+>;
+
+async function createManagedOllamaTestStream(params: {
+  baseUrl?: string;
+  providerId?: string;
+  defaultHeaders?: Record<string, string>;
+  model?: Record<string, unknown>;
+  context?: Record<string, unknown>;
+  options?: Parameters<ReturnType<typeof createConfiguredOllamaStreamFn>>[2];
+  acquire: OllamaLocalService["acquire"];
+}) {
+  const baseUrl = params.baseUrl ?? "http://provider-host:11434";
+  return createOllamaTestStream({
+    ...params,
+    baseUrl,
+    model: { provider: params.providerId ?? "custom-ollama", ...params.model },
+    configured: {
+      model: { baseUrl, headers: params.defaultHeaders },
+      providerBaseUrl: baseUrl,
+      localService: { providerId: params.providerId ?? "custom-ollama", acquire: params.acquire },
+    },
+  });
 }
 
 async function collectStreamEvents<T>(stream: AsyncIterable<T>): Promise<T[]> {
@@ -1352,805 +646,1136 @@ async function collectStreamEvents<T>(stream: AsyncIterable<T>): Promise<T[]> {
   return events;
 }
 
-async function nextEventWithin<T>(
-  iterator: AsyncIterator<T>,
-  timeoutMs = 100,
-): Promise<IteratorResult<T> | "timeout"> {
-  let timer: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      iterator.next(),
-      new Promise<"timeout">((resolve) => {
-        timer = setTimeout(() => resolve("timeout"), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
+function rejectWhenAborted(signal: AbortSignal): Promise<never> {
+  return new Promise((_, reject) => {
+    const rejectWithReason = () =>
+      reject(signal.reason instanceof Error ? signal.reason : new Error("aborted"));
+    if (signal.aborted) {
+      rejectWithReason();
+      return;
     }
+    signal.addEventListener("abort", rejectWithReason, { once: true });
+  });
+}
+
+type OllamaStreamEvent =
+  Awaited<ReturnType<typeof createOllamaTestStream>> extends AsyncIterable<infer Event>
+    ? Event
+    : never;
+
+function expectTextAppends(events: OllamaStreamEvent[], text: string) {
+  const deltas = events.filter((event) => event.type === "text_delta");
+  expect(deltas.map((event) => event.delta).join("")).toBe(text);
+  for (const delta of deltas) {
+    expect(delta.contentIndex).toBe(0);
+    expect(delta).not.toHaveProperty("partial");
   }
 }
 
+async function collectMockedOllamaEvents(
+  lines: string[],
+  params: Parameters<typeof createOllamaTestStream>[0] = {},
+): Promise<OllamaStreamEvent[]> {
+  mockResponse(lines.join("\n") + "\n", { headers: { "Content-Type": "application/x-ndjson" } });
+  return collectStreamEvents(await createOllamaTestStream(params));
+}
+
+function collectKimiEvents(messages: Partial<AssistantResponseMessage>[]) {
+  return collectMockedOllamaEvents(
+    [
+      ...messages.map((message) => ndjson(message)),
+      ndjson({}, { done: true, prompt_eval_count: 20, eval_count: 40 }),
+    ],
+    { model: { id: "kimi-k2.6:cloud", provider: "ollama" } },
+  );
+}
+
+async function expectSuccessfulOllamaRequest(
+  params: Parameters<typeof createOllamaTestStream>[0],
+  verify: (observation: {
+    body: Record<string, unknown>;
+    fetchMock: typeof fetchWithSsrFGuardMock;
+    request: GuardedFetchCall;
+  }) => void | Promise<void>,
+): Promise<void> {
+  await withSuccessfulOllamaFetch(async (fetchMock) => {
+    const events = await collectStreamEvents(await createOllamaTestStream(params));
+    expect(events.at(-1)?.type).toBe("done");
+    await verify({
+      body: getGuardedFetchJsonBody(fetchMock),
+      fetchMock,
+      request: getGuardedFetchCall(fetchMock),
+    });
+  });
+}
+
 describe("createOllamaStreamFn streaming events", () => {
-  it("emits start, text_start, text_delta, text_end, done for text responses", async () => {
-    await withMockNdjsonFetch(
-      [
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"Hello"},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":" world"},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":5,"eval_count":2}',
-      ],
-      async () => {
-        const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
-        const events = await collectStreamEvents(stream);
-
-        const types = events.map((e) => e.type);
-        expect(types).toEqual([
-          "start",
-          "text_start",
-          "text_delta",
-          "text_delta",
-          "text_end",
-          "done",
-        ]);
-
-        // text_delta events carry incremental deltas
-        const deltas = events.filter((e) => e.type === "text_delta");
-        expect(deltas[0]?.contentIndex).toBe(0);
-        expect(deltas[0]?.delta).toBe("Hello");
-        expect(deltas[1]?.contentIndex).toBe(0);
-        expect(deltas[1]?.delta).toBe(" world");
-
-        // text_end carries the full accumulated content
-        const textEnd = events.find((e) => e.type === "text_end");
-        expect(textEnd?.contentIndex).toBe(0);
-        expect(textEnd?.content).toBe("Hello world");
-
-        // start/text_start carry empty partials (before any content accumulates)
-        const startEvent = events.find((e) => e.type === "start");
-        expect(startEvent?.partial.content).toStrictEqual([]);
-        const textStartEvent = events.find((e) => e.type === "text_start");
-        expect(textStartEvent?.partial.content).toStrictEqual([]);
-
-        // text_delta partials accumulate content progressively
-        expect(deltas[0].partial.content).toEqual([{ type: "text", text: "Hello" }]);
-        expect(deltas[1].partial.content).toEqual([{ type: "text", text: "Hello world" }]);
-
-        // done event contains the final message
-        const doneEvent = events.at(-1);
-        expect(doneEvent?.type).toBe("done");
-        if (doneEvent?.type === "done") {
-          expect(doneEvent.message.content).toEqual([{ type: "text", text: "Hello world" }]);
-        }
-      },
-    );
+  it("stops an already-aborted stream at the read boundary", async () => {
+    await withSuccessfulOllamaFetch(async () => {
+      const signal = AbortSignal.abort();
+      expect(
+        await collectStreamEvents(await createOllamaTestStream({ options: { signal } })),
+      ).toMatchObject([{ type: "error", reason: "aborted" }]);
+    });
   });
 
-  it("emits only done for tool-call-only responses (no text content)", async () => {
-    await withMockNdjsonFetch(
-      [
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"bash","arguments":{"command":"ls"}}}]},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":10,"eval_count":5}',
-      ],
-      async () => {
-        const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
-        const events = await collectStreamEvents(stream);
+  it("reports the successful HTTP response before streaming events", async () => {
+    const timeline: string[] = [];
+    const acceptanceObserver = vi.fn();
+    const onResponse = vi.fn((response, callbackModel) => {
+      timeline.push("response");
+      expect(response).toEqual({
+        status: 200,
+        headers: {
+          "content-type": "application/x-ndjson",
+          "x-ollama-request-id": "req-1",
+        },
+      });
+      expect(callbackModel.id).toBe("qwen3:32b");
+    });
+    mockResponse(ndjson({ content: "ok" }) + "\n" + ndjson({}, { done: true }), {
+      headers: { "Content-Type": "application/x-ndjson", "X-Ollama-Request-Id": "req-1" },
+    });
 
-        // No text content means no start/text_start/text_delta/text_end events
-        const types = events.map((e) => e.type);
-        expect(types).toEqual(["done"]);
-        const doneEvent = events[0];
-        if (doneEvent.type === "done") {
-          expect(doneEvent.reason).toBe("toolUse");
-        }
-      },
-    );
+    const stream = await createOllamaTestStream({
+      options: withProviderAcceptanceObserver({ onResponse }, acceptanceObserver),
+    });
+    for await (const event of stream) {
+      timeline.push(event.type);
+    }
+
+    expect(acceptanceObserver).toHaveBeenCalledWith({
+      kind: "http_response",
+      status: 200,
+      headers: { "content-type": "application/x-ndjson", "x-ollama-request-id": "req-1" },
+    });
+    expect(onResponse).toHaveBeenCalledTimes(1);
+    expect(timeline).toEqual(["response", "start", "text_start", "text_delta", "text_end", "done"]);
   });
 
-  it("estimates usage when the final Ollama chunk omits counters", async () => {
-    await withMockNdjsonFetch(
-      [
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"Estimated answer"},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true}',
-      ],
-      async () => {
-        const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
-        const events = await collectStreamEvents(stream);
+  it("does not wait for unread response cancellation when the response hook fails", async () => {
+    const source = createPendingCancelNdjsonStream([
+      '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":true}',
+    ]);
+    source.reader.releaseLock();
+    const release = mockResponse(source.stream);
 
-        const doneEvent = events.at(-1);
-        expect(doneEvent?.type).toBe("done");
-        if (doneEvent?.type === "done") {
-          expect(doneEvent.message.usage.input).toBeGreaterThan(0);
-          expect(doneEvent.message.usage.output).toBeGreaterThan(0);
-          expect(doneEvent.message.usage.totalTokens).toBeGreaterThan(0);
-        }
+    const stream = await createOllamaTestStream({
+      options: {
+        onResponse: () => {
+          throw new Error("response hook failed");
+        },
       },
-    );
+    });
+    const event = await stream[Symbol.asyncIterator]().next();
+    await source.cancelStarted;
+    source.settleCancel();
+    await source.cancelPending;
+
+    expect(event).toMatchObject({ done: false, value: { type: "error", reason: "error" } });
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["pending", "resolving"] as const)(
+    "aborts response handling while the hook is %s",
+    async (phase) => {
+      const hookStarted = Promise.withResolvers<void>();
+      const hookPending = Promise.withResolvers<void>();
+      const body = new ReadableStream<Uint8Array>();
+      const getReader = vi.spyOn(body, "getReader");
+      const cancel = vi.spyOn(body, "cancel");
+      const release = mockResponse(body);
+      const caller = new AbortController();
+      const eventsPromise = collectStreamEvents(
+        await createOllamaTestStream({
+          options: {
+            onResponse: () => {
+              hookStarted.resolve();
+              return hookPending.promise;
+            },
+            signal: caller.signal,
+          },
+        }),
+      );
+      await hookStarted.promise;
+      if (phase === "resolving") {
+        await Promise.resolve();
+        void hookPending.promise.then(() => caller.abort());
+        hookPending.resolve();
+      } else {
+        caller.abort();
+      }
+      const events = await eventsPromise;
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({ type: "error", reason: "aborted" });
+      expect(getReader).not.toHaveBeenCalled();
+      expect(cancel).toHaveBeenCalledTimes(1);
+      expect(release).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([
+    {
+      name: "malformed terminal tool arguments",
+      lines: [
+        ndjson({
+          tool_calls: [
+            { id: "call_valid", function: { name: "read", arguments: { path: "README.md" } } },
+            { id: "call_invalid", function: { name: "bash", arguments: '{"command":"ls"' } },
+          ],
+        }),
+        ndjson({}, { done: true }),
+      ],
+      error: { errorMessage: "Provider completed tool call with malformed JSON arguments" },
+    },
+    {
+      name: "data after the terminal record",
+      lines: [ndjson({ content: "done" }, { done: true }), ndjson({ content: "extra" })],
+      error: undefined,
+    },
+    {
+      name: "official streamed error with status metadata",
+      lines: ['{"error":"model failed","status":503}'],
+      error: {
+        errorMessage: "503: model failed",
+        errorCode: "503",
+        errorBody: '{"error":"model failed","status":503}',
+      },
+    },
+  ])("rejects $name", async ({ lines, error }) => {
+    const events = await collectMockedOllamaEvents(lines);
+    const types = events.map((event) => event.type);
+    expect(types.at(-1)).toBe("error");
+    expect(types).not.toContain("text_end");
+    expect(types).not.toContain("done");
+    if (error) {
+      expect(types).toEqual(["error"]);
+      expect(events[0]).toMatchObject({ type: "error", error });
+    }
   });
 
   it("counts image payloads in prompt usage estimates when Ollama omits counters", async () => {
-    await withMockNdjsonFetch(
+    const events = await collectMockedOllamaEvents(
       [
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"vision answer"},"done":false}',
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true}',
       ],
-      async () => {
-        const streamFn = createOllamaStreamFn("http://ollama-host:11434");
-        const stream = await Promise.resolve(
-          streamFn(
-            {
-              id: "llava",
-              api: "ollama",
-              provider: "custom-ollama",
-              contextWindow: 131072,
-            } as never,
-            {
-              messages: [
-                {
-                  role: "user",
-                  content: [{ type: "image", data: "a".repeat(400) }],
-                },
-              ],
-            } as never,
-            {} as never,
-          ),
-        );
-        const events = await collectStreamEvents(stream);
-
-        const doneEvent = events.at(-1);
-        expect(doneEvent?.type).toBe("done");
-        if (doneEvent?.type === "done") {
-          expect(doneEvent.message.usage.input).toBeGreaterThan(50);
-        }
+      {
+        model: { id: "llava", input: ["text", "image"] },
+        context: {
+          messages: [{ role: "user", content: [{ type: "image", data: "a".repeat(400) }] }],
+        },
       },
     );
-  });
-
-  it("emits text streaming events before done for mixed text + tool responses", async () => {
-    await withMockNdjsonFetch(
-      [
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"Let me check."},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"bash","arguments":{"command":"ls"}}}]},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":10,"eval_count":5}',
-      ],
-      async () => {
-        const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
-        const events = await collectStreamEvents(stream);
-
-        const types = events.map((e) => e.type);
-        expect(types).toEqual(["start", "text_start", "text_delta", "text_end", "done"]);
-        const doneEvent = events.at(-1);
-        if (doneEvent?.type === "done") {
-          expect(doneEvent.reason).toBe("toolUse");
-        }
-      },
-    );
-  });
-
-  it("emits text_end as soon as Ollama switches from text to tool calls", async () => {
-    const controlledFetch = createControlledNdjsonFetch();
-    fetchWithSsrFGuardMock.mockImplementation(controlledFetch.fetchImpl);
-
-    try {
-      const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
-      const iterator = stream[Symbol.asyncIterator]();
-
-      controlledFetch.pushLine(
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"Let me check."},"done":false}',
-      );
-
-      const startEvent = await nextEventWithin(iterator);
-      const textStartEvent = await nextEventWithin(iterator);
-      const textDeltaEvent = await nextEventWithin(iterator);
-
-      expect(startEvent).not.toBe("timeout");
-      expect(textStartEvent).not.toBe("timeout");
-      expect(textDeltaEvent).not.toBe("timeout");
-      expectIteratorEvent(startEvent, { type: "start", done: false });
-      expectIteratorEvent(textStartEvent, { type: "text_start", done: false });
-      expectIteratorEvent(textDeltaEvent, {
-        type: "text_delta",
-        delta: "Let me check.",
-        done: false,
-      });
-
-      controlledFetch.pushLine(
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"bash","arguments":{"command":"ls"}}}]},"done":false}',
-      );
-
-      const textEndEvent = await nextEventWithin(iterator);
-      expect(textEndEvent).not.toBe("timeout");
-      expectIteratorEvent(textEndEvent, {
-        type: "text_end",
-        content: "Let me check.",
-        done: false,
-      });
-      if (textEndEvent !== "timeout") {
-        const textEndValue = requireRecord(textEndEvent.value, "text_end value");
-        expect(textEndValue.contentIndex).toBe(0);
-        expect(requireRecord(textEndValue.partial, "text_end partial").content).toEqual([
-          { type: "text", text: "Let me check." },
-        ]);
-      }
-
-      controlledFetch.pushLine(
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":10,"eval_count":5}',
-      );
-      controlledFetch.close();
-
-      const doneEvent = await nextEventWithin(iterator);
-      expect(doneEvent).not.toBe("timeout");
-      if (doneEvent !== "timeout" && doneEvent.done === false) {
-        expectIteratorEvent(doneEvent, { type: "done", done: false });
-        expect(requireRecord(doneEvent.value, "done value").reason).toBe("toolUse");
-
-        const streamEnd = await nextEventWithin(iterator);
-        expect(streamEnd).not.toBe("timeout");
-        expectIteratorEvent(streamEnd, { done: true });
-      } else {
-        expectIteratorEvent(doneEvent, { done: true });
-      }
-    } finally {
-      fetchWithSsrFGuardMock.mockReset();
+    const doneEvent = events.at(-1);
+    expect(doneEvent?.type).toBe("done");
+    if (doneEvent?.type === "done") {
+      expect(doneEvent.message.usage.input).toBeGreaterThan(50);
     }
   });
 
-  it("emits error without text_end when stream fails mid-response", async () => {
-    // Simulate a stream that sends one content chunk then ends without done:true.
-    // The stream function throws "Ollama API stream ended without a final response".
-    await withMockNdjsonFetch(
-      [
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"partial"},"done":false}',
-      ],
-      async () => {
-        const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
-        const events = await collectStreamEvents(stream);
+  it("streams multiple native calls with stable provider ids across chunks", async () => {
+    const events = await collectMockedOllamaEvents([
+      '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","tool_calls":[{"id":"call-read","function":{"name":"read","arguments":{"path":"/tmp/a","target":1234567890123456789,"nested":{"thread":9223372036854775807}}}}]},"done":false}',
+      '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","tool_calls":[{"id":"call-bash","function":{"name":"bash","arguments":"{\\"command\\":\\"ls\\",\\"target\\":9223372036854775807}"}}]},"done":false}',
+      '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true}',
+    ]);
 
-        const types = events.map((e) => e.type);
-        // Should have streaming events for the partial content, then error (no text_end).
-        expect(types).toEqual(["start", "text_start", "text_delta", "error"]);
-        const errorEvent = events.at(-1);
-        expect(errorEvent?.type).toBe("error");
+    expect(events.map((event) => event.type)).toEqual([
+      "start",
+      "toolcall_start",
+      "toolcall_delta",
+      "toolcall_end",
+      "toolcall_start",
+      "toolcall_delta",
+      "toolcall_end",
+      "done",
+    ]);
+    const toolCallEnds = events.filter((event) => event.type === "toolcall_end");
+    expect(toolCallEnds).toMatchObject([
+      {
+        contentIndex: 0,
+        toolCall: {
+          id: "call-read",
+          name: "read",
+          arguments: {
+            path: "/tmp/a",
+            target: "1234567890123456789",
+            nested: { thread: "9223372036854775807" },
+          },
+        },
       },
-    );
+      {
+        contentIndex: 1,
+        toolCall: {
+          id: "call-bash",
+          name: "bash",
+          arguments: { command: "ls", target: "9223372036854775807" },
+        },
+      },
+    ]);
+    expect(events.filter((event) => event.type === "toolcall_delta")).toMatchObject([
+      {
+        contentIndex: 0,
+        delta:
+          '{"path":"/tmp/a","target":"1234567890123456789","nested":{"thread":"9223372036854775807"}}',
+      },
+      { contentIndex: 1, delta: '{"command":"ls","target":"9223372036854775807"}' },
+    ]);
+    expect(events.filter((event) => event.type === "toolcall_start")).toMatchObject([
+      { partial: { content: [{ arguments: {} }] } },
+      {
+        partial: {
+          content: [{ arguments: { path: "/tmp/a" } }, { arguments: {} }],
+        },
+      },
+    ]);
+    const done = events.at(-1);
+    if (done?.type !== "done") {
+      throw new Error("missing terminal Ollama message");
+    }
+    expect(done.message.content).toMatchObject([
+      { type: "toolCall", id: "call-read" },
+      { type: "toolCall", id: "call-bash" },
+    ]);
   });
 
+  it("never exposes an intermediate native call invalidated by a later length terminal", async () => {
+    const events = await collectMockedOllamaEvents([
+      '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"bash","arguments":{"command":"ls"}}}]},"done":false}',
+      '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"done_reason":"length"}',
+    ]);
+
+    expect(events.map((event) => event.type)).toEqual(["done"]);
+    expect(events[0]).toMatchObject({
+      type: "done",
+      reason: "length",
+      message: { content: [], stopReason: "length" },
+    });
+  });
+
+  it("emits text_end as soon as Ollama switches from text to tool calls", async () => {
+    const source = createControlledNdjsonFetch();
+    fetchWithSsrFGuardMock.mockImplementation(source.fetchImpl);
+    const stream = await createOllamaTestStream({});
+    const iterator = stream[Symbol.asyncIterator]();
+    source.pushLine(ndjson({ content: "Let me check." }));
+    await expect(iterator.next()).resolves.toMatchObject({
+      done: false,
+      value: { type: "start", partial: { content: [] } },
+    });
+    await expect(iterator.next()).resolves.toMatchObject({
+      done: false,
+      value: { type: "text_start", partial: { content: [] } },
+    });
+    await expect(iterator.next()).resolves.toMatchObject({
+      done: false,
+      value: { type: "text_delta", delta: "Let me check." },
+    });
+    source.pushLine(
+      ndjson({ tool_calls: [{ function: { name: "bash", arguments: { command: "ls" } } }] }),
+    );
+    await expect(iterator.next()).resolves.toMatchObject({
+      done: false,
+      value: {
+        type: "text_end",
+        contentIndex: 0,
+        content: "Let me check.",
+        partial: { content: [{ type: "text", text: "Let me check." }] },
+      },
+    });
+    source.pushLine(ndjson({}, { done: true }));
+    source.close();
+    const remaining = await collectStreamEvents(stream);
+    expect(remaining.map((event) => event.type)).toEqual([
+      "toolcall_start",
+      "toolcall_delta",
+      "toolcall_end",
+      "done",
+    ]);
+    expect(remaining[1]).toMatchObject({ type: "toolcall_delta", delta: '{"command":"ls"}' });
+    expect(remaining.at(-1)).toMatchObject({ type: "done", reason: "toolUse" });
+    await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
+  });
   it("emits an error instead of accepting garbled Kimi visible text", async () => {
     const garbled =
       '$$"##"%#"##"####""$""""##""$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$' +
       '#"$"$"""$""""#$"""$"""%"%###"""#%""""&"#"""$"""#"#""""%#""""&"#"""$"""$"""#%"""';
-    await withMockNdjsonFetch(
-      [
-        JSON.stringify({
-          model: "kimi-k2.5:cloud",
-          created_at: "t",
-          message: { role: "assistant", content: garbled },
-          done: false,
-        }),
-        '{"model":"kimi-k2.5:cloud","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":20,"eval_count":40}',
-      ],
-      async () => {
-        const stream = await createOllamaTestStream({
-          baseUrl: "http://ollama-host:11434",
-          model: { id: "kimi-k2.5:cloud", provider: "ollama" },
-        });
-        const events = await collectStreamEvents(stream);
-
-        const types = events.map((e) => e.type);
-        expect(types).toEqual(["start", "text_start", "text_delta", "error"]);
-        const errorEvent = events.at(-1);
-        expect(errorEvent?.type).toBe("error");
-        if (errorEvent?.type === "error") {
-          expect(errorEvent.error.errorMessage).toContain("garbled visible text");
-        }
-      },
-    );
+    const events = await collectKimiEvents([{ content: garbled }]);
+    const types = events.map((e) => e.type);
+    expect(types).toEqual(["error"]);
+    const errorEvent = events.at(-1);
+    expect(errorEvent?.type).toBe("error");
+    if (errorEvent?.type === "error") {
+      expect(errorEvent.error.errorMessage).toContain("garbled visible text");
+    }
   });
 
-  it("does not reject punctuation-heavy text from unrelated Ollama models", async () => {
-    const punctuationHeavy =
-      '$$"##"%#"##"####""$""""##""$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$' +
-      '#"$"$"""$""""#$"""$"""%"%###"""#%""""&"#"""$"""#"#""""%#""""&"#"""$"""$"""#%"""';
-    await withMockNdjsonFetch(
-      [
-        JSON.stringify({
-          model: "qwen3:32b",
-          created_at: "t",
-          message: { role: "assistant", content: punctuationHeavy },
-          done: false,
-        }),
-        '{"model":"qwen3:32b","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":20,"eval_count":40}',
-      ],
-      async () => {
-        const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
-        const events = await collectStreamEvents(stream);
-
-        expect(events.map((e) => e.type)).toEqual([
-          "start",
-          "text_start",
-          "text_delta",
-          "text_end",
-          "done",
-        ]);
-      },
-    );
+  it("buffers Kimi inline reasoning until the streaming boundary is safe", async () => {
+    vi.useFakeTimers();
+    try {
+      const source = createControlledNdjsonFetch();
+      fetchWithSsrFGuardMock.mockImplementation(source.fetchImpl);
+      const stream = await createOllamaTestStream({
+        model: { id: "kimi-k2.6:cloud", provider: "ollama" },
+      });
+      const iterator = stream[Symbol.asyncIterator]();
+      source.pushLine(ndjson({ content: hiddenReasoning }));
+      const started = vi.fn();
+      const pendingStart = iterator.next().then((event) => {
+        started();
+        return event;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(started).not.toHaveBeenCalled();
+      source.pushLine(ndjson({ content: " ️ OK." }));
+      await expect(pendingStart).resolves.toMatchObject({ done: false, value: { type: "start" } });
+      await expect(iterator.next()).resolves.toMatchObject({
+        done: false,
+        value: { type: "text_start", partial: { content: [] } },
+      });
+      const delta = await iterator.next();
+      expect(delta).toMatchObject({ done: false, value: { type: "text_delta", delta: "OK." } });
+      expect(JSON.stringify(delta)).not.toContain(hiddenReasoning);
+      source.pushLine(ndjson({}, { done: true }));
+      source.close();
+      const remaining = await collectStreamEvents(stream);
+      expect(remaining.map((event) => event.type)).toEqual(["text_end", "done"]);
+      expect(remaining[0]).toMatchObject({ content: "OK." });
+      expect(remaining[1]).toMatchObject({ message: { content: [{ type: "text", text: "OK." }] } });
+      expect(JSON.stringify(remaining)).not.toContain(hiddenReasoning);
+      await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
+    } finally {
+      vi.useRealTimers();
+    }
   });
-
-  it("emits a single text_delta for single-chunk responses", async () => {
-    await withMockNdjsonFetch(
-      [
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"one shot"},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
-      ],
-      async () => {
-        const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
-        const events = await collectStreamEvents(stream);
-
-        const types = events.map((e) => e.type);
-        expect(types).toEqual(["start", "text_start", "text_delta", "text_end", "done"]);
-
-        const delta = events.find((e) => e.type === "text_delta");
-        expect(delta?.delta).toBe("one shot");
-      },
-    );
+  const bypassPrefix = "This Kimi cloud output has streamed past the sanitizer window. ".repeat(10);
+  const visibleAnswer =
+    "This visible answer is intentionally long enough to look like a reasoning prefix if it is sanitized a second time. ️ keep this marker visible.";
+  it.each([
+    {
+      name: "bypassed sanitizer window",
+      messages: [{ content: bypassPrefix }, { content: " ️ OK." }],
+      text: `${bypassPrefix} ️ OK.`,
+      appendOnly: true,
+    },
+    {
+      name: "already sanitized output",
+      messages: [{ content: `${hiddenReasoning} ️` }, { content: visibleAnswer }],
+      text: visibleAnswer,
+      appendOnly: false,
+    },
+    {
+      name: "empty tool-call chunk",
+      messages: [{ content: hiddenReasoning }, { tool_calls: [] }, { content: " ️ Visible answer" }],
+      text: "Visible answer",
+      appendOnly: false,
+    },
+  ])("keeps Kimi visible text after $name", async ({ name, messages, text, appendOnly }) => {
+    const events = await collectKimiEvents(messages);
+    if (appendOnly) {
+      expectTextAppends(events, text);
+    }
+    expect(events.find((event) => event.type === "text_end")?.content).toBe(text);
+    expect(events.at(-1)).toMatchObject({
+      type: "done",
+      message: { content: [{ type: "text", text }] },
+    });
+    if (name === "empty tool-call chunk") {
+      expect(events.map((event) => event.type)).toEqual([
+        "start",
+        "text_start",
+        "text_delta",
+        "text_end",
+        "done",
+      ]);
+      expect(events[2]).toMatchObject({ type: "text_delta", delta: "Visible answer" });
+      expect(JSON.stringify(events)).not.toContain(hiddenReasoning);
+    }
+  });
+  it.each([
+    ["reasoning-only", `${hiddenReasoning} ️ `, ""],
+    ["buffered visible text", "Visible answer", "Visible answer"],
+  ])("flushes Kimi %s before native tool calls", async (_name, content, visible) => {
+    const events = await collectKimiEvents([
+      { content },
+      { tool_calls: [{ function: { name: "bash", arguments: { command: "ls" } } }] },
+    ]);
+    expect(events.map((event) => event.type)).toEqual([
+      "start",
+      ...(visible ? ["text_start", "text_delta", "text_end"] : []),
+      "toolcall_start",
+      "toolcall_delta",
+      "toolcall_end",
+      "done",
+    ]);
+    expect(JSON.stringify(events)).not.toContain(hiddenReasoning);
+    if (visible) {
+      expect(events[2]).toMatchObject({ type: "text_delta", delta: "Visible answer" });
+      expect(events[4]).toMatchObject({ type: "toolcall_start", contentIndex: 1 });
+      expect(events[6]).toMatchObject({ type: "toolcall_end", contentIndex: 1 });
+    }
+    const done = events.at(-1);
+    assert(done?.type === "done", "Expected done event");
+    expect(done.message.content).toEqual([
+      ...(visible
+        ? [{ type: "text", text: "Visible answer", textSignature: expect.any(String) }]
+        : []),
+      { type: "toolCall", id: expect.any(String), name: "bash", arguments: { command: "ls" } },
+    ]);
   });
 });
 
 describe("createOllamaStreamFn", () => {
-  it("normalizes /v1 baseUrl and maps maxTokens + signal", async () => {
-    await withMockNdjsonFetch(
-      [
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+  it("preserves user and tool images for a vision model", async () => {
+    const context = {
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "user caption" },
+            { type: "image", mimeType: "image/png", data: "dXNlci1pbWFnZQ==" },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_inspect",
+          toolName: "view_image",
+          content: [
+            { type: "text", text: "tool caption" },
+            { type: "image", mimeType: "image/png", data: "dG9vbC1pbWFnZQ==" },
+          ],
+        },
       ],
-      async (fetchMock) => {
-        const signal = new AbortController().signal;
-        const stream = await createOllamaTestStream({
-          baseUrl: "http://ollama-host:11434/v1/",
-          options: { maxTokens: 123, signal },
-        });
+    };
+    await expectSuccessfulOllamaRequest(
+      {
+        model: { input: ["text", "image"] },
+        context,
+      },
+      ({ body }) => {
+        const messages = body.messages as Array<Record<string, unknown>>;
+        expect(messages[0]?.images).toEqual(["dXNlci1pbWFnZQ=="]);
+        expect(messages[1]?.images).toEqual(["dG9vbC1pbWFnZQ=="]);
+        expect(messages[0]?.content).toContain("user caption");
+        expect(messages[1]?.content).toContain("tool caption");
+        expect(
+          String(messages[0]?.content).includes("(image omitted: model does not support images)"),
+        ).toBe(false);
+        expect(
+          String(messages[1]?.content).includes(
+            "(tool image omitted: model does not support images)",
+          ),
+        ).toBe(false);
+        expect(messages[1]?.tool_call_id).toBe("call_inspect");
+      },
+    );
+    expect(JSON.stringify(context)).toContain("dXNlci1pbWFnZQ==");
+    expect(JSON.stringify(context)).toContain("dG9vbC1pbWFnZQ==");
+  });
 
-        const events = await collectStreamEvents(stream);
-        expect(events.at(-1)?.type).toBe("done");
+  it.each([
+    ["hosted", "https://ollama.com", {}],
+    [
+      "cloud provider proxy",
+      "https://proxy.example.test",
+      { provider: "ollama-cloud", id: "glm-5.2" },
+    ],
+    ["cloud model on local daemon", "http://ollama-host:11434", { id: "qwen3:32b-cloud" }],
+  ] as const)("leaves %s history settings to the server", async (_name, baseUrl, model) => {
+    await expectSuccessfulOllamaRequest({ baseUrl, model }, ({ body }) => {
+      expect(body.truncate).toBeUndefined();
+      expect(body.shift).toBeUndefined();
+      expect(body.options).not.toHaveProperty("truncate");
+      expect(body.options).not.toHaveProperty("shift");
+    });
+  });
 
+  it("normalizes /v1 baseUrl and maps maxTokens + signal", async () => {
+    const signal = new AbortController().signal;
+    await expectSuccessfulOllamaRequest(
+      {
+        baseUrl: "http://ollama-host:11434/v1/",
+        options: { maxTokens: 123, signal, timeoutMs: 123_456 },
+      },
+      ({ body, fetchMock, request }) => {
         expect(fetchMock).toHaveBeenCalledTimes(1);
-        const request = getGuardedFetchCall(fetchMock);
         expect(request.url).toBe("http://ollama-host:11434/api/chat");
         expect(request.auditContext).toBe("ollama-stream.chat");
         expect(request.signal).toBe(signal);
-        const requestInit = request.init ?? {};
-        expect(requestInit.signal).toBeUndefined();
-        if (typeof requestInit.body !== "string") {
-          throw new Error("Expected string request body");
-        }
-
-        const requestBody = JSON.parse(requestInit.body) as {
-          options?: { num_ctx?: number; num_predict?: number };
-        };
-        if (!requestBody.options) {
-          throw new Error("Expected Ollama request options");
-        }
-        expect(requestBody.options?.num_ctx).toBeUndefined();
-        expect(requestBody.options.num_predict).toBe(123);
+        expect(request.timeoutMs).toBe(123_456);
+        expect(request.init?.signal).toBeUndefined();
+        const options = requireRecord(body.options, "Ollama request options");
+        expect(options.num_ctx).toBeUndefined();
+        expect(options.num_predict).toBe(123);
+        expect(body.truncate).toBe(false);
+        expect(body.shift).toBe(false);
       },
     );
   });
 
-  it("uses configured params.num_ctx for native Ollama chat options", async () => {
-    await withMockNdjsonFetch(
-      [
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
-      ],
-      async (fetchMock) => {
-        const stream = await createOllamaTestStream({
-          baseUrl: "http://ollama-host:11434",
-          model: {
-            params: {
-              num_ctx: 32768,
-              temperature: 0.2,
-              top_p: 0.9,
-              thinking: false,
-              streaming: false,
-            },
-            contextWindow: 131072,
+  it.each(["mutation", "replacement"] as const)(
+    "awaits asynchronous payload %s before dispatch",
+    async (mode) => {
+      await withSuccessfulOllamaFetch(async (fetchMock) => {
+        const started = Promise.withResolvers<void>();
+        const gate = Promise.withResolvers<void>();
+        const onPayload = vi.fn(async (payload: unknown) => {
+          started.resolve();
+          await gate.promise;
+          if (mode === "replacement") {
+            return { model: "replacement-model", options: { stop: ["REPLACEMENT"] } };
+          }
+          requireRecord(payload, "Ollama request payload").model = "patched-model";
+          return undefined;
+        });
+        const stream = await createOllamaTestStream({ options: { onPayload } });
+        await started.promise;
+        expect(onPayload).toHaveBeenCalledTimes(1);
+        expect(fetchMock).not.toHaveBeenCalled();
+        gate.resolve();
+        const events = await collectStreamEvents(stream);
+        expect(events.at(-1)?.type).toBe("done");
+        const body = getGuardedFetchJsonBody(fetchMock);
+        expect(body.model).toBe(mode === "replacement" ? "replacement-model" : "patched-model");
+        if (mode === "replacement") {
+          expect(requireRecord(body.options, "Ollama request options").stop).toEqual([
+            "REPLACEMENT",
+          ]);
+        }
+      });
+    },
+  );
+
+  it.each([
+    {
+      name: "keeps provider-shaped text response formats off the native Ollama wire",
+      responseFormat: { type: "text" },
+    },
+    {
+      name: "omits native Ollama format for cloud model through a local daemon",
+      id: "gemma4:cloud",
+      responseFormat: { type: "object" },
+    },
+    {
+      name: "omits native Ollama format for hosted Ollama Cloud",
+      baseUrl: "https://ollama.com/v1",
+      id: "gemma4",
+      responseFormat: { type: "object" },
+    },
+    {
+      name: "maps raw JSON Schema",
+      responseFormat: { type: "object", properties: { reply: { type: "string" } } },
+      expectedFormat: { type: "object", properties: { reply: { type: "string" } } },
+    },
+  ])("$name", async ({ baseUrl, id, responseFormat, expectedFormat }) => {
+    await expectSuccessfulOllamaRequest(
+      {
+        baseUrl,
+        ...(id ? { model: { id } } : {}),
+        ...(responseFormat ? { options: { responseFormat } } : {}),
+      },
+      ({ body }) => expect(body.format).toEqual(expectedFormat),
+    );
+  });
+
+  it("normalizes native tool schemas and keeps their serialization stable across discovery order", async () => {
+    const tools = [
+      {
+        name: "search",
+        description: "search",
+        parameters: {
+          properties: {
+            query: { anyOf: [{ type: "string" }, { type: "null" }] },
+            tags: { items: { type: "string" } },
           },
-          options: { temperature: 0.7, maxTokens: 55 },
-        });
-
-        const events = await collectStreamEvents(stream);
-        expect(events.at(-1)?.type).toBe("done");
-
-        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
-        if (typeof requestInit.body !== "string") {
-          throw new Error("Expected string request body");
-        }
-        const requestBody = JSON.parse(requestInit.body) as {
-          think?: boolean;
+          required: ["query"],
+        },
+      },
+      {
+        name: "read",
+        description: "read",
+        parameters: { type: "object", properties: { path: { type: "string" } } },
+      },
+    ];
+    const serialized: string[] = [];
+    for (const orderedTools of [tools, tools.toReversed()]) {
+      fetchWithSsrFGuardMock.mockClear();
+      await expectSuccessfulOllamaRequest(
+        {
+          context: { messages: [{ role: "user", content: "hello" }], tools: orderedTools },
           options: {
-            num_ctx?: number;
-            num_predict?: number;
-            temperature?: number;
-            top_p?: number;
-            streaming?: boolean;
-          };
-        };
-        expect(requestBody.options.num_ctx).toBe(32768);
-        expect(requestBody.options.num_predict).toBe(55);
-        expect(requestBody.options.temperature).toBe(0.7);
-        expect(requestBody.options.top_p).toBe(0.9);
-        expect(requestBody.options.streaming).toBeUndefined();
-        expect(requestBody.think).toBe(false);
-      },
-    );
+            responseFormat: { type: "object", properties: { reply: { type: "string" } } },
+          },
+        },
+        ({ body }) => {
+          expect(body.tools).toEqual([
+            { type: "function", function: tools[1] },
+            {
+              type: "function",
+              function: {
+                name: "search",
+                description: "search",
+                parameters: {
+                  type: "object",
+                  properties: {
+                    query: { anyOf: [{ type: "string" }, { type: "null" }], type: "string" },
+                    tags: { items: { type: "string" }, type: "array" },
+                  },
+                  required: ["query"],
+                },
+              },
+            },
+          ]);
+          expect(body).not.toHaveProperty("format");
+          serialized.push(JSON.stringify(body.tools));
+        },
+      );
+    }
+    expect(serialized[1]).toBe(serialized[0]);
+    expect(tools.map((tool) => tool.name)).toEqual(["search", "read"]);
   });
-
-  it("omits num_ctx when the model has no params.num_ctx and no catalog window", async () => {
-    await withMockNdjsonFetch(
-      [
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
-      ],
-      async (fetchMock) => {
-        const stream = await createOllamaTestStream({
-          baseUrl: "http://ollama-host:11434",
-          // Override the helper default contextWindow back to undefined so the
-          // request body should leave Ollama's Modelfile to decide num_ctx.
-          model: { contextWindow: undefined },
-        });
-
-        await collectStreamEvents(stream);
-
-        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
-        if (typeof requestInit.body !== "string") {
-          throw new Error("Expected string request body");
-        }
-        const requestBody = JSON.parse(requestInit.body) as {
-          options?: { num_ctx?: number };
-        };
-        expect(requestBody.options?.num_ctx).toBeUndefined();
+  it.each([
+    {
+      name: "configured options",
+      params: { num_ctx: 0 },
+      options: { stop: [] },
+      expected: {
+        num_ctx: 16384,
+        temperature: 0.8,
+        top_p: 0.9,
+        seed: 7,
+        frequency_penalty: 0.5,
+        presence_penalty: 0.75,
+        stop: ["MODEL"],
       },
-    );
-  });
-
-  it("does not fall back to catalog contextWindow as native Ollama num_ctx", async () => {
-    await withMockNdjsonFetch(
-      [
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
-      ],
-      async (fetchMock) => {
-        const stream = await createOllamaTestStream({
-          baseUrl: "http://ollama-host:11434",
-          model: { contextWindow: 32768 },
-        });
-
-        await collectStreamEvents(stream);
-
-        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
-        if (typeof requestInit.body !== "string") {
-          throw new Error("Expected string request body");
-        }
-        const requestBody = JSON.parse(requestInit.body) as {
-          options?: { num_ctx?: number };
-        };
-        expect(requestBody.options?.num_ctx).toBeUndefined();
+    },
+    {
+      name: "runtime zero overrides",
+      params: { num_ctx: 32768 },
+      options: {
+        temperature: 0.7,
+        maxTokens: 55,
+        topP: 0,
+        seed: 0,
+        frequencyPenalty: 0,
+        presencePenalty: 0,
+        stop: ["REQUEST"],
       },
-    );
-  });
-
-  it("does not fall back to catalog maxTokens as native Ollama num_ctx", async () => {
-    await withMockNdjsonFetch(
-      [
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
-      ],
-      async (fetchMock) => {
-        const stream = await createOllamaTestStream({
-          baseUrl: "http://ollama-host:11434",
-          // The helper default contextWindow is overridden back to undefined so
-          // the right side of `model.contextWindow ?? model.maxTokens` is the
-          // load-bearing branch.
-          model: { contextWindow: undefined, maxTokens: 65536 },
-        });
-
-        await collectStreamEvents(stream);
-
-        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
-        if (typeof requestInit.body !== "string") {
-          throw new Error("Expected string request body");
-        }
-        const requestBody = JSON.parse(requestInit.body) as {
-          options?: { num_ctx?: number };
-        };
-        expect(requestBody.options?.num_ctx).toBeUndefined();
+      expected: {
+        num_ctx: 32768,
+        temperature: 0.7,
+        num_predict: 55,
+        top_p: 0,
+        seed: 0,
+        frequency_penalty: 0,
+        presence_penalty: 0,
+        stop: ["REQUEST"],
       },
-    );
-  });
-
-  it("maps configured native Ollama params.thinking=max to the stable top-level think value", async () => {
-    await withMockNdjsonFetch(
-      [
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
-      ],
-      async (fetchMock) => {
-        const stream = await createOllamaTestStream({
-          baseUrl: "http://ollama-host:11434",
-          model: { params: { thinking: "max" } },
-        });
-
-        const events = await collectStreamEvents(stream);
-        expect(events.at(-1)?.type).toBe("done");
-
-        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
-        if (typeof requestInit.body !== "string") {
-          throw new Error("Expected string request body");
-        }
-        const requestBody = JSON.parse(requestInit.body) as {
-          think?: string;
-          options?: { think?: string };
-        };
-        expect(requestBody.think).toBe("high");
-        expect(requestBody.options?.think).toBeUndefined();
+    },
+    {
+      name: "greedy normalization",
+      params: { num_ctx: 32768 },
+      options: { temperature: 0, topP: 0.6 },
+      expected: { num_ctx: 32768, temperature: 0, top_p: 1 },
+    },
+  ])("maps native request options: $name", async ({ params, options, expected }) => {
+    await expectSuccessfulOllamaRequest(
+      {
+        model: {
+          contextWindow: 131072,
+          contextTokens: 16384,
+          params: {
+            temperature: 0.8,
+            top_p: 0.9,
+            seed: 7,
+            frequency_penalty: 0.5,
+            presence_penalty: 0.75,
+            stop: ["MODEL"],
+            thinking: false,
+            streaming: false,
+            truncate: true,
+            shift: true,
+            ...params,
+          },
+        },
+        options,
+      },
+      ({ body }) => {
+        expect(body.options).toMatchObject(expected);
+        expect(requireRecord(body.options, "options").streaming).toBeUndefined();
+        expect(body.think).toBe(false);
+        expect(body.truncate).toBe(true);
+        expect(body.shift).toBe(true);
       },
     );
   });
 
   it("uses the default loopback policy when baseUrl is empty", async () => {
-    await withMockNdjsonFetch(
-      [
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
-      ],
-      async (fetchMock) => {
-        const stream = await createOllamaTestStream({ baseUrl: "" });
-
-        const events = await collectStreamEvents(stream);
-        expect(events.at(-1)?.type).toBe("done");
-
-        const request = getGuardedFetchCall(fetchMock);
-        expect(request.url).toBe("http://127.0.0.1:11434/api/chat");
-        const policy = requireRecord(request.policy, "ssrf policy");
-        expect(policy.hostnameAllowlist).toEqual(["127.0.0.1"]);
-        expect(policy.allowPrivateNetwork).toBe(true);
-      },
-    );
+    await expectSuccessfulOllamaRequest({ baseUrl: "" }, ({ request }) => {
+      expect(request.url).toBe("http://127.0.0.1:11434/api/chat");
+      const policy = requireRecord(request.policy, "ssrf policy");
+      expect(policy.hostnameAllowlist).toEqual(["127.0.0.1"]);
+      expect(policy.allowPrivateNetwork).toBe(true);
+    });
   });
 
-  it("merges default headers and allows request headers to override them", async () => {
-    await withMockNdjsonFetch(
-      [
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
-      ],
-      async (fetchMock) => {
-        const stream = await createOllamaTestStream({
-          baseUrl: "http://ollama-host:11434",
-          defaultHeaders: {
-            "X-OLLAMA-KEY": "provider-secret",
-            "X-Trace": "default",
-          },
-          options: {
-            headers: {
-              "X-Trace": "request",
-              "X-Request-Only": "1",
-            },
-          },
-        });
-
-        const events = await collectStreamEvents(stream);
-        expect(events.at(-1)?.type).toBe("done");
-
-        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
-        const headers = requireHeaders(requestInit.headers);
-        expect(headers["Content-Type"]).toBe("application/json");
-        expect(headers["X-OLLAMA-KEY"]).toBe("provider-secret");
-        expect(headers["X-Trace"]).toBe("request");
-        expect(headers["X-Request-Only"]).toBe("1");
-      },
+  it("redacts a configured header prefix split by the 8 KiB error cap", async () => {
+    const configuredSecret = "stream-boundary-credential-secret";
+    const retainedPrefix = configuredSecret.slice(0, -5);
+    const safeMarker = "bounded stream diagnostic: ";
+    const tracked = cancelTrackedTextResponse(
+      `${safeMarker}${"x".repeat(8 * 1024 - safeMarker.length - retainedPrefix.length)}${configuredSecret} trailing text`,
+      { status: 503, statusText: "Service Unavailable" },
     );
-  });
-
-  it("preserves an explicit Authorization header when apiKey is a local marker", async () => {
-    await withMockNdjsonFetch(
-      [
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
-      ],
-      async (fetchMock) => {
-        const stream = await createOllamaTestStream({
-          baseUrl: "http://ollama-host:11434",
-          defaultHeaders: {
-            Authorization: "Bearer proxy-token",
-          },
-          options: {
-            apiKey: "ollama-local", // pragma: allowlist secret
-            headers: {
-              Authorization: "Bearer proxy-token",
-            },
-          },
-        });
-
-        await collectStreamEvents(stream);
-        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
-        expect(requireHeaders(requestInit.headers).Authorization).toBe("Bearer proxy-token");
-      },
-    );
-  });
-
-  it("allows a real apiKey to override an explicit Authorization header", async () => {
-    await withMockNdjsonFetch(
-      [
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
-      ],
-      async (fetchMock) => {
-        const streamFn = createOllamaStreamFn("http://ollama-host:11434", {
-          Authorization: "Bearer proxy-token",
-        });
-        const stream = await Promise.resolve(
-          streamFn(
-            {
-              id: "qwen3:32b",
-              api: "ollama",
-              provider: "custom-ollama",
-              contextWindow: 131072,
-            } as never,
-            {
-              messages: [{ role: "user", content: "hello" }],
-            } as never,
-            {
-              apiKey: "real-token", // pragma: allowlist secret
-            } as never,
-          ),
-        );
-
-        await collectStreamEvents(stream);
-        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
-        expect(requireHeaders(requestInit.headers).Authorization).toBe("Bearer real-token");
-      },
-    );
-  });
-
-  it("surfaces non-2xx HTTP response as status-prefixed error", async () => {
     fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response("Service Unavailable", {
-        status: 503,
-        statusText: "Service Unavailable",
-      }),
+      response: tracked.response,
       release: vi.fn(async () => undefined),
     });
-    try {
-      const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
-      const events = await collectStreamEvents(stream);
-
-      const errorEvent = events.find((e) => e.type === "error") as
-        | { type: "error"; error: { errorMessage?: string } }
-        | undefined;
-      if (!errorEvent) {
-        throw new Error("expected Ollama stream error event");
-      }
-      // The error message must start with the HTTP status code so that
-      // extractLeadingHttpStatus can parse it for failover/retry logic.
-      expect(errorEvent.error.errorMessage).toMatch(/^503\b/);
-    } finally {
-      fetchWithSsrFGuardMock.mockReset();
+    const timeline: string[] = [];
+    const onResponse = vi.fn(() => {
+      timeline.push("response");
+    });
+    const stream = await createOllamaTestStream({
+      defaultHeaders: { "X-Proxy-Auth": configuredSecret },
+      options: { onResponse },
+    });
+    const events: OllamaStreamEvent[] = [];
+    for await (const event of stream) {
+      timeline.push(event.type);
+      events.push(event);
     }
-  });
-
-  it("keeps thinking chunks when no final content is emitted", async () => {
-    await expectDoneEventContent(
-      [
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","thinking":"reasoned"},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","thinking":" output"},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":2}',
-      ],
-      [{ type: "thinking", thinking: "reasoned output" }],
+    expect(timeline).toEqual(["response", "error"]);
+    expect(onResponse).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 503 }),
+      expect.objectContaining({ id: "qwen3:32b" }),
     );
-  });
-
-  it("keeps streamed content after earlier thinking chunks", async () => {
-    await expectDoneEventContent(
-      [
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","thinking":"internal"},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"final"},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":" answer"},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":2}',
-      ],
-      [
-        { type: "thinking", thinking: "internal" },
-        { type: "text", text: "final answer" },
-      ],
+    const errorEvent = expectDefined(
+      events.find((event) => event.type === "error"),
+      "Ollama error event",
     );
+
+    const message = errorEvent.error.errorMessage ?? "";
+    expect(message).toMatch(/^503\b/);
+    expect(message).toContain(safeMarker);
+    expect(message).not.toContain(retainedPrefix);
+    expect(message).not.toContain(configuredSecret);
+    expect(message).not.toContain("trailing text");
+    expect(tracked.wasCanceled()).toBe(true);
   });
 
-  it("keeps reasoning chunks when no final content is emitted", async () => {
-    await expectDoneEventContent(
+  it("drops streamed reasoning chunks for non-reasoning models", async () => {
+    const events = await collectMockedOllamaEvents(
       [
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","reasoning":"reasoned"},"done":false}',
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","reasoning":" output"},"done":false}',
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":2}',
       ],
-      [{ type: "thinking", thinking: "reasoned output" }],
+      { model: { reasoning: false } },
     );
+    const doneEvent = events.at(-1);
+    if (!doneEvent || doneEvent.type !== "done") {
+      throw new Error("Expected done event");
+    }
+
+    expect(doneEvent.message.content).toEqual([]);
+    expect(doneEvent.message.usage.output).toBeGreaterThan(0);
+    expect(events.some((event) => event.type === "thinking_delta")).toBe(false);
   });
 
   it("keeps streamed content after earlier reasoning chunks", async () => {
-    await expectDoneEventContent(
-      [
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","reasoning":"internal"},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"final"},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":" answer"},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":2}',
-      ],
-      [
-        { type: "thinking", thinking: "internal" },
-        { type: "text", text: "final answer" },
-      ],
-    );
-  });
-});
-
-describe("resolveOllamaBaseUrlForRun", () => {
-  it("prefers provider baseUrl over model baseUrl", () => {
-    expect(
-      resolveOllamaBaseUrlForRun({
-        modelBaseUrl: "http://model-host:11434",
-        providerBaseUrl: "http://provider-host:11434",
-      }),
-    ).toBe("http://provider-host:11434");
-  });
-
-  it("falls back to model baseUrl when provider baseUrl is missing", () => {
-    expect(
-      resolveOllamaBaseUrlForRun({
-        modelBaseUrl: "http://model-host:11434",
-      }),
-    ).toBe("http://model-host:11434");
-  });
-
-  it("falls back to native default when neither baseUrl is configured", () => {
-    expect(resolveOllamaBaseUrlForRun({})).toBe("http://127.0.0.1:11434");
+    const events = await collectMockedOllamaEvents([
+      ndjson({ thinking: "internal" }),
+      ndjson({ content: "final" }),
+      ndjson({ content: " answer" }),
+      ndjson({}, { done: true, prompt_eval_count: 1, eval_count: 2 }),
+    ]);
+    expect(events.at(-1)).toMatchObject({
+      type: "done",
+      message: {
+        content: [
+          { type: "thinking", thinking: "internal" },
+          { type: "text", text: "final answer" },
+        ],
+      },
+    });
   });
 });
 
 describe("createConfiguredOllamaStreamFn", () => {
-  it("uses provider-level baseUrl when model baseUrl is absent", async () => {
-    await withMockNdjsonFetch(
-      [
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
-        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
-      ],
-      async (fetchMock) => {
-        const streamFn = createConfiguredOllamaStreamFn({
-          model: {
-            headers: { Authorization: "Bearer proxy-token" },
-          },
-          providerBaseUrl: "http://provider-host:11434/v1",
-        });
-        const stream = await Promise.resolve(
-          streamFn(
-            {
-              id: "qwen3:32b",
-              api: "ollama",
-              provider: "custom-ollama",
-              contextWindow: 131072,
-            } as never,
-            {
-              messages: [{ role: "user", content: "hello" }],
-            } as never,
-            {
-              apiKey: "ollama-local", // pragma: allowlist secret
-            } as never,
-          ),
-        );
-
-        await collectStreamEvents(stream);
-        const request = getGuardedFetchCall(fetchMock);
-        expect(request.url).toBe("http://provider-host:11434/api/chat");
-        const requestInit = request.init ?? {};
-        expect(requireHeaders(requestInit.headers).Authorization).toBe("Bearer proxy-token");
+  it.each([
+    {
+      name: "remote model endpoint",
+      model: { baseUrl: "https://remote-ollama.example.test" },
+      providerBaseUrl: undefined,
+      managed: true,
+      acquisitions: 0,
+      url: "https://remote-ollama.example.test/api/chat",
+    },
+    {
+      name: "whitespace model endpoint",
+      model: { baseUrl: "   " },
+      providerBaseUrl: undefined,
+      managed: true,
+      acquisitions: 1,
+      url: "http://127.0.0.1:11434/api/chat",
+    },
+    {
+      name: "provider endpoint and proxy auth",
+      model: { headers: { Authorization: "Bearer proxy-token" } },
+      providerBaseUrl: "http://provider-host:11434/v1",
+      managed: false,
+      acquisitions: 0,
+      url: "http://provider-host:11434/api/chat",
+    },
+  ])("routes $name", async ({ model, providerBaseUrl, managed, acquisitions, url }) => {
+    const acquire = vi.fn(async () => ({ release: vi.fn() }));
+    await expectSuccessfulOllamaRequest(
+      {
+        model: { provider: "ollama-gpu" },
+        configured: {
+          model,
+          providerBaseUrl,
+          ...(managed ? { localService: { providerId: "ollama-gpu", acquire } } : {}),
+        },
+        options: managed ? {} : { apiKey: "ollama-local" }, // pragma: allowlist secret
+      },
+      ({ request }) => {
+        expect(acquire).toHaveBeenCalledTimes(acquisitions);
+        expect(request.url).toBe(url);
+        if (model.headers) {
+          expect(request.init?.headers).toMatchObject({ Authorization: "Bearer proxy-token" });
+        }
       },
     );
   });
+
+  it("acquires the exact provider service after final payload and headers, before fetch", async () => {
+    const signal = new AbortController().signal;
+    const leaseRelease = vi.fn();
+    const payloadStarted = Promise.withResolvers<void>();
+    const finishPayload = Promise.withResolvers<void>();
+    let payloadReady = false;
+    const preparationAtAcquisition: boolean[] = [];
+    const acquire = vi.fn(async () => {
+      preparationAtAcquisition.push(payloadReady);
+      return { release: leaseRelease };
+    });
+    const guardRelease = mockResponse(
+      ndjson({ content: "ok" }) + "\n" + ndjson({}, { done: true }),
+    );
+
+    const stream = await createManagedOllamaTestStream({
+      providerId: "ollama-gpu",
+      defaultHeaders: { "X-Provider": "provider", Authorization: "Bearer proxy-token" },
+      options: {
+        apiKey: "real-token", // pragma: allowlist secret
+        headers: { "X-Request": "request" },
+        onPayload: async (payload) => {
+          payloadStarted.resolve();
+          await finishPayload.promise;
+          payloadReady = true;
+          return { ...requireRecord(payload, "payload"), model: "patched" };
+        },
+        signal,
+      },
+      acquire,
+    });
+    const eventsPromise = collectStreamEvents(stream);
+    try {
+      await payloadStarted.promise;
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+      expect(acquire).not.toHaveBeenCalled();
+    } finally {
+      finishPayload.resolve();
+      await eventsPromise;
+    }
+
+    expect(preparationAtAcquisition).toEqual([true]);
+    expect(acquire).toHaveBeenCalledWith(
+      {
+        providerId: "ollama-gpu",
+        baseUrl: "http://provider-host:11434",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer real-token",
+          "X-Provider": "provider",
+          "X-Request": "request",
+        },
+      },
+      signal,
+    );
+    expect(getGuardedFetchJsonBody(fetchWithSsrFGuardMock).model).toBe("patched");
+    expect(acquire.mock.invocationCallOrder[0]).toBeLessThan(
+      expectDefined(fetchWithSsrFGuardMock.mock.invocationCallOrder[0], "fetch call order"),
+    );
+    expect(guardRelease).toHaveBeenCalledOnce();
+    expect(leaseRelease).toHaveBeenCalledOnce();
+    expect(guardRelease.mock.invocationCallOrder[0]).toBeLessThan(
+      expectDefined(leaseRelease.mock.invocationCallOrder[0], "lease release call order"),
+    );
+  });
+
+  it("times out pending local-service acquisition before fetch", async () => {
+    vi.useFakeTimers();
+    try {
+      let acquisitionSignal: AbortSignal | undefined;
+      const acquire = vi.fn((_request, signal) => {
+        const timeoutSignal = expectDefined(signal, "acquisition timeout signal");
+        acquisitionSignal = timeoutSignal;
+        return rejectWhenAborted(timeoutSignal);
+      });
+      const eventsPromise = collectStreamEvents(
+        await createManagedOllamaTestStream({
+          model: { requestTimeoutMs: 25 },
+          acquire,
+        }),
+      );
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(acquire).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(25);
+      const events = await eventsPromise;
+
+      expect(acquisitionSignal?.reason).toMatchObject({
+        name: "TimeoutError",
+        message: "request timed out",
+      });
+      expect(events).toMatchObject([
+        { type: "error", reason: "error", error: { errorMessage: "request timed out" } },
+      ]);
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps caller aborts classified as aborted during acquisition", async () => {
+    const caller = new AbortController();
+    let acquisitionSignal: AbortSignal | undefined;
+    const acquire = vi.fn((_request, signal) => {
+      const combinedSignal = expectDefined(signal, "combined acquisition signal");
+      acquisitionSignal = combinedSignal;
+      return rejectWhenAborted(combinedSignal);
+    });
+    const eventsPromise = collectStreamEvents(
+      await createManagedOllamaTestStream({
+        model: { requestTimeoutMs: 5_000 },
+        options: { signal: caller.signal },
+        acquire,
+      }),
+    );
+    await vi.waitFor(() => expect(acquire).toHaveBeenCalledOnce());
+
+    const reason = new Error("caller stopped");
+    caller.abort(reason);
+    const events = await eventsPromise;
+
+    expect(acquisitionSignal?.reason).toBe(reason);
+    expect(events).toMatchObject([{ type: "error", reason: "aborted" }]);
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
+  it("cleans the acquisition timer before a long progressing stream", async () => {
+    vi.useFakeTimers();
+    try {
+      const source = createControlledNdjsonFetch();
+      fetchWithSsrFGuardMock.mockImplementation(source.fetchImpl);
+      let acquisitionSignal: AbortSignal | undefined;
+      const acquire = vi.fn(async (_request, signal) => {
+        acquisitionSignal = expectDefined(signal, "acquisition timeout signal");
+        return { release: vi.fn() };
+      });
+      const eventsPromise = collectStreamEvents(
+        await createManagedOllamaTestStream({
+          model: { requestTimeoutMs: 25 },
+          acquire,
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
+      expect(getGuardedFetchCall(fetchWithSsrFGuardMock)).toMatchObject({ timeoutMs: 25 });
+      expect(getGuardedFetchCall(fetchWithSsrFGuardMock).signal).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(acquisitionSignal?.aborted).toBe(false);
+      source.pushLine(ndjson({ content: "partial" }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(source.refreshTimeout).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(acquisitionSignal?.aborted).toBe(false);
+      source.pushLine(ndjson({}, { done: true }));
+      source.close();
+      expect((await eventsPromise).at(-1)).toMatchObject({ type: "done" });
+      expect(source.refreshTimeout).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("holds the local-service lease through incomplete NDJSON handling", async () => {
+    const source = createControlledNdjsonFetch();
+    fetchWithSsrFGuardMock.mockImplementation(source.fetchImpl);
+    const leaseRelease = vi.fn();
+    const acquire = vi.fn(async () => ({ release: leaseRelease }));
+    const stream = await createManagedOllamaTestStream({ acquire });
+    const iterator = stream[Symbol.asyncIterator]();
+    source.pushLine(ndjson({ content: "partial" }));
+    await expect(iterator.next()).resolves.toMatchObject({ value: { type: "start" } });
+    expect(leaseRelease).not.toHaveBeenCalled();
+    source.close();
+    const events = await collectStreamEvents(stream);
+    expect(events.at(-1)).toMatchObject({
+      type: "error",
+      reason: "error",
+      error: { errorMessage: OLLAMA_INCOMPLETE_STREAM_ERROR },
+    });
+    expect(source.release).toHaveBeenCalledOnce();
+    expect(leaseRelease).toHaveBeenCalledOnce();
+  });
+  it.each(["empty body", "fetch rejection"] as const)(
+    "releases the service exactly once after %s",
+    async (failure) => {
+      const leaseRelease = vi.fn();
+      const acquire = vi.fn(async () => ({ release: leaseRelease }));
+      const guardRelease = failure === "empty body" ? mockResponse(null) : undefined;
+      if (failure === "fetch rejection") {
+        fetchWithSsrFGuardMock.mockRejectedValue(
+          Object.assign(new Error("connect failed"), { code: "ECONNREFUSED" }),
+        );
+      }
+      const events = await collectStreamEvents(await createManagedOllamaTestStream({ acquire }));
+      expect(acquire).toHaveBeenCalledOnce();
+      expect(leaseRelease).toHaveBeenCalledOnce();
+      expect(events).toMatchObject([{ type: "error" }]);
+      if (guardRelease) {
+        expect(guardRelease).toHaveBeenCalledOnce();
+      } else {
+        expect(events).toHaveLength(1);
+        expect(events[0]).toMatchObject({
+          type: "error",
+          reason: "error",
+          error: { errorMessage: "connect failed", errorCode: "ECONNREFUSED" },
+        });
+      }
+    },
+  );
+
+  it("does not acquire or fetch when payload preparation rejects", async () => {
+    const acquire = vi.fn();
+
+    const events = await collectStreamEvents(
+      await createManagedOllamaTestStream({
+        options: {
+          onPayload: () => {
+            throw new Error("payload rejected");
+          },
+        },
+        acquire,
+      }),
+    );
+
+    expect(events).toMatchObject([{ type: "error", reason: "error" }]);
+    expect(acquire).not.toHaveBeenCalled();
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

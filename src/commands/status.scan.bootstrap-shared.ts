@@ -1,9 +1,14 @@
+import { measureCliCommandStartup } from "../cli/command-startup-timing.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { UpdateCheckResult } from "../infra/update-check.js";
 import { runExec } from "../process/exec.js";
-import { createEmptyTaskAuditSummary } from "../tasks/task-registry.audit.shared.js";
-import { createEmptyTaskRegistrySummary } from "../tasks/task-registry.summary.js";
-import { buildTailscaleHttpsUrl, resolveGatewayProbeSnapshot } from "./status.scan.shared.js";
+import type { StatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
+import {
+  buildTailscaleHttpsUrl,
+  resolveGatewayProbeSnapshot,
+  type GatewayProbeSnapshot,
+} from "./status.scan.shared.js";
+import type { getUpdateCheckResult } from "./status.update.js";
 
 function buildColdStartUpdateResult(): UpdateCheckResult {
   return {
@@ -22,6 +27,7 @@ function buildColdStartAgentLocalStatuses() {
   };
 }
 
+/** Builds an empty summary for cold-start status paths that skip network and session work. */
 export function buildColdStartStatusSummary() {
   return {
     runtimeVersion: null,
@@ -31,8 +37,7 @@ export function buildColdStartStatusSummary() {
     },
     channelSummary: [],
     queuedSystemEvents: [],
-    tasks: createEmptyTaskRegistrySummary(),
-    taskAudit: createEmptyTaskAuditSummary(),
+    degradedSecretOwners: [],
     sessions: {
       paths: [],
       count: 0,
@@ -43,32 +48,20 @@ export function buildColdStartStatusSummary() {
   };
 }
 
-function shouldSkipStatusScanNetworkChecks(params: {
-  coldStart: boolean;
-  hasConfiguredChannels: boolean;
-  all?: boolean;
-}): boolean {
-  return params.coldStart && !params.hasConfiguredChannels && params.all !== true;
-}
-
-type StatusScanExecRunner = (
-  command: string,
-  args: string[],
-  opts?: number | { timeoutMs?: number; maxBuffer?: number; cwd?: string },
-) => Promise<{ stdout: string; stderr: string }>;
-
 type StatusScanCoreBootstrapParams<TAgentStatus> = {
   coldStart: boolean;
   cfg: OpenClawConfig;
+  configPath: string;
+  env: NodeJS.ProcessEnv;
   hasConfiguredChannels: boolean;
-  opts: { timeoutMs?: number; all?: boolean };
-  getTailnetHostname: (runner: StatusScanExecRunner) => Promise<string | null>;
-  getUpdateCheckResult: (params: {
-    timeoutMs: number;
-    fetchGit: boolean;
-    includeRegistry: boolean;
-    updateConfigChannel?: string | null;
-  }) => Promise<UpdateCheckResult>;
+  opts: StatusGatewayProbeBudget & { all?: boolean };
+  fetchGitUpdate?: boolean;
+  includeRegistryUpdate?: boolean;
+  includeLocalStatusRpcFallback?: boolean;
+  gatewaySnapshot?: GatewayProbeSnapshot;
+  onGatewayProgress?: (phase: string) => void;
+  getTailnetHostname: (runner: typeof runExec) => Promise<string | null>;
+  getUpdateCheckResult: typeof getUpdateCheckResult;
   getAgentLocalStatuses: (cfg: OpenClawConfig) => Promise<TAgentStatus>;
 };
 
@@ -76,38 +69,52 @@ export async function createStatusScanCoreBootstrap<TAgentStatus>(
   params: StatusScanCoreBootstrapParams<TAgentStatus>,
 ) {
   const tailscaleMode = params.cfg.gateway?.tailscale?.mode ?? "off";
-  const skipColdStartNetworkChecks = shouldSkipStatusScanNetworkChecks({
-    coldStart: params.coldStart,
-    hasConfiguredChannels: params.hasConfiguredChannels,
-    all: params.opts.all,
-  });
-  const updateTimeoutMs = params.opts.all ? 6500 : 2500;
+  // First-run users without channels should get instant status instead of waiting on network probes.
+  const skipColdStartNetworkChecks =
+    params.coldStart && !params.hasConfiguredChannels && params.opts.all !== true;
+  const statusTimeoutMs = params.opts.timeoutMs ?? 10_000;
+  const tailscaleTimeoutMs = Math.min(1200, statusTimeoutMs);
   const tailscaleDnsPromise =
     tailscaleMode === "off"
       ? Promise.resolve<string | null>(null)
       : params
-          .getTailnetHostname((cmd, args) =>
-            runExec(cmd, args, { timeoutMs: 1200, maxBuffer: 200_000 }),
+          .getTailnetHostname((cmd, args, options) =>
+            runExec(cmd, args, {
+              ...(typeof options === "object" ? options : {}),
+              timeoutMs: tailscaleTimeoutMs,
+            }),
           )
           .catch(() => null);
+  // Update checks can hit git/registry, so cold-start status uses a synthetic unknown result.
   const updatePromise = skipColdStartNetworkChecks
     ? Promise.resolve(buildColdStartUpdateResult())
     : params.getUpdateCheckResult({
-        timeoutMs: updateTimeoutMs,
-        fetchGit: true,
-        includeRegistry: true,
+        timeoutMs: statusTimeoutMs,
+        fetchGit: params.fetchGitUpdate ?? true,
+        includeRegistry: params.includeRegistryUpdate ?? true,
         updateConfigChannel: params.cfg.update?.channel ?? null,
       });
   const agentStatusPromise = skipColdStartNetworkChecks
     ? Promise.resolve(buildColdStartAgentLocalStatuses() as TAgentStatus)
     : params.getAgentLocalStatuses(params.cfg);
-  const gatewayProbePromise = resolveGatewayProbeSnapshot({
-    cfg: params.cfg,
-    opts: {
-      ...params.opts,
-      ...(skipColdStartNetworkChecks ? { skipProbe: true } : {}),
-    },
-  });
+  const gatewayProbePromise = params.gatewaySnapshot
+    ? Promise.resolve(params.gatewaySnapshot)
+    : measureCliCommandStartup(
+        "status.gateway-probe",
+        () =>
+          resolveGatewayProbeSnapshot({
+            cfg: params.cfg,
+            configPath: params.configPath,
+            env: params.env,
+            opts: {
+              ...params.opts,
+              ...(skipColdStartNetworkChecks ? { skipProbe: true } : {}),
+              localStatusRpcFallback: params.includeLocalStatusRpcFallback !== false,
+              onProgress: params.onGatewayProgress,
+            },
+          }),
+        { config: params.cfg, env: params.env },
+      );
 
   return {
     tailscaleMode,

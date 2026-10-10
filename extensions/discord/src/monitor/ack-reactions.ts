@@ -17,10 +17,7 @@ export function createDiscordAckReactionContext(params: {
 }): DiscordReactionRuntimeContext {
   return {
     rest: params.rest,
-    ...createDiscordRuntimeAccountContext({
-      cfg: params.cfg,
-      accountId: params.accountId,
-    }),
+    ...createDiscordRuntimeAccountContext(params),
   };
 }
 
@@ -59,7 +56,7 @@ export function queueInitialDiscordAckReaction(params: {
   if (!params.shouldSendAckReaction || !params.ackReaction) {
     return;
   }
-  void params.reactionAdapter.setReaction(params.ackReaction).catch((err) => {
+  void params.reactionAdapter.setReaction(params.ackReaction).catch((err: unknown) => {
     logAckFailure({
       log: logVerbose,
       channel: "discord",

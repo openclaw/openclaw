@@ -1,0 +1,207 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
+import { extractLeadingHttpStatus } from "../../shared/assistant-error-format.js";
+import { extractHttpResponseBody } from "../../shared/http-error-response.js";
+import { classifyOAuthRefreshFailure } from "../auth-profiles/oauth-refresh-failure.js";
+import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
+import {
+  inferSignalStatus,
+  isExactUnknownNoDetailsError,
+  isReplayInvalidErrorMessage,
+} from "../failover/classification-rules.js";
+import { classifyFailoverReason, classifyFailoverSignal } from "../failover/classify.js";
+import { isContextOverflowErrorFromTables } from "../failover/context-overflow-tables.js";
+import { matchesFormatErrorPattern, isTimeoutErrorMessage } from "../failover/message-patterns.js";
+import type { PreparedProviderFailoverOwner } from "../failover/provider-patterns.js";
+import type { FailoverSignal } from "../failover/signal.js";
+export type ProviderRuntimeFailureKind =
+  | "gateway_storage"
+  | "auth_scope"
+  | "auth_refresh"
+  | "refresh_timeout"
+  | "refresh_contention"
+  | "callback_timeout"
+  | "callback_validation"
+  | "auth_html"
+  /** Plain provider HTTP 401 auth failure that should not leak raw text to chat users. */
+  | "auth_invalid_token"
+  | "upstream_html"
+  | "proxy"
+  | "rate_limit"
+  | "dns"
+  | "timeout"
+  | "tls_certificate"
+  | "model_not_found"
+  | "schema"
+  | "sandbox_blocked"
+  | "replay_invalid"
+  | "empty_response"
+  | "no_error_details"
+  | "unclassified"
+  | "unknown";
+const AUTH_SCOPE_HINT_RE =
+  /\b(?:missing|required|requires|insufficient)\s+(?:the\s+following\s+)?scopes?\b|\bmissing\s+scope\b/i;
+const AUTH_SCOPE_NAME_RE = /\b(?:api\.responses\.write|model\.request)\b/i;
+const AUTH_INVALID_TOKEN_HINT_RE =
+  /\bunauthorized\b|\b(?:invalid|incorrect|expired|stale)[_\s-]?api[_\s-]?key\b|\b(?:invalid|incorrect|expired|stale)\s+(?:token|jwt|credential|api[_\s-]?key)\b|\b(?:token|jwt|credential|api[_\s-]?key)\s+(?:is\s+)?(?:invalid|incorrect|expired|stale)\b/i;
+const HTML_BODY_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
+const HTML_CLOSE_RE = /<\/html>/i;
+const CLOUDFLARE_CHALLENGE_RE =
+  /Enable\s+JavaScript\s+and\s+cookies\s+to\s+continue|cf-browser-verification|__cf_challenge|cdn-cgi\/challenge-platform|challenge-error-text/i;
+const PROXY_ERROR_RE =
+  /\bproxyconnect\b|\bhttps?_proxy\b|\b407\b|\bproxy authentication required\b|\btunnel connection failed\b|\bconnect tunnel\b|\bsocks proxy\b|\bproxy error\b/i;
+const DNS_ERROR_RE = /\benotfound\b|\beai_again\b|\bgetaddrinfo\b|\bno such host\b|\bdns\b/i;
+const INTERRUPTED_NETWORK_ERROR_RE =
+  /\beconnrefused\b|\beconnreset\b|\beconnaborted\b|\benetreset\b|\behostunreach\b|\behostdown\b|\benetunreach\b|\bepipe\b|\bsocket hang up\b|\bconnection refused\b|\bconnection reset\b|\bconnection aborted\b|\bnetwork is unreachable\b|\bhost is unreachable\b|\bfetch failed\b|\bconnection error\b|\bnetwork request failed\b/i;
+const SANDBOX_BLOCKED_RE =
+  /\bapproval is required\b|\bapproval timed out\b|\bapproval was denied\b|\bblocked by sandbox\b|\bsandbox\b.*\b(?:blocked|denied|forbidden|disabled|not allowed)\b|\bexec denied\s*\(/i;
+const OAUTH_FAILURE_PATTERNS = [
+  [/\boauth refresh call\b.*\bexceeded hard timeout\b/i, "refresh_timeout"],
+  [/\bcallback_timeout\b/i, "callback_timeout"],
+  [/\bcallback_validation_failed\b/i, "callback_validation"],
+] as const;
+function isHtmlErrorResponse(raw: string, status?: number): boolean {
+  if (status === undefined || status < 400) {
+    return false;
+  }
+  const candidate = extractLeadingHttpStatus(raw) ? raw : raw.replace(/^error:\s*/i, "").trim();
+  const rest = extractHttpResponseBody(extractLeadingHttpStatus(candidate))?.body ?? candidate;
+  return HTML_BODY_RE.test(rest) && HTML_CLOSE_RE.test(rest);
+}
+function isOpenAICodexScopeContext(raw: string, provider?: string): boolean {
+  const normalizedProvider = normalizeLowercaseStringOrEmpty(provider);
+  return (
+    normalizedProvider === "openai" ||
+    /\bopenai\s+codex\b/i.test(raw) ||
+    /\bcodex\b.*\bscopes?\b/i.test(raw)
+  );
+}
+function isAuthScopeErrorMessage(raw: string, status?: number, provider?: string): boolean {
+  if (!isOpenAICodexScopeContext(raw, provider)) {
+    return false;
+  }
+  const hasScopeHint = AUTH_SCOPE_HINT_RE.test(raw);
+  const hasKnownScopeName = AUTH_SCOPE_NAME_RE.test(raw);
+  if (!hasScopeHint && !hasKnownScopeName) {
+    return false;
+  }
+  return status === undefined ? hasScopeHint : status === 401 || status === 403;
+}
+function isOAuthRefreshContentionMessage(raw: string): boolean {
+  return (
+    /\brefresh_contention\b/i.test(raw) ||
+    (/\bfile lock timeout\b/i.test(raw) &&
+      /(?:\/|\\|^)(?:oauth-refresh|openclaw-oauth-refresh)[^/\n\\]*?(?:\.lock)?\b/i.test(raw))
+  );
+}
+export function classifyProviderRuntimeFailureKind(
+  signal: FailoverSignal | string,
+  opts?: { providerPlugin?: PreparedProviderFailoverOwner | null },
+): ProviderRuntimeFailureKind {
+  const normalizedSignal = typeof signal === "string" ? { message: signal } : signal;
+  if (classifyGatewayStorageFailure(normalizedSignal)) {
+    return "gateway_storage";
+  }
+  const message = normalizedSignal.message?.trim() ?? "";
+  const status = inferSignalStatus(normalizedSignal);
+  const hasStructuredErrorSignal = Boolean(normalizedSignal.code || normalizedSignal.errorType);
+  if (!message && typeof status !== "number" && !hasStructuredErrorSignal) {
+    return "empty_response";
+  }
+  if (
+    normalizedSignal.code === "refresh_contention" ||
+    (message && isOAuthRefreshContentionMessage(message))
+  ) {
+    return "refresh_contention";
+  }
+  for (const [pattern, kind] of OAUTH_FAILURE_PATTERNS) {
+    if (message && pattern.test(message)) {
+      return kind;
+    }
+  }
+  if (message && classifyOAuthRefreshFailure(message)) {
+    return "auth_refresh";
+  }
+  if (message && isAuthScopeErrorMessage(message, status, normalizedSignal.provider)) {
+    return "auth_scope";
+  }
+  if (message && (status === 407 || PROXY_ERROR_RE.test(message))) {
+    return "proxy";
+  }
+  if (message && isHtmlErrorResponse(message, status)) {
+    // Cloudflare challenge pages block programmatic requests at the CDN layer.
+    // These are upstream gateway blocks, not authentication failures — surface
+    // the more accurate "upstream_html" message, which already mentions
+    // "CDN or gateway (e.g. Cloudflare) blocked the request".
+    if (status === 403 && CLOUDFLARE_CHALLENGE_RE.test(message)) {
+      return "upstream_html";
+    }
+    return status === 401 || status === 403 ? "auth_html" : "upstream_html";
+  }
+  const failoverClassification = classifyFailoverSignal(
+    { ...normalizedSignal, status, message: message || undefined },
+    opts,
+  );
+  const failoverReason =
+    failoverClassification?.kind === "reason" ? failoverClassification.reason : undefined;
+  switch (failoverReason) {
+    case "tls_certificate":
+    case "rate_limit":
+    case "model_not_found":
+      return failoverReason;
+    default:
+      break;
+  }
+  if (message && DNS_ERROR_RE.test(message)) {
+    return "dns";
+  }
+  if (message && (formatExecDeniedUserMessage(message) || SANDBOX_BLOCKED_RE.test(message))) {
+    return "sandbox_blocked";
+  }
+  if (message && isReplayInvalidErrorMessage(message)) {
+    return "replay_invalid";
+  }
+  const schemaOptions = message ? { ...opts, provider: normalizedSignal.provider } : undefined;
+  // Schema copy requires message evidence, not a generic HTTP 400 classification.
+  if (
+    message &&
+    !isContextOverflowErrorFromTables(message) &&
+    (classifyFailoverReason(message, schemaOptions) === "format" ||
+      matchesFormatErrorPattern(message))
+  ) {
+    return "schema";
+  }
+  // Plain HTTP 401 / invalid-token replies should be safe chat copy, but the
+  // same failover reason also covers plain 403 and status-less auth payloads.
+  // Require positive 401 evidence so we do not claim the wrong HTTP status.
+  const messageMentions401 = /\b401\b/.test(message);
+  const messageMentions403 = /\b403\b/.test(message);
+  const has401Evidence =
+    status === 401 || (status === undefined && messageMentions401 && !messageMentions403);
+  const hasPermissionScopeSignal =
+    AUTH_SCOPE_HINT_RE.test(message) || AUTH_SCOPE_NAME_RE.test(message);
+  if (
+    failoverReason === "auth" &&
+    has401Evidence &&
+    AUTH_INVALID_TOKEN_HINT_RE.test(message) &&
+    !hasPermissionScopeSignal
+  ) {
+    return "auth_invalid_token";
+  }
+  if (failoverReason === "timeout" || failoverReason === "overloaded") {
+    return "timeout";
+  }
+  if (
+    message &&
+    (isTimeoutErrorMessage(message) ||
+      INTERRUPTED_NETWORK_ERROR_RE.test(message) ||
+      (status !== undefined &&
+        [408, 499, 500, 502, 503, 504, 521, 522, 523, 524, 529].includes(status)))
+  ) {
+    return "timeout";
+  }
+  if (message && isExactUnknownNoDetailsError(message)) {
+    return "no_error_details";
+  }
+  return "unclassified";
+}

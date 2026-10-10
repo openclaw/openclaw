@@ -1,0 +1,106 @@
+import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { compactionWatchdogs } from "../../context-engine/compaction-watchdog.js";
+import type { CompactResult, ContextEngine } from "../../context-engine/types.js";
+import { createAbortError, racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import { runAbortableTimeout } from "../../node-host/with-timeout.js";
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
+
+const EMBEDDED_COMPACTION_TIMEOUT_MS = 180_000;
+// Progress resets keep a streaming request alive, so the whole operation also has a
+// hard ceiling. Ten windows leaves several times the headroom a near-full-context
+// staged compaction needs, while still stopping a stream that trickles forever.
+const COMPACTION_CEILING_WINDOWS = 10;
+
+export function resolveCompactionTimeoutMs(cfg?: OpenClawConfig): number {
+  return (
+    finiteSecondsToTimerSafeMilliseconds(cfg?.agents?.defaults?.compaction?.timeoutSeconds, {
+      floorSeconds: true,
+    }) ?? EMBEDDED_COMPACTION_TIMEOUT_MS
+  );
+}
+
+export async function compactWithSafetyTimeout<T>(
+  compact: (abortSignal: AbortSignal | undefined, resetTimeout: () => void) => Promise<T>,
+  timeoutMs: number = EMBEDDED_COMPACTION_TIMEOUT_MS,
+  opts?: {
+    abortSignal?: AbortSignal;
+    onCancel?: () => void;
+    /** Epoch ms ceiling; defaults to COMPACTION_CEILING_WINDOWS windows from now. */
+    deadlineAt?: number;
+  },
+): Promise<T> {
+  const deadlineAt = opts?.deadlineAt ?? Date.now() + timeoutMs * COMPACTION_CEILING_WINDOWS;
+  let canceled = false;
+  const cancel = () => {
+    if (canceled) {
+      return;
+    }
+    canceled = true;
+    try {
+      opts?.onCancel?.();
+    } catch {
+      // Best-effort cancellation hook. Keep the timeout/abort path intact even
+      // if the underlying compaction cancel operation throws.
+    }
+  };
+
+  return await runAbortableTimeout(
+    async (timeoutSignal, resetTimeout) => {
+      const abortSignal = opts?.abortSignal;
+      const composedAbortSignal =
+        timeoutSignal && abortSignal
+          ? AbortSignal.any([timeoutSignal, abortSignal])
+          : (timeoutSignal ?? abortSignal);
+
+      timeoutSignal?.addEventListener("abort", cancel, { once: true });
+
+      try {
+        return await racePromiseWithAbortSignal(
+          () => trackAsyncWork(() => compact(composedAbortSignal, resetTimeout)),
+          abortSignal,
+          (signal) => {
+            cancel();
+            const reason = signal.reason;
+            return reason instanceof Error
+              ? reason
+              : createAbortError("aborted", reason ? { cause: reason } : undefined);
+          },
+        );
+      } finally {
+        timeoutSignal?.removeEventListener("abort", cancel);
+      }
+    },
+    timeoutMs,
+    "Compaction",
+    deadlineAt - Date.now(),
+  );
+}
+
+type ContextEngineCompactParams = Parameters<ContextEngine["compact"]>[0];
+
+/**
+ * Every engine is bounded by one host window and receives the composed
+ * timeout/caller cancellation signal. Only the built-in runtime delegate, reached
+ * with that signal, refreshes the window while its model requests make progress,
+ * up to the operation ceiling it also receives.
+ */
+export function compactContextEngineWithSafetyTimeout(
+  contextEngine: Pick<ContextEngine, "compact" | "info">,
+  params: ContextEngineCompactParams,
+  timeoutMs: number = EMBEDDED_COMPACTION_TIMEOUT_MS,
+  abortSignal?: AbortSignal,
+): Promise<CompactResult> {
+  const deadlineAt = Date.now() + timeoutMs * COMPACTION_CEILING_WINDOWS;
+  return compactWithSafetyTimeout(
+    (compactionAbortSignal, resetTimeout) => {
+      if (!compactionAbortSignal) {
+        return contextEngine.compact(params);
+      }
+      compactionWatchdogs.set(compactionAbortSignal, { reset: resetTimeout, deadlineAt });
+      return contextEngine.compact({ ...params, abortSignal: compactionAbortSignal });
+    },
+    timeoutMs,
+    abortSignal ? { abortSignal, deadlineAt } : { deadlineAt },
+  );
+}

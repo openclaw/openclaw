@@ -1,8 +1,11 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
+import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-resolution";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { OpenClawPluginApi } from "../runtime-api.js";
+import type { OpenClawConfig } from "../runtime-api.js";
 import {
+  listEnabledFeishuAccounts,
   listFeishuAccountIds,
+  resolveDefaultFeishuAccountId,
   resolveFeishuAccount,
   resolveFeishuRuntimeAccount,
 } from "./accounts.js";
@@ -11,24 +14,58 @@ import { resolveToolsConfig } from "./tools-config.js";
 import type { FeishuToolsConfig, ResolvedFeishuAccount } from "./types.js";
 
 type AccountAwareParams = { accountId?: string };
+type FeishuToolFamily = keyof FeishuToolsConfig;
+type FeishuToolRequirement = {
+  family: FeishuToolFamily;
+  label: string;
+};
 
-function resolveImplicitToolAccountId(params: {
-  api: Pick<OpenClawPluginApi, "config">;
+type FeishuToolAccountParams = {
+  cfg: OpenClawConfig;
   executeParams?: AccountAwareParams;
   defaultAccountId?: string;
-}): string | undefined {
+  requiredTool: FeishuToolRequirement;
+};
+
+function resolveImplicitToolAccountId(params: FeishuToolAccountParams): string {
   const explicitAccountId = normalizeOptionalString(params.executeParams?.accountId);
   if (explicitAccountId) {
-    return explicitAccountId;
+    const normalizedAccountId = normalizeOptionalAccountId(explicitAccountId);
+    if (!normalizedAccountId) {
+      throw new Error(`Invalid Feishu account ID "${explicitAccountId}"`);
+    }
+    const listedAccountId =
+      listFeishuAccountIds(params.cfg).find(
+        (accountId) => normalizeOptionalAccountId(accountId) === normalizedAccountId,
+      ) ??
+      (() => {
+        const defaultAccountId = resolveDefaultFeishuAccountId(params.cfg);
+        return normalizeOptionalAccountId(defaultAccountId) === normalizedAccountId
+          ? defaultAccountId
+          : undefined;
+      })();
+    if (!listedAccountId) {
+      throw new Error(`Unknown Feishu account "${explicitAccountId}"`);
+    }
+    const account = resolveFeishuAccount({
+      cfg: params.cfg,
+      accountId: normalizedAccountId,
+    });
+    if (!account.enabled) {
+      throw new Error(`Feishu account "${listedAccountId}" is disabled`);
+    }
+    return normalizedAccountId;
   }
 
-  const contextualAccountId = normalizeOptionalString(params.defaultAccountId);
-  if (
-    contextualAccountId &&
-    listFeishuAccountIds(params.api.config).includes(contextualAccountId)
-  ) {
+  const contextualAccountId = normalizeOptionalAccountId(params.defaultAccountId);
+  const hasContextualAccount =
+    contextualAccountId !== undefined &&
+    listFeishuAccountIds(params.cfg).some(
+      (accountId) => normalizeOptionalAccountId(accountId) === contextualAccountId,
+    );
+  if (hasContextualAccount) {
     const contextualAccount = resolveFeishuAccount({
-      cfg: params.api.config,
+      cfg: params.cfg,
       accountId: contextualAccountId,
     });
     if (contextualAccount.enabled) {
@@ -37,41 +74,51 @@ function resolveImplicitToolAccountId(params: {
   }
 
   const configuredDefaultAccountId = normalizeOptionalString(
-    (params.api.config?.channels?.feishu as { defaultAccount?: unknown } | undefined)
-      ?.defaultAccount,
+    (params.cfg.channels?.feishu as { defaultAccount?: unknown } | undefined)?.defaultAccount,
   );
-  if (configuredDefaultAccountId) {
+  // A routing preference must not reactivate credentials that the operator disabled.
+  if (
+    configuredDefaultAccountId &&
+    resolveFeishuAccount({ cfg: params.cfg, accountId: configuredDefaultAccountId }).enabled
+  ) {
     return configuredDefaultAccountId;
   }
 
-  return undefined;
+  for (const accountId of listFeishuAccountIds(params.cfg)) {
+    const account = resolveFeishuAccount({ cfg: params.cfg, accountId });
+    if (
+      account.enabled &&
+      account.configured &&
+      resolveToolsConfig(account.config.tools)[params.requiredTool.family]
+    ) {
+      return accountId;
+    }
+  }
+
+  throw new Error(`No usable Feishu account has ${params.requiredTool.label} tools enabled`);
 }
 
-export function resolveFeishuToolAccount(params: {
-  api: Pick<OpenClawPluginApi, "config">;
-  executeParams?: AccountAwareParams;
-  defaultAccountId?: string;
-}): ResolvedFeishuAccount {
-  if (!params.api.config) {
-    throw new Error("Feishu config unavailable");
-  }
-  return resolveFeishuRuntimeAccount({
-    cfg: params.api.config,
+export function resolveFeishuToolAccount(params: FeishuToolAccountParams): ResolvedFeishuAccount {
+  const account = resolveFeishuRuntimeAccount({
+    cfg: params.cfg,
     accountId: resolveImplicitToolAccountId(params),
   });
+  if (!resolveToolsConfig(account.config.tools)[params.requiredTool.family]) {
+    throw new Error(
+      `Feishu ${params.requiredTool.label} tools are disabled for account "${account.accountId}"`,
+    );
+  }
+  return account;
 }
 
-export function createFeishuToolClient(params: {
-  api: Pick<OpenClawPluginApi, "config">;
-  executeParams?: AccountAwareParams;
-  defaultAccountId?: string;
-}): Lark.Client {
+export function createFeishuToolClient(params: FeishuToolAccountParams): Lark.Client {
   return createFeishuClient(resolveFeishuToolAccount(params));
 }
 
 export function resolveAnyEnabledFeishuToolsConfig(
-  accounts: ResolvedFeishuAccount[],
+  config: OpenClawConfig,
 ): Required<FeishuToolsConfig> {
+  const accounts = listEnabledFeishuAccounts(config);
   const merged: Required<FeishuToolsConfig> = {
     doc: false,
     chat: false,
@@ -79,6 +126,7 @@ export function resolveAnyEnabledFeishuToolsConfig(
     drive: false,
     perm: false,
     scopes: false,
+    bitable: false,
   };
   for (const account of accounts) {
     const cfg = resolveToolsConfig(account.config.tools);
@@ -88,6 +136,7 @@ export function resolveAnyEnabledFeishuToolsConfig(
     merged.drive = merged.drive || cfg.drive;
     merged.perm = merged.perm || cfg.perm;
     merged.scopes = merged.scopes || cfg.scopes;
+    merged.bitable = merged.bitable || cfg.bitable;
   }
   return merged;
 }

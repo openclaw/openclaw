@@ -1,18 +1,14 @@
 import {
-  fetchRemoteEmbeddingVectors,
+  createRemoteEmbeddingProvider,
+  normalizeEmbeddingModelWithPrefixes,
   resolveRemoteEmbeddingClient,
   type MemoryEmbeddingProvider,
   type MemoryEmbeddingProviderCreateOptions,
+  type RemoteEmbeddingClient,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { OPENAI_DEFAULT_EMBEDDING_MODEL } from "./default-models.js";
 
-export type OpenAiEmbeddingClient = {
-  baseUrl: string;
-  headers: Record<string, string>;
-  ssrfPolicy?: SsrFPolicy;
-  fetchImpl?: typeof fetch;
-  model: string;
+export type OpenAiEmbeddingClient = RemoteEmbeddingClient & {
   inputType?: string;
   queryInputType?: string;
   documentInputType?: string;
@@ -20,7 +16,6 @@ export type OpenAiEmbeddingClient = {
 };
 
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
-export const DEFAULT_OPENAI_EMBEDDING_MODEL = OPENAI_DEFAULT_EMBEDDING_MODEL;
 const OPENAI_MAX_INPUT_TOKENS: Record<string, number> = {
   "text-embedding-3-small": 8192,
   "text-embedding-3-large": 8192,
@@ -28,83 +23,58 @@ const OPENAI_MAX_INPUT_TOKENS: Record<string, number> = {
 };
 
 function normalizeOpenAiModel(model: string): string {
-  const trimmed = model.trim();
-  if (!trimmed) {
-    return DEFAULT_OPENAI_EMBEDDING_MODEL;
-  }
-  return trimmed.startsWith("openai/") ? trimmed.slice("openai/".length) : trimmed;
+  return normalizeEmbeddingModelWithPrefixes({
+    model,
+    defaultModel: OPENAI_DEFAULT_EMBEDDING_MODEL,
+    prefixes: ["openai/"],
+  });
 }
 
 export async function createOpenAiEmbeddingProvider(
   options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<{ provider: MemoryEmbeddingProvider; client: OpenAiEmbeddingClient }> {
-  const client = await resolveOpenAiEmbeddingClient(options);
-  const url = `${client.baseUrl.replace(/\/$/, "")}/embeddings`;
-
-  const resolveInputType = (kind: "query" | "document"): string | undefined => {
-    const explicit = kind === "query" ? client.queryInputType : client.documentInputType;
-    const value = explicit ?? client.inputType;
-    return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-  };
-
-  const embed = async (
-    input: string[],
-    kind: "query" | "document",
-    signal?: AbortSignal,
-  ): Promise<number[][]> => {
-    if (input.length === 0) {
-      return [];
-    }
-    const inputType = resolveInputType(kind);
-    return await fetchRemoteEmbeddingVectors({
-      url,
-      headers: client.headers,
-      ssrfPolicy: client.ssrfPolicy,
-      fetchImpl: client.fetchImpl,
-      signal,
-      body: {
-        model: client.model,
-        input,
-        ...(typeof client.outputDimensionality === "number"
-          ? { dimensions: client.outputDimensionality }
-          : {}),
-        ...(inputType ? { input_type: inputType } : {}),
-      },
-      errorPrefix: "openai embeddings failed",
-    });
-  };
-
-  return {
-    provider: {
-      id: "openai",
-      model: client.model,
-      ...(typeof OPENAI_MAX_INPUT_TOKENS[client.model] === "number"
-        ? { maxInputTokens: OPENAI_MAX_INPUT_TOKENS[client.model] }
-        : {}),
-      embedQuery: async (text, options) => {
-        const [vec] = await embed([text], "query", options?.signal);
-        return vec ?? [];
-      },
-      embedBatch: async (texts, options) => await embed(texts, "document", options?.signal),
-    },
-    client,
-  };
-}
-
-async function resolveOpenAiEmbeddingClient(
-  options: MemoryEmbeddingProviderCreateOptions,
-): Promise<OpenAiEmbeddingClient> {
-  const client = await resolveRemoteEmbeddingClient({
-    provider: "openai",
+  const originalModel = options.model;
+  const resolvedClient = await resolveRemoteEmbeddingClient({
+    provider: options.provider ?? "openai",
+    capability: "embedding",
     options,
     defaultBaseUrl: DEFAULT_OPENAI_BASE_URL,
     normalizeModel: normalizeOpenAiModel,
   });
-  return {
-    ...client,
+  // Routers expect the provider-qualified model name; only native OpenAI strips it.
+  if (
+    URL.parse(resolvedClient.baseUrl)?.hostname.toLowerCase().replace(/\.+$/, "") !==
+      "api.openai.com" &&
+    originalModel.startsWith("openai/")
+  ) {
+    resolvedClient.model = `openai/${normalizeOpenAiModel(originalModel)}`;
+  }
+  const client: OpenAiEmbeddingClient = {
+    ...resolvedClient,
     inputType: options.inputType,
     queryInputType: options.queryInputType,
     documentInputType: options.documentInputType,
-    outputDimensionality: options.outputDimensionality,
+    outputDimensionality: options.dimensions,
+  };
+  return {
+    provider: createRemoteEmbeddingProvider({
+      id: "openai",
+      client,
+      errorPrefix: "openai embeddings failed",
+      maxInputTokens: OPENAI_MAX_INPUT_TOKENS[normalizeOpenAiModel(client.model)],
+      buildRequestFields: (kind) => {
+        const explicit = kind === "query" ? client.queryInputType : client.documentInputType;
+        const value = explicit ?? client.inputType;
+        const inputType =
+          typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+        return {
+          ...(typeof client.outputDimensionality === "number"
+            ? { dimensions: client.outputDimensionality }
+            : {}),
+          ...(inputType ? { input_type: inputType } : {}),
+        };
+      },
+    }),
+    client,
   };
 }

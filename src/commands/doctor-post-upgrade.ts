@@ -1,0 +1,194 @@
+import crypto from "node:crypto";
+import fsSync from "node:fs";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { hasErrnoCode } from "../infra/errno.js";
+import type { UpdateChannel } from "../infra/update-channels.js";
+import { formatConsoleDiagnosticLine } from "../logging/json-console-line.js";
+import { resolveInstalledPluginIndexInstallOwner } from "../plugins/installed-plugin-index-install-owner.js";
+import { isOptionalPluginManifestFile } from "../plugins/installed-plugin-index-manifest.js";
+import { readPersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
+import { resolvePackageExtensionEntries, type PackageManifest } from "../plugins/manifest.js";
+import { validatePackageExtensionEntriesForInstall } from "../plugins/package-entry-resolution.js";
+import {
+  detectPluginVersionDrift,
+  resolvePluginVersionDriftRegistryLag,
+  resolvePluginVersionDriftTargets,
+  resolvePluginVersionDriftUpdateCommand,
+} from "../plugins/plugin-version-drift.js";
+import { VERSION } from "../version.js";
+import {
+  POST_UPGRADE_PROBE_CODES,
+  type PostUpgradeFinding,
+  type PostUpgradeReport,
+} from "./doctor-post-upgrade.types.js";
+
+function buildReport(findings: PostUpgradeFinding[]): PostUpgradeReport {
+  return { probesRun: [...POST_UPGRADE_PROBE_CODES], findings };
+}
+
+function isBundledSourceCheckoutPluginRoot(pluginRootDir: string): boolean {
+  let current = path.resolve(pluginRootDir);
+  while (true) {
+    const extensionsDir = path.dirname(current);
+    if (path.basename(extensionsDir) === "extensions") {
+      const packageRoot = path.dirname(extensionsDir);
+      return [".git", "pnpm-workspace.yaml", "src"].every((entry) =>
+        fsSync.existsSync(path.join(packageRoot, entry)),
+      );
+    }
+    if (extensionsDir === current) {
+      return false;
+    }
+    current = extensionsDir;
+  }
+}
+
+export async function runPostUpgradeProbes(params: {
+  stateDir?: string;
+  updateChannel?: UpdateChannel;
+}): Promise<PostUpgradeReport> {
+  const findings: PostUpgradeFinding[] = [];
+  const installs = await readPersistedInstalledPluginIndex(params);
+  if (!installs) {
+    findings.push({
+      level: "error",
+      code: "plugin.index_unavailable",
+      message:
+        "Installed plugin index is missing, unreadable, or malformed. Run `openclaw plugins registry --refresh` to rebuild it before post-upgrade validation.",
+    });
+    return buildReport(findings);
+  }
+
+  const enabledPlugins = installs.plugins.filter((record) => record.enabled);
+  const installRecords = Object.fromEntries(
+    Object.entries(installs.installRecords).filter(([id]) =>
+      enabledPlugins.some(
+        (record) =>
+          record.pluginId === id || resolveInstalledPluginIndexInstallOwner(record) === id,
+      ),
+    ),
+  );
+  // Post-upgrade validates the newly installed CLI even while the old Gateway
+  // is still running; the persisted index owns the selected plugins' enablement.
+  // Carry only update intent so current config cannot re-filter that selection.
+  const drift = await resolvePluginVersionDriftTargets(
+    detectPluginVersionDrift({
+      gatewayVersion: VERSION,
+      installRecords,
+      config: { update: { channel: params.updateChannel } },
+    }),
+  );
+  for (const entry of drift.drifts) {
+    const registryLag = resolvePluginVersionDriftRegistryLag(entry);
+    const updateCommand = resolvePluginVersionDriftUpdateCommand(entry);
+    const repair = registryLag
+      ? `The registry already serves ${registryLag.registryVersion}; no release reaches ${registryLag.expectedVersion} yet, so no update applies.`
+      : updateCommand
+        ? `Run \`${updateCommand}\`, then restart the Gateway.`
+        : "No confirmed repair target is available; check registry availability and rerun this command.";
+    findings.push({
+      level: "warn",
+      code: "plugin.version_drift",
+      plugin: entry.pluginId,
+      message: `Plugin ${entry.pluginId} is ${entry.installedVersion}, but OpenClaw is ${VERSION}. ${repair}`,
+    });
+  }
+
+  for (const record of enabledPlugins) {
+    const addError = (code: string, message: string, entry?: string) =>
+      findings.push({
+        level: "error",
+        code,
+        message: `Plugin ${record.pluginId}: ${message}`,
+        plugin: record.pluginId,
+        ...(entry ? { entry } : {}),
+      });
+    const pkgRelPath =
+      record.packageJson?.path ??
+      (await fs.access(path.join(record.rootDir, "package.json")).then(
+        () => "package.json",
+        () => undefined,
+      ));
+    if (pkgRelPath) {
+      let pkg: PackageManifest;
+      try {
+        const parsed: unknown = JSON.parse(
+          await fs.readFile(path.join(record.rootDir, pkgRelPath), "utf-8"),
+        );
+        if (!isRecord(parsed)) {
+          throw new Error("package.json must contain a JSON object");
+        }
+        pkg = parsed as PackageManifest;
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        const message = `[doctor-post-upgrade] could not read package.json for ${record.pluginId} at ${record.rootDir}: ${reason}`;
+        process.stderr.write(`${formatConsoleDiagnosticLine({ level: "warn", message })}\n`);
+        // A declared package is required to validate its runtime entry; logging
+        // alone otherwise makes a broken enabled plugin exit as healthy.
+        addError(
+          "plugin.entry_unresolved",
+          `could not read package.json (${pkgRelPath}): ${reason}. Reinstall the plugin or run \`openclaw plugins registry --refresh\`.`,
+          pkgRelPath,
+        );
+        continue;
+      }
+      const resolvedEntries = resolvePackageExtensionEntries(pkg);
+      if (resolvedEntries.status === "invalid") {
+        addError(
+          "plugin.entry_unresolved",
+          `${resolvedEntries.error}. Reinstall the plugin or run \`openclaw plugins registry --refresh\`.`,
+          pkgRelPath,
+        );
+      } else if (resolvedEntries.status === "ok") {
+        const entries = resolvedEntries.entries;
+        // Delegate to the install-time resolver so the probe enforces the same
+        // contract as plugin install/discovery: runtimeExtensions shape, plugin-root
+        // boundary, and inferred-built-output / TypeScript-source-only handling.
+        const validation = await validatePackageExtensionEntriesForInstall({
+          packageDir: record.rootDir,
+          extensions: [...entries],
+          manifest: pkg,
+          allowSourceTypeScriptEntries:
+            record.origin === "workspace" ||
+            record.origin === "config" ||
+            (record.origin === "bundled" && isBundledSourceCheckoutPluginRoot(record.rootDir)),
+        });
+        if (!validation.ok) {
+          const offendingEntry = entries.find((entry) => validation.error.includes(entry));
+          addError("plugin.entry_unresolved", validation.error, offendingEntry);
+        }
+      }
+    }
+
+    if (record.manifestPath) {
+      let currentHash: string;
+      try {
+        const raw = await fs.readFile(record.manifestPath);
+        currentHash = crypto.createHash("sha256").update(raw).digest("hex");
+      } catch (err) {
+        // Doctor checks current disk state; cached existence can predate a file transition.
+        if (hasErrnoCode(err, "ENOENT") && isOptionalPluginManifestFile(record)) {
+          continue;
+        }
+        const reason = err instanceof Error ? err.message : String(err);
+        addError(
+          "plugin.manifest_unavailable",
+          `could not read indexed manifest (${record.manifestPath}): ${reason}. Reinstall the plugin or run \`openclaw plugins registry --refresh\`.`,
+        );
+        continue;
+      }
+      if (record.manifestHash && currentHash !== record.manifestHash) {
+        findings.push({
+          level: "warn",
+          code: "plugin.manifest_drift",
+          message: `Plugin ${record.pluginId} manifest hash drifted from the installed plugin index. Run \`openclaw plugins registry --refresh\` to re-sync.`,
+          plugin: record.pluginId,
+        });
+      }
+    }
+  }
+
+  return buildReport(findings);
+}

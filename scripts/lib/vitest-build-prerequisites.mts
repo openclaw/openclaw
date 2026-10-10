@@ -1,0 +1,822 @@
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import { createRequire } from "node:module";
+import path from "node:path";
+import { startupCorpusTestFiles } from "../../test/vitest/vitest.startup-corpus-paths.mjs";
+import { fullSuiteVitestShards } from "../../test/vitest/vitest.test-shards.mjs";
+import { uiE2eRealGatewayTestFiles } from "../../test/vitest/vitest.ui-paths.mjs";
+import { ensureKyselyTypes } from "../generate-kysely-types.mts";
+import { runManagedCommand } from "./managed-child-process.mts";
+import { resolveRepoRoot } from "./repo-root.mjs";
+
+// A private-QA build also satisfies ordinary runtime readers.
+const VITEST_PRETEST_BUILD_MODES = ["private-qa", "runtime"] as const;
+const CONTROL_UI_E2E_CONFIG = "test/vitest/vitest.ui-e2e.config.ts";
+const aiPackageConsumer = {
+  file: "packages/ai/src/package.e2e.test.ts",
+  configs: ["test/vitest/vitest.e2e.config.ts"],
+  dir: "",
+};
+export type VitestPretestBuildMode = (typeof VITEST_PRETEST_BUILD_MODES)[number];
+type SetupCommandRunner = (args: string[], env: NodeJS.ProcessEnv) => Promise<number>;
+
+export type VitestRuntimeTestSelection = {
+  configs?: readonly string[];
+  includePatterns?: readonly string[] | null;
+  matchesFile?: (
+    file: string,
+    included: boolean,
+    includePatterns: readonly string[] | null | undefined,
+  ) => boolean;
+};
+
+// These tests consume built runtime artifacts. Prepare their strongest
+// prerequisite before admitting any workers: a child build invalidates dist
+// while unrelated workers may still be importing its public plugin facades.
+const runtimeConsumers = [
+  {
+    file: "src/process/exec.windows.integration.test.ts",
+    configs: ["test/vitest/vitest.process.config.ts"],
+    mode: "runtime",
+    dir: "src",
+  },
+  {
+    file: "src/tui/tui-session-identity-pty.e2e.test.ts",
+    configs: ["test/vitest/vitest.tui-pty.config.ts"],
+    mode: "runtime",
+    dir: "src",
+  },
+  {
+    file: "src/gateway/server-methods/agent.visitor-access.test.ts",
+    configs: [
+      "test/vitest/vitest.gateway-methods-isolated.config.ts",
+      "test/vitest/vitest.gateway.config.ts",
+    ],
+    mode: "runtime",
+    dir: "src/gateway",
+  },
+  {
+    file: "src/gateway/setup-inference.first-signin.integration.test.ts",
+    configs: [
+      "test/vitest/vitest.gateway-database-workers.config.ts",
+      "test/vitest/vitest.gateway.config.ts",
+    ],
+    mode: "runtime",
+    dir: "",
+  },
+  {
+    file: "src/plugins/loader.test.ts",
+    configs: ["test/vitest/vitest.bundled.config.ts"],
+    mode: "runtime",
+    dir: "",
+  },
+  ...[
+    "src/plugins/setup-registry.migrations.test.ts",
+    "src/plugins/source-checkout-runtime.test.ts",
+  ].map((file) => ({
+    file,
+    configs: ["test/vitest/vitest.unit-fast.config.ts"],
+    mode: "runtime" as const,
+    dir: "",
+  })),
+  ...[
+    "extensions/deepinfra/provider.contract.test.ts",
+    "extensions/file-transfer/src/workspace-service.test.ts",
+    "extensions/google-meet/src/transports/chrome-startup.test.ts",
+  ].map((file) => ({
+    file,
+    configs: ["test/vitest/vitest.extensions.config.ts"],
+    mode: "runtime" as const,
+    dir: "extensions",
+  })),
+  {
+    file: "src/node-host/linux-node-plugin.integration.test.ts",
+    configs: ["test/vitest/vitest.unit.config.ts", "test/vitest/vitest.unit-src.config.ts"],
+    mode: "runtime",
+    dir: "",
+  },
+  {
+    file: "src/entry.memory-json.test.ts",
+    configs: ["test/vitest/vitest.infra.config.ts"],
+    mode: "runtime",
+    dir: "",
+  },
+  ...[
+    "test/openai-model-discovery-auth-order.test.ts",
+    "test/plugin-npm-runtime-build.test.ts",
+    "test/scripts/plugin-inventory-module-refs.test.ts",
+  ].map((file) => ({
+    file,
+    configs: ["test/vitest/vitest.tooling.config.ts"],
+    mode: "runtime" as const,
+    dir: "",
+  })),
+  {
+    file: "src/channels/plugins/contracts/directory.registry-backed-shard-b.contract.test.ts",
+    configs: ["test/vitest/vitest.contracts-channel-config.config.ts"],
+    mode: "runtime",
+    dir: "",
+  },
+  ...[
+    "src/channels/plugins/contracts/directory.registry-backed-shard-d.contract.test.ts",
+    "src/channels/plugins/contracts/surfaces-only.registry-backed-shard-d.contract.test.ts",
+  ].map((file) => ({
+    file,
+    configs: ["test/vitest/vitest.contracts-channel-session.config.ts"],
+    mode: "runtime" as const,
+    dir: "",
+  })),
+  {
+    file: "src/channels/plugins/contracts/plugin-shape.contract.test.ts",
+    configs: ["test/vitest/vitest.contracts-channel-registry.config.ts"],
+    mode: "private-qa",
+    dir: "",
+  },
+  {
+    file: "src/plugin-sdk/channel-entry-contract.lifecycle.test.ts",
+    configs: ["test/vitest/vitest.plugin-sdk.config.ts"],
+    mode: "runtime",
+    dir: "src",
+  },
+  ...[
+    "src/agents/runtime-plugins.context-engine.integration.test.ts",
+    "src/agents/tool-surface-plan.provider-catalog.integration.test.ts",
+  ].map((file) => ({
+    file,
+    configs: ["test/vitest/vitest.agents-core.config.ts", "test/vitest/vitest.agents.config.ts"],
+    mode: "runtime" as const,
+    dir: "src/agents",
+  })),
+  ...[
+    "src/agents/simple-completion-runtime.plugin-scope.test.ts",
+    // Compiled catalog workers load the fixture's public SDK through built host artifacts.
+    "src/agents/prepared-model-catalog-worker.custody.integration.test.ts",
+    "src/agents/prepared-model-catalog-worker.integration.test.ts",
+    "src/agents/prepared-model-catalog-worker.native-renewal.integration.test.ts",
+  ].map((file) => ({
+    file,
+    configs: ["test/vitest/vitest.infra.config.ts"],
+    mode: "runtime" as const,
+    dir: "src/agents",
+  })),
+  {
+    file: "src/plugins/plugin-module-generation.sdk.test.ts",
+    configs: ["test/vitest/vitest.plugins.config.ts"],
+    mode: "runtime",
+    dir: "src/plugins",
+  },
+  {
+    file: "test/plugins/codex-model-catalog.gateway.test.ts",
+    configs: [
+      "test/vitest/vitest.gateway-database-workers.config.ts",
+      "test/vitest/vitest.gateway.config.ts",
+    ],
+    mode: "runtime",
+    dir: "",
+  },
+  {
+    file: "src/gateway/server-methods/models-list.freshness.integration.test.ts",
+    configs: [
+      "test/vitest/vitest.gateway-database-workers.config.ts",
+      "test/vitest/vitest.gateway.config.ts",
+    ],
+    mode: "runtime",
+    dir: "",
+  },
+  {
+    file: "src/gateway/server-methods/models-list.remote-catalog.integration.test.ts",
+    configs: [
+      "test/vitest/vitest.gateway-database-workers.config.ts",
+      "test/vitest/vitest.gateway.config.ts",
+    ],
+    mode: "runtime",
+    dir: "",
+  },
+  {
+    file: "src/gateway/server-methods/models-list.worker-recovery.integration.test.ts",
+    configs: [
+      "test/vitest/vitest.gateway-database-workers.config.ts",
+      "test/vitest/vitest.gateway.config.ts",
+    ],
+    mode: "runtime",
+    dir: "",
+  },
+  ...startupCorpusTestFiles.map((file) => ({
+    file,
+    configs: ["test/vitest/vitest.runtime-config.config.ts"],
+    mode: "runtime" as const,
+    dir: "src",
+  })),
+  {
+    file: "test/agent-exec-code-mode.live.test.ts",
+    configs: ["test/vitest/vitest.live.config.ts"],
+    mode: "runtime",
+    dir: "",
+  },
+  ...[
+    "extensions/qa-lab/src/agent-run-identity-repeated-turn-child.process.test.ts",
+    "extensions/qa-lab/src/suite-process-lifecycle.test.ts",
+  ].map((file) => ({
+    file,
+    configs: ["test/vitest/vitest.extension-qa.config.ts"],
+    mode: "private-qa" as const,
+    dir: "extensions",
+  })),
+  // Native Codex transcript evidence runs in the packaged history Worker.
+  ...[
+    "extensions/codex/src/app-server/event-projector.verbose-hooks.test.ts",
+    "extensions/codex/src/app-server/session-history.test.ts",
+    "extensions/codex/src/app-server/settled-turn-finalizer.native.test.ts",
+    "extensions/codex/src/app-server/transcript-mirror.admission.test.ts",
+    "extensions/codex/src/app-server/transcript-mirror.test.ts",
+  ].map((file) => ({
+    file,
+    configs: ["test/vitest/vitest.extension-codex-app-server-support.config.ts"],
+    mode: "runtime" as const,
+    dir: "extensions",
+  })),
+  // These Telegram tests consume real built runtime sidecars. Sticker selection
+  // loads provider registrations; polling launches the production ingress Worker.
+  ...[
+    "extensions/telegram/src/polling-session.test.ts",
+    "extensions/telegram/src/sticker-cache.selection.test.ts",
+  ].map((file) => ({
+    file,
+    configs: ["test/vitest/vitest.extension-telegram.config.ts"],
+    mode: "runtime" as const,
+    dir: "extensions",
+  })),
+  {
+    file: "extensions/telegram/src/bot.create-telegram-bot.native-pipeline.test.ts",
+    configs: ["test/vitest/vitest.extension-database-workers.config.ts"],
+    mode: "runtime",
+    dir: "extensions",
+  },
+  ...[
+    "src/agents/agent-command-local.test.ts",
+    "src/cli/acp-cli-exit.process.test.ts",
+    "src/cli/update-dry-run-state.process.test.ts",
+    "src/cli/update-cli/update-command-migrated.test.ts",
+    "src/cli/update-cli/update-command-rollback.test.ts",
+    "src/cli/update-cli/update-command-post-update-recovery.test.ts",
+    "src/cli/update-cli/update-command-post-update-repair.test.ts",
+    "src/cli/update-cli/update-command-service.integration.test.ts",
+  ].map((file) => ({
+    file,
+    configs: ["test/vitest/vitest.cli-process.config.ts"],
+    mode: "runtime" as const,
+    dir: "",
+  })),
+  ...[
+    "src/infra/update-candidate-canary.integration.test.ts",
+    "src/infra/update-managed-service-handoff-lifecycle.test.ts",
+    "src/plugin-state/plugin-state-store.runtime.test.ts",
+  ].map((file) => ({
+    file,
+    configs: ["test/vitest/vitest.infra.config.ts"],
+    mode: "runtime" as const,
+    dir: "src",
+  })),
+  ...[
+    "src/commands/doctor-agent-database-order.process.test.ts",
+    "src/commands/doctor-config-flow.legacy-composition.test.ts",
+    "src/commands/doctor-config-preflight.test.ts",
+    "src/commands/doctor-config-preflight.process.test.ts",
+    "src/commands/doctor-config-preflight.refusal.process.test.ts",
+  ].map((file) => ({
+    file,
+    configs: ["test/vitest/vitest.commands.config.ts"],
+    mode: "runtime" as const,
+    dir: "src/commands",
+  })),
+  {
+    file: "src/commands/doctor-config-preflight.legacy-driver.live.test.ts",
+    configs: ["test/vitest/vitest.live.config.ts"],
+    mode: "runtime",
+    dir: "src/commands",
+  },
+  {
+    file: "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts",
+    configs: ["test/vitest/vitest.infra.config.ts"],
+    mode: "private-qa",
+    dir: "",
+  },
+  {
+    file: "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts",
+    configs: ["test/vitest/vitest.tooling.config.ts"],
+    mode: "runtime",
+    dir: "",
+  },
+  {
+    file: "src/config/sessions/session-accessor.sqlite-reclamation-memory.test.ts",
+    configs: ["test/vitest/vitest.runtime-config.config.ts"],
+    mode: "runtime",
+    dir: "src",
+  },
+  ...[
+    "src/gateway/server.chat-cli-auth.test.ts",
+    "src/gateway/server.chat-recovered-output.test.ts",
+    "src/gateway/server.chat.canonical-publication.test.ts",
+    "src/gateway/server.cli-watchdog.test.ts",
+    "src/gateway/server.codex-failure-recovery.test.ts",
+    "src/gateway/server.message-buffer-caption.test.ts",
+    "src/gateway/server.xai-fallback.test.ts",
+  ].map((file) => ({
+    file,
+    configs: [
+      "test/vitest/vitest.gateway-server-isolated.config.ts",
+      "test/vitest/vitest.gateway.config.ts",
+    ],
+    mode: "runtime" as const,
+    dir: "",
+  })),
+  ...[
+    "src/gateway/server.acp-native-model.product.test.ts",
+    "src/gateway/server-sidecar-retention.test.ts",
+    "src/gateway/server.config-patch.test.ts",
+  ].map((file) => ({
+    file,
+    configs: [
+      "test/vitest/vitest.gateway-server.config.ts",
+      "test/vitest/vitest.gateway.config.ts",
+    ],
+    mode: "runtime" as const,
+    dir: "src/gateway",
+  })),
+  ...[
+    "src/gateway/gateway-active-memory.test.ts",
+    "src/gateway/gateway-concurrent-streams.test.ts",
+  ].map((file) => ({
+    file,
+    configs: ["test/vitest/vitest.gateway-core.config.ts", "test/vitest/vitest.gateway.config.ts"],
+    mode: "runtime" as const,
+    dir: "src/gateway",
+  })),
+  ...[
+    "src/gateway/gateway-auth-recovery.test.ts",
+    "src/gateway/gateway-cron-process-identity.windows.test.ts",
+    "src/gateway/gateway-route-model-reuse.test.ts",
+    "src/gateway/gateway-ssh-upload-signal.test.ts",
+    "src/gateway/github-publication-requester-aliases.test.ts",
+    "src/gateway/github-publication-requester.test.ts",
+  ].map((file) => ({
+    file,
+    configs: [
+      "test/vitest/vitest.gateway-database-workers.config.ts",
+      "test/vitest/vitest.gateway.config.ts",
+    ],
+    mode: "runtime" as const,
+    dir: "",
+  })),
+] as const;
+
+function includesRuntimeConfig(configs: readonly string[] | undefined, config: string) {
+  return configs?.some(
+    (selected) =>
+      selected === config ||
+      selected === "vitest.config.ts" ||
+      selected === "test/vitest/vitest.config.ts" ||
+      fullSuiteVitestShards.some(
+        (shard) => shard.config === selected && shard.projects.includes(config),
+      ),
+  );
+}
+
+export function resolveVitestRuntimeConfigScopes(config: string) {
+  if (aiPackageConsumer.configs.includes(config)) {
+    return [aiPackageConsumer];
+  }
+  // UI E2E is not part of the root unit-test inventory.
+  if (config === CONTROL_UI_E2E_CONFIG) {
+    return uiE2eRealGatewayTestFiles.map((file) => ({ file, configs: [config], dir: "" }));
+  }
+  return runtimeConsumers.flatMap(({ file, configs, dir }) => {
+    // Preserve the matched project scope; broad roots must not apply another
+    // consumer's directory to scoped exclusions.
+    const selected = configs.filter((candidate) => includesRuntimeConfig([config], candidate));
+    return selected.length ? [{ file, configs: selected, dir }] : [];
+  });
+}
+
+/**
+ * Test files under `configs` that need a built runtime. Callers use this to keep
+ * those files in one shard: the pretest build is charged per job, so spreading
+ * them across stripes makes every stripe pay for it.
+ */
+export function listVitestRuntimeConsumerFiles(configs: readonly string[]): string[] {
+  return runtimeConsumers
+    .filter((consumer) =>
+      consumer.configs.some((candidate) => includesRuntimeConfig(configs, candidate)),
+    )
+    .map((consumer) => consumer.file);
+}
+
+/** Merge prepared prerequisites without repeating test-file ownership discovery. */
+export function mergeVitestPretestBuildModes(
+  modes: readonly (VitestPretestBuildMode | undefined)[],
+): VitestPretestBuildMode | undefined {
+  return VITEST_PRETEST_BUILD_MODES.find((mode) => modes.includes(mode));
+}
+
+export function resolveVitestPretestBuildMode(
+  selections: readonly VitestRuntimeTestSelection[],
+): VitestPretestBuildMode | undefined {
+  const preparedSelections = selections.map((selection) => {
+    const includedFiles = new Set<string>();
+    for (const pattern of selection.includePatterns ?? []) {
+      for (const { file } of runtimeConsumers) {
+        if (!includedFiles.has(file) && path.matchesGlob(file, pattern)) {
+          includedFiles.add(file);
+        }
+      }
+    }
+    return { ...selection, includedFiles };
+  });
+  return mergeVitestPretestBuildModes(
+    runtimeConsumers
+      .filter(({ file, configs: consumerConfigs }) =>
+        preparedSelections.some(({ configs, includePatterns, matchesFile, includedFiles }) => {
+          const included = includePatterns
+            ? includedFiles.has(file)
+            : consumerConfigs.some((config) => includesRuntimeConfig(configs, config));
+          // Only project the canonical consumers; config loading and test discovery
+          // stay with Vitest. Include-file overrides still intersect emitted filters.
+          return matchesFile ? matchesFile(file, included, includePatterns) : included;
+        }),
+      )
+      .map(({ mode }) => mode),
+  );
+}
+
+export async function preparePrebuiltAiPackage(
+  selections: readonly VitestRuntimeTestSelection[],
+  env: NodeJS.ProcessEnv,
+  signal?: AbortSignal,
+): Promise<number> {
+  const selected =
+    env.OPENCLAW_E2E_SKIP_BUILD !== "1" &&
+    env.OPENCLAW_E2E_USE_PREBUILT_DIST === "1" &&
+    selections.some(({ configs, includePatterns, matchesFile }) => {
+      const included = includePatterns
+        ? includePatterns.some((pattern) => path.matchesGlob(aiPackageConsumer.file, pattern))
+        : configs?.some((config) => aiPackageConsumer.configs.includes(config)) === true;
+      return matchesFile
+        ? matchesFile(aiPackageConsumer.file, included, includePatterns)
+        : included;
+    });
+  if (!selected) {
+    return 0;
+  }
+  signal?.throwIfAborted();
+  const cwd = path.resolve(import.meta.dirname, "../..");
+  const packageRoot = path.join(cwd, "packages/ai");
+  const manifest = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8")) as {
+    types: string;
+    exports: Record<string, { types: string }>;
+  };
+  const declarations = new Set([
+    manifest.types,
+    ...Object.values(manifest.exports).map((entry) => entry.types),
+  ]);
+  // CI's qaRuntime supplies JavaScript only. Its shard owner repairs types
+  // before reader admission; generic prebuilt readers must never rebuild them.
+  if ([...declarations].some((entry) => !fs.existsSync(path.resolve(packageRoot, entry)))) {
+    console.error(
+      "[test] preparing missing prebuilt AI package declarations before Vitest workers",
+    );
+    const code = await runManagedCommand({
+      bin: process.execPath,
+      args: ["--import", "tsx", "scripts/tsdown-build.mts", "--config", "tsdown.ai.config.ts"],
+      cwd,
+      env: { ...env, OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0" },
+      signal,
+    });
+    if (code !== 0) {
+      return code;
+    }
+  }
+  return 0;
+}
+
+export async function prepareVitestRuntime(
+  selections: readonly VitestRuntimeTestSelection[],
+  env: NodeJS.ProcessEnv = process.env,
+  options: { runtimePrepared?: boolean; signal?: AbortSignal } = {},
+): Promise<number> {
+  options.signal?.throwIfAborted();
+  await ensureKyselyTypes();
+  const controlUi =
+    !isE2eBuildSkipped(env) &&
+    env.OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY !== "1" &&
+    selections.some(
+      ({ configs, includePatterns, matchesFile }) =>
+        configs?.includes(CONTROL_UI_E2E_CONFIG) &&
+        uiE2eRealGatewayTestFiles.some((file) => {
+          const included =
+            !includePatterns || includePatterns.some((pattern) => path.matchesGlob(file, pattern));
+          return matchesFile ? matchesFile(file, included, includePatterns) : included;
+        }),
+    );
+  const mode = controlUi ? "private-qa" : resolveVitestPretestBuildMode(selections);
+  if (!mode) {
+    return 0;
+  }
+  options.signal?.throwIfAborted();
+  const cwd = path.resolve(import.meta.dirname, "../..");
+  if (!options.runtimePrepared || controlUi) {
+    console.error(`[test] preparing ${mode} runtime before Vitest workers`);
+    const code = await runManagedCommand({
+      bin: process.execPath,
+      args: [
+        "scripts/prepare-vitest-runtime.mjs",
+        ...(controlUi ? ["--require-current-head"] : []),
+      ],
+      cwd,
+      env: { ...env, ...(mode === "private-qa" ? { OPENCLAW_BUILD_PRIVATE_QA: "1" } : {}) },
+      signal: options.signal,
+    });
+    if (code !== 0) {
+      return code;
+    }
+  }
+  if (!controlUi) {
+    return 0;
+  }
+
+  // Runtime preparation can replace build-info while retaining canonical UI
+  // assets. Reconcile that pair before any Gateway reader captures its identity.
+  const { registerToolingTsx } = await import("./tsx-cli-shim.mjs");
+  options.signal?.throwIfAborted();
+  await registerToolingTsx();
+  options.signal?.throwIfAborted();
+  const [{ inspectControlUiRootAssets }, { normalizeControlUiBuildInfo }] = await Promise.all([
+    import("../../src/infra/control-ui-assets.ts"),
+    import("../../ui/src/build-info-normalizers.ts"),
+  ]);
+  options.signal?.throwIfAborted();
+  const { buildId } = normalizeControlUiBuildInfo(
+    JSON.parse(fs.readFileSync(path.join(cwd, "dist/build-info.json"), "utf8")),
+  );
+  const uiRoot = path.join(cwd, "dist/control-ui");
+  if (inspectControlUiRootAssets(uiRoot, buildId).kind === "ready") {
+    return 0;
+  }
+  console.error("[test] preparing matching Control UI assets before Vitest workers");
+  const code = await runManagedCommand({
+    bin: process.execPath,
+    args: ["scripts/ui.js", "build"],
+    cwd,
+    env,
+    signal: options.signal,
+  });
+  if (code !== 0) {
+    return code;
+  }
+  const health = inspectControlUiRootAssets(uiRoot, buildId);
+  if (health.kind !== "ready") {
+    throw new Error(`Control UI setup left ${health.kind} assets for runtime ${buildId}`);
+  }
+  return 0;
+}
+
+function isE2eBuildSkipped(env: NodeJS.ProcessEnv) {
+  return env.OPENCLAW_E2E_SKIP_BUILD === "1" || env.OPENCLAW_E2E_USE_PREBUILT_DIST === "1";
+}
+
+export async function prepareE2eVitestRuntime(env: NodeJS.ProcessEnv) {
+  if (isE2eBuildSkipped(env)) {
+    return {};
+  }
+  console.error("[test] preparing E2E runtime before Vitest workers");
+  await runE2eGlobalSetup(
+    (args, commandEnv) =>
+      runManagedCommand({ bin: process.execPath, args, cwd: process.cwd(), env: commandEnv }),
+    env,
+  );
+  // Only successful preparation may tell readers to reuse this shared generation.
+  return { OPENCLAW_E2E_USE_PREBUILT_DIST: "1" };
+}
+
+function runE2eSetupCommand(args: string[], env: NodeJS.ProcessEnv): Promise<number> {
+  const child = spawn(process.execPath, args, {
+    cwd: process.cwd(),
+    detached: false,
+    env,
+    stdio: ["inherit", "pipe", "pipe"],
+  });
+  child.stdout.pipe(process.stdout, { end: false });
+  child.stderr.pipe(process.stderr, { end: false });
+
+  return new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", (status, signal) => {
+      if (signal) {
+        reject(new Error(`E2E setup command terminated by ${signal}: ${args.join(" ")}`));
+        return;
+      }
+      resolve(status ?? 1);
+    });
+  });
+}
+
+export async function runE2eGlobalSetup(
+  runCommand: SetupCommandRunner = runE2eSetupCommand,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<void> {
+  // Focused suites may own their fixtures; prebuilt consumers already have the
+  // complete surface. Neither may start another shared artifact writer.
+  if (isE2eBuildSkipped(env)) {
+    return;
+  }
+  const commands = [
+    {
+      args: ["scripts/prepare-vitest-runtime.mjs"],
+      env: {
+        ...env,
+        OPENCLAW_BUILD_PRIVATE_QA: "1",
+        OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0",
+      },
+    },
+    {
+      args: ["--import", "tsx", "scripts/tsdown-build.mts", "--config", "tsdown.ai.config.ts"],
+      env,
+    },
+  ];
+  for (const { args, env: commandEnv } of commands) {
+    const status = await runCommand(args, commandEnv);
+    if (status !== 0) {
+      throw new Error(`E2E setup command failed with exit code ${status}: ${args.join(" ")}`);
+    }
+  }
+}
+
+const require = createRequire(import.meta.url);
+
+type VitestFs = {
+  existsSync(path: string): boolean;
+  symlinkSync?(target: string, path: string, type: "dir" | "junction"): void;
+};
+function isMissingVitestResolveError(error: unknown): error is NodeJS.ErrnoException {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    error.code === "MODULE_NOT_FOUND" &&
+    error.message.includes("vitest/package.json")
+  );
+}
+
+/**
+ * Builds the actionable dependency-install message when Vitest is unavailable.
+ */
+function resolveMissingVitestDependencyMessage(
+  baseDir = resolveRepoRoot(import.meta.url),
+  fsImpl: Pick<VitestFs, "existsSync"> = fs,
+): string {
+  const hasNodeModules = fsImpl.existsSync(path.join(baseDir, "node_modules"));
+  const reason = hasNodeModules
+    ? "[vitest] Vitest is not installed in node_modules."
+    : "[vitest] node_modules is missing; Vitest cannot be resolved.";
+  return [
+    reason,
+    "Install dependencies before running scripts/run-vitest.mjs:",
+    "  pnpm install --frozen-lockfile",
+    "For raw Crabbox/AWS macOS source syncs, hydrate or install dependencies before this runner.",
+  ].join("\n");
+}
+
+function resolvePathFromBase(value: string, baseDir: string): string {
+  return path.isAbsolute(value) ? value : path.resolve(baseDir, value);
+}
+
+function resolvePnpmModulesDir(env: NodeJS.ProcessEnv): string {
+  return env.PNPM_CONFIG_MODULES_DIR?.trim() || env.npm_config_modules_dir?.trim() || "";
+}
+
+function resolveHydratedVitestPackageJson({
+  baseDir,
+  env,
+  fsImpl,
+}: {
+  baseDir: string;
+  env: NodeJS.ProcessEnv;
+  fsImpl: Pick<VitestFs, "existsSync">;
+}): string | null {
+  const modulesDir = resolvePnpmModulesDir(env);
+  if (!modulesDir) {
+    return null;
+  }
+  const packageJsonPath = path.join(
+    resolvePathFromBase(modulesDir, baseDir),
+    "vitest",
+    "package.json",
+  );
+  return fsImpl.existsSync(packageJsonPath) ? packageJsonPath : null;
+}
+
+function ensureHydratedNodeModulesSelfLink({
+  hydratedNodeModulesPath,
+  fsImpl,
+  platform,
+}: {
+  hydratedNodeModulesPath: string;
+  fsImpl: VitestFs;
+  platform: NodeJS.Platform;
+}): boolean {
+  if (platform !== "win32") {
+    return true;
+  }
+  const selfLinkPath = path.join(hydratedNodeModulesPath, "node_modules");
+  if (fsImpl.existsSync(selfLinkPath)) {
+    return true;
+  }
+  if (!fsImpl.symlinkSync) {
+    return false;
+  }
+  try {
+    fsImpl.symlinkSync(hydratedNodeModulesPath, selfLinkPath, "junction");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveHydratedVitestCliEntry({
+  baseDir,
+  env,
+  fsImpl,
+  platform,
+}: {
+  baseDir: string;
+  env: NodeJS.ProcessEnv;
+  fsImpl: VitestFs;
+  platform: NodeJS.Platform;
+}): string | null {
+  const hydratedVitestPackageJson = resolveHydratedVitestPackageJson({ baseDir, env, fsImpl });
+  if (!hydratedVitestPackageJson) {
+    return null;
+  }
+  const hydratedNodeModulesPath = path.dirname(path.dirname(hydratedVitestPackageJson));
+  if (!ensureHydratedNodeModulesSelfLink({ hydratedNodeModulesPath, fsImpl, platform })) {
+    return null;
+  }
+  const nodeModulesPath = path.join(baseDir, "node_modules");
+  if (fsImpl.existsSync(nodeModulesPath)) {
+    const workspaceVitestCliEntry = path.join(nodeModulesPath, "vitest", "vitest.mjs");
+    return fsImpl.existsSync(workspaceVitestCliEntry) ? workspaceVitestCliEntry : null;
+  }
+  if (!fsImpl.symlinkSync) {
+    return null;
+  }
+  try {
+    fsImpl.symlinkSync(
+      hydratedNodeModulesPath,
+      nodeModulesPath,
+      platform === "win32" ? "junction" : "dir",
+    );
+  } catch {
+    return null;
+  }
+  return path.join(nodeModulesPath, "vitest", "vitest.mjs");
+}
+
+/**
+ * Resolves the Vitest CLI entry from normal or hydrated node_modules layouts.
+ */
+export function resolveVitestCliEntry({
+  baseDir = resolveRepoRoot(import.meta.url),
+  env = process.env,
+  fsImpl = fs,
+  platform = process.platform,
+  requireResolve = require.resolve.bind(require),
+}: {
+  baseDir?: string;
+  env?: NodeJS.ProcessEnv;
+  fsImpl?: VitestFs;
+  platform?: NodeJS.Platform;
+  requireResolve?: (specifier: string, options?: { paths?: string[] }) => string;
+} = {}): string {
+  const hydratedVitestCliEntry = resolveHydratedVitestCliEntry({
+    baseDir,
+    env,
+    fsImpl,
+    platform,
+  });
+  if (hydratedVitestCliEntry) {
+    return hydratedVitestCliEntry;
+  }
+
+  let vitestPackageJson: string;
+  try {
+    vitestPackageJson = requireResolve("vitest/package.json");
+  } catch (error) {
+    if (isMissingVitestResolveError(error)) {
+      const wrappedError: NodeJS.ErrnoException = new Error(
+        resolveMissingVitestDependencyMessage(baseDir, fsImpl),
+      );
+      wrappedError.code = "OPENCLAW_MISSING_VITEST";
+      throw wrappedError;
+    }
+    throw error;
+  }
+  return path.join(path.dirname(vitestPackageJson), "vitest.mjs");
+}

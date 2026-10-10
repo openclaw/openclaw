@@ -1,3 +1,4 @@
+/** Tests image asset parsing, MIME sniffing, and OpenAI-compatible response conversion. */
 import { describe, expect, it } from "vitest";
 import {
   generatedImageAssetFromDataUrl,
@@ -5,9 +6,12 @@ import {
   imageSourceUploadFileName,
   parseImageDataUrl,
   parseOpenAiCompatibleImageResponse,
+  resolveInlineImageJsonResponseMaxBytes,
   sniffImageMimeType,
   toImageDataUrl,
 } from "./image-assets.js";
+
+const DEFAULT_TEST_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
 
 describe("image asset helpers", () => {
   it("converts buffers to image data URLs and parses them back", () => {
@@ -45,11 +49,17 @@ describe("image asset helpers", () => {
     expect(imageFileExtensionForMimeType(undefined, "jpg")).toBe("jpg");
   });
 
-  it("sniffs common generated image types", () => {
-    expect(sniffImageMimeType(Buffer.from([0xff, 0xd8, 0xff]))).toEqual({
-      mimeType: "image/jpeg",
-      extension: "jpg",
-    });
+  it("sizes inline image JSON caps from decoded image payload limits", () => {
+    expect(resolveInlineImageJsonResponseMaxBytes(4, DEFAULT_TEST_IMAGE_MAX_BYTES)).toBe(
+      34_603_008,
+    );
+    expect(resolveInlineImageJsonResponseMaxBytes(Number.NaN, DEFAULT_TEST_IMAGE_MAX_BYTES)).toBe(
+      9_437_184,
+    );
+    expect(resolveInlineImageJsonResponseMaxBytes(2, 8 * 1024 * 1024)).toBe(23_418_198);
+  });
+
+  it("sniffs generated PNG images", () => {
     expect(sniffImageMimeType(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 0]))).toEqual({
       mimeType: "image/png",
       extension: "png",
@@ -102,12 +112,6 @@ describe("image asset helpers", () => {
           defaultMimeType: "image/png",
           malformedResponseError: "Sample image response malformed",
         },
-      ),
-    ).toThrow("Sample image response malformed");
-    expect(() =>
-      parseOpenAiCompatibleImageResponse(
-        { data: { b64_json: Buffer.from("png").toString("base64") } },
-        { malformedResponseError: "Sample image response malformed" },
       ),
     ).toThrow("Sample image response malformed");
   });

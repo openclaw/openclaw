@@ -1,5 +1,6 @@
+/** Resolves manifest-declared command and tool ownership at runtime. */
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
 import {
   resolveManifestCommandAliasOwnerInRegistry,
@@ -15,6 +16,7 @@ import {
 } from "./manifest-contract-eligibility.js";
 import { hasManifestToolAvailability } from "./manifest-tool-availability.js";
 
+/** Resolves the manifest owner for a CLI command alias when one is declared. */
 export function resolveManifestCommandAliasOwner(params: {
   command: string | undefined;
   config?: OpenClawConfig;
@@ -22,19 +24,14 @@ export function resolveManifestCommandAliasOwner(params: {
   env?: NodeJS.ProcessEnv;
   registry?: PluginManifestCommandAliasRegistry;
 }): PluginManifestCommandAliasRecord | undefined {
-  const registry =
-    params.registry ??
-    loadManifestMetadataRegistry({
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-    }).manifestRegistry;
+  const registry = params.registry ?? loadManifestMetadataRegistry(params).manifestRegistry;
   return resolveManifestCommandAliasOwnerInRegistry({
     command: params.command,
     registry,
   });
 }
 
+/** Resolves the plugin id that should be activated for a CLI command surface. */
 export function resolveManifestCliCommandSurfaceOwner(params: {
   command: string | undefined;
   config?: OpenClawConfig;
@@ -60,28 +57,7 @@ export function resolveManifestCliCommandSurfaceOwner(params: {
   })[0];
 }
 
-/**
- * Resolve which plugin owns an agent-tool name, applying control-plane
- * availability filters so disabled/denied plugins are not falsely attributed.
- *
- * Behavior:
- * - Walks the full manifest snapshot (not the lighter-weight registry view) so
- *   per-tool `configSignals`/`authSignals` are visible.
- * - Skips plugins that fail `isManifestPluginAvailableForControlPlane`
- *   (`plugins.allow` / `plugins.deny` / `plugins.entries[id].enabled` /
- *   installed-index).
- * - For matched tools, runs `hasManifestToolAvailability` to check the
- *   tool's own configSignals (e.g. Feishu's `appId`/`appSecret` gate).
- * - Reports `availability: "loaded"` when both filters pass, enough for a
- *   direct "available from this plugin" diagnostic.
- * - Reports `availability: "manifest-only"` when the manifest declares
- *   ownership but availability is not provable from manifest alone (e.g.
- *   per-account `enabled` flags or per-tool toggles that are runtime-only).
- *   Caller should soften the wording to "may be provided by".
- *
- * Falls back to the pure registry walk only when an explicit registry is
- * supplied (no snapshot to filter against).
- */
+/** Applies control-plane availability unless the caller supplies its own registry selection. */
 export function resolveManifestToolOwner(params: {
   toolName: string | undefined;
   config?: OpenClawConfig;
@@ -99,11 +75,7 @@ export function resolveManifestToolOwner(params: {
   if (!normalizedToolName) {
     return undefined;
   }
-  const snapshot = loadManifestMetadataSnapshot({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  });
+  const snapshot = loadManifestMetadataSnapshot(params);
   const env = params.env ?? process.env;
   for (const plugin of snapshot.plugins) {
     const tools = plugin.contracts?.tools;

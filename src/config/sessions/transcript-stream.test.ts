@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   streamSessionTranscriptLines,
   streamSessionTranscriptLinesReverse,
@@ -22,6 +22,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
@@ -32,6 +33,15 @@ async function collect(iter: AsyncGenerator<string>): Promise<string[]> {
   }
   return out;
 }
+
+describe("transcript stream empty files", () => {
+  it("returns empty iterators for empty files in both directions", async () => {
+    fs.writeFileSync(transcriptPath, "", "utf-8");
+
+    await expect(collect(streamSessionTranscriptLines(transcriptPath))).resolves.toEqual([]);
+    await expect(collect(streamSessionTranscriptLinesReverse(transcriptPath))).resolves.toEqual([]);
+  });
+});
 
 describe("streamSessionTranscriptLines", () => {
   it("yields trimmed non-empty lines in file order", async () => {
@@ -48,24 +58,13 @@ describe("streamSessionTranscriptLines", () => {
     expect(lines).toEqual([]);
   });
 
-  it("returns an empty iterator for an empty file", async () => {
-    fs.writeFileSync(transcriptPath, "", "utf-8");
+  it("propagates stat failures other than ENOENT", async () => {
+    const error = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+    vi.spyOn(fs.promises, "stat").mockRejectedValueOnce(error);
 
-    const lines = await collect(streamSessionTranscriptLines(transcriptPath));
-
-    expect(lines).toEqual([]);
-  });
-
-  it("forwards malformed JSON lines as raw text so callers can choose to skip them", async () => {
-    fs.writeFileSync(
-      transcriptPath,
-      `${JSON.stringify({ id: "a" })}\nnot-json\n${JSON.stringify({ id: "b" })}\n`,
-      "utf-8",
-    );
-
-    const lines = await collect(streamSessionTranscriptLines(transcriptPath));
-
-    expect(lines).toEqual([JSON.stringify({ id: "a" }), "not-json", JSON.stringify({ id: "b" })]);
+    await expect(
+      collect(streamSessionTranscriptLines("/some/protected/transcript.jsonl")),
+    ).rejects.toBe(error);
   });
 
   it("honours an abort signal between lines", async () => {
@@ -96,15 +95,7 @@ describe("streamSessionTranscriptLines", () => {
 });
 
 describe("streamSessionTranscriptLinesReverse", () => {
-  it("yields trimmed non-empty lines in reverse order for short files", async () => {
-    fs.writeFileSync(transcriptPath, "first\nsecond\nthird\n", "utf-8");
-
-    const lines = await collect(streamSessionTranscriptLinesReverse(transcriptPath));
-
-    expect(lines).toEqual(["third", "second", "first"]);
-  });
-
-  it("returns an empty iterator when the file cannot be opened", async () => {
+  it("returns an empty iterator when the file does not exist", async () => {
     const lines = await collect(
       streamSessionTranscriptLinesReverse(path.join(tempDir, "missing.jsonl")),
     );
@@ -112,12 +103,13 @@ describe("streamSessionTranscriptLinesReverse", () => {
     expect(lines).toEqual([]);
   });
 
-  it("returns an empty iterator for an empty file", async () => {
-    fs.writeFileSync(transcriptPath, "", "utf-8");
+  it("propagates open failures other than ENOENT", async () => {
+    const error = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+    vi.spyOn(fs.promises, "open").mockRejectedValueOnce(error);
 
-    const lines = await collect(streamSessionTranscriptLinesReverse(transcriptPath));
-
-    expect(lines).toEqual([]);
+    await expect(
+      collect(streamSessionTranscriptLinesReverse("/some/protected/transcript.jsonl")),
+    ).rejects.toBe(error);
   });
 
   it("preserves complete lines across chunk boundaries", async () => {
@@ -187,22 +179,5 @@ describe("streamSessionTranscriptLinesReverse", () => {
     );
 
     expect(lines).toEqual(["gamma", "beta", firstLine]);
-  });
-
-  it("preserves JSONL line ordering so reverse scans hit the newest match first", async () => {
-    fs.writeFileSync(
-      transcriptPath,
-      [
-        JSON.stringify({ id: "first", role: "user" }),
-        JSON.stringify({ id: "second", role: "assistant", text: "hi" }),
-        JSON.stringify({ id: "third", role: "assistant", text: "bye" }),
-      ].join("\n") + "\n",
-      "utf-8",
-    );
-
-    const lines = await collect(streamSessionTranscriptLinesReverse(transcriptPath));
-    const parsed = lines.map((line) => JSON.parse(line) as { id: string });
-
-    expect(parsed.map((entry) => entry.id)).toEqual(["third", "second", "first"]);
   });
 });

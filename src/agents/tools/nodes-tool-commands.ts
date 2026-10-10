@@ -1,15 +1,37 @@
 import crypto from "node:crypto";
-import { parseTimeoutMs } from "../../cli/parse-timeout.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
-import { jsonResult, readStringParam } from "./common.js";
+import {
+  jsonResult,
+  readFiniteNumberParam,
+  readNonNegativeIntegerParam,
+  readPositiveIntegerParam,
+  readStringArrayParam,
+  readToolStringParam,
+} from "./common.js";
 import type { GatewayCallOptions } from "./gateway.js";
-import { callGatewayTool } from "./gateway.js";
-import { POLICY_REDIRECT_INVOKE_COMMANDS } from "./nodes-tool-media.js";
-import { resolveNodeId } from "./nodes-utils.js";
+import { callNodesToolNodeInvoke, resolveNodesToolInvokeTimeouts } from "./nodes-tool-invoke.js";
+import { resolveAgentNodeId } from "./nodes-utils.js";
 
 const BLOCKED_INVOKE_COMMANDS = new Set(["system.run", "system.run.prepare"]);
-
+const MEDIA_INVOKE_ACTIONS: Readonly<Record<string, string>> = {
+  "camera.snap": "camera_snap",
+  "camera.clip": "camera_clip",
+  "photos.latest": "photos_latest",
+  "screen.record": "screen_record",
+  "screen.snapshot": "screen_snapshot",
+  "file.fetch": "file_fetch",
+  "dir.list": "dir_list",
+  "dir.fetch": "dir_fetch",
+  "file.write": "file_write",
+};
+// File-transfer policy cannot be bypassed by opting into raw media payloads.
+const POLICY_REDIRECT_INVOKE_COMMANDS: ReadonlySet<string> = new Set([
+  "file.fetch",
+  "dir.list",
+  "dir.fetch",
+  "file.write",
+]);
 const NODE_READ_ACTION_COMMANDS = {
   camera_list: "camera.list",
   notifications_list: "notifications.list",
@@ -19,42 +41,80 @@ const NODE_READ_ACTION_COMMANDS = {
   device_health: "device.health",
 } as const;
 
-export type NodeCommandAction =
+type NodeCommandAction =
   | keyof typeof NODE_READ_ACTION_COMMANDS
+  | "camera_ptz"
   | "notifications_action"
   | "location_get"
+  | "which"
   | "invoke";
 
 export async function executeNodeCommandAction(params: {
   action: NodeCommandAction;
   input: Record<string, unknown>;
   gatewayOpts: GatewayCallOptions;
+  agentSessionKey?: string;
   allowMediaInvokeCommands?: boolean;
-  mediaInvokeActions: Record<string, string>;
-}): Promise<
-  | ReturnType<typeof jsonResult>
-  | { content: Array<{ type: "text"; text: string }>; details: Record<string, unknown> }
-> {
+}): Promise<ReturnType<typeof jsonResult>> {
+  const node = readToolStringParam(params.input, "node", { required: true });
+  let command: string;
+  let commandParams: unknown = {};
+  let nodeId: string | undefined;
+  const rawInvoke = params.action === "invoke";
+  let gatewayOpts = params.gatewayOpts;
+  let invokeTimeoutMs: number | undefined;
+  let requireObjectPayload = false;
   switch (params.action) {
+    case "camera_ptz": {
+      const deviceId = readToolStringParam(params.input, "deviceId", { required: true });
+      const ptzOperation = normalizeLowercaseStringOrEmpty(params.input.ptzOperation);
+      if (
+        ptzOperation !== "status" &&
+        ptzOperation !== "set" &&
+        ptzOperation !== "move" &&
+        ptzOperation !== "home"
+      ) {
+        throw new Error("ptzOperation must be status|set|move|home");
+      }
+      const panDegrees = readFiniteNumberParam(params.input, "panDegrees");
+      const tiltDegrees = readFiniteNumberParam(params.input, "tiltDegrees");
+      const zoomPercent = readFiniteNumberParam(params.input, "zoomPercent");
+      const hasAxes =
+        panDegrees !== undefined || tiltDegrees !== undefined || zoomPercent !== undefined;
+      if ((ptzOperation === "status" || ptzOperation === "home") && hasAxes) {
+        throw new Error(`${ptzOperation} does not accept axis values`);
+      }
+      if ((ptzOperation === "set" || ptzOperation === "move") && !hasAxes) {
+        throw new Error(`${ptzOperation} requires at least one PTZ axis`);
+      }
+      const axes = { panDegrees, tiltDegrees, zoomPercent };
+      command = ptzOperation === "status" ? "camera.ptz.status" : "camera.ptz.control";
+      commandParams =
+        ptzOperation === "status"
+          ? { deviceId }
+          : ptzOperation === "home"
+            ? { deviceId, operation: "home" }
+            : {
+                deviceId,
+                operation: ptzOperation,
+                [ptzOperation === "set" ? "target" : "delta"]: axes,
+              };
+      break;
+    }
     case "camera_list":
     case "notifications_list":
     case "device_status":
     case "device_info":
     case "device_permissions":
     case "device_health": {
-      const node = readStringParam(params.input, "node", { required: true });
-      const payloadRaw = await invokeNodeCommandPayload({
-        gatewayOpts: params.gatewayOpts,
-        node,
-        command: NODE_READ_ACTION_COMMANDS[params.action],
-      });
-      const payload =
-        payloadRaw && typeof payloadRaw === "object" && payloadRaw !== null ? payloadRaw : {};
-      return jsonResult(payload);
+      command = NODE_READ_ACTION_COMMANDS[params.action];
+      requireObjectPayload = true;
+      break;
     }
     case "notifications_action": {
-      const node = readStringParam(params.input, "node", { required: true });
-      const notificationKey = readStringParam(params.input, "notificationKey", { required: true });
+      const notificationKey = readToolStringParam(params.input, "notificationKey", {
+        required: true,
+      });
       const notificationAction = normalizeLowercaseStringOrEmpty(params.input.notificationAction);
       if (
         notificationAction !== "open" &&
@@ -70,66 +130,51 @@ export async function executeNodeCommandAction(params: {
       if (notificationAction === "reply" && !notificationReplyText) {
         throw new Error("notificationReplyText required when notificationAction=reply");
       }
-      const payloadRaw = await invokeNodeCommandPayload({
-        gatewayOpts: params.gatewayOpts,
-        node,
-        command: "notifications.actions",
-        commandParams: {
-          key: notificationKey,
-          action: notificationAction,
-          replyText: notificationReplyText,
-        },
-      });
-      const payload =
-        payloadRaw && typeof payloadRaw === "object" && payloadRaw !== null ? payloadRaw : {};
-      return jsonResult(payload);
+      command = "notifications.actions";
+      commandParams = {
+        key: notificationKey,
+        action: notificationAction,
+        replyText: notificationReplyText,
+      };
+      requireObjectPayload = true;
+      break;
     }
     case "location_get": {
-      const node = readStringParam(params.input, "node", { required: true });
-      const maxAgeMs =
-        typeof params.input.maxAgeMs === "number" && Number.isFinite(params.input.maxAgeMs)
-          ? params.input.maxAgeMs
-          : undefined;
+      const maxAgeMs = readNonNegativeIntegerParam(params.input, "maxAgeMs");
       const desiredAccuracy =
         params.input.desiredAccuracy === "coarse" ||
         params.input.desiredAccuracy === "balanced" ||
         params.input.desiredAccuracy === "precise"
           ? params.input.desiredAccuracy
           : undefined;
-      const locationTimeoutMs =
-        typeof params.input.locationTimeoutMs === "number" &&
-        Number.isFinite(params.input.locationTimeoutMs)
-          ? params.input.locationTimeoutMs
-          : undefined;
-      const payload = await invokeNodeCommandPayload({
+      const locationTimeoutMs = readPositiveIntegerParam(params.input, "locationTimeoutMs");
+      const timeouts = resolveNodesToolInvokeTimeouts({
+        input: params.input,
         gatewayOpts: params.gatewayOpts,
-        node,
-        command: "location.get",
-        commandParams: {
-          maxAgeMs,
-          desiredAccuracy,
-          timeoutMs: locationTimeoutMs,
-        },
+        operationTimeoutMs: locationTimeoutMs,
       });
-      return jsonResult(payload);
+      gatewayOpts = timeouts.gatewayOpts;
+      invokeTimeoutMs = timeouts.invokeTimeoutMs;
+      command = "location.get";
+      commandParams = { maxAgeMs, desiredAccuracy, timeoutMs: locationTimeoutMs };
+      break;
+    }
+    case "which": {
+      const bins = readStringArrayParam(params.input, "bins", { required: true });
+      command = "system.which";
+      commandParams = { bins };
+      break;
     }
     case "invoke": {
-      const node = readStringParam(params.input, "node", { required: true });
-      const nodeId = await resolveNodeId(params.gatewayOpts, node);
-      const invokeCommand = readStringParam(params.input, "invokeCommand", { required: true });
+      nodeId = await resolveAgentNodeId(params.gatewayOpts, node);
+      const invokeCommand = readToolStringParam(params.input, "invokeCommand", { required: true });
       const invokeCommandNormalized = normalizeLowercaseStringOrEmpty(invokeCommand);
       if (BLOCKED_INVOKE_COMMANDS.has(invokeCommandNormalized)) {
         throw new Error(
-          `invokeCommand "${invokeCommand}" is reserved for shell execution; use exec with host=node instead`,
+          `invokeCommand "${invokeCommand}" is reserved for shell execution; call the shell exec tool with { command, host: "node", node: "${nodeId}" } instead`,
         );
       }
-      const dedicatedAction = params.mediaInvokeActions[invokeCommandNormalized];
-      // Policy-redirect commands (file-transfer) ALWAYS reroute to their
-      // dedicated tool. The dedicated tool runs gatekeep() + path policy
-      // + operator approval; the generic invoke path doesn't. Operators
-      // who set allowMediaInvokeCommands=true to allow camera/screen
-      // bytes via raw invoke must not also get a path-policy bypass for
-      // file-transfer.
+      const dedicatedAction = MEDIA_INVOKE_ACTIONS[invokeCommandNormalized];
       if (dedicatedAction && POLICY_REDIRECT_INVOKE_COMMANDS.has(invokeCommandNormalized)) {
         throw new Error(
           `invokeCommand "${invokeCommand}" enforces a path-allowlist policy and cannot be invoked via the generic nodes.invoke surface; use the dedicated file-transfer tool "${dedicatedAction}"`,
@@ -144,10 +189,9 @@ export async function executeNodeCommandAction(params: {
         typeof params.input.invokeParamsJson === "string"
           ? params.input.invokeParamsJson.trim()
           : "";
-      let invokeParams: unknown = {};
       if (invokeParamsJson) {
         try {
-          invokeParams = JSON.parse(invokeParamsJson);
+          commandParams = JSON.parse(invokeParamsJson);
         } catch (err) {
           const message = formatErrorMessage(err);
           throw new Error(`invokeParamsJson must be valid JSON: ${message}`, {
@@ -155,32 +199,37 @@ export async function executeNodeCommandAction(params: {
           });
         }
       }
-      const invokeTimeoutMs = parseTimeoutMs(params.input.invokeTimeoutMs);
-      const raw = await callGatewayTool("node.invoke", params.gatewayOpts, {
-        nodeId,
-        command: invokeCommand,
-        params: invokeParams,
-        timeoutMs: invokeTimeoutMs,
-        idempotencyKey: crypto.randomUUID(),
+      const timeouts = resolveNodesToolInvokeTimeouts({
+        input: params.input,
+        gatewayOpts: params.gatewayOpts,
       });
-      return jsonResult(raw ?? {});
+      command = invokeCommand;
+      gatewayOpts = timeouts.gatewayOpts;
+      invokeTimeoutMs = timeouts.invokeTimeoutMs;
+      break;
     }
+    default:
+      throw new Error("Unsupported node command action");
   }
-  throw new Error("Unsupported node command action");
-}
-
-async function invokeNodeCommandPayload(params: {
-  gatewayOpts: GatewayCallOptions;
-  node: string;
-  command: string;
-  commandParams?: Record<string, unknown>;
-}): Promise<unknown> {
-  const nodeId = await resolveNodeId(params.gatewayOpts, params.node);
-  const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", params.gatewayOpts, {
-    nodeId,
-    command: params.command,
-    params: params.commandParams ?? {},
-    idempotencyKey: crypto.randomUUID(),
-  });
-  return raw?.payload ?? {};
+  nodeId ??= await resolveAgentNodeId(gatewayOpts, node);
+  const raw = await callNodesToolNodeInvoke<{ payload: unknown }>(
+    gatewayOpts,
+    {
+      nodeId,
+      command,
+      params: commandParams,
+      ...(rawInvoke || invokeTimeoutMs !== undefined ? { timeoutMs: invokeTimeoutMs } : {}),
+      idempotencyKey: crypto.randomUUID(),
+      ...(rawInvoke && params.agentSessionKey ? { sessionKey: params.agentSessionKey } : {}),
+    },
+    rawInvoke ? { rawInvoke: true } : undefined,
+  );
+  if (rawInvoke) {
+    return jsonResult(raw ?? {});
+  }
+  const payload =
+    raw && typeof raw === "object" && Object.hasOwn(raw, "payload") ? raw.payload : {};
+  return jsonResult(
+    requireObjectPayload && (payload === null || typeof payload !== "object") ? {} : payload,
+  );
 }

@@ -1,6 +1,12 @@
 import { hashTextSha256 } from "./hash.js";
 import type { SandboxBrowserConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
 
+/**
+ * Stable sandbox config hashing for container reuse decisions.
+ *
+ * Undefined values and object key order are normalized so semantically equal
+ * configs keep the same hash while security epoch changes force recreation.
+ */
 export const SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH = "explicit-config-env-v1";
 
 type SandboxHashInput = {
@@ -10,11 +16,11 @@ type SandboxHashInput = {
   workspaceDir: string;
   agentWorkspaceDir: string;
   mountFormatVersion: number;
+  createArgsEpoch: string;
+  managedMounts?: readonly string[];
 };
 
-type SandboxBrowserHashInput = {
-  docker: SandboxDockerConfig;
-  dockerEnvPolicyEpoch?: string;
+type SandboxBrowserHashInput = SandboxHashInput & {
   browser: Pick<
     SandboxBrowserConfig,
     | "cdpPort"
@@ -22,24 +28,18 @@ type SandboxBrowserHashInput = {
     | "vncPort"
     | "noVncPort"
     | "headless"
-    | "enableNoVnc"
+    | "noVncEnabled"
     | "autoStartTimeoutMs"
   >;
   securityEpoch: string;
-  workspaceAccess: SandboxWorkspaceAccess;
-  workspaceDir: string;
-  agentWorkspaceDir: string;
-  mountFormatVersion: number;
 };
 
 function normalizeForHash(value: unknown): unknown {
-  if (value === undefined) {
-    return undefined;
-  }
   if (Array.isArray(value)) {
     return value.map(normalizeForHash).filter((item): item is unknown => item !== undefined);
   }
   if (value && typeof value === "object") {
+    // Sort object keys recursively so JSON serialization is deterministic.
     const entries = Object.entries(value).toSorted(([a], [b]) => a.localeCompare(b));
     const normalized: Record<string, unknown> = {};
     for (const [key, entryValue] of entries) {
@@ -53,16 +53,12 @@ function normalizeForHash(value: unknown): unknown {
   return value;
 }
 
+/** Computes the sandbox container config hash. */
 export function computeSandboxConfigHash(input: SandboxHashInput): string {
-  return computeHash(input);
+  return hashTextSha256(JSON.stringify(normalizeForHash(input)));
 }
 
+/** Computes the browser-enabled sandbox container config hash. */
 export function computeSandboxBrowserConfigHash(input: SandboxBrowserHashInput): string {
-  return computeHash(input);
-}
-
-function computeHash(input: unknown): string {
-  const payload = normalizeForHash(input);
-  const raw = JSON.stringify(payload);
-  return hashTextSha256(raw);
+  return computeSandboxConfigHash(input);
 }

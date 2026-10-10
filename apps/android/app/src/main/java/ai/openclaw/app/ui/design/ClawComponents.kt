@@ -1,0 +1,703 @@
+package ai.openclaw.app.ui.design
+
+import ai.openclaw.app.uppercaseFirstGraphemeOrNull
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+
+internal enum class ClawStatus {
+  Neutral,
+  Success,
+  Warning,
+  Danger,
+}
+
+internal fun ClawColors.statusColors(
+  status: ClawStatus,
+  neutral: Color = textMuted,
+): Pair<Color, Color> =
+  when (status) {
+    ClawStatus.Neutral -> neutral to surfaceRaised
+    ClawStatus.Success -> success to successSoft
+    ClawStatus.Warning -> warning to warningSoft
+    ClawStatus.Danger -> danger to dangerSoft
+  }
+
+@Composable
+internal fun ClawScaffold(
+  modifier: Modifier = Modifier,
+  contentPadding: PaddingValues = PaddingValues(horizontal = ClawTheme.spacing.sm, vertical = ClawTheme.spacing.xxs),
+  contentWindowInsets: WindowInsets = WindowInsets.safeDrawing,
+  content: @Composable () -> Unit,
+) {
+  Box(
+    modifier =
+      modifier
+        .fillMaxSize()
+        .background(ClawTheme.colors.canvas)
+        .windowInsetsPadding(contentWindowInsets)
+        .padding(contentPadding),
+  ) {
+    content()
+  }
+}
+
+@Composable
+internal fun ClawSectionHeader(
+  title: String,
+  modifier: Modifier = Modifier,
+  action: (@Composable () -> Unit)? = null,
+) {
+  Row(
+    modifier = modifier.fillMaxWidth(),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.SpaceBetween,
+  ) {
+    Text(
+      text = title,
+      style = ClawTheme.type.section,
+      color = ClawTheme.colors.text,
+    )
+    action?.invoke()
+  }
+}
+
+@Composable
+internal fun ClawPrimaryButton(
+  text: String,
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier,
+  enabled: Boolean = true,
+  icon: ImageVector? = null,
+  loading: Boolean = false,
+  contentPadding: PaddingValues = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+  disabledContentColor: Color = ClawTheme.colors.textSubtle,
+) {
+  Button(
+    onClick = onClick,
+    enabled = enabled,
+    modifier = modifier.heightIn(min = ClawTheme.spacing.touchTarget),
+    shape = RoundedCornerShape(ClawTheme.radii.button),
+    colors =
+      ButtonDefaults.buttonColors(
+        containerColor = ClawTheme.colors.primary,
+        contentColor = ClawTheme.colors.primaryText,
+        disabledContainerColor = ClawTheme.colors.surfacePressed,
+        disabledContentColor = disabledContentColor,
+      ),
+    contentPadding = contentPadding,
+    elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp, pressedElevation = 0.dp),
+  ) {
+    if (loading) {
+      CircularProgressIndicator(
+        modifier = Modifier.size(18.dp),
+        color = ClawTheme.colors.textMuted,
+        strokeWidth = 2.dp,
+        trackColor = Color.Transparent,
+      )
+      Spacer(modifier = Modifier.width(8.dp))
+    } else if (icon != null) {
+      Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(16.dp))
+      Spacer(modifier = Modifier.width(6.dp))
+    }
+    Text(text = text, style = ClawTheme.type.label)
+  }
+}
+
+@Composable
+internal fun ClawSecondaryButton(
+  text: String,
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier,
+  enabled: Boolean = true,
+  icon: ImageVector? = null,
+) {
+  Surface(
+    onClick = onClick,
+    enabled = enabled,
+    modifier = modifier.heightIn(min = ClawTheme.spacing.touchTarget),
+    shape = RoundedCornerShape(ClawTheme.radii.button),
+    color = if (enabled) ClawTheme.colors.surfaceRaised else ClawTheme.colors.surface,
+    contentColor = if (enabled) ClawTheme.colors.text else ClawTheme.colors.textSubtle,
+    border = BorderStroke(1.dp, if (enabled) ClawTheme.colors.borderStrong else ClawTheme.colors.border),
+  ) {
+    Row(
+      modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.Center,
+    ) {
+      if (icon != null) {
+        Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(16.dp))
+        Spacer(modifier = Modifier.width(6.dp))
+      }
+      Text(text = text, style = ClawTheme.type.label)
+    }
+  }
+}
+
+@Composable
+internal fun ClawIconButton(
+  icon: ImageVector,
+  contentDescription: String,
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier,
+  enabled: Boolean = true,
+) {
+  ClawIconTouchTarget(onClick = onClick, enabled = enabled, modifier = modifier) {
+    Box(
+      modifier =
+        Modifier
+          .size(ClawTheme.spacing.iconSlot)
+          .background(
+            color = if (enabled) ClawTheme.colors.surfaceRaised else ClawTheme.colors.surface,
+            shape = CircleShape,
+          ).border(width = 1.dp, color = ClawTheme.colors.border, shape = CircleShape),
+      contentAlignment = Alignment.Center,
+    ) {
+      Icon(
+        imageVector = icon,
+        contentDescription = contentDescription,
+        modifier = Modifier.size(ClawTheme.spacing.icon),
+        tint = if (enabled) ClawTheme.colors.text else ClawTheme.colors.textSubtle,
+      )
+    }
+  }
+}
+
+@Composable
+internal fun ClawPlainIconButton(
+  icon: ImageVector,
+  contentDescription: String,
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier,
+  enabled: Boolean = true,
+) {
+  ClawIconTouchTarget(onClick = onClick, enabled = enabled, modifier = modifier) {
+    Icon(
+      imageVector = icon,
+      contentDescription = contentDescription,
+      modifier = Modifier.size(ClawTheme.spacing.icon),
+      tint = if (enabled) ClawTheme.colors.text else ClawTheme.colors.textSubtle,
+    )
+  }
+}
+
+/**
+ * Keeps the full touch target while the painted shape stays small: the hit area
+ * and ripple fill [ClawSpacing.touchTarget], the content draws at icon scale.
+ */
+@Composable
+private fun ClawIconTouchTarget(
+  onClick: () -> Unit,
+  enabled: Boolean,
+  modifier: Modifier = Modifier,
+  content: @Composable () -> Unit,
+) {
+  Box(
+    modifier =
+      modifier
+        .size(ClawTheme.spacing.touchTarget)
+        .clip(CircleShape)
+        .clickable(enabled = enabled, role = Role.Button, onClick = onClick),
+    contentAlignment = Alignment.Center,
+    content = { content() },
+  )
+}
+
+/** Health and readiness labels flow above their status when both cannot fit beside each other. */
+@Composable
+internal fun ClawStatusRow(
+  title: String,
+  value: String,
+  healthy: Boolean,
+  modifier: Modifier = Modifier,
+) {
+  FlowRow(
+    modifier = modifier.fillMaxWidth().heightIn(min = ClawTheme.spacing.touchTarget).padding(vertical = 6.dp),
+    horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs, Alignment.End),
+    verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
+    itemVerticalAlignment = Alignment.CenterVertically,
+  ) {
+    Text(
+      text = title,
+      style = ClawTheme.type.body,
+      color = ClawTheme.colors.text,
+      modifier = Modifier.weight(1f),
+    )
+    ClawStatusPill(
+      text = value,
+      status = if (healthy) ClawStatus.Success else ClawStatus.Warning,
+    )
+  }
+}
+
+@Composable
+internal fun ClawStatusPill(
+  text: String,
+  status: ClawStatus,
+  modifier: Modifier = Modifier,
+) {
+  val colors = ClawTheme.colors
+  val (accentColor, backgroundColor) = colors.statusColors(status)
+
+  Surface(
+    modifier = modifier,
+    shape = RoundedCornerShape(ClawTheme.radii.row),
+    color = backgroundColor,
+    border = BorderStroke(1.dp, if (status == ClawStatus.Neutral) colors.border else accentColor.copy(alpha = 0.35f)),
+  ) {
+    Row(
+      modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+      Box(
+        modifier =
+          Modifier
+            .size(5.dp)
+            .clip(CircleShape)
+            .background(accentColor),
+      )
+      Text(text = text, style = ClawTheme.type.caption, color = colors.text)
+    }
+  }
+}
+
+@Composable
+internal fun ClawPill(
+  text: String,
+  modifier: Modifier = Modifier,
+  selected: Boolean = false,
+  onClick: (() -> Unit)? = null,
+) {
+  val surfaceModifier =
+    if (onClick == null) {
+      modifier
+    } else {
+      modifier.selectable(selected = selected, role = Role.Button, onClick = onClick)
+    }
+
+  Surface(
+    modifier = surfaceModifier,
+    shape = RoundedCornerShape(ClawTheme.radii.pill),
+    color = if (selected) ClawTheme.colors.accentSoft else ClawTheme.colors.surfaceRaised,
+    contentColor = if (selected) ClawTheme.colors.text else ClawTheme.colors.textMuted,
+    border = BorderStroke(1.dp, if (selected) ClawTheme.colors.accent.copy(alpha = 0.45f) else ClawTheme.colors.border),
+  ) {
+    Text(
+      text = text,
+      modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+      style = ClawTheme.type.caption,
+      maxLines = 1,
+      overflow = TextOverflow.Ellipsis,
+    )
+  }
+}
+
+@Composable
+internal fun <T> ClawListPanel(
+  items: List<T>,
+  modifier: Modifier = Modifier,
+  contentPadding: PaddingValues = PaddingValues(horizontal = ClawTheme.spacing.xs, vertical = 4.dp),
+  dividerColor: Color = ClawTheme.colors.border.copy(alpha = 0.82f),
+  row: @Composable (T) -> Unit,
+) {
+  ClawPanel(modifier = modifier, contentPadding = contentPadding) {
+    ClawSeparatedColumn(items = items, dividerColor = dividerColor, row = row)
+  }
+}
+
+@Composable
+internal fun <T> ClawSeparatedColumn(
+  items: List<T>,
+  modifier: Modifier = Modifier,
+  dividerColor: Color = ClawTheme.colors.border.copy(alpha = 0.82f),
+  row: @Composable (T) -> Unit,
+) {
+  Column(modifier = modifier) {
+    items.forEachIndexed { index, item ->
+      row(item)
+      if (index != items.lastIndex) {
+        HorizontalDivider(color = dividerColor, thickness = 1.dp)
+      }
+    }
+  }
+}
+
+internal fun badgeInitials(
+  value: String,
+  fallback: String,
+): String =
+  value
+    .split(' ', '-', '_')
+    .filter { it.isNotBlank() }
+    .take(2)
+    .mapNotNull { it.uppercaseFirstGraphemeOrNull() }
+    .joinToString("")
+    .ifBlank { fallback }
+
+@Composable
+internal fun ClawTextBadge(
+  text: String,
+  modifier: Modifier = Modifier,
+) {
+  Surface(
+    modifier = modifier.size(28.dp),
+    shape = CircleShape,
+    color = ClawTheme.colors.surfacePressed,
+    border = BorderStroke(1.dp, ClawTheme.colors.border),
+    contentColor = ClawTheme.colors.text,
+  ) {
+    Box(contentAlignment = Alignment.Center) {
+      Text(text = text, style = ClawTheme.type.label, color = ClawTheme.colors.text, maxLines = 1)
+    }
+  }
+}
+
+@Composable
+internal fun ClawIconBadge(
+  icon: ImageVector,
+  modifier: Modifier = Modifier,
+  size: Dp = 28.dp,
+  iconSize: Dp = 14.dp,
+  color: Color = ClawTheme.colors.surfacePressed,
+  borderColor: Color = ClawTheme.colors.border,
+) {
+  Surface(
+    modifier = modifier.size(size),
+    shape = CircleShape,
+    color = color,
+    border = BorderStroke(1.dp, borderColor),
+    contentColor = ClawTheme.colors.text,
+  ) {
+    Box(contentAlignment = Alignment.Center) {
+      Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(iconSize), tint = ClawTheme.colors.text)
+    }
+  }
+}
+
+/** Keeps labels together and flows controls below when their intrinsic widths cannot fit. */
+@Composable
+internal fun ClawListItem(
+  title: String,
+  modifier: Modifier = Modifier,
+  subtitle: String? = null,
+  metadata: String? = null,
+  maxLines: Int = Int.MAX_VALUE,
+  leading: (@Composable () -> Unit)? = null,
+  trailing: (@Composable () -> Unit)? = null,
+  onClick: (() -> Unit)? = null,
+) {
+  val rowModifier =
+    if (onClick == null) {
+      modifier
+    } else {
+      modifier.clickable(onClick = onClick)
+    }
+
+  FlowRow(
+    modifier =
+      rowModifier
+        .fillMaxWidth()
+        .heightIn(min = ClawTheme.spacing.touchTarget)
+        .clip(RoundedCornerShape(ClawTheme.radii.row))
+        .padding(vertical = 6.dp),
+    horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs, Alignment.End),
+    verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
+    itemVerticalAlignment = Alignment.CenterVertically,
+  ) {
+    Row(
+      modifier = Modifier.weight(1f),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
+    ) {
+      leading?.invoke()
+      Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(
+          text = title,
+          style = ClawTheme.type.body,
+          color = ClawTheme.colors.text,
+          maxLines = maxLines,
+          overflow = TextOverflow.Ellipsis,
+        )
+        listOfNotNull(subtitle, metadata).forEach { detail ->
+          Text(
+            text = detail,
+            style = ClawTheme.type.caption,
+            color = ClawTheme.colors.textMuted,
+            maxLines = maxLines,
+            overflow = TextOverflow.Ellipsis,
+          )
+        }
+      }
+    }
+    trailing?.invoke()
+  }
+}
+
+/** Keeps segmented options on one row unless a caller explicitly opts into wrapping. */
+internal fun <T> segmentedControlRows(
+  options: List<T>,
+  maxOptionsPerRow: Int? = null,
+): List<List<T>> {
+  if (options.isEmpty()) return emptyList()
+  if (maxOptionsPerRow == null || options.size <= maxOptionsPerRow) return listOf(options)
+  require(maxOptionsPerRow > 0) { "maxOptionsPerRow must be positive" }
+
+  val rowCount = (options.size + maxOptionsPerRow - 1) / maxOptionsPerRow
+  val minimumRowSize = options.size / rowCount
+  val largerRowCount = options.size % rowCount
+  return List(rowCount) { rowIndex ->
+    val startIndex = rowIndex * minimumRowSize + minOf(rowIndex, largerRowCount)
+    val rowSize = minimumRowSize + if (rowIndex < largerRowCount) 1 else 0
+    options.subList(startIndex, startIndex + rowSize).toList()
+  }
+}
+
+@Composable
+internal fun <T> ClawSegmentedControl(
+  options: List<T>,
+  selected: T,
+  onSelect: (T) -> Unit,
+  modifier: Modifier = Modifier,
+  enabledOptions: Set<T> = options.toSet(),
+  maxOptionsPerRow: Int? = null,
+  optionLabel: (T) -> String = { it.toString() },
+) {
+  val textMeasurer = rememberTextMeasurer()
+  val density = LocalDensity.current
+  BoxWithConstraints(modifier = modifier) {
+    val rowLimit =
+      maxOptionsPerRow?.let { limit ->
+        val labelWidth = options.maxOfOrNull { textMeasurer.measure(optionLabel(it), ClawTheme.type.caption, softWrap = false).size.width } ?: 0
+        // Include the control inset, label padding, and gap before choosing equal-width rows.
+        val available = constraints.maxWidth - with(density) { 2.dp.roundToPx() }
+        val optionWidth = labelWidth + with(density) { 18.dp.roundToPx() }
+        minOf(limit, (available / optionWidth).coerceAtLeast(1))
+      }
+    Column(
+      modifier =
+        Modifier
+          .selectableGroup()
+          .clip(RoundedCornerShape(ClawTheme.radii.control))
+          .background(ClawTheme.colors.surface)
+          .border(1.dp, ClawTheme.colors.border, RoundedCornerShape(ClawTheme.radii.control))
+          .padding(2.dp),
+      verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+      segmentedControlRows(options, rowLimit).forEach { rowOptions ->
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+          rowOptions.forEach { option ->
+            val active = option == selected
+            val enabled = option in enabledOptions
+            Box(
+              modifier =
+                Modifier
+                  .weight(1f)
+                  .heightIn(min = ClawTheme.spacing.control)
+                  .clip(RoundedCornerShape(ClawTheme.radii.row))
+                  .background(if (active) ClawTheme.colors.surfacePressed else Color.Transparent)
+                  .selectable(selected = active, enabled = enabled, role = Role.RadioButton) { onSelect(option) }
+                  .padding(horizontal = 8.dp, vertical = 6.dp),
+              contentAlignment = Alignment.Center,
+            ) {
+              Text(
+                text = optionLabel(option),
+                style = ClawTheme.type.caption,
+                color =
+                  when {
+                    active -> ClawTheme.colors.text
+                    enabled -> ClawTheme.colors.textMuted
+                    else -> ClawTheme.colors.textSubtle
+                  },
+              )
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+@Composable
+internal fun ClawTextField(
+  value: String,
+  onValueChange: (String) -> Unit,
+  placeholder: String,
+  modifier: Modifier = Modifier,
+  minLines: Int = 1,
+  label: String? = null,
+  enabled: Boolean = true,
+  secret: Boolean = false,
+  maxLines: Int = Int.MAX_VALUE,
+) {
+  // Compose 1.12's String editor retains its initial password semantics.
+  // Recreate it when sensitivity changes; the caller still owns the text.
+  key(secret) {
+    val fieldModifier =
+      if (label == null) modifier else modifier.semantics { contentDescription = label }
+    val interactionSource = remember { MutableInteractionSource() }
+    val focused by interactionSource.collectIsFocusedAsState()
+    BasicTextField(
+      value = value,
+      onValueChange = onValueChange,
+      enabled = enabled,
+      interactionSource = interactionSource,
+      modifier =
+        fieldModifier
+          .fillMaxWidth()
+          .heightIn(min = ClawTheme.spacing.touchTarget)
+          .clip(RoundedCornerShape(ClawTheme.radii.control))
+          .background(ClawTheme.colors.surface)
+          .border(
+            1.dp,
+            if (focused) ClawTheme.colors.accent else ClawTheme.colors.border,
+            RoundedCornerShape(ClawTheme.radii.control),
+          ).padding(horizontal = ClawTheme.spacing.xs, vertical = ClawTheme.spacing.xxs),
+      textStyle =
+        ClawTheme.type.body.copy(
+          color = if (enabled) ClawTheme.colors.text else ClawTheme.colors.textSubtle,
+        ),
+      cursorBrush = SolidColor(ClawTheme.colors.text),
+      keyboardOptions =
+        if (secret) KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false) else KeyboardOptions.Default,
+      visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None,
+      minLines = minLines,
+      maxLines = maxLines,
+      decorationBox = { innerTextField ->
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+          label?.let {
+            Text(text = it, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+          }
+          Box(modifier = Modifier.fillMaxWidth()) {
+            if (value.isEmpty()) {
+              Text(text = placeholder, style = ClawTheme.type.body, color = ClawTheme.colors.textSubtle)
+            }
+            innerTextField()
+          }
+        }
+      },
+    )
+  }
+}
+
+@Composable
+internal fun ClawComponentShowcase(modifier: Modifier = Modifier) {
+  var selected by rememberSaveable { mutableStateOf("Chat") }
+  var prompt by rememberSaveable { mutableStateOf("") }
+
+  ClawScaffold(modifier = modifier) {
+    Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.sm)) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+      ) {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+          Text(text = "OpenClaw", style = ClawTheme.type.display, color = ClawTheme.colors.text)
+          Text(text = "Design system prototype", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+        }
+        ClawStatusPill(text = "Connected", status = ClawStatus.Success)
+      }
+
+      ClawSegmentedControl(
+        options = listOf("Chat", "Voice", "Threads"),
+        selected = selected,
+        onSelect = { selected = it },
+        modifier = Modifier.fillMaxWidth(),
+      )
+
+      Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        ClawSectionHeader(title = "Threads")
+        ClawListItem(
+          title = "Testing testing 1 2 3",
+          subtitle = "14 messages · Android",
+          metadata = "now",
+        )
+        ClawListItem(
+          title = "Provider setup",
+          subtitle = "OpenClaw gateway",
+          metadata = "8m",
+        )
+      }
+
+      ClawTextField(value = prompt, onValueChange = { prompt = it }, placeholder = "Ask OpenClaw anything", minLines = 3)
+
+      Row(horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
+        ClawPrimaryButton(text = "Start Chat", onClick = {}, modifier = Modifier.weight(1f))
+        ClawSecondaryButton(text = "Voice", onClick = {}, modifier = Modifier.weight(1f))
+      }
+
+      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        ClawPill(text = "Realtime", selected = true)
+        ClawPill(text = "Dictation")
+        ClawPill(text = "Screen")
+      }
+
+      ClawEmptyState(
+        title = "Nothing needs your attention",
+        body = "OpenClaw will surface approvals, failed jobs, and channel issues here.",
+      )
+    }
+  }
+}

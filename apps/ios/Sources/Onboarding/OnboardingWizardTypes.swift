@@ -1,0 +1,120 @@
+import CoreImage
+import OpenClawKit
+import SwiftUI
+
+enum OnboardingStep: Int, CaseIterable {
+    case intro
+    case welcome
+    case mode
+    case connect
+    case auth
+    case success
+
+    var previous: Self? {
+        Self(rawValue: rawValue - 1)
+    }
+
+    /// Progress label for the manual setup flow (mode → connect → auth → success).
+    var manualProgressTitle: String {
+        let manualSteps: [OnboardingStep] = [.mode, .connect, .auth, .success]
+        guard let idx = manualSteps.firstIndex(of: self) else { return "" }
+        return "Step \(idx + 1) of \(manualSteps.count)"
+    }
+
+    var title: LocalizedStringKey {
+        switch self {
+        case .intro: "Welcome"
+        case .welcome: "Connect Gateway"
+        case .mode: "Gateway Setup"
+        case .connect: "Gateway Details"
+        case .auth: "Gateway Status"
+        case .success: "Connected"
+        }
+    }
+
+    var canGoBack: Bool {
+        switch self {
+        case .intro, .welcome, .success:
+            false
+        case .mode, .connect, .auth:
+            true
+        }
+    }
+}
+
+enum OnboardingConnectPhase: Equatable {
+    case connecting(detail: String)
+    case failed(GatewayConnectionProblem)
+    case failedStatus(message: String, allowsRetry: Bool)
+    case ready
+
+    static func resolve(
+        problem: GatewayConnectionProblem?,
+        connectingDetail: String?,
+        localFailure: String?,
+        retryableFailure: String?) -> Self
+    {
+        // A retry may already be running; keep its previous error readable until success clears it.
+        if let localFailure { return .failedStatus(message: localFailure, allowsRetry: false) }
+        if let problem { return .failed(problem) }
+        if let connectingDetail { return .connecting(detail: connectingDetail) }
+        if let retryableFailure { return .failedStatus(message: retryableFailure, allowsRetry: true) }
+        return .ready
+    }
+}
+
+/// Typed connection attempt replaces string sentinels ("manual", "retry", ...) so
+/// gateway attempts compare by byte-exact stable-ID key, never trimmed strings.
+enum OnboardingGatewayConnectionAttempt: Equatable {
+    case gateway(GatewayStableIdentifier.Key)
+    case manual
+    case retry
+    case retryAutomatically
+    case setupCode
+    case trustCertificate
+}
+
+enum OnboardingQRCodeDestination: Equatable {
+    case mainUI
+    case successScreen
+}
+
+struct OnboardingQRCodeCompletion {
+    private var targetStableID: String?
+
+    mutating func stage(_ link: GatewayConnectDeepLink) {
+        self.targetStableID = GatewayConnectionController.ManualAuthOverride.manualStableID(
+            host: link.host,
+            port: link.port,
+            contextPath: link.contextPath)
+    }
+
+    mutating func cancel() {
+        self.targetStableID = nil
+    }
+
+    mutating func destination(connectedStableID: String?) -> OnboardingQRCodeDestination {
+        guard let targetStableID else { return .successScreen }
+        self.targetStableID = nil
+        return GatewayStableIdentifier.matches(targetStableID, connectedStableID)
+            ? .mainUI
+            : .successScreen
+    }
+}
+
+extension OnboardingWizardView {
+    func detectQRCode(from data: Data) -> String? {
+        guard let ciImage = CIImage(data: data) else { return nil }
+        let detector = CIDetector(
+            ofType: CIDetectorTypeQRCode,
+            context: nil,
+            options: [CIDetectorAccuracy: CIDetectorAccuracyHigh])
+        let features = detector?.features(in: ciImage) ?? []
+        for feature in features {
+            if let qr = feature as? CIQRCodeFeature, let message = qr.messageString {
+                return message
+            }
+        }
+        return nil
+    }
+}

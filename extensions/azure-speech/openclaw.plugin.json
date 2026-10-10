@@ -1,30 +1,48 @@
 {
   "id": "azure-speech",
+  "categories": ["voice"],
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "activation": {
     "onStartup": false
   },
   "enabledByDefault": true,
   "name": "Azure Speech",
   "description": "Azure AI Speech text-to-speech (MP3, native Ogg/Opus voice notes, PCM telephony).",
-  "providerAuthEnvVars": {
-    "azure-speech": [
-      "AZURE_SPEECH_KEY",
-      "AZURE_SPEECH_API_KEY",
-      "SPEECH_KEY",
-      "AZURE_SPEECH_REGION",
-      "SPEECH_REGION"
-    ],
-    "azure": [
-      "AZURE_SPEECH_KEY",
-      "AZURE_SPEECH_API_KEY",
-      "SPEECH_KEY",
-      "AZURE_SPEECH_REGION",
-      "SPEECH_REGION"
+  "setup": {
+    "providers": [
+      {
+        "id": "azure-speech",
+        "envVars": ["AZURE_SPEECH_KEY", "AZURE_SPEECH_API_KEY", "SPEECH_KEY", "AZURE_SPEECH_REGION", "SPEECH_REGION"]
+      },
+      {
+        "id": "azure",
+        "envVars": ["AZURE_SPEECH_KEY", "AZURE_SPEECH_API_KEY", "SPEECH_KEY", "AZURE_SPEECH_REGION", "SPEECH_REGION"]
+      }
     ]
   },
   "contracts": {
     "speechProviders": ["azure-speech", "azure"]
   },
+  "configGroups": [
+    {
+      "id": "azure-connection",
+      "title": "Azure connection",
+      "order": 10,
+      "properties": ["apiKey", "region", "endpoint", "baseUrl"]
+    },
+    {
+      "id": "voice",
+      "title": "Voice",
+      "order": 20,
+      "properties": ["voice", "lang"]
+    },
+    {
+      "id": "audio-formats",
+      "title": "Audio formats",
+      "order": 30,
+      "properties": ["outputFormat", "voiceNoteOutputFormat"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

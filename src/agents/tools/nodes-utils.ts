@@ -1,10 +1,36 @@
-import { parseNodeList, parsePairingList } from "../../shared/node-list-parse.js";
+import crypto from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { getAgentToolAssistantTurnId } from "../../../packages/agent-core/src/tool-execution-context.js";
+import { SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY } from "../../../packages/gateway-protocol/src/system-run-execution-context.js";
+import { parseNodeList } from "../../shared/node-list-parse.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { resolveNodeFromNodeList, resolveNodeIdFromNodeList } from "../../shared/node-resolve.js";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
 
 export type { NodeListNode };
+
+export function nodeToolIdempotencyKey(params: {
+  command: "computer.act" | "mobile.ui.act";
+  scope?: string;
+  toolCallId: string;
+  purpose?: "follow-up-observation";
+}): string {
+  const stableScope = params.scope?.trim();
+  const stableCallId = params.toolCallId.trim();
+  // Runner-normalized call ids are unique within an attempt, not across all runs.
+  if (!stableScope || !stableCallId) {
+    return crypto.randomUUID();
+  }
+  const parts = [stableScope, getAgentToolAssistantTurnId() ?? "", stableCallId, params.command];
+  if (params.purpose) {
+    parts.push(params.purpose);
+  }
+  // The automatic read shares a call id with input, but must never replay its result.
+  const prefix = params.purpose ? "computer.observation" : params.command;
+  // v2 versions scope + assistant turn + call id + command, not the wire contract.
+  return `${prefix}:v2:${sha256Hex(JSON.stringify(parts))}`;
+}
 
 type DefaultNodeFallback = "none" | "first";
 
@@ -14,63 +40,6 @@ type DefaultNodeSelectionOptions = {
   preferLocalMac?: boolean;
 };
 
-function messageFromError(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  if (typeof error === "string") {
-    return error;
-  }
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "message" in error &&
-    typeof (error as { message?: unknown }).message === "string"
-  ) {
-    return (error as { message: string }).message;
-  }
-  if (typeof error === "object" && error !== null) {
-    try {
-      return JSON.stringify(error);
-    } catch {
-      return "";
-    }
-  }
-  return "";
-}
-
-function shouldFallbackToPairList(error: unknown): boolean {
-  const message = normalizeOptionalLowercaseString(messageFromError(error)) ?? "";
-  if (!message.includes("node.list")) {
-    return false;
-  }
-  return (
-    message.includes("unknown method") ||
-    message.includes("method not found") ||
-    message.includes("not implemented") ||
-    message.includes("unsupported")
-  );
-}
-
-async function loadNodes(opts: GatewayCallOptions): Promise<NodeListNode[]> {
-  try {
-    const res = await callGatewayTool("node.list", opts, {});
-    return parseNodeList(res);
-  } catch (error) {
-    if (!shouldFallbackToPairList(error)) {
-      throw error;
-    }
-    const res = await callGatewayTool("node.pair.list", opts, {});
-    const { paired } = parsePairingList(res);
-    return paired.map((n) => ({
-      nodeId: n.nodeId,
-      displayName: n.displayName,
-      platform: n.platform,
-      remoteIp: n.remoteIp,
-    }));
-  }
-}
-
 function isLocalMacNode(node: NodeListNode): boolean {
   return (
     normalizeOptionalLowercaseString(node.platform)?.startsWith("mac") === true &&
@@ -79,13 +48,10 @@ function isLocalMacNode(node: NodeListNode): boolean {
   );
 }
 
-function compareDefaultNodeOrder(a: NodeListNode, b: NodeListNode): number {
-  const aConnectedAt = Number.isFinite(a.connectedAtMs) ? (a.connectedAtMs ?? 0) : -1;
-  const bConnectedAt = Number.isFinite(b.connectedAtMs) ? (b.connectedAtMs ?? 0) : -1;
-  if (aConnectedAt !== bConnectedAt) {
-    return bConnectedAt - aConnectedAt;
-  }
-  return a.nodeId.localeCompare(b.nodeId);
+function compareNewestTimestamp(a?: number, b?: number): number {
+  const aValue = Number.isFinite(a) ? (a ?? 0) : -1;
+  const bValue = Number.isFinite(b) ? (b ?? 0) : -1;
+  return bValue - aValue;
 }
 
 export function selectDefaultNodeFromList(
@@ -103,14 +69,14 @@ export function selectDefaultNodeFromList(
   const connected = withCapability.filter((n) => n.connected);
   const candidates = connected.length > 0 ? connected : withCapability;
   if (candidates.length === 1) {
-    return candidates[0];
+    return candidates.at(0) ?? null;
   }
 
   const preferLocalMac = options.preferLocalMac ?? true;
   if (preferLocalMac) {
     const local = candidates.filter(isLocalMacNode);
     if (local.length === 1) {
-      return local[0];
+      return local.at(0) ?? null;
     }
   }
 
@@ -119,11 +85,16 @@ export function selectDefaultNodeFromList(
     return null;
   }
 
-  const ordered = [...candidates].toSorted(compareDefaultNodeOrder);
-  // Multiple candidates — pick the first connected canvas-capable node.
-  // For A2UI and other canvas operations, any node works since multi-node
-  // setups broadcast surfaces across devices.
-  return ordered[0] ?? null;
+  // Once the pool is known to be offline, stale connection timestamps must not
+  // outrank the durable last-seen signal used to choose the wake target.
+  const recencyField = connected.length > 0 ? "connectedAtMs" : "lastSeenAtMs";
+  return candidates.reduce<NodeListNode | null>((best, node) => {
+    const order = best
+      ? compareNewestTimestamp(node[recencyField], best[recencyField]) ||
+        node.nodeId.localeCompare(best.nodeId)
+      : -1;
+    return order < 0 ? node : best;
+  }, null);
 }
 
 function pickDefaultNode(nodes: NodeListNode[]): NodeListNode | null {
@@ -134,37 +105,79 @@ function pickDefaultNode(nodes: NodeListNode[]): NodeListNode | null {
   });
 }
 
-export async function listNodes(opts: GatewayCallOptions): Promise<NodeListNode[]> {
-  return loadNodes(opts);
+export async function listNodes(
+  opts: GatewayCallOptions,
+  signal?: AbortSignal,
+): Promise<NodeListNode[]> {
+  // In-process calls share this build; every transported call replaces this from hello.
+  let supportsContext = true;
+  const res = await callGatewayTool(
+    "node.list",
+    opts,
+    {},
+    {
+      signal,
+      onHelloOk: (hello) => {
+        supportsContext =
+          hello.features.capabilities?.includes(SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY) === true;
+      },
+    },
+  );
+  // Older Gateways expose unknown node caps but strip the new field from system.run.
+  const nodes = parseNodeList(res);
+  if (!supportsContext) {
+    // Only transport can lack support; these records were decoded for this RPC.
+    for (const node of nodes) {
+      node.caps = node.caps?.filter((cap) => cap !== SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY);
+    }
+  }
+  return nodes;
 }
 
 export function resolveNodeIdFromList(
   nodes: NodeListNode[],
   query?: string,
   allowDefault = false,
+  options: { allowCompactDisplayName?: boolean } = {},
 ): string {
   return resolveNodeIdFromNodeList(nodes, query, {
     allowDefault,
-    pickDefaultNode: pickDefaultNode,
+    allowCompactDisplayName: options.allowCompactDisplayName,
+    pickDefaultNode,
   });
 }
 
-export async function resolveNodeId(
-  opts: GatewayCallOptions,
-  query?: string,
-  allowDefault = false,
-) {
-  return (await resolveNode(opts, query, allowDefault)).nodeId;
+export async function resolveAgentNodeId(opts: GatewayCallOptions, query: string) {
+  return (await resolveAgentNode(opts, query)).nodeId;
 }
 
-export async function resolveNode(
+export async function resolveAgentNode(
   opts: GatewayCallOptions,
-  query?: string,
-  allowDefault = false,
+  query: string,
 ): Promise<NodeListNode> {
-  const nodes = await loadNodes(opts);
-  return resolveNodeFromNodeList(nodes, query, {
-    allowDefault,
-    pickDefaultNode: pickDefaultNode,
-  });
+  return resolveNodeFromNodeList(await listNodes(opts), query);
+}
+
+export async function invokeAgentNodeCommand(params: {
+  gatewayOpts: GatewayCallOptions;
+  nodeId: string;
+  command: string;
+  commandParams: Record<string, unknown>;
+  timeoutMs?: number;
+  idempotencyKey?: string;
+  signal?: AbortSignal;
+}): Promise<unknown> {
+  const raw = await callGatewayTool<{ payload: unknown }>(
+    "node.invoke",
+    params.gatewayOpts,
+    {
+      nodeId: params.nodeId,
+      command: params.command,
+      params: params.commandParams,
+      timeoutMs: params.timeoutMs,
+      idempotencyKey: params.idempotencyKey ?? crypto.randomUUID(),
+    },
+    { signal: params.signal },
+  );
+  return raw && typeof raw === "object" && Object.hasOwn(raw, "payload") ? raw.payload : raw;
 }

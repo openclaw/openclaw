@@ -3,14 +3,19 @@ import Foundation
 import OpenClawKit
 
 final class CalendarService: CalendarServicing {
+    private let eventAuthorizationStatus: @Sendable () -> EKAuthorizationStatus
+
+    init(
+        eventAuthorizationStatus: @escaping @Sendable () -> EKAuthorizationStatus = {
+            EKEventStore.authorizationStatus(for: .event)
+        })
+    {
+        self.eventAuthorizationStatus = eventAuthorizationStatus
+    }
+
     func events(params: OpenClawCalendarEventsParams) async throws -> OpenClawCalendarEventsPayload {
-        let status = EKEventStore.authorizationStatus(for: .event)
-        let authorized: Bool = if status == .notDetermined || status == .writeOnly {
-            await Self.requestFullEventAccess()
-        } else {
-            EventKitAuthorization.allowsRead(status: status)
-        }
-        guard authorized else {
+        let status = self.eventAuthorizationStatus()
+        guard DevicePermissionStatusMap.eventKitRead(status) == .granted else {
             throw NSError(domain: "Calendar", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "CALENDAR_PERMISSION_REQUIRED: grant Calendar permission",
             ])
@@ -23,31 +28,17 @@ final class CalendarService: CalendarServicing {
         let predicate = store.predicateForEvents(withStart: start, end: end, calendars: nil)
         let events = store.events(matching: predicate)
         let limit = max(1, min(params.limit ?? 50, 500))
-        let selected = Array(events.prefix(limit))
-
         let formatter = ISO8601DateFormatter()
-        let payload = selected.map { event in
-            OpenClawCalendarEventPayload(
-                identifier: event.eventIdentifier ?? UUID().uuidString,
-                title: event.title ?? "(untitled)",
-                startISO: formatter.string(from: event.startDate),
-                endISO: formatter.string(from: event.endDate),
-                isAllDay: event.isAllDay,
-                location: event.location,
-                calendarTitle: event.calendar.title)
+        let payload = events.prefix(limit).map { event in
+            Self.payload(from: event, fallbackTitle: "(untitled)", formatter: formatter)
         }
 
         return OpenClawCalendarEventsPayload(events: payload)
     }
 
     func add(params: OpenClawCalendarAddParams) async throws -> OpenClawCalendarAddPayload {
-        let status = EKEventStore.authorizationStatus(for: .event)
-        let authorized: Bool = if status == .notDetermined {
-            await Self.requestWriteOnlyEventAccess()
-        } else {
-            EventKitAuthorization.allowsWrite(status: status)
-        }
-        guard authorized else {
+        let status = self.eventAuthorizationStatus()
+        guard DevicePermissionStatusMap.eventKitWrite(status) == .granted else {
             throw NSError(domain: "Calendar", code: 2, userInfo: [
                 NSLocalizedDescriptionKey: "CALENDAR_PERMISSION_REQUIRED: grant Calendar permission",
             ])
@@ -91,34 +82,22 @@ final class CalendarService: CalendarServicing {
 
         try store.save(event, span: .thisEvent)
 
-        let payload = OpenClawCalendarEventPayload(
+        return OpenClawCalendarAddPayload(event: Self.payload(from: event, fallbackTitle: title, formatter: formatter))
+    }
+
+    private static func payload(
+        from event: EKEvent,
+        fallbackTitle: String,
+        formatter: ISO8601DateFormatter) -> OpenClawCalendarEventPayload
+    {
+        OpenClawCalendarEventPayload(
             identifier: event.eventIdentifier ?? UUID().uuidString,
-            title: event.title ?? title,
+            title: event.title ?? fallbackTitle,
             startISO: formatter.string(from: event.startDate),
             endISO: formatter.string(from: event.endDate),
             isAllDay: event.isAllDay,
             location: event.location,
             calendarTitle: event.calendar.title)
-
-        return OpenClawCalendarAddPayload(event: payload)
-    }
-
-    private static func requestFullEventAccess() async -> Bool {
-        await PermissionRequestBridge.awaitRequest { completion in
-            let store = EKEventStore()
-            store.requestFullAccessToEvents { granted, _ in
-                completion(granted)
-            }
-        }
-    }
-
-    private static func requestWriteOnlyEventAccess() async -> Bool {
-        await PermissionRequestBridge.awaitRequest { completion in
-            let store = EKEventStore()
-            store.requestWriteOnlyAccessToEvents { granted, _ in
-                completion(granted)
-            }
-        }
     }
 
     private static func resolveCalendar(

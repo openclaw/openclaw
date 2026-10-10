@@ -1,81 +1,31 @@
-import { setTimeout as sleep } from "node:timers/promises";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { QaBusState } from "./bus-state.js";
 import { getQaProvider } from "./providers/index.js";
-import { QaStateBackedTransportAdapter } from "./qa-transport.js";
+import {
+  createQaTransportStateMethods,
+  sendQaTransportNativeCommand,
+  waitForQaTransportAccountReady,
+  waitForQaTransportCondition,
+  waitForQaTransportOutboundSequence,
+} from "./qa-transport.js";
 import type {
-  QaTransportActionName,
+  QaTransportAdapter,
   QaTransportGatewayConfig,
-  QaTransportGatewayClient,
+  QaTransportOutboundSequenceMatch,
+  QaTransportPolicy,
   QaTransportReportParams,
 } from "./qa-transport.js";
-import { qaChannelPlugin } from "./runtime-api.js";
+import { waitForCompletedQaReply } from "./suite-runtime-transport.js";
 
 const QA_CHANNEL_ID = "qa-channel";
 const QA_CHANNEL_ACCOUNT_ID = "default";
 export const QA_CHANNEL_REQUIRED_PLUGIN_IDS = Object.freeze([QA_CHANNEL_ID]);
 export const QA_CHANNEL_DEFAULT_SUITE_CONCURRENCY = 4;
 
-async function waitForQaChannelReady(params: {
-  gateway: QaTransportGatewayClient;
-  timeoutMs?: number;
-  pollIntervalMs?: number;
-}) {
-  const timeoutMs = params.timeoutMs ?? 45_000;
-  const pollIntervalMs = params.pollIntervalMs ?? 500;
-  const startedAt = Date.now();
-  let lastAccountStatus = "no qa-channel accounts reported";
-  let lastProbeError: string | null = null;
-
-  while (Date.now() - startedAt < timeoutMs) {
-    try {
-      const payload = (await params.gateway.call(
-        "channels.status",
-        { probe: false, timeoutMs: 2_000 },
-        { timeoutMs: 5_000 },
-      )) as {
-        channelAccounts?: Record<
-          string,
-          Array<{
-            accountId?: string;
-            running?: boolean;
-            restartPending?: boolean;
-          }>
-        >;
-      };
-      const accounts = payload.channelAccounts?.[QA_CHANNEL_ID] ?? [];
-      const account =
-        accounts.find((entry) => entry.accountId === QA_CHANNEL_ACCOUNT_ID) ?? accounts[0];
-      lastProbeError = null;
-      lastAccountStatus = account
-        ? JSON.stringify({
-            accountId: account.accountId ?? null,
-            running: account.running ?? null,
-            restartPending: account.restartPending ?? null,
-          })
-        : "no qa-channel accounts reported";
-      if (account?.running && account.restartPending !== true) {
-        return;
-      }
-    } catch (error) {
-      lastProbeError = formatErrorMessage(error);
-    }
-    await sleep(pollIntervalMs);
-  }
-
-  throw new Error(
-    [
-      `timed out after ${timeoutMs}ms waiting for qa-channel ready`,
-      `last status: ${lastAccountStatus}`,
-      ...(lastProbeError ? [`last probe error: ${lastProbeError}`] : []),
-    ].join("; "),
-  );
-}
-
 export function createQaChannelGatewayConfig(params: {
   baseUrl: string;
+  transportPolicy?: QaTransportPolicy;
 }): QaTransportGatewayConfig {
+  const senderAllowlist = params.transportPolicy?.senderAllowlist;
   return {
     channels: {
       [QA_CHANNEL_ID]: {
@@ -83,11 +33,27 @@ export function createQaChannelGatewayConfig(params: {
         baseUrl: params.baseUrl,
         botUserId: "openclaw",
         botDisplayName: "OpenClaw QA",
-        allowFrom: ["*"],
+        allowFrom: senderAllowlist ? [...senderAllowlist] : ["*"],
+        ...(senderAllowlist
+          ? {
+              groupPolicy: "allowlist" as const,
+              groupAllowFrom: [...senderAllowlist],
+            }
+          : {}),
+        ...(params.transportPolicy?.requireGroupMention
+          ? {
+              groups: {
+                "*": {
+                  requireMention: true,
+                },
+              },
+            }
+          : {}),
         pollTimeoutMs: 250,
       },
     },
     messages: {
+      visibleReplies: "automatic",
       groupChat: {
         mentionPatterns: ["\\b@?openclaw\\b"],
         visibleReplies: "automatic",
@@ -102,19 +68,15 @@ function createQaChannelReportNotes(params: QaTransportReportParams) {
     provider.kind === "mock"
       ? `Runs against qa-channel + qa-lab bus + real gateway child + ${params.providerMode} provider.`
       : `Runs against qa-channel + qa-lab bus + real gateway child + live frontier models (${params.primaryModel}, ${params.alternateModel})${params.fastMode ? " with fast mode enabled" : ""}.`,
-    params.concurrency > 1
+    params.isolatedWorkers === true
       ? `Scenarios run in isolated gateway workers with concurrency ${params.concurrency}.`
       : "Scenarios run serially in one gateway worker.",
-    "Cron uses a one-minute schedule assertion plus forced execution for fast verification.",
+    "Scheduling scenarios verify stored schedules and execution behavior through the Gateway.",
   ];
 }
 
-async function handleQaChannelAction(params: {
-  action: QaTransportActionName;
-  args: Record<string, unknown>;
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}) {
+async function handleQaChannelAction(params: Parameters<QaTransportAdapter["handleAction"]>[0]) {
+  const { qaChannelPlugin } = await import("openclaw/plugin-sdk/qa-channel");
   return await qaChannelPlugin.actions?.handleAction?.({
     channel: QA_CHANNEL_ID,
     action: params.action,
@@ -124,28 +86,59 @@ async function handleQaChannelAction(params: {
   });
 }
 
-class QaChannelTransport extends QaStateBackedTransportAdapter {
-  constructor(state: QaBusState) {
-    super({
-      id: QA_CHANNEL_ID,
-      label: "qa-channel + qa-lab bus",
-      accountId: QA_CHANNEL_ACCOUNT_ID,
-      requiredPluginIds: QA_CHANNEL_REQUIRED_PLUGIN_IDS,
-      state,
-    });
-  }
-
-  createGatewayConfig = createQaChannelGatewayConfig;
-  waitReady = waitForQaChannelReady;
-  buildAgentDelivery = ({ target }: { target: string }) => ({
-    channel: QA_CHANNEL_ID,
-    replyChannel: QA_CHANNEL_ID,
-    replyTo: target,
-  });
-  handleAction = handleQaChannelAction;
-  createReportNotes = createQaChannelReportNotes;
-}
-
-export function createQaChannelTransport(state: QaBusState) {
-  return new QaChannelTransport(state);
+export function createQaChannelTransport(state: QaBusState, transportPolicy?: QaTransportPolicy) {
+  const methods = createQaTransportStateMethods({ state, accountId: QA_CHANNEL_ACCOUNT_ID });
+  return {
+    ...methods,
+    id: QA_CHANNEL_ID,
+    label: "qa-channel + qa-lab bus",
+    accountId: QA_CHANNEL_ACCOUNT_ID,
+    requiredPluginIds: QA_CHANNEL_REQUIRED_PLUGIN_IDS,
+    supportedActions: ["delete", "edit", "react", "thread-create"],
+    waitForCompletedReply: ({ inbound, timeoutMs }) =>
+      waitForCompletedQaReply(state, inbound, timeoutMs),
+    async reset() {
+      await waitForQaTransportCondition(() => {
+        if (
+          state
+            .getSnapshot()
+            .events.some(
+              (event) =>
+                event.kind === "inbound-message" &&
+                state.getAcknowledgedPollCursor(event.accountId) < event.cursor,
+            )
+        ) {
+          return undefined;
+        }
+        // Reset clears every account. Check and clear together so a newly admitted
+        // turn cannot lose its message while an earlier turn is being drained.
+        state.reset();
+        return true;
+      });
+    },
+    createGatewayConfig: ({ baseUrl }) =>
+      createQaChannelGatewayConfig({ baseUrl, transportPolicy }),
+    waitReady: (params) =>
+      waitForQaTransportAccountReady({
+        ...params,
+        accountId: QA_CHANNEL_ACCOUNT_ID,
+        channel: QA_CHANNEL_ID,
+      }),
+    buildAgentDelivery: ({ target, threadId }) => ({
+      channel: QA_CHANNEL_ID,
+      replyChannel: QA_CHANNEL_ID,
+      replyTo: target,
+      ...(threadId ? { threadId } : {}),
+    }),
+    sendNativeCommand: (input) => sendQaTransportNativeCommand(methods, input),
+    async waitForOutboundSequence(input: QaTransportOutboundSequenceMatch) {
+      return await waitForQaTransportOutboundSequence({
+        accountId: QA_CHANNEL_ACCOUNT_ID,
+        input,
+        readEvents: () => state.getSnapshot().events,
+      });
+    },
+    handleAction: handleQaChannelAction,
+    createReportNotes: createQaChannelReportNotes,
+  } satisfies QaTransportAdapter;
 }

@@ -1,3 +1,4 @@
+// Comfy helper module supports test helpers behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
 import { expect, vi } from "vitest";
@@ -16,7 +17,6 @@ type ComfyCloudJobResponseOptions = {
   filename: string;
   outputKind: "gifs" | "images";
   promptId: string;
-  redirectLocation: string;
 };
 
 export function buildComfyConfig(config: Record<string, unknown>): OpenClawConfig {
@@ -80,14 +80,6 @@ export function mockComfyCloudJobResponses(
     )
     .mockResolvedValueOnce(
       fetchGuardResponse(
-        new Response(null, {
-          status: 302,
-          headers: { location: options.redirectLocation },
-        }),
-      ),
-    )
-    .mockResolvedValueOnce(
-      fetchGuardResponse(
         new Response(options.body, {
           status: 200,
           headers: { "content-type": options.contentType },
@@ -96,7 +88,7 @@ export function mockComfyCloudJobResponses(
     );
 }
 
-function fetchGuardJson(body: unknown) {
+export function fetchGuardJson(body: unknown) {
   return fetchGuardResponse(
     new Response(JSON.stringify(body), {
       status: 200,

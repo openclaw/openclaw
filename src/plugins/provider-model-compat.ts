@@ -1,6 +1,15 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
-import { detectOpenAICompletionsCompat } from "../agents/openai-completions-compat.js";
+import { resolveOpenAICompletionsCompat } from "@openclaw/ai/internal/openai-completions-compat";
+// Normalizes provider model compatibility metadata from plugins.
+import "@openclaw/ai/internal/tool-schema";
+import { normalizeModelTransportBaseUrl } from "../agents/model-compat-catalog.js";
+import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
+import { getModelProviderRequestRouteFacts } from "../agents/provider-request-config.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
+import type { Model } from "../llm/types.js";
+import type { PluginMetadataSnapshotOwnerMaps } from "./plugin-metadata-snapshot.types.js";
+// Tool-schema compat predicates moved into @openclaw/ai (agent-tools-parameter-schema);
+// re-export so existing core/plugin callers keep one canonical import site.
+export { resolveUnsupportedToolSchemaKeywords } from "@openclaw/ai/internal/tool-schema";
 
 export function extractModelCompat(
   modelOrCompat: { compat?: unknown } | ModelCompatConfig | undefined,
@@ -41,59 +50,25 @@ export function hasToolSchemaProfile(
   return extractModelCompat(modelOrCompat)?.toolSchemaProfile === profile;
 }
 
-export function hasNativeWebSearchTool(
-  modelOrCompat: { compat?: unknown } | ModelCompatConfig | undefined,
-): boolean {
-  return extractModelCompat(modelOrCompat)?.nativeWebSearchTool === true;
-}
-
 export function resolveToolCallArgumentsEncoding(
   modelOrCompat: { compat?: unknown } | ModelCompatConfig | undefined,
 ): ModelCompatConfig["toolCallArgumentsEncoding"] | undefined {
   return extractModelCompat(modelOrCompat)?.toolCallArgumentsEncoding;
 }
 
-export function resolveUnsupportedToolSchemaKeywords(
-  modelOrCompat: { compat?: unknown } | ModelCompatConfig | undefined,
-): ReadonlySet<string> {
-  const keywords = extractModelCompat(modelOrCompat)?.unsupportedToolSchemaKeywords ?? [];
-  return new Set(
-    keywords
-      .filter((keyword): keyword is string => typeof keyword === "string")
-      .map((keyword) => keyword.trim())
-      .filter(Boolean),
-  );
-}
-
-export function shouldOmitEmptyArrayItems(
-  modelOrCompat: { compat?: unknown } | ModelCompatConfig | undefined,
-): boolean {
-  const compat = extractModelCompat(modelOrCompat) as
-    | (ModelCompatConfig & { omitEmptyArrayItems?: unknown })
-    | undefined;
-  return compat?.omitEmptyArrayItems === true;
-}
-
-function isOpenAiCompletionsModel(model: Model<Api>): model is Model<"openai-completions"> {
+function isOpenAiCompletionsModel(model: Model): model is Model<"openai-completions"> {
   return model.api === "openai-completions";
 }
 
-function isAnthropicMessagesModel(model: Model<Api>): model is Model<"anthropic-messages"> {
-  return model.api === "anthropic-messages";
-}
-
-function normalizeAnthropicBaseUrl(baseUrl: string): string {
-  return baseUrl.replace(/\/v1\/?$/, "");
-}
-
-export function normalizeModelCompat(model: Model<Api>): Model<Api> {
+export function normalizeModelCompat(
+  model: Model,
+  providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps,
+): Model {
   const baseUrl = model.baseUrl ?? "";
 
-  if (isAnthropicMessagesModel(model) && baseUrl) {
-    const normalized = normalizeAnthropicBaseUrl(baseUrl);
-    if (normalized !== baseUrl) {
-      return { ...model, baseUrl: normalized } as Model<"anthropic-messages">;
-    }
+  const normalized = normalizeModelTransportBaseUrl(model.api, baseUrl);
+  if (normalized !== baseUrl) {
+    return { ...model, baseUrl: normalized };
   }
 
   if (!isOpenAiCompletionsModel(model)) {
@@ -101,46 +76,45 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   }
 
   const compat = model.compat ?? undefined;
-  const detectedCompatDefaults = baseUrl
-    ? detectOpenAICompletionsCompat(model).defaults
-    : undefined;
-  const needsForce = Boolean(
-    detectedCompatDefaults &&
-    (!detectedCompatDefaults.supportsDeveloperRole ||
-      !detectedCompatDefaults.supportsUsageInStreaming ||
-      !detectedCompatDefaults.supportsStrictMode),
-  );
-  if (!needsForce) {
+  if (!baseUrl) {
     return model;
   }
-  const forcedDeveloperRole = compat?.supportsDeveloperRole === true;
-  const hasStreamingUsageOverride = compat?.supportsUsageInStreaming !== undefined;
-  const targetStrictMode = compat?.supportsStrictMode ?? detectedCompatDefaults?.supportsStrictMode;
+  const resolvedProviderMetadataOwners =
+    providerMetadataOwners ?? getModelProviderRequestRouteFacts(model)?.providerMetadataOwners;
+  // Metadata supplies its capability resolver explicitly; only execution facades
+  // install the transport host, which would pull runtime into plugin discovery.
+  const resolved = resolveOpenAICompletionsCompat(model, (input) =>
+    resolveProviderRequestCapabilities({
+      ...input,
+      ...(resolvedProviderMetadataOwners
+        ? { providerMetadataOwners: resolvedProviderMetadataOwners }
+        : {}),
+    }),
+  );
   if (
-    compat?.supportsDeveloperRole !== undefined &&
-    hasStreamingUsageOverride &&
-    compat?.supportsStrictMode !== undefined
+    resolved.supportsDeveloperRole &&
+    resolved.supportsUsageInStreaming &&
+    resolved.supportsStrictMode
   ) {
+    return model;
+  }
+  const patch = {
+    ...(compat?.supportsDeveloperRole === undefined
+      ? { supportsDeveloperRole: resolved.supportsDeveloperRole }
+      : {}),
+    ...(compat?.supportsUsageInStreaming === undefined
+      ? { supportsUsageInStreaming: resolved.supportsUsageInStreaming }
+      : {}),
+    ...(compat?.supportsStrictMode === undefined
+      ? { supportsStrictMode: resolved.supportsStrictMode }
+      : {}),
+  };
+  if (Object.keys(patch).length === 0) {
     return model;
   }
 
   return {
     ...model,
-    compat: compat
-      ? {
-          ...compat,
-          supportsDeveloperRole: forcedDeveloperRole || false,
-          ...(hasStreamingUsageOverride
-            ? {}
-            : {
-                supportsUsageInStreaming: detectedCompatDefaults?.supportsUsageInStreaming ?? false,
-              }),
-          supportsStrictMode: targetStrictMode,
-        }
-      : {
-          supportsDeveloperRole: false,
-          supportsUsageInStreaming: detectedCompatDefaults?.supportsUsageInStreaming ?? false,
-          supportsStrictMode: detectedCompatDefaults?.supportsStrictMode ?? false,
-        },
+    compat: { ...compat, ...patch },
   } as typeof model;
 }

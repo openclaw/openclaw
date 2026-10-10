@@ -10,9 +10,10 @@ import {
   mergeScopedSearchConfig,
   readCachedSearchPayload,
   readConfiguredSecretString,
-  readNumberParam,
+  readPositiveIntegerParam,
   readProviderEnvValue,
   readStringParam,
+  MAX_SEARCH_COUNT,
   resolveProviderWebSearchPluginConfig,
   resolveSearchCacheTtlMs,
   resolveSearchCount,
@@ -23,7 +24,10 @@ import {
   writeCachedSearchPayload,
   type SearchConfigRecord,
 } from "openclaw/plugin-sdk/provider-web-search";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const MINIMAX_SEARCH_ENDPOINT_GLOBAL = "https://api.minimax.io/v1/coding_plan/search";
 const MINIMAX_SEARCH_ENDPOINT_CN = "https://api.minimaxi.com/v1/coding_plan/search";
@@ -55,8 +59,10 @@ type MiniMaxSearchResponse = {
 
 function resolveMiniMaxApiKey(searchConfig?: SearchConfigRecord): string | undefined {
   return (
-    readConfiguredSecretString(searchConfig?.apiKey, "tools.web.search.apiKey") ??
-    readProviderEnvValue([...MINIMAX_TOKEN_PLAN_ENV_VARS, "MINIMAX_API_KEY"])
+    readConfiguredSecretString(
+      searchConfig?.apiKey,
+      "plugins.entries.minimax.config.webSearch.apiKey",
+    ) ?? readProviderEnvValue([...MINIMAX_TOKEN_PLAN_ENV_VARS, "MINIMAX_API_KEY"])
   );
 }
 
@@ -65,36 +71,23 @@ function isMiniMaxCnHost(value: string | undefined): boolean {
   if (!trimmed) {
     return false;
   }
-  try {
-    return new URL(trimmed).hostname.endsWith("minimaxi.com");
-  } catch {
-    return trimmed.includes("minimaxi.com");
-  }
+  return URL.parse(trimmed)?.hostname.endsWith("minimaxi.com") ?? trimmed.includes("minimaxi.com");
 }
 
 function resolveMiniMaxRegion(
   searchConfig?: SearchConfigRecord,
   config?: Record<string, unknown>,
 ): "cn" | "global" {
-  // 1. Explicit region in search config takes priority
-  const minimax =
-    typeof searchConfig?.minimax === "object" &&
-    searchConfig.minimax !== null &&
-    !Array.isArray(searchConfig.minimax)
-      ? (searchConfig.minimax as Record<string, unknown>)
-      : undefined;
-  const configuredRegion =
-    typeof minimax?.region === "string" ? normalizeOptionalString(minimax.region) : undefined;
+  const minimax = asOptionalRecord(searchConfig?.minimax);
+  const configuredRegion = normalizeOptionalString(minimax?.region);
   if (configuredRegion) {
     return configuredRegion === "cn" ? "cn" : "global";
   }
 
-  // 2. Infer from the shared MiniMax host override.
   if (isMiniMaxCnHost(process.env.MINIMAX_API_HOST)) {
     return "cn";
   }
 
-  // 3. Infer from model provider base URL (set by CN onboarding)
   const models = config?.models as Record<string, unknown> | undefined;
   const providers = models?.providers as Record<string, unknown> | undefined;
   const minimaxProvider = providers?.minimax as Record<string, unknown> | undefined;
@@ -123,6 +116,7 @@ async function runMiniMaxSearch(params: {
   apiKey: string;
   endpoint: string;
   timeoutSeconds: number;
+  signal?: AbortSignal;
 }): Promise<{
   results: Array<Record<string, unknown>>;
   relatedSearches?: string[];
@@ -131,6 +125,7 @@ async function runMiniMaxSearch(params: {
     {
       url: params.endpoint,
       timeoutSeconds: params.timeoutSeconds,
+      signal: params.signal,
       init: {
         method: "POST",
         headers: {
@@ -198,36 +193,40 @@ function missingMiniMaxKeyPayload() {
 export async function executeMiniMaxWebSearchProviderTool(
   ctx: { config?: Record<string, unknown>; searchConfig?: SearchConfigRecord },
   args: Record<string, unknown>,
+  signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
   const searchConfig = mergeScopedSearchConfig(
     ctx.searchConfig,
     "minimax",
     resolveProviderWebSearchPluginConfig(ctx.config, "minimax"),
     { mirrorApiKeyToTopLevel: true },
-  ) as SearchConfigRecord | undefined;
-  const config = ctx.config;
+  );
   const apiKey = resolveMiniMaxApiKey(searchConfig);
   if (!apiKey) {
     return missingMiniMaxKeyPayload();
   }
 
-  const params = args;
-  const query = readStringParam(params, "query", { required: true });
+  const query = readStringParam(args, "query", { required: true });
   const count =
-    readNumberParam(params, "count", { integer: true }) ?? searchConfig?.maxResults ?? undefined;
+    readPositiveIntegerParam(args, "count", {
+      max: MAX_SEARCH_COUNT,
+      message: `count must be an integer from 1 to ${MAX_SEARCH_COUNT}.`,
+    }) ??
+    searchConfig?.maxResults ??
+    undefined;
 
   const resolvedCount = resolveSearchCount(count, DEFAULT_SEARCH_COUNT);
-  const endpoint = resolveMiniMaxEndpoint(searchConfig, config);
+  const endpoint = resolveMiniMaxEndpoint(searchConfig, ctx.config);
 
   const cacheKey = buildSearchCacheKey(["minimax", endpoint, query, resolvedCount]);
-  const cached = readCachedSearchPayload(cacheKey);
+  const cacheTtlMs = resolveSearchCacheTtlMs(searchConfig);
+  const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
   if (cached) {
     return cached;
   }
 
   const start = Date.now();
   const timeoutSeconds = resolveSearchTimeoutSeconds(searchConfig);
-  const cacheTtlMs = resolveSearchCacheTtlMs(searchConfig);
 
   const { results, relatedSearches } = await runMiniMaxSearch({
     query,
@@ -235,8 +234,10 @@ export async function executeMiniMaxWebSearchProviderTool(
     apiKey,
     endpoint,
     timeoutSeconds,
+    signal,
   });
 
+  signal?.throwIfAborted();
   const payload: Record<string, unknown> = {
     query,
     provider: "minimax",
@@ -258,12 +259,3 @@ export async function executeMiniMaxWebSearchProviderTool(
   writeCachedSearchPayload(cacheKey, payload, cacheTtlMs);
   return payload;
 }
-
-export const __testing = {
-  MINIMAX_SEARCH_ENDPOINT_GLOBAL,
-  MINIMAX_SEARCH_ENDPOINT_CN,
-  resolveMiniMaxApiKey,
-  resolveMiniMaxEndpoint,
-  resolveMiniMaxRegion,
-  readMiniMaxSearchJsonResponse: readProviderJsonResponse<MiniMaxSearchResponse>,
-} as const;

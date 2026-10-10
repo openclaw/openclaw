@@ -1,83 +1,76 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  requestDeferredPackageDirInstall,
+  resolvePackageDirInstallTransaction,
+} from "../infra/install-package-dir.js";
+import { buildNpmResolutionFields } from "../infra/install-source-utils.js";
+import {
   expectedIntegrityForUpdate,
+  isPackageVersionDowngrade,
   readInstalledPackageVersion,
 } from "../infra/package-update-utils.js";
+import type { InstallSafetyOverrides } from "../plugins/install-security-scan.types.js";
+import { resolvePluginInstallTransactionRequest } from "../plugins/install-transaction.js";
+import type { PluginLifecycleLeaseContext } from "../plugins/plugin-lifecycle-lease.js";
+import { stageHookInstall } from "./install-record-transaction.js";
 import {
   installHooksFromNpmSpec,
   type HookNpmIntegrityDriftParams,
   resolveHookInstallDir,
 } from "./install.js";
-import { recordHookInstall } from "./installs.js";
+import { readHookInstalls } from "./installs.js";
 
-export type HookPackUpdateLogger = {
-  info?: (message: string) => void;
-  warn?: (message: string) => void;
-};
-
-export type HookPackUpdateStatus = "updated" | "unchanged" | "skipped" | "error";
-
-export type HookPackUpdateOutcome = {
+type HookPackUpdateOutcome = {
   hookId: string;
-  status: HookPackUpdateStatus;
+  status: "updated" | "unchanged" | "skipped" | "error";
   message: string;
   currentVersion?: string;
   nextVersion?: string;
 };
 
-export type HookPackUpdateSummary = {
-  config: OpenClawConfig;
-  changed: boolean;
-  outcomes: HookPackUpdateOutcome[];
-};
-
-export type HookPackUpdateIntegrityDriftParams = HookNpmIntegrityDriftParams & {
+/** Integrity drift payload enriched with hook pack identity and dry-run state. */
+type HookPackUpdateIntegrityDriftParams = HookNpmIntegrityDriftParams & {
   hookId: string;
   resolvedSpec?: string;
   resolvedVersion?: string;
   dryRun: boolean;
 };
 
-function createHookPackUpdateIntegrityDriftHandler(params: {
-  hookId: string;
-  dryRun: boolean;
-  logger: HookPackUpdateLogger;
-  onIntegrityDrift?: (params: HookPackUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
-}) {
-  return async (drift: HookNpmIntegrityDriftParams) => {
-    const payload: HookPackUpdateIntegrityDriftParams = {
-      hookId: params.hookId,
-      spec: drift.spec,
-      expectedIntegrity: drift.expectedIntegrity,
-      actualIntegrity: drift.actualIntegrity,
-      resolution: drift.resolution,
-      resolvedSpec: drift.resolution.resolvedSpec,
-      resolvedVersion: drift.resolution.version,
-      dryRun: params.dryRun,
-    };
-    if (params.onIntegrityDrift) {
-      return await params.onIntegrityDrift(payload);
-    }
-    params.logger.warn?.(
-      `Integrity drift for hook pack "${params.hookId}" (${payload.resolvedSpec ?? payload.spec}): expected ${payload.expectedIntegrity}, got ${payload.actualIntegrity}`,
-    );
-    return false;
-  };
-}
-
+/** Update npm-installed hook packs and return config changes plus per-pack outcomes. */
 export async function updateNpmInstalledHookPacks(params: {
   config: OpenClawConfig;
-  logger?: HookPackUpdateLogger;
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
+  logger?: Parameters<typeof installHooksFromNpmSpec>[0]["logger"];
   hookIds?: string[];
   dryRun?: boolean;
+  lease?: PluginLifecycleLeaseContext;
+  beforePersistentApply?: () => void;
   specOverrides?: Record<string, string>;
   onIntegrityDrift?: (params: HookPackUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
-}): Promise<HookPackUpdateSummary> {
+}) {
   const logger = params.logger ?? {};
-  const installs = params.config.hooks?.internal?.installs ?? {};
+  const transactionRequest = resolvePluginInstallTransactionRequest(params);
+  // The caller owns the config commit and settles every staged payload/record together.
+  const persistence = params.dryRun
+    ? undefined
+    : {
+        lease: expectDefined(params.lease, "hook update lifecycle lease"),
+        transactions: expectDefined(
+          transactionRequest?.transactionSink,
+          "hook update transaction sink",
+        ),
+      };
+  const beforePersistentApply = () => {
+    persistence?.lease.assertOwned();
+    params.beforePersistentApply?.();
+  };
+  if (persistence) {
+    beforePersistentApply();
+  }
+  const installs = readHookInstalls(persistence ? { path: persistence.lease.databasePath } : {});
   const targets = params.hookIds?.length ? params.hookIds : Object.keys(installs);
   const outcomes: HookPackUpdateOutcome[] = [];
-  let next = params.config;
   let changed = false;
 
   for (const hookId of targets) {
@@ -100,6 +93,8 @@ export async function updateNpmInstalledHookPacks(params: {
     }
 
     const effectiveSpec = params.specOverrides?.[hookId] ?? record.spec;
+    // Only enforce the stored integrity when the update uses the same spec.
+    // Spec overrides intentionally resolve a new tarball identity.
     const expectedIntegrity =
       effectiveSpec === record.spec
         ? expectedIntegrityForUpdate(record.spec, record.integrity)
@@ -125,20 +120,48 @@ export async function updateNpmInstalledHookPacks(params: {
       continue;
     }
     const currentVersion = await readInstalledPackageVersion(installPath);
-    const result = await installHooksFromNpmSpec({
-      spec: effectiveSpec,
-      mode: "update",
-      dryRun: params.dryRun,
-      expectedHookPackId: hookId,
-      expectedIntegrity,
-      onIntegrityDrift: createHookPackUpdateIntegrityDriftHandler({
-        hookId,
-        dryRun: Boolean(params.dryRun),
-        logger,
-        onIntegrityDrift: params.onIntegrityDrift,
-      }),
+    // Preserve the callback's captured options and receiver during asynchronous installation.
+    const integrityDriftContext = {
+      hookId,
+      dryRun: Boolean(params.dryRun),
       logger,
-    });
+      onIntegrityDrift: params.onIntegrityDrift,
+    };
+    const result = await installHooksFromNpmSpec(
+      requestDeferredPackageDirInstall(
+        {
+          config: params.config,
+          onInstallPolicyWarning: params.onInstallPolicyWarning,
+          spec: effectiveSpec,
+          mode: "update",
+          dryRun: params.dryRun,
+          beforePersistentApply,
+          expectedHookPackId: hookId,
+          expectedIntegrity,
+          onIntegrityDrift: async (drift) => {
+            const payload: HookPackUpdateIntegrityDriftParams = {
+              hookId: integrityDriftContext.hookId,
+              spec: drift.spec,
+              expectedIntegrity: drift.expectedIntegrity,
+              actualIntegrity: drift.actualIntegrity,
+              resolution: drift.resolution,
+              resolvedSpec: drift.resolution.resolvedSpec,
+              resolvedVersion: drift.resolution.version,
+              dryRun: integrityDriftContext.dryRun,
+            };
+            if (integrityDriftContext.onIntegrityDrift) {
+              return await integrityDriftContext.onIntegrityDrift(payload);
+            }
+            integrityDriftContext.logger.warn?.(
+              `Integrity drift for hook pack "${integrityDriftContext.hookId}" (${payload.resolvedSpec ?? payload.spec}): expected ${payload.expectedIntegrity}, got ${payload.actualIntegrity}`,
+            );
+            return false;
+          },
+          logger,
+        },
+        transactionRequest?.assertOwned,
+      ),
+    );
 
     if (!result.ok) {
       outcomes.push({
@@ -154,34 +177,34 @@ export async function updateNpmInstalledHookPacks(params: {
     const nextLabel = nextVersion ?? "unknown";
     const status =
       currentVersion && nextVersion && currentVersion === nextVersion ? "unchanged" : "updated";
+    const downgraded = isPackageVersionDowngrade(currentVersion, nextVersion);
 
-    if (params.dryRun) {
-      outcomes.push({
-        hookId,
-        status,
-        currentVersion: currentVersion ?? undefined,
-        nextVersion: nextVersion ?? undefined,
-        message:
-          status === "unchanged"
-            ? `Hook pack "${hookId}" is up to date (${currentLabel}).`
-            : `Would update hook pack "${hookId}": ${currentLabel} -> ${nextLabel}.`,
-      });
-      continue;
+    if (persistence) {
+      persistence.transactions.push(
+        await stageHookInstall({
+          update: {
+            hookId,
+            source: "npm",
+            spec: effectiveSpec,
+            installPath: result.targetDir,
+            version: nextVersion,
+            ...buildNpmResolutionFields(result.npmResolution),
+            hooks: result.hooks,
+          },
+          payloadTransaction: resolvePackageDirInstallTransaction(result),
+          lease: persistence.lease,
+          beforePersistentApply,
+        }),
+      );
+      changed = true;
     }
-
-    next = recordHookInstall(next, {
-      hookId,
-      source: "npm",
-      spec: effectiveSpec,
-      installPath: result.targetDir,
-      version: nextVersion,
-      resolvedName: result.npmResolution?.name,
-      resolvedSpec: result.npmResolution?.resolvedSpec,
-      integrity: result.npmResolution?.integrity,
-      hooks: result.hooks,
-    });
-    changed = true;
-
+    const action = persistence
+      ? downgraded
+        ? "Downgraded"
+        : "Updated"
+      : downgraded
+        ? "Would downgrade"
+        : "Would update";
     outcomes.push({
       hookId,
       status,
@@ -189,10 +212,12 @@ export async function updateNpmInstalledHookPacks(params: {
       nextVersion: nextVersion ?? undefined,
       message:
         status === "unchanged"
-          ? `Hook pack "${hookId}" already at ${currentLabel}.`
-          : `Updated hook pack "${hookId}": ${currentLabel} -> ${nextLabel}.`,
+          ? persistence
+            ? `Hook pack "${hookId}" already at ${currentLabel}.`
+            : `Hook pack "${hookId}" is up to date (${currentLabel}).`
+          : `${action} hook pack "${hookId}": ${currentLabel} -> ${nextLabel}.`,
     });
   }
 
-  return { config: next, changed, outcomes };
+  return { config: params.config, changed, outcomes };
 }

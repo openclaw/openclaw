@@ -1,3 +1,4 @@
+// Voice Call tests cover call status plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   isProviderStatusTerminal,
@@ -20,5 +21,14 @@ describe("provider call status mapping", () => {
   it("flags terminal provider statuses", () => {
     expect(isProviderStatusTerminal("busy")).toBe(true);
     expect(isProviderStatusTerminal("in-progress")).toBe(false);
+    expect(isProviderStatusTerminal("ringing")).toBe(false);
   });
+
+  it.each(["constructor", "__proto__"])(
+    "does not treat Object.prototype key %s as a terminal provider status",
+    (status) => {
+      expect(mapProviderStatusToEndReason(status)).toBeNull();
+      expect(isProviderStatusTerminal(status)).toBe(false);
+    },
+  );
 });

@@ -1,8 +1,12 @@
+// Covers message-action media param collection, sandbox normalization, base64
+// hydration, structured attachments, JSON params, and plugin alias gating.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { MEDIA_MAX_BYTES } from "../../media/store.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 
 const { resolveChannelMessageToolMediaSourceParamKeysMock } = vi.hoisted(() => ({
   resolveChannelMessageToolMediaSourceParamKeysMock: vi.fn(() => ["avatarPath", "avatarUrl"]),
@@ -15,7 +19,6 @@ vi.mock("../../channels/plugins/message-action-discovery.js", () => ({
 import {
   collectActionMediaSourceHints,
   hydrateAttachmentParamsForAction,
-  normalizeSandboxMediaList,
   normalizeSandboxMediaParams,
   resolveExtraActionMediaSourceParamKeys,
   resolveAttachmentMediaPolicy,
@@ -24,6 +27,13 @@ import {
 const cfg = {} as OpenClawConfig;
 const maybeIt = process.platform === "win32" ? it.skip : it;
 const matrixMediaSourceParamKeys = ["avatarPath", "avatarUrl"] as const;
+
+async function withTempOpenClawStateDir<T>(test: (stateDir: string) => Promise<T>): Promise<T> {
+  return await withOpenClawTestState(
+    { layout: "state-only", prefix: "msg-params-state-" },
+    (state) => test(state.stateDir),
+  );
+}
 
 describe("message action media helpers", () => {
   beforeEach(() => {
@@ -40,47 +50,41 @@ describe("message action media helpers", () => {
           channel: "workspace",
           target: "#C12345678",
           message: "hi",
+          buffer: Buffer.from("artifact").toString("base64"),
+          filename: "artifact.txt",
+          contentType: "text/plain",
           media: "https://example.com/photo.png",
+          media_urls: ["https://example.com/extra.png"],
         },
       }),
     ).toStrictEqual([]);
     expect(resolveChannelMessageToolMediaSourceParamKeysMock).not.toHaveBeenCalled();
   });
 
-  it("discovers plugin media params when args include an extension-owned field", () => {
-    expect(
-      resolveExtraActionMediaSourceParamKeys({
-        cfg,
-        action: "set-profile",
-        channel: "matrix",
-        args: {
-          channel: "matrix",
-          avatarPath: "/workspace/avatars/profile.png",
-        },
-      }),
-    ).toEqual(["avatarPath", "avatarUrl"]);
-    expect(resolveChannelMessageToolMediaSourceParamKeysMock).toHaveBeenCalledWith({
-      cfg,
-      action: "set-profile",
-      channel: "matrix",
-      accountId: undefined,
-      sessionKey: undefined,
-      sessionId: undefined,
-      agentId: undefined,
-      requesterSenderId: undefined,
-      senderIsOwner: undefined,
-    });
-  });
-
   it("prefers sandbox media policy when sandbox roots are non-blank", () => {
+    const mediaReadFile = async () => Buffer.from("sandbox");
     expect(
       resolveAttachmentMediaPolicy({
         sandboxRoot: "  /tmp/workspace  ",
+        mediaAccess: { readFile: mediaReadFile },
         mediaLocalRoots: ["/tmp/a"],
       }),
     ).toEqual({
       mode: "sandbox",
       sandboxRoot: "/tmp/workspace",
+    });
+    expect(
+      resolveAttachmentMediaPolicy({
+        sandboxRoot: "/tmp/workspace",
+        sandboxContainerWorkdir: "/sandbox",
+        mediaAccess: { readFile: mediaReadFile },
+        mediaReadFile,
+      }),
+    ).toEqual({
+      mode: "sandbox",
+      sandboxRoot: "/tmp/workspace",
+      containerWorkdir: "/sandbox",
+      mediaReadFile,
     });
     expect(
       resolveAttachmentMediaPolicy({
@@ -113,88 +117,63 @@ describe("message action media helpers", () => {
     });
   });
 
-  maybeIt("normalizes sandbox media lists and dedupes resolved workspace paths", async () => {
-    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-list-"));
+  maybeIt.each([
+    "mediaUrl",
+    "media_url",
+    "path",
+    "filePath",
+    "file_path",
+    "fileUrl",
+    "file_url",
+    "url",
+  ])("rejects an out-of-sandbox %s hidden behind valid attachment media", async (shadowKey) => {
+    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-shadow-sandbox-"));
+    const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-shadow-host-"));
     try {
       await expect(
-        normalizeSandboxMediaList({
-          values: [" data:text/plain;base64,QQ== "],
+        normalizeSandboxMediaParams({
+          args: {
+            attachments: [
+              {
+                media: "/workspace/allowed.png",
+                [shadowKey]: path.join(outsideRoot, "restricted.png"),
+              },
+            ],
+          },
+          mediaPolicy: {
+            mode: "sandbox",
+            sandboxRoot,
+          },
+          structuredAttachments: "all",
         }),
-      ).rejects.toThrow(/data:/i);
-      await expect(
-        normalizeSandboxMediaList({
-          values: [" file:///workspace/assets/photo.png ", "/workspace/assets/photo.png", " "],
-          sandboxRoot: ` ${sandboxRoot} `,
-        }),
-      ).resolves.toEqual([path.join(sandboxRoot, "assets", "photo.png")]);
+      ).rejects.toThrow(/escapes sandbox root/i);
     } finally {
       await fs.rm(sandboxRoot, { recursive: true, force: true });
+      await fs.rm(outsideRoot, { recursive: true, force: true });
     }
   });
 
-  maybeIt("normalizes mediaUrl and fileUrl sandbox media params", async () => {
-    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-alias-"));
+  maybeIt("normalizes every allowed source in one structured attachment", async () => {
+    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-multi-source-"));
     try {
-      const args: Record<string, unknown> = {
-        mediaUrl: " file:///workspace/assets/photo.png ",
-        fileUrl: "/workspace/docs/report.pdf",
+      const attachment: Record<string, unknown> = {
+        media: "/workspace/allowed.png",
+        file_path: "/workspace/allowed-file.png",
       };
 
       await normalizeSandboxMediaParams({
-        args,
-        mediaPolicy: {
-          mode: "sandbox",
-          sandboxRoot: ` ${sandboxRoot} `,
-        },
-      });
-
-      expect(args.mediaUrl).toBe(path.join(sandboxRoot, "assets", "photo.png"));
-      expect(args.fileUrl).toBe(path.join(sandboxRoot, "docs", "report.pdf"));
-    } finally {
-      await fs.rm(sandboxRoot, { recursive: true, force: true });
-    }
-  });
-
-  maybeIt("normalizes extension event image sandbox media params", async () => {
-    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-image-"));
-    try {
-      const args: Record<string, unknown> = {
-        image: " file:///workspace/assets/event-cover.png ",
-      };
-
-      await normalizeSandboxMediaParams({
-        args,
-        mediaPolicy: {
-          mode: "sandbox",
-          sandboxRoot: ` ${sandboxRoot} `,
-        },
-      });
-
-      expect(args.image).toBe(path.join(sandboxRoot, "assets", "event-cover.png"));
-    } finally {
-      await fs.rm(sandboxRoot, { recursive: true, force: true });
-    }
-  });
-
-  maybeIt("normalizes extension avatarPath and avatarUrl sandbox media params", async () => {
-    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-avatar-"));
-    try {
-      const args: Record<string, unknown> = {
-        avatarPath: "/workspace/avatars/profile.png",
-        avatarUrl: "file:///workspace/avatars/remote-avatar.jpg",
-      };
-
-      await normalizeSandboxMediaParams({
-        args,
+        args: { attachments: [attachment] },
         mediaPolicy: {
           mode: "sandbox",
           sandboxRoot,
         },
-        extraParamKeys: matrixMediaSourceParamKeys,
+        structuredAttachments: "all",
       });
 
-      expect(args.avatarPath).toBe(path.join(sandboxRoot, "avatars", "profile.png"));
-      expect(args.avatarUrl).toBe(path.join(sandboxRoot, "avatars", "remote-avatar.jpg"));
+      expect(attachment).toEqual({
+        media: path.join(sandboxRoot, "allowed.png"),
+        file_path: path.join(sandboxRoot, "allowed-file.png"),
+      });
     } finally {
       await fs.rm(sandboxRoot, { recursive: true, force: true });
     }
@@ -207,6 +186,7 @@ describe("message action media helpers", () => {
           media: " /workspace/uploads/photo.png ",
           filePath: "",
           image: "file:///workspace/assets/event-cover.png",
+          media_urls: [" /workspace/extra/diagram.png ", ""],
           avatarPath: "/workspace/avatars/profile.png",
           avatar_url: "mxc://matrix.org/abc123def456",
           ignored: "/workspace/not-included.png",
@@ -218,7 +198,41 @@ describe("message action media helpers", () => {
       "file:///workspace/assets/event-cover.png",
       "/workspace/avatars/profile.png",
       "mxc://matrix.org/abc123def456",
+      "/workspace/extra/diagram.png",
     ]);
+  });
+
+  it("does not collect ignored structured attachments when top-level media wins", () => {
+    expect(
+      collectActionMediaSourceHints({
+        media: "https://example.com/top-level.png",
+        attachments: [
+          {
+            path: "/workspace/uploads/ignored.png",
+            mimeType: "image/png",
+            name: "ignored.png",
+          },
+        ],
+      }),
+    ).toEqual(["https://example.com/top-level.png"]);
+  });
+
+  it("does not collect ignored structured attachments when plugin media params win", () => {
+    expect(
+      collectActionMediaSourceHints(
+        {
+          avatarPath: "/workspace/avatars/profile.png",
+          attachments: [
+            {
+              path: "/workspace/uploads/ignored.png",
+              mimeType: "image/png",
+              name: "ignored.png",
+            },
+          ],
+        },
+        matrixMediaSourceParamKeys,
+      ),
+    ).toEqual(["/workspace/avatars/profile.png"]);
   });
 
   maybeIt("normalizes extension snake_case avatar_path and avatar_url aliases", async () => {
@@ -272,80 +286,6 @@ describe("message action media helpers", () => {
       await fs.rm(sandboxRoot, { recursive: true, force: true });
     }
   });
-
-  maybeIt("keeps remote HTTP avatarUrl unchanged under sandbox normalization", async () => {
-    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-avatar-remote-"));
-    try {
-      const args: Record<string, unknown> = {
-        avatarUrl: "https://example.com/avatars/profile.png",
-        avatarPath: "/workspace/avatars/local.png",
-      };
-
-      await normalizeSandboxMediaParams({
-        args,
-        mediaPolicy: {
-          mode: "sandbox",
-          sandboxRoot,
-        },
-        extraParamKeys: matrixMediaSourceParamKeys,
-      });
-
-      expect(args.avatarUrl).toBe("https://example.com/avatars/profile.png");
-      expect(args.avatarPath).toBe(path.join(sandboxRoot, "avatars", "local.png"));
-    } finally {
-      await fs.rm(sandboxRoot, { recursive: true, force: true });
-    }
-  });
-
-  maybeIt("keeps mxc:// avatarUrl unchanged under sandbox normalization", async () => {
-    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-avatar-mxc-"));
-    try {
-      const args: Record<string, unknown> = {
-        avatarUrl: "mxc://matrix.org/abc123def456",
-        avatarPath: "/workspace/avatars/local.png",
-      };
-
-      await normalizeSandboxMediaParams({
-        args,
-        mediaPolicy: {
-          mode: "sandbox",
-          sandboxRoot,
-        },
-        extraParamKeys: matrixMediaSourceParamKeys,
-      });
-
-      expect(args.avatarUrl).toBe("mxc://matrix.org/abc123def456");
-      expect(args.avatarPath).toBe(path.join(sandboxRoot, "avatars", "local.png"));
-    } finally {
-      await fs.rm(sandboxRoot, { recursive: true, force: true });
-    }
-  });
-
-  maybeIt(
-    "keeps remote HTTP mediaUrl and fileUrl aliases unchanged under sandbox normalization",
-    async () => {
-      const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-remote-alias-"));
-      try {
-        const args: Record<string, unknown> = {
-          mediaUrl: "https://example.com/assets/photo.png?sig=1",
-          fileUrl: "https://example.com/docs/report.pdf?sig=2",
-        };
-
-        await normalizeSandboxMediaParams({
-          args,
-          mediaPolicy: {
-            mode: "sandbox",
-            sandboxRoot,
-          },
-        });
-
-        expect(args.mediaUrl).toBe("https://example.com/assets/photo.png?sig=1");
-        expect(args.fileUrl).toBe("https://example.com/docs/report.pdf?sig=2");
-      } finally {
-        await fs.rm(sandboxRoot, { recursive: true, force: true });
-      }
-    },
-  );
 
   it("uses mediaUrl and fileUrl aliases when inferring attachment filenames", async () => {
     const mediaArgs: Record<string, unknown> = {
@@ -409,14 +349,16 @@ describe("message action media helpers", () => {
     expect(args.filename).toBe("attachment");
   });
 
-  it("hydrates reply attachments through the resolver so threaded sends don't bypass mediaLocalRoots", async () => {
-    // Locks in coverage for the reply-with-attachment path: when an agent
-    // calls message(action: "reply") with a `path`/`media`/etc., the
-    // resolver — not the channel runtime — must run. Pre-PR this was
-    // gated only on sendAttachment/setGroupIcon/upload-file, letting
-    // imessage reply forward an arbitrary host path to imsg.
+  it("does not hydrate ignored structured attachments when plugin media params win", async () => {
     const args: Record<string, unknown> = {
-      mediaUrl: "https://example.com/cute.png",
+      avatarPath: "/workspace/avatars/profile.png",
+      attachments: [
+        {
+          url: "https://example.com/ignored.png",
+          mimeType: "image/png",
+          name: "ignored.png",
+        },
+      ],
     };
 
     await hydrateAttachmentParamsForAction({
@@ -426,31 +368,197 @@ describe("message action media helpers", () => {
       action: "reply",
       dryRun: true,
       mediaPolicy: { mode: "host" },
+      extraParamKeys: matrixMediaSourceParamKeys,
     });
 
-    expect(args.filename).toBe("cute.png");
+    expect(args.filename).toBe("attachment");
+    expect(args.contentType).toBeUndefined();
   });
 
-  it("does not fall back caption->message on reply (reply has its own text field)", async () => {
-    // sendAttachment uses caption as the body text and falls back from
-    // message -> caption when the agent only supplied `message`. Reply has
-    // its own `text`/`message` field, so caption fallback would invent a
-    // bogus caption param on the reply payload.
-    const args: Record<string, unknown> = {
-      mediaUrl: "https://example.com/cute.png",
-      message: "🦞",
-    };
+  it("rejects oversized buffer-only send params before base64 decoding", async () => {
+    await withTempOpenClawStateDir(async () => {
+      const fromSpy = vi.spyOn(Buffer, "from");
+      const args: Record<string, unknown> = {
+        buffer: Buffer.alloc(MEDIA_MAX_BYTES + 1, 1).toString("base64"),
+        contentType: "application/octet-stream",
+      };
 
-    await hydrateAttachmentParamsForAction({
-      cfg,
-      channel: "imessage",
-      args,
-      action: "reply",
-      dryRun: true,
-      mediaPolicy: { mode: "host" },
+      try {
+        await expect(
+          hydrateAttachmentParamsForAction({
+            cfg,
+            channel: "workspace",
+            args,
+            action: "send",
+            mediaPolicy: { mode: "host" },
+          }),
+        ).rejects.toThrow(/too large|limit/i);
+
+        const base64Calls = (fromSpy.mock.calls as ReadonlyArray<readonly unknown[]>).filter(
+          (call) => call[1] === "base64",
+        );
+        expect(base64Calls).toHaveLength(0);
+        expect(args.media).toBeUndefined();
+        expect(args.mediaUrl).toBeUndefined();
+      } finally {
+        fromSpy.mockRestore();
+      }
     });
+  });
 
-    expect(args.caption).toBeUndefined();
+  it("rejects invalid buffer-only send base64 without staging media", async () => {
+    await withTempOpenClawStateDir(async () => {
+      const args: Record<string, unknown> = {
+        buffer: "not-base64!",
+        contentType: "text/plain",
+      };
+
+      await expect(
+        hydrateAttachmentParamsForAction({
+          cfg,
+          channel: "workspace",
+          args,
+          action: "send",
+          mediaPolicy: { mode: "host" },
+        }),
+      ).rejects.toThrow(/invalid base64/i);
+
+      expect(args.media).toBeUndefined();
+      expect(args.mediaUrl).toBeUndefined();
+    });
+  });
+
+  it("skips send buffer materialization when an explicit media source is present", async () => {
+    await withTempOpenClawStateDir(async (stateDir) => {
+      const args: Record<string, unknown> = {
+        buffer: Buffer.from("ignored").toString("base64"),
+        mediaUrl: "https://example.com/pic.png",
+      };
+
+      await hydrateAttachmentParamsForAction({
+        cfg,
+        channel: "workspace",
+        args,
+        action: "send",
+        mediaPolicy: { mode: "host" },
+      });
+
+      expect(args.mediaUrl).toBe("https://example.com/pic.png");
+      expect(args.media).toBeUndefined();
+      expect(args.buffer).toBeUndefined();
+      await expect(fs.readdir(path.join(stateDir, "media", "outbound"))).rejects.toThrow();
+    });
+  });
+
+  it.each(
+    ["dry-run", "preserve-buffer"].flatMap((mode) => [
+      {
+        mode,
+        buffer: "data:application/octet-stream;base64,SGVsbG8=",
+        name: "data URL",
+        expectedError: undefined,
+      },
+      {
+        mode,
+        buffer: "SGVsbG8h",
+        name: "one byte over the limit",
+        expectedError: "Media too large: 6 bytes (limit: 5 bytes)",
+      },
+      {
+        mode,
+        buffer: "!!!!!!!!",
+        name: "oversized malformed base64",
+        expectedError: "Media too large: 6 bytes (limit: 5 bytes)",
+      },
+      {
+        mode,
+        buffer: " \t\r\n",
+        name: "whitespace-only base64",
+        expectedError: "message.send buffer has invalid base64 data",
+      },
+    ]),
+  )("validates $mode $name without staging", async ({ mode, buffer, expectedError }) => {
+    await withTempOpenClawStateDir(async (stateDir) => {
+      const args: Record<string, unknown> = {
+        buffer,
+        filename: "preview.txt",
+        mimeType: "text/plain",
+      };
+
+      const hydration = hydrateAttachmentParamsForAction({
+        cfg: { agents: { defaults: { mediaMaxMb: 5 / (1024 * 1024) } } },
+        channel: "imessage",
+        args,
+        action: "send",
+        dryRun: mode === "dry-run",
+        preserveSendBuffer: mode === "preserve-buffer",
+        mediaPolicy: { mode: "host" },
+      });
+
+      if (expectedError) {
+        await expect(hydration).rejects.toThrow(expectedError);
+        expect(args).toEqual({ buffer, filename: "preview.txt", mimeType: "text/plain" });
+      } else {
+        await hydration;
+        expect(args.media).toBe("buffer://message-send/attachment");
+        expect(args.mediaUrl).toBe("buffer://message-send/attachment");
+        expect(args.mediaUrls).toEqual(["buffer://message-send/attachment"]);
+        expect(args.buffer).toBe(mode === "preserve-buffer" ? buffer : undefined);
+        expect(args.contentType).toBe("text/plain");
+        expect(args.filename).toBe("preview.txt");
+      }
+      await expect(fs.readdir(path.join(stateDir, "media", "outbound"))).rejects.toThrow();
+    });
+  });
+});
+
+describe("message action send buffer honors the non-positive channel cap rule", () => {
+  it.each([
+    { mediaMaxMb: 0, label: "zero" },
+    { mediaMaxMb: -5, label: "negative" },
+  ])(
+    "attaches a small buffer instead of a 0-byte cap for a $label channels.line.mediaMaxMb",
+    async ({ mediaMaxMb }) => {
+      await withTempOpenClawStateDir(async () => {
+        const args: Record<string, unknown> = {
+          buffer: "SGVsbG8=",
+          filename: "preview.txt",
+          mimeType: "text/plain",
+        };
+
+        await hydrateAttachmentParamsForAction({
+          cfg: { channels: { line: { mediaMaxMb } } },
+          channel: "line",
+          args,
+          action: "send",
+          dryRun: true,
+          mediaPolicy: { mode: "host" },
+        });
+
+        expect(args.media).toBe("buffer://message-send/attachment");
+      });
+    },
+  );
+
+  it("keeps capping send buffers at a positive channels.line.mediaMaxMb", async () => {
+    await withTempOpenClawStateDir(async () => {
+      const args: Record<string, unknown> = {
+        buffer: "SGVsbG8h",
+        filename: "preview.txt",
+        mimeType: "text/plain",
+      };
+
+      await expect(
+        hydrateAttachmentParamsForAction({
+          cfg: { channels: { line: { mediaMaxMb: 5 / (1024 * 1024) } } },
+          channel: "line",
+          args,
+          action: "send",
+          dryRun: true,
+          mediaPolicy: { mode: "host" },
+        }),
+      ).rejects.toThrow("Media too large: 6 bytes (limit: 5 bytes)");
+    });
   });
 });
 

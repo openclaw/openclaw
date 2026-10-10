@@ -1,19 +1,35 @@
+// Manifest metadata registry builder for media-understanding providers without
+// loading plugin runtime code.
+import { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
-import { normalizeMediaProviderId } from "./provider-id.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { MediaUnderstandingProvider } from "./types.js";
 
+// Defaults follow the selected immutable manifest generation, including retained
+// owners. Configured model overrides remain outside this projection.
+const registriesByManifest = new WeakMap<
+  PluginManifestRegistry,
+  Map<string, MediaUnderstandingProvider>
+>();
+
+/** Builds a media provider registry from trusted manifest metadata without loading plugin code. */
 export function buildMediaUnderstandingManifestMetadataRegistry(
   cfg?: OpenClawConfig,
   workspaceDir?: string,
 ): Map<string, MediaUnderstandingProvider> {
-  const registry = new Map<string, MediaUnderstandingProvider>();
   const snapshot = loadManifestMetadataSnapshot({
     config: cfg,
     env: process.env,
     ...(workspaceDir ? { workspaceDir } : {}),
   });
+  const cached = registriesByManifest.get(snapshot.manifestRegistry);
+  if (cached) {
+    return cached;
+  }
+  const registry = new Map<string, MediaUnderstandingProvider>();
   for (const plugin of snapshot.plugins) {
+    // Metadata only counts when the manifest also declares the provider contract.
     const declaredProviders = new Set(
       (plugin.contracts?.mediaUnderstandingProviders ?? []).map((providerId) =>
         normalizeMediaProviderId(providerId),
@@ -22,6 +38,8 @@ export function buildMediaUnderstandingManifestMetadataRegistry(
     for (const [providerId, metadata] of Object.entries(
       plugin.mediaUnderstandingProviderMetadata ?? {},
     )) {
+      // Metadata is trusted only when the plugin also declares the corresponding
+      // provider contract; stray manifest fields must not register providers.
       const normalizedProviderId = normalizeMediaProviderId(providerId);
       if (!normalizedProviderId || !declaredProviders.has(normalizedProviderId)) {
         continue;
@@ -32,8 +50,10 @@ export function buildMediaUnderstandingManifestMetadataRegistry(
         defaultModels: metadata.defaultModels,
         autoPriority: metadata.autoPriority,
         nativeDocumentInputs: metadata.nativeDocumentInputs,
+        documentModels: metadata.documentModels,
       });
     }
   }
+  registriesByManifest.set(snapshot.manifestRegistry, registry);
   return registry;
 }

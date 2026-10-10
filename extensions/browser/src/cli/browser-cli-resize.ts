@@ -1,36 +1,49 @@
-import { callBrowserResize, type BrowserParentOpts } from "./browser-cli-shared.js";
-import { danger, defaultRuntime } from "./core-api.js";
+import type { Command } from "commander";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { ACT_MAX_VIEWPORT_DIMENSION } from "../browser/act-policy.js";
+import {
+  BROWSER_TAB_REFERENCE_HELP,
+  runBrowserCliRequest,
+  type BrowserParentOpts,
+} from "./browser-cli-shared.js";
 
-export async function runBrowserResizeWithOutput(params: {
-  parent: BrowserParentOpts;
-  profile?: string;
-  width: number;
-  height: number;
-  targetId?: string;
-  timeoutMs?: number;
-  successMessage: string;
-}): Promise<void> {
-  const { width, height } = params;
-  if (!Number.isFinite(width) || !Number.isFinite(height)) {
-    defaultRuntime.error(danger("width and height must be numbers"));
-    defaultRuntime.exit(1);
-    return;
+function parseBrowserViewportDimension(value: unknown, label: string): number | undefined {
+  const parsed = parseStrictPositiveInteger(value);
+  if (parsed !== undefined && parsed <= ACT_MAX_VIEWPORT_DIMENSION) {
+    return parsed;
   }
+  const reason =
+    parsed === undefined
+      ? "must be a positive integer"
+      : `maximum is ${ACT_MAX_VIEWPORT_DIMENSION}`;
+  defaultRuntime.error(danger(`Invalid ${label}: ${reason}`));
+  defaultRuntime.exit(1);
+  return undefined;
+}
 
-  const result = await callBrowserResize(
-    params.parent,
-    {
-      profile: params.profile,
-      width,
-      height,
-      targetId: params.targetId,
-    },
-    { timeoutMs: params.timeoutMs ?? 20000 },
-  );
-
-  if (params.parent?.json) {
-    defaultRuntime.writeJson(result);
-    return;
-  }
-  defaultRuntime.log(params.successMessage);
+export function registerBrowserResizeCommand(
+  command: Command,
+  parentOpts: (cmd: Command) => BrowserParentOpts,
+  alias = false,
+) {
+  command
+    .argument("<width>", "Viewport width")
+    .argument("<height>", "Viewport height")
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
+    .action(async (widthRaw: string, heightRaw: string, opts, cmd) => {
+      const width = parseBrowserViewportDimension(widthRaw, "width");
+      const height = parseBrowserViewportDimension(heightRaw, "height");
+      if (width === undefined || height === undefined) {
+        return;
+      }
+      await runBrowserCliRequest({
+        parent: parentOpts(cmd),
+        path: "/act",
+        body: { kind: "resize", width, height, targetId: normalizeOptionalString(opts.targetId) },
+        successMessage: `${alias ? "viewport set:" : "resized to"} ${width}x${height}`,
+        errorPolicy: alias ? "runtime" : "inline",
+      });
+    });
 }

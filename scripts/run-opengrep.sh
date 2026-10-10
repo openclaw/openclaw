@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 # scripts/run-opengrep.sh
 #
 # Run the OpenClaw precise OpenGrep rulepack against the local working tree
@@ -24,7 +28,7 @@ BUCKET="precise"
 if [[ "${1:-}" == "precise" ]]; then
   shift
 elif [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  sed -n '2,22p' "$0"
+  sed -n '/^# scripts\/run-opengrep\.sh$/,/^# Exit code:/p' "$0"
   exit 0
 elif [[ "${1:-}" == "broad" ]]; then
   echo "error: broad OpenGrep rulepacks are not supported in this repo workflow" >&2
@@ -45,27 +49,26 @@ if ! command -v opengrep >/dev/null 2>&1; then
   cat >&2 <<'EOF'
 error: 'opengrep' not found on PATH.
 
-Install with one of:
-  curl -fsSL https://raw.githubusercontent.com/opengrep/opengrep/v1.19.0/install.sh | bash -s -- -v v1.19.0
-  brew install opengrep/tap/opengrep
-  pipx install opengrep
+Install with:
+  curl -fsSL https://raw.githubusercontent.com/opengrep/opengrep/v1.30.0/install.sh | bash -s -- -v v1.30.0
 
 (See https://opengrep.dev for other options.)
 EOF
   exit 127
 fi
 
-# Pull off our own flags from the remaining args; pass everything else through to opengrep.
 EXTRA_ARGS=()
 PATHS_PASSED=0
 SAW_DOUBLE_DASH=0
 CHANGED_ONLY=0
 FAIL_ON_FINDINGS=0
+SARIF_OUTPUT=""
 while (( $# > 0 )); do
   case "$1" in
     --sarif)
       mkdir -p "$REPO_ROOT/.opengrep-out"
-      EXTRA_ARGS+=( "--sarif-output=$REPO_ROOT/.opengrep-out/$BUCKET.sarif" )
+      SARIF_OUTPUT="$REPO_ROOT/.opengrep-out/$BUCKET.sarif"
+      EXTRA_ARGS+=( "--sarif-output=$SARIF_OUTPUT" )
       shift
       ;;
     --json)
@@ -87,20 +90,38 @@ while (( $# > 0 )); do
       ;;
     *)
       if (( SAW_DOUBLE_DASH )); then
-        # Treat anything after `--` as a path-positional override
-        if (( PATHS_PASSED == 0 )); then
-          PATHS_PASSED=1
-          EXTRA_ARGS+=( "$1" )
-        else
-          EXTRA_ARGS+=( "$1" )
-        fi
-      else
-        EXTRA_ARGS+=( "$1" )
+        PATHS_PASSED=1
       fi
+      EXTRA_ARGS+=( "$1" )
       shift
       ;;
   esac
 done
+
+write_empty_sarif() {
+  local output="$1"
+
+  mkdir -p "$(dirname "$output")"
+  cat > "$output" <<'JSON'
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "Opengrep OSS",
+          "informationUri": "https://opengrep.dev",
+          "semanticVersion": "1.30.0",
+          "rules": []
+        }
+      },
+      "results": []
+    }
+  ]
+}
+JSON
+}
 
 cd "$REPO_ROOT"
 
@@ -109,44 +130,81 @@ if (( CHANGED_ONLY && PATHS_PASSED )); then
   exit 64
 fi
 
+resolve_changed_diff_ref() {
+  local diff_ref="${OPENCLAW_OPENGREP_BASE_REF:-origin/main...HEAD}"
+  local base_ref
+  local head_ref
+  local resolved_base
+
+  if [[ "$diff_ref" != *"..."* ]]; then
+    printf '%s\n' "$diff_ref"
+    return 0
+  fi
+  if [[ "${OPENCLAW_OPENGREP_MERGE_HEAD_FIRST_PARENT:-0}" != "1" ]]; then
+    printf '%s\n' "$diff_ref"
+    return 0
+  fi
+
+  base_ref="${diff_ref%%...*}"
+  head_ref="${diff_ref#*...}"
+  # First-parent resolution is shared with the Node CI routers so PR diff
+  # scope cannot drift between changed-lanes, changed-scope, and OpenGrep.
+  resolved_base="$(
+    node "$REPO_ROOT/scripts/lib/merge-head-diff-base.mjs" \
+      --base "$base_ref" \
+      --head "$head_ref" \
+      --prefer-first-parent 2>/dev/null || true
+  )"
+  if [[ -z "$resolved_base" || "$resolved_base" == "$base_ref" ]]; then
+    printf '%s\n' "$diff_ref"
+    return 0
+  fi
+
+  printf '%s...%s\n' "$resolved_base" "$head_ref"
+}
+
 # Default scan paths match CI. Override by passing `-- <paths...>`.
 if (( PATHS_PASSED == 0 )); then
   if (( CHANGED_ONLY )); then
+    CHANGED_DIFF_REF="$(resolve_changed_diff_ref)"
+    CHANGED_PATHS_DIR="$(mktemp -d)"
+    trap 'rm -rf -- "$CHANGED_PATHS_DIR"' EXIT
+    {
+      git diff --name-only -z --diff-filter=ACMRTUXB "$CHANGED_DIFF_REF"
+      git diff --cached --name-only -z --diff-filter=ACMRTUXB --
+      git diff --name-only -z --diff-filter=ACMRTUXB --
+      git ls-files -z --others --exclude-standard
+    } > "$CHANGED_PATHS_DIR/all"
+    LC_ALL=C sort -zu "$CHANGED_PATHS_DIR/all" > "$CHANGED_PATHS_DIR/sorted"
     SCAN_PATHS=()
-    while IFS= read -r path; do
-      # OpenGrep errors when an explicit changed path is a symlink; scan the
-      # real target content, not duplicate guide aliases such as CLAUDE.md.
-      if [[ -L "$path" ]]; then
-        continue
-      fi
-      if [[ ! -f "$path" && ! -d "$path" ]]; then
-        continue
-      fi
-      SCAN_PATHS+=( "$path" )
-    done < <(
-      {
-        git diff --name-only --diff-filter=ACMRTUXB "${OPENCLAW_OPENGREP_BASE_REF:-origin/main...HEAD}" 2>/dev/null || true
-        git diff --name-only --diff-filter=ACMRTUXB -- 2>/dev/null || true
-        git ls-files --others --exclude-standard
-      } | awk '/^(src|extensions|apps|packages|scripts)\// { print }' | sort -u
-    )
-    RULEPACK_CHANGED_PATHS=()
-    while IFS= read -r path; do
-      RULEPACK_CHANGED_PATHS+=( "$path" )
-    done < <(
-      {
-        git diff --name-only --diff-filter=ACMRTUXB "${OPENCLAW_OPENGREP_BASE_REF:-origin/main...HEAD}" 2>/dev/null || true
-        git diff --name-only --diff-filter=ACMRTUXB -- 2>/dev/null || true
-        git ls-files --others --exclude-standard
-      } | awk '/^(security\/opengrep\/|scripts\/run-opengrep\.sh$|\.semgrepignore$|\.github\/workflows\/opengrep-)/ { print }' | sort -u
-    )
-    if (( ${#SCAN_PATHS[@]} == 0 && ${#RULEPACK_CHANGED_PATHS[@]} > 0 )); then
+    RULEPACK_CHANGED=0
+    while IFS= read -r -d '' path; do
+      case "$path" in
+        src/*|extensions/*|apps/*|packages/*|scripts/*)
+          # OpenGrep errors when an explicit changed path is a symlink; scan the
+          # real target content, not duplicate guide aliases such as CLAUDE.md.
+          if [[ ! -L "$path" && ( -f "$path" || -d "$path" ) ]]; then
+            SCAN_PATHS+=( "$path" )
+          fi
+          ;;
+      esac
+      case "$path" in
+        security/opengrep/*|scripts/run-opengrep.sh|.semgrepignore|.github/workflows/opengrep-*)
+          RULEPACK_CHANGED=1
+          ;;
+      esac
+    done < "$CHANGED_PATHS_DIR/sorted"
+    rm -rf -- "$CHANGED_PATHS_DIR"
+    if (( ${#SCAN_PATHS[@]} == 0 && RULEPACK_CHANGED )); then
       # Exercise rulepack loading without scanning the compiled YAML, which contains
       # rule pattern literals that can match themselves.
       SCAN_PATHS=( "scripts/run-opengrep.sh" )
     fi
     if (( ${#SCAN_PATHS[@]} == 0 )); then
       echo "→ No changed first-party paths for opengrep." >&2
+      if [[ -n "$SARIF_OUTPUT" ]]; then
+        write_empty_sarif "$SARIF_OUTPUT"
+      fi
       exit 0
     fi
   else

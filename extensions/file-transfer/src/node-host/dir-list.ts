@@ -1,74 +1,42 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import {
-  FsSafeError,
-  resolveAbsolutePathForRead,
-  root,
-} from "openclaw/plugin-sdk/security-runtime";
+  asPositiveFiniteNumber,
+  parseStrictNonNegativeInteger,
+} from "openclaw/plugin-sdk/number-runtime";
 import { mimeFromExtension } from "../shared/mime.js";
+import type { PathBinding } from "../shared/path-binding.js";
+import { listCanonicalDirectory } from "./dir-list-worker.js";
+import {
+  classifyFsSafeReadError,
+  readAbsolutePath,
+  resolveBoundReadDirectory,
+  statRequiredDirectory,
+} from "./path-errors.js";
 
-export const DIR_LIST_DEFAULT_MAX_ENTRIES = 200;
-export const DIR_LIST_HARD_MAX_ENTRIES = 5000;
+const DIR_LIST_DEFAULT_MAX_ENTRIES = 200;
+const DIR_LIST_HARD_MAX_ENTRIES = 5000;
 
 type DirListParams = {
   path?: unknown;
   pageToken?: unknown;
   maxEntries?: unknown;
   followSymlinks?: unknown;
+  preflightOnly?: unknown;
+  expectedCanonicalPath?: unknown;
+  expectedBinding?: unknown;
 };
 
-type DirListEntry = {
-  name: string;
-  path: string;
-  size: number;
-  mimeType: string;
-  isDir: boolean;
-  mtime: number;
-};
-
-type DirListOk = {
-  ok: true;
-  path: string;
-  entries: DirListEntry[];
-  nextPageToken?: string;
-  truncated: boolean;
-};
-
-type DirListErrCode =
-  | "INVALID_PATH"
-  | "NOT_FOUND"
-  | "PERMISSION_DENIED"
-  | "IS_FILE"
-  | "SYMLINK_REDIRECT"
-  | "READ_ERROR";
-
-type DirListErr = {
-  ok: false;
-  code: DirListErrCode;
-  message: string;
-  canonicalPath?: string;
-};
-
-type DirListResult = DirListOk | DirListErr;
-
-function clampMaxEntries(input: unknown): number {
-  if (typeof input !== "number" || !Number.isFinite(input) || input <= 0) {
-    return DIR_LIST_DEFAULT_MAX_ENTRIES;
+function parsePageOffset(input: unknown): number {
+  if (typeof input !== "string") {
+    return 0;
   }
-  return Math.min(Math.floor(input), DIR_LIST_HARD_MAX_ENTRIES);
+  return parseStrictNonNegativeInteger(input) ?? 0;
 }
 
-function classifyFsError(err: unknown): DirListErrCode {
-  if (err instanceof FsSafeError) {
-    if (err.code === "not-found") {
-      return "NOT_FOUND";
-    }
-    if (err.code === "symlink") {
-      return "SYMLINK_REDIRECT";
-    }
-    if (err.code === "invalid-path") {
-      return "INVALID_PATH";
-    }
+function classifyFsError(err: unknown) {
+  const safeCode = classifyFsSafeReadError(err);
+  if (safeCode) {
+    return safeCode;
   }
   const code = (err as { code?: string } | null)?.code;
   if (code === "ENOENT") {
@@ -80,114 +48,87 @@ function classifyFsError(err: unknown): DirListErrCode {
   return "READ_ERROR";
 }
 
-export async function handleDirList(params: DirListParams): Promise<DirListResult> {
-  const requestedPath = params.path;
-  if (typeof requestedPath !== "string" || requestedPath.length === 0) {
-    return { ok: false, code: "INVALID_PATH", message: "path required" };
-  }
-  if (requestedPath.includes("\0")) {
-    return { ok: false, code: "INVALID_PATH", message: "path contains NUL byte" };
-  }
-  if (!path.isAbsolute(requestedPath)) {
-    return { ok: false, code: "INVALID_PATH", message: "path must be absolute" };
+export async function handleDirList(params: DirListParams) {
+  const requestedPath = readAbsolutePath(params.path);
+  if (typeof requestedPath !== "string") {
+    return requestedPath;
   }
 
-  const maxEntries = clampMaxEntries(params.maxEntries);
-  const offset =
-    typeof params.pageToken === "string" && params.pageToken.length > 0
-      ? Math.max(0, Number.parseInt(params.pageToken, 10) || 0)
-      : 0;
+  const maxEntries = Math.min(
+    Math.floor(asPositiveFiniteNumber(params.maxEntries) ?? DIR_LIST_DEFAULT_MAX_ENTRIES),
+    DIR_LIST_HARD_MAX_ENTRIES,
+  );
+  const offset = parsePageOffset(params.pageToken);
 
   const followSymlinks = params.followSymlinks === true;
 
-  let canonical: string;
-  try {
-    canonical = (
-      await resolveAbsolutePathForRead(requestedPath, {
-        symlinks: followSymlinks ? "follow" : "reject",
-      })
-    ).canonicalPath;
-  } catch (err) {
-    const code = classifyFsError(err);
-    const canonicalPath =
-      err instanceof FsSafeError &&
-      err.cause &&
-      typeof err.cause === "object" &&
-      "canonicalPath" in err.cause &&
-      typeof err.cause.canonicalPath === "string"
-        ? err.cause.canonicalPath
-        : undefined;
+  const directory = await resolveBoundReadDirectory({
+    requestedPath,
+    followSymlinks,
+    classifyError: classifyFsError,
+    notFoundMessage: "path not found",
+    expectedCanonicalPath: params.expectedCanonicalPath,
+    expectedBinding: params.expectedBinding,
+  });
+  if (!directory.ok) {
+    return directory;
+  }
+  const { canonicalPath: canonical, identity } = directory;
+  if (params.preflightOnly === true) {
     return {
-      ok: false,
-      code,
-      message:
-        code === "NOT_FOUND"
-          ? "path not found"
-          : code === "SYMLINK_REDIRECT"
-            ? "path traverses a symlink; refusing because followSymlinks=false (set plugins.entries.file-transfer.config.nodes.<node>.followSymlinks=true to allow, or update allowReadPaths to the canonical path)"
-            : `realpath failed: ${String(err)}`,
-      ...(canonicalPath ? { canonicalPath } : {}),
+      ok: true as const,
+      path: canonical,
+      entries: [],
+      truncated: false,
+      preflight: true,
+      binding: { kind: "existing", ...identity } satisfies PathBinding,
     };
   }
 
-  let stats: Awaited<ReturnType<typeof fs.stat>>;
-  try {
-    stats = await fs.stat(canonical);
-  } catch (err) {
-    const code = classifyFsError(err);
-    return { ok: false, code, message: `stat failed: ${String(err)}`, canonicalPath: canonical };
-  }
-
-  if (!stats.isDirectory()) {
+  const listing = await listCanonicalDirectory({
+    directoryPath: canonical,
+    expectedCanonicalPath: canonical,
+    expectedDevice: identity.device,
+    expectedInode: identity.inode,
+    maxEntries,
+    offset,
+  });
+  if (!listing.ok) {
+    if (listing.code === "CANONICAL_PATH_CHANGED") {
+      return {
+        ok: false as const,
+        code: "CANONICAL_PATH_CHANGED",
+        message: "canonical path differs from the authorized target",
+        canonicalPath: canonical,
+      };
+    }
+    const currentDirectory = await statRequiredDirectory(canonical, classifyFsError);
+    if (!currentDirectory.ok) {
+      return currentDirectory;
+    }
     return {
-      ok: false,
-      code: "IS_FILE",
-      message: "path is not a directory",
+      ok: false as const,
+      code: "READ_ERROR",
+      message: "list failed",
       canonicalPath: canonical,
     };
   }
-
-  let listedEntries: { name: string; isDirectory: boolean; size: number; mtimeMs: number }[];
-  try {
-    const dirRoot = await root(canonical);
-    listedEntries = await dirRoot.list(".", { withFileTypes: true });
-  } catch (err) {
-    const code = classifyFsError(err);
-    return {
-      ok: false,
-      code,
-      message: `list failed: ${String(err)}`,
-      canonicalPath: canonical,
-    };
-  }
-
-  listedEntries.sort((a, b) => a.name.localeCompare(b.name));
-
-  const total = listedEntries.length;
-  const page = listedEntries.slice(offset, offset + maxEntries);
-  const truncated = offset + maxEntries < total;
+  const truncated = offset + maxEntries < listing.total;
   const nextPageToken = truncated ? String(offset + maxEntries) : undefined;
-
-  const entries: DirListEntry[] = [];
-  for (const entry of page) {
-    const entryPath = path.join(canonical, entry.name);
-    const isDir = entry.isDirectory;
-
-    entries.push({
-      name: entry.name,
-      path: entryPath,
-      size: isDir ? 0 : entry.size,
-      mimeType: isDir ? "inode/directory" : mimeFromExtension(entry.name),
-      isDir,
-      mtime: entry.mtimeMs,
-    });
-  }
-
   return {
-    ok: true,
+    ok: true as const,
     path: canonical,
-    entries,
+    entries: listing.entries.map((entry) => ({
+      name: entry.name,
+      path: path.join(canonical, entry.name),
+      size: entry.isDirectory ? 0 : entry.size,
+      mimeType: entry.isDirectory ? "inode/directory" : mimeFromExtension(entry.name),
+      isDir: entry.isDirectory,
+      isFile: entry.isFile,
+      mtime: entry.mtimeMs,
+    })),
     nextPageToken,
     truncated,
+    binding: { kind: "existing", ...identity } satisfies PathBinding,
   };
 }

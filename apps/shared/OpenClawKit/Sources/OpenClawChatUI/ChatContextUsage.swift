@@ -1,0 +1,189 @@
+import Foundation
+
+/// Snapshot of how full the active session's context window is, derived from
+/// the newest usage-bearing message plus session/model metadata.
+public struct OpenClawChatContextUsage: Equatable, Sendable {
+    public let usedTokens: Int
+    public let contextWindowTokens: Int?
+    public let totalCost: Double?
+
+    public var fractionUsed: Double? {
+        guard let contextWindowTokens, contextWindowTokens > 0 else { return nil }
+        return min(1, max(0, Double(self.usedTokens) / Double(contextWindowTokens)))
+    }
+
+    public var percentUsed: Int? {
+        self.fractionUsed.map { Int(($0 * 100).rounded()) }
+    }
+}
+
+enum ChatContextUsageCalculator {
+    /// Prefers the newest per-run usage (fresh after every reply) and falls
+    /// back to fresh server-side session totals when no message carries usage.
+    static func usage(
+        messages: [OpenClawChatMessage],
+        sessionEntry: OpenClawChatSessionEntry?,
+        defaults: OpenClawChatSessionsDefaults?,
+        modelContextWindow: Int?) -> OpenClawChatContextUsage?
+    {
+        let sessionTokens = sessionEntry?.totalTokensFresh == false ? nil : sessionEntry?.totalTokens
+        let usedTokens = self.latestRunTokens(in: messages) ?? sessionTokens
+        guard let usedTokens, usedTokens > 0 else { return nil }
+        let contextWindow = self.positive(sessionEntry?.contextTokens)
+            ?? self.positive(defaults?.contextTokens)
+            ?? self.positive(modelContextWindow)
+        return OpenClawChatContextUsage(
+            usedTokens: usedTokens,
+            contextWindowTokens: contextWindow,
+            totalCost: self.totalCost(in: messages))
+    }
+
+    /// Context pressure comes from the latest run: its usage already counts
+    /// the whole conversation the model saw, so runs are not summed.
+    private static func latestRunTokens(in messages: [OpenClawChatMessage]) -> Int? {
+        for message in messages.reversed() {
+            guard let usage = message.usage else { continue }
+            if let total = usage.total, total > 0 {
+                return total
+            }
+            let summed = [usage.input, usage.cacheRead, usage.cacheWrite, usage.output]
+                .compactMap(\.self)
+                .reduce(0, +)
+            if summed > 0 {
+                return summed
+            }
+        }
+        return nil
+    }
+
+    private static func totalCost(in messages: [OpenClawChatMessage]) -> Double? {
+        let costs = messages.compactMap { $0.usage?.cost?.total }
+        guard !costs.isEmpty else { return nil }
+        return costs.reduce(0, +)
+    }
+
+    fileprivate static func positive(_ value: Int?) -> Int? {
+        guard let value, value > 0 else { return nil }
+        return value
+    }
+}
+
+extension OpenClawChatViewModel {
+    public var contextUsage: OpenClawChatContextUsage? {
+        let entry = self.currentSessionEntry()
+        return ChatContextUsageCalculator.usage(
+            messages: self.messages,
+            sessionEntry: entry,
+            defaults: self.sessionDefaults,
+            modelContextWindow: self.selectedModelContextWindow(sessionEntry: entry))
+    }
+
+    private func selectedModelContextWindow(sessionEntry: OpenClawChatSessionEntry?) -> Int? {
+        let selection = self.modelSelectionID != Self.defaultModelSelectionID
+            ? self.modelSelectionID
+            : (sessionEntry?.model ?? self.sessionDefaults?.model)
+        guard let selection else { return nil }
+        return self.modelChoices.first {
+            $0.selectionID == selection || $0.modelID == selection
+        }?.contextWindow
+    }
+}
+
+struct ChatMessageUsagePresentation: Equatable {
+    enum Pressure: Equatable {
+        case normal
+        case warning
+        case danger
+    }
+
+    let text: String
+    let accessibilityValue: String
+    let pressure: Pressure
+
+    static func make(
+        message: OpenClawChatMessage,
+        contextWindowTokens: Int?) -> ChatMessageUsagePresentation?
+    {
+        guard message.role.lowercased() == "assistant", let usage = message.usage else { return nil }
+
+        var visualParts: [String] = []
+        var accessibilityParts: [String] = []
+        let input = ChatContextUsageCalculator.positive(usage.input)
+        let output = ChatContextUsageCalculator.positive(usage.output)
+        let cacheRead = ChatContextUsageCalculator.positive(usage.cacheRead)
+        let cacheWrite = ChatContextUsageCalculator.positive(usage.cacheWrite)
+
+        let tokenParts: [(Int?, String, String)] = [
+            (input, "↑", String(localized: "Input tokens: %@")),
+            (output, "↓", String(localized: "Output tokens: %@")),
+            (cacheRead, "R", String(localized: "Cache read tokens: %@")),
+            (cacheWrite, "W", String(localized: "Cache write tokens: %@")),
+        ]
+        for (count, symbol, format) in tokenParts {
+            guard let count else { continue }
+            visualParts.append("\(symbol)\(ChatCompactTokenCountFormatter.string(Double(count)))")
+            accessibilityParts.append(String(format: format, count.formatted()))
+        }
+        if let cost = usage.cost?.total, cost > 0 {
+            let formattedCost = String(format: "$%.4f", locale: Locale(identifier: "en_US_POSIX"), cost)
+            visualParts.append(formattedCost)
+            accessibilityParts.append(String(
+                format: String(localized: "Cost: %@"),
+                formattedCost))
+        }
+
+        // Context pressure mirrors the Control UI prompt size. Output is response data;
+        // input plus cache reads/writes is the context the model received for this run.
+        let promptTokens = Double(input ?? 0) + Double(cacheRead ?? 0) + Double(cacheWrite ?? 0)
+        let contextPercent: Int?
+        if let contextWindowTokens, contextWindowTokens > 0, promptTokens > 0 {
+            let roundedPercent = (promptTokens / Double(contextWindowTokens) * 100).rounded()
+            contextPercent = Int(min(100, roundedPercent))
+        } else {
+            contextPercent = nil
+        }
+        let pressure = self.pressure(for: contextPercent)
+        if let contextPercent {
+            let warningPrefix = pressure == .normal ? "" : "⚠︎ "
+            visualParts.append("\(warningPrefix)\(contextPercent)% \(String(localized: "ctx"))")
+            let format = switch pressure {
+            case .normal:
+                String(localized: "%@ percent of context used")
+            case .warning:
+                String(localized: "Warning: %@ percent of context used")
+            case .danger:
+                String(localized: "Critical: %@ percent of context used")
+            }
+            accessibilityParts.append(String(format: format, contextPercent.formatted()))
+        }
+
+        guard !visualParts.isEmpty else { return nil }
+        return ChatMessageUsagePresentation(
+            text: visualParts.joined(separator: " "),
+            accessibilityValue: accessibilityParts.joined(separator: ", "),
+            pressure: pressure)
+    }
+
+    private static func pressure(for percent: Int?) -> Pressure {
+        guard let percent else { return .normal }
+        if percent >= 90 { return .danger }
+        if percent >= 75 { return .warning }
+        return .normal
+    }
+}
+
+enum ChatContextUsageFormatter {
+    static func tokens(_ value: Int) -> String {
+        if value >= 1_000_000 {
+            return String(format: "%.1fM", Double(value) / 1_000_000)
+        }
+        if value >= 1000 {
+            return String(format: "%.1fk", Double(value) / 1000)
+        }
+        return "\(value)"
+    }
+
+    static func cost(_ value: Double) -> String {
+        String(format: "$%.2f", value)
+    }
+}

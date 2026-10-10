@@ -1,18 +1,6 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { AuthProfileStore } from "./types.js";
-
-function resolveStoredMetadata(store: AuthProfileStore | undefined, profileId: string) {
-  const profile = store?.profiles[profileId];
-  if (!profile) {
-    return {};
-  }
-  return {
-    displayName:
-      "displayName" in profile ? normalizeOptionalString(profile.displayName) : undefined,
-    email: "email" in profile ? normalizeOptionalString(profile.email) : undefined,
-  };
-}
 
 export function buildAuthProfileId(params: {
   providerId: string;
@@ -30,9 +18,12 @@ export function resolveAuthProfileMetadata(params: {
   profileId: string;
 }): { displayName?: string; email?: string } {
   const configured = params.cfg?.auth?.profiles?.[params.profileId];
-  const stored = resolveStoredMetadata(params.store, params.profileId);
+  const stored = params.store?.profiles[params.profileId];
+  // Display labels can be configured without mutating stored credentials.
   return {
-    displayName: normalizeOptionalString(configured?.displayName) ?? stored.displayName,
-    email: normalizeOptionalString(configured?.email) ?? stored.email,
+    displayName:
+      normalizeOptionalString(configured?.displayName) ??
+      normalizeOptionalString(stored?.displayName),
+    email: normalizeOptionalString(configured?.email) ?? normalizeOptionalString(stored?.email),
   };
 }

@@ -10,20 +10,17 @@ export type DiscordGuildSummary = {
 export async function listGuilds(
   token: string,
   fetcher: typeof fetch,
+  options?: { timeoutMs?: number },
 ): Promise<DiscordGuildSummary[]> {
   const raw = await fetchDiscord<Array<{ id?: string; name?: string }>>(
     "/users/@me/guilds",
     token,
     fetcher,
+    options,
   );
-  return raw
-    .filter(
-      (guild): guild is { id: string; name: string } =>
-        typeof guild.id === "string" && typeof guild.name === "string",
-    )
-    .map((guild) => ({
-      id: guild.id,
-      name: guild.name,
-      slug: normalizeDiscordSlug(guild.name),
-    }));
+  return raw.flatMap((guild) =>
+    typeof guild.id === "string" && typeof guild.name === "string"
+      ? [{ id: guild.id, name: guild.name, slug: normalizeDiscordSlug(guild.name) }]
+      : [],
+  );
 }

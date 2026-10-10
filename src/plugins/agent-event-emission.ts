@@ -1,5 +1,6 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { hasInvalidLifecycleStartTimestamp } from "../infra/agent-event-lifecycle.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   isPluginJsonValue,
   type PluginAgentEventEmitParams,
@@ -32,15 +33,10 @@ function normalizePluginEventData(params: {
   pluginName?: string;
   data: PluginJsonValue;
 }): Record<string, unknown> {
-  if (params.data && typeof params.data === "object" && !Array.isArray(params.data)) {
-    return {
-      ...params.data,
-      pluginId: params.pluginId,
-      ...(params.pluginName ? { pluginName: params.pluginName } : {}),
-    };
-  }
   return {
-    value: params.data,
+    ...(params.data && typeof params.data === "object" && !Array.isArray(params.data)
+      ? params.data
+      : { value: params.data }),
     pluginId: params.pluginId,
     ...(params.pluginName ? { pluginName: params.pluginName } : {}),
   };
@@ -69,6 +65,9 @@ export function emitPluginAgentEvent(params: {
       emitted: false,
       reason: `stream ${stream} must be scoped to plugin ${params.pluginId}`,
     };
+  }
+  if (hasInvalidLifecycleStartTimestamp(stream, params.event.data)) {
+    return { emitted: false, reason: "lifecycle start requires a finite startedAt timestamp" };
   }
   emitAgentEvent({
     runId,

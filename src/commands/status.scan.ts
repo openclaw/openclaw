@@ -1,91 +1,53 @@
+// Top-level text status scan entrypoint.
+// Human `status --all` and JSON status use their dedicated command paths.
+
 import { withProgress } from "../cli/progress.js";
-import { hasConfiguredChannelsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
-import { buildPluginCompatibilitySnapshotNotices } from "../plugins/status.js";
-import type { RuntimeEnv } from "../runtime.js";
+import type { StatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
 import { executeStatusScanFromOverview } from "./status.scan-execute.ts";
-import { resolveStatusMemoryStatusSnapshot } from "./status.scan-memory.ts";
 import { collectStatusScanOverview } from "./status.scan-overview.ts";
 import type { StatusScanResult } from "./status.scan-result.ts";
-import { scanStatusJsonWithPolicy } from "./status.scan.fast-json.js";
 
+/** Runs the text status scan. */
 export async function scanStatus(
-  opts: {
-    json?: boolean;
-    timeoutMs?: number;
-    all?: boolean;
+  opts: StatusGatewayProbeBudget & {
     deep?: boolean;
   },
-  _runtime: RuntimeEnv,
 ): Promise<StatusScanResult> {
-  if (opts.json) {
-    return await scanStatusJsonWithPolicy(
-      {
-        timeoutMs: opts.timeoutMs,
-        all: opts.all,
-      },
-      _runtime,
-      {
-        commandName: "status --json",
-        resolveHasConfiguredChannels: (cfg, sourceConfig) =>
-          hasConfiguredChannelsForReadOnlyScope({
-            config: cfg,
-            activationSourceConfig: sourceConfig,
-          }),
-        resolveMemory: async ({ cfg, agentStatus, memoryPlugin }) =>
-          await resolveStatusMemoryStatusSnapshot({
-            cfg,
-            agentStatus,
-            memoryPlugin,
-          }),
-      },
-    );
-  }
   return await withProgress(
     {
       label: "Scanning status…",
-      total: 10,
+      total: 9,
       enabled: true,
     },
     async (progress) => {
-      const includeLiveChannelChecks = opts.all === true || opts.deep === true;
+      const isDetailedScan = opts.deep === true;
       const overview = await collectStatusScanOverview({
+        env: process.env,
         commandName: "status",
         opts,
         showSecrets: process.env.OPENCLAW_SHOW_SECRETS?.trim() !== "0",
-        includeLiveChannelStatus: includeLiveChannelChecks,
-        includeChannelSetupRuntimeFallback: true,
+        includeLiveChannelStatus: isDetailedScan,
+        includeChannelSetupRuntimeFallback: isDetailedScan,
+        fetchGitUpdate: isDetailedScan,
+        includeRegistryUpdate: isDetailedScan,
+        includeAdvertisedControlUiLinks: true,
         progress,
         labels: {
           loadingConfig: "Loading config…",
           checkingTailscale: "Checking Tailscale…",
           checkingForUpdates: "Checking for updates…",
           resolvingAgents: "Resolving agents…",
-          probingGateway: "Probing gateway…",
+          probingGateway: "Checking gateway…",
           queryingChannelStatus: "Querying channel status…",
           summarizingChannels: "Summarizing channels…",
         },
       });
 
-      progress.setLabel("Checking plugins…");
-      const pluginCompatibility = opts.all
-        ? buildPluginCompatibilitySnapshotNotices({ config: overview.cfg })
-        : [];
-      progress.tick();
-
       progress.setLabel("Checking memory and sessions…");
       const result = await executeStatusScanFromOverview({
         overview,
-        resolveMemory: async ({ cfg, agentStatus, memoryPlugin }) =>
-          opts.all
-            ? await resolveStatusMemoryStatusSnapshot({
-                cfg,
-                agentStatus,
-                memoryPlugin,
-              })
-            : null,
-        channelIssues: overview.channelIssues,
-        channels: overview.channels,
-        pluginCompatibility,
+        resolveMemory: async () => null,
+        pluginCompatibility: [],
       });
       progress.tick();
 

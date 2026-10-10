@@ -1,6 +1,24 @@
-import fsSync from "node:fs";
-import path from "node:path";
 import { readRootJsonObjectSync } from "@openclaw/fs-safe/json";
+import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
+import { compareValidSemver } from "./semver.js";
+
+export function comparePackageUpdateVersions(left: string, right: string): number {
+  const releaseCmp = compareOpenClawReleaseVersions(left, right);
+  if (releaseCmp !== null) {
+    return releaseCmp;
+  }
+  return compareValidSemver(left, right) ?? 0;
+}
+
+export function isPackageVersionDowngrade(
+  currentVersion: string | undefined,
+  nextVersion: string | undefined,
+): boolean {
+  if (!currentVersion || !nextVersion) {
+    return false;
+  }
+  return comparePackageUpdateVersions(nextVersion, currentVersion) < 0;
+}
 
 export function expectedIntegrityForUpdate(
   spec: string | undefined,
@@ -24,11 +42,7 @@ export function expectedIntegrityForUpdate(
   return integrity;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function readInstalledPackageManifest(dir: string): Record<string, unknown> | undefined {
+export function readInstalledPackageManifest(dir: string): Record<string, unknown> | undefined {
   const result = readRootJsonObjectSync({
     rootDir: dir,
     relativePath: "package.json",
@@ -40,30 +54,4 @@ function readInstalledPackageManifest(dir: string): Record<string, unknown> | un
 export async function readInstalledPackageVersion(dir: string): Promise<string | undefined> {
   const manifest = readInstalledPackageManifest(dir);
   return typeof manifest?.version === "string" ? manifest.version : undefined;
-}
-
-export function readInstalledPackagePeerDependencies(dir: string): Record<string, string> {
-  const manifest = readInstalledPackageManifest(dir);
-  const peerDependencies = isRecord(manifest?.peerDependencies) ? manifest.peerDependencies : {};
-  return Object.fromEntries(
-    Object.entries(peerDependencies).filter((entry): entry is [string, string] => {
-      const [, value] = entry;
-      return typeof value === "string";
-    }),
-  );
-}
-
-export function installedPackageNeedsOpenClawPeerLinkRepair(dir: string): boolean {
-  const peerDependencies = readInstalledPackagePeerDependencies(dir);
-  if (!Object.hasOwn(peerDependencies, "openclaw")) {
-    return false;
-  }
-
-  try {
-    fsSync.statSync(path.join(dir, "node_modules", "openclaw"));
-    return false;
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException | undefined)?.code;
-    return code === "ENOENT" || code === "ENOTDIR";
-  }
 }

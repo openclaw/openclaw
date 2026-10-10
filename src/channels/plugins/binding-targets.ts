@@ -1,15 +1,12 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { ConfiguredBindingResolution } from "./binding-types.js";
-import {
-  ensureStatefulTargetBuiltinsRegistered,
-  isStatefulTargetBuiltinDriverId,
-} from "./stateful-target-builtins.js";
-import {
-  getStatefulBindingTargetDriver,
-  resolveStatefulBindingTargetBySessionKey,
-} from "./stateful-target-drivers.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import type {
+  ConfiguredBindingResolution,
+  StatefulBindingTargetResetResult,
+} from "./binding-types.js";
 
 export async function ensureConfiguredBindingTargetReady(params: {
+  assertActive?: () => void;
   cfg: OpenClawConfig;
   bindingResolution: ConfiguredBindingResolution | null;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
@@ -17,18 +14,20 @@ export async function ensureConfiguredBindingTargetReady(params: {
     return { ok: true };
   }
   const driverId = params.bindingResolution.statefulTarget.driverId;
-  let driver = getStatefulBindingTargetDriver(driverId);
-  if (!driver && isStatefulTargetBuiltinDriverId(driverId)) {
-    await ensureStatefulTargetBuiltinsRegistered();
-    driver = getStatefulBindingTargetDriver(driverId);
-  }
-  if (!driver) {
+  if (driverId.trim() !== "acp") {
     return {
       ok: false,
       error: `Configured binding target driver unavailable: ${driverId}`,
     };
   }
-  return await driver.ensureReady({
+  const { ensureConfiguredAcpBindingTargetReady } = await import("./acp-stateful-target-driver.js");
+  try {
+    params.assertActive?.();
+  } catch (error) {
+    return { ok: false, error: formatErrorMessage(error) };
+  }
+  return await ensureConfiguredAcpBindingTargetReady({
+    ...(params.assertActive ? { assertActive: params.assertActive } : {}),
     cfg: params.cfg,
     bindingResolution: params.bindingResolution,
   });
@@ -37,51 +36,25 @@ export async function ensureConfiguredBindingTargetReady(params: {
 export async function resetConfiguredBindingTargetInPlace(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
+  agentId?: string;
   reason: "new" | "reset";
   commandSource?: string;
-}): Promise<{ ok: true } | { ok: false; skipped?: boolean; error?: string }> {
-  let resolved = resolveStatefulBindingTargetBySessionKey({
+}): Promise<StatefulBindingTargetResetResult> {
+  const { resolveAcpBindingTargetBySessionKey, resetConfiguredAcpBindingTargetInPlace } =
+    await import("./acp-stateful-target-driver.js");
+  const bindingTarget = await resolveAcpBindingTargetBySessionKey({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
+    agentId: params.agentId,
   });
-  if (!resolved) {
-    await ensureStatefulTargetBuiltinsRegistered();
-    resolved = resolveStatefulBindingTargetBySessionKey({
-      cfg: params.cfg,
-      sessionKey: params.sessionKey,
-    });
-  }
-  if (!resolved?.driver.resetInPlace) {
+  if (!bindingTarget) {
     return {
       ok: false,
       skipped: true,
     };
   }
-  return await resolved.driver.resetInPlace({
+  return await resetConfiguredAcpBindingTargetInPlace({
     ...params,
-    bindingTarget: resolved.bindingTarget,
-  });
-}
-
-export async function ensureConfiguredBindingTargetSession(params: {
-  cfg: OpenClawConfig;
-  bindingResolution: ConfiguredBindingResolution;
-}): Promise<{ ok: true; sessionKey: string } | { ok: false; sessionKey: string; error: string }> {
-  const driverId = params.bindingResolution.statefulTarget.driverId;
-  let driver = getStatefulBindingTargetDriver(driverId);
-  if (!driver && isStatefulTargetBuiltinDriverId(driverId)) {
-    await ensureStatefulTargetBuiltinsRegistered();
-    driver = getStatefulBindingTargetDriver(driverId);
-  }
-  if (!driver) {
-    return {
-      ok: false,
-      sessionKey: params.bindingResolution.statefulTarget.sessionKey,
-      error: `Configured binding target driver unavailable: ${driverId}`,
-    };
-  }
-  return await driver.ensureSession({
-    cfg: params.cfg,
-    bindingResolution: params.bindingResolution,
+    bindingTarget,
   });
 }

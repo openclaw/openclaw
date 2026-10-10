@@ -1,7 +1,8 @@
-import process from "node:process";
 import { resolveDebugProxySettings, type DebugProxySettings } from "./env.js";
 import type { CaptureProtocol } from "./types.js";
 
+// Debug-proxy coverage records which transport seams are fully captured versus
+// merely routed through a proxy, so operators know where packet evidence is weak.
 export type DebugProxyCoverageStatus = "captured" | "proxy-only" | "uncovered";
 
 export type DebugProxyCoverageEntry = {
@@ -11,13 +12,6 @@ export type DebugProxyCoverageEntry = {
   protocols: CaptureProtocol[];
   status: DebugProxyCoverageStatus;
   notes: string;
-};
-
-export type DebugProxyCoverageSummary = {
-  total: number;
-  captured: number;
-  proxyOnly: number;
-  uncovered: number;
 };
 
 const DEBUG_PROXY_COVERAGE_ENTRIES: readonly DebugProxyCoverageEntry[] = [
@@ -33,7 +27,7 @@ const DEBUG_PROXY_COVERAGE_ENTRIES: readonly DebugProxyCoverageEntry[] = [
   {
     id: "discord-rest",
     label: "Discord REST monitor fetch",
-    modulePath: "extensions/discord/monitor/rest-fetch.ts",
+    modulePath: "extensions/discord/src/monitor/rest-fetch.ts",
     protocols: ["http", "https"],
     status: "captured",
     notes: "Discord monitor REST calls inherit the debug proxy and record HTTP exchanges.",
@@ -41,7 +35,7 @@ const DEBUG_PROXY_COVERAGE_ENTRIES: readonly DebugProxyCoverageEntry[] = [
   {
     id: "discord-gateway",
     label: "Discord gateway monitor",
-    modulePath: "extensions/discord/monitor/gateway-plugin.ts",
+    modulePath: "extensions/discord/src/monitor/gateway-plugin.ts",
     protocols: ["https", "wss"],
     status: "captured",
     notes:
@@ -50,7 +44,7 @@ const DEBUG_PROXY_COVERAGE_ENTRIES: readonly DebugProxyCoverageEntry[] = [
   {
     id: "telegram-fetch",
     label: "Telegram fetch resolver",
-    modulePath: "extensions/telegram/fetch.ts",
+    modulePath: "extensions/telegram/src/fetch.ts",
     protocols: ["http", "https"],
     status: "captured",
     notes:
@@ -59,7 +53,7 @@ const DEBUG_PROXY_COVERAGE_ENTRIES: readonly DebugProxyCoverageEntry[] = [
   {
     id: "mattermost-ws",
     label: "Mattermost monitor websocket",
-    modulePath: "extensions/mattermost/mattermost/monitor-websocket.ts",
+    modulePath: "extensions/mattermost/src/mattermost/monitor-websocket.ts",
     protocols: ["ws", "wss"],
     status: "captured",
     notes: "Mattermost websocket monitor uses the debug proxy agent and records frame activity.",
@@ -103,7 +97,7 @@ const DEBUG_PROXY_COVERAGE_ENTRIES: readonly DebugProxyCoverageEntry[] = [
   {
     id: "feishu-client-http",
     label: "Feishu SDK HTTP client",
-    modulePath: "extensions/feishu/client.ts",
+    modulePath: "extensions/feishu/src/client.ts",
     protocols: ["https"],
     status: "proxy-only",
     notes:
@@ -112,7 +106,7 @@ const DEBUG_PROXY_COVERAGE_ENTRIES: readonly DebugProxyCoverageEntry[] = [
   {
     id: "feishu-client-ws",
     label: "Feishu SDK websocket client",
-    modulePath: "extensions/feishu/client.ts",
+    modulePath: "extensions/feishu/src/client.ts",
     protocols: ["wss"],
     status: "proxy-only",
     notes:
@@ -122,54 +116,33 @@ const DEBUG_PROXY_COVERAGE_ENTRIES: readonly DebugProxyCoverageEntry[] = [
 
 let warnedCoverageSessionKey: string | null = null;
 
-export function listDebugProxyCoverageEntries(): DebugProxyCoverageEntry[] {
-  return DEBUG_PROXY_COVERAGE_ENTRIES.map((entry) => ({
-    ...entry,
-    protocols: [...entry.protocols],
-  }));
-}
-
-export function summarizeDebugProxyCoverage(
-  entries: readonly DebugProxyCoverageEntry[] = DEBUG_PROXY_COVERAGE_ENTRIES,
-): DebugProxyCoverageSummary {
-  let captured = 0;
-  let proxyOnly = 0;
-  let uncovered = 0;
-  for (const entry of entries) {
-    if (entry.status === "captured") {
-      captured += 1;
-      continue;
-    }
-    if (entry.status === "proxy-only") {
-      proxyOnly += 1;
-      continue;
-    }
-    uncovered += 1;
-  }
-  return {
-    total: entries.length,
-    captured,
-    proxyOnly,
-    uncovered,
-  };
-}
-
 export function buildDebugProxyCoverageReport() {
-  const entries = listDebugProxyCoverageEntries();
-  return {
-    summary: summarizeDebugProxyCoverage(entries),
-    entries,
+  // Return copies because callers may render/sort/filter entries for CLI output.
+  const entries: DebugProxyCoverageEntry[] = [];
+  const counts = { captured: 0, "proxy-only": 0, uncovered: 0 };
+  for (const entry of DEBUG_PROXY_COVERAGE_ENTRIES) {
+    entries.push({ ...entry, protocols: [...entry.protocols] });
+    counts[entry.status] += 1;
+  }
+  const summary = {
+    total: entries.length,
+    captured: counts.captured,
+    proxyOnly: counts["proxy-only"],
+    uncovered: counts.uncovered,
   };
+  return { summary, entries };
 }
 
 export function maybeWarnAboutDebugProxyCoverage(
   settings: DebugProxySettings = resolveDebugProxySettings(),
-  warn: (message: string) => void = (message) => process.stderr.write(`${message}\n`),
+  warn: (message: string) => void = (message) => console.warn(message),
 ): void {
   if (!settings.enabled || !settings.required) {
     return;
   }
   const sessionKey = `${settings.sessionId}:${settings.proxyUrl ?? ""}`;
+  // Warn once per capture session/proxy URL; the gaps are static enough that
+  // repeating them during a run only adds noise.
   if (warnedCoverageSessionKey === sessionKey) {
     return;
   }

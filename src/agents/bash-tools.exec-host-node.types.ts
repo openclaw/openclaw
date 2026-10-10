@@ -1,30 +1,12 @@
-import type { ExecAsk, ExecSecurity } from "../infra/exec-approvals.js";
-import type { ExecElevatedDefaults } from "./bash-tools.exec-types.js";
+import type { SystemRunExecutionContext } from "../../packages/gateway-protocol/src/system-run-execution-context.js";
+import type { ExecHostCommandParams } from "./bash-tools.exec-types.js";
 
-export type ExecuteNodeHostCommandParams = {
-  command: string;
+export type ExecuteNodeHostCommandParams = ExecHostCommandParams & {
   workdir: string | undefined;
-  env: Record<string, string>;
-  requestedEnv?: Record<string, string>;
+  executionContext?: SystemRunExecutionContext;
   requestedNode?: string;
   boundNode?: string;
-  sessionKey?: string;
-  bashElevated?: ExecElevatedDefaults;
-  turnSourceChannel?: string;
-  turnSourceTo?: string;
-  turnSourceAccountId?: string;
-  turnSourceThreadId?: string | number;
-  trigger?: string;
-  agentId?: string;
-  security: ExecSecurity;
-  ask: ExecAsk;
-  strictInlineEval?: boolean;
-  commandHighlighting?: boolean;
-  timeoutSec?: number;
-  defaultTimeoutSec: number;
-  approvalRunningNoticeMs: number;
-  warnings: string[];
-  notifySessionKey?: string;
+  /** Warnings that apply only when the command runs inline, never while approval is pending. */
+  foregroundWarnings?: string[];
   notifyOnExit?: boolean;
-  trustedSafeBinDirs?: ReadonlySet<string>;
 };

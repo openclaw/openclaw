@@ -2,10 +2,19 @@
 
 Adds the `lobster` agent tool as an **optional** plugin tool.
 
+## Install
+
+```bash
+openclaw plugins install @openclaw/lobster
+```
+
+Restart the Gateway after installing or updating the plugin.
+
 ## What this is
 
-- Lobster is a standalone workflow shell (typed JSON-first pipelines + approvals/resume).
+- Lobster is a standalone workflow shell (typed JSON-first pipelines + approval/input checkpoints).
 - This plugin integrates Lobster with OpenClaw _without core changes_.
+- Input checkpoints return the question and schema; resume with `responseJson` containing the user's answer as JSON. See [structured input](https://docs.openclaw.ai/tools/lobster#structured-input).
 
 ## Enable
 
@@ -16,16 +25,16 @@ Enable it in an agent allowlist:
 ```json
 {
   "agents": {
-    "list": [
-      {
-        "id": "main",
+    "entries": {
+      "main": {
+        "default": true,
         "tools": {
           "allow": [
             "lobster" // plugin id (enables all tools from this plugin)
           ]
         }
       }
-    ]
+    }
   }
 }
 ```
@@ -49,15 +58,15 @@ Example (allow only a small set of tools):
 ```jsonc
 {
   "agents": {
-    "list": [
-      {
-        "id": "main",
+    "entries": {
+      "main": {
+        "default": true,
         "tools": {
           "allow": ["lobster", "web_fetch", "web_search", "gog", "gh"],
           "deny": ["gateway"],
         },
       },
-    ],
+    },
   },
 }
 ```
@@ -72,3 +81,14 @@ Notes:
 - Runs Lobster in process via the published `@clawdbot/lobster/core` runtime.
 - Does not manage OAuth/tokens.
 - Uses timeouts, stdout caps, and strict JSON envelope parsing.
+
+## Docs
+
+- https://docs.openclaw.ai/tools/lobster
+
+## Package
+
+- Plugin id: `lobster`
+- Tool: `lobster`
+- Package: `@openclaw/lobster`
+- Minimum OpenClaw host: `2026.4.25`

@@ -1,13 +1,7 @@
-export {
-  loadSessionStore,
-  readLatestAssistantTextFromSessionTranscript,
-  resolveAndPersistSessionFile,
-  resolveSessionStoreEntry,
-} from "openclaw/plugin-sdk/session-store-runtime";
-export { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+export { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 export { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
-export { resolveChunkMode } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 export {
-  generateTelegramTopicLabel as generateTopicLabel,
-  resolveAutoTopicLabelConfig,
-} from "./auto-topic-label.js";
+  generateConversationLabel as generateTopicLabel,
+  resolveChunkMode,
+} from "openclaw/plugin-sdk/reply-dispatch-runtime";
+export { resolveAutoTopicLabelConfig } from "./auto-topic-label-config.js";

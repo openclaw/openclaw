@@ -1,9 +1,11 @@
+// Feishu tests cover dynamic agent plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
+import type { FeishuConfig } from "./types.js";
 
 let tempRoot: string;
 
@@ -15,15 +17,33 @@ afterEach(async () => {
   await fs.promises.rm(tempRoot, { recursive: true, force: true });
 });
 
-function createRuntime() {
-  const replaceConfigFile = vi.fn(async () => {});
+function createRuntime(
+  currentCfg?: OpenClawConfig,
+  persistedCfg?: OpenClawConfig,
+  mutationCfg?: OpenClawConfig,
+) {
+  let runtimeCfg = structuredClone(currentCfg ?? ({} as OpenClawConfig));
+  const commitConfig = vi.fn();
+  const mutateConfigFile = vi.fn(
+    async (params: {
+      mutate: (draft: OpenClawConfig, context: { snapshot: never; previousHash: null }) => unknown;
+    }) => {
+      const draft = structuredClone(mutationCfg ?? runtimeCfg);
+      const result = await params.mutate(draft, { snapshot: {} as never, previousHash: null });
+      runtimeCfg = draft;
+      commitConfig();
+      return { nextConfig: persistedCfg ?? runtimeCfg, result };
+    },
+  );
   return {
     runtime: {
       config: {
-        replaceConfigFile,
+        mutateConfigFile,
+        current: vi.fn(() => runtimeCfg),
       },
     } as unknown as PluginRuntime,
-    replaceConfigFile,
+    commitConfig,
+    mutateConfigFile,
   };
 }
 
@@ -33,6 +53,38 @@ function createDynamicConfig() {
     workspaceTemplate: path.join(tempRoot, "workspace-{agentId}"),
     agentDirTemplate: path.join(tempRoot, "agent-{agentId}"),
   };
+}
+
+function createCanonicalAgentRoster(): OpenClawConfig["agents"] {
+  return {
+    ownership: "explicit",
+    defaults: { systemAgent: { agentId: "main" } },
+    entries: { main: {} },
+  };
+}
+
+function createConfig(feishu: Partial<FeishuConfig> = {}): OpenClawConfig {
+  return {
+    channels: { feishu: { dynamicAgentCreation: createDynamicConfig(), ...feishu } },
+    agents: createCanonicalAgentRoster(),
+    bindings: [],
+  };
+}
+
+function createAgent(
+  cfg: OpenClawConfig,
+  runtime: PluginRuntime,
+  overrides: Partial<Omit<Parameters<typeof maybeCreateDynamicAgent>[0], "cfg" | "runtime">> = {},
+) {
+  return maybeCreateDynamicAgent({
+    cfg,
+    runtime,
+    accountId: "default",
+    senderOpenId: "ou_sender",
+    canCreateForConfig: async () => true,
+    log: vi.fn(),
+    ...overrides,
+  });
 }
 
 async function pathExists(target: string): Promise<boolean> {
@@ -49,107 +101,323 @@ async function pathExists(target: string): Promise<boolean> {
 
 describe("maybeCreateDynamicAgent", () => {
   it("does not persist dynamic agents when config writes are disabled", async () => {
-    const { runtime, replaceConfigFile } = createRuntime();
-    const dynamicCfg = createDynamicConfig();
+    const cfg = createConfig({ configWrites: false });
+    const { runtime, mutateConfigFile } = createRuntime(cfg);
 
-    const result = await maybeCreateDynamicAgent({
-      cfg: {
-        channels: { feishu: { configWrites: false } },
-        agents: { list: [] },
-        bindings: [],
-      } as OpenClawConfig,
-      runtime,
-      senderOpenId: "ou_sender",
-      dynamicCfg,
-      configWritesAllowed: false,
-      log: vi.fn(),
-    });
+    const result = await createAgent(cfg, runtime);
 
-    expect(result).toEqual({
-      created: false,
-      updatedCfg: {
-        channels: { feishu: { configWrites: false } },
-        agents: { list: [] },
-        bindings: [],
-      },
-    });
-    expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(result).toEqual({ created: false, updatedCfg: cfg });
+    expect(mutateConfigFile).not.toHaveBeenCalled();
     expect(await pathExists(path.join(tempRoot, "workspace-feishu-ou_sender"))).toBe(false);
     expect(await pathExists(path.join(tempRoot, "agent-feishu-ou_sender"))).toBe(false);
   });
 
-  it("persists a sender agent and direct binding when config writes are allowed", async () => {
-    const { runtime, replaceConfigFile } = createRuntime();
+  it("does not create persistent state when current ingress denies the sender", async () => {
+    const cfg = createConfig();
+    const { runtime, mutateConfigFile } = createRuntime(cfg);
 
-    const result = await maybeCreateDynamicAgent({
-      cfg: {
-        agents: { list: [] },
-        bindings: [],
-      } as OpenClawConfig,
-      runtime,
-      senderOpenId: "ou_sender",
-      dynamicCfg: createDynamicConfig(),
-      configWritesAllowed: true,
-      log: vi.fn(),
+    const result = await createAgent(cfg, runtime, {
+      canCreateForConfig: async () => false,
     });
 
-    expect(result.created).toBe(true);
-    expect(result.agentId).toBe("feishu-ou_sender");
-    expect(replaceConfigFile).toHaveBeenCalledTimes(1);
-    expect(replaceConfigFile).toHaveBeenCalledWith({
-      nextConfig: {
-        agents: {
-          list: [
-            {
-              id: "feishu-ou_sender",
-              workspace: path.join(tempRoot, "workspace-feishu-ou_sender"),
-              agentDir: path.join(tempRoot, "agent-feishu-ou_sender"),
-            },
-          ],
-        },
-        bindings: [
-          {
-            agentId: "feishu-ou_sender",
-            match: {
-              channel: "feishu",
-              peer: { kind: "direct", id: "ou_sender" },
-            },
-          },
-        ],
-      },
-      afterWrite: { mode: "auto" },
-    });
-    expect(await pathExists(path.join(tempRoot, "workspace-feishu-ou_sender"))).toBe(true);
-    expect(await pathExists(path.join(tempRoot, "agent-feishu-ou_sender"))).toBe(true);
+    expect(result).toEqual({ created: false, updatedCfg: cfg });
+    expect(mutateConfigFile).not.toHaveBeenCalled();
+    expect(await pathExists(path.join(tempRoot, "workspace-feishu-ou_sender"))).toBe(false);
+    expect(await pathExists(path.join(tempRoot, "agent-feishu-ou_sender"))).toBe(false);
   });
 
-  it("keeps the maxAgents limit before adding a missing binding", async () => {
-    const { runtime, replaceConfigFile } = createRuntime();
+  it("rechecks current ingress inside the config mutation lock", async () => {
+    const cfg = createConfig();
+    const { runtime, commitConfig, mutateConfigFile } = createRuntime(cfg);
+    const canCreateForConfig = vi
+      .fn<(cfg: OpenClawConfig) => Promise<boolean>>()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
 
-    const result = await maybeCreateDynamicAgent({
-      cfg: {
-        agents: {
-          list: [
-            {
-              id: "feishu-ou_sender",
-              workspace: path.join(tempRoot, "existing-workspace"),
-              agentDir: path.join(tempRoot, "existing-agent"),
-            },
-          ],
-        },
-        bindings: [],
-      } as OpenClawConfig,
-      runtime,
-      senderOpenId: "ou_sender",
-      dynamicCfg: {
-        ...createDynamicConfig(),
-        maxAgents: 1,
-      },
-      configWritesAllowed: true,
-      log: vi.fn(),
+    const result = await createAgent(cfg, runtime, {
+      canCreateForConfig,
     });
 
     expect(result.created).toBe(false);
-    expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(canCreateForConfig).toHaveBeenCalledTimes(2);
+    expect(mutateConfigFile).toHaveBeenCalledTimes(1);
+    expect(commitConfig).not.toHaveBeenCalled();
+    expect(result.updatedCfg.agents?.entries).toEqual({ main: {} });
+    expect(result.updatedCfg.bindings).toEqual([]);
+    expect(await pathExists(path.join(tempRoot, "workspace-feishu-ou_sender"))).toBe(false);
+    expect(await pathExists(path.join(tempRoot, "agent-feishu-ou_sender"))).toBe(false);
+  });
+
+  it("preserves a non-peer route added before the config mutation lock", async () => {
+    const cfg = createConfig();
+    const mutationCfg = {
+      ...cfg,
+      bindings: [
+        {
+          agentId: "main",
+          match: { channel: "feishu", accountId: "default" },
+        },
+      ],
+    } as OpenClawConfig;
+    const { runtime, commitConfig, mutateConfigFile } = createRuntime(cfg, undefined, mutationCfg);
+
+    const result = await createAgent(cfg, runtime);
+
+    expect(result.created).toBe(false);
+    expect(result.updatedCfg).toEqual(mutationCfg);
+    expect(mutateConfigFile).toHaveBeenCalledTimes(1);
+    expect(commitConfig).not.toHaveBeenCalled();
+  });
+
+  it("scopes bindings to the normalized account id", async () => {
+    const cfg = createConfig();
+    const { runtime } = createRuntime(cfg);
+
+    const result = await createAgent(cfg, runtime, {
+      accountId: "Ops Team",
+    });
+
+    expect(result.created).toBe(true);
+    expect(result.agentId).toMatch(/^feishu-ops-team-[a-f0-9]{32}$/);
+    expect(result.updatedCfg.bindings).toEqual([
+      {
+        agentId: result.agentId,
+        match: {
+          channel: "feishu",
+          accountId: "ops-team",
+          peer: { kind: "direct", id: "ou_sender" },
+        },
+      },
+    ]);
+  });
+
+  it("keeps named-account dynamic agent ids bounded and sender-unique", async () => {
+    const accountId = "a".repeat(64);
+    const cfg = createConfig();
+    const { runtime } = createRuntime(cfg);
+
+    const first = await createAgent(cfg, runtime, {
+      accountId,
+      senderOpenId: "ou_sender_one_with_a_shared_long_prefix",
+    });
+    const second = await createAgent(first.updatedCfg, runtime, {
+      accountId,
+      senderOpenId: "ou_sender_two_with_a_shared_long_prefix",
+    });
+
+    expect(first.agentId).toHaveLength(52);
+    expect(second.agentId).toHaveLength(52);
+    expect(first.agentId).not.toBe(second.agentId);
+    expect(Object.keys(second.updatedCfg.agents?.entries ?? {})).toEqual([
+      "main",
+      first.agentId,
+      second.agentId,
+    ]);
+  });
+
+  it("uses the current maxAgents limit instead of stale request policy", async () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          dynamicAgentCreation: {
+            ...createDynamicConfig(),
+            maxAgents: 1,
+          },
+        },
+      },
+      agents: {
+        ...createCanonicalAgentRoster(),
+        entries: {
+          main: {},
+          "feishu-ou_existing": {
+            workspace: path.join(tempRoot, "existing-workspace"),
+            agentDir: path.join(tempRoot, "existing-agent"),
+          },
+        },
+      },
+      bindings: [],
+    } as OpenClawConfig;
+    const { runtime, mutateConfigFile } = createRuntime(cfg);
+
+    const result = await createAgent(
+      {
+        ...createConfig({ dynamicAgentCreation: { ...createDynamicConfig(), maxAgents: 2 } }),
+        agents: cfg.agents,
+      },
+      runtime,
+    );
+
+    expect(result.created).toBe(false);
+    expect(mutateConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("adds only the missing binding for an agent found in the cloned mutation roster", async () => {
+    const cfg = createConfig();
+    const mutationCfg: OpenClawConfig = {
+      ...cfg,
+      agents: {
+        ...cfg.agents,
+        entries: {
+          main: {},
+          "feishu-ou_sender": {
+            workspace: path.join(tempRoot, "existing-workspace"),
+            agentDir: path.join(tempRoot, "existing-agent"),
+          },
+        },
+      },
+    };
+    const { runtime, commitConfig } = createRuntime(cfg, undefined, mutationCfg);
+
+    const result = await createAgent(cfg, runtime);
+
+    expect(result.created).toBe(true);
+    expect(commitConfig).toHaveBeenCalledTimes(1);
+    expect(result.updatedCfg.agents).toEqual(mutationCfg.agents);
+    expect(result.updatedCfg.agents).not.toHaveProperty("list");
+    expect(result.updatedCfg.bindings).toEqual([
+      {
+        agentId: "feishu-ou_sender",
+        match: {
+          channel: "feishu",
+          accountId: "default",
+          peer: { kind: "direct", id: "ou_sender" },
+        },
+      },
+    ]);
+    expect(await pathExists(path.join(tempRoot, "workspace-feishu-ou_sender"))).toBe(false);
+    expect(await pathExists(path.join(tempRoot, "agent-feishu-ou_sender"))).toBe(false);
+  });
+
+  it("counts dynamic entries added before the cloned mutation roster reaches the lock", async () => {
+    const cfg = createConfig({
+      dynamicAgentCreation: { ...createDynamicConfig(), maxAgents: 1 },
+    });
+    const mutationCfg: OpenClawConfig = {
+      ...cfg,
+      agents: {
+        ...cfg.agents,
+        entries: { main: {}, "feishu-ou_existing": {}, unrelated: {} },
+      },
+    };
+    const { runtime, commitConfig, mutateConfigFile } = createRuntime(cfg, undefined, mutationCfg);
+
+    const result = await createAgent(cfg, runtime);
+
+    expect(result).toEqual({ created: false, updatedCfg: mutationCfg });
+    expect(mutateConfigFile).toHaveBeenCalledTimes(1);
+    expect(commitConfig).not.toHaveBeenCalled();
+    expect(await pathExists(path.join(tempRoot, "workspace-feishu-ou_sender"))).toBe(false);
+    expect(await pathExists(path.join(tempRoot, "agent-feishu-ou_sender"))).toBe(false);
+  });
+
+  it("preserves concurrent runtime config when creating from a stale request snapshot", async () => {
+    const currentCfg = {
+      channels: { feishu: { dynamicAgentCreation: createDynamicConfig() } },
+      agents: {
+        ...createCanonicalAgentRoster(),
+        entries: {
+          main: {},
+          "feishu-ou_existing": {
+            workspace: path.join(tempRoot, "existing-workspace"),
+            agentDir: path.join(tempRoot, "existing-agent"),
+          },
+        },
+      },
+      bindings: [
+        {
+          agentId: "feishu-ou_existing",
+          match: {
+            channel: "feishu",
+            peer: { kind: "direct", id: "ou_existing" },
+          },
+        },
+      ],
+    } as OpenClawConfig;
+    const { runtime, mutateConfigFile } = createRuntime(currentCfg);
+
+    const result = await createAgent(
+      { agents: createCanonicalAgentRoster(), bindings: [] },
+      runtime,
+    );
+
+    expect(mutateConfigFile).toHaveBeenCalledWith({
+      base: "runtime",
+      afterWrite: { mode: "auto" },
+      mutate: expect.any(Function),
+    });
+    expect(result.updatedCfg.agents?.entries).toEqual({
+      ...currentCfg.agents?.entries,
+      "feishu-ou_sender": {
+        workspace: path.join(tempRoot, "workspace-feishu-ou_sender"),
+        agentDir: path.join(tempRoot, "agent-feishu-ou_sender"),
+      },
+    });
+    expect(result.updatedCfg.agents).not.toHaveProperty("list");
+    expect(result.updatedCfg.bindings).toEqual([
+      ...currentCfg.bindings!,
+      {
+        agentId: "feishu-ou_sender",
+        match: {
+          channel: "feishu",
+          accountId: "default",
+          peer: { kind: "direct", id: "ou_sender" },
+        },
+      },
+    ]);
+  });
+
+  it("returns refreshed runtime config instead of the persisted source config", async () => {
+    const currentCfg = createConfig({ appSecret: "resolved-secret" });
+    const persistedCfg = {
+      channels: {
+        feishu: {
+          appSecret: { source: "env", id: "FEISHU_APP_SECRET" },
+          dynamicAgentCreation: createDynamicConfig(),
+        },
+      },
+      agents: createCanonicalAgentRoster(),
+      bindings: [],
+    } as OpenClawConfig;
+    const { runtime } = createRuntime(currentCfg, persistedCfg);
+
+    const result = await createAgent(currentCfg, runtime);
+
+    expect(result.updatedCfg.channels?.feishu?.appSecret).toBe("resolved-secret");
+    expect(result.updatedCfg.bindings).toHaveLength(1);
+  });
+
+  it("returns runtime current binding even when config writes are disabled", async () => {
+    const currentCfg = {
+      channels: { feishu: { configWrites: false } },
+      agents: {
+        ...createCanonicalAgentRoster(),
+        entries: {
+          main: {},
+          "feishu-ou_sender": {
+            workspace: path.join(tempRoot, "existing-workspace"),
+            agentDir: path.join(tempRoot, "existing-agent"),
+          },
+        },
+      },
+      bindings: [
+        {
+          agentId: "feishu-ou_sender",
+          match: {
+            channel: "feishu",
+            peer: { kind: "direct", id: "ou_sender" },
+          },
+        },
+      ],
+    } as OpenClawConfig;
+    const { runtime, mutateConfigFile } = createRuntime(currentCfg);
+
+    const result = await createAgent(
+      { agents: createCanonicalAgentRoster(), bindings: [] },
+      runtime,
+    );
+
+    expect(result.created).toBe(false);
+    expect(result.updatedCfg).toStrictEqual(currentCfg);
+    expect(mutateConfigFile).not.toHaveBeenCalled();
   });
 });

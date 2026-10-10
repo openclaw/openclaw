@@ -1,3 +1,4 @@
+// Verifies gateway auth selection audit behavior.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveGatewayProbeAuthSafe, resolveGatewayProbeTarget } from "../gateway/probe-auth.js";
@@ -38,10 +39,10 @@ describe("security audit gateway auth selection", () => {
         expectedAuth: { token: "local-token-abc123" },
       },
       {
-        name: "prefers env token over local config token",
+        name: "prefers local config token over env token",
         cfg: { gateway: { mode: "local", auth: { token: "local-token" } } },
         env: { token: "env-token" },
-        expectedAuth: { token: "env-token" },
+        expectedAuth: { token: "local-token" },
       },
       {
         name: "uses local auth when gateway.mode is undefined (default)",

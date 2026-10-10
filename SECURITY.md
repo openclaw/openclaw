@@ -8,6 +8,10 @@ The fastest useful reports show a current, reproducible boundary bypass with dem
 
 Security work is shared across a number of OpenClaw maintainers, including engineers and security researchers from organizations such as NVIDIA and Tencent. See the [maintainer list](CONTRIBUTING.md#maintainers).
 
+## Shared Agents
+
+Anyone who can operate an agent can make it do anything that agent can do. Session ownership, visibility, and presence are usability features, not security boundaries. Turn attribution is best-effort because steering can merge input into an active turn. Use separate agents or separate gateway/host trust boundaries when operators need real isolation.
+
 ## Report a Security Issue
 
 Report vulnerabilities directly to the repository where the issue lives:
@@ -17,7 +21,6 @@ Report vulnerabilities directly to the repository where the issue lives:
 - **iOS app** — [openclaw/openclaw](https://github.com/openclaw/openclaw) (apps/ios)
 - **Android app** — [openclaw/openclaw](https://github.com/openclaw/openclaw) (apps/android)
 - **ClawHub** — [openclaw/clawhub](https://github.com/openclaw/clawhub)
-- **Trust and threat model** — [openclaw/trust](https://github.com/openclaw/trust)
 
 For issues that don't fit a specific repo, or if you're unsure, email **[security@openclaw.ai](mailto:security@openclaw.ai)** and we'll route it.
 
@@ -48,6 +51,7 @@ These patterns are usually not vulnerabilities by themselves:
 
 - Prompt injection without a policy, auth, approval, sandbox, or tool-boundary bypass.
 - A trusted operator using an intentional local feature, such as local shell access or browser/script execution.
+- A report whose only primitive is changing the process or child-process environment before running OpenClaw or an executable OpenClaw invokes.
 - A malicious plugin after a trusted operator installs or enables it.
 - Multiple adversarial users sharing one Gateway host/config and expecting per-user isolation.
 - Scanner-only, dependency-only, or stale-path reports without a working repro and demonstrated OpenClaw impact.
@@ -88,7 +92,8 @@ These are frequently reported but are typically closed with no code change:
 
 - Prompt-injection-only chains without a boundary bypass (prompt injection is out of scope).
 - Operator-intended local features (for example TUI local `!` shell) presented as remote injection.
-- Reports that treat explicit operator-control surfaces (for example `canvas.eval`, browser evaluate/script execution, or direct `node.invoke` execution primitives) as vulnerabilities without demonstrating an auth/policy/sandbox boundary bypass. These capabilities are intentional when enabled and are trusted-operator features, not standalone security bugs.
+- Reports that treat explicit operator-control surfaces (for example browser evaluate/script execution or direct `node.invoke` execution primitives) as vulnerabilities without demonstrating an auth/policy/sandbox boundary bypass. These capabilities are intentional when enabled and are trusted-operator features, not standalone security bugs.
+- Reports that treat an admin-gated enablement or arming step as requiring `operator.admin` for every subsequent action, when the documented contract delegates use of the enabled capability to `operator.write` and no auth, arming, allowlist, sandbox, or policy bypass is shown. This is an arm-then-use operator guardrail, not privilege escalation.
 - Authorized user-triggered local actions presented as privilege escalation. Example: an allowlisted/owner sender running `/export-session /absolute/path.html` to write on the host. In this trust model, authorized user actions are trusted host actions unless you demonstrate an auth/sandbox/boundary bypass.
 - Reports that only show a malicious plugin executing privileged actions after a trusted operator installs/enables it.
 - Reports that assume per-user multi-tenant authorization on a shared gateway host/config.
@@ -98,11 +103,12 @@ These are frequently reported but are typically closed with no code change:
 - Reports that treat `POST /tools/invoke` under shared-secret bearer auth (`gateway.auth.mode="token"` or `"password"`) as a narrower per-request/per-scope authorization surface. That endpoint is designed as the same trusted-operator HTTP boundary: shared-secret bearer auth is full operator access there, narrower `x-openclaw-scopes` values do not reduce that path, and owner-only tool policy follows the shared-secret operator contract.
 - Reports that only show differences in heuristic detection/parity (for example obfuscation-pattern detection on one exec path but not another, such as `node.invoke -> system.run` parity gaps) without demonstrating bypass of auth, approvals, allowlist enforcement, sandboxing, or other documented trust boundaries.
 - Reports that only show an ACP tool can indirectly execute, mutate, orchestrate sessions, or reach another tool/runtime without demonstrating bypass of ACP prompt/approval, allowlist enforcement, sandboxing, or another documented trust boundary. ACP silent approval is intentionally limited to narrow readonly classes; parity-only indirect-command findings are hardening, not vulnerabilities.
-- Reports that only show untrusted media bytes reaching a maintained native decoder dependency (for example Sharp/libvips/libheif) without proving the shipped dependency version is vulnerable and demonstrating crash, memory corruption, data exposure, or a boundary bypass through OpenClaw. JavaScript header sniffing and image dimension fast-paths are preflight/UX checks, not the security boundary for native decoder correctness.
+- Reports that only show untrusted media bytes reaching a maintained native decoder dependency (for example image codec libraries such as libheif) without proving the shipped dependency version is vulnerable and demonstrating crash, memory corruption, data exposure, or a boundary bypass through OpenClaw. JavaScript header sniffing and image dimension fast-paths are preflight/UX checks, not the security boundary for native decoder correctness.
 - Reports whose only impact is transient extra memory, CPU, or allocation work from decoding, base64 expansion, media transcoding, serialization, or other format conversion after the input was already accepted under OpenClaw's configured size/trust limits, including base64 decode-before-size-estimate findings. These are performance issues, not vulnerabilities, unless the report demonstrates unauthenticated amplification, bypass of configured limits, crash/process termination, persistent resource exhaustion, data exposure, or another documented boundary bypass.
 - ReDoS/DoS claims that require trusted operator configuration input (for example catastrophic regex in `sessionFilter` or `logging.redactPatterns`) without a trust-boundary bypass.
 - Archive/install extraction claims that require pre-existing local filesystem priming in trusted state (for example planting symlink/hardlink aliases under destination directories such as skills/tools paths) without showing an untrusted path that can create/control that primitive.
 - Reports that depend on replacing or rewriting an already-approved executable path on a trusted host (same-path inode/content swap) without showing an untrusted path to perform that write.
+- Reports that depend on attacker-controlled environment variables changing executable behavior, including variables that redirect lookup paths, preload code, select wrappers/interpreters, alter package-manager or runtime hooks, or make one executable call another executable. Control of the process or child-process environment is trusted host/operator control in OpenClaw's model; these reports need a separate OpenClaw boundary bypass that lets untrusted input set or mutate that environment.
 - Reports that depend on pre-existing symlinked skill/workspace filesystem state (for example symlink chains involving `skills/*/SKILL.md`) without showing an untrusted path that can create/control that state.
 - Missing HSTS findings on default local/loopback deployments.
 - Reports against test-only harnesses, QA Lab, QE Lab, E2E fixtures, benchmark rigs, or maintainer-only debugging tools when the vulnerable code is not shipped as a supported production surface.
@@ -150,6 +156,18 @@ Plugins/extensions are part of OpenClaw's trusted computing base for a gateway.
 - Plugin behavior such as reading env/files or running host commands is expected inside this trust boundary.
 - Security reports must show a boundary bypass (for example unauthenticated plugin load, allowlist/policy bypass, or sandbox/path-safety bypass), not only malicious behavior from a trusted-installed plugin.
 
+### Code Mode Executors
+
+When global `tools.codeMode` is absent, OpenClaw uses automatic per-model activation. Explicit `false` disables it, and an authored object without `enabled` remains off. When engaged, its default `node` executor runs JavaScript with Node.js `node:vm` in a worker thread. **`node:vm` is not a security boundary.** The worker keeps guest computation off the Gateway event loop, but it runs with the Gateway process's OS privileges. Node Code Mode is a trusted-host execution choice.
+
+The intended guest API omits filesystem, network, subprocess, environment, and module-loading APIs. Its limited globals and module guards are programming constraints, not containment against hostile JavaScript. Tool policy, approvals, hooks, and session ownership still apply to calls made through the shared tool bridge; they cannot contain code that escapes the Node VM context. Agent sandbox settings for nested tools do not turn this Gateway worker into an OS sandbox.
+
+Select `tools.codeMode.executor: "quickjs"` for the bundled hardened executor. It runs QuickJS-WASI in a separate WASM guest, exposes only the controlled bridge, and applies guest memory and execution limits. Its tool capabilities still come from the effective OpenClaw tool policy. For stronger host isolation, use a separate OS user, container, or host with appropriate credentials and tool grants.
+
+Executor selection stays fixed throughout a cell's `exec`/`wait` lifecycle. If the selected executor is unavailable, execution fails rather than falling back to Node. Node's live worker context and QuickJS's serialized snapshots are transient state and are released on completion, cancellation, expiry, or Gateway shutdown.
+
+Reports must identify the selected executor and the boundary crossed. Node VM escape alone is not a sandbox bypass under this documented trusted-execution mode; authentication, tool-bridge authorization, QuickJS isolation, and separately configured OS sandbox boundaries remain in scope. See [Code Mode executors](https://docs.openclaw.ai/tools/code-mode/executors).
+
 ### Out of Scope
 
 - Public Internet Exposure
@@ -161,8 +179,9 @@ Plugins/extensions are part of OpenClaw's trusted computing base for a gateway.
 - Reports where exploitability depends on attacker-controlled pre-existing symlink/hardlink filesystem state in trusted local paths (for example extraction/install target trees) unless a separate untrusted boundary bypass is shown that creates that state.
 - Reports whose only claim is sandbox/workspace read expansion through trusted local skill/workspace symlink state (for example `skills/*/SKILL.md` symlink chains) unless a separate untrusted boundary bypass is shown that creates/controls that state.
 - Reports whose only claim is post-approval executable identity drift on a trusted host via same-path file replacement/rewrite unless a separate untrusted boundary bypass is shown for that host write primitive.
+- Reports whose only claim is environment-variable-driven executable behavior change, including path lookup changes, preload hooks, wrapper/interpreter selection, package-manager/runtime hooks, or variables that make an executable invoke another executable, unless a separate OpenClaw boundary bypass lets untrusted input set or mutate that environment.
 - Reports where the only demonstrated impact is an already-authorized sender intentionally invoking a local-action command (for example `/export-session` writing to an absolute host path) without bypassing auth, sandbox, or another documented boundary
-- Reports whose only claim is use of an explicit trusted-operator control surface (for example `canvas.eval`, browser evaluate/script execution, or direct `node.invoke` execution) without demonstrating an auth, policy, allowlist, approval, or sandbox bypass.
+- Reports whose only claim is use of an explicit trusted-operator control surface (for example browser evaluate/script execution or direct `node.invoke` execution) without demonstrating an auth, policy, allowlist, approval, or sandbox bypass.
 - Reports where the only claim is that a trusted-installed/enabled plugin can execute with gateway/host privileges (documented trust model behavior).
 - Any report whose only claim is that an operator-enabled `dangerous*`/`dangerously*` config option weakens defaults (these are explicit break-glass tradeoffs by design)
 - Reports that depend on trusted operator-supplied configuration values to trigger availability impact (for example custom regex patterns). These may still be fixed as defense-in-depth hardening, but are not security-boundary bypasses.
@@ -181,6 +200,7 @@ Plugins/extensions are part of OpenClaw's trusted computing base for a gateway.
 OpenClaw security guidance assumes:
 
 - The host where OpenClaw runs is within a trusted OS/admin boundary.
+- Anyone who can set or mutate the OpenClaw process environment, launcher environment, or child-process environment is inside that trusted host/operator boundary.
 - Anyone who can modify `~/.openclaw` state/config (including `openclaw.json`) is effectively a trusted operator.
 - A single Gateway shared by mutually untrusted people is **not a recommended setup**. Use separate gateways (or at minimum separate OS users/hosts) per trust boundary.
 - Authenticated Gateway callers are treated as trusted operators. Session identifiers (for example `sessionKey`) are routing controls, not per-user authorization boundaries.
@@ -267,7 +287,7 @@ Security boundary notes:
 - Enforcement reference points:
   - temp root resolver: `src/infra/tmp-openclaw-dir.ts`
   - SDK temp helpers: `src/plugin-sdk/temp-path.ts`
-  - messaging/channel tmp guardrail: `scripts/check-no-random-messaging-tmp.mjs`
+  - messaging/channel tmp guardrail: `scripts/check-no-random-messaging-tmp.mts`
 
 ### Operational Guidance
 
@@ -296,7 +316,9 @@ OpenClaw's web interface (Gateway Control UI + HTTP endpoints) is intended for *
 - Recommended: keep the Gateway **loopback-only** (`127.0.0.1` / `::1`).
   - Config: `gateway.bind="loopback"` (default).
   - CLI: `openclaw gateway run --bind loopback`.
-- `gateway.controlUi.dangerouslyDisableDeviceAuth` is intended for localhost-only break-glass use.
+- The retired `gateway.controlUi.dangerouslyDisableDeviceAuth` break-glass key is not a
+  current security option. Upgrade migration accepts it only from older config
+  versions and requires explicit self-pairing before normal enforcement resumes.
   - OpenClaw keeps deployment flexibility by design and does not hard-forbid non-local setups.
   - Non-local and other risky configurations are surfaced by `openclaw security audit` as dangerous findings.
   - This operator-selected tradeoff is by design and not, by itself, a security vulnerability.
@@ -312,15 +334,12 @@ OpenClaw's web interface (Gateway Control UI + HTTP endpoints) is intended for *
 
 ### Node.js Version
 
-OpenClaw requires **Node.js 22.16.0 or later** (LTS). This version includes important security patches:
-
-- CVE-2025-59466: async_hooks DoS vulnerability
-- CVE-2026-21636: Permission model bypass vulnerability
+OpenClaw requires **Node.js 24.16+ or Node.js 26.1+**. Node 26 is recommended; Node 24 is the supported LTS line. These minimum versions include the upstream SQLite WAL-reset corruption fix and preserve embedded NUL characters in SQLite TEXT reads. Node 22, 23, and 25 are unsupported.
 
 Verify your Node.js version:
 
 ```bash
-node --version  # Should be v22.16.0 or later
+node --version  # Should be v24.16+ or v26.1+
 ```
 
 ### Docker Security
@@ -345,12 +364,12 @@ OpenClaw uses several security and release-validation layers. No single scanner 
 
 ### Secret Detection
 
-OpenClaw runs the pre-commit `detect-private-key` hook in CI and keeps secret-resolution behavior covered by the dedicated secrets test surface.
+OpenClaw runs the in-repo `scripts/detect-private-keys.mts` scanner in CI (the same private-key marker set as the pre-commit-hooks `detect-private-key` hook, with no hook-repo fetches, package installs, or third-party hook execution in the scan's path) over every tracked regular file except colocated `*.test.ts` fixtures and the iOS Fastfile; pull requests run the base branch's copy of the scanner and fail if the base branch lacks it. The local `detect-private-key` pre-commit hook runs the same scanner over the text files pre-commit hands it. Secret-resolution behavior stays covered by the dedicated secrets test surface.
 
 Run the key scan locally:
 
 ```bash
-pre-commit run --all-files detect-private-key
+node scripts/detect-private-keys.mts
 ```
 
 ### Static Analysis

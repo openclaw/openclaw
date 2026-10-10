@@ -1,116 +1,18 @@
-const DATA_URL_PREFIX = "data:";
+/**
+ * Sanitizes inline image payloads mirrored through Codex history so invalid
+ * base64 data becomes readable text instead of poisoning replayed transcripts.
+ */
+import {
+  INLINE_IMAGE_DATA_URL_PREFIX,
+  sanitizeInlineImageDataUrl,
+} from "openclaw/plugin-sdk/inline-image-data-url-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+
 const IMAGE_OMITTED_TEXT = "omitted image payload: invalid inline image data";
 
-function startsWithDataUrl(value: string): boolean {
-  return value.slice(0, DATA_URL_PREFIX.length).toLowerCase() === DATA_URL_PREFIX;
-}
-
-function canonicalizeBase64(base64: string): string | undefined {
-  let cleaned = "";
-  let padding = 0;
-  let sawPadding = false;
-  for (let i = 0; i < base64.length; i += 1) {
-    const code = base64.charCodeAt(i);
-    if (code <= 0x20) {
-      continue;
-    }
-    if (code === 0x3d) {
-      padding += 1;
-      if (padding > 2) {
-        return undefined;
-      }
-      sawPadding = true;
-      cleaned += "=";
-      continue;
-    }
-    const isBase64DataChar =
-      (code >= 0x41 && code <= 0x5a) ||
-      (code >= 0x61 && code <= 0x7a) ||
-      (code >= 0x30 && code <= 0x39) ||
-      code === 0x2b ||
-      code === 0x2f;
-    if (sawPadding || !isBase64DataChar) {
-      return undefined;
-    }
-    cleaned += base64[i];
-  }
-  if (!cleaned || cleaned.length % 4 !== 0) {
-    return undefined;
-  }
-  return cleaned;
-}
-
-function sniffImageMime(buffer: Buffer): string | undefined {
-  if (
-    buffer.length >= 8 &&
-    buffer[0] === 0x89 &&
-    buffer[1] === 0x50 &&
-    buffer[2] === 0x4e &&
-    buffer[3] === 0x47 &&
-    buffer[4] === 0x0d &&
-    buffer[5] === 0x0a &&
-    buffer[6] === 0x1a &&
-    buffer[7] === 0x0a
-  ) {
-    return "image/png";
-  }
-  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
-    return "image/jpeg";
-  }
-  if (
-    buffer.length >= 12 &&
-    buffer.subarray(0, 4).toString("ascii") === "RIFF" &&
-    buffer.subarray(8, 12).toString("ascii") === "WEBP"
-  ) {
-    return "image/webp";
-  }
-  if (
-    buffer.length >= 6 &&
-    (buffer.subarray(0, 6).toString("ascii") === "GIF87a" ||
-      buffer.subarray(0, 6).toString("ascii") === "GIF89a")
-  ) {
-    return "image/gif";
-  }
-  return undefined;
-}
-
-export function sanitizeInlineImageDataUrl(imageUrl: string): string | undefined {
-  if (!startsWithDataUrl(imageUrl)) {
-    return imageUrl;
-  }
-  const commaIndex = imageUrl.indexOf(",");
-  if (commaIndex < 0) {
-    return undefined;
-  }
-
-  const metadata = imageUrl.slice(DATA_URL_PREFIX.length, commaIndex);
-  const payload = imageUrl.slice(commaIndex + 1);
-  const metadataParts = metadata.split(";").map((part) => part.trim());
-  const declaredMimeType = metadataParts[0]?.toLowerCase();
-  if (!declaredMimeType?.startsWith("image/")) {
-    return undefined;
-  }
-  if (!metadataParts.slice(1).some((part) => part.toLowerCase() === "base64")) {
-    return undefined;
-  }
-
-  const canonicalPayload = canonicalizeBase64(payload);
-  if (!canonicalPayload) {
-    return undefined;
-  }
-  const sniffedMimeType = sniffImageMime(Buffer.from(canonicalPayload, "base64"));
-  if (!sniffedMimeType) {
-    return undefined;
-  }
-  return `data:${sniffedMimeType};base64,${canonicalPayload}`;
-}
-
+/** Builds the replacement text inserted when an inline image payload is invalid. */
 export function invalidInlineImageText(label: string): string {
   return `[${label}] ${IMAGE_OMITTED_TEXT}`;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function sanitizeImageContentRecord(
@@ -124,31 +26,44 @@ function sanitizeImageContentRecord(
       return { type: "text", text: invalidInlineImageText(label) };
     }
     const commaIndex = imageUrl.indexOf(",");
-    const metadata = imageUrl.slice(DATA_URL_PREFIX.length, commaIndex);
+    const metadata = imageUrl.slice(INLINE_IMAGE_DATA_URL_PREFIX.length, commaIndex);
     const mime = metadata.split(";")[0] ?? mimeType;
-    return { ...record, mimeType: mime, data: imageUrl.slice(commaIndex + 1) };
+    const data = imageUrl.slice(commaIndex + 1);
+    return mime === record.mimeType && data === record.data
+      ? record
+      : { ...record, mimeType: mime, data };
   }
 
-  if (record.type === "inputImage" && typeof record.imageUrl === "string") {
-    const imageUrl = sanitizeInlineImageDataUrl(record.imageUrl);
+  const urlKey = record.type === "inputImage" ? "imageUrl" : "image_url";
+  if (
+    (record.type === "inputImage" || record.type === "input_image") &&
+    typeof record[urlKey] === "string"
+  ) {
+    const imageUrl = sanitizeInlineImageDataUrl(record[urlKey]);
     return imageUrl
-      ? { ...record, imageUrl }
-      : { type: "inputText", text: invalidInlineImageText(label) };
-  }
-
-  if (record.type === "input_image" && typeof record.image_url === "string") {
-    const imageUrl = sanitizeInlineImageDataUrl(record.image_url);
-    return imageUrl
-      ? { ...record, image_url: imageUrl }
-      : { type: "input_text", text: invalidInlineImageText(label) };
+      ? imageUrl === record[urlKey]
+        ? record
+        : { ...record, [urlKey]: imageUrl }
+      : {
+          type: record.type === "inputImage" ? "inputText" : "input_text",
+          text: invalidInlineImageText(label),
+        };
   }
 
   return undefined;
 }
 
+/** Sanitizes images without copying unchanged history or mutating its owned snapshot. */
 export function sanitizeCodexHistoryImagePayloads<T>(value: T, label: string): T {
   if (Array.isArray(value)) {
-    return value.map((entry) => sanitizeCodexHistoryImagePayloads(entry, label)) as T;
+    let next: unknown[] | undefined;
+    for (let index = 0; index < value.length; index++) {
+      const child = sanitizeCodexHistoryImagePayloads(value[index], label);
+      if (child !== value[index]) {
+        (next ??= value.slice())[index] = child;
+      }
+    }
+    return (next ?? value) as T;
   }
   if (!isRecord(value)) {
     return value;
@@ -159,9 +74,15 @@ export function sanitizeCodexHistoryImagePayloads<T>(value: T, label: string): T
     return imageRecord as T;
   }
 
-  const next: Record<string, unknown> = {};
-  for (const [key, child] of Object.entries(value)) {
-    next[key] = sanitizeCodexHistoryImagePayloads(child, label);
+  let next: Record<string, unknown> | undefined;
+  for (const key in value) {
+    if (!Object.hasOwn(value, key)) {
+      continue;
+    }
+    const child = sanitizeCodexHistoryImagePayloads(value[key], label);
+    if (child !== value[key]) {
+      (next ??= { ...value })[key] = child;
+    }
   }
-  return next as T;
+  return (next ?? value) as T;
 }

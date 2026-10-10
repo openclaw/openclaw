@@ -1,3 +1,8 @@
+/**
+ * Public SDK helpers for maintaining generated blocks inside Markdown files.
+ */
+import { escapeRegExp } from "../shared/regexp.js";
+
 export type ManagedMarkdownBlockParams = {
   original: string;
   body: string;
@@ -6,26 +11,24 @@ export type ManagedMarkdownBlockParams = {
   heading?: string;
 };
 
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 function isLineWhitespace(value: string): boolean {
   return /^[\t \r\n]*$/.test(value);
 }
 
+/** Ensures generated Markdown content ends with exactly the caller-provided body plus newline. */
 export function withTrailingNewline(content: string): string {
   return content.endsWith("\n") ? content : `${content}\n`;
 }
 
+/** Replaces all existing managed blocks with one current block, or appends it if missing. */
 export function replaceManagedMarkdownBlock(params: ManagedMarkdownBlockParams): string {
   const headingPrefix = params.heading ? `${params.heading}\n` : "";
   const managedBlock = `${headingPrefix}${params.startMarker}\n${params.body}\n${params.endMarker}`;
   const headingPattern = params.heading
-    ? `${escapeRegex(params.heading)}(?:[ \t]*(?:\r\n|\n|\r))+[ \t]*`
+    ? `${escapeRegExp(params.heading)}(?:[ \t]*(?:\r\n|\n|\r))+[ \t]*`
     : "";
   const existingPattern = new RegExp(
-    `${headingPattern}${escapeRegex(params.startMarker)}[\\s\\S]*?${escapeRegex(params.endMarker)}`,
+    `${headingPattern}${escapeRegExp(params.startMarker)}[\\s\\S]*?${escapeRegExp(params.endMarker)}`,
     "g",
   );
   const matches = Array.from(params.original.matchAll(existingPattern));
@@ -34,7 +37,7 @@ export function replaceManagedMarkdownBlock(params: ManagedMarkdownBlockParams):
     let updated = "";
     let lastEnd = 0;
     matches.forEach((match, index) => {
-      const matchStart = match.index ?? 0;
+      const matchStart = match.index;
       const matchEnd = matchStart + match[0].length;
       const betweenMatches = params.original.slice(lastEnd, matchStart);
       if (index === 0) {

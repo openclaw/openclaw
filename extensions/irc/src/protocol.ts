@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { hasIrcControlChars, stripIrcControlChars } from "./control-chars.js";
 
 const IRC_TARGET_PATTERN = /^[^\s:]+$/u;
@@ -41,10 +40,6 @@ export function parseIrcLine(line: string): ParsedIrcLine | null {
 
   const firstSpace = cursor.indexOf(" ");
   const command = (firstSpace === -1 ? cursor : cursor.slice(0, firstSpace)).trim();
-  if (!command) {
-    return null;
-  }
-
   cursor = firstSpace === -1 ? "" : cursor.slice(firstSpace + 1);
   const params: string[] = [];
   let trailing: string | undefined;
@@ -105,65 +100,19 @@ export function parseIrcPrefix(prefix?: string): ParsedIrcPrefix {
   return { nick: prefix };
 }
 
-function decodeLiteralEscapes(input: string): string {
-  // Defensive: this is not a full JS string unescaper.
-  // It's just enough to catch common "\r\n" / "\u0001" style payloads.
-  return input
-    .replace(/\\r/g, "\r")
-    .replace(/\\n/g, "\n")
-    .replace(/\\t/g, "\t")
-    .replace(/\\0/g, "\0")
-    .replace(/\\x([0-9a-fA-F]{2})/g, (_, hex) => String.fromCharCode(Number.parseInt(hex, 16)))
-    .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(Number.parseInt(hex, 16)));
-}
-
+// Only real CR/LF and control characters can break out of an IRC line. Literal
+// backslash sequences such as "\n" or "C:\temp" are ordinary text and pass through.
 export function sanitizeIrcOutboundText(text: string): string {
-  const decoded = decodeLiteralEscapes(text);
-  return stripIrcControlChars(decoded.replace(/\r?\n/g, " ")).trim();
+  return stripIrcControlChars(text.replace(/\r?\n/g, " ")).trim();
 }
 
 export function sanitizeIrcTarget(raw: string): string {
-  const decoded = decodeLiteralEscapes(raw);
-  if (!decoded) {
+  if (!raw) {
     throw new Error("IRC target is required");
   }
   // Reject any surrounding whitespace instead of trimming it away.
-  if (decoded !== decoded.trim()) {
+  if (raw !== raw.trim() || hasIrcControlChars(raw) || !IRC_TARGET_PATTERN.test(raw)) {
     throw new Error(`Invalid IRC target: ${raw}`);
   }
-  if (hasIrcControlChars(decoded)) {
-    throw new Error(`Invalid IRC target: ${raw}`);
-  }
-  if (!IRC_TARGET_PATTERN.test(decoded)) {
-    throw new Error(`Invalid IRC target: ${raw}`);
-  }
-  return decoded;
-}
-
-export function splitIrcText(text: string, maxChars = 350): string[] {
-  const cleaned = sanitizeIrcOutboundText(text);
-  if (!cleaned) {
-    return [];
-  }
-  if (cleaned.length <= maxChars) {
-    return [cleaned];
-  }
-  const chunks: string[] = [];
-  let remaining = cleaned;
-  while (remaining.length > maxChars) {
-    let splitAt = remaining.lastIndexOf(" ", maxChars);
-    if (splitAt < Math.floor(maxChars * 0.5)) {
-      splitAt = maxChars;
-    }
-    chunks.push(remaining.slice(0, splitAt).trim());
-    remaining = remaining.slice(splitAt).trimStart();
-  }
-  if (remaining) {
-    chunks.push(remaining);
-  }
-  return chunks.filter(Boolean);
-}
-
-export function makeIrcMessageId() {
-  return randomUUID();
+  return raw;
 }

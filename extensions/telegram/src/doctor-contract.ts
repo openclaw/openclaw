@@ -3,119 +3,218 @@ import type {
   ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
 import {
   asObjectRecord,
+  createLegacyWebhookListenerDoctorContract,
   hasLegacyAccountStreamingAliases,
-  hasLegacyStreamingAliases,
-  normalizeLegacyChannelAliases,
-} from "openclaw/plugin-sdk/runtime-doctor";
-import { resolveTelegramPreviewStreamMode } from "./preview-streaming.js";
+  normalizeChannelAccounts,
+  type CompatMutationResult,
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { mergeTelegramAccountConfig } from "./account-config.js";
+import { listTelegramAccountIds } from "./account-selection.js";
+import {
+  DEFAULT_TELEGRAM_WEBHOOK_PATH,
+  resolveTelegramGatewayWebhookUrl,
+  resolveTelegramWebhookPathConflict,
+} from "./webhook-route.js";
 
-function hasLegacyTelegramStreamingAliases(value: unknown): boolean {
-  return hasLegacyStreamingAliases(value, { includePreviewChunk: true });
+const webhookListenerMigration = createLegacyWebhookListenerDoctorContract({
+  channelKey: "telegram",
+  defaultPort: 8787,
+  defaultHost: "127.0.0.1",
+});
+export const { historicalWebhookListener } = webhookListenerMigration;
+
+const RETIRED_TUNING_KEYS = new Set([
+  "timeoutSeconds",
+  "mediaGroupFlushMs",
+  "pollingStallThresholdMs",
+  "retry",
+  "errorCooldownMs",
+]);
+
+function stripRetiredTelegramTuning(
+  entry: Record<string, unknown>,
+  scope: "channel" | "account" | "chat" | "topic",
+): CompatMutationResult {
+  let changed = false;
+  const updated = { ...entry };
+  for (const key of scope === "channel" || scope === "account"
+    ? RETIRED_TUNING_KEYS
+    : ["errorCooldownMs"]) {
+    if (Object.hasOwn(updated, key)) {
+      delete updated[key];
+      changed = true;
+    }
+  }
+  // Account IDs and sender-policy keys can equal retired setting names. Descend
+  // only through Telegram's config maps, never arbitrary object properties.
+  const maps = scope === "topic" ? [] : scope === "chat" ? ["topics"] : ["groups", "direct"];
+  if (scope === "channel") {
+    maps.push("accounts");
+  }
+  for (const key of maps) {
+    const entries = asObjectRecord(entry[key]);
+    if (!entries) {
+      continue;
+    }
+    const nextEntries = { ...entries };
+    for (const [id, value] of Object.entries(entries)) {
+      const child = asObjectRecord(value);
+      if (!child) {
+        continue;
+      }
+      const next = stripRetiredTelegramTuning(
+        child,
+        key === "accounts" ? "account" : key === "topics" ? "topic" : "chat",
+      );
+      if (next.changed) {
+        nextEntries[id] = next.entry;
+        updated[key] = nextEntries;
+        changed = true;
+      }
+    }
+  }
+  return { entry: changed ? updated : entry, changed };
 }
 
-function resolveCompatibleDefaultGroupEntry(section: Record<string, unknown>): {
-  groups: Record<string, unknown>;
+function hasRetiredTelegramGroupHistoryContextConfig(value: unknown): boolean {
+  return asObjectRecord(value)?.includeGroupHistoryContext !== undefined;
+}
+
+function removeRetiredTelegramGroupHistoryContextConfig(params: {
   entry: Record<string, unknown>;
-} | null {
-  const existingGroups = section.groups;
-  if (existingGroups !== undefined && !asObjectRecord(existingGroups)) {
-    return null;
+  pathPrefix: string;
+  changes: string[];
+  preserveRecentHistoryLimit?: number;
+}): { entry: Record<string, unknown>; changed: boolean } {
+  if (params.entry.includeGroupHistoryContext === undefined) {
+    return { entry: params.entry, changed: false };
   }
-  const groups = asObjectRecord(existingGroups) ?? {};
-  const defaultKey = "*";
-  const existingEntry = groups[defaultKey];
-  if (existingEntry !== undefined && !asObjectRecord(existingEntry)) {
-    return null;
-  }
-  const entry = asObjectRecord(existingEntry) ?? {};
-  return { groups, entry };
+  const { includeGroupHistoryContext, ...rest } = params.entry;
+  const historyLimit =
+    includeGroupHistoryContext === "none"
+      ? 0
+      : includeGroupHistoryContext === "recent" &&
+          params.preserveRecentHistoryLimit !== undefined &&
+          params.entry.historyLimit === undefined
+        ? params.preserveRecentHistoryLimit
+        : undefined;
+  const updated = historyLimit === undefined ? rest : { ...rest, historyLimit };
+  const historyLimitNote =
+    historyLimit === undefined ? "" : ` and set historyLimit to ${historyLimit}`;
+  params.changes.push(
+    `Removed ${params.pathPrefix}.includeGroupHistoryContext${historyLimitNote}; Telegram group history is always on for groups and bounded by historyLimit.`,
+  );
+  return { entry: updated, changed: true };
 }
 
 export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
-  {
-    path: ["channels", "telegram", "groupMentionsOnly"],
-    message:
-      'channels.telegram.groupMentionsOnly was removed; use channels.telegram.groups."*".requireMention instead. Run "openclaw doctor --fix".',
-  },
+  ...webhookListenerMigration.legacyConfigRules,
   {
     path: ["channels", "telegram"],
     message:
-      "channels.telegram.streamMode, channels.telegram.streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy; use channels.telegram.streaming.{mode,chunkMode,preview.chunk,block.enabled,block.coalesce}.",
-    match: hasLegacyTelegramStreamingAliases,
+      'channels.telegram.includeGroupHistoryContext was removed; Telegram group history is always on for groups and bounded by historyLimit. Run "openclaw doctor --fix".',
+    match: hasRetiredTelegramGroupHistoryContextConfig,
   },
   {
     path: ["channels", "telegram", "accounts"],
     message:
-      "channels.telegram.accounts.<id>.streamMode, streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy; use channels.telegram.accounts.<id>.streaming.{mode,chunkMode,preview.chunk,block.enabled,block.coalesce}.",
-    match: (value) => hasLegacyAccountStreamingAliases(value, hasLegacyTelegramStreamingAliases),
+      'channels.telegram.accounts.<id>.includeGroupHistoryContext was removed; Telegram group history is always on for groups and bounded by historyLimit. Run "openclaw doctor --fix".',
+    match: (value) =>
+      hasLegacyAccountStreamingAliases(value, hasRetiredTelegramGroupHistoryContextConfig),
   },
 ];
+
+export function normalizeHistoricalWebhookConfig({
+  cfg,
+}: {
+  cfg: OpenClawConfig;
+}): ChannelDoctorConfigMutation {
+  const historicalWebhookAccountIds =
+    cfg.channels?.telegram?.enabled === false
+      ? []
+      : listTelegramAccountIds(cfg).filter((accountId) => {
+          const account = mergeTelegramAccountConfig(cfg, accountId);
+          if (account.enabled === false || !account.webhookUrl?.trim()) {
+            return false;
+          }
+          const path = account.webhookPath ?? DEFAULT_TELEGRAM_WEBHOOK_PATH;
+          const gatewayUrl = resolveTelegramGatewayWebhookUrl(cfg, path);
+          return (
+            !gatewayUrl ||
+            URL.parse(account.webhookUrl)?.href !== gatewayUrl ||
+            resolveTelegramWebhookPathConflict(path) !== undefined
+          );
+        });
+  return {
+    ...webhookListenerMigration.normalizeCompatibilityConfig({ cfg }),
+    historicalWebhookAccountIds,
+  };
+}
 
 export function normalizeCompatibilityConfig({
   cfg,
 }: {
   cfg: OpenClawConfig;
 }): ChannelDoctorConfigMutation {
-  const rawEntry = asObjectRecord((cfg.channels as Record<string, unknown> | undefined)?.telegram);
+  const webhook = normalizeHistoricalWebhookConfig({ cfg });
+  const { historicalWebhookAccountIds } = webhook;
+  const changes = [...webhook.changes];
+  const rawEntry = asObjectRecord(
+    (webhook.config.channels as Record<string, unknown> | undefined)?.telegram,
+  );
   if (!rawEntry) {
-    return { config: cfg, changes: [] };
+    return { config: cfg, changes: [], historicalWebhookAccountIds };
   }
 
-  const changes: string[] = [];
-  let updated = rawEntry;
-  let changed = false;
-
-  if (updated.groupMentionsOnly !== undefined) {
-    const defaultGroupEntry = resolveCompatibleDefaultGroupEntry(updated);
-    if (!defaultGroupEntry) {
-      changes.push(
-        "Skipped channels.telegram.groupMentionsOnly migration because channels.telegram.groups already has an incompatible shape; fix remaining issues manually.",
-      );
-    } else {
-      const { groups, entry } = defaultGroupEntry;
-      if (entry.requireMention === undefined) {
-        entry.requireMention = updated.groupMentionsOnly;
-        groups["*"] = entry;
-        updated = { ...updated, groups };
-        changes.push(
-          'Moved channels.telegram.groupMentionsOnly → channels.telegram.groups."*".requireMention.',
-        );
-      } else {
-        changes.push(
-          'Removed channels.telegram.groupMentionsOnly (channels.telegram.groups."*" already set).',
-        );
-      }
-      const { groupMentionsOnly: _ignored, ...rest } = updated;
-      updated = rest;
-      changed = true;
-    }
+  const tuningKnobs = stripRetiredTelegramTuning(rawEntry, "channel");
+  let updated = tuningKnobs.entry;
+  if (tuningKnobs.changed) {
+    changes.push("Removed retired Telegram tuning knobs.");
   }
+  const rootGroupHistoryContextMode = updated.includeGroupHistoryContext;
+  const rootGroupHistoryLimitBeforeMigration =
+    typeof updated.historyLimit === "number"
+      ? updated.historyLimit
+      : (cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT);
 
-  const aliases = normalizeLegacyChannelAliases({
+  const retired = removeRetiredTelegramGroupHistoryContextConfig({
     entry: updated,
     pathPrefix: "channels.telegram",
     changes,
-    resolveStreamingOptions: (entry) => ({
-      includePreviewChunk: true,
-      resolvedMode: resolveTelegramPreviewStreamMode(entry),
-    }),
   });
-  updated = aliases.entry;
-  changed = changed || aliases.changed;
+  updated = retired.entry;
 
-  if (!changed && changes.length === 0) {
-    return { config: cfg, changes: [] };
+  const accounts = normalizeChannelAccounts({
+    entry: updated,
+    pathPrefix: "channels.telegram",
+    changes,
+    normalizeAccount: ({ account, pathPrefix, changes: accountChanges }) =>
+      removeRetiredTelegramGroupHistoryContextConfig({
+        entry: account,
+        pathPrefix,
+        changes: accountChanges,
+        ...(rootGroupHistoryContextMode === "none"
+          ? { preserveRecentHistoryLimit: rootGroupHistoryLimitBeforeMigration }
+          : {}),
+      }),
+  });
+  updated = accounts.entry;
+
+  if (webhook.config === cfg && updated === rawEntry && changes.length === 0) {
+    return { config: cfg, changes: [], historicalWebhookAccountIds };
   }
   return {
     config: {
-      ...cfg,
+      ...webhook.config,
       channels: {
-        ...cfg.channels,
+        ...webhook.config.channels,
         telegram: updated as unknown as NonNullable<OpenClawConfig["channels"]>["telegram"],
       } as OpenClawConfig["channels"],
     },
     changes,
+    historicalWebhookAccountIds,
   };
 }

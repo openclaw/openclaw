@@ -1,4 +1,4 @@
-import { definePluginEntry } from "./api.js";
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { diffsPluginConfigSchema } from "./src/config.js";
 import { registerDiffsPlugin } from "./src/plugin.js";
 

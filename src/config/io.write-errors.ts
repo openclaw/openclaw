@@ -1,0 +1,159 @@
+import { hasErrnoCode } from "../infra/errno.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import type { ConfigValidationIssue } from "./types.js";
+
+const CONFIG_VALIDATION_FAILED_CODE = "CONFIG_VALIDATION_FAILED";
+const CONFIG_INCLUDE_OWNERSHIP_CODE = "CONFIG_INCLUDE_OWNERSHIP";
+const CONFIG_WRITE_REJECTED_CODE = "CONFIG_WRITE_REJECTED";
+
+const CONFIG_WRITE_SAFETY_REJECTION_MESSAGE =
+  "OpenClaw blocked this config update because it looked like it could overwrite or remove existing settings. Your current config was left unchanged. Correct the proposed update so it preserves existing settings, then retry. If the saved config is already invalid, run openclaw doctor --fix first.";
+
+export type ConfigWriteRollbackStatus = "restored" | "not-restored" | "unknown";
+
+/**
+ * Refuses a suspicious root-config replacement without exposing filesystem
+ * paths or byte-level guard diagnostics through user-facing error surfaces.
+ */
+export function createConfigWriteSafetyRejectionError(params: {
+  reasons: readonly string[];
+  rejectedPath?: string;
+}): Error & { code: string; reasons: string[]; rejectedPath?: string } {
+  return Object.assign(new Error(CONFIG_WRITE_SAFETY_REJECTION_MESSAGE), {
+    code: CONFIG_WRITE_REJECTED_CODE,
+    reasons: [...params.reasons],
+    ...(params.rejectedPath ? { rejectedPath: params.rejectedPath } : {}),
+  });
+}
+
+/** A completed file write must not be handled as a retryable pre-write refusal. */
+export class ConfigWritePostCommitError extends Error {
+  readonly configPath: string;
+  readonly rollbackStatus: ConfigWriteRollbackStatus;
+  readonly publication: "complete" | "partial";
+  readonly recoveryBackupPath?: string;
+
+  constructor(params: {
+    configPath: string;
+    rollbackStatus: ConfigWriteRollbackStatus;
+    cause: unknown;
+    publication?: "complete" | "partial";
+  }) {
+    const recovery = {
+      restored: "The config write was rolled back.",
+      "not-restored": "The write was not rolled back. Inspect the current config before retrying.",
+      unknown: "Rollback could not be confirmed. Inspect the current config before retrying.",
+    }[params.rollbackStatus];
+    super(
+      params.publication === "partial"
+        ? `Config publication failed after removing ${params.configPath}: ${formatErrorMessage(params.cause)}\n${recovery} Inspect recovery backups at ${params.configPath}.bak.`
+        : `Config was written to ${params.configPath}, but post-write processing failed: ${formatErrorMessage(params.cause)}\n${recovery}`,
+      { cause: params.cause },
+    );
+    this.name = "ConfigWritePostCommitError";
+    this.configPath = params.configPath;
+    this.rollbackStatus = params.rollbackStatus;
+    this.publication = params.publication ?? "complete";
+    this.recoveryBackupPath =
+      params.publication === "partial" ? `${params.configPath}.bak` : undefined;
+  }
+}
+
+export async function recoverConfigWriteFailure(params: {
+  configPath: string;
+  cause: unknown;
+  publication?: "complete" | "partial";
+  restoreFile: () => Promise<boolean | undefined>;
+  restoreEffects?: () => void | Promise<void>;
+}): Promise<never> {
+  let rollbackStatus: ConfigWriteRollbackStatus = "unknown";
+  let cause = params.cause;
+  try {
+    const restored = await params.restoreFile();
+    rollbackStatus = restored ? "restored" : "not-restored";
+    if (restored) {
+      await params.restoreEffects?.();
+    }
+  } catch (rollbackError) {
+    cause = new AggregateError(
+      [params.cause, rollbackError],
+      `${formatErrorMessage(params.cause)} Recovery failed: ${formatErrorMessage(rollbackError)}`,
+      { cause: rollbackError },
+    );
+  }
+  throw new ConfigWritePostCommitError({
+    configPath: params.configPath,
+    rollbackStatus,
+    cause,
+    publication: params.publication,
+  });
+}
+
+/**
+ * Typed write refusal for a candidate that fails schema validation, so doctor
+ * can render "config left unchanged" plus the offending paths instead of crashing.
+ */
+export function createConfigValidationFailedError(issues: ConfigValidationIssue[]): Error {
+  const issue = issues[0];
+  return Object.assign(
+    new Error(formatConfigValidationFailure(issue?.path || "<root>", issue?.message ?? "invalid")),
+    { code: CONFIG_VALIDATION_FAILED_CODE, issues },
+  );
+}
+
+export function isConfigValidationFailedError(
+  error: unknown,
+): error is Error & { issues: ConfigValidationIssue[] } {
+  return error instanceof Error && hasErrnoCode(error, CONFIG_VALIDATION_FAILED_CODE);
+}
+
+type ConfigIncludeOwnershipRefusal = {
+  /** Logical config path of the $include-owned value the write would flatten. */
+  ownedConfigPath: string;
+  /** Authored `$include` target(s) at that path, when the root file names them. */
+  includeTargets?: readonly string[];
+};
+
+/**
+ * Typed write refusal for a candidate that would flatten an $include-owned value
+ * into the root file, so doctor can record "config left unchanged" with the
+ * owning path instead of surfacing a raw error after advertising the repair.
+ */
+export function createConfigIncludeOwnershipError(refusal: ConfigIncludeOwnershipRefusal): Error {
+  return Object.assign(
+    new Error(
+      `Config write would flatten $include-owned config at ${refusal.ownedConfigPath}; edit that include file directly or remove the $include first.`,
+    ),
+    { code: CONFIG_INCLUDE_OWNERSHIP_CODE, ...refusal },
+  );
+}
+
+export function isConfigIncludeOwnershipError(
+  error: unknown,
+): error is Error & ConfigIncludeOwnershipRefusal {
+  return error instanceof Error && hasErrnoCode(error, CONFIG_INCLUDE_OWNERSHIP_CODE);
+}
+
+const OPEN_DM_POLICY_ALLOW_FROM_RE =
+  /^(?<policyPath>[a-z0-9_.-]+)\s*=\s*"open"\s+requires\s+(?<allowPath>[a-z0-9_.-]+)(?:\s+\(or\s+[a-z0-9_.-]+\))?\s+to include "\*"$/i;
+
+function formatConfigValidationFailure(pathLabel: string, issueMessage: string): string {
+  const match = issueMessage.match(OPEN_DM_POLICY_ALLOW_FROM_RE);
+  const policyPath = match?.groups?.policyPath?.trim();
+  const allowPath = match?.groups?.allowPath?.trim();
+  if (!policyPath || !allowPath) {
+    return `Config validation failed: ${pathLabel}: ${issueMessage}`;
+  }
+
+  return [
+    `Config validation failed: ${pathLabel}`,
+    "",
+    `Configuration mismatch: ${policyPath} is "open", but ${allowPath} does not include "*".`,
+    "",
+    "Fix with:",
+    `  openclaw config set ${allowPath} '["*"]'`,
+    "",
+    "Or switch policy:",
+    `  openclaw config set ${policyPath} "pairing"`,
+  ].join("\n");
+}

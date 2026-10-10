@@ -1,74 +1,32 @@
+// Slack tests cover shared interactive plugin behavior.
+import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import { describe, expect, it } from "vitest";
-import { buildSlackInteractiveBlocks, buildSlackPresentationBlocks } from "./blocks-render.js";
+import {
+  buildSlackInteractiveBlocks,
+  buildSlackPresentationBlocks,
+  buildSlackPresentationBlocksIfComplete,
+  resolveSlackBlockOffsets,
+  type SlackBlock,
+} from "./blocks-render.js";
 import { resolveSlackReplyBlocks } from "./reply-blocks.js";
 
 describe("buildSlackInteractiveBlocks", () => {
-  it("renders shared interactive blocks in authored order", () => {
-    expect(
-      buildSlackInteractiveBlocks({
-        blocks: [
-          {
-            type: "select",
-            placeholder: "Pick one",
-            options: [{ label: "Alpha", value: "alpha" }],
-          },
-          { type: "text", text: "then" },
-          { type: "buttons", buttons: [{ label: "Retry", value: "retry" }] },
-        ],
-      }),
-    ).toEqual([
-      {
-        type: "actions",
-        block_id: "openclaw_reply_select_1",
-        elements: [
-          {
-            type: "static_select",
-            action_id: "openclaw:reply_select:1",
-            placeholder: {
-              type: "plain_text",
-              text: "Pick one",
-              emoji: true,
-            },
-            options: [
-              {
-                text: {
-                  type: "plain_text",
-                  text: "Alpha",
-                  emoji: true,
-                },
-                value: "alpha",
-              },
-            ],
-          },
-        ],
-      },
-      {
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text: "then",
-        },
-      },
-      {
-        type: "actions",
-        block_id: "openclaw_reply_buttons_1",
-        elements: [
-          {
-            type: "button",
-            action_id: "openclaw:reply_button:1:1",
-            text: {
-              type: "plain_text",
-              text: "Retry",
-              emoji: true,
-            },
-            value: "retry",
-          },
-        ],
-      },
-    ]);
+  it("preserves long legacy text, whitespace, protected entities, and surrogate pairs", () => {
+    const text = `${"x".repeat(2_998)}  &amp;🚀tail`;
+    const blocks = buildSlackInteractiveBlocks({ blocks: [{ type: "text", text }] });
+    const sections = blocks.map((block) =>
+      block.type === "section" && "text" in block && block.text?.type === "mrkdwn"
+        ? block.text.text
+        : "",
+    );
+
+    expect(sections.join("")).toBe(text);
+    expect(sections).toHaveLength(2);
+    expect(sections.every((section) => section.length <= 3_000)).toBe(true);
+    expect(sections.some((section) => section.includes("&amp;🚀"))).toBe(true);
   });
 
-  it("truncates Slack render strings to Block Kit limits", () => {
+  it("keeps Slack sections and interactive controls within Block Kit limits", () => {
     const long = "x".repeat(120);
     const blocks = buildSlackInteractiveBlocks({
       blocks: [
@@ -77,47 +35,51 @@ describe("buildSlackInteractiveBlocks", () => {
         { type: "buttons", buttons: [{ label: long, value: long }] },
       ],
     });
-    const section = blocks[0] as { text?: { text?: string } };
-    const selectBlock = blocks[1] as {
+    const sections = blocks.flatMap((block) =>
+      block.type === "section" && "text" in block && block.text?.type === "mrkdwn"
+        ? [block.text.text]
+        : [],
+    );
+    const selectBlock = blocks.find(
+      (block) => block.type === "actions" && block.block_id === "openclaw_reply_select_1",
+    ) as {
       elements?: Array<{ placeholder?: { text?: string } }>;
     };
-    const buttonBlock = blocks[2] as {
+    const buttonBlock = blocks.find(
+      (block) => block.type === "actions" && block.block_id === "openclaw_reply_buttons_1",
+    ) as {
       elements?: Array<{ value?: string }>;
     };
 
-    expect((section.text?.text ?? "").length).toBeLessThanOrEqual(3000);
+    expect(sections.join("")).toBe("y".repeat(3_100));
+    expect(sections.every((section) => section.length <= 3_000)).toBe(true);
     expect((selectBlock.elements?.[0]?.placeholder?.text ?? "").length).toBeLessThanOrEqual(75);
     expect(buttonBlock.elements?.[0]?.value).toBe(long);
   });
 
-  it("preserves original callback payloads for round-tripping", () => {
-    const blocks = buildSlackInteractiveBlocks({
-      blocks: [
-        {
-          type: "buttons",
-          buttons: [{ label: "Allow", value: "pluginbind:approval-123:o" }],
-        },
-        {
-          type: "select",
-          options: [{ label: "Approve", value: "codex:approve:thread-1" }],
-        },
-      ],
-    });
-
-    const buttonBlock = blocks[0] as {
-      elements?: Array<{ action_id?: string; value?: string }>;
-    };
-    const selectBlock = blocks[1] as {
-      elements?: Array<{
-        action_id?: string;
-        options?: Array<{ value?: string }>;
-      }>;
-    };
-
-    expect(buttonBlock.elements?.[0]?.action_id).toBe("openclaw:reply_button:1:1");
-    expect(buttonBlock.elements?.[0]?.value).toBe("pluginbind:approval-123:o");
-    expect(selectBlock.elements?.[0]?.action_id).toBe("openclaw:reply_select:1");
-    expect(selectBlock.elements?.[0]?.options?.[0]?.value).toBe("codex:approve:thread-1");
+  it.each([
+    {
+      name: "button label",
+      block: { type: "buttons" as const, buttons: [{ label: "x".repeat(76), value: "go" }] },
+    },
+    {
+      name: "select placeholder",
+      block: {
+        type: "select" as const,
+        placeholder: "x".repeat(76),
+        options: [{ label: "Go", value: "go" }],
+      },
+    },
+    {
+      name: "select option label",
+      block: {
+        type: "select" as const,
+        placeholder: "Choose",
+        options: [{ label: "x".repeat(76), value: "go" }],
+      },
+    },
+  ])("does not silently truncate an oversized portable $name", ({ block }) => {
+    expect(buildSlackPresentationBlocksIfComplete({ blocks: [block] })).toBeUndefined();
   });
 
   it("drops Slack select options with values beyond Block Kit limits", () => {
@@ -197,7 +159,7 @@ describe("buildSlackInteractiveBlocks", () => {
     expect(buttonBlock.elements?.[0]?.value).toBe("a".repeat(2000));
     expect(buttonBlock.elements?.[1]).toEqual({
       type: "button",
-      action_id: "openclaw:reply_button:1:3",
+      action_id: "openclaw:reply_link:1:3",
       text: {
         type: "plain_text",
         text: "Docs",
@@ -256,32 +218,6 @@ describe("buildSlackInteractiveBlocks", () => {
     expect(buttonBlock.elements?.at(-1)?.value).toBe("v25");
   });
 
-  it("preserves URL-only buttons as Slack link buttons", () => {
-    const blocks = buildSlackInteractiveBlocks({
-      blocks: [
-        {
-          type: "buttons",
-          buttons: [{ label: "Docs", url: "https://example.com/docs" }],
-        },
-      ],
-    });
-
-    const buttonBlock = blocks[0] as {
-      elements?: Array<{ value?: string; url?: string }>;
-    };
-
-    expect(buttonBlock.elements?.[0]).toEqual({
-      type: "button",
-      action_id: "openclaw:reply_button:1:1",
-      text: {
-        type: "plain_text",
-        text: "Docs",
-        emoji: true,
-      },
-      url: "https://example.com/docs",
-    });
-  });
-
   it("maps supported button styles to Slack Block Kit styles", () => {
     const blocks = buildSlackInteractiveBlocks({
       blocks: [
@@ -306,16 +242,254 @@ describe("buildSlackInteractiveBlocks", () => {
     expect(buttonBlock.elements?.[2]?.style).toBe("primary");
     expect(buttonBlock.elements?.[3]).not.toHaveProperty("style");
   });
+
+  it.each([
+    {
+      name: "approval",
+      action: {
+        type: "approval" as const,
+        approvalId: "request-1",
+        approvalKind: "exec" as const,
+        decision: "allow-once" as const,
+      },
+      actionId: "openclaw:approval_button:5:1",
+      value:
+        'openclaw:approval:v1:{"approvalId":"request-1","approvalKind":"exec","decision":"allow-once"}',
+    },
+    {
+      name: "callback",
+      action: { type: "callback" as const, value: "plugin:opaque|value" },
+      actionId: "openclaw:callback_button:5:1",
+      value: "plugin:opaque|value",
+    },
+    {
+      name: "question",
+      action: {
+        type: "question" as const,
+        questionId: "ask_0123456789abcdef0123456789abcdef",
+        optionValue: "Production",
+      },
+      actionId: "openclaw:question_button:5:1",
+      value: "slq1:ask_0123456789abcdef0123456789abcdef:0",
+    },
+  ])(
+    "preserves typed $name authority through the legacy renderer",
+    ({ action, actionId, value }) => {
+      expect(
+        buildSlackInteractiveBlocks(
+          { blocks: [{ type: "buttons", buttons: [{ label: "Continue", action }] }] },
+          {
+            buttonIndexOffset: 4,
+            questionOptionIndices:
+              action.type === "question"
+                ? new Map([[action.questionId, new Map([[action.optionValue.toLowerCase(), 0]])]])
+                : undefined,
+          },
+        ),
+      ).toMatchObject([
+        {
+          block_id: "openclaw_reply_buttons_5",
+          elements: [{ action_id: actionId, value }],
+        },
+      ]);
+    },
+  );
 });
 
 describe("buildSlackPresentationBlocks", () => {
-  it("renders presentation controls without requiring legacy interactive payloads", () => {
+  it.each(["👨‍👩‍👧‍👦", "🇦🇹", "👍🏽", "e\u0301", "\r\n"])(
+    "keeps the complete %s grapheme across native mrkdwn section boundaries",
+    (grapheme) => {
+      for (const marker of ["&amp;", "`", "```"] as const) {
+        const closing = marker === "&amp;" ? "" : marker;
+        const first = Array.from(grapheme)[0]!;
+        const prefix = "x".repeat(3_000 - marker.length - closing.length - first.length);
+        const blocks = buildSlackPresentationBlocks({
+          blocks: [{ type: "text", text: `${marker}${prefix}${grapheme}tail${closing}` }],
+        });
+        const chunks = blocks.flatMap((block) =>
+          block.type === "section" && "text" in block && block.text?.type === "mrkdwn"
+            ? [block.text.text]
+            : [],
+        );
+
+        expect(chunks, marker).toEqual([
+          `${marker}${prefix}${closing}`,
+          `${closing}${grapheme}tail${closing}`,
+        ]);
+      }
+    },
+  );
+
+  it.each(["text", "context"] as const)(
+    "preserves long %s presentation blocks without truncating their mrkdwn",
+    (type) => {
+      const text = `${"x".repeat(2_998)}  &amp;🚀tail`;
+      const presentation: MessagePresentation = { blocks: [{ type, text }] };
+      const blocks = buildSlackPresentationBlocks(presentation);
+      const chunks = blocks.flatMap((block) => {
+        if (block.type === "section" && "text" in block && block.text?.type === "mrkdwn") {
+          return [block.text.text];
+        }
+        const element =
+          block.type === "context" && "elements" in block ? block.elements[0] : undefined;
+        return element?.type === "mrkdwn" ? [element.text] : [];
+      });
+
+      expect(buildSlackPresentationBlocksIfComplete(presentation)).toBeDefined();
+      expect(chunks.join("")).toBe(text);
+      expect(chunks).toHaveLength(2);
+      expect(chunks.every((chunk) => chunk.length <= 3_000)).toBe(true);
+      expect(
+        blocks.every((block) => block.type === (type === "text" ? "section" : "context")),
+      ).toBe(true);
+    },
+  );
+
+  it("keeps question choices native when custom input stays on the text path", () => {
+    const questionId = "ask_0123456789abcdef0123456789abcdef";
+    const presentation: MessagePresentation = {
+      blocks: [
+        { type: "text", text: "Tap a choice, or reply with your own answer." },
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Production",
+              action: { type: "question" as const, questionId, optionValue: "Production" },
+            },
+            {
+              label: "Other…",
+              action: { type: "question" as const, questionId, intent: "custom-input" as const },
+            },
+            {
+              label: "Staging",
+              action: { type: "question" as const, questionId, optionValue: "Staging" },
+            },
+          ],
+        },
+      ],
+    };
+
+    const renderOptions = {
+      questionOptionIndices: new Map([
+        [
+          questionId,
+          new Map([
+            ["staging", 0],
+            ["production", 1],
+          ]),
+        ],
+      ]),
+    };
+    expect(buildSlackPresentationBlocksIfComplete(presentation, renderOptions)).toBeDefined();
+    expect(buildSlackPresentationBlocks(presentation, renderOptions)).toMatchObject([
+      { type: "section" },
+      {
+        type: "actions",
+        elements: [
+          { action_id: "openclaw:question_button:1:1", value: `slq1:${questionId}:1` },
+          { action_id: "openclaw:question_button:1:3", value: `slq1:${questionId}:0` },
+        ],
+      },
+    ]);
+  });
+
+  it("renders presentation blocks in authored order", () => {
+    const blocks = buildSlackPresentationBlocks({
+      blocks: [
+        { type: "text", text: "First" },
+        { type: "buttons", buttons: [{ label: "Approve", value: "approve" }] },
+        { type: "context", text: "After buttons" },
+        { type: "divider" },
+        {
+          type: "select",
+          options: [{ label: "One", value: "one" }],
+        },
+      ],
+    });
+
+    expect(blocks.map((block) => block.type)).toEqual([
+      "section",
+      "actions",
+      "context",
+      "divider",
+      "actions",
+    ]);
+  });
+
+  it("encodes typed approvals with Slack-private action data", () => {
+    const blocks = buildSlackPresentationBlocks({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Allow once",
+              action: {
+                type: "approval",
+                approvalId: "plugin:req/😀",
+                approvalKind: "plugin",
+                decision: "allow-once",
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(blocks).toEqual([
+      {
+        type: "actions",
+        block_id: "openclaw_reply_buttons_1",
+        elements: [
+          {
+            type: "button",
+            action_id: "openclaw:approval_button:1:1",
+            text: {
+              type: "plain_text",
+              text: "Allow once",
+              emoji: true,
+            },
+            value:
+              'openclaw:approval:v1:{"approvalId":"plugin:req/😀","approvalKind":"plugin","decision":"allow-once"}',
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("does not activate deprecated targets behind invalid explicit actions", () => {
+    const presentation = {
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Invalid",
+              action: null,
+              value: "legacy",
+              url: "https://legacy.example",
+            },
+          ],
+        },
+        {
+          type: "select",
+          options: [{ label: "Invalid", action: null, value: "legacy" }],
+        },
+      ],
+    } as unknown as MessagePresentation;
+
+    expect(buildSlackPresentationBlocks(presentation)).toEqual([]);
+  });
+
+  it("does not render generic command actions that Slack cannot execute", () => {
     const blocks = buildSlackPresentationBlocks({
       blocks: [
         { type: "text", text: "Pick" },
         {
           type: "buttons",
-          buttons: [{ label: "Approve", value: "approve", style: "success" }],
+          buttons: [{ label: "Plugins", action: { type: "command", command: "/codex plugins" } }],
         },
       ],
     });
@@ -325,6 +499,25 @@ describe("buildSlackPresentationBlocks", () => {
         type: "section",
         text: { type: "mrkdwn", text: "Pick" },
       },
+    ]);
+  });
+
+  it("keeps legacy approval commands on the owner-neutral reply route", () => {
+    const blocks = buildSlackPresentationBlocks({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Approve",
+              action: { type: "command", command: "/approve req-1 allow-once" },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(blocks).toEqual([
       {
         type: "actions",
         block_id: "openclaw_reply_buttons_1",
@@ -337,12 +530,185 @@ describe("buildSlackPresentationBlocks", () => {
               text: "Approve",
               emoji: true,
             },
-            value: "approve",
-            style: "primary",
+            value: "/approve req-1 allow-once",
           },
         ],
       },
     ]);
+  });
+
+  it("chunks Slack-incompatible chart fallback without truncating its data", () => {
+    const categories = Array.from(
+      { length: 4 },
+      (_entry, index) => `category-${String(index)}-${"x".repeat(1_000)}`,
+    );
+    const blocks = buildSlackPresentationBlocks({
+      blocks: [
+        {
+          type: "chart",
+          chartType: "line",
+          title: "Long labels",
+          categories,
+          series: [{ name: "Requests", values: [1, 2, 3, 4] }],
+        },
+      ],
+    });
+    const chunks = blocks.flatMap((block) => {
+      const context = block as { type?: string; elements?: Array<{ text?: string }> };
+      return context.type === "context"
+        ? (context.elements ?? []).flatMap((element) => (element.text ? [element.text] : []))
+        : [];
+    });
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 3_000)).toBe(true);
+    expect(chunks.join("\n")).toContain(categories.at(-1));
+    expect(chunks.join("\n")).toContain(": 4");
+  });
+
+  it("renders at most two native charts per message", () => {
+    const blocks = buildSlackPresentationBlocks({
+      blocks: [
+        {
+          type: "chart",
+          chartType: "pie",
+          title: "Issue share",
+          segments: [{ label: "Open", value: 5 }],
+        },
+        {
+          type: "chart",
+          chartType: "bar",
+          title: "Weekly volume",
+          categories: ["Mon"],
+          series: [{ name: "Messages", values: [12] }],
+        },
+        {
+          type: "chart",
+          chartType: "area",
+          title: "Active sessions",
+          categories: ["09:00"],
+          series: [{ name: "Sessions", values: [3] }],
+        },
+      ],
+    });
+
+    expect(blocks.map((block) => block.type)).toEqual([
+      "data_visualization",
+      "data_visualization",
+      "context",
+    ]);
+    expect(blocks[2]).toEqual({
+      type: "context",
+      elements: [
+        {
+          type: "mrkdwn",
+          text: "Active sessions (area chart)\n- Sessions: 09:00: 3",
+          verbatim: true,
+        },
+      ],
+    });
+  });
+
+  it("counts existing native chart blocks toward Slack's per-message limit", () => {
+    const nativeChart = {
+      type: "data_visualization",
+      title: "Existing chart",
+      chart: { type: "pie", segments: [{ label: "Open", value: 5 }] },
+    } as SlackBlock;
+    const offsets = resolveSlackBlockOffsets([nativeChart, nativeChart]);
+
+    const presentation = {
+      blocks: [
+        {
+          type: "chart" as const,
+          chartType: "pie" as const,
+          title: "Presentation chart",
+          segments: [{ label: "Closed", value: 8 }],
+        },
+      ],
+    };
+    expect(buildSlackPresentationBlocksIfComplete(presentation, offsets)).toBeUndefined();
+    expect(buildSlackPresentationBlocks(presentation, offsets)).toEqual([
+      {
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text: "Presentation chart (pie chart)\n- Closed: 8",
+            verbatim: true,
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("keeps over-budget tables out of the native block renderer", () => {
+    const table = (caption: string, value: string) => ({
+      type: "table" as const,
+      caption,
+      headers: ["Account"],
+      rows: Array.from({ length: 100 }, (_entry, index) => [`${String(index)}-${value}`]),
+    });
+    const presentation = {
+      blocks: [table("First", "a".repeat(45)), table("Second", "b".repeat(55))],
+    };
+
+    expect(buildSlackPresentationBlocksIfComplete(presentation)).toBeUndefined();
+    expect(buildSlackPresentationBlocks(presentation)).toEqual([]);
+  });
+
+  it("counts raw native tables against the aggregate Slack table budget", () => {
+    const nativeTable = {
+      type: "data_table",
+      caption: "Existing",
+      rows: [[{ type: "raw_text", text: "Name" }], [{ type: "raw_text", text: "x".repeat(9995) }]],
+    } as SlackBlock;
+
+    const blocks = buildSlackPresentationBlocks(
+      {
+        blocks: [
+          {
+            type: "table",
+            caption: "Portable",
+            headers: ["Name"],
+            rows: [["Acme"]],
+          },
+        ],
+      },
+      resolveSlackBlockOffsets([nativeTable]),
+    );
+
+    expect(blocks).toEqual([]);
+  });
+
+  it.each([
+    { offset: 9_985, native: true },
+    { offset: 9_986, native: false },
+  ])("counts Unicode, whitespace, and numeric cells at offset $offset", ({ offset, native }) => {
+    const presentation = {
+      blocks: [
+        {
+          type: "table" as const,
+          caption: "First",
+          headers: [" Name "],
+          rows: [[" 😀 "], [42]],
+        },
+        {
+          type: "table" as const,
+          caption: "Second",
+          headers: [" B "],
+          rows: [["🦀"]],
+        },
+      ],
+    };
+    const options = { dataTableCellCharacterCountOffset: offset };
+
+    expect(buildSlackPresentationBlocksIfComplete(presentation, options) !== undefined).toBe(
+      native,
+    );
+    expect(buildSlackPresentationBlocks(presentation, options).map((block) => block.type)).toEqual(
+      native ? ["data_table", "data_table"] : [],
+    );
   });
 });
 

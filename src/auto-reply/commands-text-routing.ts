@@ -1,44 +1,11 @@
-import { listChannelPlugins } from "../channels/plugins/index.js";
-import {
-  getActivePluginChannelRegistryVersion,
-  requireActivePluginChannelRegistry,
-} from "../plugins/runtime.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { getLoadedChannelPluginById } from "../channels/plugins/registry-loaded.js";
 import type { ShouldHandleTextCommandsParams } from "./commands-registry.types.js";
 
-let cachedNativeCommandSurfaces: Set<string> | null = null;
-let cachedNativeCommandSurfacesVersion = -1;
-let cachedNativeCommandSurfacesRegistry: object | null = null;
-
-export function isNativeCommandSurface(surface?: string): boolean {
-  const normalized = normalizeOptionalLowercaseString(surface);
-  if (!normalized) {
-    return false;
-  }
-  const activeRegistry = requireActivePluginChannelRegistry();
-  const registryVersion = getActivePluginChannelRegistryVersion();
-  if (
-    !cachedNativeCommandSurfaces ||
-    cachedNativeCommandSurfacesVersion !== registryVersion ||
-    cachedNativeCommandSurfacesRegistry !== activeRegistry
-  ) {
-    cachedNativeCommandSurfaces = new Set(
-      listChannelPlugins()
-        .filter((plugin) => plugin.capabilities?.nativeCommands === true)
-        .map((plugin) => plugin.id),
-    );
-    cachedNativeCommandSurfacesVersion = registryVersion;
-    cachedNativeCommandSurfacesRegistry = activeRegistry;
-  }
-  return cachedNativeCommandSurfaces.has(normalized);
-}
-
 export function shouldHandleTextCommands(params: ShouldHandleTextCommandsParams): boolean {
-  if (params.commandSource === "native") {
+  if (params.commandSource === "native" || params.cfg.commands?.text !== false) {
     return true;
   }
-  if (params.cfg.commands?.text !== false) {
-    return true;
-  }
-  return !isNativeCommandSurface(params.surface);
+  const surface = normalizeOptionalLowercaseString(params.surface);
+  return !surface || getLoadedChannelPluginById(surface)?.capabilities?.nativeCommands !== true;
 }

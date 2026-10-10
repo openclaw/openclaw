@@ -1,6 +1,3 @@
-import type { ChannelId } from "../channel-id.types.js";
-import type { ChannelOutboundAdapter } from "../outbound.types.js";
+import type { loadChannelOutboundAdapter } from "./load.js";
 
-export type LoadChannelOutboundAdapter = (
-  id: ChannelId,
-) => Promise<ChannelOutboundAdapter | undefined>;
+export type LoadChannelOutboundAdapter = typeof loadChannelOutboundAdapter;

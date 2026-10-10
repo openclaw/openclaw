@@ -1,65 +1,77 @@
+import {
+  PRECOMPUTED_SUBCOMMAND_HELP_NAMES,
+  type PrecomputedSubcommandHelpName,
+} from "./precomputed-help-commands.js";
 import { readCliStartupMetadata } from "./startup-metadata.js";
 
-let precomputedRootHelpText: string | null | undefined;
-let precomputedBrowserHelpText: string | null | undefined;
+type PrecomputedHelpTextKey =
+  | "rootHelpText"
+  | "browserHelpText"
+  | "secretsHelpText"
+  | "nodesHelpText"
+  | PrecomputedSubcommandHelpName;
 
-function loadPrecomputedHelpText(
-  key: "rootHelpText" | "browserHelpText",
-  cache: string | null | undefined,
-  setCache: (value: string | null) => void,
-): string | null {
-  if (cache !== undefined) {
-    return cache;
+const precomputedHelpText = new Map<PrecomputedHelpTextKey, string | null>();
+
+function loadPrecomputedHelpText(key: PrecomputedHelpTextKey): string | null {
+  const cached = precomputedHelpText.get(key);
+  if (cached !== undefined) {
+    return cached;
   }
-  try {
-    const parsed = readCliStartupMetadata(import.meta.url);
-    if (parsed) {
-      const value = parsed[key];
-      if (typeof value === "string" && value.length > 0) {
-        setCache(value);
-        return value;
-      }
+  const parsed = readCliStartupMetadata(import.meta.url);
+  let value: unknown;
+  if (isPrecomputedSubcommandHelpName(key)) {
+    const subcommandHelpText = parsed?.subcommandHelpText;
+    if (isSubcommandHelpTextRecord(subcommandHelpText)) {
+      value = subcommandHelpText[key];
     }
-  } catch {
-    // Fall back to live help rendering.
+  } else if (parsed) {
+    value = parsed[key];
   }
-  setCache(null);
-  return null;
+  const helpText = typeof value === "string" && value.length > 0 ? value : null;
+  // Entry can retry command help through run-main; keep a miss even if the
+  // metadata reader advances from a falsy direct record to the parent layout.
+  precomputedHelpText.set(key, helpText);
+  return helpText;
 }
 
-export function loadPrecomputedRootHelpText(): string | null {
-  return loadPrecomputedHelpText("rootHelpText", precomputedRootHelpText, (value) => {
-    precomputedRootHelpText = value;
-  });
-}
-
-export function loadPrecomputedBrowserHelpText(): string | null {
-  return loadPrecomputedHelpText("browserHelpText", precomputedBrowserHelpText, (value) => {
-    precomputedBrowserHelpText = value;
-  });
+function outputPrecomputedHelpText(key: PrecomputedHelpTextKey): boolean {
+  const helpText = loadPrecomputedHelpText(key);
+  if (!helpText) {
+    return false;
+  }
+  process.stdout.write(helpText);
+  return true;
 }
 
 export function outputPrecomputedRootHelpText(): boolean {
-  const rootHelpText = loadPrecomputedRootHelpText();
-  if (!rootHelpText) {
-    return false;
-  }
-  process.stdout.write(rootHelpText);
-  return true;
+  return outputPrecomputedHelpText("rootHelpText");
 }
 
 export function outputPrecomputedBrowserHelpText(): boolean {
-  const browserHelpText = loadPrecomputedBrowserHelpText();
-  if (!browserHelpText) {
-    return false;
-  }
-  process.stdout.write(browserHelpText);
-  return true;
+  return outputPrecomputedHelpText("browserHelpText");
 }
 
-export const __testing = {
-  resetPrecomputedRootHelpTextForTests(): void {
-    precomputedRootHelpText = undefined;
-    precomputedBrowserHelpText = undefined;
-  },
-};
+export function outputPrecomputedSecretsHelpText(): boolean {
+  return outputPrecomputedHelpText("secretsHelpText");
+}
+
+export function outputPrecomputedNodesHelpText(): boolean {
+  return outputPrecomputedHelpText("nodesHelpText");
+}
+
+export function outputPrecomputedSubcommandHelpText(commandName: string): boolean {
+  return isPrecomputedSubcommandHelpName(commandName) && outputPrecomputedHelpText(commandName);
+}
+
+function isPrecomputedSubcommandHelpName(
+  commandName: string,
+): commandName is PrecomputedSubcommandHelpName {
+  return PRECOMPUTED_SUBCOMMAND_HELP_NAMES.some((name) => name === commandName);
+}
+
+function isSubcommandHelpTextRecord(
+  value: unknown,
+): value is Partial<Record<PrecomputedSubcommandHelpName, unknown>> {
+  return typeof value === "object" && value !== null;
+}

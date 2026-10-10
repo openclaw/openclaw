@@ -1,18 +1,18 @@
 #!/usr/bin/env node
-// Secret scanning alert handler for OpenClaw maintainers.
-// Usage: node secret-scanning.mjs <command> [options]
+/**
+ * Secret scanning alert handler for OpenClaw maintainers.
+ * Usage: node secret-scanning.mjs <command> [options]
+ */
 
-import { execFileSync, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { execPlainGh } from "../../../../scripts/lib/plain-gh.mjs";
 
 const REPO = "openclaw/openclaw";
 const REPO_URL = `https://github.com/${REPO}`;
-
-// ─── Helpers ────────────────────────────────────────────────────────────────
 
 function fail(message) {
   console.error(`error: ${message}`);
@@ -21,29 +21,35 @@ function fail(message) {
 
 function tmpFile(purpose) {
   const filePath = path.join(os.tmpdir(), `secretscan-${purpose}-${crypto.randomUUID()}`);
-  // 预创建文件，限制权限为 owner-only
   fs.writeFileSync(filePath, "", { mode: 0o600 });
   return filePath;
 }
 
 function gh(args, { json = true, allowFailure = false } = {}) {
-  const proc = spawnSync("gh", args, { encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
-  if (proc.status !== 0 && !allowFailure) {
-    fail(`gh ${args.slice(0, 3).join(" ")} failed:\n${(proc.stderr || proc.stdout || "").trim()}`);
-  }
-  if (proc.status !== 0) {
-    return {
-      gh_failed: true,
-      status: proc.status,
-      stdout: proc.stdout,
-      stderr: proc.stderr,
-    };
-  }
-  if (!json) return proc.stdout;
+  let stdout;
   try {
-    return JSON.parse(proc.stdout);
+    stdout = execPlainGh(args, { encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
+  } catch (error) {
+    const failure = {
+      gh_failed: true,
+      status: error?.status ?? 1,
+      stdout: String(error?.stdout ?? ""),
+      stderr: String(error?.stderr ?? ""),
+    };
+    if (!allowFailure) {
+      fail(
+        `gh ${args.slice(0, 3).join(" ")} failed:\n${(failure.stderr || failure.stdout).trim()}`,
+      );
+    }
+    return failure;
+  }
+  if (!json) {
+    return stdout;
+  }
+  try {
+    return JSON.parse(stdout);
   } catch {
-    return proc.stdout;
+    return stdout;
   }
 }
 
@@ -51,11 +57,25 @@ function ghGraphQL(query, options = {}) {
   return gh(["api", "graphql", "-f", `query=${query}`], options);
 }
 
+function contentEditCount(nodeId, typeName) {
+  const result = ghGraphQL(`{
+    node(id: "${nodeId}") {
+      ... on ${typeName} {
+        userContentEdits(first: 50) {
+          totalCount
+        }
+      }
+    }
+  }`);
+  return result?.data?.node?.userContentEdits?.totalCount ?? 0;
+}
+
 function isBodyLocationType(locationType) {
   return locationType === "issue_body" || locationType === "pull_request_body";
 }
 
-export function decideBodyRedaction(currentBody, redactedBody) {
+/** Decides whether redacting an issue/PR body requires notifying the reporter. */
+function decideBodyRedaction(currentBody, redactedBody) {
   const bodyChanged = String(currentBody) !== String(redactedBody);
   return {
     body_changed: bodyChanged,
@@ -63,14 +83,17 @@ export function decideBodyRedaction(currentBody, redactedBody) {
   };
 }
 
-export function loadBodyRedactionResult(locationType, resultFile) {
+/** Loads redaction-result metadata for issue/PR body secret locations. */
+function loadBodyRedactionResult(locationType, resultFile) {
   if (!isBodyLocationType(locationType)) {
     return { notify_required: true };
   }
   if (!resultFile) {
     fail("Body notifications require a redaction result file from redact-body-if-needed");
   }
-  if (!fs.existsSync(resultFile)) fail(`File not found: ${resultFile}`);
+  if (!fs.existsSync(resultFile)) {
+    fail(`File not found: ${resultFile}`);
+  }
 
   const result = JSON.parse(fs.readFileSync(resultFile, "utf8"));
   if (typeof result.notify_required !== "boolean") {
@@ -182,10 +205,11 @@ function fetchDiscussionComment(discussionNumber, discussionCommentDbId) {
     failOnGraphQLFailure(gql, `Failed to fetch discussion #${discussionNumber}`);
 
     const discussion = gql?.data?.repository?.discussion;
-    if (!discussion)
+    if (!discussion) {
       fail(
         `Discussion #${discussionNumber} not found — it may have been deleted. The alert cannot be processed via this skill.`,
       );
+    }
 
     discussionId = discussion.id;
 
@@ -205,15 +229,18 @@ function fetchDiscussionComment(discussionNumber, discussionCommentDbId) {
           `Failed to fetch replies for discussion comment ${topLevelComment.id}`,
         );
         const replies = replyPage?.data?.node?.replies;
-        if (!replies)
+        if (!replies) {
           fail(`Failed to paginate replies for discussion comment ${topLevelComment.id}`);
+        }
 
         reply = findDiscussionCommentNode(replies.nodes, discussionCommentDbId);
         hasMoreReplies = replies.pageInfo.hasNextPage;
         replyCursor = replies.pageInfo.endCursor;
       }
 
-      if (reply) return { discussionId, comment: reply };
+      if (reply) {
+        return { discussionId, comment: reply };
+      }
     }
 
     hasNextPage = discussion.comments.pageInfo.hasNextPage;
@@ -234,14 +261,14 @@ function createDiscussionComment(discussionNodeId, body, replyToNodeId) {
   return result?.data?.addDiscussionComment?.comment;
 }
 
-// ─── Commands ───────────────────────────────────────────────────────────────
-
 /**
  * fetch-alert <number>
  * Fetch alert metadata + locations. Never exposes .secret.
  */
 function cmdFetchAlert(alertNumber) {
-  if (!alertNumber) fail("Usage: fetch-alert <number>");
+  if (!alertNumber) {
+    fail("Usage: fetch-alert <number>");
+  }
 
   const alert = gh(["api", `repos/${REPO}/secret-scanning/alerts/${alertNumber}?hide_secret=true`]);
 
@@ -251,7 +278,6 @@ function cmdFetchAlert(alertNumber) {
     "--paginate",
     "--slurp",
   ]);
-  // --paginate + --slurp 确保多页结果合并为一个 JSON 数组
   const flatLocations = Array.isArray(locations?.[0])
     ? locations.flat()
     : Array.isArray(locations)
@@ -280,17 +306,24 @@ function cmdFetchAlert(alertNumber) {
  * Saves full body to a temp file. Prints metadata + file path to stdout.
  */
 function cmdFetchContent(locationJson) {
-  if (!locationJson) fail("Usage: fetch-content '<location-json>'");
+  if (!locationJson) {
+    fail("Usage: fetch-content '<location-json>'");
+  }
   const location = JSON.parse(locationJson);
   const type = location.type;
   const details = location.details;
+  let result;
 
   if (type === "discussion_comment") {
     const commentUrl = details.discussion_comment_url;
-    if (!commentUrl) fail("No discussion_comment_url in location details");
+    if (!commentUrl) {
+      fail("No discussion_comment_url in location details");
+    }
 
     const urlMatch = commentUrl.match(/discussions\/(\d+)#discussioncomment-(\d+)/);
-    if (!urlMatch) fail(`Cannot parse discussion comment URL: ${commentUrl}`);
+    if (!urlMatch) {
+      fail(`Cannot parse discussion comment URL: ${commentUrl}`);
+    }
     const discussionNumber = urlMatch[1];
     const discussionCommentDbId = urlMatch[2];
 
@@ -298,188 +331,100 @@ function cmdFetchContent(locationJson) {
       discussionNumber,
       discussionCommentDbId,
     );
-    if (!comment)
+    if (!comment) {
       fail(
         `Discussion comment #${discussionCommentDbId} not found in discussion #${discussionNumber}`,
       );
+    }
 
     const bodyFile = tmpFile("body.md");
     fs.writeFileSync(bodyFile, comment.body || "");
 
-    console.log(
-      JSON.stringify(
-        {
-          type,
-          comment_node_id: comment.id,
-          discussion_node_id: discussionId,
-          reply_to_node_id: comment.replyTo?.id ?? null,
-          discussion_number: Number(discussionNumber),
-          discussion_comment_db_id: Number(discussionCommentDbId),
-          author: comment.author?.login,
-          html_url: comment.url || commentUrl,
-          edit_history_count: comment.userContentEdits?.totalCount ?? 0,
-          body_file: bodyFile,
-        },
-        null,
-        2,
-      ),
-    );
+    result = {
+      type,
+      comment_node_id: comment.id,
+      discussion_node_id: discussionId,
+      reply_to_node_id: comment.replyTo?.id ?? null,
+      discussion_number: Number(discussionNumber),
+      discussion_comment_db_id: Number(discussionCommentDbId),
+      author: comment.author?.login,
+      html_url: comment.url || commentUrl,
+      edit_history_count: comment.userContentEdits?.totalCount ?? 0,
+      body_file: bodyFile,
+    };
   } else if (
     type === "issue_comment" ||
     type === "pull_request_comment" ||
     type === "pull_request_review_comment"
   ) {
-    // Extract comment ID from URL
     const commentUrl =
       details.issue_comment_url ||
       details.pull_request_comment_url ||
       details.pull_request_review_comment_url;
-    if (!commentUrl) fail(`No comment URL in location details`);
+    if (!commentUrl) {
+      fail(`No comment URL in location details`);
+    }
 
     const comment = gh(["api", commentUrl]);
     const bodyFile = tmpFile("body.md");
     fs.writeFileSync(bodyFile, comment.body || "");
 
-    // Fetch edit history
     const nodeId = comment.node_id;
     const typeName =
       type === "pull_request_review_comment" ? "PullRequestReviewComment" : "IssueComment";
-    const gql = ghGraphQL(`{
-      node(id: "${nodeId}") {
-        ... on ${typeName} {
-          userContentEdits(first: 50) {
-            totalCount
-          }
-        }
-      }
-    }`);
-    const editCount = gql?.data?.node?.userContentEdits?.totalCount ?? 0;
+    const editCount = contentEditCount(nodeId, typeName);
 
-    // Extract issue number from html_url
     const htmlUrl = comment.html_url || details.html_url || "";
     const issueMatch = htmlUrl.match(/\/(issues|pull)\/(\d+)/);
     const issueNumber = issueMatch ? issueMatch[2] : null;
 
-    console.log(
-      JSON.stringify(
-        {
-          type,
-          comment_id: comment.id,
-          node_id: nodeId,
-          author: comment.user?.login,
-          issue_number: issueNumber,
-          html_url: htmlUrl,
-          edit_history_count: editCount,
-          body_file: bodyFile,
-        },
-        null,
-        2,
-      ),
-    );
-  } else if (type === "issue_body") {
-    const issueUrl = details.issue_body_url || details.issue_url;
-    if (!issueUrl) fail("No issue URL in location details");
+    result = {
+      type,
+      comment_id: comment.id,
+      node_id: nodeId,
+      author: comment.user?.login,
+      issue_number: issueNumber,
+      html_url: htmlUrl,
+      edit_history_count: editCount,
+      body_file: bodyFile,
+    };
+  } else if (isBodyLocationType(type)) {
+    const isPullRequest = type === "pull_request_body";
+    const url = isPullRequest
+      ? details.pull_request_body_url || details.pull_request_url
+      : details.issue_body_url || details.issue_url;
+    if (!url) {
+      fail(`No ${isPullRequest ? "PR" : "issue"} URL in location details`);
+    }
 
-    const issue = gh(["api", issueUrl]);
+    const content = gh(["api", url]);
     const bodyFile = tmpFile("body.md");
-    fs.writeFileSync(bodyFile, issue.body || "");
-
-    const nodeId = issue.node_id;
-    const number = issue.number;
-    const gql = ghGraphQL(`{
-      node(id: "${nodeId}") {
-        ... on Issue {
-          userContentEdits(first: 50) {
-            totalCount
-          }
-        }
-      }
-    }`);
-    const editCount = gql?.data?.node?.userContentEdits?.totalCount ?? 0;
-
-    console.log(
-      JSON.stringify(
-        {
-          type,
-          issue_number: number,
-          node_id: nodeId,
-          author: issue.user?.login,
-          html_url: issue.html_url,
-          edit_history_count: editCount,
-          body_file: bodyFile,
-        },
-        null,
-        2,
-      ),
-    );
-  } else if (type === "pull_request_body") {
-    const prUrl = details.pull_request_body_url || details.pull_request_url;
-    if (!prUrl) fail("No PR URL in location details");
-
-    const pr = gh(["api", prUrl]);
-    const bodyFile = tmpFile("body.md");
-    fs.writeFileSync(bodyFile, pr.body || "");
-
-    const nodeId = pr.node_id;
-    const number = pr.number;
-    const gql = ghGraphQL(`{
-      node(id: "${nodeId}") {
-        ... on PullRequest {
-          userContentEdits(first: 50) {
-            totalCount
-          }
-        }
-      }
-    }`);
-    const editCount = gql?.data?.node?.userContentEdits?.totalCount ?? 0;
-
-    console.log(
-      JSON.stringify(
-        {
-          type,
-          pr_number: number,
-          node_id: nodeId,
-          author: pr.user?.login,
-          merged: pr.merged,
-          state: pr.state,
-          html_url: pr.html_url,
-          edit_history_count: editCount,
-          body_file: bodyFile,
-        },
-        null,
-        2,
-      ),
-    );
+    fs.writeFileSync(bodyFile, content.body || "");
+    const editCount = contentEditCount(content.node_id, isPullRequest ? "PullRequest" : "Issue");
+    result = {
+      type,
+      [isPullRequest ? "pr_number" : "issue_number"]: content.number,
+      node_id: content.node_id,
+      author: content.user?.login,
+      ...(isPullRequest ? { merged: content.merged, state: content.state } : {}),
+      html_url: content.html_url,
+      edit_history_count: editCount,
+      body_file: bodyFile,
+    };
   } else if (type === "commit") {
-    console.log(
-      JSON.stringify(
-        {
-          type,
-          commit_sha: details.commit_sha,
-          path: details.path,
-          start_line: details.start_line,
-          end_line: details.end_line,
-          html_url: details.html_url || details.commit_url || details.blob_url || null,
-          // No body file for commits
-          body_file: null,
-        },
-        null,
-        2,
-      ),
-    );
+    result = {
+      type,
+      commit_sha: details.commit_sha,
+      path: details.path,
+      start_line: details.start_line,
+      end_line: details.end_line,
+      html_url: details.html_url || details.commit_url || details.blob_url || null,
+      body_file: null,
+    };
   } else {
-    console.log(
-      JSON.stringify(
-        {
-          type,
-          unsupported: true,
-          details,
-        },
-        null,
-        2,
-      ),
-    );
+    result = { type, unsupported: true, details };
   }
+  console.log(JSON.stringify(result, null, 2));
 }
 
 /**
@@ -490,7 +435,9 @@ function cmdRedactBody(kind, number, bodyFile) {
   if (!kind || !number || !bodyFile) {
     fail("Usage: redact-body <issue|pr> <number> <redacted-body-file>");
   }
-  if (!fs.existsSync(bodyFile)) fail(`File not found: ${bodyFile}`);
+  if (!fs.existsSync(bodyFile)) {
+    fail(`File not found: ${bodyFile}`);
+  }
 
   const endpoint =
     kind === "pr" ? `repos/${REPO}/pulls/${number}` : `repos/${REPO}/issues/${number}`;
@@ -509,8 +456,12 @@ function cmdRedactBodyIfNeeded(kind, number, currentBodyFile, redactedBodyFile, 
       "Usage: redact-body-if-needed <issue|pr> <number> <current-body-file> <redacted-body-file> <result-file>",
     );
   }
-  if (!fs.existsSync(currentBodyFile)) fail(`File not found: ${currentBodyFile}`);
-  if (!fs.existsSync(redactedBodyFile)) fail(`File not found: ${redactedBodyFile}`);
+  if (!fs.existsSync(currentBodyFile)) {
+    fail(`File not found: ${currentBodyFile}`);
+  }
+  if (!fs.existsSync(redactedBodyFile)) {
+    fail(`File not found: ${redactedBodyFile}`);
+  }
 
   const currentBody = fs.readFileSync(currentBodyFile, "utf8");
   const redactedBody = fs.readFileSync(redactedBodyFile, "utf8");
@@ -541,7 +492,9 @@ function cmdRedactBodyIfNeeded(kind, number, currentBodyFile, redactedBodyFile, 
  * Delete a comment (and all its edit history).
  */
 function cmdDeleteComment(commentId) {
-  if (!commentId) fail("Usage: delete-comment <comment-id>");
+  if (!commentId) {
+    fail("Usage: delete-comment <comment-id>");
+  }
   gh(["api", `repos/${REPO}/issues/comments/${commentId}`, "-X", "DELETE"], { json: false });
   console.log(JSON.stringify({ ok: true, deleted_comment_id: Number(commentId) }));
 }
@@ -551,7 +504,9 @@ function cmdDeleteComment(commentId) {
  * Delete a discussion comment via GraphQL (and all its edit history).
  */
 function cmdDeleteDiscussionComment(nodeId) {
-  if (!nodeId) fail("Usage: delete-discussion-comment <node-id>");
+  if (!nodeId) {
+    fail("Usage: delete-discussion-comment <node-id>");
+  }
   const result = ghGraphQL(
     `mutation { deleteDiscussionComment(input: { id: "${nodeId}" }) { comment { id } } }`,
   );
@@ -566,9 +521,12 @@ function cmdDeleteDiscussionComment(nodeId) {
  * Create a new discussion comment via GraphQL.
  */
 function cmdRecreateDiscussionComment(discussionNodeId, bodyFile, replyToNodeId) {
-  if (!discussionNodeId || !bodyFile)
+  if (!discussionNodeId || !bodyFile) {
     fail("Usage: recreate-discussion-comment <discussion-node-id> <body-file> [reply-to-node-id]");
-  if (!fs.existsSync(bodyFile)) fail(`File not found: ${bodyFile}`);
+  }
+  if (!fs.existsSync(bodyFile)) {
+    fail(`File not found: ${bodyFile}`);
+  }
 
   const body = fs.readFileSync(bodyFile, "utf8");
   const newComment = createDiscussionComment(discussionNodeId, body, replyToNodeId);
@@ -586,8 +544,12 @@ function cmdRecreateDiscussionComment(discussionNodeId, bodyFile, replyToNodeId)
  * Create a new comment from a file.
  */
 function cmdRecreateComment(issueNumber, bodyFile) {
-  if (!issueNumber || !bodyFile) fail("Usage: recreate-comment <issue-number> <body-file>");
-  if (!fs.existsSync(bodyFile)) fail(`File not found: ${bodyFile}`);
+  if (!issueNumber || !bodyFile) {
+    fail("Usage: recreate-comment <issue-number> <body-file>");
+  }
+  if (!fs.existsSync(bodyFile)) {
+    fail(`File not found: ${bodyFile}`);
+  }
 
   const result = gh([
     "api",
@@ -671,11 +633,8 @@ function cmdNotify(target, author, locationType, secretTypes, replyToNodeId) {
     "**Please rotate these credentials immediately.**",
     "",
     "These secrets were publicly exposed and should be considered compromised.",
-  ]
-    .filter((line) => line !== undefined)
-    .join("\n");
+  ].join("\n");
 
-  // Discussion comments must be notified via GraphQL
   if (locationType === "discussion_comment") {
     const newComment = createDiscussionComment(target, body, replyToNodeId);
     console.log(
@@ -688,7 +647,6 @@ function cmdNotify(target, author, locationType, secretTypes, replyToNodeId) {
     return;
   }
 
-  // Issue/PR comments via REST
   const bodyFile = tmpFile("notify.md");
   fs.writeFileSync(bodyFile, body);
 
@@ -715,7 +673,9 @@ function cmdNotify(target, author, locationType, secretTypes, replyToNodeId) {
  * Close a secret scanning alert.
  */
 function cmdResolve(alertNumber, resolution, comment) {
-  if (!alertNumber) fail("Usage: resolve <alert-number> [resolution] [comment]");
+  if (!alertNumber) {
+    fail("Usage: resolve <alert-number> [resolution] [comment]");
+  }
 
   const res = resolution || "revoked";
   const resComment = comment || "Content redacted and author notified to rotate credentials.";
@@ -756,7 +716,6 @@ function cmdListOpen() {
     "--slurp",
   ]);
 
-  // --slurp 将分页结果合并为 [[page1], [page2], ...] 需要 flat
   const flat = Array.isArray(alerts?.[0]) ? alerts.flat() : Array.isArray(alerts) ? alerts : [];
   const rows = flat.map((a) => ({
     number: a.number,
@@ -773,8 +732,12 @@ function cmdListOpen() {
  * Print a formatted summary table from a JSON results file.
  */
 function cmdSummary(jsonFile) {
-  if (!jsonFile) fail("Usage: summary <json-file>");
-  if (!fs.existsSync(jsonFile)) fail(`File not found: ${jsonFile}`);
+  if (!jsonFile) {
+    fail("Usage: summary <json-file>");
+  }
+  if (!fs.existsSync(jsonFile)) {
+    fail(`File not found: ${jsonFile}`);
+  }
 
   const results = JSON.parse(fs.readFileSync(jsonFile, "utf8"));
   const lines = [];
@@ -833,29 +796,23 @@ function cmdSummary(jsonFile) {
   console.log(lines.join("\n"));
 }
 
-// ─── Dispatch ───────────────────────────────────────────────────────────────
-
-const args = [];
-
-export const commands = {
-  "fetch-alert": () => cmdFetchAlert(args[0]),
-  "fetch-content": () => cmdFetchContent(args[0]),
-  "redact-body": () => cmdRedactBody(args[0], args[1], args[2]),
-  "redact-body-if-needed": () => cmdRedactBodyIfNeeded(args[0], args[1], args[2], args[3], args[4]),
-  "delete-comment": () => cmdDeleteComment(args[0]),
-  "delete-discussion-comment": () => cmdDeleteDiscussionComment(args[0]),
-  "recreate-comment": () => cmdRecreateComment(args[0], args[1]),
-  "recreate-discussion-comment": () => cmdRecreateDiscussionComment(args[0], args[1], args[2]),
-  notify: () => cmdNotify(args[0], args[1], args[2], args[3], args[4]),
-  resolve: () => cmdResolve(args[0], args[1], args[2]),
-  "list-open": () => cmdListOpen(),
-  summary: () => cmdSummary(args[0]),
+const commands = {
+  "fetch-alert": cmdFetchAlert,
+  "fetch-content": cmdFetchContent,
+  "redact-body": cmdRedactBody,
+  "redact-body-if-needed": cmdRedactBodyIfNeeded,
+  "delete-comment": cmdDeleteComment,
+  "delete-discussion-comment": cmdDeleteDiscussionComment,
+  "recreate-comment": cmdRecreateComment,
+  "recreate-discussion-comment": cmdRecreateDiscussionComment,
+  notify: cmdNotify,
+  resolve: cmdResolve,
+  "list-open": cmdListOpen,
+  summary: cmdSummary,
 };
 
 function main(argv = process.argv.slice(2)) {
   const [command, ...commandArgs] = argv;
-  args.length = 0;
-  args.push(...commandArgs);
 
   if (!command || !commands[command]) {
     console.error(
@@ -880,7 +837,7 @@ function main(argv = process.argv.slice(2)) {
     process.exit(1);
   }
 
-  commands[command]();
+  commands[command](...commandArgs);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

@@ -10,8 +10,8 @@ status: active
 ---
 
 Parallel specialist lanes let one Gateway route different chats or rooms to
-different agents, while keeping the user experience fast. The trick is to treat
-parallelism as a scarce-resource design problem, not just as "more agents".
+different agents while keeping the user experience fast. Treat parallelism as
+a scarce-resource design problem, not just "more agents".
 
 ## First principles
 
@@ -26,27 +26,35 @@ real bottlenecks:
   focused.
 - **Ownership ambiguity**: duplicate agents doing the same job waste capacity.
 
-OpenClaw already serializes runs per session and caps global parallelism through
-the [command queue](/concepts/queue). Specialist lanes add policy on top:
-which agent owns which work, what stays in chat, and what becomes background
-work.
+OpenClaw already serializes runs per session and caps global parallelism
+through the [command queue](/concepts/queue). Specialist lanes add policy on
+top: which agent owns which work, what stays in chat, and what becomes
+background work.
 
 ## Recommended rollout
 
+For a ready-made starting point, `openclaw agents team create` ships these lane
+contracts as coordinator, researcher, writer, and reviewer roles. Each role puts
+its scope, artifact handoff, approval gates, and escalation rules in `AGENTS.md`.
+The preset wires the coordinator to the specialists and instructs specialists
+to return results without further delegation. See [Team preset](/concepts/multi-agent#team-preset).
+
 ### Phase 1: lane contracts + background heavy work
 
-Give every lane a written contract in its workspace and system prompt:
+Give every lane a written contract in its [agent workspace](/concepts/agent-workspace)
+`AGENTS.md`, which is loaded into the system prompt at the start of every session:
 
 - **Purpose**: the work this lane owns.
 - **Non-goals**: work it should hand off instead of attempting.
-- **Chat budget**: quick answers stay in chat; long tasks should acknowledge
-  briefly, then run in a background sub-agent or task.
+- **Chat budget**: quick answers stay in chat; long tasks acknowledge briefly,
+  then run in a background sub-agent or task.
 - **Handoff rule**: when another lane owns the work, say where it should go and
   provide a compact handoff summary.
 - **Tool-risk rule**: prefer the smallest tool surface that can do the job.
 
 This is the cheapest phase and fixes most clogging: one coding job no longer
-turns the research lane into molasses, and each chat keeps its own context clean.
+turns the research lane into molasses, and each chat keeps its own context
+clean.
 
 ### Phase 2: priority and concurrency controls
 
@@ -63,7 +71,6 @@ Tune queue and model capacity around the business value of each lane:
   messages: {
     queue: {
       mode: "collect",
-      debounceMs: 1000,
       cap: 20,
       drop: "summarize",
     },
@@ -71,9 +78,14 @@ Tune queue and model capacity around the business value of each lane:
 }
 ```
 
+`maxConcurrent` caps the shared main lane; `subagents.maxConcurrent` gives each
+spawning session its own child execution budget.
+
 Use direct/personal chats and production-ops agents for high-priority work. Let
 research, drafting, and batch coding move to background tasks when the system is
-busy.
+busy. `subagents.delegationMode` is prompt guidance only; see
+[sub-agent delegation](/tools/subagents/tool-reference) for what each value does,
+and [command queue](/concepts/queue) for `mode`, `cap`, and `drop`.
 
 ### Phase 3: coordinator / traffic controller
 
@@ -87,6 +99,8 @@ Add a small coordinator pattern once multiple lanes are active:
 Do not start here. A coordinator without lane contracts just coordinates chaos.
 
 ## Minimal lane contract template
+
+Save this in the lane agent's workspace `AGENTS.md`:
 
 ```md
 # Lane contract

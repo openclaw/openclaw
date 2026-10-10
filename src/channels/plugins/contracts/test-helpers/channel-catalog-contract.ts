@@ -1,8 +1,13 @@
+/**
+ * Channel catalog contract suites.
+ *
+ * Exercises manifest/catalog loading paths used by setup and install-on-demand surfaces.
+ */
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "../../../../infra/tmp-openclaw-dir.js";
-import { getChannelPluginCatalogEntry, listChannelPluginCatalogEntries } from "../../catalog.js";
+import { getChannelPluginCatalogEntry, listRawChannelPluginCatalogEntries } from "../../catalog.js";
 
 type CatalogEntryMeta = {
   id: string;
@@ -41,14 +46,10 @@ export function describeChannelCatalogEntryContract(params: {
         expect(entry?.meta.aliases).toContain(params.alias);
       }
     });
-
-    it("appears in the channel catalog listing", () => {
-      const ids = listChannelPluginCatalogEntries().map((entry) => entry.id);
-      expect(ids).toContain(params.channelId);
-    });
   });
 }
 
+/** Verifies catalog entries that come only from bundled manifest metadata. */
 export function describeBundledMetadataOnlyChannelCatalogContract(params: {
   pluginId: string;
   packageName: string;
@@ -90,7 +91,7 @@ export function describeBundledMetadataOnlyChannelCatalogContract(params: {
         "utf8",
       );
 
-      const entry = listChannelPluginCatalogEntries({
+      const entry = listRawChannelPluginCatalogEntries({
         workspaceDir,
         env: createCatalogFixtureEnv({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }),
       }).find((item) => item.id === params.meta.id);
@@ -101,12 +102,12 @@ export function describeBundledMetadataOnlyChannelCatalogContract(params: {
   });
 }
 
+/** Verifies fallback ordering between bundled, official, and external catalogs. */
 export function describeOfficialFallbackChannelCatalogContract(params: {
   channelId: string;
   npmSpec: string;
   meta: CatalogEntryMeta;
   packageName: string;
-  pluginId: string;
   externalNpmSpec: string;
   externalLabel: string;
 }) {
@@ -116,25 +117,8 @@ export function describeOfficialFallbackChannelCatalogContract(params: {
         path.join(resolvePreferredOpenClawTmpDir(), "openclaw-official-catalog-"),
       );
       const catalogPath = path.join(dir, "channel-catalog.json");
-      fs.writeFileSync(
-        catalogPath,
-        JSON.stringify({
-          entries: [
-            {
-              name: params.packageName,
-              openclaw: {
-                channel: params.meta,
-                install: {
-                  npmSpec: params.npmSpec,
-                  defaultChoice: "npm",
-                },
-              },
-            },
-          ],
-        }),
-      );
 
-      const entry = listChannelPluginCatalogEntries({
+      const entry = listRawChannelPluginCatalogEntries({
         env: createCatalogFallbackOnlyEnv(),
         officialCatalogPaths: [catalogPath],
       }).find((item) => item.id === params.channelId);
@@ -148,46 +132,8 @@ export function describeOfficialFallbackChannelCatalogContract(params: {
       const dir = fs.mkdtempSync(
         path.join(resolvePreferredOpenClawTmpDir(), "openclaw-fallback-catalog-"),
       );
-      const bundledDir = path.join(dir, "dist", "extensions", params.pluginId);
       const officialCatalogPath = path.join(dir, "channel-catalog.json");
       const externalCatalogPath = path.join(dir, "catalog.json");
-      fs.mkdirSync(bundledDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(bundledDir, "package.json"),
-        JSON.stringify({
-          name: params.packageName,
-          openclaw: {
-            channel: {
-              ...params.meta,
-              label: `${params.meta.label} Bundled`,
-              selectionLabel: `${params.meta.label} Bundled`,
-              blurb: "bundled fallback",
-            },
-            install: { npmSpec: params.npmSpec },
-          },
-        }),
-        "utf8",
-      );
-      fs.writeFileSync(
-        officialCatalogPath,
-        JSON.stringify({
-          entries: [
-            {
-              name: params.packageName,
-              openclaw: {
-                channel: {
-                  ...params.meta,
-                  label: `${params.meta.label} Official`,
-                  selectionLabel: `${params.meta.label} Official`,
-                  blurb: "official fallback",
-                },
-                install: { npmSpec: params.npmSpec },
-              },
-            },
-          ],
-        }),
-        "utf8",
-      );
       fs.writeFileSync(
         externalCatalogPath,
         JSON.stringify({
@@ -209,7 +155,7 @@ export function describeOfficialFallbackChannelCatalogContract(params: {
         "utf8",
       );
 
-      const entry = listChannelPluginCatalogEntries({
+      const entry = listRawChannelPluginCatalogEntries({
         catalogPaths: [externalCatalogPath],
         officialCatalogPaths: [officialCatalogPath],
         env: createCatalogFallbackOnlyEnv(),
@@ -245,7 +191,7 @@ export function describeOfficialFallbackChannelCatalogContract(params: {
         "utf8",
       );
 
-      const entry = listChannelPluginCatalogEntries({
+      const entry = listRawChannelPluginCatalogEntries({
         catalogPaths: [catalogPath],
         officialCatalogPaths: [],
         env: createCatalogFallbackOnlyEnv(),

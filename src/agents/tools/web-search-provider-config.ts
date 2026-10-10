@@ -1,5 +1,8 @@
-import { resolvePluginWebSearchConfig } from "../../config/plugin-web-search-config.js";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isLegacyWebSearchProviderConfigKey } from "../../config/web-search-legacy-provider-keys.js";
+
+export { resolvePluginWebSearchConfig as resolveProviderWebSearchPluginConfig } from "../../config/plugin-web-search-config.js";
 
 export function getTopLevelCredentialValue(searchConfig?: Record<string, unknown>): unknown {
   return searchConfig?.apiKey;
@@ -16,11 +19,7 @@ export function getScopedCredentialValue(
   searchConfig: Record<string, unknown> | undefined,
   key: string,
 ): unknown {
-  const scoped = searchConfig?.[key];
-  if (!scoped || typeof scoped !== "object" || Array.isArray(scoped)) {
-    return undefined;
-  }
-  return (scoped as Record<string, unknown>).apiKey;
+  return asOptionalRecord(searchConfig?.[key])?.apiKey;
 }
 
 export function setScopedCredentialValue(
@@ -28,37 +27,32 @@ export function setScopedCredentialValue(
   key: string,
   value: unknown,
 ): void {
-  const scoped = searchConfigTarget[key];
-  if (!scoped || typeof scoped !== "object" || Array.isArray(scoped)) {
-    searchConfigTarget[key] = { apiKey: value };
-    return;
-  }
-  (scoped as Record<string, unknown>).apiKey = value;
+  ensureObject(searchConfigTarget, key).apiKey = value;
 }
 
+/** Projects plugin web-search config into the provider-scoped tool-local shape. */
 export function mergeScopedSearchConfig(
   searchConfig: Record<string, unknown> | undefined,
   key: string,
   pluginConfig: Record<string, unknown> | undefined,
   options?: { mirrorApiKeyToTopLevel?: boolean },
 ): Record<string, unknown> | undefined {
+  const next: Record<string, unknown> = { ...searchConfig };
+  delete next.apiKey;
+  if (isLegacyWebSearchProviderConfigKey(key)) {
+    delete next[key];
+  }
   if (!pluginConfig) {
-    return searchConfig;
+    return Object.keys(next).length > 0 ? next : undefined;
   }
 
-  const currentScoped =
-    searchConfig?.[key] &&
-    typeof searchConfig[key] === "object" &&
-    !Array.isArray(searchConfig[key])
-      ? (searchConfig[key] as Record<string, unknown>)
-      : {};
-  const next: Record<string, unknown> = {
-    ...searchConfig,
-    [key]: {
-      ...currentScoped,
-      ...pluginConfig,
-    },
-  };
+  // Provider-local projections are runtime-only and must never reserialize into tools.web.search.
+  Object.defineProperty(next, key, {
+    value: { ...pluginConfig },
+    enumerable: false,
+    configurable: true,
+    writable: true,
+  });
 
   if (options?.mirrorApiKeyToTopLevel && pluginConfig.apiKey !== undefined) {
     next.apiKey = pluginConfig.apiKey;
@@ -67,23 +61,17 @@ export function mergeScopedSearchConfig(
   return next;
 }
 
-export function resolveProviderWebSearchPluginConfig(
-  config: OpenClawConfig | undefined,
-  pluginId: string,
-): Record<string, unknown> | undefined {
-  return resolvePluginWebSearchConfig(config, pluginId);
-}
-
 function ensureObject(target: Record<string, unknown>, key: string): Record<string, unknown> {
-  const current = target[key];
-  if (current && typeof current === "object" && !Array.isArray(current)) {
-    return current as Record<string, unknown>;
+  const current = asOptionalRecord(target[key]);
+  if (current) {
+    return current;
   }
   const next: Record<string, unknown> = {};
   target[key] = next;
   return next;
 }
 
+/** Writes a single plugin-owned web-search config value and enables the plugin entry if needed. */
 export function setProviderWebSearchPluginConfigValue(
   configTarget: OpenClawConfig,
   pluginId: string,

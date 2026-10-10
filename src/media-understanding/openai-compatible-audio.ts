@@ -1,6 +1,11 @@
+import { resolveMediaUnderstandingString } from "../../packages/media-understanding-common/src/openai-compatible-video.js";
+import { OPENAI_AUDIO_TRANSCRIPTIONS_API } from "./openai-audio-api.js";
+// OpenAI-compatible audio transcription adapter for providers exposing the
+// /audio/transcriptions API shape.
 import {
   assertOkOrThrowHttpError,
   buildAudioTranscriptionFormData,
+  buildOpenAiCompatibleAuthHeaders,
   postTranscriptionRequest,
   readProviderJsonObjectResponse,
   resolveProviderHttpRequestConfig,
@@ -14,11 +19,7 @@ type OpenAiCompatibleAudioParams = AudioTranscriptionRequest & {
   provider?: string;
 };
 
-function resolveModel(model: string | undefined, fallback: string): string {
-  const trimmed = model?.trim();
-  return trimmed || fallback;
-}
-
+/** Sends an OpenAI-compatible audio transcription request and returns validated text output. */
 export async function transcribeOpenAiCompatibleAudio(
   params: OpenAiCompatibleAudioParams,
 ): Promise<AudioTranscriptionResult> {
@@ -29,17 +30,16 @@ export async function transcribeOpenAiCompatibleAudio(
       defaultBaseUrl: params.defaultBaseUrl,
       headers: params.headers,
       request: params.request,
-      defaultHeaders: {
-        authorization: `Bearer ${params.apiKey}`,
-      },
+      defaultHeaders: buildOpenAiCompatibleAuthHeaders(params),
       provider: params.provider,
-      api: "openai-audio-transcriptions",
+      api: OPENAI_AUDIO_TRANSCRIPTIONS_API,
       capability: "audio",
       transport: "media-understanding",
     });
   const url = `${baseUrl}/audio/transcriptions`;
 
-  const model = resolveModel(params.model, params.defaultModel);
+  const model = resolveMediaUnderstandingString(params.model, params.defaultModel);
+  // Keep multipart construction centralized so provider tests cover filename and MIME behavior.
   const form = buildAudioTranscriptionFormData({
     buffer: params.buffer,
     fileName: params.fileName,
@@ -56,6 +56,7 @@ export async function transcribeOpenAiCompatibleAudio(
     headers,
     body: form,
     timeoutMs: params.timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
     fetchFn,
     pinDns: false,
     allowPrivateNetwork,
@@ -63,9 +64,11 @@ export async function transcribeOpenAiCompatibleAudio(
   });
 
   try {
-    await assertOkOrThrowHttpError(res, "Audio transcription failed");
+    await assertOkOrThrowHttpError(res, "Audio transcription failed", { requestHeaders: headers });
 
-    const payload = await readProviderJsonObjectResponse(res, "Audio transcription failed");
+    const payload = await readProviderJsonObjectResponse(res, "Audio transcription failed", {
+      requestHeaders: headers,
+    });
     const text = requireTranscriptionText(
       typeof payload.text === "string" ? payload.text : undefined,
       "Audio transcription response missing text",

@@ -1,9 +1,15 @@
-import type { ReplyPayload } from "./reply-payload.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString as readString } from "@openclaw/normalization-core/string-coerce";
+import { assertCronJobScratchContent } from "../cron/scratch-contract.js";
+import { readTrimmedStringAlias } from "../utils/string-readers.js";
+import { setReplyPayloadMetadata, type ReplyPayload } from "./reply-payload.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
+/** Tool name used by heartbeat runs to report visible or silent progress. */
 export const HEARTBEAT_RESPONSE_TOOL_NAME = "heartbeat_respond";
 const HEARTBEAT_RESPONSE_CHANNEL_DATA_KEY = "openclawHeartbeatResponse";
 
+/** Allowed heartbeat response outcomes. */
 export const HEARTBEAT_TOOL_OUTCOMES = [
   "no_change",
   "progress",
@@ -13,9 +19,11 @@ export const HEARTBEAT_TOOL_OUTCOMES = [
 ] as const;
 type HeartbeatToolOutcome = (typeof HEARTBEAT_TOOL_OUTCOMES)[number];
 
+/** Allowed heartbeat notification priorities. */
 export const HEARTBEAT_TOOL_PRIORITIES = ["low", "normal", "high"] as const;
 type HeartbeatToolPriority = (typeof HEARTBEAT_TOOL_PRIORITIES)[number];
 
+/** Normalized response emitted by the heartbeat response tool. */
 export type HeartbeatToolResponse = {
   outcome: HeartbeatToolOutcome;
   notify: boolean;
@@ -24,54 +32,37 @@ export type HeartbeatToolResponse = {
   reason?: string;
   priority?: HeartbeatToolPriority;
   nextCheck?: string;
+  /** Complete replacement for the current heartbeat monitor's private scratch. */
+  scratch?: string;
 };
 
 const OUTCOMES = new Set<string>(HEARTBEAT_TOOL_OUTCOMES);
 const PRIORITIES = new Set<string>(HEARTBEAT_TOOL_PRIORITIES);
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function readStringAlias(record: Record<string, unknown>, ...keys: string[]) {
-  for (const key of keys) {
-    const value = readString(record[key]);
-    if (value) {
-      return value;
-    }
-  }
-  return undefined;
-}
-
-function readBooleanAlias(record: Record<string, unknown>, ...keys: string[]) {
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "boolean") {
-      return value;
-    }
-  }
-  return undefined;
-}
-
+/** Validate and normalize unknown heartbeat tool output. */
 export function normalizeHeartbeatToolResponse(value: unknown): HeartbeatToolResponse | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
   const outcome = readString(value.outcome);
-  const notify = readBooleanAlias(value, "notify");
+  const notify = typeof value.notify === "boolean" ? value.notify : undefined;
   const summary = readString(value.summary);
   if (!outcome || !OUTCOMES.has(outcome) || notify === undefined || !summary) {
     return undefined;
   }
 
   const priority = readString(value.priority);
-  const notificationText = readStringAlias(value, "notificationText", "notification_text");
+  const notificationText = readTrimmedStringAlias(value, ["notificationText", "notification_text"]);
   const reason = readString(value.reason);
-  const nextCheck = readStringAlias(value, "nextCheck", "next_check");
+  const nextCheck = readTrimmedStringAlias(value, ["nextCheck", "next_check"]);
+  const scratch = typeof value.scratch === "string" ? value.scratch : undefined;
+  if (scratch !== undefined) {
+    try {
+      assertCronJobScratchContent(scratch);
+    } catch {
+      return undefined;
+    }
+  }
   return {
     outcome: outcome as HeartbeatToolOutcome,
     notify,
@@ -82,41 +73,45 @@ export function normalizeHeartbeatToolResponse(value: unknown): HeartbeatToolRes
       ? { priority: priority as HeartbeatToolPriority }
       : {}),
     ...(nextCheck ? { nextCheck } : {}),
+    ...(scratch !== undefined ? { scratch } : {}),
   };
 }
 
+/** Resolve the user-visible notification text for a heartbeat response. */
 export function getHeartbeatToolNotificationText(response: HeartbeatToolResponse): string {
   return response.notify ? (response.notificationText ?? response.summary).trim() : "";
 }
 
+/** Store public heartbeat response metadata while keeping scratch process-private. */
 export function createHeartbeatToolResponsePayload(response: HeartbeatToolResponse): ReplyPayload {
-  return {
+  const { scratch, ...publicResponse } = response;
+  const payload: ReplyPayload = {
     text: response.notify ? getHeartbeatToolNotificationText(response) : HEARTBEAT_TOKEN,
     channelData: {
-      [HEARTBEAT_RESPONSE_CHANNEL_DATA_KEY]: response,
+      [HEARTBEAT_RESPONSE_CHANNEL_DATA_KEY]: publicResponse,
     },
   };
+  if (scratch !== undefined) {
+    setReplyPayloadMetadata(payload, { heartbeatScratchProposal: scratch });
+  }
+  return payload;
 }
 
-function getHeartbeatToolResponseFromPayload(
-  payload: ReplyPayload | undefined,
-): HeartbeatToolResponse | undefined {
-  return normalizeHeartbeatToolResponse(
-    payload?.channelData?.[HEARTBEAT_RESPONSE_CHANNEL_DATA_KEY],
-  );
-}
-
-export function resolveHeartbeatToolResponseFromReplyResult(
+/** Select the newest valid response and retain its private metadata carrier. */
+export function selectHeartbeatToolResponse(
   replyResult: ReplyPayload | ReplyPayload[] | undefined,
-): HeartbeatToolResponse | undefined {
+): { response: HeartbeatToolResponse; payload: ReplyPayload } | undefined {
   if (!replyResult) {
     return undefined;
   }
   const payloads = Array.isArray(replyResult) ? replyResult : [replyResult];
   for (let idx = payloads.length - 1; idx >= 0; idx -= 1) {
-    const response = getHeartbeatToolResponseFromPayload(payloads[idx]);
-    if (response) {
-      return response;
+    const payload = payloads[idx];
+    const response = normalizeHeartbeatToolResponse(
+      payload?.channelData?.[HEARTBEAT_RESPONSE_CHANNEL_DATA_KEY],
+    );
+    if (response && payload) {
+      return { response, payload };
     }
   }
   return undefined;

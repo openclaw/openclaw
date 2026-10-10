@@ -1,13 +1,16 @@
 ---
-summary: "Adds OpenAI, OpenAI Codex model provider support to OpenClaw."
+summary: "Adds OpenAI model provider support to OpenClaw."
 read_when:
   - You are installing, configuring, or auditing the openai plugin
-title: "OpenAI plugin"
+title: "OpenAI plugin reference"
 ---
 
-# OpenAI plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
-Adds OpenAI, OpenAI Codex model provider support to OpenClaw.
+Adds OpenAI model provider support to OpenClaw.
 
 ## Distribution
 
@@ -16,7 +19,8 @@ Adds OpenAI, OpenAI Codex model provider support to OpenClaw.
 
 ## Surface
 
-providers: openai, openai-codex; contracts: imageGenerationProviders, mediaUnderstandingProviders, memoryEmbeddingProviders, realtimeTranscriptionProviders, realtimeVoiceProviders, speechProviders, videoGenerationProviders
+- Providers: `openai`
+- Contracts: `embeddingProviders`, `imageGenerationProviders`, `mediaUnderstandingProviders`, `realtimeTranscriptionProviders`, `realtimeVoiceProviders`, `speechProviders`, `usageProviders`
 
 ## Related docs
 

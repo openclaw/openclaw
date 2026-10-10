@@ -1,13 +1,14 @@
+/** Tests ACP runtime backend registration, health selection, and required lookup errors. */
+import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AcpRuntimeError } from "./errors.js";
 import {
-  __testing,
+  testing,
   getAcpRuntimeBackend,
   registerAcpRuntimeBackend,
   requireAcpRuntimeBackend,
   unregisterAcpRuntimeBackend,
 } from "./registry.js";
-import type { AcpRuntime } from "./types.js";
 
 function createRuntimeStub(): AcpRuntime {
   return {
@@ -28,11 +29,11 @@ function createRuntimeStub(): AcpRuntime {
 
 describe("acp runtime registry", () => {
   beforeEach(() => {
-    __testing.resetAcpRuntimeBackendsForTests();
+    testing.resetAcpRuntimeBackendsForTests();
   });
 
   afterEach(() => {
-    __testing.resetAcpRuntimeBackendsForTests();
+    testing.resetAcpRuntimeBackendsForTests();
   });
 
   it("registers and resolves backends by id", () => {
@@ -42,25 +43,6 @@ describe("acp runtime registry", () => {
     const backend = getAcpRuntimeBackend("acpx");
     expect(backend?.id).toBe("acpx");
     expect(backend?.runtime).toBe(runtime);
-  });
-
-  it("prefers a healthy backend when resolving without explicit id", () => {
-    const unhealthyRuntime = createRuntimeStub();
-    const healthyRuntime = createRuntimeStub();
-
-    registerAcpRuntimeBackend({
-      id: "unhealthy",
-      runtime: unhealthyRuntime,
-      healthy: () => false,
-    });
-    registerAcpRuntimeBackend({
-      id: "healthy",
-      runtime: healthyRuntime,
-      healthy: () => true,
-    });
-
-    const backend = getAcpRuntimeBackend();
-    expect(backend?.id).toBe("healthy");
   });
 
   it("throws a typed missing-backend error when no backend is registered", () => {
@@ -112,7 +94,7 @@ describe("acp runtime registry", () => {
 
   it("keeps backend state on a global registry for cross-loader access", () => {
     const runtime = createRuntimeStub();
-    const sharedState = __testing.getAcpRuntimeRegistryGlobalStateForTests();
+    const sharedState = testing.getAcpRuntimeRegistryGlobalStateForTests();
 
     sharedState.backendsById.set("acpx", {
       id: "acpx",

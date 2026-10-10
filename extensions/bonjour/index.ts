@@ -26,13 +26,13 @@ export default definePluginEntry({
           import("./src/advertiser.js"),
           import("openclaw/plugin-sdk/runtime"),
         ]);
-        const advertiser = await startGatewayBonjourAdvertiser(
+        return startGatewayBonjourAdvertiser(
           {
             instanceName: formatBonjourInstanceName(ctx.machineDisplayName),
             gatewayPort: ctx.gatewayPort,
             gatewayTlsEnabled: ctx.gatewayTlsEnabled,
             gatewayTlsFingerprintSha256: ctx.gatewayTlsFingerprintSha256,
-            canvasPort: ctx.canvasPort,
+            gatewayDirectReachable: ctx.gatewayDirectReachable,
             sshPort: ctx.sshPort,
             tailnetDns: ctx.tailnetDns,
             cliPath: ctx.cliPath,
@@ -44,7 +44,6 @@ export default definePluginEntry({
             registerUnhandledRejectionHandler,
           },
         );
-        return { stop: advertiser.stop };
       },
     });
   },

@@ -1,88 +1,75 @@
-import { updateSessionStore } from "../../config/sessions/store.js";
-import { mergeSessionEntry, type SessionEntry } from "../../config/sessions/types.js";
+/** Shared session persistence for agent attempt execution. */
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
+import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import {
-  formatAgentInternalEventsForPlainPrompt,
-  formatAgentInternalEventsForPrompt,
-} from "../internal-events.js";
-import {
-  hasInternalRuntimeContext,
-  stripInternalRuntimeContext,
-} from "../internal-runtime-context.js";
-import type { AgentCommandOpts } from "./types.js";
-
-export type PersistSessionEntryParams = {
+  sessionEntryCommitGuardOptions,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
+type PersistSessionEntryParams = {
+  agentId: string;
   sessionStore: Record<string, SessionEntry>;
   sessionKey: string;
   storePath: string;
+  initialEntry: SessionEntry;
   entry: SessionEntry;
-  clearedFields?: string[];
+  creation?: Parameters<typeof buildSessionCreationStamp>[0];
+  assertCommitAllowed?: SessionSourceAssertion;
   shouldPersist?: (entry: SessionEntry | undefined) => boolean;
 };
 
-export async function persistSessionEntry(
+/** Persists one session entry while keeping the caller's in-memory store aligned. */
+export async function persistAgentSession(
   params: PersistSessionEntryParams,
 ): Promise<SessionEntry | undefined> {
-  const persisted = await updateSessionStore(params.storePath, (store) => {
-    const current = store[params.sessionKey];
-    if (params.shouldPersist && !params.shouldPersist(current)) {
-      return current;
-    }
-    const merged = mergeSessionEntry(store[params.sessionKey], params.entry);
-    for (const field of params.clearedFields ?? []) {
-      if (!Object.hasOwn(params.entry, field)) {
-        Reflect.deleteProperty(merged, field);
+  let rejectedMissingEntry = false;
+  let published = false;
+  const persisted = await patchSessionEntryCore(
+    { agentId: params.agentId, sessionKey: params.sessionKey, storePath: params.storePath },
+    (_entry, context) => {
+      const shouldPersistCurrent = params.shouldPersist?.(context.existingEntry);
+      if (
+        (!context.existingEntry && shouldPersistCurrent !== true) ||
+        shouldPersistCurrent === false
+      ) {
+        rejectedMissingEntry = !context.existingEntry;
+        return null;
       }
-    }
-    store[params.sessionKey] = merged;
-    return merged;
-  });
-  if (persisted) {
-    params.sessionStore[params.sessionKey] = persisted;
-  } else {
+      if (!context.existingEntry) {
+        return {
+          ...params.entry,
+          ...(params.creation ? buildSessionCreationStamp(params.creation) : {}),
+        };
+      }
+      if (context.existingEntry.sessionId !== params.initialEntry.sessionId) {
+        return null;
+      }
+      // Agent turns persist broad snapshots. Project only this turn's changes
+      // so a stale snapshot cannot restore fields changed or cleared meanwhile.
+      return mergeSessionSnapshotChanges({
+        initial: params.initialEntry,
+        next: params.entry,
+        current: context.existingEntry,
+      });
+    },
+    {
+      fallbackEntry: params.sessionStore[params.sessionKey] ?? params.entry,
+      replaceEntry: true,
+      ...sessionEntryCommitGuardOptions(params.assertCommitAllowed),
+      requireWriteSuccess: params.creation !== undefined,
+      onCommitted: (entry) => {
+        published = true;
+        params.sessionStore[params.sessionKey] = entry;
+      },
+    },
+  );
+  if (rejectedMissingEntry || !persisted) {
     delete params.sessionStore[params.sessionKey];
+    return undefined;
+  }
+  if (!published) {
+    params.sessionStore[params.sessionKey] = persisted;
   }
   return persisted;
-}
-
-export function prependInternalEventContext(
-  body: string,
-  events: AgentCommandOpts["internalEvents"],
-): string {
-  if (hasInternalRuntimeContext(body)) {
-    return body;
-  }
-  const renderedEvents = formatAgentInternalEventsForPrompt(events);
-  if (!renderedEvents) {
-    return body;
-  }
-  return [renderedEvents, body].filter(Boolean).join("\n\n");
-}
-
-function resolvePlainInternalEventBody(
-  body: string,
-  events: AgentCommandOpts["internalEvents"],
-): string {
-  const renderedEvents = formatAgentInternalEventsForPlainPrompt(events);
-  if (!renderedEvents) {
-    return body;
-  }
-  const visibleBody = stripInternalRuntimeContext(body).trim();
-  return [renderedEvents, visibleBody].filter(Boolean).join("\n\n") || body;
-}
-
-export function resolveAcpPromptBody(
-  body: string,
-  events: AgentCommandOpts["internalEvents"],
-): string {
-  return events?.length ? resolvePlainInternalEventBody(body, events) : body;
-}
-
-export function resolveInternalEventTranscriptBody(
-  body: string,
-  events: AgentCommandOpts["internalEvents"],
-): string {
-  if (!hasInternalRuntimeContext(body)) {
-    return body;
-  }
-  return resolvePlainInternalEventBody(body, events);
 }

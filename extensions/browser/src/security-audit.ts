@@ -2,10 +2,12 @@ import type { OpenClawPluginSecurityAuditContext } from "openclaw/plugin-sdk/plu
 import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
 import { isPrivateNetworkOptInEnabled, isPrivateIpAddress } from "openclaw/plugin-sdk/ssrf-policy";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  hasNonEmptyString,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { redactCdpUrl, resolveBrowserConfig, resolveProfile } from "./browser/config.js";
 import { resolveBrowserControlAuth } from "./browser/control-auth.js";
-import { hasNonEmptyString } from "./record-shared.js";
 
 const BLOCKED_HOSTNAMES = new Set([
   "localhost",
@@ -43,6 +45,18 @@ export function collectBrowserSecurityAuditFindings(ctx: OpenClawPluginSecurityA
 
   if (!resolved.enabled) {
     return findings;
+  }
+
+  if (resolved.extensionRelay.allowLegacyAuth) {
+    findings.push({
+      checkId: "browser.extension_relay_legacy_auth",
+      severity: "warn" as const,
+      title: "Legacy browser extension relay authentication is enabled",
+      detail:
+        "browser.extensionRelay.allowLegacyAuth defaults to true for one migration window, so old relay Bearer, Basic, and token-subprotocol clients can still authenticate.",
+      remediation:
+        "Update paired Chrome extensions and external CDP clients to Browser Relay Authentication v2, then set browser.extensionRelay.allowLegacyAuth=false.",
+    });
   }
 
   const browserAuth = resolveBrowserControlAuth(ctx.config, ctx.env);
@@ -83,10 +97,8 @@ export function collectBrowserSecurityAuditFindings(ctx: OpenClawPluginSecurityA
     if (!profile || profile.cdpIsLoopback) {
       continue;
     }
-    let url: URL;
-    try {
-      url = new URL(profile.cdpUrl);
-    } catch {
+    const url = URL.parse(profile.cdpUrl);
+    if (!url) {
       continue;
     }
     const redactedCdpUrl = redactCdpUrl(profile.cdpUrl) ?? profile.cdpUrl;

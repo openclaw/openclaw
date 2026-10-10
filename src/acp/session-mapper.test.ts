@@ -1,6 +1,7 @@
+/** Tests ACP metadata session-key resolution against Gateway defaults and lookups. */
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
-import { parseSessionMeta, resolveSessionKey } from "./session-mapper.js";
+import { parseSessionMeta, resolveAcpSessionKey } from "./session-mapper.js";
 
 function createGateway(resolveLabelKey = "agent:main:label"): {
   gateway: GatewayClient;
@@ -27,7 +28,7 @@ describe("acp session mapper", () => {
     const { gateway, request } = createGateway();
     const meta = parseSessionMeta({ sessionLabel: "support", sessionKey: "agent:main:main" });
 
-    const key = await resolveSessionKey({
+    const key = await resolveAcpSessionKey({
       meta,
       fallbackKey: "acp:fallback",
       gateway,
@@ -43,7 +44,7 @@ describe("acp session mapper", () => {
     const { gateway, request } = createGateway();
     const meta = parseSessionMeta({ sessionKey: "agent:main:override" });
 
-    const key = await resolveSessionKey({
+    const key = await resolveAcpSessionKey({
       meta,
       fallbackKey: "acp:fallback",
       gateway,
@@ -52,5 +53,56 @@ describe("acp session mapper", () => {
 
     expect(key).toBe("agent:main:override");
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "resolves the default label ahead of the default key",
+      meta: {},
+      opts: { defaultSessionLabel: "default-label", defaultSessionKey: "default-key" },
+      expected: "agent:main:label",
+      lookup: { label: "default-label" },
+    },
+    {
+      name: "uses the default key without a lookup",
+      meta: {},
+      opts: { defaultSessionKey: "default-key" },
+      expected: "default-key",
+      lookup: undefined,
+    },
+    {
+      name: "resolves an existing default key",
+      meta: {},
+      opts: { defaultSessionKey: "default-key", requireExistingSession: true },
+      expected: "default-key",
+      lookup: { key: "default-key" },
+    },
+    {
+      name: "resolves an explicit existing key ahead of the default label",
+      meta: { sessionKey: "explicit-key", requireExisting: true },
+      opts: { defaultSessionLabel: "default-label" },
+      expected: "explicit-key",
+      lookup: { key: "explicit-key" },
+    },
+    {
+      name: "allows metadata to disable the default existing-key requirement",
+      meta: { requireExisting: false },
+      opts: { defaultSessionKey: "default-key", requireExistingSession: true },
+      expected: "default-key",
+      lookup: undefined,
+    },
+    {
+      name: "uses the fallback without a lookup when routing is unset",
+      meta: {},
+      opts: { requireExistingSession: true },
+      expected: "acp:fallback",
+      lookup: undefined,
+    },
+  ])("$name", async ({ meta, opts, expected, lookup }) => {
+    const { gateway, request } = createGateway();
+    expect(await resolveAcpSessionKey({ meta, opts, gateway, fallbackKey: "acp:fallback" })).toBe(
+      expected,
+    );
+    expect(request.mock.calls).toEqual(lookup ? [["sessions.resolve", lookup]] : []);
   });
 });

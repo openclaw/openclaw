@@ -1,26 +1,51 @@
+/** Strict dotted-path get/set/delete helpers for secrets migration targets. */
 import { isDeepStrictEqual } from "node:util";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import type { ConcreteConfigPathSegment } from "../shared/dot-path.js";
+import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { isRecord } from "./shared.js";
 
-function isArrayIndexSegment(segment: string): boolean {
-  return /^\d+$/.test(segment);
+function requireArrayIndexSegment(segment: string, pathLabel: string): number {
+  const index = parseConfigPathArrayIndex(segment);
+  if (index === undefined) {
+    throw new Error(`Invalid array index segment "${segment}" at ${pathLabel}.`);
+  }
+  return index;
 }
 
-function expectedContainer(nextSegment: string): "array" | "object" {
-  return isArrayIndexSegment(nextSegment) ? "array" : "object";
+function assertSafeMutationPath(segments: readonly ConcreteConfigPathSegment[]): void {
+  if (segments.length === 0) {
+    throw new Error("Target path is empty.");
+  }
+  const blockedSegment = segments.find(
+    (segment) => typeof segment === "string" && isBlockedObjectKey(segment),
+  );
+  if (blockedSegment) {
+    throw new Error(`Refusing to mutate prototype-polluting path segment "${blockedSegment}".`);
+  }
 }
 
 function parseArrayLeafTarget(
   cursor: unknown,
-  leaf: string,
-  segments: string[],
+  leaf: ConcreteConfigPathSegment,
+  segments: readonly ConcreteConfigPathSegment[],
 ): { array: unknown[]; index: number } | null {
   if (!Array.isArray(cursor)) {
     return null;
   }
-  if (!isArrayIndexSegment(leaf)) {
-    throw new Error(`Invalid array index segment "${leaf}" at ${segments.join(".")}.`);
+  return { array: cursor, index: requireArrayIndexSegment(String(leaf), segments.join(".")) };
+}
+
+function setLeafValueIfChanged<Key extends string | number>(
+  target: Record<Key, unknown>,
+  key: Key,
+  value: unknown,
+): boolean {
+  if (isDeepStrictEqual(target[key], value)) {
+    return false;
   }
-  return { array: cursor, index: Number.parseInt(leaf, 10) };
+  target[key] = value;
+  return true;
 }
 
 function traverseToLeafParent(params: {
@@ -28,20 +53,14 @@ function traverseToLeafParent(params: {
   segments: string[];
   requireExistingSegment: boolean;
 }): unknown {
-  if (params.segments.length === 0) {
-    throw new Error("Target path is empty.");
-  }
+  assertSafeMutationPath(params.segments);
 
   let cursor: unknown = params.root;
   for (let index = 0; index < params.segments.length - 1; index += 1) {
     const segment = params.segments[index] ?? "";
     if (Array.isArray(cursor)) {
-      if (!isArrayIndexSegment(segment)) {
-        throw new Error(
-          `Invalid array index segment "${segment}" at ${params.segments.join(".")}.`,
-        );
-      }
-      const arrayIndex = Number.parseInt(segment, 10);
+      const arrayIndex = requireArrayIndexSegment(segment, params.segments.join("."));
+      // Existing-path mutations must fail before the leaf so callers do not create partial config.
       if (params.requireExistingSegment && (arrayIndex < 0 || arrayIndex >= cursor.length)) {
         throw new Error(
           `Path segment does not exist at ${params.segments.slice(0, index + 1).join(".")}.`,
@@ -56,7 +75,7 @@ function traverseToLeafParent(params: {
         `Invalid path shape at ${params.segments.slice(0, index).join(".") || "<root>"}.`,
       );
     }
-    if (params.requireExistingSegment && !Object.prototype.hasOwnProperty.call(cursor, segment)) {
+    if (params.requireExistingSegment && !Object.hasOwn(cursor, segment)) {
       throw new Error(
         `Path segment does not exist at ${params.segments.slice(0, index + 1).join(".")}.`,
       );
@@ -66,6 +85,10 @@ function traverseToLeafParent(params: {
   return cursor;
 }
 
+/**
+ * Reads a config path from object/array containers.
+ * Missing containers, invalid array indexes, and scalar parents resolve to undefined.
+ */
 export function getPath(root: unknown, segments: string[]): unknown {
   if (segments.length === 0) {
     return undefined;
@@ -73,10 +96,11 @@ export function getPath(root: unknown, segments: string[]): unknown {
   let cursor: unknown = root;
   for (const segment of segments) {
     if (Array.isArray(cursor)) {
-      if (!isArrayIndexSegment(segment)) {
+      const arrayIndex = parseConfigPathArrayIndex(segment);
+      if (arrayIndex === undefined) {
         return undefined;
       }
-      cursor = cursor[Number.parseInt(segment, 10)];
+      cursor = cursor[arrayIndex];
       continue;
     }
     if (!isRecord(cursor)) {
@@ -87,70 +111,69 @@ export function getPath(root: unknown, segments: string[]): unknown {
   return cursor;
 }
 
+/**
+ * Sets a config path using token types as the sole authority for object-versus-array shape.
+ */
 export function setPathCreateStrict(
   root: Record<string, unknown>,
-  segments: string[],
+  segments: readonly ConcreteConfigPathSegment[],
   value: unknown,
 ): boolean {
-  if (segments.length === 0) {
-    throw new Error("Target path is empty.");
-  }
+  assertSafeMutationPath(segments);
   let cursor: unknown = root;
   let changed = false;
 
   for (let index = 0; index < segments.length - 1; index += 1) {
     const segment = segments[index] ?? "";
-    const nextSegment = segments[index + 1] ?? "";
-    const needs = expectedContainer(nextSegment);
+    const needsArray = typeof segments[index + 1] === "number";
 
     if (Array.isArray(cursor)) {
-      if (!isArrayIndexSegment(segment)) {
-        throw new Error(`Invalid array index segment "${segment}" at ${segments.join(".")}.`);
+      if (typeof segment !== "number") {
+        throw new Error(`Invalid path shape at ${segments.slice(0, index).join(".") || "<root>"}.`);
       }
-      const arrayIndex = Number.parseInt(segment, 10);
+      const arrayIndex = requireArrayIndexSegment(String(segment), segments.join("."));
       const existing = cursor[arrayIndex];
       if (existing === undefined || existing === null) {
-        cursor[arrayIndex] = needs === "array" ? [] : {};
+        cursor[arrayIndex] = needsArray ? [] : {};
         changed = true;
-      } else if (needs === "array" ? !Array.isArray(existing) : !isRecord(existing)) {
+      } else if (needsArray ? !Array.isArray(existing) : !isRecord(existing)) {
         throw new Error(`Invalid path shape at ${segments.slice(0, index + 1).join(".")}.`);
       }
       cursor = cursor[arrayIndex];
       continue;
     }
 
-    if (!isRecord(cursor)) {
+    if (!isRecord(cursor) || typeof segment !== "string") {
       throw new Error(`Invalid path shape at ${segments.slice(0, index).join(".") || "<root>"}.`);
     }
     const existing = cursor[segment];
     if (existing === undefined || existing === null) {
-      cursor[segment] = needs === "array" ? [] : {};
+      cursor[segment] = needsArray ? [] : {};
       changed = true;
-    } else if (needs === "array" ? !Array.isArray(existing) : !isRecord(existing)) {
+    } else if (needsArray ? !Array.isArray(existing) : !isRecord(existing)) {
       throw new Error(`Invalid path shape at ${segments.slice(0, index + 1).join(".")}.`);
     }
     cursor = cursor[segment];
   }
 
   const leaf = segments[segments.length - 1] ?? "";
-  const arrayTarget = parseArrayLeafTarget(cursor, leaf, segments);
-  if (arrayTarget) {
-    if (!isDeepStrictEqual(arrayTarget.array[arrayTarget.index], value)) {
-      arrayTarget.array[arrayTarget.index] = value;
-      changed = true;
-    }
-    return changed;
-  }
-  if (!isRecord(cursor)) {
+  if (Array.isArray(cursor) !== (typeof leaf === "number")) {
     throw new Error(`Invalid path shape at ${segments.slice(0, -1).join(".") || "<root>"}.`);
   }
-  if (!isDeepStrictEqual(cursor[leaf], value)) {
-    cursor[leaf] = value;
-    changed = true;
+  const arrayTarget = parseArrayLeafTarget(cursor, leaf, segments);
+  if (arrayTarget) {
+    return setLeafValueIfChanged(arrayTarget.array, arrayTarget.index, value) || changed;
   }
-  return changed;
+  if (!isRecord(cursor) || typeof leaf !== "string") {
+    throw new Error(`Invalid path shape at ${segments.slice(0, -1).join(".") || "<root>"}.`);
+  }
+  return setLeafValueIfChanged(cursor, leaf, value) || changed;
 }
 
+/**
+ * Sets an existing config path and throws if any parent or leaf segment is missing.
+ * Used by runtime resolution paths that must only replace values proven by source discovery.
+ */
 export function setPathExistingStrict(
   root: Record<string, unknown>,
   segments: string[],
@@ -164,25 +187,21 @@ export function setPathExistingStrict(
     if (arrayTarget.index < 0 || arrayTarget.index >= arrayTarget.array.length) {
       throw new Error(`Path segment does not exist at ${segments.join(".")}.`);
     }
-    if (!isDeepStrictEqual(arrayTarget.array[arrayTarget.index], value)) {
-      arrayTarget.array[arrayTarget.index] = value;
-      return true;
-    }
-    return false;
+    return setLeafValueIfChanged(arrayTarget.array, arrayTarget.index, value);
   }
   if (!isRecord(cursor)) {
     throw new Error(`Invalid path shape at ${segments.slice(0, -1).join(".") || "<root>"}.`);
   }
-  if (!Object.prototype.hasOwnProperty.call(cursor, leaf)) {
+  if (!Object.hasOwn(cursor, leaf)) {
     throw new Error(`Path segment does not exist at ${segments.join(".")}.`);
   }
-  if (!isDeepStrictEqual(cursor[leaf], value)) {
-    cursor[leaf] = value;
-    return true;
-  }
-  return false;
+  return setLeafValueIfChanged(cursor, leaf, value);
 }
 
+/**
+ * Deletes an existing config path, returning whether anything was removed.
+ * Array deletes compact with splice; object deletes remove only the concrete leaf key.
+ */
 export function deletePathStrict(root: Record<string, unknown>, segments: string[]): boolean {
   const cursor = traverseToLeafParent({ root, segments, requireExistingSegment: false });
 
@@ -199,7 +218,7 @@ export function deletePathStrict(root: Record<string, unknown>, segments: string
   if (!isRecord(cursor)) {
     throw new Error(`Invalid path shape at ${segments.slice(0, -1).join(".") || "<root>"}.`);
   }
-  if (!Object.prototype.hasOwnProperty.call(cursor, leaf)) {
+  if (!Object.hasOwn(cursor, leaf)) {
     return false;
   }
   delete cursor[leaf];

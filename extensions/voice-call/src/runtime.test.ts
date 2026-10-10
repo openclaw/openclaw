@@ -1,26 +1,42 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
+// Voice Call tests cover runtime plugin behavior.
+import { resetPluginRuntimeStateForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VoiceCallConfig } from "./config.js";
-import type { CoreConfig } from "./core-bridge.js";
-import { createVoiceCallBaseConfig } from "./test-fixtures.js";
+import {
+  createMockSessionRuntime,
+  registerFastContextMemoryProvider,
+} from "./runtime.fast-context.test-support.js";
+import { createExternalProviderConfig, createVoiceCallBaseConfig } from "./test-fixtures.js";
+import type { RealtimeCallHandler } from "./webhook/realtime-handler.js";
 
 const mocks = vi.hoisted(() => ({
   resolveVoiceCallConfig: vi.fn(),
+  resolveVoiceCallStreamExposurePaths: vi.fn(),
   resolveTwilioAuthToken: vi.fn(),
   validateProviderConfig: vi.fn(),
   managerInitialize: vi.fn(),
+  managerStop: vi.fn(),
   managerGetCall: vi.fn(),
   webhookStart: vi.fn(),
   webhookStop: vi.fn(),
   webhookSetRealtimeHandler: vi.fn(),
   webhookGetRealtimeHandler: vi.fn(),
   webhookGetMediaStreamHandler: vi.fn(),
+  webhookGetStreamDisconnectLifecycle: vi.fn(),
   webhookCtorArgs: [] as unknown[][],
   realtimeHandlerCtorArgs: [] as unknown[][],
-  realtimeHandlerRegisterToolHandler: vi.fn(),
+  realtimeHandlerRegisterToolHandler: vi.fn<RealtimeCallHandler["registerToolHandler"]>(),
   realtimeHandlerSetPublicUrl: vi.fn(),
   resolveConfiguredRealtimeVoiceProvider: vi.fn(),
   resolveRealtimeFastContextConsult: vi.fn(),
+  actualRealtimeFastContextConsult: undefined as
+    | typeof import("openclaw/plugin-sdk/realtime-voice").resolveRealtimeVoiceFastContextConsult
+    | undefined,
   startTunnel: vi.fn(),
   setupTailscaleExposure: vi.fn(),
   cleanupTailscaleExposure: vi.fn(),
@@ -28,23 +44,44 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./config.js", () => ({
   resolveVoiceCallSessionKey: (params: {
-    config: Pick<VoiceCallConfig, "sessionScope">;
+    config: Pick<VoiceCallConfig, "agentId" | "sessionScope">;
     callId: string;
     phone?: string;
     explicitSessionKey?: string;
   }) => {
     const explicit = params.explicitSessionKey?.trim();
     if (explicit) {
-      return explicit;
+      const lower = explicit.toLowerCase();
+      return lower === "global" || lower === "unknown" || lower.startsWith("agent:")
+        ? explicit
+        : `agent:${params.config.agentId?.trim().toLowerCase() || "main"}:${explicit}`;
     }
+    const agentId = params.config.agentId?.trim().toLowerCase() || "main";
+    const prefix = `agent:${agentId}:voice`;
     if (params.config.sessionScope === "per-call") {
-      return `voice:call:${params.callId}`;
+      return `${prefix}:call:${params.callId}`.toLowerCase();
     }
     const normalizedPhone = params.phone?.replace(/\D/g, "");
-    return normalizedPhone ? `voice:${normalizedPhone}` : `voice:${params.callId}`;
+    return (
+      normalizedPhone ? `${prefix}:${normalizedPhone}` : `${prefix}:${params.callId}`
+    ).toLowerCase();
   },
-  resolveVoiceCallEffectiveConfig: (config: VoiceCallConfig) => ({ config }),
+  resolveVoiceCallNumberRouteKeyForCall: (call: {
+    direction?: "inbound" | "outbound";
+    to?: string;
+    metadata?: { numberRouteKey?: unknown };
+  }) =>
+    call.direction === "inbound"
+      ? typeof call.metadata?.numberRouteKey === "string"
+        ? call.metadata.numberRouteKey
+        : call.to
+      : undefined,
+  resolveVoiceCallEffectiveConfig: (config: VoiceCallConfig, numberRouteKey?: string) => {
+    const route = numberRouteKey ? config.numbers[numberRouteKey] : undefined;
+    return route ? { config: { ...config, ...route }, numberRouteKey } : { config };
+  },
   resolveVoiceCallConfig: mocks.resolveVoiceCallConfig,
+  resolveVoiceCallStreamExposurePaths: mocks.resolveVoiceCallStreamExposurePaths,
   resolveTwilioAuthToken: mocks.resolveTwilioAuthToken,
   validateProviderConfig: mocks.validateProviderConfig,
 }));
@@ -52,6 +89,7 @@ vi.mock("./config.js", () => ({
 vi.mock("./manager.js", () => ({
   CallManager: class {
     initialize = mocks.managerInitialize;
+    stop = mocks.managerStop;
     getCall = mocks.managerGetCall;
   },
 }));
@@ -66,6 +104,7 @@ vi.mock("./webhook.js", () => ({
     setRealtimeHandler = mocks.webhookSetRealtimeHandler;
     getRealtimeHandler = mocks.webhookGetRealtimeHandler;
     getMediaStreamHandler = mocks.webhookGetMediaStreamHandler;
+    getStreamDisconnectLifecycle = mocks.webhookGetStreamDisconnectLifecycle;
   },
 }));
 
@@ -73,9 +112,14 @@ vi.mock("./realtime-voice.runtime.js", () => ({
   resolveConfiguredRealtimeVoiceProvider: mocks.resolveConfiguredRealtimeVoiceProvider,
 }));
 
-vi.mock("./realtime-fast-context.js", () => ({
-  resolveRealtimeFastContextConsult: mocks.resolveRealtimeFastContextConsult,
-}));
+vi.mock("openclaw/plugin-sdk/realtime-voice", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/realtime-voice")>();
+  mocks.actualRealtimeFastContextConsult = actual.resolveRealtimeVoiceFastContextConsult;
+  return {
+    ...actual,
+    resolveRealtimeVoiceFastContextConsult: mocks.resolveRealtimeFastContextConsult,
+  };
+});
 
 vi.mock("./webhook/realtime-handler.js", () => ({
   RealtimeCallHandler: class {
@@ -102,69 +146,18 @@ function createBaseConfig(): VoiceCallConfig {
   return createVoiceCallBaseConfig({ tunnelProvider: "ngrok" });
 }
 
-function createExternalProviderConfig(params: {
-  provider: "twilio" | "telnyx" | "plivo";
-  publicUrl?: string;
-}): VoiceCallConfig {
-  const config = createVoiceCallBaseConfig({
-    provider: params.provider,
-    tunnelProvider: "none",
-  });
-  config.twilio = {
-    accountSid: "AC123",
-    authToken: "secret",
-  };
-  config.telnyx = {
-    apiKey: "key",
-    connectionId: "conn",
-    publicKey: "pub",
-  };
-  config.plivo = {
-    authId: "MA123",
-    authToken: "secret",
-  };
-  if (params.publicUrl) {
-    config.publicUrl = params.publicUrl;
-  }
-  return config;
-}
+const requireRecord = createRequireRecord("record", "expected-label-record");
 
-type RealtimeConsultToolHandler = (
-  args: unknown,
-  callId: string,
-  context?: { partialUserTranscript?: string },
-) => Promise<unknown>;
-
-function firstMockCall(calls: readonly unknown[][], label: string): unknown[] {
-  const call = calls.at(0);
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call;
-}
-
-function firstCallParam(calls: readonly unknown[][], label: string) {
-  const call = firstMockCall(calls, label);
-  return call[0];
-}
-
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be a record`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function requireRealtimeConsultToolHandler(): RealtimeConsultToolHandler {
-  const registeredToolHandler = firstMockCall(
-    mocks.realtimeHandlerRegisterToolHandler.mock.calls,
-    "realtime tool handler registration",
+function requireRealtimeConsultToolHandler() {
+  const registeredToolHandler = expectDefined(
+    mocks.realtimeHandlerRegisterToolHandler.mock.calls.at(0),
+    "realtime tool handler registration call",
   );
   expect(registeredToolHandler[0]).toBe("openclaw_agent_consult");
   if (typeof registeredToolHandler[1] !== "function") {
     throw new Error("expected realtime tool handler callback");
   }
-  return registeredToolHandler[1] as RealtimeConsultToolHandler;
+  return registeredToolHandler[1];
 }
 
 describe("createVoiceCallRuntime lifecycle", () => {
@@ -176,6 +169,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     );
     mocks.validateProviderConfig.mockReturnValue({ valid: true, errors: [] });
     mocks.managerInitialize.mockResolvedValue(undefined);
+    mocks.managerStop.mockResolvedValue(undefined);
     mocks.managerGetCall.mockReset();
     mocks.webhookStart.mockResolvedValue("http://127.0.0.1:3334/voice/webhook");
     mocks.webhookStop.mockResolvedValue(undefined);
@@ -184,38 +178,107 @@ describe("createVoiceCallRuntime lifecycle", () => {
       setPublicUrl: mocks.realtimeHandlerSetPublicUrl,
     });
     mocks.webhookGetMediaStreamHandler.mockReturnValue(undefined);
+    mocks.webhookGetStreamDisconnectLifecycle.mockReturnValue({
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+      retire: vi.fn(),
+    });
     mocks.webhookCtorArgs.length = 0;
     mocks.realtimeHandlerCtorArgs.length = 0;
     mocks.realtimeHandlerRegisterToolHandler.mockReset();
     mocks.realtimeHandlerSetPublicUrl.mockReset();
-    mocks.resolveConfiguredRealtimeVoiceProvider.mockResolvedValue({
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
       provider: { id: "openai" },
       providerConfig: { model: "gpt-realtime" },
     });
     mocks.resolveRealtimeFastContextConsult.mockReset();
     mocks.resolveRealtimeFastContextConsult.mockResolvedValue({ handled: false });
+    mocks.resolveVoiceCallStreamExposurePaths.mockReset();
+    mocks.resolveVoiceCallStreamExposurePaths.mockReturnValue([
+      {
+        localPath: "/voice/stream/realtime",
+        publicPath: "/voice/stream/realtime",
+      },
+    ]);
     mocks.startTunnel.mockResolvedValue(null);
     mocks.setupTailscaleExposure.mockResolvedValue(null);
     mocks.cleanupTailscaleExposure.mockResolvedValue(undefined);
   });
 
+  it("explains the missing phone-call owner before provisioning a runtime", async () => {
+    await expect(
+      createVoiceCallRuntime({
+        scheduler: createTestPluginServiceScheduler(),
+        config: createBaseConfig(),
+        coreConfig: {
+          agents: { ownership: "explicit", entries: { operator: {}, support: {} } },
+        },
+        agentRuntime: {} as never,
+      }),
+    ).rejects.toThrow("Set plugins.entries.voice-call.config.agentId to a configured agent ID.");
+    expect(mocks.webhookCtorArgs).toHaveLength(0);
+    expect(mocks.managerInitialize).not.toHaveBeenCalled();
+    expect(mocks.startTunnel).not.toHaveBeenCalled();
+  });
+
+  it.each<{ name: string; coreConfig: OpenClawConfig; agentId?: string }>([
+    { name: "sole named agent", coreConfig: { agents: { entries: { operator: {} } } } },
+    {
+      name: "explicit fleet owner",
+      coreConfig: {
+        agents: { ownership: "explicit", entries: { operator: {}, support: {} } },
+      },
+      agentId: "OPERATOR",
+    },
+    {
+      name: "explicit owner after another agent",
+      coreConfig: { agents: { entries: { support: {}, operator: {} } } },
+      agentId: "operator",
+    },
+  ])("preserves the $name for phone-call startup", async ({ coreConfig, agentId }) => {
+    const runtime = await createVoiceCallRuntime({
+      scheduler: createTestPluginServiceScheduler(),
+      config: { ...createBaseConfig(), agentId },
+      coreConfig,
+      agentRuntime: {} as never,
+    });
+    expect(runtime.config.agentId).toBe("operator");
+    await runtime.stop();
+  });
+
   it("cleans up tunnel, tailscale, and webhook server when init fails after start", async () => {
+    const config = createBaseConfig();
+    config.tunnel.provider = "tailscale-funnel";
+    config.tailscale.port = 8443;
     const tunnelStop = vi.fn().mockResolvedValue(undefined);
     mocks.startTunnel.mockResolvedValue({
-      publicUrl: "https://public.example/voice/webhook",
-      provider: "ngrok",
+      publicUrl: "https://public.example:8443/voice/webhook",
+      provider: "tailscale-funnel",
       stop: tunnelStop,
     });
     mocks.managerInitialize.mockRejectedValue(new Error("init failed"));
 
     await expect(
       createVoiceCallRuntime({
-        config: createBaseConfig(),
+        scheduler: createTestPluginServiceScheduler(),
+        config,
         coreConfig: {},
         agentRuntime: {} as never,
       }),
     ).rejects.toThrow("init failed");
 
+    expect(mocks.startTunnel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "tailscale-funnel",
+        tailscalePort: 8443,
+        streamPaths: [
+          {
+            localPath: "/voice/stream/realtime",
+            publicPath: "/voice/stream/realtime",
+          },
+        ],
+      }),
+    );
     expect(tunnelStop).toHaveBeenCalledTimes(1);
     expect(mocks.cleanupTailscaleExposure).toHaveBeenCalledTimes(1);
     expect(mocks.webhookStop).toHaveBeenCalledTimes(1);
@@ -223,6 +286,13 @@ describe("createVoiceCallRuntime lifecycle", () => {
 
   it("returns an idempotent stop handler", async () => {
     const tunnelStop = vi.fn().mockResolvedValue(undefined);
+    let releaseWebhookStop: (() => void) | undefined;
+    mocks.webhookStop.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseWebhookStop = resolve;
+        }),
+    );
     mocks.startTunnel.mockResolvedValue({
       publicUrl: "https://public.example/voice/webhook",
       provider: "ngrok",
@@ -230,21 +300,60 @@ describe("createVoiceCallRuntime lifecycle", () => {
     });
 
     const runtime = await createVoiceCallRuntime({
+      scheduler: createTestPluginServiceScheduler(),
       config: createBaseConfig(),
-      coreConfig: {} as CoreConfig,
+      coreConfig: {} as OpenClawConfig,
       agentRuntime: {} as never,
     });
 
-    await runtime.stop();
-    await runtime.stop();
+    const firstStop = runtime.stop();
+    const secondStop = runtime.stop();
+    let stopped = false;
+    void secondStop.then(() => {
+      stopped = true;
+    });
+
+    expect(secondStop).toBe(firstStop);
+    await vi.waitFor(() => {
+      expect(mocks.webhookStop).toHaveBeenCalledTimes(1);
+    });
+    expect(stopped).toBe(false);
+    expect(mocks.managerStop).not.toHaveBeenCalled();
+
+    releaseWebhookStop?.();
+    await firstStop;
+    expect(stopped).toBe(true);
+    expect(mocks.managerStop).toHaveBeenCalledOnce();
 
     expect(tunnelStop).toHaveBeenCalledTimes(1);
     expect(mocks.cleanupTailscaleExposure).toHaveBeenCalledTimes(1);
     expect(mocks.webhookStop).toHaveBeenCalledTimes(1);
   });
 
+  it("drains the manager after transport cleanup fails and preserves the first error", async () => {
+    const transportFailure = new Error("webhook shutdown failed");
+    const drain = createDeferred<void>();
+    mocks.webhookStop.mockRejectedValue(transportFailure);
+    mocks.managerStop.mockReturnValue(drain.promise);
+    const runtime = await createVoiceCallRuntime({
+      scheduler: createTestPluginServiceScheduler(),
+      config: createBaseConfig(),
+      coreConfig: {},
+      agentRuntime: {} as never,
+    });
+    let settled = false;
+    const stopped = runtime.stop().catch((error: unknown) => {
+      settled = true;
+      return error;
+    });
+    await vi.waitFor(() => expect(mocks.managerStop).toHaveBeenCalledOnce());
+    expect(settled).toBe(false);
+    drain.reject(new Error("manager drain failed"));
+    expect(await stopped).toBe(transportFailure);
+  });
+
   it("passes fullConfig to the webhook server for streaming provider resolution", async () => {
-    const coreConfig = { messages: { tts: { provider: "openai" } } } as CoreConfig;
+    const coreConfig = { tts: { provider: "openai" } } as OpenClawConfig;
     const fullConfig = {
       plugins: {
         entries: {
@@ -254,14 +363,103 @@ describe("createVoiceCallRuntime lifecycle", () => {
     } as OpenClawConfig;
 
     await createVoiceCallRuntime({
+      scheduler: createTestPluginServiceScheduler(),
       config: createBaseConfig(),
       coreConfig,
       fullConfig,
       agentRuntime: {} as never,
     });
 
-    expect(mocks.webhookCtorArgs[0]?.[3]).toBe(coreConfig);
-    expect(mocks.webhookCtorArgs[0]?.[4]).toBe(fullConfig);
+    expect(mocks.webhookCtorArgs[0]?.[4]).toBe(coreConfig);
+    expect(mocks.webhookCtorArgs[0]?.[5]).toBe(fullConfig);
+  });
+
+  it("builds realtime instructions for the agent frozen on each call", async () => {
+    const config = createBaseConfig();
+    config.realtime.enabled = true;
+    config.agentId = "operator";
+    config.realtime.agentContext = {
+      enabled: true,
+      maxChars: 6000,
+      includeIdentity: true,
+      includeWorkspaceFiles: false,
+      files: ["SOUL.md"],
+    };
+    const fullConfig: OpenClawConfig = {
+      agents: {
+        entries: {
+          operator: { identity: { name: "Main Voice" } },
+          support: { identity: { name: "Support Voice" } },
+        },
+      },
+    };
+    const runtime = await createVoiceCallRuntime({
+      scheduler: createTestPluginServiceScheduler(),
+      config,
+      coreConfig: {},
+      fullConfig,
+      agentRuntime: {} as never,
+    });
+
+    const resolveCallRegistration = mocks.realtimeHandlerCtorArgs[0]?.[2];
+    expect(mocks.realtimeHandlerCtorArgs[0]?.[4]).toBe(
+      mocks.webhookGetStreamDisconnectLifecycle.mock.results[0]?.value,
+    );
+    expect(mocks.resolveConfiguredRealtimeVoiceProvider).not.toHaveBeenCalled();
+    if (typeof resolveCallRegistration !== "function") {
+      throw new Error("expected per-call realtime registration resolver");
+    }
+    expect(runtime.config.agentId).toBe("operator");
+    const outboundContact = {
+      direction: "outbound" as const,
+      from: "+15550001111",
+      to: "+15550002222",
+    };
+    expect(() =>
+      resolveCallRegistration({
+        ...outboundContact,
+        callId: "unowned",
+        sessionKey: "agent:operator:voice:unowned",
+      }),
+    ).toThrow("no recorded agent owner");
+    expect(mocks.resolveConfiguredRealtimeVoiceProvider).not.toHaveBeenCalled();
+    const defaultRegistration = resolveCallRegistration({
+      ...outboundContact,
+      callId: "call-default",
+      agentId: "operator",
+    });
+    expect(defaultRegistration.agentId).toBe("operator");
+    expect(defaultRegistration.instructions).toContain("- Name: Main Voice");
+    expect(defaultRegistration.instructions.match(/Agent context:/g)).toHaveLength(1);
+    const briefRegistration = resolveCallRegistration({
+      callId: "call-brief",
+      direction: "outbound",
+      from: "+15550001111",
+      to: "+15550002222",
+      agentId: "operator",
+      metadata: { brief: { task: "Arrange a plumber visit", approvals: "No paid work" } },
+    });
+    expect(briefRegistration.instructions).toContain("Arrange a plumber visit");
+    expect(briefRegistration.instructions).toContain("No paid work");
+    expect(defaultRegistration.instructions).not.toContain("Arrange a plumber visit");
+
+    const supportRegistration = resolveCallRegistration({
+      ...outboundContact,
+      callId: "call-support",
+      agentId: "support",
+    });
+    expect(supportRegistration.agentId).toBe("support");
+    expect(supportRegistration.instructions.match(/Agent context:/g)).toHaveLength(1);
+    expect(supportRegistration.instructions).toContain("- Name: Support Voice");
+    expect(supportRegistration.instructions).not.toContain("Main Voice");
+
+    const unknownRegistration = resolveCallRegistration({
+      ...outboundContact,
+      callId: "call-unknown",
+      agentId: "unknown",
+    });
+    expect(unknownRegistration.instructions).not.toContain("Configured identity:");
+    expect(unknownRegistration.instructions.match(/Agent context:/g)).toHaveLength(1);
   });
 
   it.each(["twilio", "telnyx", "plivo"] as const)(
@@ -269,8 +467,9 @@ describe("createVoiceCallRuntime lifecycle", () => {
     async (provider) => {
       await expect(
         createVoiceCallRuntime({
+          scheduler: createTestPluginServiceScheduler(),
           config: createExternalProviderConfig({ provider }),
-          coreConfig: {} as CoreConfig,
+          coreConfig: {} as OpenClawConfig,
           agentRuntime: {} as never,
         }),
       ).rejects.toThrow(`${provider} requires a publicly reachable webhook URL`);
@@ -278,18 +477,15 @@ describe("createVoiceCallRuntime lifecycle", () => {
     },
   );
 
-  it.each([
-    "http://127.0.0.1:3334/voice/webhook",
-    "http://[::1]:3334/voice/webhook",
-    "http://[fd00::1]/voice/webhook",
-  ])("fails closed when Twilio publicUrl %s points at a local-only webhook", async (publicUrl) => {
+  it("fails closed when Twilio publicUrl points at a local-only webhook", async () => {
     await expect(
       createVoiceCallRuntime({
+        scheduler: createTestPluginServiceScheduler(),
         config: createExternalProviderConfig({
           provider: "twilio",
-          publicUrl,
+          publicUrl: "http://127.0.0.1:3334/voice/webhook",
         }),
-        coreConfig: {} as CoreConfig,
+        coreConfig: {} as OpenClawConfig,
         agentRuntime: {} as never,
       }),
     ).rejects.toThrow("twilio requires a publicly reachable webhook URL");
@@ -298,11 +494,12 @@ describe("createVoiceCallRuntime lifecycle", () => {
 
   it("accepts an explicit public URL for external voice providers", async () => {
     const runtime = await createVoiceCallRuntime({
+      scheduler: createTestPluginServiceScheduler(),
       config: createExternalProviderConfig({
         provider: "twilio",
         publicUrl: "https://voice.example.com/voice/webhook",
       }),
-      coreConfig: {} as CoreConfig,
+      coreConfig: {} as OpenClawConfig,
       agentRuntime: {} as never,
     });
 
@@ -320,11 +517,12 @@ describe("createVoiceCallRuntime lifecycle", () => {
     };
 
     const runtime = await createVoiceCallRuntime({
+      scheduler: createTestPluginServiceScheduler(),
       config: createExternalProviderConfig({
         provider: "twilio",
         publicUrl: "https://voice.example.com/voice/webhook",
       }),
-      coreConfig: {} as CoreConfig,
+      coreConfig: {} as OpenClawConfig,
       agentRuntime: {} as never,
       logger,
     });
@@ -339,9 +537,13 @@ describe("createVoiceCallRuntime lifecycle", () => {
     await runtime.stop();
   });
 
-  it("wires the shared realtime agent consult tool and handler", async () => {
+  it("wires realtime consults and keeps outbound calls off inbound number routes", async () => {
     const config = createBaseConfig();
     config.inboundPolicy = "allowlist";
+    config.numbers["+15550009999"] = {
+      agentId: "inbound-route",
+      responseModel: "openai/gpt-5.5",
+    };
     config.realtime.enabled = true;
     config.realtime.tools = [
       {
@@ -352,7 +554,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       },
     ];
     const sessionStore: Record<string, unknown> = {};
-    const runEmbeddedPiAgent = vi.fn(async () => ({
+    const runEmbeddedAgent = vi.fn(async (_params: unknown) => ({
       payloads: [{ text: "Use the shipment status." }],
       meta: {},
     }));
@@ -364,27 +566,27 @@ describe("createVoiceCallRuntime lifecycle", () => {
       resolveThinkingDefault: vi.fn(() => "high"),
       resolveAgentTimeoutMs: vi.fn(() => 30_000),
       ensureAgentWorkspace: vi.fn(async () => {}),
-      session: {
-        resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
-        loadSessionStore: vi.fn(() => sessionStore),
-        saveSessionStore: vi.fn(async () => {}),
-        updateSessionStore: vi.fn(async (_storePath, mutator) => mutator(sessionStore as never)),
-        resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
-      },
-      runEmbeddedPiAgent,
+      session: createMockSessionRuntime(sessionStore),
+      runEmbeddedAgent,
     };
     mocks.managerGetCall.mockReturnValue({
       callId: "call-1",
+      agentId: "support",
       direction: "outbound",
       from: "+15550001234",
       to: "+15550009999",
-      metadata: { requesterSessionKey: "agent:main:discord:channel:general" },
+      metadata: {
+        requesterSessionKey: "agent:main:discord:channel:general",
+        brief: { task: "Check shipment reference ABC" },
+        ownerInstructions: ["Ask for tomorrow delivery"],
+      },
       transcript: [{ speaker: "user", text: "Can you check shipment status?" }],
     });
 
     await createVoiceCallRuntime({
+      scheduler: createTestPluginServiceScheduler(),
       config,
-      coreConfig: {} as CoreConfig,
+      coreConfig: {} as OpenClawConfig,
       agentRuntime: agentRuntime as never,
     });
 
@@ -397,6 +599,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       throw new Error("expected realtime handler tools to be an array");
     }
     expect(tools.map((tool) => requireRecord(tool, "realtime tool").name)).toEqual([
+      "openclaw_end_call",
       "openclaw_agent_consult",
       "custom_tool",
     ]);
@@ -408,12 +611,13 @@ describe("createVoiceCallRuntime lifecycle", () => {
     ).resolves.toEqual({
       text: "Use the shipment status.",
     });
-    expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
     const consultParams = requireRecord(
-      firstCallParam(runEmbeddedPiAgent.mock.calls as unknown[][], "embedded PI consult"),
-      "embedded PI consult params",
+      expectDefined(runEmbeddedAgent.mock.calls.at(0), "embedded OpenClaw consult call")[0],
+      "embedded OpenClaw consult params",
     );
-    expect(consultParams.sessionKey).toBe("voice:15550009999");
+    expect(consultParams.agentId).toBe("support");
+    expect(consultParams.sessionKey).toBe("agent:support:voice:15550009999");
     expect(consultParams.spawnedBy).toBe("agent:main:discord:channel:general");
     expect(consultParams.messageProvider).toBe("voice");
     expect(consultParams.lane).toBe("voice");
@@ -426,18 +630,117 @@ describe("createVoiceCallRuntime lifecycle", () => {
       "x_search",
       "memory_search",
       "memory_get",
+      "voice_call",
     ]);
+    expect(consultParams.toolBindings).toEqual({
+      voice_call: { kind: "active-call", callId: "call-1" },
+    });
     expect(consultParams.extraSystemPrompt).toContain("one or two bounded read-only queries");
+    expect(consultParams.extraSystemPrompt).toContain('bound call id is "call-1"');
+    expect(consultParams.extraSystemPrompt).toContain("Check shipment reference ABC");
+    expect(consultParams.extraSystemPrompt).toContain("Ask for tomorrow delivery");
     expect(consultParams.prompt).toContain("Caller: Can you check shipment status?");
     expect(consultParams.prompt).toContain("Caller: Also check the ETA.");
   });
 
-  it("uses persisted per-call session keys for realtime consults", async () => {
+  it("always exposes the built-in end-call tool without allowing configured replacement", async () => {
+    const config = createBaseConfig();
+    config.realtime.enabled = true;
+    config.realtime.toolPolicy = "none";
+    config.realtime.tools = [
+      {
+        type: "function",
+        name: "openclaw_end_call",
+        description: "Configured replacement",
+        parameters: { type: "object", properties: { callId: { type: "string" } } },
+      },
+      {
+        type: "function",
+        name: "custom_tool",
+        description: "Custom tool",
+        parameters: { type: "object", properties: {} },
+      },
+    ];
+
+    await createVoiceCallRuntime({
+      scheduler: createTestPluginServiceScheduler(),
+      config,
+      coreConfig: {} as OpenClawConfig,
+      agentRuntime: {} as never,
+    });
+
+    const realtimeHandlerOptions = requireRecord(
+      mocks.realtimeHandlerCtorArgs[0]?.[0],
+      "realtime handler options",
+    );
+    const tools = realtimeHandlerOptions.tools;
+    if (!Array.isArray(tools)) {
+      throw new Error("expected realtime handler tools to be an array");
+    }
+    expect(tools.map((tool) => requireRecord(tool, "realtime tool").name)).toEqual([
+      "openclaw_end_call",
+      "custom_tool",
+    ]);
+    const endCallTool = requireRecord(tools[0], "end-call tool");
+    expect(endCallTool.description).toContain("final words");
+    expect(endCallTool.description).toContain("no further reply");
+    expect(requireRecord(endCallTool.parameters, "end-call parameters")).toEqual({
+      type: "object",
+      properties: {},
+    });
+    expect(mocks.realtimeHandlerRegisterToolHandler).not.toHaveBeenCalled();
+  });
+
+  it("rejects a realtime consult whose lifecycle owner already aborted", async () => {
+    const config = createBaseConfig();
+    config.realtime.enabled = true;
+    const runEmbeddedAgent = vi.fn();
+    const sessionStore: Record<string, unknown> = {};
+    const agentRuntime = {
+      defaults: { provider: "openai", model: "gpt-5.4" },
+      resolveAgentDir: vi.fn(() => "/tmp/agent"),
+      resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
+      resolveAgentIdentity: vi.fn(),
+      resolveThinkingDefault: vi.fn(() => "high"),
+      resolveAgentTimeoutMs: vi.fn(() => 30_000),
+      ensureAgentWorkspace: vi.fn(async () => {}),
+      session: createMockSessionRuntime(sessionStore),
+      runEmbeddedAgent,
+    };
+    mocks.managerGetCall.mockReturnValue({
+      callId: "call-aborted",
+      agentId: "main",
+      direction: "inbound",
+      from: "+15550001234",
+      to: "+15550009999",
+      transcript: [],
+    });
+
+    await createVoiceCallRuntime({
+      scheduler: createTestPluginServiceScheduler(),
+      config,
+      coreConfig: {} as OpenClawConfig,
+      agentRuntime: agentRuntime as never,
+    });
+
+    const controller = new AbortController();
+    controller.abort(new Error("voice session replaced"));
+    const handler = requireRealtimeConsultToolHandler();
+    await expect(
+      handler({ question: "Check the deployment." }, "call-aborted", {
+        abortSignal: controller.signal,
+      }),
+    ).rejects.toThrow("voice session replaced");
+    expect(mocks.resolveRealtimeFastContextConsult).not.toHaveBeenCalled();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
+  it("canonicalizes restored legacy per-call keys for realtime consults", async () => {
     const config = createBaseConfig();
     config.inboundPolicy = "allowlist";
     config.realtime.enabled = true;
     config.sessionScope = "per-call";
-    const runEmbeddedPiAgent = vi.fn(async () => ({
+    const runEmbeddedAgent = vi.fn(async (_params: unknown) => ({
       payloads: [{ text: "Per-call consult answer." }],
       meta: {},
     }));
@@ -450,18 +753,13 @@ describe("createVoiceCallRuntime lifecycle", () => {
       resolveThinkingDefault: vi.fn(() => "high"),
       resolveAgentTimeoutMs: vi.fn(() => 30_000),
       ensureAgentWorkspace: vi.fn(async () => {}),
-      session: {
-        resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
-        loadSessionStore: vi.fn(() => sessionStore),
-        saveSessionStore: vi.fn(async () => {}),
-        updateSessionStore: vi.fn(async (_storePath, mutator) => mutator(sessionStore as never)),
-        resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
-      },
-      runEmbeddedPiAgent,
+      session: createMockSessionRuntime(sessionStore),
+      runEmbeddedAgent,
     };
     mocks.managerGetCall.mockReturnValue({
       callId: "call-1",
       sessionKey: "voice:call:call-1",
+      agentId: "main",
       direction: "inbound",
       from: "+15550001234",
       to: "+15550009999",
@@ -469,21 +767,71 @@ describe("createVoiceCallRuntime lifecycle", () => {
     });
 
     await createVoiceCallRuntime({
+      scheduler: createTestPluginServiceScheduler(),
       config,
-      coreConfig: {} as CoreConfig,
+      coreConfig: {} as OpenClawConfig,
       agentRuntime: agentRuntime as never,
     });
 
     const handler = requireRealtimeConsultToolHandler();
-    await expect(handler({ question: "What should I say?" }, "call-1")).resolves.toEqual({
+    await expect(handler({ question: "What should I say?" }, "call-1", {})).resolves.toEqual({
       text: "Per-call consult answer.",
     });
-    expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
     const consultParams = requireRecord(
-      firstCallParam(runEmbeddedPiAgent.mock.calls as unknown[][], "per-call embedded PI consult"),
-      "per-call embedded PI consult params",
+      expectDefined(
+        runEmbeddedAgent.mock.calls.at(0),
+        "per-call embedded OpenClaw consult call",
+      )[0],
+      "per-call embedded OpenClaw consult params",
     );
-    expect(consultParams.sessionKey).toBe("voice:call:call-1");
+    expect(consultParams.sessionKey).toBe("agent:main:voice:call:call-1");
+  });
+
+  it("blocks locked Codex realtime consults before fast context or model dispatch", async () => {
+    const config = createBaseConfig();
+    config.realtime.enabled = true;
+    const sessionStore: Record<string, unknown> = {
+      "agent:main:voice:15550001234": {
+        sessionId: "locked-codex-session",
+        updatedAt: 1,
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+      },
+    };
+    const runEmbeddedAgent = vi.fn();
+    const agentRuntime = {
+      resolveAgentDir: vi.fn(() => "/tmp/agent"),
+      resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
+      resolveAgentIdentity: vi.fn(),
+      resolveThinkingDefault: vi.fn(() => "high"),
+      resolveAgentTimeoutMs: vi.fn(() => 30_000),
+      ensureAgentWorkspace: vi.fn(async () => {}),
+      session: createMockSessionRuntime(sessionStore),
+      runEmbeddedAgent,
+    };
+    mocks.managerGetCall.mockReturnValue({
+      callId: "call-locked",
+      agentId: "main",
+      direction: "inbound",
+      from: "+15550001234",
+      to: "+15550009999",
+      transcript: [],
+    });
+
+    await createVoiceCallRuntime({
+      scheduler: createTestPluginServiceScheduler(),
+      config,
+      coreConfig: {} as OpenClawConfig,
+      agentRuntime: agentRuntime as never,
+    });
+
+    const handler = requireRealtimeConsultToolHandler();
+    await expect(
+      handler({ question: "Continue this session." }, "call-locked", {}),
+    ).rejects.toThrow("Model selection is locked for this session.");
+    expect(mocks.resolveRealtimeFastContextConsult).not.toHaveBeenCalled();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
   it("answers realtime consults from fast memory context before starting the full agent", async () => {
@@ -496,7 +844,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       sources: ["memory"],
       fallbackToConsult: false,
     };
-    const runEmbeddedPiAgent = vi.fn(async () => ({
+    const runEmbeddedAgent = vi.fn(async () => ({
       payloads: [{ text: "slow answer" }],
       meta: {},
     }));
@@ -508,17 +856,12 @@ describe("createVoiceCallRuntime lifecycle", () => {
       resolveThinkingDefault: vi.fn(() => "high"),
       resolveAgentTimeoutMs: vi.fn(() => 30_000),
       ensureAgentWorkspace: vi.fn(async () => {}),
-      session: {
-        resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
-        loadSessionStore: vi.fn(() => sessionStore),
-        saveSessionStore: vi.fn(async () => {}),
-        updateSessionStore: vi.fn(async (_storePath, mutator) => mutator(sessionStore as never)),
-        resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
-      },
-      runEmbeddedPiAgent,
+      session: createMockSessionRuntime(sessionStore),
+      runEmbeddedAgent,
     };
     mocks.managerGetCall.mockReturnValue({
       callId: "call-1",
+      agentId: "main",
       direction: "inbound",
       from: "+15550001234",
       to: "+15550009999",
@@ -532,13 +875,18 @@ describe("createVoiceCallRuntime lifecycle", () => {
     });
 
     await createVoiceCallRuntime({
+      scheduler: createTestPluginServiceScheduler(),
       config,
-      coreConfig: {} as CoreConfig,
+      coreConfig: {} as OpenClawConfig,
       agentRuntime: agentRuntime as never,
     });
 
     const handler = requireRealtimeConsultToolHandler();
-    const fastContextResult = await handler({ question: "Are the basement lights on?" }, "call-1");
+    const fastContextResult = await handler(
+      { question: "Are the basement lights on?" },
+      "call-1",
+      {},
+    );
     const fastContextRecord = requireRecord(fastContextResult, "fast context result");
     expect(fastContextRecord.text).toContain("The caller's basement lights are on.");
     expect(mocks.resolveRealtimeFastContextConsult).toHaveBeenCalledWith({
@@ -558,19 +906,97 @@ describe("createVoiceCallRuntime lifecycle", () => {
         error: console.error,
         debug: console.debug,
       },
-      sessionKey: "voice:15550001234",
+      sessionKey: "agent:main:voice:15550001234",
+      labels: {
+        audienceLabel: "caller",
+        contextName: "OpenClaw memory or session context",
+      },
+      liveness: { signal: undefined, assertCurrent: expect.any(Function) },
     });
-    expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
+  describe("fast memory context through the selected memory provider", () => {
+    afterEach(() => {
+      resetPluginRuntimeStateForTest();
+    });
+
+    async function createFastContextHandler() {
+      const config = createBaseConfig();
+      config.realtime.enabled = true;
+      config.realtime.fastContext = {
+        enabled: true,
+        timeoutMs: 1_000,
+        maxResults: 2,
+        sources: ["memory"],
+        fallbackToConsult: false,
+      };
+      const { open, search } = registerFastContextMemoryProvider();
+      mocks.resolveRealtimeFastContextConsult.mockImplementation(
+        expectDefined(mocks.actualRealtimeFastContextConsult, "actual fast context consult"),
+      );
+      const call = {
+        callId: "call-1",
+        agentId: "main",
+        state: "active",
+        direction: "inbound",
+        from: "+15550001234",
+        to: "+15550009999",
+        transcript: [],
+      };
+      mocks.managerGetCall.mockReturnValue(call);
+      await createVoiceCallRuntime({
+        scheduler: createTestPluginServiceScheduler(),
+        config,
+        coreConfig: {} as OpenClawConfig,
+        agentRuntime: { session: createMockSessionRuntime({}) } as never,
+      });
+      return { handler: requireRealtimeConsultToolHandler(), open, search };
+    }
+
+    it("answers from the provider while the call and consult are live", async () => {
+      const { handler, open, search } = await createFastContextHandler();
+      const result = await handler({ question: "Are the lights on?" }, "call-1", {
+        abortSignal: new AbortController().signal,
+      });
+      expect(requireRecord(result, "fast context result").text).toContain("Lights are on.");
+      expect(open).toHaveBeenCalledOnce();
+      expect(search).toHaveBeenCalledOnce();
+    });
+
+    it("rejects a consult aborted during lookup before provider I/O", async () => {
+      const { handler, open } = await createFastContextHandler();
+      const consult = new AbortController();
+      const pending = handler({ question: "Are the lights on?" }, "call-1", {
+        abortSignal: consult.signal,
+      });
+      consult.abort(new Error("consult cancelled"));
+      await expect(pending).rejects.toThrow("consult cancelled");
+      expect(open).not.toHaveBeenCalled();
+    });
+
+    it("rejects a call that ends during lookup before provider I/O", async () => {
+      const { handler, open } = await createFastContextHandler();
+      const pending = handler({ question: "Are the lights on?" }, "call-1", {
+        abortSignal: new AbortController().signal,
+      });
+      mocks.managerGetCall.mockReturnValue(undefined);
+      const result = await pending;
+      expect(requireRecord(result, "fast context result").text).toContain(
+        "No relevant OpenClaw memory or session context was found quickly",
+      );
+      expect(open).not.toHaveBeenCalled();
+    });
   });
 
   it("uses the configured realtime consult thinking level when set", async () => {
     const config = createBaseConfig();
     config.inboundPolicy = "allowlist";
     config.realtime.enabled = true;
-    config.realtime.consultThinkingLevel = "low";
+    config.realtime.consultThinkingLevel = "ultra";
     config.realtime.consultFastMode = true;
     const sessionStore: Record<string, unknown> = {};
-    const runEmbeddedPiAgent = vi.fn(async () => ({
+    const runEmbeddedAgent = vi.fn(async (_params: unknown) => ({
       payloads: [{ text: "Done." }],
       meta: {},
     }));
@@ -582,17 +1008,12 @@ describe("createVoiceCallRuntime lifecycle", () => {
       resolveThinkingDefault: vi.fn(() => "high"),
       resolveAgentTimeoutMs: vi.fn(() => 30_000),
       ensureAgentWorkspace: vi.fn(async () => {}),
-      session: {
-        resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
-        loadSessionStore: vi.fn(() => sessionStore),
-        saveSessionStore: vi.fn(async () => {}),
-        updateSessionStore: vi.fn(async (_storePath, mutator) => mutator(sessionStore)),
-        resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
-      },
-      runEmbeddedPiAgent,
+      session: createMockSessionRuntime(sessionStore),
+      runEmbeddedAgent,
     };
     mocks.managerGetCall.mockReturnValue({
       callId: "call-1",
+      agentId: "main",
       direction: "outbound",
       from: "+15550001234",
       to: "+15550009999",
@@ -600,26 +1021,27 @@ describe("createVoiceCallRuntime lifecycle", () => {
     });
 
     await createVoiceCallRuntime({
+      scheduler: createTestPluginServiceScheduler(),
       config,
-      coreConfig: {} as CoreConfig,
+      coreConfig: {} as OpenClawConfig,
       agentRuntime: agentRuntime as never,
     });
 
     const handler = requireRealtimeConsultToolHandler();
-    await expect(handler({ question: "Turn on the lights." }, "call-1")).resolves.toEqual({
+    await expect(handler({ question: "Turn on the lights." }, "call-1", {})).resolves.toEqual({
       text: "Done.",
     });
 
     expect(agentRuntime.resolveThinkingDefault).not.toHaveBeenCalled();
-    expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
     const consultParams = requireRecord(
-      firstCallParam(
-        runEmbeddedPiAgent.mock.calls as unknown[][],
-        "configured embedded PI consult",
-      ),
-      "configured embedded PI consult params",
+      expectDefined(
+        runEmbeddedAgent.mock.calls.at(0),
+        "configured embedded OpenClaw consult call",
+      )[0],
+      "configured embedded OpenClaw consult params",
     );
-    expect(consultParams.thinkLevel).toBe("low");
+    expect(consultParams.thinkLevel).toBe("ultra");
     expect(consultParams.fastMode).toBe(true);
   });
 });

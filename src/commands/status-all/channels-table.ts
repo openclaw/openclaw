@@ -1,17 +1,6 @@
-import { groupChannelIssuesByChannel } from "./channel-issues.js";
-
-type ChannelTableRowInput = {
-  id: string;
-  label: string;
-  enabled: boolean;
-  state: "ok" | "warn" | "off" | "setup";
-  detail: string;
-};
-
-type ChannelIssueLike = {
-  channel: string;
-  message: string;
-};
+import type { ChannelStatusIssue } from "../../channels/plugins/types.core.js";
+import { indexFirstByKey } from "../../shared/dedupe-by-key.js";
+import type { buildChannelsTable } from "./channels.js";
 
 export const statusChannelsTableColumns = [
   { key: "Channel", header: "Channel", minWidth: 10 },
@@ -21,23 +10,23 @@ export const statusChannelsTableColumns = [
 ] as const;
 
 export function buildStatusChannelsTableRows(params: {
-  rows: readonly ChannelTableRowInput[];
-  channelIssues: readonly ChannelIssueLike[];
+  rows: Readonly<Awaited<ReturnType<typeof buildChannelsTable>>["rows"]>;
+  channelIssues: readonly Pick<ChannelStatusIssue, "channel" | "message">[];
   ok: (text: string) => string;
   warn: (text: string) => string;
   muted: (text: string) => string;
   accentDim: (text: string) => string;
   formatIssueMessage?: (message: string) => string;
 }) {
-  const channelIssuesByChannel = groupChannelIssuesByChannel(params.channelIssues);
+  const firstIssueByChannel = indexFirstByKey(params.channelIssues, (issue) => issue.channel);
   const formatIssueMessage = params.formatIssueMessage ?? ((message: string) => message);
   return params.rows.map((row) => {
-    const issues = channelIssuesByChannel.get(row.id) ?? [];
-    const effectiveState = row.state === "off" ? "off" : issues.length > 0 ? "warn" : row.state;
-    const issueSuffix =
-      issues.length > 0
-        ? ` · ${params.warn(`gateway: ${formatIssueMessage(issues[0]?.message ?? "issue")}`)}`
-        : "";
+    const issue = firstIssueByChannel.get(row.id);
+    // A disabled channel stays disabled even if the gateway still reports stale issues for it.
+    const effectiveState = row.state === "off" ? "off" : issue ? "warn" : row.state;
+    const issueSuffix = issue
+      ? ` · ${params.warn(`gateway: ${formatIssueMessage(issue.message ?? "issue")}`)}`
+      : "";
     return {
       Channel: row.label,
       Enabled: row.enabled ? params.ok("ON") : params.muted("OFF"),

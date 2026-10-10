@@ -1,5 +1,10 @@
-import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import { resolveExpiresAtMsFromDurationSeconds } from "openclaw/plugin-sdk/number-runtime";
+import {
+  createProviderHttpError,
+  readProviderJsonResponse,
+} from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   MSTEAMS_DEFAULT_DELEGATED_SCOPES,
   MSTEAMS_DEFAULT_TOKEN_FETCH_TIMEOUT_MS,
@@ -14,29 +19,33 @@ const EXPIRY_BUFFER_MS = 5 * 60 * 1000;
 type MSTeamsTokenResponse = {
   access_token: string;
   refresh_token?: string;
-  expires_in: number;
+  expiresAt: number;
   scope?: string;
 };
 
-function createMSTeamsTokenBody(params: {
-  clientId: string;
-  clientSecret: string;
-  grantType: string;
-  scopes: readonly string[];
-  values?: Record<string, string>;
-}): URLSearchParams {
-  const body = new URLSearchParams({
-    client_id: params.clientId,
-    client_secret: params.clientSecret,
-    grant_type: params.grantType,
-    scope: [...params.scopes].join(" "),
+function parseMSTeamsTokenResponse(data: unknown, failureLabel: string): MSTeamsTokenResponse {
+  if (!isRecord(data)) {
+    throw new Error(`MSTeams ${failureLabel} failed: invalid token response fields`);
+  }
+  const expiresAt = resolveExpiresAtMsFromDurationSeconds(data.expires_in, {
+    bufferMs: EXPIRY_BUFFER_MS,
   });
-
-  for (const [key, value] of Object.entries(params.values ?? {})) {
-    body.set(key, value);
+  if (
+    typeof data.access_token !== "string" ||
+    !data.access_token ||
+    expiresAt === undefined ||
+    (data.refresh_token !== undefined && typeof data.refresh_token !== "string") ||
+    (data.scope !== undefined && typeof data.scope !== "string")
+  ) {
+    throw new Error(`MSTeams ${failureLabel} failed: invalid token response fields`);
   }
 
-  return body;
+  return {
+    access_token: data.access_token,
+    refresh_token: data.refresh_token,
+    expiresAt,
+    scope: data.scope,
+  };
 }
 
 async function fetchMSTeamsTokens(params: {
@@ -45,10 +54,8 @@ async function fetchMSTeamsTokens(params: {
   auditContext: string;
   failureLabel: string;
 }): Promise<MSTeamsTokenResponse> {
-  const currentFetch = globalThis.fetch;
   const { response, release } = await fetchWithSsrFGuard({
     url: params.tokenUrl,
-    fetchImpl: async (input, guardedInit) => await currentFetch(input, guardedInit),
     init: {
       method: "POST",
       headers: {
@@ -63,13 +70,13 @@ async function fetchMSTeamsTokens(params: {
 
   try {
     if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`MSTeams ${params.failureLabel} failed (${response.status}): ${errorText}`);
+      throw await createProviderHttpError(response, `MSTeams ${params.failureLabel} failed`);
     }
-    return await readProviderJsonResponse<MSTeamsTokenResponse>(
+    const data = await readProviderJsonResponse<unknown>(
       response,
       `MSTeams ${params.failureLabel} failed`,
     );
+    return parseMSTeamsTokenResponse(data, params.failureLabel);
   } finally {
     await release();
   }
@@ -87,12 +94,12 @@ async function requestMSTeamsDelegatedTokens(params: {
   resolveRefreshToken: (data: MSTeamsTokenResponse) => string;
 }): Promise<MSTeamsDelegatedTokens> {
   const scopes = params.scopes ?? MSTEAMS_DEFAULT_DELEGATED_SCOPES;
-  const body = createMSTeamsTokenBody({
-    clientId: params.clientId,
-    clientSecret: params.clientSecret,
-    grantType: params.grantType,
-    scopes,
-    values: params.values,
+  const body = new URLSearchParams({
+    client_id: params.clientId,
+    client_secret: params.clientSecret,
+    grant_type: params.grantType,
+    scope: scopes.join(" "),
+    ...params.values,
   });
   const data = await fetchMSTeamsTokens({
     tokenUrl: buildMSTeamsTokenEndpoint(params.tenantId),
@@ -104,7 +111,7 @@ async function requestMSTeamsDelegatedTokens(params: {
   return {
     accessToken: data.access_token,
     refreshToken: params.resolveRefreshToken(data),
-    expiresAt: Date.now() + data.expires_in * 1000 - EXPIRY_BUFFER_MS,
+    expiresAt: data.expiresAt,
     scopes: data.scope ? data.scope.split(" ") : [...scopes],
   };
 }

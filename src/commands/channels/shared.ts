@@ -1,48 +1,35 @@
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { hasConfiguredUnavailableCredentialStatus } from "../../channels/account-snapshot-fields.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolution.js";
-import type { CommandSecretResolutionMode } from "../../cli/command-secret-gateway.js";
 import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
-import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
-import {
-  requireValidConfigFileSnapshot,
-  requireValidConfigSnapshot,
-} from "../config-validation.js";
+import type { RuntimeEnv } from "../../runtime.js";
+import { requireValidConfig } from "../config-validation.js";
 
 export type ChatChannel = ChannelId;
 
-export { requireValidConfigSnapshot };
-export { requireValidConfigFileSnapshot };
+export const NO_CONFIGURED_CHAT_CHANNELS_LINE =
+  "- no configured chat channels (run `openclaw channels list --all` to see installable channels)";
 
-export async function requireValidConfig(
-  runtime: RuntimeEnv = defaultRuntime,
-  secretResolution?: {
-    commandName?: string;
-    mode?: CommandSecretResolutionMode;
-  },
+export { requireValidConfigForWrite } from "../config-validation.js";
+
+/** Load valid channel command config with read-only secret resolution applied. */
+export async function requireValidChannelConfig(
+  runtime: RuntimeEnv,
 ): Promise<OpenClawConfig | null> {
-  const cfg = await requireValidConfigSnapshot(runtime);
+  const cfg = await requireValidConfig(runtime, { skipPluginValidation: true });
   if (!cfg) {
     return null;
   }
   const { effectiveConfig } = await resolveCommandConfigWithSecrets({
     config: cfg,
-    commandName: secretResolution?.commandName ?? "channels",
+    commandName: "channels",
     targetIds: getChannelsCommandSecretTargetIds(),
-    mode: secretResolution?.mode,
     runtime,
   });
   return effectiveConfig;
-}
-
-function formatAccountLabel(params: { accountId: string; name?: string }) {
-  const base = params.accountId || DEFAULT_ACCOUNT_ID;
-  if (params.name?.trim()) {
-    return `${base} (${params.name.trim()})`;
-  }
-  return base;
 }
 
 export function formatChannelAccountLabel(params: {
@@ -53,16 +40,16 @@ export function formatChannelAccountLabel(params: {
   channelStyle?: (value: string) => string;
   accountStyle?: (value: string) => string;
 }): string {
-  const channelText = params.channelLabel ?? params.channel;
-  const accountText = formatAccountLabel({
-    accountId: params.accountId,
-    name: params.name,
-  });
+  const channelText = sanitizeTerminalText(params.channelLabel ?? params.channel);
+  const accountId = sanitizeTerminalText(params.accountId || DEFAULT_ACCOUNT_ID);
+  const name = params.name?.trim();
+  const accountText = name ? `${accountId} (${sanitizeTerminalText(name)})` : accountId;
   const styledChannel = params.channelStyle ? params.channelStyle(channelText) : channelText;
   const styledAccount = params.accountStyle ? params.accountStyle(accountText) : accountText;
   return `${styledChannel} ${styledAccount}`;
 }
 
+/** Append canonical state fragments and genuine runtime failures for account output. */
 export function appendEnabledConfiguredLinkedBits(
   bits: string[],
   account: Record<string, unknown>,
@@ -83,6 +70,18 @@ export function appendEnabledConfiguredLinkedBits(
   if (typeof account.linked === "boolean") {
     bits.push(account.linked ? "linked" : "not linked");
   }
+  const reason = typeof account.stateReason === "string" ? account.stateReason : "";
+  const duplicatesState =
+    (account.enabled === false && reason === "disabled") ||
+    (account.configured === false && reason === "not configured") ||
+    (account.linked === false && reason === "not linked");
+  if (reason && !duplicatesState) {
+    bits.push(`reason:${reason}`);
+  }
+  const error = typeof account.lastError === "string" ? account.lastError : "";
+  if (error) {
+    bits.push(`error:${error}`);
+  }
 }
 
 export function appendModeBit(bits: string[], account: Record<string, unknown>) {
@@ -91,6 +90,7 @@ export function appendModeBit(bits: string[], account: Record<string, unknown>) 
   }
 }
 
+/** Append credential source fragments, preserving unavailable-secret state. */
 export function appendTokenSourceBits(bits: string[], account: Record<string, unknown>) {
   const appendSourceBit = (label: string, sourceKey: string, statusKey: string) => {
     const source = account[sourceKey];
@@ -129,8 +129,4 @@ export function buildChannelAccountLine(
     channelLabel: opts?.channelLabel,
   });
   return `- ${labelText}: ${bits.join(", ")}`;
-}
-
-export function shouldUseWizard(params?: { hasFlags?: boolean }) {
-  return params?.hasFlags === false;
 }

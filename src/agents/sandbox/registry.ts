@@ -1,374 +1,332 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-import { z } from "zod";
-import { writeJson } from "../../infra/json-files.js";
-import { safeParseJsonWithSchema } from "../../utils/zod-parse.js";
-import { acquireSessionWriteLock } from "../session-write-lock.js";
+/**
+ * Persistent sandbox registry storage.
+ *
+ * Tracks runtime and browser containers in the shared state DB.
+ */
+import { createHash } from "node:crypto";
+import { withFileLock } from "../../infra/file-lock.js";
+import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
 import {
-  SANDBOX_BROWSER_REGISTRY_PATH,
-  SANDBOX_BROWSERS_DIR,
-  SANDBOX_CONTAINERS_DIR,
-  SANDBOX_REGISTRY_PATH,
-} from "./constants.js";
-import { hashTextSha256 } from "./hash.js";
+  executeExistingOpenClawStateRead,
+  withExistingOpenClawStateDatabaseReadOnly,
+} from "../../state/openclaw-state-db-readonly.js";
+import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
+import type { WorkspaceStateGuard } from "../workspace-state-store.worker-contract.js";
+import {
+  finishSandboxRegistryRemoval,
+  withSandboxRegistrySettlement,
+} from "./registry-lifecycle.js";
+import { withSandboxRegistryPublication } from "./registry-publication.js";
+import {
+  assertSandboxRegistryGenerationCurrent,
+  shouldPruneSandboxRegistryEntry,
+  type SandboxRegistryOperations,
+  type SandboxRegistryPrune,
+  type SandboxRegistryWrite,
+  readSandboxRegistryEntryInDatabase,
+  readSandboxRegistryRowInDatabase,
+  rowToBrowserEntry,
+} from "./registry.kernel.js";
+import type {
+  SandboxBrowserRegistry,
+  SandboxBrowserRegistryEntry,
+  SandboxRegistry,
+  SandboxRegistryEntry,
+} from "./registry.types.js";
 
-export type SandboxRegistryEntry = {
-  containerName: string;
-  backendId?: string;
-  runtimeLabel?: string;
-  sessionKey: string;
-  createdAtMs: number;
-  lastUsedAtMs: number;
-  image: string;
-  configLabelKind?: string;
-  configHash?: string;
-};
+export type { SandboxRegistryEntry, SandboxBrowserRegistryEntry } from "./registry.types.js";
 
-type SandboxRegistry = {
-  entries: SandboxRegistryEntry[];
-};
-
-export type SandboxBrowserRegistryEntry = {
-  containerName: string;
-  sessionKey: string;
-  createdAtMs: number;
-  lastUsedAtMs: number;
-  image: string;
-  configHash?: string;
-  cdpPort: number;
-  noVncPort?: number;
-};
-
-type SandboxBrowserRegistry = {
-  entries: SandboxBrowserRegistryEntry[];
-};
-
-type RegistryEntry = {
-  containerName: string;
-};
-
-type RegistryEntryPayload = RegistryEntry & Record<string, unknown>;
-
-type RegistryFile = {
-  entries: RegistryEntryPayload[];
-};
-
-type LegacyRegistryKind = "containers" | "browsers";
-
-type LegacyRegistryTarget = {
-  kind: LegacyRegistryKind;
-  registryPath: string;
-  shardedDir: string;
-};
-
-export type LegacySandboxRegistryInspection = LegacyRegistryTarget & {
-  exists: boolean;
-  valid: boolean;
-  entries: number;
-};
-
-export type LegacySandboxRegistryMigrationResult = LegacyRegistryTarget & {
-  status: "missing" | "migrated" | "removed-empty" | "quarantined-invalid";
-  entries: number;
-  quarantinePath?: string;
-};
-
-const RegistryEntrySchema = z
-  .object({
-    containerName: z.string(),
-  })
-  .passthrough();
-
-const RegistryFileSchema = z.object({
-  entries: z.array(RegistryEntrySchema),
-});
-
-function normalizeSandboxRegistryEntry(entry: SandboxRegistryEntry): SandboxRegistryEntry {
-  return {
-    ...entry,
-    backendId: entry.backendId?.trim() || "docker",
-    runtimeLabel: entry.runtimeLabel?.trim() || entry.containerName,
-    configLabelKind: entry.configLabelKind?.trim() || "Image",
+type SandboxRegistryKind = "container" | "browser";
+async function executeRegistry<Key extends keyof SandboxRegistryOperations>(
+  command: { type: Key; input: SandboxRegistryOperations[Key]["input"] },
+  guard?: WorkspaceStateGuard,
+  assertCallerCurrent?: () => void,
+  context = captureOpenClawStateWorkerContext(),
+): Promise<SandboxRegistryOperations[Key]["output"]> {
+  guard?.assertHost?.();
+  guard?.beforeLegacyApply?.();
+  const input = structuredClone(command.input);
+  const assertCurrent = () => {
+    guard?.assertHost?.();
+    context.admission.assertCurrent();
+    context.maintenanceScope?.assertAdmission();
+    assertCallerCurrent?.();
   };
+  const { runOpenClawStateWorkerOperation } =
+    await import("../../state/openclaw-state-worker-store.js");
+  // Reservation checks stay outside grants; the worker checks its authoritative rows.
+  guard?.beforeLegacyApply?.();
+  return runOpenClawStateWorkerOperation(
+    context,
+    (scope) => scope.execute({ type: command.type, input }),
+    {
+      assertCurrent,
+      createAdmission: withSandboxRegistryPublication(
+        createSqliteWorkerWriteAdmission(assertCurrent, [context.admission.databasePath]),
+        () => context.admission.identity.key,
+        () => context.admission.assertCurrent(),
+      ),
+    },
+  );
 }
 
-async function withRegistryLock<T>(registryPath: string, fn: () => Promise<T>): Promise<T> {
-  const lock = await acquireSessionWriteLock({
-    sessionFile: registryPath,
-    allowReentrant: false,
-    timeoutMs: 60_000,
-  });
-  try {
-    return await fn();
-  } finally {
-    await lock.release();
-  }
+function writeRegistry(
+  write: SandboxRegistryWrite,
+  guard?: WorkspaceStateGuard,
+  assertCallerCurrent?: () => void,
+  context?: OpenClawStateWorkerContext,
+): Promise<void> {
+  return executeRegistry(
+    { type: "sandboxRegistry.write", input: write },
+    guard,
+    assertCallerCurrent,
+    context,
+  );
 }
 
-async function readLegacyRegistryFile(registryPath: string): Promise<RegistryFile | null> {
-  try {
-    const raw = await fs.readFile(registryPath, "utf-8");
-    const parsed = safeParseJsonWithSchema(RegistryFileSchema, raw) as RegistryFile | null;
-    return parsed;
-  } catch (error) {
-    const code = (error as { code?: string } | null)?.code;
-    if (code === "ENOENT") {
-      return { entries: [] };
-    }
-    if (error instanceof Error) {
-      throw error;
-    }
-    throw new Error(`Failed to read sandbox registry file: ${registryPath}`, { cause: error });
-  }
-}
-
+/** Reads all registered sandbox runtime containers from SQLite. */
 export async function readRegistry(): Promise<SandboxRegistry> {
-  const entries = await readShardedEntries<SandboxRegistryEntry>(SANDBOX_CONTAINERS_DIR);
-  return {
-    entries: entries.map((entry) => normalizeSandboxRegistryEntry(entry)),
-  };
-}
-
-function shardedEntryFilePath(dir: string, containerName: string): string {
-  return path.join(dir, `${hashTextSha256(containerName)}.json`);
-}
-
-async function withEntryLock<T>(
-  dir: string,
-  containerName: string,
-  fn: () => Promise<T>,
-): Promise<T> {
-  const entryPath = shardedEntryFilePath(dir, containerName);
-  const lock = await acquireSessionWriteLock({
-    sessionFile: entryPath,
-    allowReentrant: false,
-    timeoutMs: 60_000,
-  });
-  try {
-    return await fn();
-  } finally {
-    await lock.release();
+  const reply = await executeExistingOpenClawStateRead({}, { type: "sandboxRegistry.list" });
+  if (!reply) {
+    return { entries: [] };
   }
-}
-
-async function readShardedEntry<T extends RegistryEntry>(
-  dir: string,
-  containerName: string,
-): Promise<T | null> {
-  let raw: string;
-  try {
-    raw = await fs.readFile(shardedEntryFilePath(dir, containerName), "utf-8");
-  } catch (error) {
-    const code = (error as { code?: string } | null)?.code;
-    if (code === "ENOENT") {
-      return null;
-    }
-    throw error;
+  if (!reply.ok || reply.type !== "sandboxRegistry.list") {
+    throw new Error("Unexpected sandbox registry list result");
   }
-  const parsed = safeParseJsonWithSchema(RegistryEntrySchema, raw) as T | null;
-  return parsed?.containerName === containerName ? parsed : null;
+  return { entries: reply.entries };
 }
 
-async function writeShardedEntry(dir: string, entry: RegistryEntryPayload): Promise<void> {
-  await fs.mkdir(dir, { recursive: true });
-  await writeJson(shardedEntryFilePath(dir, entry.containerName), entry, {
-    trailingNewline: true,
-  });
-}
-
-async function removeShardedEntry(dir: string, containerName: string): Promise<void> {
-  await fs.rm(shardedEntryFilePath(dir, containerName), { force: true });
-}
-
-async function readShardedEntries<T extends RegistryEntry>(dir: string): Promise<T[]> {
-  let files: string[];
-  try {
-    files = await fs.readdir(dir);
-  } catch (error) {
-    const code = (error as { code?: string } | null)?.code;
-    if (code === "ENOENT") {
-      return [];
-    }
-    throw error;
-  }
-
-  const entries = await Promise.all(
-    files
-      .filter((name) => name.endsWith(".json"))
-      .toSorted()
-      .map(async (name) => {
-        try {
-          const raw = await fs.readFile(path.join(dir, name), "utf-8");
-          return safeParseJsonWithSchema(RegistryEntrySchema, raw) as T | null;
-        } catch {
-          return null;
-        }
-      }),
-  );
-  const validEntries: T[] = [];
-  for (const entry of entries) {
-    if (entry) {
-      validEntries.push(entry);
-    }
-  }
-  return validEntries.toSorted((left, right) =>
-    left.containerName.localeCompare(right.containerName),
-  );
-}
-
-async function quarantineLegacyRegistry(registryPath: string): Promise<string> {
-  const quarantinePath = `${registryPath}.invalid-${Date.now()}`;
-  await fs.rename(registryPath, quarantinePath).catch(async (error) => {
-    const code = (error as { code?: string } | null)?.code;
-    if (code !== "ENOENT") {
-      await fs.rm(registryPath, { force: true });
-    }
-  });
-  return quarantinePath;
-}
-
-async function migrateMonolithicIfNeeded(
-  target: LegacyRegistryTarget,
-): Promise<LegacySandboxRegistryMigrationResult> {
-  const { registryPath, shardedDir } = target;
-  try {
-    await fs.access(registryPath);
-  } catch (error) {
-    const code = (error as { code?: string } | null)?.code;
-    if (code === "ENOENT") {
-      return { ...target, status: "missing", entries: 0 };
-    }
-    throw error;
-  }
-
-  return await withRegistryLock(registryPath, async () => {
-    const registry = await readLegacyRegistryFile(registryPath);
-    if (!registry) {
-      const quarantinePath = await quarantineLegacyRegistry(registryPath);
-      return { ...target, status: "quarantined-invalid", entries: 0, quarantinePath };
-    }
-    if (registry.entries.length === 0) {
-      await fs.rm(registryPath, { force: true });
-      return { ...target, status: "removed-empty", entries: 0 };
-    }
-    await fs.mkdir(shardedDir, { recursive: true });
-    for (const entry of registry.entries) {
-      await withEntryLock(shardedDir, entry.containerName, async () => {
-        const existing = await readShardedEntry(shardedDir, entry.containerName);
-        if (!existing) {
-          await writeShardedEntry(shardedDir, entry);
-        }
-      });
-    }
-    await fs.rm(registryPath, { force: true });
-    return { ...target, status: "migrated", entries: registry.entries.length };
-  });
-}
-
-function legacyRegistryTargets(): LegacyRegistryTarget[] {
-  return [
-    {
-      kind: "containers",
-      registryPath: SANDBOX_REGISTRY_PATH,
-      shardedDir: SANDBOX_CONTAINERS_DIR,
-    },
-    {
-      kind: "browsers",
-      registryPath: SANDBOX_BROWSER_REGISTRY_PATH,
-      shardedDir: SANDBOX_BROWSERS_DIR,
-    },
-  ];
-}
-
-export async function inspectLegacySandboxRegistryFiles(): Promise<
-  LegacySandboxRegistryInspection[]
-> {
-  const inspections: LegacySandboxRegistryInspection[] = [];
-  for (const target of legacyRegistryTargets()) {
-    try {
-      await fs.access(target.registryPath);
-    } catch (error) {
-      const code = (error as { code?: string } | null)?.code;
-      if (code === "ENOENT") {
-        inspections.push({ ...target, exists: false, valid: true, entries: 0 });
-        continue;
-      }
-      throw error;
-    }
-
-    const registry = await readLegacyRegistryFile(target.registryPath);
-    inspections.push({
-      ...target,
-      exists: true,
-      valid: Boolean(registry),
-      entries: registry?.entries.length ?? 0,
-    });
-  }
-  return inspections;
-}
-
-export async function migrateLegacySandboxRegistryFiles(): Promise<
-  LegacySandboxRegistryMigrationResult[]
-> {
-  const results: LegacySandboxRegistryMigrationResult[] = [];
-  for (const target of legacyRegistryTargets()) {
-    results.push(await migrateMonolithicIfNeeded(target));
-  }
-  return results;
-}
-
+/** Reads one registered sandbox runtime container by container name. */
 export async function readRegistryEntry(
   containerName: string,
 ): Promise<SandboxRegistryEntry | null> {
-  const entry = await readShardedEntry<SandboxRegistryEntry>(SANDBOX_CONTAINERS_DIR, containerName);
-  return entry ? normalizeSandboxRegistryEntry(entry) : null;
+  const reply = await executeExistingOpenClawStateRead(
+    {},
+    { type: "sandboxRegistry.get", containerName },
+  );
+  if (!reply) {
+    return null;
+  }
+  if (!reply.ok || reply.type !== "sandboxRegistry.get") {
+    throw new Error("Unexpected sandbox registry lookup result");
+  }
+  return reply.entry;
 }
 
-export async function updateRegistry(entry: SandboxRegistryEntry) {
-  await withEntryLock(SANDBOX_CONTAINERS_DIR, entry.containerName, async () => {
-    const existing = await readShardedEntry<SandboxRegistryEntry>(
-      SANDBOX_CONTAINERS_DIR,
-      entry.containerName,
+/** Reads registered runtime IDs for one backend-owned sandbox scope, newest first. */
+export async function readRegisteredSandboxRuntimeIds(params: {
+  backendId: string;
+  scopeKey: string;
+}): Promise<string[]> {
+  const reply = await executeExistingOpenClawStateRead(
+    {},
+    { type: "sandboxRegistry.runtimeIds", ...params },
+  );
+  if (!reply) {
+    return [];
+  }
+  if (!reply.ok || reply.type !== "sandboxRegistry.runtimeIds") {
+    throw new Error("Unexpected sandbox runtime ID result");
+  }
+  return reply.runtimeIds;
+}
+
+/** Creates or updates one sandbox runtime registry entry, preserving immutable creation fields. */
+export async function updateRegistry(entry: SandboxRegistryEntry, guard?: WorkspaceStateGuard) {
+  await writeRegistry({ operation: "update", entry }, guard);
+}
+
+/** Removes one sandbox runtime registry entry by container name. */
+export async function removeRegistryEntry(
+  containerName: string,
+  options: { preserveRemovalIntent?: boolean; guard?: WorkspaceStateGuard } = {},
+) {
+  await writeRegistry(
+    {
+      operation: "remove",
+      containerName,
+      preserveRemovalIntent: options.preserveRemovalIntent,
+    },
+    options.guard,
+  );
+}
+
+/** Atomically select one generation for a backend/scope before provider allocation. */
+export async function reserveSandboxRegistryEntry(
+  candidate: SandboxRegistryEntry,
+  guard?: WorkspaceStateGuard,
+): Promise<SandboxRegistryEntry> {
+  return executeRegistry({ type: "sandboxRegistry.reserve", input: candidate }, guard);
+}
+
+/** Validate the exact generation; retained handles cannot outlive removal intent. */
+// Released synchronous sandbox callbacks span provider waits and deferred process launch.
+// Raw synchronous writers still lack complete receipts, so retain the native generation
+// guard until their next SDK-major removal (docs/reference/database-schemas/worker-access.md).
+export function assertSandboxRegistryEntryCurrent(entry: SandboxRegistryEntry): void {
+  const current =
+    withExistingOpenClawStateDatabaseReadOnly(({ db }) =>
+      readSandboxRegistryEntryInDatabase(db, entry.containerName),
+    ) ?? null;
+  assertSandboxRegistryGenerationCurrent(current, entry);
+}
+
+/** Publish only a still-current reservation, or forget a provider-confirmed terminal generation. */
+export async function completeSandboxRegistryReservation(
+  entry: SandboxRegistryEntry,
+  retired = false,
+  guard?: WorkspaceStateGuard,
+): Promise<void> {
+  await writeRegistry({ operation: "complete", entry, retired }, guard);
+}
+
+/** Serialize provider operations across Gateway/CLI; only dead owners permit lock recovery. */
+export async function withSandboxRegistryEntryLock<T>(
+  entry: SandboxRegistryEntry,
+  operation: () => Promise<T>,
+  databasePath = resolveOpenClawStateSqlitePath(),
+): Promise<T> {
+  const key = createHash("sha256").update(entry.containerName).digest("hex");
+  return await withFileLock(
+    `${databasePath}.sandbox-${key}`,
+    {
+      // Cover provider warmup (10 minutes), inspection, and cleanup contention.
+      retries: { retries: 9000, factor: 1, minTimeout: 100, maxTimeout: 100 },
+      stale: 0,
+      staleRecovery: "remove-if-definitely-stale",
+    },
+    operation,
+  );
+}
+
+/** Persist removal intent before waiting for provisioning, and retain failed cleanup for retry. */
+export async function removeSandboxRegistryRuntime(
+  entry: SandboxRegistryEntry,
+  removeRuntime: (entry: SandboxRegistryEntry) => Promise<void>,
+  options: {
+    reserveRuntime?: boolean;
+    prune?: SandboxRegistryPrune;
+    guard?: WorkspaceStateGuard;
+  } = {},
+): Promise<void> {
+  const context = captureOpenClawStateWorkerContext();
+  const assertCurrent = () => {
+    context.admission.assertCurrent();
+    options.guard?.assertHost?.();
+    options.guard?.beforeLegacyApply?.();
+  };
+  assertCurrent();
+  const input = structuredClone({
+    entry,
+    reserveRuntime: options.reserveRuntime,
+    prune: options.prune,
+  });
+  return withSandboxRegistrySettlement(context, async () => {
+    const selected = await executeRegistry(
+      { type: "sandboxRegistry.beginRemoval", input },
+      options.guard,
+      undefined,
+      context,
     );
-    await writeShardedEntry(SANDBOX_CONTAINERS_DIR, {
-      ...entry,
-      backendId: entry.backendId ?? existing?.backendId,
-      runtimeLabel: entry.runtimeLabel ?? existing?.runtimeLabel,
-      createdAtMs: existing?.createdAtMs ?? entry.createdAtMs,
-      image: existing?.image ?? entry.image,
-      configLabelKind: entry.configLabelKind ?? existing?.configLabelKind,
-      configHash: entry.configHash ?? existing?.configHash,
-    });
+    assertCurrent();
+    if (!selected) {
+      return;
+    }
+    const remove = async (current: SandboxRegistryEntry) => {
+      assertCurrent();
+      const identity = { ...context.admission.identity };
+      const generation = structuredClone(current);
+      await removeRuntime(current);
+      await finishSandboxRegistryRemoval(context, identity, generation, options.guard);
+    };
+    if (!selected.runtimeState) {
+      await remove(selected);
+      return;
+    }
+    await withSandboxRegistryEntryLock(
+      selected,
+      async () => {
+        assertCurrent();
+        const reply = await executeExistingOpenClawStateRead(
+          { path: context.admission.databasePath, env: context.environment },
+          { type: "sandboxRegistry.get", containerName: selected.containerName },
+          { context, current: true },
+        );
+        assertCurrent();
+        if (reply && (!reply.ok || reply.type !== "sandboxRegistry.get")) {
+          throw new Error("Unexpected sandbox registry removal lookup result");
+        }
+        const current = reply?.entry;
+        if (
+          !current ||
+          (current.runtimeState !== "removing" && current.runtimeState !== "removing-pending") ||
+          current.backendId !== selected.backendId ||
+          current.sessionKey !== selected.sessionKey ||
+          current.createdAtMs !== selected.createdAtMs ||
+          (input.prune && !shouldPruneSandboxRegistryEntry(current, input.prune))
+        ) {
+          return;
+        }
+        await remove(current);
+      },
+      context.admission.databasePath,
+    );
   });
 }
 
-export async function removeRegistryEntry(containerName: string) {
-  await withEntryLock(SANDBOX_CONTAINERS_DIR, containerName, async () => {
-    await removeShardedEntry(SANDBOX_CONTAINERS_DIR, containerName);
-  });
-}
-
+/** Reads all registered browser sandbox containers from SQLite. */
 export async function readBrowserRegistry(): Promise<SandboxBrowserRegistry> {
-  return { entries: await readShardedEntries<SandboxBrowserRegistryEntry>(SANDBOX_BROWSERS_DIR) };
+  const reply = await executeExistingOpenClawStateRead({}, { type: "sandboxRegistry.browsers" });
+  if (!reply) {
+    return { entries: [] };
+  }
+  if (!reply.ok || reply.type !== "sandboxRegistry.browsers") {
+    throw new Error("Unexpected sandbox browser registry result");
+  }
+  return { entries: reply.entries };
 }
 
-export async function updateBrowserRegistry(entry: SandboxBrowserRegistryEntry) {
-  await withEntryLock(SANDBOX_BROWSERS_DIR, entry.containerName, async () => {
-    const existing = await readShardedEntry<SandboxBrowserRegistryEntry>(
-      SANDBOX_BROWSERS_DIR,
-      entry.containerName,
-    );
-    await writeShardedEntry(SANDBOX_BROWSERS_DIR, {
-      ...entry,
-      createdAtMs: existing?.createdAtMs ?? entry.createdAtMs,
-      image: existing?.image ?? entry.image,
-      configHash: entry.configHash ?? existing?.configHash,
-    });
+/** Validate the exact browser workspace owner before local reconciliation effects. */
+export function assertSandboxBrowserRegistryEntryCurrent(entry: SandboxBrowserRegistryEntry): void {
+  const current = withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
+    if (!tableExists(db, "sandbox_registry_entries")) {
+      return null;
+    }
+    const row = readSandboxRegistryRowInDatabase(db, "browser", entry.containerName);
+    return row ? rowToBrowserEntry(row) : null;
   });
+  if (
+    !current ||
+    current.sessionKey !== entry.sessionKey ||
+    current.createdAtMs !== entry.createdAtMs ||
+    current.workspaceDir !== entry.workspaceDir ||
+    current.configHash !== entry.configHash
+  ) {
+    throw new Error("Sandbox browser workspace owner changed");
+  }
 }
 
+/** Creates or updates one browser sandbox registry entry, preserving immutable creation fields. */
+export async function updateBrowserRegistry(
+  entry: SandboxBrowserRegistryEntry,
+  assertCurrent?: () => void,
+) {
+  await writeRegistry({ operation: "updateBrowser", entry }, undefined, assertCurrent);
+}
+
+/** Forget only the inspected allocation, under the caller's still-live settlement lease. */
+export async function removeSandboxRegistryGeneration(
+  kind: SandboxRegistryKind,
+  entry: SandboxRegistryEntry | SandboxBrowserRegistryEntry,
+  assertCurrent?: () => void,
+): Promise<void> {
+  await writeRegistry({ operation: "removeGeneration", kind, entry }, undefined, assertCurrent);
+}
+
+/** Removes one browser sandbox registry entry by container name. */
 export async function removeBrowserRegistryEntry(containerName: string) {
-  await withEntryLock(SANDBOX_BROWSERS_DIR, containerName, async () => {
-    await removeShardedEntry(SANDBOX_BROWSERS_DIR, containerName);
-  });
+  await writeRegistry({ operation: "removeBrowser", containerName });
 }

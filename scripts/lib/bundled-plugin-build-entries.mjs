@@ -1,17 +1,66 @@
+// Discovers bundled plugin source entries, package artifacts, and root excludes for builds.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { NON_PACKAGED_BUNDLED_PLUGIN_DIRS } from "../../src/shared/non-packaged-plugin-dirs.ts";
+import { BUNDLED_PLUGIN_ROOT_DIR, bundledDistPluginFile } from "./bundled-plugin-paths.mjs";
 import {
-  BUNDLED_PLUGIN_ROOT_DIR,
-  bundledDistPluginFile,
-  bundledPluginFile,
-} from "./bundled-plugin-paths.mjs";
-import { shouldBuildBundledCluster } from "./optional-bundled-clusters.mjs";
+  OPTIONAL_BUNDLED_BUILD_ENV,
+  shouldBuildBundledCluster,
+} from "./optional-bundled-clusters.mjs";
+import { collectRootPackageExcludedExtensionDirs } from "./root-package-bundled-plugin-excludes.mjs";
+
+export { collectRootPackageExcludedExtensionDirs };
 
 const TOP_LEVEL_PUBLIC_SURFACE_EXTENSIONS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
-export const NON_PACKAGED_BUNDLED_PLUGIN_DIRS = new Set(["qa-channel", "qa-lab", "qa-matrix"]);
-const EXCLUDED_CORE_BUNDLED_PLUGIN_DIRS = new Set(["qqbot", "whatsapp"]);
-const toPosixPath = (value) => value.replaceAll("\\", "/");
+const BUNDLED_PLUGIN_BUILD_IDS_ENV = "OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS";
+/** @internal Shared repository-script contract. */
+export const DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV = "OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS";
+// Declaration caches must distinguish every selector that changes this entry graph.
+export const BUNDLED_PLUGIN_BUILD_ENV_NAMES = [
+  BUNDLED_PLUGIN_BUILD_IDS_ENV,
+  DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV,
+  OPTIONAL_BUNDLED_BUILD_ENV,
+];
+const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9-]*$/u;
+const TOP_LEVEL_PRIVATE_TEST_SURFACE_RE =
+  /(?:^|[._-])(?:test|spec|test-support|test-helpers|test-fixtures|test-harness|mock-setup)(?:[._-]|$)/u;
+const toPosixPath = (value) => value.replaceAll(path.sep, "/");
+
+function parseBundledPluginBuildIdFilter(env = process.env) {
+  const raw = env[BUNDLED_PLUGIN_BUILD_IDS_ENV];
+  if (typeof raw !== "string" || raw.trim() === "") {
+    return null;
+  }
+  return new Set(
+    raw
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0),
+  );
+}
+
+export function parseDockerSelectedPluginBuildIdFilter(env = process.env) {
+  const raw = env[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV];
+  if (typeof raw !== "string" || raw.trim() === "") {
+    return null;
+  }
+  const ids = new Set(
+    raw
+      .split(/[\s,]+/u)
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0),
+  );
+  const invalidIds = [...ids].filter((id) => !PLUGIN_ID_RE.test(id));
+  if (invalidIds.length > 0) {
+    throw new Error(
+      `${DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV} contains invalid plugin id(s): ${invalidIds
+        .toSorted((left, right) => left.localeCompare(right))
+        .join(", ")}`,
+    );
+  }
+  return ids;
+}
 
 function readBundledPluginPackageJson(packageJsonPath, options = {}) {
   if (!(options.hasPackageJson ?? fs.existsSync(packageJsonPath))) {
@@ -25,6 +74,9 @@ function readBundledPluginPackageJson(packageJsonPath, options = {}) {
 }
 
 function isManifestlessBundledRuntimeSupportPackage(params) {
+  if (params.packageJson?.openclaw?.release?.publishToNpm === true) {
+    return false;
+  }
   const packageName = typeof params.packageJson?.name === "string" ? params.packageJson.name : "";
   if (packageName !== `@openclaw/${params.dirName}`) {
     return false;
@@ -36,88 +88,117 @@ function shouldBuildBundledDistEntry(packageJson) {
   return packageJson?.openclaw?.build?.bundledDist !== false;
 }
 
-export function collectPluginSourceEntries(packageJson) {
-  let packageEntries = Array.isArray(packageJson?.openclaw?.extensions)
-    ? packageJson.openclaw.extensions.filter(
-        (entry) => typeof entry === "string" && entry.trim().length > 0,
-      )
-    : [];
-  const setupEntry =
-    typeof packageJson?.openclaw?.setupEntry === "string" &&
-    packageJson.openclaw.setupEntry.trim().length > 0
-      ? packageJson.openclaw.setupEntry
-      : undefined;
-  if (setupEntry) {
-    packageEntries = Array.from(new Set([...packageEntries, setupEntry]));
-  }
-  return packageEntries.length > 0 ? packageEntries : ["./index.ts"];
+/**
+ * Standalone and isolated source-checkout builds retain the package's declared format.
+ * @returns {"cjs" | "esm"}
+ */
+export function resolvePluginRuntimeFormat(packageJson) {
+  return packageJson?.openclaw?.build?.runtimeFormat === "cjs" ? "cjs" : "esm";
 }
 
+export function pluginRuntimeExtension(runtimeFormat) {
+  return runtimeFormat === "cjs" ? ".cjs" : ".js";
+}
+
+function isExcludedTopLevelPublicSurfaceFile(fileName) {
+  const normalizedName = fileName.toLowerCase();
+  return (
+    normalizedName.endsWith(".d.ts") ||
+    /^config(?:-doctor)?-api\.(?:[cm]?[jt]s)$/u.test(normalizedName) ||
+    TOP_LEVEL_PRIVATE_TEST_SURFACE_RE.test(normalizedName) ||
+    normalizedName.includes(".fixture.") ||
+    normalizedName.includes(".snap")
+  );
+}
+
+function isTopLevelPublicSurfaceFile(fileName) {
+  return (
+    !fileName.includes("/") &&
+    TOP_LEVEL_PUBLIC_SURFACE_EXTENSIONS.has(path.extname(fileName)) &&
+    !isExcludedTopLevelPublicSurfaceFile(fileName)
+  );
+}
+
+const CATALOG_ENTRY_FIELDS = ["providerCatalogEntry", "capabilityCatalogEntry"];
+
+function collectPluginCatalogSourceEntries(manifest) {
+  return CATALOG_ENTRY_FIELDS.map((field) => manifest[field]).filter(
+    (entry) => typeof entry === "string" && entry.trim().length > 0,
+  );
+}
+
+/** Keep catalog declarations aligned with the artifact owner that emits their modules. */
+export function mapPluginCatalogEntries(manifest, mapEntry) {
+  const result = { ...manifest };
+  for (const field of CATALOG_ENTRY_FIELDS) {
+    if (typeof manifest[field] === "string") {
+      result[field] = mapEntry(manifest[field]);
+    }
+  }
+  return result;
+}
+
+/** Collect plugin source entry files declared by package and manifest metadata. */
+export function collectPluginSourceEntries(packageJson, manifest = {}) {
+  const packageEntries = [
+    ...(Array.isArray(packageJson?.openclaw?.extensions) ? packageJson.openclaw.extensions : []),
+    packageJson?.openclaw?.setupEntry,
+  ].filter((entry) => typeof entry === "string" && entry.trim().length > 0);
+  return [
+    ...new Set([
+      ...(packageEntries.length > 0 ? packageEntries : ["./index.ts"]),
+      ...collectPluginCatalogSourceEntries(manifest),
+      ...(Array.isArray(packageJson?.openclaw?.build?.workerEntries)
+        ? packageJson.openclaw.build.workerEntries.filter(
+            (entry) => typeof entry === "string" && entry.trim().length > 0,
+          )
+        : []),
+    ]),
+  ];
+}
+
+/** Select typed plugin contracts, not runtime loader sidecars or implementation helpers. */
+export function collectPluginDeclarationSourceEntries(packageJson, sourceEntries) {
+  const entryName = (entry) =>
+    entry.replace(/^\.\/(?:dist\/)?/u, "").replace(/(?:\.d)?\.[cm]?[jt]s$/u, "");
+  const publicNames = new Set(["api", "runtime-api", "contract-api"]);
+  function collectExports(value) {
+    if (typeof value === "string") {
+      publicNames.add(entryName(value));
+    } else if (value && typeof value === "object") {
+      for (const entry of Object.values(value)) {
+        collectExports(entry);
+      }
+    }
+  }
+  collectExports(packageJson?.exports);
+  collectExports(packageJson?.types ?? packageJson?.typings);
+  return sourceEntries.filter((entry) => publicNames.has(entryName(entry)));
+}
+
+/** Collect top-level public plugin surface files that should be built. */
 export function collectTopLevelPublicSurfaceEntries(pluginDir) {
   if (!fs.existsSync(pluginDir)) {
     return [];
   }
 
-  return fs
-    .readdirSync(pluginDir, { withFileTypes: true })
-    .flatMap((dirent) => {
-      if (!dirent.isFile()) {
-        return [];
-      }
-
-      const ext = path.extname(dirent.name);
-      if (!TOP_LEVEL_PUBLIC_SURFACE_EXTENSIONS.has(ext)) {
-        return [];
-      }
-
-      const normalizedName = dirent.name.toLowerCase();
-      if (
-        normalizedName.endsWith(".d.ts") ||
-        /^config-api\.(?:[cm]?[jt]s)$/u.test(normalizedName) ||
-        normalizedName.includes(".test.") ||
-        normalizedName.includes(".spec.") ||
-        normalizedName.includes(".fixture.") ||
-        normalizedName.includes(".snap")
-      ) {
-        return [];
-      }
-
-      return [`./${dirent.name}`];
-    })
-    .toSorted((left, right) => left.localeCompare(right));
+  return collectTopLevelPublicSurfaceEntriesFromFiles(
+    fs
+      .readdirSync(pluginDir, { withFileTypes: true })
+      .filter((dirent) => dirent.isFile())
+      .map((dirent) => dirent.name),
+  );
 }
 
 function collectTopLevelPublicSurfaceEntriesFromFiles(relativeFiles) {
   return relativeFiles
-    .flatMap((relativeFile) => {
-      if (relativeFile.includes("/")) {
-        return [];
-      }
-
-      const ext = path.extname(relativeFile);
-      if (!TOP_LEVEL_PUBLIC_SURFACE_EXTENSIONS.has(ext)) {
-        return [];
-      }
-
-      const normalizedName = relativeFile.toLowerCase();
-      if (
-        normalizedName.endsWith(".d.ts") ||
-        /^config-api\.(?:[cm]?[jt]s)$/u.test(normalizedName) ||
-        normalizedName.includes(".test.") ||
-        normalizedName.includes(".spec.") ||
-        normalizedName.includes(".fixture.") ||
-        normalizedName.includes(".snap")
-      ) {
-        return [];
-      }
-
-      return [`./${relativeFile}`];
-    })
+    .filter(isTopLevelPublicSurfaceFile)
+    .map((relativeFile) => `./${relativeFile}`)
     .toSorted((left, right) => left.localeCompare(right));
 }
 
 function collectTrackedBundledPluginFiles(cwd) {
-  const result = spawnSync("git", ["ls-files", "--", BUNDLED_PLUGIN_ROOT_DIR], {
+  const result = spawnSync("git", ["ls-files", "-z", "--", BUNDLED_PLUGIN_ROOT_DIR], {
     cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
@@ -125,17 +206,31 @@ function collectTrackedBundledPluginFiles(cwd) {
   if (result.status !== 0) {
     return null;
   }
-
   const filesByPlugin = new Map();
-  for (const rawLine of result.stdout.split("\n")) {
-    const line = toPosixPath(rawLine.trim());
-    const match = new RegExp(`^${BUNDLED_PLUGIN_ROOT_DIR}/([^/]+)/(.+)$`).exec(line);
-    if (!match) {
+  const prefix = `${BUNDLED_PLUGIN_ROOT_DIR}/`;
+  for (const file of result.stdout.split("\0")) {
+    if (!file.startsWith(prefix)) {
       continue;
     }
-    const [, dirName, relativeFile] = match;
+    const separator = file.indexOf("/", prefix.length);
+    if (separator === -1) {
+      continue;
+    }
+    const dirName = file.slice(prefix.length, separator);
+    const relativeFile = file.slice(separator + 1);
+    const relevant =
+      relativeFile === "package.json" ||
+      relativeFile === "openclaw.plugin.json" ||
+      isTopLevelPublicSurfaceFile(relativeFile);
+    // Any existing tracked file establishes a known plugin directory. Once known,
+    // only metadata and top-level entry files affect its build inventory.
+    if ((!relevant && filesByPlugin.has(dirName)) || !fs.existsSync(path.join(cwd, file))) {
+      continue;
+    }
     const files = filesByPlugin.get(dirName) ?? [];
-    files.push(relativeFile);
+    if (relevant) {
+      files.push(relativeFile);
+    }
     filesByPlugin.set(dirName, files);
   }
 
@@ -143,42 +238,54 @@ function collectTrackedBundledPluginFiles(cwd) {
 }
 
 function collectBundledPluginCandidates(cwd, extensionsRoot) {
-  const trackedFiles = collectTrackedBundledPluginFiles(cwd);
-  if (trackedFiles) {
-    return [...trackedFiles.entries()]
-      .map(([dirName, relativeFiles]) => ({
-        dirName,
-        pluginDir: path.join(extensionsRoot, dirName),
-        relativeFiles,
-        topLevelPublicSurfaceEntries: collectTopLevelPublicSurfaceEntriesFromFiles(relativeFiles),
-      }))
-      .toSorted((left, right) => left.dirName.localeCompare(right.dirName));
-  }
-
-  return fs
-    .readdirSync(extensionsRoot, { withFileTypes: true })
-    .filter((dirent) => dirent.isDirectory())
-    .map((dirent) => {
-      const pluginDir = path.join(extensionsRoot, dirent.name);
+  const candidates =
+    collectTrackedBundledPluginFiles(cwd) ??
+    new Map(
+      fs
+        .readdirSync(extensionsRoot, { withFileTypes: true })
+        .filter((dirent) => dirent.isDirectory())
+        .map((dirent) => [dirent.name, null]),
+    );
+  return [...candidates]
+    .map(([dirName, relativeFiles]) => {
+      const pluginDir = path.join(extensionsRoot, dirName);
       return {
-        dirName: dirent.name,
+        dirName,
         pluginDir,
-        relativeFiles: null,
-        topLevelPublicSurfaceEntries: collectTopLevelPublicSurfaceEntries(pluginDir),
+        relativeFiles,
+        topLevelPublicSurfaceEntries: relativeFiles
+          ? collectTopLevelPublicSurfaceEntriesFromFiles(relativeFiles)
+          : collectTopLevelPublicSurfaceEntries(pluginDir),
       };
-    });
+    })
+    .toSorted((left, right) => left.dirName.localeCompare(right.dirName));
 }
 
+/** Share raw source discovery within one config evaluation; policy reads stay independent. */
+export function createBundledPluginBuildInventory(cwd = process.cwd()) {
+  let candidates;
+  return {
+    cwd,
+    getCandidates: () =>
+      (candidates ??= collectBundledPluginCandidates(cwd, path.join(cwd, BUNDLED_PLUGIN_ROOT_DIR))),
+  };
+}
+
+/** Collect all bundled plugin build entries for the current checkout. */
 export function collectBundledPluginBuildEntries(params = {}) {
   const cwd = params.cwd ?? process.cwd();
   const env = params.env ?? process.env;
   const extensionsRoot = path.join(cwd, BUNDLED_PLUGIN_ROOT_DIR);
+  const dockerSelectedBuildIds = parseDockerSelectedPluginBuildIdFilter(env);
+  const candidates =
+    params.getCandidates?.() ?? collectBundledPluginCandidates(cwd, extensionsRoot);
   const entries = [];
 
-  for (const candidate of collectBundledPluginCandidates(cwd, extensionsRoot)) {
+  for (const candidate of candidates) {
     const { dirName, pluginDir, relativeFiles, topLevelPublicSurfaceEntries } = candidate;
     const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
-    const hasManifest = relativeFiles?.includes("openclaw.plugin.json") ?? fs.existsSync(manifestPath);
+    const hasManifest =
+      relativeFiles?.includes("openclaw.plugin.json") ?? fs.existsSync(manifestPath);
     const packageJsonPath = path.join(pluginDir, "package.json");
     const packageJson = readBundledPluginPackageJson(packageJsonPath, {
       hasPackageJson: relativeFiles?.includes("package.json"),
@@ -196,63 +303,139 @@ export function collectBundledPluginBuildEntries(params = {}) {
     if (!shouldBuildBundledCluster(dirName, env, { packageJson })) {
       continue;
     }
-    if (!shouldBuildBundledDistEntry(packageJson)) {
-      continue;
-    }
-    if (EXCLUDED_CORE_BUNDLED_PLUGIN_DIRS.has(dirName)) {
+    const externalSourceEntry =
+      params.includeExternalSourceEntries === true &&
+      (packageJson?.openclaw?.release?.publishToNpm === true ||
+        packageJson?.openclaw?.release?.publishToClawHub === true);
+    if (
+      !shouldBuildBundledDistEntry(packageJson) &&
+      !dockerSelectedBuildIds?.has(dirName) &&
+      !externalSourceEntry
+    ) {
       continue;
     }
 
+    const manifest = hasManifest ? JSON.parse(fs.readFileSync(manifestPath, "utf8")) : {};
     entries.push({
       id: dirName,
       hasManifest,
       hasPackageJson: packageJson !== null,
       packageJson,
+      catalogSourceEntries: collectPluginCatalogSourceEntries(manifest),
       sourceEntries: Array.from(
         new Set([
-          ...(hasManifest ? collectPluginSourceEntries(packageJson) : []),
+          ...(hasManifest ? collectPluginSourceEntries(packageJson, manifest) : []),
           ...topLevelPublicSurfaceEntries,
         ]),
       ),
     });
   }
 
+  if (dockerSelectedBuildIds) {
+    const knownIds = new Set(candidates.map((candidate) => candidate.dirName));
+    const unknownIds = [...dockerSelectedBuildIds].filter((id) => !knownIds.has(id));
+    if (unknownIds.length > 0) {
+      throw new Error(
+        `${DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV} references unknown plugin id(s): ${unknownIds
+          .toSorted((left, right) => left.localeCompare(right))
+          .join(", ")}`,
+      );
+    }
+  }
+
+  const filteredBuildIds = parseBundledPluginBuildIdFilter(env);
+  if (!filteredBuildIds) {
+    return entries;
+  }
+  const buildableIds = new Set(entries.map((entry) => entry.id));
+  const missingIds = [...filteredBuildIds].filter((id) => !buildableIds.has(id));
+  if (missingIds.length > 0) {
+    throw new Error(
+      `${BUNDLED_PLUGIN_BUILD_IDS_ENV} references unknown bundled plugin id(s): ${missingIds
+        .toSorted((left, right) => left.localeCompare(right))
+        .join(", ")}`,
+    );
+  }
+  return entries.filter((entry) => filteredBuildIds.has(entry.id));
+}
+
+/** One source-checkout output plan for compilation, metadata, and readiness checks. */
+export function collectSourceCheckoutPluginBuildEntries(params = {}) {
+  const env = params.env ?? process.env;
+  const dockerSelected = parseDockerSelectedPluginBuildIdFilter(env);
+  const excluded = collectRootPackageExcludedExtensionDirs(params);
+  return collectBundledPluginBuildEntries({
+    ...params,
+    includeExternalSourceEntries: !dockerSelected,
+  })
+    .filter(({ id }) =>
+      NON_PACKAGED_BUNDLED_PLUGIN_DIRS.has(id)
+        ? env.OPENCLAW_BUILD_PRIVATE_QA === "1"
+        : !dockerSelected || !excluded.has(id) || dockerSelected.has(id),
+    )
+    .map((entry) => {
+      const isolated =
+        !dockerSelected &&
+        !NON_PACKAGED_BUNDLED_PLUGIN_DIRS.has(entry.id) &&
+        (excluded.has(entry.id) || !shouldBuildBundledDistEntry(entry.packageJson));
+      // Docker-selected plugins belong to the unified ESM graph, irrespective
+      // of their standalone format. Never infer ownership from files left on disk.
+      const runtimeFormat = isolated ? resolvePluginRuntimeFormat(entry.packageJson) : "esm";
+      return Object.assign(entry, {
+        isolated,
+        runtimeExtension: pluginRuntimeExtension(runtimeFormat),
+      });
+    });
+}
+
+/** Retain plugin-owned Doctor checks independently of runtime installation. */
+export function collectRetainedDoctorBuildEntries(params = {}) {
+  const cwd = params.cwd ?? process.cwd();
+  const entries = {};
+  const candidates =
+    params.getCandidates?.() ??
+    collectBundledPluginCandidates(cwd, path.join(cwd, BUNDLED_PLUGIN_ROOT_DIR));
+  for (const { pluginDir } of candidates) {
+    const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
+    if (!fs.existsSync(manifestPath)) {
+      continue;
+    }
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const stateRetention = params.surface === "state-retention";
+    const ids = stateRetention
+      ? Array.isArray(manifest.doctorContract?.stateMigrations)
+        ? [manifest.id]
+        : []
+      : manifest.doctorContract?.configRepair === true
+        ? (manifest.channels ?? [])
+        : [];
+    if (!ids.length) {
+      continue;
+    }
+    const source = path.join(
+      pluginDir,
+      `${stateRetention ? "state-retention" : "config-doctor"}-api.ts`,
+    );
+    if (!fs.existsSync(source)) {
+      if (stateRetention) {
+        continue;
+      }
+      throw new Error(`Missing config-only doctor entrypoint: ${source}`);
+    }
+    for (const id of ids) {
+      if (!PLUGIN_ID_RE.test(id) || entries[id]) {
+        throw new Error(`Invalid or duplicate retained Doctor owner: ${id}`);
+      }
+      entries[id] = toPosixPath(path.relative(cwd, source));
+    }
+  }
   return entries;
 }
 
-export function listBundledPluginBuildEntries(params = {}) {
-  return Object.fromEntries(
-    collectBundledPluginBuildEntries(params).flatMap(({ id, sourceEntries }) =>
-      sourceEntries.map((entry) => {
-        const normalizedEntry = entry.replace(/^\.\//, "");
-        const entryKey = bundledPluginFile(id, normalizedEntry.replace(/\.[^.]+$/u, ""));
-        return [entryKey, toPosixPath(path.join(BUNDLED_PLUGIN_ROOT_DIR, id, normalizedEntry))];
-      }),
-    ),
-  );
-}
-
-export function collectRootPackageExcludedExtensionDirs(params = {}) {
-  const cwd = params.cwd ?? process.cwd();
-  const packageJsonPath = path.join(cwd, "package.json");
-  const excluded = new Set();
-  if (!fs.existsSync(packageJsonPath)) {
-    return excluded;
-  }
-
-  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
-  for (const entry of packageJson.files ?? []) {
-    if (typeof entry !== "string") {
-      continue;
-    }
-    const match = /^!dist\/extensions\/([^/]+)\/\*\*$/u.exec(entry);
-    if (match?.[1]) {
-      excluded.add(match[1]);
-    }
-  }
-  return excluded;
-}
-
+/**
+ * List package artifact files generated for bundled plugins.
+ * @internal Shared repository-script contract.
+ */
 export function listBundledPluginPackArtifacts(params = {}) {
   const excludedPackageDirs =
     params.includeRootPackageExcludedDirs === true

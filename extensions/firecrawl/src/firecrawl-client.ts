@@ -1,18 +1,32 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
+  asPositiveFiniteNumber,
+  parseDateStringTimestampMs,
+  parseFiniteNumber,
+  resolveIntegerOption,
+} from "openclaw/plugin-sdk/number-runtime";
+import {
+  ProviderHttpError,
+  readProviderJsonObjectResponse,
+} from "openclaw/plugin-sdk/provider-http";
+import {
   DEFAULT_CACHE_TTL_MINUTES,
   markdownToText,
   normalizeCacheKey,
   readCache,
   readResponseText,
   resolveCacheTtlMs,
-  truncateText,
   withSelfHostedWebToolsEndpoint,
   withStrictWebToolsEndpoint,
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-fetch";
+import { resolveSiteName } from "openclaw/plugin-sdk/provider-web-search";
 import { normalizeSecretInput } from "openclaw/plugin-sdk/secret-input";
-import { wrapExternalContent, wrapWebContent } from "openclaw/plugin-sdk/security-runtime";
+import {
+  truncateSanitizedExternalContent,
+  wrapExternalContent,
+  wrapWebContent,
+} from "openclaw/plugin-sdk/security-runtime";
 import {
   SsrFBlockedError,
   isBlockedHostnameOrIp,
@@ -20,6 +34,13 @@ import {
   resolvePinnedHostnameWithPolicy,
   type LookupFn,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  asRecord,
+  asOptionalObjectRecord,
+  asOptionalRecord,
+  normalizeOptionalString,
+  readStringField,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   DEFAULT_FIRECRAWL_BASE_URL,
   resolveFirecrawlApiKey,
@@ -34,13 +55,15 @@ const SEARCH_CACHE = new Map<
   string,
   { value: Record<string, unknown>; expiresAt: number; insertedAt: number }
 >();
-const SCRAPE_CACHE = new Map<
-  string,
-  { value: Record<string, unknown>; expiresAt: number; insertedAt: number }
->();
 const DEFAULT_SEARCH_COUNT = 5;
+const FIRECRAWL_SEARCH_MAX_RESULTS = 100;
+const FIRECRAWL_SEARCH_MAX_CONTENT_CHARS = 20_000;
 const DEFAULT_SCRAPE_MAX_CHARS = 50_000;
+const FIRECRAWL_SCRAPE_METADATA_MAX_CHARS = 4_000;
+const FIRECRAWL_RESULT_URL_MAX_CHARS = 2_048;
+const FIRECRAWL_SCRAPE_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
 const ALLOWED_FIRECRAWL_HOSTS = new Set(["api.firecrawl.dev"]);
+const FIRECRAWL_PUBLISHED_DATE_RE = /^\d{4}-\d{2}-\d{2}(?:[T ][\d:.+Z-]{0,20})?$/u;
 const FIRECRAWL_SELF_HOSTED_PRIVATE_ERROR =
   "Firecrawl custom baseUrl must target a private or internal self-hosted endpoint.";
 const FIRECRAWL_HTTP_PRIVATE_ERROR =
@@ -52,27 +75,7 @@ type FirecrawlResolvedEndpoint = {
   mode: FirecrawlEndpointMode;
 };
 
-type FirecrawlSearchItem = {
-  title: string;
-  url: string;
-  description?: string;
-  content?: string;
-  published?: string;
-  siteName?: string;
-};
-
-async function readFirecrawlJsonResponse(
-  response: Response,
-  label: string,
-): Promise<Record<string, unknown>> {
-  try {
-    return (await response.json()) as Record<string, unknown>;
-  } catch (cause) {
-    throw new Error(`${label}: malformed JSON response`, { cause });
-  }
-}
-
-export type FirecrawlSearchParams = {
+type FirecrawlSearchParams = {
   cfg?: OpenClawConfig;
   query: string;
   count?: number;
@@ -80,18 +83,27 @@ export type FirecrawlSearchParams = {
   sources?: string[];
   categories?: string[];
   scrapeResults?: boolean;
+  includeDomains?: string[];
+  excludeDomains?: string[];
+  tbs?: string;
+  location?: string;
+  country?: string;
+  access?: "credential" | "keyless";
+  signal?: AbortSignal;
 };
 
-export type FirecrawlScrapeParams = {
+type FirecrawlScrapeParams = {
   cfg?: OpenClawConfig;
   url: string;
   extractMode: "markdown" | "text";
+  access?: "credential" | "keyless";
   maxChars?: number;
   onlyMainContent?: boolean;
   maxAgeMs?: number;
   proxy?: "auto" | "basic" | "stealth";
   storeInCache?: boolean;
   timeoutSeconds?: number;
+  signal?: AbortSignal;
 };
 
 export function assertFirecrawlScrapeTargetAllowed(url: string): void {
@@ -136,16 +148,9 @@ async function firecrawlEndpointTargetsPrivateNetwork(
 }
 
 async function validateFirecrawlBaseUrl(
-  baseUrl: string,
+  url: URL,
   lookupFn?: LookupFn,
 ): Promise<FirecrawlEndpointMode> {
-  let url: URL;
-  try {
-    url = new URL(baseUrl.trim() || DEFAULT_FIRECRAWL_BASE_URL);
-  } catch {
-    throw new Error("Firecrawl baseUrl must be a valid http:// or https:// URL.");
-  }
-
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error("Firecrawl baseUrl must use http:// or https://.");
   }
@@ -169,7 +174,7 @@ async function resolveEndpoint(
   lookupFn?: LookupFn,
 ): Promise<FirecrawlResolvedEndpoint> {
   const url = new URL(baseUrl.trim() || DEFAULT_FIRECRAWL_BASE_URL);
-  const mode = await validateFirecrawlBaseUrl(url.toString(), lookupFn);
+  const mode = await validateFirecrawlBaseUrl(url, lookupFn);
   url.username = "";
   url.password = "";
   url.search = "";
@@ -179,57 +184,45 @@ async function resolveEndpoint(
 }
 
 async function postFirecrawlJson<T>(
-  params: {
-    url: string;
-    mode?: FirecrawlEndpointMode;
+  params: FirecrawlResolvedEndpoint & {
     timeoutSeconds: number;
-    apiKey: string;
+    apiKey?: string;
     body: Record<string, unknown>;
     errorLabel: string;
+    signal?: AbortSignal;
   },
   parse: (response: Response) => Promise<T>,
 ): Promise<T> {
   const apiKey = normalizeSecretInput(params.apiKey);
-  const mode = params.mode ?? (await validateFirecrawlBaseUrl(params.url));
   const withEndpoint =
-    mode === "selfHosted" ? withSelfHostedWebToolsEndpoint : withStrictWebToolsEndpoint;
-  return await withEndpoint(
+    params.mode === "selfHosted" ? withSelfHostedWebToolsEndpoint : withStrictWebToolsEndpoint;
+  const result = await withEndpoint(
     {
       url: params.url,
       timeoutSeconds: params.timeoutSeconds,
+      ...(params.signal ? { signal: params.signal } : {}),
       init: {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
+          // Hosted Firecrawl accepts starter scrape requests without a token.
+          // Send one only when configured so higher-limit accounts still apply.
+          ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
         },
         body: JSON.stringify(params.body),
       },
     },
     async ({ response }) => {
       if (!response.ok) {
-        let detail =
-          typeof response.statusText === "string" && response.statusText.trim()
-            ? response.statusText.trim()
-            : "request failed";
+        let detail = response.statusText.trim() || "request failed";
 
-        const readJsonPayload = async (): Promise<Record<string, unknown> | null> => {
-          const candidate = response as Response & { clone?: () => Response };
-          const jsonResponse = typeof candidate.clone === "function" ? candidate.clone() : response;
-          if (typeof jsonResponse.json !== "function") {
-            return null;
-          }
-          try {
-            const payload = await jsonResponse.json();
-            return payload && typeof payload === "object" && !Array.isArray(payload)
-              ? (payload as Record<string, unknown>)
-              : null;
-          } catch {
-            return null;
-          }
-        };
-
-        const payload = await readJsonPayload();
+        const errorBody = await readResponseText(response, { maxBytes: 64_000 });
+        let payload: Record<string, unknown> | undefined;
+        try {
+          payload = asOptionalRecord(JSON.parse(errorBody.text));
+        } catch {
+          // Non-JSON errors keep their bounded text body.
+        }
         if (payload) {
           detail =
             typeof payload.error === "string"
@@ -237,154 +230,176 @@ async function postFirecrawlJson<T>(
               : typeof payload.message === "string"
                 ? payload.message
                 : detail;
-        } else {
-          const errorBody = await readResponseText(response, { maxBytes: 64_000 });
-          if (errorBody.text) {
-            detail = errorBody.text;
-          }
+        } else if (errorBody.text) {
+          detail = errorBody.text;
         }
-        const safeDetail = wrapWebContent(detail.slice(0, 1_000), "web_fetch");
-        throw new Error(`${params.errorLabel} API error (${response.status}): ${safeDetail}`);
+        const safeDetail = wrapWebContent(
+          truncateSanitizedExternalContent(detail, 1_000).text,
+          "web_fetch",
+        );
+        throw new ProviderHttpError(
+          `${params.errorLabel} API error (${response.status}): ${safeDetail}`,
+          { status: response.status },
+        );
       }
       return await parse(response);
     },
   );
+  params.signal?.throwIfAborted();
+  return result;
 }
 
-function resolveSiteName(urlRaw: string): string | undefined {
+function normalizeFirecrawlResultUrl(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length > FIRECRAWL_RESULT_URL_MAX_CHARS) {
+    return undefined;
+  }
   try {
-    const host = new URL(urlRaw).hostname.replace(/^www\./, "");
-    return host || undefined;
+    const url = new URL(value);
+    if (
+      (url.protocol !== "http:" && url.protocol !== "https:") ||
+      url.href.length > FIRECRAWL_RESULT_URL_MAX_CHARS
+    ) {
+      return undefined;
+    }
+    // Preserve shipped bare-origin spellings while percent-encoding all other untrusted input.
+    return url.href === `${value}/` ? value : url.href;
   } catch {
     return undefined;
   }
 }
 
-function resolveSearchItems(payload: Record<string, unknown>): FirecrawlSearchItem[] {
-  const candidates = [
-    payload.data,
-    payload.results,
-    (payload.data as { results?: unknown } | undefined)?.results,
-    (payload.data as { data?: unknown } | undefined)?.data,
-    (payload.data as { web?: unknown } | undefined)?.web,
-    (payload.web as { results?: unknown } | undefined)?.results,
-  ];
-  const rawItems = candidates.find((candidate) => Array.isArray(candidate));
-  if (!Array.isArray(rawItems)) {
+function isValidFirecrawlPublishedDate(value: string): boolean {
+  if (!FIRECRAWL_PUBLISHED_DATE_RE.test(value)) {
+    return false;
+  }
+  const calendarDate = value.slice(0, 10);
+  const timestamp = parseDateStringTimestampMs(calendarDate);
+  return timestamp !== undefined && new Date(timestamp).toISOString().startsWith(calendarDate);
+}
+
+function resolveSearchItems(payload: Record<string, unknown>, count: number) {
+  const nestedData = asOptionalRecord(payload.data);
+  const envelopeCandidates = [payload.data, payload.results, nestedData?.results, nestedData?.data];
+  const sourceCandidates = [nestedData?.web, nestedData?.news, nestedData?.images];
+  const legacyWebResults = asOptionalRecord(payload.web)?.results;
+  const isArray = (candidate: unknown): candidate is unknown[] => Array.isArray(candidate);
+  const sourceItems = sourceCandidates.flatMap((candidate) =>
+    isArray(candidate) ? candidate : [],
+  );
+  const rawItems =
+    envelopeCandidates.find(isArray) ??
+    (sourceItems.length > 0 ? sourceItems : undefined) ??
+    sourceCandidates.find(isArray) ??
+    (isArray(legacyWebResults) ? legacyWebResults : undefined);
+  if (!rawItems) {
     return [];
   }
-  const items: FirecrawlSearchItem[] = [];
-  for (const entry of rawItems) {
-    if (!entry || typeof entry !== "object") {
+  const items = [];
+  let inspectedObjects = 0;
+  for (const rawItem of rawItems) {
+    if (inspectedObjects >= FIRECRAWL_SEARCH_MAX_RESULTS || items.length >= count) {
+      break;
+    }
+    const entry = asOptionalRecord(rawItem);
+    if (!entry) {
       continue;
     }
-    const record = entry as Record<string, unknown>;
-    const metadata =
-      record.metadata && typeof record.metadata === "object"
-        ? (record.metadata as Record<string, unknown>)
-        : undefined;
-    const url =
-      (typeof record.url === "string" && record.url) ||
-      (typeof record.sourceURL === "string" && record.sourceURL) ||
-      (typeof record.sourceUrl === "string" && record.sourceUrl) ||
-      (typeof metadata?.sourceURL === "string" && metadata.sourceURL) ||
+    // The scan cap counts objects, including invalid URLs, after discarding non-object rows.
+    inspectedObjects += 1;
+    const metadata = asOptionalRecord(entry.metadata);
+    const rawUrl =
+      readStringField(entry, "url") ||
+      readStringField(entry, "sourceURL") ||
+      readStringField(entry, "sourceUrl") ||
+      readStringField(metadata, "sourceURL") ||
       "";
+    const url = normalizeFirecrawlResultUrl(rawUrl);
     if (!url) {
       continue;
     }
-    const title =
-      (typeof record.title === "string" && record.title) ||
-      (typeof metadata?.title === "string" && metadata.title) ||
-      "";
+    const title = readStringField(entry, "title") || readStringField(metadata, "title") || "";
     const description =
-      (typeof record.description === "string" && record.description) ||
-      (typeof record.snippet === "string" && record.snippet) ||
-      (typeof record.summary === "string" && record.summary) ||
+      readStringField(entry, "description") ||
+      readStringField(entry, "snippet") ||
+      readStringField(entry, "summary") ||
       undefined;
     const content =
-      (typeof record.markdown === "string" && record.markdown) ||
-      (typeof record.content === "string" && record.content) ||
-      (typeof record.text === "string" && record.text) ||
+      readStringField(entry, "markdown") ||
+      readStringField(entry, "content") ||
+      readStringField(entry, "text") ||
+      undefined;
+    const rawPublished =
+      readStringField(entry, "publishedDate") ||
+      readStringField(entry, "published") ||
+      readStringField(metadata, "publishedTime") ||
+      readStringField(metadata, "publishedDate") ||
       undefined;
     const published =
-      (typeof record.publishedDate === "string" && record.publishedDate) ||
-      (typeof record.published === "string" && record.published) ||
-      (typeof metadata?.publishedTime === "string" && metadata.publishedTime) ||
-      (typeof metadata?.publishedDate === "string" && metadata.publishedDate) ||
-      undefined;
+      rawPublished && isValidFirecrawlPublishedDate(rawPublished) ? rawPublished : undefined;
     items.push({
       title,
       url,
       description,
       content,
       published,
-      siteName: resolveSiteName(url),
+      siteName: resolveSiteName(url)?.replace(/^www\./, ""),
     });
   }
   return items;
 }
 
-function buildSearchPayload(params: {
-  query: string;
-  provider: "firecrawl";
-  items: FirecrawlSearchItem[];
-  tookMs: number;
-  scrapeResults: boolean;
-}): Record<string, unknown> {
-  return {
-    query: params.query,
-    provider: params.provider,
-    count: params.items.length,
-    tookMs: params.tookMs,
-    externalContent: {
-      untrusted: true,
-      source: "web_search",
-      provider: params.provider,
-      wrapped: true,
-    },
-    results: params.items.map((entry) => ({
-      title: entry.title ? wrapWebContent(entry.title, "web_search") : "",
-      url: entry.url,
-      description: entry.description ? wrapWebContent(entry.description, "web_search") : "",
-      ...(entry.published ? { published: entry.published } : {}),
-      ...(entry.siteName ? { siteName: entry.siteName } : {}),
-      ...(params.scrapeResults && entry.content
-        ? { content: wrapWebContent(entry.content, "web_search") }
-        : {}),
-    })),
-  };
-}
-
 export async function runFirecrawlSearch(
   params: FirecrawlSearchParams,
 ): Promise<Record<string, unknown>> {
-  const apiKey = resolveFirecrawlApiKey(params.cfg);
-  if (!apiKey) {
+  params.signal?.throwIfAborted();
+  const keyless = params.access === "keyless";
+  const providerId = keyless ? "firecrawl-free" : "firecrawl";
+  const apiKey = keyless ? undefined : resolveFirecrawlApiKey(params.cfg);
+  if (!apiKey && !keyless) {
     throw new Error(
       "web_search (firecrawl) needs a Firecrawl API key. Set FIRECRAWL_API_KEY in the Gateway environment, or configure plugins.entries.firecrawl.config.webSearch.apiKey.",
     );
   }
-  const count =
-    typeof params.count === "number" && Number.isFinite(params.count)
-      ? Math.max(1, Math.min(10, Math.floor(params.count)))
-      : DEFAULT_SEARCH_COUNT;
+  const count = resolveIntegerOption(params.count, DEFAULT_SEARCH_COUNT, { min: 1, max: 100 });
   const timeoutSeconds = resolveFirecrawlSearchTimeoutSeconds(params.timeoutSeconds);
   const scrapeResults = params.scrapeResults === true;
   const sources = Array.isArray(params.sources) ? params.sources.filter(Boolean) : [];
   const categories = Array.isArray(params.categories) ? params.categories.filter(Boolean) : [];
+  const includeDomains = Array.isArray(params.includeDomains)
+    ? params.includeDomains.filter(Boolean)
+    : [];
+  const excludeDomains = Array.isArray(params.excludeDomains)
+    ? params.excludeDomains.filter(Boolean)
+    : [];
+  if (includeDomains.length > 0 && excludeDomains.length > 0) {
+    throw new Error("Firecrawl search accepts includeDomains or excludeDomains, not both.");
+  }
+  const tbs = normalizeOptionalString(params.tbs);
+  const location = normalizeOptionalString(params.location);
+  const country = normalizeOptionalString(params.country);
   const baseUrl = resolveFirecrawlBaseUrl(params.cfg);
   const cacheKey = normalizeCacheKey(
     JSON.stringify({
       type: "firecrawl-search",
+      provider: providerId,
       q: params.query,
       count,
       baseUrl,
       sources,
       categories,
+      includeDomains,
+      excludeDomains,
+      tbs,
+      location,
+      country,
       scrapeResults,
     }),
   );
-  const cached = readCache(SEARCH_CACHE, cacheKey);
+  const cacheTtlMs = resolveCacheTtlMs(
+    params.cfg?.tools?.web?.search?.cacheTtlMinutes,
+    DEFAULT_CACHE_TTL_MINUTES,
+  );
+  const cached = readCache(SEARCH_CACHE, cacheKey, cacheTtlMs);
   if (cached) {
     return { ...cached.value, cached: true };
   }
@@ -392,18 +407,15 @@ export async function runFirecrawlSearch(
   const body: Record<string, unknown> = {
     query: params.query,
     limit: count,
+    ...(sources.length > 0 ? { sources } : {}),
+    ...(categories.length > 0 ? { categories } : {}),
+    ...(includeDomains.length > 0 ? { includeDomains } : {}),
+    ...(excludeDomains.length > 0 ? { excludeDomains } : {}),
+    ...(tbs ? { tbs } : {}),
+    ...(location ? { location } : {}),
+    ...(country ? { country } : {}),
+    ...(scrapeResults ? { scrapeOptions: { formats: ["markdown"] } } : {}),
   };
-  if (sources.length > 0) {
-    body.sources = sources;
-  }
-  if (categories.length > 0) {
-    body.categories = categories;
-  }
-  if (scrapeResults) {
-    body.scrapeOptions = {
-      formats: ["markdown"],
-    };
-  }
 
   const start = Date.now();
   const endpoint = await resolveEndpoint(baseUrl, "/v2/search");
@@ -415,43 +427,63 @@ export async function runFirecrawlSearch(
       apiKey,
       body,
       errorLabel: "Firecrawl Search",
+      ...(params.signal ? { signal: params.signal } : {}),
     },
     async (response) => {
-      const payload = await readFirecrawlJsonResponse(response, "Firecrawl Search API error");
-      if (payload.success === false) {
+      const payloadValue = await readProviderJsonObjectResponse(
+        response,
+        "Firecrawl Search API error",
+      );
+      if (payloadValue.success === false) {
         const error =
-          typeof payload.error === "string"
-            ? payload.error
-            : typeof payload.message === "string"
-              ? payload.message
+          typeof payloadValue.error === "string"
+            ? payloadValue.error
+            : typeof payloadValue.message === "string"
+              ? payloadValue.message
               : "unknown error";
-        throw new Error(`Firecrawl Search API error: ${error}`);
+        const safeError = wrapWebContent(
+          truncateSanitizedExternalContent(error, 1_000).text,
+          "web_search",
+        );
+        throw new Error(`Firecrawl Search API error: ${safeError}`);
       }
-      return payload;
+      return payloadValue;
     },
   );
-  const result = buildSearchPayload({
+  const items = resolveSearchItems(payload, count);
+  const tookMs = Date.now() - start;
+  let remainingContentChars = FIRECRAWL_SEARCH_MAX_CONTENT_CHARS;
+  let truncated = false;
+  const wrapBoundedContent = (value: string): string => {
+    const bounded = truncateSanitizedExternalContent(value, remainingContentChars);
+    truncated ||= bounded.truncated;
+    remainingContentChars -= bounded.text.length;
+    return wrapWebContent(bounded.text, "web_search");
+  };
+  const results = items.map((entry) => ({
+    title: entry.title ? wrapBoundedContent(entry.title) : "",
+    url: entry.url,
+    description: entry.description ? wrapBoundedContent(entry.description) : "",
+    ...(entry.published ? { published: entry.published } : {}),
+    ...(entry.siteName ? { siteName: entry.siteName } : {}),
+    ...(scrapeResults && entry.content ? { content: wrapBoundedContent(entry.content) } : {}),
+  }));
+  const result = {
     query: params.query,
-    provider: "firecrawl",
-    items: resolveSearchItems(payload),
-    tookMs: Date.now() - start,
-    scrapeResults,
-  });
-  writeCache(
-    SEARCH_CACHE,
-    cacheKey,
-    result,
-    resolveCacheTtlMs(undefined, DEFAULT_CACHE_TTL_MINUTES),
-  );
+    provider: providerId,
+    count: items.length,
+    tookMs,
+    externalContent: {
+      untrusted: true,
+      source: "web_search",
+      provider: providerId,
+      wrapped: true,
+    },
+    results,
+    ...(truncated ? { truncated: true } : {}),
+  };
+  writeCache(SEARCH_CACHE, cacheKey, result, cacheTtlMs);
   return result;
-}
-
-function resolveScrapeData(payload: Record<string, unknown>): Record<string, unknown> {
-  const data = payload.data;
-  if (data && typeof data === "object") {
-    return data as Record<string, unknown>;
-  }
-  return {};
 }
 
 export function parseFirecrawlScrapePayload(params: {
@@ -459,12 +491,16 @@ export function parseFirecrawlScrapePayload(params: {
   url: string;
   extractMode: "markdown" | "text";
   maxChars: number;
-}): Record<string, unknown> {
-  const data = resolveScrapeData(params.payload);
-  const metadata =
-    data.metadata && typeof data.metadata === "object"
-      ? (data.metadata as Record<string, unknown>)
-      : undefined;
+}) {
+  const data = asRecord(params.payload.data);
+  const metadata = asOptionalObjectRecord(data.metadata);
+  const rawStatus = parseFiniteNumber(metadata?.statusCode) ?? parseFiniteNumber(data.statusCode);
+  const status = rawStatus === undefined ? undefined : Math.floor(rawStatus);
+  if (status !== undefined && (status < 200 || status >= 300)) {
+    throw new Error(
+      `Firecrawl fetch failed (${status}): target returned an unsuccessful HTTP status.`,
+    );
+  }
   const markdown =
     (typeof data.markdown === "string" && data.markdown) ||
     (typeof data.content === "string" && data.content) ||
@@ -473,21 +509,35 @@ export function parseFirecrawlScrapePayload(params: {
     throw new Error("Firecrawl scrape returned no content.");
   }
   const rawText = params.extractMode === "text" ? markdownToText(markdown) : markdown;
-  const truncated = truncateText(rawText, params.maxChars);
+  const boundedText = truncateSanitizedExternalContent(rawText, params.maxChars);
+  let truncated = boundedText.truncated;
+  let remainingMetadataChars = FIRECRAWL_SCRAPE_METADATA_MAX_CHARS;
+  const wrapBoundedMetadata = (value: string): string => {
+    const bounded = truncateSanitizedExternalContent(value, remainingMetadataChars);
+    truncated ||= bounded.truncated;
+    remainingMetadataChars -= bounded.text.length;
+    return wrapExternalContent(bounded.text, { source: "web_fetch", includeWarning: false });
+  };
+  const wrappedText = wrapExternalContent(boundedText.text, {
+    source: "web_fetch",
+    includeWarning: false,
+  });
+  const title =
+    typeof metadata?.title === "string" && metadata.title
+      ? wrapBoundedMetadata(metadata.title)
+      : undefined;
+  const warning =
+    typeof params.payload.warning === "string" && params.payload.warning
+      ? wrapBoundedMetadata(params.payload.warning)
+      : undefined;
   return {
     url: params.url,
     finalUrl:
-      (typeof metadata?.sourceURL === "string" && metadata.sourceURL) ||
-      (typeof data.url === "string" && data.url) ||
+      normalizeFirecrawlResultUrl(metadata?.sourceURL) ??
+      normalizeFirecrawlResultUrl(data.url) ??
       params.url,
-    status:
-      (typeof metadata?.statusCode === "number" && metadata.statusCode) ||
-      (typeof data.statusCode === "number" && data.statusCode) ||
-      undefined,
-    title:
-      typeof metadata?.title === "string" && metadata.title
-        ? wrapExternalContent(metadata.title, { source: "web_fetch", includeWarning: false })
-        : undefined,
+    ...(status !== undefined ? { status } : {}),
+    ...(title ? { title } : {}),
     extractor: "firecrawl",
     extractMode: params.extractMode,
     externalContent: {
@@ -495,33 +545,22 @@ export function parseFirecrawlScrapePayload(params: {
       source: "web_fetch",
       wrapped: true,
     },
-    truncated: truncated.truncated,
+    truncated,
     rawLength: rawText.length,
-    wrappedLength: wrapExternalContent(truncated.text, {
-      source: "web_fetch",
-      includeWarning: false,
-    }).length,
-    text: wrapExternalContent(truncated.text, {
-      source: "web_fetch",
-      includeWarning: false,
-    }),
-    warning:
-      typeof params.payload.warning === "string" && params.payload.warning
-        ? wrapExternalContent(params.payload.warning, {
-            source: "web_fetch",
-            includeWarning: false,
-          })
-        : undefined,
+    length: wrappedText.length,
+    text: wrappedText,
+    ...(warning ? { warning } : {}),
   };
 }
 
-export async function runFirecrawlScrape(
-  params: FirecrawlScrapeParams,
-): Promise<Record<string, unknown>> {
+export async function runFirecrawlScrape(params: FirecrawlScrapeParams) {
+  params.signal?.throwIfAborted();
   assertFirecrawlScrapeTargetAllowed(params.url);
 
   const apiKey = resolveFirecrawlApiKey(params.cfg);
-  if (!apiKey) {
+  // Hosted v2/scrape accepts starter requests without a bearer token.
+  // Only the selected web_fetch provider opts into that access mode.
+  if (!apiKey && params.access !== "keyless") {
     throw new Error(
       "firecrawl_scrape needs a Firecrawl API key. Set FIRECRAWL_API_KEY in the Gateway environment, or configure plugins.entries.firecrawl.config.webFetch.apiKey.",
     );
@@ -532,28 +571,13 @@ export async function runFirecrawlScrape(
   const maxAgeMs = resolveFirecrawlMaxAgeMs(params.cfg, params.maxAgeMs);
   const proxy = params.proxy ?? "auto";
   const storeInCache = params.storeInCache ?? true;
-  const maxChars =
-    typeof params.maxChars === "number" && Number.isFinite(params.maxChars) && params.maxChars > 0
-      ? Math.floor(params.maxChars)
-      : DEFAULT_SCRAPE_MAX_CHARS;
-  const cacheKey = normalizeCacheKey(
-    JSON.stringify({
-      type: "firecrawl-scrape",
-      url: params.url,
-      extractMode: params.extractMode,
-      baseUrl,
-      onlyMainContent,
-      maxAgeMs,
-      proxy,
-      storeInCache,
-      maxChars,
-    }),
+  const maxChars = Math.floor(
+    Math.min(
+      asPositiveFiniteNumber(params.maxChars) ?? DEFAULT_SCRAPE_MAX_CHARS,
+      asPositiveFiniteNumber(params.cfg?.tools?.web?.fetch?.maxCharsCap) ??
+        DEFAULT_SCRAPE_MAX_CHARS,
+    ),
   );
-  const cached = readCache(SCRAPE_CACHE, cacheKey);
-  if (cached) {
-    return { ...cached.value, cached: true };
-  }
-
   const endpoint = await resolveEndpoint(baseUrl, "/v2/scrape");
   const payload = await postFirecrawlJson(
     {
@@ -562,6 +586,7 @@ export async function runFirecrawlScrape(
       timeoutSeconds,
       apiKey,
       errorLabel: "Firecrawl",
+      ...(params.signal ? { signal: params.signal } : {}),
       body: {
         url: params.url,
         formats: ["markdown"],
@@ -573,41 +598,38 @@ export async function runFirecrawlScrape(
       },
     },
     async (response) => {
-      const payload = await readFirecrawlJsonResponse(response, "Firecrawl fetch failed");
-      if (payload.success === false) {
+      const data = await readProviderJsonObjectResponse(response, "Firecrawl fetch failed", {
+        // Scrape can legitimately return page bodies before maxChars truncates parsed output.
+        maxBytes: FIRECRAWL_SCRAPE_RESPONSE_MAX_BYTES,
+      });
+      if (data.success === false) {
         const detail =
-          typeof payload.error === "string"
-            ? payload.error
-            : typeof payload.message === "string"
-              ? payload.message
+          typeof data.error === "string"
+            ? data.error
+            : typeof data.message === "string"
+              ? data.message
               : response.statusText;
         throw new Error(
-          `Firecrawl fetch failed (${response.status}): ${wrapWebContent(detail, "web_fetch")}`.trim(),
+          `Firecrawl fetch failed (${response.status}): ${wrapWebContent(
+            truncateSanitizedExternalContent(detail, FIRECRAWL_SCRAPE_METADATA_MAX_CHARS).text,
+            "web_fetch",
+          )}`.trim(),
         );
       }
-      return payload;
+      return data;
     },
   );
-  const result = parseFirecrawlScrapePayload({
+  return parseFirecrawlScrapePayload({
     payload,
     url: params.url,
     extractMode: params.extractMode,
     maxChars,
   });
-  writeCache(
-    SCRAPE_CACHE,
-    cacheKey,
-    result,
-    resolveCacheTtlMs(undefined, DEFAULT_CACHE_TTL_MINUTES),
-  );
-  return result;
 }
 
-export const __testing = {
+export const testing = {
   assertFirecrawlScrapeTargetAllowed,
   parseFirecrawlScrapePayload,
-  postFirecrawlJson,
   resolveEndpoint,
-  validateFirecrawlBaseUrl,
   resolveSearchItems,
 };

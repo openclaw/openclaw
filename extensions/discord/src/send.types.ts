@@ -1,5 +1,7 @@
-import type { MessageReceipt } from "openclaw/plugin-sdk/channel-message";
+import type { APIAllowedMentions } from "discord-api-types/v10";
+import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OutboundMediaAccess, OutboundMediaReadFile } from "openclaw/plugin-sdk/media-runtime";
 import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import type { RequestClient } from "./internal/discord.js";
 
@@ -13,9 +15,7 @@ export class DiscordSendError extends Error {
   constructor(message: string, opts?: Partial<DiscordSendError>) {
     super(message);
     this.name = "DiscordSendError";
-    if (opts) {
-      Object.assign(this, opts);
-    }
+    Object.assign(this, opts);
   }
 
   override toString() {
@@ -38,6 +38,16 @@ export type DiscordRuntimeAccountContext = {
   accountId: string;
 };
 
+/**
+ * Sender-scoped media read policy. Guild media actions must carry it end to end so the sender's
+ * allowed roots and host read capability still bound the file the loader opens.
+ */
+export type DiscordOutboundMediaOpts = {
+  mediaAccess?: OutboundMediaAccess;
+  mediaLocalRoots?: readonly string[];
+  mediaReadFile?: OutboundMediaReadFile;
+};
+
 export type DiscordReactOpts = {
   cfg: OpenClawConfig;
   accountId?: string;
@@ -45,7 +55,11 @@ export type DiscordReactOpts = {
   rest?: RequestClient;
   verbose?: boolean;
   retry?: RetryConfig;
+  signal?: AbortSignal;
+  timeoutMs?: number;
 };
+
+export type DiscordAssetUploadOpts = DiscordReactOpts & DiscordOutboundMediaOpts;
 
 export type DiscordReactionRuntimeContext = DiscordRuntimeAccountContext & {
   rest: RequestClient;
@@ -82,6 +96,8 @@ export type DiscordMessageQuery = {
 export type DiscordMessageEdit = {
   content?: string;
   flags?: number;
+  /** Maps to Discord's allowed_mentions; omission sends no field and preserves existing edit behavior. */
+  allowedMentions?: APIAllowedMentions;
 };
 
 export type DiscordThreadCreate = {

@@ -9,8 +9,7 @@ final class MotionService: MotionServicing {
                 NSLocalizedDescriptionKey: "MOTION_UNAVAILABLE: activity not supported on this device",
             ])
         }
-        let auth = CMMotionActivityManager.authorizationStatus()
-        guard auth == .authorized else {
+        guard Self.allowsMotionQuery(CMMotionActivityManager.authorizationStatus()) else {
             throw NSError(domain: "Motion", code: 3, userInfo: [
                 NSLocalizedDescriptionKey: "MOTION_PERMISSION_REQUIRED: grant Motion & Fitness permission",
             ])
@@ -26,8 +25,7 @@ final class MotionService: MotionServicing {
                     cont.resume(throwing: error)
                 } else {
                     let formatter = ISO8601DateFormatter()
-                    let sliced = Array((activity ?? []).suffix(limit))
-                    let entries = sliced.map { entry in
+                    let entries = (activity ?? []).suffix(limit).map { entry in
                         OpenClawMotionActivityEntry(
                             startISO: formatter.string(from: entry.startDate),
                             endISO: formatter.string(from: end),
@@ -53,8 +51,7 @@ final class MotionService: MotionServicing {
                 NSLocalizedDescriptionKey: "PEDOMETER_UNAVAILABLE: step counting not supported",
             ])
         }
-        let auth = CMPedometer.authorizationStatus()
-        guard auth == .authorized else {
+        guard Self.allowsMotionQuery(CMPedometer.authorizationStatus()) else {
             throw NSError(domain: "Motion", code: 4, userInfo: [
                 NSLocalizedDescriptionKey: "MOTION_PERMISSION_REQUIRED: grant Motion & Fitness permission",
             ])
@@ -78,6 +75,18 @@ final class MotionService: MotionServicing {
                     cont.resume(returning: payload)
                 }
             }
+        }
+    }
+
+    static func allowsMotionQuery(_ authorizationStatus: CMAuthorizationStatus) -> Bool {
+        switch authorizationStatus {
+        case .notDetermined, .authorized:
+            // Core Motion only presents its first-use permission prompt when a query runs.
+            return true
+        case .restricted, .denied:
+            return false
+        @unknown default:
+            return false
         }
     }
 

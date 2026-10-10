@@ -1,3 +1,4 @@
+/** Returns the UTF-8 byte length of JSON.stringify(value), falling back to String(value). */
 export function jsonUtf8Bytes(value: unknown): number {
   try {
     return Buffer.byteLength(JSON.stringify(value), "utf8");
@@ -6,11 +7,15 @@ export function jsonUtf8Bytes(value: unknown): number {
   }
 }
 
+/** Best-effort byte count result for bounded JSON traversal. */
 export type BoundedJsonUtf8Bytes = {
+  /** Bytes counted, or a value greater than the requested max when incomplete. */
   bytes: number;
+  /** True when traversal completed without unsupported/circular/over-limit input. */
   complete: boolean;
 };
 
+/** Returns JSON UTF-8 byte length, or Infinity when the value cannot serialize safely. */
 export function jsonUtf8BytesOrInfinity(value: unknown): number {
   try {
     const serialized = JSON.stringify(value);
@@ -23,21 +28,17 @@ export function jsonUtf8BytesOrInfinity(value: unknown): number {
 }
 
 function jsonStringByteLengthUpToLimit(value: string, remainingBytes: number): number {
-  if (value.length + 2 > remainingBytes) {
+  // Pre-scan raw UTF-8 only when the code-unit bounds are inconclusive.
+  if (
+    value.length + 2 > remainingBytes ||
+    (value.length * 3 + 2 > remainingBytes && Buffer.byteLength(value, "utf8") + 2 > remainingBytes)
+  ) {
     return remainingBytes + 1;
   }
   return jsonUtf8BytesOrInfinity(value);
 }
 
-function* enumerableOwnEntries(value: object): Generator<[string, unknown]> {
-  const record = value as Record<string, unknown>;
-  for (const key in record) {
-    if (Object.prototype.propertyIsEnumerable.call(record, key)) {
-      yield [key, record[key]];
-    }
-  }
-}
-
+/** Returns the first enumerable own keys in JavaScript enumeration order. */
 export function firstEnumerableOwnKeys(value: object, maxKeys: number): string[] {
   const keys: string[] = [];
   for (const key in value as Record<string, unknown>) {
@@ -52,6 +53,7 @@ export function firstEnumerableOwnKeys(value: object, maxKeys: number): string[]
   return keys;
 }
 
+/** Counts JSON UTF-8 bytes up to a hard limit without fully serializing large objects. */
 export function boundedJsonUtf8Bytes(value: unknown, maxBytes: number): BoundedJsonUtf8Bytes {
   let bytes = 0;
   const seen = new WeakSet<object>();
@@ -95,6 +97,8 @@ export function boundedJsonUtf8Bytes(value: unknown, maxBytes: number): BoundedJ
     if (seen.has(objectEntry)) {
       throw new Error("json_byte_length_circular");
     }
+    // Custom toJSON can hide arbitrary work or reshape output, so bounded
+    // traversal only handles Date's well-known JSON conversion explicitly.
     if (
       typeof (objectEntry as { toJSON?: unknown }).toJSON === "function" &&
       !(objectEntry instanceof Date)
@@ -107,31 +111,34 @@ export function boundedJsonUtf8Bytes(value: unknown, maxBytes: number): BoundedJ
         visit(objectEntry.toJSON(), inArray);
         return;
       }
-      if (Array.isArray(objectEntry)) {
-        add(1);
+      const array = Array.isArray(objectEntry);
+      add(1);
+      if (array) {
         for (let index = 0; index < objectEntry.length; index += 1) {
           if (index > 0) {
             add(1);
           }
           visit(objectEntry[index], true);
         }
-        add(1);
-        return;
-      }
-
-      add(1);
-      let wroteField = false;
-      for (const [key, field] of enumerableOwnEntries(objectEntry)) {
-        if (field === undefined || typeof field === "function" || typeof field === "symbol") {
-          continue;
-        }
-        if (wroteField) {
+      } else {
+        let wroteField = false;
+        const record = objectEntry as Record<string, unknown>;
+        for (const key in record) {
+          if (!Object.prototype.propertyIsEnumerable.call(record, key)) {
+            continue;
+          }
+          const field = record[key];
+          if (field === undefined || typeof field === "function" || typeof field === "symbol") {
+            continue;
+          }
+          if (wroteField) {
+            add(1);
+          }
+          wroteField = true;
+          add(jsonStringByteLengthUpToLimit(key, maxBytes - bytes));
           add(1);
+          visit(field, false);
         }
-        wroteField = true;
-        add(jsonStringByteLengthUpToLimit(key, maxBytes - bytes));
-        add(1);
-        visit(field, false);
       }
       add(1);
     } finally {

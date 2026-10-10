@@ -6,11 +6,12 @@ read_when:
   - You need the account ID, gateway ID, or API key env var
 ---
 
-Cloudflare AI Gateway sits in front of provider APIs and lets you add analytics, caching, and controls. For Anthropic, OpenClaw uses the Anthropic Messages API through your Gateway endpoint.
+[Cloudflare AI Gateway](https://developers.cloudflare.com/ai-gateway/) sits in front of provider APIs and adds analytics, caching, and controls. For Anthropic, OpenClaw uses the Anthropic Messages API through your Gateway endpoint.
 
 | Property      | Value                                                                                    |
 | ------------- | ---------------------------------------------------------------------------------------- |
 | Provider      | `cloudflare-ai-gateway`                                                                  |
+| Plugin        | official external package (`@openclaw/cloudflare-ai-gateway-provider`)                   |
 | Base URL      | `https://gateway.ai.cloudflare.com/v1/<account_id>/<gateway_id>/anthropic`               |
 | Default model | `cloudflare-ai-gateway/claude-sonnet-4-6`                                                |
 | API key       | `CLOUDFLARE_AI_GATEWAY_API_KEY` (your provider API key for requests through the Gateway) |
@@ -23,6 +24,17 @@ When thinking is enabled for Anthropic Messages models, OpenClaw strips trailing
 assistant prefill turns before sending the payload through Cloudflare AI Gateway.
 Anthropic rejects response prefilling with extended thinking, while ordinary
 non-thinking prefill remains available.
+
+## Install plugin
+
+Install the official plugin:
+
+```bash
+openclaw plugins install @openclaw/cloudflare-ai-gateway-provider
+```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 ## Getting started
 
@@ -63,7 +75,7 @@ non-thinking prefill remains available.
 For scripted or CI setups, pass all values on the command line:
 
 ```bash
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --mode local \
   --auth-choice cloudflare-ai-gateway-api-key \
   --cloudflare-ai-gateway-account-id "your-account-id" \

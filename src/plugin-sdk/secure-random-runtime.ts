@@ -1,3 +1,4 @@
-// Secure random token helpers for plugin runtime state.
-
-export { generateSecureToken, generateSecureUuid } from "../infra/secure-random.js";
+/**
+ * Runtime SDK subpath for secure token and UUID generation.
+ */
+export { generateSecureToken } from "../infra/secure-random.js";

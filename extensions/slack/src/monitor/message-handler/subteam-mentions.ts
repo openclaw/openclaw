@@ -1,5 +1,9 @@
 import type { WebClient } from "@slack/web-api";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const SUBTEAM_MENTION_RE = /<!subteam\^([A-Z0-9]+)(?:\|[^>]*)?>/gi;
@@ -10,18 +14,16 @@ type CacheEntry = {
   users: ReadonlySet<string>;
 };
 
-let subteamMemberCache = new WeakMap<WebClient, Map<string, CacheEntry>>();
+const subteamMemberCache = new WeakMap<WebClient, Map<string, CacheEntry>>();
 
-function normalizeSlackId(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim().toUpperCase() : undefined;
+export function normalizeSlackId(value: unknown): string | undefined {
+  return normalizeOptionalString(value)?.toUpperCase();
 }
 
-export function extractSlackSubteamMentionIds(text?: string | null): string[] {
-  if (!text) {
-    return [];
-  }
+export function collectSlackMentionIds(text: string | null | undefined, regex: RegExp): string[] {
   const ids = new Set<string>();
-  for (const match of text.matchAll(SUBTEAM_MENTION_RE)) {
+  regex.lastIndex = 0;
+  for (const match of (text ?? "").matchAll(regex)) {
     const id = normalizeSlackId(match[1]);
     if (id) {
       ids.add(id);
@@ -44,8 +46,16 @@ async function readSlackSubteamUsers(params: {
   }
   const cacheKey = `${normalizeSlackId(params.teamId) ?? ""}:${params.subteamId}`;
   const cached = bySubteam.get(cacheKey);
-  if (cached && cached.expiresAt > params.now) {
-    return cached.users;
+  const now = asDateTimestampMs(params.now);
+  if (cached) {
+    if (
+      now !== undefined &&
+      asDateTimestampMs(cached.expiresAt) !== undefined &&
+      cached.expiresAt > now
+    ) {
+      return cached.users;
+    }
+    bySubteam.delete(cacheKey);
   }
 
   try {
@@ -60,12 +70,17 @@ async function readSlackSubteamUsers(params: {
       return new Set();
     }
     const users = new Set(
-      (response.users ?? []).map((userId) => normalizeSlackId(userId)).filter(Boolean) as string[],
+      (response.users ?? []).map(normalizeSlackId).filter((userId) => userId !== undefined),
     );
-    bySubteam.set(cacheKey, {
-      expiresAt: params.now + SUBTEAM_MEMBER_CACHE_TTL_MS,
-      users,
+    const expiresAt = resolveExpiresAtMsFromDurationMs(SUBTEAM_MEMBER_CACHE_TTL_MS, {
+      nowMs: params.now,
     });
+    if (expiresAt !== undefined) {
+      bySubteam.set(cacheKey, {
+        expiresAt,
+        users,
+      });
+    }
     return users;
   } catch (err) {
     params.log?.(
@@ -87,7 +102,7 @@ export async function isSlackSubteamMentionForBot(params: {
   if (!botUserId) {
     return false;
   }
-  const subteamIds = extractSlackSubteamMentionIds(params.text);
+  const subteamIds = collectSlackMentionIds(params.text, SUBTEAM_MENTION_RE);
   if (subteamIds.length === 0) {
     return false;
   }
@@ -105,8 +120,4 @@ export async function isSlackSubteamMentionForBot(params: {
     }
   }
   return false;
-}
-
-export function clearSlackSubteamMentionCacheForTest(): void {
-  subteamMemberCache = new WeakMap<WebClient, Map<string, CacheEntry>>();
 }

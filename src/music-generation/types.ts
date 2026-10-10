@@ -1,9 +1,10 @@
+import type { MediaNormalizationEntry } from "../../packages/media-generation-core/src/normalization.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { MediaNormalizationEntry } from "../media-generation/normalization.types.js";
 
 export type MusicGenerationOutputFormat = "mp3" | "wav";
 
+/** Non-empty in-memory audio asset returned from a music generation provider. */
 export type GeneratedMusicAsset = {
   buffer: Buffer;
   mimeType: string;
@@ -11,6 +12,7 @@ export type GeneratedMusicAsset = {
   metadata?: Record<string, unknown>;
 };
 
+/** Optional source image passed to image-conditioned music edit models. */
 export type MusicGenerationSourceImage = {
   url?: string;
   buffer?: Buffer;
@@ -24,6 +26,7 @@ type MusicGenerationProviderConfiguredContext = {
   agentDir?: string;
 };
 
+/** Provider request after runtime fallback and override normalization. */
 export type MusicGenerationRequest = {
   provider: string;
   model: string;
@@ -39,6 +42,7 @@ export type MusicGenerationRequest = {
   inputImages?: MusicGenerationSourceImage[];
 };
 
+/** Provider result before runtime fallback metadata is attached. */
 export type MusicGenerationResult = {
   tracks: GeneratedMusicAsset[];
   model?: string;
@@ -46,6 +50,7 @@ export type MusicGenerationResult = {
   metadata?: Record<string, unknown>;
 };
 
+/** Caller override dropped because the selected provider/model does not support it. */
 export type MusicGenerationIgnoredOverride = {
   key: "lyrics" | "instrumental" | "durationSeconds" | "format";
   value: string | boolean | number;
@@ -53,6 +58,7 @@ export type MusicGenerationIgnoredOverride = {
 
 export type MusicGenerationMode = "generate" | "edit";
 
+/** Capability block for prompt-only music generation. */
 export type MusicGenerationModeCapabilities = {
   maxTracks?: number;
   maxDurationSeconds?: number;
@@ -66,11 +72,13 @@ export type MusicGenerationModeCapabilities = {
   supportedFormatsByModel?: Readonly<Record<string, readonly MusicGenerationOutputFormat[]>>;
 };
 
+/** Capability block for image-conditioned music generation. */
 export type MusicGenerationEditCapabilities = MusicGenerationModeCapabilities & {
   enabled: boolean;
   maxInputImages?: number;
 };
 
+/** Provider capability declaration, including optional mode-specific overrides. */
 export type MusicGenerationProviderCapabilities = MusicGenerationModeCapabilities & {
   maxInputImages?: number;
   generate?: MusicGenerationModeCapabilities;

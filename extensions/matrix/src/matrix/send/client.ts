@@ -1,19 +1,13 @@
-import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { CoreConfig } from "../../types.js";
 import { resolveMatrixAccountConfig } from "../account-config.js";
+import type { MatrixRuntimeClientOptions } from "../client-bootstrap.js";
 import type { MatrixClient } from "../sdk.js";
+import { withMatrixSendCurrentness } from "../sdk/send-currentness.js";
 
-type MatrixSendClientRuntime = Pick<
-  typeof import("../client-bootstrap.js"),
-  "withResolvedRuntimeMatrixClient"
->;
+type MatrixControlClientOptions = Omit<MatrixRuntimeClientOptions, "readiness">;
 
-let matrixSendClientRuntimePromise: Promise<MatrixSendClientRuntime> | null = null;
-
-async function loadMatrixSendClientRuntime(): Promise<MatrixSendClientRuntime> {
-  matrixSendClientRuntimePromise ??= import("../client-bootstrap.js");
-  return await matrixSendClientRuntimePromise;
-}
+const loadMatrixSendClientRuntime = createLazyRuntimeModule(() => import("../client-bootstrap.js"));
 
 export function resolveMediaMaxBytes(
   accountId?: string | null,
@@ -24,23 +18,20 @@ export function resolveMediaMaxBytes(
       "Matrix media limits requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
     );
   }
-  const resolvedCfg = requireRuntimeConfig(cfg, "Matrix media limits") as CoreConfig;
-  const matrixCfg = resolveMatrixAccountConfig({ cfg: resolvedCfg, accountId });
-  const mediaMaxMb = typeof matrixCfg.mediaMaxMb === "number" ? matrixCfg.mediaMaxMb : undefined;
-  if (typeof mediaMaxMb === "number") {
-    return mediaMaxMb * 1024 * 1024;
-  }
-  return undefined;
+  const matrixCfg = resolveMatrixAccountConfig({ cfg, accountId });
+  const mediaMaxMb = matrixCfg.mediaMaxMb;
+  // Only a positive value is a cap, matching CommonMediaMaxMbSchema. `0` or a negative
+  // number would become a literal 0-byte limit that rejects every outbound media send;
+  // fall through to the unset path instead. Inbound floors the same field (monitor/index.ts).
+  return typeof mediaMaxMb === "number" && mediaMaxMb > 0 ? mediaMaxMb * 1024 * 1024 : undefined;
 }
 
 export async function withResolvedMatrixSendClient<T>(
-  opts: {
-    client?: MatrixClient;
-    cfg?: CoreConfig;
-    timeoutMs?: number;
-    accountId?: string | null;
+  opts: MatrixControlClientOptions & {
+    signal?: AbortSignal;
+    assertDirectAdapterHandoff?: () => void;
   },
-  run: (client: MatrixClient) => Promise<T>,
+  run: (client: MatrixClient, abortSignal?: AbortSignal) => Promise<T>,
 ): Promise<T> {
   return await withResolvedMatrixClient(
     {
@@ -49,7 +40,20 @@ export async function withResolvedMatrixSendClient<T>(
       // state and live crypto sessions are available before sendMessage/sendEvent.
       readiness: "started",
     },
-    run,
+    (client, abortSignal) => {
+      if (!opts.signal && !opts.assertDirectAdapterHandoff) {
+        return run(client, abortSignal);
+      }
+      return withMatrixSendCurrentness(
+        client,
+        () => {
+          opts.assertDirectAdapterHandoff?.();
+          opts.signal?.throwIfAborted();
+          abortSignal?.throwIfAborted();
+        },
+        () => run(client, abortSignal),
+      );
+    },
     // Started one-off send clients should flush sync/crypto state before CLI
     // shutdown paths can tear down the process.
     "persist",
@@ -57,13 +61,8 @@ export async function withResolvedMatrixSendClient<T>(
 }
 
 export async function withResolvedMatrixControlClient<T>(
-  opts: {
-    client?: MatrixClient;
-    cfg?: CoreConfig;
-    timeoutMs?: number;
-    accountId?: string | null;
-  },
-  run: (client: MatrixClient) => Promise<T>,
+  opts: MatrixControlClientOptions,
+  run: (client: MatrixClient, abortSignal?: AbortSignal) => Promise<T>,
 ): Promise<T> {
   return await withResolvedMatrixClient(
     {
@@ -75,14 +74,8 @@ export async function withResolvedMatrixControlClient<T>(
 }
 
 async function withResolvedMatrixClient<T>(
-  opts: {
-    client?: MatrixClient;
-    cfg?: CoreConfig;
-    timeoutMs?: number;
-    accountId?: string | null;
-    readiness: "started" | "none";
-  },
-  run: (client: MatrixClient) => Promise<T>,
+  opts: MatrixControlClientOptions & { readiness: "started" | "none" },
+  run: (client: MatrixClient, abortSignal?: AbortSignal) => Promise<T>,
   shutdownBehavior?: "persist",
 ): Promise<T> {
   if (opts.client) {

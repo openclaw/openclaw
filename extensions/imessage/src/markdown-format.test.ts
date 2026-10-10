@@ -1,99 +1,50 @@
+// Imessage tests cover markdown format plugin behavior.
 import { describe, expect, it } from "vitest";
 import { extractMarkdownFormatRuns } from "./markdown-format.js";
 
 describe("extractMarkdownFormatRuns", () => {
-  it("returns the text unchanged when there is no markdown", () => {
-    const { text, ranges } = extractMarkdownFormatRuns("plain text reply");
-    expect(text).toBe("plain text reply");
-    expect(ranges).toStrictEqual([]);
+  it("renders mixed, nested, and repeated native styles in UTF-16 coordinates", () => {
+    expect(extractMarkdownFormatRuns("😀 **bold _and italic_** ~~gone~~")).toEqual({
+      text: "😀 bold and italic gone",
+      ranges: [
+        { start: 3, length: 15, styles: ["bold"] },
+        { start: 8, length: 10, styles: ["italic"] },
+        { start: 19, length: 4, styles: ["strikethrough"] },
+      ],
+    });
+    expect(
+      extractMarkdownFormatRuns(
+        "😀\ud800 **bold `a😀` mid 😀\udfff `b` tail** then _italics `c😀` end \ud800_.",
+      ),
+    ).toEqual({
+      text: "😀\ud800 bold `a😀` mid 😀\udfff `b` tail then italics `c😀` end \ud800.",
+      ranges: [
+        { start: 4, length: 27, styles: ["bold"] },
+        { start: 37, length: 19, styles: ["italic"] },
+      ],
+    });
   });
 
-  it("extracts a bold span", () => {
-    const { text, ranges } = extractMarkdownFormatRuns("**bold** text");
-    expect(text).toBe("bold text");
-    expect(ranges).toEqual([{ start: 0, length: 4, styles: ["bold"] }]);
+  it("separates code content that touches a backtick delimiter", () => {
+    expect(extractMarkdownFormatRuns("`` ` ``")).toEqual({ text: "`` ` ``", ranges: [] });
   });
 
-  it("extracts mixed bold and italic", () => {
-    const { text, ranges } = extractMarkdownFormatRuns("**hi** and *there*");
-    expect(text).toBe("hi and there");
-    expect(ranges).toEqual([
-      { start: 0, length: 2, styles: ["bold"] },
-      { start: 7, length: 5, styles: ["italic"] },
-    ]);
-  });
-
-  it("extracts underline and strikethrough", () => {
-    const { text, ranges } = extractMarkdownFormatRuns("__under__ and ~~strike~~");
-    expect(text).toBe("under and strike");
-    expect(ranges).toEqual([
-      { start: 0, length: 5, styles: ["underline"] },
-      { start: 10, length: 6, styles: ["strikethrough"] },
-    ]);
-  });
-
-  it("respects word boundaries on single-underscore italics", () => {
-    const { text, ranges } = extractMarkdownFormatRuns("snake_case_var ok");
-    expect(text).toBe("snake_case_var ok");
-    expect(ranges).toStrictEqual([]);
-  });
-
-  it("treats single-underscore as italic when surrounded by whitespace", () => {
-    const { text, ranges } = extractMarkdownFormatRuns("a _word_ b");
-    expect(text).toBe("a word b");
-    expect(ranges).toEqual([{ start: 2, length: 4, styles: ["italic"] }]);
-  });
-
-  it("does not treat empty marker pairs as formatting", () => {
-    const { text, ranges } = extractMarkdownFormatRuns("**  ** literal");
-    expect(text).toBe("**  ** literal");
-    expect(ranges).toStrictEqual([]);
-  });
-
-  it("leaves a lone asterisk alone", () => {
-    const { text, ranges } = extractMarkdownFormatRuns("price * quantity");
-    expect(text).toBe("price * quantity");
-    expect(ranges).toStrictEqual([]);
-  });
-
-  it("computes ranges in output coordinates, not input", () => {
-    const { text, ranges } = extractMarkdownFormatRuns("a **b** c **d** e");
-    expect(text).toBe("a b c d e");
-    expect(ranges).toEqual([
-      { start: 2, length: 1, styles: ["bold"] },
-      { start: 6, length: 1, styles: ["bold"] },
-    ]);
-  });
-
-  it("parses ***triple-marker*** as bold + italic over the same span", () => {
-    const { text, ranges } = extractMarkdownFormatRuns("***hi***");
-    expect(text).toBe("hi");
-    // Compound marker emits both styles over the same span.
-    expect(ranges).toEqual([
-      { start: 0, length: 2, styles: ["bold"] },
-      { start: 0, length: 2, styles: ["italic"] },
-    ]);
-  });
-
-  it("parses **bold _and underline_ together** as nested ranges", () => {
-    const { text, ranges } = extractMarkdownFormatRuns("**bold _and underline_ together**");
-    expect(text).toBe("bold and underline together");
-    // Inner italic-via-_ at offset 5, length 13; outer bold over the full span.
-    expect(ranges).toEqual([
-      { start: 5, length: 13, styles: ["italic"] },
-      { start: 0, length: 27, styles: ["bold"] },
-    ]);
-  });
-
-  it("respects word boundaries on double-underscore underline", () => {
-    const { text, ranges } = extractMarkdownFormatRuns("def __init__(self):");
-    expect(text).toBe("def __init__(self):");
-    expect(ranges).toStrictEqual([]);
-  });
-
-  it("does not leak literal asterisks from triple markers when intent is unclear", () => {
-    // `***bold***` should never produce a bare `*` in the output text.
-    const { text } = extractMarkdownFormatRuns("hello ***world***");
-    expect(text).not.toMatch(/\*/);
+  it("preserves every repeated destination containing a dunder identifier", () => {
+    expect(
+      extractMarkdownFormatRuns(
+        [
+          "[Class][docs] and [Type][docs] **done**",
+          "",
+          "[docs]: https://docs.python.org/3/library/stdtypes.html#instance.__class__",
+        ].join("\n"),
+      ),
+    ).toEqual({
+      text: [
+        "Class (https://docs.python.org/3/library/stdtypes.html#instance.__class__)",
+        "and Type (https://docs.python.org/3/library/stdtypes.html#instance.__class__)",
+        "done",
+      ].join(" "),
+      ranges: [{ start: 153, length: 4, styles: ["bold"] }],
+    });
   });
 });

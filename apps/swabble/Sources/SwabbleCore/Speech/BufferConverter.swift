@@ -2,7 +2,12 @@
 import Foundation
 
 final class BufferConverter {
-    private final class Box<T>: @unchecked Sendable { var value: T; init(_ value: T) { self.value = value } }
+    private final class Box<T>: @unchecked Sendable { var value: T
+        init(_ value: T) {
+            self.value = value
+        }
+    }
+
     enum ConverterError: Swift.Error {
         case failedToCreateConverter
         case failedToCreateConversionBuffer
@@ -16,7 +21,7 @@ final class BufferConverter {
         if inputFormat == format {
             return buffer
         }
-        if converter == nil || converter?.outputFormat != format {
+        if converter?.inputFormat != inputFormat || converter?.outputFormat != format {
             converter = AVAudioConverter(from: inputFormat, to: format)
             converter?.primeMethod = .none
         }

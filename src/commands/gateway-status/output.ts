@@ -1,6 +1,7 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { writeRuntimeJson } from "../../runtime.js";
-import { colorize, theme } from "../../terminal/theme.js";
 import { serializeGatewayDiscoveryBeacon } from "./discovery.js";
 import {
   isProbeReachable,
@@ -12,30 +13,43 @@ import {
 } from "./helpers.js";
 import type { GatewayStatusProbedTarget } from "./probe-run.js";
 
-export type GatewayStatusWarning = {
+type GatewayStatusWarning = {
   code: string;
   message: string;
   targetIds?: string[];
 };
 
 const noReachableGatewayDiagnostic =
-  "No gateway answered any probe and Bonjour discovery returned no local gateways. Run `openclaw gateway status --deep --require-rpc` to inspect service state, config paths, listener owners, and logs; include `ss -ltnp` or `lsof -nP -iTCP:<port> -sTCP:LISTEN` for the configured port when filing a report.";
+  "No gateway answered any check and Bonjour discovery returned no local gateways. Run `openclaw gateway status --deep --require-rpc` to inspect service state, config paths, listener owners, and logs; include `ss -ltnp` or `lsof -nP -iTCP:<port> -sTCP:LISTEN` for the configured port when filing a report.";
 
-function readModelPricingDegradedDetail(health: unknown): string | null {
-  if (!health || typeof health !== "object") {
+function gatewaySelfIdentityKey(entry: GatewayStatusProbedTarget): string | null {
+  if (!entry.self) {
     return null;
   }
-  const modelPricing = (health as { modelPricing?: unknown }).modelPricing;
-  if (!modelPricing || typeof modelPricing !== "object") {
+  const host = normalizeLowercaseStringOrEmpty(entry.self.host);
+  const ip = normalizeLowercaseStringOrEmpty(entry.self.ip);
+  const instanceId = normalizeLowercaseStringOrEmpty(entry.self.instanceId);
+  const deviceId = normalizeLowercaseStringOrEmpty(entry.self.deviceId);
+  const discriminator = instanceId
+    ? `instance:${instanceId}`
+    : deviceId
+      ? `device:${deviceId}`
+      : "";
+  if ((!host && !ip) || !discriminator) {
     return null;
   }
-  const record = modelPricing as { state?: unknown; detail?: unknown };
-  if (record.state !== "degraded") {
-    return null;
+  return `${host}\0${ip}\0${discriminator}`;
+}
+
+function hasMultipleReachableGatewayIdentities(reachable: GatewayStatusProbedTarget[]): boolean {
+  if (reachable.length <= 1) {
+    return false;
   }
-  return typeof record.detail === "string" && record.detail.trim()
-    ? record.detail.trim()
-    : "pricing bootstrap or refresh failed";
+  const identityKeys = reachable.map(gatewaySelfIdentityKey);
+  if (identityKeys.some((key) => key === null)) {
+    return true;
+  }
+  return new Set(identityKeys).size > 1;
 }
 
 export function pickPrimaryProbedTarget(probed: GatewayStatusProbedTarget[]) {
@@ -70,7 +84,7 @@ export function buildGatewayStatusWarnings(params: {
       code: "ssh_tunnel_failed",
       message: params.sshTunnelError
         ? `SSH tunnel failed: ${params.sshTunnelError}`
-        : "SSH tunnel failed to start; falling back to direct probes.",
+        : "SSH tunnel failed to start; falling back to direct checks.",
     });
   }
   if (params.localTlsLoadError) {
@@ -87,11 +101,13 @@ export function buildGatewayStatusWarnings(params: {
       targetIds: params.probed.map((entry) => entry.target.id),
     });
   }
-  if (reachable.length > 1) {
+  if (hasMultipleReachableGatewayIdentities(reachable)) {
+    // Multiple reachable gateways are valid for isolated profiles but surprising
+    // enough to call out before users debug against the wrong process.
     warnings.push({
       code: "multiple_gateways",
       message:
-        "Unconventional setup: multiple reachable gateways detected. Usually one gateway per network is recommended unless you intentionally run isolated profiles, like a rescue bot (see docs: /gateway#multiple-gateways-same-host).",
+        "Unconventional setup: multiple reachable gateway identities detected. Usually one gateway per network is recommended unless you intentionally run isolated profiles, like a rescue bot (see docs: /gateway#multiple-gateways-same-host).",
       targetIds: reachable.map((entry) => entry.target.id),
     });
   }
@@ -111,7 +127,7 @@ export function buildGatewayStatusWarnings(params: {
     warnings.push({
       code: "probe_scope_limited",
       message:
-        "Read-probe diagnostics are limited by gateway scopes (missing operator.read). Connection succeeded, but read-only status calls are incomplete. Hint: pair device identity or use credentials with operator.read.",
+        "Read-check diagnostics are limited by gateway scopes (missing operator.read). Connection succeeded, but read-only status calls are incomplete. Hint: pair device identity or use credentials with operator.read.",
       targetIds: [result.target.id],
     });
   }
@@ -120,17 +136,6 @@ export function buildGatewayStatusWarnings(params: {
     warnings.push({
       code: "probe_detail_failed",
       message: `Gateway accepted the WebSocket connection, but follow-up read diagnostics failed${detail}`,
-      targetIds: [result.target.id],
-    });
-  }
-  for (const result of reachable) {
-    const detail = readModelPricingDegradedDetail(result.probe.health);
-    if (!detail) {
-      continue;
-    }
-    warnings.push({
-      code: "model_pricing_degraded",
-      message: `Model pricing warning: optional pricing refresh degraded: ${detail}`,
       targetIds: [result.target.id],
     });
   }
@@ -164,7 +169,7 @@ export function writeGatewayStatusJson(params: {
     discovery: {
       timeoutMs: params.discoveryTimeoutMs,
       count: params.discovery.length,
-      beacons: params.discovery.map((beacon) => serializeGatewayDiscoveryBeacon(beacon)),
+      beacons: params.discovery.map(serializeGatewayDiscoveryBeacon),
     },
     targets: params.probed.map((entry) => ({
       id: entry.target.id,
@@ -181,6 +186,7 @@ export function writeGatewayStatusJson(params: {
         close: entry.probe.close,
       },
       auth: entry.probe.auth,
+      server: entry.probe.server,
       self: entry.self,
       config: entry.configSummary,
       health: entry.probe.health,
@@ -215,7 +221,7 @@ export function writeGatewayStatusText(params: {
     `${colorize(params.rich, theme.info, "Capability")}: ${capability.replaceAll("_", "-")}`,
   );
   params.runtime.log(
-    colorize(params.rich, theme.muted, `Probe budget: ${params.overallTimeoutMs}ms`),
+    colorize(params.rich, theme.muted, `Check budget: ${params.overallTimeoutMs}ms`),
   );
 
   if (params.warnings.length > 0) {
@@ -230,9 +236,7 @@ export function writeGatewayStatusText(params: {
   params.runtime.log(colorize(params.rich, theme.heading, "Discovery (this machine)"));
   const discoveryDomains = params.wideAreaDomain ? `local. + ${params.wideAreaDomain}` : "local.";
   params.runtime.log(
-    params.discovery.length > 0
-      ? `Found ${params.discovery.length} gateway(s) via Bonjour (${discoveryDomains})`
-      : `Found 0 gateways via Bonjour (${discoveryDomains})`,
+    `Found ${params.discovery.length} ${params.discovery.length > 0 ? "gateway(s)" : "gateways"} via Bonjour (${discoveryDomains})`,
   );
   if (params.discovery.length === 0) {
     params.runtime.log(

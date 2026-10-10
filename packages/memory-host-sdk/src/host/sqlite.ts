@@ -2,16 +2,18 @@ import { createRequire } from "node:module";
 import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "./error-utils.js";
 import {
+  configureSqliteConnectionPragmas,
   configureSqliteWalMaintenance,
+  installProcessWarningFilter,
+  type SqliteConnectionPragmaOptions,
   type SqliteWalMaintenance,
   type SqliteWalMaintenanceOptions,
-} from "./sqlite-wal.js";
-import { installProcessWarningFilter } from "./warning-filter.js";
+} from "./openclaw-runtime-io.js";
 
 const require = createRequire(import.meta.url);
 const sqliteWalMaintenanceByDb = new WeakMap<DatabaseSync, SqliteWalMaintenance>();
 
-export function requireNodeSqlite(): typeof import("node:sqlite") {
+function requireMemoryHostNodeSqlite(): typeof import("node:sqlite") {
   installProcessWarningFilter();
   try {
     return require("node:sqlite") as typeof import("node:sqlite");
@@ -26,15 +28,20 @@ export function requireNodeSqlite(): typeof import("node:sqlite") {
   }
 }
 
+export { requireMemoryHostNodeSqlite as requireNodeSqlite };
+
 export function configureMemorySqliteWalMaintenance(
   db: DatabaseSync,
-  options?: SqliteWalMaintenanceOptions,
+  options?: SqliteWalMaintenanceOptions & Pick<SqliteConnectionPragmaOptions, "busyTimeoutMs">,
 ): SqliteWalMaintenance {
   const existing = sqliteWalMaintenanceByDb.get(db);
   if (existing) {
     return existing;
   }
-  const maintenance = configureSqliteWalMaintenance(db, options);
+  const maintenance =
+    options?.busyTimeoutMs === undefined
+      ? configureSqliteWalMaintenance(db, options)
+      : configureSqliteConnectionPragmas(db, options);
   sqliteWalMaintenanceByDb.set(db, maintenance);
   return maintenance;
 }
@@ -46,4 +53,8 @@ export function closeMemorySqliteWalMaintenance(db: DatabaseSync): boolean {
   }
   sqliteWalMaintenanceByDb.delete(db);
   return maintenance.close();
+}
+
+export async function stopMemorySqliteWalMaintenance(db: DatabaseSync): Promise<void> {
+  await sqliteWalMaintenanceByDb.get(db)?.stop();
 }

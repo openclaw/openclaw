@@ -88,12 +88,8 @@ function parseTomlDottedKey(value: string): string[] {
 }
 
 function parseProjectHeader(line: string): string | undefined {
-  const trimmed = line.trim();
-  if (!trimmed.startsWith("[") || !trimmed.endsWith("]") || trimmed.startsWith("[[")) {
-    return undefined;
-  }
-  const parts = parseTomlDottedKey(trimmed.slice(1, -1));
-  return parts.length === 2 && parts[0] === "projects" ? parts[1] : undefined;
+  const parts = parseTableHeader(line);
+  return parts?.length === 2 && parts[0] === "projects" ? parts[1] : undefined;
 }
 
 function parseTrustedInlineProjectEntries(value: string): string[] {
@@ -137,12 +133,14 @@ export function extractTrustedCodexProjectPaths(configToml: string): string[] {
 
     const assignment =
       /^(?<key>"(?:\\.|[^"\\])*"|'[^']*'|[A-Za-z0-9_\-/.~:]+)\s*=\s*(?<value>.+)$/.exec(line);
-    if (!assignment?.groups) {
+    const rawKey = assignment?.groups?.key;
+    const rawValue = assignment?.groups?.value;
+    if (!rawKey || rawValue === undefined) {
       continue;
     }
 
-    const key = parseTomlString(assignment.groups.key) ?? assignment.groups.key;
-    const value = assignment.groups.value.trim();
+    const key = parseTomlString(rawKey) ?? rawKey;
+    const value = rawValue.trim();
     if (inProjectsTable && /^\{.*\}$/.test(value)) {
       if (/\btrust_level\s*=\s*["']trusted["']/.test(value) && key) {
         trusted.add(key);
@@ -255,9 +253,6 @@ function extractInheritedCodexRuntimeConfig(configToml: string): string {
     inheritedLines.push(rawLine.trimEnd());
   }
 
-  while (inheritedLines.length > 0 && inheritedLines[inheritedLines.length - 1] === "") {
-    inheritedLines.pop();
-  }
   return inheritedLines.join("\n");
 }
 
@@ -290,8 +285,4 @@ export function renderIsolatedCodexConfig(params: {
   ]
     .filter((line, index, lines) => !(line === "" && lines[index - 1] === ""))
     .join("\n");
-}
-
-export function renderIsolatedCodexProjectTrustConfig(projectPaths: string[]): string {
-  return renderIsolatedCodexConfig({ projectPaths });
 }

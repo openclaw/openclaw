@@ -9,9 +9,5 @@ const FIREWORKS_KIMI_THINKING_PROFILE = {
 export function resolveFireworksThinkingProfile(
   modelId: string,
 ): ProviderThinkingProfile | undefined {
-  if (!isFireworksKimiModelId(modelId)) {
-    return undefined;
-  }
-
-  return FIREWORKS_KIMI_THINKING_PROFILE;
+  return isFireworksKimiModelId(modelId) ? FIREWORKS_KIMI_THINKING_PROFILE : undefined;
 }

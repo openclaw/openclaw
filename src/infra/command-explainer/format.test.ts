@@ -1,3 +1,5 @@
+// Verifies command explanation spans are reduced to executable highlights and
+// suppressed for unsupported shell-wrapper grammars.
 import { describe, expect, it } from "vitest";
 import { explainShellCommand } from "./extract.js";
 import { formatCommandSpans } from "./format.js";
@@ -13,48 +15,8 @@ function span(startIndex: number, endIndex: number): SourceSpan {
 }
 
 describe("formatCommandSpans", () => {
-  it("returns executable token spans without risk or severity metadata", () => {
-    const explanation: CommandExplanation = {
-      ok: true,
-      source: 'ls | grep "stuff" | python -c \'print("hi")\'',
-      shapes: ["pipeline"],
-      topLevelCommands: [
-        {
-          context: "top-level",
-          executable: "ls",
-          argv: ["ls"],
-          text: "ls",
-          span: span(0, 2),
-          executableSpan: span(0, 2),
-        },
-        {
-          context: "top-level",
-          executable: "grep",
-          argv: ["grep", "stuff"],
-          text: 'grep "stuff"',
-          span: span(5, 17),
-          executableSpan: span(5, 9),
-        },
-        {
-          context: "top-level",
-          executable: "python",
-          argv: ["python", "-c", 'print("hi")'],
-          text: "python -c 'print(\"hi\")'",
-          span: span(20, 42),
-          executableSpan: span(20, 26),
-        },
-      ],
-      nestedCommands: [],
-      risks: [
-        {
-          kind: "inline-eval",
-          command: "python",
-          flag: "-c",
-          text: "python -c 'print(\"hi\")'",
-          span: span(20, 42),
-        },
-      ],
-    };
+  it("returns executable token spans without risk or severity metadata", async () => {
+    const explanation = await explainShellCommand('ls | grep "stuff" | python -c \'print("hi")\'');
 
     expect(formatCommandSpans(explanation)).toEqual([
       { startIndex: 0, endIndex: 2 },

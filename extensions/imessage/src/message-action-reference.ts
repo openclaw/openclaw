@@ -1,0 +1,52 @@
+// Imessage plugin module resolves and authorizes action message references.
+import type { IMessageChatContext } from "./chat-context.js";
+import type { authorizeIMessageResourceReference } from "./message-resource.js";
+
+type ResolveMessageId = (
+  messageId: string,
+  options: {
+    requireKnownShortId: boolean;
+    chatContext: IMessageChatContext;
+    requireFromMe?: boolean;
+  },
+) => string | Promise<string>;
+
+type AuthorizeMessageReference = (
+  params: Parameters<typeof authorizeIMessageResourceReference>[0],
+) => void | Promise<void>;
+
+export async function resolveAuthorizedIMessageActionReference(params: {
+  messageId?: string;
+  inputChatContext: IMessageChatContext;
+  requireFromMe?: boolean;
+  resolveFallbackMessageId: (chatContext: IMessageChatContext) => string;
+  resolveMessageId: ResolveMessageId;
+  authorize: AuthorizeMessageReference;
+  authorization: Omit<Parameters<AuthorizeMessageReference>[0], "chatContext" | "messageId">;
+  resolveChatGuid: () => Promise<string>;
+}): Promise<{ messageId: string; chatGuid: string }> {
+  const options = {
+    requireKnownShortId: true,
+    chatContext: params.inputChatContext,
+    ...(params.requireFromMe ? { requireFromMe: true } : {}),
+  };
+  const rawMessageId = params.messageId ?? params.resolveFallbackMessageId(params.inputChatContext);
+  const messageId = await params.resolveMessageId(rawMessageId, options);
+  const authorize = (authorizedMessageId: string, chatContext: IMessageChatContext) =>
+    params.authorize({ ...params.authorization, messageId: authorizedMessageId, chatContext });
+  // Alias resolution may call `chats.list`; reject known foreign references
+  // before that provider read, then bind again to its canonical result.
+  await authorize(messageId, params.inputChatContext);
+  const chatGuid = await params.resolveChatGuid();
+  // The mutation uses this GUID, so authorize it independently. Keeping the
+  // original alias here would let an alias-only cache match mask a foreign GUID.
+  const chatContext = { chatGuid };
+  // Sender ownership was proven against the original selector above. Repeating
+  // it here would reject cache entries whose canonical GUID was learned later.
+  const resolvedMessageId = await params.resolveMessageId(messageId, {
+    requireKnownShortId: true,
+    chatContext,
+  });
+  await authorize(resolvedMessageId, chatContext);
+  return { messageId: resolvedMessageId, chatGuid };
+}

@@ -1,16 +1,15 @@
-import { resolveCommitHash } from "../infra/git-commit.js";
-import { visibleWidth } from "../terminal/ansi.js";
+import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import {
   decorativeEmoji,
   decorativePrefix,
   stripDecorativeEmojiForTerminal,
-  supportsDecorativeEmoji,
-  type DecorativeEmojiOptions,
-} from "../terminal/decorative-emoji.js";
-import { isRich, theme } from "../terminal/theme.js";
+} from "../../packages/terminal-core/src/decorative-emoji.js";
+import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
+import { resolveCommitHash } from "../infra/git-commit.js";
 import { hasRootVersionAlias } from "./argv.js";
-import { parseTaglineMode, readCliBannerTaglineMode } from "./banner-config-lite.js";
-import { pickTagline, type TaglineMode, type TaglineOptions } from "./tagline.js";
+import { parseTaglineMode } from "./banner-config-lite.js";
+import { pickCliLobsterArt } from "./lobster-art.js";
+import { pickTagline, type TaglineOptions } from "./tagline.js";
 
 type BannerOptions = TaglineOptions & {
   argv?: string[];
@@ -23,150 +22,53 @@ type BannerOptions = TaglineOptions & {
 
 let bannerEmitted = false;
 
-const graphemeSegmenter =
-  typeof Intl !== "undefined" && "Segmenter" in Intl
-    ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
-    : null;
-
-function splitGraphemes(value: string): string[] {
-  if (!graphemeSegmenter) {
-    return Array.from(value);
-  }
-  try {
-    return Array.from(graphemeSegmenter.segment(value), (seg) => seg.segment);
-  } catch {
-    return Array.from(value);
-  }
-}
-
 const hasJsonFlag = (argv: string[]) =>
   argv.some((arg) => arg === "--json" || arg.startsWith("--json="));
 
 const hasVersionFlag = (argv: string[]) =>
   argv.some((arg) => arg === "--version" || arg === "-V") || hasRootVersionAlias(argv);
 
-function resolveTaglineMode(options: BannerOptions): TaglineMode | undefined {
-  const explicit = parseTaglineMode(options.mode);
-  if (explicit) {
-    return explicit;
-  }
-  return readCliBannerTaglineMode(options.env);
-}
-
-function resolveEmojiOptions(options: BannerOptions): DecorativeEmojiOptions {
-  return {
-    ...(options.env ? { env: options.env } : {}),
-    ...(options.isTty === undefined ? {} : { isTty: options.isTty }),
-    ...(options.platform ? { platform: options.platform } : {}),
-  };
-}
-
 export function formatCliBannerLine(version: string, options: BannerOptions = {}): string {
   const commit =
     options.commit ?? resolveCommitHash({ env: options.env, moduleUrl: import.meta.url });
   const commitLabel = commit ?? "unknown";
-  const emojiOptions = resolveEmojiOptions(options);
   const tagline = stripDecorativeEmojiForTerminal(
-    pickTagline({ ...options, mode: resolveTaglineMode(options) }),
-    emojiOptions,
+    pickTagline({ ...options, mode: parseTaglineMode(options.mode) }),
+    options,
   );
   const rich = options.richTty ?? isRich();
-  const title = decorativePrefix("🦞", "OpenClaw", emojiOptions);
-  const prefix = decorativeEmoji("🦞", emojiOptions);
+  const title = decorativePrefix("🦞", "OpenClaw", options);
+  const prefix = decorativeEmoji("🦞", options);
   const indent = prefix ? `${prefix} ` : "";
   const columns = options.columns ?? process.stdout.columns ?? 120;
   const plainBaseLine = `${title} ${version} (${commitLabel})`;
   const plainFullLine = tagline ? `${plainBaseLine} — ${tagline}` : plainBaseLine;
   const fitsOnOneLine = visibleWidth(plainFullLine) <= columns;
-  if (rich) {
-    if (fitsOnOneLine) {
-      if (!tagline) {
-        return `${theme.heading(title)} ${theme.info(version)} ${theme.muted(`(${commitLabel})`)}`;
-      }
-      return `${theme.heading(title)} ${theme.info(version)} ${theme.muted(
-        `(${commitLabel})`,
-      )} ${theme.muted("—")} ${theme.accentDim(tagline)}`;
-    }
-    const line1 = `${theme.heading(title)} ${theme.info(version)} ${theme.muted(
-      `(${commitLabel})`,
-    )}`;
-    if (!tagline) {
-      return line1;
-    }
-    const line2 = `${" ".repeat(indent.length)}${theme.accentDim(tagline)}`;
-    return `${line1}\n${line2}`;
-  }
-  if (fitsOnOneLine) {
-    return plainFullLine;
-  }
-  const line1 = plainBaseLine;
+  const baseLine = rich
+    ? `${theme.heading(title)} ${theme.info(version)} ${theme.muted(`(${commitLabel})`)}`
+    : plainBaseLine;
   if (!tagline) {
-    return line1;
+    return baseLine;
   }
-  const line2 = `${" ".repeat(indent.length)}${tagline}`;
-  return `${line1}\n${line2}`;
+  const taglineText = rich ? theme.accentDim(tagline) : tagline;
+  return fitsOnOneLine
+    ? `${baseLine} ${rich ? theme.muted("—") : "—"} ${taglineText}`
+    : `${baseLine}\n${" ".repeat(indent.length)}${taglineText}`;
 }
 
-const LOBSTER_ASCII_BODY = [
-  "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
-  "██░▄▄▄░██░▄▄░██░▄▄▄██░▀██░██░▄▄▀██░████░▄▄▀██░███░██",
-  "██░███░██░▀▀░██░▄▄▄██░█░█░██░█████░████░▀▀░██░█░█░██",
-  "██░▀▀▀░██░█████░▀▀▀██░██▄░██░▀▀▄██░▀▀░█░██░██▄▀▄▀▄██",
-  "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
-];
-
-function centerText(text: string, width: number): string {
-  const pad = Math.max(0, width - visibleWidth(text));
-  const left = Math.floor(pad / 2);
-  const right = pad - left;
-  return `${" ".repeat(left)}${text}${" ".repeat(right)}`;
-}
-
-function formatCliBannerArtLines(options: BannerOptions): string[] {
-  const width = visibleWidth(LOBSTER_ASCII_BODY[0] ?? "");
-  const emojiOptions = resolveEmojiOptions(options);
-  const title = supportsDecorativeEmoji(emojiOptions) ? "🦞 OPENCLAW 🦞" : "OPENCLAW";
-  return [...LOBSTER_ASCII_BODY, centerText(title, width), " "];
-}
-
-export function formatCliBannerArt(options: BannerOptions = {}): string {
-  const rich = options.richTty ?? isRich();
-  const lines = formatCliBannerArtLines(options);
-  if (!rich) {
-    return lines.join("\n");
+// Rare day-seeded ASCII lobster above the banner: random-tagline mode only,
+// rich terminals only, never in CI (see lobster-art.ts for the odds).
+function resolveLobsterArt(options: BannerOptions): string | null {
+  const mode = parseTaglineMode(options.mode);
+  if (mode === "off" || mode === "default") {
+    return null;
   }
-
-  const colorChar = (ch: string) => {
-    if (ch === "█") {
-      return theme.accentBright(ch);
-    }
-    if (ch === "░") {
-      return theme.accentDim(ch);
-    }
-    if (ch === "▀") {
-      return theme.accent(ch);
-    }
-    return theme.muted(ch);
-  };
-
-  const emojiOptions = resolveEmojiOptions(options);
-  const icon = decorativeEmoji("🦞", emojiOptions);
-  const colored = lines.map((line) => {
-    if (line.includes("OPENCLAW")) {
-      if (!icon) {
-        return theme.info(centerText("OPENCLAW", visibleWidth(line)));
-      }
-      return (
-        theme.muted("              ") +
-        theme.accent(icon) +
-        theme.info(" OPENCLAW ") +
-        theme.accent(icon)
-      );
-    }
-    return splitGraphemes(line).map(colorChar).join("");
-  });
-
-  return colored.join("\n");
+  if (!(options.richTty ?? isRich())) {
+    return null;
+  }
+  const now = options.now ? options.now() : new Date();
+  const art = pickCliLobsterArt(now, options.env ?? process.env);
+  return art ? theme.accentDim(art) : null;
 }
 
 export function emitCliBanner(version: string, options: BannerOptions = {}) {
@@ -174,7 +76,8 @@ export function emitCliBanner(version: string, options: BannerOptions = {}) {
     return;
   }
   const argv = options.argv ?? process.argv;
-  if (!process.stdout.isTTY) {
+  const isTty = options.isTty ?? process.stdout.isTTY;
+  if (!isTty) {
     return;
   }
   if (hasJsonFlag(argv)) {
@@ -184,7 +87,8 @@ export function emitCliBanner(version: string, options: BannerOptions = {}) {
     return;
   }
   const line = formatCliBannerLine(version, options);
-  process.stdout.write(`\n${line}\n\n`);
+  const art = resolveLobsterArt(options);
+  process.stdout.write(`\n${art ? `${art}\n` : ""}${line}\n\n`);
   bannerEmitted = true;
 }
 

@@ -1,12 +1,663 @@
-import { describe, expect, it } from "vitest";
-import { formatFastModeLabel } from "./status-labels.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
+import * as transcriptReaders from "../gateway/session-transcript-usage.js";
 
-describe("formatFastModeLabel", () => {
-  it("shows fast mode when enabled", () => {
-    expect(formatFastModeLabel(true)).toBe("Fast");
+vi.mock("../version.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../version.js")>();
+  return { ...actual, resolveRuntimeServiceCommit: () => "aaaaaaa" };
+});
+import {
+  buildStatusMessage,
+  buildStatusMessageParts,
+  statusModelRefs,
+} from "./status-message.test-support.js";
+
+function statusTestModel(id: string, name: string, contextWindow: number): ModelDefinitionConfig {
+  return {
+    id,
+    name,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow,
+    maxTokens: 8_192,
+  };
+}
+
+const displayParams: Partial<Parameters<typeof buildStatusMessage>[0]> = {
+  sessionKey: "agent:main:main",
+  sessionScope: "per-sender",
+  queue: { mode: "steer", depth: 0 },
+  modelAuth: "api-key",
+};
+
+afterEach(() => {
+  cliBackendsTesting.resetDepsForTest();
+});
+
+describe("buildStatusMessage current time", () => {
+  it("surfaces a live current-time line so session_status returns the date/time", () => {
+    // 2025-07-03T08:00:00Z; the Reference UTC line is timezone-independent.
+    const now = 1_751_529_600_000;
+    const text = buildStatusMessage({
+      ...displayParams,
+      modelRefs: statusModelRefs({ provider: "anthropic", model: "claude-haiku-4-5" }),
+      now,
+      config: { agents: { defaults: { userTimezone: "UTC" } } },
+      agent: { model: "anthropic/claude-haiku-4-5" },
+    });
+
+    expect(text).toContain("Current time:");
+    expect(text).toContain("(UTC)");
+    expect(text).toContain("Reference UTC: 2025-07-03 08:00 UTC");
+  });
+});
+
+describe("buildStatusMessageParts presentation", () => {
+  it("reports the loaded build commit", () => {
+    const parts = buildStatusMessageParts({
+      ...displayParams,
+      modelRefs: statusModelRefs({ provider: "anthropic", model: "claude-haiku-4-5" }),
+      now: 1_751_529_600_000,
+      config: { agents: { defaults: { userTimezone: "UTC" } } },
+      agent: { model: "anthropic/claude-haiku-4-5" },
+    });
+
+    expect(parts.presentation.title).toContain("(aaaaaaa)");
   });
 
-  it("hides fast mode when disabled", () => {
-    expect(formatFastModeLabel(false)).toBeNull();
+  it("mirrors the text body as a titled status table with context lines", () => {
+    const parts = buildStatusMessageParts({
+      ...displayParams,
+      modelRefs: statusModelRefs({ provider: "anthropic", model: "claude-haiku-4-5" }),
+      now: 1_751_529_600_000,
+      config: { agents: { defaults: { userTimezone: "UTC" } } },
+      agent: { model: "anthropic/claude-haiku-4-5" },
+      uptimeValue: "gateway 1h · system 2d",
+      channelFeatureLine: "Telegram rich messages: on · Bot API 10.3 sendRichMessage enabled",
+    });
+
+    expect(parts.text).toContain("⏱️ Uptime: gateway 1h · system 2d");
+    expect(parts.text).toContain("Telegram rich messages: on");
+    expect(parts.presentation.title).toMatch(/^🦞 OpenClaw /);
+    const table = parts.presentation.blocks.find((block) => block.type === "table");
+    expect(table).toBeDefined();
+    if (table?.type !== "table") {
+      throw new Error("expected table block");
+    }
+    expect(table.headers).toEqual(["Item", "Value"]);
+    expect(table.rowHeaderColumnIndex).toBe(0);
+    const rowLabels = table.rows.map((row) => row[0]);
+    expect(rowLabels).toContain("🧠 Model");
+    expect(rowLabels).toContain("📚 Context");
+    expect(rowLabels).toContain("🧵 Session");
+    expect(rowLabels).toContain("🪢 Queue");
+    expect(
+      table.rows.every((row) => row.length === 2 && row.every((cell) => String(cell).trim())),
+    ).toBe(true);
+    const contextTexts = parts.presentation.blocks.flatMap((block) =>
+      block.type === "context" ? [block.text] : [],
+    );
+    // One compact clock-and-uptime context line; channel feature hint and
+    // reference-UTC stay text-only.
+    const clockLine = contextTexts.find((entry) => entry.includes("⏱️ gateway 1h · system 2d"));
+    expect(clockLine).toContain("(UTC)");
+    expect(contextTexts.join("\n")).not.toContain("Reference UTC");
+    expect(contextTexts.join("\n")).not.toContain("Telegram rich messages");
+    // Boring defaults stay out of the card: no zero compaction row, no depth-0
+    // queue detail, no meter or warning without usage data.
+    const rows = new Map(table.rows.map((row) => [row[0], row[1]]));
+    expect(rows.has("🧹 Compactions")).toBe(false);
+    expect(rows.get("🪢 Queue")).toBe("steer");
+    expect(String(rows.get("📚 Context"))).not.toContain("▰");
+    expect(parts.presentation.blocks.some((block) => block.type === "text")).toBe(false);
+  });
+
+  it("shows the sanitized endpoint in text and tables", () => {
+    const parts = buildStatusMessageParts({
+      modelRefs: statusModelRefs({ provider: "openai", model: "selected-model" }),
+      agent: { model: "openai/selected-model" },
+      selectedEndpoint: "https://user:secret@api.openai.com/v1?token=private#private",
+    });
+    const table = parts.presentation.blocks.find((block) => block.type === "table");
+    const rows = new Map(table?.type === "table" ? table.rows.map((row) => [row[0], row[1]]) : []);
+    expect(parts.text).toContain("Endpoint: https://api.openai.com/v1");
+    expect(rows.get("🌐 Endpoint")).toBe("https://api.openai.com/v1");
+    expect(JSON.stringify(parts)).not.toMatch(/secret|private|user:/);
+  });
+
+  it("does not infer endpoints from a model or credential label without route facts", () => {
+    const parts = buildStatusMessageParts({
+      modelRefs: statusModelRefs({ provider: "openai", model: "selected-model" }),
+      agent: { model: "openai/selected-model" },
+      modelAuth: "oauth (codex)",
+    });
+    expect(parts.text).toContain("Endpoint: unknown");
+    expect(JSON.stringify(parts)).not.toContain("https://");
+  });
+
+  it("shows a context meter and a pressure warning when the window runs hot", () => {
+    const parts = buildStatusMessageParts({
+      ...displayParams,
+      modelRefs: statusModelRefs({ provider: "anthropic", model: "claude-haiku-4-5" }),
+      now: 1_751_529_600_000,
+      config: { agents: { defaults: { userTimezone: "UTC" } } },
+      agent: { model: "anthropic/claude-haiku-4-5" },
+      runtimeContextTokens: 100_000,
+      sessionEntry: {
+        sessionId: "status-meter-session",
+        totalTokens: 87_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+        compactionCount: 2,
+        updatedAt: 1_751_529_500_000,
+      },
+      queue: { mode: "steer", depth: 3 },
+    });
+
+    const table = parts.presentation.blocks.find((block) => block.type === "table");
+    if (table?.type !== "table") {
+      throw new Error("expected table block");
+    }
+    const rows = new Map(table.rows.map((row) => [row[0], row[1]]));
+    expect(String(rows.get("📚 Context"))).toMatch(/^▰{9}▱ /);
+    expect(rows.get("🧹 Compactions")).toBe("2");
+    expect(rows.get("🪢 Queue")).toBe("steer (depth 3)");
+    const warning = parts.presentation.blocks.find(
+      (block) => block.type === "text" && block.text.startsWith("⚠️ Context"),
+    );
+    expect(warning?.type === "text" ? warning.text : "").toBe("⚠️ Context 87% full");
+  });
+});
+
+describe("buildStatusMessage cost snapshot", () => {
+  it.each([
+    {
+      name: "recorded per-call total",
+      recorded: 0.25,
+      tiered: true,
+      expected: "Cost: $0.25",
+      tokens: true,
+    },
+    { name: "recorded zero", recorded: 0, tiered: true, expected: "Cost: $0.0000", tokens: true },
+    {
+      name: "unknown tiered total",
+      recorded: undefined,
+      tiered: true,
+      expected: undefined,
+      tokens: true,
+    },
+    {
+      name: "legacy flat estimate",
+      recorded: undefined,
+      tiered: false,
+      expected: "Cost: $0.30",
+      tokens: true,
+    },
+    {
+      name: "cost-only zero total",
+      recorded: 0,
+      tiered: true,
+      expected: "Cost: $0.0000",
+      tokens: false,
+    },
+  ])("uses $name without repricing combined calls", ({ recorded, tiered, expected, tokens }) => {
+    const text = buildStatusMessage({
+      modelRefs: statusModelRefs({ provider: "fixture", model: "priced" }),
+      agent: { model: "fixture/priced" },
+      config: {
+        models: {
+          providers: {
+            fixture: {
+              baseUrl: "https://fixture.invalid",
+              models: [
+                {
+                  ...statusTestModel("priced", "Priced", 1_000_000),
+                  cost: {
+                    input: 1,
+                    output: 0,
+                    cacheRead: 0,
+                    cacheWrite: 0,
+                    ...(tiered
+                      ? {
+                          tieredPricing: [
+                            { input: 2, output: 0, cacheRead: 0, cacheWrite: 0, range: [200_000] },
+                          ],
+                        }
+                      : {}),
+                  },
+                },
+              ],
+            },
+          },
+        },
+      },
+      sessionEntry: {
+        sessionId: "status-cost",
+        updatedAt: 0,
+        modelProvider: "fixture",
+        model: "priced",
+        ...(tokens ? { inputTokens: 300_000, outputTokens: 200 } : {}),
+        estimatedCostUsd: recorded,
+      },
+    });
+
+    if (expected) {
+      expect(text).toContain(expected);
+    } else {
+      expect(text).not.toContain("Cost:");
+    }
+    if (!tokens) {
+      expect(text).not.toContain("Tokens:");
+      expect(text).not.toContain("Cache:");
+    }
+  });
+});
+
+describe("buildStatusMessage cache usage", () => {
+  it.each([
+    { source: "session", cacheRead: 0, cacheWrite: 0 },
+    { source: "session", cacheRead: undefined, cacheWrite: undefined },
+    { source: "transcript", cacheRead: 0, cacheWrite: undefined },
+    { source: "transcript", cacheRead: undefined, cacheWrite: undefined },
+    { source: "session with unreported transcript", cacheRead: 0, cacheWrite: 0 },
+  ])(
+    "distinguishes $source cache usage ($cacheRead, $cacheWrite)",
+    ({ source, cacheRead, cacheWrite }) => {
+      const usage = { inputTokens: 10_000, outputTokens: 50, cacheRead, cacheWrite };
+      const reader = vi.spyOn(transcriptReaders, "readRecentSessionUsageFromTranscript");
+      reader.mockReturnValue(
+        source === "transcript"
+          ? usage
+          : source === "session with unreported transcript"
+            ? { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens }
+            : null,
+      );
+      try {
+        const parts = buildStatusMessageParts({
+          modelRefs: statusModelRefs({ provider: "anthropic", model: "claude-haiku-4-5" }),
+          agent: { model: "anthropic/claude-haiku-4-5" },
+          sessionEntry: {
+            sessionId: "status-cache",
+            updatedAt: 0,
+            ...(source !== "transcript" ? usage : {}),
+          },
+          includeTranscriptUsage: source !== "session",
+        });
+        const table = parts.presentation.blocks.find((block) => block.type === "table");
+        if (table?.type !== "table") {
+          throw new Error("expected table block");
+        }
+        const rows = new Map(table.rows.map((row) => [row[0], row[1]]));
+        if (cacheRead === 0) {
+          expect(parts.text).toContain("Cache: 0% hit · 0 cached, 0 new");
+          expect(rows.get("🗄️ Cache")).toBe("0% hit · 0 cached, 0 new");
+        } else {
+          expect(parts.text).not.toContain("Cache:");
+          expect(rows.has("🗄️ Cache")).toBe(false);
+        }
+      } finally {
+        reader.mockRestore();
+      }
+    },
+  );
+});
+
+describe("buildStatusMessage context window", () => {
+  const tokenUsage = {
+    totalTokens: 11,
+    totalTokensFresh: true,
+    totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+  };
+
+  it("rejects a stale runtime window after a same-model harness change", () => {
+    const text = buildStatusMessage({
+      ...displayParams,
+      modelRefs: statusModelRefs({ provider: "openai", model: "gpt-5.6-luna" }),
+      config: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.6-luna",
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [statusTestModel("gpt-5.6-luna", "GPT-5.6 Luna", 1_050_000)],
+            },
+          },
+        },
+      },
+      agent: { model: "openai/gpt-5.6-luna" },
+      runtimeContextTokens: 1_000_000,
+      resolvedHarness: "codex",
+      sessionEntry: {
+        sessionId: "same-model-runtime-change",
+        updatedAt: 0,
+        modelProvider: "openai",
+        model: "gpt-5.6-luna",
+        agentHarnessId: "openclaw",
+        contextTokens: 272_000,
+        contextTokensSource: "runtime",
+        ...tokenUsage,
+      },
+      modelAuth: "oauth",
+    });
+
+    expect(text).toContain("Context: 11/1.0m");
+    expect(text).not.toContain("Context: 11/272k");
+  });
+
+  it("replaces matching runtime telemetry with a newly authored effective cap", () => {
+    const text = buildStatusMessage({
+      ...displayParams,
+      modelRefs: statusModelRefs({ provider: "openai", model: "gpt-5.6-luna" }),
+      config: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.6-luna",
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [
+                {
+                  ...statusTestModel("gpt-5.6-luna", "GPT-5.6 Luna", 1_050_000),
+                  contextTokens: 1_000_000,
+                },
+              ],
+            },
+          },
+        },
+      },
+      agent: { model: "openai/gpt-5.6-luna" },
+      runtimeContextTokens: 1_000_000,
+      resolvedHarness: "codex",
+      sessionEntry: {
+        sessionId: "authored-context-cap",
+        updatedAt: 0,
+        modelProvider: "openai",
+        model: "gpt-5.6-luna",
+        agentHarnessId: "codex",
+        contextTokens: 272_000,
+        contextTokensSource: "runtime",
+        ...tokenUsage,
+      },
+      modelAuth: "oauth",
+    });
+
+    expect(text).toContain("Context: 11/1.0m");
+    expect(text).not.toContain("Context: 11/272k");
+  });
+
+  it("preserves a locked legacy session window", () => {
+    const text = buildStatusMessage({
+      ...displayParams,
+      modelRefs: statusModelRefs({ provider: "openai", model: "gpt-5.6-luna" }),
+      agent: { model: "openai/gpt-5.6-luna" },
+      runtimeContextTokens: 272_000,
+      resolvedHarness: "codex",
+      sessionEntry: {
+        sessionId: "locked-legacy-window",
+        updatedAt: 0,
+        modelSelectionLocked: true,
+        contextTokens: 1_000_000,
+        ...tokenUsage,
+      },
+      modelAuth: "oauth",
+    });
+
+    expect(text).toContain("Context: 11/1.0m");
+    expect(text).not.toContain("Context: 11/272k");
+  });
+
+  it("caps matching unlocked runtime telemetry to the lower current window", () => {
+    const text = buildStatusMessage({
+      ...displayParams,
+      modelRefs: statusModelRefs({ provider: "openai", model: "gpt-5.6-luna" }),
+      agent: { model: "openai/gpt-5.6-luna" },
+      runtimeContextTokens: 272_000,
+      resolvedHarness: "codex",
+      sessionEntry: {
+        sessionId: "unlocked-runtime-window",
+        updatedAt: 0,
+        modelProvider: "openai",
+        model: "gpt-5.6-luna",
+        agentHarnessId: "codex",
+        contextTokens: 1_000_000,
+        contextTokensSource: "runtime",
+        ...tokenUsage,
+      },
+      modelAuth: "oauth",
+    });
+
+    expect(text).toContain("Context: 11/272k");
+    expect(text).not.toContain("Context: 11/1.0m");
+  });
+
+  it("ignores stale runtime context after a manual session model switch", () => {
+    const text = buildStatusMessage({
+      ...displayParams,
+      modelRefs: statusModelRefs(
+        { provider: "ollama-cloud", model: "glm-5.1" },
+        { provider: "ollama-cloud", model: "deepseek-v4-pro" },
+      ),
+      config: {
+        models: {
+          providers: {
+            "ollama-cloud": {
+              baseUrl: "https://ollama.com",
+              models: [
+                statusTestModel("deepseek-v4-pro", "DeepSeek V4 Pro", 1_000_000),
+                statusTestModel("glm-5.1", "GLM 5.1", 200_000),
+              ],
+            },
+          },
+        },
+      },
+      agent: {
+        model: "ollama-cloud/deepseek-v4-pro",
+      },
+      configuredDefaultModelLabel: "ollama-cloud/deepseek-v4-pro",
+      runtimeContextTokens: 1_000_000,
+      sessionEntry: {
+        sessionId: "manual-switch-stale-runtime",
+        updatedAt: 0,
+        providerOverride: "ollama-cloud",
+        modelOverride: "glm-5.1",
+        modelOverrideSource: "user",
+        modelProvider: "ollama-cloud",
+        model: "deepseek-v4-pro",
+        totalTokens: 128_393,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      },
+      sessionKey: "agent:main:telegram:direct:584667058",
+    });
+
+    expect(text).toContain("Model: ollama-cloud/glm-5.1");
+    expect(text).toContain("pinned session; config primary ollama-cloud/deepseek-v4-pro");
+    expect(text).toContain("Context: 128k/200k");
+    expect(text).not.toContain("Context: 128k/1.0m");
+    expect(text).not.toContain("live switch pending");
+  });
+
+  it("flags a pending live model switch on the model line", () => {
+    // A /model switch issued during an active run stays pending until a turn
+    // applies it; /status must not imply the new selection is already running.
+    const text = buildStatusMessage({
+      ...displayParams,
+      modelRefs: statusModelRefs({ provider: "openai", model: "gpt-5.5" }),
+      config: {},
+      agent: { model: "anthropic/claude-opus-4-6" },
+      sessionEntry: {
+        sessionId: "pending-live-switch",
+        updatedAt: 0,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.5",
+        modelOverrideSource: "user",
+        liveModelSwitchPending: true,
+      },
+    });
+
+    expect(text).toContain("Model: openai/gpt-5.5");
+    expect(text).toContain("⏳ live switch pending");
+  });
+
+  it("keeps trusted runtime context for config-backed runtime aliases", () => {
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: ({ backend }) =>
+        backend === "claude-cli"
+          ? {
+              pluginId: "anthropic",
+              backend: {
+                id: "claude-cli",
+                modelProvider: "anthropic",
+                config: { command: "claude" },
+                bundleMcp: false,
+              },
+            }
+          : undefined,
+      resolvePluginSetupRegistry: () => {
+        throw new Error("setup registry should not load for a targeted runtime alias");
+      },
+      resolveRuntimeCliBackends: () => [],
+    });
+
+    const text = buildStatusMessage({
+      ...displayParams,
+      modelRefs: statusModelRefs(
+        { provider: "anthropic", model: "claude-haiku-4-5" },
+        { provider: "claude-cli", model: "claude-haiku-4-5" },
+      ),
+      config: {
+        agents: {
+          defaults: {},
+        },
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://api.anthropic.com",
+              models: [statusTestModel("claude-haiku-4-5", "Claude Haiku 4.5", 200_000)],
+            },
+          },
+        },
+      },
+      agent: {
+        model: "anthropic/claude-haiku-4-5",
+      },
+      runtimeContextTokens: 1_000_000,
+      sessionEntry: {
+        sessionId: "runtime-alias-context",
+        updatedAt: 0,
+        modelProvider: "claude-cli",
+        model: "claude-haiku-4-5",
+        totalTokens: 36_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      },
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "oauth",
+      activeModelAuth: "oauth",
+    });
+
+    expect(text).toContain("Model: anthropic/claude-haiku-4-5");
+    expect(text).toContain("Context: 36k/1.0m");
+    expect(text).not.toContain("Context: 36k/200k");
+  });
+
+  it("shows auto-fallback override label when model differs from configured default", () => {
+    const text = buildStatusMessage({
+      ...displayParams,
+      modelRefs: statusModelRefs(
+        { provider: "ollama-cloud", model: "qwen3.6-blue" },
+        { provider: "ollama-cloud", model: "deepseek-v4-pro" },
+      ),
+      config: {
+        models: {
+          providers: {
+            "ollama-cloud": {
+              baseUrl: "https://ollama.com",
+              models: [
+                statusTestModel("deepseek-v4-pro", "DeepSeek V4 Pro", 1_000_000),
+                statusTestModel("qwen3.6-blue", "Qwen 3.6 Blue", 128_000),
+              ],
+            },
+          },
+        },
+      },
+      agent: {
+        model: "ollama-cloud/deepseek-v4-pro",
+      },
+      configuredDefaultModelLabel: "ollama-cloud/deepseek-v4-pro",
+      runtimeContextTokens: 128_000,
+      sessionEntry: {
+        sessionId: "auto-fallback-qwen",
+        updatedAt: 0,
+        providerOverride: "ollama-cloud",
+        modelOverride: "qwen3.6-blue",
+        modelOverrideSource: "auto",
+        modelOverrideFallbackOriginProvider: "ollama-cloud",
+        modelOverrideFallbackOriginModel: "deepseek-v4-pro",
+        modelProvider: "ollama-cloud",
+        model: "deepseek-v4-pro",
+        agentHarnessId: "openclaw",
+        contextTokens: 128_000,
+        contextTokensSource: "runtime",
+        totalTokens: 50_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      },
+      sessionKey: "agent:main:telegram:direct:auto-fallback",
+      resolvedHarness: "openclaw",
+    });
+
+    expect(text).toContain("Model: ollama-cloud/qwen3.6-blue");
+    expect(text).toContain("auto fallback; config primary ollama-cloud/deepseek-v4-pro");
+    expect(text).toContain("check provider");
+    expect(text).not.toContain("pinned session");
+    expect(text).toContain("Context: 50k/128k");
+  });
+
+  it("does not label a configured subagent model as auto fallback", () => {
+    const text = buildStatusMessage({
+      ...displayParams,
+      modelRefs: statusModelRefs({ provider: "ollama-cloud", model: "qwen3.6-blue" }),
+      config: {
+        models: {
+          providers: {
+            "ollama-cloud": {
+              baseUrl: "https://ollama.com",
+              models: [
+                statusTestModel("deepseek-v4-pro", "DeepSeek V4 Pro", 1_000_000),
+                statusTestModel("qwen3.6-blue", "Qwen 3.6 Blue", 128_000),
+              ],
+            },
+          },
+        },
+      },
+      agent: { model: "ollama-cloud/deepseek-v4-pro" },
+      configuredDefaultModelLabel: "ollama-cloud/deepseek-v4-pro",
+      sessionEntry: {
+        sessionId: "configured-subagent",
+        updatedAt: 0,
+        providerOverride: "ollama-cloud",
+        modelOverride: "qwen3.6-blue",
+        modelOverrideSource: "auto",
+        modelOverrideFallbackOriginProvider: "ollama-cloud",
+        modelOverrideFallbackOriginModel: "qwen3.6-blue",
+      },
+      sessionKey: "agent:worker:subagent:configured",
+    });
+
+    expect(text).toContain("Model: ollama-cloud/qwen3.6-blue");
+    expect(text).not.toContain("auto fallback");
+    expect(text).not.toContain("check provider");
+    expect(text).not.toContain("pinned session");
   });
 });

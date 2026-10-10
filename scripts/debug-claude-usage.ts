@@ -4,47 +4,97 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { normalizeOptionalString } from "../src/shared/string-coerce.ts";
-import { maskIdentifier, previewForDevToolLog, redactHomePath } from "./lib/dev-tooling-safety.ts";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import { normalizeOptionalString } from "../packages/normalization-core/src/string-coerce.js";
+import { requireOptionArgument } from "./lib/arg-utils.mts";
+import { readBoundedResponseText } from "./lib/bounded-response.mjs";
+import {
+  maskIdentifier,
+  parseStrictIntegerOption,
+  previewForDevToolLog,
+  redactHomePath,
+} from "./lib/dev-tooling-safety.ts";
 
 type Args = {
   agentId: string;
+  help: boolean;
   reveal: boolean;
   sessionKey?: string;
 };
 
-const mask = (value: string) => {
-  return maskIdentifier(
-    value,
-    value.trim().length >= 12 ? 6 : 4,
-    value.trim().length >= 12 ? 6 : 4,
-  );
+type FetchOptions = {
+  fetchImpl?: typeof fetch;
+  timeoutMs?: number;
 };
 
-const parseArgs = (): Args => {
-  const args = process.argv.slice(2);
+type AuthProfiles = {
+  profiles?: Record<string, { provider?: string; type?: string; token?: string; key?: string }>;
+};
+
+const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
+const FETCH_RESPONSE_MAX_BYTES = 256 * 1024;
+
+const mask = (value: string) => {
+  const visibleChars = value.trim().length >= 12 ? 6 : 4;
+  return maskIdentifier(value, visibleChars, visibleChars);
+};
+
+const parseArgs = (args = process.argv.slice(2)): Args => {
   let agentId = "main";
+  let help = false;
   let reveal = false;
   let sessionKey: string | undefined;
 
   for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg === "--agent" && args[i + 1]) {
-      agentId = args[++i].trim() || "main";
+    const arg = expectDefined(args[i], `Claude usage argument at index ${i}`);
+    const valueFlag = ["--agent", "--session-key"].find(
+      (flag) => arg === flag || arg.startsWith(`${flag}=`),
+    );
+    if (valueFlag) {
+      const value = parseNonBlankArgValue(
+        arg === valueFlag
+          ? requireOptionArgument(args, i++, valueFlag)
+          : arg.slice(valueFlag.length + 1),
+        valueFlag,
+      );
+      if (valueFlag === "--agent") {
+        agentId = value;
+      } else {
+        sessionKey = value;
+      }
+      continue;
+    }
+    if (arg === "--help" || arg === "-h") {
+      help = true;
       continue;
     }
     if (arg === "--reveal") {
       reveal = true;
       continue;
     }
-    if (arg === "--session-key" && args[i + 1]) {
-      sessionKey = normalizeOptionalString(args[++i]);
-      continue;
-    }
+    throw new Error(`Unknown argument: ${arg}`);
   }
 
-  return { agentId, reveal, sessionKey };
+  return { agentId, help, reveal, sessionKey };
 };
+
+function parseNonBlankArgValue(value: string, label: string): string {
+  const normalized = normalizeOptionalString(value);
+  if (!normalized) {
+    throw new Error(`${label} requires a value`);
+  }
+  return normalized;
+}
+
+function printUsage(): void {
+  console.log(`Usage: node --import tsx scripts/debug-claude-usage.ts [options]
+
+Options:
+  --agent <id>          OpenClaw agent id to inspect (default: main)
+  --session-key <key>   Claude web session key override
+  --reveal              Print token/session values instead of masked identifiers
+  --help, -h            Show this help message`);
+}
 
 const loadAuthProfiles = (agentId: string) => {
   const stateRoot = process.env.OPENCLAW_STATE_DIR?.trim() || path.join(os.homedir(), ".openclaw");
@@ -52,9 +102,7 @@ const loadAuthProfiles = (agentId: string) => {
   if (!fs.existsSync(authPath)) {
     throw new Error(`Missing: ${authPath}`);
   }
-  const store = JSON.parse(fs.readFileSync(authPath, "utf8")) as {
-    profiles?: Record<string, { provider?: string; type?: string; token?: string; key?: string }>;
-  };
+  const store = JSON.parse(fs.readFileSync(authPath, "utf8")) as AuthProfiles;
   return { authPath, store };
 };
 
@@ -63,40 +111,80 @@ const CLAUDE_COOKIE_HOST_SQL =
 const CLAUDE_FIREFOX_COOKIE_HOST_SQL =
   "(host = 'claude.ai' OR host = '.claude.ai' OR host LIKE '%.claude.ai')";
 
-const pickAnthropicTokens = (store: {
-  profiles?: Record<string, { provider?: string; type?: string; token?: string; key?: string }>;
-}): Array<{ profileId: string; token: string }> => {
-  const profiles = store.profiles ?? {};
-  const found: Array<{ profileId: string; token: string }> = [];
-  for (const [id, cred] of Object.entries(profiles)) {
-    if (cred?.provider !== "anthropic") {
-      continue;
-    }
-    const token = cred.type === "token" ? cred.token?.trim() : undefined;
-    if (token) {
-      found.push({ profileId: id, token });
-    }
-  }
-  return found;
+const pickAnthropicTokens = (store: AuthProfiles): Array<{ profileId: string; token: string }> =>
+  Object.entries(store.profiles ?? {}).flatMap(([profileId, cred]) => {
+    const token =
+      cred?.provider === "anthropic" && cred.type === "token" ? cred.token?.trim() : undefined;
+    return token ? [{ profileId, token }] : [];
+  });
+
+const resolveFetchTimeoutMs = (raw = process.env.OPENCLAW_DEBUG_CLAUDE_USAGE_FETCH_TIMEOUT_MS) => {
+  return parseStrictIntegerOption({
+    fallback: DEFAULT_FETCH_TIMEOUT_MS,
+    label: "OPENCLAW_DEBUG_CLAUDE_USAGE_FETCH_TIMEOUT_MS",
+    min: 1,
+    raw,
+  });
 };
 
-const fetchAnthropicOAuthUsage = async (token: string) => {
-  const res = await fetch("https://api.anthropic.com/api/oauth/usage", {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/json",
-      "anthropic-version": "2023-06-01",
-      "anthropic-beta": "oauth-2025-04-20",
-      "User-Agent": "openclaw-debug",
-    },
+const withFetchTimeout = async <T>(
+  label: string,
+  timeoutMs: number,
+  run: (signal: AbortSignal) => Promise<T>,
+): Promise<T> => {
+  const controller = new AbortController();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<T>((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      const error = new Error(`${label} exceeded timeout of ${timeoutMs}ms`);
+      reject(error);
+      controller.abort(error);
+    }, timeoutMs);
   });
-  const text = await res.text();
+  try {
+    return await Promise.race([run(controller.signal), timeoutPromise]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+};
+
+const fetchText = async (
+  label: string,
+  url: string,
+  init: RequestInit,
+  options: FetchOptions = {},
+) => {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const timeoutMs = options.timeoutMs ?? resolveFetchTimeoutMs();
+  return await withFetchTimeout(label, timeoutMs, async (signal) => {
+    const res = await fetchImpl(url, { ...init, signal });
+    const text = await readBoundedResponseText(res, label, FETCH_RESPONSE_MAX_BYTES, { signal });
+    return { res, text };
+  });
+};
+
+const fetchAnthropicOAuthUsage = async (token: string, options: FetchOptions = {}) => {
+  const { res, text } = await fetchText(
+    "Anthropic OAuth usage request",
+    "https://api.anthropic.com/api/oauth/usage",
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/json",
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta": "oauth-2025-04-20",
+        "User-Agent": "openclaw-debug",
+      },
+    },
+    options,
+  );
   return { status: res.status, contentType: res.headers.get("content-type"), text };
 };
 
 const readClaudeCliKeychain = (): {
   accessToken: string;
-  expiresAt?: number;
   scopes?: string[];
 } | null => {
   if (process.platform !== "darwin") {
@@ -117,11 +205,10 @@ const readClaudeCliKeychain = (): {
     if (typeof accessToken !== "string" || !accessToken.trim()) {
       return null;
     }
-    const expiresAt = typeof oauth.expiresAt === "number" ? oauth.expiresAt : undefined;
     const scopes = Array.isArray(oauth.scopes)
       ? oauth.scopes.filter((v): v is string => typeof v === "string")
       : undefined;
-    return { accessToken, expiresAt, scopes };
+    return { accessToken, scopes };
   } catch {
     return null;
   }
@@ -246,8 +333,6 @@ const queryFirefoxCookieDb = (cookieDb: string): string | null => {
   }
 };
 
-const browserRootLabel = (root: string): string => path.basename(root) || "browser";
-
 const findClaudeSessionKey = (): { sessionKey: string; source: string } | null => {
   if (process.platform !== "darwin") {
     return null;
@@ -295,7 +380,10 @@ const findClaudeSessionKey = (): { sessionKey: string; source: string } | null =
       }
       const value = queryChromeCookieDb(db);
       if (value) {
-        return { sessionKey: value, source: `chromium:${browserRootLabel(root)}/${profile}` };
+        return {
+          sessionKey: value,
+          source: `chromium:${path.basename(root) || "browser"}/${profile}`,
+        };
       }
     }
   }
@@ -303,15 +391,19 @@ const findClaudeSessionKey = (): { sessionKey: string; source: string } | null =
   return null;
 };
 
-const fetchClaudeWebUsage = async (sessionKey: string) => {
+const fetchClaudeWebUsage = async (sessionKey: string, options: FetchOptions = {}) => {
   const headers = {
     Cookie: `sessionKey=${sessionKey}`,
     Accept: "application/json",
     "User-Agent":
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15",
   };
-  const orgRes = await fetch("https://claude.ai/api/organizations", { headers });
-  const orgText = await orgRes.text();
+  const { res: orgRes, text: orgText } = await fetchText(
+    "Claude organizations request",
+    "https://claude.ai/api/organizations",
+    { headers },
+    options,
+  );
   if (!orgRes.ok) {
     return { ok: false as const, step: "organizations", status: orgRes.status, body: orgText };
   }
@@ -321,15 +413,24 @@ const fetchClaudeWebUsage = async (sessionKey: string) => {
     return { ok: false as const, step: "organizations", status: 200, body: orgText };
   }
 
-  const usageRes = await fetch(`https://claude.ai/api/organizations/${orgId}/usage`, { headers });
-  const usageText = await usageRes.text();
+  const { res: usageRes, text: usageText } = await fetchText(
+    "Claude usage request",
+    `https://claude.ai/api/organizations/${orgId}/usage`,
+    { headers },
+    options,
+  );
   return usageRes.ok
     ? { ok: true as const, orgId, body: usageText }
     : { ok: false as const, step: "usage", status: usageRes.status, body: usageText };
 };
 
-const main = async () => {
-  const opts = parseArgs();
+const main = async (argv = process.argv.slice(2)) => {
+  const opts = parseArgs(argv);
+  if (opts.help) {
+    printUsage();
+    return;
+  }
+
   const { authPath, store } = loadAuthProfiles(opts.agentId);
   console.log(`Auth file: ${redactHomePath(authPath)}`);
 
@@ -366,7 +467,7 @@ const main = async () => {
   const envSessionKey =
     process.env.CLAUDE_AI_SESSION_KEY?.trim() || process.env.CLAUDE_WEB_SESSION_KEY?.trim();
   const discoveredSession = opts.sessionKey || envSessionKey ? null : findClaudeSessionKey();
-  const sessionKey = opts.sessionKey?.trim() || envSessionKey || discoveredSession?.sessionKey;
+  const sessionKey = opts.sessionKey || envSessionKey || discoveredSession?.sessionKey;
   const source = opts.sessionKey
     ? "--session-key"
     : envSessionKey
@@ -395,13 +496,13 @@ const main = async () => {
 
 export const testing = {
   CLAUDE_COOKIE_HOST_SQL,
-  CLAUDE_FIREFOX_COOKIE_HOST_SQL,
-  browserRootLabel,
-  mask,
+  fetchAnthropicOAuthUsage,
+  parseArgs,
+  resolveFetchTimeoutMs,
 };
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  await main().catch((error) => {
+if (import.meta.url === pathToFileURL(path.resolve(process.argv[1] ?? "")).href) {
+  await main().catch((error: unknown) => {
     console.error(
       previewForDevToolLog(error instanceof Error ? error.message : String(error), 800),
     );

@@ -1,6 +1,12 @@
+// Session conversation fallback tests cover bundled plugin fallback for conversation sessions.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
-import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 
 const fallbackState = vi.hoisted(() => ({
   activeDirName: null as string | null,
@@ -53,7 +59,8 @@ function enableBundledFallback(
 
 function enableThreadedFallback() {
   enableBundledFallback("mock-threaded", ({ rawId }) => {
-    const [conversationId, threadId] = rawId.split(":topic:");
+    const [rawConversationId, threadId] = rawId.split(":topic:");
+    const conversationId = expectDefined(rawConversationId, "conversation id");
     return {
       id: conversationId,
       threadId,
@@ -88,6 +95,33 @@ describe("session conversation bundled fallback", () => {
       baseConversationId: "room",
       parentConversationCandidates: ["room"],
     });
+  });
+
+  it("keeps a loaded plugin without messaging on generic thread grammar", () => {
+    enableThreadedFallback();
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "mock-threaded",
+          source: "test",
+          plugin: createChannelTestPluginBase({ id: "mock-threaded" }),
+        },
+      ]),
+    );
+
+    expect(
+      resolveSessionConversationRef("agent:main:mock-threaded:group:room:topic:42:thread:leaf"),
+    ).toEqual({
+      channel: "mock-threaded",
+      kind: "group",
+      rawId: "room:topic:42:thread:leaf",
+      id: "room:topic:42",
+      threadId: "leaf",
+      baseSessionKey: "agent:main:mock-threaded:group:room:topic:42",
+      baseConversationId: "room:topic:42",
+      parentConversationCandidates: ["room:topic:42"],
+    });
+    expect(fallbackState.loadCalls).toBe(0);
   });
 
   it("can skip bundled fallback probing for hot generic-only callers", () => {

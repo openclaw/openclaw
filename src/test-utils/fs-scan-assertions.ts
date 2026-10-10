@@ -1,3 +1,4 @@
+// Test assertions for scanning repository files and filesystem fixtures.
 import fs from "node:fs";
 import { expect, vi } from "vitest";
 import { spawnNodeEvalSync } from "./node-process.js";
@@ -9,6 +10,7 @@ type NodeFsScanResult<T> = {
   result: T;
 };
 
+/** Asserts a synchronous block did not enumerate directories. */
 export function expectNoReaddirSyncDuring<T>(run: () => T): T {
   return expectNoFsSyncDuring(run, ["readdirSync"]);
 }
@@ -38,20 +40,6 @@ export function expectNoFsSyncDuring<T>(run: () => T, counters: FsScanCounter[])
     for (const spy of spies) {
       spy.mockRestore();
     }
-  }
-}
-
-export function captureReaddirSyncCallsDuring<T>(run: () => T): {
-  calls: unknown[][];
-  result: T;
-} {
-  const readDir = vi.spyOn(fs, "readdirSync");
-  try {
-    const before = readDir.mock.calls.length;
-    const result = run();
-    return { calls: readDir.mock.calls.slice(before), result };
-  } finally {
-    readDir.mockRestore();
   }
 }
 

@@ -2,6 +2,14 @@ import Foundation
 import OpenClawIPC
 import OpenClawKit
 
+private struct RemoteGatewayProbeTimeout: LocalizedError, Sendable {
+    let timeoutMs: Double
+
+    var errorDescription: String? {
+        "Remote gateway check timed out after \(Int(self.timeoutMs))ms"
+    }
+}
+
 enum RemoteGatewayAuthIssue: Equatable {
     case tokenRequired
     case tokenMismatch
@@ -32,15 +40,6 @@ enum RemoteGatewayAuthIssue: Equatable {
         }
     }
 
-    var showsTokenField: Bool {
-        switch self {
-        case .tokenRequired, .tokenMismatch:
-            true
-        case .gatewayTokenNotConfigured, .setupCodeExpired, .passwordRequired, .pairingRequired:
-            false
-        }
-    }
-
     var title: String {
         switch self {
         case .tokenRequired:
@@ -52,7 +51,7 @@ enum RemoteGatewayAuthIssue: Equatable {
         case .setupCodeExpired:
             "This setup code is no longer valid"
         case .passwordRequired:
-            "This gateway is using unsupported auth"
+            "Check this gateway's password"
         case .pairingRequired:
             "This device needs pairing approval"
         }
@@ -61,20 +60,24 @@ enum RemoteGatewayAuthIssue: Equatable {
     var body: String {
         switch self {
         case .tokenRequired:
-            "Paste the token configured on the gateway host. "
-                + "On the gateway host, run `openclaw config get gateway.auth.token`. "
-                + "If the gateway uses an environment variable instead, use `OPENCLAW_GATEWAY_TOKEN`."
+            "On the gateway host, run `openclaw gateway auth-token --show` in an interactive terminal. "
+                + "Click Change connection and paste its output into Gateway token. "
+                + "Save the connection, then try again."
         case .tokenMismatch:
-            "Check `gateway.auth.token` or `OPENCLAW_GATEWAY_TOKEN` on the gateway host and try again."
+            "On the gateway host, run `openclaw gateway auth-token --show` in an interactive terminal. "
+                + "Click Change connection and replace Gateway token with its output. "
+                + "Save the connection, then try again."
         case .gatewayTokenNotConfigured:
             "This gateway is set to token auth, but no `gateway.auth.token` is configured on the gateway host. "
                 + "If the gateway uses an environment variable instead, "
                 + "set `OPENCLAW_GATEWAY_TOKEN` before starting the gateway."
         case .setupCodeExpired:
-            "Scan or paste a fresh setup code from an already-paired OpenClaw client, then try again."
+            "Get a fresh setup code from the Gateway owner. Click Change connection and paste it into "
+                + "Address or setup code. Save the connection, then try again."
         case .passwordRequired:
-            "This onboarding flow does not support password auth yet. "
-                + "Reconfigure the gateway to use token auth, then retry."
+            "Click Change connection and enter the gateway host's configured password in the Gateway password field. "
+                + "Save the connection, then try again. If no password is configured, "
+                + "set `gateway.auth.password` or `OPENCLAW_GATEWAY_PASSWORD` on the gateway host."
         case .pairingRequired:
             "Approve this device from an already-paired OpenClaw client. "
                 + "In your OpenClaw chat, run `/pair approve`, then click **Check connection** again."
@@ -99,15 +102,16 @@ enum RemoteGatewayAuthIssue: Equatable {
     var statusMessage: String {
         switch self {
         case .tokenRequired:
-            "This gateway requires an auth token from the gateway host."
+            "This gateway requires an auth token. Run openclaw gateway auth-token --show on the gateway host."
         case .tokenMismatch:
-            "Gateway token mismatch. Check gateway.auth.token or OPENCLAW_GATEWAY_TOKEN on the gateway host."
+            "Gateway token mismatch. Run openclaw gateway auth-token --show on the gateway host."
         case .gatewayTokenNotConfigured:
             "This gateway has token auth enabled, but no gateway.auth.token is configured on the host."
         case .setupCodeExpired:
-            "Setup code expired or already used. Scan a fresh setup code, then try again."
+            "Setup code no longer valid. Get a fresh code from the Gateway owner and use Change connection."
         case .passwordRequired:
-            "This gateway uses password auth. Remote onboarding on macOS cannot collect gateway passwords yet."
+            "Click Change connection and enter the gateway password in the Gateway password field. "
+                + "If needed, configure gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD on the gateway host."
         case .pairingRequired:
             "Pairing required. In an already-paired OpenClaw client, "
                 + "run /pair approve, then check the connection again."
@@ -142,9 +146,9 @@ struct RemoteGatewayProbeSuccess: Equatable {
     var detail: String? {
         switch self.authSource {
         case .some(.deviceToken):
-            "This Mac used a stored device token. New or unpaired devices may still need the gateway token."
+            "This app used a stored device token. New or unpaired devices may still need the gateway token."
         case .some(.bootstrapToken):
-            "This Mac is still using the temporary setup code. "
+            "This app is still using the temporary setup code. "
                 + "Approve pairing to finish provisioning device-scoped auth."
         case .some(.sharedToken), .some(.password), .some(GatewayAuthSource.none), nil:
             nil
@@ -153,9 +157,13 @@ struct RemoteGatewayProbeSuccess: Equatable {
 }
 
 enum RemoteGatewayProbe {
+    private static let gatewayProbeTimeoutMs: Double = 10000
+
     @MainActor
     static func run() async -> RemoteGatewayProbeResult {
-        AppStateStore.shared.syncGatewayConfigNow()
+        guard AppStateStore.shared.syncGatewayConfigNow() else {
+            return .failed("Save valid remote gateway settings before checking the connection")
+        }
         let settings = CommandResolver.connectionSettings()
         let transport = AppStateStore.shared.remoteTransport
 
@@ -164,8 +172,8 @@ enum RemoteGatewayProbe {
             guard !trimmedUrl.isEmpty else {
                 return .failed("Set a gateway URL first")
             }
-            guard self.isValidWsUrl(trimmedUrl) else {
-                return .failed("Gateway URL must use wss:// for remote hosts (ws:// only for localhost)")
+            guard GatewayRemoteConfig.normalizeGatewayUrl(trimmedUrl) != nil else {
+                return .failed(GatewayRemoteConfig.directGatewayUrlValidationMessage)
             }
         } else {
             let trimmedTarget = settings.target.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -175,25 +183,50 @@ enum RemoteGatewayProbe {
             if let validationMessage = CommandResolver.sshTargetValidationMessage(trimmedTarget) {
                 return .failed(validationMessage)
             }
-            guard let sshCommand = self.sshCheckCommand(target: settings.target, identity: settings.identity) else {
+            guard let sshCommand = self.sshCheckCommand(
+                target: settings.target,
+                identity: settings.identity,
+                hostKeyPolicy: settings.sshHostKeyPolicy)
+            else {
                 return .failed("SSH target is invalid")
             }
 
             let sshResult = await ShellExecutor.run(
                 command: sshCommand,
                 cwd: nil,
-                env: nil,
+                env: CommandResolver.sshEnvironment(),
                 timeout: 8)
             guard sshResult.ok else {
                 return .failed(self.formatSSHFailure(sshResult, target: settings.target))
             }
         }
 
+        return await self.probeGateway(
+            connection: GatewayConnection.shared,
+            timeoutMs: self.gatewayProbeTimeoutMs)
+    }
+
+    static func probeGateway(
+        connection: GatewayConnection,
+        timeoutMs: Double) async -> RemoteGatewayProbeResult
+    {
         do {
-            _ = try await GatewayConnection.shared.healthSnapshot(timeoutMs: 10000)
-            let authSource = await GatewayConnection.shared.authSource()
+            let authSource = try await AsyncTimeout.withTimeout(
+                seconds: timeoutMs / 1000,
+                onTimeout: { RemoteGatewayProbeTimeout(timeoutMs: timeoutMs) },
+                operation: {
+                    _ = try await connection.request(
+                        method: GatewayConnection.Method.health.rawValue,
+                        params: nil,
+                        timeoutMs: 0,
+                        retryTransportFailures: false)
+                    return await connection.authSource()
+                })
             return .ready(RemoteGatewayProbeSuccess(authSource: authSource))
         } catch {
+            if let issue = GatewayCompatibilityIssue(error: error) {
+                return .failed(issue.message)
+            }
             if let authIssue = RemoteGatewayAuthIssue(error: error) {
                 return .authIssue(authIssue)
             }
@@ -201,16 +234,16 @@ enum RemoteGatewayProbe {
         }
     }
 
-    private static func isValidWsUrl(_ raw: String) -> Bool {
-        GatewayRemoteConfig.normalizeGatewayUrl(raw) != nil
-    }
-
-    private static func sshCheckCommand(target: String, identity: String) -> [String]? {
+    static func sshCheckCommand(
+        target: String,
+        identity: String,
+        hostKeyPolicy: CommandResolver.SSHHostKeyPolicy) -> [String]?
+    {
         guard let parsed = CommandResolver.parseSSHTarget(target) else { return nil }
         let options = [
             "-o", "BatchMode=yes",
             "-o", "ConnectTimeout=5",
-        ] + CommandResolver.strictHostKeyCheckingSSHOptions + CommandResolver.updateHostKeysSSHOptions
+        ] + hostKeyPolicy.commandOptions
         let args = CommandResolver.sshArguments(
             target: parsed,
             identity: identity,

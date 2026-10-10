@@ -1,13 +1,17 @@
-import { canonicalizeBase64 } from "../media/base64.js";
+import { canonicalizeBase64 } from "@openclaw/media-core/base64";
+import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
 import type { GeneratedImageAsset, ImageGenerationSourceImage } from "./types.js";
 
 const DEFAULT_IMAGE_MIME_TYPE = "image/png";
 const DEFAULT_IMAGE_FILE_PREFIX = "image";
+const INLINE_IMAGE_JSON_RESPONSE_ENVELOPE_BYTES = 1024 * 1024;
 
+/** Result of conservative image MIME sniffing for provider responses. */
 export type ImageMimeTypeDetection = {
   mimeType: string;
   extension: string;
@@ -23,8 +27,17 @@ export type OpenAiCompatibleImageResponsePayload = {
   data?: unknown;
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+export function resolveInlineImageJsonResponseMaxBytes(
+  maxImages: number,
+  maxImageBytes: number,
+): number {
+  const imageCount = Number.isFinite(maxImages) ? Math.max(1, Math.trunc(maxImages)) : 1;
+  const imageBytes =
+    Number.isFinite(maxImageBytes) && maxImageBytes > 0
+      ? Math.max(1, Math.trunc(maxImageBytes))
+      : MAX_IMAGE_BYTES;
+  const maxBase64Bytes = Math.ceil((imageBytes * imageCount * 4) / 3);
+  return maxBase64Bytes + INLINE_IMAGE_JSON_RESPONSE_ENVELOPE_BYTES;
 }
 
 function throwMalformedImageResponse(message: string | undefined): never | undefined {
@@ -34,6 +47,7 @@ function throwMalformedImageResponse(message: string | undefined): never | undef
   return undefined;
 }
 
+/** Maps an image MIME type to a stable filename extension. */
 export function imageFileExtensionForMimeType(
   mimeType: string | undefined,
   fallback = "png",
@@ -52,6 +66,8 @@ export function imageFileExtensionForMimeType(
   return slashIndex >= 0 ? normalized.slice(slashIndex + 1) || fallback : fallback;
 }
 
+// Lightweight magic-byte sniffing for providers that omit mime_type. Keep this
+// conservative so unknown formats still use the configured default mime type.
 export function sniffImageMimeType(
   buffer: Buffer,
   fallbackMimeType = DEFAULT_IMAGE_MIME_TYPE,
@@ -112,6 +128,8 @@ export function parseImageDataUrl(
   return { mimeType, base64: canonicalBase64 };
 }
 
+// Public conversion path for OpenAI-compatible base64 payloads. Invalid or
+// empty base64 returns undefined so callers can choose strict/lenient handling.
 export function generatedImageAssetFromBase64(params: {
   base64: string | undefined;
   index: number;
@@ -198,10 +216,7 @@ export function parseOpenAiCompatibleImageResponse(
     throwMalformedImageResponse(options.malformedResponseError);
     return [];
   }
-  const data = payload.data;
-  if (data === undefined || data === null) {
-    return [];
-  }
+  const data = payload.data ?? [];
   if (!Array.isArray(data)) {
     throwMalformedImageResponse(options.malformedResponseError);
     return [];
@@ -209,11 +224,9 @@ export function parseOpenAiCompatibleImageResponse(
 
   const images: GeneratedImageAsset[] = [];
   for (const [index, entry] of data.entries()) {
-    if (!isRecord(entry)) {
-      throwMalformedImageResponse(options.malformedResponseError);
-      continue;
-    }
-    const image = generatedImageAssetFromOpenAiCompatibleEntry(entry, index, options);
+    const image = isRecord(entry)
+      ? generatedImageAssetFromOpenAiCompatibleEntry(entry, index, options)
+      : undefined;
     if (!image) {
       throwMalformedImageResponse(options.malformedResponseError);
       continue;
@@ -223,6 +236,8 @@ export function parseOpenAiCompatibleImageResponse(
   return images;
 }
 
+// Upload filename contract for edit/reference images. User-provided filenames
+// win; generated names follow the same prefix/index/mime logic as outputs.
 export function imageSourceUploadFileName(params: {
   image: ImageGenerationSourceImage;
   index: number;

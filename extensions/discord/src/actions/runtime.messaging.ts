@@ -1,5 +1,6 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import type { ActionGate, DiscordActionConfig, OpenClawConfig } from "../runtime-api.js";
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import type { ActionGate } from "openclaw/plugin-sdk/channel-actions";
+import type { DiscordActionConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { handleDiscordMessageManagementAction } from "./runtime.messaging.messages.js";
 import { handleDiscordReactionMessagingAction } from "./runtime.messaging.reactions.js";
 import { handleDiscordMessageSendAction } from "./runtime.messaging.send.js";
@@ -7,8 +8,6 @@ import {
   createDiscordMessagingActionContext,
   type DiscordMessagingActionOptions,
 } from "./runtime.messaging.shared.js";
-export { discordMessagingActionRuntime } from "./runtime.messaging.runtime.js";
-
 export async function handleDiscordMessagingAction(
   action: string,
   params: Record<string, unknown>,
@@ -26,12 +25,12 @@ export async function handleDiscordMessagingAction(
     cfg,
     options,
   });
-  return (
+  const result =
     (await handleDiscordReactionMessagingAction(ctx)) ??
     (await handleDiscordMessageSendAction(ctx)) ??
-    (await handleDiscordMessageManagementAction(ctx)) ??
-    (() => {
-      throw new Error(`Unknown action: ${action}`);
-    })()
-  );
+    (await handleDiscordMessageManagementAction(ctx));
+  if (result == null) {
+    throw new Error(`Unknown action: ${action}`);
+  }
+  return result;
 }

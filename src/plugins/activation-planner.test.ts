@@ -1,3 +1,4 @@
+/** Tests manifest activation planning for commands, providers, channels, and capabilities. */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -25,31 +26,22 @@ describe("activation planner", () => {
         {
           id: "memory-core",
           commandAliases: [{ name: "dreaming", kind: "runtime-slash", cliCommand: "memory" }],
-          providers: [],
-          channels: [],
-          cliBackends: [],
-          skills: [],
-          hooks: [],
           origin: "bundled",
         },
         {
           id: "device-pair",
           commandAliases: [{ name: "pair", kind: "runtime-slash" }],
-          providers: [],
-          channels: [],
-          cliBackends: [],
-          skills: [],
-          hooks: [],
           origin: "bundled",
         },
         {
           id: "browser",
-          commandAliases: [{ name: "browser" }],
-          providers: [],
-          channels: [],
-          cliBackends: [],
-          skills: [],
-          hooks: [],
+          cliCommands: [
+            {
+              name: "browser",
+              description: "Manage the browser",
+              hasSubcommands: true,
+            },
+          ],
           origin: "bundled",
         },
         {
@@ -59,20 +51,27 @@ describe("activation planner", () => {
             onAgentHarnesses: ["codex"],
           },
           setup: {
-            providers: [{ id: "openai-codex" }],
+            providers: [{ id: "openai" }],
           },
-          channels: [],
-          cliBackends: [],
-          skills: [],
-          hooks: [],
           origin: "bundled",
+        },
+        {
+          id: "custom-harness-plugin",
+          activation: {
+            onAgentHarnesses: ["custom-harness"],
+          },
+          origin: "workspace",
+        },
+        {
+          id: "load-path-harness-plugin",
+          activation: {
+            onAgentHarnesses: ["load-path-harness"],
+          },
+          origin: "config",
         },
         {
           id: "demo-channel",
           channels: ["telegram"],
-          providers: [],
-          cliBackends: [],
-          skills: [],
           hooks: ["before-agent-start"],
           contracts: {
             tools: ["web-search"],
@@ -83,7 +82,12 @@ describe("activation planner", () => {
           },
           origin: "workspace",
         },
-      ],
+      ].map((plugin) =>
+        Object.assign(
+          { providers: [], channels: [], cliBackends: [], skills: [], hooks: [] },
+          plugin,
+        ),
+      ),
       diagnostics: [],
     });
   });
@@ -126,51 +130,90 @@ describe("activation planner", () => {
     ).toEqual(["demo-channel"]);
   });
 
-  it("keeps ids-only provider, agent harness, channel, and route planning stable", () => {
-    expect(
-      resolveManifestActivationPluginIds({
-        trigger: {
-          kind: "provider",
-          provider: "openai",
-        },
-      }),
-    ).toEqual(["openai"]);
-
-    expect(
-      resolveManifestActivationPluginIds({
-        trigger: {
-          kind: "provider",
-          provider: "openai-codex",
-        },
-      }),
-    ).toEqual(["openai"]);
-
+  it("plans manifest-owned custom harnesses and respects their activation policy", () => {
     expect(
       resolveManifestActivationPluginIds({
         trigger: {
           kind: "agentHarness",
-          runtime: "codex",
+          runtime: "custom-harness",
         },
       }),
-    ).toEqual(["openai"]);
+    ).toEqual(["custom-harness-plugin"]);
 
     expect(
       resolveManifestActivationPluginIds({
+        config: {
+          plugins: {
+            entries: {
+              "custom-harness-plugin": { enabled: false },
+            },
+          },
+        },
         trigger: {
-          kind: "channel",
-          channel: "telegram",
+          kind: "agentHarness",
+          runtime: "custom-harness",
         },
       }),
-    ).toEqual(["demo-channel"]);
+    ).toEqual([]);
+  });
+
+  it("requires canonical ids for explicit manifest owner trust", () => {
+    expect(
+      resolveManifestActivationPluginIds({
+        config: {
+          plugins: {
+            allow: ["legacy-custom-harness-plugin"],
+          },
+        },
+        trigger: {
+          kind: "agentHarness",
+          runtime: "custom-harness",
+        },
+        requireExplicitManifestOwnerTrust: true,
+      }),
+    ).toEqual([]);
 
     expect(
       resolveManifestActivationPluginIds({
-        trigger: {
-          kind: "route",
-          route: "webhook",
+        config: {
+          plugins: {
+            allow: ["custom-harness-plugin"],
+          },
         },
+        trigger: {
+          kind: "agentHarness",
+          runtime: "custom-harness",
+        },
+        requireExplicitManifestOwnerTrust: true,
       }),
-    ).toEqual(["demo-channel"]);
+    ).toEqual(["custom-harness-plugin"]);
+  });
+
+  it("treats load-path manifest owners as explicitly trusted for activation planning", () => {
+    expect(
+      resolveManifestActivationPluginIds({
+        trigger: {
+          kind: "agentHarness",
+          runtime: "load-path-harness",
+        },
+        requireExplicitManifestOwnerTrust: true,
+      }),
+    ).toEqual(["load-path-harness-plugin"]);
+
+    expect(
+      resolveManifestActivationPluginIds({
+        config: {
+          plugins: {
+            deny: ["load-path-harness-plugin"],
+          },
+        },
+        trigger: {
+          kind: "agentHarness",
+          runtime: "load-path-harness",
+        },
+        requireExplicitManifestOwnerTrust: true,
+      }),
+    ).toEqual([]);
   });
 
   it("keeps ids-only capability planning stable", () => {
@@ -269,22 +312,7 @@ describe("activation planner", () => {
       {
         pluginId: "openai",
         origin: "bundled",
-        reasons: ["manifest-provider-owner"],
-      },
-    ]);
-
-    expect(
-      resolveManifestActivationPlan({
-        trigger: {
-          kind: "provider",
-          provider: "openai-codex",
-        },
-      }).entries,
-    ).toEqual([
-      {
-        pluginId: "openai",
-        origin: "bundled",
-        reasons: ["manifest-setup-provider-owner"],
+        reasons: ["manifest-provider-owner", "manifest-setup-provider-owner"],
       },
     ]);
 
@@ -365,6 +393,41 @@ describe("activation planner", () => {
         reasons: ["manifest-tool-contract"],
       },
     ]);
+  });
+
+  it("keeps unique sorted ids and stable same-id explanation entries", () => {
+    const diagnostics = [{ level: "warn", message: "synthetic discovery warning" }];
+    mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
+      plugins: [
+        { id: "z-owner", origin: "bundled", activation: { onProviders: [" OPENAI "] } },
+        {
+          id: "duplicate",
+          origin: "workspace",
+          providers: ["openai"],
+          setup: { providers: [{ id: "OPENAI" }] },
+        },
+        { id: "a-owner", origin: "bundled", providers: ["OPENAI"] },
+        { id: "duplicate", origin: "config", activation: { onProviders: ["openai"] } },
+      ],
+      diagnostics,
+    });
+    const trigger = { kind: "provider" as const, provider: " OpenAI " };
+    const plan = resolveManifestActivationPlan({ trigger });
+    const expectedIds = ["a-owner", "duplicate", "z-owner"];
+    expect(resolveManifestActivationPluginIds({ trigger })).toEqual(expectedIds);
+    expect(plan.pluginIds).toEqual(expectedIds);
+    expect(plan.entries).toEqual([
+      { pluginId: "a-owner", origin: "bundled", reasons: ["manifest-provider-owner"] },
+      {
+        pluginId: "duplicate",
+        origin: "workspace",
+        reasons: ["manifest-provider-owner", "manifest-setup-provider-owner"],
+      },
+      { pluginId: "duplicate", origin: "config", reasons: ["activation-provider-hint"] },
+      { pluginId: "z-owner", origin: "bundled", reasons: ["activation-provider-hint"] },
+    ]);
+    expect(plan.trigger).toBe(trigger);
+    expect(plan.diagnostics).toBe(diagnostics);
   });
 
   it("treats explicit empty plugin scopes as scoped-empty", () => {

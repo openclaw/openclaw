@@ -1,7 +1,8 @@
+// Msteams plugin module implements message handler support behavior.
 import { vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../../runtime-api.js";
-import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.js";
 import { installMSTeamsTestRuntime } from "../monitor-handler.test-helpers.js";
+import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
 
 export const channelConversationId = "19:general@thread.tacv2";
 
@@ -12,6 +13,14 @@ type MessageHandlerDepsOptions = {
   recordInboundSession?: ReturnType<typeof vi.fn>;
   resolveAgentRoute?: (params: { peer: { kind: string; id: string } }) => unknown;
   hasControlCommand?: PluginRuntime["channel"]["text"]["hasControlCommand"];
+  isControlCommandMessage?: PluginRuntime["channel"]["commands"]["isControlCommandMessage"];
+  shouldComputeCommandAuthorized?: PluginRuntime["channel"]["commands"]["shouldComputeCommandAuthorized"];
+  shouldHandleTextCommands?: PluginRuntime["channel"]["commands"]["shouldHandleTextCommands"];
+  createInboundDebouncer?: PluginRuntime["channel"]["debounce"]["createInboundDebouncer"];
+  resolveInboundDebounceMs?: PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"];
+  getTeamDetails?: ReturnType<typeof vi.fn>;
+  runPrepared?: NonNullable<Parameters<typeof installMSTeamsTestRuntime>[0]>["runPrepared"];
+  resolveStorePath?: () => string;
 };
 
 export function createMessageHandlerDeps(
@@ -33,6 +42,8 @@ export function createMessageHandlerDeps(
       lastRoutePolicy: "session" as const,
       matchedBy: "default" as const,
     }));
+  const getTeamDetails =
+    options.getTeamDetails ?? vi.fn(async () => ({ aadGroupId: "team-aad-group" }));
 
   installMSTeamsTestRuntime({
     enqueueSystemEvent,
@@ -41,24 +52,29 @@ export function createMessageHandlerDeps(
     recordInboundSession,
     resolveAgentRoute,
     hasControlCommand: options.hasControlCommand,
+    isControlCommandMessage: options.isControlCommandMessage,
+    shouldComputeCommandAuthorized: options.shouldComputeCommandAuthorized,
+    shouldHandleTextCommands: options.shouldHandleTextCommands,
+    createInboundDebouncer: options.createInboundDebouncer,
+    resolveInboundDebounceMs: options.resolveInboundDebounceMs,
     resolveTextChunkLimit: () => 4000,
-    resolveStorePath: () => "/tmp/test-store",
+    resolveStorePath: options.resolveStorePath ?? (() => "/tmp/test-store"),
+    runPrepared: options.runPrepared,
   });
 
   const conversationStore = {
-    get: vi.fn(async () => null),
+    get: vi.fn<MSTeamsMessageHandlerDeps["conversationStore"]["get"]>(async () => null),
     upsert: vi.fn(async () => undefined),
     list: vi.fn(async () => []),
     remove: vi.fn(async () => false),
     findPreferredDmByUserId: vi.fn(async () => null),
-    findByUserId: vi.fn(async () => null),
   } satisfies MSTeamsMessageHandlerDeps["conversationStore"];
 
   const deps: MSTeamsMessageHandlerDeps = {
     cfg,
     runtime: { error: vi.fn() } as unknown as RuntimeEnv,
     appId: "test-app",
-    adapter: {} as MSTeamsMessageHandlerDeps["adapter"],
+    app: {} as MSTeamsMessageHandlerDeps["app"],
     tokenProvider: {
       getAccessToken: vi.fn(async () => "token"),
     },
@@ -83,6 +99,7 @@ export function createMessageHandlerDeps(
     upsertPairingRequest,
     recordInboundSession,
     resolveAgentRoute,
+    getTeamDetails,
   };
 }
 

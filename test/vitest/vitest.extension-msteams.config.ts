@@ -1,3 +1,5 @@
+// Vitest extension msteams config wires the extension msteams test shard.
+import { databaseWorkerExtensionTestFiles } from "./vitest.extension-database-workers-paths.mjs";
 import { msTeamsExtensionTestRoots } from "./vitest.extension-msteams-paths.mjs";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
@@ -7,6 +9,7 @@ export function createExtensionMsTeamsVitestConfig(env?: Record<string, string |
     {
       dir: "extensions",
       env,
+      exclude: databaseWorkerExtensionTestFiles,
       name: "extension-msteams",
       passWithNoTests: true,
       setupFiles: ["test/setup.extensions.ts"],

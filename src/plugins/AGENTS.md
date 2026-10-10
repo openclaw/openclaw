@@ -27,16 +27,16 @@ assembly, and contract enforcement.
   belongs to runtime resolution.
 - Preserve manifest-first behavior: discovery, config validation, and setup
   should work from metadata before plugin runtime executes.
-- Cache concept: metadata stays fresh unless a caller owns an explicit
-  `PluginMetadataSnapshot`, `PluginLookUpTable`, or manifest registry for the
-  current flow. Do not add persistent metadata caches for discovery, manifest
-  registries, installed-index reconstruction, owner lookup, model suppression,
-  provider policy, public-artifact metadata, or similar control-plane answers.
-  Runtime loader, jiti/module, and dependency-artifact caches are the allowed
-  cache layer once code or installed artifacts are actually loaded.
 - Keep loader behavior aligned with the documented Plugin SDK and manifest
   contracts. Do not create private backdoors that bundled plugins can use but
   external plugins cannot.
+- Admit plugins once at load/registration through the existing manifest,
+  provenance, and load-policy owners. All loaded plugins pass results and stream
+  events by reference; never add per-value copying, deep validation, or a second
+  boundary. Plugins must not mutate values after handing them to the host. Keep
+  managed callables scoped and bind each stream's scope, abort propagation, and
+  lease once for its lifetime; see the
+  [SDK contract](../../docs/plugins/sdk-runtime.md#plugin-value-boundary).
 - Preserve laziness in discovery and activation flows. Loader, registry, and
   public-artifact changes must not eagerly import bundled plugin runtime barrels
   when metadata, light exports, or typed contracts are sufficient.
@@ -79,10 +79,26 @@ assembly, and contract enforcement.
   fixtures for broad `api.js` / `runtime-api.js` fallback behavior. Do not point
   those tests at real bundled plugin source APIs just to prove path resolution.
 
+## Availability And Selection
+
+- Gateway plugin metadata is stable while the Gateway runs. Reuse current
+  snapshots, install records, discovery, lookup tables, and bounded process
+  caches; avoid per-call stat/read/hash freshness. Metadata changes require
+  restart or the plugin owner's explicit reload/install/doctor flow. Keep caches
+  lifecycle-owned and test-clearable, not broad persistent stores.
+- Repeated availability checks and catalog selection consume prepared local
+  facts. Remote catalog discovery and provider probes belong to initialization
+  or the owner's refresh operation, not each request or UI render. A second
+  request-time cache or polling loop is not the fix for repeated discovery.
+- Keep configured/eligible state distinct from live health. A present credential
+  or cached descriptor does not prove a service is reachable. Explicit health
+  probes, credential refresh, and actual provider/tool execution retain their
+  network contracts.
+
 ## Verification
 
 - If you touch loader, registry, activation, or public-artifact code that can
   change bundled plugin import fanout, run `pnpm build`.
 - If the change can alter bundled plugin startup cost, re-profile the affected
   plugin entrypoint with:
-  `OPENCLAW_LOCAL_CHECK=0 node scripts/profile-extension-memory.mjs --extension <id> --skip-combined --concurrency 1`
+  `OPENCLAW_LOCAL_CHECK=0 node --import tsx scripts/profile-extension-memory.mts --extension <id> --skip-combined --concurrency 1`

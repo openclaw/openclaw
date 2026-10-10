@@ -1,17 +1,12 @@
 import { formatInboundEnvelope } from "openclaw/plugin-sdk/channel-inbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMonitorContext } from "../context.js";
-
-type SlackDmHistoryMessage = {
-  text?: string;
-  user?: string;
-  bot_id?: string;
-  username?: string;
-  ts?: string;
-};
+import type { SlackEventScope } from "../event-scope.js";
+import { resolveSlackTimestampMs } from "./timestamp.js";
 
 type SlackDmHistoryEntry = {
   sender: string;
@@ -24,11 +19,10 @@ export function resolveSlackDmHistoryLimit(params: {
   userId?: string;
   defaultLimit: number;
 }): number {
-  const override =
-    params.userId && params.account.config.dms?.[params.userId]?.historyLimit !== undefined
-      ? params.account.config.dms[params.userId]?.historyLimit
-      : undefined;
-  return Math.max(0, override ?? params.defaultLimit);
+  const override = params.userId
+    ? params.account.config.dms?.[params.userId]?.historyLimit
+    : undefined;
+  return resolvePromptHistoryLimit(override ?? params.defaultLimit, 0);
 }
 
 export async function resolveSlackDmHistoryContext(params: {
@@ -36,6 +30,7 @@ export async function resolveSlackDmHistoryContext(params: {
   channelId: string;
   currentMessageTs?: string;
   limit: number;
+  eventScope?: SlackEventScope;
   envelopeOptions: ReturnType<
     typeof import("openclaw/plugin-sdk/channel-inbound").resolveEnvelopeFormatOptions
   >;
@@ -46,19 +41,22 @@ export async function resolveSlackDmHistoryContext(params: {
   }
 
   try {
-    const response = (await params.ctx.app.client.conversations.history({
+    const response = await (
+      params.eventScope?.client ?? params.ctx.app.client
+    ).conversations.history({
       token: params.ctx.botToken,
       channel: params.channelId,
       ...(params.currentMessageTs ? { latest: params.currentMessageTs, inclusive: true } : {}),
       limit: maxMessages + 1,
-    })) as { messages?: SlackDmHistoryMessage[] };
+    });
 
     const messages = (response.messages ?? [])
-      .filter((message) => {
+      .flatMap((message) => {
         if (params.currentMessageTs && message.ts === params.currentMessageTs) {
-          return false;
+          return [];
         }
-        return Boolean(normalizeOptionalString(message.text));
+        const body = normalizeOptionalString(message.text);
+        return body ? [{ message, body }] : [];
       })
       .slice(0, maxMessages)
       .toReversed();
@@ -73,7 +71,9 @@ export async function resolveSlackDmHistoryContext(params: {
       if (cached) {
         return cached;
       }
-      const resolved = normalizeOptionalString((await params.ctx.resolveUserName(userId)).name);
+      const resolved = normalizeOptionalString(
+        (await params.ctx.resolveUserName(userId, params.eventScope)).name,
+      );
       const label = resolved ?? userId;
       userNames.set(userId, label);
       return label;
@@ -81,11 +81,7 @@ export async function resolveSlackDmHistoryContext(params: {
 
     const entries: SlackDmHistoryEntry[] = [];
     const formatted: string[] = [];
-    for (const message of messages) {
-      const body = normalizeOptionalString(message.text);
-      if (!body) {
-        continue;
-      }
+    for (const { message, body } of messages) {
       const isCurrentBot =
         (params.ctx.botUserId && message.user === params.ctx.botUserId) ||
         (params.ctx.botId && message.bot_id === params.ctx.botId);
@@ -96,7 +92,7 @@ export async function resolveSlackDmHistoryContext(params: {
           ? await resolveUserLabel(message.user)
           : (normalizeOptionalString(message.username) ?? (message.bot_id ? "Bot" : "Unknown"));
       const sender = `${senderBase} (${role})`;
-      const timestamp = message.ts ? Math.round(Number(message.ts) * 1000) : undefined;
+      const timestamp = resolveSlackTimestampMs(message.ts);
       entries.push({ sender, body, timestamp });
       formatted.push(
         formatInboundEnvelope({
@@ -111,8 +107,8 @@ export async function resolveSlackDmHistoryContext(params: {
     }
 
     return {
-      body: formatted.length > 0 ? formatted.join("\n\n") : undefined,
-      inboundHistory: entries.length > 0 ? entries : undefined,
+      body: formatted.join("\n\n"),
+      inboundHistory: entries,
     };
   } catch (err) {
     logVerbose(

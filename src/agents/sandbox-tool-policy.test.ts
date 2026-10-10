@@ -1,23 +1,13 @@
+// Verifies sandbox tool allow/deny policy extraction and additive alsoAllow behavior.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveEffectiveToolPolicy } from "./pi-tools.policy.js";
+import { resolveEffectiveToolPolicy } from "./agent-tools.policy.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import { resolveEffectiveToolFsRootExpansionAllowed } from "./tool-fs-policy.js";
 
 describe("pickSandboxToolPolicy", () => {
   it("returns undefined when neither allow nor deny is configured", () => {
     expect(pickSandboxToolPolicy({})).toBeUndefined();
-  });
-
-  it("keeps alsoAllow without allow additive", () => {
-    expect(
-      pickSandboxToolPolicy({
-        alsoAllow: ["web_search"],
-      }),
-    ).toEqual({
-      allow: ["*", "web_search"],
-      deny: undefined,
-    });
   });
 
   it("merges allow and alsoAllow when both are present", () => {
@@ -33,6 +23,7 @@ describe("pickSandboxToolPolicy", () => {
   });
 
   it("preserves allow-all semantics for allow: [] plus alsoAllow", () => {
+    // Empty allow means allow-all; alsoAllow remains additive, not restrictive.
     expect(
       pickSandboxToolPolicy({
         allow: [],

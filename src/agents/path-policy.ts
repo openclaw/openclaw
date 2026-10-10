@@ -1,139 +1,181 @@
+/**
+ * Shared workspace and sandbox path boundary helpers.
+ *
+ * Converts validated absolute or relative inputs into root-relative paths without allowing boundary escapes.
+ */
 import path from "node:path";
-import { normalizeWindowsPathForComparison } from "../infra/path-guards.js";
+import { pathExistsSync } from "../infra/fs-safe.js";
+import { normalizeWindowsPathPreservingCase } from "../infra/path-guards.js";
 import { resolveSandboxInputPath } from "./sandbox-paths.js";
+import type { SandboxFsBridge } from "./sandbox/fs-bridge.types.js";
+
+/** Compare resolved runtime paths using the declared root's syntax, never the host OS. */
+export function relativePathInsideSandboxRoot(root: string, target: string): string | null {
+  const windows = !root.startsWith("/") && path.win32.isAbsolute(root);
+  const syntax = windows ? path.win32 : path.posix;
+  const normalize = windows ? normalizeWindowsPathPreservingCase : path.posix.normalize;
+  const normalizedRoot = normalize(root);
+  const normalizedTarget = normalize(target);
+  if (
+    !syntax.isAbsolute(normalizedRoot) ||
+    !syntax.isAbsolute(normalizedTarget) ||
+    (windows &&
+      (path.win32.parse(normalizedRoot).root === "\\" ||
+        path.win32.parse(normalizedTarget).root === "\\"))
+  ) {
+    return null;
+  }
+  const relative = syntax.relative(normalizedRoot, normalizedTarget);
+  return relative === ".." || relative.startsWith(`..${syntax.sep}`) || syntax.isAbsolute(relative)
+    ? null
+    : relative;
+}
+
+/** Select the deepest admitted mapping without replacing a supplied miss with a host fallback. */
+export function resolveSandboxPathMapping<
+  T extends { readonly hostRoot: string; readonly containerRoot: string },
+>(mappings: readonly T[], target: string): { mapping: T; hostPath: string } | null {
+  let selected: { mapping: T; hostPath: string; relative: string } | undefined;
+  for (const mapping of mappings) {
+    const relative = relativePathInsideSandboxRoot(mapping.containerRoot, target);
+    // A shorter relative suffix means a deeper root after normalization. Equal
+    // roots retain the backend's ordering, including protected mount precedence.
+    if (relative === null || (selected && relative.length >= selected.relative.length)) {
+      continue;
+    }
+    const separator = mapping.containerRoot.startsWith("/") ? "/" : "\\";
+    selected = {
+      mapping,
+      relative,
+      hostPath: path.resolve(mapping.hostRoot, ...relative.split(separator)),
+    };
+  }
+  return selected ? { mapping: selected.mapping, hostPath: selected.hostPath } : null;
+}
 
 type RelativePathOptions = {
   allowRoot?: boolean;
   cwd?: string;
-  boundaryLabel?: string;
-  includeRootInError?: boolean;
 };
 
-function throwPathEscapesBoundary(params: {
-  options?: RelativePathOptions;
-  rootResolved: string;
-  candidate: string;
-}): never {
-  const boundary = params.options?.boundaryLabel ?? "workspace root";
-  const suffix = params.options?.includeRootInError ? ` (${params.rootResolved})` : "";
-  throw new Error(`Path escapes ${boundary}${suffix}: ${params.candidate}`);
-}
+function toRelativePathUnderRoot(
+  root: string,
+  candidate: string,
+  options: RelativePathOptions = {},
+  sandbox = false,
+): string {
+  const resolvedInput = resolveSandboxInputPath(candidate, options.cwd ?? root);
 
-function validateRelativePathWithinBoundary(params: {
-  relativePath: string;
-  isAbsolutePath: (path: string) => boolean;
-  options?: RelativePathOptions;
-  rootResolved: string;
-  candidate: string;
-}): string {
-  if (params.relativePath === "" || params.relativePath === ".") {
-    if (params.options?.allowRoot) {
-      return "";
-    }
-    throwPathEscapesBoundary({
-      options: params.options,
-      rootResolved: params.rootResolved,
-      candidate: params.candidate,
-    });
-  }
-  if (
-    params.relativePath === ".." ||
-    params.relativePath.startsWith("../") ||
-    params.relativePath.startsWith("..\\") ||
-    params.isAbsolutePath(params.relativePath)
-  ) {
-    throwPathEscapesBoundary({
-      options: params.options,
-      rootResolved: params.rootResolved,
-      candidate: params.candidate,
-    });
-  }
-  return params.relativePath;
-}
-
-function toRelativePathUnderRoot(params: {
-  root: string;
-  candidate: string;
-  options?: RelativePathOptions;
-}): string {
-  const resolvedInput = resolveSandboxInputPath(
-    params.candidate,
-    params.options?.cwd ?? params.root,
+  const windows = process.platform === "win32";
+  const syntax = windows ? path.win32 : path;
+  const rootResolved = syntax.resolve(root);
+  const resolvedCandidate = syntax.resolve(resolvedInput);
+  // Strip extended-length Windows prefixes without lowercasing the relative
+  // path that callers use to create files. win32.relative already ignores case.
+  const relative = syntax.relative(
+    windows ? normalizeWindowsPathPreservingCase(rootResolved) : rootResolved,
+    windows ? normalizeWindowsPathPreservingCase(resolvedCandidate) : resolvedCandidate,
   );
-
-  if (process.platform === "win32") {
-    const rootResolved = path.win32.resolve(params.root);
-    const resolvedCandidate = path.win32.resolve(resolvedInput);
-    const rootForCompare = normalizeWindowsPathForComparison(rootResolved);
-    const targetForCompare = normalizeWindowsPathForComparison(resolvedCandidate);
-    const relative = path.win32.relative(rootForCompare, targetForCompare);
-    return validateRelativePathWithinBoundary({
-      relativePath: relative,
-      isAbsolutePath: path.win32.isAbsolute,
-      options: params.options,
-      rootResolved,
-      candidate: params.candidate,
-    });
+  const targetsRoot = relative === "" || relative === ".";
+  if (targetsRoot && options.allowRoot) {
+    return "";
   }
-
-  const rootResolved = path.resolve(params.root);
-  const resolvedCandidate = path.resolve(resolvedInput);
-  const relative = path.relative(rootResolved, resolvedCandidate);
-  return validateRelativePathWithinBoundary({
-    relativePath: relative,
-    isAbsolutePath: path.isAbsolute,
-    options: params.options,
-    rootResolved,
-    candidate: params.candidate,
-  });
+  // Absolute results catch Windows drive-relative oddities after normalization.
+  if (
+    targetsRoot ||
+    relative === ".." ||
+    relative.startsWith("../") ||
+    relative.startsWith("..\\") ||
+    syntax.isAbsolute(relative)
+  ) {
+    const boundary = sandbox ? `sandbox root (${rootResolved})` : "workspace root";
+    throw new Error(`Path escapes ${boundary}: ${candidate}`);
+  }
+  return relative;
 }
 
-function toRelativeBoundaryPath(params: {
-  root: string;
-  candidate: string;
-  options?: Pick<RelativePathOptions, "allowRoot" | "cwd">;
-  boundaryLabel: string;
-  includeRootInError?: boolean;
-}): string {
-  return toRelativePathUnderRoot({
-    root: params.root,
-    candidate: params.candidate,
-    options: {
-      allowRoot: params.options?.allowRoot,
-      cwd: params.options?.cwd,
-      boundaryLabel: params.boundaryLabel,
-      includeRootInError: params.includeRootInError,
-    },
-  });
-}
-
+/** Return a workspace-relative path after rejecting boundary escapes. */
 export function toRelativeWorkspacePath(
   root: string,
   candidate: string,
-  options?: Pick<RelativePathOptions, "allowRoot" | "cwd">,
+  options?: RelativePathOptions,
 ): string {
-  return toRelativeBoundaryPath({
-    root,
-    candidate,
-    options,
-    boundaryLabel: "workspace root",
-  });
+  return toRelativePathUnderRoot(root, candidate, options);
 }
 
+/** Return a sandbox-relative path, including the sandbox root in boundary errors. */
 export function toRelativeSandboxPath(
   root: string,
   candidate: string,
-  options?: Pick<RelativePathOptions, "allowRoot" | "cwd">,
+  options?: RelativePathOptions,
 ): string {
-  return toRelativeBoundaryPath({
-    root,
-    candidate,
-    options,
-    boundaryLabel: "sandbox root",
-    includeRootInError: true,
-  });
+  return toRelativePathUnderRoot(root, candidate, options, true);
 }
 
+/** Resolve a user-supplied path against `cwd` using the sandbox input rules. */
 export function resolvePathFromInput(filePath: string, cwd: string): string {
   return path.normalize(resolveSandboxInputPath(filePath, cwd));
+}
+
+/** Disambiguate an existing literal relative filename from `@` file-reference shorthand. */
+export function preserveAtPrefixedRelativePath(filePath: string, cwd: string): string;
+export function preserveAtPrefixedRelativePath(
+  filePath: string,
+  cwd: string,
+  bridge: SandboxFsBridge | undefined,
+  signal?: AbortSignal,
+): string | Promise<string>;
+export function preserveAtPrefixedRelativePath(
+  filePath: string,
+  cwd: string,
+  bridge?: SandboxFsBridge,
+  signal?: AbortSignal,
+): string | Promise<string> {
+  if (!filePath.startsWith("@")) {
+    return filePath;
+  }
+  const stripped = filePath.slice(1);
+  if (
+    !stripped ||
+    stripped === "~" ||
+    stripped.startsWith("~/") ||
+    stripped.startsWith("~\\") ||
+    /^file:\/\//i.test(stripped) ||
+    path.posix.isAbsolute(stripped) ||
+    path.win32.isAbsolute(stripped)
+  ) {
+    // Absolute/home/URL mentions must reach existing workspace guards unchanged.
+    return filePath;
+  }
+  // `./` preserves literal @ through legacy resolvers without breaking TUI mentions.
+  const literalPath = `./${filePath}`;
+  let literalAncestor = filePath;
+  while (true) {
+    const parent = path.dirname(literalAncestor);
+    if (parent === "." || parent === literalAncestor) {
+      break;
+    }
+    literalAncestor = parent;
+  }
+  const ancestorPath = literalAncestor === filePath ? undefined : `./${literalAncestor}`;
+  const mountedHostPath = bridge?.resolvePath({ filePath: literalPath, cwd }).hostPath;
+  if (!bridge || mountedHostPath) {
+    const hostPath = mountedHostPath ?? path.resolve(cwd, literalPath);
+    const ancestorHostPath = ancestorPath
+      ? bridge
+        ? bridge.resolvePath({ filePath: ancestorPath, cwd }).hostPath
+        : path.resolve(cwd, ancestorPath)
+      : undefined;
+    return pathExistsSync(hostPath) || (ancestorHostPath && pathExistsSync(ancestorHostPath))
+      ? literalPath
+      : filePath;
+  }
+  signal?.throwIfAborted();
+  return bridge
+    .stat({ filePath: literalPath, cwd, signal })
+    .then(async (stat) =>
+      stat || (ancestorPath && (await bridge.stat({ filePath: ancestorPath, cwd, signal })))
+        ? literalPath
+        : filePath,
+    );
 }

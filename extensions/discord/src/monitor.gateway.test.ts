@@ -1,3 +1,4 @@
+// Discord tests cover monitor.gateway plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { waitForDiscordGatewayStop } from "./monitor.gateway.js";
 import type { DiscordGatewayEvent } from "./monitor/gateway-supervisor.js";
@@ -59,30 +60,7 @@ function startGatewayWait(params?: {
   return { ...harness, promise };
 }
 
-async function expectAbortToResolve(params: {
-  abort: AbortController;
-  attachLifecycle: ReturnType<typeof vi.fn>;
-  detachLifecycle: ReturnType<typeof vi.fn>;
-  disconnect: ReturnType<typeof vi.fn>;
-  promise: Promise<void>;
-  expectedDisconnectBeforeAbort?: number;
-}) {
-  if (params.expectedDisconnectBeforeAbort !== undefined) {
-    expect(params.disconnect).toHaveBeenCalledTimes(params.expectedDisconnectBeforeAbort);
-  }
-  expect(params.attachLifecycle).toHaveBeenCalledTimes(1);
-  params.abort.abort();
-  await expect(params.promise).resolves.toBeUndefined();
-  expect(params.disconnect).toHaveBeenCalledTimes(1);
-  expect(params.detachLifecycle).toHaveBeenCalledTimes(1);
-}
-
 describe("waitForDiscordGatewayStop", () => {
-  it("resolves on abort and disconnects gateway", async () => {
-    const { abort, attachLifecycle, detachLifecycle, disconnect, promise } = startGatewayWait();
-    await expectAbortToResolve({ abort, attachLifecycle, detachLifecycle, disconnect, promise });
-  });
-
   it("rejects on lifecycle stop events and disconnects", async () => {
     const fatalEvent = createGatewayEvent("fatal", "boom");
     const { detachLifecycle, disconnect, emitGatewayEvent, promise } = startGatewayWait();
@@ -92,37 +70,6 @@ describe("waitForDiscordGatewayStop", () => {
     await expect(promise).rejects.toThrow("discord gateway fatal: Error: boom");
     expect(disconnect).toHaveBeenCalledTimes(1);
     expect(detachLifecycle).toHaveBeenCalledTimes(1);
-  });
-
-  it("ignores transient gateway events when instructed", async () => {
-    const transientEvent = createGatewayEvent("other", "transient");
-    const onGatewayEvent = vi.fn(() => "continue" as const);
-    const { abort, attachLifecycle, detachLifecycle, disconnect, emitGatewayEvent, promise } =
-      startGatewayWait({
-        onGatewayEvent,
-      });
-
-    emitGatewayEvent(transientEvent);
-    expect(onGatewayEvent).toHaveBeenCalledWith(transientEvent);
-    await expectAbortToResolve({
-      abort,
-      attachLifecycle,
-      detachLifecycle,
-      disconnect,
-      promise,
-      expectedDisconnectBeforeAbort: 0,
-    });
-  });
-
-  it("resolves on abort without a gateway", async () => {
-    const abort = new AbortController();
-    const promise = waitForDiscordGatewayStop({
-      abortSignal: abort.signal,
-    });
-
-    abort.abort();
-
-    await expect(promise).resolves.toBeUndefined();
   });
 
   it("rejects via registerForceStop and disconnects gateway", async () => {
@@ -143,14 +90,13 @@ describe("waitForDiscordGatewayStop", () => {
   it("keeps the lifecycle handler active until disconnect returns on abort", async () => {
     const onGatewayEvent = vi.fn(() => "stop" as const);
     const fatalEvent = createGatewayEvent("fatal", "disconnect emitted error");
-    let emitFromDisconnect: ((event: DiscordGatewayEvent) => void) | undefined;
     const { abort, detachLifecycle, disconnect, emitGatewayEvent, promise } = startGatewayWait({
       onGatewayEvent,
       disconnect: () => {
         emitFromDisconnect?.(fatalEvent);
       },
     });
-    emitFromDisconnect = emitGatewayEvent;
+    const emitFromDisconnect: ((event: DiscordGatewayEvent) => void) | undefined = emitGatewayEvent;
 
     abort.abort();
 
@@ -164,7 +110,6 @@ describe("waitForDiscordGatewayStop", () => {
     const firstEvent = createGatewayEvent("fatal", "first failure");
     const secondEvent = createGatewayEvent("fatal", "second failure");
     const seenEvents: DiscordGatewayEvent[] = [];
-    let emitFromDisconnect: ((event: DiscordGatewayEvent) => void) | undefined;
     const { emitGatewayEvent, promise } = startGatewayWait({
       onGatewayEvent: (event) => {
         seenEvents.push(event);
@@ -174,7 +119,7 @@ describe("waitForDiscordGatewayStop", () => {
         emitFromDisconnect?.(secondEvent);
       },
     });
-    emitFromDisconnect = emitGatewayEvent;
+    const emitFromDisconnect: ((event: DiscordGatewayEvent) => void) | undefined = emitGatewayEvent;
 
     emitGatewayEvent(firstEvent);
 

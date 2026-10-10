@@ -1,5 +1,9 @@
-import { spawn } from "node:child_process";
+import { runCommandWithTimeout } from "../process/exec.js";
+import { resolveSshClient } from "./ssh-client.js";
 import type { SshParsedTarget } from "./ssh-tunnel.js";
+import { parseTcpPort } from "./tcp-port.js";
+
+const SSH_CONFIG_OUTPUT_MAX_CHARS = 64 * 1024;
 
 export type SshResolvedConfig = {
   user?: string;
@@ -8,18 +12,7 @@ export type SshResolvedConfig = {
   identityFiles: string[];
 };
 
-function parsePort(value: string | undefined): number | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return undefined;
-  }
-  return parsed;
-}
-
-export function parseSshConfigOutput(output: string): SshResolvedConfig {
+function parseSshConfigOutput(output: string): SshResolvedConfig {
   const result: SshResolvedConfig = { identityFiles: [] };
   const lines = output.split("\n");
   for (const raw of lines) {
@@ -40,7 +33,7 @@ export function parseSshConfigOutput(output: string): SshResolvedConfig {
         result.host = value;
         break;
       case "port":
-        result.port = parsePort(value);
+        result.port = parseTcpPort(value) ?? undefined;
         break;
       case "identityfile":
         if (value !== "none") {
@@ -58,7 +51,10 @@ export async function resolveSshConfig(
   target: SshParsedTarget,
   opts: { identity?: string; timeoutMs?: number } = {},
 ): Promise<SshResolvedConfig | null> {
-  const sshPath = "/usr/bin/ssh";
+  const sshPath = resolveSshClient();
+  if (!sshPath) {
+    return null;
+  }
   const args = ["-G"];
   if (target.port > 0 && target.port !== 22) {
     args.push("-p", String(target.port));
@@ -70,36 +66,18 @@ export async function resolveSshConfig(
   // Use "--" so userHost can't be parsed as an ssh option.
   args.push("--", userHost);
 
-  return await new Promise<SshResolvedConfig | null>((resolve) => {
-    const child = spawn(sshPath, args, {
-      stdio: ["ignore", "pipe", "ignore"],
+  try {
+    const result = await runCommandWithTimeout([sshPath, ...args], {
+      maxOutputBytes: SSH_CONFIG_OUTPUT_MAX_CHARS,
+      outputCapture: "head",
+      terminateOnOutputLimit: true,
+      timeoutMs: Math.max(200, opts.timeoutMs ?? 800),
     });
-    let stdout = "";
-    child.stdout?.setEncoding("utf8");
-    child.stdout?.on("data", (chunk) => {
-      stdout += String(chunk);
-    });
-
-    const timeoutMs = Math.max(200, opts.timeoutMs ?? 800);
-    const timer = setTimeout(() => {
-      try {
-        child.kill("SIGKILL");
-      } finally {
-        resolve(null);
-      }
-    }, timeoutMs);
-
-    child.once("error", () => {
-      clearTimeout(timer);
-      resolve(null);
-    });
-    child.once("exit", (code) => {
-      clearTimeout(timer);
-      if (code !== 0 || !stdout.trim()) {
-        resolve(null);
-        return;
-      }
-      resolve(parseSshConfigOutput(stdout));
-    });
-  });
+    if (result.code !== 0 || result.termination !== "exit" || !result.stdout.trim()) {
+      return null;
+    }
+    return parseSshConfigOutput(result.stdout);
+  } catch {
+    return null;
+  }
 }

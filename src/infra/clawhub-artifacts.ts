@@ -1,0 +1,252 @@
+import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  createClawHubError,
+  readClawHubBytes,
+  withClawHubResponse,
+  resolveClawHubBaseUrl,
+  type ClawHubFetch,
+  type ClawHubFetchOptions,
+  type ClawHubRequestParams,
+} from "./clawhub-client.js";
+import { normalizeClawHubSha256Hex } from "./clawhub-integrity.js";
+import { sha256Hex } from "./crypto-digest.js";
+import { createTempDownloadTarget } from "./temp-download.js";
+
+const DEFAULT_GITHUB_CODELOAD_URL = "https://codeload.github.com";
+
+export type ClawHubDownloadResult = {
+  archivePath: string;
+  integrity: string;
+  sha256Hex: string;
+  artifact: "archive" | "clawpack";
+  clawpackHeaderSha256?: string;
+  clawpackHeaderSpecVersion?: number;
+  npmIntegrity?: string;
+  npmShasum?: string;
+  npmTarballName?: string;
+  cleanup: () => Promise<void>;
+};
+
+function safePackageTarballName(name: string, version: string): string {
+  const base = name
+    .replace(/^@/, "")
+    .replace(/[\\/]+/g, "-")
+    .replace(/[^A-Za-z0-9._-]/g, "-");
+  return `${base || "package"}-${version}.tgz`;
+}
+
+async function stageClawHubArchive(params: {
+  prefix: string;
+  fileName: string;
+  bytes: Uint8Array;
+  sha256Hex?: string;
+  result?: Omit<ClawHubDownloadResult, "archivePath" | "integrity" | "sha256Hex" | "cleanup">;
+}): Promise<ClawHubDownloadResult> {
+  const sha256Digest = params.sha256Hex ?? sha256Hex(params.bytes);
+  const target = await createTempDownloadTarget(params);
+  try {
+    await fs.writeFile(target.path, params.bytes);
+    return {
+      archivePath: target.path,
+      integrity: `sha256-${Buffer.from(sha256Digest, "hex").toString("base64")}`,
+      sha256Hex: sha256Digest,
+      artifact: "archive",
+      ...params.result,
+      cleanup: target.cleanup,
+    };
+  } catch (error) {
+    await target.cleanup().catch(() => undefined);
+    throw error;
+  }
+}
+
+async function fetchClawHubArchive(params: ClawHubRequestParams, resourceLabel: string) {
+  return await withClawHubResponse(params, async ({ response, url, hasToken, releaseDeadline }) => {
+    if (!response.ok) {
+      throw await createClawHubError(response, url, hasToken, params.timeoutMs);
+    }
+    releaseDeadline();
+    const bytes = await readClawHubBytes({
+      response,
+      timeoutMs: params.timeoutMs,
+      resourceLabel,
+    });
+    return { bytes, headers: response.headers };
+  });
+}
+
+export async function downloadClawHubPackageArchive(
+  params: ClawHubFetchOptions & {
+    name: string;
+    version?: string;
+    tag?: string;
+    artifact?: "archive" | "clawpack";
+  },
+): Promise<ClawHubDownloadResult> {
+  if (params.artifact === "clawpack") {
+    if (!params.version) {
+      throw new Error("ClawPack package downloads require an explicit version.");
+    }
+    const { bytes, headers } = await fetchClawHubArchive(
+      {
+        ...params,
+        path: `/api/v1/packages/${encodeURIComponent(params.name)}/versions/${encodeURIComponent(
+          params.version,
+        )}/artifact/download`,
+      },
+      `ClawPack download for ${params.name}@${params.version}`,
+    );
+    const sha256Digest = sha256Hex(bytes);
+    const npmIntegrity = `sha512-${createHash("sha512").update(bytes).digest("base64")}`;
+    const npmShasum = createHash("sha1").update(bytes).digest("hex");
+    const headerSha256 = normalizeClawHubSha256Hex(
+      headers.get("X-ClawHub-Artifact-Sha256") ?? headers.get("X-ClawHub-ClawPack-Sha256") ?? "",
+    );
+    if (!headerSha256) {
+      throw new Error(
+        `ClawHub ClawPack download for "${params.name}@${params.version}" is missing X-ClawHub-Artifact-Sha256.`,
+      );
+    }
+    if (headerSha256 !== sha256Digest) {
+      throw new Error(
+        `ClawHub ClawPack download for "${params.name}@${params.version}" declared sha256 ${headerSha256}, got ${sha256Digest}.`,
+      );
+    }
+    const headerNpmIntegrity = normalizeOptionalString(headers.get("X-ClawHub-Npm-Integrity"));
+    if (headerNpmIntegrity && headerNpmIntegrity !== npmIntegrity) {
+      throw new Error(
+        `ClawHub ClawPack download for "${params.name}@${params.version}" declared npm integrity ${headerNpmIntegrity}, got ${npmIntegrity}.`,
+      );
+    }
+    const headerNpmShasum = normalizeOptionalString(headers.get("X-ClawHub-Npm-Shasum"));
+    if (headerNpmShasum && headerNpmShasum !== npmShasum) {
+      throw new Error(
+        `ClawHub ClawPack download for "${params.name}@${params.version}" declared npm shasum ${headerNpmShasum}, got ${npmShasum}.`,
+      );
+    }
+    const npmTarballName =
+      normalizeOptionalString(headers.get("X-ClawHub-Npm-Tarball-Name")) ??
+      safePackageTarballName(params.name, params.version);
+    const rawSpecVersion = headers.get("X-ClawHub-ClawPack-Spec-Version");
+    const specVersion = parseStrictPositiveInteger(rawSpecVersion);
+    return stageClawHubArchive({
+      prefix: "openclaw-clawhub-clawpack",
+      fileName: npmTarballName,
+      bytes,
+      sha256Hex: sha256Digest,
+      result: {
+        artifact: "clawpack",
+        clawpackHeaderSha256: headerSha256,
+        ...(specVersion !== undefined ? { clawpackHeaderSpecVersion: specVersion } : {}),
+        npmIntegrity,
+        npmShasum,
+        npmTarballName,
+      },
+    });
+  }
+  const search = params.version
+    ? { version: params.version }
+    : params.tag
+      ? { tag: params.tag }
+      : undefined;
+  const { bytes } = await fetchClawHubArchive(
+    {
+      ...params,
+      path: `/api/v1/packages/${encodeURIComponent(params.name)}/download`,
+      search,
+    },
+    `package archive download for ${params.name}`,
+  );
+  return stageClawHubArchive({
+    prefix: "openclaw-clawhub-package",
+    fileName: `${params.name}.zip`,
+    bytes,
+  });
+}
+
+export async function downloadClawHubSkillArchive(
+  params: ClawHubFetchOptions & {
+    slug: string;
+    ownerHandle?: string;
+    version?: string;
+    tag?: string;
+  },
+): Promise<ClawHubDownloadResult> {
+  const { bytes } = await fetchClawHubArchive(
+    {
+      ...params,
+      path: "/api/v1/download",
+      search: {
+        slug: params.slug,
+        ownerHandle: params.ownerHandle,
+        version: params.version,
+        tag: params.version ? undefined : params.tag,
+      },
+    },
+    `skill archive download for ${params.slug}`,
+  );
+  return stageClawHubArchive({
+    prefix: "openclaw-clawhub-skill",
+    fileName: `${params.slug}.zip`,
+    bytes,
+  });
+}
+
+export async function downloadClawHubSkillArchiveUrl(
+  params: ClawHubFetchOptions & {
+    url: string;
+  },
+): Promise<ClawHubDownloadResult> {
+  const providedToken = normalizeOptionalString(params.token);
+  const requestUrl = new URL(params.url, `${resolveClawHubBaseUrl(params.baseUrl)}/`);
+  const registryOrigin = new URL(`${resolveClawHubBaseUrl(params.baseUrl)}/`).origin;
+  const skipAuth = providedToken == null && requestUrl.origin !== registryOrigin;
+  const { bytes } = await fetchClawHubArchive(
+    {
+      ...params,
+      token: providedToken,
+      skipAuth,
+    },
+    `skill archive download at ${requestUrl.pathname}`,
+  );
+  return stageClawHubArchive({
+    prefix: "openclaw-clawhub-skill",
+    fileName: "skill.zip",
+    bytes,
+  });
+}
+
+export async function downloadClawHubGitHubSkillArchive(params: {
+  repo: string;
+  commit: string;
+  timeoutMs?: number;
+  fetchImpl?: ClawHubFetch;
+}): Promise<ClawHubDownloadResult> {
+  const configuredBaseUrl =
+    normalizeOptionalString(process.env.CLAWHUB_GITHUB_CODELOAD_BASE_URL) ||
+    DEFAULT_GITHUB_CODELOAD_URL;
+  const baseUrl = configuredBaseUrl.replace(/\/+$/, "") || DEFAULT_GITHUB_CODELOAD_URL;
+  const downloadUrl = new URL(`${baseUrl}/`);
+  const basePath = downloadUrl.pathname.replace(/\/+$/, "");
+  const repoPath = params.repo
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+  downloadUrl.pathname = `${basePath}/${repoPath}/zip/${encodeURIComponent(params.commit)}`;
+  const { bytes } = await fetchClawHubArchive(
+    {
+      ...params,
+      url: downloadUrl.toString(),
+      skipAuth: true,
+    },
+    `GitHub source archive for ${params.repo}@${params.commit}`,
+  );
+  return stageClawHubArchive({
+    prefix: "openclaw-clawhub-github-skill",
+    fileName: `${params.commit}.zip`,
+    bytes,
+  });
+}

@@ -1,6 +1,8 @@
+// Credentials module supports OpenClaw QA credential workflows.
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation, internalQuery } from "./_generated/server";
 
 const LEASE_EVENT_RETENTION_MS = 2 * 24 * 60 * 60 * 1_000;
@@ -41,25 +43,8 @@ type BrokerOkResult = {
   status: "ok";
 };
 
-type CredentialLease = {
-  ownerId: string;
-  actorRole: ActorRole;
-  leaseToken: string;
-  acquiredAtMs: number;
-  heartbeatAtMs: number;
-  expiresAtMs: number;
-};
-
-type CredentialSetRecord = {
-  _id: Id<"credential_sets">;
-  kind: string;
-  status: CredentialStatus;
+type CredentialSetRecord = Omit<Doc<"credential_sets">, "_creationTime" | "payload"> & {
   payload: unknown;
-  createdAtMs: number;
-  updatedAtMs: number;
-  lastLeasedAtMs: number;
-  note?: string;
-  lease?: CredentialLease;
 };
 
 type ChunkedCredentialPayloadMarker = {
@@ -68,29 +53,14 @@ type ChunkedCredentialPayloadMarker = {
   chunkCount: number;
 };
 
-type CredentialPayloadChunkRecord = {
-  _id: unknown;
-  credentialId: Id<"credential_sets">;
-  index: number;
-  data: string;
-  createdAtMs: number;
-};
-
 type CredentialPayloadStorage = {
   chunks: string[];
   payload: unknown;
 };
 
-type EventInsertCtx = {
-  db: {
-    insert: (
-      table: "lease_events" | "admin_events",
-      value: Record<string, unknown>,
-    ) => Promise<unknown>;
-  };
-};
+type EventInsertCtx = Pick<MutationCtx, "db">;
 
-function normalizeIntervalMs(params: {
+function normalizeBoundedInteger(params: {
   value: number | undefined;
   fallback: number;
   min: number;
@@ -104,31 +74,16 @@ function normalizeIntervalMs(params: {
   return rounded;
 }
 
-function normalizeListLimit(value: number | undefined) {
-  const limit = value ?? DEFAULT_LIST_LIMIT;
-  const rounded = Math.floor(limit);
-  if (!Number.isFinite(rounded) || rounded < MIN_LIST_LIMIT || rounded > MAX_LIST_LIMIT) {
-    return null;
-  }
-  return rounded;
-}
-
 function brokerError(code: string, message: string, retryAfterMs?: number): BrokerErrorResult {
-  return retryAfterMs && retryAfterMs > 0
-    ? {
-        status: "error",
-        code,
-        message,
-        retryAfterMs,
-      }
-    : {
-        status: "error",
-        code,
-        message,
-      };
+  return {
+    status: "error",
+    code,
+    message,
+    ...(retryAfterMs && retryAfterMs > 0 ? { retryAfterMs } : {}),
+  };
 }
 
-function leaseIsActive(lease: CredentialLease | undefined, nowMs: number) {
+function leaseIsActive(lease: CredentialSetRecord["lease"], nowMs: number) {
   return Boolean(lease && lease.expiresAtMs > nowMs);
 }
 
@@ -146,38 +101,25 @@ function isChunkedCredentialPayloadMarker(
   );
 }
 
-async function readCredentialPayload(
-  ctx: {
-    db: {
-      query: (table: "credential_payload_chunks") => {
-        withIndex: (
-          indexName: "by_credential_index",
-          range: (q: {
-            eq: (
-              field: "credentialId",
-              value: Id<"credential_sets">,
-            ) => {
-              eq: (field: "index", value: number) => unknown;
-            };
-          }) => unknown,
-        ) => {
-          collect: () => Promise<CredentialPayloadChunkRecord[]>;
-        };
-      };
-    };
-  },
-  row: CredentialSetRecord,
+async function readCredentialPayloadChunk(
+  ctx: Pick<QueryCtx, "db">,
+  credentialId: Id<"credential_sets">,
+  index: number,
 ) {
+  const rows = await ctx.db
+    .query("credential_payload_chunks")
+    .withIndex("by_credential_index", (q) => q.eq("credentialId", credentialId).eq("index", index))
+    .collect();
+  return rows[0];
+}
+
+async function readCredentialPayload(ctx: Pick<QueryCtx, "db">, row: CredentialSetRecord) {
   if (!isChunkedCredentialPayloadMarker(row.payload)) {
     return row.payload;
   }
   const chunks: string[] = [];
   for (let index = 0; index < row.payload.chunkCount; index += 1) {
-    const rows = await ctx.db
-      .query("credential_payload_chunks")
-      .withIndex("by_credential_index", (q) => q.eq("credentialId", row._id).eq("index", index))
-      .collect();
-    const chunk = rows[0];
+    const chunk = await readCredentialPayloadChunk(ctx, row["_id"], index);
     if (!chunk) {
       throw new Error(`Credential payload chunk ${index} is missing.`);
     }
@@ -215,7 +157,7 @@ function toCredentialSummary(
   resolvedPayload?: unknown,
 ) {
   return {
-    credentialId: row._id,
+    credentialId: row["_id"],
     kind: row.kind,
     status: row.status,
     createdAtMs: row.createdAtMs,
@@ -293,8 +235,8 @@ function sortByLeastRecentlyLeasedThenId(
     if (left.lastLeasedAtMs !== right.lastLeasedAtMs) {
       return left.lastLeasedAtMs - right.lastLeasedAtMs;
     }
-    const leftId = String(left._id);
-    const rightId = String(right._id);
+    const leftId = String(left["_id"]);
+    const rightId = String(right["_id"]);
     return leftId.localeCompare(rightId);
   });
 }
@@ -312,7 +254,7 @@ function sortCredentialRowsForList(rows: CredentialSetRecord[]) {
     if (left.updatedAtMs !== right.updatedAtMs) {
       return right.updatedAtMs - left.updatedAtMs;
     }
-    return String(left._id).localeCompare(String(right._id));
+    return String(left["_id"]).localeCompare(String(right["_id"]));
   });
 }
 
@@ -321,17 +263,15 @@ function normalizeActorId(value: string | undefined) {
   return normalized && normalized.length > 0 ? normalized : "unknown";
 }
 
-export const acquireLease = internalMutation({
+export const prepareLeaseAcquisition = internalQuery({
   args: {
     kind: v.string(),
-    ownerId: v.string(),
-    actorRole,
     leaseTtlMs: v.optional(v.number()),
     heartbeatIntervalMs: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const nowMs = Date.now();
-    const leaseTtlMs = normalizeIntervalMs({
+    const leaseTtlMs = normalizeBoundedInteger({
       value: args.leaseTtlMs,
       fallback: DEFAULT_LEASE_TTL_MS,
       min: MIN_LEASE_TTL_MS,
@@ -343,7 +283,7 @@ export const acquireLease = internalMutation({
         `leaseTtlMs must be between ${MIN_LEASE_TTL_MS} and ${MAX_LEASE_TTL_MS}.`,
       );
     }
-    const heartbeatIntervalMs = normalizeIntervalMs({
+    const heartbeatIntervalMs = normalizeBoundedInteger({
       value: args.heartbeatIntervalMs,
       fallback: DEFAULT_HEARTBEAT_INTERVAL_MS,
       min: MIN_HEARTBEAT_INTERVAL_MS,
@@ -362,37 +302,46 @@ export const acquireLease = internalMutation({
       .collect()) as CredentialSetRecord[];
 
     const availableRows = activeRows.filter((row) => !leaseIsActive(row.lease, nowMs));
-
-    if (availableRows.length === 0) {
-      await insertLeaseEvent({
-        ctx,
-        kind: args.kind,
-        eventType: "acquire_failed",
-        actorRole: args.actorRole,
-        ownerId: args.ownerId,
-        occurredAtMs: nowMs,
-        code: "POOL_EXHAUSTED",
-        message: "No active credential in this kind is currently available.",
-      });
-      return brokerError(
-        "POOL_EXHAUSTED",
-        `No available credential for kind "${args.kind}".`,
-        POOL_EXHAUSTED_RETRY_AFTER_MS,
-      );
-    }
-
     sortByLeastRecentlyLeasedThenId(availableRows);
-    const selected = availableRows[0];
+    return {
+      status: "ok",
+      credentialIds: availableRows.map((row) => row["_id"]),
+      leaseTtlMs,
+      heartbeatIntervalMs,
+    };
+  },
+});
+
+export const tryAcquireLease = internalMutation({
+  args: {
+    kind: v.string(),
+    ownerId: v.string(),
+    actorRole,
+    credentialId: v.id("credential_sets"),
+    leaseTtlMs: v.number(),
+    heartbeatIntervalMs: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const nowMs = Date.now();
+    const selected = (await ctx.db.get(args.credentialId)) as CredentialSetRecord | null;
+    if (
+      !selected ||
+      selected.kind !== args.kind ||
+      selected.status !== "active" ||
+      leaseIsActive(selected.lease, nowMs)
+    ) {
+      return { status: "unavailable" } as const;
+    }
     const leaseToken = crypto.randomUUID();
 
-    await ctx.db.patch(selected._id, {
+    await ctx.db.patch(selected["_id"], {
       lease: {
         ownerId: args.ownerId,
         actorRole: args.actorRole,
         leaseToken,
         acquiredAtMs: nowMs,
         heartbeatAtMs: nowMs,
-        expiresAtMs: nowMs + leaseTtlMs,
+        expiresAtMs: nowMs + args.leaseTtlMs,
       },
       lastLeasedAtMs: nowMs,
       updatedAtMs: nowMs,
@@ -405,17 +354,43 @@ export const acquireLease = internalMutation({
       actorRole: args.actorRole,
       ownerId: args.ownerId,
       occurredAtMs: nowMs,
-      credentialId: selected._id,
+      credentialId: selected["_id"],
     });
 
     return {
       status: "ok",
-      credentialId: selected._id,
+      credentialId: selected["_id"],
       leaseToken,
       payload: selected.payload,
-      leaseTtlMs,
-      heartbeatIntervalMs,
+      leaseTtlMs: args.leaseTtlMs,
+      heartbeatIntervalMs: args.heartbeatIntervalMs,
     };
+  },
+});
+
+export const recordLeaseAcquisitionFailure = internalMutation({
+  args: {
+    kind: v.string(),
+    ownerId: v.string(),
+    actorRole,
+  },
+  handler: async (ctx, args) => {
+    const nowMs = Date.now();
+    await insertLeaseEvent({
+      ctx,
+      kind: args.kind,
+      eventType: "acquire_failed",
+      actorRole: args.actorRole,
+      ownerId: args.ownerId,
+      occurredAtMs: nowMs,
+      code: "POOL_EXHAUSTED",
+      message: "No active credential in this kind is currently available.",
+    });
+    return brokerError(
+      "POOL_EXHAUSTED",
+      `No available credential for kind "${args.kind}".`,
+      POOL_EXHAUSTED_RETRY_AFTER_MS,
+    );
   },
 });
 
@@ -458,13 +433,7 @@ export const getPayloadChunk = internalQuery({
     if (!Number.isInteger(args.index) || args.index < 0 || args.index >= row.payload.chunkCount) {
       return brokerError("INVALID_CHUNK_INDEX", "Credential payload chunk index is out of range.");
     }
-    const chunks = (await ctx.db
-      .query("credential_payload_chunks")
-      .withIndex("by_credential_index", (q) =>
-        q.eq("credentialId", args.credentialId).eq("index", args.index),
-      )
-      .collect()) as CredentialPayloadChunkRecord[];
-    const chunk = chunks[0];
+    const chunk = await readCredentialPayloadChunk(ctx, args.credentialId, args.index);
     if (!chunk) {
       return brokerError("PAYLOAD_CHUNK_MISSING", "Credential payload chunk is missing.");
     }
@@ -483,7 +452,7 @@ export const heartbeatLease = internalMutation({
   },
   handler: async (ctx, args): Promise<BrokerErrorResult | BrokerOkResult> => {
     const nowMs = Date.now();
-    const leaseTtlMs = normalizeIntervalMs({
+    const leaseTtlMs = normalizeBoundedInteger({
       value: args.leaseTtlMs,
       fallback: DEFAULT_LEASE_TTL_MS,
       min: MIN_LEASE_TTL_MS,
@@ -587,7 +556,7 @@ export const addCredentialSet = internalMutation({
     const status = args.status ?? "active";
     const note = args.note?.trim();
     const storage = createCredentialPayloadStorage(args.payload);
-    const credentialId = await ctx.db.insert("credential_sets", {
+    const created = {
       kind: args.kind,
       status,
       payload: storage.payload,
@@ -595,7 +564,8 @@ export const addCredentialSet = internalMutation({
       updatedAtMs: nowMs,
       lastLeasedAtMs: 0,
       ...(note ? { note } : {}),
-    });
+    };
+    const credentialId = await ctx.db.insert("credential_sets", created);
 
     for (const [index, data] of storage.chunks.entries()) {
       await ctx.db.insert("credential_payload_chunks", {
@@ -616,19 +586,9 @@ export const addCredentialSet = internalMutation({
       kind: args.kind,
     });
 
-    const created: CredentialSetRecord = {
-      _id: credentialId,
-      kind: args.kind,
-      status,
-      payload: storage.payload,
-      createdAtMs: nowMs,
-      updatedAtMs: nowMs,
-      lastLeasedAtMs: 0,
-      ...(note ? { note } : {}),
-    };
     return {
       status: "ok",
-      credential: toCredentialSummary(created, false),
+      credential: toCredentialSummary({ _id: credentialId, ...created }, false),
     };
   },
 });
@@ -662,7 +622,7 @@ export const disableCredentialSet = internalMutation({
         actorRole: "maintainer",
         actorId,
         occurredAtMs: nowMs,
-        credentialId: row._id,
+        credentialId: row["_id"],
         kind: row.kind,
         code: "LEASE_ACTIVE",
         message: "Credential is currently leased and cannot be disabled yet.",
@@ -689,7 +649,7 @@ export const disableCredentialSet = internalMutation({
       actorRole: "maintainer",
       actorId,
       occurredAtMs: nowMs,
-      credentialId: row._id,
+      credentialId: row["_id"],
       kind: row.kind,
     });
 
@@ -717,7 +677,12 @@ export const listCredentialSets = internalQuery({
   handler: async (ctx, args) => {
     const normalizedStatus: ListStatus = args.status ?? "all";
     const includePayload = args.includePayload === true;
-    const limit = normalizeListLimit(args.limit);
+    const limit = normalizeBoundedInteger({
+      value: args.limit,
+      fallback: DEFAULT_LIST_LIMIT,
+      min: MIN_LIST_LIMIT,
+      max: MAX_LIST_LIMIT,
+    });
     if (!limit) {
       return brokerError(
         "INVALID_LIST_LIMIT",
@@ -725,7 +690,7 @@ export const listCredentialSets = internalQuery({
       );
     }
 
-    let rows: CredentialSetRecord[] = [];
+    let rows: CredentialSetRecord[];
     const kind = args.kind?.trim();
     if (kind) {
       if (normalizedStatus === "all") {
@@ -765,52 +730,41 @@ export const listCredentialSets = internalQuery({
   },
 });
 
-export const cleanupLeaseEvents = internalMutation({
-  args: {},
-  handler: async (ctx) => {
-    const cutoffMs = Date.now() - LEASE_EVENT_RETENTION_MS;
-    const staleRows = await ctx.db
-      .query("lease_events")
-      .withIndex("by_occurredAtMs", (q) => q.lt("occurredAtMs", cutoffMs))
-      .take(EVENT_RETENTION_BATCH_SIZE);
+function createEventCleanup(
+  table: "lease_events" | "admin_events",
+  retentionMs: number,
+  reschedule: (ctx: MutationCtx) => Promise<unknown>,
+) {
+  return internalMutation({
+    args: {},
+    handler: async (ctx) => {
+      const cutoffMs = Date.now() - retentionMs;
+      const staleRows = await ctx.db
+        .query(table)
+        .withIndex("by_occurredAtMs", (q) => q.lt("occurredAtMs", cutoffMs))
+        .take(EVENT_RETENTION_BATCH_SIZE);
 
-    for (const row of staleRows) {
-      await ctx.db.delete(row._id);
-    }
+      for (const row of staleRows) {
+        await ctx.db.delete(row["_id"]);
+      }
 
-    if (staleRows.length === EVENT_RETENTION_BATCH_SIZE) {
-      await ctx.scheduler.runAfter(0, internal.credentials.cleanupLeaseEvents, {});
-    }
+      if (staleRows.length === EVENT_RETENTION_BATCH_SIZE) {
+        await reschedule(ctx);
+      }
 
-    return {
-      status: "ok",
-      deleted: staleRows.length,
-      retentionMs: LEASE_EVENT_RETENTION_MS,
-    };
-  },
-});
+      return { status: "ok", deleted: staleRows.length, retentionMs };
+    },
+  });
+}
 
-export const cleanupAdminEvents = internalMutation({
-  args: {},
-  handler: async (ctx) => {
-    const cutoffMs = Date.now() - ADMIN_EVENT_RETENTION_MS;
-    const staleRows = await ctx.db
-      .query("admin_events")
-      .withIndex("by_occurredAtMs", (q) => q.lt("occurredAtMs", cutoffMs))
-      .take(EVENT_RETENTION_BATCH_SIZE);
+export const cleanupLeaseEvents = createEventCleanup(
+  "lease_events",
+  LEASE_EVENT_RETENTION_MS,
+  (ctx) => ctx.scheduler.runAfter(0, internal.credentials.cleanupLeaseEvents, {}),
+);
 
-    for (const row of staleRows) {
-      await ctx.db.delete(row._id);
-    }
-
-    if (staleRows.length === EVENT_RETENTION_BATCH_SIZE) {
-      await ctx.scheduler.runAfter(0, internal.credentials.cleanupAdminEvents, {});
-    }
-
-    return {
-      status: "ok",
-      deleted: staleRows.length,
-      retentionMs: ADMIN_EVENT_RETENTION_MS,
-    };
-  },
-});
+export const cleanupAdminEvents = createEventCleanup(
+  "admin_events",
+  ADMIN_EVENT_RETENTION_MS,
+  (ctx) => ctx.scheduler.runAfter(0, internal.credentials.cleanupAdminEvents, {}),
+);

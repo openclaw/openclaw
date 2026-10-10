@@ -1,0 +1,234 @@
+/**
+ * Owns pending assistant reply directives and tool-media handoff.
+ */
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-directives.js";
+import type { BlockReplyPayload } from "./embedded-agent-payloads.js";
+import type { EmbeddedAgentSubscribeState } from "./embedded-agent-subscribe.handlers.types.js";
+
+type PendingToolMediaState = Pick<
+  EmbeddedAgentSubscribeState,
+  | "pendingToolMediaUrls"
+  | "pendingToolMediaAttachments"
+  | "pendingToolMediaTrustByUrl"
+  | "pendingToolAudioAsVoice"
+>;
+
+export function hasReplyDirectiveMetadata(
+  parsed: ReplyDirectiveParseResult | null | undefined,
+): boolean {
+  return Boolean(
+    parsed &&
+    (parsed.audioAsVoice || parsed.replyToId || parsed.replyToTag || parsed.replyToCurrent),
+  );
+}
+
+export function mergeReplyDirectiveResults(
+  first: ReplyDirectiveParseResult | null | undefined,
+  second: ReplyDirectiveParseResult | null | undefined,
+): ReplyDirectiveParseResult | null {
+  if (!first) {
+    return second ?? null;
+  }
+  if (!second) {
+    return first;
+  }
+  return {
+    text: `${first.text ?? ""}${second.text ?? ""}`,
+    replyToId: second.replyToId ?? first.replyToId,
+    replyToCurrent: first.replyToCurrent || second.replyToCurrent,
+    replyToTag: first.replyToTag || second.replyToTag,
+    audioAsVoice: first.audioAsVoice || second.audioAsVoice || undefined,
+    isSilent: first.isSilent || second.isSilent,
+  };
+}
+
+/** Moves queued tool media into a non-reasoning assistant reply payload. */
+export function consumePendingToolMediaIntoReply(
+  state: PendingToolMediaState,
+  payload: BlockReplyPayload,
+): BlockReplyPayload {
+  if (payload.isReasoning) {
+    return payload;
+  }
+  const pendingMedia = readPendingToolMediaReply(state);
+  if (!pendingMedia) {
+    return payload;
+  }
+  let mergedPayload: BlockReplyPayload;
+  if ((payload.mediaUrls ?? []).some((url) => url.trim().length > 0)) {
+    // Pending tool media is a fallback delivery queue; explicit final media is
+    // the assistant's user-visible selection, while tool output remains in the transcript.
+    const metadataByUrl = new Map(
+      (pendingMedia.mediaUrls ?? []).map((url, index) => [
+        url,
+        pendingMedia.attachments?.[index] ?? {},
+      ]),
+    );
+    const selectedAttachments = (payload.mediaUrls ?? []).map(
+      (url) => metadataByUrl.get(url.trim()) ?? {},
+    );
+    const allSelectedMediaIsPending =
+      (payload.mediaUrls?.length ?? 0) > 0 &&
+      (payload.mediaUrls ?? []).every((url) => metadataByUrl.has(url.trim()));
+    const payloadWithMetadata =
+      payload.attachments?.length ||
+      selectedAttachments.every((entry) => Object.keys(entry).length === 0)
+        ? payload
+        : { ...payload, attachments: selectedAttachments };
+    mergedPayload =
+      allSelectedMediaIsPending &&
+      (payload.mediaUrls ?? []).every(
+        (url) => state.pendingToolMediaTrustByUrl.get(url.trim()) === true,
+      )
+        ? { ...payloadWithMetadata, trustedLocalMedia: true }
+        : payloadWithMetadata;
+  } else {
+    mergedPayload = {
+      ...payload,
+      ...pendingMedia,
+      audioAsVoice: payload.audioAsVoice || pendingMedia.audioAsVoice || undefined,
+      ...(payload.trustedLocalMedia ? { trustedLocalMedia: true } : {}),
+    };
+  }
+  state.pendingToolMediaUrls = [];
+  state.pendingToolMediaAttachments = [];
+  state.pendingToolMediaTrustByUrl.clear();
+  state.pendingToolAudioAsVoice = false;
+  return mergedPayload;
+}
+
+/** Restores reserved tool media after its outbound delivery was rejected. */
+export function restorePendingToolMediaReply(
+  state: PendingToolMediaState &
+    Pick<EmbeddedAgentSubscribeState, "pendingToolMediaDeliveryFailed">,
+  payload: BlockReplyPayload,
+): void {
+  const pendingUrls = state.pendingToolMediaUrls;
+  const pendingAttachments = state.pendingToolMediaAttachments ?? [];
+  const restoredUrls = payload.mediaUrls ?? [];
+  const restoredAttachments = payload.attachments ?? [];
+  const seen = new Set(restoredUrls);
+  state.pendingToolMediaUrls = [...restoredUrls, ...pendingUrls.filter((url) => !seen.has(url))];
+  state.pendingToolMediaAttachments = [
+    ...restoredUrls.map((_, index) => restoredAttachments[index] ?? {}),
+    ...pendingUrls.flatMap((url, index) =>
+      seen.has(url) ? [] : [pendingAttachments[index] ?? {}],
+    ),
+  ];
+  for (const [index, url] of restoredUrls.entries()) {
+    if (payload.trustedLocalMedia || restoredAttachments[index]?.trustedLocalMedia) {
+      state.pendingToolMediaTrustByUrl.set(url, true);
+    } else if (!state.pendingToolMediaTrustByUrl.has(url)) {
+      state.pendingToolMediaTrustByUrl.set(url, false);
+    }
+  }
+  state.pendingToolAudioAsVoice ||= payload.audioAsVoice === true;
+  state.pendingToolMediaDeliveryFailed = true;
+}
+
+/** Reads queued tool media without clearing it. */
+export function readPendingToolMediaReply(state: PendingToolMediaState): BlockReplyPayload | null {
+  if (state.pendingToolMediaUrls.length === 0 && !state.pendingToolAudioAsVoice) {
+    return null;
+  }
+  const seen = new Set<string>();
+  const mediaUrls: string[] = [];
+  const attachments: NonNullable<BlockReplyPayload["attachments"]> = [];
+  for (const [index, url] of state.pendingToolMediaUrls.entries()) {
+    if (seen.has(url)) {
+      continue;
+    }
+    seen.add(url);
+    mediaUrls.push(url);
+    const { trustedLocalMedia: _untrustedInput, ...attachment } =
+      state.pendingToolMediaAttachments?.[index] ?? {};
+    attachments.push({
+      ...attachment,
+      ...(state.pendingToolMediaTrustByUrl.get(url) === true ? { trustedLocalMedia: true } : {}),
+    });
+  }
+  const alignedAttachments = attachments.some((entry) => Object.keys(entry).length > 0)
+    ? attachments
+    : undefined;
+  const allPendingMediaTrusted =
+    mediaUrls.length > 0 &&
+    mediaUrls.every((url) => state.pendingToolMediaTrustByUrl.get(url) === true);
+  return {
+    mediaUrls: mediaUrls.length ? mediaUrls : undefined,
+    attachments: alignedAttachments,
+    audioAsVoice: state.pendingToolAudioAsVoice || undefined,
+    ...(allPendingMediaTrusted ? { trustedLocalMedia: true } : {}),
+  };
+}
+
+export function recordPendingAssistantReplyDirectives(
+  state: Pick<EmbeddedAgentSubscribeState, "pendingAssistantReplyDirectives">,
+  parsed: ReplyDirectiveParseResult | null | undefined,
+  audioDirectiveCounts?: { previous: number; current: number },
+) {
+  if (!parsed) {
+    return;
+  }
+  const current = state.pendingAssistantReplyDirectives;
+  // Closing an inline span can retract provisional tags. Keep only source
+  // occurrences after the first still-unconsumed voice directive's boundary.
+  const audioAsVoice = Boolean(
+    parsed.audioAsVoice ||
+    (current?.audioAsVoice &&
+      audioDirectiveCounts &&
+      audioDirectiveCounts.current > (current.audioDirectiveStart ?? 0)),
+  );
+  if (!audioAsVoice && !hasReplyDirectiveMetadata(parsed)) {
+    state.pendingAssistantReplyDirectives = undefined;
+    return;
+  }
+  state.pendingAssistantReplyDirectives = {
+    audioAsVoice: audioAsVoice || undefined,
+    ...(audioAsVoice && audioDirectiveCounts
+      ? { audioDirectiveStart: current?.audioDirectiveStart ?? audioDirectiveCounts.previous }
+      : {}),
+    replyToId: parsed.replyToId,
+    replyToTag: parsed.replyToTag || undefined,
+    replyToCurrent: parsed.replyToCurrent || undefined,
+  };
+}
+
+/** Merges pending reply directives into one reply payload and clears them. */
+export function consumePendingAssistantReplyDirectivesIntoReply(
+  state: Pick<EmbeddedAgentSubscribeState, "pendingAssistantReplyDirectives">,
+  payload: BlockReplyPayload,
+): BlockReplyPayload {
+  if (payload.isReasoning || !state.pendingAssistantReplyDirectives) {
+    return payload;
+  }
+  const pending = state.pendingAssistantReplyDirectives;
+  state.pendingAssistantReplyDirectives = undefined;
+  return {
+    ...payload,
+    audioAsVoice: payload.audioAsVoice || pending.audioAsVoice || undefined,
+    replyToId: payload.replyToId ?? pending.replyToId,
+    replyToTag: Boolean(payload.replyToTag || pending.replyToTag) || undefined,
+    replyToCurrent: Boolean(payload.replyToCurrent || pending.replyToCurrent) || undefined,
+  };
+}
+
+export function hasAssistantVisibleReply(params: {
+  text?: string;
+  mediaUrls?: string[];
+  mediaUrl?: string;
+  audioAsVoice?: boolean;
+}): boolean {
+  return resolveSendableOutboundReplyParts(params).hasContent || Boolean(params.audioAsVoice);
+}
+
+/** Exact tool-owned media that the managed WebChat pipeline may hide from display text. */
+export function resolveManagedStreamMediaUrls(
+  state: Pick<EmbeddedAgentSubscribeState, "pendingToolMediaTrustByUrl">,
+  mediaUrls: readonly string[],
+): string[] {
+  return uniqueStrings(
+    mediaUrls.filter((url) => state.pendingToolMediaTrustByUrl.get(url.trim()) === true),
+  );
+}

@@ -4,12 +4,12 @@ export type BrowserFormField = {
   value?: string | number | boolean;
 };
 
-export type BrowserActRequest =
+/** Normalized browser action request sent to the control server. */
+export type BrowserActRequest = { targetId?: string } & (
   | {
       kind: "click";
       ref?: string;
       selector?: string;
-      targetId?: string;
       doubleClick?: boolean;
       button?: string;
       modifiers?: string[];
@@ -20,7 +20,6 @@ export type BrowserActRequest =
       kind: "clickCoords";
       x: number;
       y: number;
-      targetId?: string;
       doubleClick?: boolean;
       button?: string;
       delayMs?: number;
@@ -31,24 +30,22 @@ export type BrowserActRequest =
       ref?: string;
       selector?: string;
       text: string;
-      targetId?: string;
       submit?: boolean;
       slowly?: boolean;
       timeoutMs?: number;
     }
-  | { kind: "press"; key: string; targetId?: string; delayMs?: number }
+  | { kind: "press"; key: string; delayMs?: number }
+  | { kind: "insertText"; text: string }
   | {
       kind: "hover";
       ref?: string;
       selector?: string;
-      targetId?: string;
       timeoutMs?: number;
     }
   | {
       kind: "scrollIntoView";
       ref?: string;
       selector?: string;
-      targetId?: string;
       timeoutMs?: number;
     }
   | {
@@ -57,7 +54,6 @@ export type BrowserActRequest =
       startSelector?: string;
       endRef?: string;
       endSelector?: string;
-      targetId?: string;
       timeoutMs?: number;
     }
   | {
@@ -65,16 +61,14 @@ export type BrowserActRequest =
       ref?: string;
       selector?: string;
       values: string[];
-      targetId?: string;
       timeoutMs?: number;
     }
   | {
       kind: "fill";
       fields: BrowserFormField[];
-      targetId?: string;
       timeoutMs?: number;
     }
-  | { kind: "resize"; width: number; height: number; targetId?: string }
+  | { kind: "resize"; width: number; height: number }
   | {
       kind: "wait";
       timeMs?: number;
@@ -84,14 +78,13 @@ export type BrowserActRequest =
       url?: string;
       loadState?: "load" | "domcontentloaded" | "networkidle";
       fn?: string;
-      targetId?: string;
       timeoutMs?: number;
     }
-  | { kind: "evaluate"; fn: string; ref?: string; targetId?: string; timeoutMs?: number }
-  | { kind: "close"; targetId?: string }
+  | { kind: "evaluate"; fn: string; ref?: string; timeoutMs?: number }
+  | { kind: "close" }
   | {
       kind: "batch";
       actions: BrowserActRequest[];
-      targetId?: string;
       stopOnError?: boolean;
-    };
+    }
+);

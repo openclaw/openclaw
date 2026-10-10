@@ -1,4 +1,4 @@
-import "./fs-safe-defaults.js";
+// Provides safe path helpers for plugin installation targets.
 export {
   assertCanonicalPathWithinBase,
   resolveSafeInstallDir,
@@ -6,14 +6,13 @@ export {
   safePathSegmentHashed,
 } from "@openclaw/fs-safe/advanced";
 
+/** Returns the package basename for scoped npm names while preserving plain ids. */
 export function unscopedPackageName(name: string): string {
   const trimmed = name.trim();
-  if (!trimmed) {
-    return trimmed;
-  }
-  return trimmed.includes("/") ? (trimmed.split("/").pop() ?? trimmed) : trimmed;
+  return trimmed.slice(trimmed.lastIndexOf("/") + 1);
 }
 
+/** Matches a requested install id against either the full package name or unscoped basename. */
 export function packageNameMatchesId(packageName: string, id: string): boolean {
   const trimmedId = id.trim();
   if (!trimmedId) {

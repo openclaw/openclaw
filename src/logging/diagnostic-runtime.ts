@@ -1,13 +1,12 @@
 import {
   areDiagnosticsEnabledForProcess,
-  emitDiagnosticEvent,
+  emitInternalDiagnosticEvent as emitDiagnosticEvent,
 } from "../infra/diagnostic-events.js";
+import { getDiagnosticSessionState, type SessionRef } from "./diagnostic-session-state.js";
 import { createSubsystemLogger } from "./subsystem.js";
 
-const diag = createSubsystemLogger("diagnostic");
+export const diagnosticLogger = createSubsystemLogger("diagnostic");
 let lastActivityAt = 0;
-
-export const diagnosticLogger = diag;
 
 export function markDiagnosticActivity(): void {
   lastActivityAt = Date.now();
@@ -21,11 +20,50 @@ export function resetDiagnosticActivityForTest(): void {
   lastActivityAt = 0;
 }
 
+type DiagnosticMessageQueueParams = SessionRef & {
+  channel?: string;
+  source: string;
+};
+
+/** Records queue activity while letting internal run owners distinguish steering from backlog. */
+export function logMessageQueuedWithBacklogPolicy(
+  params: DiagnosticMessageQueueParams,
+  countsTowardBacklog: boolean,
+): void {
+  if (!areDiagnosticsEnabledForProcess()) {
+    return;
+  }
+  const state = getDiagnosticSessionState(params);
+  if (countsTowardBacklog) {
+    state.queueDepth += 1;
+  }
+  state.lastActivity = Date.now();
+  state.generation = (state.generation ?? 0) + 1;
+  state.lastStuckWarnAgeMs = undefined;
+  state.lastLongRunningWarnAgeMs = undefined;
+  if (diagnosticLogger.isEnabled("debug")) {
+    diagnosticLogger.debug(
+      `message queued: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
+        state.sessionKey ?? "unknown"
+      } source=${params.source} queueDepth=${state.queueDepth} sessionState=${state.state}`,
+    );
+  }
+  emitDiagnosticEvent({
+    type: "message.queued",
+    sessionId: state.sessionId,
+    sessionKey: state.sessionKey,
+    channel: params.channel,
+    source: params.source,
+    queueDepth: state.queueDepth,
+  });
+  markDiagnosticActivity();
+}
+
 export function logLaneEnqueue(lane: string, queueSize: number): void {
   if (!areDiagnosticsEnabledForProcess()) {
     return;
   }
-  diag.debug(`lane enqueue: lane=${lane} queueSize=${queueSize}`);
+  diagnosticLogger.debug(`lane enqueue: lane=${lane} queueSize=${queueSize}`);
   emitDiagnosticEvent({
     type: "queue.lane.enqueue",
     lane,
@@ -38,7 +76,7 @@ export function logLaneDequeue(lane: string, waitMs: number, queueSize: number):
   if (!areDiagnosticsEnabledForProcess()) {
     return;
   }
-  diag.debug(`lane dequeue: lane=${lane} waitMs=${waitMs} queueSize=${queueSize}`);
+  diagnosticLogger.debug(`lane dequeue: lane=${lane} waitMs=${waitMs} queueSize=${queueSize}`);
   emitDiagnosticEvent({
     type: "queue.lane.dequeue",
     lane,

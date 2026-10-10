@@ -1,35 +1,38 @@
 import {
   normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "./string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+
+/**
+ * Shared node-selection policy for CLI, gateway-facing SDK helpers, and plugins.
+ *
+ * Exact ids, remote IPs, normalized display names, and long id prefixes are the
+ * only accepted query shapes; fuzzy ordering lives here so callers agree.
+ */
 
 export type NodeMatchCandidate = {
   nodeId: string;
   displayName?: string;
+  /** Tailscale or network address accepted as an exact match. */
   remoteIp?: string;
+  /** Connected nodes win only after the strongest match type is chosen. */
   connected?: boolean;
+  /** Client id included in ambiguous-node diagnostics. */
   clientId?: string;
 };
 
-type ScoredNodeMatch = {
-  node: NodeMatchCandidate;
-  matchScore: number;
-  selectionScore: number;
-};
-
-export function normalizeNodeKey(value: string) {
-  return normalizeLowercaseStringOrEmpty(value)
-    .replace(/[^a-z0-9]+/g, "-")
+function normalizeNodeKey(value: string) {
+  // Emoji components can also be marks (variation selectors and keycaps); drop
+  // them so decorated and plain display-name selectors stay equivalent.
+  // Retain script marks only when attached to a surviving letter/number; marks
+  // on stripped emoji or symbols must not become invisible selector bytes.
+  const normalized = normalizeLowercaseStringOrEmpty(value.normalize("NFC"))
+    .replace(/(?=\p{M})\p{Emoji_Component}/gu, "")
+    .replace(/(?<![\p{L}\p{M}\p{N}])\p{M}+/gu, "");
+  return normalized
+    .replace(/[^\p{L}\p{M}\p{N}]+/gu, "-")
     .replace(/^-+/, "")
     .replace(/-+$/, "");
-}
-
-function listKnownNodes(nodes: NodeMatchCandidate[]): string {
-  return nodes
-    .map((n) => n.displayName || n.remoteIp || n.nodeId)
-    .filter(Boolean)
-    .join(", ");
 }
 
 function formatNodeCandidateLabel(node: NodeMatchCandidate): string {
@@ -42,44 +45,23 @@ function formatNodeCandidateLabel(node: NodeMatchCandidate): string {
   return `${label} [${details.join(", ")}]`;
 }
 
-function isCurrentOpenClawClient(clientId: string | undefined): boolean {
-  const normalized = normalizeOptionalLowercaseString(clientId) ?? "";
-  return normalized.startsWith("openclaw-");
-}
-
-function isLegacyClawdbotClient(clientId: string | undefined): boolean {
-  const normalized = normalizeOptionalLowercaseString(clientId) ?? "";
-  return normalized.startsWith("clawdbot-") || normalized.startsWith("moldbot-");
-}
-
-function pickPreferredLegacyMigrationMatch(
-  matches: NodeMatchCandidate[],
-): NodeMatchCandidate | undefined {
-  const current = matches.filter((match) => isCurrentOpenClawClient(match.clientId));
-  if (current.length !== 1) {
-    return undefined;
-  }
-  const legacyCount = matches.filter((match) => isLegacyClawdbotClient(match.clientId)).length;
-  if (legacyCount === 0 || current.length + legacyCount !== matches.length) {
-    return undefined;
-  }
-  return current[0];
-}
-
 function resolveMatchScore(
   node: NodeMatchCandidate,
   query: string,
   queryNormalized: string,
+  queryCompact: string | undefined,
 ): number {
-  if (node.nodeId === query) {
-    return 4_000;
-  }
-  if (typeof node.remoteIp === "string" && node.remoteIp === query) {
-    return 3_000;
-  }
   const name = typeof node.displayName === "string" ? node.displayName : "";
-  if (name && normalizeNodeKey(name) === queryNormalized) {
+  const nameNormalized = name ? normalizeNodeKey(name) : "";
+  if (nameNormalized && nameNormalized === queryNormalized) {
     return 2_000;
+  }
+  if (
+    queryCompact !== undefined &&
+    nameNormalized &&
+    nameNormalized.replace(/-/g, "") === queryCompact
+  ) {
+    return 1_900;
   }
   if (query.length >= 6 && node.nodeId.startsWith(query)) {
     return 1_000;
@@ -87,80 +69,52 @@ function resolveMatchScore(
   return 0;
 }
 
-function scoreNodeCandidate(node: NodeMatchCandidate, matchScore: number): number {
-  let score = matchScore;
-  if (node.connected === true) {
-    score += 100;
-  }
-  if (isCurrentOpenClawClient(node.clientId)) {
-    score += 10;
-  } else if (isLegacyClawdbotClient(node.clientId)) {
-    score -= 10;
-  }
-  return score;
-}
-
-function resolveScoredMatches(nodes: NodeMatchCandidate[], query: string): ScoredNodeMatch[] {
-  const trimmed = normalizeOptionalString(query);
-  if (!trimmed) {
-    return [];
-  }
-  const normalized = normalizeNodeKey(trimmed);
-  return nodes
-    .map((node) => {
-      const matchScore = resolveMatchScore(node, trimmed, normalized);
-      if (matchScore === 0) {
-        return null;
-      }
-      return {
-        node,
-        matchScore,
-        selectionScore: scoreNodeCandidate(node, matchScore),
-      };
-    })
-    .filter((entry): entry is ScoredNodeMatch => entry !== null);
-}
-
-export function resolveNodeMatches(
+export function resolveNodeIdFromCandidates(
   nodes: NodeMatchCandidate[],
   query: string,
-): NodeMatchCandidate[] {
-  return resolveScoredMatches(nodes, query).map((entry) => entry.node);
-}
-
-export function resolveNodeIdFromCandidates(nodes: NodeMatchCandidate[], query: string): string {
+  allowCompactDisplayName = false,
+): string {
   const q = query.trim();
   if (!q) {
     throw new Error("node required");
   }
 
-  const rawMatches = resolveScoredMatches(nodes, q);
-  if (rawMatches.length === 1) {
-    return rawMatches[0]?.node.nodeId ?? "";
+  // Exact ids and IPs outrank names; retain every tie before applying heuristics.
+  let strongestMatches = nodes.filter((node) => node.nodeId === q);
+  if (strongestMatches.length === 0) {
+    strongestMatches = nodes.filter((node) => node.remoteIp === q);
   }
-  if (rawMatches.length === 0) {
-    const known = listKnownNodes(nodes);
+  if (strongestMatches.length === 0) {
+    const normalized = normalizeNodeKey(q);
+    const compact = allowCompactDisplayName ? normalized.replace(/-/g, "") : undefined;
+    let topMatchScore = 0;
+    nodes.forEach((node) => {
+      const score = resolveMatchScore(node, q, normalized, compact);
+      if (score > topMatchScore) {
+        topMatchScore = score;
+        strongestMatches.length = 0;
+      }
+      if (score > 0 && score === topMatchScore) {
+        strongestMatches.push(node);
+      }
+    });
+  }
+  if (strongestMatches.length === 0) {
+    const known = nodes
+      .map((node) => node.displayName || node.remoteIp || node.nodeId)
+      .filter(Boolean)
+      .join(", ");
     throw new Error(`unknown node: ${q}${known ? ` (known: ${known})` : ""}`);
   }
 
-  const topMatchScore = Math.max(...rawMatches.map((match) => match.matchScore));
-  const strongestMatches = rawMatches.filter((match) => match.matchScore === topMatchScore);
-  if (strongestMatches.length === 1) {
-    return strongestMatches[0]?.node.nodeId ?? "";
-  }
-
-  const topSelectionScore = Math.max(...strongestMatches.map((match) => match.selectionScore));
-  const matches = strongestMatches.filter((match) => match.selectionScore === topSelectionScore);
+  // Connected state only breaks ties within the strongest match class.
+  const connectedMatches = strongestMatches.filter((match) => match.connected === true);
+  const matches = connectedMatches.length > 0 ? connectedMatches : strongestMatches;
   if (matches.length === 1) {
-    return matches[0]?.node.nodeId ?? "";
-  }
-
-  const preferred = pickPreferredLegacyMigrationMatch(matches.map((match) => match.node));
-  if (preferred) {
-    return preferred.nodeId;
+    return matches[0]?.nodeId ?? "";
   }
 
   throw new Error(
-    `ambiguous node: ${q} (matches: ${matches.map((match) => formatNodeCandidateLabel(match.node)).join(", ")})`,
+    `ambiguous node: ${q} (matches: ${matches.map(formatNodeCandidateLabel).join(", ")})`,
   );
 }

@@ -3,6 +3,7 @@ import type {
   RequestPermissionRequest,
   RequestPermissionResponse,
 } from "@agentclientprotocol/sdk";
+import { normalizeOptionalString as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 
 export type GatewayExecApprovalDecision = "allow-once" | "allow-always" | "deny";
 
@@ -22,10 +23,11 @@ export type GatewayExecApprovalDetails = {
 };
 
 const FALLBACK_EXEC_APPROVAL_DECISIONS = ["allow-once", "deny"] as const;
-
-function readNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
+const EXEC_APPROVAL_OPTIONS: readonly PermissionOption[] = [
+  { optionId: "allow-once", name: "Allow once", kind: "allow_once" },
+  { optionId: "allow-always", name: "Allow always", kind: "allow_always" },
+  { optionId: "deny", name: "Deny", kind: "reject_once" },
+];
 
 function normalizeGatewayExecApprovalDecision(
   value: unknown,
@@ -36,46 +38,17 @@ function normalizeGatewayExecApprovalDecision(
   return undefined;
 }
 
-export function normalizeGatewayExecApprovalDecisions(
-  value: unknown,
-): GatewayExecApprovalDecision[] {
+function buildAcpPermissionOptions(value: unknown): PermissionOption[] {
   const normalized = Array.isArray(value)
-    ? value
-        .map(normalizeGatewayExecApprovalDecision)
-        .filter((decision): decision is GatewayExecApprovalDecision => Boolean(decision))
+    ? value.map(normalizeGatewayExecApprovalDecision).filter((decision) => decision !== undefined)
     : [];
-  return normalized.length > 0 ? normalized : [...FALLBACK_EXEC_APPROVAL_DECISIONS];
+  const decisions = new Set<string>(
+    normalized.length > 0 ? normalized : FALLBACK_EXEC_APPROVAL_DECISIONS,
+  );
+  return structuredClone(EXEC_APPROVAL_OPTIONS.filter((option) => decisions.has(option.optionId)));
 }
 
-export function buildAcpPermissionOptions(
-  decisions: readonly GatewayExecApprovalDecision[],
-): PermissionOption[] {
-  const unique = new Set<GatewayExecApprovalDecision>(decisions);
-  const options: PermissionOption[] = [];
-  if (unique.has("allow-once")) {
-    options.push({
-      optionId: "allow-once",
-      name: "Allow once",
-      kind: "allow_once",
-    });
-  }
-  if (unique.has("allow-always")) {
-    options.push({
-      optionId: "allow-always",
-      name: "Allow always",
-      kind: "allow_always",
-    });
-  }
-  if (unique.has("deny")) {
-    options.push({
-      optionId: "deny",
-      name: "Deny",
-      kind: "reject_once",
-    });
-  }
-  return options.length > 0 ? options : buildAcpPermissionOptions(FALLBACK_EXEC_APPROVAL_DECISIONS);
-}
-
+/** Parses legacy Gateway approval event data into ACP relay state. */
 export function parseGatewayExecApprovalEventData(
   data: Record<string, unknown>,
 ): GatewayExecApprovalEvent | null {
@@ -109,6 +82,7 @@ export function parseGatewayExecApprovalRequestEventPayload(
     command:
       readNonEmptyString(requestRecord.command) ?? readNonEmptyString(requestRecord.commandPreview),
     host: readNonEmptyString(requestRecord.host),
+    toolCallId: readNonEmptyString(requestRecord.toolCallId),
   };
 }
 
@@ -122,7 +96,6 @@ export function buildAcpPermissionRequest(params: {
     readNonEmptyString(params.details?.commandPreview) ??
     params.event.command;
   const host = readNonEmptyString(params.details?.host) ?? params.event.host;
-  const decisions = normalizeGatewayExecApprovalDecisions(params.details?.allowedDecisions);
   const rawInput: Record<string, string> = {
     name: "exec",
     approvalId: params.event.approvalId,
@@ -149,7 +122,7 @@ export function buildAcpPermissionRequest(params: {
         approvalId: params.event.approvalId,
       },
     },
-    options: buildAcpPermissionOptions(decisions),
+    options: buildAcpPermissionOptions(params.details?.allowedDecisions),
   };
 }
 

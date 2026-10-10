@@ -1,44 +1,46 @@
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import { emptyChannelConfigSchema } from "../channels/plugins/config-schema.js";
 import type { ChannelOutboundAdapter } from "../channels/plugins/types.adapters.js";
 import type { ChannelConfigSchema } from "../channels/plugins/types.config.js";
-import type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/types.core.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
+import { tryNativeRequireJavaScriptModule } from "../plugins/native-module-require.js";
+import { getPluginCacheRoot, getPluginCacheSource } from "../plugins/plugin-cache.js";
+import { pluginInstanceInvocation } from "../plugins/plugin-instance-invocation.js";
 import {
   createProfiler,
   formatPluginLoadProfileLine,
   shouldProfilePluginLoader,
 } from "../plugins/plugin-load-profile.js";
-import {
-  getCachedPluginSourceModuleLoader,
-  type PluginModuleLoaderFactory,
-  type PluginModuleLoaderCache,
-} from "../plugins/plugin-module-loader-cache.js";
-import type { PluginRuntime } from "../plugins/runtime/types.js";
-import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
-import type {
-  AnyAgentTool,
-  OpenClawPluginApi,
-  OpenClawPluginCommandDefinition,
-  PluginCommandContext,
-} from "../plugins/types.js";
+import { getCachedPluginModuleLoader } from "../plugins/plugin-module-loader-cache.js";
+import { buildPluginLoaderAliasMap, resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import type {
+  BundledChannelLegacySessionSurface,
+  BundledChannelLegacyStateMigrationDetector,
+  BundledEntryModuleLoadOptions,
+} from "./channel-entry-contract.types.js";
+import { createCachedLazyValueGetter } from "./lazy-value.js";
+
+export type AnyAgentTool = import("../plugins/types.js").AnyAgentTool;
+export type OpenClawPluginApi = import("../plugins/types.js").OpenClawPluginApi;
+export type OpenClawPluginCommandDefinition =
+  import("../plugins/types.js").OpenClawPluginCommandDefinition;
+export type PluginCommandContext = import("../plugins/types.js").PluginCommandContext;
 
 export type {
-  AnyAgentTool,
-  OpenClawPluginApi,
-  OpenClawPluginCommandDefinition,
-  PluginCommandContext,
-};
+  BundledChannelLegacySessionSurface,
+  BundledChannelLegacyStateMigrationDetector,
+  BundledEntryModuleLoadOptions,
+} from "./channel-entry-contract.types.js";
+
+type BundledChannelRuntime = unknown;
 
 type ChannelEntryConfigSchema<TPlugin> =
-  TPlugin extends ChannelPlugin<unknown>
+  TPlugin extends ChannelPlugin<unknown, unknown, unknown, 1 | 2>
     ? NonNullable<TPlugin["configSchema"]>
     : ChannelConfigSchema;
 
@@ -61,6 +63,7 @@ type DefineBundledChannelEntryOptions<TPlugin = ChannelPlugin> = {
   features?: BundledChannelEntryFeatures;
   registerCliMetadata?: (api: OpenClawPluginApi) => void;
   registerFull?: (api: OpenClawPluginApi) => void;
+  registerCapabilities?: (api: OpenClawPluginApi) => void;
 };
 
 type DefineBundledChannelSetupEntryOptions = {
@@ -68,45 +71,38 @@ type DefineBundledChannelSetupEntryOptions = {
   plugin: BundledEntryModuleRef;
   secrets?: BundledEntryModuleRef;
   runtime?: BundledEntryModuleRef;
+  /**
+   * @deprecated Export stateMigrations from the plugin doctor contract instead.
+   * Removal plan: remove the setup-entry adapter after the 2027.1 external-plugin migration window.
+   */
   legacyStateMigrations?: BundledEntryModuleRef;
   legacySessionSurface?: BundledEntryModuleRef;
+  registerSetupRuntime?: (api: OpenClawPluginApi) => void;
   features?: BundledChannelSetupEntryFeatures;
 };
 
+/** Feature flags exposed by bundled setup entries for optional migration/session surfaces. */
 export type BundledChannelSetupEntryFeatures = {
+  /**
+   * @deprecated Declare doctorContract.stateMigrations in openclaw.plugin.json instead.
+   * Removal plan: remove the setup-entry adapter after the 2027.1 external-plugin migration window.
+   */
   legacyStateMigrations?: boolean;
   legacySessionSurfaces?: boolean;
 };
 
+/** Feature flags exposed by full bundled channel entries. */
 export type BundledChannelEntryFeatures = {
   accountInspect?: boolean;
 };
 
-export type BundledChannelLegacySessionSurface = {
-  isLegacyGroupSessionKey?: (key: string) => boolean;
-  canonicalizeLegacySessionKey?: (params: {
-    key: string;
-    agentId: string;
-  }) => string | null | undefined;
-};
-
-export type BundledChannelLegacyStateMigrationDetector = (params: {
-  cfg: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  stateDir: string;
-  oauthDir: string;
-}) =>
-  | ChannelLegacyStateMigrationPlan[]
-  | Promise<ChannelLegacyStateMigrationPlan[] | null | undefined>
-  | null
-  | undefined;
-
+/** Runtime contract returned by a bundled channel's main entrypoint definition. */
 export type BundledChannelEntryContract<TPlugin = ChannelPlugin> = {
   kind: "bundled-channel-entry";
   id: string;
   name: string;
   description: string;
-  configSchema: ChannelEntryConfigSchema<TPlugin>;
+  configSchema: ChannelConfigSchema;
   features?: BundledChannelEntryFeatures;
   register: (api: OpenClawPluginApi) => void;
   loadChannelPlugin: (options?: BundledEntryModuleLoadOptions) => TPlugin;
@@ -119,9 +115,10 @@ export type BundledChannelEntryContract<TPlugin = ChannelPlugin> = {
   loadChannelAccountInspector?: (
     options?: BundledEntryModuleLoadOptions,
   ) => NonNullable<ChannelPlugin["config"]["inspectAccount"]>;
-  setChannelRuntime?: (runtime: PluginRuntime) => void;
+  setChannelRuntime?: (runtime: BundledChannelRuntime) => void;
 };
 
+/** Runtime contract returned by a bundled channel's setup-only entrypoint definition. */
 export type BundledChannelSetupEntryContract<TPlugin = ChannelPlugin> = {
   kind: "bundled-channel-setup-entry";
   loadSetupPlugin: (options?: BundledEntryModuleLoadOptions) => TPlugin;
@@ -134,20 +131,16 @@ export type BundledChannelSetupEntryContract<TPlugin = ChannelPlugin> = {
   loadLegacySessionSurface?: (
     options?: BundledEntryModuleLoadOptions,
   ) => BundledChannelLegacySessionSurface;
-  setChannelRuntime?: (runtime: PluginRuntime) => void;
+  setChannelRuntime?: (runtime: BundledChannelRuntime) => void;
+  registerSetupRuntime?: (api: OpenClawPluginApi) => void;
   features?: BundledChannelSetupEntryFeatures;
 };
 
-export type BundledEntryModuleLoadOptions = {
-  createLoaderForTest?: PluginModuleLoaderFactory;
-};
-
-const nodeRequire = createRequire(import.meta.url);
-const moduleLoaders: PluginModuleLoaderCache = new Map();
-const loadedModuleExports = new Map<string, unknown>();
 const disableBundledEntrySourceFallbackEnv = "OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK";
 
-function isTruthyEnvFlag(value: string | undefined): boolean {
+function isBundledEntrySourceFallbackDisabled(value: string | undefined): boolean {
+  // Presence-based disable is a shipped operator contract; canonical opt-in
+  // truthiness intentionally does not apply to this packaging flag.
   return value !== undefined && !/^(?:0|false)$/iu.test(value.trim());
 }
 
@@ -174,6 +167,41 @@ type BundledEntryModuleCandidate = {
   boundaryRoot: string;
 };
 
+type BundledEntryBoundaryInfo = {
+  importerPath: string;
+  importerDir: string;
+  boundaryRoot: string;
+  packageRoot: string | null;
+};
+
+function resolveBundledEntryBoundaryInfo(importMetaUrl: string): BundledEntryBoundaryInfo {
+  const cacheKey = `${process.argv[1] ?? ""}\0${importMetaUrl}`;
+  const entryBoundaryInfoCache = getPluginCacheRoot(
+    resolveEntryBoundaryRoot(importMetaUrl),
+  ).entryBoundaries;
+  const cached = entryBoundaryInfoCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const importerPath = fileURLToPath(importMetaUrl);
+  const importerDir = path.dirname(importerPath);
+  const boundaryRoot = path.dirname(importerPath);
+  const info = {
+    importerPath,
+    importerDir,
+    boundaryRoot,
+    packageRoot:
+      resolveLoaderPackageRoot({
+        modulePath: importerPath,
+        moduleUrl: importMetaUrl,
+        cwd: importerDir,
+        argv1: process.argv[1],
+      }) ?? null,
+  };
+  entryBoundaryInfoCache.set(cacheKey, info);
+  return info;
+}
+
 function addBundledEntryCandidates(
   candidates: BundledEntryModuleCandidate[],
   basePath: string,
@@ -192,12 +220,13 @@ function addBundledEntryCandidates(
 function resolveBundledEntryModuleCandidates(
   importMetaUrl: string,
   specifier: string,
-): BundledEntryModuleCandidate[] {
-  const importerPath = fileURLToPath(importMetaUrl);
-  const importerDir = path.dirname(importerPath);
-  const boundaryRoot = resolveEntryBoundaryRoot(importMetaUrl);
-  const candidates: BundledEntryModuleCandidate[] = [];
+): [BundledEntryModuleCandidate, ...BundledEntryModuleCandidate[]] {
+  const { importerPath, importerDir, boundaryRoot, packageRoot } =
+    resolveBundledEntryBoundaryInfo(importMetaUrl);
   const primaryResolved = path.resolve(importerDir, specifier);
+  const candidates: [BundledEntryModuleCandidate, ...BundledEntryModuleCandidate[]] = [
+    { path: primaryResolved, boundaryRoot },
+  ];
   addBundledEntryCandidates(candidates, primaryResolved, boundaryRoot);
 
   const sourceRelativeSpecifier = specifier.replace(/^\.\/src\//u, "./");
@@ -209,12 +238,6 @@ function resolveBundledEntryModuleCandidates(
     );
   }
 
-  const packageRoot = resolveLoaderPackageRoot({
-    modulePath: importerPath,
-    moduleUrl: importMetaUrl,
-    cwd: importerDir,
-    argv1: process.argv[1],
-  });
   if (!packageRoot) {
     return candidates;
   }
@@ -223,7 +246,7 @@ function resolveBundledEntryModuleCandidates(
   if (!importerPath.startsWith(distExtensionsRoot)) {
     return candidates;
   }
-  if (isTruthyEnvFlag(process.env[disableBundledEntrySourceFallbackEnv])) {
+  if (isBundledEntrySourceFallbackDisabled(process.env[disableBundledEntrySourceFallbackEnv])) {
     return candidates;
   }
 
@@ -233,6 +256,8 @@ function resolveBundledEntryModuleCandidates(
     return candidates;
   }
 
+  // Published bundles resolve from dist first, then fall back to source so local dev checkouts
+  // can exercise bundled entries without requiring a fresh package build.
   addBundledEntryCandidates(
     candidates,
     path.resolve(sourcePluginRoot, specifier),
@@ -282,19 +307,33 @@ function formatBundledEntryModuleOpenFailure(params: {
   ].join(" ");
 }
 
-function resolveBundledEntryModulePath(importMetaUrl: string, specifier: string): string {
-  const candidates = resolveBundledEntryModuleCandidates(importMetaUrl, specifier);
-  const fallbackCandidate = candidates[0] ?? {
-    path: path.resolve(path.dirname(fileURLToPath(importMetaUrl)), specifier),
-    boundaryRoot: resolveEntryBoundaryRoot(importMetaUrl),
-  };
+function createBundledEntryModulePathCacheKey(importMetaUrl: string, specifier: string): string {
+  const sourceFallbackDisabled = isBundledEntrySourceFallbackDisabled(
+    process.env[disableBundledEntrySourceFallbackEnv],
+  );
+  return `${sourceFallbackDisabled ? "1" : "0"}\0${importMetaUrl}\0${specifier}`;
+}
 
+function resolveBundledEntryModulePath(importMetaUrl: string, specifier: string): string {
+  const cacheKey = createBundledEntryModulePathCacheKey(importMetaUrl, specifier);
+  const resolvedModulePaths = getPluginCacheRoot(
+    resolveEntryBoundaryRoot(importMetaUrl),
+  ).entryPaths;
+  const cached = resolvedModulePaths.get(cacheKey);
+  if (cached) {
+    if ("error" in cached) {
+      throw cached.error;
+    }
+    return cached.path;
+  }
+  const candidates = resolveBundledEntryModuleCandidates(importMetaUrl, specifier);
   let firstFailure: {
     candidate: BundledEntryModuleCandidate;
     failure: Extract<ReturnType<typeof openRootFileSync>, { ok: false }>;
   } | null = null;
-
-  for (const candidate of candidates) {
+  let candidateIndex = 0;
+  let candidate: BundledEntryModuleCandidate | undefined = candidates[0];
+  do {
     const opened = openRootFileSync({
       absolutePath: candidate.path,
       rootPath: candidate.boundaryRoot,
@@ -304,29 +343,15 @@ function resolveBundledEntryModulePath(importMetaUrl: string, specifier: string)
     });
     if (opened.ok) {
       fs.closeSync(opened.fd);
+      resolvedModulePaths.set(cacheKey, { path: opened.path });
       return opened.path;
     }
     firstFailure ??= { candidate, failure: opened };
-  }
+    candidate = candidates[++candidateIndex];
+  } while (candidate);
 
   const failure = firstFailure;
-  if (!failure) {
-    throw new Error(
-      formatBundledEntryModuleOpenFailure({
-        importMetaUrl,
-        specifier,
-        resolvedPath: fallbackCandidate.path,
-        boundaryRoot: fallbackCandidate.boundaryRoot,
-        failure: {
-          ok: false,
-          reason: "path",
-          error: new Error(`ENOENT: no such file or directory, lstat '${fallbackCandidate.path}'`),
-        },
-      }),
-    );
-  }
-
-  throw new Error(
+  const error = new Error(
     formatBundledEntryModuleOpenFailure({
       importMetaUrl,
       specifier,
@@ -335,17 +360,8 @@ function resolveBundledEntryModulePath(importMetaUrl: string, specifier: string)
       failure: failure.failure,
     }),
   );
-}
-
-function getSourceModuleLoader(modulePath: string, options: BundledEntryModuleLoadOptions) {
-  return getCachedPluginSourceModuleLoader({
-    cache: moduleLoaders,
-    modulePath,
-    importerUrl: import.meta.url,
-    preferBuiltDist: true,
-    loaderFilename: import.meta.url,
-    ...(options.createLoaderForTest ? { createLoader: options.createLoaderForTest } : {}),
-  });
+  resolvedModulePaths.set(cacheKey, { error });
+  throw error;
 }
 
 function canTryNodeRequireBuiltModule(modulePath: string): boolean {
@@ -364,42 +380,55 @@ function loadBundledEntryModuleSync(
   options: BundledEntryModuleLoadOptions = {},
 ): unknown {
   const modulePath = resolveBundledEntryModulePath(importMetaUrl, specifier);
-  const cached = loadedModuleExports.get(modulePath);
-  if (cached !== undefined) {
-    return cached;
+  const instance = pluginInstanceInvocation.getStore()?.instance;
+  const captured = instance?.hasModuleSource(modulePath);
+  if (captured === false) {
+    throw new Error(
+      `Bundled companion is outside the plugin's captured module graph: ${modulePath}`,
+    );
+  }
+  if (instance && captured) {
+    return instance.loadModule(modulePath);
+  }
+  const source = getPluginCacheSource(modulePath);
+  const cached = source.variants.get("bundled-entry")?.exports;
+  if (cached) {
+    return cached.value;
   }
   let loaded: unknown;
   const profile = shouldProfilePluginLoader();
   const loadStartMs = profile ? performance.now() : 0;
   let sourceLoaderReadyMs = 0;
-  if (canTryNodeRequireBuiltModule(modulePath)) {
-    try {
-      loaded = nodeRequire(modulePath);
-    } catch {
-      const moduleLoader = getSourceModuleLoader(modulePath, options);
-      sourceLoaderReadyMs = profile ? performance.now() : 0;
-      loaded = moduleLoader(toSafeImportPath(modulePath));
-    }
+  const native = canTryNodeRequireBuiltModule(modulePath)
+    ? tryNativeRequireJavaScriptModule(modulePath, {
+        aliasMap: buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url),
+        fallbackOnMissingDependency: true,
+      })
+    : undefined;
+  if (native?.ok) {
+    loaded = native.moduleExport;
   } else {
-    const moduleLoader = getSourceModuleLoader(modulePath, options);
+    const moduleLoader = getCachedPluginModuleLoader({
+      modulePath,
+      importerUrl: import.meta.url,
+      loaderFilename: import.meta.url,
+      ...(options.createLoaderForTest ? { createLoader: options.createLoaderForTest } : {}),
+      tryNative: false,
+    });
     sourceLoaderReadyMs = profile ? performance.now() : 0;
     loaded = moduleLoader(toSafeImportPath(modulePath));
   }
+
   if (profile) {
     const endMs = performance.now();
-    // Use shared formatter — but split timing fields ourselves so we can
-    // attribute time spent in source-loader creation vs the actual graph load.
-    // Both are emitted as extras
-    // alongside the canonical `elapsedMs=<total>` field.
+    // Split source-loader creation from graph loading while preserving canonical elapsedMs.
     console.error(
       formatPluginLoadProfileLine({
         phase: "bundled-entry-module-load",
         pluginId: "(bundled-entry)",
         source: modulePath,
         elapsedMs: endMs - loadStartMs,
-        // When the built-artifact fast path resolves via `nodeRequire`, the
-        // source-loader timestamp stays `0`; keep its breakdown at zero so
-        // `elapsedMs=` owns the native load time.
+        // Native loads leave the source timestamp at zero, so elapsedMs owns the full load.
         extras: [
           ["sourceLoaderCreateMs", sourceLoaderReadyMs ? sourceLoaderReadyMs - loadStartMs : 0],
           ["sourceLoaderCallMs", sourceLoaderReadyMs ? endMs - sourceLoaderReadyMs : 0],
@@ -407,10 +436,11 @@ function loadBundledEntryModuleSync(
       }),
     );
   }
-  loadedModuleExports.set(modulePath, loaded);
+  source.variants.set("bundled-entry", { exports: { value: loaded } });
   return loaded;
 }
 
+/** Loads one export from a bundled channel sidecar module through the guarded entry boundary. */
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic entry export loaders use caller-supplied export types.
 export function loadBundledEntryExportSync<T>(
   importMetaUrl: string,
@@ -434,6 +464,30 @@ export function loadBundledEntryExportSync<T>(
   return record[reference.exportName] as T;
 }
 
+function createOptionalBundledEntryLoader<T>(
+  importMetaUrl: string,
+  reference: BundledEntryModuleRef | undefined,
+  loadExport: typeof loadBundledEntryExportSync<T>,
+): ((options?: BundledEntryModuleLoadOptions) => T) | undefined {
+  return reference ? (options) => loadExport(importMetaUrl, reference, options) : undefined;
+}
+
+function createBundledEntryRuntimeSetter(
+  importMetaUrl: string,
+  reference: BundledEntryModuleRef | undefined,
+): ((runtime: BundledChannelRuntime) => void) | undefined {
+  return reference
+    ? (runtime) => {
+        const setter = loadBundledEntryExportSync<(runtime: BundledChannelRuntime) => void>(
+          importMetaUrl,
+          reference,
+        );
+        setter(runtime);
+      }
+    : undefined;
+}
+
+/** Defines the full bundled channel entry contract used by core plugin registration. */
 export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
   id,
   name,
@@ -448,53 +502,36 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
   features,
   registerCliMetadata,
   registerFull,
+  registerCapabilities,
 }: DefineBundledChannelEntryOptions<TPlugin>): BundledChannelEntryContract<TPlugin> {
-  const resolvedConfigSchema: ChannelEntryConfigSchema<TPlugin> =
-    typeof configSchema === "function"
-      ? configSchema()
-      : ((configSchema ?? emptyChannelConfigSchema()) as ChannelEntryConfigSchema<TPlugin>);
+  const getConfigSchema = createCachedLazyValueGetter(configSchema ?? emptyChannelConfigSchema);
   const loadChannelPlugin = (options?: BundledEntryModuleLoadOptions) =>
     loadBundledEntryExportSync<TPlugin>(importMetaUrl, plugin, options);
-  const loadChannelOutbound = outbound
-    ? (options?: BundledEntryModuleLoadOptions) =>
-        loadBundledEntryExportSync<ChannelOutboundAdapter | undefined>(
-          importMetaUrl,
-          outbound,
-          options,
-        )
-    : undefined;
-  const loadChannelSecrets = secrets
-    ? (options?: BundledEntryModuleLoadOptions) =>
-        loadBundledEntryExportSync<ChannelPlugin["secrets"] | undefined>(
-          importMetaUrl,
-          secrets,
-          options,
-        )
-    : undefined;
-  const loadChannelAccountInspector = accountInspect
-    ? (options?: BundledEntryModuleLoadOptions) =>
-        loadBundledEntryExportSync<NonNullable<ChannelPlugin["config"]["inspectAccount"]>>(
-          importMetaUrl,
-          accountInspect,
-          options,
-        )
-    : undefined;
-  const setChannelRuntime = runtime
-    ? (pluginRuntime: PluginRuntime) => {
-        const setter = loadBundledEntryExportSync<(runtime: PluginRuntime) => void>(
-          importMetaUrl,
-          runtime,
-        );
-        setter(pluginRuntime);
-      }
-    : undefined;
+  const loadChannelOutbound = createOptionalBundledEntryLoader(
+    importMetaUrl,
+    outbound,
+    loadBundledEntryExportSync<ChannelOutboundAdapter | undefined>,
+  );
+  const loadChannelSecrets = createOptionalBundledEntryLoader(
+    importMetaUrl,
+    secrets,
+    loadBundledEntryExportSync<ChannelPlugin["secrets"]>,
+  );
+  const loadChannelAccountInspector = createOptionalBundledEntryLoader(
+    importMetaUrl,
+    accountInspect,
+    loadBundledEntryExportSync<NonNullable<ChannelPlugin["config"]["inspectAccount"]>>,
+  );
+  const setChannelRuntime = createBundledEntryRuntimeSetter(importMetaUrl, runtime);
 
   return {
     kind: "bundled-channel-entry",
     id,
     name,
     description,
-    configSchema: resolvedConfigSchema,
+    get configSchema() {
+      return getConfigSchema();
+    },
     ...(features || accountInspect
       ? { features: { ...features, ...(accountInspect ? { accountInspect: true } : {}) } }
       : {}),
@@ -503,26 +540,26 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
         registerCliMetadata?.(api);
         return;
       }
+      const profile = createProfiler({ pluginId: id, source: importMetaUrl });
       if (api.registrationMode === "tool-discovery") {
-        const profile = createProfiler({ pluginId: id, source: importMetaUrl });
         profile("bundled-register:registerFull", () => registerFull?.(api));
+        profile("bundled-register:registerCapabilities", () => registerCapabilities?.(api));
         return;
       }
-      const profile = createProfiler({ pluginId: id, source: importMetaUrl });
       const channelPlugin = profile("bundled-register:loadChannelPlugin", loadChannelPlugin);
       profile("bundled-register:registerChannel", () =>
         api.registerChannel({ plugin: channelPlugin as ChannelPlugin }),
       );
       profile("bundled-register:setChannelRuntime", () => setChannelRuntime?.(api.runtime));
-      if (api.registrationMode === "discovery") {
-        profile("bundled-register:registerCliMetadata", () => registerCliMetadata?.(api));
-        return;
-      }
-      if (api.registrationMode !== "full") {
+      const registrationMode = api.registrationMode;
+      if (registrationMode !== "discovery" && registrationMode !== "full") {
         return;
       }
       profile("bundled-register:registerCliMetadata", () => registerCliMetadata?.(api));
-      profile("bundled-register:registerFull", () => registerFull?.(api));
+      if (registrationMode === "full") {
+        profile("bundled-register:registerFull", () => registerFull?.(api));
+      }
+      profile("bundled-register:registerCapabilities", () => registerCapabilities?.(api));
     },
     loadChannelPlugin,
     ...(loadChannelOutbound ? { loadChannelOutbound } : {}),
@@ -532,6 +569,7 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
   };
 }
 
+/** Defines the setup-only bundled channel entry contract for onboarding and migration surfaces. */
 export function defineBundledChannelSetupEntry<TPlugin = ChannelPlugin>({
   importMetaUrl,
   plugin,
@@ -539,53 +577,37 @@ export function defineBundledChannelSetupEntry<TPlugin = ChannelPlugin>({
   runtime,
   legacyStateMigrations,
   legacySessionSurface,
+  registerSetupRuntime,
   features,
 }: DefineBundledChannelSetupEntryOptions): BundledChannelSetupEntryContract<TPlugin> {
-  // Bundled setup entries stay on a light path during setup-only/setup-runtime loads.
-  // When runtime wiring is needed, expose only the setter so the loader can hand
-  // the setup surface the active runtime without importing the full channel entry.
-  const setChannelRuntime = runtime
-    ? (pluginRuntime: PluginRuntime) => {
-        const setter = loadBundledEntryExportSync<(runtime: PluginRuntime) => void>(
-          importMetaUrl,
-          runtime,
-        );
-        setter(pluginRuntime);
-      }
-    : undefined;
-  const loadLegacyStateMigrationDetector = legacyStateMigrations
-    ? (options?: BundledEntryModuleLoadOptions) =>
-        loadBundledEntryExportSync<BundledChannelLegacyStateMigrationDetector>(
-          importMetaUrl,
-          legacyStateMigrations,
-          options,
-        )
-    : undefined;
-  const loadLegacySessionSurface = legacySessionSurface
-    ? (options?: BundledEntryModuleLoadOptions) =>
-        loadBundledEntryExportSync<BundledChannelLegacySessionSurface>(
-          importMetaUrl,
-          legacySessionSurface,
-          options,
-        )
-    : undefined;
+  // Setup loads stay light; expose only the setter needed to inject the active runtime
+  // without importing the full channel entry.
+  const setChannelRuntime = createBundledEntryRuntimeSetter(importMetaUrl, runtime);
+  const loadSetupSecrets = createOptionalBundledEntryLoader(
+    importMetaUrl,
+    secrets,
+    loadBundledEntryExportSync<ChannelPlugin["secrets"]>,
+  );
+  const loadLegacyStateMigrationDetector = createOptionalBundledEntryLoader(
+    importMetaUrl,
+    legacyStateMigrations,
+    loadBundledEntryExportSync<BundledChannelLegacyStateMigrationDetector>,
+  );
+  const loadLegacySessionSurface = createOptionalBundledEntryLoader(
+    importMetaUrl,
+    legacySessionSurface,
+    loadBundledEntryExportSync<BundledChannelLegacySessionSurface>,
+  );
+
   return {
     kind: "bundled-channel-setup-entry",
     loadSetupPlugin: (options) =>
       loadBundledEntryExportSync<TPlugin>(importMetaUrl, plugin, options),
-    ...(secrets
-      ? {
-          loadSetupSecrets: (options) =>
-            loadBundledEntryExportSync<ChannelPlugin["secrets"] | undefined>(
-              importMetaUrl,
-              secrets,
-              options,
-            ),
-        }
-      : {}),
+    ...(loadSetupSecrets ? { loadSetupSecrets } : {}),
     ...(loadLegacyStateMigrationDetector ? { loadLegacyStateMigrationDetector } : {}),
     ...(loadLegacySessionSurface ? { loadLegacySessionSurface } : {}),
     ...(setChannelRuntime ? { setChannelRuntime } : {}),
+    ...(registerSetupRuntime ? { registerSetupRuntime } : {}),
     ...(features ? { features } : {}),
   };
 }

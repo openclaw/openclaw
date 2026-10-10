@@ -1,138 +1,184 @@
-import fs from "node:fs/promises";
-import os from "node:os";
+import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { captureEnv } from "../../test-utils/env.js";
-import { AUTH_STORE_VERSION } from "./constants.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { resolveLegacyAuthProfilesPath as resolveAuthStorePath } from "../../commands/doctor-auth-legacy-paths.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
-  resolveAuthStatePath,
-  resolveAuthStatePathForDisplay,
-  resolveAuthStorePath,
-  resolveAuthStorePathForDisplay,
-  resolveLegacyAuthStorePath,
-} from "./path-resolve.js";
-import { ensureAuthStoreFile } from "./paths.js";
+  closeOpenClawAgentDatabasesAsync,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { withEnv } from "../../test-utils/env.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { resolveSharedAuthStorePath } from "./path-resolve.js";
+import { withPreparedAuthStorePathForDisplay, resolveAuthStorePathForDisplay } from "./paths.js";
+import * as sqliteRead from "./sqlite-read.js";
+import { closeAuthProfileReadPool } from "./sqlite.js";
 
-// Direct-import sanity tests. These helpers are exercised transitively by the
-// wider auth-profile test suite via ESM re-exports through paths.ts, but v8
-// coverage does not always attribute those transitive hits back to the
-// original function bodies in path-resolve.ts. This file imports each helper
-// directly from ./path-resolve.js (bypassing the re-export indirection) and
-// calls it at least once so the coverage report is honest about what is and
-// isn't tested.
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-describe("path-resolve helpers (direct-import coverage attribution)", () => {
-  const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+describe("auth profile path helpers (direct-import coverage attribution)", () => {
   let stateDir = "";
 
-  beforeEach(async () => {
-    stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-path-direct-"));
-    process.env.OPENCLAW_STATE_DIR = stateDir;
+  beforeEach(() => {
+    stateDir = tempDirs.make("openclaw-path-direct-");
   });
 
-  afterEach(async () => {
-    envSnapshot.restore();
-    await fs.rm(stateDir, { recursive: true, force: true });
+  it("honors OPENCLAW_AGENT_DIR in both no-argument auth path implementations", () => {
+    const relocatedAgentDir = path.join(stateDir, "relocated-main-agent");
+    withEnv({ OPENCLAW_STATE_DIR: stateDir, OPENCLAW_AGENT_DIR: relocatedAgentDir }, () => {
+      expect(path.dirname(resolveAuthStorePath())).toBe(relocatedAgentDir);
+      expect(resolveAuthStorePathForDisplay()).toBe(
+        path.join(relocatedAgentDir, "openclaw-agent.sqlite"),
+      );
+    });
   });
 
-  it("resolveAuthStorePath joins agentDir with the auth-profiles filename", () => {
-    const agentDir = path.join(stateDir, "agents", "main", "agent");
-    const resolved = resolveAuthStorePath(agentDir);
-    expect(path.dirname(resolved)).toBe(agentDir);
-    expect(path.basename(resolved)).toMatch(/auth-profiles/);
-  });
-
-  it("resolveAuthStorePath falls back to the default agent dir when agentDir is omitted", () => {
-    // Omitting agentDir exercises the default agent-dir branch. With
-    // OPENCLAW_STATE_DIR set to our tempdir, the resolved path must live under it.
-    const resolved = resolveAuthStorePath();
-    expect(resolved.startsWith(stateDir)).toBe(true);
-    expect(path.basename(resolved)).toMatch(/auth-profiles/);
-  });
-
-  it("resolveLegacyAuthStorePath joins agentDir with the legacy auth filename", () => {
-    const agentDir = path.join(stateDir, "agents", "main", "agent");
-    const resolved = resolveLegacyAuthStorePath(agentDir);
-    expect(path.dirname(resolved)).toBe(agentDir);
-    expect(path.basename(resolved)).not.toMatch(/auth-profiles/);
-  });
-
-  it("resolveLegacyAuthStorePath falls back to the default agent dir", () => {
-    const resolved = resolveLegacyAuthStorePath();
-    expect(resolved.startsWith(stateDir)).toBe(true);
-  });
-
-  it("resolveAuthStatePath joins agentDir with the auth-state filename", () => {
-    const agentDir = path.join(stateDir, "agents", "main", "agent");
-    const resolved = resolveAuthStatePath(agentDir);
-    expect(path.dirname(resolved)).toBe(agentDir);
-  });
-
-  it("resolveAuthStatePath falls back to the default agent dir", () => {
-    const resolved = resolveAuthStatePath();
-    expect(resolved.startsWith(stateDir)).toBe(true);
-  });
-
-  it("resolveAuthStorePathForDisplay returns the resolved path for a non-tilde input", () => {
-    const agentDir = path.join(stateDir, "agents", "main", "agent");
-    const resolved = resolveAuthStorePathForDisplay(agentDir);
-    expect(resolved.startsWith(stateDir)).toBe(true);
-  });
-
-  it("resolveAuthStorePathForDisplay preserves a tilde-rooted path unchanged", () => {
-    // Exercises the `pathname.startsWith(\"~\")` branch. We use a contrived
-    // agentDir that already starts with `~` so the resolver echoes the
-    // tilde path back instead of expanding it via resolveUserPath.
-    const tildeAgentDir = "~fake-openclaw-no-expand";
-    const resolved = resolveAuthStorePathForDisplay(tildeAgentDir);
-    expect(resolved).toBe(path.resolve(tildeAgentDir, "auth-profiles.json"));
-  });
-
-  it("resolveAuthStatePathForDisplay returns the auth-state path for a non-tilde input", () => {
-    const agentDir = path.join(stateDir, "agents", "main", "agent");
-    const resolved = resolveAuthStatePathForDisplay(agentDir);
-    expect(resolved).toBe(path.join(agentDir, "auth-state.json"));
+  it("falls back to the shared owner for an agent dir that has no local store", () => {
+    withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
+      // A tilde-rooted dir resolveUserPath cannot expand still must not be reported as the owner:
+      // without a local store the loader reads the shared database, so display must name that.
+      const resolved = resolveAuthStorePathForDisplay("~fake-openclaw-no-expand");
+      expect(resolved).toBe(resolveSharedAuthStorePath());
+      expect(resolved.startsWith("~")).toBe(false);
+    });
   });
 });
 
-describe("ensureAuthStoreFile (direct-import coverage attribution)", () => {
-  const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-  let stateDir = "";
+it.each(["shared", "missing", "missing-row", "empty", "present", "unreadable"] as const)(
+  "prepares the canonical display source without host SQL (%s)",
+  async (mode) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const agentId = "display";
+      const agentDir = state.agentDir(agentId);
+      const databasePath = path.join(agentDir, "openclaw-agent.sqlite");
+      if (mode === "missing-row") {
+        openOpenClawAgentDatabase({ agentId, env: state.env });
+      } else if (mode !== "shared" && mode !== "missing") {
+        await state.writeAuthProfiles(
+          {
+            version: 1,
+            profiles:
+              mode === "empty"
+                ? {}
+                : {
+                    "fixture:display": {
+                      type: "api_key",
+                      provider: "fixture",
+                      key: "synthetic-display",
+                    },
+                  },
+          },
+          agentId,
+        );
+      }
+      await closeOpenClawAgentDatabasesAsync(state.stateDir);
+      closeAuthProfileReadPool();
+      if (mode === "unreadable") {
+        fs.writeFileSync(databasePath, "not a SQLite database");
+      }
+      const context = captureOpenClawStateWorkerContext({ env: state.env });
+      const sql = observeMainThreadSql();
+      sql.calibrate();
+      let displayPath: string;
+      try {
+        displayPath = await withPreparedAuthStorePathForDisplay(
+          mode === "shared" ? undefined : agentDir,
+          state.env,
+          () => context.admission.assertCurrent(),
+          (pathname) => pathname,
+        );
+        sql.expectIdle();
+      } finally {
+        sql.restore();
+      }
+      expect(displayPath).toBe(
+        mode === "shared" || mode === "missing" || mode === "missing-row"
+          ? resolveSharedAuthStorePath(state.env)
+          : databasePath,
+      );
+      if (mode === "missing") {
+        expect(fs.existsSync(databasePath)).toBe(false);
+      }
+    });
+  },
+);
 
-  beforeEach(async () => {
-    stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-path-ensure-"));
-    process.env.OPENCLAW_STATE_DIR = stateDir;
-  });
-
-  afterEach(async () => {
-    envSnapshot.restore();
-    await fs.rm(stateDir, { recursive: true, force: true });
-  });
-
-  it("creates a new auth-profiles.json when the file does not yet exist", async () => {
-    const target = path.join(stateDir, "sub", "auth-profiles.json");
-    ensureAuthStoreFile(target);
-    const raw = await fs.readFile(target, "utf8");
-    const parsed = JSON.parse(raw) as { version: number; profiles: Record<string, unknown> };
-    expect(parsed.version).toBe(AUTH_STORE_VERSION);
-    expect(parsed.profiles).toStrictEqual({});
-  });
-
-  it("leaves an existing auth-profiles.json unchanged", async () => {
-    const target = path.join(stateDir, "auth-profiles.json");
-    // Seed a file with custom content; ensureAuthStoreFile should bail out
-    // on the existsSync short-circuit and NOT overwrite.
-    await fs.writeFile(
-      target,
-      JSON.stringify({
-        version: 1,
-        profiles: { canary: { type: "api_key", provider: "x", key: "k" } },
-      }),
-      "utf8",
-    );
-    ensureAuthStoreFile(target);
-    const raw = await fs.readFile(target, "utf8");
-    const parsed = JSON.parse(raw) as { profiles: Record<string, unknown> };
-    expect(parsed.profiles.canary).toEqual({ type: "api_key", provider: "x", key: "k" });
-  });
-});
+it.each(["source-close", "caller-withdrawn"] as const)(
+  "refuses a display source withdrawn after its actual worker read (%s)",
+  async (withdrawal) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await state.writeAuthProfiles({ version: 1, profiles: {} });
+      await closeOpenClawAgentDatabasesAsync(state.stateDir);
+      closeAuthProfileReadPool();
+      const entered = createDeferredCore();
+      const resume = createDeferredCore();
+      const original = sqliteRead.prepareAgentAuthProfileRowsRead;
+      const held = vi
+        .spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead")
+        .mockImplementation((options) => {
+          const reader = original(options);
+          return {
+            ...reader,
+            async read() {
+              const rows = await reader.read();
+              entered.resolve();
+              await resume.promise;
+              return rows;
+            },
+          };
+        });
+      const context = captureOpenClawStateWorkerContext({ env: state.env });
+      const withdrawn = new Error("Model build authority was withdrawn");
+      let current = true;
+      const consume = vi.fn((pathname: string) => pathname);
+      const reading = withPreparedAuthStorePathForDisplay(
+        state.agentDir(),
+        state.env,
+        () => {
+          context.admission.assertCurrent();
+          if (!current) {
+            throw withdrawn;
+          }
+        },
+        consume,
+      );
+      const result = reading.then(
+        (value) => ({ ok: true as const, value }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+      try {
+        await Promise.race([
+          entered.promise,
+          result.then(() => {
+            throw new Error("Display preparation settled before its worker read gate");
+          }),
+        ]);
+        if (withdrawal === "source-close") {
+          await closeOpenClawAgentDatabasesAsync(state.stateDir);
+        } else {
+          current = false;
+        }
+        resume.resolve();
+        const outcome = await result;
+        expect(outcome.ok).toBe(false);
+        expect(consume).not.toHaveBeenCalled();
+        if (outcome.ok) {
+          throw new Error("Withdrawn source produced a display path");
+        }
+        if (withdrawal === "caller-withdrawn") {
+          expect(outcome.error).toBe(withdrawn);
+        } else {
+          expect(outcome.error).toBeInstanceOf(Error);
+          expect(outcome.error).toMatchObject({ message: expect.stringMatching(/revoked|closed/) });
+        }
+      } finally {
+        resume.resolve();
+        await result;
+        held.mockRestore();
+      }
+    });
+  },
+);

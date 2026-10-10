@@ -1,260 +1,123 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { expect, test, vi } from "vitest";
-import { WebSocket } from "ws";
-import { isSessionPatchEvent } from "../hooks/internal-hooks.js";
-import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
+// Session RPC permissions, hook isolation, and negotiated wire compatibility.
+import { expect, test } from "vitest";
 import {
-  connectOk,
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import { getRuntimeConfig } from "../config/io.js";
+import {
+  listSessionEntriesCore,
+  loadSessionEntry,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
+import { isSessionPatchEvent } from "../hooks/internal-hooks.js";
+import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
+import {
+  agentDiscoveryMock,
+  connectWebchatClient,
+  onceMessage,
   rpcReq,
   testState,
-  trackConnectChallengeNonce,
   writeSessionStore,
 } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   sessionHookMocks,
   sessionStoreEntry,
-  createCheckpointFixture,
   isInternalHookEvent,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir, openClient, getHarness } = setupGatewaySessionsTestHarness();
+const { createSessionStoreDir, openClient, getHarness, seedActiveMainSession } =
+  setupGatewaySessionsTestHarness();
+type PermissionClient = NonNullable<Parameters<typeof connectWebchatClient>[0]["client"]>;
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected record");
-  }
-  return value as Record<string, unknown>;
-}
-
-function requireFirstCallArg(mock: { mock: { calls: readonly (readonly unknown[])[] } }) {
-  const call = mock.mock.calls.at(0);
-  if (!call) {
-    throw new Error("Expected first mock call");
-  }
-  return call[0];
-}
-
-test("webchat clients cannot patch, delete, compact, or restore sessions", async () => {
-  const { dir } = await createSessionStoreDir();
-  const fixture = await createCheckpointFixture(dir);
-
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry(fixture.sessionId, {
-        sessionFile: fixture.sessionFile,
-        compactionCheckpoints: [
-          {
-            checkpointId: "checkpoint-1",
-            sessionKey: "agent:main:main",
-            sessionId: fixture.sessionId,
-            createdAt: Date.now(),
-            reason: "manual",
-            tokensBefore: 123,
-            tokensAfter: 45,
-            summary: "checkpoint summary",
-            firstKeptEntryId: fixture.preCompactionLeafId,
-            preCompaction: {
-              sessionId: fixture.preCompactionSession.getSessionId(),
-              sessionFile: fixture.preCompactionSessionFile,
-              leafId: fixture.preCompactionLeafId,
-            },
-            postCompaction: {
-              sessionId: fixture.sessionId,
-              sessionFile: fixture.sessionFile,
-              leafId: fixture.postCompactionLeafId,
-              entryId: fixture.postCompactionLeafId,
-            },
-          },
-        ],
-      }),
-      "discord:group:dev": sessionStoreEntry("sess-group"),
-    },
-  });
-
-  const ws = new WebSocket(`ws://127.0.0.1:${getHarness().port}`, {
-    headers: { origin: `http://127.0.0.1:${getHarness().port}` },
-  });
-  trackConnectChallengeNonce(ws);
-  await new Promise<void>((resolve) => ws.once("open", resolve));
-  await connectOk(ws, {
+async function openPermissionClient(
+  client: Pick<PermissionClient, "id" | "mode"> & { scopes?: string[] },
+) {
+  return await connectWebchatClient({
+    port: getHarness().port,
+    scopes: client.scopes,
     client: {
-      id: GATEWAY_CLIENT_IDS.WEBCHAT_UI,
+      id: client.id,
       version: "1.0.0",
       platform: "test",
-      mode: GATEWAY_CLIENT_MODES.UI,
-    },
-    scopes: ["operator.admin"],
-  });
-
-  const patched = await rpcReq(ws, "sessions.patch", {
-    key: "agent:main:discord:group:dev",
-    label: "should-fail",
-  });
-  expect(patched.ok).toBe(false);
-  expect(patched.error?.message ?? "").toMatch(/webchat clients cannot patch sessions/i);
-
-  const deleted = await rpcReq(ws, "sessions.delete", {
-    key: "agent:main:discord:group:dev",
-  });
-  expect(deleted.ok).toBe(false);
-  expect(deleted.error?.message ?? "").toMatch(/webchat clients cannot delete sessions/i);
-
-  const compacted = await rpcReq(ws, "sessions.compact", {
-    key: "main",
-    maxLines: 3,
-  });
-  expect(compacted.ok).toBe(false);
-  expect(compacted.error?.message ?? "").toMatch(/webchat clients cannot compact sessions/i);
-
-  const restored = await rpcReq(ws, "sessions.compaction.restore", {
-    key: "main",
-    checkpointId: "checkpoint-1",
-  });
-  expect(restored.ok).toBe(false);
-  expect(restored.error?.message ?? "").toMatch(/webchat clients cannot restore sessions/i);
-
-  ws.close();
-});
-
-test("session:patch hook fires with correct context", async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-patch-hook-"));
-  const storePath = path.join(dir, "sessions.json");
-  testState.sessionStorePath = storePath;
-
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry("sess-hook-test", {
-        label: "original-label",
-      }),
+      mode: client.mode,
     },
   });
+}
 
-  sessionHookMocks.triggerInternalHook.mockClear();
+async function createPermissionSessionStore() {
+  const { storePath } = await createSessionStoreDir();
+  await upsertSessionEntryCore(
+    { sessionKey: "agent:main:main", storePath },
+    sessionStoreEntry("main-session"),
+  );
+  await upsertSessionEntryCore(
+    { sessionKey: "agent:main:discord:group:dev", storePath },
+    sessionStoreEntry("sess-group"),
+  );
+  return { storePath };
+}
 
-  const { ws } = await openClient();
+test("webchat session mutations follow operator scope policy", async () => {
+  const { storePath } = await createPermissionSessionStore();
 
-  const patched = await rpcReq(ws, "sessions.patch", {
-    key: "agent:main:main",
-    label: "updated-label",
+  const ws = await openPermissionClient({
+    id: GATEWAY_CLIENT_IDS.WEBCHAT_UI,
+    mode: GATEWAY_CLIENT_MODES.UI,
+    scopes: ["operator.read"],
   });
 
-  expect(patched.ok).toBe(true);
-  const event = requireRecord(requireFirstCallArg(sessionHookMocks.triggerInternalHook));
-  expect(event.type).toBe("session");
-  expect(event.action).toBe("patch");
-  expect(event.sessionKey).toBe("agent:main:main");
-  const context = requireRecord(event.context);
-  const sessionEntry = requireRecord(context.sessionEntry);
-  expect(sessionEntry.sessionId).toBe("sess-hook-test");
-  expect(sessionEntry.label).toBe("updated-label");
-  expect(requireRecord(context.patch).label).toBe("updated-label");
-  requireRecord(context.cfg);
+  const deniedMutations = [
+    [
+      "sessions.patch",
+      { key: "agent:main:discord:group:dev", label: "should-fail" },
+      "operator.write",
+    ],
+    ["sessions.delete", { key: "agent:main:discord:group:dev" }, "operator.admin"],
+    ["sessions.compact", { key: "main", maxLines: 3 }, "operator.admin"],
+    [
+      "sessions.branches.switch",
+      { sessionKey: "agent:main:main", leafEntryId: "entry-1" },
+      "operator.admin",
+    ],
+    ["sessions.rewind", { sessionKey: "agent:main:main", entryId: "entry-1" }, "operator.admin"],
+    ["sessions.fork", { sessionKey: "agent:main:main", entryId: "entry-1" }, "operator.write"],
+    ["sessions.dispatch", { key: "agent:main:main", profileId: "test" }, "operator.admin"],
+    ["sessions.dispatch", { key: "agent:main:main", deviceId: "device-1" }, "operator.write"],
+    ["sessions.reclaim", { key: "agent:main:main" }, "operator.write"],
+    [
+      "sessions.move",
+      {
+        key: "agent:main:main",
+        expected: { generation: 1, environmentId: "environment-1", ownerEpoch: 1 },
+        target: { kind: "gateway" },
+      },
+      "operator.write",
+    ],
+    [
+      "sessions.pluginPatch",
+      { key: "agent:main:main", pluginId: "test-plugin", namespace: "test", value: true },
+      "operator.admin",
+    ],
+  ] as const;
+  for (const [method, params, missingScope] of deniedMutations) {
+    const result = await rpcReq(ws, method, params);
+    expect(result.ok, method).toBe(false);
+    expect(result.error, method).toEqual({
+      code: "FORBIDDEN",
+      message: `missing scope: ${missingScope}`,
+      details: { code: "MISSING_SCOPE", missingScope, requiredScopes: [missingScope] },
+    });
+  }
 
-  ws.close();
-});
+  expect(
+    listSessionEntriesCore({ storePath })
+      .map(({ sessionKey }) => sessionKey)
+      .toSorted(),
+  ).toEqual(["agent:main:discord:group:dev", "agent:main:main"]);
 
-test("session:patch hook does not fire for webchat clients", async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-webchat-hook-"));
-  const storePath = path.join(dir, "sessions.json");
-  testState.sessionStorePath = storePath;
-
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry("sess-webchat-test"),
-    },
-  });
-
-  sessionHookMocks.triggerInternalHook.mockClear();
-
-  const ws = new WebSocket(`ws://127.0.0.1:${getHarness().port}`, {
-    headers: { origin: `http://127.0.0.1:${getHarness().port}` },
-  });
-  trackConnectChallengeNonce(ws);
-  await new Promise<void>((resolve) => ws.once("open", resolve));
-  await connectOk(ws, {
-    client: {
-      id: GATEWAY_CLIENT_IDS.WEBCHAT_UI,
-      version: "1.0.0",
-      platform: "test",
-      mode: GATEWAY_CLIENT_MODES.UI,
-    },
-    scopes: ["operator.admin"],
-  });
-
-  const patched = await rpcReq(ws, "sessions.patch", {
-    key: "agent:main:main",
-    label: "should-not-trigger-hook",
-  });
-
-  expect(patched.ok).toBe(false);
   expect(sessionHookMocks.triggerInternalHook).not.toHaveBeenCalled();
-
-  ws.close();
-});
-
-test("session:patch hook only fires after successful patch", async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-success-hook-"));
-  const storePath = path.join(dir, "sessions.json");
-  testState.sessionStorePath = storePath;
-
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry("sess-success-test"),
-    },
-  });
-
-  const { ws } = await openClient();
-
-  sessionHookMocks.triggerInternalHook.mockClear();
-
-  // Test 1: Invalid patch (missing key) - hook should not fire
-  const invalidPatch = await rpcReq(ws, "sessions.patch", {
-    // Missing required 'key' parameter
-    label: "should-fail",
-  });
-
-  expect(invalidPatch.ok).toBe(false);
-  expect(sessionHookMocks.triggerInternalHook).not.toHaveBeenCalled();
-
-  // Test 2: Valid patch - hook should fire
-  const validPatch = await rpcReq(ws, "sessions.patch", {
-    key: "agent:main:main",
-    label: "should-succeed",
-  });
-
-  expect(validPatch.ok).toBe(true);
-  const event = requireRecord(requireFirstCallArg(sessionHookMocks.triggerInternalHook));
-  expect(event.type).toBe("session");
-  expect(event.action).toBe("patch");
-
-  ws.close();
-});
-
-test("session:patch skips clone and dispatch when no hooks listen", async () => {
-  const structuredCloneSpy = vi.spyOn(globalThis, "structuredClone");
-  sessionHookMocks.hasInternalHookListeners.mockReturnValue(false);
-
-  const { ws } = await openClient();
-  const patched = await rpcReq(ws, "sessions.patch", {
-    key: "agent:main:main",
-    label: "no-hook-listener",
-  });
-
-  expect(patched.ok).toBe(true);
-  const clonedHookContexts = structuredCloneSpy.mock.calls.filter(([value]) => {
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-      return false;
-    }
-    const record = value as Record<string, unknown>;
-    return Boolean(record.cfg && record.patch && record.sessionEntry);
-  });
-  expect(clonedHookContexts).toHaveLength(0);
-  expect(sessionHookMocks.triggerInternalHook).not.toHaveBeenCalled();
-
-  structuredCloneSpy.mockRestore();
   ws.close();
 });
 
@@ -294,54 +157,276 @@ test("session:patch hook mutations cannot change the response path", async () =>
   });
 
   expect(patched.ok).toBe(true);
+  expect(sessionHookMocks.triggerInternalHook).toHaveBeenCalledOnce();
+  expect(sessionHookMocks.triggerInternalHook.mock.calls[0]?.[0]).toMatchObject({
+    type: "session",
+    action: "patch",
+    sessionKey: "agent:main:main",
+    context: {
+      sessionEntry: { sessionId: "sess-cfg-isolation-test", label: "cfg-isolation" },
+      patch: { label: "cfg-isolation" },
+    },
+  });
   expect(patched.payload?.resolved).toEqual({
     modelProvider: "anthropic",
     model: "claude-opus-4-6",
-    agentRuntime: { id: "auto", source: "implicit" },
+    agentRuntime: { id: "openclaw", source: "implicit" },
+    runtimeSelectionLocked: false,
   });
   expect(patched.payload?.entry.label).toBe("cfg-isolation");
 
   ws.close();
 });
 
-test("control-ui client can delete sessions even in webchat mode", async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-control-ui-delete-"));
-  const storePath = path.join(dir, "sessions.json");
-  testState.sessionStorePath = storePath;
-
+test("sessions.patch stores and clears rootless modes while preserving recorded roots", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const pinnedSessionKey = "agent:main:dashboard:pinned-permission";
   await writeSessionStore({
     entries: {
-      main: sessionStoreEntry("sess-main"),
-      "discord:group:dev": sessionStoreEntry("sess-group"),
+      main: sessionStoreEntry("sess-rootless-permission"),
+      [pinnedSessionKey]: sessionStoreEntry("sess-pinned-permission", {
+        sessionRoot: "/workspace/project",
+      }),
     },
   });
 
-  const ws = new WebSocket(`ws://127.0.0.1:${getHarness().port}`, {
-    headers: { origin: `http://127.0.0.1:${getHarness().port}` },
+  const { ws } = await openClient();
+  try {
+    const patched = await rpcReq(ws, "sessions.patch", {
+      key: "agent:main:main",
+      permissionMode: "guarded",
+    });
+
+    expect(patched).toMatchObject({ ok: true });
+    expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+      permissionMode: "guarded",
+    });
+
+    const cleared = await rpcReq(ws, "sessions.patch", {
+      key: "agent:main:main",
+      permissionMode: null,
+    });
+    expect(cleared).toMatchObject({ ok: true });
+    expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).not.toHaveProperty(
+      "permissionMode",
+    );
+
+    const pinned = await rpcReq(ws, "sessions.patch", {
+      key: pinnedSessionKey,
+      permissionMode: "workspace",
+    });
+    expect(pinned).toMatchObject({ ok: true });
+    expect(loadSessionEntry({ sessionKey: pinnedSessionKey, storePath })).toMatchObject({
+      permissionMode: "workspace",
+      sessionRoot: "/workspace/project",
+    });
+  } finally {
+    ws.close();
+  }
+});
+
+test("createGatewaySession stores a permission mode without a prepared session root", async () => {
+  await createSessionStoreDir();
+  const { createGatewaySession } = await import("./session-create-service.js");
+
+  const created = await createGatewaySession({
+    cfg: getRuntimeConfig(),
+    agentId: "main",
+    commandSource: "test",
+    permissionMode: "guarded",
   });
-  trackConnectChallengeNonce(ws);
-  await new Promise<void>((resolve) => ws.once("open", resolve));
-  await connectOk(ws, {
-    client: {
-      id: GATEWAY_CLIENT_IDS.CONTROL_UI,
-      version: "1.0.0",
-      platform: "test",
-      mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+
+  expect(created).toMatchObject({
+    ok: true,
+    entry: { permissionMode: "guarded" },
+  });
+  expect(created).not.toHaveProperty("entry.sessionRoot");
+});
+
+test("sessions.reset applies a rootless permission mode and interrupts admitted work", async () => {
+  const { storePath } = await seedActiveMainSession();
+  let interrupted = false;
+  let releaseAdmission = () => {};
+  const admissionLease = await beginSessionWorkAdmission({
+    scope: storePath,
+    identities: ["agent:main:main", "sess-main"],
+    assertAllowed: () => {},
+    onInterrupt: () => {
+      interrupted = true;
+      releaseAdmission();
     },
-    scopes: ["operator.admin"],
+  });
+  releaseAdmission = admissionLease.release;
+
+  try {
+    const { performGatewaySessionReset } = await import("./session-reset-service.js");
+    const reset = await performGatewaySessionReset({
+      key: "main",
+      reason: "reset",
+      commandSource: "gateway:agent",
+      workerPlacementContext: {},
+      permissionMode: "guarded",
+    });
+
+    expect(reset).toMatchObject({
+      ok: true,
+      entry: { permissionMode: "guarded" },
+    });
+    expect(interrupted).toBe(true);
+    expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+      permissionMode: "guarded",
+    });
+  } finally {
+    admissionLease.release();
+  }
+});
+
+test("sessions.reset preserves a persisted rootless permission mode", async () => {
+  await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-legacy-rootless-permission", { permissionMode: "full" }),
+    },
+  });
+  const { performGatewaySessionReset } = await import("./session-reset-service.js");
+
+  const reset = await performGatewaySessionReset({
+    key: "main",
+    reason: "reset",
+    commandSource: "gateway:agent",
+    workerPlacementContext: {},
   });
 
-  const deleted = await rpcReq<{ ok: true; deleted: boolean }>(ws, "sessions.delete", {
-    key: "agent:main:discord:group:dev",
+  expect(reset).toMatchObject({
+    ok: true,
+    entry: { permissionMode: "full" },
   });
-  expect(deleted.ok).toBe(true);
-  expect(deleted.payload?.deleted).toBe(true);
+  if (reset.ok && "entry" in reset) {
+    expect(reset.entry.sessionRoot).toBeUndefined();
+  }
+});
 
-  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-    string,
-    { sessionId?: string }
-  >;
-  expect(store["agent:main:discord:group:dev"]).toBeUndefined();
+type SpeedFields = { fastMode?: boolean | string; effectiveFastMode?: boolean | string };
 
-  ws.close();
+test("session wire speed negotiation preserves canonical ultrafast across legacy and current clients", async () => {
+  const { storePath } = await createSessionStoreDir();
+  testState.agentConfig = { fastModeDefault: "ultrafast", model: "openai/gpt-test-a" };
+  agentDiscoveryMock.enabled = true;
+  agentDiscoveryMock.models = [{ id: "gpt-test-a", name: "Speed fixture", provider: "openai" }];
+  await writeSessionStore({
+    entries: { main: sessionStoreEntry("speed-session", { fastMode: "ultrafast" }) },
+  });
+  const legacy = await openClient({ caps: [] });
+  const current = await openClient({ caps: ["ultrafast"] });
+  const key = "agent:main:main";
+  try {
+    for (const [ws, expected] of [
+      [legacy.ws, true],
+      [current.ws, "ultrafast"],
+    ] as const) {
+      const list = await rpcReq<{ sessions: Array<SpeedFields & { key: string }> }>(
+        ws,
+        "sessions.list",
+        {},
+      );
+      expect(list.ok).toBe(true);
+      expect(list.payload?.sessions.find((row) => row.key === key)).toMatchObject({
+        fastMode: expected,
+        effectiveFastMode: expected,
+      });
+      const described = await rpcReq<{ session: SpeedFields }>(ws, "sessions.describe", { key });
+      expect(described.ok).toBe(true);
+      expect(described.payload?.session).toMatchObject({
+        fastMode: expected,
+        effectiveFastMode: expected,
+      });
+      for (const method of ["models.list", "chat.metadata"] as const) {
+        const catalog = await rpcReq<{ models: SpeedFields[] }>(
+          ws,
+          method,
+          method === "models.list" ? { preparedOnly: true } : { sessionKey: key },
+        );
+        expect(catalog.ok, JSON.stringify(catalog.error)).toBe(true);
+        expect(catalog.payload?.models.length).toBeGreaterThan(0);
+        expect(catalog.payload?.models.every((model) => model.effectiveFastMode === expected)).toBe(
+          true,
+        );
+      }
+      for (const method of ["chat.history", "chat.startup"] as const) {
+        const history = await rpcReq<
+          SpeedFields & { sessionInfo: SpeedFields; metadata?: { models?: SpeedFields[] } }
+        >(ws, method, {
+          sessionKey: key,
+        });
+        expect(history.ok, JSON.stringify(history.error)).toBe(true);
+        expect(history.payload?.fastMode).toBe(expected);
+        expect(history.payload?.sessionInfo).toMatchObject({
+          fastMode: expected,
+          effectiveFastMode: expected,
+        });
+      }
+      const unsaved = await rpcReq<{ sessionInfo: SpeedFields }>(ws, "chat.history", {
+        sessionKey: "agent:main:unsaved-speed",
+      });
+      expect(unsaved.ok, JSON.stringify(unsaved.error)).toBe(true);
+      expect(unsaved.payload?.sessionInfo.effectiveFastMode).toBe(expected);
+      const patch = await rpcReq<{ entry: SpeedFields }>(ws, "sessions.patch", {
+        key,
+        label: "Speed compatibility",
+      });
+      expect(patch.ok, JSON.stringify(patch.error)).toBe(true);
+      expect(patch.payload?.entry.fastMode).toBe(expected);
+      expect((await rpcReq(ws, "sessions.subscribe", {})).ok).toBe(true);
+    }
+    const changed = [legacy.ws, current.ws].map((ws) =>
+      onceMessage(
+        ws,
+        (message) =>
+          message.type === "event" &&
+          message.event === "sessions.changed" &&
+          message.payload?.reason === "patch",
+      ),
+    );
+    expect(
+      (await rpcReq(current.ws, "sessions.patch", { key, label: "Renamed speed session" })).ok,
+    ).toBe(true);
+    for (const [index, message] of (await Promise.all(changed)).entries()) {
+      const expected = index === 0 ? true : "ultrafast";
+      expect(message.payload).toMatchObject({
+        fastMode: expected,
+        effectiveFastMode: expected,
+        session: { fastMode: expected, effectiveFastMode: expected },
+      });
+    }
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.fastMode).toBe(
+      "ultrafast",
+    );
+    const createdKey = "agent:main:dashboard:speed-created";
+    for (const [ws, expected] of [
+      [current.ws, "ultrafast"],
+      [legacy.ws, true],
+      [current.ws, "ultrafast"],
+    ] as const) {
+      const created = await rpcReq<{ entry: SpeedFields }>(ws, "sessions.create", {
+        agentId: "main",
+        key: createdKey,
+        fastMode: "ultrafast",
+        idempotencyKey: "speed-create-once",
+      });
+      expect(created.ok, JSON.stringify(created.error)).toBe(true);
+      expect(created.payload?.entry.fastMode).toBe(expected);
+    }
+    expect(loadSessionEntry({ agentId: "main", sessionKey: createdKey, storePath })?.fastMode).toBe(
+      "ultrafast",
+    );
+    const reset = await rpcReq<{ entry: SpeedFields }>(legacy.ws, "sessions.reset", { key });
+    expect(reset.ok, JSON.stringify(reset.error)).toBe(true);
+    expect(reset.payload?.entry.fastMode).toBe(true);
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.fastMode).toBe(
+      "ultrafast",
+    );
+  } finally {
+    legacy.ws.close();
+    current.ws.close();
+  }
 });

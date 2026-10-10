@@ -1,20 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import { collectFilesSync, isCodeFile, relativeToCwd } from "./check-file-utils.js";
-import { classifyBundledExtensionSourcePath } from "./lib/extension-source-classifier.mjs";
+import { classifyBundledExtensionSourcePath } from "./lib/extension-source-classifier.mts";
 
 const FORBIDDEN_REPO_SRC_IMPORT = /["'](?:\.\.\/)+(?:src\/)[^"']+["']/;
 
-function collectExtensionSourceFiles(rootDir: string): string[] {
-  return collectFilesSync(rootDir, {
+function main() {
+  const extensionsDir = path.join(process.cwd(), "extensions");
+  const files = collectFilesSync(extensionsDir, {
     includeFile: (filePath) =>
       isCodeFile(filePath) && classifyBundledExtensionSourcePath(filePath).isProductionSource,
   });
-}
-
-function main() {
-  const extensionsDir = path.join(process.cwd(), "extensions");
-  const files = collectExtensionSourceFiles(extensionsDir);
   const offenders: string[] = [];
 
   for (const file of files) {

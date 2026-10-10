@@ -1,3 +1,4 @@
+import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
 import {
   addWildcardAllowFrom,
   DEFAULT_ACCOUNT_ID,
@@ -8,11 +9,13 @@ import {
   normalizeAccountId,
   patchScopedAccountConfig,
   createSetupTranslator,
+  splitSetupEntries,
   type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
   type DmPolicy,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/setup";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   checkZcaAuthenticated,
   listZalouserAccountIds,
@@ -37,13 +40,6 @@ const ZALOUSER_DM_ACCESS_TITLE = t("wizard.zalouser.dmAccessTitle");
 const ZALOUSER_ALLOWLIST_TITLE = t("wizard.zalouser.allowlistTitle");
 const ZALOUSER_GROUPS_TITLE = t("wizard.zalouser.groupsTitle");
 
-function parseZalouserEntries(raw: string): string[] {
-  return raw
-    .split(/[\n,;]+/g)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-}
-
 function setZalouserAccountScopedConfig(
   cfg: OpenClawConfig,
   accountId: string,
@@ -64,47 +60,17 @@ function setZalouserDmPolicy(
   accountId: string,
   policy: DmPolicy,
 ): OpenClawConfig {
-  const resolvedAccountId = normalizeAccountId(accountId) ?? DEFAULT_ACCOUNT_ID;
+  const resolvedAccountId = normalizeAccountId(accountId);
   const resolved = resolveZalouserAccountSync({ cfg, accountId: resolvedAccountId });
-  return setZalouserAccountScopedConfig(
-    cfg,
-    resolvedAccountId,
-    {
-      dmPolicy: policy,
-      ...(policy === "open" ? { allowFrom: addWildcardAllowFrom(resolved.config.allowFrom) } : {}),
-    },
-    {
-      dmPolicy: policy,
-      ...(policy === "open" ? { allowFrom: addWildcardAllowFrom(resolved.config.allowFrom) } : {}),
-    },
-  );
-}
-
-function setZalouserGroupPolicy(
-  cfg: OpenClawConfig,
-  accountId: string,
-  groupPolicy: "open" | "allowlist" | "disabled",
-): OpenClawConfig {
-  return setZalouserAccountScopedConfig(cfg, accountId, {
-    groupPolicy,
-  });
-}
-
-function setZalouserGroupAllowlist(
-  cfg: OpenClawConfig,
-  accountId: string,
-  groupKeys: string[],
-): OpenClawConfig {
-  const groups = Object.fromEntries(
-    groupKeys.map((key) => [key, { enabled: true, requireMention: true }]),
-  );
-  return setZalouserAccountScopedConfig(cfg, accountId, {
-    groups,
+  return setZalouserAccountScopedConfig(cfg, resolvedAccountId, {
+    dmPolicy: policy,
+    ...(policy === "open" ? { allowFrom: addWildcardAllowFrom(resolved.config.allowFrom) } : {}),
   });
 }
 
 function ensureZalouserPluginEnabled(cfg: OpenClawConfig): OpenClawConfig {
-  const next: OpenClawConfig = {
+  const allow = cfg.plugins?.allow;
+  return {
     ...cfg,
     plugins: {
       ...cfg.plugins,
@@ -115,34 +81,9 @@ function ensureZalouserPluginEnabled(cfg: OpenClawConfig): OpenClawConfig {
           enabled: true,
         },
       },
+      ...(Array.isArray(allow) && !allow.includes(channel) ? { allow: [...allow, channel] } : {}),
     },
   };
-  const allow = next.plugins?.allow;
-  if (!Array.isArray(allow) || allow.includes(channel)) {
-    return next;
-  }
-  return {
-    ...next,
-    plugins: {
-      ...next.plugins,
-      allow: [...allow, channel],
-    },
-  };
-}
-
-async function noteZalouserHelp(
-  prompter: Parameters<NonNullable<ChannelSetupWizard["prepare"]>>[0]["prompter"],
-): Promise<void> {
-  await prompter.note(
-    [
-      t("wizard.zalouser.helpQrLogin"),
-      "",
-      t("wizard.zalouser.helpZcaJs"),
-      "",
-      `Docs: ${formatDocsLink("/channels/zalouser", "zalouser")}`,
-    ].join("\n"),
-    t("wizard.zalouser.setupTitle"),
-  );
 }
 
 async function promptZalouserAllowFrom(params: {
@@ -160,7 +101,7 @@ async function promptZalouserAllowFrom(params: {
       placeholder: ZALOUSER_ALLOW_FROM_PLACEHOLDER,
       initialValue: existingAllowFrom.length > 0 ? existingAllowFrom.join(", ") : undefined,
     });
-    const parts = parseZalouserEntries(entry);
+    const parts = splitSetupEntries(entry);
     if (parts.length === 0) {
       await prompter.note(
         [
@@ -180,6 +121,7 @@ async function promptZalouserAllowFrom(params: {
     const resolvedEntries = await resolveZaloAllowFromEntries({
       profile: resolved.profile,
       entries: parts,
+      credentialPersistence: "read-only",
     });
 
     const unresolved = resolvedEntries.filter((item) => !item.resolved).map((item) => item.input);
@@ -210,40 +152,25 @@ async function promptZalouserAllowFrom(params: {
   }
 }
 
-const zalouserDmPolicy: ChannelSetupDmPolicy = {
+const zalouserDmPolicy = createChannelDmPolicy({
   label: "Zalo Personal",
   channel,
-  policyKey: "channels.zalouser.dmPolicy",
-  allowFromKey: "channels.zalouser.allowFrom",
-  resolveConfigKeys: (cfg, accountId) =>
-    (accountId ?? resolveDefaultZalouserAccountId(cfg)) !== DEFAULT_ACCOUNT_ID
-      ? {
-          policyKey: `channels.zalouser.accounts.${accountId ?? resolveDefaultZalouserAccountId(cfg)}.dmPolicy`,
-          allowFromKey: `channels.zalouser.accounts.${accountId ?? resolveDefaultZalouserAccountId(cfg)}.allowFrom`,
-        }
-      : {
-          policyKey: "channels.zalouser.dmPolicy",
-          allowFromKey: "channels.zalouser.allowFrom",
-        },
-  getCurrent: (cfg, accountId) =>
+  resolveAccount: (cfg, accountId) =>
     resolveZalouserAccountSync({
       cfg,
       accountId: accountId ?? resolveDefaultZalouserAccountId(cfg),
-    }).config.dmPolicy ?? "pairing",
-  setPolicy: (cfg, policy, accountId) =>
-    setZalouserDmPolicy(cfg, accountId ?? resolveDefaultZalouserAccountId(cfg), policy),
+    }),
+  applyPatch: ({ cfg, account, patch }) =>
+    setZalouserAccountScopedConfig(cfg, account.accountId, patch, patch),
   promptAllowFrom: async ({ cfg, prompter, accountId }) => {
-    const id =
-      accountId && normalizeAccountId(accountId)
-        ? (normalizeAccountId(accountId) ?? DEFAULT_ACCOUNT_ID)
-        : resolveDefaultZalouserAccountId(cfg);
+    const id = accountId ? normalizeAccountId(accountId) : resolveDefaultZalouserAccountId(cfg);
     return await promptZalouserAllowFrom({
-      cfg: cfg,
+      cfg,
       prompter,
       accountId: id,
     });
   },
-};
+});
 
 async function promptZalouserQuickstartDmPolicy(params: {
   cfg: OpenClawConfig;
@@ -306,14 +233,17 @@ export const zalouserSetupWizard: ChannelSetupWizard = {
       const ids = accountId ? [accountId] : listZalouserAccountIds(cfg);
       for (const resolvedAccountId of ids) {
         const account = resolveZalouserAccountSync({ cfg, accountId: resolvedAccountId });
-        if (await checkZcaAuthenticated(account.profile)) {
+        if (
+          await checkZcaAuthenticated(account.profile, {
+            credentialPersistence: "read-only",
+          })
+        ) {
           return true;
         }
       }
       return false;
     },
-    resolveStatusLines: async ({ cfg, accountId, configured }) => {
-      void cfg;
+    resolveStatusLines: async ({ accountId, configured }) => {
       const label =
         accountId && accountId !== DEFAULT_ACCOUNT_ID
           ? `Zalo Personal (${accountId})`
@@ -324,76 +254,80 @@ export const zalouserSetupWizard: ChannelSetupWizard = {
   prepare: async ({ cfg, accountId, prompter, options }) => {
     let next = cfg;
     const account = resolveZalouserAccountSync({ cfg: next, accountId });
-    const alreadyAuthenticated = await checkZcaAuthenticated(account.profile);
+    const alreadyAuthenticated = await checkZcaAuthenticated(account.profile, {
+      credentialPersistence: "read-only",
+    });
 
+    let wantsLogin: boolean;
     if (!alreadyAuthenticated) {
-      await noteZalouserHelp(prompter);
-      const wantsLogin = await prompter.confirm({
+      await prompter.note(
+        [
+          t("wizard.zalouser.helpQrLogin"),
+          "",
+          t("wizard.zalouser.helpZcaJs"),
+          "",
+          `Docs: ${formatDocsLink("/channels/zalouser", "zalouser")}`,
+        ].join("\n"),
+        t("wizard.zalouser.setupTitle"),
+      );
+      wantsLogin = await prompter.confirm({
         message: t("wizard.zalouser.loginQrPrompt"),
         initialValue: true,
       });
-
-      if (wantsLogin) {
-        const start = await startZaloQrLogin({ profile: account.profile, timeoutMs: 35_000 });
-        if (start.qrDataUrl) {
-          const qrPath = await writeQrDataUrlToTempFile(start.qrDataUrl, account.profile);
-          await prompter.note(
-            [
-              start.message,
-              qrPath
-                ? t("wizard.zalouser.qrImageSaved", { path: qrPath })
-                : t("wizard.zalouser.qrImageWriteFailed"),
-              t("wizard.zalouser.scanApproveContinue"),
-            ].join("\n"),
-            t("wizard.zalouser.qrLoginTitle"),
-          );
-          const scanned = await prompter.confirm({
-            message: t("wizard.zalouser.qrScannedPrompt"),
-            initialValue: true,
-          });
-          if (scanned) {
-            const waited = await waitForZaloQrLogin({
-              profile: account.profile,
-              timeoutMs: 120_000,
-            });
-            await prompter.note(
-              waited.message,
-              waited.connected ? t("common.done") : t("wizard.zalouser.loginPendingTitle"),
-            );
-          }
-        } else {
-          await prompter.note(start.message, t("wizard.zalouser.loginPendingTitle"));
-        }
-      }
     } else {
-      const keepSession = await prompter.confirm({
+      wantsLogin = !(await prompter.confirm({
         message: t("wizard.zalouser.keepSessionPrompt"),
         initialValue: true,
-      });
-      if (!keepSession) {
-        await logoutZaloProfile(account.profile);
-        const start = await startZaloQrLogin({
-          profile: account.profile,
-          force: true,
-          timeoutMs: 35_000,
+      }));
+    }
+
+    if (wantsLogin) {
+      if (alreadyAuthenticated) {
+        await options?.beforePersistentEffect?.();
+        await logoutZaloProfile(account.profile, {
+          assertCurrent: options?.assertPersistentEffectCurrent,
         });
-        if (start.qrDataUrl) {
-          const qrPath = await writeQrDataUrlToTempFile(start.qrDataUrl, account.profile);
-          await prompter.note(
-            [
+      }
+      await options?.beforePersistentEffect?.();
+      const start = await startZaloQrLogin({
+        profile: account.profile,
+        ...(alreadyAuthenticated ? { force: true } : {}),
+        timeoutMs: 35_000,
+        ...(options?.beforePersistentEffect
+          ? { beforeCredentialPersistence: options.beforePersistentEffect }
+          : {}),
+        ...(options?.assertPersistentEffectCurrent
+          ? { assertCredentialPersistenceCurrent: options.assertPersistentEffectCurrent }
+          : {}),
+      });
+      if (start.qrDataUrl) {
+        const qrPath = await writeQrDataUrlToTempFile(start.qrDataUrl, account.profile);
+        const savedQrNote = qrPath
+          ? t("wizard.zalouser.qrImageSaved", { path: qrPath })
+          : undefined;
+        const qrNotes = alreadyAuthenticated
+          ? [start.message, savedQrNote].filter(Boolean)
+          : [
               start.message,
-              qrPath ? t("wizard.zalouser.qrImageSaved", { path: qrPath }) : undefined,
-            ]
-              .filter(Boolean)
-              .join("\n"),
-            t("wizard.zalouser.qrLoginTitle"),
-          );
+              savedQrNote ?? t("wizard.zalouser.qrImageWriteFailed"),
+              t("wizard.zalouser.scanApproveContinue"),
+            ];
+        await prompter.note(qrNotes.join("\n"), t("wizard.zalouser.qrLoginTitle"));
+        const scanned =
+          alreadyAuthenticated ||
+          (await prompter.confirm({
+            message: t("wizard.zalouser.qrScannedPrompt"),
+            initialValue: true,
+          }));
+        if (scanned) {
           const waited = await waitForZaloQrLogin({ profile: account.profile, timeoutMs: 120_000 });
           await prompter.note(
             waited.message,
             waited.connected ? t("common.done") : t("wizard.zalouser.loginPendingTitle"),
           );
         }
+      } else if (!alreadyAuthenticated) {
+        await prompter.note(start.message, t("wizard.zalouser.loginPendingTitle"));
       }
     }
 
@@ -424,7 +358,8 @@ export const zalouserSetupWizard: ChannelSetupWizard = {
       Object.keys(resolveZalouserAccountSync({ cfg, accountId }).config.groups ?? {}),
     updatePrompt: ({ cfg, accountId }) =>
       Boolean(resolveZalouserAccountSync({ cfg, accountId }).config.groups),
-    setPolicy: ({ cfg, accountId, policy }) => setZalouserGroupPolicy(cfg, accountId, policy),
+    setPolicy: ({ cfg, accountId, policy }) =>
+      setZalouserAccountScopedConfig(cfg, accountId, { groupPolicy: policy }),
     resolveAllowlist: async ({ cfg, accountId, entries, prompter }) => {
       if (entries.length === 0) {
         await prompter.note(
@@ -440,17 +375,18 @@ export const zalouserSetupWizard: ChannelSetupWizard = {
         );
         return [];
       }
-      const updatedAccount = resolveZalouserAccountSync({ cfg: cfg, accountId });
+      const updatedAccount = resolveZalouserAccountSync({ cfg, accountId });
       try {
         const resolved = await resolveZaloGroupsByEntries({
           profile: updatedAccount.profile,
           entries,
+          credentialPersistence: "read-only",
         });
         const resolvedIds = resolved
           .filter((entry) => entry.resolved && entry.id)
           .map((entry) => entry.id as string);
         const unresolved = resolved.filter((entry) => !entry.resolved).map((entry) => entry.input);
-        const keys = [...resolvedIds, ...unresolved.map((entry) => entry.trim()).filter(Boolean)];
+        const keys = [...resolvedIds, ...normalizeStringEntries(unresolved)];
         const resolution = formatResolvedUnresolvedNote({
           resolved: resolvedIds,
           unresolved,
@@ -464,11 +400,15 @@ export const zalouserSetupWizard: ChannelSetupWizard = {
           t("wizard.zalouser.groupLookupFailed", { error: String(err) }),
           ZALOUSER_GROUPS_TITLE,
         );
-        return entries.map((entry) => entry.trim()).filter(Boolean);
+        return normalizeStringEntries(entries);
       }
     },
     applyAllowlist: ({ cfg, accountId, resolved }) =>
-      setZalouserGroupAllowlist(cfg, accountId, resolved as string[]),
+      setZalouserAccountScopedConfig(cfg, accountId, {
+        groups: Object.fromEntries(
+          (resolved as string[]).map((key) => [key, { enabled: true, requireMention: true }]),
+        ),
+      }),
   },
   finalize: async ({ cfg, accountId, forceAllowFrom, options, prompter }) => {
     let next = cfg;

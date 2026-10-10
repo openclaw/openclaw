@@ -1,9 +1,11 @@
+// State dir environment helpers isolate state paths during tests.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { captureEnv } from "../test-utils/env.js";
-import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 
+// OPENCLAW_STATE_DIR test helpers isolate stateful tests and restore the caller
+// environment even when session cleanup fails.
 export function snapshotStateDirEnv() {
   return captureEnv(["OPENCLAW_STATE_DIR"]);
 }
@@ -13,7 +15,7 @@ export function restoreStateDirEnv(snapshot: ReturnType<typeof snapshotStateDirE
 }
 
 export function setStateDirEnv(stateDir: string): void {
-  process.env.OPENCLAW_STATE_DIR = stateDir;
+  setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
 }
 
 export async function withStateDirEnv<T>(
@@ -21,15 +23,19 @@ export async function withStateDirEnv<T>(
   fn: (ctx: { tempRoot: string; stateDir: string }) => Promise<T>,
 ): Promise<T> {
   const snapshot = snapshotStateDirEnv();
+  const { cleanupSessionStateForTest } = await import("../test-utils/session-state-cleanup.js");
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  const stateDir = path.join(tempRoot, "state");
-  await fs.mkdir(stateDir, { recursive: true });
+  const requestedStateDir = path.join(tempRoot, "state");
+  await fs.mkdir(requestedStateDir, { recursive: true });
+  const stateDir = await fs.realpath(requestedStateDir);
   setStateDirEnv(stateDir);
   try {
     return await fn({ tempRoot, stateDir });
   } finally {
-    await cleanupSessionStateForTest().catch(() => undefined);
+    // Session state cleanup may race with assertions in failing tests; never let
+    // that cleanup failure hide the original test error or skip env restoration.
+    await cleanupSessionStateForTest({ stateDir }).catch(() => undefined);
     restoreStateDirEnv(snapshot);
-    await fs.rm(tempRoot, { recursive: true, force: true });
+    await fs.rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   }
 }

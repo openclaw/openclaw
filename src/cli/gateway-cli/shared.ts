@@ -1,3 +1,4 @@
+// Shared gateway CLI helpers for supervised-service stop guidance.
 import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
@@ -7,32 +8,30 @@ import { resolveGatewayService } from "../../daemon/service.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 
-function renderGatewayServiceStopHints(env: NodeJS.ProcessEnv = process.env): string[] {
+function renderGatewayServiceStopHints(): string[] {
+  const env = process.env;
   const profile = env.OPENCLAW_PROFILE;
+  const hints = [`Tip: ${formatCliCommand("openclaw gateway stop")}`];
   switch (process.platform) {
     case "darwin":
-      return [
-        `Tip: ${formatCliCommand("openclaw gateway stop")}`,
-        `Or: launchctl bootout gui/$UID/${resolveGatewayLaunchAgentLabel(profile)}`,
-      ];
+      hints.push(`Or: launchctl bootout gui/$UID/${resolveGatewayLaunchAgentLabel(profile)}`);
+      break;
     case "linux":
-      return [
-        `Tip: ${formatCliCommand("openclaw gateway stop")}`,
-        `Or: systemctl --user stop ${resolveGatewaySystemdServiceName(profile)}.service`,
-      ];
+      hints.push(`Or: systemctl --user stop ${resolveGatewaySystemdServiceName(profile)}.service`);
+      break;
     case "win32":
-      return [
-        `Tip: ${formatCliCommand("openclaw gateway stop")}`,
-        `Or: schtasks /End /TN "${resolveGatewayWindowsTaskName(profile)}"`,
-      ];
+      hints.push(`Or: schtasks /End /TN "${resolveGatewayWindowsTaskName(profile)}"`);
+      break;
     default:
-      return [`Tip: ${formatCliCommand("openclaw gateway stop")}`];
+      break;
   }
+  return hints;
 }
 
 export async function maybeExplainGatewayServiceStop() {
+  // Direct `gateway run` should not race a managed service on the same port.
   const service = resolveGatewayService();
-  let loaded: boolean | null = null;
+  let loaded: boolean | null;
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch {

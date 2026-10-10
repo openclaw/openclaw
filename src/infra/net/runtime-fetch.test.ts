@@ -1,6 +1,9 @@
+// Runtime fetch tests cover header normalization and FormData conversion before
+// calls reach undici's dispatcher-aware fetch.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchWithRuntimeDispatcher } from "./runtime-fetch.js";
-import { TEST_UNDICI_RUNTIME_DEPS_KEY } from "./undici-runtime.js";
+
+const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
 
 class RuntimeFormData {
   readonly records: Array<{
@@ -94,8 +97,7 @@ describe("fetchWithRuntimeDispatcher", () => {
 
   it("normalizes global FormData bodies into the runtime FormData implementation", async () => {
     const runtimeFetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      // init.body was rebuilt as RuntimeFormData by normalizeRuntimeFormData;
-      // BodyInit and RuntimeFormData live in separate type namespaces so a double cast is needed.
+      // BodyInit and RuntimeFormData live in separate type namespaces.
       const body = init?.body as unknown as RuntimeFormData;
       expect(body).toBeInstanceOf(RuntimeFormData);
       const modelRecord = body.records.find((record) => record.name === "model");

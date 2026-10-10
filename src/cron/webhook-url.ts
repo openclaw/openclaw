@@ -1,22 +1,14 @@
-function isAllowedWebhookProtocol(protocol: string) {
-  return protocol === "http:" || protocol === "https:";
-}
+import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
+/** Normalizes cron webhook URLs while rejecting empty, malformed, and non-HTTP(S) values. */
 export function normalizeHttpWebhookUrl(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return null;
   }
-  try {
-    const parsed = new URL(trimmed);
-    if (!isAllowedWebhookProtocol(parsed.protocol)) {
-      return null;
-    }
-    return trimmed;
-  } catch {
-    return null;
-  }
+  const parsed = URL.parse(trimmed);
+  // Fetch rejects URL userinfo before dispatch. Fail at the shared boundary so
+  // validation and doctor migration do not preserve a target that cannot deliver.
+  return parsed && isHttpUrl(parsed) && !parsed.username && !parsed.password ? trimmed : null;
 }

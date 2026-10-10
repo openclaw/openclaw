@@ -1,24 +1,27 @@
 import { spawnSync } from "node:child_process";
+import path from "node:path";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { note } from "../terminal/note.js";
-import type { StatusSummary } from "./status.types.js";
+import type { HealthFinding } from "../flows/health-checks.js";
+import type { StatusSummary } from "../status/summary.js";
 
-export type LocalTuiProcess = {
-  pid: number;
-  command: string;
-};
+type LocalTuiProcess = NonNullable<ReturnType<typeof parsePsPidLine>>;
 
-type ProcessSignal = "SIGTERM" | "SIGKILL";
+const LOCAL_TUI_SUBCOMMANDS = new Set(["chat", "terminal", "tui"]);
+const WHATSAPP_RESPONSIVENESS_CHECK_ID = "core/doctor/whatsapp-responsiveness";
+const LOCAL_TUI_PROCESS_PROBE_TIMEOUT_MS = 1_000;
 
-type ProcessController = {
-  kill: (pid: number, signal: ProcessSignal | 0) => boolean;
-};
+function isLocalTuiCommand(command: string): boolean {
+  const argv = command.trim().split(/\s+/u).filter(Boolean);
+  const executable = path.basename(argv[0] ?? "").replace(/\.exe$/iu, "");
+  if (executable === "openclaw-tui") {
+    return true;
+  }
+  return executable === "openclaw" && LOCAL_TUI_SUBCOMMANDS.has(argv[1] ?? "");
+}
 
-const LOCAL_TUI_CMD_RE =
-  /(?:^|\s)(?:openclaw-tui|openclaw\s+tui|openclaw\s+chat|openclaw\s+terminal)(?:\s|$)/;
-
-function parsePsPidLine(line: string): LocalTuiProcess | null {
+function parsePsPidLine(line: string) {
   const match = line.match(/^\s*(\d+)\s+(.+)$/);
   if (!match) {
     return null;
@@ -28,34 +31,33 @@ function parsePsPidLine(line: string): LocalTuiProcess | null {
     return null;
   }
   const command = match[2]?.trim() ?? "";
-  if (!LOCAL_TUI_CMD_RE.test(command)) {
+  if (!isLocalTuiCommand(command)) {
     return null;
   }
   return { pid, command };
 }
 
-export function listLocalTuiProcesses(): LocalTuiProcess[] {
+/** Lists local OpenClaw TUI processes without inferring their Gateway or activity. */
+function listLocalTuiProcesses(): LocalTuiProcess[] {
   if (process.platform === "win32") {
     return [];
   }
   const ps = spawnSync("ps", ["-axo", "pid=,command="], {
     encoding: "utf8",
-    timeout: 1000,
+    killSignal: "SIGKILL",
+    timeout: LOCAL_TUI_PROCESS_PROBE_TIMEOUT_MS,
   });
   if (ps.error || ps.status !== 0 || typeof ps.stdout !== "string") {
     return [];
   }
-  const seen = new Set<number>();
-  const processes: LocalTuiProcess[] = [];
+  const processes = new Map<number, LocalTuiProcess>();
   for (const line of ps.stdout.split(/\r?\n/)) {
     const proc = parsePsPidLine(line);
-    if (!proc || seen.has(proc.pid)) {
-      continue;
+    if (proc && !processes.has(proc.pid)) {
+      processes.set(proc.pid, proc);
     }
-    seen.add(proc.pid);
-    processes.push(proc);
   }
-  return processes;
+  return [...processes.values()];
 }
 
 function hasWhatsappEnabled(cfg: OpenClawConfig): boolean {
@@ -63,115 +65,54 @@ function hasWhatsappEnabled(cfg: OpenClawConfig): boolean {
   if (!whatsapp || whatsapp.enabled === false) {
     return false;
   }
-  const accounts = whatsapp.accounts;
-  if (accounts && Object.keys(accounts).length > 0) {
-    return Object.values(accounts).some((account) => account?.enabled !== false);
-  }
-  return true;
+  const accounts = Object.values(whatsapp.accounts ?? {});
+  return accounts.length === 0 || accounts.some((account) => account?.enabled !== false);
 }
 
-function formatPidList(processes: LocalTuiProcess[]): string {
-  return processes.map((proc) => String(proc.pid)).join(", ");
-}
-
-function isProcessAlive(controller: ProcessController, pid: number): boolean {
-  try {
-    controller.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-export async function terminateLocalTuiProcesses(params: {
-  processes: LocalTuiProcess[];
-  controller?: ProcessController;
-  graceMs?: number;
-}): Promise<{ stopped: number[]; failed: number[] }> {
-  const controller = params.controller ?? process;
-  const graceMs = Math.max(0, params.graceMs ?? 500);
-  const stopped: number[] = [];
-  const failed: number[] = [];
-
-  for (const proc of params.processes) {
-    try {
-      controller.kill(proc.pid, "SIGTERM");
-    } catch {
-      // Already gone is success for this repair.
-    }
-  }
-  if (graceMs > 0) {
-    await sleep(graceMs);
-  }
-  for (const proc of params.processes) {
-    if (!isProcessAlive(controller, proc.pid)) {
-      stopped.push(proc.pid);
-      continue;
-    }
-    try {
-      controller.kill(proc.pid, "SIGKILL");
-    } catch {
-      // Already gone is still success.
-    }
-    if (isProcessAlive(controller, proc.pid)) {
-      failed.push(proc.pid);
-    } else {
-      stopped.push(proc.pid);
-    }
-  }
-  return { stopped, failed };
-}
-
-export async function noteWhatsappResponsivenessHealth(params: {
+/** Collects read-only structured findings for WhatsApp responsiveness pressure. */
+export function collectWhatsappResponsivenessHealthFindings(params: {
   cfg: OpenClawConfig;
   status?: Pick<StatusSummary, "eventLoop"> | null;
-  shouldRepair: boolean;
   listLocalTuiProcesses?: () => LocalTuiProcess[];
-  terminateLocalTuiProcesses?: typeof terminateLocalTuiProcesses;
-}): Promise<void> {
-  if (!hasWhatsappEnabled(params.cfg)) {
-    return;
+}): readonly HealthFinding[] {
+  if (!hasWhatsappEnabled(params.cfg) || params.status?.eventLoop?.degraded !== true) {
+    return [];
   }
 
-  const warnings: string[] = [];
   const tuiProcesses = (params.listLocalTuiProcesses ?? listLocalTuiProcesses)();
-  const eventLoop = params.status?.eventLoop;
-  const gatewayDegraded = eventLoop?.degraded === true;
-
-  if (gatewayDegraded && tuiProcesses.length > 0) {
-    warnings.push(
-      [
-        "Gateway event loop is degraded while local TUI clients are running.",
-        "WhatsApp replies can queue behind TUI startup/session refresh work.",
-        `Local TUI pids: ${formatPidList(tuiProcesses)}`,
-      ].join("\n"),
-    );
-    if (params.shouldRepair) {
-      const repair = await (params.terminateLocalTuiProcesses ?? terminateLocalTuiProcesses)({
-        processes: tuiProcesses,
-      });
-      const repairLines: string[] = [];
-      if (repair.stopped.length > 0) {
-        repairLines.push(`Stopped local TUI clients: ${repair.stopped.join(", ")}`);
-      }
-      if (repair.failed.length > 0) {
-        repairLines.push(`Could not stop local TUI clients: ${repair.failed.join(", ")}`);
-      }
-      if (repairLines.length > 0) {
-        warnings.push(repairLines.join("\n"));
-      }
-    } else {
-      warnings.push(
-        `Fix: close those TUI sessions, or run ${formatCliCommand("openclaw doctor --fix")}.`,
-      );
-    }
+  if (tuiProcesses.length === 0) {
+    return [];
   }
 
-  if (warnings.length > 0) {
-    note(warnings.join("\n\n"), "WhatsApp responsiveness");
+  return [
+    {
+      checkId: WHATSAPP_RESPONSIVENESS_CHECK_ID,
+      severity: "warning",
+      message:
+        "Gateway reports pressure, and local TUI clients were detected. This snapshot does not identify the source of the pressure.",
+      path: "channels.whatsapp",
+      target: tuiProcesses.map((proc) => String(proc.pid)).join(", "),
+      requirement: "local-tui-event-loop-pressure",
+      fixHint: `Inspect Gateway diagnostics with ${formatCliCommand(
+        "openclaw gateway diagnostics export",
+      )} before deciding whether to close clients.`,
+    },
+  ];
+}
+
+/** Renders the same advisory observations as the opt-in health check. */
+export function noteWhatsappResponsivenessHealth(
+  params: Parameters<typeof collectWhatsappResponsivenessHealthFindings>[0],
+): void {
+  const findings = collectWhatsappResponsivenessHealthFindings(params);
+  if (findings.length > 0) {
+    note(
+      findings
+        .map((finding) =>
+          [finding.message, `Local TUI pids: ${finding.target}`, finding.fixHint].join("\n"),
+        )
+        .join("\n\n"),
+      "WhatsApp responsiveness",
+    );
   }
 }

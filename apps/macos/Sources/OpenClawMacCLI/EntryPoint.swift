@@ -1,39 +1,68 @@
 import Foundation
 
-private struct RootCommand {
-    var name: String
-    var args: [String]
+enum RootCommandAction: Equatable {
+    case usage
+    case control([String])
+    case connect([String])
+    case configureRemote([String])
+    case discover([String])
+    case wizard([String])
+    case unknown(exitCode: Int32)
 }
 
 @main
 struct OpenClawMacCLI {
     static func main() async {
         let args = Array(CommandLine.arguments.dropFirst())
-        let command = parseRootCommand(args)
-        switch command?.name {
-        case nil:
+        let context: MacCLIContext
+        do {
+            context = try MacCLIContext(arguments: args)
+        } catch {
+            exitMacCLI(error, json: args.contains("--json"))
+        }
+        switch resolveRootCommandAction(context.arguments) {
+        case .usage:
             printUsage()
-        case "-h", "--help", "help":
-            printUsage()
-        case "connect":
-            await runConnect(command?.args ?? [])
-        case "configure-remote":
-            runConfigureRemote(command?.args ?? [])
-        case "discover":
-            await runDiscover(command?.args ?? [])
-        case "wizard":
-            await runWizardCommand(command?.args ?? [])
-        default:
+        case .control:
+            runMacControl(context)
+        case let .connect(commandArgs):
+            await runConnect(commandArgs, configURL: context.configURL)
+        case let .configureRemote(commandArgs):
+            runConfigureRemote(commandArgs, context: context)
+        case let .discover(commandArgs):
+            await runDiscover(commandArgs)
+        case let .wizard(commandArgs):
+            await runWizardCommand(commandArgs, configURL: context.configURL)
+        case let .unknown(exitCode):
             fputs("openclaw-mac: unknown command\n", stderr)
             printUsage()
-            exit(1)
+            exit(exitCode)
         }
     }
 }
 
-private func parseRootCommand(_ args: [String]) -> RootCommand? {
-    guard let first = args.first else { return nil }
-    return RootCommand(name: first, args: Array(args.dropFirst()))
+func resolveRootCommandAction(_ args: [String]) -> RootCommandAction {
+    guard let command = args.first else {
+        return .control(args)
+    }
+
+    let commandArgs = Array(args.dropFirst())
+    switch command {
+    case "status", "primary", "gateway", "--profile", "--json", "--timeout", "--launch", "--no-launch":
+        return .control(args)
+    case "-h", "--help", "help":
+        return .usage
+    case "connect":
+        return .connect(commandArgs)
+    case "configure-remote":
+        return .configureRemote(commandArgs)
+    case "discover":
+        return .discover(commandArgs)
+    case "wizard":
+        return .wizard(commandArgs)
+    default:
+        return .unknown(exitCode: 1)
+    }
 }
 
 private func printUsage() {
@@ -41,16 +70,23 @@ private func printUsage() {
     openclaw-mac
 
     Usage:
+      openclaw-mac status [--json] [--profile <name>] [--no-launch]
+      openclaw-mac primary show|set|clear [options]
+      openclaw-mac gateway list|add|remove|reconnect [options]
+        Run openclaw-mac primary --help for app control options.
       openclaw-mac connect [--url <ws://host:port>] [--token <token>] [--password <password>]
                            [--mode <local|remote>] [--timeout <ms>] [--probe] [--json]
                            [--client-id <id>] [--client-mode <mode>] [--display-name <name>]
                            [--role <role>] [--scopes <a,b,c>]
       openclaw-mac configure-remote --ssh-target <user@host[:port]> [--local-port <port>]
                           [--remote-port <port>] [--token <token>] [--password <password>]
-                          [--identity <path>] [--project-root <path>] [--cli-path <path>] [--json]
+                          [--identity <path>] [--ssh-host-key-policy <strict|openssh>]
+                          [--project-root <path>] [--cli-path <path>] [--json]
       openclaw-mac discover [--timeout <ms>] [--json] [--include-local]
       openclaw-mac wizard [--url <ws://host:port>] [--token <token>] [--password <password>]
                           [--mode <local|remote>] [--workspace <path>] [--json]
+
+    All commands accept --profile <name>; overrides OPENCLAW_PROFILE (default: default).
 
     Examples:
       openclaw-mac connect

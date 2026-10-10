@@ -1,37 +1,56 @@
+// MCP loopback HTTP request helpers.
+// Authenticates local MCP POST requests and extracts scoped Gateway context.
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type {
+  SourceReplyDeliveryMode,
+  TaskSuggestionDeliveryMode,
+} from "../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
-import { getHeader } from "./http-utils.js";
+import { getHeader } from "./http-header-value.js";
+import {
+  resolveAttachGrant,
+  resolveMcpLoopbackClientGrant,
+  type McpLoopbackRequestContext,
+} from "./mcp-grant-store.js";
 import { isLoopbackAddress } from "./net.js";
 import { checkBrowserOrigin } from "./origin-check.js";
 
-const MAX_MCP_BODY_BYTES = 1_048_576;
+const DEFAULT_MCP_BODY_TIMEOUT_MS = 30_000;
 
-function shouldLogMcpLoopbackHttp(): boolean {
-  return (
-    isTruthyEnvValue(process.env.OPENCLAW_CLI_BACKEND_LOG_OUTPUT) ||
-    isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND_DEBUG)
-  );
+function readPositiveIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) {
+    return fallback;
+  }
+  const parsed = Number(raw);
+  if (!/^\d+$/u.test(raw) || !Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive integer. Got: ${JSON.stringify(raw)}`);
+  }
+  return parsed;
 }
 
-function logMcpLoopbackHttp(step: string, details: Record<string, unknown>): void {
-  if (!shouldLogMcpLoopbackHttp()) {
+export function logMcpLoopbackTraffic(step: string, details: Record<string, unknown>): void {
+  if (
+    !isTruthyEnvValue(process.env.OPENCLAW_CLI_BACKEND_LOG_OUTPUT) &&
+    !isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND_DEBUG)
+  ) {
     return;
   }
   console.error(`[mcp-loopback] ${step} ${JSON.stringify(details)}`);
 }
 
-type McpRequestContext = {
-  sessionKey: string;
-  messageProvider: string | undefined;
-  accountId: string | undefined;
-  inboundEventKind: InboundEventKind | undefined;
+type McpLoopbackRequestAuth = {
   senderIsOwner: boolean;
+  boundSessionKey?: string;
+  boundAgentId?: string;
+  boundClientGrant?: NonNullable<ReturnType<typeof resolveMcpLoopbackClientGrant>>;
+  boundGrantToken?: string;
 };
 
 function resolveScopedSessionKey(cfg: OpenClawConfig, rawSessionKey: string | undefined): string {
@@ -44,22 +63,33 @@ function normalizeMcpInboundEventKind(value: string | undefined): InboundEventKi
   return trimmed === "room_event" || trimmed === "user_request" ? trimmed : undefined;
 }
 
+function normalizeMcpSourceReplyDeliveryMode(
+  value: string | undefined,
+): SourceReplyDeliveryMode | undefined {
+  const trimmed = normalizeOptionalString(value);
+  return trimmed === "automatic" || trimmed === "message_tool_only" ? trimmed : undefined;
+}
+
+function normalizeMcpTaskSuggestionDeliveryMode(
+  value: string | undefined,
+): TaskSuggestionDeliveryMode | undefined {
+  return normalizeOptionalString(value) === "gateway" ? "gateway" : undefined;
+}
+
+function normalizeMcpBooleanHeader(value: string | undefined): boolean | undefined {
+  const trimmed = normalizeOptionalString(value);
+  return trimmed ? isTruthyEnvValue(trimmed) : undefined;
+}
+
 function rejectsBrowserLoopbackRequest(req: IncomingMessage): boolean {
   const origin = getHeader(req, "origin");
   if (!origin) {
-    // No Origin header → not a browser request. Native MCP clients
-    // (curl, codex CLI, scripted MCP clients) never set Origin; let
-    // them through to the bearer check.
+    // Native MCP clients use bearer authentication without a browser Origin.
     return false;
   }
 
-  // Defer to checkBrowserOrigin. It already treats loopback peers
-  // talking to a loopback Origin as `local-loopback`, which covers
-  // the legitimate `localhost`↔`127.0.0.1` mismatch that browsers
-  // flag as `Sec-Fetch-Site: cross-site` even though both ends are
-  // local. A blanket cross-site early-return here would block that
-  // flow even with a valid bearer; the helper's isLocalClient +
-  // isLoopbackHost gating is the authoritative check.
+  // The origin owner accepts localhost ↔ 127.0.0.1 only for loopback peers,
+  // including when the browser describes those names as cross-site.
   return !checkBrowserOrigin({
     requestHost: getHeader(req, "host"),
     origin,
@@ -67,20 +97,61 @@ function rejectsBrowserLoopbackRequest(req: IncomingMessage): boolean {
   }).ok;
 }
 
+function resolveMcpSender(params: {
+  req: IncomingMessage;
+  ownerToken: string;
+  nonOwnerToken: string;
+}): McpLoopbackRequestAuth | undefined {
+  const authHeader = getHeader(params.req, "authorization") ?? "";
+  const ownerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.ownerToken}`);
+  const nonOwnerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.nonOwnerToken}`);
+  if (ownerTokenMatched || nonOwnerTokenMatched) {
+    return { senderIsOwner: ownerTokenMatched };
+  }
+  const grantToken = authHeader.startsWith("Bearer ") ? authHeader.slice("Bearer ".length) : "";
+  const captureKey = normalizeOptionalString(getHeader(params.req, "x-openclaw-cli-capture-key"));
+  const clientGrant =
+    grantToken && captureKey
+      ? resolveMcpLoopbackClientGrant({
+          token: grantToken,
+          runtimeOwnerToken: params.ownerToken,
+          captureKey,
+        })
+      : undefined;
+  if (clientGrant) {
+    return {
+      senderIsOwner: clientGrant.context.senderIsOwner,
+      boundClientGrant: clientGrant,
+      boundGrantToken: grantToken,
+    };
+  }
+  const grant = grantToken ? resolveAttachGrant(grantToken) : undefined;
+  if (grant) {
+    return {
+      senderIsOwner: false,
+      boundSessionKey: grant.sessionKey,
+      ...(grant.agentId ? { boundAgentId: grant.agentId } : {}),
+    };
+  }
+  return undefined;
+}
+
 export function validateMcpLoopbackRequest(params: {
   req: IncomingMessage;
   res: ServerResponse;
   ownerToken: string;
   nonOwnerToken: string;
-}): { senderIsOwner: boolean } | null {
-  let url: URL;
-  try {
-    url = new URL(params.req.url ?? "/", `http://${params.req.headers.host ?? "localhost"}`);
-  } catch {
-    logMcpLoopbackHttp("reject", { reason: "bad_request_url", method: params.req.method ?? "" });
-    params.res.writeHead(400, { "Content-Type": "application/json" });
-    params.res.end(JSON.stringify({ error: "bad_request" }));
+  onSseResponse?: (res: ServerResponse) => void;
+}): McpLoopbackRequestAuth | null {
+  const reply = (status: number, body: unknown): null => {
+    params.res.writeHead(status, { "Content-Type": "application/json" });
+    params.res.end(JSON.stringify(body));
     return null;
+  };
+  const url = URL.parse(params.req.url ?? "/", `http://${params.req.headers.host ?? "localhost"}`);
+  if (!url) {
+    logMcpLoopbackTraffic("reject", { reason: "bad_request_url", method: params.req.method ?? "" });
+    return reply(400, { error: "bad_request" });
   }
 
   if (params.req.method === "GET" && url.pathname.startsWith("/.well-known/")) {
@@ -90,97 +161,167 @@ export function validateMcpLoopbackRequest(params: {
   }
 
   if (url.pathname !== "/mcp") {
-    logMcpLoopbackHttp("reject", {
+    logMcpLoopbackTraffic("reject", {
       reason: "not_found",
       method: params.req.method ?? "",
       path: url.pathname,
     });
-    params.res.writeHead(404, { "Content-Type": "application/json" });
-    params.res.end(JSON.stringify({ error: "not_found" }));
-    return null;
+    return reply(404, { error: "not_found" });
   }
 
-  if (params.req.method !== "POST") {
-    logMcpLoopbackHttp("reject", {
+  if (
+    params.req.method !== "GET" &&
+    params.req.method !== "DELETE" &&
+    params.req.method !== "POST"
+  ) {
+    logMcpLoopbackTraffic("reject", {
       reason: "method_not_allowed",
       method: params.req.method ?? "",
       path: url.pathname,
     });
-    params.res.writeHead(405, { Allow: "POST" });
+    params.res.writeHead(405, { Allow: "GET, POST, DELETE" });
     params.res.end();
     return null;
   }
 
+  // Check browser origin before bearer authentication for every supported method.
   if (rejectsBrowserLoopbackRequest(params.req)) {
-    logMcpLoopbackHttp("reject", {
-      reason: "forbidden_origin",
-      method: params.req.method ?? "",
-      origin: getHeader(params.req, "origin") ?? "",
-    });
-    params.res.writeHead(403, { "Content-Type": "application/json" });
-    params.res.end(JSON.stringify({ error: "forbidden" }));
-    return null;
+    if (params.req.method === "POST") {
+      logMcpLoopbackTraffic("reject", {
+        reason: "forbidden_origin",
+        method: params.req.method,
+        origin: getHeader(params.req, "origin") ?? "",
+      });
+    }
+    return reply(403, { error: "forbidden" });
   }
 
-  const authHeader = getHeader(params.req, "authorization") ?? "";
-  const ownerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.ownerToken}`);
-  const nonOwnerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.nonOwnerToken}`);
-  const senderIsOwner = ownerTokenMatched ? true : nonOwnerTokenMatched ? false : null;
-  if (senderIsOwner === null) {
-    logMcpLoopbackHttp("reject", {
-      reason: "unauthorized",
-      method: params.req.method ?? "",
-      hasAuthorization: authHeader.length > 0,
+  const sender = resolveMcpSender(params);
+  if (!sender) {
+    if (params.req.method === "POST") {
+      logMcpLoopbackTraffic("reject", {
+        reason: "unauthorized",
+        method: params.req.method,
+        hasAuthorization: (getHeader(params.req, "authorization") ?? "").length > 0,
+      });
+    }
+    return reply(401, { error: "unauthorized" });
+  }
+
+  if (params.req.method === "GET") {
+    logMcpLoopbackTraffic("sse-open", { method: "GET", path: url.pathname });
+    params.res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
     });
-    params.res.writeHead(401, { "Content-Type": "application/json" });
-    params.res.end(JSON.stringify({ error: "unauthorized" }));
+    params.res.flushHeaders();
+    params.res.write(":\n\n");
+    params.onSseResponse?.(params.res);
+    params.req.on("close", () => {
+      if (!params.res.writableEnded) {
+        params.res.end();
+      }
+    });
     return null;
+  }
+  if (params.req.method === "DELETE") {
+    // This stateless listener owns no session lifecycle; authenticated teardown is a no-op.
+    logMcpLoopbackTraffic("session-delete", { method: "DELETE", path: url.pathname });
+    return reply(200, { ok: true });
   }
 
   const contentType = getHeader(params.req, "content-type") ?? "";
   if (!contentType.startsWith("application/json")) {
-    logMcpLoopbackHttp("reject", {
+    logMcpLoopbackTraffic("reject", {
       reason: "unsupported_media_type",
       method: params.req.method ?? "",
       contentType,
     });
-    params.res.writeHead(415, { "Content-Type": "application/json" });
-    params.res.end(JSON.stringify({ error: "unsupported_media_type" }));
-    return null;
+    return reply(415, { error: "unsupported_media_type" });
   }
 
-  return { senderIsOwner };
+  return sender;
 }
 
-export async function readMcpHttpBody(req: IncomingMessage): Promise<string> {
-  return await new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let received = 0;
-    req.on("data", (chunk: Buffer) => {
-      received += chunk.length;
-      if (received > MAX_MCP_BODY_BYTES) {
-        req.destroy();
-        reject(new Error(`Request body exceeds ${MAX_MCP_BODY_BYTES} bytes`));
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
-    req.on("error", reject);
-  });
+export function resolveMcpHttpBodyTimeoutMs(): number {
+  return readPositiveIntEnv("OPENCLAW_MCP_LOOPBACK_BODY_TIMEOUT_MS", DEFAULT_MCP_BODY_TIMEOUT_MS);
+}
+
+export function resolveMcpCliCaptureKey(
+  req: IncomingMessage,
+  auth: McpLoopbackRequestAuth,
+): string | undefined {
+  if (auth.boundClientGrant || auth.boundSessionKey) {
+    return auth.boundClientGrant?.captureKey;
+  }
+  return normalizeOptionalString(getHeader(req, "x-openclaw-cli-capture-key"));
+}
+
+function normalizeMcpClientCapsHeader(value: string | undefined): string[] | undefined {
+  const clientCaps = [...new Set((value ?? "").split(",").map((cap) => cap.trim()))].filter(
+    Boolean,
+  );
+  return clientCaps.length > 0 ? clientCaps : undefined;
 }
 
 export function resolveMcpRequestContext(
   req: IncomingMessage,
   cfg: OpenClawConfig,
-  auth: { senderIsOwner: boolean },
-): McpRequestContext {
+  auth: McpLoopbackRequestAuth,
+): McpLoopbackRequestContext {
+  if (auth.boundClientGrant) {
+    // Gateway-launched CLI clients receive an immutable context grant. The
+    // child process can replay the token, but cannot scope-shop by rewriting
+    // session, channel, capability, or ownership headers.
+    return structuredClone(auth.boundClientGrant.context);
+  }
+  // Grant-authenticated callers get only their server-bound session and optional
+  // global-session agent owner; spoofable delivery/action headers stay reserved.
+  if (auth.boundSessionKey) {
+    return {
+      sessionKey: auth.boundSessionKey,
+      agentId: auth.boundAgentId,
+      sessionId: undefined,
+      messageProvider: undefined,
+      clientCaps: undefined,
+      currentChannelId: undefined,
+      currentThreadTs: undefined,
+      currentMessageId: undefined,
+      currentInboundAudio: undefined,
+      accountId: undefined,
+      inboundEventKind: undefined,
+      sourceReplyDeliveryMode: undefined,
+      taskSuggestionDeliveryMode: undefined,
+      requireExplicitMessageTarget: undefined,
+      senderIsOwner: auth.senderIsOwner,
+    };
+  }
   return {
     sessionKey: resolveScopedSessionKey(cfg, getHeader(req, "x-session-key")),
+    sessionId: normalizeOptionalString(getHeader(req, "x-openclaw-session-id")),
     messageProvider:
       normalizeMessageChannel(getHeader(req, "x-openclaw-message-channel")) ?? undefined,
+    // The token-authenticated loopback client is gateway-spawned on 127.0.0.1. Caps only
+    // widen tool availability; sender ownership remains derived from the bearer token.
+    clientCaps: normalizeMcpClientCapsHeader(getHeader(req, "x-openclaw-client-caps")),
+    currentChannelId: normalizeOptionalString(getHeader(req, "x-openclaw-current-channel-id")),
+    currentThreadTs: normalizeOptionalString(getHeader(req, "x-openclaw-current-thread-ts")),
+    currentMessageId: normalizeOptionalString(getHeader(req, "x-openclaw-current-message-id")),
+    currentInboundAudio: normalizeMcpBooleanHeader(
+      getHeader(req, "x-openclaw-current-inbound-audio"),
+    ),
     accountId: normalizeOptionalString(getHeader(req, "x-openclaw-account-id")),
     inboundEventKind: normalizeMcpInboundEventKind(getHeader(req, "x-openclaw-inbound-event-kind")),
+    sourceReplyDeliveryMode: normalizeMcpSourceReplyDeliveryMode(
+      getHeader(req, "x-openclaw-source-reply-delivery-mode"),
+    ),
+    taskSuggestionDeliveryMode: normalizeMcpTaskSuggestionDeliveryMode(
+      getHeader(req, "x-openclaw-task-suggestion-delivery-mode"),
+    ),
+    requireExplicitMessageTarget: normalizeMcpBooleanHeader(
+      getHeader(req, "x-openclaw-require-explicit-message-target"),
+    ),
     senderIsOwner: auth.senderIsOwner,
   };
 }

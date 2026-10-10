@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
+import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 // Copilot's OpenAI-compatible `/responses` endpoint can emit replay item IDs
 // that encode upstream connection state. Those IDs are rejected after the
-// connection changes, so normalize them at the provider boundary before send.
+// connection changes, so sanitize them at the provider boundary before send.
 
 function looksLikeConnectionBoundId(id: string): boolean {
   if (id.length < 24) {
@@ -23,23 +24,60 @@ function deriveReplacementId(type: string | undefined, originalId: string): stri
   return `${prefix}_${hex}`;
 }
 
-type InputItem = Record<string, unknown> & { id?: unknown; type?: unknown };
+function isValidReasoningReplayId(id: unknown): id is string {
+  return typeof id === "string" && id.length <= 64 && /^rs_[A-Za-z0-9_-]+$/.test(id);
+}
 
-export function rewriteCopilotConnectionBoundResponseIds(input: unknown): boolean {
+function dropReasoningItem(input: unknown[], index: number): void {
+  input.splice(index, 1);
+  const dependentMessage = asOptionalObjectRecord(input[index]);
+  // Assistant replay IDs are signed with preceding reasoning; keeping one after a drop is invalid.
+  if (
+    dependentMessage &&
+    dependentMessage.type === "message" &&
+    dependentMessage.role === "assistant"
+  ) {
+    delete dependentMessage.id;
+  }
+}
+
+function sanitizeCopilotReplayResponseIds(input: unknown): boolean {
   if (!Array.isArray(input)) {
     return false;
   }
   let rewrote = false;
-  for (const item of input as InputItem[]) {
-    const id = item.id;
-    if (typeof id !== "string" || id.length === 0) {
+  // Walk backward because dropping reasoning splices input and must not skip adjacent items.
+  for (let index = input.length - 1; index >= 0; index -= 1) {
+    const item = asOptionalObjectRecord(input[index]);
+    if (!item) {
       continue;
     }
-    // Reasoning items always reference server-side encrypted state bound to the
-    // original item ID. Rewriting the ID — even when encrypted_content is absent
-    // or null — breaks Copilot's server-side lookup and causes a 400 validation
-    // failure regardless of whether the client included encrypted_content.
+    const id = item.id;
     if (item.type === "reasoning") {
+      // Cold reasoning is removed earlier; normalize null status and never synthesize active IDs.
+      if (item.status === null) {
+        delete item.status;
+        rewrote = true;
+      }
+      const isComplete =
+        typeof item.encrypted_content === "string" &&
+        item.encrypted_content.length > 0 &&
+        (item.status === undefined || item.status === "completed");
+      if (!isComplete) {
+        dropReasoningItem(input, index);
+        rewrote = true;
+      } else if (id === undefined || isValidReasoningReplayId(id)) {
+        continue;
+      } else if (typeof id === "string" && looksLikeConnectionBoundId(id)) {
+        delete item.id;
+        rewrote = true;
+      } else {
+        dropReasoningItem(input, index);
+        rewrote = true;
+      }
+      continue;
+    }
+    if (typeof id !== "string" || id.length === 0) {
       continue;
     }
     if (looksLikeConnectionBoundId(id)) {
@@ -50,9 +88,6 @@ export function rewriteCopilotConnectionBoundResponseIds(input: unknown): boolea
   return rewrote;
 }
 
-export function rewriteCopilotResponsePayloadConnectionBoundIds(payload: unknown): boolean {
-  if (!payload || typeof payload !== "object") {
-    return false;
-  }
-  return rewriteCopilotConnectionBoundResponseIds((payload as { input?: unknown }).input);
+export function sanitizeCopilotReplayResponsePayload(payload: unknown): boolean {
+  return sanitizeCopilotReplayResponseIds(asOptionalObjectRecord(payload)?.input);
 }

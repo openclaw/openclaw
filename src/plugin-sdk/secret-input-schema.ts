@@ -1,55 +1,23 @@
 import { z } from "zod";
-import { ENV_SECRET_REF_ID_RE } from "../config/types.secrets.js";
+import { SecretRefSchema } from "../config/zod-schema.secret-input.js";
 import { sensitive } from "../config/zod-schema.sensitive.js";
-import {
-  formatExecSecretRefIdValidationMessage,
-  isValidExecSecretRefId,
-  isValidFileSecretRefId,
-  SECRET_PROVIDER_ALIAS_PATTERN,
-} from "../secrets/ref-contract.js";
 
+/**
+ * Returns the shared secret-input schema for plaintext values and env/file/exec/store refs.
+ * Reusing this singleton preserves sensitive-path registration for config redaction.
+ */
 export function buildSecretInputSchema() {
   return secretInputSchema;
 }
 
-const providerSchema = z
-  .string()
-  .regex(
-    SECRET_PROVIDER_ALIAS_PATTERN,
-    'Secret reference provider must match /^[a-z][a-z0-9_-]{0,63}$/ (example: "default").',
-  );
+/** Register a plugin-owned config schema leaf for redaction in host config projections. */
+export function registerSensitiveConfigSchema<TSchema extends z.ZodType>(schema: TSchema): TSchema {
+  sensitive.add(schema);
+  return schema;
+}
 
-// Singleton registered with the sensitive registry so that mapSensitivePaths
-// marks every config field using this schema as sensitive (redacted).
+// Keep the SDK's published tuple order while sharing the config owner's validators.
+const [envRef, fileRef, execRef, storeRef] = SecretRefSchema.options;
 const secretInputSchema = z
-  .union([
-    z.string(),
-    z.discriminatedUnion("source", [
-      z.object({
-        source: z.literal("env"),
-        provider: providerSchema,
-        id: z
-          .string()
-          .regex(
-            ENV_SECRET_REF_ID_RE,
-            'Env secret reference id must match /^[A-Z][A-Z0-9_]{0,127}$/ (example: "OPENAI_API_KEY").',
-          ),
-      }),
-      z.object({
-        source: z.literal("file"),
-        provider: providerSchema,
-        id: z
-          .string()
-          .refine(
-            isValidFileSecretRefId,
-            'File secret reference id must be an absolute JSON pointer (example: "/providers/openai/apiKey"), or "value" for singleValue mode.',
-          ),
-      }),
-      z.object({
-        source: z.literal("exec"),
-        provider: providerSchema,
-        id: z.string().refine(isValidExecSecretRefId, formatExecSecretRefIdValidationMessage()),
-      }),
-    ]),
-  ])
+  .union([z.string(), z.discriminatedUnion("source", [envRef, storeRef, fileRef, execRef])])
   .register(sensitive);

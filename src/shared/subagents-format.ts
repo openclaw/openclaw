@@ -1,31 +1,34 @@
-export { formatDurationCompact } from "../infra/format-time/format-duration.ts";
+import { formatCompactTokenCount } from "@openclaw/normalization-core";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 
-export function formatTokenShort(value?: number) {
+function formatTokenShort(value?: number) {
   if (!value || !Number.isFinite(value) || value <= 0) {
     return undefined;
   }
   const n = Math.floor(value);
-  if (n < 1_000) {
-    return `${n}`;
-  }
-  if (n < 10_000) {
-    return `${(n / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
-  }
-  if (n < 1_000_000) {
-    return `${Math.round(n / 1_000)}k`;
-  }
-  return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}m`;
+  return formatCompactTokenCount(n, {
+    thousandsPrecision: n >= 10_000 ? 0 : 1,
+    trimTrailingZero: true,
+  });
 }
 
 export function truncateLine(value: string, maxLength: number) {
-  if (value.length <= maxLength) {
-    return value;
+  const limit = Math.max(0, Math.floor(maxLength));
+  const trimmed = value.trimEnd();
+  if (trimmed.length <= limit) {
+    return trimmed;
   }
-  return `${value.slice(0, maxLength).trimEnd()}...`;
+  const marker = "...";
+  if (limit <= marker.length) {
+    return marker.slice(0, limit);
+  }
+  return `${truncateUtf16Safe(trimmed, limit - marker.length).trimEnd()}${marker}`;
 }
 
-export type TokenUsageLike = {
+type TokenUsageLike = {
   totalTokens?: unknown;
+  totalTokensFresh?: unknown;
+  totalTokensVersion?: unknown;
   inputTokens?: unknown;
   outputTokens?: unknown;
 };
@@ -34,7 +37,12 @@ export function resolveTotalTokens(entry?: TokenUsageLike) {
   if (!entry || typeof entry !== "object") {
     return undefined;
   }
-  if (typeof entry.totalTokens === "number" && Number.isFinite(entry.totalTokens)) {
+  if (
+    typeof entry.totalTokens === "number" &&
+    Number.isFinite(entry.totalTokens) &&
+    entry.totalTokensFresh === true &&
+    entry.totalTokensVersion === 1
+  ) {
     return entry.totalTokens;
   }
   const input = typeof entry.inputTokens === "number" ? entry.inputTokens : 0;
@@ -43,7 +51,7 @@ export function resolveTotalTokens(entry?: TokenUsageLike) {
   return total > 0 ? total : undefined;
 }
 
-export function resolveIoTokens(entry?: TokenUsageLike) {
+function resolveIoTokens(entry?: TokenUsageLike) {
   if (!entry || typeof entry !== "object") {
     return undefined;
   }

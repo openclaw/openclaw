@@ -1,15 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
+import { pruneMapToMaxSize } from "./map-size.js";
 import { getWindowsInstallRoots, getWindowsProgramFilesRoots } from "./windows-install-roots.js";
 
-/**
- * Trust level for system binary resolution.
- * - "strict": Only fixed OS-managed directories. Use for security-critical
- *   binaries like openssl where a compromised binary has high impact.
- * - "standard": Strict dirs plus common local-admin/package-manager
- *   directories appended after system dirs. Use for tool binaries like
- *   ffmpeg that are rarely available via the OS itself.
- */
+/** Standard trust appends local-admin/package-manager paths after strict system paths. */
 type SystemBinTrust = "strict" | "standard";
 
 // Unix directories where OS-managed or system-installed binaries live.
@@ -17,34 +11,47 @@ type SystemBinTrust = "strict" | "standard";
 // attacker-planted binaries cannot shadow legitimate system executables.
 const UNIX_BASE_TRUSTED_DIRS = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"] as const;
 
-// Package-manager directories appended in "standard" trust on macOS.
-// These come after strict dirs so OS binaries always take priority.
-// Could be acceptable for tooling binaries like ffmpeg but NOT for
-// security-critical ones like openssl — callers needing higher
-// assurance should stick with "strict".
 const DARWIN_STANDARD_DIRS = ["/opt/homebrew/bin", "/usr/local/bin"] as const;
 const LINUX_STANDARD_DIRS = ["/usr/local/bin"] as const;
 
-// Windows extensions to probe when searching for executables.
 const WIN_PATHEXT = [".exe", ".cmd", ".bat", ".com"] as const;
+const WINDOWS_PROGRAM_FILES_TOOL_DIR_PREFIXES = ["ImageMagick-", "GraphicsMagick-"] as const;
+const WINDOWS_PROGRAM_FILES_TOOL_DIRS = ["ImageMagick", "GraphicsMagick"] as const;
 
+const RESOLVED_BIN_CACHE_LIMIT = 512;
 const resolvedCacheStrict = new Map<string, string>();
 const resolvedCacheStandard = new Map<string, string>();
 
-function defaultIsExecutable(filePath: string): boolean {
+function cacheResolvedSystemBin(cache: Map<string, string>, name: string, candidate: string): void {
+  cache.set(name, candidate);
+  pruneMapToMaxSize(cache, RESOLVED_BIN_CACHE_LIMIT);
+}
+
+function isExecutable(filePath: string): boolean {
   try {
-    if (process.platform === "win32") {
-      fs.accessSync(filePath, fs.constants.R_OK);
-    } else {
-      fs.accessSync(filePath, fs.constants.X_OK);
-    }
+    fs.accessSync(filePath, process.platform === "win32" ? fs.constants.R_OK : fs.constants.X_OK);
     return true;
   } catch {
     return false;
   }
 }
 
-let isExecutableFn: (filePath: string) => boolean = defaultIsExecutable;
+function collectWindowsProgramFilesToolDirs(programFilesRoot: string): string[] {
+  const dirs = WINDOWS_PROGRAM_FILES_TOOL_DIRS.map((dir) => path.win32.join(programFilesRoot, dir));
+  try {
+    for (const entry of fs.readdirSync(programFilesRoot, { withFileTypes: true })) {
+      if (
+        entry.isDirectory() &&
+        WINDOWS_PROGRAM_FILES_TOOL_DIR_PREFIXES.some((prefix) => entry.name.startsWith(prefix))
+      ) {
+        dirs.push(path.win32.join(programFilesRoot, entry.name));
+      }
+    }
+  } catch {
+    // Program Files can be unreadable in constrained contexts; static candidates still cover common installs.
+  }
+  return dirs;
+}
 
 /**
  * Build the trusted-dir list for Windows. Only system-managed directories
@@ -55,6 +62,7 @@ function buildWindowsTrustedDirs(): readonly string[] {
   const { systemRoot } = getWindowsInstallRoots();
   dirs.push(path.win32.join(systemRoot, "System32"));
   dirs.push(path.win32.join(systemRoot, "SysWOW64"));
+  dirs.push(path.win32.join(systemRoot, "System32", "WindowsPowerShell", "v1.0"));
 
   for (const programFilesRoot of getWindowsProgramFilesRoots()) {
     // Trust the machine's validated Program Files roots rather than assuming C:.
@@ -66,15 +74,16 @@ function buildWindowsTrustedDirs(): readonly string[] {
   return dirs;
 }
 
-/**
- * Build the trusted-dir list for Unix (macOS, Linux, etc.), extending
- * UNIX_BASE_TRUSTED_DIRS with platform/environment-specific paths.
- *
- * Strict: only fixed OS-managed directories.
- *
- * Standard: strict dirs plus platform package-manager directories appended
- * after, so OS binaries always take priority.
- */
+function buildWindowsStandardDirs(): readonly string[] {
+  const { systemRoot } = getWindowsInstallRoots();
+  const systemDriveRoot = path.win32.parse(systemRoot).root;
+  const dirs = [path.win32.join(systemDriveRoot, "ProgramData", "chocolatey", "bin")];
+  for (const programFilesRoot of getWindowsProgramFilesRoots()) {
+    dirs.push(...collectWindowsProgramFilesToolDirs(programFilesRoot));
+  }
+  return dirs;
+}
+
 function buildUnixTrustedDirs(trust: SystemBinTrust): readonly string[] {
   const dirs: string[] = [...UNIX_BASE_TRUSTED_DIRS];
   const platform = process.platform;
@@ -87,9 +96,6 @@ function buildUnixTrustedDirs(trust: SystemBinTrust): readonly string[] {
     dirs.push("/snap/bin");
   }
 
-  // "standard" trust widens the search for non-security-critical tools in
-  // common local-admin/package-manager directories, while keeping strict dirs
-  // first so OS binaries always take priority.
   if (trust === "standard") {
     if (platform === "darwin") {
       dirs.push(...DARWIN_STANDARD_DIRS);
@@ -101,22 +107,15 @@ function buildUnixTrustedDirs(trust: SystemBinTrust): readonly string[] {
   return dirs;
 }
 
-let trustedDirsStrict: readonly string[] | null = null;
-let trustedDirsStandard: readonly string[] | null = null;
+const trustedDirs: Partial<Record<SystemBinTrust, readonly string[]>> = {};
 
 function getTrustedDirs(trust: SystemBinTrust): readonly string[] {
-  if (process.platform === "win32") {
-    // Windows does not currently widen "standard" beyond the registry-backed
-    // system roots; both trust levels intentionally share the same set today.
-    trustedDirsStrict ??= buildWindowsTrustedDirs();
-    return trustedDirsStrict;
-  }
-  if (trust === "standard") {
-    trustedDirsStandard ??= buildUnixTrustedDirs("standard");
-    return trustedDirsStandard;
-  }
-  trustedDirsStrict ??= buildUnixTrustedDirs("strict");
-  return trustedDirsStrict;
+  return (trustedDirs[trust] ??=
+    process.platform !== "win32"
+      ? buildUnixTrustedDirs(trust)
+      : trust === "strict"
+        ? buildWindowsTrustedDirs()
+        : [...getTrustedDirs("strict"), ...buildWindowsStandardDirs()]);
 }
 
 /**
@@ -139,6 +138,10 @@ export function resolveSystemBin(
   if (!hasExtra) {
     const cached = cache.get(name);
     if (cached !== undefined) {
+      // Trusted-directory probes hit the filesystem repeatedly; keep active binaries ahead of
+      // colder entries when the shared insertion-order pruning helper enforces the bound.
+      cache.delete(name);
+      cache.set(name, cached);
       return cached;
     }
   }
@@ -148,21 +151,14 @@ export function resolveSystemBin(
   const hasExt = isWin && path.win32.extname(name).length > 0;
 
   for (const dir of dirs) {
-    if (isWin && !hasExt) {
-      for (const ext of WIN_PATHEXT) {
-        const candidate = path.win32.join(dir, name + ext);
-        if (isExecutableFn(candidate)) {
-          if (!hasExtra) {
-            cache.set(name, candidate);
-          }
-          return candidate;
-        }
-      }
-    } else {
-      const candidate = path.join(dir, name);
-      if (isExecutableFn(candidate)) {
+    const candidates =
+      isWin && !hasExt
+        ? WIN_PATHEXT.map((ext) => path.win32.join(dir, name + ext))
+        : [path.join(dir, name)];
+    for (const candidate of candidates) {
+      if (isExecutable(candidate)) {
         if (!hasExtra) {
-          cache.set(name, candidate);
+          cacheResolvedSystemBin(cache, name, candidate);
         }
         return candidate;
       }
@@ -170,18 +166,4 @@ export function resolveSystemBin(
   }
 
   return null;
-}
-
-/** Visible for tests: the computed trusted directories. */
-export function _getTrustedDirs(trust: SystemBinTrust = "strict"): readonly string[] {
-  return getTrustedDirs(trust);
-}
-
-/** Reset cache and optionally override the executable-check function (for tests). */
-export function _resetResolveSystemBin(overrideIsExecutable?: (p: string) => boolean): void {
-  resolvedCacheStrict.clear();
-  resolvedCacheStandard.clear();
-  trustedDirsStrict = null;
-  trustedDirsStandard = null;
-  isExecutableFn = overrideIsExecutable ?? defaultIsExecutable;
 }

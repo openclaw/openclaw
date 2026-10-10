@@ -1,19 +1,17 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { getAcpSessionManager } from "./control-plane/manager.js";
-import { resolveConfiguredAcpBindingSpecBySessionKey } from "./persistent-bindings.resolve.js";
 import {
   buildConfiguredAcpSessionKey,
   normalizeText,
   type ConfiguredAcpBindingSpec,
   type ResolvedConfiguredAcpBinding,
 } from "./persistent-bindings.types.js";
-import { readAcpSessionEntry } from "./runtime/session-meta.js";
 
-function sessionMatchesConfiguredBinding(params: {
+function sessionStructurallyMatchesConfiguredBinding(params: {
   cfg: OpenClawConfig;
   spec: ConfiguredAcpBindingSpec;
   meta: SessionAcpMeta;
@@ -54,24 +52,49 @@ function sessionMatchesConfiguredBinding(params: {
 }
 
 export async function ensureConfiguredAcpBindingSession(params: {
+  assertActive?: () => void;
   cfg: OpenClawConfig;
   spec: ConfiguredAcpBindingSpec;
 }): Promise<{ ok: true; sessionKey: string } | { ok: false; sessionKey: string; error: string }> {
   const sessionKey = buildConfiguredAcpSessionKey(params.spec);
   const acpManager = getAcpSessionManager();
+  const runtimeOptions = {
+    ...(params.spec.model ? { model: params.spec.model } : {}),
+    ...(params.spec.thinking ? { thinking: params.spec.thinking } : {}),
+  };
   try {
-    const resolution = acpManager.resolveSession({
+    const resolution = await acpManager.resolveSessionAsync({
       cfg: params.cfg,
+      agentId: params.spec.agentId,
       sessionKey,
+      assertCurrent: params.assertActive,
     });
+    params.assertActive?.();
     if (
       resolution.kind === "ready" &&
-      sessionMatchesConfiguredBinding({
+      sessionStructurallyMatchesConfiguredBinding({
         cfg: params.cfg,
         spec: params.spec,
         meta: resolution.meta,
       })
     ) {
+      // Apply before persisting: rejected controls must not overwrite accepted options.
+      // Model precedes effort; omission retains the selection because ACP has no unset.
+      let currentOptions = resolution.meta.runtimeOptions;
+      for (const key of ["model", "thinking"] as const) {
+        const value = runtimeOptions[key];
+        if (value !== undefined && normalizeText(currentOptions?.[key]) !== value) {
+          params.assertActive?.();
+          currentOptions = await acpManager.setSessionConfigOption({
+            ...(params.assertActive ? { assertActive: params.assertActive } : {}),
+            cfg: params.cfg,
+            agentId: params.spec.agentId,
+            sessionKey,
+            key,
+            value,
+          });
+        }
+      }
       return {
         ok: true,
         sessionKey,
@@ -79,8 +102,11 @@ export async function ensureConfiguredAcpBindingSession(params: {
     }
 
     if (resolution.kind !== "none") {
+      params.assertActive?.();
       await acpManager.closeSession({
+        ...(params.assertActive ? { assertActive: params.assertActive } : {}),
         cfg: params.cfg,
+        agentId: params.spec.agentId,
         sessionKey,
         reason: "config-binding-reconfigure",
         clearMeta: false,
@@ -89,11 +115,15 @@ export async function ensureConfiguredAcpBindingSession(params: {
       });
     }
 
+    params.assertActive?.();
     await acpManager.initializeSession({
+      ...(params.assertActive ? { assertActive: params.assertActive } : {}),
       cfg: params.cfg,
+      agentId: params.spec.agentId,
       sessionKey,
       agent: params.spec.acpAgentId ?? params.spec.agentId,
       mode: params.spec.mode,
+      runtimeOptions,
       cwd: params.spec.cwd,
       backendId: params.spec.backend,
     });
@@ -115,7 +145,8 @@ export async function ensureConfiguredAcpBindingSession(params: {
   }
 }
 
-export async function ensureConfiguredAcpBindingReady(params: {
+export async function ensureConfiguredAcpBindingReadyCore(params: {
+  assertActive?: () => void;
   cfg: OpenClawConfig;
   configuredBinding: ResolvedConfiguredAcpBinding | null;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
@@ -123,6 +154,7 @@ export async function ensureConfiguredAcpBindingReady(params: {
     return { ok: true };
   }
   const ensured = await ensureConfiguredAcpBindingSession({
+    ...(params.assertActive ? { assertActive: params.assertActive } : {}),
     cfg: params.cfg,
     spec: params.configuredBinding.spec,
   });
@@ -131,63 +163,6 @@ export async function ensureConfiguredAcpBindingReady(params: {
   }
   return {
     ok: false,
-    error: ensured.error ?? "unknown error",
+    error: ensured.error,
   };
-}
-
-export async function resetAcpSessionInPlace(params: {
-  cfg: OpenClawConfig;
-  sessionKey: string;
-  reason: "new" | "reset";
-  clearMeta?: boolean;
-}): Promise<{ ok: true } | { ok: false; skipped?: boolean; error?: string }> {
-  const sessionKey = params.sessionKey.trim();
-  if (!sessionKey) {
-    return {
-      ok: false,
-      skipped: true,
-    };
-  }
-
-  const meta = readAcpSessionEntry({
-    cfg: params.cfg,
-    sessionKey,
-  })?.acp;
-  const configuredBinding = resolveConfiguredAcpBindingSpecBySessionKey({
-    cfg: params.cfg,
-    sessionKey,
-  });
-  const clearMeta = params.clearMeta ?? Boolean(configuredBinding);
-  if (!meta) {
-    if (clearMeta) {
-      return { ok: true };
-    }
-    return {
-      ok: false,
-      skipped: true,
-    };
-  }
-
-  const acpManager = getAcpSessionManager();
-
-  try {
-    await acpManager.closeSession({
-      cfg: params.cfg,
-      sessionKey,
-      reason: `${params.reason}-in-place-reset`,
-      discardPersistentState: true,
-      clearMeta,
-      allowBackendUnavailable: true,
-      requireAcpSession: false,
-    });
-
-    return { ok: true };
-  } catch (error) {
-    const message = formatErrorMessage(error);
-    logVerbose(`acp-configured-binding: failed reset for ${sessionKey}: ${message}`);
-    return {
-      ok: false,
-      error: message,
-    };
-  }
 }

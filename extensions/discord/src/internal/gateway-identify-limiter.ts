@@ -1,15 +1,28 @@
 const IDENTIFY_WINDOW_MS = 5_000;
 
-class GatewayIdentifyLimiter {
-  private nextAllowedAtByKey = new Map<number, number>();
+type IdentifyRateState = {
+  lastObservedAt: number;
+  nextAllowedAt: number;
+};
 
-  async wait(params: { shardId?: number; maxConcurrency?: number }): Promise<void> {
-    const maxConcurrency = Math.max(1, Math.floor(params.maxConcurrency ?? 1));
-    const rateKey = (params.shardId ?? 0) % maxConcurrency;
+class GatewayIdentifyLimiter {
+  private state: IdentifyRateState | undefined;
+
+  async wait(): Promise<void> {
     const now = Date.now();
-    const nextAllowedAt = this.nextAllowedAtByKey.get(rateKey) ?? now;
+    const state = this.state;
+    const clockMovedBackward = state !== undefined && now < state.lastObservedAt;
+    const nextAllowedAt =
+      state === undefined
+        ? now
+        : clockMovedBackward
+          ? now + IDENTIFY_WINDOW_MS
+          : state.nextAllowedAt;
     const waitMs = Math.max(0, nextAllowedAt - now);
-    this.nextAllowedAtByKey.set(rateKey, Math.max(now, nextAllowedAt) + IDENTIFY_WINDOW_MS);
+    this.state = {
+      lastObservedAt: now,
+      nextAllowedAt: Math.max(now, nextAllowedAt) + IDENTIFY_WINDOW_MS,
+    };
     if (waitMs > 0) {
       await new Promise<void>((resolve) => {
         const timer = setTimeout(resolve, waitMs);
@@ -19,7 +32,7 @@ class GatewayIdentifyLimiter {
   }
 
   reset(): void {
-    this.nextAllowedAtByKey.clear();
+    this.state = undefined;
   }
 }
 

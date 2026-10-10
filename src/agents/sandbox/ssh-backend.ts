@@ -1,9 +1,4 @@
-import path from "node:path";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
-import type {
-  SandboxBackendCommandParams,
-  SandboxBackendCommandResult,
-} from "./backend-handle.types.js";
+/** Static SSH adapter and management hooks for the shared remote-shell workspace owner. */
 import type {
   CreateSandboxBackendParams,
   SandboxBackendHandle,
@@ -11,35 +6,27 @@ import type {
 } from "./backend.types.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import {
-  createRemoteShellSandboxFsBridge,
-  type RemoteShellSandboxHandle,
-} from "./remote-fs-bridge.js";
+  createRemoteShellSandboxBackend,
+  resolveRemoteShellRuntimePaths as resolveSshRuntimePaths,
+} from "./remote-shell-backend.js";
+import type { RemoteShellSandboxSession } from "./remote-shell-transport.js";
 import { sanitizeEnvVars } from "./sanitize-env-vars.js";
+import { assertSshSandboxSecretOwnerAvailable } from "./secret-owner.js";
+import { resolveSandboxAgentId } from "./shared.js";
 import {
-  buildExecRemoteCommand,
   buildRemoteCommand,
-  buildSshSandboxArgv,
   createSshSandboxSessionFromSettings,
   disposeSshSandboxSession,
+  prepareSshSandboxExec,
   runSshSandboxCommand,
   uploadDirectoryToSshTarget,
-  type SshSandboxSession,
 } from "./ssh.js";
 
-type PendingExec = {
-  sshSession: SshSandboxSession;
-};
-
-type ResolvedSshRuntimePaths = {
-  runtimeId: string;
-  runtimeRootDir: string;
-  remoteWorkspaceDir: string;
-  remoteAgentWorkspaceDir: string;
-};
-
+/** SSH backend lifecycle hooks for probing and removing remote sandbox copies. */
 export const sshSandboxBackendManager: SandboxBackendManager = {
   async describeRuntime({ entry, config, agentId }) {
-    const cfg = resolveSandboxConfigForAgent(config, agentId);
+    const effectiveAgentId = agentId ?? resolveSandboxAgentId(entry.sessionKey);
+    const cfg = resolveSandboxConfigForAgent(config, effectiveAgentId);
     if (cfg.backend !== "ssh" || !cfg.ssh.target) {
       return {
         running: false,
@@ -47,6 +34,11 @@ export const sshSandboxBackendManager: SandboxBackendManager = {
         configLabelMatch: false,
       };
     }
+    assertSshSandboxSecretOwnerAvailable({
+      config,
+      scope: cfg.scope,
+      agentId: effectiveAgentId,
+    });
     const runtimePaths = resolveSshRuntimePaths(cfg.ssh.workspaceRoot, entry.sessionKey);
     const session = await createSshSandboxSessionFromSettings({
       ...cfg.ssh,
@@ -73,17 +65,23 @@ export const sshSandboxBackendManager: SandboxBackendManager = {
     }
   },
   async removeRuntime({ entry, config, agentId }) {
-    const cfg = resolveSandboxConfigForAgent(config, agentId);
+    const effectiveAgentId = agentId ?? resolveSandboxAgentId(entry.sessionKey);
+    const cfg = resolveSandboxConfigForAgent(config, effectiveAgentId);
     if (cfg.backend !== "ssh" || !cfg.ssh.target) {
       return;
     }
+    assertSshSandboxSecretOwnerAvailable({
+      config,
+      scope: cfg.scope,
+      agentId: effectiveAgentId,
+    });
     const runtimePaths = resolveSshRuntimePaths(cfg.ssh.workspaceRoot, entry.sessionKey);
     const session = await createSshSandboxSessionFromSettings({
       ...cfg.ssh,
       target: cfg.ssh.target,
     });
     try {
-      await runSshSandboxCommand({
+      const result = await runSshSandboxCommand({
         session,
         remoteCommand: buildRemoteCommand([
           "/bin/sh",
@@ -94,213 +92,58 @@ export const sshSandboxBackendManager: SandboxBackendManager = {
         ]),
         allowFailure: true,
       });
+      if (result.code !== 0) {
+        const detail = result.stderr.toString("utf8").trim() || `exit ${result.code}`;
+        throw new Error(`Failed to remove SSH sandbox runtime ${entry.containerName}: ${detail}`);
+      }
     } finally {
       await disposeSshSandboxSession(session);
     }
   },
 };
 
-export async function createSshSandboxBackend(
+async function createSshSandboxBackendInternal(
   params: CreateSandboxBackendParams,
+  preprovisionedWorkdir?: { runtimeId: string; remoteWorkspaceDir: string },
 ): Promise<SandboxBackendHandle> {
-  if ((params.cfg.docker.binds?.length ?? 0) > 0) {
-    throw new Error("SSH sandbox backend does not support sandbox.docker.binds.");
-  }
   const target = params.cfg.ssh.target;
   if (!target) {
     throw new Error('Sandbox backend "ssh" requires agents.defaults.sandbox.ssh.target.');
   }
-
-  const runtimePaths = resolveSshRuntimePaths(params.cfg.ssh.workspaceRoot, params.scopeKey);
-  const impl = new SshSandboxBackendImpl({
-    createParams: params,
-    target,
-    runtimePaths,
-  });
-  return impl.asHandle();
-}
-
-class SshSandboxBackendImpl {
-  private ensurePromise: Promise<void> | null = null;
-
-  constructor(
-    private readonly params: {
-      createParams: CreateSandboxBackendParams;
-      target: string;
-      runtimePaths: ResolvedSshRuntimePaths;
-    },
-  ) {}
-
-  asHandle(): SandboxBackendHandle & RemoteShellSandboxHandle {
-    return {
-      id: "ssh",
-      runtimeId: this.params.runtimePaths.runtimeId,
-      runtimeLabel: this.params.runtimePaths.runtimeId,
-      workdir: this.params.runtimePaths.remoteWorkspaceDir,
-      env: this.params.createParams.cfg.docker.env,
-      configLabel: this.params.target,
-      configLabelKind: "Target",
-      remoteWorkspaceDir: this.params.runtimePaths.remoteWorkspaceDir,
-      remoteAgentWorkspaceDir: this.params.runtimePaths.remoteAgentWorkspaceDir,
-      buildExecSpec: async ({ command, workdir, env, usePty }) => {
-        await this.ensureRuntime();
-        const sshSession = await this.createSession();
-        const remoteCommand = buildExecRemoteCommand({
-          command,
-          workdir: workdir ?? this.params.runtimePaths.remoteWorkspaceDir,
-          env,
-        });
-        return {
-          argv: buildSshSandboxArgv({
-            session: sshSession,
-            remoteCommand,
-            tty: usePty,
-          }),
+  return createRemoteShellSandboxBackend(params, {
+    backendId: "ssh",
+    configLabel: target,
+    configLabelKind: "Target",
+    preprovisionedWorkdir,
+    createSession: async (): Promise<RemoteShellSandboxSession> => {
+      const session = await createSshSandboxSessionFromSettings({ ...params.cfg.ssh, target });
+      session.assertCurrent = params.assertRuntimeCurrent;
+      return {
+        runCommand: (command) => runSshSandboxCommand({ ...command, session }),
+        uploadDirectory: (upload) => uploadDirectoryToSshTarget({ ...upload, session }),
+        prepareExec: async (exec) => ({
+          ...(await prepareSshSandboxExec({ ...exec, session })),
           env: sanitizeEnvVars(process.env).allowed,
-          stdinMode: "pipe-open",
-          finalizeToken: { sshSession } satisfies PendingExec,
-        };
-      },
-      finalizeExec: async ({ token }) => {
-        const sshSession = (token as PendingExec | undefined)?.sshSession;
-        if (sshSession) {
-          await disposeSshSandboxSession(sshSession);
-        }
-      },
-      runShellCommand: async (command) => await this.runRemoteShellScript(command),
-      createFsBridge: ({ sandbox }) =>
-        createRemoteShellSandboxFsBridge({
-          sandbox,
-          runtime: this.asHandle(),
         }),
-      runRemoteShellScript: async (command) => await this.runRemoteShellScript(command),
-    };
-  }
-
-  private async createSession(): Promise<SshSandboxSession> {
-    return await createSshSandboxSessionFromSettings({
-      ...this.params.createParams.cfg.ssh,
-      target: this.params.target,
-    });
-  }
-
-  private async ensureRuntime(): Promise<void> {
-    if (this.ensurePromise) {
-      return await this.ensurePromise;
-    }
-    this.ensurePromise = this.ensureRuntimeInner();
-    try {
-      await this.ensurePromise;
-    } catch (error) {
-      this.ensurePromise = null;
-      throw error;
-    }
-  }
-
-  private async ensureRuntimeInner(): Promise<void> {
-    const session = await this.createSession();
-    try {
-      const exists = await runSshSandboxCommand({
-        session,
-        remoteCommand: buildRemoteCommand([
-          "/bin/sh",
-          "-c",
-          'if [ -d "$1" ]; then printf "1\\n"; else printf "0\\n"; fi',
-          "openclaw-sandbox-check",
-          this.params.runtimePaths.runtimeRootDir,
-        ]),
-      });
-      if (exists.stdout.toString("utf8").trim() === "1") {
-        return;
-      }
-      await this.replaceRemoteDirectoryFromLocal(
-        session,
-        this.params.createParams.workspaceDir,
-        this.params.runtimePaths.remoteWorkspaceDir,
-      );
-      if (
-        this.params.createParams.cfg.workspaceAccess !== "none" &&
-        path.resolve(this.params.createParams.agentWorkspaceDir) !==
-          path.resolve(this.params.createParams.workspaceDir)
-      ) {
-        await this.replaceRemoteDirectoryFromLocal(
-          session,
-          this.params.createParams.agentWorkspaceDir,
-          this.params.runtimePaths.remoteAgentWorkspaceDir,
-        );
-      }
-    } finally {
-      await disposeSshSandboxSession(session);
-    }
-  }
-
-  private async replaceRemoteDirectoryFromLocal(
-    session: SshSandboxSession,
-    localDir: string,
-    remoteDir: string,
-  ): Promise<void> {
-    await runSshSandboxCommand({
-      session,
-      remoteCommand: buildRemoteCommand([
-        "/bin/sh",
-        "-c",
-        'mkdir -p -- "$1" && find "$1" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +',
-        "openclaw-sandbox-clear",
-        remoteDir,
-      ]),
-    });
-    await uploadDirectoryToSshTarget({
-      session,
-      localDir,
-      remoteDir,
-    });
-  }
-
-  async runRemoteShellScript(
-    params: SandboxBackendCommandParams,
-  ): Promise<SandboxBackendCommandResult> {
-    await this.ensureRuntime();
-    const session = await this.createSession();
-    try {
-      return await runSshSandboxCommand({
-        session,
-        remoteCommand: buildRemoteCommand([
-          "/bin/sh",
-          "-c",
-          params.script,
-          "openclaw-sandbox-fs",
-          ...(params.args ?? []),
-        ]),
-        stdin: params.stdin,
-        allowFailure: params.allowFailure,
-        signal: params.signal,
-      });
-    } finally {
-      await disposeSshSandboxSession(session);
-    }
-  }
+        dispose: () => disposeSshSandboxSession(session),
+      };
+    },
+  });
 }
 
-function resolveSshRuntimePaths(workspaceRoot: string, scopeKey: string): ResolvedSshRuntimePaths {
-  const runtimeId = buildSshSandboxRuntimeId(scopeKey);
-  const runtimeRootDir = path.posix.join(workspaceRoot, runtimeId);
-  return {
-    runtimeId,
-    runtimeRootDir,
-    remoteWorkspaceDir: path.posix.join(runtimeRootDir, "workspace"),
-    remoteAgentWorkspaceDir: path.posix.join(runtimeRootDir, "agent"),
-  };
+/** Create a static SSH sandbox using the shared remote workspace lifecycle. */
+export async function createSshSandboxBackend(
+  params: CreateSandboxBackendParams,
+): Promise<SandboxBackendHandle> {
+  return createSshSandboxBackendInternal(params);
 }
 
-function buildSshSandboxRuntimeId(scopeKey: string): string {
-  const trimmed = scopeKey.trim() || "session";
-  const safe = normalizeLowercaseStringOrEmpty(trimmed)
-    .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 32);
-  const hash = Array.from(trimmed).reduce(
-    (acc, char) => ((acc * 33) ^ char.charCodeAt(0)) >>> 0,
-    5381,
-  );
-  return `openclaw-ssh-${safe || "session"}-${hash.toString(16).slice(0, 8)}`;
+/** Adopt a placement-owned worktree without mirroring local files into it. */
+export async function createPreprovisionedSshSandboxBackend(
+  params: CreateSandboxBackendParams,
+  preprovisionedWorkdir: { runtimeId: string; remoteWorkspaceDir: string },
+): Promise<SandboxBackendHandle> {
+  return createSshSandboxBackendInternal(params, preprovisionedWorkdir);
 }
+
+export { resolveSshRuntimePaths };

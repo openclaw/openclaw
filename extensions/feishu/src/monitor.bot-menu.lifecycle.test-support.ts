@@ -1,16 +1,16 @@
+// Feishu plugin module implements monitor.bot menu.lifecycle support behavior.
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import "./lifecycle.test-support.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
 import {
   getFeishuLifecycleTestMocks,
   resetFeishuLifecycleTestMocks,
 } from "./lifecycle.test-support.js";
 import {
-  createFeishuLifecycleConfig,
+  createFeishuLifecycleFixture,
   createFeishuLifecycleReplyDispatcher,
-  createResolvedFeishuLifecycleAccount,
   expectFeishuReplyDispatcherSentFinalReplyOnce,
-  expectFeishuReplyPipelineDedupedAcrossReplay,
   expectFeishuReplyPipelineDedupedAfterPostSendFailure,
   expectFeishuSingleEffectAcrossReplay,
   installFeishuLifecycleReplyRuntime,
@@ -18,24 +18,22 @@ import {
   restoreFeishuLifecycleStateDir,
   setFeishuLifecycleStateDir,
   setupFeishuLifecycleHandler,
+  stopFeishuLifecycleMonitors,
 } from "./test-support/lifecycle-test-support.js";
 
 const {
   createEventDispatcherMock,
   createFeishuReplyDispatcherMock,
   dispatchReplyFromConfigMock,
-  finalizeInboundContextMock,
   resolveAgentRouteMock,
   resolveBoundConversationMock,
   sendCardFeishuMock,
   touchBindingMock,
   withReplyDispatcherMock,
 } = getFeishuLifecycleTestMocks();
-
-let _handlers: Record<string, (data: unknown) => Promise<void>> = {};
 let lastRuntime = createRuntimeEnv();
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
-const lifecycleConfig = createFeishuLifecycleConfig({
+const { cfg: lifecycleConfig, account: lifecycleAccount } = createFeishuLifecycleFixture({
   accountId: "acct-menu",
   appId: "cli_test",
   appSecret: "secret_test",
@@ -44,16 +42,6 @@ const lifecycleConfig = createFeishuLifecycleConfig({
     allowFrom: ["ou_user1"],
   },
   accountConfig: {
-    dmPolicy: "open",
-    allowFrom: ["ou_user1"],
-  },
-});
-
-const lifecycleAccount = createResolvedFeishuLifecycleAccount({
-  accountId: "acct-menu",
-  appId: "cli_test",
-  appSecret: "secret_test",
-  config: {
     dmPolicy: "open",
     allowFrom: ["ou_user1"],
   },
@@ -77,9 +65,7 @@ async function setupLifecycleMonitor() {
   lastRuntime = createRuntimeEnv();
   return setupFeishuLifecycleHandler({
     createEventDispatcherMock,
-    onRegister: (registered) => {
-      _handlers = registered;
-    },
+    onRegister: () => {},
     runtime: lastRuntime,
     cfg: lifecycleConfig,
     account: lifecycleAccount,
@@ -92,7 +78,6 @@ describe("Feishu bot-menu lifecycle", () => {
   beforeEach(() => {
     vi.useRealTimers();
     resetFeishuLifecycleTestMocks();
-    _handlers = {};
     lastRuntime = createRuntimeEnv();
     setFeishuLifecycleStateDir("openclaw-feishu-bot-menu");
 
@@ -117,20 +102,21 @@ describe("Feishu bot-menu lifecycle", () => {
       replyText: "menu reply once",
     });
 
-    withReplyDispatcherMock.mockImplementation(async ({ run }) => await run());
-
     installFeishuLifecycleReplyRuntime({
       resolveAgentRouteMock,
-      finalizeInboundContextMock,
       dispatchReplyFromConfigMock,
       withReplyDispatcherMock,
       storePath: "/tmp/feishu-bot-menu-sessions.json",
     });
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-    restoreFeishuLifecycleStateDir(originalStateDir);
+  afterEach(async () => {
+    try {
+      await stopFeishuLifecycleMonitors();
+      restoreFeishuLifecycleStateDir(originalStateDir);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("opens one launcher card across duplicate quick-actions replay", async () => {
@@ -158,45 +144,6 @@ describe("Feishu bot-menu lifecycle", () => {
     expect(createFeishuReplyDispatcherMock).not.toHaveBeenCalled();
   });
 
-  it("falls back once to the legacy routed reply path when launcher rendering fails", async () => {
-    const onBotMenu = await setupLifecycleMonitor();
-    const event = createBotMenuEvent({
-      eventKey: "quick-actions",
-      timestamp: "1700000000001",
-    });
-    sendCardFeishuMock.mockRejectedValueOnce(new Error("boom"));
-
-    await expectFeishuReplyPipelineDedupedAcrossReplay({
-      handler: onBotMenu,
-      event,
-      dispatchReplyFromConfigMock,
-      createFeishuReplyDispatcherMock,
-      waitTimeoutMs: 5_000,
-    });
-
-    expect(lastRuntime?.error).not.toHaveBeenCalled();
-    expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
-    expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
-    expect(createFeishuReplyDispatcherMock).toHaveBeenCalledTimes(1);
-    expect(createFeishuReplyDispatcherMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        accountId: "acct-menu",
-        chatId: "p2p:ou_user1",
-        replyToMessageId: undefined,
-      }),
-    );
-    expect(finalizeInboundContextMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        AccountId: "acct-menu",
-        SessionKey: "agent:bound-agent:feishu:direct:ou_user1",
-        MessageSid: "bot-menu:quick-actions:1700000000001",
-      }),
-    );
-    expect(touchBindingMock).toHaveBeenCalledWith("binding-menu");
-
-    expectFeishuReplyDispatcherSentFinalReplyOnce({ createFeishuReplyDispatcherMock });
-  });
-
   it("does not duplicate delivery when launcher fallback hits a post-send failure", async () => {
     const onBotMenu = await setupLifecycleMonitor();
     const event = createBotMenuEvent({
@@ -219,6 +166,24 @@ describe("Feishu bot-menu lifecycle", () => {
 
     expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
     expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
+    expect(createFeishuReplyDispatcherMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "acct-menu",
+        chatId: "p2p:ou_user1",
+        replyToMessageId: undefined,
+      }),
+    );
+    expect(dispatchReplyFromConfigMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctx: expect.objectContaining({
+          AccountId: "acct-menu",
+          SessionKey: "agent:bound-agent:feishu:direct:ou_user1",
+          MessageSid: "bot-menu:quick-actions:1700000000002",
+        }),
+      }),
+    );
+    expect(touchBindingMock).toHaveBeenCalledWith("binding-menu");
+
     expectFeishuReplyDispatcherSentFinalReplyOnce({ createFeishuReplyDispatcherMock });
   });
 });

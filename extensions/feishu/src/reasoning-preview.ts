@@ -1,6 +1,6 @@
-import { resolveFeishuConfigReasoningDefault } from "./agent-config.js";
-import { loadSessionStore, resolveSessionStoreEntry } from "./bot-runtime-api.js";
-import type { ClawdbotConfig } from "./bot-runtime-api.js";
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
+import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import type { ClawdbotConfig } from "../runtime-api.js";
 
 export function resolveFeishuReasoningPreviewEnabled(params: {
   cfg: ClawdbotConfig;
@@ -8,16 +8,21 @@ export function resolveFeishuReasoningPreviewEnabled(params: {
   storePath: string;
   sessionKey?: string;
 }): boolean {
-  const configDefault = resolveFeishuConfigReasoningDefault(params.cfg, params.agentId);
+  const configDefault =
+    resolveAgentConfig(params.cfg, params.agentId)?.reasoningDefault ??
+    params.cfg.agents?.defaults?.reasoningDefault ??
+    "off";
 
   if (!params.sessionKey) {
     return configDefault === "stream";
   }
 
   try {
-    const store = loadSessionStore(params.storePath, { skipCache: true });
-    const level = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey }).existing
-      ?.reasoningLevel;
+    const level = getSessionEntry({
+      storePath: params.storePath,
+      sessionKey: params.sessionKey,
+      readConsistency: "latest",
+    })?.reasoningLevel;
     if (level === "on" || level === "stream" || level === "off") {
       return level === "stream";
     }

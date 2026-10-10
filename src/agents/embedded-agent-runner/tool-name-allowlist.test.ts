@@ -1,0 +1,179 @@
+// Tool-name allowlist tests cover session replay names, client tool conflict
+// checks, and Tool Search compaction visibility.
+import { describe, expect, it } from "vitest";
+import { findClientToolNameConflicts } from "../agent-tool-definition-adapter.js";
+import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
+import { addClientToolsToToolCatalog } from "../tool-search-catalog.js";
+import {
+  applyToolSearchCatalog,
+  createToolSearchCatalogRef,
+  TOOL_CALL_RAW_TOOL_NAME,
+} from "../tool-search.js";
+import type { ClientToolDefinition } from "./run/params.js";
+import {
+  collectAllowedToolNames,
+  collectRegisteredToolNames,
+  AGENT_RESERVED_TOOL_NAMES,
+  toSessionToolAllowlist,
+} from "./tool-name-allowlist.js";
+
+describe("tool name allowlists", () => {
+  it("collects exact registered custom-tool names for the agent session allowlist", () => {
+    const allowlist = toSessionToolAllowlist(
+      collectRegisteredToolNames([
+        { name: "exec" },
+        { name: "read" },
+        { name: "exec" },
+        { name: "image_generate" },
+      ]),
+    );
+
+    expect(allowlist).toEqual(["exec", "image_generate", "read"]);
+  });
+
+  it("keeps hidden core names available for client conflict admission", () => {
+    // Tool Search hides many built-ins from the visible tool list (core coding
+    // tools like exec stay visible), but conflict checks still need the
+    // original core names to reject duplicate client tools.
+    const uncompactedTools = [
+      createStubTool(TOOL_CALL_RAW_TOOL_NAME),
+      createStubTool("exec"),
+      createStubTool("message"),
+    ];
+    const compacted = applyToolSearchCatalog({
+      tools: uncompactedTools,
+      config: { tools: { toolSearch: true } } as never,
+      catalogRef: createToolSearchCatalogRef(),
+    });
+    const names = collectRegisteredToolNames(uncompactedTools);
+
+    expect([...names]).toEqual([TOOL_CALL_RAW_TOOL_NAME, "exec", "message"]);
+    expect(compacted.tools.map((tool) => tool.name)).toEqual([TOOL_CALL_RAW_TOOL_NAME, "exec"]);
+    expect(
+      findClientToolNameConflicts({
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "exec",
+              parameters: { type: "object", properties: {} },
+            },
+          },
+        ],
+        existingToolNames: [...names, ...AGENT_RESERVED_TOOL_NAMES],
+      }),
+    ).toEqual(["exec"]);
+  });
+
+  it("pins the reserved OpenClaw built-in tool namespace used by client conflict checks", () => {
+    expect(AGENT_RESERVED_TOOL_NAMES).toEqual([
+      "bash",
+      "edit",
+      "find",
+      "grep",
+      "ls",
+      "read",
+      "write",
+    ]);
+  });
+
+  it("keeps collected run allowlists broader than the agent session allowlist source", () => {
+    const allowlist = toSessionToolAllowlist(
+      collectAllowedToolNames({
+        tools: [createStubTool("exec"), createStubTool("read"), createStubTool("exec")],
+        clientTools: [
+          {
+            type: "function",
+            function: {
+              name: "image_generate",
+              parameters: { type: "object", properties: {} },
+            },
+          },
+        ],
+      }),
+    );
+
+    expect(allowlist).toEqual(["exec", "image_generate", "read"]);
+  });
+
+  it("excludes client tool names when Tool Search compacts them into the catalog", () => {
+    const config = { tools: { toolSearch: true } } as never;
+    const catalogRef = createToolSearchCatalogRef();
+    const compacted = applyToolSearchCatalog({
+      tools: [createStubTool(TOOL_CALL_RAW_TOOL_NAME)],
+      config,
+      catalogRef,
+    });
+    const clientTools: ClientToolDefinition[] = [
+      {
+        type: "function",
+        function: {
+          name: "client_pick_file",
+          parameters: { type: "object", properties: {} },
+        },
+      },
+    ];
+    const clientToolSearch = addClientToolsToToolCatalog({
+      tools: [createStubTool("client_pick_file")],
+      enabled: true,
+      catalogRef,
+    });
+
+    const allowlist = toSessionToolAllowlist(
+      collectAllowedToolNames({
+        tools: compacted.tools,
+        clientTools: compacted.catalogRegistered ? undefined : clientTools,
+      }),
+    );
+
+    expect(compacted.catalogRegistered).toBe(true);
+    expect(clientToolSearch.tools).toEqual([]);
+    expect(allowlist).toEqual([TOOL_CALL_RAW_TOOL_NAME]);
+  });
+
+  it("keeps hidden catalog tools valid for replay guards after Tool Search compaction", () => {
+    // Replay validation uses the full registered tool set; the visible session
+    // allowlist can be narrower after catalog compaction.
+    const config = { tools: { toolSearch: true } } as never;
+    const uncompactedTools = [
+      createStubTool(TOOL_CALL_RAW_TOOL_NAME),
+      createStubTool("exec"),
+      createStubTool("fake_plugin_tool"),
+    ];
+    const compacted = applyToolSearchCatalog({
+      tools: uncompactedTools,
+      config,
+      catalogRef: createToolSearchCatalogRef(),
+    });
+    const clientTools: ClientToolDefinition[] = [
+      {
+        type: "function",
+        function: {
+          name: "client_pick_file",
+          parameters: { type: "object", properties: {} },
+        },
+      },
+    ];
+
+    const visibleAllowlist = toSessionToolAllowlist(
+      collectAllowedToolNames({
+        tools: compacted.tools,
+        clientTools: compacted.catalogRegistered ? undefined : clientTools,
+      }),
+    );
+    const replayAllowlist = toSessionToolAllowlist(
+      collectAllowedToolNames({
+        tools: uncompactedTools,
+        clientTools,
+      }),
+    );
+
+    expect(visibleAllowlist).toEqual(["exec", TOOL_CALL_RAW_TOOL_NAME]);
+    expect(replayAllowlist).toEqual([
+      "client_pick_file",
+      "exec",
+      "fake_plugin_tool",
+      TOOL_CALL_RAW_TOOL_NAME,
+    ]);
+  });
+});

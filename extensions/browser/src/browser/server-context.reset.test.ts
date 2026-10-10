@@ -1,127 +1,69 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createProfileResetOps } from "./server-context.reset.js";
+import { useAutoCleanupTempDirTracker } from "../../test-support.js";
+import "./server-context.chrome-test-harness.js";
+import * as chrome from "./chrome.js";
+import { createBrowserRouteContext } from "./server-context.js";
+import { makeBrowserServerState } from "./server-context.test-harness.js";
+import { movePathToTrash } from "./trash.js";
 
-const trashMocks = vi.hoisted(() => ({
-  movePathToTrash: vi.fn(async (from: string) => `${from}.trashed`),
+vi.mock("./trash.js", () => ({
+  movePathToTrash: vi.fn(async (targetPath: string) => targetPath),
 }));
 
-const pwAiMocks = vi.hoisted(() => ({
-  closePlaywrightBrowserConnection: vi.fn(async () => {}),
-}));
-
-vi.mock("./trash.js", () => trashMocks);
-vi.mock("./pw-ai.js", () => pwAiMocks);
-
-afterEach(() => {
-  vi.clearAllMocks();
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(chrome.stopOwnedOpenClawChrome).mockResolvedValue({ status: "not-running" });
 });
 
-function localOpenClawProfile(): Parameters<typeof createProfileResetOps>[0]["profile"] {
-  return {
-    name: "openclaw",
-    cdpUrl: "http://127.0.0.1:18800",
-    cdpHost: "127.0.0.1",
-    cdpIsLoopback: true,
-    cdpPort: 18800,
-    color: "#f60",
-    driver: "openclaw",
-    headless: false,
-    attachOnly: false,
-  };
+function createResetHarness() {
+  const userDataDir = path.join(tempDirs.make("browser-reset-"), "user-data");
+  fs.mkdirSync(userDataDir);
+  vi.mocked(chrome.resolveOpenClawUserDataDir).mockReturnValue(userDataDir);
+  const state = makeBrowserServerState();
+  const profile = createBrowserRouteContext({ getState: () => state }).forProfile();
+  return { profile, state, userDataDir };
 }
 
-function createLocalOpenClawResetOps(
-  params: Omit<Parameters<typeof createProfileResetOps>[0], "profile">,
-) {
-  return createProfileResetOps({ profile: localOpenClawProfile(), ...params });
-}
-
-function createStatelessResetOps(profile: Parameters<typeof createProfileResetOps>[0]["profile"]) {
-  return createProfileResetOps({
-    profile,
-    getProfileState: () => ({ profile: {} as never, running: null }),
-    stopRunningBrowser: vi.fn(async () => ({ stopped: false })),
-    isHttpReachable: vi.fn(async () => false),
-    resolveOpenClawUserDataDir: (name: string) => `/tmp/${name}`,
-  });
-}
-
-describe("createProfileResetOps", () => {
-  it("rejects remote non-extension profiles", async () => {
-    const ops = createStatelessResetOps({
-      ...localOpenClawProfile(),
-      name: "remote",
-      cdpUrl: "https://browserless.example/chrome",
-      cdpHost: "browserless.example",
-      cdpIsLoopback: false,
-      cdpPort: 443,
-      color: "#0f0",
+describe("managed browser profile reset", () => {
+  it("stops a browser from an earlier runtime before moving its profile data", async () => {
+    const { profile, state, userDataDir } = createResetHarness();
+    const resolved = state.resolved;
+    const order: string[] = [];
+    vi.mocked(chrome.stopOwnedOpenClawChrome).mockImplementationOnce(async () => {
+      order.push("stop");
+      return { status: "stopped" };
+    });
+    vi.mocked(movePathToTrash).mockImplementationOnce(async (targetPath) => {
+      order.push("trash");
+      return targetPath;
     });
 
-    await expect(ops.resetProfile()).rejects.toThrow(/only supported for local profiles/i);
+    const resetting = profile.resetProfile();
+    state.resolved = { ...resolved, executablePath: "/replacement/chrome" };
+    await expect(resetting).resolves.toMatchObject({ moved: true, from: userDataDir });
+
+    expect(chrome.stopOwnedOpenClawChrome).toHaveBeenCalledWith(resolved, profile.profile);
+    expect(order).toEqual(["stop", "trash"]);
+    expect(chrome.stopOpenClawChrome).not.toHaveBeenCalled();
   });
 
-  it("stops local browser, closes playwright connection, and trashes profile dir", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reset-"));
-    const profileDir = path.join(tempRoot, "openclaw");
-    fs.mkdirSync(profileDir, { recursive: true });
-
-    const stopRunningBrowser = vi.fn(async () => ({ stopped: true }));
-    const isHttpReachable = vi.fn(async () => true);
-    const getProfileState = vi.fn(() => ({
-      profile: {} as never,
-      running: { pid: 1 } as never,
-    }));
-
-    const ops = createLocalOpenClawResetOps({
-      getProfileState,
-      stopRunningBrowser,
-      isHttpReachable,
-      resolveOpenClawUserDataDir: () => profileDir,
+  it("preserves data after uncertain shutdown and allows a later reset to finish cleanup", async () => {
+    const { profile, userDataDir } = createResetHarness();
+    vi.mocked(chrome.stopOwnedOpenClawChrome).mockResolvedValueOnce({
+      status: "unverified",
+      reason: "managed process identity changed",
     });
 
-    const result = await ops.resetProfile();
-    expect(result).toEqual({
-      moved: true,
-      from: profileDir,
-      to: `${profileDir}.trashed`,
-    });
-    expect(isHttpReachable).toHaveBeenCalledWith(300);
-    expect(stopRunningBrowser).toHaveBeenCalledTimes(1);
-    expect(pwAiMocks.closePlaywrightBrowserConnection).toHaveBeenCalledWith({
-      cdpUrl: "http://127.0.0.1:18800",
-    });
-    expect(trashMocks.movePathToTrash).toHaveBeenCalledWith(profileDir);
-  });
+    await expect(profile.resetProfile()).rejects.toThrow("managed process identity changed");
 
-  it("forces playwright disconnect when loopback cdp is occupied by non-owned process", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reset-no-own-"));
-    const profileDir = path.join(tempRoot, "openclaw");
-    fs.mkdirSync(profileDir, { recursive: true });
+    expect(movePathToTrash).not.toHaveBeenCalled();
+    expect(fs.existsSync(userDataDir)).toBe(true);
 
-    const stopRunningBrowser = vi.fn(async () => ({ stopped: false }));
-    const ops = createLocalOpenClawResetOps({
-      getProfileState: () => ({ profile: {} as never, running: null }),
-      stopRunningBrowser,
-      isHttpReachable: vi.fn(async () => true),
-      resolveOpenClawUserDataDir: () => profileDir,
-    });
-
-    await ops.resetProfile();
-    expect(stopRunningBrowser).not.toHaveBeenCalled();
-    expect(pwAiMocks.closePlaywrightBrowserConnection).toHaveBeenCalledTimes(2);
-    expect(pwAiMocks.closePlaywrightBrowserConnection).toHaveBeenNthCalledWith(1, {
-      cdpUrl: "http://127.0.0.1:18800",
-    });
-    expect(pwAiMocks.closePlaywrightBrowserConnection).toHaveBeenNthCalledWith(2, {
-      cdpUrl: "http://127.0.0.1:18800",
-    });
+    await expect(profile.resetProfile()).resolves.toMatchObject({ moved: true });
+    expect(movePathToTrash).toHaveBeenCalledExactlyOnceWith(userDataDir);
   });
 });

@@ -1,0 +1,303 @@
+/**
+ * Logging tests for tool adapter failures.
+ * Verifies retryable parameter errors expose useful context while exec secrets
+ * stay out of raw logs.
+ */
+import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
+import { Type } from "typebox";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
+
+const mocks = vi.hoisted(() => ({
+  logDebug: vi.fn(),
+  logError: vi.fn(),
+}));
+
+vi.mock("../logger.js", () => ({
+  logDebug: mocks.logDebug,
+  logError: mocks.logError,
+}));
+
+let wrapToolParamValidation: typeof import("./agent-tools.params.js").wrapToolParamValidation;
+let REQUIRED_PARAM_GROUPS: typeof import("./agent-tools.params.js").REQUIRED_PARAM_GROUPS;
+let logError: typeof import("../logger.js").logError;
+let withToolOperatorHint: typeof import("./tool-operator-hint.js").withToolOperatorHint;
+
+type ToolExecute = ReturnType<
+  typeof import("./agent-tool-definition-adapter.js").toToolDefinitions
+>[number]["execute"];
+const extensionContext = {} as Parameters<ToolExecute>[4];
+
+function definitionFor(tool: AgentTool) {
+  const [definition] = toToolDefinitions([tool]);
+  if (!definition) {
+    throw new Error("missing tool definition");
+  }
+  return definition;
+}
+
+function failingExecDefinition(name: string, parameters: AgentTool["parameters"]) {
+  return definitionFor({
+    name,
+    label: name,
+    description: "runs commands",
+    parameters,
+    execute: async () => {
+      throw new Error("exec denied: allowlist miss");
+    },
+  });
+}
+
+function firstLogErrorMessage(): unknown {
+  return vi.mocked(logError).mock.calls[0]?.[0];
+}
+
+describe("agent tool definition adapter logging", () => {
+  beforeAll(async () => {
+    ({ wrapToolParamValidation, REQUIRED_PARAM_GROUPS } = await import("./agent-tools.params.js"));
+    ({ logError } = await import("../logger.js"));
+    ({ withToolOperatorHint } = await import("./tool-operator-hint.js"));
+  });
+
+  beforeEach(() => {
+    vi.mocked(logError).mockReset();
+    mocks.logDebug.mockReset();
+  });
+
+  it("logs raw malformed edit params when required aliases are missing", async () => {
+    const baseTool = {
+      name: "edit",
+      label: "Edit",
+      description: "edits files",
+      parameters: Type.Object({
+        path: Type.String(),
+        edits: Type.Array(
+          Type.Object({
+            oldText: Type.String(),
+            newText: Type.String(),
+          }),
+        ),
+      }),
+      execute: async () => ({
+        content: [{ type: "text" as const, text: "ok" }],
+        details: { ok: true },
+      }),
+    } satisfies AgentTool;
+
+    const tool = wrapToolParamValidation(baseTool, REQUIRED_PARAM_GROUPS.edit);
+    const def = definitionFor(tool);
+
+    await def.execute("call-edit-1", { path: "notes.txt" }, undefined, undefined, extensionContext);
+
+    expect(firstLogErrorMessage()).toContain(
+      '[tools] edit failed: Missing required parameter: edits (received: path). Supply correct parameters before retrying. raw_params={"path":"notes.txt"}',
+    );
+  });
+
+  it("logs the operator hint for a contained tool failure without exposing it to the model", async () => {
+    const baseTool = {
+      name: "apply_patch",
+      label: "apply_patch",
+      description: "patches files",
+      parameters: Type.Object({ input: Type.String() }),
+      execute: async () => {
+        throw withToolOperatorHint(
+          new Error("Path escapes sandbox root (~/workspace): /outside/note.md"),
+          "apply_patch is restricted to the workspace by default. Set tools.exec.applyPatch.workspaceOnly to false.",
+        );
+      },
+    } satisfies AgentTool;
+    const [def] = toToolDefinitions([baseTool]);
+    if (!def) {
+      throw new Error("missing tool definition");
+    }
+
+    const result = await def.execute(
+      "call-hint-1",
+      { input: "*** Begin Patch" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    const logged = String(firstLogErrorMessage());
+    expect(logged).toContain("Path escapes sandbox root");
+    expect(logged).toContain("tools.exec.applyPatch.workspaceOnly");
+
+    // The model-visible result carries the rejection but never the way to lift it.
+    const modelText = JSON.stringify(result);
+    expect(modelText).toContain("Path escapes sandbox root");
+    expect(modelText).not.toContain("workspaceOnly");
+  });
+
+  it("omits raw exec commands and env values from failure logs", async () => {
+    const commandSecret = "issue85049-xai-cleartext-token-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
+    const envSecret = "issue85049-env-cleartext-token-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
+    const def = failingExecDefinition(
+      "bash",
+      Type.Object({
+        command: Type.String(),
+        cmd: Type.Optional(Type.String()),
+        env: Type.Optional(Type.Record(Type.String(), Type.String())),
+        timeout: Type.Optional(Type.Number()),
+      }),
+    );
+
+    const result = await def.execute(
+      "call-exec-denied",
+      {
+        command: `export XAI_API_KEY=\\"${commandSecret}\\" && echo blocked`,
+        cmd: `echo ${commandSecret}`,
+        env: {
+          OPENAI_API_KEY: envSecret,
+        },
+        timeout: 5,
+      },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    const message = String(firstLogErrorMessage());
+    expect(message).toContain("[tools] exec failed: exec denied: allowlist miss");
+    expect(message).toContain('"command":{"omitted":true');
+    expect(message).toContain('"cmd":{"omitted":true');
+    expect(message).toContain('"reason":"exec command may contain credentials"');
+    expect(message).toContain('"chars":');
+    expect(message).toMatch(/"sha256":"[a-f0-9]{16}"/u);
+    expect(message).toContain('"env":{"OPENAI_API_KEY":"[omitted exec env value]"}');
+    expect(message).toContain('"timeout":5');
+    expect(message).not.toContain(commandSecret);
+    expect(message).not.toContain(envSecret);
+    expect(message).not.toContain("export XAI_API_KEY");
+    expect(result.details).toEqual({
+      status: "error",
+      tool: "exec",
+      error: "exec denied: allowlist miss",
+    });
+  });
+
+  it("omits raw exec commands from JSON-string failure params", async () => {
+    const commandSecret = "issue85049-json-cleartext-token-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
+    const def = failingExecDefinition("exec", Type.Any());
+
+    await def.execute(
+      "call-exec-denied-json-string",
+      JSON.stringify({
+        command: `export XAI_API_KEY=\\"${commandSecret}\\" && echo blocked`,
+        timeout: 5,
+      }),
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    const message = String(firstLogErrorMessage());
+    expect(message).toContain('"command":{"omitted":true');
+    expect(message).toContain('"reason":"exec command may contain credentials"');
+    expect(message).toContain('"timeout":5');
+    expect(message).not.toContain(commandSecret);
+    expect(message).not.toContain("export XAI_API_KEY");
+  });
+
+  it("omits malformed exec command and env values from failure logs", async () => {
+    const commandSecret =
+      "issue85049-malformed-command-cleartext-token-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
+    const envSecret =
+      "issue85049-malformed-env-cleartext-token-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
+    const def = failingExecDefinition("exec", Type.Any());
+
+    await def.execute(
+      "call-exec-denied-malformed",
+      {
+        command: [`export XAI_API_KEY=\\"${commandSecret}\\" && echo blocked`],
+        env: `OPENAI_API_KEY=${envSecret}`,
+      },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    const message = String(firstLogErrorMessage());
+    expect(message).toContain('"command":{"omitted":true');
+    expect(message).toContain('"type":"array"');
+    expect(message).toContain('"env":"[omitted exec env]"');
+    expect(message).not.toContain(commandSecret);
+    expect(message).not.toContain(envSecret);
+    expect(message).not.toContain("export XAI_API_KEY");
+  });
+
+  it("rethrows AbortError failures when the agent run signal was aborted", async () => {
+    const baseTool = {
+      name: "web_search",
+      label: "Web Search",
+      description: "searches",
+      parameters: Type.Object({
+        query: Type.String(),
+      }),
+      execute: async () => {
+        const error = new Error("This operation was aborted");
+        error.name = "AbortError";
+        throw error;
+      },
+    } satisfies AgentTool;
+    const def = definitionFor(baseTool);
+    const controller = new AbortController();
+    controller.abort();
+
+    let thrown: unknown;
+    try {
+      await def.execute(
+        "call-web-search-agent-abort",
+        { query: "OpenClaw" },
+        controller.signal,
+        undefined,
+        extensionContext,
+      );
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown).toBe(controller.signal.reason);
+    expect((thrown as Error).name).toBe("AbortError");
+    expect(logError).not.toHaveBeenCalled();
+  });
+
+  it("accepts nested edits arrays for the current edit schema", async () => {
+    const execute = vi.fn(async (_toolCallId: string, params: unknown) => ({
+      content: [{ type: "text" as const, text: JSON.stringify(params) }],
+      details: { ok: true },
+    }));
+    const baseTool = {
+      name: "edit",
+      label: "Edit",
+      description: "edits files",
+      parameters: Type.Object({
+        path: Type.String(),
+        edits: Type.Array(
+          Type.Object({
+            oldText: Type.String(),
+            newText: Type.String(),
+          }),
+        ),
+      }),
+      execute,
+    } satisfies AgentTool;
+
+    const tool = wrapToolParamValidation(baseTool, REQUIRED_PARAM_GROUPS.edit);
+    const def = definitionFor(tool);
+
+    const payload = {
+      path: "notes.txt",
+      edits: [
+        { oldText: "alpha", newText: "beta" },
+        { oldText: "gamma", newText: "" },
+      ],
+    };
+
+    await def.execute("call-edit-batch", payload, undefined, undefined, extensionContext);
+
+    expect(execute).toHaveBeenCalledWith("call-edit-batch", payload, undefined, undefined);
+    expect(logError).not.toHaveBeenCalled();
+  });
+});

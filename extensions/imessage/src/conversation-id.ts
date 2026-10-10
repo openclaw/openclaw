@@ -1,15 +1,9 @@
-import {
-  matchIMessageAcpConversation,
-  normalizeIMessageAcpConversationId,
-  resolveIMessageConversationIdFromTarget,
-} from "./conversation-id-core.js";
 import { normalizeIMessageHandle } from "./targets.js";
-
 export {
   matchIMessageAcpConversation,
   normalizeIMessageAcpConversationId,
   resolveIMessageConversationIdFromTarget,
-};
+} from "./conversation-id-core.js";
 
 export function resolveIMessageInboundConversationId(params: {
   isGroup: boolean;

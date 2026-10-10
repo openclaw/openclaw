@@ -1,0 +1,655 @@
+import { createMeetingRoutingOwnershipSource } from "./status-call-ownership-source.js";
+
+type MeetingStatusCallSourceOptions = {
+  captionEnableSource: string;
+  captionSettleMs?: number;
+  platform: {
+    audioOutputElementIdPrefix: string;
+    displayName: string;
+    globals: {
+      audioOutputs: string;
+      captions: string;
+      meeting: string;
+    };
+    manualActionReasonPrefix: string;
+  };
+  extraResultSource?: string;
+  /** In-page boolean expression that revalidates call ownership after media-routing awaits. */
+  liveOwnershipSource?: string;
+  /** In-page statements run once audio routing settles, before captions and the status result. */
+  afterAudioRoutingSource?: string;
+  transcriptMaxLines?: number;
+};
+
+export function createMeetingStatusCallSource(options: MeetingStatusCallSourceOptions): string {
+  const captionSettleMs = options.captionSettleMs ?? 1_000;
+  const audioOutputsGlobal = JSON.stringify(options.platform.globals.audioOutputs);
+  const captionsGlobal = JSON.stringify(options.platform.globals.captions);
+  const meetingGlobal = JSON.stringify(options.platform.globals.meeting);
+  const transcriptMaxLines = options.transcriptMaxLines ?? 500;
+  const withLiveOwnership = (source: string) =>
+    options.liveOwnershipSource === undefined ? "" : source;
+  const ownershipCheck = (indent: number) =>
+    withLiveOwnership(
+      `\n${" ".repeat(indent)}if (!recheckAudioOwnership()) break audioOutputRouting;`,
+    );
+  return `  let audioOutputRouted;
+  let audioOutputDeviceLabel;
+  let audioOutputRouteError;
+  let audioOutputRouteRetryable = false;${
+    options.liveOwnershipSource === undefined
+      ? ""
+      : createMeetingRoutingOwnershipSource({
+          liveOwnershipSource: options.liveOwnershipSource,
+          meetingGlobal,
+        })
+  }
+  const remoteCapture = window.__openclawMeetingRemoteAudio;
+  if (remoteCapture && remoteCapture.sessionId === sessionId && remoteCapture.isCurrent()) {
+    if (canMutateSession) remoteCapture.scan();
+    audioOutputRouted = remoteCapture.isCurrent();
+    audioOutputDeviceLabel = "Isolated browser playback";
+  } else if (inCall && allowMicrophone && navigator.mediaDevices?.enumerateDevices) {
+    const media = [...document.querySelectorAll("audio, video")].filter(
+      (element) =>
+        typeof element.setSinkId === "function" &&
+        !String(element.id || "").startsWith(${JSON.stringify(options.platform.audioOutputElementIdPrefix)}),
+    );
+    if (media.length === 0) audioOutputRouted = false;
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();${ownershipCheck(6)}
+      const output = devices.find(
+        (device) => device.kind === "audiooutput" && isVirtualAudioDevice(device.label)
+      );
+      if (!output?.deviceId) {
+        audioOutputRouted = false;
+        if (media.length > 0 && canMutateSession) suspendOwnedAudioBridges();
+        notes.push("The OpenClaw virtual audio speaker output was not visible to ${options.platform.displayName}.");
+      } else if (media.length === 0) {
+        // Retry an in-call rerender only after proving the required output still exists.
+        audioOutputRouteRetryable = true;
+        audioOutputDeviceLabel = output.label || "Virtual audio device";
+      } else {
+        const routeErrors = [];
+        const liveStream = (element) =>
+          element.srcObject?.getAudioTracks?.().some((track) => track.readyState === "live")
+            ? element.srcObject
+            : undefined;
+        const allBridgeEntries = Array.isArray(window[${audioOutputsGlobal}])
+          ? window[${audioOutputsGlobal}]
+          : [];
+        const retainedBridgeEntries = allBridgeEntries.filter((entry) => !bridgeOwnedBySession(entry));
+        const previousBridgeEntries = allBridgeEntries.filter(bridgeOwnedBySession);
+        const originalMuteBySource = new Map(previousBridgeEntries.flatMap((entry) =>
+          bridgeSources(entry).flatMap((source) =>
+            source?.element ? [[source.element, Boolean(source.muted)]] : []
+          )
+        ));
+        const routeCandidates = media
+          .map((element) => ({ element, stream: liveStream(element) }))
+          // Teams mutes local/self-view and intentionally suppressed playback. Preserve
+          // that product decision; only our own already-bridged source stays eligible.
+          .filter((entry) => !entry.element.muted || originalMuteBySource.has(entry.element));
+        // The self-view often exists before Teams attaches remote playback. With the
+        // required output present, an all-filtered list is still a transient DOM state.
+        if (routeCandidates.length === 0) audioOutputRouteRetryable = true;
+        if (canMutateSession) {
+          for (const { element } of routeCandidates) {
+            if (!originalMuteBySource.has(element)) {
+              originalMuteBySource.set(element, Boolean(element.muted));
+            }
+            // Sink changes are asynchronous. Silence the physical output until either
+            // the source or its fallback bridge is confirmed on the virtual device.
+            ${withLiveOwnership(`routingSources.push({
+              element,
+              muted: originalMuteBySource.get(element),
+              sinkId: element.sinkId,
+              stream: element.srcObject,
+              url: mediaSourceUrl(element),
+            });
+            `)}element.muted = true;
+          }
+        }
+        const currentSources = new Set(routeCandidates.map((entry) => entry.element));
+        const bridgeEntries = previousBridgeEntries.filter((entry) =>
+          entry?.source &&
+          entry?.stream === liveStream(entry.source) &&
+          entry?.bridge?.isConnected &&
+          currentSources.has(entry.source)
+        );
+        const suspendedBySource = new Map();
+        for (const entry of previousBridgeEntries) {
+          if (bridgeEntries.includes(entry)) continue;
+          for (const source of bridgeSources(entry)) {
+            if (
+              !source?.element ||
+              source.muted ||
+              !bridgeSourceMatches(source.element, source)
+            ) continue;
+            const sourceStillPresent = currentSources.has(source.element);
+            const detachedLiveSource = !sourceStillPresent && Boolean(liveStream(source.element));
+            if (!sourceStillPresent && !detachedLiveSource) continue;
+            suspendedBySource.set(source.element, {
+              detached: detachedLiveSource,
+              sessionId: entry.sessionId || sessionId,
+              source: source.element,
+              sourceMuted: false,
+              sourceUrl: mediaSourceUrl(source.element) || source.url,
+              stream: source.element.srcObject,
+              suspended: true,
+            });
+          }
+        }
+        if (canMutateSession) {
+          // One bridge owns one Teams playback element. Stream or element replacement
+          // retires that bridge so it cannot keep playing or satisfy route verification.
+          previousBridgeEntries.filter((entry) => !bridgeEntries.includes(entry)).forEach((entry) => {
+            for (const source of bridgeSources(entry)) {
+              if (
+                !source?.element ||
+                suspendedBySource.has(source.element) ||
+                currentSources.has(source.element)
+              ) continue;
+              restoreAudioBridgeSource(source);
+            }
+            // Reused current elements stay silent until this pass confirms their
+            // replacement source; unrelated exact sources were restored above.
+            retireAudioBridge(entry, false);
+          });
+        }
+        const routed = [];
+        for (const { element, stream } of routeCandidates) {
+          let entry = bridgeEntries.find((candidate) => candidate.source === element);
+          let elementRouted = element.sinkId === output.deviceId;
+          let directRouteError;
+          if (canMutateSession && !elementRouted) {
+            try {
+              await element.setSinkId(output.deviceId);${ownershipCheck(16)}
+              elementRouted = element.sinkId === output.deviceId;
+            } catch (error) {${ownershipCheck(16)}
+              directRouteError = {
+                message: error?.message || String(error),
+                retryable: error?.name === "AbortError",
+              };
+            }
+          }
+          if (elementRouted && entry && canMutateSession) {
+            bridgeEntries.splice(bridgeEntries.indexOf(entry), 1);
+            retireAudioBridge(entry);
+            entry = undefined;
+          }
+          // Direct sink routing is valid for src/MediaSource and pre-attachment elements.
+          // A live MediaStream is required only when the hidden bridge fallback is needed.
+          if (elementRouted) {
+            if (canMutateSession) {
+              element.muted = originalMuteBySource.get(element);
+            }
+            suspendedBySource.delete(element);
+            routed.push(true);
+            continue;
+          }
+          if (!stream) {
+            const hasLoadedPlaybackSource = Number(element.readyState) > 0;
+            routed.push(false);
+            if (hasLoadedPlaybackSource && directRouteError) routeErrors.push(directRouteError);
+            if (!hasLoadedPlaybackSource) audioOutputRouteRetryable = true;
+            if (canMutateSession && originalMuteBySource.get(element) === false) {
+              // Teams may attach the remote MediaStream after creating its media element.
+              // Keep it silent until a later serialized status poll routes that source.
+              suspendedBySource.set(element, {
+                sessionId,
+                pending: true,
+                source: element,
+                sourceMuted: false,
+                sourceUrl: mediaSourceUrl(element),
+                stream: element.srcObject,
+                suspended: true,
+              });
+            }
+            continue;
+          }
+          if (!entry && canMutateSession) {
+            const bridge = document.createElement("audio");
+            bridge.id = ${JSON.stringify(options.platform.audioOutputElementIdPrefix)} + bridgeEntries.length;
+            bridge.autoplay = false;
+            bridge.hidden = true;
+            bridge.srcObject = stream;
+            document.body.appendChild(bridge);
+            entry = {
+              bridge,
+              playing: false,
+              sessionId,
+              source: element,
+              sourceMuted: originalMuteBySource.get(element),
+              sourceUrl: mediaSourceUrl(element),
+              stream,
+            };
+            bridgeEntries.push(entry);${withLiveOwnership("\n                routingBridges.push(entry);")}
+            suspendedBySource.delete(element);
+          }
+          if (entry?.bridge) {
+            try {
+              if (canMutateSession) {
+                if (entry.bridge.sinkId !== output.deviceId) {
+                  await entry.bridge.setSinkId(output.deviceId);${ownershipCheck(22)}
+                }
+                await entry.bridge.play();${ownershipCheck(20)}
+                entry.playing = true;
+              }
+              elementRouted =
+                entry.bridge.sinkId === output.deviceId && entry.playing === true;
+              if (elementRouted) {
+                suspendedBySource.delete(element);
+                if (canMutateSession && !entry.sourceMuted) element.muted = true;
+              }
+            } catch (error) {${ownershipCheck(18)}
+              entry.playing = false;
+              if (canMutateSession) retireAudioBridge(entry, false);
+              routeErrors.push({
+                message: error?.message || String(error),
+                retryable: error?.name === "AbortError",
+              });
+            }
+          }
+          routed.push(elementRouted);
+        }
+        if (canMutateSession) {
+          const nextBridgeEntries = [
+            ...retainedBridgeEntries,
+            ...bridgeEntries,
+            ...suspendedBySource.values(),
+          ];
+          if (nextBridgeEntries.length > 0) {
+            window[${audioOutputsGlobal}] = nextBridgeEntries;
+          } else {
+            delete window[${audioOutputsGlobal}];
+          }
+        }
+        audioOutputRouted = routed.length > 0 && routed.every(Boolean);
+        if (canMutateSession && !audioOutputRouted) suspendOwnedAudioBridges();
+        if (audioOutputRouted && bridgeEntries.length > 0) {
+          notes.push(
+            "Routed ${options.platform.displayName} remote audio to " +
+            (output.label || "the virtual audio device") +
+            " through MediaStream bridges."
+          );
+        }
+        audioOutputDeviceLabel = output.label || "Virtual audio device";
+        // An unloaded Teams media element can reject setSinkId before its stream
+        // arrives. Keep that state retryable; loaded-source failures are terminal.
+        if (!audioOutputRouted && routed.length > 0 && routeErrors.length > 0) {
+          audioOutputRouteError = routeErrors[routeErrors.length - 1]?.message;
+          audioOutputRouteRetryable = routeErrors.every((error) => error.retryable === true);
+        }
+      }
+    } catch (error) {${ownershipCheck(6)}
+      if (media.length > 0) audioOutputRouted = false;
+      audioOutputRouteError = error?.message || String(error);
+      if (media.length > 0) {
+        if (canMutateSession) suspendOwnedAudioBridges();
+      } else {
+        notes.push("Could not inspect ${options.platform.displayName} speaker outputs: " + audioOutputRouteError);
+      }
+    }
+    if (media.length === 0) {
+      // Suspend ownership until the source returns; call teardown retires it.
+      if (canMutateSession) suspendOwnedAudioBridges();
+    } else if (!audioOutputRouted && audioOutputRouteError) {
+      notes.push("Could not route ${options.platform.displayName} speaker output to the OpenClaw virtual audio device: " + audioOutputRouteError);
+    }
+  } else if (inCall && allowMicrophone) {
+    audioOutputRouted = false;
+    if (canMutateSession) retireOwnedAudioBridges();
+  }
+${withLiveOwnership("  }\n")}${
+    options.afterAudioRoutingSource
+      ? // The hook may await; recheck ownership after it so this pass's routing still rolls back.
+        `  ${options.afterAudioRoutingSource}\n${withLiveOwnership("  recheckAudioOwnership();\n")}`
+      : ""
+  }  let captioning = false;
+  let captionsEnabledAttempted = false;
+  let transcriptLines = 0;
+  let lastCaptionAt;
+  let lastCaptionSpeaker;
+  let lastCaptionText;
+  let recentTranscript = [];
+  const captionState = (() => {
+    let active = window[${captionsGlobal}];
+    const activeOwnedByRequest = Boolean(
+      !active || (sessionId && (!active.sessionId || active.sessionId === sessionId))
+    );
+    if (!identityVerified) {
+      if (identityAwaitingRerender && activeOwnedByRequest) return active;
+      if (canMutateSession && activeOwnedByRequest) finalizeOwnedCaptions();
+      return undefined;
+    }
+    if (!activeOwnedByRequest) {
+      const replacedPriorOwner = Boolean(
+        canMutateSession &&
+        active?.sessionId &&
+        active.sessionId !== sessionId
+      );
+      if (replacedPriorOwner) {
+        if (priorMeeting?.sessionId === active.sessionId) {
+          active.identity ||= priorMeeting.identity;
+        }
+        finalizeCaptionState(active);
+      }
+      else if (!canMutateSession || !captureCaptions || active?.finalized !== true) return undefined;
+      archiveFinalizedCaptions(active);
+      if (active.settleTimer !== undefined) clearTimeout(active.settleTimer);
+      active.observer?.disconnect?.();
+      delete window[${captionsGlobal}];
+      active = undefined;
+    }
+    if (!captureCaptions) {
+      if (!canMutateSession) return undefined;
+      if (active?.settleTimer !== undefined) clearTimeout(active.settleTimer);
+      active?.observer?.disconnect?.();
+      if (active) delete window[${captionsGlobal}];
+      return undefined;
+    }
+    if (!inCall && !active) return undefined;
+    if (!active && !canMutateSession) return undefined;
+    if (!active) {
+      window[${captionsGlobal}] = {
+        sessionId,
+        identity: expectedIdentity,
+        epoch: crypto.randomUUID(),
+        enabledAttempted: false,
+        observerInstalled: false,
+        observer: undefined,
+        droppedLines: 0,
+        lines: [],
+        settled: [],
+        settleTimer: undefined,
+        visible: [],
+      };
+    }
+    return window[${captionsGlobal}];
+  })();
+  const normalizeCaption = (speaker, captionText) => {
+    if (!captionState) return undefined;
+    const clean = String(captionText || "").replace(/\\s+/g, " ").trim();
+    const cleanSpeaker = String(speaker || "").replace(/\\s+/g, " ").trim();
+    if (!clean) return undefined;
+    return { speaker: cleanSpeaker || undefined, text: clean };
+  };
+  const captionRowIdentity = (row) => {
+    // aria-posinset identifies the logical caption item across virtual-list
+    // rerenders. DOM ids and data indexes can belong to the recycled element.
+    const value = row?.getAttribute?.("aria-posinset");
+    return typeof value === "string" && value.trim()
+      ? "aria-posinset:" + value.trim()
+      : undefined;
+  };
+  const sameCaptionUtterance = (prior, current) => {
+    if (prior.rowIdentity || current.rowIdentity) {
+      return Boolean(
+        prior.rowIdentity &&
+        current.rowIdentity &&
+        prior.rowIdentity === current.rowIdentity
+      );
+    }
+    if (prior.speaker && current.speaker && prior.speaker !== current.speaker) return false;
+    return prior.node === current.node;
+  };
+  const sameCaptionRow = (left, right) =>
+    right.rowIdentity
+      ? left.rowIdentity === right.rowIdentity
+      : left.node === right.node;
+  const commitCaptionLines = (state, entries) => {
+    state.lines.push(...entries.map((entry) => {
+      entry.utteranceId ||= crypto.randomUUID();
+      return {
+        at: entry.at,
+        speaker: entry.speaker,
+        text: entry.text,
+        utteranceId: entry.utteranceId,
+      };
+    }));
+    const excess = state.lines.length - ${transcriptMaxLines};
+    if (excess > 0) {
+      state.lines.splice(0, excess);
+      state.droppedLines = (state.droppedLines || 0) + excess;
+    }
+    const settled = [...state.settled];
+    for (const entry of entries) {
+      const priorIndex = settled.findIndex((candidate) => sameCaptionRow(candidate, entry));
+      if (priorIndex >= 0) settled.splice(priorIndex, 1, { ...entry });
+      else settled.push({ ...entry });
+    }
+    const retainedLineIds = new Set(state.lines.map((entry) => entry.utteranceId));
+    state.settled = settled.filter((entry) => retainedLineIds.has(entry.utteranceId));
+  };
+  const scheduleCaptionSettle = () => {
+    if (!captionState || captionState.visible.length === 0) return;
+    if (captionState.settleTimer !== undefined) clearTimeout(captionState.settleTimer);
+    const pendingState = captionState;
+    pendingState.settleTimer = setTimeout(() => {
+      if (window[${captionsGlobal}] !== pendingState) return;
+      commitCaptionLines(pendingState, pendingState.visible);
+      pendingState.visible = [];
+      pendingState.settleTimer = undefined;
+    }, ${captionSettleMs});
+  };
+  const captionCaptureMatchesCurrentMeeting = () => {
+    if (
+      !captionState ||
+      captionState.finalized === true ||
+      window[${captionsGlobal}] !== captionState
+    ) return false;
+    const observedIdentity = meetingIdentity(location.href);
+    const observedMeeting = window[${meetingGlobal}];
+    const identityConflicts = Boolean(
+      observedIdentity && expectedIdentity && observedIdentity !== expectedIdentity
+    );
+    const sessionConflicts = Boolean(
+      observedMeeting?.sessionId && sessionId && observedMeeting.sessionId !== sessionId
+    );
+    if (identityConflicts || sessionConflicts) {
+      // The observer outlives Teams SPA navigation. Freeze the old buffer before
+      // any caption nodes from the replacement meeting can be attributed to it.
+      finalizeOwnedCaptions();
+      return false;
+    }
+    if (observedIdentity === expectedIdentity) return true;
+    const observedMarkerAgeMs = Date.now() - (observedMeeting?.verifiedAt || 0);
+    const observedAwaitingRerender = Boolean(
+      !observedIdentity &&
+      observedMeeting?.identity === expectedIdentity &&
+      (!observedMeeting.sessionId || !sessionId || observedMeeting.sessionId === sessionId) &&
+      observedMeeting.inCallControl?.isConnected === false &&
+      observedMeeting.inCallUrl === location.href &&
+      observedMarkerAgeMs >= 0 &&
+      observedMarkerAgeMs < 5_000
+    );
+    if (observedAwaitingRerender) return true;
+    return Boolean(
+      observedMeeting?.identity === expectedIdentity &&
+      (!observedMeeting.sessionId || !sessionId || observedMeeting.sessionId === sessionId) &&
+      observedMeeting.inCallControl?.isConnected !== false &&
+      observedMeeting.inCallUrl === location.href
+    );
+  };
+  const scrapeCaptions = (mutations = []) => {
+    if (!captionCaptureMatchesCurrentMeeting()) return;
+    const content = firstRaw(selectors.captionContent);
+    const rows = content
+      ? selectors.captionRows.flatMap((selector) => [...content.querySelectorAll(selector)])
+      : [];
+    captionState.settled = Array.isArray(captionState.settled) ? captionState.settled : [];
+    const removedNodes = mutations.flatMap((mutation) => [...(mutation.removedNodes || [])]);
+    const rowWasRemoved = (entry) => removedNodes.some((node) =>
+      node === entry.node || node?.contains?.(entry.node)
+    );
+    const removedVisible = captionState.visible.filter(rowWasRemoved);
+    if (removedVisible.length > 0) {
+      if (captionState.settleTimer !== undefined) clearTimeout(captionState.settleTimer);
+      captionState.settleTimer = undefined;
+      captionState.visible = captionState.visible.filter((entry) => !rowWasRemoved(entry));
+      commitCaptionLines(captionState, removedVisible);
+    }
+    const retainedLineIds = new Set(captionState.lines.map((entry) => entry.utteranceId));
+    captionState.settled = captionState.settled.filter((entry) =>
+      entry.rowIdentity
+        ? retainedLineIds.has(entry.utteranceId)
+        : !rowWasRemoved(entry) && rows.some((row) => sameCaptionRow(entry, {
+            node: row,
+            rowIdentity: captionRowIdentity(row),
+          }))
+    );
+    const parsedRows = rows.flatMap((row) => {
+      const speaker = text(firstWithin(row, selectors.captionAuthor));
+      const captionText = text(firstWithin(row, selectors.captionText));
+      const parsed = normalizeCaption(speaker, captionText);
+      if (!parsed) return [];
+      const current = { ...parsed, node: row, rowIdentity: captionRowIdentity(row) };
+      const settledIndex = captionState.settled.findIndex((entry) =>
+        sameCaptionRow(entry, current)
+      );
+      const settled = settledIndex >= 0 ? captionState.settled[settledIndex] : undefined;
+      if (
+        settled &&
+        settled.text === current.text &&
+        (settled.speaker || "") === (current.speaker || "")
+      ) return [];
+      if (settled?.rowIdentity && settled.rowIdentity === current.rowIdentity) {
+        const committed = captionState.lines.find((entry) =>
+          entry.utteranceId === settled.utteranceId
+        );
+        if (committed) {
+          committed.speaker = current.speaker || committed.speaker;
+          committed.text = current.text;
+        }
+        captionState.settled.splice(settledIndex, 1, {
+          ...settled,
+          ...current,
+          speaker: current.speaker || settled.speaker,
+        });
+        return [];
+      }
+      if (settledIndex >= 0) captionState.settled.splice(settledIndex, 1);
+      return [current];
+    });
+    if (parsedRows.length === 0) {
+      if (captionState.visible.length > 0 && captionState.settleTimer === undefined) {
+        scheduleCaptionSettle();
+      }
+      return;
+    }
+    const unmatchedPrevious = [...captionState.visible];
+    const nextVisible = [];
+    const now = Date.now();
+    let captionChanged = false;
+    for (const row of parsedRows) {
+      const priorIndex = unmatchedPrevious.findIndex((candidate) => sameCaptionRow(candidate, row));
+      const candidate = priorIndex >= 0 ? unmatchedPrevious[priorIndex] : undefined;
+      const prior = candidate && sameCaptionUtterance(candidate, row)
+        ? unmatchedPrevious.splice(priorIndex, 1)[0]
+        : undefined;
+      if (prior) {
+        captionChanged ||=
+          prior.text !== row.text ||
+          prior.speaker !== row.speaker ||
+          prior.node !== row.node;
+        prior.speaker = row.speaker || prior.speaker;
+        prior.text = row.text;
+        prior.node = row.node;
+        prior.rowIdentity = row.rowIdentity || prior.rowIdentity;
+        prior.seenAt = now;
+        nextVisible.push(prior);
+      } else {
+        captionChanged = true;
+        nextVisible.push({
+          at: new Date().toISOString(),
+          node: row.node,
+          rowIdentity: row.rowIdentity,
+          seenAt: now,
+          speaker: row.speaker,
+          text: row.text,
+        });
+      }
+    }
+    captionChanged ||= unmatchedPrevious.length > 0;
+    commitCaptionLines(captionState, unmatchedPrevious);
+    captionState.visible = nextVisible;
+    // Identity-less rows stay mutable while rendered; removal is their only
+    // reliable utterance boundary. Stable logical rows may settle on quiet.
+    if (
+      (captionChanged || captionState.settleTimer === undefined) &&
+      captionState.visible.every((entry) => entry.rowIdentity)
+    ) {
+      scheduleCaptionSettle();
+    }
+  };
+  if (captionState) {
+    const captionsFinalized = captionState.finalized === true;
+    let captionsEnabledNow = captionsFinalized
+      ? Boolean(captionState.enabledAttempted)
+      : Boolean(firstRaw(selectors.captionRenderer) || firstRaw(selectors.captionsOff));
+    ${options.captionEnableSource}
+    if (!captionsFinalized && canMutateSession) captionState.enabledAttempted = captionsEnabledNow;
+    captionsEnabledAttempted = Boolean(captionState.enabledAttempted);
+    if (!captionsFinalized && canMutateSession && inCall && !captionState.observerInstalled) {
+      captionState.observerInstalled = true;
+      captionState.observer = new MutationObserver(scrapeCaptions);
+      captionState.observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+      });
+      notes.push("Installed ${options.platform.displayName} live-caption observer.");
+    }
+    if (!captionsFinalized && canMutateSession && inCall) scrapeCaptions();
+    const allLines = [...captionState.lines, ...captionState.visible];
+    const lines = allLines.slice(-${transcriptMaxLines});
+    const last = lines[lines.length - 1];
+    captioning = captionsEnabledNow;
+    transcriptLines = (captionState.droppedLines || 0) + allLines.length;
+    lastCaptionAt = last?.at;
+    lastCaptionSpeaker = last?.speaker;
+    lastCaptionText = last?.text;
+    recentTranscript = lines.slice(-5).map((entry) => ({
+      at: entry.at,
+      speaker: entry.speaker,
+      text: entry.text,
+    }));
+  }
+  if (inCall && allowMicrophone && !manualAction) {
+    if (audioInputRouted !== true || audioOutputRouted !== true) {
+      manualAction = manualActionFor("${options.platform.manualActionReasonPrefix}-audio-choice-required", "Verify the OpenClaw virtual audio device is selected as both the ${options.platform.displayName} microphone and speaker before starting talk-back.");
+    } else if (micMuted !== false) {
+      manualAction = manualActionFor("${options.platform.manualActionReasonPrefix}-microphone-required", "Unmute the ${options.platform.displayName} microphone and verify the microphone control shows it is on before starting talk-back.");
+    }
+  }
+  return JSON.stringify({
+    clickedContinueInBrowser: Boolean(continueInBrowser),
+    clickedJoin,
+    inCall,
+    ${options.extraResultSource ?? ""}
+    micMuted,
+    cameraOff,
+    lobbyWaiting,
+    captionCaptureRequested: captureCaptions,
+    captioning,
+    captionsEnabledAttempted,
+    transcriptLines,
+    lastCaptionAt,
+    lastCaptionSpeaker,
+    lastCaptionText,
+    recentTranscript,
+    audioInputRouted,
+    audioInputDeviceLabel,
+    audioInputRouteError,
+    audioOutputRouted,
+    audioOutputDeviceLabel,
+    audioOutputRouteError,
+    audioOutputRouteRetryable,
+    manualAction,
+    title: document.title,
+    url: location.href,
+    notes,
+  });
+}`;
+}

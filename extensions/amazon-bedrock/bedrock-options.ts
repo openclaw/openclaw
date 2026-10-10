@@ -1,0 +1,98 @@
+/**
+ * Stream option extensions and prompt-cache policy for Amazon Bedrock models.
+ * Provider registration and runtime streaming share these contracts.
+ */
+import type { CachePointBlock } from "@aws-sdk/client-bedrock-runtime";
+import type {
+  CacheRetention,
+  Model,
+  ModelThinkingLevel,
+  StreamOptions,
+  ThinkingBudgets,
+} from "openclaw/plugin-sdk/llm";
+import { resolveClaudeModelIdentity } from "openclaw/plugin-sdk/provider-model-shared";
+
+export function resolveBedrockPromptCachePolicy(
+  model: Pick<Model, "id" | "params"> & { name?: string },
+): "nova" | "claude" | undefined {
+  // AWS Nova model cards allow system/messages checkpoints with a five-minute TTL.
+  // Only unwrap foundation models and system profiles; application profiles stay opaque.
+  const modelId = model.id
+    .trim()
+    .toLowerCase()
+    .replace(
+      /^arn:aws(?:-cn|-us-gov)?:bedrock:[^:]+:[^:]*:(?:foundation-model|inference-profile)\//,
+      "",
+    )
+    .replace(/^(?:us|eu|apac|jp|global)\./, "");
+  if (/^amazon\.nova-(?:micro|lite|pro|premier|2-lite)-v1:0$/.test(modelId)) {
+    return "nova";
+  }
+  if (
+    supportsBedrockClaudePromptCaching(model.id, model.name) ||
+    supportsBedrockClaudePromptCaching(resolveClaudeModelIdentity(model), model.name)
+  ) {
+    return "claude";
+  }
+  return undefined;
+}
+
+export function resolveBedrockCachePoint(
+  model: Pick<Model, "id" | "params"> & { name?: string },
+  retention: CacheRetention,
+): CachePointBlock | undefined {
+  const policy = resolveBedrockPromptCachePolicy(model);
+  if (!policy || retention === "none") {
+    return undefined;
+  }
+  const supportsLongTtl = getModelMatchCandidates(
+    resolveClaudeModelIdentity(model),
+    model.name,
+  ).some((candidate) =>
+    /claude-(?:haiku-(?:4-5|5-5)|sonnet-(?:4-[56]|5(?:-5)?)|opus-(?:4-[5-8]|5(?:-5)?)|(?:fable|mythos)-5(?:-1)?)(?:$|-v\d|-\d{8}(?:-|$))/.test(
+      candidate,
+    ),
+  );
+  return {
+    type: "default",
+    ...(policy === "claude" && retention === "long" && supportsLongTtl ? { ttl: "1h" } : {}),
+  };
+}
+
+type BedrockThinkingDisplay = "summarized" | "omitted";
+
+export interface BedrockOptions extends StreamOptions {
+  region?: string;
+  profile?: string;
+  toolChoice?: "auto" | "any" | "none" | { type: "tool"; name: string };
+  reasoning?: ModelThinkingLevel;
+  thinkingBudgets?: ThinkingBudgets;
+  interleavedThinking?: boolean;
+  thinkingDisplay?: BedrockThinkingDisplay;
+  requestMetadata?: Record<string, string>;
+  bearerToken?: string;
+}
+
+function getModelMatchCandidates(modelId: string, modelName?: string): string[] {
+  const values = modelName ? [modelId, modelName] : [modelId];
+  return values.flatMap((value) => {
+    const lower = value.toLowerCase();
+    return [lower, lower.replace(/[\s_.:]+/g, "-")];
+  });
+}
+
+export function supportsBedrockClaudePromptCaching(modelId: string, modelName?: string): boolean {
+  const candidates = getModelMatchCandidates(modelId, modelName);
+  const hasClaudeRef = candidates.some((s) => s.includes("claude"));
+  if (!hasClaudeRef) {
+    if (typeof process !== "undefined" && process.env.AWS_BEDROCK_FORCE_CACHE === "1") {
+      return true;
+    }
+    return false;
+  }
+  return candidates.some(
+    (candidate) =>
+      candidate.includes("-4-") ||
+      /claude-(?:fable-5|mythos-5|opus-5|sonnet-5|3-7-sonnet|3-5-haiku)/.test(candidate),
+  );
+}

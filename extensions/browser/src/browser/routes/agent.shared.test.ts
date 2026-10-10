@@ -1,13 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import { BrowserProfileUnavailableError } from "../errors.js";
+import * as navigationGuard from "../navigation-guard.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import "../../test-support/browser-security.mock.js";
-import {
-  readBody,
-  resolveSafeRouteTabUrl,
-  resolveTargetIdFromBody,
-  resolveTargetIdFromQuery,
-  withRouteTabContext,
-} from "./agent.shared.js";
+import { handleRouteError, resolveSafeRouteTabUrl, withRouteTabContext } from "./agent.shared.js";
 import { createBrowserRouteResponse } from "./test-helpers.js";
 import type { BrowserRequest } from "./types.js";
 
@@ -40,72 +36,107 @@ function profileContext(tabs: Array<{ targetId: string; url: string }>) {
   };
 }
 
-function routeContextForTab(url: string): BrowserRouteContext {
+function routeContextForTab(
+  url: string,
+  ensureTabAvailable = vi.fn(async () => ({
+    targetId: "tab-1",
+    title: "Tab",
+    url,
+    type: "page",
+  })),
+): BrowserRouteContext {
   const profileCtx = {
     profile: {
       cdpUrl: "http://127.0.0.1:9222",
       name: "default",
     },
-    ensureTabAvailable: vi.fn(async () => ({
-      targetId: "tab-1",
-      title: "Tab",
-      url,
-      type: "page",
-    })),
+    ensureTabAvailable,
   } as unknown as ProfileContext;
 
   return {
     forProfile: () => profileCtx,
     state: () => ({
       resolved: {
+        actionTimeoutMs: 60_000,
         ssrfPolicy: {},
       },
     }),
-    mapTabError: () => null,
   } as unknown as BrowserRouteContext;
 }
 
 describe("browser route shared helpers", () => {
-  describe("readBody", () => {
-    it("returns object bodies", () => {
-      expect(readBody(requestWithBody({ one: 1 }))).toEqual({ one: 1 });
+  it("does not interact after dashboard ownership changes during target resolution", async () => {
+    let ownerCurrent = true;
+    const ctx = routeContextForTab(
+      "https://example.com",
+      vi.fn(async () => {
+        ownerCurrent = false;
+        return { targetId: "tab-1", title: "Tab", url: "https://example.com", type: "page" };
+      }),
+    );
+    const response = createBrowserRouteResponse();
+    const run = vi.fn(async () => "mutated");
+    await withRouteTabContext({
+      req: {
+        params: {},
+        query: {},
+        assertCurrent: async () => {
+          if (!ownerCurrent) {
+            throw new Error("dashboard was removed");
+          }
+        },
+      },
+      res: response.res,
+      ctx,
+      targetId: "tab-1",
+      run,
+    });
+    expect(response.statusCode).toBe(500);
+    expect(response.body).toMatchObject({
+      error: expect.stringContaining("dashboard was removed"),
+    });
+    expect(run).not.toHaveBeenCalled();
+  });
+  it("preserves structured browser errors on agent routes", () => {
+    const response = createBrowserRouteResponse();
+    const error = new BrowserProfileUnavailableError("display required", {
+      metadata: {
+        reason: "no_display_for_headed_profile",
+        details: {
+          profile: "openclaw",
+          requestedHeadless: false,
+          headlessSource: "env",
+          displayPresent: false,
+        },
+      },
     });
 
-    it("normalizes non-object bodies to empty object", () => {
-      expect(readBody(requestWithBody(null))).toStrictEqual({});
-      expect(readBody(requestWithBody("text"))).toStrictEqual({});
-      expect(readBody(requestWithBody(["x"]))).toStrictEqual({});
+    handleRouteError(response.res, error);
+
+    expect(response.statusCode).toBe(409);
+    expect(response.body).toMatchObject({
+      error: "display required",
+      reason: "no_display_for_headed_profile",
+      details: { headlessSource: "env" },
     });
   });
 
-  describe("target id parsing", () => {
-    it("extracts and trims targetId from body", () => {
-      expect(resolveTargetIdFromBody({ targetId: "  tab-1  " })).toBe("tab-1");
-      expect(resolveTargetIdFromBody({ targetId: "   " })).toBeUndefined();
-      expect(resolveTargetIdFromBody({ targetId: 123 })).toBeUndefined();
-    });
+  it("redacts credentials from unmapped route errors", () => {
+    const response = createBrowserRouteResponse();
+    const error = new Error(
+      "connect failed for wss://browser-user:browser-password@browserless.example/cdp?token=browser-token",
+    );
 
-    it("extracts and trims targetId from query", () => {
-      expect(resolveTargetIdFromQuery({ targetId: "  tab-2  " })).toBe("tab-2");
-      expect(resolveTargetIdFromQuery({ targetId: "" })).toBeUndefined();
-      expect(resolveTargetIdFromQuery({ targetId: false })).toBeUndefined();
-    });
+    handleRouteError(response.res, error);
+
+    expect(response.statusCode).toBe(500);
+    expect(response.body).toMatchObject({ error: expect.stringContaining("browserless.example") });
+    expect(JSON.stringify(response.body)).not.toContain("browser-user");
+    expect(JSON.stringify(response.body)).not.toContain("browser-password");
+    expect(JSON.stringify(response.body)).not.toContain("browser-token");
   });
 
   describe("safe route tab URLs", () => {
-    it("returns the current listed URL for a tab target", async () => {
-      await expect(
-        resolveSafeRouteTabUrl({
-          ctx: routeContext() as never,
-          profileCtx: profileContext([
-            { targetId: "tab-1", url: "https://example.com/current" },
-          ]) as never,
-          targetId: "tab-1",
-          fallbackUrl: "https://example.com/stale",
-        }),
-      ).resolves.toBe("https://example.com/current");
-    });
-
     it("falls back to the ensured tab URL when tab listing is stale", async () => {
       await expect(
         resolveSafeRouteTabUrl({
@@ -128,6 +159,32 @@ describe("browser route shared helpers", () => {
         }),
       ).resolves.toBeUndefined();
     });
+
+    it("propagates cancelled URL verification instead of returning a redacted URL", async () => {
+      const controller = new AbortController();
+      const reason = new Error("browser navigation verification deadline expired");
+      const guard = vi
+        .spyOn(navigationGuard, "assertBrowserNavigationResultAllowed")
+        .mockImplementationOnce(async () => {
+          controller.abort(reason);
+          throw reason;
+        });
+      try {
+        await expect(
+          resolveSafeRouteTabUrl({
+            ctx: routeContext() as never,
+            profileCtx: profileContext([
+              { targetId: "tab-1", url: "https://example.com/current" },
+            ]) as never,
+            targetId: "tab-1",
+            signal: controller.signal,
+          }),
+        ).rejects.toBe(reason);
+        expect(guard).toHaveBeenCalledWith(expect.objectContaining({ signal: controller.signal }));
+      } finally {
+        guard.mockRestore();
+      }
+    });
   });
 
   describe("withRouteTabContext", () => {
@@ -146,27 +203,6 @@ describe("browser route shared helpers", () => {
 
       expect(run).toHaveBeenCalledOnce();
       expect(response.body).toEqual({ ok: true });
-    });
-
-    it("blocks guarded routes before running on a disallowed current tab", async () => {
-      const response = createBrowserRouteResponse();
-      const run = vi.fn(async () => {
-        response.res.json({ ok: true });
-      });
-
-      await withRouteTabContext({
-        req: requestWithBody({}),
-        res: response.res,
-        ctx: routeContextForTab("http://127.0.0.1:8080/admin"),
-        enforceCurrentUrlAllowed: true,
-        run,
-      });
-
-      expect(run).not.toHaveBeenCalled();
-      expect(response.statusCode).toBe(400);
-      const body = response.body as { error?: unknown };
-      expect(typeof body.error).toBe("string");
-      expect(body.error).not.toBe("");
     });
   });
 });

@@ -1,19 +1,22 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   analyzeArgvCommand,
-  buildSafeBinsShellCommand,
   evaluateExecAllowlist,
-  evaluateShellAllowlist,
+  evaluateShellAllowlistWithAuthorization,
   resolvePlannedSegmentArgv,
-  resolveExecApprovals,
-  type ExecAllowlistEntry,
+  type ExecAllowlistAnalysis,
+  type ExecApprovalsResolved,
   type ExecCommandSegment,
   type ExecSegmentSatisfiedBy,
   type ExecSecurity,
   type SkillBinTrustEntry,
 } from "../infra/exec-approvals.js";
+import type { ExecAuthorizationPlan } from "../infra/exec-authorization-plan.js";
+import { buildAuthorizedShellCommandFromPlan } from "../infra/exec-authorization-render.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   normalizeExecutableToken,
+  POSIX_PARSEABLE_SHELL_WRAPPERS,
   POSIX_SHELL_WRAPPERS,
   resolveShellWrapperTransportArgv,
 } from "../infra/exec-wrapper-resolution.js";
@@ -23,21 +26,14 @@ import {
 } from "../infra/shell-inline-command.js";
 import type { RunResult } from "./invoke-types.js";
 
-const POSIX_SHELL_WRAPPER_NAMES: ReadonlySet<string> = POSIX_SHELL_WRAPPERS;
-
-type SystemRunAllowlistAnalysis = {
-  analysisOk: boolean;
-  allowlistMatches: ExecAllowlistEntry[];
-  allowlistSatisfied: boolean;
-  segments: ExecCommandSegment[];
-  segmentAllowlistEntries: Array<ExecAllowlistEntry | null>;
-  segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
+type SystemRunAllowlistAnalysis = ExecAllowlistAnalysis & {
+  allowlistAuthorizationSatisfied: boolean;
 };
 
-export function evaluateSystemRunAllowlist(params: {
+export async function evaluateSystemRunAllowlist(params: {
   shellCommand: string | null;
   argv: string[];
-  approvals: ReturnType<typeof resolveExecApprovals>;
+  approvals: ExecApprovalsResolved;
   security: ExecSecurity;
   safeBins: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["safeBins"];
   safeBinProfiles: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["safeBinProfiles"];
@@ -46,36 +42,8 @@ export function evaluateSystemRunAllowlist(params: {
   env: Record<string, string> | undefined;
   skillBins: SkillBinTrustEntry[];
   autoAllowSkills: boolean;
-}): SystemRunAllowlistAnalysis {
-  if (params.shellCommand) {
-    const allowlistEval = evaluateShellAllowlist({
-      command: params.shellCommand,
-      allowlist: params.approvals.allowlist,
-      safeBins: params.safeBins,
-      safeBinProfiles: params.safeBinProfiles,
-      cwd: params.cwd,
-      env: params.env,
-      trustedSafeBinDirs: params.trustedSafeBinDirs,
-      skillBins: params.skillBins,
-      autoAllowSkills: params.autoAllowSkills,
-      platform: process.platform,
-    });
-    return {
-      analysisOk: allowlistEval.analysisOk,
-      allowlistMatches: allowlistEval.allowlistMatches,
-      allowlistSatisfied:
-        params.security === "allowlist" && allowlistEval.analysisOk
-          ? allowlistEval.allowlistSatisfied
-          : false,
-      segments: allowlistEval.segments,
-      segmentAllowlistEntries: allowlistEval.segmentAllowlistEntries,
-      segmentSatisfiedBy: allowlistEval.segmentSatisfiedBy,
-    };
-  }
-
-  const analysis = analyzeArgvCommand({ argv: params.argv, cwd: params.cwd, env: params.env });
-  const allowlistEval = evaluateExecAllowlist({
-    analysis,
+}): Promise<SystemRunAllowlistAnalysis> {
+  const context = {
     allowlist: params.approvals.allowlist,
     safeBins: params.safeBins,
     safeBinProfiles: params.safeBinProfiles,
@@ -83,18 +51,32 @@ export function evaluateSystemRunAllowlist(params: {
     trustedSafeBinDirs: params.trustedSafeBinDirs,
     skillBins: params.skillBins,
     autoAllowSkills: params.autoAllowSkills,
-  });
+  };
+  let evaluation: ExecAllowlistAnalysis;
+  if (params.shellCommand) {
+    evaluation = await evaluateShellAllowlistWithAuthorization({
+      ...context,
+      command: params.shellCommand,
+      env: params.env,
+      platform: process.platform,
+    });
+  } else {
+    const analysis = analyzeArgvCommand({ argv: params.argv, cwd: params.cwd, env: params.env });
+    evaluation = {
+      ...evaluateExecAllowlist({ ...context, analysis }),
+      analysisOk: analysis.ok,
+      segments: analysis.segments,
+    };
+  }
   return {
-    analysisOk: analysis.ok,
-    allowlistMatches: allowlistEval.allowlistMatches,
+    ...evaluation,
     allowlistSatisfied:
-      params.security === "allowlist" && analysis.ok ? allowlistEval.allowlistSatisfied : false,
-    segments: analysis.segments,
-    segmentAllowlistEntries: allowlistEval.segmentAllowlistEntries,
-    segmentSatisfiedBy: allowlistEval.segmentSatisfiedBy,
+      params.security === "allowlist" && evaluation.analysisOk && evaluation.allowlistSatisfied,
+    allowlistAuthorizationSatisfied: evaluation.analysisOk && evaluation.allowlistSatisfied,
   };
 }
 
+/** Resolve the single planned argv that can replace the caller argv after allowlist approval. */
 export function resolvePlannedAllowlistArgv(params: {
   security: ExecSecurity;
   shellCommand: string | null;
@@ -115,11 +97,13 @@ export function resolvePlannedAllowlistArgv(params: {
   ) {
     return undefined;
   }
-  const plannedAllowlistArgv = resolvePlannedSegmentArgv(params.segments[0]);
+  const plannedAllowlistArgv = resolvePlannedSegmentArgv(
+    expectDefined(params.segments[0], "segments entry at 0"),
+  );
   return plannedAllowlistArgv && plannedAllowlistArgv.length > 0 ? plannedAllowlistArgv : null;
 }
 
-export function resolveSystemRunExecArgv(params: {
+export async function resolveSystemRunExecArgv(params: {
   plannedAllowlistArgv: string[] | undefined;
   argv: string[];
   security: ExecSecurity;
@@ -132,62 +116,65 @@ export function resolveSystemRunExecArgv(params: {
   shellCommand: string | null;
   segments: ExecCommandSegment[];
   segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
-  cwd: string | undefined;
-  env: Record<string, string> | undefined;
-}): string[] | null {
-  let execArgv = params.plannedAllowlistArgv ?? params.argv;
+  authorizationPlan: ExecAuthorizationPlan | undefined;
+}): Promise<string[] | null> {
+  const execArgv = params.plannedAllowlistArgv ?? params.argv;
   if (
-    params.security === "allowlist" &&
-    params.isWindows &&
-    !params.policy.approvedByAsk &&
-    params.shellCommand &&
-    params.policy.analysisOk &&
-    params.policy.allowlistSatisfied &&
-    params.segments.length === 1 &&
-    params.segments[0]?.argv.length > 0
+    params.security !== "allowlist" ||
+    params.policy.approvedByAsk ||
+    !params.shellCommand ||
+    !params.policy.analysisOk ||
+    !params.policy.allowlistSatisfied
   ) {
-    execArgv = params.segments[0].argv;
+    return execArgv;
+  }
+  const transportKind = resolvePosixShellInlineCommandTransportKind(params.argv);
+  if (transportKind === "opaque") {
+    return null;
+  }
+  if (params.isWindows) {
+    // Exact-path matches stay bound to the resolved executable, while the bare
+    // wildcard contract can still authorize unresolved Windows commands.
+    return params.segments.length === 1
+      ? resolvePlannedSegmentArgv(expectDefined(params.segments[0], "segments entry at 0"))
+      : execArgv;
   }
   if (
-    params.security === "allowlist" &&
-    !params.isWindows &&
-    !params.policy.approvedByAsk &&
-    params.shellCommand &&
-    params.policy.analysisOk &&
-    params.policy.allowlistSatisfied &&
-    params.segmentSatisfiedBy.some((entry) => entry === "safeBins" || entry === "inlineChain") &&
-    isPosixShellInlineCommandTransport(params.argv)
+    transportKind !== "parseable" ||
+    !params.segmentSatisfiedBy.some((entry) => entry === "safeBins" || entry === "inlineChain")
   ) {
-    const rebuilt = buildSafeBinsShellCommand({
-      command: params.shellCommand,
-      segments: params.segments,
-      segmentSatisfiedBy: params.segmentSatisfiedBy,
-      cwd: params.cwd,
-      env: params.env,
-      platform: process.platform,
-    });
-    if (!rebuilt.ok || !rebuilt.command) {
-      return null;
-    }
-    const rewrittenArgv = replacePosixShellInlineCommand({
-      argv: params.argv,
-      oldCommand: params.shellCommand,
-      nextCommand: rebuilt.command,
-    });
-    if (!rewrittenArgv) {
-      return null;
-    }
-    execArgv = rewrittenArgv;
+    return execArgv;
   }
-  return execArgv;
+  if (!params.authorizationPlan) {
+    return null;
+  }
+  const rebuilt = buildAuthorizedShellCommandFromPlan({
+    plan: params.authorizationPlan,
+    mode: "safeBins",
+    segmentSatisfiedBy: params.segmentSatisfiedBy,
+  });
+  if (!rebuilt.ok || !rebuilt.command) {
+    return null;
+  }
+  return replacePosixShellInlineCommand({
+    argv: params.argv,
+    oldCommand: params.shellCommand,
+    nextCommand: rebuilt.command,
+  });
 }
 
-function isPosixShellInlineCommandTransport(argv: string[]): boolean {
+function resolvePosixShellInlineCommandTransportKind(
+  argv: string[],
+): "none" | "opaque" | "parseable" {
   const transportArgv = resolveShellWrapperTransportArgv(argv);
-  return Boolean(
-    transportArgv &&
-    POSIX_SHELL_WRAPPER_NAMES.has(normalizeExecutableToken(transportArgv[0] ?? "")),
-  );
+  if (!transportArgv) {
+    return "none";
+  }
+  const executable = normalizeExecutableToken(transportArgv[0] ?? "");
+  if (!POSIX_SHELL_WRAPPERS.has(executable)) {
+    return "none";
+  }
+  return POSIX_PARSEABLE_SHELL_WRAPPERS.has(executable) ? "parseable" : "opaque";
 }
 
 function findSubsequence(haystack: readonly string[], needle: readonly string[]): number {
@@ -217,7 +204,7 @@ function replacePosixShellInlineCommand(params: {
   const transportArgv = resolveShellWrapperTransportArgv(params.argv);
   if (
     !transportArgv ||
-    !POSIX_SHELL_WRAPPER_NAMES.has(normalizeExecutableToken(transportArgv[0] ?? ""))
+    !POSIX_PARSEABLE_SHELL_WRAPPERS.has(normalizeExecutableToken(transportArgv[0] ?? ""))
   ) {
     return null;
   }
@@ -236,19 +223,17 @@ function replacePosixShellInlineCommand(params: {
   if (token === undefined) {
     return null;
   }
+  if (!token.endsWith(params.oldCommand)) {
+    return null;
+  }
+  // Combined shell flags can leave the inline command in a suffix of the same argv token.
   const rewritten = [...params.argv];
-  if (token === params.oldCommand) {
-    rewritten[absoluteValueIndex] = params.nextCommand;
-    return rewritten;
-  }
-  if (token.endsWith(params.oldCommand)) {
-    rewritten[absoluteValueIndex] =
-      token.slice(0, token.length - params.oldCommand.length) + params.nextCommand;
-    return rewritten;
-  }
-  return null;
+  rewritten[absoluteValueIndex] =
+    token.slice(0, token.length - params.oldCommand.length) + params.nextCommand;
+  return rewritten;
 }
 
+/** Mark truncated output in stderr when possible, otherwise stdout. */
 export function applyOutputTruncation(result: RunResult): void {
   if (!result.truncated) {
     return;

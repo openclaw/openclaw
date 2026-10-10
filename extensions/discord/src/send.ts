@@ -17,6 +17,7 @@ export {
   createScheduledEventDiscord,
   resolveEventCoverImage,
   fetchChannelInfoDiscord,
+  fetchGuildInfoDiscord,
   fetchMemberInfoDiscord,
   fetchRoleInfoDiscord,
   fetchVoiceStatusDiscord,
@@ -45,8 +46,11 @@ export { sendVoiceMessageDiscord } from "./send.voice.js";
 export { sendTypingDiscord } from "./send.typing.js";
 export {
   canViewDiscordGuildChannel,
+  canManageGuildRoleDiscord,
+  canManageGuildMemberRoleDiscord,
   fetchChannelPermissionsDiscord,
   hasAllGuildPermissionsDiscord,
+  hasAnyChannelPermissionDiscord,
   hasAnyGuildPermissionDiscord,
   fetchMemberGuildPermissionsDiscord,
 } from "./send.permissions.js";

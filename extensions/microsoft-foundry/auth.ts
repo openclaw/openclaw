@@ -4,14 +4,11 @@ import type {
   ProviderAuthResult,
 } from "openclaw/plugin-sdk/core";
 import {
-  ensureApiKeyFromOptionEnvOrPrompt,
   ensureAuthProfileStore,
-  normalizeApiKeyInput,
   normalizeOptionalSecretInput,
-  type SecretInput,
-  validateApiKeyInput,
 } from "openclaw/plugin-sdk/provider-auth";
-import { getLoggedInAccount, isAzCliInstalled } from "./cli.js";
+import { captureProviderApiKey } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { getLoggedInAccount, isAzCliInstalled, listSubscriptions } from "./cli.js";
 import {
   loginWithTenantFallback,
   listResourceDeployments,
@@ -20,12 +17,13 @@ import {
   promptTenantId,
   selectFoundryDeployment,
   selectFoundryResource,
-  listSubscriptions,
   testFoundryConnection,
 } from "./onboard.js";
 import {
   buildFoundryAuthResult,
+  formatFoundryApiLabel,
   type FoundryProviderApi,
+  isFoundryMaiImageModel,
   listConfiguredFoundryProfileIds,
   PROVIDER_ID,
   resolveConfiguredModelNameHint,
@@ -41,6 +39,7 @@ export const entraIdAuthMethod: ProviderAuthMethod = {
     choiceId: "microsoft-foundry-entra",
     choiceLabel: "Microsoft Foundry (Entra ID / az login)",
     choiceHint: "Use your Azure login — no API key needed",
+    onboardingScopes: ["text-inference", "image-generation"],
     groupId: "microsoft-foundry",
     groupLabel: "Microsoft Foundry",
     groupHint: "Entra ID + API key",
@@ -52,7 +51,7 @@ export const entraIdAuthMethod: ProviderAuthMethod = {
       );
     }
 
-    let account = getLoggedInAccount();
+    const account = getLoggedInAccount();
     let tenantId = account?.tenantId;
     if (account) {
       const useExisting = await ctx.prompter.confirm({
@@ -61,7 +60,6 @@ export const entraIdAuthMethod: ProviderAuthMethod = {
       });
       if (!useExisting) {
         const loginResult = await loginWithTenantFallback(ctx);
-        account = loginResult.account;
         tenantId = loginResult.tenantId ?? loginResult.account?.tenantId;
       }
     } else {
@@ -70,7 +68,6 @@ export const entraIdAuthMethod: ProviderAuthMethod = {
         "Azure Login",
       );
       const loginResult = await loginWithTenantFallback(ctx);
-      account = loginResult.account;
       tenantId = loginResult.tenantId ?? loginResult.account?.tenantId;
     }
 
@@ -114,61 +111,58 @@ export const entraIdAuthMethod: ProviderAuthMethod = {
       | Array<{
           name: string;
           modelName?: string;
-          api?: "openai-completions" | "openai-responses";
+          api?: FoundryProviderApi;
         }>
       | undefined;
-    if (selectedSub) {
-      const useDiscoveredResource = await ctx.prompter.confirm({
+    if (
+      selectedSub &&
+      (await ctx.prompter.confirm({
         message: "Discover Microsoft Foundry resources from this subscription?",
         initialValue: true,
-      });
-      if (useDiscoveredResource) {
-        const selectedResource = await selectFoundryResource(ctx, selectedSub);
-        const resourceDeployments = listResourceDeployments(selectedResource, selectedSub.id);
-        const selectedDeployment = await selectFoundryDeployment(
-          ctx,
-          selectedResource,
-          resourceDeployments,
-        );
-        discoveredDeployments = resourceDeployments.map((deployment) =>
-          Object.assign(
-            { name: deployment.name },
-            deployment.modelName ? { modelName: deployment.modelName } : {},
-            { api: resolveFoundryApi(deployment.name, deployment.modelName) },
-          ),
-        );
-        endpoint = selectedResource.endpoint;
-        modelId = selectedDeployment.name;
-        modelNameHint = resolveConfiguredModelNameHint(modelId, selectedDeployment.modelName);
-        api = resolveFoundryApi(modelId, modelNameHint);
-        await ctx.prompter.note(
-          [
-            `Resource: ${selectedResource.accountName}`,
-            `Endpoint: ${endpoint}`,
-            `Deployment: ${modelId}`,
-            selectedDeployment.modelName ? `Model: ${selectedDeployment.modelName}` : undefined,
-            `API: ${api === "openai-responses" ? "Responses" : "Chat Completions"}`,
-          ]
-            .filter(Boolean)
-            .join("\n"),
-          "Microsoft Foundry",
-        );
-      } else {
-        ({ endpoint, modelId, modelNameHint, api } = await promptEndpointAndModelManually(ctx));
-      }
+      }))
+    ) {
+      const selectedResource = await selectFoundryResource(ctx, selectedSub);
+      const resourceDeployments = listResourceDeployments(selectedResource, selectedSub.id);
+      const { selected: selectedDeployment, supported: supportedDeployments } =
+        await selectFoundryDeployment(ctx, selectedResource, resourceDeployments);
+      discoveredDeployments = supportedDeployments.map((deployment) =>
+        Object.assign(
+          { name: deployment.name },
+          deployment.modelName ? { modelName: deployment.modelName } : {},
+          { api: resolveFoundryApi(deployment.name, deployment.modelName) },
+        ),
+      );
+      endpoint = selectedResource.endpoint;
+      modelId = selectedDeployment.name;
+      modelNameHint = resolveConfiguredModelNameHint(modelId, selectedDeployment.modelName);
+      api = resolveFoundryApi(modelId, modelNameHint);
+      await ctx.prompter.note(
+        [
+          `Resource: ${selectedResource.accountName}`,
+          `Endpoint: ${endpoint}`,
+          `Deployment: ${modelId}`,
+          selectedDeployment.modelName ? `Model: ${selectedDeployment.modelName}` : undefined,
+          `API: ${formatFoundryApiLabel(api)}`,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        "Microsoft Foundry",
+      );
     } else {
       ({ endpoint, modelId, modelNameHint, api } = await promptEndpointAndModelManually(ctx));
     }
 
-    await testFoundryConnection({
-      ctx,
-      endpoint,
-      modelId,
-      modelNameHint,
-      api,
-      subscriptionId: selectedSub?.id,
-      tenantId,
-    });
+    if (!isFoundryMaiImageModel(resolveConfiguredModelNameHint(modelId, modelNameHint))) {
+      await testFoundryConnection({
+        ctx,
+        endpoint,
+        modelId,
+        modelNameHint,
+        api,
+        subscriptionId: selectedSub?.id,
+        tenantId,
+      });
+    }
 
     return buildFoundryAuthResult({
       profileId: `${PROVIDER_ID}:entra`,
@@ -203,6 +197,7 @@ export const apiKeyAuthMethod: ProviderAuthMethod = {
   wizard: {
     choiceId: "microsoft-foundry-apikey",
     choiceLabel: "Microsoft Foundry (API key)",
+    onboardingScopes: ["text-inference", "image-generation"],
     groupId: "microsoft-foundry",
     groupLabel: "Microsoft Foundry",
     groupHint: "Entra ID + API key",
@@ -213,42 +208,27 @@ export const apiKeyAuthMethod: ProviderAuthMethod = {
     });
     const existing = authStore.profiles[`${PROVIDER_ID}:default`];
     const existingMetadata = existing?.type === "api_key" ? existing.metadata : undefined;
-    let capturedSecretInput: SecretInput | undefined;
-    let capturedCredential = false;
-    let capturedMode: "plaintext" | "ref" | undefined;
-    await ensureApiKeyFromOptionEnvOrPrompt({
+    const { input, mode } = await captureProviderApiKey(ctx, {
       token: normalizeOptionalSecretInput(ctx.opts?.azureOpenaiApiKey),
       tokenProvider: PROVIDER_ID,
-      secretInputMode:
-        ctx.allowSecretRefPrompt === false
-          ? (ctx.secretInputMode ?? "plaintext")
-          : ctx.secretInputMode,
-      config: ctx.config,
       expectedProviders: [PROVIDER_ID],
       provider: PROVIDER_ID,
       envLabel: "AZURE_OPENAI_API_KEY",
       promptMessage: "Enter Azure OpenAI API key",
-      normalize: normalizeApiKeyInput,
-      validate: validateApiKeyInput,
-      prompter: ctx.prompter,
-      setCredential: async (apiKey, mode) => {
-        capturedSecretInput = apiKey;
-        capturedCredential = true;
-        capturedMode = mode;
-      },
+      missingInputMessage: "Missing Azure OpenAI API key.",
     });
-    if (!capturedCredential) {
-      throw new Error("Missing Azure OpenAI API key.");
-    }
     const selection = await promptApiKeyEndpointAndModel(ctx);
+    const existingModelNameHint =
+      existingMetadata?.modelId === selection.modelId
+        ? (existingMetadata.modelName ?? existingMetadata.modelId)
+        : undefined;
     return buildFoundryAuthResult({
       profileId: `${PROVIDER_ID}:default`,
-      apiKey: capturedSecretInput ?? "",
-      ...(capturedMode ? { secretInputMode: capturedMode } : {}),
+      apiKey: input,
+      ...(mode ? { secretInputMode: mode } : {}),
       endpoint: selection.endpoint,
       modelId: selection.modelId,
-      modelNameHint:
-        selection.modelNameHint ?? existingMetadata?.modelName ?? existingMetadata?.modelId,
+      modelNameHint: selection.modelNameHint ?? existingModelNameHint,
       api: selection.api,
       authMethod: "api-key",
       currentProviderProfileIds: listConfiguredFoundryProfileIds(ctx.config),

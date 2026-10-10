@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+/** Tests provider replay helper normalization and deterministic ordering. */
+import { describe, expect, it, vi } from "vitest";
+import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   buildAnthropicReplayPolicyForModel,
   buildGoogleGeminiReplayPolicy,
@@ -8,6 +11,7 @@ import {
   buildPassthroughGeminiSanitizingReplayPolicy,
   resolveTaggedReasoningOutputMode,
   sanitizeGoogleGeminiReplayHistory,
+  sanitizeGoogleGeminiReplayHistoryAsync,
   buildStrictAnthropicReplayPolicy,
 } from "./provider-replay-helpers.js";
 
@@ -45,6 +49,19 @@ describe("provider replay helpers", () => {
     expect(policy).not.toHaveProperty("toolCallIdMode");
   });
 
+  it("selects OpenAI-style ids for duplicate replay tool calls", () => {
+    expectFields(
+      buildOpenAICompatibleReplayPolicy("openai-completions", {
+        duplicateToolCallIdStyle: "openai",
+      }),
+      {
+        sanitizeToolCallIds: true,
+        toolCallIdMode: "strict",
+        duplicateToolCallIdStyle: "openai",
+      },
+    );
+  });
+
   it("drops historical reasoning for OpenAI-compatible chat completions replay", () => {
     expect(
       buildOpenAICompatibleReplayPolicy("openai-completions", {
@@ -62,7 +79,7 @@ describe("provider replay helpers", () => {
         modelId: "google/gemma-4-26b-a4b-it",
         dropReasoningFromHistory: false,
       }),
-    ).toHaveProperty("dropReasoningFromHistory", true);
+    ).not.toHaveProperty("dropReasoningFromHistory");
     expect(
       buildOpenAICompatibleReplayPolicy("openai-responses", {
         modelId: "google/gemma-4-26b-a4b-it",
@@ -86,12 +103,61 @@ describe("provider replay helpers", () => {
 
   it("builds strict anthropic replay policy", () => {
     expectFields(buildStrictAnthropicReplayPolicy({ dropThinkingBlocks: true }), {
+      appendOnlyRuntimeContext: false,
       sanitizeMode: "full",
       preserveSignatures: true,
       repairToolUseResultPairing: true,
       allowSyntheticToolResults: true,
       dropThinkingBlocks: true,
     });
+  });
+
+  it("retains operator context for an admitted in-history system route", () => {
+    expect(
+      buildNativeAnthropicReplayPolicyForModel("claude-opus-5", undefined, true),
+    ).toMatchObject({
+      inHistorySystemUpdates: true,
+      appendOnlyRuntimeContext: true,
+      preserveNativeAnthropicToolUseIds: true,
+    });
+  });
+
+  it.each([
+    ["claude-fable-5-1", true],
+    ["claude-mythos-5-1", false],
+  ])("scopes append-only replay to prefix-binding %s", (modelId, expected) => {
+    for (const buildPolicy of [
+      buildAnthropicReplayPolicyForModel,
+      buildNativeAnthropicReplayPolicyForModel,
+    ]) {
+      expect(buildPolicy(modelId).appendOnlyRuntimeContext).toBe(expected);
+      expect(
+        buildPolicy("deployment", { params: { canonicalModelId: modelId } })
+          .appendOnlyRuntimeContext,
+      ).toBe(expected);
+    }
+    for (const modelApi of ["anthropic-messages", "bedrock-converse-stream"]) {
+      expect(
+        buildHybridAnthropicOrOpenAIReplayPolicy({
+          provider: "custom-proxy",
+          modelApi,
+          modelId: "deployment",
+          model: {
+            id: "deployment",
+            name: "Deployment",
+            api: modelApi,
+            provider: "custom-proxy",
+            baseUrl: "https://example.invalid",
+            input: ["text"],
+            reasoning: true,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 128_000,
+            maxTokens: 16_384,
+            params: { canonicalModelId: modelId },
+          },
+        })?.appendOnlyRuntimeContext,
+      ).toBe(expected);
+    }
   });
 
   it("derives claude-only anthropic replay policy from the model id", () => {
@@ -114,30 +180,55 @@ describe("provider replay helpers", () => {
     );
   });
 
-  it("preserves thinking blocks for Claude Opus 4.5+ and Sonnet 4.5+ models", () => {
-    // These models should NOT drop thinking blocks
+  it("preserves thinking blocks only for Claude models with native history support", () => {
     for (const modelId of [
+      "claude-fable-5",
       "claude-opus-4-5-20251101",
       "claude-opus-4-6",
-      "claude-sonnet-4-5-20250929",
       "claude-sonnet-4-6",
-      "claude-haiku-4-5-20251001",
+      "claude-opus-5",
+      "claude-sonnet-5",
+      "claude-mythos-5",
+      "us.anthropic.claude-opus-5-20260101-v1:0",
     ]) {
       const policy = buildAnthropicReplayPolicyForModel(modelId);
       expect(policy).not.toHaveProperty("dropThinkingBlocks");
     }
 
-    // These legacy models SHOULD drop thinking blocks
-    for (const modelId of ["claude-3-7-sonnet-20250219", "claude-3-5-sonnet-20240620"]) {
+    for (const modelId of [
+      "claude-opus-4-1",
+      "claude-sonnet-4-5-20250929",
+      "claude-haiku-4-5-20251001",
+      "claude-3-7-sonnet-20250219",
+      "claude-3-5-sonnet-20240620",
+      "claude-3-opus-20240229",
+      "claude-opus-50",
+      "claude-sonnet-50",
+      "claude-sonnet-4-60",
+    ]) {
       const policy = buildAnthropicReplayPolicyForModel(modelId);
       expect(policy.dropThinkingBlocks).toBe(true);
     }
+  });
+
+  it("uses canonical deployment metadata for Claude replay policy", () => {
+    expect(
+      buildAnthropicReplayPolicyForModel("prod-opus", {
+        params: { canonicalModelId: "claude-opus-5" },
+      }),
+    ).not.toHaveProperty("dropThinkingBlocks");
+    expect(
+      buildAnthropicReplayPolicyForModel("prod-sonnet", {
+        params: { canonicalModelId: "claude-sonnet-4-5-20250929" },
+      }),
+    ).toHaveProperty("dropThinkingBlocks", true);
   });
 
   it("builds native Anthropic replay policy with selective tool-call id preservation", () => {
     // Sonnet 4.6 preserves thinking blocks
     const policy46 = buildNativeAnthropicReplayPolicyForModel("claude-sonnet-4-6");
     expectFields(policy46, {
+      appendOnlyRuntimeContext: false,
       sanitizeMode: "full",
       sanitizeToolCallIds: true,
       toolCallIdMode: "strict",
@@ -165,6 +256,7 @@ describe("provider replay helpers", () => {
       { anthropicModelDropThinkingBlocks: true },
     );
     expectFields(sonnet46Policy, {
+      appendOnlyRuntimeContext: false,
       validateAnthropicTurns: true,
     });
     expect(sonnet46Policy).not.toHaveProperty("dropThinkingBlocks");
@@ -199,6 +291,7 @@ describe("provider replay helpers", () => {
 
   it("builds Gemini replay helpers and tagged reasoning mode", () => {
     expectFields(buildGoogleGeminiReplayPolicy(), {
+      appendOnlyRuntimeContext: false,
       validateGeminiTurns: true,
       allowSyntheticToolResults: true,
     });
@@ -220,7 +313,7 @@ describe("provider replay helpers", () => {
     ).not.toHaveProperty("sanitizeThoughtSignatures");
   });
 
-  it("sanitizes Gemini replay ordering with a bootstrap turn", () => {
+  it("retains the deprecated synchronous Gemini replay adapter", () => {
     const customEntries: Array<{ customType: string; data: unknown }> = [];
 
     const result = sanitizeGoogleGeminiReplayHistory({
@@ -247,4 +340,39 @@ describe("provider replay helpers", () => {
     expect(bootstrapMessage?.content).toBe("(session bootstrap)");
     expect(customEntries[0]?.customType).toBe("google-turn-ordering-bootstrap");
   });
+});
+
+it("awaits the Gemini bootstrap marker and propagates write failure without sync fallback", async () => {
+  const committed = createDeferredCore<string>();
+  const legacy = vi.fn(() => {
+    throw new Error("synchronous persistence called");
+  });
+  const sessionState = {
+    getCustomEntries: () => [],
+    appendCustomEntry: legacy,
+    appendCustomEntryAsync: vi.fn(() => committed.promise),
+  };
+  const context = {
+    provider: "google",
+    sessionId: "awaited-replay",
+    messages: [makeAgentAssistantMessage({ content: [{ type: "text", text: "hello" }] })],
+    sessionState,
+  };
+  let completed = false;
+  const replay = sanitizeGoogleGeminiReplayHistoryAsync(context).then((messages) => {
+    completed = true;
+    return messages;
+  });
+  await Promise.resolve();
+  expect(completed).toBe(false);
+  committed.resolve("bootstrap-marker");
+  const messages = await replay;
+  expect(messages[0]).toMatchObject({ role: "user", content: "(session bootstrap)" });
+  expect(legacy).not.toHaveBeenCalled();
+
+  sessionState.appendCustomEntryAsync.mockRejectedValueOnce(new Error("worker commit rejected"));
+  await expect(sanitizeGoogleGeminiReplayHistoryAsync(context)).rejects.toThrow(
+    "worker commit rejected",
+  );
+  expect(legacy).not.toHaveBeenCalled();
 });

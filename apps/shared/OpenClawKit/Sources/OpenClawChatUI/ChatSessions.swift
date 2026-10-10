@@ -1,4 +1,46 @@
 import Foundation
+import OpenClawProtocol
+
+public struct OpenClawChatSessionAgentStatus: Codable, Sendable, Hashable {
+    public let note: String
+    public let expiresAt: Double
+    public let attention: String?
+}
+
+public struct OpenClawChatSessionObserverDigest: Codable, Sendable, Hashable {
+    public let agentId: String?
+    public let runId: String?
+    public let revision: Int
+    public let updatedAt: Double
+    public let headline: String
+    public let health: String
+
+    public init(
+        agentId: String? = nil,
+        runId: String? = nil,
+        revision: Int,
+        updatedAt: Double,
+        headline: String,
+        health: String)
+    {
+        self.agentId = agentId
+        self.runId = runId
+        self.revision = revision
+        self.updatedAt = updatedAt
+        self.headline = headline
+        self.health = health
+    }
+
+    public init(_ digest: SessionObserverDigest) {
+        self.init(
+            agentId: digest.agentid,
+            runId: digest.runid,
+            revision: digest.revision,
+            updatedAt: Double(digest.updatedat),
+            headline: digest.headline,
+            health: digest.health.rawValue)
+    }
+}
 
 public struct OpenClawChatThinkingLevelOption: Codable, Identifiable, Sendable, Hashable {
     public let id: String
@@ -10,6 +52,115 @@ public struct OpenClawChatThinkingLevelOption: Codable, Identifiable, Sendable, 
     }
 }
 
+public struct OpenClawChatThinkingProfile: Sendable {
+    public let levels: [OpenClawChatThinkingLevelOption]?
+    public let defaultLevel: String?
+
+    public static func resolve(
+        session: OpenClawChatSessionEntry?,
+        defaults: OpenClawChatSessionsDefaults?,
+        model: OpenClawChatModelChoice?) -> Self?
+    {
+        if let profile = self.profile(
+            levels: session?.thinkingLevels,
+            legacyOptions: session?.thinkingOptions,
+            defaultLevel: session?.thinkingDefault)
+        {
+            return profile
+        }
+        let defaultsMatch = (session?.modelProvider == nil || session?.modelProvider == defaults?.modelProvider) &&
+            (session?.model == nil || session?.model == defaults?.model) &&
+            self.routesMatch(session?.agentRuntime, defaults?.agentRuntime)
+        if defaultsMatch, let profile = self.profile(
+            levels: defaults?.thinkingLevels,
+            legacyOptions: defaults?.thinkingOptions,
+            defaultLevel: defaults?.thinkingDefault)
+        {
+            return profile
+        }
+        guard self.routesMatch(session?.agentRuntime, model?.agentRuntime) else { return nil }
+        return self.profile(levels: model?.thinkingLevels, legacyOptions: nil, defaultLevel: model?.thinkingDefault)
+    }
+
+    private static func routesMatch(_ session: OpenClawChatAgentRuntime?, _ other: OpenClawChatAgentRuntime?) -> Bool {
+        session?.id == nil || other?.id == nil || session?.id == other?.id
+    }
+
+    private static func profile(
+        levels: [OpenClawChatThinkingLevelOption]?, legacyOptions: [String]?, defaultLevel: String?) -> Self?
+    {
+        guard levels != nil || legacyOptions != nil || defaultLevel != nil else { return nil }
+        return Self(
+            levels: levels ?? legacyOptions?.map { .init(id: $0.lowercased(), label: $0) },
+            defaultLevel: defaultLevel)
+    }
+}
+
+public enum OpenClawChatFastMode: Sendable, Equatable, Hashable, Codable {
+    case off
+    case on
+    case automatic
+    case ultrafast
+
+    public var isEnabled: Bool {
+        self != .off
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let enabled = try? container.decode(Bool.self) {
+            self = enabled ? .on : .off
+            return
+        }
+        switch try container.decode(String.self).lowercased() {
+        case "auto":
+            self = .automatic
+        case "ultrafast":
+            self = .ultrafast
+        default:
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Invalid fast mode")
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .off:
+            try container.encode(false)
+        case .on:
+            try container.encode(true)
+        case .automatic:
+            try container.encode("auto")
+        case .ultrafast:
+            try container.encode("ultrafast")
+        }
+    }
+}
+
+public struct OpenClawChatFastModeProfile: Sendable, Equatable {
+    public let supportsFastMode: Bool
+    public let override: OpenClawChatFastMode?
+    public let effective: OpenClawChatFastMode?
+
+    public var isEnabled: Bool {
+        self.effective?.isEnabled == true
+    }
+
+    public var showsControls: Bool {
+        self.supportsFastMode || self.override != nil
+    }
+
+    public static func resolve(
+        session: OpenClawChatSessionEntry?,
+        model: OpenClawChatModelChoice?) -> Self
+    {
+        Self(
+            supportsFastMode: model?.supportsFastMode == true,
+            override: session?.fastMode,
+            effective: session?.effectiveFastMode ?? session?.fastMode ?? model?.effectiveFastMode)
+    }
+}
+
 public struct OpenClawChatModelChoice: Identifiable, Codable, Sendable, Hashable {
     public var id: String {
         self.selectionID
@@ -18,13 +169,51 @@ public struct OpenClawChatModelChoice: Identifiable, Codable, Sendable, Hashable
     public let modelID: String
     public let name: String
     public let provider: String
+    public let available: Bool?
+    public let manualSelectionAllowed: Bool?
+    public let unavailableReason: String?
+    public let unavailableUntil: Int?
     public let contextWindow: Int?
+    public let reasoning: Bool?
+    public let supportsFastMode: Bool?
+    public let effectiveFastMode: OpenClawChatFastMode?
+    public let thinkingLevels: [OpenClawChatThinkingLevelOption]?
+    public let thinkingDefault: String?
+    public let input: [String]?
+    public let agentRuntime: OpenClawChatAgentRuntime?
 
-    public init(modelID: String, name: String, provider: String, contextWindow: Int?) {
+    public init(
+        modelID: String,
+        name: String,
+        provider: String,
+        available: Bool? = nil,
+        manualSelectionAllowed: Bool? = nil,
+        unavailableReason: String? = nil,
+        unavailableUntil: Int? = nil,
+        contextWindow: Int?,
+        reasoning: Bool? = nil,
+        supportsFastMode: Bool? = nil,
+        effectiveFastMode: OpenClawChatFastMode? = nil,
+        thinkingLevels: [OpenClawChatThinkingLevelOption]? = nil,
+        thinkingDefault: String? = nil,
+        input: [String]? = nil,
+        agentRuntime: OpenClawChatAgentRuntime? = nil)
+    {
         self.modelID = modelID
         self.name = name
         self.provider = provider
+        self.available = available
+        self.manualSelectionAllowed = manualSelectionAllowed
+        self.unavailableReason = unavailableReason
+        self.unavailableUntil = unavailableUntil
         self.contextWindow = contextWindow
+        self.reasoning = reasoning
+        self.supportsFastMode = supportsFastMode
+        self.effectiveFastMode = effectiveFastMode
+        self.thinkingLevels = thinkingLevels
+        self.thinkingDefault = thinkingDefault
+        self.input = input
+        self.agentRuntime = agentRuntime
     }
 
     /// Provider-qualified model ref used for picker identity and selection tags.
@@ -41,16 +230,257 @@ public struct OpenClawChatModelChoice: Identifiable, Codable, Sendable, Hashable
     public var displayLabel: String {
         self.selectionID
     }
+
+    public var availabilityReason: OpenClawChatModelUnavailableReason? {
+        OpenClawChatModelUnavailableReason(rawValue: self.unavailableReason)
+    }
+
+    public var capabilityDescription: String {
+        var labels = (self.input ?? []).filter { $0 != "text" }.map { input in
+            switch input {
+            case "image": String(localized: "Images")
+            case "audio": String(localized: "Audio")
+            case "video": String(localized: "Video")
+            case "document": String(localized: "Documents")
+            default: input
+            }
+        }
+        if let route = self.agentRuntime, route.source == "model" || route.source == "provider" {
+            labels.append(route.id)
+        }
+        return labels.joined(separator: " · ")
+    }
+}
+
+public enum OpenClawChatModelUnavailableReason: Sendable, Equatable, Hashable {
+    case missingAuth
+    case authFailed
+    case cooldown
+    case unknown(String)
+
+    public init?(rawValue: String?) {
+        guard let value = rawValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              !value.isEmpty
+        else { return nil }
+        switch value {
+        case "missing-auth": self = .missingAuth
+        case "auth-failed": self = .authFailed
+        case "cooldown": self = .cooldown
+        default: self = .unknown(value)
+        }
+    }
+
+    public var pickerDescription: String {
+        switch self {
+        case .missingAuth: String(localized: "Sign-in needed")
+        case .authFailed: String(localized: "Authentication failed")
+        case .cooldown: String(localized: "Cooling down")
+        case .unknown: String(localized: "Unavailable")
+        }
+    }
+
+    var blocksSend: Bool {
+        self == .missingAuth || self == .authFailed
+    }
+}
+
+public struct OpenClawChatSessionSettingsPatch: Sendable, Equatable {
+    /// Outer optional means unchanged; inner optional clears the override.
+    public let expectedSessionID: String?
+    public let expectedPermissionMode: OpenClawChatPermissionMode??
+    public let expectedToolOverrides: OpenClawChatSessionToolOverrides??
+    public let model: String??
+    public let thinkingLevel: String??
+    public let fastMode: OpenClawChatFastMode??
+    public let verboseLevel: String??
+    public let permissionMode: OpenClawChatPermissionMode??
+    public let toolOverrides: OpenClawChatSessionToolOverrides??
+
+    public var requiresSessionSettingsContract: Bool {
+        self.expectedSessionID != nil || self.permissionMode != nil || self.toolOverrides != nil
+    }
+
+    public var requiresSessionSettingsCAS: Bool {
+        self.expectedPermissionMode != nil || self.expectedToolOverrides != nil ||
+            self.permissionMode != nil || self.toolOverrides != nil
+    }
+
+    public init(
+        expectedSessionID: String? = nil,
+        expectedPermissionMode: OpenClawChatPermissionMode?? = nil,
+        expectedToolOverrides: OpenClawChatSessionToolOverrides?? = nil,
+        model: String?? = nil,
+        thinkingLevel: String?? = nil,
+        fastMode: OpenClawChatFastMode?? = nil,
+        verboseLevel: String?? = nil,
+        permissionMode: OpenClawChatPermissionMode?? = nil,
+        toolOverrides: OpenClawChatSessionToolOverrides?? = nil)
+    {
+        self.expectedSessionID = expectedSessionID
+        self.expectedPermissionMode = expectedPermissionMode
+        self.expectedToolOverrides = expectedToolOverrides
+        self.model = model
+        self.thinkingLevel = thinkingLevel
+        self.fastMode = fastMode
+        self.verboseLevel = verboseLevel
+        self.permissionMode = permissionMode
+        self.toolOverrides = toolOverrides
+    }
+
+    func withExpectedSessionID(
+        _ expectedSessionID: String,
+        expectedPermissionMode: OpenClawChatPermissionMode?? = nil,
+        expectedToolOverrides: OpenClawChatSessionToolOverrides?? = nil) -> Self
+    {
+        Self(
+            expectedSessionID: expectedSessionID,
+            expectedPermissionMode: expectedPermissionMode,
+            expectedToolOverrides: expectedToolOverrides,
+            model: self.model,
+            thinkingLevel: self.thinkingLevel,
+            fastMode: self.fastMode,
+            verboseLevel: self.verboseLevel,
+            permissionMode: self.permissionMode,
+            toolOverrides: self.toolOverrides)
+    }
+}
+
+/// Authority-bearing session settings a chat turn must still match at admission.
+public struct OpenClawChatSessionSettingsExpectation: Codable, Hashable, Sendable {
+    public let permissionMode: OpenClawChatPermissionMode?
+    public let toolOverrides: OpenClawChatSessionToolOverrides?
+
+    public init(
+        permissionMode: OpenClawChatPermissionMode?,
+        toolOverrides: OpenClawChatSessionToolOverrides?)
+    {
+        self.permissionMode = permissionMode
+        self.toolOverrides = toolOverrides
+    }
+}
+
+public struct OpenClawChatSendTarget: Hashable, Sendable {
+    public let agentID: String?
+    public let expectedSessionRoutingContract: String?
+    public let expectedSessionSettings: OpenClawChatSessionSettingsExpectation?
+
+    public init(
+        agentID: String?,
+        expectedSessionRoutingContract: String?,
+        expectedSessionSettings: OpenClawChatSessionSettingsExpectation?)
+    {
+        self.agentID = agentID
+        self.expectedSessionRoutingContract = expectedSessionRoutingContract
+        self.expectedSessionSettings = expectedSessionSettings
+    }
+}
+
+/// Authoritative model identity and thinking state returned by `sessions.patch`.
+public struct OpenClawChatModelPatchResult: Decodable, Sendable, Equatable {
+    public let key: String?
+    public let modelProvider: String?
+    public let model: String?
+    public let thinkingLevel: String?
+    public let thinkingLevels: [OpenClawChatThinkingLevelOption]?
+    public let fastMode: OpenClawChatFastMode?
+    public let effectiveFastMode: OpenClawChatFastMode?
+    public let verboseLevel: String?
+    public let permissionMode: OpenClawChatPermissionMode?
+    public let toolOverrides: OpenClawChatSessionToolOverrides?
+
+    public init(
+        key: String? = nil,
+        modelProvider: String?,
+        model: String?,
+        thinkingLevel: String?,
+        thinkingLevels: [OpenClawChatThinkingLevelOption]? = nil,
+        fastMode: OpenClawChatFastMode? = nil,
+        effectiveFastMode: OpenClawChatFastMode? = nil,
+        verboseLevel: String? = nil,
+        permissionMode: OpenClawChatPermissionMode? = nil,
+        toolOverrides: OpenClawChatSessionToolOverrides? = nil)
+    {
+        self.key = key
+        self.modelProvider = modelProvider
+        self.model = model
+        self.thinkingLevel = thinkingLevel
+        self.thinkingLevels = thinkingLevels
+        self.fastMode = fastMode
+        self.effectiveFastMode = effectiveFastMode
+        self.verboseLevel = verboseLevel
+        self.permissionMode = permissionMode
+        self.toolOverrides = toolOverrides
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case entry
+        case resolved
+    }
+
+    private enum EntryKeys: String, CodingKey {
+        case modelProvider
+        case model
+        case providerOverride
+        case modelOverride
+        case thinkingLevel
+        case thinkingLevels
+        case fastMode
+        case effectiveFastMode
+        case verboseLevel
+        case permissionMode
+        case toolOverrides
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let entry = try container.nestedContainer(keyedBy: EntryKeys.self, forKey: .entry)
+        self.key = try container.decodeIfPresent(String.self, forKey: .key)
+        let entryModelProvider = try entry.decodeIfPresent(String.self, forKey: .modelProvider)
+            ?? entry.decodeIfPresent(String.self, forKey: .providerOverride)
+        let entryModel = try entry.decodeIfPresent(String.self, forKey: .model)
+            ?? entry.decodeIfPresent(String.self, forKey: .modelOverride)
+        let entryThinkingLevel = try entry.decodeIfPresent(String.self, forKey: .thinkingLevel)
+        let entryFastMode = try entry.decodeIfPresent(OpenClawChatFastMode.self, forKey: .fastMode)
+        let entryEffectiveFastMode = try entry.decodeIfPresent(
+            OpenClawChatFastMode.self,
+            forKey: .effectiveFastMode)
+        let entryVerboseLevel = try entry.decodeIfPresent(String.self, forKey: .verboseLevel)
+        let entryPermissionMode = try entry.decodeIfPresent(
+            OpenClawChatPermissionMode.self,
+            forKey: .permissionMode)
+        let entryToolOverrides = try entry.decodeIfPresent(
+            OpenClawChatSessionToolOverrides.self,
+            forKey: .toolOverrides)
+        let resolved = try container.contains(.resolved)
+            ? container.nestedContainer(keyedBy: EntryKeys.self, forKey: .resolved) : nil
+        self.modelProvider = try resolved?.decodeIfPresent(String.self, forKey: .modelProvider) ?? entryModelProvider
+        self.model = try resolved?.decodeIfPresent(String.self, forKey: .model) ?? entryModel
+        self.thinkingLevel = try resolved?.decodeIfPresent(String.self, forKey: .thinkingLevel) ?? entryThinkingLevel
+        self.thinkingLevels = try resolved?.decodeIfPresent(
+            [OpenClawChatThinkingLevelOption].self,
+            forKey: .thinkingLevels)
+        self.fastMode = try resolved?.decodeIfPresent(OpenClawChatFastMode.self, forKey: .fastMode) ?? entryFastMode
+        self.effectiveFastMode = try resolved?.decodeIfPresent(
+            OpenClawChatFastMode.self, forKey: .effectiveFastMode) ?? entryEffectiveFastMode
+        self.verboseLevel = try resolved?.decodeIfPresent(String.self, forKey: .verboseLevel) ?? entryVerboseLevel
+        self.permissionMode = try resolved?.decodeIfPresent(
+            OpenClawChatPermissionMode.self, forKey: .permissionMode) ?? entryPermissionMode
+        self.toolOverrides = try resolved?.decodeIfPresent(
+            OpenClawChatSessionToolOverrides.self, forKey: .toolOverrides) ?? entryToolOverrides
+    }
 }
 
 public struct OpenClawChatSessionsDefaults: Codable, Sendable {
+    public let agentRuntime: OpenClawChatAgentRuntime?
     public let modelProvider: String?
     public let model: String?
+    public let modelSelectionTarget: String?
     public let contextTokens: Int?
     public let thinkingLevels: [OpenClawChatThinkingLevelOption]?
     public let thinkingOptions: [String]?
     public let thinkingDefault: String?
-    public let mainSessionKey: String?
+    public var mainSessionKey: String?
 
     public init(
         modelProvider: String? = nil,
@@ -59,10 +489,14 @@ public struct OpenClawChatSessionsDefaults: Codable, Sendable {
         thinkingLevels: [OpenClawChatThinkingLevelOption]? = nil,
         thinkingOptions: [String]? = nil,
         thinkingDefault: String? = nil,
-        mainSessionKey: String? = nil)
+        mainSessionKey: String? = nil,
+        modelSelectionTarget: String? = nil,
+        agentRuntime: OpenClawChatAgentRuntime? = nil)
     {
         self.modelProvider = modelProvider
+        self.agentRuntime = agentRuntime
         self.model = model
+        self.modelSelectionTarget = modelSelectionTarget
         self.contextTokens = contextTokens
         self.thinkingLevels = thinkingLevels
         self.thinkingOptions = thinkingOptions
@@ -71,77 +505,314 @@ public struct OpenClawChatSessionsDefaults: Codable, Sendable {
     }
 }
 
+public struct OpenClawChatSessionWorktree: Codable, Sendable, Hashable {
+    public let id: String?
+    public let branch: String?
+    public let repoRoot: String?
+
+    public init(id: String?, branch: String?, repoRoot: String?) {
+        self.id = id
+        self.branch = branch
+        self.repoRoot = repoRoot
+    }
+}
+
+public struct OpenClawChatAgentRuntime: Codable, Sendable, Hashable {
+    public let id: String
+    public let fallback: String?
+    public let source: String?
+}
+
+public struct OpenClawChatSessionGroup: Codable, Identifiable, Sendable, Hashable {
+    public var id: String {
+        self.name
+    }
+
+    public let name: String
+    public let position: Int
+
+    public init(name: String, position: Int) {
+        self.name = name
+        self.position = position
+    }
+}
+
+public struct OpenClawChatSessionGroupsResponse: Codable, Sendable, Equatable {
+    public let groups: [OpenClawChatSessionGroup]
+    public var sectionOrder: [String]?
+}
+
+public struct OpenClawChatSessionGroupsMutationResponse: Codable, Sendable, Equatable {
+    public let ok: Bool
+    public let groups: [OpenClawChatSessionGroup]
+    public let updatedSessions: Int?
+}
+
 public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashable {
+    public struct CreatedActor: Codable, Sendable, Hashable {
+        public let type: String
+        public let id: String?
+        public let label: String?
+        public let avatarUrl: String?
+        public let identity: AnyCodable?
+    }
+
     public var id: String {
         self.key
     }
 
-    public let key: String
-    public let kind: String?
-    public let displayName: String?
-    public let surface: String?
-    public let subject: String?
-    public let room: String?
-    public let space: String?
-    public let updatedAt: Double?
-    public let sessionId: String?
+    public var key: String
+    public var kind: String?
+    public var displayName: String?
+    public var derivedTitle: String?
+    public var lastMessagePreview: String?
+    public var icon: String?
+    public var channel: String?
+    public var channelAvatarUrl: String?
+    public var origin: [String: AnyCodable]?
+    public var chatType: String?
+    public var groupChannel: String?
+    public var deliveryContext: [String: AnyCodable]?
+    public var owner: Owner?
+    public var participants: [Participant]?
+    public var expandedParticipants: [Participant]?
+    public var participantCount: Int?
+    public var visibility: SessionVisibility?
+    public var sharingRole: SessionSharingRole?
+    public var hiddenFromInvolvingMe: Bool?
+    public var incognito: Bool?
+    public var archivedBy: CreatedActor?
+    public var archiveReason: String?
+    public var projectId: String?
+    public var workspaceDir: String?
+    public var spawnedWorkspaceDir: String?
+    public var spawnedCwd: String?
+    public var repositoryWorkspaceId: String?
+    public var repository: [String: AnyCodable]?
+    public var execNode: String?
+    public var execCwd: String?
+    public var forkedFromParent: Bool?
+    public var parentSessionId: String?
+    public var controlOwnerSessionKey: String?
+    public var forkSource: ForkSource?
+    public var previousSessionId: String?
+    public var spawnDepth: Double?
+    public var subagentRole: String?
+    public var subagentControlScope: String?
+    public var placement: Placement?
+    public var placementMove: PlacementMove?
+    /// Non-sensitive facts derived by the Gateway from the canonical session route.
+    public var classification: String?
+    public var boardFace: String?
+    public var agentId: String?
+    public var accountId: String?
+    public var peerKind: String?
+    public var isMain: Bool?
+    public var isBackground: Bool?
+    public var label: String?
+    /// Automatic device label; explicit labels and generated display names take precedence.
+    public var autoLabel: String?
+    public var category: String?
+    public var color: String?
+    public var pinned: Bool?
+    public var pinnedAt: Double?
+    public var archived: Bool?
+    public var archivedAt: Double?
+    public var snoozedUntil: Double?
+    public var snoozedAt: Double?
+    public var unread: Bool?
+    public var agentStatus: OpenClawChatSessionAgentStatus?
+    public var observerDigest: OpenClawChatSessionObserverDigest?
+    public var surface: String?
+    public var subject: String?
+    public var room: String?
+    public var space: String?
+    public var createdAt: Double?
+    public var createdActor: CreatedActor?
+    public var createdVia: String?
+    public var updatedAt: Double?
+    public var lastReadAt: Double?
+    public var markedUnreadAt: Double?
+    public var lastInteractionAt: Double?
+    public var lastActivityAt: Double?
+    public var sessionId: String?
 
-    public let systemSent: Bool?
-    public let abortedLastRun: Bool?
-    public let thinkingLevel: String?
-    public let verboseLevel: String?
+    public var parentSessionKey: String?
+    public var spawnedBy: String?
+    public var childSessions: [String]?
+    public var status: String?
+    public var lastRunError: String?
+    public var hasActiveRun: Bool?
+    public var activeRunIds: [String]?
+    public var hasActiveSubagentRun: Bool?
+    public var subagentRunState: String?
+    public var swarmGroupId: String?
+    public var swarmPhase: String?
+    public var swarmPhaseRank: Int?
+    public var swarmLog: String?
+    public var worktree: OpenClawChatSessionWorktree?
+    public var startedAt: Double?
+    public var endedAt: Double?
+    public var runtimeMs: Double?
+    public var agentRuntime: OpenClawChatAgentRuntime?
 
-    public let inputTokens: Int?
-    public let outputTokens: Int?
-    public let totalTokens: Int?
+    public var systemSent: Bool?
+    public var abortedLastRun: Bool?
+    public var thinkingLevel: String?
+    public var verboseLevel: String?
+    public var fastMode: OpenClawChatFastMode?
+    public var effectiveFastMode: OpenClawChatFastMode?
+    public var permissionMode: OpenClawChatPermissionMode?
+    public var toolOverrides: OpenClawChatSessionToolOverrides?
 
-    public let modelProvider: String?
-    public let model: String?
-    public let contextTokens: Int?
-    public let thinkingLevels: [OpenClawChatThinkingLevelOption]?
-    public let thinkingOptions: [String]?
-    public let thinkingDefault: String?
+    public var inputTokens: Int?
+    public var outputTokens: Int?
+    public var totalTokens: Int?
+    public var totalTokensFresh: Bool?
+
+    public var modelProvider: String?
+    public var model: String?
+    public var contextTokens: Int?
+    public var thinkingLevels: [OpenClawChatThinkingLevelOption]?
+    public var thinkingOptions: [String]?
+    public var thinkingDefault: String?
 
     public init(
         key: String,
-        kind: String?,
-        displayName: String?,
-        surface: String?,
-        subject: String?,
-        room: String?,
-        space: String?,
-        updatedAt: Double?,
-        sessionId: String?,
-        systemSent: Bool?,
-        abortedLastRun: Bool?,
-        thinkingLevel: String?,
-        verboseLevel: String?,
-        inputTokens: Int?,
-        outputTokens: Int?,
-        totalTokens: Int?,
-        modelProvider: String?,
-        model: String?,
-        contextTokens: Int?,
+        kind: String? = nil,
+        displayName: String? = nil,
+        classification: String? = nil,
+        boardFace: String? = nil,
+        agentId: String? = nil,
+        accountId: String? = nil,
+        peerKind: String? = nil,
+        isMain: Bool? = nil,
+        isBackground: Bool? = nil,
+        surface: String? = nil,
+        subject: String? = nil,
+        room: String? = nil,
+        space: String? = nil,
+        updatedAt: Double? = nil,
+        sessionId: String? = nil,
+        systemSent: Bool? = nil,
+        abortedLastRun: Bool? = nil,
+        thinkingLevel: String? = nil,
+        verboseLevel: String? = nil,
+        inputTokens: Int? = nil,
+        outputTokens: Int? = nil,
+        totalTokens: Int? = nil,
+        totalTokensFresh: Bool? = nil,
+        modelProvider: String? = nil,
+        model: String? = nil,
+        contextTokens: Int? = nil,
         thinkingLevels: [OpenClawChatThinkingLevelOption]? = nil,
         thinkingOptions: [String]? = nil,
-        thinkingDefault: String? = nil)
+        thinkingDefault: String? = nil,
+        label: String? = nil,
+        autoLabel: String? = nil,
+        category: String? = nil,
+        color: String? = nil,
+        pinned: Bool? = nil,
+        pinnedAt: Double? = nil,
+        archived: Bool? = nil,
+        archivedAt: Double? = nil,
+        snoozedUntil: Double? = nil,
+        snoozedAt: Double? = nil,
+        unread: Bool? = nil,
+        agentStatus: OpenClawChatSessionAgentStatus? = nil,
+        observerDigest: OpenClawChatSessionObserverDigest? = nil,
+        lastReadAt: Double? = nil,
+        markedUnreadAt: Double? = nil,
+        lastInteractionAt: Double? = nil,
+        lastActivityAt: Double? = nil,
+        parentSessionKey: String? = nil,
+        spawnedBy: String? = nil,
+        childSessions: [String]? = nil,
+        status: String? = nil,
+        lastRunError: String? = nil,
+        hasActiveRun: Bool? = nil,
+        activeRunIds: [String]? = nil,
+        hasActiveSubagentRun: Bool? = nil,
+        subagentRunState: String? = nil,
+        swarmGroupId: String? = nil,
+        swarmPhase: String? = nil,
+        swarmPhaseRank: Int? = nil,
+        swarmLog: String? = nil,
+        worktree: OpenClawChatSessionWorktree? = nil,
+        fastMode: OpenClawChatFastMode? = nil,
+        effectiveFastMode: OpenClawChatFastMode? = nil,
+        permissionMode: OpenClawChatPermissionMode? = nil,
+        toolOverrides: OpenClawChatSessionToolOverrides? = nil,
+        startedAt: Double? = nil,
+        endedAt: Double? = nil,
+        runtimeMs: Double? = nil,
+        agentRuntime: OpenClawChatAgentRuntime? = nil,
+        derivedTitle: String? = nil)
     {
         self.key = key
         self.kind = kind
         self.displayName = displayName
+        self.derivedTitle = derivedTitle
+        self.classification = classification
+        self.boardFace = boardFace
+        self.agentId = agentId
+        self.accountId = accountId
+        self.peerKind = peerKind
+        self.isMain = isMain
+        self.isBackground = isBackground
+        self.label = label
+        self.autoLabel = autoLabel
+        self.category = category
+        self.color = color
+        self.pinned = pinned
+        self.pinnedAt = pinnedAt
+        self.archived = archived
+        self.archivedAt = archivedAt
+        self.snoozedUntil = snoozedUntil
+        self.snoozedAt = snoozedAt
+        self.unread = unread
+        self.agentStatus = agentStatus
+        self.observerDigest = observerDigest
         self.surface = surface
         self.subject = subject
         self.room = room
         self.space = space
         self.updatedAt = updatedAt
+        self.lastReadAt = lastReadAt
+        self.markedUnreadAt = markedUnreadAt
+        self.lastInteractionAt = lastInteractionAt
+        self.lastActivityAt = lastActivityAt
         self.sessionId = sessionId
+        self.parentSessionKey = parentSessionKey
+        self.spawnedBy = spawnedBy
+        self.childSessions = childSessions
+        self.status = status
+        self.lastRunError = lastRunError
+        self.hasActiveRun = hasActiveRun
+        self.activeRunIds = activeRunIds
+        self.hasActiveSubagentRun = hasActiveSubagentRun
+        self.subagentRunState = subagentRunState
+        self.swarmGroupId = swarmGroupId
+        self.swarmPhase = swarmPhase
+        self.swarmPhaseRank = swarmPhaseRank
+        self.swarmLog = swarmLog
+        self.worktree = worktree
+        self.startedAt = startedAt
+        self.endedAt = endedAt
+        self.runtimeMs = runtimeMs
+        self.agentRuntime = agentRuntime
         self.systemSent = systemSent
         self.abortedLastRun = abortedLastRun
         self.thinkingLevel = thinkingLevel
         self.verboseLevel = verboseLevel
+        self.fastMode = fastMode
+        self.effectiveFastMode = effectiveFastMode
+        self.permissionMode = permissionMode
+        self.toolOverrides = toolOverrides
         self.inputTokens = inputTokens
         self.outputTokens = outputTokens
         self.totalTokens = totalTokens
+        self.totalTokensFresh = totalTokensFresh
         self.modelProvider = modelProvider
         self.model = model
         self.contextTokens = contextTokens
@@ -149,26 +820,197 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         self.thinkingOptions = thinkingOptions
         self.thinkingDefault = thinkingDefault
     }
+
+    public var isPinned: Bool {
+        self.pinned == true
+    }
+
+    public var isArchived: Bool {
+        self.archived == true
+    }
+
+    public func isSnoozed(at now: Date = .now) -> Bool {
+        guard let snoozedUntil, snoozedUntil.isFinite else { return false }
+        return snoozedUntil / 1000 > now.timeIntervalSince1970
+    }
+}
+
+/// Client-side session list policy shared by every session list surface.
+/// Ordering mirrors the gateway (`pinnedAt` desc, `updatedAt` desc, key) so
+/// cached/offline lists render in the same order as server responses.
+public enum OpenClawChatSessionListOrganizer {
+    public static func organize(_ sessions: [OpenClawChatSessionEntry]) -> [OpenClawChatSessionEntry] {
+        sessions.sorted { lhs, rhs in
+            let lhsPinnedAt = lhs.pinnedAt ?? (lhs.isPinned ? .greatestFiniteMagnitude : 0)
+            let rhsPinnedAt = rhs.pinnedAt ?? (rhs.isPinned ? .greatestFiniteMagnitude : 0)
+            if lhsPinnedAt != rhsPinnedAt {
+                return lhsPinnedAt > rhsPinnedAt
+            }
+            let lhsUpdatedAt = lhs.updatedAt ?? 0
+            let rhsUpdatedAt = rhs.updatedAt ?? 0
+            if lhsUpdatedAt != rhsUpdatedAt {
+                return lhsUpdatedAt > rhsUpdatedAt
+            }
+            return lhs.key < rhs.key
+        }
+    }
+
+    /// Local fallback for the server-side `sessions.list` search when the
+    /// gateway is unreachable and only cached entries are available.
+    public static func filter(
+        _ sessions: [OpenClawChatSessionEntry],
+        search: String) -> [OpenClawChatSessionEntry]
+    {
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return sessions }
+        return sessions.filter { session in
+            [session.displayName, session.label, session.subject, session.sessionId, session.category, session.key]
+                .contains { $0?.lowercased().contains(query) == true }
+        }
+    }
+}
+
+public struct OpenClawChatChildSessionsResult: Sendable {
+    public let rows: [OpenClawChatSessionEntry]
+    public let isComplete: Bool
+
+    public init(rows: [OpenClawChatSessionEntry], isComplete: Bool) {
+        self.rows = rows
+        self.isComplete = isComplete
+    }
+}
+
+public enum OpenClawChatChildSessionPager {
+    private static let maxCollectedSessions = 100_000
+    private static let maxPageRequests = 100
+
+    public static func collect(
+        fetchPage: (Int) async throws -> OpenClawChatSessionsListResponse) async throws
+        -> OpenClawChatChildSessionsResult
+    {
+        var rowsByKey: [String: OpenClawChatSessionEntry] = [:]
+        var expectedTotal: Int?
+        var remainingPageRequests = Self.maxPageRequests
+        for _ in 0..<4 {
+            let rowsBeforePass = rowsByKey.count
+            var reachedEnd = false
+            var seenOffsets = Set<Int>()
+            var offset = 0
+            while remainingPageRequests > 0,
+                  rowsByKey.count < Self.maxCollectedSessions,
+                  seenOffsets.insert(offset).inserted
+            {
+                remainingPageRequests -= 1
+                let page = try await fetchPage(offset)
+                // Preserve known totals across moving pages/passes, as in
+                // ui/src/lib/sessions/paged-session-rows.ts:43; later omissions cannot certify a partial list.
+                if let total = page.totalCount {
+                    expectedTotal = max(expectedTotal ?? 0, total)
+                }
+                for row in page.sessions {
+                    rowsByKey[row.key] = row
+                    if rowsByKey.count >= Self.maxCollectedSessions {
+                        break
+                    }
+                }
+                if rowsByKey.count >= Self.maxCollectedSessions {
+                    return OpenClawChatChildSessionsResult(rows: Array(rowsByKey.values), isComplete: false)
+                }
+                // ui/src/lib/sessions/paged-session-rows.ts:50 uses the flag/count, never the cursor alone.
+                let hasMore = page.hasMore ?? page.totalCount.map { offset + page.sessions.count < $0 } ?? false
+                reachedEnd = !hasMore
+                let nextOffset = page.nextOffset ?? ((page.offset ?? offset) + page.sessions.count)
+                guard hasMore, nextOffset > offset else { break }
+                offset = nextOffset
+            }
+            if reachedEnd, expectedTotal.map({ rowsByKey.count >= $0 }) != false {
+                return OpenClawChatChildSessionsResult(rows: Array(rowsByKey.values), isComplete: true)
+            }
+            if remainingPageRequests == 0 || rowsByKey.count == rowsBeforePass {
+                break
+            }
+        }
+        return OpenClawChatChildSessionsResult(rows: Array(rowsByKey.values), isComplete: false)
+    }
 }
 
 public struct OpenClawChatSessionsListResponse: Codable, Sendable {
     public let ts: Double?
     public let path: String?
-    public let count: Int?
-    public let defaults: OpenClawChatSessionsDefaults?
-    public let sessions: [OpenClawChatSessionEntry]
+    public var count: Int?
+    public var totalCount: Int?
+    public let offset: Int?
+    public var nextOffset: Int?
+    public var nextOffsetPresent: Bool
+    public var hasMore: Bool?
+    public let owners: [OpenClawChatSessionEntry.CreatedActor]?
+    public let ownerSessionCounts: [SessionOwnerSessionCount]?
+    public let people: [SessionPerson]?
+    public let peopleIncomplete: Bool?
+    public let peopleSessionCount: Int?
+    public let involvingProfileId: String?
+    public var defaults: OpenClawChatSessionsDefaults?
+    public var sessions: [OpenClawChatSessionEntry]
 
     public init(
         ts: Double?,
         path: String?,
         count: Int?,
+        totalCount: Int? = nil,
+        offset: Int? = nil,
+        nextOffset: Int? = nil,
+        nextOffsetPresent: Bool? = nil,
+        hasMore: Bool? = nil,
+        owners: [OpenClawChatSessionEntry.CreatedActor]? = nil,
+        ownerSessionCounts: [SessionOwnerSessionCount]? = nil,
+        people: [SessionPerson]? = nil,
+        peopleIncomplete: Bool? = nil,
+        peopleSessionCount: Int? = nil,
+        involvingProfileId: String? = nil,
         defaults: OpenClawChatSessionsDefaults?,
         sessions: [OpenClawChatSessionEntry])
     {
         self.ts = ts
         self.path = path
         self.count = count
+        self.totalCount = totalCount
+        self.offset = offset
+        self.nextOffset = nextOffset
+        self.nextOffsetPresent = nextOffsetPresent ?? (nextOffset != nil)
+        self.hasMore = hasMore
+        self.owners = owners
+        self.ownerSessionCounts = ownerSessionCounts
+        self.people = people
+        self.peopleIncomplete = peopleIncomplete
+        self.peopleSessionCount = peopleSessionCount
+        self.involvingProfileId = involvingProfileId
         self.defaults = defaults
         self.sessions = sessions
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ts, path, count, totalCount, offset, nextOffset, hasMore, defaults, sessions
+        case owners, ownerSessionCounts, people, peopleIncomplete, peopleSessionCount, involvingProfileId
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            ts: container.decodeIfPresent(Double.self, forKey: .ts),
+            path: container.decodeIfPresent(String.self, forKey: .path),
+            count: container.decodeIfPresent(Int.self, forKey: .count),
+            totalCount: container.decodeIfPresent(Int.self, forKey: .totalCount),
+            offset: container.decodeIfPresent(Int.self, forKey: .offset),
+            nextOffset: container.decodeIfPresent(Int.self, forKey: .nextOffset),
+            nextOffsetPresent: container.contains(.nextOffset),
+            hasMore: container.decodeIfPresent(Bool.self, forKey: .hasMore),
+            owners: container.decodeIfPresent([OpenClawChatSessionEntry.CreatedActor].self, forKey: .owners),
+            ownerSessionCounts: container.decodeIfPresent([SessionOwnerSessionCount].self, forKey: .ownerSessionCounts),
+            people: container.decodeIfPresent([SessionPerson].self, forKey: .people),
+            peopleIncomplete: container.decodeIfPresent(Bool.self, forKey: .peopleIncomplete),
+            peopleSessionCount: container.decodeIfPresent(Int.self, forKey: .peopleSessionCount),
+            involvingProfileId: container.decodeIfPresent(String.self, forKey: .involvingProfileId),
+            defaults: container.decodeIfPresent(OpenClawChatSessionsDefaults.self, forKey: .defaults),
+            sessions: container.decode([OpenClawChatSessionEntry].self, forKey: .sessions))
     }
 }

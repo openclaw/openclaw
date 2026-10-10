@@ -1,329 +1,124 @@
 import { describe, expect, it } from "vitest";
 import { validateConfigObject } from "./validation.js";
 
+function agentTools(tools: Record<string, unknown>) {
+  return { agents: { entries: { main: { tools } } } };
+}
+
+function validateBinding(agentId: string, entries: Record<string, unknown>) {
+  return validateConfigObject({
+    agents: { entries },
+    bindings: [
+      {
+        type: "route",
+        agentId,
+        match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
+      },
+    ],
+  });
+}
+
 describe("config schema regressions", () => {
-  it("accepts session write-lock acquire timeout", () => {
-    const res = validateConfigObject({
-      session: {
-        writeLock: {
-          acquireTimeoutMs: 60_000,
-        },
-      },
-    });
+  it.each([["ops"], ["ops-*"], [], ["*"]].map((send) => ({ send })))(
+    "accepts per-agent send destinations $send",
+    ({ send }) => {
+      const result = validateConfigObject(agentTools({ agentToAgent: { send } }));
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.config.agents?.entries?.main?.tools?.agentToAgent?.send).toEqual(send);
+      }
+    },
+  );
 
-    expect(res.ok).toBe(true);
+  it.each(["ops", [1], { target: "ops" }].map((send) => ({ send })))(
+    "rejects malformed send destinations $send",
+    ({ send }) => {
+      expect(validateConfigObject(agentTools({ agentToAgent: { send } })).ok).toBe(false);
+    },
+  );
+
+  it("preserves the global exec approval notice delay (#115101)", () => {
+    const result = validateConfigObject({ tools: { exec: { approvalRunningNoticeMs: 0 } } });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.tools?.exec?.approvalRunningNoticeMs).toBe(0);
+    }
   });
 
-  it('accepts memorySearch fallback "voyage"', () => {
-    const res = validateConfigObject({
-      agents: {
-        defaults: {
-          memorySearch: {
-            fallback: "voyage",
-          },
-        },
-      },
-    });
-
-    expect(res.ok).toBe(true);
+  it("accepts exact main bindings when the roster omits main (#89419)", () => {
+    expect(validateBinding("main", { alpha: { model: "anthropic/claude-3-5-sonnet" } }).ok).toBe(
+      true,
+    );
   });
 
-  it('accepts memorySearch provider "mistral"', () => {
-    const res = validateConfigObject({
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "mistral",
-          },
-        },
-      },
-    });
-
-    expect(res.ok).toBe(true);
+  it("rejects normalized main variants omitted from the roster", () => {
+    const result = validateBinding("MAIN", { alpha: { model: "anthropic/claude-3-5-sonnet" } });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues.some((issue) => issue.message.includes('Unknown agent id "MAIN"'))).toBe(
+        true,
+      );
+    }
   });
 
-  it('accepts memorySearch provider "bedrock"', () => {
-    const res = validateConfigObject({
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "bedrock",
-          },
-        },
-      },
-    });
-
-    expect(res.ok).toBe(true);
+  it("accepts an explicitly configured main variant", () => {
+    expect(validateBinding("MAIN", { MAIN: { model: "anthropic/claude-3-5-sonnet" } }).ok).toBe(
+      true,
+    );
   });
 
-  it("accepts memorySearch.qmd.extraCollections", () => {
-    const res = validateConfigObject({
-      agents: {
-        defaults: {
-          memorySearch: {
-            qmd: {
-              extraCollections: [
-                { path: "/shared/team-notes", name: "team-notes", pattern: "**/*.md" },
+  it("accepts persisted Foundry thinkingLevelMap (#91011)", () => {
+    expect(
+      validateConfigObject({
+        models: {
+          providers: {
+            "microsoft-foundry": {
+              models: [
+                {
+                  id: "gpt-5.1-chat",
+                  name: "gpt-5.1-chat",
+                  api: "openai-responses",
+                  reasoning: true,
+                  thinkingLevelMap: {
+                    off: "none",
+                    minimal: null,
+                    low: "low",
+                    medium: "medium",
+                    high: "high",
+                    xhigh: null,
+                    max: null,
+                  },
+                },
               ],
             },
           },
         },
-      },
-    });
-
-    expect(res.ok).toBe(true);
+      }).ok,
+    ).toBe(true);
   });
 
-  it("accepts agents.list[].memorySearch.qmd.extraCollections", () => {
-    const res = validateConfigObject({
-      agents: {
-        list: [
-          {
-            id: "main",
-            memorySearch: {
-              qmd: {
-                extraCollections: [
-                  { path: "/shared/team-notes", name: "team-notes", pattern: "**/*.md" },
-                ],
-              },
-            },
-          },
-        ],
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
-
-  it("accepts agents.defaults.startupContext overrides", () => {
-    const res = validateConfigObject({
-      agents: {
-        defaults: {
-          startupContext: {
-            enabled: true,
-            applyOn: ["new"],
-            dailyMemoryDays: 3,
-            maxFileBytes: 8192,
-            maxFileChars: 1000,
-            maxTotalChars: 2500,
-          },
-        },
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
-
-  it("rejects oversized agents.defaults.startupContext overrides", () => {
-    const res = validateConfigObject({
-      agents: {
-        defaults: {
-          startupContext: {
-            dailyMemoryDays: 99,
-            maxFileBytes: 999_999,
-          },
-        },
-      },
-    });
-
-    expect(res.ok).toBe(false);
-  });
-
-  it("accepts agents.defaults and agents.list contextLimits overrides", () => {
-    const res = validateConfigObject({
-      agents: {
-        defaults: {
-          contextLimits: {
-            memoryGetMaxChars: 20_000,
-            memoryGetDefaultLines: 180,
-            toolResultMaxChars: 24_000,
-            postCompactionMaxChars: 4_000,
-          },
-        },
-        list: [
-          {
-            id: "writer",
-            skillsLimits: {
-              maxSkillsPromptChars: 30_000,
-            },
-            contextLimits: {
-              memoryGetMaxChars: 24_000,
-            },
-          },
-        ],
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
-
-  it("accepts agents.defaults.compaction.truncateAfterCompaction", () => {
-    const res = validateConfigObject({
-      agents: {
-        defaults: {
-          compaction: {
-            truncateAfterCompaction: true,
-            maxActiveTranscriptBytes: "20mb",
-          },
-        },
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
-  it("accepts string values for agents defaults model inputs", () => {
-    const res = validateConfigObject({
-      agents: {
-        defaults: {
-          model: "anthropic/claude-opus-4-6",
-          imageModel: "openai/gpt-4.1-mini",
-        },
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
-
-  it("accepts pdf default model and limits", () => {
-    const res = validateConfigObject({
-      agents: {
-        defaults: {
-          pdfModel: {
-            primary: "anthropic/claude-opus-4-6",
-            fallbacks: ["openai/gpt-5.4-mini"],
-          },
-          pdfMaxBytesMb: 12,
-          pdfMaxPages: 25,
-        },
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
-
-  it("rejects non-positive pdf limits", () => {
-    const res = validateConfigObject({
-      agents: {
-        defaults: {
-          pdfModel: { primary: "openai/gpt-5.4-mini" },
-          pdfMaxBytesMb: 0,
-          pdfMaxPages: 0,
-        },
-      },
-    });
-
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      const issuePaths = res.issues.map((issue) => issue.path);
-      expect(issuePaths).toContain("agents.defaults.pdfMaxBytesMb");
-      expect(issuePaths).toContain("agents.defaults.pdfMaxPages");
+  it.each([
+    {
+      scope: "global",
+      path: "tools",
+      config: { tools: { allow: ["group:fs"], alsoAllow: ["lobster"] } },
+    },
+    {
+      scope: "per-agent",
+      path: "agents.entries.main.tools",
+      config: agentTools({ allow: ["group:fs"], alsoAllow: ["lobster"] }),
+    },
+  ])("rejects allow + alsoAllow in the $scope scope", ({ config, path }) => {
+    const result = validateConfigObject(config);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues.map((issue) => issue.path)).toContain(path);
     }
   });
 
-  it("accepts browser.extraArgs for proxy and custom flags", () => {
-    const res = validateConfigObject({
-      browser: {
-        extraArgs: ["--proxy-server=http://127.0.0.1:7890"],
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
-
-  it("accepts browser local startup timeout settings", () => {
-    const res = validateConfigObject({
-      browser: {
-        localLaunchTimeoutMs: 45_000,
-        localCdpReadyTimeoutMs: 30_000,
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
-
-  it("rejects out-of-range browser local startup timeout settings", () => {
-    const res = validateConfigObject({
-      browser: {
-        localLaunchTimeoutMs: 120_001,
-        localCdpReadyTimeoutMs: 0,
-      },
-    });
-
-    expect(res.ok).toBe(false);
-  });
-
-  it("rejects browser.extraArgs with non-array value", () => {
-    const res = validateConfigObject({
-      browser: {
-        extraArgs: "--proxy-server=http://127.0.0.1:7890" as unknown,
-      },
-    });
-
-    expect(res.ok).toBe(false);
-  });
-
-  it("accepts browser.tabCleanup overrides", () => {
-    const res = validateConfigObject({
-      browser: {
-        tabCleanup: {
-          enabled: true,
-          idleMinutes: 10,
-          maxTabsPerSession: 10,
-          sweepMinutes: 5,
-        },
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
-
-  it("rejects browser.tabCleanup.sweepMinutes when not positive", () => {
-    const res = validateConfigObject({
-      browser: {
-        tabCleanup: {
-          sweepMinutes: 0,
-        },
-      },
-    });
-
-    expect(res.ok).toBe(false);
-  });
-
-  it("rejects unknown keys under browser.tabCleanup", () => {
-    const res = validateConfigObject({
-      browser: {
-        tabCleanup: {
-          unknownKey: true as unknown,
-        },
-      },
-    });
-
-    expect(res.ok).toBe(false);
-  });
-
-  it("accepts tools.media.asyncCompletion.directSend", () => {
-    const res = validateConfigObject({
-      tools: {
-        media: {
-          asyncCompletion: {
-            directSend: true,
-          },
-        },
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
-  it("accepts discovery.wideArea.domain for unicast DNS-SD", () => {
-    const res = validateConfigObject({
-      discovery: {
-        wideArea: {
-          enabled: true,
-          domain: "openclaw.internal",
-        },
-      },
-    });
-
-    expect(res.ok).toBe(true);
+  it("allows profile + alsoAllow", () => {
+    expect(validateConfigObject({ tools: { profile: "coding", alsoAllow: ["lobster"] } }).ok).toBe(
+      true,
+    );
   });
 });

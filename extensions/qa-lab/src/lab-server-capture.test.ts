@@ -1,6 +1,15 @@
+// Qa Lab tests cover lab server capture plugin behavior.
 import { createServer } from "node:http";
-import { afterEach, describe, expect, it } from "vitest";
-import { mapCaptureEventForQa, probeTcpReachability } from "./lab-server-capture.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  createQaCaptureLifecycle,
+  mapCaptureEventForQa,
+  readQaCaptureStartupStatus,
+} from "./lab-server-capture.js";
+
+vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
+  acquireDebugProxyCaptureStoreAsync: undefined,
+}));
 
 const cleanups: Array<() => Promise<void>> = [];
 
@@ -11,6 +20,17 @@ afterEach(async () => {
 });
 
 describe("qa-lab server capture helpers", () => {
+  it("refuses unavailable async capture without running the operation", async () => {
+    const capture = createQaCaptureLifecycle();
+    const operation = vi.fn();
+    await expect(capture.withStore(operation)).rejects.toThrow(
+      "QA capture requires async proxy capture support. Upgrade the OpenClaw host.",
+    );
+    expect(operation).not.toHaveBeenCalled();
+    capture.stopAdmission();
+    await expect(capture.release()).resolves.toBeUndefined();
+  });
+
   it("maps capture rows into QA-friendly fields", () => {
     const record = mapCaptureEventForQa({
       flowId: "flow-1",
@@ -18,7 +38,7 @@ describe("qa-lab server capture helpers", () => {
       metaJson: JSON.stringify({
         provider: "openai",
         api: "responses",
-        model: "gpt-5.5",
+        model: "gpt-5.6-luna",
         captureOrigin: "shared-fetch",
       }),
     }) as ReturnType<typeof mapCaptureEventForQa> & { flowId?: string };
@@ -26,11 +46,11 @@ describe("qa-lab server capture helpers", () => {
     expect(record.payloadPreview).toBe('{"hello":"world"}');
     expect(record.provider).toBe("openai");
     expect(record.api).toBe("responses");
-    expect(record.model).toBe("gpt-5.5");
+    expect(record.model).toBe("gpt-5.6-luna");
     expect(record.captureOrigin).toBe("shared-fetch");
   });
 
-  it("probes tcp reachability for reachable and unreachable targets", async () => {
+  it("reports reachable and unreachable targets in startup status", async () => {
     const server = createServer((_req, res) => {
       res.writeHead(200);
       res.end("ok");
@@ -41,9 +61,9 @@ describe("qa-lab server capture helpers", () => {
     });
     cleanups.push(
       async () =>
-        await new Promise<void>((resolve, reject) =>
-          server.close((error) => (error ? reject(error) : resolve())),
-        ),
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        }),
     );
 
     const address = server.address();
@@ -51,9 +71,13 @@ describe("qa-lab server capture helpers", () => {
       throw new Error("expected tcp probe address");
     }
 
-    const reachable = await probeTcpReachability(`http://127.0.0.1:${address.port}`);
-    expect(reachable.ok).toBe(true);
-    const unreachable = await probeTcpReachability("http://127.0.0.1:9", 50);
-    expect(unreachable.ok).toBe(false);
+    const status = await readQaCaptureStartupStatus({
+      proxyUrl: `http://127.0.0.1:${address.port}`,
+      gatewayUrl: "http://127.0.0.1:9",
+      publicBaseUrl: "http://127.0.0.1:8080",
+    });
+    expect(status.proxy).toMatchObject({ label: "Proxy", ok: true });
+    expect(status.gateway).toMatchObject({ label: "Gateway", ok: false });
+    expect(status.qaLab).toEqual({ label: "QA Lab", url: "http://127.0.0.1:8080", ok: true });
   });
 });

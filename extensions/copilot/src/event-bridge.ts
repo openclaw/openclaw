@@ -1,0 +1,784 @@
+import type { MessageOptions, SessionEvent, SessionEventType } from "@github/copilot-sdk";
+import {
+  emitAgentEvent,
+  projectAgentToolActivity,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
+import type {
+  AgentHarnessAttemptResult,
+  AgentMessage,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { readNonEmptyStringPreservingWhitespace as readNonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  buildAssistantMessage,
+  buildAssistantProjectionGroup,
+  hasOwnKeys,
+  projectSdkUserMetadata,
+  projectToolResultDetails,
+  resolveAssistantUsage,
+  resolveEventTimestamp,
+  sanitizeToolDetailText,
+  type AssistantProjectionChunk,
+  type AssistantProjectionGroup,
+  type AssistantUsageSnapshot,
+  type AttemptTranscriptJournalProjection,
+} from "./event-bridge-transcript.js";
+import { createPromptError } from "./prompt-error.js";
+import { normalizeCopilotUsage } from "./usage-bridge.js";
+
+export type { AssistantMessage, AssistantUsageSnapshot } from "./event-bridge-transcript.js";
+
+export interface OnAssistantDeltaPayload {
+  delta: string;
+  sessionId?: string;
+  text: string;
+  usage?: AssistantUsageSnapshot;
+}
+
+export interface SessionLike {
+  abort(): Promise<void>;
+  disconnect(): Promise<void>;
+  id?: string;
+  on: {
+    <K extends SessionEventType>(
+      eventType: K,
+      handler: (event: Extract<SessionEvent, { type: K }>) => void,
+    ): () => void;
+    (eventType: string, handler: (event: SessionEvent) => void): () => void;
+  };
+  rpc?: {
+    history?: {
+      cancelBackgroundCompaction?: () => Promise<unknown>;
+    };
+  };
+  send(options: MessageOptions): Promise<string>;
+  sendAndWait(options: MessageOptions, timeout?: number): Promise<SessionEvent | undefined>;
+  sessionId?: string;
+}
+
+interface EventBridgeOptions {
+  runId?: string;
+  sessionKey?: string;
+  onAssistantDelta?: (payload: OnAssistantDeltaPayload) => void | Promise<void>;
+  onAgentEvent?: (event: {
+    stream: "item" | "plan";
+    data: Record<string, unknown>;
+  }) => void | Promise<void>;
+  onCompactionComplete?: (payload: {
+    messagesRemoved?: number;
+    success: boolean;
+  }) => void | Promise<void>;
+  onCompactionStart?: () => void | Promise<void>;
+  onContextCompacted?: () => void;
+  getSdkSessionId: () => string | undefined;
+  isAborted: () => boolean;
+  transcriptProjection?: {
+    journal: AttemptTranscriptJournalProjection;
+    modelRef: { api?: string; id: string; provider: string };
+    now: () => number;
+    resultContentSourceByToolName?: ReadonlyMap<string, "network">;
+  };
+}
+
+interface EventBridgeSnapshot {
+  readonly assistantTexts: readonly string[];
+  readonly completedCount: number;
+  readonly lastAssistantEvent: Extract<SessionEvent, { type: "assistant.message" }> | undefined;
+  readonly startedCount: number;
+  readonly streamError: Error | undefined;
+  readonly toolMetas: ReadonlyArray<AgentHarnessAttemptResult["toolMetas"][number]>;
+  readonly usage: AssistantUsageSnapshot | undefined;
+}
+
+export function attachEventBridge(session: SessionLike, options: EventBridgeOptions) {
+  const messagesById = new Map<string, string>();
+  const reasoningById = new Map<string, string>();
+  const durableReasoningById = new Map<string, string>();
+  let lastAssistantEvent: Extract<SessionEvent, { type: "assistant.message" }> | undefined;
+  let lastAssistantReasoningText: string | undefined;
+  let usage: AssistantUsageSnapshot | undefined;
+  const usageByApiCallId = new Map<string, AssistantUsageSnapshot>();
+  const handledAssistantEventIds = new Set<string>();
+  const projectedAssistantMessageIdsWithoutApiCall = new Set<string>();
+  let pendingAssistantProjection: AssistantProjectionGroup | undefined;
+  let lastAssistantProjection: AssistantProjectionGroup | undefined;
+  let streamError: Error | undefined;
+  const toolMetas: AgentHarnessAttemptResult["toolMetas"] = [];
+  const toolMetaIndexByCallId = new Map<string, number>();
+  const toolCallsById = new Map<string, { args: unknown; root: boolean }>();
+  const preparedToolCompletions = new Set<string>();
+  const projectedToolNamesByCallId = new Map<string, string>();
+  const userRequestedToolCallIds = new Set<string>();
+  let startedCount = 0;
+  let completedCount = 0;
+  let activeCompactionCount = 0;
+  let observedCompaction = false;
+  let deltaQueue = Promise.resolve();
+  let deltaChain = Promise.resolve();
+  let agentEventChain = Promise.resolve();
+  let compactionChain = Promise.resolve();
+  let compactionIdle: ReturnType<typeof createDeferred<void>> | undefined;
+  let observedSessionIdle = false;
+  const sessionIdle = createDeferred();
+  let firstDeltaError: unknown;
+  let detached = false;
+  const unsubscribeFns: Array<() => void> = [];
+  const listen = <K extends SessionEventType>(
+    eventType: K,
+    handler: (event: Extract<SessionEvent, { type: K }>) => void,
+  ) => {
+    unsubscribeFns.push(session.on(eventType, handler));
+  };
+  const listenRoot = <K extends SessionEventType>(
+    eventType: K,
+    handler: (event: Extract<SessionEvent, { type: K }>) => void,
+  ) =>
+    listen(eventType, (event) => {
+      if (isRootSessionEvent(event)) {
+        handler(event);
+      }
+    });
+
+  listenRoot("user.message", (event) => {
+    if (event.ephemeral === true) {
+      return;
+    }
+    flushPendingAssistantProjection();
+    const projection = options.transcriptProjection;
+    if (!projection) {
+      return;
+    }
+    const source = readNonEmptyString(event.data.source);
+    const transformedContent =
+      typeof event.data.transformedContent === "string" ? event.data.transformedContent : undefined;
+    const openClawMeta = projectSdkUserMetadata(event.data.attachments, source);
+    const idempotencyKey = `copilot-sdk:${options.getSdkSessionId() ?? "unknown"}:${event.id}`;
+    // `source` is open-ended provenance, not a visibility enum. Hide the one
+    // documented injected source; unknown sources stay visible without guessing.
+    const hidden = event.data.isAutopilotContinuation === true || source === "skill-pdf";
+    projection.journal.recordSdkUser({
+      eventId: event.id,
+      autopilotContinuation: event.data.isAutopilotContinuation === true,
+      replayIncomplete: Boolean(
+        event.data.attachments?.length ||
+        (event.data.agentMode !== undefined && event.data.agentMode !== "interactive") ||
+        (transformedContent !== undefined && transformedContent !== event.data.content),
+      ),
+      message: {
+        role: "user",
+        content: event.data.content,
+        timestamp: resolveEventTimestamp(event.timestamp, projection.now),
+        idempotencyKey,
+        ...(hidden ? { display: false } : {}),
+        ...(openClawMeta ? { __openclaw: openClawMeta } : {}),
+      } as Extract<AgentMessage, { role: "user" }>,
+    });
+  });
+
+  // These native history events have no lossless AgentMessage projection.
+  for (const eventType of ["system.message", "skill.invoked", "system.notification"] as const) {
+    listenRoot(eventType, (event) => {
+      if (event.ephemeral !== true) {
+        options.transcriptProjection?.journal.markReplayIncomplete();
+      }
+    });
+  }
+
+  listenRoot("assistant.message_delta", (event) => {
+    const messageId = readNonEmptyString(event.data.messageId) ?? "assistant-message";
+    const delta = event.data.deltaContent;
+    if (!delta) {
+      return;
+    }
+    const text = (messagesById.get(messageId) ?? "") + delta;
+    messagesById.set(messageId, text);
+    const onAssistantDelta = options.onAssistantDelta;
+    if (!onAssistantDelta) {
+      return;
+    }
+    const payload: OnAssistantDeltaPayload = {
+      delta,
+      sessionId: options.getSdkSessionId(),
+      text,
+      usage,
+    };
+    deltaQueue = deltaQueue
+      .then(
+        () => onAssistantDelta(payload),
+        () => onAssistantDelta(payload),
+      )
+      .catch((error: unknown) => {
+        firstDeltaError ??= error;
+      });
+    deltaChain = deltaQueue.then(() => {
+      if (firstDeltaError !== undefined) {
+        throw toErrorObject(firstDeltaError, "Non-Error thrown");
+      }
+    });
+    void deltaChain.catch(() => undefined);
+  });
+
+  listenRoot("assistant.reasoning_delta", (event) => {
+    const reasoningId = readNonEmptyString(event.data.reasoningId) ?? "assistant-reasoning";
+    const delta = event.data.deltaContent;
+    if (!delta) {
+      return;
+    }
+    reasoningById.set(reasoningId, `${reasoningById.get(reasoningId) ?? ""}${delta}`);
+  });
+
+  listenRoot("assistant.reasoning", (event) => {
+    if (event.ephemeral === true) {
+      return;
+    }
+    reasoningById.set(event.data.reasoningId, event.data.content);
+    durableReasoningById.set(event.data.reasoningId, event.data.content);
+  });
+
+  listenRoot("assistant.turn_start", markUnconsumedReasoningIncomplete);
+
+  listen("assistant.message", handleAssistantMessage);
+
+  listenRoot("assistant.usage", (event) => {
+    usage = normalizeCopilotUsage(event.data);
+    const apiCallId = readNonEmptyString(event.data.apiCallId);
+    if (apiCallId && usage) {
+      usageByApiCallId.set(apiCallId, usage);
+    }
+    if (apiCallId) {
+      flushPendingAssistantProjection(apiCallId);
+    }
+  });
+
+  listenRoot("tool.user_requested", (event) => {
+    if (event.ephemeral !== true) {
+      userRequestedToolCallIds.add(event.data.toolCallId);
+      options.transcriptProjection?.journal.markReplayIncomplete();
+    }
+  });
+
+  listen("tool.execution_start", (event) => {
+    flushPendingAssistantProjectionForToolCall(event.data.toolCallId);
+    if (isRootSessionEvent(event)) {
+      startedCount += 1;
+    }
+    toolMetaIndexByCallId.set(event.data.toolCallId, toolMetas.length);
+    toolMetas.push({ toolName: event.data.toolName });
+    toolCallsById.set(event.data.toolCallId, {
+      args: event.data.arguments,
+      root: isRootSessionEvent(event),
+    });
+    if (isRootSessionEvent(event)) {
+      enqueueAgentEvent({
+        stream: "item",
+        data: projectAgentToolActivity({
+          toolCallId: event.data.toolCallId,
+          name: event.data.toolName,
+          phase: "start",
+          args: event.data.arguments,
+        }),
+      });
+    }
+  });
+
+  listen("tool.execution_complete", (event) => {
+    flushPendingAssistantProjectionForToolCall(event.data.toolCallId);
+    if (isRootSessionEvent(event)) {
+      completedCount += 1;
+    }
+    const toolMetaIndex = toolMetaIndexByCallId.get(event.data.toolCallId);
+    const toolName = toolMetaIndex === undefined ? undefined : toolMetas[toolMetaIndex]?.toolName;
+    const args = toolCallsById.get(event.data.toolCallId)?.args;
+    toolCallsById.delete(event.data.toolCallId);
+    const completionPrepared = preparedToolCompletions.delete(event.data.toolCallId);
+    if (toolName && isRootSessionEvent(event) && !completionPrepared) {
+      enqueueAgentEvent({
+        stream: "item",
+        data: projectAgentToolActivity({
+          toolCallId: event.data.toolCallId,
+          name: toolName,
+          phase: "result",
+          args,
+          isError: !event.data.success,
+        }),
+      });
+    }
+    const meta = event.data.success
+      ? (event.data.result?.detailedContent ?? event.data.result?.content)
+      : event.data.error?.message;
+    if (toolName && toolMetaIndex !== undefined) {
+      toolMetas[toolMetaIndex] = {
+        ...(meta ? { meta } : {}),
+        toolName,
+        isError: !event.data.success,
+      };
+    }
+    const projection = options.transcriptProjection;
+    const isDurableRootCompletion = isRootSessionEvent(event) && event.ephemeral !== true;
+    const wasTrackedUserRequest = userRequestedToolCallIds.has(event.data.toolCallId);
+    const isUserRequested = event.data.isUserRequested === true || wasTrackedUserRequest;
+    const projectedToolName = projectedToolNamesByCallId.get(event.data.toolCallId);
+    if (isDurableRootCompletion) {
+      userRequestedToolCallIds.delete(event.data.toolCallId);
+      projectedToolNamesByCallId.delete(event.data.toolCallId);
+    }
+    if (projection && isDurableRootCompletion && isUserRequested) {
+      projection.journal.markReplayIncomplete();
+    }
+    if (projection && isDurableRootCompletion && !isUserRequested) {
+      const resultText = event.data.success
+        ? (event.data.result?.content ?? "")
+        : (event.data.error?.message ?? "Tool execution failed");
+      const details = projectToolResultDetails(event.data);
+      const replayIncomplete = Boolean(
+        event.data.result?.binaryResultsForLlm?.length || event.data.result?.citableSources?.length,
+      );
+      const resolvedToolName =
+        toolName ?? event.data.toolDescription?.name ?? projectedToolName ?? "unknown";
+      const resultContentSource = projection.resultContentSourceByToolName?.get(resolvedToolName);
+      projection.journal.recordToolResult({
+        eventId: event.id,
+        replayIncomplete,
+        message: {
+          role: "toolResult",
+          toolCallId: event.data.toolCallId,
+          toolName: resolvedToolName,
+          content: [{ type: "text", text: sanitizeToolDetailText(resultText) }],
+          ...(hasOwnKeys(details) ? { details } : {}),
+          isError: !event.data.success,
+          timestamp: resolveEventTimestamp(event.timestamp, projection.now),
+          ...(resultContentSource ? { __openclaw: { resultContentSource } } : {}),
+        },
+      });
+    }
+  });
+
+  listen("session.plan_changed", (event) => {
+    enqueueAgentEvent({
+      stream: "plan",
+      data: {
+        phase: "update",
+        title: "Plan updated",
+        source: "copilot-sdk",
+        operation: event.data.operation,
+        ...(event.agentId ? { agentId: event.agentId } : {}),
+      },
+    });
+  });
+
+  listen("exit_plan_mode.requested", (event) => {
+    const steps = splitPlanText(event.data.planContent).map((step) => ({
+      step,
+      status: "pending" as const,
+    }));
+    enqueueAgentEvent({
+      stream: "plan",
+      data: {
+        phase: "update",
+        title: "Plan updated",
+        source: "copilot-sdk",
+        ...(event.data.summary ? { explanation: event.data.summary } : {}),
+        ...(steps.length > 0 ? { steps } : {}),
+        ...(event.data.actions.length > 0 ? { actions: event.data.actions } : {}),
+        ...(event.data.requestId ? { requestId: event.data.requestId } : {}),
+        ...(event.data.recommendedAction
+          ? { recommendedAction: event.data.recommendedAction }
+          : {}),
+        ...(event.agentId ? { agentId: event.agentId } : {}),
+      },
+    });
+  });
+
+  listen("exit_plan_mode.completed", (event) => {
+    enqueueAgentEvent({
+      stream: "plan",
+      data: {
+        phase: "update",
+        title: "Plan decision",
+        source: "copilot-sdk",
+        requestId: event.data.requestId,
+        ...(event.data.approved !== undefined ? { approved: event.data.approved } : {}),
+        ...(event.data.autoApproveEdits !== undefined
+          ? { autoApproveEdits: event.data.autoApproveEdits }
+          : {}),
+        ...(event.data.feedback ? { feedback: event.data.feedback } : {}),
+        ...(event.data.selectedAction ? { selectedAction: event.data.selectedAction } : {}),
+        ...(event.agentId ? { agentId: event.agentId } : {}),
+      },
+    });
+  });
+
+  listenRoot("session.compaction_start", () => {
+    observedCompaction = true;
+    if (activeCompactionCount === 0) {
+      compactionIdle = createDeferred();
+    }
+    activeCompactionCount += 1;
+    enqueueCompactionCallback(options.onCompactionStart);
+  });
+
+  listen("session.compaction_complete", (event) => {
+    if (event.data.success) {
+      try {
+        // The SDK shares one tool-handler map and omits agent identity from
+        // tool invocations, so any compacted context invalidates the frame.
+        options.onContextCompacted?.();
+      } catch {
+        // Context invalidation must not break generic compaction tracking.
+      }
+    }
+    if (!isRootSessionEvent(event)) {
+      return;
+    }
+    activeCompactionCount = Math.max(0, activeCompactionCount - 1);
+    enqueueCompactionCallback(() =>
+      options.onCompactionComplete?.({
+        ...(event.data.messagesRemoved !== undefined
+          ? { messagesRemoved: event.data.messagesRemoved }
+          : {}),
+        success: event.data.success,
+      }),
+    );
+    if (activeCompactionCount === 0) {
+      compactionIdle?.resolve();
+      compactionIdle = undefined;
+    }
+  });
+
+  listenRoot("session.idle", () => {
+    markUnconsumedReasoningIncomplete();
+    flushPendingAssistantProjection();
+    observedSessionIdle = true;
+    sessionIdle.resolve();
+  });
+
+  listen("session.error", (event) => {
+    markUnconsumedReasoningIncomplete();
+    if (!options.isAborted()) {
+      streamError = createPromptError(
+        event.data.errorCode ?? event.data.errorType,
+        event.data.message,
+      );
+    }
+  });
+
+  listen("abort", (event) => {
+    markUnconsumedReasoningIncomplete();
+    if (!options.isAborted()) {
+      streamError = createPromptError(
+        "session_aborted",
+        `[copilot-attempt] session aborted: ${event.data.reason}`,
+      );
+    }
+  });
+
+  return {
+    recordSendResult(result: SessionEvent | undefined) {
+      if (
+        !isAssistantMessageEvent(result) ||
+        !isRootSessionEvent(result) ||
+        result.ephemeral === true
+      ) {
+        return false;
+      }
+      handleAssistantMessage(result);
+      flushPendingAssistantProjection();
+      return true;
+    },
+    awaitCompactionChain() {
+      return compactionChain;
+    },
+    awaitCompactionCompletion: awaitStableCompaction,
+    awaitSessionIdle() {
+      return observedSessionIdle ? Promise.resolve() : sessionIdle.promise;
+    },
+    settleCompactionWait() {
+      activeCompactionCount = 0;
+      compactionIdle?.resolve();
+      compactionIdle = undefined;
+    },
+    awaitDeltaChain() {
+      return deltaChain;
+    },
+    awaitAgentEventChain() {
+      return agentEventChain;
+    },
+    flushTranscriptProjection() {
+      markUnconsumedReasoningIncomplete();
+      flushPendingAssistantProjection();
+    },
+    hasObservedCompaction() {
+      return observedCompaction;
+    },
+    hasObservedSessionIdle() {
+      return observedSessionIdle;
+    },
+    isCompacting() {
+      return activeCompactionCount > 0;
+    },
+    snapshot(): EventBridgeSnapshot {
+      return {
+        assistantTexts: finalizeAssistantTexts(messagesById, lastAssistantEvent),
+        completedCount,
+        lastAssistantEvent,
+        startedCount,
+        streamError,
+        toolMetas: toolMetas.map((toolMeta) => Object.assign({}, toolMeta)),
+        usage: usage ? { ...usage } : undefined,
+      };
+    },
+    buildAssistantMessage(
+      args: Pick<Parameters<typeof buildAssistantMessage>[0], "modelRef" | "now">,
+    ) {
+      const group = pendingAssistantProjection ?? lastAssistantProjection;
+      return group
+        ? buildAssistantProjectionGroup(
+            group,
+            args.modelRef,
+            () => args.now(),
+            usageByApiCallId,
+            usage,
+            false,
+          ).message
+        : buildAssistantMessage({
+            event: lastAssistantEvent,
+            modelRef: args.modelRef,
+            now: args.now,
+            reasoningText: lastAssistantReasoningText,
+            usage: resolveAssistantUsage(lastAssistantEvent, usage, usageByApiCallId),
+            assistantTexts: finalizeAssistantTexts(messagesById, lastAssistantEvent),
+          });
+    },
+    finalizeAssistantTexts() {
+      return finalizeAssistantTexts(messagesById, lastAssistantEvent);
+    },
+    completeTool(tool: {
+      toolCallId: string;
+      parentToolCallId?: string;
+      toolName: string;
+      args?: unknown;
+      result?: unknown;
+      isError: boolean;
+    }) {
+      const owner = toolCallsById.get(tool.parentToolCallId ?? tool.toolCallId);
+      if (detached || !owner?.root) {
+        return;
+      }
+      if (!tool.parentToolCallId) {
+        preparedToolCompletions.add(tool.toolCallId);
+      }
+      enqueueAgentEvent({
+        stream: "item",
+        data: projectAgentToolActivity({ ...tool, name: tool.toolName, phase: "result" }),
+      });
+    },
+    detach() {
+      if (detached) {
+        return;
+      }
+      detached = true;
+      for (const unsubscribe of [...unsubscribeFns].toReversed()) {
+        try {
+          unsubscribe();
+        } catch {
+          // best-effort cleanup only
+        }
+      }
+      unsubscribeFns.length = 0;
+    },
+  };
+
+  function handleAssistantMessage(
+    event: Extract<SessionEvent, { type: "assistant.message" }>,
+  ): void {
+    if (!isRootSessionEvent(event) || event.ephemeral === true) {
+      return;
+    }
+    lastAssistantEvent = event;
+    if (handledAssistantEventIds.has(event.id)) {
+      return;
+    }
+    handledAssistantEventIds.add(event.id);
+    for (const request of event.data.toolRequests ?? []) {
+      projectedToolNamesByCallId.set(request.toolCallId, request.name);
+    }
+    const previousText = messagesById.get(event.data.messageId) ?? "";
+    messagesById.set(
+      event.data.messageId,
+      typeof event.data.content === "string" && event.data.content.length >= previousText.length
+        ? event.data.content
+        : previousText,
+    );
+    lastAssistantReasoningText =
+      event.data.reasoningText ?? ([...reasoningById.values()].join("") || undefined);
+    const transcriptReasoningText =
+      event.data.reasoningText ?? ([...durableReasoningById.values()].join("") || undefined);
+    reasoningById.clear();
+    durableReasoningById.clear();
+    const chunk: AssistantProjectionChunk = {
+      event,
+      assistantTexts: [messagesById.get(event.data.messageId) ?? ""],
+      ...(lastAssistantReasoningText ? { reasoningText: lastAssistantReasoningText } : {}),
+      transcriptAssistantTexts: [event.data.content ?? ""],
+      ...(transcriptReasoningText ? { transcriptReasoningText } : {}),
+    };
+    const apiCallId = readNonEmptyString(event.data.apiCallId);
+    if (!apiCallId) {
+      if (projectedAssistantMessageIdsWithoutApiCall.has(event.data.messageId)) {
+        options.transcriptProjection?.journal.markReplayIncomplete();
+        lastAssistantProjection = { chunks: [chunk] };
+        return;
+      }
+      projectedAssistantMessageIdsWithoutApiCall.add(event.data.messageId);
+      flushPendingAssistantProjection();
+      const group = { chunks: [chunk] } satisfies AssistantProjectionGroup;
+      lastAssistantProjection = group;
+      recordAssistantProjection(group);
+      return;
+    }
+    if (pendingAssistantProjection?.apiCallId !== apiCallId) {
+      flushPendingAssistantProjection();
+      pendingAssistantProjection = { apiCallId, chunks: [] };
+    }
+    const priorChunkIndex = pendingAssistantProjection.chunks.findIndex(
+      (candidate) => candidate.event.data.messageId === event.data.messageId,
+    );
+    if (priorChunkIndex === -1) {
+      pendingAssistantProjection.chunks.push(chunk);
+    } else {
+      pendingAssistantProjection.chunks[priorChunkIndex] = chunk;
+    }
+  }
+
+  function flushPendingAssistantProjection(apiCallId?: string): void {
+    const group = pendingAssistantProjection;
+    if (!group || (apiCallId !== undefined && group.apiCallId !== apiCallId)) {
+      return;
+    }
+    pendingAssistantProjection = undefined;
+    lastAssistantProjection = group;
+    recordAssistantProjection(group);
+  }
+
+  function markUnconsumedReasoningIncomplete(): void {
+    if (durableReasoningById.size > 0) {
+      options.transcriptProjection?.journal.markReplayIncomplete();
+    }
+    reasoningById.clear();
+    durableReasoningById.clear();
+  }
+
+  function flushPendingAssistantProjectionForToolCall(toolCallId: string): void {
+    const group = pendingAssistantProjection;
+    if (
+      group?.chunks.some((chunk) =>
+        chunk.event.data.toolRequests?.some((request) => request.toolCallId === toolCallId),
+      )
+    ) {
+      flushPendingAssistantProjection();
+    }
+  }
+
+  function recordAssistantProjection(group: AssistantProjectionGroup): void {
+    const projection = options.transcriptProjection;
+    if (!projection) {
+      return;
+    }
+    const { message, replayIncomplete, toolCallIds } = buildAssistantProjectionGroup(
+      group,
+      projection.modelRef,
+      (event) => resolveEventTimestamp(event.timestamp, projection.now),
+      usageByApiCallId,
+      // Optional assistant.usage must never delay canonical content. Later
+      // unkeyed usage stays attempt metadata; this row uses per-call data only.
+      undefined,
+      true,
+    );
+    const eventId = group.chunks[0]?.event.id;
+    if (!eventId) {
+      return;
+    }
+    if (!message) {
+      if (replayIncomplete) {
+        projection.journal.markReplayIncomplete();
+      }
+      projection.journal.recordAssistantProjectionGap();
+      return;
+    }
+    projection.journal.recordAssistant({
+      eventId,
+      message,
+      replayIncomplete,
+      toolCallIds,
+    });
+  }
+
+  function enqueueCompactionCallback(callback: (() => void | Promise<void>) | undefined): void {
+    if (!callback) {
+      return;
+    }
+    const queued = compactionChain.then(callback, callback);
+    compactionChain = queued.catch(() => undefined);
+  }
+
+  function enqueueAgentEvent(event: {
+    stream: "item" | "plan";
+    data: Record<string, unknown>;
+  }): void {
+    if (options.runId) {
+      emitAgentEvent({ runId: options.runId, sessionKey: options.sessionKey, ...event });
+    }
+    const callback = options.onAgentEvent;
+    if (!callback) {
+      return;
+    }
+    const invoke = () => callback(event);
+    agentEventChain = agentEventChain.then(invoke, invoke).catch(() => undefined);
+  }
+
+  async function awaitStableCompaction(): Promise<void> {
+    const idle = activeCompactionCount > 0 ? compactionIdle?.promise : undefined;
+    if (idle) {
+      await idle;
+    }
+    const callbacks = compactionChain;
+    await callbacks;
+    // Compaction events can arrive while an earlier hook callback settles.
+    // Recheck both queues before teardown so the root observer stays attached.
+    if (activeCompactionCount > 0 || compactionChain !== callbacks) {
+      await awaitStableCompaction();
+    }
+  }
+}
+
+function finalizeAssistantTexts(
+  messagesById: Map<string, string>,
+  event?: Extract<SessionEvent, { type: "assistant.message" }>,
+): string[] {
+  const texts = [...messagesById.values()].filter((text) => text.length > 0);
+  if (texts.length > 0) {
+    return texts;
+  }
+  if (event?.data.content) {
+    return [event.data.content];
+  }
+  return [];
+}
+
+function isAssistantMessageEvent(
+  event: SessionEvent | undefined,
+): event is Extract<SessionEvent, { type: "assistant.message" }> {
+  return event?.type === "assistant.message";
+}
+
+function isRootSessionEvent(event: { agentId?: string }): boolean {
+  return event.agentId === undefined;
+}
+
+function splitPlanText(text: string | undefined): string[] {
+  return (text ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.trim().replace(/^[-*]\s+/, ""))
+    .filter((line) => line.length > 0);
+}

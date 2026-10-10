@@ -1,0 +1,185 @@
+import type { Bot } from "grammy";
+import type { Message } from "grammy/types";
+import type {
+  createChannelProgressDraftCompositor,
+  LivePreviewDeliveryResult,
+  LivePreviewLifecycle,
+  TextChunkMode,
+} from "openclaw/plugin-sdk/channel-outbound";
+import type {
+  OpenClawConfig,
+  ReplyToMode,
+  TelegramAccountConfig,
+} from "openclaw/plugin-sdk/config-contracts";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
+import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import type { readLatestAssistantTextByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
+import type { TelegramBotDeps } from "./bot-deps.js";
+import type { TelegramMessageContext } from "./bot-message-context.js";
+import type { TelegramBotOptions } from "./bot.types.js";
+import type { TelegramNativeQuoteCandidateByMessageId } from "./bot/native-quote.js";
+import type { TelegramStreamMode } from "./bot/types.js";
+import type { TelegramDraftStream } from "./draft-stream.js";
+import type { LaneDeliveryStateTracker } from "./lane-delivery-state.js";
+import type {
+  DraftLaneState,
+  LaneName,
+  LaneTextDeliverer,
+} from "./lane-delivery-text-deliverer.js";
+import type { createTelegramReasoningStepState } from "./reasoning-lane-coordinator.js";
+
+export type DispatchTelegramMessageParams = {
+  context: TelegramMessageContext;
+  bot: Bot;
+  cfg: OpenClawConfig;
+  runtime: RuntimeEnv;
+  replyToMode: ReplyToMode;
+  streamMode: TelegramStreamMode;
+  textLimit: number;
+  telegramCfg: TelegramAccountConfig;
+  telegramDeps?: TelegramBotDeps;
+  opts: Pick<
+    TelegramBotOptions,
+    "token" | "mediaMaxMb" | "ownerAgentId" | "dispatchReplyFromConfig"
+  >;
+  retryDispatchErrors?: boolean;
+  suppressFailureFallback?: boolean;
+  /**
+   * Canonical turn ownership lifecycle from the durable ingress drain
+   * (or a test double). Pre-adoption abort + adopt/defer/abandon.
+   */
+  turnAdoptionLifecycle?: GetReplyOptions["turnAdoptionLifecycle"];
+};
+
+export type TelegramDispatchResult =
+  | { kind: "completed" }
+  | { kind: "failed-retryable"; error: unknown };
+
+export type TelegramReasoningLevel = "off" | "on" | "stream";
+export type TelegramTranscriptMirrorPayload = { text?: string; mediaUrls?: string[] };
+export type CurrentTurnTranscriptFinal = Pick<
+  NonNullable<Awaited<ReturnType<typeof readLatestAssistantTextByIdentity>>>,
+  "text" | "openclawDelivery"
+> & { messageId?: string };
+
+export type FreshTelegramSessionEntryLoader = ((
+  agentId: string,
+  sessionKey: string,
+) => {
+  storePath: string;
+  entry?: SessionEntry;
+}) & {
+  clear: () => void;
+};
+
+type TelegramAnswerBlockDelivery = {
+  payload: ReplyPayload;
+  text: string;
+  buttons: import("./button-types.js").TelegramInlineButtons | undefined;
+};
+
+export type TelegramDispatchTurnConfig = Omit<DispatchTelegramMessageParams, "telegramDeps"> & {
+  allowProviderPreview: boolean;
+  chunkMode: TextChunkMode;
+  dispatchStartedAt: number;
+  draftReplyToMessageId?: number;
+  isSuperseded: () => boolean;
+  loadFreshSessionEntry: FreshTelegramSessionEntryLoader;
+  mediaLocalRoots: readonly string[];
+  replyQuoteByMessageId: TelegramNativeQuoteCandidateByMessageId;
+  replyQuoteEntities?: Message["entities"];
+  replyQuoteMessageId?: number;
+  replyQuotePosition?: number;
+  replyQuoteText?: string;
+  resolvedReasoningLevel: TelegramReasoningLevel;
+  /** Resolved once per turn by the rich-messages owner; never re-read from telegramCfg. */
+  richMessages: boolean;
+  statusReactionController: TelegramMessageContext["statusReactionController"];
+  tableMode: Parameters<NonNullable<TelegramBotDeps["deliverReplies"]>>[0]["tableMode"];
+  telegramDeps: TelegramBotDeps;
+};
+
+export type TelegramSplitLaneSegmentsResult = {
+  segment: { lane: LaneName; text: string } | undefined;
+  suppressedReasoningOnly: boolean;
+};
+export type TelegramQueuedAnswerBlockRotation = {
+  assistantMessageIndex?: number;
+  text?: string;
+  shouldRotateBeforeDelivery: boolean;
+};
+type TelegramBufferedFinalSettlement = {
+  visibleReplySent: boolean;
+  onPlatformSendDispatch?: () => Promise<void>;
+  assertPlatformSendAuthorized?: () => void;
+  bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
+  resolve: (result: LivePreviewDeliveryResult) => void;
+  reject: (error: unknown) => void;
+};
+
+type TelegramProgressCompositor = ReturnType<typeof createChannelProgressDraftCompositor>;
+
+type TelegramReasoningStepState = ReturnType<typeof createTelegramReasoningStepState>;
+
+export type TelegramDraftStateSlice = {
+  answerLane: DraftLaneState;
+  reasoningLane: DraftLaneState;
+  lanes: Record<LaneName, DraftLaneState>;
+  createAnswerStream: () => TelegramDraftStream;
+  streamDeliveryEnabled: boolean;
+  streamReasoningInProgressDraft: boolean;
+  disableBlockStreaming: boolean | undefined;
+  durableReasoningPayloadsEnabled: boolean;
+  lastAnswerPartialText: string;
+  activeAnswerDraftIsToolProgressOnly: boolean;
+  activeAnswerBlockAssistantMessageIndex: number | undefined;
+  activeAnswerBlockDelivery: TelegramAnswerBlockDelivery | undefined;
+  queuedAnswerBlockRotations: TelegramQueuedAnswerBlockRotation[];
+  pendingAnswerBlockAssistantMessageIndex: number | undefined;
+  rotateAnswerLaneWhenQueuedBlocksSettle: boolean;
+  draftEventQueue: Promise<void>;
+};
+
+export type TelegramProgressStateSlice = {
+  verboseProgressActive: () => Promise<boolean>;
+  previewLifecycle: LivePreviewLifecycle<ReplyPayload, number>;
+  progressCompositor: TelegramProgressCompositor;
+  commentaryProgressEnabled: boolean;
+  progressPreambleEnabled: boolean | undefined;
+};
+
+export type TelegramDeliveryStateSlice = {
+  deliveryState: LaneDeliveryStateTracker;
+  deliverLaneText: LaneTextDeliverer;
+  materializeAnswerLaneBeforeRotation: () => Promise<void>;
+  resolveCurrentTurnTranscriptFinal: () => Promise<CurrentTurnTranscriptFinal | undefined>;
+  transcriptMirrorSequence: number;
+  transcriptMirrorTurnId: string;
+  implicitQuoteReplyTargetId: string | undefined;
+  currentMessageIdForQuoteReply: string | undefined;
+};
+
+export type TelegramReplyStateSlice = {
+  reasoningStepState: TelegramReasoningStepState;
+  bufferedFinalSettlement: TelegramBufferedFinalSettlement | undefined;
+  sentBlockMediaUrls: Set<string>;
+  splitReasoningOnNextStream: boolean;
+};
+
+export type TelegramDispatchTurn = TelegramDispatchTurnConfig &
+  TelegramDraftStateSlice &
+  TelegramProgressStateSlice &
+  TelegramDeliveryStateSlice &
+  TelegramReplyStateSlice & {
+    finalDispatchClaimed: boolean;
+    finalDeliveryNotDispatched?: boolean;
+    agentRunFailed?: boolean;
+    sendPolicyDenied?: boolean;
+    noVisibleReplyFallbackEligible: boolean;
+    suppressSilentReplyFallback: boolean;
+    hadErrorReplyFailureOrSkip: boolean;
+    progressContinuationAdopted?: boolean;
+    dispatchError?: unknown;
+  };

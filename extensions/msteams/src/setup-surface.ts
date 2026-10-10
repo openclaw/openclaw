@@ -3,6 +3,8 @@ import {
   createTopLevelChannelDmPolicy,
   createTopLevelChannelGroupPolicySetter,
   mergeAllowFromEntries,
+  patchTopLevelChannelConfigSection,
+  setSetupChannelEnabled,
   splitSetupEntries,
   createSetupTranslator,
   type ChannelSetupDmPolicy,
@@ -10,7 +12,7 @@ import {
   type OpenClawConfig,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup";
-import type { MSTeamsTeamConfig } from "../runtime-api.js";
+import { saveMSTeamsDelegatedTokens } from "./delegated-state.js";
 import { formatUnknownError } from "./errors.js";
 import {
   parseMSTeamsTeamEntry,
@@ -18,7 +20,7 @@ import {
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
 import { createMSTeamsSetupWizardBase } from "./setup-core.js";
-import { resolveMSTeamsCredentials, saveDelegatedTokens } from "./token.js";
+import { resolveMSTeamsCredentials } from "./token.js";
 
 const t = createSetupTranslator();
 
@@ -129,17 +131,7 @@ function setMSTeamsTeamsAllowlist(
       teams[teamKey] = existing;
     }
   }
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      msteams: {
-        ...cfg.channels?.msteams,
-        enabled: true,
-        teams: teams as Record<string, MSTeamsTeamConfig>,
-      },
-    },
-  };
+  return patchTopLevelChannelConfigSection({ cfg, channel, enabled: true, patch: { teams } });
 }
 
 function listMSTeamsGroupEntries(cfg: OpenClawConfig): string[] {
@@ -230,8 +222,8 @@ const msteamsGroupAccess: NonNullable<ChannelSetupWizard["groupAccess"]> = {
   currentEntries: ({ cfg }) => listMSTeamsGroupEntries(cfg),
   updatePrompt: ({ cfg }) => Boolean(cfg.channels?.msteams?.teams),
   setPolicy: ({ cfg, policy }) => setMSTeamsGroupPolicy(cfg, policy),
-  resolveAllowlist: async ({ cfg, entries, prompter }) =>
-    await resolveMSTeamsGroupAllowlist({ cfg, entries, prompter }),
+  resolveAllowlist: ({ cfg, entries, prompter }) =>
+    resolveMSTeamsGroupAllowlist({ cfg, entries, prompter }),
   applyAllowlist: ({ cfg, resolved }) =>
     setMSTeamsTeamsAllowlist(cfg, resolved as Array<{ teamKey: string; channelKey?: string }>),
 };
@@ -249,13 +241,7 @@ const msteamsSetupWizardBase = createMSTeamsSetupWizardBase();
 
 export const msteamsSetupWizard: ChannelSetupWizard = {
   ...msteamsSetupWizardBase,
-  // Override finalize to layer on the optional delegated-auth bootstrap after
-  // the base wizard collects app credentials. This preserves main's shared
-  // setup-core flow while keeping the delegated OAuth step from this PR.
   finalize: async (params) => {
-    // setup-core always provides a finalize; the type is optional only because
-    // ChannelSetupWizard.finalize is generally optional. Fall back to the
-    // incoming cfg if the base ever returns void for forward-compat.
     const baseFinalize = msteamsSetupWizardBase.finalize;
     const baseResult = baseFinalize ? await baseFinalize(params) : undefined;
     let next = baseResult?.cfg ?? params.cfg;
@@ -266,24 +252,35 @@ export const msteamsSetupWizard: ChannelSetupWizard = {
         initialValue: false,
       });
       if (enableDelegated) {
-        next = {
-          ...next,
-          channels: {
-            ...next.channels,
-            msteams: {
-              ...next.channels?.msteams,
-              delegatedAuth: { enabled: true },
-            },
-          },
+        next = patchTopLevelChannelConfigSection({
+          cfg: next,
+          channel,
+          patch: { delegatedAuth: { enabled: true } },
+        });
+        const noteDelegatedAuthFailure = async (err: unknown) => {
+          await params.prompter.note(
+            `Delegated auth setup failed: ${formatUnknownError(err)}\n` +
+              t("wizard.msteams.delegatedAuthRetry"),
+            t("wizard.msteams.delegatedAuthTitle"),
+          );
         };
+        let oauthModule: typeof import("./oauth.js");
         try {
-          const { loginMSTeamsDelegated } = await import("./oauth.js");
-          const progress = params.prompter.progress(t("wizard.msteams.delegatedOAuthProgress"));
-          const tokens = await loginMSTeamsDelegated(
+          oauthModule = await import("./oauth.js");
+        } catch (err) {
+          await noteDelegatedAuthFailure(err);
+          return { ...baseResult, cfg: next };
+        }
+
+        await params.options?.beforePersistentEffect?.();
+        const progress = params.prompter.progress(t("wizard.msteams.delegatedOAuthProgress"));
+        let tokens: Awaited<ReturnType<typeof oauthModule.loginMSTeamsDelegated>>;
+        try {
+          tokens = await oauthModule.loginMSTeamsDelegated(
             {
-              isRemote: true,
-              openUrl: openDelegatedOAuthUrl,
-              log: (msg) => params.prompter.note(msg),
+              log: (msg) => {
+                void params.prompter.note(msg);
+              },
               note: (msg, title) => params.prompter.note(msg, title),
               prompt: (msg) => params.prompter.text({ message: msg }),
               progress,
@@ -294,26 +291,25 @@ export const msteamsSetupWizard: ChannelSetupWizard = {
               clientSecret: finalCreds.appPassword,
             },
           );
-          saveDelegatedTokens(tokens);
-          progress.stop(t("wizard.msteams.delegatedAuthConfigured"));
         } catch (err) {
-          await params.prompter.note(
-            `Delegated auth setup failed: ${formatUnknownError(err)}\n` +
-              t("wizard.msteams.delegatedAuthRetry"),
-            t("wizard.msteams.delegatedAuthTitle"),
-          );
+          progress.stop();
+          await noteDelegatedAuthFailure(err);
+          return { ...baseResult, cfg: next };
         }
+
+        try {
+          await params.options?.beforePersistentEffect?.();
+        } catch (err) {
+          progress.stop();
+          throw err;
+        }
+        await saveMSTeamsDelegatedTokens(tokens);
+        progress.stop(t("wizard.msteams.delegatedAuthConfigured"));
       }
     }
     return { ...baseResult, cfg: next };
   },
   dmPolicy: msteamsDmPolicy,
   groupAccess: msteamsGroupAccess,
-  disable: (cfg) => ({
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      msteams: { ...cfg.channels?.msteams, enabled: false },
-    },
-  }),
+  disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
 };

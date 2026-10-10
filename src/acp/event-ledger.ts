@@ -1,228 +1,280 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-import type { ContentBlock, SessionUpdate } from "@agentclientprotocol/sdk";
-import { resolveStateDir } from "../config/paths.js";
-import { withFileLock } from "../infra/file-lock.js";
-import { readJsonFile, writeTextAtomic } from "../infra/json-files.js";
-import { isRecord } from "../utils.js";
+import type { DatabaseSync } from "node:sqlite";
+import type { SessionUpdate } from "@agentclientprotocol/sdk";
+import {
+  createSqliteQueryCache,
+  executeSqliteQuerySync,
+  prepareSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import {
+  openOpenClawStateDatabase,
+  type OpenClawStateDatabaseOptions,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
+import { estimateAcpEventRowBytes, estimateAcpSessionRowBytes } from "./event-ledger-bytes.js";
+import {
+  createAcpPromptUpdates,
+  normalizeAcpLedgerEvent,
+  normalizeAcpLedgerOptions,
+  type AcpEventLedger,
+  type AcpEventLedgerEntry,
+  type AcpEventLedgerReplay,
+  type AcpLedgerOptions,
+  type AcpMutableLedgerState,
+} from "./event-ledger.types.js";
 
-const LEDGER_VERSION = 1;
-const DEFAULT_MAX_SESSIONS = 200;
-const DEFAULT_MAX_EVENTS_PER_SESSION = 5_000;
-const DEFAULT_MAX_SERIALIZED_BYTES = 16 * 1024 * 1024;
-const FILE_LEDGER_LOCK_OPTIONS = {
-  retries: {
-    retries: 8,
-    factor: 2,
-    minTimeout: 50,
-    maxTimeout: 5_000,
-    randomize: true,
-  },
-  stale: 15_000,
-} as const;
+export type { AcpEventLedger, AcpEventLedgerReplay } from "./event-ledger.types.js";
 
-export type AcpEventLedgerEntry = {
-  seq: number;
-  at: number;
-  sessionId: string;
-  sessionKey: string;
-  runId?: string;
-  update: SessionUpdate;
-};
-
-export type AcpEventLedgerReplay = {
-  complete: boolean;
-  sessionId?: string;
-  sessionKey?: string;
-  events: AcpEventLedgerEntry[];
-};
-
-export type AcpEventLedger = {
-  startSession: (params: {
-    sessionId: string;
-    sessionKey: string;
-    cwd: string;
-    complete: boolean;
-    reset?: boolean;
-  }) => Promise<void>;
-  recordUserPrompt: (params: {
-    sessionId: string;
-    sessionKey: string;
-    runId: string;
-    prompt: readonly ContentBlock[];
-  }) => Promise<void>;
-  recordUpdate: (params: {
-    sessionId: string;
-    sessionKey: string;
-    runId?: string;
-    update: SessionUpdate;
-  }) => Promise<void>;
-  markIncomplete: (params: { sessionId: string; sessionKey: string }) => Promise<void>;
-  readReplay: (params: { sessionId: string; sessionKey: string }) => Promise<AcpEventLedgerReplay>;
-  readReplayBySessionId: (params: { sessionId: string }) => Promise<AcpEventLedgerReplay>;
-  readReplayBySessionKey: (params: { sessionKey: string }) => Promise<AcpEventLedgerReplay>;
-};
-
-type LedgerSession = {
-  sessionId: string;
-  sessionKey: string;
-  cwd: string;
-  complete: boolean;
-  createdAt: number;
-  updatedAt: number;
-  nextSeq: number;
-  events: AcpEventLedgerEntry[];
-};
-
-type LedgerStore = {
-  version: 1;
-  sessions: Record<string, LedgerSession>;
-};
-
-type LedgerOptions = {
-  maxSessions?: number;
-  maxEventsPerSession?: number;
-  maxSerializedBytes?: number;
-  now?: () => number;
-};
-
-type MutableLedgerState = {
-  store: LedgerStore;
-  maxSessions: number;
-  maxEventsPerSession: number;
-  maxSerializedBytes: number;
-  now: () => number;
-};
-
-function createEmptyStore(): LedgerStore {
-  return {
-    version: LEDGER_VERSION,
-    sessions: {},
-  };
+function normalizeSqliteInteger(value: number | bigint | null): number {
+  return value === null ? 0 : sqliteNumber(value);
 }
 
-function normalizeLedgerOptions(options: LedgerOptions = {}) {
+type AcpLedgerDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "acp_replay_sessions" | "acp_replay_events"
+>;
+type AcpReplayEventRow = Pick<
+  AcpLedgerDatabase["acp_replay_events"],
+  "session_id" | "seq" | "at" | "session_key" | "run_id" | "update_json"
+>;
+
+type AcpReplaySessionRow = Pick<
+  AcpLedgerDatabase["acp_replay_sessions"],
+  "session_id" | "session_key" | "cwd" | "complete" | "next_seq"
+>;
+
+function createSqliteLedgerQueries(db: DatabaseSync) {
+  const query = getNodeSqliteKysely<AcpLedgerDatabase>(db);
   return {
-    maxSessions: Math.max(1, Math.floor(options.maxSessions ?? DEFAULT_MAX_SESSIONS)),
-    maxEventsPerSession: Math.max(
-      1,
-      Math.floor(options.maxEventsPerSession ?? DEFAULT_MAX_EVENTS_PER_SESSION),
+    readSession: prepareSqliteQuerySync<string, AcpReplaySessionRow>(db, (parameter) =>
+      sqliteSessionMetadataQuery(db).where(
+        "session_id",
+        "=",
+        parameter((sessionId) => sessionId),
+      ),
     ),
-    maxSerializedBytes: Math.max(
-      1_024,
-      Math.floor(options.maxSerializedBytes ?? DEFAULT_MAX_SERIALIZED_BYTES),
+    updateSessionMetadata: prepareSqliteQuerySync<{
+      sessionId: string;
+      sessionKey: string;
+      cwd: string;
+      complete: number;
+      now: number;
+      metadataDelta: number;
+    }>(db, (parameter) =>
+      query
+        .updateTable("acp_replay_sessions")
+        .set((eb) => ({
+          estimated_bytes: eb(
+            "estimated_bytes",
+            "+",
+            parameter((params) => params.metadataDelta),
+          ),
+          session_key: parameter((params) => params.sessionKey),
+          cwd: parameter((params) => params.cwd),
+          complete: parameter((params) => params.complete),
+          updated_at: parameter((params) => params.now),
+        }))
+        .where(
+          "session_id",
+          "=",
+          parameter((params) => params.sessionId),
+        ),
     ),
-    now: options.now ?? Date.now,
+    insertEvent: prepareSqliteQuerySync<{
+      sessionId: string;
+      seq: number;
+      at: number;
+      sessionKey: string;
+      runId: string | null;
+      updateJson: string;
+      eventBytes: number;
+    }>(db, (parameter) =>
+      query.insertInto("acp_replay_events").values({
+        session_id: parameter((params) => params.sessionId),
+        seq: parameter((params) => params.seq),
+        at: parameter((params) => params.at),
+        session_key: parameter((params) => params.sessionKey),
+        run_id: parameter((params) => params.runId),
+        update_json: parameter((params) => params.updateJson),
+        estimated_bytes: parameter((params) => params.eventBytes),
+      }),
+    ),
+    updateSessionAfterAppend: prepareSqliteQuerySync<{
+      sessionId: string;
+      eventBytes: number;
+      now: number;
+      nextSeq: number;
+    }>(db, (parameter) =>
+      query
+        .updateTable("acp_replay_sessions")
+        .set((eb) => ({
+          estimated_bytes: eb(
+            "estimated_bytes",
+            "+",
+            parameter((params) => params.eventBytes),
+          ),
+          updated_at: parameter((params) => params.now),
+          next_seq: parameter((params) => params.nextSeq),
+        }))
+        .where(
+          "session_id",
+          "=",
+          parameter((params) => params.sessionId),
+        ),
+    ),
+    readEventCapCandidates: prepareSqliteQuerySync<
+      number,
+      { session_id: string; event_count: number }
+    >(db, (parameter) =>
+      query
+        .selectFrom("acp_replay_sessions as s")
+        .select("s.session_id")
+        .select((eb) =>
+          eb
+            .selectFrom("acp_replay_events as e")
+            .select((count) => count.fn.count<number>("e.seq").as("event_count"))
+            .whereRef("e.session_id", "=", "s.session_id")
+            .as("event_count"),
+        )
+        .where((eb) => {
+          const events = eb
+            .selectFrom("acp_replay_events as e")
+            .whereRef("e.session_id", "=", "s.session_id");
+          return eb(
+            eb(
+              events.select((endpoint) => endpoint.fn.max<number>("e.seq").as("seq")),
+              "-",
+              events.select((endpoint) => endpoint.fn.min<number>("e.seq").as("seq")),
+            ),
+            ">=",
+            parameter((limit) => limit),
+          );
+        }),
+    ),
+    readExcessSessions: prepareSqliteQuerySync<number, { session_id: string }>(db, (parameter) =>
+      query
+        .selectFrom("acp_replay_sessions")
+        .select("session_id")
+        .orderBy("updated_at", "desc")
+        .orderBy("session_id", "asc")
+        .limit(-1)
+        .offset(parameter((limit) => limit)),
+    ),
+    readTotalBytes: prepareSqliteQuerySync<void, { total: number }>(db, () =>
+      query
+        .selectFrom("acp_replay_sessions")
+        .select((eb) =>
+          eb.fn.coalesce(eb.fn.sum<number>("estimated_bytes"), eb.val(0)).as("total"),
+        ),
+    ),
+    readOldestSession: prepareSqliteQuerySync<void, { session_id: string }>(db, () =>
+      query
+        .selectFrom("acp_replay_sessions")
+        .select("session_id")
+        .orderBy("updated_at", "asc")
+        .orderBy("session_id", "asc")
+        .limit(1),
+    ),
+    deleteOldestEvents: prepareSqliteQuerySync<
+      { sessionId: string; limit: number },
+      { estimated_bytes: number }
+    >(db, (parameter) => {
+      const sessionId = parameter((params) => params.sessionId);
+      return query
+        .deleteFrom("acp_replay_events")
+        .where("session_id", "=", sessionId)
+        .where(
+          "seq",
+          "in",
+          query
+            .selectFrom("acp_replay_events")
+            .select("seq")
+            .where("session_id", "=", sessionId)
+            .orderBy("seq", "asc")
+            .limit(parameter((params) => params.limit)),
+        )
+        .returning("estimated_bytes");
+    }),
+    subtractSessionBytes: prepareSqliteQuerySync<{ sessionId: string; freed: number }>(
+      db,
+      (parameter) =>
+        query
+          .updateTable("acp_replay_sessions")
+          .set((eb) => ({
+            estimated_bytes: eb.fn<number>("max", [
+              eb.val(0),
+              eb(
+                "estimated_bytes",
+                "-",
+                parameter((params) => params.freed),
+              ),
+            ]),
+            complete: 0,
+          }))
+          .where(
+            "session_id",
+            "=",
+            parameter((params) => params.sessionId),
+          ),
+    ),
+    deleteSession: prepareSqliteQuerySync<string>(db, (parameter) =>
+      query.deleteFrom("acp_replay_sessions").where(
+        "session_id",
+        "=",
+        parameter((sessionId) => sessionId),
+      ),
+    ),
   };
 }
 
-function cloneJsonValue<T>(value: T): T {
-  return structuredClone(value);
-}
+// Native statements and their invalidation remain owned by the shared executor cache.
+const getSqliteLedgerQueries = createSqliteQueryCache(createSqliteLedgerQueries);
 
-function createUserPromptUpdates(prompt: readonly ContentBlock[]): SessionUpdate[] {
-  return prompt.map((content) => ({
-    sessionUpdate: "user_message_chunk",
-    content: cloneJsonValue(content),
-  }));
-}
-
-function serializeLedgerStore(store: LedgerStore): string {
-  return JSON.stringify(store);
-}
-
-function getSerializedLedgerByteLength(store: LedgerStore): number {
-  return Buffer.byteLength(serializeLedgerStore(store), "utf8");
-}
-
-function normalizeEvent(raw: unknown): AcpEventLedgerEntry | undefined {
-  if (!isRecord(raw) || !isRecord(raw.update)) {
+function sqliteRowToLedgerEvent(row: AcpReplayEventRow): AcpEventLedgerEntry | undefined {
+  let update: unknown;
+  try {
+    update = JSON.parse(row.update_json) as unknown;
+  } catch {
     return undefined;
   }
-  const seq = raw.seq;
-  const at = raw.at;
-  const sessionId = raw.sessionId;
-  const sessionKey = raw.sessionKey;
-  const runId = raw.runId;
-  const sessionUpdate = raw.update.sessionUpdate;
-  if (
-    typeof seq !== "number" ||
-    !Number.isInteger(seq) ||
-    seq < 0 ||
-    typeof at !== "number" ||
-    !Number.isFinite(at) ||
-    typeof sessionId !== "string" ||
-    typeof sessionKey !== "string" ||
-    typeof sessionUpdate !== "string"
-  ) {
-    return undefined;
-  }
-  return {
-    seq,
-    at,
-    sessionId,
-    sessionKey,
-    ...(typeof runId === "string" && runId ? { runId } : {}),
-    update: cloneJsonValue(raw.update) as SessionUpdate,
-  };
+  return normalizeAcpLedgerEvent({
+    seq: normalizeSqliteInteger(row.seq),
+    at: normalizeSqliteInteger(row.at),
+    sessionId: row.session_id,
+    sessionKey: row.session_key,
+    ...(row.run_id ? { runId: row.run_id } : {}),
+    update,
+  });
 }
 
-function normalizeSession(raw: unknown): LedgerSession | undefined {
-  if (!isRecord(raw)) {
-    return undefined;
-  }
-  const sessionId = raw.sessionId;
-  const sessionKey = raw.sessionKey;
-  const cwd = raw.cwd;
-  const createdAt = raw.createdAt;
-  const updatedAt = raw.updatedAt;
-  const nextSeq = raw.nextSeq;
-  if (
-    typeof sessionId !== "string" ||
-    typeof sessionKey !== "string" ||
-    typeof cwd !== "string" ||
-    typeof createdAt !== "number" ||
-    !Number.isFinite(createdAt) ||
-    typeof updatedAt !== "number" ||
-    !Number.isFinite(updatedAt) ||
-    typeof nextSeq !== "number" ||
-    !Number.isInteger(nextSeq) ||
-    nextSeq < 1
-  ) {
-    return undefined;
-  }
-  const events = Array.isArray(raw.events)
-    ? raw.events.map(normalizeEvent).filter((event): event is AcpEventLedgerEntry => Boolean(event))
-    : [];
-  return {
-    sessionId,
-    sessionKey,
-    cwd,
-    complete: raw.complete === true,
-    createdAt,
-    updatedAt,
-    nextSeq,
-    events,
-  };
+function sqliteSessionMetadataQuery(db: DatabaseSync) {
+  return getNodeSqliteKysely<AcpLedgerDatabase>(db)
+    .selectFrom("acp_replay_sessions")
+    .select(["session_id", "session_key", "cwd", "complete", "next_seq"]);
 }
 
-function normalizeStore(raw: unknown): LedgerStore {
-  if (!isRecord(raw) || raw.version !== LEDGER_VERSION || !isRecord(raw.sessions)) {
-    return createEmptyStore();
-  }
-  const sessions: Record<string, LedgerSession> = {};
-  for (const [sessionId, value] of Object.entries(raw.sessions)) {
-    const session = normalizeSession(value);
-    if (!session || session.sessionId !== sessionId) {
-      continue;
-    }
-    sessions[sessionId] = session;
-  }
-  return { version: LEDGER_VERSION, sessions };
+function readSqliteSessionById(db: DatabaseSync, sessionId: string) {
+  return getSqliteLedgerQueries(db).readSession(sessionId).rows[0];
 }
 
-function getOrCreateSession(
-  state: MutableLedgerState,
+function readLatestCompleteSqliteSessionByKey(db: DatabaseSync, sessionKey: string) {
+  return executeSqliteQueryTakeFirstSync(
+    db,
+    sqliteSessionMetadataQuery(db)
+      .where("session_key", "=", sessionKey)
+      .where("complete", "=", 1)
+      .orderBy("updated_at", "desc")
+      .orderBy("session_id", "asc")
+      .limit(1),
+  );
+}
+
+function upsertSqliteSession(
+  db: DatabaseSync,
+  state: Pick<AcpMutableLedgerState, "now">,
   params: {
     sessionId: string;
     sessionKey: string;
@@ -230,77 +282,133 @@ function getOrCreateSession(
     complete: boolean;
     reset?: boolean;
   },
-): LedgerSession {
+): number {
   const now = state.now();
-  const existing = state.store.sessions[params.sessionId];
-  if (!params.reset && existing) {
-    existing.sessionKey = params.sessionKey;
-    if (params.cwd) {
-      existing.cwd = params.cwd;
-    }
-    existing.complete = existing.complete || params.complete;
-    existing.updatedAt = now;
-    return existing;
+  const existing = params.reset ? undefined : readSqliteSessionById(db, params.sessionId);
+  if (existing) {
+    const cwd = params.cwd || existing.cwd;
+    const complete = normalizeSqliteInteger(existing.complete) === 1 || params.complete ? 1 : 0;
+    const metadataDelta =
+      estimateAcpSessionRowBytes({ ...params, cwd }) -
+      estimateAcpSessionRowBytes({
+        sessionId: params.sessionId,
+        sessionKey: existing.session_key,
+        cwd: existing.cwd,
+      });
+    getSqliteLedgerQueries(db).updateSessionMetadata({
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      cwd,
+      complete,
+      now,
+      metadataDelta,
+    });
+    return normalizeSqliteInteger(existing.next_seq);
   }
-  const session: LedgerSession = {
+
+  if (params.reset) {
+    db.prepare("DELETE FROM acp_replay_events WHERE session_id = ?").run(params.sessionId);
+  }
+  // A fresh or reset session's footprint is just its own row overhead; event
+  // bytes accumulate onto the aggregate as appends land.
+  const rowBytes = estimateAcpSessionRowBytes({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     cwd: params.cwd,
-    complete: params.complete,
-    createdAt: now,
-    updatedAt: now,
-    nextSeq: 1,
-    events: [],
-  };
-  state.store.sessions[params.sessionId] = session;
-  return session;
+  });
+  db.prepare(
+    `INSERT INTO acp_replay_sessions (
+       session_id, session_key, cwd, complete, created_at, updated_at, next_seq, estimated_bytes
+     ) VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+     ON CONFLICT(session_id) DO UPDATE SET
+       session_key = excluded.session_key,
+       cwd = excluded.cwd,
+       complete = excluded.complete,
+       updated_at = excluded.updated_at,
+       next_seq = excluded.next_seq,
+       -- Row overhead plus whatever event rows still exist: exact after a
+       -- reset (events deleted, sum is 0) and on any conflicting rewrite.
+       estimated_bytes = excluded.estimated_bytes + COALESCE(
+         (SELECT SUM(e.estimated_bytes) FROM acp_replay_events e
+           WHERE e.session_id = excluded.session_id), 0)`,
+  ).run(
+    params.sessionId,
+    params.sessionKey,
+    params.cwd,
+    params.complete ? 1 : 0,
+    now,
+    now,
+    rowBytes,
+  );
+  return 1;
 }
 
-function trimLedger(state: MutableLedgerState): void {
-  for (const session of Object.values(state.store.sessions)) {
-    if (session.events.length <= state.maxEventsPerSession) {
-      continue;
+// Session rows carry a running footprint aggregate (row overhead plus their
+// event rows), maintained at insert/trim time. The budget check therefore
+// sums over at most maxSessions rows instead of scanning every event per
+// append, which was O(events) per message and quadratic while trimming.
+function estimateSqliteLedgerBytes(db: DatabaseSync): number {
+  const row = getSqliteLedgerQueries(db).readTotalBytes().rows[0];
+  return normalizeSqliteInteger(row?.total ?? 0);
+}
+
+const LEDGER_TRIM_EVENT_BATCH = 64;
+
+// Keep the session's byte aggregate in sync with the deletion in the same transaction.
+function deleteOldestSqliteEvents(db: DatabaseSync, sessionId: string, limit: number): number {
+  const queries = getSqliteLedgerQueries(db);
+  const rows = queries.deleteOldestEvents({ sessionId, limit }).rows;
+  if (rows.length === 0) {
+    return 0;
+  }
+  const freed = rows.reduce((sum, row) => sum + normalizeSqliteInteger(row.estimated_bytes), 0);
+  queries.subtractSessionBytes({ sessionId, freed });
+  return rows.length;
+}
+
+function trimSqliteLedger(
+  db: DatabaseSync,
+  state: Pick<AcpMutableLedgerState, "maxEventsPerSession" | "maxSessions" | "maxSerializedBytes">,
+): void {
+  // Indexed sequence endpoints bound the count even when retained sequences have
+  // gaps. Only histories that could exceed the cap need an exact count.
+  const queries = getSqliteLedgerQueries(db);
+  const eventCapCandidates = queries.readEventCapCandidates(state.maxEventsPerSession).rows;
+  for (const row of eventCapCandidates) {
+    const overage = normalizeSqliteInteger(row.event_count) - state.maxEventsPerSession;
+    if (overage > 0) {
+      deleteOldestSqliteEvents(db, row.session_id, overage);
     }
-    session.events = session.events.slice(-state.maxEventsPerSession);
-    session.complete = false;
   }
 
-  const sessions = Object.values(state.store.sessions);
-  if (sessions.length > state.maxSessions) {
-    for (const session of sessions
-      .toSorted((a, b) => b.updatedAt - a.updatedAt)
-      .slice(state.maxSessions)) {
-      delete state.store.sessions[session.sessionId];
-    }
+  const oldSessions = queries.readExcessSessions(state.maxSessions).rows;
+  for (const session of oldSessions) {
+    queries.deleteSession(session.session_id);
   }
 
-  let serializedBytes = getSerializedLedgerByteLength(state.store);
+  // Byte budget: evict from the least-recently-updated session in bounded
+  // batches, dropping the session row itself once its events are exhausted.
+  // Aggregates keep every recheck O(maxSessions); no event scans occur.
+  let serializedBytes = estimateSqliteLedgerBytes(db);
   while (serializedBytes > state.maxSerializedBytes) {
-    const session = Object.values(state.store.sessions)
-      .filter((candidate) => candidate.events.length > 0)
-      .toSorted((a, b) => a.updatedAt - b.updatedAt)[0];
+    const session = queries.readOldestSession().rows[0];
     if (!session) {
       break;
     }
-    session.events.shift();
-    session.complete = false;
-    serializedBytes = getSerializedLedgerByteLength(state.store);
-  }
-
-  while (serializedBytes > state.maxSerializedBytes) {
-    const session = Object.values(state.store.sessions).toSorted(
-      (a, b) => a.updatedAt - b.updatedAt,
-    )[0];
-    if (!session) {
-      break;
+    const deleted = deleteOldestSqliteEvents(db, session.session_id, LEDGER_TRIM_EVENT_BATCH);
+    if (deleted === 0) {
+      queries.deleteSession(session.session_id);
     }
-    delete state.store.sessions[session.sessionId];
-    serializedBytes = getSerializedLedgerByteLength(state.store);
+    serializedBytes = estimateSqliteLedgerBytes(db);
   }
 }
 
-function appendUpdate(
-  state: MutableLedgerState,
+function appendSqliteUpdate(
+  db: DatabaseSync,
+  state: Pick<
+    AcpMutableLedgerState,
+    "now" | "maxEventsPerSession" | "maxSessions" | "maxSerializedBytes"
+  >,
   params: {
     sessionId: string;
     sessionKey: string;
@@ -308,50 +416,89 @@ function appendUpdate(
     update: SessionUpdate;
   },
 ): void {
-  const session = getOrCreateSession(state, {
+  const nextSeq = upsertSqliteSession(db, state, {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     cwd: "",
     complete: false,
   });
   const now = state.now();
-  session.updatedAt = now;
-  session.events.push({
-    seq: session.nextSeq,
-    at: now,
+  const updateJson = JSON.stringify(structuredClone(params.update));
+  const eventBytes = estimateAcpEventRowBytes({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
-    ...(params.runId ? { runId: params.runId } : {}),
-    update: cloneJsonValue(params.update),
+    ...(params.runId !== undefined ? { runId: params.runId } : {}),
+    updateJson,
   });
-  session.nextSeq += 1;
-  trimLedger(state);
+  const queries = getSqliteLedgerQueries(db);
+  queries.insertEvent({
+    sessionId: params.sessionId,
+    seq: nextSeq,
+    at: now,
+    sessionKey: params.sessionKey,
+    runId: params.runId ?? null,
+    updateJson,
+    eventBytes,
+  });
+  // Upsert already accounted for metadata; only the new event remains.
+  queries.updateSessionAfterAppend({
+    sessionId: params.sessionId,
+    eventBytes,
+    now,
+    nextSeq: nextSeq + 1,
+  });
+  trimSqliteLedger(db, state);
 }
 
-function createLedgerApi(params: {
-  state: MutableLedgerState;
-  mutate: (fn: () => void) => Promise<void>;
-  read: <T>(fn: () => T) => Promise<T>;
-}): AcpEventLedger {
-  const buildReplay = (session: LedgerSession): AcpEventLedgerReplay => ({
-    complete: true,
-    sessionId: session.sessionId,
-    sessionKey: session.sessionKey,
-    events: session.events.map((event) => cloneJsonValue(event)),
+function buildSqliteReplay(
+  db: DatabaseSync,
+  session: ReturnType<typeof readSqliteSessionById>,
+): AcpEventLedgerReplay {
+  if (!session || normalizeSqliteInteger(session.complete) !== 1) {
+    return { complete: false, events: [] };
+  }
+  // Only eligible replays load history; appends and session metadata changes
+  // must not decode all prior payloads while holding the write transaction.
+  const events = executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<AcpLedgerDatabase>(db)
+      .selectFrom("acp_replay_events")
+      .select(["session_id", "seq", "at", "session_key", "run_id", "update_json"])
+      .where("session_id", "=", session.session_id)
+      .orderBy("seq", "asc"),
+  ).rows.flatMap((row) => {
+    const event = sqliteRowToLedgerEvent(row);
+    return event ? [event] : [];
   });
+  return {
+    complete: true,
+    sessionId: session.session_id,
+    sessionKey: session.session_key,
+    events,
+  };
+}
+
+export function createSqliteAcpEventLedger(
+  params: OpenClawStateDatabaseOptions & AcpLedgerOptions = {},
+): AcpEventLedger {
+  const state = normalizeAcpLedgerOptions(params);
+  const dbOptions = { env: params.env, path: params.path };
+  const mutate = (fn: (db: DatabaseSync) => void) =>
+    runOpenClawStateWriteTransaction((database) => fn(database.db), dbOptions);
+  const read = <T>(fn: (db: DatabaseSync) => T): T => fn(openOpenClawStateDatabase(dbOptions).db);
 
   return {
     async startSession(sessionParams) {
-      await params.mutate(() => {
-        getOrCreateSession(params.state, sessionParams);
-        trimLedger(params.state);
+      mutate((db) => {
+        upsertSqliteSession(db, state, sessionParams);
+        trimSqliteLedger(db, state);
       });
     },
 
     async recordUserPrompt(promptParams) {
-      await params.mutate(() => {
-        for (const update of createUserPromptUpdates(promptParams.prompt)) {
-          appendUpdate(params.state, {
+      mutate((db) => {
+        for (const update of createAcpPromptUpdates(promptParams.prompt)) {
+          appendSqliteUpdate(db, state, {
             sessionId: promptParams.sessionId,
             sessionKey: promptParams.sessionKey,
             runId: promptParams.runId,
@@ -362,124 +509,39 @@ function createLedgerApi(params: {
     },
 
     async recordUpdate(updateParams) {
-      await params.mutate(() => {
-        appendUpdate(params.state, updateParams);
+      mutate((db) => {
+        appendSqliteUpdate(db, state, updateParams);
       });
     },
 
     async markIncomplete(markParams) {
-      await params.mutate(() => {
-        const session = params.state.store.sessions[markParams.sessionId];
-        if (!session || session.sessionKey !== markParams.sessionKey) {
-          return;
-        }
-        session.complete = false;
-        session.updatedAt = params.state.now();
+      mutate((db) => {
+        db.prepare(
+          `UPDATE acp_replay_sessions
+              SET complete = 0, updated_at = ?
+            WHERE session_id = ? AND session_key = ?`,
+        ).run(state.now(), markParams.sessionId, markParams.sessionKey);
       });
     },
 
     async readReplay(replayParams) {
-      return params.read(() => {
-        const session = params.state.store.sessions[replayParams.sessionId];
-        if (!session || session.sessionKey !== replayParams.sessionKey || !session.complete) {
+      return read((db) => {
+        const session = readSqliteSessionById(db, replayParams.sessionId);
+        if (session?.session_key !== replayParams.sessionKey) {
           return { complete: false, events: [] };
         }
-        return buildReplay(session);
+        return buildSqliteReplay(db, session);
       });
     },
 
     async readReplayBySessionId(replayParams) {
-      return params.read(() => {
-        const session = params.state.store.sessions[replayParams.sessionId];
-        if (!session || !session.complete) {
-          return { complete: false, events: [] };
-        }
-        return buildReplay(session);
-      });
+      return read((db) => buildSqliteReplay(db, readSqliteSessionById(db, replayParams.sessionId)));
     },
 
     async readReplayBySessionKey(replayParams) {
-      return params.read(() => {
-        const session = Object.values(params.state.store.sessions)
-          .filter(
-            (candidate) => candidate.sessionKey === replayParams.sessionKey && candidate.complete,
-          )
-          .toSorted((a, b) => b.updatedAt - a.updatedAt)[0];
-        if (!session) {
-          return { complete: false, events: [] };
-        }
-        return buildReplay(session);
-      });
+      return read((db) =>
+        buildSqliteReplay(db, readLatestCompleteSqliteSessionByKey(db, replayParams.sessionKey)),
+      );
     },
   };
-}
-
-export function createInMemoryAcpEventLedger(options: LedgerOptions = {}): AcpEventLedger {
-  const normalized = normalizeLedgerOptions(options);
-  const state: MutableLedgerState = {
-    store: createEmptyStore(),
-    ...normalized,
-  };
-  return createLedgerApi({
-    state,
-    mutate: async (fn) => {
-      fn();
-    },
-    read: async (fn) => fn(),
-  });
-}
-
-export function resolveDefaultAcpEventLedgerPath(env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(resolveStateDir(env), "acp", "event-ledger.json");
-}
-
-export function createFileAcpEventLedger(
-  params: { filePath: string } & LedgerOptions,
-): AcpEventLedger {
-  const normalized = normalizeLedgerOptions(params);
-  const state: MutableLedgerState = {
-    store: createEmptyStore(),
-    ...normalized,
-  };
-  let operation = Promise.resolve();
-
-  const load = async () => {
-    state.store = normalizeStore(await readJsonFile(params.filePath));
-  };
-  const ensureParentDir = async () => {
-    await fs.mkdir(path.dirname(params.filePath), { recursive: true, mode: 0o700 });
-  };
-
-  const enqueue = async <T>(fn: () => Promise<T>): Promise<T> => {
-    const task = operation.then(fn, fn);
-    operation = task.then(
-      () => {},
-      () => {},
-    );
-    return task;
-  };
-
-  return createLedgerApi({
-    state,
-    mutate: async (fn) =>
-      enqueue(async () => {
-        await ensureParentDir();
-        await withFileLock(params.filePath, FILE_LEDGER_LOCK_OPTIONS, async () => {
-          await load();
-          fn();
-          await writeTextAtomic(params.filePath, serializeLedgerStore(state.store), {
-            mode: 0o600,
-            dirMode: 0o700,
-          });
-        });
-      }),
-    read: async (fn) =>
-      enqueue(async () => {
-        await ensureParentDir();
-        return await withFileLock(params.filePath, FILE_LEDGER_LOCK_OPTIONS, async () => {
-          await load();
-          return fn();
-        });
-      }),
-  });
 }

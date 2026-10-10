@@ -1,6 +1,16 @@
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 
-export function readProviderBaseUrl(provider: ModelProviderConfig | undefined): string | undefined {
+export function resolveOllamaBaseUrlForRun(params: {
+  modelBaseUrl?: string;
+  providerBaseUrl?: string;
+}): string {
+  return params.providerBaseUrl?.trim() || params.modelBaseUrl?.trim() || OLLAMA_DEFAULT_BASE_URL;
+}
+
+export function readProviderBaseUrl(
+  provider: Partial<ModelProviderConfig> | undefined,
+): string | undefined {
   if (!provider) {
     return undefined;
   }
@@ -11,7 +21,7 @@ export function readProviderBaseUrl(provider: ModelProviderConfig | undefined): 
   ) {
     return provider.baseUrl.trim();
   }
-  const alternate = provider as ModelProviderConfig & { baseURL?: unknown };
+  const alternate = provider as Partial<ModelProviderConfig> & { baseURL?: unknown };
   if (
     Object.hasOwn(alternate, "baseURL") &&
     typeof alternate.baseURL === "string" &&

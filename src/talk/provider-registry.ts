@@ -4,34 +4,25 @@ import {
   resolvePluginCapabilityProviders,
 } from "../plugins/capability-provider-runtime.js";
 import {
-  buildCapabilityProviderMaps,
-  normalizeCapabilityProviderId,
+  buildCapabilityProviderIndex,
+  normalizeCapabilityProviderId as normalizeRealtimeVoiceProviderId,
 } from "../plugins/provider-registry-shared.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import type { RealtimeVoiceProviderId } from "./provider-types.js";
 
-export function normalizeRealtimeVoiceProviderId(
-  providerId: string | undefined,
-): RealtimeVoiceProviderId | undefined {
-  return normalizeCapabilityProviderId(providerId);
-}
-
-function resolveRealtimeVoiceProviderEntries(cfg?: OpenClawConfig): RealtimeVoiceProviderPlugin[] {
-  return resolvePluginCapabilityProviders({
+/**
+ * Lists canonical realtime voice providers, discovering additional candidates through manifest policy.
+ */
+export function listRealtimeVoiceProviders(
+  cfg?: OpenClawConfig,
+  additionalProviderIds?: readonly string[],
+): RealtimeVoiceProviderPlugin[] {
+  const providers = resolvePluginCapabilityProviders({
     key: "realtimeVoiceProviders",
     cfg,
+    additionalProviderIds,
   });
-}
-
-function buildProviderMaps(cfg?: OpenClawConfig): {
-  canonical: Map<string, RealtimeVoiceProviderPlugin>;
-  aliases: Map<string, RealtimeVoiceProviderPlugin>;
-} {
-  return buildCapabilityProviderMaps(resolveRealtimeVoiceProviderEntries(cfg));
-}
-
-export function listRealtimeVoiceProviders(cfg?: OpenClawConfig): RealtimeVoiceProviderPlugin[] {
-  return [...buildProviderMaps(cfg).canonical.values()];
+  return [...buildCapabilityProviderIndex(providers, "canonical").values()];
 }
 
 export function getRealtimeVoiceProvider(
@@ -42,15 +33,11 @@ export function getRealtimeVoiceProvider(
   if (!normalized) {
     return undefined;
   }
-  const directProvider = resolvePluginCapabilityProvider({
+  return resolvePluginCapabilityProvider({
     key: "realtimeVoiceProviders",
     providerId: normalized,
     cfg,
   });
-  if (directProvider) {
-    return directProvider;
-  }
-  return buildProviderMaps(cfg).aliases.get(normalized);
 }
 
 export function canonicalizeRealtimeVoiceProviderId(
@@ -61,5 +48,6 @@ export function canonicalizeRealtimeVoiceProviderId(
   if (!normalized) {
     return undefined;
   }
+  // Unknown ids stay normalized so validation can report the same operator-facing value.
   return getRealtimeVoiceProvider(normalized, cfg)?.id ?? normalized;
 }

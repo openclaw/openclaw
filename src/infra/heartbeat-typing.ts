@@ -15,6 +15,7 @@ type HeartbeatTypingTarget = {
   threadId?: string | number | null;
 };
 
+/** Create typing start/stop/keepalive callbacks for a heartbeat delivery target. */
 export function createHeartbeatTypingCallbacks(params: {
   cfg: OpenClawConfig;
   target: HeartbeatTypingTarget;
@@ -43,17 +44,9 @@ export function createHeartbeatTypingCallbacks(params: {
   };
 
   return createTypingCallbacks({
-    start: async () => {
-      await sendTyping(target);
-    },
-    ...(clearTyping
-      ? {
-          stop: async () => {
-            await clearTyping(target);
-          },
-        }
-      : {}),
-    ...(keepaliveIntervalMs ? { keepaliveIntervalMs } : {}),
+    start: async () => sendTyping(target),
+    ...(clearTyping ? { stop: async () => clearTyping(target) } : {}),
+    keepaliveIntervalMs,
     onStartError: (err) => {
       params.log?.debug?.(`heartbeat typing failed for ${params.target.channel}`, {
         error: String(err),

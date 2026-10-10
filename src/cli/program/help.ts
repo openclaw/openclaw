@@ -1,18 +1,22 @@
 import type { Command } from "commander";
+import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
+import { isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveCommitHash } from "../../infra/git-commit.js";
-import { formatDocsLink } from "../../terminal/links.js";
-import { isRich, theme } from "../../terminal/theme.js";
+import { formatConsoleDiagnosticBlock } from "../../logging/json-console-line.js";
 import { escapeRegExp } from "../../utils.js";
-import { hasFlag, hasRootVersionAlias } from "../argv.js";
+import { isRootVersionInvocation } from "../argv.js";
 import { formatCliBannerLine, hasEmittedCliBanner } from "../banner.js";
-import { replaceCliName, resolveCliName } from "../cli-name.js";
+import { CLI_NAME } from "../cli-name.js";
+import { formatHelpExamples } from "../help-format.js";
 import { CLI_LOG_LEVEL_VALUES, parseCliLogLevelOption } from "../log-level-option.js";
-import type { ProgramContext } from "./context.js";
+import {
+  getCommanderErrorCommandNames,
+  getCommanderErrorCommandPath,
+} from "./commander-parse-facts.js";
 import { getCoreCliCommandsWithSubcommands } from "./core-command-descriptors.js";
 import { formatCliParseErrorOutput } from "./error-output.js";
 import { getSubCliCommandsWithSubcommands } from "./subcli-descriptors.js";
 
-const CLI_NAME = resolveCliName();
 const CLI_NAME_PATTERN = escapeRegExp(CLI_NAME);
 const ROOT_COMMANDS_WITH_SUBCOMMANDS = new Set([
   ...getCoreCliCommandsWithSubcommands(),
@@ -23,7 +27,7 @@ const ROOT_COMMANDS_HINT =
 
 const EXAMPLES = [
   ["openclaw onboard", "Run guided setup for a local Gateway, workspace, auth, and channels."],
-  ["openclaw setup", "Create the baseline config, workspace, and session folders."],
+  ["openclaw setup --baseline", "Create the baseline config, workspace, and session folders."],
   ["openclaw configure", "Change models, Gateway, channels, plugins, skills, and health checks."],
   ["openclaw status", "Check Gateway, channel, model, and recent-session status."],
   ["openclaw doctor --fix", "Repair common config, service, plugin, and channel problems."],
@@ -43,7 +47,33 @@ const EXAMPLES = [
   ],
 ] as const;
 
-export function configureProgramHelp(program: Command, ctx: ProgramContext) {
+export function formatProgramHelpOutput(str: string): string {
+  // Commander emits plain section labels; decorate them after command-specific help renders.
+  let output = str;
+  const isRootHelp = new RegExp(
+    `^Usage:\\s+${CLI_NAME_PATTERN}\\s+\\[options\\]\\s+\\[command\\]\\s*$`,
+    "m",
+  ).test(output);
+  if (isRootHelp && /^Commands:/m.test(output)) {
+    output = output.replace(/^Commands:/m, `Commands:\n  ${theme.muted(ROOT_COMMANDS_HINT)}`);
+  }
+
+  return output
+    .replace(/^Usage:/gm, theme.heading("Usage:"))
+    .replace(/^Options:/gm, theme.heading("Options:"))
+    .replace(/^Commands:/gm, theme.heading("Commands:"));
+}
+
+export function configureProgramHelp(
+  program: Command,
+  ctx: { programVersion: string },
+  options?: { commandsWithSubcommands?: ReadonlySet<string> },
+) {
+  const commandsWithSubcommands = new Set([
+    ...ROOT_COMMANDS_WITH_SUBCOMMANDS,
+    ...(options?.commandsWithSubcommands ?? []),
+  ]);
+
   program
     .name(CLI_NAME)
     .description("")
@@ -71,48 +101,36 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
   program.helpCommand("help [command]", "Display help for command");
 
   program.configureHelp({
-    // sort options and subcommands alphabetically
     sortSubcommands: true,
     sortOptions: true,
     optionTerm: (option) => theme.option(option.flags),
     subcommandTerm: (cmd) => {
       const isRootCommand = cmd.parent === program;
-      const hasSubcommands = isRootCommand && ROOT_COMMANDS_WITH_SUBCOMMANDS.has(cmd.name());
+      const hasSubcommands = isRootCommand && commandsWithSubcommands.has(cmd.name());
       return theme.command(hasSubcommands ? `${cmd.name()} *` : cmd.name());
     },
   });
 
-  const formatHelpOutput = (str: string) => {
-    let output = str;
-    const isRootHelp = new RegExp(
-      `^Usage:\\s+${CLI_NAME_PATTERN}\\s+\\[options\\]\\s+\\[command\\]\\s*$`,
-      "m",
-    ).test(output);
-    if (isRootHelp && /^Commands:/m.test(output)) {
-      output = output.replace(/^Commands:/m, `Commands:\n  ${theme.muted(ROOT_COMMANDS_HINT)}`);
-    }
-
-    return output
-      .replace(/^Usage:/gm, theme.heading("Usage:"))
-      .replace(/^Options:/gm, theme.heading("Options:"))
-      .replace(/^Commands:/gm, theme.heading("Commands:"));
-  };
-
   program.configureOutput({
     writeOut: (str) => {
-      process.stdout.write(formatHelpOutput(str));
+      process.stdout.write(formatProgramHelpOutput(str));
     },
     writeErr: (str) => {
-      process.stderr.write(formatHelpOutput(str));
+      const message = formatProgramHelpOutput(str);
+      process.stderr.write(formatConsoleDiagnosticBlock({ level: "error", message }));
     },
-    outputError: (str, write) => write(formatCliParseErrorOutput(str, { argv: process.argv })),
+    outputError: (str, write) => {
+      write(
+        formatCliParseErrorOutput(str, {
+          argv: process.argv,
+          commandPath: getCommanderErrorCommandPath(program),
+          commandNames: getCommanderErrorCommandNames(program),
+        }),
+      );
+    },
   });
 
-  if (
-    hasFlag(process.argv, "-V") ||
-    hasFlag(process.argv, "--version") ||
-    hasRootVersionAlias(process.argv)
-  ) {
+  if (isRootVersionInvocation(process.argv)) {
     const commit = resolveCommitHash({ moduleUrl: import.meta.url });
     console.log(
       commit ? `OpenClaw ${ctx.programVersion} (${commit})` : `OpenClaw ${ctx.programVersion}`,
@@ -129,9 +147,7 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
     return `\n${line}\n`;
   });
 
-  const fmtExamples = EXAMPLES.map(
-    ([cmd, desc]) => `  ${theme.command(replaceCliName(cmd, CLI_NAME))}\n    ${theme.muted(desc)}`,
-  ).join("\n");
+  const fmtExamples = formatHelpExamples(EXAMPLES);
 
   program.addHelpText("afterAll", ({ command }) => {
     if (command !== program) {

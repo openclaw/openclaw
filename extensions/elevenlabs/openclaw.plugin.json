@@ -1,11 +1,21 @@
 {
   "id": "elevenlabs",
+  "categories": ["voice"],
+  "capabilityCatalogEntry": "./capability-catalog.ts",
+  "doctorContract": {
+    "configRepair": true
+  },
   "activation": {
     "onStartup": false
   },
   "enabledByDefault": true,
-  "providerAuthEnvVars": {
-    "elevenlabs": ["ELEVENLABS_API_KEY", "XI_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "elevenlabs",
+        "envVars": ["ELEVENLABS_API_KEY", "XI_API_KEY"]
+      }
+    ]
   },
   "contracts": {
     "speechProviders": ["elevenlabs"],

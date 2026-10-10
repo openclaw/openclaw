@@ -1,59 +1,58 @@
-import { promises as fs } from "node:fs";
-import path from "node:path";
-import type { OpenClawPluginService } from "openclaw/plugin-sdk/core";
+import { randomUUID } from "node:crypto";
 import { listDevicePairing } from "openclaw/plugin-sdk/device-bootstrap";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type {
+  OpenClawPluginApi,
+  PluginCommandContext,
+  PluginServiceSchedulerV1,
+} from "openclaw/plugin-sdk/plugin-entry";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  normalizeOptionalString,
+  normalizeTrimmedStringList,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  DEVICE_PAIR_NOTIFY_MAX_SEEN_AGE_MS,
+  DEVICE_PAIR_NOTIFY_SEEN_REQUEST_MAX_ENTRIES,
+  DEVICE_PAIR_NOTIFY_SEEN_REQUEST_NAMESPACE,
+  DEVICE_PAIR_NOTIFY_SUBSCRIBER_MAX_ENTRIES,
+  DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE,
+  notifyRequestStoreKey,
+  notifySubscriberStoreKey,
+  type NotifySeenRequest,
+  type NotifySubscription,
+} from "./notify-state.js";
 
-const NOTIFY_STATE_FILE = "device-pair-notify.json";
 const NOTIFY_POLL_INTERVAL_MS = 10_000;
-const NOTIFY_MAX_SEEN_AGE_MS = 24 * 60 * 60 * 1000;
 
-type NotifySubscription = {
-  to: string;
-  accountId?: string;
-  messageThreadId?: string | number;
-  mode: "persistent" | "once";
-  addedAtMs: number;
-};
+// Gateway services and workspace command registries have distinct APIs but share these stores.
+let notifyStateRevision = 0;
+let pendingNotifyWrites = 0;
+const inactiveNotifierRevisions = new WeakMap<OpenClawPluginApi, number>();
 
-type NotifyStateFile = {
-  subscribers: NotifySubscription[];
-  notifiedRequestIds: Record<string, number>;
-};
+async function writeNotifyState<T>(write: () => Promise<T>): Promise<T> {
+  notifyStateRevision++;
+  pendingNotifyWrites++;
+  try {
+    return await write();
+  } finally {
+    // Failed replies can follow durable writes; the next poll must reconcile either outcome.
+    notifyStateRevision++;
+    pendingNotifyWrites--;
+  }
+}
 
-type PendingPairingRequest = {
-  requestId: string;
-  deviceId: string;
-  displayName?: string;
-  platform?: string;
-  role?: string;
-  roles?: string[];
-  scopes?: string[];
-  remoteIp?: string;
-  ts?: number;
-};
+type PendingPairingRequest = Pick<
+  Awaited<ReturnType<typeof listDevicePairing>>["pending"][number],
+  "requestId" | "deviceId" | "displayName" | "platform" | "role" | "roles" | "scopes" | "remoteIp"
+> & { ts?: number };
 
 function formatStringList(values?: readonly string[]): string {
-  if (!Array.isArray(values) || values.length === 0) {
-    return "none";
-  }
-  const normalized = values.map((value) => value.trim()).filter((value) => value.length > 0);
-  return normalized.length > 0 ? normalized.join(", ") : "none";
+  return normalizeTrimmedStringList(values).join(", ") || "none";
 }
 
 function formatRoleList(request: PendingPairingRequest): string {
-  const role = normalizeOptionalString(request.role);
-  if (role) {
-    return role;
-  }
-  return formatStringList(request.roles);
-}
-
-function formatScopeList(request: PendingPairingRequest): string {
-  return formatStringList(request.scopes);
+  return normalizeOptionalString(request.role) ?? formatStringList(request.roles);
 }
 
 export function formatPendingRequests(pending: PendingPairingRequest[]): string {
@@ -70,7 +69,7 @@ export function formatPendingRequests(pending: PendingPairingRequest[]): string 
       label ? `name=${label}` : null,
       platform ? `platform=${platform}` : null,
       `role=${formatRoleList(req)}`,
-      `scopes=${formatScopeList(req)}`,
+      `scopes=${formatStringList(req.scopes)}`,
       ip ? `ip=${ip}` : null,
     ].filter(Boolean);
     lines.push(parts.join(" · "));
@@ -78,128 +77,37 @@ export function formatPendingRequests(pending: PendingPairingRequest[]): string 
   return lines.join("\n");
 }
 
-function resolveNotifyStatePath(stateDir: string): string {
-  return path.join(stateDir, NOTIFY_STATE_FILE);
+type NotifySubscriberStore = PluginStateKeyedStore<NotifySubscription> & {
+  observe: NonNullable<PluginStateKeyedStore<NotifySubscription>["observe"]>;
+  compareAndApply: NonNullable<PluginStateKeyedStore<NotifySubscription>["compareAndApply"]>;
+};
+
+function openNotifySubscriberStore(api: OpenClawPluginApi): NotifySubscriberStore {
+  const store = api.runtime.state.openKeyedStore<NotifySubscription>({
+    namespace: DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE,
+    maxEntries: DEVICE_PAIR_NOTIFY_SUBSCRIBER_MAX_ENTRIES,
+  });
+  if (!store.observe || !store.compareAndApply) {
+    throw new Error(
+      "device-pair notify requires a runtime with atomic plugin state compare-and-apply support",
+    );
+  }
+  return store as NotifySubscriberStore;
 }
 
-function normalizeNotifyState(raw: unknown): NotifyStateFile {
-  const root = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
-  const subscribersRaw = Array.isArray(root.subscribers) ? root.subscribers : [];
-  const notifiedRaw =
-    typeof root.notifiedRequestIds === "object" && root.notifiedRequestIds !== null
-      ? (root.notifiedRequestIds as Record<string, unknown>)
-      : {};
-
-  const subscribers: NotifySubscription[] = [];
-  for (const item of subscribersRaw) {
-    if (typeof item !== "object" || item === null) {
-      continue;
-    }
-    const record = item as Record<string, unknown>;
-    const to = normalizeOptionalString(record.to) ?? "";
-    if (!to) {
-      continue;
-    }
-    const accountId = normalizeOptionalString(record.accountId) ?? undefined;
-    const messageThreadId =
-      typeof record.messageThreadId === "string"
-        ? normalizeOptionalString(record.messageThreadId) || undefined
-        : typeof record.messageThreadId === "number" && Number.isFinite(record.messageThreadId)
-          ? Math.trunc(record.messageThreadId)
-          : undefined;
-    const mode = record.mode === "once" ? "once" : "persistent";
-    const addedAtMs =
-      typeof record.addedAtMs === "number" && Number.isFinite(record.addedAtMs)
-        ? Math.trunc(record.addedAtMs)
-        : Date.now();
-    subscribers.push({
-      to,
-      accountId,
-      messageThreadId,
-      mode,
-      addedAtMs,
-    });
-  }
-
-  const notifiedRequestIds: Record<string, number> = {};
-  for (const [requestId, ts] of Object.entries(notifiedRaw)) {
-    const normalizedRequestId = normalizeOptionalString(requestId);
-    if (!normalizedRequestId) {
-      continue;
-    }
-    if (typeof ts !== "number" || !Number.isFinite(ts) || ts <= 0) {
-      continue;
-    }
-    notifiedRequestIds[normalizedRequestId] = Math.trunc(ts);
-  }
-
-  return { subscribers, notifiedRequestIds };
-}
-
-async function readNotifyState(filePath: string): Promise<NotifyStateFile> {
-  try {
-    const content = await fs.readFile(filePath, "utf8");
-    return normalizeNotifyState(JSON.parse(content));
-  } catch {
-    return { subscribers: [], notifiedRequestIds: {} };
-  }
-}
-
-async function writeNotifyState(filePath: string, state: NotifyStateFile): Promise<void> {
-  const content = JSON.stringify(state, null, 2);
-  await replaceFileAtomic({
-    filePath,
-    content: `${content}\n`,
-    tempPrefix: ".device-pair-notify",
+function openNotifySeenRequestStore(
+  api: OpenClawPluginApi,
+): PluginStateKeyedStore<NotifySeenRequest> {
+  return api.runtime.state.openKeyedStore<NotifySeenRequest>({
+    namespace: DEVICE_PAIR_NOTIFY_SEEN_REQUEST_NAMESPACE,
+    maxEntries: DEVICE_PAIR_NOTIFY_SEEN_REQUEST_MAX_ENTRIES,
+    defaultTtlMs: DEVICE_PAIR_NOTIFY_MAX_SEEN_AGE_MS,
   });
 }
 
-function notifySubscriberKey(subscriber: {
-  to: string;
-  accountId?: string;
-  messageThreadId?: string | number;
-}): string {
-  return JSON.stringify([
-    subscriber.to,
-    subscriber.accountId ?? "",
-    normalizeNotifyThreadKey(subscriber.messageThreadId),
-  ]);
-}
+type NotifyTarget = Pick<NotifySubscription, "to" | "accountId" | "messageThreadId">;
 
-function normalizeNotifyThreadKey(messageThreadId?: string | number): string {
-  if (typeof messageThreadId === "number" && Number.isFinite(messageThreadId)) {
-    return String(Math.trunc(messageThreadId));
-  }
-  if (typeof messageThreadId !== "string") {
-    return "";
-  }
-  const normalized = normalizeOptionalString(messageThreadId);
-  if (!normalized) {
-    return "";
-  }
-  if (!/^-?\d+$/u.test(normalized)) {
-    return normalized;
-  }
-  try {
-    return BigInt(normalized).toString();
-  } catch {
-    return normalized;
-  }
-}
-
-type NotifyTarget = {
-  to: string;
-  accountId?: string;
-  messageThreadId?: string | number;
-};
-
-function resolveNotifyTarget(ctx: {
-  senderId?: string;
-  from?: string;
-  to?: string;
-  accountId?: string;
-  messageThreadId?: string | number;
-}): NotifyTarget | null {
+function resolveNotifyTarget(ctx: NotifyCommandContext): NotifyTarget | null {
   const to =
     normalizeOptionalString(ctx.senderId) ||
     normalizeOptionalString(ctx.from) ||
@@ -215,27 +123,35 @@ function resolveNotifyTarget(ctx: {
   };
 }
 
-function upsertNotifySubscriber(
-  subscribers: NotifySubscription[],
+function nextNotifySubscription(
   target: NotifyTarget,
   mode: NotifySubscription["mode"],
-): boolean {
-  const key = notifySubscriberKey(target);
-  const index = subscribers.findIndex((entry) => notifySubscriberKey(entry) === key);
-  const next: NotifySubscription = {
+): NotifySubscription {
+  return {
     ...target,
     mode,
     addedAtMs: Date.now(),
+    armId: randomUUID(),
   };
-  if (index === -1) {
-    subscribers.push(next);
-    return true;
-  }
-  const existing = subscribers[index];
-  if (existing?.mode === mode) {
+}
+
+async function registerNotifySubscriber(params: {
+  api: OpenClawPluginApi;
+  target: NotifyTarget;
+  mode: NotifySubscription["mode"];
+  refresh: boolean;
+  assertCurrent?: () => void;
+}): Promise<boolean> {
+  const assertCurrent = params.assertCurrent;
+  const store = openNotifySubscriberStore(params.api);
+  const key = notifySubscriberStoreKey(params.target);
+  const current = await store.lookup(key);
+  if (!params.refresh && current?.mode === params.mode) {
     return false;
   }
-  subscribers[index] = next;
+  await writeNotifyState(() =>
+    store.register(key, nextNotifySubscription(params.target, params.mode), { assertCurrent }),
+  );
   return true;
 }
 
@@ -244,7 +160,7 @@ function buildPairingRequestNotificationText(request: PendingPairingRequest): st
   const platform = normalizeOptionalString(request.platform);
   const ip = normalizeOptionalString(request.remoteIp);
   const role = formatRoleList(request);
-  const scopes = formatScopeList(request);
+  const scopes = formatStringList(request.scopes);
   const lines = [
     "📲 New device pairing request",
     `ID: ${request.requestId}`,
@@ -283,112 +199,121 @@ function shouldNotifySubscriberForRequest(
   return ts >= subscriber.addedAtMs;
 }
 
-async function notifySubscriber(params: {
-  api: OpenClawPluginApi;
-  subscriber: NotifySubscription;
-  text: string;
-}): Promise<boolean> {
-  const adapter = await params.api.runtime.channel.outbound.loadAdapter("telegram");
-  const send = adapter?.sendText;
-  if (!send) {
-    params.api.logger.warn(
-      "device-pair: telegram outbound adapter unavailable for pairing notifications",
-    );
-    return false;
+async function notifyPendingPairingRequests(params: { api: OpenClawPluginApi }): Promise<void> {
+  if (inactiveNotifierRevisions.get(params.api) === notifyStateRevision) {
+    return;
   }
-
-  try {
-    await send({
-      cfg: params.api.config,
-      to: params.subscriber.to,
-      text: params.text,
-      ...(params.subscriber.accountId ? { accountId: params.subscriber.accountId } : {}),
-      ...(params.subscriber.messageThreadId != null
-        ? { threadId: params.subscriber.messageThreadId }
-        : {}),
-    });
-    return true;
-  } catch (err) {
-    params.api.logger.warn(
-      `device-pair: failed to send pairing notification to ${params.subscriber.to}: ${formatErrorMessage(err)}`,
-    );
-    return false;
+  const revision = notifyStateRevision;
+  const subscriberStore = openNotifySubscriberStore(params.api);
+  const seenRequestStore = openNotifySeenRequestStore(params.api);
+  const [subscriberEntries, seenRequestEntries] = await Promise.all([
+    subscriberStore.entries(),
+    seenRequestStore.entries(),
+  ]);
+  if (subscriberEntries.length === 0 && seenRequestEntries.length === 0) {
+    if (notifyStateRevision === revision && pendingNotifyWrites === 0) {
+      inactiveNotifierRevisions.set(params.api, revision);
+    }
+    return;
   }
-}
-
-async function notifyPendingPairingRequests(params: {
-  api: OpenClawPluginApi;
-  statePath: string;
-}): Promise<void> {
-  const state = await readNotifyState(params.statePath);
   const pairing = await listDevicePairing();
-  const pending = pairing.pending as PendingPairingRequest[];
+  const subscribers = subscriberEntries.toSorted((a, b) => a.value.addedAtMs - b.value.addedAtMs);
+  const pending: PendingPairingRequest[] = pairing.pending;
   const now = Date.now();
   const pendingIds = new Set(pending.map((entry) => entry.requestId));
-  let changed = false;
+  const notifiedRequestIds = new Set<string>();
 
-  for (const [requestId, ts] of Object.entries(state.notifiedRequestIds)) {
-    if (!pendingIds.has(requestId) || now - ts > NOTIFY_MAX_SEEN_AGE_MS) {
-      delete state.notifiedRequestIds[requestId];
-      changed = true;
+  for (const entry of seenRequestEntries) {
+    const requestId = normalizeOptionalString(entry.value.requestId);
+    const notifiedAtMs = entry.value.notifiedAtMs;
+    if (
+      !requestId ||
+      !Number.isFinite(notifiedAtMs) ||
+      notifiedAtMs <= 0 ||
+      !pendingIds.has(requestId) ||
+      now - notifiedAtMs > DEVICE_PAIR_NOTIFY_MAX_SEEN_AGE_MS
+    ) {
+      await writeNotifyState(() => seenRequestStore.delete(entry.key));
+      continue;
     }
+    notifiedRequestIds.add(requestId);
   }
 
-  if (state.subscribers.length > 0) {
-    const oneShotDelivered = new Set<string>();
+  if (subscribers.length > 0) {
+    const deliveredOneShots = new Set<string>();
     for (const request of pending) {
-      if (state.notifiedRequestIds[request.requestId]) {
+      if (notifiedRequestIds.has(request.requestId)) {
         continue;
       }
 
       const text = buildPairingRequestNotificationText(request);
       let delivered = false;
-      for (const subscriber of state.subscribers) {
-        if (!shouldNotifySubscriberForRequest(subscriber, request)) {
+      for (const entry of subscribers) {
+        if (deliveredOneShots.has(entry.key)) {
           continue;
         }
-        const sent = await notifySubscriber({
-          api: params.api,
-          subscriber,
-          text,
-        });
-        delivered = delivered || sent;
-        if (sent && subscriber.mode === "once") {
-          oneShotDelivered.add(notifySubscriberKey(subscriber));
+        const adapter = await params.api.runtime.channel.outbound.loadAdapter("telegram");
+        const send = adapter?.sendText;
+        if (!send) {
+          params.api.logger.warn(
+            "device-pair: telegram outbound adapter unavailable for pairing notifications",
+          );
+          continue;
+        }
+        const observation = await subscriberStore.observe(entry.key);
+        const subscriber = observation.value;
+        if (!subscriber || !shouldNotifySubscriberForRequest(subscriber, request)) {
+          continue;
+        }
+        try {
+          await send({
+            cfg: params.api.config,
+            to: subscriber.to,
+            text,
+            ...(subscriber.accountId ? { accountId: subscriber.accountId } : {}),
+            ...(subscriber.messageThreadId != null ? { threadId: subscriber.messageThreadId } : {}),
+          });
+        } catch (err) {
+          params.api.logger.warn(
+            `device-pair: failed to send pairing notification to ${subscriber.to}: ${formatErrorMessage(err)}`,
+          );
+          continue;
+        }
+        delivered = true;
+        if (subscriber.mode === "once") {
+          deliveredOneShots.add(entry.key);
+          // A changed row belongs to its writer; never recapture it after delivery.
+          await writeNotifyState(() =>
+            subscriberStore.compareAndApply(entry.key, observation.comparison, {
+              operation: "delete",
+              action: "delete",
+            }),
+          );
         }
       }
 
       if (delivered) {
-        state.notifiedRequestIds[request.requestId] = now;
-        changed = true;
+        await writeNotifyState(() =>
+          seenRequestStore.register(
+            notifyRequestStoreKey(request.requestId),
+            { requestId: request.requestId, notifiedAtMs: now },
+            { ttlMs: DEVICE_PAIR_NOTIFY_MAX_SEEN_AGE_MS },
+          ),
+        );
+        notifiedRequestIds.add(request.requestId);
       }
     }
-    if (oneShotDelivered.size > 0) {
-      const initialCount = state.subscribers.length;
-      state.subscribers = state.subscribers.filter(
-        (subscriber) => !oneShotDelivered.has(notifySubscriberKey(subscriber)),
-      );
-      if (state.subscribers.length !== initialCount) {
-        changed = true;
-      }
-    }
-  }
-
-  if (changed) {
-    await writeNotifyState(params.statePath, state);
   }
 }
 
+type NotifyCommandContext = Pick<
+  PluginCommandContext,
+  "assertOwnerCurrent" | "channel" | "senderId" | "from" | "to" | "accountId" | "messageThreadId"
+>;
+
 export async function armPairNotifyOnce(params: {
   api: OpenClawPluginApi;
-  ctx: {
-    channel: string;
-    senderId?: string;
-    from?: string;
-    to?: string;
-    accountId?: string;
-    messageThreadId?: string | number;
-  };
+  ctx: NotifyCommandContext;
 }): Promise<boolean> {
   if (params.ctx.channel !== "telegram") {
     return false;
@@ -398,33 +323,22 @@ export async function armPairNotifyOnce(params: {
     return false;
   }
 
-  const stateDir = params.api.runtime.state.resolveStateDir();
-  const statePath = resolveNotifyStatePath(stateDir);
-  const state = await readNotifyState(statePath);
-  let changed = false;
-
-  if (upsertNotifySubscriber(state.subscribers, target, "once")) {
-    changed = true;
-  }
-
-  if (changed) {
-    await writeNotifyState(statePath, state);
-  }
+  await registerNotifySubscriber({
+    api: params.api,
+    target,
+    mode: "once",
+    refresh: true,
+    assertCurrent: params.ctx.assertOwnerCurrent,
+  });
   return true;
 }
 
 export async function handleNotifyCommand(params: {
   api: OpenClawPluginApi;
-  ctx: {
-    channel: string;
-    senderId?: string;
-    from?: string;
-    to?: string;
-    accountId?: string;
-    messageThreadId?: string | number;
-  };
+  ctx: NotifyCommandContext;
   action: string;
 }): Promise<{ text: string }> {
+  const assertOwnerCurrent = params.ctx.assertOwnerCurrent;
   if (params.ctx.channel !== "telegram") {
     return { text: "Pairing notifications are currently supported only on Telegram." };
   }
@@ -434,16 +348,17 @@ export async function handleNotifyCommand(params: {
     return { text: "Could not resolve Telegram target for this chat." };
   }
 
-  const stateDir = params.api.runtime.state.resolveStateDir();
-  const statePath = resolveNotifyStatePath(stateDir);
-  const state = await readNotifyState(statePath);
-  const targetKey = notifySubscriberKey(target);
-  const current = state.subscribers.find((entry) => notifySubscriberKey(entry) === targetKey);
+  const subscriberStore = openNotifySubscriberStore(params.api);
+  const targetStoreKey = notifySubscriberStoreKey(target);
 
   if (params.action === "on" || params.action === "enable") {
-    if (upsertNotifySubscriber(state.subscribers, target, "persistent")) {
-      await writeNotifyState(statePath, state);
-    }
+    await registerNotifySubscriber({
+      api: params.api,
+      target,
+      mode: "persistent",
+      refresh: false,
+      assertCurrent: assertOwnerCurrent,
+    });
     return {
       text:
         "✅ Pair request notifications enabled for this Telegram chat.\n" +
@@ -452,13 +367,9 @@ export async function handleNotifyCommand(params: {
   }
 
   if (params.action === "off" || params.action === "disable") {
-    const currentIndex = state.subscribers.findIndex(
-      (entry) => notifySubscriberKey(entry) === targetKey,
+    await writeNotifyState(() =>
+      subscriberStore.delete(targetStoreKey, { assertCurrent: assertOwnerCurrent }),
     );
-    if (currentIndex !== -1) {
-      state.subscribers.splice(currentIndex, 1);
-      await writeNotifyState(statePath, state);
-    }
     return { text: "✅ Pair request notifications disabled for this Telegram chat." };
   }
 
@@ -475,14 +386,21 @@ export async function handleNotifyCommand(params: {
   }
 
   if (params.action === "status" || params.action === "") {
-    const pending = await listDevicePairing();
+    const [current, subscriberCount, pending] = await Promise.all([
+      subscriberStore.lookup(targetStoreKey),
+      subscriberStore.count
+        ? subscriberStore.count()
+        : subscriberStore.entries().then((entries) => entries.length),
+      listDevicePairing(),
+    ]);
     const enabled = Boolean(current);
+    assertOwnerCurrent?.();
     const mode = current?.mode ?? "off";
     return {
       text: [
         `Pair request notifications: ${enabled ? "enabled" : "disabled"} for this chat.`,
         `Mode: ${mode}`,
-        `Subscribers: ${state.subscribers.length}`,
+        `Subscribers: ${subscriberCount}`,
         `Pending requests: ${pending.pending.length}`,
         "",
         "Use /pair notify on|off|once",
@@ -493,36 +411,20 @@ export async function handleNotifyCommand(params: {
   return { text: "Usage: /pair notify on|off|once|status" };
 }
 
-export function createPairingNotifierService(api: OpenClawPluginApi): OpenClawPluginService {
-  let notifyInterval: ReturnType<typeof setInterval> | null = null;
-
-  return {
-    id: "device-pair-notifier",
-    start: async (ctx) => {
-      const statePath = resolveNotifyStatePath(ctx.stateDir);
-      const tick = async () => {
-        await notifyPendingPairingRequests({ api, statePath });
-      };
-
-      await tick().catch((err) => {
-        api.logger.warn(`device-pair: initial notify poll failed: ${formatErrorMessage(err)}`);
-      });
-      notifyInterval = setInterval(() => {
-        tick().catch((err) => {
-          api.logger.warn(`device-pair: notify poll failed: ${formatErrorMessage(err)}`);
-        });
-      }, NOTIFY_POLL_INTERVAL_MS);
-      notifyInterval.unref?.();
-    },
-    stop: async () => {
-      if (notifyInterval) {
-        clearInterval(notifyInterval);
-        notifyInterval = null;
-      }
-    },
-  };
-}
-
-export function registerPairingNotifierService(api: OpenClawPluginApi): void {
-  api.registerService(createPairingNotifierService(api));
+export function startPairingNotifier(
+  api: OpenClawPluginApi,
+  scheduler: PluginServiceSchedulerV1,
+): void {
+  // Fence empty reads still in flight from an earlier service lifetime.
+  notifyStateRevision++;
+  // Keep the first scan off Gateway readiness; retirement joins delivery and its receipt.
+  scheduler.schedule({
+    id: "notifications",
+    delayMs: NOTIFY_POLL_INTERVAL_MS,
+    everyMs: NOTIFY_POLL_INTERVAL_MS,
+    run: () =>
+      notifyPendingPairingRequests({ api }).catch((err: unknown) => {
+        api.logger.warn(`device-pair: notify poll failed: ${formatErrorMessage(err)}`);
+      }),
+  });
 }

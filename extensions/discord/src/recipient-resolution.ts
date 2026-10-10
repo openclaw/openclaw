@@ -4,7 +4,7 @@ import { resolveDiscordAccount } from "./accounts.js";
 import { parseAndResolveDiscordTarget } from "./target-resolver.js";
 import type { DiscordTargetParseOptions } from "./targets.js";
 
-type DiscordRecipient =
+export type DiscordRecipient =
   | {
       kind: "user";
       id: string;
@@ -20,11 +20,6 @@ export async function parseAndResolveRecipient(
   accountId?: string,
   parseOptions: DiscordTargetParseOptions = {},
 ): Promise<DiscordRecipient> {
-  if (!cfg) {
-    throw new Error(
-      "Discord recipient resolution requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
-    );
-  }
   const resolvedCfg = requireRuntimeConfig(cfg, "Discord recipient resolution");
   const accountInfo = resolveDiscordAccount({ cfg: resolvedCfg, accountId });
   const resolved = await parseAndResolveDiscordTarget(
@@ -34,6 +29,20 @@ export async function parseAndResolveRecipient(
       accountId: accountInfo.accountId,
     },
     parseOptions,
+  );
+  return { kind: resolved.kind, id: resolved.id };
+}
+
+export async function parseAndResolveChannelRecipient(
+  raw: string,
+  cfg: OpenClawConfig,
+  accountId: string,
+): Promise<DiscordRecipient> {
+  const resolvedCfg = requireRuntimeConfig(cfg, "Discord recipient resolution");
+  const resolved = await parseAndResolveDiscordTarget(
+    raw,
+    { cfg: resolvedCfg, accountId },
+    { defaultKind: "channel" },
   );
   return { kind: resolved.kind, id: resolved.id };
 }

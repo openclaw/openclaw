@@ -1,5 +1,6 @@
+// Channel Contract Test Plan tests cover channel contract test plan script behavior.
 import { describe, expect, it } from "vitest";
-import { createChannelContractTestShards } from "../../scripts/lib/channel-contract-test-plan.mjs";
+import { createChannelContractTestShards } from "../../scripts/lib/channel-contract-test-plan.mts";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles } from "../../src/test-utils/repo-files.js";
 
@@ -9,9 +10,9 @@ function listContractTests(rootDir = "src/channels/plugins/contracts"): string[]
   return (files ?? []).filter((line) => line.endsWith(".test.ts"));
 }
 
-describe("scripts/lib/channel-contract-test-plan.mjs", () => {
+describe("scripts/lib/channel-contract-test-plan.mts", () => {
   it("splits channel contracts into focused shards", () => {
-    const suffixes = ["a", "b", "c"];
+    const suffixes = ["a", "b"];
 
     expect(
       createChannelContractTestShards().map((shard) => ({
@@ -42,14 +43,14 @@ describe("scripts/lib/channel-contract-test-plan.mjs", () => {
       files: number;
       shards: number;
     }>(`
-      const { createChannelContractTestShards } = await import("./scripts/lib/channel-contract-test-plan.mjs");
+      const { createChannelContractTestShards } = await import("./scripts/lib/channel-contract-test-plan.mts");
       const shards = createChannelContractTestShards();
       return {
         files: shards.reduce((total, shard) => total + shard.includePatterns.length, 0),
         shards: shards.length,
       };
     `);
-    expect(payload.shards).toBe(3);
+    expect(payload.shards).toBe(2);
     expect(payload.files).toBeGreaterThan(0);
   });
 
@@ -58,7 +59,7 @@ describe("scripts/lib/channel-contract-test-plan.mjs", () => {
       const surfaceRegistryFiles = shard.includePatterns.filter((pattern) =>
         pattern.includes("/surfaces-only.registry-backed-shard-"),
       );
-      expect(surfaceRegistryFiles.length).toBeLessThanOrEqual(4);
+      expect(surfaceRegistryFiles.length).toBeLessThanOrEqual(6);
     }
   });
 });

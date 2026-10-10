@@ -1,343 +1,563 @@
-import type { MemoryCitationsMode } from "../config/types.memory.js";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { MemorySearchManager } from "../memory-host-sdk/host/types.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
+import { wrapCurrentPluginInstance } from "./plugin-instance-scope.js";
+import type {
+  MemoryCorpusSupplement,
+  MemoryCorpusSupplementRegistration,
+  MemoryFlushFilePlanDraft,
+  MemoryFlushToolsPlan,
+  MemoryPluginCapability,
+  MemoryPluginCapabilityRegistration,
+  MemoryProviderFlushPlanResolver,
+  MemoryPluginPublicArtifact,
+  MemoryPluginRuntime,
+  MemoryPromptPreparationRegistration,
+  MemoryPromptSectionBuilder,
+  MemoryPromptSectionParams,
+  MemoryPromptSectionPreparer,
+  PreparedMemoryPromptSection,
+} from "./registry-contribution-types.js";
+import type { PluginRegistry } from "./registry-types.js";
+import {
+  getActivePluginRegistry,
+  getPluginRegistryForContext,
+  getPluginRegistrationContext,
+  requireActivePluginRegistry,
+  resolveDirectPluginRegistrationOwner,
+} from "./runtime.js";
 
-export type MemoryPromptSectionBuilder = (params: {
-  availableTools: Set<string>;
-  citationsMode?: MemoryCitationsMode;
-}) => string[];
+const log = createSubsystemLogger("plugins/memory-state");
 
-export type MemoryCorpusSearchResult = {
-  corpus: string;
-  path: string;
-  title?: string;
-  kind?: string;
-  score: number;
-  snippet: string;
-  id?: string;
-  startLine?: number;
-  endLine?: number;
-  citation?: string;
-  source?: string;
-  provenanceLabel?: string;
-  sourceType?: string;
-  sourcePath?: string;
-  updatedAt?: string;
-};
+export type {
+  MemoryCorpusSearchResult,
+  MemoryCorpusSupplement,
+  MemoryFlushFilePlanDraft,
+  MemoryFlushPlan,
+  MemoryFlushPlanResolver,
+  MemoryFlushToolsPlan,
+  MemoryPluginCapability,
+  MemoryPluginPublicArtifact,
+  MemoryPluginPublicArtifactsProvider,
+  MemoryProviderFlushPlanResolver,
+  MemoryPluginRuntime,
+  MemoryPromptSectionBuilder,
+  MemoryPromptSectionParams,
+  PreparedMemoryPromptSection,
+  RegisteredMemorySearchManager,
+} from "./registry-contribution-types.js";
 
-export type MemoryCorpusGetResult = {
-  corpus: string;
-  path: string;
-  title?: string;
-  kind?: string;
-  content: string;
-  fromLine: number;
-  lineCount: number;
-  id?: string;
-  provenanceLabel?: string;
-  sourceType?: string;
-  sourcePath?: string;
-  updatedAt?: string;
-};
-
-export type MemoryCorpusSupplement = {
-  search(params: {
-    query: string;
-    maxResults?: number;
-    agentSessionKey?: string;
-  }): Promise<MemoryCorpusSearchResult[]>;
-  get(params: {
-    lookup: string;
-    fromLine?: number;
-    lineCount?: number;
-    agentSessionKey?: string;
-  }): Promise<MemoryCorpusGetResult | null>;
-};
-
-export type MemoryCorpusSupplementRegistration = {
+/** The flush plan resolver a registration supplies, bound to the plugin that supplied it. */
+type MemoryFlushPlanSource = {
+  resolve: MemoryProviderFlushPlanResolver;
   pluginId: string;
-  supplement: MemoryCorpusSupplement;
 };
 
-export type MemoryPromptSupplementRegistration = {
-  pluginId: string;
-  builder: MemoryPromptSectionBuilder;
+type ResolvedMemoryCapabilityRegistration = MemoryPluginCapabilityRegistration & {
+  flushPlanSource?: MemoryFlushPlanSource;
 };
 
-export type MemoryFlushPlan = {
-  softThresholdTokens: number;
-  forceFlushTranscriptBytes: number;
-  reserveTokensFloor: number;
-  model?: string;
-  prompt: string;
-  systemPrompt: string;
-  relativePath: string;
-};
+// A registration's own flush resolver: the provider resolver when declared, else the released one.
+// A complete released plan is a valid file draft, so both resolve through one signature.
+function ownFlushPlanSource(
+  registration: MemoryPluginCapabilityRegistration,
+): MemoryFlushPlanSource | undefined {
+  const resolve =
+    registration.capability.providerFlushPlanResolver ?? registration.capability.flushPlanResolver;
+  return resolve ? { resolve, pluginId: registration.pluginId } : undefined;
+}
 
-export type MemoryFlushPlanResolver = (params: {
-  cfg?: OpenClawConfig;
-  nowMs?: number;
-}) => MemoryFlushPlan | null;
+// Merged capabilities retain the resolver's original supplier across later sidecars.
+function flushPlanSourceOf(
+  registration: MemoryPluginCapabilityRegistration | ResolvedMemoryCapabilityRegistration,
+): MemoryFlushPlanSource | undefined {
+  return "flushPlanSource" in registration
+    ? registration.flushPlanSource
+    : ownFlushPlanSource(registration);
+}
 
-export type RegisteredMemorySearchManager = MemorySearchManager;
-
-export type MemoryRuntimeQmdConfig = {
-  command?: string;
-};
-
-export type MemoryRuntimeBackendConfig =
-  | {
-      backend: "builtin";
+export function resolveMemoryCapabilityRegistration(
+  registrations: readonly MemoryPluginCapabilityRegistration[],
+): ResolvedMemoryCapabilityRegistration | undefined {
+  let effective: ResolvedMemoryCapabilityRegistration | undefined;
+  for (const registration of registrations) {
+    const existing = effective;
+    if (!existing) {
+      const flushPlanSource = ownFlushPlanSource(registration);
+      effective = { ...registration, ...(flushPlanSource ? { flushPlanSource } : {}) };
+      continue;
     }
-  | {
-      backend: "qmd";
-      qmd?: MemoryRuntimeQmdConfig;
+    const existingOwnsSlot = existing.memorySlotSelected === true;
+    const registrationOwnsSlot = registration.memorySlotSelected === true;
+    if (existingOwnsSlot !== registrationOwnsSlot) {
+      // A dreaming sidecar contributes consolidation fields, but the selected
+      // plugin keeps every field it declares regardless of registration order.
+      const owner = existingOwnsSlot ? existing : registration;
+      const contributor = existingOwnsSlot ? registration : existing;
+      // The owner's flush resolver, when it has one, wins as a unit over the contributor's.
+      const flushPlanSource = flushPlanSourceOf(owner) ?? flushPlanSourceOf(contributor);
+      effective = {
+        pluginId: owner.pluginId,
+        capability: {
+          ...contributor.capability,
+          ...owner.capability,
+        },
+        memorySlotSelected: true,
+        ...(flushPlanSource ? { flushPlanSource } : {}),
+      };
+      continue;
+    }
+    const preserveExisting =
+      Boolean(registration.capability.publicArtifacts) &&
+      !registration.capability.promptBuilder &&
+      !registration.capability.flushPlanResolver &&
+      !registration.capability.providerFlushPlanResolver &&
+      !registration.capability.runtime &&
+      !registration.capability.providerRuntime;
+    const flushPlanSource =
+      ownFlushPlanSource(registration) ?? (preserveExisting ? existing.flushPlanSource : undefined);
+    effective = {
+      pluginId: registration.pluginId,
+      capability: {
+        ...(preserveExisting ? existing.capability : {}),
+        ...registration.capability,
+      },
+      memorySlotSelected: registration.memorySlotSelected,
+      ...(flushPlanSource ? { flushPlanSource } : {}),
     };
+  }
+  return effective;
+}
 
-export type MemoryPluginRuntime = {
-  getMemorySearchManager(params: {
-    cfg: OpenClawConfig;
-    agentId: string;
-    purpose?: "default" | "status" | "cli";
-  }): Promise<{
-    manager: RegisteredMemorySearchManager | null;
-    error?: string;
-  }>;
-  resolveMemoryBackendConfig(params: {
-    cfg: OpenClawConfig;
-    agentId: string;
-  }): MemoryRuntimeBackendConfig;
-  closeAllMemorySearchManagers?(): Promise<void>;
-};
+// Cleanup reads must not recreate the process registry after its owner has cleared it.
+const getMemoryCapability = () =>
+  resolveMemoryCapabilityRegistration(getPluginRegistryForContext()?.memoryCapabilities ?? []);
 
-export type MemoryPluginPublicArtifactContentType = "markdown" | "json" | "text";
-
-export type MemoryPluginPublicArtifact = {
-  kind: string;
-  workspaceDir: string;
-  relativePath: string;
-  absolutePath: string;
-  agentIds: string[];
-  contentType: MemoryPluginPublicArtifactContentType;
-};
-
-export type MemoryPluginPublicArtifactsProvider = {
-  listArtifacts(params: { cfg: OpenClawConfig }): Promise<MemoryPluginPublicArtifact[]>;
-};
-
-export type MemoryPluginCapability = {
-  promptBuilder?: MemoryPromptSectionBuilder;
-  flushPlanResolver?: MemoryFlushPlanResolver;
-  runtime?: MemoryPluginRuntime;
-  publicArtifacts?: MemoryPluginPublicArtifactsProvider;
-};
-
-export type MemoryPluginCapabilityRegistration = {
-  pluginId: string;
-  capability: MemoryPluginCapability;
-};
-
-const LEGACY_MEMORY_COMPAT_PLUGIN_ID = "legacy-memory-v1";
-
-type MemoryPluginState = {
-  capability?: MemoryPluginCapabilityRegistration;
-  corpusSupplements: MemoryCorpusSupplementRegistration[];
-  promptSupplements: MemoryPromptSupplementRegistration[];
-};
-
-const memoryPluginState: MemoryPluginState = {
-  corpusSupplements: [],
-  promptSupplements: [],
-};
+const preparedMemoryPromptSections = new WeakSet<PreparedMemoryPromptSection>();
+const activePreparedMemoryPromptSection = new AsyncLocalStorage<PreparedMemoryPromptSection>();
 
 export function registerMemoryCorpusSupplement(
-  pluginId: string,
+  requestedPluginId: string,
   supplement: MemoryCorpusSupplement,
 ): void {
-  const next = memoryPluginState.corpusSupplements.filter(
-    (registration) => registration.pluginId !== pluginId,
-  );
-  next.push({ pluginId, supplement });
-  memoryPluginState.corpusSupplements = next;
+  const pluginId = resolveDirectPluginRegistrationOwner(requestedPluginId) ?? requestedPluginId;
+  const registry = requireActivePluginRegistry();
+  registry.memoryCorpusSupplements = registry.memoryCorpusSupplements
+    .filter((registration) => registration.pluginId !== pluginId)
+    .concat({ pluginId, supplement: wrapCurrentPluginInstance(supplement) });
 }
 
 export function registerMemoryCapability(
-  pluginId: string,
+  requestedPluginId: string,
   capability: MemoryPluginCapability,
 ): void {
-  memoryPluginState.capability = { pluginId, capability: { ...capability } };
-}
-
-function patchMemoryCapability(pluginId: string, patch: MemoryPluginCapability): void {
-  const current =
-    memoryPluginState.capability?.pluginId === pluginId
-      ? memoryPluginState.capability.capability
-      : {};
-  registerMemoryCapability(pluginId, { ...current, ...patch });
+  const registrar = getPluginRegistrationContext()?.registerMemoryCapability;
+  if (registrar) {
+    registrar(capability);
+    return;
+  }
+  const pluginId = resolveDirectPluginRegistrationOwner(requestedPluginId) ?? requestedPluginId;
+  const registry = requireActivePluginRegistry();
+  registry.memoryCapabilities.push({ pluginId, capability: wrapCurrentPluginInstance(capability) });
 }
 
 export function getMemoryCapabilityRegistration(): MemoryPluginCapabilityRegistration | undefined {
-  return memoryPluginState.capability
+  const capability = getMemoryCapability();
+  return capability
     ? {
-        pluginId: memoryPluginState.capability.pluginId,
-        capability: { ...memoryPluginState.capability.capability },
+        pluginId: capability.pluginId,
+        capability: { ...capability.capability },
       }
     : undefined;
 }
 
 export function listMemoryCorpusSupplements(): MemoryCorpusSupplementRegistration[] {
-  return [...memoryPluginState.corpusSupplements];
+  return [...requireActivePluginRegistry().memoryCorpusSupplements];
 }
 
-/** @deprecated Use registerMemoryCapability(pluginId, { promptBuilder }) instead. */
-export function registerMemoryPromptSection(builder: MemoryPromptSectionBuilder): void {
-  registerMemoryPromptSectionForPlugin(LEGACY_MEMORY_COMPAT_PLUGIN_ID, builder);
+function adoptEligibleRuntimeMemoryRegistrations<T extends { pluginId: string }>(
+  target: T[],
+  runtime: readonly T[],
+  canAdopt: (pluginId: string) => boolean,
+): T[] {
+  const pluginIds = new Set(target.map((registration) => registration.pluginId));
+  let adopted: T[] | undefined;
+  for (const registration of runtime) {
+    if (pluginIds.has(registration.pluginId) || !canAdopt(registration.pluginId)) {
+      continue;
+    }
+    (adopted ??= [...target]).push(registration);
+    pluginIds.add(registration.pluginId);
+  }
+  return adopted ?? target;
 }
 
-export function registerMemoryPromptSectionForPlugin(
-  pluginId: string,
-  builder: MemoryPromptSectionBuilder,
-): void {
-  patchMemoryCapability(pluginId, { promptBuilder: builder });
+/**
+ * Discovery scopes cannot safely rerun full memory plugin setup.
+ * Reuse exact root sidecars only while activation and source ownership still match.
+ */
+export function adoptRuntimeMemoryRegistrations(
+  targetRegistry: PluginRegistry,
+  runtimeRegistry: PluginRegistry,
+  config: OpenClawConfig,
+): PluginRegistry {
+  const normalizedConfig = normalizePluginsConfig(config.plugins);
+  const canAdopt = (pluginId: string) => {
+    const targetOwner = targetRegistry.plugins.find((plugin) => plugin.id === pluginId);
+    const runtimeOwner = runtimeRegistry.plugins.find((plugin) => plugin.id === pluginId);
+    return (
+      runtimeOwner?.status === "loaded" &&
+      resolveEffectivePluginActivationState({
+        id: runtimeOwner.id,
+        origin: runtimeOwner.origin,
+        config: normalizedConfig,
+        rootConfig: config,
+        enabledByDefault: runtimeOwner.activationSource === "default",
+      }).enabled &&
+      (!targetOwner ||
+        (targetOwner.status === "loaded" && targetOwner.source === runtimeOwner.source))
+    );
+  };
+  const memoryCorpusSupplements = adoptEligibleRuntimeMemoryRegistrations(
+    targetRegistry.memoryCorpusSupplements,
+    runtimeRegistry.memoryCorpusSupplements,
+    canAdopt,
+  );
+  const memoryPromptPreparations = adoptEligibleRuntimeMemoryRegistrations(
+    targetRegistry.memoryPromptPreparations,
+    runtimeRegistry.memoryPromptPreparations,
+    canAdopt,
+  );
+  const memoryPromptSupplements = adoptEligibleRuntimeMemoryRegistrations(
+    targetRegistry.memoryPromptSupplements,
+    runtimeRegistry.memoryPromptSupplements,
+    canAdopt,
+  );
+  return memoryCorpusSupplements === targetRegistry.memoryCorpusSupplements &&
+    memoryPromptPreparations === targetRegistry.memoryPromptPreparations &&
+    memoryPromptSupplements === targetRegistry.memoryPromptSupplements
+    ? targetRegistry
+    : {
+        ...targetRegistry,
+        memoryCorpusSupplements,
+        memoryPromptPreparations,
+        memoryPromptSupplements,
+      };
 }
-
 export function registerMemoryPromptSupplement(
-  pluginId: string,
+  requestedPluginId: string,
   builder: MemoryPromptSectionBuilder,
 ): void {
-  const next = memoryPluginState.promptSupplements.filter(
-    (registration) => registration.pluginId !== pluginId,
-  );
-  next.push({ pluginId, builder });
-  memoryPluginState.promptSupplements = next;
+  const pluginId = resolveDirectPluginRegistrationOwner(requestedPluginId) ?? requestedPluginId;
+  const registry = requireActivePluginRegistry();
+  registry.memoryPromptSupplements = registry.memoryPromptSupplements
+    .filter((registration) => registration.pluginId !== pluginId)
+    .concat({ pluginId, builder: wrapCurrentPluginInstance(builder) });
 }
 
-export function buildMemoryPromptSection(params: {
-  availableTools: Set<string>;
-  citationsMode?: MemoryCitationsMode;
-}): string[] {
-  const primary = normalizeMemoryPromptLines(
-    memoryPluginState.capability?.capability.promptBuilder?.(params) ?? [],
+export function registerMemoryPromptPreparation(
+  requestedPluginId: string,
+  prepare: MemoryPromptSectionPreparer,
+): void {
+  const pluginId = resolveDirectPluginRegistrationOwner(requestedPluginId) ?? requestedPluginId;
+  const registry = requireActivePluginRegistry();
+  registry.memoryPromptPreparations = registry.memoryPromptPreparations
+    .filter((registration) => registration.pluginId !== pluginId)
+    .concat({ pluginId, prepare: wrapCurrentPluginInstance(prepare) });
+}
+
+function buildSynchronousMemoryPromptSection(params: MemoryPromptSectionParams): {
+  primary: string[];
+  supplements: Array<{ pluginId: string; lines: string[] }>;
+} {
+  const registry = requireActivePluginRegistry();
+  const primary = filterStringEntries(
+    resolveMemoryCapabilityRegistration(registry.memoryCapabilities)?.capability.promptBuilder?.(
+      params,
+    ) ?? [],
   );
-  const supplements = memoryPluginState.promptSupplements
+  const supplements = registry.memoryPromptSupplements
     // Keep supplement order stable even if plugin registration order changes.
     .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId))
-    .flatMap((registration) => normalizeMemoryPromptLines(registration.builder(params)));
-  return [...primary, ...supplements];
+    .map((registration) => ({
+      pluginId: registration.pluginId,
+      lines: filterStringEntries(registration.builder(params)),
+    }));
+  return { primary, supplements };
 }
 
-function normalizeMemoryPromptLines(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
+function cloneMemoryPromptSectionParams(
+  params: MemoryPromptSectionParams,
+): MemoryPromptSectionParams {
+  return {
+    availableTools: new Set(params.availableTools),
+    citationsMode: params.citationsMode,
+    agentId: params.agentId,
+    agentSessionKey: params.agentSessionKey,
+    sandboxed: params.sandboxed,
+  };
+}
+
+function snapshotMemoryPromptContext(
+  params: MemoryPromptSectionParams,
+): PreparedMemoryPromptSection["context"] {
+  return Object.freeze({
+    availableTools: Object.freeze([...params.availableTools].toSorted()),
+    citationsMode: params.citationsMode,
+    agentId: params.agentId,
+    agentSessionKey: params.agentSessionKey,
+    sandboxed: params.sandboxed === true,
+  });
+}
+
+function preparedMemoryPromptContextMatches(
+  prepared: PreparedMemoryPromptSection,
+  params: MemoryPromptSectionParams,
+): boolean {
+  // The snapshot comes from a Set, so equal size and membership ignore insertion order.
+  return (
+    prepared.context.citationsMode === params.citationsMode &&
+    prepared.context.agentId === params.agentId &&
+    prepared.context.agentSessionKey === params.agentSessionKey &&
+    prepared.context.sandboxed === (params.sandboxed === true) &&
+    prepared.context.availableTools.length === params.availableTools.size &&
+    prepared.context.availableTools.every((tool) => params.availableTools.has(tool))
+  );
+}
+
+/** Prepare one immutable memory prompt snapshot for a run. */
+export async function prepareMemoryPromptSection(
+  params: MemoryPromptSectionParams,
+): Promise<PreparedMemoryPromptSection> {
+  const runParams = cloneMemoryPromptSectionParams(params);
+  const context = snapshotMemoryPromptContext(runParams);
+  const synchronous = buildSynchronousMemoryPromptSection(
+    cloneMemoryPromptSectionParams(runParams),
+  );
+  const preparationRegistrations = [...requireActivePluginRegistry().memoryPromptPreparations];
+  const preparedSupplements = await Promise.all(
+    preparationRegistrations.map(async (registration) => ({
+      pluginId: registration.pluginId,
+      lines: filterStringEntries(
+        await registration.prepare(cloneMemoryPromptSectionParams(runParams)),
+      ),
+    })),
+  );
+  const lines = Object.freeze([
+    ...synchronous.primary,
+    ...[...synchronous.supplements, ...preparedSupplements]
+      .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId))
+      .flatMap((registration) => registration.lines),
+  ]);
+  const prepared = Object.freeze({
+    context,
+    lines,
+  });
+  preparedMemoryPromptSections.add(prepared);
+  return prepared;
+}
+
+/** Keep async preparation run-scoped while a context engine assembles synchronously. */
+export async function runWithPreparedMemoryPromptSection<T>(
+  params: MemoryPromptSectionParams,
+  run: () => Promise<T>,
+): Promise<T> {
+  const prepared = await prepareMemoryPromptSection(params);
+  return activePreparedMemoryPromptSection.run(prepared, run);
+}
+
+export function getActivePreparedMemoryPromptSection(): PreparedMemoryPromptSection | undefined {
+  return activePreparedMemoryPromptSection.getStore();
+}
+
+export function buildMemoryPromptSection(
+  params: MemoryPromptSectionParams,
+  prepared?: PreparedMemoryPromptSection,
+): string[] {
+  if (prepared) {
+    // Run-scoped prompt state must never cross agent/session/tool boundaries.
+    if (
+      !preparedMemoryPromptSections.has(prepared) ||
+      !preparedMemoryPromptContextMatches(prepared, params)
+    ) {
+      throw new Error("prepared memory prompt section does not match the current run");
+    }
+    return [...prepared.lines];
   }
-  return value.filter((line): line is string => typeof line === "string");
+  const synchronous = buildSynchronousMemoryPromptSection(params);
+  return [...synchronous.primary, ...synchronous.supplements.flatMap((entry) => entry.lines)];
 }
 
-export function getMemoryPromptSectionBuilder(): MemoryPromptSectionBuilder | undefined {
-  return memoryPluginState.capability?.capability.promptBuilder;
+export function listMemoryPromptPreparations(): MemoryPromptPreparationRegistration[] {
+  return [...requireActivePluginRegistry().memoryPromptPreparations];
 }
-
-export function listMemoryPromptSupplements(): MemoryPromptSupplementRegistration[] {
-  return [...memoryPluginState.promptSupplements];
-}
-
-/** @deprecated Use registerMemoryCapability(pluginId, { flushPlanResolver }) instead. */
-export function registerMemoryFlushPlanResolver(resolver: MemoryFlushPlanResolver): void {
-  registerMemoryFlushPlanResolverForPlugin(LEGACY_MEMORY_COMPAT_PLUGIN_ID, resolver);
-}
-
-export function registerMemoryFlushPlanResolverForPlugin(
-  pluginId: string,
-  resolver: MemoryFlushPlanResolver,
-): void {
-  patchMemoryCapability(pluginId, { flushPlanResolver: resolver });
-}
-
 export function resolveMemoryFlushPlan(params: {
   cfg?: OpenClawConfig;
   nowMs?: number;
-}): MemoryFlushPlan | null {
-  return memoryPluginState.capability?.capability.flushPlanResolver?.(params) ?? null;
+  contextWindowTokens?: number;
+}): MemoryFlushPlanResolution | null {
+  const registration = getMemoryCapability();
+  const source = registration?.flushPlanSource;
+  if (!registration || !source) {
+    return null;
+  }
+  const plan = source.resolve(params);
+  if (!plan) {
+    return null;
+  }
+  return {
+    plan,
+    pluginId: source.pluginId,
+    selectedSlotOwner:
+      registration.memorySlotSelected === true && source.pluginId === registration.pluginId,
+  };
 }
 
-export function getMemoryFlushPlanResolver(): MemoryFlushPlanResolver | undefined {
-  return memoryPluginState.capability?.capability.flushPlanResolver;
+/**
+ * Whether the flush plan resolver belongs to a selected slot owner that registers the
+ * provider-neutral runtime. Such a provider may persist through its own tools, so its
+ * flush does not depend on a writable workspace; it is answered without calling the resolver.
+ */
+export function isMemoryFlushPlanNativeProviderOwned(): boolean {
+  const registration = getMemoryCapability();
+  return Boolean(
+    registration?.flushPlanSource &&
+    registration.capability.providerRuntime &&
+    registration.memorySlotSelected === true &&
+    registration.flushPlanSource.pluginId === registration.pluginId,
+  );
 }
 
-/** @deprecated Use registerMemoryCapability(pluginId, { runtime }) instead. */
-export function registerMemoryRuntime(runtime: MemoryPluginRuntime): void {
-  registerMemoryRuntimeForPlugin(LEGACY_MEMORY_COMPAT_PLUGIN_ID, runtime);
-}
-
-export function registerMemoryRuntimeForPlugin(
-  pluginId: string,
-  runtime: MemoryPluginRuntime,
-): void {
-  patchMemoryCapability(pluginId, { runtime });
-}
-
+export type MemoryFlushPlanResolution = {
+  plan: MemoryFlushFilePlanDraft | MemoryFlushToolsPlan;
+  pluginId: string;
+  selectedSlotOwner: boolean;
+};
 export function getMemoryRuntime(): MemoryPluginRuntime | undefined {
-  return memoryPluginState.capability?.capability.runtime;
+  return getMemoryCapability()?.capability.runtime;
+}
+
+export function getMemoryProviderRuntime() {
+  return getMemoryCapability()?.capability.providerRuntime;
+}
+
+let standaloneMemoryManagerActive = false;
+// Identity of the slot owner a standalone lookup loaded outside any registry.
+let standaloneMemoryOwner: { pluginId: string; native: boolean } | undefined;
+
+/** Records, or clears, the slot owner a standalone memory lookup loaded. */
+export function setStandaloneMemoryOwner(
+  owner: { pluginId: string; native: boolean } | undefined,
+): void {
+  standaloneMemoryOwner = owner;
+}
+
+/**
+ * Classifies the configured memory slot owner from owners this process already
+ * loaded, never loading one: the current registry, then the process registry for
+ * the configured slot, then a standalone owner an earlier memory lookup loaded.
+ * Undefined means no loaded owner answers; callers then keep their legacy path
+ * and its own loading behavior.
+ */
+export function resolveLoadedMemoryProviderKind(
+  cfg: OpenClawConfig,
+): "native" | "legacy" | undefined {
+  const current = getMemoryCapability()?.capability;
+  if (current?.providerRuntime || current?.runtime) {
+    return current.providerRuntime ? "native" : "legacy";
+  }
+  const plugins = normalizePluginsConfig(cfg.plugins);
+  const slotPluginId = plugins.enabled ? plugins.slots.memory : undefined;
+  if (!slotPluginId) {
+    return undefined;
+  }
+  const processOwner = resolveMemoryCapabilityRegistration(
+    getActivePluginRegistry()?.memoryCapabilities ?? [],
+  );
+  if (
+    processOwner?.pluginId === slotPluginId &&
+    (processOwner.capability.providerRuntime || processOwner.capability.runtime)
+  ) {
+    return processOwner.capability.providerRuntime ? "native" : "legacy";
+  }
+  if (standaloneMemoryOwner?.pluginId === slotPluginId) {
+    return standaloneMemoryOwner.native ? "native" : "legacy";
+  }
+  return undefined;
+}
+
+// Standalone managers are intentionally absent from the active plugin registry.
+export function setStandaloneMemoryManagerActive(active: boolean): void {
+  standaloneMemoryManagerActive = active;
 }
 
 export function hasMemoryRuntime(): boolean {
-  return getMemoryRuntime() !== undefined;
+  return (
+    standaloneMemoryManagerActive ||
+    getMemoryRuntime() !== undefined ||
+    getMemoryProviderRuntime() !== undefined
+  );
 }
 
 function cloneMemoryPublicArtifact(
   artifact: MemoryPluginPublicArtifact,
 ): MemoryPluginPublicArtifact {
+  const agentIds = Array.isArray(artifact.agentIds) ? artifact.agentIds : [];
   return {
     ...artifact,
-    agentIds: [...artifact.agentIds],
+    agentIds: [...agentIds],
   };
+}
+
+// The sort below dereferences these fields, so a plugin-supplied artifact
+// missing any of them would crash every status/bridge consumer.
+function isValidMemoryPublicArtifact(
+  artifact: MemoryPluginPublicArtifact | null | undefined,
+): artifact is MemoryPluginPublicArtifact {
+  return (
+    typeof artifact?.kind === "string" &&
+    typeof artifact.workspaceDir === "string" &&
+    typeof artifact.relativePath === "string" &&
+    typeof artifact.absolutePath === "string" &&
+    typeof artifact.contentType === "string"
+  );
 }
 
 export async function listActiveMemoryPublicArtifacts(params: {
   cfg: OpenClawConfig;
 }): Promise<MemoryPluginPublicArtifact[]> {
-  const artifacts =
-    (await memoryPluginState.capability?.capability.publicArtifacts?.listArtifacts(params)) ?? [];
-  return artifacts.map(cloneMemoryPublicArtifact).toSorted((left, right) => {
-    const workspaceOrder = left.workspaceDir.localeCompare(right.workspaceDir);
-    if (workspaceOrder !== 0) {
-      return workspaceOrder;
-    }
-    const relativePathOrder = left.relativePath.localeCompare(right.relativePath);
-    if (relativePathOrder !== 0) {
-      return relativePathOrder;
-    }
-    const kindOrder = left.kind.localeCompare(right.kind);
-    if (kindOrder !== 0) {
-      return kindOrder;
-    }
-    const contentTypeOrder = left.contentType.localeCompare(right.contentType);
-    if (contentTypeOrder !== 0) {
-      return contentTypeOrder;
-    }
-    const agentOrder = left.agentIds.join("\0").localeCompare(right.agentIds.join("\0"));
-    if (agentOrder !== 0) {
-      return agentOrder;
-    }
-    return left.absolutePath.localeCompare(right.absolutePath);
-  });
-}
-
-export function restoreMemoryPluginState(state: MemoryPluginState): void {
-  memoryPluginState.capability = state.capability
-    ? {
-        pluginId: state.capability.pluginId,
-        capability: { ...state.capability.capability },
-      }
-    : undefined;
-  memoryPluginState.corpusSupplements = [...state.corpusSupplements];
-  memoryPluginState.promptSupplements = [...state.promptSupplements];
+  const capability = getMemoryCapability();
+  const pluginId = capability?.pluginId;
+  const listed = (await capability?.capability.publicArtifacts?.listArtifacts(params)) ?? [];
+  if (!Array.isArray(listed)) {
+    log.warn(`ignoring public memory artifacts from plugin "${pluginId}": not an array`);
+    return [];
+  }
+  const artifacts = listed.filter(isValidMemoryPublicArtifact);
+  if (artifacts.length < listed.length) {
+    log.warn(
+      `ignoring ${listed.length - artifacts.length} malformed public memory artifact(s) from plugin "${pluginId}": artifacts must include string kind, workspaceDir, relativePath, absolutePath, and contentType`,
+    );
+  }
+  return artifacts
+    .map(cloneMemoryPublicArtifact)
+    .toSorted(
+      (left, right) =>
+        left.workspaceDir.localeCompare(right.workspaceDir) ||
+        left.relativePath.localeCompare(right.relativePath) ||
+        left.kind.localeCompare(right.kind) ||
+        left.contentType.localeCompare(right.contentType) ||
+        left.agentIds.join("\0").localeCompare(right.agentIds.join("\0")) ||
+        left.absolutePath.localeCompare(right.absolutePath),
+    );
 }
 
 export function clearMemoryPluginState(): void {
-  memoryPluginState.capability = undefined;
-  memoryPluginState.corpusSupplements = [];
-  memoryPluginState.promptSupplements = [];
+  const registry = requireActivePluginRegistry();
+  registry.memoryCapabilities = [];
+  registry.memoryCorpusSupplements = [];
+  registry.memoryPromptPreparations = [];
+  registry.memoryPromptSupplements = [];
 }
-
-export const _resetMemoryPluginState = clearMemoryPluginState;

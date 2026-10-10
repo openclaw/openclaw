@@ -28,10 +28,11 @@ export function hasChromeProxyControlArg(args: readonly string[]): boolean {
   return args.some((arg) => PROXY_CONTROL_CHROME_ARGS.has(chromeArgName(arg)));
 }
 
-export function hasExplicitChromeProxyRoutingArg(args: readonly string[]): boolean {
+function hasExplicitChromeProxyRoutingArg(args: readonly string[]): boolean {
   return args.some((arg) => PROXY_ROUTING_CHROME_ARGS.has(chromeArgName(arg)));
 }
 
+/** Remove inherited proxy env so launched Chrome follows only configured args. */
 export function omitChromeProxyEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const next: NodeJS.ProcessEnv = { ...env };
   for (const key of CHROME_PROXY_ENV_KEYS) {
@@ -42,11 +43,12 @@ export function omitChromeProxyEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 
 export function resolveBrowserNavigationProxyMode(params: {
   resolved: Pick<ResolvedBrowserConfig, "extraArgs">;
-  profile: Pick<ResolvedBrowserProfile, "cdpIsLoopback" | "driver">;
+  profile: Pick<ResolvedBrowserProfile, "attachOnly" | "cdpIsLoopback" | "driver">;
 }): BrowserNavigationProxyMode {
   if (
     params.profile.driver === "openclaw" &&
     params.profile.cdpIsLoopback &&
+    !params.profile.attachOnly &&
     hasExplicitChromeProxyRoutingArg(params.resolved.extraArgs)
   ) {
     return "explicit-browser-proxy";

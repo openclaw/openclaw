@@ -1,0 +1,362 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { LocalOnboardingState } from "../state/local-onboarding-state.js";
+import { buildOnboardingWelcome } from "./onboarding-welcome.js";
+
+const mocks = vi.hoisted(() => ({
+  readLocalOnboardingState: vi.fn<
+    (
+      configPath: string,
+      config: { wizard?: { securityAcknowledgedAt?: string } },
+    ) => LocalOnboardingState | undefined
+  >(() => undefined),
+  sourceConfig: {
+    agents: { defaults: { workspace: "/existing/workspace" } },
+    wizard: undefined as
+      | { securityAcknowledgedAt?: string; accessMode?: "full" | "guarded" }
+      | undefined,
+    gateway: undefined as
+      | {
+          mode?: "local" | "remote";
+          auth?: {
+            mode?: string;
+            token?: string | { source: "env"; provider: string; id: string };
+          };
+        }
+      | undefined,
+  },
+}));
+
+vi.mock("../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/config.js")>()),
+  readConfigFileSnapshot: vi.fn(async () => ({
+    exists: true,
+    valid: true,
+    path: "/tmp/openclaw.json",
+    hash: "hash",
+    config: {},
+    sourceConfig: mocks.sourceConfig,
+    issues: [],
+  })),
+}));
+
+vi.mock("../state/local-onboarding-state.js", () => ({
+  readLocalOnboardingStateForConfig: mocks.readLocalOnboardingState,
+}));
+
+vi.mock("../commands/onboard-helpers.js", () => ({ DEFAULT_WORKSPACE: "/default/workspace" }));
+
+function createWelcomeEngine(
+  defaultModel: string | undefined,
+  config: { exists: boolean; valid: boolean; issues?: []; hash?: string | null } = {
+    exists: true,
+    valid: true,
+    issues: [],
+    hash: "hash",
+  },
+  gateway?: { reachable: boolean; url: string },
+) {
+  return {
+    loadOverview: vi.fn(async () => ({
+      config: { path: "/tmp/openclaw.json", ...config },
+      defaultModel,
+      ...(gateway ? { gateway } : {}),
+    })),
+    propose: vi.fn(),
+    noteAssistantMessage: vi.fn(),
+  };
+}
+
+describe("buildOnboardingWelcome", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  beforeEach(() => {
+    mocks.sourceConfig.agents.defaults.workspace = "/existing/workspace";
+    mocks.sourceConfig.wizard = undefined;
+    mocks.sourceConfig.gateway = undefined;
+    mocks.readLocalOnboardingState.mockReset().mockReturnValue(undefined);
+  });
+
+  it.each([
+    ["zh-CN", "你好，我是 OpenClaw", "是的 — 开始设置", "推理已就绪", "和我的智能体聊天"],
+    ["zh-TW", "你好，我是 OpenClaw", "是的 — 開始設定", "推理已就緒", "與我的智慧代理聊天"],
+  ] as const)(
+    "localizes setup and ready welcomes in %s without translating command replies",
+    async (locale, intro, setupLabel, readyTitle, readyLabel) => {
+      vi.stubEnv("OPENCLAW_LOCALE", "en");
+      const engine = createWelcomeEngine("example/verified-model", undefined, {
+        reachable: true,
+        url: "ws://127.0.0.1:19431",
+      });
+      const setup = await buildOnboardingWelcome({ engine: engine as never, locale });
+      expect(setup.text).toContain(intro);
+      expect(setup.text).toContain("example/verified-model");
+      expect(setup.text).toContain("/existing/workspace");
+      expect(setup.question.options[0]).toMatchObject({ label: setupLabel, reply: "yes" });
+
+      mocks.sourceConfig.wizard = { securityAcknowledgedAt: "2026-09-30T00:00:00.000Z" };
+      const ready = await buildOnboardingWelcome({ engine: engine as never, locale });
+      expect(ready.text).toContain(readyTitle);
+      expect(ready.text).toContain("ws://127.0.0.1:19431");
+      expect(ready.question.options[0]).toMatchObject({
+        label: readyLabel,
+        reply: "talk to agent",
+      });
+      expect(ready.question.skipAction).toBe("exit");
+    },
+  );
+
+  it("preserves an authored workspace in a partial setup", async () => {
+    mocks.sourceConfig.agents.defaults.workspace = "/existing/workspace";
+    const engine = createWelcomeEngine("openai/gpt-5.5");
+    const { propose } = engine;
+
+    const { text: welcome, question } = await buildOnboardingWelcome({
+      engine: engine as never,
+      agentName: "robby",
+    });
+
+    expect(propose).toHaveBeenCalledWith({
+      kind: "setup",
+      workspace: "/existing/workspace",
+      agentName: "robby",
+    });
+    expect(question.id).toBe("onboarding-apply-setup");
+    expect(question.options[0]).toMatchObject({
+      label: "Yes — set it up",
+      reply: "yes",
+      recommended: true,
+    });
+    expect(welcome).toContain("Workspace: /existing/workspace");
+    expect(welcome).toContain("AI: openai/gpt-5.5 — already verified with a real reply");
+  });
+
+  it("resumes pending local onboarding in the receipt's authoritative workspace", async () => {
+    mocks.sourceConfig.wizard = {
+      securityAcknowledgedAt: "2026-07-13T00:00:00.000Z",
+      accessMode: "guarded",
+    };
+    mocks.sourceConfig.gateway = { auth: { mode: "token", token: "existing-token" } };
+    mocks.readLocalOnboardingState.mockReturnValueOnce({
+      version: 1,
+      status: "pending",
+      runId: "pending-onboarding",
+      configPath: "/tmp/openclaw.json",
+      workspace: "/recovered/workspace",
+      securityAcknowledgedAt: "2026-07-13T00:00:00.000Z",
+      startedAtMs: 1,
+    });
+    const engine = createWelcomeEngine("openai/gpt-5.6-luna", { exists: true, valid: true });
+    const { propose } = engine;
+    const { text: welcome, question } = await buildOnboardingWelcome({
+      engine: engine as never,
+      workspace: "/requested/workspace",
+      localRecovery: true,
+    });
+
+    expect(mocks.readLocalOnboardingState).toHaveBeenCalledWith(
+      "/tmp/openclaw.json",
+      mocks.sourceConfig,
+    );
+    expect(propose).toHaveBeenCalledWith({ kind: "setup", workspace: "/recovered/workspace" });
+    expect(question.id).toBe("onboarding-apply-setup");
+    expect(welcome).toContain("Workspace: /recovered/workspace");
+  });
+
+  it("keeps the ready welcome after a local onboarding receipt completes", async () => {
+    mocks.sourceConfig.wizard = { securityAcknowledgedAt: "2026-07-13T00:00:00.000Z" };
+    mocks.readLocalOnboardingState.mockReturnValueOnce({
+      version: 1,
+      status: "completed",
+      runId: "completed-onboarding",
+      configPath: "/tmp/openclaw.json",
+      workspace: "/recovered/workspace",
+      securityAcknowledgedAt: "2026-07-13T00:00:00.000Z",
+      startedAtMs: 1,
+      completedAtMs: 2,
+    });
+    const engine = createWelcomeEngine(
+      "openai/gpt-5.6-luna",
+      { exists: true, valid: true },
+      { reachable: true, url: "ws://127.0.0.1:18789" },
+    );
+    const { propose } = engine;
+    const { question } = await buildOnboardingWelcome({
+      engine: engine as never,
+      localRecovery: true,
+    });
+
+    expect(mocks.readLocalOnboardingState).toHaveBeenCalledWith(
+      "/tmp/openclaw.json",
+      mocks.sourceConfig,
+    );
+    expect(propose).not.toHaveBeenCalled();
+    expect(question.id).toBe("onboarding-next-step");
+  });
+
+  it("ignores a pending receipt from a replaced configuration", async () => {
+    mocks.sourceConfig.wizard = { securityAcknowledgedAt: "2026-08-03T00:00:00.000Z" };
+    mocks.readLocalOnboardingState.mockImplementation((_configPath, config) =>
+      config.wizard?.securityAcknowledgedAt === "2026-08-02T00:00:00.000Z"
+        ? {
+            version: 1,
+            status: "pending",
+            runId: "stale-onboarding",
+            configPath: "/tmp/openclaw.json",
+            workspace: "/replaced/workspace",
+            securityAcknowledgedAt: "2026-08-02T00:00:00.000Z",
+            startedAtMs: 1,
+          }
+        : undefined,
+    );
+    const engine = createWelcomeEngine(
+      "openai/gpt-5.6-luna",
+      { exists: true, valid: true },
+      { reachable: true, url: "ws://127.0.0.1:18789" },
+    );
+    const { propose } = engine;
+
+    const { question } = await buildOnboardingWelcome({
+      engine: engine as never,
+      localRecovery: true,
+    });
+
+    expect(mocks.readLocalOnboardingState).toHaveBeenCalledWith(
+      "/tmp/openclaw.json",
+      mocks.sourceConfig,
+    );
+    expect(propose).not.toHaveBeenCalled();
+    expect(question.id).toBe("onboarding-next-step");
+  });
+
+  it("never applies machine-local recovery to Gateway onboarding", async () => {
+    mocks.sourceConfig.wizard = { securityAcknowledgedAt: "2026-07-13T00:00:00.000Z" };
+    mocks.readLocalOnboardingState.mockReturnValueOnce({
+      version: 1,
+      status: "pending",
+      runId: "pending-onboarding",
+      configPath: "/tmp/openclaw.json",
+      workspace: "/recovered/workspace",
+      securityAcknowledgedAt: "2026-07-13T00:00:00.000Z",
+      startedAtMs: 1,
+    });
+    const engine = createWelcomeEngine(
+      "openai/gpt-5.6-luna",
+      { exists: true, valid: true },
+      { reachable: true, url: "ws://127.0.0.1:18789" },
+    );
+    const { propose } = engine;
+    const { question } = await buildOnboardingWelcome({
+      engine: engine as never,
+    });
+
+    expect(mocks.readLocalOnboardingState).not.toHaveBeenCalled();
+    expect(propose).not.toHaveBeenCalled();
+    expect(question.id).toBe("onboarding-next-step");
+  });
+
+  it("never reads a local onboarding receipt for a remote Gateway", async () => {
+    mocks.sourceConfig.wizard = { securityAcknowledgedAt: "2026-07-13T00:00:00.000Z" };
+    mocks.sourceConfig.gateway = { mode: "remote" };
+    const engine = createWelcomeEngine(
+      "openai/gpt-5.6-luna",
+      { exists: true, valid: true },
+      { reachable: true, url: "wss://gateway.example.test" },
+    );
+    const { propose } = engine;
+    const { question } = await buildOnboardingWelcome({
+      engine: engine as never,
+      localRecovery: true,
+    });
+
+    expect(mocks.readLocalOnboardingState).not.toHaveBeenCalled();
+    expect(propose).not.toHaveBeenCalled();
+    expect(question.id).toBe("onboarding-next-step");
+  });
+
+  it("advertises only the route that passed the inference gate", async () => {
+    const engine = createWelcomeEngine("openai/gpt-5.5", {
+      exists: false,
+      valid: false,
+      issues: [],
+      hash: null,
+    });
+    const { text: welcome } = await buildOnboardingWelcome({
+      engine: engine as never,
+      localRecovery: true,
+    });
+
+    expect(mocks.readLocalOnboardingState).not.toHaveBeenCalled();
+    expect(welcome).toContain("AI: openai/gpt-5.5 — already verified with a real reply");
+    expect(welcome).not.toContain("Claude Code");
+    expect(welcome).not.toContain("Codex login");
+  });
+
+  it("ignores a blank authored workspace", async () => {
+    mocks.sourceConfig.agents.defaults.workspace = "   ";
+    const engine = createWelcomeEngine("openai/gpt-5.5");
+    const { propose } = engine;
+
+    await buildOnboardingWelcome({ engine: engine as never });
+
+    expect(propose).toHaveBeenCalledWith({
+      kind: "setup",
+      workspace: "/default/workspace",
+    });
+  });
+
+  it("honors an explicit workspace override on an authored setup", async () => {
+    mocks.sourceConfig.gateway = { auth: { mode: "token", token: "existing-token" } };
+    const engine = createWelcomeEngine("openai/gpt-5.5");
+    const { propose } = engine;
+    const { text: welcome } = await buildOnboardingWelcome({
+      workspace: "/requested/workspace",
+      engine: engine as never,
+    });
+
+    expect(propose).toHaveBeenCalledWith({
+      kind: "setup",
+      workspace: "/requested/workspace",
+    });
+    expect(welcome).toContain("Workspace: /requested/workspace");
+  });
+
+  it("fails closed before proposing setup when inference is missing", async () => {
+    const engine = createWelcomeEngine(undefined);
+    const { propose, noteAssistantMessage } = engine;
+
+    await expect(
+      buildOnboardingWelcome({
+        engine: engine as never,
+      }),
+    ).rejects.toThrow("requires working inference first");
+
+    expect(propose).not.toHaveBeenCalled();
+    expect(noteAssistantMessage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { label: "blank token", auth: { token: "   " }, configured: false },
+    {
+      label: "SecretRef token",
+      auth: { token: { source: "env" as const, provider: "default", id: "GATEWAY_TOKEN" } },
+      configured: true,
+    },
+  ])("treats $label consistently with the app gate", async ({ auth, configured }) => {
+    mocks.sourceConfig.gateway = { auth };
+    const engine = createWelcomeEngine("openai/gpt-5.5", undefined, {
+      reachable: true,
+      url: "ws://127.0.0.1:18789",
+    });
+    const { propose } = engine;
+    const { text: welcome, question } = await buildOnboardingWelcome({
+      engine: engine as never,
+    });
+
+    expect(propose).toHaveBeenCalledTimes(configured ? 0 : 1);
+    expect(question.id).toBe(configured ? "onboarding-next-step" : "onboarding-apply-setup");
+    expect(question.skipAction).toBe(configured ? "exit" : undefined);
+    expect(welcome.includes("Say **yes**")).toBe(!configured);
+  });
+});

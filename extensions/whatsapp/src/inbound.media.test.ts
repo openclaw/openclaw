@@ -1,7 +1,11 @@
+// Whatsapp tests cover inbound.media plugin behavior.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as waitForLogTick } from "node:timers/promises";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   mockExtractMessageContent,
@@ -9,12 +13,66 @@ import {
   mockIsJidGroup,
   mockNormalizeMessageContent,
 } from "../../../test/mocks/baileys.js";
+import { lookupInboundMessageMeta } from "./quoted-message.js";
 
 type MockMessageInput = Parameters<typeof mockNormalizeMessageContent>[0];
+type InMemoryKeyedStoreEntry<T> = {
+  key: string;
+  value: T;
+  createdAt: number;
+  expiresAt?: number;
+};
+
+function createInMemoryKeyedStore<T>() {
+  const entries = new Map<string, InMemoryKeyedStoreEntry<T>>();
+  return {
+    async register(key: string, value: T, opts?: { ttlMs?: number }) {
+      const createdAt = Date.now();
+      entries.set(key, {
+        key,
+        value,
+        createdAt,
+        ...(opts?.ttlMs ? { expiresAt: createdAt + opts.ttlMs } : {}),
+      });
+    },
+    async registerIfAbsent(key: string, value: T, opts?: { ttlMs?: number }) {
+      if (entries.has(key)) {
+        return false;
+      }
+      const createdAt = Date.now();
+      entries.set(key, {
+        key,
+        value,
+        createdAt,
+        ...(opts?.ttlMs ? { expiresAt: createdAt + opts.ttlMs } : {}),
+      });
+      return true;
+    },
+    async lookup(key: string) {
+      return entries.get(key)?.value;
+    },
+    async consume(key: string) {
+      const value = entries.get(key)?.value;
+      entries.delete(key);
+      return value;
+    },
+    async delete(key: string) {
+      return entries.delete(key);
+    },
+    async entries() {
+      return Array.from(entries.values());
+    },
+    async clear() {
+      entries.clear();
+    },
+  };
+}
 
 const readAllowFromStoreMock = vi.fn().mockResolvedValue([]);
 const upsertPairingRequestMock = vi.fn().mockResolvedValue({ code: "PAIRCODE", created: true });
 const saveMediaStreamSpy = vi.fn();
+const downloadMediaMessageMock = vi.hoisted(() => vi.fn());
+const observedConsoleWarnings = vi.hoisted(() => vi.fn());
 let currentMockSocket:
   | {
       ev: import("node:events").EventEmitter;
@@ -28,6 +86,33 @@ let currentMockSocket:
       user: { id: string };
     }
   | undefined;
+
+vi.mock("openclaw/plugin-sdk/logging-core", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/logging-core")>(
+    "openclaw/plugin-sdk/logging-core",
+  );
+  function observeConsoleWarnings(
+    logger: ReturnType<typeof actual.createSubsystemLogger>,
+  ): ReturnType<typeof actual.createSubsystemLogger> {
+    return {
+      ...logger,
+      warn(message, meta) {
+        if (logger.isEnabled("warn", "console")) {
+          observedConsoleWarnings(message, meta);
+        }
+        logger.warn(message, meta);
+      },
+      child(name) {
+        return observeConsoleWarnings(logger.child(name));
+      },
+    };
+  }
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) =>
+      observeConsoleWarnings(actual.createSubsystemLogger(subsystem)),
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
   const actual = await vi.importActual<
@@ -89,6 +174,32 @@ vi.mock("openclaw/plugin-sdk/media-store", async () => {
   };
 });
 
+vi.mock("./runtime.js", async () => {
+  const { createPluginRuntimeMock } = await import("openclaw/plugin-sdk/channel-test-helpers");
+  const { createChannelIngressQueueForTests: createChannelIngressQueue } = await Promise.resolve(
+    vi.importActual<typeof import("openclaw/plugin-sdk/plugin-state-test-runtime")>(
+      "openclaw/plugin-sdk/plugin-state-test-runtime",
+    ),
+  );
+  const stateDir = `/tmp/openclaw-whatsapp-inbound-media-${Date.now()}-${Math.random()}`;
+  const channelRuntime = createPluginRuntimeMock().channel;
+  return {
+    getWhatsAppChannelRuntime: () => channelRuntime,
+    getOptionalWhatsAppRuntime: () => undefined,
+    getWhatsAppRuntime: () => ({
+      channel: channelRuntime,
+      state: {
+        resolveStateDir: () => stateDir,
+        openKeyedStore: () => createInMemoryKeyedStore(),
+        openChannelIngressQueue: (
+          options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
+        ) => createChannelIngressQueue({ ...options, channelId: "whatsapp" }),
+      },
+    }),
+    setWhatsAppRuntime: vi.fn(),
+  };
+});
+
 const HOME = path.join(os.tmpdir(), `openclaw-inbound-media-${crypto.randomUUID()}`);
 const ORIGINAL_HOME = process.env.HOME;
 process.env.HOME = HOME;
@@ -111,7 +222,9 @@ vi.mock("baileys", async () => {
   return {
     ...actual,
     DisconnectReason: actual.DisconnectReason ?? { loggedOut: 401 },
-    downloadMediaMessage: vi.fn().mockImplementation(() => Readable.from([jpegBuffer])),
+    downloadMediaMessage: downloadMediaMessageMock.mockImplementation(() =>
+      Readable.from([jpegBuffer]),
+    ),
     extractMessageContent: vi.fn((message: MockMessageInput) => mockExtractMessageContent(message)),
     getContentType: vi.fn((message: MockMessageInput) => mockGetContentType(message)),
     isJidGroup: vi.fn((jid: string | undefined | null) => mockIsJidGroup(jid)),
@@ -148,11 +261,20 @@ vi.mock("./session.js", async () => {
 let monitorWebInbox: typeof import("./inbound.js").monitorWebInbox;
 let resetWebInboundDedupe: typeof import("./inbound.js").resetWebInboundDedupe;
 let createWaSocket: typeof import("./session.js").createWaSocket;
+let resetLogger: typeof import("openclaw/plugin-sdk/runtime-env").resetLogger;
+let setLoggerOverride: typeof import("openclaw/plugin-sdk/runtime-env").setLoggerOverride;
+
+const LOG_PATH = path.join(os.tmpdir(), `openclaw-inbound-media-${crypto.randomUUID()}.log`);
+const DIRECT_SYNTHETIC_BEARER = "synthetic-direct-bearer-never-real";
+const QUOTED_SYNTHETIC_API_KEY = "synthetic-quoted-api-key-never-real";
+const DEPLOYMENT_REDACTION_SENTINEL = "deployment-secret-never-real";
 
 async function waitForMessage(onMessage: ReturnType<typeof vi.fn>) {
+  // Saturated no-isolate suite runs can stall the worker (sync module fetches
+  // against the shared transform queue) well past a 2s delivery budget.
   await vi.waitFor(() => expect(onMessage).toHaveBeenCalledTimes(1), {
     interval: 1,
-    timeout: 250,
+    timeout: 5_000,
   });
   return onMessage.mock.calls[0]?.[0];
 }
@@ -172,6 +294,61 @@ function requireMediaPath(value: unknown): string {
   return value;
 }
 
+// The async file transport's flush promise is not exposed through the plugin SDK.
+async function waitForLogLine(messageId: string, signal: AbortSignal): Promise<string> {
+  try {
+    for (;;) {
+      signal.throwIfAborted();
+      const content = await withinTest(
+        fs.readFile(LOG_PATH, "utf8").catch((error: unknown) => {
+          if (extractErrorCode(error) === "ENOENT") {
+            return "";
+          }
+          throw error;
+        }),
+        signal,
+      );
+      const matchingLine = content
+        .split("\n")
+        .find(
+          (line) =>
+            line.includes("WhatsApp inbound media materialization failed") &&
+            line.includes(messageId),
+        );
+      if (matchingLine) {
+        return matchingLine;
+      }
+      await waitForLogTick(10, undefined, { signal });
+    }
+  } catch (error) {
+    if (signal.aborted) {
+      throw new Error(`Timed out waiting for the media failure log for ${messageId}`, {
+        cause: error,
+      });
+    }
+    throw error;
+  }
+}
+
+async function createBaileysMediaHttpError(statusCode: number, details: string): Promise<Error> {
+  const fetchSpy = vi
+    .spyOn(globalThis, "fetch")
+    .mockResolvedValueOnce(new Response(null, { status: statusCode }));
+  try {
+    const { getHttpStream } = await vi.importActual<typeof import("baileys")>("baileys");
+    await getHttpStream("https://media.example/private");
+  } catch (error) {
+    if (!(error instanceof Error)) {
+      throw new Error("expected Baileys to reject media downloads with an Error", { cause: error });
+    }
+    error.message = `${error.message} ${details}`;
+    return error;
+  } finally {
+    fetchSpy.mockRestore();
+  }
+  throw new Error("expected Baileys to reject the failed media response");
+}
+
 describe("web inbound media saves with extension", () => {
   async function getMockSocket() {
     return (await createWaSocket(false, false)) as unknown as {
@@ -179,20 +356,47 @@ describe("web inbound media saves with extension", () => {
     };
   }
 
+  function startMediaMonitor(
+    onMessage: Parameters<typeof monitorWebInbox>[0]["onMessage"],
+    mediaMaxMb?: number,
+  ) {
+    return monitorWebInbox({
+      cfg: { channels: { whatsapp: { allowFrom: ["*"] } } },
+      verbose: false,
+      onMessage,
+      accountId: "default",
+      authDir: path.join(HOME, "wa-auth"),
+      ...(mediaMaxMb === undefined ? {} : { mediaMaxMb }),
+    });
+  }
+
   beforeEach(() => {
     vi.useRealTimers();
     currentMockSocket = undefined;
+    downloadMediaMessageMock.mockClear();
+    observedConsoleWarnings.mockClear();
     saveMediaStreamSpy.mockClear();
     resetWebInboundDedupe();
   });
 
   beforeAll(async () => {
     await fs.rm(HOME, { recursive: true, force: true });
+    const configDir = path.join(HOME, ".openclaw");
+    await fs.mkdir(configDir, { recursive: true });
+    await fs.writeFile(
+      path.join(configDir, "openclaw.json"),
+      JSON.stringify({ logging: { redactPatterns: ["deployment-secret-[a-z-]+"] } }),
+    );
+    ({ resetLogger, setLoggerOverride } = await import("openclaw/plugin-sdk/runtime-env"));
+    setLoggerOverride({ level: "trace", consoleLevel: "info", file: LOG_PATH });
     ({ monitorWebInbox, resetWebInboundDedupe } = await import("./inbound.js"));
     ({ createWaSocket } = await import("./session.js"));
   });
 
   afterAll(async () => {
+    resetLogger();
+    setLoggerOverride(null);
+    await fs.rm(LOG_PATH, { force: true });
     await fs.rm(HOME, { recursive: true, force: true });
     if (ORIGINAL_HOME === undefined) {
       delete process.env.HOME;
@@ -203,16 +407,7 @@ describe("web inbound media saves with extension", () => {
 
   it("stores image extension and keeps document filename", async () => {
     const onMessage = vi.fn();
-    const listener = await monitorWebInbox({
-      cfg: {
-        channels: { whatsapp: { allowFrom: ["*"] } },
-        messages: { messagePrefix: undefined, responsePrefix: undefined },
-      } as never,
-      verbose: false,
-      onMessage,
-      accountId: "default",
-      authDir: path.join(HOME, "wa-auth"),
-    });
+    const listener = await startMediaMonitor(onMessage);
     const realSock = await getMockSocket();
 
     realSock.ev.emit("messages.upsert", {
@@ -227,7 +422,7 @@ describe("web inbound media saves with extension", () => {
     });
 
     const first = await waitForMessage(onMessage);
-    const mediaPath = requireMediaPath(first.mediaPath);
+    const mediaPath = requireMediaPath(first.payload.media?.path);
     expect(path.extname(mediaPath)).toBe(".jpg");
     const stat = await fs.stat(mediaPath);
     expect(stat.size).toBeGreaterThan(0);
@@ -246,7 +441,7 @@ describe("web inbound media saves with extension", () => {
     });
 
     const second = await waitForMessage(onMessage);
-    expect(second.mediaFileName).toBe(fileName);
+    expect(second.payload.media?.fileName).toBe(fileName);
     expect(saveMediaStreamSpy).toHaveBeenCalled();
     const lastCall = latestSaveMediaStreamCall();
     expect(lastCall[4]).toBe(fileName);
@@ -256,16 +451,7 @@ describe("web inbound media saves with extension", () => {
 
   it("stores quoted image media from reply context", async () => {
     const onMessage = vi.fn();
-    const listener = await monitorWebInbox({
-      cfg: {
-        channels: { whatsapp: { allowFrom: ["*"] } },
-        messages: { messagePrefix: undefined, responsePrefix: undefined },
-      } as never,
-      verbose: false,
-      onMessage,
-      accountId: "default",
-      authDir: path.join(HOME, "wa-auth"),
-    });
+    const listener = await startMediaMonitor(onMessage);
     const realSock = await getMockSocket();
 
     realSock.ev.emit("messages.upsert", {
@@ -292,29 +478,143 @@ describe("web inbound media saves with extension", () => {
     });
 
     const inbound = await waitForMessage(onMessage);
-    expect(inbound.replyToBody).toBe("<media:image>");
-    const mediaPath = requireMediaPath(inbound.mediaPath);
+    expect(inbound.quote?.body).toBe("");
+    expect(inbound.quote?.media).toEqual({ contentType: "image/jpeg", kind: "image" });
+    const mediaPath = requireMediaPath(inbound.payload.media?.path);
     expect(path.extname(mediaPath)).toBe(".jpg");
     expect(saveMediaStreamSpy).toHaveBeenCalled();
     const lastCall = latestSaveMediaStreamCall();
     expect(lastCall[1]).toBe("image/jpeg");
+    expect(
+      lookupInboundMessageMeta("default", "111@g.us", "quote-img-reply")?.media,
+    ).toBeUndefined();
+
+    await listener.close();
+  });
+
+  it("preserves self-authored quoted media through the real Baileys reupload boundary", async () => {
+    const onMessage = vi.fn();
+    const listener = await startMediaMonitor(onMessage);
+    const realSock = await getMockSocket();
+
+    realSock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: { id: "quote-own-image", fromMe: false, remoteJid: "111@s.whatsapp.net" },
+          message: {
+            extendedTextMessage: {
+              text: "what is in your image?",
+              contextInfo: {
+                stanzaId: "bot-image",
+                participant: "me@s.whatsapp.net",
+                quotedMessage: { imageMessage: { mimetype: "image/jpeg" } },
+              },
+            },
+          },
+          messageTimestamp: 1_700_000_007,
+        },
+      ],
+    });
+
+    await waitForMessage(onMessage);
+    const quoted = downloadMediaMessageMock.mock.calls[0]?.[0] as
+      | { key?: { fromMe?: boolean; id?: string; remoteJid?: string } }
+      | undefined;
+    expect(quoted?.key).toMatchObject({ fromMe: true, id: "bot-image" });
+
+    const { encryptMediaRetryRequest } = await vi.importActual<typeof import("baileys")>("baileys");
+    const retry = encryptMediaRetryRequest(
+      quoted!.key as never,
+      Buffer.alloc(32, 1),
+      "me@s.whatsapp.net",
+    );
+    const retryNode = Array.isArray(retry.content)
+      ? retry.content.find((node) => node.tag === "rmr")
+      : undefined;
+    expect(retryNode?.attrs.from_me).toBe("true");
+
+    await listener.close();
+  });
+
+  it("delivers incoming video notes as normal video media", async () => {
+    const onMessage = vi.fn();
+    const listener = await startMediaMonitor(onMessage);
+    const realSock = await getMockSocket();
+
+    realSock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: { id: "video-note-1", fromMe: false, remoteJid: "111@s.whatsapp.net" },
+          message: { ptvMessage: { mimetype: "video/mp4" } },
+          messageTimestamp: 1_700_000_008,
+        },
+      ],
+    });
+
+    const inbound = await waitForMessage(onMessage);
+    expect(inbound.payload.media).toMatchObject({ kind: "video", type: "video/mp4" });
+    expect(inbound.payload.media?.path).toBeTruthy();
+    expect(downloadMediaMessageMock).toHaveBeenCalled();
+
+    await listener.close();
+  });
+
+  it("delivers native polls and preserves their questions when quoted", async () => {
+    const onMessage = vi.fn();
+    const listener = await startMediaMonitor(onMessage);
+    const realSock = await getMockSocket();
+    const poll = {
+      name: "Lunch?",
+      options: [{ optionName: "Pizza" }, { optionName: "Sushi" }],
+    };
+
+    realSock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: { id: "poll-1", fromMe: false, remoteJid: "111@s.whatsapp.net" },
+          message: { pollCreationMessageV3: poll },
+          messageTimestamp: 1_700_000_009,
+        },
+      ],
+    });
+
+    expect((await waitForMessage(onMessage)).payload.body).toBe("Lunch?\n- Pizza\n- Sushi");
+    onMessage.mockClear();
+
+    realSock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: { id: "poll-reply", fromMe: false, remoteJid: "111@s.whatsapp.net" },
+          message: {
+            extendedTextMessage: {
+              text: "Pizza, please",
+              contextInfo: {
+                stanzaId: "poll-1",
+                participant: "111@s.whatsapp.net",
+                quotedMessage: { pollCreationMessageV3: poll },
+              },
+            },
+          },
+          messageTimestamp: 1_700_000_010,
+        },
+      ],
+    });
+
+    expect((await waitForMessage(onMessage)).quote).toMatchObject({
+      id: "poll-1",
+      body: "Lunch?\n- Pizza\n- Sushi",
+    });
 
     await listener.close();
   });
 
   it("passes mediaMaxMb to saveMediaStream", async () => {
     const onMessage = vi.fn();
-    const listener = await monitorWebInbox({
-      cfg: {
-        channels: { whatsapp: { allowFrom: ["*"] } },
-        messages: { messagePrefix: undefined, responsePrefix: undefined },
-      } as never,
-      verbose: false,
-      onMessage,
-      mediaMaxMb: 1,
-      accountId: "default",
-      authDir: path.join(HOME, "wa-auth"),
-    });
+    const listener = await startMediaMonitor(onMessage, 1);
     const realSock = await getMockSocket();
 
     const upsert = {
@@ -336,5 +636,132 @@ describe("web inbound media saves with extension", () => {
     expect(lastCall[3]).toBe(1 * 1024 * 1024);
 
     await listener.close();
+  });
+
+  it("keeps a failed image fact with an unavailable notice", async ({ signal, onTestFinished }) => {
+    downloadMediaMessageMock.mockRejectedValueOnce(
+      await createBaileysMediaHttpError(
+        410,
+        `expired media reference +15551234567 111@s.whatsapp.net 789@hosted.lid 42@c.us Authorization: Bearer ${DIRECT_SYNTHETIC_BEARER} ${DEPLOYMENT_REDACTION_SENTINEL}`,
+      ),
+    );
+    const onMessage = vi.fn();
+    const listener = await startMediaMonitor(onMessage);
+    onTestFinished(() => listener.close());
+    const realSock = await getMockSocket();
+
+    realSock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: { id: "img-failed", fromMe: false, remoteJid: "111@s.whatsapp.net" },
+          message: { imageMessage: { mimetype: "image/jpeg" } },
+          messageTimestamp: 1_700_000_006,
+        },
+      ],
+    });
+
+    const inbound = await waitForMessage(onMessage);
+    expect(inbound.payload.body).toBe("[whatsapp attachment unavailable]");
+    expect(inbound.payload.commandBody).toBe("");
+    expect(inbound.payload.media).toEqual({
+      path: undefined,
+      type: "image/jpeg",
+      fileName: undefined,
+      kind: "image",
+    });
+    expect(inbound.payload.channelStructuredContext).toContainEqual({
+      label: "WhatsApp media",
+      source: "whatsapp",
+      type: "media",
+      payload: { contentType: "image/jpeg", kind: "image" },
+    });
+    const diagnostic = await waitForLogLine("img-failed", signal);
+    expect(diagnostic).toContain('"channel":"whatsapp"');
+    expect(diagnostic).toContain('"mediaKind":"image"');
+    expect(diagnostic).toContain('"mimeType":"image/jpeg"');
+    expect(diagnostic).toContain('"failureStage":"direct"');
+    expect(diagnostic).toContain('"errorClass":"Error"');
+    expect(diagnostic).toContain('"statusCode":410');
+    expect(diagnostic).toContain("expired media reference");
+    expect(diagnostic).toContain("[redacted-url]");
+    expect(diagnostic).toContain("[redacted-phone]");
+    expect(diagnostic).toContain("[redacted-jid]");
+    expect(diagnostic).not.toContain("media.example/private");
+    expect(diagnostic).not.toContain("+15551234567");
+    expect(diagnostic).not.toContain("111@s.whatsapp.net");
+    expect(diagnostic).not.toContain("789@hosted.lid");
+    expect(diagnostic).not.toContain("42@c.us");
+    expect(diagnostic).not.toContain(DIRECT_SYNTHETIC_BEARER);
+    expect(diagnostic).not.toContain(DEPLOYMENT_REDACTION_SENTINEL);
+    const terminalDiagnostic = observedConsoleWarnings.mock.calls.find(
+      ([message]) => message === "WhatsApp inbound media materialization failed",
+    )?.[1]?.consoleMessage;
+    expect(terminalDiagnostic).toContain("stage=direct");
+    expect(terminalDiagnostic).toContain("status=410");
+    expect(terminalDiagnostic).toContain("[redacted-url]");
+    expect(terminalDiagnostic).not.toContain("media.example/private");
+    expect(terminalDiagnostic).not.toContain("789@hosted.lid");
+    expect(terminalDiagnostic).not.toContain("42@c.us");
+    expect(terminalDiagnostic).not.toContain(DIRECT_SYNTHETIC_BEARER);
+    expect(terminalDiagnostic).not.toContain(DEPLOYMENT_REDACTION_SENTINEL);
+  });
+
+  it("logs quoted media failures without verbose logging", async ({ signal, onTestFinished }) => {
+    downloadMediaMessageMock.mockRejectedValueOnce(
+      await createBaileysMediaHttpError(
+        410,
+        `quoted media reference expired 7@hosted 88@newsletter api_key=${QUOTED_SYNTHETIC_API_KEY} ${DEPLOYMENT_REDACTION_SENTINEL}`,
+      ),
+    );
+    const onMessage = vi.fn();
+    const listener = await startMediaMonitor(onMessage);
+    onTestFinished(() => listener.close());
+    const realSock = await getMockSocket();
+
+    realSock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: { id: "quoted-failed", fromMe: false, remoteJid: "111@s.whatsapp.net" },
+          message: {
+            extendedTextMessage: {
+              text: "inspect this",
+              contextInfo: {
+                stanzaId: "quoted-image-failed",
+                participant: "222@s.whatsapp.net",
+                quotedMessage: { imageMessage: { mimetype: "image/jpeg" } },
+              },
+            },
+          },
+          messageTimestamp: 1_700_000_011,
+        },
+      ],
+    });
+
+    const inbound = await waitForMessage(onMessage);
+    expect(inbound.payload.body).toBe("inspect this\n\n[whatsapp quoted attachment unavailable]");
+    expect(inbound.payload.commandBody).toBe("inspect this");
+    const diagnostic = await waitForLogLine("quoted-failed", signal);
+    expect(diagnostic).toContain('"channel":"whatsapp"');
+    expect(diagnostic).toContain('"mediaKind":"image"');
+    expect(diagnostic).toContain('"mimeType":"image/jpeg"');
+    expect(diagnostic).toContain('"failureStage":"quoted"');
+    expect(diagnostic).toContain('"errorClass":"Error"');
+    expect(diagnostic).toContain('"statusCode":410');
+    expect(diagnostic).toContain("quoted media reference expired");
+    expect(diagnostic).not.toContain("7@hosted");
+    expect(diagnostic).not.toContain("88@newsletter");
+    expect(diagnostic).not.toContain(QUOTED_SYNTHETIC_API_KEY);
+    expect(diagnostic).not.toContain(DEPLOYMENT_REDACTION_SENTINEL);
+    const terminalDiagnostic = observedConsoleWarnings.mock.calls.find(
+      ([message]) => message === "WhatsApp inbound media materialization failed",
+    )?.[1]?.consoleMessage;
+    expect(terminalDiagnostic).toContain("stage=quoted");
+    expect(terminalDiagnostic).toContain("status=410");
+    expect(terminalDiagnostic).not.toContain("7@hosted");
+    expect(terminalDiagnostic).not.toContain("88@newsletter");
+    expect(terminalDiagnostic).not.toContain(QUOTED_SYNTHETIC_API_KEY);
+    expect(terminalDiagnostic).not.toContain(DEPLOYMENT_REDACTION_SENTINEL);
   });
 });

@@ -10,9 +10,6 @@ function formatSyncLifecycleError(state: MatrixSyncState, error?: unknown): Erro
   if (state === "STOPPED") {
     return new Error(message ?? "Matrix sync stopped unexpectedly");
   }
-  if (state === "ERROR") {
-    return new Error(message ?? "Matrix sync entered ERROR unexpectedly");
-  }
   return new Error(message ?? `Matrix sync entered ${state} unexpectedly`);
 }
 
@@ -37,9 +34,9 @@ export function createMatrixMonitorSyncLifecycle(params: {
 
   const onSyncState = (state: MatrixSyncState, _prevState: string | null, error?: unknown) => {
     if (isMatrixTerminalSyncState(state) && !params.isStopping?.()) {
-      const fatalError = formatSyncLifecycleError(state, error);
-      params.statusController.noteUnexpectedError(fatalError);
-      settleFatal(fatalError);
+      const fatalErrorLocal = formatSyncLifecycleError(state, error);
+      params.statusController.noteUnexpectedError(fatalErrorLocal);
+      settleFatal(fatalErrorLocal);
       return;
     }
     // Fatal sync failures are sticky for telemetry; later SDK state churn during

@@ -1,61 +1,29 @@
-export {
-  addGatewayClientOptions,
-  callGatewayFromCli,
-  ensureGatewayStartupAuth,
-  ErrorCodes,
-  errorShape,
-  isLoopbackHost,
-  isNodeCommandAllowed,
-  respondUnavailableOnNodeInvokeError,
-  resolveGatewayAuth,
-  resolveNodeCommandAllowlist,
-  safeParseJson,
-} from "openclaw/plugin-sdk/gateway-runtime";
-export type {
-  GatewayRequestHandlers,
-  GatewayRpcOpts,
-  NodeSession,
-} from "openclaw/plugin-sdk/gateway-runtime";
-export { runCommandWithRuntime } from "openclaw/plugin-sdk/cli-runtime";
-export type { OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
-export {
-  startLazyPluginServiceModule,
-  type LazyPluginServiceHandle,
-} from "openclaw/plugin-sdk/plugin-runtime";
-export { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { clampTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 
 export async function withTimeout<T>(
   work: (signal: AbortSignal | undefined) => Promise<T>,
   timeoutMs?: number,
   label?: string,
 ): Promise<T> {
-  const resolved =
-    typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
-      ? Math.max(1, Math.floor(timeoutMs))
-      : undefined;
+  const resolved = clampTimerTimeoutMs(timeoutMs);
   if (!resolved) {
     return await work(undefined);
   }
 
-  const abortCtrl = new AbortController();
-  const timeoutError = new Error(`${label ?? "request"} timed out`);
-  const timer = setTimeout(() => abortCtrl.abort(timeoutError), resolved);
+  const controller = new AbortController();
+  const error = new Error(`${label ?? "request"} timed out`);
+  const timeout = createDeferred<never>();
+  const timer = setTimeout(() => {
+    // Timeout wins even when work resolves from its abort listener.
+    timeout.reject(error);
+    controller.abort(error);
+  }, resolved);
   timer.unref?.();
 
-  let abortListener: (() => void) | undefined;
-  const abortPromise: Promise<never> = abortCtrl.signal.aborted
-    ? Promise.reject(abortCtrl.signal.reason ?? timeoutError)
-    : new Promise((_, reject) => {
-        abortListener = () => reject(abortCtrl.signal.reason ?? timeoutError);
-        abortCtrl.signal.addEventListener("abort", abortListener, { once: true });
-      });
-
   try {
-    return await Promise.race([work(abortCtrl.signal), abortPromise]);
+    return await Promise.race([work(controller.signal), timeout.promise]);
   } finally {
     clearTimeout(timer);
-    if (abortListener) {
-      abortCtrl.signal.removeEventListener("abort", abortListener);
-    }
   }
 }

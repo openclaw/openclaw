@@ -1,12 +1,34 @@
+// Qa Lab tests cover gateway log sentinel plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   assertNoGatewayLogSentinels,
+  extractGatewayMessageText,
   formatGatewayLogSentinelSummary,
   scanDirectReplyTranscriptSentinels,
   scanGatewayLogSentinels,
 } from "./gateway-log-sentinel.js";
 
 describe("gateway log sentinels", () => {
+  it.each([
+    [{ content: [{ type: "toolResult", content: "codex output" }] }, "codex output"],
+    [{ content: [{ type: "text", text: "standard output" }] }, "standard output"],
+    [
+      {
+        content: [
+          "  plain  ",
+          " ",
+          null,
+          { type: "ToOl_ReSuLt", content: " nested " },
+          { type: "OUTPUT_TEXT", content: "output" },
+          { type: "unknown", text: " priority ", content: "ignored" },
+        ],
+      },
+      "plain\nnested\noutput\npriority",
+    ],
+  ])("extracts message text from tool result shapes", (message, expected) => {
+    expect(extractGatewayMessageText(message)).toBe(expected);
+  });
+
   it("classifies May 13 beta.5 operational failure signatures", () => {
     const findings = scanGatewayLogSentinels(
       [
@@ -16,7 +38,7 @@ describe("gateway log sentinels", () => {
         "[plugins] plugin must declare contracts.tools for: runtime_tool",
         "2026-05-13T00:00:04Z codex app-server attempt timed out after 180000ms",
         "2026-05-13T00:00:05Z codex_app_server progress stalled for run abc123",
-        "2026-05-13T00:00:06Z cron payload model openai/gpt-5.5 is not in model allowlist",
+        "2026-05-13T00:00:06Z cron payload model openai/gpt-5.6-luna is not in model allowlist",
         "2026-05-13T00:00:07Z OpenAI quota exceeded for live-frontier request",
       ].join("\n"),
     );
@@ -58,13 +80,13 @@ describe("gateway log sentinels", () => {
     });
   });
 
-  it("throws actionable summaries unless only environment blockers are allowed", () => {
+  it("throws actionable summaries for product and environment failures", () => {
     expect(() => assertNoGatewayLogSentinels("codex_app_server progress stalled")).toThrow(
       "stalled-agent-run",
     );
-    expect(() =>
-      assertNoGatewayLogSentinels("OpenAI quota exceeded", { allowEnvironmentBlocked: true }),
-    ).not.toThrow();
+    expect(() => assertNoGatewayLogSentinels("OpenAI quota exceeded")).toThrow(
+      "live-quota-or-subscription",
+    );
     expect(formatGatewayLogSentinelSummary(scanGatewayLogSentinels("OpenAI quota exceeded"))).toBe(
       "live-quota-or-subscription@1 environment-blocked owner=environment: OpenAI quota exceeded",
     );

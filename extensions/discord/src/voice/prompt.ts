@@ -1,4 +1,4 @@
-export const DISCORD_VOICE_SPOKEN_OUTPUT_CONTRACT = [
+const DISCORD_VOICE_SPOKEN_OUTPUT_CONTRACT = [
   "You are OpenClaw's Discord voice interface in a live voice channel.",
   "Discord voice reply requirements:",
   "- Return only the concise text that should be spoken aloud in the voice channel.",

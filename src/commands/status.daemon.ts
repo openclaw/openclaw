@@ -1,43 +1,42 @@
+// Daemon service summary helpers for status output.
+// Gateway and node service state share the same normalized shape.
+
 import { resolveNodeService } from "../daemon/node-service.js";
 import { resolveGatewayService } from "../daemon/service.js";
+import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { formatDaemonRuntimeShort } from "./status.format.js";
 import { readServiceStatusSummary } from "./status.service-summary.js";
 
-type DaemonStatusSummary = {
-  label: string;
-  installed: boolean | null;
-  loaded: boolean;
-  managedByOpenClaw: boolean;
-  externallyManaged: boolean;
-  loadedText: string;
-  runtime: Awaited<ReturnType<typeof readServiceStatusSummary>>["runtime"];
-  runtimeShort: string | null;
-  layout: Awaited<ReturnType<typeof readServiceStatusSummary>>["layout"];
-};
-
-async function buildDaemonStatusSummary(
-  serviceLabel: "gateway" | "node",
-): Promise<DaemonStatusSummary> {
+async function buildDaemonStatusSummary(serviceLabel: "gateway" | "node", timeoutMs?: number) {
   const service = serviceLabel === "gateway" ? resolveGatewayService() : resolveNodeService();
   const fallbackLabel = serviceLabel === "gateway" ? "Daemon" : "Node";
-  const summary = await readServiceStatusSummary(service, fallbackLabel);
+  const activePackageRoot =
+    serviceLabel === "gateway"
+      ? await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url, argv1: process.argv[1] })
+      : null;
+  const summary = await readServiceStatusSummary(
+    service,
+    fallbackLabel,
+    timeoutMs,
+    activePackageRoot ?? undefined,
+  );
+  const runtime = summary.runtime?.inspectionFailure
+    ? { ...summary.runtime, detail: `${summary.runtime.detail}; retry with openclaw status --deep` }
+    : summary.runtime;
+  const loaded =
+    summary.loadState.status === "unknown" ? null : summary.loadState.status === "loaded";
   return {
-    label: summary.label,
-    installed: summary.installed,
-    loaded: summary.loaded,
-    managedByOpenClaw: summary.managedByOpenClaw,
-    externallyManaged: summary.externallyManaged,
-    loadedText: summary.loadedText,
-    runtime: summary.runtime,
-    runtimeShort: formatDaemonRuntimeShort(summary.runtime),
-    layout: summary.layout,
+    ...summary,
+    loaded,
+    runtime,
+    runtimeShort: formatDaemonRuntimeShort(runtime),
   };
 }
 
-export async function getDaemonStatusSummary(): Promise<DaemonStatusSummary> {
-  return await buildDaemonStatusSummary("gateway");
+export async function getDaemonStatusSummary(timeoutMs?: number) {
+  return await buildDaemonStatusSummary("gateway", timeoutMs);
 }
 
-export async function getNodeDaemonStatusSummary(): Promise<DaemonStatusSummary> {
-  return await buildDaemonStatusSummary("node");
+export async function getNodeDaemonStatusSummary(timeoutMs?: number) {
+  return await buildDaemonStatusSummary("node", timeoutMs);
 }

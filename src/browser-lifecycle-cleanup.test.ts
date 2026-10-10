@@ -1,4 +1,6 @@
+// Tests browser lifecycle cleanup after CLI and runtime shutdown paths.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "./config/types.openclaw.js";
 
 const closeTrackedBrowserTabsForSessions = vi.hoisted(() => vi.fn(async () => 0));
 
@@ -15,18 +17,52 @@ describe("cleanupBrowserSessionsForLifecycleEnd", () => {
 
   it("normalizes session keys before closing browser sessions", async () => {
     const onWarn = vi.fn();
+    const isCurrent = () => true;
+    const prepareCurrent = async () => true;
 
     await expect(
       cleanupBrowserSessionsForLifecycleEnd({
-        sessionKeys: ["", "  session-a  ", "session-a", "session-b"],
+        sessionKeys: [
+          "",
+          "global",
+          "  agent:alpha:global  ",
+          "agent:alpha:global",
+          "agent:beta:global",
+        ],
+        isCurrent,
+        prepareCurrent,
         onWarn,
       }),
     ).resolves.toBeUndefined();
 
     expect(closeTrackedBrowserTabsForSessions).toHaveBeenCalledWith({
-      sessionKeys: ["session-a", "session-b"],
+      sessionKeys: ["agent:alpha:global", "agent:beta:global"],
+      isCurrent,
+      prepareCurrent,
       onWarn,
     });
+  });
+
+  it("skips cleanup when root browser support is disabled", async () => {
+    await expect(
+      cleanupBrowserSessionsForLifecycleEnd({
+        cfg: { browser: { enabled: false } } as OpenClawConfig,
+        sessionKeys: ["agent:alpha:global"],
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
+  });
+
+  it("skips cleanup when the browser plugin entry is disabled", async () => {
+    await expect(
+      cleanupBrowserSessionsForLifecycleEnd({
+        cfg: { plugins: { entries: { browser: { enabled: false } } } } as OpenClawConfig,
+        sessionKeys: ["agent:alpha:global"],
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
   });
 
   it("swallows browser cleanup failures", async () => {
@@ -36,7 +72,7 @@ describe("cleanupBrowserSessionsForLifecycleEnd", () => {
 
     await expect(
       cleanupBrowserSessionsForLifecycleEnd({
-        sessionKeys: ["session-a"],
+        sessionKeys: ["agent:alpha:global"],
         onError,
       }),
     ).resolves.toBeUndefined();

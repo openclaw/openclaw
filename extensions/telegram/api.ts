@@ -1,3 +1,4 @@
+export type { Message as TelegramBotMessage, Update as TelegramBotUpdate } from "grammy/types";
 export { telegramPlugin } from "./src/channel.js";
 export { telegramSetupPlugin } from "./src/channel.setup.js";
 export {
@@ -10,7 +11,6 @@ export {
   listEnabledTelegramAccounts,
   listTelegramAccountIds,
   mergeTelegramAccountConfig,
-  resetMissingDefaultWarnFlag,
   resolveDefaultTelegramAccountId,
   type ResolvedTelegramAccount,
   resolveTelegramAccount,
@@ -42,19 +42,15 @@ export {
   buildTelegramThreadParams,
   buildTypingThreadParams,
   describeReplyTarget,
-  expandTextLinks,
   extractTelegramForumFlag,
   extractTelegramLocation,
   getTelegramTextParts,
   hasBotMention,
   isBinaryContent,
   normalizeForwardedContext,
-  resetTelegramForumFlagCacheForTest,
-  resolveTelegramDirectPeerId,
   resolveTelegramForumFlag,
   resolveTelegramForumThreadId,
   resolveTelegramGroupAllowFromContext,
-  resolveTelegramMediaPlaceholder,
   resolveTelegramReplyId,
   resolveTelegramStreamMode,
   resolveTelegramThreadSpec,
@@ -64,6 +60,7 @@ export {
   type TelegramThreadSpec,
   withResolvedTelegramForumFlag,
 } from "./src/bot/helpers.js";
+export { resolveTelegramDirectPeerId } from "./src/dm-session-key.js";
 export {
   normalizeTelegramCommandDescription,
   normalizeTelegramCommandName,
@@ -93,7 +90,6 @@ export {
   isTelegramExecApprovalTargetRecipient,
   resolveTelegramExecApprovalConfig,
   resolveTelegramExecApprovalTarget,
-  shouldEnableTelegramExecApprovalButtons,
   shouldHandleTelegramExecApprovalRequest,
   shouldInjectTelegramExecApprovalButtons,
   shouldSuppressLocalTelegramExecApprovalPrompt,
@@ -105,6 +101,7 @@ export {
 export type {
   TelegramInteractiveHandlerContext,
   TelegramInteractiveHandlerRegistration,
+  TelegramInteractiveHandlerResult,
 } from "./src/interactive-dispatch.js";
 export {
   isTelegramInlineButtonsEnabled,
@@ -139,12 +136,7 @@ export {
   parseTelegramReplyToMessageId,
   parseTelegramThreadId,
 } from "./src/outbound-params.js";
-export {
-  probeTelegram,
-  resetTelegramProbeFetcherCacheForTests,
-  type TelegramProbe,
-  type TelegramProbeOptions,
-} from "./src/probe.js";
+export { probeTelegram, type TelegramProbe, type TelegramProbeOptions } from "./src/probe.js";
 export {
   type ResolvedReactionLevel,
   resolveTelegramReactionLevel,

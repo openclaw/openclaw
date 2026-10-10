@@ -1,81 +1,175 @@
 import { describe, expect, it } from "vitest";
 import {
-  type OfficialExternalPluginCatalogEntry,
+  getOfficialExternalChannelSecretContract,
   getOfficialExternalPluginCatalogEntry,
-  listOfficialExternalPluginCatalogEntries,
+  getOfficialExternalPluginCatalogEntryForPackage,
+  isOfficialExternalPluginId,
+  isOfficialExternalPluginCatalogFeed,
+  resolveOfficialExternalProviderContractPluginIds,
+  resolveOfficialExternalProviderPluginIds,
+  resolveOfficialExternalProviderPluginIdsForEnv,
+  resolveOfficialExternalWebProviderContractPluginIdsForEnv,
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
+  resolveOfficialExternalPluginLegacyIds,
+  resolveOfficialExternalPluginLegacyNpmPackageNames,
 } from "./official-external-plugin-catalog.js";
-
-function expectCatalogEntry(id: string): OfficialExternalPluginCatalogEntry {
-  const entry = getOfficialExternalPluginCatalogEntry(id);
-  if (entry === undefined) {
-    throw new Error(`Expected external plugin catalog entry for ${id}`);
-  }
-  return entry;
-}
+import {
+  installableEntry,
+  hostedCatalogFeed,
+} from "./official-external-plugin-catalog.test-support.js";
 
 describe("official external plugin catalog", () => {
-  it("resolves third-party channel lookup aliases to published plugin ids", () => {
-    const wecomByChannel = expectCatalogEntry("wecom");
-    const wecomByPlugin = expectCatalogEntry("wecom-openclaw-plugin");
-    const yuanbaoByChannel = expectCatalogEntry("yuanbao");
-
-    expect(resolveOfficialExternalPluginId(wecomByChannel)).toBe("wecom-openclaw-plugin");
-    expect(resolveOfficialExternalPluginId(wecomByPlugin)).toBe("wecom-openclaw-plugin");
-    expect(resolveOfficialExternalPluginInstall(wecomByChannel)?.npmSpec).toBe(
-      "@wecom/wecom-openclaw-plugin@2026.5.7",
-    );
-    expect(resolveOfficialExternalPluginId(yuanbaoByChannel)).toBe("openclaw-plugin-yuanbao");
-    expect(resolveOfficialExternalPluginInstall(yuanbaoByChannel)?.npmSpec).toBe(
-      "openclaw-plugin-yuanbao@2.13.1",
-    );
+  it("keeps Fish Audio's legacy id migration-only across npm and ClawHub routes", () => {
+    const entry = getOfficialExternalPluginCatalogEntryForPackage("@openclaw/fish-audio-speech");
+    expect(entry).toBeDefined();
+    expect(resolveOfficialExternalPluginId(entry!)).toBe("fish-audio-speech");
+    expect(resolveOfficialExternalPluginLegacyIds(entry!)).toEqual(["fish-audio"]);
+    expect(resolveOfficialExternalPluginInstall(entry!)).toEqual({
+      clawhubSpec: "clawhub:@openclaw/fish-audio-speech",
+      npmSpec: "@openclaw/fish-audio-speech",
+      defaultChoice: "npm",
+      minHostVersion: ">=2026.7.2",
+    });
+    expect(getOfficialExternalPluginCatalogEntry("fish-audio-speech")).toBe(entry);
+    expect(getOfficialExternalPluginCatalogEntry("fish-audio")).toBeUndefined();
+    expect(isOfficialExternalPluginId("fish-audio-speech")).toBe(true);
+    expect(isOfficialExternalPluginId("fish-audio")).toBe(false);
   });
 
-  it("keeps official launch package specs on the production package names", () => {
-    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("acpx"))?.npmSpec).toBe(
-      "@openclaw/acpx",
-    );
-    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("googlechat"))?.npmSpec).toBe(
-      "@openclaw/googlechat",
-    );
-    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("line"))?.npmSpec).toBe(
-      "@openclaw/line",
-    );
-  });
-
-  it("allows invalid-config recovery for externalized stock plugins", () => {
-    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("brave"))).toMatchObject({
-      npmSpec: "@openclaw/brave-plugin",
-      allowInvalidConfigRecovery: true,
-    });
-    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("slack"))).toMatchObject({
-      npmSpec: "@openclaw/slack",
-      allowInvalidConfigRecovery: true,
-    });
-    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("discord"))).toMatchObject({
-      npmSpec: "@openclaw/discord",
-      allowInvalidConfigRecovery: true,
-    });
-  });
-
-  it("lists Matrix as an official external ClawHub channel after cutover", () => {
-    const ids = new Set<string>();
-    for (const entry of listOfficialExternalPluginCatalogEntries()) {
-      const pluginId = resolveOfficialExternalPluginId(entry);
-      if (pluginId) {
-        ids.add(pluginId);
-      }
+  it("does not allow malformed feed wrappers to count as feed documents", () => {
+    const feed = hostedCatalogFeed({ sequence: 1, pluginName: "@acme/plugin" });
+    feed.generatedAt = " 2026-06-22 00:00:10Z ";
+    expect(isOfficialExternalPluginCatalogFeed({ ...feed, schemaVersion: 2 })).toBe(true);
+    for (const invalid of [
+      { id: " " },
+      { schemaVersion: 3 },
+      { generatedAt: "not-a-date" },
+      { generatedAt: "2026-02-30T00:00:00.000Z" },
+      { sequence: Number.POSITIVE_INFINITY },
+    ]) {
+      expect(isOfficialExternalPluginCatalogFeed({ ...feed, ...invalid })).toBe(false);
     }
+  });
 
-    expect(ids.has("matrix")).toBe(true);
-    expect(ids.has("mattermost")).toBe(false);
-    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("matrix"))).toEqual({
-      clawhubSpec: "clawhub:@openclaw/matrix",
-      npmSpec: "@openclaw/matrix",
+  it("prefers feed install candidates before legacy install metadata", () => {
+    expect(
+      resolveOfficialExternalPluginInstall({
+        ...installableEntry("@openclaw/candidate-package", {
+          integrity: "sha256:b355dda04403becaab8bbab069fd1e7b0578262e7459e598cc5b19615b5bdab9",
+        }),
+        name: "@legacy/plain-package",
+        openclaw: {
+          plugin: { id: "candidate-package" },
+          install: {
+            npmSpec: "@legacy/plain-package",
+            minHostVersion: ">=2026.6.1",
+            expectedIntegrity: "sha256:manifest",
+            allowInvalidConfigRecovery: true,
+          },
+        },
+      }),
+    ).toEqual({
+      clawhubSpec: "clawhub:@openclaw/candidate-package@1.2.3",
       defaultChoice: "clawhub",
-      minHostVersion: ">=2026.4.10",
+      expectedIntegrity: "sha256-s1XdoEQDvsqri7qwaf0eewV4Ji50WeWYzFsZYVtb2rk=",
+      minHostVersion: ">=2026.6.1",
       allowInvalidConfigRecovery: true,
     });
+    for (const [integrity, expected] of [
+      [undefined, { npmSpec: "@acme/private@4.5.6", defaultChoice: "npm" }],
+      [
+        "sha256:b355dda04403becaab8bbab069fd1e7b0578262e7459e598cc5b19615b5bdab9",
+        { npmSpec: "@acme/private@4.5.6", defaultChoice: "npm" },
+      ],
+      [
+        "sha512-abc=",
+        { npmSpec: "@acme/private@4.5.6", defaultChoice: "npm", expectedIntegrity: "sha512-abc=" },
+      ],
+    ] as const) {
+      expect(
+        resolveOfficialExternalPluginInstall(
+          installableEntry("@acme/private", { sourceRef: "acme-npm", version: "4.5.6", integrity }),
+          { catalogConfig: { sources: { "acme-npm": { type: "npm" } } } },
+        ),
+      ).toEqual(expected);
+    }
+    expect(
+      resolveOfficialExternalPluginInstall(
+        {
+          name: "git-only-package",
+          kind: "plugin",
+          install: {
+            candidates: [{ sourceRef: "acme-git", package: "git@example.com:acme/plugin.git" }],
+          },
+        },
+        { catalogConfig: { sources: { "acme-git": { type: "git" } } } },
+      ),
+    ).toBeNull();
+    expect(
+      resolveOfficialExternalPluginInstall({ id: "metadata-only", title: "Metadata only" }),
+    ).toBeNull();
+  });
+
+  it("resolves channel aliases and legacy packages to their published owner", () => {
+    const entry = getOfficialExternalPluginCatalogEntry("qqbot");
+    if (!entry) {
+      throw new Error("Expected catalog entry for qqbot");
+    }
+    expect(getOfficialExternalPluginCatalogEntry("openclaw-qqbot")).toBe(entry);
+    expect(resolveOfficialExternalPluginId(entry)).toBe("openclaw-qqbot");
+    expect(resolveOfficialExternalPluginLegacyNpmPackageNames(entry)).toEqual(["@openclaw/qqbot"]);
+    expect(resolveOfficialExternalPluginInstall(entry)).toEqual({
+      npmSpec: "@tencent-connect/openclaw-qqbot@2.0.3",
+      defaultChoice: "npm",
+      expectedIntegrity:
+        "sha512-yngu/2cPeZjJfIfHWCXWB2/6KlDHrb9vpOUjKLdQxePLSp6wCn3CFOALcBIVq/9o6jlYz9WTU9idW6nfX1xpFA==",
+    });
+    expect(getOfficialExternalChannelSecretContract("qqbot")).toEqual({
+      channelId: "qqbot",
+      fields: [{ field: "clientSecret", activationField: "appId", activationEnv: "QQBOT_APP_ID" }],
+    });
+  });
+
+  it("maps capability provider ids to plugin owners", () => {
+    expect(
+      resolveOfficialExternalProviderContractPluginIds({
+        contract: "speechProviders",
+        providerIds: new Set(["gradium", "inworld", "xiaomi"]),
+      }),
+    ).toEqual(["gradium", "inworld", "xiaomi"]);
+  });
+
+  it("maps env-only web-fetch credentials to external plugin owners", () => {
+    expect(
+      resolveOfficialExternalWebProviderContractPluginIdsForEnv({
+        contract: "webFetchProviders",
+        env: { FIRECRAWL_API_KEY: "firecrawl-key" },
+      }),
+    ).toEqual(["firecrawl"]);
+    expect(
+      resolveOfficialExternalWebProviderContractPluginIdsForEnv({
+        contract: "webFetchProviders",
+        env: { EXA_API_KEY: "exa-key" },
+      }),
+    ).toEqual([]);
+  });
+
+  it("maps configured provider ids and aliases even without an auth choice", () => {
+    expect(
+      resolveOfficialExternalProviderPluginIds({
+        providerIds: new Set(["groq", "modelstudio"]),
+      }),
+    ).toEqual(["groq", "qwen"]);
+  });
+
+  it("maps env-only provider credentials to external installs", () => {
+    expect(
+      resolveOfficialExternalProviderPluginIdsForEnv({
+        GROQ_API_KEY: "groq-key",
+        MODELSTUDIO_API_KEY: "qwen-key",
+      }),
+    ).toEqual(["groq", "qwen"]);
+    expect(resolveOfficialExternalProviderPluginIdsForEnv({ GROQ_API_KEY: " " })).toEqual([]);
   });
 });

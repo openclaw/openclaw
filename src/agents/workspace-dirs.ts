@@ -1,16 +1,24 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
+import { resolveUserPath } from "../infra/home-dir.js";
+import { listAgentEntries, listAgentIds, resolveAgentWorkspaceDir } from "./agent-scope-config.js";
 
-export function listAgentWorkspaceDirs(cfg: OpenClawConfig): string[] {
+export function listAgentWorkspaceDirs(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  return [
+    ...new Set(listAgentIds(cfg).map((agentId) => resolveAgentWorkspaceDir(cfg, agentId, env))),
+  ];
+}
+
+/** Lists only entry-authored workspace paths without requiring a valid default marker. */
+export function listExplicitAgentWorkspaceDirs(cfg: OpenClawConfig): string[] {
   const dirs = new Set<string>();
-  const list = cfg.agents?.list;
-  if (Array.isArray(list)) {
-    for (const entry of list) {
-      if (entry && typeof entry === "object" && typeof entry.id === "string") {
-        dirs.add(resolveAgentWorkspaceDir(cfg, entry.id));
-      }
+  for (const entry of listAgentEntries(cfg)) {
+    const workspace = typeof entry.workspace === "string" ? entry.workspace.trim() : "";
+    if (workspace) {
+      dirs.add(resolveUserPath(workspace));
     }
   }
-  dirs.add(resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)));
   return [...dirs];
 }

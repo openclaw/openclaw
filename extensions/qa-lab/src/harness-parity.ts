@@ -1,0 +1,246 @@
+import { resolveNonNegativeIntegerOption as readCount } from "openclaw/plugin-sdk/number-runtime";
+import { compareParityBehavior, stableHash } from "./parity-shared.js";
+import type { RuntimeId } from "./runtime-id.js";
+import type {
+  RuntimeParityCell,
+  RuntimeParityDrift,
+  RuntimeParityUsage,
+} from "./runtime-parity.js";
+import type { RuntimeParityComparisonMode } from "./runtime-tool-metadata.js";
+
+type HarnessVariant = {
+  id: string;
+  label: string;
+  runtime?: RuntimeId;
+};
+
+export type HarnessParityDrift =
+  | RuntimeParityDrift
+  | "system-prompt"
+  | "tool-description"
+  | "tool-schema";
+
+type HarnessParityPromptStats = ReturnType<typeof buildPromptStats>;
+
+export type RuntimeParitySystemPromptReport = {
+  systemPrompt?: {
+    chars?: number;
+    projectContextChars?: number;
+    nonProjectContextChars?: number;
+    text?: string;
+    hash?: string;
+    contentHash?: string;
+  };
+  skills?: {
+    promptChars?: number;
+    prompt?: string;
+    hash?: string;
+    contentHash?: string;
+  };
+  tools?: {
+    listChars?: number;
+    schemaChars?: number;
+    entries?: Array<{
+      name?: string;
+      summary?: string;
+      summaryHash?: string;
+      summaryChars?: number;
+      schema?: unknown;
+      schemaHash?: string;
+      schemaChars?: number;
+      propertiesCount?: number;
+    }>;
+  };
+};
+
+export type HarnessRuntimeParityCell = RuntimeParityCell & {
+  systemPromptReport?: RuntimeParitySystemPromptReport;
+};
+
+type HarnessParityCell = ReturnType<typeof buildHarnessParityCell>;
+
+type HarnessParityResult = {
+  scenarioId: string;
+  left: HarnessParityCell;
+  right: HarnessParityCell;
+  drift: HarnessParityDrift;
+  driftDetails?: string;
+  promptDelta: {
+    systemPromptChars: number;
+    projectContextChars: number;
+    skillPromptChars: number;
+    toolSummaryChars: number;
+    toolSchemaChars: number;
+    toolCount: number;
+  };
+  tokenDeltaPercent: number;
+  firstDriftTurn?: number;
+};
+
+function buildPromptStats(report: RuntimeParitySystemPromptReport | undefined) {
+  const toolEntries = Array.isArray(report?.tools?.entries) ? report.tools.entries : [];
+  return {
+    systemPromptChars: readCount(report?.systemPrompt?.chars, 0),
+    projectContextChars: readCount(report?.systemPrompt?.projectContextChars, 0),
+    nonProjectContextChars: readCount(report?.systemPrompt?.nonProjectContextChars, 0),
+    skillPromptChars: readCount(report?.skills?.promptChars, 0),
+    toolSummaryChars: toolEntries.reduce((sum, entry) => sum + readCount(entry.summaryChars, 0), 0),
+    toolSchemaChars: readCount(report?.tools?.schemaChars, 0),
+    toolCount: toolEntries.length,
+  };
+}
+
+function estimateUsage(
+  cell: RuntimeParityCell,
+  stats: HarnessParityPromptStats,
+): RuntimeParityUsage {
+  const inputChars =
+    stats.systemPromptChars +
+    stats.skillPromptChars +
+    stats.toolSummaryChars +
+    stats.toolSchemaChars +
+    cell.transcriptBytes.length;
+  const outputChars = cell.finalText.length + cell.toolCalls.length * 80;
+  const inputTokens = Math.ceil(inputChars / 4);
+  const outputTokens = Math.ceil(outputChars / 4);
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens: inputTokens + outputTokens,
+  };
+}
+
+function firstDriftTurn(leftTranscript: string, rightTranscript: string): number | undefined {
+  const leftLines = leftTranscript.trim().length ? leftTranscript.trim().split(/\r?\n/u) : [];
+  const rightLines = rightTranscript.trim().length ? rightTranscript.trim().split(/\r?\n/u) : [];
+  const total = Math.max(leftLines.length, rightLines.length);
+  for (let index = 0; index < total; index += 1) {
+    if ((leftLines[index] ?? "") !== (rightLines[index] ?? "")) {
+      return index + 1;
+    }
+  }
+  return undefined;
+}
+
+export function buildHarnessParityCell(params: {
+  variant: HarnessVariant;
+  cell: HarnessRuntimeParityCell;
+  tokenUsageSource: "live-usage" | "mock-estimate";
+}) {
+  const report = params.cell.systemPromptReport;
+  const promptStats = buildPromptStats(report);
+  const toolEntries = report?.tools?.entries ?? [];
+  const tokenUsage =
+    params.tokenUsageSource === "live-usage"
+      ? params.cell.usage
+      : estimateUsage(params.cell, promptStats);
+  return {
+    ...params.cell,
+    variant: params.variant,
+    promptStats,
+    systemPromptHash: stableHash({
+      systemPrompt: report?.systemPrompt ?? null,
+      skills: report?.skills ?? null,
+    }),
+    toolDescriptionHash: stableHash(
+      toolEntries.map((entry) => ({
+        name: entry.name,
+        summary: entry.summary,
+        summaryHash: entry.summaryHash,
+        summaryChars: entry.summaryChars,
+      })),
+    ),
+    toolSchemaHash: stableHash({
+      listChars: report?.tools?.listChars,
+      schemaChars: report?.tools?.schemaChars,
+      entries: toolEntries.map((entry) => ({
+        name: entry.name,
+        schema: entry.schema,
+        schemaHash: entry.schemaHash,
+        schemaChars: entry.schemaChars,
+        propertiesCount: entry.propertiesCount,
+      })),
+    }),
+    tokenUsage,
+    tokenUsageSource: params.tokenUsageSource,
+  };
+}
+
+export function buildHarnessParityResult(params: {
+  scenarioId: string;
+  left: HarnessParityCell;
+  right: HarnessParityCell;
+  comparisonMode?: RuntimeParityComparisonMode;
+}): HarnessParityResult {
+  const promptDelta = {
+    systemPromptChars:
+      params.right.promptStats.systemPromptChars - params.left.promptStats.systemPromptChars,
+    projectContextChars:
+      params.right.promptStats.projectContextChars - params.left.promptStats.projectContextChars,
+    skillPromptChars:
+      params.right.promptStats.skillPromptChars - params.left.promptStats.skillPromptChars,
+    toolSummaryChars:
+      params.right.promptStats.toolSummaryChars - params.left.promptStats.toolSummaryChars,
+    toolSchemaChars:
+      params.right.promptStats.toolSchemaChars - params.left.promptStats.toolSchemaChars,
+    toolCount: params.right.promptStats.toolCount - params.left.promptStats.toolCount,
+  };
+  const tokenDeltaPercent =
+    params.left.tokenUsage.totalTokens === 0
+      ? params.right.tokenUsage.totalTokens === 0
+        ? 0
+        : 100
+      : ((params.right.tokenUsage.totalTokens - params.left.tokenUsage.totalTokens) /
+          params.left.tokenUsage.totalTokens) *
+        100;
+  const driftResult = (
+    drift: Exclude<HarnessParityDrift, "none">,
+    driftDetails: string,
+  ): HarnessParityResult => ({
+    scenarioId: params.scenarioId,
+    left: params.left,
+    right: params.right,
+    drift,
+    driftDetails,
+    promptDelta,
+    tokenDeltaPercent,
+    firstDriftTurn: firstDriftTurn(params.left.transcriptBytes, params.right.transcriptBytes),
+  });
+  const failDetails =
+    params.left.transportErrorClass || params.right.transportErrorClass
+      ? "at least one harness variant hit a transport failure"
+      : params.left.runtimeErrorClass || params.right.runtimeErrorClass
+        ? "at least one harness variant hit a runtime failure"
+        : undefined;
+  if (failDetails) {
+    return driftResult("failure-mode", failDetails);
+  }
+  if (params.left.systemPromptHash !== params.right.systemPromptHash) {
+    return driftResult("system-prompt", "system prompt report differs");
+  }
+  if (params.left.toolDescriptionHash !== params.right.toolDescriptionHash) {
+    return driftResult("tool-description", "tool description summary shape differs");
+  }
+  if (params.left.toolSchemaHash !== params.right.toolSchemaHash) {
+    return driftResult("tool-schema", "tool schema shape differs");
+  }
+  const behavior = compareParityBehavior({
+    left: params.left,
+    right: params.right,
+    compareStructure:
+      params.comparisonMode !== "codex-native-workspace" &&
+      params.comparisonMode !== "outcome-only",
+    transcriptMode: "messages",
+  });
+  if (behavior.drift !== "none") {
+    return driftResult(behavior.drift, behavior.driftDetails);
+  }
+  return {
+    scenarioId: params.scenarioId,
+    left: params.left,
+    right: params.right,
+    drift: "none",
+    promptDelta,
+    tokenDeltaPercent,
+  };
+}

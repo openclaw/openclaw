@@ -1,0 +1,281 @@
+import { runWithAsyncWorkResources } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+  closeCodexStartupClientBestEffort,
+  CodexAppServerUnsafeSubscriptionError,
+  unsubscribeCodexThreadBestEffort,
+} from "./attempt-client-cleanup.js";
+import {
+  isCodexAppServerLiveThreadClaimed,
+  releaseCodexAppServerLiveThread,
+  retainCodexAppServerLiveThread,
+} from "./client-runtime.js";
+import type { CodexAppServerLiveThreadOwnership } from "./client-thread-owner.js";
+import type { CodexAppServerClient } from "./client.js";
+import type {
+  CodexAppServerBindingIdentity,
+  CodexAppServerBindingStore,
+  CodexAppServerThreadBinding,
+} from "./session-binding.js";
+import { retainSharedCodexAppServerClientByInstanceId } from "./shared-client.js";
+import { withCodexAppServerThreadMutation } from "./thread-ownership-queue.js";
+
+/** Queued cancellation settles the caller without letting successors overtake its lane. */
+export async function withCodexAppServerThreadMutationHold<T>(
+  threadId: string,
+  run: (hold: (until: Promise<unknown>) => void, start: () => void) => Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  return await runWithAsyncWorkResources(async (onAcquired) => {
+    signal?.throwIfAborted();
+    const { promise, resolve, reject } = createDeferred<T>();
+    const abort = () =>
+      reject(signal?.reason instanceof Error ? signal.reason : new Error("compaction aborted"));
+    signal?.addEventListener("abort", abort, { once: true });
+    const start = () => signal?.removeEventListener("abort", abort);
+    const queued = withCodexAppServerThreadMutation(threadId, async () => {
+      let heldUntil: Promise<unknown> | undefined;
+      try {
+        signal?.throwIfAborted();
+        resolve(
+          await run((until) => {
+            heldUntil ??= until;
+          }, start),
+        );
+      } catch (error) {
+        reject(error);
+      }
+      await heldUntil;
+    });
+    onAcquired({
+      release: async () => {
+        await Promise.allSettled([queued]);
+      },
+    });
+    void queued.finally(start).catch(reject);
+    return promise;
+  });
+}
+
+export {
+  withCodexAppServerThreadMutation,
+  withCodexConversationThreadActivity,
+} from "./thread-ownership-queue.js";
+
+/** Codex subscriptions belong to a physical connection, not the native thread ID alone. */
+export function isSameCodexAppServerThreadOwner(
+  current: Pick<CodexAppServerThreadBinding, "threadId" | "clientId"> | undefined,
+  expected: Pick<CodexAppServerThreadBinding, "threadId" | "clientId"> | undefined,
+): boolean {
+  return (
+    current !== undefined &&
+    expected !== undefined &&
+    current.threadId === expected.threadId &&
+    current.clientId === expected.clientId
+  );
+}
+
+/** Fences native subscription and commit together; Codex subscriptions are not reference-counted. */
+export async function withExclusiveCodexAppServerThread<T>(params: {
+  bindingStore: CodexAppServerBindingStore;
+  identity: CodexAppServerBindingIdentity;
+  threadId: string;
+  run: () => Promise<T>;
+}): Promise<T> {
+  return await withCodexAppServerThreadMutation(params.threadId, async () => {
+    if (await params.bindingStore.hasOtherThreadOwner(params.threadId, params.identity)) {
+      throw new Error(
+        `Codex thread ${params.threadId} is owned by another OpenClaw session or conversation.`,
+      );
+    }
+    return await params.run();
+  });
+}
+
+/** Publishes one owned subscription with its persistent or ephemeral retention lifetime. */
+export async function retainCodexAppServerBindingSubscription(
+  client: CodexAppServerClient,
+  threadId: string,
+  ownership?: Partial<CodexAppServerLiveThreadOwnership>,
+): Promise<boolean> {
+  return await retainCodexAppServerLiveThread(
+    client,
+    threadId,
+    ownership?.release ??
+      (async (releasedThreadId, assertCurrent, withCurrent) => {
+        const unsubscribed = await unsubscribeCodexThreadBestEffort(client, {
+          threadId: releasedThreadId,
+          timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+          assertCurrent,
+          withCurrent,
+        });
+        if (!unsubscribed) {
+          assertCurrent?.();
+          await closeCodexStartupClientBestEffort(client);
+          throw new CodexAppServerUnsafeSubscriptionError(
+            `Codex thread subscription could not be released: ${releasedThreadId}`,
+          );
+        }
+      }),
+    ownership?.configFingerprint,
+    ownership?.serviceTier,
+    ownership?.ephemeralPolicy,
+  );
+}
+
+/** Rolls back the exact subscription Codex created before its binding was committed. */
+export async function rollbackCodexAppServerBindingSubscription(
+  client: CodexAppServerClient,
+  threadId: string,
+  retained: boolean,
+): Promise<void> {
+  if (retained && (await releaseCodexAppServerLiveThread(client, threadId))) {
+    return;
+  }
+  // Failed retention can mean another generation already owns this exact
+  // subscription; resume did not create a second connection-scoped listener.
+  if (isCodexAppServerLiveThreadClaimed(client, threadId)) {
+    return;
+  }
+  // Start/resume subscribes before its response; failed retention has no
+  // registry owner, so the responding physical client must unsubscribe it.
+  if (
+    !(await unsubscribeCodexThreadBestEffort(client, {
+      threadId,
+      timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+    }))
+  ) {
+    await closeCodexStartupClientBestEffort(client);
+  }
+}
+
+/** Releases only the physical client and native thread recorded by the displaced binding owner. */
+export async function releaseCodexAppServerBindingSubscription(
+  binding: Pick<CodexAppServerThreadBinding, "threadId" | "clientId" | "conversationIncognito">,
+  options: {
+    allowUntracked?: boolean;
+    assertCurrent?: () => void;
+    withCurrent?: (write: () => void) => Promise<void>;
+    retainedClientId?: string;
+  } = {},
+): Promise<void> {
+  options.assertCurrent?.();
+  const clientLease = await retainSharedCodexAppServerClientByInstanceId(binding.clientId);
+  if (!clientLease) {
+    return;
+  }
+  try {
+    if (
+      await releaseCodexAppServerLiveThread(
+        clientLease.client,
+        binding.threadId,
+        options.assertCurrent,
+        options.withCurrent,
+      )
+    ) {
+      return;
+    }
+    options.assertCurrent?.();
+    // Evicted idle owners also disappear from the registry. Only an explicit
+    // claimed generation proves an active turn still owns its subscription.
+    if (isCodexAppServerLiveThreadClaimed(clientLease.client, binding.threadId)) {
+      throw new Error(
+        `Codex thread ${binding.threadId} has an active run; stop it before changing its owner.`,
+      );
+    }
+    if (!options.allowUntracked && binding.conversationIncognito !== true) {
+      return;
+    }
+    const unsubscribed = await unsubscribeCodexThreadBestEffort(clientLease.client, {
+      threadId: binding.threadId,
+      timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+      assertCurrent: options.assertCurrent,
+      withCurrent: options.withCurrent,
+    });
+    if (!unsubscribed) {
+      await closeCodexStartupClientBestEffort(clientLease.client);
+      throw new CodexAppServerUnsafeSubscriptionError(
+        `Codex retired thread subscription could not be released: ${binding.threadId}`,
+      );
+    }
+  } finally {
+    // A same-client caller releases its outer lease only after this cleanup returns.
+    await clientLease.release(
+      binding.clientId !== options.retainedClientId &&
+        !isCodexAppServerLiveThreadClaimed(clientLease.client, binding.threadId),
+    );
+  }
+}
+
+/** Clears and releases one exact conversation generation without touching its replacement. */
+export async function retireCodexConversationThreadBinding(params: {
+  bindingStore: CodexAppServerBindingStore;
+  identity: Extract<CodexAppServerBindingIdentity, { kind: "conversation" }>;
+  expectedThreadId?: string;
+  expectedStartId?: string;
+  allowUntracked?: boolean;
+  assertCurrent?: () => void;
+  afterClear?: () => Promise<void>;
+}): Promise<boolean> {
+  const assertCurrent = params.assertCurrent;
+  const expected = params.bindingStore.read(params.identity);
+  if (!expected || (params.expectedThreadId && expected.threadId !== params.expectedThreadId)) {
+    return false;
+  }
+  return await withCodexAppServerThreadMutation(expected.threadId, () =>
+    params.bindingStore.withLease(params.identity, async () => {
+      const current = params.bindingStore.read(params.identity);
+      if (
+        !current ||
+        !isSameCodexAppServerThreadOwner(current, expected) ||
+        (params.expectedStartId && current?.conversationStartId !== params.expectedStartId)
+      ) {
+        return false;
+      }
+      // Keep the old row authoritative through unsubscribe; Codex has one
+      // subscription per physical client, so clearing first races a new owner.
+      // Admission happens under both owner locks; release and public detach must settle together.
+      assertCurrent?.();
+      await releaseCodexAppServerBindingSubscription(current, {
+        allowUntracked: params.allowUntracked,
+        assertCurrent,
+      });
+      const cleared = await params.bindingStore.mutate(
+        params.identity,
+        { kind: "clear", threadId: current.threadId },
+        assertCurrent,
+      );
+      if (!cleared || !params.afterClear) {
+        return cleared;
+      }
+      try {
+        assertCurrent?.();
+        await params.afterClear();
+        return true;
+      } catch (error) {
+        try {
+          // Public binding storage commits separately. Restore its exact native
+          // owner on failure without ever overwriting a replacement generation.
+          const restored = await params.bindingStore.mutate(
+            params.identity,
+            { kind: "set", binding: current, if: { kind: "absent" } },
+            assertCurrent,
+          );
+          if (!restored) {
+            throw new Error("the previous Codex binding generation could not be restored", {
+              cause: error,
+            });
+          }
+        } catch (restorationError) {
+          throw new AggregateError(
+            [error, restorationError],
+            `Codex conversation detachment failed and native thread ${current.threadId} could not be restored; run /codex resume ${current.threadId} to recover it`,
+            { cause: restorationError },
+          );
+        }
+        throw error;
+      }
+    }),
+  );
+}

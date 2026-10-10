@@ -1,8 +1,11 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
+import { readPositiveIntEnv, readTcpPortEnv } from "../env-limits.mjs";
+import { readBoundedRequestBody } from "../request-body.mjs";
 
-const port = Number(process.env.CLICKCLACK_FIXTURE_PORT ?? 44181);
+const port = readTcpPortEnv("CLICKCLACK_FIXTURE_PORT", 44181);
+const requestMaxBytes = readPositiveIntEnv("CLICKCLACK_FIXTURE_REQUEST_MAX_BYTES", 4 * 1024 * 1024);
 const token = process.env.CLICKCLACK_FIXTURE_TOKEN ?? "clickclack-release-token";
 const statePath = process.env.CLICKCLACK_FIXTURE_STATE ?? "/tmp/openclaw-clickclack-fixture.json";
 const workspace = {
@@ -41,6 +44,7 @@ const messages = [];
 const threadReplies = [];
 const outboundMessages = [];
 const sockets = new Set();
+let socketGeneration = 0;
 
 function persist() {
   fs.writeFileSync(
@@ -51,6 +55,7 @@ function persist() {
         threadReplies,
         outboundMessages,
         socketCount: sockets.size,
+        socketGeneration,
       },
       null,
       2,
@@ -67,37 +72,40 @@ function json(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
-function unauthorized(res) {
-  json(res, 401, { error: "unauthorized" });
-}
-
 function checkAuth(req, res) {
   if (req.url?.startsWith("/fixture/") || req.url === "/health") {
     return true;
   }
   if (req.headers.authorization !== `Bearer ${token}`) {
-    unauthorized(res);
+    json(res, 401, { error: "unauthorized" });
     return false;
   }
   return true;
 }
 
-function readBody(req) {
-  return new Promise((resolve, reject) => {
-    let body = "";
-    req.setEncoding("utf8");
-    req.on("data", (chunk) => {
-      body += chunk;
-    });
-    req.on("end", () => {
-      try {
-        resolve(body ? JSON.parse(body) : {});
-      } catch {
-        resolve({});
-      }
-    });
-    req.on("error", reject);
-  });
+async function readBody(req) {
+  const body = await readBoundedRequestBody(req, requestMaxBytes, (limit) =>
+    Object.assign(new Error(`ClickClack fixture request body exceeded ${limit} bytes`), {
+      code: "ETOOBIG",
+    }),
+  );
+  try {
+    return body ? JSON.parse(body) : {};
+  } catch {
+    return {};
+  }
+}
+
+function handleRequestError(res, error) {
+  if (res.headersSent) {
+    res.destroy();
+    return;
+  }
+  if (error instanceof Error && error.code === "ETOOBIG") {
+    json(res, 413, { error: error.message });
+    return;
+  }
+  json(res, 500, { error: String(error instanceof Error ? error.message : error) });
 }
 
 function createMessage({ body, author = humanUser, parentMessageId }) {
@@ -170,78 +178,92 @@ function broadcast(event) {
   }
 }
 
-const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url ?? "/", "http://127.0.0.1");
-  if (!checkAuth(req, res)) {
-    return;
+async function handleRequest(req, res) {
+  try {
+    const url = new URL(req.url ?? "/", "http://127.0.0.1");
+    if (!checkAuth(req, res)) {
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/health") {
+      json(res, 200, { ok: true });
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/api/me") {
+      json(res, 200, { user: botUser });
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/api/workspaces") {
+      json(res, 200, { workspaces: [workspace] });
+      return;
+    }
+    if (req.method === "GET" && url.pathname === `/api/workspaces/${workspace.id}/channels`) {
+      json(res, 200, { channels: [channel] });
+      return;
+    }
+    if (req.method === "GET" && url.pathname === `/api/channels/${channel.id}/messages`) {
+      const afterSeq = Number(url.searchParams.get("after_seq") ?? 0);
+      json(res, 200, {
+        messages: messages.filter((message) => message.channel_seq > afterSeq),
+      });
+      return;
+    }
+    if (req.method === "POST" && url.pathname === `/api/channels/${channel.id}/messages`) {
+      const body = await readBody(req);
+      const message = createMessage({ body: String(body.body ?? ""), author: botUser });
+      outboundMessages.push(message);
+      persist();
+      json(res, 200, { message });
+      return;
+    }
+    const threadReplyMatch = url.pathname.match(/^\/api\/messages\/([^/]+)\/thread\/replies$/u);
+    if (req.method === "POST" && threadReplyMatch) {
+      const body = await readBody(req);
+      const message = createMessage({
+        body: String(body.body ?? ""),
+        author: botUser,
+        parentMessageId: decodeURIComponent(threadReplyMatch[1]),
+      });
+      json(res, 200, { message });
+      return;
+    }
+    const threadMatch = url.pathname.match(/^\/api\/messages\/([^/]+)\/thread$/u);
+    if (req.method === "GET" && threadMatch) {
+      const rootId = decodeURIComponent(threadMatch[1]);
+      json(res, 200, {
+        root: messages.find((message) => message.id === rootId) ?? null,
+        replies: threadReplies.filter((message) => message.thread_root_id === rootId),
+      });
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/api/realtime/events") {
+      json(res, 200, { events: [] });
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/fixture/inbound") {
+      const body = await readBody(req);
+      const message = createMessage({ body: String(body.body ?? ""), author: humanUser });
+      broadcast(eventFor(message));
+      json(res, 200, { message });
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/fixture/state") {
+      json(res, 200, {
+        messages,
+        threadReplies,
+        outboundMessages,
+        socketCount: sockets.size,
+        socketGeneration,
+      });
+      return;
+    }
+    json(res, 404, { error: `unhandled ${req.method} ${url.pathname}` });
+  } catch (error) {
+    handleRequestError(res, error);
   }
-  if (req.method === "GET" && url.pathname === "/health") {
-    json(res, 200, { ok: true });
-    return;
-  }
-  if (req.method === "GET" && url.pathname === "/api/me") {
-    json(res, 200, { user: botUser });
-    return;
-  }
-  if (req.method === "GET" && url.pathname === "/api/workspaces") {
-    json(res, 200, { workspaces: [workspace] });
-    return;
-  }
-  if (req.method === "GET" && url.pathname === `/api/workspaces/${workspace.id}/channels`) {
-    json(res, 200, { channels: [channel] });
-    return;
-  }
-  if (req.method === "GET" && url.pathname === `/api/channels/${channel.id}/messages`) {
-    const afterSeq = Number(url.searchParams.get("after_seq") ?? 0);
-    json(res, 200, {
-      messages: messages.filter((message) => (message.channel_seq ?? 0) > afterSeq),
-    });
-    return;
-  }
-  if (req.method === "POST" && url.pathname === `/api/channels/${channel.id}/messages`) {
-    const body = await readBody(req);
-    const message = createMessage({ body: String(body.body ?? ""), author: botUser });
-    outboundMessages.push(message);
-    persist();
-    json(res, 200, { message });
-    return;
-  }
-  const threadReplyMatch = url.pathname.match(/^\/api\/messages\/([^/]+)\/thread\/replies$/u);
-  if (req.method === "POST" && threadReplyMatch) {
-    const body = await readBody(req);
-    const message = createMessage({
-      body: String(body.body ?? ""),
-      author: botUser,
-      parentMessageId: decodeURIComponent(threadReplyMatch[1]),
-    });
-    json(res, 200, { message });
-    return;
-  }
-  const threadMatch = url.pathname.match(/^\/api\/messages\/([^/]+)\/thread$/u);
-  if (req.method === "GET" && threadMatch) {
-    const rootId = decodeURIComponent(threadMatch[1]);
-    json(res, 200, {
-      root: messages.find((message) => message.id === rootId) ?? null,
-      replies: threadReplies.filter((message) => message.thread_root_id === rootId),
-    });
-    return;
-  }
-  if (req.method === "GET" && url.pathname === "/api/realtime/events") {
-    json(res, 200, { events: [] });
-    return;
-  }
-  if (req.method === "POST" && url.pathname === "/fixture/inbound") {
-    const body = await readBody(req);
-    const message = createMessage({ body: String(body.body ?? ""), author: humanUser });
-    broadcast(eventFor(message));
-    json(res, 200, { message });
-    return;
-  }
-  if (req.method === "GET" && url.pathname === "/fixture/state") {
-    json(res, 200, { messages, threadReplies, outboundMessages, socketCount: sockets.size });
-    return;
-  }
-  json(res, 404, { error: `unhandled ${req.method} ${url.pathname}` });
+}
+
+const server = http.createServer((req, res) => {
+  void handleRequest(req, res);
 });
 
 server.on("upgrade", (req, socket) => {
@@ -270,15 +292,20 @@ server.on("upgrade", (req, socket) => {
     ].join("\r\n"),
   );
   sockets.add(socket);
+  socketGeneration += 1;
   persist();
-  socket.on("close", () => {
-    sockets.delete(socket);
-    persist();
+  const cleanupSocket = () => {
+    if (sockets.delete(socket)) {
+      persist();
+    }
+  };
+  socket.on("close", cleanupSocket);
+  socket.on("end", () => {
+    cleanupSocket();
+    socket.end();
   });
-  socket.on("error", () => {
-    sockets.delete(socket);
-    persist();
-  });
+  socket.on("error", cleanupSocket);
+  socket.resume();
 });
 
 persist();

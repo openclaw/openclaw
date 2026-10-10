@@ -1,3 +1,5 @@
-import type { ShouldHandleTextCommandsParams } from "./commands-registry.types.js";
+/** Runtime type contracts for command routing helpers loaded across lazy boundaries. */
+import type { shouldHandleTextCommands } from "./commands-text-routing.js";
 
-export type ShouldHandleTextCommands = (params: ShouldHandleTextCommandsParams) => boolean;
+/** Runtime-injected policy hook for whether text slash commands should be honored. */
+export type ShouldHandleTextCommands = typeof shouldHandleTextCommands;

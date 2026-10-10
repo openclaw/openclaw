@@ -1,0 +1,39 @@
+title: Autonomous task lifecycle receipts
+
+scenario:
+  id: autonomous-task-lifecycle-receipts
+  surface: gateway
+  coverage:
+    primary:
+      - gateway.identity-and-decision-receipts
+    secondary:
+      - automation.manual-cron-runs
+      - automation.isolated-cron-execution
+  objective: Verify exact-bound cron receipts and admitted agent execution identity without generic lifecycle decision-fact copies.
+  successCriteria:
+    - A mapped hook transform suppression returns HTTP 204 before admission and creates no execution identity.
+    - Admitted mapped webhook POSTs before and after Gateway replacement retain distinct immutable contexts with one stable pseudonymized ingress source, absent invoker evidence, and unattributed admission coverage.
+    - Mapping IDs, request IDs, and webhook body sentinels stay absent from persisted contexts, JSON and human inspection, and audit-specific Gateway logs before and after replacement.
+    - A real forced scheduled agent run binds one exact context and execution to its terminal cron receipt.
+    - A real Gateway agent action completes through agent.wait and retains its exact admitted execution identity.
+    - JSON and human audit inspection expose the attribution-only cron lifecycle display, accept the cron cursor prefix, and omit private prompt content from JSON.
+    - A replacement Gateway returns byte-equivalent inspection JSON, and no cron receipt lifecycle rows are copied into the generic decision-fact table.
+  docsRefs:
+    - docs/gateway/audit.md
+    - docs/cli/audit.md
+    - docs/automation/cron-jobs.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - src/audit/execution-decision-receipts.ts
+    - src/cron/store/run-receipt-store.ts
+    - src/infra/agent-run-registry.ts
+    - src/gateway/hooks-mapping.ts
+    - test/e2e/qa-lab/runtime/autonomous-task-lifecycle-receipts.ts
+    - test/e2e/qa-lab/runtime/autonomous-task-lifecycle-receipts.fixtures.ts
+  execution:
+    kind: script
+    path: test/e2e/qa-lab/runtime/autonomous-task-lifecycle-receipts.ts
+    summary: Requires a current private-QA dist build (OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build). Starts an ephemeral Gateway and mock provider from that build, proves pre-admission suppression and admitted mapped webhook identity/privacy, runs cron receipts and agent execution, replaces the Gateway, and compares persisted contexts and inspection output.
+    args:
+      - --artifact-base
+      - ${outputDir}

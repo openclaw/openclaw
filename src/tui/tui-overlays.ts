@@ -1,19 +1,15 @@
-import type { Component, TUI } from "@earendil-works/pi-tui";
+import type { Component, OverlayHandle, TUI } from "@earendil-works/pi-tui";
 
-type OverlayHost = Pick<TUI, "showOverlay" | "hideOverlay" | "hasOverlay" | "setFocus">;
+type OverlayHost = Pick<TUI, "showOverlay" | "hasOverlay" | "setFocus">;
 
+/** Creates open/close handlers that restore focus when no overlay is active. */
 export function createOverlayHandlers(host: OverlayHost, fallbackFocus: Component) {
-  const openOverlay = (component: Component) => {
-    host.showOverlay(component);
-  };
-
-  const closeOverlay = () => {
-    if (host.hasOverlay()) {
-      host.hideOverlay();
-      return;
+  const closeOverlay = (handle: OverlayHandle) => {
+    handle.hide();
+    if (!host.hasOverlay()) {
+      host.setFocus(fallbackFocus);
     }
-    host.setFocus(fallbackFocus);
   };
 
-  return { openOverlay, closeOverlay };
+  return { openOverlay: host.showOverlay.bind(host), closeOverlay };
 }

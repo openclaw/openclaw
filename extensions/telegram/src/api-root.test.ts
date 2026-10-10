@@ -1,14 +1,13 @@
+// Telegram tests cover api root plugin behavior.
 import { describe, expect, it } from "vitest";
-import {
-  DEFAULT_TELEGRAM_API_ROOT,
-  hasTelegramBotEndpointApiRoot,
-  normalizeTelegramApiRoot,
-} from "./api-root.js";
+import { hasTelegramBotEndpointApiRoot, normalizeTelegramApiRoot } from "./api-root.js";
+
+const PUBLIC_TELEGRAM_API_ROOT = "https://api.telegram.org";
 
 describe("telegram api root", () => {
   it("defaults to the public Telegram Bot API root", () => {
-    expect(normalizeTelegramApiRoot()).toBe(DEFAULT_TELEGRAM_API_ROOT);
-    expect(normalizeTelegramApiRoot("  ")).toBe(DEFAULT_TELEGRAM_API_ROOT);
+    expect(normalizeTelegramApiRoot()).toBe(PUBLIC_TELEGRAM_API_ROOT);
+    expect(normalizeTelegramApiRoot("  ")).toBe(PUBLIC_TELEGRAM_API_ROOT);
   });
 
   it("keeps custom Bot API roots without a bot-token endpoint", () => {
@@ -20,17 +19,7 @@ describe("telegram api root", () => {
     );
   });
 
-  it("strips a full bot endpoint from apiRoot", () => {
-    const root = "https://api.telegram.org/bot123456:ABC_def-ghi/";
-
-    expect(hasTelegramBotEndpointApiRoot(root)).toBe(true);
-    expect(normalizeTelegramApiRoot(root)).toBe("https://api.telegram.org");
-  });
-
-  it("strips only terminal bot-token endpoint segments", () => {
-    expect(normalizeTelegramApiRoot("https://proxy.example.com/custom/bot123456:ABC_def")).toBe(
-      "https://proxy.example.com/custom",
-    );
+  it("keeps bot-prefixed route names without a token", () => {
     expect(normalizeTelegramApiRoot("https://proxy.example.com/bot123456")).toBe(
       "https://proxy.example.com/bot123456",
     );

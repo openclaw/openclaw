@@ -4,14 +4,11 @@ export type QaReportCheck = {
   details?: string;
 };
 
-export type QaReportScenario = {
-  name: string;
-  status: "pass" | "fail" | "skip";
-  details?: string;
+export type QaReportScenario = QaReportCheck & {
   steps?: QaReportCheck[];
 };
 
-function pushDetailsBlock(lines: string[], label: string, details: string, indent = "") {
+function pushQaReportDetailsBlock(lines: string[], label: string, details: string, indent = "") {
   if (!details.includes("\n")) {
     lines.push(`${indent}- ${label}: ${details}`);
     return;
@@ -20,8 +17,18 @@ function pushDetailsBlock(lines: string[], label: string, details: string, inden
   lines.push("", "```text", details, "```");
 }
 
+function pushQaReportCheck(lines: string[], check: QaReportCheck, indent = "") {
+  const marker = check.status === "pass" ? "x" : " ";
+  const outcome = check.status === "pass" ? "" : ` (${check.status})`;
+  lines.push(`${indent}- [${marker}] ${check.name}${outcome}`);
+  if (check.details) {
+    pushQaReportDetailsBlock(lines, "Details", check.details, `${indent}  `);
+  }
+}
+
 export function renderQaMarkdownReport(params: {
   title: string;
+  inProgress?: boolean;
   startedAt: Date;
   finishedAt: Date;
   checks?: QaReportCheck[];
@@ -31,31 +38,28 @@ export function renderQaMarkdownReport(params: {
 }) {
   const checks = params.checks ?? [];
   const scenarios = params.scenarios ?? [];
-  const passCount =
-    checks.filter((check) => check.status === "pass").length +
-    scenarios.filter((scenario) => scenario.status === "pass").length;
-  const failCount =
-    checks.filter((check) => check.status === "fail").length +
-    scenarios.filter((scenario) => scenario.status === "fail").length;
+  const outcomes = [...checks, ...scenarios];
+  const passCount = outcomes.filter((check) => check.status === "pass").length;
+  const failCount = outcomes.filter((check) => check.status === "fail").length;
+  const skipCount = outcomes.filter((check) => check.status === "skip").length;
 
   const lines = [
-    `# ${params.title}`,
+    `# ${params.title}${params.inProgress ? " (In Progress)" : ""}`,
     "",
+    ...(params.inProgress ? ["- Status: running"] : []),
     `- Started: ${params.startedAt.toISOString()}`,
-    `- Finished: ${params.finishedAt.toISOString()}`,
+    `- ${params.inProgress ? "Updated" : "Finished"}: ${params.finishedAt.toISOString()}`,
     `- Duration ms: ${params.finishedAt.getTime() - params.startedAt.getTime()}`,
     `- Passed: ${passCount}`,
     `- Failed: ${failCount}`,
+    `- Skipped: ${skipCount}`,
     "",
   ];
 
   if (checks.length > 0) {
     lines.push("## Checks", "");
     for (const check of checks) {
-      lines.push(`- [${check.status === "pass" ? "x" : " "}] ${check.name}`);
-      if (check.details) {
-        pushDetailsBlock(lines, "Details", check.details, "  ");
-      }
+      pushQaReportCheck(lines, check);
     }
   }
 
@@ -66,15 +70,12 @@ export function renderQaMarkdownReport(params: {
       lines.push("");
       lines.push(`- Status: ${scenario.status}`);
       if (scenario.details) {
-        pushDetailsBlock(lines, "Details", scenario.details);
+        pushQaReportDetailsBlock(lines, "Details", scenario.details);
       }
       if (scenario.steps?.length) {
         lines.push("- Steps:");
         for (const step of scenario.steps) {
-          lines.push(`  - [${step.status === "pass" ? "x" : " "}] ${step.name}`);
-          if (step.details) {
-            pushDetailsBlock(lines, "Details", step.details, "    ");
-          }
+          pushQaReportCheck(lines, step, "  ");
         }
       }
       lines.push("");
@@ -97,4 +98,16 @@ export function renderQaMarkdownReport(params: {
 
   lines.push("");
   return lines.join("\n");
+}
+
+export function escapeTableCell(value: string): string {
+  return value.replace(/\\/gu, "\\\\").replace(/\|/gu, "\\|").replace(/\s+/gu, " ").trim();
+}
+
+export function pushQaReportListSection(lines: string[], title: string, items: readonly string[]) {
+  lines.push(`## ${title}`, "");
+  for (const item of items) {
+    lines.push(`- ${item}`);
+  }
+  lines.push("");
 }

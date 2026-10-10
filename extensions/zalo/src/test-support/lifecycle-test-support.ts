@@ -1,8 +1,22 @@
+// Zalo plugin module implements lifecycle test support behavior.
 import { request as httpRequest } from "node:http";
-import { createPluginRuntimeMediaMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import {
+  createPluginRuntimeMediaMock,
+  createPluginRuntimeMock,
+} from "openclaw/plugin-sdk/channel-test-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { expect, vi } from "vitest";
-import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import type { ResolvedZaloAccount } from "../types.js";
+
+type LifecycleMonitorSetupParams = {
+  accountId: string;
+  dmPolicy: "open" | "pairing";
+  allowFrom?: string[];
+  webhookUrl?: string;
+  webhookSecret?: string;
+  mediaMaxMb?: number;
+};
 
 function resolveLifecycleAllowFrom(params: {
   dmPolicy: "open" | "pairing";
@@ -11,65 +25,43 @@ function resolveLifecycleAllowFrom(params: {
   return params.allowFrom ?? (params.dmPolicy === "open" ? ["*"] : undefined);
 }
 
-function createLifecycleConfig(params: {
-  accountId: string;
-  dmPolicy: "open" | "pairing";
-  allowFrom?: string[];
-  webhookUrl?: string;
-  webhookSecret?: string;
-}): OpenClawConfig {
-  const webhookUrl = params.webhookUrl ?? "https://example.com/hooks/zalo";
-  const webhookSecret = params.webhookSecret ?? "supersecret";
+function createLifecycleAccountConfig(params: LifecycleMonitorSetupParams) {
   const allowFrom = resolveLifecycleAllowFrom(params);
+  return {
+    webhookUrl: params.webhookUrl ?? "https://example.com/hooks/zalo",
+    webhookSecret: params.webhookSecret ?? "supersecret", // pragma: allowlist secret
+    dmPolicy: params.dmPolicy,
+    ...(allowFrom ? { allowFrom } : {}),
+    // Kept undefined-free so cases can assert on an account config that never
+    // declared the key, which is what the resolver's unset branch expects.
+    ...(params.mediaMaxMb === undefined ? {} : { mediaMaxMb: params.mediaMaxMb }),
+  };
+}
+
+function createLifecycleConfig(params: LifecycleMonitorSetupParams): OpenClawConfig {
   return {
     channels: {
       zalo: {
         enabled: true,
         accounts: {
-          [params.accountId]: {
-            enabled: true,
-            webhookUrl,
-            webhookSecret, // pragma: allowlist secret
-            dmPolicy: params.dmPolicy,
-            ...(allowFrom ? { allowFrom } : {}),
-          },
+          [params.accountId]: { enabled: true, ...createLifecycleAccountConfig(params) },
         },
       },
     },
   } as OpenClawConfig;
 }
 
-function createLifecycleAccount(params: {
-  accountId: string;
-  dmPolicy: "open" | "pairing";
-  allowFrom?: string[];
-  webhookUrl?: string;
-  webhookSecret?: string;
-}): ResolvedZaloAccount {
-  const webhookUrl = params.webhookUrl ?? "https://example.com/hooks/zalo";
-  const webhookSecret = params.webhookSecret ?? "supersecret";
-  const allowFrom = resolveLifecycleAllowFrom(params);
+function createLifecycleAccount(params: LifecycleMonitorSetupParams): ResolvedZaloAccount {
   return {
     accountId: params.accountId,
     enabled: true,
     token: "zalo-token",
     tokenSource: "config",
-    config: {
-      webhookUrl,
-      webhookSecret, // pragma: allowlist secret
-      dmPolicy: params.dmPolicy,
-      ...(allowFrom ? { allowFrom } : {}),
-    },
+    config: createLifecycleAccountConfig(params),
   } as ResolvedZaloAccount;
 }
 
-export function createLifecycleMonitorSetup(params: {
-  accountId: string;
-  dmPolicy: "open" | "pairing";
-  allowFrom?: string[];
-  webhookUrl?: string;
-  webhookSecret?: string;
-}) {
+export function createLifecycleMonitorSetup(params: LifecycleMonitorSetupParams) {
   return {
     account: createLifecycleAccount(params),
     config: createLifecycleConfig(params),
@@ -101,6 +93,7 @@ export function createImageUpdate(params?: {
   displayName?: string;
   chatId?: string;
   photoUrl?: string;
+  caption?: string;
   date?: number;
 }) {
   return {
@@ -108,7 +101,7 @@ export function createImageUpdate(params?: {
     message: {
       date: params?.date ?? 1774086023728,
       chat: { chat_type: "PRIVATE" as const, id: params?.chatId ?? "chat-123" },
-      caption: "",
+      caption: params?.caption ?? "",
       message_id: params?.messageId ?? "msg-123",
       message_type: "CHAT_PHOTO",
       from: {
@@ -139,7 +132,12 @@ export function createImageLifecycleCore() {
       };
       reply: { to: string; originatingTo: string };
       message: { body?: string; rawBody: string; bodyForAgent?: string; commandBody?: string };
-      media?: Array<{ path?: string; url?: string; contentType?: string }>;
+      media?: Array<{
+        path?: string;
+        url?: string;
+        contentType?: string;
+        kind?: "audio" | "document" | "image" | "unknown" | "video";
+      }>;
       extra?: Record<string, unknown>;
     }) =>
       finalizeInboundContextMock({
@@ -159,9 +157,7 @@ export function createImageLifecycleCore() {
         Surface: params.channel,
         MessageSid: params.messageId,
         Timestamp: params.timestamp,
-        MediaPath: params.media?.[0]?.path,
-        MediaType: params.media?.[0]?.contentType,
-        MediaUrl: params.media?.[0]?.url ?? params.media?.[0]?.path,
+        media: params.media,
         OriginatingChannel: params.channel,
         OriginatingTo: params.reply.originatingTo,
         ...params.extra,
@@ -172,17 +168,24 @@ export function createImageLifecycleCore() {
     buffer: Buffer.from("image-bytes"),
     contentType: "image/jpeg",
   }));
-  const saveRemoteMediaMock = vi.fn(async () => ({
-    path: "/tmp/zalo-photo.jpg",
-    contentType: "image/jpeg",
-  }));
+  // Keep the mock arity aligned with PluginRuntime.saveRemoteMedia so
+  // mockImplementation callbacks that inspect timeout options typecheck.
+  const saveRemoteMediaMock = vi.fn<PluginRuntime["channel"]["media"]["saveRemoteMedia"]>(
+    async (_params) => ({
+      id: "zalo-photo.jpg",
+      path: "/tmp/zalo-photo.jpg",
+      size: Buffer.byteLength("image-bytes"),
+      contentType: "image/jpeg",
+    }),
+  );
   const saveMediaBufferMock = vi.fn(async () => ({
     path: "/tmp/zalo-photo.jpg",
     contentType: "image/jpeg",
   }));
   const readAllowFromStoreMock = vi.fn(async () => [] as string[]);
   const upsertPairingRequestMock = vi.fn(async () => ({ code: "PAIRCODE", created: true }));
-  const core = {
+  const dispatchReplyWithBufferedBlockDispatcherMock = vi.fn(async () => undefined);
+  const core = createPluginRuntimeMock({
     logging: {
       shouldLogVerbose: vi.fn(
         () => false,
@@ -195,20 +198,11 @@ export function createImageLifecycleCore() {
         upsertPairingRequest:
           upsertPairingRequestMock as unknown as PluginRuntime["channel"]["pairing"]["upsertPairingRequest"],
       },
-      routing: {
-        resolveAgentRoute: vi.fn(() => ({
-          agentId: "main",
-          accountId: "default",
-          sessionKey: "agent:main:zalo:direct:chat-123",
-        })) as unknown as PluginRuntime["channel"]["routing"]["resolveAgentRoute"],
-      },
       session: {
         resolveStorePath: vi.fn(
           () => "/tmp/zalo-sessions.json",
         ) as unknown as PluginRuntime["channel"]["session"]["resolveStorePath"],
-        readSessionUpdatedAt: vi.fn(
-          () => undefined,
-        ) as unknown as PluginRuntime["channel"]["session"]["readSessionUpdatedAt"],
+        readSessionUpdatedAtAsync: vi.fn(async () => undefined),
         recordInboundSession:
           recordInboundSessionMock as unknown as PluginRuntime["channel"]["session"]["recordInboundSession"],
       },
@@ -228,108 +222,12 @@ export function createImageLifecycleCore() {
       reply: {
         finalizeInboundContext:
           finalizeInboundContextMock as unknown as PluginRuntime["channel"]["reply"]["finalizeInboundContext"],
-        resolveEnvelopeFormatOptions: vi.fn(() => ({
-          template: "channel+name+time",
-        })) as unknown as PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"],
-        formatAgentEnvelope: vi.fn(
-          (opts: { body: string }) => opts.body,
-        ) as unknown as PluginRuntime["channel"]["reply"]["formatAgentEnvelope"],
-        dispatchReplyWithBufferedBlockDispatcher: vi.fn(
-          async () => undefined,
-        ) as unknown as PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"],
+        dispatchReplyWithBufferedBlockDispatcher:
+          dispatchReplyWithBufferedBlockDispatcherMock as unknown as PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"],
       },
-      turn: {
-        run: vi.fn(async (params: Parameters<PluginRuntime["channel"]["turn"]["run"]>[0]) => {
-          const input = await params.adapter.ingest(params.raw);
-          if (!input) {
-            return {
-              admission: { kind: "drop" as const, reason: "ingest-null" },
-              dispatched: false,
-            };
-          }
-          const resolved = await params.adapter.resolveTurn(
-            input,
-            {
-              kind: "message",
-              canStartAgentTurn: true,
-            },
-            {},
-          );
-          await resolved.recordInboundSession({
-            storePath: resolved.storePath,
-            sessionKey: resolved.ctxPayload.SessionKey ?? resolved.routeSessionKey,
-            ctx: resolved.ctxPayload,
-            groupResolution: resolved.record?.groupResolution,
-            createIfMissing: resolved.record?.createIfMissing,
-            updateLastRoute: resolved.record?.updateLastRoute,
-            onRecordError: resolved.record?.onRecordError ?? (() => undefined),
-          });
-          if ("runDispatch" in resolved) {
-            const dispatchResult = await resolved.runDispatch();
-            return {
-              admission: { kind: "dispatch" as const },
-              dispatched: true,
-              ctxPayload: resolved.ctxPayload,
-              routeSessionKey: resolved.routeSessionKey,
-              dispatchResult,
-            };
-          }
-          const dispatchResult = await resolved.dispatchReplyWithBufferedBlockDispatcher({
-            ctx: resolved.ctxPayload,
-            cfg: resolved.cfg,
-            dispatcherOptions: {
-              ...resolved.dispatcherOptions,
-              deliver: async (...args: Parameters<typeof resolved.delivery.deliver>) => {
-                await resolved.delivery.deliver(...args);
-              },
-              onError: resolved.delivery.onError,
-            },
-            replyOptions: resolved.replyOptions,
-            replyResolver: resolved.replyResolver,
-          });
-          return {
-            admission: { kind: "dispatch" as const },
-            dispatched: true,
-            ctxPayload: resolved.ctxPayload,
-            routeSessionKey: resolved.routeSessionKey,
-            dispatchResult,
-          };
-        }) as unknown as PluginRuntime["channel"]["turn"]["run"],
-        runAssembled: vi.fn(
-          async (params: Parameters<PluginRuntime["channel"]["turn"]["runAssembled"]>[0]) => {
-            await params.recordInboundSession({
-              storePath: params.storePath,
-              sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
-              ctx: params.ctxPayload,
-              groupResolution: params.record?.groupResolution,
-              createIfMissing: params.record?.createIfMissing,
-              updateLastRoute: params.record?.updateLastRoute,
-              onRecordError: params.record?.onRecordError ?? (() => undefined),
-            });
-            const dispatchResult = await params.dispatchReplyWithBufferedBlockDispatcher({
-              ctx: params.ctxPayload,
-              cfg: params.cfg,
-              dispatcherOptions: {
-                ...params.dispatcherOptions,
-                deliver: async (...args: Parameters<typeof params.delivery.deliver>) => {
-                  await params.delivery.deliver(...args);
-                },
-                onError: params.delivery.onError,
-              },
-              replyOptions: params.replyOptions,
-              replyResolver: params.replyResolver,
-            });
-            return {
-              admission: params.admission ?? { kind: "dispatch" as const },
-              dispatched: true,
-              ctxPayload: params.ctxPayload,
-              routeSessionKey: params.routeSessionKey,
-              dispatchResult,
-            };
-          },
-        ) as unknown as PluginRuntime["channel"]["turn"]["runAssembled"],
+      inbound: {
         buildContext:
-          buildChannelInboundEventContextMock as unknown as PluginRuntime["channel"]["turn"]["buildContext"],
+          buildChannelInboundEventContextMock as unknown as PluginRuntime["channel"]["inbound"]["buildContext"],
       },
       commands: {
         shouldComputeCommandAuthorized: vi.fn(
@@ -343,7 +241,7 @@ export function createImageLifecycleCore() {
         ) as unknown as PluginRuntime["channel"]["commands"]["isControlCommandMessage"],
       },
     },
-  } as PluginRuntime;
+  });
   return {
     core,
     finalizeInboundContextMock,
@@ -375,21 +273,21 @@ export function expectImageLifecycleDelivery(params: {
   expect(saveRemoteMediaMock).toHaveBeenCalledWith({
     url: photoUrl,
     maxBytes: 5 * 1024 * 1024,
+    responseHeaderTimeoutMs: 120_000,
+    readIdleTimeoutMs: 30_000,
   });
   expect(params.saveMediaBufferMock).not.toHaveBeenCalled();
   expect(params.finalizeInboundContextMock).toHaveBeenCalledWith(
     expect.objectContaining({
       SenderName: senderName,
-      MediaPath: mediaPath,
-      MediaType: mediaType,
+      media: [expect.objectContaining({ path: mediaPath, contentType: mediaType })],
     }),
   );
   expect(params.recordInboundSessionMock).toHaveBeenCalledWith(
     expect.objectContaining({
       ctx: expect.objectContaining({
         SenderName: senderName,
-        MediaPath: mediaPath,
-        MediaType: mediaType,
+        media: [expect.objectContaining({ path: mediaPath, contentType: mediaType })],
       }),
     }),
   );
@@ -398,7 +296,9 @@ export function expectImageLifecycleDelivery(params: {
 export async function settleAsyncWork(): Promise<void> {
   for (let i = 0; i < 6; i += 1) {
     await Promise.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
   }
 }
 
@@ -445,12 +345,10 @@ export async function postWebhookReplay(params: {
   path: string;
   secret: string;
   payload: Record<string, unknown>;
-  settleBeforeReplay?: boolean;
+  beforeReplay?: () => Promise<void>;
 }) {
   const first = await postWebhookUpdate(params);
-  if (params.settleBeforeReplay) {
-    await settleAsyncWork();
-  }
+  await params.beforeReplay?.();
   const replay = await postWebhookUpdate(params);
   return { first, replay };
 }

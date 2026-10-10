@@ -1,45 +1,153 @@
+/** Resolves the effective reply route from current context and persisted session route. */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
+import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import {
+  stripOutboundTargetKindPrefix,
+  stripTargetProviderPrefix,
+} from "../../infra/outbound/channel-target-prefix.js";
+import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
+import type { InputProvenance } from "../../sessions/input-provenance.js";
+import {
+  deliveryContextFromSession,
+  sessionDeliveryOrigin,
+  sessionDeliveryRoute,
+} from "../../utils/delivery-context.read.js";
+import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { FinalizedMsgContext } from "../templating.js";
 
-export type EffectiveReplyRouteContext = Pick<
+/** Current finalized context fields used for reply route resolution. */
+type EffectiveReplyRouteContext = Pick<
   FinalizedMsgContext,
-  "Provider" | "OriginatingChannel" | "OriginatingTo" | "AccountId"
+  | "Provider"
+  | "Surface"
+  | "OriginatingChannel"
+  | "OriginatingTo"
+  | "MessageThreadId"
+  | "AccountId"
+  | "InputProvenance"
+  | "InternalTurnSource"
+  | "ChatType"
 >;
 
-export type EffectiveReplyRouteEntry = Pick<
-  SessionEntry,
-  "deliveryContext" | "lastChannel" | "lastTo" | "lastAccountId"
->;
+/** Persisted session fields used as route fallback/inheritance. */
+type EffectiveReplyRouteEntry = Pick<SessionEntry, "delivery" | "chatType">;
 
+/** Effective channel target selected for source reply delivery. */
 export type EffectiveReplyRoute = {
   channel?: string;
   to?: string;
   accountId?: string;
+  threadId?: string | number;
+  chatType?: ChatType;
+  inheritedExternalRoute?: boolean;
 };
 
-export function isSystemEventProvider(provider?: string): boolean {
-  return provider === "heartbeat" || provider === "cron-event" || provider === "exec-event";
+/** Normalizes an external target without collapsing provider-owned topic suffixes. */
+export function normalizeEffectiveReplyTarget(
+  raw: string | undefined,
+  channel: string | null | undefined,
+  threadId?: string | number,
+): string | undefined {
+  let target = normalizeOptionalString(raw);
+  if (target && channel && threadId != null) {
+    // The channel owns whether a separate thread is part of its conversation ID.
+    // Use the same identity for stored-context matching and group policy lookup.
+    target =
+      getLoadedChannelPluginForRead(channel)?.threading?.resolveCurrentChannelId?.({
+        to: target,
+        threadId,
+      }) ?? target;
+  }
+  return target
+    ? normalizeOptionalString(
+        stripOutboundTargetKindPrefix(stripTargetProviderPrefix(target, channel ?? "")),
+      )
+    : undefined;
 }
 
+function isSessionsSendInterSessionHandoff(inputProvenance: InputProvenance | undefined): boolean {
+  return (
+    inputProvenance?.kind === "inter_session" &&
+    inputProvenance.sourceTool?.toLowerCase() === "sessions_send"
+  );
+}
+
+function resolveTrustedInheritedThreadId(
+  entry: EffectiveReplyRouteEntry | undefined,
+): string | number | undefined {
+  const deliveryThreadId = deliveryContextFromSession(entry)?.threadId;
+  if (deliveryThreadId == null) {
+    return undefined;
+  }
+  const routeThread = sessionDeliveryRoute(entry)?.thread;
+  if (
+    routeThread?.id != null &&
+    (routeThread.source === "explicit" ||
+      routeThread.source === "target" ||
+      routeThread.source === "turn") &&
+    stringifyRouteThreadId(routeThread.id) === stringifyRouteThreadId(deliveryThreadId)
+  ) {
+    return deliveryThreadId;
+  }
+  return undefined;
+}
+
+/** Resolves current, inherited, or persisted reply route for a session turn. */
 export function resolveEffectiveReplyRoute(params: {
   ctx: EffectiveReplyRouteContext;
   entry?: EffectiveReplyRouteEntry;
 }): EffectiveReplyRoute {
-  if (!isSystemEventProvider(params.ctx.Provider)) {
+  const currentSurface =
+    normalizeMessageChannel(params.ctx.Provider) ??
+    normalizeMessageChannel(params.ctx.Surface) ??
+    normalizeMessageChannel(params.ctx.OriginatingChannel);
+  const persistedDeliveryContext = deliveryContextFromSession(params.entry);
+  const persistedRoute = sessionDeliveryRoute(params.entry);
+  const persistedOrigin = sessionDeliveryOrigin(params.entry);
+  const persistedDeliveryChannel = normalizeMessageChannel(persistedDeliveryContext?.channel);
+  const liveChatType = normalizeChatType(params.ctx.ChatType);
+  const persistedChatType =
+    persistedRoute?.target?.chatType ??
+    params.entry?.chatType ??
+    normalizeChatType(persistedOrigin?.chatType);
+  if (
+    isSessionsSendInterSessionHandoff(params.ctx.InputProvenance) &&
+    currentSurface === INTERNAL_MESSAGE_CHANNEL &&
+    persistedDeliveryChannel &&
+    persistedDeliveryChannel !== INTERNAL_MESSAGE_CHANNEL &&
+    persistedDeliveryContext?.to
+  ) {
+    const inheritedThreadId = resolveTrustedInheritedThreadId(params.entry);
     return {
-      channel: params.ctx.OriginatingChannel,
-      to: params.ctx.OriginatingTo,
-      accountId: params.ctx.AccountId,
+      channel: persistedDeliveryChannel,
+      to: persistedDeliveryContext.to,
+      accountId: persistedDeliveryContext.accountId,
+      ...(inheritedThreadId !== undefined ? { threadId: inheritedThreadId } : {}),
+      ...(persistedChatType ? { chatType: persistedChatType } : {}),
+      inheritedExternalRoute: true,
     };
   }
-  const persistedDeliveryContext = params.entry?.deliveryContext;
+  const liveChannel = params.ctx.OriginatingChannel;
+  const canInheritPersistedTuple =
+    params.ctx.InternalTurnSource !== undefined &&
+    (!liveChannel ||
+      normalizeMessageChannel(liveChannel) ===
+        normalizeMessageChannel(persistedDeliveryContext?.channel));
+  const chatType = liveChatType ?? (canInheritPersistedTuple ? persistedChatType : undefined);
   return {
     channel:
-      params.ctx.OriginatingChannel ??
-      persistedDeliveryContext?.channel ??
-      params.entry?.lastChannel,
-    to: params.ctx.OriginatingTo ?? persistedDeliveryContext?.to ?? params.entry?.lastTo,
+      params.ctx.InternalTurnSource === undefined
+        ? liveChannel
+        : (liveChannel ?? persistedDeliveryContext?.channel),
+    to:
+      params.ctx.OriginatingTo ??
+      (canInheritPersistedTuple ? persistedDeliveryContext?.to : undefined),
     accountId:
-      params.ctx.AccountId ?? persistedDeliveryContext?.accountId ?? params.entry?.lastAccountId,
+      params.ctx.AccountId ??
+      (canInheritPersistedTuple ? persistedDeliveryContext?.accountId : undefined),
+    ...(params.ctx.MessageThreadId !== undefined ? { threadId: params.ctx.MessageThreadId } : {}),
+    ...(chatType ? { chatType } : {}),
   };
 }

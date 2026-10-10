@@ -1,19 +1,22 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
+  normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveActiveTalkProviderConfig } from "openclaw/plugin-sdk/talk-config-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
 
-function mask(s: string, keep: number = 6): string {
+function mask(s: string): string {
   const trimmed = s.trim();
-  if (trimmed.length <= keep) {
+  if (trimmed.length <= 6) {
     return "***";
   }
-  return `${trimmed.slice(0, keep)}…`;
+  return `${trimmed.slice(0, 6)}…`;
 }
 
 function isLikelyVoiceId(value: string): boolean {
@@ -80,48 +83,60 @@ function findVoice(voices: SpeechVoiceOption[], query: string): SpeechVoiceOptio
     return null;
   }
   const lower = normalizeLowercaseStringOrEmpty(q);
-  const byId = voices.find((v) => v.id === q);
-  if (byId) {
-    return byId;
-  }
-  const exactName = voices.find((v) => normalizeOptionalLowercaseString(v.name) === lower);
-  if (exactName) {
-    return exactName;
-  }
-  const partial = voices.find((v) => normalizeLowercaseStringOrEmpty(v.name).includes(lower));
-  return partial ?? null;
-}
-
-function asTrimmedString(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
+  return (
+    voices.find((v) => v.id === q) ??
+    voices.find((v) => normalizeOptionalLowercaseString(v.name) === lower) ??
+    voices.find((v) => normalizeLowercaseStringOrEmpty(v.name).includes(lower)) ??
+    null
+  );
 }
 
 function resolveCommandLabel(channel: string): string {
   return channel === "discord" ? "/talkvoice" : "/voice";
 }
 
-function asProviderBaseUrl(value: unknown): string | undefined {
-  const trimmed = asTrimmedString(value);
-  return trimmed || undefined;
-}
-
 const TALK_ADMIN_SCOPE = "operator.admin";
 
-function requiresAdminToSetVoice(
-  channel: string,
-  gatewayClientScopes?: readonly string[],
-): boolean {
+function requiresAdminToSetVoice(params: {
+  senderIsOwner?: boolean;
+  gatewayClientScopes?: readonly string[];
+}): boolean {
+  const { senderIsOwner, gatewayClientScopes } = params;
   if (Array.isArray(gatewayClientScopes)) {
     return !gatewayClientScopes.includes(TALK_ADMIN_SCOPE);
   }
-  return channel === "webchat";
+  return senderIsOwner !== true;
 }
 
 export default definePluginEntry({
   id: "talk-voice",
   name: "Talk Voice",
-  description: "Command helpers for managing Talk voice configuration",
+  description: "Select the active Talk voice and manage Talk voice configuration",
   register(api: OpenClawPluginApi) {
+    const loadTool = createLazyRuntimeModule(() => import("./tool.js"));
+    api.registerTool(
+      (ctx) => {
+        const sessionKey = ctx.sessionKey;
+        return {
+          name: "talk_voice",
+          label: "Talk Voice",
+          description:
+            "List or change the voice of the active realtime Talk call (browser, iOS, or Android) or Discord voice call in this conversation. Use list to see its provider, model, current voice, available voice IDs, and whether it can change. Use set with an available voice ID to reconnect the active call, preserving conversation and ongoing agent work. Success means the replacement call is ready. Saved voice defaults stay unchanged.",
+          parameters: {
+            type: "object",
+            properties: {
+              action: { type: "string", enum: ["list", "set"] },
+              voice: { type: "string", description: "Voice ID from list; required for set." },
+            },
+            required: ["action"],
+            additionalProperties: false,
+          },
+          execute: async (...args) =>
+            await (await loadTool()).executeTalkVoiceTool(sessionKey, ...args),
+        };
+      },
+      { name: "talk_voice" },
+    );
     api.registerCommand({
       name: "voice",
       nativeNames: {
@@ -129,7 +144,9 @@ export default definePluginEntry({
       },
       description: "List/set Talk provider voices (affects iOS Talk playback).",
       acceptsArgs: true,
+      exposeSenderIsOwner: true,
       handler: async (ctx) => {
+        const assertOwnerCurrent = ctx.assertOwnerCurrent;
         const commandLabel = resolveCommandLabel(ctx.channel);
         const args = ctx.args?.trim() ?? "";
         const tokens = args.split(/\s+/).filter(Boolean);
@@ -147,10 +164,10 @@ export default definePluginEntry({
         }
         const providerId = active.provider;
         const providerLabel = resolveProviderLabel(providerId);
-        const apiKey = asTrimmedString(active.config.apiKey);
-        const baseUrl = asProviderBaseUrl(active.config.baseUrl);
+        const apiKey = normalizeOptionalString(active.config.apiKey);
+        const baseUrl = normalizeOptionalString(active.config.baseUrl);
 
-        const currentVoiceId = asTrimmedString(active.config.voiceId);
+        const currentVoiceId = normalizeOptionalString(active.config.voiceId);
 
         if (action === "status") {
           return {
@@ -163,7 +180,7 @@ export default definePluginEntry({
         }
 
         if (action === "list") {
-          const limit = Number.parseInt(tokens[1] ?? "12", 10);
+          const limit = parseStrictPositiveInteger(tokens[1]) ?? 12;
           try {
             const voices = await api.runtime.tts.listVoices({
               provider: providerId,
@@ -172,7 +189,7 @@ export default definePluginEntry({
               baseUrl,
             });
             return {
-              text: formatVoiceList(voices, Number.isFinite(limit) ? limit : 12, providerId),
+              text: formatVoiceList(voices, limit, providerId),
             };
           } catch (error) {
             const message = formatErrorMessage(error);
@@ -181,9 +198,14 @@ export default definePluginEntry({
         }
 
         if (action === "set") {
-          // Gateway callers can override messageChannel, so scope presence is
-          // the reliable signal for internal admin-only mutations.
-          if (requiresAdminToSetVoice(ctx.channel, ctx.gatewayClientScopes)) {
+          // Persistent Talk voice changes are gateway config writes, so the
+          // mutating subcommand requires explicit admin or owner authority.
+          if (
+            requiresAdminToSetVoice({
+              senderIsOwner: ctx.senderIsOwner,
+              gatewayClientScopes: ctx.gatewayClientScopes,
+            })
+          ) {
             return { text: `⚠️ ${commandLabel} set requires operator.admin.` };
           }
 
@@ -211,23 +233,23 @@ export default definePluginEntry({
 
           await api.runtime.config.mutateConfigFile({
             afterWrite: { mode: "auto" },
+            writeOptions: {
+              assertCurrent: Array.isArray(ctx.gatewayClientScopes)
+                ? undefined
+                : assertOwnerCurrent,
+            },
             mutate: (draft) => {
-              const nextConfig = {
-                ...draft,
-                talk: {
-                  ...draft.talk,
-                  provider: providerId,
-                  providers: {
-                    ...draft.talk?.providers,
-                    [providerId]: {
-                      ...draft.talk?.providers?.[providerId],
-                      voiceId: chosen.id,
-                    },
+              draft.talk = {
+                ...draft.talk,
+                provider: providerId,
+                providers: {
+                  ...draft.talk?.providers,
+                  [providerId]: {
+                    ...draft.talk?.providers?.[providerId],
+                    voiceId: chosen.id,
                   },
-                  ...(providerId === "elevenlabs" ? { voiceId: chosen.id } : {}),
                 },
               };
-              Object.assign(draft, nextConfig);
             },
           });
 

@@ -2,15 +2,15 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   parseLiveCsvFilter,
   parseProviderModelMap,
-  redactLiveApiKey,
   resolveConfiguredLiveProviderModels,
-  resolveLiveAuthStore,
 } from "../media-generation/live-test-helpers.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
-export { parseProviderModelMap, redactLiveApiKey };
+export { parseProviderModelMap };
+export { resolveLiveAuthStore as resolveLiveImageAuthStore } from "../media-generation/live-test-helpers.js";
 
-export const DEFAULT_LIVE_IMAGE_MODELS: Record<string, string> = {
+// Default provider/model matrix for image live tests. Provider env filters can
+// override these without changing test source.
+export const DEFAULT_LIVE_IMAGE_MODELS: Partial<Record<string, string>> = {
   deepinfra: "deepinfra/black-forest-labs/FLUX-1-schnell",
   fal: "fal/fal-ai/flux/dev",
   google: "google/gemini-3.1-flash-image-preview",
@@ -21,29 +21,16 @@ export const DEFAULT_LIVE_IMAGE_MODELS: Record<string, string> = {
   xai: "xai/grok-imagine-image",
 };
 
+// Case filters are intentionally lowercased because test case names are local
+// labels, unlike provider ids/models that may be case-sensitive.
 export function parseCaseFilter(raw?: string): Set<string> | null {
-  const trimmed = raw?.trim();
-  if (!trimmed || trimmed === "all") {
-    return null;
-  }
-  const values = trimmed
-    .split(",")
-    .map((entry) => normalizeOptionalLowercaseString(entry))
-    .filter((entry): entry is string => Boolean(entry));
-  return values.length > 0 ? new Set(values) : null;
+  return parseLiveCsvFilter(raw);
 }
 
-export function parseCsvFilter(raw?: string): Set<string> | null {
+export function parseImageProviderFilter(raw?: string): Set<string> | null {
   return parseLiveCsvFilter(raw, { lowercase: false });
 }
 
 export function resolveConfiguredLiveImageModels(cfg: OpenClawConfig): Map<string, string> {
-  return resolveConfiguredLiveProviderModels(cfg.agents?.defaults?.imageGenerationModel);
-}
-
-export function resolveLiveImageAuthStore(params: {
-  requireProfileKeys: boolean;
-  hasLiveKeys: boolean;
-}) {
-  return resolveLiveAuthStore(params);
+  return resolveConfiguredLiveProviderModels(cfg.agents?.defaults?.mediaModels?.image);
 }

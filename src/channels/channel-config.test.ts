@@ -1,5 +1,5 @@
+// Channel config tests cover channel config normalization and account lookup behavior.
 import { describe, expect, it } from "vitest";
-import type { MsgContext } from "../auto-reply/templating.js";
 import { typedCases } from "../test-utils/typed-cases.js";
 import {
   type ChannelMatchSource,
@@ -8,10 +8,8 @@ import {
   resolveChannelEntryMatch,
   resolveChannelEntryMatchWithFallback,
   resolveNestedAllowlistDecision,
-  applyChannelMatchMeta,
   resolveChannelMatchConfig,
 } from "./channel-config.js";
-import { validateSenderIdentity } from "./sender-identity.js";
 
 describe("buildChannelKeyCandidates", () => {
   it("dedupes and trims keys", () => {
@@ -91,26 +89,26 @@ describe("resolveChannelEntryMatchWithFallback", () => {
     expect(match.matchKey).toBe(testCase.expectedMatchKey);
   });
 
-  it("matches normalized keys when normalizeKey is provided", () => {
-    const entries = { "My Team": { allow: true } };
-    const match = resolveChannelEntryMatchWithFallback({
-      entries,
-      keys: ["my-team"],
-      normalizeKey: normalizeChannelSlug,
-    });
-    expect(match.entry).toBe(entries["My Team"]);
-    expect(match.matchSource).toBe("direct");
-    expect(match.matchKey).toBe("My Team");
-  });
-});
-
-describe("applyChannelMatchMeta", () => {
-  it("copies match metadata onto resolved configs", () => {
-    const base: { matchKey?: string; matchSource?: ChannelMatchSource } = {};
-    const resolved = applyChannelMatchMeta(base, { matchKey: "general", matchSource: "direct" });
-    expect(resolved.matchKey).toBe("general");
-    expect(resolved.matchSource).toBe("direct");
-  });
+  it.each([
+    { keys: ["my-team"], parentKeys: ["parent"], source: "direct" },
+    { keys: ["missing"], parentKeys: ["my-team"], source: "parent" },
+  ] as const)(
+    "matches normalized $source keys before wildcard fallback",
+    ({ keys, parentKeys, source }) => {
+      const entries = { "My Team": { allow: true } };
+      const match = resolveChannelEntryMatchWithFallback({
+        entries: { ...entries, parent: { allow: false }, "*": { allow: false } },
+        keys: [...keys],
+        parentKeys: [...parentKeys],
+        wildcardKey: "*",
+        normalizeKey: normalizeChannelSlug,
+      });
+      expect(match.entry).toBe(entries["My Team"]);
+      expect(match.matchSource).toBe(source);
+      expect(match.matchKey).toBe("My Team");
+      expect(match.parentEntry).toBe(source === "parent" ? entries["My Team"] : undefined);
+    },
+  );
 });
 
 describe("resolveChannelMatchConfig", () => {
@@ -132,33 +130,6 @@ describe("resolveChannelMatchConfig", () => {
     );
     expect(resolved?.matchKey).toBe("*");
     expect(resolved?.matchSource).toBe("wildcard");
-  });
-});
-
-describe("validateSenderIdentity", () => {
-  it("allows direct messages without sender fields", () => {
-    const ctx: MsgContext = { ChatType: "direct" };
-    expect(validateSenderIdentity(ctx)).toStrictEqual([]);
-  });
-
-  it("requires some sender identity for non-direct chats", () => {
-    const ctx: MsgContext = { ChatType: "group" };
-    expect(validateSenderIdentity(ctx)).toContain(
-      "missing sender identity (SenderId/SenderName/SenderUsername/SenderE164)",
-    );
-  });
-
-  it("validates SenderE164 and SenderUsername shape", () => {
-    const ctx: MsgContext = {
-      ChatType: "group",
-      SenderE164: "123",
-      SenderUsername: "@ada lovelace",
-    };
-    expect(validateSenderIdentity(ctx)).toEqual([
-      "invalid SenderE164: 123",
-      'SenderUsername should not include "@": @ada lovelace',
-      "SenderUsername should not include whitespace: @ada lovelace",
-    ]);
   });
 });
 

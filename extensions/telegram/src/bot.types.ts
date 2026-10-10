@@ -1,3 +1,4 @@
+import type { ChannelInboundTurnPlan } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { TelegramBotDeps } from "./bot-deps.js";
@@ -7,7 +8,12 @@ import type { TelegramTransport } from "./fetch.js";
 export type TelegramBotOptions = {
   token: string;
   accountId?: string;
+  /** Agent that owns account-scoped Telegram runtime state. */
+  ownerAgentId?: string;
   runtime?: RuntimeEnv;
+  buildContext?: typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
+  /** Instance-bound reply dispatcher prepared by the owning plugin runtime. */
+  dispatchReplyFromConfig?: NonNullable<ChannelInboundTurnPlan["dispatchReplyFromConfig"]>;
   requireMention?: boolean;
   allowFrom?: Array<string | number>;
   groupAllowFrom?: Array<string | number>;
@@ -19,8 +25,10 @@ export type TelegramBotOptions = {
   botInfo?: TelegramBotInfo;
   /** Signal to abort in-flight Telegram API fetch requests (e.g. getUpdates) on shutdown. */
   fetchAbortSignal?: AbortSignal;
-  /** Minimum grammY client timeout when timeoutSeconds is configured on long-polling bots. */
-  minimumClientTimeoutSeconds?: number;
+  /** Account-lifecycle signal; polling-cycle recovery must not abort account-owned work. */
+  accountAbortSignal?: AbortSignal;
+  /** Signal to abort inbound media resolution without cancelling adopted-turn Bot API calls. */
+  mediaAbortSignal?: AbortSignal;
   updateOffset?: {
     lastUpdateId?: number | null;
     persistenceFloorUpdateId?: number | null;

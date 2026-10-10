@@ -1,14 +1,17 @@
 import type { Command } from "commander";
+import { getCliPluginInvocationResources } from "../runtime-cleanup-scope.js";
+import { reparseProgramFromActionCommand } from "./action-reparse.js";
 import { removeCommandByName } from "./command-tree.js";
-import { registerLazyCommand } from "./register-lazy-command.js";
+import { markCommanderLazyCommand } from "./commander-parse-facts.js";
 
 export type CommandGroupPlaceholder = {
   name: string;
   description: string;
+  hidden?: boolean;
   options?: readonly CommandGroupPlaceholderOption[];
 };
 
-export type CommandGroupPlaceholderOption = {
+type CommandGroupPlaceholderOption = {
   flags: string;
   description: string;
 };
@@ -55,15 +58,18 @@ export function registerLazyCommandGroup(
   entry: CommandGroupEntry,
   placeholder: CommandGroupPlaceholder,
 ) {
-  registerLazyCommand({
-    program,
-    name: placeholder.name,
-    description: placeholder.description,
-    options: placeholder.options,
-    removeNames: [...new Set(getCommandGroupNames(entry))],
-    register: async () => {
-      await entry.register(program);
-    },
+  const command = program
+    .command(placeholder.name, { hidden: placeholder.hidden })
+    .description(placeholder.description);
+  markCommanderLazyCommand(command);
+  for (const option of placeholder.options ?? []) {
+    command.option(option.flags, option.description);
+  }
+  command.allowUnknownOption(true).allowExcessArguments(true);
+  command.action(async () => {
+    removeCommandGroupNames(program, entry);
+    await entry.register(program);
+    await reparseProgramFromActionCommand(program, command);
   });
 }
 
@@ -77,8 +83,13 @@ export function registerCommandGroups(
   },
 ) {
   if (params.eager) {
+    const resources = getCliPluginInvocationResources();
     for (const entry of entries) {
-      void entry.register(program);
+      if (resources) {
+        resources.register(() => entry.register(program));
+      } else {
+        void entry.register(program);
+      }
     }
     return;
   }

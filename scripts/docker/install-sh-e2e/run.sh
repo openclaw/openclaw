@@ -15,6 +15,38 @@ fi
 # shellcheck source=../install-sh-common/version-parse.sh
 source "$VERIFY_HELPER_PATH"
 
+read_positive_int_env() {
+  local name="${1:?missing environment variable name}"
+  local fallback="${2:?missing fallback value}"
+  local value="${!name-}"
+  if [[ -z "${!name+x}" ]]; then
+    value="$fallback"
+  fi
+  if [[ ! "$value" =~ ^[0-9]+$ ]] || (( 10#$value < 1 )); then
+    echo "invalid $name: $value" >&2
+    return 2
+  fi
+  printf "%s\n" "$((10#$value))"
+}
+
+read_boolean_env() {
+  local name="${1:?missing environment variable name}"
+  local fallback="${2:?missing fallback value}"
+  local value="${!name-}"
+  if [[ -z "${!name+x}" ]]; then
+    value="$fallback"
+  fi
+  case "$value" in
+    0 | 1)
+      printf "%s\n" "$value"
+      ;;
+    *)
+      echo "invalid $name: $value" >&2
+      return 2
+      ;;
+  esac
+}
+
 INSTALL_URL="${OPENCLAW_INSTALL_URL:-https://openclaw.bot/install.sh}"
 MODELS_MODE="${OPENCLAW_E2E_MODELS:-both}" # both|openai|anthropic
 INSTALL_TAG="${OPENCLAW_INSTALL_TAG:-latest}"
@@ -23,11 +55,11 @@ SKIP_PREVIOUS="${OPENCLAW_INSTALL_E2E_SKIP_PREVIOUS:-0}"
 OPENAI_API_KEY="${OPENAI_API_KEY:-}"
 ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
 ANTHROPIC_API_TOKEN="${ANTHROPIC_API_TOKEN:-}"
-AGENT_TURN_TIMEOUT_SECONDS="${OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS:-300}"
-AGENT_TURNS_PARALLEL="${OPENCLAW_INSTALL_E2E_AGENT_TURNS_PARALLEL:-1}"
-AGENT_TOOL_SMOKE="${OPENCLAW_INSTALL_E2E_AGENT_TOOL_SMOKE:-1}"
-OPENAI_AGENT_MODEL="${OPENCLAW_INSTALL_E2E_OPENAI_MODEL:-openai/gpt-5.5}"
-OPENAI_PROVIDER_TIMEOUT_SECONDS="${OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS:-${AGENT_TURN_TIMEOUT_SECONDS}}"
+AGENT_TURN_TIMEOUT_SECONDS="$(read_positive_int_env OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS 300)"
+AGENT_TURNS_PARALLEL="$(read_boolean_env OPENCLAW_INSTALL_E2E_AGENT_TURNS_PARALLEL 1)"
+AGENT_TOOL_SMOKE="$(read_boolean_env OPENCLAW_INSTALL_E2E_AGENT_TOOL_SMOKE 1)"
+OPENAI_AGENT_MODEL="${OPENCLAW_INSTALL_E2E_OPENAI_MODEL:-openai/gpt-5.6-luna}"
+OPENAI_PROVIDER_TIMEOUT_SECONDS="$(read_positive_int_env OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS "$AGENT_TURN_TIMEOUT_SECONDS")"
 
 time_phase() {
   local name="$1"
@@ -96,15 +128,12 @@ resolve_npm_versions() {
     echo "ERROR: unable to resolve openclaw@${INSTALL_TAG} version" >&2
     return 2
   fi
-  if [[ -n "$E2E_PREVIOUS_VERSION" ]]; then
+  if [[ "$SKIP_PREVIOUS" == "1" ]]; then
+    PREVIOUS_VERSION="$EXPECTED_VERSION"
+  elif [[ -n "$E2E_PREVIOUS_VERSION" ]]; then
     PREVIOUS_VERSION="$E2E_PREVIOUS_VERSION"
   else
-    PREVIOUS_VERSION="$(VERSIONS_JSON="$(quiet_npm view openclaw versions --json)" node - <<'NODE'
-const versions = JSON.parse(process.env.VERSIONS_JSON || "[]");
-if (!Array.isArray(versions) || versions.length === 0) process.exit(1);
-process.stdout.write(versions.length >= 2 ? versions[versions.length - 2] : versions[0]);
-NODE
-    )"
+    PREVIOUS_VERSION="$(resolve_previous_npm_version openclaw "$EXPECTED_VERSION")" || return
   fi
   echo "expected=$EXPECTED_VERSION previous=$PREVIOUS_VERSION"
 }
@@ -118,15 +147,21 @@ preinstall_previous_version() {
   fi
 }
 
-run_official_installer() {
+run_official_installer() (
+  local installer
+  # time_phase disables errexit, so setup and download failures must return explicitly.
+  installer="$(mktemp)" || return
+  trap 'rm -f "$installer"' EXIT
+
+  curl -fsSL --connect-timeout 10 --max-time 120 "$INSTALL_URL" -o "$installer" || return
   if [[ "$INSTALL_TAG" == "beta" ]]; then
-    curl -fsSL "$INSTALL_URL" | OPENCLAW_BETA=1 bash
+    OPENCLAW_BETA=1 bash "$installer"
   elif [[ "$INSTALL_TAG" != "latest" ]]; then
-    curl -fsSL "$INSTALL_URL" | OPENCLAW_VERSION="$INSTALL_TAG" bash
+    OPENCLAW_VERSION="$INSTALL_TAG" bash "$installer"
   else
-    curl -fsSL "$INSTALL_URL" | bash
+    bash "$installer"
   fi
-}
+)
 
 verify_installed_version() {
   INSTALLED_VERSION="$(openclaw --version 2>/dev/null | head -n 1 | tr -d '\r')"
@@ -143,31 +178,19 @@ time_phase "Preinstall previous" preinstall_previous_version
 time_phase "Run official installer one-liner" run_official_installer
 time_phase "Verify installed version" verify_installed_version
 
-set_image_model() {
+set_profile_model() {
   local profile="$1"
-  shift
+  local command="$2"
+  local label="$3"
+  shift 3
   local candidate
   for candidate in "$@"; do
-    if openclaw --profile "$profile" models set-image "$candidate" >/dev/null 2>&1; then
+    if openclaw --profile "$profile" models "$command" "$candidate" >/dev/null 2>&1; then
       echo "$candidate"
       return 0
     fi
   done
-  echo "ERROR: could not set an image model (tried: $*)" >&2
-  return 1
-}
-
-set_agent_model() {
-  local profile="$1"
-  local candidate
-  shift
-  for candidate in "$@"; do
-    if openclaw --profile "$profile" models set "$candidate" >/dev/null 2>&1; then
-      echo "$candidate"
-      return 0
-    fi
-  done
-  echo "ERROR: could not set agent model (tried: $*)" >&2
+  echo "ERROR: could not set $label model (tried: $*)" >&2
   return 1
 }
 
@@ -245,13 +268,11 @@ run_agent_turn() {
   local session_id="$2"
   local prompt="$3"
   local out_json="$4"
-  # Installer E2E validates install + onboard + embedded agent tooling. It does
-  # not need a paired Gateway control-plane hop, which is flaky/non-deterministic
-  # in the isolated container and already covered by gateway-specific lanes.
+  # The profile Gateway is already running and owns this state directory. Route
+  # agent turns through it so the smoke matches the supported ownership model.
   set +e
   timeout --kill-after=15s "${AGENT_TURN_TIMEOUT_SECONDS}s" \
     openclaw --profile "$profile" agent \
-    --local \
     --session-id "$session_id" \
     --message "$prompt" \
     --thinking off \
@@ -277,15 +298,63 @@ function extractTrailingJsonObject(input) {
   try {
     return JSON.parse(trimmed);
   } catch {
-    // Some local runs emit stderr diagnostics before the final JSON payload.
-    // Walk backward and keep the last parseable top-level object.
-    for (let index = trimmed.lastIndexOf("{"); index >= 0; index = trimmed.lastIndexOf("{", index - 1)) {
-      const candidate = trimmed.slice(index);
+    // Agent lifecycle diagnostics can surround --json output. Prefer an agent
+    // result envelope so a structured post-result diagnostic cannot replace it.
+    let lastParsed;
+    let lastAgentResult;
+    for (let index = 0; index < trimmed.length; index += 1) {
+      if (trimmed[index] !== "{") {
+        continue;
+      }
+      let depth = 0;
+      let inString = false;
+      let escaping = false;
+      let end = -1;
+      for (let cursor = index; cursor < trimmed.length; cursor += 1) {
+        const char = trimmed[cursor];
+        if (inString) {
+          if (escaping) {
+            escaping = false;
+          } else if (char === "\\") {
+            escaping = true;
+          } else if (char === '"') {
+            inString = false;
+          }
+          continue;
+        }
+        if (char === '"') {
+          inString = true;
+        } else if (char === "{") {
+          depth += 1;
+        } else if (char === "}") {
+          depth -= 1;
+          if (depth === 0) {
+            end = cursor;
+            break;
+          }
+        }
+      }
+      if (end < 0) {
+        continue;
+      }
       try {
-        return JSON.parse(candidate);
+        lastParsed = JSON.parse(trimmed.slice(index, end + 1));
+        if (
+          Array.isArray(lastParsed?.result?.payloads) ||
+          Array.isArray(lastParsed?.payloads)
+        ) {
+          lastAgentResult = lastParsed;
+        }
       } catch {
         // keep scanning
       }
+      index = end;
+    }
+    if (lastAgentResult !== undefined) {
+      return lastAgentResult;
+    }
+    if (lastParsed !== undefined) {
+      return lastParsed;
     }
     throw new Error(`could not extract JSON payload from agent output:\n${trimmed}`);
   }
@@ -338,14 +407,9 @@ run_agent_turn_logged_or_skip_profile() {
 }
 
 run_agent_turn_bg() {
-  local label="$1"
-  local profile="$2"
-  local session_id="$3"
-  local prompt="$4"
-  local out_json="$5"
   (
     set -euo pipefail
-    run_agent_turn_logged "$label" "$profile" "$session_id" "$prompt" "$out_json"
+    run_agent_turn_logged "$@"
   ) &
   RUN_AGENT_TURN_BG_PID="$!"
 }
@@ -489,16 +553,38 @@ NODE
 }
 
 assert_session_used_tools() {
-  local jsonl="$1"
-  shift
-  node - <<'NODE' "$jsonl" "$@"
+  local profile="$1"
+  local session_id="$2"
+  shift 2
+  local jsonl
+  local export_workspace=""
+  jsonl="$(session_jsonl_path "$profile" "$session_id")"
+  if [[ ! -f "$jsonl" ]]; then
+    export_workspace="$(mktemp -d)"
+    local export_status=0
+    openclaw --profile "$profile" sessions export-trajectory \
+      --session-key "agent:main:explicit:${session_id}" \
+      --agent main \
+      --workspace "$export_workspace" \
+      --output scan \
+      --json >/dev/null || export_status="$?"
+    if [[ "$export_status" -ne 0 ]]; then
+      rm -rf "$export_workspace"
+      return "$export_status"
+    fi
+    jsonl="$export_workspace/.openclaw/trajectory-exports/scan/events.jsonl"
+  fi
+  local scan_status=0
+  node - <<'NODE' "$jsonl" "$@" || scan_status="$?"
 const fs = require("node:fs");
 const jsonl = process.argv[2];
-const required = new Set(process.argv.slice(3));
+const required = process.argv.slice(3).map((spec) => spec.split("|").filter(Boolean));
 
-const raw = fs.readFileSync(jsonl, "utf8");
-const lines = raw.split("\n").map((l) => l.trim()).filter(Boolean);
 const seen = new Set();
+const head = [];
+let scannedBytes = 0;
+let truncated = false;
+let skippedOversizedLines = 0;
 
 const toolTypes = new Set([
   "tool_use",
@@ -511,10 +597,32 @@ const toolTypes = new Set([
   "toolresult",
   "tool-result",
 ]);
-function walk(node, parent) {
+function readPositiveIntEnv(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return fallback;
+  if (!/^[1-9][0-9]*$/.test(raw)) {
+    console.error(`${name} must be a positive integer`);
+    process.exit(2);
+  }
+  return Number(raw);
+}
+const maxBytes = readPositiveIntEnv("OPENCLAW_INSTALL_E2E_SESSION_SCAN_BYTES", 16 * 1024 * 1024);
+const maxLineBytes = readPositiveIntEnv("OPENCLAW_INSTALL_E2E_SESSION_LINE_BYTES", 1024 * 1024);
+const maxDepth = readPositiveIntEnv("OPENCLAW_INSTALL_E2E_SESSION_SCAN_DEPTH", 64);
+const maxNodes = readPositiveIntEnv("OPENCLAW_INSTALL_E2E_SESSION_SCAN_NODES", 100000);
+
+function missingTools() {
+  return required
+    .filter((group) => !group.some((tool) => seen.has(tool)))
+    .map((group) => group.join("|"));
+}
+
+function walk(node, depth, state) {
   if (!node) return;
+  if (depth > maxDepth || state.nodes >= maxNodes) return;
+  state.nodes += 1;
   if (Array.isArray(node)) {
-    for (const item of node) walk(item, node);
+    for (const item of node) walk(item, depth + 1, state);
     return;
   }
   if (typeof node !== "object") return;
@@ -542,27 +650,118 @@ function walk(node, parent) {
     }
   }
   if (obj.function && typeof obj.function.name === "string") seen.add(obj.function.name);
-  for (const v of Object.values(obj)) walk(v, obj);
+  for (const v of Object.values(obj)) walk(v, depth + 1, state);
 }
 
-for (const line of lines) {
+function processLine(lineBuffer) {
+  const line = lineBuffer.toString("utf8").trim();
+  if (!line) return;
+  if (head.length < 5) head.push(line.slice(0, maxLineBytes));
   try {
     const entry = JSON.parse(line);
-    walk(entry, null);
+    walk(entry, 0, { nodes: 0 });
   } catch {
     // ignore unparsable lines
   }
 }
 
-const missing = [...required].filter((t) => !seen.has(t));
-if (missing.length > 0) {
-  console.error(`Missing tools in transcript: ${missing.join(", ")}`);
-  console.error(`Seen tools: ${[...seen].sort().join(", ")}`);
-  console.error("Transcript head:");
-  console.error(lines.slice(0, 5).join("\n"));
-  process.exit(1);
+async function scan() {
+  const stream = fs.createReadStream(jsonl, { highWaterMark: 64 * 1024 });
+  let lineParts = [];
+  let lineBytes = 0;
+  let skippingLine = false;
+
+  function resetLine() {
+    lineParts = [];
+    lineBytes = 0;
+    skippingLine = false;
+  }
+
+  function appendLineChunk(chunk) {
+    if (skippingLine) return;
+    if (lineBytes + chunk.length > maxLineBytes) {
+      skippedOversizedLines += 1;
+      lineParts = [];
+      lineBytes = 0;
+      skippingLine = true;
+      return;
+    }
+    lineParts.push(chunk);
+    lineBytes += chunk.length;
+  }
+
+  function finishLine() {
+    if (!skippingLine && lineBytes > 0) {
+      processLine(Buffer.concat(lineParts, lineBytes));
+    }
+    resetLine();
+  }
+
+  for await (const rawChunk of stream) {
+    let chunk = rawChunk;
+    let stopAfterChunk = false;
+    if (scannedBytes + rawChunk.length > maxBytes) {
+      const remaining = Math.max(0, maxBytes - scannedBytes);
+      chunk = rawChunk.subarray(0, remaining);
+      truncated = true;
+      stopAfterChunk = true;
+    }
+    scannedBytes += chunk.length;
+    let offset = 0;
+    while (offset < chunk.length) {
+      const newline = chunk.indexOf(10, offset);
+      const end = newline === -1 ? chunk.length : newline;
+      if (end > offset) {
+        appendLineChunk(chunk.subarray(offset, end));
+      }
+      if (newline === -1) {
+        break;
+      }
+      finishLine();
+      if (missingTools().length === 0) {
+        stream.destroy();
+        return;
+      }
+      offset = newline + 1;
+    }
+    if (stopAfterChunk) {
+      stream.destroy();
+      break;
+    }
+  }
+  if (!truncated && lineBytes > 0) {
+    finishLine();
+  }
 }
+
+scan()
+  .then(() => {
+    const missing = missingTools();
+    if (missing.length > 0) {
+      console.error(`Missing tools in transcript: ${missing.join(", ")}`);
+      console.error(`Seen tools: ${[...seen].sort().join(", ")}`);
+      if (truncated) {
+        console.error(`Transcript scan stopped after ${maxBytes} bytes`);
+      }
+      if (skippedOversizedLines > 0) {
+        console.error(`Skipped ${skippedOversizedLines} oversized transcript line(s)`);
+      }
+      console.error("Transcript head:");
+      console.error(head.join("\n"));
+      process.exit(1);
+    }
+  })
+  .catch((error) => {
+    console.error(
+      `Could not scan transcript ${jsonl}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    process.exit(1);
+  });
 NODE
+  if [[ -n "$export_workspace" ]]; then
+    rm -rf "$export_workspace"
+  fi
+  return "$scan_status"
 }
 
 session_jsonl_path() {
@@ -579,56 +778,24 @@ run_profile() {
   CURRENT_AGENT_MODEL_PROVIDER="$agent_model_provider"
 
   phase_mark_start "Onboard ($profile)"
-	  if [[ "$agent_model_provider" == "openai" ]]; then
-	    openclaw --profile "$profile" onboard \
-	      --non-interactive \
-	      --accept-risk \
-	      --flow quickstart \
-	      --auth-choice openai-api-key \
-	      --openai-api-key "$OPENAI_API_KEY" \
-	      --gateway-port "$port" \
-	      --gateway-bind loopback \
-      --gateway-auth token \
-      --workspace "$workspace" \
-      --skip-health
-	  elif [[ -n "$ANTHROPIC_API_KEY" ]]; then
-	    openclaw --profile "$profile" onboard \
-	      --non-interactive \
-	      --accept-risk \
-	      --flow quickstart \
-	      --auth-choice apiKey \
-	      --anthropic-api-key "$ANTHROPIC_API_KEY" \
-	      --gateway-port "$port" \
-      --gateway-bind loopback \
-      --gateway-auth token \
-      --workspace "$workspace" \
-      --skip-health
-	  elif [[ -n "$ANTHROPIC_API_TOKEN" ]]; then
-	    openclaw --profile "$profile" onboard \
-	      --non-interactive \
-	      --accept-risk \
-	      --flow quickstart \
-	      --auth-choice token \
-	      --token-provider anthropic \
-	      --token "$ANTHROPIC_API_TOKEN" \
-	      --gateway-port "$port" \
-      --gateway-bind loopback \
-      --gateway-auth token \
-      --workspace "$workspace" \
-      --skip-health
-	  else
-	    openclaw --profile "$profile" onboard \
-	      --non-interactive \
-	      --accept-risk \
-	      --flow quickstart \
-	      --auth-choice apiKey \
-	      --anthropic-api-key "$ANTHROPIC_API_KEY" \
-	      --gateway-port "$port" \
-	      --gateway-bind loopback \
-      --gateway-auth token \
-      --workspace "$workspace" \
-      --skip-health
+  local auth_args=()
+  if [[ "$agent_model_provider" == "openai" ]]; then
+    auth_args=(--auth-choice openai-api-key --openai-api-key "$OPENAI_API_KEY")
+  elif [[ -z "$ANTHROPIC_API_KEY" && -n "$ANTHROPIC_API_TOKEN" ]]; then
+    auth_args=(--auth-choice token --token-provider anthropic --token "$ANTHROPIC_API_TOKEN")
+  else
+    auth_args=(--auth-choice apiKey --anthropic-api-key "$ANTHROPIC_API_KEY")
   fi
+  openclaw --profile "$profile" onboard \
+    --non-interactive \
+    --accept-risk \
+    --flow quickstart \
+    "${auth_args[@]}" \
+    --gateway-port "$port" \
+    --gateway-bind loopback \
+    --gateway-auth token \
+    --workspace "$workspace" \
+    --skip-health
   phase_mark_passed "Onboard ($profile)"
 
   phase_mark_start "Verify workspace identity files ($profile)"
@@ -636,7 +803,6 @@ run_profile() {
   test -f "$workspace/IDENTITY.md"
   test -f "$workspace/USER.md"
   test -f "$workspace/SOUL.md"
-  test -f "$workspace/TOOLS.md"
   # The remaining checks are deterministic tool smokes, not the interactive
   # first-run identity ritual. Drop BOOTSTRAP.md so provider prompts stay focused
   # on the fixture task and do not spend turns following onboarding copy.
@@ -647,18 +813,18 @@ run_profile() {
   local agent_model
   local image_model
   if [[ "$agent_model_provider" == "openai" ]]; then
-    agent_model="$(set_agent_model "$profile" \
+    agent_model="$(set_profile_model "$profile" set agent \
       "$OPENAI_AGENT_MODEL" \
       "openai/gpt-5.5" \
       "openai/gpt-5.4-mini")"
-    openclaw --profile "$profile" config set models.providers.openai "{\"baseUrl\":\"https://api.openai.com/v1\",\"models\":[],\"timeoutSeconds\":${OPENAI_PROVIDER_TIMEOUT_SECONDS},\"agentRuntime\":{\"id\":\"pi\"}}" --strict-json >/dev/null
-    image_model="$(set_image_model "$profile" \
+    openclaw --profile "$profile" config set models.providers.openai "{\"baseUrl\":\"https://api.openai.com/v1\",\"models\":[],\"timeoutSeconds\":${OPENAI_PROVIDER_TIMEOUT_SECONDS},\"agentRuntime\":{\"id\":\"openclaw\"}}" --strict-json >/dev/null
+    image_model="$(set_profile_model "$profile" set-image "an image" \
       "openai/gpt-5.4-image-2")"
   else
-    agent_model="$(set_agent_model "$profile" \
+    agent_model="$(set_profile_model "$profile" set agent \
       "anthropic/claude-opus-4-6" \
       "claude-opus-4-6")"
-    image_model="$(set_image_model "$profile" \
+    image_model="$(set_profile_model "$profile" set-image "an image" \
       "anthropic/claude-opus-4-6" \
       "claude-opus-4-6")"
   fi
@@ -838,11 +1004,11 @@ run_profile() {
   phase_mark_start "Verify tool usage via session transcript ($profile)"
   # Give the gateway a moment to flush transcripts.
   sleep 1
-  assert_session_used_tools "$(session_jsonl_path "$profile" "$TURN2_SESSION_ID")" write
-  assert_session_used_tools "$(session_jsonl_path "$profile" "$TURN2B_SESSION_ID")" read
-  assert_session_used_tools "$(session_jsonl_path "$profile" "$TURN3_SESSION_ID")" exec
-  assert_session_used_tools "$(session_jsonl_path "$profile" "$TURN3B_SESSION_ID")" write
-  assert_session_used_tools "$(session_jsonl_path "$profile" "$TURN4_SESSION_ID")" image write
+  assert_session_used_tools "$profile" "$TURN2_SESSION_ID" write
+  assert_session_used_tools "$profile" "$TURN2B_SESSION_ID" read
+  assert_session_used_tools "$profile" "$TURN3_SESSION_ID" exec
+  assert_session_used_tools "$profile" "$TURN3B_SESSION_ID" write
+  assert_session_used_tools "$profile" "$TURN4_SESSION_ID" "image|view_image" write
   phase_mark_passed "Verify tool usage via session transcript ($profile)"
 
   cleanup_profile

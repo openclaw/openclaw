@@ -1,4 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+// Discord tests cover threading.auto thread plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType } from "../internal/discord.js";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
@@ -21,9 +23,17 @@ const mockClient = {
   rest: { post: postMock, get: getMock, patch: patchMock },
 } as unknown as Parameters<MaybeCreateDiscordAutoThreadFn>[0]["client"];
 const mockMessage = {
-  id: "msg1",
+  id: "1001",
   timestamp: "123",
 } as unknown as Parameters<MaybeCreateDiscordAutoThreadFn>[0]["message"];
+
+function createMockMessage(overrides: Record<string, unknown>) {
+  return Object.assign(
+    {},
+    mockMessage,
+    overrides,
+  ) as Parameters<MaybeCreateDiscordAutoThreadFn>[0]["message"];
+}
 
 function createBaseParams(
   overrides: Partial<Parameters<MaybeCreateDiscordAutoThreadFn>[0]> = {},
@@ -48,12 +58,7 @@ async function flushAsyncWork() {
   await Promise.resolve();
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function callArg(mock: unknown, callIndex: number, argIndex: number, label: string) {
   const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
@@ -90,42 +95,57 @@ beforeEach(() => {
   generateThreadTitleMock.mockReset();
 });
 
+function mockThreadCreation() {
+  postMock.mockResolvedValueOnce({ id: "thread1" });
+  getMock.mockResolvedValueOnce({});
+}
+
 describe("maybeCreateDiscordAutoThread", () => {
-  it("skips auto-thread if channelType is GuildForum", async () => {
-    const result = await maybeCreateDiscordAutoThread(
-      createBaseParams({ channelType: ChannelType.GuildForum }),
-    );
+  it.each([
+    ChannelType.GuildForum,
+    ChannelType.GuildMedia,
+    ChannelType.GuildVoice,
+    ChannelType.GuildStageVoice,
+  ])("skips auto-thread for unsupported channel type %s", async (channelType) => {
+    const result = await maybeCreateDiscordAutoThread(createBaseParams({ channelType }));
     expect(result).toBeUndefined();
     expect(postMock).not.toHaveBeenCalled();
   });
 
-  it("skips auto-thread if channelType is GuildMedia", async () => {
+  it("reuses an existing message thread before skipping bot-authored messages", async () => {
+    getMock.mockResolvedValueOnce({ thread: { id: "existing-thread" } });
     const result = await maybeCreateDiscordAutoThread(
-      createBaseParams({ channelType: ChannelType.GuildMedia }),
+      createBaseParams({
+        message: createMockMessage({
+          author: { bot: true },
+        }),
+      }),
     );
+
+    expect(result).toBe("existing-thread");
+    expect(postMock).not.toHaveBeenCalled();
+  });
+
+  it("skips creating new auto-threads for bot-authored messages", async () => {
+    getMock.mockResolvedValueOnce({});
+    const result = await maybeCreateDiscordAutoThread(
+      createBaseParams({
+        message: createMockMessage({
+          author: { bot: true },
+        }),
+      }),
+    );
+
     expect(result).toBeUndefined();
     expect(postMock).not.toHaveBeenCalled();
   });
 
-  it("skips auto-thread if channelType is GuildVoice", async () => {
-    const result = await maybeCreateDiscordAutoThread(
-      createBaseParams({ channelType: ChannelType.GuildVoice }),
-    );
-    expect(result).toBeUndefined();
-    expect(postMock).not.toHaveBeenCalled();
-  });
-
-  it("skips auto-thread if channelType is GuildStageVoice", async () => {
-    const result = await maybeCreateDiscordAutoThread(
-      createBaseParams({ channelType: ChannelType.GuildStageVoice }),
-    );
-    expect(result).toBeUndefined();
-    expect(postMock).not.toHaveBeenCalled();
-  });
-
-  it("creates auto-thread if channelType is GuildText", async () => {
+  it("still creates an auto-thread when the existing-thread lookup fails", async () => {
     postMock.mockResolvedValueOnce({ id: "thread1" });
+    getMock.mockRejectedValueOnce(new Error("transient fetch failure"));
+
     const result = await maybeCreateDiscordAutoThread(createBaseParams());
+
     expect(result).toBe("thread1");
     expect(postMock).toHaveBeenCalled();
   });
@@ -133,7 +153,7 @@ describe("maybeCreateDiscordAutoThread", () => {
 
 describe("maybeCreateDiscordAutoThread autoArchiveDuration", () => {
   it("uses configured autoArchiveDuration", async () => {
-    postMock.mockResolvedValueOnce({ id: "thread1" });
+    mockThreadCreation();
     await maybeCreateDiscordAutoThread(
       createBaseParams({
         channelConfig: { allowed: true, autoThread: true, autoArchiveDuration: "10080" },
@@ -143,7 +163,7 @@ describe("maybeCreateDiscordAutoThread autoArchiveDuration", () => {
   });
 
   it("accepts numeric autoArchiveDuration", async () => {
-    postMock.mockResolvedValueOnce({ id: "thread1" });
+    mockThreadCreation();
     await maybeCreateDiscordAutoThread(
       createBaseParams({
         channelConfig: { allowed: true, autoThread: true, autoArchiveDuration: 4320 },
@@ -153,7 +173,7 @@ describe("maybeCreateDiscordAutoThread autoArchiveDuration", () => {
   });
 
   it("defaults to 60 when autoArchiveDuration not set", async () => {
-    postMock.mockResolvedValueOnce({ id: "thread1" });
+    mockThreadCreation();
     await maybeCreateDiscordAutoThread(createBaseParams());
     expectRestBodyField(postMock, "auto_archive_duration", 60);
   });
@@ -161,7 +181,7 @@ describe("maybeCreateDiscordAutoThread autoArchiveDuration", () => {
 
 describe("maybeCreateDiscordAutoThread autoThreadName", () => {
   it("renames created thread when generated mode is enabled", async () => {
-    postMock.mockResolvedValueOnce({ id: "thread1" });
+    mockThreadCreation();
     patchMock.mockResolvedValueOnce({});
     generateThreadTitleMock.mockResolvedValueOnce("Deploy rollout summary");
 
@@ -191,7 +211,7 @@ describe("maybeCreateDiscordAutoThread autoThreadName", () => {
   });
 
   it("does not block thread creation while title summary is pending", async () => {
-    postMock.mockResolvedValueOnce({ id: "thread1" });
+    mockThreadCreation();
     patchMock.mockResolvedValueOnce({});
     let resolveTitle: ((value: string | null) => void) | undefined;
     generateThreadTitleMock.mockReturnValueOnce(
@@ -216,8 +236,8 @@ describe("maybeCreateDiscordAutoThread autoThreadName", () => {
     expect(patchMock).toHaveBeenCalled();
   });
 
-  it("uses channel-specific thread override for generated title model", async () => {
-    postMock.mockResolvedValueOnce({ id: "thread1" });
+  it.each(["thread1", "text1"])("uses title model override from %s", async (channelId) => {
+    mockThreadCreation();
     patchMock.mockResolvedValueOnce({});
     generateThreadTitleMock.mockResolvedValueOnce("Deploy rollout summary");
 
@@ -228,36 +248,7 @@ describe("maybeCreateDiscordAutoThread autoThreadName", () => {
       channels: {
         modelByChannel: {
           discord: {
-            thread1: "openai/gpt-4.1-mini",
-          },
-        },
-      },
-    } as OpenClawConfig;
-    await maybeCreateDiscordAutoThread(
-      createBaseParams({
-        channelConfig: { allowed: true, autoThread: true, autoThreadName: "generated" },
-        cfg,
-        agentId: "main",
-      }),
-    );
-
-    await flushAsyncWork();
-    expectGeneratedTitleField("modelRef", "openai/gpt-4.1-mini");
-  });
-
-  it("falls back to parent channel override for generated title model", async () => {
-    postMock.mockResolvedValueOnce({ id: "thread1" });
-    patchMock.mockResolvedValueOnce({});
-    generateThreadTitleMock.mockResolvedValueOnce("Deploy rollout summary");
-
-    const cfg = {
-      agents: {
-        defaults: { model: "anthropic/claude-opus-4-6" },
-      },
-      channels: {
-        modelByChannel: {
-          discord: {
-            text1: "openai/gpt-4.1-mini",
+            [channelId]: "openai/gpt-4.1-mini",
           },
         },
       },
@@ -275,7 +266,7 @@ describe("maybeCreateDiscordAutoThread autoThreadName", () => {
   });
 
   it("skips summarization when cfg or agentId is missing", async () => {
-    postMock.mockResolvedValueOnce({ id: "thread1" });
+    mockThreadCreation();
     await maybeCreateDiscordAutoThread(
       createBaseParams({
         channelConfig: { allowed: true, autoThread: true, autoThreadName: "generated" },
@@ -287,7 +278,7 @@ describe("maybeCreateDiscordAutoThread autoThreadName", () => {
   });
 
   it("does not rename when autoThreadName is not set", async () => {
-    postMock.mockResolvedValueOnce({ id: "thread1" });
+    mockThreadCreation();
     await maybeCreateDiscordAutoThread(
       createBaseParams({
         channelConfig: { allowed: true, autoThread: true },
@@ -299,7 +290,7 @@ describe("maybeCreateDiscordAutoThread autoThreadName", () => {
   });
 
   it("does not rename when generated title sanitizes to fallback thread name", async () => {
-    postMock.mockResolvedValueOnce({ id: "thread1" });
+    mockThreadCreation();
     generateThreadTitleMock.mockResolvedValueOnce("<@123456789012345678> <#987654321098765432>");
 
     const cfg = { agents: { defaults: { model: "anthropic/claude-opus-4-6" } } } as OpenClawConfig;

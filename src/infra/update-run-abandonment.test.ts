@@ -1,0 +1,585 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { UPDATE_RUN_DRIVER_LIMIT } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createUpdateCommandExecutionGuards } from "../cli/update-cli/update-command-execution-guards.js";
+import { createUpdateRunProgress } from "../cli/update-cli/update-command-run.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import * as pidAlive from "../shared/pid-alive.js";
+import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { createRetainedUpdateRecovery } from "./update-retained-recovery.test-support.js";
+import { inspectUpdateRunAbandonment } from "./update-run-activity.js";
+import { readUpdateRunDriver, type UpdateRunDriver } from "./update-run-driver.js";
+import {
+  adoptUpdateRun,
+  createUpdateRun,
+  getUpdateRun,
+  heartbeatUpdateRun,
+  recordUpdateRunPhase,
+  recordUpdateRunStep,
+} from "./update-run-ledger.js";
+import { reconcileUpdateRunsInNativeKernelForTest } from "./update-run-reconciliation.test-support.js";
+import { loadUpdateRecovery } from "./update-run-recovery.js";
+import { ABANDONED_UPDATE_RUN_MS, UPDATE_RUN_HEARTBEAT_MS } from "./update-run-timeouts.js";
+import { runStep } from "./update-runner-command.js";
+import type { CommandRunner } from "./update-runner-types.js";
+
+const tempDirs = createTempDirTracker();
+
+function isolatedOptions() {
+  return { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-update-abandonment-") } };
+}
+
+function currentDriver(): UpdateRunDriver {
+  const driver = readUpdateRunDriver();
+  if (!driver) {
+    throw new Error("Test process identity is unavailable");
+  }
+  return driver;
+}
+
+function exitedDriver(): UpdateRunDriver {
+  const driver = currentDriver();
+  // The current PID belongs to a different generation than the recorded driver.
+  return { ...driver, startIdentity: String(Number(driver.startIdentity) + 1) };
+}
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-09-07T12:00:00Z"));
+});
+
+afterEach(async () => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  await closeStateDatabaseForTest();
+  tempDirs.cleanup();
+});
+
+describe("abandoned update runs", () => {
+  it.each(["young", "recovery", "live-driver", "legacy-only"] as const)(
+    "does not request write access for protected %s history",
+    (shape) => {
+      const options = isolatedOptions();
+      const run = createUpdateRun(
+        {
+          trigger: "cli",
+          ...(shape === "legacy-only" ? { origin: { driver: exitedDriver() } } : {}),
+        },
+        options,
+      );
+      if (shape === "recovery") {
+        const from = {
+          root: options.env.OPENCLAW_STATE_DIR,
+          nodePath: process.execPath,
+          version: "2026.9.2",
+          buildId: null,
+        };
+        createRetainedUpdateRecovery(
+          { runId: run.runId, from, to: { ...from, version: "2026.9.3" } },
+          options,
+        );
+      } else if (shape === "live-driver") {
+        adoptUpdateRun(run.runId, options);
+      }
+      const before = getUpdateRun(run.runId, options);
+      vi.advanceTimersByTime((shape === "young" ? 1 : 25) * 60 * 60_000);
+      expect(
+        reconcileUpdateRunsInNativeKernelForTest(
+          { legacyOnly: shape === "legacy-only" },
+          { ...options, readOnly: true },
+        ),
+      ).toEqual([]);
+      expect(getUpdateRun(run.runId, options)).toEqual(before);
+    },
+  );
+
+  it.each([24 * 60 * 60_000, 24 * 60 * 60_000 + 1])(
+    "expires only untouched legacy admissions older than 24 hours (age=%s)",
+    (age) => {
+      const options = isolatedOptions();
+      const run = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } }, options);
+      vi.advanceTimersByTime(age);
+      const reconciled = reconcileUpdateRunsInNativeKernelForTest({}, options);
+      if (age <= 24 * 60 * 60_000) {
+        expect(reconciled).toEqual([]);
+        expect(getUpdateRun(run.runId, options)).toEqual(run);
+      } else {
+        expect(reconciled).toMatchObject([
+          {
+            runId: run.runId,
+            phase: "finished",
+            status: "failed",
+            reason: "legacy-driver-expired",
+          },
+        ]);
+        expect(getUpdateRun(run.runId, options)?.steps).toContainEqual(
+          expect.objectContaining({ step: "reconcile:abandoned", detail: "legacy-driver-expired" }),
+        );
+      }
+    },
+  );
+
+  it.each([
+    { first: "startup reconciliation", reason: "legacy-driver-expired" },
+    { first: "new update admission", reason: "superseded" },
+  ])(
+    "preserves the terminal reason when $first handles a legacy admission first",
+    ({ first, reason }) => {
+      const options = isolatedOptions();
+      const old = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } }, options);
+      vi.advanceTimersByTime(25 * 60 * 60_000);
+
+      if (first === "startup reconciliation") {
+        expect(reconcileUpdateRunsInNativeKernelForTest({}, options)).toMatchObject([
+          { runId: old.runId, status: "failed", reason },
+        ]);
+      }
+      createUpdateRun(
+        { trigger: "cli", origin: { driver: currentDriver() }, supersedeStaleIdentityless: true },
+        options,
+      );
+      const terminal = getUpdateRun(old.runId, options);
+      expect(terminal).toMatchObject({
+        status: "failed",
+        phase: "finished",
+        reason,
+        finishedAtMs: Date.now(),
+      });
+      expect(reconcileUpdateRunsInNativeKernelForTest({}, options)).toEqual([]);
+      expect(getUpdateRun(old.runId, options)).toEqual(terminal);
+    },
+  );
+
+  it.each(["automatic", "explicit", "supersede"] as const)(
+    "preserves a durable run and its descriptor during %s stale-run cleanup",
+    (mode) => {
+      const options = isolatedOptions();
+      const run = createUpdateRun(
+        { trigger: "cli", origin: mode === "supersede" ? {} : { driver: exitedDriver() } },
+        options,
+      );
+      const from = {
+        root: options.env.OPENCLAW_STATE_DIR,
+        nodePath: process.execPath,
+        version: "1.0.0",
+        buildId: null,
+      };
+      // This fixture owns every writer of its disposable database; the transaction is real.
+      const recovery = createRetainedUpdateRecovery(
+        { runId: run.runId, from, to: { ...from, version: "2.0.0" } },
+        options,
+      );
+      vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS + 10);
+      if (mode === "supersede") {
+        createUpdateRun({ trigger: "cli", supersedeStaleIdentityless: true }, options);
+      } else {
+        expect(
+          reconcileUpdateRunsInNativeKernelForTest({ explicit: mode === "explicit" }, options),
+        ).toEqual([]);
+      }
+      expect(getUpdateRun(run.runId, options)).toEqual(run);
+      expect(loadUpdateRecovery(run.runId, options)).toEqual(recovery);
+    },
+  );
+
+  it("preserves a known parent and the unobservable adopter across later driver death", () => {
+    const options = isolatedOptions();
+    const parent = currentDriver();
+    const created = createUpdateRun({ trigger: "cli", origin: { driver: parent } }, options);
+    const inspection = vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockReturnValue(null);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    adoptUpdateRun(created.runId, options);
+    for (let index = 0; index < 150; index++) {
+      recordUpdateRunStep(
+        created.runId,
+        { step: `diagnostic:${index}`, status: "completed" },
+        options,
+      );
+    }
+    inspection.mockReturnValue(Number(parent.startIdentity) + 1);
+    expect(reconcileUpdateRunsInNativeKernelForTest({ explicit: true }, options)).toEqual([]);
+    vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS + 1_000);
+    inspection.mockReturnValue(Number(parent.startIdentity));
+    expect(reconcileUpdateRunsInNativeKernelForTest({ explicit: true }, options)).toEqual([]);
+    inspection.mockReturnValue(Number(parent.startIdentity) + 1);
+    expect(reconcileUpdateRunsInNativeKernelForTest({}, options)).toEqual([]);
+    expect(reconcileUpdateRunsInNativeKernelForTest({ explicit: true }, options)).toMatchObject([
+      { runId: created.runId, status: "failed", reason: "abandoned" },
+    ]);
+  });
+
+  it("keeps a command running after heartbeat errors and warns once across its steps", async () => {
+    const options = isolatedOptions();
+    const run = adoptUpdateRun(createUpdateRun({ trigger: "cli" }, options).runId, options);
+    const progressRun = { runId: run.runId, env: options.env };
+    const guards = createUpdateCommandExecutionGuards(
+      { run: progressRun },
+      options.env.OPENCLAW_STATE_DIR,
+    );
+    const progress = createUpdateRunProgress(progressRun, {}, guards.recordStep);
+    progress.onHeartbeat = vi.fn(() => {
+      throw new Error("SQLITE_BUSY: database is locked");
+    });
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    for (const name of ["install", "build"]) {
+      const command = createDeferredCore<Awaited<ReturnType<CommandRunner>>>();
+      const started = createDeferredCore();
+      const aborted = vi.fn(() => command.reject(new Error("command aborted")));
+      const pending = runStep({
+        runCommand: (_argv, input) => {
+          input.signal?.addEventListener("abort", aborted);
+          started.resolve();
+          return command.promise;
+        },
+        name,
+        argv: ["pnpm", name],
+        cwd: options.env.OPENCLAW_STATE_DIR,
+        timeoutMs: ABANDONED_UPDATE_RUN_MS,
+        progress,
+        stepIndex: 0,
+        totalSteps: 2,
+      });
+      const settled = pending.catch((error: unknown) => error);
+      await Promise.race([started.promise, pending]);
+      await vi.advanceTimersByTimeAsync(UPDATE_RUN_HEARTBEAT_MS * 2);
+      expect(aborted).not.toHaveBeenCalled();
+      command.resolve({ stdout: "", stderr: "", code: 0 });
+      expect(await settled).toMatchObject({ exitCode: 0 });
+      expect(getUpdateRun(run.runId, options)?.steps).toContainEqual(
+        expect.objectContaining({ step: name, status: "completed" }),
+      );
+    }
+    expect(warning).toHaveBeenCalledTimes(1);
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining("SQLITE_BUSY"));
+  });
+
+  it("requires explicit recovery for a recent run whose driver exited", () => {
+    const options = isolatedOptions();
+    const run = createUpdateRun({ trigger: "cli", origin: { driver: exitedDriver() } }, options);
+    vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS - 1);
+
+    expect(inspectUpdateRunAbandonment(run)).toBeUndefined();
+    expect(reconcileUpdateRunsInNativeKernelForTest({}, options)).toEqual([]);
+    expect(getUpdateRun(run.runId, options)).toEqual(run);
+    expect(reconcileUpdateRunsInNativeKernelForTest({ explicit: true }, options)).toMatchObject([
+      { runId: run.runId, phase: "finished", status: "failed", reason: "abandoned" },
+    ]);
+  });
+
+  it("supersedes the single stale identityless staging run on explicit admission", () => {
+    const options = isolatedOptions();
+    const old = createUpdateRun(
+      { trigger: "control-ui", before: { version: "2026.9.2" } },
+      options,
+    );
+    recordUpdateRunPhase(old.runId, "staging", {}, options);
+    vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS + 10);
+
+    const next = createUpdateRun(
+      { trigger: "cli", origin: { driver: currentDriver() }, supersedeStaleIdentityless: true },
+      options,
+    );
+
+    expect(next).toMatchObject({ status: "running", origin: { driver: currentDriver() } });
+    expect(getUpdateRun(old.runId, options)).toMatchObject({
+      status: "failed",
+      phase: "finished",
+      reason: "superseded",
+      steps: expect.arrayContaining([
+        expect.objectContaining({
+          step: "reconcile:superseded",
+          status: "failed",
+          detail: "operator-started-update-supersedes-inactive-identityless-run",
+        }),
+      ]),
+    });
+  });
+
+  it.each([
+    "recent",
+    "live",
+    "previous-live",
+    "multiple",
+    "implicit",
+    "inherited",
+    "campaign",
+  ] as const)("does not supersede protected rows on %s admission", (kind) => {
+    const options = isolatedOptions();
+    const old = createUpdateRun(
+      {
+        trigger: "cli",
+        origin:
+          kind === "live"
+            ? { driver: currentDriver() }
+            : kind === "previous-live"
+              ? { previousDrivers: [currentDriver()] }
+              : {},
+      },
+      options,
+    );
+    if (kind !== "recent") {
+      vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS + 10);
+    }
+    if (kind === "multiple") {
+      createUpdateRun({ trigger: "cli" }, options);
+    }
+    createUpdateRun(
+      {
+        trigger: kind === "campaign" ? "campaign" : "cli",
+        runId: kind === "inherited" ? old.runId : undefined,
+        supersedeStaleIdentityless: kind !== "implicit",
+      },
+      options,
+    );
+    expect(getUpdateRun(old.runId, options)).toEqual(old);
+    if (kind === "recent") {
+      expect(
+        reconcileUpdateRunsInNativeKernelForTest({ explicit: true, runIds: [old.runId] }, options),
+      ).toEqual([]);
+    }
+  });
+
+  it("preserves the whole explicit recovery selection when one driver resumes", () => {
+    const options = isolatedOptions();
+    const first = createUpdateRun({ trigger: "cli" }, options);
+    const second = createUpdateRun({ trigger: "cli" }, options);
+    vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS + 10);
+    const resumed = recordUpdateRunStep(
+      second.runId,
+      { step: "build", status: "in_progress", startedAtMs: Date.now() },
+      options,
+    );
+
+    expect(
+      reconcileUpdateRunsInNativeKernelForTest(
+        { explicit: true, runIds: [first.runId, second.runId] },
+        options,
+      ),
+    ).toEqual([]);
+    expect(getUpdateRun(first.runId, options)).toEqual(first);
+    expect(getUpdateRun(second.runId, options)).toEqual(resumed);
+  });
+
+  it("commits every eligible row in the explicit recovery selection", () => {
+    const options = isolatedOptions();
+    const runs = [
+      createUpdateRun({ trigger: "cli" }, options),
+      createUpdateRun({ trigger: "cli" }, options),
+    ];
+    vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS + 10);
+    const reconciled = reconcileUpdateRunsInNativeKernelForTest(
+      { explicit: true, runIds: runs.map((run) => run.runId), requireAllActive: true },
+      options,
+    );
+    expect(reconciled.map((run) => run.runId).toSorted()).toEqual(
+      runs.map((run) => run.runId).toSorted(),
+    );
+    for (const run of runs) {
+      expect(getUpdateRun(run.runId, options)).toMatchObject({
+        status: "failed",
+        reason: "abandoned",
+      });
+    }
+  });
+
+  it("automatically reconciles a dead driver while preserving other active rows", () => {
+    const options = isolatedOptions();
+    const dead = createUpdateRun({ trigger: "cli", origin: { driver: exitedDriver() } }, options);
+    const live = createUpdateRun({ trigger: "cli", origin: { driver: currentDriver() } }, options);
+    const legacy = createUpdateRun({ trigger: "cli" }, options);
+    vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS + 10);
+
+    expect(reconcileUpdateRunsInNativeKernelForTest({}, options)).toMatchObject([
+      { runId: dead.runId, status: "failed", reason: "abandoned" },
+    ]);
+    expect(getUpdateRun(live.runId, options)).toEqual(live);
+    expect(getUpdateRun(legacy.runId, options)).toEqual(legacy);
+  });
+
+  it("preserves a captured recovery selection when another active run exists", () => {
+    const options = isolatedOptions();
+    const captured = createUpdateRun({ trigger: "cli" }, options);
+    vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS + 10);
+    const admitted = createUpdateRun({ trigger: "cli" }, options);
+
+    expect(
+      reconcileUpdateRunsInNativeKernelForTest(
+        { explicit: true, runIds: [captured.runId], requireAllActive: true },
+        options,
+      ),
+    ).toEqual([]);
+    expect(getUpdateRun(captured.runId, options)).toEqual(captured);
+    expect(getUpdateRun(admitted.runId, options)).toEqual(admitted);
+  });
+
+  it("adopts an exited driver and rejects its old heartbeat without refreshing activity", () => {
+    const options = isolatedOptions();
+    const oldDriver = exitedDriver();
+    const created = createUpdateRun({ trigger: "cli", origin: { driver: oldDriver } }, options);
+    const adopted = adoptUpdateRun(created.runId, options);
+    expect(adopted.origin.driver).toEqual(currentDriver());
+    vi.advanceTimersByTime(UPDATE_RUN_HEARTBEAT_MS);
+
+    heartbeatUpdateRun(created.runId, oldDriver, options);
+    expect(getUpdateRun(created.runId, options)).toEqual(adopted);
+    expect(adoptUpdateRun(created.runId, options)).toEqual(adopted);
+    heartbeatUpdateRun(created.runId, adopted.origin.driver, options);
+    expect(getUpdateRun(created.runId, options)?.updatedAtMs).toBeGreaterThan(adopted.updatedAtMs);
+  });
+
+  it("rejects adoption after reconciliation instead of resuming a terminal run", () => {
+    const options = isolatedOptions();
+    const created = createUpdateRun(
+      { trigger: "cli", origin: { driver: exitedDriver() } },
+      options,
+    );
+    recordUpdateRunPhase(created.runId, "staging", {}, options);
+    vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS + 10);
+    const [reconciled] = reconcileUpdateRunsInNativeKernelForTest({}, options);
+    expect(reconciled).toMatchObject({
+      runId: created.runId,
+      status: "failed",
+      reason: "abandoned",
+    });
+
+    expect(() => adoptUpdateRun(created.runId, options)).toThrow();
+    expect(getUpdateRun(created.runId, options)).toEqual(reconciled);
+  });
+
+  it("records the child while retaining and renewing its live controlling parent", () => {
+    const options = isolatedOptions();
+    const parentStart = getFileLockProcessStartTime(process.ppid);
+    if (parentStart === null) {
+      throw new Error("The test's controlling parent must have an observable start identity.");
+    }
+    const driver = { ...currentDriver(), pid: process.ppid, startIdentity: String(parentStart) };
+    const created = createUpdateRun({ trigger: "cli", origin: { driver } }, options);
+    const run = recordUpdateRunPhase(created.runId, "verifying", {}, options);
+    vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS + 10);
+
+    const adopted = adoptUpdateRun(run.runId, options);
+    expect(adopted.origin).toMatchObject({ driver: currentDriver(), previousDrivers: [driver] });
+    vi.advanceTimersByTime(UPDATE_RUN_HEARTBEAT_MS);
+    heartbeatUpdateRun(run.runId, driver, options);
+    expect(getUpdateRun(run.runId, options)?.updatedAtMs).toBeGreaterThan(adopted.updatedAtMs);
+    expect(reconcileUpdateRunsInNativeKernelForTest({ explicit: true }, options)).toEqual([]);
+  });
+
+  it.each(["alive", "unknown", "dead"] as const)(
+    "reconciles a recent run only when the previous driver is also dead (%s)",
+    (liveness) => {
+      const options = isolatedOptions();
+      const previous =
+        liveness === "alive"
+          ? currentDriver()
+          : liveness === "dead"
+            ? exitedDriver()
+            : { ...currentDriver(), host: "other-host.invalid" };
+      const run = createUpdateRun(
+        { trigger: "cli", origin: { driver: exitedDriver(), previousDrivers: [previous] } },
+        options,
+      );
+      vi.advanceTimersByTime(60_000);
+      const reconciled = reconcileUpdateRunsInNativeKernelForTest({ explicit: true }, options);
+      expect(reconciled).toHaveLength(liveness === "dead" ? 1 : 0);
+      expect(getUpdateRun(run.runId, options)?.status).toBe(
+        liveness === "dead" ? "failed" : "running",
+      );
+    },
+  );
+
+  it("deduplicates retained drivers and removes only positively dead identities on adoption", () => {
+    const options = isolatedOptions();
+    const retained = { ...currentDriver(), host: "other-host.invalid" };
+    const run = createUpdateRun(
+      {
+        trigger: "cli",
+        origin: { driver: retained, previousDrivers: [retained, currentDriver(), exitedDriver()] },
+      },
+      options,
+    );
+    const adopted = adoptUpdateRun(run.runId, options);
+    expect(adopted.origin).toMatchObject({ driver: currentDriver(), previousDrivers: [retained] });
+    vi.advanceTimersByTime(100);
+    expect(adoptUpdateRun(run.runId, options)).toEqual(adopted);
+  });
+
+  it("refuses adoption without evicting an unobservable driver at capacity", () => {
+    const options = isolatedOptions();
+    const drivers = Array.from({ length: UPDATE_RUN_DRIVER_LIMIT }, (_, index) => ({
+      ...currentDriver(),
+      host: `other-host-${index}.invalid`,
+    }));
+    const run = createUpdateRun(
+      { trigger: "cli", origin: { driver: drivers[0], previousDrivers: drivers.slice(1) } },
+      options,
+    );
+    expect(() => adoptUpdateRun(run.runId, options)).toThrow(
+      "too many live or unobservable drivers",
+    );
+    expect(getUpdateRun(run.runId, options)).toEqual(run);
+  });
+
+  it.each([false, true])(
+    "renews a slow step and stops heartbeats after failure=%s",
+    async (fails) => {
+      const options = isolatedOptions();
+      const created = createUpdateRun({ trigger: "cli" }, options);
+      const run = adoptUpdateRun(created.runId, options);
+      const progressRun = { runId: run.runId, env: options.env };
+      const guards = createUpdateCommandExecutionGuards(
+        { run: progressRun },
+        options.env.OPENCLAW_STATE_DIR,
+      );
+      const progress = createUpdateRunProgress(progressRun, {}, guards.recordStep);
+      const command = createDeferredCore<Awaited<ReturnType<CommandRunner>>>();
+      const heartbeat = vi.spyOn(progress, "onHeartbeat");
+      const started = createDeferredCore();
+      const pending = runStep({
+        runCommand: () => {
+          started.resolve();
+          return command.promise;
+        },
+        name: "build",
+        argv: ["pnpm", "build"],
+        cwd: options.env.OPENCLAW_STATE_DIR,
+        timeoutMs: ABANDONED_UPDATE_RUN_MS * 2,
+        progress,
+        stepIndex: 0,
+        totalSteps: 1,
+      });
+      const settled = fails
+        ? expect(pending).rejects.toThrow("build interrupted")
+        : expect(pending).resolves.toMatchObject({ exitCode: 0 });
+      await Promise.race([started.promise, pending]);
+      const admitted = getUpdateRun(run.runId, options);
+      if (!admitted) {
+        throw new Error("Started command has no admitted progress receipt");
+      }
+      // The worker uses its own clock; age the step from its committed admission.
+      vi.setSystemTime(admitted.updatedAtMs);
+      await vi.advanceTimersByTimeAsync(ABANDONED_UPDATE_RUN_MS + UPDATE_RUN_HEARTBEAT_MS);
+
+      const active = getUpdateRun(run.runId, options);
+      expect(active?.updatedAtMs).toBeGreaterThan(admitted.updatedAtMs + ABANDONED_UPDATE_RUN_MS);
+      expect(active?.steps).toContainEqual(
+        expect.objectContaining({ step: "build", status: "in_progress" }),
+      );
+      expect(reconcileUpdateRunsInNativeKernelForTest({ explicit: true }, options)).toEqual([]);
+
+      if (fails) {
+        command.reject(new Error("build interrupted"));
+      } else {
+        command.resolve({ stdout: "", stderr: "", code: 0 });
+      }
+      await settled;
+      expect(heartbeat).toHaveBeenCalled();
+      heartbeat.mockClear();
+      const finished = getUpdateRun(run.runId, options);
+      await vi.advanceTimersByTimeAsync(UPDATE_RUN_HEARTBEAT_MS * 2);
+      expect(heartbeat).not.toHaveBeenCalled();
+      expect(getUpdateRun(run.runId, options)).toEqual(finished);
+    },
+  );
+});

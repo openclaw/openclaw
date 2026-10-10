@@ -3,7 +3,7 @@ summary: "Steer an active run without changing queue mode"
 read_when:
   - Using /steer or /tell while an agent is already running
   - Comparing /steer with /queue modes
-  - Deciding whether to steer the current run, a sub-agent, or an ACP session
+  - Deciding whether to steer the current run or an ACP session
 title: "Steer"
 sidebarTitle: "Steer"
 ---
@@ -12,6 +12,9 @@ sidebarTitle: "Steer"
 "adjust this run while it is still working" moments. If the current runtime
 cannot accept steering, OpenClaw sends the message as a normal prompt instead
 of dropping it.
+
+`/tell` is an alias of `/steer`. The two names are interchangeable everywhere
+on this page.
 
 ## Current session
 
@@ -40,6 +43,11 @@ supported runtime boundary, regardless of the stored `/queue` setting. When
 that injection is not available, the command prefix is stripped and `<message>`
 continues as a normal prompt.
 
+The explicit `/steer` (and `/tell`) command is Gateway-backed. In
+`openclaw chat` or `openclaw tui --local`, select `/queue steer` and send the
+guidance as a normal message; the embedded runtime applies the same steering
+policy without forwarding a Gateway command.
+
 Use:
 
 - `/steer <message>` when you want to guide the active run right now.
@@ -55,15 +63,8 @@ For queue modes and steering boundaries, see [Command queue](/concepts/queue) an
 
 ## Sub-agents
 
-Use `/subagents steer` when the target is a child run:
-
-```text
-/subagents steer 2 focus only on the API surface
-```
-
-Top-level `/steer` does not select a sub-agent by id or list index. It always
-targets the current session's active run. See [Sub-agents](/tools/subagents) for
-sub-agent ids, labels, and control commands.
+Top-level `/steer` targets the current session's active run. Sub-agents report
+back to their parent/requester session; `/subagents` is for visibility only.
 
 ## ACP sessions
 
@@ -72,6 +73,10 @@ Use `/acp steer` when the target is an ACP harness session:
 ```text
 /acp steer --session agent:main:acp:codex tighten the repro
 ```
+
+ACP harness sessions cannot accept input mid-turn. `/acp steer` queues the
+instruction and runs it after the active turn finishes; use `/acp cancel` first
+to stop work in progress. See [ACP controls](/tools/acp-agents/controls#acp-controls).
 
 See [ACP agents](/tools/acp-agents) for ACP session selection and runtime
 behavior.

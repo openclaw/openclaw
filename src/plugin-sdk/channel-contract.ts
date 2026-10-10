@@ -26,7 +26,7 @@ export type {
   ChannelThreadingToolContext,
   ChannelToolSend,
 } from "../channels/plugins/types.public.js";
-export type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/types.core.js";
+export type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/legacy-state-migration.types.js";
 
 export type {
   ChannelDirectoryAdapter,
@@ -36,6 +36,8 @@ export type {
   ChannelDoctorLegacyConfigRule,
   ChannelDoctorSequenceResult,
   ChannelGatewayContext,
+  ChannelGatewayContextV2,
+  ChannelGatewayAdapterV2,
   ChannelOutboundAdapter,
   ChannelOutboundContext,
   ChannelOutboundPayloadHint,

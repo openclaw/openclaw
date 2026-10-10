@@ -1,7 +1,9 @@
+import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
 import {
   createDelegatedSetupWizardProxy,
   createPatchedAccountSetupAdapter,
   createSetupTranslator,
+  type ChannelSetupAdapter,
   type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup-runtime";
 
@@ -9,10 +11,18 @@ const t = createSetupTranslator();
 
 const channel = "zalouser" as const;
 
-export const zalouserSetupAdapter = createPatchedAccountSetupAdapter({
-  channelKey: channel,
-  validateInput: () => null,
-  buildPatch: () => ({}),
+export const zalouserSetupAdapter: ChannelSetupAdapter = {
+  ...createPatchedAccountSetupAdapter({
+    channelKey: channel,
+    validateInput: () => null,
+    buildPatch: () => ({}),
+  }),
+  singleAccountKeysToMove: [],
+};
+
+export const zalouserSetupContract = defineChannelSetupContract({
+  fields: {},
+  legacyAdapter: zalouserSetupAdapter,
 });
 
 export function createZalouserSetupWizardProxy(

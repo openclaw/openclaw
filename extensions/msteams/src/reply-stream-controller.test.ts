@@ -1,424 +1,476 @@
+// Msteams tests cover reply stream controller plugin behavior.
 import { describe, expect, it, vi } from "vitest";
-
-const streamInstances = vi.hoisted(
-  () =>
-    [] as Array<{
-      hasContent: boolean;
-      isFinalized: boolean;
-      isFailed: boolean;
-      streamedLength: number;
-      messageId?: string;
-      previewStreamId?: string;
-      sendInformativeUpdate: ReturnType<typeof vi.fn>;
-      update: ReturnType<typeof vi.fn>;
-      replaceInformativeWithFinal: ReturnType<typeof vi.fn>;
-      finalize: ReturnType<typeof vi.fn>;
-    }>,
-);
-
-vi.mock("./streaming-message.js", () => ({
-  TeamsHttpStream: class {
-    hasContent = false;
-    isFinalized = false;
-    isFailed = false;
-    streamedLength = 0;
-    messageId: string | undefined;
-    previewStreamId = "preview-stream";
-    sendInformativeUpdate = vi.fn(async () => {});
-    update = vi.fn(function (
-      this: { hasContent: boolean; isFailed: boolean; streamedLength: number },
-      payloadText?: string,
-    ) {
-      if ((payloadText?.length ?? 0) > 4000) {
-        this.hasContent = false;
-        this.isFailed = true;
-        this.streamedLength = 0;
-        return;
-      }
-      this.hasContent = true;
-      this.streamedLength = payloadText?.length ?? 0;
-    });
-    replaceInformativeWithFinal = vi.fn(async function (
-      this: {
-        hasContent: boolean;
-        isFailed: boolean;
-        isFinalized: boolean;
-        streamedLength: number;
-        messageId?: string;
-        update: (payloadText?: string) => void;
-      },
-      payloadText: string,
-    ) {
-      this.update(payloadText);
-      if (this.isFailed) {
-        return false;
-      }
-      this.isFinalized = true;
-      this.messageId = "final-message";
-      return this.hasContent;
-    });
-    finalize = vi.fn(async function (this: { isFinalized: boolean; messageId?: string }) {
-      this.isFinalized = true;
-      this.messageId = "final-message";
-    });
-
-    constructor() {
-      streamInstances.push(this as never);
-    }
-  },
-}));
-
+import { teamsQuotedTableReply } from "./format.test-fixtures.js";
+import { flattenInformativeStatus } from "./informative-status.js";
 import { createTeamsReplyStreamController } from "./reply-stream-controller.js";
 
+type StreamCloseResult = { id: string } | undefined;
+
+function makeStream() {
+  return {
+    emit: vi.fn(),
+    update: vi.fn(),
+    clearText: vi.fn(),
+    close: vi.fn<() => Promise<StreamCloseResult>>(async () => ({ id: "stream-final" })),
+    canceled: false,
+  };
+}
+
+function makeAcknowledgedStream() {
+  type ChunkActivity = {
+    id?: string;
+    type?: string;
+    text?: string;
+    channelData?: { streamType?: string };
+  };
+  const handlers = new Map<number, (activity: ChunkActivity) => void>();
+  let nextSubscriptionId = 0;
+  const stream = {
+    ...makeStream(),
+    events: {
+      on: vi.fn((_event: "chunk", handler: (activity: ChunkActivity) => void) => {
+        const subscriptionId = nextSubscriptionId++;
+        handlers.set(subscriptionId, handler);
+        return subscriptionId;
+      }),
+      off: vi.fn((subscriptionId: number) => {
+        handlers.delete(subscriptionId);
+      }),
+    },
+    acknowledge(text: string, overrides: Partial<ChunkActivity> = {}) {
+      const activity: ChunkActivity = {
+        id: "stream-acknowledged",
+        type: "typing",
+        text,
+        channelData: { streamType: "streaming" },
+        ...overrides,
+      };
+      for (const handler of handlers.values()) {
+        handler(activity);
+      }
+    },
+  };
+  return stream;
+}
+
+function makeContext(stream?: ReturnType<typeof makeStream>) {
+  return { activity: { type: "message" }, stream } as never;
+}
+
+function makeController(
+  opts: {
+    stream?: ReturnType<typeof makeStream>;
+  } = {},
+) {
+  const stream = opts.stream;
+  return createTeamsReplyStreamController({
+    allowProviderPreview: true,
+    conversationType: "personal",
+    context: makeContext(stream),
+    feedbackLoopEnabled: false,
+  });
+}
+
 describe("createTeamsReplyStreamController", () => {
-  function createController() {
-    streamInstances.length = 0;
-    return createTeamsReplyStreamController({
-      conversationType: "personal",
-      context: { sendActivity: vi.fn(async () => ({ id: "a" })) } as never,
-      feedbackLoopEnabled: false,
-      log: { debug: vi.fn() } as never,
+  it("keeps the next chunk after cumulative trailing whitespace is normalized", () => {
+    const stream = makeStream();
+    const ctrl = makeController({ stream });
+
+    ctrl.onPartialReply({ text: "Intro\n\n " });
+    ctrl.onPartialReply({ text: "Intro\n\nNext" });
+
+    expect(stream.emit).toHaveBeenNthCalledWith(1, "Intro\n\n ");
+    expect(stream.emit).toHaveBeenNthCalledWith(2, "Next");
+  });
+
+  it("retains an acknowledged replacement when stream close produces no activity", async () => {
+    const stream = makeAcknowledgedStream();
+    const ctrl = makeController({ stream });
+
+    ctrl.onPartialReply({ text: "abcde" });
+    stream.acknowledge("abcde");
+    ctrl.onPartialReply({ text: "provider replacement" });
+    expect(
+      ctrl.preparePayload({
+        text: "provider replacement",
+        mediaUrl: "https://example.test/replacement.png",
+      }),
+    ).toBeUndefined();
+    stream.acknowledge("provider replacement");
+    stream.close.mockResolvedValueOnce(undefined);
+
+    await expect(ctrl.finalize()).resolves.toEqual({
+      visibleReplySent: true,
+      messageId: "stream-acknowledged",
+      content: "provider replacement",
+      logicalContent: "provider replacement",
+      postNativePayloads: [
+        {
+          text: undefined,
+          mediaUrl: "https://example.test/replacement.png",
+        },
+      ],
     });
-  }
-
-  it("suppresses fallback for first text segment that was streamed", async () => {
-    const ctrl = createController();
-    ctrl.onPartialReply({ text: "Hello world" });
-
-    const result = await ctrl.preparePayload({ text: "Hello world" });
-    expect(result).toBeUndefined();
   });
 
-  it("when stream fails after partial delivery, fallback sends only remaining text", async () => {
-    const ctrl = createController();
-    const fullText = "a".repeat(4000) + "b".repeat(200);
+  it("rejects a delayed common-prefix chunk while awaiting replacement acknowledgement", async () => {
+    const stream = makeAcknowledgedStream();
+    const ctrl = makeController({ stream });
 
-    ctrl.onPartialReply({ text: fullText });
-    streamInstances[0].hasContent = false;
-    streamInstances[0].isFailed = true;
-    streamInstances[0].isFinalized = true;
-    streamInstances[0].streamedLength = 4000;
+    ctrl.onPartialReply({ text: "abcdef" });
+    ctrl.onPartialReply({ text: "abcXYZ" });
+    expect(ctrl.preparePayload({ text: "abcXYZ" })).toBeUndefined();
+    stream.acknowledge("abc");
+    stream.close.mockRejectedValueOnce(new Error("close failed"));
 
-    const result = await ctrl.preparePayload({ text: fullText });
-    expect(result).toEqual({ text: "b".repeat(200) });
+    await expect(ctrl.finalize()).resolves.toEqual({
+      visibleReplySent: false,
+      logicalContent: "abcXYZ",
+      postNativePayloads: [{ text: "abcXYZ" }],
+    });
   });
 
-  it("when stream fails before sending content, fallback sends full text", async () => {
-    const ctrl = createController();
-    const fullText = "Failure at first chunk";
+  it("uses the latest partial when no final text payload follows a rewrite", async () => {
+    const stream = makeAcknowledgedStream();
+    const ctrl = makeController({ stream });
 
-    ctrl.onPartialReply({ text: fullText });
-    streamInstances[0].hasContent = false;
-    streamInstances[0].isFailed = true;
-    streamInstances[0].isFinalized = true;
-    streamInstances[0].streamedLength = 0;
+    ctrl.onPartialReply({ text: "abcde" });
+    stream.acknowledge("abcde");
+    ctrl.onPartialReply({ text: "abXYZ" });
+    ctrl.onPartialReply({ text: "abcdef" });
+    expect(ctrl.preparePayload({ mediaUrl: "https://example.test/final.png" })).toBeUndefined();
 
-    const result = await ctrl.preparePayload({ text: fullText });
-    expect(result).toEqual({ text: fullText });
+    await expect(ctrl.finalize()).resolves.toEqual({
+      visibleReplySent: true,
+      messageId: "stream-final",
+      content: "abcdef",
+      logicalContent: "abcdef",
+      postNativePayloads: [{ mediaUrl: "https://example.test/final.png" }],
+    });
+    expect(stream.emit).toHaveBeenLastCalledWith(
+      expect.objectContaining({ type: "message", text: "abcdef" }),
+    );
   });
 
-  it("allows fallback delivery for second text segment after tool calls", async () => {
-    const ctrl = createController();
+  it("suppresses a replacement when emit synchronously discovers Stop", async () => {
+    const stream = makeAcknowledgedStream();
+    const ctrl = makeController({ stream });
 
-    // First text segment: streaming tokens arrive
+    ctrl.onPartialReply({ text: "abcde" });
+    stream.acknowledge("abcde");
+    ctrl.onPartialReply({ text: "provider replacement" });
+    stream.emit.mockImplementation(() => {
+      const error = new Error("stream canceled");
+      error.name = "StreamCancelledError";
+      throw error;
+    });
+
+    expect(ctrl.preparePayload({ text: "provider replacement" })).toBeUndefined();
+    await expect(ctrl.finalize()).resolves.toEqual({
+      visibleReplySent: true,
+      messageId: "stream-acknowledged",
+      content: "abcde",
+    });
+    expect(stream.close).not.toHaveBeenCalled();
+  });
+
+  it("preserves held payload order after replacement emit fails", async () => {
+    const stream = makeAcknowledgedStream();
+    const ctrl = makeController({ stream });
+
+    ctrl.onPartialReply({ text: "abcde" });
+    stream.acknowledge("abcde");
+    ctrl.onPartialReply({ text: "provider replacement" });
+    expect(ctrl.preparePayload({ mediaUrl: "https://example.test/before.png" })).toBeUndefined();
+    stream.emit.mockImplementationOnce(() => {
+      throw new Error("network failure");
+    });
+    expect(ctrl.preparePayload({ text: "provider replacement" })).toBeUndefined();
+    expect(ctrl.preparePayload({ text: "later payload" })).toBeUndefined();
+
+    await expect(ctrl.finalize()).resolves.toEqual({
+      visibleReplySent: true,
+      messageId: "stream-final",
+      content: "abcde",
+      logicalContent: "provider replacement\nlater payload",
+      postNativePayloads: [
+        { mediaUrl: "https://example.test/before.png" },
+        { text: "provider replacement" },
+        { text: "later payload" },
+      ],
+    });
+  });
+
+  it("ignores duplicate or out-of-order partial replies that don't extend the text", () => {
+    const stream = makeStream();
+    const ctrl = makeController({ stream });
+    ctrl.onPartialReply({ text: "abcdef" });
+    ctrl.onPartialReply({ text: "abc" }); // shorter — could be edit-in-place semantics
+    ctrl.onPartialReply({ text: "abcdef" }); // back to known length
+    expect(stream.emit).toHaveBeenCalledTimes(1);
+    expect(stream.emit).toHaveBeenCalledWith("abcdef");
+  });
+
+  it("keeps later partial segments whole after settlement", async () => {
+    const stream = makeStream();
+    const ctrl = makeController({ stream });
+
     ctrl.onPartialReply({ text: "First segment" });
-
-    // First segment complete: preparePayload suppresses (stream handled it)
-    const result1 = await ctrl.preparePayload({ text: "First segment" });
-    expect(result1).toBeUndefined();
-
-    // Tool calls happen... then second text segment arrives via deliver()
-    // preparePayload should allow fallback delivery for this segment
-    const result2 = await ctrl.preparePayload({ text: "Second segment after tools" });
-    expect(result2).toEqual({ text: "Second segment after tools" });
-  });
-
-  it("finalizes the stream when suppressing first segment", async () => {
-    const ctrl = createController();
-    ctrl.onPartialReply({ text: "Streamed text" });
-
-    await ctrl.preparePayload({ text: "Streamed text" });
+    expect(ctrl.preparePayload({ text: "First segment" })).toBeUndefined();
+    expect(ctrl.claimNativeDelivery()).toBe(true);
     await ctrl.finalize();
 
-    expect(streamInstances[0]?.finalize).toHaveBeenCalled();
-    expect(ctrl.liveState().phase).toBe("finalized");
-    expect(ctrl.liveState().receipt?.primaryPlatformMessageId).toBe("final-message");
+    ctrl.onPartialReply({ text: "Second segment after tools" });
+    const result = ctrl.preparePayload({ text: "Second segment after tools" });
+    expect(result).toEqual({ text: "Second segment after tools" });
   });
 
-  it("uses fallback even when onPartialReply fires after stream finalized", async () => {
-    const ctrl = createController();
-
-    // First text segment: streaming tokens arrive
-    ctrl.onPartialReply({ text: "First segment" });
-
-    // First segment complete: preparePayload suppresses and finalizes stream
-    const result1 = await ctrl.preparePayload({ text: "First segment" });
-    expect(result1).toBeUndefined();
-    expect(streamInstances[0]?.isFinalized).toBe(true);
-
-    // Post-tool partial replies fire again (stream.update is a no-op since finalized)
-    ctrl.onPartialReply({ text: "Second segment" });
-
-    // Must still use fallback because stream is finalized and can't deliver
-    const result2 = await ctrl.preparePayload({ text: "Second segment" });
-    expect(result2).toEqual({ text: "Second segment" });
-  });
-
-  it("delivers all segments across 3+ tool call rounds", async () => {
-    const ctrl = createController();
-
-    // Round 1: text → tool
-    ctrl.onPartialReply({ text: "Segment 1" });
-    await expect(ctrl.preparePayload({ text: "Segment 1" })).resolves.toBeUndefined();
-
-    // Round 2: text → tool
-    ctrl.onPartialReply({ text: "Segment 2" });
-    const r2 = await ctrl.preparePayload({ text: "Segment 2" });
-    expect(r2).toEqual({ text: "Segment 2" });
-
-    // Round 3: final text
-    ctrl.onPartialReply({ text: "Segment 3" });
-    const r3 = await ctrl.preparePayload({ text: "Segment 3" });
-    expect(r3).toEqual({ text: "Segment 3" });
-  });
-
-  it("passes media+text payload through fully after stream finalized", async () => {
-    const ctrl = createController();
-
-    // First segment streamed and finalized
-    ctrl.onPartialReply({ text: "Streamed text" });
-    await ctrl.preparePayload({ text: "Streamed text" });
-
-    // Second segment has both text and media — should pass through fully
-    const result = await ctrl.preparePayload({
-      text: "Post-tool text with image",
-      mediaUrl: "https://example.com/tool-output.png",
-    });
-    expect(result).toEqual({
-      text: "Post-tool text with image",
-      mediaUrl: "https://example.com/tool-output.png",
-    });
-  });
-
-  it("still strips text from media payloads when stream handled text", async () => {
-    const ctrl = createController();
-    ctrl.onPartialReply({ text: "Some text" });
-
-    const result = await ctrl.preparePayload({
-      text: "Some text",
-      mediaUrl: "https://example.com/image.png",
-    });
-    expect(result).toEqual({
-      text: undefined,
-      mediaUrl: "https://example.com/image.png",
-    });
-  });
-
-  it("falls back to normal delivery when progress final streaming fails", async () => {
-    streamInstances.length = 0;
+  it("preserves disabled quoted tables when finalizing formatted replies", async () => {
+    const { source: text, expected } = teamsQuotedTableReply;
+    const stream = makeStream();
     const ctrl = createTeamsReplyStreamController({
+      allowProviderPreview: true,
       conversationType: "personal",
-      context: { sendActivity: vi.fn(async () => ({ id: "a" })) } as never,
+      context: makeContext(stream),
       feedbackLoopEnabled: false,
-      log: { debug: vi.fn() } as never,
-      msteamsConfig: { streaming: { mode: "progress" } } as never,
+      tableMode: "off",
     });
-    await ctrl.noteProgressWork({ toolName: "exec" });
-    await ctrl.noteProgressWork();
-    const fullText = "x".repeat(4200);
 
-    const result = await ctrl.preparePayload({ text: fullText });
-
-    expect(result).toEqual({ text: fullText });
-    expect(streamInstances[0]?.replaceInformativeWithFinal).toHaveBeenCalledWith(fullText);
-  });
-
-  it("records lifecycle receipt when progress final streaming succeeds", async () => {
-    streamInstances.length = 0;
-    const ctrl = createTeamsReplyStreamController({
-      conversationType: "personal",
-      context: { sendActivity: vi.fn(async () => ({ id: "a" })) } as never,
-      feedbackLoopEnabled: false,
-      log: { debug: vi.fn() } as never,
-      msteamsConfig: { streaming: { mode: "progress" } } as never,
+    ctrl.onPartialReply({ text });
+    expect(ctrl.preparePayload({ text })).toBeUndefined();
+    await expect(ctrl.finalize()).resolves.toEqual({
+      visibleReplySent: true,
+      messageId: "stream-final",
+      content: expected,
+      logicalContent: text,
     });
-    await ctrl.noteProgressWork({ toolName: "exec" });
-    await ctrl.noteProgressWork();
-
-    await expect(ctrl.preparePayload({ text: "complete final answer" })).resolves.toBeUndefined();
-
-    expect(ctrl.liveState().phase).toBe("finalized");
-    expect(ctrl.liveState().receipt?.primaryPlatformMessageId).toBe("final-message");
-  });
-
-  it("falls back with full text when progress final send fails after streaming text", async () => {
-    streamInstances.length = 0;
-    const ctrl = createTeamsReplyStreamController({
-      conversationType: "personal",
-      context: { sendActivity: vi.fn(async () => ({ id: "a" })) } as never,
-      feedbackLoopEnabled: false,
-      log: { debug: vi.fn() } as never,
-      msteamsConfig: { streaming: { mode: "progress" } } as never,
-    });
-    await ctrl.onReplyStart();
-    streamInstances[0].replaceInformativeWithFinal.mockImplementationOnce(
-      async function (this: {
-        hasContent: boolean;
-        isFailed: boolean;
-        isFinalized: boolean;
-        streamedLength: number;
-      }) {
-        this.hasContent = true;
-        this.isFailed = true;
-        this.isFinalized = true;
-        this.streamedLength = 12;
-        return false;
-      },
+    expect(stream.clearText).toHaveBeenCalledTimes(1);
+    expect(stream.emit).toHaveBeenLastCalledWith(
+      expect.objectContaining({ type: "message", text: expected }),
     );
-
-    const result = await ctrl.preparePayload({ text: "complete final answer" });
-
-    expect(result).toEqual({ text: "complete final answer" });
+    expect(stream.close).toHaveBeenCalledTimes(1);
   });
 
-  it("honors disabled Teams progress labels", async () => {
-    streamInstances.length = 0;
-    const ctrl = createTeamsReplyStreamController({
-      conversationType: "personal",
-      context: { sendActivity: vi.fn(async () => ({ id: "a" })) } as never,
-      feedbackLoopEnabled: false,
-      log: { debug: vi.fn() } as never,
-      msteamsConfig: { streaming: { mode: "progress", progress: { label: false } } } as never,
-    });
-
-    await ctrl.onReplyStart();
-
-    expect(streamInstances).toHaveLength(1);
-    expect(streamInstances[0]?.sendInformativeUpdate).not.toHaveBeenCalled();
-  });
-
-  it("streams compact Teams progress lines when tool progress is enabled", async () => {
-    streamInstances.length = 0;
-    const ctrl = createTeamsReplyStreamController({
-      conversationType: "personal",
-      context: { sendActivity: vi.fn(async () => ({ id: "a" })) } as never,
-      feedbackLoopEnabled: false,
-      log: { debug: vi.fn() } as never,
-      msteamsConfig: {
-        streaming: {
-          mode: "progress",
-          progress: {
-            label: "Working",
-            maxLines: 3,
-          },
-        },
-      } as never,
-    });
-
-    await ctrl.pushProgressLine("tool: search");
-    await ctrl.pushProgressLine("tool: exec");
-
-    expect(ctrl.shouldSuppressDefaultToolProgressMessages()).toBe(true);
-    expect(ctrl.shouldStreamPreviewToolProgress()).toBe(true);
-    expect(streamInstances[0]?.sendInformativeUpdate).toHaveBeenLastCalledWith(
-      "Working\n- tool: search\n- tool: exec",
-    );
-  });
-
-  it("suppresses Teams default progress messages without stream lines when tool progress is disabled", async () => {
-    streamInstances.length = 0;
-    const ctrl = createTeamsReplyStreamController({
-      conversationType: "personal",
-      context: { sendActivity: vi.fn(async () => ({ id: "a" })) } as never,
-      feedbackLoopEnabled: false,
-      log: { debug: vi.fn() } as never,
-      msteamsConfig: {
-        streaming: {
-          mode: "progress",
-          progress: {
-            toolProgress: false,
-          },
-        },
-      } as never,
-    });
-
-    await ctrl.pushProgressLine("tool: search");
-
-    expect(ctrl.shouldSuppressDefaultToolProgressMessages()).toBe(true);
-    expect(ctrl.shouldStreamPreviewToolProgress()).toBe(false);
-    expect(streamInstances[0]?.sendInformativeUpdate).not.toHaveBeenCalled();
-  });
-
-  it("does not start native streaming for Teams block mode", async () => {
-    streamInstances.length = 0;
-    const ctrl = createTeamsReplyStreamController({
-      conversationType: "personal",
-      context: { sendActivity: vi.fn(async () => ({ id: "a" })) } as never,
-      feedbackLoopEnabled: false,
-      log: { debug: vi.fn() } as never,
-      msteamsConfig: { streaming: { mode: "block" } } as never,
-    });
-
-    await ctrl.onReplyStart();
-    ctrl.onPartialReply({ text: "block partial" });
-
-    expect(streamInstances).toHaveLength(0);
-    await expect(ctrl.preparePayload({ text: "block final" })).resolves.toEqual({
-      text: "block final",
-    });
-    expect(ctrl.hasStream()).toBe(false);
-  });
-
-  describe("isStreamActive", () => {
-    it("returns false before any tokens arrive so typing keepalive can warm up", () => {
-      const ctrl = createController();
-      expect(ctrl.isStreamActive()).toBe(false);
-    });
-
-    it("returns false after the informative update but before tokens arrive", async () => {
-      const ctrl = createController();
-      await ctrl.onReplyStart();
-      expect(ctrl.isStreamActive()).toBe(false);
-    });
-
-    it("returns true while the stream is actively receiving tokens", () => {
-      const ctrl = createController();
-      ctrl.onPartialReply({ text: "Streaming tokens" });
-      expect(ctrl.isStreamActive()).toBe(true);
-    });
-
-    it("returns false after the stream is finalized between tool rounds", async () => {
-      const ctrl = createController();
-
-      ctrl.onPartialReply({ text: "First segment" });
-      expect(ctrl.isStreamActive()).toBe(true);
-
-      // First segment complete: stream is finalized so the typing keepalive
-      // can resume during the tool chain that follows.
-      await ctrl.preparePayload({ text: "First segment" });
-      expect(ctrl.isStreamActive()).toBe(false);
-    });
-
-    it("returns false when the stream has failed", () => {
-      const ctrl = createController();
-
-      ctrl.onPartialReply({ text: "First segment" });
-      expect(ctrl.isStreamActive()).toBe(true);
-
-      streamInstances[0].isFailed = true;
-      expect(ctrl.isStreamActive()).toBe(false);
-    });
-
-    it("returns false when conversationType is not personal", () => {
-      streamInstances.length = 0;
+  it("cancels the pending progress gate at finalize so no stale card posts after close", async () => {
+    vi.useFakeTimers();
+    const stream = makeStream();
+    try {
       const ctrl = createTeamsReplyStreamController({
-        conversationType: "channel",
-        context: { sendActivity: vi.fn() } as never,
+        allowProviderPreview: true,
+        conversationType: "personal",
+        context: makeContext(stream),
         feedbackLoopEnabled: false,
         log: { debug: vi.fn() } as never,
+        msteamsConfig: {
+          streaming: { mode: "progress", progress: { toolProgress: true, label: "Working" } },
+        } as never,
       });
-      ctrl.onPartialReply({ text: "anything" });
+
+      // One work event schedules the delayed start; the turn finishes first.
+      await ctrl.pushItemEvent({ itemId: "search", title: "tool: search", phase: "start" });
+      ctrl.preparePayload({ text: "done" });
+      await ctrl.finalize();
+      expect(stream.update).not.toHaveBeenCalled();
+
+      // The gate timer must be dead: firing it against the closed stream
+      // would post a fresh stale "working" card below the final answer.
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(stream.update).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores progress after final answer streaming starts and settles", async () => {
+    const stream = makeStream();
+    const ctrl = createTeamsReplyStreamController({
+      allowProviderPreview: true,
+      conversationType: "personal",
+      context: makeContext(stream),
+      feedbackLoopEnabled: false,
+      msteamsConfig: { streaming: { mode: "progress", progress: { toolProgress: true } } } as never,
+    });
+
+    expect(ctrl.preparePayload({ text: "complete final answer" })).toBeUndefined();
+    await ctrl.pushPlanProgress([{ step: "Late plan", status: "in_progress" }]);
+    const lateFailure = {
+      itemId: "late-failure",
+      title: "Late failure",
+      phase: "end",
+      status: "failed",
+    };
+    await ctrl.pushItemEvent(lateFailure);
+    await ctrl.finalize();
+    await ctrl.pushPlanProgress([{ step: "Late settled plan", status: "in_progress" }]);
+    await ctrl.pushItemEvent(lateFailure);
+
+    expect(stream.update).not.toHaveBeenCalled();
+  });
+
+  it("falls back to normal delivery when progress final streaming fails", () => {
+    const stream = makeStream();
+    stream.emit.mockImplementation(() => {
+      throw new Error("progress final failed");
+    });
+    const ctrl = createTeamsReplyStreamController({
+      allowProviderPreview: true,
+      conversationType: "personal",
+      context: makeContext(stream),
+      feedbackLoopEnabled: false,
+      log: { debug: vi.fn() } as never,
+      msteamsConfig: { streaming: { mode: "progress", progress: { toolProgress: true } } } as never,
+    });
+
+    expect(ctrl.preparePayload({ text: "complete final answer" })).toEqual({
+      text: "complete final answer",
+    });
+  });
+
+  describe("StreamCancelledError handling", () => {
+    function makeCancelError(): Error {
+      const err = new Error("stream canceled");
+      err.name = "StreamCancelledError";
+      return err;
+    }
+
+    it("swallows StreamCancelledError thrown from progress stream.update", async () => {
+      const stream = makeStream();
+      stream.update.mockImplementation(() => {
+        throw makeCancelError();
+      });
+      const ctrl = createTeamsReplyStreamController({
+        allowProviderPreview: true,
+        conversationType: "personal",
+        context: makeContext(stream),
+        feedbackLoopEnabled: false,
+        msteamsConfig: {
+          streaming: { mode: "progress", progress: { toolProgress: true } },
+        } as never,
+      });
+      await ctrl.pushItemEvent({
+        itemId: "tool:exec",
+        name: "exec",
+        title: "Exec",
+        phase: "end",
+        status: "failed",
+      });
+      expect(stream.update).toHaveBeenCalled();
+    });
+
+    it("swallows StreamCancelledError thrown from stream.emit during finalize", async () => {
+      const stream = makeStream();
+      const ctrl = makeController({ stream });
+      ctrl.onPartialReply({ text: "partial" });
+      expect(ctrl.preparePayload({ text: "partial" })).toBeUndefined();
+      // Cancel after we've started streaming, then make the final emit throw.
+      stream.emit.mockImplementation(() => {
+        throw makeCancelError();
+      });
+      // Must not throw — finalize's pre-check on stream.canceled may miss
+      // the cancellation that happens between check and emit.
+      await expect(ctrl.finalize()).resolves.toEqual({
+        visibleReplySent: false,
+      });
+    });
+
+    it("does not trim an independent later payload using a previous stream acknowledgement", () => {
+      const stream = makeAcknowledgedStream();
+      const ctrl = makeController({ stream });
+
+      ctrl.onPartialReply({ text: "hello" });
+      stream.acknowledge("hello");
+      stream.emit.mockImplementation(() => {
+        throw new Error("network failure");
+      });
+      ctrl.onPartialReply({ text: "hello world" });
+
+      expect(ctrl.preparePayload({ text: "hello world" })).toEqual({
+        text: " world",
+      });
+      expect(ctrl.preparePayload({ text: "hello again" })).toEqual({
+        text: "hello again",
+      });
+      expect(stream.events.off).not.toHaveBeenCalled();
+    });
+
+    it("ignores unrelated, informative, and out-of-order stream acknowledgements", () => {
+      const stream = makeAcknowledgedStream();
+      const ctrl = makeController({ stream });
+
+      ctrl.onPartialReply({ text: "hello" });
+      stream.acknowledge("hello", { type: "message" });
+      stream.acknowledge("hello", { channelData: { streamType: "informative" } });
+      stream.acknowledge("unrelated");
+      stream.acknowledge("he");
+      stream.acknowledge("hello", { id: "different-stream" });
+      stream.acknowledge("h");
+      stream.emit.mockImplementation(() => {
+        throw new Error("network failure");
+      });
+      ctrl.onPartialReply({ text: "hello world" });
+
+      expect(ctrl.preparePayload({ text: "hello world" })).toEqual({
+        text: "llo world",
+      });
+    });
+
+    it("retains media when Teams already acknowledged all fallback text", () => {
+      const stream = makeAcknowledgedStream();
+      const ctrl = makeController({ stream });
+
+      ctrl.onPartialReply({ text: "hello" });
+      stream.acknowledge("hello");
+      stream.emit.mockImplementation(() => {
+        throw new Error("network failure");
+      });
+      ctrl.onPartialReply({ text: "hello world" });
+
+      expect(
+        ctrl.preparePayload({ text: "hello", mediaUrl: "https://example.com/image.png" }),
+      ).toEqual({
+        text: undefined,
+        mediaUrl: "https://example.com/image.png",
+      });
+    });
+
+    it("treats post-cancel stream as inactive without further emit attempts", () => {
+      const stream = makeStream();
+      stream.emit.mockImplementationOnce(() => {
+        throw makeCancelError();
+      });
+      const ctrl = makeController({ stream });
+      ctrl.onPartialReply({ text: "first chunk after stop" });
+      // Subsequent partial replies should short-circuit and not call emit
+      // again (the SDK would throw on every call once canceled).
+      ctrl.onPartialReply({ text: "second chunk" });
+      ctrl.onPartialReply({ text: "third chunk" });
+      expect(stream.emit).toHaveBeenCalledTimes(1);
       expect(ctrl.isStreamActive()).toBe(false);
     });
+  });
+});
+
+describe("flattenInformativeStatus", () => {
+  const bytes = (v: string) => new TextEncoder().encode(v).length;
+
+  it("joins rows onto one line without bullets", () => {
+    expect(flattenInformativeStatus("Working\n• tool: search\n- tool: exec\n\n")).toBe(
+      "Working · tool: search · tool: exec",
+    );
+  });
+
+  it("keeps the newest rows within 1000 characters", () => {
+    const rows = Array.from({ length: 40 }, (_, i) => `row ${i} ${"x".repeat(40)}`);
+    const out = flattenInformativeStatus(rows.join("\n"));
+    expect(out.length).toBeLessThanOrEqual(1000);
+    expect(out.startsWith("…")).toBe(true);
+    expect(out.endsWith(rows.at(-1)!)).toBe(true);
+  });
+
+  it("enforces the byte limit without splitting a joined emoji", () => {
+    const grapheme = "👩🏽‍💻";
+    const out = flattenInformativeStatus(grapheme.repeat(200));
+    expect(out).toBe(`…${grapheme.repeat(68)}`);
+    expect(bytes(out)).toBe(1023);
   });
 });

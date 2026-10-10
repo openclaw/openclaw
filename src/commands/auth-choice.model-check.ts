@@ -1,88 +1,173 @@
-import { ensureAuthProfileStore, listProfilesForProvider } from "../agents/auth-profiles.js";
-import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
-import { hasUsableCustomProviderApiKey, resolveEnvApiKey } from "../agents/model-auth.js";
-import { loadModelCatalog } from "../agents/model-catalog.js";
+// Post-selection model/auth sanity checks shown during onboarding and agent setup.
+import { normalizeProviderIdForAuth } from "@openclaw/model-catalog-core/provider-id";
+import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
+import { createModelAuthAvailabilityResolver } from "../agents/model-auth-availability.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
-import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../agents/openai-codex-routing.js";
+import { buildProviderAuthRecoveryHint } from "../agents/provider-auth-recovery-hint.js";
+import { canonicalizeProviderModelId } from "../agents/provider-model-route.js";
+import type { ModelApi } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ProviderModelRouteAuthRequirement } from "../plugin-sdk/provider-model-types.js";
+import type { ProviderAuthResult } from "../plugins/types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { buildProviderAuthRecoveryHint } from "./provider-auth-guidance.js";
 
-function resolveAuthProviderCandidates(params: {
-  config: OpenClawConfig;
-  provider: string;
-  modelId: string;
+type ModelRouteObservation = {
+  api?: ModelApi | null;
+  baseUrl?: unknown;
+};
+
+type DefaultModelAuthOptions = {
   agentId?: string;
-}): string[] {
-  const harnessPolicy = resolveAgentHarnessPolicy({
-    provider: params.provider,
-    modelId: params.modelId,
-    config: params.config,
-    agentId: params.agentId,
-  });
-  return [
-    ...new Set([
-      params.provider,
-      ...listOpenAIAuthProfileProvidersForAgentRuntime({
-        provider: params.provider,
-        harnessRuntime: harnessPolicy.runtime,
-        config: params.config,
-      }),
-    ]),
-  ];
-}
+  agentDir?: string;
+  env?: NodeJS.ProcessEnv;
+  observedRoutes?: readonly ModelRouteObservation[];
+  pendingAuthProfiles?: ProviderAuthResult["profiles"];
+};
 
-export async function warnIfModelConfigLooksOff(
+type DefaultModelAuthStatus = {
+  provider: string;
+  model: string;
+} & (
+  | { status: "ready"; hasAuth: true }
+  | {
+      status: "missing";
+      hasAuth: false;
+      authRequirement?: ProviderModelRouteAuthRequirement;
+    }
+  | { status: "indeterminate"; hasAuth: false }
+  | { status: "incompatible"; hasAuth: false; code: string; message: string }
+);
+
+/**
+ * Resolve the default model ref and its auth readiness. A catalog observation
+ * makes transport-specific auth exact; absent observations remain
+ * indeterminate when provider facts cannot choose one route. Shared by the
+ * onboarding model check and the finalize hatch gating.
+ */
+export function resolveDefaultModelAuthStatus(
   config: OpenClawConfig,
-  prompter: WizardPrompter,
-  options?: { agentId?: string; agentDir?: string; validateCatalog?: boolean },
-) {
+  options?: DefaultModelAuthOptions,
+): DefaultModelAuthStatus {
   const ref = resolveDefaultModelForAgent({
     cfg: config,
     agentId: options?.agentId,
   });
-  const warnings: string[] = [];
-  if (options?.validateCatalog !== false) {
-    const catalog = await loadModelCatalog({
-      config,
-      useCache: false,
-    });
-    if (catalog.length > 0) {
-      const known = catalog.some(
-        (entry) => entry.provider === ref.provider && entry.id === ref.model,
-      );
-      if (!known) {
-        warnings.push(
-          `Model not found: ${ref.provider}/${ref.model}. Update agents.defaults.model or run /models list.`,
-        );
-      }
-    }
-  }
-
-  const store = ensureAuthProfileStore(options?.agentDir);
-  const authProviders = resolveAuthProviderCandidates({
+  const store = ensureAuthProfileStore(options?.agentDir, {
+    allowKeychainPrompt: false,
     config,
-    provider: ref.provider,
-    modelId: ref.model,
-    agentId: options?.agentId,
+    ...(ref.provider === "openai" ? { externalCliProviderIds: ["openai"] } : {}),
+    readOnly: true,
   });
-  const hasAuth =
-    authProviders.some((provider) => listProfilesForProvider(store, provider).length > 0) ||
-    authProviders.some((provider) => resolveEnvApiKey(provider)) ||
-    authProviders.some((provider) => hasUsableCustomProviderApiKey(config, provider));
-  if (!hasAuth) {
-    warnings.push(
-      `No auth configured for provider "${ref.provider}". The agent may fail until credentials are added. ${buildProviderAuthRecoveryHint(
-        {
-          provider: ref.provider,
-          config,
-          includeEnvVar: true,
-        },
-      )}`,
-    );
+  // Pending wizard credentials are transaction-local; include them without
+  // publishing or persisting them before setup commits.
+  const pendingAuthProfiles = options?.pendingAuthProfiles ?? [];
+  const authStore = pendingAuthProfiles.length
+    ? { ...store, profiles: { ...store.profiles } }
+    : store;
+  for (const { profileId, credential } of pendingAuthProfiles) {
+    authStore.profiles[profileId] = credential;
+  }
+  const evaluation = createModelAuthAvailabilityResolver({
+    cfg: config,
+    agentId: options?.agentId,
+    authStore,
+    ...(options?.agentDir ? { agentDir: options.agentDir } : {}),
+    ...(options?.env ? { env: options.env } : {}),
+  }).evaluateModelAuth(ref.provider, {
+    modelId: ref.model,
+    ...(options?.observedRoutes?.length ? { observedRoutes: options.observedRoutes } : {}),
+  });
+  if (evaluation.routeResolution?.kind === "incompatible") {
+    return {
+      provider: ref.provider,
+      model: ref.model,
+      status: "incompatible",
+      hasAuth: false,
+      code: evaluation.routeResolution.code,
+      message: evaluation.routeResolution.message,
+    };
+  }
+  const availability = evaluation.availability;
+  const authRequirement = evaluation.selectedRoute?.authRequirement;
+  if (availability === true) {
+    return { provider: ref.provider, model: ref.model, status: "ready", hasAuth: true };
+  }
+  if (
+    availability === undefined &&
+    (normalizeProviderIdForAuth(ref.provider) === "openai" ||
+      evaluation.routeResolution !== null ||
+      evaluation.evidence !== undefined)
+  ) {
+    return { provider: ref.provider, model: ref.model, status: "indeterminate", hasAuth: false };
+  }
+  return {
+    provider: ref.provider,
+    model: ref.model,
+    status: "missing",
+    hasAuth: false,
+    ...(authRequirement ? { authRequirement } : {}),
+  };
+}
+
+function catalogRouteObservation(entry: ModelCatalogEntry): ModelRouteObservation | undefined {
+  const baseUrl = entry.baseUrl;
+  if (entry.api === undefined && baseUrl === undefined) {
+    return undefined;
+  }
+  return {
+    ...(entry.api !== undefined ? { api: entry.api } : {}),
+    ...(baseUrl !== undefined ? { baseUrl } : {}),
+  };
+}
+
+type DefaultModelCatalogFacts = {
+  observedRoutes?: readonly ModelRouteObservation[];
+};
+
+/** Resolve logical model identity and every physical route represented by a catalog. */
+export function resolveDefaultModelCatalogFacts(
+  config: OpenClawConfig,
+  catalog: readonly ModelCatalogEntry[],
+  options?: { agentId?: string; routeVariants?: readonly ModelCatalogEntry[] },
+): DefaultModelCatalogFacts {
+  const ref = resolveDefaultModelForAgent({ cfg: config, agentId: options?.agentId });
+  const provider = normalizeProviderIdForAuth(ref.provider);
+  const modelId = canonicalizeProviderModelId(provider, ref.model);
+  const matches = (entry: ModelCatalogEntry) =>
+    normalizeProviderIdForAuth(entry.provider) === provider &&
+    canonicalizeProviderModelId(provider, entry.id) === modelId;
+  const routeVariants = options?.routeVariants ?? catalog;
+  const observedRoutes = routeVariants
+    .filter(matches)
+    .map(catalogRouteObservation)
+    .filter((route): route is ModelRouteObservation => route !== undefined);
+  return observedRoutes.length > 0 ? { observedRoutes } : {};
+}
+
+/** Warn when the selected default model does not have confirmed usable credentials. */
+export async function warnIfModelConfigLooksOff(
+  config: OpenClawConfig,
+  prompter: WizardPrompter,
+  options?: DefaultModelAuthOptions,
+) {
+  let warning: string | undefined;
+  const authStatus = resolveDefaultModelAuthStatus(config, options);
+  if (authStatus.status === "missing") {
+    warning = `No auth configured for provider "${authStatus.provider}". The agent may fail until credentials are added. ${buildProviderAuthRecoveryHint(
+      {
+        provider: authStatus.provider,
+        config,
+        includeEnvVar: authStatus.authRequirement !== "subscription",
+      },
+    )}`;
+  } else if (authStatus.status === "incompatible") {
+    warning = `Model route is incompatible for "${authStatus.provider}/${authStatus.model}": ${authStatus.message}`;
+  } else if (authStatus.status === "indeterminate") {
+    warning = `Auth readiness could not be confirmed for "${authStatus.provider}/${authStatus.model}". Verify the selected model route and credential source before continuing.`;
   }
 
-  if (warnings.length > 0) {
-    await prompter.note(warnings.join("\n"), "Model check");
+  if (warning) {
+    await prompter.note(warning, "Model check");
   }
 }

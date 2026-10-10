@@ -1,0 +1,135 @@
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ArchiveLogger } from "../../infra/archive.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  installSkillArchiveFromPath,
+  type SkillArchiveInstallFailureKind,
+} from "./archive-install.js";
+import { validateRequestedSkillSlug } from "./install-paths.js";
+import { SkillUploadRequestError } from "./upload-store-error.js";
+import {
+  defaultSkillUploadStore,
+  normalizeSkillUploadSha256,
+  type SkillUploadStore,
+} from "./upload-store.js";
+
+export const UPLOADED_SKILL_ARCHIVES_DISABLED_MESSAGE =
+  "Uploaded skill archive installs are disabled by skills.install.allowUploadedArchives";
+
+export function areUploadedSkillArchivesEnabled(config: OpenClawConfig): boolean {
+  return config.skills?.install?.allowUploadedArchives === true;
+}
+
+type UploadedSkillInstallResult =
+  | {
+      ok: true;
+      message: string;
+      stdout: string;
+      stderr: string;
+      code: 0;
+      slug: string;
+      targetDir: string;
+      sha256: string;
+    }
+  | {
+      ok: false;
+      error: string;
+      errorKind: SkillArchiveInstallFailureKind;
+    };
+
+export async function installUploadedSkillArchive(params: {
+  uploadId: string;
+  slug: string;
+  force: boolean;
+  sha256?: string;
+  timeoutMs?: number;
+  workspaceDir: string;
+  config: OpenClawConfig;
+  log?: ArchiveLogger;
+  store?: SkillUploadStore;
+  beforePersistentApply?: () => void;
+}): Promise<UploadedSkillInstallResult> {
+  const store = params.store ?? defaultSkillUploadStore;
+  if (!areUploadedSkillArchivesEnabled(params.config)) {
+    return {
+      ok: false,
+      error: UPLOADED_SKILL_ARCHIVES_DISABLED_MESSAGE,
+      errorKind: "unavailable",
+    };
+  }
+  try {
+    params.beforePersistentApply?.();
+    const requestedSlug = validateRequestedSkillSlug(params.slug);
+    const requestedSha = normalizeSkillUploadSha256(params.sha256);
+    return await store.withCommittedUpload(params.uploadId, async (record, upload) => {
+      const rejectInvalid = async (error: string): Promise<UploadedSkillInstallResult> => {
+        await upload.remove().catch(() => undefined);
+        return { ok: false, error, errorKind: "invalid-request" };
+      };
+      if (record.slug !== requestedSlug) {
+        return await rejectInvalid("install slug does not match upload slug");
+      }
+      if (record.force !== params.force) {
+        return await rejectInvalid("install force does not match upload force");
+      }
+      if (requestedSha && requestedSha !== record.actualSha256) {
+        return await rejectInvalid("install sha256 does not match uploaded archive");
+      }
+      if (!record.actualSha256) {
+        return await rejectInvalid("committed upload is missing sha256");
+      }
+
+      const install = await installSkillArchiveFromPath({
+        archivePath: record.archivePath,
+        workspaceDir: params.workspaceDir,
+        slug: record.slug,
+        force: record.force,
+        timeoutMs: params.timeoutMs,
+        logger: params.log,
+        beforePersistentApply: params.beforePersistentApply,
+        policy: {
+          config: params.config,
+          installId: "upload",
+          origin: {
+            type: "upload",
+            uploadId: params.uploadId,
+            sha256: record.actualSha256,
+          },
+          source: { kind: "upload", authority: "user", mutable: false, network: false },
+          requestedSpecifier: `upload:${params.uploadId}`,
+        },
+      });
+      if (!install.ok) {
+        if (install.failureKind === "invalid-request") {
+          await upload.remove().catch(() => undefined);
+        }
+        return {
+          ok: false,
+          error: install.error,
+          errorKind: install.failureKind,
+        };
+      }
+      await upload.remove().catch(() => undefined);
+      return {
+        ok: true,
+        message: `Installed ${record.slug}`,
+        stdout: "",
+        stderr: "",
+        code: 0,
+        slug: record.slug,
+        targetDir: install.targetDir,
+        sha256: record.actualSha256,
+      };
+    });
+  } catch (err) {
+    const error = err instanceof SkillUploadRequestError ? err.message : formatErrorMessage(err);
+    return {
+      ok: false,
+      error,
+      errorKind:
+        err instanceof SkillUploadRequestError || error.startsWith("Invalid skill slug")
+          ? "invalid-request"
+          : "unavailable",
+    };
+  }
+}

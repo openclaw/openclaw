@@ -1,5 +1,7 @@
+// Covers secure random helper outputs.
 import { Buffer } from "node:buffer";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { redactRegisteredSecretValues } from "../logging/secret-redaction-registry.js";
 
 const cryptoMocks = vi.hoisted(() => ({
   randomBytes: vi.fn((bytes: number) => Buffer.alloc(bytes, 0xab)),
@@ -70,6 +72,16 @@ describe("secure-random", () => {
     expect(cryptoMocks.randomBytes).toHaveBeenCalledWith(expectedBytes);
     expect(token).toBe(expectedToken);
     expect(token).toMatch(/^[A-Za-z0-9_-]*$/);
+  });
+
+  it("registers redacted tokens at creation without redacting ordinary generated IDs", () => {
+    cryptoMocks.randomBytes.mockReturnValueOnce(Buffer.alloc(32, 0xc1));
+    const secret = generateSecureToken({ bytes: 32, redact: true });
+    expect(cryptoMocks.randomBytes).toHaveBeenCalledWith(32);
+    expect(redactRegisteredSecretValues("route/" + secret, () => "hidden")).toBe("route/hidden");
+    const publicId = generateSecureToken(18);
+    expect(redactRegisteredSecretValues(publicId, () => "hidden")).toBe(publicId);
+    expect(() => generateSecureToken({ bytes: 0, redact: true })).toThrow("at least 16 bytes");
   });
 
   it("generates secure hex strings", () => {

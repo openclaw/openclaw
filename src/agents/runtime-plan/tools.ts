@@ -1,11 +1,18 @@
-import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { TSchema } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import { copyAgentToolMetadata } from "../agent-tool-metadata.js";
 import {
   logProviderToolSchemaDiagnostics,
   normalizeProviderToolSchemas,
-} from "../pi-embedded-runner/tool-schema-runtime.js";
+} from "../embedded-agent-runner/tool-schema-runtime.js";
+import type { AgentTool } from "../runtime/index.js";
+import {
+  filterProviderNormalizableTools,
+  type RuntimeToolSchemaDiagnostic,
+} from "../tool-schema-projection.js";
+import type { AnyAgentTool } from "../tools/common.js";
 import type { AgentRuntimePlan } from "./types.js";
 
 type AgentRuntimeToolPolicyParams<TSchemaType extends TSchema = TSchema, TResult = unknown> = {
@@ -18,6 +25,16 @@ type AgentRuntimeToolPolicyParams<TSchemaType extends TSchema = TSchema, TResult
   modelId?: string;
   modelApi?: string | null;
   model?: ProviderRuntimeModel;
+  runtimeHandle?: ProviderRuntimePluginHandle;
+  allowProviderRuntimePluginLoad?: boolean;
+  /**
+   * Invoked on every normalization, including with an empty list, so
+   * consumers can observe the all-clear and retire stale quarantine state.
+   */
+  onPreNormalizationSchemaDiagnostics?: (
+    diagnostics: readonly RuntimeToolSchemaDiagnostic[],
+    tools: readonly AgentTool<TSchemaType, TResult>[],
+  ) => void;
 };
 
 function runtimePlanToolContext(params: {
@@ -32,24 +49,90 @@ function runtimePlanToolContext(params: {
   };
 }
 
+// Normalizers may return cloned tool definitions. Preserve owner and private
+// execution metadata so downstream dispatch keeps the same policy and result contract.
+function copyRuntimeToolMetadata(source: AgentTool, target: AgentTool): void {
+  if (source === target) {
+    return;
+  }
+  const { catalogMode, outputSchema, hideFromChannelProgress } = source as AnyAgentTool;
+  Object.assign(target, {
+    ...(catalogMode ? { catalogMode } : {}),
+    ...(outputSchema !== undefined ? { outputSchema } : {}),
+    ...(hideFromChannelProgress === true ? { hideFromChannelProgress } : {}),
+  });
+  copyAgentToolMetadata(source as never, target as never);
+}
+
+// Duplicate names cannot be matched by map lookup alone, so same-index matches
+// take precedence and unique-name fallback covers cloned arrays.
+function preserveRuntimeToolMetadata<TSchemaType extends TSchema = TSchema, TResult = unknown>(
+  sourceTools: AgentTool<TSchemaType, TResult>[],
+  normalizedTools: AgentTool<TSchemaType, TResult>[],
+): AgentTool<TSchemaType, TResult>[] {
+  const sourcesByUniqueName = new Map<string, AgentTool<TSchemaType, TResult>>();
+  const duplicateNames = new Set<string>();
+  for (const source of sourceTools) {
+    const name = source.name;
+    if (sourcesByUniqueName.has(name)) {
+      duplicateNames.add(name);
+      sourcesByUniqueName.delete(name);
+      continue;
+    }
+    if (!duplicateNames.has(name)) {
+      sourcesByUniqueName.set(name, source);
+    }
+  }
+  for (const [index, target] of normalizedTools.entries()) {
+    const indexedSource = sourceTools[index];
+    const source =
+      indexedSource?.name === target.name ? indexedSource : sourcesByUniqueName.get(target.name);
+    if (source) {
+      copyRuntimeToolMetadata(source, target);
+    }
+  }
+  return normalizedTools;
+}
+
 export function normalizeAgentRuntimeTools<
   TSchemaType extends TSchema = TSchema,
   TResult = unknown,
->(params: AgentRuntimeToolPolicyParams<TSchemaType, TResult>): AgentTool<TSchemaType, TResult>[] {
+>(
+  params: Omit<AgentRuntimeToolPolicyParams<TSchemaType, TResult>, "tools"> & {
+    tools: readonly AgentTool<TSchemaType, TResult>[];
+  },
+): AgentTool<TSchemaType, TResult>[] {
   const planContext = runtimePlanToolContext(params);
-  return (
-    params.runtimePlan?.tools.normalize(params.tools, planContext) ??
-    normalizeProviderToolSchemas({
-      tools: params.tools,
-      provider: params.provider,
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env ?? process.env,
-      modelId: params.modelId,
-      modelApi: params.modelApi,
-      model: params.model,
-    })
+  const normalizableToolProjection = filterProviderNormalizableTools(params.tools);
+  params.onPreNormalizationSchemaDiagnostics?.(
+    normalizableToolProjection.diagnostics,
+    params.tools,
   );
+  // Projection owns this fresh array, so normalizers can mutate it without changing raw input.
+  const normalizableTools = normalizableToolProjection.tools;
+  const planNormalized = params.runtimePlan?.tools.normalize(normalizableTools, planContext);
+  // Empty fallback input cannot gain provider-specific schema changes. Avoid loading a provider
+  // runtime just to return the same empty list; runtime plans still receive their normal callback.
+  const normalized =
+    planNormalized ??
+    (normalizableTools.length === 0
+      ? normalizableTools
+      : normalizeProviderToolSchemas({
+          tools: normalizableTools,
+          provider: params.provider,
+          config: params.config,
+          workspaceDir: params.workspaceDir,
+          env: params.env ?? process.env,
+          modelId: params.modelId,
+          modelApi: params.modelApi,
+          model: params.model,
+          runtimeHandle: params.runtimeHandle,
+          allowRuntimePluginLoad: params.allowProviderRuntimePluginLoad,
+        }));
+  // Provider collection views wrap the results of map, including host-owned tool wrappers.
+  // Own the assembly array so later wrapping keeps its metadata; retain fenced tool elements.
+  const normalizedTools = Array.isArray(normalized) ? Array.from(normalized) : normalizableTools;
+  return preserveRuntimeToolMetadata(normalizableTools, normalizedTools);
 }
 
 export function logAgentRuntimeToolDiagnostics(params: AgentRuntimeToolPolicyParams): void {
@@ -67,5 +150,6 @@ export function logAgentRuntimeToolDiagnostics(params: AgentRuntimeToolPolicyPar
     modelId: params.modelId,
     modelApi: params.modelApi,
     model: params.model,
+    runtimeHandle: params.runtimeHandle,
   });
 }

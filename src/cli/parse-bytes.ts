@@ -1,7 +1,4 @@
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 type BytesParseOptions = {
   defaultUnit?: "b" | "kb" | "mb" | "gb" | "tb";
@@ -28,7 +25,7 @@ function invalidByteSize(raw: string, reason?: string): Error {
 }
 
 export function parseByteSize(raw: string, opts?: BytesParseOptions): number {
-  const trimmed = normalizeLowercaseStringOrEmpty(normalizeOptionalString(raw) ?? "");
+  const trimmed = normalizeLowercaseStringOrEmpty(raw);
   if (!trimmed) {
     throw invalidByteSize(raw, "empty");
   }
@@ -39,7 +36,7 @@ export function parseByteSize(raw: string, opts?: BytesParseOptions): number {
   }
 
   const value = Number(m[1]);
-  if (!Number.isFinite(value) || value < 0) {
+  if (!Number.isFinite(value)) {
     throw invalidByteSize(raw);
   }
 
@@ -50,7 +47,8 @@ export function parseByteSize(raw: string, opts?: BytesParseOptions): number {
   }
 
   const bytes = Math.round(value * multiplier);
-  if (!Number.isFinite(bytes)) {
+  // Validate the rounded byte count; fractional inputs may safely round back into range.
+  if (!Number.isSafeInteger(bytes)) {
     throw invalidByteSize(raw);
   }
   return bytes;

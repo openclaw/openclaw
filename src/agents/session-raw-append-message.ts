@@ -1,24 +1,35 @@
-import type { SessionManager } from "@earendil-works/pi-coding-agent";
+// Retain raw appenders for transcript repair without changing SessionManager's public shape.
+import type { SessionManager } from "./sessions/index.js";
 
-const RAW_APPEND_MESSAGE = Symbol("openclaw.session.rawAppendMessage");
+const rawAppenders = new WeakMap<SessionManager, SessionManager["appendMessage"]>();
+const rawAsyncAppenders = new WeakMap<SessionManager, SessionManager["appendMessageAsync"]>();
 
-type SessionManagerWithRawAppend = SessionManager & {
-  [RAW_APPEND_MESSAGE]?: SessionManager["appendMessage"];
-};
-
-/**
- * Return the unguarded appendMessage implementation for a session manager.
- */
+/** Return the unguarded appendMessage implementation for a session manager. */
 export function getRawSessionAppendMessage(
   sessionManager: SessionManager,
 ): SessionManager["appendMessage"] {
-  const rawAppend = (sessionManager as SessionManagerWithRawAppend)[RAW_APPEND_MESSAGE];
-  return rawAppend ?? sessionManager.appendMessage.bind(sessionManager);
+  return rawAppenders.get(sessionManager) ?? sessionManager.appendMessage.bind(sessionManager);
 }
 
+/** Retains the unguarded appendMessage implementation for a session manager. */
 export function setRawSessionAppendMessage(
   sessionManager: SessionManager,
   appendMessage: SessionManager["appendMessage"],
 ): void {
-  (sessionManager as SessionManagerWithRawAppend)[RAW_APPEND_MESSAGE] = appendMessage;
+  rawAppenders.set(sessionManager, appendMessage);
+}
+
+export function getRawSessionAppendMessageAsync(
+  sessionManager: SessionManager,
+): SessionManager["appendMessageAsync"] {
+  return (
+    rawAsyncAppenders.get(sessionManager) ?? sessionManager.appendMessageAsync.bind(sessionManager)
+  );
+}
+
+export function setRawSessionAppendMessageAsync(
+  sessionManager: SessionManager,
+  appendMessage: SessionManager["appendMessageAsync"],
+): void {
+  rawAsyncAppenders.set(sessionManager, appendMessage);
 }

@@ -1,0 +1,376 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
+import type { Frame, Page } from "playwright-core";
+import {
+  ACT_MAX_BATCH_ACTIONS,
+  ACT_MAX_BATCH_DEPTH,
+  BROWSER_ACTION_NAVIGATION_GRACE_MS,
+} from "./act-policy.js";
+import type { BrowserBatchAbort, BrowserBatchActionResult } from "./client-actions-types.js";
+import type { BrowserActRequest } from "./client-actions.types.js";
+import type { BrowserDownloadResult } from "./download-types.js";
+import {
+  assertBrowserNavigationResultAllowed,
+  type BrowserNavigationPolicyOptions,
+} from "./navigation-guard.js";
+import { pageTargetInfo } from "./pw-session-connection.js";
+import {
+  beginActionDownloadCaptureOnPage,
+  createObservedDialogAbortSignalForPage,
+  getPageForTargetId,
+  isBrowserObservedDialogBlockedError,
+  isPolicyDenyNavigationError,
+  quarantineBlockedNavigationTarget,
+  wasBrowserNavigationSourcePreservedAfterPolicyDenial,
+} from "./pw-session.js";
+import {
+  clickCoordsViaPlaywright,
+  clickViaPlaywright,
+  dragViaPlaywright,
+  evaluateViaPlaywright,
+  fillFormViaPlaywright,
+  hoverViaPlaywright,
+  insertTextViaPlaywright,
+  pressKeyViaPlaywright,
+  scrollIntoViewViaPlaywright,
+  selectOptionViaPlaywright,
+  typeViaPlaywright,
+} from "./pw-tools-core.interactions.actions.js";
+import { waitForViaPlaywright } from "./pw-tools-core.interactions.content.js";
+import {
+  assertInteractionCurrent,
+  BrowserInteractionAuthorityError,
+  type GuardedInteractionOptions,
+  hasInteractionNavigationPolicy,
+  interactionNavigationPolicy,
+} from "./pw-tools-core.interactions.navigation.js";
+import { closePageViaPlaywright, resizeViewportViaPlaywright } from "./pw-tools-core.snapshot.js";
+
+const ACT_DOWNLOAD_MAX_DRAIN_MS = 1_000;
+
+type ActionExecutionOptions = GuardedInteractionOptions & {
+  evaluateEnabled?: boolean;
+  depth?: number;
+};
+
+async function executeSingleAction(
+  action: BrowserActRequest,
+  opts: ActionExecutionOptions,
+): Promise<unknown> {
+  const depth = opts.depth ?? 0;
+  if (depth > ACT_MAX_BATCH_DEPTH) {
+    throw new Error(`Batch nesting depth exceeds maximum of ${ACT_MAX_BATCH_DEPTH}`);
+  }
+  const effectiveTargetId = action.targetId ?? opts.targetId;
+  const interaction = {
+    cdpUrl: opts.cdpUrl,
+    targetId: effectiveTargetId,
+    ...interactionNavigationPolicy(opts),
+    signal: opts.signal,
+    assertCurrent: opts.assertCurrent,
+  };
+  const assertion = assertInteractionCurrent(interaction);
+  if (assertion) {
+    await assertion;
+  }
+  switch (action.kind) {
+    case "click":
+      return await clickViaPlaywright({
+        ...action,
+        ...interaction,
+        button: action.button as "left" | "right" | "middle" | undefined,
+        modifiers: action.modifiers as Array<
+          "Alt" | "Control" | "ControlOrMeta" | "Meta" | "Shift"
+        >,
+      });
+    case "clickCoords":
+      return await clickCoordsViaPlaywright({
+        ...action,
+        ...interaction,
+        button: action.button as "left" | "right" | "middle" | undefined,
+      });
+    case "type":
+      return await typeViaPlaywright({ ...action, ...interaction });
+    case "insertText":
+      return await insertTextViaPlaywright({ ...action, ...interaction });
+    case "press":
+      return await pressKeyViaPlaywright({ ...action, ...interaction });
+    case "hover":
+      return await hoverViaPlaywright({ ...action, ...interaction });
+    case "scrollIntoView":
+      return await scrollIntoViewViaPlaywright({ ...action, ...interaction });
+    case "drag":
+      return await dragViaPlaywright({ ...action, ...interaction });
+    case "select":
+      return await selectOptionViaPlaywright({ ...action, ...interaction });
+    case "fill":
+      return await fillFormViaPlaywright({ ...action, ...interaction });
+    case "resize":
+      return await resizeViewportViaPlaywright({
+        cdpUrl: opts.cdpUrl,
+        targetId: effectiveTargetId,
+        width: action.width,
+        height: action.height,
+        signal: opts.signal,
+        assertCurrent: opts.assertCurrent,
+      });
+    case "wait":
+      if (action.fn && !opts.evaluateEnabled) {
+        throw new Error("wait --fn is disabled by config (browser.evaluateEnabled=false)");
+      }
+      return await waitForViaPlaywright({ ...action, ...interaction });
+    case "evaluate":
+      if (!opts.evaluateEnabled) {
+        throw new Error("act:evaluate is disabled by config (browser.evaluateEnabled=false)");
+      }
+      return await evaluateViaPlaywright({ ...action, ...interaction });
+    case "close":
+      return await closePageViaPlaywright({
+        cdpUrl: opts.cdpUrl,
+        targetId: effectiveTargetId,
+        assertCurrent: opts.assertCurrent,
+      });
+    case "batch": {
+      const batch = await batchViaPlaywright({
+        ...action,
+        ...interaction,
+        evaluateEnabled: opts.evaluateEnabled,
+        depth: depth + 1,
+      });
+      // A nested batch is one parent action; surface its first failure so each
+      // level applies its own stopOnError without discarding the child outcome.
+      const failure = batch.results.find((result) => !result.ok);
+      if (failure) {
+        throw new Error(failure.error);
+      }
+      break;
+    }
+    default:
+      throw new Error(`Unsupported batch action kind: ${(action as { kind: string }).kind}`);
+  }
+  return undefined;
+}
+
+function actionUsesNavigationRequestGuard(action: BrowserActRequest): boolean {
+  if (action.kind === "batch") {
+    return action.actions.some(actionUsesNavigationRequestGuard);
+  }
+  return action.kind === "wait"
+    ? Boolean(action.fn)
+    : action.kind !== "close" && action.kind !== "resize";
+}
+
+function actionNeedsStandaloneDownloadGrace(
+  action: BrowserActRequest,
+  navigationPolicy: BrowserNavigationPolicyOptions,
+): boolean {
+  // Guarded interactions already hold a 250 ms event window while policy is
+  // active. Policy-free internal callers need that window from download capture.
+  return (
+    actionUsesNavigationRequestGuard(action) && !hasInteractionNavigationPolicy(navigationPolicy)
+  );
+}
+
+export async function executeActViaPlaywright(
+  opts: GuardedInteractionOptions & {
+    action: BrowserActRequest;
+    evaluateEnabled?: boolean;
+  },
+): Promise<{
+  result?: unknown;
+  results?: BrowserBatchActionResult[];
+  aborted?: BrowserBatchAbort;
+  blockedByDialog?: boolean;
+  browserState?: unknown;
+  downloads?: BrowserDownloadResult[];
+  targetId?: string;
+}> {
+  const navigationPolicy = interactionNavigationPolicy(opts);
+  const page = await getPageForTargetId({
+    cdpUrl: opts.cdpUrl,
+    targetId: opts.targetId,
+    ssrfPolicy: opts.ssrfPolicy,
+  });
+  const withOperationTarget = async <T extends Record<string, unknown>>(payload: T) => {
+    const targetId = (await pageTargetInfo(page).catch(() => null))?.targetId;
+    return { ...payload, ...(targetId ? { targetId } : {}) };
+  };
+  // Any DOM action can synchronously trigger a download. Capturing all actions
+  // keeps reporting and final-URL policy aligned with the actual file write.
+  const downloadCapture = beginActionDownloadCaptureOnPage(page, {
+    beforeSave: async (download) => {
+      if (!download.url) {
+        throw new Error("Action download URL is unavailable");
+      }
+      await assertBrowserNavigationResultAllowed({
+        url: download.url,
+        ...navigationPolicy,
+      });
+    },
+  });
+  const downloadGraceMs = actionNeedsStandaloneDownloadGrace(opts.action, navigationPolicy)
+    ? BROWSER_ACTION_NAVIGATION_GRACE_MS
+    : 0;
+  const drainDownloads = async (firstEventGraceMs = downloadGraceMs) =>
+    await downloadCapture.drain({
+      firstEventGraceMs,
+      maxWaitMs: ACT_DOWNLOAD_MAX_DRAIN_MS,
+      quietMs: BROWSER_ACTION_NAVIGATION_GRACE_MS,
+    });
+  const dialogAbort = createObservedDialogAbortSignalForPage({
+    page,
+    parentSignal: opts.signal,
+  });
+  const execution = {
+    cdpUrl: opts.cdpUrl,
+    targetId: opts.targetId,
+    ...navigationPolicy,
+    evaluateEnabled: opts.evaluateEnabled,
+    signal: dialogAbort.signal,
+    assertCurrent: opts.assertCurrent,
+  };
+  try {
+    if (opts.action.kind === "batch") {
+      const batch = await batchViaPlaywright({
+        ...execution,
+        page,
+        actions: opts.action.actions,
+        stopOnError: opts.action.stopOnError,
+      });
+      const newDownloads = await drainDownloads();
+      return await withOperationTarget({
+        results: batch.results,
+        ...(batch.aborted ? { aborted: batch.aborted } : {}),
+        ...(newDownloads ? { downloads: newDownloads } : {}),
+      });
+    }
+    const result = await executeSingleAction(opts.action, execution);
+    const newDownloads = await drainDownloads();
+    return await withOperationTarget({
+      ...(opts.action.kind === "evaluate" ? { result } : {}),
+      ...(newDownloads ? { downloads: newDownloads } : {}),
+    });
+  } catch (err) {
+    let failure = err;
+    try {
+      const failureGraceMs =
+        dialogAbort.signal.aborted && actionUsesNavigationRequestGuard(opts.action)
+          ? BROWSER_ACTION_NAVIGATION_GRACE_MS
+          : downloadGraceMs;
+      await drainDownloads(failureGraceMs);
+    } catch (downloadErr) {
+      // A download policy/save failure is the action's network-to-file result;
+      // preserve it even when the initiating interaction also failed.
+      failure = downloadErr;
+    }
+    if (isBrowserObservedDialogBlockedError(failure)) {
+      return await withOperationTarget({
+        blockedByDialog: true,
+        browserState: failure.browserState,
+      });
+    }
+    if (
+      isPolicyDenyNavigationError(failure) &&
+      !wasBrowserNavigationSourcePreservedAfterPolicyDenial(failure)
+    ) {
+      await quarantineBlockedNavigationTarget({
+        cdpUrl: opts.cdpUrl,
+        page,
+        targetId: opts.targetId,
+      });
+    }
+    throw failure;
+  } finally {
+    downloadCapture.dispose();
+    dialogAbort.cleanup();
+  }
+}
+
+async function batchViaPlaywright(
+  opts: ActionExecutionOptions & {
+    actions: BrowserActRequest[];
+    stopOnError?: boolean;
+    page?: Page;
+  },
+): Promise<{ results: BrowserBatchActionResult[]; aborted?: BrowserBatchAbort }> {
+  const navigationPolicy = interactionNavigationPolicy(opts);
+  const depth = opts.depth ?? 0;
+  if (depth > ACT_MAX_BATCH_DEPTH) {
+    throw new Error(`Batch nesting depth exceeds maximum of ${ACT_MAX_BATCH_DEPTH}`);
+  }
+  if (opts.actions.length > ACT_MAX_BATCH_ACTIONS) {
+    throw new Error(`Batch exceeds maximum of ${ACT_MAX_BATCH_ACTIONS} actions`);
+  }
+  const page = opts.page ?? (await getPageForTargetId(opts));
+  const results: BrowserBatchActionResult[] = [];
+  const finishAborted = (
+    reason: BrowserBatchAbort["reason"],
+    afterAction: number,
+    url: string,
+    skipped: number,
+  ) =>
+    skipped === 0
+      ? { results }
+      : { results, aborted: { reason, afterAction, url, skipped } satisfies BrowserBatchAbort };
+  let navigated = false;
+  const onFrameNavigated = (frame: Frame) => {
+    if (frame === page.mainFrame()) {
+      navigated = true;
+    }
+  };
+  const finishNavigation = (afterAction: number, skipped: number) => {
+    const url = page.url();
+    const lastResult = results.at(-1);
+    if (lastResult) {
+      results[results.length - 1] = { ...lastResult, navigated: true, url };
+    }
+    return finishAborted("navigation", afterAction, url, skipped);
+  };
+
+  // Snapshot refs are document-scoped, so any committed main-frame navigation
+  // ends the batch. A commit after the next action dispatch is inherently unguardable;
+  // callers that expect navigation can use separate act calls as the escape hatch.
+  page.on("framenavigated", onFrameNavigated);
+  try {
+    for (const [index, action] of opts.actions.entries()) {
+      if (opts.signal?.aborted) {
+        throw opts.signal.reason ?? new Error("aborted");
+      }
+      if (navigated) {
+        return finishNavigation(index, opts.actions.length - index);
+      }
+      if (page.isClosed()) {
+        return finishAborted("closed", index, page.url(), opts.actions.length - index);
+      }
+      navigated = false;
+      let result: BrowserBatchActionResult;
+      try {
+        await executeSingleAction(action, { ...opts, ...navigationPolicy, depth });
+        result = { ok: true };
+      } catch (err) {
+        if (
+          isBrowserObservedDialogBlockedError(err) ||
+          err instanceof BrowserInteractionAuthorityError
+        ) {
+          throw err;
+        }
+        if (isPolicyDenyNavigationError(err)) {
+          throw err;
+        }
+        result = { ok: false, error: formatErrorMessage(err) };
+      }
+      results.push(result);
+      if (page.isClosed()) {
+        return finishAborted("closed", index + 1, page.url(), opts.actions.length - index - 1);
+      }
+      if (navigated) {
+        return finishNavigation(index + 1, opts.actions.length - index - 1);
+      }
+      if (!result.ok && opts.stopOnError !== false) {
+        break;
+      }
+    }
+    return { results };
+  } finally {
+    page.off("framenavigated", onFrameNavigated);
+  }
+}

@@ -1,11 +1,20 @@
-import { z } from "zod";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString as toText,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { z } from "zod";
+import type { ChannelApprovalKind } from "../infra/approval-types.js";
+import { isMeaningfulMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 
+/**
+ * Shared channel MCP contracts and normalization helpers.
+ *
+ * These shapes are intentionally smaller than raw Gateway payloads so MCP tools
+ * can return stable structured content without exposing every session detail.
+ */
 export type ClaudeChannelMode = "off" | "on" | "auto";
 
+/** Conversation route information required to read and reply through a channel session. */
 export type ConversationDescriptor = {
   sessionKey: string;
   channel: string;
@@ -58,6 +67,7 @@ export type ChatHistoryResult = {
 
 export type SessionMessagePayload = {
   sessionKey?: string;
+  senderIsOwner?: boolean;
   messageId?: string;
   messageSeq?: number;
   message?: { role?: string; content?: unknown; [key: string]: unknown };
@@ -68,11 +78,10 @@ export type SessionMessagePayload = {
   [key: string]: unknown;
 };
 
-export type ApprovalKind = "exec" | "plugin";
 export type ApprovalDecision = "allow-once" | "allow-always" | "deny";
 
 export type PendingApproval = {
-  kind: ApprovalKind;
+  kind: ChannelApprovalKind;
   id: string;
   request?: Record<string, unknown>;
   createdAtMs?: number;
@@ -110,15 +119,26 @@ export type QueueEvent =
       raw: Record<string, unknown>;
     };
 
-export type ClaudePermissionRequest = {
-  toolName: string;
-  description: string;
-  inputPreview: string;
-};
-
 export type WaitFilter = {
   afterCursor: number;
   sessionKey?: string;
+};
+
+/** Retained queue boundary reported when a requested cursor can no longer be replayed. */
+export type EventCursorGap = {
+  requested_after_cursor: number;
+  oldest_available_cursor: number;
+};
+
+export type EventPollResult = {
+  events: QueueEvent[];
+  nextCursor: number;
+  gap?: EventCursorGap;
+};
+
+export type EventWaitResult = {
+  event: QueueEvent | null;
+  gap?: EventCursorGap;
 };
 
 export const ClaudePermissionRequestSchema = z.object({
@@ -132,15 +152,6 @@ export const ClaudePermissionRequestSchema = z.object({
 });
 
 export { toText };
-
-export function resolveMessageId(entry: Record<string, unknown>): string | undefined {
-  return (
-    toText(entry.id) ??
-    (entry.__openclaw && typeof entry.__openclaw === "object"
-      ? toText((entry.__openclaw as { id?: unknown }).id)
-      : undefined)
-  );
-}
 
 export function summarizeResult(
   label: string,
@@ -161,17 +172,14 @@ export function summarizeStructuredResult(
   };
 }
 
-function resolveConversationChannel(row: SessionRow): string | undefined {
-  return normalizeOptionalLowercaseString(
+/** Convert a Gateway session row into a reply-capable conversation descriptor. */
+export function toConversation(row: SessionRow): ConversationDescriptor | null {
+  const channel = normalizeOptionalLowercaseString(
     toText(row.deliveryContext?.channel) ??
       toText(row.lastChannel) ??
       toText(row.channel) ??
       toText(row.origin?.provider),
   );
-}
-
-export function toConversation(row: SessionRow): ConversationDescriptor | null {
-  const channel = resolveConversationChannel(row);
   const to = toText(row.deliveryContext?.to) ?? toText(row.lastTo);
   if (!channel || !to) {
     return null;
@@ -203,23 +211,25 @@ export function matchEventFilter(event: QueueEvent, filter: WaitFilter): boolean
   return "sessionKey" in event && event.sessionKey === filter.sessionKey;
 }
 
+/** Return non-text content blocks plus canonical persisted media from a raw message payload. */
 export function extractAttachmentsFromMessage(message: unknown): unknown[] {
   if (!message || typeof message !== "object") {
     return [];
   }
   const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
-    return [];
-  }
-  return content.filter((entry) => {
-    if (!entry || typeof entry !== "object") {
-      return false;
-    }
-    return toText((entry as { type?: unknown }).type) !== "text";
-  });
-}
-
-export function normalizeApprovalId(value: unknown): string | undefined {
-  const id = toText(value);
-  return id ? id.trim() : undefined;
+  const contentAttachments = Array.isArray(content)
+    ? content.filter((entry) => {
+        if (!entry || typeof entry !== "object") {
+          return false;
+        }
+        return toText((entry as { type?: unknown }).type) !== "text";
+      })
+    : [];
+  const mediaAttachments = (readPersistedMediaFacts(message) ?? [])
+    .filter(isMeaningfulMediaFact)
+    .map((media) => ({
+      type: "openclaw_media" as const,
+      media: Object.fromEntries(Object.entries(media).filter(([, value]) => value !== undefined)),
+    }));
+  return [...contentAttachments, ...mediaAttachments];
 }

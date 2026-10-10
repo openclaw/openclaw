@@ -1,6 +1,8 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import type { PairingChannel } from "./pairing-store.types.js";
 
+// User-facing pairing reply formatter sent to unapproved channel users. The
+// owner command is formatted through CLI helpers so profiles/aliases stay valid.
 export function buildPairingReply(params: {
   channel: PairingChannel;
   idLine: string;
@@ -18,7 +20,6 @@ export function buildPairingReply(params: {
     "```",
     "",
     "Ask the bot owner to approve with:",
-    formatCliCommand(`openclaw pairing approve ${channel} ${code}`),
     "```",
     approveCommand,
     "```",

@@ -1,13 +1,28 @@
+/**
+ * Shared text-control command authorization policy for channel runtimes.
+ *
+ * These helpers are re-exported through the plugin SDK so built-in and external
+ * channels make the same access-groups decisions for native command text.
+ */
+
+/** One channel-specific authorization source for text control commands. */
 export type CommandAuthorizer = {
+  /** True when this channel/user identity has an access-group rule configured. */
   configured: boolean;
+  /** True when the configured rule permits the command. Ignored when unconfigured. */
   allowed: boolean;
 };
 
+/** Fallback policy for channels that have access groups globally disabled. */
 export type CommandGatingModeWhenAccessGroupsOff = "allow" | "deny" | "configured";
 
+/** Resolves whether any configured authorizer permits a control command. */
 export function resolveCommandAuthorizedFromAuthorizers(params: {
+  /** Global access-group switch for the channel/runtime. */
   useAccessGroups: boolean;
+  /** Independent authorization sources, such as sender id and actor id. */
   authorizers: CommandAuthorizer[];
+  /** Policy used only when `useAccessGroups` is false. Defaults to open. */
   modeWhenAccessGroupsOff?: CommandGatingModeWhenAccessGroupsOff;
 }): boolean {
   const { useAccessGroups, authorizers } = params;
@@ -19,48 +34,26 @@ export function resolveCommandAuthorizedFromAuthorizers(params: {
     if (mode === "deny") {
       return false;
     }
+    // `configured` preserves the old open-by-default behavior until a channel has at least one
+    // command authorizer configured, then enforces that configured source.
     const anyConfigured = authorizers.some((entry) => entry.configured);
     if (!anyConfigured) {
       return true;
     }
-    return authorizers.some((entry) => entry.configured && entry.allowed);
   }
   return authorizers.some((entry) => entry.configured && entry.allowed);
 }
 
-export function resolveControlCommandGate(params: {
-  useAccessGroups: boolean;
-  authorizers: CommandAuthorizer[];
-  allowTextCommands: boolean;
-  hasControlCommand: boolean;
-  modeWhenAccessGroupsOff?: CommandGatingModeWhenAccessGroupsOff;
-}): { commandAuthorized: boolean; shouldBlock: boolean } {
-  const commandAuthorized = resolveCommandAuthorizedFromAuthorizers({
-    useAccessGroups: params.useAccessGroups,
-    authorizers: params.authorizers,
-    modeWhenAccessGroupsOff: params.modeWhenAccessGroupsOff,
-  });
+/** Resolves command authorization and whether the current text command should be blocked. */
+export function resolveControlCommandGate(
+  params: Parameters<typeof resolveCommandAuthorizedFromAuthorizers>[0] & {
+    /** Channel setting that enables text commands as an input surface. */
+    allowTextCommands: boolean;
+    /** True when the current inbound message parsed as a control command. */
+    hasControlCommand: boolean;
+  },
+): { commandAuthorized: boolean; shouldBlock: boolean } {
+  const commandAuthorized = resolveCommandAuthorizedFromAuthorizers(params);
   const shouldBlock = params.allowTextCommands && params.hasControlCommand && !commandAuthorized;
   return { commandAuthorized, shouldBlock };
-}
-
-export function resolveDualTextControlCommandGate(params: {
-  useAccessGroups: boolean;
-  primaryConfigured: boolean;
-  primaryAllowed: boolean;
-  secondaryConfigured: boolean;
-  secondaryAllowed: boolean;
-  hasControlCommand: boolean;
-  modeWhenAccessGroupsOff?: CommandGatingModeWhenAccessGroupsOff;
-}): { commandAuthorized: boolean; shouldBlock: boolean } {
-  return resolveControlCommandGate({
-    useAccessGroups: params.useAccessGroups,
-    authorizers: [
-      { configured: params.primaryConfigured, allowed: params.primaryAllowed },
-      { configured: params.secondaryConfigured, allowed: params.secondaryAllowed },
-    ],
-    allowTextCommands: true,
-    hasControlCommand: params.hasControlCommand,
-    modeWhenAccessGroupsOff: params.modeWhenAccessGroupsOff,
-  });
 }

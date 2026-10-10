@@ -1,8 +1,15 @@
+/**
+ * Browser HTTP auth helpers.
+ *
+ * Validates browser-control bearer token or password headers with constant-time
+ * comparison against resolved control auth.
+ */
 import type { IncomingMessage } from "node:http";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { safeEqualSecret } from "../security/secret-equal.js";
+import type { BrowserControlAuth } from "./control-auth.js";
 
-function firstHeaderValue(value: string | string[] | undefined): string {
+export function firstHeader(value: string | string[] | undefined): string {
   return Array.isArray(value) ? (value[0] ?? "") : (value ?? "");
 }
 
@@ -37,9 +44,9 @@ function parseBasicPassword(authorization: string): string | undefined {
 
 export function isAuthorizedBrowserRequest(
   req: IncomingMessage,
-  auth: { token?: string; password?: string },
+  auth: BrowserControlAuth,
 ): boolean {
-  const authorization = firstHeaderValue(req.headers.authorization).trim();
+  const authorization = firstHeader(req.headers.authorization).trim();
 
   if (auth.token) {
     const bearer = parseBearerToken(authorization);
@@ -49,7 +56,7 @@ export function isAuthorizedBrowserRequest(
   }
 
   if (auth.password) {
-    const passwordHeader = firstHeaderValue(req.headers["x-openclaw-password"]).trim();
+    const passwordHeader = firstHeader(req.headers["x-openclaw-password"]).trim();
     if (passwordHeader && safeEqualSecret(passwordHeader, auth.password)) {
       return true;
     }

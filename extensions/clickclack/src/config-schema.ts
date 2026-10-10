@@ -1,4 +1,9 @@
-import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
+import {
+  buildChannelAllowBotsSchema,
+  buildChannelConfigSchema,
+  buildMultiAccountChannelSchema,
+  ChannelBotLoopProtectionSchema,
+} from "openclaw/plugin-sdk/channel-config-schema";
 import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
 import { z } from "zod";
 
@@ -6,26 +11,87 @@ const ClickClackAccountConfigSchema = z
   .object({
     name: z.string().optional(),
     enabled: z.boolean().optional(),
+    configWrites: z.boolean().optional(),
+    mediaMaxMb: z.number().positive().optional(),
+    responsePrefix: z.string().optional(),
     baseUrl: z.string().url().optional(),
+    apiBaseUrl: z.string().url().optional(),
     token: buildSecretInputSchema().optional(),
+    tokenFile: z.string().optional(),
     workspace: z.string().optional(),
     botUserId: z.string().optional(),
     agentId: z.string().optional(),
     replyMode: z.enum(["agent", "model"]).optional(),
     model: z.string().optional(),
     systemPrompt: z.string().optional(),
-    timeoutSeconds: z.number().int().min(1).max(3_600).optional(),
     toolsAllow: z.array(z.string()).optional(),
-    senderIsOwner: z.boolean().optional(),
     defaultTo: z.string().optional(),
     allowFrom: z.array(z.string()).optional(),
+    allowBots: buildChannelAllowBotsSchema({ allowMentions: true }),
+    botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
     reconnectMs: z.number().int().min(100).max(60_000).optional(),
+    agentActivity: z.boolean().optional(),
+    nativeProgress: z.boolean().optional(),
+    commandMenu: z.boolean().optional(),
+    requireMention: z.boolean().optional(),
+    requireMentionInBotThreads: z.boolean().optional(),
+    mentionPatterns: z.array(z.string()).optional(),
+    groups: z
+      .record(
+        z.string(),
+        z
+          .object({
+            requireMention: z.boolean().optional(),
+            requireMentionInBotThreads: z.boolean().optional(),
+            mentionPatterns: z.array(z.string()).optional(),
+            allowBots: buildChannelAllowBotsSchema({ allowMentions: true }),
+            botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
+          })
+          .strict(),
+      )
+      .optional(),
+    discussions: z
+      .object({
+        enabled: z.boolean().optional(),
+        workspace: z.string().optional(),
+        controlUrlBase: z.string().url().optional(),
+        section: z.string().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
-const ClickClackConfigSchema = ClickClackAccountConfigSchema.extend({
-  accounts: z.record(z.string(), ClickClackAccountConfigSchema.partial()).optional(),
-  defaultAccount: z.string().optional(),
-}).strict();
+export type ClickClackAccountConfigInput = z.input<typeof ClickClackAccountConfigSchema>;
 
-export const clickClackConfigSchema = buildChannelConfigSchema(ClickClackConfigSchema);
+const ClickClackConfigSchema = buildMultiAccountChannelSchema(
+  ClickClackAccountConfigSchema.extend({ historyLimit: z.number().int().min(0).optional() }),
+  { accountSchema: ClickClackAccountConfigSchema.partial() },
+);
+
+export type ClickClackConfigInput = z.input<typeof ClickClackConfigSchema>;
+
+/**
+ * Config schema exported to core so `openclaw doctor` and config validation
+ * understand both default and named ClickClack accounts.
+ */
+export const clickClackConfigSchema = buildChannelConfigSchema(ClickClackConfigSchema, {
+  uiHints: {
+    requireMentionInBotThreads: {
+      label: "Require Mention in Bot Threads",
+      help: "Override mention requirements in threads rooted in this bot's messages. Unset keeps the normal mention policy.",
+    },
+    "groups.*.requireMentionInBotThreads": {
+      label: "Require Mention in Bot Threads",
+      help: "Override the account policy for threads rooted in this bot's messages in this channel.",
+    },
+    "accounts.*.requireMentionInBotThreads": {
+      label: "Require Mention in Bot Threads",
+      help: "Override mention requirements in threads rooted in this bot's messages. Unset inherits the channel configuration.",
+    },
+    "accounts.*.groups.*.requireMentionInBotThreads": {
+      label: "Require Mention in Bot Threads",
+      help: "Override the account policy for threads rooted in this bot's messages in this channel.",
+    },
+  },
+});
