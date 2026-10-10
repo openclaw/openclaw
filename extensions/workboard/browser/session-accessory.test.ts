@@ -1,9 +1,10 @@
 import "./test/dom.setup.ts";
+import { flush } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { createWorkboardCapability } from "./lib/workboard/capability.ts";
 import { createWorkboardCard } from "./lib/workboard/test/index-helpers.ts";
-import { createWorkboardPage } from "./pages/workboard/workboard-page.ts";
-import { createWorkboardSessionAccessory } from "./session-accessory.ts";
+import { createWorkboardPage } from "./pages/workboard/workboard-page.tsx";
+import { createWorkboardSessionAccessory } from "./session-accessory.tsx";
 import { workboardTestHost } from "./test/host.setup.ts";
 import { createViewContext } from "./test/host.ts";
 
@@ -116,6 +117,7 @@ it("renders shared card updates and retires navigation while hidden or disposed"
       path: ["platform"],
     });
     mounted?.update?.({ ...context, presented: false, props: { sessionKey: "agent:main:next" } });
+    flush();
     expect(container.querySelector("a")).toBeNull();
     link.click();
     expect(fixture.host.navigation.openPage).toHaveBeenCalledOnce();
@@ -125,6 +127,7 @@ it("renders shared card updates and retires navigation while hidden or disposed"
     workboard.notify();
     expect(container.querySelector("a")).toBeNull();
     mounted?.update?.({ ...context, props: { sessionKey: "agent:main:next" } });
+    flush();
     expect(container.textContent).toContain("Next card");
     expect(container.querySelector("a")?.getAttribute("href")).toBe("/workboard/default");
     expect(container.textContent).not.toContain(card.title);

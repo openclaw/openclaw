@@ -1,9 +1,11 @@
-import { html, nothing, render } from "lit";
+/** @jsxImportSource @solidjs/web */
+import { render } from "@solidjs/web";
 import type { ControlUiView } from "openclaw/plugin-sdk/control-ui";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { renderAgentPicker } from "../../components/host-components.ts";
-import { icons } from "../../components/icons.ts";
-import { renderWorkboardBoardGlyph } from "../../components/workboard-board-glyph.ts";
+import { createSignal, Show } from "solid-js";
+import { AgentPicker } from "../../components/host-components.tsx";
+import { icons } from "../../components/icons.tsx";
+import { WorkboardBoardGlyph } from "../../components/workboard-board-glyph.tsx";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { workboardCardBoardId } from "../../lib/workboard/board-filter.ts";
@@ -26,25 +28,30 @@ import {
 import { invalidateWorkboardLoads } from "../../lib/workboard/runtime.ts";
 import { createWorkboardSessionResolver } from "../../lib/workboard/session-resolution.ts";
 import type { WorkboardBoardMetadata } from "../../lib/workboard/types.ts";
-import { matchesAgentScope } from "./agent-filter.ts";
+import {
+  buildAgentFilterOptions,
+  normalizeActiveAgentFilter,
+  matchesAgentScope,
+} from "./agent-filter.ts";
 import { matchesBoardFilter, WORKBOARD_ALL_BOARDS_FILTER } from "./board-filter.ts";
 import { workboardPageTarget } from "./page-target.ts";
 import { createSessionsBoardController } from "./sessions-board-controller.ts";
-import { loadBoardAutomation, renderBoardAutomationHeading } from "./view-automation.ts";
+import { loadBoardAutomation, BoardAutomationHeading } from "./view-automation.tsx";
 import {
   createBoardDraft,
   createNewBoardDraft,
-  renderBoardModal,
+  BoardModal,
   type BoardDraft,
-} from "./view-board-modal.ts";
-import { getVisibleDetailCard } from "./view-card-details.ts";
+} from "./view-board-modal.tsx";
+import { getVisibleDetailCard } from "./view-card-details.tsx";
 import {
   workboardErrorMessage,
   type BoardAutomationState,
   type WorkboardProps,
-} from "./view-helpers.ts";
-import { renderSessionsBoard } from "./view-sessions-board.ts";
-import { renderWorkboard } from "./view.ts";
+} from "./view-helpers.tsx";
+import { reconcileSelectionScope } from "./view-selection.tsx";
+import { SessionsBoard } from "./view-sessions-board.tsx";
+import { WorkboardView } from "./view.tsx";
 
 function reconcileCardOverlays(state: WorkboardUiState, visible: (card: WorkboardCard) => boolean) {
   const remainsVisible = (id: string) =>
@@ -69,10 +76,20 @@ export function createWorkboardPage(
     let disposed = false;
     let boardDraft: BoardDraft | null = null;
     const automations = new Map<string, BoardAutomationState>();
+    type PagePresentation = {
+      workboardProps: WorkboardProps & { onRefresh: () => void };
+      selectedBoard: WorkboardBoardMetadata | null | undefined;
+      boards: typeof state.boards;
+      boardDraft: BoardDraft | null;
+      revision: number;
+    };
+    const [presentation, setPresentation] = createSignal<PagePresentation>();
+    let revision = 0;
     let queued = false;
     let connected = false;
     let refreshActive = false;
     let metadataGeneration = 0;
+    let navigationGeneration = 0;
     let metadataLoad: Promise<void> | null = null;
     // Card reloads cannot clear an unresolved agent/session metadata failure.
     let metadataError: string | null = null;
@@ -156,15 +173,12 @@ export function createWorkboardPage(
     const update = () => {
       synchronizeConnection();
       const agents = host.agents.rows;
-      const selectableAgents = agents.filter((agent) => agent.kind !== "system");
       const defaultId = host.agents.defaultId;
       const defaultAgentId = defaultId ?? host.connection.assistantAgentId;
       const agentsList = defaultId === null ? null : { defaultId, agents: [...agents] };
       const boardId =
         context.props.boardId || context.props.boardFilter || WORKBOARD_ALL_BOARDS_FILTER;
       const scope = host.agents.scopeId;
-      const missingScope =
-        scope && !selectableAgents.some((agent) => agent.id === scope) ? scope : null;
       if (observedScope !== scope) {
         observedScope = scope;
         state.agentFilter = "all";
@@ -279,178 +293,221 @@ export function createWorkboardPage(
           replace: true,
           preserveSearch: true,
         });
-      const renderBoard = (props: WorkboardProps & { onRefresh: () => void }) =>
-        selectedBoard?.kind === "sessions"
-          ? renderSessionsBoard({
-              board: selectedBoard,
-              boards: state.boards,
-              controller: sessionsBoard,
-              host,
-              heading: props.heading ?? html``,
-              scopeControl: props.scopeControl,
-              pageError,
-              overlayOpen: Boolean(boardDraft),
-              onNewBoard,
-              onBoardChange,
-            })
-          : renderWorkboard(props);
-      render(
-        html`
-          ${renderBoard({
-            heading: html`
-              <div class="workboard-heading__identity">
-                <div class="page-title workboard-page-title">
-                  ${
-                    selectedBoard
-                      ? renderWorkboardBoardGlyph(selectedBoard, "workboard-board-glyph--header")
-                      : nothing
-                  }
-                  <span>${selectedBoard ? workboardBoardName(selectedBoard) : "Workboard"}</span>
-                  ${
-                    selectedBoard && host.connection.canWrite
-                      ? html`
-                          <button
-                            class="btn btn--icon workboard-board-edit"
-                            type="button"
-                            aria-label=${t("workboard.editBoard")}
-                            title=${t("workboard.editBoard")}
-                            @click=${() => {
-                              boardDraft = createBoardDraft({
-                                ...selectedBoard,
-                                ...(sessionsBoard.snapshot?.board.id === selectedBoard.id
-                                  ? sessionsBoard.snapshot.board
-                                  : {}),
-                              });
-                              requestUpdate();
-                            }}
-                          >
-                            ${icons.penLine}
-                          </button>
-                        `
-                      : nothing
-                  }
-                </div>
-                ${
-                  selectedBoard?.automationJobId
-                    ? renderBoardAutomationHeading(automations.get(selectedBoard.automationJobId))
-                    : nothing
-                }
-              </div>
-            `,
-            scopeControl:
-              selectableAgents.length > 1 || scope
-                ? renderAgentPicker(
-                    {
-                      options: [
-                        { value: "", label: t("workboard.allAgents"), icon: "users" },
-                        ...selectableAgents.map((agent) => ({
-                          value: agent.id,
-                          label: agent.name ?? agent.identity?.name ?? agent.id,
-                          agent,
-                        })),
-                        ...(missingScope
-                          ? [
-                              {
-                                value: missingScope,
-                                label: missingScope,
-                                agent: { id: missingScope },
-                              },
-                            ]
-                          : []),
-                      ],
-                      value: scope ?? "",
-                      variant: "compact",
-                      accessibleLabel: t("workboard.agentFilter"),
-                      onSelect: (value) => host.agents.setScope(value || null),
-                    },
-                    "workboard-scope",
-                  )
-                : undefined,
-            pageError,
-            overlayOpen: Boolean(boardDraft),
-            presented: context.presented,
-            detailBoardAutomation: detailJobId ? automations.get(detailJobId) : undefined,
+      const workboardProps: WorkboardProps & { onRefresh: () => void } = {
+        pageError,
+        overlayOpen: Boolean(boardDraft),
+        presented: context.presented,
+        detailBoardAutomation: detailJobId ? automations.get(detailJobId) : undefined,
+        host: workboard,
+        client: connected ? client : null,
+        connected,
+        canWrite: host.connection.canWrite,
+        canGrant: host.connection.canGrant,
+        canModelOverride: host.connection.canAdmin,
+        agentsList,
+        defaultAgentId,
+        sessions,
+        sessionResolution,
+        scopeAgentId: scope,
+        onClearAgentScope: () => host.agents.setScope(null),
+        showAgentFilter: false,
+        onOpenSession: host.sessions.open,
+        onRefresh: () => {
+          automations.clear();
+          void refreshMetadata();
+          sessionResolver.refresh();
+          void refreshWorkboard({
             host: workboard,
             client: connected ? client : null,
-            connected,
-            canWrite: host.connection.canWrite,
-            canGrant: host.connection.canGrant,
-            canModelOverride: host.connection.canAdmin,
-            agentsList,
-            defaultAgentId,
-            sessions,
-            sessionResolution,
-            scopeAgentId: scope,
-            onClearAgentScope: () => host.agents.setScope(null),
-            showAgentFilter: false,
-            onOpenSession: host.sessions.open,
-            onRefresh: () => {
-              automations.clear();
-              void refreshMetadata();
-              sessionResolver.refresh();
-              void refreshWorkboard({
-                host: workboard,
-                client: connected ? client : null,
-                requestUpdate,
-                source: "manual",
-                refreshDiagnostics: host.connection.canWrite,
-              });
-            },
-            onBoardFilterChange: onBoardChange,
-            onNewBoard,
-            onRequestUpdate: requestUpdate,
-          })}
-          ${
-            boardDraft
-              ? renderBoardModal({
-                  draft: boardDraft,
-                  toastOwner: state,
-                  pageError: workboardErrorMessage(state, pageError),
-                  client: connected ? client : null,
-                  get canWrite() {
-                    const connection = host.connection;
-                    return connection.connected && connection.canWrite;
-                  },
-                  requestUpdate,
-                  onCancel: () => {
-                    boardDraft = null;
-                    requestUpdate();
-                  },
-                  onSaved: (board) => {
-                    if (disposed) {
-                      return;
-                    }
-                    const creating = boardDraft?.create;
-                    boardDraft = null;
-                    if (creating) {
-                      invalidateWorkboardLoads(workboard);
-                      registerBoardNavigation(board);
-                      host.ui.pinNavigation(`board-${board.id}`);
-                    }
-                    void refreshWorkboard({
-                      host: workboard,
-                      client,
-                      requestUpdate,
-                      source: "manual",
-                    }).then(() => {
-                      if (disposed) {
-                        return;
-                      }
-                      if (creating) {
-                        onBoardChange(board.id);
-                      } else if (selectedBoard?.kind === "sessions") {
-                        void sessionsBoard.read();
-                      }
-                    });
-                    requestUpdate();
-                  },
-                })
-              : nothing
-          }
-        `,
-        container,
+            requestUpdate,
+            source: "manual",
+            refreshDiagnostics: host.connection.canWrite,
+          });
+        },
+        onBoardFilterChange: onBoardChange,
+        onNewBoard,
+        onRequestUpdate: requestUpdate,
+      };
+      state.agentFilter = normalizeActiveAgentFilter(
+        buildAgentFilterOptions(agentsList, state.cards),
+        state.agentFilter,
       );
+      reconcileSelectionScope(workboardProps);
+      setPresentation({
+        workboardProps,
+        selectedBoard,
+        boards: state.boards,
+        boardDraft,
+        revision: ++revision,
+      });
     };
+    function PageHeading() {
+      const board = () => presentation()?.selectedBoard;
+      return (
+        <div class="workboard-heading__identity">
+          <div class="page-title workboard-page-title">
+            <Show when={board()}>
+              {(selected) => (
+                <WorkboardBoardGlyph board={selected()} className="workboard-board-glyph--header" />
+              )}
+            </Show>
+            <span>{board() ? workboardBoardName(board()!) : "Workboard"}</span>
+            <Show when={board() && presentation()?.workboardProps.canWrite}>
+              <button
+                class="btn btn--icon workboard-board-edit"
+                type="button"
+                aria-label={t("workboard.editBoard")}
+                title={t("workboard.editBoard")}
+                onClick={() => {
+                  const selected = board();
+                  if (!selected) return;
+                  boardDraft = createBoardDraft({
+                    ...selected,
+                    ...(sessionsBoard.snapshot?.board.id === selected.id
+                      ? sessionsBoard.snapshot.board
+                      : {}),
+                  });
+                  requestUpdate();
+                }}
+              >
+                {icons.penLine}
+              </button>
+            </Show>
+          </div>
+          <Show when={board()?.automationJobId}>
+            {(jobId) => (
+              <BoardAutomationHeading
+                automation={automations.get(jobId())}
+                revision={presentation()?.revision}
+              />
+            )}
+          </Show>
+        </div>
+      );
+    }
+    function ScopeControl() {
+      const agents = () =>
+        presentation()?.workboardProps.agentsList?.agents.filter(
+          (agent) => agent.kind !== "system",
+        ) ?? [];
+      const scope = () => presentation()?.workboardProps.scopeAgentId;
+      const missing = () => scope() && !agents().some((agent) => agent.id === scope());
+      return (
+        <Show when={agents().length > 1 || scope()}>
+          <AgentPicker
+            class="workboard-scope"
+            options={[
+              { value: "", label: t("workboard.allAgents"), icon: "users" },
+              ...agents().map((agent) => ({
+                value: agent.id,
+                label: agent.name ?? agent.identity?.name ?? agent.id,
+                agent,
+              })),
+              ...(missing() ? [{ value: scope()!, label: scope()!, agent: { id: scope()! } }] : []),
+            ]}
+            value={scope() ?? ""}
+            variant="compact"
+            accessibleLabel={t("workboard.agentFilter")}
+            onSelect={(value) => host.agents.setScope(value || null)}
+          />
+        </Show>
+      );
+    }
+    function Page() {
+      return (
+        <Show when={presentation()}>
+          {(current) => (
+            <>
+              <Show
+                when={current().selectedBoard?.kind === "sessions"}
+                fallback={
+                  <WorkboardView
+                    {...current().workboardProps}
+                    revision={current().revision}
+                    heading={<PageHeading />}
+                    scopeControl={() => <ScopeControl />}
+                  />
+                }
+              >
+                <SessionsBoard
+                  board={current().selectedBoard!}
+                  boards={current().boards}
+                  controller={sessionsBoard}
+                  host={host}
+                  revision={current().revision}
+                  heading={<PageHeading />}
+                  scopeControl={<ScopeControl />}
+                  pageError={current().workboardProps.pageError}
+                  overlayOpen={Boolean(current().boardDraft)}
+                  onNewBoard={() => {
+                    boardDraft = createNewBoardDraft();
+                    requestUpdate();
+                  }}
+                  onBoardChange={(boardFilter) =>
+                    host.navigation.openPage(workboardPageTarget(boardFilter), {
+                      replace: true,
+                      preserveSearch: true,
+                    })
+                  }
+                />
+              </Show>
+              <Show when={current().boardDraft}>
+                {(draft) => (
+                  <BoardModal
+                    draft={draft()}
+                    revision={current().revision}
+                    toastOwner={state}
+                    pageError={workboardErrorMessage(state, current().workboardProps.pageError)}
+                    client={current().workboardProps.client}
+                    canWrite={
+                      current().workboardProps.connected &&
+                      current().workboardProps.canWrite !== false
+                    }
+                    requestUpdate={requestUpdate}
+                    onCancel={() => {
+                      boardDraft = null;
+                      requestUpdate();
+                    }}
+                    onSaved={(board) => {
+                      if (disposed) return;
+                      const creating = boardDraft?.create;
+                      const savedNavigation = navigationGeneration;
+                      boardDraft = null;
+                      if (creating) {
+                        invalidateWorkboardLoads(workboard);
+                        registerBoardNavigation(board);
+                        host.ui.pinNavigation(`board-${board.id}`);
+                      }
+                      void refreshWorkboard({
+                        host: workboard,
+                        client,
+                        requestUpdate,
+                        source: "manual",
+                      }).then(() => {
+                        if (
+                          disposed ||
+                          !context.presented ||
+                          savedNavigation !== navigationGeneration
+                        )
+                          return;
+                        if (creating)
+                          host.navigation.openPage(workboardPageTarget(board.id), {
+                            replace: true,
+                            preserveSearch: true,
+                          });
+                        else if (presentation()?.selectedBoard?.kind === "sessions")
+                          void sessionsBoard.read();
+                      });
+                      requestUpdate();
+                    }}
+                  />
+                )}
+              </Show>
+            </>
+          )}
+        </Show>
+      );
+    }
     const onVisibilityChange = () => {
       if (document.visibilityState === "visible") {
         resumeWorkboardLiveRefresh(workboard);
@@ -483,8 +540,16 @@ export function createWorkboardPage(
     });
     document.addEventListener("visibilitychange", onVisibilityChange);
     update();
+    const disposeRoot = render(() => <Page />, container);
     return {
       update(next) {
+        if (
+          context.presented !== next.presented ||
+          context.props.boardId !== next.props.boardId ||
+          context.props.boardFilter !== next.props.boardFilter
+        ) {
+          navigationGeneration += 1;
+        }
         context = next;
         requestUpdate();
       },
@@ -499,7 +564,7 @@ export function createWorkboardPage(
         sessionResolver.dispose();
         document.removeEventListener("visibilitychange", onVisibilityChange);
         stop();
-        render(nothing, container);
+        disposeRoot();
       },
     };
   };

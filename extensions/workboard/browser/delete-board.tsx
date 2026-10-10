@@ -1,5 +1,7 @@
-import { html, nothing, render } from "lit";
+/** @jsxImportSource @solidjs/web */
+import { render } from "@solidjs/web";
 import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
+import { createSignal } from "solid-js";
 import { t } from "./i18n/index.ts";
 import { formatUiError } from "./lib/format-error.ts";
 import { workboardBoardName } from "./lib/workboard/board-presentation.ts";
@@ -20,6 +22,8 @@ export function deleteWorkboardBoard(
     let busy = false;
     let error = "";
     let closed = false;
+    const [view, setView] = createSignal({ busy, error });
+    const update = () => setView({ busy, error });
     const finish = () => {
       if (closed) {
         return;
@@ -27,7 +31,7 @@ export function deleteWorkboardBoard(
       closed = true;
       host.signal.removeEventListener("abort", finish);
       dialog.dispose();
-      render(nothing, content);
+      disposeRoot();
       container.remove();
       resolve();
     };
@@ -55,29 +59,28 @@ export function deleteWorkboardBoard(
         }
       }
     };
-    const update = () =>
-      render(
-        html`
-          <div class="exec-approval-card">
-            <div class="exec-approval-header">
-              <div>
-                <div class="exec-approval-title">${title}</div>
-                <div class="exec-approval-sub">${t("workboard.deleteBoardHelp")}</div>
-              </div>
-            </div>
-            ${error ? html`<div role="alert">${error}</div>` : nothing}
-            <div class="exec-approval-actions">
-              <button class="btn danger" type="button" ?disabled=${busy} @click=${remove}>
-                ${t("workboard.deleteBoardConfirm")}
-              </button>
-              <button class="btn" type="button" autofocus ?disabled=${busy} @click=${finish}>
-                ${t("common.cancel")}
-              </button>
+    const disposeRoot = render(
+      () => (
+        <div class="exec-approval-card">
+          <div class="exec-approval-header">
+            <div>
+              <div class="exec-approval-title">{title}</div>
+              <div class="exec-approval-sub">{t("workboard.deleteBoardHelp")}</div>
             </div>
           </div>
-        `,
-        content,
-      );
+          {view().error ? <div role="alert">{view().error}</div> : null}
+          <div class="exec-approval-actions">
+            <button class="btn danger" type="button" disabled={view().busy} onClick={remove}>
+              {t("workboard.deleteBoardConfirm")}
+            </button>
+            <button class="btn" type="button" autofocus disabled={view().busy} onClick={finish}>
+              {t("common.cancel")}
+            </button>
+          </div>
+        </div>
+      ),
+      content,
+    );
     document.body.append(container);
     update();
     const dialog = host.components.mountDialog(container, {

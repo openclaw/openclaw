@@ -1,9 +1,10 @@
+/** @jsxImportSource @solidjs/web */
 import type { CronJob } from "@openclaw/gateway-protocol";
-import { html, type TemplateResult } from "lit";
+import type { JSX } from "@solidjs/web";
 import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { icons } from "../../components/icons.ts";
+import { icons } from "../../components/icons.tsx";
 import { t } from "../../i18n/index.ts";
 import { formatDateTimeMs } from "../../lib/format.ts";
 import {
@@ -30,8 +31,9 @@ export type BoardAutomationState = { jobId: string } & (
 );
 
 export type WorkboardProps = {
-  heading?: TemplateResult;
-  scopeControl?: TemplateResult;
+  heading?: JSX.Element;
+  scopeControl?: () => JSX.Element;
+  revision?: number;
   pageError?: string | null;
   overlayOpen?: boolean;
   presented?: boolean;
@@ -109,13 +111,17 @@ export const formatPriorityLabel = (priority: WorkboardPriority) =>
   priority.charAt(0).toUpperCase() + priority.slice(1);
 
 const priorityIcons = {
-  low: icons.priorityLow,
-  normal: icons.priorityNormal,
-  high: icons.priorityHigh,
-  urgent: icons.priorityUrgent,
-} satisfies Record<WorkboardPriority, TemplateResult>;
+  low: "priorityLow",
+  normal: "priorityNormal",
+  high: "priorityHigh",
+  urgent: "priorityUrgent",
+} as const satisfies Record<WorkboardPriority, keyof typeof icons>;
 
-export const renderPriorityIcon = (priority: WorkboardPriority) => priorityIcons[priority];
+export const renderPriorityIcon = (priority: WorkboardPriority) => icons[priorityIcons[priority]];
+
+export function PriorityIcon(props: { priority: WorkboardPriority }) {
+  return <>{renderPriorityIcon(props.priority)}</>;
+}
 
 function formatRefreshTime(value: number): string {
   return new Intl.DateTimeFormat(undefined, {
@@ -291,7 +297,7 @@ export function cardHasUnresolvedStartedRun(card: WorkboardCard): boolean {
 
 export function renderLifecycleIcon(lifecycle: WorkboardLifecycle) {
   if (lifecycle.state === "running") {
-    return html`<span class="session-run-spinner" aria-hidden="true"></span>`;
+    return <span class="session-run-spinner" aria-hidden="true" />;
   }
   const icon =
     lifecycle.state === "failed" &&
@@ -306,5 +312,13 @@ export function renderLifecycleIcon(lifecycle: WorkboardLifecycle) {
             : lifecycle.state === "idle" || lifecycle.state === "unlinked"
               ? icons.messageSquare
               : icons.alertTriangle;
-  return html`<span class="workboard-card__session-icon" aria-hidden="true">${icon}</span>`;
+  return (
+    <span class="workboard-card__session-icon" aria-hidden="true">
+      {icon}
+    </span>
+  );
+}
+
+export function LifecycleIcon(props: { lifecycle: WorkboardLifecycle }) {
+  return <>{renderLifecycleIcon(props.lifecycle)}</>;
 }
