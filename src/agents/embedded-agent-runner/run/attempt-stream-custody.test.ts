@@ -69,6 +69,7 @@ import { checkpoint, createStreamCustodyFixture } from "./attempt-stream-custody
 import { prepareCatalogExecutor } from "./attempt-stream-prepare.test-support.js";
 import { createEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
 import { createEmbeddedRunLaneController } from "./lane-controller.js";
+import { EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS } from "./lane-runtime.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import type { EmbeddedAttemptExecutionState } from "./types.js";
 
@@ -628,9 +629,9 @@ describe("installed replay repair ownership", () => {
   });
 });
 
-it.each([false, true])(
-  "retains the parent reply and lane through repeated watchdog recovery (callerCancel=%s)",
-  async (callerCancel) => {
+it.each(["settlement", "caller cancellation", "reclamation"] as const)(
+  "retains watchdog recovery custody until %s",
+  async (ending) => {
     // Fake scheduling controls only existing timers. setSystemTime advances the
     // evidence clock without firing the provider's own idle callback first.
     vi.useFakeTimers({
@@ -696,6 +697,7 @@ it.each([false, true])(
     let recovery: ReturnType<typeof recoverStuckDiagnosticSession> | undefined;
     let repeatedRecovery: ReturnType<typeof recoverStuckDiagnosticSession> | undefined;
     let prompt: Promise<void> | undefined;
+    let promptSettled = () => false;
     let prepared: ReturnType<typeof prepareCatalogExecutor> | undefined;
     const tracker = createEmbeddedAttemptSessionSettleTracker(session);
     const state: Pick<EmbeddedAttemptExecutionState, "terminal"> = { terminal: { kind: "ok" } };
@@ -771,6 +773,7 @@ it.each([false, true])(
             diagnosticOwner: fixture.diagnosticOwner,
             attempt: {
               ...ownedAttempt,
+              abortSignal: controls.abortSignal,
               replyOperation: operation,
               onAttemptAbort: controls.onAttemptAbort,
             },
@@ -798,6 +801,7 @@ it.each([false, true])(
           active = lane.enqueueSession(async () => {
             try {
               prompt = tracker.trackPromptSettlePromise(session.prompt("Wait for the model"));
+              promptSettled = observeSettlement(prompt);
               void prompt.catch(() => {});
               await abortable(fixture.controller.signal, prompt).catch(() => {});
               await tracker.buildAbortSettlePromise();
@@ -865,11 +869,26 @@ it.each([false, true])(
           expect.soft(lane.abortSignal.aborted).toBe(false);
           expect.soft(controls.isCurrent()).toBe(true);
           expect(queuedStarted).not.toHaveBeenCalled();
-          if (callerCancel) {
+          if (ending === "caller cancellation") {
             expect(operation.abortByUser()).toBe(true);
             expect(prepared.queueHandle.recoverStalledModelCall?.()).toBe(false);
             expect(operation.abortSignal.aborted).toBe(true);
             expect(lane.abortSignal.aborted).toBe(true);
+          }
+          if (ending === "reclamation") {
+            await vi.advanceTimersByTimeAsync(EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS - 1);
+            expect(lane.abortSignal.aborted).toBe(false);
+            expect(queuedStarted).not.toHaveBeenCalled();
+            await vi.advanceTimersByTimeAsync(1);
+            await expect(active).rejects.toMatchObject({ name: "CommandLaneTaskTimeoutError" });
+            await queued;
+            expect(queuedStarted).toHaveBeenCalledOnce();
+            expect(lane.abortSignal.aborted).toBe(true);
+            expect(controls.isCurrent()).toBe(false);
+            expect(prepared.queueHandle.recoverStalledModelCall?.()).toBe(false);
+            // Releasing queue capacity does not certify physical producer settlement.
+            expect(promptSettled()).toBe(false);
+            expect(operation.result).toBeNull();
           }
           releaseProvider.resolve();
           releaseRawProvider?.();

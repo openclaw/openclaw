@@ -2,11 +2,9 @@ import {
   asDateTimestampMs,
   isFutureDateTimestampMs,
   resolveDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { registerAgentRunDeadlineRenewer } from "../infra/agent-run-deadline.js";
-import { renewChatRunExecutionDeadline, resolveAgentRunExpiresAtMs, resolveChatRunExpiresAtMs } from "./chat-run-deadline.js";
-export { resolveAgentRunExpiresAtMs, resolveChatRunExpiresAtMs } from "./chat-run-deadline.js";
 import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../agents/agent-run-terminal-outcome.js";
 import {
@@ -20,6 +18,7 @@ import {
   reserveAgentTerminalEvent,
   getAgentEventLifecycleGeneration,
 } from "../infra/agent-events.js";
+import { registerAgentRunDeadlineRenewer } from "../infra/agent-run-deadline.js";
 import {
   releaseAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
@@ -33,6 +32,11 @@ import {
 import type { ChatAbortControllerEntry } from "./chat-abort.types.js";
 import { appendChatCanvasBlocksToMessage } from "./chat-display-projection.canvas.js";
 import { projectInFlightRunSnapshot, type InFlightRunSnapshot } from "./chat-inflight-snapshot.js";
+import {
+  renewChatRunExecutionDeadline,
+  resolveAgentRunExpiresAtMs,
+  resolveChatRunExpiresAtMs,
+} from "./chat-run-deadline.js";
 import { resolveChatRunOwnerAgentId } from "./chat-run-owner.js";
 import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
 import { createChatAbortMarker, type ChatRunState } from "./server-chat-state.js";
@@ -42,9 +46,10 @@ import {
   resolveSessionSubscriptionKeys,
 } from "./session-subscription-keys.js";
 
+export { resolveAgentRunExpiresAtMs, resolveChatRunExpiresAtMs } from "./chat-run-deadline.js";
+
 export type { ChatAbortControllerEntry } from "./chat-abort.types.js";
 export { removeChatAbortControllerEntry } from "./chat-abort-lifecycle-internal.js";
-
 
 export type RestartRecoveryCandidate = {
   runId: string;
@@ -254,13 +259,16 @@ export function registerChatAbortController(params: {
     turnKind: params.turnKind,
   };
   params.chatAbortControllers.set(params.runId, entry);
-  const unregisterDeadline = registerAgentRunDeadlineRenewer(params.runId, () =>
-    renewChatRunExecutionDeadline({
-      entries: params.chatAbortControllers,
-      runId: params.runId,
-      controller,
-      timeoutMs: params.timeoutMs,
-    }),
+  const unregisterDeadline = registerAgentRunDeadlineRenewer(
+    params.runId,
+    () =>
+      !isStopped(entry) &&
+      renewChatRunExecutionDeadline({
+        entries: params.chatAbortControllers,
+        runId: params.runId,
+        controller,
+        timeoutMs: params.timeoutMs,
+      }),
   );
   if (params.onQueueTimeout) {
     // The maintenance expiry includes execution grace and cannot own a queued deadline.

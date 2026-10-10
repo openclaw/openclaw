@@ -1,35 +1,11 @@
-// Whole-run deadline math for chat and agent runs, plus per-attempt renewal.
-//
-// `registerChatAbortController` sizes a run's deadline for ONE attempt
-// (`timeoutMs` plus the abort grace). A primary model candidate that burns the
-// full timeout therefore leaves every later fallback candidate only the grace
-// window: the maintenance sweep aborts it with an external `TimeoutError`, the
-// fallback chain stops with no decision line, and the configured tail is never
-// tried. Renewing the deadline as each attempt actually starts removes that
-// starvation without touching abort attribution or the once-only execution
-// guard in `markExecutionStarted`.
 import {
   asDateTimestampMs,
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
+import type { ChatAbortControllerEntry } from "./chat-abort.types.js";
 
 const DEFAULT_CHAT_RUN_ABORT_GRACE_MS = 60_000;
-
-/**
- * The exact fields {@link renewChatRunExecutionDeadline} reads and writes.
- *
- * Declared structurally so this module stays a leaf. `chat-abort.ts` imports
- * and re-exports from here, so importing the abort registry's entry type back
- * closes a type-graph cycle that `check:madge-import-cycles` rejects. A real
- * abort controller entry satisfies this shape.
- */
-export type ChatRunDeadlineEntry = {
-  controller: AbortController;
-  /** False until lane admission reaches the execution boundary. */
-  executionStarted?: boolean;
-  expiresAtMs: number;
-};
 
 export function resolveChatRunExpiresAtMs(params: {
   now: number;
@@ -60,32 +36,18 @@ export function resolveChatRunExpiresAtMs(params: {
   return Math.min(max, Math.max(min, target));
 }
 
-export function resolveAgentRunExpiresAtMs(params: {
-  now: number;
-  timeoutMs: number;
-  graceMs?: number;
-}): number {
-  const graceMs = Math.max(0, params.graceMs ?? DEFAULT_CHAT_RUN_ABORT_GRACE_MS);
+export function resolveAgentRunExpiresAtMs(params: { now: number; timeoutMs: number }): number {
   return resolveChatRunExpiresAtMs({
-    now: params.now,
-    timeoutMs: params.timeoutMs,
-    graceMs,
-    minMs: graceMs,
-    maxMs: Math.max(0, params.timeoutMs) + graceMs,
+    ...params,
+    graceMs: DEFAULT_CHAT_RUN_ABORT_GRACE_MS,
+    minMs: DEFAULT_CHAT_RUN_ABORT_GRACE_MS,
+    maxMs: Math.max(0, params.timeoutMs) + DEFAULT_CHAT_RUN_ABORT_GRACE_MS,
   });
 }
 
-/**
- * Extends the run deadline for `runId` because a new model attempt is starting.
- *
- * Returns false when the registration is gone, superseded, already aborted, not
- * executing yet, already past its deadline, or when the recomputed deadline
- * would not be later than the current one. The deadline is only ever extended,
- * never shortened, and an entry the sweep has already condemned is never
- * revived.
- */
+/** A new candidate cannot revive a cancelled, expired, or replaced execution. */
 export function renewChatRunExecutionDeadline(params: {
-  entries: ReadonlyMap<string, ChatRunDeadlineEntry>;
+  entries: ReadonlyMap<string, ChatAbortControllerEntry>;
   runId: string;
   controller: AbortController;
   timeoutMs: number;

@@ -580,10 +580,11 @@ function prepareStream(
     recoverStalledModelCall: recoverStalledModelCall
       ? () => {
           if (stalledModelRecoveryAccepted) {
-            // Idle cancellation fences tools immediately; its original owner
-            // still retains settlement without admitting another interruption.
+            // Keep recovery eligible during settlement, but stop shielding a
+            // parent cancelled by Stop or bounded lane reclamation.
             return (
               !externalAbortAccepted &&
+              !attempt.abortSignal?.aborted &&
               registration !== undefined &&
               ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(queueHandle) === registration &&
               ACTIVE_EMBEDDED_RUNS.get(attempt.sessionId) === queueHandle &&

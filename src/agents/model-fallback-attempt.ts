@@ -305,11 +305,7 @@ export async function runFallbackAttempt<T>(
   // Only the initial attempt may own a result after caller cancellation.
   if (params.attempt > 1) {
     params.abortSignal?.throwIfAborted();
-    // Recovery only. The run owner sizes the whole-run deadline for a single
-    // attempt, so a candidate that follows a timed-out primary would otherwise
-    // inherit only the abort grace window and be killed by the run deadline
-    // instead of running. The primary is never renewed, so a run that never
-    // reaches a fallback candidate keeps exactly its configured budget.
+    // Give the next candidate its own budget without replacing parent cancellation.
     renewAgentRunDeadline(params.attribution?.runId);
   }
   const runResult = await runFallbackCandidate(params);

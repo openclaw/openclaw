@@ -1,5 +1,5 @@
 // A fallback candidate must not inherit a run budget the primary already spent.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   registerChatAbortController,
   removeChatAbortControllerEntry,
@@ -8,6 +8,11 @@ import {
 import { FailoverError } from "./failover-error.js";
 import { runWithModelFallback } from "./model-fallback-runner.js";
 import { createModelFallbackConfig } from "./test-helpers/model-fallback-config-fixture.js";
+
+// mock-isolation: Auth-store discovery is unrelated I/O; this fixture owns only deadline and fallback composition.
+vi.mock("./auth-profiles/source-check.js", () => ({
+  hasAnyAuthProfileStoreSourceAsync: async () => false,
+}));
 
 const TIMEOUT_MS = 60_000;
 const RUN_ID = "run-deadline-renewal";
@@ -32,11 +37,16 @@ function registerExecutingChatSendRun(entries: Map<string, ChatAbortControllerEn
 describe("model fallback run deadline", () => {
   const entries = new Map<string, ChatAbortControllerEntry>();
 
+  beforeEach(() => {
+    vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+  });
+
   // Removing the entry unregisters its deadline renewer through the same
   // production path the gateway uses, so no registration leaks between tests
   // even when an assertion above fails.
   afterEach(() => {
     removeChatAbortControllerEntry(entries, RUN_ID);
+    vi.restoreAllMocks();
   });
 
   it("gives a fallback candidate its own run budget after the primary spent it", async () => {
