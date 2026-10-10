@@ -15,6 +15,7 @@ import { terminalOpenErrorText } from "./terminal-panel-chrome.ts";
 import { bootTerminalPanelSession } from "./terminal-panel-session-boot.ts";
 import { focusTerminalSession } from "./terminal-panel-session-rendering.ts";
 import {
+  resolveTerminalPanelOpenAgentId,
   resolveTerminalPanelOwnerSessionKey,
   shellBasename,
   type TerminalOperation,
@@ -451,11 +452,12 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
       return false;
     }
     this.updateControllerState({ booting: true, error: null });
-    const action: TerminalPanelOpenAction = catalog
-      ? { kind: "catalog", agentId, catalog }
-      : { kind: "open", agentId };
     // Freeze the selection for this tab; later agent changes affect only new tabs.
     const ownerSessionKey = resolveTerminalPanelOwnerSessionKey(this.host.sessionKey, catalog);
+    const resolvedAgentId = resolveTerminalPanelOpenAgentId(agentId, ownerSessionKey) ?? null;
+    const action: TerminalPanelOpenAction = catalog
+      ? { kind: "catalog", agentId: resolvedAgentId, catalog }
+      : { kind: "open", agentId: resolvedAgentId };
     // Tracked outside the try so the catch can dispose a tab whose open failed.
     let createdTab: TerminalPanelSessionTab | undefined;
     try {
@@ -464,7 +466,7 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
       boot.tab.pendingOpen = action;
       const result = await boot.connection.open(
         {
-          agentId: agentId ?? undefined,
+          ...(resolvedAgentId ? { agentId: resolvedAgentId } : {}),
           ...(ownerSessionKey ? { sessionKey: ownerSessionKey } : {}),
           cols: boot.cols,
           rows: boot.rows,
