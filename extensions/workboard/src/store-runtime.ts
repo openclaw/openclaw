@@ -201,10 +201,7 @@ export class WorkboardStoreRuntime {
     });
   }
 
-  protected async withMutationAuthority<T>(
-    run: () => Promise<T>,
-    assertCurrent?: () => void,
-  ): Promise<T> {
+  async withMutationAuthority<T>(run: () => Promise<T>, assertCurrent?: () => void): Promise<T> {
     if (!assertCurrent) {
       return await run();
     }

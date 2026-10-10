@@ -1,5 +1,6 @@
 import type { WorkboardCard, WorkboardSessionsBoardView } from "@openclaw/workboard-contract";
 import { readStringParam } from "openclaw/plugin-sdk/core";
+import { captureLocalStateMutationGuard } from "openclaw/plugin-sdk/gateway-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawPluginApi } from "../api.js";
 import { redactClaimToken } from "./card-redaction.js";
@@ -135,12 +136,45 @@ export function registerWorkboardGatewayMethods(params: {
     api.registerGatewayMethod(
       method,
       async (request) => {
+        let assertOwnerCurrent: (() => void) | undefined;
+        if (request.params.expectedOwnerId !== undefined) {
+          try {
+            const expectedOwnerId = readStringParam(request.params, "expectedOwnerId", {
+              required: true,
+            });
+            assertOwnerCurrent = captureLocalStateMutationGuard(expectedOwnerId, request);
+          } catch (error) {
+            request.respond(false, undefined, {
+              code: "UNAVAILABLE",
+              message: String(error),
+              details: { mutationAccepted: false },
+            });
+            return;
+          }
+          const { expectedOwnerId: _expectedOwnerId, ...input } = request.params;
+          const previousGuard = request.sessionMutationCommitGuard;
+          request = {
+            ...request,
+            params: input,
+            sessionMutationCommitGuard: () => {
+              previousGuard?.();
+              assertOwnerCurrent?.();
+            },
+          };
+        }
         try {
           await store.runOperation(async () => {
+            assertOwnerCurrent?.();
             if (method === "workboard.cards.attachments.add") {
               assertUploadsAllowed(request.client);
             }
-            request.respond(true, await handler(request));
+            request.respond(
+              true,
+              await store.withMutationAuthority(
+                () => Promise.resolve(handler(request)),
+                assertOwnerCurrent,
+              ),
+            );
           });
         } catch (error) {
           respondError(request.respond, error);
