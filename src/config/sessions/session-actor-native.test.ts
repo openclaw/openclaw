@@ -2,7 +2,6 @@ import "../../test-utils/prepare-compiled-subprocesses.js";
 import { existsSync } from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
-import { bindUserTurnInputActor } from "../../sessions/user-turn-transcript-admission.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
@@ -36,6 +35,7 @@ import {
   captureNativeIncognitoSessionActorSources,
   captureNativeIncognitoSessionActorTarget,
 } from "./session-actor-native-incognito.js";
+import { bindUserTurnInputActor } from "./session-input-actor.js";
 import { acquireSessionInputActor } from "./session-input-actor.js";
 import { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
 import { deleteSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
