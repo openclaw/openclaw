@@ -8,8 +8,7 @@ import {
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "openclaw/plugin-sdk/provider-setup";
 import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { LLAMA_SERVER_DEFAULT_ORIGIN } from "./defaults.js";
-import { normalizeLlamaServerProviderConfig } from "./endpoint.js";
+import { normalizeLlamaServerProviderConfig, resolveLlamaServerEndpoint } from "./endpoint.js";
 
 type LlamaServerModelStatus =
   | "unloaded"
@@ -139,11 +138,16 @@ export function buildLlamaServerProviderConfig(params: {
   configured?: ModelProviderConfig;
   discoveredModels: readonly LlamaServerDiscoveredModel[];
 }): ModelProviderConfig {
+  const baseUrl = resolveLlamaServerEndpoint(params.configured?.baseUrl).inferenceBaseUrl;
   const discoveredById = new Map(params.discoveredModels.map(({ config }) => [config.id, config]));
   const models = (params.configured?.models ?? []).map((configured) => {
     const discovered = discoveredById.get(configured.id);
     discoveredById.delete(configured.id);
-    return discovered
+    const matchesRoute =
+      (!configured.api || configured.api === "openai-completions") &&
+      resolveLlamaServerEndpoint(configured.baseUrl?.trim() || baseUrl).inferenceBaseUrl ===
+        baseUrl;
+    return discovered && matchesRoute
       ? Object.assign({}, discovered, configured, {
           contextWindow: configured.contextWindow ?? discovered.contextWindow,
           contextTokens: configured.contextTokens ?? discovered.contextTokens,
@@ -154,7 +158,7 @@ export function buildLlamaServerProviderConfig(params: {
   models.push(...discoveredById.values());
   return normalizeLlamaServerProviderConfig({
     ...params.configured,
-    baseUrl: params.configured?.baseUrl ?? LLAMA_SERVER_DEFAULT_ORIGIN,
+    baseUrl,
     models,
   });
 }

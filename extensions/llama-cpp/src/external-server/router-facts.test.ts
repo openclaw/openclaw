@@ -106,6 +106,22 @@ it("persists verified router facts and refreshes unknown fields without replacin
         compat: { supportsTools: true },
       });
 
+      const savedModels = provider.models;
+      for (const route of [
+        { baseUrl: `${baseUrl}/other/v1` },
+        { api: "openai-responses" as const },
+      ]) {
+        provider.models = savedModels.map((model) =>
+          model.id === "model-b" ? Object.assign({}, model, route) : model,
+        );
+        const otherRoute = (await refresh(saved)).find((model) => model.id === "model-b");
+        expect(otherRoute).toMatchObject(route);
+        expect(JSON.stringify(otherRoute)).not.toMatch(
+          /"(?:contextWindow|contextTokens|supportsTools)"/u,
+        );
+      }
+      provider.models = savedModels;
+
       provider.models = provider.models.map((model) =>
         model.id === "model-b"
           ? Object.assign({}, model, {
@@ -123,6 +139,8 @@ it("persists verified router facts and refreshes unknown fields without replacin
       expect(propsRequests).toEqual([
         "?model=model-a&autoload=false",
         "?model=model-a&autoload=false",
+        "?model=model-b&autoload=false",
+        "?model=model-b&autoload=false",
         "?model=model-b&autoload=false",
         "?model=model-b&autoload=false",
       ]);
