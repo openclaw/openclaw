@@ -7,6 +7,7 @@ import {
   getSqliteDatabaseAdmission,
   installSqliteDatabaseAdmissions,
   publishSqliteDatabaseAdmission,
+  retireSqliteDatabaseAdmissionForPath,
   type SqliteDatabaseAdmissionKey,
 } from "./sqlite-database-admission.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "./sqlite-schema-facts.js";
@@ -26,6 +27,7 @@ export type AdmissionOperations = {
     output: { value: number | undefined; lookupMessages: number };
   };
   mutate: { input: undefined; output: undefined };
+  retirePath: { input: { path: string }; output: undefined };
   writeRows: { input: { sql: string }; output: undefined };
   mutateAfterHostAdmission: {
     input: { path: string };
@@ -142,6 +144,10 @@ export function createSqliteWorkerBackend(
       } finally {
         reader.close();
       }
+    }
+    if (command.type === "retirePath") {
+      retireSqliteDatabaseAdmissionForPath(command.input.path);
+      return undefined;
     }
     if (command.type === "mutate") {
       database.exec("CREATE TABLE worker_publication (value)");

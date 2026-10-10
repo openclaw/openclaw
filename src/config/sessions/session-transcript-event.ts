@@ -72,8 +72,8 @@ export async function appendPreparedTranscriptEvent(
   }
   if (!isMainThread || !supportsOpenClawAgentDatabaseExecution(database)) {
     // Maintenance and process-held incognito retain their existing transaction owner.
-    return appendTranscriptEvent(requested, JSON.parse(eventJson), {
-      beforeCommitInTransaction: () => {
+    return appendTranscriptEvent(fenced, JSON.parse(eventJson), {
+      beforeCommitInTransaction() {
         assertCurrent();
         assertLockedTranscriptWriteAllowed(openOpenClawAgentDatabase(database), scope, fenced);
       },

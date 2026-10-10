@@ -153,9 +153,16 @@ suite.define(() => {
           (params) => params.key === archived.key && params.archived === false,
         );
         expect(restored.params).toMatchObject({
+          key: archived.key,
           expectedSessionId: archived.sessionId,
-          pinned: true,
+          archived: false,
+          ...(surface === "header" ? { pinned: true } : {}),
         });
+        // Header Undo retains the legacy shared flag; the personal sidebar does not write it.
+        if (surface === "sidebar") {
+          expect(restored.params).not.toHaveProperty("pinned");
+        }
+        expect(await gateway.getRequests("sessions.patch")).toHaveLength(2);
         await rowFor(archived.key).waitFor({ state: "visible" });
         expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(target.key));
       } finally {
@@ -269,9 +276,15 @@ suite.define(() => {
         await captureUiProof(suite, page, "cross-agent-after-pagination.png");
         await switchAgent("Main");
         await rowFor(archived.key).waitFor({ state: "visible" });
+        // Restoring legacy shared metadata does not author a personal navigation pin.
         await rowFor(archived.key)
-          .getByRole("button", { name: "Unpin session", exact: true })
+          .getByRole("button", { name: "Pin session", exact: true })
           .waitFor({ state: "attached" });
+        expect(
+          await page
+            .locator(`.sidebar-rail [data-sidebar-entry="session:${archived.key}"]`)
+            .count(),
+        ).toBe(0);
       } finally {
         await context.close();
       }

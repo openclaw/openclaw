@@ -50,7 +50,6 @@ import { callGatewayFromCliWithTransport } from "./gateway-rpc.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";
 import { formatConnectionFlagReminder } from "./nodes-cli/cli-utils.js";
 import { formatPairingApproveCommand } from "./pairing-command-format.js";
-import { quoteCliArg } from "./quote-cli-arg.js";
 
 type DevicesRpcOpts = {
   url?: string;
@@ -752,30 +751,6 @@ export async function runDevicesListCommand(opts: DevicesRpcOpts): Promise<void>
   if (!list.pending.length && !list.paired.length) {
     defaultRuntime.log(theme.muted("No device pairing entries."));
   }
-}
-
-export async function runDevicesJoinCodeCommand(opts: DevicesRpcOpts): Promise<void> {
-  const result = await callGatewayCli(
-    "device.pair.setupCode",
-    opts,
-    {
-      bootstrapProfile: "node",
-      includeQr: false,
-      joinUrl: true,
-    },
-    { scopes: [ADMIN_SCOPE] },
-  );
-  const joinUrl = normalizeOptionalString((result as { joinUrl?: unknown }).joinUrl);
-  if (!joinUrl) {
-    throw new Error("Gateway did not return a device join URL.");
-  }
-  const command = `npx openclaw connect ${quoteCliArg(joinUrl)}`;
-  if (opts.json) {
-    defaultRuntime.writeJson({ joinUrl, command });
-    return;
-  }
-  defaultRuntime.log(joinUrl);
-  defaultRuntime.log(command);
 }
 
 export async function runDevicesDeleteCommand(

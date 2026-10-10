@@ -15,12 +15,14 @@ import type {
   CronAgentExecutionStarted,
   CronCompletionStatus,
   CronJob,
+  CronJobExecutionResult,
   CronNextCheckProposal,
   CronResolvedDeliveryState,
   CronRunOutcome,
+  CronRunDeliveryResult,
   CronRunTelemetry,
 } from "../types.js";
-import type { CronRunDeliveryResult, CronServiceState } from "./state.js";
+import type { CronServiceState } from "./state.js";
 
 export const MAX_CRON_TIMER_DELAY_MS = 60_000;
 
@@ -38,15 +40,6 @@ export const DEFAULT_MISSED_JOB_STAGGER_MS = 5_000;
 export const DEFAULT_MAX_MISSED_JOBS_PER_RESTART = 5;
 
 export const DEFAULT_STARTUP_DEFERRED_MISSED_AGENT_JOB_DELAY_MS = 2 * 60_000;
-
-export type CronJobExecutionResult = CronRunOutcome &
-  CronRunTelemetry &
-  CronRunDeliveryResult & {
-    nextCheck?: CronNextCheckProposal;
-    scriptStateChanged?: boolean;
-    scriptState?: unknown;
-    triggerEval?: CronTriggerEvalOutcome;
-  };
 
 export type TimedCronRunOutcome = CronJobExecutionResult & {
   jobId: string;
@@ -79,13 +72,6 @@ export type CronJobRunResult = CronRunOutcome &
     endedAt: number;
     nextCheck?: CronNextCheckProposal;
   };
-
-export type CronTriggerEvalOutcome = {
-  fired: boolean;
-  stateChanged: boolean;
-  state?: unknown;
-  busy?: true;
-};
 
 export type IsolatedAgentSetupTimeoutSignal = {
   error: string;

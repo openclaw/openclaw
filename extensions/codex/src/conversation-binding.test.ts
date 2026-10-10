@@ -36,7 +36,7 @@ const sharedClientMocks = vi.hoisted(() => ({
 }));
 
 const publicBindingMocks = vi.hoisted(() => ({
-  resolveByConversation: vi.fn((_conversation: unknown): { bindingId: string } | null => ({
+  readBinding: vi.fn((): { bindingId: string } | null => ({
     bindingId: "binding-1",
   })),
 }));
@@ -107,14 +107,16 @@ vi.mock("./app-server/config-layer-policy.js", async (importOriginal) => ({
   readCodexEffectiveConfig: configLayerPolicyMocks.readCodexEffectiveConfig,
 }));
 
-vi.mock("openclaw/plugin-sdk/conversation-binding-runtime", async (importOriginal) => {
+vi.mock("openclaw/plugin-sdk/conversation-binding-inspection-runtime", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/conversation-binding-runtime")>();
+    await importOriginal<
+      typeof import("openclaw/plugin-sdk/conversation-binding-inspection-runtime")
+    >();
   return {
     ...actual,
-    getSessionBindingService: () => ({
-      resolveByConversation: publicBindingMocks.resolveByConversation,
-    }),
+    inspectConversationBinding: (
+      conversation: Parameters<typeof actual.inspectConversationBinding>[0],
+    ) => createConversationInspection(conversation, publicBindingMocks.readBinding()?.bindingId),
   };
 });
 
@@ -200,9 +202,12 @@ import type { JsonValue } from "./app-server/protocol.js";
 import {
   createCodexAppServerBindingStore,
   createCodexTestBindingStateStore,
+  createConversationInspection,
   resetCodexTestBindingStore,
   testCodexAppServerBindingStore,
-  type CodexAppServerThreadBinding,
+  testConversationIdentity,
+  writeTestConversationBinding,
+  readTestConversationBinding,
 } from "./app-server/session-binding.test-helpers.js";
 import { createClientHarness } from "./app-server/test-support.js";
 import { withCodexConversationThreadActivity } from "./app-server/thread-ownership.js";
@@ -223,27 +228,6 @@ import {
   mockCallArg,
 } from "./conversation-binding.test-helpers.js";
 import { readCodexConversationActiveTurn } from "./conversation-control.js";
-
-function testConversationIdentity(sessionFile: string) {
-  return {
-    kind: "conversation" as const,
-    bindingId: legacyCodexConversationBindingId(sessionFile),
-  };
-}
-
-async function writeTestConversationBinding(
-  sessionFile: string,
-  binding: CodexAppServerThreadBinding,
-): Promise<void> {
-  await testCodexAppServerBindingStore.mutate(testConversationIdentity(sessionFile), {
-    kind: "set",
-    binding: { clientId: "test-client", ...binding },
-  });
-}
-
-async function readTestConversationBinding(sessionFile: string) {
-  return testCodexAppServerBindingStore.read(testConversationIdentity(sessionFile));
-}
 
 async function createSameThreadClientMigrationFixture(
   sessionFile: string,
@@ -422,8 +406,8 @@ describe("codex conversation binding", () => {
   });
 
   afterEach(() => {
-    publicBindingMocks.resolveByConversation.mockReset();
-    publicBindingMocks.resolveByConversation.mockReturnValue({ bindingId: "binding-1" });
+    publicBindingMocks.readBinding.mockReset();
+    publicBindingMocks.readBinding.mockReturnValue({ bindingId: "binding-1" });
     sharedClientMocks.getSharedCodexAppServerClient.mockReset();
     sharedClientMocks.retainSharedCodexAppServerClientByInstanceId.mockReset();
     sharedClientMocks.retainSharedCodexAppServerClientByInstanceId.mockReturnValue(undefined);
@@ -574,7 +558,16 @@ describe("codex conversation binding", () => {
         pluginConfig: {},
         runtime: {
           modelAuth: { resolveProviderIdForAuth: agentRuntimeMocks.resolveProviderIdForAuth },
-          state: { openSyncKeyedStore: () => stateStore, openKeyedStore: () => stateStore },
+          state: {
+            openSyncKeyedStore: () => stateStore,
+            openKeyedStoreV2: (
+              _options: unknown,
+              authority?: Parameters<typeof stateStore.withCurrent>[0],
+            ) => ({
+              ...stateStore.asyncReads,
+              ...stateStore.withCurrent(authority ?? { assertCurrent() {} }),
+            }),
+          },
         } as never,
         on,
       }),
@@ -668,13 +661,15 @@ describe("codex conversation binding", () => {
         kind: "clear",
         threadId: "thread-retiring",
       });
-      publicBindingMocks.resolveByConversation.mockReturnValue(null);
+      publicBindingMocks.readBinding.mockReturnValue(null);
     });
     await retirementStarted.promise;
     const bindingStore = {
       ...testCodexAppServerBindingStore,
-      read: (requestedIdentity: Parameters<typeof testCodexAppServerBindingStore.read>[0]) => {
-        const binding = testCodexAppServerBindingStore.read(requestedIdentity);
+      readAsync: async (
+        requestedIdentity: Parameters<typeof testCodexAppServerBindingStore.readAsync>[0],
+      ) => {
+        const binding = await testCodexAppServerBindingStore.readAsync(requestedIdentity);
         ownerCaptured.resolve();
         return binding;
       },
