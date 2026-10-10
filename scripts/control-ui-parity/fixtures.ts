@@ -156,6 +156,17 @@ export const settingsControlsScenario: ControlUiMockGatewayScenario = {
 export const parityBaseScenario: ControlUiMockGatewayScenario = {
   sessionKey,
   sessions: [session],
+  // Bootstrap reads must retain the same principal when users.self resolves.
+  presenceUsers: [
+    {
+      self: true,
+      id: profiles[0]!.id,
+      identity: { type: "profile", id: profiles[0]!.id },
+      name: profiles[0]!.displayName!,
+      email: profiles[0]!.emails[0],
+      ts: fixedTime,
+    },
+  ],
   allowedSessionVisibilities: ["shared", "read-only", "suggest", "draft"],
   hasMultipleSessionSharingIdentities: true,
   operatorScopes: ["operator.admin", "operator.read", "operator.write", "operator.approvals"],
