@@ -672,6 +672,7 @@ export const ChannelsStartParamsSchema = closedObject(ChannelsLogoutParamsSchema
 export const WebLoginStartParamsSchema = closedObject({
   channel: Type.Optional(NonEmptyString),
   force: Type.Optional(Type.Boolean()),
+  preserveRunning: Type.Optional(Type.Boolean()),
   timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
   verbose: Type.Optional(Type.Boolean()),
   accountId: Type.Optional(Type.String()),
@@ -685,6 +686,7 @@ const QrDataUrlSchema = Type.String({
 /** Waits for web login completion or the next QR code. */
 export const WebLoginWaitParamsSchema = closedObject({
   channel: Type.Optional(NonEmptyString),
+  preserveRunning: Type.Optional(Type.Boolean()),
   sessionKey: Type.Optional(NonEmptyString),
   timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
   accountId: Type.Optional(Type.String()),

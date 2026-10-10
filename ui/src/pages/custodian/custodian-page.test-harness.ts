@@ -91,6 +91,14 @@ export function createContext(
   const agentListeners = new Set<() => void>();
   const channelListeners = new Set<(state: ApplicationContext["channels"]["state"]) => void>();
   const channelState: ApplicationContext["channels"]["state"] = {
+    weixinLogin: {
+      phase: "idle",
+      qrDataUrl: null,
+      sessionKey: null,
+      expiresAtMs: null,
+      message: null,
+      busy: false,
+    },
     client,
     connected: true,
     channelsLoading: false,

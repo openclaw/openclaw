@@ -4,6 +4,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -116,6 +117,169 @@ beforeEach(() => {
     channelId === "wechat" || channelId === "weixin" ? "openclaw-weixin" : channelId,
   );
   mocks.resolveMissingOfficialExternalChannelPluginRepairHints.mockReturnValue([]);
+});
+
+describe("web QR login preserves existing monitors", () => {
+  function provider(startResult: object = {}, waitResult: object = {}) {
+    const start = vi.fn().mockResolvedValue(startResult);
+    const wait = vi.fn().mockResolvedValue(waitResult);
+    mocks.listChannelPlugins.mockReturnValue([
+      {
+        id: "openclaw-weixin",
+        gateway: { loginWithQrStart: start, loginWithQrWait: wait },
+      },
+    ]);
+    return { start, wait };
+  }
+
+  it.each([
+    { message: "scan", qrDataUrl: "data:image/png;base64,qr" },
+    { message: "failed to obtain QR" },
+    { message: "already authenticated", connected: true },
+  ])("leaves monitors untouched during a preserving start", async (result) => {
+    provider(result);
+    const runtime = createRunningWhatsappContext();
+    await invokeWeb(
+      "web.login.start",
+      { channel: "weixin", preserveRunning: true },
+      { context: runtime.context },
+    );
+    expect(runtime.stopChannel).not.toHaveBeenCalled();
+    expect(runtime.startChannel).not.toHaveBeenCalled();
+  });
+
+  it("rejects conflicting force before provider invocation or runtime changes", async () => {
+    const { start } = provider();
+    const runtime = createRunningWhatsappContext();
+    const respond = vi.fn();
+    await invokeWeb(
+      "web.login.start",
+      { channel: "weixin", force: true, preserveRunning: true },
+      { context: runtime.context, respond },
+    );
+    expect(start).not.toHaveBeenCalled();
+    expect(runtime.stopChannel).not.toHaveBeenCalled();
+    expect(runtime.startChannel).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST" }),
+    );
+  });
+
+  it("does not stop an account when a start settles after cancellation", async () => {
+    const qr = createDeferred<{ message: string; qrDataUrl: string }>();
+    const { start } = provider({}, { connected: false, message: "cancelled" });
+    start.mockReturnValue(qr.promise);
+    const runtime = createRunningWhatsappContext();
+    const params = { channel: "weixin", preserveRunning: true };
+    const pending = invokeWeb("web.login.start", params, { context: runtime.context });
+    await invokeWeb("web.login.wait", params, { context: runtime.context });
+    qr.resolve({ message: "retired QR", qrDataUrl: "data:image/png;base64,qr" });
+    await pending;
+    expect(runtime.stopChannel).not.toHaveBeenCalled();
+    expect(runtime.startChannel).not.toHaveBeenCalled();
+  });
+
+  it("rotates only the confirmed account after saving credentials", async () => {
+    provider({}, { connected: true, accountId: "Work", message: "saved" });
+    const runtime = createRunningWhatsappContext();
+    const order: string[] = [];
+    runtime.stopChannel.mockImplementation(async () => {
+      order.push("stop");
+    });
+    runtime.startChannel.mockImplementation(async () => {
+      order.push("start");
+    });
+    await invokeWeb(
+      "web.login.wait",
+      { channel: "weixin", preserveRunning: true },
+      { context: runtime.context },
+    );
+    expect(runtime.stopChannel.mock.calls).toEqual([["openclaw-weixin", "work"]]);
+    expect(runtime.startChannel.mock.calls).toEqual([["openclaw-weixin", "work"]]);
+    expect(order).toEqual(["stop", "start"]);
+  });
+
+  it.each([undefined, "", "  ", "!!!", "__proto__", "other"])(
+    "rejects missing, invalid or mismatched confirmed account %s without a channel sweep",
+    async (accountId) => {
+      provider({}, { connected: true, accountId, message: "saved" });
+      const runtime = createRunningWhatsappContext();
+      const respond = vi.fn();
+      await invokeWeb(
+        "web.login.wait",
+        { channel: "weixin", accountId: "work", preserveRunning: true },
+        { context: runtime.context, respond },
+      );
+      expect(runtime.stopChannel).not.toHaveBeenCalled();
+      expect(runtime.startChannel).not.toHaveBeenCalled();
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: "INVALID_REQUEST" }),
+      );
+    },
+  );
+
+  it("keeps the default wait activation contract without preservation", async () => {
+    provider({}, { connected: true, accountId: "other", message: "saved" });
+    const runtime = createRunningWhatsappContext();
+    await invokeWeb(
+      "web.login.wait",
+      { channel: "weixin", accountId: "work" },
+      { context: runtime.context },
+    );
+    expect(runtime.stopChannel).not.toHaveBeenCalled();
+    expect(runtime.startChannel.mock.calls).toEqual([["openclaw-weixin", "work"]]);
+  });
+
+  it("does not stop or start after requester authority is revoked during the provider wait", async () => {
+    const result = createDeferred<{ connected: boolean; accountId: string; message: string }>();
+    const { wait } = provider();
+    wait.mockReturnValue(result.promise);
+    const runtime = createRunningWhatsappContext();
+    const respond = vi.fn();
+    let current = true;
+    const pending = invokeWeb(
+      "web.login.wait",
+      { channel: "weixin", preserveRunning: true },
+      { context: runtime.context, respond, hasCurrentClientAuthority: () => current },
+    );
+    current = false;
+    result.resolve({ connected: true, accountId: "work", message: "saved" });
+    await pending;
+    expect(runtime.stopChannel).not.toHaveBeenCalled();
+    expect(runtime.startChannel).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
+  });
+
+  it("does not restart after operator scopes change during the targeted stop", async () => {
+    provider({}, { connected: true, accountId: "work", message: "saved" });
+    const runtime = createRunningWhatsappContext();
+    const stopping = createDeferred();
+    const entered = createDeferred();
+    runtime.stopChannel.mockImplementation(async () => {
+      entered.resolve();
+      await stopping.promise;
+    });
+    const client = {
+      connect: { role: "operator", scopes: ["operator.admin"] },
+    } as NonNullable<GatewayRequestHandlerOptions["client"]>;
+    const respond = vi.fn();
+    const pending = invokeWeb(
+      "web.login.wait",
+      { channel: "weixin", preserveRunning: true },
+      { context: runtime.context, respond, client },
+    );
+    await entered.promise;
+    client.connect.scopes = ["operator.read"];
+    stopping.resolve();
+    await pending;
+    expect(runtime.stopChannel.mock.calls).toEqual([["openclaw-weixin", "work"]]);
+    expect(runtime.startChannel).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
+  });
 });
 
 describe("webHandlers web.login.start", () => {

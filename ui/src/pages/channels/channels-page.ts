@@ -16,8 +16,10 @@ import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveChannelPairingAuthSignature } from "../../lib/channels/index.ts";
+import { createWeixinQrController } from "../../lib/channels/weixin-qr.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
+import { runPluginConfigMutation, setPluginEnabled } from "../../lib/plugins/index.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import {
   GatewayPageController,
@@ -65,6 +67,17 @@ class ChannelsPage extends OpenClawLightDomElement {
 
   @state()
   private selectedChannel: string | null = null;
+
+  @state()
+  private weixinActivationBusy = false;
+
+  @state()
+  private weixinActivationMessage: string | null = null;
+
+  private weixinActivationEpoch = 0;
+
+  @state()
+  private weixinRestartRequired = false;
 
   @state()
   private pairingChannelFilter: string | null = null;
@@ -129,7 +142,11 @@ class ChannelsPage extends OpenClawLightDomElement {
           }
         };
         handleChange();
-        return channels.subscribe(handleChange);
+        const unsubscribe = channels.subscribe(handleChange);
+        return () => {
+          unsubscribe();
+          void channels.closeWeixin();
+        };
       },
     )
     .effect(
@@ -160,6 +177,12 @@ class ChannelsPage extends OpenClawLightDomElement {
     const pairingAuthSignature = resolveChannelPairingAuthSignature(snapshot);
     const pairingAuthChanged =
       !change.initial && this.gatewayPairingAuthSignature !== pairingAuthSignature;
+    if (change.identityChanged || pairingAuthChanged || snapshot.phase !== "connected") {
+      this.weixinActivationEpoch++;
+      this.weixinActivationBusy = false;
+      this.weixinActivationMessage = null;
+      this.weixinRestartRequired = false;
+    }
     if (change.identityChanged || snapshot.phase !== "connected") {
       this.clearNostrForm();
     }
@@ -238,6 +261,11 @@ class ChannelsPage extends OpenClawLightDomElement {
   }
 
   override disconnectedCallback() {
+    this.weixinActivationEpoch++;
+    this.weixinActivationBusy = false;
+    this.weixinActivationMessage = null;
+    this.weixinRestartRequired = false;
+    void this.context?.channels.closeWeixin();
     this.wizardHost.cancelOnDisconnect();
     this.selectedChannel = null;
     this.channelsSource = undefined;
@@ -557,6 +585,72 @@ class ChannelsPage extends OpenClawLightDomElement {
     );
   }
 
+  private async startWeixin() {
+    const context = this.context;
+    const snapshot = context.gateway.snapshot;
+    const client = snapshot.client;
+    if (
+      !client ||
+      snapshot.phase !== "connected" ||
+      this.weixinActivationBusy ||
+      this.weixinRestartRequired ||
+      !hasOperatorAdminAccess(snapshot.hello?.auth ?? null) ||
+      context.runtimeConfig.state.configFormDirty
+    ) {
+      return;
+    }
+    const scope = this.gateway.capture();
+    if (!scope) {
+      return;
+    }
+    const generation = ++this.weixinActivationEpoch;
+    const current = () =>
+      this.isConnected &&
+      this.context === context &&
+      this.gateway.isCurrent(scope) &&
+      generation === this.weixinActivationEpoch &&
+      hasOperatorAdminAccess(context.gateway.snapshot.hello?.auth ?? null);
+    this.weixinActivationBusy = true;
+    this.weixinActivationMessage = null;
+    try {
+      const plugin = this.pluginPresentation.pluginCatalog?.plugins.find(
+        (entry) => entry.id === "openclaw-weixin",
+      );
+      if (plugin && !plugin.enabled) {
+        const { value, refreshError } = await runPluginConfigMutation(
+          context.runtimeConfig,
+          client,
+          (connection) => setPluginEnabled(connection, plugin.id, true),
+          { canDispatch: current },
+        );
+        if (!current()) {
+          return;
+        }
+        this.pluginPresentation.reset();
+        this.pluginPresentation.ensure(client);
+        if (value.restartRequired) {
+          this.weixinRestartRequired = true;
+          this.weixinActivationMessage = t("channels.weixin.restart");
+          return;
+        }
+        if (refreshError) {
+          throw new Error(refreshError);
+        }
+      }
+      if (current()) {
+        await context.channels.startWeixin(createWeixinQrController);
+      }
+    } catch (error) {
+      if (current()) {
+        this.weixinActivationMessage = formatUiError(error);
+      }
+    } finally {
+      if (generation === this.weixinActivationEpoch) {
+        this.weixinActivationBusy = false;
+      }
+    }
+  }
+
   override render() {
     const context = this.context;
     const channels = context.channels.state;
@@ -575,6 +669,12 @@ class ChannelsPage extends OpenClawLightDomElement {
       </section>
       ${renderSettingsWorkspace(
         renderChannels({
+          weixinActivationBusy: this.weixinActivationBusy,
+          weixinRestartRequired: this.weixinRestartRequired,
+          weixinActivationMessage: this.weixinActivationMessage,
+          onWeixinStart: () => void this.startWeixin(),
+          onWeixinClose: () => void context.channels.closeWeixin(),
+          onWeixinVerify: (code) => void context.channels.verifyWeixin(code),
           channels,
           config,
           presentation: this.pluginPresentation,
@@ -597,7 +697,12 @@ class ChannelsPage extends OpenClawLightDomElement {
           },
           onStartSetup: (channelId) => {
             if (canAdmin) {
-              this.wizardHost.startSetup(channelId);
+              if (channelId === "openclaw-weixin") {
+                this.selectedChannel = null;
+                void this.startWeixin();
+              } else {
+                this.wizardHost.startSetup(channelId);
+              }
             }
           },
           onRefresh: (probe) => void context.channels.refresh(probe),

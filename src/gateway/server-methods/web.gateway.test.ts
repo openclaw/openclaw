@@ -113,6 +113,25 @@ describe("web QR login Gateway dispatch", () => {
       { connected: true, message: "connected" },
       undefined,
     );
+
+    vi.mocked(context.stopChannel).mockClear();
+    vi.mocked(context.startChannel).mockClear();
+    weixinStart.mockResolvedValue({
+      message: "scan",
+      sessionKey: "preserved-session",
+      qrDataUrl: "data:image/png;base64,qr",
+    });
+    weixinWait.mockResolvedValue({ connected: true, message: "connected", accountId: "work" });
+    await dispatch("web.login.start", { channel: "wechat", preserveRunning: true });
+    expect(context.stopChannel).not.toHaveBeenCalled();
+    expect(context.startChannel).not.toHaveBeenCalled();
+    await dispatch("web.login.wait", {
+      channel: "weixin",
+      sessionKey: "preserved-session",
+      preserveRunning: true,
+    });
+    expect(vi.mocked(context.stopChannel).mock.calls).toEqual([["openclaw-weixin", "work"]]);
+    expect(vi.mocked(context.startChannel).mock.calls).toEqual([["openclaw-weixin", "work"]]);
   });
 
   it("routes explicit selectors through the registry attached to the request", async () => {

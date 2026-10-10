@@ -235,6 +235,8 @@ export type ChannelGatewayAdapter<ResolvedAccount = unknown> = {
     connected: boolean;
     message: string;
     qrDataUrl?: string;
+    /** Confirmed credential account, used for targeted activation after a non-disruptive login. */
+    accountId?: string;
   }>;
   logoutAccount?: (ctx: {
     cfg: OpenClawConfig;

@@ -11,6 +11,7 @@ import type { ControlUiMockGateway } from "../ui/src/test-helpers/control-ui-e2e
 
 export type PluginCatalogMockOptions = {
   installedCopies?: number;
+  weixinLogin?: boolean;
 };
 
 export function buildPluginDiscoveryMock(): PluginsCatalogBrowseResult {
@@ -287,6 +288,20 @@ export function buildPluginCatalogMock(options: PluginCatalogMockOptions = {}) {
       "OpenClaw Slack channel plugin for channels, DMs, commands, and app events.",
     ),
     bundledChannel("signal", "Signal", "OpenClaw Signal channel plugin."),
+    ...(options.weixinLogin
+      ? [
+          entry({
+            id: "openclaw-weixin",
+            name: "Weixin",
+            description: "Personal Weixin QR login fixture.",
+            category: "channel",
+            origin: "global",
+            installed: true,
+            enabled: true,
+            hasIcon: false,
+          }),
+        ]
+      : []),
     bundledChannel(
       "imessage",
       "iMessage",
@@ -427,6 +442,12 @@ export function buildPluginInspectMock(options: PluginCatalogMockOptions = {}) {
       },
     ],
   ]);
+  if (options.weixinLogin) {
+    fixtures.set("openclaw-weixin", {
+      source: { kind: "official-catalog", packageName: "@tencent-weixin/openclaw-weixin" },
+      declared: { contracts: ["web.login.start", "web.login.wait", "weixin.login.control"] },
+    });
+  }
   const cases = buildPluginCatalogMock(options).plugins.map((plugin) => {
     const fixtureId = plugin.id.replace(/-copy-\d+$/u, "");
     const fixture = fixtures.get(fixtureId);

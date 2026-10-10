@@ -76,8 +76,10 @@ import { createControlUiPreviewInitScript } from "./control-ui-mock-preview.ts";
 import { skillLibraryMockInitScript } from "./control-ui-mock-skill-library.ts";
 import { skillWorkshopMockInitScript } from "./control-ui-mock-skill-workshop.js";
 import { buildProfileUsageMocks } from "./control-ui-mock-usage.ts";
+import { weixinLoginMockInitScript } from "./control-ui-mock-weixin.ts";
 
 const FIXTURES = [
+  "weixin-login",
   "approval",
   "attachments",
   "avatars",
@@ -3351,7 +3353,10 @@ async function createMockGatewayPlugin(
   const statefulInitScript = escapeScriptContent(
     createControlUiPreviewInitScript(newAgentWelcome) +
       skillLibraryMockInitScript(prepared.scenario.models) +
-      pluginLifecycleMockInitScript() +
+      pluginLifecycleMockInitScript({ weixinLogin: fixture === "weixin-login" }) +
+      (fixture === "weixin-login"
+        ? weixinLoginMockInitScript(await qrcode.toDataURL("TRAVELCLAW_DEMO_NOT_A_WEIXIN_LOGIN"))
+        : "") +
       skillWorkshopMockInitScript(Date.now()) +
       approvalMockInitScript(fixture === "approval") +
       (fixture === "workboard" || fixture === "workboard-states"

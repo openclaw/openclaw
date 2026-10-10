@@ -13,6 +13,12 @@ export type ChannelPairingPrompt = {
 };
 
 export type ChannelsProps = {
+  weixinActivationBusy: boolean;
+  weixinRestartRequired: boolean;
+  weixinActivationMessage: string | null;
+  onWeixinStart: () => void;
+  onWeixinClose: () => void;
+  onWeixinVerify: (code: string) => void;
   channels: ChannelsState;
   config: RuntimeConfigState;
   presentation: ChannelPluginPresentationController;

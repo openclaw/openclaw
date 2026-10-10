@@ -3,7 +3,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import type { PluginListResult } from "../../lib/plugins/index.ts";
 import { fetchPluginIconBlobUrl } from "../plugins/icon-loader.ts";
 import { pluginIconFetchContext } from "../plugins/plugin-icon-controller.ts";
-import { resolveChannelIconOwner } from "./plugin-presentation.ts";
+import { resolveChannelIconOwner, WEIXIN_CHANNEL_ICON } from "./plugin-presentation.ts";
 
 const CHANNEL_PLUGIN_ICON_TIMEOUT_MS = 10_000;
 
@@ -32,18 +32,21 @@ export class ChannelPluginPresentationController {
     return this.catalog;
   }
 
-  get pluginIconUrls() {
+  get pluginIconUrls(): Record<string, string> {
     if (!this.catalog) {
-      return {};
+      return { "openclaw-weixin": WEIXIN_CHANNEL_ICON };
     }
     const plugins = this.catalog.plugins;
-    return Object.fromEntries(
-      this.hooks.getChannelIds().flatMap((channelId) => {
-        const plugin = resolveChannelIconOwner(plugins, channelId);
-        const url = plugin ? this.iconUrls.get(plugin.id) : undefined;
-        return url === undefined ? [] : [[channelId, url] as const];
-      }),
-    );
+    return {
+      "openclaw-weixin": WEIXIN_CHANNEL_ICON,
+      ...Object.fromEntries(
+        this.hooks.getChannelIds().flatMap((channelId) => {
+          const plugin = resolveChannelIconOwner(plugins, channelId);
+          const url = plugin ? this.iconUrls.get(plugin.id) : undefined;
+          return url === undefined ? [] : [[channelId, url] as const];
+        }),
+      ),
+    };
   }
 
   ensure(client: GatewayBrowserClient | null) {

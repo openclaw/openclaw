@@ -55,6 +55,19 @@ describe("WebLoginStartParamsSchema", () => {
   });
 });
 
+describe("web login monitor preservation", () => {
+  it.each([WebLoginStartParamsSchema, WebLoginWaitParamsSchema])(
+    "accepts only an optional boolean preservation flag",
+    (schema) => {
+      const validate = Compile(schema);
+      expect(validate.Check({})).toBe(true);
+      expect(validate.Check({ preserveRunning: true })).toBe(true);
+      expect(validate.Check({ preserveRunning: false })).toBe(true);
+      expect(validate.Check({ preserveRunning: "true" })).toBe(false);
+    },
+  );
+});
+
 describe("TalkSessionCancelOutputResultSchema", () => {
   const validate = Compile(TalkSessionCancelOutputResultSchema);
 
