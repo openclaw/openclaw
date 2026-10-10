@@ -75,7 +75,7 @@ describe("Crabbox warm-image lifecycle ownership", () => {
     );
     stopFails = true;
     await expect(
-      destroyAndWait(restarted.provider, { leaseId: lease.leaseId, profile: PROFILE }),
+      restarted.provider.destroy({ leaseId: lease.leaseId, profile: PROFILE }),
     ).rejects.toThrow();
     expect(
       (await listCrabboxWarmImages(crabboxState))[0]?.allocations[lease.leaseId]?.choice,

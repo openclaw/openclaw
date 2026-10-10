@@ -34,7 +34,6 @@ export function createProviderFixtures(defaults: Partial<ProviderDependencies> =
   const providers = new Set<ReturnType<typeof createCrabboxWorkerProvider>>();
   return {
     providers,
-    destroyAndWait,
     createProvider: (dependencies: Partial<ProviderDependencies>) => {
       const pending = new Map<string, Teardown>();
       // Observe real cleanup completion without making destroy synchronous in tests.

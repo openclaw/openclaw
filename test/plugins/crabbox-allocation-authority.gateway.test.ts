@@ -53,6 +53,8 @@ describe("Crabbox allocation through Gateway ownership", () => {
     async ({ allocation, allowed }) => {
       const entered = createDeferredCore();
       const released = createDeferredCore();
+      const seedReleased = createDeferredCore();
+      let seedLeaseId: string | null = null;
       let pauseLookup = false;
       const runtime = createPluginRuntimeMock({
         state: {
@@ -61,8 +63,30 @@ describe("Crabbox allocation through Gateway ownership", () => {
               ...options,
               env: { OPENCLAW_STATE_DIR: support.testState.root },
             });
+            const compareAndApply = store.compareAndApply;
+            if (!compareAndApply) {
+              throw new Error("Crabbox fixture requires atomic plugin state");
+            }
             return {
               ...store,
+              compareAndApply: async (key, comparison, intent) => {
+                const result = await compareAndApply(key, comparison, intent);
+                if (
+                  options.namespace === "warm-images" &&
+                  seedLeaseId &&
+                  result.status === "applied" &&
+                  intent.action === "set" &&
+                  typeof intent.value === "object" &&
+                  intent.value !== null &&
+                  "allocations" in intent.value &&
+                  typeof intent.value.allocations === "object" &&
+                  intent.value.allocations !== null &&
+                  !Object.hasOwn(intent.value.allocations, seedLeaseId)
+                ) {
+                  seedReleased.resolve();
+                }
+                return result;
+              },
               entries: async () => {
                 const entries = await store.entries();
                 if (options.namespace === "warm-images" && pauseLookup) {
@@ -190,7 +214,10 @@ describe("Crabbox allocation through Gateway ownership", () => {
             profileId: "development",
             idempotencyKey: "checkpoint-source",
           });
+          seedLeaseId = seed.leaseId;
           await service.destroyUnattached(seed.environmentId);
+          // The seed's real capture must publish before this case can exercise a fork.
+          await seedReleased.promise;
         }
         runner.mockClear();
         pauseLookup = true;

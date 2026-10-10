@@ -62,7 +62,7 @@ const NON_RUNNABLE_STATES = [
   "stopped_with_code",
   "terminated",
 ];
-const { providers, createProvider, destroyAndWait } = createProviderFixtures({
+const { providers, createProvider } = createProviderFixtures({
   isExecutable: (candidate) => candidate === SIBLING_BINARY,
 });
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -210,7 +210,7 @@ describe("Crabbox worker provider", () => {
     ]);
     const lease = { ...(await provider.provision(profile, OPERATION_ID)), profile };
     expect(await provider.inspect(lease)).toEqual(active);
-    await destroyAndWait(provider, lease);
+    await provider.destroy(lease);
 
     expect(runCommand.mock.calls.map(([argv]) => argv[1])).toEqual(
       expect.arrayContaining(["providers", "config", "warmup", "inspect", "run", "stop"]),
@@ -235,7 +235,7 @@ describe("Crabbox worker provider", () => {
 
     const lease = await provider.provision(PROFILE, OPERATION_ID);
     expect(lease.leaseId).toBe(LEASE_ID);
-    await destroyAndWait(provider, { ...lease, profile: PROFILE });
+    await provider.destroy({ ...lease, profile: PROFILE });
   });
 
   it("does not allocate after cancellation during managed binary acquisition", async () => {
@@ -284,7 +284,7 @@ describe("Crabbox worker provider", () => {
       });
       const profile = { ...PROFILE, ...(configured ? { target: configured } : {}) };
       const lease = await provider.provision(profile, OPERATION_ID, { os: requested });
-      await destroyAndWait(provider, { ...lease, profile });
+      await provider.destroy({ ...lease, profile });
       const warmup = calls.find((argv) => argv[1] === "warmup")!;
       const resolved = requested ?? configured;
       if (resolved === "windows/wsl2" || resolved === "windows/normal") {
@@ -1245,7 +1245,7 @@ describe("Crabbox worker provider", () => {
           apps: [{ id: "browser" }, { id: "terminal" }],
         });
       }
-      await destroyAndWait(restarted, { ...lease, profile });
+      await restarted.destroy({ ...lease, profile });
       expect(live.size).toBe(0);
       expect(calls.map((argv) => argv[1])).toEqual([
         "warmup",
@@ -1436,7 +1436,7 @@ describe("Crabbox worker provider", () => {
       await vi.advanceTimersByTimeAsync(1);
       expect(heartbeat).toHaveBeenCalledTimes(2);
     } finally {
-      await destroyAndWait(provider, lifecycleLease(LEASE_ID, profile));
+      await provider.destroy(lifecycleLease(LEASE_ID, profile));
       vi.useRealTimers();
     }
   });
@@ -1499,7 +1499,7 @@ describe("Crabbox worker provider", () => {
         `Crabbox provider aws does not support heartbeat for worker lease ${LEASE_ID}; cloud worker machines may be reaped after 60m of coordinator-idle time`,
       ]);
     } finally {
-      await destroyAndWait(provider, lifecycleLease());
+      await provider.destroy(lifecycleLease());
       vi.useRealTimers();
     }
   });
@@ -1518,7 +1518,7 @@ describe("Crabbox worker provider", () => {
         "Crabbox heartbeat did not exit normally (timeout after 60012 ms); cloud worker machines may be reaped after 60m of coordinator-idle time",
       ]);
     } finally {
-      await destroyAndWait(provider, lifecycleLease());
+      await provider.destroy(lifecycleLease());
       vi.useRealTimers();
     }
   });
@@ -1554,7 +1554,7 @@ describe("Crabbox worker provider", () => {
       expect(heartbeat).toHaveBeenCalledTimes(2);
       expect(warnings).toHaveLength(1);
     } finally {
-      await destroyAndWait(provider, lifecycleLease());
+      await provider.destroy(lifecycleLease());
       vi.useRealTimers();
     }
   });
@@ -1565,7 +1565,7 @@ describe("Crabbox worker provider", () => {
     const lease = lifecycleLease("lease:not-crabbox");
 
     await expect(provider.inspect(lease)).rejects.toThrow("lease id is invalid");
-    await expect(destroyAndWait(provider, lease)).rejects.toThrow("lease id is invalid");
+    await expect(provider.destroy(lease)).rejects.toThrow("lease id is invalid");
     expect(runCommand).not.toHaveBeenCalled();
   });
 
@@ -1592,7 +1592,7 @@ describe("Crabbox worker provider", () => {
         await vi.advanceTimersByTimeAsync(60_000);
         expect(heartbeats).toHaveBeenCalledTimes(expected.status === "active" ? 2 : 1);
       } finally {
-        await destroyAndWait(provider, lease);
+        await provider.destroy(lease);
         vi.useRealTimers();
       }
     },

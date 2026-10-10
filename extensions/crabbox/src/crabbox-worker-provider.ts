@@ -58,15 +58,15 @@ import {
 } from "./crabbox-worker-snapshot-actions.js";
 import {
   countCrabboxProvisionSetupPhases,
-  CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS,
   CRABBOX_DESKTOP_WARMUP_TIMEOUT_MS,
   CRABBOX_SETUP_TIMEOUT_MS,
-  CRABBOX_STOP_TIMEOUT_MS,
   CRABBOX_WARMUP_TIMEOUT_MS,
   resolveCrabboxLifecycleTimeoutMs,
   resolveCrabboxNodeEnrollmentTimeoutMs,
   resolveCrabboxProvisionBaseTimeoutMs,
-  resolveCrabboxProvisionCallTimeoutMs,
+  resolveCrabboxProvisionTimeoutMs,
+  resolveCrabboxDestroyTimeoutMs,
+  CRABBOX_PROJECT_PREPARATION_TIMEOUT_MS,
   resolveCrabboxWarmImageCaptureTimeoutMs,
   WARM_IMAGE_COMMAND_ROUND_TRIP_TIMEOUT_MS,
 } from "./crabbox-worker-timeouts.js";
@@ -75,8 +75,6 @@ import type { CrabboxWarmImagePolicy } from "./crabbox-worker-warm-image-policy.
 import type { CrabboxState } from "./crabbox-worker-warm-image-store.js";
 import { createCrabboxWarmImageManager } from "./crabbox-worker-warm-image.js";
 
-// Local pack creation, two seed commands, and upload precede runtime preparation and capture.
-const CRABBOX_PROJECT_PREPARATION_TIMEOUT_MS = 4 * CRABBOX_SETUP_TIMEOUT_MS;
 type CrabboxProfile = ReturnType<typeof parseCrabboxProfile>;
 
 type LeaseHeartbeatContext = LeaseCommandContext &
@@ -100,8 +98,9 @@ export function createCrabboxWorkerProvider(
 ): WorkerProvider & { dispose: () => Promise<void>; images: CrabboxSnapshotActions } {
   const wallpaperBase64 = loadCrabboxWorkerWallpaperBase64(dependencies.wallpaperPath);
   const runCommand = dependencies.runCommand ?? runCommandWithTimeout;
-  const teardownHint = new AsyncLocalStorage<string>();
-  const warn = (message: string) => dependencies.warn?.(message + (teardownHint.getStore() ?? ""));
+  const logHint = new AsyncLocalStorage<{ value: string }>();
+  const warn = (message: string) =>
+    dependencies.warn?.(message + (logHint.getStore()?.value ?? ""));
   const sleep =
     dependencies.sleep ?? ((milliseconds, signal) => delay(milliseconds, undefined, { signal }));
   const openclawRoot = dependencies.openclawRoot ?? process.cwd();
@@ -660,32 +659,12 @@ export function createCrabboxWorkerProvider(
     notePreparedDemand: async (lease, preparation) =>
       await warmImages.notePreparedDemand(lease.leaseId, preparation),
     resolveAllocation,
-    resolveProvisionTimeoutMs(profile, options) {
-      const parsed = parseCrabboxProfile(profile);
-      return (
-        resolveCrabboxProvisionCallTimeoutMs(parsed, options?.nodeBootstrapTimeoutMs) +
-        (parsed.warmImage === false
-          ? 0
-          : CRABBOX_PROJECT_PREPARATION_TIMEOUT_MS +
-            resolveCrabboxWarmImageCaptureTimeoutMs(parsed.provider))
-      );
-    },
-    resolveDestroyTimeoutMs(profile) {
-      const parsed = parseCrabboxProfile(profile);
-      // Lifecycle profiles omit placement sizing. Reserve capture unless disabled,
-      // plus separate heartbeat and stop child settlement.
-      return (
-        CRABBOX_STOP_TIMEOUT_MS +
-        2 * CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS +
-        (parsed.warmImage === false ? 0 : resolveCrabboxWarmImageCaptureTimeoutMs(parsed.provider))
-      );
-    },
+    resolveProvisionTimeoutMs: (profile, { nodeBootstrapTimeoutMs } = {}) =>
+      resolveCrabboxProvisionTimeoutMs(parseCrabboxProfile(profile), nodeBootstrapTimeoutMs),
+    resolveDestroyTimeoutMs: (profile) =>
+      resolveCrabboxDestroyTimeoutMs(parseCrabboxProfile(profile)),
     prepareProvision,
-    async provision(...args) {
-      return await (
-        await prepareProvision(...args)
-      )();
-    },
+    provision: async (...args) => (await prepareProvision(...args))(),
     async inspect(lease): Promise<WorkerLeaseStatus> {
       const { context } = await resolveLeaseContext(lease);
       const inspected = await inspectWithContext({
@@ -706,32 +685,47 @@ export function createCrabboxWorkerProvider(
       // Stop renewal before binary acquisition can delay or fail teardown.
       await heartbeats.stop(lease.leaseId);
       const { context, profile } = await resolveLeaseContext(lease);
-      // If the Gateway exits during capture, OpenClaw will not stop this lease;
-      // Crabbox's idle timeout / TTL reaps it. Reclaim does not wait for this work.
-      void teardownHint.run(
-        `; lease ${context.id}; next step: crabbox stop --provider ${context.provider} ${context.id}`,
-        async () => {
-          // Lifecycle profiles omit placement overrides; enrollment records their owner.
-          try {
-            const allocation = await warmImages.lookupLease(context.id);
-            const captureProfile = resolveCrabboxWarmImageProfile(
-              profile,
-              allocation?.machineClass ?? profile.class,
-              allocation ? (allocation.os ?? "linux") : profile.target,
-            );
-            if (captureProfile.warmImage) {
-              await warmImages.capture({ ...context, profile: captureProfile });
-            }
-          } catch (error) {
-            warn(`Crabbox warm image capture failed during teardown: ${coerceErrorMessage(error)}`);
+      const captureStarted = Promise.withResolvers<void>();
+      const hint = { value: "" };
+      const teardown = logHint.run(hint, async () => {
+        let captureError: unknown;
+        try {
+          const allocation = await warmImages.lookupLease(context.id);
+          const captureProfile = resolveCrabboxWarmImageProfile(
+            profile,
+            allocation?.machineClass ?? profile.class,
+            allocation ? (allocation.os ?? "linux") : profile.target,
+          );
+          if (captureProfile.warmImage) {
+            await warmImages.capture({
+              ...context,
+              profile: captureProfile,
+              onCaptureStart: () => {
+                hint.value = `; lease ${context.id}; next step: crabbox stop --provider ${context.provider} ${context.id}`;
+                captureStarted.resolve();
+              },
+            });
           }
-          try {
-            await stopLease(context);
-          } catch (error) {
-            warn(`Crabbox teardown stop failed: ${coerceErrorMessage(error)}`);
+        } catch (error) {
+          captureError = error;
+        }
+        try {
+          await stopLease(context);
+        } catch (error) {
+          if (!hint.value) {
+            throw error;
           }
-        },
-      );
+          warn(`Crabbox teardown stop failed: ${coerceErrorMessage(error)}`);
+        }
+        if (captureError) {
+          warn(
+            `Crabbox warm image capture failed during teardown: ${coerceErrorMessage(captureError)}`,
+          );
+        }
+      });
+      // Only a claimed capture detaches. If the Gateway exits during it, OpenClaw
+      // will not stop the lease; Crabbox's idle timeout / TTL reaps it.
+      await Promise.race([teardown, captureStarted.promise]);
     },
   };
 }

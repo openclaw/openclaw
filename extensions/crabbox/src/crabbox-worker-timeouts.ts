@@ -2,6 +2,7 @@ type CrabboxProvisionTimeoutProfile = {
   provider: string;
   desktop?: boolean;
   setup?: string;
+  warmImage?: boolean;
 };
 
 const CRABBOX_ACQUISITION_ENVELOPE_MS = 5 * 60_000;
@@ -120,5 +121,31 @@ export function resolveCrabboxProvisionCallTimeoutMs(
     CRABBOX_STOP_TIMEOUT_MS +
     // Diagnostics, heartbeat cancellation, and stop retain child/tree settlement.
     3 * CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS
+  );
+}
+
+// Local pack creation, two seed commands, and upload precede runtime preparation and capture.
+export const CRABBOX_PROJECT_PREPARATION_TIMEOUT_MS = 4 * CRABBOX_SETUP_TIMEOUT_MS;
+
+export function resolveCrabboxProvisionTimeoutMs(
+  profile: CrabboxProvisionTimeoutProfile,
+  nodeBootstrapTimeoutMs?: number,
+): number {
+  return (
+    resolveCrabboxProvisionCallTimeoutMs(profile, nodeBootstrapTimeoutMs) +
+    (profile.warmImage === false
+      ? 0
+      : CRABBOX_PROJECT_PREPARATION_TIMEOUT_MS +
+        resolveCrabboxWarmImageCaptureTimeoutMs(profile.provider))
+  );
+}
+
+export function resolveCrabboxDestroyTimeoutMs(profile: CrabboxProvisionTimeoutProfile): number {
+  // Lifecycle profiles omit placement sizing. Reserve capture unless disabled,
+  // plus separate heartbeat and stop child settlement.
+  return (
+    CRABBOX_STOP_TIMEOUT_MS +
+    2 * CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS +
+    (profile.warmImage === false ? 0 : resolveCrabboxWarmImageCaptureTimeoutMs(profile.provider))
   );
 }
