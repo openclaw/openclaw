@@ -9,6 +9,19 @@ import { LEGACY_ADVERTISED_GATEWAY_METHODS } from "./server-methods-list.test-fi
 import { coreGatewayHandlers } from "./server-methods.js";
 
 describe("listGatewayMethods", () => {
+  it("advertises private backgrounds with personal read/write scopes", () => {
+    const descriptors = createCoreGatewayMethodDescriptors(coreGatewayHandlers);
+    for (const [name, scope] of [
+      ["users.background.get", "operator.read"],
+      ["users.background.upload", "operator.write"],
+      ["users.background.remove", "operator.write"],
+    ]) {
+      expect(listGatewayMethods()).toContain(name);
+      expect(coreGatewayHandlers[name]).toBeTypeOf("function");
+      expect(descriptors.find((descriptor) => descriptor.name === name)).toMatchObject({ scope });
+    }
+  });
+
   it("preserves the frozen legacy advertised method prefix", () => {
     expect(listGatewayMethods().slice(0, LEGACY_ADVERTISED_GATEWAY_METHODS.length)).toEqual(
       LEGACY_ADVERTISED_GATEWAY_METHODS,

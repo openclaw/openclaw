@@ -7,6 +7,11 @@ openclaw-new-session-page {
   min-height: 0;
 }
 
+/* Artwork owns the whole canvas; the scroll/welcome owners keep content insets. */
+.content--new-session {
+  padding-inline: 0;
+}
+
 .new-session-page {
   position: relative;
   display: flex;

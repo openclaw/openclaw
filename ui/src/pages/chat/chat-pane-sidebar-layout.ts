@@ -184,6 +184,7 @@ export function renderSidebarRegion(params: {
   sideFocusOrigin?: () => HTMLElement | null;
   panelDefinitions?: SidebarPanelDefinition[];
   header?: TemplateResult | typeof nothing;
+  background?: TemplateResult;
   primary: TemplateResult;
   requestUpdate: () => void;
 }): TemplateResult {
@@ -211,14 +212,31 @@ export function renderSidebarRegion(params: {
   const chatMain = !main || main.slot === "conversation";
   const column = params.layout.columns[0];
   return html`<div
-    class="sidebar-region ${collapsed ? "sidebar-region--narrow" : ""} ${
+    class="sidebar-region ${params.background ? "sidebar-region--background" : ""} ${collapsed ? "sidebar-region--narrow" : ""} ${
       params.layout.expanded ? "sidebar-region--expanded" : ""
-    } ${params.layout.expanded && params.layout.expandedSide ? "sidebar-region--expanded-side" : ""} sidebar-region--${sidebarDock(params.layout)} ${panelOpen ? "sidebar-region--open" : ""}"
+    } ${
+      params.layout.expanded && params.layout.expandedSide ? "sidebar-region--expanded-side" : ""
+    } sidebar-region--${sidebarDock(params.layout)} ${panelOpen ? "sidebar-region--open" : ""}"
     style=${styleMap({
       "--side-panel-width": `${column?.width ?? 480}px`,
       "--side-panel-height": `${column?.height ?? 360}px`,
     })}
   >
+    ${
+      params.background
+        ? html`<div
+            class="sidebar-region__background"
+            ?hidden=${!isSidebarSlotVisible(params.layout, "conversation")}
+            style=${styleMap({
+              gridArea: chatMain
+                ? "main-header / main-header / main / main"
+                : "side-header / side-header / side / side",
+            })}
+          >
+            ${params.background}
+          </div>`
+        : nothing
+    }
     <div class="sidebar-region__header">${params.header ?? nothing}</div>
     ${
       regionError !== undefined
