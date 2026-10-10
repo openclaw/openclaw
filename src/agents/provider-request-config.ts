@@ -270,8 +270,8 @@ function resolveTlsOverride(tls: ProviderRequestTlsOverride | undefined) {
   if (tls.insecureSkipVerify === true) {
     throw new Error(FORBIDDEN_INSECURE_TLS_MESSAGE);
   }
-  const fields: Omit<ProviderRequestTlsOverride, "insecureSkipVerify"> = {};
-  const keys: (keyof typeof fields)[] = ["ca", "cert", "key", "passphrase", "serverName"];
+  const keys = ["ca", "cert", "key", "passphrase", "serverName"] as const;
+  const fields: Partial<Record<(typeof keys)[number], string | undefined>> = {};
   for (const key of keys) {
     const value = tls[key]?.trim();
     if (value) {
