@@ -138,7 +138,7 @@ export function executeSharedStateCommand(
         return true;
       }, stateOptions());
       if (!existing) {
-        return;
+        return undefined;
       }
     }
     return write(({ db }) => recordBackupRunInDatabase(db, command.input));
