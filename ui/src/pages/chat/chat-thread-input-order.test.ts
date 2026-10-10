@@ -171,7 +171,7 @@ describe("transcript input order", () => {
             content: "Earlier tool",
             runId: "run",
             timestamp: 9001,
-            __openclawToolStreamAfterSendId: "original",
+            openclawToolStreamAfterSendId: "original",
           },
         ],
       }),

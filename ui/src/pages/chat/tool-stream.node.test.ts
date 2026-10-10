@@ -93,7 +93,7 @@ describe("observed steering boundary", () => {
         seq: 3,
         data: { ...tool.data, phase: "result", result: "Done" },
       });
-      expect(host.chatToolMessages[0]?.__openclawToolStreamAfterSendId).toBe(expected);
+      expect(host.chatToolMessages[0]?.openclawToolStreamAfterSendId).toBe(expected);
       resetToolStream(host);
     },
   );

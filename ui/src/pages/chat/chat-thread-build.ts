@@ -356,7 +356,7 @@ export function buildChatItems(
       resolveRunBounds(
         canvasRunBounds,
         projection.item.message.runId,
-        normalizeOptionalString(projection.item.message.__openclawToolStreamAfterSendId),
+        normalizeOptionalString(projection.item.message.openclawToolStreamAfterSendId),
       ),
     );
     const { minimum: canvasMinimumIndex, maximum: canvasMaximumIndex } = insertionIndexesForBounds(
@@ -488,7 +488,7 @@ export function buildChatItems(
     if (tool && (props.showToolCalls || hasSessionsYieldCall(tool.projection.item.message))) {
       tool.projection.bounds = resolveProjectionBounds(
         tool.runId,
-        normalizeOptionalString(tool.projection.item.message.__openclawToolStreamAfterSendId),
+        normalizeOptionalString(tool.projection.item.message.openclawToolStreamAfterSendId),
       );
       projections.push(tool.projection);
     }

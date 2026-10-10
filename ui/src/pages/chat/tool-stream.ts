@@ -153,7 +153,7 @@ function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown>
       ? { __openclawToolStreamDiffStat: entry.liveDiffStat }
       : {}),
     __openclawToolStreamReceivedAt: entry.receivedAt,
-    ...(entry.afterUserSendId ? { __openclawToolStreamAfterSendId: entry.afterUserSendId } : {}),
+    ...(entry.afterUserSendId ? { openclawToolStreamAfterSendId: entry.afterUserSendId } : {}),
   };
 }
 
