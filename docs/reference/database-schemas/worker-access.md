@@ -289,7 +289,9 @@ Cancellation without a matching pending request returns after a read in the same
 worker FIFO, without a write transaction or publication. Matching requests are
 still reread inside the mutation transaction. GitHub role checks prepare only the
 canonical profile ID, role, and verified GitHub login through the existing profile
-authority fence; display and alias consumers retain the full profile projection.
+authority fence. One joined query on the shared-state worker resolves those facts
+without opening a separate reader or read transaction; display and alias consumers
+retain the full profile projection.
 These changes do not alter the schema, stored representation, or update behavior.
 
 Released coordinator methods with opaque requester assertions remain explicit

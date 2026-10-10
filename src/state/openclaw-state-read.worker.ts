@@ -508,7 +508,6 @@ serveOwnedWorkerTasks(
             }
             if (
               command.type === "userProfiles.authority.resolve" ||
-              command.type === "userProfiles.roleAuthority.resolve" ||
               command.type === "userProfiles.aliases.resolve" ||
               command.type === "userProfiles.catalogIdentity" ||
               command.type === "userProfiles.githubIdentity.cached" ||
