@@ -535,7 +535,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
           throw new Error("Memory source owner changed before replacement");
         }
       };
-      if (session) {
+      if (session && database !== sourceDatabase) {
         // Forget shares this cross-process lock. The prepared predicate remains
         // current through native commit only while this lock and original owner
         // stay retained; a shadow's empty tombstone table cannot authorize it.
@@ -578,7 +578,14 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
         assertCurrent();
         return true;
       };
-      const published = await database.replaceSource(createReplacement(), assertCurrent, prepare);
+      const published = await database
+        .replaceSource(createReplacement(), assertCurrent, prepare)
+        .catch((error: unknown) => {
+          if (session) {
+            this.markFailedFullReindexRetry({ memory: false, sessions: true });
+          }
+          throw error;
+        });
       if (!published) {
         return false;
       }

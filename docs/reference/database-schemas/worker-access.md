@@ -2124,10 +2124,9 @@ continue through the P02 transaction owners.
 
 Active Memory prepares one parent-entry snapshot per recall request and reuses it
 for eligibility, fast mode, and channel context; final authority checks remain
-current. Memory publication's connection-local TEMP scratch table creation and
-explicitly TEMP-qualified cleanup expire local read facts without revoking MAIN
-schema admission. Mixed SQL batches, unqualified drops, and actual MAIN schema
-changes retain their existing invalidation and repair behavior.
+current. Memory publication stages transfer fragments in worker memory without
+changing schema admission. Actual MAIN schema changes retain their existing
+invalidation and repair behavior.
 
 Production acquisition remains host-owned until P12. Unbound incognito calls keep
 their native owner and allocate no actor; native selector removal remains P12.
@@ -2833,10 +2832,13 @@ same FIFO interval.
 
 Memory source-state reads, cache pruning, standing-intent operations, and session
 collaboration writes without a preparation callback use that single-command
-path. Memory bindings reuse the canonical connection's installed policy and
-create staging tables only for a staged transfer. Small embedding-cache writes
-carry a bounded inline batch through the same revision, tombstone, capacity, and
-commit checks; larger inputs retain fragment staging. Standing-intent setup
+path. Memory bindings reuse the canonical connection's installed policy. Small
+source replacements and embedding-cache writes carry a bounded inline batch in
+one request through the same revision, tombstone, capacity, and commit checks.
+Larger inputs retain bounded fragment messages and stage one publication in worker
+memory until settlement, without TEMP tables or staging SQL. This trades additional
+memory proportional to that publication for fewer database calls; source size is
+not newly capped. Standing-intent setup
 consumes admitted MAIN schema facts and requests a write transaction only when
 installation is needed. Temporary tables cannot redirect its canonical schema
 installation. Cold installation commits separately from the business operation.
@@ -2947,9 +2949,9 @@ Generated embedding-cache publication uses the existing memory publication worke
 and the captured published database, including during a shadow rebuild. Its native
 transaction rereads the index revision and session tombstones before reserving cache
 capacity and writing vectors. Conflicting dimensions invalidate the generation
-before its writer turn releases, even when clearing fails or loses its reply;
-the error still propagates without replay. Bounded staging retains one vector row
-at a time and preserves cache binary values. Source-file inspection remains on the
+before the operation returns, even when clearing fails or loses its reply;
+the error still propagates without replay. Worker-owned staging preserves cache
+binary values and is discarded after settlement or owner closure. Source-file inspection remains on the
 host. Cache pruning uses that same worker for its live count and oldest-row deletion,
 with a transaction recheck before each batch of at most 100 rows. The host releases
 admission and yields between batches; only definite pre-entry lock failures retry.
@@ -2957,7 +2959,8 @@ Cache and source-hash reads use the retained publication worker, with caller
 authority checked after delivery. Source snapshots use that same publication owner;
 read-only diagnostics use the retrieval worker. Shadow session publication prepares
 its current tombstone predicate in the original published worker while retaining
-the workspace lock through commit. The shadow's empty tombstone table never grants
+the workspace lock through commit. Ordinary publication checks that predicate only
+inside its committing transaction. The shadow's empty tombstone table never grants
 publication authority. Cold opening remains separate work. Schemas, cache retention,
 and stored formats are unchanged.
 

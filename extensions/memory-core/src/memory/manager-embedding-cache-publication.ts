@@ -10,7 +10,7 @@ import {
   memoryEmbeddingCacheFitsInline,
 } from "./manager-publication-transfer.js";
 
-/** The caller retains its writer turn through revision preparation and invalidation. */
+/** The committing worker checks the captured revision before retaining vectors. */
 export async function publishMemoryEmbeddingCache(params: {
   scope: Pick<SqliteWorkerStore<MemoryPublicationOperations>, "execute">;
   mutation: MemoryEmbeddingCacheMutation;

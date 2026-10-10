@@ -51,6 +51,8 @@ import type {
 import {
   memoryPublicationBatches,
   memoryPublicationHeader,
+  memoryPublicationInline,
+  memoryEmbeddingCacheFitsInline,
 } from "./manager-publication-transfer.js";
 import {
   assertMemoryShadowIdentity,
@@ -501,6 +503,18 @@ export class MemoryIndexDatabase {
     prepareRevision: () => number | undefined,
     invalidate: () => void,
   ): Promise<boolean | undefined> {
+    if (
+      mutation.kind === "clear" ||
+      memoryEmbeddingCacheFitsInline(mutation.header, mutation.entries)
+    ) {
+      return publishMemoryEmbeddingCache({
+        scope: { execute: (command) => this.executePublication(command, assertCurrent) },
+        mutation,
+        prepareRevision,
+        invalidate,
+        retry: (run, prepare) => this.retryPublication(run, prepare),
+      });
+    }
     return this.runPublication(
       (scope) =>
         publishMemoryEmbeddingCache({
@@ -519,6 +533,22 @@ export class MemoryIndexDatabase {
     assertCurrent: () => void,
     prepare: () => Promise<boolean>,
   ) {
+    const inline = memoryPublicationInline(replacement);
+    if (inline) {
+      return this.withSourceMutation(() =>
+        this.retryPublication(
+          () =>
+            this.executePublication(
+              {
+                type: "source.replace.inline",
+                input: { ...inline, state: this.publicationState() },
+              },
+              assertCurrent,
+            ),
+          prepare,
+        ),
+      );
+    }
     const run = () =>
       this.runPublication(async (scope) => {
         const operation = randomUUID();
