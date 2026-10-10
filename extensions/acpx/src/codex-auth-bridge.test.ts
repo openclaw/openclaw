@@ -240,6 +240,46 @@ describe("prepareAcpxCodexAuthConfig", () => {
     },
   );
 
+  it("falls back through npm when npm sits next to the node binary", async () => {
+    // Windows installer layouts keep npm in a sibling node_modules rather than
+    // under a prefix's lib/, so the wrapper used to miss npm entirely and fall
+    // through to spawning npx.cmd, which modern Node rejects with EINVAL.
+    const { root, generated, prepare } = createWrapperFixture();
+    await prepare({
+      resolveInstalledCodexAcpBinPath: async () => path.join(root, "gone-codex-acp.js"),
+    });
+
+    const shimRoot = path.join(root, "node-shim");
+    const shimNode = path.join(
+      shimRoot,
+      "node",
+      process.platform === "win32" ? "node.exe" : "node",
+    );
+    await fs.mkdir(path.dirname(shimNode), { recursive: true });
+    try {
+      await fs.link(process.execPath, shimNode);
+    } catch {
+      await fs.copyFile(process.execPath, shimNode);
+    }
+    // Only the sibling layout exists; the prefix lib/ layout is deliberately absent.
+    const shimNpmCli = path.join(shimRoot, "node", "node_modules", "npm", "bin", "npm-cli.js");
+    await fs.mkdir(path.dirname(shimNpmCli), { recursive: true });
+    await fs.writeFile(
+      shimNpmCli,
+      "process.stdout.write(JSON.stringify({ invokedAs: process.argv[1], argv: process.argv.slice(2) }));\n",
+      "utf8",
+    );
+
+    const { stdout } = await execFileAsync(shimNode, [generated.wrapperPath], {
+      cwd: root,
+      env: { ...process.env },
+    });
+
+    const launched = JSON.parse(stdout.trim()) as { invokedAs?: unknown; argv?: unknown };
+    expect(launched.invokedAs).toBe(shimNpmCli);
+    expect(launched.argv).toEqual(expect.arrayContaining(["exec", "--yes", "--package"]));
+  });
+
   it("keeps the orphaned wrapper alive long enough to force-kill the child process group", async () => {
     const { generated, prepare } = createWrapperFixture();
 
