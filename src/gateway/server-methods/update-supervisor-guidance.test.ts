@@ -15,7 +15,8 @@ const guidance = vi.hoisted(() => ({
   runFrom: "deployment host",
   command: "deployctl update gateway",
 }));
-vi.mock("../../plugins/supervisor-guidance-runtime.js", () => ({
+vi.mock("../../plugins/supervisor-guidance-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/supervisor-guidance-runtime.js")>()),
   resolveExternalSupervisorGuidance: vi.fn(async () => guidance),
 }));
 

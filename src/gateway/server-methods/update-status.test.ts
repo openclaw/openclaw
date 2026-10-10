@@ -43,7 +43,8 @@ import { createLazyCoreHandlers } from "./lazy-core-handlers.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 import { updateStatusHandlers } from "./update-status.js";
 
-vi.mock("../../plugins/supervisor-guidance-runtime.js", () => ({
+vi.mock("../../plugins/supervisor-guidance-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/supervisor-guidance-runtime.js")>()),
   resolveExternalSupervisorGuidance: vi.fn(async () => undefined),
 }));
 
@@ -51,7 +52,8 @@ vi.mock("../../infra/update-startup.js", () => ({
   getUpdateEffectiveChannel: async () => "stable",
 }));
 
-vi.mock("../../infra/update-status-schedule.js", () => ({
+vi.mock("../../infra/update-status-schedule.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/update-status-schedule.js")>()),
   getGatewayUpdateSchedule: () => getUpdateSchedule(),
   refreshGatewayUpdateStatus: vi.fn(async () => {}),
 }));

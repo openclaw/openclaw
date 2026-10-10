@@ -25,7 +25,8 @@ import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 const resolveSupervisorGuidance = vi.hoisted(() =>
   vi.fn<() => Promise<SupervisorDisplayGuidance | undefined>>(),
 );
-vi.mock("../plugins/supervisor-guidance-runtime.js", () => ({
+vi.mock("../plugins/supervisor-guidance-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/supervisor-guidance-runtime.js")>()),
   resolveExternalSupervisorGuidance: resolveSupervisorGuidance,
 }));
 
