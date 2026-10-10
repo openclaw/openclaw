@@ -75,3 +75,7 @@ and the retained caller content. Moving to a different application provider
 also replaces the root. The bridge uses the DOM `context-request` protocol to
 subscribe to the existing application's Lit provider; it never owns or disposes
 the application capabilities. Direct Solid callers inherit their Solid provider.
+
+The Lit ratchet excepts only this bridge test's Lit imports and templates, which
+prove caller compatibility. Other metrics and paths stay gated. Delete that
+path-exact exception with the bridge at cutover.

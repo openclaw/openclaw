@@ -33,7 +33,9 @@ type Spec<Props, Methods> = {
 };
 
 type ComponentProps<Props, Methods> = Partial<Props> &
-  Omit<JSX.HTMLAttributes<SolidBridgeElement<Props, Methods>>, keyof Props>;
+  Omit<JSX.HTMLAttributes<SolidBridgeElement<Props, Methods>>, keyof Props> & {
+    children?: JSX.Element;
+  };
 
 /** Interim tag owner: delete with the last Lit caller at the Solid cutover. */
 export function defineSolidBridge<Props extends object, Methods extends object = object>(
@@ -45,6 +47,10 @@ export function defineSolidBridge<Props extends object, Methods extends object =
   spec: Spec<Props, Methods>,
 ) {
   const properties = Object.entries<Property<unknown>>(spec.properties);
+  // Each declared key is materialized before it is exposed as a typed host/prop.
+  const defaults = Object.fromEntries(
+    properties.map(([key, property]) => [key, property.default]),
+  ) as Props;
   const declarations = new Map(properties);
   const attributes = new Map(
     properties.flatMap(([key, property]) =>
@@ -65,24 +71,34 @@ export function defineSolidBridge<Props extends object, Methods extends object =
     #start?: Comment;
     #pending?: Promise<boolean>;
     #solidOwned = false;
+    #host: SolidBridgeElement<Props, Methods>;
 
     constructor() {
       super();
+      const methods = Object.fromEntries(
+        Object.entries(spec.methods ?? {}).map(([key, method]) => {
+          if (typeof method !== "function") {
+            throw new TypeError(`Bridge method ${key} must be a function`);
+          }
+          return [
+            key,
+            (...args: unknown[]) => Reflect.apply(method, undefined, [this.#host, ...args]),
+          ];
+        }),
+      ) as Methods;
+      const upgraded = properties.filter(([key]) => Object.hasOwn(this, key));
+      for (const [key] of upgraded) {
+        this.#upgraded.set(key, Reflect.get(this, key));
+        Reflect.deleteProperty(this, key);
+      }
       for (const [key] of properties) {
-        if (Object.hasOwn(this, key)) {
-          this.#upgraded.set(key, Reflect.get(this, key));
-          Reflect.deleteProperty(this, key);
-        }
         Object.defineProperty(this, key, {
+          configurable: true,
           get: () => this.#values.get(key),
           set: (value: unknown) => this.#write(key, value),
         });
       }
-      for (const [key, method] of Object.entries(spec.methods ?? {})) {
-        Object.defineProperty(this, key, {
-          value: (...args: unknown[]) => Reflect.apply(method, undefined, [this, ...args]),
-        });
-      }
+      this.#host = Object.assign(this, defaults, methods);
     }
 
     get updateComplete(): Promise<boolean> {
@@ -188,8 +204,8 @@ export function defineSolidBridge<Props extends object, Methods extends object =
       }));
     }
 
-    #mount(children?: JSX.Element) {
-      let source = children;
+    #mount(children?: () => JSX.Element) {
+      let source: JSX.Element;
       if (!this.#solidOwned) {
         if (!this.#content) {
           this.#content = this.ownerDocument.createDocumentFragment();
@@ -202,9 +218,11 @@ export function defineSolidBridge<Props extends object, Methods extends object =
       this.#dispose = render(() => {
         const [revision, setRevision] = createSignal(0);
         this.#notify = () => setRevision((value) => value + 1);
-        // The descriptor table is the complete runtime shape of Props.
-        const props = Object.fromEntries(properties.map(([key]) => [key, undefined])) as Props & {
-          children?: JSX.Element;
+        const props = {
+          ...defaults,
+          get children() {
+            return children ? children() : source;
+          },
         };
         for (const [key] of properties) {
           Object.defineProperty(props, key, {
@@ -214,8 +232,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
             },
           });
         }
-        Object.defineProperty(props, "children", { get: () => source });
-        const view = () => content(props, this as SolidBridgeElement<Props, Methods>);
+        const view = () => content(props, this.#host);
         return this.#application
           ? createComponent(ApplicationProvider, {
               value: this.#application,

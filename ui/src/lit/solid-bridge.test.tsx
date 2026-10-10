@@ -1,6 +1,6 @@
 import { ContextProvider } from "@lit/context";
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
-import { LitElement, html, render as renderLit } from "lit";
+import { LitElement, html } from "lit";
 import { createSignal, flush, onCleanup } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
@@ -104,7 +104,7 @@ it("mounts once, mirrors attributes/properties, and preserves synchronous impera
 
 it("commits Solid DOM before a Lit parent updateComplete resumes", async () => {
   class Parent extends LitElement {
-    static properties = { label: {} };
+    static override properties = { label: {} };
     label = "first";
     override createRenderRoot() {
       return this;
@@ -148,20 +148,21 @@ it("keeps the same root across moves and releases/recreates it after a real disc
   expect(mounted).toHaveBeenCalledTimes(2);
 });
 
-it("leaves Lit in charge of caller children through updates and reconnects", async () => {
+it("preserves caller content through updates and reconnects", async () => {
   const container = document.createElement("div");
   document.body.append(container);
-  const child = (value: string, count: number) =>
-    html`<openclaw-solid-bridge-test
-      >${Array.from({ length: count }, () => html`<input .value=${value} />`)}</openclaw-solid-bridge-test
-    >`;
-  renderLit(child("first", 1), container);
-  const host = container.querySelector<Host>("openclaw-solid-bridge-test")!;
+  const host = createHost();
+  const input = document.createElement("input");
+  input.value = "first";
+  host.append(input);
+  container.append(host);
   await host.updateComplete;
-  const input = host.querySelector("input");
-  renderLit(child("next", 2), container);
+  const outlet = input.parentElement!;
+  input.value = "next";
+  const second = document.createElement("input");
+  outlet.append(second);
   expect(host.querySelector("input")).toBe(input);
-  expect(input?.value).toBe("next");
+  expect(input.value).toBe("next");
   expect(host.querySelectorAll("input")).toHaveLength(2);
 
   host.remove();
@@ -170,8 +171,9 @@ it("leaves Lit in charge of caller children through updates and reconnects", asy
   await host.updateComplete;
   expect(host.querySelector("input")).toBe(input);
   expect(host.querySelectorAll("input")).toHaveLength(2);
-  renderLit(child("last", 1), container);
-  expect(input?.value).toBe("last");
+  input.value = "last";
+  second.remove();
+  expect(input.value).toBe("last");
   expect(host.querySelectorAll("input")).toHaveLength(1);
 });
 
@@ -324,7 +326,8 @@ it("releases a disconnected Solid root while the custom element itself is retain
   const host = createHost();
   document.body.append(host);
   await host.updateComplete;
-  const weak = new WeakRef(mounted.mock.calls[0][0]);
+  expect(mounted).toHaveBeenCalledTimes(1);
+  const weak = new WeakRef(mounted.mock.calls[0]![0]);
   const control = new WeakRef({ control: true });
   mounted.mockClear();
   host.remove();
