@@ -118,7 +118,7 @@ describe("update failure report receipt recovery", () => {
     const second = await submit({ createIssue });
 
     expect(first).toMatchObject({
-      message: expect.stringContaining("canonical receipt is still pending"),
+      message: expect.stringContaining("its receipt has not been saved yet"),
       status: "created",
       url: issueUrl,
     });

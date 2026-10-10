@@ -197,7 +197,7 @@ function listArchiveBatch(
       const encoding = readArchiveEncoding(row.encoding, owner);
       const bytes = Buffer.from(row.archive_blob);
       if (sha256Hex(bytes) !== row.archive_sha256) {
-        throw new Error("Canonical SQLite transcript archive is corrupt");
+        throw new Error("Stored SQLite transcript archive is corrupt");
       }
       const fingerprint = options
         ? transcriptArchiveFingerprint(archivePath, row.archive_sha256, encoding)
@@ -479,10 +479,10 @@ export async function migrateCanonicalTranscriptArchives(
             ...(missingCopies > 0
               ? [
                   formatMigrationWarningSummary({
-                    summary: `${params.pathname}: Missing ${missingCopies} canonical transcript archive file(s)`,
+                    summary: `${params.pathname}: Missing ${missingCopies} transcript archive file(s)`,
                     count: missingCopies,
                     detail:
-                      "Canonical SQLite archive blobs remain retained. Migration completed without recreating the missing copies.",
+                      "SQLite archive contents remain saved. Migration completed without recreating the missing copies.",
                   }),
                   ...missingCopyExamples,
                 ]
@@ -576,7 +576,7 @@ export async function migrateCanonicalTranscriptArchives(
         if (rowsPresent[index] && !fileCurrent) {
           missingCopies += 1;
           if (missingCopyExamples.length < MIGRATION_WARNING_EXAMPLE_LIMIT) {
-            missingCopyExamples.push(`Missing canonical transcript archive copy: ${archivePath}`);
+            missingCopyExamples.push(`Missing transcript archive copy: ${archivePath}`);
           }
         }
         if (rowsPresent[index] && planned.fingerprint) {

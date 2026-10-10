@@ -325,12 +325,12 @@ describe("media migration of canonical SQLite transcript archives", () => {
     );
     expect(result.warningDisposition).toBe("recoverable");
     expect(result.warnings).toHaveLength(6);
-    expect(result.warnings[0]).toContain("Missing 121 canonical transcript archive file(s)");
+    expect(result.warnings[0]).toContain("Missing 121 transcript archive file(s)");
     expect(result.warnings[0]).toContain("showing 5 example(s), 116 omitted");
     expect(result.warnings.slice(1)).toEqual(
       ["000", "001", "002", "003", "004"].map(
         (retained) =>
-          `Missing canonical transcript archive copy: ${path.join(f.archiveDirectory, `a-${retained}.jsonl`)}`,
+          `Missing transcript archive copy: ${path.join(f.archiveDirectory, `a-${retained}.jsonl`)}`,
       ),
     );
     expect(plans.length).toBeGreaterThan(0);
@@ -410,8 +410,8 @@ describe("media migration of canonical SQLite transcript archives", () => {
     const result = await migrateHistoricalTranscriptDirectives({ env: f.env });
     expect(result.warningDisposition).toBe("recoverable");
     expect(result.warnings).toEqual([
-      expect.stringContaining("Missing 1 canonical transcript archive file(s)"),
-      `Missing canonical transcript archive copy: ${f.archivePath}`,
+      expect.stringContaining("Missing 1 transcript archive file(s)"),
+      `Missing transcript archive copy: ${f.archivePath}`,
     ]);
     expect(result.changes).toEqual([]);
     expect(f.read()).toEqual(before);
@@ -535,7 +535,7 @@ describe("media migration of canonical SQLite transcript archives", () => {
         .run(Buffer.from("corrupt"));
     });
     expect((await migrateLegacyMediaPersistence({ env: f.env })).warnings.join("\n")).toContain(
-      "Canonical SQLite transcript archive is corrupt",
+      "Stored SQLite transcript archive is corrupt",
     );
   });
 

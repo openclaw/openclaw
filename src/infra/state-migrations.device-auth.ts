@@ -158,7 +158,7 @@ export async function migrateLegacyDeviceAuth(params: {
         notices: [
           ...(counts.preserved > 0
             ? [
-                `Preserved ${counts.preserved} canonical SQLite device-auth token${counts.preserved === 1 ? "" : "s"}.`,
+                `Preserved ${counts.preserved} current SQLite device-auth token${counts.preserved === 1 ? "" : "s"}.`,
               ]
             : []),
           "Removed retired device-auth JSON after verified SQLite import.",

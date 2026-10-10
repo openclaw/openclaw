@@ -267,7 +267,7 @@ async function migrateOneStore(params: {
   changes.push(
     result.imported
       ? `Migrated MCP OAuth store ${path.basename(params.sourcePath)} to SQLite.`
-      : `Preserved canonical SQLite MCP OAuth store for ${path.basename(params.sourcePath)}.`,
+      : `Preserved current SQLite MCP OAuth store for ${path.basename(params.sourcePath)}.`,
   );
   notices.push("Removed retired MCP OAuth JSON after verified SQLite import.");
   return { changes, warnings, notices };

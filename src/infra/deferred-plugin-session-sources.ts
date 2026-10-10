@@ -277,7 +277,7 @@ function assertVerifiedSessionSources(
         continue;
       }
       throw new Error(
-        `Retained session migration source changed: ${source.path}. Preserve the current file and its ${source.path}.bak-<pid>-<timestamp> siblings, restore the verified original at ${source.path}, then run openclaw doctor --session-sqlite recover --session-sqlite-all-agents against the same state directory. Canonical SQLite sessions were not replayed.`,
+        `Retained session migration source changed: ${source.path}. Preserve the current file and its ${source.path}.bak-<pid>-<timestamp> siblings, restore the verified original at ${source.path}, then run openclaw doctor --session-sqlite recover --session-sqlite-all-agents against the same state directory. Existing SQLite sessions were not reimported.`,
       );
     }
     verifiedPaths.set(source.path, verifiedPath);
@@ -403,7 +403,7 @@ export function readDeferredPluginSessionImport(
       throw error;
     }
     recordStartupMigrationWarnings([
-      `Retained plugin session source awaits Doctor repair; canonical SQLite sessions remain available: ${String(error)}`,
+      `Retained plugin session source awaits Doctor repair; stored SQLite sessions remain available: ${String(error)}`,
     ]);
   }
   return recorded;

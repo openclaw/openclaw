@@ -426,7 +426,7 @@ describe("legacy exec approvals migration", () => {
     const result = await migrate();
 
     expect(result.warnings).toEqual([]);
-    expect(result.changes).toEqual(["Preserved byte-identical canonical SQLite exec approvals."]);
+    expect(result.changes).toEqual(["Preserved byte-identical existing SQLite exec approvals."]);
     expect(fs.existsSync(sourcePath)).toBe(false);
     expect(receipt()).toMatchObject({ removed_source: 1 });
   });

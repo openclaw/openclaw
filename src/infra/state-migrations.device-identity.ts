@@ -143,7 +143,7 @@ function verifyCanonicalIdentity(
   const { db } = openOpenClawStateDatabase({ env });
   const row = readCanonicalIdentity(db);
   if (!row || classifyCanonicalRow(row, identity) !== "same") {
-    throw new Error("canonical SQLite device identity no longer matches the legacy source");
+    throw new Error("current SQLite device identity no longer matches the legacy source");
   }
 }
 
@@ -165,7 +165,7 @@ function importAndRecordReceipt(params: {
         }
         const existing = readCanonicalIdentity(db);
         if (!existing || classifyCanonicalRow(existing, params.snapshot.identity) !== "same") {
-          throw new Error("migration receipt does not match the canonical device identity");
+          throw new Error("migration receipt does not match the current device identity");
         }
         return { sourceKey, imported: false };
       }
@@ -175,7 +175,7 @@ function importAndRecordReceipt(params: {
         ? classifyCanonicalRow(existing, params.snapshot.identity)
         : undefined;
       if (existingState === "different") {
-        throw new Error("canonical SQLite device identity differs from the legacy identity");
+        throw new Error("current SQLite device identity differs from the legacy identity");
       }
       const imported = !existing || existingState === "invalid";
       const repaired = existingState === "invalid";
@@ -281,7 +281,7 @@ async function cleanupReceiptSources(params: {
       try {
         if (readStoredDeviceIdentityReadOnly({ env: params.env, identityKey: IDENTITY_KEY })) {
           notices.push(
-            `Preserved retired device identity ${candidate}: bytes differ from the migration receipt; the canonical SQLite identity remains authoritative. Archive or delete the file to clear this notice.`,
+            `Preserved retired device identity ${candidate}: bytes differ from the migration receipt; OpenClaw still uses the SQLite identity. Archive or delete the file to clear this notice.`,
           );
           continue;
         }

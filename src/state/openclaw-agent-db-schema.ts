@@ -212,7 +212,7 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
     );
     if (rebuiltIndexes.length > 0) {
       agentDbLog.warn(
-        `Rebuilt canonical agent SQLite indexes for ${agentId} (${pathname}): ${rebuiltIndexes.join(", ")}`,
+        `Rebuilt agent SQLite indexes for ${agentId} (${pathname}): ${rebuiltIndexes.join(", ")}`,
         {
           agentId,
           path: pathname,

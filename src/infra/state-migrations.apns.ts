@@ -400,7 +400,7 @@ export async function migrateLegacyApnsRegistrations(params: {
       );
       if (result.preserved > 0) {
         notices.push(
-          `Preserved ${result.preserved} canonical SQLite APNs registration${result.preserved === 1 ? "" : "s"}.`,
+          `Preserved ${result.preserved} current SQLite APNs registration${result.preserved === 1 ? "" : "s"}.`,
         );
       }
       if (result.suppressed > 0) {

@@ -107,7 +107,7 @@ export function detectLegacyExecApprovals(params: {
   const sourcePresent = legacyMigrationSourceOrClaimMayExist(sourcePath, DOCTOR_CLAIM_SUFFIX);
   return {
     sourcePath,
-    preview: "- Exec approvals: normalize legacy policy into canonical SQLite state",
+    preview: "- Exec approvals: save legacy policy in the current SQLite format",
     hasLegacy:
       params.doctorOnlyStateMigrations === true &&
       (sourcePresent || hasLegacySqliteExecApprovals(env)),
@@ -261,7 +261,7 @@ const decisionMessages: Record<MigrationDecision, string> = {
   "legacy-imported": "Imported legacy exec approvals into shared SQLite state.",
   "invalid-canonical-repaired":
     "Replaced an invalid SQLite exec approvals row with validated legacy state.",
-  "canonical-preserved": "Preserved byte-identical canonical SQLite exec approvals.",
+  "canonical-preserved": "Preserved byte-identical existing SQLite exec approvals.",
   "malformed-legacy-preserved": "Preserved malformed legacy exec approvals for operator recovery.",
   "receipt-authoritative": "Completed cleanup for previously imported legacy exec approvals.",
 };

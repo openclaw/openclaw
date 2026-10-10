@@ -1195,7 +1195,7 @@ describe("createBackupArchive", () => {
 
         try {
           await expect(createStateArchive(outputDir)).rejects.toThrow(
-            /Canonical SQLite path changed after discovery/iu,
+            /Resolved SQLite path changed after discovery/iu,
           );
           expect(retargeted).toBe(true);
           expect(await fs.readdir(outputDir)).toEqual([]);

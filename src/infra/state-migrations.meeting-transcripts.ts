@@ -526,7 +526,7 @@ export async function migrateLegacyMeetingTranscripts(params: {
         );
         if (existing) {
           throw new Error(
-            `legacy transcript conflicts with canonical SQLite state: ${snapshot.relativeDir}`,
+            `legacy transcript conflicts with current SQLite state: ${snapshot.relativeDir}`,
           );
         }
       }

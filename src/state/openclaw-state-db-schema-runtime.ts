@@ -125,7 +125,7 @@ export function ensureOpenClawStateRuntimeSchema(
           writeCurrentStateSchemaMetadata(db, now);
           runtimeReady = true;
           return indexes.length > 0
-            ? [`Rebuilt canonical shared-state SQLite indexes (${indexes.length})`]
+            ? [`Rebuilt shared-state SQLite indexes (${indexes.length})`]
             : [];
         }
 

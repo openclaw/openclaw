@@ -132,7 +132,7 @@ it.each(["none", "matching", "different", "unbound"] as const)(
         const database = openOpenClawStateDatabase({ env: state.env });
         const current = selectAcpSessionRow(database.db, databaseKey);
         await expect(migrate()).rejects.toThrow(
-          "Canonical ACP metadata has a conflicting session binding",
+          "Stored ACP metadata has a conflicting session binding",
         );
         expect(fs.readFileSync(storePath)).toEqual(original);
         expect(selectAcpSessionRow(database.db, databaseKey)).toEqual(current);

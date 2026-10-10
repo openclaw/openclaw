@@ -255,7 +255,7 @@ describe("legacy node-host Doctor migration", () => {
     const result = await migrate();
 
     expect(result.warnings).toEqual([]);
-    expect(result.changes).toContain("Kept newer canonical node-host SQLite state.");
+    expect(result.changes).toContain("Kept newer node-host SQLite state.");
     expect(readCanonicalRow(env)).toMatchObject({
       value: {
         displayName: "Newer Canonical",

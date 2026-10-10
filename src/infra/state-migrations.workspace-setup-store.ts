@@ -334,7 +334,7 @@ export function importAndRecordReceipt(params: {
             existing.workspace_path !== params.source.workspaceDir ||
             existing.version !== WORKSPACE_SETUP_STATE_VERSION
           ) {
-            throw new Error("legacy workspace setup conflicts with canonical SQLite state");
+            throw new Error("legacy workspace setup conflicts with current SQLite state");
           }
           const existingFingerprint = createWorkspaceSetupFingerprint(existing);
           // The canonical record is authoritative even without an import receipt.
@@ -359,7 +359,7 @@ export function importAndRecordReceipt(params: {
             existing?.workspace_path != null &&
             existing.workspace_path !== params.source.workspaceDir
           ) {
-            throw new Error("legacy workspace setup conflicts with canonical SQLite state");
+            throw new Error("legacy workspace setup conflicts with current SQLite state");
           }
           const setupColumns = {
             workspace_path: params.source.workspaceDir,
@@ -435,7 +435,7 @@ export function importAndRecordReceipt(params: {
               fingerprint: existingFingerprint,
             });
             if (!authority) {
-              throw new Error("legacy workspace attestation conflicts with canonical SQLite state");
+              throw new Error("legacy workspace attestation conflicts with current SQLite state");
             }
             // Equal-time markers use source priority only when migration receipts
             // prove which whole snapshot won; hashes are never merged.

@@ -202,7 +202,7 @@ async function planBackupSqliteSources(
     let canonicalSource: CanonicalSqliteSource | undefined;
     if (owner.role !== "plugin") {
       if (!owner.identity || !sameFileIdentity(owner.identity, identity)) {
-        throw new Error(`Canonical SQLite path changed after discovery: ${archiveSourcePath}`);
+        throw new Error(`Resolved SQLite path changed after discovery: ${archiveSourcePath}`);
       }
       canonicalSource = {
         ...owner,
@@ -247,7 +247,7 @@ export async function createBackupSqliteSnapshotPlan(params: {
       canonicalSource &&
       !sameFileIdentity(canonicalSource.identity, await fs.stat(archiveSourcePath))
     ) {
-      throw new Error(`Canonical SQLite path changed after discovery: ${archiveSourcePath}`);
+      throw new Error(`Resolved SQLite path changed after discovery: ${archiveSourcePath}`);
     }
     const sourceDatabasePath = sourceGroup.sourcePath;
     assertNotUpdateCapturePath(archiveSourcePath, params.resources.stateDir);
@@ -340,9 +340,7 @@ export async function createBackupSqliteSnapshotPlan(params: {
   if (globalEntry) {
     globalIdentity = globalEntry.isSymbolicLink() ? await fs.stat(globalPath) : globalEntry;
     if (!globalIdentity.isFile()) {
-      throw new Error(
-        `Canonical global SQLite path must be a regular file or symlink to one: ${globalPath}`,
-      );
+      throw new Error(`Global SQLite path must be a regular file or symlink to one: ${globalPath}`);
     }
     const globalSource: CanonicalSqliteSource = {
       role: "global",
@@ -366,9 +364,7 @@ export async function createBackupSqliteSnapshotPlan(params: {
     for (const sidecar of resolveSqliteDatabaseFilePaths(globalPath).slice(1)) {
       const exists = await fs.lstat(sidecar).catch(ignoreMissingSource);
       if (exists) {
-        throw new Error(
-          `Canonical global SQLite database is missing but a sidecar remains: ${sidecar}`,
-        );
+        throw new Error(`Global SQLite database is missing but a sidecar remains: ${sidecar}`);
       }
     }
   }
@@ -439,7 +435,7 @@ export async function createBackupSqliteSnapshotPlan(params: {
   }
   for (const source of coreDatabases) {
     if (source.identity && !sameFileIdentity(source.identity, await fs.stat(source.sourcePath))) {
-      throw new Error(`Canonical SQLite path changed after discovery: ${source.sourcePath}`);
+      throw new Error(`Resolved SQLite path changed after discovery: ${source.sourcePath}`);
     }
   }
   return { inventory, snapshots, discoveredSourcePaths: discovery.discoveredSourcePaths };

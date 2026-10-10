@@ -236,7 +236,7 @@ function migrateIntoDatabase(params: { env: NodeJS.ProcessEnv; legacy: Canonical
       const row = readConfig();
       const existing = row ? rowToCanonicalState(row) : null;
       if (existing && existing.config.nodeId !== params.legacy.config.nodeId) {
-        throw new Error("legacy node-host nodeId conflicts with canonical SQLite identity");
+        throw new Error("legacy node-host nodeId conflicts with current SQLite identity");
       }
 
       let expected = params.legacy;
@@ -383,7 +383,7 @@ export async function migrateLegacyNodeHostConfig(params: {
 
       changes.push(
         result.preservedCanonical
-          ? "Kept newer canonical node-host SQLite state."
+          ? "Kept newer node-host SQLite state."
           : result.imported
             ? "Migrated node-host config to shared SQLite state."
             : "Verified node-host config in shared SQLite state.",

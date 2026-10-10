@@ -127,8 +127,8 @@ describe("historical transcript directive archive recovery", () => {
       const first = await migrateHistoricalTranscriptDirectives({ env });
       if (copyMissing) {
         const expectedWarnings = [
-          expect.stringContaining("Missing 1 canonical transcript archive file(s)"),
-          `Missing canonical transcript archive copy: ${archivePath}`,
+          expect.stringContaining("Missing 1 transcript archive file(s)"),
+          `Missing transcript archive copy: ${archivePath}`,
         ];
         expect(first.warnings).toEqual(expectedWarnings);
         expect((await migrateHistoricalTranscriptDirectives({ env })).warnings).toEqual(

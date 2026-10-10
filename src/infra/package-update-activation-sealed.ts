@@ -38,7 +38,7 @@ try {
     );
   }
   if (path.resolve(anchor) !== anchor) {
-    throw new Error("Package recovery anchor must be an absolute canonical path.");
+    throw new Error("Package recovery anchor must be an absolute, resolved path.");
   }
   const journal = openPackageActivationJournal(anchor);
   const record = action === "status" ? journal.read() : (await journal.readForRecovery()).record;

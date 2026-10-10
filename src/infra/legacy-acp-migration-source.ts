@@ -89,7 +89,7 @@ export function hasLegacyAcpMigrationCompletion(
   }
   if (receipt.sourceSha256 !== source.sourceSha256) {
     throw new Error(
-      `Retained ACP metadata changed after import in ${source.sourcePath}; resolve the source conflict before rerunning Doctor. Canonical metadata was not replayed.`,
+      `Retained ACP metadata changed after import in ${source.sourcePath}; resolve the source conflict before rerunning Doctor. Existing metadata was not reimported.`,
     );
   }
   return true;

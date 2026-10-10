@@ -229,7 +229,7 @@ describe("Telegram JSON spool Doctor import", () => {
         expect(results[0]?.warnings).toHaveLength(2);
         expect(results[0]?.warningDisposition).toBeUndefined();
         expect(results[0]?.warnings[0]).toContain(
-          "canonical SQLite ingress contains a different event",
+          "current SQLite ingress contains a different event",
         );
         expect(
           results[0]?.warnings.every((warning) => warning.includes("openclaw doctor --fix")),
