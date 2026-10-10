@@ -1960,8 +1960,12 @@ describe("previous release update compatibility", () => {
       const output = writeWindowInventory(createTempDir("update-compat-unsupported-tags-"));
       if (source === "recorded") {
         const inventory = readUpdateCompatibilityInventory(output);
+        const recorded = inventory.releases[0];
+        if (!recorded) {
+          throw new Error("Fixture has no recorded release");
+        }
         inventory.releases.push({
-          ...inventory.releases[0],
+          ...recorded,
           version: "2026.10.1-beta.1",
           schemaVersions: { state: 21, agent: 25 },
           chunks: [],
@@ -2057,8 +2061,13 @@ describe("previous release update compatibility", () => {
     const unsupported = structuredClone(inventory.releases[0]);
     unsupported.version = "2026.10.1-beta.1";
     unsupported.schemaVersions = { state: 21, agent: 25 };
-    unsupported.chunks[0].exports[0].origin.module = "src/cli/update-cli/unsupported.ts";
-    unsupported.chunks.push({ ...unsupported.chunks[0], path: "unsupported-abcdefgh.js" });
+    const chunk = unsupported.chunks[0];
+    const exported = chunk?.exports[0];
+    if (!chunk || !exported) {
+      throw new Error("Fixture has no recorded export");
+    }
+    exported.origin.module = "src/cli/update-cli/unsupported.ts";
+    unsupported.chunks.push({ ...chunk, path: "unsupported-abcdefgh.js" });
     inventory.releases.push(unsupported);
     const root = createTempDir("update-compat-supported-only-");
     candidate(root);

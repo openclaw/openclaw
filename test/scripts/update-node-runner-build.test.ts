@@ -46,7 +46,7 @@ it("loads published updater Node-runner bridges without the replaced dependency 
     const bridges = writeUpdateCompatibilityChunks({
       distDir,
       sourceDir: process.cwd(),
-      inventory: { schemaVersion: 1, releases },
+      inventory: { ...previousReleaseInventory, releases },
     });
     expect(bridges.length).toBeGreaterThan(0);
     const output = execFileSync(
