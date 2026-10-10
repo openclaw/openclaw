@@ -218,7 +218,7 @@ export function buildOpenClawReleaseClawHubRuntimeState(
   if (normalRunId !== undefined && args.forceSkipClawHub) {
     normalProofLine = `- plugin ClawHub publish: not verified after a required ClawHub failure: ${runUrl(repository, normalRunId)}`;
   } else if (normalRunId !== undefined && args.normalPublicationStaged === true) {
-    normalProofLine = `- plugin ClawHub submission: ${runUrl(repository, normalRunId)}; public artifact verification follows successful release-parent completion`;
+    normalProofLine = `- plugin ClawHub submission: ${runUrl(repository, normalRunId)}; public finalization and exact artifact verification follow terminal release-parent completion`;
   } else if (normalRunId !== undefined && args.waitForClawHub) {
     normalProofLine = `- plugin ClawHub publish: ${runUrl(repository, normalRunId)}`;
   } else if (normalRunId !== undefined) {

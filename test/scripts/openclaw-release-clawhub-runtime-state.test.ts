@@ -84,7 +84,7 @@ describe("scripts/openclaw-release-clawhub-runtime-state.ts", () => {
         expect(state.proofLines.normal).not.toContain("ClawHub submission");
       } else {
         expect(state.proofLines.normal).toContain(
-          "public artifact verification follows successful release-parent completion",
+          "public finalization and exact artifact verification follow terminal release-parent completion",
         );
       }
       expect(state.proofLines.normal).toContain("actions/runs/123");
