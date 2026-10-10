@@ -10,7 +10,7 @@ import {
   UI_APPEARANCE_DEFAULTS,
   type ChatSendShortcut,
   type UiSettings,
-} from "./settings.ts";
+} from "./settings-contract.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
 import { normalizeTypefaceOverride } from "./typography.ts";
 

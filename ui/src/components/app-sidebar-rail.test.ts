@@ -102,6 +102,43 @@ describe("personal navigation rail", () => {
     ).toBe("Active run");
   });
 
+  it("keeps Home outbox attention and drafts visible with its run state", async () => {
+    const { sidebar, result, sessions } = await fixture();
+    const mainIndex = result.sessions.findIndex((row) => row.key === "agent:main:main");
+    sessions.publishList({
+      agentId: "main",
+      result: {
+        ...result,
+        sessions: result.sessions.with(mainIndex, {
+          ...result.sessions[mainIndex]!,
+          hasActiveRun: true,
+          status: "running",
+        }),
+      },
+    });
+    sidebar.storedOutboxes = {
+      total: 2,
+      attentionCountForSession: (key) => (key === "agent:main:main" ? 2 : 0),
+      hasSessionDraft: (key) => key === "agent:main:main",
+    };
+    await sidebar.updateComplete;
+    const home = sidebar.querySelector(".sidebar-footer-bar__home")!;
+    expect(home.querySelector(".session-glyph__ring")).not.toBeNull();
+    expect(
+      home.querySelector(".session-row-badge--attention")?.getAttribute("aria-label"),
+    ).toContain("2");
+    expect(home.querySelector(".session-row-badge--draft")).not.toBeNull();
+    sidebar.storedOutboxes = {
+      total: 0,
+      attentionCountForSession: () => 0,
+      hasSessionDraft: () => false,
+    };
+    await sidebar.updateComplete;
+    expect(home.querySelector(".session-row-badge--attention")).toBeNull();
+    expect(home.querySelector(".session-row-badge--draft")).toBeNull();
+    expect(home.querySelector(".session-glyph__ring")).not.toBeNull();
+  });
+
   it("pins and unpins sessions personally without sessions.patch", async () => {
     const { sidebar, sessions } = await fixture();
     const pin = sidebar.querySelector<HTMLButtonElement>(
@@ -111,6 +148,9 @@ describe("personal navigation rail", () => {
     pin!.click();
     await sidebar.updateComplete;
     expect(sidebar.sidebarEntries).toEqual(["session:agent:main:mine"]);
+    expect(pin!.closest(".session-row-host")?.classList.contains("session-row-host--pinned")).toBe(
+      true,
+    );
     expect(
       sidebar.querySelector('.sidebar-rail [data-sidebar-entry="session:agent:main:mine"]'),
     ).not.toBeNull();
@@ -118,6 +158,9 @@ describe("personal navigation rail", () => {
     pin!.click();
     await sidebar.updateComplete;
     expect(sidebar.sidebarEntries).toEqual([]);
+    expect(pin!.closest(".session-row-host")?.classList.contains("session-row-host--pinned")).toBe(
+      false,
+    );
     expect(sessions.sessions.patch).not.toHaveBeenCalled();
   });
 
@@ -169,6 +212,34 @@ describe("personal navigation rail", () => {
     await sidebar.updateComplete;
     expect(sidebar.navigationCatalog.scopesEquivalent).toBe(false);
     expect(sidebar.navigationScope).toBe("mine");
+  });
+
+  it("shows All only for resolved profileless identity without replacing saved Mine", async () => {
+    const { sidebar, gateway } = await fixture();
+    const persist = vi.fn();
+    sidebar.navigationScope = "mine";
+    sidebar.onUpdateNavigationScope = persist;
+    gateway.publish({ selfUser: undefined });
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector('[data-session-key="agent:main:mine"]')).toBeNull();
+    expect(sidebar.querySelector('[data-session-key="agent:main:other"]')).toBeNull();
+    gateway.publish({ selfUser: null });
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector('[data-session-key="agent:main:mine"]')).not.toBeNull();
+    expect(sidebar.querySelector('[data-session-key="agent:main:other"]')).not.toBeNull();
+    expect(sidebar.querySelector('[aria-label="All"]')?.getAttribute("aria-pressed")).toBe("true");
+    expect(sidebar.navigationScope).toBe("mine");
+    expect(persist).not.toHaveBeenCalled();
+    gateway.publish({ selfUser: { id: "self", name: "Self" } });
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector('[data-session-key="agent:main:mine"]')).not.toBeNull();
+    expect(sidebar.querySelector('[data-session-key="agent:main:other"]')).toBeNull();
+    expect(sidebar.querySelector('[aria-label="Mine"]')?.getAttribute("aria-pressed")).toBe("true");
+    expect(sidebar.navigationScope).toBe("mine");
+    expect(persist).not.toHaveBeenCalled();
+    gateway.publish({ phase: "reconnecting", selfUser: undefined });
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector('[data-session-key="agent:main:other"]')).toBeNull();
   });
 
   it("pins a person with native drag and retains a safe destination after they go offline", async () => {

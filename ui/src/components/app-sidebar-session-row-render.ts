@@ -410,7 +410,7 @@ export function renderRecentSession(params: {
     session.archived ? "sidebar-session--archived" : "",
     session.visuallyActive ? "sidebar-recent-session--active" : "",
     host.selectedSessionKeys.has(session.key) ? "sidebar-recent-session--selected" : "",
-    session.pinned ? "session-row-host--pinned" : "",
+    personallyPinned ? "session-row-host--pinned" : "",
     running ? "session-row-host--running" : "",
     session.visibility === "draft" ? "session-row-host--draft" : "",
     session.visibility === "draft"

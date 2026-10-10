@@ -6,7 +6,7 @@ import {
   type ServerUiPrefs,
   type SyncedPrefKey,
 } from "./server-prefs-state.ts";
-import type { UiSettings } from "./settings.ts";
+import type { UiSettings } from "./settings-contract.ts";
 
 type UiPrefIntent = "write" | "server" | "device-local";
 let requestedUiPrefIntents: Partial<Record<SyncedPrefKey, UiPrefIntent>> = {};
@@ -58,6 +58,20 @@ export function changedServerUiPrefs(previous: UiSettings, next: UiSettings): Se
   }
   return Object.keys(prefs).length > 0 ? prefs : null;
 }
+/** The observed base is part of pin intent, not independently acknowledgeable metadata. */
+export function prefIntentMatches(
+  left: ServerUiPrefs,
+  right: ServerUiPrefs,
+  key: SyncedPrefKey,
+): boolean {
+  return (
+    prefValuesEqual(left[key], right[key]) &&
+    (key !== "sidebarEntries" ||
+      (prefValuesEqual(left.sidebarEntriesBase, right.sidebarEntriesBase) &&
+        left.sidebarEntriesOrder === right.sidebarEntriesOrder))
+  );
+}
+
 /** Preserve observations of untouched entries while folding explicit additions/removals. */
 export function foldSidebarEntriesBase(
   base: readonly string[],

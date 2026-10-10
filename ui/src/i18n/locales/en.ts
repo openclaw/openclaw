@@ -32,7 +32,18 @@ export const en: TranslationMap & {
         | "errorSender",
         string
       >;
-    pullRequests: TranslationMap;
+    pullRequests: TranslationMap &
+      Record<
+        | "createPr"
+        | "createPrLabel"
+        | "open"
+        | "draft"
+        | "merged"
+        | "closed"
+        | "rateLimited"
+        | "unavailable",
+        string
+      >;
     processesPanel: TranslationMap;
   };
   configForm: TranslationMap & { sections: TranslationMap };
@@ -3124,32 +3135,12 @@ export const en: TranslationMap & {
       adminRequired: "Administrator access is required to start suggested tasks.",
     },
     pullRequests: {
-      linkLabel: "Pull request #{number}: {title}",
       createPr: "Create PR",
       createPrLabel: "Create a pull request for {branch}",
-      publishPr: "Publish PR",
-      publishing: "Publishing…",
-      publicationRequested: "Requested",
-      retryPublication: "Retry publication",
-      openPublishedPr: "Open PR",
-      cloudPublicationGuidance:
-        "Start a live agent turn and ask it to publish this cloud workspace after reconciliation.",
-      dismiss: "Dismiss pull request #{number}",
-      dismissBranch: "Hide {branch} for this session",
       open: "Open",
       draft: "Draft",
       merged: "Merged",
       closed: "Closed",
-      checks: "CI",
-      checksPassing: "CI checks passing",
-      checksFailing: "CI checks failing",
-      checksPending: "CI checks running",
-      ciMonitoring: "CI monitoring",
-      openChecks: "Open checks on GitHub",
-      checksPassed: "Passed",
-      checksFailed: "Failed",
-      checksRunning: "Running",
-      checksSkipped: "Skipped",
       rateLimited:
         "GitHub API rate limit reached. Pull request status may be out of date until the limit resets.",
       unavailable:

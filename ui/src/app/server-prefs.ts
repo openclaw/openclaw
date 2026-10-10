@@ -2,12 +2,13 @@
 // the approval gate and other devices pick them up. The localStorage mirror gives instant boot and
 // stays authoritative when this client cannot write config (viewer scope, offline). Pending local
 // intent shadows server snapshots until the hash-free LWW ack; failed pushes degrade device-local.
-import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 import { hasOperatorWriteAccess } from "./operator-access.ts";
-import type { ConfirmedPrefsFallback } from "./server-prefs-confirmation.ts";
-import type { ServerUiPrefsWriter, ServerUiPrefsCommit } from "./server-prefs-drain.ts";
-import { mergePendingUiPrefs, resetServerUiPrefIntent } from "./server-prefs-intent.ts";
+import {
+  mergePendingUiPrefs,
+  resetServerUiPrefIntent,
+  prefIntentMatches,
+} from "./server-prefs-intent.ts";
 import {
   rememberProfileAppearanceIdentity,
   resetProfileAppearancePrefs,
@@ -18,7 +19,6 @@ import {
   isNavigationPref,
   clearSidebarEntriesMetadata,
   isProfilePref,
-  prefValuesEqual,
   SYNCED_PREF_KEYS,
   SYNCED_PREFS,
   type ServerUiPrefs,
@@ -33,7 +33,13 @@ import {
   writeRetainedLocalKeys,
   writeStorage,
 } from "./server-prefs-storage.ts";
-import { patchSettings, type UiSettings } from "./settings.ts";
+import type {
+  ServerUiPrefsWriter,
+  ServerUiPrefsCommit,
+  ServerUiPrefsSync,
+} from "./server-prefs-sync-contract.ts";
+import type { UiSettings } from "./settings-contract.ts";
+import { patchSettings } from "./settings.ts";
 
 type ServerUiPrefsPushHooks = {
   afterCommit?: (commit: ServerUiPrefsCommit) => void;
@@ -45,29 +51,6 @@ export type { ServerUiPrefProvenance } from "./server-prefs-state.ts";
 
 const CONFLICT_REDRAIN_DELAY_MS = 1_000;
 const MAX_CONFLICT_REDRAINS = 5;
-// Sole mutable sync owner. Config reconciliation and write operations borrow it when needed.
-export type ServerUiPrefsSync = {
-  applyingServerPrefs: boolean;
-  pendingScope: string;
-  pendingPrefs: ServerUiPrefs | null;
-  pendingPersistedKeys: Set<SyncedPrefKey>;
-  // The active pin operation alone can observe local successors; foreign adoption detaches it.
-  composeSidebar: ((pending: ServerUiPrefs | null, next: ServerUiPrefs) => void) | null;
-  pushWriter: ServerUiPrefsWriter | null;
-  pushScope: string;
-  pushClient: GatewayBrowserClient | null;
-  pushProfileId: string | null;
-  pushCanWrite: boolean;
-  pushAfterCommit: ((commit: ServerUiPrefsCommit) => void) | undefined;
-  pushDraining: boolean;
-  drainRequested: boolean;
-  pushEpoch: number;
-  conflictRedrainTimer: ReturnType<typeof setTimeout> | null;
-  consecutiveConflictRedrains: number;
-  confirmedPrefsFallback: ConfirmedPrefsFallback | null;
-  lastReconciledScope: string | null;
-  lastReconciledConfigObject: unknown;
-};
 export const serverUiPrefsSync: ServerUiPrefsSync = {
   applyingServerPrefs: false,
   pendingScope: "",
@@ -170,20 +153,6 @@ export function cancelPendingKeys(scope: string, keys: readonly SyncedPrefKey[])
 // localStorage pending is a cross-tab merged pool per gateway. Per-key read-merge-write prevents
 // one tab from clobbering sibling offline intent; its ms-scale race is accepted because storage has
 // no CAS and the drain converges through server-side LWW.
-/** The observed base is part of pin intent, not independently acknowledgeable metadata. */
-export function prefIntentMatches(
-  left: ServerUiPrefs,
-  right: ServerUiPrefs,
-  key: SyncedPrefKey,
-): boolean {
-  return (
-    prefValuesEqual(left[key], right[key]) &&
-    (key !== "sidebarEntries" ||
-      (prefValuesEqual(left.sidebarEntriesBase, right.sidebarEntriesBase) &&
-        left.sidebarEntriesOrder === right.sidebarEntriesOrder))
-  );
-}
-
 function mergePendingIntoStorage(ackedBatch: ServerUiPrefs = {}): void {
   const stored = parseStoredPrefs(readStorage(PENDING_KEY, sync.pendingScope)) ?? {};
   for (const key of SYNCED_PREF_KEYS) {

@@ -8,13 +8,8 @@ import {
   readStorageState,
   writeStorage,
 } from "./server-prefs-storage.ts";
+import type { ConfirmedPrefsFallback } from "./server-prefs-sync-contract.ts";
 
-export type ConfirmedPrefsFallback = {
-  scope: string;
-  raw: string | null;
-  prefs: ServerUiPrefs | null;
-  dirty: boolean;
-};
 type ConfirmationOwner = { confirmedPrefsFallback: ConfirmedPrefsFallback | null };
 
 /** LAST_SEEN's snapshot and per-key publication identities share one atomic browser record. */

@@ -1,7 +1,5 @@
 import { sleepWithAbort } from "@openclaw/retry";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ConfigPatchAck } from "../lib/config/config-gateway-operations.ts";
-import type { RuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
 import { readConfirmedPrefs, publishConfirmedPrefs } from "./server-prefs-confirmation.ts";
 import { foldSidebarEntriesBase, hasSidebarOrderIntent } from "./server-prefs-intent.ts";
 import {
@@ -16,26 +14,15 @@ import {
   type ServerUiPrefs,
   type SyncedPrefKey,
 } from "./server-prefs-state.ts";
+import type { ServerUiPrefsSync, ServerUiPrefsWriter } from "./server-prefs-sync-contract.ts";
 import {
   selectProfileUiPrefs,
   removePendingUiPrefsBatch,
   serverUiPrefsCommittedSnapshot,
 } from "./server-prefs-write-batch.ts";
-import type { ServerUiPrefsSync } from "./server-prefs.ts";
-import type { UiSettings } from "./settings.ts";
+import type { UiSettings } from "./settings-contract.ts";
 import { invalidateUserPreferences } from "./user-prefs-cache.ts";
 
-export type ServerUiPrefsWriter = Pick<
-  RuntimeConfigCapability,
-  "canPatch" | "runExternalMutation"
-> & {
-  readonly state: {
-    readonly client: GatewayBrowserClient | null;
-    readonly connected: boolean;
-    readonly configSnapshot?: { readonly config?: unknown } | null;
-  };
-};
-export type ServerUiPrefsCommit = { needsRefresh: boolean; retainedLocal?: boolean };
 type DrainOwner = {
   scheduleConflictRedrain(writer: ServerUiPrefsWriter, epoch: number): void;
   reconcilePersistedPendingPrefs(): void;

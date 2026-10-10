@@ -2,6 +2,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import {
   captureControlUiE2eFailureDiagnostics,
+  controlUiBundledSettingsStorageKey,
   navigateToControlUiSession,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
@@ -111,6 +112,11 @@ suite.define(() => {
         const ownRow = page.locator(`.sidebar-recent-session[data-session-key="${own.key}"]`);
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, own.key));
         await historyText.waitFor();
+        // Both authorized rows are needed to compare own-session writes with shared read-only access.
+        await page
+          .locator(".sidebar-navigation-scope")
+          .getByRole("button", { name: "All", exact: true })
+          .click();
         await ownRow.click({ button: "right" });
         await rename.waitFor();
         await captureUiProof(suite, page, `${name}-owned-menu.png`, menu.locator('[part="menu"]'), [
@@ -215,7 +221,7 @@ suite.define(() => {
           await expect.poll(() => ownRow.textContent()).toContain("Organized workspace");
           await ownRow.hover();
           await ownRow.getByRole("button", { name: "Pin session", exact: true }).click();
-          await waitForPatch(gateway, (params) => params.key === own.key && params.pinned === true);
+          await ownRow.getByRole("button", { name: "Unpin session", exact: true }).waitFor();
           await ownRow.click({ button: "right" });
           await activateSelfRemovingControl(archive);
           await waitForPatch(
@@ -263,9 +269,25 @@ suite.define(() => {
           await page.keyboard.press("Escape");
           await ownRow.hover();
           const pin = ownRow.getByRole("button", { name: "Pin session", exact: true });
-          expect(await pin.isDisabled()).toBe(true);
-          await pin.click({ force: true });
+          // Personal navigation remains available without shared-session mutation authority.
+          expect(await pin.isDisabled()).toBe(false);
+          await pin.click();
+          await ownRow.getByRole("button", { name: "Unpin session", exact: true }).waitFor();
         }
+        const pinRef = `session:${own.key}`;
+        await expect
+          .poll(() => page.locator(`.sidebar-rail [data-sidebar-entry="${pinRef}"]`).count())
+          .toBe(1);
+        await expect
+          .poll(() =>
+            page.evaluate(
+              (key) =>
+                JSON.parse(localStorage.getItem(key) ?? "{}").navigationByProfile?.["scope-reader"]
+                  ?.sidebarEntries,
+              controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+            ),
+          )
+          .toContain(pinRef);
         const forbiddenMethods = new Set([
           "sessions.create",
           "sessions.dispatch",
@@ -276,6 +298,9 @@ suite.define(() => {
           "sessions.catalog.startTerminal",
           "sessions.groups.put",
           "sessions.assignOwner",
+          // Narrow session scopes retain pins locally, without broader profile/config writes.
+          "users.prefs.set",
+          "config.patch",
         ]);
         const requests = await gateway.getRequests();
         if (!canOrganize) {
@@ -295,7 +320,6 @@ suite.define(() => {
             ? [
                 { key: own.key, label: "List workspace" },
                 { key: own.key, label: "Organized workspace" },
-                { key: own.key, pinned: true },
                 { key: own.key, archived: true },
                 { key: own.key, archived: false },
               ]

@@ -39,13 +39,13 @@ import {
   updateRetainedLocalKeys,
   applyServerPrefsPatch,
 } from "./server-prefs.ts";
+import type { UiSettings } from "./settings-contract.ts";
 import {
   loadSettings,
   loadUiPreferences,
   readSettingsForGateway,
   profileNavigation,
   patchSettings,
-  type UiSettings,
 } from "./settings.ts";
 import type { ThemeName } from "./theme.ts";
 

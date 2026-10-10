@@ -136,12 +136,13 @@ export function projectSidebarAgentSessionRows({
   const lineageAgentId = normalizeAgentId(
     parseAgentSessionKey(lineageRoot?.key ?? "")?.agentId ?? "",
   );
-  // Adopted catalog keys render as live rows inside the Coding catalog;
-  // re-inserting one here would show the selected session twice.
+  // Selection can supplement pagination, not Gateway-owned involvement membership.
+  // Adopted catalog keys already render in Coding, so do not duplicate them here.
   const selectedFallback = navigationState.visibleSessionRows.find(
     (session) =>
       (grouped ? inScope(session) : selected === routeAgentId || lineageAgentId === selected) &&
       session.key === navigationState.activeRowKey &&
+      (!host.sessionInvolvingMeFilterActive || rowsByKey.has(session.key)) &&
       !isSessionHidden(session) &&
       !adopted.has(session.key) &&
       !isMainSession(session.key),
@@ -153,6 +154,7 @@ export function projectSidebarAgentSessionRows({
   );
   if (
     lineageRoot &&
+    (!host.sessionInvolvingMeFilterActive || rowsByKey.has(lineageRoot.key)) &&
     !isSessionHidden(lineageRoot) &&
     (areUiSessionKeysEquivalent(lineageRoot.key, navigationState.routeSessionKey) ||
       sessionMatchesArchivedFilter(lineageRoot, host.sessionsStatusFilter)) &&

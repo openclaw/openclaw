@@ -17,6 +17,10 @@ it.each([
     load: () => import("../features/github-connections/github-connections.ts"),
   },
   {
+    surface: "CI details",
+    load: () => import("../pages/chat/components/chat-ci-details.ts"),
+  },
+  {
     surface: "identity",
     load: () => import("../features/github-connections/github-identity-view.ts"),
   },
@@ -26,6 +30,11 @@ it.each([
   });
   const connections = en.githubConnections;
   const publication = en.githubPublication;
+  const pullRequests = en.chat.pullRequests;
+  expect(pullRequests.publishPr).toBeUndefined();
+  expect(manager.t("chat.pullRequests.open")).toBe("Open");
+  expect(manager.t("chat.pullRequests.createPr")).toBe("Create PR");
+  expect(pullRequests.checksPassed).toBeUndefined();
   expect(connections.manage).toBeUndefined();
   expect(publication.failedAttempt).toBeUndefined();
   expect(manager.t("githubPublication.newAction")).toBe("Choose a new publication");
@@ -41,11 +50,17 @@ it.each([
   expect(en.githubPublication).toBe(publication);
   expect(manager.t("githubConnections.manage")).toBe("Verbindungen verwalten");
   expect(manager.t("githubPublication.failedAttempt")).toBe("Publication attempt failed");
+  expect(en.chat.pullRequests).toBe(pullRequests);
+  expect(manager.t("chat.pullRequests.publishPr")).toBe("Publish PR");
+  expect(manager.t("chat.pullRequests.checksPassing")).toBe("CI checks passing");
+  expect(manager.t("chat.pullRequests.checksPassed")).toBe("Passed");
   expect(manager.t("githubPublication.sharedUnavailable.changed")).toBe(
     "The Gateway GitHub account changed. Reload and retry publication.",
   );
   const { registerGitHubEnglish } = await import("./locales/en-github.ts");
   registerGitHubEnglish();
+  expect(en.chat.pullRequests).toBe(pullRequests);
+  expect(manager.t("chat.pullRequests.open")).toBe("Open");
   expect(en.githubConnections).toBe(connections);
   expect(en.githubPublication).toBe(publication);
   expect(manager.t("githubConnections.manage")).toBe("Verbindungen verwalten");

@@ -27,6 +27,7 @@ import { renderShortcutHint } from "./kbd.ts";
 import { renderNewSessionLink } from "./new-session-link.ts";
 import { HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import { renderSessionLeadingState } from "./session-leading-indicator.ts";
+import { renderSessionRowBadges } from "./session-row-badges.ts";
 import { formatSidebarBuildSubtitle } from "./sidebar-build-chip-format.ts";
 import { renderThemeBrandIcon } from "./theme-brand-icon.ts";
 
@@ -266,6 +267,7 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
             @click=${() => window.dispatchEvent(new CustomEvent(HOME_PANEL_TOGGLE_EVENT))}
           >
             ${home ? renderSessionLeadingState(home, undefined, "owned", undefined, undefined, false, html`<span class="nav-item__icon" aria-hidden="true">${icons.home}</span>`).leadingIndicator : icons.home}
+            ${home ? renderSessionRowBadges({ outboxAttentionCount: home.outboxAttentionCount, hasComposerDraft: home.hasComposerDraft }) : nothing}
           </button></openclaw-tooltip
         >`}
         <openclaw-sidebar-attention

@@ -1,14 +1,33 @@
 import type { SessionsListResult } from "../api/types.ts";
 import { parseSidebarEntry, serializeSidebarEntry } from "../app-navigation.ts";
+import type { ApplicationContext } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
+import type { SessionListSnapshot } from "../lib/sessions/session-capability.ts";
 import { showToast } from "../lib/toast.ts";
 import { buildReconciledSidebarZone } from "./app-sidebar-session-navigation-logic.ts";
-import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
+import type { SidebarSessionNavigationState } from "./app-sidebar-session-navigation-logic.ts";
 import { applySidebarSessionOwnerFilter } from "./app-sidebar-session-ownership.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 
+type PersonalNavigationHost = {
+  readonly isConnected: boolean;
+  personalNavigationEpoch: number;
+  readonly activeRouteId?: string;
+  readonly navigationView: string;
+  readonly effectiveNavigationScope: "mine" | "all";
+  readonly sidebarEntries: readonly string[];
+  readonly sessionOwnerFilterId: string | null;
+  readonly sessionDataContext: Pick<ApplicationContext, "sessions" | "gateway"> | undefined;
+  readonly navigationCatalog: { readonly dashboards: SessionListSnapshot | null };
+  getRouteSessionKey(): string;
+  getSessionNavigationState(): SidebarSessionNavigationState;
+  selectSession(key: string, agentId?: string, row?: SidebarRecentSession): void;
+  findSidebarSessionByKey(key: string): SidebarRecentSession | undefined;
+  pluginNavigation(): Parameters<typeof buildReconciledSidebarZone>[0]["pluginNavigation"];
+};
+
 export async function openPersonalPinnedSession(
-  host: AppSidebarSessionNavigationElement,
+  host: PersonalNavigationHost,
   sessionKey: string,
 ): Promise<void> {
   const epoch = ++host.personalNavigationEpoch;
@@ -50,10 +69,7 @@ export async function openPersonalPinnedSession(
   }
 }
 
-export function personalSidebarZone(
-  host: AppSidebarSessionNavigationElement,
-  rows: SidebarRecentSession[],
-) {
+export function personalSidebarZone(host: PersonalNavigationHost, rows: SidebarRecentSession[]) {
   const pins = host.sidebarEntries.flatMap((value) => {
     const entry = parseSidebarEntry(value);
     const catalogRow =
@@ -86,18 +102,26 @@ export function projectUnpinnedSessionRows(
 }
 
 export function personalSidebarOwnerProjection(
-  host: AppSidebarSessionNavigationElement,
+  host: PersonalNavigationHost,
   projected: SidebarRecentSession[],
   ownerFacet: SessionsListResult["owners"],
 ) {
-  const self = host.sessionDataContext?.gateway.snapshot.selfUser;
+  const context = host.sessionDataContext;
+  const self = context?.gateway.snapshot.selfUser;
+  const presentation = context?.sessions.presentation;
+  const profileId =
+    self?.id ??
+    (context?.gateway.snapshot.phase !== "connected"
+      ? (presentation?.profileId ?? undefined)
+      : undefined);
   const result = applySidebarSessionOwnerFilter({
     projected,
     ownerFacet,
-    selectedOwnerId: host.sessionOwnerFilterId,
-    selectedProfileId: host.navigationScope === "mine" ? self?.id : undefined,
+    selectedOwnerId:
+      host.effectiveNavigationScope === "mine" ? (profileId ?? null) : host.sessionOwnerFilterId,
+    selectedProfileId: host.effectiveNavigationScope === "mine" ? profileId : undefined,
     self,
   });
-  // Do not flash All's cached rows while the current human is still unknown.
-  return host.navigationScope === "mine" && !self?.id ? { ...result, rows: [] } : result;
+  // Retained rows use their admitted profile, not unresolved live identity or another account.
+  return host.effectiveNavigationScope === "mine" && !profileId ? { ...result, rows: [] } : result;
 }

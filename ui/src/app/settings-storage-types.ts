@@ -1,4 +1,4 @@
-import type { UiSettings } from "./settings.ts";
+import type { UiSettings } from "./settings-contract.ts";
 
 // The existing gateway-scoped browser record; profile snapshots contain references only.
 export type ScopedSessionSelection = {

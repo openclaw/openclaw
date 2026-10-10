@@ -125,7 +125,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     this,
     () => this.context,
     () =>
-      this.navigationScope === "all"
+      this.effectiveNavigationScope === "all"
         ? this.context?.sessions.listSnapshot(
             this.sessionData.sessionListQuery(this.expandedAgentId()),
           )
@@ -194,13 +194,13 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   }
 
   get sessionOwnerFilterId(): string | null {
-    return this.navigationScope === "mine"
+    return this.effectiveNavigationScope === "mine"
       ? (this.context?.gateway.snapshot.selfUser?.id ?? null)
       : this.sessionOwnerFilter.ownerId;
   }
 
   get sessionInvolvingMeFilterActive(): boolean {
-    return this.navigationScope !== "mine" && this.sessionOwnerFilter.involvingMe;
+    return this.effectiveNavigationScope !== "mine" && this.sessionOwnerFilter.involvingMe;
   }
 
   sessionOwnerOptions: readonly SessionOwnerOption[] = [];
@@ -670,7 +670,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       () => [
         ...sidebarRowsInputs(this, navigationState),
         this.sidebarEntries,
-        this.navigationScope,
+        this.effectiveNavigationScope,
       ],
       () => {
         const roster = this.groupedSessionSource;

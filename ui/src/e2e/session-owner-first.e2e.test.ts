@@ -71,19 +71,37 @@ suite.define(() => {
       expect(subscribe.params).toEqual({});
       const roster = await gateway.waitForRequest("sessions.list", { match: rosterMatch });
       expect(roster.params).toEqual(
-        expect.objectContaining({ ownerFirst: true, limit: SIDEBAR_SESSION_ROSTER_LIMIT }),
+        expect.objectContaining({
+          ownerFirst: true,
+          limit: SIDEBAR_SESSION_ROSTER_LIMIT,
+        }),
       );
       const adaRow = page.locator('[data-session-key="agent:main:ada"]');
       const bobRow = page.locator('[data-session-key="agent:main:bob"]');
-      // The selected session has an optimistic placeholder before roster hydration.
+      // The selected session can resolve independently while the roster is deferred.
       await expect.poll(() => adaRow.count()).toBe(1);
       await expect.poll(() => bobRow.count()).toBe(0);
       expect(await gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(1);
 
       await gateway.resolveDeferred("sessions.list");
       await adaRow.waitFor();
-      await bobRow.waitFor();
+      // Mine hydrates only the current human; a foreign row requires an explicit All choice.
+      expect(await bobRow.count()).toBe(0);
       expect(await gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(1);
+      await page
+        .locator(".sidebar-navigation-scope")
+        .getByRole("button", { name: "All", exact: true })
+        .click();
+      const allRoster = await gateway.waitForRequest("sessions.list", {
+        after: 1,
+        match: rosterMatch,
+      });
+      expect(allRoster.params).toEqual(
+        expect.objectContaining({ ownerFirst: true, limit: SIDEBAR_SESSION_ROSTER_LIMIT }),
+      );
+      expect(allRoster.params).not.toHaveProperty("ownerId");
+      await bobRow.waitFor();
+      expect(await gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(2);
       await captureSidebar(page, "owner-first-bootstrap.png");
     } finally {
       await context.close();

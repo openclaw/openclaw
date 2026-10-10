@@ -114,6 +114,11 @@ suite.define(() => {
             }
             markdown = await text(stream);
           } else {
+            // Keep this transcript ownerless: selecting All must not attribute it to the viewer.
+            await page
+              .locator(".sidebar-navigation-scope")
+              .getByRole("button", { name: "All", exact: true })
+              .click();
             const row = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
             await row.hover();
             await row.click({ button: "right" });

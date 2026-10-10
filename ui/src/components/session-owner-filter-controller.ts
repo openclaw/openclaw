@@ -20,6 +20,7 @@ export class SessionOwnerFilterController implements ReactiveController {
   private scope: string | null = null;
   private previous?: SidebarSessionOwnerFilter & { scope: string | null };
   private pendingFacetRefresh: Promise<void> | null = null;
+  private userIntent = false;
 
   constructor(
     private readonly host: ReactiveControllerHost & {
@@ -28,6 +29,7 @@ export class SessionOwnerFilterController implements ReactiveController {
       sessionData: {
         resetSessionList(): void;
         refreshSidebarSessions(): Promise<void>;
+        scheduleSidebarSessions(): Promise<void>;
       };
     },
     private readonly getContext: () => SessionOwnerFilterContext | undefined,
@@ -39,8 +41,8 @@ export class SessionOwnerFilterController implements ReactiveController {
   }
 
   hostConnected(): void {
-    // Restore before SessionDataController subscribes its initial list. Startup
-    // scheduling stays with that owner rather than issuing a second refresh.
+    // Restore before SessionDataController subscribes its initial list; its queue
+    // owns automatic reads while selected-chat startup remains unresolved.
     this.restore();
   }
 
@@ -55,14 +57,20 @@ export class SessionOwnerFilterController implements ReactiveController {
     const previous = this.previous;
     const current = { ...this.host.sidebarSessionOwnerFilter(), scope: this.scope };
     this.previous = current;
+    const userIntent = this.userIntent;
+    this.userIntent = false;
     if (
-      previous &&
-      (previous.ownerId !== current.ownerId ||
-        previous.involvingMe !== current.involvingMe ||
-        previous.scope !== current.scope)
+      !previous ||
+      previous.ownerId !== current.ownerId ||
+      previous.involvingMe !== current.involvingMe ||
+      previous.scope !== current.scope
     ) {
-      this.host.sessionData.resetSessionList();
-      const pending = this.host.sessionData.refreshSidebarSessions();
+      if (previous) {
+        this.host.sessionData.resetSessionList();
+      }
+      const pending = userIntent
+        ? this.host.sessionData.refreshSidebarSessions()
+        : this.host.sessionData.scheduleSidebarSessions();
       this.pendingFacetRefresh = pending;
       void pending.finally(() => {
         if (this.pendingFacetRefresh === pending) {
@@ -84,19 +92,28 @@ export class SessionOwnerFilterController implements ReactiveController {
       this.ownerId &&
       !facet.result.owners.some((owner) => owner.id === this.ownerId)
     ) {
-      this.set(null);
+      this.set(null, false, { automatic: true });
     }
   }
 
   hostDisconnected(): void {
     this.previous = undefined;
     this.pendingFacetRefresh = null;
+    this.userIntent = false;
   }
 
-  set(ownerId: string | null, involvingMe = false): void {
+  markUserIntent(): void {
+    this.restore();
+    this.userIntent = true;
+  }
+
+  set(ownerId: string | null, involvingMe = false, options?: { automatic: true }): void {
     this.restore();
     this.ownerId = involvingMe ? null : ownerId?.trim() || null;
     this.involvingMe = involvingMe;
+    if (!options?.automatic) {
+      this.markUserIntent();
+    }
     const context = this.getContext();
     const selfUserId = context?.gateway.snapshot.selfUser?.id.trim();
     if (context && selfUserId) {
@@ -119,6 +136,7 @@ export class SessionOwnerFilterController implements ReactiveController {
       return;
     }
     this.scope = nextScope;
+    this.userIntent = false;
     const stored =
       context && selfUserId
         ? loadStoredSidebarSessionOwnerFilter(context.gateway.connection.gatewayUrl, selfUserId)

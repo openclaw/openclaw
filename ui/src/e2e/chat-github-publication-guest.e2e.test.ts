@@ -15,6 +15,7 @@ import {
   reconnectMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { openDetailsPullRequests } from "./chat-details.test-support.ts";
 import { publicationMethods } from "./chat-github-publication.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -135,6 +136,7 @@ suite.define(() => {
       } satisfies SessionGitHubStatusResult;
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await page.getByText(historyText, { exact: true }).waitFor();
+      await openDetailsPullRequests(page);
       const discovered = await gateway.waitForRequest("sessions.github.options");
       expect(discovered.params).toEqual({ sessionKey, agentId: "main" });
       const publish = page.getByRole("button", { name: "Publish PR", exact: true });
@@ -174,12 +176,14 @@ suite.define(() => {
       const previousOptions = (await gateway.getRequests("sessions.github.options")).length;
       await reconnectMockGateway(page, gateway);
       await gateway.waitForRequest("sessions.github.options", { after: previousOptions });
+      await openDetailsPullRequests(page);
       await expect.poll(() => openPr.getAttribute("href")).toBe(receipt.result.url);
       await expectNoPersonalActions(page);
       expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(1);
       expect(await gateway.getRequests("sessions.github.confirm")).toHaveLength(0);
       expect(await gateway.getRequests(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD)).toHaveLength(0);
       await page.reload();
+      await openDetailsPullRequests(page);
       await gateway.waitForRequest("sessions.github.options");
       await expect.poll(() => openPr.getAttribute("href")).toBe(receipt.result.url);
       await screenshot(page, "04-guest-recovered.png");
@@ -195,6 +199,7 @@ suite.define(() => {
         const gateway = await installGuestGateway(page, hasWorkspace, null);
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await page.getByText(historyText, { exact: true }).waitFor();
+        await openDetailsPullRequests(page);
         await gateway.waitForRequest("sessions.github.options");
         expect(await page.getByRole("button", { name: "Publish PR", exact: true }).count()).toBe(0);
         await expectNoPersonalActions(page);
@@ -206,6 +211,7 @@ suite.define(() => {
           const previousOptions = (await gateway.getRequests("sessions.github.options")).length;
           await reconnectMockGateway(page, gateway);
           await gateway.waitForRequest("sessions.github.options", { after: previousOptions });
+          await openDetailsPullRequests(page);
           await expect
             .poll(() => page.getByRole("button", { name: "Publish PR", exact: true }).count())
             .toBe(1);

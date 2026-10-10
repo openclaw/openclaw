@@ -2,6 +2,38 @@ import type { TranslationMap } from "../lib/types.ts";
 import { en } from "./en.ts";
 
 const enGitHub = {
+  chat: {
+    pullRequests: {
+      linkLabel: "Pull request #{number}: {title}",
+      createPr: en.chat.pullRequests.createPr,
+      createPrLabel: en.chat.pullRequests.createPrLabel,
+      publishPr: "Publish PR",
+      publishing: "Publishing…",
+      publicationRequested: "Requested",
+      retryPublication: "Retry publication",
+      openPublishedPr: "Open PR",
+      cloudPublicationGuidance:
+        "Start a live agent turn and ask it to publish this cloud workspace after reconciliation.",
+      dismiss: "Dismiss pull request #{number}",
+      dismissBranch: "Hide {branch} for this session",
+      open: en.chat.pullRequests.open,
+      draft: en.chat.pullRequests.draft,
+      merged: en.chat.pullRequests.merged,
+      closed: en.chat.pullRequests.closed,
+      checks: "CI",
+      checksPassing: "CI checks passing",
+      checksFailing: "CI checks failing",
+      checksPending: "CI checks running",
+      ciMonitoring: "CI monitoring",
+      openChecks: "Open checks on GitHub",
+      checksPassed: "Passed",
+      checksFailed: "Failed",
+      checksRunning: "Running",
+      checksSkipped: "Skipped",
+      rateLimited: en.chat.pullRequests.rateLimited,
+      unavailable: en.chat.pullRequests.unavailable,
+    },
+  },
   githubPublication: {
     personal: "My GitHub",
     system: "System",
@@ -175,6 +207,7 @@ const enGitHub = {
 
 export const registerGitHubEnglish = Object.assign(
   () => {
+    Object.assign(en.chat.pullRequests, enGitHub.chat.pullRequests);
     Object.assign(en.agentTools, enGitHub.agentTools);
     Object.assign(en.githubPublication, enGitHub.githubPublication);
     Object.assign(en.githubConnections, enGitHub.githubConnections);

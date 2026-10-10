@@ -39,7 +39,6 @@ import { reconcileSidebarZone } from "../lib/sidebar-zone.ts";
 import { pluginTabKey } from "../pages/plugin/route.ts";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
 import { sidebarPluginTabs } from "./app-sidebar-nav-menus.ts";
-import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import {
   SIDEBAR_SESSION_NO_ATTENTION,
   type SidebarRecentSession,
@@ -507,19 +506,23 @@ export function findProjectedSidebarSession(input: {
 
 /** Live canonical requests outlive a paginated row, but never supply its old private metadata. */
 export function projectSidebarVisibleMainSession(
-  host: Pick<
-    AppSidebarSessionNavigationElement,
-    | "mainSessionRow"
-    | "projectHomeSession"
-    | "selectedAgentMainSessionKey"
-    | "navigationScope"
-    | "sessionOwnerFilterActive"
-    | "sessionInvolvingMeFilterActive"
-    | "sessionsStatusFilter"
-    | "sessionDataContext"
-    | "getSessionNavigationState"
-    | "resolveSessionAttention"
-  >,
+  host: {
+    mainSessionRow(agentId: string): GatewaySessionRow | null;
+    projectHomeSession(
+      row: GatewaySessionRow,
+      agentId: string,
+    ): SidebarRecentSession & { metadataVisible: boolean };
+    selectedAgentMainSessionKey(agentId: string): string;
+    readonly effectiveNavigationScope: "mine" | "all";
+    readonly sessionOwnerFilterActive: boolean;
+    readonly sessionInvolvingMeFilterActive: boolean;
+    readonly sessionsStatusFilter: SidebarSessionStatusFilter;
+    readonly sessionDataContext: Pick<ApplicationContext, "sessions"> | undefined;
+    getSessionNavigationState(): SidebarSessionNavigationState;
+    resolveSessionAttention(
+      row: Pick<GatewaySessionRow, "key" | "agentId">,
+    ): SidebarRecentSession["attention"];
+  },
   agentId: string,
 ): SidebarRecentSession | null {
   const row = host.mainSessionRow(agentId);
@@ -529,7 +532,7 @@ export function projectSidebarVisibleMainSession(
   }
   const key = host.selectedAgentMainSessionKey(agentId);
   if (
-    host.navigationScope === "mine" ||
+    host.effectiveNavigationScope === "mine" ||
     host.sessionOwnerFilterActive ||
     host.sessionInvolvingMeFilterActive ||
     (host.sessionsStatusFilter !== "active" && host.sessionsStatusFilter !== "all") ||

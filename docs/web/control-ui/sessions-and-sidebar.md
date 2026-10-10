@@ -43,6 +43,11 @@ extra scope control is hidden. Other people going offline, an incomplete roster,
 or a partially loaded page does not establish that equivalence. Your preferred
 scope is retained if the control temporarily disappears.
 
+While your identity is still loading, Mine does not display another person’s
+cached sessions. A connection confirmed to have no durable profile displays All
+instead, without replacing your saved Mine preference. If your profile becomes
+available, its preferred scope applies again.
+
 ### Personal navigation storage
 
 For authenticated profiles with write access, pin references, their order, and

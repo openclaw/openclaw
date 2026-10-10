@@ -39,7 +39,7 @@ async function mountDefaultMine(
   savedAllFilter?: SidebarSessionOwnerFilter,
 ) {
   const gateway = createGatewayHarness({} as GatewayBrowserClient);
-  gateway.publish({ selfUser: selfAvailable ? { id: "viewer", name: "Viewer" } : null });
+  gateway.publish({ selfUser: selfAvailable ? { id: "viewer", name: "Viewer" } : undefined });
   const harness = createSessionsHarness("main", [
     "agent:main:mine",
     "agent:main:other",
@@ -73,6 +73,38 @@ async function mountDefaultMine(
 }
 
 describe("personal Sessions view preferences", () => {
+  it.each([true, false])(
+    "uses only the admitted presentation profile for offline Mine rows, never unresolved live identity (cached: %s)",
+    async (resultCached) => {
+      const { sidebar, gateway, harness } = await mountDefaultMine(false);
+      const persist = vi.fn();
+      sidebar.onUpdateNavigationScope = persist;
+      const presentation = {
+        ...harness.sessions.presentation,
+        resultCached,
+        profileId: "viewer",
+      };
+      vi.spyOn(harness.sessions, "presentation", "get").mockReturnValue(presentation);
+      gateway.publish({ phase: "connecting" });
+      await settleLitElement(sidebar);
+      expect(sidebar.querySelector('[data-session-key="agent:main:mine"]')).not.toBeNull();
+      expect(sidebar.querySelector('[data-session-key="agent:main:other"]')).toBeNull();
+      expect(sidebar.querySelector('[data-session-key="agent:main:agent-owned"]')).toBeNull();
+      expect(sidebar.navigationScope).toBe("mine");
+      expect(persist).not.toHaveBeenCalled();
+      gateway.publish({ phase: "connected", selfUser: undefined });
+      await settleLitElement(sidebar);
+      expect(sidebar.querySelectorAll(".sidebar-session-content [data-session-key]")).toHaveLength(
+        0,
+      );
+      gateway.publish({ selfUser: { id: "other", name: "Other" } });
+      await settleLitElement(sidebar);
+      expect(sidebar.querySelector('[data-session-key="agent:main:mine"]')).toBeNull();
+      expect(sidebar.querySelector('[data-session-key="agent:main:other"]')).not.toBeNull();
+      expect(persist).not.toHaveBeenCalled();
+    },
+  );
+
   it("renders an initial Mine preference by human ownership and retains it across view switches", async () => {
     const { sidebar } = await mountDefaultMine(true);
     const onScope = vi.fn();
@@ -107,6 +139,32 @@ describe("personal Sessions view preferences", () => {
     await settleLitElement(sidebar);
     expect(onScope).toHaveBeenCalledWith("all");
     expect(sidebar.querySelector('[data-session-key="agent:main:other"]')).not.toBeNull();
+  });
+});
+
+describe("profileless retained Sessions view", () => {
+  it("keeps resolved profileless rows offline without writing Mine and closes them for unresolved identity", async () => {
+    const { sidebar, gateway } = await mountDefaultMine(false);
+    const persist = vi.fn();
+    sidebar.onUpdateNavigationScope = persist;
+    gateway.publish({ selfUser: null });
+    await settleLitElement(sidebar);
+    expect(sidebar.querySelector('[data-session-key="agent:main:other"]')).not.toBeNull();
+    for (const phase of ["reconnecting", "offline"] as const) {
+      gateway.publish({ phase });
+      await settleLitElement(sidebar);
+      expect(sidebar.querySelector('[data-session-key="agent:main:other"]')).not.toBeNull();
+      expect(sidebar.querySelector('[aria-label="All"]')?.getAttribute("aria-pressed")).toBe(
+        "true",
+      );
+      expect(sidebar.navigationScope).toBe("mine");
+      expect(persist).not.toHaveBeenCalled();
+    }
+    gateway.publish({ phase: "reconnecting", selfUser: undefined });
+    await settleLitElement(sidebar);
+    expect(sidebar.querySelectorAll(".sidebar-session-content [data-session-key]")).toHaveLength(0);
+    expect(sidebar.navigationScope).toBe("mine");
+    expect(persist).not.toHaveBeenCalled();
   });
 });
 

@@ -12,6 +12,7 @@
   display: flex;
   flex-direction: column;
   flex: 0 0 var(--shell-nav-rail-width, 52px);
+  min-width: 0;
   min-height: 0;
   padding: 8px 4px;
   gap: 12px;
@@ -116,22 +117,50 @@
   height: 36px;
 }
 
+.sidebar-footer-bar__home {
+  position: relative;
+}
+
+/* Home keeps its centered activity glyph; compact badges never move the rail. */
+.sidebar-footer-bar__home .session-row-badges {
+  position: absolute;
+  inset-block-end: 0;
+  inset-inline-end: 0;
+  gap: 2px;
+  padding: 1px;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+
+.sidebar-footer-bar__home .session-row-badge svg {
+  width: 10px;
+  height: 10px;
+}
+
+/* The tooltip and accessible label retain the full outbox count. */
+.sidebar-footer-bar__home .session-row-badge--attention > span {
+  display: none;
+}
+
+/* Reordering owns a separate hit area below the shortcut, never its glyph. */
 .sidebar-rail__pin {
   display: flex;
+  flex-direction: column;
   position: relative;
   width: 36px;
-  height: 36px;
+  min-height: 60px;
   flex: 0 0 auto;
 }
 
 .sidebar-rail .sidebar-rail__pin > .sidebar-reorder-menu {
-  position: absolute;
-  inset: 0 0 auto auto;
+  position: static;
 }
 
 .sidebar-rail__pin .sidebar-reorder-trigger {
-  width: 14px;
-  height: 18px;
+  width: 36px;
+  height: 24px;
+  min-height: 24px;
+  flex: none;
   padding: 0;
   opacity: 0;
 }
@@ -207,6 +236,10 @@ html:is(.openclaw-native-desktop, .openclaw-native-macos)
   .sidebar-rail__button {
     width: 44px;
     height: 44px;
+  }
+
+  .sidebar-rail__pin .sidebar-reorder-trigger {
+    opacity: 1;
   }
 
   .sidebar-pages__pin {

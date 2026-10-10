@@ -1,3 +1,4 @@
+import { prefIntentMatches } from "./server-prefs-intent.ts";
 // Write-only algorithms load with the existing async preference drain, not the boot mirror.
 import { extractServerUiPrefs } from "./server-prefs-reconcile.ts";
 import {
@@ -8,7 +9,6 @@ import {
   type ServerUiPrefs,
   type SyncedPrefKey,
 } from "./server-prefs-state.ts";
-import { prefIntentMatches } from "./server-prefs.ts";
 
 /** Rebase only authored membership/order changes, preserving unseen remote pins and removals. */
 export function rebaseSidebarEntries(

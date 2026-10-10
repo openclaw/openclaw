@@ -27,14 +27,14 @@ afterEach(() => {
   }
 });
 
-function fixture() {
+function fixture(initialMine = false) {
   const context = {
     gateway: {
       connection: { gatewayUrl: "wss://one.example/ws" },
       snapshot: { selfUser: { id: "profile-ada" } as { id: string } | null },
     },
   };
-  let mine = false;
+  let mine = initialMine;
   let facet: SessionListSnapshot | undefined;
   const host = {
     isConnected: true,
@@ -49,6 +49,7 @@ function fixture() {
     sessionData: {
       resetSessionList: vi.fn(),
       refreshSidebarSessions: vi.fn(() => Promise.resolve()),
+      scheduleSidebarSessions: vi.fn(() => Promise.resolve()),
     },
   };
   const controller = new SessionOwnerFilterController(
@@ -65,8 +66,11 @@ function fixture() {
     controller,
     context,
     update,
-    mine: (value: boolean) => {
+    mine: (value: boolean, userIntent = true) => {
       mine = value;
+      if (userIntent) {
+        controller.markUserIntent();
+      }
       update();
     },
     facet: (value: SessionListSnapshot) => {
@@ -86,6 +90,52 @@ function ownerFacet(id: string): SessionListSnapshot {
 }
 
 describe("SessionOwnerFilterController", () => {
+  it("schedules initial Mine and programmatic scope changes but immediately refreshes explicit changes", () => {
+    const { controller, host, update, mine } = fixture(true);
+    controller.hostConnected();
+    update();
+    expect(host.sidebarSessionOwnerFilter()).toEqual({
+      ownerId: "profile-ada",
+      involvingMe: false,
+    });
+    expect(host.sessionData.scheduleSidebarSessions).toHaveBeenCalledOnce();
+    expect(host.sessionData.resetSessionList).not.toHaveBeenCalled();
+    expect(host.sessionData.refreshSidebarSessions).not.toHaveBeenCalled();
+
+    mine(false, false);
+    expect(host.sessionData.scheduleSidebarSessions).toHaveBeenCalledTimes(2);
+    expect(host.sessionData.refreshSidebarSessions).not.toHaveBeenCalled();
+    mine(true);
+    expect(host.sessionData.refreshSidebarSessions).toHaveBeenCalledOnce();
+    mine(false, false);
+    expect(host.sessionData.scheduleSidebarSessions).toHaveBeenCalledTimes(3);
+    expect(host.sessionData.refreshSidebarSessions).toHaveBeenCalledOnce();
+  });
+
+  it.each(["no query change", "replacement profile", "disconnected host"])(
+    "does not carry explicit intent into later automatic work after %s",
+    (retirement) => {
+      const { controller, host, context, update } = fixture(true);
+      controller.hostConnected();
+      update();
+      controller.markUserIntent();
+      if (retirement === "no query change") {
+        update();
+      } else if (retirement === "disconnected host") {
+        controller.hostDisconnected();
+        controller.hostConnected();
+      }
+      context.gateway.snapshot.selfUser = { id: "replacement-profile" };
+      update();
+      expect(host.sessionData.refreshSidebarSessions).not.toHaveBeenCalled();
+      expect(host.sessionData.scheduleSidebarSessions).toHaveBeenCalledTimes(2);
+      expect(host.sidebarSessionOwnerFilter()).toEqual({
+        ownerId: "replacement-profile",
+        involvingMe: false,
+      });
+    },
+  );
+
   it.each([
     { ownerId: "owner-bob", involvingMe: false },
     { ownerId: null, involvingMe: true },
@@ -100,6 +150,7 @@ describe("SessionOwnerFilterController", () => {
       update();
       update();
       expect(host.sessionData.refreshSidebarSessions).not.toHaveBeenCalled();
+      expect(host.sessionData.scheduleSidebarSessions).toHaveBeenCalledOnce();
       mine(true);
       expect(host.sidebarSessionOwnerFilter()).toEqual({
         ownerId: "profile-ada",
@@ -159,18 +210,20 @@ describe("SessionOwnerFilterController", () => {
       involvingMe: false,
     });
     const pending = createDeferred();
-    host.sessionData.refreshSidebarSessions.mockReturnValueOnce(pending.promise);
+    host.sessionData.scheduleSidebarSessions.mockReturnValueOnce(pending.promise);
     context.gateway.snapshot.selfUser = { id: "profile-bob" };
     update();
     facet(ownerFacet("owner-ada"));
     expect(controller.ownerId).toBe("owner-bob");
-    expect(host.sessionData.refreshSidebarSessions).toHaveBeenCalledOnce();
+    expect(host.sessionData.refreshSidebarSessions).not.toHaveBeenCalled();
+    expect(host.sessionData.scheduleSidebarSessions).toHaveBeenCalledTimes(2);
     facet(ownerFacet("owner-bob"));
     pending.resolve();
     await pending.promise;
     update();
     expect(controller.ownerId).toBe("owner-bob");
-    expect(host.sessionData.refreshSidebarSessions).toHaveBeenCalledOnce();
+    expect(host.sessionData.refreshSidebarSessions).not.toHaveBeenCalled();
+    expect(host.sessionData.scheduleSidebarSessions).toHaveBeenCalledTimes(2);
   });
 
   it("clears only from a settled complete All facet, never a Mine or failed snapshot", async () => {
@@ -204,5 +257,6 @@ describe("SessionOwnerFilterController", () => {
     });
     update();
     expect(host.sessionData.refreshSidebarSessions).toHaveBeenCalledTimes(3);
+    expect(host.sessionData.scheduleSidebarSessions).toHaveBeenCalledOnce();
   });
 });

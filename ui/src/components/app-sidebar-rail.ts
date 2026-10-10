@@ -264,7 +264,7 @@ export function renderSidebarScope(host: AppSidebarRenderHost) {
           type="button"
           class="sidebar-rail__button"
           aria-label=${t(scope === "mine" ? "nav.scopeMine" : "nav.scopeAll")}
-          aria-pressed=${String(host.navigationScope === scope)}
+          aria-pressed=${String(host.effectiveNavigationScope === scope)}
           @click=${() => host.setNavigationScope(scope)}
         >
           ${scope === "mine" ? icons.target : icons.users}

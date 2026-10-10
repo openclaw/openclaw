@@ -81,8 +81,16 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
 
   abstract readonly sessionOwnerFilter: SessionOwnerFilterController;
 
+  get effectiveNavigationScope(): "mine" | "all" {
+    const snapshot = this.context?.gateway.snapshot;
+    // The Gateway retains resolved profileless identity only within the same connection scope.
+    // Pending and retired identities stay private, including while reconnecting.
+    return snapshot?.selfUser === null ? "all" : this.navigationScope;
+  }
+
   setNavigationScope(scope: "mine" | "all"): void {
     this.navigationScope = scope;
+    this.sessionOwnerFilter.markUserIntent();
     this.onUpdateNavigationScope?.(scope);
   }
 
