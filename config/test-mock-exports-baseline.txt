@@ -2796,7 +2796,6 @@
 ["src/agents/harness/session-preparation.test.ts","./host-capability.js","1968ee4f5737816827a999930fb226368449f0af5c58a65f2d034d638aca4090",1]
 ["src/agents/identity-avatar-file.test.ts","../infra/runtime-process-url.js","4b191cd2dce29b3c2d464e915eea96b6124c455898ff212ff1f4f1f63715735f",1]
 ["src/agents/identity-avatar-file.test.ts","../infra/worker-task-pool.js","8fe8589ee5eb8aebd83af0b84760b0d7aca6256a8844e2f61053e75422c90d1c",1]
-["src/agents/internal-session-effects.cleanup.test.ts","../config/sessions/session-accessor.js","a3b5debbf74310444a47614945dffb82a000be95c63884c8a2a7f73068dbeed1",1]
 ["src/agents/isolated-completion.operator-model-policy.test.ts","./cli-runner/execute.runtime.js","3a0f8d15c48d452051783f24780b65c99418ce9c909a704f2e9d96f9d4eeff66",1]
 ["src/agents/isolated-completion.operator-model-policy.test.ts","./cli-runner/prepare.runtime.js","b51a159caa56e101a10792219cb925bde7656094867c7b670946ab041d7d611f",1]
 ["src/agents/isolated-completion.test-support.ts","../infra/tmp-openclaw-dir.js","ffd7e1c718b5fc7ed1f7f17956cf8212afbaa47a5170a6cdd2fcc50eda567aac",1]
