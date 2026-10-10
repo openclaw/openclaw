@@ -237,7 +237,7 @@ export async function withMutableUpdateSignals<T>(
       executorFence.assertCurrent();
       const file = fs.lstatSync(pathname);
       if (!file.isFile() || file.dev !== admission.dev || file.ino !== admission.ino) {
-        throw new Error("Interrupted update's canonical state generation changed.");
+        throw new Error("Interrupted update's current state generation changed.");
       }
     };
     assertCurrent();
