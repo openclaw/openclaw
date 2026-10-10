@@ -67,8 +67,9 @@ function projectOpencodeGoListedRows(
         ...model,
         ...OPENCODE_GO_PROVIDER_ROUTE,
         provider: PROVIDER_ID,
+        input: model.input.includes("image") ? ["text", "image"] : ["text"],
       });
-      // SAFETY: Templateless listed rows carry only text/image input and keep the Go route.
+      // SAFETY: Normalization keeps the assigned Go route and text/image input.
       return listed as OpencodeGoModelDefinition;
     });
   return [...projectProviderCatalogSnapshotRows(rows, snapshot), ...unknown];
