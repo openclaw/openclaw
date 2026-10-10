@@ -6,7 +6,6 @@ import {
   type KeyboardShortcutCombo,
 } from "../../lib/keyboard-shortcut-contract.ts";
 import { hasKeyboardIcon, KeyboardIcon } from "./icon.tsx";
-import "../../styles/kbd.css";
 
 export type KbdOptions = {
   className?: string;

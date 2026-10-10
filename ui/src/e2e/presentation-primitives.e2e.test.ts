@@ -41,7 +41,10 @@ async function captureGroup(page: Page, name: string) {
 
 async function assertControlledInputs(page: Page) {
   const accepted = page.getByRole("switch", { name: "Accept toggle", exact: true });
-  await page.getByText("Accept toggle", { exact: true }).click();
+  await page
+    .locator(".settings-row__title")
+    .filter({ hasText: /^Accept toggle$/ })
+    .click();
   await expect.poll(() => accepted.isChecked()).toBe(true);
   expect(await page.locator("#fixture-outcome").textContent()).toBe("toggle:true");
   const rejected = page.getByRole("switch", { name: "Rejected toggle", exact: true });

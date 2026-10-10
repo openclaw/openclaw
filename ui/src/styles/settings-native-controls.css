@@ -82,18 +82,6 @@
   cursor: not-allowed;
 }
 
-.shell--embed-settings .settings-toggle {
-  min-width: 44px;
-  min-height: 44px;
-}
-
-@media (pointer: coarse), (max-width: 640px) {
-  :is(.shell--settings, openclaw-skills-page, openclaw-cron-page) .settings-toggle {
-    min-width: 44px;
-    min-height: 44px;
-  }
-}
-
 .settings-segmented__btn:has(> .settings-segmented__input) {
   position: relative;
   min-height: calc(var(--settings-control-height) - 6px);
