@@ -110,6 +110,7 @@ describe("resolveThinkingDefault", () => {
       };
       for (const [state, cfg] of [
         ["fresh", config],
+        // oxlint-disable-next-line unicorn/prefer-structured-clone -- Persisted JSON omits undefined preferences.
         ["serialized existing", JSON.parse(JSON.stringify(config))],
       ] as const) {
         expect(
