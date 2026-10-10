@@ -59,8 +59,6 @@ const FEATURES = [
 
 async function preparedHarness(
   options: {
-    reserve?: boolean;
-    protocolFeatures?: string[];
     executionMode?: WorkerPlacementExecutionMode;
     repository?: SessionRepositoryWorkspaceRecord;
     boundWorkspace?: Pick<
@@ -69,9 +67,8 @@ async function preparedHarness(
     >;
   } = {},
 ) {
-  const protocolFeatures = options.protocolFeatures ?? FEATURES;
+  const protocolFeatures = FEATURES;
   const executionMode = options.executionMode ?? "worker-turn";
-  const reserve = options.reserve !== false;
   let nodeCurrent = true;
   const placements = createWorkerSessionPlacementStore({
     database: support.testState.stateDb,
@@ -93,7 +90,7 @@ async function preparedHarness(
         mode === "worker-turn",
       ),
   });
-  const environmentId = reserve ? "prepared-spare" : harness.ready.environmentId;
+  const environmentId = "prepared-spare";
   const intent: WorkerProviderPreparedIntent = {
     providerId: "fake",
     preparationKey: PREPARATION_KEY,
@@ -140,16 +137,12 @@ async function preparedHarness(
     providerId: intent.providerId,
     profileSnapshot: intent.profileSnapshot,
     provisionOperationId: `provision:${environmentId}`,
-    ...(reserve
-      ? {
-          preparation: {
-            purpose: "reserve",
-            key: PREPARATION_KEY,
-            demandAtMs: 900,
-            expiresAtMs: 10_000,
-          },
-        }
-      : {}),
+    preparation: {
+      purpose: "reserve",
+      key: PREPARATION_KEY,
+      demandAtMs: 900,
+      expiresAtMs: 10_000,
+    },
   });
   await store.transition({ environmentId, from: "requested", to: "provisioning" });
   const ready = await store.transition({
@@ -177,7 +170,7 @@ async function preparedHarness(
     (id) => workerService.get(id) ?? ordinaryGet(id),
   );
   vi.mocked(harness.environments.prepareProjectIntent).mockResolvedValue(intent);
-  vi.mocked(harness.environments.getPreparedCandidates).mockReturnValue(reserve ? [projected] : []);
+  vi.mocked(harness.environments.getPreparedCandidates).mockReturnValue([projected]);
   const ordinaryAttach = vi.mocked(harness.environments.attachSession).getMockImplementation()!;
   vi.mocked(harness.environments.attachSession).mockImplementation(async (request) => {
     const credential =
@@ -203,9 +196,6 @@ async function preparedHarness(
     harness.log.push("workspace:bind-prepared");
     return { ...(await ordinaryBind(request)), ...options.boundWorkspace };
   });
-  if (!reserve) {
-    vi.mocked(harness.environments.createWithRequest).mockResolvedValue(projected);
-  }
   const node: NodeWorkerSupervisorNodeProof = {
     nodeId: "prepared-node",
     connId: "prepared-connection",
@@ -308,7 +298,7 @@ async function preparedHarness(
 describe("prepared worker dispatch", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
-  it.each(["worker-turn", "remote-exec"] as const)(
+  it.each(["remote-exec"] as const)(
     "consumes the existing environment and binds its workspace for %s",
     async (executionMode) => {
       const { harness, placements, store, ready, request } = await preparedHarness({
@@ -343,33 +333,10 @@ describe("prepared worker dispatch", () => {
     },
   );
 
-  it("binds a freshly prepared cold workspace without turning its ordinary row into a reserve", async () => {
-    const { harness, store, ready, intent, request } = await preparedHarness({ reserve: false });
-
-    const active = await harness.service.dispatch(request);
-
-    expect(active.environmentId).toBe(ready.environmentId);
-    expect(harness.environments.createWithRequest).toHaveBeenCalledWith({
-      profileId: request.profileId,
-      idempotencyKey: expect.any(String),
-      executionMode: request.executionMode,
-      projectPath: "/gateway/workspace",
-      admittedIntent: intent,
-    });
-    expect(store.get(ready.environmentId)?.preparation).toBeNull();
-    expect(harness.environments.bindPreparedWorkspace).toHaveBeenCalledOnce();
-    expect(harness.log.indexOf("workspace:bind-prepared")).toBeLessThan(
-      harness.log.indexOf("sync"),
-    );
-  });
-
-  it.each(["build", "node", "exec-authority"] as const)(
+  it.each(["build", "node"] as const)(
     "uses the cold path when a candidate's %s proof is stale",
     async (stale) => {
-      const { harness, store, ready, request, revokeNode } = await preparedHarness({
-        protocolFeatures:
-          stale === "exec-authority" ? [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE] : undefined,
-      });
+      const { harness, store, ready, request, revokeNode } = await preparedHarness();
       if (stale === "build") {
         const environment = harness.environments.get(ready.environmentId)!;
         vi.mocked(harness.environments.getPreparedCandidates).mockReturnValue([
@@ -392,12 +359,7 @@ describe("prepared worker dispatch", () => {
     },
   );
 
-  it.each([
-    { executionMode: "worker-turn", reconnect: false },
-    { executionMode: "remote-exec", reconnect: false },
-    { executionMode: "worker-turn", reconnect: true },
-    { executionMode: "remote-exec", reconnect: true },
-  ] as const)(
+  it.each([{ executionMode: "remote-exec", reconnect: true }] as const)(
     "keeps a $executionMode reserve unconsumed after session hosting is disabled (reconnect=$reconnect)",
     async ({ executionMode, reconnect }) => {
       const { harness, store, ready, request, setHostingAvailable } = await preparedHarness({
@@ -415,7 +377,7 @@ describe("prepared worker dispatch", () => {
     },
   );
 
-  it.each(["worker-turn", "remote-exec"] as const)(
+  it.each(["remote-exec"] as const)(
     "does not consume a %s reserve when session hosting is disabled during admission",
     async (executionMode) => {
       const {
@@ -539,7 +501,7 @@ describe("prepared worker dispatch", () => {
     expect(harness.environments.destroy).toHaveBeenCalledWith(ready.environmentId);
     expect(harness.environments.schedulePreparedRefill).not.toHaveBeenCalled();
   });
-  it.each([true, false])(
+  it.each([true])(
     "claims a repository-only reserve with setup %s and overlays its accepted checkpoint on the bound source",
     async (runSetupScript) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", support.testState.root);

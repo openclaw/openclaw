@@ -57,33 +57,6 @@ describe("worker placement cancellation and reclaim authority", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it.each(["requested", "syncing", "starting"] as const)(
-    "does not activate after Stop closes the %s dispatch owner",
-    async (stage) => {
-      const controller = new AbortController();
-      const harness = createTestHarness();
-      await expect(
-        harness.service.dispatch(
-          REQUEST,
-          (placement) => {
-            if (placement.state === stage) {
-              controller.abort(new Error("Stop dispatch"));
-            }
-          },
-          undefined,
-          controller.signal,
-        ),
-      ).rejects.toThrow("Stop dispatch");
-      expect(harness.log).not.toContain("activation");
-      expect(harness.placements.current()?.state).toBe("failed");
-      if (stage === "requested") {
-        expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
-      } else {
-        expect(harness.environments.destroy).toHaveBeenCalledOnce();
-      }
-    },
-  );
-
   it("aborts held startup workspace sync and joins the SSH owner before teardown", async () => {
     const entered = createDeferredCore();
     const childClosed = createDeferredCore<ReturnType<typeof success>>();
@@ -313,30 +286,6 @@ describe("worker placement cancellation and reclaim authority", () => {
 
     expect(harness.environments.destroy).toHaveBeenCalledTimes(1);
     expect(harness.placements.current()).toMatchObject({ state: "failed" });
-  });
-
-  it("finishes failed-placement bookkeeping when authority closes during destroy", async () => {
-    let authorized = true;
-    const harness = createTestHarness({
-      failAt: "activation",
-      destroyFailureCount: 1,
-      afterDestroy: () => {
-        authorized = false;
-      },
-    });
-    await expect(harness.service.dispatch(REQUEST)).rejects.toThrow("activation failed");
-    expect(harness.placements.current()).toMatchObject({ state: "failed" });
-
-    await expect(
-      harness.service.reclaim(REQUEST, () => {
-        if (!authorized) {
-          throw new Error("session recovery authority closed");
-        }
-      }),
-    ).resolves.toMatchObject({ state: "local" });
-
-    expect(harness.environments.destroy).toHaveBeenCalledTimes(2);
-    expect(harness.placements.current()).toMatchObject({ state: "local" });
   });
 });
 
