@@ -6,14 +6,6 @@ import { Icon } from "./icon.tsx";
 import "../tooltip.ts";
 import "../../styles/copy-button.css";
 
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-tooltip": HTMLAttributes<HTMLElement> & { "prop:content": string };
-    }
-  }
-}
-
 export type CopyButtonProps = { text: string; idleLabel?: string; bare?: boolean };
 
 export function CopyButton(props: CopyButtonProps): SolidJSX.Element {
