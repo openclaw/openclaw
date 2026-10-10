@@ -17,12 +17,9 @@ import { getDiscordExecApprovalApprovers } from "./exec-approvals.js";
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
 
-function isDiscordApprovalAccountEligible(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  request: ApprovalRequest;
-  configOverride?: DiscordExecApprovalConfig | null;
-}): boolean {
+function isDiscordApprovalAccountEligible(
+  params: Parameters<typeof shouldHandleDiscordApprovalRequest>[0],
+): boolean {
   const account = resolveDiscordAccount(params);
   const config = params.configOverride ?? account.config.execApprovals;
   return (
@@ -46,17 +43,14 @@ export function shouldHandleDiscordApprovalRequest(params: {
   configOverride?: DiscordExecApprovalConfig | null;
 }): boolean {
   const accountId = params.accountId ?? resolveDefaultDiscordAccountId(params.cfg);
-  if (
-    !doesApprovalRequestSelectChannelAccount({
+  return (
+    doesApprovalRequestSelectChannelAccount({
       ...params,
       channel: "discord",
       defaultAccountId: resolveDefaultDiscordAccountId(params.cfg),
       eligibleAccountIds: isDiscordApprovalAccountEligible({ ...params, accountId })
         ? [accountId]
         : [],
-    })
-  ) {
-    return false;
-  }
-  return isDiscordApprovalAccountEligible(params);
+    }) && isDiscordApprovalAccountEligible(params)
+  );
 }

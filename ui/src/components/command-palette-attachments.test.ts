@@ -2,6 +2,7 @@
 
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.ts";
 import {
   CommandPaletteLoadingState,
   renderCommandPaletteLoading,
@@ -63,8 +64,8 @@ function key(input: HTMLTextAreaElement, init: KeyboardEventInit) {
   return event;
 }
 
-async function mount() {
-  const fixture = createDraftFixture();
+async function mount(options: Parameters<typeof createDraftFixture>[0] = {}) {
+  const fixture = createDraftFixture(options);
   const { context } = fixture;
   const connection = createApplicationGateway(context.gateway.snapshot);
   Object.assign(connection.gateway, {
@@ -108,19 +109,32 @@ async function mount() {
 }
 
 describe("command palette paste-only images", () => {
-  it("blocks image ingestion in both loaded and loading palettes while keeping text paste native", async () => {
-    const { context, input } = await mount();
-    context.config.current.uploadsEnabled = false;
-    expect(paste(input, [image()]).defaultPrevented).toBe(true);
-    expect(readers).toHaveLength(0);
-    expect(paste(input, [], "plain text ".repeat(200)).defaultPrevented).toBe(false);
-    const loading = new CommandPaletteLoadingState({ context, requestUpdate: vi.fn() });
-    loading.begin();
-    const loadingInput = document.createElement("textarea");
-    loadingInput.addEventListener("paste", loading.handlePaste);
-    expect(paste(loadingInput, [image()]).defaultPrevented).toBe(true);
-    expect(loading.captureHandoff()()?.imageFiles).toBeUndefined();
-  });
+  it.each([true, false])(
+    "keeps non-image paste native with uploads enabled=%s",
+    async (uploadsEnabled) => {
+      const { palette, context, input } = await mount();
+      context.config.current.uploadsEnabled = uploadsEnabled;
+      for (const text of ["ordinary search", "long search ".repeat(200)]) {
+        expect(paste(input, [], text).defaultPrevented).toBe(false);
+      }
+      expect(
+        paste(input, [new File(["pdf"], "document.pdf", { type: "application/pdf" })])
+          .defaultPrevented,
+      ).toBe(false);
+      if (!uploadsEnabled) {
+        expect(paste(input, [image()]).defaultPrevented).toBe(true);
+        const loading = new CommandPaletteLoadingState({ context, requestUpdate: vi.fn() });
+        loading.begin();
+        const loadingInput = document.createElement("textarea");
+        loadingInput.addEventListener("paste", loading.handlePaste);
+        expect(paste(loadingInput, [image()]).defaultPrevented).toBe(true);
+        expect(loading.captureHandoff()()?.imageFiles).toBeUndefined();
+      }
+      expect(readers).toHaveLength(0);
+      expect(palette.querySelector(".chat-attachments-preview")).toBeNull();
+      expect(context.sessions.createResult).not.toHaveBeenCalled();
+    },
+  );
 
   it("preserves the input and submits text with images in the background", async () => {
     const message = "Describe these images";
@@ -159,20 +173,6 @@ describe("command palette paste-only images", () => {
     );
     expect(context.navigateAndWait).not.toHaveBeenCalled();
     expect(context.gateway.setSessionKey).not.toHaveBeenCalled();
-  });
-
-  it("keeps text and non-image paste native, including long search prompts", async () => {
-    const { palette, input, context } = await mount();
-    for (const text of ["ordinary search", "long search ".repeat(200)]) {
-      expect(paste(input, [], text).defaultPrevented).toBe(false);
-    }
-    expect(
-      paste(input, [new File(["pdf"], "document.pdf", { type: "application/pdf" })])
-        .defaultPrevented,
-    ).toBe(false);
-    expect(readers).toHaveLength(0);
-    expect(palette.querySelector(".chat-attachments-preview")).toBeNull();
-    expect(context.sessions.createResult).not.toHaveBeenCalled();
   });
 
   it.each(["dismiss", "disconnect", "owner"])(
@@ -255,91 +255,113 @@ describe("command palette paste-only images", () => {
     expect(palette.querySelector('[role="alert"]')).toBeNull();
   });
 
-  it.each(["ready", "failed", "dismissed", "oversized", "partial"] as const)(
-    "settles a cold image submit exactly once after %s preparation",
-    async (outcome) => {
-      const { palette, context } = await mount();
-      palette.togglePalette();
-      await palette.updateComplete;
-      if (outcome === "oversized" || outcome === "partial") {
-        Object.assign(context.gateway.snapshot.hello!, {
-          policy: { attachments: { maxBytes: 65_536, maxImageBytes: 4 } },
-        });
-      }
-      const state = new CommandPaletteLoadingState({ requestUpdate: () => {} });
-      const loader = document.body.appendChild(document.createElement("div"));
-      state.begin();
-      render(
-        renderCommandPaletteLoading(state, () => state.clear()),
-        loader,
-      );
-      const coldInput = loader.querySelector("textarea")!;
-      if (outcome !== "ready") {
-        coldInput.value = "Keep every image";
-        coldInput.dispatchEvent(new Event("input", { bubbles: true }));
-      }
-      // PNGs enter asynchronous resize preparation; use a non-resizable image
-      // to exercise synchronous admission rejection and partial-batch custody.
-      const candidate =
-        outcome === "oversized" || outcome === "partial"
-          ? new File(["image"], "oversized.gif", { type: "image/gif" })
-          : image();
-      const files =
-        outcome === "partial"
-          ? [new File(["ok"], "small.png", { type: "image/png" }), candidate]
-          : [candidate];
+  it.each([
+    "ready",
+    "policy-delayed",
+    "text-policy-delayed",
+    "failed",
+    "dismissed",
+    "oversized",
+    "partial",
+  ] as const)("settles a cold submit exactly once after %s preparation", async (outcome) => {
+    const delayedPolicy = outcome === "policy-delayed" || outcome === "text-policy-delayed";
+    const policy = createDeferred<{ sessionPlacement: Record<string, never> }>();
+    const { palette, context } = await mount(
+      delayedPolicy ? { placementPolicy: () => policy.promise } : {},
+    );
+    palette.togglePalette();
+    await palette.updateComplete;
+    if (outcome === "oversized" || outcome === "partial") {
+      Object.assign(context.gateway.snapshot.hello!, {
+        policy: {
+          maxPayload: 25 * 1024 * 1024,
+          attachments: { maxBytes: 65_536, maxImageBytes: 4 },
+        },
+      });
+    }
+    const state = new CommandPaletteLoadingState({ requestUpdate: () => {} });
+    const loader = document.body.appendChild(document.createElement("div"));
+    state.begin();
+    render(
+      renderCommandPaletteLoading(state, () => state.clear()),
+      loader,
+    );
+    const coldInput = loader.querySelector("textarea")!;
+    if (outcome !== "ready" && outcome !== "policy-delayed") {
+      coldInput.value = "Keep every image";
+      coldInput.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    // PNGs enter asynchronous resize preparation; use a non-resizable image
+    // to exercise synchronous admission rejection and partial-batch custody.
+    const candidate =
+      outcome === "oversized" || outcome === "partial"
+        ? new File(["image"], "oversized.gif", { type: "image/gif" })
+        : image();
+    const files =
+      outcome === "partial"
+        ? [new File(["ok"], "small.png", { type: "image/png" }), candidate]
+        : [candidate];
+    if (outcome !== "text-policy-delayed") {
       paste(coldInput, files);
-      key(coldInput, { key: "Enter", metaKey: true });
-      const take = state.captureHandoff();
-      palette.openPalette(take);
-      await palette.updateComplete;
-      const replacement = palette.querySelector<HTMLTextAreaElement>(".cmd-palette__input")!;
-      replacement.focus();
-      await palette.updateComplete;
-      expect(take()).toBeUndefined();
+    }
+    key(coldInput, { key: "Enter", metaKey: true });
+    const take = state.captureHandoff();
+    palette.openPalette(take);
+    await palette.updateComplete;
+    const replacement = palette.querySelector<HTMLTextAreaElement>(".cmd-palette__input")!;
+    replacement.focus();
+    await palette.updateComplete;
+    expect(take()).toBeUndefined();
+    expect(context.sessions.createResult).not.toHaveBeenCalled();
+    if (outcome === "dismissed") {
+      key(replacement, { key: "Escape" });
+    }
+    if (outcome === "failed") {
+      readers[0]!.dispatchEvent(new ProgressEvent("error"));
+    } else if (outcome !== "oversized" && outcome !== "text-policy-delayed") {
+      finishRead(0, outcome === "partial" ? "data:image/png;base64,b2s=" : undefined);
+    }
+    await palette.updateComplete;
+    await palette.updateComplete;
+    if (delayedPolicy) {
       expect(context.sessions.createResult).not.toHaveBeenCalled();
-      if (outcome === "dismissed") {
-        key(replacement, { key: "Escape" });
-      }
-      if (outcome === "failed") {
-        readers[0]!.dispatchEvent(new ProgressEvent("error"));
-      } else if (outcome !== "oversized") {
-        finishRead(0, outcome === "partial" ? "data:image/png;base64,b2s=" : undefined);
-      }
-      await palette.updateComplete;
-      await palette.updateComplete;
-      if (outcome === "oversized" || outcome === "partial") {
-        // A valid text/remaining-image prompt could be sent explicitly, but the
-        // cold submit must not silently drop a rejected clipboard image.
-        await vi.waitFor(() =>
-          expect(palette.querySelector<HTMLButtonElement>(".cmd-palette__create")?.disabled).toBe(
-            false,
-          ),
-        );
-        expect(palette.querySelectorAll(".chat-attachment-thumb")).toHaveLength(
-          outcome === "partial" ? 1 : 0,
-        );
-      }
-      if (outcome === "ready") {
-        await vi.waitFor(() =>
-          expect(context.sessions.createResult).toHaveBeenCalledExactlyOnceWith(
-            expect.objectContaining({
-              message: "",
-              attachments: [
-                expect.objectContaining({
-                  fileName: "pasted.png",
-                  mimeType: "image/png",
-                  content: "aW1hZ2U=",
+      policy.resolve({ sessionPlacement: {} });
+    }
+    if (outcome === "oversized" || outcome === "partial") {
+      // A valid text/remaining-image prompt could be sent explicitly, but the
+      // cold submit must not silently drop a rejected clipboard image.
+      await vi.waitFor(() =>
+        expect(palette.querySelector<HTMLButtonElement>(".cmd-palette__create")?.disabled).toBe(
+          false,
+        ),
+      );
+      expect(palette.querySelectorAll(".chat-attachment-thumb")).toHaveLength(
+        outcome === "partial" ? 1 : 0,
+      );
+    }
+    if (outcome === "ready" || delayedPolicy) {
+      await vi.waitFor(() =>
+        expect(context.sessions.createResult).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            message: outcome === "text-policy-delayed" ? "Keep every image" : "",
+            ...(outcome === "text-policy-delayed"
+              ? {}
+              : {
+                  attachments: [
+                    expect.objectContaining({
+                      fileName: "pasted.png",
+                      mimeType: "image/png",
+                      content: "aW1hZ2U=",
+                    }),
+                  ],
                 }),
-              ],
-            }),
-            { reconciliation: "background" },
-          ),
-        );
-      } else {
-        expect(context.sessions.createResult).not.toHaveBeenCalled();
-      }
-      render(nothing, loader);
-    },
-  );
+          }),
+          { reconciliation: "background" },
+        ),
+      );
+    } else {
+      expect(context.sessions.createResult).not.toHaveBeenCalled();
+    }
+    render(nothing, loader);
+  });
 });

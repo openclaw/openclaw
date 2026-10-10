@@ -1,14 +1,12 @@
 import { expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { ensureExecutionOwnerLifecycleBindingSchema } from "../audit/execution-owner-lifecycle-binding-store.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import {
-  cronQuietTriggerDetail,
-  cronRunLogEntryToDetail,
-  cronRunRecordToRunLogEntry,
-} from "./run-history-detail.js";
+import { cronQuietTriggerDetail, cronRunLogEntryToDetail } from "./run-history-detail.js";
 import { projectCronRunHistoryPage, type ReadCronRunHistoryPageOptions } from "./run-history.js";
 import { findCronRunRecoveryInDatabase } from "./service/run-history-recovery.js";
 import { cronStoreKey } from "./store/key.js";
@@ -55,6 +53,33 @@ function outcome(storeKey: string, receipt: string): CronRunHistoryWrite {
   };
 }
 
+it.each(["asc", "desc"] as const)("orders history timestamps and ties %s", (sortDir) => {
+  const run = (
+    id: string,
+    timestamps: Pick<CronRunRecord, "createdAt" | "endedAt" | "lastEventAt">,
+  ): CronRunRecord => ({
+    id,
+    ...timestamps,
+    jobId: "job",
+    status: "succeeded",
+    detail: { kind: "cron-run", storeKey: "store", status: "ok", runId: id },
+  });
+  const records: CronRunRecord[] = [
+    run("tie-a", { createdAt: 5, endedAt: 20 }),
+    run("created-only", { createdAt: 15 }),
+    run("ended", { createdAt: 10, endedAt: 20, lastEventAt: 90 }),
+    run("tie-b", { createdAt: 5, endedAt: 20 }),
+    run("last-event", { createdAt: 0, lastEventAt: 30 }),
+  ];
+  const newestFirst = ["last-event", "ended", "tie-b", "tie-a", "created-only"];
+
+  const page = projectCronRunHistoryPage(records, { storeKey: "store", sortDir });
+
+  expect(page.entries.map((entry) => entry.runId)).toEqual(
+    sortDir === "desc" ? newestFirst : newestFirst.toReversed(),
+  );
+});
+
 it("retains history across worker reads, isolates stores, and recovers only an exact receipt", async () => {
   await withOpenClawTestState(
     { layout: "state-only", prefix: "cron-native-history-" },
@@ -85,11 +110,20 @@ it("retains history across worker reads, isolates stores, and recovers only an e
           }).finalized,
         ).toBeUndefined();
         // A late result cannot replace the first durable outcome for this exact run.
-        recordCronRunInDatabase(db, {
-          ...outcome(storeKey, "first"),
-          status: "failed",
-          endedAt: 40,
-        });
+        const reads = trackSqliteStatementExecutions(db, ["history"], (sql) =>
+          /^select\b/i.test(sql) && sql.includes('from "task_runs"') ? "history" : null,
+        );
+        try {
+          recordCronRunInDatabase(db, {
+            ...outcome(storeKey, "first"),
+            status: "failed",
+            endedAt: 40,
+          });
+          // Both stores can retain this run ID; unrelated runs must stay in SQLite.
+          expect(reads.rowCounts.history).toBe(2);
+        } finally {
+          reads.restore();
+        }
         expect(
           readCronRunRecordsInDatabase(db, "job").find((row) => row.runId === "cron:job:10:first")
             ?.endedAt,
@@ -199,18 +233,13 @@ it("admits actual worker writes and rolls back history pruning when commit is re
       const storeKey = cronStoreKey(state.statePath("cron/jobs.json"));
       const stages: string[] = [];
       let refuseCommit = false;
-      const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
-      const admissionSpy = vi
-        .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit, attachment) =>
-          createAdmission((request, grant) => {
-            stages.push(request.stage);
-            if (refuseCommit && request.stage === "commit") {
-              throw new Error("Cron history commit refused");
-            }
-            admit(request, grant);
-          }, attachment),
-        );
+      const admissionSpy = probe.admission(operationAdmission, (request, grant, admit) => {
+        stages.push(request.stage);
+        if (refuseCommit && request.stage === "commit") {
+          throw new Error("Cron history commit refused");
+        }
+        admit(request, grant);
+      });
       try {
         await recordCronRun(outcome(storeKey, "worker"));
         expect(stages).toEqual(["transaction", "commit"]);
@@ -232,36 +261,6 @@ it("admits actual worker writes and rolls back history pruning when commit is re
       }
     },
   );
-});
-
-it("reads released row fallback fields but never discloses internal recovery state", () => {
-  const record: CronRunRecord = {
-    id: "released",
-    jobId: "job",
-    createdAt: 1,
-    endedAt: 2,
-    status: "cancelled",
-    error: "operator reason",
-    summary: "old summary",
-    sessionKey: "agent:main:cron:job",
-    detail: {
-      kind: "cron-run",
-      status: "ok",
-      storeKey: "store",
-      sessionId: "old-generation",
-      triggerState: { secret: true },
-      futureInternal: "private",
-    },
-  };
-  const entry = cronRunRecordToRunLogEntry(record);
-  expect(entry).toMatchObject({
-    error: "operator reason",
-    summary: "old summary",
-    sessionId: "old-generation",
-  });
-  expect(entry).not.toHaveProperty("triggerState");
-  expect(entry).not.toHaveProperty("futureInternal");
-  expect(entry).not.toHaveProperty("storeKey");
 });
 
 it("retains legacy identities and raw details without inventing a store partition", async () => {

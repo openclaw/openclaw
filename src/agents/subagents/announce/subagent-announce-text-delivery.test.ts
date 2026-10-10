@@ -78,7 +78,7 @@ function setup(outcome: "rejected" | "aborted" | "sent" = "sent") {
 }
 
 describe("direct completion text delivery", () => {
-  it.each(["rejected", "aborted", "sent"] as const)(
+  it.each(["rejected", "aborted"] as const)(
     "settles a chunked result when its second chunk is %s",
     async (outcome) => {
       const fixture = setup(outcome);
@@ -86,22 +86,14 @@ describe("direct completion text delivery", () => {
 
       expect(fixture.sendText).toHaveBeenCalledTimes(2);
       expect(fixture.steer).not.toHaveBeenCalled();
-      if (outcome === "sent") {
-        expect(fixture.received.join(" ")).toBe(content);
-        expect(result).toMatchObject({ delivered: true, path: "direct" });
-        expect(fixture.onDeliveryResult).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({ delivered: true }),
-        );
-      } else {
-        expect(fixture.received).toHaveLength(1);
-        expect(result).toMatchObject({
-          delivered: false,
-          path: "direct",
-          disposition: "permanent_failure",
-        });
-        expect(result.error).toContain(`second chunk ${outcome}`);
-        expect(fixture.onDeliveryResult).not.toHaveBeenCalled();
-      }
+      expect(fixture.received).toHaveLength(1);
+      expect(result).toMatchObject({
+        delivered: false,
+        path: "direct",
+        disposition: "permanent_failure",
+      });
+      expect(result.error).toContain(`second chunk ${outcome}`);
+      expect(fixture.onDeliveryResult).not.toHaveBeenCalled();
     },
   );
 
@@ -121,6 +113,8 @@ describe("direct completion text delivery", () => {
           throw new Error("Delivery settled without entering its mirror");
         }),
       ]);
+      expect(fixture.sendText).toHaveBeenCalledTimes(2);
+      expect(fixture.steer).not.toHaveBeenCalled();
       expect(fixture.received.join(" ")).toBe(content);
       expect(fixture.onDeliveryResult).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ delivered: true, deliveredAt: expect.any(Number) }),
@@ -129,7 +123,7 @@ describe("direct completion text delivery", () => {
       releaseMirror.resolve();
       await delivery;
     }
-    await expect(delivery).resolves.toMatchObject({ delivered: true });
+    await expect(delivery).resolves.toMatchObject({ delivered: true, path: "direct" });
   });
 
   it.each(["mirror", "report"] as const)(

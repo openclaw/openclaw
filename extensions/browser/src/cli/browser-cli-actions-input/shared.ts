@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import fs from "node:fs/promises";
 import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { FsSafeError, readRegularFile } from "openclaw/plugin-sdk/security-runtime";
@@ -79,20 +80,27 @@ export function requireRef(ref: string | undefined) {
   return refValue;
 }
 
-async function readFile(filePath: string, maxBytes?: number): Promise<string> {
-  if (maxBytes === undefined) {
-    return await fs.readFile(filePath, "utf8");
-  }
+async function readActionsFile(filePath: string): Promise<string> {
   try {
     // Preserve existing symlinked inputs while rejecting oversized files and FIFOs.
-    const { buffer } = await readRegularFile({ filePath: await fs.realpath(filePath), maxBytes });
-    return buffer.toString("utf8");
+    const { buffer } = await readRegularFile({
+      filePath: await fs.realpath(filePath),
+      maxBytes: ACTIONS_INPUT_MAX_BYTES,
+    });
+    return decodeJsonInput(buffer, "--actions-file");
   } catch (cause) {
     if (cause instanceof FsSafeError && cause.code === "too-large") {
       throw createActionsInputTooLargeError("--actions-file", cause);
     }
     throw cause;
   }
+}
+
+function decodeJsonInput(buffer: Buffer, source: string): string {
+  if (!isUtf8(buffer)) {
+    throw new Error(`${source} must be valid UTF-8.`);
+  }
+  return buffer.toString("utf8");
 }
 
 export async function readFields(opts: {
@@ -102,20 +110,26 @@ export async function readFields(opts: {
   if (opts.fields !== undefined && opts.fieldsFile !== undefined) {
     throw new Error("Specify only one of --fields or --fields-file");
   }
-  const payload = opts.fieldsFile ? await readFile(opts.fieldsFile) : (opts.fields ?? "");
+  const payload = opts.fieldsFile
+    ? decodeJsonInput(await fs.readFile(opts.fieldsFile), "--fields-file")
+    : (opts.fields ?? "");
+  return normalizeBrowserFormFields(parseBrowserInputArray(payload, "fields"));
+}
+
+export function parseBrowserInputArray(payload: string, kind: "fields" | "actions"): unknown[] {
   if (!payload.trim()) {
-    throw new Error("fields are required");
+    throw new Error(`${kind} are required`);
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(payload);
   } catch (cause) {
-    throw new Error("fields must be valid JSON.", { cause });
+    throw new Error(`${kind} must be valid JSON${kind === "fields" ? "." : ""}`, { cause });
   }
   if (!Array.isArray(parsed)) {
-    throw new Error("fields must be an array");
+    throw new Error(`${kind} must be ${kind === "fields" ? "an array" : "a JSON array"}`);
   }
-  return normalizeBrowserFormFields(parsed);
+  return parsed;
 }
 
 const ACTIONS_INPUT_MAX_BYTES = 1_000_000;
@@ -128,21 +142,18 @@ function createActionsInputTooLargeError(source: string, cause?: unknown): FsSaf
   );
 }
 
-async function readStdinText(
-  stream: NodeJS.ReadableStream = process.stdin,
-  maxBytes = ACTIONS_INPUT_MAX_BYTES,
-): Promise<string> {
+async function readStdinText(): Promise<string> {
   const chunks: Buffer[] = [];
   let total = 0;
-  for await (const chunk of stream) {
+  for await (const chunk of process.stdin) {
     const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     total += buf.length;
-    if (total > maxBytes) {
+    if (total > ACTIONS_INPUT_MAX_BYTES) {
       throw createActionsInputTooLargeError("--actions-file - stdin");
     }
     chunks.push(buf);
   }
-  return Buffer.concat(chunks).toString("utf8");
+  return decodeJsonInput(Buffer.concat(chunks), "--actions-file - stdin");
 }
 
 export async function readActionsPayload(opts: {
@@ -155,7 +166,7 @@ export async function readActionsPayload(opts: {
   if (opts.actionsFile) {
     return opts.actionsFile === "-"
       ? await readStdinText()
-      : await readFile(opts.actionsFile, ACTIONS_INPUT_MAX_BYTES);
+      : await readActionsFile(opts.actionsFile);
   }
   return opts.actions ?? "";
 }

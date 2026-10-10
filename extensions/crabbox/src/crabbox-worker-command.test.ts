@@ -1,8 +1,13 @@
+import { inspect as inspectValue } from "node:util";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { isUnrecognizedLease, stopCrabboxLease } from "./crabbox-worker-command.js";
+import {
+  isUnrecognizedLease,
+  runCrabboxCommand,
+  stopCrabboxLease,
+} from "./crabbox-worker-command.js";
 
-const LEASE_ID = "cbx_absent_fixture";
+const LEASE_ID = "cbx_0123456789ab";
 const readError = `coordinator GET /v1/leases/${LEASE_ID}: http 404: {"error":"not_found"}`;
 const releaseError = `coordinator POST /v1/leases/${LEASE_ID}/release: http 404: {"error":"not_found"}`;
 const absentOutput = `warning: could not inspect lease before release: ${readError}\n${releaseError}`;
@@ -14,6 +19,180 @@ const absentResult: SpawnResult = {
   killed: false,
   termination: "exit",
 };
+
+const leaseTimeout = `Get "https://coordinator.example/v1/leases/${LEASE_ID}?providerMetadata=authoritative": context deadline exceeded`;
+const transportFailure = { ...absentResult, stderr: leaseTimeout };
+
+describe("Crabbox coordinator timeouts", () => {
+  it.each([
+    { name: "lease read", result: {}, transient: true },
+    {
+      name: "CLI retry and joined deadline",
+      result: {
+        stderr: `coordinator read retry 1/4 reason=timeout\ncontext deadline exceeded\n${leaseTimeout}`,
+      },
+      transient: true,
+    },
+    {
+      name: "heartbeat",
+      result: {
+        stderr: leaseTimeout
+          .replace("Get", "Post")
+          .replace("?providerMetadata=authoritative", "/heartbeat"),
+      },
+      transient: true,
+    },
+    { name: "bare deadline", result: { stderr: "context deadline exceeded" }, transient: false },
+    {
+      name: "retry diagnostic alone",
+      result: { stderr: "coordinator read retry 1/4 reason=timeout" },
+      transient: false,
+    },
+    { name: "script stdout", result: { stdout: "installing packages" }, transient: false },
+    { name: "script stderr", result: { stderr: `${leaseTimeout}\napt failed` }, transient: false },
+    {
+      name: "bootstrap phase",
+      result: { stdout: "CRABBOX_PHASE:openclaw-bootstrap-start" },
+      transient: false,
+    },
+    {
+      name: "authentication",
+      result: { stderr: `${leaseTimeout}\nauthentication failed` },
+      transient: false,
+    },
+    {
+      name: "other endpoint",
+      result: { stderr: leaseTimeout.replace("/leases/", "/runs/") },
+      transient: false,
+    },
+    {
+      name: "process timeout",
+      result: { termination: "timeout" as const, code: null },
+      transient: false,
+    },
+    { name: "successful exit", result: { code: 0 }, transient: false },
+  ])("retries only coordinator failures: $name", async ({ result, transient }) => {
+    const failure = { ...transportFailure, ...result };
+    const runCommand = vi
+      .fn()
+      .mockResolvedValueOnce(failure)
+      .mockResolvedValue({ ...absentResult, code: 0, stderr: "" });
+    const stopped = stopCrabboxLease({
+      binary: "crabbox",
+      id: LEASE_ID,
+      provider: "aws",
+      runCommand,
+      warn: vi.fn(),
+      sleep: async () => {},
+    });
+    if (transient || failure.code === 0) {
+      await expect(stopped).resolves.toBeUndefined();
+    } else {
+      await expect(stopped).rejects.toThrow();
+    }
+    expect(runCommand).toHaveBeenCalledTimes(transient ? 2 : 1);
+  });
+
+  it.each(["released", "absent", "timeout"])("retries stop until %s", async (outcome) => {
+    const releaseTimeout = `warning: could not inspect lease before release: context deadline exceeded\n${leaseTimeout}\nPost "https://coordinator.example/v1/leases/${LEASE_ID}/release": context deadline exceeded`;
+    const runCommand = vi
+      .fn()
+      .mockResolvedValueOnce({ ...transportFailure, stderr: releaseTimeout })
+      .mockResolvedValue(
+        outcome === "released"
+          ? { ...absentResult, code: 0, stderr: "" }
+          : outcome === "absent"
+            ? absentResult
+            : { ...transportFailure, stderr: releaseTimeout },
+      );
+    const warn = vi.fn();
+    const sleep = vi.fn(async (_ms: number) => {});
+    const stopped = stopCrabboxLease({
+      binary: "crabbox",
+      id: LEASE_ID,
+      provider: "aws",
+      runCommand,
+      warn,
+      sleep,
+    });
+    if (outcome === "timeout") {
+      await expect(stopped).rejects.toThrow(/Post .*context deadline exceeded.*after 3 attempts/s);
+    } else {
+      await expect(stopped).resolves.toBeUndefined();
+    }
+    expect(runCommand).toHaveBeenCalledTimes(outcome === "timeout" ? 3 : 2);
+    expect(warn).toHaveBeenCalledTimes(outcome === "absent" ? 1 : 0);
+    expect(runCommand.mock.calls.every(([argv]) => argv.at(-1) === LEASE_ID)).toBe(true);
+  });
+
+  it.each([false, true])(
+    "keeps the stop deadline and diagnostic, process timeout=%s",
+    async (processTimeout) => {
+      let elapsedMs = 0;
+      const now = vi.spyOn(Date, "now").mockImplementation(() => elapsedMs);
+      const timeouts: number[] = [];
+      const sleep = vi.fn(async (ms: number) => {
+        elapsedMs += ms;
+      });
+      try {
+        await expect(
+          stopCrabboxLease({
+            binary: "crabbox",
+            id: LEASE_ID,
+            provider: "aws",
+            warn: vi.fn(),
+            sleep,
+            runCommand: async (_argv, options) => {
+              timeouts.push(options.timeoutMs);
+              elapsedMs += timeouts.length === 1 ? 60_000 : options.timeoutMs;
+              return processTimeout && timeouts.length > 1
+                ? { ...absentResult, code: null, termination: "timeout", stderr: "" }
+                : transportFailure;
+            },
+          }),
+        ).rejects.toThrow(/Get .*context deadline exceeded.*after 2 attempts/s);
+        expect(timeouts).toHaveLength(2);
+        expect(timeouts[1]).toBe(timeouts[0]! - 61_000);
+        expect(sleep).toHaveBeenCalledTimes(1);
+      } finally {
+        now.mockRestore();
+      }
+    },
+  );
+});
+it.each(["output capture failed", "cleanup could not confirm process exit", "spawn ENOENT"])(
+  "reports the runner failure without retaining private error data: %s",
+  async (message) => {
+    const token = "synthetic-command-secret-0123456789";
+    const cause = Object.assign(
+      new Error(`${message} token=${token}`, {
+        cause: new Error(`nested token=${token}`),
+      }),
+      { stdout: token, stderr: token },
+    );
+    const error = await runCrabboxCommand({
+      action: "warmup",
+      args: ["warmup"],
+      binary: "crabbox",
+      timeoutMs: 1_000,
+      runCommand: async () => {
+        throw cause;
+      },
+    }).catch((rejection: unknown) => rejection);
+    expect(error).toMatchObject({
+      message: expect.stringContaining(`Crabbox warmup execution failed: ${message}`),
+    });
+    for (let current: unknown = error; current instanceof Error; current = current.cause) {
+      expect(current.message).not.toContain(token);
+    }
+    expect(inspectValue(error, { depth: null })).not.toContain(token);
+    expect(error).not.toHaveProperty("cause");
+    expect(error).toHaveProperty(
+      "message",
+      expect.not.stringContaining("synthetic-command-secret"),
+    );
+  },
+);
 
 describe("Crabbox lease absence classification", () => {
   it.each<{
@@ -27,6 +206,29 @@ describe("Crabbox lease absence classification", () => {
       name: "absolute coordinator URLs",
       result: { stderr: absentOutput.replaceAll("/v1/", "https://coordinator.example/v1/") },
       absent: true,
+    },
+    {
+      // Crabbox 0.67 inspect adds a query string to the lease read.
+      name: "authoritative metadata query on the inspect read",
+      result: {
+        stderr: readError.replace(`${LEASE_ID}:`, `${LEASE_ID}?providerMetadata=authoritative:`),
+      },
+      absent: false,
+      inspect: true,
+    },
+    {
+      name: "authoritative metadata query on the stop read",
+      result: {
+        stderr: absentOutput.replace(`${LEASE_ID}:`, `${LEASE_ID}?providerMetadata=authoritative:`),
+      },
+      absent: true,
+    },
+    {
+      name: "query on a different lease read",
+      result: {
+        stderr: `coordinator GET /v1/leases/cbx_other?providerMetadata=authoritative: http 404: {"error":"not_found"}\n${releaseError}`,
+      },
+      absent: false,
     },
     {
       name: "diagnostics split across streams",
@@ -109,6 +311,29 @@ describe("Crabbox lease absence classification", () => {
       name: "direct provider absence with a different exit code",
       result: { code: 1, stderr: `lease/server not found: ${LEASE_ID}` },
       absent: false,
+    },
+    {
+      name: "missing local claim without verified remote absence",
+      result: {
+        code: 1,
+        stderr: `lease ${LEASE_ID} has no local claim; if an earlier stop verified absence, nothing remains to do; otherwise check the ID, provider, and provider inventory before recovery`,
+      },
+      absent: false,
+    },
+    {
+      name: "W&B missing claim without an inventory observation",
+      result: {
+        code: 4,
+        stderr: `wandb sandbox "${LEASE_ID}" has no matching local ownership claim`,
+      },
+      absent: false,
+      inspect: true,
+    },
+    {
+      name: "unclaimed sandbox is not confirmed absent",
+      result: { code: 4, stderr: `cubesandbox sandbox "${LEASE_ID}" is not claimed by Crabbox` },
+      absent: false,
+      inspect: true,
     },
     {
       name: "coder recognition alone does not confirm stop",

@@ -9,10 +9,10 @@ import { SYSTEM_AGENT_AUDIT_SCOPE } from "../system-agent/audit.js";
 import { root as createFsSafeRoot } from "./fs-safe.js";
 import {
   detectLegacyAuditLogs,
-  legacyAuditRawCheckpointKey,
   legacyAuditSourceGenerationKey,
   type LegacyAuditRawCheckpoint,
 } from "./state-migrations.audit-checkpoints.js";
+import { legacyAuditMoveCandidates } from "./state-migrations.audit-moves.js";
 import {
   prepareLegacyAuditRecords,
   serializePreparedAuditRecords,
@@ -22,6 +22,7 @@ import {
   readLegacyAuditRecoverySourceForBackup,
   readLegacyAuditSourcePrefixSnapshotForBackup,
 } from "./state-migrations.audit-recovery.js";
+import { inspectLegacyMigrationLinkedMove } from "./state-migrations.no-replace-move.js";
 
 type LegacyAuditBackupCheckpoint = {
   key: string;
@@ -62,14 +63,6 @@ export function createLegacyAuditDatabaseWitness(database: DatabaseSync): string
   return createHash("sha256").update(JSON.stringify(rows)).digest("hex");
 }
 
-async function readLegacyAuditDatabaseWitness(stateDir: string): Promise<string> {
-  return (
-    withExistingOpenClawStateDatabaseReadOnly(({ db }) => createLegacyAuditDatabaseWitness(db), {
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    }) ?? createHash("sha256").digest("hex")
-  );
-}
-
 export function legacyAuditBackupCapturesMatch(
   left: LegacyAuditBackupCapture,
   right: LegacyAuditBackupCapture,
@@ -91,7 +84,7 @@ export function rewriteLegacyAuditBackupCheckpoints(
   if (hasDiagnosticEvents?.ok !== 1) {
     return;
   }
-  const scope = "migration.legacy-audit-raw";
+  const scope = LEGACY_AUDIT_RAW_CHECKPOINT_SCOPE;
   database.prepare("DELETE FROM diagnostic_events WHERE scope = ?").run(scope); // sqlite-allow-raw -- Offline snapshot maintenance boundary.
   const insert = database // sqlite-allow-raw -- Offline snapshot maintenance boundary.
     .prepare(
@@ -137,10 +130,33 @@ async function createLegacyAuditBackupSnapshotsOnce(params: {
   const filesystemWitness = createHash("sha256");
   for (const [index, source] of detected.sources.entries()) {
     const sourceRelativePath = path.relative(path.resolve(params.stateDir), source.sourcePath);
+    let linkedMove: { retained: string; removed: string } | undefined;
+    for (const candidate of await legacyAuditMoveCandidates(root, source)) {
+      if (
+        (candidate.retained === sourceRelativePath || candidate.removed === sourceRelativePath) &&
+        (await inspectLegacyMigrationLinkedMove(root, candidate.retained, candidate.removed))
+      ) {
+        linkedMove = candidate;
+        break;
+      }
+    }
+    // Interrupted moves have one logical source. Capture its destination once
+    // without unlinking either live name; quarantined destinations stay excluded.
+    if (linkedMove && linkedMove.retained !== sourceRelativePath) {
+      continue;
+    }
     const snapshot =
       source.storage === "raw-archive"
-        ? await readLegacyAuditRecoverySourceForBackup(root, sourceRelativePath)
-        : await readLegacyAuditSourcePrefixSnapshotForBackup(root, sourceRelativePath);
+        ? await readLegacyAuditRecoverySourceForBackup(
+            root,
+            sourceRelativePath,
+            linkedMove?.removed,
+          )
+        : await readLegacyAuditSourcePrefixSnapshotForBackup(
+            root,
+            sourceRelativePath,
+            linkedMove?.removed,
+          );
     const sourceGeneration = legacyAuditSourceGenerationKey(sourceRelativePath);
     const previousCheckpoint =
       source.storage === "raw-archive"
@@ -180,7 +196,7 @@ async function createLegacyAuditBackupSnapshotsOnce(params: {
         size: transformedPrefix.length,
         contentHash: createHash("sha256").update(transformedPrefix).digest("hex"),
       };
-      checkpoint = { key: legacyAuditRawCheckpointKey(value), value };
+      checkpoint = { key: value.generationKey, value };
     }
     const backupSnapshot: LegacyAuditBackupSnapshot = {
       sourcePath,
@@ -188,6 +204,7 @@ async function createLegacyAuditBackupSnapshotsOnce(params: {
       ...(checkpoint ? { checkpoint } : {}),
       skippedSourcePaths: new Set([
         path.resolve(source.sourcePath),
+        ...(linkedMove ? [path.resolve(params.stateDir, linkedMove.removed)] : []),
         path.resolve(`${source.sourcePath}.doctor-scrub-progress`),
         path.resolve(`${source.sourcePath}.doctor-scrub-restore`),
         path.resolve(`${source.sourcePath}.doctor-scrub-staging`),
@@ -216,27 +233,23 @@ export async function createLegacyAuditBackupCapture(params: {
   stateDir: string;
   tempDir: string;
 }): Promise<LegacyAuditBackupCapture> {
-  const capture = await createLegacyAuditBackupSnapshots(params);
-  const databaseWitness = await readLegacyAuditDatabaseWitness(params.stateDir);
-  return { ...capture, databaseWitness };
-}
-
-async function createLegacyAuditBackupSnapshots(params: {
-  stateDir: string;
-  tempDir: string;
-}): Promise<Pick<LegacyAuditBackupCapture, "snapshots" | "filesystemWitness">> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  let capture: Awaited<ReturnType<typeof createLegacyAuditBackupSnapshotsOnce>>;
+  for (let attempt = 0; ; attempt += 1) {
     try {
-      return await createLegacyAuditBackupSnapshotsOnce(params);
+      capture = await createLegacyAuditBackupSnapshotsOnce(params);
+      break;
     } catch (error) {
-      lastError = error;
-      if (attempt < 2) {
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 25);
-        });
+      if (attempt === 2) {
+        throw error;
       }
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 25);
+      });
     }
   }
-  throw lastError;
+  const databaseWitness =
+    withExistingOpenClawStateDatabaseReadOnly(({ db }) => createLegacyAuditDatabaseWitness(db), {
+      env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir },
+    }) ?? createHash("sha256").digest("hex");
+  return { ...capture, databaseWitness };
 }

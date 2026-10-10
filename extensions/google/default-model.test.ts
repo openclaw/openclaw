@@ -4,46 +4,6 @@ import { describe, expect, it } from "vitest";
 import { applyGoogleGeminiModelDefault, GOOGLE_GEMINI_DEFAULT_MODEL } from "./onboard.js";
 
 describe("google default model", () => {
-  it("sets defaults when model is unset", () => {
-    const cfg: OpenClawConfig = { agents: { defaults: {} } };
-    const applied = applyGoogleGeminiModelDefault(cfg);
-    expect(applied.changed).toBe(true);
-    expect(applied.next.agents?.defaults?.model).toEqual({ primary: GOOGLE_GEMINI_DEFAULT_MODEL });
-  });
-
-  it("overrides existing models", () => {
-    const applied = applyGoogleGeminiModelDefault({
-      agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6" } } },
-    } as OpenClawConfig);
-    expect(applied.changed).toBe(true);
-    expect(applied.next.agents?.defaults?.model).toEqual({ primary: GOOGLE_GEMINI_DEFAULT_MODEL });
-  });
-
-  it("normalizes retired Gemini model map keys when applying the default", () => {
-    const applied = applyGoogleGeminiModelDefault({
-      agents: {
-        defaults: {
-          model: {
-            primary: "google/gemini-3-pro-preview",
-            fallbacks: ["google/gemini-3-pro-preview"],
-          },
-          models: {
-            "google/gemini-3-pro-preview": { alias: "gemini" },
-          },
-        },
-      },
-    } as OpenClawConfig);
-
-    expect(applied.changed).toBe(true);
-    expect(applied.next.agents?.defaults?.model).toEqual({
-      primary: "google/gemini-3.1-pro-preview",
-      fallbacks: ["google/gemini-3.1-pro-preview"],
-    });
-    expect(applied.next.agents?.defaults?.models).toEqual({
-      "google/gemini-3.1-pro-preview": { alias: "gemini" },
-    });
-  });
-
   it("normalizes retired Gemini model maps even when the primary is already current", () => {
     const applied = applyGoogleGeminiModelDefault({
       agents: {

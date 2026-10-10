@@ -6,6 +6,9 @@ import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { gunzipSync, inflateRawSync } from "node:zlib";
 import {
+  boundedLimit,
+  compareCodeUnits,
+  hasControlCharacters,
   downloadActionsArtifactArchive,
   describeActionsArtifactFiles,
   inspectActionsArtifactZip,
@@ -93,10 +96,6 @@ function npmShasum(bytes) {
   return createHash("sha1").update(bytes).digest("hex");
 }
 
-function compareCodeUnits(left, right) {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
-
 function assertString(value, label) {
   if (typeof value !== "string" || value.trim() !== value || value.length === 0) {
     throw new Error(`${label} must be a non-empty trimmed string.`);
@@ -109,16 +108,6 @@ function assertPositiveInteger(value, label) {
     throw new Error(`${label} must be a safe positive integer.`);
   }
   return value;
-}
-
-function hasControlCharacters(value) {
-  for (const character of value) {
-    const codePoint = character.codePointAt(0);
-    if (codePoint <= 0x1f || codePoint === 0x7f) {
-      return true;
-    }
-  }
-  return false;
 }
 
 function normalizeManualOverrideReason(value) {
@@ -205,43 +194,33 @@ function normalizePublisherPolicy(value) {
   return { policyId, schema, sha256: policySha256 };
 }
 
-function boundedTarLimit(value, fallback, label) {
-  if (value === undefined) {
-    return fallback;
-  }
-  if (!Number.isSafeInteger(value) || value <= 0 || value > fallback) {
-    throw new Error(`${label} must be a positive safe integer no larger than ${fallback}.`);
-  }
-  return value;
-}
-
 function normalizeTarInspectionOptions(options = {}) {
-  const maxArchiveBytes = boundedTarLimit(
+  const maxArchiveBytes = boundedLimit(
     options.maxArchiveBytes,
     MAX_ARCHIVE_BYTES,
     "Plugin tarball byte limit",
   );
-  const maxExpandedBytes = boundedTarLimit(
+  const maxExpandedBytes = boundedLimit(
     options.maxExpandedBytes,
     MAX_EXPANDED_BYTES,
     "Plugin tarball expanded-byte limit",
   );
-  const maxEntryBytes = boundedTarLimit(
+  const maxEntryBytes = boundedLimit(
     options.maxEntryBytes,
     maxExpandedBytes,
     "Plugin tarball per-entry byte limit",
   );
-  const maxTotalFileBytes = boundedTarLimit(
+  const maxTotalFileBytes = boundedLimit(
     options.maxTotalFileBytes,
     Math.min(MAX_TAR_TOTAL_FILE_BYTES, maxExpandedBytes),
     "Plugin tarball total-file byte limit",
   );
-  const maxEntries = boundedTarLimit(
+  const maxEntries = boundedLimit(
     options.maxEntries,
     MAX_TAR_ENTRIES,
     "Plugin tarball entry-count limit",
   );
-  const maxPathBytes = boundedTarLimit(
+  const maxPathBytes = boundedLimit(
     options.maxPathBytes,
     MAX_TAR_PATH_BYTES,
     "Plugin tarball path-byte limit",

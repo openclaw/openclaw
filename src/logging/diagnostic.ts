@@ -73,6 +73,7 @@ import {
   isDiagnosticSessionStateCurrent,
   pruneDiagnosticSessionStates,
   resetDiagnosticSessionStateForTest,
+  touchDiagnosticSessionState,
   type SessionRef,
   type SessionState,
   type SessionStateValue,
@@ -153,18 +154,7 @@ async function recoverStuckSession(
     });
 }
 
-function pushLimitedDiagnosticLabel(
-  labels: string[],
-  state: {
-    sessionId?: string;
-    sessionKey?: string;
-    state: SessionStateValue;
-    queueDepth: number;
-    activeQueuedTurn?: boolean;
-    lastActivity: number;
-  },
-  now: number,
-): void {
+function pushLimitedDiagnosticLabel(labels: string[], state: SessionState, now: number): void {
   const label = state.sessionKey ?? state.sessionId ?? "unknown";
   const ageSeconds = Math.round(Math.max(0, now - state.lastActivity) / 1000);
   const activity = getDiagnosticSessionActivitySnapshot(
@@ -182,11 +172,7 @@ function pushLimitedDiagnosticLabel(
   );
 }
 
-function resolveDiagnosticQueuedBacklog(state: {
-  activeQueuedTurn?: boolean;
-  queueDepth: number;
-  state: SessionStateValue;
-}): number {
+function resolveDiagnosticQueuedBacklog(state: SessionState): number {
   return Math.max(
     0,
     state.queueDepth - (state.state === "processing" && state.activeQueuedTurn ? 1 : 0),
@@ -613,10 +599,7 @@ export function logSessionStateChange(
   const isProbeSession = state.sessionId?.startsWith("probe-") ?? false;
   const prevState = state.state;
   state.state = params.state;
-  state.lastActivity = Date.now();
-  state.generation = (state.generation ?? 0) + 1;
-  state.lastStuckWarnAgeMs = undefined;
-  state.lastLongRunningWarnAgeMs = undefined;
+  touchDiagnosticSessionState(state);
   if (params.state === "processing" && prevState !== "processing") {
     state.activeQueuedTurn = state.queueDepth > 0;
   }
@@ -649,11 +632,7 @@ export function markDiagnosticSessionProgress(params: SessionRef) {
   if (!areDiagnosticsEnabledForProcess()) {
     return;
   }
-  const state = getDiagnosticSessionState(params);
-  state.lastActivity = Date.now();
-  state.generation = (state.generation ?? 0) + 1;
-  state.lastStuckWarnAgeMs = undefined;
-  state.lastLongRunningWarnAgeMs = undefined;
+  touchDiagnosticSessionState(getDiagnosticSessionState(params));
   markActivity();
 }
 

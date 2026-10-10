@@ -6,6 +6,7 @@ import {
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
+  compareCronRunRecordsNewestFirst,
   cronRunRecordStoreKey,
   cronRunRecordToRunLogEntry,
   isCronDeliveryStatus,
@@ -88,19 +89,6 @@ function queryText(entry: CronRunLogEntry, jobNameById?: Record<string, string>)
   ].join(" ");
 }
 
-function compareHistoryRows(
-  left: { entry: CronRunLogEntry; record: CronRunRecord },
-  right: { entry: CronRunLogEntry; record: CronRunRecord },
-  direction: CronRunHistorySortDir,
-): number {
-  const multiplier = direction === "asc" ? 1 : -1;
-  return (
-    multiplier * (left.entry.ts - right.entry.ts) ||
-    multiplier * (left.record.createdAt - right.record.createdAt) ||
-    multiplier * left.record.id.localeCompare(right.record.id)
-  );
-}
-
 function attachJobNames(entries: CronRunLogEntry[], jobNameById?: Record<string, string>): void {
   for (const entry of entries) {
     const jobName = jobNameById?.[entry.jobId];
@@ -126,7 +114,7 @@ export function projectCronRunHistoryPage(
   const runId = normalizeOptionalString(options.runId);
   const agentId = options.agentId ? normalizeAgentId(options.agentId) : undefined;
   const query = normalizeLowercaseStringOrEmpty(options.query);
-  const sortDir: CronRunHistorySortDir = options.sortDir === "asc" ? "asc" : "desc";
+  const sortMultiplier = options.sortDir === "asc" ? -1 : 1;
   const rows = records
     .filter(
       (record) =>
@@ -151,7 +139,9 @@ export function projectCronRunHistoryPage(
         (!options.entryFilter || options.entryFilter(entry))
       );
     })
-    .toSorted((left, right) => compareHistoryRows(left, right, sortDir));
+    .toSorted(
+      (left, right) => sortMultiplier * compareCronRunRecordsNewestFirst(left.record, right.record),
+    );
   const total = rows.length;
   const boundedOffset = Math.min(total, offset);
   const entries = rows.slice(boundedOffset, boundedOffset + limit).map(({ entry }) => entry);

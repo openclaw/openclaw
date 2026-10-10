@@ -15,7 +15,7 @@ const DEFAULT_REALTIME_VOICE_FORCED_CONSULT_NATIVE_DEDUPE_MS = 2_000;
 const DEFAULT_REALTIME_VOICE_FORCED_CONSULT_LIMIT = 12;
 
 /** Timer abstraction used so tests can inject deterministic fake timers. */
-export type RealtimeVoiceForcedConsultTimer = {
+type RealtimeVoiceForcedConsultTimer = {
   clear(): void;
 };
 
@@ -37,7 +37,7 @@ export type RealtimeVoiceForcedConsultHandle<TContext = unknown> = {
 };
 
 /** Classification of a native provider consult relative to forced consult state. */
-export type RealtimeVoiceForcedConsultNativeMatch<TContext = unknown> =
+type RealtimeVoiceForcedConsultNativeMatch<TContext = unknown> =
   | { kind: "none"; question?: string }
   | { kind: "pending"; question?: string; handle: RealtimeVoiceForcedConsultHandle<TContext> }
   | { kind: "in_flight"; question?: string; handle: RealtimeVoiceForcedConsultHandle<TContext> }
@@ -47,45 +47,15 @@ export type RealtimeVoiceForcedConsultNativeMatch<TContext = unknown> =
       handle: RealtimeVoiceForcedConsultHandle<TContext>;
     };
 
-export type RealtimeVoiceForcedConsultNativeRecentOptions = {
+type RealtimeVoiceForcedConsultNativeRecentOptions = {
   /** Treat native calls without readable questions as recent generic consults. */
   allowUnknownQuestion?: boolean;
 };
 
 /** Public state machine for forced/native consult dedupe in a voice session. */
-export type RealtimeVoiceForcedConsultCoordinator<TContext = unknown> = {
-  prepare(
-    question: string,
-    options?: { context?: TContext; id?: string },
-  ): RealtimeVoiceForcedConsultHandle<TContext> | undefined;
-  schedule(
-    handle: RealtimeVoiceForcedConsultHandle<TContext>,
-    delayMs: number,
-    run: (handle: RealtimeVoiceForcedConsultHandle<TContext>) => void,
-  ): void;
-  clearPending(): void;
-  consumePending(question?: string): RealtimeVoiceForcedConsultHandle<TContext> | undefined;
-  cancelPending(handle: RealtimeVoiceForcedConsultHandle<TContext>): void;
-  recordNativeConsult(
-    args: unknown,
-    nativeCallId?: string,
-  ): RealtimeVoiceForcedConsultNativeMatch<TContext>;
-  markStarted(handle: RealtimeVoiceForcedConsultHandle<TContext>): void;
-  markDelivered(handle: RealtimeVoiceForcedConsultHandle<TContext>): void;
-  markCancelled(handle: RealtimeVoiceForcedConsultHandle<TContext>): void;
-  isCancelled(handle: RealtimeVoiceForcedConsultHandle<TContext>): boolean;
-  nativeCallIds(handle: RealtimeVoiceForcedConsultHandle<TContext>): readonly string[];
-  handles(): readonly RealtimeVoiceForcedConsultHandle<TContext>[];
-  rememberQuestion(handle: RealtimeVoiceForcedConsultHandle<TContext>, question: string): void;
-  findRecent(question: string): RealtimeVoiceForcedConsultHandle<TContext> | undefined;
-  hasRecent(question: string): boolean;
-  hasRecentNativeConsult(
-    question: string,
-    options?: RealtimeVoiceForcedConsultNativeRecentOptions,
-  ): boolean;
-  remove(handle: RealtimeVoiceForcedConsultHandle<TContext>): void;
-  clear(): void;
-};
+export type RealtimeVoiceForcedConsultCoordinator<TContext = unknown> = ReturnType<
+  typeof createRealtimeVoiceForcedConsultCoordinator<TContext>
+>;
 
 type StoredForcedConsult<TContext> = {
   handle: RealtimeVoiceForcedConsultHandle<TContext>;
@@ -107,7 +77,7 @@ type RecentNativeConsult = {
 /** Create an in-memory forced-consult coordinator for one realtime session. */
 export function createRealtimeVoiceForcedConsultCoordinator<TContext = unknown>(
   options: RealtimeVoiceForcedConsultCoordinatorOptions = {},
-): RealtimeVoiceForcedConsultCoordinator<TContext> {
+) {
   const state = new Map<string, StoredForcedConsult<TContext>>();
   const recentNativeConsults: RecentNativeConsult[] = [];
   let nextId = 0;
@@ -124,9 +94,10 @@ export function createRealtimeVoiceForcedConsultCoordinator<TContext = unknown>(
     });
   const questionsMatch = options.questionsMatch ?? matchRealtimeVoiceConsultQuestions;
 
-  const clearTimer = (stored: StoredForcedConsult<TContext>) => {
+  const stopPending = (stored: StoredForcedConsult<TContext>) => {
     stored.timer?.clear();
     stored.timer = undefined;
+    stored.pending = false;
   };
 
   const scheduleCleanup = (stored: StoredForcedConsult<TContext>) => {
@@ -163,18 +134,13 @@ export function createRealtimeVoiceForcedConsultCoordinator<TContext = unknown>(
     }
   };
 
-  const findMatching = (question: string | undefined) => {
-    if (!question) {
-      return undefined;
-    }
-    return [...state.values()]
-      .toReversed()
-      .find((candidate) =>
-        candidate.questions.some((candidateQuestion) =>
-          questionsMatch(candidateQuestion, question),
-        ),
-      );
-  };
+  const matchesQuestion = (stored: StoredForcedConsult<TContext>, question: string | undefined) =>
+    stored.questions.some((candidate) => questionsMatch(candidate, question));
+
+  const findMatching = (question: string | undefined) =>
+    question
+      ? [...state.values()].findLast((candidate) => matchesQuestion(candidate, question))
+      : undefined;
 
   const rememberStoredQuestion = (
     stored: StoredForcedConsult<TContext>,
@@ -197,24 +163,10 @@ export function createRealtimeVoiceForcedConsultCoordinator<TContext = unknown>(
     prune();
   };
 
-  const hasRecentNativeConsult = (
-    question: string,
-    recentOptions: RealtimeVoiceForcedConsultNativeRecentOptions = {},
-  ) => {
-    prune();
-    return recentNativeConsults
-      .toReversed()
-      .some((recent) =>
-        recent.question
-          ? questionsMatch(recent.question, question)
-          : recentOptions.allowUnknownQuestion === true,
-      );
-  };
-
   const getStored = (handle: RealtimeVoiceForcedConsultHandle<TContext>) => state.get(handle.id);
 
   return {
-    prepare(question, prepareOptions) {
+    prepare(question: string, prepareOptions?: { context?: TContext; id?: string }) {
       const trimmed = question.trim();
       if (!trimmed) {
         return undefined;
@@ -244,7 +196,11 @@ export function createRealtimeVoiceForcedConsultCoordinator<TContext = unknown>(
       prune();
       return handle;
     },
-    schedule(handle, delayMs, run) {
+    schedule(
+      handle: RealtimeVoiceForcedConsultHandle<TContext>,
+      delayMs: number,
+      run: (handle: RealtimeVoiceForcedConsultHandle<TContext>) => void,
+    ) {
       const stored = getStored(handle);
       if (!stored || !stored.pending || stored.timer) {
         return;
@@ -263,57 +219,48 @@ export function createRealtimeVoiceForcedConsultCoordinator<TContext = unknown>(
     clearPending() {
       for (const stored of state.values()) {
         if (stored.pending) {
-          clearTimer(stored);
+          stopPending(stored);
           state.delete(stored.handle.id);
         }
       }
     },
-    consumePending(question) {
+    consumePending(question?: string) {
       const pendingCandidates = [...state.values()].filter((candidate) => candidate.pending);
       // If there is exactly one pending forced consult, allow callers that do
       // not have readable question text to consume it unambiguously.
       const stored =
         !question && pendingCandidates.length === 1
           ? pendingCandidates[0]
-          : pendingCandidates
-              .toReversed()
-              .find((candidate) =>
-                candidate.questions.some((candidateQuestion) =>
-                  questionsMatch(candidateQuestion, question),
-                ),
-              );
+          : pendingCandidates.findLast((candidate) => matchesQuestion(candidate, question));
       if (!stored?.pending) {
         return undefined;
       }
-      clearTimer(stored);
-      stored.pending = false;
+      stopPending(stored);
       return stored.handle;
     },
-    cancelPending(handle) {
+    cancelPending(handle: RealtimeVoiceForcedConsultHandle<TContext>) {
       const stored = getStored(handle);
       if (!stored?.pending) {
         return;
       }
-      clearTimer(stored);
-      stored.pending = false;
+      stopPending(stored);
       state.delete(handle.id);
     },
-    recordNativeConsult(args, nativeCallId) {
+    recordNativeConsult(
+      args: unknown,
+      nativeCallId?: string,
+    ): RealtimeVoiceForcedConsultNativeMatch<TContext> {
       const question = readRealtimeVoiceConsultQuestion(args);
       recordRecentNativeConsult(question);
       // Native calls win over scheduled forced calls when they match a pending
       // question; the pending timer is cleared and the handle remains for dedupe.
-      const pending = [...state.values()]
-        .toReversed()
-        .find(
-          (candidate) =>
-            candidate.pending &&
-            candidate.questions.some((candidateQuestion) =>
-              questionsMatch(candidateQuestion, question),
-            ),
-        );
+      const pending = [...state.values()].findLast(
+        (candidate) => candidate.pending && matchesQuestion(candidate, question),
+      );
       if (pending) {
-        clearTimer(pending);
+        // Clear the timer before matcher callbacks; publish the consumed state afterward.
+        pending.timer?.clear();
+        pending.timer = undefined;
         rememberStoredQuestion(pending, question);
         if (nativeCallId) {
           pending.nativeCallIds.add(nativeCallId);
@@ -338,60 +285,69 @@ export function createRealtimeVoiceForcedConsultCoordinator<TContext = unknown>(
       }
       return { kind: "none", question };
     },
-    markStarted(handle) {
+    markStarted(handle: RealtimeVoiceForcedConsultHandle<TContext>) {
       const stored = getStored(handle);
       if (!stored) {
         return;
       }
-      clearTimer(stored);
-      stored.pending = false;
+      stopPending(stored);
       stored.started = true;
     },
-    markDelivered(handle) {
+    markDelivered(handle: RealtimeVoiceForcedConsultHandle<TContext>) {
       const stored = getStored(handle);
       if (!stored) {
         return;
       }
-      clearTimer(stored);
-      stored.pending = false;
+      stopPending(stored);
       stored.started = true;
       stored.delivered = true;
       scheduleCleanup(stored);
     },
-    markCancelled(handle) {
+    markCancelled(handle: RealtimeVoiceForcedConsultHandle<TContext>) {
       const stored = getStored(handle);
       if (!stored || stored.delivered) {
         return;
       }
-      clearTimer(stored);
-      stored.pending = false;
+      stopPending(stored);
       stored.cancelled = true;
       scheduleCleanup(stored);
     },
-    isCancelled(handle) {
+    isCancelled(handle: RealtimeVoiceForcedConsultHandle<TContext>) {
       return getStored(handle)?.cancelled === true;
     },
-    nativeCallIds(handle) {
+    nativeCallIds(handle: RealtimeVoiceForcedConsultHandle<TContext>): readonly string[] {
       return [...(getStored(handle)?.nativeCallIds ?? [])];
     },
-    handles() {
+    handles(): readonly RealtimeVoiceForcedConsultHandle<TContext>[] {
       return [...state.values()].map((stored) => stored.handle);
     },
-    rememberQuestion(handle, question) {
+    rememberQuestion(handle: RealtimeVoiceForcedConsultHandle<TContext>, question: string) {
       const stored = getStored(handle);
       if (stored) {
         rememberStoredQuestion(stored, question);
       }
     },
-    findRecent(question) {
+    findRecent(question: string) {
       prune();
       return findMatching(question)?.handle;
     },
-    hasRecent(question) {
+    hasRecent(question: string) {
       return Boolean(findMatching(question));
     },
-    hasRecentNativeConsult,
-    remove(handle) {
+    hasRecentNativeConsult(
+      question: string,
+      recentOptions: RealtimeVoiceForcedConsultNativeRecentOptions = {},
+    ) {
+      prune();
+      return recentNativeConsults
+        .toReversed()
+        .some((recent) =>
+          recent.question
+            ? questionsMatch(recent.question, question)
+            : recentOptions.allowUnknownQuestion === true,
+        );
+    },
+    remove(handle: RealtimeVoiceForcedConsultHandle<TContext>) {
       const stored = getStored(handle);
       stored?.timer?.clear();
       stored?.cleanupTimer?.clear();

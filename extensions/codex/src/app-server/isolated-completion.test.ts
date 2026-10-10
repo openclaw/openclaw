@@ -205,27 +205,23 @@ describe("runCodexIsolatedCompletion", () => {
     });
   });
 
-  it.each([undefined, false])(
-    "rejects hook continuations without active managed attestation (%s)",
-    async (managedHooksEnabled) => {
-      mocks.runBoundedTurn.mockResolvedValue({
-        text: "Garden Planning",
-        model: "gpt-5.4",
-        managedHooksEnabled,
-        items: [
-          {
-            id: "hook",
-            type: "hookPrompt",
-            fragments: [{ text: "Revise the answer.", hookRunId: "hook-1" }],
-          },
-        ],
-      });
+  it("rejects hook continuations without active managed attestation", async () => {
+    mocks.runBoundedTurn.mockResolvedValue({
+      text: "Garden Planning",
+      model: "gpt-5.4",
+      items: [
+        {
+          id: "hook",
+          type: "hookPrompt",
+          fragments: [{ text: "Revise the answer.", hookRunId: "hook-1" }],
+        },
+      ],
+    });
 
-      await expect(runCodexIsolatedCompletion(createParams(), {})).rejects.toThrow(
-        "unexpected native item: hookPrompt",
-      );
-    },
-  );
+    await expect(runCodexIsolatedCompletion(createParams(), {})).rejects.toThrow(
+      "unexpected native item: hookPrompt",
+    );
+  });
 
   it("rejects native tools even when managed hooks were attested", async () => {
     mocks.runBoundedTurn.mockResolvedValue({

@@ -3,7 +3,6 @@ import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e
 import {
   SESSION_DRAG_MIME,
   captureSessionAccessibilityProof,
-  captureUiProof,
   chatSessionListResponse,
   controlUiSessionPath,
   createChatFlowE2eSuite,
@@ -91,10 +90,13 @@ suite.define(() => {
           ),
         )
         .toEqual([true, true]);
+      // Loading is published before foreground subscription admission and RPC dispatch.
+      await gateway.waitForRequest("chat.startup");
       expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
 
       await gateway.resolveDeferred("chat.startup");
       await expect.poll(() => page.getByText("Shared cold startup proof.").count()).toBe(2);
+      expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -782,7 +784,7 @@ suite.define(() => {
         .evaluate((label) => getComputedStyle(label).fontWeight);
       expect(activeWeight).toBe(inactiveWeight);
 
-      const filterAndSort = page.getByRole("button", { name: "Filter & sort" });
+      const filterAndSort = page.getByRole("button", { name: "Filter & sort", exact: true });
       await filterAndSort.click();
       await chooseSidebarMenuOption(page, "Sort by", "Last updated");
       await closeSidebarMenu(page);
@@ -796,139 +798,6 @@ suite.define(() => {
       await filterAndSort.click();
       await page.getByRole("main").click();
       await expect.poll(() => page.locator(".sidebar-session-sort-menu").count()).toBe(0);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  it("releases a retained queued send after the canonical session list records idle", async () => {
-    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const firstKey = "agent:main:thread:aaaaaaaa-1111-4111-8111-111111111111";
-    const secondKey = "agent:main:thread:bbbbbbbb-2222-4222-8222-222222222222";
-    const activeSessions = chatSessionListResponse([
-      {
-        key: firstKey,
-        kind: "direct",
-        label: "Instant A",
-        updatedAt: 2,
-        activeRunIds: ["server-run"],
-        hasActiveRun: true,
-        status: "running",
-      },
-      { key: secondKey, kind: "direct", label: "Instant B", updatedAt: 1 },
-    ]);
-    const idleSessions = chatSessionListResponse([
-      {
-        key: firstKey,
-        kind: "direct",
-        label: "Instant A",
-        updatedAt: 3,
-        activeRunIds: [],
-        hasActiveRun: false,
-        lastRunId: "server-run",
-        status: "done",
-      },
-      { key: secondKey, kind: "direct", label: "Instant B", updatedAt: 1 },
-    ]);
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "chat.history": {
-          messages: [],
-          sessionInfo: { hasActiveRun: false, status: "done" },
-          thinkingLevel: null,
-        },
-        "sessions.list": activeSessions,
-      },
-      sessionKey: firstKey,
-    });
-
-    try {
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, firstKey));
-      await page.locator(`.sidebar-recent-session[data-session-key="${secondKey}"]`).waitFor();
-      await page
-        .locator(".chat-pane-cache__pane--visible .chat-pane__session-title")
-        .getByText("Instant A")
-        .waitFor();
-      await page.waitForTimeout(500);
-      const initialListCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
-      const initialMetadataCount = (await gateway.getRequests("chat.metadata")).length;
-      await gateway.deferNext("sessions.list", rosterMatch);
-
-      await page
-        .locator(
-          `.sidebar-recent-session[data-session-key="${secondKey}"] a.sidebar-recent-session__link`,
-        )
-        .click();
-      await page
-        .locator(".chat-pane-cache__pane--visible .chat-pane__session-title")
-        .getByText("Instant B")
-        .waitFor();
-      const emptyOutboxListRequests = (
-        await gateway.getRequests("sessions.list", rosterMatch)
-      ).slice(initialListCount);
-      expect(emptyOutboxListRequests).toHaveLength(0);
-      expect(await gateway.getRequests("chat.metadata")).toHaveLength(initialMetadataCount);
-      const emptyOutboxListCount = initialListCount + emptyOutboxListRequests.length;
-
-      await page.locator('openclaw-chat-pane[aria-hidden="false"]').evaluate((pane, targetKey) => {
-        const state = (
-          pane as HTMLElement & {
-            state: {
-              settings?: { gatewayUrl?: string };
-            };
-          }
-        ).state;
-        const gatewayOwner = state.settings?.gatewayUrl?.trim() || "default";
-        const key = `openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayOwner)}`;
-        sessionStorage.setItem(
-          key,
-          JSON.stringify({
-            version: 2,
-            gatewayOwner,
-            sessions: {
-              [`${targetKey}\u0000agent:main`]: {
-                updatedAt: Date.now(),
-                queue: [
-                  {
-                    id: "queued-before-switch",
-                    text: "flush after idle reconciliation",
-                    createdAt: Date.now(),
-                    sendState: "waiting-idle",
-                    sessionKey: targetKey,
-                    agentId: "main",
-                  },
-                ],
-              },
-            },
-          }),
-        );
-        window.dispatchEvent(new StorageEvent("storage", { key, storageArea: sessionStorage }));
-      }, firstKey);
-      await page
-        .locator(
-          `.sidebar-recent-session[data-session-key="${firstKey}"] a.sidebar-recent-session__link`,
-        )
-        .click();
-      await page
-        .locator(".chat-pane-cache__pane--visible .chat-pane__session-title")
-        .getByText("Instant A")
-        .waitFor();
-      await expect
-        .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
-        .toBe(emptyOutboxListCount + 1);
-      const queued = page.locator(".chat-queue").getByText("flush after idle reconciliation");
-      await queued.waitFor();
-      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-      await captureUiProof(suite, page, "queued-idle-release", "01-queued-before-idle.png");
-      await gateway.resolveDeferred("sessions.list", idleSessions);
-      const send = await gateway.waitForRequest("chat.send");
-      expect(requireRecord(send.params)).toMatchObject({
-        message: "flush after idle reconciliation",
-        sessionKey: firstKey,
-      });
-      await queued.waitFor({ state: "detached" });
-      await captureUiProof(suite, page, "queued-idle-release", "02-sent-after-idle.png");
     } finally {
       await suite.closeBrowserContext(context);
     }

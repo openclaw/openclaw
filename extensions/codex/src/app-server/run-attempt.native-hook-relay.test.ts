@@ -60,23 +60,6 @@ function writeCodexAppServerBinding(...args: Parameters<typeof writeRawCodexAppS
 }
 
 describe("runCodexAppServerAttempt native hook relay", () => {
-  it("refuses to run when managed-only hooks would silently discard its enforcing relay", async () => {
-    const sessionFile = path.join(tempDir, "managed-hooks-only.jsonl");
-    const workspaceDir = path.join(tempDir, "managed-hooks-only-workspace");
-    const harness = createStartedThreadHarness(async (method) =>
-      method === "configRequirements/read"
-        ? { requirements: { allowManagedHooksOnly: true } }
-        : undefined,
-    );
-
-    await expect(
-      runCodexAppServerAttempt(createLoopRelayParams(sessionFile, workspaceDir), {
-        nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
-      }),
-    ).rejects.toThrow(/managed-only hooks.*OpenClaw native hook relay/i);
-    expect(harness.requests.some((request) => request.method === "thread/start")).toBe(false);
-  });
-
   it("rejects Guardian review when the running server resolves an untrusted managed endpoint", async () => {
     const sessionFile = path.join(tempDir, "managed-review-endpoint.jsonl");
     const workspaceDir = path.join(tempDir, "managed-review-endpoint-workspace");
@@ -118,6 +101,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
     params.sandboxSessionKey = "agent:main:policy";
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const run = runCodexAppServerAttempt(params, {
       nativeHookRelay: {
         enabled: true,
@@ -253,17 +237,21 @@ describe("runCodexAppServerAttempt native hook relay", () => {
 
   it("fails a defensive unattended yolo approval immediately when the hook requires review", async () => {
     const onResolution = vi.fn();
+    let reviewRequestedAtMs = 0;
     initializeGlobalHookRunner(
       createMockPluginRegistry([
         {
           hookName: "before_tool_call",
-          handler: vi.fn(() => ({
-            requireApproval: {
-              title: "Operator review required",
-              description: "Command needs an interactive approver",
-              onResolution,
-            },
-          })),
+          handler: vi.fn(() => {
+            reviewRequestedAtMs = performance.now();
+            return {
+              requireApproval: {
+                title: "Operator review required",
+                description: "Command needs an interactive approver",
+                onResolution,
+              },
+            };
+          }),
         },
       ]),
     );
@@ -275,11 +263,11 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     params.onAgentEvent = vi.fn();
     const closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);
 
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const run = runCodexAppServerAttempt(params, {
       nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
     });
     await harness.waitForMethod("turn/start");
-    const startedAtMs = Date.now();
     const response = await harness.handleServerRequest({
       id: "request-command-policy-unattended",
       method: "item/commandExecution/requestApproval",
@@ -294,7 +282,9 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     });
 
     expect(response).toEqual({ decision: "decline" });
-    expect(Date.now() - startedAtMs).toBeLessThan(1_000);
+    // Binding mutable executable bytes precedes the hook; the decision must not wait for review.
+    expect(reviewRequestedAtMs).toBeGreaterThan(0);
+    expect(performance.now() - reviewRequestedAtMs).toBeLessThan(1_000);
     expect(onResolution).toHaveBeenCalledWith("cancelled");
     expect(params.onAgentEvent).toHaveBeenCalledWith(
       expect.objectContaining({

@@ -6,7 +6,6 @@ import type {
 } from "../../../api/types.ts";
 import { renderAgentIdentityAvatar } from "../../../components/identity-avatar-view.ts";
 import { renderKbd } from "../../../components/kbd.ts";
-// Control UI chat module implements chat welcome behavior.
 import { t } from "../../../i18n/index.ts";
 import "../../../components/openclaw-mascot.ts";
 import { registerCommandPaletteEnglish } from "../../../i18n/locales/en-command-palette.ts";
@@ -22,7 +21,7 @@ import {
   resolveSessionDisplayName,
   resolveSessionWorkSubtitle,
 } from "../../../lib/session-display.ts";
-import { getVisibleSessionRows } from "../../../lib/sessions/navigation.ts";
+import { filterVisibleSessionRows } from "../../../lib/sessions/navigation.ts";
 import {
   areUiSessionKeysEquivalent,
   parseAgentSessionKey,
@@ -94,9 +93,7 @@ export function resolveAssistantDisplayAvatar(
  * minus channel-originated sessions — those live in their channel sections and
  * are not something the user "starts" from here.
  */
-function selectWelcomeRecentSessions(
-  props: Pick<ChatWelcomeProps, "sessions" | "sessionKey" | "sessionHost">,
-): GatewaySessionRow[] {
+function selectWelcomeRecentSessions(props: ChatWelcomeProps): GatewaySessionRow[] {
   if (!props.sessions) {
     return [];
   }
@@ -106,7 +103,11 @@ function selectWelcomeRecentSessions(
   const defaultAgentId = resolveUiSelectedGlobalAgentId(host);
   const agentId = parseAgentSessionKey(props.sessionKey)?.agentId ?? defaultAgentId;
   return (
-    getVisibleSessionRows(props.sessions, { agentId, defaultAgentId, filterByAgent: true })
+    filterVisibleSessionRows(props.sessions.sessions, {
+      agentId,
+      defaultAgentId,
+      filterByAgent: true,
+    })
       .filter(
         (row) =>
           !areUiSessionKeysEquivalent(row.key, props.sessionKey) &&
@@ -172,17 +173,7 @@ function renderWelcomeSuggestions(props: Pick<ChatWelcomeProps, "onDraftChange" 
   `;
 }
 
-function renderWelcomeHero(
-  props: Pick<
-    ChatWelcomeProps,
-    | "currentAgentId"
-    | "agents"
-    | "assistantName"
-    | "assistantAvatar"
-    | "assistantAvatarUrl"
-    | "hint"
-  >,
-) {
+function renderWelcomeHero(props: ChatWelcomeProps) {
   const name = props.assistantName || "Assistant";
   const hint =
     props.hint ??

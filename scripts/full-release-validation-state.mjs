@@ -32,7 +32,6 @@ import {
   buildReleaseExecutionPlan,
   buildReleaseExecutionPlanArtifact,
   buildReleaseStateArtifact,
-  buildReleaseValidationManifest,
   classifyReleaseGhTransportError,
   classifyReleaseSnapshot,
   composeReleaseChildAttemptEvidence,
@@ -49,8 +48,14 @@ import {
 } from "./full-release-validation-policy.mjs";
 import { sortJsonValueKeys } from "./lib/canonical-json.mjs";
 import { validateReusableReleaseChild } from "./lib/full-release-child-reuse.mjs";
+import {
+  buildReleaseValidationManifest,
+  manifestContextFromEnvironment,
+  releaseManifestChildEvidence,
+} from "./lib/full-release-manifest.mjs";
 import { createReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 import { downloadFullReleaseNpmPreflight } from "./npm-preflight-tooling-identity.mjs";
+import { verifyQualificationAdmission } from "./release-qualification-admission.mjs";
 
 export * from "./full-release-validation-policy.mjs";
 
@@ -290,15 +295,14 @@ export async function readChild(child, previous, signal, options = {}) {
       `${child.key} GitHub read failed: ${error instanceof Error ? error.message : String(error)}`,
     );
     ghRetryDeadline ??= degraded ? performance.now() + TRANSPORT_UNCERTAINTY_MS : undefined;
+    const errors = (previous?.errors ?? []).filter((entry) => entry.kind === "provenance_mismatch");
+    if (!degraded) {
+      errors.push(readError);
+    }
     return {
       ...child,
       ...previous,
-      errors: degraded
-        ? (previous?.errors ?? []).filter((entry) => entry.kind === "provenance_mismatch")
-        : [
-            ...(previous?.errors ?? []).filter((entry) => entry.kind === "provenance_mismatch"),
-            readError,
-          ],
+      errors,
       status: degraded ? "transport_uncertain" : stringValue(previous?.status, "unknown"),
       transportFailure: degraded ? { errorClass: "transient" } : undefined,
     };
@@ -421,6 +425,7 @@ async function validateReuse(executionPlan, signal) {
         validateReusableReleaseChild(selection, {
           repository: executionPlan.repository,
           targetSha: executionPlan.targetSha,
+          workflowSha: executionPlan.workflowSha,
           role,
           inputs: selection.inputs,
         }),
@@ -450,6 +455,14 @@ async function validateReuse(executionPlan, signal) {
     return { blockers: [], children: plan, errors: [] };
   }
   try {
+    const admission = executionPlan.sourceAdmission?.qualificationAdmission;
+    const verifier = admission
+      ? {
+          ref: admission.workflowHeadBranch,
+          fullRef: admission.workflowFullRef,
+          sha: admission.workflowSha,
+        }
+      : trustedWorkflow;
     const args = [
       RELEASE_SUMMARY_PATH,
       "--validate-run",
@@ -457,13 +470,13 @@ async function validateReuse(executionPlan, signal) {
       "--repo",
       requiredString(process.env.GITHUB_REPOSITORY, "GitHub repository"),
       "--trusted-workflow-ref",
-      requiredString(trustedWorkflow?.ref, "trusted workflow ref"),
+      requiredString(verifier?.ref, "trusted workflow ref"),
       "--trusted-workflow-full-ref",
-      requiredString(trustedWorkflow?.fullRef, "trusted workflow full ref"),
+      requiredString(verifier?.fullRef, "trusted workflow full ref"),
       "--trusted-workflow-sha",
-      requiredString(trustedWorkflow?.sha, "trusted workflow SHA"),
+      requiredString(verifier?.sha, "trusted workflow SHA"),
       "--verifier-source-sha",
-      requiredString(executionPlan.workflowSha, "workflow SHA"),
+      requiredString(admission?.workflowSha ?? executionPlan.workflowSha, "verifier source SHA"),
       "--verifier-source-file",
       RELEASE_SUMMARY_PATH,
       "--expected-target-sha",
@@ -480,6 +493,18 @@ async function validateReuse(executionPlan, signal) {
       JSON.stringify(changedPathsValue(evidenceReuse.changedPaths)),
       "--json",
     ];
+    if (admission) {
+      args.push(
+        "--qualification-reuse-json",
+        JSON.stringify({
+          candidateSha: executionPlan.targetSha,
+          qualificationSha: executionPlan.workflowSha,
+          workflowRef: executionPlan.workflowRef,
+          descriptor: admission,
+          inputs: executionPlan.qualificationInputs,
+        }),
+      );
+    }
     const result = await execFileAsync(process.execPath, args, {
       encoding: "utf8",
       env: process.env,
@@ -524,7 +549,7 @@ async function validateReuse(executionPlan, signal) {
       runId: stringValue(evidenceReuse.selectedRunId),
       url: stringValue(evidenceReuse.runUrl),
     };
-    return API_ERROR_PATTERN.test(message)
+    return entry.kind === "api_error"
       ? { blockers: [], children: plan, errors: [entry] }
       : { blockers: [entry], children: plan, errors: [] };
   }
@@ -654,72 +679,6 @@ function planExpected() {
     targetSha: stringValue(process.env.TARGET_SHA),
     workflowSha: requiredString(process.env.GITHUB_SHA, "workflow SHA"),
     workflowRef: requiredString(process.env.GITHUB_REF_NAME, "workflow ref"),
-  };
-}
-
-function manifestContextFromEnvironment(source) {
-  const env = process.env;
-  const coverage = source?.coverage ?? {};
-  const inputs = {};
-  for (const [key, variable, sourceKey] of [
-    ["provider", "PROVIDER", "provider"],
-    ["mode", "MODE", "mode"],
-    ["liveSuiteFilter", "LIVE_SUITE_FILTER", "live_suite_filter"],
-    ["crossOsSuiteFilter", "CROSS_OS_SUITE_FILTER", "cross_os_suite_filter"],
-    ["releasePackageSpec", "RELEASE_PACKAGE_SPEC", "release_package_spec"],
-    [
-      "packageAcceptancePackageSpec",
-      "PACKAGE_ACCEPTANCE_PACKAGE_SPEC",
-      "package_acceptance_package_spec",
-    ],
-    ["codexPluginSpec", "CODEX_PLUGIN_SPEC", "codex_plugin_spec"],
-    ["npmTelegramPackageSpec", "NPM_TELEGRAM_PACKAGE_SPEC", "npm_telegram_package_spec"],
-    ["npmTelegramProviderMode", "NPM_TELEGRAM_PROVIDER_MODE", "npm_telegram_provider_mode"],
-    ["npmTelegramScenario", "NPM_TELEGRAM_SCENARIO", "npm_telegram_scenario"],
-    ["skipPackageTelegramE2e", "SKIP_PACKAGE_TELEGRAM_E2E", "skip_package_telegram_e2e"],
-    ["allowUnreleasedChangelog", "ALLOW_UNRELEASED_CHANGELOG", "allow_unreleased_changelog"],
-    [
-      "pluginPrereleaseNodeExcludePatternsJson",
-      "PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON",
-      "plugin_prerelease_node_exclude_patterns_json",
-    ],
-    [
-      "extensionTestExcludePatternsJson",
-      "EXTENSION_TEST_EXCLUDE_PATTERNS_JSON",
-      "extension_test_exclude_patterns_json",
-    ],
-  ]) {
-    inputs[key] = env[variable] ?? coverage[sourceKey] ?? "";
-  }
-  inputs.targetContextRef = env.TARGET_CONTEXT_REF ?? source?.targetContextRef ?? "";
-  inputs.targetVersion = env.TARGET_VERSION ?? source?.projection?.version ?? "";
-  const waiver = env.TELEGRAM_WAIVER ?? coverage.telegram_waiver ?? "";
-  if (waiver) {
-    inputs.telegramWaiver = waiver;
-  }
-  return {
-    runId: env.GITHUB_RUN_ID,
-    runAttempt: env.GITHUB_RUN_ATTEMPT,
-    workflowRef: env.GITHUB_REF_NAME,
-    workflowSha: env.GITHUB_SHA,
-    workflowFullRef: env.GITHUB_REF,
-    workflowRefType: env.GITHUB_REF_TYPE,
-    targetRef: env.TARGET_REF ?? source?.targetContextRef ?? "",
-    releaseProfile: env.RELEASE_PROFILE ?? coverage.release_profile ?? "",
-    rerunGroup: env.RERUN_GROUP ?? coverage.rerun_group ?? "",
-    runReleaseSoak: env.RUN_RELEASE_SOAK ?? coverage.run_release_soak ?? "",
-    validationInputs: inputs,
-    publicationArtifacts: {
-      npmPreflight: JSON.parse(env.QUALIFIED_NPM_BUNDLE_JSON || "null"),
-      docker: env.PREPARED_DOCKER_MANIFEST_SHA256
-        ? {
-            preparedRunId: env.PREPARED_DOCKER_RUN_ID,
-            preparedRunAttempt: env.PREPARED_DOCKER_RUN_ATTEMPT,
-            preparedArtifactName: env.PREPARED_DOCKER_ARTIFACT_NAME,
-            preparedManifestSha256: env.PREPARED_DOCKER_MANIFEST_SHA256,
-          }
-        : null,
-    },
   };
 }
 
@@ -1082,6 +1041,20 @@ async function planMode() {
         cachedPlan: restored,
       });
     }
+    if (restored.sourceAdmission?.qualificationAdmission) {
+      const admitted = verifyQualificationAdmission({
+        descriptor: restored.sourceAdmission.qualificationAdmission,
+        repository: expected.repository,
+        candidateSha: restored.targetSha,
+        qualificationSha: restored.workflowSha,
+        workflowRef: restored.workflowRef,
+        inputs: restored.qualificationInputs,
+      });
+      validateReleaseExecutionPlanArtifact(restored, {
+        ...expected,
+        qualificationCoverage: admitted.coverage,
+      });
+    }
     writeExecutionPlan(outputPath, restored);
     return;
   }
@@ -1106,6 +1079,22 @@ async function planMode() {
           };
     Object.assign(planInputs, publication);
   }
+  if (planInputs.sourceAdmission?.qualificationAdmission) {
+    const event = readArtifact(
+      requiredString(process.env.GITHUB_EVENT_PATH, "workflow event path"),
+      "workflow event",
+    );
+    const admitted = verifyQualificationAdmission({
+      descriptor: planInputs.sourceAdmission.qualificationAdmission,
+      repository: expected.repository,
+      candidateSha: expected.targetSha,
+      qualificationSha: expected.workflowSha,
+      workflowRef: expected.workflowRef,
+      inputs: event.inputs,
+    });
+    planInputs.qualificationInputs = event.inputs;
+    planInputs.qualificationCoverage = admitted.coverage;
+  }
   const attemptEvidenceVersion = Number(planInputs.childPhaseVersion) === 3 ? 3 : 2;
   const built = buildReleaseExecutionPlan(planInputs);
   const candidate = candidateFromInputs(planInputs, built.gates);
@@ -1118,6 +1107,8 @@ async function planMode() {
     sourceAdmission: planInputs.sourceAdmission,
     publicationAdmissionContract: planInputs.publicationAdmissionContract,
     publicationAdmission: planInputs.publicationAdmission,
+    qualificationCoverage: planInputs.qualificationCoverage,
+    qualificationInputs: planInputs.qualificationInputs,
     candidate,
     coveragePolicy: planInputs.coveragePolicy,
     children: hydrateReusedPlan(built.children, { childReuse: planInputs.childReuse ?? {} }),
@@ -1211,10 +1202,6 @@ async function collectMode(mode) {
     },
   );
   const plan = executionPlan.children;
-  const policy = {
-    releaseProfile,
-    workflowRef: expected.workflowRef,
-  };
   const gateFailures = releasePlanGateFailures(executionPlan.gates);
   const failFast = mode === "decision" && process.env.FAIL_FAST === "true";
   const pollIntervalMs =
@@ -1268,7 +1255,6 @@ async function collectMode(mode) {
         },
       ],
       localFailures: gateFailures,
-      ...policy,
     });
     writePayload(decision, { cancelledRunIds, requested: true });
     finished = true;
@@ -1337,7 +1323,6 @@ async function collectMode(mode) {
       extraBlockers: [...executionPlan.blockers, ...decisionReuse.blockers],
       extraErrors: [...transportReadErrors, ...executionPlan.errors, ...decisionReuse.errors],
       localFailures: gateFailures,
-      ...policy,
     });
     if (Date.now() >= nextHeartbeat) {
       console.log(formatReleaseStateHeartbeat(mode, decision));
@@ -1365,7 +1350,6 @@ async function collectMode(mode) {
             ...cancellationErrors,
           ],
           localFailures: gateFailures,
-          ...policy,
         });
       }
     }
@@ -1493,25 +1477,7 @@ async function validateManifestMode() {
     ? Object.fromEntries(
         Object.entries(drain.children).map(([key, child]) => [
           key,
-          {
-            compositeJobsSha256: child.compositeJobsSha256,
-            dispatchActor: child.dispatchActor,
-            effectiveRunAttempt: child.runAttempt,
-            jobs: child.timing.jobs.map((job) => ({
-              acceptedRunAttempt: job.acceptedRunAttempt,
-              completedAt: job.completedAt,
-              conclusion: job.conclusion,
-              name: job.name,
-              startedAt: job.startedAt,
-              status: job.status,
-              url: job.url,
-            })),
-            observedRunAttempts: child.observedRunAttempts,
-            plannedRunAttempt: child.plannedRunAttempt,
-            repository: child.repository,
-            runId: child.runId,
-            triggeringActor: child.triggeringActor,
-          },
+          releaseManifestChildEvidence(child),
         ]),
       )
     : undefined;
@@ -1531,7 +1497,7 @@ async function validateManifestMode() {
   ) {
     throw new Error("release validation manifest differs from the immutable execution plan");
   }
-  rawManifest.advisoryJobs = [];
+  rawManifest.advisoryJobs = manifest.advisoryJobs;
   writeArtifact(manifestPath, rawManifest);
 }
 
@@ -1578,42 +1544,32 @@ function selectMode() {
   }
 }
 
-async function main() {
+function main() {
   const mode = process.argv[2];
-  if (mode === "reuse-publication") {
-    await publicationReuseMode();
-    return;
+  switch (mode) {
+    case "reuse-publication":
+      return publicationReuseMode();
+    case "restore-publication":
+    case "finalize-publication":
+      return publicationMode(mode);
+    case "write-manifest":
+      return writeManifestMode();
+    case "plan":
+      return planMode();
+    case "verify":
+      return verifyMode();
+    case "select":
+      return selectMode();
+    case "validate-manifest":
+      return validateManifestMode();
+    case "decision":
+    case "drain":
+      return collectMode(mode);
+    default:
+      throw new Error(
+        "usage: full-release-validation-state.mjs <plan|decision|drain|select|validate-manifest|verify>",
+      );
   }
-  if (["restore-publication", "finalize-publication"].includes(mode)) {
-    await publicationMode(mode);
-    return;
-  }
-  if (mode === "write-manifest") {
-    await writeManifestMode();
-    return;
-  }
-  if (mode === "plan") {
-    await planMode();
-    return;
-  }
-  if (mode === "verify") {
-    verifyMode();
-    return;
-  }
-  if (mode === "select") {
-    selectMode();
-    return;
-  }
-  if (mode === "validate-manifest") {
-    await validateManifestMode();
-    return;
-  }
-  if (!["decision", "drain"].includes(mode)) {
-    throw new Error(
-      "usage: full-release-validation-state.mjs <plan|decision|drain|select|validate-manifest|verify>",
-    );
-  }
-  await collectMode(mode);
 }
 
 if (process.argv[1]?.endsWith("full-release-validation-state.mjs")) {

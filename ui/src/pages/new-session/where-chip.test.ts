@@ -213,7 +213,7 @@ describe("Where chip", () => {
       (heading) => heading.textContent?.trim(),
     );
 
-    expect(headings).toEqual(["Your devices"]);
+    expect(headings).toEqual(["Your devices", "Hosted workspaces"]);
   });
 
   it("shows the Cloud settings action only to admins when a cloud profile is available", () => {
@@ -894,6 +894,15 @@ describe("Where chip", () => {
       disabled: true,
       reason: "No worker slots are available. Wait for a slot or pick another device.",
       label: "Slot utilization unavailable",
+    },
+    {
+      name: "admits worker execution by reclaiming the sole idle worker slot",
+      devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+      workerSlots: { total: 1, available: 0, reclaimableIdle: 1 },
+      invocableCommands: [],
+      commandState: undefined,
+      disabled: false,
+      label: "1 of 1 session slots in use",
     },
     {
       name: "disables a declared remote command that the Gateway has not enabled",

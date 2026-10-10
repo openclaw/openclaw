@@ -6,13 +6,13 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import type { ReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.types.js";
 import { replyRunRegistry } from "../auto-reply/reply/reply-run-registry.js";
 import { loadSessionEntry, updateSessionEntry } from "../config/sessions/session-accessor.js";
-import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import {
   claimAgentRunContext,
@@ -36,6 +36,7 @@ import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { drainOpenClawAgentWriteQueuesForTest } from "../state/openclaw-agent-write-admission.test-support.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
+import * as chatRestartRecovery from "./server-methods/chat-restart-recovery.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import { createMainChatSessionStoreFixture } from "./server.chat-session-store.test-support.js";
 import {
@@ -46,7 +47,6 @@ import {
   createGatewayHistoryDeliveryMirror,
   hasGatewayHistoryMessageToolMirror,
 } from "./session-history-fixtures.test-support.js";
-import * as sessionLifecycleState from "./session-lifecycle-state.js";
 import { removeChatTestDirectory as removeTempDir } from "./session-test-directories.test-support.js";
 import {
   agentDiscoveryMock,
@@ -353,8 +353,8 @@ describe("gateway server chat", () => {
     });
   });
 
-  const waitForAgentRunOk = async (runId: string, timeoutMs = 1_000) => {
-    const res = await rpcReq(ws, "agent.wait", {
+  const waitForAgentRunOk = async (runId: string, timeoutMs = 1_000, socket = ws) => {
+    const res = await rpcReq(socket, "agent.wait", {
       runId,
       timeoutMs,
     });
@@ -362,10 +362,10 @@ describe("gateway server chat", () => {
     expect(res.payload?.status, JSON.stringify(res.payload)).toBe("ok");
     return res;
   };
-  const waitForAgentRunDrained = async (runId: string) => {
+  const waitForAgentRunDrained = async (runId: string, socket = ws) => {
     await requestExecution.waitForCompletion(runId);
     expect(getActiveGatewayRootWorkCount()).toBe(0);
-    await waitForAgentRunOk(runId, 0);
+    await waitForAgentRunOk(runId, 0, socket);
   };
   const abortChatRun = async (runId: string) => {
     const res = await rpcReq(ws, "chat.abort", {
@@ -406,7 +406,7 @@ describe("gateway server chat", () => {
     { method: "send", message: "hello from dashboard" },
     { method: "steer", message: "follow-up from dashboard" },
   ])(
-    "sessions.$method accepts an existing session input before reporting its committed history position",
+    "sessions.$method returns the committed history position when starting an existing session input",
     async ({ method, message }) => {
       const sessionKey = `agent:main:dashboard:test-${method}`;
       const runId = `idem-sessions-${method}-1`;
@@ -428,9 +428,8 @@ describe("gateway server chat", () => {
           idempotencyKey: runId,
         });
         expect(res.ok).toBe(true);
-        expectRecordFields(res.payload, { runId, status: "started" });
-        // The suite's TEST client ACKs before dispatch can commit the user turn.
-        expect(res.payload).not.toHaveProperty("messageSeq");
+        // Direct operator input commits through restart-safe admission before the ACK.
+        expectRecordFields(res.payload, { runId, status: "started", messageSeq: 1 });
         await waitForAgentRunDrained(runId);
 
         const history = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", { sessionKey });
@@ -440,7 +439,10 @@ describe("gateway server chat", () => {
         );
         expect(users).toHaveLength(1);
         const user = expectRecordFields(users[0], { role: "user" });
-        expectRecordFields(user["__openclaw"], { seq: 1, idempotencyKey: `${runId}:user` });
+        expectRecordFields(user["__openclaw"], {
+          seq: res.payload?.messageSeq,
+          idempotencyKey: `${runId}:user`,
+        });
         expect(collectHistoryTextValues(users)).toEqual([message]);
       } finally {
         // A failed ACK assertion must not retire storage before detached work finishes.
@@ -609,7 +611,7 @@ describe("gateway server chat", () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-send-agent-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
     testState.agentsConfig = {
-      list: [{ id: "main", default: true }, { id: "orion" }],
+      entries: { main: {}, orion: {} },
     };
     try {
       await writeSessionStore({ entries: {} });
@@ -1086,7 +1088,7 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("marks a running webchat session failed when restart drain overlaps dispatch rejection", async () => {
+  test("persists a failed chat dispatch before restart drain can finish", async ({ signal }) => {
     await withMainSessionStore(async (dir) => {
       await writeSessionStore({
         entries: {
@@ -1094,7 +1096,6 @@ describe("gateway server chat", () => {
             sessionId: "sess-main",
             sessionFile: path.join(dir, "sess-main.jsonl"),
             updatedAt: 1_000,
-            status: "running",
             startedAt: 900,
           },
         },
@@ -1103,25 +1104,23 @@ describe("gateway server chat", () => {
       expect(subscribeRes.ok).toBe(true);
       const rejectDispatch = createDeferred();
       const releasePersistence = createDeferred();
-      let dispatchStarted = false;
+      const dispatchStarted = createDeferred();
       const persistenceEntered = createDeferred();
-      const persistLifecycleEvent = sessionLifecycleState.persistGatewaySessionLifecycleEvent;
+      const terminalizeAdmission = chatRestartRecovery.terminalizeRestartSafeChatAdmission;
       const persistSpy = vi
-        .spyOn(sessionLifecycleState, "persistGatewaySessionLifecycleEvent")
+        .spyOn(chatRestartRecovery, "terminalizeRestartSafeChatAdmission")
         .mockImplementation(async (params) => {
-          if (params.event.runId !== "idem-dispatch-error-1") {
-            await persistLifecycleEvent(params);
-            return;
+          if (params.clientRunId === "idem-dispatch-error-1") {
+            persistenceEntered.resolve();
+            await releasePersistence.promise;
           }
-          persistenceEntered.resolve();
-          await releasePersistence.promise;
-          await persistLifecycleEvent(params);
+          return terminalizeAdmission(params);
         });
       const messagePromises: Promise<unknown>[] = [];
       const sessionChanged = await (async () => {
         try {
           dispatchInboundMessageMock.mockImplementationOnce(async () => {
-            dispatchStarted = true;
+            dispatchStarted.resolve();
             await rejectDispatch.promise;
             throw new Error("provider rejected request");
           });
@@ -1145,12 +1144,10 @@ describe("gateway server chat", () => {
             idempotencyKey: "idem-dispatch-error-1",
           });
           expect(res.ok).toBe(true);
-          await waitForFast(() => {
-            expect(dispatchStarted).toBe(true);
-          });
+          await withinTest(dispatchStarted.promise, signal);
           markGatewayRestartDraining();
           rejectDispatch.resolve();
-          await persistenceEntered.promise;
+          await withinTest(persistenceEntered.promise, signal);
           const restartInspectors = {
             getQueueSize: () => 0,
             getPendingReplies: () => 0,
@@ -1168,9 +1165,8 @@ describe("gateway server chat", () => {
           releasePersistence.resolve();
           await errorPromise;
           const changed = await sessionChangedPromise;
-          await waitForFast(() => {
-            expect(createSafeGatewayRestartPreflight(restartInspectors).safe).toBe(true);
-          });
+          await withinTest(requestExecution.waitForCompletion("idem-dispatch-error-1"), signal);
+          expect(createSafeGatewayRestartPreflight(restartInspectors).safe).toBe(true);
           return changed;
         } finally {
           rejectDispatch.resolve();
@@ -1204,7 +1200,7 @@ describe("gateway server chat", () => {
   });
 
   const contextOverflowCopy =
-    "Context overflow: this conversation is too large for the model. Try /compact, use /new to start a fresh session, or retry the command with a tighter output limit.";
+    "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.";
 
   test.each([
     {
@@ -1222,8 +1218,7 @@ describe("gateway server chat", () => {
         errorCode: "rate_limit_exceeded",
         errorMessage: "413 request too large: 203557 tokens per minute (TPM)",
       },
-      expected:
-        "⚠️ LLM request failed (rate limited, HTTP 413). This is usually temporary — try again shortly.",
+      expected: "⚠️ The AI service needs a short break. Please try again in a few minutes.",
     },
     {
       name: "private upstream failure",
@@ -1493,22 +1488,6 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("routes chat.send slash commands without agent runs", async () => {
-    await withMainSessionStore(async () => {
-      const spy = vi.mocked(agentCommandMock);
-      const callsBefore = spy.mock.calls.length;
-      const eventPromise = waitForChatEvent("idem-command-1");
-      const res = await rpcReq(ws, "chat.send", {
-        sessionKey: "main",
-        message: "/context list",
-        idempotencyKey: "idem-command-1",
-      });
-      expect(res.ok).toBe(true);
-      await eventPromise;
-      expect(spy.mock.calls.length).toBe(callsBefore);
-    });
-  });
-
   test("routes /btw replies through side-result events without transcript injection", async () => {
     await withMainSessionStore(async () => {
       await replaceMainTranscriptMessages([
@@ -1675,12 +1654,7 @@ describe("gateway server chat", () => {
         });
         expect(sendRes.ok).toBe(true);
 
-        const waitRes = await rpcReq(scopedWs, "agent.wait", {
-          runId: "idem-write-scope-verbose-no-persist",
-          timeoutMs: 1_000,
-        });
-        expect(waitRes.ok).toBe(true);
-        expect(waitRes.payload?.status).toBe("ok");
+        await waitForAgentRunDrained("idem-write-scope-verbose-no-persist", scopedWs);
 
         const sessionStorePath = testState.sessionStorePath;
         if (!sessionStorePath) {

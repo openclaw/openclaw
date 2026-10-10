@@ -4,12 +4,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { PreparedModelCatalogConfigReplacedError } from "../agents/prepared-model-catalog.errors.js";
 import type * as AuthChoiceModelCheck from "../commands/auth-choice.model-check.js";
+import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayTlsConfig } from "../config/types.gateway.js";
+import * as programArgs from "../daemon/program-args.js";
+import * as runtimePaths from "../daemon/runtime-paths.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
+  createRuntimeProbeResult,
   expectNoteContains,
   expectNoteTitleNotCalled,
   withPlatform,
@@ -23,11 +27,15 @@ type DefaultModelCatalogFacts = ReturnType<
 
 const readPin = vi.hoisted(() => vi.fn());
 vi.mock("../daemon/runtime-pin-state.js", () => ({ readDaemonRuntimePinForInstall: readPin }));
+const runExec = vi.hoisted(() => vi.fn());
+vi.mock("../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/exec.js")>()),
+  runExec,
+}));
 
 const runTui = vi.hoisted(() => vi.fn<(options: unknown) => Promise<void>>(async () => {}));
-const setupCleanupExitTimer = vi.hoisted(() => ({ unref: vi.fn() }));
+const setupCleanupExitTimer = vi.hoisted(() => ({}));
 const scheduleProcessExitAfterTuiReturn = vi.hoisted(() => vi.fn(() => setupCleanupExitTimer));
-const cancelProcessExitAfterTuiReturn = vi.hoisted(() => vi.fn());
 const resolveTuiShutdownHardExitMs = vi.hoisted(() => vi.fn(() => 122_000));
 const restoreTerminalState = vi.hoisted(() => vi.fn());
 const probeGatewayReachable = vi.hoisted(() =>
@@ -73,12 +81,15 @@ const loadModelCatalog = vi.hoisted(() =>
   vi.fn<(_params?: unknown) => Promise<unknown[]>>(async () => []),
 );
 const buildGatewayInstallPlan = vi.hoisted(() =>
-  vi.fn(async (_params?: { warn?: (message: string, title?: string) => void }) => ({
-    programArguments: [],
-    workingDirectory: "/tmp",
-    environment: {},
-    environmentValueSources: {},
-  })),
+  vi.fn<typeof import("../commands/daemon-install-helpers.js").buildGatewayInstallPlan>(
+    async () => ({
+      runtime: "node",
+      programArguments: [],
+      workingDirectory: "/tmp",
+      environment: {},
+      environmentValueSources: {},
+    }),
+  ),
 );
 const gatewayServiceInstall = vi.hoisted(() => vi.fn(async () => {}));
 const gatewayServiceRestart = vi.hoisted(() =>
@@ -245,8 +256,8 @@ vi.mock("../../packages/terminal-core/src/restore.js", () => ({
   restoreTerminalState,
 }));
 
+// mock-isolation: Onboarding handoff fixtures isolate the interactive terminal graph and process-exit timers.
 vi.mock("../tui/tui.js", () => ({
-  cancelProcessExitAfterTuiReturn,
   resolveTuiShutdownHardExitMs,
   runTui,
   scheduleProcessExitAfterTuiReturn,
@@ -353,7 +364,6 @@ function createFinalizeArgs(
       bind: "loopback",
       authMode: "token",
       gatewayToken: undefined,
-      tailscaleMode: "off",
       ...settings,
     },
     prompter: createLaterPrompter(),
@@ -377,10 +387,9 @@ function requireMockArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex 
 describe("finalizeSetupWizard", () => {
   beforeEach(() => {
     readPin.mockReset().mockReturnValue({ revision: "empty", stored: false });
+    runExec.mockReset().mockResolvedValue(createRuntimeProbeResult());
     runTui.mockClear();
-    setupCleanupExitTimer.unref.mockClear();
     scheduleProcessExitAfterTuiReturn.mockReset().mockReturnValue(setupCleanupExitTimer);
-    cancelProcessExitAfterTuiReturn.mockClear();
     resolveTuiShutdownHardExitMs.mockClear();
     restoreTerminalState.mockClear();
     probeGatewayReachable.mockReset().mockResolvedValue({ ok: false, detail: "offline" });
@@ -696,7 +705,7 @@ describe("finalizeSetupWizard", () => {
     const nextConfig = {
       agents: {
         defaults: { model: "openai/gpt-5.4-nano" },
-        list: [{ id: "main", agentDir: "/tmp/custom-agent" }],
+        entries: { main: { agentDir: "/tmp/custom-agent" } },
       },
     } satisfies OpenClawConfig;
 
@@ -732,7 +741,7 @@ describe("finalizeSetupWizard", () => {
       prompter,
       nextConfig: {
         agents: {
-          list: [{ id: "main", agentDir: "/tmp/custom-agent" }],
+          entries: { main: { agentDir: "/tmp/custom-agent" } },
         },
       },
     });
@@ -741,7 +750,7 @@ describe("finalizeSetupWizard", () => {
     expect(resolveDefaultModelAuthStatus).toHaveBeenCalledWith(
       expect.objectContaining({
         agents: {
-          list: [{ id: "main", agentDir: "/tmp/custom-agent" }],
+          entries: { main: { agentDir: "/tmp/custom-agent" } },
         },
       }),
       { agentDir: "/tmp/custom-agent" },
@@ -815,6 +824,7 @@ describe("finalizeSetupWizard", () => {
     const prompter = createLaterPrompter();
     const runtime = createRuntime();
     buildGatewayInstallPlan.mockResolvedValueOnce({
+      runtime: "node",
       programArguments: [],
       workingDirectory: "/tmp",
       environment: {
@@ -856,6 +866,50 @@ describe("finalizeSetupWizard", () => {
     );
   });
 
+  it("reports Bun for a Bun-only QuickStart install", async () => {
+    const { buildGatewayInstallPlan: realPlan } = await vi.importActual<
+      typeof import("../commands/daemon-install-helpers.js")
+    >("../commands/daemon-install-helpers.js");
+    const bunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
+    Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.2" });
+    const discoverNode = vi
+      .spyOn(runtimePaths, "resolvePreferredNodePath")
+      .mockResolvedValue(undefined);
+    const probeBun = vi.spyOn(runtimePaths, "resolveBunRuntimeInfo").mockResolvedValue({
+      status: "supported",
+      version: "1.4.2",
+      sqliteVersion: "3.53.4",
+      sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+      nodeSharedSqlite: false,
+    });
+    const resolveArguments = vi
+      .spyOn(programArgs, "resolveGatewayProgramArguments")
+      .mockResolvedValue({ programArguments: [process.execPath, "/app/openclaw.mjs", "gateway"] });
+    buildGatewayInstallPlan.mockImplementationOnce(realPlan);
+    const prompter = buildWizardPrompter();
+    try {
+      const result = await ensureGatewayServiceForOnboarding(
+        createServiceSetupArgs({ flow: "quickstart", opts: { installDaemon: true }, prompter }),
+      );
+      expect(result.gateway).toEqual({ status: "ready", action: "installed" });
+      expect(resolveArguments).toHaveBeenCalledWith(
+        expect.objectContaining({ runtime: "bun", runtimePath: process.execPath }),
+      );
+      expectNoteContains(prompter, "QuickStart uses Bun", "Gateway service runtime");
+      expectNoteNotContains(prompter, "QuickStart uses Node");
+      expect(gatewayServiceInstall).toHaveBeenCalledOnce();
+    } finally {
+      discoverNode.mockRestore();
+      probeBun.mockRestore();
+      resolveArguments.mockRestore();
+      if (bunVersion) {
+        Object.defineProperty(process.versions, "bun", bunVersion);
+      } else {
+        delete process.versions.bun;
+      }
+    }
+  });
+
   it("waits for gateway install warnings before installing the service", async () => {
     let acknowledgeWarning: (() => void) | undefined;
     const warningAcknowledged = new Promise<void>((resolve) => {
@@ -873,6 +927,7 @@ describe("finalizeSetupWizard", () => {
     buildGatewayInstallPlan.mockImplementationOnce(async (params) => {
       params?.warn?.("Gateway install warning", "Gateway service");
       return {
+        runtime: "node",
         programArguments: [],
         workingDirectory: "/tmp",
         environment: {},
@@ -939,16 +994,15 @@ describe("finalizeSetupWizard", () => {
           return;
         }
         const managedStartup = action !== "reused";
+        const startupTiming = resolveGatewayStartupTiming(platform);
         expect(waitForGatewayReachable).toHaveBeenCalledOnce();
         const timing = requireMockArg(waitForGatewayReachable) as {
           deadlineMs?: number;
           probeTimeoutMs?: number;
         };
-        expect(timing.deadlineMs).toBe(
-          managedStartup ? (platform === "win32" ? 90_000 : 45_000) : 15_000,
-        );
+        expect(timing.deadlineMs).toBe(managedStartup ? startupTiming.deadlineMs : 15_000);
         expect(timing.probeTimeoutMs ?? 1_500).toBe(
-          managedStartup ? (platform === "win32" ? 15_000 : 10_000) : 1_500,
+          managedStartup ? startupTiming.probeTimeoutMs : 1_500,
         );
       });
     },
@@ -1298,6 +1352,48 @@ describe("finalizeSetupWizard", () => {
     },
   );
 
+  it.each([
+    { flow: "advanced", choice: "bun" },
+    { flow: "advanced", choice: "node" },
+    { flow: "quickstart", choice: "bun" },
+  ] as const)(
+    "reinstalls recorded Bun through $flow with choice=$choice",
+    async ({ flow, choice }) => {
+      const recordedPath = "/opt/recorded/bin/bun";
+      runExec.mockResolvedValue(createRuntimeProbeResult("1.4.2"));
+      gatewayServiceIsLoaded.mockResolvedValue(true);
+      gatewayServiceReadCommand.mockResolvedValue({
+        programArguments: [recordedPath, "/app/openclaw.mjs", "gateway"],
+      });
+      const prompter = buildWizardPrompter();
+      const selectRuntime = vi
+        .mocked(prompter.select)
+        .mockResolvedValueOnce("reinstall")
+        .mockResolvedValueOnce(choice);
+
+      const result = await ensureGatewayServiceForOnboarding(
+        createServiceSetupArgs({
+          flow,
+          opts: { installDaemon: true },
+          prompter,
+        }),
+      );
+
+      expect(result.gateway).toEqual({ status: "ready", action: "installed" });
+      if (flow === "advanced") {
+        expect(selectRuntime).toHaveBeenCalledWith(
+          expect.objectContaining({ initialValue: "bun" }),
+        );
+      }
+      expect(selectRuntime).toHaveBeenCalledTimes(flow === "advanced" ? 2 : 1);
+      expect(requireMockArg(buildGatewayInstallPlan)).toMatchObject({
+        runtime: choice,
+        runtimePath: choice === "bun" ? recordedPath : undefined,
+        pinnedRuntimePath: undefined,
+      });
+    },
+  );
+
   it.each(["skip", "restart"])("does not turn %s into an implicit reinstall", async (action) => {
     gatewayServiceIsLoaded.mockResolvedValueOnce(true).mockResolvedValue(false);
     const prompter = buildWizardPrompter(undefined, { defaultSelect: action });
@@ -1505,6 +1601,7 @@ describe("finalizeSetupWizard", () => {
   });
 
   it("starts a session gateway and launches gateway-backed TUI in containers without systemd", async () => {
+    using clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
     await withPlatform("linux", async () => {
       isSystemdUserServiceAvailable.mockResolvedValue(false);
       isContainerEnvironment.mockReturnValue(true);
@@ -1544,7 +1641,7 @@ describe("finalizeSetupWizard", () => {
       expect(scheduleProcessExitAfterTuiReturn).toHaveBeenNthCalledWith(1, {
         delayMs: 122_000,
       });
-      expect(cancelProcessExitAfterTuiReturn).not.toHaveBeenCalled();
+      expect(clearTimeoutSpy).not.toHaveBeenCalledWith(setupCleanupExitTimer);
       resolveClose?.();
       await finalizing;
 
@@ -1571,10 +1668,13 @@ describe("finalizeSetupWizard", () => {
       );
       expect(runTui.mock.calls.at(-1)?.[0]).not.toHaveProperty("timeoutMs");
       expect(sessionGateway.close).toHaveBeenCalledWith({ reason: "onboarding tui exited" });
-      expect(cancelProcessExitAfterTuiReturn).toHaveBeenCalledWith(setupCleanupExitTimer);
+      expect(clearTimeoutSpy).toHaveBeenCalledWith(setupCleanupExitTimer);
       expect(scheduleProcessExitAfterTuiReturn).toHaveBeenCalledTimes(2);
       expect(scheduleProcessExitAfterTuiReturn).toHaveBeenNthCalledWith(2);
-      expect(cancelProcessExitAfterTuiReturn.mock.invocationCallOrder[0]).toBeLessThan(
+      const cleanupClearIndex = clearTimeoutSpy.mock.calls.findIndex(([timer]) =>
+        Object.is(timer, setupCleanupExitTimer),
+      );
+      expect(clearTimeoutSpy.mock.invocationCallOrder[cleanupClearIndex]).toBeLessThan(
         scheduleProcessExitAfterTuiReturn.mock.invocationCallOrder[1]!,
       );
       expectNoteContains(

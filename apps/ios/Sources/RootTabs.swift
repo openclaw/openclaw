@@ -85,10 +85,9 @@ struct RootTabs: View {
         if let requested = self.requestedInitialSidebarDestination(arguments: arguments) {
             return requested
         }
-        guard let flagIndex = arguments.firstIndex(of: "--openclaw-initial-tab") else { return .chat }
-        let valueIndex = arguments.index(after: flagIndex)
-        guard arguments.indices.contains(valueIndex) else { return .chat }
-        return switch arguments[valueIndex].trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        guard let value = arguments.drop(while: { $0 != "--openclaw-initial-tab" }).dropFirst().first
+        else { return .chat }
+        return switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
         case "control", "overview": .overview
         case "chat", "talk", "voice": .chat
         case "agent", "agents": .agents
@@ -98,12 +97,9 @@ struct RootTabs: View {
     }
 
     static func requestedInitialSidebarDestination(arguments: [String]) -> SidebarDestination? {
-        guard let flagIndex = arguments.firstIndex(of: "--openclaw-initial-destination") else {
-            return nil
-        }
-        let valueIndex = arguments.index(after: flagIndex)
-        guard arguments.indices.contains(valueIndex) else { return nil }
-        let requested = arguments[valueIndex].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard let value = arguments.drop(while: { $0 != "--openclaw-initial-destination" }).dropFirst().first
+        else { return nil }
+        let requested = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return SidebarDestination.allCases.first { $0.rawValue.lowercased() == requested }
     }
 
@@ -113,12 +109,9 @@ struct RootTabs: View {
 
     private static var initialChatSessionKey: String? {
         let arguments = ProcessInfo.processInfo.arguments
-        guard let flagIndex = arguments.firstIndex(of: "--openclaw-chat-session") else {
-            return nil
-        }
-        let valueIndex = arguments.index(after: flagIndex)
-        guard arguments.indices.contains(valueIndex) else { return nil }
-        let trimmed = arguments[valueIndex].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let value = arguments.drop(while: { $0 != "--openclaw-chat-session" }).dropFirst().first
+        else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
 
@@ -223,14 +216,12 @@ struct RootTabs: View {
                 // and the periodic attention refresh all land here.
                 .task(id: self.sidebarRefreshID) {
                     guard self.scenePhase == .active else { return }
-                    await self.sidebarModel.refresh(appModel: self.appModel)
-                    await self.appModel.refreshPendingApprovalInbox()
-                    while !Task.isCancelled {
-                        try? await Task.sleep(for: .seconds(600))
-                        guard !Task.isCancelled else { return }
+                    repeat {
                         await self.sidebarModel.refresh(appModel: self.appModel)
                         await self.appModel.refreshPendingApprovalInbox()
-                    }
+                        guard !Task.isCancelled else { return }
+                        try? await Task.sleep(for: .seconds(600))
+                    } while !Task.isCancelled
                 }
                 .task(id: "\(self.sidebarRefreshID):events") {
                     guard self.scenePhase == .active else { return }
@@ -307,7 +298,6 @@ struct RootTabs: View {
                 openSettings: { self.selectSidebarDestination(.gateway) })
         case .overview:
             CommandCenterTab(
-                headerTitle: "Overview",
                 headerSidebarAction: self.sidebarHeaderAction,
                 dashboardModel: self.sidebarModel,
                 openChat: { self.selectSidebarDestination(.chat) },
@@ -381,6 +371,7 @@ struct RootTabs: View {
             } else {
                 NavigationStack(path: self.$sidebarNavigationPath) {
                     self.sidebarDetailShell
+                        .background(SidebarNavigationMarginAnchor())
                 }
             }
         }
@@ -403,11 +394,6 @@ struct RootTabs: View {
         return NodeAppModel.execApprovalInboxKey(self.appModel.pendingExecApprovalPrompt)
     }
 
-    private var shouldCollapseSidebarAfterSelection: Bool {
-        Self.shouldCollapseSidebarAfterSelection(
-            layoutMode: self.isSidebarDrawerLayout ? .drawer : .split)
-    }
-
     private var sidebarHeaderAction: OpenClawSidebarHeaderAction? {
         guard Self.shouldShowSidebarRevealInDestinationHeader(
             isSidebarVisible: self.isSidebarVisible,
@@ -415,18 +401,13 @@ struct RootTabs: View {
         else {
             return nil
         }
-        if self.isSidebarVisible {
-            return OpenClawSidebarHeaderAction(
-                systemName: "line.3.horizontal",
-                accessibilityLabel: .localized("Hide Sidebar"),
-                accessibilityIdentifier: Self.sidebarHideButtonAccessibilityIdentifier,
-                action: { self.hideSidebar() })
-        }
         return OpenClawSidebarHeaderAction(
             systemName: "line.3.horizontal",
-            accessibilityLabel: .localized("Show Sidebar"),
-            accessibilityIdentifier: Self.sidebarShowButtonAccessibilityIdentifier,
-            action: { self.showSidebar() })
+            accessibilityLabel: self.isSidebarVisible ? .localized("Hide Sidebar") : .localized("Show Sidebar"),
+            accessibilityIdentifier: self.isSidebarVisible
+                ? Self.sidebarHideButtonAccessibilityIdentifier
+                : Self.sidebarShowButtonAccessibilityIdentifier,
+            action: self.isSidebarVisible ? { self.hideSidebar() } : { self.showSidebar() })
     }
 
     private var sidebarAnimation: Animation? {
@@ -556,11 +537,6 @@ struct RootTabs: View {
             }
     }
 
-    private func handleGatewayProblemReport() {
-        guard self.isGatewayToastSwipeDismissed else { return }
-        self.isGatewayToastSwipeDismissed = false
-    }
-
     private func rootLifecycle(_ content: some View) -> some View {
         self.rootRequestLifecycle(
             self.rootGatewayLifecycle(
@@ -590,6 +566,7 @@ struct RootTabs: View {
     private func rootAppearLifecycle(_ content: some View) -> some View {
         content
             .onAppear {
+                self.sidebarModel.setSnoozeWakeUpdatesActive(self.scenePhase == .active)
                 self.updateIdleTimer()
                 self.evaluateOnboardingPresentation(force: false)
                 self.maybeAutoOpenSettings()
@@ -602,6 +579,7 @@ struct RootTabs: View {
             .onChange(of: self.preventSleep) { _, _ in self.updateIdleTimer() }
             .onChange(of: self.appModel.talkMode.isEnabled) { _, _ in self.updateIdleTimer() }
             .onChange(of: self.scenePhase) { _, newValue in
+                self.sidebarModel.setSnoozeWakeUpdatesActive(newValue == .active)
                 self.updateIdleTimer()
                 guard newValue == .active else {
                     self.clearVoiceWakeToast()
@@ -614,6 +592,7 @@ struct RootTabs: View {
                 }
             }
             .onDisappear {
+                self.sidebarModel.setSnoozeWakeUpdatesActive(false)
                 UIApplication.shared.isIdleTimerDisabled = false
                 self.clearVoiceWakeToast()
             }
@@ -632,7 +611,7 @@ struct RootTabs: View {
                 }
             }
             .onChange(of: self.appModel.gatewayProblemReportCount) { _, _ in
-                self.handleGatewayProblemReport()
+                self.isGatewayToastSwipeDismissed = false
             }
     }
 
@@ -756,14 +735,11 @@ extension RootTabs {
             self.appModel.openChat(sessionKey: session.key)
             self.selectSidebarDestination(.chat)
         case .dashboard:
-            let target = Self.sidebarDashboardTarget(for: session)
             self.presentedSheet = .sessionDashboard(
-                sessionKey: target.sessionKey,
-                agentId: target.agentId)
-            guard self.shouldCollapseSidebarAfterSelection else { return }
-            withAnimation(self.sidebarAnimation) {
-                self.isSidebarVisible = false
-            }
+                sessionKey: session.key,
+                agentId: session.agentId)
+            guard self.isSidebarDrawerLayout else { return }
+            self.hideSidebar()
         }
     }
 
@@ -773,10 +749,8 @@ extension RootTabs {
         self.selectedSidebarDestination = destination
         self.selectedSettingsRoute = destination.settingsRoute
         self.activeSettingsRoute = destination.settingsRoute
-        guard self.shouldCollapseSidebarAfterSelection else { return }
-        withAnimation(self.sidebarAnimation) {
-            self.isSidebarVisible = false
-        }
+        guard self.isSidebarDrawerLayout else { return }
+        self.hideSidebar()
     }
 
     private func handleOpenChatRequest(_ requestID: Int) {
@@ -806,10 +780,8 @@ extension RootTabs {
         self.selectedSettingsRouteRequestID &+= 1
         self.selectedSidebarDestination = .settings
         self.sidebarNavigationPath = [route]
-        guard self.shouldCollapseSidebarAfterSelection else { return }
-        withAnimation(self.sidebarAnimation) {
-            self.isSidebarVisible = false
-        }
+        guard self.isSidebarDrawerLayout else { return }
+        self.hideSidebar()
     }
 
     private func openNotificationSettings(_ approvalID: String?) {

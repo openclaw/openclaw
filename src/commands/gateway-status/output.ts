@@ -16,12 +16,11 @@ import type { GatewayStatusProbedTarget } from "./probe-run.js";
 type GatewayStatusWarning = {
   code: string;
   message: string;
-  details?: string[];
   targetIds?: string[];
 };
 
 const noReachableGatewayDiagnostic =
-  "No gateway answered any probe and Bonjour discovery returned no local gateways. Run `openclaw gateway status --deep --require-rpc` to inspect service state, config paths, listener owners, and logs; include `ss -ltnp` or `lsof -nP -iTCP:<port> -sTCP:LISTEN` for the configured port when filing a report.";
+  "No gateway answered any check and Bonjour discovery returned no local gateways. Run `openclaw gateway status --deep --require-rpc` to inspect service state, config paths, listener owners, and logs; include `ss -ltnp` or `lsof -nP -iTCP:<port> -sTCP:LISTEN` for the configured port when filing a report.";
 
 function gatewaySelfIdentityKey(entry: GatewayStatusProbedTarget): string | null {
   if (!entry.self) {
@@ -53,7 +52,6 @@ function hasMultipleReachableGatewayIdentities(reachable: GatewayStatusProbedTar
   return new Set(identityKeys).size > 1;
 }
 
-/** Chooses the reachable target that best represents the user's requested gateway. */
 export function pickPrimaryProbedTarget(probed: GatewayStatusProbedTarget[]) {
   const reachable = probed.filter((entry) => isProbeReachable(entry.probe));
   return (
@@ -86,7 +84,7 @@ export function buildGatewayStatusWarnings(params: {
       code: "ssh_tunnel_failed",
       message: params.sshTunnelError
         ? `SSH tunnel failed: ${params.sshTunnelError}`
-        : "SSH tunnel failed to start; falling back to direct probes.",
+        : "SSH tunnel failed to start; falling back to direct checks.",
     });
   }
   if (params.localTlsLoadError) {
@@ -129,7 +127,7 @@ export function buildGatewayStatusWarnings(params: {
     warnings.push({
       code: "probe_scope_limited",
       message:
-        "Read-probe diagnostics are limited by gateway scopes (missing operator.read). Connection succeeded, but read-only status calls are incomplete. Hint: pair device identity or use credentials with operator.read.",
+        "Read-check diagnostics are limited by gateway scopes (missing operator.read). Connection succeeded, but read-only status calls are incomplete. Hint: pair device identity or use credentials with operator.read.",
       targetIds: [result.target.id],
     });
   }
@@ -144,7 +142,6 @@ export function buildGatewayStatusWarnings(params: {
   return warnings;
 }
 
-/** Writes the machine-readable gateway status payload and exits nonzero when unreachable. */
 export function writeGatewayStatusJson(params: {
   runtime: RuntimeEnv;
   startedAt: number;
@@ -202,7 +199,6 @@ export function writeGatewayStatusJson(params: {
   }
 }
 
-/** Writes the human-readable gateway status report and exits nonzero when unreachable. */
 export function writeGatewayStatusText(params: {
   runtime: RuntimeEnv;
   rich: boolean;
@@ -225,7 +221,7 @@ export function writeGatewayStatusText(params: {
     `${colorize(params.rich, theme.info, "Capability")}: ${capability.replaceAll("_", "-")}`,
   );
   params.runtime.log(
-    colorize(params.rich, theme.muted, `Probe budget: ${params.overallTimeoutMs}ms`),
+    colorize(params.rich, theme.muted, `Check budget: ${params.overallTimeoutMs}ms`),
   );
 
   if (params.warnings.length > 0) {
@@ -233,9 +229,6 @@ export function writeGatewayStatusText(params: {
     params.runtime.log(colorize(params.rich, theme.warn, "Warning:"));
     for (const warning of params.warnings) {
       params.runtime.log(`- ${warning.message}`);
-      for (const detail of warning.details ?? []) {
-        params.runtime.log(`  ${detail}`);
-      }
     }
   }
 

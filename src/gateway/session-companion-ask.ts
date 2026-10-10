@@ -9,12 +9,14 @@ import {
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { buildBtwCliPrompt } from "../agents/btw-prompts.js";
 import type { PreparedCliRunContext } from "../agents/cli-runner/types.js";
-import type { InternalSessionEffectsTarget } from "../agents/internal-session-effects.js";
 import { withSessionManagerWrite } from "../agents/sessions/session-manager-write-admission.js";
 import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { resolveSessionStorePathCore } from "../config/sessions.js";
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
+import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
+import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Message, ImageContent } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -72,10 +74,10 @@ type SessionCompanionRunParams = {
 export type SessionCompanionAskDeps = {
   getConfig: () => OpenClawConfig;
   sessionObserver: {
-    getCompanionSnapshot: (
+    getCompanionSnapshotAsync: (
       sessionKey: string,
       agentId?: string,
-    ) => SessionObserverCompanionSnapshot;
+    ) => Promise<SessionObserverCompanionSnapshot>;
   };
   resolveUtilityModelRef?: typeof resolveUtilityModelRefForAgent;
   contextReader: SessionCompanionContextReader;
@@ -183,17 +185,55 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
     );
     if (cliRuntime) {
       executionStarted = true;
-      const answer = await runSessionCompanionViaCliRuntime({
-        ...params,
-        cliRuntime,
-        modelId: selectedModel.modelId,
-        requesterModel: { provider: selectedModel.provider, model: selectedModel.modelId },
-        authProfileId: selectedModel.profileId,
-        target,
-        preparedRunAdmission,
-        runId,
-        abortSignal,
-      });
+      // Subscription-backed CLI runtimes have no direct provider credential. Their
+      // tool-free side question uses bounded context because the CLI bridge cannot
+      // scope read-only session tools to the observed session.
+      const [{ prepareCliRunContext }, { executePreparedCliRun }] = await Promise.all([
+        import("../agents/cli-runner/prepare.runtime.js"),
+        import("../agents/cli-runner/execute.runtime.js"),
+      ]);
+      let prepared: PreparedCliRunContext | undefined;
+      let answer: string;
+      try {
+        params.assertSourceCurrent?.();
+        prepared = await prepareCliRunContext({
+          preparedRunAdmission,
+          sessionId: target.sessionId,
+          sessionKey: target.sessionKey,
+          sessionEntry: target.sessionEntry,
+          sessionFile: target.sessionFile,
+          agentId: params.agentId,
+          trigger: "manual",
+          workspaceDir: params.workspaceDir,
+          config: params.cfg,
+          prompt: buildBtwCliPrompt({
+            messages: params.messages.slice(0, -1).map((message) =>
+              toRunnerHistoryMessage(message, {
+                provider: cliRuntime,
+                modelId: selectedModel.modelId,
+              }),
+            ),
+            question: current.content,
+            imageCount: 0,
+          }),
+          extraSystemPrompt: params.systemPrompt,
+          executionMode: "side-question",
+          provider: cliRuntime,
+          model: selectedModel.modelId,
+          requesterModel: { provider: selectedModel.provider, model: selectedModel.modelId },
+          disableTools: true,
+          timeoutMs: ASK_TIMEOUT_MS,
+          runTimeoutOverrideMs: ASK_TIMEOUT_MS,
+          runId,
+          authProfileId: selectedModel.profileId,
+          abortSignal,
+        });
+        abortSignal.throwIfAborted();
+        params.assertSourceCurrent?.();
+        answer = (await executePreparedCliRun(prepared)).text;
+      } finally {
+        await prepared?.preparedBackend.cleanup?.();
+      }
       modelExecution?.assertCurrent();
       return answer;
     }
@@ -209,7 +249,7 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
     );
     params.signal.throwIfAborted();
     params.assertSourceCurrent?.();
-    await withSessionManagerWrite(sessionManager, () => {
+    const assertSeedCurrent = () => {
       abortSignal.throwIfAborted();
       params.assertSourceCurrent?.();
       const currentEntry = loadExactSessionEntry(target)?.entry;
@@ -221,10 +261,16 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
       ) {
         throw new Error("Session companion identity changed before history persistence");
       }
-      for (const message of params.messages.slice(0, -1)) {
-        sessionManager.appendMessage(toRunnerHistoryMessage(message, selectedModel));
-      }
-    });
+    };
+    await withSessionTranscriptWriteAssertion(target, assertSeedCurrent, () =>
+      withSessionManagerWrite(sessionManager, async () => {
+        assertSeedCurrent();
+        for (const message of params.messages.slice(0, -1)) {
+          assertSeedCurrent();
+          await sessionManager.appendMessageAsync(toRunnerHistoryMessage(message, selectedModel));
+        }
+      }),
+    );
     abortSignal.throwIfAborted();
     params.assertInputCurrent?.();
     executionStarted = true;
@@ -292,85 +338,12 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
   }
 }
 
-/**
- * Subscription-backed CLI runtimes have no direct provider credential, so Side
- * chat runs as a tool-free, one-shot side question on the owning CLI backend.
- * The bounded reference context stands in for the read-only session tools,
- * which the CLI bridge cannot scope to the observed session.
- */
-async function runSessionCompanionViaCliRuntime(
-  params: SessionCompanionRunParams & {
-    cliRuntime: string;
-    modelId: string;
-    requesterModel: { provider: string; model: string };
-    authProfileId?: string;
-    target: InternalSessionEffectsTarget;
-    preparedRunAdmission: PreparedAgentRunAdmission;
-    runId: string;
-    abortSignal: AbortSignal;
-  },
-): Promise<string> {
-  const [{ prepareCliRunContext }, { executePreparedCliRun }] = await Promise.all([
-    import("../agents/cli-runner/prepare.runtime.js"),
-    import("../agents/cli-runner/execute.runtime.js"),
-  ]);
-  const history = params.messages.slice(0, -1);
-  const question = params.messages.at(-1)?.content ?? "";
-  let prepared: PreparedCliRunContext | undefined;
-  try {
-    params.assertSourceCurrent?.();
-    prepared = await prepareCliRunContext({
-      preparedRunAdmission: params.preparedRunAdmission,
-      sessionId: params.target.sessionId,
-      sessionKey: params.target.sessionKey,
-      sessionEntry: params.target.sessionEntry,
-      sessionFile: params.target.sessionFile,
-      agentId: params.agentId,
-      trigger: "manual",
-      workspaceDir: params.workspaceDir,
-      config: params.cfg,
-      prompt: buildBtwCliPrompt({
-        messages: history.map((message) =>
-          toRunnerHistoryMessage(message, {
-            provider: params.cliRuntime,
-            modelId: params.modelId,
-          }),
-        ),
-        question,
-        imageCount: 0,
-      }),
-      extraSystemPrompt: params.systemPrompt,
-      executionMode: "side-question",
-      provider: params.cliRuntime,
-      model: params.modelId,
-      requesterModel: params.requesterModel,
-      disableTools: true,
-      timeoutMs: ASK_TIMEOUT_MS,
-      runTimeoutOverrideMs: ASK_TIMEOUT_MS,
-      runId: params.runId,
-      authProfileId: params.authProfileId,
-      abortSignal: params.abortSignal,
-    });
-    params.abortSignal.throwIfAborted();
-    params.assertSourceCurrent?.();
-    return (await executePreparedCliRun(prepared)).text;
-  } finally {
-    await prepared?.preparedBackend.cleanup?.();
-  }
-}
-
 export function createSessionCompanionAskRuntime(params: SessionCompanionAskRuntimeParams) {
   const resolveUtilityModelRef = params.resolveUtilityModelRef ?? resolveUtilityModelRefForAgent;
   const contextReader = params.contextReader;
   const run = params.run ?? defaultRun;
   const activeAsks = new Map<string, SessionCompanionActiveAsk>();
   const admissions: Array<{ connId: string; admittedAt: number }> = [];
-
-  const resolveTarget = (sessionKey: string, agentId: string) => {
-    const cfg = params.getConfig();
-    const observerSnapshot = params.sessionObserver.getCompanionSnapshot(sessionKey, agentId);
-    return { agentId, cfg, observerSnapshot };
-  };
 
   const currentSessionId = (sessionKey: string, agentId: string): string | undefined =>
     contextReader.currentSessionId({ agentId, sessionKey });
@@ -383,7 +356,10 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
   ): Promise<SessionCompanionThread> => {
     const threadKey = sessionObserverScopeKey(sessionKey, agentId);
     const existing = params.threads.get(threadKey);
-    const { observerSnapshot } = resolveTarget(sessionKey, agentId);
+    const observerSnapshot = await params.sessionObserver.getCompanionSnapshotAsync(
+      sessionKey,
+      agentId,
+    );
     if (signal.aborted) {
       throw new Error("session companion preparation was cancelled");
     }
@@ -433,6 +409,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     agentId: string;
     sessionKey: string;
     question: string;
+    selectionContext?: string;
     attachments?: ChatAttachment[];
     connId: string;
     operatorAuthority?: AdmittedRunOperatorAuthority;
@@ -443,14 +420,15 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     const sessionKey = request.sessionKey.trim();
     const agentId = request.agentId.trim();
     const question = request.question.trim();
+    const incognitoSource = captureIncognitoSessionSource({ sessionKey, agentId });
     if (!sessionKey || !agentId || !question || params.isDisposed() || request.signal?.aborted) {
       throw new SessionCompanionAskError("unavailable", "Side chat is unavailable.");
     }
     const assertSourceCurrent = request.operatorAuthority
-      ? () => {
-          request.assertSourceCurrent?.();
-          request.operatorAuthority?.assertCurrent();
-        }
+      ? composeSessionSourceAssertion([
+          request.assertSourceCurrent,
+          request.operatorAuthority.assertCurrent,
+        ])
       : request.assertSourceCurrent;
     assertSourceCurrent?.();
     const requestSignal = request.operatorAuthority?.signal
@@ -544,7 +522,6 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       }
       thread.busy = true;
       thread.lastUsedAt = admittedAt;
-      const { cfg } = resolveTarget(sessionKey, agentId);
       if (currentSessionId(sessionKey, agentId) !== thread.context.sessionId) {
         params.threads.delete(threadKey);
         throw new SessionCompanionAskError(
@@ -552,6 +529,20 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
           "The selected session changed before Side chat could answer.",
         );
       }
+      const currentSnapshot = await params.sessionObserver.getCompanionSnapshotAsync(
+        sessionKey,
+        agentId,
+      );
+      controller.signal.throwIfAborted();
+      assertSourceCurrent?.();
+      request.assertInputCurrent?.();
+      if (currentSessionId(sessionKey, agentId) !== thread.context.sessionId) {
+        throw new SessionCompanionAskError(
+          "context-unavailable",
+          "The selected session changed before Side chat could answer.",
+        );
+      }
+      const cfg = params.getConfig();
       const utilityModelRef = resolveUtilityModelRef({ cfg, agentId });
       if (!utilityModelRef) {
         throw new SessionCompanionAskError(
@@ -560,7 +551,6 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
         );
       }
       const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-      const currentSnapshot = params.sessionObserver.getCompanionSnapshot(sessionKey, agentId);
       thread.digestText = formatObserverDigest(currentSnapshot);
       const delta = selectDeltaNotes(currentSnapshot, thread.lastNoteSequence);
       const referenceContext = buildReferenceContext({
@@ -570,6 +560,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       const messages = composePromptMessages({
         thread,
         question,
+        selectionContext: request.selectionContext,
         referenceContext,
         now: admittedAt,
       });
@@ -626,8 +617,9 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       thread.lastUsedAt = ts;
       return { answer, ts };
     };
+    const execution = execute();
     try {
-      return await Promise.race([execute(), aborted.promise]);
+      return await Promise.race([execution, aborted.promise]);
     } catch (error) {
       if (
         error instanceof SessionCompanionAskError ||
@@ -652,6 +644,10 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
             : "Side chat could not answer right now.",
       );
     } finally {
+      // Actor source authority must outlive accepted writes to the separate durable run.
+      if (incognitoSource) {
+        await execution.catch(() => undefined);
+      }
       clearTimeout(timeout);
       controller.signal.removeEventListener("abort", onAbort);
       requestSignal?.removeEventListener("abort", abortRequest);

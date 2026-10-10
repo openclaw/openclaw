@@ -16,6 +16,18 @@ Assembly has three layers:
 
 This keeps exported/debug prompt surfaces aligned with live runs without turning every runtime detail into one monolithic builder.
 
+Node-hosted OpenClaw sessions use the same prompt and bootstrap preparation as
+Gateway-local sessions. The Gateway selects agent instructions, persona files,
+skills, memory guidance, and conversation context under the session's existing
+privacy and tool policies. The node supplies its own workspace path, host, OS,
+shell, and active process facts. Moving execution to a node does not switch the
+agent to a generic coding prompt or make unselected node-local bootstrap files
+part of its context.
+
+Context-engine selection, history preparation, and turn settlement remain
+Gateway-owned. Direct post-turn hooks run after the node's workspace results
+are accepted and before its placement claim is released.
+
 Provider plugins can contribute cache-aware guidance without replacing the OpenClaw-owned prompt. A provider runtime can:
 
 - replace one of three named core sections: `interaction_style`, `tool_call_style`, `execution_bias`
@@ -34,7 +46,7 @@ The prompt is compact, with fixed sections:
 - **Execution Bias**: act in-turn on actionable requests, continue until done or blocked, recover from weak tool results, check mutable state live, and verify before finalizing. A requested action with an available tool is authorized: tool policy, sandboxing, and exec approvals gate risk at runtime, so the prompt does not ask the model to pre-refuse, warn, or seek extra permission.
 - **Promised Work**: promising future, background, delegated, or continued work creates follow-through ownership: arrange an available completion or watch path before ending the turn, proactively return with the result or a concrete blocker, and never treat progress (like `running`) as completion.
 - **Care**: inspect and merge before editing existing config or scheduler files, use or store credentials the user shares as asked, private delivery of short-lived login codes in groups, and a terminal setup route when no control tools are available.
-- **Runtime Context**: stable guidance for all providers, immediately after Care and above the cache boundary. Messages delimited by `<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>` and `<<<END_OPENCLAW_INTERNAL_CONTEXT>>>` carry runtime context for the user request they follow, not user-authored text. This includes compact facts about active exec sessions, active subagents, and media-generation progress, plus advisory approved-executable hints on Windows when `exec` is available. Each available capability emits a current snapshot, including `none` when empty, which supersedes older snapshots. Use it without replying to or describing it, keep its internal details private, and continue without waiting for another message. Carriers themselves hold only the delimited body, so this instruction is not repeated per turn.
+- **Runtime Context**: stable guidance for all providers, immediately after Care and above the cache boundary. OpenClaw attaches a separate, typed runtime-context message for the current request. This includes the local date and time zone, compact facts about active exec sessions, active subagents, and media-generation progress, plus advisory approved-executable hints on Windows when `exec` is available. [Runtime context and provider roles](/concepts/context#runtime-context-and-provider-roles) explains the native operator channel, user-role compatibility carriers, and quoted-data boundary. Use it without replying to or describing it, keep its internal details private, and continue without waiting for another message.
 - **Skills** (when available): tells the model how to load skill instructions on demand.
 - **OpenClaw Control**: inspect config with `gateway` (`config.get` / `config.schema.lookup`); request restart, config, channel, plugin, agent, and model/provider changes through `openclaw` when available. Delegated changes follow [effective permissions](/gateway/permission-modes#delegated-setup-and-repair). For the Gateway hosting this session, owner-requested updates use the `gateway` action `update.run` only on explicit user request, with automatic restart and a completion or failure notice. Without `gateway`, direct the user to the OpenClaw owner, `openclaw update` in a terminal, or the Control UI for updates to that Gateway. Never modify that Gateway's installation or control its service through exec or detached jobs; do not invent CLI commands. When `exec` is available, the prompt also says: "For a user-requested update on another host, verify it is not this Gateway, then use exec/SSH with `openclaw update --yes`; normal exec approvals still apply." See [Automation and SSH](/cli/update#automation-and-ssh).
 - **Messaging**: use OpenClaw routing for connected channel replies and actions, not shell or HTTP workarounds. This does not prohibit user-authorized CLI or API actions for other services, such as sending email; normal tool permissions and approvals still apply.
@@ -42,14 +54,15 @@ The prompt is compact, with fixed sections:
 - **Documentation**: local docs/source path and when to read them.
 - **Workspace Files (injected)**: notes that bootstrap files are included below.
 - **Sandbox** (when enabled): sandboxed runtime, sandbox paths, elevated-exec availability.
-- **Temporal Context**: local date and time zone below the cache boundary; exact time comes from `session_status` when available.
 - **Assistant Output Directives**: compact attachment, voice-note, and reply-tag syntax.
 - **UI Presentation** (when presentation tools are available): compact widget, dashboard, and portal routing; verify the actual delivered surface.
 - **Collapsible Details** (when supported): teaches the model to keep optional depth in `<details>` disclosures while leaving the primary answer and required actions visible.
 - **Runtime**: host, OS, node, model, repo root (when detected), and session identity (one line). Git co-author trailers appear here only when a shared session has someone to credit. Active exec sessions travel in the Runtime Context carrier. Reasoning effort travels through provider controls; its Ultra orchestration guidance stays below the cache boundary. Use `/status` to inspect the selected effort.
 - **Reasoning**: current visibility level plus the `/reasoning` toggle hint.
 
-Large stable content (including **Project Context** and static **Memory Recall** instructions) stays above the internal prompt cache boundary. Volatile per-turn sections (**UI Presentation**, Control UI embed guidance, **Messaging**, **Collapsible Details**, **Voice**, **Group Chat Context**, **Reactions**, **Runtime**, **Project Memory** facts, channel-specific ACP hints, delegation/orchestration mode, and the current elevated level) are appended below that boundary so local backends with prefix caches can reuse the stable workspace prefix across channel turns. Exec, subagent, and media facts use the later Runtime Context carrier to preserve the conversation-history prefix too; their capability-based instructions stay in the system prompt. The boundary is internal transport metadata: every section remains system-prompt guidance for CLI backends. Tool descriptions should avoid embedding current channel names when the accepted schema already carries that runtime detail.
+Large stable content (including **Project Context** and static **Memory Recall** instructions) stays above the internal prompt cache boundary. Volatile per-turn sections (**UI Presentation**, Control UI embed guidance, **Messaging**, **Collapsible Details**, **Voice**, **Group Chat Context**, **Reactions**, **Runtime**, **Project Memory** facts, channel-specific ACP hints, delegation/orchestration mode, and the current elevated level) are appended below that boundary so local backends with prefix caches can reuse the stable workspace prefix across channel turns. Date, time zone, exec, subagent, and media facts use the later Runtime Context carrier to preserve the conversation-history prefix too; their capability-based instructions stay in the system prompt. The boundary is internal transport metadata: every section remains system-prompt guidance for CLI backends. Tool descriptions should avoid embedding current channel names when the accepted schema already carries that runtime detail.
+
+On supported direct Anthropic API-key routes and native OpenAI Responses routes, the embedded session pins both sides of this boundary. Refreshed sections are appended as instruction messages after the current user turn, preserving earlier prompt and history bytes. Route or selected personal-profile changes, reset, and compaction start a new series; skill and memory refresh contracts continue to deliver updated guidance. Prompt-cache diagnostics identify changed sections using a bounded set of names without logging their contents.
 
 Media task facts include only enabled media tools and tasks belonging to the current requester. Restored tasks without a recorded requester use the configured session owner; completed tasks are omitted.
 
@@ -112,9 +125,9 @@ Branches and restored history keep the source version, as do reset boundaries
 and compaction within an existing transcript. Adoption leaves retained history
 untouched; Doctor repairs legacy headerless history with version 3. Unknown projection versions are
 rejected before model submission. Provider message roles remain unchanged to
-preserve retained-thinking prefix compatibility. Cloud-worker prompt assembly
-uses a separate launch contract and still needs this hardening; see
-[the cloud-worker follow-up](https://github.com/openclaw/openclaw/issues/140666).
+preserve retained-thinking prefix compatibility. Cloud-worker turns use the same
+Gateway-owned prompt projection before launch and carry trusted runtime context
+separately to the worker, which adds its execution-host facts.
 
 Resumed room CLI turns retain new thread notes, system events, and MCP App context.
 
@@ -125,12 +138,12 @@ On channels with native approval cards/buttons, the prompt tells the agent to re
 OpenClaw renders smaller system prompts for sub-agents. The runtime sets a `promptMode` per run (not user-facing config):
 
 - `full` (default): all sections above.
-- `minimal`: used for sub-agents; omits the memory prompt section (bundled as **Memory Recall**), **Model Aliases**, **User Identity**, **Assistant Output Directives**, **Messaging**, **Collapsible Details**, and **Silent Replies**. Tooling, **Care**, **Skills** (when supplied), Workspace, Sandbox, Current Date & Time (when known), Runtime, and injected context stay available.
+- `minimal`: used for sub-agents; omits the memory prompt section (bundled as **Memory Recall**), **Model Aliases**, **User Identity**, **Assistant Output Directives**, **Messaging**, **Collapsible Details**, and **Silent Replies**. Tooling, **Care**, **Skills** (when supplied), Workspace, Sandbox, Runtime, and injected context stay available. The current date and time zone still arrive through turn context.
 - `none`: returns only the base identity line.
 
 Under `promptMode=minimal`, extra injected prompts are labeled **Subagent Context** instead of **Group Chat Context**.
 
-For channel auto-reply runs, OpenClaw omits the generic **Silent Replies** section when direct, group, or message-tool-only context already owns the visible-reply contract. Automatic group/channel contexts show `NO_REPLY` guidance only when the operator explicitly [allows group silence](/concepts/messages#silent-replies); direct chats and message-tool-only replies skip silent-token guidance.
+The **Silent Replies** section applies only to sessions connected to external message channels. Subagents, the Control UI, and other internal sessions never receive silent-token guidance: they must return a result or continue unfinished work. For channel auto-reply runs, OpenClaw omits the generic section when direct, group, or message-tool-only context already owns the visible-reply contract. Automatic group/channel contexts show `NO_REPLY` guidance only when the operator explicitly [allows group silence](/concepts/messages#silent-replies); direct chats and message-tool-only replies skip silent-token guidance.
 
 ## Prompt snapshots
 
@@ -146,6 +159,8 @@ Regenerate with `pnpm prompt:snapshots:gen`; verify drift with `pnpm prompt:snap
 
 Agent identity, instructions, and memory are resolved from the configured agent workspace and routed to the prompt surface matching their lifetime. When a session runs from another folder or managed worktree, that folder remains the execution workspace. Its `AGENTS.md` is appended after the configured workspace files as project context; OpenClaw does not load `SOUL.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, or `BOOTSTRAP.md` from the execution folder.
 
+Turn startup seeds missing bootstrap templates only in the configured agent workspace, never in a separate execution folder. This also applies to spawned child sessions and session-bound cron turns.
+
 - `AGENTS.md`
 - `SOUL.md`
 - `IDENTITY.md`
@@ -153,7 +168,7 @@ Agent identity, instructions, and memory are resolved from the configured agent 
 - `BOOTSTRAP.md` (only on brand-new workspaces)
 - `MEMORY.md` when present
 
-On the native Codex harness, OpenClaw avoids repeating stable workspace files in every user turn. Codex loads the execution folder's `AGENTS.md`, including its `## Tools` section, through native project-doc discovery, so OpenClaw does not inject that file again. When execution uses another folder, OpenClaw adds the configured agent workspace's bounded `AGENTS.md` snapshot to the thread-level developer instructions so native Codex sub-agents inherit it. On the managed bundled stdio app-server, `SOUL.md`, `IDENTITY.md`, and `USER.md` are appended to parent-only model request instructions rather than native history, so newly delivered persona does not automatically flow to native subagents. External and Desktop connections retain the legacy collaboration carrier with an explicit availability warning; older history is preserved. `MEMORY.md` content is not pasted into every native Codex turn either: when memory tools are available for the agent workspace, Codex turns get a small workspace-memory note directing the model to `memory_search` or `memory_get`. If tools are disabled or memory search is unavailable, `MEMORY.md` falls back to the normal bounded turn-context path. `BOOTSTRAP.md` keeps the normal turn-context role.
+On the native Codex harness, OpenClaw avoids repeating stable workspace files in every user turn. Codex loads the execution folder's `AGENTS.md`, including its `## Tools` section, through native project-doc discovery, so OpenClaw does not inject that file again. When execution uses another folder, OpenClaw adds the configured agent workspace's bounded `AGENTS.md` snapshot to the thread-level developer instructions so native Codex sub-agents inherit it. On the managed bundled stdio app-server, `SOUL.md`, `IDENTITY.md`, and `USER.md` are appended to parent-only model request instructions rather than native history, so newly delivered persona does not automatically flow to native subagents. Connections without a managed inference relay, including external and Desktop connections, deliver shared persona through refreshable thread developer instructions that native children can inherit. Selected personal `users/<profile-id>/USER.md` overlays are omitted on those connections because they lack a parent-only carrier; OpenClaw logs a warning when one is selected. Older history is preserved. `MEMORY.md` content is not pasted into every native Codex turn either: when memory tools are available for the agent workspace, Codex turns get a small workspace-memory note directing the model to `memory_search` or `memory_get`. If tools are disabled or memory search is unavailable, `MEMORY.md` falls back to the normal bounded turn-context path. `BOOTSTRAP.md` keeps the normal turn-context role.
 
 Heartbeat monitor scratch is not a bootstrap file. The heartbeat runner appends it only to the scheduled heartbeat user message; normal turns do not receive it, and the system prompt contains no heartbeat-specific section.
 
@@ -184,7 +199,9 @@ To inspect how much each injected file contributes (raw vs injected, truncation,
 
 ## Time handling
 
-The **Temporal Context** section includes the user-local calendar date and time zone. It appears below the cache boundary, so day rollover or a timezone change does not invalidate the stable prefix.
+The **Temporal Context** section carries the user-local calendar date and time zone in the current-turn runtime context, outside the system prompt. It refreshes each turn without rewriting earlier messages. Day rollover therefore leaves the complete system prompt and prior conversation bytes unchanged, preserving prefix-cache reuse on local and hosted providers. Raw model probes omit OpenClaw runtime context.
+
+Chat Completions and native Ollama retain these hidden per-turn messages by default, so the next request extends the previous request's prefix. Provider replay policies can explicitly opt out. Retained runtime facts include empty snapshots to clear earlier active state and count toward normal history and compaction budgets; transient routes still omit empty producer snapshots.
 
 Use `session_status` when the agent needs the exact current time and the tool is available; its status card includes a timestamp line. The same tool can optionally set a per-session model override (`model=default` clears it).
 

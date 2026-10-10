@@ -45,30 +45,18 @@ function makeAssistantMessageEvent(
 
 function createFakeSession(
   options: {
-    onOff?: (eventType: string) => void;
     onReturnedUnsubscribe?: (eventType: string) => void;
-    returnUnsubscribe?: boolean;
   } = {},
 ): FakeSession {
   const listeners = new Map<string, Array<(event: SessionEvent) => void>>();
-  const returnUnsubscribe = options.returnUnsubscribe !== false;
-
-  const off = vi.fn((eventType: string, handler: (event: SessionEvent) => void) => {
-    options.onOff?.(eventType);
-    listeners.set(
-      eventType,
-      (listeners.get(eventType) ?? []).filter((existing) => existing !== handler),
-    );
-  });
-
   const on = vi.fn((eventType: string, handler: (event: SessionEvent) => void) => {
     listeners.set(eventType, [...(listeners.get(eventType) ?? []), handler]);
-    if (!returnUnsubscribe) {
-      return undefined;
-    }
     return () => {
       options.onReturnedUnsubscribe?.(eventType);
-      off(eventType, handler);
+      listeners.set(
+        eventType,
+        (listeners.get(eventType) ?? []).filter((existing) => existing !== handler),
+      );
     };
   });
 
@@ -84,7 +72,6 @@ function createFakeSession(
     listenerCount(eventType: string) {
       return listeners.get(eventType)?.length ?? 0;
     },
-    off,
     on,
     send: vi.fn().mockResolvedValue("sdk-user"),
     sendAndWait: vi.fn().mockResolvedValue(undefined),
@@ -919,17 +906,18 @@ describe("attachEventBridge", () => {
     bridge.detach();
 
     expect(order).toEqual(registeredEvents.toReversed());
-    expect(session.off).toHaveBeenCalledTimes(registeredEvents.length);
     expect(session.listenerCount("assistant.message_delta")).toBe(0);
   });
 
-  it("detach unsubscribes in reverse order via off() fallback", () => {
+  it("detaches remaining listeners in reverse order when a disposer throws", () => {
     const order: string[] = [];
     const session = createFakeSession({
-      onOff: (eventType) => {
+      onReturnedUnsubscribe: (eventType) => {
         order.push(eventType);
+        if (eventType === "session.error") {
+          throw new Error("unsubscribe failed");
+        }
       },
-      returnUnsubscribe: false,
     });
     const bridge = attachTestBridge(session);
 

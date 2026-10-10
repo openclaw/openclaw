@@ -52,9 +52,6 @@ export function getGlobalPluginRegistry(): GlobalHookRunnerRegistry | null {
   return state.registry;
 }
 
-/**
- * Check if any hooks are registered for a given hook name.
- */
 export function hasGlobalHooks<K extends PluginHookName>(
   hookName: K,
   ctx?: Partial<Parameters<PluginHookHandlerMap[K]>[1]>,

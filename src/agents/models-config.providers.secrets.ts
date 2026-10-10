@@ -69,7 +69,10 @@ function resolveCatalogAuthProfileOrder(params: {
   });
 }
 
-function resolveCatalogDirectAuthMode(config: OpenClawConfig | undefined, provider: string) {
+function resolveCatalogDirectAuthMode(
+  config: OpenClawConfig | undefined,
+  provider: string,
+): NonNullable<ReturnType<ProviderApiKeyResolver>["mode"]> {
   const mode = resolveDirectProviderCredentialMode({
     cfg: config,
     provider,
@@ -111,26 +114,19 @@ export function createProviderApiKeyResolverFromPreparedCredentials(
         mode: "oauth",
       };
     }
-    if (credential.type === "token") {
-      if (
-        !credential.token.trim() ||
-        (credential.expires !== undefined && Date.now() >= credential.expires)
-      ) {
-        return resolveConfiguredOrEnvironment(provider);
-      }
-      return {
-        apiKey: credential.token,
-        discoveryApiKey: toDiscoveryApiKey(credential.token),
-        mode: "token",
-      };
-    }
-    if (!credential.key.trim()) {
+    const apiKey = credential.type === "token" ? credential.token : credential.key;
+    if (
+      !apiKey.trim() ||
+      (credential.type === "token" &&
+        credential.expires !== undefined &&
+        Date.now() >= credential.expires)
+    ) {
       return resolveConfiguredOrEnvironment(provider);
     }
     return {
-      apiKey: credential.key,
-      discoveryApiKey: toDiscoveryApiKey(credential.key),
-      mode: "api_key",
+      apiKey,
+      discoveryApiKey: toDiscoveryApiKey(apiKey),
+      mode: credential.type,
     };
   };
 }
@@ -167,33 +163,20 @@ export function createProviderApiKeyResolver(
   return (provider: string) => {
     const lookupCaches = getLookupCaches();
     const authProvider = resolveProviderIdForAuthFromCaches(provider, lookupCaches);
-    const envVar = resolveEnvApiKeyVarName(authProvider, env, {
-      aliasMap: lookupCaches.aliasMap,
-      candidateMap: lookupCaches.envCandidateMap,
-      authEvidenceMap: lookupCaches.authEvidenceMap,
-    });
-    if (envVar) {
-      // Public return value carries the env var name, while discovery receives
-      // only the redacted/hashable value form.
-      return {
-        apiKey: envVar,
-        discoveryApiKey: toDiscoveryApiKey(env[envVar]),
-        mode: resolveCatalogDirectAuthMode(config, authProvider),
-      };
-    }
-    const fromConfig = resolveConfigBackedProviderAuth({
+    const direct = resolveDirectCatalogAuth({
       provider: authProvider,
       config,
       env,
+      lookupCaches,
       sourceConfigForSecrets,
       workspaceDir,
       syntheticAuthEnv,
     });
-    if (fromConfig?.apiKey) {
+    if (direct?.apiKey) {
       return {
-        apiKey: fromConfig.apiKey,
-        discoveryApiKey: fromConfig.discoveryApiKey,
-        mode: fromConfig.mode,
+        apiKey: direct.apiKey,
+        discoveryApiKey: direct.discoveryApiKey,
+        mode: direct.mode,
       };
     }
     const authStore = resolveAuthProfileStoreInput(authStoreInput);
@@ -274,43 +257,47 @@ export function createProviderAuthResolver(
       };
     }
 
-    const envVar = resolveEnvApiKeyVarName(authProvider, env, {
-      aliasMap: lookupCaches.aliasMap,
-      candidateMap: lookupCaches.envCandidateMap,
-      authEvidenceMap: lookupCaches.authEvidenceMap,
-    });
-    if (envVar) {
-      return {
-        apiKey: envVar,
-        discoveryApiKey: toDiscoveryApiKey(env[envVar]),
-        mode: resolveCatalogDirectAuthMode(config, authProvider),
-        source: "env" as const,
-      };
-    }
-
-    const fromConfig = resolveConfigBackedProviderAuth({
-      provider: authProvider,
-      config,
-      env,
-      sourceConfigForSecrets,
-      workspaceDir,
-      syntheticAuthEnv,
-    });
-    if (fromConfig) {
-      return {
-        apiKey: fromConfig.apiKey,
-        discoveryApiKey: fromConfig.discoveryApiKey,
-        mode: fromConfig.mode,
-        source: "none",
-      };
-    }
-    return {
-      apiKey: undefined,
-      discoveryApiKey: undefined,
-      mode: "none" as const,
-      source: "none" as const,
-    };
+    return (
+      resolveDirectCatalogAuth({
+        provider: authProvider,
+        config,
+        env,
+        lookupCaches,
+        sourceConfigForSecrets,
+        workspaceDir,
+        syntheticAuthEnv,
+      }) ?? { apiKey: undefined, discoveryApiKey: undefined, mode: "none", source: "none" }
+    );
   };
+}
+
+function resolveDirectCatalogAuth(
+  params: Parameters<typeof resolveConfigBackedProviderAuth>[0] & {
+    env: NodeJS.ProcessEnv;
+    lookupCaches: ProviderAuthLookupCaches;
+  },
+): (ReturnType<typeof resolveConfigBackedProviderAuth> & { source: "env" | "none" }) | undefined {
+  const envVar = resolveEnvApiKeyVarName(params.provider, params.env, {
+    aliasMap: params.lookupCaches.aliasMap,
+    candidateMap: params.lookupCaches.envCandidateMap,
+    authEvidenceMap: params.lookupCaches.authEvidenceMap,
+  });
+  // Public auth retains the env name; only discovery consumes its resolved value.
+  const auth = envVar
+    ? {
+        apiKey: envVar,
+        discoveryApiKey: toDiscoveryApiKey(params.env[envVar]),
+        mode: resolveCatalogDirectAuthMode(params.config, params.provider),
+      }
+    : resolveConfigBackedProviderAuth(params);
+  return auth
+    ? {
+        apiKey: auth.apiKey,
+        discoveryApiKey: auth.discoveryApiKey,
+        mode: auth.mode,
+        source: envVar ? ("env" as const) : ("none" as const),
+      }
+    : undefined;
 }
 
 function resolveConfigBackedProviderAuth(params: {
@@ -386,46 +373,29 @@ function resolveConfigBackedProviderAuth(params: {
     value: configuredProviderApiKey,
     defaults: params.config?.secrets?.defaults,
   });
-  if (configuredApiKeyRef) {
-    // Secret refs are preserved as markers. Env refs can still provide a
-    // discovery value from the current process without exposing the secret name's value.
-    if (configuredApiKeyRef.source === "env") {
-      const envVar = configuredApiKeyRef.id.trim();
-      const envValue = params.env?.[envVar]?.trim();
-      return envValue
-        ? {
-            apiKey: envVar,
-            discoveryApiKey: toDiscoveryApiKey(envValue),
-            mode,
-          }
-        : undefined;
-    }
+  if (configuredApiKeyRef && configuredApiKeyRef.source !== "env") {
+    // Non-env refs stay sterile until the runtime materializes them.
     return {
       apiKey: resolveNonEnvSecretRefApiKeyMarker(configuredApiKeyRef.source),
       mode,
     };
   }
-  if (typeof configuredProviderApiKey !== "string") {
+  const configuredApiKey =
+    configuredApiKeyRef?.id.trim() ??
+    (typeof configuredProviderApiKey === "string" ? configuredProviderApiKey.trim() : undefined);
+  if (configuredApiKey === undefined || (!configuredApiKeyRef && !configuredApiKey)) {
     return undefined;
   }
-  const configuredApiKey = configuredProviderApiKey.trim();
-  if (!configuredApiKey) {
-    return undefined;
-  }
-  if (isKnownEnvApiKeyMarker(configuredApiKey)) {
-    const envValue = params.env?.[configuredApiKey]?.trim();
-    if (envValue) {
-      return {
-        apiKey: configuredApiKey,
-        discoveryApiKey: toDiscoveryApiKey(envValue),
-        mode,
-      };
-    }
+  const discoveryValue =
+    configuredApiKeyRef || isKnownEnvApiKeyMarker(configuredApiKey)
+      ? params.env?.[configuredApiKey]?.trim()
+      : configuredApiKey;
+  if (!discoveryValue) {
     return undefined;
   }
   return {
     apiKey: configuredApiKey,
-    discoveryApiKey: toDiscoveryApiKey(configuredApiKey),
+    discoveryApiKey: toDiscoveryApiKey(discoveryValue),
     mode,
   };
 }

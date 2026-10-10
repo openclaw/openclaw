@@ -33,7 +33,7 @@ import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
 setupRunAttemptTestHooks();
 vi.mock("openclaw/plugin-sdk/node-selection-runtime", { spy: true });
 
-it.each(["delayed-success", "opaque-steer", "wait-before-admission"] as const)(
+it.each(["delayed-success", "opaque-steer", "wait-before-admission", "yield-receipt"] as const)(
   "preserves accepted follow-up through sessions_yield (%s)",
   async (scenario) => {
     // Keep discovery off ambient Gateway I/O while using the real admitted host and monitor.
@@ -54,6 +54,7 @@ it.each(["delayed-success", "opaque-steer", "wait-before-admission"] as const)(
       }
     });
     let waitAfterAdmission: unknown;
+    let claimedAfterStart: boolean | undefined;
     const harness = createStartedThreadHarness();
     const lifetime = new AbortController();
     const params = createTestParams();
@@ -193,15 +194,38 @@ it.each(["delayed-success", "opaque-steer", "wait-before-admission"] as const)(
         },
       });
       expect(yieldResponse).toMatchObject({ success: true });
+      if (scenario === "yield-receipt") {
+        // The native receipt queues input without starting another parent turn.
+        // Keep teardown open after the real yield has been accepted.
+        await turn(childThreadId, turnB);
+        claimedAfterStart = isCodexAppServerLiveThreadClaimed(harness.client, childThreadId);
+        await parentItem(
+          {
+            type: "agent_message",
+            author: childThreadId,
+            recipient: "/root",
+            content: [
+              {
+                type: "input_text",
+                text: `Message Type: FINAL_ANSWER\nTask name: /root\nSender: ${childThreadId}\nPayload:\nB result`,
+              },
+            ],
+          },
+          "rawResponseItem/completed",
+        );
+        await turn(childThreadId, turnB, "B result");
+      }
       await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
       expect(readAttemptTerminal(await run)).toMatchObject({ aborted: false, promptError: null });
       await nativeHookRelayUnregisterQueue.flush();
       host.closeHost();
       host.closeAdmission();
-      if (scenario !== "wait-before-admission") {
+      if (scenario !== "wait-before-admission" && scenario !== "yield-receipt") {
         await turn(childThreadId, turnB);
       }
-      const claimedAfterStart = isCodexAppServerLiveThreadClaimed(harness.client, childThreadId);
+      if (scenario !== "yield-receipt") {
+        claimedAfterStart = isCodexAppServerLiveThreadClaimed(harness.client, childThreadId);
+      }
       if (accepted) {
         await turn(childThreadId, turnB, "B result");
         await turn(childThreadId, turnB, "B result");

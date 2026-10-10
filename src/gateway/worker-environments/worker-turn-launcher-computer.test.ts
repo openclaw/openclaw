@@ -39,6 +39,7 @@ import {
   cleanupWorkerTurnLauncherTest,
   computerDescriptor,
   createWorkerSessionTurnPlacementProvider,
+  readLaunchToolNames,
   placements,
   seedActivePlacement,
   setupWorkerTurnLauncherTest,
@@ -108,9 +109,10 @@ describe("worker launch capabilities", () => {
     { missingFeature: undefined, modelHasVision: true, allowed: true },
     { missingFeature: undefined, modelHasVision: false, allowed: false },
     { missingFeature: WORKER_COMPUTER_PROTOCOL_FEATURE, modelHasVision: true, allowed: false },
+    { modelHasVision: true, supervisorAdmitsComputer: false, allowed: false },
   ])(
-    "grants computer with negotiated features and model vision (missing: $missingFeature, vision: $modelHasVision)",
-    async ({ missingFeature, modelHasVision, allowed }) => {
+    "grants computer with negotiated features, supervisor vocabulary, and model vision (%j)",
+    async ({ missingFeature, modelHasVision, supervisorAdmitsComputer = true, allowed }) => {
       await seedActivePlacement();
       const environment = attachedEnvironment();
       if (!missingFeature) {
@@ -138,6 +140,10 @@ describe("worker launch capabilities", () => {
       });
       const tunnel: WorkerTunnelHandle = createWorkerTurnTunnel({
         launchTurn,
+        readLaunchToolNames: async () =>
+          (await readLaunchToolNames()).filter(
+            (name) => supervisorAdmitsComputer || name !== "computer",
+          ),
         stageAttachments: vi.fn(async () => {}),
         quiesceWorkspace: vi.fn(),
         syncWorkspace: vi.fn(),
@@ -165,7 +171,9 @@ describe("worker launch capabilities", () => {
       ).rejects.toBeInstanceOf(WorkerRunnerCapacityError);
       expect(launchTurn).toHaveBeenCalledOnce();
       expect(tunnel.stageAttachments).toHaveBeenCalledTimes(modelHasVision === true ? 1 : 0);
-      expect(prepareComputer).toHaveBeenCalledTimes(allowed ? 1 : 0);
+      expect(prepareComputer).toHaveBeenCalledTimes(
+        !missingFeature && modelHasVision !== false ? 1 : 0,
+      );
       expect(bind).toHaveBeenCalledTimes(allowed ? 1 : 0);
     },
   );
@@ -320,7 +328,7 @@ describe("worker launch capabilities", () => {
             throw new Error("expected a local workspace source");
           }
           order.push("reconcile");
-          request.source.journal.commit(MANIFEST_REF);
+          await request.source.journal.commit(MANIFEST_REF);
           return {
             manifestRef: MANIFEST_REF,
             changed: false,
@@ -615,7 +623,7 @@ describe("worker launch capabilities", () => {
       ]);
       expect(launchTurn).not.toHaveBeenCalled();
       expect(environments.acquireTurnCredential).not.toHaveBeenCalled();
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       const placement = placements.get(SESSION_ID);
       expect([placement?.state, placement?.turnClaim]).toEqual(["active", null]);
       if (retainedNodeAuthority) {

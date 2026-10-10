@@ -20,9 +20,20 @@ openclaw gateway restart
 openclaw gateway uninstall
 ```
 
-`gateway stop` remains available when plugin configuration needs Doctor migration.
-It still validates core configuration and refuses configuration written by a newer
-OpenClaw binary. Start and restart continue to validate plugin configuration.
+`gateway stop`, `gateway uninstall`, and `gateway restart` remain available when
+configuration is invalid or needs Doctor migration, including configuration written
+by a newer OpenClaw version. They control the recorded service and report config
+problems as warnings with `openclaw doctor --fix` guidance. Stop and uninstall do
+not rewrite configuration. Restart preserves the installed service definition when
+config needs repair; its health check still reports whether the Gateway came back.
+`gateway start` continues to validate configuration before starting the Gateway.
+
+`gateway status` reports service process state separately from Gateway readiness.
+When its connection check fails, inspect the service logs even if the process is
+running. Recent log errors are matching evidence from the bounded log tail, may
+belong to an earlier run, and do not establish the current process's startup phase.
+Routine startup and shutdown messages are not reported as errors. Doctor and
+onboarding use the same error selection.
 
 On Windows, Scheduled Task stop and restart first ask the verified Gateway to drain
 and exit. Older or unresponsive Gateways fall back to termination of the captured
@@ -35,11 +46,42 @@ within the stop budget, restart still attempts the captured task after confirmin
 the Gateway exited, then reports that restart is unverified. An observed replacement
 is preserved and the restart is refused.
 
+`gateway start` checks readiness even when the service process is already running.
+It reports `already-running` only after the selected Gateway passes the health and
+readiness checks; it does not restart a process that is still warming up.
+
 If `gateway start` reaches its readiness deadline while the managed Gateway is
 still starting, it reports `still-starting` and exits with code `2`. The service
 keeps running; check `openclaw gateway status --deep` again before restarting it.
 A crashed service or a foreign listener still produces a failure. Port ownership
 alone does not prove readiness or rule out warm-up.
+
+### Linux maintenance holds
+
+On Linux, `openclaw gateway stop` asks systemd to stop the unit. An explicit stop
+suppresses its `Restart=always` policy until the unit is started again; it does
+not disable startup at the next login or boot. `gateway stop --disable` is
+macOS-only. For non-interactive maintenance, use `openclaw gateway stop --force`.
+
+A systemd mask also refuses explicit starts. Keep masks under operator control:
+OpenClaw does not remove them automatically. If you masked the default user
+service for maintenance, remove the hold before updating:
+
+```bash
+systemctl --user unmask openclaw-gateway.service
+openclaw update
+```
+
+Use the unit and scope shown by `openclaw gateway status --deep` for a custom profile or system
+service. Unmask **before** running `openclaw update`: preflight refuses a masked
+managed unit before replacing files or running migrations. Doctor and status
+report the mask with the unmask command; Doctor does not remove the hold or offer
+to reinstall the masked unit.
+
+If a unit becomes masked during an update, the updater keeps the activated
+candidate and reports a service-definition warning. Remove the mask, run
+`openclaw gateway start`, and check `openclaw gateway status --deep`; the refused
+start does not prove the candidate unhealthy or the Gateway ready.
 
 ### Recover an unreadable native service definition
 
@@ -115,9 +157,19 @@ commands retain their service-management behavior.
 
 ### Pin the service runtime
 
-Forced reinstall retains a supported Node executable recorded in the service.
-Doctor also retains it when no runtime migration is needed. An explicit
-`--runtime node` requests automatic selection again.
+When no runtime option is supplied, forced reinstall retains a supported Node or
+Bun executable recorded in an unpinned service without a wrapper. Update refresh
+does the same without creating a pin. Doctor also defaults to the recorded runtime
+when no runtime migration is needed, including an existing but unloaded service.
+A missing, non-executable, or unsupported recorded Bun falls back to automatic
+Node selection. An explicit `--runtime node` or `--runtime bun` requests automatic
+selection of that runtime.
+
+Configure and advanced onboarding suggest the supported recorded runtime first.
+Without one, their runtime picker suggests the running supported Bun when no
+supported Node is available, otherwise Node. A picker choice is explicit: choosing
+Node on a Bun-only host reports that Node is unavailable before replacing the
+service. Quickstart keeps automatic selection without creating a runtime pin.
 
 Use `--runtime-path` to keep the service on an operator-selected Node or Bun
 executable instead of automatic runtime selection:
@@ -186,14 +238,14 @@ openclaw gateway restart
 <AccordionGroup>
   <Accordion title="Command options">
     - `gateway status`: `--url`, `--port`, `--token`, `--password`, `--timeout`, `--no-probe`, `--require-rpc`, `--deep`, `--json`
-    - `gateway install`: `--port`, `--runtime <node|bun>` (default: `node`), `--runtime-path <path>`, `--token`, `--wrapper <path>`, `--force`, `--json`
+    - `gateway install`: `--port`, `--runtime <node|bun>` (fresh-install default: `node`), `--runtime-path <path>`, `--token`, `--wrapper <path>`, `--force`, `--json`
     - `gateway restart`: `--safe`, `--skip-deferral`, `--force`, `--wait <duration>`, `--preserve-definition`, `--json`
     - `gateway uninstall|start`: `--json`
     - `gateway stop`: `--disable`, `--force`, `--json`
 
   </Accordion>
   <Accordion title="Service runtime">
-    - Node is the primary, default, and recommended managed Gateway runtime.
+    - Node is the primary and recommended managed Gateway runtime and the default for fresh installations; with no explicit runtime, pin, or wrapper, an install running under supported Bun uses that executable without creating a pin if no supported Node is found. Implicit reinstalls retain a supported recorded Node or Bun runtime as described above.
     - For unpinned services, `gateway install` checks the Node executable recorded in the managed service. If it is missing, non-executable, or unsupported, installation refreshes the service without requiring `--force` and reports the replacement path. This also applies when an installer or update refreshes the service. Repair prefers the current CLI's supported Node, retaining stable Homebrew paths, then checks supported system installations. Custom wrappers keep control of their runtime; protected service definitions still require their deployment owner to repair them.
     - Bun 1.4+ with WAL-reset-safe `node:sqlite` is available as an explicit opt-in with `gateway install --runtime bun`.
 

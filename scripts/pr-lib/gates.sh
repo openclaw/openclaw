@@ -170,10 +170,19 @@ prepare_local_gate_workspace() {
   bootstrap_deps_if_needed
 }
 
-run_remote_testbox_full_test_gate() {
+run_remote_testbox_gates() {
   local label="$1"
   local log_file="$2"
   local lease_label="$3"
+  local check_base="${5:-}"
+  if ! [[ "$check_base" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "Remote prepare gates require the captured check-base commit." >&2
+    return 2
+  fi
+  local gate_command="corepack pnpm build && corepack pnpm check --base $check_base"
+  if [ "${4:-false}" != "true" ]; then
+    gate_command="$gate_command && corepack pnpm test"
+  fi
   local remote_env=(CI=1 OPENCLAW_TESTBOX_REMOTE_RUN=1 PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false)
   local name value
   # Delegated Testbox commands do not inherit the caller's scheduling controls.
@@ -184,27 +193,26 @@ run_remote_testbox_full_test_gate() {
       const { parsePositiveInt } = await import(pathToFileURL(process.argv[1] + "/lib/numeric-options.mjs").href);
       const value = process.argv[2].trim();
       if (value) {
-        try { console.log(parsePositiveInt(value, process.argv[3])); }
+        try { process.stdout.write(String(parsePositiveInt(value, process.argv[3]))); }
         catch (error) { console.error(error.message); process.exitCode = 2; }
       }
     ' "$script_parent_dir" "${!name}" "$name") || return 2
     [ -z "$value" ] || remote_env+=("$name=$value")
   done
-  # Same Blacksmith Testbox delegation shape check:changed uses; the worktree's
-  # own wrapper syncs this prep tree (the canonical copy would sync the primary
-  # checkout instead).
+  # Explicit full-suite proof retains the measured high-memory allocation.
+  # The worktree wrapper syncs this prep tree, not the canonical checkout.
   run_quiet_logged "$label" "$log_file" \
     node scripts/crabbox-wrapper.mjs run \
     --provider blacksmith-testbox \
     --blacksmith-org openclaw \
-    --blacksmith-workflow .github/workflows/ci-check-testbox.yml \
+    --blacksmith-workflow .github/workflows/ci-check-high-memory-testbox.yml \
     --blacksmith-job check \
     --blacksmith-ref main \
-    --idle-timeout 90m \
+    --idle-timeout 15m \
     --ttl 240m \
     --timing-json \
     --label "$lease_label" \
-    -- env "${remote_env[@]}" corepack pnpm test
+    -- env "${remote_env[@]}" /bin/bash -c "$gate_command"
 }
 
 read_remote_testbox_gate_stamp() {
@@ -410,17 +418,21 @@ write_gates_env_stamp() {
 }
 
 # Correction publication requires the native gate owner's exact candidate
-# stamp. An explicit pending Crabbox stamp is admission to its protected-main
-# publisher, not proof; retain that separately authorized route.
+# disposition. GitHub pending is not proof: merge_verify still owns exact-head
+# auto-merge admission and enforced checks. Pending Crabbox retains its separate
+# protected-main publisher and live-admin requirements.
 require_correction_publication_gates() (
-  local pr="$1" head="$2" allow_pending="${3:-false}"
+  local pr="$1" head="$2" allow_crabbox_pending="${3:-false}"
   local PR_NUMBER="" LAST_VERIFIED_HEAD_SHA="" FULL_GATES_HEAD_SHA=""
   local GATES_MODE="" HOSTED_GATES_TARGET_HEAD_SHA="" DOCS_ONLY=""
   local REMOTE_GATES_PROVIDER="" REMOTE_GATES_RUN_ID="" REMOTE_GATES_LEASE_ID="" REMOTE_GATES_RUN_URL=""
   require_artifact .local/gates.env || return 1
   source .local/gates.env || return 1
   local qualified_head="$LAST_VERIFIED_HEAD_SHA"
-  [ "$PR_NUMBER" = "$pr" ] || return 1
+  if [ "$GATES_MODE" = github_pending ]; then
+    qualified_head="$HOSTED_GATES_TARGET_HEAD_SHA"
+  fi
+  [ "$PR_NUMBER" = "$pr" ] && [[ "$qualified_head" =~ ^[0-9a-f]{40}$ ]] || return 1
   if [ "$qualified_head" != "$head" ]; then
     # GraphQL can assign a hosted OID for the identical reviewed local tree.
     # The verified publication can precede the completed preparation stamp.
@@ -436,6 +448,7 @@ require_correction_publication_gates() (
     }
   fi
   case "$GATES_MODE" in
+    github_pending) ;; # Exact pending binding above; never promote it to success.
     full) [ "$FULL_GATES_HEAD_SHA" = "$qualified_head" ] || return 1 ;;
     docs_only|reused_docs_only) [ "$DOCS_ONLY" = true ] || return 1 ;;
     hosted_exact_or_recent_parent) [ "$HOSTED_GATES_TARGET_HEAD_SHA" = "$qualified_head" ] || return 1 ;;
@@ -451,7 +464,7 @@ require_correction_publication_gates() (
         [[ "$REMOTE_GATES_RUN_URL" == https://github.com/openclaw/openclaw/actions/runs/* ]] || return 1
       ;;
     remote_crabbox_aws_pending)
-      [ "$allow_pending" = true ] && [ "$REMOTE_GATES_PROVIDER" = aws ] || return 1
+      [ "$allow_crabbox_pending" = true ] && [ "$REMOTE_GATES_PROVIDER" = aws ] || return 1
       require_active_org_admin_for_crabbox_gate >/dev/null || return 1
       # The candidate is not hosted yet. Bind eligibility to the publication
       # lease, then let the existing publisher verify the newly hosted head.
@@ -613,9 +626,31 @@ prepare_gates() {
     remote_gates_run_url=""
     echo "Crabbox AWS proof is deferred until prepare-push verifies the exact remote head."
   else
-    prepare_local_gate_workspace
-    run_quiet_logged "pnpm build" ".local/gates-build.log" pnpm build
-    run_quiet_logged "pnpm check" ".local/gates-check.log" pnpm check --base "$check_base"
+    if [ "$gates_remote_mode" = "testbox" ]; then
+      # The capsule owns the complete install/build/check/test boundary. Running
+      # any package phase here can resolve an ancestor checkout's dependencies.
+      echo "Running prepare gates on Blacksmith Testbox (OPENCLAW_PR_GATES_REMOTE=testbox)."
+      run_remote_testbox_gates \
+        "prepare gates (blacksmith-testbox)" \
+        ".local/gates-test.log" \
+        "pr-$pr-gates" "$docs_only" "$check_base" || return $?
+      local remote_stamp
+      remote_stamp=$(require_remote_testbox_gate_stamp ".local/gates-test.log") || return $?
+      remote_gates_provider="blacksmith-testbox"
+      remote_gates_run_id=""
+      remote_gates_lease_id=$(printf '%s\n' "$remote_stamp" | jq -r '.leaseId')
+      remote_gates_run_url=$(printf '%s\n' "$remote_stamp" | jq -r '.actionsRunUrl // ""')
+      echo "Remote testbox gate stamp: $remote_gates_lease_id${remote_gates_run_url:+ ($remote_gates_run_url)}"
+    else
+      prepare_local_gate_workspace
+      local build_command=(pnpm build)
+      if [ "$gates_remote_mode" = local ] && [ "$docs_only" != true ]; then
+        # Prepare the full suite's artifacts without changing check/test runtime inputs.
+        build_command=(env OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build)
+      fi
+      run_quiet_logged "pnpm build" ".local/gates-build.log" "${build_command[@]}" || return $?
+      run_quiet_logged "pnpm check" ".local/gates-check.log" pnpm check --base "$check_base"
+    fi
 
     if [ "$docs_only" = "true" ]; then
       gates_mode="docs_only"
@@ -627,18 +662,6 @@ prepare_gates() {
       echo "Docs-only change detected with high confidence; skipping pnpm test."
     elif [ "$gates_remote_mode" = "testbox" ]; then
       gates_mode="remote_testbox"
-      echo "Running pnpm test on Blacksmith Testbox (OPENCLAW_PR_GATES_REMOTE=testbox)."
-      run_remote_testbox_full_test_gate \
-        "pnpm test (blacksmith-testbox)" \
-        ".local/gates-test.log" \
-        "pr-$pr-gates"
-      local remote_stamp
-      remote_stamp=$(require_remote_testbox_gate_stamp ".local/gates-test.log")
-      remote_gates_provider="blacksmith-testbox"
-      remote_gates_run_id=""
-      remote_gates_lease_id=$(printf '%s\n' "$remote_stamp" | jq -r '.leaseId')
-      remote_gates_run_url=$(printf '%s\n' "$remote_stamp" | jq -r '.actionsRunUrl // ""')
-      echo "Remote testbox gate stamp: $remote_gates_lease_id${remote_gates_run_url:+ ($remote_gates_run_url)}"
       previous_full_gates_head="$current_head"
     else
       gates_mode="full"

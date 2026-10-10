@@ -146,7 +146,7 @@ curl -fsS http://127.0.0.1:18789/readyz
 # Credential-scoped catalog discovery.
 openclaw models list --all --provider clawrouter --json
 
-# Minimal real inference probe through the configured ClawRouter provider.
+# Minimal real inference test through the configured ClawRouter provider.
 openclaw models status --probe --probe-provider clawrouter --probe-max-tokens 8 --json
 
 # Workload canary using an exact granted model ref.
@@ -159,7 +159,7 @@ openclaw agent --agent main \
 Use a model returned by the scoped catalog instead of copying the example
 model blindly. A successful `/readyz` response means the gateway can serve
 requests; it does not claim that ClawRouter, the ClawRouter key, or an
-upstream provider is ready. The model probe and agent canary are the inference proofs.
+upstream provider is ready. The model check and agent canary are the inference proofs.
 
 For live diagnosis, enable `OPENCLAW_DEBUG_MODEL_TRANSPORT=1` in the gateway
 process, issue the canary, and inspect the gateway's logs. The metadata-only
@@ -204,9 +204,14 @@ ClawRouter models. A catalog model is advertised as an OpenClaw model when:
   route); and
 - the provider exposes a matching route for one of the transports below.
 
-Adding a model to a supported ClawRouter provider needs no OpenClaw release:
-the next catalog refresh (cached 60 seconds per ClawRouter key scope) discovers
-it. A model that needs a new wire protocol requires plugin support first.
+Adding a model to a supported ClawRouter provider needs no OpenClaw release.
+Successful catalog responses, including an empty granted-model list, are reused
+for one hour per endpoint and resolved credential. Ordinary model-list reads
+serve retained inventory while expired data refreshes in the background. Use
+**Refresh** in Models to discover changes immediately; explicit refresh bypasses
+the response cache. A model that needs a new wire protocol requires plugin
+support first. Cached inventory is not authorization: ClawRouter checks current
+grants and budgets when a model request is dispatched.
 
 A model's optional `displayName` is its picker label; without it, OpenClaw uses
 the provider display name and catalog `id`, omitting a repeated `<provider>/`
@@ -273,7 +278,7 @@ the same ClawRouter policy can change the remaining percentage.
 
 ## Security behavior
 
-- Catalog discovery is scoped to the configured ClawRouter key. The result is cached per ClawRouter key scope (agent dir, workspace dir, auth profile id, and base URL).
+- Catalog discovery is scoped to the configured ClawRouter key. HTTP responses are cached by endpoint and resolved credential; changing either does not reuse the previous response. Prepared inventory and dynamic model lookup retain their own agent, workspace, and auth scopes.
 - The ClawRouter key is attached only at request dispatch; it is not stored in model metadata.
 - Automatic attribution and request-correlation values are trimmed and control-character rejected before dispatch. Attribution values are bounded to 256 characters; request ids are bounded to 128.
 - Model transport diagnostics contain metadata only and never include the ClawRouter key or model content.

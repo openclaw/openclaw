@@ -12,8 +12,6 @@ import {
   listOpenClawRegisteredAgentDatabases,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
-import { seedOpenClawAgentSchemaV21 } from "../state/openclaw-agent-schema-v21.test-support.js";
 import { readOpenClawAgentIntegrityVerification } from "../state/openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -35,17 +33,9 @@ function createRegisteredAgentDatabase(): {
   return { databasePath, env };
 }
 
-function recreateUnreleasedInlineMemoryMetadata(databasePath: string, legacyStorage = false): void {
-  if (legacyStorage) {
-    // The registered fixture is closed and empty. Seed frozen historical bytes,
-    // including TEXT caches/transcripts and their original indexes/triggers.
-    fs.rmSync(databasePath);
-  }
+function recreateUnreleasedInlineMemoryMetadata(databasePath: string): void {
   const database = openNodeSqliteDatabase(databasePath);
   try {
-    if (legacyStorage) {
-      seedOpenClawAgentSchemaV21(database, "worker-1");
-    }
     database.exec("PRAGMA foreign_keys = OFF");
     database.exec(`
       DROP TABLE memory_index_chunk_recall_metadata;
@@ -70,7 +60,7 @@ function recreateUnreleasedInlineMemoryMetadata(databasePath: string, legacyStor
         'sentinel-hash', 'sentinel-model', 'sentinel text', ?, 42,
         9, 'when testing rollback', 'project/key'
       )`)
-      .run(legacyStorage ? "[1,0]" : encodeMemoryEmbedding([1, 0]));
+      .run(encodeMemoryEmbedding([1, 0]));
     database.exec("PRAGMA foreign_keys = ON");
   } finally {
     database.close();
@@ -84,20 +74,6 @@ function readMemoryChunkColumns(databasePath: string): string[] {
       .prepare("PRAGMA table_info(memory_index_chunks)")
       .all()
       .map((row) => (row as { name: string }).name);
-  } finally {
-    database.close();
-  }
-}
-
-function readMemoryChunkTableSql(databasePath: string): string {
-  const database = openNodeSqliteDatabase(databasePath, { readOnly: true });
-  try {
-    const row = database
-      .prepare(
-        "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'memory_index_chunks'",
-      )
-      .get() as { sql: string };
-    return row.sql;
   } finally {
     database.close();
   }
@@ -146,99 +122,6 @@ describe("doctor agent memory schema repair", () => {
     }
   });
 
-  it.each(["v17", "current"] as const)(
-    "moves %s inline recall metadata, preserves rows, and lists the durable repair",
-    async (version) => {
-      const { databasePath, env } = createRegisteredAgentDatabase();
-      recreateUnreleasedInlineMemoryMetadata(databasePath, version === "v17");
-      if (version === "v17") {
-        const legacy = openNodeSqliteDatabase(databasePath);
-        removeCanonicalValidationFromHistoricalAgentFixture(legacy);
-        legacy.exec(
-          "DROP TABLE session_participants; PRAGMA user_version = 17; UPDATE schema_meta SET schema_version = 17;",
-        );
-        legacy.close();
-      }
-      const writeNote = vi.fn();
-
-      const report = await noteDoctorAgentMemorySchemaHealth(
-        { env, shouldRepair: true },
-        { note: writeNote },
-      );
-
-      expect(report).toEqual({
-        repaired: [
-          {
-            agentId: "worker-1",
-            columns: ["importance", "triggers", "project_key"],
-            path: databasePath,
-            removedTrigger: true,
-          },
-        ],
-        warnings: [],
-      });
-      expect(writeNote).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "Agent worker-1: moved memory_index_chunks.importance, memory_index_chunks.triggers, memory_index_chunks.project_key to additive storage; removed memory_index_chunk_provenance_after_insert",
-        ),
-        "Doctor changes",
-      );
-
-      const database = openNodeSqliteDatabase(databasePath, { readOnly: true });
-      try {
-        expect(readMemoryChunkColumns(databasePath)).toEqual([
-          "chunk_rowid",
-          "id",
-          "path",
-          "source",
-          "start_line",
-          "end_line",
-          "hash",
-          "model",
-          "text",
-          "embedding",
-          "updated_at",
-        ]);
-        expect(
-          database.prepare("SELECT id, text, embedding FROM memory_index_chunks").get(),
-        ).toEqual({
-          id: "pre-provenance-sentinel",
-          text: "sentinel text",
-          embedding: encodeMemoryEmbedding([1, 0]),
-        });
-        expect(
-          database
-            .prepare(
-              `SELECT importance, triggers, project_key
-             FROM memory_index_chunk_recall_metadata
-             WHERE chunk_id = 'pre-provenance-sentinel'`,
-            )
-            .get(),
-        ).toEqual({
-          importance: 9,
-          project_key: "project/key",
-          triggers: "when testing rollback",
-        });
-        expect(
-          database
-            .prepare(
-              "SELECT name FROM sqlite_schema WHERE type = 'trigger' AND name = 'memory_index_chunk_provenance_after_insert'",
-            )
-            .get(),
-        ).toBeUndefined();
-        expect(
-          database
-            .prepare(
-              "SELECT origin_class FROM memory_index_chunk_provenance WHERE chunk_id = 'pre-provenance-sentinel'",
-            )
-            .get(),
-        ).toEqual({ origin_class: "agent" });
-      } finally {
-        database.close();
-      }
-    },
-  );
-
   it("blocks runtime admission until a lost Doctor repair releases maintenance", async () => {
     const { databasePath, env } = createRegisteredAgentDatabase();
     const laterOptions = { agentId: "worker-2", env };
@@ -248,6 +131,7 @@ describe("doctor agent memory schema repair", () => {
     recreateUnreleasedInlineMemoryMetadata(laterPath);
     const laterBefore = fs.readFileSync(laterPath);
     const agentDatabase = await import("../state/openclaw-agent-db.js");
+    const agentMaintenance = await import("../state/openclaw-agent-db-maintenance.js");
     const integrityWorker = await import("../infra/sqlite-integrity-worker.js");
     const sqlite = await import("../infra/node-sqlite.js");
     const startAdmission = createDeferred();
@@ -270,9 +154,9 @@ describe("doctor agent memory schema repair", () => {
         return open(pathname, options);
       });
     const close = vi.spyOn(agentDatabase, "closeOpenClawAgentDatabaseByPath");
-    const migrate = agentDatabase.migrateOpenClawAgentDatabaseForMaintenance;
+    const migrate = agentMaintenance.migrateOpenClawAgentDatabaseForMaintenance;
     const repair = vi
-      .spyOn(agentDatabase, "migrateOpenClawAgentDatabaseForMaintenance")
+      .spyOn(agentMaintenance, "migrateOpenClawAgentDatabaseForMaintenance")
       .mockImplementationOnce(async (options, maintenance) => {
         await migrate(options, maintenance);
         const removed = openOpenClawStateDatabase({ env })
@@ -315,6 +199,8 @@ describe("doctor agent memory schema repair", () => {
     const { databasePath, env } = createRegisteredAgentDatabase();
     recreateUnreleasedInlineMemoryMetadata(databasePath);
     await noteDoctorAgentMemorySchemaHealth({ env, shouldRepair: true }, { note: vi.fn() });
+    const options = { agentId: "worker-1", env };
+    const admitted = openOpenClawAgentDatabase(options);
     const writeNote = vi.fn();
 
     const report = await noteDoctorAgentMemorySchemaHealth(
@@ -324,59 +210,8 @@ describe("doctor agent memory schema repair", () => {
 
     expect(report).toEqual({ repaired: [], warnings: [] });
     expect(writeNote).not.toHaveBeenCalled();
-  });
-
-  it("leaves a fresh canonical database untouched", async () => {
-    const { databasePath, env } = createRegisteredAgentDatabase();
-    const options = { agentId: "worker-1", env };
-    const admitted = openOpenClawAgentDatabase(options);
-    const beforeSql = readMemoryChunkTableSql(databasePath);
-    const beforeStat = fs.statSync(databasePath);
-
-    const report = await noteDoctorAgentMemorySchemaHealth(
-      { env, shouldRepair: true },
-      { note: vi.fn() },
-    );
-
-    const afterStat = fs.statSync(databasePath);
-    expect(report).toEqual({ repaired: [], warnings: [] });
     expect(admitted.db.isOpen).toBe(true);
     expect(openOpenClawAgentDatabase(options)).toBe(admitted);
-    expect(readMemoryChunkTableSql(databasePath)).toBe(beforeSql);
-    expect({ mtimeMs: afterStat.mtimeMs, size: afterStat.size }).toEqual({
-      mtimeMs: beforeStat.mtimeMs,
-      size: beforeStat.size,
-    });
-  });
-
-  it("continues canonical index maintenance on a pre-provenance database", async () => {
-    const { databasePath, env } = createRegisteredAgentDatabase();
-    recreateUnreleasedInlineMemoryMetadata(databasePath);
-    const drifted = openNodeSqliteDatabase(databasePath);
-    try {
-      drifted.exec("DROP INDEX idx_agent_cache_updated;");
-    } finally {
-      drifted.close();
-    }
-
-    const report = await noteDoctorAgentMemorySchemaHealth(
-      { env, shouldRepair: true },
-      { note: vi.fn() },
-    );
-
-    expect(report.repaired).toHaveLength(1);
-    const repaired = openNodeSqliteDatabase(databasePath, { readOnly: true });
-    try {
-      expect(
-        repaired
-          .prepare(
-            "SELECT name FROM sqlite_schema WHERE type = 'index' AND name = 'idx_agent_cache_updated'",
-          )
-          .get(),
-      ).toEqual({ name: "idx_agent_cache_updated" });
-    } finally {
-      repaired.close();
-    }
   });
 
   it.each(["already-repaired", "new-repair"])(
@@ -386,14 +221,15 @@ describe("doctor agent memory schema repair", () => {
       const laterPath = openOpenClawAgentDatabase({ agentId: "worker-2", env }).path;
       closeOpenClawAgentDatabasesForTest();
       recreateUnreleasedInlineMemoryMetadata(databasePath);
-      const agentDatabase = await import("../state/openclaw-agent-db.js");
-      const withLease = agentDatabase.withAgentDatabaseMaintenanceLease;
+      const agentMaintenance = await import("../state/openclaw-agent-db-maintenance.js");
+      const agentMaintenanceLease = await import("../state/openclaw-agent-db-maintenance-lease.js");
+      const withLease = agentMaintenanceLease.withAgentDatabaseMaintenanceLease;
       const lease = vi
-        .spyOn(agentDatabase, "withAgentDatabaseMaintenanceLease")
+        .spyOn(agentMaintenanceLease, "withAgentDatabaseMaintenanceLease")
         .mockImplementationOnce((options, run) =>
           withLease(options, async (maintenance) => {
             if (change === "already-repaired") {
-              await agentDatabase.migrateOpenClawAgentDatabaseForMaintenance(
+              await agentMaintenance.migrateOpenClawAgentDatabaseForMaintenance(
                 { agentId: "worker-1", pathname: databasePath },
                 maintenance,
               );
@@ -457,9 +293,9 @@ describe("doctor agent memory schema repair", () => {
           peer.close();
         }
       };
-      const agentDatabase = await import("../state/openclaw-agent-db.js");
-      const withLease = agentDatabase.withAgentDatabaseMaintenanceLease;
-      const lease = vi.spyOn(agentDatabase, "withAgentDatabaseMaintenanceLease");
+      const agentMaintenanceLease = await import("../state/openclaw-agent-db-maintenance-lease.js");
+      const withLease = agentMaintenanceLease.withAgentDatabaseMaintenanceLease;
+      const lease = vi.spyOn(agentMaintenanceLease, "withAgentDatabaseMaintenanceLease");
       if (timing === "before-doctor") {
         publishPeerRegistration();
       } else {

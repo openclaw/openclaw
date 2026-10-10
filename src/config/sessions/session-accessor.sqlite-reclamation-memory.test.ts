@@ -28,7 +28,7 @@ import {
   loadSessionEntry,
   replaceSessionEntry,
 } from "./session-accessor.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 
 const checkpoint = vi.hoisted(() => ({
   startForeground: undefined as (() => void) | undefined,
@@ -135,7 +135,7 @@ describe("reclamation with the public memory runtime", () => {
           store: { vector: { enabled: false } },
         },
       },
-      agents: { defaults: { workspace }, list: [{ id: "main", default: true }] },
+      agents: { defaults: { workspace }, entries: { main: {} } },
     };
     const acquired = await getActiveMemorySearchManagerCore({
       cfg,
@@ -191,8 +191,8 @@ describe("reclamation with the public memory runtime", () => {
     );
     const outcomes = await Promise.allSettled(write ? [write] : []);
     const authorizations = await Promise.allSettled(checkpoint.authorizations);
-    expect(outcomes).toEqual([{ status: "fulfilled", value: undefined }]);
     expect(deletion).toMatchObject({ result: { deleted: true } });
+    expect(outcomes).toEqual([{ status: "fulfilled", value: undefined }]);
     expect(checkpoint.startForeground).toHaveBeenCalledOnce();
     expect(authorizations).toEqual([{ status: "fulfilled", value: undefined }]);
     expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toBeUndefined();

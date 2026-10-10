@@ -6,7 +6,7 @@ import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { DropdownMenuController } from "./dropdown-menu-controller.ts";
 import { icons } from "./icons.ts";
 import { activateMenuShortcut, menuShortcutHint } from "./menu-shortcuts.ts";
-import { promoteToPopoverTopLayer } from "./menu-surface.ts";
+import { promoteToPopoverTopLayer, renderMenuTrigger } from "./menu-surface.ts";
 import {
   EMPTY_SESSION_MENU_DATA,
   SessionMenuActions,
@@ -61,6 +61,7 @@ class SessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) forkDisabled = false;
   @property({ attribute: false }) forkFromLastCompleted = false;
   @property({ attribute: false }) archiveAllowed = false;
+  @property({ attribute: false }) snoozeAllowed = false;
   @property({ attribute: false }) deleteAllowed = false;
   @property({ attribute: false }) cloudWorkerStopAllowed = false;
   @property({ attribute: false }) groups: readonly string[] = [];
@@ -151,6 +152,7 @@ class SessionMenu extends OpenClawLightDomElement {
   private readonly handleAfterHide = (event: Event) => {
     // A keyed replacement can finish hiding after its successor opens.
     if (event.currentTarget instanceof Node && event.currentTarget.isConnected) {
+      this.managementActions.settings.close();
       this.onClose();
     }
   };
@@ -201,14 +203,7 @@ class SessionMenu extends OpenClawLightDomElement {
         @wa-select=${this.handleSelect}
         @wa-after-hide=${this.handleAfterHide}
       >
-        <button
-          slot="trigger"
-          type="button"
-          tabindex="-1"
-          aria-hidden="true"
-          aria-label=${menuLabel}
-          style="position: fixed; left: ${clampedX}px; top: ${clampedY}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
-        ></button>
+        ${renderMenuTrigger({ x: clampedX, y: clampedY }, menuLabel)}
         ${
           this.compact && this.compactView !== "root"
             ? this.managementActions.renderCompactView(this.compactView)

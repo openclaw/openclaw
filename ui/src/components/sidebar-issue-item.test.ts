@@ -13,6 +13,7 @@ import { resolveSidebarUpdateAttention } from "./sidebar-attention-update.ts";
 import {
   renderSidebarIssueItem,
   renderSidebarMentionItem,
+  renderSidebarScopeUpgradeItem,
   renderSidebarUpdateSurface,
 } from "./sidebar-issue-item.ts";
 
@@ -50,6 +51,24 @@ describe("renderSidebarIssueItem", () => {
     render(renderSidebarIssueItem(item, { ...shared, onDismiss }), container);
     container.querySelector<HTMLButtonElement>(".sidebar-issues-panel__dismiss")?.click();
     expect(onDismiss).toHaveBeenCalledOnce();
+  });
+});
+
+describe("renderSidebarScopeUpgradeItem", () => {
+  it("shows the exact approval command for the pending access request", () => {
+    render(
+      renderSidebarScopeUpgradeItem({
+        state: { phase: "pending", requestId: "9c21fe9d-6f53-4420-a273-f447920314dd" },
+        onCancel: vi.fn(),
+        onRequest: vi.fn(),
+        onRetry: vi.fn(),
+      }),
+      container,
+    );
+
+    expect(container.querySelector('[role="status"]')?.textContent).toContain(
+      "openclaw devices approve 9c21fe9d-6f53-4420-a273-f447920314dd",
+    );
   });
 });
 
@@ -218,7 +237,7 @@ describe("renderSidebarUpdateSurface", () => {
         if (state === "acknowledged") {
           overlays.acknowledgeUpdateRun();
         }
-        const dismissal = resolveSidebarUpdateAttention(context).dismissal;
+        const dismissal = resolveSidebarUpdateAttention(context)?.dismissal;
         const expected = {
           kind: "updateAvailable",
           signature: JSON.stringify(

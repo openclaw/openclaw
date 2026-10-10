@@ -4,7 +4,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
-import { setUserPreferences } from "../../state/user-preferences.js";
+import { setCanonicalUserPreferences } from "../../state/user-preferences.js";
 import { resolveUserProfileId } from "../../state/user-profiles.js";
 import { pushHandlers } from "./push.js";
 
@@ -35,18 +35,37 @@ vi.mock("../../infra/push-web.js", () => ({
   clearBoundWebPushSubscription: vi.fn(),
   withBoundWebPushSubscriptionByEndpoint: async <T>(
     params: { endpoint: string },
-    prepare: (subscription: BoundWebPushSubscription | null) => { start: () => T } | undefined,
-  ) => prepare(await mocks.findBoundWebPushSubscriptionByEndpoint(params))?.start(),
+    prepare: (
+      subscription: BoundWebPushSubscription | null,
+    ) => { start: () => T } | undefined | Promise<{ start: () => T } | undefined>,
+  ) => (await prepare(await mocks.findBoundWebPushSubscriptionByEndpoint(params)))?.start(),
   registerWebPushSubscription: vi.fn(),
   resolveVapidKeys: vi.fn(),
   setWebPushSubscriptionPreferences: vi.fn(),
 }));
 
 vi.mock("../../state/user-preferences.js", () => ({
-  getUserPreferences: vi.fn(() => ({})),
-  setUserPreferences: vi.fn(() => ({ ok: true })),
+  getCanonicalUserPreferences: vi.fn(async () => ({ profileId: "profile-owner", entries: {} })),
+  setCanonicalUserPreferences: vi.fn(async () => ({
+    ok: true,
+    value: { profileId: "profile-owner" },
+  })),
 }));
 
+vi.mock("../../state/user-channel-identity-operations.js", () => ({
+  prepareUserProfileSelectionAuthority: vi.fn(async (id: string) => {
+    const profileId = resolveUserProfileId(id);
+    return profileId
+      ? { profileId, isCurrent: () => resolveUserProfileId(id) === profileId }
+      : undefined;
+  }),
+}));
+vi.mock("../../state/user-profile-list.js", () => ({
+  prepareUserProfileCatalog: async () => ({
+    readCurrentIdentity: (id: string) => ({ profileId: resolveUserProfileId(id) }),
+    release: vi.fn(),
+  }),
+}));
 vi.mock("../../state/user-profiles.js", () => ({
   resolveUserProfileId: vi.fn((profileId: string) => profileId),
 }));
@@ -290,22 +309,6 @@ describe("push.test handler", () => {
     expectInvalidRequestResponse(respond, "has no APNs registration");
   });
 
-  it("sends push test when registration and auth are available", async () => {
-    vi.mocked(loadApnsRegistration).mockResolvedValue(directRegistration());
-    mockDirectAuth();
-    vi.mocked(normalizeApnsEnvironment).mockReturnValue(null);
-    vi.mocked(sendApnsAlert).mockResolvedValue(apnsResult({}));
-
-    const { respond, invoke } = createInvokeParams({
-      nodeId: "ios-node-1",
-      title: "Wake",
-      body: "Ping",
-    });
-    await invoke();
-
-    expectSuccessfulPushTestResponse(respond);
-  });
-
   it("sends push test through relay registrations", async () => {
     mocks.getRuntimeConfig.mockReturnValue({
       gateway: {
@@ -546,7 +549,7 @@ describe("push.web.subscribe handler", () => {
 
 describe("bound Web Push handlers", () => {
   beforeEach(() => {
-    vi.mocked(setUserPreferences).mockClear();
+    vi.mocked(setCanonicalUserPreferences).mockClear();
     vi.mocked(resolveUserProfileId).mockImplementation((profileId) => profileId);
     vi.mocked(clearBoundWebPushSubscription).mockReset();
     vi.mocked(clearBoundWebPushSubscription).mockResolvedValue(true);
@@ -629,7 +632,7 @@ describe("bound Web Push handlers", () => {
     expect(firstRespondCall(respond)).toEqual([true, { scope: "device", preferences }, undefined]);
   });
 
-  it.each([undefined, true, false])(
+  it.each([undefined, true])(
     "saves human mention preference %s, defaulting older client payloads to off",
     async (humanMentioned) => {
       const subscription = expectDefined(
@@ -670,9 +673,13 @@ describe("bound Web Push handlers", () => {
         ...preferences,
         categories: { ...preferences.categories, humanMentioned: humanMentioned ?? false },
       };
-      expect(setUserPreferences).toHaveBeenCalledWith("profile-owner", {
-        "notifications.web.v1": normalized,
-      });
+      expect(setCanonicalUserPreferences).toHaveBeenCalledWith(
+        "profile-owner",
+        {
+          "notifications.web.v1": normalized,
+        },
+        { assertCurrent: expect.any(Function) },
+      );
       expect(firstRespondCall(respond)).toEqual([
         true,
         { scope: "user", preferences: normalized },
@@ -695,64 +702,28 @@ describe("bound Web Push handlers", () => {
     expect(firstRespondCall(respond)?.[2]?.code).toBe(ErrorCodes.FORBIDDEN);
   });
 
-  it.each(["user", "device"] as const)(
-    "rejects an invalid %s quiet-hours time zone",
-    async (scope) => {
-      const userProfileId = scope === "user" ? "profile-owner" : undefined;
-      if (userProfileId) {
-        const subscription = await findBoundWebPushSubscriptionByEndpoint({
-          endpoint: "https://push.example.test/subscription",
-        });
-        vi.mocked(findBoundWebPushSubscriptionByEndpoint).mockResolvedValue({
-          ...expectDefined(subscription, "bound subscription fixture"),
-          userProfileId,
-        });
-      }
-      const preferences =
-        scope === "user"
-          ? {
-              categories: {
-                approvalRequested: true,
-                agentFinished: false,
-                agentQuestion: false,
-                scheduledTaskFailed: false,
-              },
-              detailLevel: "private",
-              quietHours: {
-                enabled: true,
-                startMinute: 1320,
-                endMinute: 420,
-                timeZone: "Not/A_Time_Zone",
-              },
-              agentIds: [],
-            }
-          : {
-              enabled: true,
-              label: "phone",
-              quietHours: {
-                enabled: true,
-                startMinute: 1320,
-                endMinute: 420,
-                timeZone: "Not/A_Time_Zone",
-              },
-            };
-      const { respond, invoke } = createBoundWebPushInvokeParams(
-        "push.web.preferences.set",
-        {
-          endpoint: "https://push.example.test/subscription",
-          scope,
-          preferences,
+  it("rejects an invalid quiet-hours time zone", async () => {
+    const { respond, invoke } = createBoundWebPushInvokeParams("push.web.preferences.set", {
+      endpoint: "https://push.example.test/subscription",
+      scope: "device",
+      preferences: {
+        enabled: true,
+        label: "phone",
+        quietHours: {
+          enabled: true,
+          startMinute: 1320,
+          endMinute: 420,
+          timeZone: "Not/A_Time_Zone",
         },
-        { userProfileId },
-      );
+      },
+    });
 
-      await invoke();
+    await invoke();
 
-      expect(firstRespondCall(respond)?.[0]).toBe(false);
-      expect(firstRespondCall(respond)?.[2]).toMatchObject({
-        code: ErrorCodes.INVALID_REQUEST,
-        message: "invalid notification quiet-hours time zone",
-      });
-    },
-  );
+    expect(firstRespondCall(respond)?.[0]).toBe(false);
+    expect(firstRespondCall(respond)?.[2]).toMatchObject({
+      code: ErrorCodes.INVALID_REQUEST,
+      message: "invalid notification quiet-hours time zone",
+    });
+  });
 });

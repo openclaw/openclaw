@@ -7,8 +7,8 @@ export type CodexThreadConfigurationOptions = {
   dynamicTools?: CodexDynamicToolSpec[];
   appServer: CodexAppServerRuntimeOptions;
   developerInstructions?: string;
-  /** Skill catalog carried with thread developer instructions; refreshable, never generic policy. */
-  skillsInstructions?: string;
+  /** Skills, persona, and memory carried with thread developer instructions, separate from generic policy. */
+  refreshableInstructions?: string;
   config?: JsonObject;
   nativeCodeModeEnabled?: boolean;
   nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
@@ -21,5 +21,7 @@ export type CodexThreadConfigurationOptions = {
   restrictedToolSurfaceInheritedMcpServerNames?: readonly string[];
   shellEnvironment?: Readonly<Record<string, string>>;
   shellPathPrepend?: readonly string[];
+  /** Host append fragment; inherited Git settings stay in the private stdio process. */
+  shellGitConfigParameters?: string;
   disableLoginShell?: boolean;
 };

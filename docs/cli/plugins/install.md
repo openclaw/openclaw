@@ -18,6 +18,10 @@ Gateway, it saves the installation for the next start. A lost reply or failed
 runtime activation does not trigger a second local install; inspect the reported
 state and use `plugins reload <id>` after fixing an activation failure.
 
+Replacement installs wait for the old plugin's in-flight work before applying
+the new generation. File watcher notifications for the install's own unchanged
+config do not cancel that wait; a newer config change can still supersede it.
+
 Use `--no-enable` when configuration already owns plugin activation. It installs
 and records the plugin without adding it to `plugins.allow`, removing it from
 `plugins.deny`, enabling its entry, or selecting its exclusive slot. Existing
@@ -101,7 +105,12 @@ Default official installs follow the catalog's declared source order.
 ClawHub also provides plugin discovery. OpenClaw-owned
 `@openclaw/*` plugin packages are published on npm again; see the current list
 on [npmjs.com/org/openclaw](https://www.npmjs.com/org/openclaw) or the
-[plugin inventory](/plugins/plugin-inventory). Stable installs use `latest`.
+[plugin inventory](/plugins/plugin-inventory). Stable official ClawHub installs
+first try the running OpenClaw version. If that build is unpublished, installation
+falls back to the original catalog candidate with a visible warning and retains
+that candidate’s integrity pin. An incompatible fallback names the required
+plugin API or OpenClaw version and asks you to upgrade or choose an explicit
+compatible plugin version.
 Fresh beta-channel installs with bare/default or `@latest` intent target the
 installed core's exact beta version for eligible official npm and trusted
 official ClawHub plugins. If the core is not a beta release, they target `@beta`.

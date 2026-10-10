@@ -22,9 +22,9 @@ const runtimeApiKeyMock = vi.hoisted(() => vi.fn());
 const removeProviderAuthProfilesWithLockMock = vi.hoisted(() => vi.fn());
 const upsertAuthProfileWithLockMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>()),
-  upsertAuthProfileWithLock: upsertAuthProfileWithLockMock,
+vi.mock("openclaw/plugin-sdk/provider-auth-api-key", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth-api-key")>()),
+  upsertAuthProfileWithLockOrThrow: upsertAuthProfileWithLockMock,
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => ({
@@ -229,7 +229,7 @@ describe("llama-server setup", () => {
     removeProviderAuthProfilesWithLockMock.mockReset();
     removeProviderAuthProfilesWithLockMock.mockResolvedValue({ version: 1, profiles: {} });
     upsertAuthProfileWithLockMock.mockReset();
-    upsertAuthProfileWithLockMock.mockResolvedValue({ version: 1, profiles: {} });
+    upsertAuthProfileWithLockMock.mockResolvedValue(undefined);
   });
 
   it("does not present a managed localService as an existing-server candidate", async () => {
@@ -360,6 +360,35 @@ describe("llama-server setup", () => {
     await expect(
       prepareLlamaServerSetup({ config: {}, env: {}, modelRef: "llama-cpp/missing" }),
     ).resolves.toBeNull();
+  });
+
+  it("validates the server URL before discovery and accepts a corrected host shorthand", async () => {
+    discoverMock.mockResolvedValue(successfulDiscovery());
+    const text: ProviderAuthContext["prompter"]["text"] = vi.fn(async (prompt) => {
+      for (const invalid of [
+        "not a valid URL",
+        "ftp://localhost:8080",
+        "http://operator@localhost:8080",
+      ]) {
+        expect(prompt.validate?.(invalid)).toMatch(/HTTP.*URL/i);
+      }
+      expect(discoverMock).not.toHaveBeenCalled();
+      expect(prompt.validate?.("localhost:8080/v1/")).toBeUndefined();
+      return "localhost:8080/v1/";
+    });
+
+    const result = await runLlamaServerSetup(
+      interactiveContext({
+        config: {},
+        env: {},
+        prompter: { text, confirm: vi.fn(async () => false) },
+      }),
+    );
+
+    expect(result.configPatch?.models?.providers?.[LLAMA_CPP_PROVIDER_ID]?.baseUrl).toBe(
+      "http://localhost:8080/v1",
+    );
+    expect(result.defaultModel).toBe("llama-cpp/qwen/model:Q4_K_M");
   });
 
   it("configures an unauthenticated server without persisting a fake key", async () => {
@@ -644,9 +673,7 @@ describe("llama-server setup", () => {
         },
       },
     ]);
-    expect(discoverMock).toHaveBeenCalledWith(
-      expect.objectContaining({ apiKey: "secret-key", cacheTtlMs: 0 }),
-    );
+    expect(discoverMock).toHaveBeenCalledWith(expect.objectContaining({ apiKey: "secret-key" }));
     const provider = result.configPatch?.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
     expect(provider?.auth).toBeUndefined();
     expect(provider?.apiKey).toBeUndefined();
@@ -775,15 +802,34 @@ describe("llama-server setup", () => {
     }
   });
 
+  it.each([
+    ["reset validation", validateLlamaServerNonInteractive],
+    ["setup", configureLlamaServerNonInteractive],
+  ])("propagates unreachable discovery during %s without changing auth", async (_label, run) => {
+    discoverMock.mockResolvedValue({
+      kind: "unreachable",
+      endpoint: successfulDiscovery().endpoint,
+      error: new Error("connect ECONNREFUSED"),
+    });
+    const ctx = nonInteractiveContext();
+
+    await expect(run(ctx)).rejects.toThrow(
+      "llama-server could not be reached at http://localhost:8080.",
+    );
+    expect(ctx.runtime.error).not.toHaveBeenCalled();
+    expect(ctx.runtime.exit).not.toHaveBeenCalled();
+    expect(removeProviderAuthProfilesWithLockMock).not.toHaveBeenCalled();
+    expect(upsertAuthProfileWithLockMock).not.toHaveBeenCalled();
+  });
+
   it("rejects a requested model absent from discovery", async () => {
     discoverMock.mockResolvedValue(successfulDiscovery());
     const ctx = nonInteractiveContext({ customModelId: "missing" });
 
-    await expect(validateLlamaServerNonInteractive(ctx)).resolves.toBe(false);
-    expect(ctx.runtime.error).toHaveBeenCalledWith(
+    await expect(validateLlamaServerNonInteractive(ctx)).rejects.toThrow(
       "llama-server model missing was not found. Available models: qwen/model:Q4_K_M",
     );
-    expect(ctx.runtime.exit).toHaveBeenCalledWith(1);
+    expect(ctx.runtime.exit).not.toHaveBeenCalled();
   });
 
   it("rejects failed-only implicit setup while preserving an explicitly selected model", async () => {
@@ -792,8 +838,7 @@ describe("llama-server setup", () => {
     discoverMock.mockResolvedValue(discovery);
 
     const implicit = nonInteractiveContext();
-    await expect(validateLlamaServerNonInteractive(implicit)).resolves.toBe(false);
-    expect(implicit.runtime.error).toHaveBeenCalledWith(
+    await expect(validateLlamaServerNonInteractive(implicit)).rejects.toThrow(
       "No llama-server text models were found at http://localhost:8080.",
     );
     expect(removeProviderAuthProfilesWithLockMock).not.toHaveBeenCalled();

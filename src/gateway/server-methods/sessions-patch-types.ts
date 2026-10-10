@@ -6,7 +6,7 @@ import type { SessionPatchTargetIdentity } from "./session-unread-ack.js";
 import type {
   SessionPatchArchivePreparation,
   SessionPatchArchiveTarget,
-} from "./sessions-patch-archive.js";
+} from "./sessions-patch-archive.types.js";
 import type { createSessionPatchCatalogPreparation } from "./sessions-patch-catalog-preparation.js";
 import type { ActiveSessionPermissionChange } from "./sessions-patch-permissions.runtime.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -48,6 +48,7 @@ export type MutationCoreResult =
   | { ok: false; error: ErrorShape }
   | {
       ok: true;
+      archivedSessionsCommitted: boolean;
       cfg: ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
       outcomes: MutationOutcome[];
       preparedByIndex: Array<PreparedPatchTarget | undefined>;

@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeNullableString as readNonemptyString } from "@openclaw/normalization-core/string-coerce";
 import { mergeChatStreamMessage } from "./chat-stream-message.js";
 import {
   reduceSessionProjection,
@@ -21,10 +22,6 @@ export type SessionProjectionRunTransition = {
   previousRun: SessionProjectionRun | undefined;
   currentRun: SessionProjectionRun | undefined;
 };
-
-function readNonemptyString(value: unknown): string | null {
-  return typeof value === "string" ? value.trim() || null : null;
-}
 
 /** Normalizes Gateway run envelopes once for every browser and terminal adapter. */
 export function reduceSessionProjectionRunEvent(

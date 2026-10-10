@@ -4,32 +4,29 @@ export const REMOTE_WORKSPACE_MANIFEST_CANONICAL_JS = String.raw`function canoni
   return (mode & 0o111) === 0 ? 0o644 : 0o755;
 }
 function canonicalEntry(entry) {
-  if (entry.type === "directory") {
-    return { path: entry.path, type: entry.type, mode: canonicalMode(entry.type, entry.mode) };
+  if (!["directory", "file", "symlink"].includes(entry.type)) {
+    fail("unsupported worker workspace manifest entry");
   }
+  const canonical = { path: entry.path, type: entry.type, mode: canonicalMode(entry.type, entry.mode) };
   if (entry.type === "file") {
     return {
-      path: entry.path,
-      type: entry.type,
-      mode: canonicalMode(entry.type, entry.mode),
+      ...canonical,
       size: entry.size,
       sha256: entry.sha256,
     };
   }
   if (entry.type === "symlink") {
     return {
-      path: entry.path,
-      type: entry.type,
-      mode: canonicalMode(entry.type, entry.mode),
+      ...canonical,
       target: entry.target,
     };
   }
-  fail("unsupported worker workspace manifest entry");
+  return canonical;
 }
 function compareManifestPaths(left, right) {
   return left.path < right.path ? -1 : left.path > right.path ? 1 : 0;
 }
-function serializeManifest(baseCommit, entries, comparePaths = compareManifestPaths) {
+function serializeManifest(baseCommit, entries) {
   const stagedInputs = stagedInputDirectoriesFromEntries(entries);
   return JSON.stringify({
     version: 1,
@@ -37,7 +34,7 @@ function serializeManifest(baseCommit, entries, comparePaths = compareManifestPa
     entries: entries
       .filter((entry) => !isDerivedWorkspacePath(entry.path, isStagedInputPath(entry.path, stagedInputs)))
       .map(canonicalEntry)
-      .sort(comparePaths),
+      .sort(compareManifestPaths),
   });
 }`;
 
@@ -50,18 +47,16 @@ export const REMOTE_WORKSPACE_MANIFEST_REGISTRY_JS = String.raw`function publish
   const temporaryPath = manifestPath + "." + process.pid + "." + crypto.randomBytes(4).toString("hex");
   fs.writeFileSync(temporaryPath, manifest, { encoding: "utf8", flag: "wx", mode: 0o600 });
   try {
-    try {
-      fs.linkSync(temporaryPath, manifestPath);
-    } catch (error) {
-      const existing = error && error.code === "EEXIST" ? fs.lstatSync(manifestPath) : null;
-      if (
-        !existing ||
-        existing.isSymbolicLink() ||
-        !existing.isFile() ||
-        fs.readFileSync(manifestPath, "utf8") !== manifest
-      ) {
-        throw error;
-      }
+    fs.linkSync(temporaryPath, manifestPath);
+  } catch (error) {
+    const existing = error && error.code === "EEXIST" ? fs.lstatSync(manifestPath) : null;
+    if (
+      !existing ||
+      existing.isSymbolicLink() ||
+      !existing.isFile() ||
+      fs.readFileSync(manifestPath, "utf8") !== manifest
+    ) {
+      throw error;
     }
   } finally {
     fs.rmSync(temporaryPath, { force: true });
@@ -110,32 +105,20 @@ function resolveManifest(manifestRoot, requestedDigest) {
   let scannedBytes = 0;
   for (const { name } of candidates) {
     const candidatePath = path.join(manifestRoot, name);
-    let raw;
-    try {
-      raw = readManifestFile(candidatePath);
-    } catch {
-      continue;
-    }
-    scannedBytes += Buffer.byteLength(raw);
-    if (scannedBytes > 256 * 1024 * 1024) break;
-    if (crypto.createHash("sha256").update(raw).digest("hex") !== name.slice(0, -5)) continue;
-    let value;
-    try {
-      value = JSON.parse(raw);
-    } catch {
-      continue;
-    }
-    if (!value || value.version !== 1 || !Array.isArray(value.entries)) continue;
     let canonical;
     try {
+      const raw = readManifestFile(candidatePath);
+      scannedBytes += Buffer.byteLength(raw);
+      if (scannedBytes > 256 * 1024 * 1024) break;
+      if (crypto.createHash("sha256").update(raw).digest("hex") !== name.slice(0, -5)) continue;
+      const value = JSON.parse(raw);
+      if (!value || value.version !== 1 || !Array.isArray(value.entries)) continue;
       canonical = serializeManifest(value.baseCommit ?? null, value.entries);
     } catch {
       continue;
     }
     if (crypto.createHash("sha256").update(canonical).digest("hex") !== requestedDigest) continue;
-    if (publishManifest(manifestRoot, canonical) !== requestedDigest) {
-      fail("resolved workspace manifest digest mismatch");
-    }
+    publishManifest(manifestRoot, canonical);
     return requestedDigest;
   }
   fail("worker workspace manifest is unavailable: " + requestedDigest);

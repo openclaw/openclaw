@@ -15,7 +15,6 @@ type AuthChoiceFlag = {
   label: string;
 };
 
-/** Inferred auth choice plus every flag that matched the provided options. */
 export type AuthChoiceInference = {
   choice?: AuthChoice;
   matches: AuthChoiceFlag[];

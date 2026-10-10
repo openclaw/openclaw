@@ -1,34 +1,71 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn, type ChildProcess, type SendHandle, type SpawnOptions } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { chmodSync, mkdtempSync, rmSync } from "node:fs";
 import { Socket } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { serialize } from "node:v8";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { formatChildRuntimeSpawnWarning } from "../../infra/child-runtime-viability.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import type { SpawnInitiation } from "../spawn-initiation.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "../supervisor/cancellation-policy.js";
 import { BrokerChild } from "./child.js";
 import { terminateBrokerProcessGroup, terminateLostBrokerChild } from "./cleanup.js";
 import type { BrokerExecaOptions, BrokerExecaResult } from "./execa-protocol.js";
 import { createBrokerReceiver, createBrokerSender } from "./ipc.js";
-import { holdPipe, restorePipePrefix, restoreStdinPipe } from "./pipe.js";
+import { holdPipe, restoreStdinPipe } from "./pipe.js";
 import {
   SpawnBrokerError,
   type BrokerRequest,
   type BrokerResponse,
   type BrokerSpawnOptions,
 } from "./protocol.js";
+import {
+  BrokerResourceClaims,
+  type BrokerNativeResourceCallbacks,
+  type BrokerNativeResourceInput,
+  type BrokerNativeResourceLease,
+} from "./resource-host.js";
+import {
+  SPAWN_BROKER_STARTUP_TIMEOUT_MS,
+  spawnBrokerStartupNowMs,
+  type BrokerBootstrap,
+  type BrokerResourceRequest,
+  type BrokerResourceResponse,
+} from "./resource-protocol.js";
 
-const spawnBrokerWorkerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.spawnBroker);
-export const spawnBrokerEntryPath = fileURLToPath(spawnBrokerWorkerUrl);
+export type { BrokerNativeResourceLease } from "./resource-host.js";
 
 const MAX_REQUESTS = 256;
 const RESTART_DELAYS = [100, 250, 500, 1000, 2000];
+const UNIX_SOCKET_PATH_BYTES = 103;
+const MAX_BOOTSTRAP_BYTES = 1024;
+
+function createNativeResourceDirectory(): string {
+  const directory = mkdtempSync(join(tmpdir(), "oc-br-"));
+  if (
+    process.platform === "win32" ||
+    Buffer.byteLength(join(directory, "resource.sock")) <= UNIX_SOCKET_PATH_BYTES
+  ) {
+    return directory;
+  }
+  // A configured temp root can exceed Darwin's sockaddr_un even for a short private socket.
+  rmSync(directory, { recursive: true, force: true });
+  return mkdtempSync("/tmp/oc-br-");
+}
 
 type Request = {
   child: BrokerChild;
+  initiateSpawn?: SpawnInitiation;
+  nativeInitiated?: ReturnType<typeof createDeferredCore<void>>;
   pid?: number;
   detached: boolean;
   result?: ReturnType<typeof createDeferredCore<BrokerExecaResult>>;
@@ -70,6 +107,9 @@ export function brokerSpawnOptions(options: SpawnOptions): BrokerSpawnOptions | 
 }
 
 export class SpawnBrokerHost {
+  readonly entryPath: string;
+  private readonly workerUrl: URL;
+  private readonly runInContext = AsyncLocalStorage.snapshot();
   private process: ChildProcess | undefined;
   private sendMessage: ReturnType<typeof createBrokerSender> | undefined;
   private readiness = createDeferredCore();
@@ -84,6 +124,13 @@ export class SpawnBrokerHost {
   private requests = new Map<number, Request>();
   private readonly cleanups = new Set<ReturnType<typeof terminateLostBrokerChild>>();
   private readonly cleanupErrors: Error[] = [];
+  private readonly resourceClaims: BrokerResourceClaims | undefined;
+  private readonly resourceDirectory: string | undefined;
+  private readonly resourceAuthority: { endpoint: string; secret: string } | undefined;
+  private startupDeadline = 0;
+  private serviceStartup: (() => void) | undefined;
+  private markNativeReady: ((pid: number, generation: number) => void) | undefined;
+  private brokerClosed: Promise<void> | undefined;
   private readonly onParentExit = () => {
     if (this.process?.connected) {
       this.process.disconnect();
@@ -94,10 +141,51 @@ export class SpawnBrokerHost {
   };
 
   constructor(
-    private readonly options: { onReady?: (pid: number, restarted: boolean) => void } = {},
+    private readonly options: {
+      onReady?: (pid: number, restarted: boolean) => void;
+      workerUrl?: URL;
+      nativeResources?: true;
+    } = {},
   ) {
+    this.workerUrl =
+      options.workerUrl ?? resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.spawnBroker);
+    this.entryPath = fileURLToPath(this.workerUrl);
+    if (options.nativeResources) {
+      this.resourceDirectory = createNativeResourceDirectory();
+      chmodSync(this.resourceDirectory, 0o700);
+      const secret = randomBytes(32).toString("hex");
+      this.resourceAuthority = {
+        secret,
+        endpoint:
+          process.platform === "win32"
+            ? `\\\\.\\pipe\\oc-br-${secret}`
+            : join(this.resourceDirectory, "resource.sock"),
+      };
+      this.resourceClaims = new BrokerResourceClaims({
+        transmit: async (request) => {
+          if (!this.available) {
+            await this.ready();
+          }
+          await this.transmit(request);
+        },
+        markReady: (pid, generation) => {
+          if (!this.markNativeReady) {
+            throw new SpawnBrokerError("Native resource broker unavailable");
+          }
+          this.markNativeReady(pid, generation);
+        },
+        refreshReference: () => this.refreshNativeReference(),
+      });
+    }
     void this.readiness.promise.catch(() => {});
-    this.start();
+    try {
+      this.start();
+    } catch (error) {
+      if (this.resourceDirectory) {
+        rmSync(this.resourceDirectory, { recursive: true, force: true });
+      }
+      throw error;
+    }
     process.once("exit", this.onParentExit);
   }
 
@@ -110,17 +198,79 @@ export class SpawnBrokerHost {
       : this.readiness.promise;
   }
 
-  spawn(command: string, args: string[], options: SpawnOptions): BrokerChild {
+  captureNativeResource(
+    input: BrokerNativeResourceInput,
+    callbacks: BrokerNativeResourceCallbacks,
+  ): BrokerNativeResourceLease {
+    if (
+      !this.resourceClaims ||
+      !this.resourceAuthority ||
+      this.closing ||
+      this.requests.size + this.resourceClaims.size >= MAX_REQUESTS
+    ) {
+      throw new SpawnBrokerError("Native resource broker is unavailable or at capacity");
+    }
+    return this.resourceClaims.capture(
+      {
+        ...input,
+        ...this.resourceAuthority,
+        generation: this.generation - 1,
+        startupDeadline: this.available ? undefined : this.startupDeadline,
+        id: ++this.sequence,
+      },
+      callbacks,
+    );
+  }
+
+  sealNativeResources(): Promise<void> {
+    if (this.resourceClaims && !this.available) {
+      return Promise.reject(
+        new SpawnBrokerError("Native resource broker is not ready for cleanup"),
+      );
+    }
+    return (
+      this.resourceClaims?.seal() ??
+      Promise.reject(new SpawnBrokerError("Native resources are disabled"))
+    );
+  }
+
+  serviceNativeResources(): void {
+    this.serviceStartup?.();
+  }
+
+  private refreshNativeReference(): void {
+    if (!this.resourceClaims || !this.process) {
+      return;
+    }
+    if (this.closing || this.resourceClaims.hasOpenClaims || this.requests.size > 0) {
+      this.process.ref();
+      // Newer Bun releases, like Node, reference IPC independently of the child.
+      this.process.channel?.ref?.();
+    } else {
+      this.process.unref();
+      this.process.channel?.unref?.();
+    }
+  }
+
+  spawn(
+    command: string,
+    args: string[],
+    options: SpawnOptions,
+    initiateSpawn?: SpawnInitiation,
+  ): BrokerChild {
     const prepared = brokerSpawnOptions(options);
     if (!prepared) {
       throw new Error("Unsupported spawn broker stdio or process options");
     }
-    return this.admit({
-      type: "spawn",
-      id: ++this.sequence,
-      argv: [command, ...args],
-      options: prepared,
-    }).child;
+    return this.admit(
+      {
+        type: initiateSpawn ? "prepare-spawn" : "spawn",
+        id: ++this.sequence,
+        argv: [command, ...args],
+        options: prepared,
+      },
+      initiateSpawn,
+    ).child;
   }
 
   spawnExeca(argv: string[], options: BrokerExecaOptions) {
@@ -137,17 +287,21 @@ export class SpawnBrokerHost {
     };
   }
 
-  private admit(message: Extract<BrokerRequest, { type: "spawn" | "spawn-execa" }>): Request {
-    const child = new BrokerChild(message.id, message.argv, (value, handle) =>
-      this.transmit(value, handle),
+  private admit(
+    message: Extract<BrokerRequest, { type: "spawn" | "prepare-spawn" | "spawn-execa" }>,
+    initiateSpawn?: SpawnInitiation,
+  ): Request {
+    const child = new BrokerChild(message.id, message.argv, (value, handle, initiate) =>
+      this.transmit(value, handle, initiate),
     );
     const result =
       message.type === "spawn-execa" ? createDeferredCore<BrokerExecaResult>() : undefined;
     if (result) {
       void result.promise.catch(() => {});
     }
-    const request = {
+    const request: Request = {
       child,
+      initiateSpawn,
       result,
       childClosed: false,
       resultSettled: !result,
@@ -159,26 +313,38 @@ export class SpawnBrokerHost {
       result?.reject(error);
       child.fail(error);
     };
-    if (!this.available || this.closing || this.requests.size >= MAX_REQUESTS) {
+    if (
+      !this.available ||
+      this.closing ||
+      this.requests.size + (this.resourceClaims?.size ?? 0) >= MAX_REQUESTS
+    ) {
       child.markNotStarted();
       queueMicrotask(() => fail(new SpawnBrokerError("Spawn broker is unavailable")));
       return request;
     }
     this.requests.set(message.id, request);
+    this.refreshNativeReference();
     void child.waitForClose().then(() => {
       request.childClosed = true;
       this.retire(message.id, request);
     });
     void this.transmit(message).catch((error: unknown) => {
-      this.requests.delete(message.id);
+      if (!request.nativeInitiated) {
+        if (message.type === "prepare-spawn") {
+          child.markNotStarted();
+        }
+        this.requests.delete(message.id);
+        this.refreshNativeReference();
+      }
       fail(new SpawnBrokerError("Spawn broker request delivery failed", { cause: error }));
     });
     return request;
   }
 
   private retire(id: number, request: Request): void {
-    if (request.childClosed && request.resultSettled) {
+    if (request.childClosed && request.resultSettled && !request.nativeInitiated) {
       this.requests.delete(id);
+      this.refreshNativeReference();
     }
   }
 
@@ -193,11 +359,15 @@ export class SpawnBrokerHost {
     );
   }
 
-  private transmit(message: BrokerRequest, handle?: SendHandle): Promise<void> {
+  private transmit(
+    message: BrokerRequest | Exclude<BrokerResourceRequest, { type: "resource-attach" }>,
+    handle?: SendHandle,
+    initiateSpawn?: SpawnInitiation,
+  ): Promise<void> {
     if (!this.available || !this.sendMessage) {
       return Promise.reject(new SpawnBrokerError("Spawn broker is unavailable"));
     }
-    return this.sendMessage(message, handle);
+    return this.sendMessage(message, handle, initiateSpawn);
   }
 
   private start(): void {
@@ -205,35 +375,56 @@ export class SpawnBrokerHost {
       return;
     }
     const generation = this.generation++;
-    const child = spawn(process.execPath, resolveRuntimeWorkerArgv(spawnBrokerWorkerUrl), {
+    const bootstrap: BrokerBootstrap = {
+      type: "bootstrap",
+      ...(this.resourceAuthority
+        ? { nativeResource: { ...this.resourceAuthority, generation } }
+        : {}),
+    };
+    if (serialize(bootstrap).byteLength > MAX_BOOTSTRAP_BYTES) {
+      throw new SpawnBrokerError("Spawn broker bootstrap exceeds its IPC bound");
+    }
+    // Native resource modules and bidirectional V8 frames require the parent's exact runtime.
+    const child = spawn(process.execPath, resolveRuntimeWorkerArgv(this.workerUrl), {
       stdio: ["inherit", "ignore", "ignore", "ipc"],
       detached: true,
       serialization: "advanced",
     });
     this.process = child;
-    this.sendMessage = createBrokerSender((message, handle, callback) =>
-      child.send(message, handle, { keepOpen: true }, callback),
-    );
+    this.brokerClosed = new Promise<void>((resolve) => {
+      child.once("close", () => resolve());
+    });
     const receiver = createBrokerReceiver();
     const brokerExited = createDeferredCore();
     let ended = false;
-    const startupTimer = setTimeout(() => {
-      fail(new Error("readiness deadline exceeded after 15000ms"));
-      child.kill("SIGKILL");
-    }, 15_000);
+    let ready = false;
+    this.startupDeadline = spawnBrokerStartupNowMs() + SPAWN_BROKER_STARTUP_TIMEOUT_MS;
+    const checkStartup = () => {
+      if (!ended && !ready && spawnBrokerStartupNowMs() >= this.startupDeadline) {
+        fail(new Error("readiness deadline exceeded after 15000ms"));
+        child.kill("SIGKILL");
+      }
+    };
+    // Native attachments report readiness off-main; a delayed parent callback is not failure.
+    const startupTimer = this.resourceClaims
+      ? undefined
+      : setTimeout(checkStartup, SPAWN_BROKER_STARTUP_TIMEOUT_MS);
+    this.serviceStartup = checkStartup;
     const fail = (cause?: Error) => {
       if (ended) {
         return;
       }
       ended = true;
       clearTimeout(startupTimer);
+      this.markNativeReady = undefined;
       receiver.clear();
       this.available = false;
       this.sendMessage = undefined;
       const error = new SpawnBrokerError(
-        this.hasBeenReady
-          ? "Spawn broker exited; command outcome is unavailable"
-          : `Spawn broker failed before readiness: ${cause?.message ?? "channel lost"}`,
+        formatChildRuntimeSpawnWarning(cause) ??
+          (this.hasBeenReady
+            ? "Spawn broker exited; command outcome is unavailable"
+            : `Spawn broker failed before readiness: ${cause?.message ?? "channel lost"}`),
         { cause },
       );
       const previousReadiness = this.readiness;
@@ -253,12 +444,14 @@ export class SpawnBrokerHost {
         request.child.fail(error);
       }
       this.requests.clear();
+      this.refreshNativeReference();
       if (child.pid && process.platform !== "win32") {
         // Individual detached-tree escalation is armed before the broker group can die.
         this.retainCleanup(terminateBrokerProcessGroup(child.pid));
       }
-      if (this.closing || !this.hasBeenReady) {
+      if (this.resourceClaims || this.closing || !this.hasBeenReady) {
         this.readiness.reject(error);
+        this.resourceClaims?.fail(error);
         return;
       }
       const delay = RESTART_DELAYS[this.consecutiveFailures++];
@@ -268,6 +461,22 @@ export class SpawnBrokerHost {
       }
       this.restartTimer = setTimeout(() => this.start(), delay);
     };
+    const markReady = (pid: number, receivedGeneration: number) => {
+      if (ended || pid !== child.pid || receivedGeneration !== generation) {
+        throw new SpawnBrokerError("Native resource readiness does not match the captured broker");
+      }
+      if (ready) {
+        return;
+      }
+      ready = true;
+      clearTimeout(startupTimer);
+      this.hasBeenReady = true;
+      this.consecutiveFailures = 0;
+      this.available = true;
+      this.readiness.resolve();
+      this.runInContext(() => this.options.onReady?.(pid, generation > 0));
+    };
+    this.markNativeReady = markReady;
     child.once("error", fail);
     child.once("exit", (code, signal) => {
       brokerExited.resolve();
@@ -276,7 +485,7 @@ export class SpawnBrokerHost {
     child.once("disconnect", () => fail(new Error("IPC channel disconnected")));
     const abortTransport = (error: Error) => {
       fail(error);
-      if (child.connected) {
+      if (!this.resourceClaims && child.connected) {
         child.disconnect();
       }
       child.kill("SIGTERM");
@@ -300,14 +509,23 @@ export class SpawnBrokerHost {
         return;
       }
       // SAFETY: The version-matched broker is the sole sender on this private IPC channel.
-      const message = decoded as BrokerResponse;
+      const message = decoded as BrokerResponse | BrokerResourceResponse;
       if (message.type === "ready") {
-        clearTimeout(startupTimer);
-        this.hasBeenReady = true;
-        this.consecutiveFailures = 0;
-        this.available = true;
-        this.readiness.resolve();
-        this.options.onReady?.(message.pid, generation > 0);
+        markReady(message.pid, generation);
+        return;
+      }
+      if (
+        message.type === "resource-ready" ||
+        message.type === "resource-created" ||
+        message.type === "resource-target" ||
+        message.type === "resource-owner" ||
+        message.type === "resource-owner-received" ||
+        message.type === "resource-owner-rejected" ||
+        message.type === "resource-closed" ||
+        message.type === "resource-close-error" ||
+        message.type === "resource-failed"
+      ) {
+        this.resourceClaims?.receive(message);
         return;
       }
       const request = this.requests.get(message.id);
@@ -317,11 +535,48 @@ export class SpawnBrokerHost {
         }
         if (message.type === "pipe") {
           void this.transmit({ type: "pipe-received", id: message.id, fd: message.fd }).catch(fail);
+        } else if (message.type === "prepared") {
+          void this.transmit({ type: "launch", id: message.id, allowed: false }).catch(
+            abortTransport,
+          );
         }
         return;
       }
-      if (message.type === "owned") {
+      if (message.type === "owned" || message.type === "error") {
+        request.nativeInitiated?.resolve();
+        request.nativeInitiated = undefined;
+      }
+      if (message.type === "prepared") {
+        const initiate = request.initiateSpawn;
+        request.initiateSpawn = undefined;
+        const brokerClosed = this.brokerClosed;
+        const nativeInitiated = initiate
+          ? (request.nativeInitiated ??= createDeferredCore())
+          : undefined;
+        // Local proxy failure is not native settlement; only this peer's receipt or exit is proof.
+        const settlement =
+          brokerClosed && nativeInitiated
+            ? Promise.race([nativeInitiated.promise, brokerClosed])
+            : Promise.reject(new Error("Spawn broker retirement is unavailable"));
+        void settlement.catch(() => {});
+        void this.transmit(
+          { type: "launch", id: message.id, allowed: true },
+          undefined,
+          (launch) => {
+            if (!initiate || !nativeInitiated || request.childClosed) {
+              throw new SpawnBrokerError("Spawn broker launch grant is unavailable");
+            }
+            return initiate(launch, settlement);
+          },
+        ).catch(() => {
+          void this.transmit({ type: "launch", id: message.id, allowed: false }).catch(fail);
+        });
+      } else if (message.type === "owned") {
         request.pid = message.pid;
+        if (request.childClosed) {
+          this.retainCleanup(terminateLostBrokerChild(message.pid, request.detached));
+          this.retire(message.id, request);
+        }
       } else if (message.type === "pipe") {
         try {
           if (message.closed && message.fd === 0) {
@@ -349,8 +604,8 @@ export class SpawnBrokerHost {
         void this.transmit({ type: "pipe-received", id: message.id, fd: message.fd }).catch(fail);
       } else if (message.type === "pipe-prefix") {
         const pipe = request.child.stdio[message.fd];
-        if (pipe instanceof Socket) {
-          restorePipePrefix(pipe, message.bytes);
+        if (pipe instanceof Socket && message.bytes.length > 0) {
+          pipe.unshift(message.bytes);
         }
       } else if (message.type === "execa-result") {
         // Started commands publish their owned PID first on this ordered channel.
@@ -370,6 +625,23 @@ export class SpawnBrokerHost {
         this.retire(message.id, request);
       }
     });
+    // Bootstrap must enter native IPC before a synchronous caller blocks Promise reactions.
+    // Its send receipt is not readiness; the child reports readiness after initialization.
+    try {
+      child.send(bootstrap, (error) => {
+        if (error) {
+          abortTransport(error);
+        }
+      });
+    } catch (error) {
+      abortTransport(toErrorObject(error, "Spawn broker bootstrap delivery failed"));
+    }
+    if (!ended) {
+      this.sendMessage = createBrokerSender((message, handle, callback) =>
+        child.send(message, handle, { keepOpen: true }, callback),
+      );
+    }
+    this.refreshNativeReference();
   }
 
   /** Join cleanup already retained by this host, including recorded failures. */
@@ -381,30 +653,51 @@ export class SpawnBrokerHost {
   }
 
   close(): Promise<void> {
+    if (this.resourceClaims?.hasOpenClaims) {
+      return Promise.reject(
+        new SpawnBrokerError("Native resource claims must close before broker shutdown"),
+      );
+    }
     return (this.closePromise ??= this.closeInternal());
   }
 
   private async closeInternal(): Promise<void> {
     this.closing = true;
+    this.refreshNativeReference();
     this.readiness.reject(new SpawnBrokerError("Spawn broker is closing"));
     clearTimeout(this.restartTimer);
     try {
       const child = this.process;
       if (child && child.exitCode === null && child.signalCode === null) {
-        const exited = new Promise<void>((resolve) => {
-          child.once("exit", () => resolve());
-        });
-        if (child.connected) {
-          child.disconnect();
-        }
+        const exited =
+          this.resourceClaims && this.brokerClosed
+            ? this.brokerClosed
+            : new Promise<void>((resolve) => {
+                child.once("exit", () => resolve());
+              });
         const timer = setTimeout(() => child.kill("SIGKILL"), GRACEFUL_CANCEL_TIMEOUT_MS + 2000);
         try {
+          if (this.resourceClaims) {
+            // Keep IPC readable until EOF: explicit disconnect can suppress Node's close event.
+            void this.transmit({ type: "shutdown" }).catch(() => child.kill("SIGTERM"));
+          } else if (child.connected) {
+            child.disconnect();
+          }
           await exited;
         } finally {
           clearTimeout(timer);
         }
       }
-      await this.waitForCleanup();
+      try {
+        await this.waitForCleanup();
+      } finally {
+        if (this.resourceClaims) {
+          await this.brokerClosed;
+          if (this.resourceDirectory) {
+            rmSync(this.resourceDirectory, { recursive: true, force: true });
+          }
+        }
+      }
     } finally {
       process.removeListener("exit", this.onParentExit);
     }

@@ -45,7 +45,7 @@ OpenClaw confirms the fork's subscription is released before starting the canoni
 `appServer`-source Codex harness thread under its cwd and runtime policy with
 exactly the returned model and provider for that initial start. It then injects the
 bounded visible history and commits the binding on the same supervision connection.
-The probe is never persisted or archived. The source is never
+The check is never persisted or archived. The source is never
 resumed. The canonical thread has the full OpenClaw harness tool surface;
 reasoning, tool calls, and tool results from the source are not cloned into it.
 The private connection scope survives pending and committed binding states, so

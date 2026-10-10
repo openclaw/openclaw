@@ -4,6 +4,7 @@ import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -15,10 +16,7 @@ import {
   readAgentDatabaseAdmissionRefusal,
   recordAgentDatabaseAdmissions,
 } from "./agent-database-admission.js";
-import {
-  beginAgentDeletionJournal,
-  completeAgentDeletionJournalInDatabase,
-} from "./agent-deletion-journal.js";
+import { completeAgentDeletionJournalInDatabase } from "./agent-deletion-journal.js";
 import { readAgentDeletionJournalStatusInWorker } from "./agent-deletion-journal.read.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
@@ -26,6 +24,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import { startAwaitedReadMock } from "./openclaw-state-read-mock.test-support.js";
 import * as readWorker from "./openclaw-state-read-worker.js";
 
 function deletion(state: OpenClawTestState, agentId = "worker") {
@@ -51,8 +50,15 @@ function pending(state: OpenClawTestState, agentId = "worker") {
 it.each(["warm", "cold"] as const)(
   "reads exact journal absence and presence through the %s state worker",
   async (temperature) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withOpenClawTestState({ scenario: "empty" }, async (state) => {
       const options = { env: state.env };
+      const pathname = resolveOpenClawStateSqlitePath(state.env);
+      const files = [pathname, `${pathname}-wal`, `${pathname}-shm`, `${pathname}-journal`];
+      expect(files.map((file) => fs.existsSync(file))).toEqual([false, false, false, false]);
+      await expect(readAgentDeletionJournalStatusInWorker("worker", options)).resolves.toBe(
+        "absent",
+      );
+      expect(files.map((file) => fs.existsSync(file))).toEqual([false, false, false, false]);
       openOpenClawStateDatabase(options);
       const read = async (agentId: string) => {
         if (temperature === "cold") {
@@ -100,87 +106,49 @@ it.each(["warm", "cold"] as const)(
   },
 );
 
-it("does not create shared state or sidecars for an absent journal read", async () => {
-  await withOpenClawTestState({ scenario: "empty" }, async (state) => {
-    const pathname = resolveOpenClawStateSqlitePath(state.env);
-    const files = [pathname, `${pathname}-wal`, `${pathname}-shm`, `${pathname}-journal`];
-    expect(files.map((file) => fs.existsSync(file))).toEqual([false, false, false, false]);
-    await expect(
-      readAgentDeletionJournalStatusInWorker("worker", { env: state.env }),
-    ).resolves.toBe("absent");
-    expect(files.map((file) => fs.existsSync(file))).toEqual([false, false, false, false]);
-  });
-});
-
-it.each(["commit", "rollback"] as const)(
-  "changes pending admission only after the outer journal transaction %s",
+it.each(["rollback", "commit", "republish"] as const)(
+  "publishes pending-admission invalidation only for the committed owner: %s",
   async (outcome) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const options = { env: state.env };
-      const refusal = pending(state);
-      recordAgentDatabaseAdmissions([refusal], { ...options, source: "startup" });
+      const refusals =
+        outcome === "commit" ? [pending(state), pending(state, "other")] : [pending(state)];
+      const publish = () =>
+        recordAgentDatabaseAdmissions(refusals, { ...options, source: "startup" });
+      publish();
       const rollback = new Error("rollback outer deletion");
       const write = () =>
         runOpenClawStateWriteTransaction(() => {
-          beginAgentDeletionJournal(deletion(state), options);
-          expect(readAgentDatabaseAdmissionRefusal("worker", options)).toBe(refusal);
+          for (const refusal of refusals) {
+            beginAgentDeletionJournal(deletion(state, refusal.agentId), options);
+            expect(readAgentDatabaseAdmissionRefusal(refusal.agentId, options)).toBe(refusal);
+          }
           if (outcome === "rollback") {
             throw rollback;
+          }
+          if (outcome === "republish") {
+            publish();
           }
         }, options);
       if (outcome === "rollback") {
         expect(write).toThrow(rollback);
-        expect(readAgentDatabaseAdmissionRefusal("worker", options)).toBe(refusal);
       } else {
         write();
-        expect(readAgentDatabaseAdmissionRefusal("worker", options)).toMatchObject({
-          code: "agent-database-inspection-failed",
-          reason: "Agent worker was deleted during startup inspection",
-        });
       }
-      await expect(readAgentDeletionJournalStatusInWorker("worker", options)).resolves.toBe(
-        outcome === "commit" ? "pending" : "absent",
-      );
-    });
-  },
-);
-
-it("invalidates every pending agent in one outer deletion commit", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const options = { env: state.env };
-    const refusals = [pending(state), pending(state, "other")];
-    recordAgentDatabaseAdmissions(refusals, { ...options, source: "startup" });
-    runOpenClawStateWriteTransaction(() => {
       for (const refusal of refusals) {
-        beginAgentDeletionJournal(deletion(state, refusal.agentId), options);
-        expect(readAgentDatabaseAdmissionRefusal(refusal.agentId, options)).toBe(refusal);
+        const current = readAgentDatabaseAdmissionRefusal(refusal.agentId, options);
+        if (outcome === "commit") {
+          expect(current).toMatchObject({
+            code: "agent-database-inspection-failed",
+            reason: `Agent ${refusal.agentId} was deleted during startup inspection`,
+          });
+        } else {
+          expect(current).toBe(refusal);
+        }
+        await expect(
+          readAgentDeletionJournalStatusInWorker(refusal.agentId, options),
+        ).resolves.toBe(outcome === "rollback" ? "absent" : "pending");
       }
-    }, options);
-    for (const refusal of refusals) {
-      expect(readAgentDatabaseAdmissionRefusal(refusal.agentId, options)).toMatchObject({
-        code: "agent-database-inspection-failed",
-        reason: `Agent ${refusal.agentId} was deleted during startup inspection`,
-      });
-    }
-  });
-});
-
-it.each(["same refusal in a newer owner", "successor refusal"] as const)(
-  "preserves a %s installed before the journal commit",
-  async (replacement) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const options = { env: state.env };
-      const original = pending(state);
-      const successor = replacement === "successor refusal" ? pending(state) : original;
-      recordAgentDatabaseAdmissions([original], { ...options, source: "startup" });
-      runOpenClawStateWriteTransaction(() => {
-        beginAgentDeletionJournal(deletion(state), options);
-        recordAgentDatabaseAdmissions([successor], { ...options, source: "startup" });
-      }, options);
-      expect(readAgentDatabaseAdmissionRefusal("worker", options)).toBe(successor);
-      await expect(readAgentDeletionJournalStatusInWorker("worker", options)).resolves.toBe(
-        "pending",
-      );
     });
   },
 );
@@ -233,30 +201,40 @@ it.each(["deletion", "abort"] as const)(
       const controller = new AbortController();
       const aborted = new Error("Startup stopped during journal cleanup");
       let closed = false;
-      const createTransport = readWorker.createOpenClawStateReadTransport;
+      const captureSource = readWorker.captureOpenClawStateReadSource;
       let selected = false;
       const transport = vi
-        .spyOn(readWorker, "createOpenClawStateReadTransport")
-        .mockImplementation((command) => {
-          const owned = createTransport(command);
-          if (selected || command.type !== "agentDeletionJournal.status") {
-            return owned;
-          }
-          selected = true;
+        .spyOn(readWorker, "captureOpenClawStateReadSource")
+        .mockImplementation(() => {
+          const source = captureSource();
           return {
-            ...owned,
-            async read(...args: Parameters<typeof owned.read>) {
-              const outcome = await owned.read(...args);
-              expect(outcome).toMatchObject({
-                value: { ok: true, type: "agentDeletionJournal.status", status: "absent" },
-              });
-              return outcome;
-            },
-            async close() {
-              cleanupEntered.resolve();
-              await releaseCleanup.promise;
-              await owned.close();
-              closed = true;
+            ...source,
+            createTransport(command) {
+              const owned = source.createTransport(command);
+              if (selected || command.type !== "agentDeletionJournal.status") {
+                return owned;
+              }
+              selected = true;
+              return {
+                ...owned,
+                startRead(...args) {
+                  return startAwaitedReadMock(async () => {
+                    const outcome = await owned.startRead(...args).result;
+                    expect(outcome).toMatchObject({
+                      value: { ok: true, type: "agentDeletionJournal.status", status: "absent" },
+                    });
+                    return outcome;
+                  });
+                },
+                startClose() {
+                  return startAwaitedReadMock(async () => {
+                    cleanupEntered.resolve();
+                    await releaseCleanup.promise;
+                    await owned.startClose().result;
+                    closed = true;
+                  });
+                },
+              };
             },
           };
         });

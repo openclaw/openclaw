@@ -6,6 +6,7 @@ import { renderGitHubConnectionSetup } from "../features/github-connections/gith
 import { renderWorkspaceConflictNotice } from "../pages/chat/components/chat-workspace-conflict.ts";
 import { renderDevicePairSetup } from "../pages/devices/view-pairing.runtime.ts";
 import { renderSessionsCard } from "../pages/usage/view-overview.ts";
+import { createUsageProps } from "../pages/usage/view.test-support.ts";
 import { renderCopyButton } from "./copy-button.ts";
 import { renderWizardStepControls } from "./wizard-step-controls.ts";
 
@@ -37,11 +38,6 @@ afterEach(() => {
 });
 
 const surfaces = [
-  {
-    name: "generic copy",
-    view: (text: string) => renderCopyButton(text, "Copy text"),
-    selector: ".chat-copy-btn",
-  },
   {
     name: "wizard code",
     view: (text: string) =>
@@ -110,24 +106,11 @@ const surfaces = [
   },
   {
     name: "usage session label",
-    view: (text: string) =>
-      renderSessionsCard(
-        [{ key: "session", label: text, usage: null }],
-        [],
-        [],
-        true,
-        "recent",
-        "desc",
-        [],
-        "all",
-        vi.fn(),
-        vi.fn(),
-        vi.fn(),
-        vi.fn(),
-        [],
-        1,
-        vi.fn(),
-      ),
+    view: (text: string) => {
+      const props = createUsageProps();
+      props.display.sessionSort = "recent";
+      return renderSessionsCard([{ key: "session", label: text, usage: null }], props, 1);
+    },
     selector: ".session-bar-actions button",
   },
   {
@@ -163,15 +146,27 @@ describe("copy payload lifetime", () => {
     expect(current.dataset.copyState).toBe("copied");
   });
 
-  it.each(["resolve", "reject"] as const)(
-    "keeps the replacement copy available before an older write can %s",
+  it.each(["resolve", "reject", "completed"] as const)(
+    "retires replacement copy feedback after an older write is %s",
     async (settlement) => {
       const pending = createDeferred();
-      writeText.mockReturnValueOnce(pending.promise);
-      render(renderCopyButton("first"), owner);
+      if (settlement !== "completed") {
+        writeText.mockReturnValueOnce(pending.promise);
+      }
+      render(renderCopyButton("first", "Copy first"), owner);
       owner.querySelector<HTMLButtonElement>("button")!.click();
-      render(renderCopyButton("second"), owner);
+      if (settlement === "completed") {
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      render(renderCopyButton("second", "Copy second"), owner);
       const current = owner.querySelector<HTMLButtonElement>("button")!;
+      if (settlement === "completed") {
+        expect(current.dataset.copyState).toBeUndefined();
+        expect(owner.querySelector<HTMLElement>("[data-copy-feedback]")!.hidden).toBe(true);
+        await vi.advanceTimersByTimeAsync(1_500);
+        expect(current.getAttribute("aria-label")).toBe("Copy second");
+        return;
+      }
       current.click();
       await vi.advanceTimersByTimeAsync(0);
       if (settlement === "resolve") {
@@ -207,17 +202,5 @@ describe("copy payload lifetime", () => {
     await vi.advanceTimersByTimeAsync(1_500);
     expect(button.getAttribute("aria-label")).toBe("Copier le texte");
     expect(owner.querySelector<HTMLElement>("[data-copy-feedback]")!.hidden).toBe(true);
-  });
-
-  it("does not carry completed feedback or its reset timer to a different payload", async () => {
-    render(renderCopyButton("first", "Copy first"), owner);
-    owner.querySelector<HTMLButtonElement>("button")!.click();
-    await vi.advanceTimersByTimeAsync(0);
-    render(renderCopyButton("second", "Copy second"), owner);
-    const current = owner.querySelector<HTMLButtonElement>("button")!;
-    expect(current.dataset.copyState).toBeUndefined();
-    expect(owner.querySelector<HTMLElement>("[data-copy-feedback]")!.hidden).toBe(true);
-    await vi.advanceTimersByTimeAsync(1_500);
-    expect(current.getAttribute("aria-label")).toBe("Copy second");
   });
 });

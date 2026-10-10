@@ -13,6 +13,7 @@ import { stripModelSpecialTokens } from "./model-special-tokens.js";
 import { stripReasoningTagsFromText } from "./reasoning-tags.js";
 import {
   applyTextFilters,
+  createConditionalTextProjector,
   leadingEmptyLinesTextFilter,
   trimTextFilter,
   type TextFilter,
@@ -25,8 +26,8 @@ const INTERNAL_TRACE_LINE_QUICK_RE =
   /(?:📊|🛠️|📖|📝|🔍|🔎|⚙️|tool[-_ ]?call|tool[-_ ]?result|function[-_ ]?call)/i;
 const INTERNAL_TRACE_LINE_RE =
   /^(?:>\s*)?(?:⚠️\s*)?(?:📊|🛠️|📖|📝|🔍|🔎|⚙️)\s*(?:Session Status|Exec|Read|Edit|Write|Patch|Search|Open|Click|Find|Screenshot|Update Plan|Tool Call|Tool Result|Function Call|Shell|Command)\s*:/i;
-// The current producer reserves "⚠️ 🛠️ Exec|Bash failed[:...]" for exec warnings, so
-// echoed copies must be removed. The second branch preserves the historical "(agent) failed" shape.
+// Keep historical tool-warning traces out of replayed prose, including the older
+// "(agent) failed" shape. Current warnings use plain tool labels and remain visible.
 const INTERNAL_COMPACT_FAILURE_TRACE_LINE_RE =
   /^(?:>\s*)?⚠️\s*🛠️\s+(?:(?:Exec|Bash)\s+failed(?:(?:\s+\(exit\s+-?\d+\))|(?:\s*:[^\r\n]*))?|\S[^\r\n]*\s+\(agent\)`{0,2}\s+failed(?:\s*:[^\r\n]*)?)\s*$/i;
 const INTERNAL_COMPACT_COMMAND_TRACE_LINE_RE =
@@ -660,6 +661,10 @@ export type AssistantVisibleTextSanitizerProfile =
 
 const profileFilters = new Map<string, readonly TextFilter[]>();
 
+function stripInvisibleAssistantText(text: string): string {
+  return /^[\p{White_Space}\p{Default_Ignorable_Code_Point}]*$/u.test(text) ? "" : text;
+}
+
 export function assistantVisibleTextFilters(
   profile: AssistantVisibleTextSanitizerProfile,
   streaming = false,
@@ -713,6 +718,10 @@ export function assistantVisibleTextFilters(
   }
   filters.push(
     preserve ? leadingEmptyLinesTextFilter : trimTextFilter(trim, { preserveCodeIndentation }),
+    {
+      transform: stripInvisibleAssistantText,
+      create: () => createConditionalTextProjector(stripInvisibleAssistantText, () => true),
+    },
   );
   profileFilters.set(key, filters);
   return filters;

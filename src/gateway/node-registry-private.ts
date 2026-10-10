@@ -1,12 +1,16 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import {
   isPrivateNodeInvokeCommand,
   NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
   NODE_WORKER_PRIVATE_COMMANDS,
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+  NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
   NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
+  NODE_WORKER_WORKSPACE_EXEC_COMMAND,
 } from "../infra/node-commands.js";
 import {
   NODE_WORKER_BUNDLE_RETENTION_VERSION,
@@ -18,8 +22,13 @@ import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolut
 import { sameWorkerProtocolFeatures } from "../worker/worker-build-identity.js";
 import { buildNodeInvokeRequest, serializeNodeEvent } from "./node-invoke-request.js";
 import type { NodeInvokeParams, NodeInvokeResult } from "./node-invoke.types.js";
+import type { NodePairingLeaseResolution } from "./node-registry-pairing.js";
 import { NODE_INVOKE_PAIRING_CHANGED_ABORT } from "./node-registry-private-token.js";
-import type { NodeInvokeStreamController, PendingInvoke } from "./node-registry.invoke-stream.js";
+import type {
+  NodeInvokeStreamController,
+  PendingInvoke,
+  PendingSystemRunEvent,
+} from "./node-registry.invoke-stream.js";
 import {
   normalizeSystemRunInvokeParams,
   resolvePendingSystemRunEvent,
@@ -32,8 +41,6 @@ import {
   isNodeWorkerSupervisorProofCurrent,
   resolveNodeRunnerInventoryIssue,
   resolveNodeWorkerSupervisorProof,
-  sameBundleStatusObservation,
-  sameNodeWorkerHostDeclaration,
   type NodeRunnerInventoryRecord,
   type NodeRunnerRegistrySession,
   type NodeRunnerStateChange,
@@ -49,11 +56,6 @@ export type {
 } from "./node-runner-inventory-runtime.js";
 
 type PairingBoundNodeSession = NodeRunnerRegistrySession & { pairingIdentity: string };
-type PairingLeaseResolution =
-  | { status: "current"; session: PairingBoundNodeSession }
-  | { status: "stale"; presenceInvalidated: boolean }
-  | { status: "unavailable" };
-
 type NodeWorkerPrivateCommand = (typeof NODE_WORKER_PRIVATE_COMMANDS)[number];
 
 export type NodeWorkerSupervisorTransport = {
@@ -92,17 +94,18 @@ type NodeRegistryPrivateContext = {
   listCurrentConnected: () => Promise<NodeRunnerRegistrySession[]>;
   getCurrentConnected: (nodeId: string) => Promise<NodeRunnerRegistrySession | undefined>;
   hasCurrentPairingStateResolver: boolean;
-  resolvePairingLease: (node: PairingBoundNodeSession) => Promise<PairingLeaseResolution>;
+  resolvePairingLease: (
+    node: PairingBoundNodeSession,
+  ) => Promise<NodePairingLeaseResolution<PairingBoundNodeSession>>;
   pendingInvokes: Map<string, PendingInvoke>;
   invokeStreams: NodeInvokeStreamController;
   sendEventToSession: (node: NodeRunnerRegistrySession, event: string, payload: unknown) => boolean;
-  rememberAuthorizedSystemRunEvent: (event: {
-    nodeId: string;
-    connId: string;
-    runId: string;
-    sessionKey?: string;
-    timeoutMs?: number | null;
-  }) => void;
+  rememberAuthorizedSystemRunEvent: (
+    event: PendingSystemRunEvent & {
+      nodeId: string;
+      connId: string;
+    },
+  ) => void;
   publishActiveNodeContext: () => void;
 };
 
@@ -111,12 +114,9 @@ type GenerationBoundPendingInvoke = {
   controller: AbortController;
 };
 
-type NodeRunnerInventoryUpdateResult = {
-  changed: boolean;
-};
-
 type NodeRegistryPrivateState = {
   context: NodeRegistryPrivateContext;
+  catalogRevision: number;
   runnerInventoryByConn: Map<string, NodeRunnerInventoryRecord>;
   bundleStatusByConn: Map<string, NodeWorkerBundleStatusObservation>;
   runnerState: NodeRunnerStatePublisher;
@@ -134,79 +134,14 @@ function requireNodeRegistryPrivateState(nodeRegistry: object): NodeRegistryPriv
   return state;
 }
 
-function updateWorkerRunnerInventory(
-  state: NodeRegistryPrivateState,
-  params: {
-    nodeId: string;
-    connId: string | undefined;
-    declaration: NodeRunnerInventoryDeclaration;
-  },
-): NodeRunnerInventoryUpdateResult | null {
-  const node = state.context.getNode(params.nodeId);
-  const publishesRunnerDialect = params.declaration.protocolFeatures.length === 1;
-  if (
-    !node ||
-    node.client.invalidated === true ||
-    node.connId !== params.connId ||
-    !isNodeWorkerHostClientId(node.clientId) ||
-    node.clientMode !== "node"
-  ) {
-    return null;
-  }
-  const previous = state.runnerInventoryByConn.get(node.connId);
-  if (!publishesRunnerDialect) {
-    const inventoryChanged = state.runnerInventoryByConn.delete(node.connId);
-    const statusChanged = state.bundleStatusByConn.delete(node.connId);
-    const changed = inventoryChanged || statusChanged;
-    if (changed) {
-      state.context.publishActiveNodeContext();
-      state.runnerState.reconcile(node.nodeId, true);
-    }
-    return { changed };
-  }
-  const workerHost = "workerHost" in params.declaration ? params.declaration.workerHost : undefined;
-  const next: NodeRunnerInventoryRecord = {
-    nodeId: node.nodeId,
-    connId: node.connId,
-    pairingIdentity: node.pairingIdentity,
-    ...(node.pairingGeneration ? { pairingGeneration: node.pairingGeneration } : {}),
-    clientId: node.clientId,
-    clientMode: "node",
-    protocolFeatures: [...params.declaration.protocolFeatures],
-    ...(workerHost
-      ? {
-          workerHost: workerHost.enabled
-            ? { ...workerHost, capacity: { ...workerHost.capacity } }
-            : { enabled: false },
-        }
-      : {}),
-  };
-  const statusCleared =
-    next.workerHost?.enabled !== true ||
-    next.workerHost.bundleRetention === undefined ||
-    next.workerHost.bundleStatus === undefined
-      ? state.bundleStatusByConn.delete(node.connId)
-      : false;
-  const changed =
-    !previous ||
-    previous.pairingGeneration !== next.pairingGeneration ||
-    !sameWorkerProtocolFeatures(previous.protocolFeatures, next.protocolFeatures) ||
-    !sameNodeWorkerHostDeclaration(previous.workerHost, next.workerHost) ||
-    statusCleared;
-  if (changed) {
-    state.runnerInventoryByConn.set(node.connId, next);
-    state.context.publishActiveNodeContext();
-    state.runnerState.reconcile(node.nodeId, true);
-  }
-  return { changed };
-}
-
 async function invokeNodeRegistryCore(
   state: NodeRegistryPrivateState,
   params: NodeInvokeParams,
   allowPrivateCommand: boolean,
   isCompletionAuthorized?: () => boolean,
 ): Promise<NodeInvokeResult> {
+  // Snapshot source facts before pairing/readiness can yield to caller mutation.
+  const turnSource = params.turnSource ? { ...params.turnSource } : undefined;
   let timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 30_000, 0);
   // Explicit budgets include pairing and serialization; omitted budgets retain
   // the post-dispatch default, and zero keeps long-lived invokes unbounded.
@@ -255,7 +190,9 @@ async function invokeNodeRegistryCore(
   }
   if (expectedPairingGeneration && state.context.hasCurrentPairingStateResolver) {
     const pairingNode = node;
-    let resolution: PairingLeaseResolution | typeof ABSOLUTE_DEADLINE_EXPIRED;
+    let resolution:
+      | NodePairingLeaseResolution<PairingBoundNodeSession>
+      | typeof ABSOLUTE_DEADLINE_EXPIRED;
     try {
       resolution = await awaitWithinDeadline(
         () =>
@@ -319,6 +256,7 @@ async function invokeNodeRegistryCore(
   const systemRunEvent = resolvePendingSystemRunEvent({
     command: params.command,
     params: invokeParams,
+    turnSource,
   });
   // Serialization can consume the budget or close caller-owned authority.
   // Revalidate both before arming pending state and handing off to transport.
@@ -425,6 +363,7 @@ export function registerNodeRegistryPrivateRuntime(
   const runnerState = createNodeRunnerStatePublisher(context.getNode, runnerInventoryByConn);
   const state: NodeRegistryPrivateState = {
     context,
+    catalogRevision: 0,
     runnerInventoryByConn,
     bundleStatusByConn: new Map(),
     runnerState,
@@ -485,7 +424,8 @@ export function registerNodeRegistryPrivateRuntime(
         } else {
           state.bundleStatusByConn.delete(node.connId);
         }
-        if (!sameBundleStatusObservation(previous, observation)) {
+        if (!isDeepStrictEqual(previous, observation)) {
+          state.catalogRevision++;
           state.runnerState.reconcile(node.nodeId, true);
         }
         return true;
@@ -525,6 +465,16 @@ export function registerNodeRegistryPrivateRuntime(
                 params.command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
               preparedWorkspace: params.command === NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
               capturedExecPolicy: params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+              workspaceQuiescence:
+                params.command === NODE_WORKER_WORKSPACE_EXEC_COMMAND &&
+                isRecord(params.params) &&
+                (params.params.quiescence !== undefined ||
+                  params.params.nativeProcessOwner === true),
+              statusWait:
+                params.command === NODE_WORKER_SUPERVISOR_STATUS_COMMAND &&
+                typeof params.params === "object" &&
+                params.params !== null &&
+                "waitMs" in params.params,
             },
           );
         if (!isProofCurrent()) {
@@ -583,6 +533,15 @@ export function setNodeRunnerStateChangedListener(
   requireNodeRegistryPrivateState(nodeRegistry).runnerState.setListener(listener);
 }
 
+/** Catalog readers retain prepared rows until a registry owner changes their inputs. */
+export function invalidateNodeCatalog(registry: object): void {
+  requireNodeRegistryPrivateState(registry).catalogRevision++;
+}
+
+export function readNodeCatalogRevision(registry: object): number {
+  return requireNodeRegistryPrivateState(registry).catalogRevision;
+}
+
 export function waitForNodeWorkerSupervisor(
   nodeRegistry: object,
   nodeId: string,
@@ -625,9 +584,64 @@ export function updateNodeRunnerInventory(params: {
   nodeId: string;
   connId: string | undefined;
   declaration: NodeRunnerInventoryDeclaration;
-}): NodeRunnerInventoryUpdateResult | null {
+}): { changed: boolean } | null {
   const state = NODE_REGISTRY_PRIVATE_STATES.get(params.registry);
-  return state ? updateWorkerRunnerInventory(state, params) : null;
+  if (!state) {
+    return null;
+  }
+  const node = state.context.getNode(params.nodeId);
+  const publishesRunnerDialect = params.declaration.protocolFeatures.length === 1;
+  if (
+    !node ||
+    node.client.invalidated === true ||
+    node.connId !== params.connId ||
+    !isNodeWorkerHostClientId(node.clientId) ||
+    node.clientMode !== "node"
+  ) {
+    return null;
+  }
+  const previous = state.runnerInventoryByConn.get(node.connId);
+  if (!publishesRunnerDialect) {
+    const inventoryChanged = state.runnerInventoryByConn.delete(node.connId);
+    const statusChanged = state.bundleStatusByConn.delete(node.connId);
+    const changed = inventoryChanged || statusChanged;
+    if (changed) {
+      state.catalogRevision++;
+      state.context.publishActiveNodeContext();
+      state.runnerState.reconcile(node.nodeId, true);
+    }
+    return { changed };
+  }
+  const workerHost = "workerHost" in params.declaration ? params.declaration.workerHost : undefined;
+  const next: NodeRunnerInventoryRecord = {
+    nodeId: node.nodeId,
+    connId: node.connId,
+    pairingIdentity: node.pairingIdentity,
+    ...(node.pairingGeneration ? { pairingGeneration: node.pairingGeneration } : {}),
+    clientId: node.clientId,
+    clientMode: "node",
+    protocolFeatures: [...params.declaration.protocolFeatures],
+    ...(workerHost ? { workerHost: structuredClone(workerHost) } : {}),
+  };
+  const statusCleared =
+    next.workerHost?.enabled !== true ||
+    next.workerHost.bundleRetention === undefined ||
+    next.workerHost.bundleStatus === undefined
+      ? state.bundleStatusByConn.delete(node.connId)
+      : false;
+  const changed =
+    !previous ||
+    previous.pairingGeneration !== next.pairingGeneration ||
+    !sameWorkerProtocolFeatures(previous.protocolFeatures, next.protocolFeatures) ||
+    !isDeepStrictEqual(previous.workerHost, next.workerHost) ||
+    statusCleared;
+  if (changed) {
+    state.catalogRevision++;
+    state.runnerInventoryByConn.set(node.connId, next);
+    state.context.publishActiveNodeContext();
+    state.runnerState.reconcile(node.nodeId, true);
+  }
+  return { changed };
 }
 
 export function forgetNodeRunnerInventory(nodeRegistry: object, connId: string): void {
@@ -637,6 +651,7 @@ export function forgetNodeRunnerInventory(nodeRegistry: object, connId: string):
     return;
   }
   state.bundleStatusByConn.delete(connId);
+  state.catalogRevision++;
   state.runnerState.reconcile(declaration.nodeId, true);
 }
 
@@ -686,6 +701,7 @@ export function settleNodeRegistryPairingGenerationChange(params: {
   const inventoryChanged = state.runnerInventoryByConn.delete(params.connId);
   const statusChanged = state.bundleStatusByConn.delete(params.connId);
   if (inventoryChanged || statusChanged) {
+    state.catalogRevision++;
     state.runnerState.reconcile(params.nodeId, true);
   }
   for (const pending of state.context.pendingInvokes.values()) {

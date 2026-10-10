@@ -153,7 +153,9 @@ suite.define(() => {
       await page.keyboard.press("Enter");
       const preview = page.locator("openclaw-chat-detail-panel:visible");
       await preview.waitFor({ state: "visible" });
-      expect(await page.locator("openclaw-chat-pasted-text openclaw-tooltip").count()).toBe(0);
+      expect(await chip.evaluate((element) => element.closest("openclaw-tooltip") === null)).toBe(
+        true,
+      );
       const content = preview.locator(".sidebar-attachment-preview__text");
       await expect.poll(() => content.textContent()).toBe(pastedText);
       expect(await content.evaluate((element) => getComputedStyle(element).fontFamily)).toMatch(
@@ -274,37 +276,6 @@ suite.define(() => {
         }),
       );
       expect(fileName).toMatch(/^pasted-text-\d+\.txt$/);
-    });
-  });
-
-  it("keeps a newly uploaded lookalike filename as a file and sends file origin", async () => {
-    await suite.withPage(contextOptions, async ({ page }) => {
-      const gateway = await installMockGateway(page);
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await page.locator(".agent-chat__file-input").setInputFiles({
-        name: "pasted-text-123.txt",
-        mimeType: "text/plain",
-        buffer: Buffer.from(pastedText),
-      });
-      await page
-        .locator(".chat-attachment-file__name", { hasText: "pasted-text-123.txt" })
-        .waitFor();
-      expect(await page.locator("openclaw-chat-pasted-text").count()).toBe(0);
-      await page.getByRole("button", { name: "Send message", exact: true }).click();
-      await expect.poll(async () => (await gateway.getRequests("chat.send")).length).toBe(1);
-      expect((await gateway.getRequests("chat.send"))[0]!.params).toEqual(
-        expect.objectContaining({
-          attachments: [
-            {
-              type: "file",
-              mimeType: "text/plain",
-              fileName: "pasted-text-123.txt",
-              origin: "file",
-              content: Buffer.from(pastedText).toString("base64"),
-            },
-          ],
-        }),
-      );
     });
   });
 

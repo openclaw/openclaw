@@ -329,7 +329,7 @@ export function registerPluginServiceRecoveryTests(createRecoveryFixture: Recove
           expect(() => getPluginInstance(record)?.retainWork()).toThrow(
             "replacement is in progress",
           );
-          return rollback;
+          return { retire: () => {}, rollback };
         },
       });
       const failure = new Error("fixture channel pause failed");
@@ -358,7 +358,7 @@ export function registerPluginServiceRecoveryTests(createRecoveryFixture: Recove
           }
         });
         const fixture = await createRecoveryFixture({
-          prepareConfigEffects: () => rollback,
+          prepareConfigEffects: () => ({ retire: () => {}, rollback }),
           recoveryStart: async () => {
             recoveryStarted.resolve();
             await releaseRecovery.promise;

@@ -36,6 +36,7 @@ import type {
   PluginMetadataSnapshot,
   PluginMetadataSnapshotPluginIdScope,
 } from "./plugin-metadata-snapshot.types.js";
+import { preparePluginNativeAdmissions } from "./plugin-native-admission-state.js";
 import { normalizePluginIdScope, serializePluginIdScope } from "./plugin-scope.js";
 
 type CurrentPluginMetadataSnapshotOptions = {
@@ -74,6 +75,32 @@ function resolveAgentWorkspaceFingerprint(config: OpenClawConfig, env?: NodeJS.P
   return JSON.stringify(listAgentWorkspaceDirs(config, env));
 }
 
+function prepareConfigCompatibility(
+  snapshot: PluginMetadataSnapshot,
+  options: CurrentPluginMetadataSnapshotOptions,
+  fingerprint: (config: OpenClawConfig, policyHash: string | undefined) => string,
+  trustConfigIdentity = false,
+) {
+  const compatiblePolicyHashes = options.compatibleConfigs?.map((config) =>
+    resolveInstalledPluginIndexPolicyHash(config, options.env),
+  );
+  const compatibleConfigFingerprints = options.compatibleConfigs?.map((config, index) =>
+    fingerprint(config, compatiblePolicyHashes?.[index]),
+  );
+  const configIdentities = [...(options.compatibleConfigs ?? [])];
+  if (options.config) {
+    const policyHash = resolveInstalledPluginIndexPolicyHash(options.config, options.env);
+    if (
+      trustConfigIdentity ||
+      policyHash === snapshot.policyHash ||
+      compatiblePolicyHashes?.includes(policyHash)
+    ) {
+      configIdentities.push(options.config);
+    }
+  }
+  return { compatiblePolicyHashes, compatibleConfigFingerprints, configIdentities };
+}
+
 function prepareCurrentPluginMetadataSnapshotPublication(
   snapshot: PluginMetadataSnapshot,
   options: CurrentPluginMetadataSnapshotOptions,
@@ -87,12 +114,8 @@ function prepareCurrentPluginMetadataSnapshotPublication(
       policyHash,
       workspaceDir: options.workspaceDir ?? snapshot.workspaceDir,
     });
-  const compatiblePolicyHashes = options.compatibleConfigs?.map((config) =>
-    resolveInstalledPluginIndexPolicyHash(config, options.env),
-  );
-  const compatibleConfigFingerprints = options.compatibleConfigs?.map((config, index) =>
-    fingerprint(config, compatiblePolicyHashes?.[index]),
-  );
+  const { compatiblePolicyHashes, compatibleConfigFingerprints, configIdentities } =
+    prepareConfigCompatibility(snapshot, options, fingerprint);
   const configFingerprint = fingerprint(options.config, snapshot.policyHash);
   const defaultDiscoveryConfigFingerprint = fingerprint({}, snapshot.policyHash);
   const defaultDiscoveryCompatible =
@@ -104,16 +127,6 @@ function prepareCurrentPluginMetadataSnapshotPublication(
     owner === "gateway" && options.config
       ? resolveAgentWorkspaceFingerprint(options.config, options.env)
       : undefined;
-  const configIdentities = [...(options.compatibleConfigs ?? [])];
-  if (options.config) {
-    const policyHash = resolveInstalledPluginIndexPolicyHash(options.config, options.env);
-    if (
-      policyHash === snapshot.policyHash ||
-      Boolean(compatiblePolicyHashes?.includes(policyHash))
-    ) {
-      configIdentities.push(options.config);
-    }
-  }
   return () => {
     if (getCurrentPluginMetadataSnapshotState().owner === "gateway" && owner !== "gateway") {
       throw new Error("Gateway plugin metadata can only be replaced after shutdown");
@@ -222,6 +235,8 @@ export function createPluginMetadataSnapshotFrame(
 ): PluginExecutionFrame {
   const current = getPluginExecutionFrame();
   const cache = getPluginMetadataSnapshotCache(snapshot);
+  // A retained metadata owner can be borrowed inside a different private state view.
+  preparePluginNativeAdmissions(snapshot.index, cache);
   const workspaceDir = options.workspaceDir ?? snapshot.workspaceDir;
   const fingerprint = (config: OpenClawConfig, policyHash: string | undefined) =>
     resolvePluginControlPlaneFingerprint({
@@ -233,29 +248,17 @@ export function createPluginMetadataSnapshotFrame(
       policyHash,
       workspaceDir,
     });
-  const compatiblePolicyHashes = options.compatibleConfigs?.map((config) =>
-    resolveInstalledPluginIndexPolicyHash(config, options.env),
-  );
-  const compatibleConfigFingerprints = options.compatibleConfigs?.map((config, index) =>
-    fingerprint(config, compatiblePolicyHashes?.[index]),
-  );
+  const { compatiblePolicyHashes, compatibleConfigFingerprints, configIdentities } =
+    prepareConfigCompatibility(
+      snapshot,
+      options,
+      fingerprint,
+      options.trustConfigIdentity === true,
+    );
   const configFingerprint = options.config
     ? fingerprint(options.config, snapshot.policyHash)
     : snapshot.configFingerprint;
-  const configIdentities = new WeakSet<OpenClawConfig>();
-  if (options.config) {
-    const policyHash = resolveInstalledPluginIndexPolicyHash(options.config, options.env);
-    if (
-      options.trustConfigIdentity === true ||
-      policyHash === snapshot.policyHash ||
-      compatiblePolicyHashes?.includes(policyHash)
-    ) {
-      configIdentities.add(options.config);
-    }
-  }
-  for (const config of options.compatibleConfigs ?? []) {
-    configIdentities.add(config);
-  }
+  const capturedConfigIdentities = new WeakSet(configIdentities);
   return createPluginExecutionFrame(
     {
       ...current,
@@ -268,7 +271,7 @@ export function createPluginMetadataSnapshotFrame(
         envFingerprint: resolvePluginMetadataEnvFingerprint(options.env),
         compatiblePolicyHashes,
         compatibleConfigFingerprints,
-        hasConfigIdentity: (config) => configIdentities.has(config),
+        hasConfigIdentity: (config) => capturedConfigIdentities.has(config),
         immutableRuntimeGeneration: options.trustConfigIdentity === true,
         parent: current?.metadataScope,
       },

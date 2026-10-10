@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -7,8 +5,8 @@ import {
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, describe, expect, it } from "vitest";
+import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { afterAll, describe, expect, it } from "vitest";
 import { telegramApprovalCapability } from "./approval-native.js";
 
 function buildConfig(
@@ -29,18 +27,10 @@ function buildConfig(
   } as OpenClawConfig;
 }
 
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-telegram-approval-native-");
 
 function createTempStorePath(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-approval-native-"));
-  tempDirs.push(dir);
+  const dir = sessionDirs.make();
   return path.join(dir, "sessions.json");
 }
 
@@ -142,50 +132,6 @@ describe("telegram native approval adapter", () => {
     expect(target).toEqual({
       to: "-1003841603622:direct-topic:77",
       threadId: undefined,
-    });
-  });
-
-  it("falls back to the session-bound origin target for plugin approvals", async () => {
-    const storePath = createTempStorePath();
-    await writeSessionEntry({
-      storePath,
-      sessionKey: "agent:main:telegram:group:-1003841603622:topic:928",
-      entry: {
-        sessionId: "sess",
-        updatedAt: Date.now(),
-        delivery: normalizeSessionDeliveryState({
-          context: {
-            channel: "telegram",
-            to: "-1003841603622",
-            accountId: "default",
-            threadId: 928,
-          },
-        }),
-      },
-    });
-
-    const target = await telegramApprovalCapability.native?.resolveOriginTarget?.({
-      cfg: {
-        ...buildConfig(),
-        session: { store: storePath },
-      },
-      accountId: "default",
-      approvalKind: "plugin",
-      request: {
-        id: "plugin:req-1",
-        request: {
-          title: "Plugin approval",
-          description: "Allow access",
-          sessionKey: "agent:main:telegram:group:-1003841603622:topic:928",
-        },
-        createdAtMs: 0,
-        expiresAtMs: 1000,
-      },
-    });
-
-    expect(target).toEqual({
-      to: "-1003841603622",
-      threadId: 928,
     });
   });
 

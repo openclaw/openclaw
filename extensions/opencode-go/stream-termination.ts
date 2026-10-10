@@ -5,25 +5,9 @@ import type { AssistantMessage, AssistantMessageEvent } from "openclaw/plugin-sd
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { asPositiveFiniteNumber as validTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
+import { createEmptyTransportUsage } from "openclaw/plugin-sdk/provider-transport-runtime";
 
 type ProviderStreamFn = NonNullable<ProviderWrapStreamFnContext["streamFn"]>;
-
-interface OpencodeGoStalledStreamWrapperOptions {
-  /**
-   * Provider id this wrapper applies to. Calls whose model.provider does not
-   * match are forwarded untouched so the wrapper stays provider-scoped.
-   */
-  provider: string;
-  /**
-   * Maximum idle window between two stream events before the wrapper treats
-   * the underlying SSE as stalled and aborts it. Must be > 0.
-   */
-  idleTimeoutMs: number;
-  /**
-   * Maximum window for stream creation and first event delivery. Must be > 0.
-   */
-  firstEventTimeoutMs?: number;
-}
 
 /**
  * Default idle window used in production. Matches the runtime's shared
@@ -34,15 +18,9 @@ interface OpencodeGoStalledStreamWrapperOptions {
  * explicit timeout is set) — finally get a provider-owned termination
  * well before the ~622s stuck-session recovery kicks in.
  */
-export const OPENCODE_GO_STREAM_IDLE_TIMEOUT_MS_DEFAULT = 120_000;
+const OPENCODE_GO_STREAM_IDLE_TIMEOUT_MS = 120_000;
 
-export const OPENCODE_GO_STREAM_FIRST_EVENT_TIMEOUT_MS_DEFAULT = 300_000;
-
-function isOpencodeGoModel(model: unknown, providerId: string): boolean {
-  return Boolean(model) && typeof model === "object"
-    ? (model as { provider?: unknown }).provider === providerId
-    : false;
-}
+const OPENCODE_GO_STREAM_FIRST_EVENT_TIMEOUT_MS = 300_000;
 
 function resolveTimeoutMs(model: unknown, fallbackMs: number): number {
   return validTimeoutMs((model as { requestTimeoutMs?: unknown })?.requestTimeoutMs) ?? fallbackMs;
@@ -78,14 +56,7 @@ function buildStreamErrorEvent(
         api: model.api,
         provider: model.provider,
         model: model.id,
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: createEmptyTransportUsage(),
         timestamp: Date.now(),
       }),
       stopReason: "error",
@@ -97,28 +68,17 @@ function buildStreamErrorEvent(
 // Abort at the provider-owned SSE boundary; the shared recovery watchdog fires later.
 export function createOpencodeGoStalledStreamWrapper(
   underlying: ProviderStreamFn,
-  options: OpencodeGoStalledStreamWrapperOptions,
 ): ProviderStreamFn {
-  if (!options || options.idleTimeoutMs <= 0) {
-    throw new Error("createOpencodeGoStalledStreamWrapper requires idleTimeoutMs > 0");
-  }
-  if (options.firstEventTimeoutMs !== undefined && options.firstEventTimeoutMs <= 0) {
-    throw new Error("createOpencodeGoStalledStreamWrapper requires firstEventTimeoutMs > 0");
-  }
-  const providerId = options.provider;
-  const idleTimeoutMsDefault = options.idleTimeoutMs;
-  const firstEventTimeoutMsDefault = options.firstEventTimeoutMs ?? options.idleTimeoutMs;
-
   return (model, context, callOptions) => {
-    if (!isOpencodeGoModel(model, providerId)) {
+    if (model.provider !== "opencode-go") {
       return underlying(model, context, callOptions);
     }
 
     const output = createAssistantMessageEventStream();
-    const idleTimeoutMs = resolveTimeoutMs(model, idleTimeoutMsDefault);
-    const firstEventTimeoutMs = resolveTimeoutMs(model, firstEventTimeoutMsDefault);
+    const idleTimeoutMs = resolveTimeoutMs(model, OPENCODE_GO_STREAM_IDLE_TIMEOUT_MS);
+    const firstEventTimeoutMs = resolveTimeoutMs(model, OPENCODE_GO_STREAM_FIRST_EVENT_TIMEOUT_MS);
     const controller = new AbortController();
-    const callerSignal = (callOptions as { signal?: AbortSignal } | undefined)?.signal;
+    const callerSignal = callOptions?.signal;
     const signal = callerSignal
       ? AbortSignal.any([callerSignal, controller.signal])
       : controller.signal;
@@ -185,13 +145,6 @@ export function createOpencodeGoStalledStreamWrapper(
       }
     };
 
-    const releaseResolvedStream = (baseStream: AsyncIterable<AssistantMessageEvent>) => {
-      const iterator = baseStream[Symbol.asyncIterator]();
-      if (iterator.return) {
-        void Promise.resolve(iterator.return()).catch(() => undefined);
-      }
-    };
-
     armTimer(firstEventTimeoutMs);
     let baseStreamResult: ReturnType<ProviderStreamFn>;
     try {
@@ -203,14 +156,12 @@ export function createOpencodeGoStalledStreamWrapper(
 
     void (async () => {
       try {
-        const baseStream = await Promise.resolve(
-          baseStreamResult as Awaited<ReturnType<ProviderStreamFn>>,
-        );
+        const baseStream = await baseStreamResult;
+        baseIterator = baseStream[Symbol.asyncIterator]();
         if (settled) {
-          releaseResolvedStream(baseStream as AsyncIterable<AssistantMessageEvent>);
+          releaseBaseStream();
           return;
         }
-        baseIterator = (baseStream as AsyncIterable<AssistantMessageEvent>)[Symbol.asyncIterator]();
         for (;;) {
           const result = await baseIterator.next();
           if (settled) {

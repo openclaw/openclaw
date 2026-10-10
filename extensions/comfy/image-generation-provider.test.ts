@@ -375,6 +375,47 @@ describe("comfy image-generation provider", () => {
     });
   });
 
+  it("reports completed local history without image outputs after one lookup", async () => {
+    const nowSpy = vi.spyOn(Date, "now");
+    nowSpy.mockReturnValueOnce(0).mockReturnValueOnce(0).mockReturnValueOnce(1_001);
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce(fetchGuardJson({ prompt_id: "local-prompt-1" }))
+      .mockResolvedValueOnce(
+        fetchGuardJson({
+          "local-prompt-1": { status: { completed: true, status_str: "success" }, outputs: {} },
+        }),
+      );
+
+    await expect(generateImage({ timeoutMs: 1_000 })).rejects.toThrow(
+      "Comfy workflow local-prompt-1 completed without image outputs",
+    );
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports a local execution error instead of treating it as missing output", async () => {
+    const nowSpy = vi.spyOn(Date, "now");
+    nowSpy.mockReturnValueOnce(0).mockReturnValueOnce(0).mockReturnValueOnce(1_001);
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce(fetchGuardJson({ prompt_id: "local-prompt-1" }))
+      .mockResolvedValueOnce(
+        fetchGuardJson({
+          "local-prompt-1": {
+            status: {
+              completed: false,
+              status_str: "error",
+              messages: [["execution_error", { exception_message: "Missing checkpoint" }]],
+            },
+            outputs: {},
+          },
+        }),
+      );
+
+    await expect(generateImage({ timeoutMs: 1_000 })).rejects.toThrow(
+      "Comfy workflow failed: Missing checkpoint",
+    );
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
+  });
+
   it.each([
     ["literal", "Basic fixture", true],
     ["available env", { source: "env", provider: "default", id: "COMFY_HEADER_AVAILABLE" }, true],
@@ -639,14 +680,25 @@ describe("comfy image-generation provider", () => {
   });
 
   it("caps oversized local workflow timeouts", async () => {
-    const nowSpy = vi.spyOn(Date, "now");
-    nowSpy
-      .mockReturnValueOnce(0)
-      .mockReturnValueOnce(0)
-      .mockReturnValueOnce(MAX_TIMER_TIMEOUT_MS + 1);
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce(fetchGuardJson({ prompt_id: "local-prompt-1" }))
-      .mockResolvedValueOnce(fetchGuardJson({ "local-prompt-1": { outputs: {} } }));
+    // Seed the deadline and read the remaining budget from a monotonic clock so
+    // wall-clock jumps cannot stretch or shrink the workflow poll deadline.
+    // The spy returns a single advancing `monotonicNow` value; fetch mock
+    // callbacks advance it so plugin-metadata snapshot calls to performance.now
+    // during provider init cannot desync the seed/read sequence.
+    let monotonicNow = 0;
+    const nowSpy = vi.spyOn(performance, "now").mockImplementation(() => monotonicNow);
+    fetchWithSsrFGuardMock.mockImplementation(async () => {
+      const call = fetchWithSsrFGuardMock.mock.calls.length;
+      // After the history poll returns empty outputs, advance the monotonic
+      // clock past the deadline so the next resolveComfyRemainingMs read sees
+      // a negative remaining and throws.
+      if (call >= 2) {
+        monotonicNow = MAX_TIMER_TIMEOUT_MS + 1;
+      }
+      return call === 1
+        ? fetchGuardJson({ prompt_id: "local-prompt-1" })
+        : fetchGuardJson({ "local-prompt-1": { outputs: {} } });
+    });
 
     try {
       const provider = buildComfyImageGenerationProvider();

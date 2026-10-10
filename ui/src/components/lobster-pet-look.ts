@@ -32,6 +32,7 @@ import {
   GRUMPY_FACE,
   HEADWEAR,
   PALETTE_OVERLAYS,
+  PALETTE_RIGHT_CLAW_PROPS,
   PATTERNED_PALETTES,
   PIXEL_LOBSTER,
   RETRO_ANTENNAE,
@@ -97,7 +98,6 @@ export function canonicalLobsterLook(palette: LobsterPetPalette): LobsterPetLook
     scale: 2,
     accessory: "none",
     antennae: "perky",
-    side: "left",
     spotPct: 0,
     facing: 1,
     personality: "friendly",
@@ -245,7 +245,6 @@ export function createLobsterPetLook(seed: number, now: Date = new Date()): Lobs
     scale,
     accessory,
     antennae,
-    side,
     spotPct,
     facing,
     personality,
@@ -279,8 +278,6 @@ export function createLobsterPetLook(seed: number, now: Date = new Date()): Lobs
   return preparedLook;
 }
 
-// Same species as icons.lobster / the dreams-scene sleeper: smooth dome body
-// with stubby legs, side claws, antennae, and teal-glint eyes.
 const READING_BOOK = svg`
   <g class="lob-reading-book" transform="translate(0 2)">
     <path
@@ -321,6 +318,7 @@ export function renderLobsterSvg(
   const isFlatpack = look.palette.id === "flatpack";
   const paletteGeometry = PALETTE_GEOMETRY[look.palette.id];
   const hasRetroGeometry = RETRO_GEOMETRY_PALETTES.has(look.palette.id);
+  const clawProp = options.shell ? undefined : PALETTE_RIGHT_CLAW_PROPS[look.palette.id];
   const eyesClosed = options.shell || (options.sleeping && !options.reading);
   const openEyeStyle = eyesClosed ? "display:none" : "";
   const closedEyeStyle = eyesClosed
@@ -349,7 +347,12 @@ export function renderLobsterSvg(
               ${
                 hasRetroGeometry
                   ? nothing
-                  : svg`<g class="lob-claw lob-claw--r"><path d="M100 42 C115 37 120 47 115 57 C110 67 100 62 95 52 C92 45 95 42 100 42 Z" fill="var(--lob-claw)" /></g>`
+                  : svg`
+                      <g class="lob-claw lob-claw--r">
+                        ${clawProp ?? nothing}
+                        <path d="M100 42 C115 37 120 47 115 57 C110 67 100 62 95 52 C92 45 95 42 100 42 Z" fill="var(--lob-claw)" />
+                      </g>
+                    `
               }
               ${look.palette.id === "heisenbug" ? GLITCH_GHOSTS : nothing}
               <path class="lob-standard-dome" d="M60 8 C32 8 16 32 16 52 C16 72 30 90 44 95 L44 104 L54 104 L54 96 C58 97.5 62 97.5 66 96 L66 104 L76 104 L76 95 C90 90 104 72 104 52 C104 32 88 8 60 8 Z" fill="var(--lob-shell)" />
@@ -398,8 +401,8 @@ export function renderLobsterSvg(
           : ACCESSORY_SPRITES[look.accessory]
       }
       ${
-        // The retro grail's mega claw owns the same shoulder; it moves light.
-        options.bindle && !hasRetroGeometry && !isFlatpack ? BINDLE : nothing
+        // Oversized claws and signature props already occupy the carrying shoulder.
+        options.bindle && !hasRetroGeometry && !isFlatpack && !clawProp ? BINDLE : nothing
       }
       ${
         // The foil hat is palette identity; Mulder declines the navy-issued

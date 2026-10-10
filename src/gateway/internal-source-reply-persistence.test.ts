@@ -1,20 +1,21 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createEmbeddedAttemptTranscriptLifecycle } from "../agents/embedded-agent-runner/run/attempt-transcript-lifecycle.js";
 import {
   appendTranscriptMessage,
   loadTranscriptEvents,
   replaceSessionEntry,
-  replaceTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
 import {
   readTranscriptEventId,
   readTranscriptEventMessage,
 } from "../config/sessions/session-accessor.sqlite-read.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   onSessionTranscriptUpdate,
   type SessionTranscriptUpdate,
@@ -35,7 +36,7 @@ import {
   claimManagedImageRecordCleanupIfCurrent,
   listManagedImageRecordEntries,
 } from "./managed-image-record-store.js";
-import { executeManagedImageRecordCommand } from "./managed-image-record-store.kernel.js";
+import { managedImageRecordOperations } from "./managed-image-record-store.kernel.js";
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=";
@@ -80,9 +81,9 @@ async function createSourceReplyFixture(state: OpenClawTestState) {
     }
     updates.push(update);
     // Observe records at publication, before a wrongly late write could make the test pass.
-    const entries = executeManagedImageRecordCommand(
-      { type: "managedImages.entries", input: { sessionKey } },
-      database,
+    const entries = managedImageRecordOperations["managedImages.entries"](
+      { sessionKey },
+      { open: () => database, stateOptions: () => ({ path: database.path, env: state.env }) },
     );
     for (const { record } of entries) {
       const pending = resolveManagedOutgoingMediaArtifactDownload({
@@ -126,7 +127,7 @@ async function createSourceReplyFixture(state: OpenClawTestState) {
       },
       () =>
         persistInternalSourceReply({
-          cfg: { agents: { entries: { main: { default: true, workspace: state.workspaceDir } } } },
+          cfg: { agents: { entries: { main: { workspace: state.workspaceDir } } } },
           sessionKey: options.sessionKey ?? sessionKey,
           expectedSessionId: sessionId,
           agentId: "main",
@@ -164,23 +165,18 @@ async function createSourceReplyFixture(state: OpenClawTestState) {
     },
     failSecondPromotion: () => {
       let promotions = 0;
-      const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
-      const spy = vi
-        .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit, attachment) =>
-          createAdmission((request, grant) => {
-            // Refuse the second native commit, retaining the real update and rollback.
-            if (
-              request.stage === "commit" &&
-              isRecord(request.facts) &&
-              request.facts.type === "managedImages.attach" &&
-              ++promotions === 2
-            ) {
-              throw new Error("second media promotion failed");
-            }
-            admit(request, grant);
-          }, attachment),
-        );
+      const spy = probe.admission(operationAdmission, (request, grant, admit) => {
+        // Refuse the second native commit, retaining the real update and rollback.
+        if (
+          request.stage === "commit" &&
+          isRecord(request.facts) &&
+          request.facts.type === "managedImages.attach" &&
+          ++promotions === 2
+        ) {
+          throw new Error("second media promotion failed");
+        }
+        admit(request, grant);
+      });
       restorePromotionAdmission = () => spy.mockRestore();
     },
     removePromotionFault,

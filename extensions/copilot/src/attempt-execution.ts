@@ -13,11 +13,11 @@ import {
   clearActiveEmbeddedRun,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { normalizeAcceptedSessionSpawnResult } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { registerCopilotActiveRun } from "./attempt-active-run.js";
 import { deferBackgroundCompactionCleanup } from "./attempt-cleanup.js";
 import {
   createMessageOptions,
-  createPromptError,
   createResult,
   isSdkSendAndWaitTimeoutError,
   readNonEmptyString,
@@ -43,7 +43,8 @@ import type {
 } from "./attempt-types.js";
 import { createCopilotByokProxy } from "./byok-proxy.js";
 import { attachEventBridge, type SessionLike } from "./event-bridge.js";
-import { classifyResumeFailure, decideReplayAction } from "./replay-shim.js";
+import { createPromptError } from "./prompt-error.js";
+import { isMissingCopilotSessionError } from "./replay-shim.js";
 import type { PooledClient } from "./runtime.js";
 import type { CopilotUserInputBridge } from "./user-input-bridge.js";
 export async function runCopilotExecution(context: {
@@ -138,10 +139,6 @@ export async function runCopilotExecution(context: {
     }
     void session.abort().catch(() => undefined);
   };
-  const onAbort = () => {
-    abortActiveSession();
-  };
-  params.abortSignal?.addEventListener("abort", onAbort, { once: true });
   let sandbox: SandboxContext | null = null;
   let effectiveWorkspaceDir = resolvedWorkspaceForSandbox;
   if (resolvedWorkspaceForSandbox) {
@@ -153,15 +150,12 @@ export async function runCopilotExecution(context: {
         sandboxSessionKey,
       }));
     } catch (error: unknown) {
-      settled = true;
-      params.abortSignal?.removeEventListener("abort", onAbort);
-      if (abortRequested || params.abortSignal?.aborted) {
+      if (params.abortSignal?.aborted) {
         return finishAttempt(
           createResult(input, {
             aborted: true,
             externalAbort: true,
             messagesSnapshot: messages,
-            now,
             promptError: undefined,
             sdkSessionId: undefined,
           }),
@@ -170,7 +164,6 @@ export async function runCopilotExecution(context: {
       return finishAttempt(
         createResult(input, {
           messagesSnapshot: messages,
-          now,
           promptError: createPromptError(
             "sandbox_resolution_failure",
             `[copilot-attempt] sandbox resolution failed: ${toCopilotError(error).message}`,
@@ -184,12 +177,9 @@ export async function runCopilotExecution(context: {
   hookContext.workspaceDir = effectiveWorkspaceDir;
   const requestedCwd = readResolvedAttemptPath(input.cwd);
   if (sandbox?.enabled && requestedCwd && requestedCwd !== resolvedWorkspaceForSandbox) {
-    settled = true;
-    params.abortSignal?.removeEventListener("abort", onAbort);
     return finishAttempt(
       createResult(input, {
         messagesSnapshot: messages,
-        now,
         promptError: createPromptError(
           "sandbox_cwd_override_unsupported",
           "[copilot-attempt] cwd override is not supported for sandboxed Copilot runs; omit cwd or use the agent workspace as cwd",
@@ -228,7 +218,6 @@ export async function runCopilotExecution(context: {
     return finishAttempt(
       createResult(input, {
         messagesSnapshot: messages,
-        now,
         promptError: createPromptError("model_not_supported", toCopilotError(error).message, error),
         sdkSessionId: undefined,
       }),
@@ -247,6 +236,10 @@ export async function runCopilotExecution(context: {
     | Awaited<ReturnType<typeof createToolBridge>>["promptToolPolicy"]
     | undefined;
   try {
+    params.abortSignal?.addEventListener("abort", abortActiveSession, { once: true });
+    if (params.abortSignal?.aborted) {
+      abortActiveSession();
+    }
     let resultContentSourceByToolName = new Map<
       string,
       NonNullable<AnyAgentTool["resultContentSource"]>
@@ -308,7 +301,6 @@ export async function runCopilotExecution(context: {
       } catch (error: unknown) {
         const result = createResult(input, {
           messagesSnapshot: messages,
-          now,
           promptError: createPromptError(
             "tool_bridge_failure",
             `[copilot-attempt] tool-bridge construction failed: ${toCopilotError(error).message}`,
@@ -346,16 +338,15 @@ export async function runCopilotExecution(context: {
       userInputBridge,
     } = sessionSetup;
     userInputBridgeRef = userInputBridge;
-    const replayDecision = decideReplayAction({
-      sdkSessionId: input.initialReplayState?.sdkSessionId,
-      replayInvalid: input.initialReplayState?.replayInvalid,
-    });
-    downgradedFromResume = replayDecision.downgradedFromResume;
+    const previousSessionId = normalizeOptionalString(input.initialReplayState?.sdkSessionId);
+    downgradedFromResume = Boolean(
+      previousSessionId && input.initialReplayState?.replayInvalid === true,
+    );
     const resumeSessionId = settledToolFinalization
       ? settledFinalizationSessionId
-      : replayDecision.action === "resume"
-        ? replayDecision.sdkSessionId
-        : undefined;
+      : downgradedFromResume
+        ? undefined
+        : previousSessionId;
     if (resumeSessionId) {
       try {
         session = (await client.resumeSession(resumeSessionId, {
@@ -373,16 +364,13 @@ export async function runCopilotExecution(context: {
             error,
           );
         }
-        const classification = classifyResumeFailure(error);
-        if (!classification.recoverable) {
+        if (!isMissingCopilotSessionError(error)) {
           throw error;
         }
         resumeFailureRecovered = true;
-        session = (await client.createSession(sessionConfig)) as unknown as SessionLike;
-        nativeSessionCreatedFresh = true;
-        nativeSessionHistoryValidated = true;
       }
-    } else {
+    }
+    if (!session) {
       session = (await client.createSession(sessionConfig)) as unknown as SessionLike;
       nativeSessionCreatedFresh = true;
       nativeSessionHistoryValidated = true;
@@ -398,7 +386,7 @@ export async function runCopilotExecution(context: {
         "[copilot-attempt] canonical transcript persistence requires the Copilot SDK session id",
       );
     }
-    if (sdkSessionId && deps.onSessionEstablished && !settledToolFinalization) {
+    if (deps.onSessionEstablished && !settledToolFinalization) {
       try {
         await deps.onSessionEstablished({
           compactionSessionConfig,
@@ -603,14 +591,14 @@ export async function runCopilotExecution(context: {
           });
         } catch {}
       }
-      params.abortSignal?.removeEventListener("abort", onAbort);
+      params.abortSignal?.removeEventListener("abort", abortActiveSession);
     } else {
       await bridge?.awaitCompactionChain();
       bridge?.detach();
       await bridge?.awaitAgentEventChain();
       cleanupToolBridge?.();
       await cleanupByokProxy?.();
-      params.abortSignal?.removeEventListener("abort", onAbort);
+      params.abortSignal?.removeEventListener("abort", abortActiveSession);
       if (session) {
         try {
           await session.disconnect();

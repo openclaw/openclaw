@@ -4,10 +4,13 @@ import {
   makeRegistry,
 } from "../../../config/plugin-auto-enable.test-helpers.js";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
+import { withStateDirEnv } from "../../../test-helpers/state-dir-env.js";
 import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
 import { createAgentCleanupScope } from "../../run-cleanup-timeout.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { attachToolAllowlistIntersection } from "../../tool-policy.js";
+import { listPersistedRuntimeToolSchemaQuarantines } from "../../tool-schema-quarantine-health.js";
+import { withRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
 
 const mocks = vi.hoisted(() => ({
   createBundleLspToolRuntime: vi.fn(),
@@ -75,6 +78,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       isRawModelRun: false,
       preparedToolBase: {
         cronCreatorToolAllowlist: [],
+        cronCreatorToolAllowlistCaptureRef: {},
         effectiveToolsAllow: undefined,
         inheritedToolAllowlist,
         localModelLeanPreserveToolNames: [],
@@ -84,6 +88,54 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       },
     } as unknown as Parameters<typeof prepareEmbeddedAttemptBundleTools>[0];
   }
+
+  it.each(["file", "provider"] as const)(
+    "does not widen a %s memory flush with MCP, LSP, or client functions",
+    async (arm) => {
+      const persistenceName = arm === "file" ? "write" : "memory_store";
+      const input = createInput([], [createStubTool("read"), createStubTool(persistenceName)]);
+      input.attempt.trigger = "memory";
+      if (arm === "file") {
+        input.attempt.memoryFlushWritePath = "memory/2026-10-08.md";
+      } else {
+        input.attempt.memoryFlushTools = {
+          flushId: "flush",
+          ownerPluginId: "memory-provider",
+          persistenceToolNames: [persistenceName],
+          recordPersistenceToolSuccess: () => {},
+        };
+      }
+      input.attempt.clientTools = [
+        {
+          type: "function",
+          function: { name: "client_canary", parameters: { type: "object" } },
+        },
+      ];
+      mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime: {}, releaseLease: () => {} });
+      mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
+        tools: [createStubTool("canary__write")],
+      });
+      mocks.createBundleLspToolRuntime.mockResolvedValue({
+        tools: [createStubTool("lsp_canary")],
+        dispose: vi.fn(),
+      });
+
+      const result = await prepareEmbeddedAttemptBundleTools(input);
+
+      expect(result.uncompactedEffectiveTools.map((tool) => tool.name)).toEqual([
+        "read",
+        persistenceName,
+      ]);
+      expect(result.clientTools).toBeUndefined();
+      expect(mocks.acquireSessionMcpRuntime).not.toHaveBeenCalled();
+      expect(mocks.createBundleLspToolRuntime).not.toHaveBeenCalled();
+      await withRuntimeToolSchemaQuarantine((record) => result.refreshTools(record));
+      expect(result.uncompactedEffectiveTools.map((tool) => tool.name)).toEqual([
+        "read",
+        persistenceName,
+      ]);
+    },
+  );
 
   it.each([
     { allow: ["chrome*"], expected: ["chrome__click"] },
@@ -410,49 +462,60 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
   });
 
   it("refreshes retained tools and capability captures from each schema projection", async () => {
-    const { filterRuntimeCompatibleTools } = await vi.importActual<
-      typeof import("../../tool-schema-projection.js")
-    >("../../tool-schema-projection.js");
-    mocks.filterRuntimeCompatibleTools.mockImplementation(filterRuntimeCompatibleTools);
-    const first = createStubTool("core_first");
-    const bundled = createStubTool("server__read");
-    const bundledSchema = { type: "object" };
-    bundled.parameters = bundledSchema;
-    setPluginToolMeta(bundled, { pluginId: "bundle-mcp", optional: false });
-    const core = [first];
-    const inherited = ["initial"];
-    const input = createInput(inherited, core);
-    const creatorTools = input.preparedToolBase.cronCreatorToolAllowlist;
-    input.preparedToolBase.cronCreatorToolAllowlistCaptureRef = {};
-    mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime: {}, releaseLease: () => {} });
-    mocks.materializeBundleMcpToolsForRun.mockResolvedValue({ tools: [bundled] });
+    await withStateDirEnv("openclaw-bundle-tool-quarantine-", async () => {
+      const { filterRuntimeCompatibleTools } = await vi.importActual<
+        typeof import("../../tool-schema-projection.js")
+      >("../../tool-schema-projection.js");
+      mocks.filterRuntimeCompatibleTools.mockImplementation(filterRuntimeCompatibleTools);
+      const first = createStubTool("core_first");
+      const bundled = createStubTool("server__read");
+      const bundledSchema = { type: "object" };
+      bundled.parameters = bundledSchema;
+      setPluginToolMeta(bundled, { pluginId: "bundle-mcp", optional: false });
+      const core = [first];
+      const inherited = ["initial"];
+      const input = createInput(inherited, core);
+      const creatorTools = input.preparedToolBase.cronCreatorToolAllowlist;
+      input.preparedToolBase.cronCreatorToolAllowlistCaptureRef = {};
+      mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime: {}, releaseLease: () => {} });
+      mocks.materializeBundleMcpToolsForRun.mockResolvedValue({ tools: [bundled] });
 
-    const result = await prepareEmbeddedAttemptBundleTools(input);
-    const retained = result.uncompactedEffectiveTools;
-    expect(retained.map((tool) => tool.name)).toEqual(["core_first", "server__read"]);
-    expect(core).toEqual([first]);
+      const result = await prepareEmbeddedAttemptBundleTools(input);
+      const retained = result.uncompactedEffectiveTools;
+      expect(retained.map((tool) => tool.name)).toEqual(["core_first", "server__read"]);
+      expect(core).toEqual([first]);
 
-    const second = createStubTool("core_second");
-    core.splice(0, core.length, second);
-    bundledSchema.type = "array";
-    result.refreshTools();
+      const second = createStubTool("core_second");
+      core.splice(0, core.length, second);
+      bundledSchema.type = "array";
+      await withRuntimeToolSchemaQuarantine((record) => result.refreshTools(record));
 
-    expect(retained.map((tool) => tool.name)).toEqual(["core_second"]);
-    expect(core).toEqual([second]);
-    expect(inherited).toEqual(["core_second"]);
-    expect(creatorTools).toEqual([{ name: "core_second" }]);
+      expect(retained.map((tool) => tool.name)).toEqual(["core_second"]);
+      expect(core).toEqual([second]);
+      expect(inherited).toEqual(["core_second"]);
+      expect(creatorTools).toEqual([{ name: "core_second" }]);
+      expect(await listPersistedRuntimeToolSchemaQuarantines()).toEqual([
+        {
+          toolName: "server__read",
+          owner: "plugin:bundle-mcp",
+          reason: 'server__read.parameters.type must be "object"',
+          failedAt: expect.any(Date),
+        },
+      ]);
 
-    core.splice(0, core.length, first);
-    bundledSchema.type = "object";
-    result.refreshTools();
+      core.splice(0, core.length, first);
+      bundledSchema.type = "object";
+      await withRuntimeToolSchemaQuarantine((record) => result.refreshTools(record));
 
-    expect(retained.map((tool) => tool.name)).toEqual(["core_first", "server__read"]);
-    expect(core).toEqual([first]);
-    expect(inherited).toEqual(["core_first", "server__read"]);
-    expect(creatorTools).toEqual([
-      { name: "core_first" },
-      { name: "server__read", pluginId: "bundle-mcp" },
-    ]);
+      expect(retained.map((tool) => tool.name)).toEqual(["core_first", "server__read"]);
+      expect(core).toEqual([first]);
+      expect(inherited).toEqual(["core_first", "server__read"]);
+      expect(creatorTools).toEqual([
+        { name: "core_first" },
+        { name: "server__read", pluginId: "bundle-mcp" },
+      ]);
+      expect(await listPersistedRuntimeToolSchemaQuarantines()).toEqual([]);
+    });
   });
 
   it.each([undefined, "MCP", "LSP"])(

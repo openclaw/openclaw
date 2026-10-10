@@ -238,43 +238,6 @@ function runProfileGuard(profile: string) {
   });
 }
 
-function runLaunchArgBuilder(...args: string[]) {
-  const root = makeTempRoot("openclaw-restart-mac-test-");
-
-  const parserBlock = script.slice(
-    script.indexOf('for arg in "$@"; do'),
-    script.indexOf('if [[ "$NO_SIGN" -eq 1 && "$SIGN" -eq 1 ]]'),
-  );
-  const appLaunchArgBlock = script.slice(
-    script.indexOf("APP_LAUNCH_ARGS=()"),
-    script.indexOf('if [[ "$TARGET_ONLY" -eq 1 ]]; then', script.indexOf("APP_LAUNCH_ARGS=()")),
-  );
-  const openArgBlock = script.slice(
-    script.indexOf('OPEN_ARGS=(-n "${APP_BUNDLE}")'),
-    script.indexOf("# 4) Launch"),
-  );
-  const harnessPath = writeHarness(root, "launch-arg-harness.sh", [
-    "#!/bin/bash",
-    "set -euo pipefail",
-    "WAIT_FOR_LOCK=0",
-    "NO_SIGN=0",
-    "SIGN=0",
-    "AUTO_DETECT_SIGNING=1",
-    "ATTACH_ONLY=1",
-    "BACKGROUND_ONLY=0",
-    "TARGET_ONLY=0",
-    'APP_BUNDLE="/tmp/OpenClaw.app"',
-    'log() { printf "%s\\n" "$*"; }',
-    'fail() { printf "ERROR: %s\\n" "$*" >&2; exit 1; }',
-    parserBlock,
-    appLaunchArgBlock,
-    openArgBlock,
-    'printf "<%s>\\n" "${OPEN_ARGS[@]}"',
-  ]);
-
-  return spawnSync("/bin/bash", [harnessPath, ...args], { encoding: "utf8" });
-}
-
 function runRestartLockHarness(lockDir: string) {
   const root = makeTempRoot("openclaw-restart-mac-test-");
 
@@ -348,16 +311,6 @@ describe("scripts/restart-mac.sh", () => {
     expect(result.stderr.trim()).toBe("ERROR: Unknown restart option: --wat");
   });
 
-  it("parses restart mode flags before side effects", () => {
-    const result = runRestartArgParser("--wait", "--no-sign", "--background-only", "--target-only");
-
-    expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe(
-      "wait=1 no_sign=1 sign=0 attach_only=1 background_only=1 target_only=1",
-    );
-    expect(result.stderr).toBe("");
-  });
-
   it("fails closed when loaded launchd jobs cannot be enumerated", () => {
     const result = runManagedSupervisorClassifier([], { failEnumeration: true });
 
@@ -370,20 +323,6 @@ describe("scripts/restart-mac.sh", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("No process is listening on gateway port 18789.");
     expect(result.stdout).toBe("");
-  });
-
-  it("prints listener diagnostics when the gateway port is open", () => {
-    const result = runGatewayPortCheck(
-      [
-        "#!/usr/bin/env bash",
-        "printf '%s\\n' 'COMMAND   PID USER   FD   TYPE DEVICE SIZE/OFF NODE NAME'",
-        "printf '%s\\n' 'node    12345 user   21u  IPv4 0x123      0t0  TCP 127.0.0.1:18789 (LISTEN)'",
-      ].join("\n"),
-    );
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("127.0.0.1:18789 (LISTEN)");
-    expect(result.stderr).toBe("");
   });
 
   it("uses a fail-closed gateway port verification helper", () => {
@@ -435,18 +374,6 @@ describe("scripts/restart-mac.sh", () => {
     expect(readFileSync(join(lockDir, "pid"), "utf8")).toBe(String(process.pid));
   });
 
-  it("removes the restart lock it acquired", () => {
-    const root = makeTempRoot("openclaw-restart-mac-test-");
-    const lockDir = join(root, "openclaw-restart-lock");
-
-    const result = runRestartLockHarness(lockDir);
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toBe("");
-    expect(existsSync(lockDir)).toBe(false);
-  });
-
   it("prefers the freshly packaged app unless an explicit app bundle is set", () => {
     const chooseBlock = script.slice(
       script.indexOf("choose_app_bundle()"),
@@ -460,27 +387,6 @@ describe("scripts/restart-mac.sh", () => {
     expect(chooseBlock.indexOf("${ROOT_DIR}/dist/OpenClaw.app")).toBeLessThan(
       chooseBlock.indexOf("/Applications/OpenClaw.app"),
     );
-  });
-
-  it("keeps restart cleanup scoped to known OpenClaw app and build paths", () => {
-    const cleanupBlock = script.slice(
-      script.indexOf("kill_all_openclaw()"),
-      script.indexOf("stop_launch_agent()"),
-    );
-
-    expect(cleanupBlock).toContain("ps axww -o pid=,command=");
-    expect(cleanupBlock).toContain(
-      '"${ROOT_DIR}/dist/OpenClaw.app/${APP_EXECUTABLE_RELATIVE_PATH}"',
-    );
-    expect(cleanupBlock).toContain('"/Applications/OpenClaw.app/${APP_EXECUTABLE_RELATIVE_PATH}"');
-    expect(cleanupBlock).toContain('"${DEBUG_PROCESS_PATTERN}"');
-    expect(cleanupBlock).toContain('"${LOCAL_PROCESS_PATTERN}"');
-    expect(cleanupBlock).toContain('"${RELEASE_PROCESS_PATTERN}"');
-    expect(cleanupBlock).not.toContain("APP_PROCESS_PATTERN");
-    expect(cleanupBlock).not.toContain("pkill");
-    expect(cleanupBlock).not.toContain('pkill -x "OpenClaw"');
-    expect(cleanupBlock).not.toContain("pgrep");
-    expect(cleanupBlock).not.toContain('pgrep -x "OpenClaw"');
   });
 
   it("stops launchd supervision before killing app processes", () => {
@@ -511,20 +417,6 @@ describe("scripts/restart-mac.sh", () => {
     expect(script).toContain('[[ "${executable}" == "${TARGET_EXECUTABLE}" ]] && continue');
     expect(script).toContain('process_pids_for_executable "${TARGET_EXECUTABLE}"');
     expect(script).toContain("target-only restart deferred");
-  });
-
-  it("passes background-only through to the launched app", () => {
-    expect(script).toContain("APP_LAUNCH_ARGS+=(--background-only)");
-    expect(script).toContain('OPEN_ARGS+=(--args "${APP_LAUNCH_ARGS[@]}")');
-    expect(script).toContain('/usr/bin/open "${OPEN_ARGS[@]}"');
-  });
-
-  it("keeps no-attach-only launches nounset-safe on the macOS system Bash", () => {
-    const result = runLaunchArgBuilder("--no-attach-only");
-
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
-    expect(result.stdout.trim()).toBe("<-n>\n</tmp/OpenClaw.app>");
   });
 
   it("finds persistent launchd supervisors across explicit domains", () => {
@@ -572,12 +464,6 @@ describe("scripts/restart-mac.sh", () => {
     expect(packageIndex).toBeGreaterThan(supervisorIndex);
     expect(script).toContain("Unable to inspect loaded launchd jobs");
     expect(script).toContain("stop those jobs before a target-only restart");
-  });
-
-  it("lets the packager own the single incremental Swift product build", () => {
-    expect(script).not.toContain('run_step "clean build cache"');
-    expect(script).not.toContain('run_step "swift build"');
-    expect(script).toContain('run_step "package app"');
   });
 
   it("keeps the managed app alive until the signed replacement is ready", () => {

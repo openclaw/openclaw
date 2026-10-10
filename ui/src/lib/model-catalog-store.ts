@@ -14,6 +14,10 @@ import type { ApplicationGateway } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { registerModelControlsEnglish } from "../i18n/locales/en-model-controls.ts";
 import {
+  isAgentDatabaseInspectionPendingError,
+  resolveGatewayReadRetryDelayMs,
+} from "./gateway-availability.ts";
+import {
   invalidateModelCatalogCache,
   invalidateModelCatalogEntry,
   isModelCatalogRetired,
@@ -53,21 +57,25 @@ export type ModelCatalogPresentation = ModelCatalogResult & {
 };
 
 /** Settings readers share the catalog's accepted display receipt and retirement boundary. */
-export function readAgentModelCatalog(
+export function readModelCatalog(
   client: ModelCatalogClient | null | undefined,
-  agentId: string | null | undefined,
+  scope: ModelCatalogReadScope | null | undefined,
 ): ModelCatalogPresentation {
-  if (!client || !agentId) {
-    return { models: [], hasSnapshot: false, retired: false };
-  }
-  const scope = { agentId };
-  const catalog = peekModelCatalog(client, scope, { allowStale: true });
+  const catalog =
+    client && scope ? peekModelCatalog(client, scope, { allowStale: true }) : undefined;
   return {
     ...catalog,
     models: catalog?.models ?? [],
     hasSnapshot: catalog !== undefined,
-    retired: isModelCatalogRetired(client, scope),
+    retired: client && scope ? isModelCatalogRetired(client, scope) : false,
   };
+}
+
+export function readAgentModelCatalog(
+  client: ModelCatalogClient | null | undefined,
+  agentId: string | null | undefined,
+): ModelCatalogPresentation {
+  return readModelCatalog(client, agentId ? { agentId } : null);
 }
 
 export function subscribeModelCatalogCache(
@@ -78,8 +86,7 @@ export function subscribeModelCatalogCache(
   modelCatalogObservers.set(client, listeners);
   listeners.add(listener);
   return () => {
-    listeners.delete(listener);
-    if (listeners.size === 0) {
+    if (listeners.delete(listener) && listeners.size === 0) {
       modelCatalogObservers.delete(client);
     }
   };
@@ -163,9 +170,9 @@ export function settleModelCatalogRequests(
   scope: ModelsListParams,
 ): Promise<void> | undefined {
   const key = modelCatalogKey(modelCatalogParams(scope));
-  const pending = Array.from(modelCatalogCache.get(client)?.requests.get(key)?.values() ?? [])
-    .map((lane) => lane.active?.transportSettled)
-    .filter((promise) => promise !== undefined);
+  const pending = Array.from(
+    modelCatalogCache.get(client)?.requests.get(key)?.values() ?? [],
+  ).flatMap(({ active }) => (active ? [active.transportSettled] : []));
   return pending.length ? Promise.allSettled(pending).then(() => {}) : undefined;
 }
 
@@ -178,18 +185,22 @@ function createModelCatalogRequest(params: {
   queued: boolean;
   releaseLane: () => void;
 }): ModelCatalogRequest {
-  const { client, cache, lane, timeoutMs } = params;
+  const { client, cache, lane, timeoutMs: timeout } = params;
   const controller = new AbortController();
   const completion = createDeferredCore<ModelCatalogResult>();
   const transportSettled = createDeferredCore();
   const duration =
-    typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
-      ? resolveSafeTimeoutDelayMs(timeoutMs, { minMs: 0 })
+    typeof timeout === "number" && Number.isFinite(timeout)
+      ? resolveSafeTimeoutDelayMs(timeout, { minMs: 0 })
       : undefined;
-  const deadline = duration === undefined ? undefined : Date.now() + duration;
+  let deadline = duration === undefined ? undefined : Date.now() + duration;
   let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
   let started = false;
   let requestSent = false;
+  const rejectTimeout = (timeoutMs: number) =>
+    pending.reject(
+      new GatewayProtocolRequestTimeoutError({ method: "models.list", timeoutMs, requestSent }),
+    );
   const canRetry = () =>
     !pending.settled &&
     !controller.signal.aborted &&
@@ -198,7 +209,10 @@ function createModelCatalogRequest(params: {
     cache.reads.has(pending.read) &&
     lane.active === pending &&
     !lane.queued;
-  const retireCompletion = () => {
+  const settle = (complete: () => void) => {
+    if (pending.settled) {
+      return;
+    }
     clearTimeout(deadlineTimer);
     cache.reads.delete(pending.read);
     pending.settled = true;
@@ -206,6 +220,7 @@ function createModelCatalogRequest(params: {
       lane.queued = undefined;
       params.releaseLane();
     }
+    complete();
   };
   const finishTransport = () => {
     transportSettled.resolve();
@@ -230,18 +245,8 @@ function createModelCatalogRequest(params: {
     subscribers: new Set(),
     promise: completion.promise,
     transportSettled: transportSettled.promise,
-    resolve: (result) => {
-      if (!pending.settled) {
-        retireCompletion();
-        completion.resolve(result);
-      }
-    },
-    reject: (error) => {
-      if (!pending.settled) {
-        retireCompletion();
-        completion.reject(error);
-      }
-    },
+    resolve: (result) => settle(() => completion.resolve(result)),
+    reject: (error) => settle(() => completion.reject(error)),
     start: () => {
       if (started) {
         return;
@@ -253,13 +258,7 @@ function createModelCatalogRequest(params: {
       }
       const remaining = deadline === undefined ? undefined : deadline - Date.now();
       if (params.queued && duration !== undefined && remaining !== undefined && remaining <= 0) {
-        pending.reject(
-          new GatewayProtocolRequestTimeoutError({
-            method: "models.list",
-            timeoutMs: duration,
-            requestSent: false,
-          }),
-        );
+        rejectTimeout(duration);
         finishTransport();
         return;
       }
@@ -267,14 +266,21 @@ function createModelCatalogRequest(params: {
       const requestParams = { ...params.scope, ...(pending.refresh ? { refresh: true } : {}) };
       void (async () => {
         let retried = false;
+        let startupAttempt = 0;
+        let resumeAfterStartup = false;
         for (;;) {
+          if (resumeAfterStartup && duration !== undefined) {
+            deadline = Date.now() + duration;
+            deadlineTimer = setTimeout(() => rejectTimeout(duration), duration);
+          }
+          resumeAfterStartup = false;
           try {
             // Only a received rejection can retry; local timeout still owns its transport.
-            // The existing numeric deadline covers every attempt and wait in this lane.
-            const result = await (timeoutMs === undefined
+            // Confirmed agent startup suspends the overall budget, never a silent read's timeout.
+            const result = await (timeout === undefined
               ? client.request<ModelCatalogResult>("models.list", requestParams)
               : client.request<ModelCatalogResult>("models.list", requestParams, {
-                  timeoutMs: duration === undefined ? timeoutMs : null,
+                  timeoutMs: duration === undefined ? timeout : null,
                   ...(duration === undefined
                     ? {}
                     : {
@@ -287,8 +293,9 @@ function createModelCatalogRequest(params: {
             pending.resolve(result);
             return;
           } catch (error) {
+            const startupPending = isAgentDatabaseInspectionPendingError(error);
             if (
-              retried ||
+              (retried && !startupPending) ||
               !isGatewayProtocolResponseError(error) ||
               error.gatewayCode !== "UNAVAILABLE" ||
               !error.retryable ||
@@ -297,12 +304,20 @@ function createModelCatalogRequest(params: {
               pending.reject(error);
               return;
             }
-            // Retry one superseded snapshot without chasing an indefinitely busy Gateway.
-            retried = true;
+            if (startupPending) {
+              clearTimeout(deadlineTimer);
+              deadline = undefined;
+              resumeAfterStartup = true;
+            } else {
+              // Other unavailable responses retain their one replacement attempt.
+              retried = true;
+            }
             const wake = createDeferredCore();
             const timer = setTimeout(
               wake.resolve,
-              resolveSafeTimeoutDelayMs(error.retryAfterMs ?? 0, { minMs: 0 }),
+              startupPending
+                ? resolveGatewayReadRetryDelayMs(error, startupAttempt++)
+                : resolveSafeTimeoutDelayMs(error.retryAfterMs ?? 0, { minMs: 0 }),
             );
             const stopWatching = subscribeModelCatalogCache(client, () => {
               if (!canRetry()) {
@@ -320,13 +335,7 @@ function createModelCatalogRequest(params: {
               stopWatching();
             }
             if (deadline !== undefined && duration !== undefined && deadline <= Date.now()) {
-              pending.reject(
-                new GatewayProtocolRequestTimeoutError({
-                  method: "models.list",
-                  timeoutMs: duration,
-                  requestSent,
-                }),
-              );
+              rejectTimeout(duration);
               return;
             }
             if (!canRetry()) {
@@ -344,17 +353,7 @@ function createModelCatalogRequest(params: {
     once: true,
   });
   if (duration !== undefined) {
-    deadlineTimer = setTimeout(
-      () =>
-        pending.reject(
-          new GatewayProtocolRequestTimeoutError({
-            method: "models.list",
-            timeoutMs: duration,
-            requestSent,
-          }),
-        ),
-      duration,
-    );
+    deadlineTimer = setTimeout(() => rejectTimeout(duration), duration);
   }
   return pending;
 }

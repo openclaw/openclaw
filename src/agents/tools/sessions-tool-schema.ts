@@ -6,7 +6,7 @@ import {
   SESSION_COLOR_IDS,
   SESSION_ICON_GLYPH_IDS,
 } from "../../../packages/gateway-protocol/src/session-agent-status.js";
-import { stringEnum } from "../schema/typebox.js";
+import { requesterProfileSchema, stringEnum } from "../schema/typebox.js";
 
 const ACTIONS = [
   "cloud_profiles",
@@ -24,6 +24,7 @@ const SESSION_ICON_GLYPH_DESCRIPTION = SESSION_ICON_GLYPH_IDS.join(", ");
 
 const SessionsToolSchema = Type.Object(
   {
+    user: requesterProfileSchema(),
     action: stringEnum(ACTIONS, { description: "Action" }),
     profileId: Type.Optional({
       ...SessionMoveProfileTargetSchema.properties.profileId,
@@ -56,7 +57,7 @@ const SessionsToolSchema = Type.Object(
     expectedSessionId: Type.Optional(
       Type.String({
         description:
-          "Durable identity returned by sessions_list; rejects a replaced session. Required for archive, restore, or delete of another session.",
+          "Durable identity returned by sessions_list; rejects a replaced session. Required to archive, restore, or delete another session, and for non-owner rename of another session.",
       }),
     ),
     runId: Type.Optional(
@@ -141,14 +142,26 @@ const SessionsToolSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const SessionOwnerToolSchema = Type.Object(
+  {
+    ...Type.Required(Type.Pick(SessionsToolSchema, ["ownerType", "ownerId"])).properties,
+    user: SessionsToolSchema.properties.user,
+    action: stringEnum(["assign_owner"]),
+    sessionKey: SessionsToolSchema.properties.sessionKey,
+  },
+  { additionalProperties: false },
+);
+
 export const SessionControlToolSchema = Type.Object(
   {
+    user: SessionsToolSchema.properties.user,
     action: stringEnum(["patch", "stop"]),
     sessionKey: SessionsToolSchema.properties.sessionKey,
     expectedSessionId: SessionsToolSchema.properties.expectedSessionId,
     archived: Type.Optional(
       Type.Boolean({
-        description: "patch: required; true archives without deleting, false restores.",
+        description:
+          "patch archive/restore: true archives without deleting, false restores. Omit when renaming.",
       }),
     ),
     runId: SessionsToolSchema.properties.runId,
@@ -157,9 +170,51 @@ export const SessionControlToolSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const SessionRenameToolSchema = Type.Object(
+  {
+    ...Type.Pick(SessionsToolSchema, ["user", "sessionKey", "expectedSessionId", "label"])
+      .properties,
+    action: stringEnum(["patch"], {
+      description: "Rename a session created by the requesting operator.",
+    }),
+    expectedSessionId: Type.Optional(
+      Type.String({
+        description:
+          "Durable identity from sessions_list; required when renaming another session. Current-session rename uses this run's captured identity.",
+      }),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionRenameOwnerToolSchema = Type.Object(
+  {
+    ...SessionRenameToolSchema.properties,
+    action: stringEnum(["patch", "assign_owner"]),
+    ownerType: SessionsToolSchema.properties.ownerType,
+    ownerId: SessionsToolSchema.properties.ownerId,
+  },
+  { additionalProperties: false },
+);
+
 /** Restrict only the newly exposed Stop action; preserve pre-existing collector controls. */
-export function resolveSessionsToolSchema(controlOnly: boolean, stopAllowed: boolean) {
-  const schema = controlOnly ? SessionControlToolSchema : SessionsToolSchema;
+export function resolveSessionsToolSchema(
+  controlOnly: boolean,
+  stopAllowed: boolean,
+  renameAllowed = false,
+) {
+  const schema = controlOnly
+    ? Type.Object(
+        {
+          ...SessionControlToolSchema.properties,
+          ...(renameAllowed ? { label: SessionsToolSchema.properties.label } : {}),
+          action: stringEnum(["patch", "stop", "assign_owner"]),
+          ownerType: SessionsToolSchema.properties.ownerType,
+          ownerId: SessionsToolSchema.properties.ownerId,
+        },
+        { additionalProperties: false },
+      )
+    : SessionsToolSchema;
   if (stopAllowed) {
     return schema;
   }
@@ -167,7 +222,9 @@ export function resolveSessionsToolSchema(controlOnly: boolean, stopAllowed: boo
   return Type.Object(
     {
       ...properties,
-      action: stringEnum(controlOnly ? ["patch"] : ACTIONS.filter((action) => action !== "stop")),
+      action: stringEnum(
+        controlOnly ? ["patch", "assign_owner"] : ACTIONS.filter((action) => action !== "stop"),
+      ),
     },
     { additionalProperties: false },
   );

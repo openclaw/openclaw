@@ -12,6 +12,64 @@ struct ScreenSnapshotResult: Sendable {
 }
 
 @MainActor
+enum ScreenCaptureSupport {
+    static func requirePermission(failure: (String) -> any Error) throws {
+        guard AppLaunchRuntimePlan.current.allowsActivation ||
+            PermissionManager.screenRecordingPermissions.checkScreenRecordingPermission()
+        else {
+            throw failure("Screen Recording permission required; relaunch without --no-activate and retry")
+        }
+    }
+
+    static func display(
+        at index: Int?,
+        noDisplays: any Error,
+        invalidIndex: (Int) -> any Error) async throws -> SCDisplay
+    {
+        let content = try await SCShareableContent.current
+        let displays = content.displays.sorted { $0.displayID < $1.displayID }
+        guard !displays.isEmpty else { throw noDisplays }
+        let index = index ?? 0
+        guard displays.indices.contains(index) else { throw invalidIndex(index) }
+        return displays[index]
+    }
+}
+
+struct ScreenCaptureDisplayGeometry {
+    let displayID: CGDirectDisplayID
+    let geometry: OpenClawComputerDisplayGeometry
+    let sourceWidth: Double
+    let sourceHeight: Double
+
+    init(display: SCDisplay, noDisplays: any Error) throws {
+        let bounds = CGDisplayBounds(display.displayID)
+        self.displayID = display.displayID
+        self.geometry = OpenClawComputerDisplayGeometry(
+            originX: bounds.origin.x,
+            originY: bounds.origin.y,
+            widthPoints: bounds.width,
+            heightPoints: bounds.height)
+        self.sourceWidth = Double(display.width)
+        self.sourceHeight = Double(display.height)
+        // A display can disappear after ScreenCaptureKit enumerates it.
+        guard OpenClawComputerInputGeometry.isValidMappingGeometry(
+            sourceWidth: self.sourceWidth,
+            sourceHeight: self.sourceHeight,
+            display: self.geometry)
+        else { throw noDisplays }
+    }
+
+    func frameId(referenceWidth: Int) -> String {
+        OpenClawComputerInputGeometry.displayFrameId(
+            displayID: self.displayID,
+            sourceWidth: self.sourceWidth,
+            sourceHeight: self.sourceHeight,
+            referenceWidth: referenceWidth,
+            display: self.geometry)
+    }
+}
+
+@MainActor
 final class ScreenSnapshotService {
     enum ScreenSnapshotError: LocalizedError {
         case noDisplays
@@ -25,9 +83,7 @@ final class ScreenSnapshotService {
                 "No displays available for screen snapshot"
             case let .invalidScreenIndex(idx):
                 "Invalid screen index \(idx)"
-            case let .captureFailed(message):
-                message
-            case let .encodeFailed(message):
+            case let .captureFailed(message), let .encodeFailed(message):
                 message
             }
         }
@@ -40,30 +96,25 @@ final class ScreenSnapshotService {
         format: OpenClawScreenSnapshotFormat?) async throws
         -> ScreenSnapshotResult
     {
+        try ScreenCaptureSupport.requirePermission(failure: ScreenSnapshotError.captureFailed)
         let format = format ?? .jpeg
-        let normalized = Self.normalize(maxWidth: maxWidth, quality: quality, format: format)
+        let maxWidth = maxWidth.flatMap { $0 > 0 ? $0 : nil } ?? (format == .png ? 900 : 1600)
+        let quality = min(1.0, max(0.05, quality ?? 0.72))
 
-        let content = try await SCShareableContent.current
-        let displays = content.displays.sorted { $0.displayID < $1.displayID }
-        guard !displays.isEmpty else {
-            throw ScreenSnapshotError.noDisplays
-        }
-
-        let idx = screenIndex ?? 0
-        guard idx >= 0, idx < displays.count else {
-            throw ScreenSnapshotError.invalidScreenIndex(idx)
-        }
-        let display = displays[idx]
+        let display = try await ScreenCaptureSupport.display(
+            at: screenIndex,
+            noDisplays: ScreenSnapshotError.noDisplays,
+            invalidIndex: ScreenSnapshotError.invalidScreenIndex)
         let displayFrameId = try Self.displayFrameId(
             for: display,
-            referenceWidth: normalized.maxWidth)
+            referenceWidth: maxWidth)
 
         let filter = SCContentFilter(display: display, excludingWindows: [])
         let config = SCStreamConfiguration()
         let targetSize = Self.targetSize(
             width: display.width,
             height: display.height,
-            maxWidth: normalized.maxWidth)
+            maxWidth: maxWidth)
         config.width = targetSize.width
         config.height = targetSize.height
         config.showsCursor = true
@@ -80,27 +131,21 @@ final class ScreenSnapshotService {
         // pixels were captured, no stable frame exists to authorize later input.
         let finalDisplayFrameId = try Self.displayFrameId(
             for: display,
-            referenceWidth: normalized.maxWidth)
+            referenceWidth: maxWidth)
         guard displayFrameId == finalDisplayFrameId else {
             throw ScreenSnapshotError.captureFailed("display changed during screen capture")
         }
 
         let bitmap = NSBitmapImageRep(cgImage: cgImage)
-        let data: Data
-        switch format {
-        case .png:
-            guard let encoded = bitmap.representation(using: .png, properties: [:]) else {
-                throw ScreenSnapshotError.encodeFailed("png encode failed")
-            }
-            data = encoded
-        case .jpeg:
-            guard let encoded = bitmap.representation(
-                using: .jpeg,
-                properties: [.compressionFactor: normalized.quality])
-            else {
-                throw ScreenSnapshotError.encodeFailed("jpeg encode failed")
-            }
-            data = encoded
+        let encoding: (NSBitmapImageRep.FileType, [NSBitmapImageRep.PropertyKey: Any]) = switch format {
+        case .png: (.png, [:])
+        case .jpeg: (.jpeg, [.compressionFactor: quality])
+        }
+        guard let data = bitmap.representation(
+            using: encoding.0,
+            properties: encoding.1)
+        else {
+            throw ScreenSnapshotError.encodeFailed("\(format.rawValue) encode failed")
         }
 
         return ScreenSnapshotResult(
@@ -115,38 +160,8 @@ final class ScreenSnapshotService {
         for display: SCDisplay,
         referenceWidth: Int) throws -> String
     {
-        let bounds = CGDisplayBounds(display.displayID)
-        let geometry = OpenClawComputerDisplayGeometry(
-            originX: bounds.origin.x,
-            originY: bounds.origin.y,
-            widthPoints: bounds.width,
-            heightPoints: bounds.height)
-        let sourceWidth = Double(display.width)
-        let sourceHeight = Double(display.height)
-        guard OpenClawComputerInputGeometry.isValidMappingGeometry(
-            sourceWidth: sourceWidth,
-            sourceHeight: sourceHeight,
-            display: geometry)
-        else {
-            throw ScreenSnapshotError.noDisplays
-        }
-        return OpenClawComputerInputGeometry.displayFrameId(
-            displayID: display.displayID,
-            sourceWidth: sourceWidth,
-            sourceHeight: sourceHeight,
-            referenceWidth: referenceWidth,
-            display: geometry)
-    }
-
-    private static func normalize(
-        maxWidth: Int?,
-        quality: Double?,
-        format: OpenClawScreenSnapshotFormat)
-        -> (maxWidth: Int, quality: Double)
-    {
-        let resolvedMaxWidth = maxWidth.flatMap { $0 > 0 ? $0 : nil } ?? (format == .png ? 900 : 1600)
-        let resolvedQuality = min(1.0, max(0.05, quality ?? 0.72))
-        return (maxWidth: resolvedMaxWidth, quality: resolvedQuality)
+        try ScreenCaptureDisplayGeometry(display: display, noDisplays: ScreenSnapshotError.noDisplays)
+            .frameId(referenceWidth: referenceWidth)
     }
 
     private static func targetSize(width: Int, height: Int, maxWidth: Int) -> (width: Int, height: Int) {

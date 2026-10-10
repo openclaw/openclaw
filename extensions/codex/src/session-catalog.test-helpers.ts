@@ -55,11 +55,18 @@ import {
   type CodexAppServerBindingStore,
   type CodexAppServerThreadBinding,
 } from "./app-server/session-binding.test-helpers.js";
+import { continueLocalCodexSession as continueLocalCodexSessionRuntime } from "./session-catalog-adoption.js";
+import { archiveLocalCodexSession } from "./session-catalog-archive.js";
 import {
   createCodexCatalogHomeResolver as createCodexCatalogHomeResolverRuntime,
   type CodexCatalogHome,
 } from "./session-catalog-homes.js";
-import { catalogError } from "./session-catalog-parsing.js";
+import {
+  createCodexSessionCatalogListOperation,
+  runCatalogListInline,
+} from "./session-catalog-list-operation.js";
+import { readCodexSessionTranscript as readCodexSessionTranscriptRuntime } from "./session-catalog-listing.js";
+import { catalogError, CODEX_LOCAL_SESSION_HOST_ID } from "./session-catalog-parsing.js";
 import {
   CODEX_TERMINAL_RESUME_COMMAND,
   CODEX_TERMINAL_START_COMMAND,
@@ -69,8 +76,7 @@ import type {
   CodexSessionCatalogControlFactory,
 } from "./session-catalog-types.js";
 import {
-  CODEX_LOCAL_SESSION_HOST_ID,
-  codexSessionCatalogRuntime,
+  registerCodexSessionCatalog as registerCodexSessionCatalogRuntime,
   createCodexSessionCatalogControl as createCodexSessionCatalogControlRuntime,
   createCodexSessionCatalogNodeHostCommands as createCodexSessionCatalogNodeHostCommandsRuntime,
   createCodexSessionCatalogNodeInvokePolicies,
@@ -120,12 +126,6 @@ afterEach(async () => {
   vi.unstubAllEnvs();
   process.env.PATH = originalPath;
 });
-
-const archiveLocalCodexSession = codexSessionCatalogRuntime.archiveLocal;
-const continueLocalCodexSessionRuntime = codexSessionCatalogRuntime.continueLocal;
-const listCodexSessionCatalogRuntime = codexSessionCatalogRuntime.list;
-const readCodexSessionTranscriptRuntime = codexSessionCatalogRuntime.readTranscript;
-const registerCodexSessionCatalogRuntime = codexSessionCatalogRuntime.register;
 
 function createCodexSessionCatalogControlFactory(
   params: Omit<
@@ -190,15 +190,28 @@ function asControlFactory(
   };
 }
 
-export function listCodexSessionCatalog(
-  params: Omit<Parameters<typeof listCodexSessionCatalogRuntime>[0], "control"> & {
+export async function listCodexSessionCatalog(
+  params: Omit<
+    Parameters<typeof createCodexSessionCatalogListOperation>[0],
+    "control" | "localHomes"
+  > & {
+    includeLocal?: boolean;
+    localHomes?: CodexCatalogHome[];
     control:
       | CodexSessionCatalogControl
       | CodexSessionCatalogControlFactory
       | CodexSessionCatalogControlFactoryStub;
   },
 ) {
-  return listCodexSessionCatalogRuntime({ ...params, control: asControlFactory(params.control) });
+  return {
+    hosts: await runCatalogListInline(
+      createCodexSessionCatalogListOperation({
+        ...params,
+        localHomes: params.localHomes ?? (params.includeLocal === false ? [] : [undefined]),
+        control: asControlFactory(params.control),
+      }),
+    ),
+  };
 }
 
 const catalogOwners = new WeakMap<
@@ -296,7 +309,7 @@ type CreateSessionEntryResult = Awaited<
   ReturnType<PluginRuntime["agent"]["session"]["createSessionEntry"]>
 >;
 type PatchSessionEntryParams = Parameters<
-  PluginRuntime["agent"]["session"]["patchSessionEntry"]
+  PluginRuntime["agent"]["session"]["prepareSessionEntryPatch"]
 >[0];
 type SessionEntrySummary = ReturnType<
   PluginRuntime["agent"]["session"]["listSessionEntries"]
@@ -358,9 +371,11 @@ export const config = {} as OpenClawConfig;
 export function compatibilityOwnerConfig(owner = "alpha"): OpenClawConfig {
   return {
     agents: {
-      list: ["alpha", "beta"].map((id) => (id === owner ? { id, default: true } : { id })),
+      ownership: "explicit",
+      defaults: { systemAgent: { agentId: owner } },
+      entries: { alpha: {}, beta: {} },
     },
-  } as OpenClawConfig;
+  };
 }
 
 export async function normalizeCodexManifestConfig(
@@ -601,7 +616,7 @@ export function createRuntime(
       return null;
     }
     const current = structuredClone(summary.entry);
-    const patch = await patchParams.update(current, { existingEntry: structuredClone(current) });
+    const patch = await patchParams.prepare(current, { existingEntry: structuredClone(current) });
     if (!patch) {
       return summary.entry;
     }
@@ -630,7 +645,7 @@ export function createRuntime(
             ({ sessionKey }) => !agentPrefix || sessionKey.startsWith(agentPrefix),
           );
         }),
-        patchSessionEntry,
+        prepareSessionEntryPatch: patchSessionEntry,
       },
     },
   } as unknown as PluginRuntime;

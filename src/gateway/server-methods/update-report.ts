@@ -15,7 +15,7 @@ import {
 } from "../../infra/update-failure-report.js";
 import { findActiveUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
 import { classifyUpdateOutcome, isReportableUpdateRun } from "../../shared/update-outcome.js";
-import { refreshLatestUpdateRestartSentinel } from "../server-restart-sentinel.js";
+import { refreshLatestUpdateRestartSentinel } from "../server-update-sentinel.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -55,20 +55,19 @@ function projectReportInput(payload: RestartSentinelPayload): UpdateFailureRepor
       ...(typeof stats.reason === "string" ? { reason: stats.reason } : {}),
       ...(readIdentity(stats.before) ? { before: readIdentity(stats.before) } : {}),
       ...(readIdentity(stats.after) ? { after: readIdentity(stats.after) } : {}),
-      steps: (stats.steps ?? []).map((step) => {
-        const projected: UpdateFailureReportInput["result"]["steps"][number] = {
-          name: step.name,
-          command: "",
-          cwd: "",
-          durationMs: step.durationMs ?? 0,
-          exitCode: step.log?.exitCode ?? null,
-          failureFacts: step.failureFacts,
-        };
-        if (step.advisory) {
-          projected.advisory = PACKAGE_POST_INSTALL_DOCTOR_ADVISORY;
-        }
-        return projected;
-      }),
+      steps: (stats.steps ?? []).map((step) =>
+        Object.assign(
+          {
+            name: step.name,
+            command: "",
+            cwd: "",
+            durationMs: step.durationMs ?? 0,
+            exitCode: step.log?.exitCode ?? null,
+            failureFacts: step.failureFacts,
+          },
+          step.advisory ? { advisory: PACKAGE_POST_INSTALL_DOCTOR_ADVISORY } : {},
+        ),
+      ),
       durationMs: stats.durationMs ?? 0,
       ...(recovery ? { recovery } : {}),
     },
@@ -223,18 +222,21 @@ export const updateReportHandler: GatewayRequestHandlers["update.report"] = asyn
         title: prepared.title,
       };
     } else {
-      const submitted = await submitUpdateFailureReport(prepared, params.previewDigest, {
-        publicationMode,
-        hasCurrentAuthority: hasCurrentReportAuthority,
-        validateCurrentAttempt: async () => {
-          const currentInput = await readCurrentReportInput(hasCurrentReportAuthority);
-          if (currentInput?.attemptId !== params.attemptId) {
-            return false;
-          }
-          const currentPrepared = await prepareUpdateFailureReport(currentInput);
-          return currentPrepared.previewDigest === prepared.previewDigest;
-        },
-      });
+      // Accepted publication and cleanup settle even when the connection retires during transport.
+      const submitted = await context.trackExecution(() =>
+        submitUpdateFailureReport(prepared, params.previewDigest, {
+          publicationMode,
+          hasCurrentAuthority: hasCurrentReportAuthority,
+          validateCurrentAttempt: async () => {
+            const currentInput = await readCurrentReportInput(hasCurrentReportAuthority);
+            if (currentInput?.attemptId !== params.attemptId) {
+              return false;
+            }
+            const currentPrepared = await prepareUpdateFailureReport(currentInput);
+            return currentPrepared.previewDigest === prepared.previewDigest;
+          },
+        }),
+      );
       if (submitted.status === "stale") {
         respond(false, undefined, {
           code: "INVALID_REQUEST",

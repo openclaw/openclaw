@@ -5,6 +5,12 @@ const selectorTail = String.raw`(?:[^([]|${selectorFunction}|\[[^\]]*\])*`;
 const selectorCompound = String.raw`(?:[^\s>+~(),[\]]|${selectorFunction}|\[[^\]]*\])*`;
 const appAncestor = String.raw`(?:\.(?:shell|content|chat-thread|chat-split-view)(?:--[\w-]+)?|:root|(?<![.#\w-])(?:html|body))(?![\w-])`;
 const ancestorHas = String.raw`(?::(?:not|is|where)\(\s*)*:has`;
+const selectorList = String.raw`(?:[^()[\]]|${selectorFunction}|\[[^\]]*\])*`;
+const listSubject = (subject) =>
+  String.raw`:(?:is|where)\(${selectorList}${subject}${selectorCompound}\s*(?:,${selectorList})?\)`;
+// One nesting level covers forms such as :is(:where(html, body), .other).
+const ancestorSelectorList = listSubject(`(?:${appAncestor}|${listSubject(appAncestor)})`);
+const appAncestorSubject = String.raw`(?:${appAncestor}|${ancestorSelectorList})`;
 
 export default {
   extends: "stylelint-config-recommended",
@@ -25,10 +31,13 @@ export default {
         new RegExp(`:has${selectorFunction}${selectorTail}[\\s>+~]${selectorTail}::`, "i"),
         new RegExp(`:has${selectorFunction}${selectorTail}::placeholder(?![\\w-])`, "i"),
         new RegExp(`:has(?=\\(\\s*[+~])${selectorFunction}${selectorTail}[\\s>+~]`, "i"),
-        // An ancestor subject schedules global :has invalidation on every insertion
+        // An ancestor subject, including :is()/:where() lists, restyles on every insertion
         // below it. The rule sees raw selectors; nested & forms remain policy-owned.
-        new RegExp(`${appAncestor}${selectorCompound}${ancestorHas}\\(`, "i"),
-        new RegExp(`${ancestorHas}${selectorFunction}\\)*${selectorCompound}${appAncestor}`, "i"),
+        new RegExp(`${appAncestorSubject}${selectorCompound}${ancestorHas}\\(`, "i"),
+        new RegExp(
+          `${ancestorHas}${selectorFunction}\\)*${selectorCompound}${appAncestorSubject}`,
+          "i",
+        ),
       ],
       { splitList: true },
     ],
@@ -71,7 +80,7 @@ export default {
       },
     },
     {
-      files: ["**/*.ts"],
+      files: ["**/*.{ts,tsx}"],
       customSyntax: "postcss-lit",
     },
   ],

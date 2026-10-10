@@ -1,5 +1,14 @@
 import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type {
+  SessionsBranchesListResult,
+  SessionsBranchesSwitchResult,
+  SessionsForkResult,
+  SessionsRewindResult,
+  SessionWorkspaceGetResult,
+  SessionWorkspaceListResult,
+  SessionWorkspaceSetResult,
+} from "../../api/types.ts";
 import { requestSessionRecovery } from "./recover.ts";
 import type {
   SessionCompactResult,
@@ -9,16 +18,7 @@ import type {
   SessionRefreshOutcome,
 } from "./session-capability.ts";
 import { areUiSessionKeysEquivalent, normalizeAgentId } from "./session-key.ts";
-import {
-  requestSessionBranchSwitch,
-  requestSessionBranches,
-  requestSessionCompact,
-  requestSessionFile,
-  requestSessionFilesList,
-  requestSessionFileSet,
-  requestSessionFork,
-  requestSessionRewind,
-} from "./session-requests.ts";
+import { buildSessionRequestParams } from "./session-requests.ts";
 
 type SessionScopedOperationsHost = {
   connection: SessionConnectionOwner;
@@ -28,6 +28,11 @@ type SessionScopedOperationsHost = {
 };
 
 const retiredFailedSubscriptionRecoveries = new WeakSet<AggregateError>();
+
+function buildTranscriptMutationParams(sessionKey: string, agentId?: string | null) {
+  const { key, ...owner } = buildSessionRequestParams(sessionKey, agentId);
+  return { sessionKey: key, ...owner };
+}
 
 export function createSessionScopedOperations(host: SessionScopedOperationsHost) {
   const ownedSubscriptions = new Set<SessionMessageSubscription>();
@@ -73,32 +78,48 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
     if (!scope) {
       throw new Error("Session compaction requires an active Gateway connection");
     }
-    const result = await requestSessionCompact(scope.client, key, options);
+    const result = await scope.client.request<SessionCompactResult>(
+      "sessions.compact",
+      buildSessionRequestParams(key, options.agentId),
+    );
     if (!host.connection.isCurrent(scope)) {
       throw new Error("Session compaction completed on a replaced Gateway connection");
     }
     return result;
   };
 
-  const requestCurrent = async <T>(
-    request: (client: GatewayBrowserClient) => Promise<T>,
-  ): Promise<T | null> => {
+  const requestCurrent = async <T>(method: string, params: unknown): Promise<T | null> => {
     const scope = host.connection.capture();
     if (!scope) {
       return null;
     }
-    const result = await request(scope.client);
+    const result = await scope.client.request<T>(method, params);
     return host.connection.isCurrent(scope) ? result : null;
   };
 
   const listFiles: SessionCapability["listFiles"] = (key, options = {}) =>
-    requestCurrent((client) => requestSessionFilesList(client, key, options));
+    requestCurrent<SessionWorkspaceListResult>("sessions.files.list", {
+      sessionKey: key,
+      path: options.path ?? "",
+      search: options.search ?? "",
+      ...(options.agentId?.trim() ? { agentId: options.agentId.trim() } : {}),
+    });
 
   const getFile: SessionCapability["getFile"] = (key, path, options = {}) =>
-    requestCurrent((client) => requestSessionFile(client, key, path, options));
+    requestCurrent<SessionWorkspaceGetResult>("sessions.files.get", {
+      sessionKey: key,
+      path,
+      ...(options.agentId?.trim() ? { agentId: options.agentId.trim() } : {}),
+    });
 
   const setFile: SessionCapability["setFile"] = (key, path, content, options) =>
-    requestCurrent((client) => requestSessionFileSet(client, key, path, content, options));
+    requestCurrent<SessionWorkspaceSetResult>("sessions.files.set", {
+      sessionKey: key,
+      path,
+      content,
+      expectedHash: options.expectedHash,
+      ...(options.agentId?.trim() ? { agentId: options.agentId.trim() } : {}),
+    });
 
   const unsubscribeMessages = async (subscription: SessionMessageSubscription): Promise<void> => {
     const runtime = subscriptionRuntime ?? (await loadSubscriptionRuntime());
@@ -156,14 +177,15 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
 
   const requestCommittedMutation = async <T>(
     disconnectedError: string,
-    request: (client: GatewayBrowserClient) => Promise<T>,
+    method: string,
+    params: unknown,
     agentId?: string | null,
   ): Promise<T> => {
     const scope = host.connection.capture();
     if (!scope) {
       throw new Error(disconnectedError);
     }
-    const result = await request(scope.client);
+    const result = await scope.client.request<T>(method, params);
     // The gateway response commits destructive work; refresh is connection-scoped
     // best effort and must never turn that commit into uncertainty or a retry.
     if (host.connection.isCurrent(scope)) {
@@ -173,26 +195,34 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
   };
 
   const rewind: SessionCapability["rewind"] = (key, entryId, options = {}) =>
-    requestCommittedMutation(
+    requestCommittedMutation<SessionsRewindResult>(
       "Session rewind requires an active Gateway connection",
-      (client) => requestSessionRewind(client, key, entryId, options),
+      "sessions.rewind",
+      { ...buildTranscriptMutationParams(key, options.agentId), entryId },
       options.agentId,
     );
 
   const forkAtMessage: SessionCapability["forkAtMessage"] = (key, entryId, options = {}) =>
-    requestCommittedMutation(
+    requestCommittedMutation<SessionsForkResult>(
       "Session fork requires an active Gateway connection",
-      (client) => requestSessionFork(client, key, entryId, options),
+      "sessions.fork",
+      { ...buildTranscriptMutationParams(key, options.agentId), entryId },
       options.agentId,
     );
 
   const listBranches: SessionCapability["listBranches"] = async (key, options = {}) =>
-    (await requestCurrent((client) => requestSessionBranches(client, key, options))) ?? [];
+    (
+      await requestCurrent<SessionsBranchesListResult>(
+        "sessions.branches.list",
+        buildTranscriptMutationParams(key, options.agentId),
+      )
+    )?.branches ?? [];
 
   const switchBranch: SessionCapability["switchBranch"] = (key, leafEntryId, options = {}) =>
-    requestCommittedMutation(
+    requestCommittedMutation<SessionsBranchesSwitchResult>(
       "Session branch switch requires an active Gateway connection",
-      (client) => requestSessionBranchSwitch(client, key, leafEntryId, options),
+      "sessions.branches.switch",
+      { ...buildTranscriptMutationParams(key, options.agentId), leafEntryId },
       options.agentId,
     );
 

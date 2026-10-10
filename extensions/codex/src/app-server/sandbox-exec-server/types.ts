@@ -20,7 +20,6 @@ export type CodexSandboxExecMessageTransport = {
 /** Notification delivery and lifetime owned by one execution session. */
 export type CodexSandboxExecSessionNotifications = {
   send: (method: string, params: JsonObject) => void;
-  isOpen: () => boolean;
   signal: AbortSignal;
 };
 
@@ -48,7 +47,7 @@ export type ResolvedFsSandboxEntry =
   | {
       kind: "glob";
       pattern: string;
-      matcher: RegExp;
+      matcher: (target: string) => boolean;
       literalPrefix: string;
       access: FsAccessMode;
     };

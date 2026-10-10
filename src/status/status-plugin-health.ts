@@ -1,4 +1,3 @@
-// Builds compact plugin health summaries for chat status surfaces.
 import type { PluginDiagnostic } from "../plugins/manifest-types.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 
@@ -58,23 +57,12 @@ export type StatusPluginHealthSnapshot = {
   runtimeToolQuarantines?: RuntimeToolQuarantineRecord[];
   compatibilityNotices?: PluginCompatibilityHealthNotice[];
   channelPluginFailures?: ChannelPluginFailureRecord[];
-  // Plugin ids confirmed loaded in the active runtime registry (status "loaded").
-  // Lets detailed status separate runtime-loaded plugins from installed/discovered
-  // inventory (the disk scan marks config-enabled plugins "loaded" before runtime
-  // load). Absent on hand-built/compact snapshots, where detailed rendering falls
-  // back to the merged status filter.
+  // Runtime-confirmed ids; disk discovery also labels enabled plugins "loaded".
+  // Absent snapshots fall back to the merged status filter.
   runtimeLoadedPluginIds?: string[];
-  // Eager should-run plugin ids from the gateway startup plan (deferred channel
-  // plugins already excluded). Paired with runtimeLoadedPluginIds, it lets detailed
-  // status flag desired-vs-observed drift: a plugin the gateway planned to start that
-  // is not in the runtime-loaded set. Absent on compact/hand-built snapshots, where
-  // no drift line is rendered (back-compat).
+  // Eager startup-plan ids, excluding deferred channels. Drift needs both sets.
   shouldRunPluginIds?: string[];
-  // Configured memory embedding providers (memorySearch provider/fallback) that no
-  // loaded plugin registers, so semantic memory recall silently falls back to
-  // keyword/FTS-only. Detailed-status only; absent on compact/hand-built snapshots and
-  // whenever the live runtime registry is unavailable, so no line renders (back-compat).
-  // `source` mirrors MemoryEmbeddingStartupProviderSource ("provider" | "fallback").
+  // Configured embedding providers absent from a live registry imply FTS-only recall.
   unregisteredMemoryEmbeddingProviders?: Array<{
     configuredId: string;
     source: "provider" | "fallback";
@@ -96,14 +84,6 @@ export function dedupeChannelPluginFailures(
 ): ChannelPluginFailureRecord[] {
   return dedupeByKey(failures, (entry) =>
     JSON.stringify([entry.channelId, entry.pluginId ?? "", entry.message]),
-  );
-}
-
-function dedupeCompatibilityNotices(
-  notices: readonly PluginCompatibilityHealthNotice[],
-): PluginCompatibilityHealthNotice[] {
-  return dedupeByKey(notices, (entry) =>
-    JSON.stringify([entry.pluginId, entry.severity, entry.code ?? "", entry.message]),
   );
 }
 
@@ -150,10 +130,10 @@ export function mergeStatusPluginHealthSnapshots(
       ...(installed.channelPluginFailures ?? []),
       ...(runtime.channelPluginFailures ?? []),
     ]),
-    compatibilityNotices: dedupeCompatibilityNotices([
-      ...(installed.compatibilityNotices ?? []),
-      ...(runtime.compatibilityNotices ?? []),
-    ]),
+    compatibilityNotices: dedupeByKey(
+      [...(installed.compatibilityNotices ?? []), ...(runtime.compatibilityNotices ?? [])],
+      (entry) => JSON.stringify([entry.pluginId, entry.severity, entry.code ?? "", entry.message]),
+    ),
     // Runtime-loaded provenance is a runtime-side fact; the installed disk scan
     // cannot confirm it, so it never contributes here.
     runtimeLoadedPluginIds: runtime.runtimeLoadedPluginIds,
@@ -168,28 +148,20 @@ function hasDependencyIssue(plugin: PluginHealthRecord): boolean {
   );
 }
 
-function shouldSuppressChannelPluginDiagnostic(
-  diagnostic: PluginDiagnosticRecord,
-  channelPluginFailures: readonly ChannelPluginFailureRecord[],
-): boolean {
-  if (!isChannelPluginFailureDiagnostic(diagnostic)) {
-    return false;
-  }
-  // Only suppress when the failure is actually reported in the channel
-  // section; otherwise the diagnostic must still count as a problem.
-  return channelPluginFailures.some(
-    (failure) =>
-      failure.message === diagnostic.message &&
-      (failure.pluginId == null ||
-        diagnostic.pluginId == null ||
-        failure.pluginId === diagnostic.pluginId),
-  );
-}
-
 function getReportableDiagnostics(snapshot: StatusPluginHealthSnapshot): PluginDiagnosticRecord[] {
   const channelPluginFailures = snapshot.channelPluginFailures ?? [];
+  // Only suppress when the failure is actually reported in the channel
+  // section; otherwise the diagnostic must still count as a problem.
   return snapshot.diagnostics.filter(
-    (entry) => !shouldSuppressChannelPluginDiagnostic(entry, channelPluginFailures),
+    (diagnostic) =>
+      !isChannelPluginFailureDiagnostic(diagnostic) ||
+      !channelPluginFailures.some(
+        (failure) =>
+          failure.message === diagnostic.message &&
+          (failure.pluginId == null ||
+            diagnostic.pluginId == null ||
+            failure.pluginId === diagnostic.pluginId),
+      ),
   );
 }
 
@@ -207,30 +179,20 @@ export function isChannelPluginFailureDiagnostic(diagnostic: PluginDiagnosticRec
   return diagnostic.level === "error" && diagnostic.code === "channel-setup-failure";
 }
 
-function formatCount(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
-}
-
 export function formatCompactPluginHealthLine(
   snapshot: StatusPluginHealthSnapshot,
 ): string | undefined {
-  const loadErrors = snapshot.plugins.filter((plugin) => plugin.status === "error").length;
-  const dependencyIssues = snapshot.plugins.filter(hasDependencyIssue).length;
-  const diagnosticErrors = countProblemDiagnostics(getReportableDiagnostics(snapshot)).errors;
-  const quarantines = snapshot.contextEngineQuarantines.length;
-  const runtimeToolQuarantines = snapshot.runtimeToolQuarantines?.length ?? 0;
-  const channelPluginFailures = snapshot.channelPluginFailures?.length ?? 0;
-
-  const parts = [
-    loadErrors > 0 ? formatCount(loadErrors, "plugin error") : null,
-    quarantines > 0 ? formatCount(quarantines, "context engine quarantine") : null,
-    runtimeToolQuarantines > 0
-      ? formatCount(runtimeToolQuarantines, "runtime tool quarantine")
-      : null,
-    channelPluginFailures > 0 ? formatCount(channelPluginFailures, "channel plugin failure") : null,
-    dependencyIssues > 0 ? formatCount(dependencyIssues, "dependency issue") : null,
-    diagnosticErrors > 0 ? formatCount(diagnosticErrors, "diagnostic error") : null,
-  ].filter((part): part is string => Boolean(part));
+  const counts: Array<[number, string]> = [
+    [snapshot.plugins.filter((plugin) => plugin.status === "error").length, "plugin error"],
+    [snapshot.contextEngineQuarantines.length, "context engine quarantine"],
+    [snapshot.runtimeToolQuarantines?.length ?? 0, "runtime tool quarantine"],
+    [snapshot.channelPluginFailures?.length ?? 0, "channel plugin failure"],
+    [snapshot.plugins.filter(hasDependencyIssue).length, "dependency issue"],
+    [countProblemDiagnostics(getReportableDiagnostics(snapshot)).errors, "diagnostic error"],
+  ];
+  const parts = counts
+    .filter(([count]) => count > 0)
+    .map(([count, noun]) => `${count} ${noun}${count === 1 ? "" : "s"}`);
 
   return parts.length === 0 ? undefined : `⚠️ Plugins: ${parts.join(" · ")}`;
 }
@@ -249,18 +211,11 @@ function byLocale(left: string, right: string): number {
 
 export function formatDetailedPluginHealth(snapshot: StatusPluginHealthSnapshot): string {
   const statusLoaded = snapshot.plugins.filter((plugin) => plugin.status === "loaded");
-  // "Loaded" must mean runtime-confirmed loaded. When the snapshot carries runtime
-  // provenance, render that authoritative root-registry id set directly;
-  // installed-but-not-active is then the status-loaded records the runtime did
-  // not load. Fall back to the raw status when provenance is absent.
+  // Runtime provenance overrides disk discovery's optimistic "loaded" status.
   const runtimeLoadedIds = snapshot.runtimeLoadedPluginIds;
   const runtimeLoaded = runtimeLoadedIds ? new Set(runtimeLoadedIds) : undefined;
   const loaded = (runtimeLoadedIds ?? statusLoaded.map((plugin) => plugin.id)).toSorted(byLocale);
-  // Desired-vs-observed drift: ids the gateway's eager startup plan says should run
-  // but that are absent from the runtime-loaded set and not already explained by an
-  // error/disabled record (those surface in their own sections). Computed only when
-  // both the should-run set and runtime provenance are present, so compact/hand-built
-  // snapshots render exactly as before.
+  // Do not report startup drift already explained by error/disabled sections.
   const explainedPluginIds = new Set(
     snapshot.plugins
       .filter((plugin) => plugin.status === "error" || plugin.status === "disabled")
@@ -329,10 +284,7 @@ export function formatDetailedPluginHealth(snapshot: StatusPluginHealthSnapshot)
   }
 
   if (disabledPlugins.length > 0) {
-    // Disable decisions record their reason on `error` (config off, allow/denylist,
-    // overridden-by/memory-slot arbitration). Group ids per distinct reason so the
-    // detailed view answers "why is this plugin off" without a /plugins round-trip,
-    // and a restrictive allowlist folds into one bounded line instead of dozens.
+    // Disabled records store their reason on `error`; group ids to bound repeated reasons.
     const disabledByReason = new Map<string, string[]>();
     for (const plugin of disabledPlugins) {
       const reason = plugin.error ?? "disabled";
@@ -359,28 +311,21 @@ export function formatDetailedPluginHealth(snapshot: StatusPluginHealthSnapshot)
   }
 
   if (installedNotActive.length > 0) {
-    // Installed/discovered plugins not loaded in the runtime registry. Neutral
-    // inventory, not an error: the gateway only starts the plugins its startup
-    // plan requires, so configured-but-not-started is a normal steady state.
+    // Configured-but-not-started plugins can be normal; keep this inventory neutral.
     lines.push(
       `Installed (not active): ${installedNotActive.length} (${formatPluginList(installedNotActive, 8)})`,
     );
   }
 
   if (shouldRunNotLoaded.length > 0) {
-    // Planned for eager startup but missing from the live runtime-loaded set (e.g.,
-    // config changed since the gateway started, or a planned plugin did not come up).
-    // Observer-only signal, distinct from neutral inventory; not an error chip and
-    // not counted in the compact line.
+    // Startup drift is diagnostic only and does not affect the compact error count.
     lines.push(
       `Configured to run but not loaded: ${shouldRunNotLoaded.length} (${formatPluginList(shouldRunNotLoaded, 8)})`,
     );
   }
 
   if (unregisteredMemoryProviders.length > 0) {
-    // A configured memory embedding provider that no loaded plugin registers: semantic
-    // memory recall silently falls back to keyword/FTS-only. Observer-only signal, distinct
-    // from plugin load/error state and not counted in the compact line.
+    // Missing embeddings do not affect the compact plugin error count.
     const display = unregisteredMemoryProviders.map(
       (entry) => `${entry.configuredId} (memorySearch.${entry.source})`,
     );

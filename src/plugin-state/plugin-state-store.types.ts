@@ -1,7 +1,15 @@
-import { threadId } from "node:worker_threads";
 import type { Result } from "@openclaw/normalization-core/result";
-import { VERSION } from "../version.js";
-import { capturePluginStateErrorCause } from "./plugin-state-error-cause.js";
+import type {
+  SessionEntryCurrentCheck,
+  SessionEntriesCurrentCheck,
+} from "../config/sessions/session-entry-current.types.js";
+import type { PluginStateStoreError } from "./plugin-state-error.js";
+
+export {
+  PluginStateStoreError,
+  type PluginStateStoreErrorCode,
+  type PluginStateStoreOperation,
+} from "./plugin-state-error.js";
 
 // Public plugin-state store contracts. Stores are keyed by plugin id and
 // namespace, persist JSON-compatible values, and enforce per-namespace limits.
@@ -27,6 +35,44 @@ export type PluginStateCompareResult<T> =
   | { status: "applied" | "unchanged" }
   | { status: "conflict"; current: PluginStateObservation<T> };
 
+export type PluginStateOperationDefinitions = Record<string, { input: unknown; output: unknown }>;
+
+export type PluginStateOperationCommand<Operations extends PluginStateOperationDefinitions> = {
+  [Type in keyof Operations & string]: { type: Type; input: Operations[Type]["input"] };
+}[keyof Operations & string];
+
+/** The worker owns this synchronous view for one invocation and invalidates it on return. */
+export type PluginStateOperationTransaction = {
+  lookup(store: number, key: string): unknown;
+  lookupMany<T = unknown>(keys: readonly { store: number; key: string }[]): Array<T | undefined>;
+  entries<T = unknown>(store: number): PluginStateEntry<T>[];
+  set(store: number, key: string, value: unknown, options?: { ttlMs?: number }): void;
+  delete(store: number, key: string): boolean;
+};
+
+export type PluginStateOperationHandler<Operations extends PluginStateOperationDefinitions> = (
+  command: PluginStateOperationCommand<Operations>,
+  transaction: PluginStateOperationTransaction,
+) => Operations[keyof Operations]["output"];
+
+export type PluginStateOperationReceipt<T> = {
+  value: T;
+  /** Refuses after watched state, the captured source, or live authority changes. */
+  assertCurrent: () => void;
+};
+
+export type PluginStateOperation<Operations extends PluginStateOperationDefinitions> = {
+  execute<Type extends keyof Operations & string>(
+    command: { type: Type; input: Operations[Type]["input"] },
+    options: {
+      writeStores: readonly number[];
+      watchStores?: readonly number[];
+      /** Explicit noncreating result when a read-only source does not exist. */
+      missingValue?: Operations[Type]["output"];
+    },
+  ): Promise<PluginStateOperationReceipt<Operations[Type]["output"]>>;
+};
+
 export type PluginStateKeyRange = {
   keyStartInclusive: string;
   keyEndExclusive: string;
@@ -41,6 +87,12 @@ export type PluginStateMoveEntries = {
 };
 
 type PluginStateKeyedStoreBase<T> = {
+  /** Loads a plugin-owned static handler into the existing state worker. */
+  createOperation?: <Operations extends PluginStateOperationDefinitions>(
+    stores: readonly Pick<PluginStateKeyedStore<unknown>, "lookup" | "entries">[],
+    handler: { moduleName: string; exportName: string },
+    authority?: { assertCurrent(): void; sourceReceipt?: PluginStateOperationReceipt<unknown> },
+  ) => PluginStateOperation<Operations>;
   /** Prepares a mutation observation through canonical writable admission; may create state. */
   observe?: (key: string) => Promise<PluginStateObservation<T>>;
   /** Compares the observed row before applying prepared data; only explicit conflicts may retry. */
@@ -79,7 +131,10 @@ type PluginStateKeyedStoreBase<T> = {
     keys: readonly string[],
   ) => Promise<Array<Result<T | undefined, PluginStateStoreError>>>;
   consume(key: string): Promise<T | undefined>;
-  delete(key: string, opts?: { assertCurrent?: () => void }): Promise<boolean>;
+  delete(
+    key: string,
+    opts?: { assertCurrent?: () => void; signal?: AbortSignal },
+  ): Promise<boolean>;
   entries(): Promise<PluginStateEntry<T>[]>;
   /** Reads a lexical key range with ordering and limit applied by storage. */
   entriesInKeyRange?: (range: PluginStateKeyRange) => Promise<PluginStateEntry<T>[]>;
@@ -95,10 +150,15 @@ type PluginStateKeyedStoreBase<T> = {
 
 /** Version 2 is an action-bound, data-only view; legacy stores remain source-compatible. */
 export type PluginStateKeyedStore<T, Version extends 1 | 2 = 1> = Version extends 2
-  ? Required<Omit<PluginStateKeyedStoreBase<T>, "update" | "deleteIf">>
+  ? Required<Omit<PluginStateKeyedStoreBase<T>, "update" | "deleteIf" | "createOperation">> &
+      Pick<PluginStateKeyedStoreBase<T>, "createOperation">
   : PluginStateKeyedStoreBase<T> & {
       /** Bind current action authority through read completion and final write admission. */
-      withCurrent?: (authority: { assertCurrent: () => void }) => PluginStateKeyedStore<T, 2>;
+      withCurrent?: (authority: {
+        assertCurrent: () => void;
+        /** Restricts native writes and comparisons; ordinary reads use assertCurrent. */
+        sessionEntryCurrent?: SessionEntryCurrentCheck | SessionEntriesCurrentCheck;
+      }) => PluginStateKeyedStore<T, 2>;
     };
 
 /**
@@ -152,66 +212,3 @@ export type OpenRetainedKeyedStoreOptions = {
 };
 
 export type OpenAsyncKeyedStoreOptions = OpenKeyedStoreOptions | OpenRetainedKeyedStoreOptions;
-
-export type PluginStateStoreErrorCode =
-  | "PLUGIN_STATE_SQLITE_UNAVAILABLE"
-  | "PLUGIN_STATE_OPEN_FAILED"
-  | "PLUGIN_STATE_WRITE_FAILED"
-  | "PLUGIN_STATE_READ_FAILED"
-  | "PLUGIN_STATE_CORRUPT"
-  | "PLUGIN_STATE_LIMIT_EXCEEDED"
-  | "PLUGIN_STATE_INVALID_INPUT";
-
-export type PluginStateStoreOperation =
-  | "load-sqlite"
-  | "open"
-  | "ensure-schema"
-  | "register"
-  | "lookup"
-  | "consume"
-  | "delete"
-  | "entries"
-  | "count"
-  | "clear"
-  | "sweep"
-  | "probe"
-  | "close";
-
-type PluginStateStoreErrorOptions = {
-  code: PluginStateStoreErrorCode;
-  operation: PluginStateStoreOperation;
-  path?: string;
-  cause?: unknown;
-  owner?: { pid: number; threadId: number; version: string };
-};
-
-/** Typed error thrown for plugin-state validation and sqlite failures. */
-export class PluginStateStoreError extends Error {
-  readonly code: PluginStateStoreErrorCode;
-  readonly operation: PluginStateStoreOperation;
-  readonly path?: string;
-  readonly owner: { pid: number; threadId: number; version: string };
-
-  constructor(message: string, options: PluginStateStoreErrorOptions) {
-    super(message, { cause: options.cause });
-    this.name = "PluginStateStoreError";
-    this.code = options.code;
-    this.operation = options.operation;
-    this.owner = options.owner ?? { pid: process.pid, threadId, version: VERSION };
-    if (options.path) {
-      this.path = options.path;
-    }
-  }
-
-  toJSON(): Record<string, unknown> {
-    return {
-      name: this.name,
-      message: this.message,
-      code: this.code,
-      operation: this.operation,
-      path: this.path,
-      owner: this.owner,
-      cause: capturePluginStateErrorCause(this.cause),
-    };
-  }
-}

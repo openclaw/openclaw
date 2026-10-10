@@ -1,119 +1,28 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { LoadedLaunchAgentState } from "../../src/daemon/launchd-runtime.ts";
 import type { ManagedGatewayBinding } from "../../src/daemon/managed-gateway-bindings.ts";
-import type { GatewayServiceEnv, GatewayServiceState } from "../../src/daemon/service-types.ts";
+import type { GatewayServiceState } from "../../src/daemon/service-types.ts";
 import { hasErrnoCode } from "../../src/infra/errno.ts";
-import { isPidAlive } from "../../src/shared/pid-alive.ts";
+import { hasCommandProcessCleanupError } from "../../src/process/exec-result.ts";
 
 type LiveGatewayDistFenceResult = { refuse: true; message: string } | { refuse: false };
-
-/** True when the managed service still holds a live process on this checkout's build artifacts. */
-function isLiveManagedGatewayHoldingDist(state: GatewayServiceState): boolean {
-  if (state.running) {
-    return true;
-  }
-  if ((state.runtime?.systemd?.tasksCurrent ?? 0) > 0) {
-    return true;
-  }
-  const pid = state.runtime?.pid;
-  if (typeof pid === "number" && Number.isSafeInteger(pid) && pid > 1 && isPidAlive(pid)) {
-    return true;
-  }
-  const serviceState = state.runtime?.state?.toLowerCase() ?? "";
-  const subState = state.runtime?.subState?.toLowerCase() ?? "";
-  // systemd stop/restart drains keep MainPID alive under deactivating states.
-  return (
-    serviceState === "deactivating" ||
-    subState === "stop-sigterm" ||
-    subState === "stop-sigkill" ||
-    subState === "final-sigterm"
-  );
-}
-
-function normalizeFenceProfile(value: string | undefined): string {
-  const trimmed = value?.trim();
-  if (!trimmed || trimmed.toLowerCase() === "default") {
-    return "default";
-  }
-  return trimmed;
-}
-
-function bindingFromProcessEnv(env: NodeJS.ProcessEnv): ManagedGatewayBinding {
-  return {
-    profile: normalizeFenceProfile(env.OPENCLAW_PROFILE),
-    env: env as GatewayServiceEnv,
-  };
-}
-
-function bindingSelectorKey(binding: ManagedGatewayBinding): string {
-  return [
-    binding.profile,
-    binding.scope ?? binding.systemdReadTarget?.scope ?? "",
-    binding.systemdReadTarget?.unitPath ?? "",
-    binding.windowsStartupEntry
-      ? path.win32.normalize(binding.windowsStartupEntry).toLowerCase()
-      : "",
-    binding.env.OPENCLAW_SYSTEMD_UNIT ?? "",
-    binding.env.OPENCLAW_LAUNCHD_LABEL ?? "",
-    binding.env.OPENCLAW_WINDOWS_TASK_NAME ?? "",
-  ].join("\0");
-}
-
-function dedupeBindings(bindings: readonly ManagedGatewayBinding[]): ManagedGatewayBinding[] {
-  const seen = new Set<string>();
-  const out: ManagedGatewayBinding[] = [];
-  for (const binding of bindings) {
-    const key = bindingSelectorKey(binding);
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    out.push(binding);
-  }
-  return out;
-}
-
-function formatServiceHint(profile: string, action: "stop" | "start"): string {
-  return profile === "default"
-    ? `\`openclaw gateway ${action}\``
-    : `\`openclaw gateway ${action} --profile ${profile}\``;
-}
-
 function formatRefuseMessage(params: {
-  profiles: readonly string[];
+  owners: readonly string[];
+  showUpdateHint: boolean;
   entrypoint?: string;
   unit?: string;
-  serviceProfiles: readonly string[];
-  startupEntries: readonly string[];
 }): string {
-  const profiles = [...new Set(params.profiles)].toSorted((left, right) =>
-    (left ?? "").localeCompare(right ?? ""),
-  );
-  const profileText =
-    profiles.length === 1 ? ` (profile ${profiles[0]})` : ` (profiles ${profiles.join(", ")})`;
+  const owners = [...new Set(params.owners)].join(", ");
   const entry = params.entrypoint ? ` (${params.entrypoint})` : "";
   const unit = params.unit ? ` unit ${params.unit}` : "";
-  const stopHints = [
-    ...new Set(params.serviceProfiles.map((profile) => formatServiceHint(profile, "stop"))),
-    ...new Set(
-      params.startupEntries.map(
-        (startupPath) =>
-          `stop the process launched by Startup entry ${JSON.stringify(startupPath)}`,
-      ),
-    ),
-  ].join(", ");
-  const startHints = params.serviceProfiles
-    .map((profile) => formatServiceHint(profile, "start"))
-    .join(", ");
-  const recovery =
-    params.startupEntries.length > 0
-      ? `From an external terminal, stop every listed Gateway (${stopHints}), run \`pnpm build\` in this checkout, then after a successful build start the same Startup entries and any listed services.`
-      : `From an external terminal, stop every listed Gateway (${stopHints} or the matching service stops), ` +
-        `run \`pnpm build\` in this checkout, then after a successful build start those services (${startHints} or the matching service starts). ` +
-        `\`openclaw update\` can apply an available update; an already-current result does not rebuild stale dist.`;
   return (
-    `[openclaw] Refusing to rebuild artifacts while a managed Gateway${profileText}${unit} is still using overlapping build outputs${entry}. ` +
-    recovery
+    `[openclaw] Refusing to rebuild artifacts while a managed Gateway (${owners}) is still using overlapping build outputs${unit}${entry}. ` +
+    "From an external terminal, stop every listed Gateway through its original native service or Startup owner, " +
+    "run `pnpm build` in this checkout, then after a successful build start those same services." +
+    (params.showUpdateHint
+      ? " `openclaw update` can apply an available update; an already-current result does not rebuild stale dist."
+      : "")
   );
 }
 
@@ -142,19 +51,19 @@ async function tryRealpath(value: string): Promise<string> {
 
 async function loadFenceRuntime() {
   try {
-    const [layout, service, pathGuards, windowsInspection] = await Promise.all([
+    const [layout, bindings, pathGuards, serviceRuntime] = await Promise.all([
       import("../../src/daemon/service-layout.ts"),
-      import("../../src/daemon/service.ts"),
+      import("../../src/daemon/managed-gateway-bindings.ts"),
       import("../../src/infra/path-guards.ts"),
-      import("../../src/infra/windows-powershell-spawn.ts"),
+      import("../../src/daemon/service-runtime.ts"),
     ]);
     return {
       summarizeGatewayServiceLayout: layout.summarizeGatewayServiceLayout,
       resolveServiceEntrypoint: layout.resolveServiceEntrypoint,
-      readGatewayServiceState: service.readGatewayServiceState,
-      resolveGatewayService: service.resolveGatewayService,
+      readManagedGatewayBindingState: bindings.readManagedGatewayBindingState,
+      describeManagedGatewayBinding: bindings.describeManagedGatewayBinding,
       isPathInside: pathGuards.isPathInside,
-      windowsInspectionTimeoutMs: windowsInspection.WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS,
+      isGatewayServiceStateLive: serviceRuntime.isGatewayServiceStateLive,
     };
   } catch {
     return null;
@@ -255,11 +164,15 @@ async function resolveFenceBindings(
   requireComplete?: boolean,
 ): Promise<readonly ManagedGatewayBinding[] | null> {
   try {
-    const current = bindingFromProcessEnv(env);
     const inspect = await import("../../src/daemon/managed-gateway-bindings.ts");
-    const discovered = await inspect.discoverManagedGatewayBindings(env, { requireComplete });
-    return dedupeBindings([current, ...discovered]);
-  } catch {
+    return await inspect.discoverManagedGatewayBindings(env, {
+      requireComplete,
+      includeInvoking: true,
+    });
+  } catch (error) {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
     return null;
   }
 }
@@ -289,9 +202,9 @@ export async function resolveLiveManagedGatewayDistFence(
 
   const root = path.resolve(checkoutRoot);
   const holds: Array<{
-    profile: string;
-    state: GatewayServiceState;
-    windowsStartupEntry?: string;
+    owner: string;
+    binding: ManagedGatewayBinding;
+    state: LoadedLaunchAgentState;
   }> = [];
   let unverified = false;
   for (const binding of bindings) {
@@ -309,7 +222,12 @@ export async function resolveLiveManagedGatewayDistFence(
         const location = await readSystemdServiceCommandLocation(
           binding.env,
           binding.systemdReadTarget,
-        ).catch(() => undefined);
+        ).catch((error: unknown) => {
+          if (hasCommandProcessCleanupError(error)) {
+            throw error;
+          }
+          return undefined;
+        });
         if (
           location?.kind === "not-loaded" ||
           (location?.kind === "command" &&
@@ -323,18 +241,7 @@ export async function resolveLiveManagedGatewayDistFence(
         }
       }
       // A discovered sibling keeps its own selectors, rather than ambient profile overrides.
-      const state = await runtime.readGatewayServiceState(runtime.resolveGatewayService(), {
-        env: binding.env,
-        requireEffective: true,
-        requireLoadedCommand: true,
-        ...(binding.systemdReadTarget ? { systemdReadTarget: binding.systemdReadTarget } : {}),
-        ...(binding.windowsStartupEntry !== undefined
-          ? {
-              windowsStartupEntry: binding.windowsStartupEntry,
-              timeoutMs: runtime.windowsInspectionTimeoutMs,
-            }
-          : {}),
-      });
+      const state = await runtime.readManagedGatewayBindingState(binding);
       const matches = await gatewayServiceCommandOverlapsPhysicalCheckout(
         root,
         state.command,
@@ -344,26 +251,31 @@ export async function resolveLiveManagedGatewayDistFence(
         continue;
       }
       if (matches === null) {
+        // Native readers can prove absence without setting the optional missingUnit hint.
         unverified ||= Boolean(
           state.command ||
           state.installed ||
           state.loadState.status !== "not-loaded" ||
-          state.runtime?.missingUnit !== true,
+          state.runtime?.status !== "stopped" ||
+          runtime.isGatewayServiceStateLive(state),
         );
         continue;
       }
-      if (!isLiveManagedGatewayHoldingDist(state)) {
+      // Scheduler occupancy can hold old argv or a pending launch without proving
+      // the current command is running. It fences overlapping outputs, not service control.
+      const occupiedWindowsTask =
+        process.platform === "win32" &&
+        !binding.windowsStartupEntry &&
+        (state.runtime?.state === "Running" || state.runtime?.state === "Queued");
+      if (!runtime.isGatewayServiceStateLive(state) && !occupiedWindowsTask) {
         unverified ||= state.runtime?.status !== "stopped" || state.loadState.status === "unknown";
         continue;
       }
-      holds.push({
-        profile: normalizeFenceProfile(binding.profile),
-        state,
-        ...(binding.windowsStartupEntry !== undefined
-          ? { windowsStartupEntry: binding.windowsStartupEntry }
-          : {}),
-      });
-    } catch {
+      holds.push({ owner: runtime.describeManagedGatewayBinding(binding, state), binding, state });
+    } catch (error) {
+      if (hasCommandProcessCleanupError(error)) {
+        throw error;
+      }
       unverified = true;
     }
   }
@@ -386,12 +298,9 @@ export async function resolveLiveManagedGatewayDistFence(
   return {
     refuse: true,
     message: formatRefuseMessage({
-      profiles: holds.map((hold) => hold.profile),
-      serviceProfiles: holds
-        .filter((hold) => hold.windowsStartupEntry === undefined)
-        .map((hold) => hold.profile),
-      startupEntries: holds.flatMap((hold) =>
-        hold.windowsStartupEntry === undefined ? [] : [hold.windowsStartupEntry],
+      owners: holds.map((hold) => hold.owner),
+      showUpdateHint: !holds.some(
+        (hold) => hold.binding.windowsStartupEntry || hold.state.launchAgent,
       ),
       ...(entrypoint ? { entrypoint } : {}),
       ...(unit ? { unit } : {}),

@@ -1,4 +1,4 @@
-// Shared execution helpers keep the public dispatcher small and reviewable.
+import { isDeepStrictEqual } from "node:util";
 import { getAtPath, parseConfigSetPath } from "../cli/config-cli-path.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
@@ -10,12 +10,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { appendSystemAgentAuditEntry } from "./audit.js";
-import {
-  projectDefaultInferenceRoute,
-  projectInferenceRoute,
-  sameDefaultInferenceRoute,
-  type DefaultInferenceRouteProjection,
-} from "./inference-route.js";
+import { projectInferenceRoute, type DefaultInferenceRouteProjection } from "./inference-route.js";
 import type {
   SystemAgentCommandDeps,
   SystemAgentOperation,
@@ -38,12 +33,8 @@ export function readConfigValueAtPath(
       return { found: false };
     }
     // Reads allow array properties and indices beyond the CLI writer's sparse-write limit.
-    const index = /^\d+$/.test(part) ? Number(part) : undefined;
-    if (index !== undefined && Array.isArray(current)) {
-      current = current[index];
-    } else {
-      current = (current as Record<string, unknown>)[part];
-    }
+    const key = Array.isArray(current) && /^\d+$/.test(part) ? Number(part) : part;
+    current = (current as Record<string | number, unknown>)[key];
     if (current === undefined) {
       return { found: false };
     }
@@ -427,7 +418,7 @@ async function verifyCurrentSetupInference(
     );
   }
   const beforeConfig = before.runtimeConfig ?? before.config;
-  const beforeRoute = await projectDefaultInferenceRoute(beforeConfig);
+  const beforeRoute = await projectInferenceRoute(beforeConfig);
   if (!beforeRoute.route) {
     throw new Error(
       "OpenClaw setup requires working inference first. Run `openclaw onboard` on the machine running OpenClaw, then retry.",
@@ -450,9 +441,9 @@ async function verifyCurrentSetupInference(
     );
   }
   const afterConfig = after.runtimeConfig ?? after.config;
-  const afterRoute = await projectDefaultInferenceRoute(afterConfig);
+  const afterRoute = await projectInferenceRoute(afterConfig);
   if (
-    !sameDefaultInferenceRoute(beforeRoute, afterRoute) ||
+    !isDeepStrictEqual(beforeRoute, afterRoute) ||
     verification.modelRef !== afterRoute.route?.modelLabel
   ) {
     throw new Error(
@@ -572,19 +563,18 @@ export async function executeSetDefaultModel(
     opts,
     run: async (ctx) => {
       const { mutateConfigFile, readConfigFileSnapshot } = await import("../config/config.js");
-      const { applySystemAgentModelSelection, createSystemAgentModelSelectionUpdater } =
-        await import("./setup-model-selection.js");
+      const { createSystemAgentModelSelectionUpdater } = await import("./setup-model-selection.js");
       const targetAgentId = operation.agentId;
       const snapshot = await readConfigFileSnapshot();
       // Route projection and the live probes below all take the same optional
       // agent scope, so a per-agent selection is verified against that agent's
       // route with the exact rigor the default route gets.
       const projectRoute = (config: OpenClawConfig) => projectInferenceRoute(config, targetAgentId);
-      const stagedConfig = await applySystemAgentModelSelection({
-        config: snapshot.sourceConfig,
+      const selectModel = await createSystemAgentModelSelectionUpdater({
         model: operation.model,
         ...(targetAgentId ? { targetAgentId } : {}),
       });
+      const stagedConfig = selectModel(snapshot.sourceConfig);
       const beforeRoute = await projectRoute(snapshot.sourceConfig);
       const verifiedRoute = await projectRoute(stagedConfig);
       const verifyInferenceConfig =
@@ -610,10 +600,6 @@ export async function executeSetDefaultModel(
       let persistedVerification = initialVerification;
       let persistedBinding: SystemAgentVerifiedInferenceBinding | undefined;
       let selectedRouteForCommit = verifiedRoute;
-      const selectModel = await createSystemAgentModelSelectionUpdater({
-        model: operation.model,
-        ...(targetAgentId ? { targetAgentId } : {}),
-      });
       const result = await mutateConfigFile({
         base: "source",
         writeOptions: {
@@ -623,7 +609,7 @@ export async function executeSetDefaultModel(
             : {}),
           preCommitRuntimePreflight: async (sourceConfig) => {
             const commitRoute = await projectRoute(sourceConfig);
-            if (!sameDefaultInferenceRoute(commitRoute, selectedRouteForCommit)) {
+            if (!isDeepStrictEqual(commitRoute, selectedRouteForCommit)) {
               throw new Error(
                 "The selected inference route changed while preparing the config write, so the requested model was not saved. Review the current model/auth/runtime settings and retry.",
               );
@@ -669,7 +655,7 @@ export async function executeSetDefaultModel(
           // Verification may take time. Preserve unrelated edits, but never
           // combine the passing result with a concurrently changed route.
           const currentRoute = await projectRoute(cfg);
-          if (!sameDefaultInferenceRoute(currentRoute, beforeRoute)) {
+          if (!isDeepStrictEqual(currentRoute, beforeRoute)) {
             throw new Error(
               "The default-agent inference route changed during verification, so the requested model was not saved. Review the current model/auth/runtime settings and retry.",
             );
@@ -727,7 +713,7 @@ export async function isPluginBackingDefaultInferenceRoute(pluginId: string): Pr
     return true;
   }
   const config = snapshot.runtimeConfig ?? snapshot.config;
-  const route = (await projectDefaultInferenceRoute(config ?? {})).route;
+  const route = (await projectInferenceRoute(config ?? {})).route;
   if (!route) {
     return false;
   }

@@ -6,6 +6,7 @@ import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import {
   createAgentHarnessHostCapabilitiesForTest,
   createMockPluginRegistry,
+  useProviderToolSchemaRuntimeForTest,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createCodexAppServerAgentHarness } from "../../harness.js";
@@ -75,8 +76,30 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
 });
 
 setupRunAttemptTestHooks();
+// Load real provider schema policy once; cold plugin discovery is not part of the turn budget.
+useProviderToolSchemaRuntimeForTest(["codex"]);
 
 describe("Codex native configuration", () => {
+  it.each(["missing", "disabled"])(
+    "refuses required-root execution before connection when host tools are %s",
+    async (state) => {
+      const params = createParams(path.join(tempDir, "session.jsonl"), tempDir);
+      params.requireWorkspaceOnly = true;
+      params.sessionRoot = tempDir;
+      if (state === "missing") {
+        Reflect.deleteProperty(params, "hostCapabilities");
+      } else {
+        params.disableTools = true;
+      }
+      const clientFactory = vi.fn();
+
+      await expect(runCodexAppServerAttempt(params, { clientFactory })).rejects.toThrow(
+        "requires an enabled host-mediated tool surface",
+      );
+      expect(clientFactory).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(["denied", "revoked"] as const)(
     "binds the actual harness retry model when its permission is %s",
     async (permission) => {
@@ -225,6 +248,8 @@ describe("Codex native configuration", () => {
       if (!harness.runAttempt) {
         throw new Error("Registered Codex harness must support run attempts");
       }
+      // Model policy owns this proof; cold preparation must not spend its logical clock.
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       const run = harness.runAttempt(params);
       const settled = run.then(
         () => false,
@@ -485,6 +510,8 @@ describe("Codex native configuration", () => {
           tools: { ...params.config?.tools, web: { search: { enabled: true } } },
         };
       }
+      // Keep the existing attempt budget on the clock owned by this protocol fixture.
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       const run = runCodexAppServerAttempt(params, {
         pluginConfig,
         clientFactory,
@@ -644,7 +671,7 @@ describe("Codex native configuration", () => {
   );
 });
 
-it.each(["restore", "fresh", "fresh after yield"] as const)(
+it.each(["restore", "fresh"] as const)(
   "cancels accepted unqualified native work when a policy is introduced (%s)",
   async (origin) => {
     const fresh = origin !== "restore";

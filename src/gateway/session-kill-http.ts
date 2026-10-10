@@ -1,8 +1,12 @@
 // Gateway HTTP session kill handler.
 // Stops subagent runs through the admin-scoped HTTP control surface.
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { killSubagentRunAdmin } from "../agents/subagents/registry/subagent-control.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
 import {
   sendInvalidRequest,
   sendJson,
@@ -18,27 +22,6 @@ import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "./method-s
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { loadSessionEntry } from "./session-utils.js";
 
-type SessionKeyPathResolution =
-  | { matched: false }
-  | { matched: true; sessionKey: string }
-  | { error: "invalid-session-key"; matched: true };
-
-function resolveSessionKeyFromPath(pathname: string): SessionKeyPathResolution {
-  const match = pathname.match(/^\/sessions\/([^/]+)\/kill$/);
-  if (!match) {
-    return { matched: false };
-  }
-  try {
-    const decoded = decodeURIComponent(match[1] ?? "").trim();
-    if (!decoded) {
-      return { error: "invalid-session-key", matched: true };
-    }
-    return { matched: true, sessionKey: decoded };
-  } catch {
-    return { error: "invalid-session-key", matched: true };
-  }
-}
-
 export async function handleSessionKillHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -46,21 +29,44 @@ export async function handleSessionKillHttpRequest(
 ): Promise<boolean> {
   const cfg = opts.cfg ?? getRuntimeConfig();
   const url = new URL(req.url ?? "/", "http://localhost");
-  const sessionKeyResolution = resolveSessionKeyFromPath(url.pathname);
-  if (!sessionKeyResolution.matched) {
+  const match = url.pathname.match(/^\/sessions\/([^/]+)\/kill$/);
+  if (!match) {
     return false;
   }
-  if ("error" in sessionKeyResolution) {
+  let sessionKey: string;
+  try {
+    sessionKey = decodeURIComponent(match[1] ?? "").trim();
+  } catch {
     sendInvalidRequest(res, "invalid session key");
     return true;
   }
-  const { sessionKey } = sessionKeyResolution;
+  if (!sessionKey) {
+    sendInvalidRequest(res, "invalid session key");
+    return true;
+  }
 
   if (req.method !== "POST") {
     sendMethodNotAllowed(res, "POST");
     return true;
   }
 
+  const capturedKey = normalizeSessionKeyPreservingOpaquePeerIds(sessionKey);
+  let selected: Result<ReturnType<typeof captureIncognitoSessionSource>, unknown>;
+  let assertSourceCurrent = () => {};
+  try {
+    const source = captureIncognitoSessionSource({ sessionKey: capturedKey });
+    if (source && !("kind" in source)) {
+      const claim = source.actor.sessions.captureCurrent(capturedKey);
+      assertSourceCurrent = () => {
+        source.admissionSignal?.throwIfAborted();
+        source.actor.assertReadable();
+        claim.assertCurrent();
+      };
+    }
+    selected = ok(source);
+  } catch (error) {
+    selected = err(error);
+  }
   const requestAuth = await authorizeGatewayHttpRequestOrReply({
     ...opts,
     req,
@@ -91,40 +97,69 @@ export async function handleSessionKillHttpRequest(
     sendInvalidRequest(res, requestedAgent.error.message);
     return true;
   }
-  const { entry, canonicalKey } = loadSessionEntry(sessionKey, {
-    agentId: requestedAgent.agentId,
-  });
-  if (!entry) {
-    sendJson(res, 404, {
-      ok: false,
-      error: {
-        type: "not_found",
-        message: `Session not found: ${sessionKey}`,
+  const kill = async (
+    entry: SessionEntry | undefined,
+    canonicalKey: string,
+    assertCurrent: () => void,
+  ) => {
+    if (!entry) {
+      sendJson(res, 404, {
+        ok: false,
+        error: {
+          type: "not_found",
+          message: `Session not found: ${sessionKey}`,
+        },
+      });
+      return true;
+    }
+
+    const result = await killSubagentRunAdmin(
+      {
+        cfg,
+        sessionKey: canonicalKey,
+        agentId: requestedAgent.agentId,
       },
+      { assertCurrent },
+    );
+
+    assertCurrent();
+    if (result.found && result.error) {
+      sendJson(res, 503, {
+        ok: false,
+        error: { type: "unavailable", message: result.error },
+      });
+      return true;
+    }
+
+    sendJson(res, 200, {
+      ok: true,
+      killed: result.killed,
     });
     return true;
+  };
+  if (!selected.ok) {
+    throw selected.error;
   }
-
-  const result = await killSubagentRunAdmin(
-    {
-      cfg,
-      sessionKey: canonicalKey,
-      agentId: requestedAgent.agentId,
-    },
-    { assertCurrent: requestAuth.assertCurrent },
-  );
-
-  if (result.found && result.error) {
-    sendJson(res, 503, {
-      ok: false,
-      error: { type: "unavailable", message: result.error },
+  const source = selected.value;
+  if (source) {
+    if ("kind" in source) {
+      source.assertCurrent();
+      return kill(undefined, sessionKey, requestAuth.assertCurrent);
+    }
+    const assertCurrent = () => {
+      requestAuth.assertCurrent();
+      assertSourceCurrent();
+    };
+    return source.actor.sessions.withSharedState(async () => {
+      const { entry } = await source.actor.sessions.read(
+        { assertCurrent },
+        { sessionKey: capturedKey },
+        source.admissionSignal,
+      );
+      assertCurrent();
+      return kill(entry, capturedKey, assertCurrent);
     });
-    return true;
   }
-
-  sendJson(res, 200, {
-    ok: true,
-    killed: result.killed,
-  });
-  return true;
+  const { entry, canonicalKey } = loadSessionEntry(sessionKey, { agentId: requestedAgent.agentId });
+  return kill(entry, canonicalKey, requestAuth.assertCurrent);
 }
