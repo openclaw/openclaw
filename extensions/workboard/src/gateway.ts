@@ -144,7 +144,7 @@ export function registerWorkboardGatewayMethods(params: {
       request,
     ) => {
       let assertOwnerCurrent: (() => void) | undefined;
-      if (request.params.expectedOwnerId !== undefined) {
+      if (request.params?.expectedOwnerId !== undefined) {
         try {
           const expectedOwnerId = readStringParam(request.params, "expectedOwnerId", {
             required: true,
@@ -187,7 +187,7 @@ export function registerWorkboardGatewayMethods(params: {
         `${method}.owner`,
         (request) => {
           if (
-            typeof request.params.expectedOwnerId !== "string" ||
+            typeof request.params?.expectedOwnerId !== "string" ||
             !request.params.expectedOwnerId.trim()
           ) {
             request.respond(false, undefined, {
