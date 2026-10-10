@@ -30,14 +30,14 @@ describe("collectTtsApiKeyAssignments", () => {
 
     collectTtsApiKeyAssignments({
       tts,
-      pathPrefix: "messages.tts",
+      pathPrefix: "tts",
       defaults: undefined,
       context,
     });
 
     expect(context.assignments).toHaveLength(1);
     expect(context.assignments[0]).toMatchObject({
-      path: "messages.tts.providers.elevenlabs.apiKey",
+      path: "tts.providers.elevenlabs.apiKey",
       expected: "string",
       ownerKind: "capability",
       ownerId: "tts",
@@ -62,7 +62,7 @@ describe("collectTtsApiKeyAssignments", () => {
 
     collectTtsApiKeyAssignments({
       tts,
-      pathPrefix: "agents.list.0.tts",
+      pathPrefix: "agents.entries.main.tts",
       defaults: undefined,
       context,
       active: false,
@@ -73,7 +73,7 @@ describe("collectTtsApiKeyAssignments", () => {
     expect(context.warnings).toMatchObject([
       {
         code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-        path: "agents.list.0.tts.providers.elevenlabs.apiKey",
+        path: "agents.entries.main.tts.providers.elevenlabs.apiKey",
       },
     ]);
     expect(tts.providers.elevenlabs.apiKey).toEqual(TTS_KEY_REF);

@@ -4,6 +4,10 @@ import type { MxcConfig } from "./config.js";
 import { createMxcSandboxBackendHandle } from "./mxc-backend.js";
 
 function sanitizeRuntimeId(value: string): string {
+  if (/:workspace:[a-f0-9]{32}$/i.test(value.trim())) {
+    const hash = createHash("sha256").update(value).digest("hex").slice(0, 32);
+    return `openclaw-mxc-workspace-${hash}`;
+  }
   const slug = value
     .toLowerCase()
     .replace(/[^a-z0-9_.-]+/g, "-")
@@ -13,7 +17,6 @@ function sanitizeRuntimeId(value: string): string {
   return `openclaw-mxc-${slug || "sandbox"}-${hash}`;
 }
 
-/** Factory function called by OpenClaw when sandbox.backend=mxc. */
 export function createMxcSandboxBackendFactory(config: MxcConfig) {
   return async function createMxcSandboxBackend(
     params: CreateSandboxBackendParams,

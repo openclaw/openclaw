@@ -1,67 +1,24 @@
 // Qa Lab tests cover suite runtime flow plugin behavior.
-import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const createQaScenarioRuntimeApi = vi.hoisted(() => vi.fn());
 const runScenarioFlow = vi.hoisted(() => vi.fn(async (params: { api: unknown }) => params.api));
 const waitForOutboundMessage = vi.hoisted(() => vi.fn());
-const waitForTransportOutboundMessage = vi.hoisted(() => vi.fn());
-const waitForChannelOutboundMessage = vi.hoisted(() => vi.fn());
-const waitForNoOutbound = vi.hoisted(() => vi.fn());
-const waitForNoTransportOutbound = vi.hoisted(() => vi.fn());
-const recentOutboundSummary = vi.hoisted(() => vi.fn());
-const formatConversationTranscript = vi.hoisted(() => vi.fn());
-const readTransportTranscript = vi.hoisted(() => vi.fn());
-const formatTransportTranscript = vi.hoisted(() => vi.fn());
-const fetchJson = vi.hoisted(() => vi.fn());
-const waitForGatewayHealthy = vi.hoisted(() => vi.fn());
-const waitForTransportReady = vi.hoisted(() => vi.fn());
-const waitForQaChannelReady = vi.hoisted(() => vi.fn());
-const patchConfig = vi.hoisted(() => vi.fn());
-const applyConfig = vi.hoisted(() => vi.fn());
-const readConfigSnapshot = vi.hoisted(() => vi.fn());
-const restartGatewayWithConfigPatch = vi.hoisted(() => vi.fn());
-const waitForConfigRestartSettle = vi.hoisted(() => vi.fn());
-const createSession = vi.hoisted(() => vi.fn());
-const readEffectiveTools = vi.hoisted(() => vi.fn());
-const readSkillStatus = vi.hoisted(() => vi.fn());
-const readRawQaSessionStore = vi.hoisted(() => vi.fn());
-const seedQaSessionTranscript = vi.hoisted(() => vi.fn());
-const readSessionTranscriptSummary = vi.hoisted(() => vi.fn());
-const runQaCli = vi.hoisted(() => vi.fn());
-const extractMediaPathFromText = vi.hoisted(() => vi.fn());
-const resolveGeneratedImagePath = vi.hoisted(() => vi.fn());
-const startAgentRun = vi.hoisted(() => vi.fn());
-const waitForAgentRun = vi.hoisted(() => vi.fn());
-const waitForAgentHistoryReply = vi.hoisted(() => vi.fn());
-const listCronJobs = vi.hoisted(() => vi.fn());
-const findManagedDreamingCronJob = vi.hoisted(() => vi.fn());
-const waitForCronRunCompletion = vi.hoisted(() => vi.fn());
-const readDoctorMemoryStatus = vi.hoisted(() => vi.fn());
-const forceMemoryIndex = vi.hoisted(() => vi.fn());
-const findSkill = vi.hoisted(() => vi.fn());
-const writeWorkspaceSkill = vi.hoisted(() => vi.fn());
-const callPluginToolsMcp = vi.hoisted(() => vi.fn());
-const runAgentPrompt = vi.hoisted(() => vi.fn());
-const ensureImageGenerationConfigured = vi.hoisted(() => vi.fn());
-const handleQaAction = vi.hoisted(() => vi.fn());
 const runRuntimeToolFixture = vi.hoisted(() => vi.fn());
-const extractQaToolPayload = vi.hoisted(() => vi.fn());
-const browserRequest = vi.hoisted(() => vi.fn());
-const waitForBrowserReady = vi.hoisted(() => vi.fn());
-const browserOpenTab = vi.hoisted(() => vi.fn());
-const browserSnapshot = vi.hoisted(() => vi.fn());
-const browserAct = vi.hoisted(() => vi.fn());
-const webOpenPage = vi.hoisted(() => vi.fn(async () => ({ pageId: "page-1" })));
-const webWait = vi.hoisted(() => vi.fn());
-const webType = vi.hoisted(() => vi.fn());
-const webSnapshot = vi.hoisted(() => vi.fn());
-const webEvaluate = vi.hoisted(() => vi.fn());
-const hasDiscoveryLabels = vi.hoisted(() => vi.fn());
-const reportsDiscoveryScopeLeak = vi.hoisted(() => vi.fn());
-const reportsMissingDiscoveryFiles = vi.hoisted(() => vi.fn());
-const hasModelSwitchContinuitySignal = vi.hoisted(() => vi.fn());
-const scanGatewayLogSentinels = vi.hoisted(() => vi.fn());
-const assertNoGatewayLogSentinels = vi.hoisted(() => vi.fn());
+const { webOpenPage, createWebPageOpener } = vi.hoisted(() => {
+  const openPageMock = vi.fn(async (_params: { url: string; repoRoot?: string }) => ({
+    pageId: "page-1",
+  }));
+  const createOpenerMock = vi.fn(
+    (owner: Set<string>) => (params: { url: string; repoRoot?: string }) => {
+      owner.add("page-1");
+      return openPageMock(params);
+    },
+  );
+  return { webOpenPage: openPageMock, createWebPageOpener: createOpenerMock };
+});
 
 vi.mock("./scenario-runtime-api.js", () => ({
   createQaScenarioRuntimeApi,
@@ -71,103 +28,131 @@ vi.mock("./scenario-flow-runner.js", () => ({
   runScenarioFlow,
 }));
 
-vi.mock("./suite-runtime-transport.js", () => ({
+vi.mock("./suite-runtime-transport.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./suite-runtime-transport.js")>()),
   waitForOutboundMessage,
-  waitForTransportOutboundMessage,
-  waitForChannelOutboundMessage,
-  waitForNoOutbound,
-  waitForNoTransportOutbound,
-  recentOutboundSummary,
-  formatConversationTranscript,
-  readTransportTranscript,
-  formatTransportTranscript,
 }));
 
-vi.mock("./suite-runtime-gateway.js", () => ({
-  fetchJson,
-  waitForGatewayHealthy,
-  waitForTransportReady,
-  waitForQaChannelReady,
-  waitForConfigRestartSettle,
-  patchConfig,
-  applyConfig,
-  readConfigSnapshot,
-  restartGatewayWithConfigPatch,
+vi.mock("./web-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./web-runtime.js")>()),
+  createQaWebPageOpener: createWebPageOpener,
 }));
 
-vi.mock("./suite-runtime-agent.js", () => ({
-  createSession,
-  readEffectiveTools,
-  readSkillStatus,
-  readRawQaSessionStore,
-  seedQaSessionTranscript,
-  readSessionTranscriptSummary,
-  runQaCli,
-  extractMediaPathFromText,
-  resolveGeneratedImagePath,
-  startAgentRun,
-  waitForAgentRun,
-  waitForAgentHistoryReply,
-  listCronJobs,
-  findManagedDreamingCronJob,
-  readDoctorMemoryStatus,
-  forceMemoryIndex,
-  findSkill,
-  writeWorkspaceSkill,
-  callPluginToolsMcp,
-  runAgentPrompt,
-  ensureImageGenerationConfigured,
-  handleQaAction,
-}));
-
-vi.mock("./browser-runtime.js", () => ({
-  callQaBrowserRequest: browserRequest,
-  waitForQaBrowserReady: waitForBrowserReady,
-  qaBrowserOpenTab: browserOpenTab,
-  qaBrowserSnapshot: browserSnapshot,
-  qaBrowserAct: browserAct,
-}));
-
-vi.mock("./web-runtime.js", () => ({
-  qaWebOpenPage: webOpenPage,
-  qaWebWait: webWait,
-  qaWebType: webType,
-  qaWebSnapshot: webSnapshot,
-  qaWebEvaluate: webEvaluate,
-}));
-
-vi.mock("./cron-run-wait.js", () => ({
-  waitForCronRunCompletion,
-}));
-
-vi.mock("./discovery-eval.js", () => ({
-  hasDiscoveryLabels,
-  reportsDiscoveryScopeLeak,
-  reportsMissingDiscoveryFiles,
-}));
-
-vi.mock("./extract-tool-payload.js", () => ({
-  extractQaToolPayload,
-}));
-
-vi.mock("./runtime-tool-fixture.js", () => ({
+vi.mock("./runtime-tool-fixture.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./runtime-tool-fixture.js")>()),
   runRuntimeToolFixture,
 }));
 
-vi.mock("./model-switch-eval.js", () => ({
-  hasModelSwitchContinuitySignal,
-}));
-
-vi.mock("./gateway-log-sentinel.js", () => ({
-  scanGatewayLogSentinels,
-  assertNoGatewayLogSentinels,
-}));
-
+import { extractToolPayload as extractQaToolPayload } from "openclaw/plugin-sdk/tool-payload";
+import * as browserRuntime from "./browser-runtime.js";
+import * as cronRunWait from "./cron-run-wait.js";
+import * as discoveryEval from "./discovery-eval.js";
 import { QaSuiteScenarioSkipError } from "./errors.js";
+import { inspectQaExecutionIdentityStorage } from "./execution-identity-storage-inspection.js";
+import * as modelSwitchEval from "./model-switch-eval.js";
+import { runQaCli } from "./qa-cli-process.js";
+import * as suiteRuntimeAgentMedia from "./suite-runtime-agent-media.js";
+import * as suiteRuntimeAgentProcess from "./suite-runtime-agent-process.js";
+import * as suiteRuntimeAgentSession from "./suite-runtime-agent-session.js";
+import * as suiteRuntimeAgentTools from "./suite-runtime-agent-tools.js";
 import { runQaSuiteScenarioDefinition, runQaSuiteScenarioSteps } from "./suite-runtime-flow.js";
+import * as suiteRuntimeGateway from "./suite-runtime-gateway.js";
+import * as suiteRuntimeTransport from "./suite-runtime-transport.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
+import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
+import * as webRuntime from "./web-runtime.js";
+
+const qaSuiteRuntimeFlowTestConstants = {
+  imageUnderstandingPngBase64: "small",
+  imageUnderstandingLargePngBase64: "large",
+  imageUnderstandingValidPngBase64: "valid",
+};
+
+type QaGatewayLogDeps = {
+  assertNoGatewayLogSentinels: (options?: { since?: number }) => unknown;
+  markGatewayLogCursor: () => number;
+  readGatewayLogs: (mark?: number) => string;
+  scanGatewayLogSentinels: (options?: { since?: number }) => Array<{
+    kind: string;
+    line: number;
+  }>;
+};
+
+function createQaSuiteRuntimeFlowTestEnv(
+  transportOverrides: Partial<QaSuiteRuntimeEnv["transport"]> = {},
+) {
+  return {
+    lab: { baseUrl: "http://127.0.0.1:4444" },
+    webSessionIds: new Set<string>(),
+    gateway: {} as QaSuiteRuntimeEnv["gateway"],
+    transport: {
+      id: "qa-channel",
+      label: "QA Channel",
+      accountId: "qa-channel",
+      waitReady: vi.fn(),
+      createGatewayConfig: vi.fn(),
+      buildAgentDelivery: vi.fn(),
+      requiredPluginIds: [],
+      supportedActions: [],
+      handleAction: vi.fn(),
+      createReportNotes: vi.fn(),
+      reset: vi.fn(),
+      sendInbound: vi.fn(),
+      sendNativeCommand: vi.fn(),
+      waitForNoOutbound: vi.fn(),
+      waitForOutbound: vi.fn(),
+      waitForOutboundSequence: vi.fn(),
+      state: {
+        reset: vi.fn(),
+        getSnapshot: vi.fn(),
+        addInboundMessage: vi.fn(),
+        addOutboundMessage: vi.fn(),
+        readMessage: vi.fn(),
+        searchMessages: vi.fn(),
+        waitFor: vi.fn(),
+      },
+      waitForCondition: vi.fn(),
+      ...transportOverrides,
+    },
+    outputDir: "/artifacts",
+    repoRoot: "/repo",
+    providerMode: "mock-openai",
+    primaryModel: "openai/gpt-5.6-luna",
+    alternateModel: "openai/gpt-5.6-luna-mini",
+    mock: null,
+    cfg: {},
+  } satisfies Parameters<typeof runQaSuiteScenarioDefinition>[0]["env"];
+}
+
+async function captureQaGatewayLogDeps(
+  gateway: Partial<QaSuiteRuntimeEnv["gateway"]>,
+): Promise<QaGatewayLogDeps> {
+  const env = createQaSuiteRuntimeFlowTestEnv();
+  env.gateway = gateway as QaSuiteRuntimeEnv["gateway"];
+  const scenario = makeQaSuiteTestScenario("gateway-log-deps", { config: {} });
+  createQaScenarioRuntimeApi.mockReturnValueOnce({ api: "ok" });
+
+  await runQaSuiteScenarioDefinition({
+    env,
+    scenario,
+    runScenario: vi.fn(),
+    constants: qaSuiteRuntimeFlowTestConstants,
+  });
+
+  const call = createQaScenarioRuntimeApi.mock.calls.at(-1)?.[0] as
+    | { deps: QaGatewayLogDeps }
+    | undefined;
+  if (!call) {
+    throw new Error("expected QA scenario runtime API call");
+  }
+  return call.deps;
+}
 
 describe("qa suite runtime flow", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("records intentional scenario skips without running later steps", async () => {
     const laterStep = vi.fn();
     const result = await runQaSuiteScenarioSteps("requires group credentials", [
@@ -194,47 +179,58 @@ describe("qa suite runtime flow", () => {
     expect(laterStep).not.toHaveBeenCalled();
   });
 
-  it("wires the split suite runtime deps into the scenario runtime api", async () => {
-    const env = {
-      lab: { baseUrl: "http://127.0.0.1:4444" },
-      webSessionIds: new Set<string>(),
-      gateway: {} as QaSuiteRuntimeEnv["gateway"],
-      transport: {
-        id: "qa-channel",
-        label: "QA Channel",
-        accountId: "qa-channel",
-        waitReady: vi.fn(),
-        createGatewayConfig: vi.fn(),
-        buildAgentDelivery: vi.fn(),
-        requiredPluginIds: [],
-        supportedActions: [],
-        handleAction: vi.fn(),
-        createReportNotes: vi.fn(),
-        reset: vi.fn(),
-        sendInbound: vi.fn(),
-        sendNativeCommand: vi.fn(),
-        waitForNoOutbound: vi.fn(),
-        waitForOutbound: vi.fn(),
-        waitForOutboundSequence: vi.fn(),
-        state: {
-          reset: vi.fn(),
-          getSnapshot: vi.fn(),
-          addInboundMessage: vi.fn(),
-          addOutboundMessage: vi.fn(),
-          readMessage: vi.fn(),
-          searchMessages: vi.fn(),
-          waitFor: vi.fn(),
+  it.each([["skip", new QaSuiteScenarioSkipError("later skip")]] as const)(
+    "keeps the latest structured RTT measurement when the scenario ends in %s",
+    async (expectedStatus, terminalError) => {
+      const firstMeasurement = {
+        finalMatchedReplyRttMs: 100,
+        requestStartedAt: "2026-09-03T00:00:00.000Z",
+        responseObservedAt: "2026-09-03T00:00:00.100Z",
+        source: "first-observation",
+      };
+      const latestMeasurement = {
+        finalMatchedReplyRttMs: 200,
+        requestStartedAt: "2026-09-03T00:00:01.000Z",
+        responseObservedAt: "2026-09-03T00:00:01.200Z",
+        source: "latest-observation",
+      };
+      const result = await runQaSuiteScenarioSteps("RTT retention", [
+        {
+          name: "First measurement",
+          run: async () => ({
+            timing: { wallMs: 10, rttMs: 999 },
+            rttMeasurement: firstMeasurement,
+          }),
         },
-        waitForCondition: vi.fn(),
-      },
-      outputDir: "/artifacts",
-      repoRoot: "/repo",
-      providerMode: "mock-openai",
-      primaryModel: "openai/gpt-5.6-luna",
-      alternateModel: "openai/gpt-5.6-luna-mini",
-      mock: null,
-      cfg: {} as QaSuiteRuntimeEnv["cfg"],
-    } satisfies Parameters<typeof runQaSuiteScenarioDefinition>[0]["env"];
+        {
+          name: "Latest measurement",
+          run: async () => ({
+            timing: { rttMs: 888 },
+            rttMeasurement: latestMeasurement,
+          }),
+        },
+        {
+          name: "Later timing only",
+          run: async () => ({ timing: { rttMs: 777, p50Ms: 50 } }),
+        },
+        {
+          name: "Terminal step",
+          run: async () => {
+            if (terminalError) {
+              throw terminalError;
+            }
+          },
+        },
+      ]);
+
+      expect(result.status).toBe(expectedStatus);
+      expect(result.timing).toEqual({ wallMs: 10, rttMs: 200, p50Ms: 50 });
+      expect(result.rttMeasurement).toEqual(latestMeasurement);
+    },
+  );
+
+  it("wires the split suite runtime deps into the scenario runtime api", async () => {
+    const env = createQaSuiteRuntimeFlowTestEnv();
     const scenario = {
       id: "session-memory-ranking",
       title: "Session memory ranking",
@@ -249,44 +245,26 @@ describe("qa suite runtime flow", () => {
       },
     };
     const runScenario = vi.fn();
-    const splitModelRef = vi.fn();
-    const formatErrorMessage = vi.fn();
-    const liveTurnTimeoutMs = vi.fn();
-    const resolveQaLiveTurnTimeoutMs = vi.fn();
     createQaScenarioRuntimeApi.mockReturnValue({ api: "ok" });
 
     const result = await runQaSuiteScenarioDefinition({
       env,
       scenario,
       runScenario,
-      splitModelRef,
-      formatErrorMessage,
-      liveTurnTimeoutMs,
-      resolveQaLiveTurnTimeoutMs,
-      constants: {
-        imageUnderstandingPngBase64: "small",
-        imageUnderstandingLargePngBase64: "large",
-        imageUnderstandingValidPngBase64: "valid",
-      },
+      constants: qaSuiteRuntimeFlowTestConstants,
     });
 
-    expect(result).toEqual({ api: "ok" });
+    expect(result).toMatchObject({ api: "ok", signal: expect.any(AbortSignal) });
     expect(createQaScenarioRuntimeApi).toHaveBeenCalledTimes(1);
     const call = createQaScenarioRuntimeApi.mock.calls[0]?.[0] as {
       env: typeof env;
       scenario: typeof scenario;
       deps: {
-        runScenario: typeof runScenario;
-        waitForQaChannelReady: typeof waitForQaChannelReady;
+        runScenario: (...args: never[]) => unknown;
+        normalizeModelRef: unknown;
         waitForOutboundMessage: typeof waitForOutboundMessage;
         markGatewayLogCursor: () => number;
-        assertNoGatewayLogSentinels: typeof assertNoGatewayLogSentinels;
-        readSessionTranscriptSummary: typeof readSessionTranscriptSummary;
-        seedQaSessionTranscript: typeof seedQaSessionTranscript;
-        findManagedDreamingCronJob: typeof findManagedDreamingCronJob;
-        forceMemoryIndex: typeof forceMemoryIndex;
-        runAgentPrompt: typeof runAgentPrompt;
-        waitForAgentHistoryReply: typeof waitForAgentHistoryReply;
+        assertNoGatewayLogSentinels: () => void;
         runRuntimeToolFixture: (
           envArg: typeof env,
           configArg: Record<string, unknown>,
@@ -301,27 +279,78 @@ describe("qa suite runtime flow", () => {
     };
     expect(call.env).toBe(env);
     expect(call.scenario).toBe(scenario);
-    expect(call.deps.runScenario).toBe(runScenario);
-    expect(call.deps.waitForQaChannelReady).toBe(waitForQaChannelReady);
-    expect(call.deps.waitForOutboundMessage).toBe(waitForOutboundMessage);
-    expect(call.deps.markGatewayLogCursor()).toBe(0);
+    expect(call.deps.runScenario).toBeTypeOf("function");
+    for (const dependencyModule of [
+      suiteRuntimeAgentMedia,
+      suiteRuntimeAgentProcess,
+      suiteRuntimeAgentSession,
+      suiteRuntimeAgentTools,
+      { runQaCli, inspectQaExecutionIdentityStorage },
+      suiteRuntimeGateway,
+      cronRunWait,
+      discoveryEval,
+      { extractQaToolPayload },
+      modelSwitchEval,
+    ]) {
+      for (const [name, helper] of Object.entries(dependencyModule)) {
+        expect((call.deps as Record<string, unknown>)[name]).toBe(helper);
+      }
+    }
+    for (const [name, helper] of Object.entries(suiteRuntimeTransport)) {
+      if (name !== "waitForOutboundMessage") {
+        expect((call.deps as Record<string, unknown>)[name]).toBe(helper);
+      }
+    }
+    const aliasedDependencies = {
+      browserRequest: browserRuntime.callQaBrowserRequest,
+      waitForBrowserReady: browserRuntime.waitForQaBrowserReady,
+      browserOpenTab: browserRuntime.qaBrowserOpenTab,
+      browserSnapshot: browserRuntime.qaBrowserSnapshot,
+      browserAct: browserRuntime.qaBrowserAct,
+      webWait: webRuntime.qaWebWait,
+      webType: webRuntime.qaWebType,
+      webSnapshot: webRuntime.qaWebSnapshot,
+      webEvaluate: webRuntime.qaWebEvaluate,
+    };
+    for (const [name, helper] of Object.entries(aliasedDependencies)) {
+      expect((call.deps as Record<string, unknown>)[name]).toBe(helper);
+    }
+    const canonicalOpus = { provider: "anthropic", model: "claude-opus-5-5" };
+    const normalizeModelRef = call.deps.normalizeModelRef as (
+      raw: string,
+    ) => { provider: string; model: string } | null;
+    expect(normalizeModelRef("anthropic/opus")).toEqual(canonicalOpus);
+    expect(normalizeModelRef("AnThRoPiC/OPUS")).toEqual(canonicalOpus);
+    expect(normalizeModelRef("anthropic/claude-opus-5")).toEqual({
+      provider: "anthropic",
+      model: "claude-opus-5",
+    });
+    expect(normalizeModelRef("OPENAI/gpt-5.6-luna")).toEqual({
+      provider: "openai",
+      model: "gpt-5.6-luna",
+    });
+    expect(normalizeModelRef("")).toBeNull();
+    expect(call.deps.waitForOutboundMessage).toBeTypeOf("function");
+    const outboundPredicate = vi.fn();
+    call.deps.waitForOutboundMessage(env.transport.state, outboundPredicate, 123);
+    expect(waitForOutboundMessage).toHaveBeenCalledWith(
+      env.transport.state,
+      outboundPredicate,
+      123,
+      { accountId: "qa-channel" },
+    );
+    expect(call.deps.markGatewayLogCursor()).toBe(-1);
     expect(() => call.deps.assertNoGatewayLogSentinels()).not.toThrow();
-    expect(call.deps.readSessionTranscriptSummary).toBe(readSessionTranscriptSummary);
-    expect(call.deps.seedQaSessionTranscript).toBe(seedQaSessionTranscript);
-    expect(call.deps.findManagedDreamingCronJob).toBe(findManagedDreamingCronJob);
-    expect(call.deps.forceMemoryIndex).toBe(forceMemoryIndex);
-    expect(call.deps.waitForAgentHistoryReply).toBe(waitForAgentHistoryReply);
-    expect(call.deps.runAgentPrompt).toBe(runAgentPrompt);
     await call.deps.runRuntimeToolFixture(env, { toolName: "read" });
     expect(runRuntimeToolFixture).toHaveBeenCalledWith(
       env,
       { toolName: "read" },
       {
-        createSession,
-        readEffectiveTools,
-        runAgentPrompt,
-        fetchJson,
-        ensureImageGenerationConfigured,
+        createSession: suiteRuntimeAgentSession.createSession,
+        readEffectiveTools: suiteRuntimeAgentSession.readEffectiveTools,
+        runAgentPrompt: suiteRuntimeAgentProcess.runAgentPrompt,
+        fetchJson: suiteRuntimeGateway.fetchJson,
+        ensureImageGenerationConfigured: suiteRuntimeAgentMedia.ensureImageGenerationConfigured,
       },
     );
     expect(call.constants).toEqual({
@@ -330,8 +359,356 @@ describe("qa suite runtime flow", () => {
       imageUnderstandingValidPngBase64: "valid",
     });
 
-    await call.deps.webOpenPage({ url: "https://openclaw.ai" });
+    const released = createDeferred<{ pageId: string }>();
+    webOpenPage.mockReturnValueOnce(released.promise);
+    const opening = call.deps.webOpenPage({ url: "https://openclaw.ai" });
+    expect(createWebPageOpener).toHaveBeenNthCalledWith(
+      1,
+      env.webSessionIds,
+      expect.any(AbortSignal),
+    );
+    expect(createWebPageOpener).toHaveBeenNthCalledWith(2, env.webSessionIds, undefined);
     expect(webOpenPage).toHaveBeenCalledWith({ url: "https://openclaw.ai", repoRoot: "/repo" });
     expect(env.webSessionIds.has("page-1")).toBe(true);
+    released.resolve({ pageId: "page-1" });
+    await opening;
+  });
+
+  it("reads fresh gateway logs and sentinels from one absolute collector mark", async () => {
+    const freshLogs = "codex_app_server progress stalled after restart\n";
+    let legacyLogs = "[qa-lab] older gateway logs truncated\nlegacy tail";
+    const markLogs = vi.fn(() => 70_000);
+    const readLogsSince = vi.fn((mark: number) => (mark === 70_000 ? freshLogs : ""));
+    const deps = await captureQaGatewayLogDeps({
+      logs: () => legacyLogs,
+      markLogs,
+      readLogsSince,
+    });
+
+    expect(deps.markGatewayLogCursor()).toBe(70_000);
+    expect(deps.readGatewayLogs(70_000)).toBe(freshLogs);
+    expect(deps.readGatewayLogs(-1)).toBe(legacyLogs);
+    expect(deps.scanGatewayLogSentinels({ since: 70_000 })).toEqual([
+      expect.objectContaining({
+        kind: "stalled-agent-run",
+        line: 1,
+      }),
+    ]);
+    expect(() => deps.assertNoGatewayLogSentinels({ since: 70_000 })).toThrow(
+      "codex_app_server progress stalled after restart",
+    );
+    expect(readLogsSince).toHaveBeenCalledTimes(3);
+    expect(readLogsSince).toHaveBeenCalledWith(70_000);
+
+    markLogs.mockReturnValueOnce(-1);
+    legacyLogs = "x".repeat(70_000);
+    const legacyCursor = deps.markGatewayLogCursor();
+    legacyLogs = `${"y".repeat(70_000)}\ncodex_app_server progress stalled\n`;
+    expect(legacyCursor).toBe(-1);
+    expect(deps.readGatewayLogs(legacyCursor)).toBe(legacyLogs);
+    expect(deps.scanGatewayLogSentinels({ since: legacyCursor })).toEqual([
+      expect.objectContaining({ kind: "stalled-agent-run" }),
+    ]);
+    expect(readLogsSince).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not turn the preparation fallback into a whole-flow deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const prepareFlow = vi.fn(async () => undefined);
+      const env = createQaSuiteRuntimeFlowTestEnv({ prepareFlow });
+      const scenario = makeQaSuiteTestScenario("flow-without-explicit-deadline", { config: {} });
+      createQaScenarioRuntimeApi.mockImplementationOnce(
+        (params: { deps: { runScenario: typeof runQaSuiteScenarioSteps } }) => ({
+          runScenario: params.deps.runScenario,
+        }),
+      );
+      runScenarioFlow.mockImplementationOnce(async (params) => {
+        const api = params.api as { runScenario: typeof runQaSuiteScenarioSteps };
+        return await api.runScenario("No explicit deadline", [
+          {
+            name: "Longer than preparation fallback",
+            run: async () => {
+              await new Promise<void>((resolve) => {
+                // Exceed the 60s fallback plus its 5s watchdog grace without wall-clock sleep.
+                setTimeout(resolve, 66_000);
+              });
+            },
+          },
+        ]);
+      });
+
+      const pending = runQaSuiteScenarioDefinition({
+        env,
+        scenario,
+        runScenario: runQaSuiteScenarioSteps,
+        constants: qaSuiteRuntimeFlowTestConstants,
+      });
+
+      await vi.advanceTimersByTimeAsync(66_000);
+      const result = await pending;
+      expect(vi.getTimerCount()).toBe(0);
+      expect(result.status).toBe("pass");
+      expect(prepareFlow).toHaveBeenCalledWith(
+        expect.objectContaining({ signal: expect.any(AbortSignal), timeoutMs: 60_000 }),
+      );
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([6_000])(
+    "preserves the observation window after %ims of preparation",
+    async (preparationMs) => {
+      vi.useFakeTimers();
+      try {
+        const prepareFlow = vi.fn(async () => {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, preparationMs);
+          });
+        });
+        const env = createQaSuiteRuntimeFlowTestEnv({ prepareFlow });
+        const scenario = makeQaSuiteTestScenario("negative-observation", { config: {} });
+        if (scenario.execution.kind !== "flow") {
+          throw new Error("expected flow scenario");
+        }
+        scenario.execution.timeoutMs = 8_000;
+        createQaScenarioRuntimeApi.mockImplementationOnce(
+          (params: { deps: { runScenario: typeof runQaSuiteScenarioSteps } }) => ({
+            runScenario: params.deps.runScenario,
+          }),
+        );
+        const observed = vi.fn();
+        runScenarioFlow.mockImplementationOnce(async (params) => {
+          const api = params.api as { runScenario: typeof runQaSuiteScenarioSteps };
+          return await api.runScenario("Negative observation", [
+            {
+              name: "Observe the complete no-reply window",
+              run: async () => {
+                await new Promise<void>((resolve) => {
+                  setTimeout(resolve, 8_000);
+                });
+                observed();
+              },
+            },
+          ]);
+        });
+        const pending = runQaSuiteScenarioDefinition({
+          env,
+          scenario,
+          runScenario: runQaSuiteScenarioSteps,
+          constants: qaSuiteRuntimeFlowTestConstants,
+        });
+        await vi.advanceTimersByTimeAsync(preparationMs + 7_999);
+        expect(observed).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        expect((await pending).status).toBe("pass");
+        expect(observed).toHaveBeenCalledOnce();
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.clearAllTimers();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each([8_000])("aborts stuck preparation with scenario timeout %s", async (timeoutMs) => {
+    vi.useFakeTimers();
+    try {
+      let preparationSignal: AbortSignal | undefined;
+      const prepareFlow = vi.fn(async (input: { signal?: AbortSignal }) => {
+        preparationSignal = input.signal;
+        await new Promise<void>(() => {});
+      });
+      const env = createQaSuiteRuntimeFlowTestEnv({ prepareFlow });
+      const scenario = makeQaSuiteTestScenario("stuck-preparation", { config: {} });
+      if (scenario.execution.kind !== "flow") {
+        throw new Error("expected flow scenario");
+      }
+      scenario.execution.timeoutMs = timeoutMs;
+      createQaScenarioRuntimeApi.mockImplementationOnce(
+        (params: { deps: { runScenario: typeof runQaSuiteScenarioSteps } }) => ({
+          runScenario: params.deps.runScenario,
+        }),
+      );
+      const action = vi.fn();
+      runScenarioFlow.mockImplementationOnce(async (params) => {
+        const api = params.api as { runScenario: typeof runQaSuiteScenarioSteps };
+        return await api.runScenario("Stuck preparation", [{ name: "Action", run: action }]);
+      });
+      const pending = runQaSuiteScenarioDefinition({
+        env,
+        scenario,
+        runScenario: runQaSuiteScenarioSteps,
+        constants: qaSuiteRuntimeFlowTestConstants,
+      });
+      await vi.advanceTimersByTimeAsync(64_999);
+      expect(preparationSignal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await pending).toMatchObject({
+        status: "fail",
+        steps: [{ name: "Prepare QA Channel", status: "fail" }],
+      });
+      expect(preparationSignal?.aborted).toBe(true);
+      expect(action).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds actions after preparation with an aborting scenario deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      let preparationSignal: AbortSignal | undefined;
+      let actionSignal: AbortSignal | undefined;
+      const prepareFlow = vi.fn(async (input: { signal?: AbortSignal }) => {
+        preparationSignal = input.signal;
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 10);
+        });
+      });
+      const env = createQaSuiteRuntimeFlowTestEnv({ prepareFlow });
+      const scenario = makeQaSuiteTestScenario("flow-deadline", { config: {} });
+      if (scenario.execution.kind !== "flow") {
+        throw new Error("expected flow scenario");
+      }
+      scenario.execution.timeoutMs = 30;
+      createQaScenarioRuntimeApi.mockImplementationOnce(
+        (params: { deps: { runScenario: typeof runQaSuiteScenarioSteps } }) => ({
+          runScenario: params.deps.runScenario,
+        }),
+      );
+      runScenarioFlow.mockImplementationOnce(async (params) => {
+        const api = params.api as {
+          runScenario: typeof runQaSuiteScenarioSteps;
+          signal?: AbortSignal;
+        };
+        return await api.runScenario("Flow deadline", [
+          {
+            name: "Never settles without abort",
+            run: async () =>
+              await new Promise<void>(() => {
+                actionSignal = api.signal;
+                api.signal?.addEventListener("abort", () => {}, { once: true });
+              }),
+          },
+        ]);
+      });
+
+      const pending = runQaSuiteScenarioDefinition({
+        env,
+        scenario,
+        runScenario: runQaSuiteScenarioSteps,
+        constants: qaSuiteRuntimeFlowTestConstants,
+      });
+      await vi.advanceTimersByTimeAsync(5_039);
+      expect(actionSignal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await pending;
+
+      expect(result).toMatchObject({ status: "fail", details: expect.stringContaining("30ms") });
+      expect(preparationSignal).not.toBe(actionSignal);
+      expect(preparationSignal?.aborted).toBe(true);
+      expect(actionSignal?.aborted).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["preparation", "action"])(
+    "stops %s on transport loss and rejects later actions",
+    async (phase) => {
+      const failure = Promise.withResolvers<Error>();
+      const entered = Promise.withResolvers<void>();
+      let nativeSignal: AbortSignal | undefined;
+      const laterAction = vi.fn();
+      const prepareFlow = async (input: { signal?: AbortSignal }) => {
+        nativeSignal = input.signal;
+        if (phase === "preparation") {
+          entered.resolve();
+          await new Promise<void>(() => {});
+        }
+      };
+      const env = createQaSuiteRuntimeFlowTestEnv({
+        prepareFlow,
+        whenUnhealthy: failure.promise,
+      });
+      createQaScenarioRuntimeApi.mockImplementationOnce(
+        (params: { deps: { runScenario: typeof runQaSuiteScenarioSteps } }) => ({
+          runScenario: params.deps.runScenario,
+        }),
+      );
+      runScenarioFlow.mockImplementationOnce(async (params) => {
+        const api = params.api as { runScenario: typeof runQaSuiteScenarioSteps };
+        return api.runScenario("Transport loss", [
+          {
+            name: "Pending native action",
+            run: async () => {
+              entered.resolve();
+              await new Promise<void>(() => {});
+            },
+          },
+          { name: "Must not send", run: laterAction },
+        ]);
+      });
+      const pending = runQaSuiteScenarioDefinition({
+        env,
+        scenario: makeQaSuiteTestScenario("transport-loss", { config: {} }),
+        runScenario: runQaSuiteScenarioSteps,
+        constants: qaSuiteRuntimeFlowTestConstants,
+      });
+      await entered.promise;
+      failure.resolve(new Error("owned lease lost"));
+      expect(await pending).toMatchObject({
+        status: "fail",
+        details: expect.stringContaining("owned lease lost"),
+      });
+      expect(nativeSignal?.aborted).toBe(true);
+      expect(laterAction).not.toHaveBeenCalled();
+    },
+  );
+
+  it("caps and disposes the lifecycle watchdog without advancing the maximum timer", async () => {
+    vi.useFakeTimers();
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const env = createQaSuiteRuntimeFlowTestEnv();
+      const scenario = makeQaSuiteTestScenario("flow-capped-deadline", { config: {} });
+      if (scenario.execution.kind !== "flow") {
+        throw new Error("expected flow scenario");
+      }
+      scenario.execution.timeoutMs = MAX_TIMER_TIMEOUT_MS;
+      createQaScenarioRuntimeApi.mockImplementationOnce(
+        (params: { deps: { runScenario: typeof runQaSuiteScenarioSteps } }) => ({
+          runScenario: params.deps.runScenario,
+        }),
+      );
+      runScenarioFlow.mockImplementationOnce(async (params) => {
+        const api = params.api as { runScenario: typeof runQaSuiteScenarioSteps };
+        return await api.runScenario("Capped deadline", [
+          { name: "Settles immediately", run: async () => undefined },
+        ]);
+      });
+
+      const result = await runQaSuiteScenarioDefinition({
+        env,
+        scenario,
+        runScenario: runQaSuiteScenarioSteps,
+        constants: qaSuiteRuntimeFlowTestConstants,
+      });
+
+      expect(result.status).toBe("pass");
+      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      timeoutSpy.mockRestore();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 });

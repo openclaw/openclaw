@@ -3,7 +3,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
-import type { AcceptedInboundAccessControlResult } from "./access-control.js";
 import {
   readAllowFromStoreMock,
   sendMessageMock,
@@ -26,11 +25,27 @@ beforeAll(async () => {
 
 function expectAccepted(
   result: InboundAccessControlResult,
-): asserts result is AcceptedInboundAccessControlResult {
+): asserts result is Extract<InboundAccessControlResult, { allowed: true }> {
   expect(result.allowed).toBe(true);
   if (!result.allowed) {
     throw new Error("Expected accepted inbound access result");
   }
+}
+
+function checkAccess(overrides: Partial<Parameters<typeof checkInboundAccessControl>[0]> = {}) {
+  return checkInboundAccessControl({
+    cfg: getAccessControlTestConfig() as never,
+    accountId: "default",
+    from: "+15550001111",
+    selfE164: "+15550009999",
+    senderE164: "+15550001111",
+    group: false,
+    pushName: "Sam",
+    isFromMe: false,
+    sock: { sendMessage: sendMessageMock },
+    remoteJid: "15550001111@s.whatsapp.net",
+    ...overrides,
+  });
 }
 
 async function checkUnauthorizedWorkDmSender() {
@@ -133,17 +148,8 @@ describe("checkInboundAccessControl admission contract", () => {
     };
     setAccessControlTestConfig(cfg);
 
-    const result = await checkInboundAccessControl({
-      cfg: getAccessControlTestConfig() as never,
-      accountId: "default",
-      from: "+15550001111",
-      selfE164: "+15550009999",
-      senderE164: "+15550001111",
-      group: false,
+    const result = await checkAccess({
       pushName: "Stranger",
-      isFromMe: false,
-      sock: { sendMessage: sendMessageMock },
-      remoteJid: "15550001111@s.whatsapp.net",
     });
 
     expect(result).toMatchObject({
@@ -172,18 +178,7 @@ describe("checkInboundAccessControl admission contract", () => {
     };
     setAccessControlTestConfig(cfg);
 
-    const result = await checkInboundAccessControl({
-      cfg: getAccessControlTestConfig() as never,
-      accountId: "default",
-      from: "+15550001111",
-      selfE164: "+15550009999",
-      senderE164: "+15550001111",
-      group: false,
-      pushName: "Sam",
-      isFromMe: false,
-      sock: { sendMessage: sendMessageMock },
-      remoteJid: "15550001111@s.whatsapp.net",
-    });
+    const result = await checkAccess();
 
     expectAccepted(result);
     expect(result.resolvedAccountId).toBe(result.admission.accountId);
@@ -248,17 +243,11 @@ describe("checkInboundAccessControl admission contract", () => {
     };
     setAccessControlTestConfig(cfg);
 
-    const result = await checkInboundAccessControl({
-      cfg: getAccessControlTestConfig() as never,
-      accountId: "default",
+    const result = await checkAccess({
       from: groupJid,
-      selfE164: "+15550009999",
       senderE164: null,
       senderJid: participantJid,
       group: true,
-      pushName: "Sam",
-      isFromMe: false,
-      sock: { sendMessage: sendMessageMock },
       remoteJid: groupJid,
     });
 
@@ -285,17 +274,11 @@ describe("checkInboundAccessControl admission contract", () => {
     };
     setAccessControlTestConfig(cfg);
 
-    const result = await checkInboundAccessControl({
-      cfg: getAccessControlTestConfig() as never,
-      accountId: "default",
+    const result = await checkAccess({
       from: groupJid,
-      selfE164: "+15550009999",
       senderE164: null,
       senderJid: "15550001111@lid",
       group: true,
-      pushName: "Sam",
-      isFromMe: false,
-      sock: { sendMessage: sendMessageMock },
       remoteJid: groupJid,
     });
 
@@ -307,20 +290,10 @@ describe("checkInboundAccessControl admission contract", () => {
 describe("checkInboundAccessControl pairing grace", () => {
   async function runPairingGraceCase(messageTimestampMs: number) {
     const connectedAtMs = 1_000_000;
-    return await checkInboundAccessControl({
-      cfg: getAccessControlTestConfig() as never,
-      accountId: "default",
-      from: "+15550001111",
-      selfE164: "+15550009999",
-      senderE164: "+15550001111",
-      group: false,
-      pushName: "Sam",
-      isFromMe: false,
+    return await checkAccess({
       messageTimestampMs,
       connectedAtMs,
       pairingGraceMs: 30_000,
-      sock: { sendMessage: sendMessageMock },
-      remoteJid: "15550001111@s.whatsapp.net",
     });
   }
 
@@ -414,27 +387,26 @@ describe("WhatsApp dmPolicy precedence", () => {
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
 
-  it("always allows same-phone DMs even when allowFrom is restrictive", async () => {
+  it.each([
+    { name: "omitted", selfChatMode: undefined },
+    { name: "enabled", selfChatMode: true },
+  ])("allows same-phone fromMe DMs when self-chat mode is $name", async ({ selfChatMode }) => {
     const cfg = {
       channels: {
         whatsapp: {
           dmPolicy: "pairing",
           allowFrom: ["+15550001111"],
+          ...(selfChatMode === undefined ? {} : { selfChatMode }),
         },
       },
     };
     setAccessControlTestConfig(cfg);
 
-    const result = await checkInboundAccessControl({
-      cfg: getAccessControlTestConfig() as never,
-      accountId: "default",
+    const result = await checkAccess({
       from: "+15550009999",
-      selfE164: "+15550009999",
       senderE164: "+15550009999",
-      group: false,
       pushName: "Owner",
-      isFromMe: false,
-      sock: { sendMessage: sendMessageMock },
+      isFromMe: true,
       remoteJid: "15550009999@s.whatsapp.net",
     });
     const commandAuthorized = await checkCommandAuthorizedForDm({
@@ -449,6 +421,100 @@ describe("WhatsApp dmPolicy precedence", () => {
     expect(commandAuthorized).toBe(true);
     expect(upsertPairingRequestMock).not.toHaveBeenCalled();
     expect(sendMessageMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "the default account",
+      accountId: "default",
+      whatsapp: {
+        dmPolicy: "pairing",
+        allowFrom: ["+15550009999"],
+        selfChatMode: false,
+      },
+    },
+    {
+      name: "a named account overriding enabled channel self-chat",
+      accountId: "work",
+      whatsapp: {
+        dmPolicy: "pairing",
+        selfChatMode: true,
+        accounts: {
+          work: {
+            allowFrom: ["+15550009999"],
+            selfChatMode: false,
+          },
+        },
+      },
+    },
+  ])("blocks allowlisted same-phone fromMe DMs for $name", async ({ accountId, whatsapp }) => {
+    setAccessControlTestConfig({ channels: { whatsapp } });
+
+    const result = await checkAccess({
+      accountId,
+      from: "+15550009999",
+      senderE164: "+15550009999",
+      pushName: "Owner",
+      isFromMe: true,
+      remoteJid: "15550009999@s.whatsapp.net",
+    });
+
+    expectSilentlyBlocked(result);
+    expect(result.shouldMarkRead).toBe(false);
+    expect(result.isSelfChat).toBe(false);
+    expect(result.resolvedAccountId).toBe(accountId);
+  });
+
+  it("does not implicitly allow the linked phone when self-chat is disabled", async () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          dmPolicy: "pairing",
+          allowFrom: ["+15550001111"],
+          selfChatMode: false,
+        },
+      },
+    };
+    setAccessControlTestConfig(cfg);
+
+    const result = await checkAccess({
+      from: "+15550009999",
+      senderE164: "+15550009999",
+      pushName: "Owner",
+      remoteJid: "15550009999@s.whatsapp.net",
+    });
+    const commandAuthorized = await checkCommandAuthorizedForDm({
+      cfg,
+      accountId: "default",
+      from: "+15550009999",
+      senderE164: "+15550009999",
+      selfE164: "+15550009999",
+    });
+
+    expectSilentlyBlocked(result);
+    expect(commandAuthorized).toBe(false);
+  });
+
+  it("does not grant group command ownership through implicit linked-phone access", async () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          dmPolicy: "pairing",
+          groupPolicy: "open",
+          allowFrom: ["+15550001111"],
+        },
+      },
+    };
+    setAccessControlTestConfig(cfg);
+
+    expect(
+      await checkCommandAuthorizedForGroup({
+        cfg,
+        accountId: "default",
+        senderE164: "+15550009999",
+        selfE164: "+15550009999",
+      }),
+    ).toBe(false);
   });
 
   it("allows DMs from generic message sender access groups", async () => {
@@ -474,17 +540,8 @@ describe("WhatsApp dmPolicy precedence", () => {
     };
     setAccessControlTestConfig(cfg);
 
-    const result = await checkInboundAccessControl({
-      cfg: getAccessControlTestConfig() as never,
+    const result = await checkAccess({
       accountId: "work",
-      from: "+15550001111",
-      selfE164: "+15550009999",
-      senderE164: "+15550001111",
-      group: false,
-      pushName: "Sam",
-      isFromMe: false,
-      sock: { sendMessage: sendMessageMock },
-      remoteJid: "15550001111@s.whatsapp.net",
     });
     const commandAuthorized = await checkCommandAuthorizedForDm({ cfg });
 
@@ -519,16 +576,10 @@ describe("WhatsApp dmPolicy precedence", () => {
     };
     setAccessControlTestConfig(cfg);
 
-    const result = await checkInboundAccessControl({
-      cfg: getAccessControlTestConfig() as never,
+    const result = await checkAccess({
       accountId: "work",
       from: "120363401234567890@g.us",
-      selfE164: "+15550009999",
-      senderE164: "+15550001111",
       group: true,
-      pushName: "Sam",
-      isFromMe: false,
-      sock: { sendMessage: sendMessageMock },
       remoteJid: "120363401234567890@g.us",
     });
     const commandAuthorized = await checkCommandAuthorizedForGroup({ cfg });
@@ -552,16 +603,9 @@ describe("WhatsApp dmPolicy precedence", () => {
     };
     setAccessControlTestConfig(cfg);
 
-    const result = await checkInboundAccessControl({
-      cfg: getAccessControlTestConfig() as never,
-      accountId: "default",
+    const result = await checkAccess({
       from: "120363401234567890@g.us",
-      selfE164: "+15550009999",
-      senderE164: "+15550001111",
       group: true,
-      pushName: "Sam",
-      isFromMe: false,
-      sock: { sendMessage: sendMessageMock },
       remoteJid: "120363401234567890@g.us",
     });
     const commandAuthorized = await checkCommandAuthorizedForGroup({
@@ -586,18 +630,7 @@ describe("WhatsApp dmPolicy precedence", () => {
     };
     setAccessControlTestConfig(cfg);
 
-    const result = await checkInboundAccessControl({
-      cfg: getAccessControlTestConfig() as never,
-      accountId: "default",
-      from: "+15550001111",
-      selfE164: "+15550009999",
-      senderE164: "+15550001111",
-      group: false,
-      pushName: "Sam",
-      isFromMe: false,
-      sock: { sendMessage: sendMessageMock },
-      remoteJid: "15550001111@s.whatsapp.net",
-    });
+    const result = await checkAccess();
 
     expect(result.allowed).toBe(false);
     expect(result.isSelfChat).toBe(false);
@@ -662,16 +695,10 @@ describe("WhatsApp dmPolicy precedence", () => {
     };
     setAccessControlTestConfig(cfg);
 
-    const result = await checkInboundAccessControl({
-      cfg: getAccessControlTestConfig() as never,
-      accountId: "default",
+    const result = await checkAccess({
       from: "+15550009999",
-      selfE164: "+15550009999",
       senderE164: "+15550009999",
-      group: false,
       pushName: "Owner",
-      isFromMe: false,
-      sock: { sendMessage: sendMessageMock },
       remoteJid: "15550009999@s.whatsapp.net",
     });
 

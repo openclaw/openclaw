@@ -1,11 +1,11 @@
-// Gateway RPC handlers for text-to-speech status, preferences, and conversion.
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateTtsSpeakParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { OpenClawConfig } from "../../config/types.js";
 import {
   assertSecretOwnerAvailable,
   SecretSurfaceUnavailableError,
@@ -15,15 +15,12 @@ import {
   getSpeechProvider,
   listSpeechProviders,
 } from "../../tts/provider-registry.js";
+import { resolvePreparedTtsProvider } from "../../tts/tts-provider-resolution.js";
+import { resolveTtsPersonaList, resolveTtsSettingsSnapshot } from "../../tts/tts-settings.js";
 import {
-  getResolvedSpeechProviderConfig,
-  getTtsPersona,
-  getTtsProvider,
-  isTtsEnabled,
   isTtsProviderConfigured,
   listTtsPersonas,
   resolveExplicitTtsOverrides,
-  resolveTtsAutoMode,
   resolveTtsConfig,
   resolveTtsPrefsPath,
   resolveTtsProviderOrder,
@@ -34,39 +31,66 @@ import {
   textToSpeech,
 } from "../../tts/tts.js";
 import { formatForLog } from "../ws-log.js";
+import { respondUnavailableOnThrow } from "./response.js";
 import { inferSpeechMimeType } from "./speech-mime.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
-/** Gateway request handlers for TTS status, preference mutation, and synthesis. */
+function resolveTtsGatewayStatusFacts(cfg: OpenClawConfig) {
+  const settings = resolveTtsSettingsSnapshot({ cfg });
+  const speechProviders = listSpeechProviders(cfg);
+  const configuredByProvider = new Map(
+    speechProviders.map(
+      (provider) => [provider.id, isTtsProviderConfigured(settings.config, provider, cfg)] as const,
+    ),
+  );
+  const provider = resolvePreparedTtsProvider({
+    config: settings.config,
+    preference: settings.providerPreference,
+    providers: speechProviders,
+    configuredByProvider,
+  });
+  return { configuredByProvider, provider, settings, speechProviders };
+}
+
+function setTtsEnabledHandler(enabled: boolean): GatewayRequestHandler {
+  return async ({ respond, context }) => {
+    await respondUnavailableOnThrow(respond, async () => {
+      const config = resolveTtsConfig(context.getRuntimeConfig());
+      setTtsEnabled(resolveTtsPrefsPath(config), enabled);
+      respond(true, { enabled });
+    });
+  };
+}
+
 export const ttsHandlers: GatewayRequestHandlers = {
   "tts.status": async ({ respond, context }) => {
-    try {
+    await respondUnavailableOnThrow(respond, async () => {
+      await yieldToEventLoop();
       const cfg = context.getRuntimeConfig();
-      const config = resolveTtsConfig(cfg);
-      const prefsPath = resolveTtsPrefsPath(config);
-      const provider = getTtsProvider(config, prefsPath);
-      const persona = getTtsPersona(config, prefsPath);
-      const autoMode = resolveTtsAutoMode({ config, prefsPath });
-      const fallbackProviders = resolveTtsProviderOrder(provider, cfg)
+      const { configuredByProvider, provider, settings, speechProviders } =
+        resolveTtsGatewayStatusFacts(cfg);
+      const fallbackProviders = resolveTtsProviderOrder(provider, cfg, speechProviders)
         .slice(1)
-        .filter((candidate) => isTtsProviderConfigured(config, candidate, cfg));
+        .filter((candidate) => {
+          if (configuredByProvider.has(candidate)) {
+            return configuredByProvider.get(candidate) === true;
+          }
+          return isTtsProviderConfigured(settings.config, candidate, cfg);
+        });
       // Report configured state per provider so the UI can explain why fallback
       // order differs from the complete provider registry.
-      const providerStates = listSpeechProviders(cfg).map((candidate) => ({
+      const providerStates = speechProviders.map((candidate) => ({
         id: candidate.id,
         label: candidate.label,
-        configured: candidate.isConfigured({
-          cfg,
-          providerConfig: getResolvedSpeechProviderConfig(config, candidate.id, cfg),
-          timeoutMs: config.timeoutMs,
-        }),
+        configured: configuredByProvider.get(candidate.id) === true,
       }));
       respond(true, {
-        enabled: isTtsEnabled(config, prefsPath),
-        auto: autoMode,
+        enabled: settings.autoMode !== "off",
+        auto: settings.autoMode,
         provider,
-        persona: persona?.id ?? null,
-        personas: listTtsPersonas(config).map((entry) => ({
+        persona: settings.persona?.id ?? null,
+        personas: listTtsPersonas(settings.config).map((entry) => ({
           id: entry.id,
           label: entry.label,
           description: entry.description,
@@ -74,35 +98,13 @@ export const ttsHandlers: GatewayRequestHandlers = {
         })),
         fallbackProvider: fallbackProviders[0] ?? null,
         fallbackProviders,
-        prefsPath,
+        prefsPath: settings.prefsPath,
         providerStates,
       });
-    } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
-    }
+    });
   },
-  "tts.enable": async ({ respond, context }) => {
-    try {
-      const cfg = context.getRuntimeConfig();
-      const config = resolveTtsConfig(cfg);
-      const prefsPath = resolveTtsPrefsPath(config);
-      setTtsEnabled(prefsPath, true);
-      respond(true, { enabled: true });
-    } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
-    }
-  },
-  "tts.disable": async ({ respond, context }) => {
-    try {
-      const cfg = context.getRuntimeConfig();
-      const config = resolveTtsConfig(cfg);
-      const prefsPath = resolveTtsPrefsPath(config);
-      setTtsEnabled(prefsPath, false);
-      respond(true, { enabled: false });
-    } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
-    }
-  },
+  "tts.enable": setTtsEnabledHandler(true),
+  "tts.disable": setTtsEnabledHandler(false),
   "tts.convert": async ({ params, respond, context }) => {
     const text = normalizeOptionalString(params.text) ?? "";
     if (!text) {
@@ -113,7 +115,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    try {
+    await respondUnavailableOnThrow(respond, async () => {
       const cfg = context.getRuntimeConfig();
       const channel = normalizeOptionalString(params.channel);
       const providerRaw = normalizeOptionalString(params.provider);
@@ -154,22 +156,12 @@ export const ttsHandlers: GatewayRequestHandlers = {
         undefined,
         errorShape(ErrorCodes.UNAVAILABLE, result.error ?? "TTS conversion failed"),
       );
-    } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
-    }
+    });
   },
   // Unlike tts.convert (gateway-local audioPath) this returns the clip inline,
   // so remote clients (mobile apps) can play it without filesystem access.
   "tts.speak": async ({ params, respond, context }) => {
-    if (!validateTtsSpeakParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid tts.speak params: ${formatValidationErrors(validateTtsSpeakParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateTtsSpeakParams, "tts.speak", respond)) {
       return;
     }
     const text = normalizeOptionalString(params.text);
@@ -179,7 +171,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
     }
     try {
       const cfg = context.getRuntimeConfig();
-      // synthesizeSpeech enforces the same messages.tts.maxTextLength bound but
+      // synthesizeSpeech enforces the same tts.maxTextLength bound but
       // reports it as a synthesis failure; pre-check to return a request error.
       const maxTextLength = resolveTtsConfig(cfg).maxTextLength;
       if (text.length > maxTextLength) {
@@ -248,40 +240,23 @@ export const ttsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    try {
+    await respondUnavailableOnThrow(respond, async () => {
       const config = resolveTtsConfig(cfg);
       const prefsPath = resolveTtsPrefsPath(config);
       setTtsProvider(prefsPath, provider);
       respond(true, { provider });
-    } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
-    }
+    });
   },
   "tts.personas": async ({ respond, context }) => {
-    try {
+    await respondUnavailableOnThrow(respond, async () => {
       const cfg = context.getRuntimeConfig();
-      const config = resolveTtsConfig(cfg);
-      const prefsPath = resolveTtsPrefsPath(config);
-      const active = getTtsPersona(config, prefsPath);
-      respond(true, {
-        active: active?.id ?? null,
-        personas: listTtsPersonas(config).map((persona) => ({
-          id: persona.id,
-          label: persona.label,
-          description: persona.description,
-          provider: persona.provider,
-          fallbackPolicy: persona.fallbackPolicy,
-          providers: Object.keys(persona.providers ?? {}),
-        })),
-      });
-    } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
-    }
+      respond(true, resolveTtsPersonaList(cfg));
+    });
   },
   "tts.setPersona": async ({ params, respond, context }) => {
     const cfg = context.getRuntimeConfig();
     const rawPersona = normalizeOptionalString(params.persona);
-    try {
+    await respondUnavailableOnThrow(respond, async () => {
       const config = resolveTtsConfig(cfg);
       const prefsPath = resolveTtsPrefsPath(config);
       if (!rawPersona || ["off", "none", "default"].includes(rawPersona.toLowerCase())) {
@@ -307,31 +282,22 @@ export const ttsHandlers: GatewayRequestHandlers = {
       // so preference files remain stable across copy changes.
       setTtsPersona(prefsPath, persona.id);
       respond(true, { persona: persona.id });
-    } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
-    }
+    });
   },
   "tts.providers": async ({ respond, context }) => {
-    try {
+    await respondUnavailableOnThrow(respond, async () => {
       const cfg = context.getRuntimeConfig();
-      const config = resolveTtsConfig(cfg);
-      const prefsPath = resolveTtsPrefsPath(config);
+      const { configuredByProvider, provider, speechProviders } = resolveTtsGatewayStatusFacts(cfg);
       respond(true, {
-        providers: listSpeechProviders(cfg).map((provider) => ({
-          id: provider.id,
-          name: provider.label,
-          configured: provider.isConfigured({
-            cfg,
-            providerConfig: getResolvedSpeechProviderConfig(config, provider.id, cfg),
-            timeoutMs: config.timeoutMs,
-          }),
-          models: [...(provider.models ?? [])],
-          voices: [...(provider.voices ?? [])],
+        providers: speechProviders.map((candidate) => ({
+          id: candidate.id,
+          name: candidate.label,
+          configured: configuredByProvider.get(candidate.id) === true,
+          models: [...(candidate.models ?? [])],
+          voices: [...(candidate.voices ?? [])],
         })),
-        active: getTtsProvider(config, prefsPath),
+        active: provider,
       });
-    } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
-    }
+    });
   },
 };

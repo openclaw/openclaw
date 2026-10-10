@@ -1,11 +1,11 @@
 // Normalizes fetch header inputs while stripping non-header symbols.
-type HeadersLike = {
+export type HeadersLike = {
   entries: () => IterableIterator<[string, string]>;
   get: (name: string) => string | null;
   [Symbol.iterator]: () => IterableIterator<[string, string]>;
 };
 
-function isHeadersLike(value: object): value is HeadersLike {
+export function isHeadersLike(value: object): value is HeadersLike {
   if (typeof Headers !== "undefined" && value instanceof Headers) {
     return true;
   }
@@ -48,5 +48,5 @@ export function normalizeRequestInitHeadersForFetch<T extends { headers?: Header
   if (headers === init.headers) {
     return init;
   }
-  return { ...init, headers } as T;
+  return { ...init, headers };
 }

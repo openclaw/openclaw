@@ -1,28 +1,38 @@
 // User turn transcript tests cover transcript extraction for user turns.
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import {
-  initializeGlobalHookRunner,
-  resetGlobalHookRunner,
-} from "openclaw/plugin-sdk/hook-runtime";
-import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { castAgentMessage } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it } from "vitest";
-import { runAgentHarnessBeforeMessageWriteHook } from "../agents/harness/hook-helpers.js";
-import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
-import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
+import { afterAll, describe, expect, it } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { makeUserMessage } from "../../test/helpers/user-message.js";
 import {
-  buildPersistedUserTurnMediaInputsFromFields,
+  persistSessionTranscriptTurn,
+  replaceSessionEntry,
+  replaceTranscriptEvents,
+} from "../config/sessions/session-accessor.js";
+import { transcriptMessage } from "../config/sessions/transcript-message.test-support.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
+import { readPendingUserTurnTranscriptAdmission } from "./user-turn-transcript-admission.js";
+import {
+  buildLateMediaAttachedProjection,
   createUserTurnTranscriptRecorder,
   mergePreparedUserTurnMessageForRuntime,
   resolvePersistedUserTurnText,
   type UserTurnInput,
 } from "./user-turn-transcript.js";
-import { persistUserTurnTranscript } from "./user-turn-transcript.test-support.js";
+import {
+  projectRecordedModelPrompt,
+  readModelPromptProjection,
+} from "./user-turn-transcript.message.js";
+import {
+  createSqliteTranscriptTarget,
+  persistUserTurnTranscript,
+  readTranscriptMessages,
+} from "./user-turn-transcript.test-support.js";
 
 describe("user turn transcript persistence", () => {
-  const tempDirs: string[] = [];
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-user-turn-persist-");
   const unusedRecorderTarget = {
     agentId: "main",
     sessionEntry: undefined,
@@ -31,184 +41,29 @@ describe("user turn transcript persistence", () => {
     storePath: "/tmp/openclaw-unused-sessions.json",
   };
 
-  afterEach(() => {
-    resetGlobalHookRunner();
-    for (const dir of tempDirs.splice(0)) {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  function createTempDir(prefix: string): string {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-    tempDirs.push(dir);
-    return dir;
-  }
-
-  function createSqliteTranscriptTarget(params: {
-    dir: string;
-    sessionId?: string;
-    sessionKey?: string;
-  }) {
-    const sessionId = params.sessionId ?? "session-1";
-    const sessionKey = params.sessionKey ?? "agent:main:main";
-    const storePath = path.join(params.dir, "agents", "main", "sessions", "sessions.json");
-    fs.mkdirSync(path.dirname(storePath), { recursive: true });
-    const sqliteMarker = formatSqliteSessionFileMarker({
-      agentId: "main",
-      sessionId,
-      storePath,
-    });
-    return {
-      agentId: "main",
-      cwd: params.dir,
-      sessionEntry: undefined,
-      sessionId,
-      sessionKey,
-      storePath,
-      sqliteMarker,
-    };
-  }
-
-  async function readTranscriptMessages(params: {
-    sessionId: string;
-    sessionKey: string;
-    storePath: string;
-  }): Promise<Array<Record<string, unknown>>> {
-    return (
-      await loadTranscriptEvents({
-        agentId: "main",
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
-      })
-    )
-      .map((entry) => (entry as { message?: unknown }).message)
-      .filter(
-        (message): message is Record<string, unknown> =>
-          typeof message === "object" && message !== null,
-      );
-  }
-
-  describe("buildPersistedUserTurnMediaInputsFromFields", () => {
-    it("builds media inputs from structured context media fields", () => {
-      expect(
-        buildPersistedUserTurnMediaInputsFromFields({
-          MediaPath: "/tmp/a.png",
-          MediaPaths: ["/tmp/a.png", "/tmp/b.jpg"],
-          MediaType: "image/png",
-          MediaTypes: ["image/png", "image/jpeg"],
+  describe("trusted human transcript ownership", () => {
+    it("normalizes synthetic owner facts after asynchronous input resolution", async () => {
+      const provenance = { kind: "inter_session" as const, sourceTool: "sessions_send" };
+      const sender = { id: "author", identity: { type: "profile" as const, id: "author" } };
+      const recorder = createUserTurnTranscriptRecorder({
+        input: { text: "owner prompt", senderIsOwner: true, sender },
+        resolveInput: async () => ({
+          text: "synthetic handoff",
+          senderIsOwner: true,
+          sender,
+          provenance,
         }),
-      ).toEqual([
-        { path: "/tmp/a.png", contentType: "image/png" },
-        { path: "/tmp/b.jpg", contentType: "image/jpeg" },
-      ]);
-    });
-
-    it("uses url-backed media fields when no local path is present", () => {
-      expect(
-        buildPersistedUserTurnMediaInputsFromFields({
-          MediaUrl: "media://inbound/a.png",
-          MediaType: "image/png",
-        }),
-      ).toEqual([{ url: "media://inbound/a.png", contentType: "image/png" }]);
-    });
-
-    it("infers transcript media type from media path when explicit type is absent", () => {
-      expect(
-        buildPersistedUserTurnMediaInputsFromFields({
-          MediaPaths: ["/tmp/a.png", "https://example.test/report.pdf"],
-        }),
-      ).toEqual([
-        { path: "/tmp/a.png", contentType: "image/png" },
-        { path: "https://example.test/report.pdf", contentType: "application/pdf" },
-      ]);
-    });
-
-    it("does not reuse singular media type for later media paths", () => {
-      expect(
-        buildPersistedUserTurnMediaInputsFromFields({
-          MediaPath: "/tmp/a.png",
-          MediaPaths: ["/tmp/a.png", "/tmp/report.pdf"],
-          MediaType: "image/png",
-        }),
-      ).toEqual([
-        { path: "/tmp/a.png", contentType: "image/png" },
-        { path: "/tmp/report.pdf", contentType: "application/pdf" },
-      ]);
-    });
-
-    it("resolves staged relative media paths against the media workspace", () => {
-      const workspaceDir = createTempDir("openclaw-user-turn-media-");
-
-      expect(
-        buildPersistedUserTurnMediaInputsFromFields({
-          MediaPath: "media/inbound/a.png",
-          MediaPaths: ["media/inbound/a.png", "media/inbound/b.jpg"],
-          MediaType: "image/png",
-          MediaTypes: ["image/png", "image/jpeg"],
-          MediaWorkspaceDir: workspaceDir,
-        }),
-      ).toEqual([
-        { path: path.join(workspaceDir, "media/inbound/a.png"), contentType: "image/png" },
-        { path: path.join(workspaceDir, "media/inbound/b.jpg"), contentType: "image/jpeg" },
-      ]);
-    });
-
-    it("does not rewrite absolute or URL-like media paths", () => {
-      const workspaceDir = createTempDir("openclaw-user-turn-media-");
-      const absolutePath = path.join(workspaceDir, "media/inbound/a.png");
-
-      expect(
-        buildPersistedUserTurnMediaInputsFromFields({
-          MediaPaths: [absolutePath, "media://inbound/b.jpg", "https://example.test/c.png"],
-          MediaTypes: ["image/png", "image/jpeg", "image/png"],
-          MediaWorkspaceDir: workspaceDir,
-        }),
-      ).toEqual([
-        { path: absolutePath, contentType: "image/png" },
-        { path: "media://inbound/b.jpg", contentType: "image/jpeg" },
-        { path: "https://example.test/c.png", contentType: "image/png" },
-      ]);
-    });
-
-    it("does not infer media from absent structured fields", () => {
-      expect(buildPersistedUserTurnMediaInputsFromFields(undefined)).toEqual([]);
-      expect(buildPersistedUserTurnMediaInputsFromFields({})).toEqual([]);
-    });
-
-    it("preserves index alignment when an earlier attachment lacks a content type", () => {
-      // Writer pads missing types with "" to keep MediaPaths/MediaTypes index-aligned.
-      // The reader must NOT compact those "" holes away before indexing or a later
-      // attachment's type lands on the wrong attachment.
-      const result = buildPersistedUserTurnMediaInputsFromFields({
-        MediaPaths: ["/media/a.bin", "/media/b.png"],
-        MediaTypes: ["", "image/png"],
+        target: unusedRecorderTarget,
       });
-      expect(result).toHaveLength(2);
-      const [first, second] = result;
-      // a.bin has no explicit type in the "" hole. Its contentType must NOT be
-      // "image/png" — that belongs to b.png at index 1.
-      expect(first).toMatchObject({ path: "/media/a.bin" });
-      expect(first?.contentType).not.toBe("image/png");
-      // b.png at index 1 must keep its own type correctly aligned.
-      expect(second).toEqual({ path: "/media/b.png", contentType: "image/png" });
-    });
-
-    it("preserves index alignment when an earlier attachment lacks a url", () => {
-      // Same misalignment risk for MediaUrls: a "" hole for a path-only attachment
-      // must not shift a later attachment's URL to the wrong index.
-      expect(
-        buildPersistedUserTurnMediaInputsFromFields({
-          MediaPaths: ["/media/local.bin", ""],
-          MediaUrls: ["", "https://example.test/remote.png"],
-          MediaTypes: ["application/octet-stream", "image/png"],
-        }),
-      ).toEqual([
-        // local.bin has a path but no url (the "" was a placeholder, not a real url).
-        { path: "/media/local.bin", contentType: "application/octet-stream" },
-        // remote.png has no path (the "" was a placeholder) but does have a url.
-        { url: "https://example.test/remote.png", contentType: "image/png" },
-      ]);
+      expect(recorder.message).toMatchObject({
+        __openclaw: { senderIsOwner: true, senderIdentity: sender.identity },
+      });
+      const resolved = await recorder.resolveMessage();
+      expect(resolved).toMatchObject({
+        provenance,
+        __openclaw: { senderIsOwner: false },
+      });
+      expect(resolved).not.toHaveProperty("__openclaw.senderIdentity");
     });
   });
 
@@ -218,6 +73,7 @@ describe("user turn transcript persistence", () => {
         input: {
           text: "display prompt",
           media: [{ path: "/tmp/image.png", contentType: "image/png" }],
+          sender: { id: "user-42", name: "Ada" },
           timestamp: 123,
         },
         target: unusedRecorderTarget,
@@ -229,6 +85,7 @@ describe("user turn transcript persistence", () => {
             role: "user",
             content: "runtime prompt",
             provenance: { sourceChannel: "telegram" },
+            __openclaw: { mirrorIdentity: "run-1:prompt" },
           }),
           preparedMessage: recorder.message,
         }),
@@ -237,34 +94,11 @@ describe("user turn transcript persistence", () => {
         content: "display prompt",
         provenance: { sourceChannel: "telegram" },
         timestamp: 123,
-        MediaPath: "/tmp/image.png",
-        MediaType: "image/png",
-      });
-    });
-
-    it("preserves runtime metadata when adding prepared sender attribution", () => {
-      const recorder = createUserTurnTranscriptRecorder({
-        input: {
-          text: "group prompt",
-          sender: { id: "user-42", name: "Ada" },
-        },
-        target: unusedRecorderTarget,
-      });
-
-      expect(
-        mergePreparedUserTurnMessageForRuntime({
-          runtimeMessage: castAgentMessage({
-            role: "user",
-            content: "runtime prompt",
-            __openclaw: { mirrorIdentity: "run-1:prompt" },
-          }),
-          preparedMessage: recorder.message,
-        }),
-      ).toMatchObject({
         __openclaw: {
           mirrorIdentity: "run-1:prompt",
           senderId: "user-42",
           senderName: "Ada",
+          media: [expect.objectContaining({ path: "/tmp/image.png", contentType: "image/png" })],
         },
       });
     });
@@ -312,294 +146,32 @@ describe("user turn transcript persistence", () => {
         timestamp: 123,
       });
     });
-
-    it("does not apply prepared user metadata to assistant messages", () => {
-      const recorder = createUserTurnTranscriptRecorder({
-        input: { text: "display prompt" },
-        target: unusedRecorderTarget,
-      });
-      const assistant = castAgentMessage({ role: "assistant", content: "hello" });
-
-      expect(
-        mergePreparedUserTurnMessageForRuntime({
-          runtimeMessage: assistant,
-          preparedMessage: recorder.message,
-        }),
-      ).toBe(assistant);
-    });
   });
 
   describe("resolvePersistedUserTurnText", () => {
-    it("normalizes the selected clean user-turn transcript text", () => {
-      expect(resolvePersistedUserTurnText("  What is in this image?  ", { hasMedia: true })).toBe(
-        "What is in this image?",
-      );
-    });
-
-    it("ignores exact channel media placeholders only when structured media is present", () => {
-      expect(resolvePersistedUserTurnText("<media:image> (2 images)", { hasMedia: true })).toBe(
-        undefined,
-      );
-      expect(resolvePersistedUserTurnText("<media:image> (2 images)", { hasMedia: false })).toBe(
+    it("preserves historical placeholder-like text as ordinary transcript content", () => {
+      expect(resolvePersistedUserTurnText("<media:image> (2 images)")).toBe(
         "<media:image> (2 images)",
       );
     });
   });
 
-  describe("persistUserTurnTranscript", () => {
-    it("appends a structured user turn through the shared transcript writer", async () => {
-      const dir = createTempDir("openclaw-user-turn-append-");
-      const target = createSqliteTranscriptTarget({ dir });
-      const provenance = {
-        kind: "inter_session" as const,
-        sourceSessionKey: "source-main",
-        sourceTool: "sessions_send",
-      };
-
-      const appended = await persistUserTurnTranscript({
-        ...target,
-        input: {
-          text: "What is in this image?",
-          media: [{ path: "/tmp/image.png", contentType: "image/png" }],
-          timestamp: 123,
-          senderIsOwner: true,
-          provenance,
-        },
-        updateMode: "none",
-      });
-
-      expect(appended?.message).toMatchObject({
-        role: "user",
-        content: "What is in this image?",
-        MediaPath: "/tmp/image.png",
-      });
-      await expect(readTranscriptMessages(target)).resolves.toEqual([
-        expect.objectContaining({
+  it.each([null, { version: 2, text: "stored" }, { version: 1, text: 42 }])(
+    "refuses unsupported or malformed model prompt projections: %j",
+    (modelPromptProjection) => {
+      expect(() =>
+        readModelPromptProjection({
           role: "user",
-          content: "What is in this image?",
-          MediaPath: "/tmp/image.png",
-          __openclaw: { senderIsOwner: true },
-          provenance,
-          MediaType: "image/png",
+          content: "original",
+          __openclaw: { modelPromptProjection },
         }),
-      ]);
-    });
-
-    it("persists sender metadata as __openclaw envelope", async () => {
-      const dir = createTempDir("openclaw-user-turn-append-sender-");
-      const target = createSqliteTranscriptTarget({ dir });
-
-      const appended = await persistUserTurnTranscript({
-        ...target,
-        input: {
-          text: "hello from group",
-          sender: {
-            id: "8489979671",
-            name: "Ram Shenoy",
-            username: "ram_s",
-          },
-        },
-        updateMode: "none",
-      });
-
-      expect(appended?.message).toMatchObject({
-        role: "user",
-        content: "hello from group",
-        __openclaw: {
-          senderId: "8489979671",
-          senderName: "Ram Shenoy",
-          senderUsername: "ram_s",
-        },
-      });
-      await expect(readTranscriptMessages(target)).resolves.toEqual([
-        expect.objectContaining({
-          role: "user",
-          content: "hello from group",
-          __openclaw: {
-            senderId: "8489979671",
-            senderName: "Ram Shenoy",
-            senderUsername: "ram_s",
-          },
-        }),
-      ]);
-    });
-
-    it("omits __openclaw when no sender metadata is provided", async () => {
-      const dir = createTempDir("openclaw-user-turn-append-nosender-");
-      const target = createSqliteTranscriptTarget({ dir });
-
-      const appended = await persistUserTurnTranscript({
-        ...target,
-        input: {
-          text: "hello without sender",
-          sender: { id: "", name: null },
-        },
-        updateMode: "none",
-      });
-
-      expect(appended?.message).not.toHaveProperty("__openclaw");
-    });
-
-    it("uses inline update mode by default", async () => {
-      const dir = createTempDir("openclaw-user-turn-append-inline-");
-      const target = createSqliteTranscriptTarget({ dir });
-
-      const appended = await persistUserTurnTranscript({
-        ...target,
-        input: {
-          text: "hello from runtime",
-        },
-      });
-
-      expect(appended?.message).toMatchObject({
-        role: "user",
-        content: "hello from runtime",
-        timestamp: expect.any(Number),
-      });
-      await expect(readTranscriptMessages(target)).resolves.toEqual([
-        expect.objectContaining({
-          role: "user",
-          content: "hello from runtime",
-          timestamp: expect.any(Number),
-        }),
-      ]);
-    });
-
-    it("returns the existing user turn when the idempotency key was already persisted", async () => {
-      const dir = createTempDir("openclaw-user-turn-append-idempotent-");
-      const target = createSqliteTranscriptTarget({ dir });
-
-      const first = await persistUserTurnTranscript({
-        ...target,
-        input: {
-          text: "hello once",
-          timestamp: 123,
-          idempotencyKey: "chat-run-1:user",
-        },
-        updateMode: "none",
-      });
-      const second = await persistUserTurnTranscript({
-        ...target,
-        input: {
-          text: "hello once replayed",
-          timestamp: 456,
-          idempotencyKey: "chat-run-1:user",
-        },
-        updateMode: "none",
-      });
-
-      expect(second?.messageId).toBe(first?.messageId);
-      expect(second?.message).toMatchObject({
-        role: "user",
-        content: "hello once",
-        timestamp: 123,
-        idempotencyKey: "chat-run-1:user",
-      });
-      await expect(readTranscriptMessages(target)).resolves.toEqual([
-        expect.objectContaining({
-          role: "user",
-          content: "hello once",
-          timestamp: 123,
-          idempotencyKey: "chat-run-1:user",
-        }),
-      ]);
-    });
-
-    it("preserves transcript metadata when before_message_write replaces a user turn", async () => {
-      let hookCalls = 0;
-      const provenance = {
-        kind: "inter_session" as const,
-        sourceSessionKey: "source-main",
-        sourceTool: "sessions_send",
-      };
-      initializeGlobalHookRunner(
-        createMockPluginRegistry([
-          {
-            hookName: "before_message_write",
-            handler: (event) => {
-              hookCalls += 1;
-              const message = (event as { message: Record<string, unknown> }).message;
-              const meta = message["__openclaw"] as {
-                transport?: { conversationRef?: string; messageId?: string };
-              };
-              if (meta.transport) {
-                meta.transport.conversationRef = "conv_tampered";
-                meta.transport.messageId = "tampered-message";
-              }
-              return {
-                message: castAgentMessage({
-                  role: "user",
-                  content: "[redacted by hook]",
-                  __openclaw: { hookOwned: true },
-                }),
-              };
-            },
-          },
-        ]),
-      );
-      const dir = createTempDir("openclaw-user-turn-redacted-idempotent-");
-      const target = createSqliteTranscriptTarget({ dir });
-
-      await persistUserTurnTranscript({
-        ...target,
-        input: {
-          text: "secret prompt",
-          idempotencyKey: "chat-run-1:user",
-          senderIsOwner: true,
-          provenance,
-          sender: { id: "user-42", name: "Ada" },
-          transport: {
-            channel: "reef",
-            conversationRef: "conv_0123456789abcdef0123456789abcdef",
-            messageId: "inbound-1",
-            replyToId: "outbound-1",
-          },
-        },
-        beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
-      });
-      await persistUserTurnTranscript({
-        ...target,
-        input: {
-          text: "secret prompt",
-          idempotencyKey: "chat-run-1:user",
-          senderIsOwner: true,
-          provenance,
-          sender: { id: "user-42", name: "Ada" },
-          transport: {
-            channel: "reef",
-            conversationRef: "conv_0123456789abcdef0123456789abcdef",
-            messageId: "inbound-1",
-            replyToId: "outbound-1",
-          },
-        },
-        beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
-      });
-
-      await expect(readTranscriptMessages(target)).resolves.toEqual([
-        expect.objectContaining({
-          role: "user",
-          content: "[redacted by hook]",
-          idempotencyKey: "chat-run-1:user",
-          provenance,
-          __openclaw: {
-            hookOwned: true,
-            senderIsOwner: true,
-            transport: {
-              channel: "reef",
-              conversationRef: "conv_0123456789abcdef0123456789abcdef",
-              messageId: "inbound-1",
-              replyToId: "outbound-1",
-            },
-          },
-        }),
-      ]);
-      expect(hookCalls).toBe(1);
-    });
-  });
+      ).toThrow("update OpenClaw to a compatible version or start a new session");
+    },
+  );
 
   describe("persistUserTurnTranscript", () => {
     it("resolves the session file and persists the user turn", async () => {
-      const dir = createTempDir("openclaw-user-turn-persist-");
+      const dir = sessionDirs.make();
       const target = createSqliteTranscriptTarget({ dir });
       const sessionStore = {
         [target.sessionKey]: {
@@ -624,7 +196,7 @@ describe("user turn transcript persistence", () => {
         updateMode: "none",
       });
 
-      expect(persisted?.sessionFile).toBe(target.sqliteMarker);
+      expect(persisted?.sessionFile).toBe(target.sessionKey);
       await expect(readTranscriptMessages(target)).resolves.toEqual([
         expect.objectContaining({
           role: "user",
@@ -635,19 +207,140 @@ describe("user turn transcript persistence", () => {
   });
 
   describe("createUserTurnTranscriptRecorder", () => {
+    it("freezes the original prompt after initial steering and across reopened recorders", async () => {
+      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
+      const input = { text: "original prompt", timestamp: 123, idempotencyKey: "projection:user" };
+      const recorder = createUserTurnTranscriptRecorder({ input, target });
+      await recorder.persistApproved();
+      const steering = createUserTurnTranscriptRecorder({
+        input: { text: "initial steering", timestamp: 124, idempotencyKey: "steering:user" },
+        target,
+      });
+      const steered = await steering.persistApproved();
+      const text = "prepend\n\nreplacement model prompt\n\nappend";
+      const captured = await recorder.captureModelPromptProjection!(text, () => {});
+      recorder.markSentToProvider?.();
+      const generation = recorder.getAdmissionReceipt()?.generation;
+
+      expect(captured.content).toBe(input.text);
+      expect(captured.timestamp).toBe(input.timestamp);
+      expect(await recorder.captureModelPromptProjection!(text, () => {})).toEqual(captured);
+      expect(recorder.getAdmissionReceipt()?.generation).toBe(generation);
+      await expect(
+        recorder.captureModelPromptProjection!("different hook output", () => {}),
+      ).rejects.toThrow("cannot be changed");
+
+      const reopened = createUserTurnTranscriptRecorder({ input, target });
+      await reopened.persistApproved();
+      expect(readModelPromptProjection(reopened.getPersistedMessage?.())).toBe(text);
+      expect(await reopened.captureModelPromptProjection!(text, () => {})).toEqual(captured);
+      await expect(
+        reopened.captureModelPromptProjection!("different hook output", () => {}),
+      ).rejects.toThrow("cannot be changed");
+      await expect(readTranscriptMessages(target)).resolves.toEqual([captured, steered?.message]);
+    });
+
+    it("uses the persisted target's redaction for capture, dispatch, and reopened replay", async () => {
+      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
+      const input = { text: "private", timestamp: 123, idempotencyKey: "redaction:user" };
+      const redactedTarget = { ...target, config: { logging: { redactPatterns: ["private"] } } };
+      const recorder = createUserTurnTranscriptRecorder({
+        input,
+        target: { ...target, config: { logging: { redactPatterns: [] } } },
+      });
+      await recorder.persistApproved({ target: redactedTarget });
+      const rawProjection = "prepend\n\nprivate\n\nappend";
+      const captured = await recorder.captureModelPromptProjection!(rawProjection, () => {});
+      const expected = "prepend\n\n***\n\nappend";
+      expect(captured.content).toBe("***");
+      expect(readModelPromptProjection(captured)).toBe(expected);
+      expect(projectRecordedModelPrompt(makeUserMessage(input.text, 123), captured)).toMatchObject({
+        content: expected,
+      });
+      recorder.markSentToProvider?.();
+      expect(await recorder.captureModelPromptProjection!(rawProjection, () => {})).toEqual(
+        captured,
+      );
+      const stored = await readTranscriptMessages(target);
+      expect(stored).toEqual([captured]);
+      expect(JSON.stringify(stored)).not.toContain("private");
+
+      const reopened = createUserTurnTranscriptRecorder({ input, target: redactedTarget });
+      await reopened.persistApproved();
+      const replay = await reopened.captureModelPromptProjection!(rawProjection, () => {});
+      expect(readModelPromptProjection(replay)).toBe(expected);
+      expect(projectRecordedModelPrompt(replay)).toMatchObject({ content: expected });
+    });
+
+    it("rechecks authority after pending persistence before capturing a projection", async () => {
+      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
+      const recorder = createUserTurnTranscriptRecorder({ input: { text: "original" }, target });
+      await recorder.persistApproved();
+      let release!: () => void;
+      recorder.markRuntimePersistencePending(
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+      );
+      let current = true;
+      const capture = recorder.captureModelPromptProjection!("enriched", () => {
+        if (!current) {
+          throw new Error("retired turn");
+        }
+      });
+      const rejection = expect(capture).rejects.toThrow("retired turn");
+      current = false;
+      release();
+      await rejection;
+
+      const [stored] = await readTranscriptMessages(target);
+      expect(stored).toMatchObject({ content: "original" });
+      expect(readModelPromptProjection(stored)).toBeUndefined();
+    });
+
+    it("never attaches an uncaptured projection to a sent or replaced user turn", async () => {
+      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
+      const recorder = createUserTurnTranscriptRecorder({ input: { text: "original" }, target });
+      await recorder.persistApproved();
+      await replaceTranscriptEvents(target, [
+        {
+          type: "message",
+          id: "replacement",
+          parentId: null,
+          message: makeUserMessage("new turn", 123),
+        },
+      ]);
+      await expect(recorder.captureModelPromptProjection!("enriched", () => {})).rejects.toThrow(
+        "session writer claim changed",
+      );
+      const [replacement] = await readTranscriptMessages(target);
+      expect(replacement).toMatchObject({ content: "new turn" });
+      expect(readModelPromptProjection(replacement)).toBeUndefined();
+
+      const sent = createUserTurnTranscriptRecorder({ input: { text: "already sent" }, target });
+      await sent.persistApproved();
+      sent.markSentToProvider?.();
+      await expect(sent.captureModelPromptProjection!("too late", () => {})).rejects.toThrow(
+        "before provider dispatch",
+      );
+      expect(readModelPromptProjection(sent.getPersistedMessage?.())).toBeUndefined();
+    });
+
     it("persists fallback user turns only once", async () => {
-      const dir = createTempDir("openclaw-user-turn-recorder-fallback-");
+      const dir = sessionDirs.make();
       const target = createSqliteTranscriptTarget({ dir });
+      const persistedMessages: unknown[] = [];
       const recorder = createUserTurnTranscriptRecorder({
         input: {
           text: "hello from fallback",
           timestamp: 123,
           idempotencyKey: "chat-run-1:user",
         },
-        target: {
-          ...target,
-        },
+        target,
         updateMode: "none",
+        onMessagePersisted: (message) => {
+          persistedMessages.push(message);
+        },
       });
       expect(recorder.getPersistedMessage?.()).toBeUndefined();
 
@@ -659,6 +352,7 @@ describe("user turn transcript persistence", () => {
       expect(first?.messageId).toBeTruthy();
       expect(second?.messageId).toBe(first?.messageId);
       expect(recorder.getPersistedMessage?.()).toEqual(first?.message);
+      expect(persistedMessages).toEqual([first?.message]);
       await expect(readTranscriptMessages(target)).resolves.toEqual([
         expect.objectContaining({
           role: "user",
@@ -668,184 +362,292 @@ describe("user turn transcript persistence", () => {
       ]);
     });
 
-    it("notifies once after fallback user-turn persistence", async () => {
-      const dir = createTempDir("openclaw-user-turn-recorder-notify-");
-      const target = createSqliteTranscriptTarget({ dir });
-      const persistedMessages: unknown[] = [];
-      const recorder = createUserTurnTranscriptRecorder({
-        input: {
-          text: "#35676 Keśava: No wtf",
+    it.each(["capture", "dispatch"] as const)(
+      "appends #99495 media during %s without changing the admitted turn",
+      async (timing) => {
+        const dir = sessionDirs.make();
+        const target = createSqliteTranscriptTarget({ dir });
+        const admittedInput = {
+          text: "describe @Ada",
           timestamp: 123,
-          idempotencyKey: "chat-run-ambient:user",
-        },
-        target: {
+          idempotencyKey: "chat-run-late:user",
+          mentions: [{ profileId: "ada", start: 9, end: 13 }],
+        };
+        const committedEntries: string[] = [];
+        let resolveMedia!: (input: UserTurnInput) => void;
+        let markResolverStarted!: () => void;
+        const resolverStarted = new Promise<void>((resolve) => {
+          markResolverStarted = resolve;
+        });
+        const mediaInput = new Promise<UserTurnInput>((resolve) => {
+          resolveMedia = resolve;
+        });
+        const recorder = createUserTurnTranscriptRecorder({
+          input: admittedInput,
+          onOriginalInputCommitted: ({ anchor }) => committedEntries.push(anchor.entryId),
+          resolveInput: async () => {
+            markResolverStarted();
+            return await mediaInput;
+          },
+          beforeMessageWrite: ({ message }) =>
+            castAgentMessage({
+              ...(message as unknown as Record<string, unknown>),
+              __openclaw: { hookOwned: true },
+            }),
+          target,
+        });
+        const persistence = recorder.persistFallback();
+        await resolverStarted;
+        const admitted = await persistUserTurnTranscript({
           ...target,
-        },
-        updateMode: "none",
-        onMessagePersisted: (message) => {
-          persistedMessages.push(message);
-        },
-      });
+          input: admittedInput,
+        });
+        expect(admitted).toBeDefined();
+        recorder.markRuntimePersisted(recorder.message, admitted?.admission, {
+          appended: admitted?.appended === true,
+        });
+        const captureWait = createDeferred();
+        if (timing === "capture") {
+          recorder.markRuntimePersistencePending(captureWait.promise);
+        }
+        const projection = recorder.captureModelPromptProjection!(
+          "enriched describe @Ada",
+          () => {},
+        );
+        if (timing === "dispatch") {
+          await projection;
+          recorder.markSentToProvider?.();
+        }
+        resolveMedia({
+          ...admittedInput,
+          media: [{ path: path.join(dir, "image.png"), contentType: "image/png" }],
+        });
 
-      await recorder.persistFallback();
-      await recorder.persistFallback();
+        await persistence;
+        captureWait.resolve();
+        await projection;
 
-      expect(persistedMessages).toEqual([
-        expect.objectContaining({
+        expect(recorder.getAdmissionReceipt()).toMatchObject({ entryId: admitted?.messageId });
+        expect(recorder.getPersistedMessage?.()).toMatchObject({
+          content: "describe @Ada",
+          idempotencyKey: "chat-run-late:user",
+        });
+        expect(committedEntries).toEqual([admitted?.messageId]);
+        const messages = await readTranscriptMessages(target);
+        expect(messages).toEqual([
+          expect.objectContaining({
+            content: "describe @Ada",
+            idempotencyKey: "chat-run-late:user",
+            __openclaw: {
+              humanMentions: admittedInput.mentions,
+              modelPromptProjection: { version: 1, text: "enriched describe @Ada" },
+            },
+          }),
+          expect.objectContaining({
+            content: "",
+            idempotencyKey: "chat-run-late:user:late-media",
+            __openclaw: {
+              hookOwned: true,
+              lateMedia: true,
+              media: [expect.objectContaining({ path: path.join(dir, "image.png") })],
+            },
+          }),
+        ]);
+        expect(readModelPromptProjection(messages[1])).toBeUndefined();
+        const lateProjection = buildLateMediaAttachedProjection(castAgentMessage(messages[1]));
+        expect(lateProjection.text).toBe(`[media attached: ${path.join(dir, "image.png")}]`);
+        expect(lateProjection.media).toEqual([
+          expect.objectContaining({
+            path: path.join(dir, "image.png"),
+            contentType: "image/png",
+            kind: "image",
+          }),
+        ]);
+      },
+    );
+
+    it.each(["sent", "blocked"] as const)(
+      "retires the pending admission view when %s",
+      async (state) => {
+        const dir = sessionDirs.make();
+        const target = createSqliteTranscriptTarget({ dir });
+        const recorder = createUserTurnTranscriptRecorder({
+          input: {
+            text: "admit exactly once",
+            idempotencyKey: "receipt:user",
+          },
+          target,
+        });
+
+        const persisted = await recorder.persistApproved();
+
+        expect(persisted).toBeDefined();
+        expect(recorder.getAdmissionReceipt()).toBe(persisted?.admission);
+        expect(recorder.getAdmissionReceipt()).toMatchObject({
+          entryId: persisted?.messageId,
+          agentId: target.agentId,
+          sessionId: target.sessionId,
+          sessionKey: target.sessionKey,
+          idempotencyKey: "receipt:user",
+          logicalTurnId: expect.any(String),
           role: "user",
-          content: "#35676 Keśava: No wtf",
-        }),
-      ]);
-      await expect(readTranscriptMessages(target)).resolves.toEqual([
-        expect.objectContaining({
-          role: "user",
-          content: "#35676 Keśava: No wtf",
-        }),
-      ]);
-    });
+        });
 
-    it("resolves media lazily at persistence time", async () => {
-      const dir = createTempDir("openclaw-user-turn-recorder-lazy-media-");
+        const pending = readPendingUserTurnTranscriptAdmission(recorder);
+        expect(pending).toEqual(persisted?.admission);
+        expect(pending).not.toBe(recorder.getAdmissionReceipt());
+        expect(readPendingUserTurnTranscriptAdmission({ ...recorder })).toBeUndefined();
+        if (state === "sent") {
+          recorder.markSentToProvider?.();
+        } else {
+          recorder.markBlocked();
+        }
+        expect(readPendingUserTurnTranscriptAdmission(recorder)).toBeUndefined();
+      },
+    );
+
+    it("adds confirmed steering provenance after runtime persistence", async () => {
+      const dir = sessionDirs.make();
       const target = createSqliteTranscriptTarget({ dir });
-      let resolverCalled = false;
-      const recorder = createUserTurnTranscriptRecorder({
-        input: {
-          text: "describe this",
-          timestamp: 123,
-          idempotencyKey: "chat-run-lazy:user",
-        },
-        resolveInput: async () => {
-          resolverCalled = true;
-          return {
-            text: "describe this",
-            timestamp: 123,
-            idempotencyKey: "chat-run-lazy:user",
-            media: [{ path: path.join(dir, "image.png"), contentType: "image/png" }],
-          };
-        },
-        target: {
-          ...target,
-        },
-        updateMode: "none",
-      });
+      const input = {
+        text: "tighten the answer",
+        idempotencyKey: "confirm-steer:user",
+        sender: { id: "operator-1", name: "Operator" },
+      };
+      const recorder = createUserTurnTranscriptRecorder({ input, target });
+      const persisted = await persistUserTurnTranscript({ ...target, input });
+      expect(persisted).toBeDefined();
+      recorder.markRuntimePersisted(persisted?.message, persisted?.admission);
+      const initialGeneration = recorder.getAdmissionReceipt()?.generation;
 
-      expect(recorder.message).toEqual(
-        expect.objectContaining({
-          role: "user",
-          content: "describe this",
-          idempotencyKey: "chat-run-lazy:user",
-        }),
+      const admission = recorder.getAdmissionReceipt();
+      if (!admission) {
+        throw new Error("missing persisted admission");
+      }
+      const { db } = openOpenClawAgentDatabase({
+        agentId: target.agentId,
+        path: admission.storePath,
+      });
+      const work = trackSqliteStatementExecutions(db, ["fts", "size"], (sql) =>
+        /\bsession_transcript_fts\b/i.test(sql)
+          ? "fts"
+          : sql.includes("octet_length")
+            ? "size"
+            : null,
       );
-      expect(recorder.message).not.toHaveProperty("MediaPath");
-      expect(resolverCalled).toBe(false);
+      try {
+        await recorder.confirmSteerTargetRunIdForPersistence?.("active-run");
+      } finally {
+        work.restore();
+      }
+      expect(work.counts).toEqual({ fts: 0, size: 0 });
 
-      const persisted = await recorder.persistFallback();
-
-      expect(resolverCalled).toBe(true);
-      expect(persisted?.message).toMatchObject({
-        role: "user",
-        content: "describe this",
-        MediaPath: path.join(dir, "image.png"),
-        MediaType: "image/png",
+      expect(recorder.getAdmissionReceipt()?.generation).toBe(initialGeneration);
+      expect(recorder.getPersistedMessage?.()).toMatchObject({
+        __openclaw: {
+          senderId: "operator-1",
+          senderName: "Operator",
+          steerTargetRunId: "active-run",
+        },
       });
       await expect(readTranscriptMessages(target)).resolves.toEqual([
         expect.objectContaining({
-          role: "user",
-          content: "describe this",
-          MediaPath: path.join(dir, "image.png"),
-          MediaType: "image/png",
+          __openclaw: {
+            senderId: "operator-1",
+            senderName: "Operator",
+            steerTargetRunId: "active-run",
+          },
         }),
       ]);
     });
 
-    it("appends #99495 media that resolves after the admitted turn reached the provider", async () => {
-      const dir = createTempDir("openclaw-user-turn-recorder-late-media-");
+    it("waits for a deferred projection rebuild before returning admission identity", async () => {
+      const dir = sessionDirs.make();
+      const target = createSqliteTranscriptTarget({ dir });
+      const committedEntries: string[] = [];
+      await replaceSessionEntry(
+        { storePath: target.storePath, sessionKey: target.sessionKey },
+        {
+          sessionId: target.sessionId,
+          sessionFile: target.sqliteMarker,
+          updatedAt: 1,
+        },
+      );
+      await persistSessionTranscriptTurn(target, {
+        messages: [
+          transcriptMessage("root", null, { role: "user", content: "root" }),
+          transcriptMessage("inactive", "root", { role: "assistant", content: "inactive" }),
+          transcriptMessage("active", "root", { role: "assistant", content: "active" }),
+        ],
+        touchSessionEntry: false,
+      });
+      const recorder = createUserTurnTranscriptRecorder({
+        input: { text: "admit after rebuild", idempotencyKey: "projection:user" },
+        target,
+        onOriginalInputCommitted: ({ anchor }) => committedEntries.push(anchor.entryId),
+      });
+
+      const persisted = await recorder.persistApproved({ expectedSessionId: target.sessionId });
+
+      expect(persisted).toBeDefined();
+      expect(committedEntries).toEqual([persisted?.messageId]);
+      expect(persisted?.admission).toMatchObject({
+        entryId: persisted?.messageId,
+        sessionId: target.sessionId,
+        idempotencyKey: "projection:user",
+      });
+    });
+
+    it("preserves distinct text supplied with late-resolved media", async () => {
+      const dir = sessionDirs.make();
       const target = createSqliteTranscriptTarget({ dir });
       const admittedInput = {
         text: "describe this",
         timestamp: 123,
-        idempotencyKey: "chat-run-late:user",
+        idempotencyKey: "chat-run-late-caption:user",
       };
       let resolveMedia!: (input: UserTurnInput) => void;
       let markResolverStarted!: () => void;
       const resolverStarted = new Promise<void>((resolve) => {
         markResolverStarted = resolve;
       });
-      const mediaInput = new Promise<UserTurnInput>((resolve) => {
-        resolveMedia = resolve;
-      });
       const recorder = createUserTurnTranscriptRecorder({
         input: admittedInput,
         resolveInput: async () => {
           markResolverStarted();
-          return await mediaInput;
+          return await new Promise<UserTurnInput>((resolve) => {
+            resolveMedia = resolve;
+          });
         },
-        target: {
-          ...target,
-        },
+        target,
       });
       const persistence = recorder.persistFallback();
       await resolverStarted;
-      await persistUserTurnTranscript({
-        ...target,
-        input: admittedInput,
-      });
+      await persistUserTurnTranscript({ ...target, input: admittedInput });
       recorder.markRuntimePersisted(recorder.message);
       recorder.markSentToProvider?.();
       resolveMedia({
         ...admittedInput,
+        text: "resolved subtitle",
         media: [{ path: path.join(dir, "image.png"), contentType: "image/png" }],
       });
 
       await persistence;
 
       await expect(readTranscriptMessages(target)).resolves.toEqual([
+        expect.objectContaining({ content: "describe this" }),
         expect.objectContaining({
-          content: "describe this",
-          idempotencyKey: "chat-run-late:user",
-        }),
-        expect.objectContaining({
-          content: `[media attached: ${path.join(dir, "image.png")}]`,
-          idempotencyKey: "chat-run-late:user:late-media",
-          MediaPath: path.join(dir, "image.png"),
-        }),
-      ]);
-    });
-
-    it("keeps #99495 media inline when it resolves before first serialization", async () => {
-      const dir = createTempDir("openclaw-user-turn-recorder-early-media-");
-      const target = createSqliteTranscriptTarget({ dir });
-      const recorder = createUserTurnTranscriptRecorder({
-        input: {
-          text: "describe this",
-          timestamp: 123,
-          idempotencyKey: "chat-run-early:user",
-        },
-        resolveInput: async () => ({
-          text: "describe this",
-          timestamp: 123,
-          idempotencyKey: "chat-run-early:user",
-          media: [{ path: path.join(dir, "image.png"), contentType: "image/png" }],
-        }),
-        target: {
-          ...target,
-        },
-      });
-
-      await recorder.persistFallback();
-      recorder.markSentToProvider?.();
-
-      await expect(readTranscriptMessages(target)).resolves.toEqual([
-        expect.objectContaining({
-          content: "describe this",
-          idempotencyKey: "chat-run-early:user",
-          MediaPath: path.join(dir, "image.png"),
+          content: "resolved subtitle",
+          __openclaw: {
+            lateMedia: true,
+            media: [{ path: path.join(dir, "image.png"), contentType: "image/png" }],
+          },
         }),
       ]);
     });
 
     it("falls back to the admitted text message when lazy media resolution fails", async () => {
-      const dir = createTempDir("openclaw-user-turn-recorder-lazy-failed-");
+      const dir = sessionDirs.make();
       const target = createSqliteTranscriptTarget({ dir });
       const errors: unknown[] = [];
       const recorder = createUserTurnTranscriptRecorder({
@@ -857,9 +659,7 @@ describe("user turn transcript persistence", () => {
         resolveInput: async () => {
           throw new Error("media staging failed");
         },
-        target: {
-          ...target,
-        },
+        target,
         updateMode: "none",
         onPersistenceError: (error) => errors.push(error),
       });
@@ -882,101 +682,15 @@ describe("user turn transcript persistence", () => {
       ]);
     });
 
-    it("does not fallback-persist after runtime persistence is marked", async () => {
-      const dir = createTempDir("openclaw-user-turn-recorder-runtime-");
-      const target = createSqliteTranscriptTarget({ dir });
-      const recorder = createUserTurnTranscriptRecorder({
-        input: {
-          text: "runtime-owned turn",
-          timestamp: 123,
-        },
-        target: {
-          ...target,
-        },
-        updateMode: "none",
-      });
-
-      recorder.markRuntimePersisted({
-        role: "user",
-        content: "runtime-owned turn",
-        timestamp: 123,
-      });
-
-      await expect(recorder.persistFallback()).resolves.toBeUndefined();
-      await expect(readTranscriptMessages(target)).resolves.toEqual([]);
-    });
-
-    it("approved persistence skips file targets after runtime persistence is marked", async () => {
-      const dir = createTempDir("openclaw-user-turn-recorder-runtime-approved-");
-      const target = createSqliteTranscriptTarget({ dir });
-      const recorder = createUserTurnTranscriptRecorder({
-        input: {
-          text: "runtime-owned turn",
-          timestamp: 123,
-        },
-        target: {
-          ...target,
-        },
-        updateMode: "none",
-      });
-
-      recorder.markRuntimePersisted({
-        role: "user",
-        content: "runtime-owned turn",
-        timestamp: 123,
-      });
-
-      await expect(recorder.persistApproved()).resolves.toBeUndefined();
-      await expect(readTranscriptMessages(target)).resolves.toEqual([]);
-    });
-
-    it("approved persistence does not duplicate runtime-owned SQLite turns", async () => {
-      const dir = createTempDir("openclaw-user-turn-recorder-runtime-canonical-");
-      const storePath = path.join(dir, "sessions.json");
-      const sessionStore = {};
-      const recorder = createUserTurnTranscriptRecorder({
-        input: {
-          text: "runtime-owned turn",
-          timestamp: 123,
-        },
-        target: {
-          agentId: "main",
-          sessionEntry: undefined,
-          sessionId: "session-1",
-          sessionKey: "agent:main:main",
-          sessionStore,
-          storePath,
-        },
-        updateMode: "none",
-      });
-
-      recorder.markRuntimePersisted({
-        role: "user",
-        content: "runtime-owned turn",
-        timestamp: 123,
-      });
-
-      await expect(recorder.persistApproved()).resolves.toBeUndefined();
-      await expect(
-        readTranscriptMessages({
-          sessionId: "session-1",
-          sessionKey: "agent:main:main",
-          storePath,
-        }),
-      ).resolves.toEqual([]);
-    });
-
     it("does not fallback-persist after before_agent_run blocks the turn", async () => {
-      const dir = createTempDir("openclaw-user-turn-recorder-blocked-");
+      const dir = sessionDirs.make();
       const target = createSqliteTranscriptTarget({ dir });
       const recorder = createUserTurnTranscriptRecorder({
         input: {
           text: "raw blocked prompt",
           timestamp: 123,
         },
-        target: {
-          ...target,
-        },
+        target,
         updateMode: "none",
       });
 
@@ -987,7 +701,7 @@ describe("user turn transcript persistence", () => {
     });
 
     it("uses the runtime target supplied at approved persistence time", async () => {
-      const dir = createTempDir("openclaw-user-turn-recorder-target-");
+      const dir = sessionDirs.make();
       const staleTarget = createSqliteTranscriptTarget({ dir, sessionId: "stale-session" });
       const admittedTarget = createSqliteTranscriptTarget({ dir, sessionId: "admitted-session" });
       const recorder = createUserTurnTranscriptRecorder({
@@ -995,19 +709,15 @@ describe("user turn transcript persistence", () => {
           text: "persist me in the admitted session",
           timestamp: 123,
         },
-        target: {
-          ...staleTarget,
-        },
+        target: staleTarget,
         updateMode: "none",
       });
 
       const persisted = await recorder.persistApproved({
-        target: {
-          ...admittedTarget,
-        },
+        target: admittedTarget,
       });
 
-      expect(persisted?.sessionFile).toBe(admittedTarget.sqliteMarker);
+      expect(persisted?.sessionFile).toBe(admittedTarget.sessionKey);
       await expect(readTranscriptMessages(staleTarget)).resolves.toEqual([]);
       await expect(readTranscriptMessages(admittedTarget)).resolves.toEqual([
         expect.objectContaining({
@@ -1017,8 +727,41 @@ describe("user turn transcript persistence", () => {
       ]);
     });
 
+    it("keeps concurrent persistence retries single-flight", async () => {
+      const dir = sessionDirs.make();
+      const admittedTarget = createSqliteTranscriptTarget({ dir, sessionId: "admitted-session" });
+      let targetResolutionCount = 0;
+      const recorder = createUserTurnTranscriptRecorder({
+        input: {
+          text: "persist me once after concurrent retries",
+          timestamp: 123,
+        },
+        target: () => {
+          targetResolutionCount += 1;
+          return targetResolutionCount === 1 ? undefined : admittedTarget;
+        },
+        updateMode: "none",
+      });
+
+      await expect(recorder.persistApproved({ retryIfUnpersisted: true })).resolves.toBeUndefined();
+      const [first, second] = await Promise.all([
+        recorder.persistApproved({ retryIfUnpersisted: true }),
+        recorder.persistApproved({ retryIfUnpersisted: true }),
+      ]);
+
+      expect(targetResolutionCount).toBe(2);
+      expect(first?.sessionFile).toBe(admittedTarget.sessionKey);
+      expect(second?.sessionFile).toBe(admittedTarget.sessionKey);
+      await expect(readTranscriptMessages(admittedTarget)).resolves.toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "persist me once after concurrent retries",
+        }),
+      ]);
+    });
+
     it("waits for runtime persistence before deciding fallback ownership", async () => {
-      const dir = createTempDir("openclaw-user-turn-recorder-pending-");
+      const dir = sessionDirs.make();
       const target = createSqliteTranscriptTarget({ dir });
       let releaseRuntimePersistence!: () => void;
       const runtimePersistenceStarted = new Promise<void>((resolve) => {
@@ -1029,18 +772,12 @@ describe("user turn transcript persistence", () => {
           text: "pending runtime turn",
           timestamp: 123,
         },
-        target: {
-          ...target,
-        },
+        target,
         updateMode: "none",
       });
       recorder.markRuntimePersistencePending(
         runtimePersistenceStarted.then(() => {
-          recorder.markRuntimePersisted({
-            role: "user",
-            content: "pending runtime turn",
-            timestamp: 123,
-          });
+          recorder.markRuntimePersisted(makeUserMessage("pending runtime turn", 123));
         }),
       );
 
@@ -1060,7 +797,7 @@ describe("user turn transcript persistence", () => {
     });
 
     it("fallback-persists when pending runtime persistence fails", async () => {
-      const dir = createTempDir("openclaw-user-turn-recorder-pending-failed-");
+      const dir = sessionDirs.make();
       const target = createSqliteTranscriptTarget({ dir });
       const errors: unknown[] = [];
       let rejectRuntimePersistence!: (error: unknown) => void;
@@ -1072,9 +809,7 @@ describe("user turn transcript persistence", () => {
           text: "pending failed turn",
           timestamp: 123,
         },
-        target: {
-          ...target,
-        },
+        target,
         updateMode: "none",
         onPersistenceError: (error) => errors.push(error),
       });

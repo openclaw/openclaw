@@ -1,30 +1,35 @@
-import { parseSqliteSessionFileMarker } from "../../../config/sessions/sqlite-marker.js";
+import { isSqliteTranscriptMutationConflict } from "../../../config/sessions/session-mutation-conflict-error.js";
+import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { formatAssistantErrorText } from "../../embedded-agent-helpers.js";
-import { createAgentRunDirectAbortError } from "../../run-termination.js";
 import { normalizeUsage, type UsageLike } from "../../usage.js";
 import { hasOutboundDeliveryEvidence } from "../delivery-evidence.js";
 import { log } from "../logger.js";
 import { createEmbeddedRunReplayState, observeReplayMetadata } from "../replay-state.js";
-import type { EmbeddedAgentRunResult } from "../types.js";
 import type { createUsageAccumulator } from "../usage-accumulator.js";
-import { mergeUsageIntoAccumulator } from "../usage-accumulator.js";
+import {
+  mergeAttemptRunStatsIntoAccumulator,
+  mergeUsageIntoAccumulator,
+} from "../usage-accumulator.js";
+import { applyEmbeddedAttemptSessionIdentity } from "./attempt-session-identity.js";
+import { resolveCurrentAttemptAssistant } from "./attempt-terminal-evidence.js";
 import type { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import { resolveRunFailoverDecision } from "./failover-policy.js";
 import {
   buildErrorAgentMeta,
-  isAssistantForModelRef,
-  resolveActiveErrorContext,
+  normalizeAssistantUsageForContext,
+  resolveReportedModelRef,
   resolveLatestCallUsage,
 } from "./helpers.js";
 import {
   MAX_CONSECUTIVE_IDLE_TIMEOUTS_BEFORE_OUTPUT,
   stepIdleTimeoutBreaker,
-  type createIdleTimeoutBreakerState,
+  type IdleTimeoutBreakerState,
 } from "./idle-timeout-breaker.js";
-import { resolveReplayInvalidFlag } from "./incomplete-turn.js";
+import { resolveReplayInvalidFlag } from "./incomplete-turn-resolution.js";
+import { resolveRunRetryKind } from "./retry-budget.js";
 import { handleRetryLimitExhaustion } from "./retry-limit.js";
-import type { dispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js";
+import type { prepareAndDispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js";
 import {
   hasCompletedModelProgressForIdleBreaker,
   normalizeEmbeddedRunAttemptResult,
@@ -35,125 +40,87 @@ import {
   isEmbeddedRunTerminalAbort,
   isEmbeddedRunTerminalInterrupted,
   isEmbeddedRunTerminalTimeout,
-  resolveEmbeddedRunAttemptTerminalOutcome,
+  resolveEmbeddedRunAttemptTerminalState,
 } from "./terminal-outcome.js";
 
 type PreparedRuntime = Awaited<ReturnType<typeof prepareEmbeddedRunRuntime>>;
-type SessionPromptState = ReturnType<typeof createEmbeddedRunSessionPromptState>;
+type SessionPromptState = Awaited<ReturnType<typeof createEmbeddedRunSessionPromptState>>;
+
 type ReplayState = ReturnType<typeof createEmbeddedRunReplayState>;
+export type NormalizedEmbeddedRunAttempt = Extract<
+  Awaited<ReturnType<typeof normalizeEmbeddedRunAttempt>>,
+  { action: "proceed" }
+>;
 
 export async function normalizeEmbeddedRunAttempt(input: {
   runInput: PreparedEmbeddedRunInput;
   preparedRuntime: PreparedRuntime;
-  dispatchedAttempt: Awaited<ReturnType<typeof dispatchEmbeddedRunAttempt>>;
+  dispatchedAttempt: Awaited<
+    ReturnType<typeof prepareAndDispatchEmbeddedRunAttempt>
+  >["dispatchedAttempt"];
   sessionPromptState: SessionPromptState;
   provider: string;
   modelId: string;
   bootstrapPromptWarningSignaturesSeen: string[];
   usageAccumulator: ReturnType<typeof createUsageAccumulator>;
   lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
-  lastTurnTotal: number | undefined;
-  idleTimeoutBreakerState: ReturnType<typeof createIdleTimeoutBreakerState>;
+  idleTimeoutBreakerState: IdleTimeoutBreakerState;
   contextRecoveryState: ReturnType<typeof createEmbeddedRunContextRecoveryState>;
+  recordedCompactionCount?: number;
   replayState: ReplayState;
   lastRetryFailoverReason: Parameters<typeof resolveRunFailoverDecision>[0]["failoverReason"];
-}): Promise<
-  | { action: "complete"; result: EmbeddedAgentRunResult }
-  | {
-      action: "retry";
-      bootstrapPromptWarningSignaturesSeen: string[];
-      lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
-      lastTurnTotal: number | undefined;
-      replayState: ReplayState;
-    }
-  | {
-      action: "proceed";
-      bootstrapPromptWarningSignaturesSeen: string[];
-      lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
-      lastTurnTotal: number | undefined;
-      replayState: ReplayState;
-      attempt: ReturnType<typeof normalizeEmbeddedRunAttemptResult>;
-      aborted: boolean;
-      externalAbort: boolean;
-      promptError: unknown;
-      promptErrorSource: ReturnType<typeof normalizeEmbeddedRunAttemptResult>["promptErrorSource"];
-      timedOut: boolean;
-      idleTimedOut: boolean;
-      timedOutDuringCompaction: boolean;
-      timedOutDuringToolExecution: boolean;
-      timedOutByRunBudget: boolean;
-      sessionIdUsed: string;
-      sessionFileUsed: string | undefined;
-      currentAttemptAssistant: ReturnType<
-        typeof normalizeEmbeddedRunAttemptResult
-      >["currentAttemptAssistant"];
-      currentAttemptCompletedAssistant: ReturnType<
-        typeof normalizeEmbeddedRunAttemptResult
-      >["currentAttemptCompletedAssistant"];
-      attemptAssistant: ReturnType<
-        typeof normalizeEmbeddedRunAttemptResult
-      >["currentAttemptAssistant"];
-      terminalOutcome: ReturnType<typeof resolveEmbeddedRunAttemptTerminalOutcome>;
-      terminalAborted: boolean;
-      terminalTimedOut: boolean;
-      terminalInterrupted: boolean;
-      signalOwnedInterruption: boolean;
-      setTerminalLifecycleMeta: NonNullable<
-        ReturnType<typeof normalizeEmbeddedRunAttemptResult>["setTerminalLifecycleMeta"]
-      >;
-      attemptCompactionCount: number;
-      activeErrorContext: ReturnType<typeof resolveActiveErrorContext>;
-      resolveReplayInvalidForAttempt: (incompleteTurnText?: string | null) => boolean;
-      assistantErrorText: string | undefined;
-      canRestartForLiveSwitch: boolean;
-    }
-> {
+}) {
   const { runInput, preparedRuntime, dispatchedAttempt, sessionPromptState, provider, modelId } =
     input;
   const params = runInput.runParams;
   const runtime = preparedRuntime.snapshot();
   const attempt = normalizeEmbeddedRunAttemptResult(dispatchedAttempt.rawAttempt);
+  // Completed attempt facts must survive cancellation while user persistence settles.
+  const attemptCompactionCount = Math.max(0, attempt.compactionCount ?? 0);
+  const recordedCompactionCount = input.recordedCompactionCount ?? 0;
+  input.contextRecoveryState.autoCompactionCount += Math.max(
+    0,
+    attemptCompactionCount - recordedCompactionCount,
+  );
+  if (attemptCompactionCount > recordedCompactionCount) {
+    // Returned counts carry no ordering relative to model observations.
+    input.contextRecoveryState.currentContextSnapshot = { tokens: undefined };
+  }
+  if (
+    (recordedCompactionCount === 0 || attemptCompactionCount > recordedCompactionCount) &&
+    typeof attempt.compactionTokensAfter === "number" &&
+    Number.isFinite(attempt.compactionTokensAfter) &&
+    attempt.compactionTokensAfter >= 0
+  ) {
+    input.contextRecoveryState.lastCompactionTokensAfter = Math.floor(
+      attempt.compactionTokensAfter,
+    );
+  }
   await sessionPromptState.waitForCurrentUserMessagePersistence();
   sessionPromptState.suppressNextUserMessagePersistence = sessionPromptState.activePrompt.persisted;
-  if (dispatchedAttempt.cancellationRequested) {
-    runInput.laneController.throwIfAborted();
-    throw createAgentRunDirectAbortError();
-  }
+  // Parent Stop can revoke attempt callbacks before they run. The lane signal,
+  // not a callback-derived latch, owns cancellation after persistence settles.
+  runInput.laneController.throwIfAborted();
   const {
-    aborted,
-    externalAbort,
-    promptError,
-    promptErrorSource,
+    terminal,
     preflightRecovery,
-    timedOut,
-    idleTimedOut,
-    timedOutDuringCompaction,
     sessionIdUsed,
     sessionFileUsed,
     lastAssistant: sessionLastAssistant,
     currentAttemptAssistant,
     currentAttemptCompletedAssistant,
   } = attempt;
-  const timedOutDuringToolExecution = attempt.timedOutDuringToolExecution ?? false;
-  const timedOutByRunBudget = attempt.timedOutByRunBudget ?? false;
-  const sessionAssistantForCandidate =
-    !currentAttemptAssistant &&
-    !isAssistantForModelRef(sessionLastAssistant, {
-      provider: runtime.effectiveModel.provider,
-      model: runtime.effectiveModel.id,
-    })
-      ? undefined
-      : sessionLastAssistant;
-  const attemptAssistant = currentAttemptAssistant ?? sessionAssistantForCandidate;
-  const terminalOutcome = resolveEmbeddedRunAttemptTerminalOutcome({
+  const { idleTimedOut, promptError } = projectAgentRunAttemptTerminal(terminal);
+  const attemptAssistant = resolveCurrentAttemptAssistant(attempt);
+  const terminalState = resolveEmbeddedRunAttemptTerminalState({
     attempt,
-    assistant: currentAttemptAssistant,
+    assistant: attemptAssistant,
     abortSignal: params.abortSignal,
   });
+  const { outcome: terminalOutcome, signalOwnedInterruption } = terminalState;
   const terminalAborted = isEmbeddedRunTerminalAbort(terminalOutcome);
   const terminalTimedOut = isEmbeddedRunTerminalTimeout(terminalOutcome);
   const terminalInterrupted = isEmbeddedRunTerminalInterrupted(terminalOutcome);
-  const signalOwnedInterruption = terminalInterrupted && params.abortSignal?.aborted === true;
   const setTerminalLifecycleMeta: NonNullable<typeof attempt.setTerminalLifecycleMeta> = (meta) => {
     const { stopReason, ...remainingMeta } = meta;
     const terminalStopReason = terminalInterrupted ? terminalOutcome.stopReason : stopReason;
@@ -163,26 +130,16 @@ export async function normalizeEmbeddedRunAttempt(input: {
       aborted: terminalAborted,
     });
   };
-  const previousSessionId = sessionPromptState.sessionId;
-  const previousSessionFile = sessionPromptState.sessionFile;
-  sessionPromptState.adoptSessionId(sessionIdUsed);
-  if (sessionFileUsed && sessionFileUsed !== sessionPromptState.sessionFile) {
-    sessionPromptState.sessionFile = sessionFileUsed;
+  // Detached runs may fork a foreground transcript whose id they must never adopt.
+  if (params.sessionPersistence !== "detached") {
+    await applyEmbeddedAttemptSessionIdentity({
+      sessionPromptState,
+      sessionFileUsed,
+      sessionIdUsed,
+      assertCurrent: () => runInput.laneController.throwIfAborted(),
+    });
   }
-  if (
-    (sessionIdUsed && sessionIdUsed !== previousSessionId) ||
-    (sessionFileUsed && sessionFileUsed !== previousSessionFile)
-  ) {
-    const marker = parseSqliteSessionFileMarker(sessionPromptState.sessionFile);
-    sessionPromptState.sessionTarget = marker
-      ? {
-          agentId: marker.agentId,
-          sessionId: marker.sessionId,
-          sessionKey: runInput.resolvedSessionKey,
-          storePath: marker.storePath,
-        }
-      : undefined;
-  }
+  runInput.laneController.throwIfAborted();
   const bootstrapPromptWarningSignaturesSeen =
     attempt.bootstrapPromptWarningSignaturesSeen ??
     (attempt.bootstrapPromptWarningSignature
@@ -193,21 +150,38 @@ export async function normalizeEmbeddedRunAttempt(input: {
           ]),
         )
       : input.bootstrapPromptWarningSignaturesSeen);
-  const lastAssistantUsage = normalizeUsage(sessionLastAssistant?.usage as UsageLike);
-  const currentAttemptAssistantUsage = normalizeUsage(currentAttemptAssistant?.usage as UsageLike);
+  const lastAssistantUsage = normalizeAssistantUsageForContext(sessionLastAssistant);
+  const currentAttemptAssistantUsage = normalizeAssistantUsageForContext(currentAttemptAssistant);
   const promptCacheLastCallUsage = normalizeUsage(attempt.promptCache?.lastCallUsage as UsageLike);
+  // Current-attempt evidence is newest. The session assistant is only a transcript fallback
+  // and can predate a carried attempt snapshot after transcript rewrites or compaction.
   const callUsage = resolveLatestCallUsage({
-    currentAttemptCandidates: [currentAttemptAssistantUsage, promptCacheLastCallUsage],
-    carriedCandidates: [input.lastRunPromptUsage, lastAssistantUsage],
+    currentAttemptCandidates: [
+      attempt.attemptUsage?.contextUsage ? attempt.attemptUsage : undefined,
+      currentAttemptAssistantUsage,
+      promptCacheLastCallUsage,
+    ],
+    carriedUsage: input.lastRunPromptUsage,
+    transcriptFallback: lastAssistantUsage,
   });
   const attemptUsage = attempt.attemptUsage ?? callUsage.currentAttempt;
   mergeUsageIntoAccumulator(input.usageAccumulator, attemptUsage);
-  const lastRunPromptUsage = callUsage.latest;
-  const lastTurnTotal = callUsage.latest?.total;
+  mergeAttemptRunStatsIntoAccumulator(input.usageAccumulator, attempt);
+  if (isSqliteTranscriptMutationConflict(promptError)) {
+    throw promptError;
+  }
+  // A real mid-turn truncation rewrites the context after earlier usage observations.
+  // Keep billing accumulated, but do not carry that pre-mutation context into the retry.
+  const contextMutatedByMidTurnTruncation =
+    preflightRecovery?.handled === true &&
+    preflightRecovery.source === "mid-turn" &&
+    (preflightRecovery.truncatedCount ?? 0) > 0;
+  const lastRunPromptUsage = contextMutatedByMidTurnTruncation
+    ? { contextUsage: { state: "unavailable" as const } }
+    : callUsage.latest;
   const breakerStep = stepIdleTimeoutBreaker(input.idleTimeoutBreakerState, {
     idleTimedOut: terminalTimedOut && idleTimedOut,
     completedModelProgress: hasCompletedModelProgressForIdleBreaker(attempt),
-    outputTokens: attemptUsage?.output,
   });
   if (breakerStep.tripped) {
     const message =
@@ -219,49 +193,38 @@ export async function normalizeEmbeddedRunAttempt(input: {
         `provider=${provider}/${modelId} consecutive=${breakerStep.consecutive} ` +
         `cap=${MAX_CONSECUTIVE_IDLE_TIMEOUTS_BEFORE_OUTPUT}`,
     );
-    return {
-      action: "complete",
-      result: handleRetryLimitExhaustion({
-        message,
-        decision: resolveRunFailoverDecision({
-          stage: "retry_limit",
-          fallbackConfigured: runInput.fallbackConfigured,
-          failoverReason: input.lastRetryFailoverReason,
-        }),
-        provider,
-        model: modelId,
-        profileId: runtime.lastProfileId,
-        durationMs: Date.now() - runInput.startedAtMs,
-        agentMeta: buildErrorAgentMeta({
-          sessionId: sessionPromptState.sessionId,
-          sessionFile: sessionPromptState.sessionFile,
-          provider,
-          model: preparedRuntime.model.id,
-          ...runtime.outerContextTokenMeta,
-          usageAccumulator: input.usageAccumulator,
-          lastRunPromptUsage,
-          lastTurnTotal,
-        }),
-        replayInvalid: input.replayState.replayInvalid ? true : undefined,
-        livenessState: "blocked",
+    const result = handleRetryLimitExhaustion({
+      message,
+      decision: resolveRunFailoverDecision({
+        stage: "retry_limit",
+        fallbackConfigured: runInput.fallbackConfigured,
+        failoverReason: input.lastRetryFailoverReason,
       }),
-    };
-  }
-  const attemptCompactionCount = Math.max(0, attempt.compactionCount ?? 0);
-  input.contextRecoveryState.autoCompactionCount += attemptCompactionCount;
-  if (
-    typeof attempt.compactionTokensAfter === "number" &&
-    Number.isFinite(attempt.compactionTokensAfter) &&
-    attempt.compactionTokensAfter >= 0
-  ) {
-    input.contextRecoveryState.lastCompactionTokensAfter = Math.floor(
-      attempt.compactionTokensAfter,
-    );
+      provider,
+      model: modelId,
+      profileId: runtime.lastProfileId,
+      durationMs: Date.now() - runInput.startedAtMs,
+      agentMeta: buildErrorAgentMeta({
+        sessionId: sessionPromptState.sessionId,
+        sessionFile: sessionPromptState.sessionFile,
+        provider,
+        model: preparedRuntime.model.id,
+        credentialSource: attempt.modelAttempt?.credentialSource,
+        ...runtime.outerContextTokenMeta,
+        usageAccumulator: input.usageAccumulator,
+        lastRunPromptUsage,
+      }),
+      replayInvalid: input.replayState.replayInvalid ? true : undefined,
+      livenessState: "blocked",
+    });
+    // Escalating provider failures throw above; only returned results carry a terminal stop.
+    result.meta.modelFallbackStopReason = "idle_timeout_circuit_breaker";
+    return { action: "complete" as const, result };
   }
   if (attempt.contextBudgetStatus) {
     input.contextRecoveryState.lastContextBudgetStatus = attempt.contextBudgetStatus;
   }
-  const activeErrorContext = resolveActiveErrorContext({
+  const activeErrorContext = resolveReportedModelRef({
     provider,
     model: modelId,
     assistant: attemptAssistant,
@@ -273,11 +236,13 @@ export async function normalizeEmbeddedRunAttempt(input: {
     replayState.replayInvalid = true;
   }
   replayState = observeReplayMetadata(replayState, attempt.replayMetadata);
-  const formattedAssistantErrorText = sessionAssistantForCandidate
-    ? formatAssistantErrorText(sessionAssistantForCandidate, {
+  const formattedAssistantErrorText = attemptAssistant
+    ? formatAssistantErrorText(attemptAssistant, {
         cfg: params.config,
         sessionKey: runInput.resolvedSessionKey ?? params.sessionId,
+        agentId: params.agentId,
         provider: activeErrorContext.provider,
+        providerOwner: runtime.providerRuntimeHandle?.plugin,
         model: activeErrorContext.model,
         authMode: runtime.lastProfileId
           ? preparedRuntime.attemptAuthProfileStore.profiles?.[runtime.lastProfileId]?.type
@@ -285,8 +250,8 @@ export async function normalizeEmbeddedRunAttempt(input: {
       })
     : undefined;
   const assistantErrorText =
-    sessionAssistantForCandidate?.stopReason === "error"
-      ? sessionAssistantForCandidate.errorMessage?.trim() || formattedAssistantErrorText
+    attemptAssistant?.stopReason === "error"
+      ? attemptAssistant.errorMessage?.trim() || formattedAssistantErrorText
       : undefined;
   if (!signalOwnedInterruption && !preparedRuntime.nativeModelOwned && preflightRecovery?.handled) {
     const retryingFromTranscript = preflightRecovery.source === "mid-turn";
@@ -295,42 +260,36 @@ export async function normalizeEmbeddedRunAttempt(input: {
         (retryingFromTranscript ? "retrying from current transcript" : "retrying prompt"),
     );
     if (retryingFromTranscript) {
+      if ((preflightRecovery.truncatedCount ?? 0) > 0) {
+        sessionPromptState.markOwnedTranscriptRetry();
+      }
       sessionPromptState.continueFromCurrentTranscript();
     }
+    const retryKind = resolveRunRetryKind({
+      preflightRecovery,
+      retryingFromTranscript,
+      toolMetas: attempt.toolMetas,
+    });
     return {
-      action: "retry",
+      action: "retry" as const,
+      retryKind,
       bootstrapPromptWarningSignaturesSeen,
       lastRunPromptUsage,
-      lastTurnTotal,
       replayState,
     };
   }
   return {
-    action: "proceed",
+    action: "proceed" as const,
     bootstrapPromptWarningSignaturesSeen,
     lastRunPromptUsage,
-    lastTurnTotal,
     replayState,
     attempt,
-    aborted,
-    externalAbort,
-    promptError,
-    promptErrorSource,
-    timedOut,
-    idleTimedOut,
-    timedOutDuringCompaction,
-    timedOutDuringToolExecution,
-    timedOutByRunBudget,
     sessionIdUsed,
     sessionFileUsed,
     currentAttemptAssistant,
     currentAttemptCompletedAssistant,
     attemptAssistant,
-    terminalOutcome,
-    terminalAborted,
-    terminalTimedOut,
-    terminalInterrupted,
-    signalOwnedInterruption,
+    terminalState,
     setTerminalLifecycleMeta,
     attemptCompactionCount,
     activeErrorContext,

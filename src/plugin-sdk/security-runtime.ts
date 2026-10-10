@@ -1,20 +1,25 @@
-/**
- * @deprecated Broad public SDK barrel. Prefer focused security/SSRF/secret
- * subpaths and avoid adding new imports here.
- */
+/** Public security runtime helpers for plugin-side trust boundaries. */
 
-import { statRegularFileSync as inspectRegularFileSync } from "../infra/fs-safe.js";
+import {
+  replaceFileAtomic as replaceFsSafeFileAtomic,
+  type ReplaceFileAtomicFileSystem,
+  type ReplaceFileAtomicOptions,
+} from "@openclaw/fs-safe/atomic";
 
-/** Return whether a path resolves to a regular file, treating filesystem errors as missing. */
-export function fileExists(filePath: string): boolean {
-  try {
-    return !inspectRegularFileSync(filePath).missing;
-  } catch {
-    return false;
-  }
-}
+export {
+  assertNoSymlinkParents,
+  assertNoSymlinkParentsSync,
+  fileExists,
+  readRegularFile,
+  readRegularFileSync,
+  statRegularFile,
+  statRegularFileSync,
+} from "./file-access-runtime.js";
 
-export { buildUntrustedChannelMetadata } from "../security/channel-metadata.js";
+export {
+  buildChannelMetadata,
+  buildUntrustedChannelMetadata,
+} from "../security/channel-metadata.js";
 export {
   evaluateSupplementalContextVisibility,
   filterSupplementalContextItems,
@@ -26,7 +31,11 @@ export {
   expandAllowFromWithAccessGroups,
   parseAccessGroupAllowFromEntry,
 } from "./access-groups.js";
-export { wrapExternalContent, wrapWebContent } from "../security/external-content.js";
+export {
+  truncateSanitizedExternalContent,
+  wrapExternalContent,
+  wrapWebContent,
+} from "../security/external-content.js";
 export { compileSafeRegexDetailed } from "../security/safe-regex.js";
 export type { SafeRegexRejectReason } from "../security/safe-regex.js";
 export {
@@ -35,12 +44,8 @@ export {
   openLocalFileSafely,
   pathExists,
   pathExistsSync,
-  readRegularFile,
   resolveLocalPathFromRootsSync,
-  readRegularFileSync,
   root,
-  statRegularFile,
-  statRegularFileSync,
   writeExternalFileWithinRoot,
   withTimeout,
 } from "../infra/fs-safe.js";
@@ -62,20 +67,47 @@ export {
   resolveAbsolutePathForRead,
   resolveAbsolutePathForWrite,
 } from "../infra/fs-safe.js";
-export { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
+export { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
 export { privateFileStoreSync } from "../infra/private-file-store.js";
-export { movePathWithCopyFallback, replaceFileAtomic } from "../infra/replace-file.js";
+export { movePathWithCopyFallback } from "@openclaw/fs-safe/atomic";
 
-export { assertNoSymlinkParents, assertNoSymlinkParentsSync } from "../infra/fs-safe-advanced.js";
+// Keep the shipped, ignored adapter member source-compatible without wrapping the operation.
+export const replaceFileAtomic: (
+  options: ReplaceFileAtomicOptions & {
+    fileSystem?: {
+      promises: ReplaceFileAtomicFileSystem["promises"] & {
+        /** @deprecated Omit this member; permissions use the retained FileHandle. */
+        chmod?: typeof import("node:fs/promises").chmod;
+      };
+    };
+  },
+) => ReturnType<typeof replaceFsSafeFileAtomic> = replaceFsSafeFileAtomic;
+
 export { ensurePortAvailable } from "../infra/ports.js";
 
 export {
   resolveExistingPathsWithinRoot,
   pathScope,
   resolveStrictExistingPathsWithinRoot,
-} from "../infra/root-paths.js";
+} from "@openclaw/fs-safe/advanced";
 
 export { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+/**
+ * Redact text with optional mode ("tools" or "off") and ordered patterns.
+ * Nonempty patterns replace the default string rules; form-body, structured-auth,
+ * and AWS bare-key protections still apply. Entries accept strings, RegExp, or
+ * synchronous matchers. Registered secrets still redact in "off" mode. sensitiveFieldPatterns
+ * applies to structured redaction and is unused by this text function.
+ *
+ * A matcher has source: string and exec(input), returning a fresh iterable of
+ * { match, groups: string[], input, offset }. Offsets are UTF-16 code units in the
+ * current input after registered-secret and earlier-pattern replacement. Emit exact,
+ * nonempty matches in order without overlap; keep cursors/state local to each call.
+ * The last nonempty capture is the secret (its last occurrence within match);
+ * with no capture, the whole match is masked. Use "" for unmatched captures.
+ * Executable entries are programmatic only; logging.redactPatterns stores strings.
+ * See https://docs.openclaw.ai/plugins/sdk-subpaths#sensitive-text-redaction.
+ */
 export { redactSensitiveText } from "../logging/redact.js";
 export { safeEqualSecret } from "../security/secret-equal.js";
 

@@ -1,6 +1,4 @@
 /**
- * Browser-node fallback classification.
- *
  * Only the node host's explicit pre-dispatch reachability failure is safe to
  * retry on the Gateway host. Other failures may follow a mutating action.
  */

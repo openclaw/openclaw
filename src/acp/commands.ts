@@ -1,6 +1,4 @@
-/** Builds the ACP available-command list exposed to compatible clients. */
 import type { AvailableCommand } from "@agentclientprotocol/sdk";
-import { getChatCommands } from "../auto-reply/commands-registry.data.js";
 import { THINKING_LEVELS_HELP } from "../auto-reply/thinking.shared.js";
 
 const BASE_AVAILABLE_COMMANDS: AvailableCommand[] = [
@@ -42,16 +40,6 @@ const BASE_AVAILABLE_COMMANDS: AvailableCommand[] = [
   { name: "compact", description: "Compact the session history." },
 ];
 
-function listDockAvailableCommands(): AvailableCommand[] {
-  return getChatCommands()
-    .filter((command) => command.key.startsWith("dock:"))
-    .map((command) => ({
-      name: command.textAliases[0]?.replace(/^\//, "").trim() || command.key,
-      description: command.description,
-    }));
-}
-
-/** Returns static ACP commands plus plugin-registered dock commands. */
 export function getAvailableCommands(): AvailableCommand[] {
-  return [...BASE_AVAILABLE_COMMANDS, ...listDockAvailableCommands()];
+  return [...BASE_AVAILABLE_COMMANDS];
 }

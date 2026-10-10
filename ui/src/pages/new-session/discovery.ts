@@ -1,73 +1,309 @@
-import { normalizeOptionalString } from "../../lib/string-coerce.ts";
+import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeArrayBackedTrimmedStringList,
+  normalizeSortedUniqueTrimmedStringList,
+} from "@openclaw/normalization-core/string-normalization";
+import type {
+  EnvironmentStatus,
+  RequiredNodeCommand,
+  RuntimeTargetIssue,
+  WorkerExecutionMode,
+  WorkerMachineOption,
+  WorkerOperatingSystem,
+  WorkerSlotSummary,
+} from "../../../../packages/gateway-protocol/src/schema/environments.ts";
+import type { WorktreesBranchesResult } from "../../../../packages/gateway-protocol/src/schema/worktrees.ts";
+import { parseWorkerCapacity } from "../../../../packages/gateway-protocol/src/worker-capacity.ts";
 
-export type DraftBranches = {
+export type DraftBranches = Omit<WorktreesBranchesResult, "repositoryStatus"> & {
   repoRoot: string;
-  branches: Array<{ name: string; kind: "local" | "remote" }>;
-  defaultBranch?: string;
-  headBranch?: string;
 };
 
-export type DraftNode = {
-  nodeId: string;
-  displayName: string;
-  connected: boolean;
-  canExec: boolean;
-  canBrowse: boolean;
-};
+export type DraftRepositoryState =
+  | { kind: "idle" }
+  // Selected GitHub projects offer isolation before checkout exists. Local first
+  // turns prepare after admission; remote placement clones on its selected runner.
+  | { kind: "pending-clone"; cloneUrl: string }
+  | { kind: "checking"; repoRoot: string }
+  | ({ kind: "git" } & DraftBranches)
+  | { kind: "direct"; repoRoot: string }
+  | { kind: "unavailable"; repoRoot: string };
 
 export type DraftCloudProfile = {
   id: string;
+  inference?: "worker";
   providerId: string;
+  providerDisplayId?: string;
+  trust?: "persistent" | "disposable";
+  executionModes?: readonly WorkerExecutionMode[];
+  machines?: WorkerMachineOption[];
+  operatingSystems?: WorkerOperatingSystem[];
 };
 
-export type BrowserTarget = { nodeId: string; label: string };
+export type DraftEnvironment = {
+  id: string;
+  type: "local" | "node" | "worker";
+  label?: string;
+  status: EnvironmentStatus;
+  platform?: string;
+  sessionHost?: boolean;
+  workerSlots?: WorkerSlotSummary;
+  lastConnectedAtMs?: number;
+  lastDisconnectedAtMs?: number;
+  lastSeenAtMs?: number;
+  lastSeenReason?: string;
+  trust?: "persistent" | "disposable";
+  capabilities?: string[];
+  invocableCommands?: string[];
+  requiredNodeCommand?: RequiredNodeCommand;
+  issues?: RuntimeTargetIssue[];
+};
 
-export function readDraftNodes(value: unknown): DraftNode[] {
-  const rawNodes = Array.isArray(value) ? value : [];
-  return rawNodes
-    .flatMap((raw) => {
-      const node = raw as {
-        nodeId?: unknown;
-        displayName?: unknown;
-        connected?: unknown;
-        commands?: unknown;
-      };
-      const nodeId = normalizeOptionalString(node.nodeId);
-      const commands = Array.isArray(node.commands)
-        ? node.commands.filter((command): command is string => typeof command === "string")
+function normalizeTimestamp(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.trunc(value)
+    : undefined;
+}
+
+function normalizeMachineSize(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 && value <= 65_536
+    ? value
+    : undefined;
+}
+
+function normalizeTrust(value: unknown): DraftCloudProfile["trust"] {
+  return value === "persistent" || value === "disposable" ? value : undefined;
+}
+
+function readRuntimeTargetIssues(value: unknown): RuntimeTargetIssue[] | undefined {
+  const issues = (Array.isArray(value) ? value : []).flatMap<RuntimeTargetIssue>((raw) => {
+    if (!isRecord(raw)) {
+      return [];
+    }
+    if (raw.code === "worker-host-unavailable") {
+      const message = normalizeOptionalString(raw.message);
+      return message && message.length <= 1_024
+        ? [{ code: "worker-host-unavailable", message }]
         : [];
-      if (!nodeId) {
-        return [];
-      }
-      const connected = node.connected === true;
-      const canExec = connected && commands.includes("system.run");
-      return [
-        {
-          nodeId,
-          displayName: normalizeOptionalString(node.displayName) ?? nodeId,
-          connected,
-          canExec,
-          canBrowse: canExec && commands.includes("fs.listDir"),
-        },
-      ];
-    })
-    .toSorted(
-      (left, right) =>
-        left.displayName.localeCompare(right.displayName) ||
-        left.nodeId.localeCompare(right.nodeId),
-    );
+    }
+    return raw.code === "update-required" &&
+      raw.action === "update-and-reconnect" &&
+      raw.updateCommand === "openclaw update" &&
+      raw.headlessReconnectCommand === "openclaw node restart"
+      ? [
+          {
+            code: raw.code,
+            action: raw.action,
+            updateCommand: raw.updateCommand,
+            headlessReconnectCommand: raw.headlessReconnectCommand,
+          },
+        ]
+      : [];
+  });
+  return issues.length > 0 ? issues : undefined;
+}
+
+function readDraftCloudProfileExecutionModes(value: unknown): readonly WorkerExecutionMode[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  if (value.length === 1 && (value[0] === "worker-turn" || value[0] === "remote-exec")) {
+    return [value[0]];
+  }
+  return value.length === 2 && value[0] === "worker-turn" && value[1] === "remote-exec"
+    ? ["worker-turn", "remote-exec"]
+    : [];
+}
+
+export function draftCloudProfileSupportsExecutionMode(
+  profile: DraftCloudProfile,
+  executionMode: WorkerExecutionMode,
+): boolean {
+  return profile.executionModes?.includes(executionMode) === true;
 }
 
 export function readDraftCloudProfiles(value: unknown): DraftCloudProfile[] {
   return (Array.isArray(value) ? value : [])
-    .flatMap((raw) => {
-      if (!raw || typeof raw !== "object") {
+    .flatMap<DraftCloudProfile>((raw) => {
+      const profile = asOptionalObjectRecord(raw);
+      if (!profile) {
         return [];
       }
-      const profile = raw as { id?: unknown; providerId?: unknown };
       const id = normalizeOptionalString(profile.id);
       const providerId = normalizeOptionalString(profile.providerId);
-      return id && providerId ? [{ id, providerId }] : [];
+      if (!id || !providerId) {
+        return [];
+      }
+      const trust = normalizeTrust(profile.trust);
+      const machines = readDraftCloudOptions(profile.machines, "machine");
+      const operatingSystems = readDraftCloudOptions(profile.operatingSystems, "os");
+      return [
+        {
+          id,
+          providerId,
+          ...(profile.inference === "worker" ? { inference: profile.inference } : {}),
+          ...(typeof profile.providerDisplayId === "string" &&
+          /^[a-z][a-z0-9-]{0,63}$/.test(profile.providerDisplayId) &&
+          profile.providerDisplayId.trim() === profile.providerDisplayId
+            ? { providerDisplayId: profile.providerDisplayId }
+            : {}),
+          trust,
+          ...(Object.hasOwn(profile, "executionModes")
+            ? { executionModes: readDraftCloudProfileExecutionModes(profile.executionModes) }
+            : {}),
+          ...(machines.length > 0 ? { machines } : {}),
+          ...(operatingSystems.length > 0 ? { operatingSystems } : {}),
+        },
+      ];
+    })
+    .toSorted((left, right) => left.id.localeCompare(right.id));
+}
+
+function readDraftCloudOptions(value: unknown, kind: "machine"): WorkerMachineOption[];
+function readDraftCloudOptions(value: unknown, kind: "os"): WorkerOperatingSystem[];
+function readDraftCloudOptions(value: unknown, kind: "machine" | "os") {
+  const machine = kind === "machine";
+  const options = new Map<string, WorkerMachineOption | WorkerOperatingSystem>();
+  const maxOptions = machine ? 64 : 8;
+  const maxTextLength = machine ? 128 : 64;
+  for (const raw of (Array.isArray(value) ? value : []).slice(0, maxOptions)) {
+    if (!isRecord(raw)) {
+      continue;
+    }
+    const id = normalizeOptionalString(raw.id);
+    const label = normalizeOptionalString(raw.label);
+    const os = machine ? normalizeOptionalString(raw.os) : undefined;
+    const disabledReason = machine
+      ? undefined
+      : normalizeOptionalString(raw.disabledReason)?.slice(0, 256);
+    const key = machine ? JSON.stringify([os, id]) : (id ?? "");
+    if (
+      !id ||
+      id.length > maxTextLength ||
+      !label ||
+      label.length > maxTextLength ||
+      options.has(key) ||
+      (machine && raw.os !== undefined && (!os || os.length > 64))
+    ) {
+      continue;
+    }
+    const cpu = machine ? normalizeMachineSize(raw.cpu) : undefined;
+    const memoryGb = machine ? normalizeMachineSize(raw.memoryGb) : undefined;
+    options.set(key, {
+      id,
+      label,
+      ...(os ? { os } : {}),
+      ...(cpu === undefined ? {} : { cpu }),
+      ...(memoryGb === undefined ? {} : { memoryGb }),
+      ...(typeof raw.default === "boolean" ? { default: raw.default } : {}),
+      ...(disabledReason ? { disabledReason } : {}),
+    });
+  }
+  return [...options.values()];
+}
+
+export function defaultCloudOs(profile: DraftCloudProfile): string {
+  return (
+    profile.operatingSystems?.find((os) => os.default)?.id ??
+    profile.operatingSystems?.[0]?.id ??
+    profile.machines?.find((machine) => machine.os)?.os ??
+    ""
+  );
+}
+
+export function cloudMachinesForOs(profile: DraftCloudProfile, os: string): WorkerMachineOption[] {
+  return (profile.machines ?? []).filter((machine) => !machine.os || machine.os === os);
+}
+
+/** Providers that omit a marked default still present their first catalog choice as the default. */
+export function defaultCloudMachine(
+  profile: DraftCloudProfile,
+  os = defaultCloudOs(profile),
+): WorkerMachineOption | undefined {
+  const machines = cloudMachinesForOs(profile, os);
+  return machines.find((machine) => machine.default) ?? machines[0];
+}
+
+const ENVIRONMENT_STATUSES: readonly EnvironmentStatus[] = [
+  "available",
+  "unavailable",
+  "starting",
+  "stopping",
+  "error",
+];
+
+function readRequiredNodeCommand(value: unknown): RequiredNodeCommand | undefined {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).some((key) => key !== "command" && key !== "state" && key !== "message")
+  ) {
+    return undefined;
+  }
+  const command = normalizeOptionalString(value.command);
+  const state = value.state;
+  const message = normalizeOptionalString(value.message);
+  return command &&
+    command.length <= 128 &&
+    (state === "invocable" ||
+      state === "pending-approval" ||
+      state === "undeclared" ||
+      state === "unauthorized")
+    ? { command, state, ...(message ? { message } : {}) }
+    : undefined;
+}
+
+export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
+  return (Array.isArray(value) ? value : [])
+    .flatMap<DraftEnvironment>((raw) => {
+      const environment = asOptionalObjectRecord(raw);
+      if (!environment) {
+        return [];
+      }
+      const id = normalizeOptionalString(environment.id);
+      const type = normalizeOptionalString(environment.type);
+      const status = ENVIRONMENT_STATUSES.find((candidate) => candidate === environment.status);
+      if (!id || (type !== "local" && type !== "node" && type !== "worker") || !status) {
+        return [];
+      }
+      const label = normalizeOptionalString(environment.label);
+      const platform = normalizeOptionalString(environment.platform);
+      const trust = normalizeTrust(environment.trust);
+      const capabilities = normalizeArrayBackedTrimmedStringList(environment.capabilities);
+      const invocableCommands = Array.isArray(environment.invocableCommands)
+        ? normalizeSortedUniqueTrimmedStringList(environment.invocableCommands)
+            .filter((command) => command.length <= 128)
+            .slice(0, 128)
+        : undefined;
+      const requiredNodeCommand = readRequiredNodeCommand(environment.requiredNodeCommand);
+      const lastConnectedAtMs = normalizeTimestamp(environment.lastConnectedAtMs);
+      const lastDisconnectedAtMs = normalizeTimestamp(environment.lastDisconnectedAtMs);
+      const lastSeenAtMs = normalizeTimestamp(environment.lastSeenAtMs);
+      const lastSeenReason = normalizeOptionalString(environment.lastSeenReason);
+      const issues = readRuntimeTargetIssues(environment.issues);
+      const workerSlots = parseWorkerCapacity(environment.workerSlots);
+      return [
+        {
+          id,
+          type,
+          status,
+          ...(label ? { label } : {}),
+          ...(platform ? { platform } : {}),
+          ...(typeof environment.sessionHost === "boolean"
+            ? { sessionHost: environment.sessionHost }
+            : {}),
+          ...(workerSlots ? { workerSlots } : {}),
+          ...(lastConnectedAtMs !== undefined ? { lastConnectedAtMs } : {}),
+          ...(lastDisconnectedAtMs !== undefined ? { lastDisconnectedAtMs } : {}),
+          ...(lastSeenAtMs !== undefined ? { lastSeenAtMs } : {}),
+          ...(lastSeenReason ? { lastSeenReason } : {}),
+          ...(trust ? { trust } : {}),
+          ...(capabilities ? { capabilities } : {}),
+          ...(invocableCommands ? { invocableCommands } : {}),
+          ...(requiredNodeCommand ? { requiredNodeCommand } : {}),
+          ...(issues ? { issues } : {}),
+        },
+      ];
     })
     .toSorted((left, right) => left.id.localeCompare(right.id));
 }

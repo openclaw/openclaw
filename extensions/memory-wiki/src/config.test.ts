@@ -5,13 +5,11 @@ import {
   validateJsonSchemaValue,
   type JsonSchemaObject,
 } from "openclaw/plugin-sdk/json-schema-runtime";
+import { withEnv } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../api.js";
-import {
-  memoryWikiConfigSchema,
-  resolveMemoryWikiAgentConfig,
-  resolveMemoryWikiConfig,
-} from "./config.js";
+import { memoryWikiConfigSchema } from "./config-schema.js";
+import { resolveMemoryWikiAgentConfig, resolveMemoryWikiConfig } from "./config.js";
 
 function compileManifestConfigSchema() {
   const manifest = JSON.parse(
@@ -39,6 +37,35 @@ describe("resolveMemoryWikiConfig", () => {
     expect(config.context.includeCompiledDigestPrompt).toBe(false);
   });
 
+  it.each([
+    { scope: "global" as const, segments: ["wiki", "main"] },
+    { scope: "agent" as const, segments: ["wiki"] },
+  ])("keeps default $scope vaults inside the configured state directory", ({ scope, segments }) => {
+    const stateDir = "/tmp/openclaw-isolated-state";
+    const config = resolveMemoryWikiConfig(
+      { vault: { scope } },
+      {
+        homedir: "/Users/tester",
+        env: { HOME: "/Users/tester", OPENCLAW_STATE_DIR: stateDir },
+      },
+    );
+
+    expect(config.vault.path).toBe(path.join(stateDir, ...segments));
+  });
+
+  it("uses the configured state directory for schema-resolved defaults", () => {
+    const stateDir = "/tmp/openclaw-schema-state";
+
+    withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
+      const parsed = memoryWikiConfigSchema.safeParse?.(undefined);
+
+      expect(parsed).toMatchObject({
+        success: true,
+        data: { vault: { path: path.join(stateDir, "wiki", "main") } },
+      });
+    });
+  });
+
   it("expands ~/ paths and preserves explicit modes", () => {
     const config = resolveMemoryWikiConfig(
       {
@@ -48,22 +75,15 @@ describe("resolveMemoryWikiConfig", () => {
           renderMode: "obsidian",
         },
       },
-      { homedir: "/Users/tester" },
+      {
+        homedir: "/Users/tester",
+        env: { HOME: "/Users/tester", OPENCLAW_STATE_DIR: "/tmp/openclaw-isolated-state" },
+      },
     );
 
     expect(config.vaultMode).toBe("bridge");
     expect(config.vault.path).toBe(path.join("/Users/tester", "vaults", "wiki"));
     expect(config.vault.renderMode).toBe("obsidian");
-  });
-
-  it("normalizes the bridge artifact toggle", () => {
-    const canonical = resolveMemoryWikiConfig({
-      bridge: {
-        readMemoryArtifacts: false,
-      },
-    });
-
-    expect(canonical.bridge.readMemoryArtifacts).toBe(false);
   });
 
   it("resolves normalized agent ids to distinct vault roots", () => {
@@ -78,7 +98,7 @@ describe("resolveMemoryWikiConfig", () => {
     );
     const appConfig = {
       agents: {
-        list: [{ id: "Support Team", default: true }, { id: "Marketing" }],
+        entries: { "support-team": {}, marketing: {} },
       },
     } as OpenClawConfig;
 
@@ -113,7 +133,7 @@ describe("resolveMemoryWikiConfig", () => {
 
     const resolved = resolveMemoryWikiAgentConfig({
       config: base,
-      appConfig: { agents: { list: [{ id: "support", default: true }] } },
+      appConfig: { agents: { entries: { support: {} } } },
     });
 
     const expectedRoot = path.join("/Users/tester", ".openclaw", "wiki");
@@ -124,7 +144,7 @@ describe("resolveMemoryWikiConfig", () => {
   it("fails closed when a multi-agent scoped vault has no agent context", () => {
     const config = resolveMemoryWikiConfig({ vault: { scope: "agent" } });
     const appConfig = {
-      agents: { list: [{ id: "support", default: true }, { id: "marketing" }] },
+      agents: { entries: { support: {}, marketing: {} } },
     } as OpenClawConfig;
 
     expect(() => resolveMemoryWikiAgentConfig({ config, appConfig })).toThrow(
@@ -135,7 +155,7 @@ describe("resolveMemoryWikiConfig", () => {
   it("fails closed for unknown scoped agents", () => {
     const config = resolveMemoryWikiConfig({ vault: { scope: "agent" } });
     const appConfig = {
-      agents: { list: [{ id: "support", default: true }, { id: "marketing" }] },
+      agents: { entries: { support: {}, marketing: {} } },
     } as OpenClawConfig;
 
     expect(() => resolveMemoryWikiAgentConfig({ config, appConfig, agentId: "finance" })).toThrow(

@@ -1,9 +1,10 @@
 // Verifies sessions_spawn lifecycle hooks, binding cleanup, and gateway calls.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSubagentSpawnTestConfig,
   loadSubagentSpawnModuleForTest,
-} from "./subagent-spawn.test-helpers.js";
+} from "./subagents/spawn/subagent-spawn.test-helpers.js";
 
 type GatewayRequest = { method?: string; params?: Record<string, unknown> };
 type TestBindingRequest = {
@@ -55,8 +56,8 @@ const bindingMocks = vi.hoisted(() => ({
   listBySession: vi.fn(() => []),
 }));
 
-let resetSubagentRegistryForTests: typeof import("./subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
-let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
+let resetSubagentRegistryForTests: typeof import("./subagents/registry/subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
+let spawnSubagentDirect: typeof import("./subagents/spawn/subagent-spawn.js").spawnSubagentDirect;
 
 function getGatewayRequests(): GatewayRequest[] {
   // Gateway call list is the observable side effect for spawn orchestration.
@@ -71,12 +72,7 @@ function findGatewayRequest(method: string): GatewayRequest | undefined {
   return getGatewayRequests().find((request) => request.method === method);
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function expectFields(value: unknown, expected: Record<string, unknown>, label = "object"): void {
   const record = requireRecord(value, label);
@@ -224,8 +220,8 @@ beforeAll(async () => {
 });
 
 describe("sessions_spawn subagent lifecycle hooks", () => {
-  beforeEach(() => {
-    resetSubagentRegistryForTests();
+  beforeEach(async () => {
+    await resetSubagentRegistryForTests();
     hoisted.callGatewayMock.mockReset();
     hoisted.updateSessionStoreMock.mockReset();
     hookRunnerMocks.hasSubagentEndedHook = true;
@@ -288,9 +284,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
     });
   });
 
-  afterEach(() => {
-    resetSubagentRegistryForTests();
-  });
+  afterEach(() => resetSubagentRegistryForTests());
 
   it("binds the subagent thread in core and emits subagent_spawned with requester metadata", async () => {
     const result = await spawn({
@@ -521,7 +515,10 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       context: "isolated",
     });
 
-    expectErrorResultMessage(result, /only available on channels that expose thread bindings/i);
+    expectErrorResultMessage(
+      result,
+      /only available on channels that open a separate thread for the worker/i,
+    );
     expect(hookRunnerMocks.runSubagentSpawned).not.toHaveBeenCalled();
     expectSessionsDeleteWithoutAgentStart();
   });
@@ -585,59 +582,6 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
     expectFields(
       deleteCall?.params,
       {
-        deleteTranscript: true,
-        emitLifecycleHooks: true,
-      },
-      "delete params",
-    );
-  });
-
-  it("cleans up the provisional session when lineage patching fails after thread binding", async () => {
-    const store: Record<string, Record<string, unknown>> = {};
-    hoisted.updateSessionStoreMock.mockImplementation(
-      async (_storePath: unknown, mutator: unknown) => {
-        if (typeof mutator !== "function") {
-          throw new Error("missing session store mutator");
-        }
-        await mutator(store);
-        if (Object.values(store).some((entry) => typeof entry.spawnedBy === "string")) {
-          throw new Error("lineage patch failed");
-        }
-        return store;
-      },
-    );
-    hoisted.callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string; params?: Record<string, unknown> };
-      if (request.method === "sessions.delete") {
-        return { ok: true };
-      }
-      if (request.method === "agent") {
-        return { runId: "run-1", status: "accepted", acceptedAt: 1_001 };
-      }
-      return {};
-    });
-
-    const result = await spawn({
-      thread: true,
-      mode: "session",
-      agentAccountId: "work",
-      agentTo: "channel:123",
-      agentThreadId: "456",
-      context: "isolated",
-    });
-
-    expect(result.status).toBe("error");
-    expect(result.error).toContain("lineage patch failed");
-    expect(hookRunnerMocks.runSubagentSpawned).not.toHaveBeenCalled();
-    expect(hookRunnerMocks.runSubagentEnded).not.toHaveBeenCalled();
-    const methods = getGatewayMethods();
-    expect(methods).toContain("sessions.delete");
-    expect(methods).not.toContain("agent");
-    const deleteCall = findGatewayRequest("sessions.delete");
-    expectFields(
-      deleteCall?.params,
-      {
-        key: result.childSessionKey,
         deleteTranscript: true,
         emitLifecycleHooks: true,
       },

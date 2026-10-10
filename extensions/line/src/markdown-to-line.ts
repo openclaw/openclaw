@@ -1,415 +1,432 @@
-// Line plugin module implements markdown to line behavior.
 import type { messagingApi } from "@line/bot-sdk";
-import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { stripMarkdown } from "openclaw/plugin-sdk/text-chunking";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { uriAction } from "./actions.js";
-import { createReceiptCard, toFlexMessage, type FlexBubble } from "./flex-templates.js";
-export { stripMarkdown } from "openclaw/plugin-sdk/text-chunking";
+import {
+  markdownToIRWithMeta,
+  stripMarkdown,
+  type MarkdownIR,
+  type MarkdownStyle,
+  type MarkdownStyleSpan,
+  type MarkdownTableCell,
+  type MarkdownTableMeta,
+} from "openclaw/plugin-sdk/text-chunking";
+import { cardBox, cardText } from "./flex-templates/common.js";
+import { fitsLineFlexBubble, toFlexMessage } from "./flex-templates/message.js";
+import { createReceiptCard } from "./flex-templates/schedule-cards.js";
+import type { FlexBubble } from "./flex-templates/types.js";
 
 type FlexMessage = messagingApi.FlexMessage;
 type FlexComponent = messagingApi.FlexComponent;
-type FlexText = messagingApi.FlexText;
-type FlexBox = messagingApi.FlexBox;
+type FlexSpan = messagingApi.FlexSpan;
 
-export interface ProcessedLineMessage {
-  /** The processed text with markdown stripped */
-  text: string;
-  /** Flex messages extracted from tables/code blocks */
-  flexMessages: FlexMessage[];
-}
+type LineMessageSegment = { type: "text"; text: string } | { type: "flex"; message: FlexMessage };
 
-/**
- * Regex patterns for markdown detection
- */
-const MARKDOWN_TABLE_REGEX = /^\|(.+)\|[\r\n]+\|[-:\s|]+\|[\r\n]+((?:\|.+\|[\r\n]*)+)/gm;
-const MARKDOWN_CODE_BLOCK_REGEX = /```(\w*)\n([\s\S]*?)```/g;
-const MARKDOWN_LINK_REGEX = /\[([^\]]+)\]\(([^)]+)\)/g;
-
-/**
- * Detect and extract markdown tables from text
- */
-export function extractMarkdownTables(text: string): {
-  tables: MarkdownTable[];
-  textWithoutTables: string;
-} {
-  const tables: MarkdownTable[] = [];
-  let textWithoutTables = text;
-
-  // Reset regex state
-  MARKDOWN_TABLE_REGEX.lastIndex = 0;
-
-  let match: RegExpExecArray | null;
-  const matches: { fullMatch: string; table: MarkdownTable }[] = [];
-
-  while ((match = MARKDOWN_TABLE_REGEX.exec(text)) !== null) {
-    const fullMatch = expectDefined(match[0], "Markdown table match");
-    const headerLine = expectDefined(match[1], "Markdown table header capture");
-    const bodyLines = expectDefined(match[2], "Markdown table body capture");
-
-    const headers = parseTableRow(headerLine);
-    const rows = bodyLines
-      .trim()
-      .split(/[\r\n]+/)
-      .filter((line) => line.trim())
-      .map(parseTableRow);
-
-    if (headers.length > 0 && rows.length > 0) {
-      matches.push({
-        fullMatch,
-        table: { headers, rows },
-      });
-    }
-  }
-
-  // Remove tables from text in reverse order to preserve indices
-  for (const { fullMatch, table } of matches.toReversed()) {
-    tables.unshift(table);
-    textWithoutTables = textWithoutTables.replace(fullMatch, "");
-  }
-
-  return { tables, textWithoutTables };
-}
-
-export interface MarkdownTable {
-  headers: string[];
-  rows: string[][];
-}
-
-/**
- * Parse a single table row (pipe-separated values)
- */
-function parseTableRow(row: string): string[] {
-  return row
-    .split("|")
-    .map((cell) => cell.trim())
-    .filter((cell, index, arr) => {
-      // Filter out empty cells at start/end (from leading/trailing pipes)
-      if (index === 0 && cell === "") {
-        return false;
-      }
-      if (index === arr.length - 1 && cell === "") {
-        return false;
-      }
-      return true;
-    });
-}
-
-/**
- * Convert a markdown table to a LINE Flex Message bubble
- */
-export function convertTableToFlexBubble(table: MarkdownTable): FlexBubble {
-  const parseCell = (
-    value: string | undefined,
-  ): { text: string; bold: boolean; hasMarkup: boolean } => {
-    const raw = value?.trim() ?? "";
-    if (!raw) {
-      return { text: "-", bold: false, hasMarkup: false };
-    }
-
-    let hasMarkup = false;
-    const stripped = raw.replace(/\*\*(.+?)\*\*/g, (_, inner) => {
-      hasMarkup = true;
-      return String(inner);
-    });
-    const text = stripped.trim() || "-";
-    const bold = /^\*\*.+\*\*$/.test(raw);
-
-    return { text, bold, hasMarkup };
-  };
-
-  const headerCells = table.headers.map((header) => parseCell(header));
-  const rowCells = table.rows.map((row) => row.map((cell) => parseCell(cell)));
-  const hasInlineMarkup =
-    headerCells.some((cell) => cell.hasMarkup) ||
-    rowCells.some((row) => row.some((cell) => cell.hasMarkup));
-
-  // For simple 2-column tables, use receipt card format
-  if (table.headers.length === 2 && !hasInlineMarkup) {
-    const items = rowCells.map((row) => ({
-      name: row[0]?.text ?? "-",
-      value: row[1]?.text ?? "-",
-    }));
-
-    return createReceiptCard({
-      title: headerCells.map((cell) => cell.text).join(" / "),
-      items,
-    });
-  }
-
-  // For multi-column tables, create a custom layout
-  const headerRow: FlexComponent = {
-    type: "box",
-    layout: "horizontal",
-    contents: headerCells.map((cell) => ({
-      type: "text",
-      text: cell.text,
-      weight: "bold",
-      size: "sm",
-      color: "#333333",
-      flex: 1,
-      wrap: true,
-    })) as FlexText[],
-    paddingBottom: "sm",
-  } as FlexBox;
-
-  const dataRows: FlexComponent[] = rowCells.slice(0, 10).map((row, rowIndex) => {
-    const rowContents = table.headers.map((_, colIndex) => {
-      const cell = row[colIndex] ?? { text: "-", bold: false, hasMarkup: false };
-      return {
-        type: "text",
-        text: cell.text,
-        size: "sm",
-        color: "#666666",
-        flex: 1,
-        wrap: true,
-        weight: cell.bold ? "bold" : undefined,
-      };
-    }) as FlexText[];
-
-    return {
-      type: "box",
-      layout: "horizontal",
-      contents: rowContents,
-      margin: rowIndex === 0 ? "md" : "sm",
-    } as FlexBox;
-  });
-
-  return {
-    type: "bubble",
-    body: {
-      type: "box",
-      layout: "vertical",
-      contents: [headerRow, { type: "separator", margin: "sm" }, ...dataRows],
-      paddingAll: "lg",
-    },
-  };
-}
-
-/**
- * Detect and extract code blocks from text
- */
-export function extractCodeBlocks(text: string): {
-  codeBlocks: CodeBlock[];
-  textWithoutCode: string;
-} {
-  const codeBlocks: CodeBlock[] = [];
-  let textWithoutCode = text;
-
-  // Reset regex state
-  MARKDOWN_CODE_BLOCK_REGEX.lastIndex = 0;
-
-  let match: RegExpExecArray | null;
-  const matches: { fullMatch: string; block: CodeBlock }[] = [];
-
-  while ((match = MARKDOWN_CODE_BLOCK_REGEX.exec(text)) !== null) {
-    const fullMatch = expectDefined(match[0], "Markdown code block match");
-    const language = match[1] || undefined;
-    const code = expectDefined(match[2], "Markdown code body capture");
-
-    matches.push({
-      fullMatch,
-      block: { language, code: code.trim() },
-    });
-  }
-
-  // Remove code blocks in reverse order
-  for (const { fullMatch, block } of matches.toReversed()) {
-    codeBlocks.unshift(block);
-    textWithoutCode = textWithoutCode.replace(fullMatch, "");
-  }
-
-  return { codeBlocks, textWithoutCode };
-}
-
-export interface CodeBlock {
+interface CodeBlock {
   language?: string;
   code: string;
 }
 
-/**
- * Convert a code block to a LINE Flex Message bubble
- */
-export function convertCodeBlockToFlexBubble(block: CodeBlock): FlexBubble {
-  const titleText = block.language ? `Code (${block.language})` : "Code";
+const LINE_MARKDOWN_OPTIONS = {
+  assistantTranscriptRoleHeaders: true,
+  autolink: false,
+  blockquotePrefix: "",
+  headingStyle: "none",
+  horizontalRuleText: "",
+  linkify: false,
+  preserveSourceBlockSpacing: true,
+} as const;
+const TRANSCRIPT_ROLE_PREFIX = "[assistant-authored transcript] ";
+// How much code one Flex card shows. Nothing in LINE caps a Flex text this low —
+// it is the card's own readable budget — so a longer block is delivered as text
+// rather than cut down to it.
+const LINE_FLEX_CODE_CARD_MAX_CHARS = 2000;
 
-  // Truncate very long code to fit LINE's limits
-  const displayCode =
-    block.code.length > 2000 ? truncateUtf16Safe(block.code, 2000) + "\n..." : block.code;
+function parseLineMarkdown(text: string, tableMode: "block" | "bullets" = "block") {
+  return markdownToIRWithMeta(text, { ...LINE_MARKDOWN_OPTIONS, tableMode });
+}
+
+function toCodeBlock(ir: MarkdownIR, span: MarkdownStyleSpan): CodeBlock {
+  return {
+    ...(span.language ? { language: span.language } : {}),
+    code: ir.text.slice(span.start, span.end).trimEnd(),
+  };
+}
+
+type PlainTextInsertion =
+  | { position: number; text: string }
+  | { position: number; message: FlexMessage };
+
+function rangesOverlap(
+  left: { start: number; end: number },
+  right: { start: number; end: number },
+): boolean {
+  return left.start < right.end && right.start < left.end;
+}
+
+function projectPlainText(
+  ir: MarkdownIR,
+  omitted: MarkdownStyleSpan[] = [],
+  additionalInsertions: PlainTextInsertion[] = [],
+  onSegment?: (segment: LineMessageSegment) => void,
+): string {
+  const insertions: PlainTextInsertion[] = [...additionalInsertions];
+  for (const link of ir.links) {
+    if (omitted.some((range) => rangesOverlap(range, link))) {
+      continue;
+    }
+    const href = link.href.trim();
+    const label = ir.text.slice(link.start, link.end).trim();
+    const comparableHref = href.startsWith("mailto:") ? href.slice("mailto:".length) : href;
+    if (href && label && label !== href && label !== comparableHref) {
+      insertions.push({ position: link.end, text: ` (${href})` });
+    }
+  }
+  for (const annotation of ir.annotations ?? []) {
+    if (
+      annotation.type === "assistant_transcript_role" &&
+      !omitted.some((range) => rangesOverlap(range, annotation))
+    ) {
+      insertions.push({
+        position: annotation.start,
+        text: TRANSCRIPT_ROLE_PREFIX,
+      });
+    }
+  }
+  const inlineCodeSpans = ir.styles.filter(
+    (span) => span.style === "code" && !omitted.some((range) => rangesOverlap(range, span)),
+  );
+  for (const span of inlineCodeSpans) {
+    const code = ir.text.slice(span.start, span.end);
+    if (
+      stripMarkdown(code, { assistantTranscriptRoleHeaders: true }).startsWith(
+        TRANSCRIPT_ROLE_PREFIX,
+      )
+    ) {
+      insertions.push({ position: span.start, text: TRANSCRIPT_ROLE_PREFIX });
+    }
+  }
+  insertions.sort((left, right) => left.position - right.position);
+
+  const underlineTags = [...ir.text.matchAll(/<\/?u>/gi)]
+    .map((match) => ({ start: match.index, end: match.index + match[0].length }))
+    .filter(
+      (tag) =>
+        !inlineCodeSpans.some((span) => rangesOverlap(tag, span)) &&
+        !omitted.some((span) => rangesOverlap(tag, span)),
+    );
+  const removed = [...omitted, ...underlineTags].toSorted(
+    (left, right) => left.start - right.start,
+  );
+
+  let output = "";
+  let segmentStart = 0;
+  let cursor = 0;
+  let insertionIndex = 0;
+  const appendRange = (end: number) => {
+    while (insertionIndex < insertions.length) {
+      const insertion = insertions[insertionIndex];
+      if (!insertion || insertion.position > end) {
+        break;
+      }
+      if (insertion.position >= cursor) {
+        output += ir.text.slice(cursor, insertion.position);
+        if ("text" in insertion) {
+          output += insertion.text;
+        } else if (onSegment) {
+          const precedingText = output.slice(segmentStart).trim();
+          if (precedingText) {
+            onSegment({ type: "text", text: precedingText });
+          }
+          onSegment({ type: "flex", message: insertion.message });
+          segmentStart = output.length;
+        }
+        cursor = insertion.position;
+      }
+      insertionIndex += 1;
+    }
+    output += ir.text.slice(cursor, end);
+    cursor = end;
+  };
+
+  for (const range of removed) {
+    appendRange(range.start);
+    cursor = Math.max(cursor, range.end);
+    while (
+      insertionIndex < insertions.length &&
+      (insertions[insertionIndex]?.position ?? cursor) < cursor
+    ) {
+      insertionIndex += 1;
+    }
+  }
+  appendRange(ir.text.length);
+  if (onSegment) {
+    const trailingText = output.slice(segmentStart).trim();
+    if (trailingText) {
+      onSegment({ type: "text", text: trailingText });
+    }
+  }
+  return output.trim();
+}
+
+function formatOversizedTableAsBullets(table: MarkdownTableMeta): string {
+  const markdownCell = (cell: MarkdownTableCell) =>
+    projectPlainText(cell)
+      .replace(/[\\|`*_[\]~<>&]/gu, "\\$&")
+      .replace(/\r?\n/gu, " ");
+  const markdownRow = (cells: MarkdownTableCell[]) => `| ${cells.map(markdownCell).join(" | ")} |`;
+  const markdown = [
+    markdownRow(table.headerCells),
+    `| ${table.headerCells.map(() => "---").join(" | ")} |`,
+    ...table.rowCells.map(markdownRow),
+  ].join("\n");
+
+  return projectPlainText(parseLineMarkdown(markdown, "bullets").ir);
+}
+
+type RenderedCell = {
+  text: string;
+  contents?: FlexSpan[];
+  hasMarkup: boolean;
+};
+
+function sameSpanStyle(left: FlexSpan, right: FlexSpan): boolean {
+  return (
+    left.weight === right.weight &&
+    left.style === right.style &&
+    left.decoration === right.decoration
+  );
+}
+
+function renderTableCell(cell: MarkdownTableCell): RenderedCell {
+  if (!cell.text.trim()) {
+    return { text: "-", hasMarkup: false };
+  }
+
+  const codeSpans = cell.styles.filter((span) => span.style === "code");
+  const tags = [...cell.text.matchAll(/<\/?u>/gi)]
+    .map((match) => ({
+      start: match.index,
+      end: match.index + match[0].length,
+      closing: match[0][1] === "/",
+    }))
+    .filter((tag) => !codeSpans.some((span) => rangesOverlap(tag, span)));
+  const boundaries = new Set([0, cell.text.length]);
+  for (const style of cell.styles) {
+    boundaries.add(style.start);
+    boundaries.add(style.end);
+  }
+  for (const link of cell.links) {
+    boundaries.add(link.end);
+  }
+  for (const tag of tags) {
+    boundaries.add(tag.start);
+    boundaries.add(tag.end);
+  }
+  const sortedBoundaries = [...boundaries].toSorted((left, right) => left - right);
+  const spans: FlexSpan[] = [];
+  let underlineDepth = 0;
+  let hasMarkup = false;
+
+  const appendSpan = (span: FlexSpan) => {
+    const previous = spans.at(-1);
+    if (previous && sameSpanStyle(previous, span)) {
+      previous.text = `${previous.text ?? ""}${span.text ?? ""}`;
+    } else {
+      spans.push(span);
+    }
+  };
+
+  for (let index = 0; index < sortedBoundaries.length - 1; index += 1) {
+    const start = sortedBoundaries[index];
+    const end = sortedBoundaries[index + 1];
+    if (start === undefined || end === undefined) {
+      continue;
+    }
+    const tag = tags.find((candidate) => candidate.start === start);
+    if (tag) {
+      underlineDepth += tag.closing ? -1 : 1;
+      hasMarkup = true;
+      continue;
+    }
+    const text = cell.text.slice(start, end);
+    if (text) {
+      const active = new Set<MarkdownStyle>(
+        cell.styles
+          .filter((style) => style.start <= start && style.end >= end)
+          .map((style) => style.style),
+      );
+      const weight = active.has("bold") ? "bold" : undefined;
+      const style = active.has("italic") ? "italic" : undefined;
+      const decoration = active.has("strikethrough")
+        ? "line-through"
+        : underlineDepth > 0
+          ? "underline"
+          : undefined;
+      hasMarkup ||= weight !== undefined || style !== undefined || decoration !== undefined;
+      appendSpan({ type: "span", text, weight, style, decoration });
+    }
+    for (const link of cell.links.filter((candidate) => candidate.end === end)) {
+      const href = link.href.trim();
+      const label = cell.text.slice(link.start, link.end).trim();
+      if (href && label && label !== href) {
+        appendSpan({ type: "span", text: ` (${href})` });
+        hasMarkup = true;
+      }
+    }
+  }
+
+  const renderedText =
+    spans
+      .map((span) => span.text ?? "")
+      .join("")
+      .trim() || "-";
+  return {
+    text: renderedText,
+    ...(hasMarkup ? { contents: spans } : {}),
+    hasMarkup,
+  };
+}
+
+function convertTableToFlexBubble(table: MarkdownTableMeta): FlexBubble | undefined {
+  // Receipt cards keep 12 plain rows; generic and styled layouts keep only 10.
+  const requiresPlainCells = table.rowCells.length > 10;
+  if (requiresPlainCells && (table.headers.length !== 2 || table.rowCells.length > 12)) {
+    return undefined;
+  }
+  let hasInlineMarkup = false;
+  const renderCells = (cells: MarkdownTableCell[]): RenderedCell[] | undefined => {
+    const rendered: RenderedCell[] = [];
+    for (const cell of cells) {
+      const prepared = renderTableCell(cell);
+      if (requiresPlainCells && prepared.hasMarkup) {
+        return undefined;
+      }
+      hasInlineMarkup ||= prepared.hasMarkup;
+      rendered.push(prepared);
+    }
+    return rendered;
+  };
+  const headerCells = renderCells(table.headerCells);
+  if (!headerCells) {
+    return undefined;
+  }
+  const rowCells: RenderedCell[][] = [];
+  for (const row of table.rowCells) {
+    const cells = renderCells(row);
+    if (!cells) {
+      return undefined;
+    }
+    rowCells.push(cells);
+  }
+
+  if (table.headers.length === 2 && !hasInlineMarkup) {
+    return createReceiptCard({
+      title: headerCells.map((cell) => cell.text).join(" / "),
+      items: rowCells.map((row) => ({
+        name: row[0]?.text ?? "-",
+        value: row[1]?.text ?? "-",
+      })),
+    });
+  }
+
+  const renderRow = (
+    cells: RenderedCell[],
+    textStyle: Pick<messagingApi.FlexText, "color" | "weight">,
+    rowStyle: Pick<messagingApi.FlexBox, "paddingBottom" | "margin">,
+  ): FlexComponent =>
+    cardBox(
+      "horizontal",
+      cells.map((cell) =>
+        cardText(cell.text, {
+          contents: cell.contents,
+          ...textStyle,
+          size: "sm",
+          flex: 1,
+          wrap: true,
+        }),
+      ),
+      rowStyle,
+    );
+  const headerRow = renderRow(
+    headerCells,
+    { weight: "bold", color: "#333333" },
+    { paddingBottom: "sm" },
+  );
+  const dataRows = rowCells.map((row, rowIndex) =>
+    renderRow(
+      table.headers.map((_, colIndex) => row[colIndex] ?? { text: "-", hasMarkup: false }),
+      { color: "#666666" },
+      { margin: rowIndex === 0 ? "md" : "sm" },
+    ),
+  );
 
   return {
     type: "bubble",
-    body: {
-      type: "box",
-      layout: "vertical",
-      contents: [
-        {
-          type: "text",
-          text: titleText,
-          weight: "bold",
-          size: "sm",
-          color: "#666666",
-        } as FlexText,
-        {
-          type: "box",
-          layout: "vertical",
-          contents: [
-            {
-              type: "text",
-              text: displayCode,
-              size: "xs",
-              color: "#333333",
-              wrap: true,
-            } as FlexText,
-          ],
+    body: cardBox("vertical", [headerRow, { type: "separator", margin: "sm" }, ...dataRows], {
+      paddingAll: "lg",
+    }),
+  };
+}
+
+function convertCodeBlockToFlexBubble(block: CodeBlock): FlexBubble {
+  const titleText = block.language ? `Code (${block.language})` : "Code";
+
+  return {
+    type: "bubble",
+    body: cardBox(
+      "vertical",
+      [
+        cardText(titleText, { weight: "bold", size: "sm", color: "#666666" }),
+        cardBox("vertical", [cardText(block.code, { size: "xs", color: "#333333", wrap: true })], {
           backgroundColor: "#F5F5F5",
           paddingAll: "md",
           cornerRadius: "md",
           margin: "sm",
-        } as FlexBox,
+        }),
       ],
-      paddingAll: "lg",
-    },
+      { paddingAll: "lg" },
+    ),
   };
 }
 
-/**
- * Extract markdown links from text
- */
-export function extractLinks(text: string): { links: MarkdownLink[]; textWithLinks: string } {
-  const links: MarkdownLink[] = [];
-
-  // Reset regex state
-  MARKDOWN_LINK_REGEX.lastIndex = 0;
-
-  let match: RegExpExecArray | null;
-  while ((match = MARKDOWN_LINK_REGEX.exec(text)) !== null) {
-    links.push({
-      text: expectDefined(match[1], "Markdown link text capture"),
-      url: expectDefined(match[2], "Markdown link URL capture"),
-    });
-  }
-
-  // Replace markdown links with just the text (for plain text output)
-  const textWithLinks = text.replace(MARKDOWN_LINK_REGEX, "$1");
-
-  return { links, textWithLinks };
-}
-
-export interface MarkdownLink {
-  text: string;
-  url: string;
-}
-
-/**
- * Create a Flex Message with tappable link buttons
- */
-export function convertLinksToFlexBubble(links: MarkdownLink[]): FlexBubble {
-  const buttons: FlexComponent[] = links.slice(0, 4).map((link, index) => ({
-    type: "button",
-    action: uriAction(link.text, link.url),
-    style: index === 0 ? "primary" : "secondary",
-    margin: index > 0 ? "sm" : undefined,
-  }));
-
-  return {
-    type: "bubble",
-    body: {
-      type: "box",
-      layout: "vertical",
-      contents: [
-        {
-          type: "text",
-          text: "Links",
-          weight: "bold",
-          size: "md",
-          color: "#333333",
-        } as FlexText,
-      ],
-      paddingAll: "lg",
-      paddingBottom: "sm",
-    },
-    footer: {
-      type: "box",
-      layout: "vertical",
-      contents: buttons,
-      paddingAll: "md",
-    },
-  };
-}
-
-/**
- * Main function: Process text for LINE output
- * - Extracts tables → Flex Messages
- * - Extracts code blocks → Flex Messages
- * - Strips remaining markdown
- * - Returns processed text + Flex Messages
- */
-export function processLineMessage(text: string): ProcessedLineMessage {
-  const flexMessages: FlexMessage[] = [];
-  let processedText = text;
-
-  // 1. Extract and convert tables
-  const { tables, textWithoutTables } = extractMarkdownTables(processedText);
-  processedText = textWithoutTables;
+/** Parse once, route existing block surfaces to Flex, and project the remainder as plain text. */
+export function processLineMessage(text: string): LineMessageSegment[] {
+  const { ir, tables } = parseLineMarkdown(text);
+  const codeSpans = ir.styles.filter((span) => span.style === "code_block");
+  const plainTextInsertions: PlainTextInsertion[] = [];
 
   for (const table of tables) {
     const bubble = convertTableToFlexBubble(table);
-    flexMessages.push(toFlexMessage("Table", bubble));
+    if (!bubble || !fitsLineFlexBubble(bubble)) {
+      plainTextInsertions.push({
+        position: table.placeholderOffset,
+        text: `\n\n${formatOversizedTableAsBullets(table)}\n\n`,
+      });
+      continue;
+    }
+    const message = toFlexMessage("Table", bubble);
+    plainTextInsertions.push({ position: table.placeholderOffset, message });
   }
 
-  // 2. Extract and convert code blocks
-  const { codeBlocks, textWithoutCode } = extractCodeBlocks(processedText);
-  processedText = textWithoutCode;
-
-  for (const block of codeBlocks) {
-    const bubble = convertCodeBlockToFlexBubble(block);
-    flexMessages.push(toFlexMessage("Code", bubble));
+  for (const span of codeSpans) {
+    const block = toCodeBlock(ir, span);
+    // An empty fence has no code to show, and LINE rejects the whole push when a
+    // Flex text is blank, so it drops out instead of costing the reply.
+    if (!block.code.trim()) {
+      continue;
+    }
+    // A block the card would have to cut is delivered as the text it was written
+    // as, the same way an oversized table is: the reader gets all of it, chunked
+    // by the ordinary text limit, instead of a card ending in an ellipsis.
+    if (block.code.length > LINE_FLEX_CODE_CARD_MAX_CHARS) {
+      plainTextInsertions.push({ position: span.start, text: `\n\n${block.code}\n\n` });
+      continue;
+    }
+    plainTextInsertions.push({
+      position: span.start,
+      message: toFlexMessage("Code", convertCodeBlockToFlexBubble(block)),
+    });
   }
 
-  // 3. Handle links - convert [text](url) to plain text for display
-  // (We could also create link buttons, but that can get noisy)
-  const { textWithLinks } = extractLinks(processedText);
-  processedText = textWithLinks;
-
-  // 4. Strip remaining markdown formatting
-  processedText = stripMarkdown(processedText, { assistantTranscriptRoleHeaders: true });
-
-  return {
-    text: processedText,
-    flexMessages,
-  };
-}
-
-/**
- * Check if text contains markdown that needs conversion
- */
-export function hasMarkdownToConvert(text: string): boolean {
-  // Check for tables
-  MARKDOWN_TABLE_REGEX.lastIndex = 0;
-  if (MARKDOWN_TABLE_REGEX.test(text)) {
-    return true;
-  }
-
-  // Check for code blocks
-  MARKDOWN_CODE_BLOCK_REGEX.lastIndex = 0;
-  if (MARKDOWN_CODE_BLOCK_REGEX.test(text)) {
-    return true;
-  }
-
-  // Check for other markdown patterns
-  if (/\*\*[^*]+\*\*/.test(text)) {
-    return true;
-  } // bold
-  if (/~~[^~]+~~/.test(text)) {
-    return true;
-  } // strikethrough
-  if (/^#{1,6}\s+/m.test(text)) {
-    return true;
-  } // headers
-  if (/^>\s+/m.test(text)) {
-    return true;
-  } // blockquotes
-
-  return false;
+  const segments: LineMessageSegment[] = [];
+  projectPlainText(ir, codeSpans, plainTextInsertions, (segment) => segments.push(segment));
+  return segments;
 }

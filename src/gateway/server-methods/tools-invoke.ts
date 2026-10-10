@@ -1,52 +1,20 @@
-// Tool invocation methods adapt gateway-visible tools to RPC callers with
-// protocol-shaped success, approval-required, validation, and error payloads.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateToolsInvokeParams,
   type ToolsInvokeResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveGatewayConversationReadOrigin } from "../conversation-read-origin.js";
 import { invokeGatewayTool } from "../tools-invoke-shared.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
-/**
- * RPC adapter for invoking gateway-visible tools from connected clients.
- */
-function resolveRpcErrorCode(params: {
-  type: "invalid_request" | "not_found" | "tool_call_blocked" | "tool_error";
-  requiresApproval?: boolean;
-}): string {
-  if (params.requiresApproval) {
-    return "requires_approval";
-  }
-  switch (params.type) {
-    case "invalid_request":
-      return "validation_error";
-    case "not_found":
-      return "not_found";
-    case "tool_call_blocked":
-      return "forbidden";
-    case "tool_error":
-      return "internal_error";
-  }
-  return "internal_error";
-}
-
-/** Handles `tools.invoke` with protocol-shaped success and failure payloads. */
 export const toolsInvokeHandlers: GatewayRequestHandlers = {
-  "tools.invoke": async ({ params, respond, context, client }) => {
-    if (!validateToolsInvokeParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid tools.invoke params: ${formatValidationErrors(validateToolsInvokeParams.errors)}`,
-        ),
-      );
+  "tools.invoke": async (options) => {
+    const { params, respond, context, client, signal } = options;
+    if (!assertValidParams(params, validateToolsInvokeParams, "tools.invoke", respond)) {
       return;
     }
     const requestedToolName = normalizeOptionalString(params.name);
@@ -62,6 +30,9 @@ export const toolsInvokeHandlers: GatewayRequestHandlers = {
     const outcome = await invokeGatewayTool({
       cfg: context.getRuntimeConfig(),
       input: params,
+      authenticatedUserProfile: client?.authenticatedUserProfile,
+      operatorRoleActor: client?.internal?.operatorRoleActor,
+      operatorScopes: client?.connect.scopes,
       senderIsOwner: client?.connect?.scopes?.includes("operator.admin"),
       clientCaps: client?.connect?.caps,
       conversationReadOrigin: resolveGatewayConversationReadOrigin({
@@ -70,6 +41,8 @@ export const toolsInvokeHandlers: GatewayRequestHandlers = {
       }),
       toolCallIdPrefix: "rpc",
       approvalMode: params.confirm === true ? "request" : "report",
+      signal,
+      assertInvocationCurrent: readGatewayRequestMutationAuthority(options).assertCurrent,
     });
 
     if (outcome.ok) {
@@ -88,7 +61,14 @@ export const toolsInvokeHandlers: GatewayRequestHandlers = {
       toolName: outcome.toolName || requestedToolName,
       ...(outcome.error.requiresApproval ? { requiresApproval: true } : {}),
       error: {
-        code: resolveRpcErrorCode(outcome.error),
+        code: outcome.error.requiresApproval
+          ? "requires_approval"
+          : {
+              invalid_request: "validation_error",
+              not_found: "not_found",
+              tool_call_blocked: "forbidden",
+              tool_error: "internal_error",
+            }[outcome.error.type],
         message: outcome.error.message,
       },
     };

@@ -26,12 +26,15 @@ describe("QA Lab static-SSH worker provider", () => {
       keyRef: KEY_REF,
     };
 
-    const first = await provider.provision(profile, "operation-123");
-    const replay = await provider.provision(profile, "operation-123");
+    const authority = { assertCurrent: () => {} };
+    const first = await provider.provision(profile, "operation-123", authority);
+    const replay = await provider.provision(profile, "operation-123", authority);
 
     expect(provider.id).toBe("static-ssh");
+    expect(provider.supportedExecutionModes).toEqual(["remote-exec"]);
     expect(first).toStrictEqual({
       leaseId: "static-ssh:operation-123",
+      sharedHost: true,
       ssh: {
         host: "worker.example.test",
         port: 22,
@@ -41,13 +44,19 @@ describe("QA Lab static-SSH worker provider", () => {
       },
     });
     expect(replay).toStrictEqual(first);
+    // Cleanup needs only the logical operation identity, even without usable SSH settings.
+    const allocation = await provider.resolveAllocation({}, "operation-123");
+    expect(allocation).toEqual({ leaseId: first.leaseId, sharedHost: true });
+    await expect(
+      provider.destroy({ leaseId: allocation.leaseId, profile: {} }),
+    ).resolves.toBeUndefined();
   });
 
   it("preserves an explicit positive SSH port", async () => {
     const provider = createStaticSshWorkerProvider();
 
     await expect(
-      provider.provision({ ...PROFILE, port: 2222 }, "operation-456"),
+      provider.provision({ ...PROFILE, port: 2222 }, "operation-456", { assertCurrent: () => {} }),
     ).resolves.toMatchObject({ ssh: { port: 2222 } });
   });
 
@@ -139,10 +148,15 @@ describe("QA Lab static-SSH worker provider", () => {
   ])("rejects an invalid $label", async ({ label, profile }) => {
     const provider = createStaticSshWorkerProvider();
 
-    await expect(provider.provision(profile, "operation-invalid")).rejects.toThrow(label);
-    await expect(provider.provision(profile, "operation-invalid")).rejects.toMatchObject({
-      code: "invalid_profile",
-    });
+    const authority = { assertCurrent: () => {} };
+    await expect(provider.provision(profile, "operation-invalid", authority)).rejects.toThrow(
+      label,
+    );
+    await expect(provider.provision(profile, "operation-invalid", authority)).rejects.toMatchObject(
+      {
+        code: "invalid_profile",
+      },
+    );
   });
 
   it("reports only its deterministic lease ids as active", async () => {
@@ -152,6 +166,7 @@ describe("QA Lab static-SSH worker provider", () => {
       provider.inspect({ leaseId: "static-ssh:operation-123", profile: PROFILE }),
     ).resolves.toStrictEqual({
       status: "active",
+      sharedHost: true,
     });
     await expect(
       provider.inspect({ leaseId: "static-ssh:", profile: PROFILE }),

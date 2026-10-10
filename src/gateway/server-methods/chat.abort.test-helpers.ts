@@ -3,8 +3,19 @@
  */
 import { vi } from "vitest";
 import type { Mock } from "vitest";
-import type { ChatAbortMarker } from "../server-chat-state.js";
+import { createChatRunState, type ChatRunState } from "../server-chat-state.js";
 import type { GatewayRequestHandler, RespondFn } from "./types.js";
+
+type TestChatRunRecord =
+  ReturnType<typeof createChatRunState>["runs"] extends Map<string, infer Record> ? Record : never;
+
+export function createAbortTestRunState(entries: Array<[string, Partial<TestChatRunRecord>]>) {
+  const state = createChatRunState();
+  for (const [runId, record] of entries) {
+    Object.assign(state.getOrCreate(runId), record);
+  }
+  return state;
+}
 
 export function createActiveRun(
   sessionKey: string,
@@ -34,22 +45,15 @@ export function createActiveRun(
 type ChatAbortTestContext = Record<string, unknown> & {
   chatAbortControllers: Map<string, ReturnType<typeof createActiveRun>>;
   chatQueuedTurns: Map<string, import("../chat-queued-turns.js").QueuedChatTurnEntry>;
-  chatRunBuffers: Map<string, string>;
-  chatDeltaSentAt: Map<string, number>;
-  chatDeltaLastBroadcastLen: Map<string, number>;
-  chatDeltaLastBroadcastText: Map<string, string>;
+  chatRunState: ChatRunState;
   dedupe: Map<string, unknown>;
-  agentDeltaSentAt: Map<string, number>;
-  bufferedAgentEvents: Map<string, unknown>;
-  chatAbortedRuns: Map<string, ChatAbortMarker>;
-  clearChatRunState: (runId: string) => void;
   removeChatRun: (
     ...args: unknown[]
   ) => { sessionKey: string; agentId?: string; clientRunId: string } | undefined;
   agentRunSeq: Map<string, number>;
   broadcast: (...args: unknown[]) => void;
   nodeSendToSession: (...args: unknown[]) => void;
-  logGateway: { warn: (...args: unknown[]) => void };
+  logGateway: { info: (...args: unknown[]) => void; warn: (...args: unknown[]) => void };
 };
 
 type ChatAbortRespondMock = Mock<RespondFn>;
@@ -57,40 +61,25 @@ type ChatAbortRespondMock = Mock<RespondFn>;
 export function createChatAbortContext(
   overrides: Record<string, unknown> = {},
 ): ChatAbortTestContext {
+  const chatRunState =
+    overrides.chatRunState && typeof overrides.chatRunState === "object"
+      ? (overrides.chatRunState as ChatRunState)
+      : createChatRunState();
   const context = {
     chatAbortControllers: new Map(),
     chatQueuedTurns: new Map(),
-    chatRunBuffers: new Map(),
-    chatDeltaSentAt: new Map(),
-    chatDeltaLastBroadcastLen: new Map(),
-    chatDeltaLastBroadcastText: new Map(),
+    chatRunState,
     dedupe: new Map(),
-    agentDeltaSentAt: new Map(),
-    bufferedAgentEvents: new Map(),
-    chatAbortedRuns: new Map<string, ChatAbortMarker>(),
     removeChatRun: vi
       .fn()
       .mockImplementation((run: string) => ({ sessionKey: "main", clientRunId: run })),
-    clearChatRunState: (_runId: string) => {},
     agentRunSeq: new Map<string, number>(),
     getRuntimeConfig: () => ({}),
     broadcast: vi.fn(),
     nodeSendToSession: vi.fn(),
-    logGateway: { warn: vi.fn() },
+    logGateway: { info: vi.fn(), warn: vi.fn() },
     ...overrides,
   } as ChatAbortTestContext;
-  if (overrides.clearChatRunState === undefined) {
-    context.clearChatRunState = (runId: string) => {
-      context.chatRunBuffers.delete(runId);
-      context.chatDeltaSentAt.delete(runId);
-      context.chatDeltaLastBroadcastLen.delete(runId);
-      context.chatDeltaLastBroadcastText.delete(runId);
-      for (const key of [runId, `${runId}:assistant`, `${runId}:thinking`]) {
-        context.agentDeltaSentAt.delete(key);
-        context.bufferedAgentEvents.delete(key);
-      }
-    };
-  }
   return context;
 }
 
@@ -102,6 +91,7 @@ export async function invokeChatAbortHandler(params: {
     agentId?: string;
     runId?: string;
     preserveSideRuns?: boolean;
+    discardPendingInput?: boolean;
   };
   client?: {
     connId?: string;

@@ -6,14 +6,17 @@ import {
   statSync,
   type WriteStream,
 } from "node:fs";
-import { createServer, type Server } from "node:http";
+import { createServer } from "node:http";
 import {
   createConnection as createNetConnection,
   createServer as createNetServer,
   type Socket,
 } from "node:net";
 import { dirname } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "../../windows-cmd-helpers.mjs";
+import { toStringifiedError } from "../error-format.mts";
+import { terminateManagedChild } from "../managed-child-process.mts";
 import { resolveWindowsTaskkillPath } from "../windows-taskkill.mjs";
 import type {
   Cleanup,
@@ -28,7 +31,8 @@ import {
   CROSS_OS_COMMAND_HEARTBEAT_SECONDS,
   CROSS_OS_PROCESS_TREE_KILL_AFTER_MS,
 } from "./config.ts";
-import { formatError, sleep, toLintErrorObject, trimForSummary } from "./shared.ts";
+import { readLogTextSince } from "./logs.ts";
+import { formatError, sleep, trimForSummary } from "./shared.ts";
 
 const CROSS_OS_SIGNAL_EXIT_CODES: Partial<Record<NodeJS.Signals, number>> = {
   SIGHUP: 129,
@@ -36,6 +40,8 @@ const CROSS_OS_SIGNAL_EXIT_CODES: Partial<Record<NodeJS.Signals, number>> = {
   SIGTERM: 143,
 };
 const CROSS_OS_ACTIVE_CHILD_TREE_KILLERS = new Set<(signal: NodeJS.Signals) => void>();
+const STARTUP_MIGRATION_RESTART_PREFIX =
+  "OpenClaw plugin migration inputs changed during startup convergence;";
 let forwardedSignalExitCode: number | undefined;
 let forwardedSignalForceKillTimer: NodeJS.Timeout | undefined;
 
@@ -116,8 +122,71 @@ export async function canConnectToLoopbackPort(port: number, timeoutMs = 1_000) 
   });
 }
 
-function hasChildExited(child: ChildProcess) {
+export function hasChildExited(child: ChildProcess) {
   return child.exitCode !== null || (child.signalCode ?? null) !== null;
+}
+
+export function captureGatewayProcess(
+  child: ChildProcess,
+  gatewayLog: WriteStream,
+  log: Pick<GatewayHandle, "logPath" | "launchLogOffset">,
+  onClose?: () => void,
+): GatewayHandle {
+  for (const stream of [child.stdout, child.stderr]) {
+    stream?.on("data", (chunk) => {
+      gatewayLog.write(chunk);
+    });
+  }
+  let resolveChildClose: () => void;
+  const childClosePromise = new Promise<void>((resolvePromise) => {
+    resolveChildClose = resolvePromise;
+  });
+  let closeLogPromise: Promise<void> | undefined;
+  const closeLog = () => {
+    closeLogPromise ??= new Promise<void>((resolvePromise) => {
+      gatewayLog.once("error", () => resolvePromise());
+      gatewayLog.end(() => resolvePromise());
+    });
+    return closeLogPromise;
+  };
+  const close = () => {
+    resolveChildClose();
+    onClose?.();
+    void closeLog();
+  };
+  child.once("close", close);
+  child.once("error", close);
+  return { child, closeLog, ...log, waitForClose: () => childClosePromise };
+}
+
+export async function waitForGatewayWithStartupMigrationRestart(params: {
+  gatewayHolder: { current: GatewayHandle | null };
+  restartGateway: () => Promise<GatewayHandle>;
+  waitUntilReady: (gateway: GatewayHandle) => Promise<void>;
+}) {
+  let gateway = params.gatewayHolder.current;
+  if (!gateway) {
+    throw new Error("Gateway restart coordination requires an active gateway handle.");
+  }
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await params.waitUntilReady(gateway);
+      return;
+    } catch (error) {
+      if (!hasChildExited(gateway.child)) {
+        throw error;
+      }
+      await gateway.waitForClose();
+      await gateway.closeLog();
+      const startupLog = readLogTextSince(gateway.logPath, gateway.launchLogOffset);
+      if (attempt > 0 || !startupLog.includes(STARTUP_MIGRATION_RESTART_PREFIX)) {
+        throw error;
+      }
+      gateway = await params.restartGateway();
+      params.gatewayHolder.current = gateway;
+    }
+  }
 }
 
 export async function stopGateway(gateway: GatewayHandle | null) {
@@ -160,15 +229,12 @@ export async function stopGateway(gateway: GatewayHandle | null) {
 }
 
 function signalChildProcessTree(child: ChildProcess, signal: NodeJS.Signals) {
-  if (process.platform !== "win32" && child.pid) {
-    try {
-      process.kill(-child.pid, signal);
-      return;
-    } catch {
-      // The child may have exited before its process group was signaled.
-    }
-  }
-  child.kill(signal);
+  terminateManagedChild(child, signal, {
+    onChildSignalError(error) {
+      throw error;
+    },
+    useWindowsTaskkill: false,
+  });
 }
 
 export function registerActiveChildProcessTree(child: ChildProcess) {
@@ -193,9 +259,7 @@ async function waitForChildExit(child: ChildProcess, timeoutMs: number) {
         return;
       }
       settled = true;
-      if (timer) {
-        clearTimeout(timer);
-      }
+      clearTimeout(timer);
       child.off("exit", onExit);
       child.off("close", onClose);
       child.off("error", onError);
@@ -204,12 +268,7 @@ async function waitForChildExit(child: ChildProcess, timeoutMs: number) {
     const onExit = () => finish(true);
     const onClose = () => finish(true);
     const onError = () => finish(true);
-    const timer =
-      timeoutMs > 0
-        ? setTimeout(() => {
-            finish(false);
-          }, timeoutMs)
-        : null;
+    const timer = setTimeout(() => finish(false), timeoutMs);
 
     child.once("exit", onExit);
     child.once("close", onClose);
@@ -235,10 +294,23 @@ function resolveCommandCaptureLimit(options: CommandOptions) {
   return Math.max(1, Math.floor(value));
 }
 
-function appendBoundedCommandOutput(current: string, chunk: Uint8Array | string, maxBytes: number) {
-  const chunkBuffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+function decodeBoundedUtf8Tail(buffer: Buffer, maxBytes: number): string {
+  const tail = buffer.subarray(Math.max(0, buffer.byteLength - maxBytes));
+  let start = 0;
+  while (start < tail.byteLength) {
+    const byte = tail[start];
+    if (byte === undefined || (byte & 0xc0) !== 0x80) {
+      break;
+    }
+    start += 1;
+  }
+  return tail.subarray(start).toString("utf8");
+}
+
+function appendBoundedCommandOutput(current: string, chunk: string, maxBytes: number) {
+  const chunkBuffer = Buffer.from(chunk);
   if (chunkBuffer.byteLength >= maxBytes) {
-    return chunkBuffer.subarray(chunkBuffer.byteLength - maxBytes).toString("utf8");
+    return decodeBoundedUtf8Tail(chunkBuffer, maxBytes);
   }
 
   const currentBuffer = Buffer.from(current);
@@ -249,7 +321,7 @@ function appendBoundedCommandOutput(current: string, chunk: Uint8Array | string,
 
   const currentTailBytes = maxBytes - chunkBuffer.byteLength;
   const currentTail = currentBuffer.subarray(currentBuffer.byteLength - currentTailBytes);
-  return Buffer.concat([currentTail, chunkBuffer], maxBytes).toString("utf8");
+  return decodeBoundedUtf8Tail(Buffer.concat([currentTail, chunkBuffer]), maxBytes);
 }
 
 export async function runCommand(
@@ -282,9 +354,12 @@ export async function runCommandInvocation(
     });
     const activeChildTree = registerActiveChildProcessTree(child);
     const logStream = createWriteStream(options.logPath, { flags: "a" });
+    const stdoutDecoder = new StringDecoder("utf8");
+    const stderrDecoder = new StringDecoder("utf8");
     let stdout = "";
     let stderr = "";
     let timedOut = false;
+    let terminationError: Error | undefined;
     let settled = false;
     const startedAt = Date.now();
     let killWaitTimer: NodeJS.Timeout | null = null;
@@ -334,24 +409,26 @@ export async function runCommandInvocation(
     };
 
     const requestKill = () => {
-      if (process.platform === "win32" && child.pid) {
+      if (process.platform === "win32") {
         try {
-          const killer = spawn(
-            resolveWindowsTaskkillPath(),
-            ["/PID", String(child.pid), "/T", "/F"],
-            {
-              stdio: "ignore",
-              windowsHide: true,
-            },
+          // This helper joins taskkill /T /F. Leader close alone cannot prove
+          // npm descendants released the prefix before a fallback install.
+          const termination = terminateManagedChild(child, "SIGKILL");
+          if (termination?.processTreeState !== "terminated") {
+            throw termination?.error ?? new Error("Windows process tree exit is unverified");
+          }
+          logStream.write(
+            `${new Date().toISOString()} timeout process-tree=terminated pid=${child.pid}\n`,
           );
-          killer.on("error", () => {
-            child.kill();
+        } catch (error) {
+          terminationError = new Error(`Command timeout cleanup failed: ${commandLabel}`, {
+            cause: error,
           });
-          return;
-        } catch {
-          child.kill();
-          return;
+          logStream.write(
+            `${new Date().toISOString()} timeout process-tree=unverified ${formatError(error)}\n`,
+          );
         }
+        return;
       }
       activeChildTree.killChildTree("SIGKILL");
     };
@@ -365,9 +442,10 @@ export async function runCommandInvocation(
             killWaitTimer = setTimeout(() => {
               finalize(() => {
                 rejectPromise(
-                  new Error(
-                    `Command timed out and could not be terminated cleanly: ${commandLabel}`,
-                  ),
+                  terminationError ??
+                    new Error(
+                      `Command timed out and could not be terminated cleanly: ${commandLabel}`,
+                    ),
                 );
               });
             }, 15_000);
@@ -387,14 +465,20 @@ export async function runCommandInvocation(
     logStream.write(`${new Date().toISOString()} start command=${commandLabel}\n`);
 
     child.stdout?.on("data", (chunk) => {
-      const text = chunk.toString();
-      stdout = appendBoundedCommandOutput(stdout, chunk, maxCapturedOutputBytes);
-      logStream.write(text);
+      stdout = appendBoundedCommandOutput(
+        stdout,
+        stdoutDecoder.write(chunk),
+        maxCapturedOutputBytes,
+      );
+      logStream.write(chunk);
     });
     child.stderr?.on("data", (chunk) => {
-      const text = chunk.toString();
-      stderr = appendBoundedCommandOutput(stderr, chunk, maxCapturedOutputBytes);
-      logStream.write(text);
+      stderr = appendBoundedCommandOutput(
+        stderr,
+        stderrDecoder.write(chunk),
+        maxCapturedOutputBytes,
+      );
+      logStream.write(chunk);
     });
 
     child.on("error", (error) => {
@@ -415,6 +499,11 @@ export async function runCommandInvocation(
         return;
       }
       activeChildTree.unregister();
+      if (settled) {
+        return;
+      }
+      stdout = appendBoundedCommandOutput(stdout, stdoutDecoder.end(), maxCapturedOutputBytes);
+      stderr = appendBoundedCommandOutput(stderr, stderrDecoder.end(), maxCapturedOutputBytes);
       finalize(() => {
         const result = {
           exitCode: exitCode ?? 1,
@@ -422,7 +511,7 @@ export async function runCommandInvocation(
           stderr,
         };
         if (timedOut) {
-          rejectPromise(new Error(`Command timed out: ${commandLabel}`));
+          rejectPromise(terminationError ?? new Error(`Command timed out: ${commandLabel}`));
           return;
         }
         if ((options.check ?? true) && result.exitCode !== 0) {
@@ -451,7 +540,7 @@ export async function startStaticFileServer(params: {
   logStream.on("error", (error) => {
     logStreamError ??= error;
   });
-  const fileName = params.filePath.split(/[/\\]/u).at(-1) ?? "artifact";
+  const fileName = encodeURIComponent(params.filePath.split(/[/\\]/u).at(-1) ?? "artifact");
   const fileStat = statSync(params.filePath);
   const sockets = new Set<Socket>();
   const server = createServer((request, response) => {
@@ -498,42 +587,29 @@ export async function startStaticFileServer(params: {
     url: `http://127.0.0.1:${port}/${fileName}`,
     close: () => {
       closePromise ??= new Promise<void>((resolvePromise, rejectPromise) => {
-        closeStaticFileServerConnections(server, sockets);
         server.close((error) => {
           void (async () => {
             const closeLogError = await finishStaticFileServerLog(logStream, logStreamError).catch(
-              (logError: unknown): Error =>
-                logError instanceof Error ? logError : new Error(String(logError)),
+              (logError: unknown): Error => toStringifiedError(logError),
             );
             if (error) {
               rejectPromise(error);
               return;
             }
             if (closeLogError) {
-              rejectPromise(
-                closeLogError instanceof Error
-                  ? closeLogError
-                  : new Error(formatError(closeLogError)),
-              );
+              rejectPromise(closeLogError);
               return;
             }
             resolvePromise();
           })();
         });
-        closeStaticFileServerConnections(server, sockets);
+        for (const socket of sockets) {
+          socket.destroy();
+        }
       });
       return closePromise;
     },
   };
-}
-
-function closeStaticFileServerConnections(server: Server, sockets: Set<Socket>) {
-  for (const socket of sockets) {
-    socket.destroy();
-  }
-  if (typeof server.closeAllConnections === "function") {
-    server.closeAllConnections();
-  }
 }
 
 function finishStaticFileServerLog(logStream: WriteStream, pendingError: Error | null) {
@@ -572,25 +648,19 @@ export function resolveStaticFileContentType(filePath: string) {
 }
 
 export async function withAllocatedGatewayPort<T>(lane: LaneState, callback: () => Promise<T>) {
-  let lastError = null;
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
+  for (let attempt = 1; ; attempt += 1) {
     const reservation = await reservePort();
     lane.gatewayPort = reservation.port;
     await reservation.release();
     try {
       return await callback();
     } catch (error) {
-      lastError = error;
       if (!isAddressInUseError(error) || attempt === 3) {
         throw error;
       }
       await sleep(250 * attempt);
     }
   }
-  throw toLintErrorObject(
-    lastError ?? new Error("Failed to allocate a gateway port."),
-    "Non-Error thrown",
-  );
 }
 
 export async function reserveGatewayPortForLane(lane: LaneState) {

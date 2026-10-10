@@ -1,26 +1,12 @@
 /** TLS helpers for ChatGPT OAuth provider discovery in plugin runtime code. */
 import path from "node:path";
+import { inspectTlsCertificateError } from "@openclaw/ai/internal/shared";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-
-const TLS_CERT_ERROR_CODES = new Set([
-  "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
-  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
-  "CERT_HAS_EXPIRED",
-  "DEPTH_ZERO_SELF_SIGNED_CERT",
-  "SELF_SIGNED_CERT_IN_CHAIN",
-  "ERR_TLS_CERT_ALTNAME_INVALID",
-]);
-
-const TLS_CERT_ERROR_PATTERNS = [
-  /unable to get local issuer certificate/i,
-  /unable to verify the first certificate/i,
-  /self[- ]signed certificate/i,
-  /certificate has expired/i,
-];
+import { cancelUnreadResponseBody } from "../infra/http-body.js";
 
 const OPENAI_AUTH_PROBE_URL =
   "https://auth.openai.com/oauth/authorize?response_type=code&client_id=openclaw-preflight&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&scope=openid+profile+email";
@@ -42,6 +28,14 @@ function extractFailure(error: unknown): {
   message: string;
   kind: PreflightFailureKind;
 } {
+  const tlsFailure = inspectTlsCertificateError(error);
+  if (tlsFailure) {
+    return {
+      code: tlsFailure.code,
+      message: tlsFailure.message,
+      kind: "tls-cert",
+    };
+  }
   const root = asNullableObjectRecord(error);
   const rootCause = asNullableObjectRecord(root?.cause);
   const code = typeof rootCause?.code === "string" ? rootCause.code : undefined;
@@ -51,13 +45,10 @@ function extractFailure(error: unknown): {
       : typeof root?.message === "string"
         ? root.message
         : String(error);
-  const isTlsCertError =
-    (code ? TLS_CERT_ERROR_CODES.has(code) : false) ||
-    TLS_CERT_ERROR_PATTERNS.some((pattern) => pattern.test(message));
   return {
     code,
     message,
-    kind: isTlsCertError ? "tls-cert" : "network",
+    kind: "network",
   };
 }
 
@@ -71,32 +62,16 @@ function resolveHomebrewPrefixFromExecPath(execPath: string): string | null {
   return envPrefix ? envPrefix : null;
 }
 
-function resolveCertBundlePath(): string | null {
-  const prefix = resolveHomebrewPrefixFromExecPath(process.execPath);
-  if (!prefix) {
-    return null;
-  }
-  return path.join(prefix, "etc", "openssl@3", "cert.pem");
-}
-
-function hasOpenAICodexOAuthProfile(cfg: OpenClawConfig): boolean {
-  const profiles = cfg.auth?.profiles;
-  if (!profiles) {
-    return false;
-  }
-  return Object.values(profiles).some(
-    (profile) => profile.provider === OPENAI_PROVIDER_ID && profile.mode === "oauth",
-  );
-}
-
 export function shouldRunOpenAIOAuthTlsPrerequisites(params: {
   cfg: OpenClawConfig;
   deep?: boolean;
 }): boolean {
-  if (params.deep === true) {
-    return true;
-  }
-  return hasOpenAICodexOAuthProfile(params.cfg);
+  return (
+    params.deep === true ||
+    Object.values(params.cfg.auth?.profiles ?? {}).some(
+      (profile) => profile.provider === OPENAI_PROVIDER_ID && profile.mode === "oauth",
+    )
+  );
 }
 
 export async function runOpenAIOAuthTlsPreflight(options?: {
@@ -114,17 +89,9 @@ export async function runOpenAIOAuthTlsPreflight(options?: {
     });
     return { ok: true };
   } catch (error) {
-    const failure = extractFailure(error);
-    return {
-      ok: false,
-      kind: failure.kind,
-      code: failure.code,
-      message: failure.message,
-    };
+    return { ok: false, ...extractFailure(error) };
   } finally {
-    if (response?.bodyUsed !== true) {
-      await response?.body?.cancel().catch(() => undefined);
-    }
+    await cancelUnreadResponseBody(response);
   }
 }
 
@@ -138,7 +105,8 @@ export function formatOpenAIOAuthTlsPreflightFix(
       "Verify DNS/firewall/proxy access to auth.openai.com and retry.",
     ].join("\n");
   }
-  const certBundlePath = resolveCertBundlePath();
+  const prefix = resolveHomebrewPrefixFromExecPath(process.execPath);
+  const certBundlePath = prefix ? path.join(prefix, "etc", "openssl@3", "cert.pem") : null;
   const lines = [
     "OpenAI OAuth prerequisites check failed: Node/OpenSSL cannot validate TLS certificates.",
     `Cause: ${result.code ? `${result.code} (${result.message})` : result.message}`,

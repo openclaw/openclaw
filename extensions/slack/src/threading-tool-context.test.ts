@@ -23,20 +23,6 @@ function resolveReplyToModeWithConfig(params: {
 }
 
 describe("buildSlackThreadingToolContext", () => {
-  it("uses top-level replyToMode by default", () => {
-    const cfg = {
-      channels: {
-        slack: { replyToMode: "first" },
-      },
-    } as OpenClawConfig;
-    const result = buildSlackThreadingToolContext({
-      cfg,
-      accountId: null,
-      context: { ChatType: "channel" },
-    });
-    expect(result.replyToMode).toBe("first");
-  });
-
   it("uses chat-type replyToMode overrides for direct messages when configured", () => {
     expect(
       resolveReplyToModeWithConfig({
@@ -75,18 +61,6 @@ describe("buildSlackThreadingToolContext", () => {
       context: { ChatType: "direct" },
     });
     expect(result.replyToMode).toBe("first");
-  });
-
-  it("uses legacy dm.replyToMode for direct messages when no chat-type override exists", () => {
-    expect(
-      resolveReplyToModeWithConfig({
-        slackConfig: {
-          replyToMode: "off",
-          dm: { replyToMode: "all" },
-        },
-        context: { ChatType: "direct" },
-      }),
-    ).toBe("all");
   });
 
   it("uses all mode when MessageThreadId is present", () => {
@@ -323,5 +297,35 @@ describe("buildSlackThreadingToolContext", () => {
     });
     expect(result.currentChannelId).toBe("user:U8SUVSVGS");
     expect(result.currentMessagingTarget).toBe("user:U8SUVSVGS");
+  });
+
+  it("keeps an Enterprise channel target workspace-qualified", () => {
+    const result = buildSlackThreadingToolContext({
+      cfg: emptyCfg,
+      accountId: null,
+      context: {
+        ChatType: "channel",
+        To: "team:T123:channel:C1234ABC",
+        NativeChannelId: "C1234ABC",
+      },
+    });
+
+    expect(result.currentChannelId).toBe("team:T123:channel:C1234ABC");
+    expect(result.currentMessagingTarget).toBe("team:T123:channel:C1234ABC");
+  });
+
+  it("uses the physical Enterprise DM channel without losing its workspace", () => {
+    const result = buildSlackThreadingToolContext({
+      cfg: emptyCfg,
+      accountId: null,
+      context: {
+        ChatType: "direct",
+        To: "team:T123:user:U8SUVSVGS",
+        NativeChannelId: "D8SRXRDNF",
+      },
+    });
+
+    expect(result.currentChannelId).toBe("team:T123:channel:D8SRXRDNF");
+    expect(result.currentMessagingTarget).toBe("team:T123:user:U8SUVSVGS");
   });
 });

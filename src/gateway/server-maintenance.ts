@@ -1,44 +1,87 @@
 // Gateway maintenance timers.
 // Starts periodic health, dedupe, abort, and media cleanup loops.
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import { createManagedWorktreeOwnerProtection } from "../agents/worktrees/owner-protection.js";
-import {
-  managedWorktrees,
-  resolveWorktreeCleanupLimits,
-  WORKTREE_GC_INTERVAL_MS,
-} from "../agents/worktrees/service.js";
-import type { HealthSummary } from "../commands/health.js";
+import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../agents/agent-run-terminal-outcome.js";
+import { isActiveEmbeddedRunId } from "../agents/embedded-agent-runner/runs.js";
+import { formatWorktreeGcResult } from "../agents/worktrees/gc-result.js";
+import type { ManagedWorktreeGcResult } from "../agents/worktrees/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { sweepStaleRunContexts } from "../infra/agent-events.js";
-import { pruneOrphanedDeliveryQueueMedia } from "../infra/outbound/delivery-queue-media-spool.js";
-import { cleanOldMedia } from "../media/store.js";
-import { startSkillCuratorMaintenance } from "../skills/workshop/curator.js";
 import {
-  abortTrackedChatRunById,
+  hasAgentRunContextExecutionOwner,
+  sweepStaleRunContexts,
+} from "../infra/agent-run-registry.js";
+import {
+  captureDeliveryQueueStateContext,
+  pruneExpiredDeliveryQueueTombstones,
+} from "../infra/delivery-queue-sqlite.js";
+import { pruneExpiredDevicePairSetupCompletions } from "../infra/device-bootstrap.js";
+import { formatErrorMessage as formatError } from "../infra/errors.js";
+import {
+  createGatewayActiveWorkSnapshot,
+  type GatewayActiveWorkInspectors,
+} from "../infra/gateway-active-work.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { pruneOrphanedDeliveryQueueMedia } from "../infra/outbound/delivery-queue-media-spool.js";
+import { generateSecureInt } from "../infra/secure-random.js";
+import { checkTelemetryUpdate } from "../infra/telemetry.js";
+import { cleanOldMedia, pruneOutboundMedia, prunePlaybackTranscodeCache } from "../media/store.js";
+import {
+  getGatewayRestartDrainSignal,
+  isGatewayWorkAdmissionClosed,
+  tryBeginGatewaySuspendAdmission,
+} from "../process/gateway-work-admission.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { registerSkillUsageTracking } from "../skills/workshop/skill-usage.js";
+import { pruneExpiredArtifactDownloads } from "./artifact-download-grants.js";
+import {
+  abortChatRunById,
   type ChatAbortControllerEntry,
   removeChatAbortControllerEntry,
   type RestartRecoveryCandidate,
 } from "./chat-abort.js";
 import type { QueuedChatTurnMap } from "./chat-queued-turns.js";
 import { pruneStaleControlPlaneBuckets } from "./control-plane-rate-limit.js";
-import { chatAbortMarkerTimestampMs } from "./server-chat-state.js";
-import type { ChatRunState } from "./server-chat-state.js";
-import type { ChatRunEntry } from "./server-chat.js";
+import type { HealthSummary } from "./health/types.js";
+import {
+  createHostThawRecovery,
+  type HostThawChannelRestartOutcome,
+} from "./host-thaw-recovery.js";
+import {
+  chatAbortMarkerTimestampMs,
+  type ChatRunEntry,
+  type ChatRunState,
+} from "./server-chat-state.js";
 import {
   DEDUPE_MAX,
   DEDUPE_TTL_MS,
   HEALTH_REFRESH_INTERVAL_MS,
   TICK_INTERVAL_MS,
 } from "./server-constants.js";
+import {
+  MEDIA_CLEANUP_STOP_TIMEOUT_MS,
+  type MediaCleanupStopResult,
+  registerMediaCleanupDrain,
+  waitForMediaCleanupDrains,
+  waitForMediaCleanupDrainsToSettle,
+} from "./server-media-cleanup-lifecycle.js";
+import { hasRegisteredChatRunForSessionKey } from "./server-methods/session-active-runs.js";
+import type { GatewayClient } from "./server-methods/types.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "./server-shared.js";
-import { formatError } from "./server-utils.js";
 import { setBroadcastHealthUpdate } from "./server/health-state.js";
+import { startSessionColdStorageMaintenance } from "./session-cold-storage-maintenance.js";
+import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
+import { checkGatewayInstallationReplacement } from "./stale-install.js";
+import { startWorktreeMaintenance } from "./worktree-maintenance.js";
 
 // Hourly sweep plus a one-day grace bounds orphan storage without racing the
 // stage-before-row-commit window.
 const DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS = 60 * 60_000;
+const TELEMETRY_MAINTENANCE_INTERVAL_MS = 5 * 60_000;
 
 export function startGatewayMaintenanceTimers(params: {
+  scheduler: GatewayScheduler;
+  clients: ReadonlySet<GatewayClient>;
   broadcast: (
     event: string,
     payload: unknown,
@@ -54,23 +97,19 @@ export function startGatewayMaintenanceTimers(params: {
     probe?: boolean;
     includeSensitive?: boolean;
   }) => Promise<HealthSummary>;
-  logHealth: { error: (msg: string) => void };
+  logHealth: { info: (msg: string) => void; error: (msg: string) => void };
+  restartRunningChannels: (
+    mode: "new-thaw" | "deferred-retry",
+    shouldContinue?: () => boolean,
+  ) => Promise<boolean>;
+  activeWorkInspectors: Partial<GatewayActiveWorkInspectors>;
+  refreshPresence: () => void;
+  resetEventLoopHealth: () => void;
   dedupe: Map<string, DedupeEntry>;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatQueuedTurns: QueuedChatTurnMap;
   restartRecoveryCandidates: Map<string, RestartRecoveryCandidate>;
-  chatRunState: Pick<
-    ChatRunState,
-    | "abortedRuns"
-    | "bufferUpdatedAt"
-    | "clearRun"
-    | "deltaLastBroadcastText"
-    | "agentDeltaSentAt"
-    | "bufferedAgentEvents"
-  >;
-  chatRunBuffers: Map<string, string>;
-  chatDeltaSentAt: Map<string, number>;
-  chatDeltaLastBroadcastLen: Map<string, number>;
+  chatRunState: ChatRunState;
   removeChatRun: (
     sessionId: string,
     clientRunId: string,
@@ -78,21 +117,33 @@ export function startGatewayMaintenanceTimers(params: {
   ) => ChatRunEntry | undefined;
   agentRunSeq: Map<string, number>;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
-  mediaCleanupTtlMs?: number;
+  isNixMode?: boolean;
   getRuntimeConfig: () => OpenClawConfig;
-  runWorktreeGc?: () => Promise<unknown>;
+  runWorktreeGc?: () => Promise<ManagedWorktreeGcResult | void>;
   runDeliveryQueueMediaGc?: () => Promise<unknown>;
-  enableSkillCurator?: boolean;
-  runSkillCuratorSweep?: () => Promise<unknown>;
-  registerSkillUsageTracking?: () => () => void;
+  runManagedOutgoingMediaGc?: () => Promise<unknown>;
 }): {
-  tickInterval: ReturnType<typeof setInterval>;
-  healthInterval: ReturnType<typeof setInterval>;
-  dedupeCleanup: ReturnType<typeof setInterval>;
-  mediaCleanup: ReturnType<typeof setInterval> | null;
-  worktreeCleanup: ReturnType<typeof setInterval>;
-  skillCuratorCleanup: () => void;
+  stopPeriodicTasks: () => Promise<void>;
+  startMediaCleanup: () => void;
+  stopMediaCleanup: () => Promise<MediaCleanupStopResult>;
+  skillUsageCleanup: () => Promise<void>;
 } {
+  const restartDrainSignal = getGatewayRestartDrainSignal();
+  const scheduler = params.scheduler.scope();
+  const schedulePeriodic = (
+    id: string,
+    everyMs: number,
+    run: () => void | Promise<unknown>,
+    immediate = false,
+  ) => {
+    scheduler.schedule({
+      id: `maintenance:${id}`,
+      atMs: scheduler.now() + (immediate ? 0 : everyMs),
+      everyMs,
+      run,
+    });
+  };
+  let periodicTasksStopPromise: Promise<void> | undefined;
   setBroadcastHealthUpdate((snap: HealthSummary) => {
     params.broadcast("health", snap, {
       stateVersion: {
@@ -103,90 +154,184 @@ export function startGatewayMaintenanceTimers(params: {
     params.nodeSendToAllSubscribed("health", snap);
   });
 
-  // periodic keepalive
-  const tickInterval = setInterval(() => {
-    const payload = { ts: Date.now() };
+  const restartChannelsIfIdle = async (
+    mode: "new-thaw" | "deferred-retry",
+  ): Promise<HostThawChannelRestartOutcome> => {
+    const snapshot = createGatewayActiveWorkSnapshot(params.activeWorkInspectors, {
+      ignoreTerminalSessions: true,
+    });
+    if (!snapshot.idle) {
+      return { status: "retry", reason: "active-work" };
+    }
+    // Inspection and admission commit are synchronous: no new work can enter
+    // between them, and a busy tick never changes the admission phase.
+    let invalidated = false;
+    const admission = tryBeginGatewaySuspendAdmission(() => {
+      invalidated = true;
+    });
+    if (!admission?.commit()) {
+      return { status: "retry", reason: "admission-closed" };
+    }
+    try {
+      const restarted = await params.restartRunningChannels(
+        mode,
+        () => !invalidated && !scheduler.signal.aborted,
+      );
+      return restarted
+        ? { status: "completed" }
+        : { status: "retry", reason: "channel-restart-incomplete" };
+    } finally {
+      admission.release();
+    }
+  };
+
+  const hostThawRecovery = createHostThawRecovery({
+    nowMs: () => scheduler.now(),
+    restartChannelsIfIdle,
+    refreshHealth: async () => {
+      await params.refreshGatewayHealthSnapshot({ probe: true });
+    },
+    refreshPresence: params.refreshPresence,
+    resetEventLoopHealth: params.resetEventLoopHealth,
+    isAdmissionClosed: () => scheduler.signal.aborted || isGatewayWorkAdmissionClosed(),
+    logger: params.logHealth,
+  });
+
+  const scheduleTelemetry = (delayMs: number) => {
+    scheduler.schedule({
+      id: "maintenance:telemetry",
+      delayMs,
+      run: async () => {
+        try {
+          await checkTelemetryUpdate(params.getRuntimeConfig, { surface: "gateway" });
+        } catch {
+          // Telemetry retries on its next jittered maintenance deadline.
+        } finally {
+          if (!scheduler.signal.aborted) {
+            scheduleTelemetry(
+              TELEMETRY_MAINTENANCE_INTERVAL_MS +
+                generateSecureInt(TELEMETRY_MAINTENANCE_INTERVAL_MS),
+            );
+          }
+        }
+      },
+    });
+  };
+  if (!params.isNixMode) {
+    scheduleTelemetry(generateSecureInt(TELEMETRY_MAINTENANCE_INTERVAL_MS));
+  }
+  schedulePeriodic("installation", TICK_INTERVAL_MS, () =>
+    checkGatewayInstallationReplacement().catch((error: unknown) =>
+      params.logHealth.error(`installation check failed: ${formatError(error)}`),
+    ),
+  );
+  schedulePeriodic("host-thaw", TICK_INTERVAL_MS, () =>
+    hostThawRecovery
+      .tick()
+      .catch((error: unknown) =>
+        params.logHealth.error(`host thaw recovery failed: ${formatError(error)}`),
+      ),
+  );
+  schedulePeriodic("tick", TICK_INTERVAL_MS, () => {
+    const payload = { ts: scheduler.now() };
     params.broadcast("tick", payload);
     params.nodeSendToAllSubscribed("tick", payload);
-  }, TICK_INTERVAL_MS);
+  });
 
-  // Keep cached health warm without request-time live channel probes. Explicit
-  // status/doctor probe paths still pass probe=true when the operator asks.
-  const healthInterval = setInterval(() => {
-    void params
-      .refreshGatewayHealthSnapshot({ probe: false })
-      .catch((err: unknown) => params.logHealth.error(`refresh failed: ${formatError(err)}`));
-  }, HEALTH_REFRESH_INTERVAL_MS);
+  // Automatic refresh warms the cache; explicit status and Doctor requests own live probes.
+  schedulePeriodic(
+    "health",
+    HEALTH_REFRESH_INTERVAL_MS,
+    () =>
+      params
+        .refreshGatewayHealthSnapshot({ probe: false })
+        .catch((err: unknown) => params.logHealth.error(`refresh failed: ${formatError(err)}`)),
+    true,
+  );
 
-  // Prime cache so first client gets a snapshot without waiting.
-  void params
-    .refreshGatewayHealthSnapshot({ probe: false })
-    .catch((err: unknown) => params.logHealth.error(`initial refresh failed: ${formatError(err)}`));
-
-  const runWorktreeGc =
-    params.runWorktreeGc ??
-    (() => {
-      const cfg = params.getRuntimeConfig();
-      return managedWorktrees.gc({
-        // Chat runs avoid registry acquire/bump writes; recent session metadata substitutes for
-        // worktree activity so idle GC cannot remove a checkout still used by the session.
-        shouldProtectOwner: createManagedWorktreeOwnerProtection(cfg),
-        // Read limits per run so a config edit applies at the next hourly sweep.
-        limits: resolveWorktreeCleanupLimits(cfg.worktrees),
-      });
-    });
-  const performWorktreeGc = () =>
-    runWorktreeGc().catch((err: unknown) => {
-      params.logHealth.error(`managed worktree cleanup failed: ${formatError(err)}`);
-    });
-  const worktreeCleanup = setInterval(() => void performWorktreeGc(), WORKTREE_GC_INTERVAL_MS);
-  void performWorktreeGc();
-
-  // Queue media has its own reference-aware retention policy and runs even when
-  // the general media TTL sweep is disabled.
-  const runDeliveryQueueMediaGc =
-    params.runDeliveryQueueMediaGc ?? (() => pruneOrphanedDeliveryQueueMedia());
-  let deliveryQueueMediaGcInFlight: Promise<void> | null = null;
-  let deliveryQueueMediaGcStartedAtMs = 0;
-  const performDeliveryQueueMediaGc = () => {
-    if (deliveryQueueMediaGcInFlight) {
-      return deliveryQueueMediaGcInFlight;
-    }
-    deliveryQueueMediaGcStartedAtMs = Date.now();
-    deliveryQueueMediaGcInFlight = Promise.resolve()
-      .then(async () => {
-        await runDeliveryQueueMediaGc();
-      })
-      .catch((err: unknown) => {
-        params.logHealth.error(`delivery queue media cleanup failed: ${formatError(err)}`);
-      })
-      .finally(() => {
-        deliveryQueueMediaGcInFlight = null;
-      });
-    return deliveryQueueMediaGcInFlight;
-  };
-  void performDeliveryQueueMediaGc();
-
-  let skillCuratorCleanup = () => {};
-  if (params.enableSkillCurator) {
-    skillCuratorCleanup = startSkillCuratorMaintenance({
-      onError: (err) => params.logHealth.error(`skill curator sweep failed: ${formatError(err)}`),
-      registerUsageTracking: params.registerSkillUsageTracking,
-      runSweep: params.runSkillCuratorSweep,
-    });
-  }
-
-  // dedupe cache cleanup
-  const dedupeCleanup = setInterval(() => {
-    const AGENT_RUN_SEQ_MAX = 10_000;
-    const now = Date.now();
-    if (now - deliveryQueueMediaGcStartedAtMs >= DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS) {
-      void performDeliveryQueueMediaGc();
-    }
-    const resolveDedupeRunId = (key: string, entry: DedupeEntry) => {
-      if (!key.startsWith("agent:") && !key.startsWith("chat:")) {
-        return undefined;
+  const worktreeMaintenance = startWorktreeMaintenance({
+    scheduler: params.scheduler,
+    getRuntimeConfig: params.getRuntimeConfig,
+    runGc: params.runWorktreeGc,
+    onComplete: (result) => {
+      const message = formatWorktreeGcResult(result);
+      if (result.outcome === "partial") {
+        params.logHealth.error(message);
+      } else {
+        params.logHealth.info(message);
       }
+    },
+    onError: (message) => params.logHealth.error(`managed worktree cleanup failed: ${message}`),
+  });
+
+  // Queue tombstone expiry and reference-aware media GC share one maintenance
+  // cycle even when the general media TTL sweep is disabled.
+  const mediaScheduler = params.scheduler.scope();
+  const runDeliveryQueueMediaGc =
+    params.runDeliveryQueueMediaGc ??
+    (async () => {
+      const context = captureDeliveryQueueStateContext();
+      try {
+        await pruneExpiredDeliveryQueueTombstones(undefined, context);
+      } finally {
+        await pruneOrphanedDeliveryQueueMedia(undefined, context);
+      }
+    });
+  const scheduleMedia = (id: string, run: () => Promise<unknown>) => {
+    mediaScheduler.schedule({
+      id: `maintenance:${id}`,
+      atMs: mediaScheduler.now(),
+      everyMs: DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS,
+      run,
+    });
+  };
+  void waitForMediaCleanupDrainsToSettle().then(() => {
+    if (!mediaScheduler.signal.aborted) {
+      scheduleMedia("delivery-queue-media", () =>
+        runDeliveryQueueMediaGc().catch((error: unknown) => {
+          params.logHealth.error(`delivery queue maintenance failed: ${formatError(error)}`);
+        }),
+      );
+    }
+  });
+  schedulePeriodic(
+    "device-pair-setup",
+    60_000,
+    () =>
+      pruneExpiredDevicePairSetupCompletions({ nowMs: scheduler.now() }).catch((error: unknown) => {
+        params.logHealth.error(`device pair setup cleanup failed: ${formatError(error)}`);
+      }),
+    true,
+  );
+
+  // Plugin-state expiry belongs to Gateway maintenance, not background-run tracking.
+  schedulePeriodic(
+    "plugin-state",
+    60_000,
+    async () => {
+      // Accepted writes retain their job scope until the scheduler joins their cleanup.
+      const signal = getAsyncWorkSignal();
+      try {
+        const { sweepExpiredPluginStateEntriesInWorker } =
+          await import("../plugin-state/plugin-state-worker-client.js");
+        await sweepExpiredPluginStateEntriesInWorker({
+          assertActive: () => signal?.throwIfAborted(),
+        });
+      } catch (error) {
+        params.logHealth.error(`plugin state cleanup failed: ${formatError(error)}`);
+      }
+    },
+    true,
+  );
+
+  const skillUsageCleanup = registerSkillUsageTracking();
+
+  schedulePeriodic("dedupe", 60_000, () => {
+    const AGENT_RUN_SEQ_MAX = 10_000;
+    const now = scheduler.now();
+    pruneExpiredArtifactDownloads(params.clients, now);
+    params.chatRunState.toolEventRecipients.pruneExpired(now);
+    const resolveDedupeRunId = (key: string, entry: DedupeEntry) => {
       const keyRunId = key.slice(key.indexOf(":") + 1);
       if (keyRunId) {
         if (params.chatAbortControllers.has(keyRunId) || params.chatQueuedTurns.has(keyRunId)) {
@@ -252,30 +397,18 @@ export function startGatewayMaintenanceTimers(params: {
       }
     }
 
-    if (params.agentRunSeq.size > AGENT_RUN_SEQ_MAX) {
-      const excess = params.agentRunSeq.size - AGENT_RUN_SEQ_MAX;
-      let removed = 0;
-      for (const runId of params.agentRunSeq.keys()) {
-        params.agentRunSeq.delete(runId);
-        removed += 1;
-        if (removed >= excess) {
-          break;
-        }
-      }
-    }
-
-    const resolveAgentThrottleRunId = (key: string) => {
-      if (key.endsWith(":assistant")) {
-        return key.slice(0, -":assistant".length);
-      }
-      if (key.endsWith(":thinking")) {
-        return key.slice(0, -":thinking".length);
-      }
-      return key;
-    };
+    pruneMapToMaxSize(params.agentRunSeq, AGENT_RUN_SEQ_MAX);
 
     for (const [runId, entry] of params.chatAbortControllers) {
-      if (entry.projectSessionTerminalPending === true) {
+      // A stamped terminal observation whose async projection clear never ran
+      // (dropped claim, swallowed handler error) would otherwise pin the entry
+      // forever: phantom active run in sessions.list, pinned dedupe key,
+      // skipped media GC. Past the grace window the entry re-enters the
+      // ordinary expiry branches below, which are terminal-safe.
+      const terminalClearOverdue =
+        typeof entry.projectSessionTerminalObservedAt === "number" &&
+        now - entry.projectSessionTerminalObservedAt > AGENT_RUN_TERMINAL_RETRY_GRACE_MS;
+      if (entry.projectSessionTerminalPending === true && !terminalClearOverdue) {
         continue;
       }
       if (isFutureDateTimestampMs(entry.expiresAtMs, { nowMs: now })) {
@@ -294,118 +427,158 @@ export function startGatewayMaintenanceTimers(params: {
             observedAt: entry.projectSessionTerminalObservedAt,
           });
         }
-        removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
-        continue;
+      } else if (entry.projectSessionActive !== false) {
+        const aborted = abortChatRunById(params, {
+          runId,
+          sessionKey: entry.sessionKey,
+          stopReason: "timeout",
+        });
+        if (aborted.aborted) {
+          continue;
+        }
+        // A non-abortable expired entry (signal already aborted, frozen reply
+        // op) whose owner cleanup was lost would otherwise survive every sweep:
+        // phantom active run, dead Stop button, pinned dedupe, skipped media GC.
       }
-      if (entry.projectSessionActive === false) {
-        removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
-        continue;
-      }
-      abortTrackedChatRunById(params, {
-        runId,
-        sessionKey: entry.sessionKey,
-        stopReason: "timeout",
-      });
+      removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
     }
 
     const ABORTED_RUN_TTL_MS = 60 * 60_000;
-    for (const [runId, abortMarker] of params.chatRunState.abortedRuns) {
-      if (now - chatAbortMarkerTimestampMs(abortMarker) <= ABORTED_RUN_TTL_MS) {
-        continue;
-      }
-      params.chatRunState.abortedRuns.delete(runId);
-      params.chatRunState.clearRun(runId);
-    }
-
     // Prune expired control-plane rate-limit buckets to prevent unbounded
     // growth when many unique clients connect over time.
     pruneStaleControlPlaneBuckets(now);
 
-    // Sweep stale buffers for runs that were never explicitly aborted.
-    // Only reap orphaned buffers after the abort controller is gone; active
-    // runs can legitimately sit idle while tools/models work.
-    for (const [runId, lastSentAt] of params.chatDeltaSentAt) {
-      if (params.chatRunState.abortedRuns.has(runId)) {
-        continue; // already handled above
-      }
-      if (params.chatAbortControllers.has(runId)) {
+    // Idle execution and queued delivery retain their projection until their owners settle.
+    for (const [runId, record] of params.chatRunState.runs) {
+      if (
+        params.chatAbortControllers.has(runId) ||
+        params.chatQueuedTurns.has(runId) ||
+        hasAgentRunContextExecutionOwner(runId) ||
+        isActiveEmbeddedRunId(runId)
+      ) {
         continue;
       }
-      if (now - lastSentAt <= ABORTED_RUN_TTL_MS) {
+      if (record.abortMarker !== undefined) {
+        if (now - chatAbortMarkerTimestampMs(record.abortMarker) <= ABORTED_RUN_TTL_MS) {
+          continue;
+        }
+        params.chatRunState.deleteAbortMarker(runId);
+      } else if (now - record.lastActivityAt <= ABORTED_RUN_TTL_MS) {
         continue;
       }
-      params.chatRunState.clearRun(runId);
-    }
-    for (const [runId, lastUpdatedAt] of params.chatRunState.bufferUpdatedAt) {
-      if (params.chatRunState.abortedRuns.has(runId)) {
-        continue;
-      }
-      if (params.chatAbortControllers.has(runId)) {
-        continue;
-      }
-      if (now - lastUpdatedAt <= ABORTED_RUN_TTL_MS) {
-        continue;
-      }
-      params.chatRunState.clearRun(runId);
-    }
-    for (const [key, lastSentAt] of params.chatRunState.agentDeltaSentAt) {
-      const runId = resolveAgentThrottleRunId(key);
-      if (params.chatRunState.abortedRuns.has(runId)) {
-        continue;
-      }
-      if (params.chatAbortControllers.has(runId)) {
-        continue;
-      }
-      if (now - lastSentAt <= ABORTED_RUN_TTL_MS) {
-        continue;
+      while (params.chatRunState.registry.shift(runId)) {
+        // No execution or delivery owner remains to consume these registrations.
       }
       params.chatRunState.clearRun(runId);
     }
     // Sweep stale agent run contexts (orphaned when lifecycle end/error is missed).
     sweepStaleRunContexts();
-  }, 60_000);
+  });
 
-  if (typeof params.mediaCleanupTtlMs !== "number") {
-    return {
-      tickInterval,
-      healthInterval,
-      dedupeCleanup,
-      mediaCleanup: null,
-      worktreeCleanup,
-      skillCuratorCleanup,
-    };
-  }
-
-  let mediaCleanupInFlight: Promise<void> | null = null;
-  const runMediaCleanup = () => {
-    if (mediaCleanupInFlight) {
-      return mediaCleanupInFlight;
-    }
-    mediaCleanupInFlight = cleanOldMedia(params.mediaCleanupTtlMs, {
-      recursive: true,
-      pruneEmptyDirs: true,
-    })
-      .catch((err: unknown) => {
-        params.logHealth.error(`media cleanup failed: ${formatError(err)}`);
-      })
-      .finally(() => {
-        mediaCleanupInFlight = null;
+  const runManagedOutgoingMediaGc =
+    params.runManagedOutgoingMediaGc ??
+    (async () => {
+      const { cleanupManagedOutgoingMediaRecords } = await import("./managed-image-attachments.js");
+      return await cleanupManagedOutgoingMediaRecords({
+        hasActiveSessionRun: (sessionKey, agentId) => {
+          const cfg = params.getRuntimeConfig();
+          return hasRegisteredChatRunForSessionKey({
+            context: { chatAbortControllers: params.chatAbortControllers },
+            sessionKey,
+            agentId,
+            defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, sessionKey),
+          });
+        },
       });
-    return mediaCleanupInFlight;
+    });
+  let mediaCleanupStarted = false;
+  const startMediaCleanup = () => {
+    if (mediaScheduler.signal.aborted || mediaCleanupStarted) {
+      return;
+    }
+    mediaCleanupStarted = true;
+    // A stuck prior generation defers only media cleanup, never Gateway readiness.
+    void waitForMediaCleanupDrainsToSettle().then(() => {
+      if (mediaScheduler.signal.aborted) {
+        return;
+      }
+      scheduleMedia("playback-cache", () =>
+        prunePlaybackTranscodeCache().catch((err: unknown) => {
+          params.logHealth.error(`playback transcode cache cleanup failed: ${formatError(err)}`);
+        }),
+      );
+      scheduleMedia("managed-outgoing", () =>
+        runManagedOutgoingMediaGc().catch((err: unknown) => {
+          params.logHealth.error(`managed outgoing media cleanup failed: ${formatError(err)}`);
+        }),
+      );
+      scheduleMedia("media", () => {
+        const ttlHours = params.getRuntimeConfig().attachments?.ttlHours;
+        const cleanup =
+          ttlHours !== undefined
+            ? cleanOldMedia(ttlHours * 60 * 60_000, { recursive: true, pruneEmptyDirs: true })
+            : pruneOutboundMedia();
+        return cleanup.catch((err: unknown) => {
+          params.logHealth.error(`media cleanup failed: ${formatError(err)}`);
+        });
+      });
+    });
+  };
+  let stopMediaCleanupPromise: Promise<MediaCleanupStopResult> | undefined;
+  const stopMediaCleanup = () => {
+    stopMediaCleanupPromise ??= (async () => {
+      registerMediaCleanupDrain(mediaScheduler.stop());
+      return await waitForMediaCleanupDrains({
+        timeoutMs: MEDIA_CLEANUP_STOP_TIMEOUT_MS,
+        onTimeout: () => {
+          params.logHealth.error(
+            `media cleanup drain exceeded ${MEDIA_CLEANUP_STOP_TIMEOUT_MS}ms; retaining shared state until cleanup settles`,
+          );
+        },
+      });
+    })();
+    return stopMediaCleanupPromise;
   };
 
-  const mediaCleanup = setInterval(() => {
-    void runMediaCleanup();
-  }, 60 * 60_000);
+  const sessionColdStorageMaintenance = startSessionColdStorageMaintenance({
+    scheduler: params.scheduler,
+    getRuntimeConfig: params.getRuntimeConfig,
+    onError: (message) => params.logHealth.error(`transcript cold storage failed: ${message}`),
+  });
 
-  void runMediaCleanup();
+  const stopPeriodicTasks = () => {
+    if (!periodicTasksStopPromise) {
+      restartDrainSignal.removeEventListener("abort", onRestartDrain);
+      periodicTasksStopPromise = Promise.allSettled([
+        scheduler.stop(),
+        worktreeMaintenance.stop(),
+        sessionColdStorageMaintenance.stop(),
+        stopMediaCleanup(),
+      ]).then((results) => {
+        const failures = results.flatMap((result) =>
+          result.status === "rejected" ? [result.reason] : [],
+        );
+        if (failures.length > 0) {
+          throw new AggregateError(failures, "Gateway periodic maintenance failed to stop");
+        }
+      });
+      // Drain starts before shutdown joins; retain failures for its warning report.
+      void periodicTasksStopPromise.catch(() => {});
+    }
+    return periodicTasksStopPromise;
+  };
+  const onRestartDrain = () => {
+    void stopPeriodicTasks();
+  };
+  restartDrainSignal.addEventListener("abort", onRestartDrain, { once: true });
+  if (restartDrainSignal.aborted) {
+    onRestartDrain();
+  }
 
   return {
-    tickInterval,
-    healthInterval,
-    dedupeCleanup,
-    mediaCleanup,
-    worktreeCleanup,
-    skillCuratorCleanup,
+    stopPeriodicTasks,
+    startMediaCleanup,
+    stopMediaCleanup,
+    skillUsageCleanup,
   };
 }

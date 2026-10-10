@@ -2,8 +2,15 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { resolveReplyDeliveryAccountId, resolveReplyToMode } from "./reply-threading.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
+import {
+  createReplyToModeFilterForChannel,
+  resolveReplyDeliveryAccountId,
+  resolveReplyToMode,
+} from "./reply-threading.js";
 
 const emptyCfg = {} as OpenClawConfig;
 
@@ -39,15 +46,6 @@ describe("resolveReplyToMode", () => {
         },
       },
     } as OpenClawConfig;
-    const legacyDmCfg = {
-      channels: {
-        slack: {
-          replyToMode: "off",
-          dm: { replyToMode: "all" },
-        },
-      },
-    } as OpenClawConfig;
-
     const cases: Array<{
       cfg: OpenClawConfig;
       channel?: "telegram" | "discord" | "slack";
@@ -67,8 +65,6 @@ describe("resolveReplyToMode", () => {
       { cfg: chatTypeCfg, channel: "slack", chatType: undefined, expected: "off" },
       { cfg: topLevelFallbackCfg, channel: "slack", chatType: "direct", expected: "first" },
       { cfg: topLevelFallbackCfg, channel: "slack", chatType: "channel", expected: "first" },
-      { cfg: legacyDmCfg, channel: "slack", chatType: "direct", expected: "all" },
-      { cfg: legacyDmCfg, channel: "slack", chatType: "channel", expected: "off" },
     ];
     for (const testCase of cases) {
       expect(resolveReplyToMode(testCase.cfg, testCase.channel, null, testCase.chatType)).toBe(
@@ -84,19 +80,11 @@ describe("resolveReplyToMode", () => {
           pluginId: "whatsapp",
           source: "test",
           plugin: {
-            id: "whatsapp",
-            meta: {
+            ...createChannelTestPluginBase({
               id: "whatsapp",
               label: "WhatsApp",
-              selectionLabel: "WhatsApp",
-              docsPath: "/channels/whatsapp",
-              blurb: "test stub.",
-            },
-            capabilities: { chatTypes: ["direct", "group"] },
-            config: {
-              listAccountIds: () => ["default"],
-              resolveAccount: () => ({}),
-            },
+              capabilities: { chatTypes: ["direct", "group"] },
+            }),
             threading: {
               resolveReplyToMode: ({ accountId }: { accountId?: string | null }) =>
                 accountId === "work" ? "first" : "all",
@@ -116,21 +104,14 @@ describe("resolveReplyToMode", () => {
         {
           pluginId: "whatsapp",
           source: "test",
-          plugin: {
+          plugin: createChannelTestPluginBase({
             id: "whatsapp",
-            meta: {
-              id: "whatsapp",
-              label: "WhatsApp",
-              selectionLabel: "WhatsApp",
-              docsPath: "/channels/whatsapp",
-              blurb: "test stub.",
-            },
+            label: "WhatsApp",
             capabilities: { chatTypes: ["direct", "group"] },
             config: {
               listAccountIds: () => ["work"],
-              resolveAccount: () => ({}),
             },
-          },
+          }),
         },
       ]),
     );
@@ -138,4 +119,52 @@ describe("resolveReplyToMode", () => {
     expect(resolveReplyDeliveryAccountId(emptyCfg, "whatsapp")).toBe("work");
     expect(resolveReplyDeliveryAccountId(emptyCfg, "whatsapp", "personal")).toBe("personal");
   });
+
+  it("applies canonical account policy before channel-wide threading defaults", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "irc", source: "test", plugin: createChannelTestPluginBase({ id: "irc" }) },
+      ]),
+    );
+    const cfg: OpenClawConfig = {
+      channels: {
+        irc: {
+          replyToMode: "off",
+          accounts: {
+            "Ops Team": { replyToMode: "all" },
+            support: { replyToMode: "first" },
+          },
+        },
+      },
+    };
+
+    expect(resolveReplyToMode(cfg, "irc", "ops-team", "group")).toBe("all");
+    expect(resolveReplyToMode(cfg, "irc", "OPS TEAM", "direct")).toBe("all");
+    expect(resolveReplyToMode(cfg, "irc", "support", "group")).toBe("first");
+    expect(resolveReplyToMode(cfg, "irc", "unknown", "group")).toBe("off");
+    expect(resolveReplyToMode(cfg, "irc", null, "direct")).toBe("off");
+  });
+});
+
+describe("createReplyToModeFilterForChannel", () => {
+  beforeEach(() => {
+    setActivePluginRegistry(createTestRegistry());
+  });
+
+  afterEach(() => {
+    setActivePluginRegistry(createTestRegistry());
+  });
+
+  it.each(["batched"] as const)(
+    "previews the %s transport without consuming its single reply slot",
+    (mode) => {
+      const filter = createReplyToModeFilterForChannel(mode, "discord");
+      const first = { text: "discarded", replyToId: "parent" };
+      const actual = { text: "actual", replyToId: "parent" };
+
+      expect(filter.preview(first).replyToId).toBe("parent");
+      expect(filter(actual).replyToId).toBe("parent");
+      expect(filter.preview({ text: "later", replyToId: "other" }).replyToId).toBeUndefined();
+    },
+  );
 });

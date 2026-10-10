@@ -1,8 +1,21 @@
 {
   "id": "anthropic",
+  "categories": ["models"],
+  "doctorContract": {
+    "configRepair": true
+  },
+  "sessionRouteStateOwners": [
+    {
+      "id": "anthropic",
+      "label": "Anthropic",
+      "providerIds": ["anthropic", "claude-cli"],
+      "runtimeIds": ["claude-cli"],
+      "cliSessionKeys": ["claude-cli"],
+      "authProfilePrefixes": ["anthropic:", "claude-cli:"]
+    }
+  ],
   "name": "Anthropic",
   "description": "Anthropic models, Claude CLI, and native Claude session catalog.",
-  "icon": "https://cdn.simpleicons.org/anthropic",
   "activation": {
     "onStartup": true
   },
@@ -13,10 +26,76 @@
   },
   "providerCatalogEntry": "./provider-discovery.ts",
   "modelCatalog": {
-    "runtimeAugment": true,
-        "providers": {
+    "modelsDev": {
+      "anthropic": "anthropic"
+    },
+    "providers": {
       "claude-cli": {
         "models": [
+          {
+            "id": "claude-haiku-5-5",
+            "name": "Claude Haiku 5.5 (Claude CLI)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "mediaInput": {
+              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
+            },
+            "contextWindow": 1000000,
+            "contextWindows": [
+              { "id": "200k", "label": "200K", "contextWindow": 200000 },
+              { "id": "1m", "label": "1M", "contextWindow": 1000000 }
+            ],
+            "contextWindowDefault": "1m",
+            "maxTokens": 128000
+          },
+          {
+            "id": "claude-opus-5-5",
+            "name": "Claude Opus 5.5 (Claude CLI)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "mediaInput": {
+              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
+            },
+            "contextWindow": 1000000,
+            "contextWindows": [
+              { "id": "200k", "label": "200K", "contextWindow": 200000 },
+              { "id": "1m", "label": "1M", "contextWindow": 1000000 }
+            ],
+            "contextWindowDefault": "1m",
+            "maxTokens": 128000
+          },
+          {
+            "id": "claude-opus-5",
+            "name": "Claude Opus 5 (Claude CLI)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "mediaInput": {
+              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
+            },
+            "contextWindow": 1000000,
+            "contextWindows": [
+              { "id": "200k", "label": "200K", "contextWindow": 200000 },
+              { "id": "1m", "label": "1M", "contextWindow": 1000000 }
+            ],
+            "contextWindowDefault": "1m",
+            "maxTokens": 128000
+          },
+          {
+            "id": "claude-sonnet-5-5",
+            "name": "Claude Sonnet 5.5 (Claude CLI)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "mediaInput": {
+              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
+            },
+            "contextWindow": 1000000,
+            "contextWindows": [
+              { "id": "200k", "label": "200K", "contextWindow": 200000 },
+              { "id": "1m", "label": "1M", "contextWindow": 1000000 }
+            ],
+            "contextWindowDefault": "1m",
+            "maxTokens": 128000
+          },
           {
             "id": "claude-sonnet-5",
             "name": "Claude Sonnet 5 (Claude CLI)",
@@ -26,11 +105,50 @@
               "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
             },
             "contextWindow": 1000000,
+            "contextWindows": [
+              { "id": "200k", "label": "200K", "contextWindow": 200000 },
+              { "id": "1m", "label": "1M", "contextWindow": 1000000 }
+            ],
+            "contextWindowDefault": "1m",
+            "maxTokens": 128000
+          },
+          {
+            "id": "claude-fable-5-1",
+            "name": "Claude Fable 5.1 (Claude CLI)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "mediaInput": {
+              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
+            },
+            "contextWindow": 1000000,
+            "contextWindows": [
+              { "id": "200k", "label": "200K", "contextWindow": 200000 },
+              { "id": "1m", "label": "1M", "contextWindow": 1000000 }
+            ],
+            "contextWindowDefault": "1m",
+            "maxTokens": 128000
+          },
+          {
+            "id": "claude-fable-5",
+            "name": "Claude Fable 5 (Claude CLI)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "mediaInput": {
+              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
+            },
+            "contextWindow": 1000000,
+            "contextWindows": [
+              { "id": "200k", "label": "200K", "contextWindow": 200000 },
+              { "id": "1m", "label": "1M", "contextWindow": 1000000 }
+            ],
+            "contextWindowDefault": "1m",
             "maxTokens": 128000
           },
           {
             "id": "claude-opus-4-8",
             "name": "Claude Opus 4.8 (Claude CLI)",
+            "status": "deprecated",
+            "replacedBy": "claude-opus-5",
             "reasoning": true,
             "input": ["text", "image"],
             "mediaInput": {
@@ -77,8 +195,79 @@
       "anthropic": {
         "baseUrl": "https://api.anthropic.com",
         "api": "anthropic-messages",
-        "defaultUtilityModel": "claude-haiku-4-5",
+        "defaultUtilityModel": "claude-haiku-5-5",
         "models": [
+          {
+            "id": "claude-haiku-5-5",
+            "name": "Claude Haiku 5.5",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "mediaInput": {
+              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
+            },
+            "cost": {
+              "input": 0.1, "output": 0.5, "cacheRead": 0.01, "cacheWrite": 0.125,
+              "tieredPricing": [
+                { "range": [0, 100001], "input": 0.1, "output": 0.5, "cacheRead": 0.01, "cacheWrite": 0.125 },
+                { "range": [100001], "input": 0.5, "output": 2.5, "cacheRead": 0.05, "cacheWrite": 0.625 }
+              ]
+            },
+            "contextWindow": 1000000,
+            "contextWindows": [
+              { "id": "200k", "label": "200K", "contextWindow": 200000 },
+              { "id": "1m", "label": "1M", "contextWindow": 1000000 }
+            ],
+            "contextWindowDefault": "1m",
+            "maxTokens": 128000,
+            "thinkingLevelMap": { "minimal": "low", "xhigh": "xhigh", "max": "max" },
+            "compat": { "codeMode": "capable" }
+          },
+          {
+            "id": "claude-opus-5-5",
+            "name": "Claude Opus 5.5",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "mediaInput": {
+              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
+            },
+            "cost": { "input": 4, "output": 20, "cacheRead": 0.2, "cacheWrite": 5 },
+            "contextWindow": 1000000,
+            "contextWindows": [
+              { "id": "200k", "label": "200K", "contextWindow": 200000 },
+              { "id": "1m", "label": "1M", "contextWindow": 1000000 }
+            ],
+            "contextWindowDefault": "1m",
+            "maxTokens": 128000,
+            "thinkingLevelMap": {
+              "minimal": "low",
+              "xhigh": "xhigh",
+              "max": "max"
+            },
+            "compat": { "codeMode": "preferred" }
+          },
+          {
+            "id": "claude-fable-5-1",
+            "name": "Claude Fable 5.1",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "mediaInput": {
+              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
+            },
+            "cost": { "input": 10, "output": 50, "cacheRead": 0.25, "cacheWrite": 12.5 },
+            "contextWindow": 1000000,
+            "contextWindows": [
+              { "id": "200k", "label": "200K", "contextWindow": 200000 },
+              { "id": "1m", "label": "1M", "contextWindow": 1000000 }
+            ],
+            "contextWindowDefault": "1m",
+            "maxTokens": 128000,
+            "thinkingLevelMap": {
+              "minimal": "low",
+              "xhigh": "xhigh",
+              "max": "max"
+            },
+            "compat": { "codeMode": "preferred" }
+          },
           {
             "id": "claude-fable-5",
             "name": "Claude Fable 5",
@@ -89,13 +278,63 @@
             },
             "cost": { "input": 10, "output": 50, "cacheRead": 1, "cacheWrite": 12.5 },
             "contextWindow": 1000000,
+            "contextWindows": [
+              { "id": "200k", "label": "200K", "contextWindow": 200000 },
+              { "id": "1m", "label": "1M", "contextWindow": 1000000 }
+            ],
+            "contextWindowDefault": "1m",
             "maxTokens": 128000,
             "thinkingLevelMap": {
-              "off": "low",
               "minimal": "low",
               "xhigh": "xhigh",
               "max": "max"
-            }
+            },
+            "compat": { "codeMode": "preferred" }
+          },
+          {
+            "id": "claude-opus-5",
+            "name": "Claude Opus 5",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "mediaInput": {
+              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
+            },
+            "cost": { "input": 5, "output": 25, "cacheRead": 0.5, "cacheWrite": 6.25 },
+            "contextWindow": 1000000,
+            "contextWindows": [
+              { "id": "200k", "label": "200K", "contextWindow": 200000 },
+              { "id": "1m", "label": "1M", "contextWindow": 1000000 }
+            ],
+            "contextWindowDefault": "1m",
+            "maxTokens": 128000,
+            "thinkingLevelMap": {
+              "xhigh": "xhigh",
+              "max": "max"
+            },
+            "compat": { "codeMode": "preferred" }
+          },
+          {
+            "id": "claude-sonnet-5-5",
+            "name": "Claude Sonnet 5.5",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "mediaInput": {
+              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
+            },
+            "cost": { "input": 2, "output": 10, "cacheRead": 0.2, "cacheWrite": 2.5 },
+            "contextWindow": 1000000,
+            "contextWindows": [
+              { "id": "200k", "label": "200K", "contextWindow": 200000 },
+              { "id": "1m", "label": "1M", "contextWindow": 1000000 }
+            ],
+            "contextWindowDefault": "1m",
+            "maxTokens": 128000,
+            "thinkingLevelMap": {
+              "minimal": "low",
+              "xhigh": "xhigh",
+              "max": "max"
+            },
+            "compat": { "codeMode": "preferred" }
           },
           {
             "id": "claude-sonnet-5",
@@ -107,11 +346,17 @@
             },
             "cost": { "input": 2, "output": 10, "cacheRead": 0.2, "cacheWrite": 2.5 },
             "contextWindow": 1000000,
+            "contextWindows": [
+              { "id": "200k", "label": "200K", "contextWindow": 200000 },
+              { "id": "1m", "label": "1M", "contextWindow": 1000000 }
+            ],
+            "contextWindowDefault": "1m",
             "maxTokens": 128000,
             "thinkingLevelMap": {
               "xhigh": "xhigh",
               "max": "max"
-            }
+            },
+            "compat": { "codeMode": "preferred" }
           },
           {
             "id": "claude-mythos-5",
@@ -125,33 +370,25 @@
             "contextWindow": 1000000,
             "maxTokens": 128000,
             "thinkingLevelMap": {
-              "off": "low",
               "minimal": "low",
               "xhigh": "xhigh",
               "max": "max"
-            }
+            },
+            "compat": { "codeMode": "preferred" }
           },
           {
             "id": "claude-opus-4-8",
             "name": "Claude Opus 4.8",
+            "status": "deprecated",
+            "replacedBy": "claude-opus-5",
             "reasoning": true,
             "input": ["text", "image"],
             "mediaInput": {
               "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
             },
             "contextWindow": 1000000,
-            "maxTokens": 128000
-          },
-          {
-            "id": "claude-opus-4-7",
-            "name": "Claude Opus 4.7",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "mediaInput": {
-              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
-            },
-            "contextWindow": 1000000,
-            "maxTokens": 128000
+            "maxTokens": 128000,
+            "compat": { "codeMode": "preferred" }
           },
           {
             "id": "claude-haiku-4-5",
@@ -162,47 +399,15 @@
               "image": { "maxSidePx": 1568, "preferredSidePx": 1568, "tokenMode": "provider" }
             },
             "contextWindow": 200000,
-            "maxTokens": 64000
-          },
-          {
-            "id": "claude-haiku-4-5-20251001",
-            "name": "Claude Haiku 4.5",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "mediaInput": {
-              "image": { "maxSidePx": 1568, "preferredSidePx": 1568, "tokenMode": "provider" }
-            },
-            "contextWindow": 200000,
-            "maxTokens": 64000
-          },
-          {
-            "id": "claude-sonnet-4-6",
-            "name": "Claude Sonnet 4.6",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "mediaInput": {
-              "image": { "maxSidePx": 1568, "preferredSidePx": 1568, "tokenMode": "provider" }
-            },
-            "contextWindow": 1000000,
-            "maxTokens": 128000
-          },
-          {
-            "id": "claude-opus-4-6",
-            "name": "Claude Opus 4.6",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "mediaInput": {
-              "image": { "maxSidePx": 1568, "preferredSidePx": 1568, "tokenMode": "provider" }
-            },
-            "contextWindow": 1000000,
-            "maxTokens": 128000
+            "maxTokens": 64000,
+            "compat": { "codeMode": "capable" }
           }
         ]
       }
     },
     "discovery": {
       "claude-cli": "static",
-      "anthropic": "static"
+      "anthropic": "refreshable"
     }
   },
   "modelSupport": {
@@ -212,12 +417,25 @@
     "providers": {
       "anthropic": {
         "aliases": {
+          "fable": "claude-fable-5-1",
+          "fable-5": "claude-fable-5",
+          "fable-5.1": "claude-fable-5-1",
+          "fable-5-1": "claude-fable-5-1",
+          "haiku": "claude-haiku-5-5",
+          "haiku-5.5": "claude-haiku-5-5",
+          "haiku-5-5": "claude-haiku-5-5",
+          "opus-5.5": "claude-opus-5-5",
+          "opus-5-5": "claude-opus-5-5",
+          "opus-5": "claude-opus-5",
+          "opus": "claude-opus-5-5",
           "opus-4.8": "claude-opus-4-8",
-          "opus": "claude-opus-4-8",
+          "opus-4.7": "claude-opus-4-7",
           "opus-4.6": "claude-opus-4-6",
           "mythos-5": "claude-mythos-5",
+          "sonnet-5.5": "claude-sonnet-5-5",
+          "sonnet-5-5": "claude-sonnet-5-5",
           "sonnet-5": "claude-sonnet-5",
-          "sonnet": "claude-sonnet-5",
+          "sonnet": "claude-sonnet-5-5",
           "sonnet-4.6": "claude-sonnet-4-6"
         }
       }
@@ -226,8 +444,11 @@
   "modelPricing": {
     "providers": {
       "anthropic": {
-        "openRouter": {
-          "modelIdTransforms": ["version-dots"]
+        "modelsDev": {
+          "provider": "anthropic"
+        },
+        "liteLLM": {
+          "provider": "anthropic"
         }
       }
     }
@@ -247,8 +468,18 @@
   },
   "cliBackends": ["claude-cli"],
   "syntheticAuthRefs": ["claude-cli"],
-  "nonSecretAuthMarkers": ["openclaw:claude-cli-api-key-helper"],
+  "nonSecretAuthMarkers": ["openclaw:claude-cli-native-auth"],
   "setup": {
+    "nativeSessionCatalog": {
+      "label": "Claude Code",
+      "legacyDefaultEnabled": true,
+      "description": "Existing native Claude Code conversations on this Gateway and eligible paired nodes.",
+      "nodeCommands": [
+        "anthropic.claude.sessions.list.v1",
+        "anthropic.claude.sessions.read.v1",
+        "anthropic.claude.terminal.resume.v1"
+      ]
+    },
     "providers": [
       {
         "id": "anthropic",
@@ -286,6 +517,7 @@
     {
       "provider": "anthropic",
       "method": "api-key",
+      "personalAccount": true,
       "choiceId": "apiKey",
       "appGuidedSecret": true,
       "choiceLabel": "Anthropic API key",
@@ -307,7 +539,7 @@
     "anthropic": {
       "capabilities": ["image"],
       "defaultModels": {
-        "image": "claude-opus-4-8"
+        "image": "claude-opus-5-5"
       },
       "autoPriority": {
         "image": 20
@@ -315,6 +547,14 @@
       "nativeDocumentInputs": ["pdf"]
     }
   },
+  "configGroups": [
+    {
+      "id": "native-sessions",
+      "title": "Native sessions",
+      "order": 10,
+      "properties": ["sessionCatalog"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

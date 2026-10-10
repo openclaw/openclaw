@@ -26,44 +26,28 @@ export type DispatchProcessedOptions = {
   error?: string;
 };
 
-function resolveCompletedInboundAuditReason(
-  reason: string | undefined,
-): AuditInboundMessageCompletedReasonCode | undefined {
-  switch (reason) {
-    case "fast_abort":
-      return "fast_abort";
-    case "plugin-bound-handled":
-      return "plugin_bound_handled";
-    case "plugin-bound-fallback-missing-plugin":
-    case "plugin-bound-fallback-no-handler":
-      return "plugin_bound_unavailable";
-    case "plugin-bound-declined":
-      return "plugin_bound_declined";
-    case "before_dispatch_handled":
-      return "before_dispatch_handled";
-    case "acp_dispatch":
-      return "acp_dispatch_completed";
-    case "acp_empty_prompt":
-      return "acp_dispatch_empty";
-    default:
-      return undefined;
-  }
-}
+const completedInboundAuditReasons = new Map<
+  string | undefined,
+  AuditInboundMessageCompletedReasonCode
+>([
+  ["fast_abort", "fast_abort"],
+  ["plugin-bound-handled", "plugin_bound_handled"],
+  ["plugin-bound-fallback-missing-plugin", "plugin_bound_unavailable"],
+  ["plugin-bound-fallback-no-handler", "plugin_bound_unavailable"],
+  ["plugin-bound-declined", "plugin_bound_declined"],
+  ["before_dispatch_handled", "before_dispatch_handled"],
+  ["acp_dispatch", "acp_dispatch_completed"],
+  ["acp_empty_prompt", "acp_dispatch_empty"],
+  ["active_run_injected", "active_run_injected"],
+]);
 
-function resolveSkippedInboundAuditReason(
-  reason: string | undefined,
-): AuditInboundMessageSkippedReasonCode | undefined {
-  switch (reason) {
-    case "duplicate":
-      return "duplicate";
-    case "reply-operation-active":
-      return "reply_operation_active";
-    case "reply_operation_aborted":
-      return "reply_operation_aborted";
-    default:
-      return undefined;
-  }
-}
+const skippedInboundAuditReasons = new Map<
+  string | undefined,
+  AuditInboundMessageSkippedReasonCode
+>([
+  ["duplicate", "duplicate"],
+  ["reply-operation-active", "reply_operation_active"],
+]);
 
 function resolveInboundMessageAuditTerminal(
   outcome: DispatchProcessedOutcome,
@@ -71,38 +55,24 @@ function resolveInboundMessageAuditTerminal(
 ): InboundMessageAuditTerminal {
   // Diagnostics keep their legacy outcomes and reason strings; audit projects
   // those signals into the stricter terminal contract independently.
-  if (reason === "plugin-bound-error") {
+  if (reason === "plugin-bound-error" || reason?.startsWith("acp_error:")) {
     return {
       status: "failed",
       outcome: "failed",
       errorCode: "message_processing_failed",
-      reasonCode: "plugin_bound_error",
+      reasonCode: reason === "plugin-bound-error" ? "plugin_bound_error" : "acp_dispatch_failed",
     };
   }
-  if (reason?.startsWith("acp_error:")) {
-    return {
-      status: "failed",
-      outcome: "failed",
-      errorCode: "message_processing_failed",
-      reasonCode: "acp_dispatch_failed",
-    };
-  }
-  if (reason === "reply_operation_aborted") {
+  if (reason === "reply_operation_aborted" || reason === "acp_aborted") {
     return {
       status: "blocked",
       outcome: "skipped",
-      reasonCode: "reply_operation_aborted",
-    };
-  }
-  if (reason === "acp_aborted") {
-    return {
-      status: "blocked",
-      outcome: "skipped",
-      reasonCode: "acp_dispatch_aborted",
+      reasonCode:
+        reason === "reply_operation_aborted" ? "reply_operation_aborted" : "acp_dispatch_aborted",
     };
   }
   if (outcome === "completed") {
-    const reasonCode = resolveCompletedInboundAuditReason(reason);
+    const reasonCode = completedInboundAuditReasons.get(reason);
     return {
       status: "succeeded",
       outcome: "completed",
@@ -110,7 +80,7 @@ function resolveInboundMessageAuditTerminal(
     };
   }
   if (outcome === "skipped") {
-    const reasonCode = resolveSkippedInboundAuditReason(reason);
+    const reasonCode = skippedInboundAuditReasons.get(reason);
     return {
       status: "blocked",
       outcome: "skipped",
@@ -130,6 +100,74 @@ export type InboundMessageAuditTerminalRecorder = {
   finishSuccess: (result: DispatchFromConfigResult) => void;
   finishError: () => void;
 };
+
+export function emitInboundMessageAuditTerminal(params: {
+  cfg: DispatchFromConfigParams["cfg"];
+  counts: Record<ReplyDispatchKind, number>;
+  ctx: DispatchFromConfigParams["ctx"];
+  observedRunId?: string;
+  startedAt: number;
+  terminal: { outcome: DispatchProcessedOutcome; options?: DispatchProcessedOptions };
+}): void {
+  const { ctx, cfg } = params;
+  const occurredAt = Date.now();
+  const sessionKey =
+    normalizeOptionalString(ctx.SessionKey) ?? normalizeOptionalString(ctx.CommandTargetSessionKey);
+  const actorId = normalizeOptionalString(ctx.SenderId);
+  const accountId = normalizeOptionalString(ctx.AccountId);
+  const conversationId =
+    normalizeOptionalString(ctx.NativeChannelId) ??
+    normalizeOptionalString(ctx.OriginatingTo) ??
+    normalizeOptionalString(ctx.To) ??
+    normalizeOptionalString(ctx.From);
+  const messageId =
+    normalizeOptionalString(ctx.MessageSidFull) ??
+    normalizeOptionalString(ctx.MessageSid) ??
+    normalizeOptionalString(ctx.MessageSidFirst) ??
+    normalizeOptionalString(ctx.MessageSidLast);
+  const terminalFields = resolveInboundMessageAuditTerminal(
+    params.terminal.outcome,
+    params.terminal.options?.reason,
+  );
+  let agentId = normalizeOptionalString(ctx.AgentId);
+  try {
+    agentId = resolveSessionAgentId({
+      sessionKey,
+      config: cfg,
+      agentId: ctx.AgentId,
+    });
+  } catch {
+    // Malformed setup must still produce a content-free terminal with available attribution.
+  }
+  try {
+    emitTrustedMessageAuditEvent({
+      occurredAt,
+      kind: "message",
+      action: "message.inbound.processed",
+      ...terminalFields,
+      actorType: actorId ? "channel_sender" : "system",
+      actorId: actorId ?? "gateway",
+      ...(agentId ? { agentId } : {}),
+      ...(normalizeOptionalString(params.observedRunId)
+        ? { runId: normalizeOptionalString(params.observedRunId) }
+        : {}),
+      direction: "inbound",
+      channel:
+        normalizeLowercaseStringOrEmpty(ctx.OriginatingChannel) ||
+        normalizeLowercaseStringOrEmpty(ctx.Surface) ||
+        normalizeLowercaseStringOrEmpty(ctx.Provider) ||
+        "unknown",
+      conversationKind: normalizeChatType(ctx.ChatType) ?? "unknown",
+      durationMs: Math.max(0, occurredAt - params.startedAt),
+      resultCount: params.counts.tool + params.counts.block + params.counts.final,
+      ...(accountId ? { accountId } : {}),
+      ...(conversationId ? { conversationId } : {}),
+      ...(messageId ? { messageId } : {}),
+    });
+  } catch {
+    // Optional audit observers must never alter message dispatch semantics.
+  }
+}
 
 /**
  * Captures one terminal event for the reply-processing boundary. Channel admission and
@@ -157,66 +195,14 @@ export function createInboundMessageAuditTerminal(
       return;
     }
     finished = true;
-    const { ctx, cfg } = params;
-    const occurredAt = Date.now();
-    const sessionKey =
-      normalizeOptionalString(ctx.SessionKey) ??
-      normalizeOptionalString(ctx.CommandTargetSessionKey);
-    const actorId = normalizeOptionalString(ctx.SenderId);
-    const accountId = normalizeOptionalString(ctx.AccountId);
-    const conversationId =
-      normalizeOptionalString(ctx.NativeChannelId) ??
-      normalizeOptionalString(ctx.OriginatingTo) ??
-      normalizeOptionalString(ctx.To) ??
-      normalizeOptionalString(ctx.From);
-    const messageId =
-      normalizeOptionalString(ctx.MessageSidFull) ??
-      normalizeOptionalString(ctx.MessageSid) ??
-      normalizeOptionalString(ctx.MessageSidFirst) ??
-      normalizeOptionalString(ctx.MessageSidLast);
-    const terminalFields = resolveInboundMessageAuditTerminal(
-      terminal.outcome,
-      terminal.options?.reason,
-    );
-    let agentId = normalizeOptionalString(ctx.AgentId);
-    try {
-      agentId = resolveSessionAgentId({
-        sessionKey,
-        config: cfg,
-        agentId: ctx.AgentId,
-      });
-    } catch {
-      // Malformed setup must still produce a content-free terminal with available attribution.
-    }
-    try {
-      emitTrustedMessageAuditEvent({
-        occurredAt,
-        kind: "message",
-        action: "message.inbound.processed",
-        ...terminalFields,
-        actorType: actorId ? "channel_sender" : "system",
-        actorId: actorId ?? "gateway",
-        ...(agentId ? { agentId } : {}),
-        ...(observedRunId ? { runId: observedRunId } : {}),
-        direction: "inbound",
-        // OriginatingChannel is the canonical routing channel id and matches
-        // outbound rows' channel; Surface/Provider can be UI-surface variants
-        // and plugin channels may set only OriginatingChannel.
-        channel:
-          normalizeLowercaseStringOrEmpty(ctx.OriginatingChannel) ||
-          normalizeLowercaseStringOrEmpty(ctx.Surface) ||
-          normalizeLowercaseStringOrEmpty(ctx.Provider) ||
-          "unknown",
-        conversationKind: normalizeChatType(ctx.ChatType) ?? "unknown",
-        durationMs: Math.max(0, occurredAt - startedAt),
-        resultCount: counts.tool + counts.block + counts.final,
-        ...(accountId ? { accountId } : {}),
-        ...(conversationId ? { conversationId } : {}),
-        ...(messageId ? { messageId } : {}),
-      });
-    } catch {
-      // Optional audit observers must never alter message dispatch semantics.
-    }
+    emitInboundMessageAuditTerminal({
+      cfg: params.cfg,
+      counts,
+      ctx: params.ctx,
+      observedRunId,
+      startedAt,
+      terminal,
+    });
   };
 
   return {

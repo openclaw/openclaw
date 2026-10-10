@@ -1,22 +1,21 @@
-// Port inspection and force-free helpers used by gateway run/install flows.
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:net";
+import {
+  parseStrictPositiveInteger,
+  resolvePositiveTimerTimeoutMs,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { formatErrorMessage } from "../infra/errors.js";
-import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { resolveLsofCommandSync } from "../infra/ports-lsof.js";
 import { parseWindowsNetstatListeners } from "../infra/ports-netstat.js";
 import { probePortUsage } from "../infra/ports-probe.js";
+import { resolveDiagnosticProcessEnv } from "../infra/process-env.js";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
-import { resolvePositiveTimerTimeoutMs, resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { sleep } from "../utils.js";
 
 type PortProcess = { pid: number; command?: string };
 
-type ForceFreePortResult = {
-  killed: PortProcess[];
-  waitedMs: number;
-  escalatedToSigkill: boolean;
-};
+type BeforePortSignal = (context: { port: number; pid?: number; signal: NodeJS.Signals }) => void;
 
 type ExecFileError = NodeJS.ErrnoException & {
   status?: number | null;
@@ -81,31 +80,36 @@ function isRecoverableLsofError(err: unknown): boolean {
 }
 
 function parseFuserPidList(output: string): number[] {
-  if (!output) {
-    return [];
-  }
   const values = new Set<number>();
-  for (const rawLine of output.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line) {
-      continue;
-    }
-    const pidRegion = line.includes(":") ? line.slice(line.indexOf(":") + 1) : line;
-    const pidMatches = pidRegion.match(/\d+/g) ?? [];
-    for (const match of pidMatches) {
-      const pid = Number.parseInt(match, 10);
-      if (Number.isFinite(pid) && pid > 0) {
-        values.add(pid);
-      }
+  for (const token of output.split(/\s+/)) {
+    const pid = parseStrictPositiveInteger(token);
+    if (pid !== undefined) {
+      values.add(pid);
     }
   }
   return [...values];
 }
 
-function killPortWithFuser(port: number, signal: "SIGTERM" | "SIGKILL"): PortProcess[] {
-  const args = ["-k", `-${FUSER_SIGNALS[signal]}`, `${port}/tcp`];
+function killPortWithFuser(
+  port: number,
+  signal: "SIGTERM" | "SIGKILL",
+  beforeSignal?: BeforePortSignal,
+): PortProcess[] {
+  if (beforeSignal) {
+    const listeners = runFuser(port);
+    // fuser's resource-targeted -k can select a different PID at exec time.
+    // A guard therefore freezes concrete victims before signaling directly.
+    killPids(port, listeners, signal, beforeSignal);
+    return listeners;
+  }
+  return runFuser(port, signal);
+}
+
+function runFuser(port: number, signal?: "SIGTERM" | "SIGKILL"): PortProcess[] {
+  const args = [...(signal ? ["-k", `-${FUSER_SIGNALS[signal]}`] : []), `${port}/tcp`];
   try {
     const stdout = execFileSync("fuser", args, {
+      env: resolveDiagnosticProcessEnv(),
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "pipe"],
       timeout: PORT_TOOL_TIMEOUT_MS,
@@ -114,24 +118,30 @@ function killPortWithFuser(port: number, signal: "SIGTERM" | "SIGKILL"): PortPro
     return parseFuserPidList(stdout).map((pid) => ({ pid }));
   } catch (err: unknown) {
     const execErr = err as ExecFileError;
-    const code = execErr.code;
-    const status = execErr.status;
-    const stdout = readExecOutput(execErr.stdout);
-    const stderr = readExecOutput(execErr.stderr);
-    const parsed = parseFuserPidList([stdout, stderr].filter(Boolean).join("\n"));
-    if (status === 1) {
-      // fuser exits 1 if nothing matched; keep any parsed PIDs in case signal succeeded.
-      return parsed.map((pid) => ({ pid }));
+    if (execErr.status === 1) {
+      // Only stdout is safe to use as direct signal targets. After fuser -k,
+      // stderr may also report PIDs already signaled by the subprocess.
+      const output = [
+        readExecOutput(execErr.stdout),
+        ...(signal ? [readExecOutput(execErr.stderr)] : []),
+      ]
+        .filter(Boolean)
+        .join("\n");
+      return parseFuserPidList(output).map((pid) => ({ pid }));
     }
-    if (code === "ENOENT") {
+    if (execErr.code === "ENOENT") {
       throw withErrnoCode(
         "fuser not found; required for --force when lsof is unavailable",
         "ENOENT",
         err,
       );
     }
-    if (code === "EACCES" || code === "EPERM") {
-      throw withErrnoCode("fuser permission denied while forcing gateway port", code, err);
+    if (execErr.code === "EACCES" || execErr.code === "EPERM") {
+      throw withErrnoCode(
+        `fuser permission denied while ${signal ? "forcing" : "inspecting"} gateway port`,
+        execErr.code,
+        err,
+      );
     }
     throw err instanceof Error ? err : new Error(String(err));
   }
@@ -149,11 +159,11 @@ async function isPortBusy(port: number): Promise<boolean> {
 function parseLsofOutput(output: string): PortProcess[] {
   const lines = output.split(/\r?\n/).filter(Boolean);
   const results: PortProcess[] = [];
-  let current: Partial<PortProcess> = {};
+  let current: PortProcess | undefined;
   for (const line of lines) {
     if (line.startsWith("p")) {
-      if (current.pid) {
-        results.push(current as PortProcess);
+      if (current) {
+        results.push(current);
       }
       const rawPidToken = line.slice(1);
       const rawPid = parseStrictPositiveInteger(rawPidToken);
@@ -165,12 +175,12 @@ function parseLsofOutput(output: string): PortProcess[] {
         );
       }
       current = { pid: rawPid };
-    } else if (line.startsWith("c")) {
+    } else if (current && line.startsWith("c")) {
       current.command = line.slice(1);
     }
   }
-  if (current.pid) {
-    results.push(current as PortProcess);
+  if (current) {
+    results.push(current);
   }
   return results;
 }
@@ -179,21 +189,13 @@ function listPortListeners(port: number): PortProcess[] {
   if (process.platform === "win32") {
     try {
       const out = execFileSync(getWindowsSystem32ExePath("netstat.exe"), ["-ano"], {
+        env: resolveDiagnosticProcessEnv(),
         encoding: "utf-8",
         timeout: PORT_TOOL_TIMEOUT_MS,
         killSignal: "SIGKILL",
       });
       const listeners = parseWindowsNetstatListeners(out, port);
-      const seenPids = new Set<number>();
-      const results: PortProcess[] = [];
-      for (const listener of listeners) {
-        if (seenPids.has(listener.pid)) {
-          continue;
-        }
-        seenPids.add(listener.pid);
-        results.push({ pid: listener.pid });
-      }
-      return results;
+      return [...new Set(listeners.map((listener) => listener.pid))].map((pid) => ({ pid }));
     } catch (err: unknown) {
       throw new Error(`netstat failed: ${String(err)}`, { cause: err });
     }
@@ -202,6 +204,7 @@ function listPortListeners(port: number): PortProcess[] {
   try {
     const lsof = resolveLsofCommandSync();
     const out = execFileSync(lsof, ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-FpFc"], {
+      env: resolveDiagnosticProcessEnv(),
       encoding: "utf-8",
       timeout: PORT_TOOL_TIMEOUT_MS,
       killSignal: "SIGKILL",
@@ -235,26 +238,20 @@ function listPortListeners(port: number): PortProcess[] {
   }
 }
 
-export function forceFreePort(port: number): PortProcess[] {
-  const listeners = listPortListeners(port);
+function killPids(
+  port: number,
+  listeners: PortProcess[],
+  signal: NodeJS.Signals,
+  beforeSignal?: BeforePortSignal,
+) {
   for (const proc of listeners) {
-    try {
-      process.kill(proc.pid, "SIGTERM");
-    } catch (err) {
-      throw new Error(
-        `failed to kill pid ${proc.pid}${proc.command ? ` (${proc.command})` : ""}: ${String(err)}`,
-        { cause: err },
-      );
-    }
-  }
-  return listeners;
-}
-
-function killPids(listeners: PortProcess[], signal: NodeJS.Signals) {
-  for (const proc of listeners) {
+    beforeSignal?.({ port, pid: proc.pid, signal });
     try {
       process.kill(proc.pid, signal);
     } catch (err) {
+      if (getErrnoCode(err) === "ESRCH") {
+        continue;
+      }
       throw new Error(
         `failed to kill pid ${proc.pid}${proc.command ? ` (${proc.command})` : ""}: ${String(err)}`,
         { cause: err },
@@ -272,8 +269,10 @@ export async function forceFreePortAndWait(
     intervalMs?: number;
     /** How long to wait after SIGTERM before escalating to SIGKILL. */
     sigtermTimeoutMs?: number;
+    /** Last-moment ownership guard invoked before each destructive signal. */
+    beforeSignal?: BeforePortSignal;
   } = {},
-): Promise<ForceFreePortResult> {
+) {
   const timeoutMs = resolveTimerTimeoutMs(opts.timeoutMs, 1500, 0);
   const intervalMs = resolvePositiveTimerTimeoutMs(opts.intervalMs, 100);
   const sigtermTimeoutMs = Math.min(
@@ -285,7 +284,7 @@ export async function forceFreePortAndWait(
   let useFuserFallback = false;
 
   try {
-    killed = forceFreePort(port);
+    killed = listPortListeners(port);
   } catch (err) {
     if (!isRecoverableLsofError(err)) {
       throw err;
@@ -296,7 +295,11 @@ export async function forceFreePortAndWait(
       return { killed, waitedMs: 0, escalatedToSigkill: false };
     }
     useFuserFallback = true;
-    killed = killPortWithFuser(port, "SIGTERM");
+    killed = killPortWithFuser(port, "SIGTERM", opts.beforeSignal);
+  }
+  // Signal and ownership errors must propagate without switching cleanup tools.
+  if (!useFuserFallback) {
+    killPids(port, killed, "SIGTERM", opts.beforeSignal);
   }
 
   if (killed.length === 0) {
@@ -316,36 +319,30 @@ export async function forceFreePortAndWait(
   }
 
   let waitedMs = 0;
-  while (waitedMs < sigtermTimeoutMs) {
-    if (!(await checkBusy())) {
-      return { killed, waitedMs, escalatedToSigkill: false };
+  const waitUntilFree = async (deadlineMs: number): Promise<boolean> => {
+    while (waitedMs < deadlineMs) {
+      if (!(await checkBusy())) {
+        return true;
+      }
+      const sleepMs = Math.min(intervalMs, deadlineMs - waitedMs);
+      await sleep(sleepMs);
+      waitedMs += sleepMs;
     }
-    const sleepMs = Math.min(intervalMs, sigtermTimeoutMs - waitedMs);
-    await sleep(sleepMs);
-    waitedMs += sleepMs;
-  }
+    return !(await checkBusy());
+  };
 
-  if (!(await checkBusy())) {
+  if (await waitUntilFree(sigtermTimeoutMs)) {
     return { killed, waitedMs, escalatedToSigkill: false };
   }
 
   if (useFuserFallback) {
-    killPortWithFuser(port, "SIGKILL");
+    killPortWithFuser(port, "SIGKILL", opts.beforeSignal);
   } else {
     const remaining = listPortListeners(port);
-    killPids(remaining, "SIGKILL");
+    killPids(port, remaining, "SIGKILL", opts.beforeSignal);
   }
 
-  while (waitedMs < timeoutMs) {
-    if (!(await checkBusy())) {
-      return { killed, waitedMs, escalatedToSigkill: true };
-    }
-    const sleepMs = Math.min(intervalMs, timeoutMs - waitedMs);
-    await sleep(sleepMs);
-    waitedMs += sleepMs;
-  }
-
-  if (!(await checkBusy())) {
+  if (await waitUntilFree(timeoutMs)) {
     return { killed, waitedMs, escalatedToSigkill: true };
   }
 
@@ -358,19 +355,8 @@ export async function forceFreePortAndWait(
   );
 }
 
-/**
- * Attempt a real TCP bind to verify the port is available at the OS level.
- * Catches TIME_WAIT / kernel-level holds that lsof won't show.
- *
- * Resolves false only for EADDRINUSE — a genuinely transient condition
- * (port still in TIME_WAIT after a --force kill) that the caller should retry.
- *
- * All other errors are non-retryable and are rejected immediately:
- * - EADDRNOTAVAIL: the host address doesn't exist on any local interface
- *   (hard misconfiguration, not a transient kernel hold).
- * - EACCES: bind to a privileged port as non-root.
- * - EINVAL, etc.: other unrecoverable OS errors.
- */
+// A bind catches kernel-level holds that lsof misses. Only EADDRINUSE is retryable;
+// invalid addresses, permissions, and other errors must surface immediately.
 function probePortFree(port: number, host = "0.0.0.0"): Promise<boolean> {
   return new Promise((resolve, reject) => {
     const srv = createServer();
@@ -378,11 +364,8 @@ function probePortFree(port: number, host = "0.0.0.0"): Promise<boolean> {
     srv.once("error", (err: NodeJS.ErrnoException) => {
       srv.close();
       if (err.code === "EADDRINUSE") {
-        // Genuinely transient — port still in use or TIME_WAIT after a --force kill.
         resolve(false);
       } else {
-        // Non-retryable: EADDRNOTAVAIL (bad host address), EACCES (privileged port),
-        // EINVAL, and any other OS errors. Surface immediately; no retry loop.
         reject(err);
       }
     });
@@ -412,7 +395,6 @@ export async function waitForPortBindable(
     await sleep(sleepMs);
     waited += sleepMs;
   }
-  // Final attempt
   if (await probePortFree(port, host)) {
     return waited;
   }

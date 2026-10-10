@@ -1,0 +1,210 @@
+import type { ChatGoalDraftMode, ChatReplyTarget } from "../../lib/chat/chat-types.ts";
+import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
+import { parseStoredChatOutboxScope } from "../../lib/chat/outbox-store.ts";
+import {
+  resolveUiConversationIdentity,
+  hasUiSessionDefaults,
+} from "../../lib/sessions/session-key.ts";
+import { releaseDisplacedChatAttachmentPayloads } from "./attachment-payload-store.ts";
+import type { ChatComposerMemoryFallback, ChatPageHost } from "./chat-state-host.ts";
+import { isIncognitoComposerScope } from "./composer-persistence-state.ts";
+import {
+  loadChatComposerState,
+  storedChatOutboxScopeKey,
+  type ChatComposerDraftRetry,
+} from "./composer-persistence.ts";
+
+let lastChatComposerMemoryFallbackSequence = 0;
+
+export type ChatComposerMemoryFallbackOwnership = {
+  sequence: number;
+};
+
+type ComposerFallbackInput = Pick<
+  ChatComposerMemoryFallback,
+  "message" | "mentions" | "attachments"
+> & {
+  replyTarget?: ChatReplyTarget | null;
+};
+
+function resolveChatComposerMemoryFallback(
+  state: ChatPageHost,
+  scope: StoredChatOutboxScope,
+): { fallback?: ChatComposerMemoryFallback; scopeKey: string } {
+  const { sessionKey } = scope;
+  const scopeKey = storedChatOutboxScopeKey(scope);
+  const fallbackSourceKeys = new Set([scopeKey]);
+  for (const key of Object.keys(state.chatComposerFallbackByScope)) {
+    const source = parseStoredChatOutboxScope(key);
+    if (
+      source &&
+      state.chatComposerFallbackByScope[key]?.awaitingDefaults &&
+      storedChatOutboxScopeKey(
+        resolveUiConversationIdentity(state, source.sessionKey, source.agentId),
+      ) === scopeKey
+    ) {
+      fallbackSourceKeys.add(key);
+    }
+  }
+  const candidates = [...fallbackSourceKeys].flatMap((candidateScopeKey) => {
+    const fallback = state.chatComposerFallbackByScope[candidateScopeKey];
+    return fallback === undefined ? [] : [{ fallback, scopeKey: candidateScopeKey }];
+  });
+  const newest = candidates.toSorted(
+    (left, right) => right.fallback.sequence - left.fallback.sequence,
+  )[0];
+  if (!newest) {
+    return { scopeKey };
+  }
+  const sourceKey = newest.scopeKey;
+  const sourceFallback = newest.fallback;
+  if (hasUiSessionDefaults(state)) {
+    delete sourceFallback.awaitingDefaults;
+  }
+  if (candidates.length === 1 && sourceKey === scopeKey) {
+    return { fallback: sourceFallback, scopeKey };
+  }
+  let adoptedFallback = sourceFallback;
+  if (sourceKey !== scopeKey && sourceFallback.draftRetry) {
+    const committedRevision = loadChatComposerState(state, sessionKey, scope.agentId).revisions
+      .committed;
+    const latestRevision = loadChatComposerState(state, sessionKey, scope.agentId).revisions
+      .latestAttempt;
+    // Rebase only when this unresolved edit is newer than every resolved
+    // attempt. Otherwise its original CAS must keep newer pane input intact.
+    if (sourceFallback.draftRetry.draftRevision > latestRevision) {
+      adoptedFallback = {
+        ...sourceFallback,
+        draftRetry: {
+          ...sourceFallback.draftRetry,
+          expectedDraftRevision: committedRevision,
+        },
+      };
+    }
+  }
+  const nextFallbacks = { ...state.chatComposerFallbackByScope };
+  for (const candidate of candidates) {
+    delete nextFallbacks[candidate.scopeKey];
+  }
+  nextFallbacks[scopeKey] = adoptedFallback;
+  // Losing sibling fallbacks are dropped for good here; release their
+  // payload-store entries (like the pane-handoff owner does) or the data URLs
+  // leak for the pane's lifetime.
+  releaseDisplacedChatAttachmentPayloads(
+    candidates.flatMap((candidate) => candidate.fallback.attachments),
+    [state.chatAttachments, ...Object.values(nextFallbacks).map((f) => f.attachments)],
+  );
+  state.chatComposerFallbackByScope = nextFallbacks;
+  return { fallback: adoptedFallback, scopeKey };
+}
+
+export function storeChatComposerMemoryFallback(
+  state: ChatPageHost,
+  scope: StoredChatOutboxScope,
+  composer: ComposerFallbackInput & {
+    goalMode?: ChatGoalDraftMode | null;
+    draftRetry?: ChatComposerDraftRetry;
+  },
+): ChatComposerMemoryFallbackOwnership {
+  const sequence = ++lastChatComposerMemoryFallbackSequence;
+  state.chatComposerFallbackByScope = {
+    ...state.chatComposerFallbackByScope,
+    [storedChatOutboxScopeKey(scope)]: {
+      ...(!hasUiSessionDefaults(state) ? { awaitingDefaults: true as const } : {}),
+      ...(isIncognitoComposerScope(state, scope) ? { incognito: true } : {}),
+      message: composer.message,
+      ...(composer.mentions?.length
+        ? { mentions: composer.mentions.map((mention) => ({ ...mention })) }
+        : {}),
+      ...(composer.goalMode ? { goalMode: composer.goalMode } : {}),
+      ...(composer.replyTarget ? { replyTarget: { ...composer.replyTarget } } : {}),
+      attachments: [...composer.attachments],
+      storageFailed: composer.draftRetry !== undefined,
+      sequence,
+      ...(composer.draftRetry ? { draftRetry: composer.draftRetry } : {}),
+    },
+  };
+  return { sequence };
+}
+
+function fallbackMatches(
+  existing: ChatComposerMemoryFallback,
+  composer: ComposerFallbackInput,
+): boolean {
+  return (
+    existing.message === composer.message &&
+    JSON.stringify(existing.mentions ?? []) === JSON.stringify(composer.mentions ?? []) &&
+    JSON.stringify(existing.replyTarget ?? null) === JSON.stringify(composer.replyTarget ?? null) &&
+    existing.attachments.length === composer.attachments.length &&
+    existing.attachments.every(
+      (attachment, index) => attachment.id === composer.attachments[index]?.id,
+    )
+  );
+}
+
+export function retainChatComposerMemoryFallback(
+  state: ChatPageHost,
+  scope: StoredChatOutboxScope,
+  composer: ComposerFallbackInput,
+): ChatComposerMemoryFallbackOwnership | undefined {
+  const { fallback: existing, scopeKey } = resolveChatComposerMemoryFallback(state, scope);
+  if (existing && fallbackMatches(existing, composer)) {
+    return { sequence: existing.sequence };
+  }
+  const hasInput =
+    existing &&
+    Boolean(existing.message.trim() || existing.replyTarget || existing.attachments.length > 0);
+  if (existing?.storageFailed && !hasInput) {
+    state.chatComposerFallbackByScope = {
+      ...state.chatComposerFallbackByScope,
+      [scopeKey]: {
+        ...existing,
+        message: composer.message,
+        mentions: composer.mentions,
+        replyTarget: composer.replyTarget ? { ...composer.replyTarget } : undefined,
+        attachments: [...composer.attachments],
+      },
+    };
+    return { sequence: existing.sequence };
+  }
+  if (existing && (existing.storageFailed || hasInput)) {
+    return undefined;
+  }
+  return storeChatComposerMemoryFallback(state, scope, composer);
+}
+
+export function captureChatComposerMemoryFallbackOwnership(
+  state: ChatPageHost,
+  scope: StoredChatOutboxScope,
+  composer: ComposerFallbackInput,
+): ChatComposerMemoryFallbackOwnership | undefined {
+  const { fallback: existing } = resolveChatComposerMemoryFallback(state, scope);
+  return existing && fallbackMatches(existing, composer)
+    ? { sequence: existing.sequence }
+    : undefined;
+}
+
+export function ownsChatComposerMemoryFallback(
+  state: Pick<ChatPageHost, "chatComposerFallbackByScope">,
+  ownership: ChatComposerMemoryFallbackOwnership,
+): boolean {
+  return Object.values(state.chatComposerFallbackByScope).some(
+    (fallback) => fallback.sequence === ownership.sequence,
+  );
+}
+
+export function clearChatComposerMemoryFallback(
+  state: Pick<ChatPageHost, "chatComposerFallbackByScope">,
+  ownership: ChatComposerMemoryFallbackOwnership | undefined,
+): boolean {
+  if (!ownership) {
+    return false;
+  }
+  const entries = Object.entries(state.chatComposerFallbackByScope);
+  const retained = entries.filter(([, fallback]) => fallback.sequence !== ownership.sequence);
+  if (retained.length === entries.length) {
+    return false;
+  }
+  state.chatComposerFallbackByScope = Object.fromEntries(retained);
+  return true;
+}

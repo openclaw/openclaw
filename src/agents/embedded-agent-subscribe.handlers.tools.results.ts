@@ -1,0 +1,560 @@
+import {
+  asOptionalObjectRecord,
+  asOptionalRecord as readRecordField,
+} from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { consumeRootOptionToken } from "../infra/cli-root-options.js";
+import type {
+  ExecApprovalPendingReplyParams,
+  ExecApprovalUnavailableReplyParams,
+} from "../infra/exec-approval-reply.js";
+import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
+import { parseJsonMessageParam } from "../infra/outbound/message-action-params.js";
+import { hasReplyPayloadContent } from "../interactive/payload.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { hasTopLevelShellControlOperator, splitShellArgs } from "../utils/shell-argv.js";
+import type { ApplyPatchSummary } from "./apply-patch.js";
+import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import type { ToolHandlerContext } from "./embedded-agent-subscribe.handlers.types.js";
+import {
+  extractToolResultMediaArtifact,
+  filterToolResultMediaUrls,
+} from "./embedded-agent-tool-media.js";
+import { extractToolResultText, truncateLiveExecOutput } from "./embedded-agent-tool-results.js";
+import {
+  hasTerminalControlCharacter,
+  type ProcessTerminalDiagnostic,
+} from "./tool-error-summary.js";
+import { readToolResultDetails } from "./tool-result-error.js";
+import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
+import { getCoreTtsToolResultMediaUrls } from "./tools/tts-tool-result-provenance.js";
+
+type ExecApprovalReplyModule = typeof import("../infra/exec-approval-reply.js");
+
+type HookRunnerGlobalModule = typeof import("../plugins/hook-runner-global.js");
+
+const execApprovalReplyModuleLoader = createLazyImportLoader<ExecApprovalReplyModule>(
+  () => import("../infra/exec-approval-reply.js"),
+);
+
+const hookRunnerGlobalModuleLoader = createLazyImportLoader<HookRunnerGlobalModule>(
+  () => import("../plugins/hook-runner-global.js"),
+);
+
+const fallbackToolTerminalObservers = new WeakMap<
+  ToolHandlerContext["state"],
+  ReturnType<typeof createToolTerminalObserver>
+>();
+
+export function resolveFallbackToolTerminalObserver(ctx: ToolHandlerContext) {
+  const existing = fallbackToolTerminalObservers.get(ctx.state);
+  if (existing) {
+    return existing;
+  }
+  const created = createToolTerminalObserver(ctx.params.runId);
+  fallbackToolTerminalObservers.set(ctx.state, created);
+  return created;
+}
+
+export function isMiddlewareToolResultError(result: unknown): boolean {
+  return readRecordField(asOptionalObjectRecord(result)?.details)?.middlewareError === true;
+}
+
+const PROCESS_TERMINATION_REASONS = new Set([
+  "manual-cancel",
+  "overall-timeout",
+  "no-output-timeout",
+  "spawn-error",
+  "signal",
+  "exit",
+]);
+
+function readSafeProcessSessionId(value: unknown): string | undefined {
+  const sessionId = readStringValue(value)?.trim();
+  if (!sessionId || sessionId.length > 160 || hasTerminalControlCharacter(sessionId)) {
+    return undefined;
+  }
+  return sessionId;
+}
+
+export function buildProcessTerminalDiagnostic(
+  toolName: string,
+  args: Record<string, unknown>,
+  sanitizedResult: unknown,
+): ProcessTerminalDiagnostic | undefined {
+  if (toolName !== "process") {
+    return undefined;
+  }
+  const action = normalizeOptionalLowercaseString(args.action);
+  if (action !== "poll" && action !== "log") {
+    return undefined;
+  }
+  const details = readToolResultDetails(sanitizedResult);
+  const sessionId = readSafeProcessSessionId(details?.sessionId);
+  if (!sessionId) {
+    return undefined;
+  }
+
+  const exitReason = normalizeOptionalLowercaseString(details?.exitReason);
+  const hasCanonicalExitReason = PROCESS_TERMINATION_REASONS.has(exitReason ?? "");
+  if (action === "log" && !hasCanonicalExitReason) {
+    return undefined;
+  }
+  const timeoutKind =
+    exitReason === "overall-timeout" || exitReason === "no-output-timeout" ? exitReason : undefined;
+  let reason: ProcessTerminalDiagnostic["reason"] | undefined;
+  if (details?.timedOut === true || timeoutKind) {
+    reason = { kind: "timeout", ...(timeoutKind ? { timeoutKind } : {}) };
+  } else if (
+    (typeof details?.exitSignal === "string" &&
+      details.exitSignal.trim().length > 0 &&
+      details.exitSignal.trim().length <= 32) ||
+    (typeof details?.exitSignal === "number" && Number.isFinite(details.exitSignal))
+  ) {
+    const signal =
+      typeof details.exitSignal === "string" ? details.exitSignal.trim() : details.exitSignal;
+    if (!hasTerminalControlCharacter(String(signal))) {
+      reason = { kind: "signal", signal };
+    }
+  } else if (
+    typeof details?.exitCode === "number" &&
+    Number.isSafeInteger(details.exitCode) &&
+    details.exitCode !== 0
+  ) {
+    reason = { kind: "exit", exitCode: details.exitCode };
+  }
+  if (!reason) {
+    return undefined;
+  }
+
+  return {
+    kind: "process",
+    sessionId,
+    reason,
+  };
+}
+
+export function loadHookRunnerGlobal(): Promise<HookRunnerGlobalModule> {
+  return hookRunnerGlobalModuleLoader.load();
+}
+
+export function isCronAddAction(args: unknown): boolean {
+  return normalizeOptionalLowercaseString(asOptionalObjectRecord(args)?.action) === "add";
+}
+
+export function applyCurrentMessageProvider(
+  toolName: string,
+  args: Record<string, unknown>,
+  currentProvider: string | undefined,
+): Record<string, unknown> {
+  if (
+    toolName !== "message" ||
+    readStringValue(args.provider) ||
+    readStringValue(args.channel) ||
+    !currentProvider
+  ) {
+    return args;
+  }
+  return { ...args, provider: currentProvider };
+}
+
+export function applyToolSendReceiptForExtraction(
+  result: unknown,
+  receiptResult: unknown,
+): unknown {
+  const toolSend = readToolResultDetails(receiptResult)?.toolSend;
+  if (toolSend === undefined) {
+    return result;
+  }
+  return {
+    ...readRecordField(result),
+    details: {
+      ...readToolResultDetails(result),
+      toolSend,
+    },
+  };
+}
+
+export function readExecToolDetails(result: unknown): ExecToolDetails | null {
+  const details = readToolResultDetails(result);
+  if (!details || typeof details.status !== "string") {
+    return null;
+  }
+  return details as ExecToolDetails;
+}
+
+export function extractExecOutput(result: unknown): string | undefined {
+  const execDetails = readExecToolDetails(result);
+  const output =
+    execDetails && "aggregated" in execDetails
+      ? execDetails.aggregated
+      : extractToolResultText(result);
+  return typeof output === "string" ? output : undefined;
+}
+
+export function extractLiveExecOutput(result: unknown): string | undefined {
+  const output = extractExecOutput(result);
+  return typeof output === "string" ? truncateLiveExecOutput(output) : undefined;
+}
+
+function isOpenClawExecutable(token: string | undefined): boolean {
+  const executable = normalizeOptionalLowercaseString(token);
+  return executable?.split(/[\\/]/).at(-1) === "openclaw";
+}
+
+function isOpenClawPackageSpec(token: string | undefined): boolean {
+  const packageSpec = normalizeOptionalLowercaseString(token);
+  return packageSpec?.startsWith("openclaw@") === true && packageSpec.length > "openclaw@".length;
+}
+
+function skipOpenClawPackageRunner(
+  tokens: string[],
+  startIndex: number,
+): { commandIndex: number; acceptsPackageSpec: boolean } {
+  let commandIndex = startIndex;
+  let acceptsPackageSpec = false;
+  let runner = normalizeOptionalLowercaseString(tokens[commandIndex]);
+  if (
+    runner === "corepack" &&
+    normalizeOptionalLowercaseString(tokens[commandIndex + 1]) === "pnpm"
+  ) {
+    commandIndex += 1;
+    runner = "pnpm";
+  }
+  if (runner === "pnpm") {
+    const subcommand = normalizeOptionalLowercaseString(tokens[commandIndex + 1]);
+    if (subcommand === "exec" || subcommand === "dlx") {
+      commandIndex += 2;
+      acceptsPackageSpec = subcommand === "dlx";
+    } else {
+      commandIndex = startIndex;
+    }
+  } else if (runner === "npx" || runner === "bunx") {
+    commandIndex += 1;
+    acceptsPackageSpec = true;
+    while (true) {
+      const option = normalizeOptionalLowercaseString(tokens[commandIndex]);
+      if (
+        option === "-y" ||
+        option === "--yes" ||
+        option === "--no-install" ||
+        option === "--bun" ||
+        option?.startsWith("--package=") ||
+        option?.startsWith("--yes=")
+      ) {
+        commandIndex += 1;
+        continue;
+      }
+      if (option === "-p" || option === "--package") {
+        commandIndex += 2;
+        continue;
+      }
+      break;
+    }
+  }
+  if (tokens[commandIndex] === "--") {
+    commandIndex += 1;
+  }
+  return { commandIndex, acceptsPackageSpec };
+}
+
+function isOpenClawCronAddShellCommand(args: unknown): boolean {
+  const record = asOptionalObjectRecord(args);
+  const command = readStringValue(record?.command) ?? readStringValue(record?.cmd);
+  if (!command || hasTopLevelShellControlOperator(command)) {
+    return false;
+  }
+  const tokens = splitShellArgs(command);
+  if (!tokens || tokens.length < 3) {
+    return false;
+  }
+
+  // Compound shell programs need a real shell AST; only count direct CLI invocations.
+  let commandIndex = 0;
+  if (normalizeOptionalLowercaseString(tokens[commandIndex]) === "env") {
+    commandIndex += 1;
+  }
+  while (/^[A-Za-z_][A-Za-z0-9_]*=/u.test(tokens[commandIndex] ?? "")) {
+    commandIndex += 1;
+  }
+  const packageRunner = skipOpenClawPackageRunner(tokens, commandIndex);
+  commandIndex = packageRunner.commandIndex;
+
+  let cliArgIndex = commandIndex + 1;
+  for (
+    let consumed = consumeRootOptionToken(tokens, cliArgIndex);
+    consumed > 0;
+    consumed = consumeRootOptionToken(tokens, cliArgIndex)
+  ) {
+    cliArgIndex += consumed;
+  }
+  const action = normalizeOptionalLowercaseString(tokens[cliArgIndex + 1]);
+  const actionArgs = tokens.slice(cliArgIndex + 2);
+  return (
+    (isOpenClawExecutable(tokens[commandIndex]) ||
+      (packageRunner.acceptsPackageSpec && isOpenClawPackageSpec(tokens[commandIndex]))) &&
+    (normalizeOptionalLowercaseString(tokens[cliArgIndex]) === "cron" ||
+      normalizeOptionalLowercaseString(tokens[cliArgIndex]) === "automations") &&
+    (action === "add" || action === "create") &&
+    !actionArgs.some((token) => token === "-h" || token === "--help")
+  );
+}
+
+export function didShellCronAddSucceed(args: unknown, result: unknown): boolean {
+  if (!isOpenClawCronAddShellCommand(args)) {
+    return false;
+  }
+  const details = readExecToolDetails(result);
+  return details?.status === "completed" && details.exitCode === 0;
+}
+
+export function readApplyPatchSummary(result: unknown): ApplyPatchSummary | null {
+  const details = readToolResultDetails(result);
+  const summary = readRecordField(details?.summary);
+  if (!summary) {
+    return null;
+  }
+  return {
+    added: filterStringEntries(summary.added),
+    modified: filterStringEntries(summary.modified),
+    deleted: filterStringEntries(summary.deleted),
+  };
+}
+
+export function buildPatchSummaryText(summary: ApplyPatchSummary): string {
+  const parts = (["added", "modified", "deleted"] as const).flatMap((kind) =>
+    summary[kind].length > 0 ? [`${summary[kind].length} ${kind}`] : [],
+  );
+  return parts.length > 0 ? parts.join(", ") : "no file changes recorded";
+}
+
+export function readMessagingText(record: Record<string, unknown>): string | undefined {
+  for (const key of ["content", "message", "text", "body"]) {
+    const value = readStringValue(record[key]);
+    if (value) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+export function hasMessagingRichContent(record: Record<string, unknown>): boolean {
+  const payload = {
+    presentation: record.presentation,
+    interactive: record.interactive,
+    channelData: record.channelData,
+  };
+  try {
+    parseJsonMessageParam(payload, "presentation");
+    parseJsonMessageParam(payload, "interactive");
+  } catch {
+    return false;
+  }
+  return hasReplyPayloadContent(payload);
+}
+
+function queuePendingToolMedia(
+  ctx: ToolHandlerContext,
+  mediaReply: NonNullable<ReturnType<typeof extractToolResultMediaArtifact>>,
+  allowedMediaUrls: string[],
+  autoDeliveryMediaUrls: ReadonlySet<string>,
+) {
+  const indexByUrl = new Map(
+    ctx.state.pendingToolMediaUrls.map((url, index) => [url.trim(), index]),
+  );
+  const attachments = (ctx.state.pendingToolMediaAttachments ??= ctx.state.pendingToolMediaUrls.map(
+    () => ({}),
+  ));
+  const attachmentsByUrl = new Map(
+    mediaReply.mediaUrls.map((url, index) => [url.trim(), mediaReply.attachments?.[index]]),
+  );
+  for (const mediaUrl of allowedMediaUrls) {
+    const normalized = mediaUrl.trim();
+    if (!normalized) {
+      continue;
+    }
+    if (mediaReply.trustedLocalMedia) {
+      ctx.state.pendingToolMediaTrustByUrl.set(normalized, true);
+    } else if (!ctx.state.pendingToolMediaTrustByUrl.has(normalized)) {
+      ctx.state.pendingToolMediaTrustByUrl.set(normalized, false);
+    }
+    if (autoDeliveryMediaUrls.has(normalized)) {
+      ctx.state.toolAutoDeliveryMediaUrls.add(normalized);
+    } else {
+      // One shared URL with mixed provenance must never inherit auto-delivery.
+      ctx.state.toolAutoDeliveryMediaUrls.delete(normalized);
+    }
+    const attachment = attachmentsByUrl.get(normalized);
+    const existingIndex = indexByUrl.get(normalized);
+    if (existingIndex !== undefined) {
+      if (attachment && Object.keys(attachments[existingIndex] ?? {}).length === 0) {
+        attachments[existingIndex] = attachment;
+      }
+      continue;
+    }
+    indexByUrl.set(normalized, ctx.state.pendingToolMediaUrls.length);
+    ctx.state.pendingToolMediaUrls.push(normalized);
+    attachments.push(attachment ?? {});
+  }
+  if (mediaReply.audioAsVoice) {
+    ctx.state.pendingToolAudioAsVoice = true;
+  }
+}
+
+function readExecApprovalPendingDetails(result: unknown): ExecApprovalPendingReplyParams | null {
+  const outer = asOptionalObjectRecord(result);
+  const details = readRecordField(outer?.details) ?? outer;
+  if (details?.status !== "approval-pending") {
+    return null;
+  }
+  const approvalId = readStringValue(details.approvalId) ?? "";
+  const approvalSlug = readStringValue(details.approvalSlug) ?? "";
+  const command = typeof details.command === "string" ? details.command : "";
+  const host = details.host === "node" ? "node" : details.host === "gateway" ? "gateway" : null;
+  if (!approvalId || !approvalSlug || !command || !host) {
+    return null;
+  }
+  return {
+    approvalId,
+    approvalSlug,
+    expiresAtMs: typeof details.expiresAtMs === "number" ? details.expiresAtMs : undefined,
+    allowedDecisions: Array.isArray(details.allowedDecisions)
+      ? details.allowedDecisions.filter(
+          (decision): decision is ExecApprovalDecision =>
+            decision === "allow-once" || decision === "allow-always" || decision === "deny",
+        )
+      : undefined,
+    host,
+    command,
+    cwd: readStringValue(details.cwd),
+    nodeId: readStringValue(details.nodeId),
+    warningText: readStringValue(details.warningText),
+  };
+}
+
+function readExecApprovalUnavailableDetails(
+  result: unknown,
+): ExecApprovalUnavailableReplyParams | null {
+  const outer = asOptionalObjectRecord(result);
+  const details = readRecordField(outer?.details) ?? outer;
+  if (details?.status !== "approval-unavailable") {
+    return null;
+  }
+  const reason =
+    details.reason === "initiating-platform-disabled" ||
+    details.reason === "initiating-platform-unsupported" ||
+    details.reason === "no-approval-route"
+      ? details.reason
+      : null;
+  if (!reason) {
+    return null;
+  }
+  return {
+    reason,
+    warningText: readStringValue(details.warningText),
+    channel: readStringValue(details.channel),
+    channelLabel: readStringValue(details.channelLabel),
+    accountId: readStringValue(details.accountId),
+    sentApproverDms: details.sentApproverDms === true,
+    host: details.host === "gateway" || details.host === "node" ? details.host : undefined,
+    nodeId: readStringValue(details.nodeId),
+  };
+}
+
+export async function emitToolResultOutput(params: {
+  ctx: ToolHandlerContext;
+  toolName: string;
+  rawToolName: string;
+  meta?: string;
+  isToolError: boolean;
+  result: unknown;
+  sanitizedResult: unknown;
+}) {
+  const { ctx, toolName, rawToolName, meta, isToolError, result, sanitizedResult } = params;
+  const details = readRecordField(asOptionalObjectRecord(result)?.details);
+  const hasStructuredMedia = readRecordField(details?.media) !== undefined;
+  const approvalPending = readExecApprovalPendingDetails(result);
+  const approvalUnavailable =
+    !isToolError && approvalPending ? null : readExecApprovalUnavailableDetails(result);
+  if (!isToolError && (approvalPending || approvalUnavailable)) {
+    if (!ctx.params.onToolResult) {
+      return;
+    }
+    // Setup notices are progress; only pending approvals suppress the final answer.
+    if (approvalPending) {
+      ctx.state.deterministicApprovalPromptPending = true;
+    }
+    try {
+      const replies = await execApprovalReplyModuleLoader.load();
+      if (approvalPending) {
+        await ctx.params.onToolResult(
+          replies.buildTypedExecApprovalPendingReplyPayload(approvalPending),
+        );
+        ctx.state.deterministicApprovalPromptSent = true;
+      } else if (approvalUnavailable) {
+        await ctx.params.onToolResult?.(
+          replies.buildExecApprovalUnavailableReplyPayload(approvalUnavailable),
+        );
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.log.warn(`failed to deliver exec approval prompt: ${message}`);
+      const approvalMeta = meta ? `${meta} · approval prompt delivery` : "approval prompt delivery";
+      const terminal = (ctx.params.observeToolTerminal ?? resolveFallbackToolTerminalObserver(ctx))(
+        {
+          toolName,
+          meta: approvalMeta,
+          executionStarted: false,
+          outcome: "failure",
+          failure: { error: `Approval prompt delivery failed: ${message}` },
+        },
+      );
+      ctx.state.lastToolError = terminal.lastToolError;
+      // A later delivery failure does not undo an already delivered pending prompt.
+    } finally {
+      if (approvalPending) {
+        ctx.state.deterministicApprovalPromptPending = false;
+      }
+    }
+    return;
+  }
+
+  const mediaReply = isToolError ? undefined : extractToolResultMediaArtifact(result);
+  const mediaUrls = mediaReply
+    ? filterToolResultMediaUrls(
+        rawToolName,
+        mediaReply.mediaUrls,
+        result,
+        ctx.trustedLocalMediaToolNames,
+      )
+    : [];
+  const suppressStructuredTtsOutput =
+    toolName === "tts" &&
+    rawToolName.trim() === "tts" &&
+    ctx.builtinToolNames?.has("tts") === true &&
+    !isToolError &&
+    hasStructuredMedia &&
+    mediaUrls.length > 0;
+  const shouldEmitOutput = !suppressStructuredTtsOutput && ctx.shouldEmitToolOutput();
+  if (shouldEmitOutput) {
+    const outputText = extractToolResultText(sanitizedResult);
+    if (outputText) {
+      ctx.emitToolOutput(rawToolName, meta, outputText, hasStructuredMedia ? undefined : result);
+    }
+    if (!hasStructuredMedia) {
+      return;
+    }
+  }
+
+  if (isToolError || !mediaReply || mediaUrls.length === 0) {
+    return;
+  }
+  const autoDeliveryMediaUrls = new Set(
+    mediaReply.trustedLocalMedia === true ? getCoreTtsToolResultMediaUrls(result) : [],
+  );
+  queuePendingToolMedia(ctx, mediaReply, mediaUrls, autoDeliveryMediaUrls);
+}

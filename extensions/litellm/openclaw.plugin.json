@@ -1,10 +1,16 @@
 {
   "id": "litellm",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
   "enabledByDefault": true,
   "providers": ["litellm"],
+  "modelCatalog": {
+    "discovery": {
+      "litellm": "runtime"
+    }
+  },
   "setup": {
     "providers": [
       {

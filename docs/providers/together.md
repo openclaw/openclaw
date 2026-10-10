@@ -10,12 +10,12 @@ read_when:
 models including Llama, DeepSeek, Kimi, and more through a unified API.
 OpenClaw bundles it as the `together` provider.
 
-| Property | Value                         |
-| -------- | ----------------------------- |
-| Provider | `together`                    |
-| Auth     | `TOGETHER_API_KEY`            |
-| API      | OpenAI-compatible             |
-| Base URL | `https://api.together.xyz/v1` |
+| Property | Value                            |
+| -------- | -------------------------------- |
+| Provider | `together` (alias: `togetherai`) |
+| Auth     | `TOGETHER_API_KEY`               |
+| API      | OpenAI-compatible                |
+| Base URL | `https://api.together.xyz/v1`    |
 
 ## Getting started
 
@@ -35,7 +35,7 @@ OpenClaw bundles it as the `together` provider.
       agents: {
         defaults: {
           model: {
-            primary: "together/meta-llama/Llama-3.3-70B-Instruct-Turbo",
+            primary: "together/moonshotai/Kimi-K2.6",
           },
         },
       },
@@ -47,28 +47,27 @@ OpenClaw bundles it as the `together` provider.
 ### Non-interactive example
 
 ```bash
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --mode local \
   --auth-choice together-api-key \
   --together-api-key "$TOGETHER_API_KEY"
 ```
 
 <Note>
-Onboarding sets `together/meta-llama/Llama-3.3-70B-Instruct-Turbo` as the
-default model.
+Onboarding sets Together's recommended chat model,
+`together/moonshotai/Kimi-K2.6`, as the default.
 </Note>
 
 ## Built-in catalog
 
 Cost is USD per million tokens.
 
-| Model ref                                          | Name                         | Input       | Context | Max output | Cost (in/out) | Notes               |
-| -------------------------------------------------- | ---------------------------- | ----------- | ------- | ---------- | ------------- | ------------------- |
-| `together/meta-llama/Llama-3.3-70B-Instruct-Turbo` | Llama 3.3 70B Instruct Turbo | text        | 131,072 | 8,192      | 0.88 / 0.88   | Default model       |
-| `together/moonshotai/Kimi-K2.6`                    | Kimi K2.6 FP4                | text, image | 262,144 | 32,768     | 1.20 / 4.50   | Reasoning model     |
-| `together/deepseek-ai/DeepSeek-V4-Pro`             | DeepSeek V4 Pro              | text        | 512,000 | 8,192      | 2.10 / 4.40   | Reasoning model     |
-| `together/Qwen/Qwen2.5-7B-Instruct-Turbo`          | Qwen2.5 7B Instruct Turbo    | text        | 32,768  | 8,192      | 0.30 / 0.30   | Fast, non-reasoning |
-| `together/zai-org/GLM-5.1`                         | GLM 5.1 FP4                  | text        | 202,752 | 8,192      | 1.40 / 4.40   | Reasoning model     |
+| Model ref                                          | Name                         | Input       | Context | Max output | Cost (in/out) | Notes           |
+| -------------------------------------------------- | ---------------------------- | ----------- | ------- | ---------- | ------------- | --------------- |
+| `together/meta-llama/Llama-3.3-70B-Instruct-Turbo` | Llama 3.3 70B Instruct Turbo | text        | 131,072 | 8,192      | 1.04 / 1.04   | General model   |
+| `together/moonshotai/Kimi-K2.6`                    | Kimi K2.6 FP4                | text, image | 262,144 | 32,768     | 1.20 / 4.50   | Default model   |
+| `together/deepseek-ai/DeepSeek-V4-Pro`             | DeepSeek V4 Pro              | text        | 512,000 | 384,000    | 1.74 / 3.48   | Reasoning model |
+| `together/zai-org/GLM-5.2`                         | GLM 5.2 FP4                  | text        | 262,144 | 131,072    | 1.40 / 4.40   | Reasoning model |
 
 ## Video generation
 
@@ -89,8 +88,10 @@ To use Together as the default video provider:
 {
   agents: {
     defaults: {
-      videoGenerationModel: {
-        primary: "together/Wan-AI/Wan2.2-T2V-A14B",
+      mediaModels: {
+        video: {
+          primary: "together/Wan-AI/Wan2.2-T2V-A14B",
+        },
       },
     },
   },
@@ -101,6 +102,15 @@ To use Together as the default video provider:
 See [Video generation](/tools/video-generation) for the shared tool parameters,
 provider selection, and failover behavior.
 </Tip>
+
+## Prompt caching
+
+Together automatically reuses matching prompt prefixes. OpenClaw sends a stable
+`prompt_cache_key` on native Together requests to improve routing across turns.
+Cache usage is read from both `usage.prompt_tokens_details.cached_tokens` and
+`usage.cached_tokens`, depending on the model's response format. Keep the model,
+tool definitions, reasoning settings, and earlier messages stable for the best
+reuse. See [Together prompt caching](https://docs.together.ai/docs/inference/chat/prompt-caching).
 
 <AccordionGroup>
   <Accordion title="Environment note">

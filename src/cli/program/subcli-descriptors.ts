@@ -1,17 +1,22 @@
 // Sub-CLI descriptor catalog used for root help placeholders and lazy registration.
-import { defineCommandDescriptorCatalog } from "./command-descriptor-utils.js";
+import { isCronMachineOutput } from "../cron-cli/output-mode.js";
+import { isDevicesMachineOutput } from "../devices-output-mode.js";
+import { isGatewayMachineOutput } from "../gateway-cli/output-mode.js";
+import { isModelsPlainMachineOutput, isModelsStatusJsonOutput } from "../models-output-mode.js";
+import { isNodesMachineOutput } from "../nodes-cli/output-mode.js";
+import { isProxyMachineOutput } from "../proxy-output-mode.js";
+import { isSkillsMachineOutput } from "../skills-output-mode.js";
+import { isSystemMachineOutput } from "../system-output-mode.js";
 import type { NamedCommandDescriptor } from "./command-group-descriptors.js";
 import { isPrivateQaCliEnabled } from "./private-qa-cli.js";
 
-/** Descriptor shape for root-level sub-CLI commands. */
-export type SubCliDescriptor = NamedCommandDescriptor;
-
-const subCliCommandCatalog = defineCommandDescriptorCatalog([
+const subCliCommandDescriptors = [
   { name: "acp", description: "Run an ACP bridge backed by the Gateway", hasSubcommands: true },
   {
     name: "gateway",
     description: "Run, inspect, and query the WebSocket Gateway",
     hasSubcommands: true,
+    machineOutput: ({ argv }) => isGatewayMachineOutput(argv),
   },
   {
     name: "daemon",
@@ -23,16 +28,24 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     name: "system",
     description: "System tools (events, heartbeat, presence)",
     hasSubcommands: true,
+    machineOutput: ({ argv }) => isSystemMachineOutput(argv),
   },
   {
     name: "models",
     description: "Model discovery, scanning, and configuration",
     hasSubcommands: true,
+    machineOutput: ({ argv }) => isModelsStatusJsonOutput(argv) || isModelsPlainMachineOutput(argv),
   },
   {
     name: "promos",
     description: "Discover and claim promotional model offers from ClawHub",
     hasSubcommands: true,
+  },
+  {
+    name: "telemetry",
+    description: "Inspect and manage anonymous usage telemetry",
+    hasSubcommands: true,
+    parentDefaultHelp: true,
   },
   {
     name: "infer",
@@ -46,7 +59,7 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "approvals",
-    description: "Manage exec approvals (gateway or node host)",
+    description: "Manage approval policy and pending requests",
     hasSubcommands: true,
     parentDefaultHelp: true,
   },
@@ -64,10 +77,19 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     name: "nodes",
     description: "Manage gateway-owned nodes (pairing, status, invoke, and media)",
     hasSubcommands: true,
+    machineOutput: ({ argv }) => isNodesMachineOutput(argv),
   },
   {
     name: "devices",
-    description: "Device pairing and auth tokens",
+    description:
+      "Device pairing and auth tokens (for mobile app setup codes, use `openclaw qr` instead)",
+    hasSubcommands: true,
+    machineOutput: ({ argv }) => isDevicesMachineOutput(argv),
+    parentDefaultHelp: true,
+  },
+  {
+    name: "users",
+    description: "Manage durable user profiles and email aliases",
     hasSubcommands: true,
     parentDefaultHelp: true,
   },
@@ -77,6 +99,11 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: true,
   },
   {
+    name: "connect",
+    description: "Connect this machine to an OpenClaw Gateway as a node",
+    hasSubcommands: false,
+  },
+  {
     name: "worker",
     description: "Run the restricted cloud worker runtime",
     hasSubcommands: false,
@@ -84,11 +111,6 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
   {
     name: "sandbox",
     description: "Manage sandbox containers (Docker-based agent isolation)",
-    hasSubcommands: true,
-  },
-  {
-    name: "fleet",
-    description: "Provision and manage isolated tenant cells (experimental)",
     hasSubcommands: true,
   },
   {
@@ -108,6 +130,11 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: false,
   },
   {
+    name: "resume",
+    description: "Resume a recent Gateway session in the TUI",
+    hasSubcommands: false,
+  },
+  {
     name: "terminal",
     description: "Open a local terminal UI (alias for tui --local)",
     hasSubcommands: false,
@@ -119,8 +146,16 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "cron",
-    description: "Manage cron jobs (via Gateway)",
+    description: "Manage automations (via Gateway)",
     hasSubcommands: true,
+    machineOutput: ({ argv }) => isCronMachineOutput(argv),
+    parentDefaultHelp: true,
+  },
+  {
+    name: "automations",
+    description: "Manage automations (alias for cron)",
+    hasSubcommands: true,
+    machineOutput: ({ argv }) => isCronMachineOutput(argv),
     parentDefaultHelp: true,
   },
   {
@@ -142,6 +177,7 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     name: "proxy",
     description: "Run the OpenClaw debug proxy and inspect captured traffic",
     hasSubcommands: true,
+    machineOutput: ({ argv }) => isProxyMachineOutput(argv),
   },
   {
     name: "hooks",
@@ -199,6 +235,7 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     name: "skills",
     description: "List and inspect available skills",
     hasSubcommands: true,
+    machineOutput: ({ argv }) => isSkillsMachineOutput(argv),
   },
   {
     name: "update",
@@ -210,48 +247,24 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     description: "Generate shell completion script",
     hasSubcommands: false,
   },
-] as const satisfies ReadonlyArray<SubCliDescriptor>);
+] as const satisfies ReadonlyArray<NamedCommandDescriptor>;
 
-function filterPrivateQaItems<T>(
-  items: ReadonlyArray<T>,
-  getName: (item: T) => string,
-): ReadonlyArray<T> {
-  if (isPrivateQaCliEnabled()) {
-    return items;
-  }
-  return items.filter((item) => getName(item) !== "qa");
+export const SUB_CLI_DESCRIPTORS = getSubCliEntriesCore();
+
+export function getSubCliEntriesCore(): ReadonlyArray<NamedCommandDescriptor> {
+  return isPrivateQaCliEnabled()
+    ? subCliCommandDescriptors
+    : subCliCommandDescriptors.filter((descriptor) => descriptor.name !== "qa");
 }
 
-/** Visible sub-CLI descriptors after private QA gating. */
-export const SUB_CLI_DESCRIPTORS = filterPrivateQaItems(
-  subCliCommandCatalog.descriptors,
-  (descriptor) => descriptor.name,
-);
-
-/** Return visible sub-CLI descriptors in help/registration order. */
-export function getSubCliEntries(): ReadonlyArray<SubCliDescriptor> {
-  return filterPrivateQaItems(
-    subCliCommandCatalog.getDescriptors(),
-    (descriptor) => descriptor.name,
-  );
-}
-
-/** Return visible sub-CLI names that own child subcommands. */
 export function getSubCliCommandsWithSubcommands(): string[] {
-  return [
-    ...filterPrivateQaItems(
-      subCliCommandCatalog.getCommandsWithSubcommands(),
-      (command) => command,
-    ),
-  ];
+  return getSubCliEntriesCore()
+    .filter((descriptor) => descriptor.hasSubcommands)
+    .map((descriptor) => descriptor.name);
 }
 
-/** Return visible sub-CLI names whose parent command should show help by default. */
 export function getSubCliParentDefaultHelpCommands(): string[] {
-  return [
-    ...filterPrivateQaItems(
-      subCliCommandCatalog.getParentDefaultHelpCommands(),
-      (command) => command,
-    ),
-  ];
+  return getSubCliEntriesCore()
+    .filter((descriptor) => descriptor.parentDefaultHelp)
+    .map((descriptor) => descriptor.name);
 }

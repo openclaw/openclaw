@@ -1,4 +1,5 @@
 // Builds the canonical reviewer-safe projection for durable approvals.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
@@ -6,38 +7,26 @@ import type {
   ApprovalKind,
   ApprovalPresentation,
 } from "../../packages/gateway-protocol/src/index.js";
+import { sanitizeApprovalScope } from "./approval-scope.js";
+import { resolveExecApprovalCommandDisplay } from "./exec-approval-command-display.js";
 import {
-  resolveExecApprovalCommandDisplay,
+  exceedsApprovalTextLimit,
   sanitizeExecApprovalDisplayText,
   sanitizeExecApprovalWarningText,
-} from "./exec-approval-command-display.js";
+} from "./exec-approval-text-sanitize.js";
 import type { ExecApprovalRequestPayload } from "./exec-approvals.js";
 import {
   PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH,
   PLUGIN_APPROVAL_TITLE_MAX_LENGTH,
+  truncatePluginApprovalDetail,
   type PluginApprovalRequestPayload,
 } from "./plugin-approvals.js";
 import type { SystemAgentApprovalRequestPayload } from "./system-agent-approvals.js";
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+const PLUGIN_EXTERNAL_RESOLUTION_LABEL_MAX_LENGTH = 80;
 
 function normalizeDecisionList(decisions: readonly ApprovalDecision[]): ApprovalDecision[] {
-  const result: ApprovalDecision[] = [];
-  for (const decision of decisions) {
-    if (!result.includes(decision)) {
-      result.push(decision);
-    }
-  }
-  if (!result.includes("deny")) {
-    result.push("deny");
-  }
-  return result;
-}
-
-function isWithinCodePointLimit(value: string, maxLength: number): boolean {
-  return Array.from(value).length <= maxLength;
+  return [...new Set<ApprovalDecision>([...decisions, "deny"])];
 }
 
 function sanitizeOptionalSingleLine(value: unknown): string | null {
@@ -45,13 +34,33 @@ function sanitizeOptionalSingleLine(value: unknown): string | null {
   return normalized ? sanitizeExecApprovalDisplayText(normalized) : null;
 }
 
+function normalizePluginExternalResolution(
+  value: PluginApprovalRequestPayload["externalResolution"],
+) {
+  if (!value) {
+    return null;
+  }
+  const rawLabel = value.label?.trim();
+  const label = rawLabel ? sanitizeExecApprovalDisplayText(rawLabel) : "";
+  if (!label || exceedsApprovalTextLimit(label, PLUGIN_EXTERNAL_RESOLUTION_LABEL_MAX_LENGTH)) {
+    throw new Error("invalid external approval label");
+  }
+  const decisions = value.decisions ?? ["allow-once"];
+  if (
+    decisions.length < 1 ||
+    decisions.length > 2 ||
+    decisions.some((decision) => decision !== "allow-once" && decision !== "allow-always") ||
+    new Set(decisions).size !== decisions.length
+  ) {
+    throw new Error("invalid external approval decisions");
+  }
+  return { label, decisions: [...decisions] };
+}
+
 function buildExecApprovalPresentation(params: {
   request: unknown;
   allowedDecisions: readonly ApprovalDecision[];
 }): ApprovalPresentation | null {
-  if (!isRecord(params.request)) {
-    return null;
-  }
   const request = params.request as ExecApprovalRequestPayload;
   const { commandText, commandPreview } = resolveExecApprovalCommandDisplay(request);
   if (!commandText.trim()) {
@@ -61,6 +70,7 @@ function buildExecApprovalPresentation(params: {
     typeof request.warningText === "string" && request.warningText.trim()
       ? sanitizeExecApprovalWarningText(request.warningText)
       : null;
+  const scope = request.scope ? sanitizeApprovalScope(request.scope) : null;
   return {
     kind: "exec",
     commandText,
@@ -69,6 +79,7 @@ function buildExecApprovalPresentation(params: {
     host: sanitizeOptionalSingleLine(request.host),
     nodeId: sanitizeOptionalSingleLine(request.nodeId),
     agentId: sanitizeOptionalSingleLine(request.agentId),
+    ...(scope ? { scope } : {}),
     allowedDecisions: normalizeDecisionList(params.allowedDecisions),
   };
 }
@@ -77,9 +88,6 @@ function buildPluginApprovalPresentation(params: {
   request: unknown;
   allowedDecisions: readonly ApprovalDecision[];
 }): ApprovalPresentation | null {
-  if (!isRecord(params.request)) {
-    return null;
-  }
   const request = params.request as PluginApprovalRequestPayload;
   const rawTitle = normalizeOptionalString(request.title);
   const rawDescription = normalizeOptionalString(request.description);
@@ -91,8 +99,8 @@ function buildPluginApprovalPresentation(params: {
   const title = sanitizeExecApprovalDisplayText(rawTitle);
   const description = sanitizeExecApprovalWarningText(rawDescription);
   if (
-    !isWithinCodePointLimit(title, PLUGIN_APPROVAL_TITLE_MAX_LENGTH) ||
-    !isWithinCodePointLimit(description, PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH)
+    exceedsApprovalTextLimit(title, PLUGIN_APPROVAL_TITLE_MAX_LENGTH) ||
+    exceedsApprovalTextLimit(description, PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH)
   ) {
     return null;
   }
@@ -100,15 +108,29 @@ function buildPluginApprovalPresentation(params: {
     request.severity === "info" || request.severity === "warning" || request.severity === "critical"
       ? request.severity
       : "warning";
+  const rawDetail = normalizeOptionalString(request.detail);
+  const detail = rawDetail
+    ? truncatePluginApprovalDetail(sanitizeExecApprovalWarningText(rawDetail))
+    : null;
+  const scope = request.scope ? sanitizeApprovalScope(request.scope) : null;
+  let externalResolution: ReturnType<typeof normalizePluginExternalResolution>;
+  try {
+    externalResolution = normalizePluginExternalResolution(request.externalResolution);
+  } catch {
+    return null;
+  }
   return {
     kind: "plugin",
     title,
     description,
+    ...(detail ? { detail } : {}),
     severity,
     pluginId: sanitizeOptionalSingleLine(request.pluginId),
     toolName: sanitizeOptionalSingleLine(request.toolName),
     agentId: sanitizeOptionalSingleLine(request.agentId),
+    ...(scope ? { scope } : {}),
     allowedDecisions: normalizeDecisionList(params.allowedDecisions),
+    ...(externalResolution ? { externalResolution } : {}),
   };
 }
 
@@ -116,9 +138,6 @@ function buildSystemAgentApprovalPresentation(params: {
   request: unknown;
   allowedDecisions: readonly ApprovalDecision[];
 }): ApprovalPresentation | null {
-  if (!isRecord(params.request)) {
-    return null;
-  }
   const request = params.request as SystemAgentApprovalRequestPayload;
   const title = normalizeOptionalString(request.title);
   const description = normalizeOptionalString(request.description);
@@ -141,6 +160,9 @@ export function buildApprovalPresentation(params: {
   request: unknown;
   allowedDecisions: readonly ApprovalDecision[];
 }): ApprovalPresentation | null {
+  if (!isRecord(params.request)) {
+    return null;
+  }
   if (params.kind === "exec") {
     return buildExecApprovalPresentation(params);
   }

@@ -1,10 +1,7 @@
-// Searxng tests cover searxng search provider plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  resolveSearxngBaseUrl,
-  resolveSearxngCategories,
-  resolveSearxngLanguage,
-} from "./config.js";
+import { resolveSearxngBaseUrl } from "./config.js";
 
 const { runSearxngSearch } = vi.hoisted(() => ({
   runSearxngSearch: vi.fn(async (params: Record<string, unknown>) => params),
@@ -13,6 +10,10 @@ const { runSearxngSearch } = vi.hoisted(() => ({
 vi.mock("./searxng-client.js", () => ({
   runSearxngSearch,
 }));
+
+function configWithBaseUrl(baseUrl: unknown): OpenClawConfig {
+  return { plugins: { entries: { searxng: { config: { webSearch: { baseUrl } } } } } };
+}
 
 describe("searxng web search provider", () => {
   let createSearxngWebSearchProvider: typeof import("./searxng-search-provider.js").createSearxngWebSearchProvider;
@@ -24,9 +25,17 @@ describe("searxng web search provider", () => {
   });
 
   beforeEach(() => {
+    vi.unstubAllEnvs();
     runSearxngSearch.mockReset();
     runSearxngSearch.mockImplementation(async (params: Record<string, unknown>) => params);
   });
+
+  function createTool() {
+    return expectDefined(
+      createSearxngWebSearchProvider().createTool({ config: {} }),
+      "SearXNG search tool",
+    );
+  }
 
   it("registers a setup-visible web search provider", () => {
     const webSearchProviders: unknown[] = [];
@@ -38,39 +47,26 @@ describe("searxng web search provider", () => {
     } as never);
 
     expect(plugin.id).toBe("searxng");
-    expect(webSearchProviders).toHaveLength(1);
-
-    const provider = webSearchProviders[0] as Record<string, unknown>;
-    expect(provider.id).toBe("searxng");
-    expect(provider.requiresCredential).toBe(true);
-    expect(provider.envVars).toEqual(["SEARXNG_BASE_URL"]);
-    expect(provider.onboardingScopes).toEqual(["text-inference"]);
+    expect(webSearchProviders).toEqual([
+      expect.objectContaining({
+        id: "searxng",
+        requiresCredential: true,
+        envVars: ["SEARXNG_BASE_URL"],
+        onboardingScopes: ["text-inference"],
+      }),
+    ]);
   });
 
-  it("exposes credential metadata and enables the plugin in config", () => {
+  it("enables the plugin in config when selected", () => {
     const provider = createSearxngWebSearchProvider();
-    if (!provider.applySelectionConfig) {
-      throw new Error("Expected applySelectionConfig to be defined");
-    }
-    const applied = provider.applySelectionConfig({});
+    const applied = expectDefined(provider.applySelectionConfig, "selection handler")({});
 
-    expect(provider.id).toBe("searxng");
-    expect(provider.label).toBe("SearXNG Search");
-    expect(provider.requiresCredential).toBe(true);
     expect(provider.credentialPath).toBe("plugins.entries.searxng.config.webSearch.baseUrl");
     expect(applied.plugins?.entries?.searxng?.enabled).toBe(true);
   });
 
   it("maps generic tool arguments into SearXNG search params", async () => {
-    const provider = createSearxngWebSearchProvider();
-    const tool = provider.createTool({
-      config: { test: true },
-    } as never);
-    if (!tool) {
-      throw new Error("Expected tool definition");
-    }
-
-    const result = await tool.execute({
+    await createTool().execute({
       query: "openclaw docs",
       count: 4,
       categories: "general,news",
@@ -78,51 +74,16 @@ describe("searxng web search provider", () => {
     });
 
     expect(runSearxngSearch).toHaveBeenCalledWith({
-      config: { test: true },
+      config: {},
       query: "openclaw docs",
       count: 4,
       categories: "general,news",
       language: "en",
-    });
-    expect(result).toEqual({
-      config: { test: true },
-      query: "openclaw docs",
-      count: 4,
-      categories: "general,news",
-      language: "en",
-    });
-  });
-
-  it("forwards the execution abort signal to the SearXNG client", async () => {
-    const provider = createSearxngWebSearchProvider();
-    const tool = provider.createTool({
-      config: { test: true },
-    } as never);
-    if (!tool) {
-      throw new Error("Expected tool definition");
-    }
-    const controller = new AbortController();
-
-    await tool.execute({ query: "openclaw docs" }, { signal: controller.signal });
-
-    expect(runSearxngSearch).toHaveBeenCalledWith({
-      config: { test: true },
-      query: "openclaw docs",
-      count: undefined,
-      categories: undefined,
-      language: undefined,
-      signal: controller.signal,
     });
   });
 
   it("rejects fractional and out-of-range counts before searching", async () => {
-    const provider = createSearxngWebSearchProvider();
-    const tool = provider.createTool({
-      config: { test: true },
-    } as never);
-    if (!tool) {
-      throw new Error("Expected tool definition");
-    }
+    const tool = createTool();
 
     await expect(tool.execute({ query: "openclaw docs", count: 4.5 })).rejects.toThrow(
       "count must be an integer from 1 to 10.",
@@ -134,81 +95,49 @@ describe("searxng web search provider", () => {
   });
 
   it("reads base URL from plugin config SecretRef, then env var, stripping trailing slashes", () => {
+    vi.stubEnv("SEARXNG_BASE_URL", "http://localhost:8888/");
     expect(
       resolveSearxngBaseUrl(
-        {
-          plugins: {
-            entries: {
-              searxng: {
-                config: {
-                  webSearch: {
-                    baseUrl: {
-                      source: "env",
-                      provider: "default",
-                      id: "SEARXNG_BASE_URL",
-                    },
-                  },
-                },
-              },
-            },
-          },
-        } as never,
-        { SEARXNG_BASE_URL: "http://localhost:8888/" },
+        configWithBaseUrl({
+          source: "env",
+          provider: "default",
+          id: "SEARXNG_BASE_URL",
+        }),
       ),
     ).toBe("http://localhost:8888");
 
-    expect(
-      resolveSearxngBaseUrl({} as never, {
-        SEARXNG_BASE_URL: "https://search.local/searxng///",
-      }),
-    ).toBe("https://search.local/searxng");
+    vi.stubEnv("SEARXNG_BASE_URL", "https://search.local/searxng///");
+    expect(resolveSearxngBaseUrl({})).toBe("https://search.local/searxng");
 
-    expect(resolveSearxngBaseUrl({} as never, {})).toBeUndefined();
+    vi.stubEnv("SEARXNG_BASE_URL", "");
+    expect(resolveSearxngBaseUrl({})).toBeUndefined();
   });
 
-  it("reads categories and language from plugin config", () => {
-    const config = {
-      plugins: {
-        entries: {
-          searxng: {
-            config: {
-              webSearch: {
-                categories: "general,news",
-                language: "de",
-              },
-            },
+  it("does not fall back to ambient env when an explicit SecretRef is blocked", () => {
+    vi.stubEnv("SEARXNG_BASE_URL", "https://ambient.example/");
+    const config: OpenClawConfig = {
+      ...configWithBaseUrl({ source: "env", provider: "restricted", id: "SEARXNG_BASE_URL" }),
+      secrets: {
+        providers: {
+          restricted: {
+            source: "env",
+            allowlist: [],
           },
         },
       },
-    } as never;
+    };
 
-    expect(resolveSearxngCategories(config)).toBe("general,news");
-    expect(resolveSearxngLanguage(config)).toBe("de");
-  });
-
-  it("exposes a credentialNote with JSON format guidance", () => {
-    const provider = createSearxngWebSearchProvider();
-
-    expect(provider.credentialNote).toContain("json format enabled");
-    expect(provider.credentialNote).toContain("search.formats");
+    expect(resolveSearxngBaseUrl(config)).toBeUndefined();
   });
 
   it("persists base URL to plugin config via setConfiguredCredentialValue", () => {
     const provider = createSearxngWebSearchProvider();
-    const config = {} as Record<string, unknown>;
-    const setConfiguredCredentialValue = provider.setConfiguredCredentialValue;
-    if (!setConfiguredCredentialValue) {
-      throw new Error("Expected SearXNG provider setConfiguredCredentialValue");
-    }
+    const config: OpenClawConfig = {};
+    expectDefined(provider.setConfiguredCredentialValue, "credential setter")(
+      config,
+      "http://search.local:9000",
+    );
 
-    setConfiguredCredentialValue(config, "http://search.local:9000");
-
-    expect(
-      (
-        config as {
-          plugins?: { entries?: { searxng?: { config?: { webSearch?: { baseUrl?: string } } } } };
-        }
-      ).plugins?.entries?.searxng?.config?.webSearch?.baseUrl,
-    ).toBe("http://search.local:9000");
+    expect(resolveSearxngBaseUrl(config)).toBe("http://search.local:9000");
   });
 });

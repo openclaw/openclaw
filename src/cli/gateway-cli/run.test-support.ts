@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
 import "./run.js";
 
@@ -7,11 +8,14 @@ type GatewayRunTestLogger = {
 };
 
 type GatewayRunTestApi = {
-  normalizeGatewayHealthProbeHost(host: string): string;
-  resolveGatewayLockErrorExitCode(err: unknown, supervisor: RespawnSupervisor | null): number;
+  createConfiguredGatewayHealthProbe(
+    cfg: OpenClawConfig,
+  ): (params: { host: string; port: number }) => Promise<boolean>;
+  isGatewayHealthzResponse(statusCode: number | undefined, body: string): boolean;
+  resolveGatewayLockErrorExitCode(err: unknown): number;
   resolveGatewayStartupFailureExitCode(err: unknown): number;
   runGatewayLoopWithSupervisedLockRecovery(params: {
-    startLoop: () => Promise<void>;
+    startLoop: (lifecycleDeadlineMs?: number) => Promise<void>;
     supervisor: RespawnSupervisor | null;
     port: number;
     healthHost: string;
@@ -31,16 +35,24 @@ function getTestApi(): GatewayRunTestApi {
 }
 
 export const testing: GatewayRunTestApi = {
-  normalizeGatewayHealthProbeHost(host) {
-    return getTestApi().normalizeGatewayHealthProbeHost(host);
+  createConfiguredGatewayHealthProbe(cfg) {
+    return getTestApi().createConfiguredGatewayHealthProbe(cfg);
   },
-  resolveGatewayLockErrorExitCode(err, supervisor) {
-    return getTestApi().resolveGatewayLockErrorExitCode(err, supervisor);
+  isGatewayHealthzResponse(statusCode, body) {
+    return getTestApi().isGatewayHealthzResponse(statusCode, body);
+  },
+  resolveGatewayLockErrorExitCode(err) {
+    return getTestApi().resolveGatewayLockErrorExitCode(err);
   },
   resolveGatewayStartupFailureExitCode(err) {
     return getTestApi().resolveGatewayStartupFailureExitCode(err);
   },
   async runGatewayLoopWithSupervisedLockRecovery(params) {
-    await getTestApi().runGatewayLoopWithSupervisedLockRecovery(params);
+    await getTestApi().runGatewayLoopWithSupervisedLockRecovery({
+      probeHealth: async () => {
+        throw new Error("Unexpected health probe");
+      },
+      ...params,
+    });
   },
 };

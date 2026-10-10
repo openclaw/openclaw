@@ -1,16 +1,15 @@
-// Whatsapp plugin entrypoint registers its OpenClaw integration.
 import {
   defineBundledChannelEntry,
   loadBundledEntryExportSync,
 } from "openclaw/plugin-sdk/channel-entry-contract";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-entry-contract";
 
-function registerWhatsAppCallTool(api: OpenClawPluginApi): void {
+function registerWhatsAppAgentTools(api: OpenClawPluginApi): void {
   const registerTool = loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(
     import.meta.url,
     {
-      specifier: "./call-tool-api.js",
-      exportName: "registerWhatsAppCallTool",
+      specifier: "./agent-tools-api.js",
+      exportName: "registerWhatsAppAgentTools",
     },
   );
   registerTool(api);
@@ -29,5 +28,5 @@ export default defineBundledChannelEntry({
     specifier: "./runtime-setter-api.js",
     exportName: "setWhatsAppRuntime",
   },
-  registerFull: registerWhatsAppCallTool,
+  registerFull: registerWhatsAppAgentTools,
 });

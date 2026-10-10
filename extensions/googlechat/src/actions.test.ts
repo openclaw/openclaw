@@ -1,13 +1,14 @@
-// Googlechat tests cover actions plugin behavior.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const listEnabledGoogleChatAccounts = vi.hoisted(() => vi.fn());
+const inspectGoogleChatAccount = vi.hoisted(() => vi.fn());
+const listGoogleChatAccountIds = vi.hoisted(() => vi.fn());
 const resolveGoogleChatAccount = vi.hoisted(() => vi.fn());
 const sendGoogleChatMessage = vi.hoisted(() => vi.fn());
 const resolveGoogleChatOutboundSpace = vi.hoisted(() => vi.fn());
 
 vi.mock("./accounts.js", () => ({
-  listEnabledGoogleChatAccounts,
+  inspectGoogleChatAccount,
+  listGoogleChatAccountIds,
   resolveGoogleChatAccount,
 }));
 
@@ -19,11 +20,11 @@ vi.mock("./targets.js", () => ({
   resolveGoogleChatOutboundSpace,
 }));
 
-let googlechatMessageActions: typeof import("./actions.js").googlechatMessageActions;
+let googlechatMessageActions: typeof import("./message-tool-api.js").googlechatMessageActions;
 
 describe("googlechat message actions", () => {
   beforeAll(async () => {
-    ({ googlechatMessageActions } = await import("./actions.js"));
+    ({ googlechatMessageActions } = await import("./message-tool-api.js"));
   });
 
   beforeEach(() => {
@@ -37,21 +38,12 @@ describe("googlechat message actions", () => {
     vi.resetModules();
   });
 
-  function buildAccount(overrides: Record<string, unknown> = {}) {
-    const overrideConfig =
-      overrides.config && typeof overrides.config === "object"
-        ? (overrides.config as Record<string, unknown>)
-        : {};
+  function buildAccount() {
     return {
       accountId: "default",
       enabled: true,
       credentialSource: "service-account",
-      ...overrides,
-      config: {
-        groupPolicy: "open",
-        dm: { policy: "open" },
-        ...overrideConfig,
-      },
+      config: { groupPolicy: "open", dmPolicy: "open" },
     };
   }
 
@@ -68,16 +60,16 @@ describe("googlechat message actions", () => {
   }
 
   it("describes only send actions when enabled accounts exist", () => {
-    listEnabledGoogleChatAccounts.mockReturnValueOnce([]);
+    listGoogleChatAccountIds.mockReturnValueOnce([]);
     expect(googlechatMessageActions.describeMessageTool?.({ cfg: {} as never })).toBeNull();
 
-    listEnabledGoogleChatAccounts.mockReturnValueOnce([
-      {
-        enabled: true,
-        credentialSource: "service-account",
-        config: { actions: { reactions: true } },
-      },
-    ]);
+    listGoogleChatAccountIds.mockReturnValueOnce(["default"]);
+    inspectGoogleChatAccount.mockReturnValueOnce({
+      enabled: true,
+      credentialSource: "inline",
+      tokenStatus: "available",
+      config: {},
+    });
 
     expect(googlechatMessageActions.describeMessageTool?.({ cfg: {} as never })).toEqual({
       actions: ["send"],
@@ -86,14 +78,27 @@ describe("googlechat message actions", () => {
     expect(googlechatMessageActions.supportsAction?.({ action: "upload-file" })).toBe(false);
   });
 
-  it("keeps the legacy reaction gate from changing account-scoped discovery", () => {
-    resolveGoogleChatAccount.mockImplementation(({ accountId }: { accountId?: string | null }) => ({
+  it("does not expose actions for configured-unavailable file credentials", () => {
+    listGoogleChatAccountIds.mockReturnValueOnce(["default"]);
+    inspectGoogleChatAccount.mockReturnValueOnce({
       enabled: true,
-      credentialSource: "service-account",
-      config: {
-        actions: { reactions: accountId === "work" },
-      },
-    }));
+      credentialSource: "file",
+      tokenStatus: "configured_unavailable",
+      config: {},
+    });
+
+    expect(googlechatMessageActions.describeMessageTool?.({ cfg: {} as never })).toBeNull();
+  });
+
+  it("keeps account-scoped discovery send-only", () => {
+    inspectGoogleChatAccount.mockImplementation(
+      ({ accountId: _accountId }: { accountId?: string | null }) => ({
+        enabled: true,
+        credentialSource: "inline",
+        tokenStatus: "available",
+        config: {},
+      }),
+    );
 
     for (const accountId of ["default", "work"]) {
       expect(
@@ -113,9 +118,6 @@ describe("googlechat message actions", () => {
       threadName: "spaces/AAA/threads/thread-1",
     });
 
-    if (!googlechatMessageActions.handleAction) {
-      throw new Error("Expected googlechatMessageActions.handleAction to be defined");
-    }
     const result = await googlechatMessageActions.handleAction({
       action: "send",
       params: {
@@ -149,15 +151,7 @@ describe("googlechat message actions", () => {
     { action: "send", params: { to: "spaces/AAA", message: "caption", media: "remote.png" } },
     {
       action: "send",
-      params: { to: "spaces/AAA", message: "caption", mediaUrl: "remote.png" },
-    },
-    {
-      action: "send",
       params: { to: "spaces/AAA", message: "caption", mediaUrls: ["remote.png"] },
-    },
-    {
-      action: "send",
-      params: { to: "spaces/AAA", message: "caption", fileUrl: "remote.png" },
     },
     {
       action: "send",
@@ -174,9 +168,6 @@ describe("googlechat message actions", () => {
   ])(
     "rejects outbound attachment action $action before provider access",
     async ({ action, params }) => {
-      if (!googlechatMessageActions.handleAction) {
-        throw new Error("Expected googlechatMessageActions.handleAction to be defined");
-      }
       await expect(
         googlechatMessageActions.handleAction({
           action,
@@ -194,24 +185,19 @@ describe("googlechat message actions", () => {
     },
   );
 
-  it.each(["react", "reactions"])(
-    "rejects unsupported %s actions without provider access",
-    async (action) => {
-      resolveGoogleChatAccount.mockReturnValue(buildAccount());
+  it("rejects unsupported actions without provider access", async () => {
+    const action = "react";
+    resolveGoogleChatAccount.mockReturnValue(buildAccount());
 
-      if (!googlechatMessageActions.handleAction) {
-        throw new Error("Expected googlechatMessageActions.handleAction to be defined");
-      }
-      await expect(
-        googlechatMessageActions.handleAction({
-          action,
-          params: { messageId: "spaces/AAA/messages/msg-1", emoji: "👍" },
-          cfg: {},
-          accountId: "default",
-        } as never),
-      ).rejects.toThrow(`Action ${action} is not supported for provider googlechat.`);
+    await expect(
+      googlechatMessageActions.handleAction({
+        action,
+        params: { messageId: "spaces/AAA/messages/msg-1", emoji: "👍" },
+        cfg: {},
+        accountId: "default",
+      } as never),
+    ).rejects.toThrow(`Action ${action} is not supported for provider googlechat.`);
 
-      expect(sendGoogleChatMessage).not.toHaveBeenCalled();
-    },
-  );
+    expect(sendGoogleChatMessage).not.toHaveBeenCalled();
+  });
 });

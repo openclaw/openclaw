@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements harness runtime behavior.
 import {
   buildMentionRegexes,
   implicitMentionKindWhen,
@@ -6,15 +5,28 @@ import {
   matchesMentionWithExplicit,
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  createChannelIngressResolver,
+  resolveChannelMessageIngress,
+  resolveStableChannelMessageIngress,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 
-type SessionRecord = {
-  sessionKey: string;
-  body: string;
-};
-
 export function createQaRunnerRuntime(): PluginRuntime {
-  const sessions = new Map<string, SessionRecord>();
+  const sessions = new Set<string>();
+  const dispatchReplyWithBufferedBlockDispatcher: PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"] =
+    async ({ ctx, dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        {
+          text: `qa-echo: ${ctx.BodyForAgent ?? ctx.Body ?? ""}`,
+        },
+        { kind: "final" },
+      );
+      return {
+        queuedFinal: false,
+        counts: { tool: 0, block: 0, final: 1 },
+      };
+    };
   return {
     channel: {
       routing: {
@@ -43,17 +55,11 @@ export function createQaRunnerRuntime(): PluginRuntime {
         readSessionUpdatedAt({ sessionKey }: { sessionKey: string }) {
           return sessions.has(sessionKey) ? Date.now() : undefined;
         },
-        recordInboundSession({
-          sessionKey,
-          ctx,
-        }: {
-          sessionKey: string;
-          ctx: { BodyForAgent?: string; Body?: string };
-        }) {
-          sessions.set(sessionKey, {
-            sessionKey,
-            body: ctx.BodyForAgent ?? ctx.Body ?? "",
-          });
+        async readSessionUpdatedAtAsync({ sessionKey }: { sessionKey: string }) {
+          return sessions.has(sessionKey) ? Date.now() : undefined;
+        },
+        recordInboundSession({ sessionKey }: { sessionKey: string }) {
+          sessions.add(sessionKey);
         },
       },
       mentions: {
@@ -73,39 +79,30 @@ export function createQaRunnerRuntime(): PluginRuntime {
         finalizeInboundContext(ctx: Record<string, unknown>) {
           return ctx as typeof ctx & { CommandAuthorized: boolean };
         },
-        async dispatchReplyWithBufferedBlockDispatcher({
-          ctx,
-          dispatcherOptions,
-        }: {
-          ctx: { BodyForAgent?: string; Body?: string };
-          dispatcherOptions: { deliver: (payload: { text: string }) => Promise<void> };
-        }) {
-          await dispatcherOptions.deliver({
-            text: `qa-echo: ${ctx.BodyForAgent ?? ctx.Body ?? ""}`,
-          });
-        },
+        dispatchReplyWithBufferedBlockDispatcher,
       },
       inbound: {
-        async dispatchReply(
-          params: Parameters<PluginRuntime["channel"]["inbound"]["dispatchReply"]>[0],
-        ) {
+        ingress: {
+          createResolver: createChannelIngressResolver,
+          resolve: resolveChannelMessageIngress,
+          resolveStable: resolveStableChannelMessageIngress,
+        },
+        async dispatch(params: Parameters<PluginRuntime["channel"]["inbound"]["dispatch"]>[0]) {
           const sessionKey =
             typeof params.ctxPayload.SessionKey === "string"
               ? params.ctxPayload.SessionKey
-              : params.routeSessionKey;
-          await params.recordInboundSession({
-            storePath: params.storePath,
-            sessionKey,
-            ctx: params.ctxPayload,
-            onRecordError: params.record?.onRecordError ?? (() => undefined),
-          });
-          const dispatchResult = await params.dispatchReplyWithBufferedBlockDispatcher({
+              : params.route.sessionKey;
+          sessions.add(sessionKey);
+          const delivery =
+            params.admission?.kind === "observeOnly"
+              ? async () => ({ visibleReplySent: false })
+              : params.delivery.deliver;
+          const dispatchResult = await dispatchReplyWithBufferedBlockDispatcher({
             ctx: params.ctxPayload,
             cfg: params.cfg,
             dispatcherOptions: {
-              ...params.dispatcherOptions,
               deliver: async (payload, info) => {
-                await params.delivery.deliver(payload, info);
+                await delivery(payload, info);
               },
               onError: params.delivery.onError,
             },
@@ -116,7 +113,7 @@ export function createQaRunnerRuntime(): PluginRuntime {
             admission: params.admission ?? { kind: "dispatch" },
             dispatched: true,
             ctxPayload: params.ctxPayload,
-            routeSessionKey: params.routeSessionKey,
+            routeSessionKey: params.route.sessionKey,
             dispatchResult,
           };
         },

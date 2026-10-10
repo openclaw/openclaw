@@ -1,44 +1,47 @@
-/** Recursively remove schema keywords unsupported by a target provider/tool surface. */
+import {
+  evaluateSchemaWalk,
+  SCHEMA_ARRAY_KEYS,
+  SCHEMA_MAP_KEYS,
+  SCHEMA_OBJECT_KEYS,
+  walkSchemaArray,
+  walkSchemaValue,
+  type SchemaWalk,
+} from "./schema-walk.js";
+
+function* stripSchemaKeywords(
+  schema: unknown,
+  unsupportedKeywords: ReadonlySet<string>,
+  ancestors: Set<object>,
+): SchemaWalk {
+  const visit = (value: unknown) => stripSchemaKeywords(value, unsupportedKeywords, ancestors);
+  return yield walkSchemaValue(schema, ancestors, function* (obj) {
+    const cleaned: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(obj)) {
+      if (unsupportedKeywords.has(key)) {
+        continue;
+      }
+      if (SCHEMA_MAP_KEYS.has(key) && value && typeof value === "object" && !Array.isArray(value)) {
+        const entries = Object.entries(value as Record<string, unknown>);
+        for (const entry of entries) {
+          entry[1] = yield visit(entry[1]);
+        }
+        cleaned[key] = Object.fromEntries(entries);
+      } else if (SCHEMA_ARRAY_KEYS.has(key) && Array.isArray(value)) {
+        cleaned[key] = yield walkSchemaArray(value, visit);
+      } else if (SCHEMA_OBJECT_KEYS.has(key) && value && typeof value === "object") {
+        cleaned[key] = yield visit(value);
+      } else {
+        cleaned[key] = value;
+      }
+    }
+    return cleaned;
+  });
+}
+
+/** Remove schema keywords unsupported by a target provider/tool surface. */
 export function stripUnsupportedSchemaKeywords(
   schema: unknown,
   unsupportedKeywords: ReadonlySet<string>,
 ): unknown {
-  if (!schema || typeof schema !== "object") {
-    return schema;
-  }
-  if (Array.isArray(schema)) {
-    return schema.map((entry) => stripUnsupportedSchemaKeywords(entry, unsupportedKeywords));
-  }
-  const obj = schema as Record<string, unknown>;
-  const cleaned: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(obj)) {
-    if (unsupportedKeywords.has(key)) {
-      continue;
-    }
-    // Schema containers hold nested schemas under different shapes. Recurse
-    // through each known container while preserving unrelated metadata fields.
-    if (key === "properties" && value && typeof value === "object" && !Array.isArray(value)) {
-      cleaned[key] = Object.fromEntries(
-        Object.entries(value as Record<string, unknown>).map(([childKey, childValue]) => [
-          childKey,
-          stripUnsupportedSchemaKeywords(childValue, unsupportedKeywords),
-        ]),
-      );
-      continue;
-    }
-    if (key === "items" && value && typeof value === "object") {
-      cleaned[key] = Array.isArray(value)
-        ? value.map((entry) => stripUnsupportedSchemaKeywords(entry, unsupportedKeywords))
-        : stripUnsupportedSchemaKeywords(value, unsupportedKeywords);
-      continue;
-    }
-    if ((key === "anyOf" || key === "oneOf" || key === "allOf") && Array.isArray(value)) {
-      cleaned[key] = value.map((entry) =>
-        stripUnsupportedSchemaKeywords(entry, unsupportedKeywords),
-      );
-      continue;
-    }
-    cleaned[key] = value;
-  }
-  return cleaned;
+  return evaluateSchemaWalk(stripSchemaKeywords(schema, unsupportedKeywords, new Set()));
 }

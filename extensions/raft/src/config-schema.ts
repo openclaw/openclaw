@@ -1,4 +1,3 @@
-// Raft channel configuration schema.
 import {
   buildChannelConfigSchema,
   buildMultiAccountChannelSchema,
@@ -9,6 +8,7 @@ const RaftAccountSchema = z
   .object({
     name: z.string().optional(),
     enabled: z.boolean().optional(),
+    configWrites: z.boolean().optional(),
     profile: z.string().min(1).optional(),
   })
   .strict();

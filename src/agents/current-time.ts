@@ -2,12 +2,7 @@
  * Formats cron-style current-time prompt text with local and UTC references.
  */
 import { resolveDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import {
-  type TimeFormatPreference,
-  formatUserTime,
-  resolveUserTimeFormat,
-  resolveUserTimezone,
-} from "./date-time.js";
+import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "./date-time.js";
 
 type CronStyleNow = {
   userTimezone: string;
@@ -19,7 +14,6 @@ type TimeConfigLike = {
   agents?: {
     defaults?: {
       userTimezone?: string;
-      timeFormat?: TimeFormatPreference;
     };
   };
 };
@@ -27,7 +21,7 @@ type TimeConfigLike = {
 /** Resolve localized and UTC current-time text for agent prompts. */
 export function resolveCronStyleNow(cfg: TimeConfigLike, nowMs: number): CronStyleNow {
   const userTimezone = resolveUserTimezone(cfg.agents?.defaults?.userTimezone);
-  const userTimeFormat = resolveUserTimeFormat(cfg.agents?.defaults?.timeFormat);
+  const userTimeFormat = resolveUserTimeFormat(undefined);
   const timestampMs = resolveDateTimestampMs(nowMs);
   const date = new Date(timestampMs);
   const formattedTime = formatUserTime(date, userTimezone, userTimeFormat) ?? date.toISOString();
@@ -36,22 +30,8 @@ export function resolveCronStyleNow(cfg: TimeConfigLike, nowMs: number): CronSty
   return { userTimezone, formattedTime, timeLine };
 }
 
-/**
- * Append a fresh current-time block, or refresh a previously helper-injected one,
- * so heartbeat/cron prompts flowing through this helper repeatedly never leak a
- * stale `Current time:` value (issue #44993).
- */
-// Matches the helper's own injected two-line `Current time: ...\nReference UTC: ...` block.
-// Upstream #42654 split the helper output across two lines:
-//   Line 1: `Current time: <formattedTime> (<userTimezone>)`
-//   Line 2: `Reference UTC: YYYY-MM-DD HH:MM UTC`
-// The natural-language `formattedTime` portion is locale/format-dependent (e.g.
-// `Thursday, April 30th, 2026 - 10:00 AM` from `formatUserTime`, or an ISO fallback),
-// so we anchor on the helper-only deterministic shape: `(<TZ>)` on line 1 immediately
-// followed by `Reference UTC: <ISO UTC>` on line 2. The `(TZ)` group rejects parens (so
-// timezone IDs like `Asia/Seoul` are accepted), and the strict `Reference UTC:` prefix
-// plus ISO+UTC tail rejects user-authored reminder lines that happen to start with
-// `Current time:` but lack the helper's exact two-line tail format.
+// Only refresh our own two-line block. The UTC tail distinguishes it from authored
+// reminders while permitting locale-dependent text in the first line (#44993).
 const CURRENT_TIME_LINE_RE =
   /^Current time: .+? \([^)]+\)\nReference UTC: \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC$/gm;
 

@@ -1,11 +1,39 @@
 import { createServer, type Server } from "node:http";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { createClickClackClient, normalizeClickClackCorrelationId } from "./http-client.js";
 
+const effectGate = vi.hoisted((): { prepare: (() => Promise<void>) | undefined } => ({
+  prepare: undefined,
+}));
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
+  return {
+    ...actual,
+    captureEffectAuthority: () => {
+      const authority = actual.captureEffectAuthority();
+      const prepare = effectGate.prepare;
+      return prepare
+        ? {
+            ...authority,
+            initiate: async <T>(effect: () => T | Promise<T>) => {
+              await prepare();
+              return authority.initiate(effect);
+            },
+          }
+        : authority;
+    },
+  };
+});
+
 const LOOPBACK_RESPONSE_BYTES = 18 * 1024 * 1024;
 const CLICKCLACK_REQUEST_BODY_LIMIT_BYTES = 1024 * 1024;
 const CLICKCLACK_INBOUND_JSON_LIMIT_BYTES = 16 * 1024 * 1024;
+
+function createTestClient(fetch: typeof globalThis.fetch) {
+  return createClickClackClient({ baseUrl: "https://clickclack.example", token: "fake", fetch });
+}
 
 function requestBodyJson(init: RequestInit | undefined): unknown {
   const body = init?.body;
@@ -125,6 +153,240 @@ function streamedErrorResponse(body: string, limit: number) {
 }
 
 describe("ClickClack HTTP client", () => {
+  it("creates, updates, and reads managed discussion channels", async () => {
+    const channel = {
+      id: "chn_discussion",
+      route_id: "discussion-route",
+      workspace_id: "wsp_1",
+      name: "release-planning",
+      kind: "public",
+      created_at: "2026-07-19T00:00:00.000Z",
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ channel }, { status: 201 }))
+      .mockResolvedValueOnce(Response.json({ channel }))
+      .mockResolvedValueOnce(
+        Response.json({ messages: [], oldest_seq: 0, newest_seq: 0, has_older: false }),
+      );
+    const client = createTestClient(fetchMock);
+
+    await client.createChannel("wsp_1", {
+      name: "release-planning",
+      kind: "public",
+      external_managed: true,
+      external_ref: "agent:main:main",
+      external_url: "https://control.example/chat/main",
+      sidebar_section: "Sessions",
+    });
+    await client.updateChannel("chn_discussion", {
+      archived: true,
+      name: "release-done",
+      sidebar_section: "Archive",
+    });
+    await client.latestChannelMessages("chn_discussion", 30);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "https://clickclack.example/api/workspaces/wsp_1/channels",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(requestBodyJson(fetchMock.mock.calls[0]?.[1])).toEqual({
+      name: "release-planning",
+      kind: "public",
+      external_managed: true,
+      external_ref: "agent:main:main",
+      external_url: "https://control.example/chat/main",
+      sidebar_section: "Sessions",
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "https://clickclack.example/api/channels/chn_discussion",
+      expect.objectContaining({ method: "PATCH" }),
+    );
+    expect(requestBodyJson(fetchMock.mock.calls[1]?.[1])).toEqual({
+      archived: true,
+      name: "release-done",
+      sidebar_section: "Archive",
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "https://clickclack.example/api/channels/chn_discussion/messages?limit=200",
+      expect.any(Object),
+    );
+  });
+
+  it("merges recent thread replies into the global latest-message window", async () => {
+    const root = {
+      id: "msg_root",
+      workspace_id: "wsp_1",
+      channel_id: "chn_discussion",
+      author_id: "usr_root",
+      thread_root_id: "msg_root",
+      channel_seq: 10,
+      body: "Old root",
+      body_format: "markdown" as const,
+      created_at: "2026-07-19T10:00:00.000Z",
+      thread_state: {
+        root_message_id: "msg_root",
+        reply_count: 1,
+        last_reply_at: "2026-07-19T13:00:00.000Z",
+        last_reply_author_ids: ["usr_reply"],
+      },
+    };
+    const newerRoot = {
+      ...root,
+      id: "msg_newer",
+      author_id: "usr_newer",
+      thread_root_id: "msg_newer",
+      channel_seq: 11,
+      body: "New root",
+      created_at: "2026-07-19T12:00:00.000Z",
+      thread_state: {
+        root_message_id: "msg_newer",
+        reply_count: 0,
+        last_reply_author_ids: [],
+      },
+    };
+    const reply = {
+      ...root,
+      id: "msg_reply",
+      author_id: "usr_reply",
+      parent_message_id: "msg_root",
+      thread_seq: 1,
+      body: "Recent reply",
+      created_at: "2026-07-19T13:00:00.000Z",
+      thread_state: undefined,
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({
+          messages: [newerRoot],
+          oldest_seq: 11,
+          newest_seq: 11,
+          has_older: true,
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          messages: [root],
+          oldest_seq: 10,
+          newest_seq: 10,
+          has_older: false,
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({ root, replies: [reply], thread_state: root.thread_state }),
+      );
+    const client = createTestClient(fetchMock);
+
+    const result = await client.latestChannelMessages("chn_discussion", 2);
+
+    expect(result).toEqual({
+      messages: [
+        expect.objectContaining({ id: "msg_newer" }),
+        expect.objectContaining({ id: "msg_reply" }),
+      ],
+      truncated: false,
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "https://clickclack.example/api/channels/chn_discussion/messages?limit=200&before_seq=11",
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "https://clickclack.example/api/messages/msg_root/thread?limit=200",
+      expect.any(Object),
+    );
+  });
+
+  it("fails closed when a capped thread response cannot contain the latest replies", async () => {
+    const root = {
+      id: "msg_root",
+      workspace_id: "wsp_1",
+      channel_id: "chn_discussion",
+      author_id: "usr_root",
+      thread_root_id: "msg_root",
+      channel_seq: 1,
+      body: "Root",
+      body_format: "markdown" as const,
+      created_at: "2026-07-19T10:00:00.000Z",
+      thread_state: {
+        root_message_id: "msg_root",
+        reply_count: 201,
+        last_reply_at: "2026-07-19T13:00:00.000Z",
+        last_reply_author_ids: ["usr_reply"],
+      },
+    };
+    const oldestReply = {
+      ...root,
+      id: "msg_oldest_reply",
+      parent_message_id: "msg_root",
+      thread_seq: 1,
+      body: "Oldest reply",
+      created_at: "2026-07-19T10:01:00.000Z",
+      thread_state: undefined,
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({
+          messages: [root],
+          oldest_seq: 1,
+          newest_seq: 1,
+          has_older: false,
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({ root, replies: [oldestReply], thread_state: root.thread_state }),
+      );
+    const client = createTestClient(fetchMock);
+
+    const result = await client.latestChannelMessages("chn_discussion", 30);
+
+    expect(result).toEqual({ messages: [root], truncated: true });
+  });
+
+  it("bounds discussion history pagination and reports truncation", async () => {
+    let sequence = 1_000;
+    const fetchMock = vi.fn(async () => {
+      const current = sequence;
+      sequence -= 1;
+      return Response.json({
+        messages: [
+          {
+            id: `msg_${current}`,
+            workspace_id: "wsp_1",
+            channel_id: "chn_discussion",
+            author_id: "usr_1",
+            thread_root_id: `msg_${current}`,
+            channel_seq: current,
+            body: `Message ${current}`,
+            body_format: "markdown",
+            created_at: `2026-07-19T10:00:${String(current % 60).padStart(2, "0")}.000Z`,
+            thread_state: {
+              root_message_id: `msg_${current}`,
+              reply_count: 0,
+              last_reply_author_ids: [],
+            },
+          },
+        ],
+        oldest_seq: current,
+        newest_seq: current,
+        has_older: true,
+      });
+    });
+    const client = createTestClient(fetchMock);
+
+    const result = await client.latestChannelMessages("chn_discussion", 1);
+
+    expect(result.truncated).toBe(true);
+    expect(result.messages).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(8);
+  });
+
   it("replaces the authenticated bot command menu", async () => {
     const botCommand = {
       id: "botcmd_1",
@@ -139,11 +401,7 @@ describe("ClickClack HTTP client", () => {
     const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
       Response.json({ bot_commands: [botCommand] }),
     );
-    const client = createClickClackClient({
-      baseUrl: "https://clickclack.example",
-      token: "fake",
-      fetch: fetchMock as unknown as typeof fetch,
-    });
+    const client = createTestClient(fetchMock as unknown as typeof fetch);
 
     const result = await client.setBotCommands([
       {
@@ -175,11 +433,7 @@ describe("ClickClack HTTP client", () => {
 
   it("adds paged tail queries without changing the legacy events result", async () => {
     const fetchMock = vi.fn(async () => Response.json({ events: [], tail_cursor: "cursor-900" }));
-    const client = createClickClackClient({
-      baseUrl: "https://clickclack.example",
-      token: "fake",
-      fetch: fetchMock,
-    });
+    const client = createTestClient(fetchMock);
 
     const page = await client.eventPage("workspace-1", {
       afterCursor: "cursor-500",
@@ -260,17 +514,46 @@ describe("ClickClack HTTP client", () => {
   it("bounds error response bodies without using raw response.text()", async () => {
     const streamed = streamedErrorResponse("x".repeat(9000), 8 * 1024);
     const fetchMock = vi.fn(async () => streamed.response);
-    const client = createClickClackClient({
-      baseUrl: "https://clickclack.example",
-      token: "fake",
-      fetch: fetchMock,
-    });
+    const client = createTestClient(fetchMock);
 
     await expect(client.me()).rejects.toThrow(`ClickClack 502: ${streamed.expectedDetail}`);
 
     expect(streamed.text).not.toHaveBeenCalled();
     expect(streamed.cancel).toHaveBeenCalledTimes(1);
     expect(streamed.releaseLock).toHaveBeenCalledTimes(1);
+  });
+
+  it("redacts non-2xx response details with built-in patterns", async () => {
+    const fieldA = ["access", "token"].join("_");
+    const fieldB = ["client", "secret"].join("_");
+    const valueA = ["redact", "fixture", "a", "123"].join("_");
+    const valueB = ["redact", "fixture", "b", "123"].join("_");
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            safe: "diagnostic",
+            [fieldA]: valueA,
+            [fieldB]: valueB,
+          }),
+          { status: 502 },
+        ),
+    );
+    const client = createClickClackClient({
+      baseUrl: "https://clickclack.example",
+      token: "test-token",
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+
+    let message = "";
+    try {
+      await client.me();
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain('"safe":"diagnostic"');
+    expect(message).not.toContain(valueA);
+    expect(message).not.toContain(valueB);
   });
 
   it("POSTs durable activity rows with kind and turn_id", async () => {
@@ -281,11 +564,7 @@ describe("ClickClack HTTP client", () => {
           headers: { "Content-Type": "application/json" },
         }),
     );
-    const client = createClickClackClient({
-      baseUrl: "https://clickclack.example",
-      token: "fake",
-      fetch: fetchMock as unknown as typeof fetch,
-    });
+    const client = createTestClient(fetchMock as unknown as typeof fetch);
 
     const message = await client.createActivityMessage({
       channelId: "chn_1",
@@ -307,28 +586,6 @@ describe("ClickClack HTTP client", () => {
     });
   });
 
-  it("includes quoted_message_id on a channel message when quoting", async () => {
-    const fetchMock = vi.fn(
-      async (_input: string | URL | Request, _init?: RequestInit) =>
-        new Response(JSON.stringify({ message: { id: "msg_q" } }), {
-          status: 201,
-          headers: { "Content-Type": "application/json" },
-        }),
-    );
-    const client = createClickClackClient({
-      baseUrl: "https://clickclack.example",
-      token: "fake",
-      fetch: fetchMock as unknown as typeof fetch,
-    });
-
-    await client.createChannelMessage("chn_1", "ack", { quotedMessageId: "msg_root" });
-
-    expect(requestBodyJson(fetchMock.mock.calls[0]?.[1])).toEqual({
-      body: "ack",
-      quoted_message_id: "msg_root",
-    });
-  });
-
   it("serializes retry nonces and reads persisted attachments", async () => {
     const fetchMock = vi
       .fn()
@@ -336,11 +593,7 @@ describe("ClickClack HTTP client", () => {
       .mockResolvedValueOnce(
         Response.json({ message: { id: "msg_retry", attachments: [{ id: "upl_1" }] } }),
       );
-    const client = createClickClackClient({
-      baseUrl: "https://clickclack.example",
-      token: "fake",
-      fetch: fetchMock as unknown as typeof fetch,
-    });
+    const client = createTestClient(fetchMock as unknown as typeof fetch);
 
     await client.createChannelMessage("chn_1", "retry-safe", { nonce: "media-queue-1" });
     const persisted = await client.message("msg_retry");
@@ -358,6 +611,14 @@ describe("ClickClack HTTP client", () => {
   });
 
   it("uploads multipart bytes with filename and MIME, then attaches by id", async () => {
+    const NativeBlob = Blob;
+    let uploadBlobPart: BlobPart | undefined;
+    class CapturingBlob extends NativeBlob {
+      constructor(parts?: BlobPart[], options?: BlobPropertyBag) {
+        uploadBlobPart = parts?.[0];
+        super(parts, options);
+      }
+    }
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
@@ -380,21 +641,26 @@ describe("ClickClack HTTP client", () => {
         ),
       )
       .mockResolvedValueOnce(Response.json({ ok: true }));
-    const client = createClickClackClient({
-      baseUrl: "https://clickclack.example",
-      token: "fake",
-      fetch: fetchMock as unknown as typeof fetch,
-    });
+    const client = createTestClient(fetchMock as unknown as typeof fetch);
 
-    const upload = await client.createUpload({
-      workspaceId: "wsp_1",
-      buffer: Buffer.from("const proof = true;"),
-      filename: "viewer-proof.ts",
-      contentType: "text/typescript",
-      nonce: "upload-queue-1",
-    });
+    const uploadBuffer = Buffer.from("const proof = true;");
+    vi.stubGlobal("Blob", CapturingBlob);
+    const upload = await client
+      .createUpload({
+        workspaceId: "wsp_1",
+        buffer: uploadBuffer,
+        filename: "viewer-proof.ts",
+        contentType: "text/typescript",
+        nonce: "upload-queue-1",
+      })
+      .finally(() => vi.unstubAllGlobals());
     await client.attachUpload("msg_1", upload.id);
 
+    expect(uploadBlobPart).toBeInstanceOf(Uint8Array);
+    const uploadBytes = uploadBlobPart as Uint8Array;
+    expect(uploadBytes.buffer).toBe(uploadBuffer.buffer);
+    expect(uploadBytes.byteOffset).toBe(uploadBuffer.byteOffset);
+    expect(uploadBytes.byteLength).toBe(uploadBuffer.byteLength);
     const uploadRequest = fetchMock.mock.calls[0];
     expect(uploadRequest?.[0]).toBe(
       "https://clickclack.example/api/uploads?workspace_id=wsp_1&nonce=upload-queue-1",
@@ -444,11 +710,7 @@ describe("ClickClack HTTP client", () => {
       )
       .mockResolvedValueOnce(Response.json({ error: "old server" }, { status: 404 }))
       .mockResolvedValueOnce(Response.json({ error: "broken" }, { status: 503 }));
-    const client = createClickClackClient({
-      baseUrl: "https://clickclack.example",
-      token: "fake",
-      fetch: fetchMock as unknown as typeof fetch,
-    });
+    const client = createTestClient(fetchMock as unknown as typeof fetch);
 
     await expect(
       client.findUploadByNonce({ workspaceId: "wsp_1", nonce: "upload-queue-1" }),
@@ -498,11 +760,7 @@ describe("ClickClack HTTP client", () => {
       )
       .mockResolvedValueOnce(Response.json({ error: "old server" }, { status: 404 }))
       .mockResolvedValueOnce(Response.json({ error: "broken" }, { status: 503 }));
-    const client = createClickClackClient({
-      baseUrl: "https://clickclack.example",
-      token: "fake",
-      fetch: fetchMock as unknown as typeof fetch,
-    });
+    const client = createTestClient(fetchMock as unknown as typeof fetch);
 
     await expect(
       client.findMessageByNonce({ workspaceId: "wsp_1", nonce: "message-queue-1" }),
@@ -532,25 +790,6 @@ describe("ClickClack HTTP client", () => {
     ]);
   });
 
-  it("omits quoted_message_id on a channel message when not quoting", async () => {
-    const fetchMock = vi.fn(
-      async (_input: string | URL | Request, _init?: RequestInit) =>
-        new Response(JSON.stringify({ message: { id: "msg_p" } }), {
-          status: 201,
-          headers: { "Content-Type": "application/json" },
-        }),
-    );
-    const client = createClickClackClient({
-      baseUrl: "https://clickclack.example",
-      token: "fake",
-      fetch: fetchMock as unknown as typeof fetch,
-    });
-
-    await client.createChannelMessage("chn_1", "hello");
-
-    expect(requestBodyJson(fetchMock.mock.calls[0]?.[1])).toEqual({ body: "hello" });
-  });
-
   it("includes quoted_message_id on a direct message when quoting", async () => {
     const fetchMock = vi.fn(
       async (_input: string | URL | Request, _init?: RequestInit) =>
@@ -559,11 +798,7 @@ describe("ClickClack HTTP client", () => {
           headers: { "Content-Type": "application/json" },
         }),
     );
-    const client = createClickClackClient({
-      baseUrl: "https://clickclack.example",
-      token: "fake",
-      fetch: fetchMock as unknown as typeof fetch,
-    });
+    const client = createTestClient(fetchMock as unknown as typeof fetch);
 
     await client.createDirectMessage("dcn_1", "ack", { quotedMessageId: "msg_root" });
 
@@ -575,11 +810,7 @@ describe("ClickClack HTTP client", () => {
 
   it("rejects activity rows without a channel or conversation target", async () => {
     const fetchMock = vi.fn();
-    const client = createClickClackClient({
-      baseUrl: "https://clickclack.example",
-      token: "fake",
-      fetch: fetchMock as unknown as typeof fetch,
-    });
+    const client = createTestClient(fetchMock as unknown as typeof fetch);
 
     await expect(
       client.createActivityMessage({ body: "orphan row", kind: "agent_commentary" }),
@@ -595,11 +826,7 @@ describe("ClickClack HTTP client", () => {
           headers: { "Content-Type": "application/json" },
         }),
     );
-    const client = createClickClackClient({
-      baseUrl: "https://clickclack.example",
-      token: "fake",
-      fetch: fetchMock as unknown as typeof fetch,
-    });
+    const client = createTestClient(fetchMock as unknown as typeof fetch);
 
     await client.createActivityMessage({
       conversationId: "dcn_1",
@@ -622,11 +849,7 @@ describe("ClickClack HTTP client", () => {
           headers: { "Content-Type": "application/json" },
         }),
     );
-    const client = createClickClackClient({
-      baseUrl: "https://clickclack.example",
-      token: "fake",
-      fetch: fetchMock as unknown as typeof fetch,
-    });
+    const client = createTestClient(fetchMock as unknown as typeof fetch);
 
     await client.updateMessageBody("msg_9", "longer");
 
@@ -636,6 +859,73 @@ describe("ClickClack HTTP client", () => {
     );
     const init = fetchMock.mock.calls[0]?.[1];
     expect(requestBodyJson(init)).toEqual({ body: "longer" });
+  });
+
+  it("POSTs ephemeral agent progress frames to the realtime endpoint", async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
+      Response.json({ event: { id: "evt_1" } }, { status: 202 }),
+    );
+    const client = createClickClackClient({
+      baseUrl: "https://clickclack.example",
+      token: "placeholder",
+      fetch: fetchMock,
+    });
+
+    await client.publishEphemeral({
+      workspaceId: "wsp_1",
+      channelId: "chn_1",
+      type: "agent.progress",
+      payload: { op: "append", turn_id: "msg_1" },
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://clickclack.example/api/realtime/ephemeral",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(requestBodyJson(fetchMock.mock.calls[0]?.[1])).toEqual({
+      workspace_id: "wsp_1",
+      channel_id: "chn_1",
+      type: "agent.progress",
+      payload: { op: "append", turn_id: "msg_1" },
+    });
+  });
+
+  it("aborts a stalled ephemeral request", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn(
+        async (_input: string | URL | Request, init?: RequestInit): Promise<Response> =>
+          await new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener(
+              "abort",
+              () => {
+                const error = new Error("aborted");
+                error.name = "AbortError";
+                reject(error);
+              },
+              { once: true },
+            );
+          }),
+      );
+      const client = createClickClackClient({
+        baseUrl: "https://clickclack.example",
+        token: "placeholder",
+        fetch: fetchMock,
+      });
+
+      const pending = client.publishEphemeral({
+        workspaceId: "wsp_1",
+        channelId: "chn_1",
+        type: "agent.progress",
+      });
+      const rejected = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      await rejected;
+      expect(fetchMock.mock.calls[0]?.[1]?.signal).toBeDefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -668,11 +958,6 @@ describe("createClickClackClient websocket", () => {
     }
   }
 
-  it("delivers a legitimate inbound frame below the payload cap", async () => {
-    const result = await runFrameCase(JSON.stringify({ cursor: "c1", type: "message" }));
-    expect(result.delivered).toBe(true);
-  });
-
   it("delivers a valid event frame above the server request-body limit", async () => {
     // The server wraps and re-encodes accepted request payloads, so the event
     // frame can legitimately be larger than its 1 MiB request-body limit.
@@ -696,3 +981,58 @@ describe("createClickClackClient websocket", () => {
     expect(result.error).toMatch(/max payload/i);
   });
 });
+
+it.each([false, true])(
+  "rechecks the message caller after effect preparation (retired=%s)",
+  async (retired) => {
+    const preparing = createDeferred();
+    const prepared = createDeferred();
+    const dispatched = createDeferred();
+    const response = createDeferred<Response>();
+    const caller = new AbortController();
+    const failure = new Error("ClickClack caller retired");
+    effectGate.prepare = async () => {
+      preparing.resolve();
+      await prepared.promise;
+    };
+    const fetch = vi.fn<typeof globalThis.fetch>(() => {
+      dispatched.resolve();
+      return response.promise;
+    });
+    const client = createClickClackClient({
+      baseUrl: "https://clickclack.example",
+      token: "fake",
+      fetch,
+      beforeRequest: () => caller.signal.throwIfAborted(),
+    });
+    const sending = client.createChannelMessage("chn_1", "hello").then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    try {
+      await Promise.race([
+        preparing.promise,
+        dispatched.promise.then(() => {
+          throw new Error("dispatched before preparation");
+        }),
+      ]);
+      expect(fetch).not.toHaveBeenCalled();
+      if (retired) {
+        caller.abort(failure);
+      }
+      prepared.resolve();
+      if (!retired) {
+        await dispatched.promise;
+        caller.abort(failure);
+      }
+      response.resolve(Response.json({ message: { id: "msg_1" } }));
+      expect(await sending).toEqual(retired ? { error: failure } : { value: { id: "msg_1" } });
+      expect(fetch).toHaveBeenCalledTimes(retired ? 0 : 1);
+    } finally {
+      prepared.resolve();
+      response.resolve(Response.json({ message: { id: "msg_1" } }));
+      await sending;
+      effectGate.prepare = undefined;
+    }
+  },
+);

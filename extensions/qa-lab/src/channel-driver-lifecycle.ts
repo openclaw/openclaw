@@ -12,12 +12,7 @@ export type QaChannelDriverLifecycleState =
   | { status: "stopped" }
   | { runtime: QaChannelDriverRuntime; status: "running" };
 
-export type QaChannelDriverLifecycle = {
-  readonly state: QaChannelDriverLifecycleState;
-  restart(): Promise<QaChannelDriverRuntime>;
-  start(): Promise<QaChannelDriverRuntime>;
-  stop(): Promise<void>;
-};
+export type QaChannelDriverLifecycle = ReturnType<typeof createQaChannelDriverLifecycle>;
 
 export type QaChannelDriverLifecycleScenarioId =
   | "cold-start"
@@ -45,40 +40,61 @@ export function createQaChannelDriverLifecycle(
     outputDir: string;
   },
   deps: QaChannelDriverLifecycleDeps = {},
-): QaChannelDriverLifecycle {
+) {
   const createAdapter = deps.createAdapter ?? createQaTransportAdapter;
   const discoverAdapterFactories = deps.listAdapterFactories ?? listAdapterFactories;
   let state: QaChannelDriverLifecycleState = { status: "stopped" };
+  let transition = Promise.resolve();
 
-  const lifecycle: QaChannelDriverLifecycle = {
+  // Serialize adapter ownership so overlapping lifecycle calls cannot leak a
+  // late-started runtime or clean the same live transport twice.
+  const enqueueTransition = <T>(operation: () => Promise<T>): Promise<T> => {
+    const result = transition.then(operation);
+    transition = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  };
+
+  const startRuntime = async (): Promise<QaChannelDriverRuntime> => {
+    if (state.status === "running") {
+      return state.runtime;
+    }
+    const runtime = await createAdapter(
+      {
+        ...params,
+        state: createQaBusState(),
+      },
+      await discoverAdapterFactories(),
+    );
+    state = { runtime, status: "running" };
+    return runtime;
+  };
+
+  const stopRuntime = async (): Promise<void> => {
+    if (state.status === "stopped") {
+      return;
+    }
+    await state.runtime.cleanupWithoutGateway();
+    state = { status: "stopped" };
+  };
+
+  const lifecycle = {
     get state() {
       return state;
     },
-    async restart() {
-      await lifecycle.stop();
-      return await lifecycle.start();
+    restart() {
+      return enqueueTransition(async () => {
+        await stopRuntime();
+        return await startRuntime();
+      });
     },
-    async start() {
-      if (state.status === "running") {
-        return state.runtime;
-      }
-      const runtime = await createAdapter(
-        {
-          ...params,
-          state: createQaBusState(),
-        },
-        await discoverAdapterFactories(),
-      );
-      state = { runtime, status: "running" };
-      return runtime;
+    start() {
+      return enqueueTransition(startRuntime);
     },
-    async stop() {
-      if (state.status === "stopped") {
-        return;
-      }
-      const runtime = state.runtime;
-      await runtime.cleanup();
-      state = { status: "stopped" };
+    stop() {
+      return enqueueTransition(stopRuntime);
     },
   };
 

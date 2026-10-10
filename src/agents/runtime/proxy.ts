@@ -4,13 +4,16 @@
  */
 
 import {
+  createToolArgumentPreviewSchedule,
   createSseByteGuard,
   parseStreamingJson,
-  type SseByteGuard,
+  parseTerminalToolCallArguments,
+  type ToolArgumentPreviewSchedule,
 } from "@openclaw/ai/internal/runtime";
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { resolvePositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { readResponseWithLimit } from "../../infra/http-body.js";
-// Internal import for JSON parsing utility
+import { withResponseBodyTimeout } from "../../infra/http-response-body-timeout.js";
 import type {
   AssistantMessage,
   AssistantMessageEvent,
@@ -20,32 +23,17 @@ import type {
   StopReason,
   ToolCall,
 } from "../../llm/types.js";
-import { EventStream } from "../../llm/utils/event-stream.js";
+import { AssistantMessageEventStream } from "../../llm/utils/event-stream.js";
+import { makeZeroUsageSnapshot } from "../usage.js";
 
 const PROXY_ERROR_BODY_MAX_BYTES = 16 * 1024 * 1024;
 const PROXY_SSE_STREAM_MAX_BYTES = 16 * 1024 * 1024;
 const PROXY_SSE_PENDING_BUFFER_MAX_BYTES = PROXY_SSE_STREAM_MAX_BYTES;
 const PROXY_SSE_READ_IDLE_TIMEOUT_MS = 120_000;
 
-type StreamingToolCall = ToolCall & { partialJson?: string };
-
-// Create stream class matching ProxyMessageEventStream
-class ProxyMessageEventStream extends EventStream<AssistantMessageEvent, AssistantMessage> {
-  constructor() {
-    super(
-      (event) => event.type === "done" || event.type === "error",
-      (event) => {
-        if (event.type === "done") {
-          return event.message;
-        }
-        if (event.type === "error") {
-          return event.error;
-        }
-        throw new Error("Unexpected event type");
-      },
-    );
-  }
-}
+type StreamingToolCall = ToolCall & {
+  partialJson: string;
+};
 
 /**
  * Proxy event types - server sends these with partial field stripped to reduce bandwidth.
@@ -134,17 +122,8 @@ function buildProxyRequestOptions(options: ProxyStreamOptions): ProxySerializabl
 
 function sanitizeProxyModel(model: Model): Model {
   const { headers: _headers, ...safeModel } = model;
-  return safeModel as Model;
+  return safeModel;
 }
-
-function resolveProxyReadIdleTimeoutMs(timeoutMs: ProxyStreamOptions["timeoutMs"]): number {
-  return resolvePositiveTimerTimeoutMs(timeoutMs, PROXY_SSE_READ_IDLE_TIMEOUT_MS);
-}
-
-type ProxyRequestAbort = {
-  signal: AbortSignal;
-  clear: () => void;
-};
 
 function createProxyRequestTimeoutError(timeoutMs: number): Error {
   const error = new Error(`Proxy request timed out after ${timeoutMs}ms`);
@@ -152,10 +131,7 @@ function createProxyRequestTimeoutError(timeoutMs: number): Error {
   return error;
 }
 
-function buildProxyRequestAbort(
-  callerSignal: AbortSignal | undefined,
-  timeoutMs: number,
-): ProxyRequestAbort {
+function buildProxyRequestAbort(callerSignal: AbortSignal | undefined, timeoutMs: number) {
   const timeoutController = new AbortController();
   const timeoutId = setTimeout(() => {
     timeoutController.abort(createProxyRequestTimeoutError(timeoutMs));
@@ -170,24 +146,6 @@ function buildProxyRequestAbort(
   };
 }
 
-function isProxyRequestTimeoutError(params: {
-  error: unknown;
-  callerSignal: AbortSignal | undefined;
-  requestSignal: AbortSignal;
-}): boolean {
-  if (params.callerSignal?.aborted || !params.requestSignal.aborted) {
-    return false;
-  }
-  if (!(params.error instanceof Error)) {
-    return false;
-  }
-  return (
-    params.error.name === "AbortError" ||
-    params.error.name === "TimeoutError" ||
-    params.error.message === "Request was aborted"
-  );
-}
-
 async function readProxyErrorData(
   response: Response,
   readIdleTimeoutMs: number,
@@ -198,69 +156,25 @@ async function readProxyErrorData(
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(`Proxy error body stalled: no data received for ${chunkTimeoutMs}ms`),
   });
-  return JSON.parse(new TextDecoder().decode(bytes)) as { error?: string };
+  return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as { error?: string };
 }
 
-async function readProxySseChunk(
-  reader: Pick<SseByteGuard, "read" | "cancel">,
-  readIdleTimeoutMs: number,
-): Promise<ReadableStreamReadResult<Uint8Array>> {
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  let timedOut = false;
-  return await new Promise((resolve, reject) => {
-    const timeoutError = new Error(
-      `Proxy SSE stream stalled: no data received for ${readIdleTimeoutMs}ms`,
-    );
-    timeoutId = setTimeout(() => {
-      timedOut = true;
-      void reader.cancel(timeoutError);
-      reject(timeoutError);
-    }, readIdleTimeoutMs);
-    void reader.read().then(
-      (result) => {
-        if (timeoutId !== undefined) {
-          clearTimeout(timeoutId);
-        }
-        if (!timedOut) {
-          resolve(result);
-        }
-      },
-      (error: unknown) => {
-        if (timeoutId !== undefined) {
-          clearTimeout(timeoutId);
-        }
-        if (!timedOut) {
-          reject(error instanceof Error ? error : new Error(String(error)));
-        }
-      },
-    );
-  });
-}
-
-function assertProxySsePendingBufferWithinLimit(
-  buffer: string,
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-): void {
+function assertProxySsePendingBufferWithinLimit(buffer: string): void {
   const size = new TextEncoder().encode(buffer).byteLength;
   if (size <= PROXY_SSE_PENDING_BUFFER_MAX_BYTES) {
     return;
   }
-  const error = new Error(
-    `Proxy SSE pending buffer exceeded ${PROXY_SSE_PENDING_BUFFER_MAX_BYTES} bytes`,
-  );
-  void reader.cancel(error).catch(() => undefined);
-  throw error;
+  throw new Error(`Proxy SSE pending buffer exceeded ${PROXY_SSE_PENDING_BUFFER_MAX_BYTES} bytes`);
 }
 
 export function streamProxy(
   model: Model,
   context: Context,
   options: ProxyStreamOptions,
-): ProxyMessageEventStream {
-  const stream = new ProxyMessageEventStream();
+): AssistantMessageEventStream {
+  const stream = new AssistantMessageEventStream();
 
   void (async () => {
-    // Initialize the partial message that we'll build up from events
     const partial: AssistantMessage = {
       role: "assistant",
       stopReason: "stop",
@@ -268,29 +182,22 @@ export function streamProxy(
       api: model.api,
       provider: model.provider,
       model: model.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      usage: makeZeroUsageSnapshot(),
       timestamp: Date.now(),
     };
 
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-    const readIdleTimeoutMs = resolveProxyReadIdleTimeoutMs(options.timeoutMs);
-
-    const abortHandler = () => {
-      if (reader) {
-        reader.cancel("Request aborted by user").catch(() => {});
-      }
-    };
-
-    if (options.signal) {
-      options.signal.addEventListener("abort", abortHandler);
-    }
+    let readerReachedEof = false;
+    let cancellation: Promise<void> | undefined;
+    let cleanupReason: unknown;
+    const readIdleTimeoutMs = resolvePositiveTimerTimeoutMs(
+      options.timeoutMs,
+      PROXY_SSE_READ_IDLE_TIMEOUT_MS,
+    );
+    const cancelReader = (reason?: unknown) =>
+      reader ? (cancellation ??= reader.cancel(reason).catch(() => undefined)) : Promise.resolve();
+    const abortHandler = () => void cancelReader("Request aborted by user");
+    options.signal?.addEventListener("abort", abortHandler);
 
     try {
       const requestAbort = buildProxyRequestAbort(options.signal, readIdleTimeoutMs);
@@ -309,14 +216,15 @@ export function streamProxy(
       })
         .catch((error: unknown) => {
           if (
-            isProxyRequestTimeoutError({
-              error,
-              callerSignal: options.signal,
-              requestSignal: requestAbort.signal,
-            })
+            !options.signal?.aborted &&
+            requestAbort.signal.aborted &&
+            error instanceof Error &&
+            (error.name === "AbortError" ||
+              error.name === "TimeoutError" ||
+              error.message === "Request was aborted")
           ) {
             throw new Error(`Proxy request timed out after ${readIdleTimeoutMs}ms`, {
-              cause: error instanceof Error ? error : undefined,
+              cause: error,
             });
           }
           throw error;
@@ -348,27 +256,40 @@ export function streamProxy(
       const decoder = new TextDecoder();
       let buffer = "";
       let terminalEventSeen = false;
+      const toolArgumentPreviewSchedules = new Map<number, ToolArgumentPreviewSchedule>();
 
-      const processSseLine = (line: string) => {
-        if (!line.startsWith("data: ")) {
-          return;
+      const processSseLine = (line: string): boolean => {
+        // The SSE spec makes the space after "data:" optional; accept both
+        // `data:{...}` and `data: {...}`, mirroring provider-transport-fetch.
+        if (!line.startsWith("data:")) {
+          return false;
         }
-        const data = line.slice(6).trim();
+        const data = line.slice("data:".length).trim();
         if (!data) {
-          return;
+          return false;
         }
         const proxyEvent = JSON.parse(data) as ProxyAssistantMessageEvent;
-        const event = processProxyEvent(proxyEvent, partial);
+        const event = processProxyEvent(proxyEvent, partial, toolArgumentPreviewSchedules);
         if (!event) {
-          return;
+          return false;
         }
-        terminalEventSeen = event.type === "done" || event.type === "error";
         stream.push(event);
+        return event.type === "done" || event.type === "error";
       };
 
-      while (true) {
-        const { done, value } = await readProxySseChunk(sseReader, readIdleTimeoutMs);
+      while (!terminalEventSeen) {
+        const { done, value } = await withResponseBodyTimeout({
+          timeoutMs: readIdleTimeoutMs,
+          onTimeout: () =>
+            new Error(`Proxy SSE stream stalled: no data received for ${readIdleTimeoutMs}ms`),
+          cancel: cancelReader,
+          read: () =>
+            sseReader.read().catch((error: unknown) => {
+              throw toStringifiedError(error);
+            }),
+        });
         if (done) {
+          readerReachedEof = cancellation === undefined;
           break;
         }
 
@@ -379,19 +300,24 @@ export function streamProxy(
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
         buffer = lines.pop() || "";
-        assertProxySsePendingBufferWithinLimit(buffer, reader);
+        assertProxySsePendingBufferWithinLimit(buffer);
 
         for (const line of lines) {
-          processSseLine(line);
+          terminalEventSeen = processSseLine(line);
+          if (terminalEventSeen) {
+            break;
+          }
         }
       }
 
       if (options.signal?.aborted) {
         throw new Error("Request aborted by user");
       }
-      buffer += decoder.decode();
-      if (buffer.trim()) {
-        processSseLine(buffer);
+      if (readerReachedEof) {
+        buffer += decoder.decode();
+        if (buffer.trim()) {
+          terminalEventSeen = processSseLine(buffer);
+        }
       }
       if (!terminalEventSeen) {
         throw new Error("Proxy stream ended before terminal event");
@@ -399,6 +325,7 @@ export function streamProxy(
 
       stream.end();
     } catch (error) {
+      cleanupReason = error;
       const errorMessage = error instanceof Error ? error.message : String(error);
       const reason = options.signal?.aborted ? "aborted" : "error";
       partial.stopReason = reason;
@@ -411,26 +338,26 @@ export function streamProxy(
       stream.end();
     } finally {
       try {
+        if (reader && !readerReachedEof) {
+          // Upstream cancellation may never settle; it must not prevent reader release.
+          void cancelReader(cleanupReason);
+        }
         reader?.releaseLock();
       } catch {
         // Stream handling above already pushed the terminal proxy event;
         // cleanup failures must not replace it with a secondary release error.
       }
-      if (options.signal) {
-        options.signal.removeEventListener("abort", abortHandler);
-      }
+      options.signal?.removeEventListener("abort", abortHandler);
     }
   })();
 
   return stream;
 }
 
-/**
- * Process a proxy event and update the partial message.
- */
 function processProxyEvent(
   proxyEvent: ProxyAssistantMessageEvent,
   partial: AssistantMessage,
+  toolArgumentPreviewSchedules: Map<number, ToolArgumentPreviewSchedule>,
 ): AssistantMessageEvent | undefined {
   switch (proxyEvent.type) {
     case "start":
@@ -446,18 +373,41 @@ function processProxyEvent(
       };
       return { type: "text_start", contentIndex: proxyEvent.contentIndex, partial };
 
-    case "text_delta": {
+    case "text_delta":
+    case "thinking_delta":
+    case "toolcall_delta": {
       const content = partial.content[proxyEvent.contentIndex];
-      if (content?.type === "text") {
-        content.text += proxyEvent.delta;
-        return {
-          type: "text_delta",
-          contentIndex: proxyEvent.contentIndex,
-          delta: proxyEvent.delta,
-          partial,
-        };
+      const expectedType =
+        proxyEvent.type === "text_delta"
+          ? "text"
+          : proxyEvent.type === "thinking_delta"
+            ? "thinking"
+            : "toolCall";
+      if (content?.type !== expectedType) {
+        throw new Error(`Received ${proxyEvent.type} for non-${expectedType} content`);
       }
-      throw new Error("Received text_delta for non-text content");
+      if (content.type === "text") {
+        content.text += proxyEvent.delta;
+      } else if (content.type === "thinking") {
+        content.thinking += proxyEvent.delta;
+      } else {
+        const streamingContent = content as StreamingToolCall;
+        streamingContent.partialJson += proxyEvent.delta;
+        const previewSchedule = toolArgumentPreviewSchedules.get(proxyEvent.contentIndex);
+        if (!previewSchedule) {
+          throw new Error("Received toolcall_delta without a preview schedule");
+        }
+        if (previewSchedule(streamingContent.partialJson.length)) {
+          content.arguments = parseStreamingJson(streamingContent.partialJson);
+        }
+        partial.content[proxyEvent.contentIndex] = { ...content }; // Trigger reactivity
+      }
+      return {
+        type: proxyEvent.type,
+        contentIndex: proxyEvent.contentIndex,
+        delta: proxyEvent.delta,
+        partial,
+      };
     }
 
     case "text_end": {
@@ -480,20 +430,6 @@ function processProxyEvent(
       partial.content[proxyEvent.contentIndex] = { type: "thinking", thinking: "" };
       return { type: "thinking_start", contentIndex: proxyEvent.contentIndex, partial };
 
-    case "thinking_delta": {
-      const content = partial.content[proxyEvent.contentIndex];
-      if (content?.type === "thinking") {
-        content.thinking += proxyEvent.delta;
-        return {
-          type: "thinking_delta",
-          contentIndex: proxyEvent.contentIndex,
-          delta: proxyEvent.delta,
-          partial,
-        };
-      }
-      throw new Error("Received thinking_delta for non-thinking content");
-    }
-
     case "thinking_end": {
       const content = partial.content[proxyEvent.contentIndex];
       if (content?.type === "thinking") {
@@ -508,37 +444,31 @@ function processProxyEvent(
       throw new Error("Received thinking_end for non-thinking content");
     }
 
-    case "toolcall_start":
-      partial.content[proxyEvent.contentIndex] = {
+    case "toolcall_start": {
+      const content = {
         type: "toolCall",
         id: proxyEvent.id,
         name: proxyEvent.toolName,
         arguments: {},
         partialJson: "",
-      } satisfies ToolCall & { partialJson: string } as ToolCall;
+      } satisfies StreamingToolCall;
+      partial.content[proxyEvent.contentIndex] = content;
+      toolArgumentPreviewSchedules.set(
+        proxyEvent.contentIndex,
+        createToolArgumentPreviewSchedule(),
+      );
       return { type: "toolcall_start", contentIndex: proxyEvent.contentIndex, partial };
-
-    case "toolcall_delta": {
-      const content = partial.content[proxyEvent.contentIndex];
-      if (content?.type === "toolCall") {
-        const streamingContent = content as StreamingToolCall;
-        streamingContent.partialJson = `${streamingContent.partialJson ?? ""}${proxyEvent.delta}`;
-        content.arguments = parseStreamingJson(streamingContent.partialJson) || {};
-        partial.content[proxyEvent.contentIndex] = { ...content }; // Trigger reactivity
-        return {
-          type: "toolcall_delta",
-          contentIndex: proxyEvent.contentIndex,
-          delta: proxyEvent.delta,
-          partial,
-        };
-      }
-      throw new Error("Received toolcall_delta for non-toolCall content");
     }
 
     case "toolcall_end": {
       const content = partial.content[proxyEvent.contentIndex];
       if (content?.type === "toolCall") {
-        delete (content as StreamingToolCall).partialJson;
+        const streamingContent = content as StreamingToolCall;
+        content.arguments = streamingContent.partialJson
+          ? parseTerminalToolCallArguments(streamingContent.partialJson)
+          : {};
+        toolArgumentPreviewSchedules.delete(proxyEvent.contentIndex);
+        delete (content as Partial<StreamingToolCall>).partialJson;
         return {
           type: "toolcall_end",
           contentIndex: proxyEvent.contentIndex,

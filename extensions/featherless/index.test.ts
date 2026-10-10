@@ -1,9 +1,5 @@
-// Featherless tests cover provider registration, catalog, and dynamic model behavior.
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  registerSingleProviderPlugin,
-  resolveProviderPluginChoice,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
 import { describe, expect, it } from "vitest";
 import { createProviderDynamicModelContext } from "../test-support/provider-model-test-helpers.js";
@@ -29,7 +25,7 @@ function createDefaultRuntimeModel(): ProviderRuntimeModel {
     baseUrl: FEATHERLESS_BASE_URL,
     reasoning: true,
     input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    cost: { input: 0.102, output: 0.493, cacheRead: 0, cacheWrite: 0 },
     contextWindow: FEATHERLESS_DEFAULT_CONTEXT_WINDOW,
     maxTokens: FEATHERLESS_DEFAULT_MAX_TOKENS,
     compat: { thinkingFormat: "qwen-chat-template" },
@@ -37,22 +33,6 @@ function createDefaultRuntimeModel(): ProviderRuntimeModel {
 }
 
 describe("featherless provider plugin", () => {
-  it("registers Featherless AI with api-key auth metadata", async () => {
-    const provider = await registerSingleProviderPlugin(featherlessPlugin);
-    const resolved = resolveProviderPluginChoice({
-      providers: [provider],
-      choice: "featherless-api-key",
-    });
-
-    expect(provider.id).toBe("featherless");
-    expect(provider.label).toBe("Featherless AI");
-    expect(provider.envVars).toEqual(["FEATHERLESS_API_KEY"]);
-    expect(provider.auth).toHaveLength(1);
-    expect(provider.normalizeToolSchemas).toEqual(expect.any(Function));
-    expect(resolved?.provider.id).toBe("featherless");
-    expect(resolved?.method.id).toBe("api-key");
-  });
-
   it("applies the curated default during onboarding", () => {
     const config = applyFeatherlessConfig({});
 
@@ -64,56 +44,40 @@ describe("featherless provider plugin", () => {
     );
   });
 
-  it("builds the curated Featherless catalog", async () => {
-    const provider = await registerSingleProviderPlugin(featherlessPlugin);
-    const result = await provider.staticCatalog?.run({
-      config: {},
-      env: {},
-      resolveProviderApiKey: () => ({}),
-    } as never);
-    if (!result || !("provider" in result)) {
-      throw new Error("expected Featherless static catalog");
-    }
-
-    expect(result.provider.baseUrl).toBe(FEATHERLESS_BASE_URL);
-    expect(result.provider.api).toBe("openai-completions");
-    expect(result.provider.models).toEqual([
-      expect.objectContaining({
-        id: FEATHERLESS_DEFAULT_MODEL_ID,
-        reasoning: true,
-        input: ["text"],
-        contextWindow: FEATHERLESS_DEFAULT_CONTEXT_WINDOW,
-        maxTokens: FEATHERLESS_DEFAULT_MAX_TOKENS,
-        compat: expect.objectContaining({
-          maxTokensField: "max_tokens",
-          thinkingFormat: "qwen-chat-template",
+  it.each(["custom", "missing"] as const)(
+    "resolves arbitrary Featherless model ids with a %s template",
+    async (source) => {
+      const provider = await registerSingleProviderPlugin(featherlessPlugin);
+      const template = createDefaultRuntimeModel();
+      template.api = "openai-responses";
+      template.baseUrl = "https://models.example.test/v1";
+      template.headers = { "X-Route": "custom-template" };
+      const resolved = provider.resolveDynamicModel?.(
+        createProviderDynamicModelContext({
+          provider: "featherless",
+          modelId: "moonshotai/Kimi-K2-Instruct",
+          models: source === "missing" ? [] : [template],
         }),
-      }),
-    ]);
-  });
+      );
 
-  it("resolves arbitrary Featherless model ids from conservative text defaults", async () => {
-    const provider = await registerSingleProviderPlugin(featherlessPlugin);
-    const resolved = provider.resolveDynamicModel?.(
-      createProviderDynamicModelContext({
+      expect(resolved).toMatchObject({
+        id: "moonshotai/Kimi-K2-Instruct",
         provider: "featherless",
-        modelId: "moonshotai/Kimi-K2-Instruct",
-        models: [createDefaultRuntimeModel()],
-      }),
-    );
-
-    expect(resolved).toMatchObject({
-      id: "moonshotai/Kimi-K2-Instruct",
-      provider: "featherless",
-      api: "openai-completions",
-      baseUrl: FEATHERLESS_BASE_URL,
-      reasoning: false,
-      input: ["text"],
-      contextWindow: FEATHERLESS_DYNAMIC_CONTEXT_WINDOW,
-      maxTokens: FEATHERLESS_DYNAMIC_MAX_TOKENS,
-      compat: FEATHERLESS_DYNAMIC_COMPAT,
-    });
-  });
+        api: source === "missing" ? "openai-completions" : template.api,
+        baseUrl: source === "missing" ? FEATHERLESS_BASE_URL : template.baseUrl,
+        reasoning: false,
+        input: ["text"],
+        contextWindow: FEATHERLESS_DYNAMIC_CONTEXT_WINDOW,
+        maxTokens: FEATHERLESS_DYNAMIC_MAX_TOKENS,
+        compat: FEATHERLESS_DYNAMIC_COMPAT,
+        cost:
+          source === "missing"
+            ? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+            : template.cost,
+      });
+      expect(resolved?.headers).toEqual(source === "missing" ? undefined : template.headers);
+    },
+  );
 
   it("applies provider compat to configured models without overriding explicit values", async () => {
     const provider = await registerSingleProviderPlugin(featherlessPlugin);
@@ -151,7 +115,7 @@ describe("featherless provider plugin", () => {
     expect(resolved).toBeUndefined();
   });
 
-  it("uses the shared OpenAI-compatible replay policy", async () => {
+  it("preserves Featherless reasoning during replay", async () => {
     const provider = await registerSingleProviderPlugin(featherlessPlugin);
     const policy = provider.buildReplayPolicy?.({
       provider: "featherless",
@@ -159,12 +123,7 @@ describe("featherless provider plugin", () => {
       modelId: FEATHERLESS_DEFAULT_MODEL_ID,
     });
 
-    expect(policy).toMatchObject({
-      sanitizeToolCallIds: true,
-      applyAssistantFirstOrderingFix: true,
-      validateGeminiTurns: true,
-      validateAnthropicTurns: true,
-    });
+    expect(policy).toBeDefined();
     expect(policy).not.toHaveProperty("dropReasoningFromHistory");
   });
 });

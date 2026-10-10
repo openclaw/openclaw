@@ -1,12 +1,19 @@
+import { applyPatch } from "diff";
 import { describe, expect, it } from "vitest";
-import { applyEditsToNormalizedContent, generateDiffString, normalizeToLF } from "./edit-diff.js";
+import { prepareFileEdit, type Edit } from "./edit-diff.js";
+import { prepareFileDiff } from "./file-diff.js";
 
-function getMismatchMessage(
-  content: string,
-  edits: Array<{ oldText: string; newText: string }>,
-): string {
+function prepareChangedEdit(content: string, edits: Edit[], path: string) {
+  const plan = prepareFileEdit(content, edits, path);
+  if (!plan.changed) {
+    throw new Error("Expected an edit plan that changes the file");
+  }
+  return plan;
+}
+
+function getMismatchMessage(content: string, edits: Edit[]): string {
   try {
-    applyEditsToNormalizedContent(normalizeToLF(content), edits, "test.ts");
+    prepareFileEdit(content, edits, "test.ts");
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
   }
@@ -99,28 +106,30 @@ describe("applyEditsToNormalizedContent", () => {
   });
 });
 
-describe("generateDiffString", () => {
+describe("prepareFileDiff", () => {
   it("numbers context lines from the new file after an insertion", () => {
-    const result = generateDiffString(
+    const result = prepareFileDiff(
+      "example.txt",
       "first\nthird\nfourth\n",
       "first\nsecond\nthird\nfourth\n",
-      2,
+      { context: 2 },
     );
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       diff: " 1 first\n+2 second\n 3 third\n 4 fourth",
       firstChangedLine: 2,
     });
   });
 
   it("numbers context lines from the new file after a deletion", () => {
-    const result = generateDiffString(
+    const result = prepareFileDiff(
+      "example.txt",
       "first\nsecond\nthird\nfourth\n",
       "first\nthird\nfourth\n",
-      2,
+      { context: 2 },
     );
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       diff: " 1 first\n-2 second\n 2 third\n 3 fourth",
       firstChangedLine: 2,
     });
@@ -130,9 +139,128 @@ describe("generateDiffString", () => {
     const oldContent = Array.from({ length: 10 }, (_, index) => String(index + 1)).join("\n");
     const newContent = oldContent.replace(/^2$/m, "TWO").replace(/^9$/m, "NINE");
 
-    expect(generateDiffString(oldContent, newContent, 1)).toEqual({
+    const result = prepareFileDiff("example.txt", oldContent, newContent, { context: 1 });
+    expect(result).toMatchObject({
       diff: "  1 1\n- 2 2\n+ 2 TWO\n  3 3\n    ...\n  8 8\n- 9 9\n+ 9 NINE\n 10 10",
       firstChangedLine: 2,
     });
+    if (!result) {
+      throw new Error("Expected an unbounded diff receipt");
+    }
+    expect(applyPatch(oldContent, result.patch)).toBe(newContent);
+  });
+});
+
+describe("applyEditsToNormalizedContent uniqueness", () => {
+  it("replaces an exactly unique match when trailing whitespace makes a sibling line fuzzy-identical", () => {
+    const content = "foo();  \nfoo();\nbar();\n";
+
+    const result = prepareChangedEdit(
+      content,
+      [{ oldText: "foo();\n", newText: "baz();\n" }],
+      "test.ts",
+    );
+
+    expect(result.content).toBe("foo();  \nbaz();\nbar();\n");
+  });
+});
+
+describe("fuzzy edit source-span mapping", () => {
+  it("maps smart-quote folds while preserving a smart-quote comment", () => {
+    const content =
+      "const label = \u201Chello\u201D; // keep \u201Ccomment\u201D \u2014 unchanged\n";
+    const result = prepareChangedEdit(
+      content,
+      [{ oldText: 'const label = "hello";', newText: "const label = 'hi';" }],
+      "test.ts",
+    );
+
+    expect(result.content).toBe(
+      "const label = 'hi'; // keep \u201Ccomment\u201D \u2014 unchanged\n",
+    );
+  });
+
+  it("allows a match that covers a complete NFKC expansion", () => {
+    const result = prepareChangedEdit(
+      "const value = \uFB01;\n",
+      [{ oldText: "fi", newText: "pair" }],
+      "test.ts",
+    );
+
+    expect(result.content).toBe("const value = pair;\n");
+  });
+
+  it("rejects a match ending inside an NFKC expansion", () => {
+    expect(() =>
+      prepareChangedEdit("const value = \uFB01;\n", [{ oldText: "f", newText: "x" }], "test.ts"),
+    ).toThrow(/ambiguous Unicode-normalization or trimmed-whitespace boundary/);
+  });
+
+  it("maps a complete combining sequence and preserves supplementary characters", () => {
+    const content = "const caf\u0065\u0301 = 1; // \u{1F642}\n";
+    const result = prepareChangedEdit(
+      content,
+      [{ oldText: "const caf\u00E9 = 1;", newText: "const cafe = 2;" }],
+      "test.ts",
+    );
+
+    expect(result.content).toBe("const cafe = 2; // \u{1F642}\n");
+  });
+
+  it("preserves trimmed bytes at EOF", () => {
+    const result = prepareChangedEdit(
+      "const value\u00A0= 1;  ",
+      [{ oldText: "const value = 1;", newText: "const value = 2;" }],
+      "test.ts",
+    );
+
+    expect(result.content).toBe("const value = 2;  ");
+  });
+
+  it("keeps trim-folding behavior inside a complete fuzzy span", () => {
+    const result = prepareChangedEdit(
+      "before\nfirst  \nsecond\nafter  \n",
+      [{ oldText: "first\nsecond", newText: "combined" }],
+      "test.ts",
+    );
+
+    expect(result.content).toBe("before\ncombined\nafter  \n");
+  });
+
+  it("preserves CRLF while mapping a fuzzy Unicode span", () => {
+    const result = prepareChangedEdit(
+      "const value\u00A0= 1;\r\nnext\r\n",
+      [{ oldText: "const value = 1;", newText: "const value = 2;" }],
+      "test.ts",
+    );
+
+    expect(result.content).toBe("const value = 2;\r\nnext\r\n");
+  });
+
+  it.each(["fuzzy first", "exact first"])(
+    "keeps mixed replacements in original coordinates with %s",
+    (order) => {
+      const edits = [
+        { oldText: "const a = 1;", newText: "const a = 3;" },
+        { oldText: "const b = 2;", newText: "const b = 4;" },
+      ];
+      const result = prepareChangedEdit(
+        "const a\u00A0= 1;\nconst b = 2;\n",
+        order === "exact first" ? edits.toReversed() : edits,
+        "test.ts",
+      );
+
+      expect(result.content).toBe("const a = 3;\nconst b = 4;\n");
+    },
+  );
+});
+
+describe("applyEditsToNormalizedContent fuzzy uniqueness", () => {
+  it("still rejects a fuzzy match that is ambiguous once normalization is applied", () => {
+    const content = "foo();  \nfoo();\t\nbar();\n";
+
+    expect(() =>
+      prepareChangedEdit(content, [{ oldText: "foo();\n", newText: "baz();\n" }], "test.ts"),
+    ).toThrow(/Found 2 occurrences/);
   });
 });

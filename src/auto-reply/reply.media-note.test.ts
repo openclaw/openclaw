@@ -13,7 +13,7 @@ describe("getReplyFromConfig media note plumbing", () => {
       MediaPaths: ["/tmp/a.png", "/tmp/b.png"],
       MediaUrls: ["/tmp/a.png", "/tmp/b.png"],
     });
-    const prompt = buildReplyPromptEnvelope({
+    const envelope = buildReplyPromptEnvelope({
       ctx: sessionCtx,
       sessionCtx,
       baseBody: sessionCtx.BodyForAgent,
@@ -22,15 +22,19 @@ describe("getReplyFromConfig media note plumbing", () => {
       isBareSessionReset: false,
       startupAction: "new",
       prefixedBody: sessionCtx.BodyForAgent,
-    }).prefixedCommandBody;
+      sourceReplyDeliveryMode: "automatic",
+    });
+    const prompt = envelope.prefixedCommandBody;
 
-    expect(prompt).toContain("[media attached: 2 files]");
-    const idxA = prompt.indexOf("[media attached 1/2: /tmp/a.png");
-    const idxB = prompt.indexOf("[media attached 2/2: /tmp/b.png");
-    expect(idxA).toBeGreaterThanOrEqual(0);
-    expect(idxB).toBeGreaterThanOrEqual(0);
-    expect(idxA).toBeLessThan(idxB);
-    expect(prompt).toContain("hello");
+    const mediaNote = [
+      "[media attached: 2 files]",
+      "[media attached 1/2: /tmp/a.png (application/octet-stream)]",
+      "[media attached 2/2: /tmp/b.png (application/octet-stream)]",
+    ].join("\n");
+    expect(prompt).toBe(`${mediaNote}\nhello`);
+    expect(envelope.queuedBody).toBe(`${mediaNote}\nhello`);
+    expect(envelope.transcriptCommandBody).toBe(`${mediaNote}\nhello`);
+    expect(envelope.media?.map(({ path }) => path)).toEqual(["/tmp/a.png", "/tmp/b.png"]);
   });
 
   it("keeps the real image attachment note after image understanding rewrites the body", () => {

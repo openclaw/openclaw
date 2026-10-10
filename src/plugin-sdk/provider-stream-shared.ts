@@ -1,6 +1,9 @@
-// Provider stream shared helpers implement reusable stream wrappers and payload policies.
 import { resolveOpenAIReasoningEffortForModel } from "@openclaw/ai/internal/openai";
-import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
+import {
+  createEmptyTransportUsage,
+  resolveOpenAIReasoningEffortMap,
+} from "@openclaw/ai/transports";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   createPromotedPlainTextToolCallBlock,
   createPromotedPlainTextToolCallEvents,
@@ -11,14 +14,30 @@ import {
   type PlainTextToolCallNameMatcher,
   type PlainTextToolCallMessageNormalization,
 } from "../../packages/tool-call-repair/src/index.js";
-import { resolveOpenAIReasoningEffortMap } from "../agents/openai-reasoning-compat.js";
 import type { StreamFn } from "../agents/runtime/index.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
+import {
+  sanitizeGoogleThinkingPayload,
+  type GoogleThinkingInputLevel,
+} from "../llm/providers/stream-wrappers/google-thinking-payload.js";
 import { mapThinkingLevelToReasoningEffort } from "../llm/providers/stream-wrappers/reasoning-effort-utils.js";
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
 import { streamSimple } from "../llm/stream.js";
+import type { AssistantMessage, Model } from "../llm/types.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
-export { applyAnthropicRefusal } from "@openclaw/ai/internal/anthropic";
+import { findCodeRegions } from "../shared/text/code-regions.js";
+import { assertProviderStreamEvent } from "./provider-stream-event-normalization.js";
+export {
+  isGoogleGemini3FlashModel,
+  isGoogleGemini3ProModel,
+  isGoogleGemini3ThinkingLevelModel,
+} from "@openclaw/ai/internal/google-model-family";
+export {
+  applyAnthropicRefusal,
+  isAnthropicOAuthApiKey,
+  resolveAnthropicServerCompactionPlan,
+  resolveAnthropicThinkingEffort,
+} from "@openclaw/ai/internal/anthropic";
 export { createDeferredEventBuffer } from "@openclaw/ai/internal/runtime";
 export { notifyLlmRequestActivity, onLlmRequestActivity } from "@openclaw/ai/internal/runtime";
 
@@ -42,32 +61,14 @@ export function composeProviderStreamWrappers(
   );
 }
 
-function toRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
-}
-
-function resolveContextToolNames(context: Parameters<StreamFn>[1]): Set<string> {
-  const tools = (context as { tools?: unknown }).tools;
-  if (!Array.isArray(tools)) {
-    return new Set();
-  }
-  const names = tools
-    .map((tool) => {
-      const record = toRecord(tool);
-      return typeof record?.name === "string" && record.name.trim() ? record.name : undefined;
-    })
-    .filter((name): name is string => Boolean(name));
-  return new Set(names);
-}
-
 function promotePlainTextToolCalls(
   message: unknown,
   toolNames: Set<string>,
 ): PlainTextToolCallMessageProjection | undefined {
-  const messageRecord = toRecord(message);
+  const messageRecord = asOptionalObjectRecord(message);
   if (
     Array.isArray(messageRecord?.content) &&
-    messageRecord.content.some((block) => toRecord(block)?.type === "toolCall")
+    messageRecord.content.some((block) => asOptionalObjectRecord(block)?.type === "toolCall")
   ) {
     return undefined;
   }
@@ -76,6 +77,7 @@ function promotePlainTextToolCalls(
     createToolCallBlock: createPromotedPlainTextToolCallBlock,
     isRetainableNonTextBlock: () => true,
     message,
+    resolveProtectedRanges: findCodeRegions,
   });
 }
 
@@ -100,7 +102,13 @@ function normalizeProviderDoneMessage(
   matcher: PlainTextToolCallNameMatcher,
   preserveEmptyTextBlocks = false,
 ): PlainTextToolCallMessageNormalization {
-  const scrubbedMessage = scrubProviderTerminalMessage(message, matcher, preserveEmptyTextBlocks);
+  const scrubbedMessage = projectScrubbedPlainTextToolCallMessage({
+    forceKnownCandidates: false,
+    matcher,
+    message,
+    preserveEmptyTextBlocks,
+    resolveProtectedRanges: findCodeRegions,
+  });
   if (scrubbedMessage) {
     return { kind: "scrubbed", ...scrubbedMessage };
   }
@@ -113,78 +121,66 @@ function normalizeProviderDoneMessage(
   return promotedMessage ? { kind: "promoted", ...promotedMessage } : undefined;
 }
 
-function scrubProviderTerminalMessage(
-  message: unknown,
-  matcher: PlainTextToolCallNameMatcher,
-  preserveEmptyTextBlocks = false,
-  forceKnownCandidates = false,
-): PlainTextToolCallMessageProjection | undefined {
-  return projectScrubbedPlainTextToolCallMessage({
-    forceKnownCandidates,
-    matcher,
-    message,
-    preserveEmptyTextBlocks,
-  });
-}
-
 function wrapPlainTextToolCallStream(
-  source: ReturnType<StreamFn>,
+  source: Awaited<ReturnType<StreamFn>>,
   context: Parameters<StreamFn>[1],
+  model: Model,
 ): ReturnType<StreamFn> {
-  const toolNames = resolveContextToolNames(context);
+  const toolNames = new Set(
+    (context.tools ?? []).map((tool) => tool.name).filter((name) => name.trim()),
+  );
   if (toolNames.size === 0) {
     return source;
   }
   const matcher = createProviderToolNameMatcher(toolNames);
   const output = createAssistantMessageEventStream();
-  const stream = output as unknown as { push(event: unknown): void; end(): void };
 
   void (async () => {
-    let ended = false;
-    const endStream = () => {
-      if (!ended) {
-        ended = true;
-        stream.end();
-      }
-    };
-
     try {
-      const normalizedEvents = normalizePlainTextToolCallStreamEvents(
-        source as AsyncIterable<unknown>,
-        {
-          createPromotedToolCallEvents: createPromotedPlainTextToolCallEvents,
-          matcher,
-          normalizeTerminalMessage: ({ allowPromotion, message, preserveEmptyTextBlocks }) =>
-            normalizeProviderDoneMessage(
-              message,
-              allowPromotion,
-              toolNames,
-              matcher,
-              preserveEmptyTextBlocks,
-            ),
-          stopAfterDone: true,
-        },
-      );
-      for await (const event of normalizedEvents) {
-        stream.push(event);
+      const normalizedEvents = normalizePlainTextToolCallStreamEvents(source, {
+        createPromotedToolCallEvents: createPromotedPlainTextToolCallEvents,
+        matcher,
+        normalizeTerminalMessage: ({ allowPromotion, message, preserveEmptyTextBlocks }) =>
+          normalizeProviderDoneMessage(
+            message,
+            allowPromotion,
+            toolNames,
+            matcher,
+            preserveEmptyTextBlocks,
+          ),
+        // findCodeRegions resolves exactly the CommonMark fenced/indented/inline code shapes
+        // the carried fence scan models (and yields to the full parse for the rest), so its
+        // protection is safe to trust from the fast path.
+        protectedRangesFenceCompatible: true,
+        resolveProtectedRanges: findCodeRegions,
+        stopAfterDone: true,
+      });
+      for await (const normalizedEvent of normalizedEvents) {
+        assertProviderStreamEvent(normalizedEvent, model);
+        output.push(normalizedEvent);
       }
     } catch (error) {
-      stream.push({
+      output.push({
         type: "error",
         reason: "error",
         error: {
           role: "assistant",
           content: [],
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          usage: createEmptyTransportUsage(),
           stopReason: "error",
           errorMessage: error instanceof Error ? error.message : String(error),
+          timestamp: Date.now(),
         },
       });
     } finally {
-      endStream();
+      output.end();
     }
   })();
 
-  return output as ReturnType<StreamFn>;
+  return output;
 }
 
 /**
@@ -200,10 +196,10 @@ export function createPlainTextToolCallCompatWrapper(
     const maybeStream = underlying(model, context, options);
     if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
       return Promise.resolve(maybeStream).then((stream) =>
-        wrapPlainTextToolCallStream(stream, context),
-      ) as ReturnType<StreamFn>;
+        wrapPlainTextToolCallStream(stream, context, model),
+      );
     }
-    return wrapPlainTextToolCallStream(maybeStream, context);
+    return wrapPlainTextToolCallStream(maybeStream, context, model);
   };
 }
 
@@ -264,13 +260,15 @@ export function createPayloadPatchStreamWrapper(
 export function createOpenAICompatibleCompletionsThinkingOffWrapper(
   baseStreamFn: StreamFn | undefined,
   thinkingLevel?: ThinkLevel,
+  /** Original wire API when the runtime uses a dispatch alias. */
+  sourceApi?: ProviderWrapStreamFnContext["sourceApi"],
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
-  if (thinkingLevel !== "off") {
-    return underlying;
-  }
   return (model, context, options) => {
-    if (model.api !== "openai-completions") {
+    if (
+      (options?.reasoning ?? thinkingLevel) !== "off" ||
+      (sourceApi ?? model.api) !== "openai-completions"
+    ) {
       return underlying(model, context, options);
     }
     return streamWithPayloadPatch(underlying, model, context, options, (payload) => {
@@ -279,10 +277,10 @@ export function createOpenAICompatibleCompletionsThinkingOffWrapper(
       }
       const disabled = resolveOpenAIReasoningEffortForModel({
         model,
-        effort: "none",
+        effort: "off",
         fallbackMap: resolveOpenAIReasoningEffortMap({
-          provider: typeof model.provider === "string" ? model.provider : null,
-          id: typeof model.id === "string" ? model.id : null,
+          provider: model.provider,
+          id: model.id,
           compat: model.compat,
         }),
       });
@@ -295,32 +293,19 @@ export function createOpenAICompatibleCompletionsThinkingOffWrapper(
   };
 }
 
-function isAnthropicThinkingEnabled(payload: Record<string, unknown>): boolean {
-  const thinking = payload.thinking;
-  if (!thinking || typeof thinking !== "object") {
-    return false;
-  }
-  return (thinking as { type?: unknown }).type !== "disabled";
-}
-
 function assistantMessageHasAnthropicToolUse(message: Record<string, unknown>): boolean {
-  if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
-    return true;
-  }
-  const content = message.content;
-  if (!Array.isArray(content)) {
-    return false;
-  }
-  return content.some(
-    (block) =>
-      block &&
-      typeof block === "object" &&
-      ((block as { type?: unknown }).type === "tool_use" ||
-        (block as { type?: unknown }).type === "toolCall"),
+  return (
+    (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) ||
+    (Array.isArray(message.content) &&
+      message.content.some((block) => {
+        const type = asOptionalObjectRecord(block)?.type;
+        return type === "tool_use" || type === "toolCall";
+      }))
   );
 }
 
-function stripTrailingAssistantPrefillMessages(payload: Record<string, unknown>): number {
+/** Removes trailing assistant prefills while preserving assistant tool calls. */
+export function stripTrailingAssistantPrefillMessages(payload: Record<string, unknown>): number {
   if (!Array.isArray(payload.messages)) {
     return 0;
   }
@@ -347,10 +332,10 @@ function stripTrailingAssistantPrefillMessages(payload: Record<string, unknown>)
 export function stripTrailingAnthropicAssistantPrefillWhenThinking(
   payload: Record<string, unknown>,
 ): number {
-  if (!isAnthropicThinkingEnabled(payload)) {
-    return 0;
-  }
-  return stripTrailingAssistantPrefillMessages(payload);
+  const thinking = asOptionalObjectRecord(payload.thinking);
+  return thinking && thinking.type !== "disabled"
+    ? stripTrailingAssistantPrefillMessages(payload)
+    : 0;
 }
 
 /** @deprecated Anthropic-family provider stream helper; do not use from third-party plugins. */
@@ -415,27 +400,20 @@ export function normalizeOpenAICompatibleReasoningPayload(
   }
 }
 
-/** Applies Qwen chat-template thinking flags without discarding provider-specific kwargs. */
 export function setQwenChatTemplateThinking(
   payload: Record<string, unknown>,
   enabled: boolean,
-): void {
+): Record<string, unknown> {
   const existing = payload.chat_template_kwargs;
-  if (existing && typeof existing === "object" && !Array.isArray(existing)) {
-    const next: Record<string, unknown> = {
-      ...(existing as Record<string, unknown>),
-      enable_thinking: enabled,
-    };
-    if (!Object.hasOwn(next, "preserve_thinking")) {
-      next.preserve_thinking = true;
-    }
-    payload.chat_template_kwargs = next;
-    return;
-  }
-  payload.chat_template_kwargs = {
+  const next: Record<string, unknown> = {
+    ...(existing && typeof existing === "object" && !Array.isArray(existing) ? existing : {}),
     enable_thinking: enabled,
-    preserve_thinking: true,
   };
+  if (!Object.hasOwn(next, "preserve_thinking")) {
+    next.preserve_thinking = true;
+  }
+  payload.chat_template_kwargs = next;
+  return next;
 }
 
 /** @deprecated DeepSeek provider stream helper; do not use from third-party plugins. */
@@ -454,21 +432,17 @@ function resolveDeepSeekV4ReasoningEffort(
   return thinkingLevel === "xhigh" || thinkingLevel === "max" ? "max" : "high";
 }
 
-function stripDeepSeekV4ReasoningContent(payload: Record<string, unknown>): void {
-  if (!Array.isArray(payload.messages)) {
-    return;
-  }
-  for (const message of payload.messages) {
-    if (!message || typeof message !== "object") {
-      continue;
-    }
-    delete (message as Record<string, unknown>).reasoning_content;
-  }
-}
-
-function ensureDeepSeekV4AssistantReasoningContent(
+/** Normalizes assistant reasoning replay shared by OpenAI-compatible provider families. */
+export function normalizeOpenAICompatibleReasoningReplay(
   payload: Record<string, unknown>,
-  params?: {
+  params: {
+    /** Disabled reasoning strips replay fields instead of backfilling assistant turns. */
+    thinkingEnabled: boolean;
+    /** Restricts disabled-reasoning cleanup to assistant messages when required. */
+    stripAssistantMessagesOnly?: boolean;
+    /** Replaces explicit null values for transports that require string reasoning. */
+    replaceNullReasoningContent?: boolean;
+    /** Preserves provider-specific tool-call selection for assistant replay. */
     shouldBackfillAssistantMessage?: (message: Record<string, unknown>) => boolean;
   },
 ): void {
@@ -480,13 +454,22 @@ function ensureDeepSeekV4AssistantReasoningContent(
       continue;
     }
     const record = message as Record<string, unknown>;
-    if (record.role !== "assistant") {
+    if (!params.thinkingEnabled) {
+      if (!params.stripAssistantMessagesOnly || record.role === "assistant") {
+        delete record.reasoning_content;
+      }
       continue;
     }
-    if (params?.shouldBackfillAssistantMessage && !params.shouldBackfillAssistantMessage(record)) {
+    if (
+      record.role !== "assistant" ||
+      (params.shouldBackfillAssistantMessage && !params.shouldBackfillAssistantMessage(record))
+    ) {
       continue;
     }
-    if (!("reasoning_content" in record)) {
+    if (
+      !("reasoning_content" in record) ||
+      (params.replaceNullReasoningContent && record.reasoning_content == null)
+    ) {
       record.reasoning_content = "";
     }
   }
@@ -510,25 +493,25 @@ export function createDeepSeekV4OpenAICompatibleThinkingWrapper(params: {
       return underlying(model, context, options);
     }
 
+    const thinkingLevel = options?.reasoning ?? params.thinkingLevel;
     return streamWithPayloadPatch(underlying, model, context, options, (payload) => {
-      if (isDisabledDeepSeekV4ThinkingLevel(params.thinkingLevel)) {
+      if (isDisabledDeepSeekV4ThinkingLevel(thinkingLevel)) {
         payload.thinking = { type: "disabled" };
         delete payload.reasoning_effort;
         delete payload.reasoning;
-        stripDeepSeekV4ReasoningContent(payload);
+        normalizeOpenAICompatibleReasoningReplay(payload, { thinkingEnabled: false });
         return;
       }
 
       payload.thinking = { type: "enabled" };
-      payload.reasoning_effort = resolveReasoningEffort(params.thinkingLevel);
-      ensureDeepSeekV4AssistantReasoningContent(payload, {
+      payload.reasoning_effort = resolveReasoningEffort(thinkingLevel);
+      normalizeOpenAICompatibleReasoningReplay(payload, {
+        thinkingEnabled: true,
         shouldBackfillAssistantMessage: params.shouldBackfillAssistantReasoningContent,
       });
     });
   };
 }
-
-type ThinkingOnlyFinalTextStream = Awaited<ReturnType<StreamFn>>;
 
 function promoteThinkingOnlyFinalOutputToText(message: unknown): void {
   if (!message || typeof message !== "object") {
@@ -542,8 +525,6 @@ function promoteThinkingOnlyFinalOutputToText(message: unknown): void {
     return;
   }
 
-  let hasVisibleText = false;
-  let hasToolCall = false;
   let hasVisibleThinking = false;
   for (const block of record.content) {
     if (!block || typeof block !== "object") {
@@ -551,14 +532,13 @@ function promoteThinkingOnlyFinalOutputToText(message: unknown): void {
     }
     const typedBlock = block as { type?: unknown; text?: unknown; thinking?: unknown };
     if (
-      typedBlock.type === "text" &&
-      typeof typedBlock.text === "string" &&
-      typedBlock.text.trim()
+      (typedBlock.type === "text" &&
+        typeof typedBlock.text === "string" &&
+        typedBlock.text.trim()) ||
+      typedBlock.type === "toolCall" ||
+      typedBlock.type === "tool_use"
     ) {
-      hasVisibleText = true;
-    }
-    if (typedBlock.type === "toolCall" || typedBlock.type === "tool_use") {
-      hasToolCall = true;
+      return;
     }
     if (
       typedBlock.type === "thinking" &&
@@ -568,7 +548,7 @@ function promoteThinkingOnlyFinalOutputToText(message: unknown): void {
       hasVisibleThinking = true;
     }
   }
-  if (hasVisibleText || hasToolCall || !hasVisibleThinking) {
+  if (!hasVisibleThinking) {
     return;
   }
 
@@ -577,52 +557,53 @@ function promoteThinkingOnlyFinalOutputToText(message: unknown): void {
       return block;
     }
     const typedBlock = block as { type?: unknown; thinking?: unknown };
-    if (
-      typedBlock.type !== "thinking" ||
-      typeof typedBlock.thinking !== "string" ||
-      !typedBlock.thinking.trim()
-    ) {
-      return block;
-    }
-    return { type: "text", text: typedBlock.thinking };
+    return typedBlock.type === "thinking" &&
+      typeof typedBlock.thinking === "string" &&
+      typedBlock.thinking.trim()
+      ? { type: "text", text: typedBlock.thinking }
+      : block;
   });
 }
 
-function wrapThinkingOnlyFinalTextStream(
-  stream: ThinkingOnlyFinalTextStream,
-): ThinkingOnlyFinalTextStream {
+/** Mutate streamed and final message objects without replacing or buffering events. */
+export function transformProviderStreamMessages(
+  stream: Awaited<ReturnType<StreamFn>>,
+  transformMessage: (message: AssistantMessage) => void,
+): Awaited<ReturnType<StreamFn>> {
   const originalResult = stream.result.bind(stream);
   stream.result = async () => {
     const message = await originalResult();
-    promoteThinkingOnlyFinalOutputToText(message);
+    transformMessage(message);
     return message;
   };
 
   const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
-  (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
-    function () {
-      const iterator = originalAsyncIterator();
-      return {
-        async next() {
-          const result = await iterator.next();
-          if (!result.done && result.value && typeof result.value === "object") {
-            const event = result.value as { partial?: unknown; message?: unknown };
-            promoteThinkingOnlyFinalOutputToText(event.partial);
-            promoteThinkingOnlyFinalOutputToText(event.message);
+  stream[Symbol.asyncIterator] = function () {
+    const iterator = originalAsyncIterator();
+    return {
+      async next() {
+        const result = await iterator.next();
+        if (!result.done) {
+          const event = result.value;
+          if (event.type === "done") {
+            transformMessage(event.message);
+          } else if (event.type !== "error" && event.partial) {
+            transformMessage(event.partial);
           }
-          return result;
-        },
-        async return(value?: unknown) {
-          return iterator.return?.(value) ?? { done: true as const, value: undefined };
-        },
-        async throw(error?: unknown) {
-          return iterator.throw?.(error) ?? { done: true as const, value: undefined };
-        },
-        [Symbol.asyncIterator]() {
-          return this;
-        },
-      };
+        }
+        return result;
+      },
+      async return(value?: unknown) {
+        return iterator.return?.(value) ?? { done: true as const, value: undefined };
+      },
+      async throw(error?: unknown) {
+        return iterator.throw?.(error) ?? { done: true as const, value: undefined };
+      },
+      [Symbol.asyncIterator]() {
+        return this;
+      },
     };
+  };
   return stream;
 }
 
@@ -641,320 +622,23 @@ export function createThinkingOnlyFinalTextWrapper(params: {
       return maybeStream;
     }
     if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
-      return Promise.resolve(maybeStream).then((stream) => wrapThinkingOnlyFinalTextStream(stream));
+      return Promise.resolve(maybeStream).then((stream) =>
+        transformProviderStreamMessages(stream, promoteThinkingOnlyFinalOutputToText),
+      );
     }
-    return wrapThinkingOnlyFinalTextStream(maybeStream);
+    return transformProviderStreamMessages(maybeStream, promoteThinkingOnlyFinalOutputToText);
   };
 }
 
-/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
-export type GoogleThinkingLevel = "MINIMAL" | "LOW" | "MEDIUM" | "HIGH";
-/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
-export type GoogleThinkingInputLevel =
-  | "off"
-  | "minimal"
-  | "low"
-  | "medium"
-  | "adaptive"
-  | "high"
-  | "max"
-  | "xhigh";
-
-// Gemini 2.5 Pro only works in thinking mode and rejects thinkingBudget=0 with
-// "Budget 0 is invalid. This model only works in thinking mode."
-/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
-export function isGoogleThinkingRequiredModel(modelId: string): boolean {
-  return normalizeLowercaseStringOrEmpty(modelId).includes("gemini-2.5-pro");
-}
-
-/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
-export function isGoogleGemini25ThinkingBudgetModel(modelId: string): boolean {
-  return /(?:^|\/)gemini-2\.5-/.test(normalizeLowercaseStringOrEmpty(modelId));
-}
-
-/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
-export function isGoogleGemini3ProModel(modelId: string): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(modelId);
-  return /(?:^|\/)gemini-(?:3(?:\.\d+)?-pro|pro-latest)(?:-|$)/.test(normalized);
-}
-
-/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
-export function isGoogleGemini3FlashModel(modelId: string): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(modelId);
-  return /(?:^|\/)gemini-(?:3(?:\.\d+)?-flash|flash(?:-lite)?-latest)(?:-|$)/.test(normalized);
-}
-
-/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
-export function isGoogleGemini3ThinkingLevelModel(modelId: string): boolean {
-  return isGoogleGemini3ProModel(modelId) || isGoogleGemini3FlashModel(modelId);
-}
-
-/**
- * Maps legacy numeric/semantic thinking input onto Gemini 3's provider enum.
- * @deprecated Google provider-owned stream helper; do not use from third-party plugins.
- */
-export function resolveGoogleGemini3ThinkingLevel(params: {
-  modelId?: string;
-  thinkingLevel?: GoogleThinkingInputLevel;
-  thinkingBudget?: number;
-}): GoogleThinkingLevel | undefined {
-  if (typeof params.modelId !== "string") {
-    return undefined;
-  }
-  if (isGoogleGemini3ProModel(params.modelId)) {
-    switch (params.thinkingLevel) {
-      case "off":
-      case "minimal":
-      case "low":
-        return "LOW";
-      case "medium":
-      case "high":
-      case "max":
-      case "xhigh":
-        return "HIGH";
-      case "adaptive":
-        return undefined;
-      case undefined:
-        break;
-    }
-    if (typeof params.thinkingBudget === "number") {
-      if (params.thinkingBudget < 0) {
-        return undefined;
-      }
-      return params.thinkingBudget <= 2048 ? "LOW" : "HIGH";
-    }
-    return undefined;
-  }
-  if (!isGoogleGemini3FlashModel(params.modelId)) {
-    return undefined;
-  }
-  switch (params.thinkingLevel) {
-    case "off":
-    case "minimal":
-      return "MINIMAL";
-    case "low":
-      return "LOW";
-    case "medium":
-      return "MEDIUM";
-    case "high":
-    case "max":
-    case "xhigh":
-      return "HIGH";
-    case "adaptive":
-      return undefined;
-    case undefined:
-      break;
-  }
-  if (typeof params.thinkingBudget !== "number") {
-    return undefined;
-  }
-  if (params.thinkingBudget < 0) {
-    return undefined;
-  }
-  if (params.thinkingBudget <= 0) {
-    return "MINIMAL";
-  }
-  if (params.thinkingBudget <= 2048) {
-    return "LOW";
-  }
-  if (params.thinkingBudget <= 8192) {
-    return "MEDIUM";
-  }
-  return "HIGH";
-}
-
-/**
- * Removes `thinkingBudget=0` only for Gemini models that reject disabled thinking.
- * @deprecated Google provider-owned stream helper; do not use from third-party plugins.
- */
-export function stripInvalidGoogleThinkingBudget(params: {
-  thinkingConfig: Record<string, unknown>;
-  modelId?: string;
-}): boolean {
-  if (
-    params.thinkingConfig.thinkingBudget !== 0 ||
-    typeof params.modelId !== "string" ||
-    !isGoogleThinkingRequiredModel(params.modelId)
-  ) {
-    return false;
-  }
-  delete params.thinkingConfig.thinkingBudget;
-  return true;
-}
-
-function isGemma4Model(modelId: string): boolean {
-  return normalizeLowercaseStringOrEmpty(modelId).startsWith("gemma-4");
-}
-
-function mapThinkLevelToGemma4ThinkingLevel(
-  thinkingLevel?: GoogleThinkingInputLevel,
-): "MINIMAL" | "HIGH" | undefined {
-  switch (thinkingLevel) {
-    case "off":
-      return undefined;
-    case "minimal":
-    case "low":
-      return "MINIMAL";
-    case "medium":
-    case "adaptive":
-    case "high":
-    case "max":
-    case "xhigh":
-      return "HIGH";
-    default:
-      return undefined;
-  }
-}
-
-function normalizeGemma4ThinkingLevel(value: unknown): "MINIMAL" | "HIGH" | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  switch (value.trim().toUpperCase()) {
-    case "MINIMAL":
-    case "LOW":
-      return "MINIMAL";
-    case "MEDIUM":
-    case "HIGH":
-      return "HIGH";
-    default:
-      return undefined;
-  }
-}
-
-/**
- * Normalizes Google thinking config across SDK payload shapes before provider transport.
- * @deprecated Google provider-owned stream helper; do not use from third-party plugins.
- */
-export function sanitizeGoogleThinkingPayload(params: {
-  payload: unknown;
-  modelId?: string;
-  thinkingLevel?: GoogleThinkingInputLevel;
-}): void {
-  if (!params.payload || typeof params.payload !== "object") {
-    return;
-  }
-  const payloadObj = params.payload as Record<string, unknown>;
-  sanitizeGoogleThinkingConfigContainer({
-    container: payloadObj.config,
-    modelId: params.modelId,
-    thinkingLevel: params.thinkingLevel,
-  });
-  sanitizeGoogleThinkingConfigContainer({
-    container: payloadObj.generationConfig,
-    modelId: params.modelId,
-    thinkingLevel: params.thinkingLevel,
-  });
-}
-
-function sanitizeGoogleThinkingConfigContainer(params: {
-  container: unknown;
-  modelId?: string;
-  thinkingLevel?: GoogleThinkingInputLevel;
-}): void {
-  if (!params.container || typeof params.container !== "object") {
-    return;
-  }
-  const configObj = params.container as Record<string, unknown>;
-  const thinkingConfig = configObj.thinkingConfig;
-  if (!thinkingConfig || typeof thinkingConfig !== "object") {
-    return;
-  }
-  const thinkingConfigObj = thinkingConfig as Record<string, unknown>;
-
-  if (typeof params.modelId === "string" && isGemma4Model(params.modelId)) {
-    // Gemma 4 accepts thinkingLevel but not thinkingBudget; map legacy budget
-    // inputs before deleting the unsupported numeric field.
-    const normalizedThinkingLevel = normalizeGemma4ThinkingLevel(thinkingConfigObj.thinkingLevel);
-    const explicitMappedLevel = mapThinkLevelToGemma4ThinkingLevel(params.thinkingLevel);
-    const disabledViaBudget =
-      typeof thinkingConfigObj.thinkingBudget === "number" && thinkingConfigObj.thinkingBudget <= 0;
-    const hadThinkingBudget = thinkingConfigObj.thinkingBudget !== undefined;
-    delete thinkingConfigObj.thinkingBudget;
-
-    if (
-      params.thinkingLevel === "off" ||
-      (disabledViaBudget && explicitMappedLevel === undefined && !normalizedThinkingLevel)
-    ) {
-      delete thinkingConfigObj.thinkingLevel;
-      if (Object.keys(thinkingConfigObj).length === 0) {
-        delete configObj.thinkingConfig;
-      }
-      return;
-    }
-
-    const mappedLevel =
-      explicitMappedLevel ?? normalizedThinkingLevel ?? (hadThinkingBudget ? "MINIMAL" : undefined);
-
-    if (mappedLevel) {
-      thinkingConfigObj.thinkingLevel = mappedLevel;
-    }
-    return;
-  }
-
-  const thinkingBudget = thinkingConfigObj.thinkingBudget;
-
-  if (
-    params.thinkingLevel === "adaptive" &&
-    typeof params.modelId === "string" &&
-    isGoogleGemini25ThinkingBudgetModel(params.modelId)
-  ) {
-    delete thinkingConfigObj.thinkingLevel;
-    thinkingConfigObj.thinkingBudget = -1;
-    return;
-  }
-
-  if (
-    params.thinkingLevel === "adaptive" &&
-    typeof params.modelId === "string" &&
-    isGoogleGemini3ThinkingLevelModel(params.modelId)
-  ) {
-    // Gemini 3 adaptive mode means omit both controls so the provider chooses.
-    delete thinkingConfigObj.thinkingBudget;
-    delete thinkingConfigObj.thinkingLevel;
-    if (Object.keys(thinkingConfigObj).length === 0) {
-      delete configObj.thinkingConfig;
-    }
-    return;
-  }
-
-  if (typeof params.modelId === "string" && isGoogleGemini3ThinkingLevelModel(params.modelId)) {
-    const mappedLevel = resolveGoogleGemini3ThinkingLevel({
-      modelId: params.modelId,
-      thinkingLevel: params.thinkingLevel,
-      thinkingBudget: typeof thinkingBudget === "number" ? thinkingBudget : undefined,
-    });
-    delete thinkingConfigObj.thinkingBudget;
-    if (mappedLevel) {
-      // Gemini 3 uses thinkingLevel; leaving thinkingBudget would make mixed-mode payloads.
-      thinkingConfigObj.thinkingLevel = mappedLevel;
-    }
-    if (Object.keys(thinkingConfigObj).length === 0) {
-      delete configObj.thinkingConfig;
-    }
-    return;
-  }
-
-  if (
-    stripInvalidGoogleThinkingBudget({ thinkingConfig: thinkingConfigObj, modelId: params.modelId })
-  ) {
-    if (Object.keys(thinkingConfigObj).length === 0) {
-      delete configObj.thinkingConfig;
-    }
-    return;
-  }
-
-  if (typeof thinkingBudget !== "number" || thinkingBudget >= 0) {
-    return;
-  }
-
-  // shared model runtime can emit thinkingBudget=-1 for some Google model IDs; a negative budget
-  // is invalid for Google-compatible backends and can lead to malformed handling.
-  delete thinkingConfigObj.thinkingBudget;
-  if (Object.keys(thinkingConfigObj).length === 0) {
-    delete configObj.thinkingConfig;
-  }
-}
+export {
+  isGoogleGemini25ThinkingBudgetModel,
+  isGoogleThinkingRequiredModel,
+  resolveGoogleGemini3ThinkingLevel,
+  sanitizeGoogleThinkingPayload,
+  stripInvalidGoogleThinkingBudget,
+  type GoogleThinkingInputLevel,
+  type GoogleThinkingLevel,
+} from "../llm/providers/stream-wrappers/google-thinking-payload.js";
 
 /** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
 export function createGoogleThinkingPayloadWrapper(
@@ -980,17 +664,17 @@ export function createGoogleThinkingStreamWrapper(
 }
 
 export {
+  applyAnthropicEphemeralCacheControlMarkers,
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
-} from "../agents/anthropic-payload-policy.js";
-export { applyAnthropicEphemeralCacheControlMarkers } from "../llm/providers/stream-wrappers/anthropic-cache-control-payload.js";
+} from "@openclaw/ai/transports";
 export {
   createMoonshotThinkingWrapper,
+  resolveMoonshotThinkingKeep,
   resolveMoonshotThinkingType,
 } from "../llm/providers/stream-wrappers/moonshot-thinking.js";
 export { streamWithPayloadPatch };
-export {
-  createToolStreamWrapper,
-  createZaiToolStreamWrapper,
-} from "../llm/providers/stream-wrappers/zai.js";
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+export { createToolStreamWrapper } from "../llm/providers/stream-wrappers/zai.js";
+
+export { applyCompletionsAnthropicCacheControl } from "@openclaw/ai/transports";
+export { projectCopilotRequestFacts } from "@openclaw/ai/internal/shared";

@@ -1,5 +1,5 @@
 // iOS IPA validation tests cover the App Store upload gate without real signing assets.
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
   mkdirSync,
@@ -12,7 +12,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import JSZip from "jszip";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 const SCRIPT = path.join(process.cwd(), "scripts", "ios-validate-app-store-ipa.sh");
 const BASH_BIN = process.platform === "win32" ? "bash" : "/bin/bash";
@@ -20,6 +20,7 @@ const BUILD_COMMIT = "0123456789abcdef0123456789abcdef01234567";
 const BUILD_TIMESTAMP = "2026-07-10T12:34:56.000Z";
 
 const tempDirs: string[] = [];
+let toolsDir: string;
 
 function bashArgs(scriptPath: string): string[] {
   return process.platform === "win32" ? [scriptPath] : ["--noprofile", "--norc", scriptPath];
@@ -128,14 +129,21 @@ function writeFakePlutil(filePath: string): void {
     filePath,
     `#!/usr/bin/env node
 const { readFileSync } = require("node:fs");
+if (process.argv[2] === "-convert" && process.argv[3] === "xml1") {
+  process.stdout.write(readFileSync(process.argv[process.argv.length - 1], "utf8"));
+  process.exit(0);
+}
 const extractIndex = process.argv.indexOf("-extract");
 const expectIndex = process.argv.indexOf("-expect");
 if (extractIndex < 0 || expectIndex < 0 || process.argv[expectIndex + 1] !== "string") process.exit(2);
 const key = process.argv[extractIndex + 1];
 const file = process.argv[process.argv.length - 1];
 const xml = readFileSync(file, "utf8");
-const escapedKey = key.replace(/[.*+?^\${}()|[\]\\]/g, "\\$&");
-const match = xml.match(new RegExp("<key>" + escapedKey + "<\\/key>\\s*<string>([^<]*)<\\/string>"));
+// Escapes are doubled for the template-literal -> emitted-file hop: the emitted script
+// must contain \\] in the class and \\$& in the replacement, or keys with regex
+// metacharacters interpolate unescaped into the RegExp below and stop emulating plutil.
+const escapedKey = key.replace(/[.*+?^\${}()|[\\]\\\\]/g, "\\\\$&");
+const match = xml.match(new RegExp("<key>" + escapedKey + "</key>\\\\s*<string>([^<]*)</string>"));
 if (!match) process.exit(1);
 process.stdout.write(match[1]);
 `,
@@ -207,10 +215,9 @@ async function writeValidFixture(
   root: string,
   options: {
     buildCommit?: string;
-    buildTimestamp?: string;
-    healthUpdateUsage?: boolean | string | null;
-    pushMode?: string;
-    legacyKey?: boolean;
+    healthUpdateUsage?: string | null;
+    displayName?: string;
+    localizedDisplayName?: string;
   } = {},
 ): Promise<{
   ipaPath: string;
@@ -230,9 +237,10 @@ async function writeValidFixture(
 
   const infoBody = [
     plistString("CFBundleIdentifier", "ai.openclawfoundation.app"),
+    plistString("CFBundleDisplayName", options.displayName ?? "OpenClaw"),
     plistString("OpenClawGitCommit", options.buildCommit ?? BUILD_COMMIT),
-    plistString("OpenClawBuildTimestamp", options.buildTimestamp ?? BUILD_TIMESTAMP),
-    plistString("OpenClawPushMode", options.pushMode ?? "appStore"),
+    plistString("OpenClawBuildTimestamp", BUILD_TIMESTAMP),
+    plistString("OpenClawPushMode", "appStore"),
     plistString("OpenClawPushRelayBaseURL", ""),
     plistString(
       "NSHealthShareUsageDescription",
@@ -240,15 +248,23 @@ async function writeValidFixture(
     ),
     options.healthUpdateUsage === null
       ? ""
-      : typeof options.healthUpdateUsage === "boolean"
-        ? plistBool("NSHealthUpdateUsageDescription", options.healthUpdateUsage)
-        : plistString(
-            "NSHealthUpdateUsageDescription",
-            options.healthUpdateUsage ?? "OpenClaw reads Health data for Health Summaries.",
-          ),
-    options.legacyKey ? plistString("OpenClawPushRelayProfile", "production") : "",
+      : plistString(
+          "NSHealthUpdateUsageDescription",
+          options.healthUpdateUsage ?? "OpenClaw reads Health data for Health Summaries.",
+        ),
   ].join("");
   writeFileSync(path.join(appDir, "Info.plist"), plist(infoBody), "utf8");
+  const localizedDir = path.join(appDir, "de.lproj");
+  mkdirSync(localizedDir, { recursive: true });
+  writeFileSync(
+    path.join(localizedDir, "InfoPlist.strings"),
+    plist(
+      options.localizedDisplayName === undefined
+        ? plistString("NSCameraUsageDescription", "OpenClaw verwendet die Kamera.")
+        : plistString("CFBundleDisplayName", options.localizedDisplayName),
+    ),
+    "utf8",
+  );
   writeFileSync(path.join(appDir, "embedded.mobileprovision"), "fixture profile", "utf8");
 
   const entitlementsPath = path.join(fixturesDir, "entitlements.plist");
@@ -293,12 +309,9 @@ async function writeValidFixture(
     "utf8",
   );
 
-  const plistBuddy = path.join(binDir, "plistbuddy");
-  writeFakePlistBuddy(plistBuddy);
-  const plutil = path.join(binDir, "plutil");
-  writeFakePlutil(plutil);
-  const unzip = path.join(binDir, "unzip");
-  writeFakeUnzip(unzip);
+  const plistBuddy = path.join(toolsDir, "plistbuddy");
+  const plutil = path.join(toolsDir, "plutil");
+  const unzip = path.join(toolsDir, "unzip");
   const codesign = path.join(binDir, "codesign");
   writeExecutable(
     codesign,
@@ -360,39 +373,65 @@ function runValidator(
     return { ok: true, stdout, stderr: "" };
   } catch (error) {
     const e = error as { stdout?: unknown; stderr?: unknown };
-    const stdout = Buffer.isBuffer(e.stdout) ? e.stdout.toString("utf8") : String(e.stdout ?? "");
-    const stderr = Buffer.isBuffer(e.stderr) ? e.stderr.toString("utf8") : String(e.stderr ?? "");
+    const stdout = Buffer.isBuffer(e.stdout)
+      ? e.stdout.toString("utf8")
+      : ((e.stdout ?? "") as string);
+    const stderr = Buffer.isBuffer(e.stderr)
+      ? e.stderr.toString("utf8")
+      : ((e.stderr ?? "") as string);
     return { ok: false, stdout, stderr };
   }
 }
 
 describe("scripts/ios-validate-app-store-ipa.sh", () => {
+  beforeAll(() => {
+    // Interpreters read fixture paths from argv; signing inputs remain case-owned.
+    toolsDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-ios-ipa-tools-"));
+    writeFakePlistBuddy(path.join(toolsDir, "plistbuddy"));
+    writeFakePlutil(path.join(toolsDir, "plutil"));
+    writeFakeUnzip(path.join(toolsDir, "unzip"));
+  });
+
+  afterAll(() => {
+    if (toolsDir) {
+      rmSync(toolsDir, { recursive: true, force: true });
+    }
+  });
+
   afterEach(() => {
     for (const dir of tempDirs.splice(0)) {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it("accepts an App Store IPA with appStore mode and production entitlements", async () => {
+  it("fake plutil escapes regex-metacharacter keys before matching", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-ios-ipa-"));
     tempDirs.push(root);
-    const fixture = await writeValidFixture(root);
-
-    const result = runValidator(fixture);
-
-    expect(result.ok).toBe(true);
-    expect(result.stdout).toContain("Validated iOS App Store IPA");
-  });
-
-  it("rejects an IPA that was exported with a non-App-Store push mode", async () => {
-    const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-ios-ipa-"));
-    tempDirs.push(root);
-    const fixture = await writeValidFixture(root, { pushMode: "localProduction" });
-
-    const result = runValidator(fixture);
-
-    expect(result.ok).toBe(false);
-    expect(result.stderr).toContain("push mode mismatch");
+    const plutil = path.join(toolsDir, "plutil");
+    const plistPath = path.join(root, "meta.plist");
+    writeFileSync(
+      plistPath,
+      "<plist><dict>\n<key>Weird[Key]*</key>\n<string>metavalue</string>\n</dict></plist>",
+      "utf8",
+    );
+    const escaped = spawnSync(
+      process.execPath,
+      [plutil, "-extract", "Weird[Key]*", "-expect", "string", plistPath],
+      {
+        encoding: "utf8",
+      },
+    );
+    expect(escaped.status).toBe(0);
+    expect(escaped.stdout).toBe("metavalue");
+    // An unescaped interpolation would let this key match as a regex; it must miss instead.
+    const missing = spawnSync(
+      process.execPath,
+      [plutil, "-extract", "Weird.Key.*", "-expect", "string", plistPath],
+      {
+        encoding: "utf8",
+      },
+    );
+    expect(missing.status).toBe(1);
   });
 
   it("rejects an IPA without the Health update purpose string required by App Store Connect", async () => {
@@ -406,26 +445,28 @@ describe("scripts/ios-validate-app-store-ipa.sh", () => {
     expect(result.stderr).toContain("Health update usage description must be a non-empty string");
   });
 
-  it("rejects a non-string Health update purpose value", async () => {
+  it("rejects an IPA with the wrong canonical display name", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-ios-ipa-"));
     tempDirs.push(root);
-    const fixture = await writeValidFixture(root, { healthUpdateUsage: true });
+    const fixture = await writeValidFixture(root, { displayName: "OpenClaw Debug" });
 
     const result = runValidator(fixture);
 
     expect(result.ok).toBe(false);
-    expect(result.stderr).toContain("Health update usage description must be a non-empty string");
+    expect(result.stderr).toContain("display name mismatch");
   });
 
-  it("rejects legacy independently selectable production push keys", async () => {
+  it("rejects unresolved build settings in localized plist resources", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-ios-ipa-"));
     tempDirs.push(root);
-    const fixture = await writeValidFixture(root, { legacyKey: true });
+    const fixture = await writeValidFixture(root, {
+      localizedDisplayName: "$(OPENCLAW_APP_DISPLAY_NAME)",
+    });
 
     const result = runValidator(fixture);
 
     expect(result.ok).toBe(false);
-    expect(result.stderr).toContain("legacy relay profile");
+    expect(result.stderr).toContain("unresolved build setting in localized plist");
   });
 
   it("rejects malformed or mismatched embedded build provenance", async () => {

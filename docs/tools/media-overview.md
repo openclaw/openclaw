@@ -38,7 +38,7 @@ telephony, meetings, browser realtime, and native push-to-talk clients.
   </Card>
   <Card title="Text-to-speech" href="/tools/tts" icon="microphone">
     Convert outbound replies to spoken audio via the `tts` tool plus
-    `messages.tts` config. Synchronous.
+    `tts` config. Synchronous.
   </Card>
   <Card title="Media understanding" href="/nodes/media-understanding" icon="eye">
     Summarize inbound images, audio, and video using vision-capable model
@@ -48,7 +48,25 @@ telephony, meetings, browser realtime, and native push-to-talk clients.
     Transcribe inbound voice messages through batch STT or Voice Call
     streaming STT providers.
   </Card>
+  <Card title="Media playback" href="/nodes/media-playback" icon="play">
+    Play assistant audio and video inline across the Control UI and native
+    apps, with managed access and portable playback renditions.
+  </Card>
 </CardGroup>
+
+## Local media files
+
+`view_image`, `pdf`, and reference inputs for `image_generate`, `music_generate`,
+and `video_generate` use the task's working directory for relative paths. A task
+running in a Git worktree can read media from that worktree even when the agent's
+default workspace is elsewhere.
+
+Workspace-only access follows the session's approved filesystem root, which can
+include parent directories of the current working directory. Host tools can also
+read the Gateway's media store, including browser screenshots and staged inbound
+attachments. Paths and symlinks outside these roots are rejected. Sandboxed tools
+read through the sandbox filesystem; selecting a host worktree does not grant
+access outside the sandbox.
 
 ## Provider capability matrix
 
@@ -110,7 +128,7 @@ OpenClaw until the shared realtime-voice contract can represent it.
 | Music          | Asynchronous | Same provider-processing characteristic as video.                                                    |
 
 For async tools, OpenClaw submits the request to the provider, returns a task
-id immediately, and tracks the job in the task ledger. The agent continues
+id immediately, and tracks the job in the media runtime. The agent continues
 responding to other messages while the job runs. When the provider finishes,
 OpenClaw wakes the agent with the generated media paths so it can tell the
 user through the session's normal visible-reply mode: automatic final reply
@@ -119,6 +137,14 @@ the message tool. If the requester session is inactive or its active wake
 fails, and some generated media is still missing from the completion reply,
 OpenClaw sends an idempotent direct fallback with only the missing media. Media
 already delivered by the completion reply is not posted again.
+
+If completion delivery cannot be confirmed and the original session still exists,
+OpenClaw tries to retain the generated media references in that session's history.
+Completion stays bound to the original session and storage location; a replacement
+session never receives it. Transient queue admission failures use a bounded retry.
+If both queue admission and history storage remain unavailable, the completion
+ends with a diagnostic and process-local media references; durable recovery is
+not guaranteed. The local history notice does not resend media to the channel.
 
 ## Speech-to-text and Voice Call
 
@@ -171,6 +197,7 @@ catalogs returned by the Gateway.
 - [Video generation](/tools/video-generation)
 - [Music generation](/tools/music-generation)
 - [Text-to-speech](/tools/tts)
+- [Media playback](/nodes/media-playback)
 - [Media understanding](/nodes/media-understanding)
 - [Audio nodes](/nodes/audio)
 - [Talk mode](/nodes/talk)

@@ -1,20 +1,21 @@
 import type { WorkboardWorkspace, WorkboardWorkspaceAccess } from "@openclaw/workboard-contract";
-// Workboard workspace access follows the caller's canonical filesystem boundary.
 import {
   listAgentIds,
   resolveAgentConfig,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "openclaw/plugin-sdk/agent-runtime";
+// Workboard workspace access follows the caller's canonical filesystem boundary.
+import {
+  canonicalPathFromExistingAncestor,
+  isPathInside,
+} from "openclaw/plugin-sdk/file-access-runtime";
 import type {
   AnyAgentTool,
   OpenClawPluginApi,
   OpenClawPluginToolContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  canonicalPathFromExistingAncestor,
-  isPathInside,
-} from "openclaw/plugin-sdk/security-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type { WorkboardWorkspaceAccess } from "@openclaw/workboard-contract";
 
@@ -24,7 +25,14 @@ type ResolveSandboxWorkspaceAuthority =
 type PrepareSandboxWorkspaceAuthority =
   OpenClawPluginApi["runtime"]["sandbox"]["prepareWorkspaceAuthority"];
 
-export const WORKBOARD_TOOL_NAMES = [
+export const WORKBOARD_SESSIONS_BOARD_TOOL_NAMES = [
+  "workboard_sessions_board_read",
+  "workboard_sessions_board_update",
+  "workboard_sessions_board_move",
+] as const;
+
+/** Card tools stay optional; sessions-board tools register separately as default-on. */
+export const WORKBOARD_CARD_TOOL_NAMES = [
   "workboard_list",
   "workboard_create",
   "workboard_link",
@@ -60,6 +68,11 @@ export const WORKBOARD_TOOL_NAMES = [
   "workboard_protocol_violation",
   "workboard_unblock",
   "workboard_move",
+] as const;
+
+const WORKBOARD_TOOL_NAMES = [
+  ...WORKBOARD_CARD_TOOL_NAMES,
+  ...WORKBOARD_SESSIONS_BOARD_TOOL_NAMES,
 ] as const;
 
 export const WORKBOARD_REQUIRED_WORKER_TOOLS = [
@@ -242,6 +255,13 @@ export function intersectWorkboardWorkspaceAccess(
   };
 }
 
+export class WorkboardWorkspaceOutsideRootsError extends Error {
+  constructor() {
+    super("workspace path is outside the caller's allowed workspaces.");
+    this.name = "WorkboardWorkspaceOutsideRootsError";
+  }
+}
+
 async function assertCanonicalWorkboardPathAccess(
   candidate: string,
   access: WorkboardWorkspaceAccess,
@@ -255,7 +275,7 @@ async function assertCanonicalWorkboardPathAccess(
       return candidate;
     }
   }
-  throw new Error("workspace path is outside the caller's allowed workspaces.");
+  throw new WorkboardWorkspaceOutsideRootsError();
 }
 
 export async function assertCanonicalWorkboardRootAccess(
@@ -288,40 +308,37 @@ async function assertPathAllowed(
 async function assertWorkspaceAllowed(
   value: unknown,
   access: WorkboardWorkspaceAccess,
-  options?: { sourceOnly?: boolean },
-): Promise<string | undefined> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const workspace = value as Record<string, unknown>;
-  if (options?.sourceOnly) {
-    return await assertPathAllowed(workspace.sourcePath ?? workspace.path, access);
+): Promise<void> {
+  const workspace = asOptionalRecord(value);
+  if (!workspace) {
+    return;
   }
   await assertPathAllowed(workspace.path, access);
   await assertPathAllowed(workspace.sourcePath, access);
-  return undefined;
 }
 
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
+function* workspaceMutationRecords(value: unknown): Generator<Record<string, unknown>> {
+  const record = asOptionalRecord(value);
+  if (!record) {
+    return;
+  }
+  yield record;
+  yield* workspaceMutationRecords(record.patch);
+  yield* workspaceMutationRecords(asOptionalRecord(record.metadata)?.automation);
+  if (Array.isArray(record.children)) {
+    for (const child of record.children) {
+      yield* workspaceMutationRecords(child);
+    }
+  }
 }
 
 export function containsWorkboardWorkspaceMutation(value: unknown): boolean {
-  const record = readRecord(value);
-  if (!record) {
-    return false;
+  for (const record of workspaceMutationRecords(value)) {
+    if (Object.hasOwn(record, "workspace") || Object.hasOwn(record, "defaultWorkspace")) {
+      return true;
+    }
   }
-  if (Object.hasOwn(record, "workspace") || Object.hasOwn(record, "defaultWorkspace")) {
-    return true;
-  }
-  return (
-    containsWorkboardWorkspaceMutation(record.patch) ||
-    containsWorkboardWorkspaceMutation(readRecord(record.metadata)?.automation) ||
-    (Array.isArray(record.children) &&
-      record.children.some((child) => containsWorkboardWorkspaceMutation(child)))
-  );
+  return false;
 }
 
 export function withWorkboardWorkspaceAccess(
@@ -332,7 +349,7 @@ export function withWorkboardWorkspaceAccess(
 }
 
 export function withoutWorkboardWorkspaceAccess(value: unknown): Record<string, unknown> {
-  const record = readRecord(value) ?? {};
+  const record = asOptionalRecord(value) ?? {};
   const { workspaceAccess: _untrustedWorkspaceAccess, ...rest } = record;
   return rest;
 }
@@ -359,28 +376,11 @@ export async function assertWorkboardWorkspaceMutationAccess(
   if (access.unrestricted) {
     return;
   }
-  const record = readRecord(value);
-  if (!record) {
-    return;
-  }
   // Card creation and decomposition persist only explicit workspace fields;
   // board defaults and parent workspaces are metadata, not inherited inputs.
-  await assertWorkspaceAllowed(record.workspace, access);
-  await assertWorkspaceAllowed(record.defaultWorkspace, access);
-
-  const patch = readRecord(record.patch);
-  if (patch) {
-    await assertWorkboardWorkspaceMutationAccess(patch, access);
-  }
-  const metadata = readRecord(record.metadata);
-  const automation = readRecord(metadata?.automation);
-  if (automation) {
-    await assertWorkboardWorkspaceMutationAccess(automation, access);
-  }
-  if (Array.isArray(record.children)) {
-    for (const child of record.children) {
-      await assertWorkboardWorkspaceMutationAccess(child, access);
-    }
+  for (const record of workspaceMutationRecords(value)) {
+    await assertWorkspaceAllowed(record.workspace, access);
+    await assertWorkspaceAllowed(record.defaultWorkspace, access);
   }
 }
 
@@ -388,7 +388,8 @@ export async function assertWorkboardWorkspaceSourceAccess(
   workspace: WorkboardWorkspace | undefined,
   access: WorkboardWorkspaceAccess,
 ): Promise<string | undefined> {
-  return await assertWorkspaceAllowed(workspace, access, { sourceOnly: true });
+  const record = asOptionalRecord(workspace);
+  return await assertPathAllowed(record?.sourcePath ?? record?.path, access);
 }
 
 export function guardWorkboardToolsForWorkspaceAccess(

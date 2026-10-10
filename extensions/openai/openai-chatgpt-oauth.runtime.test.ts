@@ -8,6 +8,23 @@ describe("OpenAI Codex OAuth runtime", () => {
     vi.restoreAllMocks();
   });
 
+  it("rejects retired authority before the TLS preflight sends a request", async () => {
+    const controller = new AbortController();
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 302 }));
+    const retired = new Error("owner retired");
+    const outcome = await runOpenAIOAuthTlsPreflight({
+      fetchImpl,
+      signal: controller.signal,
+      assertCurrent: () => {
+        throw retired;
+      },
+    }).catch((error: unknown) => error);
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(outcome).toBe(retired);
+    expect(controller.signal.aborted).toBe(false);
+  });
+
   it("caps oversized TLS preflight timeouts before creating an abort signal", async () => {
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
     const fetchImpl = vi.fn(async () => new Response(null, { status: 302 }));
@@ -36,5 +53,28 @@ describe("OpenAI Codex OAuth runtime", () => {
     ).resolves.toEqual({ ok: true });
 
     expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("uses the shared classifier for hostname mismatch failures", async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new TypeError("fetch failed", {
+        cause: {
+          code: "ERR_TLS_CERT_ALTNAME_INVALID",
+          message: "Hostname/IP does not match certificate's altnames",
+        },
+      });
+    });
+
+    await expect(
+      runOpenAIOAuthTlsPreflight({
+        timeoutMs: 20,
+        fetchImpl,
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      kind: "tls-cert",
+      code: "ERR_TLS_CERT_ALTNAME_INVALID",
+      message: "Hostname/IP does not match certificate's altnames",
+    });
   });
 });

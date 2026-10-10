@@ -3,20 +3,13 @@
  */
 export type {
   TranscriptImportRequest,
+  TranscriptOccupancyWatchRequest,
   TranscriptParticipant,
-  TranscriptSessionDescriptor,
   TranscriptSourceKind,
-  TranscriptSourceLocator,
+  TranscriptSourceAccessControl,
   TranscriptSourceProvider,
-  TranscriptSourceStatus,
   TranscriptStartRequest,
-  TranscriptsStartResult,
-  TranscriptStopRequest,
-  TranscriptsStopResult,
   TranscriptUtterance,
 } from "../transcripts/provider-types.js";
-export {
-  getTranscriptSourceProvider,
-  listTranscriptSourceProviders,
-  normalizeTranscriptSourceProviderId,
-} from "../transcripts/provider-registry.js";
+export { normalizeTranscriptSourceProviderId } from "../transcripts/provider-registry.js";
+export { resolveTranscriptsConfig } from "../transcripts/config.js";

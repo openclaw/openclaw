@@ -1,8 +1,12 @@
-/**
- * Normalizes OpenAI Responses reasoning/tool-call history for safe replay.
- */
-import { sha256HexPrefix } from "../../infra/crypto-digest.js";
+import {
+  normalizeOpenAIResponsesFunctionCallId,
+  replaceCompactionReplayOwnerContent,
+  shouldNormalizeOpenAIResponsesToolCallId,
+  splitOpenAIFunctionCallPairing,
+} from "@openclaw/ai/transports";
+import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { AgentMessage } from "../runtime/index.js";
+import { rewriteToolResultIds } from "../tool-call-id.js";
 
 type OpenAIThinkingBlock = {
   type?: unknown;
@@ -15,176 +19,71 @@ type OpenAIToolCallBlock = {
   id?: unknown;
 };
 
-type OpenAIReasoningSignature = {
-  id: string;
-  type: string;
-};
-
-type DowngradeOpenAIReasoningBlocksOptions = {
-  dropReplayableReasoning?: boolean;
-};
-
-const OPENAI_RESPONSES_ID_MAX_LENGTH = 64;
-const OPENAI_RESPONSES_CALL_ID_RE = /^call_[A-Za-z0-9_-]{1,59}$/;
-const OPENAI_RESPONSES_FUNCTION_CALL_ITEM_ID_RE = /^fc_[A-Za-z0-9_-]{1,61}$/;
-
-function parseOpenAIReasoningSignature(value: unknown): OpenAIReasoningSignature | null {
+function hasOpenAIReasoningSignature(value: unknown): boolean {
   if (!value) {
-    return null;
+    return false;
   }
   let candidate: { id?: unknown; type?: unknown } | null = null;
   if (typeof value === "string") {
     const trimmed = value.trim();
     if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
-      return null;
+      return false;
     }
     try {
       candidate = JSON.parse(trimmed) as { id?: unknown; type?: unknown };
     } catch {
-      return null;
+      return false;
     }
   } else if (typeof value === "object") {
     candidate = value as { id?: unknown; type?: unknown };
   }
   if (!candidate) {
-    return null;
+    return false;
   }
   const id = typeof candidate.id === "string" ? candidate.id : "";
   const type = typeof candidate.type === "string" ? candidate.type : "";
-  if (!id.startsWith("rs_")) {
-    return null;
-  }
-  if (type === "reasoning" || type.startsWith("reasoning.")) {
-    return { id, type };
-  }
-  return null;
-}
-
-function hasFollowingNonThinkingBlock(
-  content: Extract<AgentMessage, { role: "assistant" }>["content"],
-  index: number,
-): boolean {
-  for (let i = index + 1; i < content.length; i++) {
-    const block = content[i];
-    if (!block || typeof block !== "object") {
-      return true;
-    }
-    if ((block as { type?: unknown }).type !== "thinking") {
-      return true;
-    }
-  }
-  return false;
-}
-
-function splitOpenAIFunctionCallPairing(id: string): {
-  callId: string;
-  itemId?: string;
-} {
-  const separator = id.indexOf("|");
-  if (separator <= 0 || separator >= id.length - 1) {
-    return { callId: id };
-  }
-  return {
-    callId: id.slice(0, separator),
-    itemId: id.slice(separator + 1),
-  };
+  return id.startsWith("rs_") && (type === "reasoning" || type.startsWith("reasoning."));
 }
 
 function isOpenAIToolCallType(type: unknown): boolean {
   return type === "toolCall" || type === "toolUse" || type === "functionCall";
 }
 
-function shortOpenAIResponsesIdHash(id: string): string {
-  return sha256HexPrefix(id, 10);
-}
+const DROP_REPLAY_MESSAGE = Symbol("dropReplayMessage");
 
-function sanitizeOpenAIResponsesIdTail(value: string): string {
-  return value.replace(/[^A-Za-z0-9_-]/g, "_").replace(/^_+|_+$/g, "");
-}
-
-function normalizeOpenAIResponsesIdPart(params: {
-  value: string;
-  prefix: "call_" | "fc_";
-  isValid: (value: string) => boolean;
-}): string {
-  const trimmed = params.value.trim();
-  if (params.isValid(trimmed)) {
-    return trimmed;
+function rewriteReplayMessages(
+  messages: AgentMessage[],
+  rewrite: (message: AgentMessage) => AgentMessage | typeof DROP_REPLAY_MESSAGE,
+): AgentMessage[] {
+  let changed = false;
+  const result: AgentMessage[] = [];
+  for (const message of messages) {
+    const next = rewrite(message);
+    changed ||= !Object.is(next, message);
+    if (next !== DROP_REPLAY_MESSAGE) {
+      result.push(next);
+    }
   }
-
-  const rawTail = trimmed.startsWith(params.prefix) ? trimmed.slice(params.prefix.length) : trimmed;
-  const hash = shortOpenAIResponsesIdHash(trimmed || params.prefix);
-  const maxTailLength = OPENAI_RESPONSES_ID_MAX_LENGTH - params.prefix.length;
-  const hashSuffix = `_${hash}`;
-  const safeTail = sanitizeOpenAIResponsesIdTail(rawTail);
-  const clippedBase = safeTail.slice(0, Math.max(1, maxTailLength - hashSuffix.length));
-  const tail = `${clippedBase || "id"}${hashSuffix}`.slice(0, maxTailLength);
-  return `${params.prefix}${tail}`;
+  return changed ? result : messages;
 }
 
-function normalizeOpenAIResponsesFunctionCallId(id: string): string {
-  const { callId, itemId } = splitOpenAIFunctionCallPairing(id);
-  const normalizedCallId = normalizeOpenAIResponsesIdPart({
-    value: callId,
-    prefix: "call_",
-    isValid: (value) => OPENAI_RESPONSES_CALL_ID_RE.test(value),
+type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
+type AssistantContentBlock = AssistantMessage["content"][number];
+
+function rewriteAssistantContent(
+  message: AssistantMessage,
+  rewrite: (block: AssistantContentBlock) => AssistantContentBlock,
+): AssistantMessage {
+  if (!Array.isArray(message.content)) {
+    return message;
+  }
+  let changed = false;
+  const content = message.content.map((block) => {
+    const next = block && typeof block === "object" ? rewrite(block) : block;
+    changed ||= !Object.is(next, block);
+    return next;
   });
-
-  if (!itemId) {
-    return normalizedCallId;
-  }
-
-  const normalizedItemId = normalizeOpenAIResponsesIdPart({
-    value: itemId,
-    prefix: "fc_",
-    isValid: (value) => OPENAI_RESPONSES_FUNCTION_CALL_ITEM_ID_RE.test(value),
-  });
-  return `${normalizedCallId}|${normalizedItemId}`;
-}
-
-function shouldNormalizeOpenAIResponsesToolCallId(id: string): boolean {
-  const pairing = splitOpenAIFunctionCallPairing(id);
-  if (!OPENAI_RESPONSES_CALL_ID_RE.test(pairing.callId)) {
-    return true;
-  }
-  if (pairing.itemId === undefined) {
-    return false;
-  }
-  return !OPENAI_RESPONSES_FUNCTION_CALL_ITEM_ID_RE.test(pairing.itemId);
-}
-
-function createOpenAIResponsesToolCallIdResolver(): {
-  resolveAssistantId: (id: string) => string;
-  resolveToolResultId: (id: string) => string;
-} {
-  const rewrittenByOriginalId = new Map<string, string>();
-
-  return {
-    resolveAssistantId(id: string): string {
-      const rewritten = rewrittenByOriginalId.get(id);
-      if (rewritten) {
-        return rewritten;
-      }
-      if (!shouldNormalizeOpenAIResponsesToolCallId(id)) {
-        return id;
-      }
-      const normalized = normalizeOpenAIResponsesFunctionCallId(id);
-      rewrittenByOriginalId.set(id, normalized);
-      return normalized;
-    },
-    resolveToolResultId(id: string): string {
-      const rewritten = rewrittenByOriginalId.get(id);
-      if (rewritten) {
-        return rewritten;
-      }
-      if (!shouldNormalizeOpenAIResponsesToolCallId(id)) {
-        return id;
-      }
-      const normalized = normalizeOpenAIResponsesFunctionCallId(id);
-      rewrittenByOriginalId.set(id, normalized);
-      return normalized;
-    },
-  };
+  return changed ? replaceCompactionReplayOwnerContent(message, content) : message;
 }
 
 /**
@@ -195,90 +94,52 @@ function createOpenAIResponsesToolCallIdResolver(): {
  * pairs directly into the provider payload, so OpenClaw must normalize here.
  */
 export function normalizeOpenAIResponsesToolCallIds(messages: AgentMessage[]): AgentMessage[] {
-  let changed = false;
-  const resolver = createOpenAIResponsesToolCallIdResolver();
-  const rewrittenMessages: AgentMessage[] = [];
-
-  for (const msg of messages) {
+  const rewrittenByOriginalId = new Map<string, string>();
+  const resolveId = (id: string): string => {
+    const rewritten = rewrittenByOriginalId.get(id);
+    if (rewritten) {
+      return rewritten;
+    }
+    if (!shouldNormalizeOpenAIResponsesToolCallId(id)) {
+      return id;
+    }
+    const normalized = normalizeOpenAIResponsesFunctionCallId(id);
+    rewrittenByOriginalId.set(id, normalized);
+    return normalized;
+  };
+  return rewriteReplayMessages(messages, (msg) => {
     if (!msg || typeof msg !== "object") {
-      rewrittenMessages.push(msg);
-      continue;
+      return msg;
     }
 
     const role = (msg as { role?: unknown }).role;
     if (role === "assistant") {
       const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
-      if (!Array.isArray(assistantMsg.content)) {
-        rewrittenMessages.push(msg);
-        continue;
-      }
-
-      let assistantChanged = false;
-      const nextContent = assistantMsg.content.map((block) => {
-        if (!block || typeof block !== "object") {
-          return block;
-        }
+      return rewriteAssistantContent(assistantMsg, (block) => {
         const toolCallBlock = block as OpenAIToolCallBlock;
         if (!isOpenAIToolCallType(toolCallBlock.type) || typeof toolCallBlock.id !== "string") {
           return block;
         }
 
-        const nextId = resolver.resolveAssistantId(toolCallBlock.id);
+        const nextId = resolveId(toolCallBlock.id);
         if (nextId === toolCallBlock.id) {
           return block;
         }
-        assistantChanged = true;
         return {
-          ...(block as unknown as Record<string, unknown>),
+          ...block,
           id: nextId,
         } as typeof block;
       });
-
-      if (!assistantChanged) {
-        rewrittenMessages.push(msg);
-        continue;
-      }
-      changed = true;
-      rewrittenMessages.push({ ...assistantMsg, content: nextContent } as AgentMessage);
-      continue;
     }
 
     if (role === "toolResult") {
-      const toolResult = msg as Extract<AgentMessage, { role: "toolResult" }> & {
-        toolUseId?: unknown;
-      };
-      let toolResultChanged = false;
-      const updates: Record<string, string> = {};
-
-      if (typeof toolResult.toolCallId === "string") {
-        const nextToolCallId = resolver.resolveToolResultId(toolResult.toolCallId);
-        if (nextToolCallId !== toolResult.toolCallId) {
-          updates.toolCallId = nextToolCallId;
-          toolResultChanged = true;
-        }
-      }
-
-      if (typeof toolResult.toolUseId === "string") {
-        const nextToolUseId = resolver.resolveToolResultId(toolResult.toolUseId);
-        if (nextToolUseId !== toolResult.toolUseId) {
-          updates.toolUseId = nextToolUseId;
-          toolResultChanged = true;
-        }
-      }
-
-      if (!toolResultChanged) {
-        rewrittenMessages.push(msg);
-        continue;
-      }
-      changed = true;
-      rewrittenMessages.push({ ...toolResult, ...updates } as AgentMessage);
-      continue;
+      return rewriteToolResultIds({
+        message: msg as Extract<AgentMessage, { role: "toolResult" }>,
+        resolveId,
+      });
     }
-
-    rewrittenMessages.push(msg);
-  }
-
-  return changed ? rewrittenMessages : messages;
+    return msg;
+  });
 }
 
 /**
@@ -291,38 +152,23 @@ export function normalizeOpenAIResponsesToolCallIds(messages: AgentMessage[]): A
 export function downgradeOpenAIFunctionCallReasoningPairs(
   messages: AgentMessage[],
 ): AgentMessage[] {
-  let changed = false;
-  const rewrittenMessages: AgentMessage[] = [];
   let pendingRewrittenIds: Map<string, string> | null = null;
-
-  for (const msg of messages) {
+  return rewriteReplayMessages(messages, (msg) => {
     if (!msg || typeof msg !== "object") {
       pendingRewrittenIds = null;
-      rewrittenMessages.push(msg);
-      continue;
+      return msg;
     }
 
     const role = (msg as { role?: unknown }).role;
     if (role === "assistant") {
       const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
-      if (!Array.isArray(assistantMsg.content)) {
-        pendingRewrittenIds = null;
-        rewrittenMessages.push(msg);
-        continue;
-      }
-
       const localRewrittenIds = new Map<string, string>();
       let seenReplayableReasoning = false;
-      let assistantChanged = false;
-      const nextContent = assistantMsg.content.map((block) => {
-        if (!block || typeof block !== "object") {
-          return block;
-        }
-
+      const next = rewriteAssistantContent(assistantMsg, (block) => {
         const thinkingBlock = block as OpenAIThinkingBlock;
         if (
           thinkingBlock.type === "thinking" &&
-          parseOpenAIReasoningSignature(thinkingBlock.thinkingSignature)
+          hasOpenAIReasoningSignature(thinkingBlock.thinkingSignature)
         ) {
           seenReplayableReasoning = true;
           return block;
@@ -338,68 +184,37 @@ export function downgradeOpenAIFunctionCallReasoningPairs(
           return block;
         }
 
-        assistantChanged = true;
         localRewrittenIds.set(toolCallBlock.id, pairing.callId);
         return {
-          ...(block as unknown as Record<string, unknown>),
+          ...block,
           id: pairing.callId,
         } as typeof block;
       });
-
       pendingRewrittenIds = localRewrittenIds.size > 0 ? localRewrittenIds : null;
-      if (!assistantChanged) {
-        rewrittenMessages.push(msg);
-        continue;
-      }
-      changed = true;
-      rewrittenMessages.push({ ...assistantMsg, content: nextContent } as AgentMessage);
-      continue;
+      return next;
     }
 
     if (role === "toolResult" && pendingRewrittenIds && pendingRewrittenIds.size > 0) {
       const toolResult = msg as Extract<AgentMessage, { role: "toolResult" }> & {
         toolUseId?: unknown;
       };
-      let toolResultChanged = false;
       const updates: Record<string, string> = {};
-
-      if (typeof toolResult.toolCallId === "string") {
-        const nextToolCallId = pendingRewrittenIds.get(toolResult.toolCallId);
-        if (nextToolCallId && nextToolCallId !== toolResult.toolCallId) {
-          updates.toolCallId = nextToolCallId;
-          toolResultChanged = true;
+      for (const field of ["toolCallId", "toolUseId"] as const) {
+        const id = toolResult[field];
+        const nextId = typeof id === "string" ? pendingRewrittenIds.get(id) : undefined;
+        if (nextId && nextId !== id) {
+          updates[field] = nextId;
         }
       }
-
-      if (typeof toolResult.toolUseId === "string") {
-        const nextToolUseId = pendingRewrittenIds.get(toolResult.toolUseId);
-        if (nextToolUseId && nextToolUseId !== toolResult.toolUseId) {
-          updates.toolUseId = nextToolUseId;
-          toolResultChanged = true;
-        }
-      }
-
-      if (!toolResultChanged) {
-        rewrittenMessages.push(msg);
-        continue;
-      }
-      changed = true;
-      rewrittenMessages.push({
-        ...toolResult,
-        ...updates,
-      } as AgentMessage);
-      continue;
+      return Object.keys(updates).length > 0 ? { ...toolResult, ...updates } : msg;
     }
 
     pendingRewrittenIds = null;
-    rewrittenMessages.push(msg);
-  }
-
-  return changed ? rewrittenMessages : messages;
+    return msg;
+  });
 }
 
 /**
- * Extracts the Responses `phase` (commentary/final_answer) from a v1 textSignature, if present.
  * Used when dropping the paired msg_* id so phase metadata can be preserved independently.
  */
 function extractTextSignaturePhase(signature: string): "commentary" | "final_answer" | undefined {
@@ -418,81 +233,60 @@ function extractTextSignaturePhase(signature: string): "commentary" | "final_ans
 }
 
 /**
- * OpenAI Responses API can reject transcripts that contain a standalone `reasoning` item id
- * without the required following item, or stale encrypted reasoning after a model route switch.
- *
- * OpenClaw persists provider-specific reasoning metadata in `thinkingSignature`; if that metadata
- * is incomplete or no longer replay-safe, drop the block to keep history usable.
+ * Drops reasoning from before a model route switch and clears paired message ids.
+ * The transport owns orphan detection after preparing the actual replay payload.
  */
-export function downgradeOpenAIReasoningBlocks(
+export function dropStaleOpenAIReasoning(
   messages: AgentMessage[],
-  options: DowngradeOpenAIReasoningBlocksOptions = {},
+  dropBefore?: number,
 ): AgentMessage[] {
-  let anyChanged = false;
-  const out: AgentMessage[] = [];
-
-  for (const msg of messages) {
+  if (dropBefore === undefined) {
+    return messages;
+  }
+  return rewriteReplayMessages(messages, (msg) => {
     if (!msg || typeof msg !== "object") {
-      out.push(msg);
-      continue;
+      return msg;
     }
 
     const role = (msg as { role?: unknown }).role;
     if (role !== "assistant") {
-      out.push(msg);
-      continue;
+      return msg;
     }
 
     const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
     if (!Array.isArray(assistantMsg.content)) {
-      out.push(msg);
-      continue;
+      return msg;
+    }
+    const messageTimestamp = parseDateFirstTimestampMs(assistantMsg.timestamp);
+    // Timestamp-less legacy entries cannot prove they belong to the new route;
+    // treat them as pre-switch so stale provider ids never re-enter replay.
+    if (messageTimestamp !== undefined && messageTimestamp > dropBefore) {
+      return msg;
     }
 
-    let changed = false;
     let droppedReplayableReasoning = false;
-    type AssistantContentBlock = (typeof assistantMsg.content)[number];
-
-    const nextContent: AssistantContentBlock[] = [];
-    for (const [i, block] of assistantMsg.content.entries()) {
+    const nextContent = assistantMsg.content.filter((block) => {
       if (!block) {
-        changed = true;
-        continue;
-      }
-      if (typeof block !== "object") {
-        nextContent.push(block);
-        continue;
+        return false;
       }
       const record = block as OpenAIThinkingBlock;
-      if (record.type !== "thinking") {
-        nextContent.push(block);
-        continue;
+      if (
+        typeof block !== "object" ||
+        record.type !== "thinking" ||
+        !hasOpenAIReasoningSignature(record.thinkingSignature)
+      ) {
+        return true;
       }
-      const signature = parseOpenAIReasoningSignature(record.thinkingSignature);
-      if (!signature) {
-        nextContent.push(block);
-        continue;
-      }
-      if (options.dropReplayableReasoning) {
-        changed = true;
-        droppedReplayableReasoning = true;
-        continue;
-      }
-      if (hasFollowingNonThinkingBlock(assistantMsg.content, i)) {
-        nextContent.push(block);
-        continue;
-      }
-      changed = true;
+      droppedReplayableReasoning = true;
+      return false;
+    });
+
+    if (nextContent.length === assistantMsg.content.length) {
+      return msg;
     }
 
-    if (!changed) {
-      out.push(msg);
-      continue;
-    }
-
-    anyChanged = true;
     if (nextContent.length === 0) {
-      continue;
+      return DROP_REPLAY_MESSAGE;
     }
 
     // When a replayable reasoning (rs_*) item is dropped after a model/fallback
@@ -517,8 +311,6 @@ export function downgradeOpenAIReasoningBlocks(
         })
       : nextContent;
 
-    out.push({ ...assistantMsg, content: finalContent } as AgentMessage);
-  }
-
-  return anyChanged ? out : messages;
+    return replaceCompactionReplayOwnerContent(assistantMsg, finalContent);
+  });
 }

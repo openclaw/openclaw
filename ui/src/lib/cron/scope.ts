@@ -5,30 +5,9 @@ type CronScopeState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   cronAgentId: string | null;
-  cronFailingCount: number | null;
   cronScopedTotal: number | null;
   cronScopedNextWakeAtMs: number | null;
 };
-
-export async function loadCronFailingCount(state: CronScopeState) {
-  if (!state.client || !state.connected) {
-    return;
-  }
-  try {
-    // The stats card needs an unfiltered total; the jobs table holds only the
-    // current filtered page. limit=1 because only `total` matters.
-    const res = await state.client.request<CronJobsListResult>("cron.list", {
-      ...(state.cronAgentId ? { agentId: state.cronAgentId } : {}),
-      enabled: "enabled",
-      lastRunStatus: "error",
-      limit: 1,
-      offset: 0,
-    });
-    state.cronFailingCount = typeof res?.total === "number" ? res.total : null;
-  } catch {
-    state.cronFailingCount = null;
-  }
-}
 
 export async function loadCronScopeStats(state: CronScopeState) {
   if (!state.client || !state.connected || !state.cronAgentId) {
@@ -41,12 +20,14 @@ export async function loadCronScopeStats(state: CronScopeState) {
       state.client.request<CronJobsListResult>("cron.list", {
         agentId: state.cronAgentId,
         includeDisabled: true,
+        includeDeliveryPreviews: false,
         limit: 1,
         offset: 0,
       }),
       state.client.request<CronJobsListResult>("cron.list", {
         agentId: state.cronAgentId,
         enabled: "enabled",
+        includeDeliveryPreviews: false,
         limit: 1,
         offset: 0,
         sortBy: "nextRunAtMs",

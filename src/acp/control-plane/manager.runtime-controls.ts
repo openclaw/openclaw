@@ -1,4 +1,3 @@
-/** Applies runtime mode/config controls to live ACP backend sessions. */
 import type {
   AcpRuntime,
   AcpRuntimeCapabilities,
@@ -7,19 +6,31 @@ import type {
 } from "@openclaw/acp-core/runtime/types";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { AcpRuntimeError, withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
-import type { SessionAcpMeta } from "./manager.types.js";
-import { createUnsupportedControlError } from "./manager.utils.js";
-import type { CachedRuntimeState } from "./runtime-cache.js";
+import {
+  AcpRuntimeError,
+  formatAcpErrorChain,
+  toAcpRuntimeError,
+  withAcpRuntimeErrorBoundary,
+} from "../runtime/errors.js";
+import type { CachedRuntimeState } from "./manager.runtime-handle-cache.js";
+import { isAcpOwnerRepairRequired } from "./manager.runtime-owner.js";
+import type { AcpSessionRuntimeOptions, SessionAcpMeta } from "./manager.types.js";
+import { assertCurrentAcpActor, createUnsupportedControlError } from "./manager.utils.js";
 import {
   buildRuntimeConfigOptionPairs,
   buildRuntimeControlSignature,
+  isThinkingConfigKey,
   normalizeText,
+  reconcileAcceptedRuntimeOptions,
+  resolveRuntimeConfigOptionKey,
   resolveRuntimeOptionsFromMeta,
+  runtimeOptionsEqual,
 } from "./runtime-options.js";
 
 const OPTIONAL_TIMEOUT_CONFIG_KEYS = new Set(["timeout", "timeout_seconds"]);
-const THINKING_CONFIG_KEYS = new Set(["thinking", "effort", "reasoning_effort", "thought_level"]);
+const ACP_CONFIG_REJECTION_CODE_RE = /-3260[23]/;
+const CONFIG_OPTION_REJECTION_RE =
+  /invalid params|unsupported|not supported|not implement|invalid value|unknown config option|unknown value|not a valid value|must be one of/;
 
 function extractConfigOptionKeys(value: unknown): string[] {
   if (!Array.isArray(value)) {
@@ -48,13 +59,18 @@ function isOptionalTimeoutConfigKey(key: string): boolean {
   return OPTIONAL_TIMEOUT_CONFIG_KEYS.has(normalizeLowercaseStringOrEmpty(key));
 }
 
-function isThinkingConfigKey(key: string): boolean {
-  return THINKING_CONFIG_KEYS.has(normalizeLowercaseStringOrEmpty(key));
-}
-
 function isUnsupportedControlRejection(error: unknown): boolean {
   const errorCode = error && typeof error === "object" ? (error as { code?: unknown }).code : null;
   return errorCode === "ACP_BACKEND_UNSUPPORTED_CONTROL";
+}
+
+function describeConfigOptionRejection(error: unknown): string {
+  const described = toAcpRuntimeError({
+    error,
+    fallbackCode: "ACP_TURN_FAILED",
+    fallbackMessage: "",
+  });
+  return normalizeLowercaseStringOrEmpty(`${formatAcpErrorChain(error)} ${described.message}`);
 }
 
 function isUnsupportedOptionalTimeoutConfigRejection(key: string, error: unknown): boolean {
@@ -77,7 +93,25 @@ function isUnsupportedOptionalTimeoutConfigRejection(key: string, error: unknown
   );
 }
 
-/** Resolves backend-advertised controls plus locally inferred runtime control support. */
+function isRejectedThinkingConfigOption(key: string, error: unknown): boolean {
+  if (!isThinkingConfigKey(key)) {
+    return false;
+  }
+  if (isUnsupportedControlRejection(error)) {
+    return true;
+  }
+  const description = describeConfigOptionRejection(error);
+  const describesConfigOption =
+    description.includes("session/set_config_option") ||
+    (description.includes("config option") &&
+      description.includes(normalizeLowercaseStringOrEmpty(key)));
+  return (
+    describesConfigOption &&
+    ACP_CONFIG_REJECTION_CODE_RE.test(description) &&
+    CONFIG_OPTION_REJECTION_RE.test(description)
+  );
+}
+
 export async function resolveManagerRuntimeCapabilities(params: {
   runtime: AcpRuntime;
   handle: AcpRuntimeHandle;
@@ -116,7 +150,10 @@ export async function resolveManagerRuntimeCapabilities(params: {
       for (const key of extractRuntimeStatusConfigOptionKeys(status)) {
         normalizedKeys.add(key);
       }
-    } catch {
+    } catch (error) {
+      if (isAcpOwnerRepairRequired(error)) {
+        throw error;
+      }
       // Status-derived option keys are an optional refinement. Keep the
       // capability result usable for runtimes that expose controls but cannot
       // answer status before a turn.
@@ -135,8 +172,13 @@ export async function applyManagerRuntimeControls(params: {
   handle: AcpRuntimeHandle;
   meta: SessionAcpMeta;
   getCachedRuntimeState: (sessionKey: string) => CachedRuntimeState | null;
+  isCurrentActor?: () => boolean;
+  onOptionsChanged: (options: AcpSessionRuntimeOptions) => Promise<void>;
+  onModelApplied?: (model: string | undefined) => void;
 }): Promise<void> {
-  const options = resolveRuntimeOptionsFromMeta(params.meta);
+  const isCurrentActor = params.isCurrentActor ?? (() => true);
+  assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
+  let options = resolveRuntimeOptionsFromMeta(params.meta);
   const signature = buildRuntimeControlSignature(options);
   const cached = params.getCachedRuntimeState(params.sessionKey);
   if (cached?.appliedControlSignature === signature) {
@@ -149,9 +191,13 @@ export async function applyManagerRuntimeControls(params: {
     handle: params.handle,
     includeStatusConfigOptionKeys: needsConfigOptionKeys,
   });
+  assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
   const backend = params.handle.backend || params.meta.backend;
-  const runtimeMode = normalizeText(options.runtimeMode);
+  const runtimeMode = options.runtimeMode;
   const configOptions = buildRuntimeConfigOptionPairs(options, capabilities.configOptionKeys);
+  const thinkingConfigKey = options.thinking
+    ? resolveRuntimeConfigOptionKey("thinking", capabilities.configOptionKeys)
+    : undefined;
   const advertisedKeys = new Set(
     (capabilities.configOptionKeys ?? [])
       .map((entry) => normalizeLowercaseStringOrEmpty(entry))
@@ -160,6 +206,7 @@ export async function applyManagerRuntimeControls(params: {
 
   await withAcpRuntimeErrorBoundary({
     run: async () => {
+      assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
       if (runtimeMode) {
         if (!capabilities.controls.includes("session/set_mode") || !params.runtime.setMode) {
           throw createUnsupportedControlError({
@@ -183,7 +230,13 @@ export async function applyManagerRuntimeControls(params: {
             control: "session/set_config_option",
           });
         }
-        for (const [key, value] of configOptions) {
+        for (const [key, requestedValue] of configOptions) {
+          assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
+          // Model changes can clamp or remove unsupported thinking before its turn in the replay.
+          const value = key === thinkingConfigKey ? options.thinking : requestedValue;
+          if (value === undefined) {
+            continue;
+          }
           if (
             advertisedKeys.size > 0 &&
             !advertisedKeys.has(normalizeLowercaseStringOrEmpty(key))
@@ -194,15 +247,38 @@ export async function applyManagerRuntimeControls(params: {
             );
           }
           try {
-            await params.runtime.setConfigOption({
+            const result = await params.runtime.setConfigOption({
               handle: params.handle,
               key,
               value,
             });
+            assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
+            if (key === resolveRuntimeConfigOptionKey("model", capabilities.configOptionKeys)) {
+              const applied = result?.configOptions.find((option) => option.id === key);
+              params.onModelApplied?.(
+                result
+                  ? typeof applied?.currentValue === "string"
+                    ? applied.currentValue
+                    : undefined
+                  : value,
+              );
+            }
+            const accepted = reconcileAcceptedRuntimeOptions(
+              options,
+              result,
+              normalizeLowercaseStringOrEmpty(key) === "model" ? options.thinking : undefined,
+            );
+            if (!runtimeOptionsEqual(options, accepted)) {
+              // Persist each accepted change even if a later control fails.
+              await params.onOptionsChanged(accepted);
+              assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
+              options = accepted;
+            }
           } catch (error) {
+            assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
             if (
               isUnsupportedOptionalTimeoutConfigRejection(key, error) ||
-              (isThinkingConfigKey(key) && isUnsupportedControlRejection(error))
+              isRejectedThinkingConfigOption(key, error)
             ) {
               continue;
             }
@@ -215,7 +291,8 @@ export async function applyManagerRuntimeControls(params: {
     fallbackMessage: "Could not apply ACP runtime options before turn execution.",
   });
 
+  assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
   if (cached) {
-    cached.appliedControlSignature = signature;
+    cached.appliedControlSignature = buildRuntimeControlSignature(options);
   }
 }

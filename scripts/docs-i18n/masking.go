@@ -14,20 +14,20 @@ var (
 	linkLabelRe           = regexp.MustCompile(`!?\[([^\]\r\n]+)\]\(([^)\r\n]+)\)`)
 	placeholderRe         = regexp.MustCompile(`__OC_I18N_\d+__`)
 	listMarkerRe          = regexp.MustCompile(`^([ \t]*(?:>[ \t]*)*)([-+*]|[0-9]+[.)])([ \t]+)`)
-	listContainerPrefixRe = regexp.MustCompile(`^[ \t]*(?:>[ \t]*)*$`)
+	listContainerPrefixRe = regexp.MustCompile(`^[ \t]*(?:(?:>[ \t]*)|(?:(?:[-+*]|[0-9]+[.)])[ \t]+))*$`)
 	// Hard validation stays limited to low-ambiguity composite literals. Plain numbers remain
 	// model-visible so target-language plurals and ordinals can change grammar without false failures.
 	numericValueRe = regexp.MustCompile(`(?:0[xX][0-9A-Za-z_]+|0[bB][0-9A-Za-z_]+|0[oO][0-9A-Za-z_]+|[0-9]+(?:\.[0-9]+)?(?::[0-9]+(?:\.[0-9]+)?)+|[0-9]+(?:\.[0-9]+)?(?:/[0-9]+(?:\.[0-9]+)?)+|(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)[eE][+-]?[0-9]+)`)
 )
 
-func maskMarkdown(text string, nextPlaceholder func() string, placeholders *[]string, mapping map[string]string) string {
-	masked := maskMatches(text, inlineCodeRe, nextPlaceholder, placeholders, mapping)
-	masked = maskMatches(masked, angleLinkRe, nextPlaceholder, placeholders, mapping)
-	masked = maskLinkURLs(masked, nextPlaceholder, placeholders, mapping)
+func maskMarkdown(text string, state *PlaceholderState) string {
+	masked := maskMatches(text, inlineCodeRe, state)
+	masked = maskMatches(masked, angleLinkRe, state)
+	masked = maskLinkURLs(masked, state)
 	return masked
 }
 
-func maskMarkdownFencedLiterals(text string, nextPlaceholder func() string, placeholders *[]string, mapping map[string]string) string {
+func maskMarkdownFencedLiterals(text string, state *PlaceholderState) string {
 	angleValues, protocolValues, directiveValues := extractMarkdownFencedLiteralValues(text)
 	unique := map[string]struct{}{}
 	for _, value := range append(append(angleValues, protocolValues...), directiveValues...) {
@@ -52,32 +52,17 @@ func maskMarkdownFencedLiterals(text string, nextPlaceholder func() string, plac
 	}
 	literalRE := regexp.MustCompile(strings.Join(quoted, "|"))
 
-	state := markdownLiteralFenceState{}
+	fenceState := markdownLiteralFenceState{}
 	lines := strings.SplitAfter(text, "\n")
 	for index, line := range lines {
-		if state.delimiter == "" {
-			if opening, ok := parseMarkdownLiteralFenceOpening(line); ok {
-				state = opening
-			}
-			continue
+		if fenceState.consumeLine(line) {
+			lines[index] = maskMatches(line, literalRE, state)
 		}
-		if !continuesMarkdownLiteralFenceContainer(line, state) {
-			state = markdownLiteralFenceState{}
-			if opening, ok := parseMarkdownLiteralFenceOpening(line); ok {
-				state = opening
-			}
-			continue
-		}
-		if isMarkdownLiteralFenceClosing(line, state) {
-			state = markdownLiteralFenceState{}
-			continue
-		}
-		lines[index] = maskMatches(line, literalRE, nextPlaceholder, placeholders, mapping)
 	}
 	return strings.Join(lines, "")
 }
 
-func maskMarkdownDocSyntax(text string, nextPlaceholder func() string, placeholders *[]string, mapping map[string]string) string {
+func maskMarkdownDocSyntax(text string, state *PlaceholderState) string {
 	inlineRanges := make([][2]int, 0)
 	fencedRanges := markdownLiteralFenceByteRanges(text)
 	for _, span := range markdownBlockBacktickRanges(text) {
@@ -86,9 +71,9 @@ func maskMarkdownDocSyntax(text string, nextPlaceholder func() string, placehold
 		}
 	}
 	inlineRanges = append(inlineRanges, protectedMarkdownLinkRanges(text)...)
-	masked := maskByteRanges(text, inlineRanges, nextPlaceholder, placeholders, mapping)
-
-	return maskByteRanges(masked, markdownListMarkerRanges(masked), nextPlaceholder, placeholders, mapping)
+	masked := maskByteRanges(text, inlineRanges, state)
+	masked = maskByteRanges(masked, markdownListMarkerRanges(masked), state)
+	return maskByteRanges(masked, compositeNumericValueRanges(masked), state)
 }
 
 func markdownListMarkerRanges(text string) [][2]int {
@@ -96,23 +81,9 @@ func markdownListMarkerRanges(text string) [][2]int {
 	fenceState := markdownLiteralFenceState{}
 	offset := 0
 	for _, line := range strings.SplitAfter(text, "\n") {
-		insideFence := false
-		if fenceState.delimiter != "" {
-			if continuesMarkdownLiteralFenceContainer(line, fenceState) {
-				insideFence = true
-				if isMarkdownLiteralFenceClosing(line, fenceState) {
-					fenceState = markdownLiteralFenceState{}
-				}
-			} else {
-				fenceState = markdownLiteralFenceState{}
-			}
-		}
-		if !insideFence {
-			if opening, ok := parseMarkdownLiteralFenceOpening(line); ok {
-				fenceState = opening
-				insideFence = true
-			}
-		}
+		insideFence := fenceState.delimiter != "" && continuesMarkdownLiteralFenceContainer(line, fenceState)
+		fenceState.consumeLine(line)
+		insideFence = insideFence || fenceState.delimiter != ""
 		if !insideFence {
 			if match := listMarkerRe.FindStringSubmatchIndex(line); len(match) >= 6 {
 				listRanges = append(listRanges, [2]int{offset + match[0], offset + match[1]})
@@ -150,12 +121,123 @@ func normalizeMaskedListMarkerPlaceholders(text string, mapping map[string]strin
 	return strings.Join(lines, "")
 }
 
-func protectedMarkdownLinkRanges(text string) [][2]int {
-	ranges := make([][2]int, 0)
-	for _, match := range linkLabelRe.FindAllStringSubmatchIndex(text, -1) {
+func maskedListMarkerPlaceholders(mapping map[string]string) map[string]string {
+	placeholders := make(map[string]string)
+	for placeholder, original := range mapping {
+		markerSpan := listMarkerRe.FindStringIndex(original)
+		if markerSpan != nil && markerSpan[0] == 0 && markerSpan[1] == len(original) {
+			placeholders[placeholder] = original
+		}
+	}
+	return placeholders
+}
+
+func normalizeMaskedListMarkerSpacing(source, translated string, listPlaceholders map[string]string) string {
+	type replacement struct {
+		start int
+		end   int
+		value string
+	}
+	replacements := make([]replacement, 0, len(listPlaceholders))
+	for placeholder := range listPlaceholders {
+		sourcePosition := strings.Index(source, placeholder)
+		translatedPosition := strings.Index(translated, placeholder)
+		if sourcePosition < 0 || translatedPosition < 0 {
+			continue
+		}
+		sourceStart := markdownWhitespaceRunStart(source, sourcePosition)
+		translatedStart := markdownWhitespaceRunStart(translated, translatedPosition)
+		sourceSpacing := source[sourceStart:sourcePosition]
+		if translated[translatedStart:translatedPosition] == sourceSpacing {
+			continue
+		}
+		replacements = append(replacements, replacement{
+			start: translatedStart,
+			end:   translatedPosition,
+			value: sourceSpacing,
+		})
+	}
+	sort.Slice(replacements, func(i, j int) bool { return replacements[i].start > replacements[j].start })
+	for _, item := range replacements {
+		translated = translated[:item.start] + item.value + translated[item.end:]
+	}
+	return translated
+}
+
+func markdownWhitespaceRunStart(text string, position int) int {
+	return len(strings.TrimRight(text[:position], " \t\r\n"))
+}
+
+func escapeUnexpectedListItemBodyMarkers(source, translated string, listPlaceholders map[string]string) string {
+	insertions := make([]int, 0)
+	for placeholder := range listPlaceholders {
+		sourcePosition := strings.Index(source, placeholder)
+		translatedPosition := strings.Index(translated, placeholder)
+		if sourcePosition < 0 || translatedPosition < 0 {
+			continue
+		}
+		sourceBody := source[sourcePosition+len(placeholder):]
+		translatedBody := translated[translatedPosition+len(placeholder):]
+		sourceMatch := listMarkerRe.FindStringSubmatchIndex(sourceBody)
+		translatedMatch := listMarkerRe.FindStringSubmatchIndex(translatedBody)
+		if len(translatedMatch) < 6 || len(sourceMatch) >= 6 {
+			continue
+		}
+		markerStart, markerEnd := translatedMatch[4], translatedMatch[5]
+		insertAt := markerStart
+		if markerEnd-markerStart > 1 {
+			insertAt = markerEnd - 1
+		}
+		insertions = append(insertions, translatedPosition+len(placeholder)+insertAt)
+	}
+	sort.Slice(insertions, func(i, j int) bool { return insertions[i] > insertions[j] })
+	for _, position := range insertions {
+		translated = translated[:position] + `\` + translated[position:]
+	}
+	return translated
+}
+
+func escapeUnexpectedMarkdownListMarkers(text string, listPlaceholders map[string]string) string {
+	ranges := markdownListMarkerRanges(text)
+	if len(ranges) == 0 {
+		return text
+	}
+	var out strings.Builder
+	position := 0
+	for _, span := range ranges {
+		lineEnd := strings.IndexByte(text[span[1]:], '\n')
+		if lineEnd < 0 {
+			lineEnd = len(text)
+		} else {
+			lineEnd += span[1]
+		}
+		if placeholder := placeholderRe.FindString(text[span[1]:lineEnd]); placeholder != "" {
+			if _, ok := listPlaceholders[placeholder]; ok && strings.HasPrefix(text[span[1]:lineEnd], placeholder) {
+				continue
+			}
+		}
+		value := text[span[0]:span[1]]
+		match := listMarkerRe.FindStringSubmatchIndex(value)
 		if len(match) < 6 {
 			continue
 		}
+		markerStart, markerEnd := match[4], match[5]
+		insertAt := markerStart
+		if markerEnd-markerStart > 1 {
+			insertAt = markerEnd - 1
+		}
+		absolute := span[0] + insertAt
+		out.WriteString(text[position:absolute])
+		out.WriteByte('\\')
+		position = absolute
+	}
+	out.WriteString(text[position:])
+	return out.String()
+}
+
+func protectedMarkdownLinkRanges(text string) [][2]int {
+	ranges := make([][2]int, 0)
+	for _, match := range linkLabelRe.FindAllStringSubmatchIndex(text, -1) {
 		label := text[match[2]:match[3]]
 		destination := markdownInlineLinkDestination(text[match[4]:match[5]])
 		if isProtectedProductLinkLabel(label, destination) {
@@ -181,11 +263,20 @@ func markdownInlineLinkDestination(value string) string {
 }
 
 func extractNumericValues(text string) []string {
+	ranges := compositeNumericValueRanges(text)
+	values := make([]string, 0, len(ranges))
+	for _, span := range ranges {
+		values = append(values, text[span[0]:span[1]])
+	}
+	return values
+}
+
+func compositeNumericValueRanges(text string) [][2]int {
 	protocolRanges := make([][2]int, 0)
 	for _, span := range placeholderRe.FindAllStringIndex(text, -1) {
 		protocolRanges = append(protocolRanges, [2]int{span[0], span[1]})
 	}
-	values := make([]string, 0)
+	ranges := make([][2]int, 0)
 	for _, span := range numericValueRe.FindAllStringIndex(text, -1) {
 		candidate := [2]int{span[0], span[1]}
 		if hasCompositeNumericLeadingContinuation(text, candidate[0]) ||
@@ -193,9 +284,9 @@ func extractNumericValues(text string) []string {
 			rangeOverlapsAny(candidate, protocolRanges) {
 			continue
 		}
-		values = append(values, text[span[0]:span[1]])
+		ranges = append(ranges, [2]int{span[0], span[1]})
 	}
-	return values
+	return ranges
 }
 
 func hasClockMeridiemSuffix(text string, span [2]int) bool {
@@ -206,7 +297,7 @@ func hasClockMeridiemSuffix(text string, span [2]int) bool {
 	if suffix != "am" && suffix != "pm" {
 		return false
 	}
-	return span[1]+2 == len(text) || !isCompositeNumericWordByte(text[span[1]+2])
+	return span[1]+2 == len(text) || !isASCIIAlphaNumeric(text[span[1]+2])
 }
 
 func hasCompositeNumericLeadingContinuation(text string, position int) bool {
@@ -218,9 +309,9 @@ func hasCompositeNumericLeadingContinuation(text string, position int) bool {
 		for position > 0 && text[position-1] == '_' {
 			position--
 		}
-		return position > 0 && isCompositeNumericWordByte(text[position-1])
+		return position > 0 && isASCIIAlphaNumeric(text[position-1])
 	}
-	return value == '.' || value == '-' || isCompositeNumericWordByte(value)
+	return value == '.' || isASCIIAlphaNumeric(value)
 }
 
 func hasCompositeNumericContinuation(text string, position int) bool {
@@ -232,16 +323,12 @@ func hasCompositeNumericContinuation(text string, position int) bool {
 		for position < len(text) && text[position] == '_' {
 			position++
 		}
-		return position < len(text) && isCompositeNumericWordByte(text[position])
+		return position < len(text) && isASCIIAlphaNumeric(text[position])
 	}
-	if isCompositeNumericWordByte(value) {
+	if isASCIIAlphaNumeric(value) {
 		return true
 	}
-	return value == '.' && position+1 < len(text) && isCompositeNumericWordByte(text[position+1])
-}
-
-func isCompositeNumericWordByte(value byte) bool {
-	return value >= '0' && value <= '9' || value >= 'A' && value <= 'Z' || value >= 'a' && value <= 'z'
+	return value == '.' && position+1 < len(text) && isASCIIAlphaNumeric(text[position+1])
 }
 
 func markdownLiteralFenceByteRanges(text string) [][2]int {
@@ -286,7 +373,7 @@ func markdownLiteralFenceByteRangesWithMode(text string, includeUnclosed bool) [
 	return ranges
 }
 
-func maskByteRanges(text string, ranges [][2]int, nextPlaceholder func() string, placeholders *[]string, mapping map[string]string) string {
+func maskByteRanges(text string, ranges [][2]int, state *PlaceholderState) string {
 	if len(ranges) == 0 {
 		return text
 	}
@@ -304,64 +391,23 @@ func maskByteRanges(text string, ranges [][2]int, nextPlaceholder func() string,
 			continue
 		}
 		out.WriteString(text[pos:start])
-		placeholder := nextPlaceholder()
-		mapping[placeholder] = text[start:end]
-		*placeholders = append(*placeholders, placeholder)
-		out.WriteString(placeholder)
+		out.WriteString(state.mask(text[start:end]))
 		pos = end
 	}
 	out.WriteString(text[pos:])
 	return out.String()
 }
 
-func maskMatches(text string, re *regexp.Regexp, nextPlaceholder func() string, placeholders *[]string, mapping map[string]string) string {
-	matches := re.FindAllStringIndex(text, -1)
-	if len(matches) == 0 {
-		return text
-	}
-	var out strings.Builder
-	pos := 0
-	for _, span := range matches {
-		start, end := span[0], span[1]
-		if start < pos {
-			continue
-		}
-		out.WriteString(text[pos:start])
-		placeholder := nextPlaceholder()
-		mapping[placeholder] = text[start:end]
-		*placeholders = append(*placeholders, placeholder)
-		out.WriteString(placeholder)
-		pos = end
-	}
-	out.WriteString(text[pos:])
-	return out.String()
+func maskMatches(text string, re *regexp.Regexp, state *PlaceholderState) string {
+	return re.ReplaceAllStringFunc(text, state.mask)
 }
 
-func maskLinkURLs(text string, nextPlaceholder func() string, placeholders *[]string, mapping map[string]string) string {
-	matches := linkURLRe.FindAllStringSubmatchIndex(text, -1)
-	if len(matches) == 0 {
-		return text
+func maskLinkURLs(text string, state *PlaceholderState) string {
+	ranges := make([][2]int, 0)
+	for _, span := range linkURLRe.FindAllStringSubmatchIndex(text, -1) {
+		ranges = append(ranges, [2]int{span[2], span[3]})
 	}
-	var out strings.Builder
-	pos := 0
-	for _, span := range matches {
-		fullStart := span[0]
-		urlStart, urlEnd := span[2], span[3]
-		if urlStart < 0 || urlEnd < 0 {
-			continue
-		}
-		if fullStart < pos {
-			continue
-		}
-		out.WriteString(text[pos:urlStart])
-		placeholder := nextPlaceholder()
-		mapping[placeholder] = text[urlStart:urlEnd]
-		*placeholders = append(*placeholders, placeholder)
-		out.WriteString(placeholder)
-		pos = urlEnd
-	}
-	out.WriteString(text[pos:])
-	return out.String()
+	return maskByteRanges(text, ranges, state)
 }
 
 func unmaskMarkdown(text string, placeholders []string, mapping map[string]string) string {

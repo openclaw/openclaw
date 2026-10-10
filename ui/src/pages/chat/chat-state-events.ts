@@ -1,0 +1,655 @@
+import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { sleepWithAbort } from "@openclaw/retry";
+import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
+import { pruneMapToMaxSize } from "../../../../src/infra/map-size.ts";
+import type { GatewayEventFrame } from "../../api/gateway.ts";
+import { extractText } from "../../lib/chat/message-extract.ts";
+import {
+  isHiddenAssistantStreamText,
+  shouldHideAssistantChatMessage,
+} from "../../lib/chat/message-visibility.ts";
+import { pickFreshestObserverDigest } from "../../lib/observer-digest.ts";
+import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { visibleSessionMatches } from "../../lib/sessions/navigation.ts";
+import { readSessionChangedEvent } from "../../lib/sessions/reconcile.ts";
+import {
+  resolveUiConversationIdentity,
+  areUiSessionKeysEquivalent,
+  isUiGlobalSessionKey,
+  normalizeAgentId,
+  resolveUiDefaultAgentId,
+  resolveUiGlobalAliasAgentId,
+  resolveUiSelectedGlobalAgentId,
+} from "../../lib/sessions/session-key.ts";
+import type { SessionChangedRowResult } from "../../lib/sessions/session-row-reconcile.ts";
+import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
+import { invalidateChatBranches, loadChatBranches } from "./chat-history-branches.ts";
+import { getChatHistoryLoadState } from "./chat-history-state.ts";
+import { loadChatHistory } from "./chat-history.ts";
+import {
+  pullRequestLinksIn,
+  refreshPullRequestsForFinalReply,
+  refreshPullRequestsForStreamedLinks,
+  retirePullRequestRefreshes,
+} from "./chat-pull-request-refresh.ts";
+import { clearPendingQueueItemsForRun, readDeliveredQueuedChatSendForRun } from "./chat-queue.ts";
+import { flushChatQueueForEvent, resumeStoredChatOutboxes } from "./chat-send-actions.ts";
+import {
+  requiresChatInputConsumption,
+  retireDeliveredQueuedUserTurn,
+} from "./chat-send-support.ts";
+import { recordChatSendServerTiming } from "./chat-send-timing.ts";
+import { refreshCurrentChatSessionList } from "./chat-session.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
+import { applyChatModelCatalogSnapshot } from "./chat-state-refresh.ts";
+import { requestChatPageUpdate } from "./chat-state-render.ts";
+import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
+import {
+  refreshSessionWorkspace,
+  retireSessionWorkspaceCheckout,
+} from "./components/chat-session-workspace.ts";
+import {
+  getChatSessionProjection,
+  readChatSessionProjectionScope,
+  reduceChatSessionProjection,
+  retireChatSubmissionDisplay,
+} from "./history-merge.ts";
+import { captureOutboxPayloadOwner } from "./outbox-payloads.ts";
+import {
+  reconcileChatRunFromCurrentSessionRow,
+  reconcileChatRunFromSessionRow,
+  reconcileChatRunAfterSessionStatePublication,
+} from "./run-lifecycle.ts";
+import { reconcileSessionApprovalEvent } from "./session-approval-projection.ts";
+import { applySessionMessagePayload } from "./session-message-apply.ts";
+import { isSidebarSlotVisible } from "./sidebar-layout.ts";
+import { rememberAuthoritativeTerminal } from "./terminal-message-identity.ts";
+import { readTerminalReplyRecoveryState } from "./terminal-reply-recovery.ts";
+import { handleSessionOperationEvent } from "./tool-stream-status.ts";
+import { handleAgentEvent } from "./tool-stream.ts";
+
+const BRANCH_TOPOLOGY_REASONS = new Set(["rewind", "branch-switch", "fork", "reset", "new"]);
+const PENDING_INPUT_REASONS = new Set(["send", "agent.run.started", "agent.input.settled"]);
+const MISSING_TERMINAL_HISTORY_RETRY_DELAYS_MS = [100, 400, 1_500, 3_000] as const;
+const MAX_REMEMBERED_TERMINAL_RECOVERY_CLAIMS = 64;
+type ChatPanePresentation = () => boolean;
+
+function refreshChatEventHistory(
+  state: ChatPageHost,
+  presented: boolean,
+  supersedeInFlight?: true,
+): void {
+  void loadChatHistory(state, {
+    deferBranches: !presented,
+    ...(supersedeInFlight ? { supersedeInFlight } : {}),
+  }).finally(() => state.requestUpdate?.());
+}
+
+function selectedGlobalEventAgentId(state: ChatPageHost, agentId: string | null): string {
+  return agentId ? normalizeAgentId(agentId) : resolveUiDefaultAgentId(state);
+}
+
+function globalSessionEventMatchesChat(
+  state: ChatPageHost,
+  event: NonNullable<ReturnType<typeof readSessionChangedEvent>>,
+): boolean {
+  if (!isUiGlobalSessionKey(event.key)) {
+    return true;
+  }
+  const selectedAgentId = isUiGlobalSessionKey(state.sessionKey)
+    ? resolveUiSelectedGlobalAgentId(state)
+    : resolveUiGlobalAliasAgentId(state, state.sessionKey);
+  return selectedAgentId
+    ? selectedGlobalEventAgentId(state, event.agentId) === selectedAgentId
+    : true;
+}
+
+function finishSessionMessageRunReconcile(
+  state: ChatPageHost,
+  sessionKey: string,
+  runId: string | null,
+  row: SessionChangedRowResult["row"] | undefined,
+  presentation: ChatPanePresentation,
+): boolean {
+  const cleared = row
+    ? reconcileChatRunFromSessionRow(state, row, { publishRunStatus: true })
+    : reconcileChatRunFromCurrentSessionRow(state, { publishRunStatus: true });
+  const session = row ?? selectedChatSessionRow(state);
+  const needsRunObservation = Boolean(
+    state.chatRunId && session?.hasActiveRun === false && !isSessionRunActive(session),
+  );
+  if (!cleared && !needsRunObservation) {
+    return false;
+  }
+  if (cleared) {
+    clearPendingQueueItemsForRun(state, runId ?? undefined);
+  }
+  // A different completed run cannot settle local ownership without a fresh read.
+  void loadChatHistory(state, {
+    deferBranches: !presentation(),
+    supersedeInFlight: needsRunObservation,
+  })
+    .finally(() => {
+      if (!areUiSessionKeysEquivalent(state.sessionKey, sessionKey)) {
+        return;
+      }
+      void flushChatQueueForEvent(state);
+      state.requestUpdate?.();
+    })
+    .catch(() => undefined);
+  return true;
+}
+
+function handleSessionMessageEvent(
+  state: ChatPageHost,
+  payload: unknown,
+  presentation: ChatPanePresentation,
+  result: SessionChangedRowResult,
+) {
+  const event = readSessionChangedEvent(payload);
+  if (!event || !globalSessionEventMatchesChat(state, event)) {
+    return false;
+  }
+  const matchesChat = visibleSessionMatches(state, event.key, event.agentId ?? undefined);
+  const isUserMessage =
+    readSessionMessageIdentity(asNullableRecord(payload)?.message)?.role === "user";
+  if (matchesChat) {
+    invalidateChatBranches(state);
+    // A pre-commit snapshot can erase even an admitted live reply when its leaf advances.
+    // Fence it before run settlement, while retaining the loader's single queued refresh.
+    if (getChatHistoryLoadState(state).phase === "in-flight") {
+      refreshChatEventHistory(state, presentation(), true);
+    }
+    // A previous run can persist its final after the next local run starts.
+    // Admit that sequenced row now so the later unsequenced chat.final replay
+    // replaces it in place instead of appending below the newer user turn.
+    applySessionMessagePayload(state, payload, event.hasActiveRun ?? undefined, {
+      kind: "live",
+      activeRunId: state.chatRunId,
+    });
+  }
+  if (matchesChat && event.archived !== null) {
+    state.selectedChatSessionArchived = event.archived;
+  }
+  const runIdBeforeApply = state.chatRunId;
+  rememberAuthoritativeTerminal({ event, host: state, matchesChat, payload, runIdBeforeApply });
+  if (result.applied) {
+    reconcileChatRunAfterSessionStatePublication(state);
+  }
+  if (runIdBeforeApply && matchesChat) {
+    const runId = event.clientRunId ?? event.runId ?? runIdBeforeApply;
+    state.pendingSessionMessageReloadSessionKey = event.key;
+    if (event.hasActiveRun === true) {
+      if (isUserMessage) {
+        // Promotion changes pending custody even while the next turn is active.
+        refreshChatEventHistory(state, presentation(), true);
+      }
+      return true;
+    }
+    if (finishSessionMessageRunReconcile(state, event.key, runId, result.row, presentation)) {
+      state.pendingSessionMessageReloadSessionKey = null;
+      return true;
+    }
+    void refreshCurrentChatSessionList(state).then(() => {
+      if (!state.pendingSessionMessageReloadSessionKey || state.chatRunId !== runIdBeforeApply) {
+        return;
+      }
+      if (
+        finishSessionMessageRunReconcile(
+          state,
+          state.pendingSessionMessageReloadSessionKey,
+          runId,
+          undefined,
+          presentation,
+        )
+      ) {
+        state.pendingSessionMessageReloadSessionKey = null;
+      }
+    });
+    return true;
+  }
+  if (matchesChat) {
+    state.pendingSessionMessageReloadSessionKey = null;
+    refreshChatEventHistory(state, presentation());
+  }
+  return matchesChat;
+}
+
+function replayPendingSessionMessageReload(
+  state: ChatPageHost,
+  payload: ChatEventPayload | undefined,
+  presentation: ChatPanePresentation,
+): boolean {
+  const pendingSessionKey = state.pendingSessionMessageReloadSessionKey;
+  const payloadSessionKey = payload?.sessionKey?.trim();
+  if (
+    !pendingSessionKey ||
+    !payloadSessionKey ||
+    !areUiSessionKeysEquivalent(pendingSessionKey, payloadSessionKey) ||
+    !areUiSessionKeysEquivalent(payloadSessionKey, state.sessionKey) ||
+    state.chatRunId
+  ) {
+    return false;
+  }
+  state.pendingSessionMessageReloadSessionKey = null;
+  refreshChatEventHistory(state, presentation());
+  return true;
+}
+
+type TerminalRecoveryOwnership = {
+  sessionKey: string;
+  agentId: string;
+  runId: string;
+  client: ChatPageHost["client"];
+  connectionEpoch: number;
+  runLifecycleGeneration: number;
+  initialTerminalReplySignatures: ReadonlySet<string>;
+};
+
+const terminalRecoveryClaimsByPane = new WeakMap<object, Map<string, ChatPageHost["client"]>>();
+
+function claimTerminalRecovery(state: ChatPageHost, ownership: TerminalRecoveryOwnership): boolean {
+  let claims = terminalRecoveryClaimsByPane.get(state);
+  if (!claims) {
+    claims = new Map();
+    terminalRecoveryClaimsByPane.set(state, claims);
+  }
+  const key = [
+    ownership.connectionEpoch,
+    ownership.runLifecycleGeneration,
+    ownership.agentId,
+    ownership.sessionKey,
+    ownership.runId,
+  ].join("\0");
+  if (claims.has(key) && claims.get(key) === ownership.client) {
+    return false;
+  }
+  claims.delete(key);
+  claims.set(key, ownership.client);
+  pruneMapToMaxSize(claims, MAX_REMEMBERED_TERMINAL_RECOVERY_CLAIMS);
+  return true;
+}
+
+function hasRecoveredTerminalReply(
+  state: ChatPageHost,
+  ownership: TerminalRecoveryOwnership,
+): boolean {
+  const recovery = readTerminalReplyRecoveryState(state, ownership.runId);
+  return (
+    recovery.acceptedFinal ||
+    [...recovery.terminalReplySignatures].some(
+      (signature) => !ownership.initialTerminalReplySignatures.has(signature),
+    )
+  );
+}
+
+function terminalRecoveryStillOwned(
+  state: ChatPageHost,
+  ownership: TerminalRecoveryOwnership,
+): boolean {
+  return (
+    state.connected &&
+    state.client === ownership.client &&
+    state.connectionEpoch === ownership.connectionEpoch &&
+    areUiSessionKeysEquivalent(state.sessionKey, ownership.sessionKey) &&
+    resolveChatAgentId(state) === ownership.agentId &&
+    (state.chatRunId === null || state.chatRunId === ownership.runId) &&
+    (state.chatRunLifecycleGeneration ?? 0) === ownership.runLifecycleGeneration &&
+    !hasRecoveredTerminalReply(state, ownership)
+  );
+}
+
+async function recoverMissingTerminalReply(
+  state: ChatPageHost,
+  ownership: TerminalRecoveryOwnership,
+  presentation: ChatPanePresentation,
+): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    if (!terminalRecoveryStillOwned(state, ownership)) {
+      return;
+    }
+    await loadChatHistory(state, {
+      deferBranches: !presentation(),
+      supersedeInFlight: true,
+    });
+    state.requestUpdate?.();
+    if (!terminalRecoveryStillOwned(state, ownership)) {
+      return;
+    }
+    const delayMs = MISSING_TERMINAL_HISTORY_RETRY_DELAYS_MS[attempt];
+    if (delayMs === undefined) {
+      return;
+    }
+    await sleepWithAbort(delayMs);
+  }
+}
+
+function handleSessionsChangedEvent(
+  state: ChatPageHost,
+  payload: unknown,
+  presentation: ChatPanePresentation,
+  result: SessionChangedRowResult,
+) {
+  const presented = presentation();
+  const runIdBeforeApply = state.chatRunId;
+  const event = readSessionChangedEvent(payload);
+  const matchesChat = Boolean(
+    event &&
+    globalSessionEventMatchesChat(state, event) &&
+    visibleSessionMatches(state, event.key, event.agentId ?? undefined),
+  );
+  const source = asNullableRecord(payload);
+  const resetsSession = source?.reason === "reset" || source?.phase === "reset";
+  if (event && (resetsSession || source?.reason === "new")) {
+    state.retireSessionCompanion?.(event.key, event.agentId);
+  }
+  const resetsSelectedSession = matchesChat && resetsSession;
+  if (matchesChat && (resetsSession || source?.reason === "new")) {
+    const initial = state.chatSubmissions?.readInitial(state.sessionKey, state.client ?? null);
+    if (initial) {
+      retireChatSubmissionDisplay(state, new Set([initial.pendingRunId]));
+    }
+  }
+  const changesBranchTopology =
+    matchesChat && typeof source?.reason === "string" && BRANCH_TOPOLOGY_REASONS.has(source.reason);
+  if (resetsSelectedSession || changesBranchTopology) {
+    retirePullRequestRefreshes(state);
+  }
+  if (matchesChat && source?.reason === "project") {
+    retireSessionWorkspaceCheckout(state);
+  }
+  if (resetsSelectedSession) {
+    const scope = readChatSessionProjectionScope(state, { agentId: resolveChatAgentId(state) });
+    // Reset keeps the public session ID; the explicit reducer event is the
+    // only proof that its old live and pending transcript no longer exists.
+    reduceChatSessionProjection(state, { type: "sessionReset" }, { scope });
+  }
+  if (changesBranchTopology) {
+    invalidateChatBranches(state);
+    state.chatBranches = [];
+    state.chatBranchesSessionKey = null;
+    state.chatBranchesConnectionEpoch = null;
+    retireSessionWorkspaceCheckout(state);
+    if (presented) {
+      void loadChatBranches(state);
+    }
+  }
+  if (event && matchesChat && event.archived !== null) {
+    state.selectedChatSessionArchived = event.archived;
+  }
+  if (result.applied) {
+    reconcileChatRunAfterSessionStatePublication(state);
+  }
+  if (resetsSelectedSession || (matchesChat && source?.reason === "compact")) {
+    refreshChatEventHistory(state, presented);
+    return true;
+  }
+  if (
+    matchesChat &&
+    source?.phase === "message" &&
+    source.message === undefined &&
+    source.messageId === undefined &&
+    source.messageSeq === undefined
+  ) {
+    invalidateChatBranches(state);
+    // Legacy multi-message writes cannot prove individual message cursors.
+    // A snapshot begun before this invalidation cannot recover the committed rows.
+    refreshChatEventHistory(state, presented, true);
+    return true;
+  }
+  if (
+    matchesChat &&
+    typeof source?.reason === "string" &&
+    PENDING_INPUT_REASONS.has(source.reason)
+  ) {
+    // Custody can change without a transcript append. A read begun before this
+    // event must not hide accepted input until the active run ends.
+    refreshChatEventHistory(state, presented, true);
+  }
+  // The session capability owns roster invalidation, including unapplied events.
+  // A pane refresh here bypasses its debounce and multiplies reads across split panes.
+  if (result.applied && event && runIdBeforeApply && matchesChat) {
+    finishSessionMessageRunReconcile(
+      state,
+      event.key,
+      event.clientRunId ?? event.runId ?? runIdBeforeApply,
+      result.row,
+      presentation,
+    );
+  }
+  return matchesChat;
+}
+
+function finalAssistantReplyHasPullRequestLink(
+  state: ChatPageHost,
+  payload: ChatEventPayload | undefined,
+): boolean {
+  if (
+    payload?.state !== "final" ||
+    !visibleSessionMatches(state, payload.sessionKey, payload.agentId)
+  ) {
+    return false;
+  }
+  const finalText = extractText(payload.message);
+  const streamTexts =
+    typeof payload.runId === "string" && payload.runId === state.chatRunId
+      ? [state.chatStream, ...(state.chatStreamSegments ?? []).map((segment) => segment.text)]
+      : [];
+  const isVisible = (text: string | null | undefined) =>
+    typeof text === "string" && text.trim().length > 0 && !isHiddenAssistantStreamText(text);
+  return (
+    ((isVisible(finalText) && !shouldHideAssistantChatMessage(payload.message)) ||
+      streamTexts.some(isVisible)) &&
+    [finalText, ...streamTexts].some((text) => pullRequestLinksIn(text).length > 0)
+  );
+}
+
+function observerDigestMatchesAuthoritativeRun(
+  state: ChatPageHost,
+  digest: SessionObserverDigest,
+): boolean {
+  if (state.chatRunId) {
+    return digest.runId === state.chatRunId;
+  }
+  const session = selectedChatSessionRow(state);
+  return Boolean(
+    session?.hasActiveRun && digest.runId && session.activeRunIds?.includes(digest.runId),
+  );
+}
+
+export function handlePageGatewayEvent(
+  state: ChatPageHost,
+  event: GatewayEventFrame,
+  isPresented: ChatPanePresentation = () => true,
+  sessionResult: SessionChangedRowResult = { applied: false },
+): void {
+  if (event.event === "models.snapshot") {
+    applyChatModelCatalogSnapshot(state);
+    return;
+  }
+  if (event.event === "session.approval") {
+    const payload = asNullableRecord(event.payload);
+    if (!payload || typeof payload.sessionKey !== "string") {
+      return;
+    }
+    const queue = reconcileSessionApprovalEvent(
+      state.chatSessionApprovalQueue ?? [],
+      payload,
+      state.sessionKey,
+      resolveChatAgentId(state),
+    );
+    if (queue) {
+      state.chatSessionApprovalQueue = queue;
+      requestChatPageUpdate(state);
+    }
+    return;
+  }
+  if (event.event === "chat") {
+    const payload = event.payload as ChatEventPayload | undefined;
+    const terminalPayload =
+      payload &&
+      (payload.state === "final" || payload.state === "aborted" || payload.state === "error")
+        ? payload
+        : undefined;
+    const apply = () => {
+      const sessionMatches = Boolean(
+        payload && visibleSessionMatches(state, payload.sessionKey, payload.agentId),
+      );
+      const recoveryRunId =
+        payload?.state === "final" &&
+        (payload.message === undefined || payload.message === null) &&
+        sessionMatches &&
+        typeof payload.runId === "string" &&
+        (!state.chatRunId || state.chatRunId === payload.runId)
+          ? payload.runId
+          : null;
+      const recoveryScope = recoveryRunId ? readChatSessionProjectionScope(state) : null;
+      if (
+        payload?.state === "delta" &&
+        typeof payload.runId === "string" &&
+        sessionMatches &&
+        // Same-session background streams cannot clear the foreground run's status.
+        (!state.chatRunId || state.chatRunId === payload.runId) &&
+        state.observerDigest &&
+        state.observerDigest.runId !== payload.runId
+      ) {
+        state.observerDigest = null;
+      }
+      if (payload?.state === "delta" && typeof payload.deltaText === "string" && sessionMatches) {
+        refreshPullRequestsForStreamedLinks(state, payload.runId, payload.deltaText);
+      }
+      const shouldRefreshPullRequests = finalAssistantReplyHasPullRequestLink(state, payload);
+      if (handleChatGatewayEvent(state, payload) === "injected") {
+        requestChatPageUpdate(state);
+        return;
+      }
+      if (terminalPayload && sessionMatches) {
+        clearPendingQueueItemsForRun(state, terminalPayload.runId);
+      }
+      if (shouldRefreshPullRequests && payload) {
+        refreshPullRequestsForFinalReply(state, payload.runId, payload.message);
+      }
+      const shouldRecoverMissingTerminal = Boolean(
+        recoveryRunId &&
+        recoveryScope &&
+        getChatSessionProjection(state, recoveryScope).runs[recoveryRunId]?.status === "completed",
+      );
+      const recoveryOwnership: TerminalRecoveryOwnership | null =
+        shouldRecoverMissingTerminal && payload?.runId
+          ? {
+              sessionKey: payload.sessionKey,
+              agentId: resolveChatAgentId(state),
+              runId: payload.runId,
+              client: state.client,
+              connectionEpoch: state.connectionEpoch,
+              runLifecycleGeneration: state.chatRunLifecycleGeneration ?? 0,
+              initialTerminalReplySignatures: readTerminalReplyRecoveryState(state, payload.runId)
+                .terminalReplySignatures,
+            }
+          : null;
+      if (recoveryOwnership && claimTerminalRecovery(state, recoveryOwnership)) {
+        state.pendingSessionMessageReloadSessionKey = null;
+        // The first owned message-less terminal recovers history even when an
+        // earlier snapshot already marked the run complete. Replays, yielded, or
+        // background-run terminals must not repeat I/O or disturb the foreground pane.
+        // Persistence can trail the terminal event, so retry bounded authoritative
+        // snapshots until the completed run's reply becomes visible.
+        void recoverMissingTerminalReply(state, recoveryOwnership, isPresented).catch(
+          () => undefined,
+        );
+      } else {
+        replayPendingSessionMessageReload(state, payload, isPresented);
+      }
+      if (terminalPayload) {
+        void resumeStoredChatOutboxes(state, event);
+        if (sessionMatches) {
+          if (isPresented()) {
+            refreshSessionWorkspace(state, isSidebarSlotVisible(state.sidebarLayout, "workspace"));
+          } else {
+            retireSessionWorkspaceCheckout(state);
+          }
+        }
+      }
+      if (sessionMatches) {
+        requestChatPageUpdate(state, payload?.state === "delta" ? "animation-frame" : "immediate");
+      }
+    };
+    if (!terminalPayload) {
+      apply();
+      return;
+    }
+    // A cold Blob read may finish after another connection or retry takes over.
+    // Apply the terminal only after its complete user turn owns independent bytes.
+    const scope = resolveUiConversationIdentity(
+      state,
+      terminalPayload.sessionKey,
+      isUiGlobalSessionKey(terminalPayload.sessionKey)
+        ? selectedGlobalEventAgentId(state, terminalPayload.agentId ?? null)
+        : terminalPayload.agentId,
+    );
+    const connectionEpoch = state.connectionEpoch;
+    const queued = readDeliveredQueuedChatSendForRun(state, terminalPayload.runId, scope);
+    const ownerIsCurrent = captureOutboxPayloadOwner(state);
+    // Keep the complete user display pinned before applying the terminal, but
+    // ordinary input retains its durable retry bytes until consumption is proven.
+    const retirement = retireDeliveredQueuedUserTurn(state, terminalPayload.runId, scope, {
+      retainUntilConsumed: Boolean(queued && requiresChatInputConsumption(queued)),
+    });
+    const finish = (outcome: Awaited<typeof retirement>) => {
+      if (outcome !== "stale" && state.connectionEpoch === connectionEpoch && ownerIsCurrent()) {
+        apply();
+      }
+    };
+    if (retirement instanceof Promise) {
+      void retirement.then(finish);
+      return;
+    }
+    finish(retirement);
+    return;
+  }
+  if (event.event === "session.observer") {
+    const payload = event.payload as SessionObserverDigest | undefined;
+    if (
+      !payload ||
+      !visibleSessionMatches(state, payload.sessionKey, payload.agentId) ||
+      !observerDigestMatchesAuthoritativeRun(state, payload)
+    ) {
+      return;
+    }
+    const previous = state.observerDigest;
+    if (
+      previous?.runId === payload.runId &&
+      pickFreshestObserverDigest(previous, payload) === previous
+    ) {
+      return;
+    }
+    state.observerDigest = payload;
+    requestChatPageUpdate(state);
+    return;
+  }
+  if (event.event === "agent" || event.event === "session.tool") {
+    if (handleAgentEvent(state as never, event.payload as never)) {
+      requestChatPageUpdate(state, "animation-frame");
+    }
+    return;
+  }
+  if (event.event === "session.operation") {
+    handleSessionOperationEvent(state as never, event.payload as never);
+    requestChatPageUpdate(state, "animation-frame");
+    return;
+  }
+  if (event.event === "chat.send_timing") {
+    recordChatSendServerTiming(state, event.payload);
+    return;
+  }
+  if (event.event === "session.message" || event.event === "sessions.changed") {
+    const handle =
+      event.event === "session.message" ? handleSessionMessageEvent : handleSessionsChangedEvent;
+    const scopedChange = handle(state, event.payload, isPresented, sessionResult);
+    void resumeStoredChatOutboxes(state, event);
+    if (scopedChange) {
+      requestChatPageUpdate(state, "animation-frame");
+    }
+  }
+}

@@ -1,8 +1,6 @@
 import type { MeetingBrowserCandidateTab } from "openclaw/plugin-sdk/meeting-runtime";
 
-type TeamsMeetingIdentity = { kind: "work"; key: string } | { kind: "consumer"; key: string };
-
-function parseTeamsMeetingIdentity(url: string | undefined): TeamsMeetingIdentity | undefined {
+export function normalizeTeamsMeetingUrlForReuse(url: string | undefined): string | undefined {
   if (!url) {
     return undefined;
   }
@@ -21,10 +19,35 @@ function parseTeamsMeetingIdentity(url: string | undefined): TeamsMeetingIdentit
       if (!/^19:[^/]+@thread\.(?:v2|tacv2)$/i.test(threadId)) {
         return undefined;
       }
-      return { kind: "work", key: threadId };
+      return `teams-work:${threadId}`;
     }
     if (hostname === "teams.live.com") {
-      const match = parsed.pathname.match(/^\/meet\/([^/]+)\/?$/i);
+      const launcherTarget =
+        parsed.pathname.toLowerCase() === "/dl/launcher/launcher.html"
+          ? parsed.searchParams.get("url")
+          : undefined;
+      const launcherMatch = launcherTarget?.match(/^\/_#\/meet\/([^/?#]+)(?:\?(.+))?$/i);
+      let lightMeeting: { meetingCode?: unknown; passcode?: unknown } | undefined;
+      if (parsed.pathname.toLowerCase() === "/light-meetings/launch") {
+        try {
+          const coordinates = parsed.searchParams.get("coords");
+          const decoded =
+            coordinates && coordinates.length <= 16_384
+              ? JSON.parse(Buffer.from(coordinates, "base64").toString("utf8"))
+              : undefined;
+          if (decoded && typeof decoded === "object") {
+            lightMeeting = decoded as { meetingCode?: unknown; passcode?: unknown };
+          }
+        } catch {
+          return undefined;
+        }
+      }
+      const match =
+        parsed.pathname.match(/^\/meet\/([^/]+)\/?$/i) ??
+        launcherMatch ??
+        (typeof lightMeeting?.meetingCode === "string"
+          ? ([undefined, lightMeeting.meetingCode] as const)
+          : undefined);
       if (!match?.[1]) {
         return undefined;
       }
@@ -32,11 +55,12 @@ function parseTeamsMeetingIdentity(url: string | undefined): TeamsMeetingIdentit
       if (!/^[a-z0-9_-]+$/i.test(meetCode)) {
         return undefined;
       }
-      const password = parsed.searchParams.get("p");
-      return {
-        kind: "consumer",
-        key: `${meetCode.toLowerCase()}:p:${encodeURIComponent(password ?? "")}`,
-      };
+      const passcode = launcherMatch
+        ? new URLSearchParams(launcherMatch[2] ?? "").get("p")
+        : typeof lightMeeting?.passcode === "string"
+          ? lightMeeting.passcode
+          : parsed.searchParams.get("p");
+      return `teams-consumer:${meetCode.toLowerCase()}:p:${encodeURIComponent(passcode ?? "")}`;
     }
   } catch {
     return undefined;
@@ -49,7 +73,7 @@ export function normalizeTeamsMeetingUrl(input: unknown): string {
     throw new Error("Microsoft Teams meeting URL is required");
   }
   const value = input.trim();
-  if (!parseTeamsMeetingIdentity(value)) {
+  if (!normalizeTeamsMeetingUrlForReuse(value)) {
     throw new Error(
       "Microsoft Teams meeting URL must use https://teams.microsoft.com/l/meetup-join/... or https://teams.live.com/meet/<id>",
     );
@@ -57,11 +81,6 @@ export function normalizeTeamsMeetingUrl(input: unknown): string {
   const parsed = new URL(value);
   parsed.hash = "";
   return parsed.toString();
-}
-
-export function normalizeTeamsMeetingUrlForReuse(url: string | undefined): string | undefined {
-  const identity = parseTeamsMeetingIdentity(url);
-  return identity ? `teams-${identity.kind}:${identity.key}` : undefined;
 }
 
 export function isSameTeamsMeetingUrl(
@@ -83,13 +102,10 @@ export function isRecoverableTeamsMeetingTab(
   if (normalizeTeamsMeetingUrlForReuse(tab.url)) {
     return true;
   }
-  try {
-    const hostname = new URL(tab.url ?? "").hostname.toLowerCase();
-    return (
-      (hostname === "login.microsoftonline.com" || hostname.endsWith(".microsoftonline.com")) &&
-      /sign in|microsoft|teams/i.test(tab.title ?? "")
-    );
-  } catch {
-    return false;
-  }
+  const hostname = URL.parse(tab.url ?? "")?.hostname.toLowerCase();
+  return Boolean(
+    hostname &&
+    (hostname === "login.microsoftonline.com" || hostname.endsWith(".microsoftonline.com")) &&
+    /sign in|microsoft|teams/i.test(tab.title ?? ""),
+  );
 }

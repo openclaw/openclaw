@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { createServer } from "node:http";
+import { createServer, type RequestListener } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,11 +13,13 @@ const manifestPath = fileURLToPath(new URL("../openclaw.plugin.json", import.met
 const packagePath = fileURLToPath(new URL("../package.json", import.meta.url));
 
 function runResolver(params: {
-  request: unknown;
+  ids?: string[];
   env?: Record<string, string>;
-}): Promise<{ stdout: string; stderr: string; code: number | null }> {
+  resolverExecutablePath?: string;
+  timeoutMs?: number;
+}): Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [resolverPath], {
+    const child = spawn(process.execPath, [params.resolverExecutablePath ?? resolverPath], {
       stdio: ["pipe", "pipe", "pipe"],
       env: {
         ...process.env,
@@ -36,6 +38,14 @@ function runResolver(params: {
     });
     let stdout = "";
     let stderr = "";
+    let timedOut = false;
+    const timeout =
+      params.timeoutMs === undefined
+        ? undefined
+        : setTimeout(() => {
+            timedOut = true;
+            child.kill();
+          }, params.timeoutMs);
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
@@ -44,20 +54,69 @@ function runResolver(params: {
     child.stderr.on("data", (chunk) => {
       stderr += String(chunk);
     });
-    child.on("error", reject);
-    child.on("exit", (code) => {
-      resolve({ stdout, stderr, code });
+    child.once("error", (error) => {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      reject(error);
     });
-    child.stdin.end(`${JSON.stringify(params.request)}\n`);
+    child.once("exit", () => {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    });
+    // Process exit ends the watchdog; pipe closure owns the complete JSON response.
+    child.once("close", (code) => resolve({ stdout, stderr, code, timedOut }));
+    child.stdin.end(
+      `${JSON.stringify({
+        protocolVersion: 1,
+        provider: "vault",
+        ids: params.ids ?? ["providers/openai/apiKey"],
+      })}\n`,
+    );
+  });
+}
+
+function expectResponse(
+  result: Awaited<ReturnType<typeof runResolver>>,
+  expected: {
+    code?: number;
+    values?: Record<string, string>;
+    errors?: Record<string, unknown>;
+  },
+) {
+  expect(result).toMatchObject({ code: expected.code ?? 0, stderr: "", timedOut: false });
+  expect(JSON.parse(result.stdout)).toEqual({
+    protocolVersion: 1,
+    values: expected.values ?? {},
+    errors: Object.fromEntries(
+      Object.entries(expected.errors ?? {}).map(([id, message]) => [id, { message }]),
+    ),
   });
 }
 
 const servers: Array<{ close: () => Promise<void> }> = [];
 const tempDirs: string[] = [];
 
+async function writeTimeoutResolver(): Promise<string> {
+  const staged = path.join(path.dirname(resolverPath), `.vault-timeout-${process.pid}.js`);
+  tempDirs.push(staged);
+  const source = readFileSync(resolverPath, "utf8");
+  const stagedSource = source.replace(
+    "const VAULT_FETCH_TIMEOUT_MS = 5000;",
+    "const VAULT_FETCH_TIMEOUT_MS = 500;",
+  );
+  expect(stagedSource).not.toBe(source);
+  await writeFile(staged, stagedSource, "utf8");
+  return staged;
+}
+
 afterEach(async () => {
-  await Promise.all(servers.splice(0).map((server) => server.close()));
-  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })));
+  try {
+    await Promise.all(servers.splice(0).map((server) => server.close()));
+  } finally {
+    await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })));
+  }
 });
 
 async function writeTempFile(name: string, value: string): Promise<string> {
@@ -68,9 +127,33 @@ async function writeTempFile(name: string, value: string): Promise<string> {
   return filePath;
 }
 
+async function startVaultServer(handler: RequestListener): Promise<string> {
+  const server = createServer(handler);
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  servers.push({
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+        // A failed assertion must also release stalled response sockets.
+        server.closeAllConnections();
+      }),
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("fixture server did not bind to a TCP port");
+  }
+  return `http://127.0.0.1:${address.port}`;
+}
+
 async function startVaultFixture() {
   const requests: Array<{ url?: string; token?: string; namespace?: string }> = [];
-  const server = createServer((request, response) => {
+  const vaultAddr = await startVaultServer((request, response) => {
     requests.push({
       url: request.url,
       token: request.headers["x-vault-token"]?.toString(),
@@ -87,46 +170,39 @@ async function startVaultFixture() {
       }),
     );
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  servers.push({
-    close: () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      }),
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("fixture server did not bind to a TCP port");
-  }
   return {
     requests,
-    vaultAddr: `http://127.0.0.1:${address.port}`,
+    vaultAddr,
   };
 }
 
-async function startVaultErrorFixture() {
-  const server = createServer((_request, response) => {
-    response.statusCode = 403;
+async function startVaultErrorFixture(
+  statusCode = 403,
+  errors = ["token not-a-real-sensitive-value denied"],
+  lookupSucceeds = true,
+  lookupErrors = errors,
+  lookupStatusCode = statusCode,
+) {
+  const requests: string[] = [];
+  const vaultAddr = await startVaultServer((request, response) => {
+    requests.push(request.url ?? "");
+    if (request.url === "/v1/auth/token/lookup-self" && lookupSucceeds) {
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ data: { id: "redacted-fixture-token" } }));
+      return;
+    }
+    response.statusCode =
+      request.url === "/v1/auth/token/lookup-self" ? lookupStatusCode : statusCode;
     response.setHeader("content-type", "application/json");
-    response.end(JSON.stringify({ errors: ["token not-a-real-sensitive-value denied"] }));
-  });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  servers.push({
-    close: () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
+    response.end(
+      JSON.stringify({
+        errors: request.url === "/v1/auth/token/lookup-self" ? lookupErrors : errors,
       }),
+    );
   });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("fixture server did not bind to a TCP port");
-  }
   return {
-    vaultAddr: `http://127.0.0.1:${address.port}`,
+    requests,
+    vaultAddr,
   };
 }
 
@@ -150,7 +226,7 @@ async function startVaultJwtFixture() {
     namespace?: string;
     body?: unknown;
   }> = [];
-  const server = createServer((request, response) => {
+  const vaultAddr = await startVaultServer((request, response) => {
     void (async () => {
       const body = await readRequestBody(request);
       requests.push({
@@ -188,53 +264,9 @@ async function startVaultJwtFixture() {
       response.end(error instanceof Error ? error.message : String(error));
     });
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  servers.push({
-    close: () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      }),
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("fixture server did not bind to a TCP port");
-  }
   return {
     requests,
-    vaultAddr: `http://127.0.0.1:${address.port}`,
-  };
-}
-
-async function startVaultJwtErrorFixture() {
-  const server = createServer((request, response) => {
-    void readRequestBody(request)
-      .then(() => {
-        response.statusCode = 403;
-        response.setHeader("content-type", "application/json");
-        response.end(JSON.stringify({ errors: ["jwt not-a-real-sensitive-jwt denied"] }));
-      })
-      .catch((error: unknown) => {
-        response.statusCode = 500;
-        response.end(error instanceof Error ? error.message : String(error));
-      });
-  });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  servers.push({
-    close: () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      }),
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("fixture server did not bind to a TCP port");
-  }
-  return {
-    vaultAddr: `http://127.0.0.1:${address.port}`,
+    vaultAddr,
   };
 }
 
@@ -299,390 +331,360 @@ describe("plugin manifest", () => {
 });
 
 describe("vault SecretRef resolver", () => {
+  it("keeps malformed successful Vault responses scoped per id", async () => {
+    const vaultAddr = await startVaultServer((_request, response) => {
+      response.setHeader("content-type", "application/json");
+      response.end("not-json");
+    });
+    const result = await runResolver({
+      ids: ["providers/openai/apiKey", "tts/elevenlabs/apiKey"],
+      env: {
+        VAULT_ADDR: vaultAddr,
+        VAULT_TOKEN: "not-a-real-auth-header",
+      },
+    });
+
+    expectResponse(result, {
+      errors: {
+        "providers/openai/apiKey":
+          'Vault read response for "providers/openai/apiKey" was not valid JSON.',
+        "tts/elevenlabs/apiKey":
+          'Vault read response for "tts/elevenlabs/apiKey" was not valid JSON.',
+      },
+    });
+  });
+
   it("requires Vault auth instead of accepting plaintext inline values", async () => {
     const result = await runResolver({
-      request: {
-        protocolVersion: 1,
-        provider: "vault",
-        ids: ["providers/openai/apiKey"],
-      },
+      ids: ["providers/openai/apiKey", "tts/elevenlabs/apiKey"],
       env: {
         VAULT_ADDR: "https://vault.example.test",
         OPENCLAW_VAULT_VALUES_JSON: JSON.stringify({
           "providers/openai/apiKey": "not-a-real-value",
+          "tts/elevenlabs/apiKey": "not-a-real-value",
         }),
       },
     });
 
-    expect(result).toMatchObject({ code: 0, stderr: "" });
-    expect(JSON.parse(result.stdout)).toEqual({
-      protocolVersion: 1,
-      values: {},
+    expectResponse(result, {
+      code: 1,
       errors: {
-        "providers/openai/apiKey": {
-          message: "VAULT_TOKEN is required.",
-        },
+        request: "VAULT_TOKEN is required.",
       },
     });
   });
 
-  it("reads KV v2 secrets from Vault using path and field ids", async () => {
+  it.each([
+    { method: "token", namespace: "team-a" },
+    { method: "token_file", namespace: "" },
+  ])("reads KV v2 secrets using $method credentials", async ({ method, namespace }) => {
     const fixture = await startVaultFixture();
+    const token = "not-a-real-token";
+    const credentials: Record<string, string> =
+      method === "token_file"
+        ? { VAULT_TOKEN_FILE: await writeTempFile("vault-token", `${token}\n`) }
+        : { VAULT_TOKEN: token };
     const result = await runResolver({
-      request: {
-        protocolVersion: 1,
-        provider: "vault",
-        ids: ["providers/openai/apiKey"],
-      },
       env: {
         VAULT_ADDR: fixture.vaultAddr,
-        VAULT_TOKEN: "not-a-real-auth-header",
-        VAULT_NAMESPACE: "team-a",
+        ...credentials,
+        OPENCLAW_VAULT_AUTH_METHOD: method === "token" ? "" : method,
+        VAULT_NAMESPACE: namespace,
       },
     });
 
-    expect(result).toMatchObject({ code: 0, stderr: "" });
-    expect(JSON.parse(result.stdout)).toEqual({
-      protocolVersion: 1,
-      values: {
-        "providers/openai/apiKey": "not-a-real-vault-value",
-      },
-      errors: {},
+    expectResponse(result, {
+      values: { "providers/openai/apiKey": "not-a-real-vault-value" },
     });
     expect(fixture.requests).toEqual([
-      {
-        url: "/v1/secret/data/providers/openai",
-        token: "not-a-real-auth-header",
-        namespace: "team-a",
-      },
+      { url: "/v1/secret/data/providers/openai", token, namespace: namespace || undefined },
     ]);
   });
 
-  it("rejects dot segments before building Vault request URLs", async () => {
+  it.each([
+    ["providers/../../../sys/mounts/apiKey", "dot"],
+    ["providers//openai/apiKey", "empty"],
+  ])("rejects invalid path segments in %s before sending a Vault request", async (id, kind) => {
     const fixture = await startVaultFixture();
     const result = await runResolver({
-      request: {
-        protocolVersion: 1,
-        provider: "vault",
-        ids: ["providers/../../../sys/mounts/apiKey"],
-      },
+      ids: [id],
       env: {
         VAULT_ADDR: fixture.vaultAddr,
         VAULT_TOKEN: "not-a-real-auth-header",
       },
     });
 
-    expect(result).toMatchObject({ code: 0, stderr: "" });
-    expect(JSON.parse(result.stdout)).toEqual({
-      protocolVersion: 1,
-      values: {},
-      errors: {
-        "providers/../../../sys/mounts/apiKey": {
-          message:
-            'Vault SecretRef id "providers/../../../sys/mounts/apiKey" must not contain dot path segments.',
-        },
-      },
+    expectResponse(result, {
+      errors: { [id]: `Vault SecretRef id "${id}" must not contain ${kind} path segments.` },
     });
     expect(fixture.requests).toEqual([]);
   });
 
-  it.each(["/providers/openai/apiKey", "providers/openai/apiKey/", "providers//openai/apiKey"])(
-    "rejects empty path segments in Vault id %s",
-    async (id) => {
-      const fixture = await startVaultFixture();
+  it.each([
+    ["token_file", "VAULT_TOKEN_FILE"],
+    ["jwt", "OPENCLAW_VAULT_JWT_FILE"],
+  ])("rejects oversized %s credentials before sending a request", async (method, fileEnv) => {
+    const fixture = await startVaultFixture();
+    const credentialFile = await writeTempFile("vault-credential", "x".repeat(16 * 1024 + 1));
+    const result = await runResolver({
+      env: {
+        VAULT_ADDR: fixture.vaultAddr,
+        [fileEnv]: credentialFile,
+        OPENCLAW_VAULT_AUTH_METHOD: method,
+        OPENCLAW_VAULT_AUTH_ROLE: "openclaw",
+      },
+    });
+
+    expectResponse(result, {
+      code: 1,
+      errors: { request: expect.stringContaining("exceeds 16384 bytes") },
+    });
+    expect(fixture.requests).toEqual([]);
+  });
+
+  it.each([
+    { method: "jwt", mount: "keycloak", namespace: "team-a", loginPath: "/v1/auth/keycloak/login" },
+    { method: "kubernetes", mount: "", namespace: "", loginPath: "/v1/auth/kubernetes/login" },
+  ])("exchanges $method JWTs using the configured or default mount", async (auth) => {
+    const fixture = await startVaultJwtFixture();
+    const jwtFile = await writeTempFile("vault-jwt", "not-a-real-workload-jwt\n");
+    const result = await runResolver({
+      env: {
+        VAULT_ADDR: fixture.vaultAddr,
+        VAULT_NAMESPACE: auth.namespace,
+        OPENCLAW_VAULT_AUTH_METHOD: auth.method,
+        OPENCLAW_VAULT_AUTH_MOUNT: auth.mount,
+        OPENCLAW_VAULT_AUTH_ROLE: "openclaw",
+        OPENCLAW_VAULT_JWT_FILE: jwtFile,
+      },
+    });
+
+    expectResponse(result, {
+      values: { "providers/openai/apiKey": "not-a-real-vault-value" },
+    });
+    expect(fixture.requests).toEqual([
+      {
+        url: auth.loginPath,
+        method: "POST",
+        token: undefined,
+        namespace: auth.namespace || undefined,
+        body: { role: "openclaw", jwt: "not-a-real-workload-jwt" },
+      },
+      {
+        url: "/v1/secret/data/providers/openai",
+        method: "GET",
+        token: "not-a-real-vault-client-token",
+        namespace: auth.namespace || undefined,
+        body: undefined,
+      },
+    ]);
+  });
+
+  it.each([
+    { label: "successful", lookupSucceeds: true, lookupStatus: 200, lookupErrors: [] },
+    {
+      label: "denied",
+      lookupSucceeds: false,
+      lookupStatus: 403,
+      lookupErrors: ["permission denied"],
+    },
+    {
+      label: "unavailable",
+      lookupSucceeds: false,
+      lookupStatus: 503,
+      lookupErrors: ["temporarily unavailable"],
+    },
+  ])("keeps ACL failures scoped per id when token lookup is $label", async (lookup) => {
+    const fixture = await startVaultErrorFixture(
+      403,
+      ["token not-a-real-sensitive-value denied"],
+      lookup.lookupSucceeds,
+      lookup.lookupErrors,
+      lookup.lookupStatus,
+    );
+    const result = await runResolver({
+      ids: ["providers/openai/apiKey", "tts/elevenlabs/apiKey"],
+      env: {
+        VAULT_ADDR: fixture.vaultAddr,
+        VAULT_TOKEN: "not-a-real-auth-header",
+      },
+    });
+
+    expectResponse(result, {
+      errors: {
+        "providers/openai/apiKey": 'Vault read failed for "providers/openai/apiKey" (403).',
+        "tts/elevenlabs/apiKey": 'Vault read failed for "tts/elevenlabs/apiKey" (403).',
+      },
+    });
+    expect(result.stdout).not.toContain("not-a-real-sensitive-value");
+    expect(fixture.requests.filter((url) => url === "/v1/auth/token/lookup-self")).toHaveLength(1);
+  });
+
+  it("reports one provider failure when Vault rejects an invalid token", async () => {
+    const fixture = await startVaultErrorFixture(403, ["permission denied", "invalid token"]);
+    const result = await runResolver({
+      ids: ["providers/openai/apiKey", "tts/elevenlabs/apiKey"],
+      env: {
+        VAULT_ADDR: fixture.vaultAddr,
+        VAULT_TOKEN: "not-a-real-auth-header",
+      },
+    });
+
+    expectResponse(result, {
+      code: 1,
+      errors: {
+        request: "Vault read failed (403).",
+      },
+    });
+    expect(result.stdout).not.toContain("permission denied");
+    expect(result.stdout).not.toContain("invalid token");
+  });
+
+  it("promotes an explicit invalid-token self-lookup response to one provider failure", async () => {
+    const fixture = await startVaultErrorFixture(403, ["permission denied"], false, [
+      "invalid token",
+      "permission denied",
+    ]);
+    const result = await runResolver({
+      ids: ["providers/openai/apiKey", "tts/elevenlabs/apiKey"],
+      env: {
+        VAULT_ADDR: fixture.vaultAddr,
+        VAULT_TOKEN: "not-a-real-auth-header",
+      },
+    });
+
+    expectResponse(result, {
+      code: 1,
+      errors: {
+        request: "Vault token is invalid.",
+      },
+    });
+    expect(fixture.requests.filter((url) => url === "/v1/auth/token/lookup-self")).toHaveLength(1);
+  });
+
+  it.each([412, 472, 473, 503])(
+    "reports one provider failure for Vault availability status %s",
+    async (statusCode) => {
+      const fixture = await startVaultErrorFixture(statusCode);
       const result = await runResolver({
-        request: {
-          protocolVersion: 1,
-          provider: "vault",
-          ids: [id],
-        },
+        ids: ["providers/openai/apiKey", "tts/elevenlabs/apiKey"],
         env: {
           VAULT_ADDR: fixture.vaultAddr,
           VAULT_TOKEN: "not-a-real-auth-header",
         },
       });
 
-      expect(result).toMatchObject({ code: 0, stderr: "" });
-      expect(JSON.parse(result.stdout)).toEqual({
-        protocolVersion: 1,
-        values: {},
+      expectResponse(result, {
+        code: 1,
         errors: {
-          [id]: {
-            message: `Vault SecretRef id "${id}" must not contain empty path segments.`,
-          },
+          request: `Vault read failed (${statusCode}).`,
         },
       });
-      expect(fixture.requests).toEqual([]);
+      expect(result.stdout).not.toContain("not-a-real-sensitive-value");
     },
   );
 
-  it("reads the Vault client token from a token file", async () => {
-    const fixture = await startVaultFixture();
-    const tokenFile = await writeTempFile("vault-token", "not-a-real-file-token\n");
+  it("preserves per-id failures when a sibling Vault read has a provider outage", async () => {
+    const vaultAddr = await startVaultServer((request, response) => {
+      response.statusCode = request.url?.includes("/providers/openai") ? 403 : 503;
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ errors: ["not-a-real-sensitive-value"] }));
+    });
     const result = await runResolver({
-      request: {
-        protocolVersion: 1,
-        provider: "vault",
-        ids: ["providers/openai/apiKey"],
-      },
+      ids: ["providers/openai/apiKey", "tts/elevenlabs/apiKey"],
       env: {
-        VAULT_ADDR: fixture.vaultAddr,
-        VAULT_TOKEN_FILE: tokenFile,
-        OPENCLAW_VAULT_AUTH_METHOD: "token_file",
-      },
-    });
-
-    expect(result).toMatchObject({ code: 0, stderr: "" });
-    expect(JSON.parse(result.stdout)).toEqual({
-      protocolVersion: 1,
-      values: {
-        "providers/openai/apiKey": "not-a-real-vault-value",
-      },
-      errors: {},
-    });
-    expect(fixture.requests).toEqual([
-      {
-        url: "/v1/secret/data/providers/openai",
-        token: "not-a-real-file-token",
-        namespace: undefined,
-      },
-    ]);
-  });
-
-  it("rejects oversized Vault token files before sending a request", async () => {
-    const fixture = await startVaultFixture();
-    const tokenFile = await writeTempFile("vault-token", "x".repeat(16 * 1024 + 1));
-    const result = await runResolver({
-      request: {
-        protocolVersion: 1,
-        provider: "vault",
-        ids: ["providers/openai/apiKey"],
-      },
-      env: {
-        VAULT_ADDR: fixture.vaultAddr,
-        VAULT_TOKEN_FILE: tokenFile,
-        OPENCLAW_VAULT_AUTH_METHOD: "token_file",
-      },
-    });
-
-    expect(result).toMatchObject({ code: 0, stderr: "" });
-    expect(JSON.parse(result.stdout)).toEqual({
-      protocolVersion: 1,
-      values: {},
-      errors: {
-        "providers/openai/apiKey": {
-          message: expect.stringContaining("exceeds 16384 bytes"),
-        },
-      },
-    });
-    expect(fixture.requests).toEqual([]);
-  });
-
-  it("exchanges a workload JWT for a Vault token before reading KV secrets", async () => {
-    const fixture = await startVaultJwtFixture();
-    const jwtFile = await writeTempFile("vault-jwt", "not-a-real-workload-jwt\n");
-    const result = await runResolver({
-      request: {
-        protocolVersion: 1,
-        provider: "vault",
-        ids: ["providers/openai/apiKey"],
-      },
-      env: {
-        VAULT_ADDR: fixture.vaultAddr,
-        VAULT_NAMESPACE: "team-a",
-        OPENCLAW_VAULT_AUTH_METHOD: "jwt",
-        OPENCLAW_VAULT_AUTH_MOUNT: "keycloak",
-        OPENCLAW_VAULT_AUTH_ROLE: "openclaw",
-        OPENCLAW_VAULT_JWT_FILE: jwtFile,
-      },
-    });
-
-    expect(result).toMatchObject({ code: 0, stderr: "" });
-    expect(JSON.parse(result.stdout)).toEqual({
-      protocolVersion: 1,
-      values: {
-        "providers/openai/apiKey": "not-a-real-vault-value",
-      },
-      errors: {},
-    });
-    expect(fixture.requests).toEqual([
-      {
-        url: "/v1/auth/keycloak/login",
-        method: "POST",
-        token: undefined,
-        namespace: "team-a",
-        body: {
-          role: "openclaw",
-          jwt: "not-a-real-workload-jwt",
-        },
-      },
-      {
-        url: "/v1/secret/data/providers/openai",
-        method: "GET",
-        token: "not-a-real-vault-client-token",
-        namespace: "team-a",
-        body: undefined,
-      },
-    ]);
-  });
-
-  it.each(["jwt", "kubernetes"])(
-    "rejects oversized Vault JWT files before %s login",
-    async (authMethod) => {
-      const fixture = await startVaultJwtFixture();
-      const jwtFile = await writeTempFile("vault-jwt", "x".repeat(16 * 1024 + 1));
-      const result = await runResolver({
-        request: {
-          protocolVersion: 1,
-          provider: "vault",
-          ids: ["providers/openai/apiKey"],
-        },
-        env: {
-          VAULT_ADDR: fixture.vaultAddr,
-          OPENCLAW_VAULT_AUTH_METHOD: authMethod,
-          OPENCLAW_VAULT_AUTH_ROLE: "openclaw",
-          OPENCLAW_VAULT_JWT_FILE: jwtFile,
-        },
-      });
-
-      expect(result).toMatchObject({ code: 0, stderr: "" });
-      expect(JSON.parse(result.stdout)).toEqual({
-        protocolVersion: 1,
-        values: {},
-        errors: {
-          "providers/openai/apiKey": {
-            message: expect.stringContaining("exceeds 16384 bytes"),
-          },
-        },
-      });
-      expect(fixture.requests).toEqual([]);
-    },
-  );
-
-  it("uses Vault kubernetes auth defaults with a service account JWT file", async () => {
-    const fixture = await startVaultJwtFixture();
-    const jwtFile = await writeTempFile("kubernetes-service-account-token", "not-a-real-k8s-jwt\n");
-    const result = await runResolver({
-      request: {
-        protocolVersion: 1,
-        provider: "vault",
-        ids: ["providers/openai/apiKey"],
-      },
-      env: {
-        VAULT_ADDR: fixture.vaultAddr,
-        OPENCLAW_VAULT_AUTH_METHOD: "kubernetes",
-        OPENCLAW_VAULT_AUTH_ROLE: "openclaw",
-        OPENCLAW_VAULT_JWT_FILE: jwtFile,
-      },
-    });
-
-    expect(result).toMatchObject({ code: 0, stderr: "" });
-    expect(JSON.parse(result.stdout)).toEqual({
-      protocolVersion: 1,
-      values: {
-        "providers/openai/apiKey": "not-a-real-vault-value",
-      },
-      errors: {},
-    });
-    expect(fixture.requests).toEqual([
-      {
-        url: "/v1/auth/kubernetes/login",
-        method: "POST",
-        token: undefined,
-        namespace: undefined,
-        body: {
-          role: "openclaw",
-          jwt: "not-a-real-k8s-jwt",
-        },
-      },
-      {
-        url: "/v1/secret/data/providers/openai",
-        method: "GET",
-        token: "not-a-real-vault-client-token",
-        namespace: undefined,
-        body: undefined,
-      },
-    ]);
-  });
-
-  it("returns per-id errors when Vault auth is not configured", async () => {
-    const result = await runResolver({
-      request: {
-        protocolVersion: 1,
-        provider: "vault",
-        ids: ["providers/anthropic/apiKey"],
-      },
-      env: {
-        VAULT_ADDR: "https://vault.example.test",
-      },
-    });
-
-    expect(result).toMatchObject({ code: 0, stderr: "" });
-    expect(JSON.parse(result.stdout)).toEqual({
-      protocolVersion: 1,
-      values: {},
-      errors: {
-        "providers/anthropic/apiKey": {
-          message: "VAULT_TOKEN is required.",
-        },
-      },
-    });
-  });
-
-  it("does not echo Vault response bodies in resolver errors", async () => {
-    const fixture = await startVaultErrorFixture();
-    const result = await runResolver({
-      request: {
-        protocolVersion: 1,
-        provider: "vault",
-        ids: ["providers/openai/apiKey"],
-      },
-      env: {
-        VAULT_ADDR: fixture.vaultAddr,
+        VAULT_ADDR: vaultAddr,
         VAULT_TOKEN: "not-a-real-auth-header",
       },
     });
 
-    expect(result).toMatchObject({ code: 0, stderr: "" });
-    expect(JSON.parse(result.stdout)).toEqual({
-      protocolVersion: 1,
-      values: {},
+    expectResponse(result, {
       errors: {
-        "providers/openai/apiKey": {
-          message: 'Vault read failed for "providers/openai/apiKey" (403).',
-        },
+        "providers/openai/apiKey": 'Vault read failed for "providers/openai/apiKey" (403).',
+        "tts/elevenlabs/apiKey": "Vault read failed (503).",
       },
     });
     expect(result.stdout).not.toContain("not-a-real-sensitive-value");
   });
 
   it("does not echo Vault jwt login response bodies in resolver errors", async () => {
-    const fixture = await startVaultJwtErrorFixture();
+    const vaultAddr = await startVaultServer((request, response) => {
+      void readRequestBody(request)
+        .then(() => {
+          response.statusCode = 403;
+          response.setHeader("content-type", "application/json");
+          response.end(JSON.stringify({ errors: ["jwt not-a-real-sensitive-jwt denied"] }));
+        })
+        .catch((error: unknown) => {
+          response.statusCode = 500;
+          response.end(error instanceof Error ? error.message : String(error));
+        });
+    });
     const jwtFile = await writeTempFile("vault-jwt", "not-a-real-sensitive-jwt\n");
     const result = await runResolver({
-      request: {
-        protocolVersion: 1,
-        provider: "vault",
-        ids: ["providers/openai/apiKey"],
-      },
       env: {
-        VAULT_ADDR: fixture.vaultAddr,
+        VAULT_ADDR: vaultAddr,
         OPENCLAW_VAULT_AUTH_METHOD: "jwt",
         OPENCLAW_VAULT_AUTH_ROLE: "openclaw",
         OPENCLAW_VAULT_JWT_FILE: jwtFile,
       },
     });
 
-    expect(result).toMatchObject({ code: 0, stderr: "" });
-    expect(JSON.parse(result.stdout)).toEqual({
-      protocolVersion: 1,
-      values: {},
+    expectResponse(result, {
+      code: 1,
       errors: {
-        "providers/openai/apiKey": {
-          message: "Vault jwt login failed (403).",
-        },
+        request: "Vault jwt login failed (403).",
       },
     });
     expect(result.stdout).not.toContain("not-a-real-sensitive-jwt");
+  });
+
+  it("times out while reading a stalled Vault JSON response body", async () => {
+    const vaultAddr = await startVaultServer((_request, response) => {
+      response.setHeader("content-type", "application/json");
+      response.write('{"data":{"data":{"value":"partial');
+    });
+    const result = await runResolver({
+      env: {
+        VAULT_ADDR: vaultAddr,
+        VAULT_TOKEN: "not-a-real-auth-header",
+      },
+      resolverExecutablePath: await writeTimeoutResolver(),
+      timeoutMs: 2_500,
+    });
+
+    expectResponse(result, {
+      code: 1,
+      errors: {
+        request: "Vault request failed.",
+      },
+    });
+  });
+
+  it("cancels oversized Vault error bodies before clearing the fetch timeout", async () => {
+    const vaultAddr = await startVaultServer((request, response) => {
+      if (request.url === "/v1/auth/token/lookup-self") {
+        response.setHeader("content-type", "application/json");
+        response.end(JSON.stringify({ data: { id: "redacted-fixture-token" } }));
+        return;
+      }
+      response.statusCode = 403;
+      response.setHeader("content-type", "application/json");
+      response.setHeader("content-length", String(64 * 1024 + 1));
+      response.write('{"errors":["partial');
+    });
+    const result = await runResolver({
+      env: {
+        VAULT_ADDR: vaultAddr,
+        VAULT_TOKEN: "not-a-real-auth-header",
+      },
+      timeoutMs: 6_500,
+    });
+
+    expectResponse(result, {
+      errors: {
+        "providers/openai/apiKey": 'Vault read failed for "providers/openai/apiKey" (403).',
+      },
+    });
   });
 });

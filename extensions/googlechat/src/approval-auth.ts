@@ -1,4 +1,3 @@
-// Googlechat plugin module implements approval auth behavior.
 import { createChannelApprovalAuth } from "openclaw/plugin-sdk/approval-auth-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveGoogleChatAccount } from "./accounts.js";
@@ -20,7 +19,7 @@ const googleChatApproval = createChannelApprovalAuth({
   channelLabel: "Google Chat",
   resolveInputs: ({ cfg, accountId }) => {
     const account = resolveGoogleChatAccount({ cfg, accountId }).config;
-    return { allowFrom: account.dm?.allowFrom, defaultTo: account.defaultTo };
+    return { allowFrom: account.allowFrom, defaultTo: account.defaultTo };
   },
   normalizeApprover: normalizeGoogleChatApproverId,
 });

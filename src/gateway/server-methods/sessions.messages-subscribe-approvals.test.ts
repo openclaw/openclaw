@@ -1,6 +1,15 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  GatewayProtocolClient,
+  GatewayProtocolRequestTimeoutError,
+  type GatewayProtocolSocketHandlers,
+} from "../../../packages/gateway-client/src/protocol-client.js";
+import { GatewaySessionMessageSubscriptionCoordinator } from "../../../packages/gateway-client/src/session-subscriptions.js";
+import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "../../../packages/gateway-client/src/timeouts.js";
 import type { SessionApprovalReplay } from "../../../packages/gateway-protocol/src/index.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createSessionMessageSubscriberRegistry } from "../server-chat-state.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
@@ -17,18 +26,21 @@ vi.mock("../session-utils.js", async () => {
     ...actual,
     loadSessionEntry: (...args: unknown[]) =>
       loadSessionEntryMock(...(args as [string, { agentId?: string }?])),
+    loadGatewaySessionEntryReadOnly: (...args: unknown[]) =>
+      loadSessionEntryMock(...(args as [string, { agentId?: string }?])),
   };
 });
 
-import { sessionsHandlers } from "./sessions.js";
+import { sessionSubscriptionHandlers } from "./sessions-subscriptions.js";
 
-function createClient(params: {
-  scopes: string[];
-  deviceId?: string;
-  connId?: string;
-}): GatewayClient {
+function createClient(
+  params: {
+    scopes: string[];
+    deviceId?: string;
+  } = { scopes: ["operator.admin"] },
+): GatewayClient {
   return {
-    connId: params.connId ?? "conn-approval-reviewer",
+    connId: "conn-approval-reviewer",
     connect: {
       client: { id: "approval-subscribe-test", displayName: "Approval Subscribe Test" },
       scopes: params.scopes,
@@ -37,127 +49,315 @@ function createClient(params: {
   } as unknown as GatewayClient;
 }
 
+function approvalReplay(sessionKey = "agent:main:child"): SessionApprovalReplay {
+  return { sessionKey, updatedAtMs: 42, approvals: [], truncated: false };
+}
+
 function createContext(params: {
   replay?: SessionApprovalReplay;
-  replayError?: Error;
   globalScope?: boolean;
-  agents?: Array<{ id: string; default?: boolean }>;
+  mainKey?: string;
+  agents?: OpenClawConfig["agents"];
 }) {
-  const rollbackSubscription = vi.fn();
+  const rollbackSubscription = Object.assign(vi.fn(), { commit: vi.fn() });
   const subscribeSessionMessageEvents = vi.fn(() => rollbackSubscription);
-  const listSessionPendingApprovals = vi.fn(() => {
-    if (params.replayError) {
-      throw params.replayError;
-    }
-    return params.replay;
+  const listSessionPendingApprovals = vi.fn(async () => {
+    return params.replay
+      ? { replay: params.replay, isCurrent: (): boolean => true, release: vi.fn() }
+      : undefined;
   });
-  const logError = vi.fn();
   const context = {
     getRuntimeConfig: () => ({
-      agents: { list: params.agents ?? [{ id: "main", default: true }] },
-      ...(params.globalScope ? { session: { scope: "global" as const } } : {}),
+      agents: params.agents ?? { entries: { main: {} } },
+      ...(params.globalScope || params.mainKey
+        ? {
+            session: {
+              ...(params.globalScope ? { scope: "global" as const } : {}),
+              ...(params.mainKey ? { mainKey: params.mainKey } : {}),
+            },
+          }
+        : {}),
     }),
     listSessionPendingApprovals,
-    logGateway: { error: logError },
+    logGateway: { error: vi.fn() },
     subscribeSessionMessageEvents,
   } as unknown as GatewayRequestContext;
   return {
     context,
     listSessionPendingApprovals,
-    logError,
     rollbackSubscription,
     subscribeSessionMessageEvents,
   };
 }
 
-async function subscribe(params: {
-  body: Record<string, unknown>;
-  client: GatewayClient;
-  context: GatewayRequestContext;
-}) {
+async function subscribe(
+  context: GatewayRequestContext,
+  body: Record<string, unknown>,
+  client = createClient(),
+  method = "sessions.messages.subscribe",
+) {
   const respond = vi.fn();
   await expectDefined(
-    sessionsHandlers["sessions.messages.subscribe"],
-    'sessionsHandlers["sessions.messages.subscribe"] test invariant',
+    sessionSubscriptionHandlers[method],
+    `session subscription handler ${method}`,
   )({
     req: { id: "req-subscribe-approvals" } as never,
-    params: params.body,
+    params: body,
     respond,
-    context: params.context,
-    client: params.client,
+    context,
+    client,
     isWebchatConnect: () => false,
   } satisfies GatewayRequestHandlerOptions);
   return respond;
 }
 
+function createCommittedSubscriptionBoundary(holdApprovalUpgradeOnly = false) {
+  const sessionKey = "agent:main:main";
+  const registry = createSessionMessageSubscriberRegistry();
+  const gatewayClient = createClient();
+  const context = {
+    ...createContext({ replay: approvalReplay(sessionKey) }).context,
+    subscribeSessionMessageEvents: registry.subscribe,
+    unsubscribeSessionMessageEvents: registry.unsubscribe,
+  } as GatewayRequestContext;
+  const delayedResponses: string[] = [];
+  let nextRequestId = 0;
+  let socketHandlers: GatewayProtocolSocketHandlers | undefined;
+  const protocol = new GatewayProtocolClient<Record<string, never>>({
+    createSocket: (handlers) => {
+      socketHandlers = handlers;
+      return {
+        isOpen: () => true,
+        send: (raw) => {
+          const request = JSON.parse(raw) as {
+            id: string;
+            method: string;
+            params: Record<string, unknown>;
+          };
+          const handler = expectDefined(
+            sessionSubscriptionHandlers[request.method],
+            `session subscription boundary handler ${request.method}`,
+          );
+          void handler({
+            req: { id: request.id } as never,
+            params: request.params,
+            context,
+            client: gatewayClient,
+            isWebchatConnect: () => false,
+            respond: (ok, payload, error) => {
+              const response = JSON.stringify({
+                type: "res",
+                id: request.id,
+                ok,
+                payload,
+                error,
+              });
+              if (
+                request.method === "sessions.messages.subscribe" &&
+                (!holdApprovalUpgradeOnly || request.params.includeApprovals === true)
+              ) {
+                delayedResponses.push(response);
+                return;
+              }
+              handlers.message(response);
+            },
+          } satisfies GatewayRequestHandlerOptions);
+        },
+        close: (code, reason) => {
+          registry.unsubscribeAll(gatewayClient.connId ?? "");
+          handlers.close(code ?? 1000, reason ?? "stopped");
+        },
+      };
+    },
+    createRequestId: () => `subscription-${++nextRequestId}`,
+    buildConnectPlan: () => ({}),
+    buildConnectParams: (plan) => plan,
+    resolveClose: () => ({ retry: false, notify: false }),
+    handshake: { mode: "require-challenge", timeoutMs: 100 },
+    reconnect: { initialMs: 10, multiplier: 2, maxMs: 100 },
+  });
+  protocol.start();
+  return {
+    coordinator: new GatewaySessionMessageSubscriptionCoordinator(protocol),
+    gatewayClient,
+    protocol,
+    registry,
+    sessionKey,
+    deliverLateResponses() {
+      for (const response of delayedResponses) {
+        socketHandlers?.message(response);
+      }
+    },
+  };
+}
+
 describe("sessions.messages.subscribe approval opt-in", () => {
   beforeEach(() => {
     loadSessionEntryMock.mockReset();
-    loadSessionEntryMock.mockImplementation((sessionKey: string) => ({ canonicalKey: sessionKey }));
   });
 
-  it("allows an admin without a paired device and uses the exact scoped subscription key", async () => {
-    loadSessionEntryMock.mockReturnValueOnce({ canonicalKey: "global" });
-    const approvalReplay = {
-      sessionKey: "agent:work:global",
-      updatedAtMs: 42,
-      approvals: [],
-      truncated: false,
-    } satisfies SessionApprovalReplay;
-    const { context, listSessionPendingApprovals, subscribeSessionMessageEvents } = createContext({
-      replay: approvalReplay,
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("replaces narration through a configured main alias without changing approval delivery", async () => {
+    const key = "agent:main:work";
+    const registry = createSessionMessageSubscriberRegistry();
+    const client = createClient();
+    const replay = approvalReplay(key);
+    const { context } = createContext({ mainKey: "work", replay });
+    context.subscribeSessionMessageEvents = registry.subscribe;
+    const body = { key: "main", includeApprovals: true };
+
+    const narration = await subscribe(context, { ...body, mode: "narration" }, client);
+    expect(narration).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+    expect([...registry.getNarration(key)]).toEqual([client.connId]);
+
+    const foreground = await subscribe(context, body, client);
+    expect(foreground).toHaveBeenCalledWith(
+      true,
+      { subscribed: true, key, agentId: "main", approvalReplay: replay },
+      undefined,
+    );
+    expect([...registry.get(key)]).toEqual([client.connId]);
+    expect([...registry.getNarration(key)]).toEqual([]);
+    expect([...registry.getApprovals(key)]).toEqual([client.connId]);
+    expect(loadSessionEntryMock).not.toHaveBeenCalled();
+  });
+
+  it("retains the foreground global observer after narration rollback and release", async () => {
+    const key = "agent:work:global";
+    const registry = createSessionMessageSubscriberRegistry();
+    const client = createClient();
+    const { context, listSessionPendingApprovals } = createContext({
       globalScope: true,
-      agents: [{ id: "main", default: true }, { id: "work" }],
+      agents: { entries: { main: {}, work: {} } },
+      replay: approvalReplay(key),
     });
-
-    const respond = await subscribe({
-      body: { key: "agent:work:main", includeApprovals: true },
-      client: createClient({ scopes: ["operator.admin"], connId: " conn-admin " }),
-      context,
-    });
-
-    expect(listSessionPendingApprovals).toHaveBeenCalledWith(
-      "agent:work:global",
-      expect.objectContaining({ connId: " conn-admin " }),
-    );
-    expect(subscribeSessionMessageEvents.mock.invocationCallOrder[0]).toBeLessThan(
-      listSessionPendingApprovals.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
-    expect(subscribeSessionMessageEvents).toHaveBeenCalledWith("conn-admin", "agent:work:global", {
-      includeApprovals: true,
-    });
-    expect(respond).toHaveBeenCalledWith(
+    context.subscribeSessionMessageEvents = registry.subscribe;
+    context.unsubscribeSessionMessageEvents = registry.unsubscribe;
+    const foreground = await subscribe(context, { key, subscriptionId: "foreground" }, client);
+    expect(foreground).toHaveBeenCalledWith(
       true,
-      { subscribed: true, key: "global", approvalReplay },
+      { subscribed: true, key, agentId: "work" },
+      undefined,
+    );
+    const narration = await subscribe(
+      context,
+      {
+        key: "global",
+        agentId: "work",
+        subscriptionId: "narration",
+        mode: "narration",
+        includeApprovals: true,
+      },
+      client,
+    );
+    expect(narration).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ key: "global", agentId: "work" }),
+      undefined,
+    );
+    expect([...registry.getNarration(key)]).toEqual([]);
+    expect([...registry.getApprovals(key)]).toEqual([client.connId]);
+
+    listSessionPendingApprovals.mockRejectedValueOnce(new Error("replay failed"));
+    const failed = await subscribe(
+      context,
+      {
+        key,
+        subscriptionId: "failed",
+        mode: "narration",
+        includeApprovals: true,
+      },
+      client,
+    );
+    expect(failed).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "UNAVAILABLE" }),
+    );
+    expect([...registry.getNarration(key)]).toEqual([]);
+
+    const released = await subscribe(
+      context,
+      {
+        key: "global",
+        agentId: "work",
+        subscriptionId: "narration",
+      },
+      client,
+      "sessions.messages.unsubscribe",
+    );
+    expect(released).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+    expect([...registry.get(key)]).toEqual([client.connId]);
+    expect([...registry.getNarration(key)]).toEqual([]);
+    expect([...registry.getApprovals(key)]).toEqual([]);
+  });
+
+  it("reprepares a stale replay before acknowledging a paired approval reviewer", async () => {
+    const currentReplay = approvalReplay();
+    const staleReplay = {
+      ...currentReplay,
+      updatedAtMs: 41,
+      approvals: [
+        {
+          id: "terminal-before-ack",
+          status: "pending",
+          presentation: {
+            kind: "exec",
+            commandText: "printf old",
+            allowedDecisions: ["allow-once", "deny"],
+          },
+          urlPath: "/approve/terminal-before-ack",
+          createdAtMs: 1,
+          expiresAtMs: 60_000,
+        },
+      ],
+    } satisfies SessionApprovalReplay;
+    const { context, listSessionPendingApprovals } = createContext({ replay: currentReplay });
+    listSessionPendingApprovals.mockResolvedValueOnce({
+      replay: staleReplay,
+      isCurrent: () => false,
+      release: vi.fn(),
+    });
+
+    const respond = await subscribe(
+      context,
+      { key: "child", includeApprovals: true },
+      createClient({ scopes: ["operator.approvals"], deviceId: "phone" }),
+    );
+
+    expect(listSessionPendingApprovals).toHaveBeenCalledTimes(2);
+    expect(respond).toHaveBeenCalledExactlyOnceWith(
+      true,
+      {
+        subscribed: true,
+        key: currentReplay.sessionKey,
+        agentId: "main",
+        approvalReplay: currentReplay,
+      },
       undefined,
     );
   });
 
-  it("allows a paired device with approval scope", async () => {
-    loadSessionEntryMock.mockReturnValueOnce({ canonicalKey: "agent:main:child" });
-    const approvalReplay = {
-      sessionKey: "agent:main:child",
-      updatedAtMs: 43,
-      approvals: [],
-      truncated: false,
-    } satisfies SessionApprovalReplay;
-    const { context, subscribeSessionMessageEvents } = createContext({ replay: approvalReplay });
-
-    const respond = await subscribe({
-      body: { key: "child", includeApprovals: true },
-      client: createClient({ scopes: ["operator.approvals"], deviceId: "phone" }),
-      context,
+  it("rolls back after one retry when replay keeps changing", async () => {
+    const replay = approvalReplay();
+    const { context, listSessionPendingApprovals, rollbackSubscription } = createContext({
+      replay,
     });
+    listSessionPendingApprovals
+      .mockResolvedValueOnce({ replay, isCurrent: () => false, release: vi.fn() })
+      .mockResolvedValueOnce({ replay, isCurrent: () => false, release: vi.fn() });
 
-    expect(subscribeSessionMessageEvents).toHaveBeenCalledWith(
-      "conn-approval-reviewer",
-      "agent:main:child",
-      { includeApprovals: true },
-    );
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      { subscribed: true, key: "agent:main:child", approvalReplay },
+    const respond = await subscribe(context, { key: "child", includeApprovals: true });
+
+    expect(listSessionPendingApprovals).toHaveBeenCalledTimes(2);
+    expect(rollbackSubscription).toHaveBeenCalledOnce();
+    expect(respond).toHaveBeenCalledExactlyOnceWith(
+      false,
       undefined,
+      expect.objectContaining({ code: "UNAVAILABLE" }),
     );
   });
 
@@ -174,12 +374,11 @@ describe("sessions.messages.subscribe approval opt-in", () => {
     const { context, listSessionPendingApprovals, subscribeSessionMessageEvents } = createContext(
       {},
     );
-
-    const respond = await subscribe({
-      body: { key: "agent:main:child", includeApprovals: true },
-      client,
+    const respond = await subscribe(
       context,
-    });
+      { key: "agent:main:child", includeApprovals: true },
+      client,
+    );
 
     expect(listSessionPendingApprovals).not.toHaveBeenCalled();
     expect(subscribeSessionMessageEvents).not.toHaveBeenCalled();
@@ -193,66 +392,83 @@ describe("sessions.messages.subscribe approval opt-in", () => {
     );
   });
 
-  it("keeps the non-approval response shape and skips replay", async () => {
-    loadSessionEntryMock.mockReturnValueOnce({ canonicalKey: "agent:main:child" });
-    const { context, listSessionPendingApprovals, subscribeSessionMessageEvents } = createContext(
-      {},
-    );
-
-    const respond = await subscribe({
-      body: { key: "child" },
-      client: createClient({ scopes: ["operator.read"] }),
-      context,
-    });
-
-    expect(listSessionPendingApprovals).not.toHaveBeenCalled();
-    expect(subscribeSessionMessageEvents).toHaveBeenCalled();
-    expect(subscribeSessionMessageEvents.mock.calls[0]?.slice(0, 2)).toEqual([
-      "conn-approval-reviewer",
-      "agent:main:child",
-    ]);
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      { subscribed: true, key: "agent:main:child" },
-      undefined,
-    );
-    expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("approvalReplay");
-  });
-
-  it.each([
-    { name: "throws", replayError: new Error("database unavailable") },
-    { name: "returns no snapshot", replayError: undefined },
-  ])("restores the prior subscription when replay $name", async ({ replayError }) => {
+  it("restores the prior subscription when replay returns no snapshot", async () => {
     const {
       context,
       listSessionPendingApprovals,
-      logError,
       rollbackSubscription,
       subscribeSessionMessageEvents,
-    } = createContext({ replayError });
-
-    const respond = await subscribe({
-      body: { key: "agent:main:child", includeApprovals: true },
-      client: createClient({ scopes: ["operator.admin"] }),
-      context,
-    });
+    } = createContext({});
+    const respond = await subscribe(context, { key: "agent:main:child", includeApprovals: true });
 
     expect(subscribeSessionMessageEvents).toHaveBeenCalledWith(
       "conn-approval-reviewer",
       "agent:main:child",
-      { includeApprovals: true },
+      { includeApprovals: true, provisional: true },
     );
     expect(subscribeSessionMessageEvents.mock.invocationCallOrder[0]).toBeLessThan(
       listSessionPendingApprovals.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
-    expect(rollbackSubscription).toHaveBeenCalledTimes(1);
+    expect(rollbackSubscription).toHaveBeenCalledOnce();
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,
       expect.objectContaining({ code: "UNAVAILABLE" }),
     );
-    if (replayError) {
-      expect(logError).toHaveBeenCalledWith(expect.stringContaining("database unavailable"));
-    }
+  });
+
+  it("removes a committed approval observer when its subscription acknowledgment times out", async () => {
+    vi.useFakeTimers();
+    const boundary = createCommittedSubscriptionBoundary();
+    let failure: unknown;
+    void boundary.coordinator
+      .acquire("main", { includeApprovals: true })
+      .catch((error: unknown) => {
+        failure = error;
+      });
+
+    expect(
+      boundary.registry.get(boundary.sessionKey).has(boundary.gatewayClient.connId ?? ""),
+    ).toBe(true);
+    expect(
+      boundary.registry.getApprovals(boundary.sessionKey).has(boundary.gatewayClient.connId ?? ""),
+    ).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
+
+    expect(failure).toBeInstanceOf(GatewayProtocolRequestTimeoutError);
+    expect(boundary.registry.get(boundary.sessionKey)).toEqual(new Set());
+    expect(boundary.registry.getApprovals(boundary.sessionKey)).toEqual(new Set());
+    boundary.deliverLateResponses();
+    expect(boundary.registry.get(boundary.sessionKey)).toEqual(new Set());
+    boundary.protocol.stop();
+  });
+
+  it("removes timed-out approval authority while preserving an existing plain observer", async () => {
+    vi.useFakeTimers();
+    const boundary = createCommittedSubscriptionBoundary(true);
+    const plain = await boundary.coordinator.acquire("main");
+    let failure: unknown;
+    void boundary.coordinator
+      .acquire("main", { includeApprovals: true })
+      .catch((error: unknown) => {
+        failure = error;
+      });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(boundary.registry.getApprovals(boundary.sessionKey)).toEqual(
+      new Set([boundary.gatewayClient.connId]),
+    );
+
+    await vi.advanceTimersByTimeAsync(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
+
+    expect(failure).toBeInstanceOf(GatewayProtocolRequestTimeoutError);
+    expect(boundary.registry.get(boundary.sessionKey)).toEqual(
+      new Set([boundary.gatewayClient.connId]),
+    );
+    expect(boundary.registry.getApprovals(boundary.sessionKey)).toEqual(new Set());
+    boundary.deliverLateResponses();
+    expect(boundary.registry.getApprovals(boundary.sessionKey)).toEqual(new Set());
+    await boundary.coordinator.release(plain);
+    boundary.protocol.stop();
   });
 });

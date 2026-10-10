@@ -1,20 +1,32 @@
-// Gateway webhook helpers for external hook dispatch into agents and wake flows.
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
+import type { Result } from "@openclaw/normalization-core/result";
 import {
+  normalizeBoundedOptionalString,
   normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
+import { listAgentIds, tryResolveAgentOperationAgentId } from "../agents/agent-scope-config.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
+import {
+  type PersistedSessionStoreOwner,
+  resolvePersistedSessionStoreOwnerForKey,
+} from "../config/sessions/session-store-owner.js";
+import type { HookSessionMode } from "../config/types.hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readJsonBodyWithLimit, requestBodyErrorToText } from "../infra/http-body.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import {
+  normalizeAgentId,
+  normalizeAgentIdStrict,
+  parseAgentSessionKey,
+} from "../routing/session-key.js";
 import type { HookExternalContentSource } from "../security/external-content.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 import {
   hasHookTemplateExpressions,
   type HookMappingResolved,
+  normalizeHookMatchPath,
   resolveHookMappings,
 } from "./hooks-mapping.js";
 import { resolveAllowedAgentIds } from "./hooks-policy.js";
@@ -24,18 +36,20 @@ const DEFAULT_HOOKS_PATH = "/hooks";
 const DEFAULT_HOOKS_MAX_BODY_BYTES = 256 * 1024;
 const MAX_HOOK_IDEMPOTENCY_KEY_LENGTH = 256;
 
-/** Fully resolved hooks config used by gateway hook request handling. */
 export type HooksConfigResolved = {
   basePath: string;
   token: string;
   maxBodyBytes: number;
+  /** Producer-derived per-path body bounds (mapping-owned), keyed by normalized match path. */
+  maxBodyBytesByPath: ReadonlyMap<string, number>;
   mappings: HookMappingResolved[];
   agentPolicy: HookAgentPolicyResolved;
   sessionPolicy: HookSessionPolicyResolved;
 };
 
 type HookAgentPolicyResolved = {
-  defaultAgentId: string;
+  defaultAgentId?: string;
+  globalSessionStoreOwner: PersistedSessionStoreOwner;
   knownAgentIds: Set<string>;
   allowedAgentIds?: Set<string>;
 };
@@ -46,9 +60,8 @@ type HookSessionPolicyResolved = {
   allowedSessionKeyPrefixes?: string[];
 };
 
-type HookSessionKeySource = "request" | "mapping-static" | "mapping-templated";
+export type HookSessionKeySource = "request" | "mapping-static" | "mapping-templated";
 
-/** Resolve and validate hook config, returning null when hooks are disabled. */
 export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | null {
   if (cfg.hooks?.enabled !== true) {
     return null;
@@ -63,15 +76,20 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
   if (trimmed === "/") {
     throw new Error("hooks.path may not be '/'");
   }
-  const maxBodyBytes =
-    cfg.hooks?.maxBodyBytes && cfg.hooks.maxBodyBytes > 0
-      ? cfg.hooks.maxBodyBytes
-      : DEFAULT_HOOKS_MAX_BODY_BYTES;
   const mappings = resolveHookMappings(cfg.hooks);
-  const defaultAgentId = resolveDefaultAgentId(cfg);
-  const knownAgentIds = resolveKnownAgentIds(cfg, defaultAgentId);
+  const defaultAgentId = tryResolveAgentOperationAgentId(cfg);
+  // Global hook runs write a literal shared row, whose durable owner must win
+  // over ambient hook defaults after migration sidecar state is gone.
+  const globalSessionStoreOwner =
+    cfg.session?.scope === "global"
+      ? resolvePersistedSessionStoreOwnerForKey(cfg, "global")
+      : { kind: "none" as const };
+  const knownAgentIds = new Set(listAgentIds(cfg));
+  if (defaultAgentId) {
+    knownAgentIds.add(defaultAgentId);
+  }
   const allowedAgentIds = resolveAllowedAgentIds(cfg.hooks?.allowedAgentIds);
-  const defaultSessionKey = resolveSessionKey(cfg.hooks?.defaultSessionKey);
+  const defaultSessionKey = normalizeOptionalString(cfg.hooks?.defaultSessionKey);
   const allowedSessionKeyPrefixes = resolveAllowedSessionKeyPrefixes(
     cfg.hooks?.allowedSessionKeyPrefixes,
   );
@@ -99,10 +117,12 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
   return {
     basePath: trimmed,
     token,
-    maxBodyBytes,
+    maxBodyBytes: DEFAULT_HOOKS_MAX_BODY_BYTES,
+    maxBodyBytesByPath: resolveHookBodyLimitsByPath(mappings),
     mappings,
     agentPolicy: {
       defaultAgentId,
+      globalSessionStoreOwner,
       knownAgentIds,
       allowedAgentIds,
     },
@@ -114,37 +134,40 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
   };
 }
 
-function resolveKnownAgentIds(cfg: OpenClawConfig, defaultAgentId: string): Set<string> {
-  const known = new Set(listAgentIds(cfg));
-  known.add(defaultAgentId);
-  return known;
+function resolveHookBodyLimitsByPath(mappings: HookMappingResolved[]): ReadonlyMap<string, number> {
+  const byPath = new Map<string, number>();
+  for (const mapping of mappings) {
+    if (!mapping.matchPath || !mapping.maxBodyBytes) {
+      continue;
+    }
+    const current = byPath.get(mapping.matchPath) ?? DEFAULT_HOOKS_MAX_BODY_BYTES;
+    byPath.set(mapping.matchPath, Math.max(current, mapping.maxBodyBytes));
+  }
+  return byPath;
 }
 
-function resolveSessionKey(raw: string | undefined): string | undefined {
-  return normalizeOptionalString(raw);
-}
-
-function normalizeSessionKeyPrefix(raw: string): string | undefined {
-  const value = normalizeLowercaseStringOrEmpty(raw);
-  return value ? value : undefined;
+/** Resolve the body byte bound for one hook sub-path (mapping-derived, floored at the default). */
+export function resolveHookPathBodyLimit(
+  hooksConfig: Pick<HooksConfigResolved, "maxBodyBytes" | "maxBodyBytesByPath">,
+  subPath: string,
+): number {
+  const normalized = normalizeHookMatchPath(subPath);
+  if (!normalized) {
+    return hooksConfig.maxBodyBytes;
+  }
+  return hooksConfig.maxBodyBytesByPath.get(normalized) ?? hooksConfig.maxBodyBytes;
 }
 
 function resolveAllowedSessionKeyPrefixes(raw: string[] | undefined): string[] | undefined {
   if (!Array.isArray(raw)) {
     return undefined;
   }
-  const set = new Set<string>();
-  for (const prefix of raw) {
-    const normalized = normalizeSessionKeyPrefix(prefix);
-    if (!normalized) {
-      continue;
-    }
-    set.add(normalized);
-  }
-  return set.size > 0 ? Array.from(set) : undefined;
+  const prefixes = [
+    ...new Set(raw.map(normalizeOptionalLowercaseString).filter((prefix) => prefix !== undefined)),
+  ];
+  return prefixes.length > 0 ? prefixes : undefined;
 }
 
-/** Check whether a hook session key satisfies the configured prefix allowlist. */
 export function isSessionKeyAllowedByPrefix(sessionKey: string, prefixes: string[]): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
   if (!normalized) {
@@ -162,19 +185,18 @@ export function extractHookToken(req: IncomingMessage): string | undefined {
       return token;
     }
   }
-  const headerToken = normalizeOptionalString(req.headers["x-openclaw-token"]) ?? "";
-  if (headerToken) {
-    return headerToken;
-  }
-  return undefined;
+  return normalizeOptionalString(req.headers["x-openclaw-token"]);
 }
 
-/** Read and normalize a hook JSON request body with gateway-friendly error text. */
 export async function readJsonBody(
   req: IncomingMessage,
   maxBytes: number,
-): Promise<{ ok: true; value: unknown } | { ok: false; error: string }> {
-  const result = await readJsonBodyWithLimit(req, { maxBytes, emptyObjectOnEmpty: true });
+): Promise<Result<unknown, string>> {
+  const result = await readJsonBodyWithLimit(req, {
+    maxBytes,
+    emptyObjectOnEmpty: true,
+    destroyOnLimit: false,
+  });
   if (result.ok) {
     return result;
   }
@@ -190,7 +212,6 @@ export async function readJsonBody(
   return { ok: false, error: result.error };
 }
 
-/** Normalize request headers into lowercase string values for hook template matching. */
 export function normalizeHookHeaders(req: IncomingMessage) {
   const headers: Record<string, string> = {};
   for (const [key, value] of Object.entries(req.headers)) {
@@ -204,18 +225,47 @@ export function normalizeHookHeaders(req: IncomingMessage) {
   return headers;
 }
 
-/** Validate a hook wake payload. */
+function normalizeHookPayloadAgentId(raw: unknown): Result<string | undefined, string> {
+  if (raw === undefined) {
+    return { ok: true, value: undefined };
+  }
+  const agentId = normalizeOptionalString(raw);
+  return agentId
+    ? { ok: true, value: agentId }
+    : { ok: false, error: "agentId must be a non-empty string" };
+}
+
 export function normalizeWakePayload(
   payload: Record<string, unknown>,
-):
-  | { ok: true; value: { text: string; mode: "now" | "next-heartbeat" } }
-  | { ok: false; error: string } {
+): Result<
+  { text: string; mode: "now" | "next-heartbeat"; agentId?: string; sessionKey?: string },
+  string
+> {
   const normalizedText = normalizeOptionalString(payload.text) ?? "";
   if (!normalizedText) {
     return { ok: false, error: "text required" };
   }
   const mode = payload.mode === "next-heartbeat" ? "next-heartbeat" : "now";
-  return { ok: true, value: { text: normalizedText, mode } };
+  const agentId = normalizeHookPayloadAgentId(payload.agentId);
+  if (!agentId.ok) {
+    return agentId;
+  }
+  const sessionKey = normalizeOptionalString(payload.sessionKey);
+  if (payload.sessionKey !== undefined && !sessionKey) {
+    return { ok: false, error: "sessionKey must be a non-empty string" };
+  }
+  if (mode === "next-heartbeat" && sessionKey) {
+    return { ok: false, error: "sessionKey requires mode=now" };
+  }
+  return {
+    ok: true,
+    value: {
+      text: normalizedText,
+      mode,
+      ...(agentId.value ? { agentId: agentId.value } : {}),
+      ...(sessionKey ? { sessionKey } : {}),
+    },
+  };
 }
 
 type HookAgentPayload = {
@@ -225,9 +275,19 @@ type HookAgentPayload = {
   idempotencyKey?: string;
   wakeMode: "now" | "next-heartbeat";
   sessionKey?: string;
+  sessionMode: HookSessionMode;
   deliver: boolean;
   channel: HookMessageChannel;
   to?: string;
+  accountId?: string;
+  delivery:
+    | { mode: "none" }
+    | {
+        mode: "announce";
+        channel: HookMessageChannel;
+        to?: string;
+        accountId?: string;
+      };
   model?: string;
   thinking?: string;
   timeoutSeconds?: number;
@@ -235,18 +295,31 @@ type HookAgentPayload = {
 
 /** Normalized agent dispatch payload after hook policy/session resolution. */
 export type HookAgentDispatchPayload = Omit<HookAgentPayload, "sessionKey"> & {
+  effectiveAgentId: string;
   sessionKey: string;
   sourcePath: string;
   allowUnsafeExternalContent?: boolean;
   externalContentSource?: HookExternalContentSource;
+  /** Configured ingress source attribution; never an authenticated principal. */
+  mappingId?: string;
+  /**
+   * "background" admits without the start deadline: the run is never canceled
+   * for admitting slowly, and its eventual result feeds the replay cache.
+   * Fan-out items use it because their producer retries by redelivery — a
+   * fixed admission deadline would cancel every item of a slow cold batch,
+   * cache nothing, and turn each redelivery into the same cold burst forever.
+   */
+  admissionMode?: "bounded" | "background";
+  /**
+   * Replay identity from the HTTP handler. A failed admission leaves the item
+   * retryable, so each producer redelivery runs again; the failure notice for
+   * one identity announces once per dedupe window instead of once per retry.
+   */
+  replayKey?: string;
 };
 
 const listHookChannelValues = () => ["last", ...listChannelPlugins().map((plugin) => plugin.id)];
 
-/** Channel values accepted by hook agent dispatch. */
-
-const getHookChannelSet = () => new Set<string>(listHookChannelValues());
-/** Render the current hook channel validation error from registered channel plugins. */
 export const getHookChannelError = () => `channel must be ${listHookChannelValues().join("|")}`;
 
 /** Resolve a raw hook channel value, defaulting omitted values to `last`. */
@@ -258,94 +331,216 @@ export function resolveHookChannel(raw: unknown): HookMessageChannel | null {
     return null;
   }
   const normalized = normalizeMessageChannel(raw);
-  if (!normalized || !getHookChannelSet().has(normalized)) {
+  if (!normalized || !listHookChannelValues().includes(normalized)) {
     return null;
   }
   return normalized as HookMessageChannel;
 }
 
-/** Resolve hook delivery opt-out; any value except false means deliver. */
 export function resolveHookDeliver(raw: unknown): boolean {
   return raw !== false;
 }
 
-function resolveOptionalHookIdempotencyKey(raw: unknown): string | undefined {
-  if (typeof raw !== "string") {
-    return undefined;
+/** Normalize webhook delivery intent before any isolated cron work is scheduled. */
+function normalizeHookAgentDelivery(params: {
+  deliver: unknown;
+  channel: unknown;
+  to: unknown;
+  accountId: unknown;
+}): Result<
+  Pick<HookAgentPayload, "deliver" | "channel" | "to" | "accountId" | "delivery">,
+  string
+> {
+  const deliver = resolveHookDeliver(params.deliver);
+  if (!deliver) {
+    return {
+      ok: true,
+      value: {
+        deliver,
+        channel: "last",
+        to: undefined,
+        accountId: undefined,
+        delivery: { mode: "none" },
+      },
+    };
   }
-  const trimmed = raw.trim();
-  if (!trimmed || trimmed.length > MAX_HOOK_IDEMPOTENCY_KEY_LENGTH) {
-    return undefined;
+  const to = normalizeOptionalString(params.to);
+  const accountId = normalizeOptionalString(params.accountId);
+  const channel = resolveHookChannel(params.channel);
+  if (!channel) {
+    return { ok: false, error: getHookChannelError() };
   }
-  return trimmed;
+  const hasChannel = params.channel !== undefined;
+  const hasTo = params.to !== undefined;
+  const hasAccountId = params.accountId !== undefined;
+  let delivery: HookAgentPayload["delivery"] = { mode: "none" };
+  if (hasChannel || hasTo || hasAccountId) {
+    if (hasTo && !to) {
+      return {
+        ok: false,
+        error: "to must be a non-empty string for hook delivery",
+      };
+    }
+    if (hasAccountId && !accountId) {
+      return {
+        ok: false,
+        error: "accountId must be a non-empty string for hook delivery",
+      };
+    }
+    if (hasAccountId && (!hasChannel || !to)) {
+      return {
+        ok: false,
+        error: "accountId requires channel and to for hook delivery",
+      };
+    }
+    if (!hasChannel || !to) {
+      return {
+        ok: false,
+        error: "channel and to must be set together for hook delivery",
+      };
+    }
+    if (channel === "last") {
+      return {
+        ok: false,
+        error: "channel must name a concrete channel for hook delivery",
+      };
+    }
+    delivery = {
+      mode: "announce",
+      channel,
+      to,
+      ...(accountId ? { accountId } : {}),
+    };
+  }
+  return {
+    ok: true,
+    value: {
+      deliver,
+      channel,
+      to,
+      accountId,
+      delivery,
+    },
+  };
 }
 
-/** Resolve the hook idempotency key from headers or payload within length limits. */
 export function resolveHookIdempotencyKey(params: {
   payload: Record<string, unknown>;
   headers?: Record<string, string>;
 }): string | undefined {
   return (
-    resolveOptionalHookIdempotencyKey(params.headers?.["idempotency-key"]) ||
-    resolveOptionalHookIdempotencyKey(params.headers?.["x-openclaw-idempotency-key"]) ||
-    resolveOptionalHookIdempotencyKey(params.payload.idempotencyKey)
+    normalizeBoundedOptionalString(
+      params.headers?.["idempotency-key"],
+      MAX_HOOK_IDEMPOTENCY_KEY_LENGTH,
+    ) ||
+    normalizeBoundedOptionalString(
+      params.headers?.["x-openclaw-idempotency-key"],
+      MAX_HOOK_IDEMPOTENCY_KEY_LENGTH,
+    ) ||
+    normalizeBoundedOptionalString(params.payload.idempotencyKey, MAX_HOOK_IDEMPOTENCY_KEY_LENGTH)
   );
 }
 
-/** Resolve an optional hook target agent id to a known configured agent. */
-export function resolveHookTargetAgentId(
-  hooksConfig: HooksConfigResolved,
-  agentId: string | undefined,
-): string | undefined {
-  const raw = normalizeOptionalString(agentId);
-  if (!raw) {
-    return undefined;
-  }
-  const normalized = normalizeAgentId(raw);
-  if (hooksConfig.agentPolicy.knownAgentIds.has(normalized)) {
-    return normalized;
-  }
-  return hooksConfig.agentPolicy.defaultAgentId;
-}
+export type HookTargetAgentResolution =
+  | { ok: true; selectedAgentId?: string; effectiveAgentId: string }
+  | { ok: false; code: "unknown-agent"; agentId: string; error: string }
+  | { ok: false; code: "agent-required"; error: string }
+  | {
+      ok: false;
+      code: "owner-conflict";
+      agentId: string;
+      ownerAgentId: string;
+      error: string;
+    }
+  | { ok: false; code: "owner-retired"; ownerAgentId: string; error: string };
 
-/** Resolve the effective hook target agent, falling back to the hook default. */
+/** Resolve request or config-mapped agent selection against durable session ownership. */
 export function resolveEffectiveHookTargetAgentId(
   hooksConfig: HooksConfigResolved,
   agentId: string | undefined,
-): string {
-  return resolveHookTargetAgentId(hooksConfig, agentId) ?? hooksConfig.agentPolicy.defaultAgentId;
+  source: "request" | "mapping",
+): HookTargetAgentResolution {
+  const raw = normalizeOptionalString(agentId);
+  let selectedAgentId: string | undefined;
+  if (source === "mapping" && raw) {
+    const normalized = normalizeAgentId(raw);
+    selectedAgentId = hooksConfig.agentPolicy.knownAgentIds.has(normalized)
+      ? normalized
+      : hooksConfig.agentPolicy.defaultAgentId;
+  } else if (source === "request" && raw) {
+    const normalized = normalizeAgentIdStrict(raw);
+    const requestedAgentId = normalized.ok ? normalized.value : raw;
+    if (!normalized.ok || !hooksConfig.agentPolicy.knownAgentIds.has(requestedAgentId)) {
+      return {
+        ok: false,
+        code: "unknown-agent",
+        agentId: requestedAgentId,
+        error: `unknown agentId "${requestedAgentId}"`,
+      };
+    }
+    selectedAgentId = requestedAgentId;
+  }
+  const resolvedAgentId = selectedAgentId ?? hooksConfig.agentPolicy.defaultAgentId;
+  const persistedOwner = hooksConfig.agentPolicy.globalSessionStoreOwner;
+  if (persistedOwner.kind === "retired") {
+    return {
+      ok: false,
+      code: "owner-retired",
+      ownerAgentId: persistedOwner.agentId,
+      error: `global session-store owner "${persistedOwner.agentId}" is no longer configured; restore that agent or update agents.defaults.sessionStore.agentId`,
+    };
+  }
+  if (
+    persistedOwner.kind === "configured" &&
+    selectedAgentId &&
+    selectedAgentId !== persistedOwner.agentId
+  ) {
+    return {
+      ok: false,
+      code: "owner-conflict",
+      agentId: selectedAgentId,
+      ownerAgentId: persistedOwner.agentId,
+      error: `agentId "${selectedAgentId}" conflicts with global session-store owner "${persistedOwner.agentId}"; use agentId "${persistedOwner.agentId}" or update agents.defaults.sessionStore.agentId`,
+    };
+  }
+  const effectiveAgentId =
+    persistedOwner.kind === "configured" ? persistedOwner.agentId : resolvedAgentId;
+  if (!effectiveAgentId) {
+    return { ok: false, code: "agent-required", error: getHookAgentSelectionError() };
+  }
+  return {
+    ok: true,
+    ...(selectedAgentId ? { selectedAgentId } : {}),
+    effectiveAgentId,
+  };
 }
 
-/** Check the hook agent allowlist against the effective target agent. */
 export function isHookAgentAllowed(
   hooksConfig: HooksConfigResolved,
-  agentId: string | undefined,
+  effectiveAgentId: string,
 ): boolean {
   const allowed = hooksConfig.agentPolicy.allowedAgentIds;
   if (allowed === undefined) {
     return true;
   }
-  // Omitted agentId still dispatches to the default agent downstream, so the
-  // allowlist must authorize that effective target before dispatch.
-  return allowed.has(resolveEffectiveHookTargetAgentId(hooksConfig, agentId));
+  return allowed.has(effectiveAgentId);
 }
 
-/** Error message for hook agent allowlist failures. */
 export const getHookAgentPolicyError = () => "agentId is not allowed by hooks.allowedAgentIds";
+
+const getHookAgentSelectionError = () => "agentId is required when multiple agents are configured";
 const getHookSessionKeyRequestPolicyError = () =>
   "sessionKey is disabled for externally supplied hook payload values; set hooks.allowRequestSessionKey=true to enable";
-/** Error message for hook session-key prefix allowlist failures. */
 export const getHookSessionKeyPrefixError = (prefixes: string[]) =>
   `sessionKey must start with one of: ${prefixes.join(", ")}`;
 
-/** Resolve the hook dispatch session key from request, mapping, default, or generated id. */
 export function resolveHookSessionKey(params: {
   hooksConfig: HooksConfigResolved;
   source: HookSessionKeySource;
   sessionKey?: string;
   idFactory?: () => string;
-}): { ok: true; value: string } | { ok: false; error: string } {
-  const requested = resolveSessionKey(params.sessionKey);
+}): Result<string, string> {
+  const requested = normalizeOptionalString(params.sessionKey);
   if (requested) {
     if (
       (params.source === "request" || params.source === "mapping-templated") &&
@@ -353,54 +548,39 @@ export function resolveHookSessionKey(params: {
     ) {
       return { ok: false, error: getHookSessionKeyRequestPolicyError() };
     }
-    const allowedPrefixes = params.hooksConfig.sessionPolicy.allowedSessionKeyPrefixes;
-    if (allowedPrefixes && !isSessionKeyAllowedByPrefix(requested, allowedPrefixes)) {
-      return { ok: false, error: getHookSessionKeyPrefixError(allowedPrefixes) };
+  } else {
+    const defaultSessionKey = params.hooksConfig.sessionPolicy.defaultSessionKey;
+    if (defaultSessionKey) {
+      return { ok: true, value: defaultSessionKey };
     }
-    return { ok: true, value: requested };
   }
 
-  const defaultSessionKey = params.hooksConfig.sessionPolicy.defaultSessionKey;
-  if (defaultSessionKey) {
-    return { ok: true, value: defaultSessionKey };
-  }
-
-  const generated = `hook:${(params.idFactory ?? randomUUID)()}`;
+  const sessionKey = requested ?? `hook:${(params.idFactory ?? randomUUID)()}`;
   const allowedPrefixes = params.hooksConfig.sessionPolicy.allowedSessionKeyPrefixes;
-  if (allowedPrefixes && !isSessionKeyAllowedByPrefix(generated, allowedPrefixes)) {
+  if (allowedPrefixes && !isSessionKeyAllowedByPrefix(sessionKey, allowedPrefixes)) {
     return { ok: false, error: getHookSessionKeyPrefixError(allowedPrefixes) };
   }
-  return { ok: true, value: generated };
-}
-
-function hasTemplatedHookSessionKey(sessionKey: string | undefined): boolean {
-  return typeof sessionKey === "string" && hasHookTemplateExpressions(sessionKey);
+  return { ok: true, value: sessionKey };
 }
 
 function hasEffectiveTemplatedHookSessionKeyMapping(mappings: HookMappingResolved[]): boolean {
   const effectiveMappings: HookMappingResolved[] = [];
   for (const mapping of mappings) {
-    if (isHookMappingShadowed(mapping, effectiveMappings)) {
+    if (
+      effectiveMappings.some(
+        (earlier) =>
+          (!earlier.matchPath || earlier.matchPath === mapping.matchPath) &&
+          (!earlier.matchSource || earlier.matchSource === mapping.matchSource),
+      )
+    ) {
       continue;
     }
     effectiveMappings.push(mapping);
-    if (mapping.action === "agent" && hasTemplatedHookSessionKey(mapping.sessionKey)) {
+    if (typeof mapping.sessionKey === "string" && hasHookTemplateExpressions(mapping.sessionKey)) {
       return true;
     }
   }
   return false;
-}
-
-function isHookMappingShadowed(
-  mapping: HookMappingResolved,
-  earlierMappings: HookMappingResolved[],
-): boolean {
-  return earlierMappings.some((earlier) => {
-    if (earlier.matchPath && earlier.matchPath !== mapping.matchPath) {
-      return false;
-    }
-    return !earlier.matchSource || earlier.matchSource === mapping.matchSource;
-  });
 }
 
 /** Re-scope agent-prefixed hook session keys to the selected target agent. */
@@ -420,39 +600,51 @@ export function normalizeHookDispatchSessionKey(params: {
   return `agent:${targetAgentId}:${parsed.rest}`;
 }
 
-/** Validate and normalize a hook agent payload before policy/session resolution. */
-export function normalizeAgentPayload(payload: Record<string, unknown>):
-  | {
-      ok: true;
-      value: HookAgentPayload;
-    }
-  | { ok: false; error: string } {
+export function normalizeAgentPayload(
+  payload: Record<string, unknown>,
+): Result<HookAgentPayload, string> {
   const message = normalizeOptionalString(payload.message) ?? "";
   if (!message) {
     return { ok: false, error: "message required" };
   }
-  const nameRaw = payload.name;
-  const name = normalizeOptionalString(nameRaw) ?? "Hook";
-  const agentIdRaw = payload.agentId;
-  const agentId = normalizeOptionalString(agentIdRaw);
-  const idempotencyKey = resolveOptionalHookIdempotencyKey(payload.idempotencyKey);
-  const wakeMode = payload.wakeMode === "next-heartbeat" ? "next-heartbeat" : "now";
-  const sessionKeyRaw = payload.sessionKey;
-  const sessionKey = normalizeOptionalString(sessionKeyRaw);
-  const channel = resolveHookChannel(payload.channel);
-  if (!channel) {
-    return { ok: false, error: getHookChannelError() };
+  const name = normalizeOptionalString(payload.name) ?? "Hook";
+  const agentId = normalizeHookPayloadAgentId(payload.agentId);
+  if (!agentId.ok) {
+    return agentId;
   }
-  const toRaw = payload.to;
-  const to = normalizeOptionalString(toRaw);
+  const idempotencyKey = normalizeBoundedOptionalString(
+    payload.idempotencyKey,
+    MAX_HOOK_IDEMPOTENCY_KEY_LENGTH,
+  );
+  const wakeMode = payload.wakeMode === "next-heartbeat" ? "next-heartbeat" : "now";
+  const sessionKey = normalizeOptionalString(payload.sessionKey);
+  if (payload.sessionKey !== undefined && !sessionKey) {
+    return { ok: false, error: "sessionKey must be a non-empty string" };
+  }
+  const sessionModeRaw = payload.sessionMode;
+  if (
+    sessionModeRaw !== undefined &&
+    sessionModeRaw !== "isolated" &&
+    sessionModeRaw !== "persistent"
+  ) {
+    return { ok: false, error: "sessionMode must be isolated or persistent" };
+  }
+  const sessionMode = sessionModeRaw ?? "isolated";
+  const delivery = normalizeHookAgentDelivery({
+    deliver: payload.deliver,
+    channel: payload.channel,
+    to: payload.to,
+    accountId: payload.accountId,
+  });
+  if (!delivery.ok) {
+    return delivery;
+  }
   const modelRaw = payload.model;
   const model = normalizeOptionalString(modelRaw);
   if (modelRaw !== undefined && !model) {
     return { ok: false, error: "model required" };
   }
-  const deliver = resolveHookDeliver(payload.deliver);
-  const thinkingRaw = payload.thinking;
-  const thinking = normalizeOptionalString(thinkingRaw);
+  const thinking = normalizeOptionalString(payload.thinking);
   const timeoutRaw = payload.timeoutSeconds;
   const timeoutSeconds =
     typeof timeoutRaw === "number" && Number.isFinite(timeoutRaw) && timeoutRaw > 0
@@ -463,13 +655,12 @@ export function normalizeAgentPayload(payload: Record<string, unknown>):
     value: {
       message,
       name,
-      agentId,
+      agentId: agentId.value,
       idempotencyKey,
       wakeMode,
       sessionKey,
-      deliver,
-      channel,
-      to,
+      sessionMode,
+      ...delivery.value,
       model,
       thinking,
       timeoutSeconds,

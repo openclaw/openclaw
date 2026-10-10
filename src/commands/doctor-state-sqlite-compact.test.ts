@@ -1,21 +1,26 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { recordOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.js";
+import { readPersistedQuarantineRow } from "../state/openclaw-quarantine-store.test-support.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabase,
   openOpenClawStateDatabase,
-  OPENCLAW_STATE_SCHEMA_VERSION,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.generated.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
+import * as compactOwner from "./doctor-sqlite-compact.js";
+import * as maintenanceLock from "./doctor-sqlite-maintenance-lock.js";
 import { runDoctorStateSqliteCompact } from "./doctor-state-sqlite-compact.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
     closeOpenClawStateDatabase();
+    vi.restoreAllMocks();
     cleanup();
   });
 });
@@ -82,6 +87,19 @@ function seedStateDatabase(params: {
     fs.chmodSync(sqlitePath, 0o666);
   }
   return sqlitePath;
+}
+
+function dropBootstrapProvenanceColumns(sqlitePath: string): void {
+  const sqlite = requireNodeSqlite();
+  const database = new sqlite.DatabaseSync(sqlitePath);
+  try {
+    database.exec(`
+      ALTER TABLE claw_installs DROP COLUMN bootstrap_source_path;
+      ALTER TABLE claw_installs DROP COLUMN bootstrap_content_digest;
+    `);
+  } finally {
+    database.close();
+  }
 }
 
 function readPragma(database: DatabaseSync, name: string): number {
@@ -163,8 +181,78 @@ describe("runDoctorStateSqliteCompact", () => {
     expect(report.after.walSizeBytes).toBe(0);
     expect(report.after.pageSizeBytes).toBeGreaterThan(0);
     expect(report.reclaimedBytes).toBeGreaterThan(0);
-    expect(report.quickCheck).toBe("ok");
     expect(report.integrityCheck).toBe("ok");
+  });
+
+  it("fully repacks partially filled pages in an already incremental database", async () => {
+    const env = createStateEnv();
+    const sqlitePath = seedStateDatabase({ env });
+    const sqlite = requireNodeSqlite();
+    const database = new sqlite.DatabaseSync(sqlitePath);
+    try {
+      database.exec("PRAGMA auto_vacuum = INCREMENTAL; VACUUM; BEGIN;");
+      const insert = database.prepare("INSERT INTO compact_payload (payload) VALUES (?)");
+      for (let index = 0; index < 1000; index++) {
+        insert.run("x".repeat(1000));
+      }
+      database.exec(
+        "COMMIT; UPDATE compact_payload SET payload = 'keep'; PRAGMA wal_checkpoint(TRUNCATE);",
+      );
+      expect(readPragma(database, "freelist_count")).toBe(0);
+    } finally {
+      database.close();
+    }
+    const report = await runDoctorStateSqliteCompact({ env });
+    expectCompletedReport(report);
+    expect(report.before.autoVacuum).toBe(2);
+    expect(report.after.dbSizeBytes).toBeLessThan(report.before.dbSizeBytes);
+    const after = new sqlite.DatabaseSync(sqlitePath, { readOnly: true });
+    try {
+      expect(
+        after.prepare("SELECT COUNT(*) AS count FROM compact_payload WHERE payload = 'keep'").get(),
+      ).toEqual({ count: 1000 });
+    } finally {
+      after.close();
+    }
+  });
+
+  it("compacts pre-bootstrap-column v6 state without migrating it", async () => {
+    const env = createStateEnv();
+    const sqlitePath = seedStateDatabase({ env, withBloat: true });
+    dropBootstrapProvenanceColumns(sqlitePath);
+
+    const report = await runDoctorStateSqliteCompact({ env });
+
+    expectCompletedReport(report);
+    const sqlite = requireNodeSqlite();
+    const database = new sqlite.DatabaseSync(sqlitePath, { readOnly: true });
+    try {
+      const columns = database.prepare("PRAGMA table_info(claw_installs)").all() as Array<{
+        name?: unknown;
+      }>;
+      expect(columns.map((column) => column.name)).not.toContain("bootstrap_source_path");
+      expect(columns.map((column) => column.name)).not.toContain("bootstrap_content_digest");
+    } finally {
+      database.close();
+    }
+  });
+
+  it("clears authoritative quarantine after compaction", async () => {
+    const env = createStateEnv();
+    const sqlitePath = seedStateDatabase({ env, withBloat: true });
+    expect(
+      recordOpenClawDatabaseQuarantine({
+        env,
+        kind: "state",
+        path: sqlitePath,
+        reason: "corrupt index",
+      }),
+    ).toBe(true);
+
+    await runDoctorStateSqliteCompact({ env });
+
+    expect(readPersistedQuarantineRow(sqlitePath, { env })).toBeUndefined();
+    expect(openOpenClawStateDatabase({ env }).db.isOpen).toBe(true);
   });
 
   it.skipIf(process.platform === "win32")("reapplies owner-only SQLite permissions", async () => {
@@ -240,16 +328,10 @@ describe("runDoctorStateSqliteCompact", () => {
     const env = createStateEnv();
     const sqlitePath = seedStateDatabase({ env, withBloat: true });
 
-    await expect(
-      runDoctorStateSqliteCompact(
-        { env },
-        {
-          withMaintenanceLock: async () => {
-            throw new Error("Gateway owns this OpenClaw state directory");
-          },
-        },
-      ),
-    ).rejects.toThrow(/Gateway owns/);
+    vi.spyOn(maintenanceLock, "withDoctorSqliteMaintenanceLock").mockRejectedValue(
+      new Error("Gateway owns this OpenClaw state directory"),
+    );
+    await expect(runDoctorStateSqliteCompact({ env })).rejects.toThrow(/Gateway owns/);
 
     const sqlite = requireNodeSqlite();
     const database = new sqlite.DatabaseSync(sqlitePath, { readOnly: true });
@@ -264,6 +346,14 @@ describe("runDoctorStateSqliteCompact", () => {
   it("treats a busy truncating checkpoint as failure", async () => {
     const env = createStateEnv();
     const sqlitePath = seedStateDatabase({ env });
+    expect(
+      recordOpenClawDatabaseQuarantine({
+        env,
+        kind: "state",
+        path: sqlitePath,
+        reason: "busy checkpoint",
+      }),
+    ).toBe(true);
     const sqlite = requireNodeSqlite();
     const reader = new sqlite.DatabaseSync(sqlitePath);
     const writer = new sqlite.DatabaseSync(sqlitePath);
@@ -272,10 +362,15 @@ describe("runDoctorStateSqliteCompact", () => {
       writer.exec("INSERT INTO compact_payload (payload) VALUES ('newer wal frame');");
 
       // Exercise the real busy checkpoint result without waiting the production lock timeout.
-      await expect(runDoctorStateSqliteCompact({ env }, { busyTimeoutMs: 0 })).rejects.toThrow(
+      const compact = compactOwner.compactDoctorSqliteFile;
+      vi.spyOn(compactOwner, "compactDoctorSqliteFile").mockImplementation((options) =>
+        compact({ ...options, busyTimeoutMs: 0 }),
+      );
+      await expect(runDoctorStateSqliteCompact({ env })).rejects.toThrow(
         /checkpoint remained busy/,
       );
       expect(readPragma(writer, "auto_vacuum")).toBe(0);
+      expect(readPersistedQuarantineRow(sqlitePath, { env })?.reason).toBe("busy checkpoint");
     } finally {
       reader.exec("ROLLBACK;");
       reader.close();

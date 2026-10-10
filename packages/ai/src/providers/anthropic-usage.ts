@@ -1,3 +1,6 @@
+import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import type { Usage } from "../types.js";
+
 type AnthropicUsagePayload = {
   input_tokens?: unknown;
   output_tokens?: unknown;
@@ -28,8 +31,59 @@ export type AnthropicIterationUsageResult =
   | { state: "invalid" }
   | { state: "valid"; usage: AnthropicIterationUsageSnapshot };
 
+type AnthropicBilledUsage = {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cacheWrite1h: number;
+};
+
+const BILLED_USAGE_KEYS = ["input", "output", "cacheRead", "cacheWrite", "cacheWrite1h"] as const;
+
+function readAnthropicBilledUsage(
+  usage: AnthropicUsagePayload,
+  missingCacheTokens?: 0,
+): Partial<AnthropicBilledUsage> {
+  return {
+    input: readAnthropicUsageTokenCount(usage.input_tokens),
+    output: readAnthropicUsageTokenCount(usage.output_tokens),
+    cacheRead: readAnthropicUsageTokenCount(usage.cache_read_input_tokens ?? missingCacheTokens),
+    cacheWrite: readAnthropicUsageTokenCount(
+      usage.cache_creation_input_tokens ?? missingCacheTokens,
+    ),
+    cacheWrite1h: readAnthropicCacheWriteUsage(usage).cacheWrite1h,
+  };
+}
+
+function applyAnthropicBilledUsage(target: Usage, resolved: Partial<AnthropicBilledUsage>): void {
+  for (const key of BILLED_USAGE_KEYS) {
+    const value = resolved[key];
+    if (value !== undefined) {
+      target[key] = value;
+    }
+  }
+  target.totalTokens = target.input + target.output + target.cacheRead + target.cacheWrite;
+}
+
+function readAnthropicIterationUsage(value: unknown): AnthropicBilledUsage | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const { input, output, cacheRead, cacheWrite, cacheWrite1h } = readAnthropicBilledUsage(value);
+  if (
+    input === undefined ||
+    output === undefined ||
+    cacheRead === undefined ||
+    cacheWrite === undefined
+  ) {
+    return undefined;
+  }
+  return { input, output, cacheRead, cacheWrite, cacheWrite1h: cacheWrite1h ?? 0 };
+}
+
 export function readAnthropicUsageTokenCount(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+  return asNonNegativeFiniteNumber(value);
 }
 
 export function readAnthropicCacheWriteUsage(
@@ -76,29 +130,101 @@ export function readLastAnthropicIterationUsage(
   }
   // Anthropic documents the final iteration as the true context window.
   // Top-level cache fields remain cumulative billing totals across iterations.
-  const iteration = usage.iterations.at(-1);
-  if (!iteration || typeof iteration !== "object" || Array.isArray(iteration)) {
+  const iteration = readAnthropicIterationUsage(usage.iterations.at(-1));
+  if (!iteration) {
     return { state: "invalid" };
   }
-  const record = iteration as AnthropicUsagePayload;
-  const input = readAnthropicUsageTokenCount(record.input_tokens);
-  const cacheRead = readAnthropicUsageTokenCount(record.cache_read_input_tokens);
-  const cacheWrite = readAnthropicUsageTokenCount(record.cache_creation_input_tokens);
-  const outputTokens = readAnthropicUsageTokenCount(record.output_tokens);
-  if (
-    input === undefined ||
-    cacheRead === undefined ||
-    cacheWrite === undefined ||
-    outputTokens === undefined
-  ) {
-    return { state: "invalid" };
-  }
-  const contextPromptTokens = input + cacheRead + cacheWrite;
+  const contextPromptTokens = iteration.input + iteration.cacheRead + iteration.cacheWrite;
   return {
     state: "valid",
     usage: {
       contextPromptTokens,
-      totalTokens: contextPromptTokens + outputTokens,
+      totalTokens: contextPromptTokens + iteration.output,
     },
   };
+}
+
+function readAnthropicCompactionBilledUsage(iterations: unknown): AnthropicBilledUsage | undefined {
+  if (!Array.isArray(iterations) || iterations.length === 0) {
+    return undefined;
+  }
+  let sawCompaction = false;
+  const billed: AnthropicBilledUsage = {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    cacheWrite1h: 0,
+  };
+  for (const iteration of iterations) {
+    const resolved = readAnthropicIterationUsage(iteration);
+    if (!resolved) {
+      return undefined;
+    }
+    sawCompaction ||= iteration.type === "compaction";
+    for (const key of BILLED_USAGE_KEYS) {
+      billed[key] += resolved[key];
+    }
+  }
+  return sawCompaction ? billed : undefined;
+}
+
+/** Record independent billing buckets without treating zero placeholders as context proof. */
+export function applyAnthropicMessageStartUsage(
+  target: Usage,
+  payload: AnthropicUsagePayload,
+): AnthropicPromptUsageSnapshot | undefined {
+  const promptUsage = readAnthropicPromptUsageSnapshot(payload);
+  const promptTokens = promptUsage
+    ? promptUsage.input + promptUsage.cacheRead + promptUsage.cacheWrite
+    : 0;
+  const resolved = readAnthropicBilledUsage(payload, 0);
+  applyAnthropicBilledUsage(target, resolved);
+  if (promptTokens > 0 && resolved.output !== undefined) {
+    target.contextUsage = {
+      state: "available",
+      promptTokens,
+      totalTokens: promptTokens + target.output,
+    };
+  }
+  return promptTokens > 0 ? promptUsage : undefined;
+}
+
+/** Keep billing and context distinct; omitted usage preserves the last snapshot. */
+export function applyAnthropicMessageDeltaUsage(
+  target: Usage,
+  usage: AnthropicUsagePayload | undefined,
+  messageStartPromptUsage: AnthropicPromptUsageSnapshot | undefined,
+): void {
+  if (!usage) {
+    return;
+  }
+  const billedIterations = readAnthropicCompactionBilledUsage(usage.iterations);
+  const reported = readAnthropicBilledUsage(usage);
+  // Match the SDK accumulator: absent or null cache counters preserve prior values.
+  applyAnthropicBilledUsage(target, billedIterations ?? reported);
+  const iterationUsage = readLastAnthropicIterationUsage(usage);
+  if (iterationUsage.state === "valid") {
+    target.contextUsage = {
+      state: "available",
+      promptTokens: iterationUsage.usage.contextPromptTokens,
+      totalTokens: iterationUsage.usage.totalTokens,
+    };
+  } else if (iterationUsage.state === "invalid") {
+    target.contextUsage = { state: "unavailable" };
+  } else if (
+    reported.output !== undefined &&
+    (messageStartPromptUsage !== undefined ||
+      ((reported.cacheRead !== undefined || reported.cacheWrite !== undefined) &&
+        readAnthropicPromptUsageSnapshot(usage) !== undefined))
+  ) {
+    const promptTokens = target.input + target.cacheRead + target.cacheWrite;
+    target.contextUsage = {
+      state: "available",
+      promptTokens,
+      totalTokens: promptTokens + target.output,
+    };
+  } else {
+    target.contextUsage = { state: "unavailable" };
+  }
 }

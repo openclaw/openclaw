@@ -1,0 +1,163 @@
+import { sleepWithAbort } from "@openclaw/retry";
+import type { AgentWaitResult } from "../../../../src/agents/run-wait.types.js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ApplicationContext } from "../../app/context.ts";
+import {
+  autoPromptNotificationsOnSend,
+  hasActiveNotificationPromptGesture,
+  shouldAutoPromptNotificationsOnSend,
+} from "../../app/notifications-auto-prompt.ts";
+import { t } from "../../i18n/index.ts";
+import { parseSlashCommand } from "../../lib/chat/commands.ts";
+import { resolveSessionDisplayName } from "../../lib/session-display.ts";
+import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
+import {
+  areUiSessionKeysEquivalent,
+  uiSessionEventMatches,
+} from "../../lib/sessions/session-key.ts";
+import { showToast } from "../../lib/toast.ts";
+import { captureSessionNoticeOwner, openSessionNoticeTarget } from "./session-notice-owner.ts";
+
+const RETRY_DELAY_MS = 1_000;
+
+async function notifyWhenBackgroundSessionEnds(params: {
+  agentId: string;
+  client: GatewayBrowserClient;
+  context: ApplicationContext;
+  key: string;
+  runId: string;
+  isCurrentOwner: () => boolean;
+}): Promise<void> {
+  let result: Partial<AgentWaitResult> | undefined;
+  while (!result) {
+    try {
+      const observed = await params.client.request<Partial<AgentWaitResult>>(
+        "agent.wait",
+        { runId: params.runId, timeoutMs: 30_000 },
+        { timeoutMs: null },
+      );
+      if (params.context.gateway.snapshot.client !== params.client) {
+        return;
+      }
+      const observationalTimeout =
+        observed.status === "timeout" &&
+        observed.endedAt === undefined &&
+        !observed.error &&
+        !observed.stopReason &&
+        observed.providerStarted !== true;
+      if (observed.status === "pending" || observed.pendingError === true) {
+        await sleepWithAbort(RETRY_DELAY_MS);
+      } else if (observationalTimeout) {
+        // Startup display errors can mean unconfirmed delivery, not a failed run.
+        const initialTurn = params.context.placementStartup.get(params.key)?.initialTurn;
+        if (initialTurn?.sendState === "failed" && initialTurn.sendRunId === params.runId) {
+          result = { status: "error", error: initialTurn.sendError };
+        } else {
+          // A wait deadline is not a run outcome, even after startup custody retires.
+          await sleepWithAbort(RETRY_DELAY_MS);
+        }
+      } else {
+        result = observed;
+      }
+    } catch {
+      const gateway = params.context.gateway.snapshot;
+      const reconnecting =
+        gateway.phase === "connecting" ||
+        gateway.phase === "starting" ||
+        gateway.phase === "reconnecting";
+      if (gateway.client !== params.client || !reconnecting) {
+        return;
+      }
+      await sleepWithAbort(RETRY_DELAY_MS);
+    }
+  }
+
+  if (!params.isCurrentOwner()) {
+    return;
+  }
+  const gateway = params.context.gateway.snapshot;
+  if (uiSessionEventMatches(gateway, params.key, params.agentId)) {
+    return;
+  }
+  const row = params.context.sessions.state.result?.sessions.find((session) =>
+    areUiSessionKeysEquivalent(session.key, params.key),
+  );
+  const status =
+    result.status === "ok"
+      ? t("sessionsView.statusDone")
+      : result.status === "timeout"
+        ? t("sessionsView.statusTimeout")
+        : result.stopReason === "rpc"
+          ? t("sessionsView.statusKilled")
+          : t("sessionsView.statusFailed");
+  const nativeTarget = sessionNavigationTarget({
+    face: "chat",
+    sessionKey: params.key,
+    fallbackAgentId: params.agentId,
+    exactKey: true,
+  });
+  params.context.nativeNotifications?.backgroundSessionCompleted({
+    runId: params.runId,
+    path: nativeTarget.options.pathname,
+    ...(nativeTarget.options.search ? { search: nativeTarget.options.search } : {}),
+  });
+  showToast({
+    fifo: true,
+    message: `${resolveSessionDisplayName(params.key, row)}: ${status}`,
+    actionLabel: t("sessionsView.openSession"),
+    onAction: () => {
+      if (!params.isCurrentOwner()) {
+        return;
+      }
+      openSessionNoticeTarget(params.context, params.key, params.agentId);
+    },
+  });
+}
+
+export function prepareBackgroundSessionCompletion(params: {
+  enabled: boolean;
+  agentId: string;
+  client: GatewayBrowserClient;
+  context: ApplicationContext;
+}): (key: string, runId?: string) => boolean {
+  const isCurrentOwner = captureSessionNoticeOwner(params.context);
+  return (key, runId) => {
+    const normalizedRunId = runId?.trim();
+    if (!params.enabled) {
+      return false;
+    }
+    // Creation disposition is independent of whether the Gateway returned a watchable run.
+    if (!normalizedRunId) {
+      return true;
+    }
+    void notifyWhenBackgroundSessionEnds({
+      agentId: params.agentId,
+      client: params.client,
+      context: params.context,
+      key,
+      runId: normalizedRunId,
+      isCurrentOwner,
+    });
+    return true;
+  };
+}
+
+/** Keep notification permission on the original input event, before startup awaits. */
+export function promptNewSessionNotifications(
+  context: ApplicationContext,
+  message: string,
+  hasAttachments: boolean,
+  direct: boolean,
+) {
+  if (
+    shouldAutoPromptNotificationsOnSend({
+      connected: context.gateway.snapshot.phase === "connected",
+      directComposerSend: direct && hasActiveNotificationPromptGesture(),
+      message,
+      hasAttachments,
+      isCommand: parseSlashCommand(message) !== null,
+    })
+  ) {
+    autoPromptNotificationsOnSend(context);
+  }
+}

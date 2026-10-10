@@ -2,13 +2,14 @@
 import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createEmptyPluginRegistry,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { verifyGoogleChatRequest } from "./auth.js";
 import { registerGoogleChatWebhookTarget } from "./monitor-routing.js";
@@ -100,6 +101,7 @@ function registerTwoTargets() {
   const logB = vi.fn();
   const core = {} as PluginRuntime;
   const config = {} as OpenClawConfig;
+  const ingress = { receive: vi.fn(async () => ({ kind: "ignored" as const })) };
 
   const unregisterA = registerGoogleChatWebhookTarget({
     account: baseAccount("A"),
@@ -109,6 +111,7 @@ function registerTwoTargets() {
     path: "/googlechat",
     statusSink: sinkA,
     mediaMaxMb: 5,
+    ingress,
   });
   const unregisterB = registerGoogleChatWebhookTarget({
     account: baseAccount("B"),
@@ -118,6 +121,7 @@ function registerTwoTargets() {
     path: "/googlechat",
     statusSink: sinkB,
     mediaMaxMb: 5,
+    ingress,
   });
   webhookRouteHandler = expectDefined(registry.httpRoutes[0], "Google Chat webhook route").handler;
 
@@ -169,6 +173,35 @@ describe("Google Chat webhook routing", () => {
   afterAll(() => {
     vi.doUnmock("./auth.js");
     vi.resetModules();
+  });
+
+  it("rejects a foreign route collision instead of storing an unreachable target", () => {
+    const registry = createEmptyPluginRegistry();
+    const existingRoute = {
+      path: "/googlechat",
+      match: "exact" as const,
+      auth: "plugin" as const,
+      handler: () => {},
+      pluginId: "other-plugin",
+      source: "other-webhook",
+    };
+    registry.httpRoutes.push(existingRoute);
+    setActivePluginRegistry(registry);
+
+    expect(() =>
+      registerGoogleChatWebhookTarget({
+        account: baseAccount("A"),
+        config: {},
+        runtime: { log: vi.fn() },
+        core: {} as PluginRuntime,
+        path: "/googlechat",
+        statusSink: vi.fn(),
+        mediaMaxMb: 5,
+        ingress: { receive: vi.fn(async () => ({ kind: "ignored" as const })) },
+      }),
+    ).toThrow("route replacement denied");
+
+    expect(registry.httpRoutes).toEqual([existingRoute]);
   });
 
   it("rejects ambiguous routing when multiple targets on the same path verify successfully", async () => {
@@ -247,7 +280,10 @@ describe("Google Chat webhook routing", () => {
               user: { name: "users/12345", displayName: "Test User" },
               messagePayload: {
                 space: { name: "spaces/AAA" },
-                message: { text: "Hello from add-on" },
+                message: {
+                  name: "spaces/AAA/messages/add-on-1",
+                  text: "Hello from add-on",
+                },
               },
             },
           },

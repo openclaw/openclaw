@@ -1,9 +1,5 @@
-// Provider model helpers normalize model catalog entries shared by provider plugins.
-import { normalizeProviderId as normalizeProviderIdCore } from "@openclaw/model-catalog-core/provider-id";
-import {
-  normalizeAntigravityPreviewModelId as normalizeAntigravityPreviewModelIdCore,
-  normalizeGooglePreviewModelId as normalizeGooglePreviewModelIdCore,
-} from "@openclaw/model-catalog-core/provider-model-id-normalize";
+import { normalizeModelCostConfig } from "@openclaw/llm-core";
+import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
 import {
   buildAnthropicReplayPolicyForModel,
   buildGoogleGeminiReplayPolicy,
@@ -14,28 +10,144 @@ import {
   buildStrictAnthropicReplayPolicy,
   resolveTaggedReasoningOutputMode,
   sanitizeGoogleGeminiReplayHistory,
+  sanitizeGoogleGeminiReplayHistoryAsync,
 } from "../plugins/provider-replay-helpers.js";
 import type { ProviderPlugin } from "../plugins/types.js";
-import type {
-  ProviderReasoningOutputModeContext,
-  ProviderReplayPolicyContext,
-  ProviderRuntimeModel,
-  ProviderSanitizeReplayHistoryContext,
-} from "./plugin-entry.js";
+import { definePluginEntry } from "./plugin-entry.js";
+import type { ProviderReplayPolicyContext, ProviderRuntimeModel } from "./plugin-entry.js";
+
+export { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+export {
+  normalizeAntigravityPreviewModelId,
+  normalizeGooglePreviewModelId,
+} from "@openclaw/model-catalog-core/provider-model-id-normalize";
+
+type SelfHostedOpenAICompatibleProviderOverrides = Partial<
+  Omit<ProviderPlugin, "id" | "label" | "docsPath" | "envVars" | "auth" | "catalog" | "wizard">
+>;
+
+export type SelfHostedOpenAICompatibleProviderOptions = {
+  id: string;
+  label: string;
+  hint: string;
+  groupHint: string;
+  defaultBaseUrl: string;
+  apiKeyEnvVar: string;
+  modelPlaceholder: string;
+  overrides?: SelfHostedOpenAICompatibleProviderOverrides;
+};
+
+/** Defines the canonical setup, discovery, and wizard flow for one self-hosted OpenAI endpoint. */
+export function defineSelfHostedOpenAICompatibleProvider(
+  options: SelfHostedOpenAICompatibleProviderOptions,
+): ReturnType<typeof definePluginEntry> {
+  // Provider entries load during plugin discovery; setup/wizard code stays lazy until used.
+  const loadProviderSetup = async () => await import("./provider-setup.js");
+  return definePluginEntry({
+    id: options.id,
+    name: `${options.label} Provider`,
+    description: `Bundled ${options.label} provider plugin`,
+    register(api) {
+      api.registerProvider({
+        ...options.overrides,
+        id: options.id,
+        label: options.label,
+        docsPath: `/providers/${options.id}`,
+        envVars: [options.apiKeyEnvVar],
+        auth: [
+          {
+            id: "custom",
+            label: options.label,
+            hint: options.hint,
+            kind: "custom",
+            run: async (ctx) => {
+              const setup = await loadProviderSetup();
+              return await setup.promptAndConfigureOpenAICompatibleSelfHostedProviderAuth({
+                cfg: ctx.config,
+                prompter: ctx.prompter,
+                providerId: options.id,
+                providerLabel: options.label,
+                defaultBaseUrl: options.defaultBaseUrl,
+                defaultApiKeyEnvVar: options.apiKeyEnvVar,
+                modelPlaceholder: options.modelPlaceholder,
+              });
+            },
+            runNonInteractive: async (ctx) => {
+              const setup = await loadProviderSetup();
+              return await setup.configureOpenAICompatibleSelfHostedProviderNonInteractive({
+                ctx,
+                providerId: options.id,
+                providerLabel: options.label,
+                defaultBaseUrl: options.defaultBaseUrl,
+                defaultApiKeyEnvVar: options.apiKeyEnvVar,
+                modelPlaceholder: options.modelPlaceholder,
+              });
+            },
+          },
+        ],
+        catalog: {
+          order: "late",
+          run: async (ctx) => {
+            const setup = await loadProviderSetup();
+            return await setup.discoverOpenAICompatibleSelfHostedProvider({
+              ctx,
+              providerId: options.id,
+              buildProvider: async (params) => {
+                const baseUrl = (params?.baseUrl?.trim() || options.defaultBaseUrl).replace(
+                  /\/+$/,
+                  "",
+                );
+                const models = await setup.discoverOpenAICompatibleLocalModels({
+                  baseUrl,
+                  apiKey: params?.apiKey,
+                  label: options.label,
+                  discoverRuntimeContext: false,
+                });
+                return { baseUrl, api: "openai-completions", models };
+              },
+            });
+          },
+        },
+        wizard: {
+          setup: {
+            choiceId: options.id,
+            choiceLabel: options.label,
+            choiceHint: options.hint,
+            groupId: options.id,
+            groupLabel: options.label,
+            groupHint: options.groupHint,
+            methodId: "custom",
+          },
+          modelPicker: {
+            label: `${options.label} (custom)`,
+            hint: `Enter ${options.label} URL + API key + model`,
+            methodId: "custom",
+          },
+        },
+      });
+    },
+  });
+}
 
 export type {
   ModelApi,
   ModelProviderDeclarationConfig as ModelProviderConfig,
 } from "../config/types.models.js";
 export {
+  bindsClaudeThinkingPrefix,
   resolveClaudeFable5ModelIdentity,
+  resolveClaudeHaiku55ModelIdentity,
   resolveClaudeModelIdentity,
   resolveClaudeMythos5ModelIdentity,
   resolveClaudeNativeThinkingLevelMap,
+  resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
+  resolveClaudeSonnet55ModelIdentity,
   requiresClaudeDefaultSampling,
   requiresClaudeMandatoryAdaptiveThinking,
+  supportsClaude1MContext,
   supportsClaudeAdaptiveThinking,
+  supportsClaudeFastMode,
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
 } from "@openclaw/llm-core";
@@ -44,6 +156,8 @@ export type {
   UnifiedModelCatalogKind,
   UnifiedModelCatalogSource,
 } from "@openclaw/model-catalog-core/model-catalog-types";
+export { isCloudModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+export { parseModelRef } from "../agents/model-selection-normalize.js";
 export type {
   BedrockDiscoveryConfig,
   ModelCompatConfig,
@@ -67,7 +181,6 @@ export {
   GPT5_HEARTBEAT_PROMPT_OVERLAY,
   isGpt5ModelId,
   normalizeGpt5PromptOverlayMode,
-  renderGpt5PromptOverlay,
   resolveGpt5PromptOverlayMode,
   resolveGpt5SystemPromptContribution,
   type Gpt5PromptOverlayMode,
@@ -76,7 +189,6 @@ export { resolveProviderEndpoint } from "../agents/provider-attribution.js";
 export {
   applyModelCompatPatch,
   hasToolSchemaProfile,
-  hasNativeWebSearchTool,
   normalizeModelCompat,
   resolveUnsupportedToolSchemaKeywords,
   resolveToolCallArgumentsEncoding,
@@ -90,29 +202,19 @@ export {
   buildPassthroughGeminiSanitizingReplayPolicy,
   resolveTaggedReasoningOutputMode,
   sanitizeGoogleGeminiReplayHistory,
+  sanitizeGoogleGeminiReplayHistoryAsync,
   buildStrictAnthropicReplayPolicy,
 };
 
-/**
- * Normalizes provider ids for config, catalog, and plugin-registry matching.
- */
-export function normalizeProviderId(
-  /** Provider id from config, catalog, or plugin metadata. */
-  provider: string,
-): string {
-  return normalizeProviderIdCore(provider);
-}
-
-/** Compare canonical flat rates without assuming display-only models include cost metadata. */
+/** Compare canonical rates and tiers; display-only models may omit cost metadata. */
 export function modelCostsEqual(
   current: ProviderRuntimeModel["cost"] | undefined,
   expected: ProviderRuntimeModel["cost"],
 ): boolean {
   return (
-    current?.input === expected.input &&
-    current?.output === expected.output &&
-    current?.cacheRead === expected.cacheRead &&
-    current?.cacheWrite === expected.cacheWrite
+    current !== undefined &&
+    JSON.stringify(normalizeModelCostConfig(current)) ===
+      JSON.stringify(normalizeModelCostConfig(expected))
   );
 }
 
@@ -174,52 +276,20 @@ export {
 export {
   cloneFirstTemplateModel,
   matchesExactOrPrefix,
+  resolveFamilyForwardCompatModel,
 } from "../plugins/provider-model-helpers.js";
-import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
 
 export {
   isClaudeAdaptiveThinkingDefaultModelId,
   resolveClaudeThinkingProfile,
 } from "../plugins/provider-claude-thinking.js";
 
-function getModelProviderHint(modelId: string): string | null {
-  const trimmed = normalizeOptionalLowercaseString(modelId);
-  if (!trimmed) {
-    return null;
-  }
-  const slashIndex = trimmed.indexOf("/");
-  if (slashIndex <= 0) {
-    return null;
-  }
-  return trimmed.slice(0, slashIndex) || null;
-}
-
 /** @deprecated Proxy provider-owned model helper; do not use from third-party plugins. */
 export function isProxyReasoningUnsupportedModelHint(
   /** Model id that may include a provider prefix such as `x-ai/model`. */
   modelId: string,
 ): boolean {
-  return getModelProviderHint(modelId) === "x-ai";
-}
-
-/**
- * Normalizes Antigravity preview model ids to the canonical provider catalog form.
- */
-export function normalizeAntigravityPreviewModelId(
-  /** Antigravity preview model id from config or catalog data. */
-  id: string,
-): string {
-  return normalizeAntigravityPreviewModelIdCore(id);
-}
-
-/**
- * Normalizes Google preview model ids to the canonical provider catalog form.
- */
-export function normalizeGooglePreviewModelId(
-  /** Google preview model id from config or catalog data. */
-  id: string,
-): string {
-  return normalizeGooglePreviewModelIdCore(id);
+  return normalizeOptionalLowercaseString(modelId)?.startsWith("x-ai/") ?? false;
 }
 
 /**
@@ -235,7 +305,10 @@ export type ProviderReplayFamily =
 
 type ProviderReplayFamilyHooks = Pick<
   ProviderPlugin,
-  "buildReplayPolicy" | "sanitizeReplayHistory" | "resolveReasoningOutputMode"
+  | "buildReplayPolicy"
+  | "sanitizeReplayHistory"
+  | "sanitizeReplayHistoryAsync"
+  | "resolveReasoningOutputMode"
 >;
 
 type BuildProviderReplayFamilyHooksOptions =
@@ -294,22 +367,26 @@ export function buildProviderReplayFamilyHooks(
       };
     }
     case "anthropic-by-model":
+    case "native-anthropic-by-model": {
+      const buildPolicy =
+        options.family === "native-anthropic-by-model"
+          ? buildNativeAnthropicReplayPolicyForModel
+          : buildAnthropicReplayPolicyForModel;
       return {
-        buildReplayPolicy: ({ modelId }: ProviderReplayPolicyContext) =>
-          buildAnthropicReplayPolicyForModel(modelId),
+        buildReplayPolicy: ({
+          modelId,
+          model,
+          inHistorySystemUpdates,
+        }: ProviderReplayPolicyContext) => buildPolicy(modelId, model, inHistorySystemUpdates),
       };
-    case "native-anthropic-by-model":
-      return {
-        buildReplayPolicy: ({ modelId }: ProviderReplayPolicyContext) =>
-          buildNativeAnthropicReplayPolicyForModel(modelId),
-      };
+    }
     case "google-gemini":
       return {
-        buildReplayPolicy: () => buildGoogleGeminiReplayPolicy(),
-        sanitizeReplayHistory: (ctx: ProviderSanitizeReplayHistoryContext) =>
-          sanitizeGoogleGeminiReplayHistory(ctx),
-        resolveReasoningOutputMode: (_ctx: ProviderReasoningOutputModeContext) =>
-          resolveTaggedReasoningOutputMode(),
+        buildReplayPolicy: buildGoogleGeminiReplayPolicy,
+        // Retained adapter for third-party callers of the legacy family hook.
+        sanitizeReplayHistory: sanitizeGoogleGeminiReplayHistory,
+        sanitizeReplayHistoryAsync: sanitizeGoogleGeminiReplayHistoryAsync,
+        resolveReasoningOutputMode: resolveTaggedReasoningOutputMode,
       };
     case "passthrough-gemini":
       return {
@@ -326,16 +403,6 @@ export function buildProviderReplayFamilyHooks(
   }
   throw new Error("Unsupported provider replay family");
 }
-
-/** @deprecated Provider-owned replay hook shortcut; use local provider hooks instead. */
-export const OPENAI_COMPATIBLE_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
-  family: "openai-compatible",
-});
-
-/** @deprecated Anthropic provider-owned replay hook shortcut; use local provider hooks instead. */
-export const ANTHROPIC_BY_MODEL_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
-  family: "anthropic-by-model",
-});
 
 /** @deprecated Anthropic provider-owned replay hook shortcut; use local provider hooks instead. */
 export const NATIVE_ANTHROPIC_REPLAY_HOOKS = buildProviderReplayFamilyHooks({

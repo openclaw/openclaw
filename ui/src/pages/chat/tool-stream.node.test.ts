@@ -1,1081 +1,873 @@
 // @vitest-environment node
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { readToolApprovalReviews } from "../../lib/chat/tool-approval-reviews.ts";
+import { readPreparedActivity, summarizeToolGroup } from "../../lib/chat/tool-call-grouping.ts";
+import { extractToolCardsCached, resolveToolCardOutcome } from "../../lib/chat/tool-cards.ts";
+import { activeChatRunStartupStatus, chatStartupStatusLabel } from "./chat-run-startup.ts";
+import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
+import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
+import { resetToolStream } from "./tool-stream-state.ts";
+import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream-status.ts";
 import {
-  handleAgentEvent,
-  handleSessionOperationEvent,
-  resetToolStream,
-  type FallbackStatus,
-  type PlanStatus,
-  type QuestionStatus,
-  type ToolStreamEntry,
-} from "./tool-stream.ts";
+  agentEvent,
+  createHost,
+  TOOL_STREAM_TEST_NOW,
+  useToolStreamFakeTimers,
+} from "./tool-stream.test-helpers.ts";
+import { handleAgentEvent } from "./tool-stream.ts";
 
-type ToolStreamHost = Parameters<typeof handleAgentEvent>[0];
-type AgentEvent = NonNullable<Parameters<typeof handleAgentEvent>[1]>;
-type MutableHost = ToolStreamHost & {
-  sessions: {
-    state: { modelOverrides: Record<string, string | null> };
-    setModelOverride: (key: string, value: string | null | undefined) => void;
-  };
-  compactionStatus?: unknown;
-  compactionClearTimer?: number | null;
-  fallbackStatus?: FallbackStatus | null;
-  fallbackClearTimer?: number | null;
-  planStatus?: PlanStatus | null;
-  questionStatus?: QuestionStatus | null;
-  requestUpdate?: () => void;
-};
-const TOOL_STREAM_TEST_NOW = new Date("2026-05-09T00:00:00.000Z").getTime();
-
-function testQuestionActionToken(): string {
-  return "12345678-1234-4123-8123-123456789abc";
-}
-
-function createHost(overrides?: Partial<MutableHost>): MutableHost {
-  const modelOverrides: Record<string, string | null> = {};
-  return {
-    sessionKey: "main",
-    chatRunId: null,
-    chatStream: null,
-    chatStreamStartedAt: null,
-    chatStreamSegments: [],
-    toolStreamById: new Map<string, ToolStreamEntry>(),
-    toolStreamOrder: [],
-    chatToolMessages: [],
-    toolStreamSyncTimer: null,
-    sessions: {
-      state: { modelOverrides },
-      setModelOverride: (key, value) => {
-        if (value === undefined) {
-          delete modelOverrides[key];
-        } else {
-          modelOverrides[key] = value;
-        }
-      },
-    },
-    compactionStatus: null,
-    compactionClearTimer: null,
-    fallbackStatus: null,
-    fallbackClearTimer: null,
-    planStatus: null,
-    questionStatus: null,
-    ...overrides,
-  };
-}
-
-function agentEvent(
+function emitTool(
+  host: ReturnType<typeof createHost>,
   runId: string,
   seq: number,
-  stream: AgentEvent["stream"],
-  data: AgentEvent["data"],
-  sessionKey = "main",
-): AgentEvent {
-  return {
-    runId,
-    seq,
-    stream,
-    ts: Date.now(),
-    sessionKey,
-    data,
-  };
+  data: Parameters<typeof agentEvent>[3],
+) {
+  handleAgentEvent(host, agentEvent(runId, seq, "tool", data));
 }
 
-function expectCompactionCompleteAndAutoClears(host: MutableHost) {
-  expect(host.compactionStatus).toEqual({
-    phase: "complete",
-    runId: "run-1",
-    startedAt: TOOL_STREAM_TEST_NOW,
-    completedAt: TOOL_STREAM_TEST_NOW,
-  });
-  const clearTimer = host.compactionClearTimer as unknown as {
-    hasRef?: unknown;
-    ref?: unknown;
-    unref?: unknown;
-  };
-  expect(typeof clearTimer.hasRef).toBe("function");
-  expect(typeof clearTimer.ref).toBe("function");
-  expect(typeof clearTimer.unref).toBe("function");
+const globalWithWindow = globalThis as typeof globalThis & {
+  window?: Window & typeof globalThis;
+};
+let installedTestWindow = false;
 
-  vi.advanceTimersByTime(5_000);
-  expect(host.compactionStatus).toBeNull();
-  expect(host.compactionClearTimer).toBeNull();
-}
-
-function requireFallbackStatus(host: MutableHost): FallbackStatus {
-  if (!host.fallbackStatus) {
-    throw new Error("expected fallback status");
+beforeAll(() => {
+  if (!globalWithWindow.window) {
+    globalWithWindow.window = globalThis as unknown as Window & typeof globalThis;
+    installedTestWindow = true;
   }
-  return host.fallbackStatus;
-}
+});
 
-function useToolStreamFakeTimers(): void {
-  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-  vi.setSystemTime(TOOL_STREAM_TEST_NOW);
-}
+afterAll(() => {
+  if (installedTestWindow) {
+    Reflect.deleteProperty(globalWithWindow, "window");
+  }
+});
 
-describe("app-tool-stream plan snapshots", () => {
-  it("stores a normalized snapshot and drops malformed entries", () => {
-    const requestUpdate = vi.fn();
-    const host = createHost({ requestUpdate });
+afterEach(() => vi.useRealTimers());
 
-    handleAgentEvent(
-      host,
-      agentEvent("run-1", 1, "plan", {
-        phase: "update",
-        explanation: "  Shipping the focused change  ",
-        steps: [
-          { step: "Inspect the route", status: "completed" },
-          "  Wire the checklist  ",
-          { step: "Run focused tests", status: "in_progress" },
-          { step: "", status: "pending" },
-          { step: "Missing status" },
-          { step: "Unknown status", status: "blocked" },
-          null,
-          42,
+describe("observed steering boundary", () => {
+  it.each(["live", "history"] as const)(
+    "anchors only first-observed live tools and commentary (%s)",
+    (source) => {
+      useToolStreamFakeTimers();
+      const host = createHost({
+        chatRunId: "run-1",
+        chatMessages: [
+          {
+            role: "user",
+            content: "Steer",
+            __openclaw: { idempotencyKey: "steer:user", steerTargetRunId: "run-1" },
+          },
         ],
-      }),
-    );
+      });
+      const tool = agentEvent("run-1", 1, "tool", {
+        phase: "start",
+        toolCallId: "call",
+        name: "read",
+      });
+      handleAgentEvent(host, tool, source);
+      handleAgentEvent(
+        host,
+        agentEvent("run-1", 2, "item", {
+          kind: "preamble",
+          itemId: "comment",
+          progressText: "Checking.",
+        }),
+        source,
+      );
+      const expected = source === "live" ? "steer" : undefined;
+      expect(
+        host.toolStreamById.get(buildToolStreamIdentity("run-1", "call"))?.afterUserSendId,
+      ).toBe(expected);
+      expect(host.chatStreamSegments[0]?.afterUserSendId).toBe(expected);
+      host.chatMessages = [
+        ...(host.chatMessages ?? []),
+        {
+          role: "user",
+          content: "Later",
+          __openclaw: { idempotencyKey: "later:user", steerTargetRunId: "run-1" },
+        },
+      ];
+      handleAgentEvent(host, {
+        ...tool,
+        seq: 3,
+        data: { ...tool.data, phase: "result", result: "Done" },
+      });
+      expect(host.chatToolMessages[0]?.openclawToolStreamAfterSendId).toBe(expected);
+      resetToolStream(host);
+    },
+  );
+});
 
-    expect(host.planStatus).toEqual({
-      runId: "run-1",
-      explanation: "Shipping the focused change",
-      steps: [
-        { step: "Inspect the route", status: "completed" },
-        { step: "Wire the checklist", status: "pending" },
-        { step: "Run focused tests", status: "in_progress" },
-      ],
-    });
-    expect(requestUpdate).toHaveBeenCalledOnce();
-  });
-
-  it("replaces the full snapshot and clears on an empty snapshot", () => {
-    const host = createHost();
-
-    handleAgentEvent(
-      host,
-      agentEvent("run-1", 1, "plan", {
-        phase: "update",
-        steps: [
-          { step: "First", status: "completed" },
-          { step: "Second", status: "in_progress" },
-        ],
-      }),
-    );
-    handleAgentEvent(
-      host,
-      agentEvent("run-1", 2, "plan", {
-        phase: "update",
-        steps: [{ step: "Replacement", status: "pending" }],
-      }),
-    );
-
-    expect(host.planStatus).toEqual({
-      runId: "run-1",
-      steps: [{ step: "Replacement", status: "pending" }],
-    });
-
-    handleAgentEvent(
-      host,
-      agentEvent("run-1", 3, "plan", {
-        phase: "update",
-        explanation: "No actionable steps",
-        steps: [],
-      }),
-    );
-
-    expect(host.planStatus).toBeNull();
-  });
-
-  it("demotes duplicate in-progress steps to pending", () => {
-    const host = createHost();
-
-    handleAgentEvent(
-      host,
-      agentEvent("run-1", 1, "plan", {
-        phase: "update",
-        steps: [
-          { step: "First active", status: "in_progress" },
-          { step: "Second active", status: "in_progress" },
-        ],
-      }),
-    );
-
-    expect(host.planStatus).toEqual({
-      runId: "run-1",
-      steps: [
-        { step: "First active", status: "in_progress" },
-        { step: "Second active", status: "pending" },
-      ],
-    });
-  });
-
-  it("ignores plan snapshots from another run while a run is active", () => {
+describe("status text truncation", () => {
+  it.each([
+    ["short", "Ready 😀", "Ready 😀"],
+    ["ASCII limit", "x".repeat(257), "x".repeat(256)],
+    ["surrogate boundary", `${"x".repeat(255)}😀 trailing`, "x".repeat(255)],
+  ])("preserves complete characters in %s retry and fallback labels", (_name, input, expected) => {
     const host = createHost({
       chatRunId: "run-1",
-      planStatus: {
-        steps: [{ step: "Active step", status: "in_progress" }],
-      },
+      chatRunStartup: { state: "status", runId: "run-1", phase: "starting_model" },
+      toolStreamSyncTimer: 1,
     });
-
     handleAgentEvent(
       host,
-      agentEvent("run-2", 1, "plan", {
-        phase: "update",
-        steps: [{ step: "Spawned run step", status: "in_progress" }],
+      agentEvent("run-1", 1, "run_status", {
+        phase: "retrying",
+        message: input,
       }),
     );
-
-    expect(host.planStatus).toEqual({
-      steps: [{ step: "Active step", status: "in_progress" }],
-    });
-  });
-
-  it("filters plan snapshots for another session", () => {
-    const host = createHost();
-
+    expect(chatStartupStatusLabel(activeChatRunStartupStatus(host.chatRunStartup), null)).toBe(
+      expected,
+    );
     handleAgentEvent(
       host,
-      agentEvent(
-        "run-1",
-        1,
-        "plan",
-        {
-          phase: "update",
-          steps: [{ step: "Wrong session", status: "in_progress" }],
-        },
-        "agent:other:main",
-      ),
+      agentEvent("run-1", 2, "notice", {
+        phase: "provider_policy",
+        category: "cyber",
+        provider: "openai",
+        state: "fallback",
+        model: input,
+        fallbackModel: input,
+      }),
     );
-
-    expect(host.planStatus).toBeNull();
+    expect(host.providerPolicyNotice?.model).toBe(expected);
+    expect(host.providerPolicyNotice?.fallbackModel).toBe(expected);
   });
+});
 
-  it("clears plan state with the rest of a new run's transient stream", () => {
-    const host = createHost({
-      planStatus: {
-        steps: [{ step: "Stale step", status: "in_progress" }],
-      },
+describe("app-tool-stream approval lifecycle", () => {
+  it.each([
+    { withResult: true, kind: "tool" },
+    { withResult: false, kind: "tool" },
+  ])(
+    "keeps terminal $kind activity through history and replay (result: $withResult)",
+    ({ withResult, kind }) => {
+      const host = createHost({ chatRunId: "run-1" });
+      const started = {
+        itemId: "tool:call",
+        toolCallId: "call",
+        kind,
+        name: "process",
+        title: "Check process",
+        phase: "start",
+        status: "running",
+        hideFromChannelProgress: true,
+      };
+      const completed = {
+        ...started,
+        phase: "end",
+        status: withResult ? "completed" : undefined,
+        title: "Stop process",
+        hideFromChannelProgress: false,
+      };
+      const completedEvent = Object.freeze({ ...completed, diagnostic: { source: "native-tool" } });
+      handleAgentEvent(
+        host,
+        agentEvent("run-1", 1, "tool", {
+          toolCallId: "call",
+          name: "process",
+          phase: "start",
+          args: { action: "poll" },
+        }),
+      );
+      handleAgentEvent(host, agentEvent("run-1", 2, "item", started));
+      if (withResult) {
+        handleAgentEvent(
+          host,
+          agentEvent("run-1", 3, "tool", {
+            toolCallId: "call",
+            name: "process",
+            phase: "result",
+            isError: false,
+            result: "raw execution result",
+          }),
+        );
+      }
+      handleAgentEvent(host, agentEvent("run-1", 4, "item", completedEvent));
+      handleAgentEvent(host, agentEvent("run-1", 2, "item", started));
+      const live = [...host.toolStreamById.values()][0]!.message;
+      const reconciled = coalesceToolActivityMessages([
+        {
+          kind: "message",
+          key: "history",
+          message: {
+            role: "assistant",
+            runId: "run-1",
+            __openclaw: { id: "history-call" },
+            content: [
+              { type: "toolCall", id: "call", name: "process", arguments: { action: "poll" } },
+            ],
+            activity: [started],
+          },
+        },
+        { kind: "message", key: "live", message: live },
+      ]);
+      const messages = reconciled.flatMap((item) =>
+        item.kind === "message" ? [item.message] : [],
+      );
+      const activity = messages.flatMap(readPreparedActivity);
+      expect(activity).toEqual([completed]);
+      expect(summarizeToolGroup(activity)).toBe(
+        withResult ? "1 other operation" : "1 other operation · 1 unknown",
+      );
+      expect(activity[0]).not.toHaveProperty("diagnostic");
+      expect(completedEvent.diagnostic).toEqual({ source: "native-tool" });
+      const cards = messages.flatMap(extractToolCardsCached);
+      expect(cards).toMatchObject([{ args: { action: "poll" }, completed: true }]);
+      expect(cards.map((card) => card.outputText)).toEqual([
+        withResult ? "raw execution result" : undefined,
+      ]);
+      expect(cards.map((card) => resolveToolCardOutcome(card, true))).toEqual([
+        withResult ? "succeeded" : "unknown",
+      ]);
+      expect(messages[0]).toMatchObject({ __openclawToolStreamResultReceived: withResult });
+      const quietHistory = coalesceToolActivityMessages([
+        {
+          kind: "message",
+          key: "call",
+          message: {
+            role: "assistant",
+            runId: "run-1",
+            activity: [started],
+            content: [
+              { type: "toolCall", id: "call", name: "process", arguments: { action: "poll" } },
+            ],
+          },
+        },
+        {
+          kind: "message",
+          key: "result",
+          message: {
+            role: "toolResult",
+            runId: "run-1",
+            toolCallId: "call",
+            toolName: "process",
+            isError: false,
+            content: "raw wait result",
+            activity: [],
+          },
+        },
+      ]);
+      expect(
+        quietHistory.flatMap((item) =>
+          item.kind === "message" ? readPreparedActivity(item.message) : [],
+        ),
+      ).toEqual([]);
+      resetToolStream(host);
+    },
+  );
+
+  it("keeps suppressed native item completion from settling the visible call", () => {
+    const host = createHost({ chatRunId: "run-1" });
+    emitTool(host, "run-1", 1, {
+      toolCallId: "call",
+      name: "exec",
+      phase: "start",
+      args: { command: "check" },
     });
-
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "item", {
+        itemId: "native-call",
+        toolCallId: "call",
+        kind: "command",
+        name: "exec",
+        title: "Check",
+        phase: "end",
+        suppressChannelProgress: true,
+      }),
+    );
+    const [card] = extractToolCardsCached(host.chatToolMessages[0]);
+    expect(resolveToolCardOutcome(card!, true)).toBe("running");
+    expect(card?.outputText).toBeUndefined();
     resetToolStream(host);
-
-    expect(host.planStatus).toBeNull();
   });
-});
 
-describe("app-tool-stream native questions", () => {
-  it("stores structured questions and clears only the matching item", () => {
-    const host = createHost();
-    handleAgentEvent(
-      host,
-      agentEvent("run-1", 1, "question", {
-        phase: "requested",
-        itemId: "item-1",
-        actionToken: testQuestionActionToken(),
-        questions: [
-          {
-            id: " mode ",
-            header: " Mode ",
-            question: " Pick one ",
-            isOther: true,
-            options: [{ label: " Fast ", description: "Quick" }, { label: "" }],
-          },
-        ],
-      }),
-    );
-    expect(host.questionStatus).toEqual({
-      runId: "run-1",
-      itemId: "item-1",
-      actionToken: testQuestionActionToken(),
-      questions: [
-        {
-          id: " mode ",
-          header: "Mode",
-          question: "Pick one",
-          isOther: true,
-          options: [{ label: " Fast ", description: "Quick" }],
-        },
-      ],
+  it.each(["result", "review"])("keeps text streaming through %s activity", (phase) => {
+    useToolStreamFakeTimers();
+    const host = createHost({
+      chatRunId: "run-1",
+      chatStream: "I'll check",
+      chatStreamStartedAt: TOOL_STREAM_TEST_NOW,
     });
-
-    handleAgentEvent(
-      host,
-      agentEvent("run-1", 2, "question", { phase: "resolved", itemId: "other" }),
-    );
-    expect(host.questionStatus?.itemId).toBe("item-1");
-    handleAgentEvent(
-      host,
-      agentEvent("run-1", 3, "question", { phase: "resolved", itemId: "item-1" }),
-    );
-    expect(host.questionStatus).toBeNull();
-  });
-
-  it("leaves secret questions on the warned text-reply path", () => {
-    const host = createHost();
-    handleAgentEvent(
-      host,
-      agentEvent("run-secret", 1, "question", {
-        phase: "requested",
-        itemId: "item-secret",
-        actionToken: testQuestionActionToken(),
-        questions: [
-          {
-            id: "secret",
-            header: "Secret",
-            question: "Enter it",
-            isSecret: true,
-          },
-        ],
-      }),
-    );
-    expect(host.questionStatus).toBeNull();
-  });
-});
-
-describe("app-tool-stream fallback lifecycle handling", () => {
-  beforeEach(() => {
-    vi.useRealTimers();
-  });
-
-  beforeAll(() => {
-    const globalWithWindow = globalThis as typeof globalThis & {
-      window?: Window & typeof globalThis;
-    };
-    if (!globalWithWindow.window) {
-      globalWithWindow.window = globalThis as unknown as Window & typeof globalThis;
+    try {
+      handleAgentEvent(
+        host,
+        agentEvent("run-1", 1, "tool", {
+          phase,
+          toolCallId: "call",
+          name: "read",
+          review: { id: "review", label: "Approval", status: "approved" },
+        }),
+      );
+      expect(host.chatStream).toBe("I'll check");
+      expect(host.chatStreamStartedAt).toBe(TOOL_STREAM_TEST_NOW);
+      expect(host.chatStreamSegments).toEqual([]);
+      expect(host.toolStreamById.size).toBe(1);
+      if (phase === "result") {
+        const entry = host.toolStreamById.get(buildToolStreamIdentity("run-1", "call"));
+        expect(entry?.resultReceived).toBe(true);
+        expect(entry?.receivedAt).toBe(TOOL_STREAM_TEST_NOW);
+        expect(entry?.message["__openclawToolStreamReceivedAt"]).toBe(TOOL_STREAM_TEST_NOW);
+        expect(entry?.message.content).toContainEqual({
+          type: "toolresult",
+          name: "read",
+          text: "",
+        });
+      }
+    } finally {
+      resetToolStream(host);
+      vi.useRealTimers();
     }
   });
 
-  beforeEach(() => {
-    vi.useRealTimers();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("accepts session-scoped fallback lifecycle events when no run is active", () => {
-    useToolStreamFakeTimers();
+  it("preserves producer parent identity through live completion without reading arguments", () => {
     const host = createHost();
-
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 1,
-      stream: "lifecycle",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: {
-        phase: "fallback",
-        selectedProvider: "fireworks",
-        selectedModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-        activeProvider: "deepinfra",
-        activeModel: "moonshotai/Kimi-K2.5",
-        reasonSummary: "rate limit",
-      },
-    });
-
-    const fallbackStatus = requireFallbackStatus(host);
-    expect(fallbackStatus.selected).toBe("fireworks/accounts/fireworks/routers/kimi-k2p5-turbo");
-    expect(fallbackStatus.active).toBe("deepinfra/moonshotai/Kimi-K2.5");
-    expect(fallbackStatus.reason).toBe("rate limit");
-    vi.useRealTimers();
-  });
-
-  it("rejects idle fallback lifecycle events for other sessions", () => {
-    useToolStreamFakeTimers();
-    const host = createHost();
-
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 1,
-      stream: "lifecycle",
-      ts: Date.now(),
-      sessionKey: "agent:other:main",
-      data: {
-        phase: "fallback",
-        selectedProvider: "fireworks",
-        selectedModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-        activeProvider: "deepinfra",
-        activeModel: "moonshotai/Kimi-K2.5",
-      },
-    });
-
-    expect(host.fallbackStatus).toBeNull();
-    vi.useRealTimers();
-  });
-
-  it("auto-clears fallback status after toast duration", () => {
-    useToolStreamFakeTimers();
-    const host = createHost();
-
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 1,
-      stream: "lifecycle",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: {
-        phase: "fallback",
-        selectedProvider: "fireworks",
-        selectedModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-        activeProvider: "deepinfra",
-        activeModel: "moonshotai/Kimi-K2.5",
-      },
-    });
-
-    let fallbackStatus = requireFallbackStatus(host);
-    expect(fallbackStatus.phase).toBe("active");
-    expect(fallbackStatus.selected).toBe("fireworks/accounts/fireworks/routers/kimi-k2p5-turbo");
-    expect(fallbackStatus.active).toBe("deepinfra/moonshotai/Kimi-K2.5");
-    vi.advanceTimersByTime(7_999);
-    fallbackStatus = requireFallbackStatus(host);
-    expect(fallbackStatus.phase).toBe("active");
-    expect(fallbackStatus.selected).toBe("fireworks/accounts/fireworks/routers/kimi-k2p5-turbo");
-    expect(fallbackStatus.active).toBe("deepinfra/moonshotai/Kimi-K2.5");
-    vi.advanceTimersByTime(1);
-    expect(host.fallbackStatus).toBeNull();
-    vi.useRealTimers();
-  });
-
-  it("builds previous fallback label from provider + model on fallback_cleared", () => {
-    useToolStreamFakeTimers();
-    const host = createHost();
-
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 1,
-      stream: "lifecycle",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: {
-        phase: "fallback_cleared",
-        selectedProvider: "fireworks",
-        selectedModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-        activeProvider: "fireworks",
-        activeModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-        previousActiveProvider: "deepinfra",
-        previousActiveModel: "moonshotai/Kimi-K2.5",
-      },
-    });
-
-    const fallbackStatus = requireFallbackStatus(host);
-    expect(fallbackStatus.phase).toBe("cleared");
-    expect(fallbackStatus.previous).toBe("deepinfra/moonshotai/Kimi-K2.5");
-    vi.useRealTimers();
-  });
-
-  it("updates the chat model cache from session_status model changes", () => {
-    const host = createHost();
-
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 1,
-      stream: "tool",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: {
-        phase: "result",
-        name: "session_status",
-        toolCallId: "status-1",
-        result: {
-          details: {
-            ok: true,
-            sessionKey: "main",
-            changedModel: true,
-            modelProvider: "anthropic",
-            model: "claude-sonnet-4-6",
-            modelOverride: "anthropic/claude-sonnet-4-6",
-          },
-        },
-      },
-    });
-
-    expect(host.sessions.state.modelOverrides.main).toBe("anthropic/claude-sonnet-4-6");
-  });
-
-  it("clears the chat model cache from session_status default resets", () => {
-    const host = createHost();
-    host.sessions.setModelOverride("main", "anthropic/claude-sonnet-4-6");
-
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 1,
-      stream: "tool",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: {
-        phase: "result",
-        name: "session_status",
-        toolCallId: "status-1",
-        result: {
-          details: {
-            ok: true,
-            sessionKey: "main",
-            changedModel: true,
-            modelProvider: "openai",
-            model: "gpt-5.4",
-            modelOverride: null,
-          },
-        },
-      },
-    });
-
-    expect(host.sessions.state.modelOverrides.main).toBeNull();
-  });
-
-  it("tags stream segments with the tool they precede", () => {
-    useToolStreamFakeTimers();
-    const host = createHost({
-      chatRunId: "run-1",
-      chatStream: "visible text before tool",
-      chatStreamStartedAt: TOOL_STREAM_TEST_NOW - 10,
-    });
-
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 1,
-      stream: "tool",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: {
+    handleAgentEvent(
+      host,
+      agentEvent("nested-run", 1, "tool", {
         phase: "start",
         name: "exec",
-        toolCallId: "call_1",
-      },
-    });
-
-    expect(host.chatStreamSegments).toEqual([
-      { text: "visible text before tool", ts: TOOL_STREAM_TEST_NOW, toolCallId: "call_1" },
-    ]);
-    expect(host.chatStream).toBeNull();
-    vi.useRealTimers();
-  });
-
-  it("stores keyed preamble item progress as stream segments", () => {
-    useToolStreamFakeTimers();
-    const host = createHost({ chatRunId: "run-1" });
-
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 1,
-      stream: "item",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: {
-        kind: "preamble",
-        itemId: "msg-preamble-1",
-        progressText: "Checking",
-      },
-    });
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 2,
-      stream: "item",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: {
-        kind: "preamble",
-        itemId: "msg-preamble-1",
-        progressText: "Checking the app-server stream",
-      },
-    });
-
-    expect(host.chatStreamSegments).toEqual([
+        toolCallId: "child",
+        parentToolCallId: "outer",
+        args: { command: "gh auth login", parentToolCallId: "argument-is-not-provenance" },
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("nested-run", 2, "tool", {
+        phase: "result",
+        name: "exec",
+        toolCallId: "child",
+        isError: true,
+        result: { content: [{ type: "text", text: "gh: command not found" }] },
+      }),
+    );
+    const entry = [...host.toolStreamById.values()][0];
+    expect(extractToolCardsCached(entry?.message)).toMatchObject([
       {
-        text: "Checking the app-server stream",
-        ts: TOOL_STREAM_TEST_NOW,
-        itemId: "msg-preamble-1",
+        callId: "child",
+        runId: "nested-run",
+        parentToolCallId: "outer",
+        completed: true,
+        isError: true,
       },
     ]);
-    expect(host.chatStream).toBeNull();
-    vi.useRealTimers();
   });
 
-  it("clears keyed preamble item progress on empty updates", () => {
-    useToolStreamFakeTimers();
-    const host = createHost({ chatRunId: "run-1" });
-
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 1,
-      stream: "item",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: {
-        kind: "preamble",
-        itemId: "msg-preamble-1",
-        progressText: "Checking",
-      },
-    });
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 2,
-      stream: "item",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: {
-        kind: "preamble",
-        itemId: "msg-preamble-1",
-        progressText: "",
-      },
-    });
-
-    expect(host.chatStreamSegments).toEqual([]);
-    vi.useRealTimers();
-  });
-
-  it("normalizes silent and directive-only keyed preamble progress", () => {
-    useToolStreamFakeTimers();
-    const host = createHost({ chatRunId: "run-1" });
-
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 1,
-      stream: "item",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: {
-        kind: "preamble",
-        itemId: "msg-preamble-1",
-        progressText: "Checking [[reply_to_current]]",
-      },
-    });
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 2,
-      stream: "item",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: {
-        kind: "preamble",
-        itemId: "msg-preamble-2",
-        progressText: "[[reply_to_current]]",
-      },
-    });
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 3,
-      stream: "item",
-      ts: Date.now(),
-      sessionKey: "main",
-      data: {
-        kind: "preamble",
-        itemId: "msg-preamble-1",
-        progressText: "**NO_REPLY",
-      },
-    });
-
-    expect(host.chatStreamSegments).toEqual([]);
-    vi.useRealTimers();
-  });
-
-  it("ignores selected-global tool events from another agent", () => {
-    const host = createHost({
-      sessionKey: "global",
-      assistantAgentId: "work",
-      agentsList: { defaultId: "main" },
-    });
-
-    handleAgentEvent(host, {
-      runId: "run-main-global",
-      seq: 1,
-      stream: "tool",
-      ts: Date.now(),
-      sessionKey: "global",
-      agentId: "main",
-      data: {
-        phase: "start",
-        name: "exec",
-        toolCallId: "tool-main-global",
-      },
-    });
-
-    expect(host.toolStreamOrder).toHaveLength(0);
-  });
-
-  it("ignores selected-global lifecycle and fallback events from another agent", () => {
-    const host = createHost({
-      sessionKey: "global",
-      assistantAgentId: "work",
-      agentsList: { defaultId: "main" },
-    });
-
-    handleAgentEvent(host, {
-      runId: "run-main-global",
-      seq: 1,
-      stream: "compaction",
-      ts: Date.now(),
-      sessionKey: "global",
-      agentId: "main",
-      data: { phase: "start" },
-    });
-    handleAgentEvent(host, {
-      runId: "run-main-global",
-      seq: 2,
-      stream: "lifecycle",
-      ts: Date.now(),
-      sessionKey: "global",
-      agentId: "main",
-      data: {
-        phase: "fallback",
-        selectedProvider: "fireworks",
-        selectedModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-        activeProvider: "deepinfra",
-        activeModel: "moonshotai/Kimi-K2.5",
-      },
-    });
-    handleAgentEvent(host, {
-      runId: "run-main-global",
-      seq: 3,
-      stream: "fallback",
-      ts: Date.now(),
-      sessionKey: "global",
-      agentId: "main",
-      data: {
-        phase: "fallback",
-        selectedProvider: "fireworks",
-        selectedModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-        activeProvider: "deepinfra",
-        activeModel: "moonshotai/Kimi-K2.5",
-      },
-    });
-
-    expect(host.compactionStatus).toBeNull();
-    expect(host.fallbackStatus).toBeNull();
-  });
-
-  it("keeps compaction in retry-pending state until the matching lifecycle end", () => {
-    useToolStreamFakeTimers();
+  it("carries browser tab details through the completed live result, including empty text", () => {
     const host = createHost();
-
-    handleAgentEvent(host, agentEvent("run-1", 1, "compaction", { phase: "start" }));
-
-    expect(host.compactionStatus).toEqual({
-      phase: "active",
-      runId: "run-1",
-      startedAt: TOOL_STREAM_TEST_NOW,
-      completedAt: null,
+    emitTool(host, "browser-run", 1, {
+      phase: "start",
+      name: "browser",
+      toolCallId: "browser-call",
+      args: { action: "open" },
     });
-
-    handleAgentEvent(
-      host,
-      agentEvent("run-1", 2, "compaction", {
-        phase: "end",
-        willRetry: true,
-        completed: true,
-      }),
-    );
-
-    expect(host.compactionStatus).toEqual({
-      phase: "retrying",
-      runId: "run-1",
-      startedAt: TOOL_STREAM_TEST_NOW,
-      completedAt: null,
-    });
-    expect(host.compactionClearTimer).not.toBeNull();
-
-    handleAgentEvent(host, agentEvent("run-2", 3, "lifecycle", { phase: "end" }));
-
-    expect(host.compactionStatus).toEqual({
-      phase: "retrying",
-      runId: "run-1",
-      startedAt: TOOL_STREAM_TEST_NOW,
-      completedAt: null,
-    });
-
-    handleAgentEvent(host, agentEvent("run-1", 4, "lifecycle", { phase: "end" }));
-
-    expectCompactionCompleteAndAutoClears(host);
-
-    vi.useRealTimers();
-  });
-
-  it("auto-clears active compaction after the stale timeout", () => {
-    useToolStreamFakeTimers();
-    const host = createHost();
-
-    handleAgentEvent(host, agentEvent("run-1", 1, "compaction", { phase: "start" }));
-
-    expect(host.compactionStatus).toEqual({
-      phase: "active",
-      runId: "run-1",
-      startedAt: TOOL_STREAM_TEST_NOW,
-      completedAt: null,
-    });
-    vi.advanceTimersByTime(5 * 60_000 - 1);
-    expect(host.compactionStatus).toEqual({
-      phase: "active",
-      runId: "run-1",
-      startedAt: TOOL_STREAM_TEST_NOW,
-      completedAt: null,
-    });
-
-    vi.advanceTimersByTime(1);
-
-    expect(host.compactionStatus).toBeNull();
-    expect(host.compactionClearTimer).toBeNull();
-
-    vi.useRealTimers();
-  });
-
-  it("shows manual session operation compaction progress while idle", () => {
-    useToolStreamFakeTimers();
-    const host = createHost({
-      sessionKey: "main",
-      hello: {
-        snapshot: {
-          sessionDefaults: {
-            defaultAgentId: "main",
-            mainKey: "main",
-            mainSessionKey: "agent:main:main",
+    emitTool(host, "browser-run", 2, {
+      phase: "result",
+      name: "browser",
+      toolCallId: "browser-call",
+      result: {
+        content: [],
+        details: {
+          browserTab: {
+            profile: "managed",
+            target: "host",
+            targetId: "tab-1",
+            url: "https://example.com",
+            title: "Example",
           },
         },
       },
     });
-
-    handleSessionOperationEvent(host, {
-      operationId: "operation-1",
-      operation: "compact",
-      phase: "start",
-      sessionKey: "agent:main:main",
-      ts: TOOL_STREAM_TEST_NOW,
-    });
-
-    expect(host.compactionStatus).toEqual({
-      phase: "active",
-      runId: "operation-1",
-      startedAt: TOOL_STREAM_TEST_NOW,
-      completedAt: null,
-    });
-
-    handleSessionOperationEvent(host, {
-      operationId: "operation-1",
-      operation: "compact",
-      phase: "end",
-      sessionKey: "agent:main:main",
-      ts: TOOL_STREAM_TEST_NOW,
+    const entry = [...host.toolStreamById.values()][0];
+    const [card] = extractToolCardsCached(entry?.message);
+    expect(card).toMatchObject({
       completed: true,
-    });
-
-    expect(host.compactionStatus).toEqual({
-      phase: "complete",
-      runId: "operation-1",
-      startedAt: TOOL_STREAM_TEST_NOW,
-      completedAt: TOOL_STREAM_TEST_NOW,
-    });
-
-    vi.useRealTimers();
-  });
-
-  it("ignores manual session operation compaction for other sessions", () => {
-    useToolStreamFakeTimers();
-    const host = createHost({ sessionKey: "agent:main:main" });
-
-    handleSessionOperationEvent(host, {
-      operationId: "operation-1",
-      operation: "compact",
-      phase: "start",
-      sessionKey: "agent:other:main",
-      ts: TOOL_STREAM_TEST_NOW,
-    });
-
-    expect(host.compactionStatus).toBeNull();
-    expect(host.compactionClearTimer).toBeNull();
-
-    vi.useRealTimers();
-  });
-
-  it("ignores selected-global session operation compaction for another agent", () => {
-    useToolStreamFakeTimers();
-    const host = createHost({
-      sessionKey: "global",
-      assistantAgentId: "work",
-      agentsList: { defaultId: "main" },
-    });
-
-    handleSessionOperationEvent(host, {
-      operationId: "operation-main",
-      operation: "compact",
-      phase: "start",
-      sessionKey: "global",
-      agentId: "main",
-      ts: TOOL_STREAM_TEST_NOW,
-    });
-
-    expect(host.compactionStatus).toBeNull();
-    expect(host.compactionClearTimer).toBeNull();
-
-    vi.useRealTimers();
-  });
-
-  it("accepts canonical global live events for selected agent main aliases", () => {
-    useToolStreamFakeTimers();
-    const host = createHost({
-      sessionKey: "agent:work:main",
-      agentsList: { defaultId: "main" },
-    });
-
-    handleAgentEvent(host, {
-      runId: "run-work",
-      seq: 1,
-      stream: "compaction",
-      ts: TOOL_STREAM_TEST_NOW,
-      sessionKey: "global",
-      agentId: "work",
-      data: { phase: "start" },
-    });
-
-    expect(host.compactionStatus).toEqual({
-      phase: "active",
-      runId: "run-work",
-      startedAt: TOOL_STREAM_TEST_NOW,
-      completedAt: null,
-    });
-
-    handleAgentEvent(host, {
-      runId: "run-main",
-      seq: 2,
-      stream: "fallback",
-      ts: TOOL_STREAM_TEST_NOW,
-      sessionKey: "global",
-      agentId: "main",
-      data: {
-        phase: "fallback_started",
-        selectedProvider: "openai",
-        selectedModel: "gpt-5",
+      live: true,
+      preview: {
+        kind: "browser-tab",
+        profile: "managed",
+        target: "host",
+        targetId: "tab-1",
+        title: "Example",
       },
     });
-
-    expect(host.fallbackStatus).toBeNull();
-
-    vi.useRealTimers();
+    resetToolStream(host);
   });
 
-  it("ignores stale manual session operation completion after a newer start", () => {
-    useToolStreamFakeTimers();
-    const host = createHost({ sessionKey: "agent:main:main" });
-
-    handleSessionOperationEvent(host, {
-      operationId: "operation-1",
-      operation: "compact",
-      phase: "start",
-      sessionKey: "agent:main:main",
-      ts: TOOL_STREAM_TEST_NOW,
-    });
-    handleSessionOperationEvent(host, {
-      operationId: "operation-2",
-      operation: "compact",
-      phase: "start",
-      sessionKey: "agent:main:main",
-      ts: TOOL_STREAM_TEST_NOW,
-    });
-    handleSessionOperationEvent(host, {
-      operationId: "operation-1",
-      operation: "compact",
-      phase: "end",
-      sessionKey: "agent:main:main",
-      ts: TOOL_STREAM_TEST_NOW,
-      completed: true,
-    });
-
-    expect(host.compactionStatus).toEqual({
-      phase: "active",
-      runId: "operation-2",
-      startedAt: TOOL_STREAM_TEST_NOW,
-      completedAt: null,
-    });
-    vi.advanceTimersByTime(5 * 60_000);
-    expect(host.compactionStatus).toBeNull();
-    expect(host.compactionClearTimer).toBeNull();
-
-    vi.useRealTimers();
+  const approval = (runId: string | undefined, sessionKey = "main") => ({
+    id: "approval-1",
+    kind: "exec" as const,
+    request: { command: "echo test", sessionKey, runId },
+    createdAtMs: 1,
+    expiresAtMs: 2,
   });
 
-  it("treats lifecycle error as terminal for retry-pending compaction", () => {
-    useToolStreamFakeTimers();
-    const host = createHost();
+  const learnRun = (host: ReturnType<typeof createHost>, runId: string) => {
+    handleAgentEvent(host, agentEvent(runId, 1, "lifecycle", { phase: "start" }));
+  };
 
-    handleAgentEvent(host, agentEvent("run-1", 1, "compaction", { phase: "start" }));
+  it("clears only parked runs whose approvals leave the queue snapshot", () => {
+    const host = createHost({
+      waitingApprovalStatuses: new Map([
+        ["approval-1", { approvalId: "approval-1", toolCallId: "tool-1", runId: "run-1" }],
+        ["approval-2", { approvalId: "approval-2", toolCallId: "tool-2", runId: "run-2" }],
+      ]),
+    });
+
+    expect(
+      reconcileWaitingApprovalsFromSnapshot(host, [{ ...approval("run-2"), id: "approval-2" }]),
+    ).toBe(true);
+    expect([...host.waitingApprovalStatuses!.keys()]).toEqual(["approval-2"]);
+  });
+
+  it("clears hydrated state when the lifecycle resolution arrives", () => {
+    const host = createHost({ waitingApprovalStatuses: new Map() });
+    learnRun(host, "run-1");
+    reconcileWaitingApprovalsFromSnapshot(host, [approval("run-1")]);
 
     handleAgentEvent(
       host,
-      agentEvent("run-1", 2, "compaction", {
-        phase: "end",
-        willRetry: true,
-        completed: true,
+      agentEvent("run-1", 1, "lifecycle", {
+        phase: "approval-resolved",
+        approvalId: "approval-1",
       }),
     );
 
-    expect(host.compactionStatus).toEqual({
-      phase: "retrying",
+    expect(host.waitingApprovalStatuses?.size).toBe(0);
+
+    resetToolStream(host);
+    expect(reconcileWaitingApprovalsFromSnapshot(host, [approval("run-1")])).toBe(false);
+    expect(host.waitingApprovalStatuses?.size).toBe(0);
+
+    reconcileWaitingApprovalsFromSnapshot(host, []);
+    learnRun(host, "run-1");
+    expect(reconcileWaitingApprovalsFromSnapshot(host, [approval("run-1")])).toBe(true);
+  });
+
+  it("replaces hydrated state with the authoritative lifecycle payload", () => {
+    const host = createHost({ waitingApprovalStatuses: new Map() });
+    learnRun(host, "run-1");
+    reconcileWaitingApprovalsFromSnapshot(host, [approval("run-1")]);
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "lifecycle", {
+        phase: "waiting-approval",
+        approvalId: "approval-1",
+        toolCallId: "tool-1",
+      }),
+    );
+
+    expect(host.waitingApprovalStatuses?.get("approval-1")).toEqual({
+      approvalId: "approval-1",
+      toolCallId: "tool-1",
       runId: "run-1",
-      startedAt: TOOL_STREAM_TEST_NOW,
-      completedAt: null,
     });
+  });
+});
 
-    handleAgentEvent(host, agentEvent("run-1", 3, "lifecycle", { phase: "error", error: "boom" }));
-
-    expectCompactionCompleteAndAutoClears(host);
-
-    vi.useRealTimers();
+describe("app-tool-stream throttled projections", () => {
+  it("renders a deferred tool update when its projection flushes", () => {
+    useToolStreamFakeTimers();
+    const requestUpdate = vi.fn();
+    const host = createHost({ requestUpdate });
+    const toolCallId = "call-deferred";
+    emitTool(host, "run-1", 1, {
+      phase: "start",
+      name: "read",
+      toolCallId,
+      args: { path: "notes.txt" },
+    });
+    vi.advanceTimersByTime(80);
+    requestUpdate.mockClear();
+    emitTool(host, "run-1", 2, {
+      phase: "update",
+      name: "read",
+      toolCallId,
+      partialResult: "still reading",
+    });
+    expect(requestUpdate).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(79);
+    expect(requestUpdate).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(host.chatToolMessages).toHaveLength(1);
+    expect(requestUpdate).toHaveBeenCalledOnce();
+    expect(host.chatToolMessages[0]?.content).toEqual([
+      { type: "toolcall", name: "read", arguments: { path: "notes.txt" } },
+      { type: "toolresult", name: "read", text: "still reading" },
+    ]);
   });
 
-  it("does not surface retrying or complete when retry compaction failed", () => {
+  it("does not let an older replay replace newer live tool progress", () => {
     useToolStreamFakeTimers();
     const host = createHost();
+    const toolCallId = "call-sequenced";
+    emitTool(host, "run-1", 1, {
+      phase: "start",
+      name: "read",
+      toolCallId,
+      args: { path: "README.md" },
+    });
+    emitTool(host, "run-1", 3, {
+      phase: "update",
+      name: "read",
+      toolCallId,
+      partialResult: "newer live progress",
+    });
+    emitTool(host, "run-1", 2, {
+      phase: "update",
+      name: "read",
+      toolCallId,
+      partialResult: "older replayed progress",
+    });
+    vi.advanceTimersByTime(80);
+    expect(host.chatToolMessages[0]?.content).toEqual([
+      { type: "toolcall", name: "read", arguments: { path: "README.md" } },
+      { type: "toolresult", name: "read", text: "newer live progress" },
+    ]);
+  });
+});
 
-    handleAgentEvent(host, agentEvent("run-1", 1, "compaction", { phase: "start" }));
-
+describe("app-tool-stream analysis activity", () => {
+  it("does not render Codex reasoning items as tool calls", () => {
+    const host = createHost({ chatRunId: "run-1" });
+    const reasoning = {
+      itemId: "rs_1",
+      toolCallId: "rs_1",
+      kind: "analysis",
+      title: "Reasoning",
+      phase: "start",
+      status: "running",
+      hideFromChannelProgress: true,
+    };
+    handleAgentEvent(host, agentEvent("run-1", 1, "item", reasoning));
     handleAgentEvent(
       host,
-      agentEvent("run-1", 2, "compaction", {
+      agentEvent("run-1", 2, "item", { ...reasoning, phase: "end", status: "completed" }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 3, "item", {
+        itemId: "tool:call",
+        toolCallId: "call",
+        kind: "tool",
+        name: "read",
+        title: "Read",
         phase: "end",
-        willRetry: true,
-        completed: false,
+        status: "completed",
       }),
     );
 
-    expect(host.compactionStatus).toBeNull();
-    expect(host.compactionClearTimer).toBeNull();
-
-    handleAgentEvent(host, agentEvent("run-1", 3, "lifecycle", { phase: "error", error: "boom" }));
-
-    expect(host.compactionStatus).toBeNull();
-    expect(host.compactionClearTimer).toBeNull();
-
-    vi.useRealTimers();
+    expect(host.toolStreamOrder).toEqual([buildToolStreamIdentity("run-1", "call")]);
+    expect(host.chatToolMessages.flatMap(extractToolCardsCached)).toMatchObject([{ name: "read" }]);
   });
 });
 
 describe("app-tool-stream result blocks", () => {
-  it("emits a result block for completed tools with empty output", () => {
-    useToolStreamFakeTimers();
+  it("retains out-of-order review identities and lets a result fence every older review", () => {
     const host = createHost();
-
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 1,
-      stream: "tool",
-      ts: TOOL_STREAM_TEST_NOW,
-      sessionKey: "main",
-      data: { phase: "start", name: "bash", toolCallId: "call-1", args: { command: "true" } },
+    const toolCallId = "call-reviewed";
+    emitTool(host, "run-1", 4, {
+      phase: "review",
+      toolCallId,
+      approvalReviewOutcome: "approved",
+      review: {
+        id: "review-b",
+        label: "Guardian",
+        status: "approved",
+        riskLevel: "low",
+        userAuthorization: "high",
+        rationale: "Newer live review.",
+      },
     });
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 2,
-      stream: "tool",
-      ts: TOOL_STREAM_TEST_NOW + 1,
-      sessionKey: "main",
-      data: { phase: "result", name: "bash", toolCallId: "call-1", result: "" },
+    emitTool(host, "run-1", 1, {
+      phase: "start",
+      name: "exec",
+      toolCallId,
+      args: { command: "git status --short" },
+    });
+    emitTool(host, "run-1", 2, {
+      phase: "review",
+      toolCallId,
+      approvalReviewOutcome: "approved",
+      review: {
+        id: "review-a",
+        label: "Guardian",
+        status: "approved",
+        rationale: "Older snapshot review.",
+      },
+    });
+    emitTool(host, "run-1", 3, {
+      phase: "review",
+      toolCallId,
+      approvalReviewOutcome: "denied",
+      review: { id: "review-b", label: "Guardian", status: "denied" },
     });
 
-    const entry = host.toolStreamById.get("call-1") as ToolStreamEntry;
-    expect(entry.resultReceived).toBe(true);
-    expect(entry.receivedAt).toBe(TOOL_STREAM_TEST_NOW);
-    expect(entry.message["__openclawToolStreamReceivedAt"]).toBe(TOOL_STREAM_TEST_NOW);
-    const content = entry.message.content as Array<Record<string, unknown>>;
-    // The empty-output result block marks the call as finished so the UI does
-    // not keep it in a running state for the rest of the run.
-    expect(content.some((block) => block.type === "toolresult" && block.text === "")).toBe(true);
+    const identity = buildToolStreamIdentity("run-1", toolCallId);
+    const reviewed = host.toolStreamById.get(identity);
+    expect(readToolApprovalReviews(reviewed?.details).map((review) => review.id)).toEqual([
+      "review-a",
+      "review-b",
+    ]);
+    expect(reviewed?.details).toMatchObject({
+      approvalReviewOutcome: "approved",
+    });
+
+    emitTool(host, "run-1", 5, {
+      phase: "result",
+      name: "exec",
+      toolCallId,
+      result: { details: { runtime: "native" } },
+    });
+    emitTool(host, "run-1", 3, {
+      phase: "review",
+      toolCallId,
+      approvalReviewOutcome: "denied",
+      review: { id: "review-c", label: "Guardian", status: "denied" },
+    });
+
+    const completed = host.toolStreamById.get(identity);
+    expect(completed?.resultReceived).toBe(true);
+    expect(readToolApprovalReviews(completed?.details).map((review) => review.id)).toEqual([
+      "review-a",
+      "review-b",
+    ]);
+    expect(completed?.details).toMatchObject({
+      runtime: "native",
+      approvalReviewOutcome: "approved",
+    });
+  });
+
+  it("keeps an early denial after live review rows exceed the display cap", () => {
+    const host = createHost();
+    const toolCallId = "call-many-reviews";
+    emitTool(host, "run-1", 1, {
+      phase: "start",
+      name: "exec",
+      toolCallId,
+      args: { command: "printf reviewed" },
+    });
+    for (let index = 0; index < 18; index += 1) {
+      emitTool(host, "run-1", index + 2, {
+        phase: "review",
+        toolCallId,
+        approvalReviewOutcome: "denied",
+        review: {
+          id: `review-${index}`,
+          label: "Guardian",
+          status: index === 0 ? "denied" : "approved",
+        },
+      });
+    }
+
+    const entry = host.toolStreamById.get(buildToolStreamIdentity("run-1", toolCallId));
+    expect(readToolApprovalReviews(entry?.details).map((review) => review.id)).toEqual(
+      Array.from({ length: 16 }, (_, index) => `review-${index + 2}`),
+    );
+    expect(entry?.details).toMatchObject({ approvalReviewOutcome: "denied" });
+  });
+
+  it("keeps an out-of-order denial after newer reviews fill the display cap", () => {
+    const host = createHost();
+    const toolCallId = "call-out-of-order-denial";
+    emitTool(host, "run-1", 1, {
+      phase: "start",
+      name: "exec",
+      toolCallId,
+      args: { command: "printf reviewed" },
+    });
+    for (let index = 0; index < 16; index += 1) {
+      emitTool(host, "run-1", index + 3, {
+        phase: "review",
+        toolCallId,
+        approvalReviewOutcome: "approved",
+        review: {
+          id: `newer-review-${index}`,
+          label: "Guardian",
+          status: "approved",
+        },
+      });
+    }
+    emitTool(host, "run-1", 2, {
+      phase: "review",
+      toolCallId,
+      approvalReviewOutcome: "denied",
+      review: { id: "older-denied-review", label: "Guardian", status: "denied" },
+    });
+
+    const identity = buildToolStreamIdentity("run-1", toolCallId);
+    const reviewed = host.toolStreamById.get(identity);
+    expect(readToolApprovalReviews(reviewed?.details).map((review) => review.id)).toEqual(
+      Array.from({ length: 16 }, (_, index) => `newer-review-${index}`),
+    );
+    expect(reviewed?.details).toMatchObject({ approvalReviewOutcome: "denied" });
+
+    emitTool(host, "run-1", 19, {
+      phase: "result",
+      name: "exec",
+      toolCallId,
+      approvalReviewOutcome: "approved",
+      result: { details: { runtime: "native", approvalReviewOutcome: "approved" } },
+    });
+    expect(host.toolStreamById.get(identity)?.details).toMatchObject({
+      runtime: "native",
+      approvalReviewOutcome: "denied",
+    });
+  });
+
+  it("projects live edit counts and lets the resolved result replace them without flicker", () => {
+    useToolStreamFakeTimers();
+    const host = createHost({ chatRunId: "run-1" });
+    const toolCallId = "call-live-edit";
+    const identity = buildToolStreamIdentity("run-1", toolCallId);
+    emitTool(host, "run-1", 1, {
+      phase: "start",
+      name: "edit",
+      toolCallId,
+      args: { path: "src/report.ts" },
+    });
+    emitTool(host, "run-1", 2, {
+      phase: "input_delta",
+      name: "edit",
+      toolCallId,
+      diff: { added: 12, removed: 3 },
+    });
+    vi.advanceTimersByTime(80);
+    expect(host.toolStreamById.get(identity)?.liveDiffStat).toEqual({ added: 12, removed: 3 });
+    expect(host.chatToolMessages[0]?.["__openclawToolStreamDiffStat"]).toEqual({
+      added: 12,
+      removed: 3,
+    });
+    emitTool(host, "run-1", 3, {
+      phase: "result",
+      name: "edit",
+      toolCallId,
+      result: { details: { diff: "-1 old\n+1 new" } },
+    });
+    const resolved = host.toolStreamById.get(identity);
+    expect(resolved?.liveDiffStat).toBeUndefined();
+    expect(resolved?.details).toEqual({ diff: "-1 old\n+1 new" });
+    expect(resolved?.message).not.toHaveProperty("__openclawToolStreamDiffStat");
+    expect(host.chatToolMessages[0]).not.toHaveProperty("__openclawToolStreamDiffStat");
+  });
+
+  it("applies session-status effects when the result reports a placeholder tool name", () => {
+    const host = createHost();
+    const toolCallId = "status-preserve-name";
+    emitTool(host, "run-1", 1, {
+      phase: "start",
+      name: "session_status",
+      toolCallId,
+    });
+    emitTool(host, "run-1", 2, {
+      phase: "result",
+      name: "tool",
+      toolCallId,
+      result: {
+        details: {
+          changedModel: true,
+          sessionKey: "main",
+          agentId: "main",
+          modelOverride: "openai/gpt-5.6-luna",
+        },
+      },
+    });
+
+    expect(host.sessions.reconcileMutation).toHaveBeenCalledOnce();
+    expect(host.sessions.state.modelOverrides).toEqual({});
+  });
+
+  it("keeps interleaved sibling-run calls and results under independent identities", () => {
+    const host = createHost({ chatRunId: "run-foreground" });
+    const toolCallId = "call-shared";
+    const foregroundIdentity = buildToolStreamIdentity("run-foreground", toolCallId);
+    const backgroundIdentity = buildToolStreamIdentity("run-background", toolCallId);
+
+    emitTool(host, "run-foreground", 1, {
+      phase: "start",
+      name: "read",
+      toolCallId,
+      args: { path: "foreground.txt" },
+    });
+    emitTool(host, "run-background", 1, {
+      phase: "start",
+      name: "exec",
+      toolCallId,
+      args: { command: "background command" },
+    });
+    emitTool(host, "run-foreground", 2, {
+      phase: "update",
+      name: "read",
+      toolCallId,
+      partialResult: "foreground partial",
+    });
+    emitTool(host, "run-background", 2, {
+      phase: "update",
+      name: "exec",
+      toolCallId,
+      partialResult: "background partial",
+    });
+    emitTool(host, "run-background", 3, {
+      phase: "result",
+      name: "exec",
+      toolCallId,
+      isError: true,
+      result: "background failed",
+    });
+
+    expect(host.toolStreamOrder).toEqual([foregroundIdentity, backgroundIdentity]);
+    expect(host.toolStreamById.get(foregroundIdentity)).toMatchObject({
+      runId: "run-foreground",
+      toolCallId,
+      name: "read",
+      args: { path: "foreground.txt" },
+      output: "foreground partial",
+      message: {
+        runId: "run-foreground",
+        toolCallId,
+        __openclawToolStreamResultReceived: false,
+      },
+    });
+    expect(host.toolStreamById.get(backgroundIdentity)).toMatchObject({
+      runId: "run-background",
+      toolCallId,
+      name: "exec",
+      args: { command: "background command" },
+      output: "background failed",
+      isError: true,
+      resultReceived: true,
+      message: {
+        runId: "run-background",
+        toolCallId,
+        __openclawToolStreamResultReceived: true,
+      },
+    });
+    expect(host.chatToolMessages.map((message) => message.runId)).toEqual([
+      "run-foreground",
+      "run-background",
+    ]);
+
+    emitTool(host, "run-foreground", 3, {
+      phase: "result",
+      name: "read",
+      toolCallId,
+      isError: false,
+      result: "foreground completed",
+    });
+
+    expect(host.toolStreamById.get(foregroundIdentity)).toMatchObject({
+      output: "foreground completed",
+      isError: false,
+      resultReceived: true,
+    });
+    expect(host.toolStreamById.get(backgroundIdentity)).toMatchObject({
+      output: "background failed",
+      isError: true,
+      resultReceived: true,
+    });
   });
 });

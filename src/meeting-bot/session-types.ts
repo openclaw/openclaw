@@ -1,3 +1,36 @@
+import { z } from "zod";
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
+import type { MeetingAudioBackend } from "./audio-backend.js";
+import type { MeetingOutputLoopbackHealth } from "./output-loopback-verifier.js";
+
+const boundedText = (max: number) =>
+  z
+    .string()
+    .min(1)
+    .max(max)
+    .refine((value) => value.trim().length > 0);
+const observerSchema = boundedText(128);
+const identitySchema = boundedText(512);
+const speakerSchema = boundedText(512);
+const observedAtSchema = z.iso.datetime({ offset: true }).max(64);
+export const meetingObservationProvenanceSchema = z.object({
+  observer: observerSchema,
+  observationId: boundedText(1_024).optional(),
+  sessionId: identitySchema.optional(),
+  epoch: identitySchema.optional(),
+  observedAt: observedAtSchema.optional(),
+  speaker: speakerSchema.optional(),
+  self: z.enum(["self", "other", "unknown"]),
+});
+export const meetingCaptionSourceSchema = z.object({
+  id: z.string().min(1).max(512),
+  epoch: z.string().min(1).max(512),
+  revision: z.string().min(1).max(128),
+  finalized: z.boolean(),
+  /** Undefined means the provider could not establish whether this is our own speech. */
+  ownEcho: z.boolean().optional(),
+});
+
 /** Generic lifecycle state shared by browser and dial-in meeting sessions. */
 export type MeetingSessionState = "active" | "ended";
 
@@ -8,16 +41,27 @@ export type MeetingResolvedJoin<TTransport extends string, TMode extends string>
   agentId: string;
 };
 
+/** Descriptive facts for one retained observation, never participation authority. */
+export type MeetingObservationProvenance = SchemaContract<
+  z.infer<typeof meetingObservationProvenanceSchema>
+>;
+
 export type MeetingTranscriptLine = {
   at?: string;
   speaker?: string;
   text: string;
+  /** Independent of the optional, mutable action-source identity below. */
+  provenance?: MeetingObservationProvenance;
+  /** Optional identity assigned by the provider's canonical caption observer. */
+  source?: SchemaContract<z.infer<typeof meetingCaptionSourceSchema>>;
 };
 
 export type MeetingTranscriptSnapshot = {
   droppedLines: number;
   epoch?: string;
   lines: MeetingTranscriptLine[];
+  /** Live caption revisions for observation only; never append these to the transcript. */
+  pendingLines?: MeetingTranscriptLine[];
 };
 
 export type MeetingBrowserTab = {
@@ -34,15 +78,25 @@ export type MeetingBrowserCandidateTab = {
 export type MeetingBrowserHealth<
   TManualReason extends string = string,
   TSpeechBlockedReason extends string = string,
-> = {
+> = Partial<MeetingOutputLoopbackHealth> & {
   inCall?: boolean;
   micMuted?: boolean;
-  manualActionRequired?: boolean;
-  manualActionReason?: TManualReason;
-  manualActionMessage?: string;
+  manualAction?: { reason: TManualReason; message: string };
   speechReady?: boolean;
   speechBlockedReason?: TSpeechBlockedReason;
   speechBlockedMessage?: string;
+};
+
+export type MeetingPluginProbeHealth = MeetingBrowserHealth & {
+  audioOutputActive?: boolean;
+  captioning?: boolean;
+  captionsEnabledAttempted?: boolean;
+  lastCaptionAt?: string;
+  lastCaptionSpeaker?: string;
+  lastCaptionText?: string;
+  lastOutputBytes?: number;
+  recentTranscript?: MeetingTranscriptLine[];
+  transcriptLines?: number;
 };
 
 export type MeetingRealtimeSessionBlock = {
@@ -77,3 +131,62 @@ export type MeetingSessionRecord<
   realtime: TRealtime;
   notes: string[];
 };
+
+export type MeetingPluginJoinRequest<TTransport extends string, TMode extends string> = {
+  url: string;
+  transport?: TTransport;
+  mode?: TMode;
+  message?: string;
+  requesterSessionKey?: string;
+  agentId?: string;
+  timeoutMs?: number;
+};
+
+export type MeetingPluginChromeHealth<
+  TManualReason extends string,
+  TSpeechBlockedReason extends string,
+> = MeetingBrowserHealth<TManualReason, TSpeechBlockedReason> &
+  MeetingPluginProbeHealth & {
+    cameraOff?: boolean;
+    lobbyWaiting?: boolean;
+    captionCaptureRequested?: boolean;
+    audioInputRouted?: boolean;
+    audioInputDeviceLabel?: string;
+    audioInputRouteError?: string;
+    audioOutputRouted?: boolean;
+    audioOutputDeviceLabel?: string;
+    audioOutputRouteError?: string;
+    audioOutputRouteRetryable?: boolean;
+    providerConnected?: boolean;
+    realtimeReady?: boolean;
+    audioInputActive?: boolean;
+    lastInputAt?: string;
+    lastOutputAt?: string;
+    lastInputBytes?: number;
+    bridgeClosed?: boolean;
+    browserUrl?: string;
+    browserTitle?: string;
+    status?: string;
+    notes?: string[];
+  };
+
+export type MeetingPluginSession<
+  TTransport extends string,
+  TMode extends string,
+  THealth extends MeetingBrowserHealth,
+> = MeetingSessionRecord<TTransport, TMode> & {
+  chrome?: {
+    audioBackend?: MeetingAudioBackend;
+    launched: boolean;
+    nodeId?: string;
+    browserProfile?: string;
+    browserTab?: MeetingBrowserTab;
+    audioBridge?: {
+      type: "command-pair" | "node-command-pair";
+      provider?: string;
+    };
+    health?: THealth;
+  };
+};
+
+export type MeetingPluginJoinResult<TSession> = { session: TSession; spoken?: boolean };

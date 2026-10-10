@@ -1,0 +1,31 @@
+import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.types.js";
+import { selectDeliverableSessionsReply } from "../../tools/sessions-send-tokens.js";
+
+export function resolveSubagentCompletionResultText(entry: {
+  completion?: {
+    resultText?: string | null;
+    fallbackResultText?: string | null;
+    terminalReply?: AgentRunTerminalReplySnapshot;
+  };
+  execution: {
+    outcome?: { status: "ok" | "error" | "timeout" | "unknown" };
+  };
+}): string | undefined {
+  const terminalReply = entry.completion?.terminalReply;
+  // Producer-owned terminal evidence outranks retained transcript fallback text.
+  // Otherwise an intentionally silent/empty run can leak an older visible reply.
+  if (terminalReply) {
+    if (terminalReply.disposition !== "visible") {
+      return undefined;
+    }
+    return entry.execution.outcome?.status === "ok"
+      ? selectDeliverableSessionsReply(terminalReply.text)
+      : terminalReply.text;
+  }
+  const primary = entry.completion?.resultText;
+  const fallback = entry.completion?.fallbackResultText;
+  if (entry.execution.outcome?.status === "ok") {
+    return selectDeliverableSessionsReply(primary, fallback);
+  }
+  return primary?.trim() || fallback?.trim() || undefined;
+}

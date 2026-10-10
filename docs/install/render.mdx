@@ -27,7 +27,8 @@ services:
     name: openclaw
     runtime: docker
     plan: starter
-    healthCheckPath: /health
+    dockerCommand: node openclaw.mjs gateway --allow-unconfigured
+    healthCheckPath: /startupz
     envVars:
       - key: OPENCLAW_GATEWAY_PORT
         value: "8080"
@@ -43,12 +44,12 @@ services:
       sizeGB: 1
 ```
 
-| Feature               | Purpose                                                    |
-| --------------------- | ---------------------------------------------------------- |
-| `runtime: docker`     | Builds from the repo's Dockerfile                          |
-| `healthCheckPath`     | Render monitors `/health` and restarts unhealthy instances |
-| `generateValue: true` | Auto-generates a cryptographically secure value            |
-| `disk`                | Persistent storage that survives redeploys                 |
+| Feature               | Purpose                                                          |
+| --------------------- | ---------------------------------------------------------------- |
+| `runtime: docker`     | Builds from the repo's Dockerfile                                |
+| `healthCheckPath`     | Render admits traffic after `/startupz` reports startup complete |
+| `generateValue: true` | Auto-generates a cryptographically secure value                  |
+| `disk`                | Persistent storage that survives redeploys                       |
 
 ## Choosing a plan
 
@@ -58,7 +59,7 @@ services:
 | Starter   | Never             | 1GB+          | Personal use, small teams     |
 | Standard+ | Never             | 1GB+          | Production, multiple channels |
 
-The Blueprint defaults to `starter`. To use the free tier, change `plan: free` in your fork's `render.yaml` — note that with no persistent disk, OpenClaw state resets on each deploy.
+The Blueprint defaults to `starter`. To use the free tier, change `plan: free` **and delete the `disk:` block** in your fork's `render.yaml`; Render rejects a Blueprint that attaches a persistent disk to a free instance. Without that disk, OpenClaw state resets on every deploy.
 
 ## After deployment
 
@@ -100,9 +101,12 @@ From the Render Dashboard shell, export state, config, auth profiles, and worksp
 
 ```bash
 openclaw backup create
+openclaw backup restore <archive.tar.gz> --target <fresh-directory>
 ```
 
-This creates a portable backup archive. See [Backup](/cli/backup).
+Restore verifies and extracts into a fresh staging directory; activation is a
+separate offline step. See [Restore a full archive](/install/backups#restore-a-full-archive)
+for the rollback warnings and activation sequence.
 
 ## Troubleshooting
 
@@ -123,10 +127,35 @@ Happens on the free tier (no persistent disk). Upgrade to a paid plan, or regula
 
 ### Health check failures
 
-If builds succeed but deploys fail, the service may be taking too long to start or `/health` may not be reachable. Check:
+If builds succeed but deploys fail, the service may be taking too long to start or `/startupz` may not be reachable. Check:
 
 - Build logs for errors
-- Whether the container runs locally with `docker build && docker run`
+- Whether the container runs locally with the same image and command Render uses
+
+Reproduce the Render container locally from a checkout of the repository:
+
+```bash
+docker build -t openclaw:local -f Dockerfile .
+docker run --rm -p 8080:8080 \
+  -e OPENCLAW_GATEWAY_PORT=8080 \
+  -e OPENCLAW_GATEWAY_TOKEN="$(openssl rand -hex 32)" \
+  openclaw:local node openclaw.mjs gateway --allow-unconfigured
+```
+
+The token is required, not optional: in a container the Gateway selects the
+auto bind mode, and it refuses to bind a non-loopback address without a shared
+secret. `--allow-unconfigured` waives the configuration prerequisite, not that
+guard. Render supplies the value from the blueprint's `generateValue: true`; a
+throwaway one is fine locally.
+
+Leave `OPENCLAW_STATE_DIR` and `OPENCLAW_WORKSPACE_DIR` unset here. Render sets
+them to paths on its mounted disk, but the image prepares only its own
+`node`-owned directories and runs as that user, so pointing them at an unmounted
+`/data` fails when the Gateway creates its lock directory. State lands under the
+image's defaults and is discarded with the container, which is what you want for
+a health-check reproduction.
+
+See [Docker](/install/docker) for the full local container workflow.
 
 ## Next steps
 

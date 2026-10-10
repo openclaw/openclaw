@@ -1,24 +1,25 @@
-// Resolves where an operator terminal session should start and whether the
-// target agent's workspace isolation permits a host shell.
-import { existsSync, statSync } from "node:fs";
+import { statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  AgentSelectionRequiredError,
   listAgentIds,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope-config.js";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
+import { buildRemoteCommand } from "../../agents/sandbox/remote-shell-command.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveEnvironmentValue } from "../../infra/process-env.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { isTerminalConfigEnabled } from "./enabled.js";
 
-/** Why a terminal cannot open, or `null` when it can. */
 type TerminalLaunchBlock =
   | { kind: "disabled" }
+  | { kind: "owner-required"; message: string }
   | { kind: "unknown-agent"; agentId: string }
   | { kind: "sandboxed"; agentId: string; mode: "all" };
 
-/** Resolved plan for a host terminal session. */
 export type TerminalLaunchPlan = {
   agentId: string;
   cwd: string;
@@ -30,7 +31,6 @@ export type TerminalLaunchPlan = {
 
 export type TerminalSpawnPlan = Pick<TerminalLaunchPlan, "agentId" | "shell" | "args" | "cwd">;
 
-/** Terminal launch resolution result: either a runnable plan or a block reason. */
 export type TerminalLaunchResolution =
   | { ok: true; plan: TerminalLaunchPlan }
   | { ok: false; block: TerminalLaunchBlock };
@@ -43,75 +43,40 @@ type TerminalLaunchPolicy = {
   acceptConfig: (options: { retireRejectedRestart: boolean }) => void;
 };
 
-/** Picks the interactive shell: explicit config, then the host login shell. */
-function resolveTerminalShell(params: {
-  configuredShell?: string;
-  platform?: NodeJS.Platform;
-  env?: NodeJS.ProcessEnv;
-}): { shell: string; args: string[] } {
-  const configured = params.configuredShell?.trim();
-  if (configured) {
-    return { shell: configured, args: [] };
-  }
-  const platform = params.platform ?? process.platform;
-  const env = params.env ?? process.env;
-  if (platform === "win32") {
-    return { shell: env.ComSpec?.trim() || "cmd.exe", args: [] };
-  }
-  const loginShell = env.SHELL?.trim();
-  if (loginShell) {
-    // Login flag so the operator lands in the same environment their terminal
-    // app would give them (profile-sourced PATH, aliases, prompt).
-    return { shell: loginShell, args: ["-l"] };
-  }
-  return { shell: "/bin/bash", args: ["-l"] };
-}
-
-/**
- * Resolves the terminal launch plan for one agent.
- *
- * The terminal always starts in the agent workspace. When the agent runs fully
- * sandboxed (`sandbox.mode: "all"`), a host shell would escape the isolation the
- * agent itself is under, so this returns a `sandboxed` block rather than silently
- * handing back an unconfined shell — fail-closed. `"non-main"` keeps the agent's
- * main session on the host, so a host terminal is allowed there.
- */
 function resolveTerminalLaunch(params: {
   config: OpenClawConfig;
-  enabled: boolean;
   agentId?: string;
   configuredShell?: string;
-  env?: NodeJS.ProcessEnv;
-  platform?: NodeJS.Platform;
 }): TerminalLaunchResolution {
-  if (!params.enabled) {
-    return { ok: false, block: { kind: "disabled" } };
-  }
-  const env = params.env ?? process.env;
+  const env = process.env;
   const requested = params.agentId?.trim();
-  const agentId = requested ? normalizeAgentId(requested) : resolveDefaultAgentId(params.config);
-  // Fail closed on unknown ids: they would resolve against the *global*
-  // sandbox defaults and an invented workspace, sidestepping a per-agent
-  // `sandbox.mode: "all"` refusal below.
+  let agentId: string;
+  try {
+    agentId = requested ? normalizeAgentId(requested) : resolveDefaultAgentId(params.config);
+  } catch (error) {
+    if (!(error instanceof AgentSelectionRequiredError)) {
+      throw error;
+    }
+    return { ok: false, block: { kind: "owner-required", message: error.message } };
+  }
+  // Unknown IDs would bypass per-agent isolation through the global defaults.
   if (requested && !listAgentIds(params.config).includes(agentId)) {
     return { ok: false, block: { kind: "unknown-agent", agentId } };
   }
   const sandbox = resolveSandboxConfigForAgent(params.config, agentId);
-  // Only "all" sandboxes every session. Under "non-main" the agent's main
-  // session still runs on the host, so a host terminal there is consistent with
-  // how the agent already runs (and an admin already has that host access via
-  // the main session). Block only the fully-sandboxed case; in-sandbox terminals
-  // are a tracked follow-up.
+  // "non-main" already permits host execution; "all" must not gain a host shell.
   if (sandbox.mode === "all") {
     return { ok: false, block: { kind: "sandboxed", agentId, mode: "all" } };
   }
   const workspaceDir = resolveAgentWorkspaceDir(params.config, agentId, env);
   const cwd = existingDirOrHome(workspaceDir, env);
-  const { shell, args } = resolveTerminalShell({
-    configuredShell: params.configuredShell,
-    platform: params.platform,
-    env,
-  });
+  const configuredShell = params.configuredShell?.trim();
+  const windows = process.platform === "win32";
+  const shell =
+    configuredShell ||
+    (windows ? env.ComSpec?.trim() || "cmd.exe" : env.SHELL?.trim() || "/bin/bash");
+  // Load the operator's login profile, including its PATH and prompt.
+  const args = configuredShell || windows ? [] : ["-l"];
   return { ok: true, plan: { agentId, cwd, shell, args } };
 }
 
@@ -119,81 +84,70 @@ function resolveTerminalLaunch(params: {
 export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): TerminalLaunchPolicy {
   let activeConfig = initialConfig;
   let hasPendingRestart = false;
-  let terminalDisabledUntilRestart = false;
   let preparedConfig: OpenClawConfig | null = null;
   let appliedConfigWhileRestartPending: OpenClawConfig | null = null;
-  let terminalDisabledUntilCommit = false;
-  const blockedAgentsUntilRestart = new Map<string, TerminalLaunchBlock>();
-  const blockedAgentsUntilCommit = new Map<string, TerminalLaunchBlock>();
-  const preserveTerminalConfig = (config: OpenClawConfig, owner: OpenClawConfig) => {
-    const { terminal: _ignored, ...gateway } = config.gateway ?? {};
-    const terminal = owner.gateway?.terminal;
-    return {
-      ...config,
-      gateway: {
-        ...gateway,
-        ...(terminal === undefined ? {} : { terminal }),
-      },
-    };
-  };
-  const resolveForConfig = (config: OpenClawConfig, agentId?: string) => {
-    const terminalConfig = config.gateway?.terminal;
-    return resolveTerminalLaunch({
+  const createRestrictions = () => ({
+    disabled: false,
+    blockedAgents: new Map<string, TerminalLaunchBlock>(),
+  });
+  const restartRestrictions = createRestrictions();
+  const commitRestrictions = createRestrictions();
+  const committedTerminalConfig = () => appliedConfigWhileRestartPending ?? activeConfig;
+  const resolveForConfig = (config: OpenClawConfig, agentId?: string, shellConfig = config) =>
+    resolveTerminalLaunch({
       config,
-      enabled: terminalConfig?.enabled === true,
       agentId,
-      configuredShell: terminalConfig?.shell,
+      configuredShell: shellConfig.gateway?.terminal?.shell,
     });
-  };
-  const accumulateRestartRestrictions = (config: OpenClawConfig) => {
-    if (config.gateway?.terminal?.enabled !== true) {
-      terminalDisabledUntilRestart = true;
-      return;
+  const accumulateRestrictions = (
+    config: OpenClawConfig,
+    restrictions: ReturnType<typeof createRestrictions>,
+  ) => {
+    if (!isTerminalConfigEnabled(config)) {
+      // Preserve new revocations, not an unchanged disabled baseline that a
+      // later hot commit can enable. Agent restrictions remain independent.
+      restrictions.disabled ||= isTerminalConfigEnabled(committedTerminalConfig());
     }
-    const activeAgentIds = new Set([
-      ...listAgentIds(activeConfig),
-      resolveDefaultAgentId(activeConfig),
-    ]);
-    for (const agentId of activeAgentIds) {
+    for (const agentId of listAgentIds(activeConfig)) {
       const candidate = resolveForConfig(config, agentId);
       if (!candidate.ok) {
-        blockedAgentsUntilRestart.set(agentId, candidate.block);
+        restrictions.blockedAgents.set(agentId, candidate.block);
       }
     }
   };
-  const accumulateCommitRestrictions = (config: OpenClawConfig) => {
-    if (config.gateway?.terminal?.enabled !== true) {
-      terminalDisabledUntilCommit = true;
-      return;
-    }
-    const activeAgentIds = new Set([
-      ...listAgentIds(activeConfig),
-      resolveDefaultAgentId(activeConfig),
-    ]);
-    for (const agentId of activeAgentIds) {
-      const candidate = resolveForConfig(config, agentId);
-      if (!candidate.ok) {
-        blockedAgentsUntilCommit.set(agentId, candidate.block);
-      }
+  const clearRestrictions = (restrictions: ReturnType<typeof createRestrictions>) => {
+    restrictions.disabled = false;
+    restrictions.blockedAgents.clear();
+  };
+  const settlePreparedConfig = () => {
+    preparedConfig = null;
+    clearRestrictions(commitRestrictions);
+    if (appliedConfigWhileRestartPending) {
+      accumulateRestrictions(appliedConfigWhileRestartPending, commitRestrictions);
     }
   };
+  const isEnabled = () =>
+    isTerminalConfigEnabled(committedTerminalConfig()) &&
+    !restartRestrictions.disabled &&
+    !commitRestrictions.disabled &&
+    (preparedConfig === null || isTerminalConfigEnabled(preparedConfig));
 
   return {
     resolve: (agentId) => {
-      const active = resolveForConfig(activeConfig, agentId);
+      if (!isEnabled()) {
+        return { ok: false, block: { kind: "disabled" } };
+      }
+      // Committed terminal settings apply while restart debt preserves the
+      // active agent/workspace ownership and any pending revocations.
+      const active = resolveForConfig(activeConfig, agentId, committedTerminalConfig());
       if (!active.ok) {
         return active;
       }
-      if (terminalDisabledUntilRestart) {
-        return { ok: false, block: { kind: "disabled" } };
-      }
-      const pendingBlock = blockedAgentsUntilRestart.get(active.plan.agentId);
-      if (pendingBlock) {
-        return { ok: false, block: pendingBlock };
-      }
-      const preparedBlock = blockedAgentsUntilCommit.get(active.plan.agentId);
-      if (preparedBlock) {
-        return { ok: false, block: preparedBlock };
+      const block =
+        restartRestrictions.blockedAgents.get(active.plan.agentId) ??
+        commitRestrictions.blockedAgents.get(active.plan.agentId);
+      if (block) {
+        return { ok: false, block };
       }
       const candidateConfig = preparedConfig ?? appliedConfigWhileRestartPending;
       if (candidateConfig) {
@@ -204,79 +158,52 @@ export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): Termi
       }
       return active;
     },
-    isEnabled: () =>
-      activeConfig.gateway?.terminal?.enabled === true &&
-      !terminalDisabledUntilRestart &&
-      !terminalDisabledUntilCommit &&
-      (preparedConfig === null || preparedConfig.gateway?.terminal?.enabled === true),
+    isEnabled,
     prepareConfig: (config, options) => {
       if (options.restartPending) {
         hasPendingRestart = true;
         // Keep an older candidate fail-closed only until this transaction is
         // accepted; do not mix its restrictions into the restart-owned bucket.
         preparedConfig = null;
-        accumulateRestartRestrictions(config);
+        accumulateRestrictions(config, restartRestrictions);
         return;
       }
-      // No-op/hot plans may arrive with restart-only terminal fields that an
-      // earlier reload mode ignored. Advance agent policy, but preserve the
-      // terminal subtree already owned by the active or pending process.
-      if (hasPendingRestart) {
-        preparedConfig = preserveTerminalConfig(config, activeConfig);
-        accumulateCommitRestrictions(preparedConfig);
-        return;
-      }
-      preparedConfig = preserveTerminalConfig(config, activeConfig);
-      accumulateCommitRestrictions(preparedConfig);
+      preparedConfig = config;
+      accumulateRestrictions(preparedConfig, commitRestrictions);
     },
     commitConfig: () => {
-      if (hasPendingRestart) {
+      if (preparedConfig) {
         // The applied marker separates runtime truth from a later candidate
         // that may fail before publication while this restart remains pending.
-        if (preparedConfig) {
+        if (hasPendingRestart) {
           appliedConfigWhileRestartPending = preparedConfig;
+        } else {
+          activeConfig = preparedConfig;
         }
-        preparedConfig = null;
-        terminalDisabledUntilCommit = false;
-        blockedAgentsUntilCommit.clear();
-        if (appliedConfigWhileRestartPending) {
-          accumulateCommitRestrictions(appliedConfigWhileRestartPending);
-        }
-        return;
       }
-      if (preparedConfig) {
-        activeConfig = preparedConfig;
-      }
-      preparedConfig = null;
-      terminalDisabledUntilCommit = false;
-      blockedAgentsUntilCommit.clear();
+      settlePreparedConfig();
     },
     acceptConfig: (options) => {
       // Baseline acceptance retires an un-published candidate, including config
-      // intentionally skipped by reload policy. Only onConfigApplied may stage
+      // intentionally skipped by reload policy. Only committed publication stages
       // runtime truth for promotion after a rejected restart.
-      preparedConfig = null;
-      terminalDisabledUntilCommit = false;
-      blockedAgentsUntilCommit.clear();
       if (options.retireRejectedRestart) {
         hasPendingRestart = false;
-        terminalDisabledUntilRestart = false;
-        blockedAgentsUntilRestart.clear();
+        clearRestrictions(restartRestrictions);
         if (appliedConfigWhileRestartPending) {
           activeConfig = appliedConfigWhileRestartPending;
         }
         appliedConfigWhileRestartPending = null;
-        return;
       }
-      if (appliedConfigWhileRestartPending) {
-        accumulateCommitRestrictions(appliedConfigWhileRestartPending);
-      }
+      settlePreparedConfig();
     },
   };
 }
 
-/** Builds the child environment for a host terminal from the gateway env. */
-export function buildTerminalEnv(baseEnv: NodeJS.ProcessEnv): Record<string, string> {
+export function buildTerminalEnv(
+  baseEnv: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
+): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(baseEnv)) {
     if (typeof value === "string") {
@@ -284,13 +211,13 @@ export function buildTerminalEnv(baseEnv: NodeJS.ProcessEnv): Record<string, str
     }
   }
   env.TERM = env.TERM ?? "xterm-256color";
+  // The browser renderer supports RGB regardless of the Gateway host terminal.
+  if (resolveEnvironmentValue(env, "COLORTERM", platform) === undefined) {
+    env.COLORTERM = "truecolor";
+  }
   // Lets shells and prompts detect that they are inside an OpenClaw terminal.
   env.OPENCLAW_TERMINAL = "1";
   return env;
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
 /** Converts a policy-approved plan into the exact local PTY spawn. */
@@ -301,23 +228,16 @@ export function resolveTerminalSpawnPlan(
   const env = options.env ?? process.env;
   const cwd = existingDirOrHome(plan.cwdOverride ?? plan.cwd, env);
   const command = plan.initialCommand;
-  if (!command || command.length === 0) {
-    return { agentId: plan.agentId, shell: plan.shell, args: plan.args, cwd };
+  let { shell, args } = plan;
+  if (command?.length) {
+    if ((options.platform ?? process.platform) === "win32") {
+      shell = command[0] ?? shell;
+      args = command.slice(1);
+    } else {
+      args = ["-il", "-c", buildRemoteCommand(command)];
+    }
   }
-  if ((options.platform ?? process.platform) === "win32") {
-    return {
-      agentId: plan.agentId,
-      shell: command[0] ?? plan.shell,
-      args: command.slice(1),
-      cwd,
-    };
-  }
-  return {
-    agentId: plan.agentId,
-    shell: plan.shell,
-    args: ["-il", "-c", command.map(shellQuote).join(" ")],
-    cwd,
-  };
+  return { agentId: plan.agentId, shell, args, cwd };
 }
 
 // A workspace dir that has not been created yet would make the PTY spawn fail;
@@ -329,7 +249,7 @@ function existingDirOrHome(dir: string, env: NodeJS.ProcessEnv): string {
     return home;
   }
   try {
-    if (existsSync(trimmed) && statSync(trimmed).isDirectory()) {
+    if (statSync(trimmed).isDirectory()) {
       return trimmed;
     }
   } catch {

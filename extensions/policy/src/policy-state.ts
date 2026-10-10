@@ -1,3 +1,4 @@
+import { scanPolicyRouting, type PolicyRoutingRules } from "./policy-routing.js";
 import {
   scanPolicyChannels,
   scanPolicyMcpServers,
@@ -16,61 +17,29 @@ import { scanPolicyIngress } from "./policy-state-ingress.js";
 import { scanPolicySandboxPosture } from "./policy-state-sandbox.js";
 import { scanPolicyToolPosture } from "./policy-state-tool-posture.js";
 import { scanPolicyTools } from "./policy-state-tools.js";
-// Policy plugin evidence collection facade.
 import type { PolicyEvidence } from "./policy-state-types.js";
 import { scanPolicyAgentWorkspace } from "./policy-state-workspace.js";
 
-export function collectPolicyEvidence(
-  cfg: Record<string, unknown>,
-  options?: {
-    readonly toolsRaw?: undefined;
-    readonly includeIngress?: boolean;
-    readonly includeGatewayExposure?: boolean;
-    readonly includeAgentWorkspace?: boolean;
-    readonly includeDataHandling?: boolean;
-    readonly includeToolPosture?: boolean;
-    readonly includeSandboxPosture?: boolean;
-    readonly includeSecrets?: boolean;
-    readonly includeAuthProfiles?: boolean;
-    readonly execApprovalsRaw?: string | null;
-    readonly includeExecApprovals?: boolean;
-  },
-): PolicyEvidence;
+type PolicyEvidenceOptions = {
+  readonly toolsRaw?: string;
+  readonly includeIngress?: boolean;
+  readonly includeGatewayExposure?: boolean;
+  readonly includeAgentWorkspace?: boolean;
+  readonly includeDataHandling?: boolean;
+  readonly includeToolPosture?: boolean;
+  readonly includeSandboxPosture?: boolean;
+  readonly includeSecrets?: boolean;
+  readonly includeAuthProfiles?: boolean;
+  readonly execApprovalsRaw?: string | null;
+  readonly includeExecApprovals?: boolean;
+  readonly routing?: PolicyRoutingRules;
+};
 
 export function collectPolicyEvidence(
   cfg: Record<string, unknown>,
-  options: {
-    readonly toolsRaw: string;
-    readonly includeIngress?: boolean;
-    readonly includeGatewayExposure?: boolean;
-    readonly includeAgentWorkspace?: boolean;
-    readonly includeDataHandling?: boolean;
-    readonly includeToolPosture?: boolean;
-    readonly includeSandboxPosture?: boolean;
-    readonly includeSecrets?: boolean;
-    readonly includeAuthProfiles?: boolean;
-    readonly execApprovalsRaw?: string | null;
-    readonly includeExecApprovals?: boolean;
-  },
-): Promise<PolicyEvidence>;
-
-export function collectPolicyEvidence(
-  cfg: Record<string, unknown>,
-  options: {
-    readonly toolsRaw?: string;
-    readonly includeIngress?: boolean;
-    readonly includeGatewayExposure?: boolean;
-    readonly includeAgentWorkspace?: boolean;
-    readonly includeDataHandling?: boolean;
-    readonly includeToolPosture?: boolean;
-    readonly includeSandboxPosture?: boolean;
-    readonly includeSecrets?: boolean;
-    readonly includeAuthProfiles?: boolean;
-    readonly execApprovalsRaw?: string | null;
-    readonly includeExecApprovals?: boolean;
-  } = {},
-): PolicyEvidence | Promise<PolicyEvidence> {
-  const evidence = {
+  options: PolicyEvidenceOptions = {},
+): PolicyEvidence {
+  return {
     channels: scanPolicyChannels(cfg),
     mcpServers: scanPolicyMcpServers(cfg),
     modelProviders: scanPolicyModelProviders(cfg),
@@ -98,11 +67,9 @@ export function collectPolicyEvidence(
               ? []
               : scanPolicyExecApprovals(options.execApprovalsRaw),
         }),
+    ...(options.routing === undefined ? {} : { routing: scanPolicyRouting(cfg, options.routing) }),
+    ...(options.toolsRaw === undefined ? {} : { tools: scanPolicyTools(options.toolsRaw) }),
   };
-  if (options.toolsRaw === undefined) {
-    return evidence;
-  }
-  return scanPolicyTools(options.toolsRaw).then((tools) => ({ ...evidence, tools }));
 }
 
 export { createPolicyAttestation, policyDocumentHash } from "./policy-state-attestation.js";

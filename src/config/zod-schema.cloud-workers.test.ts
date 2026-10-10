@@ -1,112 +1,78 @@
-// Verifies cloud-worker provider profile config parsing.
 import { describe, expect, it } from "vitest";
 import { OpenClawSchema } from "./zod-schema.js";
 
-function parseCloudWorkers(value: unknown) {
-  const result = OpenClawSchema.safeParse({ cloudWorkers: value });
-  if (!result.success) {
-    throw new Error(JSON.stringify(result.error.issues, null, 2));
-  }
-  return result.data.cloudWorkers;
+function cloudProfile(profile: Record<string, unknown>) {
+  return { cloudWorkers: { profiles: { development: { provider: "qa-lab", ...profile } } } };
 }
 
 describe("OpenClawSchema cloudWorkers config", () => {
-  it("is absent by default and accepts an empty opt-in block", () => {
-    expect(OpenClawSchema.parse({}).cloudWorkers).toBeUndefined();
-    expect(parseCloudWorkers({})).toStrictEqual({});
-  });
-
-  it("accepts provider-owned settings and stored lifetime policy", () => {
+  it("retains a required profile before enrollment without blocking startup", () => {
     expect(
-      parseCloudWorkers({
-        profiles: {
-          development: {
-            provider: "static-ssh",
-            settings: {
-              host: "worker.example.test",
-              port: 22,
-              user: "openclaw",
-              keyRef: {
-                source: "file",
-                provider: "default",
-                id: "/cloud-workers/development/privateKey",
-              },
-            },
-            lifetime: {
-              idleTimeoutMinutes: 60,
-              maxLifetimeMinutes: 1440,
-            },
-          },
-        },
-      }),
-    ).toStrictEqual({
-      profiles: {
-        development: {
-          provider: "static-ssh",
-          install: "bundle",
-          settings: {
-            host: "worker.example.test",
-            port: 22,
-            user: "openclaw",
-            keyRef: {
-              source: "file",
-              provider: "default",
-              id: "/cloud-workers/development/privateKey",
-            },
-          },
-          lifetime: {
-            idleTimeoutMinutes: 60,
-            maxLifetimeMinutes: 1440,
-          },
-        },
-      },
+      OpenClawSchema.parse({ cloudWorkers: { requiredProfile: "not-enrolled-yet" } }).cloudWorkers,
+    ).toEqual({
+      requiredProfile: "not-enrolled-yet",
     });
   });
 
-  it("accepts npm as an explicit install method", () => {
-    expect(
-      parseCloudWorkers({
-        profiles: {
-          released: {
-            provider: "qa-lab",
-            install: "npm",
-          },
-        },
-      }),
-    ).toStrictEqual({
-      profiles: {
-        released: {
-          provider: "qa-lab",
-          install: "npm",
-        },
-      },
+  it.each(["", " ", " worker", "worker ", null, true, 3])(
+    "rejects invalid required profile %j",
+    (requiredProfile) => {
+      expect(OpenClawSchema.safeParse({ cloudWorkers: { requiredProfile } }).success).toBe(false);
+    },
+  );
+
+  it("accepts normalized per-project default profiles", () => {
+    const projectProfiles = { "github.com/acme/app": "development" };
+    expect(OpenClawSchema.parse({ cloudWorkers: { projectProfiles } }).cloudWorkers).toStrictEqual({
+      projectProfiles,
     });
   });
 
   it.each([
-    { profiles: { development: { provider: "" } } },
-    { profiles: { development: { provider: "qa-lab", install: "git" } } },
-    { profiles: { " development ": { provider: "qa-lab" } } },
-    { profiles: { development: { provider: "qa-lab", settings: { timeout: Infinity } } } },
-    { profiles: { development: { provider: "qa-lab", settings: { region: undefined } } } },
-    {
-      profiles: {
-        development: { provider: "qa-lab", settings: { keyRef: "plain-private-key" } },
-      },
-    },
-    {
-      profiles: {
-        development: { provider: "qa-lab", settings: { auth: { apiKey: "plain-api-key" } } },
-      },
-    },
-    { profiles: { development: { provider: "qa-lab", lifetime: { idleTimeoutMinutes: 0 } } } },
-    {
-      profiles: {
-        development: { provider: "qa-lab", lifetime: { maxLifetimeMinutes: 1.5 } },
-      },
-    },
-    { profiles: { development: { provider: "qa-lab", unsupported: true } } },
-  ])("rejects invalid core profile fields %#", (cloudWorkers) => {
-    expect(OpenClawSchema.safeParse({ cloudWorkers }).success).toBe(false);
+    { "github.com/acme/app": " " },
+    { "GitHub.com/acme/app": "development" },
+    { "github.com/acme": "development" },
+  ])("rejects invalid per-project profile mappings %#", (projectProfiles) => {
+    expect(OpenClawSchema.safeParse({ cloudWorkers: { projectProfiles } }).success).toBe(false);
   });
+
+  it("accepts provider-owned settings with SecretRefs and defaults to bundled installation", () => {
+    const settings = {
+      host: "worker.example.test",
+      port: 22,
+      user: "openclaw",
+      keyRef: { source: "file", provider: "default", id: "/cloud-workers/development/privateKey" },
+    };
+    expect(
+      OpenClawSchema.parse(cloudProfile({ provider: "static-ssh", settings })).cloudWorkers,
+    ).toStrictEqual({
+      profiles: { development: { provider: "static-ssh", install: "bundle", settings } },
+    });
+  });
+
+  it("accepts the minimum idle suspend duration", () => {
+    expect(OpenClawSchema.parse(cloudProfile({ suspendAfter: "1m" })).cloudWorkers).toStrictEqual({
+      profiles: { development: { provider: "qa-lab", install: "bundle", suspendAfter: "1m" } },
+    });
+  });
+
+  it.each(["59s", "-1m", "60000"])(
+    "rejects an invalid or sub-minute idle suspend duration: %s",
+    (suspendAfter) => {
+      expect(OpenClawSchema.safeParse(cloudProfile({ suspendAfter })).success).toBe(false);
+    },
+  );
+
+  it("rejects non-finite provider settings", () => {
+    expect(
+      OpenClawSchema.safeParse(cloudProfile({ settings: { timeout: Infinity } })).success,
+    ).toBe(false);
+  });
+
+  it.each([{ keyRef: "plain-private-key" }, { auth: { apiKey: "plain-api-key" } }])(
+    "rejects plaintext provider secrets at any depth: %j",
+    (settings) => {
+      expect(OpenClawSchema.safeParse(cloudProfile({ settings })).success).toBe(false);
+    },
+  );
 });

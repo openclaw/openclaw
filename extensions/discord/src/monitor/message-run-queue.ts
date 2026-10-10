@@ -1,13 +1,23 @@
-// Discord plugin module implements message run queue behavior.
 import { createChannelRunQueue } from "openclaw/plugin-sdk/channel-outbound";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
-import { DiscordRetryableInboundError } from "./inbound-dedupe.js";
-import { materializeDiscordInboundJob, type DiscordInboundJob } from "./inbound-job.js";
-import type { RuntimeEnv } from "./message-handler.preflight.types.js";
+import type {
+  DiscordMessagePreflightContext,
+  RuntimeEnv,
+} from "./message-handler.preflight.types.js";
 import type { DiscordMonitorStatusSink } from "./status.js";
 
 type ProcessDiscordMessage = typeof import("./message-handler.process.js").processDiscordMessage;
+
+type DiscordInboundJob = {
+  context: DiscordMessagePreflightContext;
+  ingressSettlement?: {
+    settle: () => Promise<void>;
+    abandon: (error?: unknown) => Promise<void>;
+    cancel: () => Promise<void>;
+  };
+};
 
 type DiscordMessageRunQueueParams = {
   runtime: RuntimeEnv;
@@ -18,14 +28,14 @@ type DiscordMessageRunQueueParams = {
 
 type DiscordMessageRunQueue = {
   enqueue: (job: DiscordInboundJob) => void;
-  deactivate: () => void;
+  deactivate: () => Promise<void>;
 };
 
 export type DiscordMessageRunQueueTestingHooks = {
   processDiscordMessage?: ProcessDiscordMessage;
 };
 
-type SkippedQueuedMessageCleanup = () => void;
+type SkippedQueuedMessageCleanup = () => Promise<void>;
 
 const loadMessageProcessRuntime = createLazyRuntimeModule(
   () => import("./message-handler.process.js"),
@@ -36,35 +46,29 @@ async function processDiscordQueuedMessage(params: {
   lifecycleSignal?: AbortSignal;
   testing?: DiscordMessageRunQueueTestingHooks;
 }) {
-  const processDiscordMessageImpl =
-    params.testing?.processDiscordMessage ??
-    (await loadMessageProcessRuntime()).processDiscordMessage;
   const abortSignal =
-    params.job.runtime.abortSignal && params.lifecycleSignal
-      ? AbortSignal.any([params.job.runtime.abortSignal, params.lifecycleSignal])
-      : (params.job.runtime.abortSignal ?? params.lifecycleSignal);
+    params.job.context.abortSignal && params.lifecycleSignal
+      ? AbortSignal.any([params.job.context.abortSignal, params.lifecycleSignal])
+      : (params.job.context.abortSignal ?? params.lifecycleSignal);
   try {
-    await processDiscordMessageImpl(materializeDiscordInboundJob(params.job, abortSignal));
-    await Promise.all(params.job.replayClaims?.map((claim) => claim.commit()) ?? []);
-  } catch (error) {
-    if (error instanceof DiscordRetryableInboundError) {
-      for (const claim of params.job.replayClaims ?? []) {
-        claim.release({ error });
-      }
+    const processDiscordMessageImpl =
+      params.testing?.processDiscordMessage ??
+      (await loadMessageProcessRuntime()).processDiscordMessage;
+    await processDiscordMessageImpl({ ...params.job.context, abortSignal });
+    if (abortSignal?.aborted) {
+      // Cancellation ended ownership before delivery; retain prior retry facts
+      // so the durable claim can replay under a replacement lifecycle.
+      await params.job.ingressSettlement?.cancel();
     } else {
-      await Promise.all(params.job.replayClaims?.map((claim) => claim.commit()) ?? []);
+      await params.job.ingressSettlement?.settle();
+    }
+  } catch (error) {
+    if (abortSignal?.aborted) {
+      await params.job.ingressSettlement?.cancel();
+    } else {
+      await params.job.ingressSettlement?.abandon(error);
     }
     throw error;
-  }
-}
-
-function cleanupSkippedDiscordQueuedMessage(params: { job: DiscordInboundJob }) {
-  // Typing feedback is created inside processing after admission, so skipped
-  // jobs only carry replay claims that need reopening for a later retry.
-  for (const claim of params.job.replayClaims ?? []) {
-    claim.release({
-      error: new DiscordRetryableInboundError("discord queued run skipped before processing"),
-    });
   }
 }
 
@@ -80,9 +84,11 @@ export function createDiscordMessageRunQueue(
     },
   });
   let lifecycleActive = !params.abortSignal?.aborted;
+  const pendingTasks = new Set<Promise<void>>();
+  const onAbort = () => void cleanupSkippedQueuedMessages();
 
-  const cleanupSkippedQueuedMessages = () => {
-    params.abortSignal?.removeEventListener("abort", cleanupSkippedQueuedMessages);
+  async function cleanupSkippedQueuedMessages() {
+    params.abortSignal?.removeEventListener("abort", onAbort);
     // These callbacks represent jobs accepted into the queue but not started.
     // Running jobs remove their callback before processDiscordMessage owns cleanup.
     if (!lifecycleActive && skippedCleanup.size === 0) {
@@ -92,40 +98,66 @@ export function createDiscordMessageRunQueue(
     const cleanups = [...skippedCleanup];
     skippedCleanup.clear();
     for (const cleanup of cleanups) {
-      cleanup();
+      await cleanup();
     }
-  };
+  }
 
   if (params.abortSignal?.aborted) {
-    cleanupSkippedQueuedMessages();
+    void cleanupSkippedQueuedMessages();
   } else {
-    params.abortSignal?.addEventListener("abort", cleanupSkippedQueuedMessages, { once: true });
+    params.abortSignal?.addEventListener("abort", onAbort, { once: true });
   }
 
   return {
     enqueue(job) {
-      const cleanupSkipped = () => {
-        cleanupSkippedDiscordQueuedMessage({ job });
+      const { promise: pending, resolve: resolvePending } = createDeferred();
+      pendingTasks.add(pending);
+      const settlePending = () => {
+        pendingTasks.delete(pending);
+        resolvePending();
+      };
+      const cleanupSkipped = async () => {
+        try {
+          // A skipped job never reached reply-lane adoption; reopen its durable claim.
+          await job.ingressSettlement?.cancel();
+        } catch (error) {
+          // Durable release is best-effort during shutdown. One failed claim
+          // must not strand the remaining accepted jobs or their pending tasks.
+          try {
+            params.runtime.error(danger(`discord queued message cleanup failed: ${String(error)}`));
+          } catch {
+            // Error reporting must not interrupt the remaining cleanup owners.
+          }
+        } finally {
+          settlePending();
+        }
       };
       if (!lifecycleActive) {
-        cleanupSkipped();
+        void cleanupSkipped();
         return;
       }
       skippedCleanup.add(cleanupSkipped);
-      runQueue.enqueue(job.queueKey, async ({ lifecycleSignal }) => {
+      // Core reply admission owns session serialization. A transport event key
+      // lets later Discord messages reach active-run steering while this run continues.
+      runQueue.enqueue(job.context.message.id, async ({ lifecycleSignal }) => {
         // Once the task starts, normal process/commit handling owns cleanup.
         // Leaving it in skippedCleanup would double-release replay state.
         skippedCleanup.delete(cleanupSkipped);
-        await processDiscordQueuedMessage({
-          job,
-          lifecycleSignal,
-          testing: params.testing,
-        });
+        try {
+          await processDiscordQueuedMessage({
+            job,
+            lifecycleSignal,
+            testing: params.testing,
+          });
+        } finally {
+          settlePending();
+        }
       });
     },
-    deactivate() {
+    async deactivate() {
       runQueue.deactivate();
-      cleanupSkippedQueuedMessages();
+      await cleanupSkippedQueuedMessages();
+      await Promise.allSettled(pendingTasks);
     },
   };
 }

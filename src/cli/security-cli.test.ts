@@ -8,7 +8,7 @@ const mocks = await vi.hoisted(async () => {
   const runtime = createCliRuntimeMock(vi);
   return {
     loadConfig: vi.fn(),
-    runSecurityAudit: vi.fn(),
+    runSecurityAuditCore: vi.fn(),
     fixSecurityFootguns: vi.fn(),
     resolveCommandSecretRefsViaGateway: vi.fn(),
     getSecurityAuditCommandSecretTargetIds: vi.fn(
@@ -20,7 +20,7 @@ const mocks = await vi.hoisted(async () => {
 
 const {
   loadConfig,
-  runSecurityAudit,
+  runSecurityAuditCore,
   fixSecurityFootguns,
   resolveCommandSecretRefsViaGateway,
   getSecurityAuditCommandSecretTargetIds,
@@ -37,7 +37,7 @@ vi.mock("../runtime.js", () => ({
 }));
 
 vi.mock("../security/audit.js", () => ({
-  runSecurityAudit: (opts: unknown) => mocks.runSecurityAudit(opts),
+  runSecurityAuditCore: (opts: unknown) => mocks.runSecurityAuditCore(opts),
 }));
 
 vi.mock("../security/fix.js", () => ({
@@ -68,7 +68,7 @@ function primeDeepAuditConfig(sourceConfig = { gateway: { mode: "local" } }) {
     targetStatesByPath: {},
     hadUnresolvedTargets: false,
   });
-  runSecurityAudit.mockResolvedValue({
+  runSecurityAuditCore.mockResolvedValue({
     ts: 0,
     summary: { critical: 0, warn: 0, info: 0 },
     findings: [],
@@ -82,7 +82,7 @@ function lastSecretResolverOptions(): Record<string, unknown> | undefined {
 }
 
 function lastSecurityAuditOptions(): Record<string, unknown> | undefined {
-  const calls = runSecurityAudit.mock.calls;
+  const calls = runSecurityAuditCore.mock.calls;
   return calls[calls.length - 1]?.[0] as Record<string, unknown> | undefined;
 }
 
@@ -90,7 +90,7 @@ describe("security CLI", () => {
   beforeEach(() => {
     runtimeLogs.length = 0;
     loadConfig.mockReset();
-    runSecurityAudit.mockReset();
+    runSecurityAuditCore.mockReset();
     fixSecurityFootguns.mockReset();
     resolveCommandSecretRefsViaGateway.mockReset();
     getSecurityAuditCommandSecretTargetIds.mockClear();
@@ -134,14 +134,14 @@ describe("security CLI", () => {
       targetStatesByPath: {},
       hadUnresolvedTargets: false,
     });
-    runSecurityAudit.mockResolvedValue({
+    runSecurityAuditCore.mockResolvedValue({
       ts: 0,
       summary: { critical: 0, warn: 1, info: 0 },
       findings: [
         {
           checkId: "gateway.probe_failed",
           severity: "warn",
-          title: "Gateway probe failed (deep)",
+          title: "Gateway check failed (deep)",
           detail: "connect failed: connect ECONNREFUSED 127.0.0.1:18789",
         },
       ],
@@ -164,6 +164,17 @@ describe("security CLI", () => {
     expect(payload.secretDiagnostics).toEqual([
       "security audit: gateway secrets.resolve unavailable (gateway closed); resolved command secrets locally.",
     ]);
+  });
+
+  it("reports an unexpected fixer failure instead of emitting a successful JSON audit", async () => {
+    primeDeepAuditConfig();
+    const failure = new Error("Fixture repair failed");
+    fixSecurityFootguns.mockRejectedValueOnce(failure);
+
+    await expect(
+      createProgram().parseAsync(["security", "audit", "--fix", "--json"], { from: "user" }),
+    ).rejects.toBe(failure);
+    expect(runtimeLogs).toEqual([]);
   });
 
   it.each([
@@ -224,7 +235,7 @@ describe("security CLI", () => {
       await expect(
         createProgram().parseAsync(["security", "audit", ...argv, "--json"], { from: "user" }),
       ).rejects.toThrow(message);
-      expect(runSecurityAudit).not.toHaveBeenCalled();
+      expect(runSecurityAuditCore).not.toHaveBeenCalled();
     },
   );
 });

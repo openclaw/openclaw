@@ -1,9 +1,9 @@
-// Discord plugin module implements reply safety behavior.
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import {
   sanitizeAssistantVisibleText,
   sanitizeAssistantVisibleTextWithProfile,
+  findCodeRegions,
 } from "openclaw/plugin-sdk/text-chunking";
 import { stripPlainTextToolCallBlocks } from "openclaw/plugin-sdk/tool-payload";
 
@@ -58,9 +58,13 @@ function stripDiscordInternalChannelLines(text: string): string {
 }
 
 function sanitizeDiscordFrontChannelText(text: string): string {
-  const withoutToolCallBlocks = stripPlainTextToolCallBlocks(text);
+  const withoutToolCallBlocks = stripPlainTextToolCallBlocks(text, {
+    resolveProtectedRanges: findCodeRegions,
+  });
   const withoutAssistantScaffolding = sanitizeAssistantVisibleText(withoutToolCallBlocks);
-  const withoutResidualToolCallBlocks = stripPlainTextToolCallBlocks(withoutAssistantScaffolding);
+  const withoutResidualToolCallBlocks = stripPlainTextToolCallBlocks(withoutAssistantScaffolding, {
+    resolveProtectedRanges: findCodeRegions,
+  });
   const withoutChannelLines = stripDiscordInternalChannelLines(withoutResidualToolCallBlocks);
   return collapseExcessBlankLines(withoutChannelLines).trim();
 }
@@ -81,9 +85,7 @@ export function sanitizeDiscordFrontChannelReplyPayloads(
           : sanitizeDiscordFrontChannelText(payload.text)
         : payload.text;
     const nextPayload =
-      safeText === payload.text
-        ? payload
-        : ({ ...payload, text: safeText || undefined } as ReplyPayload);
+      safeText === payload.text ? payload : { ...payload, text: safeText || undefined };
     const nextParts = resolveSendableOutboundReplyParts(nextPayload);
     if (!nextParts.hasContent && !hasNonTextReplyPayloadContent(nextPayload)) {
       continue;

@@ -7,7 +7,11 @@ import {
   publicKeyRawBase64UrlFromPem,
   verifyDeviceSignature,
 } from "./device-identity.js";
-import { resolveApnsRelayConfigFromEnv, sendApnsRelayPush } from "./push-apns.relay.js";
+import {
+  type ApnsRelayRequestSender,
+  resolveApnsRelayConfigFromEnv,
+  sendApnsRelayPush,
+} from "./push-apns.relay.js";
 
 const relayGatewayIdentity = (() => {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
@@ -107,25 +111,23 @@ describe("push-apns.relay", () => {
       });
     });
 
-    it.each(["0x1000", "2e4", "2500ms"])(
-      "falls back for non-decimal env timeout %s",
-      (timeoutMs) => {
-        const resolved = resolveApnsRelayConfigFromEnv({
-          OPENCLAW_APNS_RELAY_BASE_URL: "https://relay.example.com",
-          OPENCLAW_APNS_RELAY_TIMEOUT_MS: timeoutMs,
-        } as NodeJS.ProcessEnv);
+    it.each(["2e4"])("falls back for non-decimal env timeout %s", (timeoutMs) => {
+      const resolved = resolveApnsRelayConfigFromEnv({
+        OPENCLAW_APNS_RELAY_BASE_URL: "https://relay.example.com",
+        OPENCLAW_APNS_RELAY_TIMEOUT_MS: timeoutMs,
+      } as NodeJS.ProcessEnv);
 
-        expectRelayConfig(resolved, {
-          baseUrl: "https://relay.example.com",
-          timeoutMs: 10_000,
-        });
-      },
-    );
+      expectRelayConfig(resolved, {
+        baseUrl: "https://relay.example.com",
+        timeoutMs: 10_000,
+      });
+    });
 
-    it("retains numeric timeout config values", () => {
+    it("uses the configured timeout when the env override is blank", () => {
       const resolved = resolveApnsRelayConfigFromEnv(
         {
           OPENCLAW_APNS_RELAY_BASE_URL: "https://relay.example.com",
+          OPENCLAW_APNS_RELAY_TIMEOUT_MS: "   ",
         } as NodeJS.ProcessEnv,
         {
           push: {
@@ -191,9 +193,42 @@ describe("push-apns.relay", () => {
   });
 
   describe("sendApnsRelayPush", () => {
+    it("revalidates ownership before relay fetch and combines the lifecycle signal", async () => {
+      const controller = new AbortController();
+      const isCurrent = vi.fn().mockResolvedValue(true);
+      const fetchMock = vi.fn().mockResolvedValue(new Response("", { status: 202 }));
+      vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+      await sendApnsRelayPush({
+        ...createRelayPushParams(),
+        signal: controller.signal,
+        isCurrent,
+      });
+
+      expect(isCurrent).toHaveBeenCalledTimes(2);
+      const fetchOptions = firstMockCall(fetchMock)?.[1] as { signal?: AbortSignal } | undefined;
+      expect(fetchOptions?.signal?.aborted).toBe(false);
+      controller.abort(new Error("pairing removed"));
+      expect(fetchOptions?.signal?.aborted).toBe(true);
+    });
+
+    it("does not start relay transport when persistent ownership changed", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+      await expect(
+        sendApnsRelayPush({
+          ...createRelayPushParams(),
+          isCurrent: vi.fn().mockResolvedValue(false),
+        }),
+      ).rejects.toThrow("APNs send invalidated");
+
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
     it("signs relay payloads and forwards the request through the injected sender", async () => {
       vi.spyOn(Date, "now").mockReturnValue(123_456_789);
-      const sender = vi.fn().mockResolvedValue({
+      const sender = vi.fn<ApnsRelayRequestSender>().mockResolvedValue({
         ok: true,
         status: 200,
         apnsId: "relay-apns-id",
@@ -216,20 +251,7 @@ describe("push-apns.relay", () => {
       });
 
       expect(sender).toHaveBeenCalledTimes(1);
-      const sent = firstMockCall(sender)?.[0] as
-        | {
-            relayConfig?: { baseUrl?: string; timeoutMs?: number };
-            sendGrant?: string;
-            relayHandle?: string;
-            gatewayDeviceId?: string;
-            signedAtMs?: number;
-            pushType?: string;
-            priority?: string;
-            payload?: unknown;
-            bodyJson?: string;
-            signature?: string;
-          }
-        | undefined;
+      const sent = sender.mock.calls[0]?.[0];
       expect(sent?.relayConfig?.baseUrl).toBe("https://relay.example.com");
       expect(sent?.relayConfig?.timeoutMs).toBe(1000);
       expect(sent?.sendGrant).toBe("send-grant-123");
@@ -287,21 +309,6 @@ describe("push-apns.relay", () => {
     it("falls back to fetch status when the relay body is not JSON", async () => {
       // Real Response body so the bounded reader runs end-to-end; non-JSON parse stays a soft null.
       const fetchMock = vi.fn().mockResolvedValue(new Response("not-json-at-all", { status: 202 }));
-      vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-
-      await expect(sendApnsRelayPush(createRelayPushParams())).resolves.toEqual({
-        ok: true,
-        status: 202,
-        apnsId: undefined,
-        reason: undefined,
-        tokenSuffix: undefined,
-      });
-    });
-
-    it("treats an empty relay body as absent and derives status from the HTTP response", async () => {
-      // Empty body: JSON.parse("") throws -> soft null fallback (not an overflow), same as the
-      // prior response.json() behaviour. Confirms the new try/catch does not regress empty bodies.
-      const fetchMock = vi.fn().mockResolvedValue(new Response("", { status: 202 }));
       vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
       await expect(sendApnsRelayPush(createRelayPushParams())).resolves.toEqual({
@@ -420,18 +427,33 @@ describe("push-apns.relay", () => {
       });
     });
 
-    it("fails closed on an oversized body even when the HTTP status would imply success", async () => {
-      // Regression guard for the core design decision: a 2xx relay response with an oversized
-      // body must NOT be folded into the malformed-JSON (treat-as-empty -> HTTP-derived ok)
-      // fallback. Overflow always wins and the push is reported failed, never silently delivered.
-      const oversized = "b".repeat(16 * 1024 * 1024 + 4096);
-      const fetchMock = vi.fn().mockResolvedValue(new Response(oversized, { status: 202 }));
+    it("rejects relay body with malformed UTF-8 bytes instead of parsing corrupted metadata", async () => {
+      // Regression guard: with { fatal: true } on the TextDecoder, a relay body
+      // containing invalid UTF-8 sequences must be rejected at decode time and
+      // treated as absent (status-derived fallback). Corrupted field values must
+      // never reach the caller.
+      const encoder = new TextEncoder();
+      const prefix = encoder.encode('{"ok":true,"status":200,"apnsId":"test-');
+      const suffix = encoder.encode('1234"}');
+      const body = new Uint8Array(prefix.length + 1 + suffix.length);
+      body.set(prefix, 0);
+      body[prefix.length] = 0xff; // bare invalid byte inside the apns-id string
+      body.set(suffix, prefix.length + 1);
+
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(
+          new Response(body, { status: 202, headers: { "content-type": "application/json" } }),
+        );
       vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
-      const result = await sendApnsRelayPush(createRelayPushParams());
-      expect(result.ok).toBe(false);
-      expect(result.reason).toBe("RelayResponseTooLarge");
-      expect(result.status).toBe(202);
+      await expect(sendApnsRelayPush(createRelayPushParams())).resolves.toEqual({
+        ok: true,
+        status: 202,
+        apnsId: undefined,
+        reason: undefined,
+        tokenSuffix: undefined,
+      });
     });
   });
 });

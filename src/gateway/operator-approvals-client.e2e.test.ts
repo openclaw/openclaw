@@ -12,27 +12,28 @@ import {
   validateApprovalResolveResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
+import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE, READ_SCOPE } from "./method-scopes.js";
 import { withOperatorApprovalsGatewayClient } from "./operator-approvals-client.js";
 import { startGatewayServer } from "./server.js";
+import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
+import { acquireGatewayE2ePortBlock, startClaimedGateway } from "./test-helpers.listener.js";
 import {
-  connectGatewayClient,
-  disconnectGatewayClient,
-  getFreeGatewayPort,
-} from "./test-helpers.e2e.js";
+  configureManualGatewayBackgroundEnv,
+  MANUAL_GATEWAY_ENV_KEYS,
+} from "./test-helpers.manual-gateway-env.js";
 
 const TEST_ENV_KEYS = [
   "HOME",
+  ...MANUAL_GATEWAY_ENV_KEYS,
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_GATEWAY_URL",
   "OPENCLAW_GATEWAY_TOKEN",
   "OPENCLAW_GATEWAY_PASSWORD",
-  "OPENCLAW_GATEWAY_PORT",
 ];
 
 type Cleanup = () => Promise<void> | void;
@@ -87,18 +88,21 @@ describe("operator approval gateway client e2e", () => {
     await fs.mkdir(stateDir, { recursive: true });
     setTestEnvValue("HOME", tempHome);
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    configureManualGatewayBackgroundEnv(tempHome);
 
-    const port = await getFreeGatewayPort();
+    const claim = await acquireGatewayE2ePortBlock();
     const token = "approval-client-e2e-token";
-    const url = `ws://127.0.0.1:${port}`;
-    setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(port));
+    const url = `ws://127.0.0.1:${claim.port}`;
+    setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(claim.port));
 
-    const server = await startGatewayServer(port, {
-      bind: "loopback",
-      auth: { mode: "token", token },
-      controlUiEnabled: false,
-      sidecarStartup: "defer",
-    });
+    const server = await startClaimedGateway(claim, () =>
+      startGatewayServer(claim.port, {
+        bind: "loopback",
+        auth: { mode: "token", token },
+        controlUiEnabled: false,
+        sidecarStartup: "defer",
+      }),
+    );
     cleanup.push(() => server.close());
 
     const admin = await connectGatewayClient({
@@ -121,7 +125,7 @@ describe("operator approval gateway client e2e", () => {
 
     const localConfig = {
       gateway: {
-        port,
+        port: claim.port,
         auth: { mode: "token", token },
       },
     } satisfies OpenClawConfig;
@@ -191,29 +195,32 @@ describe("operator approval gateway client e2e", () => {
     await fs.mkdir(stateDir, { recursive: true });
     setTestEnvValue("HOME", tempHome);
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    configureManualGatewayBackgroundEnv(tempHome);
 
-    const requesterIdentity = loadOrCreateDeviceIdentity(
-      path.join(stateDir, "test-device-identities", "approval-requester.json"),
-    );
-    const reviewerIdentity = loadOrCreateDeviceIdentity(
-      path.join(stateDir, "test-device-identities", "approval-reviewer.json"),
-    );
-    const underscopedIdentity = loadOrCreateDeviceIdentity(
-      path.join(stateDir, "test-device-identities", "approval-underscoped.json"),
-    );
+    const requesterIdentity = loadOrCreateDeviceIdentity({
+      path: path.join(stateDir, "test-device-identities", "approval-requester.sqlite"),
+    });
+    const reviewerIdentity = loadOrCreateDeviceIdentity({
+      path: path.join(stateDir, "test-device-identities", "approval-reviewer.sqlite"),
+    });
+    const underscopedIdentity = loadOrCreateDeviceIdentity({
+      path: path.join(stateDir, "test-device-identities", "approval-underscoped.sqlite"),
+    });
     expect(requesterIdentity.deviceId).not.toBe(reviewerIdentity.deviceId);
 
-    const port = await getFreeGatewayPort();
+    const claim = await acquireGatewayE2ePortBlock();
     const token = "approval-surfaces-e2e-token";
-    const url = `ws://127.0.0.1:${port}`;
-    setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(port));
+    const url = `ws://127.0.0.1:${claim.port}`;
+    setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(claim.port));
 
-    const server = await startGatewayServer(port, {
-      bind: "loopback",
-      auth: { mode: "token", token },
-      controlUiEnabled: false,
-      sidecarStartup: "defer",
-    });
+    const server = await startClaimedGateway(claim, () =>
+      startGatewayServer(claim.port, {
+        bind: "loopback",
+        auth: { mode: "token", token },
+        controlUiEnabled: false,
+        sidecarStartup: "defer",
+      }),
+    );
     cleanup.push(() => server.close());
 
     const requester = await connectGatewayClient({

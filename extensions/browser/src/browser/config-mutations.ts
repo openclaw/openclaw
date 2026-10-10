@@ -1,14 +1,7 @@
-/**
- * Browser config mutation helpers.
- *
- * Persists browser-control credentials and profile config changes through the
- * canonical config writer while preserving port/color allocation rules.
- */
 import { isDeepStrictEqual } from "node:util";
-import { mutateConfigFile } from "../config/config.js";
-import type { BrowserProfileConfig } from "../config/config.js";
-import { deriveDefaultBrowserCdpPortRange } from "../config/port-defaults.js";
-import { formatErrorMessage } from "../infra/errors.js";
+import type { BrowserProfileConfig } from "openclaw/plugin-sdk/config-contracts";
+import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
+import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import { assertCdpEndpointAllowed } from "./cdp.helpers.js";
 import {
   getOwnBrowserProfile,
@@ -20,43 +13,13 @@ import {
   BrowserResourceExhaustedError,
   BrowserValidationError,
 } from "./errors.js";
-import { allocateCdpPort, allocateColor, getUsedColors, getUsedPorts } from "./profiles.js";
+import { allocateCdpPort, getUsedPorts } from "./profiles.js";
 
-type BrowserControlCredential =
-  | {
-      kind: "token";
-      value: string;
-    }
-  | {
-      kind: "password";
-      value: string;
-    };
-
-const cdpPortRange = (resolved: {
-  controlPort: number;
-  cdpPortRangeStart?: number;
-  cdpPortRangeEnd?: number;
-}): { start: number; end: number } => {
-  const start = resolved.cdpPortRangeStart;
-  const end = resolved.cdpPortRangeEnd;
-  if (
-    typeof start === "number" &&
-    Number.isFinite(start) &&
-    Number.isInteger(start) &&
-    typeof end === "number" &&
-    Number.isFinite(end) &&
-    Number.isInteger(end) &&
-    start > 0 &&
-    end >= start &&
-    end <= 65535
-  ) {
-    return { start, end };
-  }
-
-  return deriveDefaultBrowserCdpPortRange(resolved.controlPort);
+type BrowserControlCredential = {
+  kind: "token" | "password";
+  value: string;
 };
 
-/** Persist the generated browser-control token or password in gateway auth config. */
 export async function persistBrowserControlCredential(
   credential: BrowserControlCredential,
 ): Promise<void> {
@@ -74,11 +37,9 @@ export async function persistBrowserControlCredential(
   });
 }
 
-/** Create and persist a browser profile config with allocated color and CDP port. */
 export async function createBrowserProfileConfig(params: {
   name: string;
   resolved: ResolvedBrowserConfig;
-  color?: string;
   parsedCdpUrl?: string;
   userDataDir?: string;
   driver?: "openclaw" | "existing-session";
@@ -86,17 +47,7 @@ export async function createBrowserProfileConfig(params: {
   const mutation = await mutateConfigFile<BrowserProfileConfig>({
     afterWrite: { mode: "auto" },
     mutate: async (draft) => {
-      const rawDraftBrowser = draft.browser as
-        | (NonNullable<typeof draft.browser> & { cdpPortRangeEnd?: unknown })
-        | undefined;
-      const draftCdpPortRangeEnd =
-        typeof rawDraftBrowser?.cdpPortRangeEnd === "number"
-          ? rawDraftBrowser.cdpPortRangeEnd
-          : undefined;
-      const useRebasedPortRange =
-        draft.gateway?.port !== undefined ||
-        draft.browser?.cdpPortRangeStart !== undefined ||
-        draftCdpPortRangeEnd !== undefined;
+      const useRebasedPortRange = draft.gateway?.port !== undefined;
       const latestResolved = resolveBrowserConfig(
         {
           ...params.resolved,
@@ -115,9 +66,6 @@ export async function createBrowserProfileConfig(params: {
         throw new BrowserConflictError(`profile "${params.name}" already exists`);
       }
 
-      const profileColor =
-        params.color ?? allocateColor(getUsedColors(latestProfileSource.profiles));
-
       let nextProfileConfig: BrowserProfileConfig;
       if (params.parsedCdpUrl) {
         try {
@@ -129,31 +77,26 @@ export async function createBrowserProfileConfig(params: {
           cdpUrl: params.parsedCdpUrl,
           ...(params.driver ? { driver: params.driver } : {}),
           ...(params.driver === "existing-session" ? { attachOnly: true } : {}),
-          color: profileColor,
         };
       } else if (params.driver === "existing-session") {
         nextProfileConfig = {
           driver: params.driver,
           attachOnly: true,
           ...(params.userDataDir ? { userDataDir: params.userDataDir } : {}),
-          color: profileColor,
         };
       } else {
         const usedPorts = getUsedPorts(latestProfileSource.profiles);
         const rangeSource = useRebasedPortRange ? latestRootResolved : params.resolved;
-        const range = cdpPortRange({
-          controlPort: rangeSource.controlPort,
-          cdpPortRangeStart: rangeSource.cdpPortRangeStart,
-          cdpPortRangeEnd: draftCdpPortRangeEnd ?? rangeSource.cdpPortRangeEnd,
+        const cdpPort = allocateCdpPort(usedPorts, {
+          start: rangeSource.cdpPortRangeStart,
+          end: rangeSource.cdpPortRangeEnd,
         });
-        const cdpPort = allocateCdpPort(usedPorts, range);
         if (cdpPort === null) {
           throw new BrowserResourceExhaustedError("no available CDP ports in range");
         }
         nextProfileConfig = {
           cdpPort,
           ...(params.driver ? { driver: params.driver } : {}),
-          color: profileColor,
         };
       }
 
@@ -198,7 +141,6 @@ export async function deleteBrowserProfileConfig(params: {
   });
 }
 
-/** Make one persisted managed profile the default for future browser calls. */
 export async function setDefaultBrowserProfile(name: string): Promise<void> {
   await mutateConfigFile({
     afterWrite: { mode: "auto" },

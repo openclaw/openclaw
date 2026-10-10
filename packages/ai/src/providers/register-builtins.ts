@@ -1,5 +1,5 @@
 // Built-in provider registration installs lazy protocol adapters.
-import type { ApiRegistry } from "../api-registry.js";
+import type { ApiProvider, ApiRegistry } from "../api-registry.js";
 import type {
   Api,
   AssistantMessage,
@@ -10,49 +10,42 @@ import type {
   StreamOptions,
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { projectProviderError, type ProviderErrorProjection } from "../utils/provider-error.js";
+import { createZeroUsage } from "../utils/usage.js";
 
-type ProviderStreams<TApi extends Api, TOptions extends StreamOptions> = {
-  stream: StreamFunction<TApi, TOptions>;
-  streamSimple: StreamFunction<TApi, SimpleStreamOptions>;
-};
+type ProviderStreams<TApi extends Api, TOptions extends StreamOptions> = Omit<
+  ApiProvider<TApi, TOptions>,
+  "api"
+>;
 
 type RegisterBuiltIn = (registry: ApiRegistry) => void;
 
 /** Source id used for built-in API provider registrations. */
 export const BUILT_IN_API_PROVIDER_SOURCE_ID = "core:built-in";
 
-function forwardStream(
+async function forwardStream(
   target: AssistantMessageEventStream,
   source: AsyncIterable<AssistantMessageEvent>,
-): void {
-  void (async () => {
-    for await (const event of source) {
-      target.push(event);
-    }
-    target.end();
-  })();
+): Promise<void> {
+  for await (const event of source) {
+    target.push(event);
+  }
+  target.end();
 }
 
 function createLazyLoadErrorMessage<TApi extends Api>(
   model: Model<TApi>,
   error: unknown,
-): AssistantMessage {
+  signal?: AbortSignal,
+): AssistantMessage & ProviderErrorProjection {
   return {
     role: "assistant",
     content: [],
     api: model.api,
     provider: model.provider,
     model: model.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-    stopReason: "error",
-    errorMessage: error instanceof Error ? error.message : String(error),
+    usage: createZeroUsage(),
+    ...projectProviderError(error, signal),
     timestamp: Date.now(),
   };
 }
@@ -67,8 +60,8 @@ function createLazyStream<TApi extends Api, TOptions extends StreamOptions, TStr
     load()
       .then((streams) => forwardStream(outer, select(streams)(model, context, options)))
       .catch((error: unknown) => {
-        const message = createLazyLoadErrorMessage(model, error);
-        outer.push({ type: "error", reason: "error", error: message });
+        const message = createLazyLoadErrorMessage(model, error, options?.signal);
+        outer.push({ type: "error", reason: message.stopReason, error: message });
         outer.end(message);
       });
     return outer;
@@ -140,6 +133,14 @@ const registerBuiltIns: RegisterBuiltIn[] = [
     "google-generative-ai",
     () => import("./google.js"),
     (module) => ({ stream: module.streamGoogle, streamSimple: module.streamSimpleGoogle }),
+  ),
+  createLazyRegistration(
+    "google-interactions",
+    () => import("./google-interactions.js"),
+    (module) => ({
+      stream: module.streamGoogleInteractions,
+      streamSimple: module.streamSimpleGoogleInteractions,
+    }),
   ),
   createLazyRegistration(
     "google-vertex",

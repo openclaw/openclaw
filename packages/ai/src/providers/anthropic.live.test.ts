@@ -8,7 +8,7 @@ const live = process.env.OPENCLAW_LIVE_TEST === "1" && apiKey.length > 0;
 const describeLive = live ? describe : describe.skip;
 const timeoutMs = 120_000;
 
-const model: Model<"anthropic-messages"> = {
+const model = {
   id: "claude-haiku-4-5",
   name: "Claude Haiku 4.5",
   api: "anthropic-messages",
@@ -19,18 +19,31 @@ const model: Model<"anthropic-messages"> = {
   cost: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
   contextWindow: 200_000,
   maxTokens: 8_192,
-};
+} satisfies Model<"anthropic-messages">;
 
 describeLive("Anthropic provider live", () => {
-  it(
-    "streams a basic response with usage",
-    async () => {
+  it.each(["known", "unknown"])(
+    "streams a basic response with usage and %s model output limit",
+    async (modelOutputLimit) => {
+      const requestModel = { ...model };
+      if (modelOutputLimit === "unknown") {
+        Reflect.deleteProperty(requestModel, "maxTokens");
+      }
+      let sentMaxTokens: unknown;
       const result = await streamSimpleAnthropic(
-        model,
+        requestModel,
         { messages: [{ role: "user", content: "Reply with the single word ok.", timestamp: 0 }] },
-        { apiKey, maxTokens: 32, reasoning: "off" },
+        {
+          apiKey,
+          maxTokens: 360,
+          reasoning: "off",
+          onPayload: (payload) => {
+            sentMaxTokens = (payload as { max_tokens?: number }).max_tokens;
+          },
+        },
       ).result();
 
+      expect(sentMaxTokens).toBe(360);
       expect(result.stopReason).toBe("stop");
       expect(result.usage.output).toBeGreaterThan(0);
     },
@@ -99,7 +112,7 @@ describeLive("Anthropic provider live", () => {
             },
           ],
         },
-        { apiKey, maxTokens: 1, maxRetries: 0 },
+        { apiKey, maxTokens: 1 },
       ).result();
 
       expect(result.stopReason).toBe("error");
@@ -120,7 +133,6 @@ describeLive("Anthropic provider live", () => {
       const result = await streamSimpleAnthropic(model, context, {
         apiKey,
         maxTokens: requestedMaxTokens,
-        maxRetries: 0,
         reasoning: "off",
         onPayload: (payload) => {
           sentMaxTokens = (payload as { max_tokens?: number }).max_tokens;

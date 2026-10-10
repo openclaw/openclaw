@@ -1,0 +1,190 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { EmbeddedFullAccessBlockedReason } from "../../agents/embedded-agent-runner/types.js";
+import { updateAmbientTranscriptWatermark } from "../../config/sessions/ambient-transcript-watermark.js";
+import { isImageMediaFact, type MediaFact } from "../../media/media-facts.js";
+import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import type { MsgContext, TemplateContext } from "../templating.js";
+import type { ElevatedLevel } from "../thinking.js";
+import type { ReplyPayload } from "../types.js";
+import type { ReplyExecOverrides } from "./get-reply-exec-overrides.js";
+import type { TypingController } from "./typing.js";
+
+export function buildPersistedMediaImageLayout(params: {
+  ctx: MsgContext;
+  media: readonly MediaFact[];
+  ctxMediaCount: number;
+  imageOrder?: readonly ("inline" | "offloaded")[];
+  imageSourceIndexes?: readonly (number | undefined)[];
+}): NonNullable<UserTurnInput["mediaImageLayout"]> | undefined {
+  const describedAttachmentIndexes = new Set(
+    params.ctx.MediaUnderstanding?.flatMap((output) =>
+      output.kind === "image.description" ? [output.attachmentIndex] : [],
+    ) ?? [],
+  );
+  const suppressedFactIndexes: number[] = [];
+  const availableFactIndexes = new Set<number>();
+  for (const [factIndex, fact] of params.media.entries()) {
+    if (!isImageMediaFact(fact)) {
+      continue;
+    }
+    if (
+      (factIndex < params.ctxMediaCount && describedAttachmentIndexes.has(factIndex)) ||
+      fact.hydrationSuppressed === true
+    ) {
+      suppressedFactIndexes.push(factIndex);
+    } else {
+      availableFactIndexes.add(factIndex);
+    }
+  }
+  if (availableFactIndexes.size === 0 && suppressedFactIndexes.length === 0) {
+    return undefined;
+  }
+  const canInferByPosition = availableFactIndexes.size === (params.imageOrder?.length ?? 0);
+  const slots = (params.imageOrder ?? []).map((kind, slotIndex) => {
+    const sourceIndex = params.imageSourceIndexes?.[slotIndex];
+    const factIndex =
+      sourceIndex === undefined && canInferByPosition
+        ? availableFactIndexes.values().next().value
+        : sourceIndex;
+    return factIndex !== undefined && availableFactIndexes.delete(factIndex)
+      ? { kind, factIndex }
+      : { kind };
+  });
+  for (const factIndex of availableFactIndexes) {
+    slots.push({ kind: "offloaded", factIndex });
+  }
+  return {
+    slots,
+    ...(suppressedFactIndexes.length > 0 ? { suppressedFactIndexes } : {}),
+  };
+}
+
+/**
+ * Marks prompt-media facts whose original ctx positions are unresolved so every
+ * downstream runner skips them instead of attempting (and failing) hydration.
+ * Uses position identity, not path/URL, so distinct facts sharing the same path
+ * are not conflated.
+ */
+export function suppressUnresolvedPromptMedia(params: {
+  promptMedia: readonly MediaFact[];
+  inboundMediaIndexes: readonly number[];
+  unresolvedSourceIndexes: ReadonlySet<number>;
+}): MediaFact[] {
+  if (params.unresolvedSourceIndexes.size === 0) {
+    return [...params.promptMedia];
+  }
+  return params.promptMedia.map((fact, promptIndex) =>
+    params.inboundMediaIndexes[promptIndex] !== undefined &&
+    params.unresolvedSourceIndexes.has(params.inboundMediaIndexes[promptIndex])
+      ? { ...fact, hydrationSuppressed: true }
+      : fact,
+  );
+}
+
+export function routeThreadIdsMatch(
+  activeThreadId: string | number | undefined,
+  currentThreadId: string | number | undefined,
+): boolean {
+  if (activeThreadId === undefined || currentThreadId === undefined) {
+    return true;
+  }
+  return String(activeThreadId) === String(currentThreadId);
+}
+
+export async function updateRoomEventAmbientTranscriptWatermark(params: {
+  expectedSessionId: string;
+  sessionCtx: TemplateContext;
+  storePath?: string;
+  sessionKey?: string;
+}): Promise<void> {
+  const key = normalizeOptionalString(params.sessionCtx.AmbientTranscriptWatermarkKey);
+  const messageId = normalizeOptionalString(params.sessionCtx.AmbientTranscriptMessageId);
+  if (!params.storePath || !params.sessionKey || !key || !messageId) {
+    return;
+  }
+  // Advance only after the transcript row exists; Telegram windows exclude
+  // everything at or before this durable boundary on later turns.
+  await updateAmbientTranscriptWatermark({
+    storePath: params.storePath,
+    sessionKey: params.sessionKey,
+    key,
+    messageId,
+    timestampMs: params.sessionCtx.AmbientTranscriptTimestampMs,
+    expectedSessionId: params.expectedSessionId,
+  });
+}
+
+export function buildExecOverridePromptHint(params: {
+  execOverrides?: ReplyExecOverrides;
+  elevatedLevel: ElevatedLevel;
+  fullAccessAvailable?: boolean;
+  fullAccessBlockedReason?: EmbeddedFullAccessBlockedReason;
+}): string | undefined {
+  const exec = params.execOverrides;
+  if (!exec && params.elevatedLevel === "off") {
+    return undefined;
+  }
+  const parts = [
+    exec?.host ? `host=${exec.host}` : undefined,
+    exec?.security ? `security=${exec.security}` : undefined,
+    exec?.ask ? `ask=${exec.ask}` : undefined,
+    exec?.node ? `node=${exec.node}` : undefined,
+  ].filter(Boolean);
+  const execLine =
+    parts.length > 0
+      ? `Current session exec defaults: ${parts.join(" ")}.`
+      : "Current session exec defaults: inherited from configured agent/global defaults.";
+  const elevatedLine = `Current elevated level: ${params.elevatedLevel}.`;
+  const fullAccessLine =
+    params.fullAccessAvailable === false
+      ? `Auto-approved /elevated full is unavailable here (${params.fullAccessBlockedReason ?? "runtime"}). Do not ask the user to switch to /elevated full.`
+      : undefined;
+  return [
+    "## Current Exec Session State",
+    execLine,
+    elevatedLine,
+    fullAccessLine,
+    "If the user asks to run a command, use the current exec state above. Do not assume a prior denial still applies after `/exec` or `/elevated` changed.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+const embeddedAgentRuntimeLoader = createLazyImportLoader(
+  () => import("../../agents/embedded-agent.runtime.js"),
+);
+const agentRunnerRuntimeLoader = createLazyImportLoader(() => import("./agent-runner-run.js"));
+const sessionUpdatesRuntimeLoader = createLazyImportLoader(() => import("./session-updates.js"));
+
+export async function prewarmReplyRunRuntimes(): Promise<void> {
+  await Promise.all([
+    sessionUpdatesRuntimeLoader.load(),
+    embeddedAgentRuntimeLoader.load(),
+    agentRunnerRuntimeLoader.load(),
+  ]);
+}
+
+export const loadEmbeddedAgentRuntime = embeddedAgentRuntimeLoader.load;
+export const loadAgentRunnerRuntime = agentRunnerRuntimeLoader.load;
+export const loadSessionUpdatesRuntime = sessionUpdatesRuntimeLoader.load;
+
+export function hasInboundHistoryBody(ctx: TemplateContext): boolean {
+  return (
+    Array.isArray(ctx.InboundHistory) &&
+    ctx.InboundHistory.some((entry) => entry.body.replaceAll("\u0000", "").trim().length > 0)
+  );
+}
+
+export function hasReplyTargetContext(ctx: MsgContext | TemplateContext): boolean {
+  if (normalizeOptionalString(ctx.ReplyToBody)) {
+    return true;
+  }
+  const replyChain = ctx.ReplyChain;
+  return Array.isArray(replyChain) && replyChain.length > 0;
+}
+
+export function finishReplyPreparation(typing: TypingController, createReply?: () => ReplyPayload) {
+  typing.cleanup();
+  return { kind: "reply", reply: createReply?.() } as const;
+}

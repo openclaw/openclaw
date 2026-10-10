@@ -1,48 +1,35 @@
 import { spawn } from "node:child_process";
-import { appendFileSync, createWriteStream } from "node:fs";
-import {
-  agentOutputHasExpectedOkMarker,
-  agentTurnUsedEmbeddedFallback,
-  buildCrossOsReleaseAgentSessionId,
-  buildReleaseAgentTurnArgs,
-  maybeBuildOptionalAgentTurnSkipResult,
-  shouldRetryCrossOsAgentTurnError,
-} from "./agent.ts";
+import { createWriteStream } from "node:fs";
+import { runReleaseAgentTurn } from "./agent.ts";
 import type {
-  AgentTurnResult,
+  CommandResult,
   GatewayHandle,
   LaneCommandParams,
   LaneState,
   ProviderConfig,
 } from "./config.ts";
 import {
-  CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS,
   CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS,
   CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS,
-  CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS,
-  CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE,
-  buildCrossOsReleaseSmokeMemorySlotConfigArgs,
-  buildCrossOsReleaseSmokePluginAllowlist,
-  buildReleaseProviderConfigOverride,
-  gatewayReadyDeadlineMs,
+  buildReleaseModelConfigCommands,
   managedGatewayRestartCommandTimeoutMs,
 } from "./config.ts";
+import { waitForReleaseGateway, type GatewayReadinessParams } from "./gateway-readiness.ts";
 import { installedEntryPath } from "./install.ts";
 import {
-  appendGatewayStatusHelpProbeFallback,
-  buildGatewayStatusArgsFromHelpText,
   buildReleaseOnboardArgs,
   ensureManagedGatewayReady,
+  resolveInstalledGatewayStopArgs,
   runInstalledCli,
 } from "./installed.ts";
-import { readLogFileSize, readLogTextSince } from "./logs.ts";
+import { readLogFileSize } from "./logs.ts";
 import {
   dashboardHtmlMarkerStatus,
   readBoundedCrossOsResponseText,
   resolveDashboardAssetUrls,
   verifyDashboardAssetUrls,
 } from "./network-smokes.ts";
-import { registerActiveChildProcessTree, runCommand, withAllocatedGatewayPort } from "./process.ts";
+import { captureGatewayProcess, registerActiveChildProcessTree, runCommand } from "./process.ts";
 import { logLanePhase } from "./reporting.ts";
 import { formatError, sleep } from "./shared.ts";
 
@@ -64,18 +51,16 @@ export async function runOpenClaw(params: {
 }
 
 export async function runOnboard(params: LaneCommandParams & { providerConfig: ProviderConfig }) {
-  await withAllocatedGatewayPort(params.lane, async () => {
-    await runOpenClaw({
-      lane: params.lane,
-      env: params.env,
-      args: buildReleaseOnboardArgs({
-        authChoice: params.providerConfig.authChoice,
-        gatewayPort: params.lane.gatewayPort,
-        skipHealth: true,
-      }),
-      logPath: params.logPath,
-      timeoutMs: 10 * 60 * 1000,
-    });
+  await runOpenClaw({
+    lane: params.lane,
+    env: params.env,
+    args: buildReleaseOnboardArgs({
+      authChoice: params.providerConfig.authChoice,
+      gatewayPort: params.lane.gatewayPort,
+      skipHealth: true,
+    }),
+    logPath: params.logPath,
+    timeoutMs: 10 * 60 * 1000,
   });
 }
 
@@ -109,7 +94,12 @@ export async function exerciseManagedGatewayLifecycle(
   logLanePhase(params.lane, "gateway-stop");
   await runInstalledCli({
     cliPath: params.cliPath,
-    args: ["gateway", "stop"],
+    args: await resolveInstalledGatewayStopArgs({
+      cliPath: params.cliPath,
+      cwd: params.lane.homeDir,
+      env: params.env,
+      logPath: `${params.logPrefix}-stop-help.log`,
+    }),
     env: params.env,
     cwd: params.lane.homeDir,
     logPath: `${params.logPrefix}-stop.log`,
@@ -134,6 +124,7 @@ export async function exerciseManagedGatewayLifecycle(
 }
 
 export async function startGateway(params: LaneCommandParams): Promise<GatewayHandle> {
+  const launchLogOffset = readLogFileSize(params.logPath);
   const gatewayLog = createWriteStream(params.logPath, { flags: "a" });
   const useProcessGroup = process.platform !== "win32";
   const child = spawn(
@@ -157,182 +148,47 @@ export async function startGateway(params: LaneCommandParams): Promise<GatewayHa
     },
   );
   const activeChildTree = registerActiveChildProcessTree(child);
-  child.stdout?.on("data", (chunk) => {
-    gatewayLog.write(chunk);
-  });
-  child.stderr?.on("data", (chunk) => {
-    gatewayLog.write(chunk);
-  });
-  let logClosed = false;
-  const closeLog = async () => {
-    if (logClosed) {
-      return;
-    }
-    logClosed = true;
-    await new Promise<void>((resolvePromise) => {
-      gatewayLog.once("error", () => resolvePromise());
-      gatewayLog.end(() => resolvePromise());
-    });
-  };
-  child.once("close", () => {
-    activeChildTree.unregister();
-    void closeLog();
-  });
-  child.once("error", () => {
-    activeChildTree.unregister();
-    void closeLog();
-  });
-  return { child, closeLog, logPath: params.logPath };
+  return captureGatewayProcess(
+    child,
+    gatewayLog,
+    { launchLogOffset, logPath: params.logPath },
+    activeChildTree.unregister,
+  );
 }
 
-export async function waitForGateway(params: LaneCommandParams) {
-  const statusArgs = await resolveGatewayStatusArgs(params.lane, params.env, params.logPath);
-  const deadline = Date.now() + gatewayReadyDeadlineMs();
-  while (Date.now() < deadline) {
-    let result;
-    try {
-      result = await runOpenClaw({
-        lane: params.lane,
-        env: params.env,
-        args: statusArgs,
-        logPath: params.logPath,
-        timeoutMs: CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS,
-        check: false,
-      });
-    } catch {
-      await sleep(2_000);
-      continue;
-    }
-    if (result.exitCode === 0) {
-      return;
-    }
-    await sleep(2_000);
-  }
-  throw new Error(`Gateway did not become ready on port ${params.lane.gatewayPort}.`);
-}
-
-async function resolveGatewayStatusArgs(lane: LaneState, env: NodeJS.ProcessEnv, logPath: string) {
-  try {
-    const help = await runOpenClaw({
-      lane,
-      env,
-      args: ["gateway", "status", "--help"],
-      logPath,
-      timeoutMs: 15_000,
-      check: false,
-    });
-    return buildGatewayStatusArgsFromHelpText(`${help.stdout}\n${help.stderr}`);
-  } catch (error) {
-    appendGatewayStatusHelpProbeFallback(logPath, error);
-    return buildGatewayStatusArgsFromHelpText("--require-rpc");
-  }
+export async function waitForGateway(params: GatewayReadinessParams) {
+  await waitForReleaseGateway(
+    params,
+    (args, timeoutMs) => runOpenClaw({ ...params, args, timeoutMs, check: false }),
+    (logPath) => startGateway({ lane: params.lane, env: params.env, logPath }),
+    true,
+  );
 }
 
 export async function runModelsSet(params: LaneCommandParams & { providerConfig: ProviderConfig }) {
-  await runOpenClaw({
-    lane: params.lane,
-    env: params.env,
-    args: ["models", "set", params.providerConfig.model],
-    logPath: params.logPath,
-    timeoutMs: 2 * 60 * 1000,
-  });
-  const providerConfigOverride = buildReleaseProviderConfigOverride(params.providerConfig);
-  if (providerConfigOverride) {
+  for (const args of buildReleaseModelConfigCommands(params.providerConfig)) {
     await runOpenClaw({
       lane: params.lane,
       env: params.env,
-      args: [
-        "config",
-        "set",
-        `models.providers.${params.providerConfig.extensionId}`,
-        JSON.stringify(providerConfigOverride),
-        "--strict-json",
-        "--merge",
-      ],
+      args,
       logPath: params.logPath,
       timeoutMs: 2 * 60 * 1000,
     });
   }
-  await runOpenClaw({
-    lane: params.lane,
-    env: params.env,
-    args: [
-      "config",
-      "set",
-      "plugins.allow",
-      JSON.stringify(buildCrossOsReleaseSmokePluginAllowlist(params.providerConfig)),
-      "--strict-json",
-    ],
-    logPath: params.logPath,
-    timeoutMs: 2 * 60 * 1000,
-  });
-  await runOpenClaw({
-    lane: params.lane,
-    env: params.env,
-    args: buildCrossOsReleaseSmokeMemorySlotConfigArgs(),
-    logPath: params.logPath,
-    timeoutMs: 2 * 60 * 1000,
-  });
-  await runOpenClaw({
-    lane: params.lane,
-    env: params.env,
-    args: ["config", "set", "agents.defaults.skipBootstrap", "true", "--strict-json"],
-    logPath: params.logPath,
-    timeoutMs: 2 * 60 * 1000,
-  });
-  await runOpenClaw({
-    lane: params.lane,
-    env: params.env,
-    args: ["config", "set", "tools.profile", CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE],
-    logPath: params.logPath,
-    timeoutMs: 2 * 60 * 1000,
-  });
 }
 
 export async function runAgentTurn(
   params: LaneCommandParams & { label: string },
-): Promise<AgentTurnResult> {
-  let lastError;
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
-    const sessionId = buildCrossOsReleaseAgentSessionId(params.label, attempt);
-    try {
-      const logOffset = readLogFileSize(params.logPath);
-      const result = await runOpenClaw({
-        lane: params.lane,
-        env: params.env,
-        args: buildReleaseAgentTurnArgs(sessionId),
-        logPath: params.logPath,
-        timeoutMs: (CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS + 60) * 1000,
-      });
-      const logText = readLogTextSince(params.logPath, logOffset);
-      if (!agentOutputHasExpectedOkMarker(result.stdout, { logText })) {
-        throw new Error("Agent output did not contain the expected OK marker.");
-      }
-      if (agentTurnUsedEmbeddedFallback(result, { logText })) {
-        throw new Error("Agent turn used embedded fallback instead of gateway.");
-      }
-      return result;
-    } catch (error) {
-      lastError = error;
-      const skipped = maybeBuildOptionalAgentTurnSkipResult(error, params.logPath, {
-        attempt,
-        maxAttempts: 2,
-      });
-      if (skipped) {
-        return skipped;
-      }
-      if (attempt >= 2 || !shouldRetryCrossOsAgentTurnError(error)) {
-        throw error;
-      }
-      appendFileSync(
-        params.logPath,
-        `\n[release-checks] retrying agent turn after retryable live failure: ${
-          error instanceof Error ? error.message : String(error)
-        }\n`,
-      );
-    }
-  }
-  throw lastError;
+): Promise<CommandResult> {
+  return runReleaseAgentTurn(params, (args, timeoutMs) =>
+    runOpenClaw({
+      lane: params.lane,
+      env: params.env,
+      args,
+      logPath: params.logPath,
+      timeoutMs,
+    }),
+  );
 }
 
 export async function runDashboardSmoke(params: Pick<LaneCommandParams, "lane" | "logPath">) {

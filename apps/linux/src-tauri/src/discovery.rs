@@ -1,5 +1,7 @@
+use crate::remote_gateway::{is_private_address, is_private_host};
 use mdns_sd::{ResolvedService, ServiceDaemon, ServiceEvent};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -59,7 +61,7 @@ impl DiscoveredGateway {
     }
 
     fn advertises_direct_transport(&self) -> bool {
-        // The desktop has no SSH/relay transport, so match the native client's direct-selection gate.
+        // Discovery selections open direct WebViews; they cannot use the manual SSH transport.
         self.tls || self.direct_reachable || self.host.to_ascii_lowercase().ends_with(".ts.net")
     }
 
@@ -72,9 +74,7 @@ impl DiscoveredGateway {
         if addresses.is_empty() {
             return false;
         }
-        self.tls
-            || (is_trusted_plaintext_host(&self.host)
-                && addresses.iter().all(is_trusted_plaintext_address))
+        self.tls || (is_private_host(&self.host) && addresses.iter().all(is_private_address))
     }
 }
 
@@ -157,65 +157,95 @@ impl GatewayDiscovery {
             .values()
             .cloned()
             .collect::<Vec<_>>();
-        gateways.sort_by(|left, right| {
-            left.name
-                .to_ascii_lowercase()
-                .cmp(&right.name.to_ascii_lowercase())
-                .then_with(|| left.host.cmp(&right.host))
-                .then_with(|| left.port.cmp(&right.port))
+        gateways.sort_by_cached_key(|gateway| {
+            (
+                gateway.name.to_ascii_lowercase(),
+                gateway.host.clone(),
+                gateway.port,
+            )
         });
         Ok(gateways)
     }
 
     fn dashboard_url(&self, host: &str, port: u16, tls: bool) -> Result<Url, String> {
+        self.with_gateway(host, port, tls, |gateway| {
+            if !gateway.advertises_direct_transport() {
+                return Err(
+                    "The discovered gateway does not advertise a direct connection.".to_string(),
+                );
+            }
+            if !gateway.has_safe_resolved_address() {
+                return Err(
+                    "The discovered gateway does not have a safe resolved address.".to_string(),
+                );
+            }
+            let mut url = Url::parse(if gateway.tls {
+                "https://localhost/"
+            } else {
+                "http://localhost/"
+            })
+            .expect("static dashboard URL should parse");
+            if gateway.tls {
+                // TLS binds the validated SRV hostname through certificate validation and SNI.
+                url.set_host(Some(&gateway.host))
+                    .map_err(|_| "The discovered gateway returned an invalid host.".to_string())?;
+            } else {
+                // Plaintext has no certificate binding, so navigate to the same private address
+                // validated in this snapshot instead of letting WebKit resolve the hostname again.
+                let address = gateway
+                    .addresses
+                    .iter()
+                    .filter_map(|address| resolved_ip_address(address))
+                    .find(is_private_address)
+                    .ok_or_else(|| {
+                        "The discovered gateway does not have a safe resolved address.".to_string()
+                    })?;
+                url.set_ip_host(address)
+                    .map_err(|_| "The discovered gateway returned an invalid host.".to_string())?;
+            }
+            url.set_port(Some(gateway.port))
+                .map_err(|_| "The discovered gateway returned an invalid port.".to_string())?;
+            Ok(url)
+        })?
+    }
+
+    fn with_gateway<T>(
+        &self,
+        host: &str,
+        port: u16,
+        tls: bool,
+        select: impl FnOnce(&DiscoveredGateway) -> T,
+    ) -> Result<T, String> {
         let host = validated_service_host(host)
             .ok_or_else(|| "The discovered gateway returned an invalid host.".to_string())?;
-        let gateways = self
-            .gateways
+        self.gateways
             .lock()
-            .map_err(|_| "Gateway discovery snapshot is unavailable.".to_string())?;
-        let gateway = gateways
+            .map_err(|_| "Gateway discovery snapshot is unavailable.".to_string())?
             .values()
             .find(|gateway| gateway.host == host && gateway.port == port && gateway.tls == tls)
-            .ok_or_else(|| "The discovered gateway is no longer available.".to_string())?;
-        if !gateway.advertises_direct_transport() {
-            return Err(
-                "The discovered gateway does not advertise a direct connection.".to_string(),
-            );
-        }
-        if !gateway.has_safe_resolved_address() {
-            return Err(
-                "The discovered gateway does not have a safe resolved address.".to_string(),
-            );
-        }
-        let mut url = Url::parse(if gateway.tls {
-            "https://localhost/"
-        } else {
-            "http://localhost/"
-        })
-        .expect("static dashboard URL should parse");
-        if gateway.tls {
-            // TLS binds the validated SRV hostname through certificate validation and SNI.
-            url.set_host(Some(&gateway.host))
-                .map_err(|_| "The discovered gateway returned an invalid host.".to_string())?;
-        } else {
-            // Plaintext has no certificate binding, so navigate to the same private address
-            // validated in this snapshot instead of letting WebKit resolve the hostname again.
-            let address = gateway
-                .addresses
-                .iter()
-                .filter_map(|address| resolved_ip_address(address))
-                .find(is_trusted_plaintext_address)
-                .ok_or_else(|| {
-                    "The discovered gateway does not have a safe resolved address.".to_string()
-                })?;
-            url.set_ip_host(address)
-                .map_err(|_| "The discovered gateway returned an invalid host.".to_string())?;
-        }
-        url.set_port(Some(gateway.port))
-            .map_err(|_| "The discovered gateway returned an invalid port.".to_string())?;
-        Ok(url)
+            .map(select)
+            .ok_or_else(|| "The discovered gateway is no longer available.".to_string())
     }
+}
+
+pub(crate) fn gateway_window_label(url: &Url) -> String {
+    let host = url
+        .host_str()
+        .unwrap_or_default()
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    let route = format!(
+        "{}://{}:{}",
+        url.scheme(),
+        host,
+        url.port_or_known_default().unwrap_or_default()
+    );
+    let digest = Sha256::digest(route.as_bytes());
+    let suffix = digest[..12]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("gateway-{suffix}")
 }
 
 fn apply_event(gateways: &GatewayMap, event: ServiceEvent) -> bool {
@@ -315,32 +345,6 @@ fn resolved_ip_address(address: &str) -> Option<IpAddr> {
         .ok()
 }
 
-fn is_trusted_plaintext_host(host: &str) -> bool {
-    let host = host.to_ascii_lowercase();
-    host == "localhost"
-        || host.ends_with(".local")
-        || host.ends_with(".ts.net")
-        || host
-            .parse::<IpAddr>()
-            .is_ok_and(|address| is_trusted_plaintext_address(&address))
-}
-
-fn is_trusted_plaintext_address(address: &IpAddr) -> bool {
-    match address {
-        IpAddr::V4(address) => {
-            let [first, second, _, _] = address.octets();
-            address.is_loopback()
-                || address.is_private()
-                || address.is_link_local()
-                || (first == 100 && (64..=127).contains(&second))
-        }
-        IpAddr::V6(address) => {
-            let first = address.segments()[0];
-            address.is_loopback() || first & 0xfe00 == 0xfc00 || first & 0xffc0 == 0xfe80
-        }
-    }
-}
-
 fn service_instance_name(fullname: &str) -> String {
     let instance = strip_ascii_suffix(fullname, GATEWAY_SERVICE_TYPE).trim_end_matches('.');
     let name = prettify_instance_name(&decode_bonjour_name(instance));
@@ -420,16 +424,16 @@ pub fn discover_gateways(
 }
 
 #[tauri::command]
-pub fn connect_discovered_gateway(
+pub async fn connect_discovered_gateway(
     app: tauri::AppHandle,
-    desktop: tauri::State<'_, crate::DesktopState>,
     discovery: tauri::State<'_, GatewayDiscovery>,
     host: String,
     port: u16,
     tls: bool,
 ) -> Result<(), String> {
     let url = discovery.dashboard_url(&host, port, tls)?;
-    desktop.navigate_remote(&app, url)
+    let name = discovery.with_gateway(&host, port, tls, |gateway| gateway.name.clone())?;
+    crate::gateway_windows::open_discovered(app, url, name).await
 }
 
 #[cfg(test)]
@@ -471,6 +475,31 @@ mod tests {
         assert_eq!(
             gateway.tailnet_dns.as_deref(),
             Some("studio.example.ts.net")
+        );
+    }
+
+    #[test]
+    fn gateway_window_labels_are_route_scoped_and_stable() {
+        let mixed_case = Url::parse("https://Studio.Local:18789/").unwrap();
+        let canonical = Url::parse("https://studio.local:18789/").unwrap();
+        let trailing_dot = Url::parse("https://studio.local.:18789/").unwrap();
+        let other_port = Url::parse("https://studio.local:18790/").unwrap();
+        let plaintext = Url::parse("http://studio.local:18789/").unwrap();
+        assert_eq!(
+            gateway_window_label(&mixed_case),
+            gateway_window_label(&canonical),
+        );
+        assert_eq!(
+            gateway_window_label(&canonical),
+            gateway_window_label(&trailing_dot)
+        );
+        assert_ne!(
+            gateway_window_label(&canonical),
+            gateway_window_label(&other_port),
+        );
+        assert_ne!(
+            gateway_window_label(&canonical),
+            gateway_window_label(&plaintext),
         );
     }
 

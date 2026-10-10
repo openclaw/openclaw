@@ -1,176 +1,261 @@
-// Session and transcript event subscription handlers.
 import {
   ErrorCodes,
   errorShape,
   validateSessionsMessagesSubscribeParams,
   validateSessionsMessagesUnsubscribeParams,
+  validateSessionsListParams,
+  validateSessionsViewerPresenceSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { canReviewOperatorApproval } from "../operator-approval-authorization.js";
 import { APPROVALS_SCOPE } from "../operator-scopes.js";
-import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-create-service.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
+import { sessionObserverScopeKey } from "../session-observer-model.js";
+import { resolveRequestedSessionStoreTarget } from "../session-store-key.js";
+import { resolveSessionSubscriptionKey } from "../session-subscription-keys.js";
+import { canAccessApprovalSession } from "./approval-record-lookup.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
+import { retainSessionScopedRead } from "./session-scoped-read.js";
+import { sessionsListHandler } from "./sessions-read.js";
 import { requireSessionKey } from "./sessions-shared.js";
-import type { GatewayRequestHandlers } from "./types.js";
-import { assertValidParams } from "./validation.js";
-
-function resolveSessionMessageSubscriptionKey(params: {
-  canonicalKey: string;
-  agentId?: string;
-  defaultAgentId?: string;
-}): string {
-  const agentId = params.agentId
-    ? normalizeAgentId(params.agentId)
-    : params.canonicalKey === "global" && params.defaultAgentId
-      ? normalizeAgentId(params.defaultAgentId)
-      : undefined;
-  // Global session message subscriptions need per-agent channels to avoid cross-agent fanout.
-  return params.canonicalKey === "global" && agentId
-    ? `agent:${agentId}:global`
-    : params.canonicalKey;
-}
+import type { GatewayRequestHandlers, PreparedSessionApprovalReplay } from "./types.js";
+import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
 export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
-  "sessions.subscribe": ({ client, context, respond }) => {
+  "sessions.subscribe": async (options) => {
+    const { client, context, params, respond } = options;
+    if (!assertValidParams(params, validateSessionsListParams, "sessions.subscribe", respond)) {
+      return;
+    }
     const connId = client?.connId?.trim();
     if (connId) {
+      // Subscribe before projecting the snapshot so mutations during the read
+      // become live events; the UI queues one trailing refresh when needed.
       context.subscribeSessionEvents(connId);
     }
-    respond(true, { subscribed: Boolean(connId) }, undefined);
-  },
-  "sessions.unsubscribe": ({ client, context, respond }) => {
-    const connId = client?.connId?.trim();
-    if (connId) {
-      context.unsubscribeSessionEvents(connId);
-    }
-    respond(true, { subscribed: false }, undefined);
-  },
-  "sessions.messages.subscribe": ({ params, client, context, respond }) => {
-    if (
-      !assertValidParams(
-        params,
-        validateSessionsMessagesSubscribeParams,
-        "sessions.messages.subscribe",
-        respond,
-      )
-    ) {
+    if (!connId || Object.keys(params).length === 0) {
+      respond(true, { subscribed: Boolean(connId) }, undefined);
       return;
     }
-    const connId = client?.connId?.trim();
-    const p = params;
-    const key = requireSessionKey(p.key, respond);
-    if (!key) {
-      return;
-    }
-    if (p.includeApprovals === true && !canReviewOperatorApproval(client)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `sessions.messages.subscribe includeApprovals requires a paired device and gateway scope: ${APPROVALS_SCOPE}`,
-        ),
-      );
-      return;
-    }
-    const cfg = context.getRuntimeConfig();
-    const requestedAgent = resolveRequestedGlobalAgentId(cfg, key, p.agentId);
-    if (!requestedAgent.ok) {
-      respond(false, undefined, requestedAgent.error);
-      return;
-    }
-    const requestedAgentId = requestedAgent.agentId;
-    const { canonicalKey } = loadSessionEntry(key, { agentId: requestedAgentId });
-    const subscriptionKey = resolveSessionMessageSubscriptionKey({
-      canonicalKey,
-      agentId: requestedAgentId,
-      defaultAgentId: resolveDefaultAgentId(cfg),
+    await sessionsListHandler({
+      ...options,
+      params,
+      respond: (ok, payload, error, meta) => {
+        respond(ok, ok ? { subscribed: true, list: payload } : undefined, error, meta);
+      },
     });
-    if (connId) {
-      let approvalReplay;
-      if (p.includeApprovals === true) {
-        // Subscribe before the authoritative snapshot so a transition cannot
-        // land between replay and live delivery. Clients reconcile by id.
-        const rollbackSubscription = context.subscribeSessionMessageEvents(
-          connId,
-          subscriptionKey,
-          { includeApprovals: true },
+  },
+  "sessions.viewers.set": defineValidatedGatewayHandler(
+    "sessions.viewers.set",
+    validateSessionsViewerPresenceSetParams,
+    ({ params, client, context, respond }) => {
+      const connId = client?.connId?.trim();
+      const declarations = context.sessionViewerPresence;
+      if (!connId || !declarations) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, "session viewer presence unavailable"),
         );
-        try {
-          approvalReplay = context.listSessionPendingApprovals?.(subscriptionKey, client);
-        } catch (error) {
-          rollbackSubscription?.();
-          context.logGateway.error(`session approval replay failed: ${String(error)}`);
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.UNAVAILABLE, "session approval replay unavailable"),
-          );
-          return;
-        }
-        if (!approvalReplay) {
-          rollbackSubscription?.();
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.UNAVAILABLE, "session approval replay unavailable"),
-          );
-          return;
-        }
-      } else {
-        context.subscribeSessionMessageEvents(connId, subscriptionKey);
+        return;
       }
-      respond(
-        true,
-        {
-          subscribed: true,
-          key: canonicalKey,
-          ...(p.includeApprovals === true
-            ? {
-                approvalReplay,
-              }
-            : {}),
-        },
-        undefined,
-      );
-      return;
-    }
-    respond(true, { subscribed: false, key: canonicalKey }, undefined);
-  },
-  "sessions.messages.unsubscribe": ({ params, client, context, respond }) => {
-    if (
-      !assertValidParams(
+      const cfg = context.getRuntimeConfig();
+      const canonicalKeys: string[] = [];
+      for (const rawKey of params.sessionKeys) {
+        const trimmed = rawKey.trim();
+        if (!trimmed) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, "invalid sessions.viewers.set params"),
+          );
+          return;
+        }
+        const requested = resolveRequestedSessionStoreTarget(
+          cfg,
+          trimmed,
+          parseAgentSessionKey(trimmed) ? undefined : params.agentId,
+        );
+        if (!requested.ok) {
+          respond(false, undefined, requested.error);
+          return;
+        }
+        canonicalKeys.push(
+          sessionObserverScopeKey(requested.value.sessionKey, requested.value.agentId),
+        );
+      }
+      const sessionKeys = declarations.replace(connId, canonicalKeys);
+      respond(true, { sessionKeys }, undefined);
+    },
+  ),
+  "sessions.messages.subscribe": defineValidatedGatewayHandler(
+    "sessions.messages.subscribe",
+    validateSessionsMessagesSubscribeParams,
+    async (options) => {
+      const {
         params,
-        validateSessionsMessagesUnsubscribeParams,
-        "sessions.messages.unsubscribe",
+        client,
+        context,
         respond,
-      )
-    ) {
-      return;
-    }
-    const connId = client?.connId?.trim();
-    const p = params;
-    const key = requireSessionKey(p.key, respond);
-    if (!key) {
-      return;
-    }
-    const cfg = context.getRuntimeConfig();
-    const requestedAgent = resolveRequestedGlobalAgentId(cfg, key, p.agentId);
-    if (!requestedAgent.ok) {
-      respond(false, undefined, requestedAgent.error);
-      return;
-    }
-    const requestedAgentId = requestedAgent.agentId;
-    const { canonicalKey } = loadSessionEntry(key, { agentId: requestedAgentId });
-    const subscriptionKey = resolveSessionMessageSubscriptionKey({
-      canonicalKey,
-      agentId: requestedAgentId,
-      defaultAgentId: resolveDefaultAgentId(cfg),
-    });
-    if (connId) {
-      context.unsubscribeSessionMessageEvents(connId, subscriptionKey);
-    }
-    respond(true, { subscribed: false, key: canonicalKey }, undefined);
-  },
+        sessionMutationAuthorization,
+        hasCurrentClientAuthority,
+        signal,
+        markSessionSubscribePhase: mark,
+      } = options;
+
+      const connId = client?.connId?.trim();
+      const key = requireSessionKey(params.key, respond);
+      if (!key) {
+        return;
+      }
+      if (params.includeApprovals === true && !canReviewOperatorApproval(client)) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `sessions.messages.subscribe includeApprovals requires a paired device and gateway scope: ${APPROVALS_SCOPE}`,
+          ),
+        );
+        return;
+      }
+      const cfg = context.getRuntimeConfig();
+      const requestedAgent = resolveRequestedSessionStoreTarget(cfg, key, params.agentId);
+      if (!requestedAgent.ok) {
+        respond(false, undefined, requestedAgent.error);
+        return;
+      }
+      const { agentId: requestedAgentId, sessionKey: canonicalKey } = requestedAgent.value;
+      const subscriptionKey = resolveSessionSubscriptionKey(canonicalKey, requestedAgentId);
+      let read: ReturnType<typeof retainSessionScopedRead>;
+      let prepared: PreparedSessionApprovalReplay | undefined;
+      let approvalReplay;
+      try {
+        mark?.("retainedReadAdmission");
+        sessionMutationAuthorization?.assertCurrent();
+        read = retainSessionScopedRead(options, canonicalKey, requestedAgentId, {
+          // Activity and labels may change while approvals load without revoking access.
+          allowMetadataChanges: true,
+          requireMaterialized:
+            readGatewayRequestMutationAuthority(options).sessionScope === "operator.sessions.read",
+        });
+        options.sessionMutationCommitGuard?.();
+        if (connId) {
+          mark?.("observerCommit");
+          const includeApprovals = params.includeApprovals === true;
+          // Subscribe before the authoritative snapshot; clients reconcile replay and live events by id.
+          const rollback = context.subscribeSessionMessageEvents(connId, subscriptionKey, {
+            ...(includeApprovals ? { includeApprovals: true } : {}),
+            provisional: true,
+            mode: params.mode,
+            subscriptionId: params.subscriptionId,
+          });
+          const respondReplayUnavailable = () =>
+            respond(
+              false,
+              undefined,
+              errorShape(ErrorCodes.UNAVAILABLE, "session approval replay unavailable"),
+            );
+          try {
+            if (includeApprovals) {
+              mark?.("replayPreparation");
+              prepared = await context.listSessionPendingApprovals?.(subscriptionKey, client);
+              read?.assertCurrent();
+              sessionMutationAuthorization?.assertCurrent();
+              if (prepared && !prepared.isCurrent()) {
+                prepared.release();
+                prepared = await context.listSessionPendingApprovals?.(subscriptionKey, client);
+                read?.assertCurrent();
+                sessionMutationAuthorization?.assertCurrent();
+              }
+              if (prepared && !prepared.isCurrent()) {
+                throw new Error("session approval replay changed during preparation");
+              }
+              mark?.("observerCommit");
+              approvalReplay = prepared?.replay;
+              read?.assertCurrent();
+              sessionMutationAuthorization?.assertCurrent();
+              if (
+                client?.invalidated ||
+                signal?.aborted ||
+                hasCurrentClientAuthority?.() === false ||
+                !canReviewOperatorApproval(client) ||
+                !canAccessApprovalSession({
+                  cfg: context.getRuntimeConfig(),
+                  client,
+                  sessionKey: canonicalKey,
+                  agentId: requestedAgentId,
+                })
+              ) {
+                throw new Error("session approval replay authority is no longer active");
+              }
+            } else {
+              read?.assertCurrent();
+              sessionMutationAuthorization?.assertCurrent();
+              rollback?.commit();
+            }
+          } catch (error) {
+            rollback?.();
+            if (!includeApprovals) {
+              throw error;
+            }
+            context.logGateway.error(`session approval replay failed: ${String(error)}`);
+            respondReplayUnavailable();
+            return;
+          }
+          if (includeApprovals) {
+            if (!approvalReplay) {
+              rollback?.();
+              respondReplayUnavailable();
+              return;
+            }
+            rollback?.commit?.();
+          }
+        }
+        mark?.("response");
+        respond(
+          true,
+          {
+            subscribed: Boolean(connId),
+            key: canonicalKey,
+            agentId: requestedAgentId,
+            ...(connId && params.includeApprovals === true ? { approvalReplay } : {}),
+          },
+          undefined,
+        );
+      } catch (error) {
+        if (!(error instanceof SessionMutationAuthorizationChangedError)) {
+          throw error;
+        }
+        respond(false, undefined, error.error);
+      } finally {
+        mark?.("cleanup");
+        prepared?.release();
+        read?.release();
+      }
+    },
+  ),
+  "sessions.messages.unsubscribe": defineValidatedGatewayHandler(
+    "sessions.messages.unsubscribe",
+    validateSessionsMessagesUnsubscribeParams,
+    ({ params, client, context, respond }) => {
+      const connId = client?.connId?.trim();
+      const key = requireSessionKey(params.key, respond);
+      if (!key) {
+        return;
+      }
+      const cfg = context.getRuntimeConfig();
+      const requestedAgent = resolveRequestedSessionStoreTarget(cfg, key, params.agentId);
+      if (!requestedAgent.ok) {
+        respond(false, undefined, requestedAgent.error);
+        return;
+      }
+      const { agentId: requestedAgentId, sessionKey: canonicalKey } = requestedAgent.value;
+      const subscriptionKey = resolveSessionSubscriptionKey(canonicalKey, requestedAgentId);
+      if (connId) {
+        context.unsubscribeSessionMessageEvents(connId, subscriptionKey, params.subscriptionId);
+      }
+      respond(true, { subscribed: false, key: canonicalKey }, undefined);
+    },
+  ),
 };

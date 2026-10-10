@@ -1,9 +1,6 @@
 // Regression coverage for pruning duplicate user turns before compaction.
 import { describe, expect, it } from "vitest";
-import {
-  collectDuplicateUserMessageEntryIdsForCompaction,
-  dedupeDuplicateUserMessagesForCompaction,
-} from "./compaction-duplicate-user-messages.js";
+import { dedupeDuplicateUserMessagesForCompaction } from "./compaction-duplicate-user-messages.js";
 
 const LONG_PROMPT = "please run the deployment status check for production";
 
@@ -20,16 +17,11 @@ describe("compaction duplicate user message pruning", () => {
   it("drops identical long user messages inside the duplicate window", () => {
     // Whitespace-normalized duplicates inside the short window are transport
     // artifacts; keeping both wastes compaction budget and distorts summaries.
-    const first = {
-      role: "user",
-      content: "please run the deployment status check for production",
-      timestamp: 1_000,
-    } as const;
-    const second = {
-      role: "user",
+    const first = userMessage({ timestamp: 1_000 });
+    const second = userMessage({
       content: " please   run the deployment status check for production ",
       timestamp: 2_000,
-    } as const;
+    });
     const third = {
       role: "assistant",
       content: [{ type: "text", text: "checking" }],
@@ -47,47 +39,14 @@ describe("compaction duplicate user message pruning", () => {
     // high-confidence duplicated long prompts are removed.
     const short = { role: "user", content: "next", timestamp: 1_000 } as const;
     const shortAgain = { role: "user", content: "next", timestamp: 2_000 } as const;
-    const long = {
-      role: "user",
-      content: "please run the deployment status check for production",
-      timestamp: 1_000,
-    } as const;
-    const longLater = {
-      role: "user",
-      content: "please run the deployment status check for production",
-      timestamp: 70_000,
-    } as const;
+    const long = userMessage({ timestamp: 1_000 });
+    const longLater = userMessage({ timestamp: 70_000 });
 
     expect(dedupeDuplicateUserMessagesForCompaction([short, shortAgain])).toEqual([
       short,
       shortAgain,
     ]);
     expect(dedupeDuplicateUserMessagesForCompaction([long, longLater])).toEqual([long, longLater]);
-  });
-
-  it("collects duplicate transcript entry ids from active branch entries", () => {
-    const duplicateIds = collectDuplicateUserMessageEntryIdsForCompaction([
-      {
-        id: "entry-1",
-        type: "message",
-        message: {
-          role: "user",
-          content: "please run the deployment status check for production",
-          timestamp: 1_000,
-        },
-      },
-      {
-        id: "entry-2",
-        type: "message",
-        message: {
-          role: "user",
-          content: "please run the deployment status check for production",
-          timestamp: 2_000,
-        },
-      },
-    ]);
-
-    expect(duplicateIds).toEqual(new Set(["entry-2"]));
   });
 
   it("keys duplicate retries by sender identity (#98310)", () => {
@@ -101,15 +60,79 @@ describe("compaction duplicate user message pruning", () => {
     ]);
   });
 
-  it("keeps same text from different senders in successor transcript pruning", () => {
-    const alice = userMessage({ timestamp: 1_000, senderId: "user-alice" });
-    const bob = userMessage({ timestamp: 2_000, senderId: "user-bob" });
-    const duplicateIds = collectDuplicateUserMessageEntryIdsForCompaction([
-      { id: "entry-alice", type: "message", message: alice },
-      { id: "entry-bob", type: "message", message: bob },
-    ]);
+  it.each([
+    {
+      name: "a completed assistant reply",
+      completedTurn: [
+        { role: "assistant", content: [{ type: "text", text: "first reply" }], timestamp: 1_500 },
+      ],
+    },
+    {
+      name: "an assistant tool call and its result",
+      completedTurn: [
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
+          timestamp: 1_500,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-1",
+          content: [{ type: "text", text: "read complete" }],
+          timestamp: 1_750,
+        },
+      ],
+    },
+  ])("preserves the same user request after $name", ({ completedTurn }) => {
+    const first = userMessage({ timestamp: 1_000 });
+    const next = userMessage({ timestamp: 2_000 });
+    const messages = [first, ...completedTurn, next];
 
-    expect(duplicateIds).toEqual(new Set());
+    expect(dedupeDuplicateUserMessagesForCompaction(messages)).toEqual(messages);
+  });
+
+  it("preserves separately attached media with the same caption", () => {
+    const first = {
+      ...userMessage({ timestamp: 1_000 }),
+      __openclaw: { media: [{ kind: "image", url: "media://inbound/first.png" }] },
+    };
+    const second = {
+      ...userMessage({ timestamp: 2_000 }),
+      __openclaw: { media: [{ kind: "image", url: "media://inbound/second.png" }] },
+    };
+
+    expect(dedupeDuplicateUserMessagesForCompaction([first, second])).toEqual([first, second]);
+  });
+
+  it("preserves an attachment added to a previously text-only request", () => {
+    const first = userMessage({ timestamp: 1_000 });
+    const second = {
+      ...userMessage({ timestamp: 2_000 }),
+      __openclaw: { media: [{ kind: "image", url: "media://inbound/diagram.png" }] },
+    };
+
+    expect(dedupeDuplicateUserMessagesForCompaction([first, second])).toEqual([first, second]);
+  });
+
+  it("preserves prompts with distinct case-sensitive paths", () => {
+    const first = userMessage({
+      timestamp: 1_000,
+      content: "please inspect /srv/Production/ReleaseNotes.md",
+    });
+    const second = userMessage({
+      timestamp: 2_000,
+      content: "please inspect /srv/production/releasenotes.md",
+    });
+
+    expect(dedupeDuplicateUserMessagesForCompaction([first, second])).toEqual([first, second]);
+  });
+
+  it("preserves older requests without losing the newest retry timestamp", () => {
+    const newer = userMessage({ timestamp: 120_000 });
+    const older = userMessage({ timestamp: 1_000 });
+    const retry = userMessage({ timestamp: 121_000 });
+
+    expect(dedupeDuplicateUserMessagesForCompaction([newer, older, retry])).toEqual([newer, older]);
   });
 
   it("does not collide when sender ids and text contain the old delimiter", () => {

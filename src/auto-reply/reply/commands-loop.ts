@@ -1,0 +1,105 @@
+// Handles /loop by rewriting chat sugar into a cron-tool work order.
+import { createHash } from "node:crypto";
+import { AUTOMATIONS_TOOL_NAME } from "../../agents/tools/automations-tool-name.js";
+import { parseDurationMs } from "../../cli/parse-duration.js";
+import { truncateUtf16Safe } from "../../utils.js";
+import { applyCommandTextToParams } from "./command-context-rewrite.js";
+import { commandReply as directReply, defineAuthorizedTextCommand } from "./command-gates.js";
+import { matchSlashCommandToken } from "./commands-slash-parse.js";
+import type { CommandHandler } from "./commands-types.js";
+
+const LOOP_COMMAND_PREFIX = "/loop";
+const LOOP_MIN_INTERVAL_MS = 30_000;
+const LOOP_DEFAULT_INTERVAL_MS = 15 * 60_000;
+const LOOP_NAME_MAX_LENGTH = 40;
+const LOOP_USAGE =
+  "Usage: /loop [interval] <prompt> — repeat a prompt in this chat (e.g. /loop 5m check deploy status). Without interval the loop self-paces between 1m and 1h. /loop status lists loops; /loop stop [name] stops.";
+
+// Conversation tag baked into the job name at create time. Status/stop match by
+// this same tag, so loop discovery never depends on how the cron side resolves
+// session keys (which can differ from the command pipeline's sessionKey and
+// made stored-binding checks misfire in live testing). 48 bits keeps accidental
+// cross-conversation prefix collisions negligible; all matched jobs are still
+// the owner's own agent jobs.
+function loopNamePrefix(sessionKey: string): string {
+  const tag = createHash("sha256").update(sessionKey).digest("hex").slice(0, 12);
+  return `loop[${tag}]`;
+}
+
+const LOOP_FINAL_REPLY_ONLY =
+  "Reply with your normal final message only; do not use the message tool.";
+
+function buildLoopWorkOrder(prompt: string, sessionKey: string, everyMs?: number): string {
+  const shortName = truncateUtf16Safe(prompt.trim(), LOOP_NAME_MAX_LENGTH).trimEnd();
+  const jobName = `${loopNamePrefix(sessionKey)} ${shortName}`;
+  const selfPaced = everyMs === undefined;
+  const lines = [
+    `[loop ${shortName}] ${prompt}`,
+    "Do the task and reply concisely. If nothing changed since the last run, reply briefly.",
+  ];
+  if (selfPaced) {
+    lines.push(
+      `Before replying, ALWAYS call the ${AUTOMATIONS_TOOL_NAME} tool action:"next_check" with in:"<duration>" — pick the next check interval from how active the task is; back off toward 1h when quiet.`,
+    );
+  }
+  const message = lines.join("\n");
+  const pacing = selfPaced ? 'pacing:{min:"1m",max:"1h"},' : "";
+  return `Create a recurring loop with the ${AUTOMATIONS_TOOL_NAME} tool, then confirm in one short line (name + cadence + '/loop stop' hint). ${LOOP_FINAL_REPLY_ONLY} action:"add", job:{name:${JSON.stringify(jobName)},schedule:{kind:"every",everyMs:${everyMs ?? LOOP_DEFAULT_INTERVAL_MS}},${pacing}sessionTarget:"current",payload:{kind:"agentTurn",message:${JSON.stringify(message)}}}.`;
+}
+
+function buildLoopStatusWorkOrder(sessionKey: string): string {
+  const prefix = loopNamePrefix(sessionKey);
+  return `Use the ${AUTOMATIONS_TOOL_NAME} tool (action:"list", includeDisabled:true) and report this conversation's loop jobs — exactly those whose name starts with ${JSON.stringify(prefix)}: name, schedule/pacing, enabled, last run, next run. If none, say so. ${LOOP_FINAL_REPLY_ONLY}`;
+}
+
+function buildLoopStopWorkOrder(name: string, sessionKey: string): string {
+  const prefix = loopNamePrefix(sessionKey);
+  const matchInstruction = name
+    ? ` Among those, match ${JSON.stringify(name)} against the job name.`
+    : "";
+  return `List automations (action:"list", includeDisabled:true) and find this conversation's loops — exactly those whose name starts with ${JSON.stringify(prefix)}.${matchInstruction} Remove the matching jobs with action:"remove" and confirm the removed names. If none matched, say so and list this conversation's active loop names. Never remove a job whose name does not start with ${JSON.stringify(prefix)}. ${LOOP_FINAL_REPLY_ONLY}`;
+}
+
+/** Command handler for conversation-bound recurring loops. */
+export const handleLoopCommand: CommandHandler = defineAuthorizedTextCommand(
+  {
+    label: LOOP_COMMAND_PREFIX,
+    match: (body) => matchSlashCommandToken(body, LOOP_COMMAND_PREFIX),
+    ownerOnly: true,
+  },
+  (params, spec) => {
+    if (!spec || spec.toLowerCase() === "help") {
+      return directReply(LOOP_USAGE);
+    }
+    if (spec.toLowerCase() === "status") {
+      applyCommandTextToParams(params, buildLoopStatusWorkOrder(params.sessionKey));
+      return { shouldContinue: true };
+    }
+
+    const [firstToken = ""] = spec.split(/\s+/u);
+    if (firstToken.toLowerCase() === "stop") {
+      const name = spec.slice(firstToken.length).trim();
+      applyCommandTextToParams(params, buildLoopStopWorkOrder(name, params.sessionKey));
+      return { shouldContinue: true };
+    }
+
+    let everyMs: number | undefined;
+    // Preserve parseDurationMs semantics: bare numbers are milliseconds.
+    // The 30s floor rejects hot-loop values instead of reinterpreting them as prompt text.
+    try {
+      everyMs = parseDurationMs(firstToken);
+    } catch {
+      everyMs = undefined;
+    }
+    if (everyMs !== undefined && everyMs < LOOP_MIN_INTERVAL_MS) {
+      return directReply(`${LOOP_USAGE} Minimum interval 30s.`);
+    }
+    const prompt = everyMs === undefined ? spec : spec.slice(firstToken.length).trim();
+    if (!prompt) {
+      return directReply(LOOP_USAGE);
+    }
+
+    applyCommandTextToParams(params, buildLoopWorkOrder(prompt, params.sessionKey, everyMs));
+    return { shouldContinue: true };
+  },
+);

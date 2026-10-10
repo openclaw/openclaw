@@ -1,4 +1,8 @@
-// Tool Call Repair module implements promote behavior.
+import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  isOffsetInProtectedRanges,
+  type PlainTextToolCallProtectedRangeResolver,
+} from "./contracts.js";
 import { parseStandalonePlainTextToolCallBlocks, type PlainTextToolCallBlock } from "./payload.js";
 
 /** Resolves model-emitted tool names to the exact names allowed by the provider request. */
@@ -21,6 +25,7 @@ export type PlainTextToolCallPromotionOptions = {
   isRetainableNonTextBlock?: (block: Record<string, unknown>) => boolean;
   message: unknown;
   requireAssistantRole?: boolean;
+  resolveProtectedRanges?: PlainTextToolCallProtectedRangeResolver;
   resolveToolName?: ToolCallRepairNameResolver;
 };
 
@@ -41,10 +46,6 @@ export function createPromotedPlainTextToolCallBlock(
     arguments: block.arguments,
     partialArgs: JSON.stringify(block.arguments),
   };
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
 }
 
 /** Emits the complete provider-neutral lifecycle for promoted tool-call blocks. */
@@ -87,6 +88,10 @@ function createPromotedToolCallBlocks(
   if (!parsedBlocks) {
     return undefined;
   }
+  const protectedRanges = options.resolveProtectedRanges?.(text) ?? [];
+  if (parsedBlocks.some((block) => isOffsetInProtectedRanges(block.start, protectedRanges))) {
+    return undefined;
+  }
 
   const resolveToolName = options.resolveToolName ?? resolveExactToolName;
   const toolCalls: Record<string, unknown>[] = [];
@@ -98,27 +103,6 @@ function createPromotedToolCallBlocks(
     toolCalls.push(options.createToolCallBlock(block, resolvedName));
   }
   return toolCalls;
-}
-
-function createPromotedToolCallBlocksFromTextParts(
-  textParts: readonly string[],
-  options: PlainTextToolCallPromotionOptions,
-): Record<string, unknown>[] | undefined {
-  const text = textParts.join("");
-  if (!text.trim()) {
-    return [];
-  }
-  let offset = 0;
-  const lineBreakOffsets = new Set(
-    textParts.slice(0, -1).map((part) => {
-      offset += part.length;
-      return offset;
-    }),
-  );
-  if (lineBreakOffsets.has(text.length)) {
-    lineBreakOffsets.delete(text.length);
-  }
-  return createPromotedToolCallBlocks(text, options, lineBreakOffsets);
 }
 
 /** Promotes text calls and maps source blocks retained in the projected message. */
@@ -137,7 +121,7 @@ export function projectStandalonePlainTextToolCallMessage(
 
   const originalContent = messageRecord.content;
   if (typeof originalContent === "string") {
-    const toolCalls = createPromotedToolCallBlocks(originalContent.trim(), options);
+    const toolCalls = createPromotedToolCallBlocks(originalContent, options);
     if (!toolCalls) {
       return undefined;
     }
@@ -160,7 +144,18 @@ export function projectStandalonePlainTextToolCallMessage(
   let promotedTextBlock = false;
   let textParts: string[] = [];
   const flushTextParts = (): boolean => {
-    const toolCalls = createPromotedToolCallBlocksFromTextParts(textParts, options);
+    const text = textParts.join("");
+    let offset = 0;
+    const lineBreakOffsets = new Set(
+      textParts.slice(0, -1).map((part) => {
+        offset += part.length;
+        return offset;
+      }),
+    );
+    lineBreakOffsets.delete(text.length);
+    const toolCalls = text.trim()
+      ? createPromotedToolCallBlocks(text, options, lineBreakOffsets)
+      : [];
     textParts = [];
     if (!toolCalls) {
       return false;
@@ -193,10 +188,7 @@ export function projectStandalonePlainTextToolCallMessage(
     return undefined;
   }
 
-  if (!flushTextParts()) {
-    return undefined;
-  }
-  if (!promotedTextBlock) {
+  if (!flushTextParts() || !promotedTextBlock) {
     return undefined;
   }
 

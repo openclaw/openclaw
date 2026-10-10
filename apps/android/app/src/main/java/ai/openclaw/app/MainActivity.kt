@@ -34,17 +34,16 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/**
- * Main Android activity that owns Compose UI attachment and runtime UI wiring.
- */
 class MainActivity : AppCompatActivity() {
   private val viewModel: MainViewModel by viewModels()
-  private lateinit var permissionRequester: PermissionRequester
+  private val permissionRequester: PermissionRequester
+    get() = (application as NodeApp).permissionRequester
   private var initializedViewModel: MainViewModel? = null
-  private var didStartViewModelCollectors = false
   private var foreground = false
   private val pendingIntentRouter = MainActivityPendingIntentRouter()
   private val runtimeUiStarter = MainActivityRuntimeUiStarter()
@@ -54,7 +53,7 @@ class MainActivity : AppCompatActivity() {
     super.onCreate(savedInstanceState)
     pendingIntentRouter.setInitialIntent(intent)
     WindowCompat.setDecorFitsSystemWindows(window, false)
-    permissionRequester = PermissionRequester(this)
+    permissionRequester.attach(this)
     if (BuildConfig.DEBUG) {
       screenshotScene = parseAndroidScreenshotModeIntent(intent)
       if (screenshotScene != null) hideScreenshotModeStatusBar()
@@ -81,7 +80,8 @@ class MainActivity : AppCompatActivity() {
         }
       } else {
         val appearanceThemeMode by currentViewModel.appearanceThemeMode.collectAsState()
-        OpenClawTheme(themeMode = appearanceThemeMode) {
+        val appearanceTextScale by currentViewModel.appearanceTextScale.collectAsState()
+        OpenClawTheme(themeMode = appearanceThemeMode, textScale = appearanceTextScale) {
           RootScreen(viewModel = currentViewModel)
         }
       }
@@ -103,7 +103,20 @@ class MainActivity : AppCompatActivity() {
     initializedViewModel?.setForeground(true)
   }
 
+  override fun onTopResumedActivityChanged(isTopResumedActivity: Boolean) {
+    super.onTopResumedActivityChanged(isTopResumedActivity)
+    // minSdk 31 guarantees this callback and lets multi-resume select the actually interactive task.
+    updateTopResumedPermissionHost(
+      isTopResumedActivity = isTopResumedActivity,
+      activate = { permissionRequester.activate(this) },
+      deactivate = { permissionRequester.deactivate(this) },
+      refreshPermissionSurface = { initializedViewModel?.refreshNodePermissionSurface() },
+    )
+  }
+
   override fun onStop() {
+    // Top-resumed ownership normally clears first; this also covers abnormal lifecycle ordering.
+    permissionRequester.deactivate(this)
     foreground = false
     if (shouldNotifyRuntimeBackgrounded(isChangingConfigurations)) {
       initializedViewModel?.setForeground(false)
@@ -111,15 +124,16 @@ class MainActivity : AppCompatActivity() {
     super.onStop()
   }
 
+  override fun onDestroy() {
+    permissionRequester.detach(this)
+    super.onDestroy()
+  }
+
   override fun onNewIntent(intent: android.content.Intent) {
     super.onNewIntent(intent)
     setIntent(intent)
-    val accepted =
-      pendingIntentRouter.onNewIntent(intent) { routedIntent ->
-        initializedViewModel?.let { handleLaunchIntent(viewModel = it, intent = routedIntent) }
-      }
-    if (!accepted) {
-      Toast.makeText(this, nativeString("Too many shares are waiting to be added."), Toast.LENGTH_SHORT).show()
+    pendingIntentRouter.onNewIntent(intent) { routedIntent ->
+      initializedViewModel?.let { handleLaunchIntent(viewModel = it, intent = routedIntent) }
     }
   }
 
@@ -130,9 +144,8 @@ class MainActivity : AppCompatActivity() {
   ) {
     // AppCompatActivity marks this callback @CallSuper; it preserves Fragment and ActivityResult dispatch.
     super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-    if (::permissionRequester.isInitialized) {
-      permissionRequester.onRequestPermissionsResult(requestCode, permissions, grantResults)
-    }
+    permissionRequester.onRequestPermissionsResult(requestCode, permissions, grantResults)
+    initializedViewModel?.refreshNodePermissionSurface()
   }
 
   /**
@@ -149,57 +162,70 @@ class MainActivity : AppCompatActivity() {
     pendingIntentRouter.activate { initialIntent ->
       handleLaunchIntent(viewModel = readyViewModel, intent = initialIntent)
     }
+    readyViewModel.reportShareLaunchOverflow(pendingIntentRouter.takeShareOverflowCount())
   }
 
   /**
    * Starts lifecycle collectors after ViewModel construction so they cannot force early startup.
    */
   private fun startViewModelCollectors(readyViewModel: MainViewModel) {
-    if (didStartViewModelCollectors) return
-    didStartViewModelCollectors = true
-
-    lifecycleScope.launch {
-      repeatOnLifecycle(Lifecycle.State.STARTED) {
-        readyViewModel.preventSleep.collect { enabled ->
-          if (enabled) {
-            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-          } else {
-            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-          }
-        }
+    collectStarted(readyViewModel.preventSleep) { enabled ->
+      if (enabled) {
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+      } else {
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
       }
     }
 
-    lifecycleScope.launch {
-      repeatOnLifecycle(Lifecycle.State.STARTED) {
-        readyViewModel.runtimeInitialized.collect { ready ->
-          runtimeUiStarter.onRuntimeInitialized(
-            ready = ready,
-            startRuntimeUi = screenshotScene == null,
-            attachRuntimeUi = {
-              // Runtime UI helpers need an Activity owner, so attach once after NodeRuntime is ready.
-              readyViewModel.attachRuntimeUi(owner = this@MainActivity, permissionRequester = permissionRequester)
-            },
-            startNodeService = {
-              NodeForegroundService.start(this@MainActivity)
-            },
-          )
-        }
+    collectStarted(readyViewModel.runtimeInitialized) { ready ->
+      runtimeUiStarter.onRuntimeInitialized(
+        ready = ready,
+        startRuntimeUi = screenshotScene == null,
+        attachRuntimeUi = {
+          // Runtime UI helpers need an Activity owner, so attach once after NodeRuntime is ready.
+          readyViewModel.attachRuntimeUi(owner = this@MainActivity, permissionRequester = permissionRequester)
+        },
+        startNodeService = {
+          NodeForegroundService.start(this@MainActivity)
+        },
+      )
+    }
+
+    collectStarted(readyViewModel.shareLaunchOverflowRevision) { revision ->
+      if (revision == 0L) return@collectStarted
+      repeat(readyViewModel.takeShareLaunchOverflowCount()) {
+        Toast
+          .makeText(
+            this@MainActivity,
+            nativeString("Too many shares are waiting to be added."),
+            Toast.LENGTH_SHORT,
+          ).show()
       }
     }
   }
 
-  /**
-   * Routes assistant/app-action intents into ViewModel state without recreating the activity.
-   */
+  private fun <T> collectStarted(
+    states: Flow<T>,
+    onValue: suspend (T) -> Unit,
+  ) {
+    lifecycleScope.launch {
+      repeatOnLifecycle(Lifecycle.State.STARTED) { states.collect(onValue) }
+    }
+  }
+
   private fun handleLaunchIntent(
     viewModel: MainViewModel,
     intent: Intent?,
   ) {
-    parseShareLaunchIntent(intent)?.let { request ->
-      if (!viewModel.handleShareLaunch(request)) {
-        Toast.makeText(this, nativeString("Too many shares are waiting to be added."), Toast.LENGTH_SHORT).show()
-      }
+    if (intent?.isShareLaunchIntent() == true) {
+      viewModel.handleShareLaunchIntent(intent)
+      return
+    }
+    parseConversationNotificationLaunchIntent(
+      intent = intent,
+      takeTarget = (application as NodeApp).conversationNotificationLaunchStore::take,
+    )?.let { target ->
+      viewModel.openConversationNotification(target)
       return
     }
     parseHomeDestinationIntent(intent)?.let { destination ->
@@ -223,6 +249,7 @@ internal class MainActivityPendingIntentRouter {
   private var sequence = 0L
   private val pendingShareIntents = ArrayDeque<PendingLaunchIntent>()
   private var pendingNonShareIntent: PendingLaunchIntent? = null
+  private var shareOverflowCount = 0
 
   fun setInitialIntent(intent: Intent?) {
     if (!activated && intent != null) store(intent = intent, initial = true)
@@ -232,11 +259,9 @@ internal class MainActivityPendingIntentRouter {
     intent: Intent,
     routeIntent: (Intent) -> Unit,
   ): Boolean {
-    if (activated) {
-      routeIntent(intent)
-      return true
-    }
-    return store(intent = intent, initial = false)
+    if (!activated) return store(intent = intent, initial = false)
+    routeIntent(intent)
+    return true
   }
 
   fun discardInitialIntent() {
@@ -256,6 +281,11 @@ internal class MainActivityPendingIntentRouter {
     return true
   }
 
+  fun takeShareOverflowCount(): Int =
+    shareOverflowCount.also {
+      shareOverflowCount = 0
+    }
+
   private fun store(
     intent: Intent,
     initial: Boolean,
@@ -265,7 +295,10 @@ internal class MainActivityPendingIntentRouter {
       pendingNonShareIntent = pending
       return true
     }
-    if (pendingShareIntents.size >= MAX_PENDING_CHAT_SHARES) return false
+    if (pendingShareIntents.size >= MAX_PENDING_CHAT_SHARES) {
+      shareOverflowCount += 1
+      return false
+    }
     pendingShareIntents.addLast(pending)
     return true
   }
@@ -286,6 +319,20 @@ internal class MainActivityInitialIntentGate {
 
 internal fun shouldNotifyRuntimeBackgrounded(isChangingConfigurations: Boolean): Boolean = !isChangingConfigurations
 
+internal fun updateTopResumedPermissionHost(
+  isTopResumedActivity: Boolean,
+  activate: () -> Unit,
+  deactivate: () -> Unit,
+  refreshPermissionSurface: () -> Unit,
+) {
+  if (isTopResumedActivity) {
+    activate()
+    refreshPermissionSurface()
+  } else {
+    deactivate()
+  }
+}
+
 /** Preserves one-shot runtime UI startup while allowing screenshot fixtures to skip side effects. */
 internal class MainActivityRuntimeUiStarter {
   private var completed = false
@@ -297,13 +344,9 @@ internal class MainActivityRuntimeUiStarter {
     startNodeService: () -> Unit,
   ) {
     if (!ready || completed) return
-    if (!startRuntimeUi) {
-      completed = true
-      return
-    }
-    attachRuntimeUi()
+    if (startRuntimeUi) attachRuntimeUi()
     completed = true
-    startNodeService()
+    if (startRuntimeUi) startNodeService()
   }
 }
 

@@ -1,6 +1,7 @@
 // Tests channel approval authorization and sender validation.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createResolvedApproverActionAuthAdapter } from "../plugin-sdk/approval-auth-helpers.js";
+import type { ChannelApprovalKind } from "./approval-types.js";
 
 const getChannelPluginMock = vi.hoisted(() => vi.fn());
 
@@ -39,7 +40,7 @@ describe("resolveApprovalCommandAuthorization", () => {
           approvalKind,
         }: {
           action: "approve";
-          approvalKind: "exec" | "plugin";
+          approvalKind: ChannelApprovalKind;
         }) =>
           approvalKind === "plugin"
             ? { authorized: false, reason: "plugin denied" }
@@ -66,6 +67,25 @@ describe("resolveApprovalCommandAuthorization", () => {
         kind: "plugin",
       }),
     ).toEqual({ authorized: false, reason: "plugin denied", explicit: true });
+  });
+
+  it("rejects commands through an older channel capability with scoped plugin reviewers", () => {
+    const authorizeActorAction = vi.fn(() => ({ authorized: true }));
+    getChannelPluginMock.mockReturnValue({ approvalCapability: { authorizeActorAction } });
+    const cfg = {
+      approvals: { plugin: { slack: { approvers: ["team:T11111111:user:U11111111"] } } },
+    } as never;
+
+    expect(
+      resolveApprovalCommandAuthorization({
+        cfg,
+        channel: "slack",
+        accountId: "default",
+        senderId: "U22222222",
+        kind: "plugin",
+      }),
+    ).toMatchObject({ authorized: false, explicit: true });
+    expect(authorizeActorAction).not.toHaveBeenCalled();
   });
 
   it("uses approvalCapability as the canonical approval auth contract", () => {

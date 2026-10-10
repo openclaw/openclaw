@@ -1,0 +1,477 @@
+/** Read-only recovery inventory and dependency classification; never deletion authority. */
+import fs from "node:fs";
+import path from "node:path";
+import { listAgentIds } from "../agents/agent-scope-config.js";
+import { resolveStateDir } from "../config/paths.js";
+import { isMigrationArchiveArtifactName } from "../config/sessions/artifacts.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isPathInside } from "../infra/path-guards.js";
+import {
+  isPendingMigrationArtifactClaim,
+  sameMigrationArtifact,
+  statMigrationPath,
+  type MigrationArtifact,
+} from "../infra/session-sqlite-migration-artifact.js";
+import { isSessionSqliteMigrationWarning } from "../infra/session-sqlite-migration-issues.js";
+import {
+  canonicalMigrationFilePath,
+  collectRecordedConsumedArchives,
+  hasSymbolicLinkInDirectoryPath,
+  listSessionSqliteMigrationManifestPaths,
+  readSessionSqliteMigrationManifest,
+  resolveSessionSqliteMigrationRunsDir,
+  uniqueRestoreMoves,
+  type ActiveSessionSqliteMigrationRun,
+  type SessionSqliteMigrationMove,
+  type SessionSqliteMigrationTargetManifest,
+} from "../infra/session-sqlite-migration-manifest.js";
+import { withSynchronousArtifactPreservingStateSnapshot } from "../state/openclaw-state-db-readonly.js";
+import {
+  collectUpdateCaptureInventory,
+  readCompletedUpdateHistory,
+} from "./update-capture-cleanup.js";
+import type { RecoveryCleanupArtifact } from "./update-cleanup-types.js";
+
+type Outcome = RecoveryCleanupArtifact["outcome"];
+export type RecoveryCleanupReport = ReturnType<typeof summarizeRecoveryCleanup>;
+export type RecoveryArtifactReference = {
+  run: ActiveSessionSqliteMigrationRun;
+  target: SessionSqliteMigrationTargetManifest;
+  move: SessionSqliteMigrationMove;
+  trusted: boolean;
+  consumedByRestore: boolean;
+};
+
+export function resolveRecoveryArtifact(
+  refs: RecoveryArtifactReference[],
+): MigrationArtifact | undefined {
+  return (
+    refs.find((ref) => ref.move.artifact?.disposal.state === "pending-disposal")?.move.artifact ??
+    refs[0]?.move.artifact
+  );
+}
+
+export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv }) {
+  const stateDir = canonicalMigrationFilePath(path.join(resolveStateDir(params.env), "anchor"));
+  const root = path.dirname(stateDir);
+  const stores = new Set<string>();
+  const archiveDirs = new Set<string>();
+  const agentIds = new Set(listAgentIds(params.cfg));
+  const agentsRoot = path.join(root, "agents");
+  if (statMigrationPath(agentsRoot)?.isDirectory() && !hasSymbolicLinkInDirectoryPath(agentsRoot)) {
+    for (const item of fs.readdirSync(agentsRoot, { withFileTypes: true })) {
+      if (item.isDirectory()) {
+        agentIds.add(item.name);
+        stores.add(path.join(agentsRoot, item.name, "sessions", "sessions.json"));
+      }
+    }
+  }
+  for (const agentId of agentIds) {
+    stores.add(
+      canonicalMigrationFilePath(
+        resolveSessionStorePathCore(params.cfg.session?.store, { agentId, env: params.env }),
+      ),
+    );
+  }
+  stores.add(path.join(root, "sessions", "sessions.json"));
+  for (const store of stores) {
+    if (isPathInside(root, store)) {
+      archiveDirs.add(
+        path.join(path.dirname(path.dirname(store)), "session-sqlite-import-archive"),
+      );
+    }
+  }
+  const references = new Map<string, RecoveryArtifactReference[]>();
+  const manifestPaths: string[] = [];
+  const artifacts: RecoveryCleanupArtifact[] = [];
+  const protectUnmanifested = (filePath: string, bytes: number, reason: string) => {
+    artifacts.push({ path: filePath, runs: [], bytes, outcome: "protected", reason });
+  };
+  let laterUpdateStartedAt = 0;
+  const manifestsDir = resolveSessionSqliteMigrationRunsDir(params.env);
+  if (hasSymbolicLinkInDirectoryPath(manifestsDir)) {
+    artifacts.push({
+      path: manifestsDir,
+      runs: [],
+      bytes: 0,
+      outcome: "blocked",
+      reason: "manifest-directory-alias",
+    });
+  } else {
+    manifestPaths.push(...listSessionSqliteMigrationManifestPaths(params.env));
+    for (const manifestPath of manifestPaths) {
+      const stat = statMigrationPath(manifestPath);
+      const manifest =
+        stat?.isFile() && stat.nlink === 1
+          ? readSessionSqliteMigrationManifest(manifestPath)
+          : undefined;
+      if (!manifest) {
+        artifacts.push({
+          path: manifestPath,
+          runs: [],
+          bytes: stat?.size ?? 0,
+          outcome: "blocked",
+          reason: "unreadable-manifest",
+        });
+        continue;
+      }
+      const run = { manifest, manifestPath };
+      const consumed = collectRecordedConsumedArchives(manifest);
+      for (const target of manifest.targets) {
+        const expected = resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath);
+        const trusted =
+          isPathInside(root, target.sqlitePath) &&
+          isPathInside(root, target.storePath) &&
+          !hasSymbolicLinkInDirectoryPath(path.dirname(target.storePath)) &&
+          !hasSymbolicLinkInDirectoryPath(path.dirname(target.sqlitePath)) &&
+          (target.databaseIdentity ||
+            (stores.has(target.storePath) &&
+              (expected.agentId
+                ? target.sqlitePath === expected.path && target.agentId === expected.agentId
+                : path.dirname(target.sqlitePath) === path.dirname(expected.path))));
+        for (const move of uniqueRestoreMoves(target)) {
+          const refs = references.get(move.archivePath) ?? [];
+          refs.push({
+            run,
+            target,
+            move,
+            trusted: Boolean(trusted),
+            consumedByRestore: consumed.has(move.archivePath),
+          });
+          references.set(move.archivePath, refs);
+        }
+      }
+    }
+  }
+  if ([...references.values()].some((refs) => refs.some((ref) => ref.target.databaseIdentity))) {
+    laterUpdateStartedAt = readCompletedUpdateHistory(params.env)?.latestCompletedStartedAt ?? 0;
+  }
+  for (const [archivePath, refs] of references) {
+    const evidence = resolveRecoveryArtifact(refs);
+    const stat = refs.every((ref) => ref.trusted)
+      ? fs.lstatSync(archivePath, { bigint: true, throwIfNoEntry: false })
+      : undefined;
+    const claim =
+      refs.every((ref) => ref.trusted) && evidence?.disposal.state === "pending-disposal"
+        ? fs.lstatSync(evidence.disposal.claimPath, { bigint: true, throwIfNoEntry: false })
+        : undefined;
+    const current = stat ?? claim;
+    const item: RecoveryCleanupArtifact = {
+      path: archivePath,
+      runs: [...new Set(refs.map((ref) => ref.run.manifest.runId))],
+      bytes: current?.isFile() ? Number(current.size) : (evidence?.identity.size ?? 0),
+      outcome: "candidate",
+      reason: "producer-verified-original",
+      consequence:
+        "Permanently loses rollback to this original, including pre-repair branches and metadata.",
+    };
+    const classify = (outcome: Outcome, reason: string) => {
+      item.outcome = outcome;
+      item.reason = reason;
+    };
+    if (refs.some((ref) => !ref.trusted)) {
+      classify("protected", "unsupported-target-ownership");
+    } else if (refs.every((ref) => ref.move.artifact?.disposal.state === "disposed")) {
+      classify(
+        stat ? "protected" : "disposed",
+        stat ? "recreated-after-disposal" : "intentionally-disposed",
+      );
+    } else if (refs.some((ref) => ref.consumedByRestore)) {
+      classify("protected", "archive-consumed-by-restore");
+    } else if (
+      hasSymbolicLinkInDirectoryPath(path.dirname(archivePath)) ||
+      (stat &&
+        (!stat.isFile() ||
+          (stat.nlink !== 1n && !isPendingMigrationArtifactClaim(archivePath, evidence))))
+    ) {
+      classify("blocked", "artifact-alias-or-nonregular");
+    } else if (
+      refs.some(
+        ({ run, target }) =>
+          !run.manifest.completedAt ||
+          target.validationBeforeArchive !== "passed" ||
+          target.issues.some((issue) => !isSessionSqliteMigrationWarning(issue)),
+      )
+    ) {
+      classify("protected", "incomplete-recovery-operation");
+    } else if (refs.some(({ move }) => move.artifact?.classification === "protected")) {
+      classify(
+        "protected",
+        refs.find((ref) => ref.move.artifact?.classification === "protected")!.move.artifact!
+          .reason,
+      );
+    } else if (
+      refs.some(
+        ({ target, run }) =>
+          target.databaseIdentity &&
+          !(laterUpdateStartedAt > Date.parse(run.manifest.completedAt!)),
+      )
+    ) {
+      classify("protected", "awaiting-later-completed-update");
+    } else if (refs.some(({ move }) => !move.artifact)) {
+      classify("verification-required", "historical-manifest-without-import-proof");
+    } else if (
+      current &&
+      evidence &&
+      (["ino", "mtimeNs", "size"] as const).some(
+        (key) => String(current[key]) !== String(evidence.identity[key]),
+      )
+    ) {
+      // Preview can reject changed metadata without reading history; apply still verifies content.
+      classify("blocked", "artifact-metadata-changed");
+    } else if (
+      refs.some(({ move }) => !sameMigrationArtifact(move.artifact!.identity, evidence!.identity))
+    ) {
+      classify("blocked", "conflicting-artifact-identities");
+    } else if (
+      refs.some(({ move }) => {
+        const receipt = move.artifact?.disposal;
+        return (
+          receipt?.state === "pending-disposal" &&
+          evidence?.disposal.state === "pending-disposal" &&
+          receipt.claimPath !== evidence.disposal.claimPath
+        );
+      })
+    ) {
+      classify("blocked", "conflicting-disposal-claims");
+    } else if (
+      !stat &&
+      !refs.every(
+        ({ move }) =>
+          move.artifact?.disposal.state === "pending-disposal" ||
+          move.artifact?.disposal.state === "disposed",
+      )
+    ) {
+      classify("blocked", "unexpectedly-missing-artifact");
+    } else if (refs.some(({ move }) => move.artifact?.disposal.state === "pending-disposal")) {
+      item.reason = "resume-pending-disposal";
+    }
+    artifacts.push(item);
+  }
+  const recoveryDirectories = new Set([
+    path.join(root, "state"),
+    ...[...stores].flatMap((store) => [
+      path.dirname(store),
+      path.dirname(resolveUnsuffixedSqliteTargetFromSessionStorePath(store).path),
+    ]),
+    ...[...references.values()].flatMap((refs) =>
+      refs.filter((ref) => ref.trusted).map((ref) => path.dirname(ref.target.sqlitePath)),
+    ),
+  ]);
+  for (const directory of recoveryDirectories) {
+    if (
+      !isPathInside(root, directory) ||
+      !statMigrationPath(directory)?.isDirectory() ||
+      hasSymbolicLinkInDirectoryPath(directory)
+    ) {
+      continue;
+    }
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (
+        !isMigrationArchiveArtifactName(entry.name) &&
+        !entry.name.includes(".pre-doctor-") &&
+        !/^.+\.pre-startup-migration-.+\.bak$/.test(entry.name)
+      ) {
+        continue;
+      }
+      const filePath = path.join(directory, entry.name);
+      if (references.has(filePath)) {
+        continue;
+      }
+      protectUnmanifested(
+        filePath,
+        entry.isFile() ? fs.lstatSync(filePath).size : 0,
+        "unmanifested-recovery-original",
+      );
+    }
+  }
+  // Unknown files in known archive directories are visible, with no authority inferred from names.
+  for (const directory of archiveDirs) {
+    if (!statMigrationPath(directory)?.isDirectory() || hasSymbolicLinkInDirectoryPath(directory)) {
+      continue;
+    }
+    for (const item of fs.readdirSync(directory, { withFileTypes: true })) {
+      const filePath = path.join(directory, item.name);
+      if (references.has(filePath) || artifacts.some((artifact) => artifact.path === filePath)) {
+        continue;
+      }
+      if (
+        [...references.values()].some((refs) =>
+          refs.some(
+            ({ move }) =>
+              move.artifact?.disposal.state === "pending-disposal" &&
+              move.artifact.disposal.claimPath === filePath,
+          ),
+        )
+      ) {
+        continue;
+      }
+      protectUnmanifested(
+        filePath,
+        item.isFile() ? fs.lstatSync(filePath).size : 0,
+        "unmanifested-artifact",
+      );
+    }
+  }
+  if (
+    artifacts.some(
+      (item) => item.reason === "unreadable-manifest" || item.reason === "manifest-directory-alias",
+    )
+  ) {
+    for (const item of artifacts) {
+      if (item.outcome === "candidate" || item.outcome === "verification-required") {
+        item.outcome = "blocked";
+        item.reason = "unreadable-recovery-dependencies";
+      }
+    }
+  }
+  protectRecoveryDependencies(artifacts, references);
+  return {
+    references,
+    manifestPaths,
+    report: summarizeRecoveryCleanup(root, artifacts, "preview"),
+  };
+}
+
+export function protectRecoveryDependencies(
+  artifacts: RecoveryCleanupArtifact[],
+  refs: Map<string, RecoveryArtifactReference[]>,
+  adoptions?: ReadonlyMap<RecoveryArtifactReference, MigrationArtifact>,
+): void {
+  const active = (ref: RecoveryArtifactReference) =>
+    (!ref.consumedByRestore || statMigrationPath(ref.move.archivePath) !== undefined) &&
+    ref.move.artifact?.disposal.state !== "disposed";
+  const bySource = new Map<string, string[]>();
+  const dependents = new Map<string, Set<string>>();
+  for (const [archive, references] of refs) {
+    for (const ref of references.filter(active)) {
+      const paths = bySource.get(ref.move.sourcePath) ?? [];
+      paths.push(archive);
+      bySource.set(ref.move.sourcePath, paths);
+    }
+  }
+  const connect = (from: string, to: string) => {
+    const paths = dependents.get(from) ?? new Set<string>();
+    paths.add(to);
+    dependents.set(from, paths);
+  };
+  const backupGroups = new Map<string, string>();
+  for (const [archive, references] of refs) {
+    for (const ref of references.filter(active)) {
+      if (ref.target.databaseIdentity) {
+        const sibling = backupGroups.get(ref.run.manifestPath);
+        if (sibling) {
+          connect(archive, sibling);
+          connect(sibling, archive);
+        } else {
+          backupGroups.set(ref.run.manifestPath, archive);
+        }
+      }
+      const dependencies =
+        (ref.move.artifact ?? adoptions?.get(ref))?.dependencies ??
+        (ref.move.kind === "legacy-store"
+          ? uniqueRestoreMoves(ref.target)
+              .filter((move) => move.kind === "transcript")
+              .map((move) => move.sourcePath)
+          : []);
+      for (const source of dependencies) {
+        for (const dependency of bySource.get(source) ?? []) {
+          connect(archive, dependency);
+          // A retained transcript needs its index even when a prior run published it.
+          // Consumed restore receipts are settled generations, not retained payload dependencies.
+          if (ref.move.kind === "legacy-store") {
+            connect(dependency, archive);
+          }
+        }
+      }
+    }
+  }
+  const byPath = new Map(artifacts.map((item) => [item.path, item]));
+  const retained = artifacts.filter(
+    (item) =>
+      item.outcome !== "candidate" &&
+      item.outcome !== "verification-required" &&
+      item.outcome !== "disposed" &&
+      item.outcome !== "removed",
+  );
+  // Newly protected artifacts join this queue so retention propagates transitively.
+  for (const item of retained) {
+    for (const dependency of dependents.get(item.path) ?? []) {
+      const candidate = byPath.get(dependency);
+      if (candidate?.outcome !== "candidate" && candidate?.outcome !== "verification-required") {
+        continue;
+      }
+      candidate.outcome = "protected";
+      candidate.reason = "retained-recovery-dependency";
+      retained.push(candidate);
+    }
+  }
+}
+
+export function summarizeRecoveryCleanup(
+  stateDir: string,
+  artifacts: RecoveryCleanupArtifact[],
+  status: "preview" | "refused" | "complete" | "blocked",
+) {
+  const totals = {
+    candidateBytes: 0,
+    verificationRequiredBytes: 0,
+    protectedBytes: 0,
+    blockedBytes: 0,
+    removedBytes: 0,
+    removedFiles: 0,
+  };
+  const byteTotals: Partial<Record<Outcome, keyof typeof totals>> = {
+    candidate: "candidateBytes",
+    "verification-required": "verificationRequiredBytes",
+    protected: "protectedBytes",
+    blocked: "blockedBytes",
+    failed: "blockedBytes",
+  };
+  for (const item of artifacts) {
+    const total = byteTotals[item.outcome];
+    if (total) {
+      totals[total] += item.bytes;
+    }
+    if (item.removedBytes !== undefined) {
+      totals.removedBytes += item.removedBytes;
+      totals.removedFiles += 1;
+    }
+  }
+  return { stateDir, artifacts, totals, status };
+}
+
+/** Update cleanup also reviews original-state captures; Doctor's session repair does not. */
+export function collectUpdateCleanupInventory(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}) {
+  return withSynchronousArtifactPreservingStateSnapshot(
+    () => {
+      const inventory = collectRecoveryInventory(params);
+      const captures = collectUpdateCaptureInventory({
+        stateDir: inventory.report.stateDir,
+        env: params.env,
+      });
+      return {
+        ...inventory,
+        captureIdentities: captures.identities,
+        report: summarizeRecoveryCleanup(
+          inventory.report.stateDir,
+          [...inventory.report.artifacts, ...captures.artifacts],
+          "preview",
+        ),
+      };
+    },
+    { current: { env: params.env } },
+  );
+}
+
+export function inspectSessionSqliteRecovery(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): RecoveryCleanupReport {
+  return collectUpdateCleanupInventory(params).report;
+}

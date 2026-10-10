@@ -58,6 +58,7 @@ export {
   replaceConfigFile,
   transformConfigFile,
   transformConfigFileWithRetry,
+  withConfigMutationExclusive,
 } from "./mutate.js";
 export type {
   ConfigMutationCommit,
@@ -73,8 +74,9 @@ export type {
 } from "./mutate.js";
 export {
   assertConfigWriteAllowedInCurrentMode,
+  ConfigReadOnlyError,
   NixModeConfigMutationError,
-} from "./nix-mode-write-guard.js";
+} from "./config-write-guard.js";
 export * from "./paths.js";
 export * from "./recovery-policy.js";
 export * from "./runtime-overrides.js";

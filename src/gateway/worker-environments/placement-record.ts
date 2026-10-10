@@ -1,4 +1,17 @@
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import type { WorkerSessionPlacementState } from "./placement-state.js";
+import type { WorkerWorkspaceResultConflict } from "./workspace-conflicts.js";
+
+export const FORCED_WORKER_ABANDONMENT_ERROR =
+  "Worker result abandoned by forced operator teardown";
+
+export function isForceAbandonedWorkerPlacement(
+  placement: WorkerSessionPlacementRecord | undefined,
+): placement is Extract<WorkerSessionPlacementRecord, { state: "failed" }> {
+  return (
+    placement?.state === "failed" && placement.recoveryError === FORCED_WORKER_ABANDONMENT_ERROR
+  );
+}
 
 export type WorkerSessionPlacementIdentity = {
   sessionId: string;
@@ -6,9 +19,30 @@ export type WorkerSessionPlacementIdentity = {
   sessionKey: string;
 };
 
+export type WorkerSessionPlacementChangeSnapshot = WorkerSessionPlacementIdentity & {
+  state: WorkerSessionPlacementState;
+  generation: number;
+  updatedAtMs: number;
+};
+
+export type WorkerPlacementExecutionMode = "worker-turn" | "remote-exec";
+export type WorkerSessionPlacementDispatchIdentity = WorkerSessionPlacementIdentity & {
+  executionMode?: WorkerPlacementExecutionMode;
+  expectedPlacement?: Pick<
+    WorkerSessionPlacementRecord,
+    "state" | "generation" | "environmentId" | "activeOwnerEpoch"
+  >;
+};
+
 export type WorkerSessionTurnOwner =
-  | { kind: "local" }
+  | { kind: "local"; environmentId?: string; ownerEpoch?: number }
   | { kind: "worker"; environmentId: string; ownerEpoch: number };
+
+export type WorkerTurnClaimInput = WorkerSessionPlacementIdentity & {
+  owner: WorkerSessionTurnOwner;
+  claimId: string;
+  runId: string;
+};
 
 export type WorkerSessionTurnClaim = {
   sessionId: string;
@@ -18,91 +52,103 @@ export type WorkerSessionTurnClaim = {
   owner: WorkerSessionTurnOwner;
 };
 
-export type PersistedTurnClaim =
-  | {
-      owner: "local";
-      claimId: string;
-      runId: string;
-      generation: number;
-      ownerEpoch: null;
-    }
-  | {
-      owner: "worker";
-      claimId: string;
-      runId: string;
-      generation: number;
-      ownerEpoch: number;
-    };
+export function serializeWorkerSessionTurnClaim(claim: WorkerSessionTurnClaim): string {
+  if (claim.owner.kind !== "worker") {
+    throw new Error("Worker claim identity requires a worker-owned claim");
+  }
+  return JSON.stringify([
+    claim.sessionId,
+    claim.owner.environmentId,
+    claim.owner.ownerEpoch,
+    claim.runId,
+    claim.claimId,
+    claim.placementGeneration,
+  ]);
+}
+
+export function sameWorkerSessionTurnClaim(
+  left: WorkerSessionTurnClaim,
+  right: WorkerSessionTurnClaim,
+): boolean {
+  if (left.owner.kind !== "worker" || right.owner.kind !== "worker") {
+    throw new Error("Worker claim identity requires a worker-owned claim");
+  }
+  return (
+    left.sessionId === right.sessionId &&
+    left.owner.environmentId === right.owner.environmentId &&
+    left.owner.ownerEpoch === right.owner.ownerEpoch &&
+    left.runId === right.runId &&
+    left.claimId === right.claimId &&
+    left.placementGeneration === right.placementGeneration
+  );
+}
+
+export function placementTurnOwner(placement: {
+  executionMode: WorkerPlacementExecutionMode;
+  environmentId: string;
+  activeOwnerEpoch: number;
+}): WorkerSessionTurnOwner {
+  return {
+    kind: placement.executionMode === "remote-exec" ? "local" : "worker",
+    environmentId: placement.environmentId,
+    ownerEpoch: placement.activeOwnerEpoch,
+  };
+}
+
+export type PersistedTurnClaim = {
+  claimId: string;
+  runId: string;
+  generation: number;
+} & ({ owner: "local"; ownerEpoch: null } | { owner: "worker"; ownerEpoch: number });
 
 type PersistedLocalTurnClaim = Extract<PersistedTurnClaim, { owner: "local" }>;
-type PersistedWorkerTurnClaim = Extract<PersistedTurnClaim, { owner: "worker" }>;
 
 type PlacementRecordBase<TurnClaim extends PersistedTurnClaim | null> =
   WorkerSessionPlacementIdentity & {
     generation: number;
+    executionMode: WorkerPlacementExecutionMode;
     turnClaim: TurnClaim;
     createdAtMs: number;
     updatedAtMs: number;
     stateChangedAtMs: number;
+    /** Process-local UI projection; deliberately absent from SQLite. */
+    workspaceResultConflict?: WorkerWorkspaceResultConflict;
   };
 
 type UnclaimedPlacementRecordBase = PlacementRecordBase<null>;
 type LocalClaimablePlacementRecordBase = PlacementRecordBase<PersistedLocalTurnClaim | null>;
-type WorkerClaimablePlacementRecordBase = PlacementRecordBase<PersistedWorkerTurnClaim | null>;
 
-export type EmptyWorkerPlacementMetadata = {
-  environmentId: null;
-  activeOwnerEpoch: null;
-  workspaceBaseManifestRef: null;
-  remoteWorkspaceDir: null;
-  workerBundleHash: null;
-  lastTranscriptAckCursor: null;
-  lastLiveEventAckCursor: null;
-  recoveryError: null;
+type EmptyWorkerPlacementMetadata = {
+  [Field in keyof TerminalPlacementMetadata | "recoveryError"]: null;
 };
 
-type ProvisioningPlacementMetadata = {
+type ProvisioningPlacementMetadata = Omit<EmptyWorkerPlacementMetadata, "environmentId"> & {
   environmentId: string | null;
-  activeOwnerEpoch: null;
-  workspaceBaseManifestRef: null;
-  remoteWorkspaceDir: null;
-  workerBundleHash: null;
-  lastTranscriptAckCursor: null;
-  lastLiveEventAckCursor: null;
-  recoveryError: null;
 };
 
-type SyncingPlacementMetadata = {
+type SyncingPlacementMetadata = Omit<
+  EmptyWorkerPlacementMetadata,
+  "environmentId" | "workerBundleHash"
+> & {
   environmentId: string;
-  activeOwnerEpoch: null;
-  workspaceBaseManifestRef: null;
-  remoteWorkspaceDir: null;
   workerBundleHash: string;
-  lastTranscriptAckCursor: null;
-  lastLiveEventAckCursor: null;
-  recoveryError: null;
 };
 
-type StartingPlacementMetadata = {
-  environmentId: string;
-  activeOwnerEpoch: null;
+type StartingPlacementMetadata = Omit<
+  SyncingPlacementMetadata,
+  "workspaceBaseManifestRef" | "remoteWorkspaceDir"
+> & {
   workspaceBaseManifestRef: string;
   remoteWorkspaceDir: string;
-  workerBundleHash: string;
-  lastTranscriptAckCursor: null;
-  lastLiveEventAckCursor: null;
-  recoveryError: null;
 };
 
-export type OwnedWorkerPlacementMetadata = {
-  environmentId: string;
+type OwnedWorkerPlacementMetadata = Omit<
+  StartingPlacementMetadata,
+  "activeOwnerEpoch" | "lastTranscriptAckCursor" | "lastLiveEventAckCursor"
+> & {
   activeOwnerEpoch: number;
-  workspaceBaseManifestRef: string;
-  remoteWorkspaceDir: string;
-  workerBundleHash: string;
   lastTranscriptAckCursor: number | null;
   lastLiveEventAckCursor: number | null;
-  recoveryError: null;
 };
 
 type TerminalPlacementMetadata = {
@@ -113,72 +159,78 @@ type TerminalPlacementMetadata = {
   workerBundleHash: string | null;
   lastTranscriptAckCursor: number | null;
   lastLiveEventAckCursor: number | null;
+  terminalReason: string | null;
+  terminalAtMs: number | null;
 };
 
-type LocalPlacementRecord = LocalClaimablePlacementRecordBase &
-  EmptyWorkerPlacementMetadata & {
-    state: "local";
-  };
-type RequestedPlacementRecord = LocalClaimablePlacementRecordBase &
-  EmptyWorkerPlacementMetadata & {
-    state: "requested";
-  };
-type ProvisioningPlacementRecord = UnclaimedPlacementRecordBase &
-  ProvisioningPlacementMetadata & {
-    state: "provisioning";
-  };
-type SyncingPlacementRecord = UnclaimedPlacementRecordBase &
-  SyncingPlacementMetadata & {
-    state: "syncing";
-  };
-type StartingPlacementRecord = UnclaimedPlacementRecordBase &
-  StartingPlacementMetadata & {
-    state: "starting";
-  };
-type ActivePlacementRecord = WorkerClaimablePlacementRecordBase &
-  OwnedWorkerPlacementMetadata & {
-    state: "active";
-  };
-type DrainingPlacementRecord = WorkerClaimablePlacementRecordBase &
-  OwnedWorkerPlacementMetadata & {
-    state: "draining";
-  };
-type ReconcilingPlacementRecord = UnclaimedPlacementRecordBase &
-  OwnedWorkerPlacementMetadata & {
-    state: "reconciling";
-  };
-type ReclaimedPlacementRecord = UnclaimedPlacementRecordBase &
-  OwnedWorkerPlacementMetadata & {
-    state: "reclaimed";
-  };
-type FailedPlacementRecord = LocalClaimablePlacementRecordBase &
-  TerminalPlacementMetadata & {
-    state: "failed";
-    recoveryError: string;
-  };
-
-export type WorkerSessionPlacementRecord =
-  | LocalPlacementRecord
-  | RequestedPlacementRecord
-  | ProvisioningPlacementRecord
-  | SyncingPlacementRecord
-  | StartingPlacementRecord
-  | ActivePlacementRecord
-  | DrainingPlacementRecord
-  | ReconcilingPlacementRecord
-  | ReclaimedPlacementRecord
-  | FailedPlacementRecord;
-
-export type WorkerSessionPlacementTransitionPatch = {
-  environmentId?: string | null;
-  activeOwnerEpoch?: number | null;
-  workspaceBaseManifestRef?: string | null;
-  remoteWorkspaceDir?: string | null;
-  workerBundleHash?: string | null;
-  lastTranscriptAckCursor?: number | null;
-  lastLiveEventAckCursor?: number | null;
-  recoveryError?: string | null;
+type PlacementRecordsByState = {
+  local: LocalClaimablePlacementRecordBase & EmptyWorkerPlacementMetadata;
+  requested: LocalClaimablePlacementRecordBase & EmptyWorkerPlacementMetadata;
+  provisioning: UnclaimedPlacementRecordBase & ProvisioningPlacementMetadata;
+  syncing: UnclaimedPlacementRecordBase & SyncingPlacementMetadata;
+  starting: UnclaimedPlacementRecordBase & StartingPlacementMetadata;
+  active: PlacementRecordBase<PersistedTurnClaim | null> & OwnedWorkerPlacementMetadata;
+  draining: PlacementRecordBase<PersistedTurnClaim | null> & OwnedWorkerPlacementMetadata;
+  reconciling: UnclaimedPlacementRecordBase & OwnedWorkerPlacementMetadata;
+  reclaimed: UnclaimedPlacementRecordBase &
+    Omit<OwnedWorkerPlacementMetadata, "terminalReason" | "terminalAtMs"> &
+    TerminalPlacementMetadata;
+  failed: LocalClaimablePlacementRecordBase & TerminalPlacementMetadata & { recoveryError: string };
 };
+
+export type WorkerSessionPlacementRecord = {
+  [State in WorkerSessionPlacementState]: PlacementRecordsByState[State] & { state: State };
+}[WorkerSessionPlacementState];
+
+export type WorkerSessionTurnClaimFacts = Pick<
+  WorkerSessionPlacementRecord,
+  | "sessionId"
+  | "agentId"
+  | "sessionKey"
+  | "state"
+  | "executionMode"
+  | "environmentId"
+  | "activeOwnerEpoch"
+  | "turnClaim"
+>;
+
+export function reportPlacementTransition(
+  observer: ((placement: WorkerSessionPlacementRecord) => void) | undefined,
+  placement: WorkerSessionPlacementRecord,
+): void {
+  try {
+    sessionChanges.emit({ agentId: placement.agentId, sessionKey: placement.sessionKey });
+    observer?.(placement);
+  } catch {
+    // Reporting cannot overturn the durable placement transition.
+  }
+}
+
+export function projectWorkerSessionTurnClaim(
+  record: WorkerSessionPlacementRecord,
+): WorkerSessionTurnClaim | undefined {
+  const claim = record.turnClaim;
+  return claim?.owner === "worker" &&
+    (record.state === "active" || record.state === "draining") &&
+    record.environmentId &&
+    record.activeOwnerEpoch === claim.ownerEpoch
+    ? {
+        sessionId: record.sessionId,
+        claimId: claim.claimId,
+        runId: claim.runId,
+        placementGeneration: claim.generation,
+        owner: {
+          kind: "worker",
+          environmentId: record.environmentId,
+          ownerEpoch: claim.ownerEpoch,
+        },
+      }
+    : undefined;
+}
+
+export type WorkerSessionPlacementTransitionPatch = Partial<
+  Omit<TerminalPlacementMetadata, "terminalAtMs"> & { recoveryError: string | null }
+>;
 
 export function required(value: string, field: string): string {
   const normalized = value.trim();
@@ -186,6 +238,18 @@ export function required(value: string, field: string): string {
     throw new Error(`Worker session placement ${field} must be a non-empty string`);
   }
   return normalized;
+}
+
+export function normalizeWorkerPlacementExecutionMode(
+  value: string | null | undefined,
+): WorkerPlacementExecutionMode {
+  if (value === null || value === undefined || value === "worker-turn") {
+    return "worker-turn";
+  }
+  if (value === "remote-exec") {
+    return value;
+  }
+  throw new Error(`Invalid worker placement execution mode: ${value}`);
 }
 
 export function nullableRequired(value: string | null, field: string): string | null {
@@ -199,7 +263,7 @@ export function normalizeEpoch(value: number, field: string): number {
   return value;
 }
 
-export function normalizeCursor(value: number | null, field: string): number | null {
+export function normalizeNonNegativeInteger(value: number | null, field: string): number | null {
   if (value !== null && (!Number.isSafeInteger(value) || value < 0)) {
     throw new Error(`Worker session placement ${field} must be a non-negative safe integer`);
   }
@@ -214,7 +278,7 @@ export function advanceCursor(
   if (value === undefined) {
     return current;
   }
-  const next = normalizeCursor(value, field);
+  const next = normalizeNonNegativeInteger(value, field);
   if (next === null || current === null) {
     return next ?? current;
   }
@@ -239,57 +303,49 @@ export function nextGeneration(generation: number): number {
   return next;
 }
 
-export function localTurnClaimForState(
-  turnClaim: PersistedTurnClaim | null,
-  state: "local" | "requested" | "failed",
-): PersistedLocalTurnClaim | null {
-  if (turnClaim?.owner === "worker") {
-    throw new Error(`Worker turn claim cannot survive placement ${state}`);
-  }
-  return turnClaim;
-}
+type PlacementRecordShape = Pick<
+  WorkerSessionPlacementRecord,
+  "state" | "executionMode" | "turnClaim" | keyof EmptyWorkerPlacementMetadata
+>;
 
-export function workerTurnClaimForState(
-  turnClaim: PersistedTurnClaim | null,
-  state: "active" | "draining",
-): PersistedWorkerTurnClaim | null {
-  if (turnClaim?.owner === "local") {
-    throw new Error(`Local turn claim cannot survive placement ${state}`);
-  }
-  return turnClaim;
-}
+type ValidatedPlacementRecordShape = {
+  [State in WorkerSessionPlacementState]: Pick<
+    Extract<WorkerSessionPlacementRecord, { state: State }>,
+    keyof PlacementRecordShape
+  >;
+}[WorkerSessionPlacementState];
 
-export function unclaimedTurnForState(
-  turnClaim: PersistedTurnClaim | null,
-  state: "provisioning" | "syncing" | "starting" | "reconciling" | "reclaimed",
-): null {
-  if (turnClaim !== null) {
-    throw new Error(`Turn claim cannot survive placement ${state}`);
+export function assertRecordShape(
+  record: PlacementRecordShape,
+): asserts record is ValidatedPlacementRecordShape {
+  const terminal = record.state === "reclaimed" || record.state === "failed";
+  if (terminal) {
+    normalizeNonNegativeInteger(record.terminalAtMs, "terminal timestamp");
+    if (record.state === "reclaimed" && record.terminalReason !== null) {
+      throw new Error("Reclaimed worker session placement cannot retain a terminal reason");
+    }
+    if (record.terminalReason !== null) {
+      required(record.terminalReason, "terminal reason");
+    }
+  } else if (record.terminalReason !== null || record.terminalAtMs !== null) {
+    throw new Error(`Worker session placement ${record.state} cannot retain terminal facts`);
   }
-  return null;
-}
-
-export function assertRecordShape(record: {
-  state: WorkerSessionPlacementState;
-  environmentId: string | null;
-  activeOwnerEpoch: number | null;
-  workspaceBaseManifestRef: string | null;
-  remoteWorkspaceDir: string | null;
-  workerBundleHash: string | null;
-  lastTranscriptAckCursor: number | null;
-  lastLiveEventAckCursor: number | null;
-  recoveryError: string | null;
-  turnClaim: PersistedTurnClaim | null;
-}): void {
+  const emptyWorkspace =
+    record.workspaceBaseManifestRef === null && record.remoteWorkspaceDir === null;
+  const completeWorkspace =
+    record.environmentId &&
+    record.workspaceBaseManifestRef &&
+    record.remoteWorkspaceDir &&
+    record.workerBundleHash;
+  const emptyCursors =
+    record.lastTranscriptAckCursor === null && record.lastLiveEventAckCursor === null;
   if (record.state === "local" || record.state === "requested") {
     if (
       record.environmentId !== null ||
       record.activeOwnerEpoch !== null ||
-      record.workspaceBaseManifestRef !== null ||
-      record.remoteWorkspaceDir !== null ||
+      !emptyWorkspace ||
       record.workerBundleHash !== null ||
-      record.lastTranscriptAckCursor !== null ||
-      record.lastLiveEventAckCursor !== null ||
+      !emptyCursors ||
       record.recoveryError !== null
     ) {
       throw new Error(`Worker session placement ${record.state} cannot retain worker metadata`);
@@ -297,11 +353,9 @@ export function assertRecordShape(record: {
   } else if (record.state === "provisioning") {
     if (
       record.activeOwnerEpoch !== null ||
-      record.workspaceBaseManifestRef !== null ||
-      record.remoteWorkspaceDir !== null ||
+      !emptyWorkspace ||
       record.workerBundleHash !== null ||
-      record.lastTranscriptAckCursor !== null ||
-      record.lastLiveEventAckCursor !== null ||
+      !emptyCursors ||
       record.recoveryError !== null
     ) {
       throw new Error("Provisioning worker session placement can only retain an environment id");
@@ -310,24 +364,18 @@ export function assertRecordShape(record: {
     if (
       !record.environmentId ||
       record.activeOwnerEpoch !== null ||
-      record.workspaceBaseManifestRef !== null ||
-      record.remoteWorkspaceDir !== null ||
+      !emptyWorkspace ||
       !record.workerBundleHash ||
-      record.lastTranscriptAckCursor !== null ||
-      record.lastLiveEventAckCursor !== null ||
+      !emptyCursors ||
       record.recoveryError !== null
     ) {
       throw new Error("Syncing worker session placement requires an environment and bundle");
     }
   } else if (record.state === "starting") {
     if (
-      !record.environmentId ||
+      !completeWorkspace ||
       record.activeOwnerEpoch !== null ||
-      !record.workspaceBaseManifestRef ||
-      !record.remoteWorkspaceDir ||
-      !record.workerBundleHash ||
-      record.lastTranscriptAckCursor !== null ||
-      record.lastLiveEventAckCursor !== null ||
+      !emptyCursors ||
       record.recoveryError !== null
     ) {
       throw new Error("Starting worker session placement requires complete workspace metadata");
@@ -338,14 +386,7 @@ export function assertRecordShape(record: {
     record.state === "reconciling" ||
     record.state === "reclaimed"
   ) {
-    if (
-      !record.environmentId ||
-      record.activeOwnerEpoch === null ||
-      !record.workspaceBaseManifestRef ||
-      !record.remoteWorkspaceDir ||
-      !record.workerBundleHash ||
-      record.recoveryError !== null
-    ) {
+    if (!completeWorkspace || record.activeOwnerEpoch === null || record.recoveryError !== null) {
       throw new Error(
         `Worker session placement ${record.state} requires complete worker ownership`,
       );
@@ -358,14 +399,85 @@ export function assertRecordShape(record: {
     record.turnClaim?.owner === "local" &&
     record.state !== "local" &&
     record.state !== "requested" &&
-    record.state !== "failed"
+    record.state !== "failed" &&
+    !(
+      record.executionMode === "remote-exec" &&
+      (record.state === "active" || record.state === "draining")
+    )
   ) {
     throw new Error("Local turn claim requires local, dispatch-barrier, or failed placement");
   }
   if (record.turnClaim?.owner === "worker") {
     const workerMayFinish = record.state === "active" || record.state === "draining";
-    if (!workerMayFinish || record.activeOwnerEpoch !== record.turnClaim.ownerEpoch) {
+    if (
+      record.executionMode !== "worker-turn" ||
+      !workerMayFinish ||
+      record.activeOwnerEpoch !== record.turnClaim.ownerEpoch
+    ) {
       throw new Error("Worker turn claim requires the active or draining worker owner epoch");
     }
   }
+}
+
+export function isCurrentPlacementTurnClaim(
+  record: WorkerSessionTurnClaimFacts,
+  claim: WorkerSessionTurnClaim,
+): boolean {
+  const persisted = record.turnClaim;
+  if (
+    !persisted ||
+    persisted.claimId !== claim.claimId ||
+    persisted.runId !== claim.runId ||
+    persisted.generation !== claim.placementGeneration ||
+    persisted.owner !== claim.owner.kind
+  ) {
+    return false;
+  }
+  if (claim.owner.kind === "worker") {
+    return (
+      persisted.ownerEpoch === claim.owner.ownerEpoch &&
+      record.executionMode === "worker-turn" &&
+      (record.state === "active" || record.state === "draining") &&
+      record.environmentId === claim.owner.environmentId &&
+      record.activeOwnerEpoch === claim.owner.ownerEpoch
+    );
+  }
+  if (record.state === "active" || record.state === "draining") {
+    return (
+      record.executionMode === "remote-exec" &&
+      claim.owner.environmentId === record.environmentId &&
+      claim.owner.ownerEpoch === record.activeOwnerEpoch
+    );
+  }
+  if (
+    record.state === "failed" &&
+    record.executionMode === "remote-exec" &&
+    record.environmentId &&
+    record.activeOwnerEpoch !== null
+  ) {
+    return (
+      claim.owner.environmentId === record.environmentId &&
+      claim.owner.ownerEpoch === record.activeOwnerEpoch
+    );
+  }
+  return (
+    (record.state === "local" || record.state === "requested" || record.state === "failed") &&
+    claim.owner.environmentId === undefined &&
+    claim.owner.ownerEpoch === undefined
+  );
+}
+
+export function resolvePlacementTurnEnvironment(
+  record: WorkerSessionPlacementRecord,
+  claim: WorkerSessionTurnClaim,
+): { environmentId: string; ownerEpoch: number } | undefined {
+  if (
+    !isCurrentPlacementTurnClaim(record, claim) ||
+    (record.state !== "active" && record.state !== "draining") ||
+    !record.environmentId ||
+    record.activeOwnerEpoch === null
+  ) {
+    return undefined;
+  }
+  return { environmentId: record.environmentId, ownerEpoch: record.activeOwnerEpoch };
 }

@@ -30,3 +30,26 @@ describe("resolveSenderLabel", () => {
     ).toBeNull();
   });
 });
+
+describe("resolveSenderLabel opaque ids", () => {
+  it("never appends an opaque profile UUID to the display label", () => {
+    expect(
+      resolveSenderLabel({
+        name: "steipete",
+        id: "c3e32452-0467-47e5-aafa-233cd5dae29f",
+      }),
+    ).toBe("steipete");
+  });
+
+  it("still appends a disambiguating handle", () => {
+    expect(resolveSenderLabel({ name: "Peter", id: "peter@example.com" })).toBe(
+      "Peter (peter@example.com)",
+    );
+  });
+
+  it("keeps a UUID-only identity as a last-resort label", () => {
+    expect(resolveSenderLabel({ id: "c3e32452-0467-47e5-aafa-233cd5dae29f" })).toBe(
+      "c3e32452-0467-47e5-aafa-233cd5dae29f",
+    );
+  });
+});

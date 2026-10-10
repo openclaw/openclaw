@@ -1,21 +1,23 @@
 import fs from "node:fs/promises";
-import os from "node:os";
+import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 import type { SessionUpstreamProbe } from "openclaw/plugin-sdk/session-catalog";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { resolvePreferredOpenClawTmpDir, tempWorkspace } from "openclaw/plugin-sdk/temp-path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { checkClaudeUpstreamActivity, linkContinued } from "./session-upstream-activity.js";
 
-const tempDirs: string[] = [];
 const CLAUDE_UPSTREAM_SCAN_BYTES = 1024 * 1024;
+const claudeUpstreamWorkspaceRoot = resolvePreferredOpenClawTmpDir();
+
+function createClaudeUpstreamWorkspace(label?: string) {
+  return tempWorkspace({
+    rootDir: claudeUpstreamWorkspaceRoot,
+    prefix: `openclaw-claude-upstream-${label ? `${label}-` : ""}`,
+  });
+}
 
 async function checkActivity(probe: SessionUpstreamProbe) {
   return (await checkClaudeUpstreamActivity([probe]))[0];
-}
-
-async function makeTempDir(prefix: string): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  tempDirs.push(dir);
-  return dir;
 }
 
 function row(params: {
@@ -32,81 +34,33 @@ function row(params: {
   });
 }
 
-afterAll(async () => {
-  await Promise.all(tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
-});
+async function injectFileShortReads(filePath: string, maxBytes: number): Promise<void> {
+  const handle = await fs.open(filePath, "r");
+  const prototype = Object.getPrototypeOf(handle) as FileHandle;
+  const realRead = Object.getOwnPropertyDescriptor(prototype, "read")?.value;
+  await handle.close();
+  if (typeof realRead !== "function") {
+    throw new Error("FileHandle.read is unavailable");
+  }
+  vi.spyOn(prototype, "read").mockImplementation(function (
+    this: FileHandle,
+    buffer: Buffer,
+    offset: number,
+    length: number,
+    position: number,
+  ) {
+    return Reflect.apply(realRead, this, [buffer, offset, Math.min(length, maxBytes), position]);
+  } as FileHandle["read"]);
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
 describe("Claude upstream activity", () => {
-  it("counts only external user rows after the byte marker", async () => {
-    const dir = await makeTempDir("openclaw-claude-upstream-");
-    const filePath = path.join(dir, "thread-1.jsonl");
-    const baseline = `${row({
-      type: "user",
-      content: "already imported",
-      timestamp: "2026-07-13T10:00:00.000Z",
-    })}\n`;
-    await fs.writeFile(filePath, baseline);
-    await fs.appendFile(
-      filePath,
-      [
-        row({
-          type: "assistant",
-          content: "reply",
-          timestamp: "2026-07-13T10:01:00.000Z",
-        }),
-        row({
-          type: "user",
-          content: [{ type: "tool_result", tool_use_id: "tool-1", content: "done" }],
-          timestamp: "2026-07-13T10:02:00.000Z",
-        }),
-        row({
-          type: "user",
-          content: "[Inter-session message] synthetic",
-          timestamp: "2026-07-13T10:03:00.000Z",
-        }),
-        row({
-          type: "user",
-          content:
-            "Continue this conversation using the OpenClaw transcript below as prior session history.\nTreat it as authoritative context for this fresh CLI session.\n\n<conversation_history>\nold\n</conversation_history>\n\n<next_user_message>\nnew\n</next_user_message>",
-          timestamp: "2026-07-13T10:04:00.000Z",
-        }),
-        row({
-          type: "user",
-          content: "real upstream prompt",
-          timestamp: "2026-07-13T10:05:00.000Z",
-        }),
-        "",
-      ].join("\n"),
-    );
-    const probe: SessionUpstreamProbe = {
-      sessionKey: "agent:main:adopted:claude",
-      agentId: "main",
-      threadId: "thread-1",
-      hostId: "gateway:local",
-      upstreamKind: "claude-cli",
-      upstreamRef: { filePath },
-      marker: { size: Buffer.byteLength(baseline) },
-      ownRecentUserTexts: [],
-    };
-
-    const activity = await checkActivity(probe);
-
-    expect(activity).toEqual({
-      kind: "activity",
-      sessionKey: probe.sessionKey,
-      occurredAt: Date.parse("2026-07-13T10:05:00.000Z"),
-      humanTurns: 1,
-      nextMarker: { offset: (await fs.stat(filePath)).size },
-      dedupeId: String((await fs.stat(filePath)).size),
-    });
-  });
-
   it("stats without reading when the file did not grow", async () => {
-    const dir = await makeTempDir("openclaw-claude-upstream-static-");
+    await using workspace = await createClaudeUpstreamWorkspace("static");
+    const dir = workspace.dir;
     const filePath = path.join(dir, "thread-2.jsonl");
     await fs.writeFile(filePath, "{}\n");
     await expect(
@@ -123,58 +77,52 @@ describe("Claude upstream activity", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("filters OpenClaw-authored rows by normalized transcript text", async () => {
-    const dir = await makeTempDir("openclaw-claude-upstream-provenance-");
-    const filePath = path.join(dir, "thread-provenance.jsonl");
+  it("completes bounded scan windows across positional short reads", async () => {
+    await using workspace = await createClaudeUpstreamWorkspace("short-read");
+    const filePath = path.join(workspace.dir, "thread-short-read.jsonl");
     await fs.writeFile(
       filePath,
       `${row({
         type: "user",
-        content: " same   prompt ",
-        timestamp: "2026-07-13T10:05:30.000Z",
+        content: "short-read prompt",
+        timestamp: "2026-07-13T10:05:00.000Z",
       })}\n`,
     );
+    await injectFileShortReads(filePath, 17);
+    const completeSize = (await fs.stat(filePath)).size;
 
     await expect(
       checkActivity({
-        sessionKey: "agent:main:adopted:claude-provenance",
+        sessionKey: "agent:main:adopted:claude-short-read",
         agentId: "main",
-        threadId: "thread-provenance",
+        threadId: "thread-short-read",
         hostId: "gateway:local",
         upstreamKind: "claude-cli",
         upstreamRef: { filePath },
         marker: { offset: 0 },
-        ownRecentUserTexts: ["same prompt"],
+        ownRecentUserTexts: [],
       }),
-    ).resolves.toEqual({
-      kind: "activity",
-      sessionKey: "agent:main:adopted:claude-provenance",
-      humanTurns: 0,
-      nextMarker: { offset: (await fs.stat(filePath)).size },
-    });
-  });
-
-  it("returns missing for an absent local transcript", async () => {
-    const filePath = path.join(
-      await makeTempDir("openclaw-claude-upstream-missing-"),
-      "gone.jsonl",
+    ).resolves.toEqual(
+      expect.objectContaining({
+        kind: "activity",
+        humanTurns: 1,
+        nextMarker: { offset: completeSize },
+      }),
     );
 
+    await fs.appendFile(filePath, '{"type":"user"');
     await expect(
       checkActivity({
-        sessionKey: "agent:main:adopted:claude-missing",
+        sessionKey: "agent:main:adopted:claude-short-read",
         agentId: "main",
-        threadId: "thread-missing",
+        threadId: "thread-short-read",
         hostId: "gateway:local",
         upstreamKind: "claude-cli",
         upstreamRef: { filePath },
-        marker: { offset: 3 },
+        marker: { offset: completeSize },
         ownRecentUserTexts: [],
       }),
-    ).resolves.toEqual({
-      kind: "missing",
-      sessionKey: "agent:main:adopted:claude-missing",
-    });
+    ).resolves.toBeUndefined();
   });
 
   it("swallows non-missing local transcript errors", async () => {
@@ -196,7 +144,8 @@ describe("Claude upstream activity", () => {
   });
 
   it("isolates a missing transcript from healthy probes", async () => {
-    const dir = await makeTempDir("openclaw-claude-upstream-batch-");
+    await using workspace = await createClaudeUpstreamWorkspace("batch");
+    const dir = workspace.dir;
     const filePath = path.join(dir, "thread-good.jsonl");
     await fs.writeFile(
       filePath,
@@ -278,7 +227,8 @@ describe("Claude upstream activity", () => {
   });
 
   it("scans forward across bounded ticks without skipping a middle user row", async () => {
-    const dir = await makeTempDir("openclaw-claude-upstream-chunks-");
+    await using workspace = await createClaudeUpstreamWorkspace("chunks");
+    const dir = workspace.dir;
     const filePath = path.join(dir, "thread-chunks.jsonl");
     const firstRow = `${row({
       type: "assistant",
@@ -326,40 +276,6 @@ describe("Claude upstream activity", () => {
     );
   });
 
-  it("treats legacy size and current offset markers as the same scan cursor", async () => {
-    const dir = await makeTempDir("openclaw-claude-upstream-marker-");
-    const filePath = path.join(dir, "thread-marker.jsonl");
-    const baseline = "{}\n";
-    await fs.writeFile(
-      filePath,
-      `${baseline}${row({
-        type: "user",
-        content: "new prompt",
-        timestamp: "2026-07-13T10:11:00.000Z",
-      })}\n`,
-    );
-    const baseProbe: SessionUpstreamProbe = {
-      sessionKey: "agent:main:adopted:claude-marker",
-      agentId: "main",
-      threadId: "thread-marker",
-      hostId: "gateway:local",
-      upstreamKind: "claude-cli",
-      upstreamRef: { filePath },
-      marker: { offset: Buffer.byteLength(baseline) },
-      ownRecentUserTexts: [],
-    };
-
-    const offsetResult = await checkActivity(baseProbe);
-    const sizeResult = await checkActivity({
-      ...baseProbe,
-      marker: { size: Buffer.byteLength(baseline) },
-    });
-    expect(sizeResult).toEqual(offsetResult);
-    expect(offsetResult?.kind).toBe("activity");
-    if (offsetResult?.kind === "activity") {
-      expect(offsetResult.nextMarker).toEqual({ offset: (await fs.stat(filePath)).size });
-    }
-  });
   it("declines a remote link when the newest history item lacks a UUID", async () => {
     const readRemote = async () => [{ type: "userMessage", text: "hi" }] as never;
     const declined = await linkContinued({

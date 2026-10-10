@@ -2,15 +2,22 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  appendMemoryHostEvent,
-  resolveMemoryHostEventLogPath,
-} from "openclaw/plugin-sdk/memory-host-events";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
-import { listMemoryCorePublicArtifacts } from "./public-artifacts.js";
+import plugin from "../index.js";
 
-describe("listMemoryCorePublicArtifacts", () => {
+const registerMemoryCapability = vi.fn<OpenClawPluginApi["registerMemoryCapability"]>();
+plugin.register(createTestPluginApi({ registerMemoryCapability }));
+const publicArtifacts = registerMemoryCapability.mock.calls[0]?.[0].publicArtifacts;
+if (!publicArtifacts) {
+  throw new Error("expected memory-core to register public artifacts");
+}
+
+describe("memory-core public artifacts", () => {
   let fixtureRoot = "";
 
   beforeAll(async () => {
@@ -24,8 +31,15 @@ describe("listMemoryCorePublicArtifacts", () => {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
+  afterEach(() => {
+    resetPluginStateStoreForTests();
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
   it("lists public workspace artifacts with stable kinds", async () => {
     const workspaceDir = path.join(fixtureRoot, "workspace-stable-kinds");
+    vi.stubEnv("OPENCLAW_STATE_DIR", fixtureRoot);
     await fs.mkdir(path.join(workspaceDir, "memory", "dreaming"), { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# Durable Memory\n", "utf8");
     await fs.writeFile(
@@ -38,6 +52,8 @@ describe("listMemoryCorePublicArtifacts", () => {
       "# Dream Report\n",
       "utf8",
     );
+    const eventStoredAt = Date.parse("2026-04-07T09:30:00.000Z");
+    vi.spyOn(Date, "now").mockReturnValue(eventStoredAt);
     await appendMemoryHostEvent(workspaceDir, {
       type: "memory.recall.recorded",
       timestamp: "2026-04-06T12:00:00.000Z",
@@ -48,11 +64,16 @@ describe("listMemoryCorePublicArtifacts", () => {
 
     const cfg: OpenClawConfig = {
       agents: {
-        list: [{ id: "main", default: true, workspace: workspaceDir }],
+        entries: { main: { workspace: workspaceDir } },
       },
     };
 
-    await expect(listMemoryCorePublicArtifacts({ cfg })).resolves.toEqual([
+    const artifacts = await publicArtifacts.listArtifacts({ cfg });
+    const eventArtifact = artifacts.find((artifact) => artifact.kind === "event-log");
+    if (!eventArtifact) {
+      throw new Error("expected memory event export");
+    }
+    expect(artifacts.filter((artifact) => artifact.kind !== "event-log")).toEqual([
       {
         kind: "memory-root",
         workspaceDir,
@@ -77,15 +98,19 @@ describe("listMemoryCorePublicArtifacts", () => {
         agentIds: ["main"],
         contentType: "markdown",
       },
-      {
-        kind: "event-log",
-        workspaceDir,
-        relativePath: "memory/.dreams/events.jsonl",
-        absolutePath: resolveMemoryHostEventLogPath(workspaceDir),
-        agentIds: ["main"],
-        contentType: "json",
-      },
     ]);
+    expect(eventArtifact.relativePath).toMatch(
+      /^memory\/events\/[a-f0-9]{32}\/memory-host-events\.jsonl$/u,
+    );
+    await expect(fs.readFile(eventArtifact.absolutePath, "utf8")).resolves.toBe(
+      `${JSON.stringify({
+        type: "memory.recall.recorded",
+        timestamp: "2026-04-06T12:00:00.000Z",
+        query: "alpha",
+        resultCount: 0,
+        results: [],
+      })}\n`,
+    );
   });
 
   it("ignores lowercase memory root when only the legacy filename exists", async () => {
@@ -95,10 +120,10 @@ describe("listMemoryCorePublicArtifacts", () => {
 
     const cfg: OpenClawConfig = {
       agents: {
-        list: [{ id: "main", default: true, workspace: workspaceDir }],
+        entries: { main: { workspace: workspaceDir } },
       },
     };
 
-    await expect(listMemoryCorePublicArtifacts({ cfg })).resolves.toStrictEqual([]);
+    await expect(publicArtifacts.listArtifacts({ cfg })).resolves.toStrictEqual([]);
   });
 });

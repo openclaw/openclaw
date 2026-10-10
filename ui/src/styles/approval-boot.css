@@ -1,0 +1,31 @@
+openclaw-approval-page,
+openclaw-question-page {
+  display: block;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.approval-page {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  grid-template-columns: minmax(0, 720px);
+  grid-template-rows: max-content max-content;
+  grid-auto-rows: max-content;
+  height: 100%;
+  min-height: 100%;
+  align-content: start;
+  align-content: safe center;
+  justify-content: center;
+  place-items: center;
+  gap: 18px;
+  overflow: hidden auto;
+  /* The app wrapper owns physical safe areas for both document routes. */
+  padding: 32px 22px 24px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* Only the shared page frame lives here; detailed approval styles load with
+ * the lazy page chunk (see approval-page.ts). */

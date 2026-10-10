@@ -20,7 +20,11 @@ enum TailscaleServeGatewayDiscovery {
         static let live = DiscoveryContext(
             tailscaleStatus: { await readTailscaleStatus() },
             probeHost: { host, timeout in
-                await probeHostForGatewayChallenge(host: host, timeout: timeout)
+                var components = URLComponents()
+                components.scheme = "wss"
+                components.host = host
+                guard let url = components.url else { return false }
+                return await GatewayDiscoveryProbe.shared.hasGatewayChallenge(url: url, timeout: timeout)
             })
     }
 
@@ -30,7 +34,7 @@ enum TailscaleServeGatewayDiscovery {
     {
         guard timeoutSeconds > 0 else { return [] }
         guard let statusJson = await context.tailscaleStatus(),
-              let status = parseStatus(statusJson)
+              let status = try? JSONDecoder().decode(TailscaleStatus.self, from: Data(statusJson.utf8))
         else {
             return []
         }
@@ -41,7 +45,7 @@ enum TailscaleServeGatewayDiscovery {
         let deadline = Date().addingTimeInterval(timeoutSeconds)
         let perProbeTimeout = min(self.defaultProbeTimeoutSeconds, max(0.5, timeoutSeconds * 0.45))
 
-        var byHost: [String: TailscaleServeGatewayBeacon] = [:]
+        var beacons: [TailscaleServeGatewayBeacon] = []
         await withTaskGroup(of: TailscaleServeGatewayBeacon?.self) { group in
             var index = 0
             let workerCount = min(self.probeConcurrency, candidates.count)
@@ -52,19 +56,9 @@ enum TailscaleServeGatewayDiscovery {
                 index += 1
                 group.addTask {
                     let remaining = deadline.timeIntervalSinceNow
-                    if remaining <= 0 {
-                        return nil
-                    }
+                    guard remaining > 0 else { return nil }
                     let timeout = min(perProbeTimeout, remaining)
-                    let reachable = await context.probeHost(candidate.dnsName, timeout)
-                    if !reachable {
-                        return nil
-                    }
-                    return TailscaleServeGatewayBeacon(
-                        displayName: candidate.displayName,
-                        tailnetDns: candidate.dnsName,
-                        host: candidate.dnsName,
-                        port: 443)
+                    return await context.probeHost(candidate.host, timeout) ? candidate : nil
                 }
             }
 
@@ -74,45 +68,34 @@ enum TailscaleServeGatewayDiscovery {
 
             while let beacon = await group.next() {
                 if let beacon {
-                    byHost[beacon.host.lowercased()] = beacon
+                    beacons.append(beacon)
                 }
                 submitOne()
             }
         }
 
-        return byHost.values.sorted {
+        return beacons.sorted {
             $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
         }
     }
 
-    private struct Candidate {
-        var dnsName: String
-        var displayName: String
-    }
-
-    private static func collectCandidates(status: TailscaleStatus) -> [Candidate] {
+    private static func collectCandidates(status: TailscaleStatus) -> [TailscaleServeGatewayBeacon] {
         let selfDns = self.normalizeDnsName(status.selfNode?.dnsName)
-        var out: [Candidate] = []
+        var out: [TailscaleServeGatewayBeacon] = []
         var seen = Set<String>()
 
         for node in status.peer.values {
-            if node.online == false {
-                continue
-            }
-            guard let dnsName = normalizeDnsName(node.dnsName) else {
-                continue
-            }
-            if dnsName == selfDns {
-                continue
-            }
-            if seen.contains(dnsName) {
-                continue
-            }
-            seen.insert(dnsName)
+            guard node.online != false,
+                  let dnsName = normalizeDnsName(node.dnsName),
+                  dnsName != selfDns,
+                  seen.insert(dnsName).inserted
+            else { continue }
 
-            out.append(Candidate(
-                dnsName: dnsName,
-                displayName: self.displayName(hostName: node.hostName, dnsName: dnsName)))
+            out.append(TailscaleServeGatewayBeacon(
+                displayName: self.displayName(hostName: node.hostName, dnsName: dnsName),
+                tailnetDns: dnsName,
+                host: dnsName,
+                port: 443))
 
             if out.count >= self.maxCandidates {
                 break
@@ -123,14 +106,7 @@ enum TailscaleServeGatewayDiscovery {
     }
 
     private static func displayName(hostName: String?, dnsName: String) -> String {
-        if let hostName {
-            let trimmed = hostName.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty { return trimmed }
-        }
-        return dnsName
-            .split(separator: ".")
-            .first
-            .map(String.init) ?? dnsName
+        hostName?.trimmedNonEmpty ?? dnsName.split(separator: ".").first.map(String.init) ?? dnsName
     }
 
     private static func normalizeDnsName(_ raw: String?) -> String? {
@@ -143,21 +119,14 @@ enum TailscaleServeGatewayDiscovery {
     }
 
     private static func readTailscaleStatus() async -> String? {
-        let candidates = [
-            "/usr/local/bin/tailscale",
-            "/opt/homebrew/bin/tailscale",
-            "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
-            "tailscale",
-        ]
-
-        for candidate in candidates {
-            guard let executable = self.resolveExecutablePath(candidate) else { continue }
-            if let stdout = await self.run(path: executable, args: ["status", "--json"], timeout: 1.0) {
-                return stdout
-            }
+        await BoundedCommand.tailscaleStatus { candidate in
+            guard let executable = self.resolveExecutablePath(candidate) else { return nil }
+            return await BoundedCommand.run(
+                path: executable,
+                arguments: ["status", "--json"],
+                environment: self.commandEnvironment(),
+                timeout: 1.0)
         }
-
-        return nil
     }
 
     static func resolveExecutablePath(
@@ -168,14 +137,11 @@ enum TailscaleServeGatewayDiscovery {
         guard !trimmed.isEmpty else { return nil }
 
         let fileManager = FileManager.default
-        let hasPathSeparator = trimmed.contains("/")
-        if hasPathSeparator {
+        if trimmed.contains("/") {
             return fileManager.isExecutableFile(atPath: trimmed) ? trimmed : nil
         }
 
-        let pathRaw = env["PATH"] ?? ""
-        let entries = pathRaw.split(separator: ":").map(String.init)
-        for entry in entries {
+        for entry in (env["PATH"] ?? "").split(separator: ":") {
             let dir = entry.trimmingCharacters(in: .whitespacesAndNewlines)
             if dir.isEmpty { continue }
             let fullPath = URL(fileURLWithPath: dir)
@@ -187,43 +153,6 @@ enum TailscaleServeGatewayDiscovery {
         }
 
         return nil
-    }
-
-    private static func run(path: String, args: [String], timeout: TimeInterval) async -> String? {
-        await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .utility).async {
-                continuation.resume(returning: self.runBlocking(path: path, args: args, timeout: timeout))
-            }
-        }
-    }
-
-    private static func runBlocking(path: String, args: [String], timeout: TimeInterval) -> String? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: path)
-        process.arguments = args
-        process.environment = self.commandEnvironment()
-        let outPipe = Pipe()
-        process.standardOutput = outPipe
-        process.standardError = FileHandle.nullDevice
-
-        do {
-            try process.run()
-        } catch {
-            return nil
-        }
-
-        let deadline = Date().addingTimeInterval(timeout)
-        while process.isRunning, Date() < deadline {
-            Thread.sleep(forTimeInterval: 0.02)
-        }
-        if process.isRunning {
-            process.terminate()
-        }
-        process.waitUntilExit()
-
-        let data = (try? outPipe.fileHandleForReading.readToEnd()) ?? Data()
-        let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return output?.isEmpty == false ? output : nil
     }
 
     static func commandEnvironment(
@@ -238,28 +167,38 @@ enum TailscaleServeGatewayDiscovery {
         }
         return env
     }
+}
 
-    private static func parseStatus(_ raw: String) -> TailscaleStatus? {
-        guard let data = raw.data(using: .utf8) else { return nil }
-        return try? JSONDecoder().decode(TailscaleStatus.self, from: data)
+/// Owns the credential-free transport used to identify candidate Gateways.
+final class GatewayDiscoveryProbe: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    static let shared = GatewayDiscoveryProbe()
+
+    private lazy var session: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        // Candidate discovery must neither inherit credentials nor collect them
+        // from one peer for a later probe.
+        configuration.httpShouldSetCookies = false
+        configuration.httpCookieStorage = nil
+        configuration.urlCredentialStorage = nil
+        configuration.urlCache = nil
+        return URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+    }()
+
+    override private init() {
+        super.init()
+        // Initialize once before concurrent peer probes access the shared session.
+        _ = self.session
     }
 
-    private static func probeHostForGatewayChallenge(host: String, timeout: TimeInterval) async -> Bool {
-        var components = URLComponents()
-        components.scheme = "wss"
-        components.host = host
-        guard let url = components.url else { return false }
-
-        let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = max(0.5, timeout)
-        config.timeoutIntervalForResource = max(0.5, timeout)
-        let session = URLSession(configuration: config)
-        let task = session.webSocketTask(with: url)
+    func hasGatewayChallenge(url: URL, timeout: TimeInterval) async -> Bool {
+        guard !Task.isCancelled, timeout > 0, url.user == nil, url.password == nil else { return false }
+        // Discovery fans out and retries during startup. Reuse the session;
+        // AsyncTimeout owns each deadline and every websocket task owns its cancel.
+        let task = self.session.webSocketTask(with: url)
         task.resume()
 
         defer {
             task.cancel(with: .goingAway, reason: nil)
-            session.invalidateAndCancel()
         }
 
         do {
@@ -269,7 +208,7 @@ enum TailscaleServeGatewayDiscovery {
                 operation: {
                     while true {
                         let message = try await task.receive()
-                        if self.isConnectChallenge(message: message) {
+                        if Self.isConnectChallenge(message: message) {
                             return true
                         }
                     }
@@ -279,28 +218,57 @@ enum TailscaleServeGatewayDiscovery {
         }
     }
 
+    func urlSession(
+        _: URLSession,
+        task _: URLSessionTask,
+        willPerformHTTPRedirection _: HTTPURLResponse,
+        newRequest _: URLRequest,
+        completionHandler: @escaping @Sendable (URLRequest?) -> Void)
+    {
+        completionHandler(nil)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task _: URLSessionTask,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void)
+    {
+        self.urlSession(session, didReceive: challenge, completionHandler: completionHandler)
+    }
+
+    func urlSession(
+        _: URLSession,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void)
+    {
+        // Keep ordinary certificate verification. Discovery never answers
+        // HTTP, proxy, or client-certificate authentication challenges.
+        let disposition: URLSession.AuthChallengeDisposition =
+            challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust
+                ? .performDefaultHandling : .cancelAuthenticationChallenge
+        completionHandler(disposition, nil)
+    }
+
     private static func isConnectChallenge(message: URLSessionWebSocketTask.Message) -> Bool {
         let data: Data
         switch message {
         case let .data(value):
             data = value
         case let .string(value):
-            guard let encoded = value.data(using: .utf8) else { return false }
-            data = encoded
+            data = Data(value.utf8)
         @unknown default:
             return false
         }
 
         guard let object = try? JSONSerialization.jsonObject(with: data),
               let dict = object as? [String: Any],
-              let type = dict["type"] as? String,
-              type == "event",
-              let event = dict["event"] as? String
+              dict["type"] as? String == "event"
         else {
             return false
         }
 
-        return event == "connect.challenge"
+        return dict["event"] as? String == "connect.challenge"
     }
 }
 

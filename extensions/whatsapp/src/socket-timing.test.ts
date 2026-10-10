@@ -11,70 +11,55 @@ import {
   withWhatsAppSocketOperationTimeout,
 } from "./socket-timing.js";
 
+const effectGate = vi.hoisted(() => ({ prepare: undefined as (() => Promise<void>) | undefined }));
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
+  return {
+    ...actual,
+    captureEffectAuthority: () => {
+      const authority = actual.captureEffectAuthority();
+      const prepare = effectGate.prepare;
+      return prepare
+        ? {
+            ...authority,
+            initiate: async <T>(effect: () => T | Promise<T>) => {
+              await prepare();
+              return authority.initiate(effect);
+            },
+          }
+        : authority;
+    },
+  };
+});
+
+afterEach(() => {
+  effectGate.prepare = undefined;
+});
+
 describe("resolveWhatsAppSocketTiming", () => {
   it("uses OpenClaw's explicit WhatsApp Web socket defaults", () => {
-    expect(resolveWhatsAppSocketTiming({})).toEqual(DEFAULT_WHATSAPP_SOCKET_TIMING);
+    expect(resolveWhatsAppSocketTiming()).toEqual(DEFAULT_WHATSAPP_SOCKET_TIMING);
   });
 
-  it("reads Baileys timing values from web.whatsapp config", () => {
+  it("lets call-site overrides take precedence over defaults", () => {
     expect(
       resolveWhatsAppSocketTiming({
-        web: {
-          whatsapp: {
-            keepAliveIntervalMs: 10_000,
-            connectTimeoutMs: 90_000,
-            defaultQueryTimeoutMs: 120_000,
-          },
-        },
+        keepAliveIntervalMs: 20_000,
       }),
     ).toEqual({
-      keepAliveIntervalMs: 10_000,
-      connectTimeoutMs: 90_000,
-      defaultQueryTimeoutMs: 120_000,
-    });
-  });
-
-  it("lets call-site overrides take precedence over config", () => {
-    expect(
-      resolveWhatsAppSocketTiming(
-        {
-          web: {
-            whatsapp: {
-              keepAliveIntervalMs: 10_000,
-              connectTimeoutMs: 90_000,
-              defaultQueryTimeoutMs: 120_000,
-            },
-          },
-        },
-        {
-          keepAliveIntervalMs: 20_000,
-        },
-      ),
-    ).toEqual({
       keepAliveIntervalMs: 20_000,
-      connectTimeoutMs: 90_000,
-      defaultQueryTimeoutMs: 120_000,
+      connectTimeoutMs: DEFAULT_WHATSAPP_SOCKET_TIMING.connectTimeoutMs,
+      defaultQueryTimeoutMs: DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs,
     });
   });
 
   it("rejects invalid numeric timing values", () => {
     expect(
-      resolveWhatsAppSocketTiming(
-        {
-          web: {
-            whatsapp: {
-              keepAliveIntervalMs: 0,
-              connectTimeoutMs: Number.NaN,
-              defaultQueryTimeoutMs: 1.5,
-            },
-          },
-        },
-        {
-          keepAliveIntervalMs: -1,
-          connectTimeoutMs: Number.POSITIVE_INFINITY,
-          defaultQueryTimeoutMs: Number.MAX_SAFE_INTEGER + 1,
-        },
-      ),
+      resolveWhatsAppSocketTiming({
+        keepAliveIntervalMs: -1,
+        connectTimeoutMs: Number.POSITIVE_INFINITY,
+        defaultQueryTimeoutMs: Number.MAX_SAFE_INTEGER + 1,
+      }),
     ).toEqual(DEFAULT_WHATSAPP_SOCKET_TIMING);
   });
 
@@ -130,6 +115,115 @@ describe("createWhatsAppSocketOperationTimeoutAdapter", () => {
     vi.useRealTimers();
   });
 
+  it.each(["message", "presence"] as const)(
+    "rechecks the selected socket after %s authority preparation",
+    async (operation) => {
+      const preparing = Promise.withResolvers<void>();
+      const prepared = Promise.withResolvers<void>();
+      const revoked = new Error("socket replaced");
+      let current = true;
+      effectGate.prepare = async () => {
+        preparing.resolve();
+        await prepared.promise;
+      };
+      const sock = {
+        sendMessage: vi.fn(async () => undefined),
+        sendPresenceUpdate: vi.fn(async () => undefined),
+      };
+      const adapter = createWhatsAppSocketOperationTimeoutAdapter(sock, 30_000, {
+        assertCurrent: () => {
+          if (!current) {
+            throw revoked;
+          }
+        },
+      });
+      const send = (
+        operation === "message"
+          ? adapter.sendMessage("111@s.whatsapp.net", { text: "hello" })
+          : adapter.sendPresenceUpdate("composing", "111@s.whatsapp.net")
+      ).catch((error: unknown) => error);
+      await Promise.race([
+        preparing.promise,
+        send.then(() => {
+          throw new Error("Socket handoff bypassed authority preparation");
+        }),
+      ]);
+      expect(sock.sendMessage).not.toHaveBeenCalled();
+      expect(sock.sendPresenceUpdate).not.toHaveBeenCalled();
+      current = false;
+      prepared.resolve();
+      expect(await send).toBe(revoked);
+      expect(sock.sendMessage).not.toHaveBeenCalled();
+      expect(sock.sendPresenceUpdate).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not initiate a send whose timeout expired during authority preparation", async () => {
+    vi.useFakeTimers();
+    const preparing = Promise.withResolvers<void>();
+    const prepared = Promise.withResolvers<void>();
+    effectGate.prepare = async () => {
+      preparing.resolve();
+      await prepared.promise;
+    };
+    const sock = {
+      sendMessage: vi.fn(async () => undefined),
+      sendPresenceUpdate: vi.fn(async () => undefined),
+    };
+    let retained: Promise<WAMessage | undefined> | undefined;
+    const adapter = createWhatsAppSocketOperationTimeoutAdapter(sock, 1_000, {
+      onSendMessageTimeout: ({ promise }) => {
+        retained = promise;
+      },
+    });
+    const send = adapter.sendMessage("111@s.whatsapp.net", { text: "late" });
+    const rejected = expect(send).rejects.toMatchObject({
+      name: "WhatsAppSocketOperationTimeoutError",
+    });
+    await Promise.race([
+      preparing.promise,
+      send.then(() => {
+        throw new Error("Socket handoff bypassed authority preparation");
+      }),
+    ]);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await rejected;
+    const settled = expect(retained).rejects.toMatchObject({
+      name: "WhatsAppSocketOperationTimeoutError",
+    });
+    prepared.resolve();
+    await settled;
+    expect(sock.sendMessage).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("retains each queued send's authority instead of borrowing the active sender", async () => {
+    const started = Promise.withResolvers<void>();
+    const response = Promise.withResolvers<WAMessage | undefined>();
+    const sock = {
+      sendMessage: vi.fn(() => {
+        started.resolve();
+        return response.promise;
+      }),
+      sendPresenceUpdate: vi.fn(async () => undefined),
+    };
+    const adapter = createWhatsAppSocketOperationTimeoutAdapter(sock, 30_000);
+    const first = adapter.sendMessage("111@s.whatsapp.net", { text: "first" });
+    await started.promise;
+    const refusal = new Error("queued sender retired");
+    effectGate.prepare = async () => {
+      throw refusal;
+    };
+    const second = adapter
+      .sendMessage("222@s.whatsapp.net", { text: "second" })
+      .catch((error: unknown) => error);
+    effectGate.prepare = undefined;
+    response.resolve(undefined);
+    await first;
+    expect(await second).toBe(refusal);
+    expect(sock.sendMessage).toHaveBeenCalledOnce();
+  });
+
   it("serializes sendMessage calls across adapter instances for the same socket", async () => {
     const started: string[] = [];
     const resolves: Array<(value: WAMessage) => void> = [];
@@ -172,9 +266,13 @@ describe("createWhatsAppSocketOperationTimeoutAdapter", () => {
 
   it("releases the send queue after a socket operation timeout", async () => {
     vi.useFakeTimers();
+    const started = Promise.withResolvers<void>();
     const sendMessage = vi
       .fn<(jid: string, content: AnyMessageContent) => Promise<WAMessage | undefined>>()
-      .mockImplementationOnce(async () => await new Promise(() => {}))
+      .mockImplementationOnce(async () => {
+        started.resolve();
+        return await new Promise(() => {});
+      })
       .mockResolvedValueOnce({ key: { id: "msg-2" } } as WAMessage);
     const sock = {
       sendMessage,
@@ -189,7 +287,7 @@ describe("createWhatsAppSocketOperationTimeoutAdapter", () => {
       name: "WhatsAppSocketOperationTimeoutError",
       operation: "sendMessage",
     });
-    await Promise.resolve();
+    await started.promise;
     expect(sendMessage).toHaveBeenCalledTimes(1);
 
     const second = createWhatsAppSocketOperationTimeoutAdapter(sock, 1_000).sendMessage(

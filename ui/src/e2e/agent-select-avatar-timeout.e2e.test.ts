@@ -1,36 +1,34 @@
 // Control UI tests cover bounded authenticated agent-picker avatar fetches.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { Page, Route } from "playwright";
+import { beforeEach, expect, it } from "vitest";
+import type { AgentSelect } from "../components/agent-select.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
-  canRunPlaywrightChromium,
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const suite = createControlUiE2eSuite({
+  name: "Control UI agent picker avatar timeout",
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) =>
+    `Playwright Chromium is not available at ${executablePath}`,
+});
+
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "agent-select-avatar-timeout",
-);
-
-let browser: Browser;
-let server: ControlUiE2eServer;
+let proofDir: string;
+beforeEach(() => {
+  if (captureUiProof) {
+    proofDir = createControlUiE2eArtifactDir("agent-select-avatar-timeout");
+  }
+});
 
 async function screenshot(page: Page, name: string) {
   if (!captureUiProof) {
     return;
   }
-  await mkdir(proofDir, { recursive: true });
   await page.screenshot({
     animations: "disabled",
     fullPage: true,
@@ -38,77 +36,124 @@ async function screenshot(page: Page, name: string) {
   });
 }
 
-describeControlUiE2e("Control UI agent picker avatar timeout", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(`Playwright Chromium is not available at ${chromiumExecutablePath}`);
-    }
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  });
+suite.define(() => {
+  it.each(["timeout", "loaded", "invalid image"] as const)(
+    "keeps the avatar blank while pending, then handles %s without layout shifts",
+    async (outcome) => {
+      await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+        await page.clock.install();
 
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
-  });
+        let avatarRequestCount = 0;
+        let avatarAuthorization: string | undefined;
+        let avatarRoute: Route | undefined;
+        const failedAvatarRequests: string[] = [];
+        page.on("requestfailed", (request) => {
+          if (new URL(request.url()).pathname === "/avatar/main") {
+            failedAvatarRequests.push(request.failure()?.errorText ?? "unknown");
+          }
+        });
+        await page.route(/\/avatar\/main$/, (route) => {
+          avatarRequestCount += 1;
+          avatarAuthorization = route.request().headers().authorization;
+          avatarRoute = route;
+          // Hold the response until the pending avatar has been inspected.
+        });
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "agent.identity.get": {
+              cases: [
+                {
+                  match: { agentId: "main" },
+                  response: {
+                    agentId: "main",
+                    avatar: "/avatar/main",
+                    avatarStatus: "local",
+                    name: "Main agent",
+                  },
+                },
+                {
+                  match: { agentId: "writer" },
+                  response: {
+                    agentId: "writer",
+                    avatar: "",
+                    avatarStatus: "none",
+                    name: "Writer",
+                  },
+                },
+              ],
+            },
+            "agents.list": {
+              agents: [
+                { id: "main", name: "OpenClaw" },
+                { id: "writer", name: "Writer" },
+              ],
+              defaultId: "main",
+              mainKey: "main",
+              scope: "agent",
+            },
+          },
+        });
 
-  it("aborts a stalled authenticated avatar request and keeps the text fallback", async () => {
-    const context = await browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    await page.clock.install();
+        const response = await page.goto(`${suite.server.baseUrl}settings/agents`);
+        expect(response?.status()).toBe(200);
+        await gateway.waitForRequest("agent.identity.get");
+        await expect.poll(() => avatarRequestCount).toBe(1);
+        const picker = page.locator(".settings-sidebar__agent openclaw-agent-select");
+        const avatar = picker.locator(".agent-select__trigger .agent-select__avatar");
+        const fallback = avatar.locator(".identity-avatar__fallback");
+        await expect.poll(() => avatar.getAttribute("data-avatar-state")).toBe("pending");
+        await expect.poll(() => fallback.isVisible()).toBe(false);
+        const pendingBox = await avatar.boundingBox();
+        expect(pendingBox?.width).toBeGreaterThan(0);
+        expect(avatarAuthorization).toBe("Bearer e2e-device-token");
+        await screenshot(page, "01-request-stalled.png");
 
-    let avatarRequestCount = 0;
-    let avatarAuthorization: string | undefined;
-    const failedAvatarRequests: string[] = [];
-    page.on("requestfailed", (request) => {
-      if (new URL(request.url()).pathname === "/avatar/main") {
-        failedAvatarRequests.push(request.failure()?.errorText ?? "unknown");
-      }
-    });
-    await page.route(/\/avatar\/main$/, (route) => {
-      avatarRequestCount += 1;
-      avatarAuthorization = route.request().headers().authorization;
-      // Leave the route unanswered. The page-owned deadline must cancel it.
-    });
-    await installMockGateway(page, {
-      methodResponses: {
-        "agent.identity.get": {
-          agentId: "main",
-          avatar: "/avatar/main",
-          avatarStatus: "local",
-          name: "Main agent",
-        },
-      },
-    });
+        if (outcome === "timeout") {
+          await page.clock.runFor(30_000);
+          await expect.poll(() => failedAvatarRequests.length).toBe(1);
+        } else {
+          if (!avatarRoute) {
+            throw new Error("Avatar request was not intercepted");
+          }
+          await avatarRoute.fulfill({
+            contentType: "image/svg+xml",
+            body:
+              outcome === "loaded"
+                ? '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><circle cx="16" cy="16" r="16" fill="coral"/></svg>'
+                : "not an image",
+          });
+        }
+        if (outcome === "loaded") {
+          await expect.poll(() => avatar.getAttribute("data-avatar-state")).toBe("loaded");
+          expect(await avatar.locator("img").isVisible()).toBe(true);
+          expect(await fallback.isVisible()).toBe(false);
+        } else {
+          await expect
+            .poll(() => avatar.locator(".identity-avatar__agent-face").isVisible())
+            .toBe(true);
+        }
+        const settledBox = await avatar.boundingBox();
+        expect(settledBox?.width).toBe(pendingBox?.width);
+        expect(settledBox?.height).toBe(pendingBox?.height);
 
-    try {
-      const response = await page.goto(`${server.baseUrl}agents`);
-      expect(response?.status()).toBe(200);
-      const picker = page.locator("openclaw-agent-select");
-      await expect
-        .poll(() => picker.locator(".agent-select__avatar--text").first().textContent())
-        .toBe("O");
-      expect(avatarRequestCount).toBe(1);
-      expect(avatarAuthorization).toBe("Bearer e2e-device-token");
-      await screenshot(page, "01-request-stalled.png");
-
-      await page.clock.runFor(30_000);
-      await expect.poll(() => failedAvatarRequests.length).toBe(1);
-      await expect.poll(() => picker.locator("img.agent-select__avatar").count()).toBe(0);
-      await expect
-        .poll(() => picker.locator(".agent-select__avatar--text").first().textContent())
-        .toBe("O");
-
-      // A later render must use the cached miss instead of launching another fetch.
-      await picker.locator(".agent-select__trigger").click();
-      expect(avatarRequestCount).toBe(1);
-      await screenshot(page, "02-timeout-fallback.png");
-    } finally {
-      await context.close();
-    }
-  });
+        // Updating the label rerenders the existing image without changing its source.
+        await picker.evaluate(async (element: AgentSelect) => {
+          element.accessibleLabel = "Choose agent";
+          await element.updateComplete;
+        });
+        await expect
+          .poll(() => picker.locator(".agent-select__trigger").getAttribute("aria-label"))
+          .toMatch(/^Choose agent:/);
+        await picker.locator(".agent-select__trigger").click();
+        if (outcome === "loaded") {
+          expect(await avatar.getAttribute("data-avatar-state")).toBe("loaded");
+          expect(await fallback.isVisible()).toBe(false);
+        } else {
+          expect(await avatar.locator(".identity-avatar__agent-face").isVisible()).toBe(true);
+        }
+        expect(avatarRequestCount).toBe(1);
+        await screenshot(page, `02-${outcome.replaceAll(" ", "-")}.png`);
+      });
+    },
+  );
 });

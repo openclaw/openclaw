@@ -1,26 +1,17 @@
 // Control UI tests cover mount fallback behavior.
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const indexHtmlPath = path.resolve(
   process.cwd(),
   path.basename(process.cwd()) === "ui" ? "index.html" : "ui/index.html",
 );
 type TestWindow = Window & typeof globalThis;
+const mountTimeoutMs = 12_000;
 
-async function readIndexHtmlWithDelay(delayMs: number): Promise<string> {
-  const html = await readFile(indexHtmlPath, "utf8");
-  return html.replace(
-    'data-openclaw-mount-timeout-ms="12000"',
-    `data-openclaw-mount-timeout-ms="${delayMs}"`,
-  );
-}
-
-function waitForWindowTimeout(window: TestWindow, delayMs: number): Promise<void> {
-  return new Promise((resolve) => {
-    window.setTimeout(resolve, delayMs);
-  });
+async function readIndexHtml(): Promise<string> {
+  return readFile(indexHtmlPath, "utf8");
 }
 
 function createIsolatedWindow(): TestWindow {
@@ -31,6 +22,20 @@ function createIsolatedWindow(): TestWindow {
     throw new Error("failed to create isolated frame window");
   }
   return frameWindow;
+}
+
+function installStartupPaintShell(window: TestWindow, html: string): void {
+  const parsed = new window.DOMParser().parseFromString(html, "text/html");
+  window.document.head.innerHTML = parsed.head.innerHTML;
+  window.document.body.innerHTML = parsed.body.innerHTML;
+
+  const startupScript = Array.from(
+    parsed.querySelectorAll<HTMLScriptElement>("script:not([src])"),
+  ).find((script) => script.textContent?.includes("var THEMES = {"));
+  if (!startupScript?.textContent) {
+    throw new Error("Expected inline startup theme script in index.html");
+  }
+  window.eval(startupScript.textContent);
 }
 
 function installFallbackShell(window: TestWindow, html: string): void {
@@ -60,16 +65,52 @@ function requireElementById<T extends HTMLElement>(
   return element;
 }
 
+describe("Control UI document shell", () => {
+  it("requests the web app manifest with credentials", async () => {
+    const parsed = new DOMParser().parseFromString(await readIndexHtml(), "text/html");
+    const manifest = parsed.querySelector<HTMLLinkElement>('link[rel="manifest"]');
+
+    expect(manifest?.getAttribute("crossorigin")).toBe("use-credentials");
+  });
+});
+
 describe("Control UI mount fallback", () => {
-  afterEach(() => {
-    document.body.innerHTML = "";
+  beforeEach(() => {
+    // JSDOM's iframe timers use the host timer functions.
+    vi.useFakeTimers();
   });
 
-  it("shows the static troubleshooting panel when the app element is never registered", async () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+    vi.useRealTimers();
+  });
+
+  it.each([
+    ["claw dark", { theme: "claw", themeMode: "dark" }, "dark", "rgb(14, 16, 21)"],
+    ["OpenKnot dark", { theme: "knot", themeMode: "dark" }, "openknot", "rgb(8, 8, 8)"],
+    ["Dash light", { theme: "dash", themeMode: "light" }, "dash-light", "rgb(247, 242, 236)"],
+  ])(
+    "paints %s before the app stylesheet loads",
+    async (_name, settings, expectedTheme, expectedBackground) => {
+      const frameWindow = createIsolatedWindow();
+      frameWindow.localStorage.clear();
+      frameWindow.localStorage.setItem("openclaw.control.settings.v1", JSON.stringify(settings));
+      installStartupPaintShell(frameWindow, await readIndexHtml());
+
+      expect(frameWindow.document.documentElement.dataset.theme).toBe(expectedTheme);
+      expect(
+        frameWindow.getComputedStyle(frameWindow.document.documentElement).backgroundColor,
+      ).toBe(expectedBackground);
+      expect(frameWindow.getComputedStyle(frameWindow.document.body).backgroundColor).toBe(
+        expectedBackground,
+      );
+    },
+  );
+
+  it("shows the static troubleshooting panel when the app never renders", async () => {
     const frameWindow = createIsolatedWindow();
-    expect(frameWindow.customElements.get("openclaw-app")).toBeUndefined();
-    installFallbackShell(frameWindow, await readIndexHtmlWithDelay(1));
-    await waitForWindowTimeout(frameWindow, 10);
+    installFallbackShell(frameWindow, await readIndexHtml());
+    await vi.advanceTimersByTimeAsync(mountTimeoutMs);
 
     const fallback = requireElementById(
       frameWindow,
@@ -94,36 +135,42 @@ describe("Control UI mount fallback", () => {
     expect(fallback.hidden).toBe(true);
     expect([...frameWindow.document.body.classList]).toEqual([]);
 
-    await waitForWindowTimeout(frameWindow, 10);
+    await vi.advanceTimersByTimeAsync(mountTimeoutMs);
     expect(fallback.hidden).toBe(false);
   });
 
-  it("keeps the fallback hidden when the app element registers before the timeout", async () => {
+  it("keeps the fallback visible until the app completes its first render", async () => {
     const frameWindow = createIsolatedWindow();
-    installFallbackShell(frameWindow, await readIndexHtmlWithDelay(25));
+    installFallbackShell(frameWindow, await readIndexHtml());
     if (!frameWindow.customElements.get("openclaw-app")) {
       frameWindow.customElements.define("openclaw-app", class extends frameWindow.HTMLElement {});
     }
     await frameWindow.customElements.whenDefined("openclaw-app");
-    await waitForWindowTimeout(frameWindow, 35);
+    await vi.advanceTimersByTimeAsync(mountTimeoutMs);
 
     const fallback = requireElementById(
       frameWindow,
       "openclaw-mount-fallback",
       frameWindow.HTMLElement,
     );
+    expect(fallback.hidden).toBe(false);
+    expect([...frameWindow.document.body.classList]).toEqual(["openclaw-mount-fallback-active"]);
+
+    frameWindow.dispatchEvent(new frameWindow.Event("openclaw-control-ui-rendered"));
+
     expect(fallback.hidden).toBe(true);
     expect([...frameWindow.document.body.classList]).toEqual([]);
   });
 
   it("probes a cache-busted current document when the original bundle did not start", async () => {
     const frameWindow = createIsolatedWindow();
-    const html = await readIndexHtmlWithDelay(1);
+    const html = await readIndexHtml();
     const fetch = vi.fn().mockResolvedValue({ ok: false });
     Object.defineProperty(frameWindow, "fetch", { configurable: true, value: fetch });
     installFallbackShell(frameWindow, html);
 
-    await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
+    await vi.advanceTimersByTimeAsync(mountTimeoutMs);
+    expect(fetch).toHaveBeenCalledOnce();
 
     expect(fetch).toHaveBeenNthCalledWith(
       1,
@@ -134,6 +181,38 @@ describe("Control UI mount fallback", () => {
         signal: expect.any(frameWindow.AbortSignal),
       }),
     );
+  });
+
+  it("does not begin recovery while the unsupported browser screen is loading", async () => {
+    const frameWindow = createIsolatedWindow();
+    const fetch = vi.fn().mockResolvedValue({ ok: true });
+    Object.defineProperty(frameWindow, "fetch", { configurable: true, value: fetch });
+    installFallbackShell(frameWindow, await readIndexHtml());
+
+    frameWindow.dispatchEvent(new frameWindow.Event("openclaw-control-ui-unsupported-browser"));
+    await vi.advanceTimersByTimeAsync(mountTimeoutMs * 3);
+
+    expect(fetch).not.toHaveBeenCalled();
+    expect(frameWindow.document.getElementById("openclaw-mount-fallback")?.hidden).toBe(true);
+  });
+
+  it("keeps failed browser guidance visible without automatic recovery", async () => {
+    const frameWindow = createIsolatedWindow();
+    const fetch = vi.fn().mockResolvedValue({ ok: true });
+    Object.defineProperty(frameWindow, "fetch", { configurable: true, value: fetch });
+    installFallbackShell(frameWindow, await readIndexHtml());
+    frameWindow.dispatchEvent(new frameWindow.Event("openclaw-control-ui-unsupported-browser"));
+    frameWindow.dispatchEvent(
+      new frameWindow.Event("openclaw-control-ui-unsupported-browser-failed"),
+    );
+    await vi.advanceTimersByTimeAsync(mountTimeoutMs * 3);
+
+    const fallback = frameWindow.document.getElementById("openclaw-mount-fallback");
+    expect(fallback?.hidden).toBe(false);
+    expect(fallback?.querySelector("h1")?.textContent).toBe("Browser guidance could not load");
+    expect(frameWindow.document.getElementById("openclaw-mount-retry")?.hidden).toBe(false);
+    expect(frameWindow.document.getElementById("openclaw-mount-wait")?.hidden).toBe(true);
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it("times out stalled recovery probes so automatic retries can continue", async () => {
@@ -152,24 +231,64 @@ describe("Control UI mount fallback", () => {
       });
     });
     Object.defineProperty(frameWindow, "fetch", { configurable: true, value: fetch });
-    installFallbackShell(frameWindow, await readIndexHtmlWithDelay(1));
+    installFallbackShell(frameWindow, await readIndexHtml());
+    await vi.runAllTimersAsync();
 
-    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(6));
-
+    expect(fetch).toHaveBeenCalledTimes(6);
     expect(signals).toHaveLength(6);
-    await vi.waitFor(() => expect(signals.every((signal) => signal.aborted)).toBe(true));
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
   });
+
+  it.each(["Keep waiting", "first render", "unsupported browser"])(
+    "retires a pending recovery probe on %s",
+    async (action) => {
+      const frameWindow = createIsolatedWindow();
+      const fetch = vi.fn(
+        (_url: string, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => reject(new Error("request aborted")));
+          }),
+      );
+      Object.defineProperty(frameWindow, "fetch", { configurable: true, value: fetch });
+      installFallbackShell(frameWindow, await readIndexHtml());
+      await vi.advanceTimersByTimeAsync(mountTimeoutMs);
+      expect(fetch).toHaveBeenCalledOnce();
+      expect(fetch.mock.calls[0]?.[1]?.signal?.aborted).toBe(false);
+
+      if (action === "Keep waiting") {
+        frameWindow.document.getElementById("openclaw-mount-wait")?.click();
+      } else {
+        frameWindow.dispatchEvent(
+          new frameWindow.Event(
+            action === "first render"
+              ? "openclaw-control-ui-rendered"
+              : "openclaw-control-ui-unsupported-browser",
+          ),
+        );
+      }
+      expect(fetch.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(fetch).toHaveBeenCalledOnce();
+      expect(frameWindow.document.getElementById("openclaw-mount-fallback")?.hidden).toBe(true);
+    },
+  );
 
   it("bounds automatic recovery attempts while the gateway is unavailable", async () => {
     const frameWindow = createIsolatedWindow();
     const fetch = vi.fn().mockRejectedValue(new Error("gateway unavailable"));
+    const unregister = vi.fn().mockResolvedValue(true);
+    const getRegistrations = vi.fn().mockResolvedValue([{ unregister }]);
     Object.defineProperty(frameWindow, "fetch", { configurable: true, value: fetch });
-    installFallbackShell(frameWindow, await readIndexHtmlWithDelay(1));
-
-    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(6));
-    await waitForWindowTimeout(frameWindow, 10);
+    Object.defineProperty(frameWindow.navigator, "serviceWorker", {
+      configurable: true,
+      value: { getRegistrations },
+    });
+    installFallbackShell(frameWindow, await readIndexHtml());
+    await vi.runAllTimersAsync();
 
     expect(fetch).toHaveBeenCalledTimes(6);
+    expect(unregister).toHaveBeenCalled();
+    expect(getRegistrations).toHaveBeenCalled();
     expect(
       requireElementById(
         frameWindow,

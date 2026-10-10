@@ -1,8 +1,8 @@
-// Discord plugin module implements pluralkit behavior.
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
+import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import {
-  readProviderJsonResponse,
+  readProviderJsonObjectResponse,
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
 
@@ -65,16 +65,20 @@ export async function fetchPluralKitMessageInfo(params: {
       signal: timeout.signal,
     });
     if (res.status === 404) {
+      await res.body?.cancel().catch(() => undefined);
       return null;
     }
     if (!res.ok) {
       const text = await readResponseTextLimited(res, PLURALKIT_ERROR_BODY_LIMIT_BYTES).catch(
         () => "",
       );
-      const detail = text.trim() ? `: ${text.trim()}` : "";
+      // Match Discord API error redaction: PluralKit/proxy responses can reflect
+      // the configured Authorization token in the error body.
+      const redacted = text.trim() ? redactToolPayloadText(text.trim()) : "";
+      const detail = redacted ? `: ${redacted}` : "";
       throw new Error(`PluralKit API failed (${res.status})${detail}`);
     }
-    return await readProviderJsonResponse<PluralKitMessageInfo>(res, "PluralKit message");
+    return (await readProviderJsonObjectResponse(res, "PluralKit message")) as PluralKitMessageInfo;
   } finally {
     // Keep the deadline active through bounded error and JSON body reads; header-only
     // coverage would leave a stalled response stream holding the inbound preflight.

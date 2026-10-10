@@ -1,51 +1,45 @@
 import { spawn } from "node:child_process";
-import { appendFileSync, createWriteStream, existsSync, mkdirSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
-import {
-  agentOutputHasExpectedOkMarker,
-  agentTurnUsedEmbeddedFallback,
-  buildCrossOsReleaseAgentSessionId,
-  buildReleaseAgentTurnArgs,
-  maybeBuildOptionalAgentTurnSkipResult,
-  shouldRetryCrossOsAgentTurnError,
-} from "./agent.ts";
+import { runReleaseAgentTurn } from "./agent.ts";
 import type {
-  AgentTurnResult,
   CommandOptions,
+  CommandResult,
   GatewayHandle,
   LaneState,
   ProviderConfig,
 } from "./config.ts";
 import {
-  CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS,
   CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS,
-  CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS,
-  CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE,
-  buildCrossOsReleaseSmokeMemorySlotConfigArgs,
-  buildCrossOsReleaseSmokePluginAllowlist,
-  buildReleaseProviderConfigOverride,
+  buildReleaseModelConfigCommands,
   gatewayReadyDeadlineMs,
   installTimeoutMs,
   looksLikeCommitSha,
   resolveExplicitBaselineVersion,
   resolveExpectedDevUpdateRef,
-  shouldSkipInstallerDaemonHealthCheck,
+  shouldUseManagedGatewayService,
 } from "./config.ts";
+import {
+  resolveGatewayStatusArgs,
+  waitForReleaseGateway,
+  type GatewayReadinessParams,
+} from "./gateway-readiness.ts";
 import {
   installedEntryPath,
   normalizeWindowsInstalledCliPath,
   npmCommand,
   resolveInstalledPrefixDirFromCliPath,
 } from "./install.ts";
-import { readLogFileSize, readLogTextSince } from "./logs.ts";
+import { readLogFileSize } from "./logs.ts";
 import {
   canConnectToLoopbackPort,
+  captureGatewayProcess,
   resolveCommandSpawnInvocation,
   runCommand,
   runCommandInvocation,
   withAllocatedGatewayPort,
 } from "./process.ts";
-import { formatError, shellEscapeForSh, sleep } from "./shared.ts";
+import { shellEscapeForSh, sleep } from "./shared.ts";
 
 const INSTALLER_CONNECT_TIMEOUT_SECONDS = 10;
 const INSTALLER_REQUEST_TIMEOUT_SECONDS = 120;
@@ -173,17 +167,8 @@ export async function runInstallerSmoke(params: {
   logPath: string;
 }) {
   const script = buildInstallerSmokeScript(params);
-  if (process.platform === "win32") {
-    await runPowerShellScript(script, {
-      cwd: params.lane.homeDir,
-      env: params.env,
-      logPath: params.logPath,
-      timeoutMs: installTimeoutMs(),
-    });
-    return;
-  }
-
-  await runPosixShellScript(script, {
+  const runScript = process.platform === "win32" ? runPowerShellScript : runPosixShellScript;
+  await runScript(script, {
     cwd: params.lane.homeDir,
     env: params.env,
     logPath: params.logPath,
@@ -191,18 +176,14 @@ export async function runInstallerSmoke(params: {
   });
 }
 
-export function buildWindowsPathBootstrapScript(
-  options: { includeCurrentProcessPath?: boolean } = {},
-) {
-  const includeCurrentProcessPath = options.includeCurrentProcessPath !== false;
-  const pathCandidates = includeCurrentProcessPath
-    ? "@($userPath, $machinePath, $env:Path)"
-    : "@($userPath, $machinePath)";
+function buildWindowsPathBootstrapScript() {
+  // setup-node provisions the supported runtime in the current process PATH. Keep it ahead of
+  // stale runner image entries while still merging newly persisted user and machine paths.
   return `
 $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
 $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 $segments = New-Object System.Collections.Generic.List[string]
-foreach ($candidate in ${pathCandidates}) {
+foreach ($candidate in @($env:Path, $userPath, $machinePath)) {
   foreach ($segment in ($candidate -split ';')) {
     if ([string]::IsNullOrWhiteSpace($segment)) {
       continue
@@ -377,20 +358,21 @@ export async function runInstalledCli(params: {
   });
 }
 
-async function readInstalledUpdateStatus(params: {
+export async function resolveInstalledGatewayStopArgs(params: {
   cliPath: string;
   cwd: string;
   env: NodeJS.ProcessEnv;
   logPath: string;
 }) {
-  return runInstalledCli({
+  const help = await runInstalledCli({
     cliPath: params.cliPath,
-    args: ["update", "status", "--json"],
+    args: ["gateway", "stop", "--help"],
     cwd: params.cwd,
     env: params.env,
     logPath: params.logPath,
-    timeoutMs: 2 * 60 * 1000,
+    timeoutMs: 15_000,
   });
+  return buildGatewayStopArgsFromHelpText(`${help.stdout}\n${help.stderr}`);
 }
 
 export async function ensureDevUpdateGitInstall(params: {
@@ -400,7 +382,9 @@ export async function ensureDevUpdateGitInstall(params: {
   logsDir: string;
   requestedRef: string;
 }) {
-  const updateStatus = await readInstalledUpdateStatus({
+  const updateStatus = await runInstalledCli({
+    args: ["update", "status", "--json"],
+    timeoutMs: 2 * 60 * 1000,
     cliPath: params.cliPath,
     cwd: params.lane.homeDir,
     env: params.env,
@@ -427,7 +411,7 @@ export async function runOnboardWithInstalledCli(params: {
       authChoice: params.providerConfig.authChoice,
       gatewayPort: params.lane.gatewayPort,
       installDaemon: params.installDaemon,
-      skipHealth: !params.installDaemon || shouldSkipInstallerDaemonHealthCheck(),
+      skipHealth: !params.installDaemon || shouldUseManagedGatewayService(),
     });
     await runInstalledCli({
       cliPath: params.cliPath,
@@ -488,6 +472,7 @@ export async function startManualGatewayFromInstalledCli(params: {
   logPath: string;
 }): Promise<GatewayHandle> {
   mkdirSync(dirname(params.logPath), { recursive: true });
+  const launchLogOffset = readLogFileSize(params.logPath);
   const gatewayLog = createWriteStream(params.logPath, { flags: "a" });
   const invocation = resolveInstalledCliInvocation(
     params.cliPath,
@@ -505,30 +490,7 @@ export async function startManualGatewayFromInstalledCli(params: {
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
     windowsHide: true,
   });
-  child.stdout?.on("data", (chunk) => {
-    gatewayLog.write(chunk);
-  });
-  child.stderr?.on("data", (chunk) => {
-    gatewayLog.write(chunk);
-  });
-  let logClosed = false;
-  const closeLog = async () => {
-    if (logClosed) {
-      return;
-    }
-    logClosed = true;
-    await new Promise<void>((resolvePromise) => {
-      gatewayLog.once("error", () => resolvePromise());
-      gatewayLog.end(() => resolvePromise());
-    });
-  };
-  child.once("close", () => {
-    void closeLog();
-  });
-  child.once("error", () => {
-    void closeLog();
-  });
-  return { child, closeLog, logPath: params.logPath };
+  return captureGatewayProcess(child, gatewayLog, { launchLogOffset, logPath: params.logPath });
 }
 
 async function resolveInstalledGatewayStatusArgs(params: {
@@ -538,77 +500,37 @@ async function resolveInstalledGatewayStatusArgs(params: {
   logPath: string;
   requireRpc?: boolean;
 }) {
-  const requireRpc = params.requireRpc !== false;
-  try {
-    const help = await runInstalledCli({
-      cliPath: params.cliPath,
-      args: ["gateway", "status", "--help"],
-      cwd: params.cwd,
-      env: params.env,
-      logPath: params.logPath,
-      timeoutMs: 15_000,
-      check: false,
-    });
-    return buildGatewayStatusArgsFromHelpText(`${help.stdout}\n${help.stderr}`, { requireRpc });
-  } catch (error) {
-    appendGatewayStatusHelpProbeFallback(params.logPath, error);
-    return buildGatewayStatusArgsFromHelpText("--require-rpc", { requireRpc });
-  }
-}
-
-export function buildGatewayStatusArgsFromHelpText(
-  helpText: string,
-  options: { requireRpc?: boolean } = {},
-) {
-  const requireRpc = options.requireRpc !== false;
-  if (requireRpc && helpText.includes("--require-rpc")) {
-    return [
-      "gateway",
-      "status",
-      "--require-rpc",
-      "--timeout",
-      String(CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS),
-    ];
-  }
-  return ["gateway", "status"];
-}
-
-export function appendGatewayStatusHelpProbeFallback(logPath: string, error: unknown) {
-  appendFileSync(
-    logPath,
-    `${new Date().toISOString()} gateway status help probe failed; assuming current --require-rpc support: ${formatError(error)}\n`,
+  return resolveGatewayStatusArgs(
+    (args, timeoutMs) => runInstalledCli({ ...params, args, timeoutMs, check: false }),
+    params.logPath,
+    { requireRpc: params.requireRpc !== false },
   );
 }
 
-export async function waitForInstalledGateway(params: {
-  lane: LaneState;
-  cliPath: string;
-  env: NodeJS.ProcessEnv;
-  logPath: string;
-}) {
-  const statusArgs = await resolveInstalledGatewayStatusArgs({
-    cliPath: params.cliPath,
-    cwd: params.lane.homeDir,
-    env: params.env,
-    logPath: params.logPath,
-  });
-  const deadline = Date.now() + gatewayReadyDeadlineMs();
-  while (Date.now() < deadline) {
-    const result = await runInstalledCli({
-      cliPath: params.cliPath,
-      args: statusArgs,
-      cwd: params.lane.homeDir,
-      env: params.env,
-      logPath: params.logPath,
-      timeoutMs: CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS,
-      check: false,
-    });
-    if (result.exitCode === 0) {
-      return;
-    }
-    await sleep(2_000);
+export function buildGatewayStopArgsFromHelpText(helpText: string) {
+  if (helpText.includes("--force")) {
+    return ["gateway", "stop", "--force"];
   }
-  throw new Error(`Gateway did not become ready on port ${params.lane.gatewayPort}.`);
+  return ["gateway", "stop"];
+}
+
+export async function waitForInstalledGateway(
+  params: GatewayReadinessParams & { cliPath: string },
+) {
+  await waitForReleaseGateway(
+    params,
+    (args, timeoutMs) =>
+      runInstalledCli({
+        cliPath: params.cliPath,
+        cwd: params.lane.homeDir,
+        env: params.env,
+        logPath: params.logPath,
+        args,
+        timeoutMs,
+        check: false,
+      }),
+    (logPath) => startManualGatewayFromInstalledCli({ ...params, logPath }),
+  );
 }
 
 export async function waitForInstalledGatewayToStop(params: {
@@ -676,70 +598,16 @@ export async function runInstalledModelsSet(params: {
   providerConfig: ProviderConfig;
   logPath: string;
 }) {
-  await runInstalledCli({
-    cliPath: params.cliPath,
-    args: ["models", "set", params.providerConfig.model],
-    cwd: params.cwd,
-    env: params.env,
-    logPath: params.logPath,
-    timeoutMs: 2 * 60 * 1000,
-  });
-  const providerConfigOverride = buildReleaseProviderConfigOverride(params.providerConfig);
-  if (providerConfigOverride) {
+  for (const args of buildReleaseModelConfigCommands(params.providerConfig)) {
     await runInstalledCli({
       cliPath: params.cliPath,
-      args: [
-        "config",
-        "set",
-        `models.providers.${params.providerConfig.extensionId}`,
-        JSON.stringify(providerConfigOverride),
-        "--strict-json",
-        "--merge",
-      ],
+      args,
       cwd: params.cwd,
       env: params.env,
       logPath: params.logPath,
       timeoutMs: 2 * 60 * 1000,
     });
   }
-  await runInstalledCli({
-    cliPath: params.cliPath,
-    args: [
-      "config",
-      "set",
-      "plugins.allow",
-      JSON.stringify(buildCrossOsReleaseSmokePluginAllowlist(params.providerConfig)),
-      "--strict-json",
-    ],
-    cwd: params.cwd,
-    env: params.env,
-    logPath: params.logPath,
-    timeoutMs: 2 * 60 * 1000,
-  });
-  await runInstalledCli({
-    cliPath: params.cliPath,
-    args: buildCrossOsReleaseSmokeMemorySlotConfigArgs(),
-    cwd: params.cwd,
-    env: params.env,
-    logPath: params.logPath,
-    timeoutMs: 2 * 60 * 1000,
-  });
-  await runInstalledCli({
-    cliPath: params.cliPath,
-    args: ["config", "set", "agents.defaults.skipBootstrap", "true", "--strict-json"],
-    cwd: params.cwd,
-    env: params.env,
-    logPath: params.logPath,
-    timeoutMs: 2 * 60 * 1000,
-  });
-  await runInstalledCli({
-    cliPath: params.cliPath,
-    args: ["config", "set", "tools.profile", CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE],
-    cwd: params.cwd,
-    env: params.env,
-    logPath: params.logPath,
-    timeoutMs: 2 * 60 * 1000,
-  });
 }
 
 export async function runInstalledAgentTurn(params: {
@@ -748,49 +616,17 @@ export async function runInstalledAgentTurn(params: {
   env: NodeJS.ProcessEnv;
   label: string;
   logPath: string;
-}): Promise<AgentTurnResult> {
-  let lastError;
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
-    const sessionId = buildCrossOsReleaseAgentSessionId(params.label, attempt);
-    try {
-      const logOffset = readLogFileSize(params.logPath);
-      const result = await runInstalledCli({
-        cliPath: params.cliPath,
-        args: buildReleaseAgentTurnArgs(sessionId),
-        cwd: params.cwd,
-        env: params.env,
-        logPath: params.logPath,
-        timeoutMs: (CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS + 60) * 1000,
-      });
-      const logText = readLogTextSince(params.logPath, logOffset);
-      if (!agentOutputHasExpectedOkMarker(result.stdout, { logText })) {
-        throw new Error("Agent output did not contain the expected OK marker.");
-      }
-      if (agentTurnUsedEmbeddedFallback(result, { logText })) {
-        throw new Error("Agent turn used embedded fallback instead of gateway.");
-      }
-      return result;
-    } catch (error) {
-      lastError = error;
-      const skipped = maybeBuildOptionalAgentTurnSkipResult(error, params.logPath, {
-        attempt,
-        maxAttempts: 2,
-      });
-      if (skipped) {
-        return skipped;
-      }
-      if (attempt >= 2 || !shouldRetryCrossOsAgentTurnError(error)) {
-        throw error;
-      }
-      appendFileSync(
-        params.logPath,
-        `\n[release-checks] retrying installed agent turn after retryable live failure: ${
-          error instanceof Error ? error.message : String(error)
-        }\n`,
-      );
-    }
-  }
-  throw lastError;
+}): Promise<CommandResult> {
+  return runReleaseAgentTurn(params, (args, timeoutMs) =>
+    runInstalledCli({
+      cliPath: params.cliPath,
+      args,
+      cwd: params.cwd,
+      env: params.env,
+      logPath: params.logPath,
+      timeoutMs,
+    }),
+  );
 }
 
 export function verifyDevUpdateStatus(stdout: string, options: { ref?: string } = {}) {

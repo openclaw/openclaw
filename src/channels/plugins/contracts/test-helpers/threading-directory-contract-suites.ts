@@ -8,11 +8,17 @@ import type { OpenClawConfig } from "../../../../config/config.js";
 import type { RuntimeEnv } from "../../../../runtime.js";
 import type {
   ChannelDirectoryEntry,
-  ChannelFocusedBindingContext,
-  ChannelReplyTransport,
+  ChannelThreadingAdapter,
   ChannelThreadingToolContext,
 } from "../../types.core.js";
-import type { ChannelPlugin } from "../../types.js";
+import type { ChannelPlugin } from "../../types.plugin.js";
+
+type ChannelReplyTransport = NonNullable<
+  ReturnType<NonNullable<ChannelThreadingAdapter["resolveReplyTransport"]>>
+>;
+type ChannelFocusedBindingContext = NonNullable<
+  ReturnType<NonNullable<ChannelThreadingAdapter["resolveFocusedBinding"]>>
+>;
 
 const contractRuntime = new Proxy(Object.create(null), {
   get(_target, property) {
@@ -80,13 +86,6 @@ function expectFocusedBindingShape(binding: ChannelFocusedBindingContext) {
   expect(["current", "child"]).toContain(binding.placement);
   expect(typeof binding.labelNoun).toBe("string");
   expect(binding.labelNoun.trim()).not.toBe("");
-}
-
-/** Asserts that a plugin declares the threading adapter under test. */
-export function expectChannelThreadingBaseContract(
-  plugin: Pick<ChannelPlugin, "id" | "threading">,
-) {
-  expect(plugin.threading).toBeDefined();
 }
 
 /** Exercises optional threading hooks and checks normalized return shapes. */

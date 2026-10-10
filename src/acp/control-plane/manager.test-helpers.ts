@@ -1,33 +1,93 @@
 /** Shared ACP manager test harness, mocks, fixtures, and assertion helpers. */
 import type { AcpRuntime, AcpRuntimeCapabilities } from "@openclaw/acp-core/runtime/types";
 import { afterEach, beforeEach, expect, vi } from "vitest";
-import { resetAcpManagerTaskStateForTests } from "../../../test/helpers/acp-manager-task-state.js";
+import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AcpSessionRuntimeOptions, SessionAcpMeta } from "../../config/sessions/types.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { resetAcpActiveTurnsForTests } from "./active-turns.test-support.js";
+import { resolveAcpSessionTarget } from "./manager.utils.js";
 
 export type { AcpRuntime, OpenClawConfig, SessionAcpMeta };
+
+type AcpMetaUpsertInput = Parameters<
+  typeof import("../runtime/session-meta.js").upsertAcpSessionMeta
+>[0];
+type AcpMetaUpsertObservation = Pick<
+  AcpMetaUpsertInput,
+  "skipMaintenance" | "takeCacheOwnership"
+> & {
+  next: ReturnType<AcpMetaUpsertInput["mutate"]>;
+};
 
 const hoistedMocks = vi.hoisted(() => {
   const listAcpSessionEntriesMock = vi.fn();
   const readAcpSessionEntryMock = vi.fn();
+  const readAcpSessionEntryAsyncMock = vi.fn(async (params: unknown) =>
+    readAcpSessionEntryMock(params),
+  );
   const upsertAcpSessionMetaMock = vi.fn();
   const getAcpRuntimeBackendMock = vi.fn();
   const requireAcpRuntimeBackendMock = vi.fn();
   return {
     listAcpSessionEntriesMock,
     readAcpSessionEntryMock,
+    readAcpSessionEntryAsyncMock,
     upsertAcpSessionMetaMock,
+    upsertObservations: new WeakMap<object, AcpMetaUpsertObservation>(),
     getAcpRuntimeBackendMock,
     requireAcpRuntimeBackendMock,
   };
 });
 
+async function mockAcpSessionMetaUpsert(params: AcpMetaUpsertInput) {
+  let invoked = false;
+  const observed: AcpMetaUpsertInput = {
+    ...params,
+    mutate: (current, entry) => {
+      invoked = true;
+      const next = params.mutate(current, entry);
+      hoistedMocks.upsertObservations.set(observed, {
+        next: structuredClone(next),
+        skipMaintenance: params.skipMaintenance,
+        takeCacheOwnership: params.takeCacheOwnership,
+      });
+      return next;
+    },
+  };
+  const result = await hoistedMocks.upsertAcpSessionMetaMock(observed);
+  // Value-only persistence fixtures still evaluate the mutation while its actor is live.
+  if (!invoked) {
+    const current = readySessionMeta();
+    observed.mutate(current, {
+      sessionId: "session-1",
+      updatedAt: current.lastActivityAt,
+      acp: current,
+    });
+  }
+  return result;
+}
+
 vi.mock("../runtime/session-meta.js", () => ({
   listAcpSessionEntries: (params: unknown) => hoistedMocks.listAcpSessionEntriesMock(params),
   readAcpSessionEntry: (params: unknown) => hoistedMocks.readAcpSessionEntryMock(params),
-  upsertAcpSessionMeta: (params: unknown) => hoistedMocks.upsertAcpSessionMetaMock(params),
+  readAcpSessionEntryAsync: (params: unknown) => hoistedMocks.readAcpSessionEntryAsyncMock(params),
+  prepareAcpSessionControlRead: async (
+    params: Parameters<typeof import("../runtime/session-meta.js").prepareAcpSessionControlRead>[0],
+  ) => ({
+    readCurrent: async () => {
+      params.assertCurrent?.();
+      const stored = await hoistedMocks.readAcpSessionEntryAsyncMock(params);
+      return {
+        session: stored,
+        entry: stored?.entry,
+      };
+    },
+    assertCurrent: () => params.assertCurrent?.(),
+    release: () => {},
+  }),
+  upsertAcpSessionMeta: mockAcpSessionMetaUpsert,
+  upsertAcpSessionMetaForControl: mockAcpSessionMetaUpsert,
 }));
 
 vi.mock("../runtime/registry.js", () => ({
@@ -40,9 +100,34 @@ export const hoisted = hoistedMocks;
 
 // Shared ACP manager test harness with hoisted runtime/session-meta mocks.
 const managerModule = await import("./manager.js");
-export const AcpSessionManager = managerModule.AcpSessionManager;
+type AcpRunTurnInput = import("./manager.types.js").AcpRunTurnInput;
+type TestAcpRunTurnInput = Omit<AcpRunTurnInput, "admittedRunContext"> &
+  Partial<Pick<AcpRunTurnInput, "admittedRunContext">>;
+
+/** Keeps production ACP admission mandatory while centralizing legacy fixture setup. */
+export class AcpSessionManager extends managerModule.AcpSessionManager {
+  override async runTurn(input: TestAcpRunTurnInput): Promise<void> {
+    if (input.admittedRunContext) {
+      return await super.runTurn({ ...input, admittedRunContext: input.admittedRunContext });
+    }
+    const admission = prepareSystemAgentRunAdmission(
+      input.cfg,
+      input.requestId,
+      resolveAcpSessionTarget(input).agentId,
+      "acp-manager-test",
+    );
+    try {
+      return await super.runTurn({ ...input, admittedRunContext: await admission.admit("acp") });
+    } finally {
+      admission.close();
+    }
+  }
+}
 export const resetAcpSessionManagerForTests = () =>
   managerModule.testing.resetAcpSessionManagerForTests();
+const managerLifecycleModule = await import("./manager.lifecycle.js");
+export const disposeAcpSessionManagerInstance =
+  managerLifecycleModule.disposeAcpSessionManagerInstance;
 export const { AcpRuntimeError } = await import("../runtime/errors.js");
 
 export const baseCfg = {
@@ -58,17 +143,6 @@ export async function flushMicrotasks(rounds = 3): Promise<void> {
   for (let index = 0; index < rounds; index += 1) {
     await Promise.resolve();
   }
-}
-
-export function createDeferred(): { promise: Promise<void>; resolve: () => void } {
-  let resolve: (() => void) | undefined;
-  const promise = new Promise<void>((next) => {
-    resolve = next;
-  });
-  if (!resolve) {
-    throw new Error("Expected deferred resolver to be initialized");
-  }
-  return { promise, resolve };
 }
 
 export function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
@@ -216,6 +290,8 @@ export function readySessionMeta(overrides: Partial<SessionAcpMeta> = {}): Sessi
 export function mockParentedAcpSessionEntries(params: {
   childSessionKey: string;
   parentSessionKey: string;
+  label?: string;
+  state?: { currentMeta: SessionAcpMeta | undefined };
 }): void {
   hoisted.readAcpSessionEntryMock.mockImplementation((input: unknown) => {
     const sessionKey = (input as { sessionKey?: string }).sessionKey;
@@ -227,8 +303,9 @@ export function mockParentedAcpSessionEntries(params: {
           sessionId: "child-1",
           updatedAt: Date.now(),
           spawnedBy: params.parentSessionKey,
+          ...(params.label === undefined ? {} : { label: params.label }),
         },
-        acp: readySessionMeta(),
+        acp: params.state ? params.state.currentMeta : readySessionMeta(),
       };
     }
     if (sessionKey === params.parentSessionKey) {
@@ -245,22 +322,18 @@ export function mockParentedAcpSessionEntries(params: {
   });
 }
 
+function recordedUpserts(): AcpMetaUpsertObservation[] {
+  return hoisted.upsertAcpSessionMetaMock.mock.calls.flatMap(([input]) => {
+    const observation =
+      input !== null && typeof input === "object"
+        ? hoisted.upsertObservations.get(input)
+        : undefined;
+    return observation ? [observation] : [];
+  });
+}
+
 export function extractStatesFromUpserts(): SessionAcpMeta["state"][] {
-  const states: SessionAcpMeta["state"][] = [];
-  for (const [firstArg] of hoisted.upsertAcpSessionMetaMock.mock.calls) {
-    const payload = firstArg as {
-      mutate: (
-        current: SessionAcpMeta | undefined,
-        entry: { acp?: SessionAcpMeta } | undefined,
-      ) => SessionAcpMeta | null | undefined;
-    };
-    const current = readySessionMeta();
-    const next = payload.mutate(current, { acp: current });
-    if (next?.state) {
-      states.push(next.state);
-    }
-  }
-  return states;
+  return recordedUpserts().flatMap(({ next }) => (next?.state ? [next.state] : []));
 }
 
 export function extractStateUpsertPersistenceOptions(): Array<{
@@ -268,49 +341,15 @@ export function extractStateUpsertPersistenceOptions(): Array<{
   skipMaintenance?: boolean;
   takeCacheOwnership?: boolean;
 }> {
-  const options: Array<{
-    state: SessionAcpMeta["state"];
-    skipMaintenance?: boolean;
-    takeCacheOwnership?: boolean;
-  }> = [];
-  for (const [firstArg] of hoisted.upsertAcpSessionMetaMock.mock.calls) {
-    const payload = firstArg as {
-      skipMaintenance?: boolean;
-      takeCacheOwnership?: boolean;
-      mutate: (
-        current: SessionAcpMeta | undefined,
-        entry: { acp?: SessionAcpMeta } | undefined,
-      ) => SessionAcpMeta | null | undefined;
-    };
-    const current = readySessionMeta();
-    const next = payload.mutate(current, { acp: current });
-    if (next?.state && payload.skipMaintenance && payload.takeCacheOwnership) {
-      options.push({
-        state: next.state,
-        skipMaintenance: true,
-        takeCacheOwnership: true,
-      });
-    }
-  }
-  return options;
+  return recordedUpserts().flatMap(({ next, skipMaintenance, takeCacheOwnership }) =>
+    next?.state && skipMaintenance && takeCacheOwnership
+      ? [{ state: next.state, skipMaintenance: true, takeCacheOwnership: true }]
+      : [],
+  );
 }
 
 export function extractRuntimeOptionsFromUpserts(): Array<AcpSessionRuntimeOptions | undefined> {
-  const options: Array<AcpSessionRuntimeOptions | undefined> = [];
-  for (const [firstArg] of hoisted.upsertAcpSessionMetaMock.mock.calls) {
-    const payload = firstArg as {
-      mutate: (
-        current: SessionAcpMeta | undefined,
-        entry: { acp?: SessionAcpMeta } | undefined,
-      ) => SessionAcpMeta | null | undefined;
-    };
-    const current = readySessionMeta();
-    const next = payload.mutate(current, { acp: current });
-    if (next) {
-      options.push(next.runtimeOptions);
-    }
-  }
-  return options;
+  return recordedUpserts().flatMap(({ next }) => (next ? [next.runtimeOptions] : []));
 }
 
 export function installAcpSessionManagerTestLifecycle(): void {
@@ -320,6 +359,10 @@ export function installAcpSessionManagerTestLifecycle(): void {
     vi.useRealTimers();
     hoisted.listAcpSessionEntriesMock.mockReset().mockResolvedValue([]);
     hoisted.readAcpSessionEntryMock.mockReset();
+    hoisted.readAcpSessionEntryAsyncMock
+      .mockReset()
+      .mockImplementation(async (params: unknown) => hoisted.readAcpSessionEntryMock(params));
+    hoisted.upsertObservations = new WeakMap();
     hoisted.upsertAcpSessionMetaMock.mockReset().mockResolvedValue(null);
     hoisted.requireAcpRuntimeBackendMock.mockReset();
     hoisted.getAcpRuntimeBackendMock.mockReset().mockImplementation((backendId?: string) => {
@@ -337,6 +380,27 @@ export function installAcpSessionManagerTestLifecycle(): void {
     } else {
       setTestEnvValue("OPENCLAW_STATE_DIR", ORIGINAL_STATE_DIR);
     }
-    resetAcpManagerTaskStateForTests();
+  });
+}
+
+export function installMutableAcpSessionMetaUpsert(state: {
+  currentMeta: SessionAcpMeta | undefined;
+}): void {
+  hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
+    const params = paramsUnknown as {
+      mutate: (
+        current: SessionAcpMeta | undefined,
+        entry: { acp?: SessionAcpMeta } | undefined,
+      ) => SessionAcpMeta | null | undefined;
+    };
+    const next = params.mutate(state.currentMeta, { acp: state.currentMeta });
+    if (next) {
+      state.currentMeta = next;
+    }
+    return {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      acp: state.currentMeta,
+    };
   });
 }

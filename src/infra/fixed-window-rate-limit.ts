@@ -1,14 +1,7 @@
-/**
- * Shared fixed-window rate-limit primitive for gateway, ACP, and webhook ingress.
- *
- * It is intentionally in-memory and process-local; callers that need distributed
- * limits must layer their own persistence before invoking request work.
- */
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 
-/** Minimal fixed-window limiter interface used by memory and request guard helpers. */
 export type FixedWindowRateLimiter = {
   consume: () => {
-    /** Whether the current call consumed quota successfully. */
     allowed: boolean;
     /** Milliseconds until the next fixed window when quota is exhausted. */
     retryAfterMs: number;
@@ -19,27 +12,14 @@ export type FixedWindowRateLimiter = {
   reset: () => void;
 };
 
-/** Normalizes rate-limit numeric config to a finite integer with a lower bound. */
-export function resolveFixedWindowRateLimitInteger(
-  value: number | undefined,
-  fallback: number,
-  params: { min: number },
-): number {
-  const candidate = typeof value === "number" && Number.isFinite(value) ? value : fallback;
-  return Math.max(params.min, Math.floor(candidate));
-}
-
-/** Creates a fixed-window counter that reports allowance, remaining quota, and retry delay. */
-export function createFixedWindowRateLimiter(params: {
-  /** Maximum successful consume calls allowed per window. */
+/** Process-local fixed-window quota; distributed limits require caller-owned persistence. */
+export function createFixedWindowBudget(params: {
   maxRequests: number;
-  /** Fixed window duration in milliseconds. */
   windowMs: number;
-  /** Optional clock for tests or deterministic host runtimes. */
   now?: () => number;
 }): FixedWindowRateLimiter {
-  const maxRequests = resolveFixedWindowRateLimitInteger(params.maxRequests, 1, { min: 1 });
-  const windowMs = resolveFixedWindowRateLimitInteger(params.windowMs, 1, { min: 1 });
+  const maxRequests = resolveIntegerOption(params.maxRequests, 1, { min: 1 });
+  const windowMs = resolveIntegerOption(params.windowMs, 1, { min: 1 });
   const now = params.now ?? Date.now;
 
   let count = 0;
@@ -49,7 +29,6 @@ export function createFixedWindowRateLimiter(params: {
     consume() {
       const nowMs = now();
       if (nowMs - windowStartMs >= windowMs) {
-        // Fixed-window semantics reset all quota at the first request after the window expires.
         windowStartMs = nowMs;
         count = 0;
       }

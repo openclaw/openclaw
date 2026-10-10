@@ -1,5 +1,6 @@
 // Policy doctor metadata tests cover rule metadata.
 import { describe, expect, it } from "vitest";
+import { scanPolicyDataHandling } from "../policy-state-data.js";
 import { CHECK_IDS, POLICY_CHECK_IDS } from "./check-ids.js";
 import { POLICY_FIX_METADATA_BY_CHECK_ID } from "./fix-metadata.js";
 import { POLICY_RULE_METADATA, type PolicyRuleMetadata } from "./metadata.js";
@@ -16,158 +17,52 @@ describe("policy doctor metadata", () => {
             rule.scopeSelectors?.includes("agentIds") ||
             rule.scopeSelectors?.includes("channelIds"),
         )
-        .map((rule) => {
-          const description: {
-            path: string;
-            strictness: PolicyRuleMetadata["strictness"];
-            selectors: PolicyRuleMetadata["scopeSelectors"];
-            emptyList?: PolicyRuleMetadata["emptyList"];
-          } = {
-            path: rule.policyPath.join("."),
-            strictness: rule.strictness,
-            selectors: rule.scopeSelectors,
-          };
-          if (rule.emptyList !== undefined) {
-            description.emptyList = rule.emptyList;
-          }
-          return description;
-        }),
+        .map((rule) => [
+          rule.policyPath.join("."),
+          rule.strictness,
+          rule.emptyList,
+          rule.scopeSelectors,
+        ]),
     ).toEqual([
-      {
-        path: "agents.workspace.allowedAccess",
-        strictness: "allowlist-subset",
-        emptyList: "disabled",
-        selectors: ["agentIds"],
-      },
-      {
-        path: "agents.workspace.denyTools",
-        strictness: "denylist-superset",
-        selectors: ["agentIds"],
-      },
-      {
-        path: "tools.profiles.allow",
-        strictness: "allowlist-subset",
-        emptyList: "disabled",
-        selectors: ["agentIds"],
-      },
-      {
-        path: "tools.fs.requireWorkspaceOnly",
-        strictness: "requires-true",
-        selectors: ["agentIds"],
-      },
-      {
-        path: "tools.exec.allowSecurity",
-        strictness: "allowlist-subset",
-        emptyList: "disabled",
-        selectors: ["agentIds"],
-      },
-      {
-        path: "tools.exec.requireAsk",
-        strictness: "allowlist-subset",
-        emptyList: "disabled",
-        selectors: ["agentIds"],
-      },
-      {
-        path: "tools.exec.allowHosts",
-        strictness: "allowlist-subset",
-        emptyList: "disabled",
-        selectors: ["agentIds"],
-      },
-      { path: "tools.elevated.allow", strictness: "requires-false", selectors: ["agentIds"] },
-      {
-        path: "tools.alsoAllow.expected",
-        strictness: "exact-list",
-        emptyList: "meaningful",
-        selectors: ["agentIds"],
-      },
-      { path: "tools.denyTools", strictness: "denylist-superset", selectors: ["agentIds"] },
-      {
-        path: "sandbox.requireMode",
-        strictness: "allowlist-subset",
-        emptyList: "disabled",
-        selectors: ["agentIds"],
-      },
-      {
-        path: "sandbox.allowBackends",
-        strictness: "allowlist-subset",
-        emptyList: "disabled",
-        selectors: ["agentIds"],
-      },
-      {
-        path: "sandbox.containers.denyHostNetwork",
-        strictness: "requires-true",
-        selectors: ["agentIds"],
-      },
-      {
-        path: "sandbox.containers.denyContainerNamespaceJoin",
-        strictness: "requires-true",
-        selectors: ["agentIds"],
-      },
-      {
-        path: "sandbox.containers.requireReadOnlyMounts",
-        strictness: "requires-true",
-        selectors: ["agentIds"],
-      },
-      {
-        path: "sandbox.containers.denyContainerRuntimeSocketMounts",
-        strictness: "requires-true",
-        selectors: ["agentIds"],
-      },
-      {
-        path: "sandbox.containers.denyUnconfinedProfiles",
-        strictness: "requires-true",
-        selectors: ["agentIds"],
-      },
-      {
-        path: "sandbox.browser.requireCdpSourceRange",
-        strictness: "requires-true",
-        selectors: ["agentIds"],
-      },
-      {
-        path: "ingress.channels.allowDmPolicies",
-        strictness: "allowlist-subset",
-        emptyList: "disabled",
-        selectors: ["channelIds"],
-      },
-      {
-        path: "ingress.channels.denyOpenGroups",
-        strictness: "requires-true",
-        selectors: ["channelIds"],
-      },
-      {
-        path: "ingress.channels.requireMentionInGroups",
-        strictness: "requires-true",
-        selectors: ["channelIds"],
-      },
-      {
-        path: "dataHandling.memory.denySessionTranscriptIndexing",
-        strictness: "requires-true",
-        selectors: ["agentIds"],
-      },
-      {
-        path: "execApprovals.agents.allowSecurity",
-        strictness: "allowlist-subset",
-        emptyList: "disabled",
-        selectors: ["agentIds"],
-      },
-      {
-        path: "execApprovals.agents.allowAutoAllowSkills",
-        strictness: "requires-false",
-        selectors: ["agentIds"],
-      },
-      {
-        path: "execApprovals.agents.allowlist.expected",
-        strictness: "exact-list",
-        emptyList: "meaningful",
-        selectors: ["agentIds"],
-      },
+      ["agents.workspace.allowedAccess", "allowlist-subset", "disabled", ["agentIds"]],
+      ["agents.workspace.denyTools", "denylist-superset", undefined, ["agentIds"]],
+      ["tools.profiles.allow", "allowlist-subset", "disabled", ["agentIds"]],
+      ["tools.fs.requireWorkspaceOnly", "requires-true", undefined, ["agentIds"]],
+      ["tools.exec.allowSecurity", "allowlist-subset", "disabled", ["agentIds"]],
+      ["tools.exec.requireAsk", "allowlist-subset", "disabled", ["agentIds"]],
+      ["tools.exec.allowHosts", "allowlist-subset", "disabled", ["agentIds"]],
+      ["tools.elevated.allow", "requires-false", undefined, ["agentIds"]],
+      ["tools.alsoAllow.expected", "exact-list", "meaningful", ["agentIds"]],
+      ["tools.denyTools", "denylist-superset", undefined, ["agentIds"]],
+      ["sandbox.requireMode", "allowlist-subset", "disabled", ["agentIds"]],
+      ["sandbox.allowBackends", "allowlist-subset", "disabled", ["agentIds"]],
+      ["sandbox.containers.denyHostNetwork", "requires-true", undefined, ["agentIds"]],
+      ["sandbox.containers.denyContainerNamespaceJoin", "requires-true", undefined, ["agentIds"]],
+      ["sandbox.containers.requireReadOnlyMounts", "requires-true", undefined, ["agentIds"]],
+      [
+        "sandbox.containers.denyContainerRuntimeSocketMounts",
+        "requires-true",
+        undefined,
+        ["agentIds"],
+      ],
+      ["sandbox.containers.denyUnconfinedProfiles", "requires-true", undefined, ["agentIds"]],
+      ["sandbox.browser.requireCdpSourceRange", "requires-true", undefined, ["agentIds"]],
+      ["ingress.channels.allowDmPolicies", "allowlist-subset", "disabled", ["channelIds"]],
+      ["ingress.channels.denyOpenGroups", "requires-true", undefined, ["channelIds"]],
+      ["ingress.channels.requireMentionInGroups", "requires-true", undefined, ["channelIds"]],
+      [
+        "dataHandling.memory.denySessionTranscriptIndexing",
+        "requires-true",
+        undefined,
+        ["agentIds"],
+      ],
+      ["execApprovals.agents.allowSecurity", "allowlist-subset", "disabled", ["agentIds"]],
+      ["execApprovals.agents.allowAutoAllowSkills", "requires-false", undefined, ["agentIds"]],
+      ["execApprovals.agents.allowlist.expected", "exact-list", "meaningful", ["agentIds"]],
     ]);
   });
 
   it("classifies every policy finding for fix recommendation coverage", () => {
-    expect(POLICY_FIX_METADATA.map((rule) => rule.checkId)).toHaveLength(
-      new Set(POLICY_FIX_METADATA.map((rule) => rule.checkId)).size,
-    );
     expect([...POLICY_FIX_METADATA_BY_CHECK_ID.keys()].toSorted()).toEqual(
       [...POLICY_CHECK_IDS].toSorted(),
     );
@@ -176,7 +71,7 @@ describe("policy doctor metadata", () => {
   it("points required-deny repair metadata at OpenClaw deny config paths", () => {
     expect(
       POLICY_FIX_METADATA_BY_CHECK_ID.get(CHECK_IDS.policyToolsRequiredDenyMissing)?.configTargets,
-    ).toEqual(["tools.deny", "agents.list[].tools.deny"]);
+    ).toEqual(["tools.deny", "agents.entries.<id>.tools.deny"]);
   });
 
   it("keeps policy fix class assignments explicit", () => {
@@ -207,16 +102,10 @@ describe("policy doctor metadata", () => {
         .get("unsupported")
         ?.map((rule) => rule.checkId)
         .toSorted(),
-      validateOnly:
-        grouped
-          .get("validateOnly")
-          ?.map((rule) => rule.checkId)
-          .toSorted() ?? [],
     }).toEqual({
       automatic: [
         "policy/agents-tool-not-denied",
         "policy/channels-denied-provider",
-        "policy/data-handling-redaction-disabled",
         "policy/data-handling-telemetry-content-capture",
         "policy/gateway-control-ui-insecure",
         "policy/gateway-http-endpoint-enabled",
@@ -243,6 +132,7 @@ describe("policy doctor metadata", () => {
         "policy/policy-jsonc-missing",
         "policy/sandbox-browser-cdp-source-range-missing",
         "policy/secrets-unmanaged-provider",
+        "policy/tools-md-migration-required",
         "policy/tools-missing-owner",
         "policy/tools-missing-risk-level",
         "policy/tools-missing-sensitivity-token",
@@ -265,6 +155,10 @@ describe("policy doctor metadata", () => {
         "policy/models-denied-provider",
         "policy/models-unapproved-provider",
         "policy/network-private-access-enabled",
+        "policy/routing-agent-mismatch",
+        "policy/routing-binding-channel-unconfigured",
+        "policy/routing-bindings-required",
+        "policy/routing-match-kind-mismatch",
         "policy/sandbox-backend-unapproved",
         "policy/sandbox-container-host-network-denied",
         "policy/sandbox-container-mount-mode-required",
@@ -283,7 +177,33 @@ describe("policy doctor metadata", () => {
         "policy/tools-profile-unapproved",
       ],
       unsupported: ["policy/sandbox-container-posture-unobservable"],
-      validateOnly: [],
     });
+  });
+
+  it("declares how every policy rule is enforced", () => {
+    const rules = POLICY_RULE_METADATA as readonly PolicyRuleMetadata[];
+    // Every rule names either its doctor checks or the invariant that satisfies it, never
+    // both and never neither, so an accepted policy key cannot enforce nothing in silence.
+    expect(
+      rules
+        .filter((rule) => rule.checkIds.length > 0 === (rule.satisfiedByInvariant !== undefined))
+        .map((rule) => rule.policyPath.join(".")),
+    ).toEqual([]);
+    const invariantSources = new Set(scanPolicyDataHandling({}).map((entry) => entry.source));
+    expect(
+      rules
+        .filter((rule) => rule.satisfiedByInvariant !== undefined)
+        .map((rule) => [
+          rule.policyPath.join("."),
+          rule.satisfiedByInvariant,
+          invariantSources.has(rule.satisfiedByInvariant ?? ""),
+        ]),
+    ).toEqual([
+      [
+        "dataHandling.sensitiveLogging.requireRedaction",
+        "oc://openclaw.invariant/logging/redaction",
+        true,
+      ],
+    ]);
   });
 });

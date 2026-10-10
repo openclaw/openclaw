@@ -13,10 +13,11 @@ type NostrProfileHttpContext = Parameters<typeof createNostrProfileHttpHandler>[
 const runtimeScopeMock = vi.hoisted(() => vi.fn());
 const clearProfileRateLimiterMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./nostr-profile-http-runtime.js", async () => {
-  const webhookIngress = await import("openclaw/plugin-sdk/webhook-ingress");
-  const requestGuards = await import("openclaw/plugin-sdk/webhook-request-guards");
+vi.mock("openclaw/plugin-sdk/webhook-ingress", async (importOriginal) => {
+  const webhookIngress =
+    await importOriginal<typeof import("openclaw/plugin-sdk/webhook-ingress")>();
   return {
+    ...webhookIngress,
     createFixedWindowRateLimiter: (
       ...args: Parameters<typeof webhookIngress.createFixedWindowRateLimiter>
     ) => {
@@ -24,11 +25,13 @@ vi.mock("./nostr-profile-http-runtime.js", async () => {
       clearProfileRateLimiterMock.mockImplementation(() => limiter.clear());
       return limiter;
     },
-    readJsonBodyWithLimit: requestGuards.readJsonBodyWithLimit,
-    requestBodyErrorToText: requestGuards.requestBodyErrorToText,
-    getPluginRuntimeGatewayRequestScope: runtimeScopeMock,
   };
 });
+
+vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/plugin-runtime")>()),
+  getPluginRuntimeGatewayRequestScope: runtimeScopeMock,
+}));
 
 // Mock the channel exports
 vi.mock("./channel.js", () => ({
@@ -370,6 +373,28 @@ describe("nostr-profile-http", () => {
 
       await run();
       expect(res["_getStatusCode"]()).toBe(403);
+    });
+
+    it.each([
+      ["http://localhost:18789", 200],
+      ["http://127.0.0.1:18789", 200],
+      ["http://127.0.0.2:18789", 200],
+      ["http://127.255.255.254:18789", 200],
+      ["http://[::1]:18789", 200],
+      ["http://[::ffff:127.0.0.2]:18789", 200],
+      ["http://128.0.0.1:18789", 403],
+      ["http://127.0.0.1.evil.com:18789", 403],
+    ] as const)("classifies profile mutation origin %s", async (origin, expectedStatusCode) => {
+      const { res, run } = createProfileHttpHarness("PUT", "/api/channels/nostr/default/profile", {
+        body: { name: "satoshi" },
+        req: { headers: { origin } },
+      });
+      if (expectedStatusCode === 200) {
+        mockPublishSuccess();
+      }
+
+      await run();
+      expect(res["_getStatusCode"]()).toBe(expectedStatusCode);
     });
 
     it("rejects profile mutation with cross-site sec-fetch-site header", async () => {

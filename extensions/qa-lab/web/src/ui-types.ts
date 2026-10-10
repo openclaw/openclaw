@@ -1,4 +1,22 @@
 import type {
+  CaptureQueryPreset as StoredCaptureQueryPreset,
+  CaptureQueryRow,
+  DebugProxyCaptureStore,
+  CaptureSessionSummary,
+} from "openclaw/plugin-sdk/proxy-capture";
+import type {
+  QaBusConversationKind,
+  QaBusStateSnapshot,
+} from "openclaw/plugin-sdk/qa-channel-protocol";
+import type { QaLabLatestReport, QaLabScenarioRun } from "../../api.js";
+import type {
+  QaLabExecutionKind,
+  QaLabResolvedRunPlan,
+  QaLabRunnerSnapshot,
+  QaLabRunSelection,
+  QaRunnerModelOption,
+} from "../../runner-contract.js";
+import type {
   QaEvidenceArtifactView,
   QaEvidenceGalleryEntryView,
   QaEvidenceGalleryModel,
@@ -7,71 +25,8 @@ import type {
   QaEvidenceProducerContextFile,
 } from "../../shared/evidence-gallery-types.js";
 
-/* ===== Shared types (unchanged from the bus protocol) ===== */
-
-export type Conversation = {
-  accountId: string;
-  id: string;
-  kind: "direct" | "channel";
-  title?: string;
-};
-
-export type Attachment = {
-  id: string;
-  kind: "image" | "video" | "audio" | "file";
-  mimeType: string;
-  fileName?: string;
-  inline?: boolean;
-  url?: string;
-  contentBase64?: string;
-  width?: number;
-  height?: number;
-  durationMs?: number;
-  altText?: string;
-  transcript?: string;
-};
-
-export type Thread = {
-  accountId: string;
-  id: string;
-  conversationId: string;
-  title: string;
-};
-
-export type Message = {
-  accountId: string;
-  id: string;
-  direction: "inbound" | "outbound";
-  conversation: Omit<Conversation, "accountId">;
-  senderId: string;
-  senderName?: string;
-  text: string;
-  timestamp: number;
-  threadId?: string;
-  threadTitle?: string;
-  deleted?: boolean;
-  editedAt?: number;
-  attachments?: Attachment[];
-  reactions: Array<{ emoji: string; senderId: string }>;
-};
-
-type BusEvent =
-  | { cursor: number; kind: "thread-created"; thread: Thread }
-  | { cursor: number; kind: string; message?: Message; emoji?: string };
-
-export type Snapshot = {
-  conversations: Conversation[];
-  threads: Thread[];
-  messages: Message[];
-  events: BusEvent[];
-};
-
 export type ReportEnvelope = {
-  report: null | {
-    outputPath: string;
-    markdown: string;
-    generatedAt: string;
-  };
+  report: QaLabLatestReport | null;
 };
 
 export type SeedScenario = {
@@ -82,6 +37,11 @@ export type SeedScenario = {
   successCriteria: string[];
   docsRefs?: string[];
   codeRefs?: string[];
+  execution?: {
+    kind?: QaLabExecutionKind;
+    channel?: string;
+  };
+  runtimePairLane?: "core" | "extended" | "soak";
 };
 
 export type Bootstrap = {
@@ -100,85 +60,25 @@ export type Bootstrap = {
   runner: RunnerSnapshot;
   runnerCatalog: {
     status: "loading" | "ready" | "failed";
-    real: RunnerModelOption[];
+    real: QaRunnerModelOption[];
+    channels: string[];
+    profiles: Array<{
+      id: string;
+      evidenceMode: "full" | "slim";
+      channelDriver: "qa-channel" | "crabline" | "live";
+      categoryIds: string[];
+    }>;
   };
 };
 
-type ScenarioStep = {
-  name: string;
-  status: "pass" | "fail" | "skip";
-  details?: string;
-};
+type ScenarioRun = QaLabScenarioRun;
 
-export type ScenarioOutcome = {
-  id: string;
-  name: string;
-  status: "pending" | "running" | "pass" | "fail" | "skip";
-  details?: string;
-  steps?: ScenarioStep[];
-  startedAt?: string;
-  finishedAt?: string;
-};
-
-type ScenarioRun = {
-  kind: "suite" | "self-check";
-  status: "idle" | "running" | "completed";
-  startedAt?: string;
-  finishedAt?: string;
-  scenarios: ScenarioOutcome[];
-  counts: {
-    total: number;
-    pending: number;
-    running: number;
-    passed: number;
-    failed: number;
-    skipped: number;
-  };
-};
-
-export type RunnerSelection = {
-  providerMode: "mock-openai" | "live-frontier";
-  primaryModel: string;
-  alternateModel: string;
-  fastMode: boolean;
-  scenarioIds: string[];
-};
-
-type RunnerSnapshot = {
-  status: "idle" | "running" | "completed" | "failed";
-  selection: RunnerSelection;
-  startedAt?: string;
-  finishedAt?: string;
-  artifacts: null | {
-    evidencePath: string;
-    outputDir: string;
-    reportPath: string;
-    summaryPath: string;
-    watchUrl: string;
-  };
-  error: string | null;
-};
-
-export type RunnerModelOption = {
-  key: string;
-  name: string;
-  provider: string;
-  input: string;
-  preferred: boolean;
-};
+export type RunnerSelection = QaLabRunSelection;
+export type RunnerResolvedPlan = QaLabResolvedRunPlan;
+type RunnerSnapshot = QaLabRunnerSnapshot;
 
 export type OutcomesEnvelope = {
   run: ScenarioRun | null;
-};
-
-type CaptureSessionSummary = {
-  id: string;
-  startedAt: number;
-  endedAt?: number;
-  mode: string;
-  sourceProcess: string;
-  proxyUrl?: string;
-  eventCount: number;
 };
 
 export type CaptureEventView = {
@@ -205,14 +105,7 @@ export type CaptureEventView = {
   captureOrigin?: string;
 };
 
-export type CaptureQueryPreset =
-  | "none"
-  | "double-sends"
-  | "retry-storms"
-  | "cache-busting"
-  | "ws-duplicate-frames"
-  | "missing-ack"
-  | "error-bursts";
+type CaptureQueryPreset = "none" | StoredCaptureQueryPreset;
 
 export type CaptureSessionsEnvelope = {
   sessions: CaptureSessionSummary[];
@@ -223,24 +116,10 @@ export type CaptureEventsEnvelope = {
 };
 
 export type CaptureQueryEnvelope = {
-  rows: Array<Record<string, string | number | null>>;
+  rows: CaptureQueryRow[];
 };
 
-type CaptureObservedDimension = {
-  value: string;
-  count: number;
-};
-
-type CaptureCoverageSummary = {
-  sessionId: string;
-  totalEvents: number;
-  unlabeledEventCount: number;
-  providers: CaptureObservedDimension[];
-  apis: CaptureObservedDimension[];
-  models: CaptureObservedDimension[];
-  hosts: CaptureObservedDimension[];
-  localPeers: CaptureObservedDimension[];
-};
+type CaptureCoverageSummary = ReturnType<DebugProxyCaptureStore["summarizeSessionCoverage"]>;
 
 export type CaptureCoverageEnvelope = {
   coverage: CaptureCoverageSummary;
@@ -301,13 +180,13 @@ export type TabId = "chat" | "results" | "report" | "events" | "capture" | "evid
 export type UiState = {
   theme: "light" | "dark";
   bootstrap: Bootstrap | null;
-  snapshot: Snapshot | null;
+  snapshot: QaBusStateSnapshot | null;
   latestReport: ReportEnvelope["report"];
   scenarioRun: ScenarioRun | null;
   captureSessions: CaptureSessionSummary[];
   captureEvents: CaptureEventView[];
   captureQueryPreset: CaptureQueryPreset;
-  captureQueryRows: Array<Record<string, string | number | null>>;
+  captureQueryRows: CaptureQueryRow[];
   captureKindFilter: string[];
   captureProviderFilter: string[];
   captureHostFilter: string[];
@@ -337,7 +216,6 @@ export type UiState = {
   captureDetailSplitPct: number;
   captureDetailSplitDragging: boolean;
   captureDetailView: "overview" | "flow" | "payload" | "headers";
-  capturePreferredDetailView: "overview" | "flow" | "payload" | "headers" | null;
   captureFlowDetailLayout: "nav-first" | "pair-first" | null;
   capturePayloadDetailLayout: "formatted" | "raw" | null;
   capturePayloadExtent: "preview" | "full";
@@ -363,15 +241,16 @@ export type UiState = {
   capturePinnedLaneIds: string[];
   selectedCaptureSessionIds: string[];
   selectedCaptureEventKey: string | null;
-  selectedEvidenceEntryId: string | null;
+  selectedEvidenceEntryKey: string | null;
   selectedConversationKey: string | null;
   selectedThreadId: string | null;
   selectedScenarioId: string | null;
   activeTab: TabId;
   runnerDraft: RunnerSelection | null;
   runnerDraftDirty: boolean;
+  runnerPlanOverride: RunnerResolvedPlan | null;
   composer: {
-    conversationKind: "direct" | "channel";
+    conversationKind: QaBusConversationKind;
     conversationId: string;
     senderId: string;
     senderName: string;

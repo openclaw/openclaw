@@ -1,5 +1,5 @@
-// Matrix type declarations define plugin contracts.
 import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
+import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
 import type { CoreConfig } from "../../types.js";
 import { MATRIX_ANNOTATION_RELATION_TYPE, MATRIX_REACTION_EVENT_TYPE } from "../reaction-common.js";
 import type {
@@ -12,7 +12,6 @@ import type {
   VideoFileInfo,
 } from "../sdk.js";
 
-// Message types
 export const MsgType = {
   Text: "m.text",
   Image: "m.image",
@@ -22,14 +21,12 @@ export const MsgType = {
   Notice: "m.notice",
 } as const;
 
-// Relation types
 export const RelationType = {
   Annotation: MATRIX_ANNOTATION_RELATION_TYPE,
   Replace: "m.replace",
   Thread: "m.thread",
 } as const;
 
-// Event types
 export const EventType = {
   Direct: "m.direct",
   Reaction: MATRIX_REACTION_EVENT_TYPE,
@@ -40,11 +37,11 @@ export const MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY = "com.openclaw.finalized_pre
 
 export type MatrixDirectAccountData = Record<string, string[]>;
 
-export type MatrixReplyRelation = {
+type MatrixReplyRelation = {
   "m.in_reply_to": { event_id: string };
 };
 
-export type MatrixThreadRelation = {
+type MatrixThreadRelation = {
   rel_type: typeof RelationType.Thread;
   event_id: string;
   is_falling_back?: boolean;
@@ -82,22 +79,34 @@ export type MatrixSendResult = {
   roomId: string;
   primaryMessageId?: string;
   receipt: MessageReceipt;
+  /** Provider-accepted visible bodies in event order for this send operation. */
+  content: string;
 };
 
 export type MatrixSendOpts = {
   cfg: CoreConfig;
   client?: import("../sdk.js").MatrixClient;
   mediaUrl?: string;
-  mediaAccess?: {
-    localRoots?: readonly string[];
-    readFile?: (filePath: string) => Promise<Buffer>;
-  };
+  mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   accountId?: string;
   replyToId?: string;
+  /** Compatibility reply for unthreaded clients, distinct from a selected native reply. */
+  fallbackReplyToId?: string;
   threadId?: string | number | null;
   timeoutMs?: number;
+  /** Opaque durable queue id used to derive Matrix transaction ids. */
+  deliveryQueueId?: string;
+  /** Stable provider-send index within one durable payload. */
+  deliveryPartIndex?: number;
+  /** Exact provider-send count within one durable payload. */
+  deliveryPartCount?: number;
+  /** Marks recipient-visible timeline dispatch after the recovery plan is durable. */
+  onPlatformSendDispatch?: () => Promise<void>;
+  /** Check current caller/custody before new requests without rejecting accepted results. */
+  assertDirectAdapterHandoff?: () => void;
+  signal?: AbortSignal;
   /** Additional Matrix event content fields to merge into the first sent event. */
   extraContent?: MatrixExtraContentFields;
   /** Send audio as voice message instead of audio file. Defaults to false. */
@@ -113,8 +122,6 @@ export type MatrixMediaMsgType =
   | typeof MsgType.File;
 
 export type MatrixTextMsgType = typeof MsgType.Text | typeof MsgType.Notice;
-
-export type MediaKind = "image" | "audio" | "video" | "document" | "unknown";
 
 export type MatrixFormattedContent = MessageEventContent & {
   format?: string;

@@ -1,36 +1,27 @@
 // Tests private message-tool final delivery and visibility suppression.
+import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 import { describe, expect, it } from "vitest";
-import { shouldWarnAboutPrivateMessageToolFinal } from "./private-message-tool-final.js";
+import { classifyPrivateMessageToolFinal } from "./private-message-tool-final.js";
 
 const base = {
   sourceReplyDeliveryMode: "message_tool_only" as const,
   sendPolicyDenied: false,
   successfulSourceReplyDelivery: false,
+  isHeartbeat: false,
+  isRoomEvent: false,
   finalText:
     "Here is the answer the user asked for. It includes enough detail to look like a visible response rather than an internal no-op note.",
 };
 
+function shouldWarnAboutPrivateMessageToolFinal(
+  params: Parameters<typeof classifyPrivateMessageToolFinal>[0],
+): boolean {
+  return classifyPrivateMessageToolFinal(params) === "substantive";
+}
+
 describe("shouldWarnAboutPrivateMessageToolFinal", () => {
   it("flags a multi-sentence private final that was never delivered via the message tool (#85714)", () => {
     expect(shouldWarnAboutPrivateMessageToolFinal(base)).toBe(true);
-  });
-
-  it("flags a long private final even without multiple sentence terminators", () => {
-    expect(
-      shouldWarnAboutPrivateMessageToolFinal({
-        ...base,
-        finalText: "x".repeat(280),
-      }),
-    ).toBe(true);
-  });
-
-  it("does not flag automatic delivery mode (final text is delivered normally)", () => {
-    expect(
-      shouldWarnAboutPrivateMessageToolFinal({ ...base, sourceReplyDeliveryMode: "automatic" }),
-    ).toBe(false);
-    expect(
-      shouldWarnAboutPrivateMessageToolFinal({ ...base, sourceReplyDeliveryMode: undefined }),
-    ).toBe(false);
   });
 
   it("does not flag when the message tool already delivered this turn", () => {
@@ -49,27 +40,34 @@ describe("shouldWarnAboutPrivateMessageToolFinal", () => {
     ).toBe(false);
   });
 
-  it("does not flag a short private final", () => {
-    expect(
-      shouldWarnAboutPrivateMessageToolFinal({
-        ...base,
-        finalText: "Nothing to add here.",
-      }),
-    ).toBe(false);
-    expect(
-      shouldWarnAboutPrivateMessageToolFinal({
-        ...base,
-        finalText: "I do not need to send anything. Nothing else to add.",
-      }),
-    ).toBe(false);
+  // Raw UTF-16 length misses substantive CJK replies; recovery needs estimated length (#115555).
+  it.each([
+    {
+      label: "single-sentence CJK paragraph (length alone is substantive)",
+      finalText: `${"字".repeat(150)}。`,
+      expected: true,
+    },
+  ])("$label -> $expected", ({ finalText, expected }) => {
+    expect(shouldWarnAboutPrivateMessageToolFinal({ ...base, finalText })).toBe(expected);
   });
 
-  it("does not flag empty or whitespace-only final text", () => {
-    expect(shouldWarnAboutPrivateMessageToolFinal({ ...base, finalText: "" })).toBe(false);
-    expect(shouldWarnAboutPrivateMessageToolFinal({ ...base, finalText: "   \n " })).toBe(false);
-  });
+  it.each([{ label: "ideographic full stop", terminator: "。" }])(
+    "flags a medium-length CJK reply with $label",
+    ({ terminator }) => {
+      const finalText =
+        `第一項設定已完成，請檢查通知狀態${terminator}` +
+        `第二項資料已同步，稍後即可收到訊息${terminator}`;
+      const estimatedChars = estimateStringChars(finalText);
 
-  it("does not flag when delivery was intentionally denied by send policy", () => {
-    expect(shouldWarnAboutPrivateMessageToolFinal({ ...base, sendPolicyDenied: true })).toBe(false);
+      expect(estimatedChars).toBeGreaterThanOrEqual(120);
+      expect(estimatedChars).toBeLessThan(280);
+      expect(shouldWarnAboutPrivateMessageToolFinal({ ...base, finalText })).toBe(true);
+    },
+  );
+
+  it("leaves accented Latin on raw length", () => {
+    const finalText = `Le café est prêt. ${"x".repeat(100)}`;
+    expect(finalText.length).toBeLessThan(280);
+    expect(shouldWarnAboutPrivateMessageToolFinal({ ...base, finalText })).toBe(false);
   });
 });

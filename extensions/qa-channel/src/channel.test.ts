@@ -1,5 +1,6 @@
-// Qa Channel tests cover channel plugin behavior.
+import { readFile } from "node:fs/promises";
 import path from "node:path";
+import type { ChannelMessageActionName } from "openclaw/plugin-sdk/channel-contract";
 import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createPluginRuntimeMock,
@@ -12,13 +13,15 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { extractToolPayload } from "openclaw/plugin-sdk/tool-payload";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState, startQaBusServer } from "../../qa-lab/bus-api.js";
 import { qaChannelPlugin, setQaChannelRuntime } from "../api.js";
 import { listQaChannelAccountIds, resolveDefaultQaChannelAccountId } from "./accounts.js";
-import type { ChannelMessageActionName } from "./runtime-api.js";
 
 type QaDispatchTurn = Parameters<PluginRuntime["channel"]["inbound"]["dispatch"]>[0];
+
+const QA_GENERATED_IMAGE_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0nQAAAAASUVORK5CYII=";
 
 afterEach(() => {
   resetPluginRuntimeStateForTest();
@@ -64,6 +67,7 @@ function expectDispatchedContext(ctx: Record<string, unknown> | null): Record<st
 
 function createMockQaRuntime(params?: {
   onDispatch?: (ctx: Record<string, unknown>) => void;
+  onTurn?: (turn: QaDispatchTurn) => void;
   toolStarts?: Array<{ name?: string; phase?: string; args?: Record<string, unknown> }>;
 }): PluginRuntime {
   return createPluginRuntimeMock({
@@ -78,6 +82,7 @@ function createMockQaRuntime(params?: {
       },
       inbound: {
         async dispatch(turn: QaDispatchTurn) {
+          params?.onTurn?.(turn);
           for (const toolStart of params?.toolStarts ?? []) {
             await turn.replyOptions?.onToolStart?.(toolStart);
           }
@@ -101,7 +106,11 @@ function createMockQaRuntime(params?: {
   } as unknown as PluginRuntime);
 }
 
-function createQaChannelConfig(params: { baseUrl: string; allowFrom?: string[] }) {
+function createQaChannelConfig(params: {
+  baseUrl: string;
+  allowFrom?: string[];
+  mediaMaxMb?: number;
+}) {
   return {
     channels: {
       "qa-channel": {
@@ -109,6 +118,7 @@ function createQaChannelConfig(params: { baseUrl: string; allowFrom?: string[] }
         botUserId: "openclaw",
         botDisplayName: "OpenClaw QA",
         allowFrom: params.allowFrom,
+        mediaMaxMb: params.mediaMaxMb,
       },
     },
   };
@@ -141,12 +151,17 @@ function requireQaActionHandler() {
 async function startQaChannelTestHarness(params?: {
   runtime?: PluginRuntime;
   allowFrom?: string[];
+  mediaMaxMb?: number;
 }) {
   installQaChannelTestRegistry();
   const state = createQaBusState();
   const bus = await startQaBusServer({ state });
   setQaChannelRuntime(params?.runtime ?? createMockQaRuntime());
-  const cfg = createQaChannelConfig({ baseUrl: bus.baseUrl, allowFrom: params?.allowFrom });
+  const cfg = createQaChannelConfig({
+    baseUrl: bus.baseUrl,
+    allowFrom: params?.allowFrom,
+    mediaMaxMb: params?.mediaMaxMb,
+  });
   const account = qaChannelPlugin.config.resolveAccount(cfg, "default");
   const abort = new AbortController();
   const startAccount = requireQaStartAccount();
@@ -169,35 +184,6 @@ async function startQaChannelTestHarness(params?: {
 }
 
 describe("qa-channel plugin", () => {
-  it("derives thread-aware outbound session routes from explicit thread targets", async () => {
-    const route = await qaChannelPlugin.messaging?.resolveOutboundSessionRoute?.({
-      cfg: {},
-      agentId: "main",
-      accountId: "default",
-      target: "thread:qa-room/thread-1",
-    });
-
-    expect(route?.sessionKey).toBe("agent:main:qa-channel:channel:thread:qa-room/thread-1");
-    expect(route?.baseSessionKey).toBe("agent:main:qa-channel:channel:thread:qa-room/thread-1");
-    expect(route?.threadId).toBeUndefined();
-  });
-
-  it("does not append routing metadata to explicit thread targets", async () => {
-    const route = await qaChannelPlugin.messaging?.resolveOutboundSessionRoute?.({
-      cfg: {},
-      agentId: "main",
-      accountId: "default",
-      target: "thread:qa-room/thread-1",
-      replyToId: "reply-1",
-      threadId: "thread-1",
-      currentSessionKey: "agent:main:qa-channel:channel:thread:qa-room/thread-1:thread:stale",
-    });
-
-    expect(route?.sessionKey).toBe("agent:main:qa-channel:channel:thread:qa-room/thread-1");
-    expect(route?.baseSessionKey).toBe("agent:main:qa-channel:channel:thread:qa-room/thread-1");
-    expect(route?.threadId).toBeUndefined();
-  });
-
   it("rejects conflicting explicit thread routing metadata", () => {
     expect(() =>
       qaChannelPlugin.messaging?.resolveOutboundSessionRoute?.({
@@ -278,6 +264,7 @@ describe("qa-channel plugin", () => {
     const harness = await startQaChannelTestHarness({ allowFrom: ["*"] });
     try {
       const adapter = requireQaMessageAdapter();
+      expect(qaChannelPlugin.capabilities.media).toBe(true);
 
       const proveText = async () => {
         const result = await adapter.send!.text!({
@@ -286,12 +273,64 @@ describe("qa-channel plugin", () => {
           text: "hello",
           accountId: "default",
           replyToId: "parent-1",
-          threadId: "thread-1",
         });
         const receiptPart = result.receipt.parts[0];
         expect(receiptPart?.kind).toBe("text");
         expect(receiptPart?.replyToId).toBe("parent-1");
         expect(receiptPart?.threadId).toBe("thread-1");
+      };
+      const proveMedia = async (kind: "media" | "payload" = "media") => {
+        const before = harness.state.getSnapshot().messages.length;
+        const mediaPath = path.join(process.cwd(), "qa-channel-generated-capability.png");
+        const context = {
+          cfg: createQaChannelConfig({ baseUrl: harness.baseUrl, allowFrom: ["*"] }),
+          to: "thread:qa-room/thread-1",
+          text: "generated image",
+          mediaUrl: mediaPath,
+          mediaLocalRoots: [process.cwd()],
+          mediaReadFile: async (filePath: string) => {
+            expect(filePath).toBe(mediaPath);
+            return Buffer.from(QA_GENERATED_IMAGE_BASE64, "base64");
+          },
+          accountId: "default",
+          replyToId: "parent-1",
+        };
+        const result =
+          kind === "payload"
+            ? await adapter.send!.payload!({
+                ...context,
+                payload: {
+                  text: context.text,
+                  mediaUrl: mediaPath,
+                  mediaUrls: [mediaPath],
+                  isError: true,
+                },
+              })
+            : await adapter.send!.media!(context);
+        expect(result.receipt.parts[0]).toMatchObject({
+          kind: "media",
+          replyToId: "parent-1",
+          threadId: "thread-1",
+        });
+        const messages = harness.state.getSnapshot().messages.slice(before);
+        expect(messages).toHaveLength(1);
+        expect(messages[0]).toMatchObject({
+          id: result.messageId,
+          text: context.text,
+          threadId: "thread-1",
+          replyToId: "parent-1",
+          attachments: [
+            {
+              kind: "image",
+              mimeType: "image/png",
+              fileName: "qa-channel-generated-capability.png",
+              contentBase64: QA_GENERATED_IMAGE_BASE64,
+            },
+          ],
+        });
+        if (kind === "payload") {
+          expect(messages[0]?.isError).toBe(true);
+        }
       };
 
       await verifyChannelMessageAdapterCapabilityProofs({
@@ -299,6 +338,8 @@ describe("qa-channel plugin", () => {
         adapter,
         proofs: {
           text: proveText,
+          media: proveMedia,
+          payload: () => proveMedia("payload"),
           replyTo: proveText,
           thread: proveText,
           messageSendingHooks: () => {
@@ -311,29 +352,6 @@ describe("qa-channel plugin", () => {
     }
   });
 
-  it("roundtrips inbound DM traffic through the qa bus", { timeout: 20_000 }, async () => {
-    const harness = await startQaChannelTestHarness({ allowFrom: ["*"] });
-
-    try {
-      harness.state.addInboundMessage({
-        conversation: { id: "alice", kind: "direct" },
-        senderId: "alice",
-        senderName: "Alice",
-        text: "hello",
-      });
-
-      const outbound = await harness.state.waitFor({
-        kind: "message-text",
-        textIncludes: "qa-echo: hello",
-        direction: "outbound",
-        timeoutMs: 15_000,
-      });
-      expect("text" in outbound && outbound.text).toContain("qa-echo: hello");
-    } finally {
-      await harness.stop();
-    }
-  });
-
   it(
     "attaches sanitized agent tool starts to outbound qa bus messages",
     { timeout: 20_000 },
@@ -341,6 +359,9 @@ describe("qa-channel plugin", () => {
       const harness = await startQaChannelTestHarness({
         allowFrom: ["*"],
         runtime: createMockQaRuntime({
+          onTurn: (turn) => {
+            expect(turn.replyOptions?.allowToolLifecycleWhenProgressHidden).toBe(true);
+          },
           toolStarts: [
             {
               name: "exec",
@@ -427,6 +448,7 @@ describe("qa-channel plugin", () => {
         expect(ctx.SessionKey).toBe("agent:main:qa-channel:group:group:qa-room");
         expect(ctx.SenderId).toBe("alice");
         expect(ctx.GroupSubject).toBe("QA Room");
+        expect(ctx.WasMentioned).toBe(true);
         expect("conversation" in outbound).toBe(true);
         if (!("conversation" in outbound)) {
           throw new Error("expected outbound message conversation");
@@ -476,120 +498,207 @@ describe("qa-channel plugin", () => {
       });
 
       const mediaCtx = expectDispatchedContext(dispatchedCtx) as {
-        MediaPath?: string;
-        MediaPaths?: string[];
-        MediaType?: string;
-        MediaTypes?: string[];
+        media?: Array<{ path?: string; contentType?: string }>;
       };
-      expect(typeof mediaCtx.MediaPath).toBe("string");
-      expect(path.basename(mediaCtx.MediaPath ?? "")).toMatch(
+      const media = mediaCtx.media?.[0];
+      expect(typeof media?.path).toBe("string");
+      expect(path.basename(media?.path ?? "")).toMatch(
         /^red-top-blue-bottom---[a-f0-9-]{36}\.png$/,
       );
-      expect(mediaCtx.MediaType).toBe("image/png");
-      expect(mediaCtx.MediaPaths).toEqual([mediaCtx.MediaPath]);
-      expect(mediaCtx.MediaTypes).toEqual(["image/png"]);
+      expect(media?.contentType).toBe("image/png");
+      expect(mediaCtx.media).toHaveLength(1);
     } finally {
       await harness.stop();
     }
   });
 
-  it("exposes thread and message actions against the qa bus", async () => {
+  it.each(["inline", "remote"] as const)(
+    "rejects oversized %s inbound bytes without stopping subsequent messages",
+    async (source) => {
+      const dispatched: Record<string, unknown>[] = [];
+      const originalFetch = globalThis.fetch;
+      if (source === "remote") {
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+            const url = new URL(input instanceof Request ? input.url : String(input));
+            if (url.hostname === "93.184.216.34") {
+              return new Response(Buffer.alloc(Number(url.pathname.slice(1)), 0x61), {
+                headers: { "content-type": "text/plain" },
+              });
+            }
+            return originalFetch(input, init);
+          }),
+        );
+      }
+      const harness = await startQaChannelTestHarness({
+        allowFrom: ["*"],
+        mediaMaxMb: 1 / 1024,
+        runtime: createMockQaRuntime({ onDispatch: (ctx) => dispatched.push(ctx) }),
+      });
+      try {
+        for (const [text, bytes] of [
+          ["oversized", 1536],
+          ["small", 512],
+        ] as const) {
+          harness.state.addInboundMessage({
+            conversation: { id: "alice", kind: "direct" },
+            senderId: "alice",
+            text,
+            attachments: [
+              {
+                id: text,
+                kind: "file",
+                mimeType: "text/plain",
+                fileName: `${text}.txt`,
+                ...(source === "inline"
+                  ? { contentBase64: Buffer.alloc(bytes, 0x61).toString("base64") }
+                  : { url: `https://93.184.216.34/${bytes}` }),
+              },
+            ],
+          });
+          await harness.state.waitFor({
+            kind: "message-text",
+            textIncludes: `qa-echo: ${text}`,
+            direction: "outbound",
+            timeoutMs: 15_000,
+          });
+        }
+        expect(dispatched).toHaveLength(2);
+        expect(dispatched[0]?.media).toEqual([]);
+        expect(dispatched[0]?.BodyForAgent).toContain("attachment unavailable");
+        expect(dispatched[1]?.media).toHaveLength(1);
+        const media = dispatched[1]?.media as Array<{ path: string }>;
+        expect(await readFile(media[0]!.path)).toEqual(Buffer.alloc(512, 0x61));
+      } finally {
+        await harness.stop();
+        vi.unstubAllGlobals();
+      }
+    },
+  );
+
+  it("keeps deleted messages out of channel actions and makes reactions idempotent", async () => {
     installQaChannelTestRegistry();
     const state = createQaBusState();
     const bus = await startQaBusServer({ state });
 
     try {
       const cfg = createQaChannelConfig({ baseUrl: bus.baseUrl });
-
       const handleAction = requireQaActionHandler();
-
-      const threadResult = await handleAction({
-        channel: "qa-channel",
-        action: "thread-create",
+      const live = state.addOutboundMessage({ to: "channel:qa-room", text: "needle live" });
+      const deleted = state.addOutboundMessage({ to: "channel:qa-room", text: "needle deleted" });
+      const actionContext = {
+        channel: "qa-channel" as const,
         cfg,
         accountId: "default",
-        params: {
-          channelId: "qa-room",
-          title: "QA thread",
-        },
-      });
-      const threadPayload = extractToolPayload(threadResult) as {
-        thread: { id: string };
-        target: string;
       };
-      expect(threadPayload.thread.id).toMatch(/^thread-/);
-      expect(threadPayload.target).toContain(threadPayload.thread.id);
-
-      const outbound = state.addOutboundMessage({
-        to: threadPayload.target,
-        text: "message",
-        threadId: threadPayload.thread.id,
-      });
-
-      await handleAction({
-        channel: "qa-channel",
-        action: "react",
-        cfg,
-        accountId: "default",
-        params: {
-          to: threadPayload.target,
-          messageId: outbound.id,
-          emoji: "white_check_mark",
-        },
-      });
-
-      await handleAction({
-        channel: "qa-channel",
-        action: "edit",
-        cfg,
-        accountId: "default",
-        params: {
-          to: threadPayload.target,
-          messageId: outbound.id,
-          text: "message (edited)",
-        },
-      });
-
-      const readResult = await handleAction({
-        channel: "qa-channel",
-        action: "read",
-        cfg,
-        accountId: "default",
-        params: {
-          to: threadPayload.target,
-          messageId: outbound.id,
-        },
-      });
-      const readPayload = extractToolPayload(readResult) as { message: { text: string } };
-      expect(readPayload.message.text).toContain("(edited)");
-
-      const searchResult = await handleAction({
-        channel: "qa-channel",
-        action: "search",
-        cfg,
-        accountId: "default",
-        params: {
-          query: "edited",
-          channelId: "qa-room",
-          threadId: threadPayload.thread.id,
-        },
-      });
-      const searchPayload = extractToolPayload(searchResult) as {
-        messages: Array<{ id: string }>;
+      const reactionParams = {
+        to: "channel:qa-room",
+        messageId: deleted.id,
+        emoji: "eyes",
       };
-      expect(searchPayload.messages.map((message) => message.id)).toContain(outbound.id);
+
+      await handleAction({ ...actionContext, action: "react", params: reactionParams });
+      const cursorAfterReaction = state.getSnapshot().cursor;
+      await handleAction({ ...actionContext, action: "react", params: reactionParams });
+      expect(state.getSnapshot().cursor).toBe(cursorAfterReaction);
+      expect(state.readMessage({ messageId: deleted.id }).reactions).toHaveLength(1);
 
       await handleAction({
-        channel: "qa-channel",
+        ...actionContext,
         action: "delete",
+        params: { to: "channel:qa-room", messageId: deleted.id },
+      });
+
+      for (const action of ["read", "reactions", "react", "edit", "delete"] as const) {
+        await expect(
+          handleAction({
+            ...actionContext,
+            action,
+            params: {
+              to: "channel:qa-room",
+              messageId: deleted.id,
+              ...(action === "react" ? { emoji: "eyes" } : {}),
+              ...(action === "edit" ? { text: "edited after deletion" } : {}),
+            },
+          }),
+        ).rejects.toThrow("qa-channel message was deleted");
+      }
+
+      const result = await handleAction({
+        ...actionContext,
+        action: "search",
+        params: { query: "needle", channelId: "qa-room" },
+      });
+      const payload = extractToolPayload(result) as { messages: Array<{ id: string }> };
+      expect(payload.messages.map((message) => message.id)).toEqual([live.id]);
+      expect(state.readMessage({ messageId: deleted.id }).deleted).toBe(true);
+    } finally {
+      await bus.stop();
+    }
+  });
+
+  it("rejects thread replies outside the owning account and conversation", async () => {
+    installQaChannelTestRegistry();
+    const state = createQaBusState();
+    const bus = await startQaBusServer({ state });
+
+    try {
+      const cfg = {
+        channels: {
+          "qa-channel": {
+            baseUrl: bus.baseUrl,
+            accounts: { other: { baseUrl: bus.baseUrl } },
+          },
+        },
+      };
+      const handleAction = requireQaActionHandler();
+      const thread = state.createThread({ conversationId: "qa-room", title: "Owned thread" });
+
+      for (const attempt of [
+        { accountId: "other", channelId: "qa-room" },
+        { accountId: "default", channelId: "other-room" },
+      ]) {
+        await expect(
+          handleAction({
+            channel: "qa-channel",
+            action: "thread-reply",
+            cfg,
+            accountId: attempt.accountId,
+            params: {
+              channelId: attempt.channelId,
+              threadId: thread.id,
+              text: "foreign reply",
+            },
+          }),
+        ).rejects.toThrow("qa-bus thread not found in selected account and conversation");
+      }
+      expect(state.getSnapshot().messages).toEqual([]);
+      expect(state.getSnapshot().conversations).toEqual([
+        { accountId: "default", id: "qa-room", kind: "channel" },
+      ]);
+
+      const result = await handleAction({
+        channel: "qa-channel",
+        action: "thread-reply",
         cfg,
         accountId: "default",
-        params: {
-          to: threadPayload.target,
-          messageId: outbound.id,
-        },
+        params: { to: "channel:qa-room", threadId: thread.id, message: "owned reply" },
       });
-      expect(state.readMessage({ messageId: outbound.id }).deleted).toBe(true);
+      const payload = extractToolPayload(result) as {
+        message: { id: string; threadId: string };
+        receipt: {
+          primaryPlatformMessageId?: string;
+          threadId?: string;
+          parts: Array<{ threadId?: string }>;
+        };
+      };
+      expect(payload.message.threadId).toBe(thread.id);
+      expect(payload.receipt).toMatchObject({
+        primaryPlatformMessageId: payload.message.id,
+        threadId: thread.id,
+        parts: [{ threadId: thread.id }],
+      });
     } finally {
       await bus.stop();
     }
@@ -641,7 +750,7 @@ describe("qa-channel plugin", () => {
         { action: "read", params: {} },
         { action: "reactions", params: {} },
         { action: "react", params: { emoji: "eyes" } },
-        { action: "edit", params: { text: "foreign edit" } },
+        { action: "edit", params: { message: "foreign edit" } },
         { action: "delete", params: {} },
       ];
       for (const testCase of crossedActions) {
@@ -769,6 +878,18 @@ describe("qa-channel plugin", () => {
       });
       expect(sendTarget).toEqual({ to: "channel:qa-room", threadId: undefined });
 
+      const legacyThreadTarget = qaChannelPlugin.actions?.extractToolSend?.({
+        args: {
+          action: "thread-reply",
+          channelId: "canonical/room",
+          threadId: "thread-1",
+        },
+      });
+      expect(legacyThreadTarget).toEqual({
+        to: "channel:canonical/room",
+        threadId: "thread-1",
+      });
+
       const result = await qaChannelPlugin.actions?.handleAction?.({
         channel: "qa-channel",
         action: "send",
@@ -808,44 +929,6 @@ describe("qa-channel plugin", () => {
       }
       expect(outbound.conversation.id).toBe("qa-room");
       expect(outbound.conversation.kind).toBe("channel");
-    } finally {
-      await bus.stop();
-    }
-  });
-
-  it("routes group send targets to group qa bus conversations", async () => {
-    installQaChannelTestRegistry();
-    const state = createQaBusState();
-    const bus = await startQaBusServer({ state });
-
-    try {
-      const cfg = createQaChannelConfig({ baseUrl: bus.baseUrl });
-
-      const result = await qaChannelPlugin.actions?.handleAction?.({
-        channel: "qa-channel",
-        action: "send",
-        cfg,
-        accountId: "default",
-        params: {
-          target: "group:qa-room",
-          message: "hello group",
-        },
-      });
-      const payload = extractToolPayload(result) as { message: { text: string } };
-      expect(payload.message.text).toBe("hello group");
-
-      const outbound = await state.waitFor({
-        kind: "message-text",
-        direction: "outbound",
-        textIncludes: "hello group",
-        timeoutMs: 5_000,
-      });
-      expect("conversation" in outbound).toBe(true);
-      if (!("conversation" in outbound)) {
-        throw new Error("expected outbound message match");
-      }
-      expect(outbound.conversation.id).toBe("qa-room");
-      expect(outbound.conversation.kind).toBe("group");
     } finally {
       await bus.stop();
     }

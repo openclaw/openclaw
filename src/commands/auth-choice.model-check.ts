@@ -2,18 +2,27 @@
 import { normalizeProviderIdForAuth } from "@openclaw/model-catalog-core/provider-id";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { createModelAuthAvailabilityResolver } from "../agents/model-auth-availability.js";
-import { loadModelCatalogSnapshot, type ModelCatalogEntry } from "../agents/model-catalog.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { buildProviderAuthRecoveryHint } from "../agents/provider-auth-recovery-hint.js";
 import { canonicalizeProviderModelId } from "../agents/provider-model-route.js";
 import type { ModelApi } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderModelRouteAuthRequirement } from "../plugin-sdk/provider-model-types.js";
+import type { ProviderAuthResult } from "../plugins/types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 
 type ModelRouteObservation = {
   api?: ModelApi | null;
   baseUrl?: unknown;
+};
+
+type DefaultModelAuthOptions = {
+  agentId?: string;
+  agentDir?: string;
+  env?: NodeJS.ProcessEnv;
+  observedRoutes?: readonly ModelRouteObservation[];
+  pendingAuthProfiles?: ProviderAuthResult["profiles"];
 };
 
 type DefaultModelAuthStatus = {
@@ -38,12 +47,7 @@ type DefaultModelAuthStatus = {
  */
 export function resolveDefaultModelAuthStatus(
   config: OpenClawConfig,
-  options?: {
-    agentId?: string;
-    agentDir?: string;
-    env?: NodeJS.ProcessEnv;
-    observedRoutes?: readonly ModelRouteObservation[];
-  },
+  options?: DefaultModelAuthOptions,
 ): DefaultModelAuthStatus {
   const ref = resolveDefaultModelForAgent({
     cfg: config,
@@ -55,9 +59,19 @@ export function resolveDefaultModelAuthStatus(
     ...(ref.provider === "openai" ? { externalCliProviderIds: ["openai"] } : {}),
     readOnly: true,
   });
+  // Pending wizard credentials are transaction-local; include them without
+  // publishing or persisting them before setup commits.
+  const pendingAuthProfiles = options?.pendingAuthProfiles ?? [];
+  const authStore = pendingAuthProfiles.length
+    ? { ...store, profiles: { ...store.profiles } }
+    : store;
+  for (const { profileId, credential } of pendingAuthProfiles) {
+    authStore.profiles[profileId] = credential;
+  }
   const evaluation = createModelAuthAvailabilityResolver({
     cfg: config,
-    authStore: store,
+    agentId: options?.agentId,
+    authStore,
     ...(options?.agentDir ? { agentDir: options.agentDir } : {}),
     ...(options?.env ? { env: options.env } : {}),
   }).evaluateModelAuth(ref.provider, {
@@ -96,12 +110,7 @@ export function resolveDefaultModelAuthStatus(
   };
 }
 
-function catalogRouteObservation(
-  entry: ModelCatalogEntry | undefined,
-): ModelRouteObservation | undefined {
-  if (!entry) {
-    return undefined;
-  }
+function catalogRouteObservation(entry: ModelCatalogEntry): ModelRouteObservation | undefined {
   const baseUrl = entry.baseUrl;
   if (entry.api === undefined && baseUrl === undefined) {
     return undefined;
@@ -113,7 +122,6 @@ function catalogRouteObservation(
 }
 
 type DefaultModelCatalogFacts = {
-  found: boolean;
   observedRoutes?: readonly ModelRouteObservation[];
 };
 
@@ -134,76 +142,32 @@ export function resolveDefaultModelCatalogFacts(
     .filter(matches)
     .map(catalogRouteObservation)
     .filter((route): route is ModelRouteObservation => route !== undefined);
-  return {
-    found: catalog.some(matches) || routeVariants.some(matches),
-    ...(observedRoutes.length > 0 ? { observedRoutes } : {}),
-  };
+  return observedRoutes.length > 0 ? { observedRoutes } : {};
 }
 
-/** Warn when the selected default model is unknown or has no usable credentials. */
+/** Warn when the selected default model does not have confirmed usable credentials. */
 export async function warnIfModelConfigLooksOff(
   config: OpenClawConfig,
   prompter: WizardPrompter,
-  options?: {
-    agentId?: string;
-    agentDir?: string;
-    validateCatalog?: boolean;
-    env?: NodeJS.ProcessEnv;
-    observedRoutes?: readonly ModelRouteObservation[];
-  },
+  options?: DefaultModelAuthOptions,
 ) {
-  const ref = resolveDefaultModelForAgent({
-    cfg: config,
-    agentId: options?.agentId,
-  });
-  const warnings: string[] = [];
-  const snapshot =
-    options?.validateCatalog === false
-      ? { entries: [], routeVariants: [] }
-      : await loadModelCatalogSnapshot({ config, useCache: false });
-  const catalog = snapshot.entries;
-  const catalogFacts = resolveDefaultModelCatalogFacts(config, catalog, {
-    ...(options?.agentId ? { agentId: options.agentId } : {}),
-    routeVariants: snapshot.routeVariants,
-  });
-  const observedRoutes = options?.observedRoutes ?? catalogFacts.observedRoutes;
-  if (options?.validateCatalog !== false) {
-    if (catalog.length > 0) {
-      if (!catalogFacts.found) {
-        warnings.push(
-          `Model not found: ${ref.provider}/${ref.model}. Update agents.defaults.model or run /models list.`,
-        );
-      }
-    }
-  }
-
-  const authStatus = resolveDefaultModelAuthStatus(config, {
-    ...(options?.agentId ? { agentId: options.agentId } : {}),
-    ...(options?.agentDir ? { agentDir: options.agentDir } : {}),
-    ...(options?.env ? { env: options.env } : {}),
-    ...(observedRoutes ? { observedRoutes } : {}),
-  });
+  let warning: string | undefined;
+  const authStatus = resolveDefaultModelAuthStatus(config, options);
   if (authStatus.status === "missing") {
-    warnings.push(
-      `No auth configured for provider "${ref.provider}". The agent may fail until credentials are added. ${buildProviderAuthRecoveryHint(
-        {
-          provider: ref.provider,
-          config,
-          includeEnvVar: authStatus.authRequirement !== "subscription",
-        },
-      )}`,
-    );
+    warning = `No auth configured for provider "${authStatus.provider}". The agent may fail until credentials are added. ${buildProviderAuthRecoveryHint(
+      {
+        provider: authStatus.provider,
+        config,
+        includeEnvVar: authStatus.authRequirement !== "subscription",
+      },
+    )}`;
   } else if (authStatus.status === "incompatible") {
-    warnings.push(
-      `Model route is incompatible for "${ref.provider}/${ref.model}": ${authStatus.message}`,
-    );
+    warning = `Model route is incompatible for "${authStatus.provider}/${authStatus.model}": ${authStatus.message}`;
   } else if (authStatus.status === "indeterminate") {
-    warnings.push(
-      `Auth readiness could not be confirmed for "${ref.provider}/${ref.model}". Verify the selected model route and credential source before continuing.`,
-    );
+    warning = `Auth readiness could not be confirmed for "${authStatus.provider}/${authStatus.model}". Verify the selected model route and credential source before continuing.`;
   }
 
-  if (warnings.length > 0) {
-    await prompter.note(warnings.join("\n"), "Model check");
+  if (warning) {
+    await prompter.note(warning, "Model check");
   }
 }

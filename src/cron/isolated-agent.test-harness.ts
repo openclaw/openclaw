@@ -1,20 +1,23 @@
 // Isolated agent test harness builds filesystem and config fixtures for cron agent tests.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withTempHome as withTempHomeBase } from "../plugin-sdk/test-env.js";
 import type { CronJob } from "./types.js";
 
 /** Runs a test callback with an isolated OpenClaw home for cron tests. */
 export async function withTempCronHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(fn, { prefix: "openclaw-cron-" });
+  return withTempHomeBase(fn, {
+    prefix: "openclaw-cron-",
+    env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+  });
 }
 
 export async function writeSessionStore(
   home: string,
-  session: { lastProvider: string; lastTo: string; lastChannel?: string },
+  session: Pick<SessionEntry, "delivery">,
 ): Promise<string> {
   return writeSessionStoreEntries(home, {
     "agent:main:main": {
@@ -27,13 +30,13 @@ export async function writeSessionStore(
 
 export async function writeSessionStoreEntries(
   home: string,
-  entries: Record<string, Record<string, unknown>>,
+  entries: Record<string, SessionEntry>,
 ): Promise<string> {
   const dir = path.join(home, ".openclaw", "sessions");
   await fs.mkdir(dir, { recursive: true });
   const storePath = path.join(dir, "sessions.json");
   for (const [sessionKey, entry] of Object.entries(entries)) {
-    await replaceSessionEntry({ storePath, sessionKey }, entry as SessionEntry);
+    await replaceSessionEntry({ storePath, sessionKey }, entry);
   }
   return storePath;
 }
@@ -45,6 +48,7 @@ export function makeCfg(
 ): OpenClawConfig {
   const base: OpenClawConfig = {
     agents: {
+      entries: { main: {} },
       defaults: {
         model: "anthropic/claude-opus-4-6",
         workspace: path.join(home, "openclaw"),

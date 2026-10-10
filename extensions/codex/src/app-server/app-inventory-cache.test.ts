@@ -6,17 +6,25 @@ import {
   buildCodexAppInventoryCacheKey,
   serializeCodexAppInventoryError,
 } from "./app-inventory-cache.js";
-import type { v2 } from "./protocol.js";
+import { CodexAppServerRpcError } from "./client.js";
+import type { CodexAppServerRequestParams, CodexAppServerRequestResult, v2 } from "./protocol.js";
+
+type AppMetadata = CodexAppServerRequestResult<"app/read">["apps"][number];
 
 describe("Codex app inventory cache", () => {
-  it("returns missing while scheduling one coalesced app/list refresh", async () => {
+  it("coalesces native metadata and installed runtime facts without fabricating app/list fields", async () => {
     const cache = new CodexAppInventoryCache({ ttlMs: 100 });
-    const request = vi.fn(async (_method: "app/list", params: v2.AppsListParams) => {
-      return {
-        data: [app(params.cursor ? "app-2" : "app-1")],
-        nextCursor: params.cursor ? null : "next",
-      } satisfies v2.AppsListResponse;
-    });
+    const apps = [
+      { ...app("app-1"), iconUrl: "https://example.com/app-icon.png" },
+      { ...app("app-2"), name: "Canonical app name" },
+    ];
+    const installedApps = [
+      { id: "app-1", runtimeName: null, enabled: true, callable: false },
+      { id: "app-2", runtimeName: "runtime-name", enabled: false, callable: false },
+    ];
+    const request = vi.fn(async (method, params) =>
+      codexAppInventoryResponse(method, apps, params, { installedApps }),
+    );
 
     const key = buildCodexAppInventoryCacheKey(
       { codexHome: "/codex", authProfileId: "work" },
@@ -28,145 +36,164 @@ describe("Codex app inventory cache", () => {
     expect(read.refreshScheduled).toBe(true);
 
     const snapshot = await cache.refreshNow({ key, request, nowMs: 0 });
-    expect(snapshot.apps.map((item) => item.id)).toEqual(["app-1", "app-2"]);
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(snapshot.apps).toEqual(apps);
+    expect(snapshot.installedApps).toEqual(installedApps);
+    expect(request).toHaveBeenNthCalledWith(1, "app/installed", { forceRefresh: true });
+    expect(request).toHaveBeenNthCalledWith(2, "app/read", {
+      appIds: ["app-1", "app-2"],
+      includeTools: true,
+    });
 
     const fresh = cache.read({ key, request, nowMs: 50 });
     expect(fresh.state).toBe("fresh");
     expect(fresh.refreshScheduled).toBe(false);
-    expect(fresh.snapshot?.apps.map((item) => item.id)).toEqual(["app-1", "app-2"]);
+    expect(fresh.snapshot?.apps).toEqual(apps);
   });
 
-  it("changes the cache key when either build version changes", () => {
-    const input = { codexHome: "/codex", authProfileId: "work" };
-    const baseline = buildCodexAppInventoryCacheKey(input, "2026.6.27", "2026.6.27");
-
-    expect(buildCodexAppInventoryCacheKey(input, "2026.6.28", "2026.6.27")).not.toBe(baseline);
-    expect(buildCodexAppInventoryCacheKey(input, "2026.6.27", "2026.6.28")).not.toBe(baseline);
+  it("refreshes and removes legacy runtime rows targeted by their Apps SDK identity", async () => {
+    const manifestId = "asdk_app_0123456789abcdef0123456789abcdef";
+    const runtimeId = "connector_0123456789abcdef0123456789abcdef";
+    const cache = new CodexAppInventoryCache();
+    let apps = [app(runtimeId), app("unrelated")];
+    const request = vi.fn(async (method, params) =>
+      codexAppInventoryResponse(method, apps, params),
+    );
+    await cache.refreshNow({ key: "runtime", request });
+    cache.invalidate("runtime", "connector changed", Date.now(), [runtimeId]);
+    await cache.refreshNow({ key: "runtime", request, targetAppIds: [manifestId] });
+    expect(cache.read({ key: "runtime", request, suppressRefresh: true })).toMatchObject({
+      state: "fresh",
+      snapshot: { apps },
+    });
+    apps = [app("unrelated")];
+    await cache.refreshNow({ key: "runtime", request, targetAppIds: [manifestId] });
+    const refreshed = cache.read({ key: "runtime", request, suppressRefresh: true }).snapshot;
+    expect(refreshed?.apps).toEqual(apps);
+    expect(refreshed?.installedApps.map((entry) => entry.id)).toEqual(["unrelated"]);
   });
 
-  it("can read missing inventory without scheduling app/list", async () => {
+  it("upgrades an in-flight targeted refresh before returning the complete account inventory", async () => {
     const cache = new CodexAppInventoryCache({ ttlMs: 100 });
-    const request = vi.fn(async () => {
-      return {
-        data: [app("app-1")],
-        nextCursor: null,
-      } satisfies v2.AppsListResponse;
+    const apps = [app("google-calendar-app"), app("unrelated-slack-app")];
+    let resolveTargetedInstall: ((response: v2.AppsInstalledResponse) => void) | undefined;
+    let installedCalls = 0;
+    const request = vi.fn(async (method, params) => {
+      if (method === "app/installed") {
+        installedCalls += 1;
+        if (installedCalls === 1) {
+          expect(params).toEqual({ forceRefresh: true });
+          return await new Promise<v2.AppsInstalledResponse>((resolve) => {
+            resolveTargetedInstall = resolve;
+          });
+        }
+        expect(params).toEqual({ forceRefresh: false });
+      }
+      return codexAppInventoryResponse(method, apps, params);
     });
 
-    const read = cache.read({
-      key: "runtime",
-      request,
-      suppressRefresh: true,
-    });
-
-    expect(read.state).toBe("missing");
-    expect(read.refreshScheduled).toBe(false);
-    expect(request).not.toHaveBeenCalled();
-  });
-
-  it("finds a targeted app on a later large page", async () => {
-    const cache = new CodexAppInventoryCache({ ttlMs: 100 });
-    const request = vi.fn(async (_method: "app/list", params: v2.AppsListParams) => {
-      return {
-        data: [app(params.cursor ? "google-calendar-app" : "app-1")],
-        nextCursor: params.cursor ? "page-3" : "page-2",
-      } satisfies v2.AppsListResponse;
-    });
-
-    const snapshot = await cache.refreshNow({
+    const targeted = cache.refreshNow({
       key: "runtime",
       request,
       targetAppIds: ["google-calendar-app"],
     });
+    const complete = cache.refreshNow({ key: "runtime", request, targetAppIds: [] });
+    expect(installedCalls).toBe(1);
 
-    expect(snapshot.apps.map((item) => item.id)).toEqual(["app-1", "google-calendar-app"]);
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenNthCalledWith(1, "app/list", {
-      cursor: undefined,
-      limit: 1_000,
-      forceRefetch: false,
-    });
-    expect(request).toHaveBeenNthCalledWith(2, "app/list", {
-      cursor: "page-2",
-      limit: 1_000,
-      forceRefetch: false,
-    });
+    resolveTargetedInstall?.(codexAppInventoryResponse("app/installed", apps));
+    const [targetedSnapshot, completeSnapshot] = await Promise.all([targeted, complete]);
+
+    expect(targetedSnapshot.apps).toEqual([app("google-calendar-app")]);
+    expect(completeSnapshot.apps).toEqual(apps);
+    expect(cache.read({ key: "runtime", request }).snapshot?.apps).toEqual(apps);
+    expect(request.mock.calls.filter(([method]) => method === "app/installed")).toEqual([
+      ["app/installed", { forceRefresh: true }],
+      ["app/installed", { forceRefresh: false }],
+    ]);
+    expect(request.mock.calls.filter(([method]) => method === "app/read")).toEqual([
+      ["app/read", { appIds: ["google-calendar-app"], includeTools: true }],
+      ["app/read", { appIds: ["google-calendar-app", "unrelated-slack-app"], includeTools: true }],
+    ]);
   });
 
-  it("exhausts targeted refresh pages when a target app is absent", async () => {
+  it("joins a complete in-flight refresh for a narrower plugin request", async () => {
     const cache = new CodexAppInventoryCache({ ttlMs: 100 });
-    const request = vi.fn(async (_method: "app/list", params: v2.AppsListParams) => {
-      return {
-        data: [app(params.cursor ? "app-2" : "app-1")],
-        nextCursor: params.cursor ? null : "page-2",
-      } satisfies v2.AppsListResponse;
+    const apps = [app("google-calendar-app"), app("unrelated-slack-app")];
+    let resolveInstall: ((response: v2.AppsInstalledResponse) => void) | undefined;
+    const request = vi.fn(async (method, params) => {
+      if (method === "app/installed") {
+        return await new Promise<v2.AppsInstalledResponse>((resolve) => {
+          resolveInstall = resolve;
+        });
+      }
+      return codexAppInventoryResponse(method, apps, params);
     });
 
-    const snapshot = await cache.refreshNow({
+    const complete = cache.refreshNow({ key: "runtime", request, targetAppIds: [] });
+    const targeted = cache.refreshNow({
       key: "runtime",
       request,
-      targetAppIds: ["missing-app"],
+      targetAppIds: ["google-calendar-app"],
     });
+    resolveInstall?.(codexAppInventoryResponse("app/installed", apps));
 
-    expect(snapshot.apps.map((item) => item.id)).toEqual(["app-1", "app-2"]);
+    const [completeSnapshot, targetedSnapshot] = await Promise.all([complete, targeted]);
+    expect(completeSnapshot.apps).toEqual(apps);
+    expect(targetedSnapshot.apps).toEqual(apps);
     expect(request).toHaveBeenCalledTimes(2);
   });
 
-  it("rejects a repeated app/list cursor instead of caching a partial snapshot", async () => {
+  it("limits each metadata request to the app/read 100-app contract", async () => {
     const cache = new CodexAppInventoryCache({ ttlMs: 100 });
-    const request = vi.fn(async () => ({
-      data: [app(`app-${request.mock.calls.length}`)],
-      nextCursor: "page-2",
-    }));
+    const apps = Array.from({ length: 205 }, (_, index) => app(`app-${index}`));
+    const request = vi.fn(async (method, params) =>
+      codexAppInventoryResponse(method, apps, params),
+    );
 
-    await expect(
-      cache.refreshNow({
-        key: "runtime",
-        request,
-        targetAppIds: ["missing-app"],
-      }),
-    ).rejects.toThrow("app/list returned repeated cursor page-2");
+    const snapshot = await cache.refreshNow({ key: "runtime", request });
 
-    const read = cache.read({ key: "runtime", request, suppressRefresh: true });
-    expect(read.state).toBe("missing");
-    expect(read.snapshot).toBeUndefined();
+    expect(snapshot.apps).toEqual(apps);
+    expect(request).toHaveBeenCalledTimes(4);
+    expect(request).toHaveBeenNthCalledWith(2, "app/read", {
+      appIds: apps.slice(0, 100).map((entry) => entry.id),
+      includeTools: true,
+    });
+    expect(request).toHaveBeenNthCalledWith(3, "app/read", {
+      appIds: apps.slice(100, 200).map((entry) => entry.id),
+      includeTools: true,
+    });
+    expect(request).toHaveBeenNthCalledWith(4, "app/read", {
+      appIds: apps.slice(200).map((entry) => entry.id),
+      includeTools: true,
+    });
   });
 
-  it("uses stale inventory for the current read while still refreshing asynchronously", async () => {
-    const cache = new CodexAppInventoryCache({ ttlMs: 10 });
-    const request = vi.fn(async () => {
-      return {
-        data: [app(`app-${request.mock.calls.length}`)],
-        nextCursor: null,
-      } satisfies v2.AppsListResponse;
-    });
-    const key = "runtime";
-    await cache.refreshNow({ key, request, nowMs: 0 });
+  it("excludes installed apps whose metadata is missing", async () => {
+    const cache = new CodexAppInventoryCache({ ttlMs: 100 });
+    const installedApps = [app("available-app"), app("missing-app")];
+    const request = vi.fn(async (method, params) =>
+      codexAppInventoryResponse(
+        method,
+        method === "app/read" ? [installedApps[0]!] : installedApps,
+        params,
+      ),
+    );
 
-    const stale = cache.read({ key, request, nowMs: 11, suppressRefresh: true });
-    expect(stale.state).toBe("stale");
-    expect(stale.snapshot?.apps.map((item) => item.id)).toEqual(["app-1"]);
-    expect(stale.refreshScheduled).toBe(true);
+    const snapshot = await cache.refreshNow({ key: "runtime", request });
 
-    const refreshed = await cache.refreshNow({ key, request, nowMs: 11 });
-    expect(refreshed.apps.map((item) => item.id)).toEqual(["app-2"]);
+    expect(snapshot.apps).toEqual([app("available-app")]);
+    expect(snapshot.installedApps.map((entry) => entry.id)).toEqual([
+      "available-app",
+      "missing-app",
+    ]);
   });
 
   it("marks inventory stale when the expiry would exceed the Date range", async () => {
     const cache = new CodexAppInventoryCache({ ttlMs: 100 });
-    const request = vi.fn(async () => {
-      return {
-        data: [app("app-overflow")],
-        nextCursor: null,
-      } satisfies v2.AppsListResponse;
-    });
+    const request = vi.fn(async (method, params) =>
+      codexAppInventoryResponse(method, [app("app-overflow")], params),
+    );
     const key = "runtime";
-    const snapshot = await cache.refreshNow({
-      key,
-      request,
-      nowMs: MAX_DATE_TIMESTAMP_MS,
-    });
+    const snapshot = await cache.refreshNow({ key, request, nowMs: MAX_DATE_TIMESTAMP_MS });
 
     expect(snapshot.expiresAtMs).toBe(0);
     const read = cache.read({
@@ -175,7 +202,7 @@ describe("Codex app inventory cache", () => {
       nowMs: Date.parse("2026-05-29T12:00:00.000Z"),
     });
     expect(read.state).toBe("stale");
-    expect(read.snapshot?.apps.map((item) => item.id)).toEqual(["app-overflow"]);
+    expect(read.snapshot?.apps).toEqual([app("app-overflow")]);
   });
 
   it("records refresh errors without discarding the last successful snapshot", async () => {
@@ -184,7 +211,7 @@ describe("Codex app inventory cache", () => {
     await cache.refreshNow({
       key,
       nowMs: 0,
-      request: async () => ({ data: [app("app-1")], nextCursor: null }),
+      request: async (method, params) => codexAppInventoryResponse(method, [app("app-1")], params),
     });
 
     await expect(
@@ -192,39 +219,74 @@ describe("Codex app inventory cache", () => {
         key,
         nowMs: 2,
         request: async () => {
-          throw new Error("app list failed");
+          throw new Error("app inventory failed");
         },
       }),
-    ).rejects.toThrow("app list failed");
+    ).rejects.toThrow("app inventory failed");
 
     const read = cache.read({
       key,
       nowMs: 2,
-      request: async () => ({ data: [app("app-2")], nextCursor: null }),
+      request: async (method, params) => codexAppInventoryResponse(method, [app("app-2")], params),
     });
-    expect(read.snapshot?.apps.map((item) => item.id)).toEqual(["app-1"]);
-    expect(read.diagnostic?.message).toBe("app list failed");
+    expect(read.snapshot?.apps).toEqual([app("app-1")]);
+    expect(read.diagnostic?.message).toBe("app inventory failed");
   });
 
-  it("omits challenge HTML when serializing app/list errors", () => {
+  it("fails closed when the pinned server does not implement app/installed", async () => {
+    const cache = new CodexAppInventoryCache({ ttlMs: 100 });
+    const request = vi.fn(async (method, params) => {
+      if (method === "app/installed") {
+        throw new CodexAppServerRpcError({ code: -32601, message: "Method not found" }, method);
+      }
+      return codexAppInventoryResponse(method, [app("current-app")], params);
+    });
+
+    await expect(cache.refreshNow({ key: "runtime", request })).rejects.toThrow("Method not found");
+    expect(request).toHaveBeenCalledExactlyOnceWith("app/installed", { forceRefresh: true });
+    expect(cache.read({ key: "runtime", request, suppressRefresh: true }).snapshot).toBeUndefined();
+  });
+
+  it("fails closed when installed app inventory is unauthorized", async () => {
+    const cache = new CodexAppInventoryCache({ ttlMs: 100 });
+    const request = vi.fn(async (method) => {
+      throw new CodexAppServerRpcError({ code: 403, message: "Forbidden" }, method);
+    });
+
+    await expect(cache.refreshNow({ key: "runtime", request })).rejects.toThrow("Forbidden");
+    expect(request).toHaveBeenCalledExactlyOnceWith("app/installed", { forceRefresh: true });
+  });
+
+  it("fails closed when app metadata cannot be read", async () => {
+    const cache = new CodexAppInventoryCache({ ttlMs: 100 });
+    const request = vi.fn(async (method, params) => {
+      if (method === "app/read") {
+        throw new CodexAppServerRpcError({ code: -32601, message: "Method not found" }, method);
+      }
+      return codexAppInventoryResponse(method, [app("current-app")], params);
+    });
+
+    await expect(cache.refreshNow({ key: "runtime", request })).rejects.toThrow("Method not found");
+    expect(request).toHaveBeenNthCalledWith(1, "app/installed", { forceRefresh: true });
+    expect(request).toHaveBeenNthCalledWith(2, "app/read", {
+      appIds: ["current-app"],
+      includeTools: true,
+    });
+    expect(cache.read({ key: "runtime", request, suppressRefresh: true }).snapshot).toBeUndefined();
+  });
+
+  it("omits challenge HTML when serializing app inventory errors", () => {
     const error = new Error(
-      'failed to list apps: Request failed with status 403 Forbidden: <html><script src="/backend-api/connectors/directory/list?__cf_chl_tk=secret-token"></script></html>',
+      'failed to read apps: Request failed with status 403 Forbidden: <html><script src="/backend-api/connectors/directory/list?__cf_chl_tk=secret-token"></script></html>',
     );
-    const serialized = serializeCodexAppInventoryError(error);
 
-    expect(serialized.message).toBe(
-      "failed to list apps: Request failed with status 403 Forbidden: [HTML response body omitted]",
+    expect(serializeCodexAppInventoryError(error).message).toBe(
+      "failed to read apps: Request failed with status 403 Forbidden: [HTML response body omitted]",
     );
   });
 
-  it("keeps serialized app/list error messages on a UTF-16 boundary", () => {
-    const error = new Error(`${"x".repeat(499)}🚀tail`);
-
-    expect(serializeCodexAppInventoryError(error).message).toBe(`${"x".repeat(499)}...`);
-  });
-
-  it("keeps serialized app/list error data on a UTF-16 boundary", () => {
-    const error = Object.assign(new Error("app list failed"), {
+  it("keeps serialized app inventory error data on a UTF-16 boundary", () => {
+    const error = Object.assign(new Error("app inventory failed"), {
       data: { label: `${"x".repeat(499)}🚀tail` },
     });
 
@@ -233,23 +295,63 @@ describe("Codex app inventory cache", () => {
     });
   });
 
-  it("forces a post-install refresh past an older in-flight app/list", async () => {
+  it.each(["clear", "invalidate", "forced successor"] as const)(
+    "keeps an obsolete refresh rejection out of cache state after %s",
+    async (replacement) => {
+      const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
+      const key = "runtime";
+      const deferred = Promise.withResolvers<never>();
+      const failure = new Error("obsolete inventory refresh failed");
+      const request = vi.fn(async (method, params) =>
+        codexAppInventoryResponse(method, [app("fresh-app")], params),
+      );
+      const obsolete = cache.refreshNow({ key, request: () => deferred.promise, nowMs: 0 });
+      const obsoleteRejection = expect(obsolete).rejects.toBe(failure);
+
+      if (replacement === "clear") {
+        cache.clear();
+      } else if (replacement === "invalidate") {
+        cache.invalidate(key, "apps changed", 1);
+      } else {
+        await cache.refreshNow({ key, request, nowMs: 2, forceRefetch: true });
+      }
+      deferred.reject(failure);
+      await obsoleteRejection;
+
+      const current = cache.read({ key, request, nowMs: 3, suppressRefresh: true });
+      expect(current.state).toBe(replacement === "forced successor" ? "fresh" : "missing");
+      expect(current.diagnostic).toEqual(
+        replacement === "invalidate" ? { message: "apps changed", atMs: 1 } : undefined,
+      );
+      if (replacement === "forced successor") {
+        expect(current.snapshot?.apps).toEqual([app("fresh-app")]);
+        expect(current.snapshot?.lastError).toBeUndefined();
+      } else {
+        expect(current.snapshot).toBeUndefined();
+      }
+    },
+  );
+
+  it("forces a post-install refresh past an older in-flight runtime snapshot", async () => {
     const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
     const key = "runtime";
-    let resolveStale: ((response: v2.AppsListResponse) => void) | undefined;
-    let resolveFresh: ((response: v2.AppsListResponse) => void) | undefined;
-    const request = vi.fn(
-      async (_method: "app/list", params: v2.AppsListParams): Promise<v2.AppsListResponse> => {
-        expect(params.forceRefetch).toBe(request.mock.calls.length === 2);
-        return await new Promise((resolve) => {
-          if (request.mock.calls.length === 1) {
+    let resolveStale: ((response: v2.AppsInstalledResponse) => void) | undefined;
+    let resolveFresh: ((response: v2.AppsInstalledResponse) => void) | undefined;
+    let installedCalls = 0;
+    const request = vi.fn(async (method, params) => {
+      if (method === "app/installed") {
+        installedCalls += 1;
+        expect(params.forceRefresh).toBe(true);
+        return await new Promise<v2.AppsInstalledResponse>((resolve) => {
+          if (installedCalls === 1) {
             resolveStale = resolve;
           } else {
             resolveFresh = resolve;
           }
         });
-      },
-    );
+      }
+      return codexAppInventoryResponse(method, [app("fresh-app"), app("stale-app")], params);
+    });
 
     const staleRead = cache.read({ key, request, nowMs: 0 });
     expect(staleRead.state).toBe("missing");
@@ -259,41 +361,258 @@ describe("Codex app inventory cache", () => {
     const forcedRead = cache.read({ key, request, nowMs: 1, forceRefetch: true });
     expect(forcedRead.state).toBe("missing");
     expect(forcedRead.refreshScheduled).toBe(true);
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(installedCalls).toBe(2);
 
     const forced = cache.refreshNow({ key, request, nowMs: 1 });
-    resolveFresh?.({ data: [app("fresh-app")], nextCursor: null });
+    resolveFresh?.(codexAppInventoryResponse("app/installed", [app("fresh-app")]));
     await expect(forced).resolves.toStrictEqual({
       key,
       apps: [app("fresh-app")],
+      installedApps: [{ id: "fresh-app", runtimeName: "fresh-app", enabled: true, callable: true }],
       fetchedAtMs: 1,
       expiresAtMs: 1_001,
       revision: 2,
     });
 
-    resolveStale?.({ data: [app("stale-app")], nextCursor: null });
-    await Promise.resolve();
+    resolveStale?.(codexAppInventoryResponse("app/installed", [app("stale-app")]));
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(4));
 
     const freshRead = cache.read({ key, request, nowMs: 2 });
     expect(freshRead.state).toBe("fresh");
-    expect(freshRead.snapshot?.apps.map((item) => item.id)).toEqual(["fresh-app"]);
+    expect(freshRead.snapshot?.apps).toEqual([app("fresh-app")]);
+  });
+
+  it("does not republish a pre-clear refresh over the new inventory", async () => {
+    const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
+    const staleInstalled = Promise.withResolvers<v2.AppsInstalledResponse>();
+    const apps = [app("fresh-app"), app("stale-app")];
+    const request = vi.fn(async (method, params) =>
+      codexAppInventoryResponse(method, apps, params),
+    );
+    request.mockImplementationOnce(() => staleInstalled.promise);
+
+    const stale = cache.refreshNow({ key: "runtime", request, nowMs: 0 });
+    cache.clear();
+    await cache.refreshNow({
+      key: "runtime",
+      request,
+      nowMs: 1,
+      targetAppIds: ["fresh-app"],
+    });
+    staleInstalled.resolve(codexAppInventoryResponse("app/installed", [app("stale-app")]));
+    await stale;
+
+    const read = cache.read({ key: "runtime", request, nowMs: 2, suppressRefresh: true });
+    expect(read.state).toBe("fresh");
+    expect(read.snapshot?.apps).toEqual([app("fresh-app")]);
+  });
+
+  it("discards a pre-invalidation refresh instead of republishing it as fresh", async () => {
+    const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
+    const key = "runtime";
+    let resolveInstalled: ((response: v2.AppsInstalledResponse) => void) | undefined;
+    const request = vi.fn(async (method, params) => {
+      if (method === "app/installed") {
+        return await new Promise<v2.AppsInstalledResponse>((resolve) => {
+          resolveInstalled = resolve;
+        });
+      }
+      return codexAppInventoryResponse(method, [app("stale-app")], params);
+    });
+
+    const read = cache.read({ key, request, nowMs: 0 });
+    expect(read.state).toBe("missing");
+    expect(read.refreshScheduled).toBe(true);
+
+    cache.invalidate(key, "plugin installed", 1);
+    resolveInstalled?.(codexAppInventoryResponse("app/installed", [app("stale-app")]));
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+
+    const after = cache.read({ key, request, nowMs: 2, suppressRefresh: true });
+    expect(after.state).toBe("missing");
+    expect(after.diagnostic?.message).toBe("plugin installed");
+  });
+
+  it("does not renew non-target row freshness during a targeted merge", async () => {
+    const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
+    const key = "runtime";
+    const apps = [app("calendar-app"), app("drive-app")];
+    const request = vi.fn(async (method, params) =>
+      codexAppInventoryResponse(method, apps, params),
+    );
+
+    await cache.refreshNow({ key, request, nowMs: 0, targetAppIds: [] });
+    await cache.refreshNow({
+      key,
+      request,
+      nowMs: 900,
+      forceRefetch: true,
+      targetAppIds: ["calendar-app"],
+    });
+
+    // Freshness still belongs to the complete fetch at t=0, not the merge at t=900.
+    const read = cache.read({ key, request, nowMs: 1_100, suppressRefresh: true });
+    expect(read.state).toBe("stale");
+  });
+
+  it("merges targeted refreshes for one runtime instead of alternating narrow snapshots", async () => {
+    const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
+    const key = "runtime";
+    const apps = [app("calendar-app"), app("drive-app")];
+    const request = vi.fn(async (method, params) =>
+      codexAppInventoryResponse(method, apps, params),
+    );
+
+    await cache.refreshNow({ key, request, nowMs: 0, targetAppIds: ["calendar-app"] });
+    await cache.refreshNow({
+      key,
+      request,
+      nowMs: 1,
+      forceRefetch: true,
+      targetAppIds: ["drive-app"],
+    });
+
+    const read = cache.read({ key, request, nowMs: 2, suppressRefresh: true });
+    expect(read.state).toBe("fresh");
+    expect(read.snapshot?.targetAppIds).toEqual(["calendar-app", "drive-app"]);
+    expect(read.snapshot?.apps).toEqual(apps);
+    expect(read.snapshot?.installedApps.map((entry) => entry.id)).toEqual([
+      "calendar-app",
+      "drive-app",
+    ]);
+  });
+
+  it("replaces an expired union entry on the next single-target refresh", async () => {
+    const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
+    const key = "runtime";
+    const apps = [app("calendar-app"), app("drive-app")];
+    const request = vi.fn(async (method, params) =>
+      codexAppInventoryResponse(method, apps, params),
+    );
+
+    await cache.refreshNow({ key, request, nowMs: 0, targetAppIds: ["calendar-app"] });
+    await cache.refreshNow({
+      key,
+      request,
+      nowMs: 1,
+      forceRefetch: true,
+      targetAppIds: ["drive-app"],
+    });
+    expect(cache.read({ key, request, nowMs: 1_500, suppressRefresh: true }).state).toBe("stale");
+
+    // Past TTL nothing is preserved; the single-target refresh replaces the
+    // union entry and freshness recovers without a complete fetch.
+    await cache.refreshNow({
+      key,
+      request,
+      nowMs: 1_500,
+      forceRefetch: true,
+      targetAppIds: ["calendar-app"],
+    });
+    const read = cache.read({ key, request, nowMs: 1_600, suppressRefresh: true });
+    expect(read.state).toBe("fresh");
+    expect(read.snapshot?.targetAppIds).toEqual(["calendar-app"]);
+    expect(read.snapshot?.apps).toEqual([app("calendar-app")]);
+  });
+
+  it("retires stacked scoped invalidations across separate covering refreshes", async () => {
+    const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
+    const key = "runtime";
+    const apps = [app("calendar-app"), app("drive-app")];
+    const request = vi.fn(async (method, params) =>
+      codexAppInventoryResponse(method, apps, params),
+    );
+
+    await cache.refreshNow({ key, request, nowMs: 0, targetAppIds: [] });
+    cache.invalidate(key, "calendar plugin installed", 1, ["calendar-app"]);
+    cache.invalidate(key, "drive plugin installed", 2, ["drive-app"]);
+
+    await cache.refreshNow({
+      key,
+      request,
+      nowMs: 3,
+      forceRefetch: true,
+      targetAppIds: ["calendar-app"],
+    });
+    expect(cache.read({ key, request, nowMs: 4, suppressRefresh: true }).state).toBe("stale");
+
+    await cache.refreshNow({
+      key,
+      request,
+      nowMs: 5,
+      forceRefetch: true,
+      targetAppIds: ["drive-app"],
+    });
+    expect(cache.read({ key, request, nowMs: 6, suppressRefresh: true }).state).toBe("fresh");
+  });
+
+  it("keeps an unscoped invalidation until a complete refresh", async () => {
+    const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
+    const key = "runtime";
+    const apps = [app("calendar-app")];
+    const request = vi.fn(async (method, params) =>
+      codexAppInventoryResponse(method, apps, params),
+    );
+
+    await cache.refreshNow({ key, request, nowMs: 0, targetAppIds: [] });
+    cache.invalidate(key, "runtime identity changed", 1);
+
+    await cache.refreshNow({
+      key,
+      request,
+      nowMs: 2,
+      forceRefetch: true,
+      targetAppIds: ["calendar-app"],
+    });
+    expect(cache.read({ key, request, nowMs: 3, suppressRefresh: true }).state).toBe("stale");
+
+    await cache.refreshNow({ key, request, nowMs: 4, forceRefetch: true, targetAppIds: [] });
+    expect(cache.read({ key, request, nowMs: 5, suppressRefresh: true }).state).toBe("fresh");
   });
 });
 
-function app(id: string): v2.AppInfo {
+function app(id: string): AppMetadata {
   return {
     id,
     name: id,
     description: null,
-    logoUrl: null,
-    logoUrlDark: null,
+    iconUrl: null,
+    iconUrlDark: null,
     distributionChannel: null,
-    branding: null,
-    appMetadata: null,
-    labels: null,
     installUrl: null,
-    isAccessible: true,
-    isEnabled: true,
     pluginDisplayNames: [],
+    toolSummaries: null,
   };
+}
+
+function codexAppInventoryResponse<Method extends "app/installed" | "app/read">(
+  method: Method,
+  apps: readonly AppMetadata[],
+  params?: CodexAppServerRequestParams<Method>,
+  options?: {
+    installedApps?: readonly v2.InstalledApp[];
+    callableByAppId?: Readonly<Record<string, boolean>>;
+  },
+): CodexAppServerRequestResult<Method> {
+  if (method === "app/installed") {
+    return {
+      apps:
+        options?.installedApps ??
+        apps.map((metadata) => ({
+          id: metadata.id,
+          runtimeName: metadata.name,
+          enabled: true,
+          callable: options?.callableByAppId?.[metadata.id] ?? true,
+        })),
+    } as CodexAppServerRequestResult<Method>;
+  }
+  const requestedIds = (params as CodexAppServerRequestParams<"app/read"> | undefined)?.appIds;
+  const matchingApps = apps.filter(
+    (metadata) => !requestedIds || requestedIds.includes(metadata.id),
+  );
+  return {
+    apps: matchingApps,
+    missingAppIds:
+      requestedIds?.filter((id) => !matchingApps.some((metadata) => metadata.id === id)) ?? [],
+  } as CodexAppServerRequestResult<Method>;
 }

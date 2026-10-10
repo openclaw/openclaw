@@ -1,21 +1,27 @@
-/**
- * Shared metadata and result types for embedded-agent runner surfaces.
- */
+import type { ProviderRefusalReview } from "@openclaw/llm-core/diagnostics";
+import type { AgentRunTimeoutPhase } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import type { HeartbeatToolResponse } from "../../auto-reply/heartbeat-tool-response.js";
 import type {
   CliSessionBinding,
   SessionContextBudgetStatus,
   SessionSystemPromptReport,
 } from "../../config/sessions/types.js";
+import type { ContextEngineSessionTarget } from "../../context-engine/types.js";
 import type { DiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import type { AcceptedSessionSpawn } from "../accepted-session-spawn.js";
+import type { AgentRunTerminalReceipt } from "../agent-run-terminal-receipt.js";
+import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.types.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
 } from "../embedded-agent-messaging.types.js";
+import type { McpConnectAction } from "../mcp-connect-action.js";
+import type { McpAppChannelView } from "../mcp-ui-resource.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
-import type { AgentRunTimeoutPhase } from "../run-timeout-attribution.js";
-import type { ContextUsage } from "../usage.js";
+import type { ModelRef } from "../model-ref-shared.js";
+import type { ReplyDeliveryState } from "../reply-completion.js";
+import type { AgentRuntimeCredentialSource } from "../runtime-plan/types.js";
+import type { NormalizedUsage } from "../usage.js";
 
 export type BlockReplyFlushContext =
   | {
@@ -33,13 +39,28 @@ export type BlockReplyFlushContext =
       attemptAccepted: boolean;
     };
 
+type EmbeddedAgentUsage = Omit<NormalizedUsage, "contextUsage">;
+
 export type EmbeddedAgentMeta = {
   sessionId: string;
   sessionFile?: string;
   provider: string;
   model: string;
   contextTokens?: number;
+  contextTokensSource?: "runtime" | "runtime-configured" | "resolved" | "resolved-v1";
   agentHarnessId?: string;
+  /** Sanitized provider-policy refusal attached to this physical attempt. */
+  providerRefusal?: {
+    provider?: string;
+    category?: string;
+    review?: ProviderRefusalReview;
+    nativeThreadId?: string;
+    nativeTurnId?: string;
+  };
+  /** Runtime-owned selection, independent of the final response or credential source. */
+  runtimeModelSelection?: ModelRef;
+  /** Redacted credential source selected for the terminal physical model attempt. */
+  credentialSource?: AgentRuntimeCredentialSource;
   fallbackAttempts?: FallbackAttempt[];
   cliSessionBinding?: CliSessionBinding;
   clearCliSessionBinding?: boolean;
@@ -56,14 +77,9 @@ export type EmbeddedAgentMeta = {
    * and completion tokens that are useful for billing but noisy as live context.
    */
   promptTokens?: number;
-  usage?: {
-    input?: number;
-    output?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-    reasoningTokens?: number;
-    total?: number;
-  };
+  usage?: EmbeddedAgentUsage;
+  /** Terminal cumulative usage reserved for turn-level diagnostics. */
+  diagnosticUsage?: EmbeddedAgentUsage;
   /**
    * Usage from the last individual API call (not accumulated across tool-use
    * loops or compaction retries). Used for context-window utilization display
@@ -71,16 +87,30 @@ export type EmbeddedAgentMeta = {
    * sums input tokens from every API call in the run, which overstates the
    * actual context size.
    */
-  lastCallUsage?: {
-    input?: number;
-    output?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-    contextUsage?: ContextUsage;
-    reasoningTokens?: number;
-    total?: number;
-  };
+  lastCallUsage?: NormalizedUsage;
   contextBudgetStatus?: SessionContextBudgetStatus;
+  /**
+   * True when code mode owned the model tool surface for this run. Config
+   * alone is not proof: the "auto" tier engages per model capability, raw
+   * model runs and plugin-harness surfaces can decline engagement, and the
+   * shell tool is also named `exec`, so consumers must read this flag
+   * instead of config or tool names.
+   */
+  codeModeEngaged?: boolean;
+  /** Completed assistant/provider round trips accumulated across run attempts. */
+  assistantTurns?: number;
+  /**
+   * Code-mode/tool-search inner bridge calls for the run's catalog. These are
+   * invisible to the provider; `toolSummary.calls` stays the outer count.
+   */
+  bridgeCalls?: {
+    search: number;
+    describe: number;
+    call: number;
+  };
+  /** Estimated USD cost of the run's accumulated usage. Omitted when the model has no cost data. */
+  costUsd?: number;
+  terminalReceipt?: Omit<AgentRunTerminalReceipt, "terminalDisposition">;
 };
 
 export type TraceAttempt = {
@@ -92,7 +122,7 @@ export type TraceAttempt = {
     | "surface_error"
     | "candidate_failed"
     | "rotate_profile"
-    | "same_model_rate_limit"
+    | "same_model_transient"
     | "fallback_model"
     | "aborted"
     | "error";
@@ -102,47 +132,13 @@ export type TraceAttempt = {
   status?: number;
 };
 
-type ExecutionTrace = {
-  winnerProvider?: string;
-  winnerModel?: string;
-  attempts?: TraceAttempt[];
-  fallbackUsed?: boolean;
-  runner?: "embedded" | "cli";
-};
-
-type RequestShapingTrace = {
-  authMode?: string;
-  thinking?: string;
-  reasoning?: string;
-  verbose?: string;
-  trace?: string;
-  fallbackEligible?: boolean;
-  blockStreaming?: string;
-};
-
-type PromptSegmentTrace = {
-  key: string;
-  chars: number;
-};
-
 export type ToolSummaryTrace = {
   calls: number;
   tools: string[];
   failures?: number;
+  /** Latest tool failure not cleared by same-tool success, independent of reply presentation. */
+  unresolvedError?: { toolName: string };
   totalToolTimeMs?: number;
-};
-
-type CompletionTrace = {
-  finishReason?: string;
-  stopReason?: string;
-  refusal?: boolean;
-};
-
-type ContextManagementTrace = {
-  sessionCompactions?: number;
-  lastTurnCompactions?: number;
-  preflightCompactionApplied?: boolean;
-  postCompactionContextInjected?: boolean;
 };
 
 export type EmbeddedRunLivenessState = "working" | "paused" | "blocked" | "abandoned";
@@ -154,6 +150,12 @@ export type EmbeddedRunFailureSignal = {
   code: "SYSTEM_RUN_DENIED" | "INVALID_REQUEST";
   message: string;
   fatalForCron: true;
+};
+
+export type EmbeddedRunTerminalToolFailure = {
+  source: "tool";
+  toolName: "exec" | "wait";
+  code: "UNKNOWN_TOOL_ID";
 };
 
 export type EmbeddedAgentRunMeta = {
@@ -168,13 +170,29 @@ export type EmbeddedAgentRunMeta = {
   livenessState?: EmbeddedRunLivenessState;
   timeoutPhase?: AgentRunTimeoutPhase;
   providerStarted?: boolean;
+  /** Producer-owned terminal cause; the fallback owner decides whether a chain was stopped. */
+  modelFallbackStopReason?:
+    | "agent_run_terminal_timeout"
+    | "idle_timeout_circuit_breaker"
+    | "provider_review_continuation";
   agentHarnessResultClassification?: "empty" | "reasoning-only" | "planning-only";
   terminalReplyKind?: "silent-empty";
+  /** An exact, successfully settled tool batch intentionally completed the turn without a reply. */
+  intentionalTerminalCompletion?: "tool-batch";
+  terminalReply?: AgentRunTerminalReplySnapshot;
   yielded?: boolean;
+  /** Explicit user-facing waiting status supplied to sessions_yield. */
+  yieldAcknowledgment?: string;
+  /**
+   * A visible parent delegated its otherwise-empty result to completion children
+   * or a detached media run.
+   */
+  continuationPending?: true;
   error?: {
     kind:
       | "context_overflow"
       | "compaction_failure"
+      | "compaction_replay_refresh_required"
       | "role_ordering"
       | "image_size"
       | "retry_limit"
@@ -187,6 +205,8 @@ export type EmbeddedAgentRunMeta = {
     terminalPresentation?: boolean;
   };
   failureSignal?: EmbeddedRunFailureSignal;
+  /** Bounded, sanitized unresolved Code Mode failure for operator diagnostics. */
+  terminalToolFailure?: EmbeddedRunTerminalToolFailure;
   /** Stop reason for the agent run (e.g., "completed", "tool_calls"). */
   stopReason?: string;
   /** Pending tool calls when stopReason is "tool_calls". */
@@ -195,15 +215,48 @@ export type EmbeddedAgentRunMeta = {
     name: string;
     arguments: string;
   }>;
-  executionTrace?: ExecutionTrace;
-  requestShaping?: RequestShapingTrace;
-  promptSegments?: PromptSegmentTrace[];
+  executionTrace?: {
+    winnerProvider?: string;
+    winnerModel?: string;
+    attempts?: TraceAttempt[];
+    fallbackUsed?: boolean;
+    runner?: "embedded" | "cli";
+    providerPolicyRetry?: {
+      category: "cyber";
+      provider: string;
+      model: string;
+    };
+  };
+  requestShaping?: {
+    authMode?: string;
+    thinking?: string;
+    reasoning?: string;
+    verbose?: string;
+    trace?: string;
+    fallbackEligible?: boolean;
+    blockStreaming?: string;
+  };
+  promptSegments?: {
+    key: string;
+    chars: number;
+  }[];
   toolSummary?: ToolSummaryTrace;
-  completion?: CompletionTrace;
-  contextManagement?: ContextManagementTrace;
+  completion?: {
+    finishReason?: string;
+    stopReason?: string;
+    refusal?: boolean;
+  };
+  contextManagement?: {
+    sessionCompactions?: number;
+    lastTurnCompactions?: number;
+    preflightCompactionApplied?: boolean;
+    postCompactionContextInjected?: boolean;
+  };
 };
 
 export type EmbeddedAgentRunResult = {
+  latestMcpAppChannelView?: McpAppChannelView;
+  latestMcpConnectAction?: McpConnectAction;
   payloads?: Array<{
     text?: string;
     mediaUrl?: string;
@@ -219,32 +272,33 @@ export type EmbeddedAgentRunResult = {
   }>;
   meta: EmbeddedAgentRunMeta;
   diagnosticTrace?: DiagnosticTraceContext;
-  // True if a messaging tool successfully sent a message.
-  // Used to suppress agent's confirmation text.
+  /** Suppresses confirmation text after a messaging tool successfully sends. */
   didSendViaMessagingTool?: boolean;
   // True if message_tool_only delivered a visible reply to the current source conversation.
   didDeliverSourceReplyViaMessageTool?: boolean;
-  // True if a deterministic approval prompt was sent through the tool-result channel.
+  sourceReplyDelivered?: true;
+  /** Current-input custody; unlike aggregate sends, this is reset when another input is admitted. */
+  sourceReplyDeliveryState?: ReplyDeliveryState;
   didSendDeterministicApprovalPrompt?: boolean;
-  // Texts successfully sent via messaging tools during the run.
   messagingToolSentTexts?: string[];
-  // Media URLs successfully sent via messaging tools during the run.
   messagingToolSentMediaUrls?: string[];
-  // Messaging tool targets that successfully sent a message during the run.
   messagingToolSentTargets?: MessagingToolSend[];
   // Message-tool replies delivered to the active internal UI source.
   messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
-  // Child sessions successfully accepted by sessions_spawn during the run.
   acceptedSessionSpawns?: AcceptedSessionSpawn[];
+  /** An asynchronous tool task started during this run; its owner tracks completion. */
+  asyncWorkStarted?: true;
+  /** Completed core yield settlement, not a requester-visible final reply. */
+  requesterContinuationSettled?: true;
   // Structured heartbeat outcome recorded by the heartbeat response tool.
   heartbeatToolResponse?: HeartbeatToolResponse;
-  // Count of successful cron.add tool calls in this run.
   successfulCronAdds?: number;
 };
 
 export type EmbeddedAgentCompactResult = {
   ok: boolean;
   compacted: boolean;
+  compactionKind?: "context-engine" | "native-harness" | "server-endpoint";
   reason?: string;
   /** Structured failure metadata used by model fallback classification. */
   failure?: {
@@ -254,8 +308,12 @@ export type EmbeddedAgentCompactResult = {
     rawError?: string;
   };
   result?: {
-    summary: string;
-    firstKeptEntryId: string;
+    /** Identifies summaryless provider compaction in RPC and UI consumers. */
+    kind?: "server-endpoint";
+    sessionTarget?: ContextEngineSessionTarget;
+    /** Server-endpoint compaction has no transcript summary or first-kept entry. */
+    summary?: string;
+    firstKeptEntryId?: string;
     tokensBefore: number;
     tokensAfter?: number;
     details?: unknown;

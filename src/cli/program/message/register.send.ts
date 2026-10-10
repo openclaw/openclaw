@@ -1,24 +1,23 @@
-// Message send command registration, including media and presentation/delivery options.
 import type { Command } from "commander";
+import { CHANNEL_TARGET_DESCRIPTION } from "../../../infra/outbound/channel-target.js";
+import { collectOption } from "../helpers.js";
 import type { MessageCliHelpers } from "./helpers.js";
 
-/** Register `message send` and route execution through shared message helpers. */
 export function registerMessageSendCommand(message: Command, helpers: MessageCliHelpers) {
   helpers
     .withMessageBase(
-      helpers
-        .withRequiredMessageTarget(
-          message
-            .command("send")
-            .description("Send a message")
-            .option(
-              "-m, --message <text>",
-              "Message body (required unless --media or --presentation is set)",
-            ),
+      message
+        .command("send")
+        .description("Send a message")
+        .option(
+          "-m, --message <text>",
+          "Message body (required unless --media or --presentation is set)",
         )
+        .requiredOption("-t, --target <dest>", CHANNEL_TARGET_DESCRIPTION)
         .option(
           "--media <path-or-url>",
-          "Attach media (image/audio/video/document). Accepts local paths or URLs.",
+          "Attach media (image/audio/video/document). Accepts local paths or URLs. Repeat to attach multiple files.",
+          collectOption,
         )
         .option(
           "--presentation <json>",
@@ -31,7 +30,7 @@ export function registerMessageSendCommand(message: Command, helpers: MessageCli
         .option("--gif-playback", "Treat video media as GIF playback (WhatsApp only).", false)
         .option(
           "--force-document",
-          "Send media as document to avoid channel compression (Telegram, WhatsApp). Applies to images, GIFs, and videos.",
+          "Preserve original image bytes on Slack, or send images, GIFs, and videos as documents on Telegram and WhatsApp, to avoid channel compression.",
           false,
         )
         .option(
@@ -40,7 +39,7 @@ export function registerMessageSendCommand(message: Command, helpers: MessageCli
           false,
         ),
     )
-    .action(async (opts) => {
-      await helpers.runMessageAction("send", opts);
-    });
+    .action(({ media, ...opts }) =>
+      helpers.runMessageAction("send", { ...opts, mediaUrls: media }),
+    );
 }

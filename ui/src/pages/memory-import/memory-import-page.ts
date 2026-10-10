@@ -1,17 +1,31 @@
 import { consume } from "@lit/context";
+import { initialState, Task, TaskStatus } from "@lit/task";
 import { html } from "lit";
 import { state } from "lit/decorators.js";
 import type {
   MigrationsMemoryApplyResult,
   MigrationsMemoryPlanResult,
 } from "../../../../packages/gateway-protocol/src/schema/migrations.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { titleForRoute } from "../../app-navigation.ts";
+import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { renderLearnMoreLink, renderSettingsPageHeader } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { listSelectableAgents } from "../../lib/agents/display.ts";
+import { formatUiError } from "../../lib/format-error.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { generateUUID } from "../../lib/uuid.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { renderMemoryImport } from "./view.ts";
+import {
+  renderMemoryImport,
+  type SessionBackfillGatewayResult,
+  type SessionBackfillProgress,
+  type SessionBackfillRollbackResult,
+} from "./view.ts";
+
+const SESSION_BACKFILL_BATCH_DAYS = 14;
+const MEMORY_IMPORT_DOCS_URL = "https://docs.openclaw.ai/install/migrating";
 
 type PendingMemoryImport = {
   providerId: string;
@@ -23,100 +37,106 @@ type PendingMemoryImport = {
   attempted: boolean;
 };
 
-function toErrorMessage(error: unknown): string {
-  return error instanceof Error && error.message.trim()
-    ? error.message
-    : typeof error === "string"
-      ? error
-      : "request failed";
-}
-
-function createIdempotencyKey(): string {
-  if (typeof globalThis.crypto.randomUUID === "function") {
-    return globalThis.crypto.randomUUID();
-  }
-  return [...globalThis.crypto.getRandomValues(new Uint32Array(4))]
-    .map((value) => value.toString(16).padStart(8, "0"))
-    .join("");
-}
-
 export class MemoryImportPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
-  @state() private plan: MigrationsMemoryPlanResult | null = null;
-  @state() private loading = false;
-  @state() private error: string | null = null;
   @state() private replaceExisting = false;
   @state() private selectedByProvider: Record<string, string[]> = {};
   @state() private applyingProviderId: string | null = null;
   @state() private pendingImport: PendingMemoryImport | null = null;
   @state() private applyError: string | null = null;
   @state() private lastResults: Record<string, MigrationsMemoryApplyResult> = {};
+  @state() private backfillFrom = "";
+  @state() private backfillTo = "";
+  @state() private backfillBusy: "preview" | "apply" | "rollback" | null = null;
+  @state() private backfillError: string | null = null;
+  @state() private backfillPreview: SessionBackfillGatewayResult | null = null;
+  @state() private backfillProgress: SessionBackfillProgress | null = null;
+  @state() private backfillRollbackResult: SessionBackfillRollbackResult | null = null;
+  @state() private backfillRollbackPending = false;
 
-  private loadedKey: string | null = null;
-  private requestedKey: string | null = null;
-  private loadedClient: GatewayBrowserClient | null = null;
-  private requestedClient: GatewayBrowserClient | null = null;
-  private refreshEpoch = 0;
   private applyEpoch = 0;
-  private gatewayUnavailable = false;
+  private backfillEpoch = 0;
+  private lastPlanValue: {
+    client: NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
+    agentId: string;
+    overwrite: boolean;
+    plan: MigrationsMemoryPlanResult;
+  } | null = null;
   private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
-      () => this.context?.gateway,
-      (gateway, notify) => gateway.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.agents,
-      (agents, notify) => agents.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.agentSelection,
-      (selection, notify) => selection.subscribe(notify),
-    );
+    .watchStore(() => this.context?.gateway)
+    .watchStore(() => this.context?.agents)
+    .watchStore(() => this.context?.agentSelection);
+
+  private readonly planTask = new Task(this, {
+    args: () => {
+      const snapshot = this.context?.gateway.snapshot;
+      return [
+        this.isConnected && snapshot?.phase === "connected" ? (snapshot.client ?? null) : null,
+        snapshot ? hasOperatorAdminAccess(snapshot.hello?.auth ?? null) : false,
+        this.currentAgentId(),
+        this.replaceExisting,
+      ] as const;
+    },
+    task: async ([client, canAdmin, agentId, overwrite], { signal }) => {
+      if (!client || !canAdmin || !agentId) {
+        return initialState;
+      }
+      const plan = await client.request<MigrationsMemoryPlanResult>(
+        "migrations.memory.plan",
+        { agentId, overwrite },
+        { signal },
+      );
+      return { client, agentId, overwrite, plan };
+    },
+    onComplete: (value) => {
+      const previous = this.lastPlanValue;
+      if (
+        previous &&
+        (previous.client !== value.client ||
+          previous.agentId !== value.agentId ||
+          previous.overwrite !== value.overwrite)
+      ) {
+        this.resetMutationState({ preserveAttemptedImport: previous.client !== value.client });
+        if (previous.client !== value.client || previous.agentId !== value.agentId) {
+          this.resetBackfillState();
+        }
+      }
+      this.lastPlanValue = value;
+      const { plan } = value;
+      this.selectedByProvider = Object.fromEntries(
+        plan.providers.map((provider) => [
+          provider.providerId,
+          provider.items.filter((item) => item.status === "planned").map((item) => item.id),
+        ]),
+      );
+    },
+  });
 
   override disconnectedCallback() {
-    this.refreshEpoch += 1;
+    void this.planTask.run([null, false, null, this.replaceExisting]);
     this.applyEpoch += 1;
+    this.backfillEpoch += 1;
     this.subscriptions.clear();
     super.disconnectedCallback();
   }
 
   override updated() {
     const snapshot = this.context.gateway.snapshot;
-    if (!snapshot.connected || !snapshot.client) {
-      if (!this.gatewayUnavailable) {
-        this.gatewayUnavailable = true;
-        this.resetPlanState({ preserveAttemptedImport: true });
-      }
-      return;
-    }
-    this.gatewayUnavailable = false;
-    if (!this.context.agents.state.agentsList) {
-      void this.context.agents.ensureList();
-      return;
-    }
-    const agentId = this.currentAgentId();
-    if (!agentId) {
-      return;
-    }
-    const key = this.planKey(agentId);
-    const activeClient = this.requestedClient ?? this.loadedClient;
-    const activeKey = this.requestedKey ?? this.loadedKey;
     if (
-      (activeClient !== null && activeClient !== snapshot.client) ||
-      (activeKey !== null && activeKey !== key)
+      this.pendingImport &&
+      (snapshot.phase !== "connected" ||
+        snapshot.client !== (this.planTask.value ?? this.lastPlanValue)?.client ||
+        this.currentAgentId() !== this.pendingImport.agentId)
     ) {
-      this.resetPlanState({
-        preserveAttemptedImport: activeClient !== null && activeClient !== snapshot.client,
-      });
+      this.resetMutationState({ preserveAttemptedImport: true });
     }
     if (
-      !this.loading &&
-      (this.loadedClient !== snapshot.client || this.loadedKey !== key) &&
-      (this.requestedClient !== snapshot.client || this.requestedKey !== key)
+      snapshot.phase !== "connected" &&
+      (this.backfillBusy !== null || this.backfillRollbackPending)
     ) {
-      void this.refresh();
+      this.resetBackfillState();
     }
   }
 
@@ -125,96 +145,60 @@ export class MemoryImportPage extends OpenClawLightDomElement {
     if (!list) {
       return null;
     }
+    const agents = listSelectableAgents(list.agents);
     const selected = this.context.agentSelection.state.selectedId;
-    if (selected && list.agents.some((agent) => agent.id === selected)) {
+    if (selected && agents.some((agent) => agent.id === selected)) {
       return selected;
     }
-    return list.defaultId ?? list.agents[0]?.id ?? null;
+    return agents.some((agent) => agent.id === list.defaultId)
+      ? list.defaultId
+      : (agents[0]?.id ?? null);
   }
 
-  private planKey(agentId: string): string {
-    return `${agentId}:${this.replaceExisting ? "replace" : "safe"}`;
+  private get plan(): MigrationsMemoryPlanResult | null {
+    const value = this.planTask.value ?? this.lastPlanValue;
+    const snapshot = this.context.gateway.snapshot;
+    const agentId = this.currentAgentId();
+    return value &&
+      snapshot.phase === "connected" &&
+      value.client === snapshot.client &&
+      value.agentId === agentId &&
+      value.overwrite === this.replaceExisting
+      ? value.plan
+      : null;
   }
 
-  private resetPlanState(options: { preserveAttemptedImport?: boolean } = {}) {
+  private get loading(): boolean {
+    return this.planTask.status === TaskStatus.PENDING;
+  }
+
+  private get error(): string | null {
+    return this.planTask.status === TaskStatus.ERROR
+      ? formatUiError(this.planTask.error, "request failed")
+      : null;
+  }
+
+  private get canAdmin(): boolean {
+    return hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null);
+  }
+
+  private resetMutationState(options: { preserveAttemptedImport?: boolean } = {}) {
     // A disconnected apply has an unknown outcome. Keep its key so reconnect retries can
     // recover the cached server result instead of repeating side effects.
     const pendingImport =
       options.preserveAttemptedImport && this.pendingImport?.attempted ? this.pendingImport : null;
-    this.refreshEpoch += 1;
     this.applyEpoch += 1;
-    this.plan = null;
-    this.loading = false;
-    this.error = null;
     this.selectedByProvider = {};
     this.applyingProviderId = null;
     this.pendingImport = pendingImport;
     this.applyError = null;
     this.lastResults = {};
-    this.loadedKey = null;
-    this.requestedKey = null;
-    this.loadedClient = null;
-    this.requestedClient = null;
   }
 
-  private async refresh(force = false) {
-    const snapshot = this.context.gateway.snapshot;
-    const agentId = this.currentAgentId();
-    if (!snapshot.connected || !snapshot.client || !agentId || this.loading) {
-      return;
-    }
-    const client = snapshot.client;
-    const key = this.planKey(agentId);
-    if (!force && this.loadedClient === client && this.loadedKey === key) {
-      return;
-    }
-    const epoch = ++this.refreshEpoch;
-    this.requestedKey = key;
-    this.requestedClient = client;
-    this.loading = true;
-    this.error = null;
-    try {
-      const plan = await client.request<MigrationsMemoryPlanResult>("migrations.memory.plan", {
-        agentId,
-        overwrite: this.replaceExisting,
-      });
-      if (epoch !== this.refreshEpoch) {
-        return;
-      }
-      this.plan = plan;
-      this.loadedKey = key;
-      this.loadedClient = client;
-      this.selectedByProvider = Object.fromEntries(
-        plan.providers.map((provider) => [
-          provider.providerId,
-          provider.items.filter((item) => item.status === "planned").map((item) => item.id),
-        ]),
-      );
-    } catch (error) {
-      if (epoch === this.refreshEpoch) {
-        this.error = toErrorMessage(error);
-        // Record the attempted key so reactive updates keep the stable error.
-        // The Refresh action explicitly retries with force=true.
-        this.loadedKey = key;
-        this.loadedClient = client;
-      }
-    } finally {
-      if (epoch === this.refreshEpoch) {
-        this.loading = false;
-        this.requestedKey = null;
-        this.requestedClient = null;
-      }
-    }
-  }
-
-  private selectAgent(agentId: string) {
-    this.context.agentSelection.set(agentId);
-    this.resetPlanState();
-  }
-
-  private setReplaceExisting(enabled: boolean) {
-    this.replaceExisting = enabled;
-    this.resetPlanState();
+  private refresh(): Promise<void> {
+    return this.currentAgentId()
+      ? this.planTask.run()
+      : this.context.agents.ensureList().then(() => undefined);
   }
 
   private toggleCollection(providerId: string, itemIds: readonly string[], selected: boolean) {
@@ -230,6 +214,9 @@ export class MemoryImportPage extends OpenClawLightDomElement {
   }
 
   private requestImport(providerId: string) {
+    if (!this.canAdmin) {
+      return;
+    }
     const agentId = this.currentAgentId();
     const planFingerprint = this.plan?.providers.find(
       (provider) => provider.providerId === providerId,
@@ -239,6 +226,9 @@ export class MemoryImportPage extends OpenClawLightDomElement {
       this.loading ||
       this.error !== null ||
       this.applyingProviderId !== null ||
+      this.backfillBusy === "apply" ||
+      this.backfillBusy === "rollback" ||
+      this.backfillRollbackPending ||
       !agentId ||
       this.plan?.agentId !== agentId ||
       !planFingerprint ||
@@ -253,13 +243,19 @@ export class MemoryImportPage extends OpenClawLightDomElement {
       planFingerprint,
       itemIds: [...itemIds],
       overwrite: this.replaceExisting,
-      idempotencyKey: createIdempotencyKey(),
+      idempotencyKey: generateUUID(),
       attempted: false,
     };
   }
 
   private async confirmImport() {
-    if (this.applyingProviderId !== null) {
+    if (
+      !this.canAdmin ||
+      this.applyingProviderId !== null ||
+      this.backfillBusy === "apply" ||
+      this.backfillBusy === "rollback" ||
+      this.backfillRollbackPending
+    ) {
       return;
     }
     const pending = this.pendingImport;
@@ -273,39 +269,158 @@ export class MemoryImportPage extends OpenClawLightDomElement {
       return;
     }
     const attemptedImport = { ...pending, attempted: true };
+    const client = snapshot.client;
     this.pendingImport = attemptedImport;
     const applyEpoch = ++this.applyEpoch;
     this.applyingProviderId = attemptedImport.providerId;
     this.applyError = null;
     try {
-      const result = await snapshot.client.request<MigrationsMemoryApplyResult>(
-        "migrations.memory.apply",
-        {
-          idempotencyKey: attemptedImport.idempotencyKey,
-          agentId: attemptedImport.agentId,
-          providerId: attemptedImport.providerId,
-          planFingerprint: attemptedImport.planFingerprint,
-          itemIds: attemptedImport.itemIds,
-          overwrite: attemptedImport.overwrite,
-        },
-      );
-      if (applyEpoch !== this.applyEpoch) {
+      const result = await client.request<MigrationsMemoryApplyResult>("migrations.memory.apply", {
+        idempotencyKey: attemptedImport.idempotencyKey,
+        agentId: attemptedImport.agentId,
+        providerId: attemptedImport.providerId,
+        planFingerprint: attemptedImport.planFingerprint,
+        itemIds: attemptedImport.itemIds,
+        overwrite: attemptedImport.overwrite,
+      });
+      if (
+        applyEpoch !== this.applyEpoch ||
+        this.context.gateway.snapshot.phase !== "connected" ||
+        this.context.gateway.snapshot.client !== client ||
+        this.currentAgentId() !== attemptedImport.agentId
+      ) {
         return;
       }
       this.lastResults = { ...this.lastResults, [attemptedImport.providerId]: result };
       this.pendingImport = null;
-      this.loadedKey = null;
-      this.requestedKey = null;
-      this.loadedClient = null;
-      this.requestedClient = null;
-      await this.refresh(true);
+      await this.refresh();
     } catch (error) {
       if (applyEpoch === this.applyEpoch) {
-        this.applyError = toErrorMessage(error);
+        this.applyError = formatUiError(error, "request failed");
       }
     } finally {
       if (applyEpoch === this.applyEpoch) {
         this.applyingProviderId = null;
+      }
+    }
+  }
+
+  private resetBackfillState() {
+    this.backfillEpoch += 1;
+    this.backfillFrom = "";
+    this.backfillTo = "";
+    this.backfillBusy = null;
+    this.backfillError = null;
+    this.clearBackfillResults();
+    this.backfillRollbackPending = false;
+  }
+
+  private clearBackfillResults() {
+    this.backfillPreview = null;
+    this.backfillProgress = null;
+    this.backfillRollbackResult = null;
+  }
+
+  private setBackfillDate(field: "backfillFrom" | "backfillTo", value: string) {
+    this[field] = value;
+    this.clearBackfillResults();
+    this.backfillError = null;
+  }
+
+  private async runBackfill(operation: "preview" | "apply" | "rollback") {
+    const client = this.context.gateway.snapshot.client;
+    const agentId = this.currentAgentId();
+    if (
+      !this.canAdmin ||
+      !client ||
+      !agentId ||
+      this.backfillBusy !== null ||
+      this.applyingProviderId !== null ||
+      (operation === "rollback" && !this.backfillRollbackPending)
+    ) {
+      return;
+    }
+    const epoch = ++this.backfillEpoch;
+    const isCurrent = () =>
+      epoch === this.backfillEpoch &&
+      this.context.gateway.snapshot.phase === "connected" &&
+      this.context.gateway.snapshot.client === client &&
+      this.currentAgentId() === agentId;
+    this.backfillBusy = operation;
+    this.backfillError = null;
+    if (operation !== "rollback") {
+      this.clearBackfillResults();
+    }
+    const requestBackfill = (method: "preview" | "apply") =>
+      client.request<SessionBackfillGatewayResult>(`memory.sessionBackfill.${method}`, {
+        agentId,
+        ...(this.backfillFrom ? { from: this.backfillFrom } : {}),
+        ...(this.backfillTo ? { to: this.backfillTo } : {}),
+        limitDays: SESSION_BACKFILL_BATCH_DAYS,
+      });
+    try {
+      if (operation === "rollback") {
+        const result = await client.request<SessionBackfillRollbackResult>(
+          "memory.sessionBackfill.rollback",
+          { agentId },
+        );
+        if (isCurrent()) {
+          this.backfillRollbackResult = result;
+          this.backfillPreview = null;
+          this.backfillProgress = null;
+          this.backfillRollbackPending = false;
+        }
+      } else if (operation === "preview") {
+        const result = await requestBackfill("preview");
+        if (isCurrent()) {
+          this.backfillPreview = result;
+        }
+      } else {
+        let progress: SessionBackfillProgress = {
+          days: 0,
+          candidates: 0,
+          staged: 0,
+          complete: false,
+        };
+        this.backfillProgress = progress;
+        const processedDays = new Set<string>();
+        while (true) {
+          const chunk = await requestBackfill("apply");
+          if (!isCurrent()) {
+            return;
+          }
+          if (chunk.candidates > 0 && chunk.cursor?.advanced !== true) {
+            throw new Error("Session backfill stopped because the server cursor did not advance.");
+          }
+          if (chunk.candidates === 0 && chunk.cursor?.exhausted !== true) {
+            throw new Error(
+              "Session backfill stopped because the server cursor was not exhausted.",
+            );
+          }
+          for (const day of chunk.perDay) {
+            processedDays.add(day.day);
+          }
+          progress = {
+            days: processedDays.size,
+            candidates: progress.candidates + chunk.candidates,
+            staged: progress.staged + chunk.staged,
+            complete: chunk.candidates === 0,
+          };
+          this.backfillProgress = progress;
+          // A zero-candidate call is the idempotent completion sentinel; cursor metadata proves
+          // that the server's persisted scan agrees before the client stops driving chunks.
+          if (chunk.candidates === 0) {
+            break;
+          }
+        }
+      }
+    } catch (error) {
+      if (isCurrent()) {
+        this.backfillError = formatUiError(error, "request failed");
+      }
+    } finally {
+      if (isCurrent()) {
+        this.backfillBusy = null;
       }
     }
   }
@@ -315,12 +430,13 @@ export class MemoryImportPage extends OpenClawLightDomElement {
     const agentsList = this.context.agents.state.agentsList;
     const agentId = this.currentAgentId();
     const body = renderMemoryImport({
-      connected: snapshot.connected,
-      agents: agentsList?.agents ?? [],
+      connected: snapshot.phase === "connected",
+      canAdmin: this.canAdmin,
+      agents: listSelectableAgents(agentsList?.agents ?? []),
       selectedAgentId: agentId,
       plan: this.plan,
-      loading: this.loading,
-      error: this.error,
+      loading: this.loading || this.context.agents.state.agentsLoading,
+      error: (agentId ? null : this.context.agents.state.agentsError) ?? this.error,
       applyError: this.applyError,
       replaceExisting: this.replaceExisting,
       selectedByProvider: this.selectedByProvider,
@@ -328,9 +444,26 @@ export class MemoryImportPage extends OpenClawLightDomElement {
       pendingProviderId:
         this.pendingImport?.agentId === agentId ? this.pendingImport.providerId : null,
       lastResults: this.lastResults,
-      onSelectAgent: (nextAgentId) => this.selectAgent(nextAgentId),
-      onReplaceExisting: (enabled) => this.setReplaceExisting(enabled),
-      onRefresh: () => void this.refresh(true),
+      backfillAvailable:
+        isGatewayMethodAdvertised(snapshot, "memory.sessionBackfill.preview") !== false,
+      backfillFrom: this.backfillFrom,
+      backfillTo: this.backfillTo,
+      backfillBusy: this.backfillBusy,
+      backfillError: this.backfillError,
+      backfillPreview: this.backfillPreview,
+      backfillProgress: this.backfillProgress,
+      backfillRollbackResult: this.backfillRollbackResult,
+      backfillRollbackPending: this.backfillRollbackPending,
+      onSelectAgent: (nextAgentId) => {
+        this.context.agentSelection.set(nextAgentId);
+        this.resetMutationState();
+        this.resetBackfillState();
+      },
+      onReplaceExisting: (enabled) => {
+        this.replaceExisting = enabled;
+        this.resetMutationState();
+      },
+      onRefresh: () => void this.refresh(),
       onToggleCollection: (providerId, itemIds, selected) =>
         this.toggleCollection(providerId, itemIds, selected),
       onRequestImport: (providerId) => this.requestImport(providerId),
@@ -341,13 +474,29 @@ export class MemoryImportPage extends OpenClawLightDomElement {
           this.applyError = null;
         }
       },
+      onBackfillFromChange: (value) => this.setBackfillDate("backfillFrom", value),
+      onBackfillToChange: (value) => this.setBackfillDate("backfillTo", value),
+      onBackfillPreview: () => void this.runBackfill("preview"),
+      onBackfillApply: () => void this.runBackfill("apply"),
+      onBackfillRollbackRequest: () => {
+        if (this.backfillBusy === null) {
+          this.backfillRollbackPending = true;
+          this.backfillError = null;
+        }
+      },
+      onBackfillRollbackConfirm: () => void this.runBackfill("rollback"),
+      onBackfillRollbackCancel: () => {
+        if (this.backfillBusy === null) {
+          this.backfillRollbackPending = false;
+        }
+      },
     });
     return html`
-      <section class="content-header">
-        <div>
-          <div class="page-title">${titleForRoute("memory-import")}</div>
-        </div>
-      </section>
+      ${renderSettingsPageHeader({
+        title: titleForRoute("memory-import"),
+        subtitle: html`${subtitleForRoute("memory-import")}
+        ${renderLearnMoreLink(MEMORY_IMPORT_DOCS_URL)}`,
+      })}
       ${renderSettingsWorkspace(body)}
     `;
   }

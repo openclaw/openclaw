@@ -5,17 +5,15 @@ import { createLazyRuntimeMethodBinder, createLazyRuntimeModule } from "../share
 const loadImageRuntime = createLazyRuntimeModule(() => import("./image.js"));
 const bindImageRuntime = createLazyRuntimeMethodBinder(loadImageRuntime);
 
-/** Describes one image through the configured media runtime. */
-export const describeImageWithModel = bindImageRuntime((runtime) => runtime.describeImageWithModel);
-/** Describes multiple images through the configured media runtime. */
+export const describeImageWithModel = bindImageRuntime(
+  (runtime) => runtime.describeImageWithModelCore,
+);
 export const describeImagesWithModel = bindImageRuntime(
-  (runtime) => runtime.describeImagesWithModel,
+  (runtime) => runtime.describeImagesWithModelCore,
 );
-/** Describes one image after applying the runtime payload transform. */
 export const describeImageWithModelPayloadTransform = bindImageRuntime(
-  (runtime) => runtime.describeImageWithModelPayloadTransform,
+  (runtime) => runtime.describeImageWithModelPayloadTransformCore,
 );
-/** Describes multiple images after applying the runtime payload transform. */
 export const describeImagesWithModelPayloadTransform = bindImageRuntime(
-  (runtime) => runtime.describeImagesWithModelPayloadTransform,
+  (runtime) => runtime.describeImagesWithModelPayloadTransformCore,
 );

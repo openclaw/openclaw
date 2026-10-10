@@ -1,8 +1,13 @@
-// Slack plugin module implements replies behavior.
 import type { MessageMetadata } from "@slack/types";
 import type { Block, KnownBlock } from "@slack/web-api";
+import {
+  createAcceptedChannelDeliveryResult,
+  createChannelPartialDeliveryError,
+  getGroupThreadDeliverySession,
+} from "openclaw/plugin-sdk/channel-inbound";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import {
   chunkMarkdownTextWithMode,
   isSilentReplyText,
@@ -17,14 +22,15 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-reference";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { buildSlackBlocksFallbackText } from "../blocks-fallback.js";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
+import { SLACK_MAX_BLOCKS } from "../blocks-input.js";
 import { markdownToSlackMrkdwnChunks } from "../format.js";
-import { SLACK_TEXT_LIMIT } from "../limits.js";
+import { SLACK_MESSAGE_TEXT_HARD_LIMIT, SLACK_TEXT_LIMIT } from "../limits.js";
 import { emitSlackMessageSentHooks } from "../message-sent-hook.js";
 import {
-  buildSlackNativeDataAccessibilityText,
   hasSlackNativeDataBlock,
-  isSlackInvalidBlocksError,
+  isSlackInvalidBlocksResponse,
+  isSlackNativeResponseUrlRejection,
 } from "../native-data-blocks.js";
 import {
   buildSlackNativeDataDeliveryPlan,
@@ -33,19 +39,76 @@ import {
 } from "../native-data-fallback.js";
 import {
   hasSlackReplyStructuredContent,
+  iterateSlackReplyDeliveryMessages,
   resolveSlackReplyBlockResolution,
   resolveSlackReplyBlocks,
+  type PreparedSlackReply,
 } from "../reply-blocks.js";
+import { sendMessageSlack, type SlackSendIdentity, type SlackSendResult } from "../send.js";
+import { resolveSlackReplyThreadTs } from "../thread-ts.js";
 import type { SlackEventScope } from "./event-scope.js";
 import {
   createSlackResponseUrlBudget,
   SlackResponseAlreadyReportedError,
   type SlackResponseUrlBudget as ResponseUrlBudget,
 } from "./response-url-budget.js";
-import { sendMessageSlack, type SlackSendIdentity, type SlackSendResult } from "./send.runtime.js";
 
-export function readSlackReplyBlocks(payload: ReplyPayload) {
-  return resolveSlackReplyBlocks(payload);
+// Receipt-tracked Web API fallbacks stay at 4k, but response_url gets only five calls.
+// Repack its complete fallback parts up to Slack's hard text and block limits.
+function compactSlackResponseUrlFallback(
+  messages: readonly SlackFormattingDisabledMessage[],
+): SlackFormattingDisabledMessage[] {
+  if (messages.length <= 1) {
+    return [...messages];
+  }
+  if (messages.every((message) => !message.blocks?.length)) {
+    return chunkSlackTextAtHardLimit(messages.map((message) => message.text).join("")).map(
+      (text) => ({ text, mrkdwn: false }),
+    );
+  }
+
+  const compacted: SlackFormattingDisabledMessage[] = [];
+  let pending: SlackFormattingDisabledMessage | undefined;
+  const flush = () => {
+    if (pending) {
+      compacted.push(pending);
+      pending = undefined;
+    }
+  };
+  for (const message of messages) {
+    if (!message.blocks?.length) {
+      flush();
+      compacted.push(message);
+      continue;
+    }
+    if (pending?.blocks?.length) {
+      const text = `${pending.text}\n\n${message.text}`;
+      const blocks = [...pending.blocks, ...message.blocks];
+      if (text.length <= SLACK_MESSAGE_TEXT_HARD_LIMIT && blocks.length <= SLACK_MAX_BLOCKS) {
+        pending = { text, blocks, mrkdwn: false };
+        continue;
+      }
+      flush();
+    }
+    pending = { ...message, blocks: [...message.blocks] };
+  }
+  flush();
+  return compacted;
+}
+
+export function sanitizeSlackMonitorReplyPayload(payload: ReplyPayload): ReplyPayload | null {
+  if (payload.isReasoning === true || typeof payload.text !== "string") {
+    return payload.isReasoning === true ? null : payload;
+  }
+  const text = sanitizeAssistantVisibleText(payload.text);
+  if (text === payload.text) {
+    return payload;
+  }
+  return text ||
+    resolveSendableOutboundReplyParts(payload).hasMedia ||
+    hasSlackReplyStructuredContent(payload)
+    ? { ...payload, text: text || undefined }
+    : null;
 }
 
 function resolveSlackMediaHookSpokenText(payload: ReplyPayload): string | undefined {
@@ -53,20 +116,9 @@ function resolveSlackMediaHookSpokenText(payload: ReplyPayload): string | undefi
   return spokenText?.trim() || undefined;
 }
 
-export function resolveDeliveredSlackReplyThreadTs(params: {
-  replyToMode: "off" | "first" | "all" | "batched";
-  payloadReplyToId?: string;
-  replyThreadTs?: string;
-}): string | undefined {
-  // Keep reply tags opt-in: when replyToMode is off, explicit reply tags
-  // must not force threading.
-  const inlineReplyToId = params.replyToMode === "off" ? undefined : params.payloadReplyToId;
-  return inlineReplyToId ?? params.replyThreadTs;
-}
-
 export async function deliverReplies(params: {
   cfg: OpenClawConfig;
-  replies: ReplyPayload[];
+  replies: PreparedSlackReply[];
   target: string;
   token: string;
   accountId?: string;
@@ -97,96 +149,95 @@ export async function deliverReplies(params: {
   /** Validated non-serializable client scope for an enterprise listener turn. */
   eventScope?: SlackEventScope;
 }) {
+  const deliverySession = getGroupThreadDeliverySession();
+  const sessionKeyForInternalHooks =
+    deliverySession?.sessionKey ?? params.sessionKeyForInternalHooks;
+  const mediaLocalRoots = deliverySession
+    ? getAgentScopedMediaLocalRoots(params.cfg, deliverySession.agentId)
+    : undefined;
   let latestResult: SlackSendResult | undefined;
-  const sendReply = async (input: {
-    text: string;
-    threadTs?: string | undefined;
-    mediaUrl?: string | undefined;
-    blocks?: (Block | KnownBlock)[] | undefined;
-    authoredTextPlacement?: "none" | "blocks" | "outside-blocks";
-    nativeDataFallbackBaseText?: string;
-    textIsSlackMrkdwn?: boolean;
-    textIsSlackPlainText?: boolean;
-  }): Promise<SlackSendResult> => {
-    return await sendMessageSlack(params.target, input.text, {
-      cfg: params.cfg,
-      token: params.token,
-      threadTs: input.threadTs,
-      accountId: params.accountId,
-      ...(input.mediaUrl ? { mediaUrl: input.mediaUrl } : {}),
-      ...(input.blocks ? { blocks: input.blocks } : {}),
-      ...(input.authoredTextPlacement
-        ? { authoredTextPlacement: input.authoredTextPlacement }
-        : {}),
-      ...(Object.hasOwn(input, "nativeDataFallbackBaseText")
-        ? { nativeDataFallbackBaseText: input.nativeDataFallbackBaseText }
-        : {}),
-      ...(input.textIsSlackMrkdwn ? { textIsSlackMrkdwn: true } : {}),
-      ...(input.textIsSlackPlainText ? { textIsSlackPlainText: true } : {}),
-      ...(params.eventScope
-        ? {
-            client: params.eventScope.client,
-            enterpriseEventScope: params.eventScope,
-            textLimit: params.textLimit,
-            ...(params.mediaMaxBytes !== undefined ? { mediaMaxBytes: params.mediaMaxBytes } : {}),
-          }
-        : {}),
-      ...(params.identity ? { identity: params.identity } : {}),
-      ...(params.metadata ? { metadata: params.metadata } : {}),
-    });
-  };
-  for (const payload of params.replies) {
+  for (const prepared of params.replies) {
+    const { payload } = prepared;
     if (payload.isReasoning === true) {
       continue;
     }
-    const threadTs = resolveDeliveredSlackReplyThreadTs({
+    const threadTs = resolveSlackReplyThreadTs({
       replyToMode: params.replyToMode,
-      payloadReplyToId: payload.replyToId,
-      replyThreadTs: params.replyThreadTs,
+      replyToId: payload.replyToId,
+      threadId: params.replyThreadTs,
+      replyToCurrent: payload.replyToCurrent,
     });
     const reply = resolveSendableOutboundReplyParts(payload);
     const textRaw =
       reply.hasText && !isSilentReplyText(reply.trimmedText, SILENT_REPLY_TOKEN)
         ? reply.trimmedText
         : undefined;
-    const materializeAuthoredText = !reply.hasMedia && hasSlackReplyStructuredContent(payload);
-    const { authoredTextPlacement, segments } = resolveSlackReplyBlockResolution(payload, {
-      materializeAuthoredText,
-    });
+    const { authoredTextPlacement, segments } = prepared.resolveDelivery();
     if (!textRaw && !reply.hasMedia && segments.length === 0) {
       continue;
     }
+
+    const acceptedResults: SlackSendResult[] = [];
+    const sendReply = async (input: {
+      text: string;
+      threadTs?: string | undefined;
+      mediaUrl?: string | undefined;
+      blocks?: (Block | KnownBlock)[] | undefined;
+      authoredTextPlacement?: "none" | "blocks" | "outside-blocks";
+      nativeDataFallbackBaseText?: string;
+      textIsSlackMrkdwn?: boolean;
+      textIsSlackPlainText?: boolean;
+    }): Promise<SlackSendResult> => {
+      return await sendMessageSlack(params.target, input.text, {
+        cfg: params.cfg,
+        token: params.token,
+        threadTs: input.threadTs,
+        accountId: params.accountId,
+        onDeliveryResult: (result) => {
+          acceptedResults.push(result);
+        },
+        ...(input.mediaUrl ? { mediaUrl: input.mediaUrl } : {}),
+        ...(mediaLocalRoots ? { mediaLocalRoots } : {}),
+        ...(input.blocks ? { blocks: input.blocks } : {}),
+        ...(input.authoredTextPlacement
+          ? { authoredTextPlacement: input.authoredTextPlacement }
+          : {}),
+        ...(Object.hasOwn(input, "nativeDataFallbackBaseText")
+          ? { nativeDataFallbackBaseText: input.nativeDataFallbackBaseText }
+          : {}),
+        ...(input.textIsSlackMrkdwn ? { textIsSlackMrkdwn: true } : {}),
+        ...(input.textIsSlackPlainText ? { textIsSlackPlainText: true } : {}),
+        ...(params.eventScope
+          ? {
+              eventScope: params.eventScope,
+              textLimit: params.textLimit,
+              ...(params.mediaMaxBytes !== undefined
+                ? { mediaMaxBytes: params.mediaMaxBytes }
+                : {}),
+            }
+          : {}),
+        ...(params.identity ? { identity: params.identity } : {}),
+        ...(params.metadata ? { metadata: params.metadata } : {}),
+      });
+    };
 
     // Fire the `message_sent` hook(s) after delivery, mirroring Telegram's
     // `emitMessageSentHooks` in `extensions/telegram/src/bot/delivery.replies.ts`.
     // `emitSlackMessageSentHooks` self-gates on registered listeners, so this is
     // a no-op when no plugin observes `message_sent`.
-    const emitSent = (content: string, result?: SlackSendResult) => {
+    const emitDelivery = (
+      content: string,
+      result: { success: true; messageId?: string } | { success: false; error: string },
+    ) => {
       if (params.deferMessageSentHooks) {
         return;
       }
       emitSlackMessageSentHooks({
-        sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
+        sessionKeyForInternalHooks,
         to: params.messageSentHookTarget ?? params.target,
         accountId: params.accountId,
         content,
-        success: true,
-        messageId: result?.messageId,
-        isGroup: params.isGroup,
-        groupId: params.groupId,
-      });
-    };
-    const emitFailed = (content: string, error: unknown) => {
-      if (params.deferMessageSentHooks) {
-        return;
-      }
-      emitSlackMessageSentHooks({
-        sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
-        to: params.messageSentHookTarget ?? params.target,
-        accountId: params.accountId,
-        content,
-        success: false,
-        error: formatErrorMessage(error),
+        ...result,
         isGroup: params.isGroup,
         groupId: params.groupId,
       });
@@ -219,56 +270,46 @@ export async function deliverReplies(params: {
         delivered ||= mediaDelivery !== "empty";
       }
 
-      for (const segment of segments) {
-        if (segment.kind === "text") {
-          const text = [outsideText, segment.text].filter(Boolean).join("\n\n");
-          outsideText = "";
-          if (!text) {
-            continue;
-          }
-          hookParts.push(text);
-          for (const chunk of chunkSlackTextAtHardLimit(text)) {
+      for (const message of iterateSlackReplyDeliveryMessages({
+        authoredTextPlacement,
+        segments,
+        text: outsideText,
+      })) {
+        hookParts.push(message.text);
+        if (message.textIsSlackPlainText) {
+          for (const chunk of chunkSlackTextAtHardLimit(message.text)) {
             lastResult = await sendReply({ text: chunk, threadTs, textIsSlackPlainText: true });
             delivered = true;
           }
           continue;
         }
-        const baseText = outsideText;
-        outsideText = "";
-        const accessibilityText =
-          buildSlackNativeDataAccessibilityText(baseText, segment.blocks) ||
-          buildSlackBlocksFallbackText(segment.blocks);
-        hookParts.push(accessibilityText);
-        const segmentPlacement = baseText
-          ? "outside-blocks"
-          : authoredTextPlacement === "blocks"
-            ? "blocks"
-            : "none";
         lastResult = await sendReply({
-          text: baseText,
+          ...(message.blocks
+            ? { ...message, text: message.nativeDataFallbackBaseText ?? "" }
+            : { text: message.text }),
           threadTs,
-          blocks: segment.blocks,
-          authoredTextPlacement: segmentPlacement,
-          ...(baseText ? { nativeDataFallbackBaseText: baseText } : {}),
         });
-        delivered = true;
-      }
-
-      if (outsideText && !reply.hasMedia) {
-        hookParts.push(outsideText);
-        lastResult = await sendReply({ text: outsideText, threadTs });
         delivered = true;
       }
     } catch (error) {
       const hookContent = hookParts.join("\n\n") || textRaw || spokenText || "";
-      emitFailed(hookContent, error);
-      throw error;
+      emitDelivery(hookContent, { success: false, error: formatErrorMessage(error) });
+      if (acceptedResults.length === 0) {
+        throw error;
+      }
+      throw createChannelPartialDeliveryError(
+        error,
+        createAcceptedChannelDeliveryResult({ results: acceptedResults }),
+      );
     }
     if (delivered) {
       const hookContent = hookParts.join("\n\n") || textRaw || spokenText || "";
       // Preserve the media hook contract even when a trailing block send has a
       // message `ts`; the logical payload still spans multiple Slack objects.
-      emitSent(hookContent, reply.hasMedia ? undefined : lastResult);
+      emitDelivery(hookContent, {
+        success: true,
+        messageId: reply.hasMedia ? undefined : lastResult?.messageId,
+      });
       latestResult = lastResult;
       params.runtime.log?.(`delivered reply to ${params.target}`);
     }
@@ -285,40 +326,11 @@ type SlackRespondFn = (payload: {
 
 type SlackResponseUrlBudget = ResponseUrlBudget<Parameters<SlackRespondFn>[0]>;
 
-/**
- * Compute effective threadTs for a Slack reply based on replyToMode.
- * - "off": stay in thread if already in one, otherwise main channel
- * - "first": first reply goes to thread, subsequent replies to main channel
- * - "all": all replies go to thread
- */
-export function resolveSlackThreadTs(params: {
+export function createSlackReplyDeliveryPlan(params: {
   replyToMode: "off" | "first" | "all" | "batched";
   incomingThreadTs: string | undefined;
   messageTs: string | undefined;
-  hasReplied: boolean;
-  isThreadReply?: boolean;
-}): string | undefined {
-  const planner = createSlackReplyReferencePlanner({
-    replyToMode: params.replyToMode,
-    incomingThreadTs: params.incomingThreadTs,
-    messageTs: params.messageTs,
-    hasReplied: params.hasReplied,
-    isThreadReply: params.isThreadReply,
-  });
-  return planner.use();
-}
-
-type SlackReplyDeliveryPlan = {
-  peekThreadTs: () => string | undefined;
-  nextThreadTs: () => string | undefined;
-  markSent: () => void;
-};
-
-function createSlackReplyReferencePlanner(params: {
-  replyToMode: "off" | "first" | "all" | "batched";
-  incomingThreadTs: string | undefined;
-  messageTs: string | undefined;
-  hasReplied?: boolean;
+  hasRepliedRef: { value: boolean };
   isThreadReply?: boolean;
 }) {
   // Older/internal callers may not pass explicit thread classification. Keep
@@ -328,27 +340,11 @@ function createSlackReplyReferencePlanner(params: {
     params.isThreadReply ??
     Boolean(params.incomingThreadTs && params.incomingThreadTs !== params.messageTs);
   const effectiveMode = effectiveIsThreadReply ? "all" : params.replyToMode;
-  return createReplyReferencePlanner({
+  const replyReference = createReplyReferencePlanner({
     replyToMode: effectiveMode,
     existingId: params.incomingThreadTs,
     startId: params.messageTs,
-    hasReplied: params.hasReplied,
-  });
-}
-
-export function createSlackReplyDeliveryPlan(params: {
-  replyToMode: "off" | "first" | "all" | "batched";
-  incomingThreadTs: string | undefined;
-  messageTs: string | undefined;
-  hasRepliedRef: { value: boolean };
-  isThreadReply?: boolean;
-}): SlackReplyDeliveryPlan {
-  const replyReference = createSlackReplyReferencePlanner({
-    replyToMode: params.replyToMode,
-    incomingThreadTs: params.incomingThreadTs,
-    messageTs: params.messageTs,
     hasReplied: params.hasRepliedRef.value,
-    isThreadReply: params.isThreadReply,
   });
   return {
     peekThreadTs: () => replyReference.peek(),
@@ -373,6 +369,11 @@ export async function deliverSlackSlashReplies(params: {
   isGroup?: boolean;
   groupId?: string;
   responseBudget?: SlackResponseUrlBudget;
+  onReplySettled?: (settlement: {
+    replyIndex: number;
+    visibleReplySent: boolean;
+    error?: unknown;
+  }) => void;
 }) {
   type SlashReplyMessage = {
     text: string;
@@ -385,6 +386,7 @@ export async function deliverSlackSlashReplies(params: {
     skipOriginalBlocks?: true;
   };
   type SlashReplyDelivery = {
+    replyIndex: number;
     hookContent: string;
     messages: PlannedSlashReplyMessage[];
   };
@@ -392,25 +394,29 @@ export async function deliverSlackSlashReplies(params: {
   const responseBudget = params.responseBudget ?? createSlackResponseUrlBudget(params.respond);
   const chunkLimit = Math.max(1, Math.min(params.textLimit, SLACK_TEXT_LIMIT));
   const createBlockMessagePlan = (input: {
-    blocks: NonNullable<ReturnType<typeof readSlackReplyBlocks>>;
+    blocks: NonNullable<ReturnType<typeof resolveSlackReplyBlocks>>;
     baseText?: string;
   }): PlannedSlashReplyMessage => {
     const plan = buildSlackNativeDataDeliveryPlan({
       blocks: input.blocks,
       baseText: input.baseText,
     });
+    const nativeFallback =
+      responseBudget.remaining() === undefined
+        ? plan.fallbackMessages
+        : compactSlackResponseUrlFallback(plan.fallbackMessages);
     return {
       message: {
         text: plan.accessibilityText,
         blocks: input.blocks,
         mrkdwn: false,
       },
-      nativeFallback: plan.fallbackMessages,
+      nativeFallback,
       ...(plan.skipOriginalBlocks ? { skipOriginalBlocks: true as const } : {}),
     };
   };
 
-  for (const payload of params.replies) {
+  for (const [replyIndex, payload] of params.replies.entries()) {
     if (payload.isReasoning === true) {
       continue;
     }
@@ -423,62 +429,48 @@ export async function deliverSlackSlashReplies(params: {
     const { authoredTextPlacement, segments } = resolveSlackReplyBlockResolution(payload, {
       materializeAuthoredText,
     });
-    let outsideText = authoredTextPlacement === "outside-blocks" ? (textRaw ?? "") : "";
-    const messages: PlannedSlashReplyMessage[] = [];
-    const hookParts: string[] = [];
-    for (const segment of segments) {
-      if (segment.kind === "text") {
-        const text = [outsideText, segment.text].filter(Boolean).join("\n\n");
-        outsideText = "";
-        if (text) {
-          hookParts.push(text);
-          messages.push(
-            ...chunkSlackTextAtHardLimit(text).map(
-              (chunk): PlannedSlashReplyMessage => ({
-                message: { text: chunk, mrkdwn: false },
-              }),
-            ),
-          );
-        }
-        continue;
-      }
-      const baseText = outsideText;
-      outsideText = "";
-      const accessibilityText =
-        buildSlackNativeDataAccessibilityText(baseText, segment.blocks) ||
-        buildSlackBlocksFallbackText(segment.blocks);
-      hookParts.push(accessibilityText);
-      const blockPlan = createBlockMessagePlan({ blocks: segment.blocks, baseText });
-      messages.push(
-        hasSlackNativeDataBlock(segment.blocks) || blockPlan.skipOriginalBlocks
-          ? blockPlan
-          : {
-              message: {
-                text: accessibilityText,
-                blocks: segment.blocks,
-                mrkdwn: false,
-              },
-            },
-      );
-    }
-    if (outsideText) {
-      hookParts.push(outsideText);
-    }
-    if (reply.mediaUrls.length > 0) {
-      hookParts.push(...reply.mediaUrls);
-    }
-
     if (segments.length > 0) {
-      const trailingText = [outsideText, ...reply.mediaUrls].filter(Boolean).join("\n");
+      const messages: PlannedSlashReplyMessage[] = [];
+      const hookParts: string[] = [];
+      for (const message of iterateSlackReplyDeliveryMessages({
+        authoredTextPlacement,
+        segments,
+        text: textRaw,
+      })) {
+        hookParts.push(message.text);
+        if (!message.blocks) {
+          messages.push(
+            ...chunkSlackTextAtHardLimit(message.text).map((text): PlannedSlashReplyMessage => ({
+              message: { text, mrkdwn: false },
+            })),
+          );
+          continue;
+        }
+        const blockPlan = createBlockMessagePlan({
+          blocks: message.blocks,
+          baseText: message.nativeDataFallbackBaseText ?? "",
+        });
+        messages.push(
+          hasSlackNativeDataBlock(message.blocks) || blockPlan.skipOriginalBlocks
+            ? blockPlan
+            : { message: blockPlan.message },
+        );
+      }
+      hookParts.push(...reply.mediaUrls);
+      const trailingText = reply.mediaUrls.filter(Boolean).join("\n");
       if (trailingText) {
         messages.push(
-          ...chunkSlackTextAtHardLimit(trailingText).map(
-            (text): PlannedSlashReplyMessage => ({ message: { text, mrkdwn: false } }),
-          ),
+          ...chunkSlackTextAtHardLimit(trailingText).map((text): PlannedSlashReplyMessage => ({
+            message: { text, mrkdwn: false },
+          })),
         );
       }
       if (messages.length > 0) {
-        deliveries.push({ hookContent: hookParts.filter(Boolean).join("\n\n"), messages });
+        deliveries.push({
+          replyIndex,
+          hookContent: hookParts.filter(Boolean).join("\n\n"),
+          messages,
+        });
       }
       continue;
     }
@@ -496,9 +488,17 @@ export async function deliverSlackSlashReplies(params: {
       markdownToSlackMrkdwnChunks(markdown, chunkLimit, { tableMode: params.tableMode }),
     );
     deliveries.push({
+      replyIndex,
       hookContent: textRaw ?? resolveSlackMediaHookSpokenText(payload) ?? combined,
       messages: (chunks.length > 0 ? chunks : [combined]).map((text) => ({ message: { text } })),
     });
+  }
+
+  const plannedReplyIndexes = new Set(deliveries.map((delivery) => delivery.replyIndex));
+  for (const replyIndex of params.replies.keys()) {
+    if (!plannedReplyIndexes.has(replyIndex)) {
+      params.onReplySettled?.({ replyIndex, visibleReplySent: false });
+    }
   }
 
   if (deliveries.length === 0) {
@@ -514,7 +514,7 @@ export async function deliverSlackSlashReplies(params: {
       ...(message.blocks ? { blocks: message.blocks } : {}),
       ...(message.mrkdwn === false ? { mrkdwn: false as const } : {}),
     });
-  const emitDeliveryFailure = (delivery: SlashReplyDelivery, error: unknown) => {
+  const emitDelivery = (delivery: SlashReplyDelivery, success: boolean, error?: unknown) => {
     if (!params.messageSentHookTarget) {
       return;
     }
@@ -523,8 +523,8 @@ export async function deliverSlackSlashReplies(params: {
       to: params.messageSentHookTarget,
       accountId: params.accountId,
       content: delivery.hookContent,
-      success: false,
-      error: formatErrorMessage(error),
+      success,
+      ...(success ? {} : { error: formatErrorMessage(error) }),
       isGroup: params.isGroup,
       groupId: params.groupId,
     });
@@ -552,27 +552,40 @@ export async function deliverSlackSlashReplies(params: {
       }
     }
     for (const delivery of deliveries) {
-      emitDeliveryFailure(delivery, failure);
+      emitDelivery(delivery, false, failure);
+      params.onReplySettled?.({
+        replyIndex: delivery.replyIndex,
+        visibleReplySent: false,
+        error: failure,
+      });
     }
     throw failure;
   };
   const initialRemaining = responseBudget.remaining();
-  const initialMinimumCalls = minimumCalls.reduce((total, calls) => total + calls, 0);
+  const initialMinimumCalls = minimumRemainingCalls[0] ?? 0;
   if (initialRemaining !== undefined && initialMinimumCalls > initialRemaining) {
     await failOversizedDelivery();
   }
 
-  const deliverNativeFallback = async (messages: readonly SlackFormattingDisabledMessage[]) => {
+  const deliverNativeFallback = async (
+    messages: readonly SlackFormattingDisabledMessage[],
+    onVisible: () => void,
+  ) => {
     for (const message of messages) {
       const response = await respond(message);
-      if (isSlackInvalidBlocksError(response)) {
+      if (await isSlackInvalidBlocksResponse(response)) {
         throw new Error("Slack rejected the native-data fallback blocks with invalid_blocks.");
       }
+      onVisible();
     }
   };
 
   let plannedIndex = 0;
   for (const delivery of deliveries) {
+    let visibleReplySent = false;
+    const markVisible = () => {
+      visibleReplySent = true;
+    };
     try {
       for (const planned of delivery.messages) {
         const minimumAfter = minimumRemainingCalls[plannedIndex + 1] ?? 0;
@@ -580,6 +593,7 @@ export async function deliverSlackSlashReplies(params: {
         const fallback = planned.nativeFallback;
         if (!fallback) {
           await respond(planned.message);
+          markVisible();
           continue;
         }
         const remaining = responseBudget.remaining();
@@ -587,37 +601,42 @@ export async function deliverSlackSlashReplies(params: {
           !planned.skipOriginalBlocks &&
           (remaining === undefined || 1 + fallback.length + minimumAfter <= remaining);
         if (!canAttemptNative) {
-          await deliverNativeFallback(fallback);
+          await deliverNativeFallback(fallback, markVisible);
           continue;
         }
         let rejectedNativeBlocks = false;
         try {
           const response = await respond(planned.message);
-          rejectedNativeBlocks = isSlackInvalidBlocksError(response);
+          rejectedNativeBlocks = await isSlackInvalidBlocksResponse(response);
+          if (!rejectedNativeBlocks) {
+            markVisible();
+          }
         } catch (error) {
-          if (!isSlackInvalidBlocksError(error)) {
+          if (!isSlackNativeResponseUrlRejection(error)) {
             throw error;
           }
           rejectedNativeBlocks = true;
         }
         if (rejectedNativeBlocks) {
-          await deliverNativeFallback(fallback);
+          await deliverNativeFallback(fallback, markVisible);
         }
       }
     } catch (error) {
-      emitDeliveryFailure(delivery, error);
-      throw error;
-    }
-    if (params.messageSentHookTarget) {
-      emitSlackMessageSentHooks({
-        sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
-        to: params.messageSentHookTarget,
-        accountId: params.accountId,
-        content: delivery.hookContent,
-        success: true,
-        isGroup: params.isGroup,
-        groupId: params.groupId,
+      const deliveryError = visibleReplySent
+        ? createChannelPartialDeliveryError(error, {
+            content: delivery.hookContent,
+            visibleReplySent: true,
+          })
+        : error;
+      emitDelivery(delivery, false, deliveryError);
+      params.onReplySettled?.({
+        replyIndex: delivery.replyIndex,
+        visibleReplySent,
+        error: deliveryError,
       });
+      throw deliveryError;
     }
+    emitDelivery(delivery, true);
+    params.onReplySettled?.({ replyIndex: delivery.replyIndex, visibleReplySent: true });
   }
 }

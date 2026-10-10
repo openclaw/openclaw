@@ -86,14 +86,35 @@ describe("MattermostConfigSchema", () => {
     expect(MattermostConfigSchema.safeParse({ chunkMode: "newline" }).success).toBe(false);
   });
 
-  it("accepts groups with requireMention", () => {
+  it.each([
+    { preview: { chunk: { minChars: 20 } } },
+    { progress: { commentary: true } },
+    { progress: { narration: true } },
+  ])("rejects unsupported streaming fields: %j", (streaming) => {
+    expect(MattermostConfigSchema.safeParse({ streaming }).success).toBe(false);
+  });
+
+  it("preserves root, account, and group thread mention overrides without defaults", () => {
     const result = MattermostConfigSchema.safeParse({
+      requireMentionInBotThreads: false,
       groups: {
-        "*": { requireMention: true },
-        "channel-123": { requireMention: false },
+        "*": { requireMention: true, requireMentionInBotThreads: false },
+        "channel-123": { requireMention: false, requireMentionInBotThreads: true },
       },
+      accounts: { work: { requireMentionInBotThreads: true }, inherited: {} },
     });
     expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).toMatchObject({
+        requireMentionInBotThreads: false,
+        groups: {
+          "*": { requireMention: true, requireMentionInBotThreads: false },
+          "channel-123": { requireMention: false, requireMentionInBotThreads: true },
+        },
+        accounts: { work: { requireMentionInBotThreads: true } },
+      });
+      expect(result.data.accounts?.inherited).not.toHaveProperty("requireMentionInBotThreads");
+    }
   });
 
   it("accepts groups on account", () => {
@@ -104,6 +125,18 @@ describe("MattermostConfigSchema", () => {
           groups: {
             "*": { requireMention: true },
           },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts account-scoped message read action toggles", () => {
+    const result = MattermostConfigSchema.safeParse({
+      actions: { messages: false },
+      accounts: {
+        reader: {
+          actions: { messages: true },
         },
       },
     });

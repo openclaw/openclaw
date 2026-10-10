@@ -1,11 +1,12 @@
-/** One-shot import of legacy cron run history into the authoritative task ledger. */
+/** One-shot import of legacy Cron history into the released task_runs table. */
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJson, safeParseJsonRecord } from "@openclaw/normalization-core";
 import {
-  cronRunLogEntryToTaskDetail,
-  cronRunStatusToTaskStatus,
+  cronRunLogEntryToDetail,
+  cronRunStorageStatus,
   parseCronRunLogEntryObject,
-} from "../cron/task-run-detail.js";
-import { normalizeSqliteNumber } from "./sqlite-number.js";
+} from "../cron/run-history-detail.js";
+import { coerceRequiredSqliteNumber, normalizeSqliteNumber } from "./sqlite-number.js";
 
 type CronRunLogEntry = import("../cron/run-log-types.js").CronRunLogEntry;
 type CronDeliveryStatus = import("../cron/types.js").CronDeliveryStatus;
@@ -52,24 +53,14 @@ type CronRunLogTaskImportResult = {
   skipped: boolean;
 };
 
-function tableExists(db: DatabaseSync, name: string): boolean {
+export function hasLegacyCronRunLogs(db: DatabaseSync): boolean {
   return Boolean(
-    db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1").get(name),
+    db
+      .prepare(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cron_run_logs' LIMIT 1",
+      )
+      .get(),
   );
-}
-
-function parseDetail(raw: string | null): Record<string, unknown> | undefined {
-  if (!raw) {
-    return undefined;
-  }
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function collectMirroredTasks(db: DatabaseSync): Map<string, MirroredIdentity[]> {
@@ -82,7 +73,7 @@ function collectMirroredTasks(db: DatabaseSync): Map<string, MirroredIdentity[]>
     .all() as MirroredTask[];
   const bySource = new Map<string, MirroredIdentity[]>();
   for (const row of rows) {
-    const detail = parseDetail(row.detail_json);
+    const detail = row.detail_json ? safeParseJsonRecord(row.detail_json) : undefined;
     if (!row.source_id || detail?.kind !== "cron-run") {
       continue;
     }
@@ -109,18 +100,16 @@ function hasMirroredIdentity(
 }
 
 function integerToBoolean(value: number | bigint | null | undefined): boolean | undefined {
-  return value === null || value === undefined ? undefined : Number(value) !== 0;
+  return value === null || value === undefined
+    ? undefined
+    : coerceRequiredSqliteNumber(value) !== 0;
 }
 
 /** Legacy rows trust write-time errorReason and diagnostic redaction without recomputation. */
 function parseLegacyRow(row: LegacyCronRunLogRow): CronRunLogEntry | null {
-  let rawEntry: unknown;
-  try {
-    rawEntry = JSON.parse(row.entry_json ?? "");
-  } catch {
-    return null;
-  }
-  const parsed = parseCronRunLogEntryObject(rawEntry, { jobId: row.job_id });
+  const parsed = parseCronRunLogEntryObject(safeParseJson(row.entry_json ?? ""), {
+    jobId: row.job_id,
+  });
   if (!parsed) {
     return null;
   }
@@ -146,13 +135,9 @@ function parseLegacyRow(row: LegacyCronRunLogRow): CronRunLogEntry | null {
   };
 }
 
-function ordinalKey(jobId: string, ts: number): string {
-  return `${jobId}\0${ts}`;
-}
-
 /** Runs inside the state schema transaction and removes the retired table after import. */
 export function migrateLegacyCronRunLogsToTaskRuns(db: DatabaseSync): CronRunLogTaskImportResult {
-  if (!tableExists(db, "cron_run_logs")) {
+  if (!hasLegacyCronRunLogs(db)) {
     return { imported: 0, alreadyMirrored: 0, malformed: 0, skipped: true };
   }
 
@@ -194,7 +179,7 @@ export function migrateLegacyCronRunLogsToTaskRuns(db: DatabaseSync): CronRunLog
         malformed++;
         continue;
       }
-      const key = ordinalKey(entry.jobId, entry.ts);
+      const key = `${entry.jobId}\0${entry.ts}`;
       const ordinal = (ordinals.get(key) ?? 0) + 1;
       ordinals.set(key, ordinal);
       const identities = mirrored.get(entry.jobId) ?? [];
@@ -203,11 +188,11 @@ export function migrateLegacyCronRunLogsToTaskRuns(db: DatabaseSync): CronRunLog
         continue;
       }
       const taskId = `cron-runlog-import:${entry.jobId}:${entry.ts}:${ordinal}`;
-      const status = cronRunStatusToTaskStatus(entry);
+      const status = cronRunStorageStatus(entry);
       insert.run({
         task_id: taskId,
         source_id: entry.jobId,
-        child_session_key: entry.sessionKey ?? null,
+        child_session_key: entry.sessionKey?.trim() || null,
         run_id: taskId,
         task: entry.jobId,
         status,
@@ -217,9 +202,7 @@ export function migrateLegacyCronRunLogsToTaskRuns(db: DatabaseSync): CronRunLog
         error: entry.error ?? null,
         terminal_summary: entry.summary ?? null,
         terminal_outcome: status === "succeeded" ? "succeeded" : null,
-        detail_json: JSON.stringify(
-          cronRunLogEntryToTaskDetail(entry, { storeKey: row.store_key }),
-        ),
+        detail_json: JSON.stringify(cronRunLogEntryToDetail(entry, { storeKey: row.store_key })),
       });
       imported++;
     }

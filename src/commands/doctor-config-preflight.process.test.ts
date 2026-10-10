@@ -1,0 +1,922 @@
+// Process regressions for Doctor repair, Gateway readiness, and lease cleanup.
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { afterAll, describe, expect, it } from "vitest";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
+import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
+import { getCliProcessTestTimeout } from "../cli/cli-process-child.test-helpers.js";
+import { resolveGatewayLockDir } from "../config/paths.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { cronOwnerHardeningEntrypoints } from "../cron/owner-hardening-runtime.test-support.js";
+import { loadCronJobsStoreWithConfigJobsReadOnly, loadCronQuarantinedJobs } from "../cron/store.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { hasActiveStartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
+import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import {
+  createBuiltRuntime,
+  createSourceRuntime,
+  ISOLATED_RUNTIME_NODE_ARGS,
+  runBuiltRuntime,
+  runIsolatedModuleScript,
+  runSourceRuntime,
+  seedPluginStateSidecar,
+  seedV17AdditiveRepairDatabase,
+} from "./doctor-config-preflight.process.test-support.js";
+import { doctorConfigRuntimeEntrypoints } from "./doctor-config-runtime.test-support.js";
+
+const STARTUP_REFUSAL =
+  "OpenClaw startup migrations did not complete cleanly; refusing to report the gateway ready.";
+const STARTUP_RECOVERY =
+  'Run "openclaw doctor --fix" against the same state/config, then restart the gateway.';
+const tempDirs = createFixtureLifetime();
+afterAll(() => tempDirs.cleanup());
+const DOCTOR_CHILD_TIMEOUT_MS = 60_000;
+const LEGACY_APPROVAL_CHILD_TIMEOUT_MS = 45_000;
+function createDoctorEnv(root: string, stateDir: string, configPath: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    HOME: root,
+    USERPROFILE: root,
+    OPENCLAW_CONFIG_PATH: configPath,
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_TEST_FAST: "1",
+    NO_COLOR: "1",
+  };
+  delete env.NODE_ENV;
+  delete env.OPENCLAW_HOME;
+  delete env.VITEST;
+  return env;
+}
+
+describe("doctor invalid config process exit", () => {
+  it(
+    "repairs the v17 additive schema through doctor --fix",
+    async () => {
+      const root = fs.realpathSync(tempDirs.createTempDir("openclaw-doctor-v17-additive-"));
+      const stateDir = path.join(root, "state");
+      const configPath = path.join(stateDir, "openclaw.json");
+      fs.mkdirSync(path.join(stateDir, "agents", "main", "sessions"), { recursive: true });
+      fs.writeFileSync(configPath, "{}\n");
+      const databasePath = seedV17AdditiveRepairDatabase(stateDir);
+      const runtimeRoot = createBuiltRuntime(root);
+      const env: NodeJS.ProcessEnv = {
+        ...process.env,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_TEST_FAST: "1",
+        NO_COLOR: "1",
+      };
+      const args = ["doctor", "--fix", "--non-interactive", "--yes", "--no-workspace-suggestions"];
+
+      const first = await tempDirs.track(
+        runBuiltRuntime(runtimeRoot, env, args, DOCTOR_CHILD_TIMEOUT_MS),
+      );
+      expect(first.code, first.stderr).toBe(0);
+      expect(`${first.stdout}\n${first.stderr}`).toContain(
+        `v17 -> v${OPENCLAW_AGENT_SCHEMA_VERSION}`,
+      );
+
+      const repaired = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        expect(repaired.prepare("PRAGMA user_version").get()?.user_version).toBe(
+          OPENCLAW_AGENT_SCHEMA_VERSION,
+        );
+        expect(
+          repaired
+            .prepare(
+              "SELECT name FROM pragma_table_info('session_conversations') WHERE name = 'route_context_json'",
+            )
+            .get()?.name,
+        ).toBe("route_context_json");
+        expect(
+          repaired
+            .prepare(
+              "SELECT name FROM sqlite_schema WHERE type = 'trigger' AND name = 'session_conversations_route_context_invalidate_after_update'",
+            )
+            .get()?.name,
+        ).toBe("session_conversations_route_context_invalidate_after_update");
+        expect(
+          repaired
+            .prepare(
+              "SELECT name FROM sqlite_schema WHERE type = 'index' AND name = 'idx_agent_transcript_event_identity_sequence'",
+            )
+            .get()?.name,
+        ).toBe("idx_agent_transcript_event_identity_sequence");
+      } finally {
+        repaired.close();
+      }
+
+      const second = await tempDirs.track(
+        runBuiltRuntime(runtimeRoot, env, args, DOCTOR_CHILD_TIMEOUT_MS),
+      );
+      expect(second.code, second.stderr).toBe(0);
+      expect(`${second.stdout}\n${second.stderr}`).not.toMatch(
+        /Skipped agent database migration|Upgraded agent database schema/u,
+      );
+    },
+    getCliProcessTestTimeout(DOCTOR_CHILD_TIMEOUT_MS, DOCTOR_CHILD_TIMEOUT_MS),
+  );
+
+  it("keeps Doctor UI checks inside the source runtime fixture", async () => {
+    const root = fs.realpathSync(tempDirs.createTempDir("openclaw-doctor-runtime-owner-"));
+    const runtimeRoot = createSourceRuntime(root);
+    const uiIndexPath = path.join(runtimeRoot, "dist", "control-ui", "index.html");
+    fs.writeFileSync(uiIndexPath, '<script src="./assets/missing-fixture.js"></script>\n');
+    const result = await tempDirs.track(
+      runSourceRuntime(
+        runtimeRoot,
+        {
+          ...process.env,
+          HOME: root,
+          USERPROFILE: root,
+          OPENCLAW_STATE_DIR: path.join(root, "state"),
+        },
+        [
+          "--input-type=module",
+          "--eval",
+          `const { detectUiProtocolFreshnessIssues } = await import("./src/commands/doctor-ui.ts");
+         console.log(JSON.stringify(await detectUiProtocolFreshnessIssues()));`,
+        ],
+        30_000,
+      ),
+    );
+    expect(result.code, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual([
+      { kind: "missing-assets", root: runtimeRoot, uiIndexPath, canBuild: false },
+    ]);
+  });
+
+  it(
+    "migrates legacy exec approvals before repairing a partially valid config",
+    async () => {
+      const root = fs.realpathSync(tempDirs.createTempDir("openclaw-doctor-legacy-approvals-"));
+      const stateDir = path.join(root, "state");
+      const configPath = path.join(stateDir, "openclaw.json");
+      const approvalsPath = path.join(stateDir, "exec-approvals.json");
+      const knowledgePath = path.join(root, "knowledge");
+      const env = createDoctorEnv(root, stateDir, configPath);
+
+      fs.mkdirSync(stateDir, { recursive: true });
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          agents: {
+            list: [
+              {
+                id: "jup",
+                memorySearch: {
+                  enabled: true,
+                  provider: "auto",
+                  sources: ["memory", "sessions"],
+                  extraPaths: [knowledgePath],
+                  experimental: { sessionMemory: true },
+                  store: { vector: { enabled: false } },
+                  query: { maxResults: 8 },
+                },
+                memory: {
+                  search: {
+                    enabled: false,
+                    experimental: { sessionMemory: false },
+                    query: { minScore: 0.25 },
+                  },
+                },
+                tools: { message: { allowCrossContextSend: true } },
+              },
+            ],
+          },
+        }),
+      );
+      fs.writeFileSync(
+        approvalsPath,
+        JSON.stringify({
+          version: 1,
+          agents: {
+            jup: {
+              allowlist: [
+                {
+                  pattern: "/usr/bin/rg",
+                  source: "allow-always",
+                  lastUsedAt: null,
+                  lastUsedCommand: null,
+                },
+                {
+                  pattern: "=command:durable",
+                  source: "allow-always",
+                  lastUsedAt: null,
+                  lastUsedCommand: null,
+                },
+              ],
+            },
+          },
+        }),
+      );
+      const runtimeRoot = createBuiltRuntime(root);
+      const result = await tempDirs.track(
+        runBuiltRuntime(
+          runtimeRoot,
+          env,
+          ["doctor", "--repair", "--non-interactive", "--no-workspace-suggestions"],
+          LEGACY_APPROVAL_CHILD_TIMEOUT_MS,
+        ),
+      );
+      const output = `${result.stderr}\n${result.stdout}`;
+
+      expect(result.code, output).toBe(0);
+      expect(result.signal, output).toBeNull();
+      expect(output).toContain("Imported legacy exec approvals into shared SQLite state.");
+      expect(output).toContain("Exec approvals updated: removed 1 older generated approval");
+      expect(output).toContain("Doctor complete.");
+      expect(output).not.toContain(STARTUP_RECOVERY);
+      expect(output).not.toContain("Building Control UI assets");
+      expect(output).toContain("Merged agents.list[0].memorySearch");
+
+      const repairedConfig = JSON.parse(fs.readFileSync(configPath, "utf8")) as OpenClawConfig;
+      expect(repairedConfig.agents).not.toHaveProperty("list");
+      expect(repairedConfig.agents?.entries?.jup).not.toHaveProperty("memorySearch");
+      expect(repairedConfig.agents?.entries?.jup?.memory?.search).toEqual({
+        enabled: false,
+        provider: "openai",
+        sources: ["memory", "sessions"],
+        extraPaths: [knowledgePath],
+        experimental: { sessionMemory: false },
+        store: { vector: { enabled: false } },
+        query: { minScore: 0.25, maxResults: 8 },
+      });
+
+      expect(fs.existsSync(approvalsPath)).toBe(false);
+      const database = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), {
+        readOnly: true,
+      });
+      try {
+        const row = database
+          .prepare("SELECT raw_json FROM exec_approvals_config WHERE config_key = 'current'")
+          .get() as { raw_json?: string } | undefined;
+        expect(row?.raw_json).not.toContain('"pattern": "/usr/bin/rg"');
+        expect(row?.raw_json).toContain('"pattern": "=command:durable"');
+        expect(row?.raw_json).not.toContain("lastUsedAt");
+        expect(row?.raw_json).not.toContain("lastUsedCommand");
+      } finally {
+        database.close();
+      }
+    },
+    getCliProcessTestTimeout(LEGACY_APPROVAL_CHILD_TIMEOUT_MS),
+  );
+
+  it("exits after a complete best-effort report for an unparseable config", async () => {
+    const root = fs.realpathSync(tempDirs.createTempDir("openclaw-doctor-invalid-config-exit-"));
+    const stateDir = path.join(root, "state");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      HOME: root,
+      USERPROFILE: root,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_NO_RESPAWN: "1",
+      OPENCLAW_SKIP_CHANNELS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_TEST_FAST: "1",
+      NO_COLOR: "1",
+    };
+    delete env.NODE_ENV;
+    delete env.NODE_OPTIONS;
+    delete env.OPENCLAW_GATEWAY_PASSWORD;
+    delete env.OPENCLAW_GATEWAY_TOKEN;
+    delete env.OPENCLAW_GATEWAY_URL;
+    delete env.OPENCLAW_HOME;
+    delete env.VITEST;
+    delete env.VITEST_POOL_ID;
+    delete env.VITEST_WORKER_ID;
+
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(configPath, '{"agents": {broken json');
+
+    const runtimeRoot = createBuiltRuntime(root);
+    const result = await tempDirs.track(
+      runBuiltRuntime(
+        runtimeRoot,
+        env,
+        ["doctor", "--non-interactive", "--no-workspace-suggestions"],
+        60_000,
+      ),
+    );
+    const output = `${result.stderr}\n${result.stdout}`;
+
+    expect(result.code, output).toBe(0);
+    expect(result.signal, output).toBeNull();
+    expect(output).toContain("Config invalid; doctor will run with best-effort config.");
+    expect(output).toContain("Doctor complete.");
+    expect(output).not.toContain("Building Control UI assets");
+  }, 75_000);
+});
+
+// Synchronous CLI probes must not consume neighboring cases' timeout budgets.
+describe("Doctor repair followed by gateway readiness", () => {
+  it("serves canonical state after Doctor repairs cron and preserves retired plugin sidecars", async () => {
+    const nodeExecutable = resolveTestNodeExecPath();
+    const runtimeRoot = createBuiltRuntime(
+      tempDirs.createTempDir("openclaw-cron-upgrade-runtime-"),
+    );
+    const instance = await createOpenClawTestInstance({
+      name: "cron-upgrade-ready",
+      cwd: runtimeRoot,
+      gatewayCommandPrefix: [nodeExecutable],
+      entrypoint: [...ISOLATED_RUNTIME_NODE_ARGS, path.join(runtimeRoot, "dist", "entry.js")],
+      startTimeoutMs: 30_000,
+      stopTimeoutMs: 1_500,
+      env: {
+        NODE_ENV: undefined,
+        NO_COLOR: "1",
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        OPENCLAW_HOME: undefined,
+        OPENCLAW_NO_RESPAWN: "1",
+        OPENCLAW_SKIP_CHANNELS: "1",
+        OPENCLAW_TEST_FAST: "1",
+        VITEST: undefined,
+        // Preserve full startup; the shared fixture otherwise skips sidecar readiness.
+        OPENCLAW_GATEWAY_TOKEN: process.env.OPENCLAW_GATEWAY_TOKEN,
+        OPENCLAW_GATEWAY_PASSWORD: process.env.OPENCLAW_GATEWAY_PASSWORD,
+        OPENCLAW_SKIP_PROVIDERS: process.env.OPENCLAW_SKIP_PROVIDERS,
+        OPENCLAW_SKIP_GMAIL_WATCHER: process.env.OPENCLAW_SKIP_GMAIL_WATCHER,
+        OPENCLAW_SKIP_CRON: process.env.OPENCLAW_SKIP_CRON,
+        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER,
+        OPENCLAW_SKIP_CANVAS_HOST: process.env.OPENCLAW_SKIP_CANVAS_HOST,
+        OPENCLAW_TEST_MINIMAL_GATEWAY: process.env.OPENCLAW_TEST_MINIMAL_GATEWAY,
+      },
+    });
+    const { env, port, stateDir } = instance;
+    const storePath = path.join(stateDir, "cron", "jobs.json");
+    const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+
+    try {
+      // Readiness must use the migration fixture without extra hooks or Control UI settings.
+      await instance.state.writeConfig({
+        agents: { entries: { main: {} } },
+        gateway: { mode: "local", port, auth: { mode: "none" } },
+      });
+      seedPluginStateSidecar(stateDir, 2_000);
+      const sidecarPath = path.join(stateDir, "plugin-state", "state.sqlite");
+      const preservedSidecar = fs.readFileSync(sidecarPath);
+      const readCanonicalPluginState = () => {
+        const database = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), {
+          readOnly: true,
+        });
+        try {
+          return database
+            .prepare(
+              "SELECT value_json, created_at FROM plugin_state_entries WHERE plugin_id = 'discord' AND namespace = 'components' AND entry_key = 'interaction:1'",
+            )
+            .get();
+        } finally {
+          database.close();
+        }
+      };
+      const job = {
+        name: "SQLite automation",
+        enabled: true,
+        createdAtMs: 1,
+        updatedAtMs: 1,
+        schedule: { kind: "cron", expr: "0 9 * * *" },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "tick" },
+        state: {},
+      };
+      const jobs = [
+        { ...job, id: "valid-job" },
+        { ...job, id: "invalid-state-job", state: { nextRunAtMs: -1 } },
+        { ...job, id: "invalid-trigger-job", trigger: { script: [] } },
+      ];
+      const database = new DatabaseSync(databasePath);
+      try {
+        // Raw rows preserve corruption that the current store writer rejects.
+        const insert = database.prepare(`
+          INSERT INTO cron_jobs (
+            store_key, job_id, name, enabled, payload_kind, job_json, state_json,
+            runtime_updated_at_ms, sort_order, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+        for (const [index, { state, updatedAtMs, ...definition }] of jobs.entries()) {
+          insert.run(
+            storePath,
+            definition.id,
+            definition.name,
+            1,
+            definition.payload.kind,
+            JSON.stringify({ ...definition, state: {} }),
+            JSON.stringify(state),
+            updatedAtMs,
+            index,
+            updatedAtMs,
+          );
+        }
+      } finally {
+        database.close();
+      }
+
+      const doctor = await instance.cli(
+        ["doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"],
+        { execPath: nodeExecutable, timeoutMs: 30_000 },
+      );
+      const doctorOutput = `${doctor.stdout}\n${doctor.stderr}`;
+      expect(doctor.code, doctorOutput).toBe(0);
+      expect(doctorOutput).not.toContain("Building Control UI assets");
+      expect(doctorOutput).not.toContain("Left plugin-state sidecar in place");
+      expect(fs.readFileSync(sidecarPath)).toEqual(preservedSidecar);
+      expect(readCanonicalPluginState()).toEqual({ value_json: '{"ok":false}', created_at: 2_000 });
+      const backupNames = fs
+        .readdirSync(path.dirname(databasePath))
+        .filter((name) => name.startsWith("openclaw.sqlite.doctor-cron-") && name.endsWith(".bak"));
+      expect(backupNames.length).toBeGreaterThan(0);
+      const backup = new DatabaseSync(
+        path.join(path.dirname(databasePath), backupNames.toSorted()[0]!),
+        {
+          readOnly: true,
+        },
+      );
+      try {
+        expect(backup.prepare("SELECT job_id FROM cron_jobs ORDER BY sort_order").all()).toEqual([
+          { job_id: "valid-job" },
+          { job_id: "invalid-state-job" },
+          { job_id: "invalid-trigger-job" },
+        ]);
+      } finally {
+        backup.close();
+      }
+
+      try {
+        await instance.startGateway();
+        const response = await fetch(`http://127.0.0.1:${port}/readyz`);
+        await expect(response.json()).resolves.toMatchObject({ ready: true, failing: [] });
+        const logs = instance.logs();
+        expect(logs).not.toContain("Left plugin-state sidecar in place");
+        expect(logs).not.toContain(STARTUP_REFUSAL);
+        const status = await instance.cli(["gateway", "call", "status", "--json"], {
+          execPath: nodeExecutable,
+        });
+        expect(status.code, status.stdout + "\n" + status.stderr).toBe(0);
+        expect(JSON.parse(status.stdout).startupMigrationWarning).toBeUndefined();
+        expect(fs.readFileSync(sidecarPath)).toEqual(preservedSidecar);
+      } finally {
+        await instance.stopGateway();
+      }
+      expect(readCanonicalPluginState()).toEqual({ value_json: '{"ok":false}', created_at: 2_000 });
+
+      const loaded = await loadCronJobsStoreWithConfigJobsReadOnly(storePath, env);
+      expect(loaded.store.jobs.map((entry) => entry.id)).toContain("valid-job");
+      // SQLite config decoding quarantines the trigger before Doctor validates runtime state.
+      expect(
+        (await loadCronQuarantinedJobs(storePath, env)).map((entry) => ({
+          sourceIndex: entry.sourceIndex,
+          reason: entry.reason,
+          id: entry.job?.id,
+        })),
+      ).toEqual([
+        { sourceIndex: 2, reason: "invalid-trigger", id: "invalid-trigger-job" },
+        { sourceIndex: 1, reason: "invalid-state", id: "invalid-state-job" },
+      ]);
+      expect(fs.existsSync(storePath)).toBe(false);
+    } finally {
+      await instance.cleanup();
+    }
+  }, 45_000);
+
+  it("admits stable upgrade state after Doctor repairs config, schema, and device identity", async () => {
+    const root = await fs.promises.realpath(
+      tempDirs.createTempDir("openclaw-stable-upgrade-ready-"),
+    );
+    const stateDir = path.join(root, "state");
+    const configPath = path.join(root, "openclaw.json");
+    const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+    const stableConfig = {
+      meta: {
+        lastTouchedAt: "2026-08-01T00:00:00.000Z",
+        lastTouchedVersion: "2026.7.1-2",
+      },
+      agents: { defaults: { heartbeat: { skipWhenBusy: true } }, list: [{ id: "main" }] },
+      gateway: { mode: "local", auth: { mode: "none" } },
+    };
+    const env = createDoctorEnv(root, stateDir, configPath);
+
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify(stableConfig));
+    seedPluginStateSidecar(stateDir, 4_000);
+    // Initialization and repair must share the same database module instance.
+    const preflightUrl = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.preflight).href;
+    const startupUrl = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.startup).href;
+    const stateDatabaseUrl = resolveRuntimeWorkerUrl(
+      cronOwnerHardeningEntrypoints.stateDatabase,
+    ).href;
+    const script = `
+      const fs = await import("node:fs");
+      const path = await import("node:path");
+      const { DatabaseSync } = await import("node:sqlite");
+      const { runDoctorConfigPreflight } = await import(${JSON.stringify(preflightUrl)});
+      const { runStartupConfigPreflight } = await import(${JSON.stringify(startupUrl)});
+      const { closeOpenClawStateDatabase, openOpenClawStateDatabase } =
+        await import(${JSON.stringify(stateDatabaseUrl)});
+      openOpenClawStateDatabase({ env: process.env });
+      closeOpenClawStateDatabase();
+      const oldDatabase = new DatabaseSync(${JSON.stringify(databasePath)});
+      oldDatabase.exec("ALTER TABLE apns_registrations DROP COLUMN relay_origin");
+      oldDatabase.close();
+      const legacyIdentityPath = path.join(${JSON.stringify(stateDir)}, "identity", "device.json");
+      fs.mkdirSync(path.dirname(legacyIdentityPath), { recursive: true });
+      fs.writeFileSync(legacyIdentityPath, JSON.stringify({
+        deviceId: "56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c",
+        publicKey: "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=",
+        privateKey: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+        createdAtMs: 1700000000000,
+      }));
+      await runDoctorConfigPreflight({
+        doctorOnlyStateMigrations: true,
+        repairPrefixedConfig: true,
+        invalidConfigNote: false,
+        observe: false,
+      });
+      const repairedRaw = fs.readFileSync(${JSON.stringify(configPath)}, "utf8");
+      const result = await runStartupConfigPreflight({ gateway: true, observe: false });
+      if (fs.readFileSync(${JSON.stringify(configPath)}, "utf8") !== repairedRaw) {
+        throw new Error("Startup changed config after Doctor repair.");
+      }
+      const config = JSON.parse(fs.readFileSync(${JSON.stringify(configPath)}, "utf8"));
+      const repairedDatabase = new DatabaseSync(${JSON.stringify(databasePath)}, { readOnly: true });
+      const columns = repairedDatabase.prepare("PRAGMA table_info(apns_registrations)").all();
+      const identity = repairedDatabase
+        .prepare("SELECT device_id FROM device_identities WHERE identity_key = 'primary'")
+        .get();
+      const pluginState = repairedDatabase
+        .prepare("SELECT value_json, created_at FROM plugin_state_entries WHERE plugin_id = 'discord' AND namespace = 'components' AND entry_key = 'interaction:1'")
+        .get();
+      repairedDatabase.close();
+      console.log("__RESULT__" + JSON.stringify({
+        valid: result.snapshot.valid,
+        hasLastTouchedAt: Object.hasOwn(config.meta ?? {}, "lastTouchedAt"),
+        hasSkipWhenBusy: Object.hasOwn(config.agents?.defaults?.heartbeat ?? {}, "skipWhenBusy"),
+        hasRelayOrigin: columns.some((column) => column.name === "relay_origin"),
+        migratedDeviceIdentity: identity?.device_id === "56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c",
+        removedLegacyDeviceIdentity: !fs.existsSync(legacyIdentityPath),
+        pluginState,
+      }));
+    `;
+
+    const result = await runIsolatedModuleScript(env, script, { timeoutMs: 60_000 });
+    const output = `${result.stderr}\n${result.stdout}`;
+    const resultLine = result.stdout.split("\n").find((line) => line.startsWith("__RESULT__"));
+
+    expect(resultLine, output).toBeDefined();
+    expect(fs.existsSync(path.join(stateDir, "plugin-state", "state.sqlite"))).toBe(true);
+    expect(fs.existsSync(path.join(stateDir, "plugin-state", "state.sqlite.migrated"))).toBe(false);
+    expect(JSON.parse(resultLine!.slice("__RESULT__".length))).toEqual({
+      valid: true,
+      hasLastTouchedAt: false,
+      hasSkipWhenBusy: false,
+      hasRelayOrigin: true,
+      migratedDeviceIdentity: true,
+      removedLegacyDeviceIdentity: true,
+      pluginState: { value_json: '{"ok":false}', created_at: 4_000 },
+    });
+    expect(hasActiveStartupMigrationLease({ env })).toBe(false);
+  }, 75_000);
+
+  it("leaves retired Codex idle settings to Doctor and preserves connection config", async () => {
+    const root = await fs.promises.realpath(
+      tempDirs.createTempDir("openclaw-codex-startup-config-"),
+    );
+    const stateDir = path.join(root, "state");
+    const configPath = path.join(root, "openclaw.json");
+    const appServer = {
+      transport: "websocket",
+      command: path.join(root, "custom-codex"),
+      args: ["app-server", "--listen", "stdio://"],
+      url: "ws://127.0.0.1:39175",
+      headers: { "X-Codex-Startup": "synthetic-header" },
+      requestTimeoutMs: 120_000,
+      mode: "guardian",
+    };
+    const pluginConfig = {
+      discovery: { enabled: false },
+      sessionCatalog: { enabled: false },
+      appServer,
+    };
+    const retiredSettings = {
+      turnCompletionIdleTimeoutMs: 60_000,
+      turnAssistantCompletionIdleTimeoutMs: 10_000,
+      postToolRawAssistantCompletionIdleTimeoutMs: 300_000,
+    };
+    const config = {
+      meta: { migrations: { webhookListeners: true } },
+      agents: {
+        defaults: { timeoutSeconds: 0 },
+        entries: { main: { workspace: path.join(root, "workspace") } },
+      },
+      gateway: { mode: "local", auth: { mode: "none" } },
+      plugins: {
+        allow: ["codex"],
+        entries: {
+          codex: {
+            enabled: true,
+            config: { ...pluginConfig, appServer: { ...appServer, ...retiredSettings } },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      HOME: root,
+      USERPROFILE: root,
+      CODEX_HOME: path.join(root, ".codex"),
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_OAUTH_DIR: path.join(stateDir, "credentials"),
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_TEST_HOME: root,
+      OPENCLAW_TEST_FAST: "1",
+      NO_COLOR: "1",
+    };
+    // Use the pretest-built bundled artifacts, not the parent worker's source-tree override.
+    for (const key of [
+      "NODE_ENV",
+      "NODE_OPTIONS",
+      "OPENCLAW_AGENT_DIR",
+      "OPENCLAW_BUNDLED_PLUGINS_DIR",
+      "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+      "OPENCLAW_HOME",
+      "OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR",
+      "OPENCLAW_UPDATE_IN_PROGRESS",
+      "VITEST",
+      "VITEST_POOL_ID",
+      "VITEST_WORKER_ID",
+    ]) {
+      delete env[key];
+    }
+
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify(config));
+    const configUrl = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.configIO).href;
+    const preflightUrl = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.preflight).href;
+    const startupUrl = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.startup).href;
+    const checkpointUrl = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.checkpoint).href;
+    const script = `
+      const assert = (await import("node:assert/strict")).default;
+      const fs = await import("node:fs");
+      const { readConfigFileSnapshot } = await import(${JSON.stringify(configUrl)});
+      const { runDoctorConfigPreflight } = await import(${JSON.stringify(preflightUrl)});
+      const { runStartupConfigPreflight } = await import(${JSON.stringify(startupUrl)});
+      const { hasActiveStartupMigrationLease } = await import(${JSON.stringify(checkpointUrl)});
+      const expectedPluginConfig = ${JSON.stringify(pluginConfig)};
+      const retiredKeys = ${JSON.stringify(Object.keys(retiredSettings))};
+      const initial = await readConfigFileSnapshot({ observe: false });
+      assert.equal(initial.valid, false);
+      for (const key of retiredKeys) {
+        assert.ok(initial.issues.some((issue) =>
+          issue.path === "plugins.entries.codex.config.appServer" && issue.message.includes(key)
+        ), JSON.stringify(initial.issues));
+      }
+      const original = fs.readFileSync(${JSON.stringify(configPath)}, "utf8");
+      const startup = await runStartupConfigPreflight({ gateway: true, observe: false });
+      assert.equal(startup.snapshot.valid, false);
+      assert.equal(fs.readFileSync(${JSON.stringify(configPath)}, "utf8"), original);
+      assert.equal(fs.existsSync(${JSON.stringify(`${configPath}.bak`)}), false);
+      let firstPersisted;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await runDoctorConfigPreflight({
+          invalidConfigNote: false,
+          observe: false,
+        });
+        const repairedRaw = fs.readFileSync(${JSON.stringify(configPath)}, "utf8");
+        const result = await runStartupConfigPreflight({ gateway: true, observe: false });
+        assert.equal(result.snapshot.valid, true);
+        const persisted = fs.readFileSync(${JSON.stringify(configPath)}, "utf8");
+        assert.equal(persisted, repairedRaw);
+        const persistedConfig = JSON.parse(persisted);
+        for (const source of [result.snapshot.sourceConfig, persistedConfig]) {
+          assert.deepEqual(source.plugins.entries.codex.config, expectedPluginConfig);
+          assert.deepEqual(source.agents, ${JSON.stringify(config.agents)});
+        }
+        const runtime = result.snapshot.config;
+        const runtimeAppServer = runtime.plugins.entries.codex.config.appServer;
+        for (const [key, value] of Object.entries(expectedPluginConfig.appServer)) {
+          assert.deepEqual(runtimeAppServer[key], value);
+        }
+        for (const key of retiredKeys) {
+          assert.equal(Object.hasOwn(runtimeAppServer, key), false);
+        }
+        assert.equal(runtime.agents.defaults.timeoutSeconds, 0);
+        assert.equal(hasActiveStartupMigrationLease(), false);
+        if (attempt === 0) {
+          firstPersisted = persisted;
+        } else {
+          assert.equal(persisted, firstPersisted);
+        }
+      }
+      console.log("__READY__");
+    `;
+
+    const result = await runIsolatedModuleScript(env, script, { timeoutMs: 60_000 });
+    expect(result.stdout, `${result.stderr}\n${result.stdout}`).toContain("__READY__");
+    expect(hasActiveStartupMigrationLease({ env })).toBe(false);
+  }, 75_000);
+
+  it("preserves legacy state and orphan sidecars when a live gateway owns the state directory", async () => {
+    const root = fs.realpathSync(tempDirs.createTempDir("openclaw-live-owner-ready-"));
+    // Live owner fixture with gateway-shaped argv: on Windows no file-lock start
+    // time exists, so the lock reader validates the owner through process argv
+    // (isGatewayArgv); the Vitest process itself would read as a dead owner there.
+    const ownerChild = spawn(
+      process.execPath,
+      ["-e", "setTimeout(() => {}, 120_000)", "src/entry.ts", "gateway"],
+      { cwd: path.resolve("."), stdio: "ignore" },
+    );
+    const stateDir = path.join(root, "state");
+    const configPath = path.join(root, "openclaw.json");
+    const env = createDoctorEnv(root, stateDir, configPath);
+
+    try {
+      fs.mkdirSync(stateDir, { recursive: true });
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({ gateway: { mode: "local", auth: { mode: "none" } } }),
+      );
+      // A retired agent file remains owned by Doctor while the Gateway is live.
+      const legacyAgentDir = path.join(stateDir, "agent");
+      const legacyArtifactPath = path.join(legacyAgentDir, "auth-profiles.json");
+      fs.mkdirSync(legacyAgentDir, { recursive: true });
+      fs.writeFileSync(legacyArtifactPath, JSON.stringify({ profiles: {} }));
+      // A pending state write admission side effect: a nonempty WAL beside a
+      // missing main database gets copied to an .orphaned-* quarantine file by
+      // sidecar quarantine unless the live-owner refusal runs first.
+      const sharedStateDbDir = path.join(stateDir, "state");
+      fs.mkdirSync(sharedStateDbDir, { recursive: true });
+      const orphanWalPath = path.join(sharedStateDbDir, "openclaw.sqlite-wal");
+      fs.writeFileSync(orphanWalPath, Buffer.alloc(64, 1));
+      // A live gateway owner: the spawned gateway-shaped child is alive with a
+      // matching start time, which is exactly how a real concurrent gateway verifies.
+      const lockDir = resolveGatewayLockDir(stateDir);
+      fs.mkdirSync(lockDir, { recursive: true });
+      const startTime = getFileLockProcessStartTime(ownerChild.pid!);
+      fs.writeFileSync(
+        path.join(lockDir, "gateway.state.lock"),
+        JSON.stringify({
+          pid: ownerChild.pid,
+          ownerId: "live-owner-refusal-test",
+          createdAt: new Date().toISOString(),
+          configPath,
+          port: 18720,
+          stateDir,
+          ...(startTime !== null ? { startTime } : {}),
+        }),
+      );
+      const runtimeRoot = createBuiltRuntime(root);
+
+      const result = await tempDirs.track(
+        runBuiltRuntime(
+          runtimeRoot,
+          env,
+          ["gateway", "run", "--port", "18720", "--allow-unconfigured"],
+          30_000,
+        ),
+      );
+      const output = `${result.stderr}\n${result.stdout}`;
+
+      // The refused startup must leave the live owner's legacy state untouched.
+      expect(fs.existsSync(legacyArtifactPath), output).toBe(true);
+      expect(fs.existsSync(path.join(stateDir, "agents", "main", "agent")), output).toBe(false);
+      // No orphan-sidecar quarantine copy either: write admission never ran.
+      expect(fs.readdirSync(sharedStateDbDir), output).toEqual(["openclaw.sqlite-wal"]);
+      expect(result.code, output).toBe(78);
+      expect(result.stderr, output).toContain("already owns this state directory");
+      expect(hasActiveStartupMigrationLease({ env })).toBe(false);
+    } finally {
+      await tempDirs.verifyCleanup(() => stopChildProcess(ownerChild, 5_000));
+    }
+  }, 45_000);
+
+  it("reloads tool ownership after updater-managed manifest repair", async () => {
+    const root = await fs.promises.realpath(
+      tempDirs.createTempDir("openclaw-updater-manifest-repair-"),
+    );
+    const stateDir = path.join(root, "state");
+    const configPath = path.join(root, "openclaw.json");
+    const pluginId = "updater-tool-owner";
+    const pluginDir = path.join(root, "plugins", pluginId);
+    const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
+    const config = {
+      gateway: { mode: "local", auth: { mode: "none" } },
+      plugins: {
+        load: { paths: [pluginDir] },
+        entries: { [pluginId]: { enabled: true } },
+      },
+    } satisfies OpenClawConfig;
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      HOME: root,
+      USERPROFILE: root,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_TEST_FAST: "1",
+      OPENCLAW_UPDATE_IN_PROGRESS: "1",
+      NO_COLOR: "1",
+    };
+    delete env.NODE_ENV;
+    delete env.OPENCLAW_HOME;
+    delete env.VITEST;
+    delete env.VITEST_POOL_ID;
+    delete env.VITEST_WORKER_ID;
+
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify(config));
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: `@openclaw/${pluginId}`,
+        version: "1.0.0",
+        openclaw: { extensions: ["./index.js"] },
+      }),
+    );
+    fs.writeFileSync(path.join(pluginDir, "index.js"), "export default {};\n");
+    fs.writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        id: pluginId,
+        tools: ["updater_tool"],
+        configSchema: { type: "object" },
+      }),
+    );
+
+    // Repair and observation must use the same metadata scope and invalidation owner.
+    const configFlowUrl = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.configFlow).href;
+    const currentSnapshotUrl = resolveRuntimeWorkerUrl(
+      doctorConfigRuntimeEntrypoints.metadataSnapshot,
+    ).href;
+    const healthRunnersUrl = resolveRuntimeWorkerUrl(
+      doctorConfigRuntimeEntrypoints.stateHealth,
+    ).href;
+    const prompterUrl = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.prompter).href;
+    const result = await runIsolatedModuleScript(
+      env,
+      `
+        const fs = await import("node:fs");
+        const { loadAndMaybeMigrateDoctorConfig } = await import(${JSON.stringify(configFlowUrl)});
+        const { getCurrentPluginMetadataSnapshot } =
+          await import(${JSON.stringify(currentSnapshotUrl)});
+        const { runLegacyPluginManifestHealth } = await import(${JSON.stringify(healthRunnersUrl)});
+        const { createDoctorPrompter } = await import(${JSON.stringify(prompterUrl)});
+        const options = { nonInteractive: true, repair: true };
+        const runtime = {
+          log: () => {},
+          warn: () => {},
+          error: () => {},
+          exit: (code) => { throw new Error("doctor exited " + code); },
+        };
+        const prompter = createDoctorPrompter({ runtime, options });
+        const configResult = await loadAndMaybeMigrateDoctorConfig({
+          options,
+          confirm: async () => false,
+          runtime,
+          prompter,
+        });
+        const readToolOwners = () =>
+          configResult.runWithPluginMetadataSnapshot(
+            { config: configResult.cfg },
+            () => [
+              ...(getCurrentPluginMetadataSnapshot({ config: configResult.cfg })
+                ?.owners.contracts.get("tools") ?? []),
+            ],
+          );
+        const before = readToolOwners();
+        await runLegacyPluginManifestHealth({
+          cfg: configResult.cfg,
+          runtime,
+          prompter,
+          invalidatePluginMetadataSnapshot: configResult.invalidatePluginMetadataSnapshot,
+        });
+        const after = readToolOwners();
+        const manifest = JSON.parse(fs.readFileSync(${JSON.stringify(manifestPath)}, "utf8"));
+        console.log("__RESULT__" + JSON.stringify({
+          retainedBaseSnapshot: configResult.pluginMetadataSnapshot !== undefined,
+          before,
+          after,
+          legacyTools: manifest.tools,
+          contractTools: manifest.contracts?.tools,
+        }));
+      `,
+      { timeoutMs: 60_000 },
+    );
+    const resultLine = result.stdout.split("\n").find((line) => line.startsWith("__RESULT__"));
+    expect(resultLine, `${result.stderr}\n${result.stdout}`).toBeDefined();
+    expect(JSON.parse(resultLine!.slice("__RESULT__".length))).toEqual({
+      retainedBaseSnapshot: false,
+      before: [],
+      after: [pluginId],
+      contractTools: ["updater_tool"],
+    });
+  }, 90_000);
+});

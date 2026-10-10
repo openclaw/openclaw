@@ -1,195 +1,155 @@
 // Telegram tests cover channel actions.contract plugin behavior.
-import { installChannelActionsContractSuite } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { telegramPlugin } from "../api.js";
 
 describe("telegram actions contract", () => {
-  installChannelActionsContractSuite({
-    plugin: telegramPlugin,
-    cases: [
-      {
-        name: "exposes configured Telegram actions and capabilities",
-        cfg: {
-          channels: {
-            telegram: {
-              botToken: "test-token-placeholder",
+  it("requires send and poll permission on the same discoverable account", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          defaultAccount: "senderOnly",
+          actions: { sendMessage: false, poll: false },
+          accounts: {
+            senderOnly: {
+              botToken: "tok-send",
+              actions: { sendMessage: true, poll: false },
+            },
+            pollOnly: {
+              botToken: "tok-poll",
+              actions: { sendMessage: false, poll: true },
             },
           },
-        } as OpenClawConfig,
-        expectedActions: ["send", "poll", "react", "delete", "edit", "topic-create", "topic-edit"],
-        expectedCapabilities: ["delivery-pin", "presentation"],
+        },
       },
-    ],
+    };
+    for (const [accountId, sends] of [
+      [undefined, true],
+      ["senderOnly", true],
+      ["pollOnly", false],
+    ] as const) {
+      const actions = telegramPlugin.actions?.describeMessageTool?.({ cfg, accountId })?.actions;
+      expect(actions?.includes("send")).toBe(sends);
+      expect(actions).not.toContain("poll");
+    }
   });
 
-  it.each([
-    {
-      richMessages: undefined as boolean | undefined,
-      expectedMarkup: "markdown",
-      expectedOn: false,
-    },
-    {
-      richMessages: false as boolean | undefined,
-      expectedMarkup: "markdown",
-      expectedOn: false,
-    },
-    {
-      richMessages: true as boolean | undefined,
-      expectedMarkup: "markdown_telegram_rich",
-      expectedOn: true,
-    },
-  ])(
-    "returns inbound formatting hints for richMessages=$richMessages",
-    ({ richMessages, expectedMarkup, expectedOn }) => {
-      const hints = telegramPlugin.agentPrompt?.inboundFormattingHints?.({
-        cfg: {
-          channels: {
-            telegram: {
-              botToken: "test-token-placeholder",
-              richMessages,
+  it("keeps root and selected-account action gates distinct", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          botToken: "tok-default",
+          actions: { reactions: false, poll: true },
+          accounts: {
+            work: {
+              botToken: "tok-work",
+              actions: { sendMessage: false, reactions: true, poll: false, sticker: true },
             },
           },
-        } as OpenClawConfig,
-      });
+        },
+      },
+    };
+    const root = telegramPlugin.actions?.describeMessageTool?.({ cfg, accountId: "default" });
+    const work = telegramPlugin.actions?.describeMessageTool?.({ cfg, accountId: "work" });
+    expect(root?.actions).toEqual(expect.arrayContaining(["send", "poll"]));
+    expect(root?.actions).not.toContain("react");
+    expect(root?.actions).not.toContain("emoji-list");
+    expect(root?.actions).not.toContain("sticker");
+    const schema = root?.schema;
+    const contributions = Array.isArray(schema) ? schema : schema ? [schema] : [];
+    expect(contributions.some((entry) => Object.hasOwn(entry.properties, "emoji"))).toBe(false);
+    expect(work?.actions).not.toContain("send");
+    expect(work?.actions).not.toContain("poll");
+    expect(work?.actions).toEqual(
+      expect.arrayContaining(["react", "emoji-list", "sticker", "sticker-search"]),
+    );
+  });
 
-      expect(hints?.text_markup).toBe(expectedMarkup);
-      if (expectedOn) {
-        expect(hints?.rules.join(" ")).toContain("Telegram rich ON");
-        expect(hints?.rules.join(" ")).toContain("Bot API 10.2 blocks");
-        expect(hints?.rules.join(" ")).toContain("<details><summary>");
-        expect(hints?.rules.join(" ")).toContain("Not MarkdownV2/parse_mode");
-        expect(hints?.rules.join(" ")).toContain("Media https URLs only, block-level only");
-      } else {
-        expect(hints?.rules.join(" ")).toContain("Telegram rich OFF");
-        expect(hints?.rules.join(" ")).toContain("richMessages");
-        expect(hints?.rules.join(" ")).not.toContain("Telegram rich ON");
-      }
+  it("discovers SecretRef actions and account-scoped reaction guidance without hiding healthy siblings", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          defaultAccount: "carey-notifications",
+          reactionLevel: "minimal",
+          accounts: {
+            "Carey Notifications": {
+              botToken: { source: "exec", provider: "default", id: "telegram-carey" },
+              reactionLevel: "extensive",
+              actions: { reactions: false, poll: false },
+            },
+            default: {
+              botToken: "tok-healthy",
+              actions: { reactions: true, poll: true },
+            },
+          },
+        },
+      },
+    };
+    const scoped = telegramPlugin.actions?.describeMessageTool?.({
+      cfg,
+      accountId: "carey-notifications",
+    });
+    expect(scoped?.actions).toContain("send");
+    expect(scoped?.actions).not.toContain("react");
+    expect(scoped?.actions).not.toContain("poll");
+    expect(telegramPlugin.actions?.describeMessageTool?.({ cfg })?.actions).toEqual(
+      expect.arrayContaining(["send", "react", "poll"]),
+    );
+    expect(
+      telegramPlugin.agentPrompt?.reactionGuidance?.({ cfg, accountId: "carey-notifications" })
+        ?.level,
+    ).toBe("extensive");
+    expect(telegramPlugin.agentPrompt?.reactionGuidance?.({ cfg })?.level).toBe("extensive");
+  });
+
+  it.each(["disabled", "tokenless", "unknown"] as const)(
+    "hides actions and capabilities for a %s scoped account",
+    (accountId) => {
+      expect(
+        telegramPlugin.actions?.describeMessageTool?.({
+          cfg: {
+            channels: {
+              telegram: {
+                ...(accountId !== "tokenless" ? { botToken: "tok-root" } : {}),
+                accounts: {
+                  healthy: { botToken: "tok-healthy" },
+                  disabled: { enabled: false, botToken: "tok-disabled" },
+                  tokenless: {},
+                },
+              },
+            },
+          },
+          accountId,
+        }),
+      ).toEqual({ actions: [], capabilities: [], schema: null });
     },
   );
 
-  it("does not advertise a richText message-tool capability", () => {
-    const capabilities = telegramPlugin.agentPrompt?.messageToolCapabilities?.({
-      cfg: {
-        channels: {
-          telegram: {
-            botToken: "test-token-placeholder",
-            richMessages: true,
+  it("owns one formatting contract, chosen by the delivering account's richMessages", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          accounts: {
+            rich: { botToken: "tok-rich", richMessages: true },
+            plain: { botToken: "tok-plain" },
           },
         },
-      } as OpenClawConfig,
-    });
+      },
+    };
+    const agentPrompt = telegramPlugin.agentPrompt;
+    const rich = agentPrompt?.inboundFormattingHints?.({ cfg, accountId: "rich" });
+    const plain = agentPrompt?.inboundFormattingHints?.({ cfg, accountId: "plain" });
 
-    expect(capabilities).toContain("inlineButtons");
-    expect(capabilities).not.toContain("richText");
-  });
-
-  it("advertises inline buttons when legacy Telegram capabilities are empty", () => {
-    const capabilities = telegramPlugin.agentPrompt?.messageToolCapabilities?.({
-      cfg: {
-        channels: {
-          telegram: {
-            botToken: "test-token-placeholder",
-            capabilities: [],
-          },
-        },
-      } as OpenClawConfig,
-    });
-
-    expect(capabilities).toContain("inlineButtons");
-  });
-
-  it("advertises rich send parameters without adding Telegram-only actions", () => {
-    const discovery = telegramPlugin.actions?.describeMessageTool?.({
-      cfg: {
-        channels: { telegram: { botToken: "test-token-placeholder" } },
-      } as OpenClawConfig,
-    });
-    const schema = discovery?.schema;
-    const contributions = Array.isArray(schema) ? schema : schema ? [schema] : [];
-    const properties = Object.assign({}, ...contributions.map((entry) => entry.properties));
-
-    expect(discovery?.actions).not.toContain("sendVideoNote");
-    expect(discovery?.actions).not.toContain("sendLocation");
-    expect(properties).toHaveProperty("asVideoNote");
-    expect(properties).toHaveProperty("location");
-  });
-
-  it("does not advertise inline buttons for non-empty legacy Telegram capabilities without inlineButtons", () => {
-    const capabilities = telegramPlugin.agentPrompt?.messageToolCapabilities?.({
-      cfg: {
-        channels: {
-          telegram: {
-            botToken: "test-token-placeholder",
-            capabilities: ["vision"],
-          },
-        },
-      } as OpenClawConfig,
-    });
-
-    expect(capabilities).not.toContain("inlineButtons");
-  });
-
-  it("uses the selected Telegram account's richMessages for inbound formatting hints", () => {
-    const hints = telegramPlugin.agentPrompt?.inboundFormattingHints?.({
-      cfg: {
-        channels: {
-          telegram: {
-            botToken: "test-token-placeholder",
-            richMessages: true,
-            accounts: {
-              ops: {
-                richMessages: false,
-              },
-            },
-          },
-        },
-      } as OpenClawConfig,
-      accountId: "ops",
-    });
-
-    expect(hints?.text_markup).toBe("markdown");
-    expect(hints?.rules.join(" ")).toContain("Telegram rich OFF");
-  });
-
-  it("does not resolve Telegram credentials while checking inbound formatting hints", () => {
-    expect(() =>
-      telegramPlugin.agentPrompt?.inboundFormattingHints?.({
-        cfg: {
-          channels: {
-            telegram: {
-              tokenFile: "/definitely/missing/telegram-token",
-              richMessages: true,
-            },
-          },
-        } as OpenClawConfig,
-      }),
-    ).not.toThrow();
-  });
-
-  it("uses the configured default Telegram account for inbound formatting hints", () => {
-    const hints = telegramPlugin.agentPrompt?.inboundFormattingHints?.({
-      cfg: {
-        channels: {
-          telegram: {
-            defaultAccount: "ops",
-            accounts: {
-              default: {
-                botToken: "test-token-placeholder",
-                richMessages: false,
-              },
-              ops: {
-                botToken: "test-token-placeholder",
-                richMessages: true,
-              },
-            },
-          },
-        },
-      } as OpenClawConfig,
-    });
-
-    expect(hints?.text_markup).toBe("markdown_telegram_rich");
-    expect(hints?.rules.join(" ")).toContain("Telegram rich ON");
+    expect(rich?.text_markup).toBe("markdown_telegram_rich");
+    expect(rich?.rules.join("\n")).toContain("<details>");
+    expect(plain?.text_markup).toBe("markdown");
+    expect(plain?.rules[0]).toMatch(/^Telegram rich OFF\./);
+    // `<details>` guidance lives only in the contract, not in a second capability route.
+    for (const accountId of ["rich", "plain"]) {
+      expect(agentPrompt?.messageToolCapabilities?.({ cfg, accountId })).not.toContain(
+        "markdownDetails",
+      );
+    }
   });
 
   it("exposes Telegram thread create CLI remapping through the exported plugin", () => {
@@ -226,7 +186,7 @@ describe("telegram actions contract", () => {
           channel: "telegram",
           action: "send",
           cfg: {} as OpenClawConfig,
-          params: { quoteText: "  original message  " },
+          params: { quoteText: "  original message\n  " },
         },
         to: "123456",
         payload: {
@@ -241,7 +201,7 @@ describe("telegram actions contract", () => {
       channelData: {
         telegram: {
           parseMode: "MarkdownV2",
-          quoteText: "original message",
+          quoteText: "  original message\n  ",
         },
       },
     });
@@ -263,7 +223,7 @@ describe("telegram actions contract", () => {
           channel: "telegram",
           action: "send",
           cfg: {} as OpenClawConfig,
-          params: { quote_text: "  snake case quote  " },
+          params: { quote_text: " \nsnake case quote  " },
         },
         to: "123456",
         payload: { text: "Chart", presentation },
@@ -271,13 +231,12 @@ describe("telegram actions contract", () => {
     ).toEqual({
       text: "Chart",
       presentation,
-      channelData: { telegram: { quoteText: "snake case quote" } },
+      channelData: { telegram: { quoteText: " \nsnake case quote  " } },
     });
   });
 
-  it("routes video-note and location hints through durable core delivery", async () => {
+  it("rejects retired native buttons before prepared presentation delivery", async () => {
     const prepareSendPayload = telegramPlugin.actions?.prepareSendPayload;
-    const location = { latitude: 48.858844, longitude: 2.294351 };
 
     await expect(
       prepareSendPayload?.({
@@ -285,23 +244,21 @@ describe("telegram actions contract", () => {
           channel: "telegram",
           action: "send",
           cfg: {} as OpenClawConfig,
-          params: { asVideoNote: true },
+          params: { buttons: '[[{"text":"Yes","callback_data":"yes"}]]' },
         },
         to: "123456",
-        payload: { mediaUrl: "file:///tmp/note.mp4", videoAsNote: true },
-      }),
-    ).resolves.toEqual({ mediaUrl: "file:///tmp/note.mp4", videoAsNote: true });
-    await expect(
-      prepareSendPayload?.({
-        ctx: {
-          channel: "telegram",
-          action: "send",
-          cfg: {} as OpenClawConfig,
-          params: { location },
+        payload: {
+          text: "Choose",
+          presentation: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Yes", action: { type: "callback", value: "yes" } }],
+              },
+            ],
+          },
         },
-        to: "123456",
-        payload: { location },
       }),
-    ).resolves.toEqual({ location });
+    ).rejects.toThrow(/native "buttons" is unsupported.*Use presentation/);
   });
 });

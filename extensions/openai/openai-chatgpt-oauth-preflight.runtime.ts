@@ -1,24 +1,11 @@
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { inspectTlsCertificateError } from "openclaw/plugin-sdk/provider-http";
+import { asNullableObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const OPENAI_AUTH_PROBE_URL =
   "https://auth.openai.com/oauth/authorize?response_type=code&client_id=openclaw-preflight&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&scope=openid+profile+email";
-const TLS_CERT_ERROR_CODES = new Set([
-  "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
-  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
-  "CERT_HAS_EXPIRED",
-  "DEPTH_ZERO_SELF_SIGNED_CERT",
-  "SELF_SIGNED_CERT_IN_CHAIN",
-  "ERR_TLS_CERT_ALTNAME_INVALID",
-]);
-const TLS_CERT_ERROR_PATTERNS = [
-  /unable to get local issuer certificate/i,
-  /unable to verify the first certificate/i,
-  /self[- ]signed certificate/i,
-  /certificate has expired/i,
-];
-
 type PreflightFailureKind = "tls-cert" | "network";
-export type OpenAIOAuthTlsPreflightResult =
+type OpenAIOAuthTlsPreflightResult =
   | { ok: true }
   | {
       ok: false;
@@ -27,17 +14,21 @@ export type OpenAIOAuthTlsPreflightResult =
       message: string;
     };
 
-function getErrorRecord(error: unknown): Record<string, unknown> | null {
-  return error && typeof error === "object" ? (error as Record<string, unknown>) : null;
-}
-
 function extractFailure(error: unknown): {
   code?: string;
   message: string;
   kind: PreflightFailureKind;
 } {
-  const root = getErrorRecord(error);
-  const rootCause = getErrorRecord(root?.cause);
+  const tlsFailure = inspectTlsCertificateError(error);
+  if (tlsFailure) {
+    return {
+      code: tlsFailure.code,
+      message: tlsFailure.message,
+      kind: "tls-cert",
+    };
+  }
+  const root = asNullableObjectRecord(error);
+  const rootCause = asNullableObjectRecord(root?.cause);
   const code = typeof rootCause?.code === "string" ? rootCause.code : undefined;
   const message =
     typeof rootCause?.message === "string"
@@ -45,38 +36,37 @@ function extractFailure(error: unknown): {
       : typeof root?.message === "string"
         ? root.message
         : String(error);
-  const isTlsCertError =
-    (code ? TLS_CERT_ERROR_CODES.has(code) : false) ||
-    TLS_CERT_ERROR_PATTERNS.some((pattern) => pattern.test(message));
   return {
     code,
     message,
-    kind: isTlsCertError ? "tls-cert" : "network",
+    kind: "network",
   };
 }
 
 export async function runOpenAIOAuthTlsPreflight(options?: {
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
+  signal?: AbortSignal;
+  assertCurrent?: () => void;
 }): Promise<OpenAIOAuthTlsPreflightResult> {
   const timeoutMs = resolveTimerTimeoutMs(options?.timeoutMs, 5000);
   const fetchImpl = options?.fetchImpl ?? fetch;
+  options?.signal?.throwIfAborted();
+  options?.assertCurrent?.();
   let response: Response | undefined;
   try {
     response = await fetchImpl(OPENAI_AUTH_PROBE_URL, {
       method: "GET",
       redirect: "manual",
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: options?.signal
+        ? AbortSignal.any([options.signal, AbortSignal.timeout(timeoutMs)])
+        : AbortSignal.timeout(timeoutMs),
     });
     return { ok: true };
   } catch (error) {
-    const failure = extractFailure(error);
-    return {
-      ok: false,
-      kind: failure.kind,
-      code: failure.code,
-      message: failure.message,
-    };
+    options?.signal?.throwIfAborted();
+    options?.assertCurrent?.();
+    return { ok: false, ...extractFailure(error) };
   } finally {
     if (response?.bodyUsed !== true) {
       await response?.body?.cancel().catch(() => undefined);

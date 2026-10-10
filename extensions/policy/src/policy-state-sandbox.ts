@@ -1,9 +1,11 @@
-// Policy plugin sandbox posture evidence.
+import { splitSandboxBindSpec } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
+  asNonArrayRecord,
   isRecord,
   asBoolean as readBoolean,
   normalizeOptionalString as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { collectPolicyConfiguredAgents, resolvePolicyValue } from "./policy-state-helpers.js";
 import { readStringArray } from "./policy-state-tool-posture.js";
 import type { PolicySandboxPostureEvidence } from "./policy-state-types.js";
 
@@ -13,9 +15,9 @@ const DEFAULT_POLICY_SANDBOX_BROWSER_NETWORK = "openclaw-sandbox-browser";
 export function scanPolicySandboxPosture(
   cfg: Record<string, unknown>,
 ): readonly PolicySandboxPostureEvidence[] {
-  const agents = isRecord(cfg.agents) ? cfg.agents : {};
-  const defaults = isRecord(agents.defaults) ? agents.defaults : {};
-  const defaultSandbox = isRecord(defaults.sandbox) ? defaults.sandbox : {};
+  const agents = asNonArrayRecord(cfg.agents);
+  const defaults = asNonArrayRecord(agents.defaults);
+  const defaultSandbox = asNonArrayRecord(defaults.sandbox);
   const entries: PolicySandboxPostureEvidence[] = [];
   pushSandboxPostureEvidence(entries, {
     id: "agents-defaults",
@@ -23,26 +25,22 @@ export function scanPolicySandboxPosture(
     sandbox: defaultSandbox,
     inheritedSandbox: {},
     sourceBase: "oc://openclaw.config/agents/defaults/sandbox",
-    inheritedSourceBase: "oc://openclaw.config/agents/defaults/sandbox",
   });
 
-  const list = Array.isArray(agents.list) ? agents.list : [];
-  list.forEach((agent, index) => {
+  collectPolicyConfiguredAgents(agents).forEach((configured) => {
+    const agent = configured.value;
     if (!isRecord(agent)) {
       return;
     }
-    const agentId =
-      typeof agent.id === "string" && agent.id.trim() !== "" ? agent.id.trim() : undefined;
-    const sandbox = isRecord(agent.sandbox) ? agent.sandbox : {};
+    const sandbox = asNonArrayRecord(agent.sandbox);
     pushSandboxPostureEvidence(entries, {
-      id: agentId ?? `agent-${index}`,
+      id: configured.agentId,
       scope: "agent",
-      agentId,
+      agentId: configured.agentId,
       sandbox,
       inheritedSandbox: defaultSandbox,
       sharedSandboxScope: sandboxScopeIsShared(sandbox, defaultSandbox),
-      sourceBase: `oc://openclaw.config/agents/list/#${index}/sandbox`,
-      inheritedSourceBase: "oc://openclaw.config/agents/defaults/sandbox",
+      sourceBase: `${configured.sourceBase}/sandbox`,
     });
   });
 
@@ -58,36 +56,37 @@ type SandboxPostureParams = {
   readonly inheritedSandbox: Record<string, unknown>;
   readonly sharedSandboxScope?: boolean;
   readonly sourceBase: string;
-  readonly inheritedSourceBase: string;
 };
 
 function pushSandboxPostureEvidence(
   entries: PolicySandboxPostureEvidence[],
   params: SandboxPostureParams,
 ): void {
-  const localMode = readString(params.sandbox.mode);
-  const inheritedMode = readString(params.inheritedSandbox.mode);
   pushSandboxPostureValue(entries, params, {
     suffix: "mode",
     kind: "mode",
-    value: localMode ?? inheritedMode ?? "off",
-    explicit: localMode !== undefined || inheritedMode !== undefined,
-    inherited: localMode === undefined && inheritedMode !== undefined,
+    ...resolvePolicyValue(
+      readString(params.sandbox.mode),
+      readString(params.inheritedSandbox.mode),
+      "off",
+    ),
   });
 
-  const localBackend = readString(params.sandbox.backend);
-  const inheritedBackend = readString(params.inheritedSandbox.backend);
-  const effectiveBackend = (localBackend ?? inheritedBackend ?? "docker").toLowerCase();
+  const backend = resolvePolicyValue(
+    readString(params.sandbox.backend),
+    readString(params.inheritedSandbox.backend),
+    "docker",
+  );
+  const effectiveBackend = backend.value.toLowerCase();
   const effectiveParams = { ...params, effectiveBackend };
   pushSandboxPostureValue(entries, params, {
     suffix: "backend",
     kind: "backend",
+    ...backend,
     value: effectiveBackend,
-    explicit: localBackend !== undefined || inheritedBackend !== undefined,
-    inherited: localBackend === undefined && inheritedBackend !== undefined,
   });
 
-  if (effectiveBackend === "docker") {
+  if (effectiveBackend === "docker" || effectiveBackend === "podman") {
     pushSandboxDockerPosture(entries, effectiveParams);
   }
   pushSandboxBrowserPosture(entries, effectiveParams);
@@ -97,162 +96,123 @@ function pushSandboxDockerPosture(
   entries: PolicySandboxPostureEvidence[],
   params: SandboxPostureParams,
 ): void {
-  const localDocker =
-    !params.sharedSandboxScope && isRecord(params.sandbox.docker) ? params.sandbox.docker : {};
-  const inheritedDocker = isRecord(params.inheritedSandbox.docker)
-    ? params.inheritedSandbox.docker
-    : {};
-  const localNetwork = readString(localDocker.network);
-  const inheritedNetwork = readString(inheritedDocker.network);
+  const localDocker = !params.sharedSandboxScope ? asNonArrayRecord(params.sandbox.docker) : {};
+  const inheritedDocker = asNonArrayRecord(params.inheritedSandbox.docker);
   pushSandboxPostureValue(entries, params, {
     suffix: "docker/network",
     kind: "containerNetwork",
-    value: localNetwork ?? inheritedNetwork ?? "none",
+    ...resolvePolicyValue(
+      readString(localDocker.network),
+      readString(inheritedDocker.network),
+      "none",
+    ),
     networkSurface: "docker",
-    explicit: localNetwork !== undefined || inheritedNetwork !== undefined,
-    inherited: localNetwork === undefined && inheritedNetwork !== undefined,
   });
 
-  pushSandboxDockerProfilePosture(entries, params, localDocker, inheritedDocker, "seccomp");
-  pushSandboxDockerProfilePosture(entries, params, localDocker, inheritedDocker, "apparmor");
-
-  pushSandboxBindPosture(entries, params, {
-    inheritedBinds: readStringArray(inheritedDocker.binds),
-    localBinds: readStringArray(localDocker.binds),
-    sourceSuffix: "docker/binds",
-    surface: "docker",
-  });
+  for (const profile of ["seccomp", "apparmor"] as const) {
+    const key = `${profile}Profile`;
+    const localValue = readString(localDocker[key]);
+    const inheritedValue = readString(inheritedDocker[key]);
+    const inherited = localValue === undefined && inheritedValue !== undefined;
+    const value = localValue ?? inheritedValue;
+    entries.push({
+      id: `${params.id}-docker-${profile}-profile`,
+      kind: "containerSecurityProfile",
+      source: `${inherited ? "oc://openclaw.config/agents/defaults/sandbox" : params.sourceBase}/docker/${key}`,
+      scope: params.scope,
+      ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
+      profile,
+      ...(value === undefined ? {} : { value }),
+      explicit: value !== undefined,
+    });
+  }
+  pushSandboxBindPosture(entries, params, "docker");
 }
 
 function pushSandboxBindPosture(
   entries: PolicySandboxPostureEvidence[],
   params: SandboxPostureParams,
-  bindParams: {
-    readonly inheritedBinds: readonly string[];
-    readonly localBinds: readonly string[];
-    readonly sourceSuffix: string;
-    readonly surface: "browser" | "docker";
-  },
+  surface: "browser" | "docker",
+  configSurface = surface,
 ): void {
-  const { inheritedBinds, localBinds } = bindParams;
+  const local = !params.sharedSandboxScope ? asNonArrayRecord(params.sandbox[configSurface]) : {};
+  const inheritedConfig = asNonArrayRecord(params.inheritedSandbox[configSurface]);
+  const inheritedBinds = readStringArray(inheritedConfig.binds);
+  const localBinds = readStringArray(local.binds);
   for (const [index, bind] of [...inheritedBinds, ...localBinds].entries()) {
     const inherited = index < inheritedBinds.length;
-    const parsed = splitPolicyBindSpec(bind);
+    const parsed = splitSandboxBindSpec(bind, { allowWindowsContainerPath: true });
+    const bindMode = parsed?.options
+      .split(",")
+      .some((option) => option.trim().toLowerCase() === "ro")
+      ? "ro"
+      : "rw";
     entries.push({
-      id: `${params.id}-${bindParams.surface}-bind-${index}`,
+      id: `${params.id}-${surface}-bind-${index}`,
       kind: "containerMount",
-      source: `${inherited ? params.inheritedSourceBase : params.sourceBase}/${bindParams.sourceSuffix}/#${
+      source: `${inherited ? "oc://openclaw.config/agents/defaults/sandbox" : params.sourceBase}/${configSurface}/binds/#${
         inherited ? index : index - inheritedBinds.length
       }`,
       scope: params.scope,
       ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
       bind,
       bindHost: parsed?.host,
-      bindMode: parsed?.mode ?? "rw",
-      bindSurface: bindParams.surface,
+      bindMode,
+      bindSurface: surface,
       explicit: true,
     });
   }
-}
-
-function pushSandboxDockerProfilePosture(
-  entries: PolicySandboxPostureEvidence[],
-  params: SandboxPostureParams,
-  localDocker: Record<string, unknown>,
-  inheritedDocker: Record<string, unknown>,
-  profile: "apparmor" | "seccomp",
-): void {
-  const key = profile === "apparmor" ? "apparmorProfile" : "seccompProfile";
-  const localValue = readString(localDocker[key]);
-  const inheritedValue = readString(inheritedDocker[key]);
-  const inherited = localValue === undefined && inheritedValue !== undefined;
-  const value = localValue ?? inheritedValue;
-  entries.push({
-    id: `${params.id}-docker-${profile}-profile`,
-    kind: "containerSecurityProfile",
-    source: `${inherited ? params.inheritedSourceBase : params.sourceBase}/docker/${key}`,
-    scope: params.scope,
-    ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
-    profile,
-    ...(value === undefined ? {} : { value }),
-    explicit: value !== undefined,
-  });
 }
 
 function pushSandboxBrowserPosture(
   entries: PolicySandboxPostureEvidence[],
   params: SandboxPostureParams,
 ): void {
-  const localBrowser =
-    !params.sharedSandboxScope && isRecord(params.sandbox.browser) ? params.sandbox.browser : {};
-  const inheritedBrowser = isRecord(params.inheritedSandbox.browser)
-    ? params.inheritedSandbox.browser
-    : {};
+  const localBrowser = !params.sharedSandboxScope ? asNonArrayRecord(params.sandbox.browser) : {};
+  const inheritedBrowser = asNonArrayRecord(params.inheritedSandbox.browser);
   const localEnabled = readBoolean(localBrowser.enabled);
   const inheritedEnabled = readBoolean(inheritedBrowser.enabled);
   const enabled = localEnabled ?? inheritedEnabled ?? false;
-  if (!enabled) {
-    const disabledInherited = localEnabled === undefined && inheritedEnabled !== undefined;
-    if (localEnabled !== undefined || inheritedEnabled !== undefined) {
-      entries.push({
-        id: `${params.id}-browser-cdp-source-range`,
-        kind: "browserCdpSourceRange",
-        source: `${disabledInherited ? params.inheritedSourceBase : params.sourceBase}/browser/enabled`,
-        scope: params.scope,
-        ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
-        value: false,
-        explicit: true,
-      });
-    }
+  if (!enabled && localEnabled === undefined && inheritedEnabled === undefined) {
     return;
   }
   const hasLocalRange = Object.hasOwn(localBrowser, "cdpSourceRange");
   const localRange = readString(localBrowser.cdpSourceRange);
   const inheritedRange = readString(inheritedBrowser.cdpSourceRange);
-  const inherited = !hasLocalRange && inheritedRange !== undefined;
-  const value = hasLocalRange ? localRange : inheritedRange;
+  const inherited = enabled
+    ? !hasLocalRange && inheritedRange !== undefined
+    : localEnabled === undefined && inheritedEnabled !== undefined;
+  const value = enabled ? (hasLocalRange ? localRange : inheritedRange) : false;
   entries.push({
     id: `${params.id}-browser-cdp-source-range`,
     kind: "browserCdpSourceRange",
-    source: `${inherited ? params.inheritedSourceBase : params.sourceBase}/browser/cdpSourceRange`,
+    source: `${inherited ? "oc://openclaw.config/agents/defaults/sandbox" : params.sourceBase}/browser/${enabled ? "cdpSourceRange" : "enabled"}`,
     scope: params.scope,
     ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
     ...(value === undefined ? {} : { value }),
     explicit: value !== undefined,
   });
+  if (!enabled) {
+    return;
+  }
 
-  const localNetwork = readString(localBrowser.network);
-  const inheritedNetwork = readString(inheritedBrowser.network);
   pushSandboxPostureValue(entries, params, {
     suffix: "browser/network",
     kind: "containerNetwork",
-    value: localNetwork ?? inheritedNetwork ?? DEFAULT_POLICY_SANDBOX_BROWSER_NETWORK,
+    ...resolvePolicyValue(
+      readString(localBrowser.network),
+      readString(inheritedBrowser.network),
+      DEFAULT_POLICY_SANDBOX_BROWSER_NETWORK,
+    ),
     networkSurface: "browser",
-    explicit: localNetwork !== undefined || inheritedNetwork !== undefined,
-    inherited: localNetwork === undefined && inheritedNetwork !== undefined,
   });
 
   const browserBindsConfigured =
     inheritedBrowser.binds !== undefined || localBrowser.binds !== undefined;
   if (browserBindsConfigured) {
-    pushSandboxBindPosture(entries, params, {
-      inheritedBinds: readStringArray(inheritedBrowser.binds),
-      localBinds: readStringArray(localBrowser.binds),
-      sourceSuffix: "browser/binds",
-      surface: "browser",
-    });
-  } else if (params.effectiveBackend !== "docker") {
-    const localDocker =
-      !params.sharedSandboxScope && isRecord(params.sandbox.docker) ? params.sandbox.docker : {};
-    const inheritedDocker = isRecord(params.inheritedSandbox.docker)
-      ? params.inheritedSandbox.docker
-      : {};
-    pushSandboxBindPosture(entries, params, {
-      inheritedBinds: readStringArray(inheritedDocker.binds),
-      localBinds: readStringArray(localDocker.binds),
-      sourceSuffix: "docker/binds",
-      surface: "browser",
-    });
+    pushSandboxBindPosture(entries, params, "browser");
+  } else if (params.effectiveBackend !== "docker" && params.effectiveBackend !== "podman") {
+    pushSandboxBindPosture(entries, params, "browser", "docker");
   }
 }
 
@@ -262,13 +222,7 @@ function sandboxScopeIsShared(
 ): boolean {
   const localScope = readString(sandbox.scope);
   const inheritedScope = readString(inheritedSandbox.scope);
-  const configuredScope = localScope ?? inheritedScope;
-  if (configuredScope !== undefined) {
-    return configuredScope === "shared";
-  }
-  const localPerSession = readBoolean(sandbox.perSession);
-  const inheritedPerSession = readBoolean(inheritedSandbox.perSession);
-  return (localPerSession ?? inheritedPerSession) === false;
+  return (localScope ?? inheritedScope) === "shared";
 }
 
 function pushSandboxPostureValue(
@@ -286,51 +240,11 @@ function pushSandboxPostureValue(
   entries.push({
     id: `${params.id}-${entry.suffix.replaceAll("/", "-")}`,
     kind: entry.kind,
-    source: `${entry.inherited ? params.inheritedSourceBase : params.sourceBase}/${entry.suffix}`,
+    source: `${entry.inherited ? "oc://openclaw.config/agents/defaults/sandbox" : params.sourceBase}/${entry.suffix}`,
     scope: params.scope,
     ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
     ...(entry.value === undefined ? {} : { value: entry.value }),
     ...(entry.networkSurface === undefined ? {} : { networkSurface: entry.networkSurface }),
     explicit: entry.explicit,
   });
-}
-
-function splitPolicyBindSpec(
-  value: string,
-): { readonly host: string; readonly mode: string } | undefined {
-  const separator = policyBindSeparatorIndex(value);
-  if (separator < 0) {
-    return undefined;
-  }
-  const host = value.slice(0, separator);
-  const rest = value.slice(separator + 1);
-  const optionsStart = policyBindOptionsSeparatorIndex(rest);
-  const options = optionsStart < 0 ? "" : rest.slice(optionsStart + 1);
-  const mode = options
-    .split(",")
-    .map((entry) => entry.trim().toLowerCase())
-    .includes("ro")
-    ? "ro"
-    : "rw";
-  return { host, mode };
-}
-
-function policyBindSeparatorIndex(value: string): number {
-  const hasDriveLetterPrefix = /^[A-Za-z]:[\\/]/.test(value);
-  for (let index = hasDriveLetterPrefix ? 2 : 0; index < value.length; index += 1) {
-    if (value[index] === ":") {
-      return index;
-    }
-  }
-  return -1;
-}
-
-function policyBindOptionsSeparatorIndex(value: string): number {
-  const hasDriveLetterPrefix = /^[A-Za-z]:[\\/]/.test(value);
-  for (let index = hasDriveLetterPrefix ? 2 : 0; index < value.length; index += 1) {
-    if (value[index] === ":") {
-      return index;
-    }
-  }
-  return -1;
 }

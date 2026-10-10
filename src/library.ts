@@ -1,27 +1,33 @@
 // Public library facade for consumers embedding OpenClaw reply runtime APIs.
 import type { getReplyFromConfig as getReplyFromConfigRuntime } from "./auto-reply/reply.runtime.js";
-import { applyTemplate } from "./auto-reply/templating.js";
-import { createDefaultDeps } from "./cli/deps.js";
+import "./auto-reply/templating.js";
+import "./cli/deps.js";
 import type { promptYesNo as promptYesNoRuntime } from "./cli/prompt.js";
-import { waitForever } from "./cli/wait.js";
-import { loadConfig } from "./config/config.js";
-import { resolveStorePath } from "./config/sessions/paths.js";
-import { deriveSessionKey, resolveSessionKey } from "./config/sessions/session-key.js";
-import { loadSessionStore, saveSessionStore } from "./config/sessions/store.js";
+import "./cli/wait.js";
+import "./config/config.js";
+import "./config/sessions/paths.js";
+import "./config/sessions/session-key.js";
 import type { ensureBinary as ensureBinaryRuntime } from "./infra/binaries.js";
-import {
-  describePortOwner,
-  ensurePortAvailable,
-  handlePortError,
-  PortInUseError,
-} from "./infra/ports.js";
+import "./infra/ports.js";
 import type { monitorWebChannel as monitorWebChannelRuntime } from "./plugins/runtime/runtime-web-channel-plugin.js";
 import type {
   runCommandWithTimeout as runCommandWithTimeoutRuntime,
   runExec as runExecRuntime,
 } from "./process/exec.js";
 import { createLazyRuntimeModule } from "./shared/lazy-runtime.js";
-import { normalizeE164 } from "./utils.js";
+export { applyTemplate } from "./auto-reply/templating.js";
+export { createDefaultDeps } from "./cli/deps.js";
+export { waitForever } from "./cli/wait.js";
+export { loadConfig } from "./config/config.js";
+export { resolveSessionStorePathCore as resolveStorePath } from "./config/sessions/paths.js";
+export { deriveSessionKey, resolveSessionKey } from "./config/sessions/session-key.js";
+export {
+  describePortOwner,
+  ensurePortAvailable,
+  handlePortError,
+  PortInUseError,
+} from "./infra/ports.js";
+export { normalizeE164 } from "./utils.js";
 
 type GetReplyFromConfig = typeof getReplyFromConfigRuntime;
 type PromptYesNo = typeof promptYesNoRuntime;
@@ -49,20 +55,3 @@ export const runCommandWithTimeout: RunCommandWithTimeout = async (...args) =>
   (await loadExecRuntime()).runCommandWithTimeout(...args);
 export const monitorWebChannel: MonitorWebChannel = async (...args) =>
   (await loadWebChannelRuntime()).monitorWebChannel(...args);
-
-export {
-  applyTemplate,
-  createDefaultDeps,
-  deriveSessionKey,
-  describePortOwner,
-  ensurePortAvailable,
-  handlePortError,
-  loadConfig,
-  loadSessionStore,
-  normalizeE164,
-  PortInUseError,
-  resolveSessionKey,
-  resolveStorePath,
-  saveSessionStore,
-  waitForever,
-};

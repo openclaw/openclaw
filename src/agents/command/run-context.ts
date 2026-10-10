@@ -1,8 +1,5 @@
-/**
- * Resolves channel/account/thread run context for agent command execution.
- */
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
-import { normalizeAccountId } from "../../utils/account-id.js";
+import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
 import type { AgentCommandOpts, AgentRunContext } from "./types.js";
 
@@ -18,32 +15,19 @@ export function resolveAgentRunContext(opts: AgentCommandOpts): AgentRunContext 
     merged.messageChannel = normalizedChannel;
   }
 
-  const normalizedAccountId = normalizeAccountId(merged.accountId ?? opts.accountId);
+  const normalizedAccountId = normalizeOptionalAccountId(merged.accountId ?? opts.accountId);
   if (normalizedAccountId) {
     merged.accountId = normalizedAccountId;
   }
 
-  const groupId = (merged.groupId ?? opts.groupId)?.toString().trim();
-  if (groupId) {
-    merged.groupId = groupId;
+  for (const key of ["groupId", "groupChannel", "groupSpace"] as const) {
+    const value = (merged[key] ?? opts[key])?.toString().trim();
+    if (value) {
+      merged[key] = value;
+    }
   }
 
-  const groupChannel = (merged.groupChannel ?? opts.groupChannel)?.toString().trim();
-  if (groupChannel) {
-    merged.groupChannel = groupChannel;
-  }
-
-  const groupSpace = (merged.groupSpace ?? opts.groupSpace)?.toString().trim();
-  if (groupSpace) {
-    merged.groupSpace = groupSpace;
-  }
-
-  if (
-    merged.currentThreadTs == null &&
-    opts.threadId != null &&
-    opts.threadId !== "" &&
-    opts.threadId !== null
-  ) {
+  if (merged.currentThreadTs == null) {
     const threadId = stringifyRouteThreadId(opts.threadId);
     if (threadId) {
       merged.currentThreadTs = threadId;

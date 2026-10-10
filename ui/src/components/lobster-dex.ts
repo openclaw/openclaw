@@ -8,13 +8,16 @@ import { getSafeLocalStorage } from "../local-storage.ts";
 
 const LOBSTERDEX_KEY = "openclaw.control.lobsterdex.v1";
 const FAMILIARITY_KEY = "openclaw.control.lobsterpet.familiarity.v1";
+const LOBSTERDEX_CHANGED_EVENT = "openclaw:lobsterdex-changed";
 
 type LobsterdexEntry = {
   firstSeenAt: number | null;
   name: string | null;
+  // When a shiny of this palette first sparkled by; null until one does.
+  shinySeenAt: number | null;
 };
 
-type PersistedDex = Record<string, { firstSeenAt?: number; name?: string }>;
+type PersistedDex = Record<string, { firstSeenAt?: number; name?: string; shinySeenAt?: number }>;
 
 function readDex(): Map<string, LobsterdexEntry> {
   try {
@@ -25,7 +28,7 @@ function readDex(): Map<string, LobsterdexEntry> {
       // v1 stored a bare palette-id array; carry ids over without memories.
       for (const value of parsed) {
         if (typeof value === "string" && value) {
-          entries.set(value, { firstSeenAt: null, name: null });
+          entries.set(value, { firstSeenAt: null, name: null, shinySeenAt: null });
         }
       }
       return entries;
@@ -38,6 +41,7 @@ function readDex(): Map<string, LobsterdexEntry> {
         entries.set(id, {
           firstSeenAt: typeof value?.firstSeenAt === "number" ? value.firstSeenAt : null,
           name: typeof value?.name === "string" && value.name ? value.name : null,
+          shinySeenAt: typeof value?.shinySeenAt === "number" ? value.shinySeenAt : null,
         });
       }
     }
@@ -53,9 +57,14 @@ function writeDex(entries: Map<string, LobsterdexEntry>): void {
     persisted[id] = {
       ...(entry.firstSeenAt !== null ? { firstSeenAt: entry.firstSeenAt } : {}),
       ...(entry.name !== null ? { name: entry.name } : {}),
+      ...(entry.shinySeenAt !== null ? { shinySeenAt: entry.shinySeenAt } : {}),
     };
   }
-  getSafeLocalStorage()?.setItem(LOBSTERDEX_KEY, JSON.stringify(persisted));
+  const storage = getSafeLocalStorage();
+  if (storage) {
+    storage.setItem(LOBSTERDEX_KEY, JSON.stringify(persisted));
+    window.dispatchEvent(new Event(LOBSTERDEX_CHANGED_EVENT));
+  }
 }
 
 export function getLobsterdex(): ReadonlySet<string> {
@@ -66,30 +75,50 @@ export function getLobsterdexEntries(): ReadonlyMap<string, LobsterdexEntry> {
   return readDex();
 }
 
-export function recordLobsterVisit(paletteId: string, details: { name?: string } = {}): void {
+// Invalidation only: callers reread the existing browser-local collection.
+export function subscribeLobsterdex(callback: () => void): () => void {
+  const onChange = () => callback();
+  const onStorage = (event: StorageEvent) => {
+    if (
+      event.storageArea === getSafeLocalStorage() &&
+      (event.key === LOBSTERDEX_KEY || event.key === null)
+    ) {
+      callback();
+    }
+  };
+  window.addEventListener(LOBSTERDEX_CHANGED_EVENT, onChange);
+  window.addEventListener("storage", onStorage);
+  return () => {
+    window.removeEventListener(LOBSTERDEX_CHANGED_EVENT, onChange);
+    window.removeEventListener("storage", onStorage);
+  };
+}
+
+export function recordLobsterVisit(
+  paletteId: string,
+  details: { name?: string; shiny?: boolean } = {},
+): void {
   try {
     const entries = readDex();
     const existing = entries.get(paletteId);
     if (existing) {
       // First-visitor memories are immutable; later visits only backfill
-      // fields the v1 schema never had.
-      if (existing.firstSeenAt !== null && existing.name !== null) {
+      // fields older schemas never had (and the first shiny sighting).
+      const shinyNews = details.shiny === true && existing.shinySeenAt === null;
+      if (existing.firstSeenAt !== null && existing.name !== null && !shinyNews) {
         return;
       }
-      entries.set(paletteId, {
-        firstSeenAt: existing.firstSeenAt ?? Date.now(),
-        name: existing.name ?? details.name ?? null,
-      });
-    } else {
-      entries.set(paletteId, { firstSeenAt: Date.now(), name: details.name ?? null });
     }
+    entries.set(paletteId, {
+      firstSeenAt: existing?.firstSeenAt ?? Date.now(),
+      name: existing?.name ?? details.name ?? null,
+      shinySeenAt: existing?.shinySeenAt ?? (details.shiny === true ? Date.now() : null),
+    });
     writeDex(entries);
   } catch {
     // best-effort — a full or blocked storage must not break visits
   }
 }
-
-// ---- Familiarity ----
 
 type LobsterFamiliarityTier = "shy" | "regular" | "friend";
 
@@ -148,8 +177,6 @@ export function getLobsterFamiliarity(): LobsterFamiliarity {
   return { tier, wary, visits, shoos };
 }
 
-// ---- Long memory ----
-
 // Milestone honorifics for the hover title, earned by lifetime visits across
 // all palettes. Highest earned title wins; below the first rung there is none.
 const HONORIFICS: Array<[number, string]> = [
@@ -159,12 +186,7 @@ const HONORIFICS: Array<[number, string]> = [
 ];
 
 export function lobsterHonorific(visits: number): string | null {
-  for (const [threshold, title] of HONORIFICS) {
-    if (visits >= threshold) {
-      return title;
-    }
-  }
-  return null;
+  return HONORIFICS.find(([threshold]) => visits >= threshold)?.[1] ?? null;
 }
 
 // True when `now` is the month/day anniversary of a palette's first recorded

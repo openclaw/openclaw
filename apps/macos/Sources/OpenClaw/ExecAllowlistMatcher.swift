@@ -2,11 +2,15 @@ import Foundation
 import JavaScriptCore
 
 enum ExecAllowlistMatcher {
+    private static let cwdBoundArgPatternPrefix = "sha256:cwd-argv:v1:"
+    private static let legacyArgPatternPrefix = "sha256:argv:"
+
     static func match(entries: [ExecAllowlistEntry], resolution: ExecCommandResolution?) -> ExecAllowlistEntry? {
         guard let resolution, !entries.isEmpty else { return nil }
         if let wildcard = entries.first(where: {
             $0.pattern.trimmingCharacters(in: .whitespacesAndNewlines) == "*" &&
-                ($0.argPattern?.isEmpty ?? true)
+                ($0.argPattern?.isEmpty ?? true) &&
+                $0.source != "allow-always"
         }) {
             return wildcard
         }
@@ -22,20 +26,27 @@ enum ExecAllowlistMatcher {
             if controlPattern.hasPrefix("=command:") || controlPattern.hasPrefix("=node-command:") {
                 continue
             }
-            switch ExecApprovalHelpers.validateAllowlistPattern(entry.pattern) {
-            case let .valid(pattern):
-                guard self.matchesExecutable(pattern: pattern, resolution: resolution) else { continue }
-                guard let argPattern = entry.argPattern, !argPattern.isEmpty else {
-                    if pathOnlyMatch == nil {
-                        pathOnlyMatch = entry
-                    }
+            guard !controlPattern.isEmpty,
+                  self.matchesExecutable(pattern: controlPattern, resolution: resolution)
+            else { continue }
+            guard let argPattern = entry.argPattern, !argPattern.isEmpty else {
+                // Old generated allow-always entries were path-only and could authorize
+                // changed argv after upgrade. Manual path-only entries have no source.
+                if entry.source == "allow-always" {
                     continue
                 }
-                if let argv = resolution.argv, matchesArgPattern(argPattern, argv: argv) {
-                    return entry
+                if pathOnlyMatch == nil {
+                    pathOnlyMatch = entry
                 }
-            case .invalid:
                 continue
+            }
+            if entry.source == "allow-always", !argPattern.hasPrefix(self.cwdBoundArgPatternPrefix) {
+                continue
+            }
+            if let argv = resolution.argv,
+               self.matchesArgPattern(argPattern, argv: argv, cwd: resolution.cwd)
+            {
+                return entry
             }
         }
         return pathOnlyMatch
@@ -88,7 +99,14 @@ enum ExecAllowlistMatcher {
     /// use NUL separators plus a trailing sentinel; hand-authored patterns use
     /// one space between parsed arguments. Redirect-shaped tokens stay literal
     /// because resolution does not retain enough shell syntax provenance.
-    private static func matchesArgPattern(_ argPattern: String, argv: [String]) -> Bool {
+    private static func matchesArgPattern(_ argPattern: String, argv: [String], cwd: String?) -> Bool {
+        if argPattern.hasPrefix(self.cwdBoundArgPatternPrefix) {
+            guard let cwd else { return false }
+            return argPattern == ExecCommandResolution.cwdBoundArgPattern(argv: argv, cwd: cwd)
+        }
+        if argPattern.hasPrefix(self.legacyArgPatternPrefix) {
+            return false
+        }
         let nul = "\0"
         let arguments = Array(argv.dropFirst())
         let usesNulSeparator = argPattern.contains(nul)

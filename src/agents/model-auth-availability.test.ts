@@ -1,141 +1,275 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type {
-  ProviderModelRouteCandidate,
-  ProviderModelRouteResolution,
-} from "../plugin-sdk/provider-model-types.js";
-import type { AuthProfileStore } from "./auth-profiles/types.js";
+import type { SecretRef } from "../config/types.secrets.js";
+import type { ProviderModelRouteCandidate } from "../plugin-sdk/provider-model-types.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { createApiKeyCredential } from "./auth-profiles/credential-fixtures.test-support.js";
+import { createModelAuthAvailabilityResolver } from "./model-auth-availability.js";
 import {
-  createModelAuthAvailabilityResolver,
-  type ModelAuthAvailabilityRef,
-} from "./model-auth-availability.js";
+  authStore,
+  dualRoutes,
+  evaluate,
+  platformRoute,
+  routeResolverFactory,
+  subscriptionRoute,
+} from "./model-auth-availability.test-support.js";
 import type { createOpenAIModelRoutesResolver } from "./openai-model-routes.js";
 
-const platformRoute = {
-  api: "openai-responses",
-  baseUrl: "https://api.openai.com/v1",
-  authRequirement: "api-key",
-  requestTransportOverrides: "none",
-  runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
-} satisfies ProviderModelRouteCandidate;
-
-const subscriptionRoute = {
-  api: "openai-chatgpt-responses",
-  baseUrl: "https://chatgpt.com/backend-api/codex",
-  authRequirement: "subscription",
-  requestTransportOverrides: "none",
-  runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
-} satisfies ProviderModelRouteCandidate;
-
-const dualRoutes = {
-  kind: "routes",
-  defaultRuntimeId: "codex",
-  routes: [platformRoute, subscriptionRoute],
-} satisfies ProviderModelRouteResolution;
-
-function routeResolverFactory(resolution: ProviderModelRouteResolution | null) {
-  return (() => () => resolution) as typeof createOpenAIModelRoutesResolver;
-}
-
-function authStore(
-  profiles: Record<string, unknown> = {},
-  order?: AuthProfileStore["order"],
-): AuthProfileStore {
+function openAiOAuthProfile() {
   return {
-    version: 1,
-    profiles: profiles as AuthProfileStore["profiles"],
-    ...(order ? { order } : {}),
+    type: "oauth" as const,
+    provider: "openai",
+    access: "oauth-access",
+    refresh: "oauth-refresh",
+    expires: Date.now() + 60_000,
   };
 }
 
-function evaluate(params: {
-  cfg?: OpenClawConfig | Record<string, unknown>;
-  env?: NodeJS.ProcessEnv;
-  ref?: ModelAuthAvailabilityRef;
-  resolution?: ProviderModelRouteResolution | null;
-  store?: AuthProfileStore;
-  syntheticAuthProviderRefs?: readonly string[];
-}) {
-  return createModelAuthAvailabilityResolver({
-    cfg: (params.cfg ?? {}) as OpenClawConfig,
-    authStore: params.store ?? authStore(),
-    env: params.env ?? {},
-    routeResolverFactory: routeResolverFactory(params.resolution ?? dualRoutes),
-    syntheticAuthProviderRefs: params.syntheticAuthProviderRefs,
-  }).evaluateModelAuth("openai", params.ref);
-}
-
 describe("createModelAuthAvailabilityResolver", () => {
-  it.each([
-    {
-      label: "Platform API key",
-      profileId: "openai:platform",
-      profile: {
-        type: "api_key" as const,
-        provider: "openai",
-        key: "platform-key",
-      },
-      selectedRoute: platformRoute,
-      selectedAuthMode: "api_key",
-    },
-    {
-      label: "ChatGPT OAuth",
-      profileId: "openai:chatgpt",
-      profile: {
-        type: "oauth" as const,
-        provider: "openai",
-        access: "oauth-access",
-        refresh: "oauth-refresh",
-        expires: Date.now() + 60_000,
-      },
-      selectedRoute: subscriptionRoute,
-      selectedAuthMode: "oauth",
-    },
-  ])("selects a ready $label route", ({ profileId, profile, selectedAuthMode, selectedRoute }) => {
-    expect(evaluate({ store: authStore({ [profileId]: profile }) })).toMatchObject({
-      availability: true,
-      evidence: "profile",
-      selectedAuthMode,
-      selectedProfileId: profileId,
-      selectedRoute,
+  it("canonicalizes prepared runtime auth through provider aliases", () => {
+    const metadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "external-cloud",
+          origin: "global",
+          providerAuthAliases: { "cloud-alias": "external-cloud" },
+        },
+      ],
     });
+    const resolver = createModelAuthAvailabilityResolver({
+      cfg: {},
+      authStore: authStore(),
+      env: {},
+      metadataSnapshot,
+      preparedRuntimeAuthModes: { "external-cloud": "api_key" },
+    });
+
+    expect(resolver.evaluateModelAuth("cloud-alias")).toMatchObject({
+      availability: true,
+      evidence: "runtime",
+      routeResolution: null,
+      selectedAuthMode: "api_key",
+    });
+    const syntheticResolver = createModelAuthAvailabilityResolver({
+      cfg: {},
+      authStore: authStore(),
+      env: {},
+      metadataSnapshot,
+      syntheticAuthProviderRefs: ["cloud-alias"],
+    });
+    expect(syntheticResolver.evaluateModelAuth("cloud-alias")).toEqual({
+      availability: undefined,
+      evidence: "synthetic",
+      routeResolution: null,
+    });
+    expect(syntheticResolver.evaluateModelAuth("external-cloud").unavailableReason).toBe(
+      "missing-auth",
+    );
   });
 
-  it("keeps a selected profile with missing credential material unavailable", () => {
+  it("keeps prepared native-runtime authentication scoped to its exact owner", () => {
+    const metadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "anthropic",
+          origin: "bundled",
+          providerAuthAliases: { "claude-cli": "anthropic" },
+        },
+      ],
+    });
+    const resolver = createModelAuthAvailabilityResolver({
+      cfg: {},
+      authStore: authStore(),
+      env: {},
+      metadataSnapshot,
+      preparedRuntimeAuthModes: { "claude-cli": "api_key" },
+    });
+
+    expect(resolver.evaluateModelAuth("claude-cli")).toMatchObject({
+      availability: true,
+      evidence: "runtime",
+      selectedAuthMode: "api_key",
+    });
+    expect(resolver.evaluateModelAuth("anthropic").availability).not.toBe(true);
+  });
+
+  it("keeps configured local providers independent from native-auth probe completion", () => {
+    const resolver = createModelAuthAvailabilityResolver({
+      cfg: {
+        models: {
+          providers: {
+            "local-openai": {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:8080/v1",
+              models: [],
+            },
+          },
+        },
+      },
+      authStore: authStore(),
+      env: {},
+      preparedSyntheticAuthComplete: true,
+    });
+
+    const evaluation = resolver.evaluateModelAuth("local-openai");
+    expect(evaluation).toMatchObject({ availability: undefined });
+  });
+
+  it.each([
+    { mode: "api_key" as const, selectedRoute: platformRoute },
+    { mode: "oauth" as const, selectedRoute: subscriptionRoute },
+  ])(
+    "uses prepared runtime $mode auth when the profile snapshot is empty",
+    ({ mode, selectedRoute }) => {
+      expect(evaluate({ preparedRuntimeAuthModes: { openai: mode } })).toMatchObject({
+        availability: true,
+        evidence: "runtime",
+        selectedAuthMode: mode,
+        selectedRoute,
+      });
+    },
+  );
+
+  it.each([
+    ["gpt-5.4", "gpt-5.5"],
+    ["Model", "model"],
+    ["model", "Model"],
+  ])(
+    "keeps successful harness auth scoped to the exact model route %s",
+    (modelId, otherModelId) => {
+      const materialization = {
+        provider: "openai",
+        modelId,
+        modelApi: "openai-chatgpt-responses",
+        modelBaseUrl: "https://chatgpt.com/backend-api/codex",
+        requestTransportOverrides: "none",
+        authMode: "oauth",
+        runtimeOwnerId: "codex",
+      } as const;
+      const store = authStore({
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+        },
+      });
+
+      expect(
+        evaluate({
+          store,
+          ref: { modelId },
+          preparedRuntimeAuthMaterializations: [materialization],
+        }),
+      ).toMatchObject({
+        availability: true,
+        evidence: "runtime",
+        selectedRoute: subscriptionRoute,
+      });
+      expect(
+        evaluate({
+          store,
+          ref: { modelId: otherModelId },
+          preparedRuntimeAuthMaterializations: [materialization],
+        }).availability,
+      ).not.toBe(true);
+      expect(
+        evaluate({
+          cfg: {
+            models: {
+              providers: {
+                openai: {
+                  auth: "api-key",
+                  apiKey: "configured-platform-key",
+                  baseUrl: "https://api.openai.com/v1",
+                  models: [],
+                },
+              },
+            },
+          },
+          store,
+          ref: { modelId },
+          preparedRuntimeAuthMaterializations: [materialization],
+        }),
+      ).toMatchObject({
+        availability: true,
+        evidence: "provider-config",
+        selectedRoute: platformRoute,
+      });
+    },
+  );
+
+  it.each([
+    { label: "matching", authProfileId: "openai:default", availability: true },
+    { label: "omitted", authProfileId: "openai:other", availability: false },
+    { label: "unscoped", authProfileId: undefined, availability: false },
+  ])(
+    "uses $label successful harness auth only when explicit order admits its profile",
+    ({ authProfileId, availability }) => {
+      const keyRef = { source: "file" as const, provider: "vault", id: "value" };
+      const store = authStore({
+        "openai:default": { type: "api_key", provider: "openai", keyRef },
+        "openai:other": { type: "api_key", provider: "openai", keyRef },
+      });
+      const materialization = {
+        provider: "openai",
+        modelId: "gpt-5.4",
+        modelApi: "openai-responses",
+        modelBaseUrl: "https://api.openai.com/v1",
+        requestTransportOverrides: "none",
+        authMode: "api-key",
+        runtimeOwnerId: "codex",
+        ...(authProfileId ? { authProfileId } : {}),
+      } as const;
+
+      expect(
+        evaluate({
+          cfg: { auth: { order: { openai: ["openai:default"] } } },
+          store,
+          ref: { modelId: "gpt-5.4" },
+          preparedRuntimeAuthMaterializations: [materialization],
+        }),
+      ).toMatchObject({
+        availability,
+        selectedProfileId: "openai:default",
+        selectedRoute: platformRoute,
+      });
+    },
+  );
+
+  it.each([
+    { label: "resolved", key: "runtime-key", availability: true },
+    { label: "unresolved", key: undefined, availability: undefined },
+  ])("uses an exact $label prepared SecretRef profile", ({ key, availability }) => {
+    const keyRef = { source: "file" as const, provider: "vault", id: "value" };
+    const persisted = authStore({
+      "openai:default": { type: "api_key", provider: "openai", keyRef },
+    });
+    const preparedRuntimeAuthStore = authStore({
+      "openai:default": {
+        type: "api_key",
+        provider: "openai",
+        keyRef,
+        ...(key ? { key } : {}),
+      },
+    });
+
     expect(
       evaluate({
-        store: authStore({
-          "openai:missing": { type: "api_key", provider: "openai", key: "" },
-        }),
+        cfg: {
+          secrets: {
+            providers: {
+              vault: { source: "file", path: "/tmp/test-secret", mode: "singleValue" },
+            },
+          },
+        },
+        store: persisted,
+        preparedRuntimeAuthStore,
       }),
     ).toMatchObject({
-      availability: false,
+      availability,
       evidence: "profile",
-      selectedProfileId: "openai:missing",
+      selectedProfileId: "openai:default",
       selectedRoute: platformRoute,
-    });
-  });
-
-  it("preserves the known physical route when an automatic tier is all cooldown", () => {
-    const store = authStore({
-      "openai:chatgpt": {
-        type: "oauth",
-        provider: "openai",
-        access: "oauth-access",
-        refresh: "oauth-refresh",
-        expires: Date.now() + 60_000,
-      },
-    });
-    store.usageStats = {
-      "openai:chatgpt": { cooldownUntil: Date.now() + 60_000 },
-    };
-
-    expect(evaluate({ store })).toMatchObject({
-      availability: false,
-      evidence: "profile",
-      selectedAuthMode: "oauth",
-      selectedProfileId: "openai:chatgpt",
-      selectedRoute: subscriptionRoute,
     });
   });
 
@@ -161,11 +295,7 @@ describe("createModelAuthAvailabilityResolver", () => {
   it("projects route-independent auth-order failures for indeterminate routes", () => {
     const resolution = { kind: "indeterminate" as const, defaultRuntimeId: "codex" };
     const cooldownStore = authStore({
-      "openai:cooldown": {
-        type: "api_key",
-        provider: "openai",
-        key: "platform-key",
-      },
+      "openai:cooldown": createApiKeyCredential("openai", "platform-key"),
     });
     cooldownStore.usageStats = {
       "openai:cooldown": { cooldownUntil: Date.now() + 60_000 },
@@ -192,13 +322,7 @@ describe("createModelAuthAvailabilityResolver", () => {
     const result = evaluate({
       resolution: { kind: "routes", defaultRuntimeId: "openclaw", routes: [customRoute] },
       store: authStore({
-        "openai:chatgpt": {
-          type: "oauth",
-          provider: "openai",
-          access: "oauth-access",
-          refresh: "oauth-refresh",
-          expires: Date.now() + 60_000,
-        },
+        "openai:chatgpt": openAiOAuthProfile(),
       }),
     });
 
@@ -214,13 +338,7 @@ describe("createModelAuthAvailabilityResolver", () => {
     },
     {
       auth: "api-key" as const,
-      profile: {
-        type: "oauth" as const,
-        provider: "openai",
-        access: "oauth-access",
-        refresh: "oauth-refresh",
-        expires: Date.now() + 60_000,
-      },
+      profile: openAiOAuthProfile(),
       route: platformRoute,
     },
   ])(
@@ -233,45 +351,14 @@ describe("createModelAuthAvailabilityResolver", () => {
         store: authStore({ "openai:wrong-route": profile }),
       });
 
-      expect(result).toMatchObject({ availability: false, selectedRoute: route });
+      expect(result).toMatchObject({
+        availability: false,
+        unavailableReason: "auth-failed",
+        selectedRoute: route,
+      });
       expect(result.selectedProfileId).toBeUndefined();
     },
   );
-
-  it("uses explicit direct provider auth ahead of automatic profiles", () => {
-    const cfg = {
-      models: {
-        providers: {
-          openai: {
-            auth: "api-key",
-            apiKey: "configured-platform-key",
-            baseUrl: platformRoute.baseUrl,
-            models: [],
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(
-      evaluate({
-        cfg,
-        store: authStore({
-          "openai:chatgpt": {
-            type: "oauth",
-            provider: "openai",
-            access: "oauth-access",
-            refresh: "oauth-refresh",
-            expires: Date.now() + 60_000,
-          },
-        }),
-      }),
-    ).toMatchObject({
-      availability: true,
-      evidence: "provider-config",
-      selectedAuthMode: "api-key",
-      selectedRoute: platformRoute,
-    });
-  });
 
   it.each([
     { provider: "anthropic", mode: "api_key" as const },
@@ -308,59 +395,6 @@ describe("createModelAuthAvailabilityResolver", () => {
     });
   });
 
-  it("keeps an automatic Platform profile ahead of a non-explicit literal fallback", () => {
-    const cfg = {
-      models: {
-        providers: {
-          openai: {
-            apiKey: "configured-platform-key",
-            baseUrl: platformRoute.baseUrl,
-            models: [],
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(
-      evaluate({
-        cfg,
-        store: authStore({
-          "openai:platform": {
-            type: "api_key",
-            provider: "openai",
-            key: "profile-key",
-          },
-        }),
-      }),
-    ).toMatchObject({
-      availability: true,
-      evidence: "profile",
-      selectedProfileId: "openai:platform",
-      selectedRoute: platformRoute,
-    });
-  });
-
-  it("uses explicit OAuth mode for literal provider material", () => {
-    const cfg = {
-      models: {
-        providers: {
-          openai: {
-            auth: "oauth",
-            apiKey: "configured-oauth-token",
-            models: [],
-          },
-        },
-      },
-    };
-
-    expect(evaluate({ cfg })).toMatchObject({
-      availability: true,
-      evidence: "provider-config",
-      selectedAuthMode: "oauth",
-      selectedRoute: subscriptionRoute,
-    });
-  });
-
   it("uses configured OAuth direct material after an unavailable API profile", () => {
     const cfg = {
       models: {
@@ -393,17 +427,11 @@ describe("createModelAuthAvailabilityResolver", () => {
     });
   });
 
-  it("treats preferred and locked profiles as distinct source-order facts", () => {
+  it("treats automatic preferences and user pins as distinct source-order facts", () => {
     const store = authStore(
       {
         "openai:platform": { type: "api_key", provider: "openai", key: "platform-key" },
-        "openai:chatgpt": {
-          type: "oauth",
-          provider: "openai",
-          access: "oauth-access",
-          refresh: "oauth-refresh",
-          expires: Date.now() + 60_000,
-        },
+        "openai:chatgpt": openAiOAuthProfile(),
       },
       { openai: ["openai:platform", "openai:chatgpt"] },
     );
@@ -417,44 +445,11 @@ describe("createModelAuthAvailabilityResolver", () => {
         store,
         ref: {
           preferredProfileId: "openai:chatgpt",
-          lockedProfileId: "openai:platform",
+          pinnedProfileId: "openai:platform",
         },
       }),
     ).toMatchObject({
       selectedProfileId: "openai:platform",
-      selectedRoute: platformRoute,
-    });
-  });
-
-  it("falls through an unavailable preferred profile to the configured order", () => {
-    const store = authStore({
-      "openai:platform": { type: "api_key", provider: "openai", key: "platform-key" },
-      "openai:expired": {
-        type: "oauth",
-        provider: "openai",
-        access: "expired-access",
-        expires: Date.now() - 60_000,
-      },
-    });
-
-    expect(
-      evaluate({
-        cfg: { auth: { order: { openai: ["openai:platform", "openai:expired"] } } },
-        store,
-        ref: { preferredProfileId: "openai:expired" },
-      }),
-    ).toMatchObject({
-      availability: true,
-      selectedProfileId: "openai:platform",
-      selectedRoute: platformRoute,
-    });
-  });
-
-  it("classifies direct environment auth as Platform API-key evidence", () => {
-    expect(evaluate({ env: { OPENAI_API_KEY: "environment-key" } })).toMatchObject({
-      availability: true,
-      evidence: "environment",
-      selectedAuthMode: "api-key",
       selectedRoute: platformRoute,
     });
   });
@@ -499,14 +494,18 @@ describe("createModelAuthAvailabilityResolver", () => {
       route: subscriptionRoute,
       mode: "oauth",
     },
-  ])("selects $label", ({ cfg, env, mode, profile, profileId, route }) => {
-    expect(evaluate({ cfg, env, store: authStore({ [profileId]: profile }) })).toMatchObject({
-      availability: true,
-      evidence: "environment",
-      selectedAuthMode: mode,
-      selectedRoute: route,
-    });
-  });
+    // An environment credential named nowhere in config is not authorized to
+    // stand in for a declared profile, including a declared profile that turned
+    // out to be unusable. Availability mirrors the runtime rule here so status
+    // does not advertise a credential the run would refuse to use.
+  ])(
+    "reports $label unavailable rather than substituting an ambient credential",
+    ({ cfg, env, profile, profileId }) => {
+      expect(evaluate({ cfg, env, store: authStore({ [profileId]: profile }) })).toMatchObject({
+        availability: false,
+      });
+    },
+  );
 
   it.each([
     { env: { OPENAI_API_KEY: "resolved-key" }, availability: true },
@@ -558,6 +557,62 @@ describe("createModelAuthAvailabilityResolver", () => {
     });
   });
 
+  it("does not grant refresh authority to an unsupported external CLI id", () => {
+    const resolver = createModelAuthAvailabilityResolver({
+      cfg: {} as OpenClawConfig,
+      authStore: authStore({
+        "acme:cli": {
+          type: "oauth",
+          provider: "acme-cli",
+          access: "expired-access",
+          refresh: "stored-refresh",
+          expires: Date.now() - 60_000,
+        },
+      }),
+      env: {},
+      externalCliProviderIds: ["acme-cli"],
+      routeResolverFactory: routeResolverFactory(null),
+    });
+
+    expect(resolver.resolveProviderAuthAvailability("acme-cli")).toBeUndefined();
+  });
+
+  it("does not grant CLI refresh authority to an unowned sibling profile", () => {
+    const cliProfileId = "anthropic:claude-cli";
+    const manualProfileId = "anthropic:manual";
+    const store = authStore({
+      [cliProfileId]: {
+        type: "oauth",
+        provider: "claude-cli",
+        access: "expired-cli-access",
+        refresh: "cli-owned-refresh",
+        expires: Date.now() - 60_000,
+      },
+      [manualProfileId]: {
+        type: "oauth",
+        provider: "claude-cli",
+        access: "expired-manual-access",
+        refresh: "manual-refresh",
+        expires: Date.now() - 60_000,
+      },
+    });
+    const resolver = createModelAuthAvailabilityResolver({
+      cfg: { auth: { order: { "claude-cli": [manualProfileId] } } } as OpenClawConfig,
+      authStore: store,
+      preparedRuntimeAuthStore: Object.assign({}, store, {
+        runtimeExternalCliProfileIds: [cliProfileId],
+      }),
+      env: {},
+      routeResolverFactory: routeResolverFactory(null),
+    });
+
+    expect(
+      resolver.resolveProviderAuthAvailability("claude-cli", {
+        requiredProfileId: manualProfileId,
+      }),
+    ).toBeUndefined();
+  });
+
   it("does not borrow usable auth from a later sibling route after an unresolved ordered profile", () => {
     const result = evaluate({
       cfg: { auth: { order: { openai: ["openai:unknown", "openai:chatgpt"] } } },
@@ -567,13 +622,7 @@ describe("createModelAuthAvailabilityResolver", () => {
           provider: "openai",
           keyRef: { source: "env", provider: "default", id: "MISSING_OPENAI_KEY" },
         },
-        "openai:chatgpt": {
-          type: "oauth",
-          provider: "openai",
-          access: "oauth-access",
-          refresh: "oauth-refresh",
-          expires: Date.now() + 60_000,
-        },
+        "openai:chatgpt": openAiOAuthProfile(),
       }),
     });
 
@@ -591,13 +640,7 @@ describe("createModelAuthAvailabilityResolver", () => {
         cfg: { auth: { order: { openai: ["openai:invalid", "openai:chatgpt"] } } },
         store: authStore({
           "openai:invalid": { type: "api_key", provider: "openai", key: "" },
-          "openai:chatgpt": {
-            type: "oauth",
-            provider: "openai",
-            access: "oauth-access",
-            refresh: "oauth-refresh",
-            expires: Date.now() + 60_000,
-          },
+          "openai:chatgpt": openAiOAuthProfile(),
         }),
       }),
     ).toMatchObject({
@@ -607,54 +650,13 @@ describe("createModelAuthAvailabilityResolver", () => {
     });
   });
 
-  it("passes one physical route group to auth selection for an unknown model", () => {
-    const resolveRoutes = vi.fn(() => dualRoutes);
-    const resolver = createModelAuthAvailabilityResolver({
-      cfg: { auth: { order: { openai: ["openai:chatgpt", "openai:platform"] } } },
-      authStore: authStore({
-        "openai:platform": { type: "api_key", provider: "openai", key: "platform-key" },
-        "openai:chatgpt": {
-          type: "oauth",
-          provider: "openai",
-          access: "oauth-access",
-          refresh: "oauth-refresh",
-          expires: Date.now() + 60_000,
-        },
-      }),
-      env: {},
-      routeResolverFactory: (() => resolveRoutes) as typeof createOpenAIModelRoutesResolver,
-    });
-    const observedRoutes = [
-      { api: "openai-chatgpt-responses" as const, baseUrl: subscriptionRoute.baseUrl },
-      { api: "openai-responses" as const, baseUrl: platformRoute.baseUrl },
-    ];
-
+  it("keeps one unconfigured Codex route indeterminate until native account validation", () => {
     expect(
-      resolver.evaluateModelAuth("openai", {
-        modelId: "gpt-future-observed",
-        observedRoutes,
+      evaluate({
+        resolution: { ...dualRoutes, routes: [subscriptionRoute] },
+        syntheticAuthProviderRefs: ["codex"],
       }),
-    ).toMatchObject({
-      availability: true,
-      selectedProfileId: "openai:chatgpt",
-      selectedRoute: subscriptionRoute,
-    });
-    expect(resolveRoutes).toHaveBeenCalledOnce();
-    expect(resolveRoutes).toHaveBeenCalledWith({
-      modelId: "gpt-future-observed",
-      observedRoutes,
-    });
-  });
-
-  it("keeps Codex synthetic auth indeterminate until the native account is read", () => {
-    const result = evaluate({ syntheticAuthProviderRefs: ["codex"] });
-    expect(result).toMatchObject({
-      availability: undefined,
-      evidence: "synthetic",
-      routeResolution: dualRoutes,
-    });
-    expect(result).not.toHaveProperty("selectedAuthMode");
-    expect(result).not.toHaveProperty("selectedRoute");
+    ).toMatchObject({ availability: undefined, evidence: "synthetic" });
   });
 
   it("does not let invalid automatic profile evidence block synthetic Codex ownership", () => {
@@ -724,33 +726,87 @@ describe("createModelAuthAvailabilityResolver", () => {
     });
   });
 
-  it("keeps a non-OpenAI provider SecretRef unresolved without reading it", () => {
-    const result = createModelAuthAvailabilityResolver({
-      cfg: {
-        models: {
-          providers: {
-            anthropic: {
-              api: "anthropic-messages",
-              apiKey: { source: "env", provider: "default", id: "ANTHROPIC_API_KEY" },
-              baseUrl: "https://api.anthropic.com",
-              models: [],
+  it.each<{
+    name: string;
+    apiKey: SecretRef;
+    secrets: OpenClawConfig["secrets"];
+  }>([
+    {
+      name: "env",
+      apiKey: { source: "env", provider: "default", id: "ANTHROPIC_API_KEY" },
+      secrets: { providers: { default: { source: "env" } } },
+    },
+    {
+      name: "store default shadowing file",
+      apiKey: { source: "store", provider: "shared", id: "ANTHROPIC_API_KEY" },
+      secrets: {
+        defaults: { store: "shared" },
+        providers: { shared: { source: "file", path: "/tmp/unused-store-alias-fixture.json" } },
+      },
+    },
+  ])(
+    "keeps a non-OpenAI provider $name SecretRef unresolved without reading it",
+    ({ apiKey, secrets }) => {
+      const result = createModelAuthAvailabilityResolver({
+        cfg: {
+          models: {
+            providers: {
+              anthropic: {
+                api: "anthropic-messages",
+                apiKey,
+                baseUrl: "https://api.anthropic.com",
+                models: [],
+              },
             },
           },
+          secrets,
         },
-        secrets: { providers: { default: { source: "env" } } },
-      },
-      authStore: authStore(),
-      env: {},
-    }).evaluateModelAuth("anthropic", {
-      modelId: "claude-sonnet-4-6",
-      api: "anthropic-messages",
-    });
+        authStore: authStore(),
+        env: {},
+      }).evaluateModelAuth("anthropic", {
+        modelId: "claude-sonnet-4-6",
+        api: "anthropic-messages",
+      });
 
-    expect(result).toMatchObject({
-      availability: undefined,
-      evidence: "provider-config",
-      routeResolution: null,
-      selectedAuthMode: "api-key",
+      expect(result).toMatchObject({
+        availability: undefined,
+        evidence: "provider-config",
+        routeResolution: null,
+        selectedAuthMode: "api-key",
+      });
+      expect(result.unavailableReason).toBeUndefined();
+    },
+  );
+  it("passes one physical route group to auth selection for an unknown model", () => {
+    const resolveRoutes = vi.fn(() => dualRoutes);
+    const resolver = createModelAuthAvailabilityResolver({
+      cfg: { auth: { order: { openai: ["openai:chatgpt", "openai:platform"] } } },
+      authStore: authStore({
+        "openai:platform": { type: "api_key", provider: "openai", key: "platform-key" },
+        "openai:chatgpt": openAiOAuthProfile(),
+      }),
+      env: {},
+      routeResolverFactory: (() => resolveRoutes) as typeof createOpenAIModelRoutesResolver,
+    });
+    const observedRoutes = [
+      { api: "openai-chatgpt-responses" as const, baseUrl: subscriptionRoute.baseUrl },
+      { api: "openai-responses" as const, baseUrl: platformRoute.baseUrl },
+    ];
+
+    expect(
+      resolver.evaluateModelAuth("openai", {
+        modelId: "gpt-future-observed",
+        observedRoutes,
+      }),
+    ).toMatchObject({
+      availability: true,
+      selectedProfileId: "openai:chatgpt",
+      selectedRoute: subscriptionRoute,
+    });
+    expect(resolveRoutes).toHaveBeenCalledOnce();
+    expect(resolveRoutes).toHaveBeenCalledWith({
+      modelId: "gpt-future-observed",
+      observedRoutes,
     });
   });
 });

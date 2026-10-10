@@ -1,0 +1,70 @@
+import { getGatewayRestartDrainSignal } from "../../../process/gateway-work-admission.js";
+import { getAsyncWorkSignal } from "../../../shared/async-work-scope.js";
+import {
+  registerOpenClawStateDatabaseAsyncResource,
+  registerOpenClawStateDatabaseLifecycleListener,
+} from "../../../state/openclaw-state-db-cache.js";
+import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
+import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
+
+/** Borrow cancellation's committed-state wake and the enclosing lifecycle's abort signals. */
+export async function waitForQueuedSubagentClaim(params: {
+  assertCurrent: () => void;
+  admission: OpenClawStateWorkerContext["admission"];
+  pending: () => boolean;
+}): Promise<void> {
+  const stops: Array<() => void> = [];
+  const signals = [getAsyncWorkSignal(), getGatewayRestartDrainSignal()].filter(
+    (signal): signal is AbortSignal => signal !== undefined,
+  );
+  try {
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const check = () => {
+        if (settled) {
+          return;
+        }
+        try {
+          for (const signal of signals) {
+            signal.throwIfAborted();
+          }
+          params.assertCurrent();
+          if (!params.pending()) {
+            settled = true;
+            resolve();
+          }
+        } catch (error) {
+          settled = true;
+          reject(
+            error instanceof Error
+              ? error
+              : new Error("Queued registration claim wait failed", { cause: error }),
+          );
+        }
+      };
+      stops.push(
+        registerOpenClawStateDatabaseAsyncResource({
+          close: async (identity) => {
+            if (!settled && (!identity || identity.key === params.admission.identity.key)) {
+              settled = true;
+              reject(new Error("Queued registration registry was retired during claim wait"));
+            }
+          },
+        }),
+      );
+      stops.push(subscribeSubagentRunChanges("persistence", check));
+      // Database subscriptions may synchronously report existing handles. Cleanup
+      // runs after subscription setup so that immediate settlement cannot leak one.
+      stops.push(registerOpenClawStateDatabaseLifecycleListener(check));
+      for (const signal of signals) {
+        signal.addEventListener("abort", check, { once: true });
+        stops.push(() => signal.removeEventListener("abort", check));
+      }
+      check();
+    });
+  } finally {
+    for (const stop of stops) {
+      stop();
+    }
+  }
+}

@@ -6,8 +6,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { safeRealpathSync } from "../infra/boundary-path.js";
 import type { ExecHost } from "../infra/exec-approvals.js";
-import { safeStatSync } from "../infra/path-guards.js";
+import { isPathInside, safeStatSync } from "../infra/path-guards.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 
@@ -17,34 +18,26 @@ export type ExecWorkdirResolution =
   | { kind: "node"; remoteCwd?: string }
   | { kind: "unavailable"; requestedCwd: string };
 
-type NormalizedWorkdirInput =
-  | { kind: "omitted" }
-  | { kind: "blank"; raw: string }
-  | { kind: "specified"; value: string };
-
 type SandboxWorkdir = {
   hostCwd: string;
   containerCwd: string;
   scriptPreflightCwd: string | null;
 };
 
-type BackendHostWorkdirCandidate = {
-  hostPath: string;
+type BackendHostWorkdirCandidate = ContainerHostWorkdirMapping & {
   failIfInvalid: boolean;
 };
 
-type ExistingHostWorkspacePathResult =
+type ContainerHostWorkdirMapping = {
+  hostPath: string;
+  hostRoot: string;
+  containerRoot: string;
+};
+
+type ExistingHostPathResult =
   | { kind: "available"; workdir: SandboxWorkdir }
   | { kind: "missing"; relative: string }
   | { kind: "invalid" };
-
-function normalizeExplicitWorkdirInput(workdir: string | undefined): NormalizedWorkdirInput {
-  if (workdir === undefined) {
-    return { kind: "omitted" };
-  }
-  const value = normalizeOptionalString(workdir);
-  return value ? { kind: "specified", value } : { kind: "blank", raw: workdir };
-}
 
 function unavailable(requestedCwd: string): ExecWorkdirResolution {
   return { kind: "unavailable", requestedCwd };
@@ -52,14 +45,7 @@ function unavailable(requestedCwd: string): ExecWorkdirResolution {
 
 function resolveExistingHostWorkdir(workdir: string): string | null {
   const stats = safeStatSync(workdir);
-  return stats?.isDirectory() ? workdir : null;
-}
-
-function isHostPathInsideRoot(params: { root: string; candidate: string }): boolean {
-  const root = path.resolve(params.root);
-  const candidate = path.resolve(params.candidate);
-  const relative = path.relative(root, candidate);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  return stats?.isDirectory() ? (safeRealpathSync(workdir) ?? path.resolve(workdir)) : null;
 }
 
 function safeCurrentCwd(): string | null {
@@ -73,23 +59,44 @@ function safeCurrentCwd(): string | null {
 function mapContainerWorkdirToHost(params: {
   workdir: string;
   sandbox: BashSandboxConfig;
-}): string | undefined {
+  includeReadOnlySkillMounts?: boolean;
+  includePrimaryWorkspace?: boolean;
+}): ContainerHostWorkdirMapping | undefined {
   const workdir = normalizeContainerPath(params.workdir);
-  const containerRoot = normalizeContainerPath(params.sandbox.containerWorkdir);
-  if (containerRoot === ".") {
-    return undefined;
+  const mappings = [
+    ...(params.includeReadOnlySkillMounts
+      ? (params.sandbox.readOnlyWorkspaceSkillMounts ?? []).map((mount) => ({
+          hostRoot: path.resolve(mount.hostPath),
+          containerRoot: normalizeContainerPath(mount.containerPath),
+        }))
+      : []),
+    ...(params.includePrimaryWorkspace === false
+      ? []
+      : [
+          {
+            hostRoot: path.resolve(params.sandbox.workspaceDir),
+            containerRoot: normalizeContainerPath(params.sandbox.containerWorkdir),
+          },
+        ]),
+  ]
+    .filter((mapping) => mapping.containerRoot !== ".")
+    .toSorted((left, right) => right.containerRoot.length - left.containerRoot.length);
+
+  for (const mapping of mappings) {
+    const relative = mapContainerWorkdirRelativeToRoot({
+      workdir,
+      root: mapping.containerRoot,
+    });
+    if (relative === null) {
+      continue;
+    }
+    return {
+      hostPath: path.resolve(mapping.hostRoot, ...relative),
+      hostRoot: mapping.hostRoot,
+      containerRoot: mapping.containerRoot,
+    };
   }
-  if (workdir === containerRoot) {
-    return path.resolve(params.sandbox.workspaceDir);
-  }
-  if (!workdir.startsWith(`${containerRoot}/`)) {
-    return undefined;
-  }
-  const rel = workdir
-    .slice(containerRoot.length + 1)
-    .split("/")
-    .filter(Boolean);
-  return path.resolve(params.sandbox.workspaceDir, ...rel);
+  return undefined;
 }
 
 function normalizeContainerPath(input: string): string {
@@ -99,6 +106,25 @@ function normalizeContainerPath(input: string): string {
   }
   const posixPath = path.posix.normalize(normalized);
   return posixPath === "/" ? posixPath : posixPath.replace(/\/+$/g, "");
+}
+
+function mapContainerWorkdirRelativeToRoot(params: {
+  workdir: string;
+  root: string;
+}): string[] | null {
+  if (params.workdir === params.root) {
+    return [];
+  }
+  if (params.root === "/") {
+    return path.posix.isAbsolute(params.workdir) ? params.workdir.split("/").filter(Boolean) : null;
+  }
+  if (!params.workdir.startsWith(`${params.root}/`)) {
+    return null;
+  }
+  return params.workdir
+    .slice(params.root.length + 1)
+    .split("/")
+    .filter(Boolean);
 }
 
 function joinContainerWorkdir(containerWorkdir: string, relative: string): string {
@@ -122,19 +148,13 @@ function isContainerWorkdirInsideRoot(params: { root: string; workdir: string })
 }
 
 function resolveBackendWorkdirRoots(sandbox: BashSandboxConfig): string[] {
-  const roots: string[] = [];
-  const addRoot = (root: string | undefined) => {
-    const normalized = normalizeContainerPath(root ?? "");
-    if (normalized === "." || !path.posix.isAbsolute(normalized) || roots.includes(normalized)) {
-      return;
-    }
-    roots.push(normalized);
-  };
-  addRoot(sandbox.containerWorkdir);
-  for (const root of sandbox.workdirRoots ?? []) {
-    addRoot(root);
-  }
-  return roots;
+  return [
+    ...new Set(
+      [sandbox.containerWorkdir, ...(sandbox.workdirRoots ?? [])]
+        .map((root) => normalizeContainerPath(root ?? ""))
+        .filter((root) => path.posix.isAbsolute(root)),
+    ),
+  ];
 }
 
 function resolveBackendContainerWorkdir(params: {
@@ -155,36 +175,34 @@ function resolveBackendContainerWorkdir(params: {
   return joinContainerWorkdir(containerRoot, requested === "." ? "" : requested);
 }
 
-async function mapExistingHostWorkspacePath(params: {
+async function mapExistingHostPath(params: {
   hostPath: string;
-  sandbox: BashSandboxConfig;
-}): Promise<ExistingHostWorkspacePathResult> {
+  hostRoot: string;
+  containerRoot: string;
+}): Promise<ExistingHostPathResult> {
   let resolved: Awaited<ReturnType<typeof assertSandboxPath>>;
   try {
     resolved = await assertSandboxPath({
       filePath: params.hostPath,
-      cwd: params.sandbox.workspaceDir,
-      root: params.sandbox.workspaceDir,
+      cwd: params.hostRoot,
+      root: params.hostRoot,
     });
   } catch {
     return { kind: "invalid" };
   }
   const stats = safeStatSync(resolved.resolved);
+  const relative = resolved.relative.split(path.sep).join(path.posix.sep);
   if (!stats) {
-    return {
-      kind: "missing",
-      relative: resolved.relative ? resolved.relative.split(path.sep).join(path.posix.sep) : "",
-    };
+    return { kind: "missing", relative };
   }
   if (!stats.isDirectory()) {
     return { kind: "invalid" };
   }
-  const relative = resolved.relative ? resolved.relative.split(path.sep).join(path.posix.sep) : "";
   return {
     kind: "available",
     workdir: {
       hostCwd: resolved.resolved,
-      containerCwd: joinContainerWorkdir(params.sandbox.containerWorkdir, relative),
+      containerCwd: joinContainerWorkdir(params.containerRoot, relative),
       scriptPreflightCwd: resolved.resolved,
     },
   };
@@ -195,13 +213,7 @@ async function validateBackendWorkdir(params: {
   sandbox: BashSandboxConfig;
 }): Promise<SandboxWorkdir | null> {
   const containerCwd = await params.sandbox.validateWorkdir?.(params.workdir.containerCwd);
-  return containerCwd
-    ? {
-        hostCwd: params.workdir.hostCwd,
-        containerCwd,
-        scriptPreflightCwd: params.workdir.scriptPreflightCwd,
-      }
-    : null;
+  return containerCwd ? { ...params.workdir, containerCwd } : null;
 }
 
 function resolveBackendHostWorkdirCandidate(params: {
@@ -211,25 +223,34 @@ function resolveBackendHostWorkdirCandidate(params: {
   if (!path.isAbsolute(params.workdir)) {
     return {
       hostPath: path.resolve(params.sandbox.workspaceDir, params.workdir),
+      hostRoot: path.resolve(params.sandbox.workspaceDir),
+      containerRoot: normalizeContainerPath(params.sandbox.containerWorkdir),
       failIfInvalid: false,
     };
   }
   const hostPath = path.resolve(params.workdir);
-  if (
-    isHostPathInsideRoot({
-      root: params.sandbox.workspaceDir,
-      candidate: hostPath,
-    })
-  ) {
-    return { hostPath, failIfInvalid: true };
+  const readOnlySkillMapping = mapContainerWorkdirToHost({
+    workdir: params.workdir,
+    sandbox: params.sandbox,
+    includeReadOnlySkillMounts: true,
+    includePrimaryWorkspace: false,
+  });
+  if (readOnlySkillMapping) {
+    return { ...readOnlySkillMapping, failIfInvalid: false };
   }
-  const containerMappedHostPath = mapContainerWorkdirToHost({
+  if (isPathInside(path.resolve(params.sandbox.workspaceDir), hostPath)) {
+    return {
+      hostPath,
+      hostRoot: path.resolve(params.sandbox.workspaceDir),
+      containerRoot: normalizeContainerPath(params.sandbox.containerWorkdir),
+      failIfInvalid: true,
+    };
+  }
+  const containerMappedWorkdir = mapContainerWorkdirToHost({
     workdir: params.workdir,
     sandbox: params.sandbox,
   });
-  return containerMappedHostPath
-    ? { hostPath: containerMappedHostPath, failIfInvalid: false }
-    : null;
+  return containerMappedWorkdir ? { ...containerMappedWorkdir, failIfInvalid: false } : null;
 }
 
 async function resolveBackendValidatedSandboxWorkdir(params: {
@@ -242,10 +263,7 @@ async function resolveBackendValidatedSandboxWorkdir(params: {
   }
   const hostCandidate = resolveBackendHostWorkdirCandidate(params);
   if (hostCandidate) {
-    const mappedWorkdir = await mapExistingHostWorkspacePath({
-      hostPath: hostCandidate.hostPath,
-      sandbox: params.sandbox,
-    });
+    const mappedWorkdir = await mapExistingHostPath(hostCandidate);
     if (mappedWorkdir.kind === "available") {
       return await validateBackendWorkdir({
         workdir: mappedWorkdir.workdir,
@@ -256,16 +274,13 @@ async function resolveBackendValidatedSandboxWorkdir(params: {
       return await validateBackendWorkdir({
         workdir: {
           hostCwd: workspaceHostCwd,
-          containerCwd: joinContainerWorkdir(
-            params.sandbox.containerWorkdir,
-            mappedWorkdir.relative,
-          ),
+          containerCwd: joinContainerWorkdir(hostCandidate.containerRoot, mappedWorkdir.relative),
           scriptPreflightCwd: null,
         },
         sandbox: params.sandbox,
       });
     }
-    if (hostCandidate.failIfInvalid && mappedWorkdir.kind === "invalid") {
+    if (hostCandidate.failIfInvalid) {
       return null;
     }
   }
@@ -290,13 +305,16 @@ async function resolveHostValidatedSandboxWorkdir(params: {
   const mappedHostWorkdir = mapContainerWorkdirToHost({
     workdir: params.workdir,
     sandbox: params.sandbox,
+    includeReadOnlySkillMounts: true,
   });
-  const candidateWorkdir = mappedHostWorkdir ?? params.workdir;
+  const candidateWorkdir = mappedHostWorkdir?.hostPath ?? params.workdir;
+  const candidateRoot = mappedHostWorkdir?.hostRoot ?? params.sandbox.workspaceDir;
+  const containerRoot = mappedHostWorkdir?.containerRoot ?? params.sandbox.containerWorkdir;
   try {
     const resolved = await assertSandboxPath({
       filePath: candidateWorkdir,
-      cwd: params.sandbox.workspaceDir,
-      root: params.sandbox.workspaceDir,
+      cwd: candidateRoot,
+      root: candidateRoot,
     });
     const stats = await fs.stat(resolved.resolved);
     if (!stats.isDirectory()) {
@@ -305,7 +323,7 @@ async function resolveHostValidatedSandboxWorkdir(params: {
     const relative = resolved.relative
       ? resolved.relative.split(path.sep).join(path.posix.sep)
       : "";
-    const containerCwd = joinContainerWorkdir(params.sandbox.containerWorkdir, relative);
+    const containerCwd = joinContainerWorkdir(containerRoot, relative);
     return { hostCwd: resolved.resolved, containerCwd, scriptPreflightCwd: resolved.resolved };
   } catch {
     return null;
@@ -340,16 +358,13 @@ export async function resolveExecWorkdir(params: {
   nodeCwd?: string;
   sandbox?: BashSandboxConfig;
 }): Promise<ExecWorkdirResolution> {
-  const explicitWorkdir = normalizeExplicitWorkdirInput(params.workdir);
-  if (explicitWorkdir.kind === "blank") {
-    return unavailable(explicitWorkdir.raw);
+  const explicitWorkdir = normalizeOptionalString(params.workdir);
+  if (params.workdir !== undefined && params.workdir !== "" && !explicitWorkdir) {
+    return unavailable(params.workdir);
   }
 
   if (params.host === "node") {
-    const remoteCwd =
-      explicitWorkdir.kind === "specified"
-        ? explicitWorkdir.value
-        : normalizeOptionalString(params.nodeCwd);
+    const remoteCwd = explicitWorkdir ?? normalizeOptionalString(params.nodeCwd);
     return remoteCwd ? { kind: "node", remoteCwd } : { kind: "node" };
   }
 
@@ -359,26 +374,24 @@ export async function resolveExecWorkdir(params: {
     if (!sandbox) {
       throw new Error("exec internal error: sandbox workdir resolution requires sandbox config");
     }
-    const requestedCwd =
-      explicitWorkdir.kind === "specified"
-        ? explicitWorkdir.value
-        : (defaultCwd ?? sandbox.containerWorkdir);
+    const requestedCwd = explicitWorkdir ?? defaultCwd ?? sandbox.containerWorkdir;
     const resolved = await resolveSandboxWorkdir({ workdir: requestedCwd, sandbox });
-    return resolved
-      ? {
-          kind: "sandbox",
-          hostCwd: resolved.hostCwd,
-          containerCwd: resolved.containerCwd,
-          scriptPreflightCwd: resolved.scriptPreflightCwd,
-        }
-      : unavailable(requestedCwd);
+    return resolved ? { kind: "sandbox", ...resolved } : unavailable(requestedCwd);
   }
 
-  const requestedCwd =
-    explicitWorkdir.kind === "specified" ? explicitWorkdir.value : (defaultCwd ?? safeCurrentCwd());
+  const requestedCwd = explicitWorkdir ?? defaultCwd ?? safeCurrentCwd();
   if (!requestedCwd) {
     return unavailable("current working directory");
   }
-  const resolved = resolveExistingHostWorkdir(requestedCwd);
+  let hostPath = requestedCwd;
+  if (explicitWorkdir && defaultCwd && !path.isAbsolute(requestedCwd)) {
+    const baseCwd = resolveExistingHostWorkdir(defaultCwd);
+    if (!baseCwd) {
+      return unavailable(defaultCwd);
+    }
+    // Preserve filesystem traversal through symlinks and reject missing path segments.
+    hostPath = `${baseCwd}${path.sep}${requestedCwd}`;
+  }
+  const resolved = resolveExistingHostWorkdir(hostPath);
   return resolved ? { kind: "local", hostCwd: resolved } : unavailable(requestedCwd);
 }

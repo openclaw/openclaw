@@ -11,11 +11,13 @@ class WearProxyListenerService : WearableListenerService() {
   override fun onCapabilityChanged(capabilityInfo: CapabilityInfo) {
     if (capabilityInfo.name != WearProtocol.PHONE_CAPABILITY) return
     val preferredNodeId =
-      capabilityInfo.nodes
-        .sortedWith(compareByDescending<com.google.android.gms.wearable.Node> { it.isNearby }.thenBy { it.id })
-        .firstOrNull()
-        ?.id
-    (application as? WearApplication)?.proxyClient?.updatePreferredPhoneNodeId(preferredNodeId)
+      selectReachablePhoneNodeId(
+        capabilityInfo.nodes.map { node ->
+          WearReachablePhoneNode(id = node.id, isNearby = node.isNearby)
+        },
+      )
+    val proxyClient = (application as? WearApplication)?.proxyClient ?: return
+    proxyClient.updatePreferredPhoneNodeId(preferredNodeId)
   }
 
   override fun onMessageReceived(messageEvent: MessageEvent) {

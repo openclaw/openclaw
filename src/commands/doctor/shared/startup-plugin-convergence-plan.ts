@@ -1,12 +1,14 @@
 // Plans first-start plugin convergence without loading the repair/catalog runtime.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { listAgentEntries } from "../../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
-import { inspectBundledPluginStartupMetadata } from "../../../plugins/bundled-plugin-startup-metadata.js";
+import { hasBundledPluginStartupManifest } from "../../../plugins/bundled-plugin-startup-metadata.js";
 import { resolveConfiguredGenericEmbeddingProviderId } from "../../../plugins/embedding-provider-config.js";
 import { collectConfiguredSpeechProviderIds } from "../../../plugins/gateway-startup-speech-providers.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-record-reader.js";
+import { isNativeSessionCatalogOptOutOnly } from "../../../plugins/native-session-catalog-config.js";
 import {
   hasOfficialExternalChannelTarget,
   hasOfficialExternalContractTarget,
@@ -15,7 +17,7 @@ import {
   hasOfficialExternalWebSearchTarget,
 } from "../../../plugins/official-external-plugin-targets.js";
 import { collectConfiguredProviderSelectionIds } from "./configured-provider-selection-ids.js";
-import { collectConfiguredRuntimePluginIds } from "./configured-runtime-plugin-installs.js";
+import { collectConfiguredRuntimeIds } from "./configured-runtime-plugin-installs.js";
 
 export type StartupPluginConvergencePlan = {
   required: boolean;
@@ -23,18 +25,18 @@ export type StartupPluginConvergencePlan = {
 };
 
 function hasPotentialPluginConfig(config: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
-  if (config.plugins?.enabled === false) {
-    return false;
-  }
   const entries = config.plugins?.entries;
   if (!isRecord(entries)) {
     return false;
   }
   return Object.entries(entries).some(([pluginId, entry]) => {
-    if (isRecord(entry) && entry.enabled === false) {
+    if (
+      (isRecord(entry) && entry.enabled === false) ||
+      isNativeSessionCatalogOptOutOnly(pluginId, entry)
+    ) {
       return false;
     }
-    return !inspectBundledPluginStartupMetadata({ pluginId, env });
+    return !hasBundledPluginStartupManifest({ pluginId, env });
   });
 }
 
@@ -51,56 +53,42 @@ function collectConfiguredMemoryEmbeddingProviderIds(config: OpenClawConfig): Re
       providerIds.add(ownerId);
     }
   };
-  const defaults = config.agents?.defaults?.memorySearch;
+  const defaults = config.memory?.search;
   if (defaults?.enabled !== false) {
     add(defaults?.provider);
     add(defaults?.fallback);
   }
-  for (const agent of config.agents?.list ?? []) {
-    if (agent.memorySearch?.enabled === false) {
+  for (const agent of listAgentEntries(config)) {
+    const override = agent.memory?.search;
+    if (override?.enabled === false) {
       continue;
     }
-    add(agent.memorySearch?.provider ?? defaults?.provider);
-    add(agent.memorySearch?.fallback ?? defaults?.fallback);
+    add(override?.provider ?? defaults?.provider);
+    add(override?.fallback ?? defaults?.fallback);
   }
   return providerIds;
 }
 
 function hasConfiguredCapabilityPlugin(config: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
-  const memoryEmbeddingProviderIds = collectConfiguredMemoryEmbeddingProviderIds(config);
-  if (memoryEmbeddingProviderIds.size > 0) {
-    if (
-      hasOfficialExternalContractTarget({
-        contract: "memoryEmbeddingProviders",
-        providerIds: memoryEmbeddingProviderIds,
-      })
-    ) {
-      return true;
-    }
-  }
-  const speechProviderIds = collectConfiguredSpeechProviderIds(config);
-  if (
+  const webFetchProviderId = normalizeOptionalLowercaseString(config.tools?.web?.fetch?.provider);
+  return (
+    hasOfficialExternalContractTarget({
+      contract: "embeddingProviders",
+      providerIds: collectConfiguredMemoryEmbeddingProviderIds(config),
+    }) ||
     hasOfficialExternalContractTarget({
       contract: "speechProviders",
-      providerIds: speechProviderIds,
-    })
-  ) {
-    return true;
-  }
-  const webFetchProviderId = normalizeOptionalLowercaseString(config.tools?.web?.fetch?.provider);
-  if (
-    webFetchProviderId &&
-    hasOfficialExternalContractTarget({
-      contract: "webFetchProviders",
-      providerIds: new Set([webFetchProviderId]),
-    })
-  ) {
-    return true;
-  }
-  return hasOfficialExternalWebContractEnvTarget({
-    contract: "webFetchProviders",
-    env,
-  });
+      providerIds: collectConfiguredSpeechProviderIds(config),
+    }) ||
+    Boolean(
+      webFetchProviderId &&
+      hasOfficialExternalContractTarget({
+        contract: "webFetchProviders",
+        providerIds: new Set([webFetchProviderId]),
+      }),
+    ) ||
+    hasOfficialExternalWebContractEnvTarget({ contract: "webFetchProviders", env })
+  );
 }
 
 /** True when config or environment state can require a missing managed plugin repair. */
@@ -111,34 +99,22 @@ export function configMayRequireStartupPluginConvergence(params: {
   if (params.config.plugins?.enabled === false) {
     return false;
   }
-  if (hasPotentialPluginConfig(params.config, params.env)) {
-    return true;
-  }
-  if (collectConfiguredRuntimePluginIds(params.config).length > 0) {
-    return true;
-  }
-  if (
+  const webSearchProvider = params.config.tools?.web?.search?.provider;
+  return (
+    hasPotentialPluginConfig(params.config, params.env) ||
+    collectConfiguredRuntimeIds(params.config).length > 0 ||
     hasOfficialExternalProviderTarget({
       providerIds: collectConfiguredProviderSelectionIds(params.config),
       env: params.env,
-    })
-  ) {
-    return true;
-  }
-  if (hasOfficialExternalChannelTarget(params)) {
-    return true;
-  }
-  const webSearchProvider = params.config.tools?.web?.search?.provider;
-  if (
-    params.config.tools?.web?.search?.enabled !== false &&
-    hasOfficialExternalWebSearchTarget({
-      providerId: typeof webSearchProvider === "string" ? webSearchProvider : undefined,
-      env: params.env,
-    })
-  ) {
-    return true;
-  }
-  return hasConfiguredCapabilityPlugin(params.config, params.env);
+    }) ||
+    hasOfficialExternalChannelTarget(params) ||
+    (params.config.tools?.web?.search?.enabled !== false &&
+      hasOfficialExternalWebSearchTarget({
+        providerId: typeof webSearchProvider === "string" ? webSearchProvider : undefined,
+        env: params.env,
+      })) ||
+    hasConfiguredCapabilityPlugin(params.config, params.env)
+  );
 }
 
 /** Carries the canonical install-record snapshot into the expensive convergence pass. */

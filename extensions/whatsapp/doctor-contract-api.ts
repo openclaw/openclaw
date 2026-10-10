@@ -1,2 +1,5 @@
-// Whatsapp API module exposes the plugin public contract.
-export { legacyConfigRules, normalizeCompatibilityConfig } from "./src/doctor-contract.js";
+import { whatsappLegacyStateMigration } from "./src/state-migrations.js";
+
+export { legacyConfigRules, normalizeCompatibilityConfig } from "./config-doctor-api.js";
+
+export const stateMigrations = [whatsappLegacyStateMigration];

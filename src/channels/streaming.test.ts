@@ -1,115 +1,229 @@
 import { describe, expect, it } from "vitest";
+import { inferToolMetaFromArgsCore } from "../agents/tool-display.js";
+import { formatToolAggregate } from "../auto-reply/tool-meta.js";
+import { createChannelProgressDraftCompositor } from "./progress-draft-compositor.js";
 import {
+  type ChannelProgressDraftLineInput,
   buildChannelProgressDraftLine,
+  buildChannelProgressDraftLineForEntry,
+  formatChannelProgressDraftLineForEntry,
   formatChannelProgressDraftText,
   formatPlanChecklistLines,
   normalizeAgentPlanSteps,
-  isChannelProgressDraftWorkToolName,
+  isChannelProgressPriorityLine,
   mergeChannelProgressDraftLine,
-  resolveChannelPreviewStreamMode,
-  resolveChannelStreamingBlockCoalesce,
   resolveChannelStreamingBlockEnabled,
-  resolveChannelStreamingChunkMode,
-  resolveChannelStreamingNativeTransport,
-  resolveChannelStreamingPreviewChunk,
+  resolveChannelStreamingProgressCommentary,
   resolveChannelStreamingProgressNarration,
 } from "./streaming.js";
 
 describe("buildChannelProgressDraftLine", () => {
-  it("suppresses update_plan from generic work-tool progress", () => {
-    expect(isChannelProgressDraftWorkToolName("update_plan")).toBe(false);
-  });
-
-  it("omits generic completed status from successful command output with title", () => {
-    const line = buildChannelProgressDraftLine(
-      {
-        event: "command-output",
-        toolCallId: "exec-1",
-        phase: "end",
-        title: "pwd",
-        name: "exec",
-        exitCode: 0,
-      },
-      { commandText: "raw" },
-    );
-
-    expect(line).toMatchObject({
-      kind: "command-output",
-      id: "exec-1",
-      text: "🛠️ pwd",
-      detail: "pwd",
-      status: "completed",
-    });
-  });
-
-  it("uses the tool label when successful command output has no title", () => {
+  it("lets named failed command items scroll out while retaining attention", () => {
     const line = buildChannelProgressDraftLine({
-      event: "command-output",
-      phase: "end",
+      event: "item",
+      itemKind: "command",
       name: "exec",
-      exitCode: 0,
+      status: "failed",
     });
-
-    expect(line).toMatchObject({
-      kind: "command-output",
-      text: "🛠️ Exec",
-      status: "completed",
-    });
-    expect(line?.detail).toBeUndefined();
+    expect(line).toBeDefined();
+    expect(isChannelProgressPriorityLine(line!)).toBe(false);
+    expect(isChannelProgressPriorityLine({ ...line!, status: "blocked" })).toBe(true);
+    expect(isChannelProgressPriorityLine({ ...line!, status: "error" })).toBe(true);
+    expect(isChannelProgressPriorityLine({ ...line!, kind: "approval" })).toBe(true);
+    expect(isChannelProgressPriorityLine({ ...line!, toolName: undefined })).toBe(true);
+    expect(isChannelProgressPriorityLine({ ...line!, kind: "tool" })).toBe(true);
   });
 
-  it("keeps command status and title in raw command progress lines", () => {
-    const line = buildChannelProgressDraftLine(
+  it("keeps prepared titles and failure outcomes when detail text is unchanged", () => {
+    const input = {
+      event: "item" as const,
+      itemKind: "tool",
+      itemId: "task",
+      name: "process",
+      title: "Check sample results",
+      progressText: "sample job",
+    };
+    const running = formatChannelProgressDraftLineForEntry(undefined, {
+      ...input,
+      status: "running",
+    });
+    const failed = formatChannelProgressDraftLineForEntry(undefined, {
+      ...input,
+      status: "failed",
+    });
+    expect(running).toContain("Check sample results");
+    expect(failed).toContain("Check sample results");
+    expect(failed).toContain("failed");
+    expect(failed).toContain("sample job");
+    expect(failed).not.toBe(running);
+  });
+
+  it.each([undefined, 40])("bounds prepared path titles at maxLineChars=%s", (maxLineChars) => {
+    const path = `/tmp/${"deep/".repeat(40)}file.txt`;
+    const entry = { streaming: { progress: { maxLineChars } } };
+    const line = buildChannelProgressDraftLineForEntry(
+      entry,
       {
-        event: "command-output",
-        toolCallId: "exec-1",
-        phase: "end",
-        title: "command false",
-        name: "exec",
-        exitCode: 2,
+        event: "item",
+        itemKind: "tool",
+        name: "read",
+        title: `Read from ${path}`,
+        meta: `from ${path}`,
+        status: "failed",
+      },
+      { toolIcons: true },
+    );
+
+    expect(line?.label).toContain("…");
+    expect(line?.label).toMatch(/file\.txt$/);
+    expect(line?.text).toContain("failed");
+    expect(Array.from(line!.text).length).toBeLessThanOrEqual(maxLineChars ?? 120);
+  });
+
+  it("keeps plan arguments out of generic tool and item rows", () => {
+    const name = "progress_card";
+    const args = {
+      markdown: '<progress aria-label="CI · 2/3" value="2" max="3"></progress>',
+      plan: [{ step: "Inspect", status: "in_progress" }],
+    };
+    expect(buildChannelProgressDraftLine({ event: "tool", name, args })).toBeUndefined();
+    expect(
+      buildChannelProgressDraftLine({
+        event: "item",
+        itemKind: "tool",
+        name,
+        meta: args.markdown,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("keeps blocked plan-tool attention without raw argument metadata", () => {
+    expect(
+      buildChannelProgressDraftLine({
+        event: "item",
+        itemId: "plan-failed",
+        itemKind: "tool",
+        name: "progress_card",
+        status: "blocked",
+        meta: '<progress aria-label="private" value="1" max="2"></progress>',
+      }),
+    ).toMatchObject({
+      id: "plan-failed",
+      kind: "item",
+      label: "Progress Card",
+      status: "blocked",
+      text: "Progress Card",
+    });
+  });
+
+  it("defaults entry-backed command progress to status and preserves explicit raw text", () => {
+    const input = {
+      event: "tool" as const,
+      name: "exec",
+      phase: "start",
+      args: { command: "echo private" },
+    };
+
+    const line = buildChannelProgressDraftLineForEntry(undefined, input);
+    expect(line?.text).toBe("Exec");
+    expect(line?.icon).toBeUndefined();
+    expect(
+      formatChannelProgressDraftText({
+        entry: { streaming: { progress: { label: false } } },
+        lines: line ? [line, { ...line, icon: "🔧" }] : [],
+      }),
+    ).toBe("• Exec\n🔧 Exec");
+    expect(
+      buildChannelProgressDraftLineForEntry(
+        { streaming: { progress: { commandText: "raw" } } },
+        input,
+        { detailMode: "raw" },
+      )?.text,
+    ).toContain("echo private");
+
+    const commandOutput = {
+      event: "command-output" as const,
+      name: "exec",
+      phase: "end",
+      title: "echo private",
+      exitCode: 1,
+    };
+    expect(buildChannelProgressDraftLine(commandOutput)?.text).toBe("exit 1");
+    expect(buildChannelProgressDraftLine(commandOutput, { commandText: "raw" })?.text).toContain(
+      "echo private",
+    );
+
+    const item = {
+      event: "item" as const,
+      itemKind: "command",
+      name: "exec",
+      phase: "start",
+      status: "running",
+      meta: "echo private",
+    };
+    expect(buildChannelProgressDraftLine(item)?.text).toBe("Exec");
+    expect(buildChannelProgressDraftLine(item, { commandText: "raw" })?.text).toContain(
+      "echo private",
+    );
+
+    const namespaced = { ...input, name: "server.exec" };
+    expect(buildChannelProgressDraftLineForEntry(undefined, namespaced)?.text).not.toContain(
+      "echo private",
+    );
+    expect(
+      buildChannelProgressDraftLineForEntry(
+        { streaming: { progress: { commandText: "raw" } } },
+        namespaced,
+      )?.text,
+    ).toContain("echo private");
+  });
+});
+
+describe("backend tool-name casing", () => {
+  it("renders capitalized shell tools and their summary as one line", () => {
+    const name = "Bash";
+    const args = { command: "echo alpha", description: "print text" };
+    const structured = buildChannelProgressDraftLine(
+      {
+        event: "tool",
+        toolCallId: "call-1",
+        name,
+        phase: "start",
+        args,
       },
       { commandText: "raw" },
     );
+    const meta = inferToolMetaFromArgsCore(name, args, { detailMode: "explain" });
+    const summaryText = formatToolAggregate(name, meta ? [meta] : undefined, { markdown: true });
 
-    expect(line).toMatchObject({
-      kind: "command-output",
-      id: "exec-1",
-      text: "🛠️ exit 2; command false",
-      detail: "command false",
-      status: "exit 2",
-    });
-  });
-
-  it("keeps only command status in status-only progress lines", () => {
-    const line = buildChannelProgressDraftLine(
-      {
-        event: "command-output",
-        phase: "end",
-        title: "command false",
-        name: "exec",
-        exitCode: 2,
-      },
-      { commandText: "status" },
+    const merged = mergeChannelProgressDraftLine(
+      structured ? [structured] : [],
+      { kind: "item", label: "", text: summaryText, prefix: false },
+      { maxLines: 8 },
     );
 
-    expect(line).toMatchObject({
-      kind: "command-output",
-      text: "🛠️ exit 2",
-      detail: "exit 2",
-      status: "exit 2",
-    });
-    expect(line?.text).not.toContain("command false");
+    expect(merged).toHaveLength(1);
+    expect(structured?.detail).toBe("print text");
+    expect(structured?.text).toBe("print text");
   });
 });
 
 describe("mergeChannelProgressDraftLine", () => {
-  it("keeps identical visible lines distinct when their stable ids differ", () => {
-    const first = { id: "tool-1", kind: "tool" as const, text: "bash", label: "bash" };
-    const second = { id: "tool-2", kind: "tool" as const, text: "bash", label: "bash" };
+  it("preserves SDK default retention of non-zero exits over newer activity", () => {
+    const exit = {
+      id: "command-1",
+      kind: "command-output" as const,
+      label: "Exec",
+      text: "exit 1",
+      status: "exit 1",
+    };
+    const lines = mergeChannelProgressDraftLine(
+      [exit, { id: "read-1", kind: "tool", label: "Read", text: "Read first file" }],
+      { id: "read-2", kind: "tool", label: "Read", text: "Read second file" },
+      { maxLines: 2 },
+    );
 
-    const lines = mergeChannelProgressDraftLine([first], second, { maxLines: 8 });
-
-    expect(lines.map((line) => line.id)).toEqual(["tool-1", "tool-2"]);
+    expect(lines.map((line) => line.text)).toEqual(["exit 1", "Read second file"]);
   });
 });
 
@@ -132,88 +246,93 @@ describe("normalizeAgentPlanSteps", () => {
 });
 
 describe("streaming config resolution", () => {
-  // Flat delivery keys remain external SDK compatibility fallbacks. Bundled
-  // schemas are nested-only; mode-family aliases stay doctor-only.
-  it("resolves flat delivery keys while ignoring mode-family aliases", () => {
-    const legacyEntry = {
-      streamMode: "block",
-      chunkMode: "newline",
-      blockStreaming: true,
-      draftChunk: { minChars: 10 },
-      blockStreamingCoalesce: { idleMs: 5 },
-      nativeStreaming: false,
-    } as never;
-
-    expect(resolveChannelPreviewStreamMode(legacyEntry, "partial")).toBe("partial");
-    expect(resolveChannelStreamingChunkMode(legacyEntry)).toBe("newline");
-    expect(resolveChannelStreamingBlockEnabled(legacyEntry)).toBe(true);
-    expect(resolveChannelStreamingPreviewChunk(legacyEntry)).toEqual({ minChars: 10 });
-    expect(resolveChannelStreamingBlockCoalesce(legacyEntry)).toEqual({ idleMs: 5 });
-    expect(resolveChannelStreamingNativeTransport(legacyEntry)).toBeUndefined();
+  it("lets an available explicit preview override the inherited block default", () => {
+    expect(
+      resolveChannelStreamingBlockEnabled(
+        { streaming: { mode: "partial" } },
+        { previewAvailable: true, blockStreamingDefault: "on" },
+      ),
+    ).toBe(false);
   });
 
-  it("resolves the canonical nested streaming shape", () => {
-    const entry = {
-      streaming: {
-        mode: "block",
-        chunkMode: "newline",
-        preview: { chunk: { minChars: 10 } },
-        block: { enabled: true, coalesce: { idleMs: 5 } },
-        nativeTransport: false,
-      },
-    };
-
-    expect(resolveChannelPreviewStreamMode(entry, "partial")).toBe("block");
-    expect(resolveChannelStreamingChunkMode(entry)).toBe("newline");
-    expect(resolveChannelStreamingBlockEnabled(entry)).toBe(true);
-    expect(resolveChannelStreamingPreviewChunk(entry)).toEqual({ minChars: 10 });
-    expect(resolveChannelStreamingBlockCoalesce(entry)).toEqual({ idleMs: 5 });
-    expect(resolveChannelStreamingNativeTransport(entry)).toBe(false);
-  });
-
-  it("keeps the scalar streaming fallback for external SDK plugin configs", () => {
-    // Bundled schemas are nested-only; this compatibility path is deprecated.
-    expect(resolveChannelPreviewStreamMode({ streaming: "block" }, "partial")).toBe("block");
-    expect(resolveChannelPreviewStreamMode({ streaming: true }, "off")).toBe("partial");
-    expect(resolveChannelPreviewStreamMode({ streaming: false }, "partial")).toBe("off");
+  it("keeps the inherited block default for off or invalid preview modes", () => {
+    expect(
+      resolveChannelStreamingBlockEnabled(
+        { streaming: { mode: "off" } },
+        {
+          previewAvailable: true,
+          blockStreamingDefault: "on",
+        },
+      ),
+    ).toBe(true);
+    expect(
+      resolveChannelStreamingBlockEnabled(
+        { streaming: { mode: "invalid" } },
+        {
+          previewAvailable: true,
+          blockStreamingDefault: "on",
+        },
+      ),
+    ).toBe(true);
   });
 });
 
 describe("progress narration", () => {
-  it("renders plan markers and keeps the checklist under narration", () => {
-    const plan = [
-      { step: "Inspect", status: "completed" as const },
-      { step: "Patch", status: "in_progress" as const },
-      { step: "Test", status: "pending" as const },
-    ];
+  const plan = [
+    { step: "Inspect", status: "completed" },
+    { step: "Patch", status: "in_progress" },
+    { step: "Verify", status: "pending" },
+  ] as const;
 
+  it.each([undefined, "summary"] as const)(
+    "preserves SDK default exit priority over a full plan (presentation=%s)",
+    (presentation) => {
+      const text = formatChannelProgressDraftText({
+        presentation,
+        entry: {
+          streaming: {
+            mode: "progress",
+            progress: { toolProgress: true, label: false, maxLines: 3 },
+          },
+        },
+        lines: [{ kind: "command-output", label: "Exec", text: "exit 1", status: "exit 1" }],
+        plan,
+      });
+
+      expect(text).toContain("exit 1");
+      expect(text).toContain("Patch");
+      expect(text.split("\n").filter(Boolean)).toHaveLength(3);
+    },
+  );
+
+  it("preserves the shipped plain checklist option", () => {
+    expect(formatPlanChecklistLines(plan, { maxLines: 3, maxLineChars: 80, plain: true })).toEqual([
+      "Completed: Inspect",
+      "In progress: Patch",
+      "Pending: Verify",
+    ]);
+  });
+
+  it("renders plan markers and keeps the checklist under narration", () => {
     expect(formatPlanChecklistLines(plan, { maxLines: 5, maxLineChars: 80 })).toEqual([
       "✅ Inspect",
       "▸ Patch",
-      "▢ Test",
+      "▢ Verify",
     ]);
     expect(
       formatChannelProgressDraftText({
         entry: { streaming: { mode: "progress", progress: { label: false } } },
-        lines: ["🛠️ hidden"],
+        lines: ["Exec"],
         narration: "Working through the plan.",
         plan,
       }),
-    ).toBe("Working through the plan.\n\n✅ Inspect\n▸ Patch\n▢ Test");
+    ).toBe("Working through the plan.\n\n• Exec\n✅ Inspect\n▸ Patch\n▢ Verify");
   });
 
-  it("summarizes overflowing plans and prioritizes unfinished steps", () => {
-    expect(
-      formatPlanChecklistLines(
-        [
-          { step: "One", status: "completed" },
-          { step: "Two", status: "completed" },
-          { step: "Three", status: "in_progress" },
-          { step: "Four", status: "pending" },
-        ],
-        { maxLines: 3, maxLineChars: 80 },
-      ),
-    ).toEqual(["✅ 2/4 done", "▸ Three", "▢ Four"]);
+  it("uses only a summary when the checklist has one line available", () => {
+    expect(formatPlanChecklistLines(plan, { maxLines: 1, maxLineChars: 80 })).toEqual([
+      "✅ 1/3 done",
+    ]);
   });
 
   it("keeps the active step when later pending work fills the checklist", () => {
@@ -246,52 +365,33 @@ describe("progress narration", () => {
     ).toBe("• tool three\n▸ Active\n▢ Next");
   });
 
-  it("omits the implicit progress label when narration is available", () => {
-    const text = formatChannelProgressDraftText({
-      entry: { streaming: { mode: "progress" } },
-      lines: ["🛠️ Exec"],
-      narration: "Counting lines in the workspace files.",
-    });
-
-    expect(text).toBe("Counting lines in the workspace files.");
-  });
-
-  it("keeps an explicitly configured automatic label above narration", () => {
-    const text = formatChannelProgressDraftText({
-      entry: {
-        streaming: {
-          mode: "progress",
-          progress: { label: "auto", labels: ["Clawing"] },
+  it("drops every tool line when the checklist consumes the whole budget", () => {
+    expect(
+      formatChannelProgressDraftText({
+        entry: {
+          streaming: { mode: "progress", progress: { label: false, maxLines: 2 } },
         },
-      },
-      lines: ["🛠️ Exec"],
-      narration: "Counting lines in the workspace files.",
-    });
-
-    expect(text).toBe("Clawing\n\nCounting lines in the workspace files.");
+        lines: ["tool one", "tool two"],
+        plan: [
+          { step: "Active", status: "in_progress" },
+          { step: "Next", status: "pending" },
+        ],
+      }),
+    ).toBe("▸ Active\n▢ Next");
   });
 
-  it("renders narration instead of tool lines", () => {
-    const text = formatChannelProgressDraftText({
-      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
-      lines: ["🛠️ Exec", "🛠️ Wc"],
-      narration: "Counting lines in the workspace files.",
-    });
-
-    expect(text).toBe("Shelling\n\nCounting lines in the workspace files.");
-  });
-
-  it("compacts narration at a word boundary instead of line width", () => {
-    const narration = Array.from({ length: 60 }, (_value, index) => `word${index}`).join(" ");
-    const text = formatChannelProgressDraftText({
-      entry: { streaming: { mode: "progress", progress: { label: false } } },
-      lines: [],
-      narration,
-    });
-
-    expect(text.endsWith("…")).toBe(true);
-    expect(Array.from(text).length).toBeLessThanOrEqual(280);
-    expect(text).not.toContain("\n");
+  it("honors the caller's mode when resolving commentary", () => {
+    // The progress-draft channels default to "progress" when streaming.mode is
+    // unset, so guessing "partial" here made progress.commentary a silent no-op.
+    const entry = { streaming: { progress: { commentary: true } } };
+    expect(resolveChannelStreamingProgressCommentary(entry, false, "progress")).toBe(true);
+    expect(resolveChannelStreamingProgressCommentary(entry, false, "partial")).toBe(false);
+    expect(
+      resolveChannelStreamingProgressCommentary(
+        { streaming: { mode: "progress", progress: { commentary: true } } },
+        false,
+      ),
+    ).toBe(true);
   });
 
   it("resolves the narration toggle with default on", () => {
@@ -305,5 +405,137 @@ describe("progress narration", () => {
         streaming: { mode: "progress", progress: { narration: false } },
       }),
     ).toBe(false);
+  });
+});
+
+type CommandInput = Extract<
+  ChannelProgressDraftLineInput,
+  { event: "tool" | "item" | "command-output" }
+>;
+
+function buildLine(input: CommandInput, markdown = false) {
+  const line = buildChannelProgressDraftLine(
+    { toolCallId: "call-1", name: "exec", ...input },
+    { commandText: "raw", markdown },
+  );
+  if (!line) {
+    throw new Error("expected command progress");
+  }
+  return line;
+}
+
+// Preserve the producer's order: terminal items precede the titled command output.
+function commandSequence(status: "failed" | "completed", exitCode: number): CommandInput[] {
+  const item = { event: "item" as const, meta: "run tests · pty · elevated" };
+  const tool = {
+    ...item,
+    itemId: "tool:call-1",
+    itemKind: "tool",
+    title: `exec ${item.meta}`,
+    commandBearing: true,
+  };
+  const command = {
+    ...item,
+    itemId: "command:call-1",
+    itemKind: "command",
+    title: `command ${item.meta}`,
+  };
+  const output = { event: "command-output" as const, phase: "end", status, exitCode };
+  return [
+    { event: "tool", itemId: tool.itemId, phase: "start", args: { command: "pnpm test" } },
+    { ...tool, phase: "start", status: "running" },
+    { ...command, phase: "start", status: "running" },
+    output,
+    { ...tool, phase: "end", status },
+    { ...command, phase: "end", status, summary: "3 tests failed" },
+    { ...output, itemId: command.itemId, title: command.title },
+  ];
+}
+
+describe("channel-streaming embedded command items", () => {
+  it.each([
+    { status: "failed", exitCode: 1, markdown: true, finalStatus: "exit 1" },
+    { status: "completed", exitCode: 0, markdown: false, finalStatus: "completed" },
+  ] as const)("keeps one command row through terminal delivery ($status)", async (params) => {
+    const commandText = params.markdown ? "`run tests`" : "run tests";
+    const detail = `pty · elevated · ${commandText}`;
+    let rendered = "";
+    const progress = createChannelProgressDraftCompositor({
+      active: true,
+      mode: "progress",
+      seed: "command-correlation",
+      entry: { streaming: { progress: { label: false, toolProgress: true, maxLines: 4 } } },
+      update: (text) => {
+        rendered = text;
+        return true;
+      },
+    });
+    try {
+      const inputs = commandSequence(params.status, params.exitCode);
+      for (const [index, input] of inputs.entries()) {
+        await progress.pushToolProgress(buildLine(input, params.markdown));
+        const lines = progress.getSnapshot().lines;
+        expect(lines, `event ${index}`).toHaveLength(1);
+        expect(lines[0], `event ${index}`).toMatchObject({
+          id: "tool:call-1",
+          detail: index === 0 ? commandText : detail,
+        });
+      }
+      await progress.start();
+      expect(progress.getSnapshot().lines[0]).toMatchObject({
+        kind: "command-output",
+        detail,
+        status: params.finalStatus,
+        text: `${params.exitCode === 0 ? "" : "exit 1; "}${detail}`,
+      });
+      expect(rendered.match(/run tests/g)).toHaveLength(1);
+    } finally {
+      progress.cancel();
+    }
+  });
+
+  it("keeps a flagged output title when it describes different work", () => {
+    const previous = buildLine({
+      event: "item",
+      itemId: "command:call-1",
+      itemKind: "command",
+      status: "running",
+      meta: "inspect files · pty",
+    });
+    const output = buildLine({
+      event: "command-output",
+      itemId: "command:call-1",
+      phase: "end",
+      title: "command run tests · pty",
+      exitCode: 0,
+    });
+    expect(mergeChannelProgressDraftLine([previous], output, { maxLines: 4 })[0]?.detail).toBe(
+      "pty · command run tests",
+    );
+    expect(mergeChannelProgressDraftLine([], output, { maxLines: 4 })[0]?.detail).toBe(
+      "pty · command run tests",
+    );
+  });
+
+  it("replaces a terminal failure when recovered output names no command", () => {
+    const endedLine = buildLine({
+      event: "item",
+      itemId: "command:call-1",
+      itemKind: "command",
+      phase: "end",
+      status: "failed",
+      progressText: "install dependencies failed",
+    });
+    const recoveredOutput = buildLine({
+      event: "command-output",
+      itemId: "command:call-1",
+      phase: "end",
+      exitCode: 0,
+    });
+    expect(endedLine.detail).toBe("install dependencies failed");
+    const merged = mergeChannelProgressDraftLine([endedLine], recoveredOutput, { maxLines: 4 });
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toMatchObject({ kind: "command-output", status: "completed" });
+    expect(merged[0]).not.toHaveProperty("detail");
   });
 });

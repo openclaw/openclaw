@@ -1,5 +1,9 @@
-// Whatsapp plugin module implements auto reply harness behavior.
-import "./test-helpers.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  resetBaileysMocks as _resetBaileysMocks,
+  resetLoadConfigMock as _resetLoadConfigMock,
+} from "./test-helpers.js";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -7,24 +11,22 @@ import path from "node:path";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawStateDatabaseAsync,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, beforeEach, vi, type Mock } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import type { WebChannelStatus } from "./auto-reply/types.js";
-import type { WebInboundMessageInput, WebListenerCloseReason } from "./inbound.js";
+import type { WebInboundCallbackMessage, WebListenerCloseReason } from "./inbound.js";
 import type { WhatsAppSendResult } from "./inbound/send-result.js";
 import { createAcceptedWhatsAppSendResult as createAcceptedWhatsAppSendResultForHarness } from "./inbound/send-result.test-helper.js";
 import { createTestWebInboundMessage } from "./inbound/test-message.test-helper.js";
 import { setWhatsAppRuntime } from "./runtime.js";
-import {
-  resetBaileysMocks as _resetBaileysMocks,
-  resetLoadConfigMock as _resetLoadConfigMock,
-} from "./test-helpers.js";
+// Whatsapp plugin module implements auto reply harness behavior.
 
-export {
-  resetLoadConfigMock,
-  setLoadConfigMock,
-  setRuntimeConfigSourceSnapshotMock,
-} from "./test-helpers.js";
+export { resetLoadConfigMock, setLoadConfigMock } from "./test-helpers.js";
 
 // Avoid exporting inferred vitest mock types (TS2742 under pnpm + d.ts emit).
 type AnyExport = any;
@@ -131,16 +133,11 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
   isEmbeddedAgentRunStreaming: vi.fn().mockReturnValue(false),
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
   resolveAgentIdentity: (
-    cfg: { agents?: { list?: Array<{ id: string; identity?: unknown }> } },
+    cfg: { agents?: { entries?: Record<string, { identity?: unknown }> } },
     agentId: string,
-  ) =>
-    cfg.agents?.list?.find(
-      (entry) => entry.id.trim().toLowerCase() === agentId.trim().toLowerCase(),
-    )?.identity,
+  ) => cfg.agents?.entries?.[agentId.trim().toLowerCase()]?.identity,
   resolveIdentityNamePrefix: (cfg: { messages?: { responsePrefix?: string } }, _agentId: string) =>
     cfg.messages?.responsePrefix,
-  resolveMessagePrefix: (cfg: { messages?: { messagePrefix?: string } }) =>
-    cfg.messages?.messagePrefix,
   runEmbeddedAgent: vi.fn(),
 }));
 
@@ -148,6 +145,8 @@ async function rmDirWithRetries(
   dir: string,
   opts?: { attempts?: number; delayMs?: number },
 ): Promise<void> {
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   const attempts = opts?.attempts ?? 10;
   const delayMs = opts?.delayMs ?? 5;
   // Some tests can leave async session-store writes in-flight; recursive deletion can race and throw ENOTEMPTY.
@@ -203,6 +202,8 @@ export function installWebAutoReplyTestHomeHooks() {
   });
 
   afterEach(async () => {
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
     process.env.HOME = previousHome;
     tempHome = undefined;
   });
@@ -256,19 +257,19 @@ export function installWebAutoReplyUnitTestHooks(opts?: { pinDns?: boolean }) {
 }
 
 export function createWebListenerFactoryCapture(): AnyExport {
-  let capturedOnMessage: ((msg: WebInboundMessageInput) => Promise<void>) | undefined;
+  let capturedOnMessage: ((msg: WebInboundCallbackMessage) => Promise<void>) | undefined;
   let capturedOptions:
     | {
-        onMessage: (msg: WebInboundMessageInput) => Promise<void>;
-        shouldDebounce?: (msg: WebInboundMessageInput) => boolean;
+        onMessage: (msg: WebInboundCallbackMessage) => Promise<void>;
+        shouldDebounce?: (msg: WebInboundCallbackMessage) => boolean;
         debounceMs?: number;
         appendReplyWindow?: { afterMs: number; untilMs: number; maxAgeMs: number };
         selfChatMode?: boolean;
       }
     | undefined;
   const listenerFactory = async (opts: {
-    onMessage: (msg: WebInboundMessageInput) => Promise<void>;
-    shouldDebounce?: (msg: WebInboundMessageInput) => boolean;
+    onMessage: (msg: WebInboundCallbackMessage) => Promise<void>;
+    shouldDebounce?: (msg: WebInboundCallbackMessage) => boolean;
     debounceMs?: number;
     appendReplyWindow?: { afterMs: number; untilMs: number; maxAgeMs: number };
     selfChatMode?: boolean;
@@ -310,22 +311,23 @@ export function createMockWebListener(): MockWebListener {
 }
 
 export function createScriptedWebListenerFactory(): AnyExport {
-  const onMessages: Array<(msg: WebInboundMessageInput) => Promise<void>> = [];
-  const closeResolvers: Array<(reason: unknown) => void> = [];
+  const onMessages: Array<(msg: WebInboundCallbackMessage) => Promise<void>> = [];
+  const closeResolvers: Array<(reason?: WebListenerCloseReason) => void> = [];
   const listeners: MockWebListener[] = [];
 
   const listenerFactory = vi.fn(
-    async (opts: { onMessage: (msg: WebInboundMessageInput) => Promise<void> }) => {
+    async (opts: { onMessage: (msg: WebInboundCallbackMessage) => Promise<void> }) => {
       onMessages.push(opts.onMessage);
-      let resolveClose: (reason: unknown) => void = () => {};
+      let resolveClose: (reason?: WebListenerCloseReason) => void = () => {};
       const onClose = new Promise<WebListenerCloseReason>((res) => {
-        resolveClose = res as (reason: unknown) => void;
+        // Match the socket-session owner: an unspecified close is not a logout.
+        resolveClose = (reason) => res(reason ?? { isLoggedOut: false, error: "closed" });
         closeResolvers.push(resolveClose);
       });
       const listener: MockWebListener = {
         ...createMockWebListener(),
         onClose,
-        signalClose: vi.fn((reason?: unknown) => resolveClose(reason)),
+        signalClose: vi.fn(resolveClose),
       };
       listeners.push(listener);
       return listener;
@@ -336,7 +338,8 @@ export function createScriptedWebListenerFactory(): AnyExport {
     listenerFactory,
     listeners,
     getOnMessage: (index = onMessages.length - 1) => onMessages[index],
-    resolveClose: (index: number, reason?: unknown) => closeResolvers[index]?.(reason),
+    resolveClose: (index: number, reason?: WebListenerCloseReason) =>
+      closeResolvers[index]?.(reason),
     getListenerCount: () => listenerFactory.mock.calls.length,
   };
 }
@@ -346,14 +349,6 @@ export function createWebInboundDeliverySpies(): AnyExport {
     sendMedia: vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResultForHarness("media", "m1")),
     reply: vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResultForHarness("text", "r1")),
     sendComposing: vi.fn(),
-  };
-}
-
-function createWebAutoReplyRuntime(): WebAutoReplyRuntime {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
   };
 }
 
@@ -370,7 +365,7 @@ export function startWebAutoReplyMonitor(params: {
   accountId?: string;
   statusSink?: (status: WebChannelStatus) => void;
 }): WebAutoReplyMonitorHarness {
-  const runtime = createWebAutoReplyRuntime();
+  const runtime: WebAutoReplyRuntime = createRuntimeSpies();
   const controller = new AbortController();
   const run = params.monitorWebChannelFn(
     false,
@@ -395,7 +390,7 @@ export function startWebAutoReplyMonitor(params: {
 }
 
 export async function sendWebGroupInboundMessage(params: {
-  onMessage: (msg: WebInboundMessageInput) => Promise<void>;
+  onMessage: (msg: WebInboundCallbackMessage) => Promise<void>;
   body: string;
   id: string;
   senderE164: string;
@@ -449,7 +444,7 @@ export async function sendWebGroupInboundMessage(params: {
 }
 
 export async function sendWebDirectInboundMessage(params: {
-  onMessage: (msg: WebInboundMessageInput) => Promise<void>;
+  onMessage: (msg: WebInboundCallbackMessage) => Promise<void>;
   body: string;
   id: string;
   from: string;

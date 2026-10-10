@@ -1,10 +1,13 @@
 /** Tests context command behavior, token reporting, and generated report files. */
-import { mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.js";
+import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { buildContextReply } from "./commands-context-report.js";
 import { buildCommandContext } from "./commands-context.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -24,12 +27,13 @@ function makeParams(
     cfg?: Record<string, unknown>;
     sessionKey?: string;
     sessionId?: string;
-    sessionFile?: string;
     storePath?: string;
     agentId?: string;
     currentTurn?: NonNullable<SessionEntry["systemPromptReport"]>["currentTurn"];
+    nativeUnverified?: boolean;
   },
 ): HandleCommandsParams {
+  const totalTokensFresh = options?.totalTokensFresh ?? true;
   return {
     command: {
       commandBodyNormalized,
@@ -47,9 +51,9 @@ function makeParams(
     resolvedReasoningLevel: "off",
     sessionEntry: {
       ...(options?.sessionId ? { sessionId: options.sessionId } : {}),
-      ...(options?.sessionFile ? { sessionFile: options.sessionFile } : {}),
       totalTokens: options?.totalTokens ?? 123,
-      totalTokensFresh: options?.totalTokensFresh ?? true,
+      totalTokensFresh,
+      ...(totalTokensFresh ? { totalTokensVersion: 1 as const } : {}),
       inputTokens: 100,
       outputTokens: 23,
       systemPromptReport: {
@@ -65,16 +69,28 @@ function makeParams(
           nonProjectContextChars: 500,
         },
         ...(options?.currentTurn ? { currentTurn: options.currentTurn } : {}),
-        injectedWorkspaceFiles: [
-          {
-            name: "AGENTS.md",
-            path: "/tmp/workspace/AGENTS.md",
-            missing: false,
-            rawChars: truncated ? 200_000 : 10_000,
-            injectedChars: truncated ? 12_000 : 10_000,
-            truncated,
-          },
-        ],
+        injectedWorkspaceFiles: options?.nativeUnverified
+          ? [
+              {
+                name: "AGENTS.md",
+                path: "/tmp/workspace/AGENTS.md",
+                missing: false,
+                rawChars: 10_000,
+                injectionStatus: "native_unverified",
+                injectedChars: null,
+                truncated: null,
+              },
+            ]
+          : [
+              {
+                name: "AGENTS.md",
+                path: "/tmp/workspace/AGENTS.md",
+                missing: false,
+                rawChars: truncated ? 200_000 : 10_000,
+                injectedChars: truncated ? 12_000 : 10_000,
+                truncated,
+              },
+            ],
         skills: {
           promptChars: 10,
           entries: [{ name: "checks", blockChars: 10 }],
@@ -97,26 +113,70 @@ function makeParams(
 
 async function withTranscript(
   messages: unknown[],
-  run: (sessionFile: string, dir: string) => Promise<void>,
+  run: (target: {
+    agentId: string;
+    sessionId: string;
+    sessionKey: string;
+    storePath: string;
+  }) => Promise<void>,
+  options: { agentId?: string; sessionKey?: string } = {},
 ): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), "openclaw-context-report-"));
   try {
-    const sessionFile = join(dir, "session.jsonl");
-    const lines = messages.map((message, index) =>
-      JSON.stringify({
-        id: `record-${index + 1}`,
-        timestamp: new Date(index + 1).toISOString(),
-        message,
-      }),
+    const agentId = options.agentId ?? "default";
+    const target = {
+      agentId,
+      sessionId: "session",
+      sessionKey: options.sessionKey ?? `agent:${agentId}:main`,
+      storePath: join(dir, "sessions.json"),
+    };
+    await persistSessionTranscriptTurn(
+      { ...target, storePath: resolveSessionStorePathForScope(target) },
+      {
+        messages: messages.map((message, index) => ({
+          eventId: `record-${index + 1}`,
+          message,
+          parentId: index === 0 ? null : `record-${index}`,
+        })),
+        touchSessionEntry: false,
+      },
     );
-    await writeFile(sessionFile, `${lines.join("\n")}\n`, "utf8");
-    await run(sessionFile, dir);
+    await run(target);
   } finally {
+    closeOpenClawAgentDatabasesForTest();
     await rm(dir, { recursive: true, force: true });
   }
 }
 
 describe("buildContextReply", () => {
+  it.each<{ resolved?: number; authored?: number; expected: number }>([
+    { expected: 32_768 },
+    { resolved: 65_536, expected: 65_536 },
+    { resolved: 200_000, expected: 200_000 },
+    { authored: 16_384, expected: 16_384 },
+  ])("projects the selected session window ($resolved, $authored)", async (testCase) => {
+    const params = makeParams("/context json", false, { contextTokens: 200_000 });
+    params.provider = "ollama";
+    params.model = "qwen2.5:7b";
+    params.sessionEntry = {
+      ...params.sessionEntry,
+      sessionId: "local-context",
+      updatedAt: 1,
+      modelProvider: params.provider,
+      model: params.model,
+      agentHarnessId: "openclaw",
+      contextTokens: 32_768,
+      contextTokensSource: "resolved-v1",
+    };
+    params.contextTokenProjection = {
+      contextTokens: testCase.resolved,
+      authoredContextTokens: testCase.authored,
+    };
+
+    const result = await buildContextReply(params);
+    expect(JSON.parse(result.text ?? "{}").session.contextTokens).toBe(testCase.expected);
+  });
+
   it("describes compactable transcript counts in help output", async () => {
     const result = await buildContextReply(makeParams("/context", false));
     expect(result.text).toContain(
@@ -129,24 +189,23 @@ describe("buildContextReply", () => {
     expect(result.text).toContain("Bootstrap max/total: 60,000 chars");
     expect(result.text).toContain("⚠ Bootstrap context is over configured limits");
     expect(result.text).toContain("Causes: 1 file(s) exceeded max/file.");
-    expect(result.text).toContain("agents.list[].bootstrapMaxChars");
+    expect(result.text).toContain("agents.entries.*.bootstrapMaxChars");
     expect(result.text).toContain("agents.defaults.*");
   });
 
-  it("does not show bootstrap truncation warning when there is no truncation", async () => {
-    const result = await buildContextReply(makeParams("/context list", false));
-    expect(result.text).not.toContain("Bootstrap context is over configured limits");
-  });
-
-  it("falls back to config defaults when legacy reports are missing bootstrap limits", async () => {
+  it("reports native Codex project docs as unverified without OpenClaw limit advice", async () => {
     const result = await buildContextReply(
-      makeParams("/context list", false, {
-        omitBootstrapLimits: true,
-      }),
+      makeParams("/context detail", false, { nativeUnverified: true }),
     );
-    expect(result.text).toContain("Bootstrap max/file: 20,000 chars");
-    expect(result.text).toContain("Bootstrap max/total: 60,000 chars");
-    expect(result.text).not.toContain("Bootstrap max/file: ? chars");
+
+    expect(result.text).toContain(
+      "- AGENTS.md: NATIVE/UNVERIFIED | raw(local) 10,000 chars (~2,500 tok) | injected unknown",
+    );
+    expect(result.text).toContain("one aggregate root-to-CWD byte budget");
+    expect(result.text).toContain("later AGENTS.md files can be partial");
+    expect(result.text).toContain("read the relevant scoped file directly");
+    expect(result.text).not.toContain("Bootstrap context is over configured limits");
+    expect(result.text).not.toContain("agents.entries.*.bootstrapMaxChars");
   });
 
   it("uses the session agent profile when legacy reports are missing bootstrap limits", async () => {
@@ -160,13 +219,12 @@ describe("buildContextReply", () => {
               bootstrapMaxChars: 12_000,
               bootstrapTotalMaxChars: 60_000,
             },
-            list: [
-              {
-                id: "scout",
+            entries: {
+              scout: {
                 bootstrapMaxChars: 32_000,
                 bootstrapTotalMaxChars: 96_000,
               },
-            ],
+            },
           },
         },
       }),
@@ -175,25 +233,14 @@ describe("buildContextReply", () => {
     expect(result.text).toContain("Bootstrap max/total: 96,000 chars");
   });
 
-  it("shows tracked estimate and cached context delta in detail output", async () => {
-    const result = await buildContextReply(
-      makeParams("/context detail", false, {
-        contextTokens: 8_192,
-        totalTokens: 900,
-      }),
-    );
-    expect(result.text).toContain("Tracked prompt estimate: 1,020 chars (~255 tok)");
-    expect(result.text).toContain("Actual context usage (cached): 900 tok");
-    expect(result.text).toContain("Untracked provider/runtime overhead: ~645 tok");
-    expect(result.text).toContain(
-      "Compactable transcript: unavailable (no active transcript session)",
-    );
-    expect(result.text).toContain("Session tokens (cached): 900 total / ctx=8,192");
-  });
-
-  it("reports compactable real conversation messages from the active transcript", async () => {
+  it("counts conversation anchors across active transcript pages", async () => {
     await withTranscript(
       [
+        ...Array.from({ length: 127 }, (_, index) => ({
+          role: "assistant",
+          content: "NO_REPLY",
+          timestamp: index,
+        })),
         { role: "user", content: "Please inspect the repo", timestamp: 1 },
         {
           role: "assistant",
@@ -208,20 +255,23 @@ describe("buildContextReply", () => {
           toolName: "read",
         },
       ],
-      async (sessionFile) => {
+      async (target) => {
         const result = await buildContextReply(
           makeParams("/context detail", false, {
             contextTokens: 8_192,
             totalTokens: 900,
-            sessionId: "session",
-            sessionFile,
+            ...target,
           }),
         );
 
         expect(result.text).toContain(
-          "Compactable transcript: 2 real conversation message(s) / 3 transcript message(s)",
+          "Compactable transcript: 2 real conversation message(s) / 130 transcript message(s)",
         );
         expect(result.text).not.toContain("Compaction note:");
+      },
+      {
+        agentId: "context-incognito",
+        sessionKey: "agent:context-incognito:dashboard:incognito-context-report",
       },
     );
   });
@@ -242,13 +292,12 @@ describe("buildContextReply", () => {
           toolName: "read",
         },
       ],
-      async (sessionFile) => {
+      async (target) => {
         const result = await buildContextReply(
           makeParams("/context detail", false, {
             contextTokens: 8_192,
             totalTokens: 900,
-            sessionId: "session",
-            sessionFile,
+            ...target,
           }),
         );
 
@@ -277,58 +326,55 @@ describe("buildContextReply", () => {
   });
 
   it("prefers the target session entry from sessionStore for cached context stats", async () => {
-    const params = makeParams("/context detail", false, {
-      contextTokens: 8_192,
-      totalTokens: 111,
-    });
-    const sessionEntry = {
-      ...params.sessionEntry,
-      sessionId: params.sessionEntry?.sessionId ?? "session-main",
-      updatedAt: params.sessionEntry?.updatedAt ?? 1,
-      totalTokens: 111,
-      totalTokensFresh: true,
-      inputTokens: 100,
-      outputTokens: 11,
-    } satisfies SessionEntry;
-    params.sessionEntry = sessionEntry;
-    params.sessionStore = {
-      [params.sessionKey]: {
-        ...sessionEntry,
-        totalTokens: 900,
+    await withTranscript([{ role: "user", content: "cached context fixture" }], async (target) => {
+      const params = makeParams("/context detail", false, {
+        contextTokens: 8_192,
+        totalTokens: 111,
+        ...target,
+      });
+      const sessionEntry = {
+        ...params.sessionEntry,
+        sessionId: target.sessionId,
+        updatedAt: params.sessionEntry?.updatedAt ?? 1,
+        totalTokens: 111,
         totalTokensFresh: true,
-        inputTokens: 700,
-        outputTokens: 200,
-      },
-    };
+        totalTokensVersion: 1,
+        inputTokens: 100,
+        outputTokens: 11,
+      } satisfies SessionEntry;
+      params.sessionEntry = sessionEntry;
+      params.sessionStore = {
+        [params.sessionKey]: {
+          ...sessionEntry,
+          totalTokens: 900,
+          totalTokensFresh: true,
+          totalTokensVersion: 1,
+          inputTokens: 700,
+          outputTokens: 200,
+        },
+      };
 
-    const result = await buildContextReply(params);
+      const result = await buildContextReply(params);
 
-    expect(result.text).toContain("Actual context usage (cached): 900 tok");
-    expect(result.text).toContain("Session tokens (cached): 900 total / ctx=8,192");
-    expect(result.text).not.toContain("Actual context usage (cached): 111 tok");
+      expect(result.text).toContain("Actual context usage (cached): 900 tok");
+      expect(result.text).toContain("Session tokens (cached): 900 total / ctx=8,192");
+      expect(result.text).not.toContain("Actual context usage (cached): 111 tok");
+    });
   });
 
-  it("renders context map as sensitive local PNG media", async () => {
+  it("omits unknown native project-document bytes from context maps", async () => {
     const result = await buildContextReply(
       makeParams("/context map", false, {
         contextTokens: 8_192,
         totalTokens: 900,
+        nativeUnverified: true,
       }),
     );
     if (!result.mediaUrl) {
       throw new Error("missing context map media path");
     }
     try {
-      const png = await readFile(result.mediaUrl);
-      expect(result.text).toContain("Context treemap");
-      expect(result.text).toContain("Source: run");
-      expect(result.text).toContain("Actual cached context: 900 tok");
-      expect(result.trustedLocalMedia).toBe(true);
-      expect(result.sensitiveMedia).toBe(true);
-      expect(png.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
-      expect(png.subarray(12, 16).toString("ascii")).toBe("IHDR");
-      expect(png.readUInt32BE(16)).toBe(1280);
-      expect(png.readUInt32BE(20)).toBe(860);
+      expect(result.text).toContain("Tracked: 1,020 chars");
     } finally {
       await unlink(result.mediaUrl);
     }
@@ -347,13 +393,12 @@ describe("buildContextReply", () => {
           toolName: "read",
         },
       ],
-      async (sessionFile) => {
+      async (target) => {
         const result = await buildContextReply(
           makeParams("/context map", false, {
             contextTokens: 8_192,
             totalTokens: 900,
-            sessionId: "session",
-            sessionFile,
+            ...target,
           }),
         );
         if (!result.mediaUrl) {
@@ -422,29 +467,6 @@ describe("buildContextReply", () => {
 /** Tests context command behavior and token reporting. */
 
 describe("buildCommandContext", () => {
-  it("canonicalizes registered aliases like /id to their primary command", () => {
-    const ctx = buildTestCtx({
-      Provider: "webchat",
-      Surface: "webchat",
-      From: "user",
-      To: "bot",
-      Body: "/id",
-      RawBody: "/id",
-      CommandBody: "/id",
-      BodyForCommands: "/id",
-    });
-
-    const result = buildCommandContext({
-      ctx,
-      cfg: {} as OpenClawConfig,
-      isGroup: false,
-      triggerBodyNormalized: "/id",
-      commandAuthorized: true,
-    });
-
-    expect(result.commandBodyNormalized).toBe("/whoami");
-  });
-
   it("preserves multiline soft reset tails after structural normalization", () => {
     const ctx = buildTestCtx({
       Provider: "whatsapp",

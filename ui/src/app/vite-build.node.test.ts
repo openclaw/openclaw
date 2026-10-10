@@ -1,0 +1,496 @@
+// @vitest-environment node
+import fsSync from "node:fs";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { brotliDecompressSync, gunzipSync } from "node:zlib";
+import { build, createLogger, type InlineConfig } from "vite";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { controlUiCodeSplitting } from "../../config/control-ui-chunking.ts";
+import controlUiViteConfig from "../../vite.config.ts";
+
+describe("Control UI Vite build", () => {
+  let root: string;
+  let outDir: string;
+  const info = vi.fn<(message: string) => void>();
+
+  function createConfig(level: "info" | "silent" = "silent"): InlineConfig {
+    info.mockReset();
+    return {
+      ...controlUiViteConfig({ outDir }),
+      configFile: false,
+      root,
+      publicDir: false,
+      logLevel: level,
+      customLogger: createLogger(level, {
+        allowClearScreen: false,
+        console: { ...console, log: info, error: vi.fn() },
+      }),
+    };
+  }
+
+  beforeEach(async () => {
+    root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "control-ui-vite-build-")));
+    outDir = path.join(root, "dist");
+    await fs.writeFile(
+      path.join(root, "index.html"),
+      '<script>globalThis.fixtureBooted = true;</script><button>Load</button><script type="module" src="./main.js"></script>',
+    );
+    await fs.writeFile(
+      path.join(root, "main.js"),
+      `document.querySelector("button").addEventListener("click", async () => {
+        const { message } = await import("./lazy.js");
+        document.body.dataset.message = message;
+      });`,
+    );
+    await fs.writeFile(
+      path.join(root, "lazy.js"),
+      'import "./lazy.css"; export const message = "Lazy content loaded";',
+    );
+    await fs.writeFile(path.join(root, "lazy.css"), "body { color: green; }");
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("omits already imported JavaScript from lazy preload tables, retaining lazy JS and CSS", async () => {
+    const config = createConfig();
+    await fs.writeFile(
+      path.join(root, "main.js"),
+      'import { shared } from "./shared.js"; globalThis.shared = shared; globalThis.load = () => import("./lazy.js");',
+    );
+    await fs.writeFile(path.join(root, "shared.js"), 'export const shared = "shared";');
+    await fs.writeFile(path.join(root, "lazy-only.js"), 'export const lazy = "lazy-only";');
+    await fs.writeFile(
+      path.join(root, "lazy.js"),
+      'import { shared } from "./shared.js"; import { lazy } from "./lazy-only.js"; import "./lazy.css"; export const message = shared + lazy;',
+    );
+    const productionBuild = config.build!;
+    config.build = {
+      ...productionBuild,
+      rolldownOptions: {
+        ...productionBuild.rolldownOptions,
+        output: {
+          codeSplitting: {
+            groups: ["shared", "lazy-only"].map((name) => ({
+              name,
+              test: (id: string) => id === path.join(root, `${name}.js`),
+            })),
+          },
+        },
+      },
+    };
+    await build(config);
+    const names = await fs.readdir(path.join(outDir, "assets"));
+    const entryName = names.find((name) => /^index-.*\.js$/u.test(name))!;
+    const entry = await fs.readFile(path.join(outDir, "assets", entryName), "utf8");
+    const table = /^const __vite__mapDeps=.*$/mu.exec(entry)?.[0];
+    expect(table).toBeDefined();
+    const sharedName = names.find((name) => /^shared-.*\.js$/u.test(name))!;
+    const lazyName = names.find((name) => /^lazy-only-.*\.js$/u.test(name))!;
+    expect(entry).toContain(sharedName);
+    expect(table).not.toContain(sharedName);
+    expect(table).toContain(lazyName);
+    expect(table).toMatch(/lazy-[^"/]+\.css/u);
+    expect(await fs.readFile(path.join(outDir, "index.html"), "utf8")).toContain(sharedName);
+  });
+
+  it("keeps page styles separate from measured JavaScript boot groups", async () => {
+    const config = createConfig();
+    const pages = fileURLToPath(new URL("../pages/", import.meta.url));
+    const first = path.join(pages, "chunk-fixture-first", "view.ts");
+    const second = path.join(pages, "chunk-fixture-second", "view.ts");
+    const lazy = path.join(pages, "chunk-fixture-lazy", "view.ts");
+    const firstCss = fileURLToPath(new URL("../styles/new-session.css", import.meta.url));
+    const secondCss = fileURLToPath(
+      new URL("../styles/chat/composer-progress.css", import.meta.url),
+    );
+    const lazyCss = path.join(path.dirname(lazy), "view.css");
+    const modules = new Map([
+      [first, 'import "../../styles/new-session.css"; export const message = "first";'],
+      [
+        second,
+        'import "../../styles/chat/composer-progress.css"; export const message = "second";',
+      ],
+      [lazy, 'import "./view.css"; export const message = "lazy";'],
+      [firstCss, ".first-page { color: red; }"],
+      [secondCss, ".second-page { color: blue; }"],
+      [lazyCss, ".lazy-page { color: purple; }"],
+    ]);
+    await fs.writeFile(path.join(root, "initial.css"), ".initial-page { color: green; }");
+    await fs.writeFile(
+      path.join(root, "main.js"),
+      'import "./initial.css"; globalThis.loadFirst = () => import("fixture:first"); globalThis.loadSecond = () => import("fixture:second"); globalThis.loadLazy = () => import("fixture:lazy");',
+    );
+    config.plugins = [
+      {
+        name: "page-style-import-owners",
+        enforce: "pre",
+        resolveId(source, importer) {
+          if (source === "fixture:first") {
+            return first;
+          }
+          if (source === "fixture:second") {
+            return second;
+          }
+          if (source === "fixture:lazy") {
+            return lazy;
+          }
+          if (importer && source.startsWith(".")) {
+            const resolved = path.resolve(path.dirname(importer), source);
+            if (modules.has(resolved)) {
+              return resolved;
+            }
+          }
+          return null;
+        },
+        load(id) {
+          return modules.get(id);
+        },
+      },
+      ...(config.plugins ?? []),
+    ];
+    config.build = {
+      ...config.build,
+      rolldownOptions: {
+        ...config.build?.rolldownOptions,
+        output: {
+          strictExecutionOrder: true,
+          codeSplitting: {
+            ...controlUiCodeSplitting,
+            groups: controlUiCodeSplitting.groups.map((group) =>
+              group.name === "control-ui-boot-shared"
+                ? Object.assign({}, group, {
+                    test: (id: string) => [first, second, firstCss, secondCss].includes(id),
+                    minSize: 0,
+                  })
+                : group,
+            ),
+          },
+        },
+      },
+    };
+    const built = await build(config);
+    if (Array.isArray(built) || !("output" in built)) {
+      throw new Error("Expected one production bundle");
+    }
+    const lazyChunk = built.output.find((chunk) => chunk.type === "chunk" && lazy in chunk.modules);
+    expect(lazyChunk?.type === "chunk" && lazyCss in lazyChunk.modules).toBe(true);
+    const names = await fs.readdir(path.join(outDir, "assets"));
+    const styles = await Promise.all(
+      names
+        .filter((name) => name.endsWith(".css"))
+        .map(async (name) => ({
+          name,
+          source: await fs.readFile(path.join(outDir, "assets", name), "utf8"),
+        })),
+    );
+    const initial = styles.find(({ source }) => source.includes(".initial-page"))!;
+    const firstStyle = styles.find(({ source }) => source.includes(".first-page"))!;
+    const secondStyle = styles.find(({ source }) => source.includes(".second-page"))!;
+    expect(new Set([initial.name, firstStyle.name, secondStyle.name]).size).toBe(3);
+    const html = await fs.readFile(path.join(outDir, "index.html"), "utf8");
+    expect(html).toContain(initial.name);
+    expect(html).not.toContain(firstStyle.name);
+    expect(html).not.toContain(secondStyle.name);
+    const scripts = (
+      await Promise.all(
+        names
+          .filter((name) => name.endsWith(".js"))
+          .map((name) => fs.readFile(path.join(outDir, "assets", name), "utf8")),
+      )
+    ).join("\n");
+    expect(scripts).toContain(firstStyle.name);
+    expect(scripts).toContain(secondStyle.name);
+  });
+
+  it("prepares the sign-in gate offline without preloading it into ordinary chat navigation", async () => {
+    const config = createConfig();
+    const gate = fileURLToPath(new URL("../components/login-gate.ts", import.meta.url));
+    const feedback = fileURLToPath(
+      new URL("../components/login-offline-fixture.ts", import.meta.url),
+    );
+    const modules = new Map([
+      [gate, `import { message } from ${JSON.stringify(feedback)}; export const label = message;`],
+      [feedback, 'export const message = "Connect again when online";'],
+    ]);
+    await fs.writeFile(
+      path.join(root, "main.js"),
+      `globalThis.loadLogin = () => import(${JSON.stringify(gate)});`,
+    );
+    config.plugins = [
+      {
+        name: "offline-login-fixture",
+        enforce: "pre",
+        resolveId: (id) => (modules.has(id) ? id : null),
+        load: (id) => modules.get(id) ?? null,
+      },
+      ...(config.plugins ?? []),
+    ];
+    const built = await build(config);
+    if (Array.isArray(built) || !("output" in built)) {
+      throw new Error("Expected one production bundle");
+    }
+    const gateChunk = built.output.find(
+      (entry) => entry.type === "chunk" && entry.facadeModuleId === gate,
+    );
+    if (!gateChunk || gateChunk.type !== "chunk") {
+      throw new Error("Expected the dynamically imported sign-in gate");
+    }
+    const worker = await fs.readFile(path.join(outDir, "sw.js"), "utf8");
+    const boot = JSON.parse(/const OFFLINE_BOOT = (.+);/u.exec(worker)![1]!) as {
+      assets: Array<{ path: string }>;
+    };
+    const cached = new Set(boot.assets.map((asset) => asset.path));
+    expect(cached.has(gateChunk.fileName)).toBe(true);
+    for (const dependency of gateChunk.imports) {
+      expect(cached.has(dependency)).toBe(true);
+    }
+    const html = await fs.readFile(path.join(outDir, "index.html"), "utf8");
+    expect(html).not.toContain(gateChunk.fileName);
+  });
+
+  it.each(["unresolved import", "blocked output"])(
+    "preserves the original %s diagnostic without finalizing the build",
+    async (failure) => {
+      const config = createConfig("info");
+      if (failure === "unresolved import") {
+        await fs.writeFile(path.join(root, "main.js"), 'import "./missing-module.js";');
+      } else {
+        await fs.mkdir(outDir);
+        await fs.writeFile(path.join(outDir, "blocked"), "output obstruction");
+        config.build = { ...config.build, emptyOutDir: false, assetsDir: "blocked" };
+      }
+      const result = build(config);
+      if (failure === "unresolved import") {
+        await expect(result).rejects.toThrow(/Could not resolve.*missing-module\.js/u);
+        await expect(result).rejects.not.toThrow(/ENOENT/u);
+        await expect(fs.stat(outDir)).rejects.toMatchObject({ code: "ENOENT" });
+      } else {
+        await expect(result).rejects.toThrow(/blocked/u);
+        await expect(result).rejects.not.toThrow(/scandir/u);
+        expect(await fs.readFile(path.join(outDir, "blocked"), "utf8")).toBe("output obstruction");
+        await expect(fs.stat(path.join(outDir, "sw.js"))).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      expect(info.mock.calls.flat().join("\n")).not.toMatch(/precompression complete|built in/u);
+    },
+  );
+
+  it("reports completed compression work before build completion at a bounded cadence", async () => {
+    const config = createConfig("info");
+    let clockMs = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => clockMs);
+    const writeFileSync = fsSync.writeFileSync;
+    vi.spyOn(fsSync, "writeFileSync").mockImplementation((file, ...args) => {
+      writeFileSync(file, ...args);
+      if (String(file).endsWith(".br") || String(file).endsWith(".gz")) {
+        clockMs += 2_500;
+      }
+    });
+    const activity: Array<{ message: string; elapsed: number; assets: number; sidecars: number }> =
+      [];
+    info.mockImplementation((message: string) => {
+      if (!message.includes("Control UI precompression")) {
+        return;
+      }
+      const emitted = fsSync.readdirSync(path.join(outDir, "assets"));
+      activity.push({
+        message,
+        elapsed: clockMs,
+        assets: emitted.filter(
+          (name) => name.endsWith(".br") && emitted.includes(name.replace(/\.br$/u, ".gz")),
+        ).length,
+        sidecars: emitted.filter((name) => /\.(br|gz)$/u.test(name)).length,
+      });
+      // The logger observes real disk writes while build() is still finalizing.
+      expect(fsSync.existsSync(path.join(outDir, "sw.js"))).toBe(false);
+    });
+    config.plugins = [
+      ...(config.plugins ?? []),
+      {
+        name: "compression-progress-fixture",
+        generateBundle() {
+          for (let index = 0; index < 4; index++) {
+            this.emitFile({
+              type: "asset",
+              fileName: `assets/extra-${index}.txt`,
+              source: "fixture",
+            });
+          }
+        },
+      },
+    ];
+
+    await build(config);
+
+    const emitted = await fs.readdir(path.join(outDir, "assets"));
+    const completed = emitted.filter((name) => name.endsWith(".gz")).length;
+    expect(completed).toBeGreaterThan(4);
+    expect(
+      activity.map(({ elapsed, assets, sidecars }) => ({ elapsed, assets, sidecars })),
+    ).toEqual([
+      ...Array.from({ length: Math.floor(completed / 2) + 1 }, (_, index) => ({
+        elapsed: index * 10_000,
+        assets: index * 2,
+        sidecars: index * 4,
+      })),
+      { elapsed: completed * 5_000, assets: completed, sidecars: completed * 2 },
+    ]);
+    expect(activity[0]?.message).toMatch(/starting/u);
+    for (const entry of activity.slice(1)) {
+      expect(entry.message).toContain(`${entry.assets} assets (${entry.sidecars} sidecars)`);
+    }
+    expect(activity.at(-1)?.message).toContain("precompression complete");
+    await expect(fs.stat(path.join(outDir, "sw.js"))).resolves.toBeDefined();
+  });
+
+  it.each([
+    { output: "configured", release: false },
+    { output: "absolute override", release: true },
+    { output: "relative override", release: false },
+    { output: "output override", release: true },
+  ])("finalizes $output assets and maps (release=$release)", async ({ output, release }) => {
+    vi.stubEnv("OPENCLAW_CONTROL_UI_RELEASE_BUILD", release ? "1" : undefined);
+    const config = createConfig();
+    const configuredOutDir = outDir;
+    if (output !== "configured") {
+      outDir = path.join(root, "overridden-output");
+      config.build =
+        output === "output override"
+          ? {
+              ...config.build,
+              rolldownOptions: {
+                ...config.build?.rolldownOptions,
+                output: { dir: outDir },
+              },
+            }
+          : {
+              ...config.build,
+              outDir: output === "relative override" ? path.relative(root, outDir) : outDir,
+            };
+    }
+    config.publicDir = fileURLToPath(new URL("../../public", import.meta.url));
+    await fs.writeFile(
+      path.join(root, "index.html"),
+      '<html><body><script>globalThis.fixtureBooted = true;</script><button>Load</button><script type="module" src="./main.js"></script></body></html>',
+    );
+    await build(config);
+    expect(info).not.toHaveBeenCalled();
+    if (output !== "configured") {
+      await expect(fs.stat(configuredOutDir)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+
+    const emitted = (await fs.readdir(path.join(outDir, "assets"))).toSorted();
+    expect(emitted.some((name) => name.endsWith(".map"))).toBe(true);
+
+    const scripts = emitted.filter((name) => name.endsWith(".js"));
+    expect(scripts.length).toBeGreaterThan(1);
+    expect(scripts.some((name) => emitted.includes(`${name}.map`))).toBe(true);
+    expect(emitted.some((name) => name.endsWith(".css"))).toBe(true);
+    for (const name of emitted.filter((fileName) => /\.(js|css)$/u.test(fileName))) {
+      const source = await fs.readFile(path.join(outDir, "assets", name));
+      const brotli = await fs.readFile(path.join(outDir, "assets", `${name}.br`));
+      const gzip = await fs.readFile(path.join(outDir, "assets", `${name}.gz`));
+      expect(brotliDecompressSync(brotli)).toEqual(source);
+      expect(gunzipSync(gzip)).toEqual(source);
+      if (name.endsWith(".js")) {
+        expect(source.toString("utf8").includes("sourceMappingURL="), name).toBe(
+          !release && emitted.includes(`${name}.map`),
+        );
+      }
+    }
+    const serviceWorker = await fs.readFile(path.join(outDir, "sw.js"), "utf8");
+    const embeddedBuildId = /const EMBEDDED_CACHE_VERSION = "([^"]+)"/u.exec(serviceWorker)?.[1];
+    const buildInfo = JSON.parse(config.define?.["globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO"]);
+    expect(embeddedBuildId).toBe(buildInfo.buildId);
+
+    const html = await fs.readFile(path.join(outDir, "index.html"), "utf8");
+    const scriptTags = html.match(/<script\b[^>]*>/gu) ?? [];
+    expect(scriptTags.length).toBeGreaterThan(0);
+    for (const tag of scriptTags) {
+      expect(tag).toMatch(/^<script data-cfasync="false"(?:\s|>)/u);
+    }
+    const cacheId = /data-openclaw-control-ui-build-id="([^"]+)"/u.exec(html)?.[1];
+    expect(cacheId?.startsWith(`${buildInfo.buildId}-`)).toBe(true);
+    expect(cacheId?.slice(buildInfo.buildId.length + 1)).toMatch(/^[a-f0-9]{64}$/u);
+    const fonts = await fs.readdir(path.join(outDir, "fonts"));
+    for (const fontCss of fonts.filter((name) => name.endsWith(".css"))) {
+      const source = await fs.readFile(path.join(outDir, "fonts", fontCss), "utf8");
+      const references = [...source.matchAll(/url\("([^"]+)"\)/gu)];
+      expect(references.length).toBeGreaterThan(0);
+      for (const [, reference] of references) {
+        const fontUrl = new URL(
+          reference!,
+          `https://control.example/ui/fonts/${fontCss}?v=${cacheId}`,
+        );
+        expect(fontUrl.searchParams.get("v")).toBe(cacheId);
+        expect(fontUrl.pathname).toMatch(/^\/ui\/fonts\/[^/]+\.woff2$/u);
+        await expect(
+          fs.stat(path.join(outDir, fontUrl.pathname.slice("/ui/".length))),
+        ).resolves.toBeDefined();
+      }
+    }
+    const webManifest: { start_url: string; icons: Array<{ src: string }> } = JSON.parse(
+      await fs.readFile(path.join(outDir, "manifest.webmanifest"), "utf8"),
+    );
+    expect(webManifest.start_url).toBe("./");
+    for (const icon of webManifest.icons) {
+      const iconUrl = new URL(icon.src, "https://control.example/ui/manifest.webmanifest");
+      expect(iconUrl.searchParams.get("v")).toBe(cacheId);
+      await expect(
+        fs.stat(path.join(outDir, iconUrl.pathname.slice("/ui/".length))),
+      ).resolves.toBeDefined();
+    }
+  });
+
+  it("changes the public asset version after a same-commit rebuild without changing worker identity", async () => {
+    const config = createConfig();
+    const publicDir = path.join(root, "public");
+    await fs.mkdir(publicDir);
+    config.publicDir = publicDir;
+    await fs.writeFile(
+      path.join(root, "index.html"),
+      '<html><script type="module" src="./main.js"></script></html>',
+    );
+    const buildInfo = JSON.parse(config.define?.["globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO"]);
+    const cacheIds: string[] = [];
+    for (const title of ["First", "Second"]) {
+      await fs.writeFile(path.join(publicDir, "favicon.svg"), `<svg><title>${title}</title></svg>`);
+      await build(config);
+      const html = await fs.readFile(path.join(outDir, "index.html"), "utf8");
+      const cacheId = /data-openclaw-control-ui-build-id="([^"]+)"/u.exec(html)?.[1];
+      expect(cacheId).toBeDefined();
+      cacheIds.push(cacheId!);
+      const worker = await fs.readFile(path.join(outDir, "sw.js"), "utf8");
+      expect(/const EMBEDDED_CACHE_VERSION = "([^"]+)"/u.exec(worker)?.[1]).toBe(buildInfo.buildId);
+    }
+    expect(cacheIds[0]).not.toBe(cacheIds[1]);
+  });
+
+  it("does not count an asset or report completion when its second sidecar write fails", async () => {
+    const config = createConfig("info");
+    const writeFileSync = fsSync.writeFileSync;
+    vi.spyOn(fsSync, "writeFileSync").mockImplementation((file, ...args) => {
+      if (String(file).endsWith(".gz")) {
+        throw new Error("synthetic gzip write failure");
+      }
+      writeFileSync(file, ...args);
+    });
+
+    await expect(build(config)).rejects.toThrow("synthetic gzip write failure");
+
+    const output = info.mock.calls.flat().join("\n");
+    expect(output).toContain("Control UI precompression: starting");
+    expect(output).not.toMatch(/\d+ assets|precompression complete|built in/u);
+    const emitted = await fs.readdir(path.join(outDir, "assets"));
+    expect(emitted.filter((name) => name.endsWith(".br"))).toHaveLength(1);
+    expect(emitted.filter((name) => name.endsWith(".gz"))).toHaveLength(0);
+    await expect(fs.stat(path.join(outDir, "sw.js"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+});

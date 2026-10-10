@@ -1,126 +1,114 @@
-// Whatsapp plugin module implements doctor contract behavior.
+import fs from "node:fs";
+import path from "node:path";
+import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-core";
 import type {
   ChannelDoctorConfigMutation,
   ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { asObjectRecord, defineChannelAliasMigration } from "openclaw/plugin-sdk/runtime-doctor";
+import {
+  asObjectRecord,
+  defineChannelAliasMigration,
+  hasLegacyAccountStreamingAliases,
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { resolveOAuthDir } from "openclaw/plugin-sdk/state-paths";
+import { listWhatsAppAccountIds, resolveDefaultWhatsAppAccountId } from "./account-ids.js";
+import { isWhatsAppBaileysAuthFileName } from "./creds-files.js";
 import { normalizeCompatibilityConfig as normalizeAckReactionConfig } from "./doctor.js";
 
 // WhatsApp's nested streaming schema is delivery-only ({chunkMode, block});
 // it has no preview mode, so only the delivery flat aliases are legal legacy
-// input. Seeding is handled below instead of via accountStreamingReplacesRoot
-// because WhatsApp resolution layers accounts.default shared config between
-// the channel root and named accounts (account-config.ts), so a materialized
-// named-account object must inherit default-account settings over root ones.
+// input. WhatsApp resolution layers accounts.default shared config between the
+// channel root and named accounts, so the shared migration materializes that
+// inheritance when it creates a named-account streaming object.
 const streamingAliasMigration = defineChannelAliasMigration({
   channelId: "whatsapp",
   streaming: { defaultMode: "partial", deliveryOnly: true },
+  accountStreamingInheritsDefaultAccount: true,
 });
 
-export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] =
-  streamingAliasMigration.legacyConfigRules;
+const hasAckReaction = (value: unknown): boolean =>
+  Boolean(asObjectRecord(asObjectRecord(value)?.ackReaction));
 
-/** Deep-fills fields missing from target with copies of source values. */
-function fillMissingStreamingFields(
-  target: Record<string, unknown>,
-  source: Record<string, unknown>,
-): { value: Record<string, unknown>; filled: boolean } {
-  let filled = false;
-  const value = { ...target };
-  for (const [key, sourceValue] of Object.entries(source)) {
-    if (sourceValue === undefined) {
-      continue;
-    }
-    const existing = value[key];
-    if (existing === undefined) {
-      value[key] = structuredClone(sourceValue);
-      filled = true;
-      continue;
-    }
-    const existingRecord = asObjectRecord(existing);
-    const sourceRecord = asObjectRecord(sourceValue);
-    if (!existingRecord || !sourceRecord) {
-      continue;
-    }
-    const merged = fillMissingStreamingFields(existingRecord, sourceRecord);
-    if (merged.filled) {
-      value[key] = merged.value;
-      filled = true;
+// The old generic seeder moved only these shared WhatsApp policy fields.
+const legacyDefaultPolicyKeys = new Set(["dmPolicy", "allowFrom", "groupPolicy", "groupAllowFrom"]);
+
+function hasPossibleLeftoverDefault(cfg: OpenClawConfig): boolean {
+  const channel = asObjectRecord(cfg.channels?.whatsapp);
+  const accounts = asObjectRecord(channel?.accounts);
+  const fallback = asObjectRecord(accounts?.default);
+  if (
+    !channel ||
+    !accounts ||
+    !fallback ||
+    channel.authDir !== undefined ||
+    (typeof channel.defaultAccount === "string" &&
+      channel.defaultAccount.trim().toLowerCase() === "default") ||
+    Object.keys(accounts).length < 2
+  ) {
+    return false;
+  }
+  const keys = Object.keys(fallback);
+  if (
+    keys.length === 0 ||
+    keys.some((key) => !legacyDefaultPolicyKeys.has(key)) ||
+    Object.values(accounts).some((account) => !asObjectRecord(account)) ||
+    cfg.bindings?.some(
+      (binding) =>
+        binding.match.channel.trim().toLowerCase() === "whatsapp" &&
+        binding.match.accountId?.trim().toLowerCase() === "default",
+    )
+  ) {
+    return false;
+  }
+  const oauthDir = resolveOAuthDir();
+  // Credentials may use the implicit directory, including a legacy root or
+  // backup. Unreadable state is not evidence that an account is unlinked.
+  for (const dir of [oauthDir, path.join(oauthDir, "whatsapp", "default")]) {
+    try {
+      if (fs.readdirSync(dir).some(isWhatsAppBaileysAuthFileName)) {
+        return false;
+      }
+    } catch (error) {
+      if (asObjectRecord(error)?.code !== "ENOENT") {
+        return false;
+      }
     }
   }
-  return { value, filled };
+  return true;
 }
 
-// The runtime merge replaces `streaming` wholesale per layer (named account >
-// accounts.default > root), while the retired flat keys resolved per key
-// across those layers. Account objects that migration materializes must carry
-// the settings the account previously inherited, or `doctor --fix` silently
-// changes effective delivery behavior for that account.
-function seedMigratedAccountStreaming(params: {
-  cfg: OpenClawConfig;
-  accountsWithoutStreamingBefore: ReadonlySet<string>;
-  changes: string[];
-}): OpenClawConfig {
-  const channels = params.cfg.channels as Record<string, unknown> | undefined;
-  const entry = asObjectRecord(channels?.whatsapp);
-  const accounts = asObjectRecord(entry?.accounts);
-  if (!entry || !accounts) {
-    return params.cfg;
+function collectDefaultAccountWarnings(cfg: OpenClawConfig): string[] {
+  if (!hasPossibleLeftoverDefault(cfg)) {
+    return [];
   }
-  const rootStreaming = asObjectRecord(entry.streaming);
-  // Account lookup treats keys case-insensitively (resolveAccountEntry), so
-  // `accounts.Default` is the default account too.
-  const defaultKey = Object.hasOwn(accounts, "default")
-    ? "default"
-    : Object.keys(accounts).find((key) => key.trim().toLowerCase() === "default");
-
-  let accountsChanged = false;
-  const nextAccounts = { ...accounts };
-  // Seed the default account first: its final object is the inheritance
-  // source for named accounts (default replaces root wholesale when set).
-  const seedOrder = Object.keys(accounts).toSorted((left, right) =>
-    left === defaultKey ? -1 : right === defaultKey ? 1 : left.localeCompare(right),
+  const namedAccountId = listWhatsAppAccountIds(cfg).find(
+    (id) => id !== "default" && normalizeOptionalAccountId(id) === id,
   );
-  for (const accountId of seedOrder) {
-    const account = asObjectRecord(nextAccounts[accountId]);
-    const created = asObjectRecord(account?.streaming);
-    if (!account || !created || !params.accountsWithoutStreamingBefore.has(accountId)) {
-      continue;
-    }
-    const defaultStreaming = defaultKey
-      ? asObjectRecord(asObjectRecord(nextAccounts[defaultKey])?.streaming)
-      : null;
-    const inheritedSource =
-      accountId === defaultKey ? rootStreaming : (defaultStreaming ?? rootStreaming);
-    if (!inheritedSource) {
-      continue;
-    }
-    const seeded = fillMissingStreamingFields(created, inheritedSource);
-    if (!seeded.filled) {
-      continue;
-    }
-    nextAccounts[accountId] = { ...account, streaming: seeded.value };
-    accountsChanged = true;
-    const sourcePath =
-      accountId === defaultKey
-        ? "channels.whatsapp.streaming"
-        : "effective channels.whatsapp streaming defaults";
-    params.changes.push(
-      `Copied ${sourcePath} into channels.whatsapp.accounts.${accountId}.streaming to keep inherited settings while migrating flat streaming keys.`,
-    );
+  if (!namedAccountId) {
+    return [];
   }
-  if (!accountsChanged) {
-    return params.cfg;
-  }
-  return {
-    ...params.cfg,
-    channels: {
-      ...channels,
-      whatsapp: { ...entry, accounts: nextAccounts },
-    },
-  } as OpenClawConfig;
+  const currentAccountId = resolveDefaultWhatsAppAccountId(cfg);
+  const suggestedAccountId = currentAccountId === "default" ? namedAccountId : currentAccountId;
+  return [
+    `channels.whatsapp.accounts.default contains only shared policy and has no detected credentials. It may be a leftover of an earlier Doctor migration or an intentional account awaiting login. Unqualified WhatsApp operations currently select "${currentAccountId}". Doctor left all accounts and routing unchanged. To select a named account while keeping all accounts and shared policy, run \`openclaw config set channels.whatsapp.defaultAccount '${JSON.stringify(suggestedAccountId)}' --strict-json\`. Only if "default" is unwanted, preserve any shared policy you still need, then run \`openclaw channels remove --channel whatsapp --account default --delete\`.`,
+  ];
 }
+
+export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
+  ...streamingAliasMigration.legacyConfigRules,
+  {
+    path: ["channels", "whatsapp", "ackReaction"],
+    message:
+      'channels.whatsapp.ackReaction moved to global message acknowledgement settings. Run "openclaw doctor --fix".',
+  },
+  {
+    path: ["channels", "whatsapp", "accounts"],
+    message:
+      'channels.whatsapp.accounts.<id>.ackReaction moved to global message acknowledgement settings. Run "openclaw doctor --fix".',
+    match: (value) => hasLegacyAccountStreamingAliases(value, hasAckReaction),
+  },
+];
 
 export function normalizeCompatibilityConfig({
   cfg,
@@ -128,25 +116,10 @@ export function normalizeCompatibilityConfig({
   cfg: OpenClawConfig;
 }): ChannelDoctorConfigMutation {
   const ackReaction = normalizeAckReactionConfig({ cfg });
-  const accountsBefore = asObjectRecord(
-    asObjectRecord((ackReaction.config.channels as Record<string, unknown> | undefined)?.whatsapp)
-      ?.accounts,
-  );
-  const accountsWithoutStreamingBefore = new Set(
-    Object.entries(accountsBefore ?? {})
-      .filter(([, account]) => asObjectRecord(account)?.streaming === undefined)
-      .map(([accountId]) => accountId),
-  );
-  const aliases = streamingAliasMigration.normalizeChannelConfig({
+  const normalized = streamingAliasMigration.normalizeChannelConfig({
     cfg: ackReaction.config,
     changes: ackReaction.changes,
   });
-  return {
-    config: seedMigratedAccountStreaming({
-      cfg: aliases.config,
-      accountsWithoutStreamingBefore,
-      changes: aliases.changes,
-    }),
-    changes: aliases.changes,
-  };
+  const warnings = collectDefaultAccountWarnings(normalized.config);
+  return { ...normalized, ...(warnings.length ? { warnings } : {}) };
 }

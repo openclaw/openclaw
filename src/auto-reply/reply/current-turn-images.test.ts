@@ -1,14 +1,25 @@
 // Tests current-turn native image hydration from inbound media paths.
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import type { MsgContext } from "../templating.js";
+import { resolveAgentTurnAttachments } from "./agent-turn-attachments.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
 
+vi.mock("./agent-turn-attachments.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./agent-turn-attachments.js")>();
+  return {
+    ...actual,
+    resolveAgentTurnAttachments: vi.fn(actual.resolveAgentTurnAttachments),
+  };
+});
+
 const originalStateDirEnv = process.env.OPENCLAW_STATE_DIR;
+const PDF_BYTES = Buffer.from("%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\n");
 
 function restoreProcessState() {
   if (originalStateDirEnv === undefined) {
@@ -25,7 +36,7 @@ describe("resolveCurrentTurnImages", () => {
   });
 
   it("hydrates Telegram-style state-relative media into native prompt images", async () => {
-    await withTempDir({ prefix: "openclaw-current-turn-images-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-current-turn-images-" }, async (base) => {
       const stateDir = path.join(base, "state");
       const cwd = path.join(base, "cwd");
       const relativePath = "media/inbound/telegram.jpg";
@@ -40,10 +51,7 @@ describe("resolveCurrentTurnImages", () => {
       const result = await resolveCurrentTurnImages({
         ctx: {
           Body: "caption",
-          MediaPath: relativePath,
-          MediaPaths: [relativePath],
-          MediaType: "image/jpeg",
-          MediaTypes: ["image/jpeg"],
+          media: [{ path: relativePath, contentType: "image/jpeg" }],
         } satisfies MsgContext,
         cfg: {} as OpenClawConfig,
       });
@@ -61,8 +69,32 @@ describe("resolveCurrentTurnImages", () => {
     });
   });
 
+  it("rejects PDF bytes despite a spoofed image kind, MIME, and filename", async () => {
+    await withTestDir({ prefix: "openclaw-current-turn-spoofed-image-" }, async (base) => {
+      const imagePath = path.join(base, "spoofed.png");
+      await fs.writeFile(imagePath, PDF_BYTES);
+
+      const result = await resolveCurrentTurnImages({
+        ctx: {
+          Body: "describe this image",
+          media: [
+            {
+              path: imagePath,
+              contentType: "image/png",
+              kind: "image",
+              workspaceDir: base,
+            },
+          ],
+        } satisfies MsgContext,
+        cfg: {} as OpenClawConfig,
+      });
+
+      expect(result.images).toBeUndefined();
+    });
+  });
+
   it("does not duplicate a prepared host-staged image during runner hydration", async () => {
-    await withTempDir({ prefix: "openclaw-current-turn-staged-image-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-current-turn-staged-image-" }, async (base) => {
       const stagingRoot = path.join(base, "media", "inbound", "staged");
       const imagePath = path.join(stagingRoot, "photo.png");
       const imageBytes = Buffer.from("host-staged-image");
@@ -70,14 +102,14 @@ describe("resolveCurrentTurnImages", () => {
       await fs.writeFile(imagePath, imageBytes);
       const sharedContext = {
         Body: "caption",
-        MediaPath: imagePath,
-        MediaPaths: [imagePath],
-        MediaType: "image/png",
-        MediaTypes: ["image/png"],
+        media: [{ path: imagePath, contentType: "image/png" }],
       } satisfies MsgContext;
 
       const prepared = await resolveCurrentTurnImages({
-        ctx: { ...sharedContext, MediaWorkspaceDir: stagingRoot },
+        ctx: {
+          ...sharedContext,
+          media: [{ path: imagePath, contentType: "image/png", workspaceDir: stagingRoot }],
+        },
         cfg: {} as OpenClawConfig,
       });
       const runner = await resolveCurrentTurnImages({
@@ -94,7 +126,7 @@ describe("resolveCurrentTurnImages", () => {
   });
 
   it("does not let a staging root expose sibling workspace images", async () => {
-    await withTempDir({ prefix: "openclaw-current-turn-staged-image-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-current-turn-staged-image-" }, async (base) => {
       const stagingRoot = path.join(base, "media", "inbound", "staged");
       const rejectedPath = path.join(base, "private.png");
       await fs.mkdir(stagingRoot, { recursive: true });
@@ -103,36 +135,12 @@ describe("resolveCurrentTurnImages", () => {
       const result = await resolveCurrentTurnImages({
         ctx: {
           Body: "caption",
-          MediaPath: rejectedPath,
-          MediaPaths: [rejectedPath],
-          MediaType: "image/png",
-          MediaTypes: ["image/png"],
-          MediaWorkspaceDir: stagingRoot,
+          media: [{ path: rejectedPath, contentType: "image/png", workspaceDir: stagingRoot }],
         } satisfies MsgContext,
         cfg: {} as OpenClawConfig,
       });
 
       expect(result.images).toBeUndefined();
-    });
-  });
-
-  it("preserves the full order when only inline image payloads are present", async () => {
-    const inlineImage = {
-      type: "image" as const,
-      data: Buffer.from("inline").toString("base64"),
-      mimeType: "image/png",
-    };
-
-    const result = await resolveCurrentTurnImages({
-      ctx: { Body: "compare these" } satisfies MsgContext,
-      cfg: {} as OpenClawConfig,
-      images: [inlineImage],
-      imageOrder: ["offloaded", "inline", "offloaded"],
-    });
-
-    expect(result).toEqual({
-      images: [inlineImage],
-      imageOrder: ["offloaded", "inline", "offloaded"],
     });
   });
 
@@ -169,48 +177,36 @@ describe("resolveCurrentTurnImages", () => {
     });
   });
 
-  it("appends extracted PDF page images without dropping current image attachments", async () => {
-    await withTempDir({ prefix: "openclaw-current-turn-pdf-images-" }, async (base) => {
-      const imagePath = path.join(base, "photo.png");
-      const imageBytes = Buffer.from("current-photo");
-      await fs.writeFile(imagePath, imageBytes);
+  it("does not rehydrate a managed copy of an already-provided inline image", async () => {
+    vi.mocked(resolveAgentTurnAttachments).mockClear();
+    const inlineImage = {
+      type: "image" as const,
+      data: Buffer.from("inline").toString("base64"),
+      mimeType: "image/png",
+    };
 
-      const pdfPage = {
-        type: "image" as const,
-        data: Buffer.from("pdf-page").toString("base64"),
-        mimeType: "image/png",
-        attachmentIndex: 1,
-      };
-
-      const result = await resolveCurrentTurnImages({
-        ctx: {
-          Body: "caption",
-          MediaPaths: [imagePath, path.join(base, "scan.pdf")],
-          MediaTypes: ["image/png", "application/pdf"],
-          MediaWorkspaceDir: base,
-        } satisfies MsgContext,
-        cfg: {} as OpenClawConfig,
-        extractedFileImages: [pdfPage],
-      });
-
-      expect(result.images).toEqual([
-        {
-          type: "image",
-          data: imageBytes.toString("base64"),
-          mimeType: "image/png",
-        },
-        {
-          type: "image",
-          data: pdfPage.data,
-          mimeType: "image/png",
-        },
-      ]);
-      expect(result.imageOrder).toEqual(["inline", "inline"]);
+    const result = await resolveCurrentTurnImages({
+      ctx: {
+        Body: "inspect",
+        media: [
+          {
+            path: "/state/media/inbound/photo.png",
+            contentType: "image/png",
+            hydrationSuppressed: true,
+          },
+        ],
+      } satisfies MsgContext,
+      cfg: {} as OpenClawConfig,
+      images: [inlineImage],
+      imageOrder: ["inline"],
     });
+
+    expect(result).toEqual({ images: [inlineImage], imageOrder: ["inline"] });
+    expect(resolveAgentTurnAttachments).not.toHaveBeenCalled();
   });
 
   it("orders extracted PDF page images before later current image attachments", async () => {
-    await withTempDir({ prefix: "openclaw-current-turn-pdf-order-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-current-turn-pdf-order-" }, async (base) => {
       const imagePath = path.join(base, "photo.png");
       await fs.writeFile(imagePath, "current-photo");
       const pdfPage = {
@@ -223,9 +219,14 @@ describe("resolveCurrentTurnImages", () => {
       const result = await resolveCurrentTurnImages({
         ctx: {
           Body: "caption",
-          MediaPaths: [path.join(base, "scan.pdf"), imagePath],
-          MediaTypes: ["application/pdf", "image/png"],
-          MediaWorkspaceDir: base,
+          media: [
+            {
+              path: path.join(base, "scan.pdf"),
+              contentType: "application/pdf",
+              workspaceDir: base,
+            },
+            { path: imagePath, contentType: "image/png", workspaceDir: base },
+          ],
         } satisfies MsgContext,
         cfg: {} as OpenClawConfig,
         extractedFileImages: [pdfPage],
@@ -236,6 +237,74 @@ describe("resolveCurrentTurnImages", () => {
         "current-photo",
       ]);
       expect(result.imageOrder).toEqual(["inline", "inline"]);
+    });
+  });
+
+  it("retains undescribed native images when a described sibling and missing sibling coexist", async () => {
+    await withTestDir({ prefix: "openclaw-current-turn-partial-" }, async (base) => {
+      const imagePath = path.join(base, "present.png");
+      const imageBytes = Buffer.from("present-image");
+      await fs.writeFile(imagePath, imageBytes);
+
+      const result = await resolveCurrentTurnImages({
+        ctx: {
+          Body: "compare these images",
+          media: [
+            {
+              path: path.join(base, "described.png"),
+              contentType: "image/png",
+              workspaceDir: base,
+            },
+            { path: imagePath, contentType: "image/png", workspaceDir: base },
+            {
+              path: path.join(base, "missing.png"),
+              contentType: "image/png",
+              workspaceDir: base,
+            },
+          ],
+          MediaUnderstanding: [
+            {
+              kind: "image.description",
+              attachmentIndex: 0,
+              provider: "imageModel",
+              text: "an already described image",
+            },
+          ],
+        } satisfies MsgContext,
+        cfg: {} as OpenClawConfig,
+      });
+
+      expect(result.images).toEqual([
+        {
+          type: "image",
+          data: imageBytes.toString("base64"),
+          mimeType: "image/png",
+        },
+      ]);
+      expect(result.imageOrder).toEqual(["inline"]);
+      expect(result.imageSourceIndexes).toEqual([1]);
+      expect(result.unresolvedSourceIndexes).toEqual([2]);
+    });
+  });
+
+  it("proceeds without native images when current media resolution throws", async () => {
+    vi.mocked(resolveAgentTurnAttachments).mockRejectedValueOnce(new Error("boom"));
+    await withTestDir({ prefix: "openclaw-current-turn-throw-" }, async (base) => {
+      const imagePath = path.join(base, "present.png");
+      await fs.writeFile(imagePath, "present-image");
+
+      const result = await resolveCurrentTurnImages({
+        ctx: {
+          Body: "describe this image",
+          media: [{ path: imagePath, contentType: "image/png", workspaceDir: base }],
+        } satisfies MsgContext,
+        cfg: {} as OpenClawConfig,
+      });
+
+      expect(result.images).toBeUndefined();
+      expect(result.imageOrder).toBeUndefined();
+      expect(result.imageSourceIndexes).toBeUndefined();
+      expect(result.unresolvedSourceIndexes).toEqual([0]);
     });
   });
 });

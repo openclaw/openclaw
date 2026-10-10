@@ -1,4 +1,3 @@
-// Runtime warning helpers for daemon install plans that depend on Node.
 import { renderSystemNodeWarning, resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 
@@ -12,6 +11,9 @@ export async function emitNodeRuntimeWarning(params: {
   warn?: DaemonInstallWarnFn;
   title: string;
 }): Promise<void> {
+  if (params.runtime !== "node") {
+    return;
+  }
   const systemNode = await resolveSystemNodeInfo({ env: params.env });
   const warning = renderSystemNodeWarning(systemNode, params.nodeProgram);
   if (warning) {

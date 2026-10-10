@@ -1,22 +1,36 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import type { ExecApprovalRequest, ExecApprovalResolved } from "../infra/exec-approvals.js";
+import type { PluginApprovalRequest, PluginApprovalResolved } from "../infra/plugin-approvals.js";
 /**
  * Tests iOS push notification dispatch for exec approval requests.
  */
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ExecApprovalRequest, ExecApprovalResolved } from "../infra/exec-approvals.js";
-import type { PluginApprovalRequest, PluginApprovalResolved } from "../infra/plugin-approvals.js";
-import { createDeferred } from "../test-utils/deferred.js";
+import {
+  createExecApprovalIosPushDelivery,
+  createPluginApprovalIosPushDelivery,
+} from "./exec-approval-ios-push.js";
 
-const listDevicePairingMock = vi.fn();
-const loadApnsRegistrationMock = vi.fn();
-const loadApnsRegistrationsMock = vi.fn();
-const resolveApnsAuthConfigFromEnvMock = vi.fn();
-const resolveApnsRelayConfigFromEnvMock = vi.fn();
-const sendApnsExecApprovalAlertMock = vi.fn();
-const sendApnsExecApprovalResolvedWakeMock = vi.fn();
-const sendApnsPluginApprovalAlertMock = vi.fn();
-const sendApnsPluginApprovalResolvedWakeMock = vi.fn();
-let createExecApprovalIosPushDelivery: typeof import("./exec-approval-ios-push.js").createExecApprovalIosPushDelivery;
-let createPluginApprovalIosPushDelivery: typeof import("./exec-approval-ios-push.js").createPluginApprovalIosPushDelivery;
+const {
+  listDevicePairingMock,
+  loadApnsRegistrationMock,
+  loadApnsRegistrationsMock,
+  resolveApnsAuthConfigFromEnvMock,
+  resolveApnsRelayConfigFromEnvMock,
+  sendApnsExecApprovalAlertMock,
+  sendApnsExecApprovalResolvedWakeMock,
+  sendApnsPluginApprovalAlertMock,
+  sendApnsPluginApprovalResolvedWakeMock,
+} = vi.hoisted(() => ({
+  listDevicePairingMock: vi.fn(),
+  loadApnsRegistrationMock: vi.fn(),
+  loadApnsRegistrationsMock: vi.fn(),
+  resolveApnsAuthConfigFromEnvMock: vi.fn(),
+  resolveApnsRelayConfigFromEnvMock: vi.fn(),
+  sendApnsExecApprovalAlertMock: vi.fn(),
+  sendApnsExecApprovalResolvedWakeMock: vi.fn(),
+  sendApnsPluginApprovalAlertMock: vi.fn(),
+  sendApnsPluginApprovalResolvedWakeMock: vi.fn(),
+}));
 
 function apnsRegistration(nodeId = "ios-device-1") {
   return {
@@ -85,6 +99,7 @@ function pluginApprovalRequest(id: string): PluginApprovalRequest {
     request: {
       title: "Install plugin update",
       description: "Allow the plugin to update its managed package.",
+      detail: '{"package":"@openclaw/example","token":"review-only"}',
       severity: "warning",
       toolName: "plugins.update",
     },
@@ -103,26 +118,22 @@ function pluginApprovalResolved(id: string): PluginApprovalResolved {
 
 function pairedIosOperator(options: {
   deviceId?: string;
-  publicKey?: string;
-  platform?: string;
-  approvedAtMs?: number;
   scopes: string[];
   approvedScopes?: string[];
-  token?: string;
 }) {
   const deviceId = options.deviceId ?? "ios-device-1";
   return {
     deviceId,
-    publicKey: options.publicKey ?? "pub",
-    platform: options.platform ?? "iOS 18",
+    publicKey: "pub",
+    platform: "iOS 18",
     role: "operator",
     roles: ["operator"],
     approvedScopes: options.approvedScopes,
     createdAtMs: 1,
-    approvedAtMs: options.approvedAtMs ?? 1,
+    approvedAtMs: 1,
     tokens: {
       operator: {
-        token: options.token ?? "operator-token",
+        token: "operator-token",
         role: "operator",
         scopes: options.scopes,
         createdAtMs: 1,
@@ -156,8 +167,9 @@ vi.mock("../infra/device-pairing.js", async () => {
   };
 });
 
-vi.mock("../infra/device-identity.js", () => ({
-  loadOrCreateProcessDeviceIdentity: () => ({ deviceId: "gateway-device-1" }),
+vi.mock("../infra/device-identity-async.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/device-identity-async.js")>()),
+  loadOrCreateProcessDeviceIdentityAsync: () => ({ deviceId: "gateway-device-1" }),
 }));
 
 vi.mock("../infra/push-apns.js", () => ({
@@ -174,11 +186,6 @@ vi.mock("../infra/push-apns.js", () => ({
 }));
 
 describe("createExecApprovalIosPushDelivery", () => {
-  beforeAll(async () => {
-    ({ createExecApprovalIosPushDelivery, createPluginApprovalIosPushDelivery } =
-      await import("./exec-approval-ios-push.js"));
-  });
-
   beforeEach(() => {
     vi.clearAllMocks();
     listDevicePairingMock.mockResolvedValue({ pending: [], paired: [] });
@@ -228,47 +235,6 @@ describe("createExecApprovalIosPushDelivery", () => {
     expect(accepted).toBe(false);
     expect(loadApnsRegistrationsMock).not.toHaveBeenCalled();
     expect(sendApnsExecApprovalAlertMock).not.toHaveBeenCalled();
-  });
-
-  it("targets iOS devices when the active operator token can approve and validate ownership", async () => {
-    mockPairedIosOperator(["operator.approvals", "operator.read"]);
-
-    const delivery = createExecApprovalIosPushDelivery({ log: {} });
-
-    const accepted = await delivery.handleRequested(approvalRequest("approval-2"));
-
-    expect(accepted).toBe(true);
-    expect(loadApnsRegistrationsMock).toHaveBeenCalledWith(["ios-device-1"]);
-    expect(sendApnsExecApprovalAlertMock).toHaveBeenCalledTimes(1);
-    expect(sendApnsExecApprovalAlertMock).toHaveBeenCalledWith(
-      expect.objectContaining({ gatewayDeviceId: "gateway-device-1" }),
-    );
-  });
-
-  it("loads APNs registrations in one bulk read for all visible iOS operators", async () => {
-    mockPairedIosOperators(
-      pairedIosOperator({
-        deviceId: "ios-device-1",
-        publicKey: "pub-1",
-        scopes: ["operator.approvals", "operator.read"],
-        token: "operator-token-1",
-      }),
-      pairedIosOperator({
-        deviceId: "ios-device-2",
-        publicKey: "pub-2",
-        platform: "iPadOS 18",
-        approvedAtMs: 2,
-        scopes: ["operator.approvals", "operator.write"],
-        token: "operator-token-2",
-      }),
-    );
-
-    const delivery = createExecApprovalIosPushDelivery({ log: {} });
-
-    await delivery.handleRequested(approvalRequest("approval-bulk-load"));
-
-    expect(loadApnsRegistrationsMock).toHaveBeenCalledTimes(1);
-    expect(loadApnsRegistrationsMock).toHaveBeenCalledWith(["ios-device-1", "ios-device-2"]);
   });
 
   it("does not target iOS devices rejected by the approval visibility filter", async () => {
@@ -342,6 +308,8 @@ describe("createExecApprovalIosPushDelivery", () => {
     await resolved;
 
     expect(sendApnsExecApprovalResolvedWakeMock).toHaveBeenCalledTimes(1);
+    expect(listDevicePairingMock).toHaveBeenCalledTimes(1);
+    expect(loadApnsRegistrationsMock).toHaveBeenLastCalledWith(["ios-device-1"]);
   });
 
   it("skips cleanup pushes when the original request target set is unknown", async () => {
@@ -356,23 +324,6 @@ describe("createExecApprovalIosPushDelivery", () => {
     expect(listDevicePairingMock).not.toHaveBeenCalled();
     expect(loadApnsRegistrationsMock).not.toHaveBeenCalled();
     expect(sendApnsExecApprovalResolvedWakeMock).not.toHaveBeenCalled();
-  });
-
-  it("sends cleanup pushes only to the original request targets", async () => {
-    mockPairedIosOperator(["operator.approvals", "operator.read"]);
-
-    const delivery = createExecApprovalIosPushDelivery({ log: {} });
-
-    await delivery.handleRequested(approvalRequest("approval-cleanup"));
-    vi.clearAllMocks();
-    loadApnsRegistrationMock.mockResolvedValue(apnsRegistration());
-    resolveApnsAuthConfigFromEnvMock.mockResolvedValue(resolvedApnsAuthConfig());
-
-    await delivery.handleResolved(approvalResolved("approval-cleanup"));
-
-    expect(listDevicePairingMock).not.toHaveBeenCalled();
-    expect(loadApnsRegistrationsMock).toHaveBeenCalledWith(["ios-device-1"]);
-    expect(sendApnsExecApprovalResolvedWakeMock).toHaveBeenCalledTimes(1);
   });
 
   describe("createPluginApprovalIosPushDelivery", () => {
@@ -403,6 +354,7 @@ describe("createExecApprovalIosPushDelivery", () => {
           description: "Allow the plugin to update its managed package.",
         }),
       );
+      expect(sendApnsPluginApprovalAlertMock.mock.calls[0]?.[0]).not.toHaveProperty("detail");
     });
 
     it("uses the shared relay delivery plan for plugin alerts", async () => {
@@ -443,23 +395,6 @@ describe("createExecApprovalIosPushDelivery", () => {
       expect(sendApnsPluginApprovalResolvedWakeMock).toHaveBeenCalledWith(
         expect.objectContaining({ approvalId: "plugin:expired" }),
       );
-    });
-
-    it("routes exec and plugin factories through the same paired-target resolver", async () => {
-      mockPairedIosOperator(["operator.approvals", "operator.read"]);
-
-      await createExecApprovalIosPushDelivery({ log: {} }).handleRequested(
-        approvalRequest("exec-shared-target"),
-      );
-      await createPluginApprovalIosPushDelivery({ log: {} }).handleRequested(
-        pluginApprovalRequest("plugin:shared-target"),
-      );
-
-      expect(listDevicePairingMock).toHaveBeenCalledTimes(2);
-      expect(loadApnsRegistrationsMock).toHaveBeenNthCalledWith(1, ["ios-device-1"]);
-      expect(loadApnsRegistrationsMock).toHaveBeenNthCalledWith(2, ["ios-device-1"]);
-      expect(sendApnsExecApprovalAlertMock).toHaveBeenCalledTimes(1);
-      expect(sendApnsPluginApprovalAlertMock).toHaveBeenCalledTimes(1);
     });
   });
 });

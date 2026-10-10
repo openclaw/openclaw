@@ -1,22 +1,34 @@
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString as normalizeText,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeInternalTurnContext } from "../../auto-reply/internal-turn-source.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
-import { normalizeChatType } from "../../channels/chat-type.js";
+import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import { resolveConversationLabel } from "../../channels/conversation-label.js";
+import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import {
   buildConversationRef,
   normalizeConversationPeerId,
 } from "../../routing/conversation-ref.js";
-import { normalizeAccountId } from "../../utils/account-id.js";
 import {
   deliveryContextFromSession,
+  sessionDeliveryOrigin,
+} from "../../utils/delivery-context.read.js";
+import {
   mergeDeliveryContext,
   normalizeDeliveryContext,
 } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import {
+  conversationRouteContextFromMsgContext,
+  type ConversationRouteContext,
+} from "./conversation-route-context.js";
 import { resolveGroupSessionKey } from "./group.js";
 import { deriveSessionOrigin } from "./metadata.js";
 import type { GroupKeyResolution, SessionEntry } from "./types.js";
 
-export type ConversationKind = "channel" | "direct" | "group";
+export type ConversationKind = ChatType;
 
 /** Stable transport address independent from the local session holding model context. */
 export type ConversationIdentity = {
@@ -34,10 +46,6 @@ export type ConversationIdentity = {
   metadata?: Record<string, unknown>;
 };
 
-function normalizeText(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function normalizeThreadId(value: unknown): string | undefined {
   if (typeof value === "number" && Number.isFinite(value)) {
     return String(value);
@@ -46,14 +54,7 @@ function normalizeThreadId(value: unknown): string | undefined {
 }
 
 function normalizeKind(value: unknown): ConversationKind {
-  const normalized = normalizeChatType(typeof value === "string" ? value : undefined);
-  if (normalized === "channel") {
-    return "channel";
-  }
-  if (normalized === "group") {
-    return "group";
-  }
-  return "direct";
+  return normalizeChatType(typeof value === "string" ? value : undefined) ?? "direct";
 }
 
 function resolvePairedOriginPeerId(params: {
@@ -65,19 +66,19 @@ function resolvePairedOriginPeerId(params: {
   if (params.kind !== "direct") {
     return undefined;
   }
-  const origin = params.entry.origin;
+  const origin = sessionDeliveryOrigin(params.entry);
   const originFrom = normalizeText(origin?.from);
   const originTo = normalizeText(origin?.to);
-  const originChannel = normalizeText(origin?.provider)?.toLowerCase();
-  const deliveryChannel = normalizeText(params.deliveryContext?.channel)?.toLowerCase();
+  const originChannel = normalizeOptionalLowercaseString(origin?.provider);
+  const deliveryChannel = normalizeOptionalLowercaseString(params.deliveryContext?.channel);
   if (
     !originFrom ||
     originTo !== params.deliveryTarget ||
     !originChannel ||
     originChannel !== deliveryChannel ||
     normalizeChatType(origin?.chatType) !== params.kind ||
-    (normalizeAccountId(origin?.accountId) ?? "default") !==
-      (normalizeAccountId(params.deliveryContext?.accountId) ?? "default") ||
+    (normalizeOptionalAccountId(origin?.accountId) ?? "default") !==
+      (normalizeOptionalAccountId(params.deliveryContext?.accountId) ?? "default") ||
     normalizeThreadId(origin?.threadId) !== normalizeThreadId(params.deliveryContext?.threadId)
   ) {
     return undefined;
@@ -99,7 +100,7 @@ export function buildConversationIdentity(params: {
   label?: string;
   metadata?: Record<string, unknown>;
 }): ConversationIdentity | null {
-  const channel = normalizeText(params.channel)?.toLowerCase();
+  const channel = normalizeOptionalLowercaseString(params.channel);
   const rawPeerId = normalizeText(params.peerId);
   if (!channel || !rawPeerId) {
     return null;
@@ -114,7 +115,7 @@ export function buildConversationIdentity(params: {
   if (!deliveryTarget) {
     return null;
   }
-  const accountId = normalizeAccountId(params.accountId) ?? "default";
+  const accountId = normalizeOptionalAccountId(params.accountId) ?? "default";
   const rawParent = normalizeText(params.parentConversationRef);
   const parentConversationRef = rawParent
     ? rawParent.startsWith("conv_")
@@ -127,6 +128,9 @@ export function buildConversationIdentity(params: {
         })
     : undefined;
   const threadId = normalizeThreadId(params.threadId);
+  const nativeChannelId = normalizeText(params.nativeChannelId);
+  const nativeDirectUserId = normalizeText(params.nativeDirectUserId);
+  const label = normalizeText(params.label);
   return {
     conversationRef: buildConversationRef({
       channel,
@@ -143,13 +147,9 @@ export function buildConversationIdentity(params: {
     deliveryTarget,
     ...(parentConversationRef ? { parentConversationRef } : {}),
     ...(threadId ? { threadId } : {}),
-    ...(normalizeText(params.nativeChannelId)
-      ? { nativeChannelId: normalizeText(params.nativeChannelId) }
-      : {}),
-    ...(normalizeText(params.nativeDirectUserId)
-      ? { nativeDirectUserId: normalizeText(params.nativeDirectUserId) }
-      : {}),
-    ...(normalizeText(params.label) ? { label: normalizeText(params.label) } : {}),
+    ...(nativeChannelId ? { nativeChannelId } : {}),
+    ...(nativeDirectUserId ? { nativeDirectUserId } : {}),
+    ...(label ? { label } : {}),
     ...(params.metadata ? { metadata: params.metadata } : {}),
   };
 }
@@ -157,21 +157,16 @@ export function buildConversationIdentity(params: {
 /** Derives a transport address from the canonical route snapshot persisted on a session. */
 export function conversationIdentityFromSessionEntry(
   entry: SessionEntry,
+  routeContext?: ConversationRouteContext | null,
 ): ConversationIdentity | null {
-  // Explicit route snapshots own their populated fields, while persisted
-  // origin/last-route facts fill gaps such as an omitted account id.
-  const deliveryContext = mergeDeliveryContext(
-    normalizeDeliveryContext(entry.deliveryContext),
-    deliveryContextFromSession(entry),
-  );
+  const deliveryContext = deliveryContextFromSession(entry);
+  const origin = sessionDeliveryOrigin(entry);
   const kind = normalizeKind(entry.chatType);
   const routeTarget = normalizeText(deliveryContext?.to);
   const deliveryTarget =
-    routeTarget ?? (kind === "direct" ? normalizeText(entry.origin?.from) : undefined);
+    routeTarget ?? (kind === "direct" ? normalizeText(origin?.from) : undefined);
   const routeOwnsTarget = Boolean(routeTarget);
-  const channel = routeOwnsTarget
-    ? deliveryContext?.channel
-    : (normalizeText(entry.origin?.provider) ?? normalizeText(entry.channel));
+  const channel = routeOwnsTarget ? deliveryContext?.channel : normalizeText(origin?.provider);
   // Outbound routes can use an alias for delivery while `origin.from` carries
   // the canonical peer. Trust it only when both snapshots are fully paired.
   const pairedOriginPeerId = routeTarget
@@ -184,14 +179,14 @@ export function conversationIdentityFromSessionEntry(
     : undefined;
   return buildConversationIdentity({
     channel,
-    accountId: routeOwnsTarget ? deliveryContext?.accountId : entry.origin?.accountId,
+    accountId: routeOwnsTarget ? deliveryContext?.accountId : origin?.accountId,
     kind,
     // Native ids remain descriptive metadata and cannot redirect a stored conversation ref.
-    peerId: pairedOriginPeerId ?? deliveryTarget,
+    peerId: routeContext?.peerId ?? pairedOriginPeerId ?? deliveryTarget,
     deliveryTarget,
-    threadId: routeOwnsTarget ? deliveryContext?.threadId : entry.origin?.threadId,
-    nativeChannelId: entry.origin?.nativeChannelId,
-    nativeDirectUserId: entry.origin?.nativeDirectUserId,
+    threadId: routeOwnsTarget ? deliveryContext?.threadId : origin?.threadId,
+    nativeChannelId: origin?.nativeChannelId,
+    nativeDirectUserId: origin?.nativeDirectUserId,
     label: entry.displayName ?? entry.label,
   });
 }
@@ -202,21 +197,29 @@ export function conversationIdentityFromMsgContext(params: {
   deliveryContext?: DeliveryContext;
   groupResolution?: GroupKeyResolution | null;
 }): ConversationIdentity | null {
+  normalizeInternalTurnContext(params.ctx);
   const route = deriveSessionOrigin(params.ctx);
   const explicitDeliveryContext = normalizeDeliveryContext(params.deliveryContext);
-  const routeDeliveryContext = normalizeDeliveryContext({
+  const deliveryContext = mergeDeliveryContext(explicitDeliveryContext, {
     channel: route?.provider,
     to: route?.to,
     accountId: route?.accountId,
     threadId: route?.threadId,
   });
-  const deliveryContext = mergeDeliveryContext(explicitDeliveryContext, routeDeliveryContext);
+  // A synthetic turn has no transport sender. Its host-prepared originating route
+  // is paired delivery, while From can be an allowlist identity used for execution.
+  const pairedDeliveryContext =
+    explicitDeliveryContext ??
+    (params.ctx.InternalTurnSource && params.ctx.OriginatingChannel && params.ctx.OriginatingTo
+      ? deliveryContext
+      : undefined);
   const groupResolution = params.groupResolution ?? resolveGroupSessionKey(params.ctx);
+  const routeContext = conversationRouteContextFromMsgContext(params.ctx);
   const kind = groupResolution?.chatType ?? normalizeKind(params.ctx.ChatType);
   const directIngressTarget = kind === "direct" ? normalizeText(params.ctx.From) : undefined;
   // An explicit delivery context is already a paired route. Otherwise direct ingress
   // addresses the sender (`From`), while OriginatingTo can describe the local endpoint.
-  const useDirectIngressTarget = Boolean(directIngressTarget && !explicitDeliveryContext?.to);
+  const useDirectIngressTarget = Boolean(directIngressTarget && !pairedDeliveryContext?.to);
   const deliveryTarget = useDirectIngressTarget
     ? directIngressTarget
     : (normalizeText(deliveryContext?.to) ??
@@ -237,7 +240,7 @@ export function conversationIdentityFromMsgContext(params: {
       ? (route?.accountId ?? params.ctx.AccountId)
       : (deliveryContext?.accountId ?? route?.accountId ?? params.ctx.AccountId),
     kind,
-    peerId: deliveryTarget,
+    peerId: routeContext?.peerId ?? deliveryTarget,
     deliveryTarget,
     threadId: useDirectIngressTarget
       ? (route?.threadId ?? params.ctx.MessageThreadId)

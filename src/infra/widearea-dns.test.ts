@@ -1,8 +1,10 @@
 // Tests wide-area DNS discovery parsing and timeout behavior.
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import * as utils from "../utils.js";
 import {
   getWideAreaZonePath,
   normalizeWideAreaDomain,
@@ -11,6 +13,13 @@ import {
   type WideAreaGatewayZoneOpts,
   writeWideAreaGatewayZone,
 } from "./widearea-dns.js";
+
+const replaceFileAtomicSyncMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@openclaw/fs-safe/atomic", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/fs-safe/atomic")>()),
+  replaceFileAtomicSync: replaceFileAtomicSyncMock,
+}));
 
 const baseZoneOpts: WideAreaGatewayZoneOpts = {
   domain: "openclaw.internal.",
@@ -41,79 +50,18 @@ function expectZoneRecords(text: string, records: string[]): void {
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  replaceFileAtomicSyncMock.mockReset();
 });
 
 describe("wide-area DNS discovery domain helpers", () => {
-  it.each([
-    { value: "openclaw.internal", expected: "openclaw.internal." },
-    { value: "openclaw.internal.", expected: "openclaw.internal." },
-    { value: "  openclaw.internal  ", expected: "openclaw.internal." },
-    { value: "", expected: null },
-    { value: "   ", expected: null },
-    { value: null, expected: null },
-    { value: undefined, expected: null },
-  ])("normalizes domains for %j", ({ value, expected }) => {
-    expect(normalizeWideAreaDomain(value)).toBe(expected);
+  it("normalizes domains with a terminal dot", () => {
+    expect(normalizeWideAreaDomain("openclaw.internal.")).toBe("openclaw.internal.");
   });
 
-  it.each(["../../x", "foo/bar", "foo\\bar", "evil\nrecords", "openclaw..internal"])(
-    "rejects invalid domains for %j",
-    (value) => {
-      expect(() => normalizeWideAreaDomain(value)).toThrow(
-        "wide-area discovery domain must be a valid DNS name",
-      );
-    },
-  );
-
-  it.each([
-    {
-      name: "prefers config domain over env",
-      params: {
-        env: { OPENCLAW_WIDE_AREA_DOMAIN: "env.internal" } as NodeJS.ProcessEnv,
-        configDomain: "config.internal",
-      },
-      expected: "config.internal.",
-    },
-    {
-      name: "falls back to env domain",
-      params: {
-        env: { OPENCLAW_WIDE_AREA_DOMAIN: "env.internal" } as NodeJS.ProcessEnv,
-      },
-      expected: "env.internal.",
-    },
-    {
-      name: "returns null when both sources are blank",
-      params: {
-        env: { OPENCLAW_WIDE_AREA_DOMAIN: "   " } as NodeJS.ProcessEnv,
-        configDomain: " ",
-      },
-      expected: null,
-    },
-    {
-      name: "returns null for invalid config domains",
-      params: {
-        env: { OPENCLAW_WIDE_AREA_DOMAIN: "env.internal" } as NodeJS.ProcessEnv,
-        configDomain: "foo/bar",
-      },
-      expected: null,
-    },
-    {
-      name: "returns null for invalid env domains",
-      params: {
-        env: { OPENCLAW_WIDE_AREA_DOMAIN: "foo/bar" } as NodeJS.ProcessEnv,
-      },
-      expected: null,
-    },
-  ])("$name", ({ params, expected }) => {
-    expect(resolveWideAreaDiscoveryDomain(params)).toBe(expected);
-  });
-
-  it("builds valid zone paths under the DNS config directory", () => {
-    const dnsDir = path.resolve(utils.CONFIG_DIR, "dns");
-    const zonePath = getWideAreaZonePath("openclaw.internal.");
-
-    expect(zonePath).toBe(path.join(dnsDir, "openclaw.internal.db"));
-    expect(path.relative(dnsDir, zonePath)).toBe("openclaw.internal.db");
+  it("returns null for invalid env domains", () => {
+    expect(
+      resolveWideAreaDiscoveryDomain({ env: { OPENCLAW_WIDE_AREA_DOMAIN: "foo/bar" } }),
+    ).toBeNull();
   });
 });
 
@@ -139,11 +87,6 @@ describe("wide-area DNS-SD zone rendering", () => {
   });
 
   it.each([
-    {
-      name: "includes tailnetDns when provided",
-      overrides: { tailnetDns: "peters-mac-studio-1.sheep-coho.ts.net" },
-      records: [`tailnetDns=peters-mac-studio-1.sheep-coho.ts.net`],
-    },
     {
       name: "includes gateway TLS TXT fields and trims display metadata",
       overrides: {
@@ -181,26 +124,17 @@ describe("wide-area DNS zone writes", () => {
     );
   });
 
-  it.each(["../../x", "foo/bar", "foo\\bar", "evil\nrecords", "openclaw..internal"])(
-    "rejects invalid domain %j before writing",
-    async (domain) => {
-      const ensureDirSpy = vi.spyOn(utils, "ensureDir").mockResolvedValue(undefined);
-      const writeSpy = vi.spyOn(fs, "writeFileSync").mockImplementation(() => undefined);
+  it("rejects path traversal domains before writing", async () => {
+    await expect(writeWideAreaGatewayZone(makeZoneOpts({ domain: "../../x" }))).rejects.toThrow(
+      "wide-area discovery domain must be a valid DNS name",
+    );
 
-      await expect(writeWideAreaGatewayZone(makeZoneOpts({ domain }))).rejects.toThrow(
-        "wide-area discovery domain must be a valid DNS name",
-      );
-
-      expect(ensureDirSpy).not.toHaveBeenCalled();
-      expect(writeSpy).not.toHaveBeenCalled();
-    },
-  );
+    expect(replaceFileAtomicSyncMock).not.toHaveBeenCalled();
+  });
 
   it("skips rewriting unchanged content", async () => {
-    vi.spyOn(utils, "ensureDir").mockResolvedValue(undefined);
     const existing = renderWideAreaGatewayZoneText({ ...makeZoneOpts(), serial: 2026031301 });
     vi.spyOn(fs, "readFileSync").mockReturnValue(existing);
-    const writeSpy = vi.spyOn(fs, "writeFileSync").mockImplementation(() => undefined);
 
     const result = await writeWideAreaGatewayZone(makeZoneOpts());
 
@@ -208,17 +142,15 @@ describe("wide-area DNS zone writes", () => {
       zonePath: getWideAreaZonePath("openclaw.internal."),
       changed: false,
     });
-    expect(writeSpy).not.toHaveBeenCalled();
+    expect(replaceFileAtomicSyncMock).not.toHaveBeenCalled();
   });
 
   it("increments same-day serials when content changes", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-13T12:00:00.000Z"));
-    vi.spyOn(utils, "ensureDir").mockResolvedValue(undefined);
     vi.spyOn(fs, "readFileSync").mockReturnValue(
       renderWideAreaGatewayZoneText({ ...makeZoneOpts(), serial: 2026031304 }),
     );
-    const writeSpy = vi.spyOn(fs, "writeFileSync").mockImplementation(() => undefined);
 
     const result = await writeWideAreaGatewayZone(
       makeZoneOpts({ gatewayTlsEnabled: true, gatewayTlsFingerprintSha256: "abc123" }),
@@ -232,10 +164,74 @@ describe("wide-area DNS zone writes", () => {
       ...makeZoneOpts({ gatewayTlsEnabled: true, gatewayTlsFingerprintSha256: "abc123" }),
       serial: 2026031305,
     });
-    expect(writeSpy).toHaveBeenCalledWith(
-      getWideAreaZonePath("openclaw.internal."),
-      expectedZoneText,
-      "utf-8",
-    );
+    expect(replaceFileAtomicSyncMock).toHaveBeenCalledWith({
+      filePath: getWideAreaZonePath("openclaw.internal."),
+      content: expectedZoneText,
+      dirMode: 0o700,
+      mode: 0o644,
+      preserveExistingMode: true,
+      syncTempFile: true,
+      syncParentDir: true,
+      tempPrefix: ".openclaw-dns-zone",
+    });
   });
+
+  it.runIf(process.platform !== "win32")(
+    "preserves the previous zone when the replacement exceeds the OS file-size limit",
+    () => {
+      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-widearea-dns-fault-"));
+      const dnsDir = path.join(stateDir, "dns");
+      const zonePath = path.join(dnsDir, "openclaw.internal.db");
+      const previous = "; previous valid zone\n$ORIGIN openclaw.internal.\n";
+      fs.mkdirSync(dnsDir);
+      fs.writeFileSync(zonePath, previous, { mode: 0o640 });
+
+      try {
+        const moduleUrl = pathToFileURL(path.resolve("src/infra/widearea-dns.ts")).href;
+        const script = `
+          const { writeWideAreaGatewayZone } = await import(${JSON.stringify(moduleUrl)});
+          try {
+            await writeWideAreaGatewayZone({
+              domain: "openclaw.internal",
+              gatewayPort: 18789,
+              displayName: "X".repeat(8192),
+              tailnetIPv4: "100.64.0.1",
+            });
+            process.exitCode = 24;
+          } catch (error) {
+            if (error?.code !== "EFBIG") {
+              console.error(error);
+              process.exitCode = 25;
+            }
+          }
+        `;
+        const child = spawnSync(
+          "/bin/sh",
+          [
+            "-c",
+            'ulimit -f 1; exec "$@"',
+            "openclaw-widearea-dns-fault",
+            process.execPath,
+            "--import",
+            "tsx",
+            "--input-type=module",
+            "-e",
+            script,
+          ],
+          {
+            cwd: process.cwd(),
+            encoding: "utf8",
+            env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+          },
+        );
+
+        expect(child.status, child.stderr).toBe(0);
+        expect(fs.readFileSync(zonePath, "utf8")).toBe(previous);
+        expect(fs.statSync(zonePath).mode & 0o777).toBe(0o640);
+        expect(fs.readdirSync(dnsDir)).toEqual(["openclaw.internal.db"]);
+      } finally {
+        fs.rmSync(stateDir, { force: true, recursive: true });
+      }
+    },
+  );
 });

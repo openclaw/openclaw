@@ -1,0 +1,92 @@
+import { t } from "../../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { formatDurationCompact } from "../../lib/format-duration.ts";
+import { formatRelativeTimestamp } from "../../lib/format.ts";
+import { prettifyPlatform } from "../../lib/platform-label.ts";
+import type { DraftEnvironment } from "./discovery.ts";
+
+registerNewSessionSetupEnglish();
+
+export const MAX_PLACE_MENU_FACTS = 4;
+const CAPABILITY_FACT_KEYS = {
+  camera: "newSession.capabilityCamera",
+  location: "newSession.capabilityLocation",
+  talk: "newSession.capabilityTalk",
+  screen: "newSession.capabilityScreenCapture",
+  canvas: "newSession.capabilityCanvas",
+  microphone: "newSession.capabilityVoice",
+  voice: "newSession.capabilityVoice",
+} as const;
+
+export function environmentIssueFact(
+  environment: DraftEnvironment | undefined,
+): string | undefined {
+  const update = environment?.issues?.find((issue) => issue.code === "update-required");
+  return update
+    ? t("newSession.nodeUpdateRequired", {
+        updateCommand: update.updateCommand,
+        restartCommand: update.headlessReconnectCommand,
+      })
+    : environment?.issues?.find((issue) => issue.code === "worker-host-unavailable")?.message;
+}
+
+function environmentLifecycleFact(params: {
+  environment: DraftEnvironment | undefined;
+  connected: boolean;
+  nowMs: number;
+}): string | undefined {
+  if (params.connected) {
+    return undefined;
+  }
+  const environment = params.environment;
+  if (environment?.lastConnectedAtMs === undefined) {
+    return t("newSession.neverConnected");
+  }
+  if (environment.lastDisconnectedAtMs !== undefined) {
+    const duration =
+      formatDurationCompact(Math.max(0, params.nowMs - environment.lastDisconnectedAtMs)) ??
+      t("common.justNow");
+    return t("newSession.offlineFor", { duration });
+  }
+  const lastSeenAtMs = environment.lastSeenAtMs ?? environment.lastConnectedAtMs;
+  return t("newSession.lastSeen", {
+    time: formatRelativeTimestamp(lastSeenAtMs),
+  });
+}
+
+export function environmentMenuFacts(
+  environment: DraftEnvironment | undefined,
+  options: { connected?: boolean; nowMs?: number } = {},
+): string[] {
+  const lifecycle = environmentLifecycleFact({
+    environment,
+    connected: options.connected ?? true,
+    nowMs: options.nowMs ?? Date.now(),
+  });
+  const priorityFact = environmentIssueFact(environment) ?? lifecycle;
+  const facts = priorityFact ? [priorityFact] : [];
+  if (environment?.platform) {
+    facts.push(prettifyPlatform(environment.platform));
+  }
+  for (const fact of environmentCapabilityLabels(environment?.capabilities)) {
+    if (!facts.includes(fact)) {
+      facts.push(fact);
+    }
+    if (facts.length >= MAX_PLACE_MENU_FACTS) {
+      break;
+    }
+  }
+  return facts;
+}
+
+export function environmentCapabilityLabels(capabilities: readonly string[] = []): string[] {
+  return [
+    ...new Set(
+      capabilities.flatMap((capability) => {
+        const family = capability.split(".", 1)[0]?.toLowerCase();
+        const key = Object.entries(CAPABILITY_FACT_KEYS).find(([name]) => name === family)?.[1];
+        return key ? [t(key)] : [];
+      }),
+    ),
+  ];
+}

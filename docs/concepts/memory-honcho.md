@@ -53,7 +53,10 @@ openclaw gateway --force
 ```
 
 The setup command prompts for your API credentials, writes the config, and
-optionally migrates existing workspace memory files.
+optionally migrates existing workspace memory files. The API key it asks for is
+issued by [Honcho](https://honcho.dev), not by OpenClaw, and is only needed for
+the managed API at `api.honcho.dev`; a self-hosted Honcho deployment has no key
+to enter.
 
 <Info>
 Honcho can run entirely locally (self-hosted) or via the managed API at
@@ -87,8 +90,8 @@ For self-hosted instances, point `baseUrl` to your local server (for example
 ## Migrating existing memory
 
 If you have existing workspace memory files (`USER.md`, `MEMORY.md`,
-`IDENTITY.md`, `memory/`, `canvas/`), `openclaw honcho setup` detects and
-offers to migrate them.
+`IDENTITY.md`, `memory/`), `openclaw honcho setup` detects and offers to
+migrate them.
 
 <Info>
 Migration is non-destructive - files are uploaded to Honcho. Originals are
@@ -107,18 +110,17 @@ sees the prompt.
 
 ## Honcho vs builtin memory
 
-|                   | Builtin / QMD                | Honcho                              |
-| ----------------- | ---------------------------- | ----------------------------------- |
-| **Storage**       | Workspace Markdown files     | Dedicated service (local or hosted) |
-| **Cross-session** | Via memory files             | Automatic, built-in                 |
-| **User modeling** | Manual (write to MEMORY.md)  | Automatic profiles                  |
-| **Search**        | Vector + keyword (hybrid)    | Semantic over observations          |
-| **Multi-agent**   | Not tracked                  | Parent/child awareness              |
-| **Dependencies**  | None (builtin) or QMD binary | Plugin install                      |
+|                   | Builtin memory              | Honcho                              |
+| ----------------- | --------------------------- | ----------------------------------- |
+| **Storage**       | Workspace Markdown files    | Dedicated service (local or hosted) |
+| **Cross-session** | Via memory files            | Automatic, built-in                 |
+| **User modeling** | Manual (write to MEMORY.md) | Automatic profiles                  |
+| **Search**        | Vector + keyword (hybrid)   | Semantic over observations          |
+| **Multi-agent**   | Not tracked                 | Parent/child awareness              |
+| **Dependencies**  | None                        | Plugin install                      |
 
-Honcho and the builtin memory system can work together. When QMD is
-configured, additional tools become available for searching local Markdown
-files alongside Honcho's cross-session memory.
+Honcho and the builtin memory system can work together. Builtin search keeps
+local Markdown available alongside Honcho's cross-session memory.
 
 ## CLI commands
 
@@ -139,5 +141,4 @@ openclaw honcho search <query> [-k N] [-d D] # Semantic search over memory
 
 - [Memory overview](/concepts/memory)
 - [Builtin memory engine](/concepts/memory-builtin)
-- [QMD memory engine](/concepts/memory-qmd)
 - [Context Engines](/concepts/context-engine)

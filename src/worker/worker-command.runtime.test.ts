@@ -1,0 +1,816 @@
+import { Console } from "node:console";
+import path from "node:path";
+import { PassThrough, Writable } from "node:stream";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  WORKER_PROTOCOL_FEATURES,
+  WORKER_RPC_SET_VERSION,
+} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { setLoggerOverride } from "../logging/logger.js";
+import { loggingState } from "../logging/state.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { WorkerBrowserRuntime } from "./browser-runtime.js";
+import type { WorkerLaunchDescriptor } from "./launch-descriptor.js";
+import { runWorkerCommand } from "./worker-command.runtime.js";
+import {
+  buildWorkerProcessTurn,
+  parseWorkerProcessMessage,
+  serializeWorkerProcessInput,
+  type WorkerProcessMessage,
+  type WorkerProcessResult,
+} from "./worker-process-protocol.js";
+import { runWorkerProcess } from "./worker-process.js";
+import { createWorkerRuntimeEnvironment, runWorkerDescriptor } from "./worker.runtime.js";
+
+const managedRuntime = vi.hoisted(() => ({
+  backgroundCount: 0,
+  close: vi.fn(),
+  waitForExecScope: vi.fn(),
+  disposeProfile: vi.fn(),
+}));
+
+vi.mock("../agents/bash-process-registry.js", () => ({
+  getActiveBackgroundExecSessionCount: () => managedRuntime.backgroundCount,
+  waitForExecScope: managedRuntime.waitForExecScope,
+}));
+
+vi.mock("./github-binding.runtime.js", () => ({
+  disposeWorkerGitHubEnvironment: managedRuntime.disposeProfile,
+}));
+
+vi.mock("./worker.runtime.js", () => ({
+  runWorkerDescriptor: vi.fn(),
+  createWorkerRuntimeEnvironment: vi.fn(),
+}));
+
+const descriptor = {
+  version: 4,
+  connectionEndpoint: { kind: "unix", socketPath: "/tmp/openclaw-worker/gateway.sock" },
+  admission: {
+    environmentId: "environment-1",
+    credential: ["worker", "fixture", "value"].join("-"),
+    sessionId: "session-1",
+    ownerEpoch: 1,
+    rpcSetVersion: WORKER_RPC_SET_VERSION,
+    handshake: {
+      bundleHash: "a".repeat(64),
+      openclawVersion: "2026.7.12",
+      protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
+    },
+  },
+  assignment: {
+    agentId: "agent-1",
+    operationalRunInstance: { instanceId: "instance-run-1", runId: "run-1" },
+    agentRuntimeIdentityToken: "signed-runtime-token",
+    runId: "run-1",
+    turnId: "turn-1",
+    prompt: "Inspect the workspace.",
+    suppressPromptTranscript: false,
+    workspaceDir: "/tmp/openclaw-worker/workspace",
+    modelRef: { provider: "provider-1", model: "model-1" },
+    inferenceOptions: { reasoning: "medium", maxTokens: 512 },
+    initialMessages: [
+      {
+        role: "user",
+        content: [{ type: "text", text: "Earlier context." }],
+        timestamp: 1,
+      },
+    ],
+    transcript: { baseLeafId: "leaf-7", nextSeq: 8 },
+    liveEvents: { ackedSeq: 12, nextSeq: 13 },
+    toolAuthority: { allowedToolNames: ["read", "exec"] },
+  },
+} satisfies WorkerLaunchDescriptor;
+
+function commandInput() {
+  const input = new PassThrough();
+  input.end(JSON.stringify(descriptor));
+  return input;
+}
+
+function processHarness(properties: Record<string, unknown> = {}) {
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  const originalConsole = globalThis.console;
+  const previousLogging = { ...loggingState };
+  const replacements = { stdin: commandInput(), stdout, stderr, ...properties };
+  const originalProperties = new Map(
+    Object.keys(replacements).map((key) => [key, Object.getOwnPropertyDescriptor(process, key)]),
+  );
+  for (const [key, value] of Object.entries(replacements)) {
+    Object.defineProperty(process, key, { configurable: true, value });
+  }
+  globalThis.console = new Console({ stdout, stderr });
+  loggingState.consolePatched = false;
+  loggingState.forceConsoleToStderr = false;
+  loggingState.rawConsole = null;
+  loggingState.streamErrorHandlersInstalled = false;
+  return {
+    stdout,
+    stderr,
+    restore: () => {
+      for (const [key, propertyDescriptor] of originalProperties) {
+        if (propertyDescriptor) {
+          Object.defineProperty(process, key, propertyDescriptor);
+        } else {
+          Reflect.deleteProperty(process, key);
+        }
+      }
+      globalThis.console = originalConsole;
+      Object.assign(loggingState, previousLogging);
+      stdout.destroy();
+      stderr.destroy();
+    },
+  };
+}
+
+function lifetimeHarness() {
+  const controller = new AbortController();
+  let resolveStarted!: (started: boolean) => void;
+  const started = new Promise<boolean>((resolve) => {
+    resolveStarted = resolve;
+  });
+  const dispose = vi.fn();
+  const reportConnectionFailure = vi.fn();
+  const terminateOwnedTree = vi.fn();
+  return {
+    contract: {
+      dispose,
+      reportConnectionFailure,
+      signal: controller.signal,
+      started,
+      terminateOwnedTree,
+    },
+    disconnectAfterStart: () => controller.abort(new Error("worker supervisor lifetime ended")),
+    disconnectBeforeStart: () => resolveStarted(false),
+    dispose,
+    open: () => resolveStarted(true),
+    terminateOwnedTree,
+  };
+}
+
+function managedHarness() {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const results: WorkerProcessResult[] = [];
+  output.on("data", (chunk: Buffer) => {
+    const result = parseWorkerProcessMessage(JSON.parse(chunk.toString("utf8")));
+    if (result?.type === "result") {
+      results.push(result);
+    }
+  });
+  const launch: WorkerLaunchDescriptor = structuredClone(descriptor);
+  launch.assignment = {
+    ...launch.assignment,
+    workspaceDir: process.cwd(),
+    permissionMode: "full",
+    workerContainmentRoot: process.cwd(),
+  };
+  const send = (value: unknown) => input.write(`${JSON.stringify(value)}\n`);
+  return {
+    input,
+    output,
+    results,
+    nextMessage: () =>
+      new Promise<WorkerProcessMessage>((resolve, reject) => {
+        output.once("data", (chunk: Buffer) => {
+          const message = parseWorkerProcessMessage(JSON.parse(chunk.toString("utf8")));
+          if (message) {
+            resolve(message);
+          } else {
+            reject(new Error("Invalid worker message"));
+          }
+        });
+      }),
+    launch,
+    send,
+    turn: (value: WorkerLaunchDescriptor = launch, idleRetention = false) =>
+      send(buildWorkerProcessTurn(value, idleRetention)),
+  };
+}
+
+function gatedCommandHarness(mode: "standalone" | "managed") {
+  if (mode === "standalone") {
+    return { input: commandInput(), output: new PassThrough() };
+  }
+  const { input, output, turn } = managedHarness();
+  turn();
+  return { input, output, managed: true };
+}
+
+describe("worker command lifetime gate", () => {
+  beforeEach(() => {
+    vi.mocked(runWorkerDescriptor).mockReset();
+    vi.mocked(runWorkerDescriptor).mockResolvedValue({
+      status: "completed",
+      transcriptLeafId: null,
+      transcriptNextSeq: 1,
+    });
+    managedRuntime.backgroundCount = 0;
+    managedRuntime.waitForExecScope.mockReset().mockResolvedValue(undefined);
+    managedRuntime.disposeProfile.mockReset().mockResolvedValue(undefined);
+    managedRuntime.close.mockReset();
+    managedRuntime.close.mockResolvedValue(undefined);
+    vi.mocked(createWorkerRuntimeEnvironment).mockReset();
+    vi.mocked(createWorkerRuntimeEnvironment).mockResolvedValue({
+      stateDir: "/tmp/openclaw-managed-worker-state",
+      close: managedRuntime.close,
+    });
+  });
+
+  it("keeps worker process stdout valid JSON when runtime diagnostics are emitted", async () => {
+    const { stdout, stderr, restore } = processHarness();
+    setLoggerOverride({ level: "silent", consoleLevel: "info", consoleStyle: "compact" });
+    vi.mocked(runWorkerDescriptor).mockImplementationOnce(async () => {
+      createSubsystemLogger("state/db").info("worker state diagnostic");
+      return { status: "completed", transcriptLeafId: null, transcriptNextSeq: 1 };
+    });
+    let output = "";
+    let diagnostics = "";
+    try {
+      await runWorkerProcess();
+      output = String(stdout.read() ?? "");
+      diagnostics = String(stderr.read() ?? "");
+    } finally {
+      restore();
+    }
+
+    expect(JSON.parse(output)).toEqual({
+      status: "completed",
+      transcriptLeafId: null,
+      transcriptNextSeq: 1,
+    });
+    expect(diagnostics).toContain("worker state diagnostic");
+  });
+
+  it.each([
+    [
+      "inherited type",
+      () =>
+        Object.assign(Object.create({ type: "openclaw-worker-start-v1" }), { unexpected: true }),
+    ],
+    ["empty lineage", () => ({ type: "openclaw-worker-start-v1", lineageFds: [] })],
+    ["standard descriptor", () => ({ type: "openclaw-worker-start-v1", lineageFds: [2] })],
+    ["fractional descriptor", () => ({ type: "openclaw-worker-start-v1", lineageFds: [3.5] })],
+    ["duplicate descriptor", () => ({ type: "openclaw-worker-start-v1", lineageFds: [3, 3] })],
+    ["string descriptor", () => ({ type: "openclaw-worker-start-v1", lineageFds: ["3"] })],
+  ] as const)("rejects an internal worker IPC start with %s", async (_label, makeInvalidStart) => {
+    const { restore } = processHarness({
+      connected: true,
+      channel: {},
+      send: vi.fn(),
+      disconnect: vi.fn(),
+    });
+    const invalidStart = makeInvalidStart();
+
+    try {
+      const running = runWorkerProcess({ internalWorkerIpc: true });
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
+      process.emit("message", invalidStart);
+
+      await expect(running).rejects.toThrow("invalid internal worker IPC start message");
+      expect(runWorkerDescriptor).not.toHaveBeenCalled();
+    } finally {
+      restore();
+    }
+  });
+
+  it("passes the build-composed Browser runtime into the worker boundary", async () => {
+    const output = new PassThrough();
+    const browserRuntime = {
+      createAttachedBrowserToolRuntime: vi.fn(),
+    } as unknown as WorkerBrowserRuntime;
+
+    await runWorkerCommand({ input: commandInput(), output, browserRuntime });
+
+    expect(runWorkerDescriptor).toHaveBeenCalledWith(
+      descriptor,
+      expect.objectContaining({ browserRuntime }),
+    );
+  });
+
+  it.each(["standalone", "managed"] as const)(
+    "does not enter the worker runtime before the explicit start message (%s)",
+    async (mode) => {
+      const harness = gatedCommandHarness(mode);
+      const lifetime = lifetimeHarness();
+      const running = runWorkerCommand({ ...harness, lifetime: lifetime.contract });
+
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(runWorkerDescriptor).not.toHaveBeenCalled();
+      expect(harness.input.readableLength > 0).toBe(mode === "managed");
+      lifetime.open();
+
+      await running;
+      expect(runWorkerDescriptor).toHaveBeenCalledOnce();
+      expect(lifetime.terminateOwnedTree).not.toHaveBeenCalled();
+      expect(lifetime.dispose).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["standalone", "managed"] as const)(
+    "exits without starting when IPC disconnects before the start message (%s)",
+    async (mode) => {
+      const harness = gatedCommandHarness(mode);
+      const lifetime = lifetimeHarness();
+      const running = runWorkerCommand({ ...harness, lifetime: lifetime.contract });
+
+      lifetime.disconnectBeforeStart();
+
+      await running;
+      expect(runWorkerDescriptor).not.toHaveBeenCalled();
+      expect(lifetime.terminateOwnedTree).not.toHaveBeenCalled();
+      expect(lifetime.dispose).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["standalone", "managed"] as const)(
+    "aborts the worker path and terminates its owned tree on IPC disconnect (%s)",
+    async (mode) => {
+      const harness = gatedCommandHarness(mode);
+      let runtimeSignal: AbortSignal | undefined;
+      vi.mocked(runWorkerDescriptor).mockImplementation(async (_descriptor, options) => {
+        const signal = options?.signal;
+        if (!signal) {
+          throw new Error("expected worker lifetime abort signal");
+        }
+        runtimeSignal = signal;
+        return await new Promise<never>((_, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              const reason = signal.reason;
+              reject(reason instanceof Error ? reason : new Error("worker interrupted"));
+            },
+            { once: true },
+          );
+        });
+      });
+      const lifetime = lifetimeHarness();
+      lifetime.terminateOwnedTree.mockImplementation(() => {
+        expect(runtimeSignal?.aborted).toBe(true);
+      });
+      const running = runWorkerCommand({ ...harness, lifetime: lifetime.contract });
+      lifetime.open();
+      await vi.waitFor(() => expect(runWorkerDescriptor).toHaveBeenCalledOnce());
+
+      lifetime.disconnectAfterStart();
+
+      await expect(running).rejects.toThrow("worker supervisor lifetime ended");
+      expect(lifetime.terminateOwnedTree).toHaveBeenCalledOnce();
+      expect(lifetime.dispose).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("retains state across turns and cancels only the exact active turn", async () => {
+    const harness = managedHarness();
+    const lifetime = lifetimeHarness();
+    managedRuntime.backgroundCount = 1;
+    const secondStarted = createDeferred<AbortSignal>();
+    vi.mocked(runWorkerDescriptor)
+      .mockImplementationOnce(async () => ({
+        status: "completed",
+        transcriptLeafId: "first-leaf",
+        transcriptNextSeq: 2,
+      }))
+      .mockImplementationOnce(async (_launch, options) => {
+        const signal = options!.signal!;
+        secondStarted.resolve(signal);
+        await new Promise<void>((resolve) => {
+          signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        managedRuntime.backgroundCount = 0;
+        return {
+          status: "failed",
+          reason: "turn-failed",
+          transcriptLeafId: "second-leaf",
+          transcriptNextSeq: 3,
+        };
+      });
+    const running = runWorkerCommand({ ...harness, managed: true, lifetime: lifetime.contract });
+    lifetime.open();
+    harness.turn();
+    await vi.waitFor(() => expect(harness.results).toHaveLength(1));
+    expect(harness.results[0]).toEqual({
+      type: "result",
+      turnId: "turn-1",
+      retainWorker: true,
+      result: { status: "completed", transcriptLeafId: "first-leaf", transcriptNextSeq: 2 },
+    });
+    expect(lifetime.dispose).not.toHaveBeenCalled();
+
+    const next = structuredClone(harness.launch);
+    next.assignment.turnId = "turn-2";
+    next.assignment.runId = "run-2";
+    next.assignment.operationalRunInstance = { instanceId: "instance-run-2", runId: "run-2" };
+    harness.turn(next);
+    const secondSignal = await secondStarted.promise;
+    harness.send({ type: "cancel", turnId: "turn-1" });
+    expect(secondSignal.aborted).toBe(false);
+    harness.send({ type: "cancel", turnId: "turn-2" });
+    await running;
+
+    expect(harness.results[1]).toMatchObject({
+      turnId: "turn-2",
+      result: { status: "failed", reason: "turn-failed" },
+      retainWorker: false,
+    });
+    expect(createWorkerRuntimeEnvironment).toHaveBeenCalledOnce();
+    expect(
+      vi.mocked(runWorkerDescriptor).mock.calls.map(([, options]) => options?.environmentStateDir),
+    ).toEqual(["/tmp/openclaw-managed-worker-state", "/tmp/openclaw-managed-worker-state"]);
+    expect(managedRuntime.close).toHaveBeenCalledOnce();
+    expect(lifetime.dispose).toHaveBeenCalledOnce();
+  });
+
+  it.each([false, true])(
+    "joins finalizers and profile disposal before idle readiness (cancelled: %s)",
+    async (cancelled) => {
+      const harness = managedHarness();
+      harness.launch.assignment.github = {
+        token: "synthetic-turn-token",
+        login: "worker-fixture",
+        branch: "session-fixture",
+        gitAuthor: { name: "Fixture", email: "fixture@openclaw.invalid" },
+      };
+      const joining = createDeferred();
+      const settled = createDeferred();
+      const disposing = createDeferred();
+      const disposed = createDeferred();
+      managedRuntime.waitForExecScope.mockImplementationOnce(() => {
+        joining.resolve();
+        return settled.promise;
+      });
+      managedRuntime.disposeProfile.mockImplementationOnce(() => {
+        disposing.resolve();
+        return disposed.promise;
+      });
+      const running = runWorkerCommand({ ...harness, managed: true });
+      const first = harness.nextMessage();
+      harness.turn(harness.launch, true);
+      await joining.promise;
+      expect(harness.results).toEqual([]);
+      expect(managedRuntime.disposeProfile).not.toHaveBeenCalled();
+      settled.resolve();
+      await disposing.promise;
+      expect(harness.results).toEqual([]);
+      if (cancelled) {
+        harness.send({ type: "cancel", turnId: "turn-1" });
+      }
+      disposed.resolve();
+      expect(await first).toMatchObject(
+        cancelled
+          ? { retainWorker: false, turnId: "turn-1" }
+          : { retainWorker: true, retention: "idle", turnId: "turn-1" },
+      );
+      expect(managedRuntime.disposeProfile).toHaveBeenCalledWith(
+        "/tmp/openclaw-managed-worker-state",
+        "turn-1",
+      );
+      if (cancelled) {
+        await running;
+        expect(managedRuntime.close).toHaveBeenCalledOnce();
+        return;
+      }
+
+      const next = structuredClone(harness.launch);
+      next.assignment.turnId = "turn-2";
+      next.assignment.runId = "run-2";
+      next.assignment.operationalRunInstance = { instanceId: "instance-run-2", runId: "run-2" };
+      next.admission.credential = "synthetic-replacement-credential";
+      const second = Promise.race([harness.nextMessage(), running]);
+      harness.turn(next, true);
+      expect(await second).toMatchObject({ retention: "idle", turnId: "turn-2" });
+      expect(vi.mocked(runWorkerDescriptor).mock.lastCall?.[0]).toEqual(next);
+      expect(createWorkerRuntimeEnvironment).toHaveBeenCalledOnce();
+      harness.input.end();
+      await running;
+      expect(managedRuntime.close).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([false, true])(
+    "settles background retention without stale idle readiness (new turn: %s)",
+    async (newTurn) => {
+      const harness = managedHarness();
+      harness.launch.assignment.github = {
+        token: "synthetic-background-token",
+        login: "fixture",
+        branch: "fixture",
+      };
+      const settled = createDeferred();
+      const disposed = createDeferred();
+      const secondStarted = createDeferred();
+      const secondSettled = createDeferred();
+      managedRuntime.disposeProfile.mockImplementationOnce(async () => disposed.resolve());
+      managedRuntime.backgroundCount = 1;
+      managedRuntime.waitForExecScope.mockReturnValueOnce(settled.promise);
+      const running = runWorkerCommand({ ...harness, managed: true });
+      const first = harness.nextMessage();
+      harness.turn(harness.launch, true);
+      expect(await first).toMatchObject({ retention: "background", turnId: "turn-1" });
+      const nextMessage = harness.nextMessage();
+      if (newTurn) {
+        vi.mocked(runWorkerDescriptor).mockImplementationOnce(async () => {
+          secondStarted.resolve();
+          await secondSettled.promise;
+          return { status: "completed", transcriptLeafId: null, transcriptNextSeq: 1 };
+        });
+        const next = structuredClone(harness.launch);
+        next.assignment.turnId = "turn-2";
+        delete next.assignment.github;
+        harness.turn(next, true);
+        await secondStarted.promise;
+      }
+      managedRuntime.backgroundCount = 0;
+      settled.resolve();
+      await disposed.promise;
+      expect(managedRuntime.disposeProfile).toHaveBeenCalledExactlyOnceWith(
+        "/tmp/openclaw-managed-worker-state",
+        "turn-1",
+      );
+      if (newTurn) {
+        expect(harness.results).toHaveLength(1);
+      }
+      secondSettled.resolve();
+      expect(await nextMessage).toMatchObject(
+        newTurn
+          ? { type: "result", turnId: "turn-2", retention: "idle" }
+          : { type: "idle-ready", turnId: "turn-1" },
+      );
+      expect(managedRuntime.disposeProfile).toHaveBeenCalledTimes(newTurn ? 2 : 1);
+      if (newTurn) {
+        expect(managedRuntime.disposeProfile).toHaveBeenLastCalledWith(
+          "/tmp/openclaw-managed-worker-state",
+          "turn-2",
+        );
+      }
+      harness.input.end();
+      await running;
+    },
+  );
+
+  it.each(["owner", "output"] as const)(
+    "closes state when %s ends during a pending result write",
+    async (ending) => {
+      const harness = managedHarness();
+      const writing = createDeferred<(error?: Error | null) => void>();
+      const output = new Writable({
+        write: (_chunk, _encoding, callback) => {
+          writing.resolve(callback);
+        },
+      });
+      managedRuntime.backgroundCount = 1;
+      const running = runWorkerCommand({ ...harness, output, managed: true });
+      harness.turn();
+      const completeWrite = await writing.promise;
+      if (ending === "owner") {
+        harness.input.end();
+        await running;
+        completeWrite();
+      } else {
+        const rejected = expect(running).rejects.toThrow("fixture result output failed");
+        completeWrite(new Error("fixture result output failed"));
+        await rejected;
+      }
+      expect(managedRuntime.close).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([
+    "duplicate",
+    "environment",
+    "session",
+    "epoch",
+    "agent",
+    "permission",
+    "workspace",
+    "containment",
+  ] as const)("refuses a retained worker's %s identity change before admission", async (change) => {
+    const harness = managedHarness();
+    managedRuntime.backgroundCount = 1;
+    const running = runWorkerCommand({ ...harness, managed: true });
+    harness.turn();
+    await vi.waitFor(() => expect(harness.results).toHaveLength(1));
+    const next = structuredClone(harness.launch);
+    if (change !== "duplicate") {
+      next.assignment.turnId = "turn-2";
+    }
+    if (change === "environment") {
+      next.admission.environmentId = "environment-2";
+    }
+    if (change === "session") {
+      next.admission.sessionId = "session-2";
+    }
+    if (change === "epoch") {
+      next.admission.ownerEpoch = 2;
+    }
+    if (change === "agent") {
+      next.assignment.agentId = "agent-2";
+    }
+    if (change === "permission") {
+      next.assignment.permissionMode = "read-only";
+    }
+    if (change === "workspace") {
+      next.assignment.workspaceDir = path.dirname(process.cwd());
+    }
+    if (change === "containment") {
+      next.assignment.workerContainmentRoot = path.dirname(process.cwd());
+    }
+    const rejected = expect(running).rejects.toThrow(
+      change === "duplicate" ? "already executed" : "binding changed",
+    );
+    harness.turn(next);
+    await rejected;
+    expect(runWorkerDescriptor).toHaveBeenCalledOnce();
+    expect(managedRuntime.close).toHaveBeenCalledOnce();
+  });
+
+  it("rejects concurrent turns and aborts the admitted turn before closing state", async () => {
+    const harness = managedHarness();
+    const started = createDeferred<AbortSignal>();
+    vi.mocked(runWorkerDescriptor).mockImplementationOnce(async (_launch, options) => {
+      const signal = options!.signal!;
+      started.resolve(signal);
+      await new Promise<void>((resolve) => {
+        signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+      return { status: "completed", transcriptLeafId: null, transcriptNextSeq: 1 };
+    });
+    const running = runWorkerCommand({ ...harness, managed: true });
+    harness.turn();
+    const signal = await started.promise;
+    const rejected = expect(running).rejects.toThrow("already active");
+    const next = structuredClone(harness.launch);
+    next.assignment.turnId = "turn-2";
+    harness.turn(next);
+    await rejected;
+    expect(signal.aborted).toBe(true);
+    expect(harness.results).toEqual([]);
+    expect(managedRuntime.close).toHaveBeenCalledOnce();
+  });
+
+  it("bounds an unterminated managed input line before attempting admission", async () => {
+    const harness = managedHarness();
+    const running = runWorkerCommand({ ...harness, managed: true });
+    const rejected = expect(running).rejects.toThrow("exceeds the protocol payload limit");
+    harness.input.write(Buffer.alloc(WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES + 1, 120));
+    await rejected;
+    expect(runWorkerDescriptor).not.toHaveBeenCalled();
+    expect(createWorkerRuntimeEnvironment).not.toHaveBeenCalled();
+  });
+
+  it("handles a turn and its cancellation in the same input chunk", async () => {
+    const harness = managedHarness();
+    const running = runWorkerCommand({ ...harness, managed: true });
+    harness.input.write(
+      serializeWorkerProcessInput(buildWorkerProcessTurn(harness.launch)) +
+        serializeWorkerProcessInput({ type: "cancel", turnId: harness.launch.assignment.turnId }),
+    );
+
+    await running;
+
+    expect(runWorkerDescriptor).toHaveBeenCalledOnce();
+    expect(vi.mocked(runWorkerDescriptor).mock.calls[0]?.[1]?.signal?.reason).toMatchObject({
+      message: "worker turn cancelled",
+    });
+  });
+
+  it("delivers cancellation before rejecting a later oversized frame in the same chunk", async () => {
+    const harness = managedHarness();
+    const started = createDeferred<AbortSignal>();
+    vi.mocked(runWorkerDescriptor).mockImplementationOnce(async (_launch, options) => {
+      const signal = options?.signal;
+      if (!signal) {
+        throw new Error("expected managed worker abort signal");
+      }
+      started.resolve(signal);
+      await new Promise<void>((resolve) => {
+        signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+      return { status: "completed", transcriptLeafId: null, transcriptNextSeq: 1 };
+    });
+    const running = runWorkerCommand({ ...harness, managed: true });
+    harness.turn();
+    const signal = await started.promise;
+    const rejected = expect(running).rejects.toThrow("exceeds the protocol payload limit");
+    harness.input.write(
+      Buffer.concat([
+        Buffer.from(
+          serializeWorkerProcessInput({ type: "cancel", turnId: harness.launch.assignment.turnId }),
+        ),
+        Buffer.alloc(WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES + 1, 120),
+      ]),
+    );
+
+    await rejected;
+
+    expect(signal.reason).toMatchObject({ message: "worker turn cancelled" });
+    expect(harness.results).toEqual([]);
+    expect(managedRuntime.close).toHaveBeenCalledOnce();
+  });
+
+  it.each(["empty", "unterminated"])(
+    "closes %s managed input at EOF without admitting a turn",
+    async (input) => {
+      const harness = managedHarness();
+      const running = runWorkerCommand({ ...harness, managed: true });
+      harness.input.end(
+        input === "empty" ? undefined : JSON.stringify(buildWorkerProcessTurn(harness.launch)),
+      );
+
+      await running;
+
+      expect(runWorkerDescriptor).not.toHaveBeenCalled();
+      expect(createWorkerRuntimeEnvironment).not.toHaveBeenCalled();
+      expect(harness.results).toEqual([]);
+    },
+  );
+
+  it.each(["standalone", "managed"] as const)(
+    "preserves ordinary two-image input through the %s parser",
+    async (mode) => {
+      const harness = managedHarness();
+      harness.launch.assignment.suppressPromptTranscript = true;
+      harness.launch.assignment.prompt = [
+        { type: "text", text: "Compare images" },
+        { type: "image", mimeType: "image/png", data: "A".repeat(1_200_000) },
+        { type: "image", mimeType: "image/png", data: "B".repeat(1_200_000) },
+      ];
+      const running = runWorkerCommand({ ...harness, managed: mode === "managed" });
+      if (mode === "managed") {
+        harness.input.write(serializeWorkerProcessInput(buildWorkerProcessTurn(harness.launch)));
+      } else {
+        harness.input.end(JSON.stringify(harness.launch));
+      }
+      await running;
+      expect(runWorkerDescriptor).toHaveBeenCalledOnce();
+      const prompt = vi.mocked(runWorkerDescriptor).mock.calls[0]?.[0].assignment.prompt;
+      expect(prompt).toEqual(harness.launch.assignment.prompt);
+    },
+  );
+
+  it.each([
+    { mode: "standalone", delta: 0 },
+    { mode: "standalone", delta: 1 },
+    { mode: "managed", delta: 0 },
+    { mode: "managed", delta: 1 },
+  ])("enforces $mode input at cap + $delta bytes", async ({ mode, delta }) => {
+    const harness = managedHarness();
+    const prefix = "wss://worker.invalid/";
+    const suffix = "/__openclaw__/worker";
+    harness.launch.connectionEndpoint = {
+      kind: "websocket",
+      url: prefix + "\0".repeat(4_096 - prefix.length - suffix.length) + suffix,
+      tlsFingerprint: "a".repeat(64),
+      cloudflareAccess: { clientId: "\0".repeat(4_096), clientSecret: "\0".repeat(4_096) },
+    };
+    harness.launch.assignment.systemPrompt = '"\\\0\n漢😀'.repeat(100);
+    const encode = () =>
+      `${JSON.stringify(mode === "managed" ? buildWorkerProcessTurn(harness.launch) : harness.launch)}\n`;
+    const targetBytes = WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES + delta;
+    const delimiterBytes = mode === "managed" ? 1 : 0;
+    harness.launch.assignment.systemPrompt += "x".repeat(
+      targetBytes + delimiterBytes - Buffer.byteLength(encode()),
+    );
+    const encoded = encode();
+    expect(Buffer.byteLength(encoded) - delimiterBytes).toBe(targetBytes);
+    if (mode === "managed") {
+      const serialize = () => serializeWorkerProcessInput(buildWorkerProcessTurn(harness.launch));
+      if (delta > 0) {
+        expect(serialize).toThrow("exceeds the protocol payload limit");
+      } else {
+        expect(Buffer.byteLength(serialize())).toBe(targetBytes + 1);
+      }
+    }
+    const running = runWorkerCommand({ ...harness, managed: mode === "managed" });
+    const outcome =
+      delta > 0 ? expect(running).rejects.toThrow("exceeds the protocol payload limit") : running;
+    if (mode === "managed") {
+      // Raw input independently verifies the receiver, including serializer-rejected bytes.
+      const bytes = Buffer.from(encoded);
+      const split = bytes.indexOf(Buffer.from("漢")) + 1;
+      harness.input.write(bytes.subarray(0, split));
+      harness.input.write(bytes.subarray(split));
+    } else {
+      harness.input.end(encoded);
+    }
+    await outcome;
+    expect(runWorkerDescriptor).toHaveBeenCalledTimes(delta > 0 ? 0 : 1);
+    if (delta <= 0) {
+      expect(vi.mocked(runWorkerDescriptor).mock.calls[0]?.[0].assignment.systemPrompt).toBe(
+        harness.launch.assignment.systemPrompt,
+      );
+    }
+    console.info(
+      "worker-input-boundary",
+      JSON.stringify({ mode, bytes: targetBytes, accepted: delta <= 0 }),
+    );
+  });
+});

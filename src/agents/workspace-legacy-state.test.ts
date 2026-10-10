@@ -4,13 +4,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   assertNoUnmigratedWorkspaceState,
+  assertWorkspaceStateMigrationReady,
   LEGACY_WORKSPACE_ATTESTATION_HEADER,
   prepareLegacyWorkspaceStateReset,
   removeLegacyWorkspaceStateForReset,
   resolveLegacyWorkspaceSourcePaths,
 } from "./workspace-legacy-state.js";
 import { resetLegacyWorkspaceStateCheckForTest } from "./workspace-legacy-state.test-support.js";
-import { resolveWorkspaceStateIdentity } from "./workspace-state-store.js";
+import { resolveWorkspaceStateIdentity } from "./workspace-state-identity.js";
 
 describe("legacy workspace reset cleanup", () => {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) => afterEach(cleanup));
@@ -39,13 +40,35 @@ describe("legacy workspace reset cleanup", () => {
     });
   }
 
+  it("retains retired state when ownership expires during asynchronous validation", async () => {
+    const context = setup();
+    await fs.mkdir(context.workspaceDir, { recursive: true });
+    const marker = `${LEGACY_WORKSPACE_ATTESTATION_HEADER}\n`;
+    const siblingPath = `${context.workspaceDir}.attested`;
+    await fs.writeFile(siblingPath, marker);
+    let owned = true;
+    const cleanup = removeLegacyWorkspaceStateForReset(prepare(context), {
+      assertCurrent: () => {
+        if (!owned) {
+          throw new Error("cleanup ownership expired");
+        }
+      },
+    });
+    owned = false;
+
+    const result = await cleanup;
+    expect(result.removedPaths).toEqual([]);
+    expect(result.warnings).toEqual([expect.stringContaining("cleanup ownership expired")]);
+    expect(await fs.readFile(siblingPath, "utf8")).toBe(marker);
+  });
+
   it("removes retired setup files, claims, and owned attestations", async () => {
     const context = setup();
     await fs.mkdir(context.workspaceDir, { recursive: true });
     const marker = `${LEGACY_WORKSPACE_ATTESTATION_HEADER}\n2026-07-15T11:00:00.000Z\n`;
     const candidates = [
       context.paths.setupStatePaths[0]!,
-      `${context.paths.setupStatePaths[1]!}.doctor-importing`,
+      `${context.paths.setupStatePaths[0]!}.doctor-importing`,
       context.paths.stateDirAttestationPaths[0]!,
       `${context.paths.stateDirAttestationPaths.at(-1)!}.doctor-importing`,
       context.paths.siblingAttestationPaths[0]!,
@@ -94,19 +117,6 @@ describe("legacy workspace reset cleanup", () => {
     }
   });
 
-  it("preserves a foreign sibling attestation", async () => {
-    const context = setup();
-    await fs.mkdir(context.workspaceDir, { recursive: true });
-    const siblingPath = context.paths.siblingAttestationPaths[0]!;
-    await fs.writeFile(siblingPath, "foreign marker\n", "utf8");
-
-    const result = await removeLegacyWorkspaceStateForReset(prepare(context));
-
-    expect(result.warnings).toEqual([]);
-    expect(result.removedPaths).toEqual([]);
-    await expect(fs.readFile(siblingPath, "utf8")).resolves.toBe("foreign marker\n");
-  });
-
   it("preserves a malformed sibling claim and foreign marker", async () => {
     const context = setup();
     const siblingPath = context.paths.siblingAttestationPaths[0]!;
@@ -143,41 +153,37 @@ describe("legacy workspace reset cleanup", () => {
     );
 
     expect(() => assertNoUnmigratedWorkspaceState({ workspaceDir: context.workspaceDir })).toThrow(
-      /run openclaw doctor --fix/u,
+      /Run openclaw doctor --fix/u,
     );
   });
 
-  it("checks canonical legacy markers when configuration uses a symlink alias", async () => {
+  it("rechecks every workspace at lifecycle boundaries after runtime cached absence", async () => {
     const context = setup();
-    const targetDir = path.join(context.homeDir, "workspace-target");
-    await fs.mkdir(targetDir, { recursive: true });
-    await fs.symlink(
-      targetDir,
-      context.workspaceDir,
-      process.platform === "win32" ? "junction" : "dir",
+    const workspaceDirs = [context.workspaceDir, path.join(context.homeDir, "secondary")];
+    for (const workspaceDir of workspaceDirs) {
+      await fs.mkdir(workspaceDir, { recursive: true });
+      assertNoUnmigratedWorkspaceState({ workspaceDir });
+      await fs.writeFile(path.join(workspaceDir, "openclaw-workspace-state.json"), '{"version":1}');
+    }
+    expect(() =>
+      assertWorkspaceStateMigrationReady({
+        workspaceDirs,
+        env: context.env,
+        homedir: context.homedir,
+      }),
+    ).toThrow(
+      `Run openclaw doctor --fix. Legacy workspace setup state requires migration for ${workspaceDirs.join(", ")}.`,
     );
-    const identity = resolveWorkspaceStateIdentity(targetDir);
-    const canonicalSiblingPath = `${identity.workspacePath}.attested`;
-    const sources = resolveLegacyWorkspaceSourcePaths(context.workspaceDir, {
-      env: context.env,
-      homedir: context.homedir,
-    });
-    await fs.writeFile(
-      canonicalSiblingPath,
-      `${LEGACY_WORKSPACE_ATTESTATION_HEADER}\n2026-07-15T11:00:00.000Z\n`,
-      "utf8",
-    );
-
-    expect(sources.siblingAttestationPaths).toContain(canonicalSiblingPath);
-    expect(sources.stateDirAttestationPaths).toContain(
-      path.join(context.stateDir, "workspace-attestations", `${identity.workspaceKey}.attested`),
-    );
-    expect(() => assertNoUnmigratedWorkspaceState({ workspaceDir: context.workspaceDir })).toThrow(
-      /run openclaw doctor --fix/u,
-    );
-    const cleanup = await removeLegacyWorkspaceStateForReset(prepare(context));
-    expect(cleanup.removedPaths).toContain(canonicalSiblingPath);
-    await expect(fs.lstat(canonicalSiblingPath)).rejects.toHaveProperty("code", "ENOENT");
+    for (const workspaceDir of workspaceDirs) {
+      await fs.unlink(path.join(workspaceDir, "openclaw-workspace-state.json"));
+    }
+    expect(() =>
+      assertWorkspaceStateMigrationReady({
+        workspaceDirs,
+        env: context.env,
+        homedir: context.homedir,
+      }),
+    ).not.toThrow();
   });
 
   it("removes canonical legacy paths after the configured symlink is removed", async () => {

@@ -1,19 +1,20 @@
 // Trajectory runtime records bounded session events into SQLite-backed storage.
+import { hash } from "node:crypto";
+import { isProxy } from "node:util/types";
+import { createDiagnosticRecord } from "@openclaw/ai/internal/shared";
 import { sanitizeDiagnosticPayload } from "../agents/payload-redaction.js";
-import type {
-  QueuedFileWriter,
-  QueuedFileWriterDiagnostics,
-} from "../agents/queued-file-writer.js";
-import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
+import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { redactSecrets } from "../logging/redact.js";
+import { getSecretRedactionRegistryRevision } from "../logging/secret-redaction-registry.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
+import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import {
   TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES,
   TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
 } from "./paths.js";
-import { appendSqliteTrajectoryRuntimeEvents } from "./runtime-store.sqlite.js";
+import { createSqliteTrajectoryRuntimeSink } from "./runtime-store-writer.js";
 import type { TrajectoryEvent, TrajectoryToolDefinition } from "./types.js";
 
 type TrajectoryRuntimeInit = {
@@ -24,39 +25,45 @@ type TrajectoryRuntimeInit = {
   sessionId: string;
   sessionKey?: string;
   sessionFile?: string;
+  sessionTarget?: SessionTranscriptRuntimeTarget;
+  assertCommitAllowed?: () => void;
   provider?: string;
   modelId?: string;
   modelApi?: string | null;
   workspaceDir?: string;
-  writer?: TrajectoryRuntimeWriter;
-};
-
-type TrajectoryRuntimeRecorder = {
-  enabled: true;
-  recordEvent: (type: string, data?: Record<string, unknown>) => void;
-  flush: () => Promise<void>;
-  describeFlushState: () => string | undefined;
 };
 
 const TRAJECTORY_RUNTIME_DATA_STRING_MAX_CHARS = 32_768;
 const TRAJECTORY_RUNTIME_DATA_ARRAY_MAX_ITEMS = 64;
 const TRAJECTORY_RUNTIME_DATA_OBJECT_MAX_KEYS = 64;
 const TRAJECTORY_RUNTIME_DATA_MAX_DEPTH = 6;
-const TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS = ["usage", "promptCache"] as const;
+const TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES = 4 * 1024;
+const TRAJECTORY_TOOL_CACHE_MAX_CHARS = 16_384;
+const TRAJECTORY_TOOL_CACHE_MAX_ENTRIES = 256;
+const toolParameterProjections = new Map<string, string>();
+let toolParameterSecretRevision = 0;
 
-type TrajectoryRuntimeWriterDiagnostics = QueuedFileWriterDiagnostics;
-
-type TrajectoryRuntimeWriter = Omit<QueuedFileWriter, "describeQueue"> & {
-  describeQueue?: () => TrajectoryRuntimeWriterDiagnostics;
-  nextSourceSeq?: () => number;
-};
-
-type TrajectoryRuntimeSink = {
-  describeFlushState: () => string | undefined;
-  flush: () => Promise<void>;
-  nextSourceSeq?: () => number;
-  write: (event: TrajectoryEvent, line: string) => void;
-};
+// Oversized events first shed repeated conversation state while keeping the
+// rest of their schema-v1 payload. The compact fallback then preserves keys
+// that remain useful even when every nonessential field must be dropped.
+// sanitizeTrajectoryPayload bounds prompt strings before this limiter runs.
+const TRAJECTORY_RUNTIME_OVERSIZE_DROP_FIRST_DATA_KEYS = [
+  "messagesSnapshot",
+  "messages",
+  "systemPrompt",
+] as const;
+const OVERSIZE_PRESERVED_DATA_KEYS = [
+  "threadId",
+  "turnId",
+  "timedOut",
+  "yieldDetected",
+  "aborted",
+  "promptError",
+  "stopReason",
+  "usage",
+  "promptCache",
+  "prompt",
+] as const;
 
 function truncateOversizedTrajectoryEvent(
   event: TrajectoryEvent,
@@ -76,9 +83,30 @@ function truncateOversizedTrajectoryEvent(
     limitBytes: TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
     reason: "trajectory-event-size-limit",
   };
+  const reducedData = { ...originalData };
+  const reducedDroppedFields: string[] = [];
+  for (const key of TRAJECTORY_RUNTIME_OVERSIZE_DROP_FIRST_DATA_KEYS) {
+    if (!Object.hasOwn(reducedData, key)) {
+      continue;
+    }
+    delete reducedData[key];
+    reducedDroppedFields.push(key);
+    const reduced = safeJsonStringify({
+      ...event,
+      data: {
+        ...reducedData,
+        ...baseData,
+        droppedFields: reducedDroppedFields,
+      },
+    });
+    if (reduced && Buffer.byteLength(reduced, "utf8") <= TRAJECTORY_RUNTIME_EVENT_MAX_BYTES) {
+      return reduced;
+    }
+  }
+
   const buildTruncatedEventLine = (includeDroppedFields: boolean): string | undefined => {
     const data: Record<string, unknown> = { ...baseData };
-    for (const key of TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS) {
+    for (const key of OVERSIZE_PRESERVED_DATA_KEYS) {
       if (preservedDataKeys.has(key)) {
         data[key] = originalData[key];
       }
@@ -101,7 +129,7 @@ function truncateOversizedTrajectoryEvent(
     return undefined;
   }
 
-  for (const key of TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS) {
+  for (const key of OVERSIZE_PRESERVED_DATA_KEYS) {
     if (!Object.hasOwn(originalData, key)) {
       continue;
     }
@@ -117,11 +145,11 @@ function truncateOversizedTrajectoryEvent(
 }
 
 function truncatedTrajectoryValue(reason: string, details: Record<string, unknown> = {}): unknown {
-  return {
-    truncated: true,
-    reason,
-    ...details,
-  };
+  const record = createDiagnosticRecord();
+  record.truncated = true;
+  record.reason = reason;
+  Object.assign(record, details);
+  return record;
 }
 
 function limitTrajectoryPayloadValue(
@@ -167,7 +195,7 @@ function limitTrajectoryPayloadValue(
   }
   const record = value as Record<string, unknown>;
   const keys = Object.keys(record);
-  const limited: Record<string, unknown> = {};
+  const limited = createDiagnosticRecord();
   for (const key of keys.slice(0, TRAJECTORY_RUNTIME_DATA_OBJECT_MAX_KEYS)) {
     limited[key] = limitTrajectoryPayloadValue(record[key], depth + 1, seen);
   }
@@ -182,90 +210,93 @@ function limitTrajectoryPayloadValue(
 }
 
 function sanitizeTrajectoryPayload(data: Record<string, unknown>): Record<string, unknown> {
-  return redactSecrets(sanitizeDiagnosticPayload(limitTrajectoryPayloadValue(data))) as Record<
-    string,
-    unknown
-  >;
-}
-
-function describeTrajectoryWriterFlushState(writer: TrajectoryRuntimeWriter): string | undefined {
-  const diagnostics = writer.describeQueue?.();
-  if (!diagnostics) {
-    return undefined;
-  }
-  const parts = [
-    `pendingWrites=${diagnostics.pendingWrites}`,
-    `queuedBytes=${diagnostics.queuedBytes}`,
-    `activeOperation=${diagnostics.activeOperation}`,
-    `yieldBeforeWrite=${diagnostics.yieldBeforeWrite}`,
-  ];
-  if (diagnostics.activeWriteBytes !== undefined) {
-    parts.push(`activeWriteBytes=${diagnostics.activeWriteBytes}`);
-  }
-  if (diagnostics.maxQueuedBytes !== undefined) {
-    parts.push(`maxQueuedBytes=${diagnostics.maxQueuedBytes}`);
-  }
-  if (diagnostics.maxFileBytes !== undefined) {
-    parts.push(`maxFileBytes=${diagnostics.maxFileBytes}`);
-  }
-  return parts.join(" ");
-}
-
-function createFileTrajectoryRuntimeSink(writer: TrajectoryRuntimeWriter): TrajectoryRuntimeSink {
-  return {
-    describeFlushState: () => describeTrajectoryWriterFlushState(writer),
-    flush: async () => {
-      await writer.flush();
-    },
-    nextSourceSeq: writer.nextSourceSeq,
-    write: (_event, line) => {
-      writer.write(`${line}\n`);
-    },
-  };
-}
-
-function createSqliteTrajectoryRuntimeSink(params: {
-  env: NodeJS.ProcessEnv;
-  maxRuntimeFileBytes: number;
-  sessionFile?: string;
-  sessionId: string;
-}): TrajectoryRuntimeSink | null {
-  const marker = parseSqliteSessionFileMarker(params.sessionFile);
-  if (!marker || marker.sessionId !== params.sessionId) {
-    return null;
-  }
-  let pendingEvents: TrajectoryEvent[] = [];
-  let queuedBytes = 0;
-  return {
-    describeFlushState: () =>
-      pendingEvents.length > 0
-        ? `pendingRows=${pendingEvents.length} queuedBytes=${queuedBytes} activeOperation=sqlite-append`
-        : undefined,
-    flush: async () => {
-      if (pendingEvents.length === 0) {
-        return;
-      }
-      const events = pendingEvents;
-      pendingEvents = [];
-      queuedBytes = 0;
-      appendSqliteTrajectoryRuntimeEvents(
-        {
-          agentId: marker.agentId,
-          env: params.env,
-          maxRuntimeBytes: params.maxRuntimeFileBytes,
-          sessionId: marker.sessionId,
-          storePath: marker.storePath,
-        },
-        events,
+  const finalPromptText = data.finalPromptText;
+  let boundedData = data;
+  if (typeof finalPromptText === "string") {
+    const redactedFinalPromptText = redactSecrets(finalPromptText);
+    boundedData = { ...data, finalPromptText: redactedFinalPromptText };
+    if (
+      Buffer.byteLength(finalPromptText, "utf8") > TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES ||
+      Buffer.byteLength(redactedFinalPromptText, "utf8") > TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES
+    ) {
+      boundedData.finalPromptText = truncateUtf8Prefix(
+        redactedFinalPromptText,
+        TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES,
       );
-    },
-    write: (event, line) => {
-      pendingEvents.push(event);
-      queuedBytes += Buffer.byteLength(line, "utf8") + 1;
-    },
-  };
+      boundedData.finalPromptTextOriginalLength = finalPromptText.length;
+    }
+  }
+  return redactSecrets(
+    sanitizeDiagnosticPayload(limitTrajectoryPayloadValue(boundedData)),
+  ) as Record<string, unknown>;
 }
 
+function isTrajectoryJsonData(value: unknown, depth = 0): boolean {
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    return true;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) && !Object.is(value, -0);
+  }
+  if (
+    typeof value !== "object" ||
+    depth > TRAJECTORY_RUNTIME_DATA_MAX_DEPTH + 1 ||
+    isProxy(value)
+  ) {
+    return false;
+  }
+  const array = Array.isArray(value);
+  if (Object.getPrototypeOf(value) !== (array ? Array.prototype : Object.prototype)) {
+    return false;
+  }
+  const keys = Reflect.ownKeys(value).filter((key) => !array || key !== "length");
+  if (array && keys.length !== value.length) {
+    return false;
+  }
+  return keys.every((key, index) => {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
+    return (
+      typeof key === "string" &&
+      (!array || key === String(index)) &&
+      "value" in descriptor &&
+      descriptor.enumerable &&
+      isTrajectoryJsonData(descriptor.value, depth + 1)
+    );
+  });
+}
+
+function projectTrajectoryToolParameters(parameters: unknown): unknown {
+  const bounded = limitTrajectoryPayloadValue(parameters);
+  // Custom array operations can return opaque objects; preserve their diagnostic projection.
+  if (!isTrajectoryJsonData(bounded)) {
+    return sanitizeDiagnosticPayload(bounded);
+  }
+  const revision = getSecretRedactionRegistryRevision();
+  if (revision !== toolParameterSecretRevision) {
+    toolParameterProjections.clear();
+    toolParameterSecretRevision = revision;
+  }
+  const content = JSON.stringify(bounded);
+  if (content.length > TRAJECTORY_TOOL_CACHE_MAX_CHARS) {
+    return sanitizeDiagnosticPayload(bounded);
+  }
+  // Content owns invalidation: tools can be rebuilt or edited in place between requests.
+  const key = hash("sha256", content);
+  const cached = toolParameterProjections.get(key);
+  if (cached !== undefined) {
+    return JSON.parse(cached);
+  }
+  // This policy is fixed; the recorder still applies current configured/exact secret redaction.
+  const projected = sanitizeDiagnosticPayload(bounded);
+  const serialized = JSON.stringify(projected);
+  if (serialized.length <= TRAJECTORY_TOOL_CACHE_MAX_CHARS) {
+    if (toolParameterProjections.size >= TRAJECTORY_TOOL_CACHE_MAX_ENTRIES) {
+      toolParameterProjections.delete(toolParameterProjections.keys().next().value!);
+    }
+    toolParameterProjections.set(key, serialized);
+  }
+  return projected;
+}
 export function toTrajectoryToolDefinitions(
   tools: ReadonlyArray<{ name?: string; description?: string; parameters?: unknown }>,
 ): TrajectoryToolDefinition[] {
@@ -279,17 +310,20 @@ export function toTrajectoryToolDefinitions(
         {
           name,
           description: tool.description,
-          parameters: sanitizeDiagnosticPayload(limitTrajectoryPayloadValue(tool.parameters)),
+          parameters: projectTrajectoryToolParameters(tool.parameters),
         },
       ];
     })
     .toSorted((left, right) => left.name.localeCompare(right.name));
 }
 
-export function createTrajectoryRuntimeRecorder(
-  params: TrajectoryRuntimeInit,
-): TrajectoryRuntimeRecorder | null {
-  const env = params.env ?? process.env;
+export async function createTrajectoryRuntimeRecorder(input: TrajectoryRuntimeInit) {
+  const params = {
+    ...input,
+    env: { ...(input.env ?? process.env) },
+    sessionTarget: input.sessionTarget && { ...input.sessionTarget },
+  };
+  const env = params.env;
   // Trajectory capture is now default-on. The env var remains as an explicit
   // override so operators can still disable recording with OPENCLAW_TRAJECTORY=0.
   const enabled = parseBooleanValue(env.OPENCLAW_TRAJECTORY) ?? true;
@@ -301,69 +335,56 @@ export function createTrajectoryRuntimeRecorder(
     1,
     Math.floor(params.maxRuntimeFileBytes ?? TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES),
   );
-  const sink = params.writer
-    ? createFileTrajectoryRuntimeSink(params.writer)
-    : createSqliteTrajectoryRuntimeSink({
-        env,
-        maxRuntimeFileBytes,
-        sessionFile: params.sessionFile,
-        sessionId: params.sessionId,
-      });
+  const sink = await createSqliteTrajectoryRuntimeSink({
+    env,
+    maxRuntimeFileBytes,
+    sessionFile: params.sessionFile,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    sessionTarget: params.sessionTarget,
+    assertCommitAllowed: params.assertCommitAllowed,
+  });
+  params.assertCommitAllowed?.();
   if (!sink) {
     return null;
   }
   let seq = 0;
-  const traceId = params.sessionId;
-
-  const buildEvent = (
-    type: string,
-    data?: Record<string, unknown>,
-  ): { event: TrajectoryEvent; line: string } | undefined => {
-    const nextSeq = seq + 1;
-    const sourceSeq = sink.nextSourceSeq?.() ?? nextSeq;
-    const event: TrajectoryEvent = {
-      traceSchema: "openclaw-trajectory",
-      schemaVersion: 1,
-      traceId,
-      source: "runtime",
-      type,
-      ts: new Date().toISOString(),
-      seq: nextSeq,
-      sourceSeq,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      runId: params.runId,
-      workspaceDir: params.workspaceDir,
-      provider: params.provider,
-      modelId: params.modelId,
-      modelApi: params.modelApi,
-      data: data ? sanitizeTrajectoryPayload(data) : undefined,
-    };
-    const line = safeJsonStringify(event);
-    if (!line) {
-      return undefined;
-    }
-    const boundedLine = truncateOversizedTrajectoryEvent(event, line);
-    if (!boundedLine) {
-      return undefined;
-    }
-    const boundedEvent = JSON.parse(boundedLine) as TrajectoryEvent;
-    seq = nextSeq;
-    return { event: boundedEvent, line: boundedLine };
-  };
 
   return {
-    enabled: true,
-    recordEvent: (type, data) => {
-      const built = buildEvent(type, data);
-      if (!built) {
+    enabled: true as const,
+    recordEvent: (type: string, data?: Record<string, unknown>) => {
+      const nextSeq = seq + 1;
+      const event: TrajectoryEvent = {
+        traceSchema: "openclaw-trajectory",
+        schemaVersion: 1,
+        traceId: params.sessionId,
+        source: "runtime",
+        type,
+        ts: new Date().toISOString(),
+        seq: nextSeq,
+        sourceSeq: nextSeq,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        runId: params.runId,
+        workspaceDir: params.workspaceDir,
+        provider: params.provider,
+        modelId: params.modelId,
+        modelApi: params.modelApi,
+        data: data ? sanitizeTrajectoryPayload(data) : undefined,
+      };
+      const line = safeJsonStringify(event);
+      if (!line) {
         return;
       }
-      sink.write(built.event, built.line);
+      const boundedLine = truncateOversizedTrajectoryEvent(event, line);
+      if (!boundedLine) {
+        return;
+      }
+      const boundedEvent = JSON.parse(boundedLine) as TrajectoryEvent;
+      seq = nextSeq;
+      sink.write(boundedEvent, boundedLine);
     },
-    flush: async () => {
-      await sink.flush();
-    },
-    describeFlushState: () => sink.describeFlushState(),
+    flush: sink.flush,
+    describeFlushState: sink.describeFlushState,
   };
 }

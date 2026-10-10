@@ -1,0 +1,703 @@
+import { spawn, type ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import process from "node:process";
+import { pathToFileURL } from "node:url";
+import { toErrorObject } from "./lib/error-format.mts";
+import { sleep } from "./lib/sleep.mjs";
+import {
+  createRunNodePathClassifier,
+  normalizeRunNodePath as normalizePath,
+  runNodeWatchedPaths,
+} from "./run-node-watch-paths.mts";
+import type { Watcher, WatcherFactory, WatchPathStats } from "./watch-node-observation.mts";
+
+const WATCH_NODE_RUNNER = "scripts/run-node.mjs";
+const WATCH_RESTART_SIGNAL = "SIGTERM";
+const WATCH_RESTARTABLE_CHILD_EXIT_CODES = new Set([143]);
+const WATCH_IGNORED_PATH_SEGMENTS = new Set([".git", "dist", "node_modules"]);
+const WATCH_LOCK_WAIT_MS = 5_000;
+const WATCH_LOCK_POLL_MS = 100;
+const WATCH_SHUTDOWN_KILL_GRACE_MS = 5_000;
+const WATCH_LOCK_DIR = path.join(".local", "watch-node");
+const WATCH_DIST_ENTRY_POLL_MS = 1_000;
+const WATCH_DIST_ENTRY_TIMEOUT_MS = 5 * 60 * 1_000;
+const AUTO_DOCTOR_DISABLE_VALUES = new Set(["0", "false", "no", "off"]);
+type ProcessSignal = NodeJS.Signals;
+type WatchExit = number | ProcessSignal;
+type TimerHandle = ReturnType<typeof setTimeout>;
+type WatchPathClassifier = ReturnType<typeof createRunNodePathClassifier>;
+
+type WatchLock = {
+  pid: number;
+  command: string;
+  createdAt: string;
+  cwd: string;
+  watchSession: string;
+};
+
+const resolveRepoPath = (filePath: unknown, cwd: string) => {
+  const rawPath = typeof filePath === "string" ? filePath : "";
+  if (path.isAbsolute(rawPath)) {
+    return normalizePath(path.relative(cwd, rawPath));
+  }
+  return normalizePath(rawPath);
+};
+
+const hasIgnoredPathSegment = (repoPath: string) =>
+  normalizePath(repoPath)
+    .split("/")
+    .some((segment) => WATCH_IGNORED_PATH_SEGMENTS.has(segment));
+
+const looksLikeDirectoryPath = (repoPath: string) =>
+  path.posix.extname(normalizePath(repoPath)) === "";
+
+const isDirectoryLikeWatchedPath = (repoPath: string, watchPaths: string[]) => {
+  const normalizedRepoPath = normalizePath(repoPath).replace(/\/$/, "");
+  return watchPaths.some((watchPath) => {
+    const normalizedWatchPath = normalizePath(watchPath).replace(/\/$/, "");
+    if (!normalizedWatchPath) {
+      return false;
+    }
+    return (
+      normalizedRepoPath === normalizedWatchPath ||
+      normalizedRepoPath.startsWith(`${normalizedWatchPath}/`)
+    );
+  });
+};
+
+const isIgnoredWatchPath = (
+  filePath: unknown,
+  cwd: string,
+  watchPaths: string[],
+  pathClassifier: WatchPathClassifier,
+  stats?: WatchPathStats,
+) => {
+  const repoPath = resolveRepoPath(filePath, cwd);
+  if (hasIgnoredPathSegment(repoPath)) {
+    return true;
+  }
+  if (isDirectoryLikeWatchedPath(repoPath, watchPaths)) {
+    if (stats?.isDirectory?.() || looksLikeDirectoryPath(repoPath)) {
+      return false;
+    }
+  }
+  return !pathClassifier.isRestartRelevantRunNodePath(repoPath);
+};
+
+const shouldRestartAfterChildExit = (
+  exitCode: number | null,
+  exitSignal: ProcessSignal | null,
+  platform: NodeJS.Platform,
+) =>
+  (typeof exitCode === "number" && WATCH_RESTARTABLE_CHILD_EXIT_CODES.has(exitCode)) ||
+  (platform === "win32" && exitSignal === "SIGTERM");
+
+const shouldRunAutoDoctor = (
+  args: string[],
+  env: NodeJS.ProcessEnv,
+  autoDoctorAttempted: boolean,
+) =>
+  !autoDoctorAttempted &&
+  args[0] === "gateway" &&
+  !AUTO_DOCTOR_DISABLE_VALUES.has((env.OPENCLAW_GATEWAY_WATCH_AUTO_DOCTOR ?? "").toLowerCase());
+
+const isProcessAlive = (pid: unknown) => {
+  if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) {
+    return false;
+  }
+  try {
+    process.kill(pid, 0);
+  } catch {
+    return false;
+  }
+  return true;
+};
+
+const createWatchLockKey = (cwd: string, args: string[]) =>
+  createHash("sha256").update(cwd).update("\0").update(args.join("\0")).digest("hex").slice(0, 12);
+
+/** Resolves the lock path that prevents duplicate watch-node loops. */
+const resolveWatchLockPath = (cwd: string, args: string[] = []) =>
+  path.join(cwd, WATCH_LOCK_DIR, `${createWatchLockKey(cwd, args)}.json`);
+
+const readWatchLock = (lockPath: string): WatchLock | null => {
+  try {
+    const value = JSON.parse(fs.readFileSync(lockPath, "utf8")) as unknown;
+    return isWatchLock(value) ? value : null;
+  } catch {
+    return null;
+  }
+};
+
+const removeWatchLock = (lockPath: string) => {
+  try {
+    fs.unlinkSync(lockPath);
+  } catch (error) {
+    if (errorCode(error) !== "ENOENT") {
+      throw error;
+    }
+  }
+};
+
+const writeWatchLock = (lockPath: string, payload: WatchLock) => {
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  fs.writeFileSync(lockPath, `${JSON.stringify(payload)}\n`, {
+    encoding: "utf8",
+    flag: "wx",
+  });
+};
+
+const logWatcher = (message: string) => {
+  process.stderr.write(`[openclaw] ${message}\n`);
+};
+
+const isInvalidPackageConfigError = (err: unknown) =>
+  errorCode(err) === "ERR_INVALID_PACKAGE_CONFIG";
+
+const extractInvalidPackageConfigPath = (err: unknown) => {
+  const message = errorMessage(err);
+  const match = message.match(/Invalid package config (.+?) while importing /);
+  return match?.[1] ?? null;
+};
+
+const printFriendlyWatchStartupError = (err: unknown) => {
+  const packageConfigPath = extractInvalidPackageConfigPath(err);
+
+  console.error("");
+  console.error(
+    "[openclaw] gateway:watch could not start because a dependency package config looks corrupted.",
+  );
+  if (packageConfigPath) {
+    console.error(`[openclaw] Invalid package config: ${packageConfigPath}`);
+  }
+  console.error("[openclaw] This usually means a file in node_modules is empty or truncated.");
+  console.error("[openclaw] Recommended recovery:");
+  console.error("[openclaw]   rm -rf node_modules");
+  console.error("[openclaw]   pnpm store prune");
+  console.error("[openclaw]   pnpm install");
+  console.error("");
+  console.error("[openclaw] Original error:");
+  console.error(err);
+};
+
+const waitForWatcherRelease = async (lockPath: string, pid: number) => {
+  const deadline = Date.now() + WATCH_LOCK_WAIT_MS;
+  while (Date.now() < deadline) {
+    if (!isProcessAlive(pid)) {
+      return true;
+    }
+    if (!fs.existsSync(lockPath)) {
+      return true;
+    }
+    await sleep(WATCH_LOCK_POLL_MS);
+  }
+  return !isProcessAlive(pid);
+};
+
+const acquireWatchLock = async (cwd: string, args: string[], watchSession: string) => {
+  const lockPath = resolveWatchLockPath(cwd, args);
+  const payload = {
+    pid: process.pid,
+    command: args.join(" "),
+    createdAt: new Date(Date.now()).toISOString(),
+    cwd,
+    watchSession,
+  };
+
+  while (true) {
+    try {
+      writeWatchLock(lockPath, payload);
+      return { lockPath, pid: process.pid };
+    } catch (error) {
+      if (errorCode(error) !== "EEXIST") {
+        throw error;
+      }
+    }
+
+    const existing = readWatchLock(lockPath);
+    const existingPid = existing?.pid;
+    if (typeof existingPid !== "number" || !isProcessAlive(existingPid)) {
+      removeWatchLock(lockPath);
+      continue;
+    }
+
+    logWatcher(`Replacing existing watcher pid ${existingPid}.`);
+    try {
+      process.kill(existingPid, WATCH_RESTART_SIGNAL);
+    } catch (error) {
+      if (isProcessAlive(existingPid)) {
+        logWatcher(
+          `Failed to stop existing watcher pid ${existingPid}: ${errorMessage(error) || "unknown error"}`,
+        );
+        return null;
+      }
+    }
+
+    const released = await waitForWatcherRelease(lockPath, existingPid);
+    if (!released) {
+      logWatcher(`Timed out waiting for watcher pid ${existingPid} to exit.`);
+      return null;
+    }
+    removeWatchLock(lockPath);
+  }
+};
+
+const releaseWatchLock = (lockHandle: { lockPath: string; pid: number } | null) => {
+  if (!lockHandle) {
+    return;
+  }
+  const current = readWatchLock(lockHandle.lockPath);
+  if (current?.pid === lockHandle.pid) {
+    removeWatchLock(lockHandle.lockPath);
+  }
+};
+
+export async function runWatchMain(): Promise<WatchExit> {
+  const cwd = process.cwd();
+  const args = process.argv.slice(2);
+  const env = { ...process.env };
+  const pathClassifier = createRunNodePathClassifier({ rootDir: cwd });
+
+  const childEnv = { ...env };
+  const watchSession = `${Date.now()}-${process.pid}`;
+  const platform = process.platform;
+  const useChildProcessGroup = platform !== "win32" && !process.stdin?.isTTY;
+  childEnv.OPENCLAW_WATCH_MODE = "1";
+  childEnv.OPENCLAW_WATCH_SESSION = watchSession;
+  // The watcher owns process restarts; keep SIGUSR2/config reloads in-process
+  // so inherited launchd/systemd markers do not make the child exit and stall.
+  childEnv.OPENCLAW_NO_RESPAWN = "1";
+  if (args.length > 0) {
+    childEnv.OPENCLAW_WATCH_COMMAND = args.join(" ");
+  }
+
+  return await new Promise<WatchExit>((resolve, reject) => {
+    let settled = false;
+    let shuttingDown = false;
+    let restartRequested = false;
+    let deferredRestartGeneration = 0;
+    let deferredRestartActive = false;
+    let watchProcess: ChildProcess | null = null;
+    let watcher: Watcher | null = null;
+    let lockHandle: { lockPath: string; pid: number } | null = null;
+    let autoDoctorAttempted = false;
+    let shutdownExitCode: number | null = null;
+    let shutdownKillTimer: TimerHandle | null = null;
+    let watcherStartupError: Error | null = null;
+
+    const signalWatchProcess = (child: ChildProcess, signal: ProcessSignal) => {
+      if (useChildProcessGroup && typeof child.pid === "number") {
+        try {
+          process.kill(-child.pid, signal);
+          return;
+        } catch (error) {
+          if (errorCode(error) === "ESRCH" || errorCode(error) === "EPERM") {
+            return;
+          }
+        }
+      }
+      child.kill(signal);
+    };
+
+    const forceKillWatchProcessGroup = (child: ChildProcess | null) => {
+      if (!useChildProcessGroup || typeof child?.pid !== "number") {
+        return;
+      }
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch (error) {
+        if (errorCode(error) !== "ESRCH" && errorCode(error) !== "EPERM") {
+          throw error;
+        }
+      }
+    };
+
+    const settle = (outcome: WatchExit) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      shuttingDown = true;
+      if (shutdownKillTimer) {
+        clearTimeout(shutdownKillTimer);
+      }
+      process.off("SIGINT", onSigInt);
+      process.off("SIGTERM", onSigTerm);
+      // Keep ownership until physical observation retires. A replacement must
+      // not acquire the lock while this owner still has live watcher resources.
+      void (async () => {
+        try {
+          await watcher?.close?.();
+        } catch (error) {
+          if (watcherStartupError) {
+            throw new AggregateError(
+              [watcherStartupError, error],
+              "Watcher startup and retirement failed",
+              { cause: error },
+            );
+          }
+          throw error;
+        }
+        releaseWatchLock(lockHandle);
+        if (watcherStartupError && typeof outcome !== "string") {
+          throw watcherStartupError;
+        }
+        return outcome;
+      })().then(resolve, reject);
+    };
+
+    const settleIfSignaled = (child: ChildProcess | null, signal: ProcessSignal | null) => {
+      // Windows emulates SIGTERM with unconditional termination, including
+      // ordinary requested restarts. It has no Unix completion distinction.
+      if (!signal || platform === "win32") {
+        return false;
+      }
+      // The native implementation normally acknowledges stop with an exit
+      // code. Its signal death cannot prove its detached workers have stopped,
+      // even when we requested a restart or were already shutting down.
+      try {
+        forceKillWatchProcessGroup(child);
+      } catch (error) {
+        logWatcher(`Failed to stop the exited runner's process group: ${errorMessage(error)}`);
+      }
+      settle(signal);
+      return true;
+    };
+
+    const requestShutdown = (code: number) => {
+      shuttingDown = true;
+      shutdownExitCode = code;
+      if (!watchProcess) {
+        settle(code);
+        return;
+      }
+      const shutdownProcess = watchProcess;
+      signalWatchProcess(shutdownProcess, WATCH_RESTART_SIGNAL);
+      shutdownKillTimer ??= setTimeout(() => {
+        shutdownKillTimer = null;
+        signalWatchProcess(shutdownProcess, "SIGKILL");
+      }, WATCH_SHUTDOWN_KILL_GRACE_MS);
+    };
+
+    const settleIfShuttingDown = (exitedProcess: ChildProcess | null) => {
+      if (!shuttingDown || shutdownExitCode === null) {
+        return false;
+      }
+      forceKillWatchProcessGroup(exitedProcess);
+      settle(shutdownExitCode);
+      return true;
+    };
+
+    const startChild = (
+      childArgs: string[],
+      label: string,
+      spawnEnv: NodeJS.ProcessEnv,
+      onExit: (
+        exitedProcess: ChildProcess | null,
+        exitCode: number | null,
+        exitSignal: ProcessSignal | null,
+      ) => void,
+    ) => {
+      watchProcess = spawn(process.execPath, childArgs, {
+        cwd,
+        detached: useChildProcessGroup,
+        env: spawnEnv,
+        stdio: "inherit",
+      });
+      watchProcess.on("error", (error) => {
+        watchProcess = null;
+        logWatcher(`Failed to spawn ${label}: ${errorMessage(error) || "unknown error"}`);
+        settle(1);
+      });
+      watchProcess.on("exit", (exitCode, exitSignal) => {
+        const exitedProcess = watchProcess;
+        watchProcess = null;
+        if (settled) {
+          return;
+        }
+        if (settleIfSignaled(exitedProcess, exitSignal) || settleIfShuttingDown(exitedProcess)) {
+          return;
+        }
+        onExit(exitedProcess, exitCode, exitSignal);
+      });
+    };
+
+    const startRunner = () => {
+      try {
+        pathClassifier.refreshGeneratedPluginAssetPaths();
+      } catch (error) {
+        logWatcher(
+          `Failed to refresh generated asset paths: ${errorMessage(error) || "unknown error"}`,
+        );
+        settle(1);
+        return;
+      }
+      startChild(
+        [WATCH_NODE_RUNNER, ...args],
+        "watcher child",
+        childEnv,
+        (exitedProcess, exitCode, exitSignal) => {
+          if (restartRequested || shouldRestartAfterChildExit(exitCode, exitSignal, platform)) {
+            forceKillWatchProcessGroup(exitedProcess);
+            restartRequested = false;
+            deferredRestartGeneration += 1;
+            deferredRestartActive = false;
+            if (!hasDistEntry()) {
+              deferredRestartActive = true;
+              const generation = deferredRestartGeneration;
+              logWatcher("Watcher child exited mid-build; waiting for the build entry.");
+              deferRestartUntilDistEntryExists({
+                generation,
+                targetProcess: null,
+                onReady: () => {
+                  if (!watchProcess) {
+                    startRunner();
+                  }
+                },
+                onTimeout: () => {
+                  logWatcher("Build entry wait timed out; starting run-node recovery.");
+                  if (!watchProcess) {
+                    startRunner();
+                  }
+                },
+              });
+              return;
+            }
+            startRunner();
+            return;
+          }
+          if (shouldRunAutoDoctor(args, env, autoDoctorAttempted)) {
+            runAutoDoctorAndRestart();
+            return;
+          }
+          settle(exitSignal ? 1 : (exitCode ?? 1));
+        },
+      );
+    };
+
+    const handleWatcherError = (error: unknown) => {
+      logWatcher(`Source observation failed: ${errorMessage(error) || String(error)}`);
+      requestShutdown(1);
+    };
+
+    const rejectWatcherStartupError = (err: unknown) => {
+      if (settled) {
+        return;
+      }
+      // Source already started before the asynchronous watcher was loaded.
+      // Keep its exit observable until cleanup acknowledges this startup error.
+      watcherStartupError = toErrorObject(err, "Non-Error rejection");
+      requestShutdown(1);
+    };
+
+    const resolveCreateWatcher = async () => {
+      try {
+        return (await import("./watch-node-observation.mts")).createSourceObserver;
+      } catch (err) {
+        if (isInvalidPackageConfigError(err)) {
+          printFriendlyWatchStartupError(err);
+        }
+        throw err;
+      }
+    };
+
+    const runAutoDoctorAndRestart = () => {
+      autoDoctorAttempted = true;
+      logWatcher("Gateway exited early; running `openclaw doctor --fix --non-interactive` once.");
+      startChild(
+        [WATCH_NODE_RUNNER, "doctor", "--fix", "--non-interactive"],
+        "doctor repair",
+        { ...childEnv },
+        (_exitedProcess, exitCode, exitSignal) => {
+          if (exitCode === 0 && !exitSignal) {
+            logWatcher("Doctor repair completed; restarting gateway watch child.");
+            startRunner();
+            return;
+          }
+          logWatcher(
+            `Doctor repair failed; gateway:watch exiting with code ${exitSignal ? 1 : (exitCode ?? 1)}.`,
+          );
+          settle(exitSignal ? 1 : (exitCode ?? 1));
+        },
+      );
+    };
+
+    const hasDistEntry = () => fs.existsSync(path.join(cwd, "dist", "entry.js"));
+
+    const deferRestartUntilDistEntryExists = ({
+      generation,
+      targetProcess,
+      onReady,
+      onTimeout,
+    }: {
+      generation: number;
+      targetProcess: ChildProcess | null;
+      onReady: () => void;
+      onTimeout: () => void;
+    }) => {
+      void (async () => {
+        const deadline = Date.now() + WATCH_DIST_ENTRY_TIMEOUT_MS;
+        const isCurrent = () =>
+          generation === deferredRestartGeneration &&
+          !settled &&
+          !shuttingDown &&
+          (!targetProcess || (restartRequested && watchProcess === targetProcess));
+        while (isCurrent()) {
+          await sleep(WATCH_DIST_ENTRY_POLL_MS);
+          if (!isCurrent()) {
+            return;
+          }
+          if (hasDistEntry()) {
+            deferredRestartActive = false;
+            onReady();
+            return;
+          }
+          if (Date.now() >= deadline) {
+            deferredRestartActive = false;
+            onTimeout();
+            return;
+          }
+        }
+      })();
+    };
+
+    const requestRestart = (changedPath?: string) => {
+      if (
+        shuttingDown ||
+        restartRequested ||
+        (changedPath !== undefined &&
+          isIgnoredWatchPath(changedPath, cwd, runNodeWatchedPaths, pathClassifier))
+      ) {
+        return;
+      }
+      if (!watchProcess) {
+        if (deferredRestartActive) {
+          return;
+        }
+        startRunner();
+        return;
+      }
+      restartRequested = true;
+
+      // A separate build can temporarily remove dist while this healthy child is
+      // still serving. Keep it alive until run-node can take ownership safely.
+      if (!hasDistEntry()) {
+        if (!deferredRestartActive) {
+          deferredRestartActive = true;
+          deferredRestartGeneration += 1;
+          logWatcher("Build entry missing; keeping watcher child alive until it returns.");
+          const targetProcess = watchProcess;
+          deferRestartUntilDistEntryExists({
+            generation: deferredRestartGeneration,
+            targetProcess,
+            onReady: () => {
+              logWatcher("Build entry restored; restarting watcher child.");
+              signalWatchProcess(targetProcess, WATCH_RESTART_SIGNAL);
+            },
+            onTimeout: () => {
+              restartRequested = false;
+              logWatcher("Build entry wait timed out; keeping the healthy watcher child.");
+            },
+          });
+        }
+        return;
+      }
+
+      signalWatchProcess(watchProcess, WATCH_RESTART_SIGNAL);
+    };
+
+    const attachWatcher = (createWatcher: WatcherFactory) => {
+      if (settled) {
+        return;
+      }
+      watcher = createWatcher(runNodeWatchedPaths, {
+        cwd,
+        env,
+        ignored: (watchPath, stats) =>
+          isIgnoredWatchPath(watchPath, cwd, runNodeWatchedPaths, pathClassifier, stats),
+        onChange: requestRestart,
+        onError: handleWatcherError,
+        onLog: (message) => logWatcher(message),
+      });
+    };
+
+    const startWatcher = () => {
+      void resolveCreateWatcher().then(attachWatcher).catch(rejectWatcherStartupError);
+    };
+
+    const onSigInt = () => {
+      requestShutdown(130);
+    };
+    const onSigTerm = () => {
+      requestShutdown(143);
+    };
+
+    process.on("SIGINT", onSigInt);
+    process.on("SIGTERM", onSigTerm);
+
+    void acquireWatchLock(cwd, args, watchSession)
+      .then((handle) => {
+        if (!handle) {
+          settle(1);
+          return;
+        }
+        lockHandle = handle;
+        startRunner();
+        startWatcher();
+      })
+      .catch((error: unknown) => {
+        logWatcher(`Failed to acquire watcher lock: ${errorMessage(error) || "unknown error"}`);
+        settle(1);
+      });
+  });
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  void runWatchMain()
+    .then((outcome) => {
+      if (typeof outcome === "string") {
+        process.kill(process.pid, outcome);
+        return;
+      }
+      process.exit(outcome);
+    })
+    .catch((err: unknown) => {
+      if (!isInvalidPackageConfigError(err)) {
+        console.error(err);
+      }
+      process.exit(1);
+    });
+}
+
+function errorCode(error: unknown): unknown {
+  return typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error !== "object" || error === null || !("message" in error)) {
+    return "";
+  }
+  return typeof error.message === "string" ? error.message : "";
+}
+
+function isWatchLock(value: unknown): value is WatchLock {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "pid" in value &&
+    typeof value.pid === "number" &&
+    "command" in value &&
+    typeof value.command === "string" &&
+    "createdAt" in value &&
+    typeof value.createdAt === "string" &&
+    "cwd" in value &&
+    typeof value.cwd === "string" &&
+    "watchSession" in value &&
+    typeof value.watchSession === "string"
+  );
+}

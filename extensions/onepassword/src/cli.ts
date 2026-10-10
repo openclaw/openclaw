@@ -17,6 +17,7 @@ type OnePasswordCliContext = {
   resolveConfig: () => OnePasswordConfig | undefined;
   resolveOpClient: () => Pick<OpClient, "opBin" | "tokenFilePresent">;
   auditStore: PluginStateKeyedStore<AuditRow>;
+  registerAdditionalCommands?: (command: CommandLike) => void;
   write?: (message: string) => void;
 };
 
@@ -59,26 +60,18 @@ async function readAuditRows(auditStore: PluginStateKeyedStore<AuditRow>, limit:
         right.value.timestampMs - left.value.timestampMs || right.key.localeCompare(left.key),
     )
     .slice(0, limit)
-    .map(({ value }) => {
-      const row: {
-        timestamp: string;
-        agent: string;
-        slug: string;
-        outcome: string;
-        errorCode?: string;
-        reason: string;
-      } = {
-        timestamp: new Date(value.timestampMs).toISOString(),
-        agent: value.agentId,
-        slug: value.slug,
-        outcome: value.outcome,
-        reason: truncateReason(value.reason),
-      };
-      if (value.errorCode) {
-        row.errorCode = value.errorCode;
-      }
-      return row;
-    });
+    .map(({ value }) =>
+      Object.assign(
+        {
+          timestamp: new Date(value.timestampMs).toISOString(),
+          agent: value.agentId,
+          slug: value.slug,
+          outcome: value.outcome,
+          reason: truncateReason(value.reason),
+        },
+        value.errorCode ? { errorCode: value.errorCode } : {},
+      ),
+    );
 }
 
 export function registerOnePasswordCommands(context: OnePasswordCliContext): void {
@@ -86,6 +79,7 @@ export function registerOnePasswordCommands(context: OnePasswordCliContext): voi
   const command = context.program
     .command("onepassword")
     .description("Inspect the 1Password broker");
+  context.registerAdditionalCommands?.(command);
   command
     .command("status")
     .description("Show broker readiness without secret values")

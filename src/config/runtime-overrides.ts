@@ -1,7 +1,7 @@
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-// Applies runtime-only config overrides without mutating persisted config.
 import { isPlainObject } from "../utils.js";
+import { attachAgentListProjection } from "./agent-list-projection.js";
 import { parseConfigPath, setConfigValueAtPath, unsetConfigValueAtPath } from "./config-paths.js";
 import type { OpenClawConfig } from "./types.js";
 
@@ -41,9 +41,17 @@ function mergeOverrides(base: unknown, override: unknown): unknown {
     if (value === undefined || isBlockedObjectKey(key)) {
       continue;
     }
-    next[key] = mergeOverrides((base as OverrideTree)[key], value);
+    next[key] = mergeOverrides(base[key], value);
   }
   return next;
+}
+
+function applyOverrideTree(cfg: OpenClawConfig, overrideTree: OverrideTree): OpenClawConfig {
+  const next = mergeOverrides(cfg, overrideTree) as OpenClawConfig;
+  if (next.agents === cfg.agents) {
+    return next;
+  }
+  return attachAgentListProjection(next);
 }
 
 /** Return the process-local runtime override tree used by debug config commands. */
@@ -72,16 +80,15 @@ export function unsetConfigOverride(pathRaw: string): Result<boolean, string> {
   if (!parsed.ok) {
     return err(parsed.error);
   }
-  const removed = unsetConfigValueAtPath(overrides, parsed.path);
-  return ok(removed);
+  return ok(unsetConfigValueAtPath(overrides, parsed.path));
 }
 
 /** Merge the current runtime overrides over a loaded config without mutating the input config. */
 export function applyConfigOverrides(cfg: OpenClawConfig): OpenClawConfig {
-  if (!overrides || Object.keys(overrides).length === 0) {
+  if (Object.keys(overrides).length === 0) {
     return cfg;
   }
-  return mergeOverrides(cfg, overrides) as OpenClawConfig;
+  return applyOverrideTree(cfg, overrides);
 }
 
 /** Capture an immutable applier for the process-local overrides active at this instant. */
@@ -90,5 +97,5 @@ export function captureConfigOverrideApplier(): (cfg: OpenClawConfig) => OpenCla
   if (Object.keys(capturedOverrides).length === 0) {
     return (cfg) => cfg;
   }
-  return (cfg) => mergeOverrides(cfg, capturedOverrides) as OpenClawConfig;
+  return (cfg) => applyOverrideTree(cfg, capturedOverrides);
 }

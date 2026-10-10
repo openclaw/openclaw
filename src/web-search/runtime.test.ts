@@ -1,17 +1,19 @@
-// Web search runtime tests cover provider resolution and search execution.
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+// Web search runtime tests cover provider resolution and search execution.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { getRuntimeAuthProfileStoreCredentialsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
+  getRuntimeAuthProfileStoreCredentialsRevision,
+  getRuntimeAuthProfileStoreSnapshotsRevision,
   replaceRuntimeAuthProfileStoreSnapshots,
-} from "../agents/auth-profiles/store.js";
-import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+} from "../agents/auth-profiles/runtime-snapshots.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/web-provider-types.js";
 import {
+  createOAuthAuthProfileStore,
   createWebSearchTestProvider,
   type WebSearchTestProviderParams,
 } from "../test-utils/web-provider-runtime.test-helpers.js";
@@ -120,32 +122,7 @@ function createGoogleSearchProvider(
   });
 }
 
-function createOAuthAuthProfileStore(params: {
-  provider: string;
-  profileId: string;
-  access: string;
-  refresh: string;
-}): AuthProfileStore {
-  return {
-    version: 1,
-    profiles: {
-      [params.profileId]: {
-        type: "oauth",
-        provider: params.provider,
-        access: params.access,
-        refresh: params.refresh,
-        expires: Date.now() + 3_600_000,
-      },
-    },
-  };
-}
-
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected a non-array record");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
 function mockCallParam(mock: ReturnType<typeof vi.fn>, index = 0): Record<string, unknown> {
   return requireRecord(mock.mock.calls[index]?.[0]);
@@ -169,6 +146,7 @@ describe("web search runtime", () => {
   let runWebSearch: typeof import("./runtime.js").runWebSearch;
   let activateSecretsRuntimeSnapshot: typeof import("../secrets/runtime.js").activateSecretsRuntimeSnapshot;
   let clearSecretsRuntimeSnapshot: typeof import("../secrets/runtime.js").clearSecretsRuntimeSnapshot;
+  let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
   let setRuntimeConfigSnapshot: typeof import("../config/config.js").setRuntimeConfigSnapshot;
   const tempDirs: string[] = [];
 
@@ -176,10 +154,12 @@ describe("web search runtime", () => {
     ({ hasUsableWebSearchProvider, runWebSearch } = await import("./runtime.js"));
     ({ activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } =
       await import("../secrets/runtime.js"));
-    ({ setRuntimeConfigSnapshot } = await import("../config/config.js"));
+    ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
+      await import("../config/config.js"));
   });
 
   beforeEach(() => {
+    clearRuntimeConfigSnapshot();
     resolveManifestContractOwnerPluginIdMock.mockReset();
     resolvePluginWebSearchProvidersMock.mockReset();
     resolveRuntimeWebSearchProvidersMock.mockReset();
@@ -189,6 +169,7 @@ describe("web search runtime", () => {
   });
 
   afterEach(() => {
+    clearRuntimeConfigSnapshot();
     clearSecretsRuntimeSnapshot();
     clearRuntimeAuthProfileStoreSnapshots();
     for (const tempDir of tempDirs.splice(0)) {
@@ -223,9 +204,9 @@ describe("web search runtime", () => {
     });
   });
 
-  it("accepts the prepared provider selection without rediscovering providers", () => {
+  it("accepts the prepared provider selection without rediscovering providers", async () => {
     expect(
-      hasUsableWebSearchProvider({
+      await hasUsableWebSearchProvider({
         config: {},
         runtimeWebSearch: {
           providerSource: "auto-detect",
@@ -454,7 +435,7 @@ describe("web search runtime", () => {
       runWebSearch({
         config: {
           agents: {
-            list: [{ id: "main", agentDir }],
+            entries: { main: { agentDir } },
           },
         },
         args: { query: "oauth-backed web search" },
@@ -494,15 +475,16 @@ describe("web search runtime", () => {
     ]);
     const config = {
       agents: {
-        list: [
-          { id: "main", default: true, agentDir: defaultAgentDir },
-          { id: "side", agentDir: activeAgentDir },
-        ],
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: {
+          main: { agentDir: defaultAgentDir },
+          side: { agentDir: activeAgentDir },
+        },
       },
     } satisfies OpenClawConfig;
 
     expect(
-      hasUsableWebSearchProvider({
+      await hasUsableWebSearchProvider({
         agentDir: activeAgentDir,
         config,
         preferRuntimeProviders: true,
@@ -585,6 +567,7 @@ describe("web search runtime", () => {
       config: resolvedConfig,
       authStores: [],
       authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+      authStoreSnapshotsRevision: getRuntimeAuthProfileStoreSnapshotsRevision(),
       warnings: [],
       webTools: {
         search: {
@@ -762,6 +745,7 @@ describe("web search runtime", () => {
       config: {},
       authStores: [],
       authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+      authStoreSnapshotsRevision: getRuntimeAuthProfileStoreSnapshotsRevision(),
       warnings: [],
       webTools: {
         search: {
@@ -804,6 +788,7 @@ describe("web search runtime", () => {
       config: {},
       authStores: [],
       authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+      authStoreSnapshotsRevision: getRuntimeAuthProfileStoreSnapshotsRevision(),
       warnings: [],
       webTools: {
         search: {
@@ -849,6 +834,7 @@ describe("web search runtime", () => {
       config: structuredClone(config),
       authStores: [],
       authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+      authStoreSnapshotsRevision: getRuntimeAuthProfileStoreSnapshotsRevision(),
       warnings: [],
       webTools: {
         search: {

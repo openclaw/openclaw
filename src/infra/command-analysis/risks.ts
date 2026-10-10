@@ -1,6 +1,6 @@
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 // Command risk detection follows nested carriers, shell wrappers, and inline
 // interpreter eval paths used by approval policy and command explanations.
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { splitShellArgs } from "../../utils/shell-argv.js";
 import {
   COMMAND_CARRIER_EXECUTABLES,
@@ -12,18 +12,18 @@ import {
 import { unwrapKnownDispatchWrapperInvocation } from "../dispatch-wrapper-resolution.js";
 import type { ExecCommandSegment } from "../exec-approvals-analysis.js";
 import { normalizeExecutableToken } from "../exec-wrapper-resolution.js";
-import { parseStrictPositiveInteger } from "../parse-finite-number.js";
-import { POSIX_INLINE_COMMAND_FLAGS, resolveInlineCommandMatch } from "../shell-inline-command.js";
+import {
+  isDirectShellPositionalCarrierCommand,
+  POSIX_INLINE_COMMAND_FLAGS,
+  resolveInlineCommandMatch,
+} from "../shell-inline-command.js";
 import {
   extractShellWrapperInlineCommand,
   isShellWrapperExecutable,
+  POSIX_PARSEABLE_SHELL_WRAPPERS,
 } from "../shell-wrapper-resolution.js";
 import { detectInterpreterInlineEvalArgv, type InterpreterInlineEvalHit } from "./inline-eval.js";
 
-/** Shared command carrier constants used by approval policy and command explanation. */
-export { SOURCE_EXECUTABLES };
-
-/** Command and flag pair that can carry nested command text. */
 type CommandCarrierHit = {
   command: string;
   flag?: string;
@@ -36,21 +36,17 @@ function commandArgvKey(argv: readonly string[]): string {
   return argv.join("\0");
 }
 
-function isCommandCarrierExecutable(executable: string, options?: { includeExec?: boolean }) {
-  return (
-    COMMAND_CARRIER_EXECUTABLES.has(executable) ||
-    Boolean(options?.includeExec && executable === "exec")
-  );
+function isCommandCarrierExecutable(executable: string) {
+  return COMMAND_CARRIER_EXECUTABLES.has(executable) || executable === "exec";
 }
 
-/** Builds candidate command payload strings from nested carriers and shell wrappers. */
-export function buildCommandPayloadCandidates(
+export function buildCommandPayloadArgvCandidates(
   argv: string[],
   seenArgv = new Set<string>(),
-): string[] {
+): string[][] {
   const key = commandArgvKey(argv);
   if (seenArgv.has(key)) {
-    return argv.length > 0 ? [argv.join(" ")] : [];
+    return argv.length > 0 ? [argv] : [];
   }
   seenArgv.add(key);
   const assignmentStrippedArgv = stripLeadingEnvAssignments(argv);
@@ -58,21 +54,34 @@ export function buildCommandPayloadCandidates(
     includeExec: true,
   });
   const executableArgv = carriedArgv ?? assignmentStrippedArgv;
-  const carriedCandidates = carriedArgv ? buildCommandPayloadCandidates(carriedArgv, seenArgv) : [];
+  const carriedCandidates = carriedArgv
+    ? buildCommandPayloadArgvCandidates(carriedArgv, seenArgv)
+    : [];
   const shellWrapperPayload = extractShellWrapperInlineCommand(executableArgv);
   const shellWrapperCandidates = shellWrapperPayload
     ? (() => {
         const innerArgv = splitShellArgs(shellWrapperPayload);
         return innerArgv
-          ? buildCommandPayloadCandidates(innerArgv, seenArgv)
-          : [shellWrapperPayload];
+          ? buildCommandPayloadArgvCandidates(innerArgv, seenArgv)
+          : [[shellWrapperPayload]];
       })()
     : [];
-  return uniqueCommandPayloadCandidates([
-    ...(executableArgv.length > 0 ? [executableArgv.join(" ")] : []),
+  const seenCandidates = new Set<string>();
+  return [
+    ...(executableArgv.length > 0 ? [executableArgv] : []),
     ...carriedCandidates,
     ...shellWrapperCandidates,
-  ]);
+  ].filter((candidate) => {
+    if (candidate.length === 0) {
+      return false;
+    }
+    const candidateKey = commandArgvKey(candidate);
+    if (seenCandidates.has(candidateKey)) {
+      return false;
+    }
+    seenCandidates.add(candidateKey);
+    return true;
+  });
 }
 
 function stripLeadingEnvAssignments(argv: string[]): string[] {
@@ -81,10 +90,6 @@ function stripLeadingEnvAssignments(argv: string[]): string[] {
     index += 1;
   }
   return index > 0 ? argv.slice(index) : argv;
-}
-
-function uniqueCommandPayloadCandidates(candidates: string[]): string[] {
-  return uniqueStrings(candidates.filter((candidate) => candidate.trim().length > 0));
 }
 
 type ShellPositionalCarrierPlan = { kind: "all" } | { kind: "indexes"; indexes: number[] };
@@ -114,19 +119,7 @@ function normalizeShellPositionalToken(
 
 function resolveShellPositionalCarrierPlan(command: string): ShellPositionalCarrierPlan | null {
   const trimmed = command.trim();
-  if (trimmed.length === 0) {
-    return null;
-  }
-
-  const shellWhitespace = String.raw`[^\S\r\n]+`;
-  const positionalZero = String.raw`(?:\$(?:0|\{0\})|"\$(?:0|\{0\})")`;
-  const positionalArg = String.raw`(?:\$(?:[@*]|[1-9]|\{[@*1-9]\})|"\$(?:[@*]|[1-9]|\{[@*1-9]\})")`;
-  if (
-    !new RegExp(
-      `^(?:exec${shellWhitespace}(?:--${shellWhitespace})?)?${positionalZero}(?:${shellWhitespace}${positionalArg})*$`,
-      "u",
-    ).test(trimmed)
-  ) {
+  if (!isDirectShellPositionalCarrierCommand(trimmed)) {
     return null;
   }
 
@@ -160,19 +153,6 @@ function resolveShellPositionalCarrierPlan(command: string): ShellPositionalCarr
   return { kind: "indexes", indexes };
 }
 
-function resolveShellPositionalCarrierArgv(params: {
-  executableArgv: string[];
-  valueTokenIndex: number;
-  plan: ShellPositionalCarrierPlan;
-}): string[] {
-  const positionalArgv = params.executableArgv.slice(params.valueTokenIndex + 1);
-  const carriedArgv =
-    params.plan.kind === "all"
-      ? positionalArgv
-      : params.plan.indexes.map((index) => positionalArgv[index] ?? "");
-  return carriedArgv.map((token) => token.trim()).filter((token) => token.length > 0);
-}
-
 function detectShellPositionalCarrierInlineEvalArgvInternal(
   argv: string[],
   seenArgv: Set<string>,
@@ -182,7 +162,7 @@ function detectShellPositionalCarrierInlineEvalArgvInternal(
   if (!isShellWrapperExecutable(executable)) {
     return null;
   }
-  if (!["ash", "bash", "dash", "fish", "ksh", "sh", "zsh"].includes(executable)) {
+  if (!POSIX_PARSEABLE_SHELL_WRAPPERS.has(executable)) {
     return null;
   }
   const key = commandArgvKey(executableArgv);
@@ -202,11 +182,14 @@ function detectShellPositionalCarrierInlineEvalArgvInternal(
     return null;
   }
 
-  const carriedArgv = resolveShellPositionalCarrierArgv({
-    executableArgv,
-    valueTokenIndex: inlineMatch.valueTokenIndex,
-    plan: carrierPlan,
-  });
+  const positionalArgv = executableArgv.slice(inlineMatch.valueTokenIndex + 1);
+  const carriedArgv = (
+    carrierPlan.kind === "all"
+      ? positionalArgv
+      : carrierPlan.indexes.map((index) => positionalArgv[index] ?? "")
+  )
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
   if (carriedArgv.length === 0) {
     return null;
   }
@@ -231,7 +214,7 @@ function detectCarrierInlineEvalArgvInternal(
   }
 
   const executable = normalizeExecutableToken(executableArgv[0] ?? "");
-  if (!isCommandCarrierExecutable(executable, { includeExec: true })) {
+  if (!isCommandCarrierExecutable(executable)) {
     return null;
   }
   const carriedArgv = resolveCarrierCommandArgv(executableArgv, 0, { includeExec: true });
@@ -296,6 +279,10 @@ export function detectCommandCarrierArgv(argv: string[]): CommandCarrierHit[] {
   if (normalizedExecutable === "xargs") {
     hits.push({ command: normalizedExecutable });
   }
+  const dispatchWrapper = unwrapKnownDispatchWrapperInvocation(argv);
+  if (dispatchWrapper.kind === "blocked") {
+    hits.push({ command: normalizedExecutable });
+  }
   const splitStringFlag = detectEnvSplitStringFlag(argv);
   if (splitStringFlag) {
     hits.push({ command: normalizedExecutable, flag: splitStringFlag });
@@ -341,7 +328,7 @@ export function detectShellWrapperThroughCarrierArgv(
   shellCommandFlag: (argv: string[], startIndex: number) => unknown,
 ): string | null {
   const executable = normalizeExecutableToken(argv[0] ?? "");
-  if (!isCommandCarrierExecutable(executable, { includeExec: true })) {
+  if (!isCommandCarrierExecutable(executable)) {
     return null;
   }
   const carriedArgv = resolveCarrierCommandArgv(argv, 0, { includeExec: true });
@@ -356,7 +343,7 @@ export function detectShellWrapperThroughCarrierArgv(
 
 export function detectCarriedShellBuiltinArgv(argv: string[]): CarriedShellBuiltinHit | null {
   const executable = normalizeExecutableToken(argv[0] ?? "");
-  if (!isCommandCarrierExecutable(executable, { includeExec: true })) {
+  if (!isCommandCarrierExecutable(executable)) {
     return null;
   }
   const carriedArgv = resolveCarrierCommandArgv(argv, 0, { includeExec: true });

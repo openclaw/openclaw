@@ -1,17 +1,10 @@
-// Commander registration for sandbox container list, recreate, and explain commands.
 import type { Command } from "commander";
-import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
-import { sandboxExplainCommand } from "../commands/sandbox-explain.js";
-import { sandboxListCommand, sandboxRecreateCommand } from "../commands/sandbox.js";
+import type { sandboxExplainCommand } from "../commands/sandbox-explain.js";
+import type { sandboxListCommand, sandboxRecreateCommand } from "../commands/sandbox.js";
 import { defaultRuntime } from "../runtime.js";
-import { formatHelpExamples } from "./help-format.js";
-
-// --- Types ---
-
-type CommandOptions = Record<string, unknown>;
-
-// --- Helpers ---
+import { runCommandWithRuntime } from "./cli-utils.js";
+import { formatDocsHelp, formatHelpExamples } from "./help-format.js";
 
 const SANDBOX_EXAMPLES = {
   main: [
@@ -42,22 +35,6 @@ const SANDBOX_EXAMPLES = {
   ],
 } as const;
 
-function createRunner(
-  commandFn: (opts: CommandOptions, runtime: typeof defaultRuntime) => Promise<void>,
-) {
-  // Sandbox commands share the default runtime error/exit behavior.
-  return async (opts: CommandOptions) => {
-    try {
-      await commandFn(opts, defaultRuntime);
-    } catch (err) {
-      defaultRuntime.error(String(err));
-      defaultRuntime.exit(1);
-    }
-  };
-}
-
-// --- Registration ---
-
 export function registerSandboxCli(program: Command) {
   const sandbox = program
     .command("sandbox")
@@ -66,16 +43,10 @@ export function registerSandboxCli(program: Command) {
       "after",
       () => `\n${theme.heading("Examples:")}\n${formatHelpExamples(SANDBOX_EXAMPLES.main)}\n`,
     )
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/sandbox", "docs.openclaw.ai/cli/sandbox")}\n`,
-    )
+    .addHelpText("after", () => formatDocsHelp("/cli/sandbox"))
     .action(() => {
       sandbox.help({ error: true });
     });
-
-  // --- List Command ---
 
   sandbox
     .command("list")
@@ -93,19 +64,10 @@ export function registerSandboxCli(program: Command) {
           "- Idle time (time since last use)",
         )}\n${theme.muted("- Associated session/agent ID")}`,
     )
-    .action(
-      createRunner((opts) =>
-        sandboxListCommand(
-          {
-            browser: Boolean(opts.browser),
-            json: Boolean(opts.json),
-          },
-          defaultRuntime,
-        ),
-      ),
-    );
-
-  // --- Recreate Command ---
+    .action(async (opts: Parameters<typeof sandboxListCommand>[0]) => {
+      const { sandboxListCommand } = await import("../commands/sandbox.js");
+      await runCommandWithRuntime(defaultRuntime, () => sandboxListCommand(opts, defaultRuntime));
+    });
 
   sandbox
     .command("recreate")
@@ -134,22 +96,12 @@ export function registerSandboxCli(program: Command) {
           "  --browser      Only affect browser containers (not regular sandbox)",
         )}\n${theme.muted("  --force        Skip confirmation prompt")}`,
     )
-    .action(
-      createRunner((opts) =>
-        sandboxRecreateCommand(
-          {
-            all: Boolean(opts.all),
-            session: opts.session as string | undefined,
-            agent: opts.agent as string | undefined,
-            browser: Boolean(opts.browser),
-            force: Boolean(opts.force),
-          },
-          defaultRuntime,
-        ),
-      ),
-    );
-
-  // --- Explain Command ---
+    .action(async (opts: Parameters<typeof sandboxRecreateCommand>[0]) => {
+      const { sandboxRecreateCommand } = await import("../commands/sandbox.js");
+      await runCommandWithRuntime(defaultRuntime, () =>
+        sandboxRecreateCommand(opts, defaultRuntime),
+      );
+    });
 
   sandbox
     .command("explain")
@@ -161,16 +113,10 @@ export function registerSandboxCli(program: Command) {
       "after",
       () => `\n${theme.heading("Examples:")}\n${formatHelpExamples(SANDBOX_EXAMPLES.explain)}\n`,
     )
-    .action(
-      createRunner((opts) =>
-        sandboxExplainCommand(
-          {
-            session: opts.session as string | undefined,
-            agent: opts.agent as string | undefined,
-            json: Boolean(opts.json),
-          },
-          defaultRuntime,
-        ),
-      ),
-    );
+    .action(async (opts: Parameters<typeof sandboxExplainCommand>[0]) => {
+      const { sandboxExplainCommand } = await import("../commands/sandbox-explain.js");
+      await runCommandWithRuntime(defaultRuntime, () =>
+        sandboxExplainCommand(opts, defaultRuntime),
+      );
+    });
 }

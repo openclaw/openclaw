@@ -1,4 +1,3 @@
-// Pixverse setup module handles plugin onboarding behavior.
 import type {
   ProviderAuthContext,
   ProviderAuthMethod,
@@ -7,18 +6,16 @@ import type {
 import {
   applyAuthProfileConfig,
   buildApiKeyCredential,
-  ensureApiKeyFromOptionEnvOrPrompt,
-  normalizeApiKeyInput,
+  captureProviderApiKey,
   normalizeOptionalSecretInput,
   type OpenClawConfig,
-  type SecretInput,
-  upsertAuthProfileWithLock,
-  validateApiKeyInput,
+  persistProviderApiKey,
 } from "openclaw/plugin-sdk/provider-auth-api-key";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-onboard";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   DEFAULT_PIXVERSE_REGION,
+  normalizePixVerseRegion,
   PIXVERSE_BASE_URL_BY_REGION,
   PIXVERSE_DEFAULT_VIDEO_MODEL_REF,
   PIXVERSE_PROVIDER_ID,
@@ -33,51 +30,18 @@ type PixVerseAuthResult = {
   notes: string[];
 };
 
-type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
-
-async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams): Promise<void> {
-  const updated = await upsertAuthProfileWithLock(params);
-  if (!updated) {
-    throw new Error(
-      "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
-    );
-  }
-}
-
-function normalizePixVerseRegion(value: unknown): PixVerseApiRegion | undefined {
-  const region = normalizeOptionalString(value)?.toLowerCase();
-  switch (region) {
-    case "cn":
-    case "china":
-    case "mainland":
-    case "pai":
-      return "cn";
-    case "global":
-    case "intl":
-    case "international":
-      return "international";
-    default:
-      return undefined;
-  }
-}
-
-function pixVerseRegionNote(region: PixVerseApiRegion): string {
-  const label = region === "cn" ? "CN" : "International";
-  return `PixVerse endpoint: ${label} (${PIXVERSE_BASE_URL_BY_REGION[region]})`;
-}
-
-function applyPixVerseProviderConfig(
+function applyPixVerseConfig(
   cfg: OpenClawConfig,
   region: PixVerseApiRegion,
-  options?: { resetBaseUrl?: boolean },
+  resetBaseUrl: boolean,
 ): OpenClawConfig {
   const existingProvider: Partial<ModelProviderConfig> =
     cfg.models?.providers?.[PIXVERSE_PROVIDER_ID] ?? {};
   const selectedBaseUrl = PIXVERSE_BASE_URL_BY_REGION[region];
-  const baseUrl = options?.resetBaseUrl
+  const baseUrl = resetBaseUrl
     ? selectedBaseUrl
     : (normalizeOptionalString(existingProvider.baseUrl) ?? selectedBaseUrl);
-  return {
+  const next: OpenClawConfig = {
     ...cfg,
     models: {
       ...cfg.models,
@@ -92,15 +56,7 @@ function applyPixVerseProviderConfig(
       },
     },
   };
-}
-
-function applyPixVerseConfig(
-  cfg: OpenClawConfig,
-  region: PixVerseApiRegion,
-  options?: { resetBaseUrl?: boolean },
-): OpenClawConfig {
-  const next = applyPixVerseProviderConfig(cfg, region, options);
-  if (next.agents?.defaults?.videoGenerationModel) {
+  if (next.agents?.defaults?.mediaModels?.video) {
     return next;
   }
   return {
@@ -109,16 +65,32 @@ function applyPixVerseConfig(
       ...next.agents,
       defaults: {
         ...next.agents?.defaults,
-        videoGenerationModel: {
-          primary: PIXVERSE_DEFAULT_VIDEO_MODEL_REF,
+        mediaModels: {
+          ...next.agents?.defaults?.mediaModels,
+          video: { primary: PIXVERSE_DEFAULT_VIDEO_MODEL_REF },
         },
       },
     },
   };
 }
 
-async function promptForPixVerseRegion(ctx: ProviderAuthContext): Promise<PixVerseApiRegion> {
-  return await ctx.prompter.select<PixVerseApiRegion>({
+async function runPixVerseApiKeyAuth(ctx: ProviderAuthContext): Promise<PixVerseAuthResult> {
+  const { input, mode } = await captureProviderApiKey(ctx, {
+    token:
+      normalizeOptionalSecretInput(ctx.opts?.pixverseApiKey) ??
+      normalizeOptionalSecretInput(ctx.opts?.token),
+    tokenProvider: normalizeOptionalSecretInput(ctx.opts?.pixverseApiKey)
+      ? PIXVERSE_PROVIDER_ID
+      : normalizeOptionalSecretInput(ctx.opts?.tokenProvider),
+    env: ctx.env,
+    expectedProviders: [PIXVERSE_PROVIDER_ID],
+    provider: PIXVERSE_PROVIDER_ID,
+    envLabel: "PIXVERSE_API_KEY",
+    promptMessage: "Enter PixVerse API key",
+    missingInputMessage: "Missing PixVerse API key.",
+  });
+
+  const region = await ctx.prompter.select<PixVerseApiRegion>({
     message: "Select PixVerse API region",
     initialValue: DEFAULT_PIXVERSE_REGION,
     options: [
@@ -134,64 +106,27 @@ async function promptForPixVerseRegion(ctx: ProviderAuthContext): Promise<PixVer
       },
     ],
   });
-}
-
-async function runPixVerseApiKeyAuth(ctx: ProviderAuthContext): Promise<PixVerseAuthResult> {
-  let capturedSecretInput: SecretInput | undefined;
-  let capturedCredential = false;
-  let capturedMode: "plaintext" | "ref" | undefined;
-
-  await ensureApiKeyFromOptionEnvOrPrompt({
-    token:
-      normalizeOptionalSecretInput(ctx.opts?.pixverseApiKey) ??
-      normalizeOptionalSecretInput(ctx.opts?.token),
-    tokenProvider: normalizeOptionalSecretInput(ctx.opts?.pixverseApiKey)
-      ? PIXVERSE_PROVIDER_ID
-      : normalizeOptionalSecretInput(ctx.opts?.tokenProvider),
-    secretInputMode:
-      ctx.allowSecretRefPrompt === false
-        ? (ctx.secretInputMode ?? "plaintext")
-        : ctx.secretInputMode,
-    config: ctx.config,
-    env: ctx.env,
-    expectedProviders: [PIXVERSE_PROVIDER_ID],
-    provider: PIXVERSE_PROVIDER_ID,
-    envLabel: "PIXVERSE_API_KEY",
-    promptMessage: "Enter PixVerse API key",
-    normalize: normalizeApiKeyInput,
-    validate: validateApiKeyInput,
-    prompter: ctx.prompter,
-    setCredential: async (apiKey, mode) => {
-      capturedSecretInput = apiKey;
-      capturedCredential = true;
-      capturedMode = mode;
-    },
-  });
-
-  if (!capturedCredential) {
-    throw new Error("Missing PixVerse API key.");
-  }
-
-  const region = await promptForPixVerseRegion(ctx);
   return {
     profiles: [
       {
         profileId: PROFILE_ID,
         credential: buildApiKeyCredential(
           PIXVERSE_PROVIDER_ID,
-          capturedSecretInput ?? "",
+          input,
           undefined,
-          capturedMode
+          mode
             ? {
-                secretInputMode: capturedMode,
+                secretInputMode: mode,
                 config: ctx.config,
               }
             : undefined,
         ),
       },
     ],
-    configPatch: applyPixVerseConfig(ctx.config, region, { resetBaseUrl: true }),
-    notes: [pixVerseRegionNote(region)],
+    configPatch: applyPixVerseConfig(ctx.config, region, true),
+    notes: [
+      `PixVerse endpoint: ${region === "cn" ? "CN" : "International"} (${PIXVERSE_BASE_URL_BY_REGION[region]})`,
+    ],
   };
 }
 
@@ -206,19 +141,13 @@ async function runPixVerseApiKeyAuthNonInteractive(ctx: ProviderAuthMethodNonInt
     return null;
   }
 
-  if (resolved.source !== "profile") {
-    const credential = ctx.toApiKeyCredential({
+  if (
+    !(await persistProviderApiKey(ctx, PROFILE_ID, {
       provider: PIXVERSE_PROVIDER_ID,
       resolved,
-    });
-    if (!credential) {
-      return null;
-    }
-    await upsertAuthProfileWithLockOrThrow({
-      profileId: PROFILE_ID,
-      credential,
-      agentDir: ctx.agentDir,
-    });
+    }))
+  ) {
+    return null;
   }
 
   const next = applyAuthProfileConfig(ctx.config, {
@@ -227,9 +156,11 @@ async function runPixVerseApiKeyAuthNonInteractive(ctx: ProviderAuthMethodNonInt
     mode: "api_key",
   });
   const explicitRegion = normalizePixVerseRegion(ctx.opts.pixverseRegion);
-  return applyPixVerseConfig(next, explicitRegion ?? DEFAULT_PIXVERSE_REGION, {
-    resetBaseUrl: explicitRegion !== undefined,
-  });
+  return applyPixVerseConfig(
+    next,
+    explicitRegion ?? DEFAULT_PIXVERSE_REGION,
+    explicitRegion !== undefined,
+  );
 }
 
 export function buildPixVerseApiKeyAuthMethod(): ProviderAuthMethod {

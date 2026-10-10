@@ -1,16 +1,24 @@
-// Qa Lab plugin module implements Matrix live transport adapter behavior.
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { buildQaTarget } from "openclaw/plugin-sdk/qa-channel";
+import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
+import { buildQaTarget } from "openclaw/plugin-sdk/qa-channel-protocol";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
 import { readQaScenarioExecutionConfig } from "../../scenario-catalog.js";
-import { createMatrixQaScenarioEnvironment } from "./scenarios/scenario-environment.js";
+import {
+  createMatrixQaScenarioEnvironment,
+  waitForMatrixAccountReady,
+} from "./scenarios/scenario-environment.js";
 import { createMatrixQaClient, provisionMatrixQaRoom } from "./substrate/client.js";
 import { buildMatrixQaConfig } from "./substrate/config.js";
 import type { MatrixQaObservedEvent } from "./substrate/events.js";
 import { startMatrixQaHarness } from "./substrate/harness.runtime.js";
-import { createMatrixQaRoomObserver } from "./substrate/sync.js";
+import {
+  createMatrixQaRoomObserver,
+  type MatrixQaRoomEventWaitResult,
+  type MatrixQaRoomObserver,
+} from "./substrate/sync.js";
 import {
   mergeMatrixQaTopologySpecs,
   resolveMatrixQaRoomObserverRole,
@@ -54,12 +62,63 @@ const MATRIX_SHARED_FLOW_TOPOLOGY = {
   ],
 } satisfies MatrixQaTopologySpec;
 
+const MATRIX_EXPECTED_INTERRUPTION_RETRY_MS = 250;
+
+export async function waitForMatrixQaObserverEvent(params: {
+  isExpectedInterruption: () => boolean;
+  observer: MatrixQaRoomObserver;
+  predicate: (event: MatrixQaObservedEvent) => boolean;
+  readInterruptionGeneration: () => number;
+  roomId: string;
+  sleepImpl?: (ms: number) => Promise<unknown>;
+  timeoutMs: number;
+}): Promise<MatrixQaRoomEventWaitResult> {
+  const sleepImpl = params.sleepImpl ?? sleep;
+  for (;;) {
+    const expectedInterruptionAtStart = params.isExpectedInterruption();
+    const interruptionGenerationAtStart = params.readInterruptionGeneration();
+    try {
+      return await params.observer.waitForOptionalRoomEvent({
+        predicate: params.predicate,
+        roomId: params.roomId,
+        timeoutMs: params.timeoutMs,
+      });
+    } catch (error) {
+      // The homeserver restart scenario owns this narrow recovery window. The
+      // generation also catches a poll that spans the complete interruption
+      // before rejecting. The observer clears its failed pollPromise in finally,
+      // so the same cursor can safely retry.
+      if (
+        !expectedInterruptionAtStart &&
+        !params.isExpectedInterruption() &&
+        interruptionGenerationAtStart === params.readInterruptionGeneration()
+      ) {
+        throw error;
+      }
+      await sleepImpl(MATRIX_EXPECTED_INTERRUPTION_RETRY_MS);
+    }
+  }
+}
+
 function readMatrixQaScenarioTopology(scenarioId: string): MatrixQaTopologySpec | undefined {
   const value = readQaScenarioExecutionConfig(scenarioId)?.matrixTopology;
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
   return value as MatrixQaTopologySpec;
+}
+
+export async function prepareMatrixQaSelectedScenarios(
+  scenarioIds: readonly string[],
+): Promise<void> {
+  if (
+    scenarioIds.some((id) =>
+      readMatrixQaScenarioTopology(id)?.rooms.some((room) => room.encrypted === true),
+    )
+  ) {
+    const { loadMatrixQaE2eeRuntime } = await import("./substrate/e2ee-client.js");
+    await loadMatrixQaE2eeRuntime();
+  }
 }
 
 function resolveMatrixQaAdapterTopology(scenarioIds: readonly string[] | undefined) {
@@ -82,55 +141,6 @@ function resolveMatrixQaAdapterRoom(
       ? topology.rooms.find((room) => room.kind === "dm")
       : undefined) ??
     topology.rooms.find((room) => room.roomId === topology.defaultRoomId)!
-  );
-}
-
-async function waitForMatrixChannelReady(
-  gateway: Parameters<AdapterDefinition["waitReady"]>[0]["gateway"],
-  accountId: string,
-  timeoutMs = 60_000,
-  pollIntervalMs = 500,
-) {
-  const deadline = Date.now() + timeoutMs;
-  let lastAccounts: unknown;
-  while (Date.now() < deadline) {
-    try {
-      const payload = (await gateway.call(
-        "channels.status",
-        { probe: false, timeoutMs: Math.min(2_000, timeoutMs) },
-        { timeoutMs: Math.min(5_000, timeoutMs) },
-      )) as {
-        channelAccounts?: Record<
-          string,
-          Array<{
-            accountId?: string;
-            connected?: boolean;
-            healthState?: string;
-            restartPending?: boolean;
-            running?: boolean;
-          }>
-        >;
-      };
-      const accounts = payload.channelAccounts?.matrix ?? [];
-      lastAccounts = accounts;
-      const account = accounts.find((entry) => entry.accountId === accountId);
-      if (
-        account?.running === true &&
-        account.connected === true &&
-        account.restartPending !== true &&
-        account.healthState !== "degraded"
-      ) {
-        return;
-      }
-    } catch {
-      // Retry until the shared host readiness deadline.
-    }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, pollIntervalMs);
-    });
-  }
-  throw new Error(
-    `matrix account "${accountId}" did not become ready; last accounts: ${JSON.stringify(lastAccounts ?? [])}`,
   );
 }
 
@@ -166,9 +176,8 @@ export async function createMatrixQaTransportAdapter(
   const roomObservers = provisioning.topology.rooms.map((room) => {
     const observerRole = resolveMatrixQaRoomObserverRole(room);
     return {
-      observedEvents,
       observer: createMatrixQaRoomObserver({
-        accessToken: provisioning[observerRole].accessToken,
+        accessToken: provisioning.observationAccounts[observerRole].accessToken,
         baseUrl: harness.baseUrl,
         observedEvents,
       }),
@@ -203,9 +212,17 @@ export async function createMatrixQaTransportAdapter(
   );
   const nativeEventIds = new Map<string, string>();
   const busMessageIds = new Map<string, string>();
+  let expectedTransportInterruption = false;
+  let transportInterruptionGeneration = 0;
   const scenarioEnvironment = createMatrixQaScenarioEnvironment({
     accountId,
     harness,
+    onTransportInterruptionStateChange: (active) => {
+      if (expectedTransportInterruption !== active) {
+        transportInterruptionGeneration += 1;
+      }
+      expectedTransportInterruption = active;
+    },
     observedEvents,
     provisioning,
   });
@@ -215,8 +232,11 @@ export async function createMatrixQaTransportAdapter(
         if (stopped) {
           return;
         }
-        const observed = await observer.waitForOptionalRoomEvent({
+        const observed = await waitForMatrixQaObserverEvent({
+          isExpectedInterruption: () => expectedTransportInterruption,
+          observer,
           predicate: (event) => event.sender === provisioning.sut.userId && Boolean(event.body),
+          readInterruptionGeneration: () => transportInterruptionGeneration,
           roomId,
           timeoutMs: 1_000,
         });
@@ -232,10 +252,9 @@ export async function createMatrixQaTransportAdapter(
         if (!logicalConversation) {
           continue;
         }
-        const replacedMessageId =
-          event.relatesTo?.relType === "m.replace" && event.relatesTo.eventId
-            ? busMessageIds.get(event.relatesTo.eventId)
-            : undefined;
+        const replacedMessageId = event.replacesEventId
+          ? busMessageIds.get(event.replacesEventId)
+          : undefined;
         if (replacedMessageId) {
           const outbound = await context.messages.editMessage({
             accountId,
@@ -271,7 +290,7 @@ export async function createMatrixQaTransportAdapter(
     }),
   ).catch((error: unknown) => {
     if (!stopped) {
-      pollingError = error instanceof Error ? error : new Error(String(error));
+      pollingError = toStringifiedError(error);
     }
   });
 
@@ -371,7 +390,15 @@ export async function createMatrixQaTransportAdapter(
     prepareFlow: scenarioEnvironment.prepareFlow,
     waitReady: async ({ gateway, timeoutMs, pollIntervalMs }) => {
       gatewayClient = gateway;
-      await waitForMatrixChannelReady(gateway, accountId, timeoutMs, pollIntervalMs);
+      await waitForMatrixAccountReady({
+        gateway,
+        accountId,
+        deadline: Date.now() + (timeoutMs ?? 60_000),
+        fixedPolling: {
+          requestTimeoutMs: timeoutMs ?? 60_000,
+          intervalMs: pollIntervalMs ?? 500,
+        },
+      });
     },
     buildAgentDelivery: () => ({
       channel: "matrix",

@@ -1,10 +1,22 @@
 /**
  * Resolves provider/model prompt-cache retention behavior.
  */
+import { resolveOpenAIPromptCacheKeySupport } from "@openclaw/ai/transports";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveAnthropicCacheRetentionFamily } from "../../llm/providers/stream-wrappers/anthropic-family-cache-semantics.js";
+import type { OpenAICompletionsCompat } from "../../llm/types.js";
 
 type CacheRetention = "none" | "short" | "long";
+
+export function resolveExplicitCachedContent(extraParams: Record<string, unknown> | undefined) {
+  const raw =
+    typeof extraParams?.cachedContent === "string"
+      ? extraParams.cachedContent
+      : typeof extraParams?.cached_content === "string"
+        ? extraParams.cached_content
+        : undefined;
+  return raw?.trim() || undefined;
+}
 
 export function parseCacheRetention(value: unknown): CacheRetention | undefined {
   return value === "none" || value === "short" || value === "long" ? value : undefined;
@@ -26,7 +38,8 @@ export function resolveCacheRetention(
   provider: string,
   modelApi?: string,
   modelId?: string,
-  supportsPromptCacheKey?: boolean,
+  compat?: Pick<OpenAICompletionsCompat, "supportsPromptCacheKey" | "cacheControlFormat">,
+  baseUrl?: string,
 ): CacheRetention | undefined {
   const hasExplicitCacheConfig =
     extraParams?.cacheRetention !== undefined || extraParams?.cacheControlTtl !== undefined;
@@ -36,17 +49,20 @@ export function resolveCacheRetention(
     modelId,
     hasExplicitCacheConfig,
   });
+  const openAIEligible =
+    (modelApi === "openai-responses" ||
+      modelApi === "openai-chatgpt-responses" ||
+      modelApi === "openai-completions") &&
+    resolveOpenAIPromptCacheKeySupport({ provider, api: modelApi, baseUrl, compat });
   const googleEligible = isGooglePromptCacheEligible({ modelApi, modelId });
-  // OpenAI-compatible completions backends (oMLX, llama.cpp, etc.) opt into
-  // prompt caching via `compat.supportsPromptCacheKey: true`. Without that
-  // flag they sit outside the anthropic/google family gates, so issue #81281
-  // dropped the user's explicit `cacheRetention` before the transport layer
-  // could emit it. Proxies that route non-cacheable models via the same
-  // openai-completions wire (amazon-bedrock + amazon.* nova models) leave
-  // the flag unset, so the existing family gate still applies to them.
-  const cacheKeyEligible = supportsPromptCacheKey === true;
+  // Marker-based caches accept retention without accepting OpenAI cache-key fields.
+  // Keep these capabilities independent so explicit "none" can suppress markers.
+  const compatEligible =
+    compat?.supportsPromptCacheKey === true || compat?.cacheControlFormat === "anthropic";
 
-  if (!family && !googleEligible && !cacheKeyEligible) {
+  // Bedrock's provider owner decides model eligibility and checkpoint TTLs.
+  const bedrockEligible = modelApi === "bedrock-converse-stream";
+  if (!family && !googleEligible && !openAIEligible && !compatEligible && !bedrockEligible) {
     return undefined;
   }
 

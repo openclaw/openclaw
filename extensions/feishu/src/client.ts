@@ -1,60 +1,36 @@
-// Feishu plugin module implements client behavior.
 import type { Agent } from "node:https";
 import { createRequire } from "node:module";
 import * as Lark from "@larksuiteoapi/node-sdk";
+import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import {
   readPluginPackageVersion,
   resolveAmbientNodeProxyAgent,
 } from "openclaw/plugin-sdk/extension-shared";
+import {
+  captureEffectAuthority,
+  captureChannelReadAuthority,
+} from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveConfiguredHttpTimeoutMs } from "./client-timeout.js";
+import { captureFeishuSendContext } from "./send-context.js";
 import type { FeishuConfig, FeishuDomain, ResolvedFeishuAccount } from "./types.js";
 
 const require = createRequire(import.meta.url);
 const pluginVersion = readPluginPackageVersion({ require });
 
 const FEISHU_USER_AGENT = `openclaw-feishu-builtin/${pluginVersion}/${process.platform}`;
+const FEISHU_SDK_ORIGIN = "https://open.feishu.cn";
 
 const FEISHU_WS_CONFIG = {
   pingTimeout: 3,
 } as const;
 
-/** User-Agent header value for all Feishu API requests. */
 export function getFeishuUserAgent(): string {
   return FEISHU_USER_AGENT;
 }
 
-type FeishuClientSdk = Pick<
-  typeof Lark,
-  | "AppType"
-  | "Client"
-  | "defaultHttpInstance"
-  | "Domain"
-  | "EventDispatcher"
-  | "LoggerLevel"
-  | "WSClient"
->;
-
-const feishuClientSdk: FeishuClientSdk = {
-  AppType: Lark.AppType,
-  Client: Lark.Client,
-  defaultHttpInstance: Lark.defaultHttpInstance,
-  Domain: Lark.Domain,
-  EventDispatcher: Lark.EventDispatcher,
-  LoggerLevel: Lark.LoggerLevel,
-  WSClient: Lark.WSClient,
-};
-
-type RequestInterceptorApi = {
-  use: (fn: (req: unknown) => unknown) => unknown;
-};
-
-type FeishuDefaultHttpInstanceWithInterceptors = {
-  interceptors?: {
-    request?: RequestInterceptorApi;
-  };
-};
-
-function setRequestUserAgent(req: unknown) {
+function setRequestUserAgent<T>(req: T): T {
   const request = req as { headers?: unknown };
   const headers = request.headers;
   if (!headers) {
@@ -75,15 +51,105 @@ function setRequestUserAgent(req: unknown) {
 // Override the SDK's default User-Agent through the public interceptor API.
 // The SDK fallback interceptor only fills User-Agent when it is absent, so this
 // interceptor can preserve the rest of the SDK's request interceptor stack.
-{
-  const inst = Lark.defaultHttpInstance as FeishuDefaultHttpInstanceWithInterceptors;
-  inst.interceptors?.request?.use(setRequestUserAgent);
+Lark.defaultHttpInstance.interceptors.request.use(setRequestUserAgent);
+
+function readHeader(headers: unknown, name: string): string | undefined {
+  if (!isRecord(headers)) {
+    return undefined;
+  }
+  const normalizedName = name.toLowerCase();
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() !== normalizedName) {
+      continue;
+    }
+    if (typeof value === "string") {
+      return value;
+    }
+    if (Array.isArray(value)) {
+      const first = value.find((entry) => typeof entry === "string");
+      return typeof first === "string" ? first : undefined;
+    }
+  }
+  return undefined;
 }
 
-type FeishuHttpInstanceLike = Pick<
-  typeof feishuClientSdk.defaultHttpInstance,
-  "request" | "get" | "post" | "put" | "patch" | "delete" | "head" | "options"
->;
+function isMultipartFormRequest(opts: Lark.HttpRequestOptions<unknown>): boolean {
+  return /^multipart\/form-data(?:;|$)/i.test(readHeader(opts.headers, "content-type") ?? "");
+}
+
+const FEISHU_MESSAGE_MEDIA_UPLOAD_PATHS = new Set([
+  "/open-apis/im/v1/files",
+  "/open-apis/im/v1/images",
+]);
+
+function isFeishuMessageMediaUploadRequest(
+  opts: Lark.HttpRequestOptions<unknown>,
+  data: Record<string, unknown>,
+): boolean {
+  if (typeof opts.url !== "string" || opts.method?.toUpperCase() !== "POST") {
+    return false;
+  }
+  let pathname: string;
+  try {
+    pathname = new URL(opts.url).pathname;
+  } catch {
+    return false;
+  }
+  return (
+    FEISHU_MESSAGE_MEDIA_UPLOAD_PATHS.has(pathname) &&
+    (Buffer.isBuffer(data.file) || Buffer.isBuffer(data.image))
+  );
+}
+
+function stringifyMultipartFieldValue(value: unknown): string | undefined {
+  switch (typeof value) {
+    case "string":
+      return value;
+    case "number":
+    case "boolean":
+    case "bigint":
+      return String(value);
+    default:
+      return undefined;
+  }
+}
+
+function normalizeMultipartUploadData<D>(
+  opts: Lark.HttpRequestOptions<D>,
+): Lark.HttpRequestOptions<D> {
+  if (
+    !isMultipartFormRequest(opts) ||
+    !isRecord(opts.data) ||
+    !isFeishuMessageMediaUploadRequest(opts, opts.data)
+  ) {
+    return opts;
+  }
+
+  const form = new FormData();
+  const fileName =
+    typeof opts.data.file_name === "string" && opts.data.file_name
+      ? opts.data.file_name
+      : undefined;
+  for (const [key, value] of Object.entries(opts.data)) {
+    if (value === undefined || value === null) {
+      continue;
+    }
+    if (Buffer.isBuffer(value)) {
+      form.append(
+        key,
+        new Blob([bufferToBlobPart(value)]),
+        key === "file" && fileName ? fileName : `${key}.bin`,
+      );
+      continue;
+    }
+    const fieldValue = stringifyMultipartFieldValue(value);
+    if (fieldValue !== undefined) {
+      form.append(key, fieldValue);
+    }
+  }
+
+  return { ...opts, data: form as D };
+}
 
 function isManagedProxyActive() {
   return process.env["OPENCLAW_PROXY_ACTIVE"] === "1";
@@ -140,13 +206,22 @@ export function resetFeishuProxyAgentForTest(): void {
   cachedFeishuProxyAgent = undefined;
 }
 
-type FeishuProxyAwareHttpRequestOptions<D> = Lark.HttpRequestOptions<D> & {
-  httpAgent?: Agent;
-  httpsAgent?: Agent;
-  proxy?: false;
+type FeishuProxyAwareHttpRequestOptions<D> = Lark.HttpRequestOptions<D> &
+  Pick<
+    Parameters<typeof Lark.defaultHttpInstance.request>[0],
+    "transformRequest" | "beforeRedirect"
+  > & {
+    httpAgent?: Agent;
+    httpsAgent?: Agent;
+    proxy?: false;
+  };
+
+type FeishuRequestAuthority = {
+  assertCurrent: () => void;
+  assertRedirect: () => void;
+  beforeDispatch?: () => Promise<void>;
 };
 
-// Multi-account client cache
 const clientCache = new Map<
   string,
   {
@@ -155,30 +230,48 @@ const clientCache = new Map<
   }
 >();
 
-function resolveDomain(domain: FeishuDomain | undefined): Lark.Domain | string {
-  if (domain === "lark") {
-    return feishuClientSdk.Domain.Lark;
-  }
-  if (domain === "feishu" || !domain) {
-    return feishuClientSdk.Domain.Feishu;
-  }
-  return domain.replace(/\/+$/, ""); // Custom URL for private deployment
+function resolveSdkDomain(domain: FeishuDomain | undefined): Lark.Domain {
+  // The SDK parses :port in its domain as an API route parameter; custom origins
+  // must stay in their account-owned HTTP transport until path expansion ends.
+  return domain === "lark" ? Lark.Domain.Lark : Lark.Domain.Feishu;
 }
 
-/**
- * Create an HTTP instance that delegates to the Lark SDK's default instance
- * but injects a default request timeout and User-Agent header to prevent
- * indefinite hangs, set a standardized User-Agent per OAPI best practices, and
- * keep axios from taking a separate ambient proxy path for HTTPS requests.
- */
-function createFeishuHttpInstance(defaultTimeoutMs: number): Lark.HttpInstance {
-  const base: FeishuHttpInstanceLike = feishuClientSdk.defaultHttpInstance;
+function createFeishuHttpInstance(
+  defaultTimeoutMs: number,
+  configuredDomain?: FeishuDomain,
+): Lark.HttpInstance {
+  // SAFETY: The SDK owns this Axios instance and unwraps responses to its HttpInstance contract.
+  const base = Lark.defaultHttpInstance as Lark.HttpInstance;
+  const customDomain =
+    configuredDomain && configuredDomain !== "feishu" && configuredDomain !== "lark"
+      ? new URL(configuredDomain)
+      : undefined;
+
+  function resolveRequestUrl(url: string): string {
+    if (!customDomain) {
+      return url;
+    }
+    const requestUrl = new URL(url);
+    if (requestUrl.origin !== FEISHU_SDK_ORIGIN) {
+      return url;
+    }
+    const destination = new URL(customDomain);
+    destination.pathname = `${destination.pathname.replace(/\/+$/, "")}${requestUrl.pathname}`;
+    destination.search = requestUrl.search;
+    destination.hash = requestUrl.hash;
+    return destination.toString();
+  }
 
   async function injectRequestOptions<D>(
     opts?: Lark.HttpRequestOptions<D>,
+    authority?: FeishuRequestAuthority,
   ): Promise<FeishuProxyAwareHttpRequestOptions<D>> {
     const next: FeishuProxyAwareHttpRequestOptions<D> = { timeout: defaultTimeoutMs, ...opts };
+    if (typeof next.url === "string") {
+      next.url = resolveRequestUrl(next.url);
+    }
     const agent = await getFeishuProxyAgent();
+    authority?.assertCurrent();
     if (agent) {
       if (isManagedProxyActive()) {
         next.httpAgent = agent;
@@ -189,18 +282,158 @@ function createFeishuHttpInstance(defaultTimeoutMs: number): Lark.HttpInstance {
       }
       next.proxy = false;
     }
+    if (authority?.beforeDispatch) {
+      await authority.beforeDispatch();
+      authority.assertCurrent();
+    }
+    if (authority) {
+      const defaults = Lark.defaultHttpInstance.defaults;
+      const transforms =
+        next.transformRequest === undefined ? defaults.transformRequest : next.transformRequest;
+      // Axios runs these after its async interceptors, immediately before the
+      // HTTP adapter starts the request, including multipart uploads.
+      next.transformRequest = [
+        ...(Array.isArray(transforms) ? transforms : transforms ? [transforms] : []),
+        (data: unknown) => {
+          authority.assertCurrent();
+          return data;
+        },
+      ];
+      const beforeRedirect =
+        next.beforeRedirect === undefined ? defaults.beforeRedirect : next.beforeRedirect;
+      next.beforeRedirect = (...args) => {
+        beforeRedirect?.(...args);
+        authority.assertRedirect();
+      };
+    }
     return next;
   }
 
+  async function runRequest<T>(
+    request: (authority: FeishuRequestAuthority | undefined) => Promise<T>,
+    sdkMethod?: "request",
+  ): Promise<T> {
+    const assertReadAuthority = captureChannelReadAuthority();
+    const sendContext = captureFeishuSendContext();
+    const recipientVisible = sdkMethod === "request" && sendContext?.recipientVisible === true;
+    const onPlatformSendDispatch = recipientVisible
+      ? sendContext.onPlatformSendDispatch
+      : undefined;
+    let fenceFailure: Error | undefined;
+    const assertCurrent = () => {
+      try {
+        assertReadAuthority?.();
+        sendContext?.assertCurrent();
+      } catch (cause) {
+        fenceFailure =
+          cause instanceof Error ? cause : new Error("Feishu request authority closed", { cause });
+        throw fenceFailure;
+      }
+    };
+    const authority: FeishuRequestAuthority | undefined =
+      assertReadAuthority || sendContext
+        ? {
+            assertCurrent,
+            assertRedirect: recipientVisible
+              ? () => {
+                  try {
+                    assertCurrent();
+                  } catch {
+                    // The first POST may have been accepted. A denied redirect
+                    // cannot prove the entire message was never dispatched.
+                    const failure = new Error(
+                      "Feishu sender retired before following a message redirect",
+                    );
+                    fenceFailure = failure;
+                    throw failure;
+                  }
+                }
+              : assertCurrent,
+            ...(onPlatformSendDispatch
+              ? {
+                  beforeDispatch: async () => {
+                    try {
+                      await onPlatformSendDispatch();
+                    } catch (cause) {
+                      // Still before the HTTP adapter: distinguish retirement
+                      // from a retryable failure to persist dispatch timing.
+                      assertCurrent();
+                      fenceFailure =
+                        cause instanceof PlatformMessageNotDispatchedError
+                          ? cause
+                          : new PlatformMessageNotDispatchedError(
+                              "Feishu dispatch refresh failed before request",
+                              { cause },
+                            );
+                      throw fenceFailure;
+                    }
+                  },
+                }
+              : {}),
+          }
+        : undefined;
+    authority?.assertCurrent();
+    try {
+      return await request(authority);
+    } catch (error) {
+      // SDK auth diagnostics include transport request data. Replace a closed
+      // invocation's wrapped error before those diagnostics can expose credentials.
+      assertReadAuthority?.();
+      // Axios/follow-redirects attach request data to errors. Return the safe
+      // error recorded at the failed fence, without rechecking a settled send.
+      if (fenceFailure) {
+        throw fenceFailure;
+      }
+      throw error;
+    }
+  }
+
+  async function dispatch<T, D>(
+    authority: FeishuRequestAuthority | undefined,
+    options: Lark.HttpRequestOptions<D> | undefined,
+    send: (options: FeishuProxyAwareHttpRequestOptions<D>) => Promise<T>,
+  ): Promise<T> {
+    const effect = captureEffectAuthority();
+    const prepared = await injectRequestOptions(options, authority);
+    return effect.initiate(() => {
+      authority?.assertCurrent();
+      return send(prepared);
+    });
+  }
+
+  const createMethod =
+    (method: "get" | "delete" | "head" | "options"): Lark.HttpInstance["get"] =>
+    (url, opts) =>
+      runRequest((authority) =>
+        dispatch(authority, opts, (prepared) => base[method](resolveRequestUrl(url), prepared)),
+      );
+  const createDataMethod =
+    (method: "post" | "put" | "patch"): Lark.HttpInstance["post"] =>
+    (url, data, opts) =>
+      runRequest((authority) =>
+        dispatch(authority, opts, (prepared) =>
+          base[method](resolveRequestUrl(url), data, prepared),
+        ),
+      );
+
   return {
-    request: async (opts) => base.request(await injectRequestOptions(opts)),
-    get: async (url, opts) => base.get(url, await injectRequestOptions(opts)),
-    post: async (url, data, opts) => base.post(url, data, await injectRequestOptions(opts)),
-    put: async (url, data, opts) => base.put(url, data, await injectRequestOptions(opts)),
-    patch: async (url, data, opts) => base.patch(url, data, await injectRequestOptions(opts)),
-    delete: async (url, opts) => base.delete(url, await injectRequestOptions(opts)),
-    head: async (url, opts) => base.head(url, await injectRequestOptions(opts)),
-    options: async (url, opts) => base.options(url, await injectRequestOptions(opts)),
+    request: (opts) =>
+      // SDK message requests reach this seam after formatPayload/auth. Token
+      // requests use post below and must never mark a message as dispatched.
+      runRequest(
+        (authority) =>
+          dispatch(authority, normalizeMultipartUploadData(opts), (prepared) =>
+            base.request(prepared),
+          ),
+        "request",
+      ),
+    get: createMethod("get"),
+    post: createDataMethod("post"),
+    put: createDataMethod("put"),
+    patch: createDataMethod("patch"),
+    delete: createMethod("delete"),
+    head: createMethod("head"),
+    options: createMethod("options"),
   };
 }
 
@@ -217,10 +450,6 @@ export type FeishuClientCredentials = {
   config?: Pick<FeishuConfig, "httpTimeoutMs">;
 };
 
-/**
- * Create or get a cached Feishu client for an account.
- * Accepts any object with appId, appSecret, and optional domain/accountId.
- */
 export function createFeishuClient(creds: FeishuClientCredentials): Lark.Client {
   const { accountId = "default", appId, appSecret, domain } = creds;
   const defaultHttpTimeoutMs = resolveConfiguredHttpTimeoutMs(creds);
@@ -229,7 +458,6 @@ export function createFeishuClient(creds: FeishuClientCredentials): Lark.Client 
     throw new Error(`Feishu credentials not configured for account "${accountId}"`);
   }
 
-  // Check cache
   const cached = clientCache.get(accountId);
   if (
     cached &&
@@ -241,16 +469,14 @@ export function createFeishuClient(creds: FeishuClientCredentials): Lark.Client 
     return cached.client;
   }
 
-  // Create new client with timeout-aware HTTP instance
-  const client = new feishuClientSdk.Client({
+  const client = new Lark.Client({
     appId,
     appSecret,
-    appType: feishuClientSdk.AppType.SelfBuild,
-    domain: resolveDomain(domain),
-    httpInstance: createFeishuHttpInstance(defaultHttpTimeoutMs),
+    appType: Lark.AppType.SelfBuild,
+    domain: resolveSdkDomain(domain),
+    httpInstance: createFeishuHttpInstance(defaultHttpTimeoutMs, domain),
   });
 
-  // Cache it
   clientCache.set(accountId, {
     client,
     config: { appId, appSecret, domain, httpTimeoutMs: defaultHttpTimeoutMs },
@@ -260,14 +486,11 @@ export function createFeishuClient(creds: FeishuClientCredentials): Lark.Client 
 }
 
 type FeishuWsClientCallbacks = Pick<
-  ConstructorParameters<typeof feishuClientSdk.WSClient>[0],
+  ConstructorParameters<typeof Lark.WSClient>[0],
   "onError" | "onReady" | "onReconnected" | "onReconnecting"
 >;
 
-/**
- * Create a Feishu WebSocket client for an account.
- * Note: WSClient is not cached since each call creates a new connection.
- */
+/** WSClient is not cached since each call creates a new connection. */
 export async function createFeishuWSClient(
   account: ResolvedFeishuAccount,
   callbacks: FeishuWsClientCallbacks = {},
@@ -280,23 +503,20 @@ export async function createFeishuWSClient(
 
   const agent = await getFeishuProxyAgent();
   const defaultHttpTimeoutMs = resolveConfiguredHttpTimeoutMs(account);
-  return new feishuClientSdk.WSClient({
+  return new Lark.WSClient({
     appId,
     appSecret,
-    domain: resolveDomain(domain),
-    httpInstance: createFeishuHttpInstance(defaultHttpTimeoutMs),
+    domain: resolveSdkDomain(domain),
+    httpInstance: createFeishuHttpInstance(defaultHttpTimeoutMs, domain),
     ...callbacks,
-    loggerLevel: feishuClientSdk.LoggerLevel.info,
+    loggerLevel: Lark.LoggerLevel.info,
     wsConfig: FEISHU_WS_CONFIG,
     ...(agent ? { agent } : {}),
   });
 }
 
-/**
- * Create an event dispatcher for an account.
- */
 export function createEventDispatcher(account: ResolvedFeishuAccount): Lark.EventDispatcher {
-  return new feishuClientSdk.EventDispatcher({
+  return new Lark.EventDispatcher({
     encryptKey: account.encryptKey,
     verificationToken: account.verificationToken,
   });

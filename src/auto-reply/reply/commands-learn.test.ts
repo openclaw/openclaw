@@ -1,7 +1,9 @@
 // Tests /learn prompt rewriting, defaults, standards, and availability gating.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_LEARN_REQUEST } from "../../skills/workshop/learn-prompt.js";
+import { createCanonicalAgentConfigFixture } from "../../test-utils/config-roster.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { handleLearnCommand } from "./commands-learn.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -30,8 +32,9 @@ function buildLearnParams(
   commandBodyNormalized: string,
   cfg: OpenClawConfig = {},
 ): HandleCommandsParams {
+  const loadedConfig = createCanonicalAgentConfigFixture(cfg).config;
   return {
-    cfg: { ...cfg, models: cfg.models ?? DEFAULT_TEST_MODELS },
+    cfg: { ...loadedConfig, models: loadedConfig.models ?? DEFAULT_TEST_MODELS },
     ctx: {
       Provider: INTERNAL_MESSAGE_CHANNEL,
       Surface: INTERNAL_MESSAGE_CHANNEL,
@@ -56,6 +59,7 @@ function buildLearnParams(
     },
     directives: {},
     elevated: { enabled: true, allowed: true, failures: [] },
+    agentId: "main",
     sessionKey: "agent:main:webchat:test",
     workspaceDir: "/tmp",
     provider: "openai",
@@ -69,61 +73,70 @@ function buildLearnParams(
   } as unknown as HandleCommandsParams;
 }
 
+afterEach(() => cliBackendsTesting.resetDepsForTest());
+
 describe("learn command", () => {
-  it("rewrites the agent and normalized command bodies and continues", async () => {
-    const params = buildLearnParams("/learn docs/runbook.md and https://example.com/guide");
+  it.each([
+    { agentId: "direct", shouldContinue: true },
+    { agentId: "isolated", shouldContinue: false },
+  ])(
+    "uses $agentId workshop availability in a global session",
+    async ({ agentId, shouldContinue }) => {
+      const params = buildLearnParams("/learn", {
+        session: { scope: "global" },
+        agents: {
+          entries: {
+            direct: { sandbox: { mode: "off" } },
+            isolated: { sandbox: { mode: "all" } },
+          },
+        },
+      });
+      params.agentId = agentId;
+      params.sessionKey = "global";
 
-    const result = await handleLearnCommand(params, true);
-    const instruction = (params.ctx as { BodyForAgent?: string }).BodyForAgent;
+      const result = await handleLearnCommand(params, true);
 
-    expect(result).toEqual({ shouldContinue: true });
-    expect(instruction).toContain("docs/runbook.md and https://example.com/guide");
-    expect(params.command.rawBodyNormalized).toBe(instruction);
-    expect(params.command.commandBodyNormalized).toBe(instruction);
-  });
+      expect(result?.shouldContinue).toBe(shouldContinue);
+      if (shouldContinue) {
+        expect(params.ctx.BodyForAgent).toContain(DEFAULT_LEARN_REQUEST);
+        expect(params.command.commandBodyNormalized).toBe(params.ctx.BodyForAgent);
+        expect(params.ctx.BodyForCommands).toBe(params.ctx.BodyForAgent);
+      } else {
+        expect(result?.reply?.text).toContain("Skill workshop is not available on this agent");
+        expect(params.ctx.BodyForAgent).toBe("/learn");
+      }
+    },
+  );
 
-  it("uses the current-conversation default for bare /learn", async () => {
-    const params = buildLearnParams("/learn");
+  it.each([
+    { mode: "all", denyWorkshop: false, shouldContinue: false },
+    { mode: "off", denyWorkshop: true, shouldContinue: false },
+  ] as const)(
+    "preserves an independent policy owner with sandbox mode $mode and workshop denied $denyWorkshop",
+    async ({ mode, denyWorkshop, shouldContinue }) => {
+      const params = buildLearnParams("/learn", {
+        agents: {
+          entries: {
+            main: { sandbox: { mode: "off" } },
+            isolated: {
+              sandbox: { mode },
+              tools: { deny: denyWorkshop ? ["skill_workshop"] : [] },
+            },
+          },
+        },
+      });
+      params.ctx.RuntimePolicySessionKey = "agent:isolated:webchat:test";
 
-    const result = await handleLearnCommand(params, true);
+      const result = await handleLearnCommand(params, true);
 
-    expect(result?.shouldContinue).toBe(true);
-    expect((params.ctx as { BodyForAgent?: string }).BodyForAgent).toContain(DEFAULT_LEARN_REQUEST);
-  });
-
-  it("includes the load-bearing skill authoring standards", async () => {
-    const params = buildLearnParams("/learn what we just did");
-
-    await handleLearnCommand(params, true);
-    const instruction = (params.ctx as { BodyForAgent?: string }).BodyForAgent ?? "";
-
-    expect(instruction).toContain('`skill_workshop` with action `"create"`');
-    expect(instruction).toContain("ONE short generic trigger phrase in double quotes");
-    expect(instruction).toContain("NEVER invent flags, commands, paths, APIs");
-  });
-
-  it("replies without continuing when the workshop is unavailable", async () => {
-    const params = buildLearnParams("/learn", {
-      agents: { defaults: { sandbox: { mode: "all" } } },
-    });
-
-    const result = await handleLearnCommand(params, true);
-
-    expect(result?.shouldContinue).toBe(false);
-    expect(result?.reply?.text).toContain("Skill workshop is not available on this agent");
-    expect((params.ctx as { BodyForAgent?: string }).BodyForAgent).toBe("/learn");
-  });
-
-  it("replies without continuing when tool policy denies the workshop", async () => {
-    const params = buildLearnParams("/learn", {
-      tools: { deny: ["skill_workshop"] },
-    });
-
-    const result = await handleLearnCommand(params, true);
-
-    expect(result?.shouldContinue).toBe(false);
-    expect(result?.reply?.text).toContain("Skill workshop is not available on this agent");
-  });
+      expect(result?.shouldContinue).toBe(shouldContinue);
+      if (shouldContinue) {
+        expect(params.ctx.BodyForAgent).toContain(DEFAULT_LEARN_REQUEST);
+      } else {
+        expect(result?.reply?.text).toContain("Skill workshop is not available on this agent");
+      }
+    },
+  );
 
   it("keeps the workshop available for owner WebChat under a wildcard sender policy", async () => {
     const params = buildLearnParams("/learn", {

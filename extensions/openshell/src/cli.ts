@@ -1,4 +1,3 @@
-// Openshell plugin module implements cli behavior.
 import {
   createSshSandboxSessionFromConfigText,
   runPluginCommandWithTimeout,
@@ -6,11 +5,6 @@ import {
   type SshSandboxSession,
 } from "openclaw/plugin-sdk/sandbox";
 import type { ResolvedOpenShellPluginConfig } from "./config.js";
-
-export {
-  buildRemoteWorkdirValidationCommand,
-  buildValidatedExecRemoteCommand,
-} from "openclaw/plugin-sdk/sandbox";
 
 export type OpenShellExecContext = {
   config: ResolvedOpenShellPluginConfig;
@@ -26,11 +20,10 @@ function buildOpenShellBaseArgv(config: ResolvedOpenShellPluginConfig): string[]
   if (config.gatewayEndpoint) {
     argv.push("--gateway-endpoint", config.gatewayEndpoint);
   }
+  if (config.workspace) {
+    argv.push("--workspace", config.workspace);
+  }
   return argv;
-}
-
-export function buildRemoteCommand(argv: string[]): string {
-  return argv.map((entry) => shellEscape(entry)).join(" ");
 }
 
 function applyGatewayEndpointToSshConfig(params: {

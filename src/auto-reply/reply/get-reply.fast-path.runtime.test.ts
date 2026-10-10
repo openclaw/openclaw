@@ -1,6 +1,11 @@
 // Tests runtime-loaded fast-path command behavior for get-reply.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import {
   createReplyRuntimeMocks,
   createTempHomeHarness,
@@ -10,6 +15,14 @@ import {
   resetReplyRuntimeMocks,
 } from "../reply.test-harness.js";
 import { loadGetReplyModuleForTest } from "./get-reply.test-loader.js";
+import { createModelSelectionStateFixture } from "./model-selection.test-support.js";
+
+vi.mock("./model-selection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./model-selection.js")>()),
+  createModelSelectionState: vi.fn<typeof import("./model-selection.js").createModelSelectionState>(
+    async (params) => createModelSelectionStateFixture(params),
+  ),
+}));
 
 let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
 const agentMocks = createReplyRuntimeMocks();
@@ -17,8 +30,21 @@ const { withTempHome } = createTempHomeHarness({ prefix: "openclaw-getreply-fast
 
 installReplyRuntimeMocks(agentMocks);
 
+function installRuntimeChannels() {
+  setActivePluginRegistry(
+    createTestRegistry(
+      (["whatsapp", "telegram"] as const).map((id) => ({
+        pluginId: id,
+        plugin: createChannelTestPluginBase({ id }),
+        source: "test",
+      })),
+    ),
+  );
+}
+
 describe("getReplyFromConfig fast-path runtime", () => {
   beforeAll(async () => {
+    installRuntimeChannels();
     ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     resetReplyRuntimeMocks(agentMocks);
@@ -47,9 +73,11 @@ describe("getReplyFromConfig fast-path runtime", () => {
   beforeEach(async () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     resetReplyRuntimeMocks(agentMocks);
+    installRuntimeChannels();
   });
 
   afterEach(() => {
+    setActivePluginRegistry(createTestRegistry([]));
     vi.clearAllMocks();
     vi.unstubAllEnvs();
   });
@@ -70,8 +98,10 @@ describe("getReplyFromConfig fast-path runtime", () => {
           CommandBody: "hello",
           From: "+1001",
           To: "+2000",
-          MediaPaths: ["/tmp/a.png", "/tmp/b.png"],
-          MediaUrls: ["/tmp/a.png", "/tmp/b.png"],
+          media: [
+            { path: "/tmp/a.png", url: "/tmp/a.png" },
+            { path: "/tmp/b.png", url: "/tmp/b.png" },
+          ],
           SessionKey: "agent:main:whatsapp:+2000",
           Provider: "whatsapp",
           Surface: "whatsapp",

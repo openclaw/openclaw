@@ -1,4 +1,4 @@
-// Control UI module implements connect error behavior.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   ConnectErrorDetailCodes,
   describePairingConnectRequirement,
@@ -7,7 +7,7 @@ import {
   readPairingConnectErrorDetails,
 } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { resolveGatewayErrorDetailCode } from "../../api/gateway.ts";
-import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 
 type ErrorWithMessageAndDetails = {
   message?: unknown;
@@ -37,21 +37,19 @@ function formatPairingRequiredError(error: ErrorWithMessageAndDetails): string {
     return message;
   }
 
-  const approvedRoles = pairing?.approvedRoles?.join(", ") ?? "none";
-  const requestedRole = pairing?.requestedRole ?? "none";
-  const approvedScopes = pairing?.approvedScopes?.join(", ") ?? "none";
-  const requestedScopes = pairing?.requestedScopes?.join(", ") ?? "none";
   switch (pairing?.reason) {
     case "scope-upgrade":
-      if (pairing.approvedScopes || pairing.requestedScopes) {
-        return `device scope upgrade requires approval (approved: ${approvedScopes}; requested: ${requestedScopes})`;
+    case "role-upgrade": {
+      const kind = pairing.reason === "scope-upgrade" ? "scope" : "role";
+      const approved = kind === "scope" ? pairing.approvedScopes : pairing.approvedRoles;
+      const requested = kind === "scope" ? pairing.requestedScopes : pairing.requestedRole;
+      if (!approved && !requested) {
+        return formatConnectPairingRequiredMessage(error.details);
       }
-      return formatConnectPairingRequiredMessage(error.details);
-    case "role-upgrade":
-      if (pairing.approvedRoles || pairing.requestedRole) {
-        return `device role upgrade requires approval (approved: ${approvedRoles}; requested: ${requestedRole})`;
-      }
-      return formatConnectPairingRequiredMessage(error.details);
+      const approvedText = approved?.join(", ") ?? "none";
+      const requestedText = Array.isArray(requested) ? requested.join(", ") : (requested ?? "none");
+      return `device ${kind} upgrade requires approval (approved: ${approvedText}; requested: ${requestedText})`;
+    }
     case "metadata-upgrade":
       return "device reconnect details changed and require approval";
     default:
@@ -73,7 +71,7 @@ function formatErrorFromMessageAndDetails(error: ErrorWithMessageAndDetails): st
     case ConnectErrorDetailCodes.PAIRING_REQUIRED:
       return formatPairingRequiredError(error);
     case ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED:
-      return "device identity required (use HTTPS/localhost or allow insecure auth explicitly)";
+      return "device identity required (use HTTPS or localhost)";
     case ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED:
       return "origin not allowed (open the Control UI from the gateway host or allow it in gateway.controlUi.allowedOrigins)";
     case ConnectErrorDetailCodes.AUTH_TOKEN_MISSING:
@@ -83,19 +81,15 @@ function formatErrorFromMessageAndDetails(error: ErrorWithMessageAndDetails): st
   }
 
   const normalized = normalizeLowercaseStringOrEmpty(message);
-  if (
-    normalized === "fetch failed" ||
-    normalized === "failed to fetch" ||
-    normalized === "connect failed"
-  ) {
-    return "gateway connect failed";
-  }
-  return message;
+  return ["fetch failed", "failed to fetch", "connect failed"].includes(normalized)
+    ? "gateway connect failed"
+    : message;
 }
 
 export function formatConnectError(error: unknown): string {
-  if (error && typeof error === "object") {
-    return formatErrorFromMessageAndDetails(error as ErrorWithMessageAndDetails);
-  }
-  return normalizeErrorMessage(error);
+  const message =
+    error && typeof error === "object"
+      ? formatErrorFromMessageAndDetails(error as ErrorWithMessageAndDetails)
+      : normalizeErrorMessage(error);
+  return formatUiError(message);
 }

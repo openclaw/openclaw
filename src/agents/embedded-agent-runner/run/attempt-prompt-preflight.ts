@@ -1,22 +1,21 @@
-/**
- * Owns prompt overflow admission and mid-turn recovery routing.
- */
-import type { AssembleResult } from "../../../context-engine/types.js";
+import { CompactionReplayRefreshRequiredError } from "@openclaw/ai/transports";
+import type { AssembleResult, ContextEngine } from "../../../context-engine/types.js";
+import type { AgentRunAttemptFailureSource } from "../../agent-run-terminal-outcome.js";
+import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SessionManager } from "../../sessions/index.js";
 import { log } from "../logger.js";
+import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   resolveLiveToolResultMaxChars,
   truncateOversizedToolResultsInSessionManager,
 } from "../tool-result-truncation.js";
-import type { AttemptContextEngine } from "./attempt.context-engine-helpers.js";
-import { normalizeMessagesForLlmBoundary } from "./attempt.llm-boundary.js";
+import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
   buildPrePromptContextBudgetStatus,
-  estimateLlmBoundaryTokenPressure,
   formatPrePromptPrecheckLog,
   shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
@@ -31,7 +30,7 @@ type AttemptPromptPreflightState = {
   contextBudgetStatus: EmbeddedRunAttemptResult["contextBudgetStatus"];
   preflightRecovery: EmbeddedRunAttemptResult["preflightRecovery"];
   promptError: unknown;
-  promptErrorSource: EmbeddedRunAttemptResult["promptErrorSource"];
+  promptErrorSource: AgentRunAttemptFailureSource | null;
   skipPromptSubmission: boolean;
 };
 
@@ -39,8 +38,6 @@ type PreflightRecoveryBudgetSnapshot = Pick<
   MidTurnPrecheckRequest,
   "estimatedPromptTokens" | "promptBudgetBeforeReserve" | "overflowTokens"
 >;
-
-type WithOwnedSessionWriteLock = <T>(operation: () => Promise<T> | T) => Promise<T>;
 
 // Carries the measured prompt budget into the outer recovery loop. The synthetic
 // precheck error is only a routing signal, so compaction engines need these
@@ -53,18 +50,24 @@ function buildPreflightRecoveryBudgetSnapshot(snapshot: PreflightRecoveryBudgetS
   };
 }
 
-export function handleEmbeddedAttemptMidTurnPrecheck(input: {
+export async function handleEmbeddedAttemptMidTurnPrecheck(input: {
   attempt: AttemptPromptPreflightParams & Pick<EmbeddedRunAttemptParams, "contextTokenBudget">;
   request: MidTurnPrecheckRequest;
   sessionAgentId: string;
   sessionManager: SessionManager;
+  toolResultPromptProjectionState: ToolResultPromptProjectionState;
   prePromptMessageCount: number;
   replaceSessionMessages: (messages: AgentMessage[]) => void;
-}): {
+}): Promise<{
   preflightRecovery: NonNullable<EmbeddedRunAttemptResult["preflightRecovery"]>;
   promptError?: Error;
-} {
+}> {
   const { attempt, request } = input;
+  const preflightRecovery = {
+    route: request.route,
+    source: "mid-turn" as const,
+    ...buildPreflightRecoveryBudgetSnapshot(request),
+  };
   const logMidTurnPrecheck = (route: string, extra?: string) => {
     log.warn(
       `[context-overflow-midturn-precheck] sessionKey=${attempt.sessionKey ?? attempt.sessionId} ` +
@@ -84,11 +87,10 @@ export function handleEmbeddedAttemptMidTurnPrecheck(input: {
     const contextTokenBudget = attempt.contextTokenBudget ?? DEFAULT_CONTEXT_TOKENS;
     const toolResultMaxChars = resolveLiveToolResultMaxChars({
       contextWindowTokens: contextTokenBudget,
-      cfg: attempt.config,
-      agentId: input.sessionAgentId,
     });
-    const truncationResult = truncateOversizedToolResultsInSessionManager({
+    const truncationResult = await truncateOversizedToolResultsInSessionManager({
       sessionManager: input.sessionManager,
+      projectionState: input.toolResultPromptProjectionState,
       contextWindowTokens: contextTokenBudget,
       maxCharsOverride: toolResultMaxChars,
       sessionFile: attempt.sessionFile,
@@ -96,43 +98,35 @@ export function handleEmbeddedAttemptMidTurnPrecheck(input: {
       sessionKey: attempt.sessionKey,
       agentId: input.sessionAgentId,
     });
-    if (truncationResult.truncated) {
-      const preflightRecovery = {
-        route: "truncate_tool_results_only" as const,
-        source: "mid-turn" as const,
-        ...buildPreflightRecoveryBudgetSnapshot(request),
-        handled: true as const,
-        truncatedCount: truncationResult.truncatedCount,
-      };
-      input.replaceSessionMessages(input.sessionManager.buildSessionContext().messages);
+    if (
+      truncationResult.truncated ||
+      truncationResult.reason === "no oversized or aggregate tool results"
+    ) {
+      if (truncationResult.truncated) {
+        input.replaceSessionMessages(
+          sanitizeCompactionReplayMessages(input.sessionManager.buildSessionContext().messages),
+        );
+      }
+      // The mid-turn estimate sees the in-memory prompt view, while persisted
+      // recovery may already have capped the same tool results. Retry without
+      // manufacturing compaction when the persisted branch has nothing to trim.
+      const truncatedCount = truncationResult.truncated ? truncationResult.truncatedCount : 0;
       logMidTurnPrecheck(
         request.route,
-        `handled=true truncatedCount=${truncationResult.truncatedCount}`,
+        `handled=true truncatedCount=${truncatedCount}` +
+          (truncationResult.truncated ? "" : ` truncateSkippedReason=${truncationResult.reason}`),
       );
-      return { preflightRecovery };
+      return { preflightRecovery: { ...preflightRecovery, handled: true, truncatedCount } };
     }
 
-    const preflightRecovery = {
-      route: "compact_only" as const,
-      source: "mid-turn" as const,
-      ...buildPreflightRecoveryBudgetSnapshot(request),
-    };
+    preflightRecovery.route = "compact_only";
     logMidTurnPrecheck(
-      "compact_only",
+      preflightRecovery.route,
       `truncateFallbackReason=${truncationResult.reason ?? "unknown"}`,
     );
-    return {
-      preflightRecovery,
-      promptError: new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT),
-    };
+  } else {
+    logMidTurnPrecheck(request.route);
   }
-
-  const preflightRecovery = {
-    route: request.route,
-    source: "mid-turn" as const,
-    ...buildPreflightRecoveryBudgetSnapshot(request),
-  };
-  logMidTurnPrecheck(request.route);
   return {
     preflightRecovery,
     promptError: new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT),
@@ -140,201 +134,138 @@ export function handleEmbeddedAttemptMidTurnPrecheck(input: {
 }
 
 export async function prepareEmbeddedAttemptPromptPreflight(input: {
-  attempt: AttemptPromptPreflightParams;
-  activeContextEngine?: Pick<AttemptContextEngine, "info">;
+  appendOnlyRuntimeContext?: boolean;
+  attempt: AttemptPromptPreflightParams &
+    Pick<EmbeddedRunAttemptParams, "model" | "runtimePlan" | "authProfileId">;
+  activeContextEngine?: Pick<ContextEngine, "info">;
+  compactionReplayEnabled: boolean;
   contextEngineAssemblySucceeded: boolean;
   contextEnginePromptAuthority: NonNullable<AssembleResult["promptAuthority"]>;
   contextTokenBudget: number;
   hookMessagesForCurrentPrompt: AgentMessage[];
   includeBoundaryTimestamp: boolean;
   promptForPrecheck: string;
+  pendingInputTokens?: number;
   reserveTokens: number;
-  sessionAgentId: string;
-  sessionManager: SessionManager;
   sessionMessageCount: number;
   state: AttemptPromptPreflightState;
   systemPrompt: string;
   timezone?: string;
   toolResultMaxChars: number;
+  toolSchemaTokens?: number;
   unwindowedContextEngineMessagesForPrecheck?: AgentMessage[];
-  withOwnedSessionWriteLock: WithOwnedSessionWriteLock;
 }): Promise<AttemptPromptPreflightState> {
   const { attempt } = input;
-  let {
-    contextBudgetStatus,
-    preflightRecovery,
-    promptError,
-    promptErrorSource,
-    skipPromptSubmission,
-  } = input.state;
-  const boundaryOptions =
-    input.timezone || !input.includeBoundaryTimestamp
-      ? {
-          ...(input.timezone ? { timezone: input.timezone } : {}),
-          ...(input.includeBoundaryTimestamp ? {} : { includeTimestamp: false }),
-        }
+  const boundaryOptions = {
+    appendOnlyRuntimeContext: input.appendOnlyRuntimeContext,
+    ...(input.timezone ? { timezone: input.timezone } : {}),
+    ...(input.includeBoundaryTimestamp ? {} : { includeTimestamp: false }),
+  };
+  const unwindowedMessages =
+    input.contextEnginePromptAuthority === "preassembly_may_overflow"
+      ? input.unwindowedContextEngineMessagesForPrecheck
       : undefined;
-  const unwindowedLlmBoundaryMessagesForPrecheck =
-    input.contextEnginePromptAuthority === "preassembly_may_overflow" &&
-    input.unwindowedContextEngineMessagesForPrecheck
-      ? normalizeMessagesForLlmBoundary(
-          input.unwindowedContextEngineMessagesForPrecheck,
-          boundaryOptions,
-        )
-      : undefined;
-  const llmBoundaryTokenPressure = estimateLlmBoundaryTokenPressure({
-    messages: input.hookMessagesForCurrentPrompt,
-    systemPrompt: input.systemPrompt,
-    prompt: input.promptForPrecheck,
-  });
-  let preemptiveCompaction: ReturnType<typeof shouldPreemptivelyCompactBeforePrompt> | null = null;
-  const shouldSkipPrecheck =
-    skipPromptSubmission ||
-    (input.contextEngineAssemblySucceeded &&
-      input.activeContextEngine?.info.ownsCompaction &&
-      input.contextEnginePromptAuthority !== "preassembly_may_overflow");
-
-  if (shouldSkipPrecheck && !skipPromptSubmission) {
-    log.info(
-      `[context-overflow-precheck] skipped: context engine "${input.activeContextEngine!.info.id}" owns compaction`,
-    );
+  const unwindowedLlmBoundaryMessagesForPrecheck = unwindowedMessages
+    ? normalizeMessagesForLlmBoundary(unwindowedMessages, boundaryOptions)
+    : undefined;
+  if (input.state.skipPromptSubmission) {
+    return { ...input.state };
   }
-
-  if (!shouldSkipPrecheck) {
+  if ((input.pendingInputTokens ?? 0) >= input.contextTokenBudget) {
+    return {
+      ...input.state,
+      preflightRecovery: { route: "compact_only" },
+      promptError: new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT),
+      promptErrorSource: "precheck",
+      skipPromptSubmission: true,
+    };
+  }
+  let preemptiveCompaction: ReturnType<typeof shouldPreemptivelyCompactBeforePrompt>;
+  try {
     preemptiveCompaction = shouldPreemptivelyCompactBeforePrompt({
       messages: input.hookMessagesForCurrentPrompt,
-      ...(unwindowedLlmBoundaryMessagesForPrecheck
-        ? { unwindowedMessages: unwindowedLlmBoundaryMessagesForPrecheck }
-        : {}),
+      unwindowedMessages: unwindowedLlmBoundaryMessagesForPrecheck,
       systemPrompt: input.systemPrompt,
       prompt: input.promptForPrecheck,
       contextTokenBudget: input.contextTokenBudget,
       reserveTokens: input.reserveTokens,
       toolResultMaxChars: input.toolResultMaxChars,
-      llmBoundaryTokenPressure: {
-        estimatedPromptTokens: llmBoundaryTokenPressure,
-        source: "llm_boundary_normalized_prompt",
-        renderedChars: input.promptForPrecheck.length,
+      ...(typeof input.toolSchemaTokens === "number"
+        ? { toolSchemaTokens: input.toolSchemaTokens }
+        : {}),
+      replay: {
+        model: attempt.model,
+        sessionId: attempt.sessionId,
+        authProfileId: attempt.runtimePlan?.auth.forwardedAuthProfileId,
+        enabled: input.compactionReplayEnabled,
       },
     });
-  }
-  if (preemptiveCompaction) {
-    contextBudgetStatus = buildPrePromptContextBudgetStatus({
-      result: preemptiveCompaction,
-      provider: attempt.provider,
-      modelId: attempt.modelId,
-      messageCount: input.sessionMessageCount,
-      contextTokenBudget: input.contextTokenBudget,
-      reserveTokens: input.reserveTokens,
-      ...(attempt.sessionId ? { sessionId: attempt.sessionId } : {}),
-      ...(input.contextEnginePromptAuthority === "preassembly_may_overflow" &&
-      input.unwindowedContextEngineMessagesForPrecheck
-        ? { unwindowedMessageCount: input.unwindowedContextEngineMessagesForPrecheck.length }
-        : {}),
-    });
-    log.debug(
-      formatPrePromptPrecheckLog({
-        result: preemptiveCompaction,
-        provider: attempt.provider,
-        modelId: attempt.modelId,
-        messageCount: input.sessionMessageCount,
-        contextTokenBudget: input.contextTokenBudget,
-        reserveTokens: input.reserveTokens,
-        ...(attempt.sessionKey ? { sessionKey: attempt.sessionKey } : {}),
-        ...(attempt.sessionId ? { sessionId: attempt.sessionId } : {}),
-        ...(input.contextEnginePromptAuthority === "preassembly_may_overflow" &&
-        input.unwindowedContextEngineMessagesForPrecheck
-          ? { unwindowedMessageCount: input.unwindowedContextEngineMessagesForPrecheck.length }
-          : {}),
-        ...(attempt.sessionFile ? { sessionFile: attempt.sessionFile } : {}),
-      }),
-    );
-  }
-  if (preemptiveCompaction?.route === "truncate_tool_results_only") {
-    const toolResultMaxChars = resolveLiveToolResultMaxChars({
-      contextWindowTokens: input.contextTokenBudget,
-      cfg: attempt.config,
-      agentId: input.sessionAgentId,
-    });
-    const truncationResult = await input.withOwnedSessionWriteLock(() =>
-      truncateOversizedToolResultsInSessionManager({
-        sessionManager: input.sessionManager,
-        contextWindowTokens: input.contextTokenBudget,
-        maxCharsOverride: toolResultMaxChars,
-        sessionFile: attempt.sessionFile,
-        sessionId: attempt.sessionId,
-        sessionKey: attempt.sessionKey,
-        agentId: input.sessionAgentId,
-      }),
-    );
-    if (truncationResult.truncated) {
-      preflightRecovery = {
-        route: "truncate_tool_results_only",
-        ...buildPreflightRecoveryBudgetSnapshot(preemptiveCompaction),
-        handled: true,
-        truncatedCount: truncationResult.truncatedCount,
-      };
-      log.info(
-        `[context-overflow-precheck] early tool-result truncation succeeded for ` +
-          `${attempt.provider}/${attempt.modelId} route=${preemptiveCompaction.route} ` +
-          `truncatedCount=${truncationResult.truncatedCount} ` +
-          `estimatedPromptTokens=${preemptiveCompaction.estimatedPromptTokens} ` +
-          `promptBudgetBeforeReserve=${preemptiveCompaction.promptBudgetBeforeReserve} ` +
-          `overflowTokens=${preemptiveCompaction.overflowTokens} ` +
-          `toolResultReducibleChars=${preemptiveCompaction.toolResultReducibleChars} ` +
-          `effectiveReserveTokens=${preemptiveCompaction.effectiveReserveTokens} ` +
-          `sessionFile=${attempt.sessionFile}`,
-      );
-      skipPromptSubmission = true;
+  } catch (error) {
+    if (!(error instanceof CompactionReplayRefreshRequiredError)) {
+      throw error;
     }
-    if (!skipPromptSubmission) {
-      log.warn(
-        `[context-overflow-precheck] early tool-result truncation did not help for ` +
-          `${attempt.provider}/${attempt.modelId}; falling back to compaction ` +
-          `reason=${truncationResult.reason ?? "unknown"} sessionFile=${attempt.sessionFile}`,
-      );
-      preflightRecovery = {
-        route: "compact_only",
-        ...buildPreflightRecoveryBudgetSnapshot(preemptiveCompaction),
-      };
-      promptError = new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
-      promptErrorSource = "precheck";
-      skipPromptSubmission = true;
-    }
+    return {
+      ...input.state,
+      promptError: error,
+      promptErrorSource: "precheck",
+      skipPromptSubmission: true,
+    };
   }
-  if (preemptiveCompaction?.shouldCompact) {
-    preflightRecovery =
-      preemptiveCompaction.route === "compact_then_truncate"
-        ? {
-            route: "compact_then_truncate",
-            ...buildPreflightRecoveryBudgetSnapshot(preemptiveCompaction),
-          }
-        : {
-            route: "compact_only",
-            ...buildPreflightRecoveryBudgetSnapshot(preemptiveCompaction),
-          };
-    promptError = new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
-    promptErrorSource = "precheck";
-    log.warn(
-      `[context-overflow-precheck] sessionKey=${attempt.sessionKey ?? attempt.sessionId} ` +
-        `provider=${attempt.provider}/${attempt.modelId} ` +
-        `route=${preemptiveCompaction.route} ` +
-        `estimatedPromptTokens=${preemptiveCompaction.estimatedPromptTokens} ` +
-        `promptBudgetBeforeReserve=${preemptiveCompaction.promptBudgetBeforeReserve} ` +
-        `overflowTokens=${preemptiveCompaction.overflowTokens} ` +
-        `toolResultReducibleChars=${preemptiveCompaction.toolResultReducibleChars} ` +
-        `reserveTokens=${input.reserveTokens} ` +
-        `effectiveReserveTokens=${preemptiveCompaction.effectiveReserveTokens} ` +
-        `sessionFile=${attempt.sessionFile}`,
+  if (
+    input.contextEngineAssemblySucceeded &&
+    input.activeContextEngine?.info.ownsCompaction &&
+    input.contextEnginePromptAuthority !== "preassembly_may_overflow" &&
+    !preemptiveCompaction.compactionReplay
+  ) {
+    log.info(
+      `[context-overflow-precheck] skipped: context engine "${input.activeContextEngine.info.id}" owns compaction`,
     );
-    skipPromptSubmission = true;
+    return { ...input.state };
   }
 
-  return {
-    contextBudgetStatus,
-    preflightRecovery,
-    promptError,
-    promptErrorSource,
-    skipPromptSubmission,
+  const precheckSummary = {
+    result: preemptiveCompaction,
+    provider: attempt.provider,
+    modelId: attempt.modelId,
+    messageCount: input.sessionMessageCount,
+    contextTokenBudget: input.contextTokenBudget,
+    reserveTokens: input.reserveTokens,
+    ...(attempt.sessionId ? { sessionId: attempt.sessionId } : {}),
+    ...(unwindowedMessages ? { unwindowedMessageCount: unwindowedMessages.length } : {}),
   };
+  const contextBudgetStatus = buildPrePromptContextBudgetStatus(precheckSummary);
+  log.debug(
+    formatPrePromptPrecheckLog({
+      ...precheckSummary,
+      ...(attempt.sessionKey ? { sessionKey: attempt.sessionKey } : {}),
+      ...(attempt.sessionFile ? { sessionFile: attempt.sessionFile } : {}),
+    }),
+  );
+  const checkpointPressure = preemptiveCompaction.compactionReplay;
+  if (checkpointPressure && checkpointPressure.route !== "fits") {
+    // Only the actual canonical window can require recovery; the raw-history
+    // maximum above remains diagnostic even when it exceeds this window.
+    return {
+      ...input.state,
+      contextBudgetStatus,
+      preflightRecovery: {
+        route: checkpointPressure.route,
+        ...buildPreflightRecoveryBudgetSnapshot(checkpointPressure),
+      },
+      promptError: new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT),
+      promptErrorSource: "precheck",
+      skipPromptSubmission: true,
+    };
+  }
+  if (preemptiveCompaction.route !== "fits") {
+    // This pressure estimate is diagnostic only; it never compacts or discards history.
+    // Real compaction runs through explicit preflight or provider-overflow recovery.
+    log.info(
+      `[context-pressure-diagnostic] admitted provider attempt for ` +
+        `${attempt.provider}/${attempt.modelId} route=${preemptiveCompaction.route} ` +
+        `estimatedPromptTokens=${preemptiveCompaction.estimatedPromptTokens} ` +
+        `promptBudgetBeforeReserve=${preemptiveCompaction.promptBudgetBeforeReserve}`,
+    );
+  }
+  return { ...input.state, contextBudgetStatus };
 }

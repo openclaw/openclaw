@@ -1,7 +1,9 @@
-// Matrix helper module supports config schema behavior.
 import {
   AllowFromListSchema,
-  BlockStreamingCoalesceSchema,
+  ChannelBotLoopProtectionSchema,
+  ChannelDeliveryStreamingConfigSchema,
+  ChannelStreamingPreviewSchema,
+  ChannelStreamingProgressSchema,
   buildChannelConfigSchema,
   buildGroupEntrySchema,
   buildNestedDmConfigSchema,
@@ -33,14 +35,12 @@ const matrixThreadBindingsSchema = z
     maxAgeHours: z.number().nonnegative().optional(),
     spawnSessions: z.boolean().optional(),
     defaultSpawnContext: z.enum(["isolated", "fork"]).optional(),
-    spawnSubagentSessions: z.boolean().optional(),
-    spawnAcpSessions: z.boolean().optional(),
   })
   .optional();
 
 const matrixExecApprovalsSchema = z
   .object({
-    enabled: z.boolean().optional(),
+    enabled: z.union([z.boolean(), z.literal("auto")]).optional(),
     approvers: AllowFromListSchema,
     agentFilter: z.array(z.string()).optional(),
     sessionFilter: z.array(z.string()).optional(),
@@ -48,20 +48,11 @@ const matrixExecApprovalsSchema = z
   })
   .optional();
 
-const botLoopProtectionSchema = z
-  .object({
-    enabled: z.boolean().optional(),
-    maxEventsPerWindow: z.number().int().positive().optional(),
-    windowSeconds: z.number().int().positive().optional(),
-    cooldownSeconds: z.number().int().positive().optional(),
-  })
-  .strict()
-  .optional();
-
-const matrixRoomSchema = buildGroupEntrySchema({
+export const matrixRoomSchema = buildGroupEntrySchema({
+  requireMentionInBotThreads: z.boolean().optional(),
   account: z.string().optional(),
   allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
-  botLoopProtection: botLoopProtectionSchema,
+  botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
   autoReply: z.boolean().optional(),
   users: AllowFromListSchema,
 })
@@ -76,41 +67,62 @@ const matrixNetworkSchema = z
   .strict()
   .optional();
 
-const matrixStreamingSchema = z
+export const matrixStreamingSchema = z
   .object({
     mode: z.enum(["partial", "quiet", "progress", "off"]).optional(),
-    chunkMode: z.enum(["length", "newline"]).optional(),
-    block: z
-      .object({
-        enabled: z.boolean().optional(),
-        coalesce: BlockStreamingCoalesceSchema.optional(),
-      })
-      .strict()
-      .optional(),
-    progress: z
-      .object({
-        label: z.union([z.string(), z.literal(false)]).optional(),
-        labels: z.array(z.string()).optional(),
-        maxLines: z.number().int().positive().optional(),
-        maxLineChars: z.number().int().positive().optional(),
-        toolProgress: z.boolean().optional(),
-      })
-      .strict()
-      .optional(),
-    preview: z
-      .object({
-        toolProgress: z.boolean().optional(),
-      })
-      .strict()
-      .optional(),
+    ...ChannelDeliveryStreamingConfigSchema.shape,
+    progress: ChannelStreamingProgressSchema.omit({ commentary: true, narration: true }).optional(),
+    preview: ChannelStreamingPreviewSchema.pick({ toolProgress: true }).optional(),
   })
   .strict();
 
-const MatrixConfigSchema = z.object({
+const retiredMatrixAccountStreamingKeys = [
+  "streamMode",
+  "chunkMode",
+  "blockStreaming",
+  "blockStreamingCoalesce",
+  "draftChunk",
+] as const;
+
+function hasCanonicalMatrixAccountStreaming(account: unknown): boolean {
+  if (typeof account !== "object" || account === null || Array.isArray(account)) {
+    return true;
+  }
+  if (retiredMatrixAccountStreamingKeys.some((key) => Object.hasOwn(account, key))) {
+    return false;
+  }
+  if (!Object.hasOwn(account, "streaming")) {
+    return true;
+  }
+  const streaming = (account as { streaming?: unknown }).streaming;
+  return typeof streaming === "object" && streaming !== null && !Array.isArray(streaming);
+}
+
+export const MatrixConfigSchema = z.object({
   name: z.string().optional(),
   enabled: z.boolean().optional(),
+  configWrites: z.boolean().optional(),
+  joinIntro: z.boolean().optional(),
   defaultAccount: z.string().optional(),
-  accounts: z.record(z.string(), z.unknown()).optional(),
+  // Accounts stay schema-open for most fields, but credential leaves must use
+  // SecretInput so Control UI redaction keeps source/provider and only masks id.
+  accounts: z
+    .record(
+      z.string(),
+      z
+        .object({
+          joinIntro: z.boolean().optional(),
+          requireMentionInBotThreads: z.boolean().optional(),
+          accessToken: buildSecretInputSchema().optional(),
+          password: buildSecretInputSchema().optional(),
+        })
+        .passthrough()
+        .refine(hasCanonicalMatrixAccountStreaming, {
+          message:
+            'flat or scalar streaming values are no longer supported; use streaming.* and run "openclaw doctor --fix"',
+        }),
+    )
+    .optional(),
   markdown: MarkdownConfigSchema,
   homeserver: z.string().optional(),
   network: matrixNetworkSchema,
@@ -126,8 +138,9 @@ const MatrixConfigSchema = z.object({
   allowlistOnly: z.boolean().optional(),
   dangerouslyAllowNameMatching: z.boolean().optional(),
   allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
-  botLoopProtection: botLoopProtectionSchema,
+  botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
   groupPolicy: GroupPolicySchema.optional(),
+  requireMentionInBotThreads: z.boolean().optional(),
   mentionPatterns: MentionPatternsPolicySchema.optional(),
   contextVisibility: ContextVisibilityModeSchema.optional(),
   streaming: matrixStreamingSchema.optional(),

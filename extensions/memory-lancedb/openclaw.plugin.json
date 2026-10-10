@@ -1,7 +1,21 @@
 {
   "id": "memory-lancedb",
+  "categories": ["memory"],
+  "doctorContract": {
+    "stateMigrations": [
+      { "id": "memory-lancedb-agent-scope" },
+      { "id": "memory-lancedb-legacy-envelope-rows", "doctorOnly": true }
+    ]
+  },
   "name": "Memory LanceDB",
   "description": "OpenClaw LanceDB-backed long-term memory plugin with auto-recall, auto-capture, and vector search.",
+  "cliCommands": [
+    {
+      "name": "ltm",
+      "description": "Inspect and query LanceDB-backed memory",
+      "hasSubcommands": true
+    }
+  ],
   "catalog": { "featured": true, "order": 70 },
   "commandAliases": [{ "name": "ltm" }],
   "activation": {
@@ -11,6 +25,10 @@
   "kind": "memory",
   "contracts": {
     "tools": ["memory_forget", "memory_recall", "memory_store"]
+  },
+  "toolMetadata": {
+    "memory_forget": { "sideEffecting": true },
+    "memory_store": { "sideEffecting": true }
   },
   "uiHints": {
     "embedding.apiKey": {
@@ -60,7 +78,7 @@
     },
     "captureMaxChars": {
       "label": "Capture Max Chars",
-      "help": "Maximum message length eligible for auto-capture",
+      "help": "Maximum text length accepted by memory_store and eligible for auto-capture",
       "advanced": true,
       "placeholder": "500"
     },
@@ -70,8 +88,8 @@
       "advanced": true
     },
     "recallMaxChars": {
-      "label": "Recall Query Max Chars",
-      "help": "Maximum prompt/query length embedded for memory recall. Lower for small local embedding models.",
+      "label": "Recall Max Chars",
+      "help": "Maximum query length embedded and maximum characters shown from each recalled memory.",
       "advanced": true,
       "placeholder": "1000"
     },
@@ -81,6 +99,38 @@
       "help": "Storage configuration options (access_key, secret_key, endpoint, etc.); supports ${ENV_VAR} values"
     }
   },
+  "configGroups": [
+    {
+      "id": "embeddings",
+      "title": "Embeddings",
+      "order": 10,
+      "properties": ["embedding"]
+    },
+    {
+      "id": "storage",
+      "title": "Storage",
+      "order": 20,
+      "properties": ["dbPath", "storageOptions"]
+    },
+    {
+      "id": "memory-capture",
+      "title": "Memory capture",
+      "order": 30,
+      "properties": ["autoCapture", "captureMaxChars", "customTriggers"]
+    },
+    {
+      "id": "memory-recall",
+      "title": "Memory recall",
+      "order": 40,
+      "properties": ["autoRecall", "recallMaxChars"]
+    },
+    {
+      "id": "dreaming",
+      "title": "Dreaming",
+      "order": 50,
+      "properties": ["dreaming"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

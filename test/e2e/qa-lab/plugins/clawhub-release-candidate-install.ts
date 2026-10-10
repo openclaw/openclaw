@@ -6,8 +6,14 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import {
   QA_EVIDENCE_FILENAME,
+  splitQaModelRef,
   type QaEvidenceSummaryJson,
-} from "../../../../extensions/qa-lab/api.js";
+} from "../../../../extensions/qa-lab/test-api.js";
+import {
+  parsePlatformList,
+  resolveParallelsProviderAuth,
+} from "../../../../scripts/e2e/parallels/provider-auth-prerequisite.mjs";
+import { coerceErrorMessage as formatErrorMessage } from "../../../../scripts/lib/error-format.mts";
 import { createBoundedChildOutput } from "../../../helpers/bounded-child-output.js";
 import {
   createQaScriptBlockedStatusTracker,
@@ -18,7 +24,6 @@ import {
 const SCENARIO_ID = "clawhub-release-candidate-checklist";
 const SCENARIO_TITLE = "ClawHub release candidate npm package install proof";
 const SOURCE_PATH = "test/e2e/qa-lab/plugins/clawhub-release-candidate-install.ts";
-const COVERAGE_ID = "clawhub.npm-pack-local-release-candidate-installs";
 const DEFAULT_TARBALL_ENV = "OPENCLAW_QA_RELEASE_CANDIDATE_TARBALL";
 const CHECKOUT_BUILD_RESULT_PREFIX = "__OPENCLAW_QA_RELEASE_CANDIDATE_TARBALL__";
 const execFileAsync = promisify(execFile);
@@ -164,10 +169,6 @@ function parseOptions(
 async function writeJson(filePath: string, value: unknown) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-}
-
-function formatErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
 }
 
 async function resolveCandidateTarball(options: ProducerOptions) {
@@ -357,18 +358,50 @@ function isBlockedPrerequisiteFailure(message: string) {
   return CLAWHUB_BLOCKED_PREREQUISITE_PATTERNS.some((pattern) => pattern.test(message));
 }
 
+function resolveParallelsEvidenceIdentity(options: ProducerOptions) {
+  try {
+    // Match the child runner's default OpenAI route without changing its arguments.
+    const models = Array.from(
+      parsePlatformList(options.platform || "all"),
+      (platform) =>
+        resolveParallelsProviderAuth({ provider: "openai", platform }, process.env).auth.modelId,
+    );
+    const refs = models.map(splitQaModelRef);
+    // Malformed qualified refs must not prevent writing the blocked evidence.
+    if (
+      models.some(
+        (value, index) =>
+          value.includes("/") && (!refs[index]?.provider.trim() || !refs[index]?.model.trim()),
+      )
+    ) {
+      return { primaryModel: "" };
+    }
+    const [model] = models;
+    const providerId = refs[0]?.provider.trim();
+    return {
+      primaryModel: model?.trim() && models.every((value) => value === model) ? model : "",
+      providerId:
+        providerId && refs.every((ref) => ref?.provider.trim() === providerId)
+          ? providerId
+          : undefined,
+    };
+  } catch {
+    // Invalid metadata must not replace the producer's blocked or failure result.
+    return { primaryModel: "" };
+  }
+}
+
 function createClawHubEvidenceWriter(options: ProducerOptions) {
   return createQaScriptEvidenceWriter({
     artifactBase: options.artifactBase,
     logFileName: "parallels-npm-update.log",
-    primaryModel: "mock-openai/gpt-5.6-luna",
-    providerMode: "mock-openai",
+    ...resolveParallelsEvidenceIdentity(options),
+    providerMode: "live-frontier",
     repoRoot: options.repoRoot,
     target: {
       id: SCENARIO_ID,
       title: SCENARIO_TITLE,
       sourcePath: SOURCE_PATH,
-      primaryCoverageIds: [COVERAGE_ID],
       docsRefs: ["docs/help/testing.md", "docs/concepts/qa-e2e-automation.md"],
       codeRefs: [
         SOURCE_PATH,

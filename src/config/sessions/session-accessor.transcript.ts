@@ -1,206 +1,74 @@
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-import { formatSessionArchiveTimestamp } from "./artifacts.js";
-import { patchSessionEntry } from "./session-accessor.entry.js";
-import {
-  appendSqliteTranscriptEvent,
-  appendSqliteTranscriptEventSync,
-  appendSqliteTranscriptMessage,
-  appendSqliteTranscriptMessageSync,
-  findSqliteTranscriptEvent,
-  loadLatestSqliteAssistantText,
-  loadSqliteTranscriptEventRowsAfterSeqSync,
-  loadSqliteTranscriptEvents,
-  loadSqliteTranscriptEventsSync,
-  readSqliteTranscriptStatsSync,
-  readSqliteTranscriptEventAtSeqSync,
-  publishSqliteTranscriptUpdate,
-  replaceSqliteTranscriptEvents,
-  replaceSqliteTranscriptEventsSync,
-  resolveSqliteSessionKeyBySessionId,
-  withSqliteTranscriptWriteLock,
-  withSqliteTranscriptWriteTransaction,
-} from "./session-accessor.sqlite.js";
+import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
+import { trimTranscriptForManualCompact } from "./session-accessor.sqlite-compaction.js";
 import type {
-  SessionTranscriptAccessScope,
   SessionTranscriptRuntimeScope,
-  SessionTranscriptReadScope,
-  SessionTranscriptWriteScope,
-  TranscriptEvent,
-  SessionTranscriptStats,
-  SessionTranscriptEventRow,
-  TranscriptMessageAppendOptions,
-  TranscriptMessageAppendResult,
-  TranscriptUpdatePayload,
-  LatestTranscriptAssistantText,
-  SessionTranscriptWriteLockAccessorContext,
-  SessionTranscriptWriteTransactionContext,
   SessionTranscriptManualTrimResult,
   SessionTranscriptManualTrimPreflightResult,
 } from "./session-accessor.types.js";
-import { formatSqliteSessionFileMarker } from "./sqlite-marker.js";
+import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
+import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
+import { selectManualCompactTranscriptLines } from "./session-manual-compact-selection.js";
+import { trimSessionTranscriptInWorker } from "./session-manual-compact.js";
 import {
-  scanSessionTranscriptTree,
-  selectSessionTranscriptTreePathNodes,
-} from "./transcript-tree.js";
+  acceptSessionSourceValidation,
+  prepareSessionSourceAuthority,
+  releaseSessionSourceAuthorities,
+  type SessionSourceAssertion,
+} from "./session-source-authority.js";
+import { withSessionTranscriptReadSource } from "./session-transcript-read-source.js";
+import { readTranscriptStatsAsync } from "./session-transcript-stats.js";
+import { resolveSessionWorkStartError } from "./session-work-start.js";
+import { SessionWorkStartChangedError } from "./work-start-error.js";
+export { persistCompactionBoundaryWithSessionEntrySync } from "./session-accessor.sqlite-compaction.js";
+export { persistCompactionBoundaryWithSessionEntryAsync } from "./session-accessor.sqlite-compaction-runtime.js";
+export { readTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
+export { resolveSessionKeyBySessionId as resolveTranscriptSessionKeyBySessionId } from "./session-accessor.sqlite-entry.js";
+export { publishTranscriptUpdate } from "./session-accessor.sqlite-events.js";
+export {
+  hasSessionTranscriptEventsSync,
+  readTranscriptMutationAtSync,
+  readTranscriptMutationStateSync,
+} from "./session-accessor.sqlite-metadata-read.js";
+export {
+  inspectTranscriptEventsSync,
+  loadLatestAssistantText as readLatestTranscriptAssistantText,
+  loadTranscriptEventRowsAfterSeqSync,
+  loadTranscriptEventsSync,
+  loadTranscriptHeaderSync,
+  readTranscriptExportSnapshotReadOnlySync,
+  readTranscriptStatsBatchReadOnlySync,
+  readTranscriptStatsSync,
+  validatePreparedAssistantAppendSync,
+  readTranscriptEventAtSeqSync,
+  readTranscriptIdentityByEventId,
+} from "./session-accessor.sqlite-read.js";
+export { hasSessionTranscriptMessage } from "./session-transcript-message-presence.js";
+export { loadTranscriptEvents } from "./session-transcript-events.js";
+export {
+  loadTranscriptSuffixEventsBoundedSync,
+  readPreviousIndexedTranscriptEventSync,
+} from "./session-accessor.sqlite-suffix-read.js";
+export {
+  rewriteAssistantTranscriptMessageForRun,
+  rewriteTranscriptMessageAtAnchor,
+} from "./session-accessor.sqlite-transcript-message-rewrite.js";
+export { readSessionTranscriptMessageByEventId } from "./session-accessor.sqlite-transcript-store.js";
+export {
+  appendTranscriptEvent,
+  appendTranscriptEventSync,
+  appendTranscriptMessage,
+  appendTranscriptMessageSync,
+  replaceTranscriptEvents,
+  replaceTranscriptEventsSync,
+  replaceSessionWithBranchedTranscript,
+  replaceTranscriptSuffixEventsSync,
+  rewriteTranscriptEventRowsExact,
+  withTranscriptWriteLock,
+  withTranscriptWriteSequence,
+  withTranscriptWriteTransaction,
+} from "./session-accessor.sqlite-transcript-write.js";
 
-/** Keeps transcript event delivery behind the transcript owner boundary. */
-export function emitTranscriptUpdate(
-  update: Parameters<typeof emitSessionTranscriptUpdate>[0],
-): void {
-  emitSessionTranscriptUpdate(update);
-}
-
-/**
- * Appends a non-message transcript record such as session or metadata events.
- * Message records must use appendTranscriptMessage so parent links, idempotency,
- * and redaction are preserved.
- */
-export async function appendTranscriptEvent(
-  scope: SessionTranscriptAccessScope,
-  event: TranscriptEvent,
-): Promise<void> {
-  await appendSqliteTranscriptEvent(scope, event);
-}
-
-/** Appends a non-message transcript record synchronously for sync session runtimes. */
-export function appendTranscriptEventSync(
-  scope: SessionTranscriptAccessScope,
-  event: TranscriptEvent,
-): boolean {
-  return appendSqliteTranscriptEventSync(scope, event);
-}
-
-/** Reads parsed transcript records from an explicit or derived transcript target. */
-export async function loadTranscriptEvents(
-  scope: SessionTranscriptReadScope,
-): Promise<TranscriptEvent[]> {
-  return await loadSqliteTranscriptEvents(scope);
-}
-
-/** Replaces all transcript records for one SQLite-backed transcript. */
-export async function replaceTranscriptEvents(
-  scope: SessionTranscriptAccessScope,
-  events: TranscriptEvent[],
-): Promise<void> {
-  await replaceSqliteTranscriptEvents(scope, events);
-}
-
-/** Replaces all transcript records synchronously for sync session runtimes. */
-export function replaceTranscriptEventsSync(
-  scope: SessionTranscriptAccessScope,
-  events: TranscriptEvent[],
-): boolean {
-  return replaceSqliteTranscriptEventsSync(scope, events);
-}
-
-/** Reads parsed transcript records synchronously from the SQLite transcript store. */
-export function loadTranscriptEventsSync(scope: SessionTranscriptReadScope): TranscriptEvent[] {
-  return loadSqliteTranscriptEventsSync(scope);
-}
-
-/** Reads only rows appended after a previously observed SQLite sequence. */
-export function loadTranscriptEventRowsAfterSeqSync(
-  scope: SessionTranscriptReadScope,
-  afterSeq: number,
-  throughSeq?: number,
-): SessionTranscriptEventRow[] {
-  return loadSqliteTranscriptEventRowsAfterSeqSync(scope, afterSeq, throughSeq);
-}
-
-/** Reads one durable SQLite transcript row for incremental checkpoint validation. */
-export function readTranscriptEventAtSeqSync(
-  scope: SessionTranscriptReadScope,
-  seq: number,
-): SessionTranscriptEventRow | undefined {
-  return readSqliteTranscriptEventAtSeqSync(scope, seq);
-}
-
-/** Reads transcript freshness and byte size without materializing event rows. */
-export function readTranscriptStatsSync(scope: SessionTranscriptReadScope): SessionTranscriptStats {
-  return readSqliteTranscriptStatsSync(scope);
-}
-
-/** Reads the latest visible assistant text without materializing the whole transcript. */
-export function readLatestTranscriptAssistantText(
-  scope: SessionTranscriptReadScope,
-  options: { includeTranscriptOnlyOpenClawAssistant?: boolean } = {},
-): LatestTranscriptAssistantText | undefined {
-  return loadLatestSqliteAssistantText(scope, options);
-}
-
-/**
- * Appends one transcript message with message-id generation and optional
- * idempotency lookup. The returned message is the redacted persisted value.
- */
-export async function appendTranscriptMessage<TMessage>(
-  scope: SessionTranscriptWriteScope,
-  options: TranscriptMessageAppendOptions<TMessage> & {
-    prepareMessageAfterIdempotencyCheck: (message: TMessage) => TMessage | undefined;
-  },
-): Promise<TranscriptMessageAppendResult<TMessage> | undefined>;
-export async function appendTranscriptMessage<TMessage>(
-  scope: SessionTranscriptWriteScope,
-  options: TranscriptMessageAppendOptions<TMessage>,
-): Promise<TranscriptMessageAppendResult<TMessage>>;
-export async function appendTranscriptMessage<TMessage>(
-  scope: SessionTranscriptWriteScope,
-  options: TranscriptMessageAppendOptions<TMessage>,
-): Promise<TranscriptMessageAppendResult<TMessage> | undefined> {
-  return await appendSqliteTranscriptMessage(scope, options);
-}
-
-/** Appends one transcript message synchronously for sync session runtimes. */
-export function appendTranscriptMessageSync<TMessage>(
-  scope: SessionTranscriptWriteScope,
-  options: TranscriptMessageAppendOptions<TMessage>,
-): TranscriptMessageAppendResult<TMessage> | undefined {
-  return appendSqliteTranscriptMessageSync(scope, options);
-}
-
-/** Resolves the persisted key for a SQLite transcript session id. */
-export function resolveTranscriptSessionKeyBySessionId(
-  scope: Pick<SessionTranscriptReadScope, "agentId" | "env" | "sessionId" | "storePath">,
-): string | undefined {
-  return resolveSqliteSessionKeyBySessionId(scope);
-}
-
-/**
- * Finds the newest transcript record accepted by the matcher. Reads rows
- * newest-first with early exit so hot append-path lookups never parse the
- * whole transcript; missing transcripts match nothing. The match is wrapped
- * so parsed falsy records stay distinguishable from "no match".
- */
-export async function findTranscriptEvent(
-  scope: SessionTranscriptReadScope,
-  match: (event: TranscriptEvent) => boolean,
-): Promise<{ event: TranscriptEvent } | undefined> {
-  return findSqliteTranscriptEvent(scope, match);
-}
-
-/** Emits a transcript update after resolving the current transcript target. */
-export async function publishTranscriptUpdate(
-  scope: SessionTranscriptWriteScope,
-  update: TranscriptUpdatePayload = {},
-): Promise<void> {
-  await publishSqliteTranscriptUpdate(scope, update);
-}
-
-/** Runs transcript read/append work under the backing store writer lock. */
-export async function withTranscriptWriteLock<T>(
-  scope: SessionTranscriptWriteScope,
-  run: (context: SessionTranscriptWriteLockAccessorContext) => Promise<T> | T,
-): Promise<T> {
-  return await withSqliteTranscriptWriteLock(scope, run);
-}
-
-/** Runs a synchronous DAG batch under one transcript writer queue and transaction. */
-export async function withTranscriptWriteTransaction<T>(
-  scope: SessionTranscriptWriteScope,
-  run: (context: SessionTranscriptWriteTransactionContext) => T,
-): Promise<T> {
-  return await withSqliteTranscriptWriteTransaction(scope, run);
-}
+export { emitSessionTranscriptUpdate as emitTranscriptUpdate } from "../../sessions/transcript-events.js";
 
 /**
  * Trims a transcript for manual sessions.compact and clears stale token metadata.
@@ -211,155 +79,298 @@ export async function preflightSessionTranscriptForManualCompact(
   scope: SessionTranscriptRuntimeScope,
   params: { maxLines: number; sessionFile?: string },
 ): Promise<SessionTranscriptManualTrimPreflightResult> {
-  const events = await loadTranscriptEvents(scope).catch(() => []);
-  if (events.length === 0) {
+  const { eventCount } = await readTranscriptStatsAsync(scope);
+  if (eventCount === 0) {
     return { compacted: false, reason: "no transcript" };
   }
 
   const maxLines = Math.max(1, Math.floor(params.maxLines));
-  return events.length > maxLines ? { compacted: true } : { compacted: false, kept: events.length };
+  return eventCount > maxLines ? { compacted: true } : { compacted: false, kept: eventCount };
 }
+
+type ManualCompactAuthority = {
+  source: SessionSourceAssertion;
+  assertHostCurrent: () => void;
+  expectedLifecycleRevision: string | undefined;
+  expectedSource?: CapturedSessionEntryReadSource;
+};
 
 export async function trimSessionTranscriptForManualCompact(
   scope: SessionTranscriptRuntimeScope,
-  params: { maxLines: number; nowMs?: number; sessionFile?: string },
+  params: {
+    maxLines: number;
+    nowMs?: number;
+    sessionFile?: string;
+    authority?: ManualCompactAuthority;
+  },
 ): Promise<SessionTranscriptManualTrimResult> {
-  const events = await loadTranscriptEvents(scope).catch(() => []);
-  if (events.length === 0) {
-    return { compacted: false, reason: "no transcript" };
+  const authority = params.authority;
+  const incognito = captureIncognitoSessionOperation(scope);
+  if (!authority && incognito) {
+    return trimPreparedSessionTranscriptForManualCompact(scope, params);
   }
-
-  const maxLines = Math.max(1, Math.floor(params.maxLines));
-  const headerLine = JSON.stringify(events[0]);
-  const tailLines = events.slice(1).map((event) => JSON.stringify(event));
-  const maxTailLines = Math.max(0, maxLines - 1);
-  if (events.length <= maxLines) {
-    return { compacted: false, kept: events.length };
-  }
-
-  const lines = normalizeManualCompactTranscriptLines(
-    headerLine,
-    maxTailLines > 0 ? tailLines.slice(-maxTailLines) : [],
-  );
-  if (!lines) {
-    return { compacted: false, kept: 0 };
-  }
-  const retainedEvents = lines.map((line) => JSON.parse(line) as TranscriptEvent);
-  await replaceSqliteTranscriptEvents(scope, retainedEvents);
-  const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
-  if (!agentId) {
-    throw new Error(`Cannot resolve manual compact transcript scope: ${scope.sessionKey}`);
-  }
-  const archived = `${formatSqliteSessionFileMarker({
-    agentId,
-    sessionId: scope.sessionId,
-    storePath: scope.storePath ?? "",
-  })}.bak.${formatSessionArchiveTimestamp()}`;
-  await patchSessionEntry(
-    {
-      ...scope,
-      sessionKey: scope.sessionKey,
-      storePath: scope.storePath,
-    },
-    (entry) => {
-      delete entry.contextBudgetStatus;
-      delete entry.inputTokens;
-      delete entry.outputTokens;
-      delete entry.totalTokens;
-      delete entry.totalTokensFresh;
-      entry.updatedAt = params.nowMs ?? Date.now();
-      return entry;
-    },
-    { replaceEntry: true },
-  );
-
-  return { archived, compacted: true, kept: lines.length };
-}
-
-function parseManualCompactTranscriptRecord(line: string): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(line) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-function normalizeManualCompactTranscriptLines(
-  headerLine: string | undefined,
-  tailLines: readonly string[],
-): string[] | null {
-  if (!headerLine) {
-    return null;
-  }
-  const header = parseManualCompactTranscriptRecord(headerLine);
-  if (header?.type !== "session" || typeof header.id !== "string") {
-    return null;
-  }
-
-  const records = tailLines
-    .map(parseManualCompactTranscriptRecord)
-    .filter((record): record is Record<string, unknown> => record !== null);
-  const retainedIds = new Set<string>();
-  const transparentParents = new Map<string, string | null>();
-  const normalizedRecords: Record<string, unknown>[] = [];
-  for (const record of records) {
-    let parentId = record.parentId;
-    const seenTransparentParents = new Set<string>();
-    while (
-      typeof parentId === "string" &&
-      transparentParents.has(parentId) &&
-      !seenTransparentParents.has(parentId)
-    ) {
-      seenTransparentParents.add(parentId);
-      parentId = transparentParents.get(parentId) ?? null;
-    }
-    let next =
-      typeof parentId === "string" && !retainedIds.has(parentId)
-        ? { ...record, parentId: null }
-        : parentId !== record.parentId
-          ? { ...record, parentId }
-          : record;
-    if (next.type === "leaf") {
-      const targetId = next.targetId;
-      const validTargetId =
-        targetId === null || (typeof targetId === "string" && targetId.trim().length > 0);
-      if (!validTargetId && typeof next.id === "string") {
-        transparentParents.set(
-          next.id,
-          next.parentId === null || typeof next.parentId === "string" ? next.parentId : null,
+  if (!authority) {
+    return withSessionTranscriptReadSource(
+      scope,
+      (captured) =>
+        trimPreparedSessionTranscriptForManualCompact(
+          { ...captured, sessionKey: scope.sessionKey },
+          params,
+        ),
+      async ({ scope: captured, resolved, expectedIdentity, assertCurrent }) => {
+        const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
+        assertCurrent();
+        await restoreSessionColdTranscript(captured, assertCurrent);
+        assertCurrent();
+        return trimSessionTranscriptInWorker(
+          {
+            ...resolved,
+            sessionKey: resolved.sessionKey ?? scope.sessionKey,
+            path: captured.storePath,
+          },
+          params,
+          {
+            assertCurrent,
+            databaseIdentity: expectedIdentity?.key.slice("file:".length),
+          },
         );
-      }
-      if (typeof targetId === "string" && targetId.trim() && !retainedIds.has(targetId)) {
-        // The selected branch fell outside the retained window. Select an
-        // empty root instead of accidentally activating abandoned or side rows.
-        next = { ...next, targetId: null, appendParentId: null };
-      } else if (
-        validTargetId &&
-        typeof next.appendParentId === "string" &&
-        !retainedIds.has(next.appendParentId)
-      ) {
-        next = { ...next, appendParentId: targetId };
-      }
-    }
-    if (next.type === "compaction" && typeof next.id === "string") {
-      const firstKeptEntryId = next.firstKeptEntryId;
-      if (typeof firstKeptEntryId === "string" && firstKeptEntryId !== next.id) {
-        const tree = scanSessionTranscriptTree([...normalizedRecords, next]);
-        const branchPath = selectSessionTranscriptTreePathNodes(tree, next.id);
-        if (!branchPath.some((node) => node.id === firstKeptEntryId)) {
-          // Replay starts at the earliest retained entry on this compaction's
-          // normalized branch, never at an abandoned row earlier in file order.
-          next = { ...next, firstKeptEntryId: branchPath[0]?.id ?? next.id };
-        }
-      }
-    }
-    normalizedRecords.push(next);
-    if (typeof next.id === "string" && next.id.trim()) {
-      retainedIds.add(next.id);
-    }
+      },
+    );
   }
-  return [JSON.stringify(header), ...normalizedRecords.map((record) => JSON.stringify(record))];
+  const assertEntryCurrent = (entry: Parameters<typeof resolveSessionWorkStartError>[1]) => {
+    if (
+      !entry ||
+      entry.sessionId !== scope.sessionId ||
+      entry.lifecycleRevision !== authority.expectedLifecycleRevision ||
+      resolveSessionWorkStartError(scope.sessionKey, entry)
+    ) {
+      throw new SessionWorkStartChangedError("Session changed before compaction. Retry.");
+    }
+  };
+  if (incognito) {
+    const { actor } = incognito;
+    const expected = authority.expectedSource;
+    if (
+      expected &&
+      (expected.path !== actor.path ||
+        expected.agentId !== actor.agentId ||
+        expected.databaseIdentity !== actor.identity.incarnation)
+    ) {
+      throw new Error("Session compaction changed its physical actor");
+    }
+    return actor.sessions.withSharedState(async () => {
+      const source = await prepareSessionSourceAuthority(authority.source);
+      try {
+        if (
+          source.nativeSource ||
+          source.hasOpaqueCheck ||
+          source.checks.some(
+            ({ predicate }) =>
+              predicate.source.path !== actor.path ||
+              predicate.source.agentId !== actor.agentId ||
+              predicate.source.databaseIdentity !== actor.identity.incarnation,
+          )
+        ) {
+          throw new Error("Incognito compaction requires source authority prepared for its actor");
+        }
+        const assertCurrent = () => {
+          incognito.authority.assertCurrent();
+          authority.assertHostCurrent();
+          (source.assertPreparedCurrent ?? source.assertCurrent)();
+        };
+        assertCurrent();
+        return await trimPreparedSessionTranscriptForManualCompact(scope, params, {
+          assertEntryCurrent,
+          assertCurrent,
+          assertCommitCurrent: assertCurrent,
+          source,
+          // The actor never owns a cold archive; native restoration remains below.
+          restore: async () => {},
+        });
+      } finally {
+        await releaseSessionSourceAuthorities([source]);
+      }
+    });
+  }
+  return withSessionTranscriptReadSource(
+    scope,
+    (captured) =>
+      trimPreparedSessionTranscriptForManualCompact(
+        { ...captured, sessionKey: scope.sessionKey },
+        params,
+        {
+          assertEntryCurrent,
+          assertCurrent: authority.source,
+          assertCommitCurrent: authority.source,
+          restore: async () => {
+            const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
+            authority.source();
+            await restoreSessionColdTranscript(captured, authority.assertHostCurrent);
+            authority.source();
+          },
+        },
+      ),
+    async ({ scope: captured, resolved, owner, expectedIdentity, assertCurrent: assertReader }) => {
+      const expectedSource = authority.expectedSource;
+      const assertPhysicalSource = () => {
+        if (expectedSource && typeof expectedSource.databaseIdentity === "string") {
+          if (captured.storePath !== expectedSource.path) {
+            throw new Error("Session compaction changed its physical store");
+          }
+          assertExistingDatabaseIdentity(
+            captured.storePath,
+            `file:${expectedSource.databaseIdentity}`,
+            expectedSource.databaseBirthtime,
+          );
+        }
+      };
+      assertPhysicalSource();
+      const source = await prepareSessionSourceAuthority(authority.source);
+      const nativeCommit = source.nativeSource || source.hasOpaqueCheck;
+      try {
+        const assertOwnerCurrent = () => {
+          assertReader();
+          assertPhysicalSource();
+          authority.assertHostCurrent();
+        };
+        const assertCurrent = () => {
+          assertOwnerCurrent();
+          if (source.assertPreparedCurrent) {
+            source.assertPreparedCurrent();
+          } else if (!nativeCommit) {
+            source.assertCurrent();
+          }
+        };
+        assertCurrent();
+        const sources = source.checks.map(({ predicate }) => predicate);
+        const read = await owner.readExactEntries({
+          sessionKeys: [scope.sessionKey],
+          projection: "exact",
+          expectedIdentity: expectedIdentity && {
+            ...expectedIdentity,
+            canonicalPath: captured.storePath,
+          },
+          env: captured.env,
+          manualCompact: { sessionId: resolved.sessionId, sources },
+        });
+        assertCurrent();
+        const refused = read.manualCompact?.refusedSource;
+        if (refused) {
+          source.checks[refused.index]!.refuse(refused.facts);
+        }
+        assertEntryCurrent(read.entries[0]?.entry);
+        if (nativeCommit) {
+          authority.source();
+        }
+        const preparation = {
+          snapshot: read.entries,
+          assertEntryCurrent,
+          assertCurrent,
+          // Released opaque callbacks require their native transaction-local fence.
+          assertCommitCurrent: () => {
+            assertCurrent();
+            authority.source();
+          },
+          restore: async () => {
+            const {
+              restoreSessionColdTranscript,
+              SessionColdSourceReboundError,
+              SessionColdTurnReboundError,
+            } = await import("./session-cold-storage.js");
+            assertCurrent();
+            try {
+              await restoreSessionColdTranscript(
+                captured,
+                assertCurrent,
+                {
+                  target: resolved,
+                  acceptSourceValidation: (validation) =>
+                    acceptSessionSourceValidation(source, validation),
+                  readMetadata: async (phase) =>
+                    phase === "initial"
+                      ? read.manualCompact?.archive
+                      : (
+                          await owner.readColdMetadata({
+                            sessionId: resolved.sessionId,
+                            env: captured.env,
+                          })
+                        ).archive,
+                },
+                {
+                  kind: "turn",
+                  agentId: resolved.agentId,
+                  sessionKey: scope.sessionKey,
+                  options: {
+                    keyFormat: "agent-qualified",
+                    expectedSessionId: resolved.sessionId,
+                    selectedSessionId: resolved.sessionId,
+                    selectedLifecycleRevision: authority.expectedLifecycleRevision ?? null,
+                  },
+                  sources,
+                  requireActive: true,
+                },
+              );
+            } catch (error) {
+              if (error instanceof SessionColdTurnReboundError) {
+                throw new SessionWorkStartChangedError(error.message);
+              }
+              if (error instanceof SessionColdSourceReboundError) {
+                source.checks[error.refusal.index]!.refuse(error.refusal.facts);
+              }
+              throw error;
+            }
+            assertCurrent();
+          },
+        };
+        if (nativeCommit) {
+          return await trimPreparedSessionTranscriptForManualCompact(
+            { ...captured, sessionKey: scope.sessionKey },
+            params,
+            preparation,
+          );
+        }
+        await preparation.restore();
+        assertCurrent();
+        return await trimSessionTranscriptInWorker(
+          {
+            ...resolved,
+            sessionKey: resolved.sessionKey ?? scope.sessionKey,
+            path: captured.storePath,
+          },
+          { maxLines: params.maxLines, nowMs: params.nowMs, entries: read.entries },
+          {
+            assertCurrent: assertOwnerCurrent,
+            source,
+            databaseIdentity: expectedIdentity?.key.slice("file:".length),
+          },
+        );
+      } finally {
+        await releaseSessionSourceAuthorities([source]);
+      }
+    },
+  );
 }
+
+async function trimPreparedSessionTranscriptForManualCompact(
+  scope: SessionTranscriptRuntimeScope,
+  params: { maxLines: number; nowMs?: number; sessionFile?: string },
+  preparation?: NonNullable<Parameters<typeof trimTranscriptForManualCompact>[2]>["preparation"],
+): Promise<SessionTranscriptManualTrimResult> {
+  let declined: SessionTranscriptManualTrimResult = { compacted: false, reason: "no transcript" };
+  const trimmed = await trimTranscriptForManualCompact(
+    scope,
+    (lines) => {
+      const selected = selectManualCompactTranscriptLines(lines, params.maxLines);
+      declined = selected.result;
+      return selected.result.compacted ? selected.lines : null;
+    },
+    { nowMs: params.nowMs, preparation },
+  );
+  if (!trimmed.trimmed) {
+    return declined;
+  }
+
+  return { compacted: true, kept: trimmed.kept };
+}
+
+export { findTranscriptEvent } from "./session-transcript-match.js";

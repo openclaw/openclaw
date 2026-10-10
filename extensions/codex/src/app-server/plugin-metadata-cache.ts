@@ -1,6 +1,3 @@
-/**
- * Process-local cache for successful Codex plugin/list snapshots.
- */
 import type { v2 } from "./protocol.js";
 
 // Matches the sibling app-inventory cache window: upstream refreshes its remote
@@ -8,47 +5,48 @@ import type { v2 } from "./protocol.js";
 // a configured plugin for the whole process lifetime.
 const CODEX_PLUGIN_METADATA_CACHE_TTL_MS = 60 * 60 * 1_000;
 
-/** Plugin catalog query whose request shape affects the returned marketplaces. */
-export type CodexPluginMetadataQueryKind = "curated-global" | "workspace-directory";
+export type CodexPluginMetadataQueryKind = "curated-global" | "installed";
 
-/** Request callback used to read Codex plugin metadata. */
-type CodexPluginMetadataRequest = (
-  method: "plugin/list",
-  params: v2.PluginListParams,
-) => Promise<v2.PluginListResponse>;
+type CodexPluginMetadataMethod<QueryKind extends CodexPluginMetadataQueryKind> =
+  QueryKind extends "installed" ? "plugin/installed" : "plugin/list";
 
-/** Successful plugin metadata snapshot scoped to one app-server runtime. */
-type CodexPluginMetadataSnapshot = {
-  appCacheKey: string;
-  queryKind: CodexPluginMetadataQueryKind;
-  response: v2.PluginListResponse;
-};
+type CodexPluginMetadataRequestParams<QueryKind extends CodexPluginMetadataQueryKind> =
+  QueryKind extends "installed" ? v2.PluginInstalledParams : v2.PluginListParams;
+
+type CodexPluginMetadataResponse<QueryKind extends CodexPluginMetadataQueryKind> =
+  QueryKind extends "installed" ? v2.PluginInstalledResponse : v2.PluginListResponse;
+
+type CodexPluginMetadataRequest<QueryKind extends CodexPluginMetadataQueryKind> = (
+  method: CodexPluginMetadataMethod<QueryKind>,
+  params: CodexPluginMetadataRequestParams<QueryKind>,
+) => Promise<CodexPluginMetadataResponse<QueryKind>>;
 
 type CachedCodexPluginMetadataEntry = {
-  snapshot: CodexPluginMetadataSnapshot;
+  appCacheKey: string;
+  response: v2.PluginInstalledResponse | v2.PluginListResponse;
   expiresAtMs: number;
 };
 
-type LoadCodexPluginMetadataParams = {
+type LoadCodexPluginMetadataParams<QueryKind extends CodexPluginMetadataQueryKind> = {
   appCacheKey: string;
-  queryKind: CodexPluginMetadataQueryKind;
-  requestParams: v2.PluginListParams;
-  request: CodexPluginMetadataRequest;
+  queryKind: QueryKind;
+  requestParams: CodexPluginMetadataRequestParams<QueryKind>;
+  catalogScope?: string;
+  request: CodexPluginMetadataRequest<QueryKind>;
   /**
    * Guards against fail-open responses: upstream plugin/list only warns when a
    * remote catalog fetch fails with omitted marketplaceKinds, returning local
    * marketplaces with empty marketplaceLoadErrors. Such a snapshot must not
    * settle for the process lifetime, or configured plugins never recover.
    */
-  cacheable?: (response: v2.PluginListResponse) => boolean;
+  cacheable?: (response: CodexPluginMetadataResponse<QueryKind>) => boolean;
 };
 
 type InFlightCodexPluginMetadataLoad = {
   appCacheKey: string;
-  promise: Promise<CodexPluginMetadataSnapshot>;
+  promise: Promise<v2.PluginInstalledResponse | v2.PluginListResponse>;
 };
 
-/** Process-local plugin metadata cache with coalesced loads per query. */
 export class CodexPluginMetadataCache {
   private readonly entries = new Map<string, CachedCodexPluginMetadataEntry>();
   private readonly inFlight = new Map<string, InFlightCodexPluginMetadataLoad>();
@@ -57,12 +55,18 @@ export class CodexPluginMetadataCache {
 
   constructor(private readonly nowMs: () => number = Date.now) {}
 
-  /** Returns a fresh cached snapshot without issuing a request. */
-  read(
+  read<QueryKind extends CodexPluginMetadataQueryKind>(
     appCacheKey: string,
-    queryKind: CodexPluginMetadataQueryKind,
-  ): CodexPluginMetadataSnapshot | undefined {
-    const entryKey = buildMetadataCacheEntryKey(appCacheKey, queryKind);
+    queryKind: QueryKind,
+    requestParams?: CodexPluginMetadataRequestParams<QueryKind>,
+    catalogScope?: string,
+  ): CodexPluginMetadataResponse<QueryKind> | undefined {
+    const entryKey = buildMetadataCacheEntryKey(
+      appCacheKey,
+      queryKind,
+      requestParams,
+      catalogScope,
+    );
     const entry = this.entries.get(entryKey);
     if (!entry) {
       return undefined;
@@ -71,20 +75,33 @@ export class CodexPluginMetadataCache {
       this.entries.delete(entryKey);
       return undefined;
     }
-    return entry.snapshot;
+    // The entry key binds the runtime, query kind, and installed request scope.
+    return entry.response as CodexPluginMetadataResponse<QueryKind>;
   }
 
-  /** Returns a fresh cached snapshot or coalesces one plugin/list request. */
-  async load(params: LoadCodexPluginMetadataParams): Promise<CodexPluginMetadataSnapshot> {
-    const entryKey = buildMetadataCacheEntryKey(params.appCacheKey, params.queryKind);
-    const cached = this.read(params.appCacheKey, params.queryKind);
+  /** Returns a fresh snapshot or coalesces one catalog or installed-plugin request. */
+  async load<QueryKind extends CodexPluginMetadataQueryKind>(
+    params: LoadCodexPluginMetadataParams<QueryKind>,
+  ): Promise<CodexPluginMetadataResponse<QueryKind>> {
+    const entryKey = buildMetadataCacheEntryKey(
+      params.appCacheKey,
+      params.queryKind,
+      params.requestParams,
+      params.catalogScope,
+    );
+    const cached = this.read(
+      params.appCacheKey,
+      params.queryKind,
+      params.requestParams,
+      params.catalogScope,
+    );
     if (cached) {
       return cached;
     }
     const pending = this.inFlight.get(entryKey);
     if (pending) {
       try {
-        return await pending.promise;
+        return (await pending.promise) as CodexPluginMetadataResponse<QueryKind>;
       } catch {
         if (this.inFlight.get(entryKey) === pending) {
           this.inFlight.delete(entryKey);
@@ -96,26 +113,25 @@ export class CodexPluginMetadataCache {
     const generation = this.generations.get(params.appCacheKey) ?? 0;
     const clearGeneration = this.clearGeneration;
     const promise = (async () => {
-      const response = await params.request("plugin/list", params.requestParams);
-      const snapshot = {
-        appCacheKey: params.appCacheKey,
-        queryKind: params.queryKind,
-        response,
-      } satisfies CodexPluginMetadataSnapshot;
+      const method = (
+        params.queryKind === "installed" ? "plugin/installed" : "plugin/list"
+      ) as CodexPluginMetadataMethod<QueryKind>;
+      const response = await params.request(method, params.requestParams);
       // Settled snapshots survive until install invalidation, identity change,
       // TTL expiry, restart, or test reset — never a per-turn refresh.
       if (
         generation === (this.generations.get(params.appCacheKey) ?? 0) &&
         clearGeneration === this.clearGeneration &&
-        !hasMarketplaceLoadErrors(response) &&
+        response.marketplaceLoadErrors.length === 0 &&
         (params.cacheable?.(response) ?? true)
       ) {
         this.entries.set(entryKey, {
-          snapshot,
+          appCacheKey: params.appCacheKey,
+          response,
           expiresAtMs: this.nowMs() + CODEX_PLUGIN_METADATA_CACHE_TTL_MS,
         });
       }
-      return snapshot;
+      return response;
     })();
     this.inFlight.set(entryKey, { appCacheKey: params.appCacheKey, promise });
     try {
@@ -127,17 +143,13 @@ export class CodexPluginMetadataCache {
     }
   }
 
-  /** Invalidates all plugin metadata queries for one app-server runtime. */
   invalidate(appCacheKey: string): void {
     this.generations.set(appCacheKey, (this.generations.get(appCacheKey) ?? 0) + 1);
-    for (const [entryKey, entry] of this.entries) {
-      if (entry.snapshot.appCacheKey === appCacheKey) {
-        this.entries.delete(entryKey);
-      }
-    }
-    for (const [entryKey, pending] of this.inFlight) {
-      if (pending.appCacheKey === appCacheKey) {
-        this.inFlight.delete(entryKey);
+    for (const cache of [this.entries, this.inFlight]) {
+      for (const [entryKey, entry] of cache) {
+        if (entry.appCacheKey === appCacheKey) {
+          cache.delete(entryKey);
+        }
       }
     }
   }
@@ -151,16 +163,24 @@ export class CodexPluginMetadataCache {
   }
 }
 
-/** Shared plugin metadata cache used by Codex app-server runtime paths. */
 export const defaultCodexPluginMetadataCache = new CodexPluginMetadataCache();
-
-function hasMarketplaceLoadErrors(response: v2.PluginListResponse): boolean {
-  return (response.marketplaceLoadErrors?.length ?? 0) > 0;
-}
 
 function buildMetadataCacheEntryKey(
   appCacheKey: string,
   queryKind: CodexPluginMetadataQueryKind,
+  requestParams?: v2.PluginListParams | v2.PluginInstalledParams,
+  catalogScope?: string,
 ): string {
-  return JSON.stringify([appCacheKey, queryKind]);
+  // Workspace roots, catalog kinds, and install suggestions each scope discovery.
+  const names =
+    queryKind === "installed"
+      ? (requestParams as v2.PluginInstalledParams | undefined)?.installSuggestionPluginNames
+      : (requestParams as v2.PluginListParams | undefined)?.marketplaceKinds;
+  return JSON.stringify([
+    appCacheKey,
+    queryKind,
+    requestParams?.cwds ?? [],
+    Array.from(new Set(names ?? [])).toSorted(),
+    ...(queryKind !== "installed" && catalogScope ? [catalogScope] : []),
+  ]);
 }

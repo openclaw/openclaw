@@ -1,89 +1,31 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString as normalizeTrimmedString } from "@openclaw/normalization-core/string-coerce";
+import type {
+  DoctorMemoryDreamActionPayload,
+  DoctorMemoryDreamDiaryPayload,
+  DoctorMemoryStatusPayload,
+} from "../../../../../src/gateway/server-methods/doctor.ts";
+import { defaultSlotIdForKey, resolveSlotSelection } from "../../../../../src/plugins/slots.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../../api/gateway.ts";
 import type { ConfigSnapshot } from "../../../api/types.ts";
+import { t } from "../../../i18n/index.ts";
+import { registerDreamingEnglish } from "../../../i18n/locales/en-dreaming.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
-import type { RuntimeConfigCapability } from "../../../lib/config/index.ts";
-import { isGatewayMethodAdvertised } from "../../../lib/gateway-methods.ts";
+import type { RuntimeConfigCapability } from "../../../lib/config/runtime-config-capability.ts";
+import { formatUiError } from "../../../lib/format-error.ts";
+import {
+  canCallGatewayMethod,
+  isGatewayMethodAdvertised,
+  type GatewayMethodOperatorScope,
+} from "../../../lib/gateway-methods.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../../lib/plugin-activation.ts";
 
-const DEFAULT_DREAM_DIARY_PATH = "DREAMS.md";
-const DEFAULT_DREAMING_PLUGIN_ID = "memory-core";
+registerDreamingEnglish();
+
 const MEMORY_WIKI_PLUGIN_ID = "memory-wiki";
 
-type DreamingPhaseStatusBase = {
-  enabled: boolean;
-  cron: string;
-  managedCronPresent: boolean;
-  nextRunAtMs?: number;
-};
-
-type LightDreamingStatus = DreamingPhaseStatusBase & {
-  lookbackDays: number;
-  limit: number;
-};
-
-type DeepDreamingStatus = DreamingPhaseStatusBase & {
-  limit: number;
-  minScore: number;
-  minRecallCount: number;
-  minUniqueQueries: number;
-  recencyHalfLifeDays: number;
-  maxAgeDays?: number;
-  maxPromotedSnippetTokens?: number;
-};
-
-type RemDreamingStatus = DreamingPhaseStatusBase & {
-  lookbackDays: number;
-  limit: number;
-  minPatternStrength: number;
-};
-
-export type DreamingEntry = {
-  key: string;
-  path: string;
-  startLine: number;
-  endLine: number;
-  snippet: string;
-  recallCount: number;
-  dailyCount: number;
-  groundedCount: number;
-  totalSignalCount: number;
-  lightHits: number;
-  remHits: number;
-  phaseHitCount: number;
-  promotedAt?: string;
-  lastRecalledAt?: string;
-};
-
-type DreamingStatus = {
-  enabled: boolean;
-  timezone?: string;
-  verboseLogging: boolean;
-  storageMode: "inline" | "separate" | "both";
-  separateReports: boolean;
-  shortTermCount: number;
-  recallSignalCount: number;
-  dailySignalCount: number;
-  groundedSignalCount: number;
-  totalSignalCount: number;
-  phaseSignalCount: number;
-  lightPhaseHitCount: number;
-  remPhaseHitCount: number;
-  promotedTotal: number;
-  promotedToday: number;
-  storePath?: string;
-  phaseSignalPath?: string;
-  storeError?: string;
-  phaseSignalError?: string;
-  shortTermEntries: DreamingEntry[];
-  signalEntries: DreamingEntry[];
-  promotedEntries: DreamingEntry[];
-  phases?: {
-    light: LightDreamingStatus;
-    deep: DeepDreamingStatus;
-    rem: RemDreamingStatus;
-  };
-};
+type DreamingStatus = NonNullable<DoctorMemoryStatusPayload["dreaming"]>;
+export type DreamingEntry = DreamingStatus["shortTermEntries"][number];
 
 type WikiImportInsightItem = {
   pagePath: string;
@@ -124,9 +66,10 @@ export type WikiImportInsights = {
   totalItems: number;
   totalClusters: number;
   clusters: WikiImportInsightCluster[];
+  truncated: boolean;
 };
 
-type WikiMemoryPalaceItem = {
+type WikiOverviewItem = {
   pagePath: string;
   title: string;
   kind: "entity" | "concept" | "source" | "synthesis" | "report";
@@ -142,90 +85,58 @@ type WikiMemoryPalaceItem = {
   snippet?: string;
 };
 
-type WikiMemoryPalaceCluster = {
-  key: WikiMemoryPalaceItem["kind"];
+type WikiOverviewCluster = {
+  key: WikiOverviewItem["kind"];
   label: string;
   itemCount: number;
   claimCount: number;
   questionCount: number;
   contradictionCount: number;
   updatedAt?: string;
-  items: WikiMemoryPalaceItem[];
+  items: WikiOverviewItem[];
 };
 
-type WikiMemoryPalacePageCounts = Record<WikiMemoryPalaceItem["kind"], number>;
+type WikiOverviewPageCounts = Record<WikiOverviewItem["kind"], number>;
 
-export type WikiMemoryPalace = {
+export type WikiOverview = {
   totalItems: number;
   totalPages: number;
-  pageCounts: WikiMemoryPalacePageCounts;
+  pageCounts: WikiOverviewPageCounts;
   totalClaims: number;
   totalQuestions: number;
   totalContradictions: number;
-  clusters: WikiMemoryPalaceCluster[];
+  clusters: WikiOverviewCluster[];
+  truncated: boolean;
 };
 
-type DoctorMemoryStatusPayload = {
-  dreaming?: unknown;
+export type WikiPagePreview = {
+  title: string;
+  path: string;
+  content: string;
+  totalLines?: number;
+  truncated?: boolean;
+  updatedAt?: string;
 };
 
-type DoctorMemoryDreamDiaryPayload = {
-  found?: unknown;
-  path?: unknown;
-  content?: unknown;
-};
-
-type DoctorMemoryDreamActionPayload = {
-  action?: unknown;
-  removedEntries?: unknown;
-  dedupedEntries?: unknown;
-  keptEntries?: unknown;
-  written?: unknown;
-  replaced?: unknown;
-  removedShortTermEntries?: unknown;
-  changed?: unknown;
-  archiveDir?: unknown;
-  archivedSessionCorpus?: unknown;
-  archivedSessionIngestion?: unknown;
-  archivedDreamsDiary?: unknown;
-  warnings?: unknown;
-};
-
-type WikiImportInsightsPayload = {
-  sourceType?: unknown;
-  totalItems?: unknown;
-  totalClusters?: unknown;
-  clusters?: unknown;
-};
-
-type WikiMemoryPalacePayload = {
-  totalItems?: unknown;
-  totalPages?: unknown;
-  pageCounts?: unknown;
-  totalClaims?: unknown;
-  totalQuestions?: unknown;
-  totalContradictions?: unknown;
-  clusters?: unknown;
-};
+export type DreamingResourceKey =
+  | "dreamingStatus"
+  | "dreamDiary"
+  | "wikiImportInsights"
+  | "wikiOverview";
+type DreamingResourceRequest = { agentId: string };
 
 export type DreamingState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   hello: GatewayHelloOk | null;
   configSnapshot: ConfigSnapshot | null;
-  applySessionKey: string;
   selectedAgentId: string | null;
-  dreamingStatusRequestAgentId?: string | null;
-  dreamingStatusRequestGeneration?: number;
-  dreamingStatusActiveRequestGeneration?: number | null;
+  resourceRequests: Partial<Record<DreamingResourceKey, DreamingResourceRequest>>;
   dreamingStatusAgentId?: string | null;
   dreamingStatusLoading: boolean;
   dreamingStatusError: string | null;
   dreamingStatus: DreamingStatus | null;
   dreamingModeSaving: boolean;
-  dreamDiaryRequestAgentId?: string | null;
-  dreamDiaryRequestGeneration?: number;
-  dreamDiaryActiveRequestGeneration?: number | null;
   dreamDiaryAgentId?: string | null;
   dreamDiaryLoading: boolean;
   dreamDiaryActionLoading: boolean;
@@ -234,31 +145,20 @@ export type DreamingState = {
   dreamDiaryError: string | null;
   dreamDiaryPath: string | null;
   dreamDiaryContent: string | null;
-  // Agent switches can overlap RPCs; generations keep an old A -> B -> A response
-  // from replacing the current agent's wiki data.
-  wikiImportInsightsRequestAgentId?: string | null;
-  wikiImportInsightsRequestGeneration?: number;
-  wikiImportInsightsActiveRequestGeneration?: number | null;
   wikiImportInsightsAgentId?: string | null;
   wikiImportInsightsLoading: boolean;
   wikiImportInsightsError: string | null;
   wikiImportInsights: WikiImportInsights | null;
-  wikiMemoryPalaceRequestAgentId?: string | null;
-  wikiMemoryPalaceRequestGeneration?: number;
-  wikiMemoryPalaceActiveRequestGeneration?: number | null;
-  wikiMemoryPalaceAgentId?: string | null;
-  wikiMemoryPalaceLoading: boolean;
-  wikiMemoryPalaceError: string | null;
-  wikiMemoryPalace: WikiMemoryPalace | null;
+  wikiOverviewAgentId?: string | null;
+  wikiOverviewLoading: boolean;
+  wikiOverviewError: string | null;
+  wikiOverview: WikiOverview | null;
   lastError: string | null;
 };
 
 export function createDreamingState(
   initial: Partial<
-    Pick<
-      DreamingState,
-      "client" | "connected" | "hello" | "configSnapshot" | "applySessionKey" | "selectedAgentId"
-    >
+    Pick<DreamingState, "client" | "connected" | "hello" | "configSnapshot" | "selectedAgentId">
   > = {},
 ): DreamingState {
   return {
@@ -266,8 +166,8 @@ export function createDreamingState(
     connected: initial.connected ?? false,
     hello: initial.hello ?? null,
     configSnapshot: initial.configSnapshot ?? null,
-    applySessionKey: initial.applySessionKey ?? "main",
     selectedAgentId: initial.selectedAgentId ?? null,
+    resourceRequests: {},
     dreamingStatusLoading: false,
     dreamingStatusError: null,
     dreamingStatus: null,
@@ -282,9 +182,9 @@ export function createDreamingState(
     wikiImportInsightsLoading: false,
     wikiImportInsightsError: null,
     wikiImportInsights: null,
-    wikiMemoryPalaceLoading: false,
-    wikiMemoryPalaceError: null,
-    wikiMemoryPalace: null,
+    wikiOverviewLoading: false,
+    wikiOverviewError: null,
+    wikiOverview: null,
     lastError: null,
   };
 }
@@ -294,795 +194,250 @@ type DreamingConfigCapability = Pick<
   "lookupSchemaPath" | "patch" | "state"
 >;
 
-function confirmDreamingAction(message: string): boolean {
-  if (typeof globalThis.confirm !== "function") {
-    return true;
-  }
-  return globalThis.confirm(message);
-}
-
-function isMemoryWikiEnabled(state: DreamingState): boolean {
-  return isPluginEnabledInConfigSnapshot(state.configSnapshot, MEMORY_WIKI_PLUGIN_ID, {
-    enabledByDefault: false,
-  });
-}
-
 function canCallMemoryWikiMethod(state: DreamingState, method: string): boolean {
-  const available = isGatewayMethodAdvertised(state, method);
-  if (available !== null) {
-    return available;
-  }
-  return isMemoryWikiEnabled(state);
+  return (
+    isGatewayMethodAdvertised(state, method) ??
+    isPluginEnabledInConfigSnapshot(state.configSnapshot, MEMORY_WIKI_PLUGIN_ID, {
+      enabledByDefault: false,
+    })
+  );
 }
+
+export function canCallDreamingMethod(
+  state: DreamingState,
+  method: string,
+  requiredScope: GatewayMethodOperatorScope,
+  options?: { requireAdvertisement?: boolean },
+): boolean {
+  return canCallGatewayMethod(
+    {
+      client: state.client,
+      hello: state.hello,
+      phase: state.connected ? "connected" : "offline",
+    },
+    method,
+    requiredScope,
+    options,
+  );
+}
+
+export type DreamDiaryActionMethod =
+  | "doctor.memory.backfillDreamDiary"
+  | "doctor.memory.resetDreamDiary"
+  | "doctor.memory.resetGroundedShortTerm"
+  | "doctor.memory.repairDreamingArtifacts"
+  | "doctor.memory.dedupeDreamDiary";
 
 function buildDreamDiaryActionSuccessMessage(
-  method:
-    | "doctor.memory.backfillDreamDiary"
-    | "doctor.memory.resetDreamDiary"
-    | "doctor.memory.resetGroundedShortTerm"
-    | "doctor.memory.repairDreamingArtifacts"
-    | "doctor.memory.dedupeDreamDiary",
+  method: DreamDiaryActionMethod,
   payload: DoctorMemoryDreamActionPayload | undefined,
 ): string {
   switch (method) {
     case "doctor.memory.dedupeDreamDiary": {
-      const removed =
-        typeof payload?.dedupedEntries === "number"
-          ? payload.dedupedEntries
-          : typeof payload?.removedEntries === "number"
-            ? payload.removedEntries
-            : 0;
-      const kept = typeof payload?.keptEntries === "number" ? payload.keptEntries : undefined;
-      return kept !== undefined
-        ? `Removed ${removed} duplicate dream ${removed === 1 ? "entry" : "entries"} and kept ${kept}.`
-        : `Removed ${removed} duplicate dream ${removed === 1 ? "entry" : "entries"}.`;
+      const removed = payload?.dedupedEntries ?? payload?.removedEntries ?? 0;
+      const kept = payload?.keptEntries;
+      return t(
+        `dreaming.actions.dedupeRemoved${removed === 1 ? "One" : "Many"}${kept === undefined ? "" : "AndKept"}`,
+        { removed: String(removed), ...(kept === undefined ? {} : { kept: String(kept) }) },
+      );
     }
     case "doctor.memory.repairDreamingArtifacts": {
-      const actions: string[] = [];
       const archiveDir = normalizeTrimmedString(payload?.archiveDir);
-      if (payload?.archivedSessionCorpus === true) {
-        actions.push("archived session corpus");
-      }
-      if (payload?.archivedSessionIngestion === true) {
-        actions.push("archived ingestion state");
-      }
-      if (payload?.archivedDreamsDiary === true) {
-        actions.push("archived dream diary");
-      }
+      const actions = (
+        [
+          [payload?.archivedSessionCorpus, "dreaming.actions.repairArchivedThreadCorpus"],
+          [payload?.archivedSessionIngestion, "dreaming.actions.repairArchivedIngestionState"],
+          [payload?.archivedDreamsDiary, "dreaming.actions.repairArchivedDreamDiary"],
+        ] as const
+      )
+        .filter(([archived]) => archived === true)
+        .map(([, label]) => t(label));
       if (actions.length === 0) {
-        return "Dream cache repair finished with no changes.";
+        return t("dreaming.actions.repairNoChanges");
       }
       return archiveDir
-        ? `Dream cache repair complete: ${actions.join(", ")}. Archive: ${archiveDir}`
-        : `Dream cache repair complete: ${actions.join(", ")}.`;
+        ? t("dreaming.actions.repairCompleteWithArchive", {
+            actions: actions.join(", "),
+            archiveDir,
+          })
+        : t("dreaming.actions.repairComplete", { actions: actions.join(", ") });
     }
     case "doctor.memory.backfillDreamDiary":
-      return `Backfilled ${typeof payload?.written === "number" ? payload.written : 0} dream diary entries.`;
+      return t("dreaming.actions.backfillComplete", {
+        count: String(payload?.written ?? 0),
+      });
     case "doctor.memory.resetDreamDiary":
-      return `Removed ${typeof payload?.removedEntries === "number" ? payload.removedEntries : 0} backfilled dream diary entries.`;
-    case "doctor.memory.resetGroundedShortTerm":
-      return `Cleared ${typeof payload?.removedShortTermEntries === "number" ? payload.removedShortTermEntries : 0} replayed short-term entries.`;
+      return t("dreaming.actions.resetDiaryComplete", {
+        count: String(payload?.removedEntries ?? 0),
+      });
+    default:
+      return t("dreaming.actions.clearReplayedComplete", {
+        count: String(payload?.removedShortTermEntries ?? 0),
+      });
   }
-  return "Dream diary action complete.";
-}
-
-function normalizeTrimmedString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 function resolveSelectedAgentId(state: DreamingState): string | null {
   return normalizeTrimmedString(state.selectedAgentId) ?? null;
 }
 
-function buildSelectedAgentPayloadForAgentId(
-  agentId: string | null,
-): { agentId: string } | Record<string, never> {
-  return agentId ? { agentId } : {};
-}
-
-function buildSelectedAgentPayload(
-  state: DreamingState,
-): { agentId: string } | Record<string, never> {
-  return buildSelectedAgentPayloadForAgentId(resolveSelectedAgentId(state));
-}
-
-function normalizeBoolean(value: unknown, fallback = false): boolean {
-  return typeof value === "boolean" ? value : fallback;
-}
-
-function normalizeFiniteInt(value: unknown, fallback = 0): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return fallback;
-  }
-  return Math.max(0, Math.floor(value));
-}
-
-function normalizeFiniteScore(value: unknown, fallback = 0): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return fallback;
-  }
-  return Math.max(0, Math.min(1, value));
-}
-
-function normalizeStorageMode(value: unknown): DreamingStatus["storageMode"] {
-  const normalized = normalizeTrimmedString(value)?.toLowerCase();
-  if (normalized === "inline" || normalized === "separate" || normalized === "both") {
-    return normalized;
-  }
-  return "inline";
-}
-
-function normalizeNextRun(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function normalizePhaseStatusBase(record: Record<string, unknown> | null): DreamingPhaseStatusBase {
-  return {
-    enabled: normalizeBoolean(record?.enabled, false),
-    cron: normalizeTrimmedString(record?.cron) ?? "",
-    managedCronPresent: normalizeBoolean(record?.managedCronPresent, false),
-    ...(normalizeNextRun(record?.nextRunAtMs) !== undefined
-      ? { nextRunAtMs: normalizeNextRun(record?.nextRunAtMs) }
-      : {}),
-  };
-}
-
-function resolveDreamingPluginId(configValue: Record<string, unknown> | null): string {
-  const plugins = asRecord(configValue?.plugins);
-  const slots = asRecord(plugins?.slots);
-  const configuredSlot = normalizeTrimmedString(slots?.memory);
-  if (configuredSlot && configuredSlot.toLowerCase() !== "none") {
-    return configuredSlot;
-  }
-  return DEFAULT_DREAMING_PLUGIN_ID;
-}
-
 export function resolveConfiguredDreaming(configValue: Record<string, unknown> | null): {
   pluginId: string;
   enabled: boolean;
+  overridden: boolean;
+  engineOff: boolean;
 } {
-  const pluginId = resolveDreamingPluginId(configValue);
   const plugins = asRecord(configValue?.plugins);
+  const slots = asRecord(plugins?.slots);
+  const slotSelection = resolveSlotSelection("memory", slots?.memory);
+  const pluginId =
+    slotSelection.kind === "off" ? defaultSlotIdForKey("memory") : slotSelection.pluginId;
   const entries = asRecord(plugins?.entries);
   const pluginEntry = asRecord(entries?.[pluginId]);
   const config = asRecord(pluginEntry?.config);
   const dreaming = asRecord(config?.dreaming);
+  const overridden = typeof dreaming?.enabled === "boolean";
   return {
     pluginId,
-    enabled: normalizeBoolean(dreaming?.enabled, false),
+    enabled: slotSelection.kind !== "off" && dreaming?.enabled !== false,
+    overridden,
+    engineOff: slotSelection.kind === "off",
   };
 }
 
-function normalizeDreamingEntry(raw: unknown): DreamingEntry | null {
-  const record = asRecord(raw);
-  const key = normalizeTrimmedString(record?.key);
-  const path = normalizeTrimmedString(record?.path);
-  const snippet = normalizeTrimmedString(record?.snippet);
-  if (!key || !path || !snippet) {
-    return null;
-  }
-  const promotedAt = normalizeTrimmedString(record?.promotedAt);
-  const lastRecalledAt = normalizeTrimmedString(record?.lastRecalledAt);
-  return {
-    key,
-    path,
-    startLine: Math.max(1, normalizeFiniteInt(record?.startLine, 1)),
-    endLine: Math.max(1, normalizeFiniteInt(record?.endLine, 1)),
-    snippet,
-    recallCount: normalizeFiniteInt(record?.recallCount, 0),
-    dailyCount: normalizeFiniteInt(record?.dailyCount, 0),
-    groundedCount: normalizeFiniteInt(record?.groundedCount, 0),
-    totalSignalCount: normalizeFiniteInt(record?.totalSignalCount, 0),
-    lightHits: normalizeFiniteInt(record?.lightHits, 0),
-    remHits: normalizeFiniteInt(record?.remHits, 0),
-    phaseHitCount: normalizeFiniteInt(record?.phaseHitCount, 0),
-    ...(promotedAt ? { promotedAt } : {}),
-    ...(lastRecalledAt ? { lastRecalledAt } : {}),
-  };
-}
+type DreamingResourcePayloads = {
+  dreamingStatus: DoctorMemoryStatusPayload;
+  dreamDiary: DoctorMemoryDreamDiaryPayload;
+  wikiImportInsights: WikiImportInsights;
+  wikiOverview: WikiOverview;
+};
 
-function normalizeDreamingEntries(raw: unknown): DreamingEntry[] {
-  if (!Array.isArray(raw)) {
-    return [];
-  }
-  return raw
-    .map((entry) => normalizeDreamingEntry(entry))
-    .filter((entry): entry is DreamingEntry => entry !== null);
-}
+type DreamingResourceSpec<Key extends DreamingResourceKey> = {
+  method: string;
+  clear: (state: DreamingState) => void;
+  apply: (state: DreamingState, payload: DreamingResourcePayloads[Key]) => void;
+};
 
-function normalizeStringArray(raw: unknown): string[] {
-  if (!Array.isArray(raw)) {
-    return [];
-  }
-  return raw.filter(
-    (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
-  );
-}
-
-function normalizeWikiImportInsightItem(raw: unknown): WikiImportInsightItem | null {
-  const record = asRecord(raw);
-  const pagePath = normalizeTrimmedString(record?.pagePath);
-  const title = normalizeTrimmedString(record?.title);
-  const riskLevel = normalizeTrimmedString(record?.riskLevel);
-  const topicKey = normalizeTrimmedString(record?.topicKey);
-  const topicLabel = normalizeTrimmedString(record?.topicLabel);
-  const digestStatus = normalizeTrimmedString(record?.digestStatus);
-  const summary = normalizeTrimmedString(record?.summary);
-  if (
-    !pagePath ||
-    !title ||
-    !topicKey ||
-    !topicLabel ||
-    !summary ||
-    (riskLevel !== "low" &&
-      riskLevel !== "medium" &&
-      riskLevel !== "high" &&
-      riskLevel !== "unknown") ||
-    (digestStatus !== "available" && digestStatus !== "withheld")
-  ) {
-    return null;
-  }
-  return {
-    pagePath,
-    title,
-    riskLevel,
-    riskReasons: normalizeStringArray(record?.riskReasons),
-    labels: normalizeStringArray(record?.labels),
-    topicKey,
-    topicLabel,
-    digestStatus,
-    activeBranchMessages: normalizeFiniteInt(record?.activeBranchMessages, 0),
-    userMessageCount: normalizeFiniteInt(record?.userMessageCount, 0),
-    assistantMessageCount: normalizeFiniteInt(record?.assistantMessageCount, 0),
-    ...(normalizeTrimmedString(record?.firstUserLine)
-      ? { firstUserLine: normalizeTrimmedString(record?.firstUserLine) }
-      : {}),
-    ...(normalizeTrimmedString(record?.lastUserLine)
-      ? { lastUserLine: normalizeTrimmedString(record?.lastUserLine) }
-      : {}),
-    ...(normalizeTrimmedString(record?.assistantOpener)
-      ? { assistantOpener: normalizeTrimmedString(record?.assistantOpener) }
-      : {}),
-    summary,
-    candidateSignals: normalizeStringArray(record?.candidateSignals),
-    correctionSignals: normalizeStringArray(record?.correctionSignals),
-    preferenceSignals: normalizeStringArray(record?.preferenceSignals),
-    ...(normalizeTrimmedString(record?.createdAt)
-      ? { createdAt: normalizeTrimmedString(record?.createdAt) }
-      : {}),
-    ...(normalizeTrimmedString(record?.updatedAt)
-      ? { updatedAt: normalizeTrimmedString(record?.updatedAt) }
-      : {}),
-  };
-}
-
-function normalizeWikiImportInsightCluster(raw: unknown): WikiImportInsightCluster | null {
-  const record = asRecord(raw);
-  const key = normalizeTrimmedString(record?.key);
-  const label = normalizeTrimmedString(record?.label);
-  if (!key || !label) {
-    return null;
-  }
-  const items = Array.isArray(record?.items)
-    ? record.items
-        .map((entry) => normalizeWikiImportInsightItem(entry))
-        .filter((entry): entry is WikiImportInsightItem => entry !== null)
-    : [];
-  return {
-    key,
-    label,
-    itemCount: normalizeFiniteInt(record?.itemCount, items.length),
-    highRiskCount: normalizeFiniteInt(
-      record?.highRiskCount,
-      items.filter((entry) => entry.riskLevel === "high").length,
-    ),
-    withheldCount: normalizeFiniteInt(
-      record?.withheldCount,
-      items.filter((entry) => entry.digestStatus === "withheld").length,
-    ),
-    preferenceSignalCount: normalizeFiniteInt(
-      record?.preferenceSignalCount,
-      items.reduce((sum, entry) => sum + entry.preferenceSignals.length, 0),
-    ),
-    ...(normalizeTrimmedString(record?.updatedAt)
-      ? { updatedAt: normalizeTrimmedString(record?.updatedAt) }
-      : {}),
-    items,
-  };
-}
-
-function normalizeWikiImportInsights(raw: unknown): WikiImportInsights {
-  const record = asRecord(raw);
-  const clusters = Array.isArray(record?.clusters)
-    ? record.clusters
-        .map((entry) => normalizeWikiImportInsightCluster(entry))
-        .filter((entry): entry is WikiImportInsightCluster => entry !== null)
-    : [];
-  return {
-    sourceType: record?.sourceType === "chatgpt" ? "chatgpt" : "chatgpt",
-    totalItems: normalizeFiniteInt(
-      record?.totalItems,
-      clusters.reduce((sum, cluster) => sum + cluster.itemCount, 0),
-    ),
-    totalClusters: normalizeFiniteInt(record?.totalClusters, clusters.length),
-    clusters,
-  };
-}
-
-function normalizeWikiPageKind(value: unknown): WikiMemoryPalaceItem["kind"] | undefined {
-  return value === "entity" ||
-    value === "concept" ||
-    value === "source" ||
-    value === "synthesis" ||
-    value === "report"
-    ? value
-    : undefined;
-}
-
-function createEmptyWikiMemoryPalacePageCounts(): WikiMemoryPalacePageCounts {
-  return {
-    synthesis: 0,
-    entity: 0,
-    concept: 0,
-    source: 0,
-    report: 0,
-  };
-}
-
-function normalizeWikiMemoryPalacePageCounts(
-  raw: unknown,
-  fallback: WikiMemoryPalacePageCounts,
-): WikiMemoryPalacePageCounts {
-  const record = asRecord(raw);
-  return {
-    synthesis: normalizeFiniteInt(record?.synthesis, fallback.synthesis),
-    entity: normalizeFiniteInt(record?.entity, fallback.entity),
-    concept: normalizeFiniteInt(record?.concept, fallback.concept),
-    source: normalizeFiniteInt(record?.source, fallback.source),
-    report: normalizeFiniteInt(record?.report, fallback.report),
-  };
-}
-
-function sumWikiMemoryPalacePageCounts(pageCounts: WikiMemoryPalacePageCounts): number {
-  return (
-    pageCounts.synthesis +
-    pageCounts.entity +
-    pageCounts.concept +
-    pageCounts.source +
-    pageCounts.report
-  );
-}
-
-function normalizeWikiMemoryPalaceItem(raw: unknown): WikiMemoryPalaceItem | null {
-  const record = asRecord(raw);
-  const pagePath = normalizeTrimmedString(record?.pagePath);
-  const title = normalizeTrimmedString(record?.title);
-  const kind = normalizeWikiPageKind(record?.kind);
-  if (!pagePath || !title || !kind) {
-    return null;
-  }
-  return {
-    pagePath,
-    title,
-    kind,
-    ...(normalizeTrimmedString(record?.id) ? { id: normalizeTrimmedString(record?.id) } : {}),
-    ...(normalizeTrimmedString(record?.updatedAt)
-      ? { updatedAt: normalizeTrimmedString(record?.updatedAt) }
-      : {}),
-    ...(normalizeTrimmedString(record?.sourceType)
-      ? { sourceType: normalizeTrimmedString(record?.sourceType) }
-      : {}),
-    claimCount: normalizeFiniteInt(record?.claimCount, 0),
-    questionCount: normalizeFiniteInt(record?.questionCount, 0),
-    contradictionCount: normalizeFiniteInt(record?.contradictionCount, 0),
-    claims: normalizeStringArray(record?.claims),
-    questions: normalizeStringArray(record?.questions),
-    contradictions: normalizeStringArray(record?.contradictions),
-    ...(normalizeTrimmedString(record?.snippet)
-      ? { snippet: normalizeTrimmedString(record?.snippet) }
-      : {}),
-  };
-}
-
-function normalizeWikiMemoryPalaceCluster(raw: unknown): WikiMemoryPalaceCluster | null {
-  const record = asRecord(raw);
-  const key = normalizeWikiPageKind(record?.key);
-  const label = normalizeTrimmedString(record?.label);
-  if (!key || !label) {
-    return null;
-  }
-  const items = Array.isArray(record?.items)
-    ? record.items
-        .map((entry) => normalizeWikiMemoryPalaceItem(entry))
-        .filter((entry): entry is WikiMemoryPalaceItem => entry !== null)
-    : [];
-  return {
-    key,
-    label,
-    itemCount: normalizeFiniteInt(record?.itemCount, items.length),
-    claimCount: normalizeFiniteInt(
-      record?.claimCount,
-      items.reduce((sum, item) => sum + item.claimCount, 0),
-    ),
-    questionCount: normalizeFiniteInt(
-      record?.questionCount,
-      items.reduce((sum, item) => sum + item.questionCount, 0),
-    ),
-    contradictionCount: normalizeFiniteInt(
-      record?.contradictionCount,
-      items.reduce((sum, item) => sum + item.contradictionCount, 0),
-    ),
-    ...(normalizeTrimmedString(record?.updatedAt)
-      ? { updatedAt: normalizeTrimmedString(record?.updatedAt) }
-      : {}),
-    items,
-  };
-}
-
-function normalizeWikiMemoryPalace(raw: unknown): WikiMemoryPalace {
-  const record = asRecord(raw);
-  const clusters = Array.isArray(record?.clusters)
-    ? record.clusters
-        .map((entry) => normalizeWikiMemoryPalaceCluster(entry))
-        .filter((entry): entry is WikiMemoryPalaceCluster => entry !== null)
-    : [];
-  const totalItems = normalizeFiniteInt(
-    record?.totalItems,
-    clusters.reduce((sum, cluster) => sum + cluster.itemCount, 0),
-  );
-  const fallbackPageCounts = createEmptyWikiMemoryPalacePageCounts();
-  for (const cluster of clusters) {
-    fallbackPageCounts[cluster.key] += cluster.itemCount;
-  }
-  const pageCounts = normalizeWikiMemoryPalacePageCounts(record?.pageCounts, fallbackPageCounts);
-  const fallbackTotalPages = sumWikiMemoryPalacePageCounts(pageCounts) || totalItems;
-  return {
-    totalItems,
-    totalPages: normalizeFiniteInt(record?.totalPages, fallbackTotalPages),
-    pageCounts,
-    totalClaims: normalizeFiniteInt(
-      record?.totalClaims,
-      clusters.reduce((sum, cluster) => sum + cluster.claimCount, 0),
-    ),
-    totalQuestions: normalizeFiniteInt(
-      record?.totalQuestions,
-      clusters.reduce((sum, cluster) => sum + cluster.questionCount, 0),
-    ),
-    totalContradictions: normalizeFiniteInt(
-      record?.totalContradictions,
-      clusters.reduce((sum, cluster) => sum + cluster.contradictionCount, 0),
-    ),
-    clusters,
-  };
-}
-
-function normalizeDreamingStatus(raw: unknown): DreamingStatus | null {
-  const record = asRecord(raw);
-  if (!record) {
-    return null;
-  }
-  const phasesRecord = asRecord(record.phases);
-  const lightRecord = asRecord(phasesRecord?.light);
-  const deepRecord = asRecord(phasesRecord?.deep);
-  const remRecord = asRecord(phasesRecord?.rem);
-  const phases =
-    lightRecord && deepRecord && remRecord
-      ? {
-          light: {
-            ...normalizePhaseStatusBase(lightRecord),
-            lookbackDays: normalizeFiniteInt(lightRecord.lookbackDays, 0),
-            limit: normalizeFiniteInt(lightRecord.limit, 0),
-          },
-          deep: {
-            ...normalizePhaseStatusBase(deepRecord),
-            limit: normalizeFiniteInt(deepRecord.limit, 0),
-            minScore: normalizeFiniteScore(deepRecord.minScore, 0),
-            minRecallCount: normalizeFiniteInt(deepRecord.minRecallCount, 0),
-            minUniqueQueries: normalizeFiniteInt(deepRecord.minUniqueQueries, 0),
-            recencyHalfLifeDays: normalizeFiniteInt(deepRecord.recencyHalfLifeDays, 0),
-            ...(typeof deepRecord.maxAgeDays === "number" && Number.isFinite(deepRecord.maxAgeDays)
-              ? { maxAgeDays: normalizeFiniteInt(deepRecord.maxAgeDays, 0) }
-              : {}),
-            ...(typeof deepRecord.maxPromotedSnippetTokens === "number" &&
-            Number.isFinite(deepRecord.maxPromotedSnippetTokens)
-              ? {
-                  maxPromotedSnippetTokens: normalizeFiniteInt(
-                    deepRecord.maxPromotedSnippetTokens,
-                    0,
-                  ),
-                }
-              : {}),
-          },
-          rem: {
-            ...normalizePhaseStatusBase(remRecord),
-            lookbackDays: normalizeFiniteInt(remRecord.lookbackDays, 0),
-            limit: normalizeFiniteInt(remRecord.limit, 0),
-            minPatternStrength: normalizeFiniteScore(remRecord.minPatternStrength, 0),
-          },
-        }
-      : undefined;
-  const timezone = normalizeTrimmedString(record.timezone);
-  const storePath = normalizeTrimmedString(record.storePath);
-  const phaseSignalPath = normalizeTrimmedString(record.phaseSignalPath);
-  const storeError = normalizeTrimmedString(record.storeError);
-  const phaseSignalError = normalizeTrimmedString(record.phaseSignalError);
-
-  return {
-    enabled: normalizeBoolean(record.enabled, false),
-    ...(timezone ? { timezone } : {}),
-    verboseLogging: normalizeBoolean(record.verboseLogging, false),
-    storageMode: normalizeStorageMode(record.storageMode),
-    separateReports: normalizeBoolean(record.separateReports, false),
-    shortTermCount: normalizeFiniteInt(record.shortTermCount, 0),
-    recallSignalCount: normalizeFiniteInt(record.recallSignalCount, 0),
-    dailySignalCount: normalizeFiniteInt(record.dailySignalCount, 0),
-    groundedSignalCount: normalizeFiniteInt(record.groundedSignalCount, 0),
-    totalSignalCount: normalizeFiniteInt(record.totalSignalCount, 0),
-    phaseSignalCount: normalizeFiniteInt(record.phaseSignalCount, 0),
-    lightPhaseHitCount: normalizeFiniteInt(record.lightPhaseHitCount, 0),
-    remPhaseHitCount: normalizeFiniteInt(record.remPhaseHitCount, 0),
-    promotedTotal: normalizeFiniteInt(record.promotedTotal, 0),
-    promotedToday: normalizeFiniteInt(record.promotedToday, 0),
-    ...(storePath ? { storePath } : {}),
-    ...(phaseSignalPath ? { phaseSignalPath } : {}),
-    ...(storeError ? { storeError } : {}),
-    ...(phaseSignalError ? { phaseSignalError } : {}),
-    shortTermEntries: normalizeDreamingEntries(record.shortTermEntries),
-    signalEntries: normalizeDreamingEntries(record.signalEntries),
-    promotedEntries: normalizeDreamingEntries(record.promotedEntries),
-    ...(phases ? { phases } : {}),
-  };
-}
-
-export async function loadDreamingStatus(state: DreamingState): Promise<void> {
-  if (!state.client || !state.connected) {
-    return;
-  }
-  const agentId = resolveSelectedAgentId(state);
-  if (state.dreamingStatusLoading && state.dreamingStatusRequestAgentId === agentId) {
-    return;
-  }
-  if (state.dreamingStatusAgentId !== agentId) {
-    state.dreamingStatus = null;
-  }
-  const requestGeneration = (state.dreamingStatusRequestGeneration ?? 0) + 1;
-  state.dreamingStatusRequestGeneration = requestGeneration;
-  state.dreamingStatusActiveRequestGeneration = requestGeneration;
-  state.dreamingStatusRequestAgentId = agentId;
-  state.dreamingStatusLoading = true;
-  state.dreamingStatusError = null;
-  try {
-    const payload = await state.client.request<DoctorMemoryStatusPayload>(
-      "doctor.memory.status",
-      buildSelectedAgentPayloadForAgentId(agentId),
-    );
-    if (
-      state.dreamingStatusActiveRequestGeneration !== requestGeneration ||
-      state.dreamingStatusRequestAgentId !== agentId ||
-      resolveSelectedAgentId(state) !== agentId
-    ) {
-      return;
-    }
-    state.dreamingStatus = normalizeDreamingStatus(payload?.dreaming);
-    state.dreamingStatusAgentId = agentId;
-  } catch (err) {
-    if (
-      state.dreamingStatusActiveRequestGeneration === requestGeneration &&
-      state.dreamingStatusRequestAgentId === agentId &&
-      resolveSelectedAgentId(state) === agentId
-    ) {
-      state.dreamingStatusError = String(err);
-    }
-  } finally {
-    if (state.dreamingStatusActiveRequestGeneration === requestGeneration) {
-      state.dreamingStatusLoading = false;
-      state.dreamingStatusRequestAgentId = null;
-      state.dreamingStatusActiveRequestGeneration = null;
-    }
-  }
-}
-
-export async function loadDreamDiary(state: DreamingState): Promise<void> {
-  if (!state.client || !state.connected) {
-    return;
-  }
-  const agentId = resolveSelectedAgentId(state);
-  if (state.dreamDiaryLoading && state.dreamDiaryRequestAgentId === agentId) {
-    return;
-  }
-  if (state.dreamDiaryAgentId !== agentId) {
-    state.dreamDiaryPath = null;
-    state.dreamDiaryContent = null;
-  }
-  const requestGeneration = (state.dreamDiaryRequestGeneration ?? 0) + 1;
-  state.dreamDiaryRequestGeneration = requestGeneration;
-  state.dreamDiaryActiveRequestGeneration = requestGeneration;
-  state.dreamDiaryRequestAgentId = agentId;
-  state.dreamDiaryLoading = true;
-  state.dreamDiaryError = null;
-  try {
-    const payload = await state.client.request<DoctorMemoryDreamDiaryPayload>(
-      "doctor.memory.dreamDiary",
-      buildSelectedAgentPayloadForAgentId(agentId),
-    );
-    if (
-      state.dreamDiaryActiveRequestGeneration !== requestGeneration ||
-      state.dreamDiaryRequestAgentId !== agentId ||
-      resolveSelectedAgentId(state) !== agentId
-    ) {
-      return;
-    }
-    const path = normalizeTrimmedString(payload?.path) ?? DEFAULT_DREAM_DIARY_PATH;
-    const found = payload?.found === true;
-    if (found) {
-      state.dreamDiaryPath = path;
-      state.dreamDiaryContent = typeof payload?.content === "string" ? payload.content : "";
-    } else {
-      state.dreamDiaryPath = path;
-      state.dreamDiaryContent = null;
-    }
-    state.dreamDiaryAgentId = agentId;
-  } catch (err) {
-    if (
-      state.dreamDiaryActiveRequestGeneration === requestGeneration &&
-      state.dreamDiaryRequestAgentId === agentId &&
-      resolveSelectedAgentId(state) === agentId
-    ) {
-      state.dreamDiaryError = String(err);
-    }
-  } finally {
-    if (state.dreamDiaryActiveRequestGeneration === requestGeneration) {
-      state.dreamDiaryLoading = false;
-      state.dreamDiaryRequestAgentId = null;
-      state.dreamDiaryActiveRequestGeneration = null;
-    }
-  }
-}
-
-export async function loadWikiImportInsights(state: DreamingState): Promise<void> {
-  if (!state.client || !state.connected) {
-    return;
-  }
-  const agentId = resolveSelectedAgentId(state);
-  if (state.wikiImportInsightsLoading && state.wikiImportInsightsRequestAgentId === agentId) {
-    return;
-  }
-  if (state.wikiImportInsightsAgentId !== agentId) {
-    state.wikiImportInsights = null;
-  }
-  if (!canCallMemoryWikiMethod(state, "wiki.importInsights")) {
-    state.wikiImportInsightsActiveRequestGeneration = null;
-    state.wikiImportInsightsRequestAgentId = null;
-    state.wikiImportInsightsLoading = false;
-    state.wikiImportInsights = null;
-    state.wikiImportInsightsError = null;
-    return;
-  }
-  const requestGeneration = (state.wikiImportInsightsRequestGeneration ?? 0) + 1;
-  state.wikiImportInsightsRequestGeneration = requestGeneration;
-  state.wikiImportInsightsActiveRequestGeneration = requestGeneration;
-  state.wikiImportInsightsRequestAgentId = agentId;
-  state.wikiImportInsightsLoading = true;
-  state.wikiImportInsightsError = null;
-  try {
-    const payload = await state.client.request<WikiImportInsightsPayload>(
-      "wiki.importInsights",
-      buildSelectedAgentPayloadForAgentId(agentId),
-    );
-    if (
-      state.wikiImportInsightsActiveRequestGeneration !== requestGeneration ||
-      state.wikiImportInsightsRequestAgentId !== agentId ||
-      resolveSelectedAgentId(state) !== agentId
-    ) {
-      return;
-    }
-    state.wikiImportInsights = normalizeWikiImportInsights(payload);
-    state.wikiImportInsightsAgentId = agentId;
-  } catch (err) {
-    if (
-      state.wikiImportInsightsActiveRequestGeneration === requestGeneration &&
-      state.wikiImportInsightsRequestAgentId === agentId &&
-      resolveSelectedAgentId(state) === agentId
-    ) {
-      state.wikiImportInsightsError = String(err);
-    }
-  } finally {
-    if (state.wikiImportInsightsActiveRequestGeneration === requestGeneration) {
-      state.wikiImportInsightsLoading = false;
-      state.wikiImportInsightsRequestAgentId = null;
-      state.wikiImportInsightsActiveRequestGeneration = null;
-    }
-  }
-}
-
-export async function loadWikiMemoryPalace(state: DreamingState): Promise<void> {
-  if (!state.client || !state.connected) {
-    return;
-  }
-  const agentId = resolveSelectedAgentId(state);
-  if (state.wikiMemoryPalaceLoading && state.wikiMemoryPalaceRequestAgentId === agentId) {
-    return;
-  }
-  if (state.wikiMemoryPalaceAgentId !== agentId) {
-    state.wikiMemoryPalace = null;
-  }
-  if (!canCallMemoryWikiMethod(state, "wiki.palace")) {
-    state.wikiMemoryPalaceActiveRequestGeneration = null;
-    state.wikiMemoryPalaceRequestAgentId = null;
-    state.wikiMemoryPalaceLoading = false;
-    state.wikiMemoryPalace = null;
-    state.wikiMemoryPalaceError = null;
-    return;
-  }
-  const requestGeneration = (state.wikiMemoryPalaceRequestGeneration ?? 0) + 1;
-  state.wikiMemoryPalaceRequestGeneration = requestGeneration;
-  state.wikiMemoryPalaceActiveRequestGeneration = requestGeneration;
-  state.wikiMemoryPalaceRequestAgentId = agentId;
-  state.wikiMemoryPalaceLoading = true;
-  state.wikiMemoryPalaceError = null;
-  try {
-    const payload = await state.client.request<WikiMemoryPalacePayload>(
-      "wiki.palace",
-      buildSelectedAgentPayloadForAgentId(agentId),
-    );
-    if (
-      state.wikiMemoryPalaceActiveRequestGeneration !== requestGeneration ||
-      state.wikiMemoryPalaceRequestAgentId !== agentId ||
-      resolveSelectedAgentId(state) !== agentId
-    ) {
-      return;
-    }
-    state.wikiMemoryPalace = normalizeWikiMemoryPalace(payload);
-    state.wikiMemoryPalaceAgentId = agentId;
-  } catch (err) {
-    if (
-      state.wikiMemoryPalaceActiveRequestGeneration === requestGeneration &&
-      state.wikiMemoryPalaceRequestAgentId === agentId &&
-      resolveSelectedAgentId(state) === agentId
-    ) {
-      state.wikiMemoryPalaceError = String(err);
-    }
-  } finally {
-    if (state.wikiMemoryPalaceActiveRequestGeneration === requestGeneration) {
-      state.wikiMemoryPalaceLoading = false;
-      state.wikiMemoryPalaceRequestAgentId = null;
-      state.wikiMemoryPalaceActiveRequestGeneration = null;
-    }
-  }
-}
-
-async function runDreamDiaryAction(
-  state: DreamingState,
-  method:
-    | "doctor.memory.backfillDreamDiary"
-    | "doctor.memory.resetDreamDiary"
-    | "doctor.memory.resetGroundedShortTerm"
-    | "doctor.memory.repairDreamingArtifacts"
-    | "doctor.memory.dedupeDreamDiary",
-  options?: {
-    reloadDiary?: boolean;
+const DREAMING_RESOURCES: {
+  [Key in DreamingResourceKey]: DreamingResourceSpec<Key>;
+} = {
+  dreamingStatus: {
+    method: "doctor.memory.status",
+    clear: (state) => {
+      state.dreamingStatus = null;
+    },
+    apply: (state, payload) => {
+      state.dreamingStatus = payload.dreaming ?? null;
+    },
   },
-): Promise<boolean> {
-  if (!state.client || !state.connected || state.dreamDiaryActionLoading) {
-    return false;
+  dreamDiary: {
+    method: "doctor.memory.dreamDiary",
+    clear: (state) => {
+      state.dreamDiaryPath = null;
+      state.dreamDiaryContent = null;
+    },
+    apply: (state, payload) => {
+      state.dreamDiaryPath = payload.path;
+      state.dreamDiaryContent = payload.found ? (payload.content ?? "") : null;
+    },
+  },
+  wikiImportInsights: {
+    method: "wiki.importInsights",
+    clear: (state) => {
+      state.wikiImportInsights = null;
+    },
+    apply: (state, payload) => {
+      state.wikiImportInsights = payload;
+    },
+  },
+  wikiOverview: {
+    method: "wiki.overview",
+    clear: (state) => {
+      state.wikiOverview = null;
+    },
+    apply: (state, payload) => {
+      state.wikiOverview = payload;
+    },
+  },
+};
+
+export function loadDreamingResource(
+  state: DreamingState,
+  key: DreamingResourceKey,
+): Promise<void> {
+  return loadDreamingResourceSpec(state, key, DREAMING_RESOURCES[key]);
+}
+
+async function loadDreamingResourceSpec<Key extends DreamingResourceKey>(
+  state: DreamingState,
+  key: Key,
+  spec: (typeof DREAMING_RESOURCES)[Key],
+): Promise<void> {
+  const agentId = resolveSelectedAgentId(state);
+  const loadingKey: `${Key}Loading` = `${key}Loading`;
+  const errorKey: `${Key}Error` = `${key}Error`;
+  const agentKey: `${Key}AgentId` = `${key}AgentId`;
+  if (!agentId) {
+    return;
+  }
+  const client = state.client;
+  if (!client || !state.connected) {
+    return;
+  }
+  if (state[agentKey] !== agentId) {
+    spec.clear(state);
   }
   if (
-    method === "doctor.memory.repairDreamingArtifacts" &&
-    !confirmDreamingAction(
-      "Repair Dream Cache? This archives derived dream cache files and rebuilds them from clean inputs. Your dream diary stays untouched.",
-    )
+    (key === "wikiImportInsights" || key === "wikiOverview") &&
+    !canCallMemoryWikiMethod(state, spec.method)
   ) {
-    return false;
+    delete state.resourceRequests[key];
+    state[loadingKey] = false;
+    state[errorKey] = null;
+    spec.clear(state);
+    return;
   }
+
+  const active = state.resourceRequests[key];
+  if (active?.agentId === agentId && state[loadingKey]) {
+    return;
+  }
+
+  // Request identity, not agent identity, rejects stale A -> B -> A completions.
+  const request: DreamingResourceRequest = { agentId };
+  state.resourceRequests[key] = request;
+  state[loadingKey] = true;
+  state[errorKey] = null;
+  try {
+    const payload = await client.request<DreamingResourcePayloads[Key]>(spec.method, { agentId });
+    if (state.resourceRequests[key] !== request || resolveSelectedAgentId(state) !== agentId) {
+      return;
+    }
+    spec.apply(state, payload);
+    state[agentKey] = agentId;
+  } catch (error) {
+    if (state.resourceRequests[key] === request && resolveSelectedAgentId(state) === agentId) {
+      state[errorKey] = formatUiError(error);
+    }
+  } finally {
+    if (state.resourceRequests[key] === request) {
+      delete state.resourceRequests[key];
+      state[loadingKey] = false;
+    }
+  }
+}
+
+export async function runDreamDiaryAction(
+  state: DreamingState,
+  method: DreamDiaryActionMethod,
+): Promise<boolean> {
+  const client = state.client;
+  const agentId = resolveSelectedAgentId(state);
   if (
-    method === "doctor.memory.dedupeDreamDiary" &&
-    !confirmDreamingAction(
-      "Dedupe Dream Diary? This rewrites DREAMS.md and removes only exact duplicate diary entries.",
-    )
+    !client ||
+    !agentId ||
+    !canCallDreamingMethod(state, method, "operator.write") ||
+    state.dreamDiaryActionLoading
   ) {
     return false;
   }
@@ -1092,14 +447,14 @@ async function runDreamDiaryAction(
   state.dreamDiaryActionMessage = null;
   state.dreamDiaryActionArchivePath = null;
   try {
-    const payload = await state.client.request<DoctorMemoryDreamActionPayload>(
-      method,
-      buildSelectedAgentPayload(state),
-    );
-    if (options?.reloadDiary !== false) {
-      await loadDreamDiary(state);
+    const payload = await client.request<DoctorMemoryDreamActionPayload>(method, { agentId });
+    if (
+      method !== "doctor.memory.resetGroundedShortTerm" &&
+      method !== "doctor.memory.repairDreamingArtifacts"
+    ) {
+      await loadDreamingResource(state, "dreamDiary");
     }
-    await loadDreamingStatus(state);
+    await loadDreamingResource(state, "dreamingStatus");
     state.dreamDiaryActionArchivePath =
       method === "doctor.memory.repairDreamingArtifacts"
         ? (normalizeTrimmedString(payload?.archiveDir) ?? null)
@@ -1110,7 +465,7 @@ async function runDreamDiaryAction(
     };
     return true;
   } catch (err) {
-    const message = String(err);
+    const message = formatUiError(err);
     state.dreamingStatusError = message;
     state.lastError = message;
     state.dreamDiaryActionArchivePath = null;
@@ -1121,155 +476,113 @@ async function runDreamDiaryAction(
   }
 }
 
-export async function backfillDreamDiary(state: DreamingState): Promise<boolean> {
-  return runDreamDiaryAction(state, "doctor.memory.backfillDreamDiary");
-}
-
-export async function resetDreamDiary(state: DreamingState): Promise<boolean> {
-  return runDreamDiaryAction(state, "doctor.memory.resetDreamDiary");
-}
-
-export async function resetGroundedShortTerm(state: DreamingState): Promise<boolean> {
-  return runDreamDiaryAction(state, "doctor.memory.resetGroundedShortTerm", {
-    reloadDiary: false,
-  });
-}
-
-export async function repairDreamingArtifacts(state: DreamingState): Promise<boolean> {
-  return runDreamDiaryAction(state, "doctor.memory.repairDreamingArtifacts", {
-    reloadDiary: false,
-  });
-}
-
 export async function copyDreamingArchivePath(state: DreamingState): Promise<boolean> {
   const path = state.dreamDiaryActionArchivePath;
   if (!path) {
     return false;
   }
-  if (await copyToClipboard(path)) {
-    state.dreamDiaryActionMessage = {
-      kind: "success",
-      text: "Archive path copied.",
-    };
-    return true;
-  }
+  const copied = await copyToClipboard(path);
   state.dreamDiaryActionMessage = {
-    kind: "error",
-    text: "Could not copy archive path.",
+    kind: copied ? "success" : "error",
+    text: t(
+      copied ? "dreaming.actions.archivePathCopied" : "dreaming.actions.archivePathCopyFailed",
+    ),
   };
-  return false;
+  return copied;
 }
 
-export async function dedupeDreamDiary(state: DreamingState): Promise<boolean> {
-  return runDreamDiaryAction(state, "doctor.memory.dedupeDreamDiary");
-}
+export type DreamingConfigPathSupport = "supported" | "unsupported" | "unknown";
 
-async function writeDreamingPatch(
-  state: DreamingState,
-  config: DreamingConfigCapability,
-  patch: Record<string, unknown>,
-): Promise<boolean> {
-  if (state.dreamingModeSaving) {
-    return false;
-  }
-
-  state.dreamingModeSaving = true;
-  state.dreamingStatusError = null;
-  try {
-    const updated = await config.patch({
-      raw: patch,
-      note: "Dreaming settings updated from the Dreaming tab.",
-    });
-    if (!updated) {
-      state.dreamingStatusError =
-        config.state.lastError ?? state.lastError ?? "Could not update dreaming settings.";
-    }
-    return updated;
-  } finally {
-    state.dreamingModeSaving = false;
-  }
-}
-
-function lookupIncludesDreamingProperty(value: unknown): boolean {
-  const lookup = asRecord(value);
-  const children = Array.isArray(lookup?.children) ? lookup.children : [];
-  for (const child of children) {
-    const childRecord = asRecord(child);
-    if (normalizeTrimmedString(childRecord?.key) === "dreaming") {
-      return true;
-    }
-  }
-  return false;
-}
-
-function lookupDisallowsUnknownProperties(value: unknown): boolean {
-  const lookup = asRecord(value);
-  const schema = asRecord(lookup?.schema);
-  return schema?.additionalProperties === false;
-}
-
-async function ensureDreamingPathSupported(
-  state: DreamingState,
-  config: DreamingConfigCapability,
+/**
+ * Whether the slot-owning memory plugin's config schema can hold `dreaming`.
+ * Only a closed schema without the child proves it cannot. An unreachable
+ * gateway or a failed lookup answers "unknown", which callers treat as
+ * optimistic but must not cache: the gateway still has the final say, and a
+ * cached guess would survive the reconnect that could settle it.
+ * Shared by the enablement toggle and the Memory page's Dreaming tab.
+ */
+export async function resolveDreamingConfigPathSupport(
+  config: Pick<DreamingConfigCapability, "lookupSchemaPath" | "state">,
   pluginId: string,
-): Promise<boolean> {
+): Promise<DreamingConfigPathSupport> {
   if (!config.state.client || !config.state.connected) {
-    return true;
+    return "unknown";
   }
   try {
-    const lookup = await config.lookupSchemaPath(`plugins.entries.${pluginId}.config`);
-    if (lookupIncludesDreamingProperty(lookup)) {
-      return true;
+    const lookup = asRecord(await config.lookupSchemaPath(`plugins.entries.${pluginId}.config`));
+    const children = Array.isArray(lookup?.children) ? lookup.children : [];
+    if (children.some((child) => normalizeTrimmedString(asRecord(child)?.key) === "dreaming")) {
+      return "supported";
     }
-    if (lookupDisallowsUnknownProperties(lookup)) {
-      const message = `Selected memory plugin "${pluginId}" does not support dreaming settings.`;
-      state.dreamingStatusError = message;
-      state.lastError = message;
-      return false;
-    }
+    return asRecord(lookup?.schema)?.additionalProperties === false ? "unsupported" : "supported";
   } catch {
-    return true;
+    return "unknown";
   }
-  return true;
 }
 
 export async function updateDreamingEnabled(
   state: DreamingState,
   config: DreamingConfigCapability,
   enabled: boolean,
+  canDispatch: () => boolean = () => true,
 ): Promise<boolean> {
-  if (state.dreamingModeSaving) {
+  if (state.dreamingModeSaving || !canDispatch()) {
     return false;
   }
   if (!config.state.configSnapshot?.hash) {
-    state.dreamingStatusError = "Config hash missing; refresh and retry.";
+    state.dreamingStatusError = t("dreaming.actions.configHashMissing");
     return false;
   }
   const { pluginId } = resolveConfiguredDreaming(
     asRecord(config.state.configSnapshot?.config) ?? null,
   );
-  if (!(await ensureDreamingPathSupported(state, config, pluginId))) {
+  // "unknown" stays optimistic: the gateway rejects the write if it is wrong.
+  if ((await resolveDreamingConfigPathSupport(config, pluginId)) === "unsupported") {
+    const message = t("dreaming.actions.unsupportedPlugin", { pluginId });
+    state.dreamingStatusError = message;
+    state.lastError = message;
     return false;
   }
-  const ok = await writeDreamingPatch(state, config, {
-    plugins: {
-      entries: {
-        [pluginId]: {
-          config: {
-            dreaming: {
-              enabled,
+  if (
+    state.dreamingModeSaving ||
+    !canDispatch() ||
+    !canCallDreamingMethod(state, "config.patch", "operator.admin")
+  ) {
+    return false;
+  }
+  state.dreamingModeSaving = true;
+  state.dreamingStatusError = null;
+  let updated: boolean;
+  try {
+    updated = await config.patch({
+      raw: {
+        plugins: {
+          entries: {
+            [pluginId]: {
+              config: {
+                dreaming: {
+                  enabled,
+                },
+              },
             },
           },
         },
       },
-    },
-  });
-  if (ok && state.dreamingStatus) {
+      note: "Dreaming settings updated from the Dreaming tab.",
+      canDispatch,
+    });
+    if (!updated) {
+      state.dreamingStatusError =
+        config.state.lastError ?? state.lastError ?? t("dreaming.actions.updateFailed");
+    }
+  } finally {
+    state.dreamingModeSaving = false;
+  }
+  if (updated && state.dreamingStatus) {
     state.dreamingStatus = {
       ...state.dreamingStatus,
       enabled,
     };
   }
-  return ok;
+  return updated;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

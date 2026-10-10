@@ -13,6 +13,11 @@ struct OpenClawActivityAttributes: ActivityAttributes {
             case approvalNeeded
             case actionRequired
             case attention
+            case toolRunning
+            case voiceListening
+            case voiceSpeaking
+            case voiceActive
+            case paused
             case idle
             case disconnected
         }
@@ -20,12 +25,11 @@ struct OpenClawActivityAttributes: ActivityAttributes {
         var status: Status
         var verbatimDetail: String?
         var startedAt: Date
-
-        private enum CodingKeys: String, CodingKey {
-            case status
-            case verbatimDetail
-            case startedAt
-        }
+        var agentBadge: String?
+        var toolName: String?
+        /// Recent playback-envelope samples, oldest first, quantized from 0...1.
+        /// Live Activity updates carry the real audible signal across the app/widget boundary.
+        var voiceSamples: [UInt8]?
 
         private enum LegacyCodingKeys: String, CodingKey {
             case statusText
@@ -34,10 +38,20 @@ struct OpenClawActivityAttributes: ActivityAttributes {
             case isConnecting
         }
 
-        init(status: Status, verbatimDetail: String?, startedAt: Date) {
+        init(
+            status: Status,
+            verbatimDetail: String?,
+            startedAt: Date,
+            agentBadge: String? = nil,
+            toolName: String? = nil,
+            voiceSamples: [UInt8]? = nil)
+        {
             self.status = status
             self.verbatimDetail = verbatimDetail
             self.startedAt = startedAt
+            self.agentBadge = agentBadge
+            self.toolName = toolName
+            self.voiceSamples = voiceSamples
         }
 
         init(from decoder: Decoder) throws {
@@ -47,6 +61,9 @@ struct OpenClawActivityAttributes: ActivityAttributes {
             if let status = try container.decodeIfPresent(Status.self, forKey: .status) {
                 self.status = status
                 self.verbatimDetail = try container.decodeIfPresent(String.self, forKey: .verbatimDetail)
+                self.agentBadge = try container.decodeIfPresent(String.self, forKey: .agentBadge)
+                self.toolName = try container.decodeIfPresent(String.self, forKey: .toolName)
+                self.voiceSamples = try container.decodeIfPresent([UInt8].self, forKey: .voiceSamples)
                 return
             }
 
@@ -59,15 +76,11 @@ struct OpenClawActivityAttributes: ActivityAttributes {
                 isIdle: legacy.decodeIfPresent(Bool.self, forKey: .isIdle) ?? false,
                 isDisconnected: legacy.decodeIfPresent(Bool.self, forKey: .isDisconnected) ?? false,
                 isConnecting: legacy.decodeIfPresent(Bool.self, forKey: .isConnecting) ?? false)
-            self.status = presentation.status
+            status = presentation.status
             self.verbatimDetail = presentation.verbatimDetail
-        }
-
-        func encode(to encoder: Encoder) throws {
-            var container = encoder.container(keyedBy: CodingKeys.self)
-            try container.encode(self.status, forKey: .status)
-            try container.encodeIfPresent(self.verbatimDetail, forKey: .verbatimDetail)
-            try container.encode(self.startedAt, forKey: .startedAt)
+            self.agentBadge = nil
+            self.toolName = nil
+            self.voiceSamples = nil
         }
 
         private static func legacyPresentation(
@@ -86,35 +99,21 @@ struct OpenClawActivityAttributes: ActivityAttributes {
             let trimmed = statusText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let detail = trimmed.isEmpty ? nil : trimmed
             if isConnecting {
-                if let detail, Self.matchesShippedTranslation(detail, key: "Reconnecting...") {
+                if detail == "Reconnecting..." {
                     return (.reconnecting, nil)
                 }
-                if let detail, Self.matchesShippedTranslation(detail, key: "Connecting...") {
+                if detail == "Connecting..." {
                     return (.connecting, nil)
                 }
                 return (.connecting, detail)
             }
-            if let detail, Self.matchesShippedTranslation(detail, key: "Approval needed") {
+            if detail == "Approval needed" {
                 return (.approvalNeeded, nil)
             }
-            if let detail, Self.matchesShippedTranslation(detail, key: "Action required") {
+            if detail == "Action required" {
                 return (.actionRequired, nil)
             }
             return (.attention, detail)
-        }
-
-        private static func matchesShippedTranslation(_ value: String, key: String) -> Bool {
-            if value == key {
-                return true
-            }
-            return Bundle.main.localizations.contains { localization in
-                guard let path = Bundle.main.path(forResource: localization, ofType: "lproj"),
-                      let bundle = Bundle(path: path)
-                else {
-                    return false
-                }
-                return bundle.localizedString(forKey: key, value: key, table: nil) == value
-            }
         }
     }
 }

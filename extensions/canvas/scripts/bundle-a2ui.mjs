@@ -1,8 +1,4 @@
 #!/usr/bin/env node
-/**
- * Bundles the Canvas A2UI web app and writes a hash for tracked inputs.
- */
-
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -21,12 +17,11 @@ const hashFile =
 const outputFile =
   process.env.OPENCLAW_A2UI_BUNDLE_OUT ??
   path.join(pluginDir, "src", "host", "a2ui", "a2ui.bundle.js");
+const outputV09File = process.env.OPENCLAW_A2UI_BUNDLE_OUT
+  ? `${process.env.OPENCLAW_A2UI_BUNDLE_OUT}.v0.9.js`
+  : path.join(pluginDir, "src", "host", "a2ui", "a2ui-v0.9.bundle.js");
 const a2uiAppDir = path.join(pluginDir, "src", "host", "a2ui-app");
 const GIT_INPUT_DISCOVERY_TIMEOUT_MS = 5_000;
-const repoInputPaths = getBundleHashRepoInputPaths(rootDir);
-const relativeRepoInputPaths = repoInputPaths.map((inputPath) =>
-  normalizePath(path.relative(rootDir, inputPath)),
-);
 
 function fail(message) {
   console.error(message);
@@ -48,12 +43,6 @@ function normalizePath(filePath) {
   return filePath.split(path.sep).join("/");
 }
 
-/** Returns whether a path should participate in the A2UI bundle input hash. */
-export function isBundleHashInputPath(filePath, repoRoot = rootDir) {
-  return Boolean(filePath && repoRoot);
-}
-
-/** Returns local Rolldown CLI candidates for the current install layout. */
 export function getLocalRolldownCliCandidates(repoRoot = rootDir) {
   return [
     path.join(repoRoot, "node_modules", "rolldown", "bin", "cli.mjs"),
@@ -71,16 +60,16 @@ export function getLocalRolldownCliCandidates(repoRoot = rootDir) {
   ];
 }
 
-/** Returns repository paths that define the A2UI bundle hash inputs. */
 export function getBundleHashRepoInputPaths(repoRoot = rootDir) {
   return [
     path.join(repoRoot, "package.json"),
     path.join(repoRoot, "pnpm-lock.yaml"),
+    path.join(repoRoot, "extensions", "canvas", "package.json"),
+    path.join(repoRoot, "extensions", "canvas", "scripts", "bundle-a2ui.mjs"),
     path.join(repoRoot, "extensions", "canvas", "src", "host", "a2ui-app"),
   ];
 }
 
-/** Compares paths after normalizing separators to POSIX slashes. */
 export function compareNormalizedPaths(left, right) {
   const normalizedLeft = normalizePath(left);
   const normalizedRight = normalizePath(right);
@@ -94,9 +83,6 @@ export function compareNormalizedPaths(left, right) {
 }
 
 async function walkFiles(entryPath, files) {
-  if (!isBundleHashInputPath(entryPath)) {
-    return;
-  }
   const stat = await fs.stat(entryPath);
   if (!stat.isDirectory()) {
     files.push(entryPath);
@@ -108,9 +94,12 @@ async function walkFiles(entryPath, files) {
   }
 }
 
-function listTrackedInputFiles() {
-  const result = spawnSync("git", ["ls-files", "--", ...relativeRepoInputPaths], {
-    cwd: rootDir,
+export function listTrackedInputFiles(runGit, repoRoot = rootDir) {
+  const relativeRepoInputPaths = getBundleHashRepoInputPaths(repoRoot).map((inputPath) =>
+    normalizePath(path.relative(repoRoot, inputPath)),
+  );
+  const result = runGit("git", ["ls-files", "--", ...relativeRepoInputPaths], {
+    cwd: repoRoot,
     encoding: "utf8",
     killSignal: "SIGKILL",
     stdio: ["ignore", "pipe", "pipe"],
@@ -119,17 +108,15 @@ function listTrackedInputFiles() {
   if (result.status !== 0) {
     return null;
   }
-  const trackedFiles = result.stdout
+  return result.stdout
     .split("\n")
     .filter(Boolean)
-    .map((filePath) => path.join(rootDir, filePath))
-    .filter((filePath) => existsSync(filePath))
-    .filter((filePath) => isBundleHashInputPath(filePath));
-  return trackedFiles;
+    .map((filePath) => path.join(repoRoot, filePath))
+    .filter((filePath) => existsSync(filePath));
 }
 
 async function computeHash() {
-  let files = listTrackedInputFiles();
+  let files = listTrackedInputFiles(spawnSync);
   if (!files) {
     files = [];
     for (const inputPath of getBundleHashRepoInputPaths(rootDir)) {
@@ -177,15 +164,20 @@ function runPnpm(pnpmArgs) {
 async function main() {
   const hasAppDir = await pathExists(a2uiAppDir);
   const hasOutputFile = await pathExists(outputFile);
+  const hasV09OutputFile = await pathExists(outputV09File);
   let hasA2uiPackage = true;
   try {
-    require.resolve("@a2ui/lit");
+    require.resolve("@solidjs/compiler");
+    require.resolve("@solidjs/web");
+    require.resolve("solid-js");
+    require.resolve("signal-utils/map");
+    require.resolve("@a2ui/web_core/v0_9");
     require.resolve("@a2ui/lit/ui");
   } catch {
     hasA2uiPackage = false;
   }
   if (!hasA2uiPackage || !hasAppDir) {
-    if (hasOutputFile) {
+    if (hasOutputFile && hasV09OutputFile) {
       console.log("A2UI package missing; keeping prebuilt bundle.");
       return;
     }
@@ -195,13 +187,15 @@ async function main() {
       );
       return;
     }
-    fail(`A2UI package missing and no prebuilt bundle found at: ${outputFile}`);
+    fail(
+      `A2UI package missing and no complete prebuilt bundle found at: ${outputFile}, ${outputV09File}`,
+    );
   }
 
   const currentHash = await computeHash();
   if (await pathExists(hashFile)) {
     const previousHash = (await fs.readFile(hashFile, "utf8")).trim();
-    if (previousHash === currentHash && hasOutputFile) {
+    if (previousHash === currentHash && hasOutputFile && hasV09OutputFile) {
       console.log("A2UI bundle up to date; skipping.");
       return;
     }
@@ -216,14 +210,11 @@ async function main() {
     )
   ).find(Boolean);
 
+  const configPath = path.join(a2uiAppDir, "rolldown.config.mjs");
   if (localRolldownCli) {
-    runStep(process.execPath, [
-      localRolldownCli,
-      "-c",
-      path.join(a2uiAppDir, "rolldown.config.mjs"),
-    ]);
+    runStep(process.execPath, [localRolldownCli, "-c", configPath]);
   } else {
-    runPnpm(["-s", "exec", "rolldown", "-c", path.join(a2uiAppDir, "rolldown.config.mjs")]);
+    runPnpm(["-s", "exec", "rolldown", "-c", configPath]);
   }
 
   await fs.writeFile(hashFile, `${currentHash}\n`, "utf8");

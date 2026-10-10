@@ -57,24 +57,28 @@ export function createSessionsListResult(
   params: {
     model?: string | null;
     modelProvider?: string | null;
+    modelOverrideSource?: GatewaySessionRow["modelOverrideSource"];
     defaultsModel?: string | null;
     defaultsProvider?: string | null;
     defaultsThinkingLevels?: SessionsListResult["defaults"]["thinkingLevels"];
     defaultsThinkingOptions?: string[];
     defaultsThinkingDefault?: string;
     thinkingDefault?: string;
+    thinkingLevels?: GatewaySessionRow["thinkingLevels"];
     omitSessionFromList?: boolean;
   } = {},
 ): SessionsListResult {
   const {
     model = null,
     modelProvider = model ? "openai" : null,
+    modelOverrideSource,
     defaultsModel = "gpt-5",
     defaultsProvider = defaultsModel ? "openai" : null,
     defaultsThinkingLevels,
     defaultsThinkingOptions,
     defaultsThinkingDefault,
     thinkingDefault,
+    thinkingLevels,
     omitSessionFromList = false,
   } = params;
 
@@ -96,7 +100,9 @@ export function createSessionsListResult(
           createMainSessionRow({
             ...(modelProvider ? { modelProvider } : {}),
             ...(model ? { model } : {}),
+            ...(modelOverrideSource === undefined ? {} : { modelOverrideSource }),
             ...(thinkingDefault ? { thinkingDefault } : {}),
+            ...(thinkingLevels === undefined ? {} : { thinkingLevels }),
           }),
         ],
   };

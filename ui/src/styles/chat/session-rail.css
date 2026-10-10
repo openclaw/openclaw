@@ -1,0 +1,172 @@
+openclaw-chat-session-rail {
+  display: contents;
+}
+
+.chat-session-rail {
+  position: relative;
+  inset: auto;
+  z-index: auto;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  animation: none;
+}
+
+.chat-session-rail__prs,
+.chat-session-rail__pr {
+  display: flex;
+  align-items: center;
+}
+
+.chat-session-rail__prs {
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 11px;
+  padding: 0 14px;
+}
+
+.chat-session-rail__pr {
+  gap: 5px;
+  padding: 4px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text);
+  font-size: 10.5px;
+  line-height: 1;
+}
+
+.chat-session-rail__pr:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.chat-session-rail__pr-checks,
+.chat-session-rail__timestamp,
+.chat-session-rail__hint {
+  color: var(--muted);
+}
+
+.chat-session-rail__thread {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 96px;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 0;
+  padding: 12px 14px 16px;
+  overflow-y: auto;
+  border-top: 0;
+  user-select: text;
+  overscroll-behavior-y: contain;
+}
+
+/* Openers stack against the composer they feed, so the eye travels chips ->
+   input without crossing the thread. Left-aligned: they are actions, not
+   content, and centring them would read as a second empty state. */
+.chat-session-rail__starters {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 0 14px 10px;
+}
+
+.chat-session-rail__starter {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  color: var(--text);
+}
+
+/* strokeIcon already inlines fill/stroke/stroke-width on the svg. */
+.chat-session-rail__starter svg {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.chat-session-rail__starter:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.chat-session-rail__starter:disabled:hover {
+  border-color: var(--border);
+  transform: none;
+}
+
+.chat-session-rail__exchange {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--chat-block-gap);
+}
+
+.chat-session-rail__exchange + .chat-session-rail__exchange {
+  padding-top: 13px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+}
+
+/* Share the main chat's bubble and Markdown skins; only the panel's column
+   geometry differs. It has no avatar gutter or transcript footer to reserve. */
+.chat-session-rail__message.chat-group {
+  display: block;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.chat-session-rail__message .chat-session-rail__question {
+  width: fit-content;
+  max-width: 90%;
+  margin-inline-start: auto;
+}
+
+.chat-session-rail__timestamp,
+.chat-session-rail__hint {
+  font-size: var(--control-ui-text-sm);
+}
+
+.chat-session-rail__exchange--error .chat-session-rail__hint {
+  color: var(--danger);
+}
+
+.chat-session-rail__retry {
+  justify-self: start;
+}
+
+.chat-session-rail__exchange--pending .chat-session-rail__hint {
+  animation: chat-session-rail-pending-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes chat-session-rail-pending-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.chat-session-rail__prompt {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-session-rail__exchange--pending .chat-session-rail__hint {
+    animation: none;
+  }
+}

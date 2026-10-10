@@ -1,0 +1,85 @@
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { PluginCapabilityCatalogHostContext } from "./capability-catalog-context.types.js";
+import type { PluginCapabilityCatalog } from "./capability-catalog.types.js";
+import { unwrapDefaultModuleExport } from "./module-export.js";
+import { getPluginValueInstance, wrapCurrentPluginInstance } from "./plugin-instance-scope.js";
+
+export const capabilityCatalogFamilies = [
+  "speechProviders",
+  "realtimeTranscriptionProviders",
+  "realtimeVoiceProviders",
+] as const;
+
+/** Materialize one registration without copying its descriptor or invoking provider operations. */
+export function resolveCapabilityProviderRegistration<T extends { id: string }>(
+  entry: T | ((context: PluginCapabilityCatalogHostContext) => T),
+  resolveContext: (() => PluginCapabilityCatalogHostContext) | undefined,
+): T {
+  if (typeof entry !== "function") {
+    return entry;
+  }
+  if (!resolveContext) {
+    throw new Error(
+      "Capability provider factories require host context; supply resolveCapabilityCatalogContext when creating the registry.",
+    );
+  }
+  const provider = entry(wrapCurrentPluginInstance(resolveContext()));
+  if (isPromiseLike(provider)) {
+    void Promise.resolve(provider).catch(() => {});
+    throw new Error("capability provider factories must be synchronous");
+  }
+  return provider;
+}
+
+/** Validate the declared public surface without copying provider objects or their hidden methods. */
+export function resolvePluginCapabilityCatalog(
+  module: unknown,
+  context: PluginCapabilityCatalogHostContext,
+): PluginCapabilityCatalog {
+  const entry = unwrapDefaultModuleExport(module);
+  if (typeof entry === "function") {
+    // Catalog results contain registrations whose callbacks retain their setup inventory's lifetime.
+    getPluginValueInstance(entry)?.admitFactory(
+      // SAFETY: The checked callable accepts catalog host context; its unknown result is validated below.
+      entry as (context: PluginCapabilityCatalogHostContext) => unknown,
+    );
+  }
+  const catalog = typeof entry === "function" ? entry(context) : entry;
+  if (isPromiseLike(catalog)) {
+    void Promise.resolve(catalog).catch(() => {});
+    throw new Error("capability catalog factories must be synchronous");
+  }
+  if (!isRecord(catalog)) {
+    throw new Error("default export must synchronously provide a capability descriptor collection");
+  }
+  const methods = {
+    speechProviders: "synthesize",
+    realtimeTranscriptionProviders: "createSession",
+    realtimeVoiceProviders: "createBridge",
+  } as const;
+  for (const [family, providers] of Object.entries(catalog)) {
+    if (!Object.hasOwn(methods, family)) {
+      throw new Error(`unknown capability catalog family: ${family}`);
+    }
+    // SAFETY: the own-key check above narrows this string to the closed family map.
+    const method = methods[family as keyof typeof methods];
+    if (
+      !Array.isArray(providers) ||
+      providers.some(
+        (provider) =>
+          !isRecord(provider) ||
+          typeof provider.id !== "string" ||
+          !provider.id.trim() ||
+          typeof provider.label !== "string" ||
+          typeof provider.isConfigured !== "function" ||
+          typeof provider[method] !== "function",
+      )
+    ) {
+      throw new Error(`${family} must contain complete provider descriptors`);
+    }
+  }
+  // Retain the objects so hidden methods and registrar-bound identity survive.
+  // SAFETY: every family and required descriptor field/method was checked above.
+  return catalog as PluginCapabilityCatalog;
+}

@@ -1,3 +1,4 @@
+import type { ChannelOutboundContext } from "openclaw/plugin-sdk/channel-contract";
 import {
   createMessageReceiptFromOutboundResults,
   defineChannelMessageAdapter,
@@ -7,6 +8,7 @@ import type {
   OutboundDeliveryResult,
 } from "openclaw/plugin-sdk/channel-send-result";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { canonicalBytes, REEF_MAX_PLAINTEXT_BYTES } from "../protocol/index.js";
 import { normalizeReefTarget } from "./config-schema.js";
 import { isPermanentReefOutboundRejection, prepareReefMessageId } from "./flow.js";
@@ -82,14 +84,17 @@ function chunkReefText(text: string, limit: number): string[] {
   return chunks;
 }
 
-async function send(
-  to: string,
-  text: string,
-  threadId?: string | number | null,
-  replyToId?: string | null,
-  preparedMessageId?: string,
-  onPlatformSendDispatch?: () => Promise<void>,
-): Promise<OutboundDeliveryResult> {
+async function send({
+  to,
+  text,
+  threadId,
+  replyToId,
+  preparedMessageId,
+  onPlatformSendDispatch,
+}: Pick<
+  ChannelOutboundContext,
+  "to" | "text" | "threadId" | "replyToId" | "preparedMessageId" | "onPlatformSendDispatch"
+>): Promise<OutboundDeliveryResult> {
   const peer = normalizeReefTarget(to);
   if (!peer) {
     throw new Error("Reef target must be a handle");
@@ -116,24 +121,21 @@ async function send(
     if (cause instanceof PlatformMessageNotDispatchedError) {
       throw cause;
     }
-    if (isPermanentReefOutboundRejection(cause)) {
+    const permanent = isPermanentReefOutboundRejection(cause);
+    if (permanent || !platformDispatchMarked) {
       throw new PlatformMessageNotDispatchedError(
         cause instanceof Error ? cause.message : String(cause),
-        {
-          cause,
-          retryable: false,
-        },
-      );
-    }
-    if (!platformDispatchMarked) {
-      throw new PlatformMessageNotDispatchedError(
-        cause instanceof Error ? cause.message : String(cause),
-        { cause },
+        { cause, ...(permanent ? { retryable: false } : {}) },
       );
     }
     throw cause;
   }
-  return { channel: "reef", messageId: id, chatId: peer, toJid: `reef:${peer}` };
+  return {
+    channel: "reef",
+    messageId: id,
+    target: { kind: "chat", id: peer },
+    toJid: `reef:${peer}`,
+  };
 }
 
 export const reefOutboundAdapter: ChannelOutboundAdapter = {
@@ -141,6 +143,7 @@ export const reefOutboundAdapter: ChannelOutboundAdapter = {
   deliveryMode: "gateway",
   textChunkLimit: REEF_MAX_PLAINTEXT_BYTES,
   chunker: chunkReefText,
+  sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
   prepareConversationTurnMessageId: ({ text, threadId }) => {
     // Runs in Gateway correlation setup before the operation and queue row exist.
     assertAtomicReefMessageFits({ text, threadId });
@@ -153,8 +156,7 @@ export const reefOutboundAdapter: ChannelOutboundAdapter = {
       ? { ok: true, to: peer }
       : { ok: false, error: new Error("Reef target must be a handle") };
   },
-  sendText: async ({ to, text, threadId, replyToId, preparedMessageId, onPlatformSendDispatch }) =>
-    await send(to, text, threadId, replyToId, preparedMessageId, onPlatformSendDispatch),
+  sendText: send,
 };
 
 export const reefMessageAdapter = defineChannelMessageAdapter({
@@ -162,14 +164,7 @@ export const reefMessageAdapter = defineChannelMessageAdapter({
   durableFinal: { capabilities: { text: true, replyTo: true, thread: true } },
   send: {
     text: async (ctx) => {
-      const result = await send(
-        ctx.to,
-        ctx.text,
-        ctx.threadId,
-        ctx.replyToId,
-        ctx.preparedMessageId,
-        ctx.onPlatformSendDispatch,
-      );
+      const result = await send(ctx);
       const receipt = createMessageReceiptFromOutboundResults({
         results: [result],
         kind: "text",

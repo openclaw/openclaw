@@ -1,12 +1,11 @@
+import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 // Zalo test support covers monitor.reply once.lifecycle plugin behavior.
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PluginRuntime } from "../runtime-api.js";
 import {
   createLifecycleMonitorSetup,
   createTextUpdate,
   postWebhookReplay,
-  settleAsyncWork,
 } from "./test-support/lifecycle-test-support.js";
 import {
   loadCachedLifecycleMonitorModule,
@@ -72,7 +71,8 @@ describe("Zalo reply-once lifecycle", () => {
 
   it("routes one accepted webhook event to one visible reply across duplicate replay", async () => {
     dispatchReplyWithBufferedBlockDispatcherMock.mockImplementation(
-      async ({ dispatcherOptions }) => {
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions.turnAdoptionLifecycle?.onAdopted();
         await dispatcherOptions.deliver({ text: "zalo reply once" });
       },
     );
@@ -102,7 +102,7 @@ describe("Zalo reply-once lifecycle", () => {
 
           expect(first.status).toBe(200);
           expect(replay.status).toBe(200);
-          await settleAsyncWork();
+          await monitor.waitForIdle();
         },
       );
 
@@ -132,8 +132,10 @@ describe("Zalo reply-once lifecycle", () => {
   it("does not emit a second visible reply when replay arrives after a post-send failure", async () => {
     let dispatchAttempts = 0;
     dispatchReplyWithBufferedBlockDispatcherMock.mockImplementation(
-      async ({ dispatcherOptions }) => {
+      async ({ dispatcherOptions, replyOptions }) => {
         dispatchAttempts += 1;
+        expect(replyOptions.turnAdoptionLifecycle).toBeDefined();
+        await replyOptions.turnAdoptionLifecycle?.onAdopted();
         await dispatcherOptions.deliver({ text: "zalo reply after failure" });
         if (dispatchAttempts === 1) {
           throw new Error("post-send failure");
@@ -162,20 +164,18 @@ describe("Zalo reply-once lifecycle", () => {
               userName: "User One",
               chatId: "dm-chat-1",
             }),
-            settleBeforeReplay: true,
+            beforeReplay: monitor.waitForIdle,
           });
 
           expect(first.status).toBe(200);
           expect(replay.status).toBe(200);
-          await settleAsyncWork();
+          await monitor.waitForIdle();
         },
       );
 
       expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
       expect(sendMessageMock).toHaveBeenCalledTimes(1);
-      expect(monitor.runtime.error).toHaveBeenCalledWith(
-        "[acct-zalo-lifecycle] Zalo webhook failed: Error: post-send failure",
-      );
+      expect(monitor.runtime.error).not.toHaveBeenCalled();
     } finally {
       await monitor.stop();
     }

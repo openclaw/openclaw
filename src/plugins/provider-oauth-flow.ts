@@ -37,9 +37,12 @@ export function createVpsAwareOAuthHandlers(params: {
         );
         manualCodePromise = params.prompter.text({
           message: manualPromptMessage,
+          sensitive: true,
           signal: params.manualPromptSignal,
           validate: validateRequiredInput,
         });
+        // Cancellation can win before the provider requests this already-open prompt.
+        void manualCodePromise.catch(() => {});
         return;
       }
 
@@ -51,13 +54,13 @@ export function createVpsAwareOAuthHandlers(params: {
       if (manualCodePromise) {
         return manualCodePromise;
       }
-      const code = await params.prompter.text({
+      return await params.prompter.text({
         message: prompt.message,
         placeholder: prompt.placeholder,
+        sensitive: true,
         signal: params.manualPromptSignal,
         validate: validateRequiredInput,
       });
-      return code;
     },
   };
 }

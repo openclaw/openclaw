@@ -1,4 +1,4 @@
-// Usage types define shared usage accounting structures for sessions and runs.
+import type { SessionCreatedActor } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
 import type {
   CostUsageSummary,
@@ -9,28 +9,38 @@ import type {
   SessionMessageCounts,
   SessionModelUsage,
   SessionToolUsage,
-} from "../infra/session-cost-usage.js";
+} from "../infra/session-cost-usage.types.js";
 
-/** One session or session-family row returned by the gateway usage endpoint. */
+export type SessionCostUsagePublication = {
+  agentId: string;
+  usageUpdatedAt: number;
+  usageRefreshFailed?: true;
+};
+
+export type SessionUsageCreator = {
+  /** Opaque, namespace-qualified identity used by the creator filter. */
+  key: string;
+  actor?: SessionCreatedActor;
+};
+
 export type SessionUsageEntry = {
   /** Stable row key for UI diffing; may be a session id or family key. */
   key: string;
-  /** Human-readable session label when available. */
   label?: string;
   /** Concrete session id for instance-scoped rows. */
   sessionId?: string;
-  /** Whether this row represents one session instance or a grouped family. */
   scope?: "instance" | "family";
   /** Grouping key shared by related historical session instances. */
   sessionFamilyKey?: string;
   /** Latest/current session id for a grouped family row. */
   currentSessionId?: string;
-  /** Session ids included in a family aggregate row. */
   includedSessionIds?: string[];
-  /** Count of historical instances included in the family row. */
   historicalInstanceCount?: number;
   updatedAt?: number;
   agentId?: string;
+  /** Immutable session creator; this is not per-turn billing attribution. */
+  createdActor?: SessionCreatedActor;
+  creatorKey?: string;
   channel?: string;
   chatType?: string;
   origin?: {
@@ -48,10 +58,12 @@ export type SessionUsageEntry = {
   modelProvider?: string;
   model?: string;
   usage: SessionCostSummary | null;
+  computing?: boolean;
+  /** Context availability without transferring the full report in overview queries. */
+  hasContextWeight?: boolean;
   contextWeight?: SessionSystemPromptReport | null;
 };
 
-/** Cross-session aggregate buckets returned alongside usage rows. */
 export type SessionsUsageAggregates = {
   /** Sessions with activity in the requested range, before the row `limit` cap. */
   sessionCount?: number;
@@ -63,6 +75,17 @@ export type SessionsUsageAggregates = {
   byProvider: SessionModelUsage[];
   byAgent: Array<{ agentId: string; totals: CostUsageSummary["totals"] }>;
   byChannel: Array<{ channel: string; totals: CostUsageSummary["totals"] }>;
+  byCreator?: Array<
+    SessionUsageCreator & {
+      totals: CostUsageSummary["totals"];
+      sessionCount: number;
+      daily: CostUsageSummary["daily"];
+      /** Date-set cohorts count each session once across any selected days, without exposing IDs. */
+      sessionActivity: Array<{ dates: string[]; sessionCount: number }>;
+    }
+  >;
+  /** Full token/cost categories for every matched session, before the row limit. */
+  costDaily?: CostUsageSummary["daily"];
   latency?: SessionLatencyStats;
   dailyLatency?: SessionDailyLatency[];
   modelDaily?: SessionDailyModelUsage[];
@@ -76,7 +99,6 @@ export type SessionsUsageAggregates = {
   }>;
 };
 
-/** Full gateway response for the sessions usage view. */
 export type SessionsUsageResult = {
   /** Unix epoch milliseconds for when this report was generated. */
   updatedAt: number;
@@ -87,5 +109,7 @@ export type SessionsUsageResult = {
   sessions: SessionUsageEntry[];
   totals: CostUsageSummary["totals"];
   aggregates: SessionsUsageAggregates;
+  /** Visible candidate identities before applying the creator filter. */
+  creatorOptions?: SessionUsageCreator[];
   cacheStatus?: CostUsageSummary["cacheStatus"];
 };

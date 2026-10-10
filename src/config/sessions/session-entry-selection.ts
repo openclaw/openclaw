@@ -1,63 +1,133 @@
-import type { SessionEntry } from "./types.js";
+import { resolveSessionAuthProfileOverrideSource } from "./auth-profile-override-provenance.js";
+import { hasSessionActiveAutoModelFallback } from "./model-override-provenance.js";
+import type {
+  SessionPatchProjectionSnapshot,
+  SessionPatchProjectionTarget,
+} from "./session-accessor.types.js";
+import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
-type SessionStoreTarget = {
-  canonicalKey: string;
-  storeKeys: readonly string[];
-};
+export class SessionLabelOwnerIndex {
+  readonly #owners = new Map<string, Set<string>>();
 
-type SessionProjectionTarget = {
-  candidateKeys?: readonly string[];
-  primaryKey: string;
-};
-
-/** Normalizes caller aliases while always preserving the canonical key. */
-export function normalizeTargetStoreKeys(target: SessionStoreTarget): string[] {
-  const keys = new Set<string>();
-  const remember = (value: string) => {
-    const trimmed = value.trim();
-    if (trimmed) {
-      keys.add(trimmed);
+  constructor(private readonly store: Record<string, SessionEntry>) {
+    for (const [sessionKey, entry] of Object.entries(this.store)) {
+      this.#add(sessionKey, entry.label);
     }
+  }
+
+  isLabelInUse(label: string, excludedKeys: readonly string[]): boolean {
+    for (const sessionKey of this.#owners.get(label) ?? []) {
+      if (!excludedKeys.includes(sessionKey)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  replaceEntry(
+    candidateKeys: readonly string[],
+    primaryKey: string,
+    entry: SessionEntry,
+  ): SessionEntry {
+    for (const sessionKey of new Set([...candidateKeys, primaryKey])) {
+      const label = this.store[sessionKey]?.label;
+      if (label !== undefined) {
+        this.#owners.get(label)?.delete(sessionKey);
+      }
+      delete this.store[sessionKey];
+    }
+    const cloned = structuredClone(entry);
+    this.store[primaryKey] = cloned;
+    this.#add(primaryKey, cloned.label);
+    return cloned;
+  }
+
+  #add(sessionKey: string, label: string | undefined): void {
+    if (label === undefined) {
+      return;
+    }
+    const owners = this.#owners.get(label) ?? new Set<string>();
+    owners.add(sessionKey);
+    this.#owners.set(label, owners);
+  }
+}
+
+type SessionModelOverrideSelection = Pick<
+  SessionEntry,
+  | "modelOverride"
+  | "providerOverride"
+  | "modelOverrideSource"
+  | "modelOverrideRouteResolution"
+  | "agentRuntimeOverride"
+>;
+
+export function selectSessionModelOverride(
+  entry: Partial<SessionModelOverrideSelection>,
+): SessionModelOverrideSelection {
+  return {
+    modelOverride: entry.modelOverride,
+    providerOverride: entry.providerOverride,
+    modelOverrideSource: entry.modelOverrideSource,
+    modelOverrideRouteResolution: entry.modelOverrideRouteResolution,
+    agentRuntimeOverride: entry.agentRuntimeOverride,
   };
-  remember(target.canonicalKey);
-  for (const key of target.storeKeys) {
-    remember(key);
-  }
-  return [...keys];
 }
 
-/** Selects the row that alias migration would promote. */
-export function resolveFreshestTargetEntry(
-  store: Record<string, SessionEntry>,
-  targetKeys: readonly string[],
-): { key: string; entry: SessionEntry } | undefined {
-  let freshest: { key: string; entry: SessionEntry } | undefined;
-  for (const key of targetKeys) {
-    const entry = store[key];
-    if (entry && (!freshest || (entry.updatedAt ?? 0) > (freshest.entry.updatedAt ?? 0))) {
-      freshest = { key, entry };
-    }
+/** Carries only user/runtime selection into a new dashboard fork. */
+export function inheritSessionSelection(
+  parentEntry: SessionEntry | undefined,
+): Partial<InternalSessionEntry> {
+  if (!parentEntry) {
+    return {};
   }
-  return freshest;
-}
-
-export function cloneOptionalSessionEntry(
-  entry: SessionEntry | undefined,
-): SessionEntry | undefined {
-  return entry ? structuredClone(entry) : undefined;
+  const authProfileOverrideSource = resolveSessionAuthProfileOverrideSource(parentEntry);
+  const inheritModelSelection = !hasSessionActiveAutoModelFallback(parentEntry);
+  const inheritAuthProfile =
+    inheritModelSelection ||
+    authProfileOverrideSource === "user" ||
+    authProfileOverrideSource === "user-link";
+  return {
+    ...(inheritModelSelection && parentEntry.providerOverride
+      ? { providerOverride: parentEntry.providerOverride }
+      : {}),
+    ...(inheritModelSelection && parentEntry.modelOverride
+      ? { modelOverride: parentEntry.modelOverride }
+      : {}),
+    ...(inheritModelSelection && parentEntry.modelOverrideSource
+      ? { modelOverrideSource: parentEntry.modelOverrideSource }
+      : {}),
+    ...(inheritModelSelection && parentEntry.modelOverrideRouteResolution
+      ? { modelOverrideRouteResolution: parentEntry.modelOverrideRouteResolution }
+      : {}),
+    ...(inheritModelSelection && parentEntry.agentRuntimeOverride
+      ? { agentRuntimeOverride: parentEntry.agentRuntimeOverride }
+      : {}),
+    ...(parentEntry.contextWindow ? { contextWindow: parentEntry.contextWindow } : {}),
+    ...(parentEntry.thinkingLevel ? { thinkingLevel: parentEntry.thinkingLevel } : {}),
+    ...(parentEntry.fastMode !== undefined ? { fastMode: parentEntry.fastMode } : {}),
+    ...(parentEntry.toolOverrides ? { toolOverrides: parentEntry.toolOverrides } : {}),
+    ...(parentEntry.verboseLevel ? { verboseLevel: parentEntry.verboseLevel } : {}),
+    ...(parentEntry.traceLevel ? { traceLevel: parentEntry.traceLevel } : {}),
+    ...(parentEntry.reasoningLevel ? { reasoningLevel: parentEntry.reasoningLevel } : {}),
+    ...(parentEntry.elevatedLevel ? { elevatedLevel: parentEntry.elevatedLevel } : {}),
+    ...(inheritAuthProfile && authProfileOverrideSource && parentEntry.authProfileOverride
+      ? { authProfileOverride: parentEntry.authProfileOverride }
+      : {}),
+    ...(inheritAuthProfile && authProfileOverrideSource ? { authProfileOverrideSource } : {}),
+  };
 }
 
 export function resolveProjectionExistingEntry(
-  entries: readonly { sessionKey: string; entry: SessionEntry }[],
-  target: SessionProjectionTarget,
+  snapshot: SessionPatchProjectionSnapshot,
+  target: SessionPatchProjectionTarget,
 ): SessionEntry | undefined {
   const candidateKeys = target.candidateKeys ?? [target.primaryKey];
   let freshest: SessionEntry | undefined;
   for (const candidateKey of candidateKeys) {
-    const entry = entries.find((candidate) => candidate.sessionKey === candidateKey)?.entry;
+    const entry = snapshot.store[candidateKey];
     if (entry && (!freshest || (entry.updatedAt ?? 0) > (freshest.updatedAt ?? 0))) {
       freshest = entry;
     }
   }
-  return cloneOptionalSessionEntry(freshest);
+  return freshest ? structuredClone(freshest) : undefined;
 }

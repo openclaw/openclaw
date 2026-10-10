@@ -1,4 +1,4 @@
-// swift-tools-version: 6.2
+// swift-tools-version: 6.3
 
 import PackageDescription
 
@@ -11,6 +11,7 @@ let package = Package(
     ],
     products: [
         .library(name: "OpenClawProtocol", targets: ["OpenClawProtocol"]),
+        .library(name: "OpenClawNativeState", targets: ["OpenClawNativeState"]),
         .library(name: "OpenClawKit", targets: ["OpenClawKit"]),
         .library(name: "OpenClawChatUI", targets: ["OpenClawChatUI"]),
     ],
@@ -19,9 +20,10 @@ let package = Package(
         .default(enabledTraits: ["Talk"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/steipete/ElevenLabsKit", exact: "0.1.1"),
+        .package(url: "https://github.com/steipete/ElevenLabsKit", exact: "0.1.3"),
+        .package(url: "https://github.com/groue/GRDB.swift.git", exact: "7.11.1"),
         .package(url: "https://github.com/mgriebling/SwiftMath", exact: "1.7.3"),
-        .package(url: "https://github.com/swiftlang/swift-markdown", exact: "0.8.0"),
+        .package(url: "https://github.com/swiftlang/swift-markdown", exact: "0.9.0"),
     ],
     targets: [
         .target(
@@ -29,10 +31,21 @@ let package = Package(
             path: "Sources/OpenClawProtocol",
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
+            ],
+            plugins: ["GenerateGatewayProtocol"]),
+        .plugin(
+            name: "GenerateGatewayProtocol",
+            capability: .buildTool()),
+        .target(
+            name: "OpenClawNativeState",
+            path: "Sources/OpenClawNativeState",
+            swiftSettings: [
+                .enableUpcomingFeature("StrictConcurrency"),
             ]),
         .target(
             name: "OpenClawKit",
             dependencies: [
+                "OpenClawNativeState",
                 "OpenClawProtocol",
                 .product(
                     name: "ElevenLabsKit",
@@ -51,17 +64,35 @@ let package = Package(
             dependencies: [
                 "OpenClawKit",
                 "OpenClawProtocol",
+                .product(name: "GRDB", package: "GRDB.swift"),
                 .product(name: "Markdown", package: "swift-markdown"),
                 .product(name: "SwiftMath", package: "SwiftMath"),
             ],
             path: "Sources/OpenClawChatUI",
+            resources: [
+                .copy("Resources/Mermaid"),
+            ],
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
             ]),
         .testTarget(
             name: "OpenClawKitTests",
-            dependencies: ["OpenClawKit", "OpenClawChatUI", "OpenClawProtocol"],
+            dependencies: [
+                "OpenClawKit",
+                "OpenClawChatUI",
+                "OpenClawProtocol",
+                .product(name: "GRDB", package: "GRDB.swift"),
+            ],
             path: "Tests/OpenClawKitTests",
+            resources: [.copy("Fixtures")],
+            swiftSettings: [
+                .enableUpcomingFeature("StrictConcurrency"),
+                .enableExperimentalFeature("SwiftTesting"),
+            ]),
+        .testTarget(
+            name: "OpenClawNativeStateTests",
+            dependencies: ["OpenClawNativeState"],
+            path: "Tests/OpenClawNativeStateTests",
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
                 .enableExperimentalFeature("SwiftTesting"),

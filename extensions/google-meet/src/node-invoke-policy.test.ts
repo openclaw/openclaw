@@ -2,10 +2,8 @@
 import type { OpenClawPluginNodeInvokePolicyContext } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it, vi } from "vitest";
 import { resolveGoogleMeetConfig } from "./config.js";
-import {
-  createGoogleMeetChromeNodeInvokePolicy,
-  GOOGLE_MEET_CHROME_NODE_COMMAND,
-} from "./node-invoke-policy.js";
+import { createGoogleMeetChromeNodeInvokePolicy } from "./node-invoke-policy.js";
+import { GOOGLE_MEET_NODE_COMMAND } from "./transports/google-meet-platform-constants.js";
 
 function createContext(params: unknown, pluginConfig: Record<string, unknown> = {}) {
   const invokeNode = vi.fn<OpenClawPluginNodeInvokePolicyContext["invokeNode"]>(async () => ({
@@ -14,7 +12,7 @@ function createContext(params: unknown, pluginConfig: Record<string, unknown> = 
   }));
   const ctx: OpenClawPluginNodeInvokePolicyContext = {
     nodeId: "node-1",
-    command: GOOGLE_MEET_CHROME_NODE_COMMAND,
+    command: GOOGLE_MEET_NODE_COMMAND,
     params,
     config: {} as never,
     pluginConfig,
@@ -60,6 +58,9 @@ describe("Google Meet node invoke policy", () => {
         launch: false,
         browserProfile: "Trusted Profile",
         joinTimeoutMs: 45_000,
+        audioBackend: "auto",
+        audioBufferBytes: 4_096,
+        audioFormat: "g711-ulaw-8khz",
         audioInputCommand: ["trusted-capture", "--raw"],
         audioOutputCommand: ["trusted-play", "--raw"],
       },
@@ -118,7 +119,14 @@ describe("Google Meet node invoke policy", () => {
 
     await policy.handle(ctx);
 
-    expect(invokeNode).toHaveBeenCalledWith({ params: { action: "setup" } });
+    expect(invokeNode).toHaveBeenCalledWith({
+      params: {
+        action: "setup",
+        audioBackend: "auto",
+        audioBufferBytes: 4_096,
+        audioFormat: "pcm16-24khz",
+      },
+    });
   });
 
   it("rejects malformed bridge control before node dispatch", async () => {
@@ -127,7 +135,15 @@ describe("Google Meet node invoke policy", () => {
     for (const params of [
       { action: "pullAudio" },
       { action: "pushAudio", bridgeId: "bridge-1" },
+      { action: "pushAudio", bridgeId: "bridge-1", base64: "not-base64!" },
+      {
+        action: "pushAudio",
+        bridgeId: "bridge-1",
+        base64: Buffer.from([1]).toString("base64"),
+        outputGeneration: -1,
+      },
       { action: "clearAudio", bridgeId: "" },
+      { action: "clearAudio", bridgeId: "bridge-1", outputGeneration: 1.5 },
       { action: "stopByUrl" },
       { action: "stopByUrl", url: "https://example.com/not-meet" },
     ]) {
@@ -139,6 +155,41 @@ describe("Google Meet node invoke policy", () => {
       });
       expect(invokeNode).not.toHaveBeenCalled();
     }
+  });
+
+  it("forwards validated output generations", async () => {
+    const policy = createGoogleMeetChromeNodeInvokePolicy(resolveGoogleMeetConfig({}));
+    const base64 = Buffer.from([1, 2, 3]).toString("base64");
+    const push = createContext({
+      action: "pushAudio",
+      bridgeId: "bridge-1",
+      base64,
+      outputGeneration: 3,
+    });
+    const clear = createContext({
+      action: "clearAudio",
+      bridgeId: "bridge-1",
+      outputGeneration: 4,
+    });
+
+    await policy.handle(push.ctx);
+    await policy.handle(clear.ctx);
+
+    expect(push.invokeNode).toHaveBeenCalledWith({
+      params: {
+        action: "pushAudio",
+        bridgeId: "bridge-1",
+        base64,
+        outputGeneration: 3,
+      },
+    });
+    expect(clear.invokeNode).toHaveBeenCalledWith({
+      params: {
+        action: "clearAudio",
+        bridgeId: "bridge-1",
+        outputGeneration: 4,
+      },
+    });
   });
 
   it("normalizes forwarded Meet URL filters before node dispatch", async () => {

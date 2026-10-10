@@ -1,18 +1,29 @@
-// Googlechat plugin module implements accounts behavior.
+import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
 import {
-  createAccountListHelpers,
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   type OpenClawConfig,
   resolveAccountEntry,
-  resolveMergedAccountConfig,
 } from "openclaw/plugin-sdk/account-resolution";
+import type { GoogleChatAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
-import { isSecretRef } from "openclaw/plugin-sdk/secret-input";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
+import {
+  coerceSecretRef,
+  isSecretRef,
+  resolveSecretInputString,
+  type SecretInputStringResolutionMode,
+} from "openclaw/plugin-sdk/secret-input";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import { z } from "zod";
-import type { GoogleChatAccountConfig } from "./types.config.js";
+import { MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES } from "./google-auth-limits.js";
+
+type CredentialUnavailableDiagnostic = Extract<
+  ReturnType<typeof tryReadSecretFileSync>,
+  { status: "configured_unavailable" }
+>["diagnostic"];
 
 type GoogleChatCredentialSource = "file" | "inline" | "env" | "none";
 
@@ -24,11 +35,11 @@ export type ResolvedGoogleChatAccount = {
   credentialSource: GoogleChatCredentialSource;
   credentials?: Record<string, unknown>;
   credentialsFile?: string;
+  tokenStatus?: "available" | "configured_unavailable" | "missing";
+  credentialDiagnostics?: CredentialUnavailableDiagnostic[];
 };
 
-export type GoogleChatConfigAccessorAccount = {
-  config: GoogleChatAccountConfig;
-};
+export type GoogleChatConfigAccessorAccount = Pick<ResolvedGoogleChatAccount, "config">;
 
 const ENV_SERVICE_ACCOUNT = "GOOGLE_CHAT_SERVICE_ACCOUNT";
 const ENV_SERVICE_ACCOUNT_FILE = "GOOGLE_CHAT_SERVICE_ACCOUNT_FILE";
@@ -37,11 +48,14 @@ const JsonRecordSchema = z.record(z.string(), z.unknown());
 const {
   listAccountIds: listGoogleChatAccountIds,
   resolveDefaultAccountId: resolveDefaultGoogleChatAccountId,
-} = createAccountListHelpers("googlechat", {
+  resolveAccountConfig: resolveMergedGoogleChatAccountConfig,
+} = createAccountListHelpers<GoogleChatAccountConfig>("googlechat", {
   implicitDefaultAccount: {
-    channelKeys: ["serviceAccount", "serviceAccountRef", "serviceAccountFile"],
+    channelKeys: ["serviceAccount", "serviceAccountFile"],
     envVars: [ENV_SERVICE_ACCOUNT, ENV_SERVICE_ACCOUNT_FILE],
   },
+  omitKeys: ["defaultAccount"],
+  nestedObjectKeys: ["botLoopProtection"],
 });
 export { listGoogleChatAccountIds, resolveDefaultGoogleChatAccountId };
 
@@ -50,13 +64,7 @@ function mergeGoogleChatAccountConfig(
   accountId: string,
 ): GoogleChatAccountConfig {
   const raw = cfg.channels?.["googlechat"] ?? {};
-  const base = resolveMergedAccountConfig<GoogleChatAccountConfig>({
-    channelConfig: raw as GoogleChatAccountConfig,
-    accounts: raw.accounts as Record<string, Partial<GoogleChatAccountConfig>> | undefined,
-    accountId,
-    omitKeys: ["defaultAccount"],
-    nestedObjectKeys: ["botLoopProtection"],
-  });
+  const base = resolveMergedGoogleChatAccountConfig(cfg, accountId);
   const defaultAccountConfig = resolveAccountEntry(raw.accounts, DEFAULT_ACCOUNT_ID) ?? {};
   if (accountId === DEFAULT_ACCOUNT_ID) {
     return base;
@@ -65,7 +73,6 @@ function mergeGoogleChatAccountConfig(
     enabled: _ignoredEnabled,
     dangerouslyAllowNameMatching: _ignoredDangerouslyAllowNameMatching,
     serviceAccount: _ignoredServiceAccount,
-    serviceAccountRef: _ignoredServiceAccountRef,
     serviceAccountFile: _ignoredServiceAccountFile,
     ...defaultAccountShared
   } = defaultAccountConfig;
@@ -79,7 +86,7 @@ function mergeGoogleChatAccountConfig(
     ...defaultAccountShared,
     ...base,
     ...(botLoopProtection ? { botLoopProtection } : {}),
-  } as GoogleChatAccountConfig;
+  };
 }
 
 export function resolveGoogleChatConfigAccessorAccount(params: {
@@ -108,55 +115,84 @@ function parseServiceAccount(value: unknown): Record<string, unknown> | null {
   return safeParseWithSchema(JsonRecordSchema, value);
 }
 
+function resolveCredentialsFile(file: string, source: "file" | "env", configPath: string) {
+  const result = tryReadSecretFileSync(
+    resolveUserPath(file),
+    "Google Chat service account file",
+    {
+      maxBytes: MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES,
+      rejectHardlinks: false,
+      rejectSymlink: false,
+    },
+    { configPath },
+  );
+  return {
+    credentialsFile: file,
+    source,
+    status: result.status,
+    ...(result.status === "configured_unavailable" ? { diagnostic: result.diagnostic } : {}),
+  };
+}
+
 function resolveCredentialsFromConfig(params: {
+  cfg: OpenClawConfig;
   accountId: string;
   account: GoogleChatAccountConfig;
+  mode: SecretInputStringResolutionMode;
 }): {
   credentials?: Record<string, unknown>;
   credentialsFile?: string;
   source: GoogleChatCredentialSource;
+  status: "available" | "configured_unavailable" | "missing";
+  diagnostic?: CredentialUnavailableDiagnostic;
 } {
   const { account, accountId } = params;
   const inline = parseServiceAccount(account.serviceAccount);
   if (inline) {
-    return { credentials: inline, source: "inline" };
+    return { credentials: inline, source: "inline", status: "available" };
   }
 
-  if (isSecretRef(account.serviceAccount)) {
-    throw new Error(
-      `channels.googlechat.accounts.${accountId}.serviceAccount: unresolved SecretRef "${account.serviceAccount.source}:${account.serviceAccount.provider}:${account.serviceAccount.id}". Resolve this command against an active gateway runtime snapshot before reading it.`,
-    );
-  }
-
-  if (isSecretRef(account.serviceAccountRef)) {
-    throw new Error(
-      `channels.googlechat.accounts.${accountId}.serviceAccount: unresolved SecretRef "${account.serviceAccountRef.source}:${account.serviceAccountRef.provider}:${account.serviceAccountRef.id}". Resolve this command against an active gateway runtime snapshot before reading it.`,
-    );
+  const serviceAccountRef = coerceSecretRef(account.serviceAccount, params.cfg.secrets?.defaults);
+  if (serviceAccountRef) {
+    const resolved = resolveSecretInputString({
+      value: account.serviceAccount,
+      defaults: params.cfg.secrets?.defaults,
+      path: `channels.googlechat.accounts.${accountId}.serviceAccount`,
+      mode: params.mode,
+    });
+    return resolved.status === "configured_unavailable"
+      ? { source: "none", status: "configured_unavailable" }
+      : { source: "none", status: "missing" };
   }
 
   const file = normalizeOptionalString(account.serviceAccountFile);
   if (file) {
-    return { credentialsFile: file, source: "file" };
+    return resolveCredentialsFile(
+      file,
+      "file",
+      `channels.googlechat.accounts.${accountId}.serviceAccountFile`,
+    );
   }
 
   if (accountId === DEFAULT_ACCOUNT_ID) {
     const envJson = process.env[ENV_SERVICE_ACCOUNT];
     const envInline = parseServiceAccount(envJson);
     if (envInline) {
-      return { credentials: envInline, source: "env" };
+      return { credentials: envInline, source: "env", status: "available" };
     }
     const envFile = normalizeOptionalString(process.env[ENV_SERVICE_ACCOUNT_FILE]);
     if (envFile) {
-      return { credentialsFile: envFile, source: "env" };
+      return resolveCredentialsFile(envFile, "env", `env.${ENV_SERVICE_ACCOUNT_FILE}`);
     }
   }
 
-  return { source: "none" };
+  return { source: "none", status: "missing" };
 }
 
-export function resolveGoogleChatAccount(params: {
+function resolveGoogleChatAccountWithMode(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
+  mode: SecretInputStringResolutionMode;
 }): ResolvedGoogleChatAccount {
   const accountId = normalizeAccountId(
     params.accountId ?? params.cfg.channels?.["googlechat"]?.defaultAccount,
@@ -165,7 +201,12 @@ export function resolveGoogleChatAccount(params: {
   const merged = mergeGoogleChatAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;
-  const credentials = resolveCredentialsFromConfig({ accountId, account: merged });
+  const credentials = resolveCredentialsFromConfig({
+    cfg: params.cfg,
+    accountId,
+    account: merged,
+    mode: params.mode,
+  });
 
   return {
     accountId,
@@ -175,11 +216,36 @@ export function resolveGoogleChatAccount(params: {
     credentialSource: credentials.source,
     credentials: credentials.credentials,
     credentialsFile: credentials.credentialsFile,
+    tokenStatus: credentials.status,
+    ...(credentials.diagnostic ? { credentialDiagnostics: [credentials.diagnostic] } : {}),
   };
 }
 
-export function listEnabledGoogleChatAccounts(cfg: OpenClawConfig): ResolvedGoogleChatAccount[] {
-  return listGoogleChatAccountIds(cfg)
-    .map((accountId) => resolveGoogleChatAccount({ cfg, accountId }))
-    .filter((account) => account.enabled);
+export function resolveGoogleChatAccount(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): ResolvedGoogleChatAccount {
+  return resolveGoogleChatAccountWithMode({ ...params, mode: "strict" });
+}
+
+export function inspectGoogleChatAccount(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}) {
+  const account = resolveGoogleChatAccountWithMode({ ...params, mode: "inspect" });
+  return {
+    ...account,
+    configured: isGoogleChatAccountConfigured(account),
+    audienceType: account.config.audienceType,
+    audience: account.config.audience,
+    webhookPath: account.config.webhookPath,
+    webhookUrl: account.config.webhookUrl,
+    dmPolicy: account.config.dmPolicy ?? "pairing",
+  };
+}
+
+export function isGoogleChatAccountConfigured(account: ResolvedGoogleChatAccount): boolean {
+  return account.tokenStatus
+    ? account.tokenStatus !== "missing"
+    : account.credentialSource !== "none";
 }

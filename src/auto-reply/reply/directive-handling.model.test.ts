@@ -4,12 +4,22 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths.js";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+import { prepareModelCatalogAuthLabels } from "../../agents/model-catalog-auth-labels.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import { bindPreparedModelRuntimeAuth } from "../../agents/prepared-model-runtime-auth.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type {
+  ProviderDefaultThinkingPolicyContext,
+  ProviderThinkingProfile,
+} from "../../plugins/provider-thinking.types.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../../sessions/model-overrides.js";
-
-vi.hoisted(() => {
-  vi.resetModules();
-});
+import {
+  createModelsTestOwner,
+  setFastModelsCliBackendDeps,
+} from "./commands-models.test-support.js";
 
 const authProfilesStoreMock = vi.hoisted(() => ({
   profiles: {} as Record<
@@ -19,304 +29,124 @@ const authProfilesStoreMock = vi.hoisted(() => ({
     | { type: "token"; provider: string; token: string }
   >,
 }));
-const modelsCommandMock = vi.hoisted(() => ({
-  delegateToActual: false,
-  resolveModelsCommandReply: vi.fn(),
+const stickyModelMock = vi.hoisted(() => ({
+  persistBestEffort: vi.fn(),
+}));
+const pluginPolicyMock = vi.hoisted(() => ({
+  channels: new Map<string, Pick<ChannelPlugin, "id" | "commands">>(),
+  thinkingProfiles: new Map<
+    string,
+    (context: ProviderDefaultThinkingPolicyContext) => ProviderThinkingProfile | null | undefined
+  >(),
 }));
 
-function defaultModelsCommandReply() {
-  return {
-    text: [
-      "Providers:",
-      "- anthropic (1)",
-      "",
-      "Use: /models <provider>",
-      "Switch: /model <provider/model>",
-    ].join("\n"),
-  };
+function readAuthProfileStoreForTest() {
+  return { version: 1, profiles: authProfilesStoreMock.profiles };
 }
 
-function normalizeProviderForAuthTest(provider: string) {
-  return provider.trim().toLowerCase();
-}
-
-function hasAllowedPluginForAuthTest(cfg: unknown, pluginId: string): boolean {
-  if (!cfg || typeof cfg !== "object" || !("plugins" in cfg)) {
-    return false;
-  }
-  const plugins = (cfg as { plugins?: { allow?: unknown } }).plugins;
-  return Array.isArray(plugins?.allow) && plugins.allow.includes(pluginId);
-}
-
-vi.mock("../../agents/auth-profiles.js", () => {
-  const store = () => ({
-    version: 1,
-    profiles: authProfilesStoreMock.profiles,
-  });
-  return {
-    clearRuntimeAuthProfileStoreSnapshots: () => {
-      authProfilesStoreMock.profiles = {};
-    },
-    externalCliDiscoveryForProviderAuth: () => ({
-      mode: "scoped",
-      allowKeychainPrompt: false,
-    }),
-    ensureAuthProfileStore: store,
-    ensureAuthProfileStoreWithoutExternalProfiles: store,
-    getRuntimeAuthProfileStoreSnapshot: store,
-    isProfileInCooldown: () => false,
-    listProfilesForProvider: (_store: unknown, provider: string) =>
-      Object.entries(authProfilesStoreMock.profiles)
-        .filter(([, profile]) => profile.provider === provider)
-        .map(([profileId, profile]) => ({ profileId, profile })),
-    replaceRuntimeAuthProfileStoreSnapshots: (
-      snapshots: Array<{
-        store?: { profiles?: Record<string, AuthProfileForTest> };
-      }>,
-    ) => {
-      authProfilesStoreMock.profiles = snapshots[0]?.store?.profiles ?? {};
-    },
-    resolveAuthProfileDisplayLabel: ({ profileId }: { profileId: string }) => profileId,
-    resolveAuthProfileOrder: () => [],
-    resolveAuthStorePathForDisplay: () => "/tmp/auth-profiles.json",
-  };
-});
-
-vi.mock("./commands-models.js", () => ({
-  resolveModelsCommandReply: async (
-    params: Parameters<typeof import("./commands-models.js").resolveModelsCommandReply>[0],
-  ) => {
-    modelsCommandMock.resolveModelsCommandReply(params);
-    if (modelsCommandMock.delegateToActual) {
-      const actual =
-        await vi.importActual<typeof import("./commands-models.js")>("./commands-models.js");
-      return actual.resolveModelsCommandReply(params);
-    }
-    return defaultModelsCommandReply();
-  },
+// Runtime eligibility belongs to the published-owner tests; these cases exercise its consumers.
+vi.mock("../../agents/model-runtime-choice.js", () => ({
+  preparePublishedModelRuntimeChoice: vi.fn<
+    typeof import("../../agents/model-runtime-choice.js").preparePublishedModelRuntimeChoice
+  >(async ({ runtimeId, preferredRuntimeId }) => ({
+    kind: "ready",
+    runtimeId: runtimeId ?? preferredRuntimeId ?? "openclaw",
+    validate: () => undefined,
+  })),
 }));
 
-vi.mock("./directive-handling.auth.js", () => ({
-  formatAuthLabel: (auth: { label: string; source: string }) => {
-    if (!auth.source || auth.source === auth.label || auth.source === "missing") {
-      return auth.label;
-    }
-    return `${auth.label} (${auth.source})`;
-  },
-  resolveAuthLabel: async (
-    provider: string,
-    cfg: unknown,
-    _modelsPath: string,
-    _agentDir?: string,
-    _mode?: unknown,
-    workspaceDir?: string,
-    options?: { acceptedProfileTypes?: readonly string[] },
-  ) => {
-    const providerKey = normalizeProviderForAuthTest(provider);
-    const acceptedProfileTypes = options?.acceptedProfileTypes
-      ? new Set(options.acceptedProfileTypes)
-      : undefined;
-    const matchingProfiles = Object.entries(authProfilesStoreMock.profiles).filter(
-      ([, profile]) =>
-        normalizeProviderForAuthTest(profile.provider) === providerKey &&
-        (!acceptedProfileTypes || acceptedProfileTypes.has(profile.type)),
-    );
-    if (matchingProfiles.length > 0) {
-      return {
-        label: matchingProfiles
-          .map(([profileId, profile]) =>
-            profile.type === "oauth"
-              ? `${profileId}=OAuth`
-              : profile.type === "token"
-                ? `${profileId}=token`
-                : `${profileId}=${profile.key}`,
-          )
-          .join(", "),
-        source: `auth-profiles.json: /tmp/auth-profiles.json`,
-      };
-    }
-    if (
-      providerKey === "anthropic" &&
-      workspaceDir &&
-      ((process.env.WORKSPACE_MODEL_CREDENTIALS &&
-        hasAllowedPluginForAuthTest(cfg, "workspace-model-auth")) ||
-        (process.env.WORKSPACE_MODEL_LIST_CREDENTIALS &&
-          hasAllowedPluginForAuthTest(cfg, "workspace-model-list")))
-    ) {
-      return {
-        label: process.env.WORKSPACE_MODEL_CREDENTIALS
-          ? "workspace model credentials"
-          : "workspace model list credentials",
-        source: "",
-      };
-    }
-    return { label: "missing", source: "missing" };
-  },
+vi.mock("../../agents/sticky-model-selection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/sticky-model-selection.js")>()),
+  persistStickyModelSelectionBestEffort: (params: {
+    agentId: string;
+    model: string;
+    target: "agent" | "defaults";
+  }) => stickyModelMock.persistBestEffort(params),
 }));
 
-vi.mock("../../agents/auth-profiles/store.js", () => {
-  const store = () => ({
-    version: 1,
-    profiles: authProfilesStoreMock.profiles,
-  });
+vi.mock("../../agents/auth-profiles/store.js", async (importOriginal) => {
   return {
-    clearRuntimeAuthProfileStoreSnapshots: () => {
-      authProfilesStoreMock.profiles = {};
-    },
-    ensureAuthProfileStore: store,
-    ensureAuthProfileStoreForLocalUpdate: store,
+    ...(await importOriginal<typeof import("../../agents/auth-profiles/store.js")>()),
     findPersistedAuthProfileCredential: ({ profileId }: { profileId: string }) =>
       authProfilesStoreMock.profiles[profileId],
-    hasAnyAuthProfileStoreSource: () => Object.keys(authProfilesStoreMock.profiles).length > 0,
-    loadAuthProfileStore: store,
-    loadAuthProfileStoreForRuntime: store,
-    loadAuthProfileStoreForSecretsRuntime: store,
-    loadAuthProfileStoreWithoutExternalProfiles: store,
-    replaceRuntimeAuthProfileStoreSnapshots: (
-      snapshots: Array<{
-        store?: { profiles?: Record<string, AuthProfileForTest> };
-      }>,
-    ) => {
-      authProfilesStoreMock.profiles = snapshots[0]?.store?.profiles ?? {};
-    },
-    saveAuthProfileStore: vi.fn(),
-    updateAuthProfileStoreWithLock: vi.fn(async ({ update }) => update(store())),
+    getRuntimeAuthProfileStoreSnapshot: readAuthProfileStoreForTest,
   };
 });
-
-vi.mock("../../agents/model-auth.js", () => {
-  const store = () => ({
-    version: 1,
-    profiles: authProfilesStoreMock.profiles,
-  });
-  const hasWorkspaceCredential = (env: NodeJS.ProcessEnv = process.env) =>
-    Boolean(env.WORKSPACE_MODEL_LIST_CREDENTIALS || env.WORKSPACE_MODEL_CREDENTIALS);
+vi.mock("../../agents/auth-profiles/source-check.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/auth-profiles/source-check.js")>()),
+  hasAnyAuthProfileStoreSourceAsync: async () =>
+    Object.keys(authProfilesStoreMock.profiles).length > 0,
+}));
+// mock-isolation: Directive tests own the in-memory credential map and stub writes; real persistence stays isolated.
+vi.mock("../../agents/auth-profiles/store-runtime.js", () => {
   return {
-    createRuntimeProviderAuthLookup: () => ({
-      envApiKey: {
-        aliasMap: {},
-        candidateMap: {},
-        authEvidenceMap: {},
-      },
-      syntheticAuthProviderRefs: [],
-    }),
-    ensureAuthProfileStore: store,
-    hasRuntimeAvailableProviderAuth: ({
-      provider,
-      env,
-    }: {
-      provider: string;
-      env?: NodeJS.ProcessEnv;
-    }) => provider === "anthropic" && hasWorkspaceCredential(env),
-    hasSyntheticLocalProviderAuthConfig: () => false,
-    resolveProviderEntryApiKeyProfileReference: () => ({ kind: "none" }),
-    resolveAuthProfileOrder: ({ provider }: { provider: string }) =>
-      Object.entries(authProfilesStoreMock.profiles)
-        .filter(([, profile]) => profile.provider === provider)
-        .map(([profileId]) => profileId),
-    resolveEnvApiKey: (provider: string, env: NodeJS.ProcessEnv = process.env) => {
-      if (provider !== "anthropic") {
-        return null;
-      }
-      if (env.WORKSPACE_MODEL_CREDENTIALS) {
-        return { apiKey: "sk-workspace", source: "workspace model credentials" };
-      }
-      if (env.WORKSPACE_MODEL_LIST_CREDENTIALS) {
-        return { apiKey: "sk-workspace", source: "workspace model list credentials" };
-      }
-      return null;
-    },
-    resolveUsableCustomProviderApiKey: () => null,
-    shouldPreferExplicitConfigApiKeyAuth: () => false,
+    ensureAuthProfileStore: readAuthProfileStoreForTest,
+    ensureAuthProfileStoreWithoutExternalProfiles: readAuthProfileStoreForTest,
+    ensureAuthProfileStoreForLocalUpdate: readAuthProfileStoreForTest,
+    loadAuthProfileStore: readAuthProfileStoreForTest,
+    loadAuthProfileStoreForRuntime: readAuthProfileStoreForTest,
+    loadAuthProfileStoreForSecretsRuntime: readAuthProfileStoreForTest,
+    loadAuthProfileStoreWithoutExternalProfiles: readAuthProfileStoreForTest,
+    saveAuthProfileStore: vi.fn(),
+    updateAuthProfileStoreWithLock: vi.fn(async ({ update }) =>
+      update(readAuthProfileStoreForTest()),
+    ),
   };
 });
 
-vi.mock("../../agents/provider-auth-aliases.js", () => ({
-  resolveProviderAuthAliasMap: () => ({}),
-  resolveProviderIdForAuth: (provider: string) => provider,
+vi.mock("../../channels/plugins/index.js", () => ({
+  getChannelPlugin: (id: string) => pluginPolicyMock.channels.get(id),
 }));
 
-vi.mock("../../agents/harness/selection.js", () => ({
-  selectAgentHarness: () => ({ id: "openclaw" }),
-  resolveAgentHarnessPolicy: ({
+vi.mock("../../plugins/provider-thinking.js", () => ({
+  resolveEffectiveThinkingProfile: ({
     provider,
-    modelId,
-    config,
-  }: {
-    provider?: string;
-    modelId?: string;
-    config?: OpenClawConfig;
-  }) => {
-    const modelRuntime =
-      provider && modelId
-        ? config?.agents?.defaults?.models?.[`${provider}/${modelId}`]?.agentRuntime?.id
-        : undefined;
-    const providerRuntime = provider
-      ? config?.models?.providers?.[provider]?.agentRuntime?.id
-      : undefined;
-    const runtime =
-      modelRuntime === "default"
-        ? undefined
-        : (modelRuntime ??
-          (providerRuntime === "default" ? undefined : providerRuntime) ??
-          (provider === "openai" ? "codex" : "auto"));
-    return {
-      runtime,
-      runtimeSource: modelRuntime ? "model" : providerRuntime ? "provider" : "implicit",
-    };
-  },
-}));
-
-vi.mock("../../agents/runtime-plan/auth.js", () => ({
-  buildAgentRuntimeAuthPlan: ({
-    provider,
-    harnessRuntime,
+    context,
   }: {
     provider: string;
-    harnessRuntime?: string;
-  }) => ({
-    providerForAuth: provider,
-    authProfileProviderForAuth: provider,
-    ...(harnessRuntime === "codex" ? { harnessAuthProvider: "openai" } : {}),
-  }),
+    context: ProviderDefaultThinkingPolicyContext;
+  }) => pluginPolicyMock.thinkingProfiles.get(provider)?.(context),
 }));
 
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
-import {
-  clearRuntimeAuthProfileStoreSnapshots,
-  replaceRuntimeAuthProfileStoreSnapshots,
-} from "../../agents/auth-profiles.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
-import type { ModelDefinitionConfig, OpenClawConfig } from "../../config/config.js";
-import type { SessionEntry } from "../../config/sessions.js";
-import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { InternalSessionEntry, SessionEntry } from "../../config/sessions.js";
+import {
+  loadSessionEntry,
+  persistSessionTranscriptTurn,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import {
   clearInternalHooks,
   registerInternalHook,
   type InternalHookEvent,
 } from "../../hooks/internal-hooks.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import type { ProviderPlugin } from "../../plugins/types.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import type { ElevatedLevel } from "../thinking.js";
+import { registerModelRuntimeDirectiveTests } from "./directive-handling.model-runtime.test-support.js";
+import { registerModelStatusDirectiveTests } from "./directive-handling.model-status.test-support.js";
+import { createModelSelectionStateFixture } from "./model-selection.test-support.js";
 
 let handleDirectiveOnly: typeof import("./directive-handling.impl.js").handleDirectiveOnly;
-let cliBackendsTesting: typeof import("../../agents/cli-backends.test-support.js").testing;
 let maybeHandleModelDirectiveInfo: typeof import("./directive-handling.model.js").maybeHandleModelDirectiveInfo;
+let createModelVisibilityPolicy: typeof import("../../agents/model-visibility-policy.js").createModelVisibilityPolicy;
+let buildModelAliasIndex: typeof import("../../agents/model-selection.js").buildModelAliasIndex;
 let resolveModelSelectionFromDirective: typeof import("./directive-handling.model-selection.js").resolveModelSelectionFromDirective;
-let parseInlineDirectives: typeof import("./directive-handling.parse.js").parseInlineDirectives;
-let persistInlineDirectives: typeof import("./directive-handling.persist.js").persistInlineDirectives;
+let parseInlineSessionDirectives: typeof import("./directive-handling.parse.js").parseInlineSessionDirectives;
+let applyInlineDirectiveOverrides: typeof import("./get-reply-directives-apply.js").applyInlineDirectiveOverrides;
 
 beforeAll(async () => {
-  ({ testing: cliBackendsTesting } = await import("../../agents/cli-backends.test-support.js"));
   ({ handleDirectiveOnly } = await import("./directive-handling.impl.js"));
   ({ maybeHandleModelDirectiveInfo } = await import("./directive-handling.model.js"));
+  ({ createModelVisibilityPolicy } = await import("../../agents/model-visibility-policy.js"));
+  ({ buildModelAliasIndex } = await import("../../agents/model-selection.js"));
   ({ resolveModelSelectionFromDirective } =
     await import("./directive-handling.model-selection.js"));
-  ({ parseInlineDirectives } = await import("./directive-handling.parse.js"));
-  ({ persistInlineDirectives } = await import("./directive-handling.persist.js"));
+  ({ parseInlineSessionDirectives } = await import("./directive-handling.parse.js"));
+  ({ applyInlineDirectiveOverrides } = await import("./get-reply-directives-apply.js"));
 });
 const queueMocks = vi.hoisted(() => ({
   refreshQueuedFollowupSession: vi.fn(),
@@ -327,24 +157,57 @@ vi.mock("../../agents/agent-scope.js", () => ({
   listAgentEntries: () => [],
   resolveAgentConfig: vi.fn(() => ({})),
   resolveAgentDir: vi.fn(() => "/tmp/agent"),
-  resolveAgentEffectiveModelPrimary: vi.fn(() => undefined),
+  resolveNativeModelPrimary: vi.fn(() => undefined),
   resolveAgentModelFallbacksOverride: vi.fn(() => undefined),
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
   resolveSessionAgentIds: () => ({ sessionAgentId: "main" }),
   resolveSessionAgentId: vi.fn(() => "main"),
 }));
 
-vi.mock("../../agents/model-catalog.js", () => {
-  const loadModelCatalog = vi.fn(async () => [
+vi.mock("../../agents/prepared-model-catalog.js", () => {
+  const entries = [
     { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus" },
     { provider: "localai", id: "ultra-chat", name: "Ultra Chat" },
-  ]);
+  ];
+  const loadOwner = (params: {
+    config: OpenClawConfig;
+    agentId?: string;
+    agentDir?: string;
+    workspaceDir?: string;
+  }) => {
+    const owner = createModelsTestOwner(params.config, entries, params);
+    const store = readAuthProfileStoreForTest();
+    bindPreparedModelRuntimeAuth(owner, {
+      store,
+      labels: prepareModelCatalogAuthLabels({
+        config: params.config,
+        agentDir: owner.agentDir,
+        authStorePath: resolveAuthStorePathForDisplay(owner.agentDir),
+        workspaceDir: owner.workspaceDir,
+        env: {},
+        store,
+        providers: [
+          "openai",
+          "anthropic",
+          "openrouter",
+          "localai",
+          ...Object.keys(params.config.models?.providers ?? {}),
+        ],
+      }),
+    });
+    return owner;
+  };
   return {
-    loadModelCatalog,
-    loadModelCatalogSnapshot: async () => {
-      const entries = await loadModelCatalog();
-      return { entries, routeVariants: entries };
+    readPreparedModelCatalog: async () => entries,
+    loadProviderScopedThinkingCatalog: async () => entries,
+    getPublishedPreparedModelCatalogOwnerSnapshot: loadOwner,
+    loadPreparedModelCatalogOwnerSnapshot: () => {
+      throw new Error("Status must use the published catalog owner");
     },
+    loadPublishedPreparedModelCatalogOwnerSnapshot: async (
+      params: Parameters<typeof loadOwner>[0],
+    ) => loadOwner(params),
+    materializePreparedModelCatalogOwner: (owner: object) => owner,
   };
 });
 
@@ -368,16 +231,8 @@ vi.mock("./queue.js", () => ({
 const TEST_AGENT_DIR = "/tmp/agent";
 const OPENAI_DATE_PROFILE_ID = "20251001";
 
-type ApiKeyProfile = { type: "api_key"; provider: string; key: string };
-type OAuthProfileForTest = {
-  type: "oauth";
-  provider: string;
-  access: string;
-  refresh: string;
-  expires: number;
-};
-type TokenProfileForTest = { type: "token"; provider: string; token: string };
-type AuthProfileForTest = ApiKeyProfile | OAuthProfileForTest | TokenProfileForTest;
+type AuthProfileForTest = (typeof authProfilesStoreMock.profiles)[string];
+type ApiKeyProfile = Extract<AuthProfileForTest, { type: "api_key" }>;
 
 function baseAliasIndex(): ModelAliasIndex {
   return { byAlias: new Map(), byKey: new Map() };
@@ -390,34 +245,31 @@ function baseConfig(): OpenClawConfig {
   } as unknown as OpenClawConfig;
 }
 
-function modelDefinition(id: string, name: string): ModelDefinitionConfig {
-  return {
-    id,
-    name,
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128_000,
-    maxTokens: 8192,
-  };
-}
-
-function createSessionEntry(overrides?: Partial<SessionEntry>): SessionEntry {
+function createSessionEntry(overrides?: Partial<InternalSessionEntry>): InternalSessionEntry {
   return {
     sessionId: "s1",
     updatedAt: Date.now(),
+    delivery: { kind: "none" },
     ...overrides,
   };
 }
 
-function setDirectiveTestProviders(providers: ProviderPlugin[]): void {
-  const registry = createEmptyPluginRegistry();
-  registry.providers = providers.map((provider) => ({
-    pluginId: "test",
-    provider,
-    source: "test",
-  }));
-  setActivePluginRegistry(registry);
+function setDirectiveTestProviders(
+  providers: Array<{
+    id: string;
+    label?: string;
+    auth?: unknown[];
+    resolveThinkingProfile?: (
+      context: ProviderDefaultThinkingPolicyContext,
+    ) => ProviderThinkingProfile | null | undefined;
+  }>,
+): void {
+  pluginPolicyMock.thinkingProfiles.clear();
+  for (const provider of providers) {
+    if (provider.resolveThinkingProfile) {
+      pluginPolicyMock.thinkingProfiles.set(provider.id, provider.resolveThinkingProfile);
+    }
+  }
 }
 
 function setOpenAiRuntimeScopedUltraProvider(): void {
@@ -442,49 +294,27 @@ function setOpenAiRuntimeScopedUltraProvider(): void {
 
 beforeEach(() => {
   vi.useRealTimers();
-  cliBackendsTesting.setDepsForTest({
-    resolvePluginSetupRegistry: () => ({
-      providers: [],
-      cliBackends: [],
-      configMigrations: [],
-      autoEnableProbes: [],
-      diagnostics: [],
-    }),
-    resolveRuntimeCliBackends: () => [],
-  });
+  setFastModelsCliBackendDeps();
   setDirectiveTestProviders([]);
-  modelsCommandMock.resolveModelsCommandReply
-    .mockReset()
-    .mockResolvedValue(defaultModelsCommandReply());
-  modelsCommandMock.delegateToActual = false;
-  clearRuntimeAuthProfileStoreSnapshots();
-  replaceRuntimeAuthProfileStoreSnapshots([
-    {
-      agentDir: TEST_AGENT_DIR,
-      store: { version: 1, profiles: {} },
-    },
-  ]);
+  pluginPolicyMock.channels.clear();
+  authProfilesStoreMock.profiles = {};
   vi.mocked(resolveAgentDir).mockReset().mockReturnValue(TEST_AGENT_DIR);
   vi.mocked(resolveSessionAgentId).mockReset().mockReturnValue("main");
   vi.mocked(enqueueSystemEvent).mockClear();
   queueMocks.refreshQueuedFollowupSession.mockReset();
+  stickyModelMock.persistBestEffort.mockReset().mockReturnValue("requested");
   clearInternalHooks();
 });
 
 afterEach(() => {
   cliBackendsTesting.resetDepsForTest();
   setDirectiveTestProviders([]);
-  clearRuntimeAuthProfileStoreSnapshots();
+  pluginPolicyMock.channels.clear();
   clearInternalHooks();
 });
 
 function setAuthProfiles(profiles: Record<string, AuthProfileForTest>) {
-  replaceRuntimeAuthProfileStoreSnapshots([
-    {
-      agentDir: TEST_AGENT_DIR,
-      store: { version: 1, profiles },
-    },
-  ]);
+  authProfilesStoreMock.profiles = profiles;
 }
 
 function createDateAuthProfiles(provider: string, id = OPENAI_DATE_PROFILE_ID) {
@@ -504,41 +334,31 @@ function createGptAliasIndex(): ModelAliasIndex {
   };
 }
 
-function createOpusAliasIndex(): ModelAliasIndex {
-  return {
-    byAlias: new Map([
-      [
-        "opus",
-        {
-          alias: "Opus",
-          ref: { provider: "anthropic", model: "claude-opus-4-6" },
-        },
-      ],
-    ]),
-    byKey: new Map([["anthropic/claude-opus-4-6", ["Opus"]]]),
-  };
-}
-
 function resolveModelSelectionForCommand(params: {
   command: string;
   allowedModelKeys: Set<string>;
-  allowedModelCatalog: Array<{ provider: string; id: string }>;
+  cfg?: OpenClawConfig;
+  agentId?: string;
 }) {
   return resolveModelSelectionFromDirective({
-    directives: parseInlineDirectives(params.command),
-    cfg: { commands: { text: true } } as unknown as OpenClawConfig,
+    directives: parseInlineSessionDirectives(params.command),
+    cfg: params.cfg ?? {
+      commands: { text: true },
+      agents: { defaults: { modelPolicy: { allow: [...params.allowedModelKeys] } } },
+    },
+    agentId: params.agentId,
     agentDir: TEST_AGENT_DIR,
     defaultProvider: "anthropic",
     defaultModel: "claude-opus-4-6",
     aliasIndex: baseAliasIndex(),
     allowedModelKeys: params.allowedModelKeys,
-    allowedModelCatalog: params.allowedModelCatalog,
-    provider: "anthropic",
   });
 }
 
 async function persistModelDirectiveForTest(params: {
   command: string;
+  directiveOnly?: boolean;
+  agentId?: string;
   profiles?: Record<string, ApiKeyProfile>;
   cfg?: OpenClawConfig;
   aliasIndex?: ModelAliasIndex;
@@ -548,78 +368,163 @@ async function persistModelDirectiveForTest(params: {
   provider?: string;
   model?: string;
   initialModelLabel?: string;
+  canPersistStickyModelSelection?: boolean;
+  isAuthorizedSender?: boolean;
 }) {
   if (params.profiles) {
     setAuthProfiles(params.profiles);
   }
-  const directives = parseInlineDirectives(params.command);
+  const originalDirectives = parseInlineSessionDirectives(params.command);
+  const commandBody =
+    params.directiveOnly || originalDirectives.cleaned.trim()
+      ? params.command
+      : `${params.command} continue with the request`;
+  const directives = parseInlineSessionDirectives(commandBody);
   const cfg = params.cfg ?? baseConfig();
   const sessionEntry = params.sessionEntry ?? createSessionEntry();
-  const persisted = await persistInlineDirectives({
-    directives,
-    effectiveModelDirective: directives.rawModelDirective,
+  const provider = params.provider ?? "anthropic";
+  const model = params.model ?? "claude-opus-4-6";
+  const agentId = params.agentId ?? "main";
+  const sessionKey = `agent:${agentId}:dm:1`;
+  const modelState = createModelSelectionStateFixture({
+    agentCfg: cfg.agents?.defaults,
+    provider,
+    model,
+  });
+  modelState.allowedModelKeys = new Set(params.allowedModelKeys);
+  modelState.allowedModelCatalog = params.allowedModelCatalog ?? [];
+  modelState.resolveThinkingCatalog = async () => params.allowedModelCatalog;
+  const result = await applyInlineDirectiveOverrides({
+    ctx: { Body: commandBody, Provider: "telegram", Surface: "telegram" },
     cfg,
+    agentId,
     agentDir: TEST_AGENT_DIR,
+    workspaceDir: "/tmp/workspace",
+    agentCfg: cfg.agents?.defaults ?? {},
     sessionEntry,
-    sessionStore: { "agent:main:dm:1": sessionEntry },
-    sessionKey: "agent:main:dm:1",
-    storePath: undefined,
+    sessionStore: { [sessionKey]: sessionEntry },
+    sessionKey,
+    sessionScope: undefined,
+    isGroup: false,
+    allowTextCommands: true,
+    command: {
+      surface: "telegram",
+      channel: "telegram",
+      ownerList: [],
+      senderIsOwner: params.canPersistStickyModelSelection ?? true,
+      isAuthorizedSender: params.isAuthorizedSender ?? true,
+      rawBodyNormalized: commandBody,
+      commandBodyNormalized: commandBody,
+    },
+    directives,
     elevatedEnabled: false,
     elevatedAllowed: false,
+    elevatedFailures: [],
     defaultProvider: "anthropic",
     defaultModel: "claude-opus-4-6",
     aliasIndex: params.aliasIndex ?? baseAliasIndex(),
-    allowedModelKeys: new Set(params.allowedModelKeys),
-    modelCatalog: params.allowedModelCatalog,
-    provider: params.provider ?? "anthropic",
-    model: params.model ?? "claude-opus-4-6",
-    initialModelLabel:
-      params.initialModelLabel ??
-      `${params.provider ?? "anthropic"}/${params.model ?? "claude-opus-4-6"}`,
+    provider,
+    model,
+    modelState,
+    initialModelLabel: params.initialModelLabel ?? `${provider}/${model}`,
     formatModelSwitchEvent: (label) => label,
-    agentCfg: cfg.agents?.defaults,
+    resolvedElevatedLevel: "off",
+    defaultActivation: () => "always",
+    contextTokens: 8192,
+    effectiveModelDirective: directives.rawModelDirective,
+    typing: {
+      onReplyStart: async () => {},
+      startTypingLoop: async () => {},
+      startTypingOnText: async () => {},
+      refreshTypingTtl: () => {},
+      isActive: () => false,
+      markRunComplete: () => {},
+      markDispatchIdle: () => {},
+      cleanup: () => {},
+    },
   });
-  return { persisted, sessionEntry };
+  const persisted =
+    result.kind === "continue"
+      ? {
+          provider: result.provider,
+          model: result.model,
+          contextTokens: result.contextTokens,
+          directiveAck: result.directiveAck,
+          errorText: undefined,
+        }
+      : {
+          provider,
+          model,
+          contextTokens: 8192,
+          directiveAck: undefined,
+          errorText: Array.isArray(result.reply) ? result.reply[0]?.text : result.reply?.text,
+        };
+  return { persisted, sessionEntry, result };
 }
 
-type PersistInlineDirectivesParams = Parameters<typeof persistInlineDirectives>[0];
+type HandleDirectiveParams = Parameters<typeof handleDirectiveOnly>[0];
+const EXEC_DEFAULTS_DIRECTIVE = "/exec host=node security=allowlist ask=always node=worker-1";
+const VERBOSE_DEFAULT_DIRECTIVE = "/verbose full";
 
-async function persistInternalOperatorWriteDirective(
-  command: string,
-  overrides: Partial<PersistInlineDirectivesParams> = {},
-) {
+function createDirectiveHandlingParams(
+  overrides: Partial<HandleDirectiveParams>,
+): HandleDirectiveParams {
+  const sessionKey = overrides.sessionKey ?? "agent:main:main";
   const sessionEntry = overrides.sessionEntry ?? createSessionEntry();
-  const sessionStore = overrides.sessionStore ?? { "agent:main:main": sessionEntry };
-  await persistInlineDirectives({
-    directives: parseInlineDirectives(command),
+  return {
     cfg: baseConfig(),
+    agentId: "main",
+    directives: parseInlineSessionDirectives(""),
     sessionEntry,
-    sessionStore,
-    sessionKey: "agent:main:main",
-    storePath: "/tmp/sessions.json",
+    sessionStore: { [sessionKey]: sessionEntry },
+    sessionKey,
     elevatedEnabled: true,
     elevatedAllowed: true,
     defaultProvider: "anthropic",
     defaultModel: "claude-opus-4-6",
     aliasIndex: baseAliasIndex(),
     allowedModelKeys: new Set(["anthropic/claude-opus-4-6", "openai/gpt-4o"]),
+    allowedModelCatalog: [],
+    resetModelOverride: false,
     provider: "anthropic",
     model: "claude-opus-4-6",
     initialModelLabel: "anthropic/claude-opus-4-6",
     formatModelSwitchEvent: (label) => `Switched to ${label}`,
-    agentCfg: undefined,
-    surface: "webchat",
-    gatewayClientScopes: ["operator.write"],
     ...overrides,
-  });
+  };
+}
+
+async function persistInternalOperatorWriteDirective(
+  command: string,
+  overrides: Partial<HandleDirectiveParams> = {},
+) {
+  const sessionEntry = overrides.sessionEntry ?? createSessionEntry();
+  await handleDirectiveOnly(
+    createDirectiveHandlingParams({
+      directives: parseInlineSessionDirectives(command),
+      sessionEntry,
+      surface: "webchat",
+      gatewayClientScopes: ["operator.write"],
+      ...overrides,
+    }),
+  );
   return sessionEntry;
+}
+
+function externalChannelPolicy(overrides: Partial<HandleDirectiveParams> = {}) {
+  return { messageProvider: "telegram", surface: "telegram", ...overrides };
+}
+
+function expectExecDefaults(sessionEntry: SessionEntry, persisted: boolean) {
+  expect(sessionEntry.execHost).toBe(persisted ? "node" : undefined);
+  expect(sessionEntry.execNode).toBe(persisted ? "worker-1" : undefined);
 }
 
 async function resolveModelInfoReply(
   overrides: Partial<Parameters<typeof maybeHandleModelDirectiveInfo>[0]> = {},
 ) {
   return maybeHandleModelDirectiveInfo({
-    directives: parseInlineDirectives("/model"),
+    directives: parseInlineSessionDirectives("/model"),
     cfg: baseConfig(),
     agentDir: TEST_AGENT_DIR,
     activeAgentId: "main",
@@ -629,567 +534,151 @@ async function resolveModelInfoReply(
     defaultModel: "claude-opus-4-6",
     aliasIndex: baseAliasIndex(),
     allowedModelCatalog: [],
+    currentThinkLevel: "medium",
+    runtimePolicySessionKey: "agent:main:main",
     resetModelOverride: false,
     ...overrides,
   });
 }
 
 describe("/model chat UX", () => {
-  it("shows summary for /model with no args", async () => {
-    const reply = await resolveModelInfoReply();
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-    expect(reply?.text).toContain("Current:");
-    expect(reply?.text).toContain("Browse: /models");
-    expect(reply?.text).toContain("Switch: /model <provider/model>");
-  });
-
-  it("treats /model list as a models browser alias, not a model id", async () => {
+  it("marks an auth profile without a model selection as an error", async () => {
     const reply = await resolveModelInfoReply({
-      directives: parseInlineDirectives("/model list"),
+      directives: parseInlineSessionDirectives("/model list@work"),
     });
 
-    expect(reply?.text).toContain("Providers:");
-    expect(reply?.text).toContain("Use: /models <provider>");
-    expect(reply?.text).toContain("Switch: /model <provider/model>");
+    expect(reply).toEqual({
+      text: "Auth profile override requires a model selection.",
+      isError: true,
+    });
   });
 
-  it("passes workspace scope through the /model list browser alias", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-model-list-auth-label-"));
-    const workspaceDir = path.join(tempRoot, "workspace");
-    const pluginDir = path.join(workspaceDir, ".openclaw", "extensions", "workspace-model-list");
-    const bundledDir = path.join(tempRoot, "bundled");
-    const stateDir = path.join(tempRoot, "state");
-    const credentialPath = path.join(tempRoot, "credentials.json");
-    fs.mkdirSync(pluginDir, { recursive: true });
-    fs.mkdirSync(bundledDir, { recursive: true });
-    fs.mkdirSync(stateDir, { recursive: true });
-    fs.writeFileSync(path.join(pluginDir, "index.ts"), "export default {}\n", "utf8");
-    fs.writeFileSync(credentialPath, "{}", "utf8");
-    fs.writeFileSync(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: "workspace-model-list",
-        configSchema: { type: "object" },
-        setup: {
-          providers: [
-            {
-              id: "anthropic",
-              authEvidence: [
-                {
-                  type: "local-file-with-env",
-                  fileEnvVar: "WORKSPACE_MODEL_LIST_CREDENTIALS",
-                  credentialMarker: "workspace-model-list-local-credentials",
-                  source: "workspace model list credentials",
-                },
-              ],
-            },
-          ],
-        },
-      }),
-      "utf8",
+  it.each([
+    ["/model status --runtime codex", "Runtime override requires a model selection."],
+    ["/model list -s", "Session-only scope requires a model selection."],
+    ["/model status --agent", "Agent scope requires a model selection."],
+    ["/model list --global", "Global scope requires a model selection."],
+  ])("rejects action options on informational model commands: %s", async (command, text) => {
+    const reply = await resolveModelInfoReply({
+      directives: parseInlineSessionDirectives(command),
+    });
+
+    expect(reply).toEqual({ text, isError: true });
+  });
+
+  it("includes the thinking level in channel-specific model summaries", async () => {
+    pluginPolicyMock.channels.set("telegram", {
+      id: "telegram",
+      commands: {
+        buildModelBrowseChannelData: () => ({ telegram: { inlineKeyboard: [] } }),
+      },
+    });
+
+    const reply = await resolveModelInfoReply({ surface: "telegram" });
+
+    expect(reply?.channelData).toBeDefined();
+    expect(reply?.text).toContain("Think: medium (change with /think <level>)");
+    expect(reply?.text).toContain("Tap below to select a model");
+    expect(reply?.text).toContain("/model <provider/model> -s for this session only");
+    expect(reply?.text).toContain("/model <provider/model> -a to update this agent's default");
+    expect(reply?.text).toContain("/model <provider/model> -g to update the global default");
+    expect(reply?.text).toContain(
+      "/model <provider/model> --runtime <runtime> -s to switch harnesses",
     );
+  });
 
-    try {
-      await withEnvAsync(
-        {
-          OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
-          OPENCLAW_STATE_DIR: stateDir,
-          WORKSPACE_MODEL_LIST_CREDENTIALS: credentialPath,
-        },
-        async () => {
-          modelsCommandMock.delegateToActual = true;
-          const reply = await resolveModelInfoReply({
-            directives: parseInlineDirectives("/model list"),
-            workspaceDir,
-            cfg: {
-              ...baseConfig(),
-              plugins: { allow: ["workspace-model-list"] },
-            } as unknown as OpenClawConfig,
-          });
-
-          expect(reply?.text).toContain("- anthropic");
-          expect(modelsCommandMock.resolveModelsCommandReply).toHaveBeenCalledWith(
-            expect.objectContaining({
-              commandBodyNormalized: "/models",
-              workspaceDir,
-              cfg: expect.objectContaining({
-                plugins: { allow: ["workspace-model-list"] },
-              }),
+  it.each(["/model"])(
+    "%s reads terminal fallback from the transcript scope, not the runtime-policy key",
+    async (command) => {
+      const tempRoot = tempDirs.make("openclaw-model-terminal-display-");
+      const stateDir = path.join(tempRoot, "state");
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const sessionKey = "agent:main:main";
+        const storePath = path.join(tempRoot, "custom-store", "openclaw-agent.sqlite");
+        const scope = { agentId: "main", sessionKey, sessionId: "terminal-display", storePath };
+        try {
+          await replaceSessionEntry(
+            scope,
+            createSessionEntry({
+              sessionId: scope.sessionId,
+              status: "done",
+              lastRunId: "settled-run",
+              fallbackNotice: {
+                kind: "active",
+                selectedModel: "anthropic/claude-opus-4-6",
+                activeModel: "anthropic/claude-haiku-4-5",
+                reason: "rate limit",
+              },
             }),
           );
-        },
-      );
-    } finally {
-      fs.rmSync(tempRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("shows active runtime model when different from selected model", async () => {
-    const reply = await resolveModelInfoReply({
-      provider: "fireworks",
-      model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-      defaultProvider: "fireworks",
-      defaultModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-      sessionEntry: {
-        modelProvider: "deepinfra",
-        model: "moonshotai/Kimi-K2.5",
-      },
-    });
-
-    expect(reply?.text).toContain(
-      "Current: fireworks/accounts/fireworks/routers/kimi-k2p5-turbo (selected)",
-    );
-    expect(reply?.text).toContain("Active: deepinfra/moonshotai/Kimi-K2.5 (runtime)");
-  });
-
-  it("shows status for the allowed catalog without duplicate missing auth labels", async () => {
-    const reply = await resolveModelInfoReply({
-      directives: parseInlineDirectives("/model status"),
-      cfg: {
-        commands: { text: true },
-        agents: {
-          defaults: {
-            models: {
-              "anthropic/claude-opus-4-6": {},
-              "openai/gpt-4.1-mini": {},
-            },
-          },
-        },
-      } as unknown as OpenClawConfig,
-      allowedModelCatalog: [
-        { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus 4.5" },
-        { provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 mini" },
-      ],
-    });
-
-    expect(reply?.text).toContain("anthropic/claude-opus-4-6");
-    expect(reply?.text).toContain("openai/gpt-4.1-mini");
-    expect(reply?.text).not.toContain("claude-sonnet-4-1");
-    expect(reply?.text).toContain("auth:");
-    expect(reply?.text).not.toContain("missing (missing)");
-  });
-
-  it("hides missing-auth direct provider rows covered by OpenRouter nested model ids", async () => {
-    const reply = await resolveModelInfoReply({
-      directives: parseInlineDirectives("/model status"),
-      provider: "openrouter",
-      model: "google/gemini-3-flash-preview",
-      defaultProvider: "openrouter",
-      defaultModel: "google/gemini-3-flash-preview",
-      cfg: {
-        commands: { text: true },
-        models: {
-          providers: {
-            openrouter: {
-              baseUrl: "https://openrouter.example.test/api/v1",
-              models: [modelDefinition("google/gemini-3-flash-preview", "Gemini via OpenRouter")],
-            },
-          },
-        },
-      } as unknown as OpenClawConfig,
-      allowedModelCatalog: [
-        { provider: "google", id: "gemini-3-flash-preview", name: "Gemini 3 Flash" },
-        {
-          provider: "openrouter",
-          id: "google/gemini-3-flash-preview",
-          name: "Gemini via OpenRouter",
-        },
-      ],
-    });
-
-    expect(reply?.text).toContain("[openrouter]");
-    expect(reply?.text).toContain("openrouter/google/gemini-3-flash-preview");
-    expect(reply?.text).not.toContain("\n[google]");
-    expect(reply?.text).not.toContain("\n  • google/gemini-3-flash-preview");
-  });
-
-  it("keeps explicitly configured direct provider rows next to OpenRouter nested ids", async () => {
-    const reply = await resolveModelInfoReply({
-      directives: parseInlineDirectives("/model status"),
-      provider: "openrouter",
-      model: "google/gemini-3-flash-preview",
-      defaultProvider: "openrouter",
-      defaultModel: "google/gemini-3-flash-preview",
-      cfg: {
-        commands: { text: true },
-        models: {
-          providers: {
-            google: {
-              baseUrl: "https://google.example.test/v1",
-              models: [modelDefinition("gemini-3-flash-preview", "Gemini 3 Flash")],
-            },
-            openrouter: {
-              baseUrl: "https://openrouter.example.test/api/v1",
-              models: [modelDefinition("google/gemini-3-flash-preview", "Gemini via OpenRouter")],
-            },
-          },
-        },
-      } as unknown as OpenClawConfig,
-      allowedModelCatalog: [
-        { provider: "google", id: "gemini-3-flash-preview", name: "Gemini 3 Flash" },
-        {
-          provider: "openrouter",
-          id: "google/gemini-3-flash-preview",
-          name: "Gemini via OpenRouter",
-        },
-      ],
-    });
-
-    expect(reply?.text).toContain("[google]");
-    expect(reply?.text).toContain("google/gemini-3-flash-preview");
-    expect(reply?.text).toContain("[openrouter]");
-    expect(reply?.text).toContain("openrouter/google/gemini-3-flash-preview");
-  });
-
-  it("reports unified OpenAI OAuth auth for OpenAI status rows", async () => {
-    setAuthProfiles({
-      "openai:patrick@example.test": {
-        type: "oauth",
-        provider: "openai",
-        access: "access-token",
-        refresh: "refresh-token",
-        expires: Date.now() + 60_000,
-      },
-      "openai:runtime-token": {
-        type: "token",
-        provider: "openai",
-        token: "token",
-      },
-    });
-
-    const reply = await resolveModelInfoReply({
-      directives: parseInlineDirectives("/model status"),
-      provider: "openai",
-      model: "gpt-5.5",
-      defaultProvider: "openai",
-      defaultModel: "gpt-5.5",
-      cfg: {
-        commands: { text: true },
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-5.5" },
-            models: {
-              "codex/gpt-5.5": {},
-              "openai/gpt-5.5": {},
-            },
-          },
-        },
-      } as unknown as OpenClawConfig,
-      allowedModelCatalog: [{ provider: "openai", id: "gpt-5.5", name: "GPT-5.5" }],
-    });
-
-    expect(reply?.text).toContain("[openai] endpoint: default auth:");
-    expect(reply?.text).not.toContain("[openai] endpoint: default auth: missing");
-    expect(reply?.text).not.toContain("via codex runtime");
-    expect(reply?.text).toContain("openai:patrick@example.test=OAuth");
-  }, 240_000);
-
-  it("keeps direct provider auth labels when OpenAI API key auth exists", async () => {
-    setAuthProfiles({
-      "openai:api-key": {
-        type: "api_key",
-        provider: "openai",
-        key: "sk-openai-direct",
-      },
-      "openai:patrick@example.test": {
-        type: "oauth",
-        provider: "openai",
-        access: "access-token",
-        refresh: "refresh-token",
-        expires: Date.now() + 60_000,
-      },
-    });
-
-    const reply = await resolveModelInfoReply({
-      directives: parseInlineDirectives("/model status"),
-      provider: "openai",
-      model: "gpt-5.5",
-      defaultProvider: "openai",
-      defaultModel: "gpt-5.5",
-      cfg: {
-        commands: { text: true },
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-5.5" },
-            models: {
-              "openai/gpt-5.5": {},
-            },
-          },
-        },
-      } as unknown as OpenClawConfig,
-      allowedModelCatalog: [{ provider: "openai", id: "gpt-5.5", name: "GPT-5.5" }],
-    });
-
-    expect(reply?.text).toContain("[openai] endpoint: default auth:");
-    expect(reply?.text).toContain("openai:api-key=");
-    expect(reply?.text).not.toContain("via codex runtime");
-  });
-
-  it("does not borrow Codex auth when OpenAI model policy pins OpenClaw runtime", async () => {
-    setAuthProfiles({
-      "openai:patrick@example.test": {
-        type: "oauth",
-        provider: "openai",
-        access: "access-token",
-        refresh: "refresh-token",
-        expires: Date.now() + 60_000,
-      },
-    });
-
-    const reply = await resolveModelInfoReply({
-      directives: parseInlineDirectives("/model status"),
-      provider: "openai",
-      model: "gpt-5.5",
-      defaultProvider: "openai",
-      defaultModel: "gpt-5.5",
-      cfg: {
-        commands: { text: true },
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-5.5" },
-            models: {
-              "openai/gpt-5.5": {
-                agentRuntime: { id: "openclaw" },
-              },
-            },
-          },
-        },
-      } as unknown as OpenClawConfig,
-      allowedModelCatalog: [{ provider: "openai", id: "gpt-5.5", name: "GPT-5.5" }],
-    });
-
-    expect(reply?.text).toContain("[openai] endpoint: default auth: missing");
-    expect(reply?.text).not.toContain("via codex runtime");
-    expect(reply?.text).not.toContain("openai:patrick@example.test=OAuth");
-    expect(reply?.text).not.toContain("openai:runtime-token=token");
-  });
-
-  it("honors Codex session runtime overrides when labeling OpenAI status auth", async () => {
-    setAuthProfiles({
-      "openai:patrick@example.test": {
-        type: "oauth",
-        provider: "openai",
-        access: "access-token",
-        refresh: "refresh-token",
-        expires: Date.now() + 60_000,
-      },
-    });
-
-    const reply = await resolveModelInfoReply({
-      directives: parseInlineDirectives("/model status"),
-      provider: "openai",
-      model: "gpt-5.5",
-      defaultProvider: "openai",
-      defaultModel: "gpt-5.5",
-      sessionEntry: {
-        agentRuntimeOverride: "codex",
-      },
-      cfg: {
-        commands: { text: true },
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-5.5" },
-            models: {
-              "openai/gpt-5.5": {
-                agentRuntime: { id: "openclaw" },
-              },
-            },
-          },
-        },
-      } as unknown as OpenClawConfig,
-      allowedModelCatalog: [{ provider: "openai", id: "gpt-5.5", name: "GPT-5.5" }],
-    });
-
-    expect(reply?.text).toContain("[openai] endpoint: default auth:");
-    expect(reply?.text).not.toContain("[openai] endpoint: default auth: missing");
-    expect(reply?.text).toContain("openai:patrick@example.test=OAuth");
-  });
-
-  it("treats the persisted harness id as observational when labeling status auth", async () => {
-    setAuthProfiles({
-      "openai:patrick@example.test": {
-        type: "oauth",
-        provider: "openai",
-        access: "access-token",
-        refresh: "refresh-token",
-        expires: Date.now() + 60_000,
-      },
-    });
-
-    const reply = await resolveModelInfoReply({
-      directives: parseInlineDirectives("/model status"),
-      provider: "openai",
-      model: "gpt-5.5",
-      defaultProvider: "openai",
-      defaultModel: "gpt-5.5",
-      sessionEntry: {
-        agentHarnessId: "codex",
-      },
-      cfg: {
-        commands: { text: true },
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-5.5" },
-            models: {
-              "openai/gpt-5.5": {
-                agentRuntime: { id: "openclaw" },
-              },
-            },
-          },
-        },
-      } as unknown as OpenClawConfig,
-      allowedModelCatalog: [{ provider: "openai", id: "gpt-5.5", name: "GPT-5.5" }],
-    });
-
-    expect(reply?.text).toContain("[openai] endpoint: default auth: missing");
-    expect(reply?.text).not.toContain("openai:patrick@example.test=OAuth");
-  });
-
-  it("uses workspace-scoped auth evidence in /model status labels", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-model-status-auth-label-"));
-    const workspaceDir = path.join(tempRoot, "workspace");
-    const pluginDir = path.join(workspaceDir, ".openclaw", "extensions", "workspace-model-auth");
-    const bundledDir = path.join(tempRoot, "bundled");
-    const stateDir = path.join(tempRoot, "state");
-    const credentialPath = path.join(tempRoot, "credentials.json");
-    fs.mkdirSync(pluginDir, { recursive: true });
-    fs.mkdirSync(bundledDir, { recursive: true });
-    fs.mkdirSync(stateDir, { recursive: true });
-    fs.writeFileSync(path.join(pluginDir, "index.ts"), "export default {}\n", "utf8");
-    fs.writeFileSync(credentialPath, "{}", "utf8");
-    fs.writeFileSync(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: "workspace-model-auth",
-        configSchema: { type: "object" },
-        setup: {
-          providers: [
-            {
-              id: "anthropic",
-              authEvidence: [
-                {
-                  type: "local-file-with-env",
-                  fileEnvVar: "WORKSPACE_MODEL_CREDENTIALS",
-                  credentialMarker: "workspace-model-local-credentials",
-                  source: "workspace model credentials",
-                },
-              ],
-            },
-          ],
-        },
-      }),
-      "utf8",
-    );
-
-    try {
-      await withEnvAsync(
-        {
-          ANTHROPIC_API_KEY: undefined,
-          ANTHROPIC_OAUTH_TOKEN: undefined,
-          OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
-          OPENCLAW_STATE_DIR: stateDir,
-          WORKSPACE_MODEL_CREDENTIALS: credentialPath,
-        },
-        async () => {
-          const reply = await resolveModelInfoReply({
-            directives: parseInlineDirectives("/model status"),
-            workspaceDir,
-            cfg: {
-              ...baseConfig(),
-              plugins: { allow: ["workspace-model-auth"] },
-              agents: {
-                defaults: {
-                  models: {
-                    "anthropic/claude-opus-4-6": {},
-                  },
+          await persistSessionTranscriptTurn(scope, {
+            runId: "settled-run",
+            messages: [
+              {
+                eventId: "terminal-answer",
+                parentId: null,
+                message: {
+                  role: "assistant",
+                  content: [{ type: "text", text: "The fallback answered." }],
+                  provider: "anthropic",
+                  model: "claude-haiku-4-5",
+                  stopReason: "stop",
                 },
               },
-            } as unknown as OpenClawConfig,
-            allowedModelCatalog: [
-              { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus 4.6" },
             ],
+            touchSessionEntry: false,
+            updateMode: "none",
           });
+          const sessionEntry = expectDefined(loadSessionEntry(scope), "persisted model session");
+          const before = structuredClone(sessionEntry);
+          const reply = await handleDirectiveOnly(
+            createDirectiveHandlingParams({
+              directives: parseInlineSessionDirectives(command),
+              sessionEntry,
+              sessionKey,
+              storePath,
+              ctx: { RuntimePolicySessionKey: "agent:main:telegram:default:direct:fixture-user" },
+            }),
+          );
+          expect(reply?.text).toContain("Current: anthropic/claude-opus-4-6");
+          expect(reply?.text).toContain("Active: anthropic/claude-haiku-4-5 (runtime)");
+          expect(sessionEntry).toEqual(before);
+          expect(loadSessionEntry(scope)).toEqual(before);
+        } finally {
+          await cleanupSessionStateForTest({ stateDir, rootPath: tempRoot });
+        }
+      });
+    },
+  );
 
-          expect(reply?.text).toContain("workspace model credentials");
-        },
-      );
-    } finally {
-      fs.rmSync(tempRoot, { recursive: true, force: true });
-    }
+  registerModelStatusDirectiveTests({
+    resolveModelInfoReply,
+    parseInlineSessionDirectives: (...args) => parseInlineSessionDirectives(...args),
+    createModelVisibilityPolicy: (...args) => createModelVisibilityPolicy(...args),
+    buildModelAliasIndex: (...args) => buildModelAliasIndex(...args),
   });
 
-  it("auto-applies closest match for typos", () => {
-    const directives = parseInlineDirectives("/model anthropic/claud-opus-4-5");
-    const cfg = { commands: { text: true } } as unknown as OpenClawConfig;
-
-    const resolved = resolveModelSelectionFromDirective({
-      directives,
-      cfg,
-      agentDir: "/tmp/agent",
-      defaultProvider: "anthropic",
-      defaultModel: "claude-opus-4-6",
-      aliasIndex: baseAliasIndex(),
-      allowedModelKeys: new Set(["anthropic/claude-opus-4-6"]),
-      allowedModelCatalog: [{ provider: "anthropic", id: "claude-opus-4-6" }],
-      provider: "anthropic",
-    });
-
-    expect(resolved.modelSelection).toEqual({
-      provider: "anthropic",
-      model: "claude-opus-4-6",
-      isDefault: true,
-    });
-    expect(resolved.errorText).toBeUndefined();
-  });
-
-  it("rejects numeric /model selections with a guided error", () => {
-    const resolved = resolveModelSelectionForCommand({
-      command: "/model 99",
-      allowedModelKeys: new Set(["anthropic/claude-opus-4-6", "openai/gpt-4o"]),
-      allowedModelCatalog: [],
-    });
-
-    expect(resolved.modelSelection).toBeUndefined();
-    expect(resolved.errorText).toContain("Numeric model selection is not supported in chat.");
-    expect(resolved.errorText).toContain("Browse: /models or /models <provider>");
-  });
-
-  it("includes additive allowlist repair when a runtime switch targets a blocked model", () => {
-    const resolved = resolveModelSelectionForCommand({
+  it("includes additive allowlist repair when a runtime switch targets a blocked model", async () => {
+    const resolved = await resolveModelSelectionForCommand({
       command: "/model openai/gpt-5.5 --runtime codex",
       allowedModelKeys: new Set(["anthropic/claude-opus-4-6"]),
-      allowedModelCatalog: [],
     });
 
     expect(resolved.modelSelection).toBeUndefined();
     expect(resolved.errorText).toContain('Model "openai/gpt-5.5" is not allowed.');
     expect(resolved.errorText).toContain(
-      `openclaw config set agents.defaults.models '{"openai/gpt-5.5":{}}' --strict-json --merge`,
+      'Add "openai/gpt-5.5" or its provider wildcard to agents.defaults.modelPolicy.allow.',
     );
     expect(resolved.errorText).toContain("Then retry: /model openai/gpt-5.5 --runtime codex");
     expect(resolved.errorText).toContain("openclaw plugins enable codex");
   });
 
-  it("treats explicit default /model selection as resettable default", () => {
-    const resolved = resolveModelSelectionForCommand({
-      command: "/model anthropic/claude-opus-4-6",
-      allowedModelKeys: new Set(["anthropic/claude-opus-4-6", "openai/gpt-4o"]),
-      allowedModelCatalog: [],
-    });
-
-    expect(resolved.errorText).toBeUndefined();
-    expect(resolved.modelSelection).toEqual({
-      provider: "anthropic",
-      model: "claude-opus-4-6",
-      isDefault: true,
-    });
-  });
-
-  it("treats /model default as a session model reset", () => {
-    const resolved = resolveModelSelectionForCommand({
+  it("treats /model default as a session model reset", async () => {
+    const resolved = await resolveModelSelectionForCommand({
       command: "/model default",
       allowedModelKeys: new Set(["anthropic/claude-opus-4-6", "openai/gpt-4o"]),
-      allowedModelCatalog: [],
     });
 
     expect(resolved.errorText).toBeUndefined();
@@ -1197,107 +686,16 @@ describe("/model chat UX", () => {
       provider: "anthropic",
       model: "claude-opus-4-6",
       isDefault: true,
+      resetToDefault: true,
     });
   });
 
-  it("keeps openrouter provider/model split for exact selections", () => {
-    const resolved = resolveModelSelectionForCommand({
-      command: "/model openrouter/anthropic/claude-opus-4-6",
-      allowedModelKeys: new Set(["openrouter/anthropic/claude-opus-4-6"]),
-      allowedModelCatalog: [],
-    });
-
-    expect(resolved.errorText).toBeUndefined();
-    expect(resolved.modelSelection).toEqual({
-      provider: "openrouter",
-      model: "anthropic/claude-opus-4-6",
-      isDefault: false,
-    });
-  });
-
-  it("keeps cloudflare @cf model segments for exact selections", () => {
-    const resolved = resolveModelSelectionForCommand({
-      command: "/model openai/@cf/openai/gpt-oss-20b",
-      allowedModelKeys: new Set(["openai/@cf/openai/gpt-oss-20b"]),
-      allowedModelCatalog: [],
-    });
-
-    expect(resolved.errorText).toBeUndefined();
-    expect(resolved.modelSelection).toEqual({
-      provider: "openai",
-      model: "@cf/openai/gpt-oss-20b",
-      isDefault: false,
-    });
-  });
-
-  it("treats @YYYYMMDD as a profile override when that profile exists for the resolved provider", () => {
-    setAuthProfiles(createDateAuthProfiles("openai"));
-
-    const resolved = resolveModelSelectionForCommand({
-      command: `/model openai/gpt-4o@${OPENAI_DATE_PROFILE_ID}`,
-      allowedModelKeys: new Set(["openai/gpt-4o"]),
-      allowedModelCatalog: [],
-    });
-
-    expect(resolved.errorText).toBeUndefined();
-    expect(resolved.modelSelection).toEqual({
-      provider: "openai",
-      model: "gpt-4o",
-      isDefault: false,
-    });
-    expect(resolved.profileOverride).toBe(OPENAI_DATE_PROFILE_ID);
-  });
-
-  it("supports alias selections with numeric auth-profile overrides", () => {
-    setAuthProfiles(createDateAuthProfiles("openai"));
-
-    const resolved = resolveModelSelectionFromDirective({
-      directives: parseInlineDirectives(`/model gpt@${OPENAI_DATE_PROFILE_ID}`),
-      cfg: { commands: { text: true } } as unknown as OpenClawConfig,
-      agentDir: TEST_AGENT_DIR,
-      defaultProvider: "anthropic",
-      defaultModel: "claude-opus-4-6",
-      aliasIndex: createGptAliasIndex(),
-      allowedModelKeys: new Set(["openai/gpt-4o"]),
-      allowedModelCatalog: [],
-      provider: "anthropic",
-    });
-
-    expect(resolved.errorText).toBeUndefined();
-    expect(resolved.modelSelection).toEqual({
-      provider: "openai",
-      model: "gpt-4o",
-      isDefault: false,
-      alias: "gpt",
-    });
-    expect(resolved.profileOverride).toBe(OPENAI_DATE_PROFILE_ID);
-  });
-
-  it("supports providerless allowlist selections with numeric auth-profile overrides", () => {
-    setAuthProfiles(createDateAuthProfiles("openai"));
-
-    const resolved = resolveModelSelectionForCommand({
-      command: `/model gpt-4o@${OPENAI_DATE_PROFILE_ID}`,
-      allowedModelKeys: new Set(["openai/gpt-4o"]),
-      allowedModelCatalog: [],
-    });
-
-    expect(resolved.errorText).toBeUndefined();
-    expect(resolved.modelSelection).toEqual({
-      provider: "openai",
-      model: "gpt-4o",
-      isDefault: false,
-    });
-    expect(resolved.profileOverride).toBe(OPENAI_DATE_PROFILE_ID);
-  });
-
-  it("keeps @YYYYMMDD as part of the model when the stored numeric profile is for another provider", () => {
+  it("keeps @YYYYMMDD as part of the model when the stored numeric profile is for another provider", async () => {
     setAuthProfiles(createDateAuthProfiles("anthropic"));
 
-    const resolved = resolveModelSelectionForCommand({
+    const resolved = await resolveModelSelectionForCommand({
       command: `/model custom/vertex-ai_claude-haiku-4-5@${OPENAI_DATE_PROFILE_ID}`,
       allowedModelKeys: new Set([`custom/vertex-ai_claude-haiku-4-5@${OPENAI_DATE_PROFILE_ID}`]),
-      allowedModelCatalog: [],
     });
 
     expect(resolved.errorText).toBeUndefined();
@@ -1308,101 +706,6 @@ describe("/model chat UX", () => {
     });
     expect(resolved.profileOverride).toBeUndefined();
   }, 240_000);
-
-  it("persists inferred numeric auth-profile overrides for mixed-content messages", async () => {
-    const { sessionEntry } = await persistModelDirectiveForTest({
-      command: `/model openai/gpt-4o@${OPENAI_DATE_PROFILE_ID} hello`,
-      profiles: createDateAuthProfiles("openai"),
-      allowedModelKeys: ["openai/gpt-4o", `openai/gpt-4o@${OPENAI_DATE_PROFILE_ID}`],
-    });
-
-    expect(sessionEntry.providerOverride).toBe("openai");
-    expect(sessionEntry.modelOverride).toBe("gpt-4o");
-    expect(sessionEntry.authProfileOverride).toBe(OPENAI_DATE_PROFILE_ID);
-  });
-
-  it.each([
-    ["openai/gpt-4o", "openai", "gpt-4o"],
-    ["codex/gpt-5.5", "codex", "gpt-5.5"],
-  ])("persists provider-compatible runtime overrides for %s", async (modelKey, provider, model) => {
-    const { persisted, sessionEntry } = await persistModelDirectiveForTest({
-      command: `/model ${modelKey} --runtime codex hello`,
-      allowedModelKeys: [modelKey],
-    });
-
-    expect(sessionEntry.providerOverride).toBe(provider);
-    expect(sessionEntry.modelOverride).toBe(model);
-    expect(sessionEntry.agentRuntimeOverride).toBe("codex");
-    expect(persisted.runtimeChange).toEqual({ kind: "set", runtime: "codex" });
-  });
-
-  it("normalizes legacy Codex app-server runtime overrides during persistence", async () => {
-    const { sessionEntry } = await persistModelDirectiveForTest({
-      command: "/model openai/gpt-4o --runtime codex-app-server hello",
-      allowedModelKeys: ["openai/gpt-4o"],
-    });
-
-    expect(sessionEntry.agentRuntimeOverride).toBe("codex");
-  });
-
-  it("uses Codex OAuth context config for persisted native Codex runtime directives", async () => {
-    const { persisted } = await persistModelDirectiveForTest({
-      command: "/model openai/gpt-5.5 --runtime codex hello",
-      allowedModelKeys: ["openai/gpt-5.5"],
-      cfg: {
-        ...baseConfig(),
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://chatgpt.com/backend-api/codex",
-              models: [
-                {
-                  id: "gpt-5.5",
-                  name: "GPT-5.5",
-                  reasoning: true,
-                  input: ["text", "image"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 1_050_000,
-                  contextTokens: 1_000_000,
-                  maxTokens: 128_000,
-                },
-              ],
-            },
-          },
-        },
-      } as unknown as OpenClawConfig,
-    });
-
-    expect(persisted.provider).toBe("openai");
-    expect(persisted.model).toBe("gpt-5.5");
-    expect(persisted.contextTokens).toBe(1_000_000);
-  });
-
-  it("caps a cold model switch with the selected catalog row", async () => {
-    const { persisted } = await persistModelDirectiveForTest({
-      command: "/model openai/gpt-5.5 hello",
-      allowedModelKeys: ["openai/gpt-5.5"],
-      allowedModelCatalog: [
-        {
-          provider: "openai",
-          id: "gpt-5.5",
-          name: "GPT-5.5",
-          contextWindow: 1_000_000,
-          contextTokens: 272_000,
-        },
-      ],
-      cfg: {
-        ...baseConfig(),
-        agents: {
-          defaults: {
-            contextTokens: 1_000_000,
-          },
-        },
-      } as OpenClawConfig,
-    });
-
-    expect(persisted.contextTokens).toBe(272_000);
-  });
 
   it("clears runtime overrides when the model directive asks for default runtime", async () => {
     const { sessionEntry } = await persistModelDirectiveForTest({
@@ -1417,117 +720,13 @@ describe("/model chat UX", () => {
     expect(sessionEntry.agentRuntimeOverride).toBeUndefined();
   });
 
-  it("clears a provider-incompatible runtime pin during a model switch", async () => {
-    const sessionEntry = createSessionEntry({
-      providerOverride: "openai",
-      modelOverride: "gpt-4o",
-      modelOverrideSource: "user",
-      agentRuntimeOverride: "codex",
-    });
-    const { persisted } = await persistModelDirectiveForTest({
-      command: "/model anthropic/claude-opus-4-6 hello",
-      allowedModelKeys: ["anthropic/claude-opus-4-6", "openai/gpt-4o"],
-      sessionEntry,
-      provider: "openai",
-      model: "gpt-4o",
-      initialModelLabel: "openai/gpt-4o",
-    });
-
-    expect(sessionEntry.agentRuntimeOverride).toBeUndefined();
-    expect(persisted.runtimeChange).toEqual({ kind: "clear" });
-  });
-
-  it("rejects model/runtime transactions that target an unsupported runtime", async () => {
-    vi.mocked(enqueueSystemEvent).mockClear();
-    const sessionEntry = createSessionEntry({
-      providerOverride: "anthropic",
-      modelOverride: "claude-opus-4-6",
-      modelOverrideSource: "user",
-      agentRuntimeOverride: "openclaw",
-    });
-    const { persisted } = await persistModelDirectiveForTest({
-      command: "/model openai/gpt-4o --runtime claude-cli hello",
-      allowedModelKeys: ["openai/gpt-4o"],
-      sessionEntry,
-    });
-
-    expect(persisted.errorText).toBe('Runtime "claude-cli" is not supported for openai.');
-    expect(sessionEntry).toMatchObject({
-      providerOverride: "anthropic",
-      modelOverride: "claude-opus-4-6",
-      modelOverrideSource: "user",
-      agentRuntimeOverride: "openclaw",
-    });
-    expect(enqueueSystemEvent).not.toHaveBeenCalled();
-  });
-
-  it("rejects the Codex runtime for providers the harness does not support", async () => {
-    const { persisted, sessionEntry } = await persistModelDirectiveForTest({
-      command: "/model anthropic/claude-opus-4-6 --runtime codex hello",
-      allowedModelKeys: ["anthropic/claude-opus-4-6"],
-    });
-
-    expect(persisted.errorText).toBe('Runtime "codex" is not supported for anthropic.');
-    expect(sessionEntry.agentRuntimeOverride).toBeUndefined();
-  });
-
-  it("rejects unsupported mixed thinking before mutating the model/runtime transaction", async () => {
-    setOpenAiRuntimeScopedUltraProvider();
-    const sessionEntry = createSessionEntry({
-      providerOverride: "openai",
-      modelOverride: "gpt-5.6-sol",
-      modelOverrideSource: "user",
-      agentRuntimeOverride: "openclaw",
-      thinkingLevel: "high",
-    });
-    const initialSessionEntry = { ...sessionEntry };
-    const { persisted } = await persistModelDirectiveForTest({
-      command: "/model openai/gpt-5.6-luna --runtime codex /think ultra please solve",
-      allowedModelKeys: ["openai/gpt-5.6-luna"],
-      sessionEntry,
-      provider: "openai",
-      model: "gpt-5.6-sol",
-      initialModelLabel: "openai/gpt-5.6-sol",
-    });
-
-    expect(persisted.errorText).toBe(
-      'Thinking level "ultra" is not supported for openai/gpt-5.6-luna. Use one of: off, low, medium, high, max.',
-    );
-    expect(sessionEntry).toEqual(initialSessionEntry);
-    expect(enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(queueMocks.refreshQueuedFollowupSession).not.toHaveBeenCalled();
-  });
-
-  it("persists an atomic model/runtime/thinking transaction when the runtime supports it", async () => {
-    setOpenAiRuntimeScopedUltraProvider();
-    const sessionEntry = createSessionEntry({ thinkingLevel: "high" });
-    const { persisted } = await persistModelDirectiveForTest({
-      command: "/model openai/gpt-5.6-luna --runtime openclaw /think ultra please solve",
-      allowedModelKeys: ["openai/gpt-5.6-luna"],
-      sessionEntry,
-    });
-
-    expect(persisted.errorText).toBeUndefined();
-    expect(sessionEntry).toMatchObject({
-      providerOverride: "openai",
-      modelOverride: "gpt-5.6-luna",
-      modelOverrideSource: "user",
-      agentRuntimeOverride: "openclaw",
-      thinkingLevel: "ultra",
-    });
-  });
-
-  it("persists alias-based numeric auth-profile overrides for mixed-content messages", async () => {
-    const { sessionEntry } = await persistModelDirectiveForTest({
-      command: `/model gpt@${OPENAI_DATE_PROFILE_ID} hello`,
-      profiles: createDateAuthProfiles("openai"),
-      aliasIndex: createGptAliasIndex(),
-      allowedModelKeys: ["openai/gpt-4o"],
-    });
-
-    expect(sessionEntry.providerOverride).toBe("openai");
-    expect(sessionEntry.modelOverride).toBe("gpt-4o");
-    expect(sessionEntry.authProfileOverride).toBe(OPENAI_DATE_PROFILE_ID);
+  registerModelRuntimeDirectiveTests({
+    setOpenAiRuntimeScopedUltraProvider,
+    createSessionEntry,
+    createGptAliasIndex,
+    persistModelDirectiveForTest,
+    queueMocks,
+    stickyModelMock,
   });
 
   it("persists providerless numeric auth-profile overrides for mixed-content messages", async () => {
@@ -1540,41 +739,6 @@ describe("/model chat UX", () => {
     expect(sessionEntry.providerOverride).toBe("openai");
     expect(sessionEntry.modelOverride).toBe("gpt-4o");
     expect(sessionEntry.authProfileOverride).toBe(OPENAI_DATE_PROFILE_ID);
-  });
-
-  it("resolves agentDir from the target session agent before wrapper agentDir", async () => {
-    vi.mocked(resolveSessionAgentId).mockReturnValue("target");
-    vi.mocked(resolveAgentDir).mockReturnValue("/tmp/target-agent");
-
-    await persistModelDirectiveForTest({
-      command: "/model openai/gpt-4o hello",
-      allowedModelKeys: ["openai/gpt-4o"],
-      sessionEntry: createSessionEntry(),
-    });
-
-    expect(resolveSessionAgentId).toHaveBeenCalledWith({
-      sessionKey: "agent:main:dm:1",
-      config: baseConfig(),
-    });
-    expect(resolveAgentDir).toHaveBeenCalledWith(baseConfig(), "target");
-  });
-
-  it("persists explicit auth profiles after @YYYYMMDD version suffixes in mixed-content messages", async () => {
-    const { sessionEntry } = await persistModelDirectiveForTest({
-      command: `/model custom/vertex-ai_claude-haiku-4-5@${OPENAI_DATE_PROFILE_ID}@work hello`,
-      profiles: {
-        work: {
-          type: "api_key",
-          provider: "custom",
-          key: "sk-test",
-        },
-      },
-      allowedModelKeys: [`custom/vertex-ai_claude-haiku-4-5@${OPENAI_DATE_PROFILE_ID}`],
-    });
-
-    expect(sessionEntry.providerOverride).toBe("custom");
-    expect(sessionEntry.modelOverride).toBe(`vertex-ai_claude-haiku-4-5@${OPENAI_DATE_PROFILE_ID}`);
-    expect(sessionEntry.authProfileOverride).toBe("work");
   });
 
   it("ignores invalid mixed-content model directives during persistence", async () => {
@@ -1613,117 +777,60 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
   type HandleParams = Parameters<typeof handleDirectiveOnly>[0];
 
   function createHandleParams(overrides: Partial<HandleParams>): HandleParams {
-    const entryOverride = overrides.sessionEntry;
-    const storeOverride = overrides.sessionStore;
-    const entry = entryOverride ?? createSessionEntry();
-    const store = storeOverride ?? ({ [sessionKey]: entry } as const);
-    const { sessionEntry: _ignoredEntry, sessionStore: _ignoredStore, ...rest } = overrides;
-
-    return {
-      cfg: baseConfig(),
-      directives: rest.directives ?? parseInlineDirectives(""),
-      sessionKey,
-      storePath: undefined,
+    return createDirectiveHandlingParams({
+      sessionKey: `agent:${overrides.agentId ?? "main"}:dm:1`,
       elevatedEnabled: false,
       elevatedAllowed: false,
-      defaultProvider: "anthropic",
-      defaultModel: "claude-opus-4-6",
-      aliasIndex: baseAliasIndex(),
       allowedModelKeys,
       allowedModelCatalog,
-      resetModelOverride: false,
-      provider: "anthropic",
-      model: "claude-opus-4-6",
-      initialModelLabel: "anthropic/claude-opus-4-6",
-      formatModelSwitchEvent: (label) => `Switched to ${label}`,
-      ...rest,
-      sessionEntry: entry,
-      sessionStore: store,
-    };
+      ...overrides,
+    });
   }
 
-  beforeAll(async () => {
-    const sessionEntry = createSessionEntry({ thinkingLevel: "xhigh" });
-    await handleDirectiveOnly(
-      createHandleParams({
-        directives: parseInlineDirectives("/model opencode/claude-opus-4-7"),
-        allowedModelKeys: new Set([...allowedModelKeys, "opencode/claude-opus-4-7"]),
-        allowedModelCatalog: [
-          ...allowedModelCatalog,
-          { provider: "opencode", id: "claude-opus-4-7", name: "Claude Opus 4.7" },
-        ],
-        sessionEntry,
-        sessionStore: { [sessionKey]: sessionEntry },
-      }),
+  function runHandleCommand(command: string, overrides: Partial<HandleParams> = {}) {
+    return handleDirectiveOnly(
+      createHandleParams({ ...overrides, directives: parseInlineSessionDirectives(command) }),
     );
-  });
+  }
 
-  it("shows success message when session state is available", async () => {
-    const directives = parseInlineDirectives("/model openai/gpt-4o");
-    const sessionEntry = createSessionEntry();
-    const result = await handleDirectiveOnly(
-      createHandleParams({
-        directives,
-        sessionEntry,
-      }),
-    );
-
-    expect(result?.text).toContain("Model set to");
-    expect(result?.text).toContain("openai/gpt-4o");
-    expect(result?.text).toContain("for this session");
-    expect(result?.text).not.toContain("failed");
-    expect(sessionEntry.liveModelSwitchPending).toBe(true);
-  });
-
-  it("persists an explicit runtime with a directive-only model switch", async () => {
-    const sessionEntry = createSessionEntry();
-    const result = await handleDirectiveOnly(
-      createHandleParams({
-        directives: parseInlineDirectives("/model openai/gpt-4o --runtime openclaw"),
-        sessionEntry,
-      }),
-    );
-
-    expect(result?.text).toContain("Model set to openai/gpt-4o for this session.");
-    expect(result?.text).toContain("Runtime set to openclaw for this session.");
-    expect(sessionEntry).toMatchObject({
-      providerOverride: "openai",
-      modelOverride: "gpt-4o",
-      modelOverrideSource: "user",
-      agentRuntimeOverride: "openclaw",
-    });
-  });
-
-  it("rejects an invalid directive-only model/runtime transaction atomically", async () => {
+  it("preserves a compatible auth profile for a mixed model directive", async () => {
     const sessionEntry = createSessionEntry({
-      providerOverride: "anthropic",
-      modelOverride: "claude-opus-4-6",
-      modelOverrideSource: "user",
-      agentRuntimeOverride: "openclaw",
+      providerOverride: "openai",
+      modelOverride: "gpt-5",
+      authProfileOverride: "team:prod",
+      authProfileOverrideSource: "user",
+      authProfileOverrideCompactionCount: 2,
     });
-    const initialSessionEntry = { ...sessionEntry };
-    const result = await handleDirectiveOnly(
-      createHandleParams({
-        directives: parseInlineDirectives("/model openai/gpt-4o --runtime claude-cli"),
-        sessionEntry,
-      }),
-    );
 
-    expect(result?.text).toBe('Runtime "claude-cli" is not supported for openai.');
-    expect(sessionEntry).toEqual(initialSessionEntry);
-    expect(queueMocks.refreshQueuedFollowupSession).not.toHaveBeenCalled();
+    await runHandleCommand("/model openai/gpt-4o", {
+      cfg: {
+        ...baseConfig(),
+        auth: { profiles: { "team:prod": { provider: "openai", mode: "api_key" } } },
+      },
+      provider: "openai",
+      model: "gpt-5",
+      sessionEntry,
+    });
+
+    expect(sessionEntry.authProfileOverride).toBe("team:prod");
+    expect(sessionEntry.authProfileOverrideSource).toBe("user");
+    expect(sessionEntry.authProfileOverrideCompactionCount).toBe(2);
   });
 
   it("preserves an explicit runtime pin when a model switch omits --runtime", async () => {
-    const sessionEntry = createSessionEntry({ agentRuntimeOverride: "codex" });
+    const sessionEntry = createSessionEntry({
+      agentRuntimeOverride: "codex",
+      nativeRuntimeConsent: "codex",
+    });
     await handleDirectiveOnly(
       createHandleParams({
-        directives: parseInlineDirectives("/model openai/gpt-4o"),
+        directives: parseInlineSessionDirectives("/model openai/gpt-4o"),
         sessionEntry,
       }),
     );
 
     expect(sessionEntry.agentRuntimeOverride).toBe("codex");
+    expect(sessionEntry.nativeRuntimeConsent).toBe("codex");
   });
 
   it("rejects model and runtime changes for model-locked sessions", async () => {
@@ -1736,39 +843,112 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     });
     const initialSessionEntry = { ...sessionEntry };
 
-    const result = await handleDirectiveOnly(
-      createHandleParams({
-        directives: parseInlineDirectives("/model openai/gpt-4o --runtime openclaw"),
-        sessionEntry,
-      }),
-    );
+    const result = await runHandleCommand("/model openai/gpt-4o --runtime openclaw", {
+      sessionEntry,
+    });
 
     expect(result?.text).toBe(MODEL_SELECTION_LOCKED_MESSAGE);
+    expect(result?.isError).toBe(true);
     expect(sessionEntry).toEqual(initialSessionEntry);
   });
 
-  it("persists /model only on the targeted session entry", async () => {
-    const targetEntry = createSessionEntry();
-    const otherEntry = createSessionEntry();
-    const sessionStore = {
-      [sessionKey]: targetEntry,
-      "agent:main:dm:other": otherEntry,
+  it("rechecks a newly persisted model lock before committing directive changes", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-model-directive-lock-"));
+    const storePath = path.join(tempRoot, "sessions.json");
+    const sessionEntry = createSessionEntry({
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-6",
+      modelOverrideSource: "user",
+    });
+    const lockedEntry: SessionEntry = {
+      ...sessionEntry,
+      updatedAt: sessionEntry.updatedAt + 1,
+      modelSelectionLocked: true,
     };
+    await replaceSessionEntry({ sessionKey, storePath }, lockedEntry);
+    const sessionStore = { [sessionKey]: sessionEntry };
 
-    await handleDirectiveOnly(
-      createHandleParams({
-        directives: parseInlineDirectives("/model openai/gpt-4o"),
-        sessionEntry: targetEntry,
+    try {
+      const result = await runHandleCommand("/model openai/gpt-4o", {
+        sessionEntry,
         sessionStore,
-      }),
-    );
+        storePath,
+      });
 
-    expect(targetEntry.providerOverride).toBe("openai");
-    expect(targetEntry.modelOverride).toBe("gpt-4o");
-    expect(targetEntry.modelOverrideSource).toBe("user");
-    expect(otherEntry.providerOverride).toBeUndefined();
-    expect(otherEntry.modelOverride).toBeUndefined();
-    expect(otherEntry.modelOverrideSource).toBeUndefined();
+      expect(result?.text).toBe(MODEL_SELECTION_LOCKED_MESSAGE);
+      expect(result?.isError).toBe(true);
+      expect(sessionEntry).toEqual(lockedEntry);
+      expect(sessionStore[sessionKey]).toEqual(lockedEntry);
+      expect(loadSessionEntry({ sessionKey, storePath })).toEqual(lockedEntry);
+      expect(queueMocks.refreshQueuedFollowupSession).not.toHaveBeenCalled();
+      expect(stickyModelMock.persistBestEffort).not.toHaveBeenCalled();
+      expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    {
+      flag: "-g",
+      target: "defaults",
+      agentId: "main",
+      selection: "openai/gpt-4o",
+      model: "openai/gpt-4o",
+    },
+  ])(
+    "persists $selection at explicit $target scope for $agentId",
+    async ({ flag, target, agentId, selection, model }) => {
+      await persistModelDirectiveForTest({
+        command: `/model ${selection} ${flag} continue with the request`,
+        agentId,
+        allowedModelKeys: ["anthropic/claude-opus-4-6", "openai/gpt-4o"],
+        allowedModelCatalog: [
+          { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus" },
+        ],
+      });
+      expect(stickyModelMock.persistBestEffort).toHaveBeenCalledWith({ agentId, model, target });
+    },
+  );
+
+  it("rejects persistent model scope without owner authority", async () => {
+    const { persisted, sessionEntry } = await persistModelDirectiveForTest({
+      command: "/model openai/gpt-4o -a continue with the request",
+      allowedModelKeys: ["anthropic/claude-opus-4-6", "openai/gpt-4o"],
+      canPersistStickyModelSelection: false,
+    });
+
+    expect(persisted.errorText).toContain("require owner authority");
+    expect(sessionEntry.providerOverride).toBeUndefined();
+    expect(stickyModelMock.persistBestEffort).not.toHaveBeenCalled();
+  });
+
+  it("leaves a scoped model directive as plain text for an unauthorized sender", async () => {
+    const { persisted, sessionEntry } = await persistModelDirectiveForTest({
+      command: "/model openai/gpt-4o -a continue with the request",
+      allowedModelKeys: ["anthropic/claude-opus-4-6", "openai/gpt-4o"],
+      // An unauthorized sender is never the owner; setting only one of these
+      // describes a state the gateway cannot produce.
+      isAuthorizedSender: false,
+      canPersistStickyModelSelection: false,
+    });
+
+    // An unauthorized sender's directives are cleared to plain text, so the
+    // persistent-scope authority error must not surface the command at all.
+    expect(persisted.errorText).toBeUndefined();
+    expect(sessionEntry.providerOverride).toBeUndefined();
+    expect(stickyModelMock.persistBestEffort).not.toHaveBeenCalled();
+  });
+
+  it("rejects conflicting model scopes before changing session or config", async () => {
+    const { persisted, sessionEntry } = await persistModelDirectiveForTest({
+      command: "/model openai/gpt-4o -a -g continue with the request",
+      allowedModelKeys: ["anthropic/claude-opus-4-6", "openai/gpt-4o"],
+    });
+
+    expect(persisted.errorText).toContain("only one model scope");
+    expect(sessionEntry.providerOverride).toBeUndefined();
+    expect(stickyModelMock.persistBestEffort).not.toHaveBeenCalled();
   });
 
   it("remaps unsupported stored thinking levels when persisting a model switch", async () => {
@@ -1780,87 +960,9 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     });
 
     expect(sessionEntry.thinkingLevel).toBe("medium");
-    expect(persisted.thinkingRemap).toEqual({
-      from: "adaptive",
-      to: "medium",
-      provider: "openai",
-      model: "gpt-4o",
-    });
-  });
-
-  it("fires session:patch when /model changes the persisted session model", async () => {
-    const events: InternalHookEvent[] = [];
-    registerInternalHook("session:patch", async (event) => {
-      events.push(event);
-    });
-    const sessionEntry = createSessionEntry();
-
-    await handleDirectiveOnly(
-      createHandleParams({
-        directives: parseInlineDirectives("/model openai/gpt-4o"),
-        sessionEntry,
-      }),
+    expect(persisted.directiveAck?.text).toContain(
+      "Thinking level set to medium (adaptive not supported for openai/gpt-4o).",
     );
-
-    await vi.waitFor(() => expect(events).toHaveLength(1));
-    const event = expectDefined(events[0], "events[0] test invariant");
-    expect(event.type).toBe("session");
-    expect(event.action).toBe("patch");
-    expect(event.sessionKey).toBe(sessionKey);
-    const context = event.context;
-    expect(context.patch).toMatchObject({ key: sessionKey, model: "openai/gpt-4o" });
-    expect(context.sessionEntry).toMatchObject({
-      providerOverride: "openai",
-      modelOverride: "gpt-4o",
-      liveModelSwitchPending: true,
-    });
-  });
-
-  it("keeps xhigh when switching to OpenCode Claude Opus 4.7", async () => {
-    const sessionEntry = createSessionEntry({ thinkingLevel: "xhigh" });
-    const sessionStore = { [sessionKey]: sessionEntry };
-
-    const result = await handleDirectiveOnly(
-      createHandleParams({
-        directives: parseInlineDirectives("/model opencode/claude-opus-4-7"),
-        allowedModelKeys: new Set([...allowedModelKeys, "opencode/claude-opus-4-7"]),
-        allowedModelCatalog: [
-          ...allowedModelCatalog,
-          { provider: "opencode", id: "claude-opus-4-7", name: "Claude Opus 4.7" },
-        ],
-        sessionEntry,
-        sessionStore,
-      }),
-    );
-
-    expect(result?.text).toContain("Model set to opencode/claude-opus-4-7 for this session.");
-    expect(result?.text ?? "").not.toContain("xhigh not supported");
-    expect(sessionEntry.thinkingLevel).toBe("xhigh");
-  });
-  it("retargets queued followups when /model mutates session state", async () => {
-    const directives = parseInlineDirectives("/model openai/gpt-4o");
-    const sessionEntry = createSessionEntry();
-
-    await handleDirectiveOnly(
-      createHandleParams({
-        directives,
-        sessionEntry,
-      }),
-    );
-
-    expect(queueMocks.refreshQueuedFollowupSession).toHaveBeenCalledWith({
-      key: sessionKey,
-      nextProvider: "openai",
-      nextModel: "gpt-4o",
-      nextModelOverrideSource: "user",
-      nextAuthProfileId: undefined,
-      nextAuthProfileIdSource: undefined,
-      nextThinking: {
-        level: undefined,
-        catalog: allowedModelCatalog,
-        agentRuntime: "codex",
-      },
-    });
   });
 
   it("suppresses model side effects when a concurrent switch wins", async () => {
@@ -1879,12 +981,18 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     };
     await replaceSessionEntry({ sessionKey, storePath }, concurrentEntry);
     const sessionStore = { [sessionKey]: sessionEntry };
-    const persistenceState = { sessionChangesApplied: true };
+    const persistenceState: NonNullable<HandleDirectiveParams["persistenceState"]> = {
+      outcome: { kind: "pending", provider: "anthropic", model: "claude-opus-4-6" },
+    };
+    const patchEvents: InternalHookEvent[] = [];
+    registerInternalHook("session:patch", async (event) => {
+      patchEvents.push(event);
+    });
 
     try {
       const result = await handleDirectiveOnly(
         createHandleParams({
-          directives: parseInlineDirectives("/model openai/gpt-4o"),
+          directives: parseInlineSessionDirectives("/model openai/gpt-4o"),
           sessionEntry,
           sessionStore,
           storePath,
@@ -1893,8 +1001,10 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       );
 
       expect(result?.text).toContain("Model change was not applied");
-      expect(persistenceState.sessionChangesApplied).toBe(false);
+      expect(result?.isError).toBe(true);
+      expect(persistenceState.outcome).toMatchObject({ kind: "rejected" });
       expect(queueMocks.refreshQueuedFollowupSession).not.toHaveBeenCalled();
+      expect(patchEvents).toEqual([]);
       expect(enqueueSystemEvent).not.toHaveBeenCalledWith(
         expect.stringContaining("openai/gpt-4o"),
         expect.anything(),
@@ -1918,25 +1028,24 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     const rotatedEntry: SessionEntry = {
       sessionId: "s2",
       updatedAt: sessionEntry.updatedAt + 1,
+      delivery: { kind: "none" },
       elevatedLevel: "full",
     };
     await replaceSessionEntry({ sessionKey, storePath }, rotatedEntry);
     const sessionStore = { [sessionKey]: sessionEntry };
 
     try {
-      const result = await handleDirectiveOnly(
-        createHandleParams({
-          directives: parseInlineDirectives("/elevated off"),
-          sessionEntry,
-          sessionStore,
-          storePath,
-          elevatedEnabled: true,
-          elevatedAllowed: true,
-          currentElevatedLevel: "full",
-        }),
-      );
+      const result = await runHandleCommand("/elevated off", {
+        sessionEntry,
+        sessionStore,
+        storePath,
+        elevatedEnabled: true,
+        elevatedAllowed: true,
+        currentElevatedLevel: "full",
+      });
 
       expect(result?.text).toContain("Session settings were not applied");
+      expect(result?.isError).toBe(true);
       expect(result?.text).not.toContain("Elevated mode disabled");
       expect(enqueueSystemEvent).not.toHaveBeenCalledWith(
         expect.stringContaining("Elevated"),
@@ -1960,19 +1069,17 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     await replaceSessionEntry({ sessionKey, storePath }, concurrentEntry);
 
     try {
-      const result = await handleDirectiveOnly(
-        createHandleParams({
-          directives: parseInlineDirectives("/elevated off"),
-          sessionEntry,
-          sessionStore: { [sessionKey]: sessionEntry },
-          storePath,
-          elevatedEnabled: true,
-          elevatedAllowed: true,
-          currentElevatedLevel: "off",
-        }),
-      );
+      const result = await runHandleCommand("/elevated off", {
+        sessionEntry,
+        sessionStore: { [sessionKey]: sessionEntry },
+        storePath,
+        elevatedEnabled: true,
+        elevatedAllowed: true,
+        currentElevatedLevel: "off",
+      });
 
       expect(result?.text).toContain("Session settings were not applied");
+      expect(result?.isError).toBe(true);
       expect(sessionEntry).toMatchObject({ sessionId: "s1", elevatedLevel: "full" });
     } finally {
       fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -2001,16 +1108,14 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     await replaceSessionEntry({ sessionKey, storePath }, concurrentEntry);
 
     try {
-      const result = await handleDirectiveOnly(
-        createHandleParams({
-          directives: parseInlineDirectives("/fast on"),
-          sessionEntry,
-          sessionStore: { [sessionKey]: sessionEntry },
-          storePath,
-        }),
-      );
+      const result = await runHandleCommand("/fast on", {
+        sessionEntry,
+        sessionStore: { [sessionKey]: sessionEntry },
+        storePath,
+      });
 
       expect(result?.text).toContain("Session settings were not applied");
+      expect(result?.isError).toBe(true);
       expect(sessionEntry).toMatchObject({ thinkingLevel: "low" });
       expect(sessionEntry.fastMode).toBeUndefined();
       expect(loadSessionEntry({ sessionKey, storePath })).toEqual(concurrentEntry);
@@ -2019,96 +1124,10 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     }
   });
 
-  it("persists auth profile overrides for alias model directives", async () => {
-    setAuthProfiles({
-      "anthropic:work": {
-        type: "api_key",
-        provider: "anthropic",
-        key: "sk-test",
-      },
-    });
-    const sessionEntry = createSessionEntry();
-    const sessionStore = { [sessionKey]: sessionEntry };
-
-    const result = await handleDirectiveOnly(
-      createHandleParams({
-        directives: parseInlineDirectives("/model Opus@anthropic:work"),
-        aliasIndex: createOpusAliasIndex(),
-        defaultProvider: "openai",
-        defaultModel: "gpt-4o",
-        provider: "openai",
-        model: "gpt-4o",
-        initialModelLabel: "openai/gpt-4o",
-        sessionEntry,
-        sessionStore,
-        formatModelSwitchEvent: (label, alias) =>
-          alias ? `Model switched to ${alias} (${label}).` : `Model switched to ${label}.`,
-      }),
-    );
-
-    expect(result?.text).toContain(
-      "Model set to Opus (anthropic/claude-opus-4-6) for this session.",
-    );
-    expect(result?.text).toContain("Auth profile set to anthropic:work.");
-    expect(sessionEntry.providerOverride).toBe("anthropic");
-    expect(sessionEntry.modelOverride).toBe("claude-opus-4-6");
-    expect(sessionEntry.authProfileOverride).toBe("anthropic:work");
-    expect(sessionEntry.authProfileOverrideSource).toBe("user");
-    expect(queueMocks.refreshQueuedFollowupSession).toHaveBeenCalledWith({
-      key: sessionKey,
-      nextProvider: "anthropic",
-      nextModel: "claude-opus-4-6",
-      nextModelOverrideSource: "user",
-      nextAuthProfileId: "anthropic:work",
-      nextAuthProfileIdSource: "user",
-      nextThinking: {
-        level: undefined,
-        catalog: allowedModelCatalog,
-        agentRuntime: "openclaw",
-      },
-    });
-    expect(enqueueSystemEvent).toHaveBeenCalledWith(
-      "Model switched to Opus (anthropic/claude-opus-4-6).",
-      {
-        sessionKey,
-        contextKey: "model:anthropic/claude-opus-4-6",
-      },
-    );
-  });
-
-  it("shows no model message when no /model directive", async () => {
-    const directives = parseInlineDirectives("hello world");
-    const sessionEntry = createSessionEntry();
-    const result = await handleDirectiveOnly(
-      createHandleParams({
-        directives,
-        sessionEntry,
-      }),
-    );
-
-    expect(result?.text ?? "").not.toContain("Model set to");
-    expect(result?.text ?? "").not.toContain("failed");
-  });
-
-  it("strips inline elevated directives while keeping user text", () => {
-    const directives = parseInlineDirectives("hello there /elevated off");
-
-    expect(directives.hasElevatedDirective).toBe(true);
-    expect(directives.elevatedLevel).toBe("off");
-    expect(directives.cleaned).toBe("hello there");
-  });
-
   it("persists thinkingLevel=off (does not clear)", async () => {
-    const directives = parseInlineDirectives("/think off");
     const sessionEntry = createSessionEntry({ thinkingLevel: "low" });
     const sessionStore = { [sessionKey]: sessionEntry };
-    const result = await handleDirectiveOnly(
-      createHandleParams({
-        directives,
-        sessionEntry,
-        sessionStore,
-      }),
-    );
+    const result = await runHandleCommand("/think off", { sessionEntry, sessionStore });
 
     expect(result?.text ?? "").not.toContain("failed");
     expect(sessionEntry.thinkingLevel).toBe("off");
@@ -2118,13 +1137,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
   it("clears thinking override for default directives", async () => {
     const sessionEntry = createSessionEntry({ thinkingLevel: "high" });
     const sessionStore = { [sessionKey]: sessionEntry };
-    const result = await handleDirectiveOnly(
-      createHandleParams({
-        directives: parseInlineDirectives("/think default"),
-        sessionEntry,
-        sessionStore,
-      }),
-    );
+    const result = await runHandleCommand("/think default", { sessionEntry, sessionStore });
 
     expect(result?.text).toContain("Thinking level reset to default.");
     expect(sessionEntry.thinkingLevel).toBeUndefined();
@@ -2150,15 +1163,12 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       },
     ]);
 
-    const result = await handleDirectiveOnly(
-      createHandleParams({
-        directives: parseInlineDirectives("/think"),
-        currentThinkLevel: "low",
-      }),
-    );
+    const result = await runHandleCommand("/think", { currentThinkLevel: "low" });
 
     expect(result?.text).toContain("Current thinking level: low");
-    expect(result?.text).toContain("Options: default, off, minimal, low, medium, adaptive, high.");
+    expect(result?.text).toContain(
+      "Options: default, off, minimal, low, medium, adaptive, high, ultra.",
+    );
   });
 
   it("reports the effective thinking level for the pinned runtime", async () => {
@@ -2186,7 +1196,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
 
     const result = await handleDirectiveOnly(
       createHandleParams({
-        directives: parseInlineDirectives("/think"),
+        directives: parseInlineSessionDirectives("/think"),
         provider: "openai",
         model: "gpt-5.6-luna",
         currentThinkLevel: "ultra",
@@ -2194,232 +1204,132 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       }),
     );
 
-    expect(result?.text).toContain("Current thinking level: max.");
-    expect(result?.text).toContain("Options: default, off, low, medium, high, max.");
-    expect(result?.text).not.toContain("ultra");
+    expect(result?.text).toContain("Current thinking level: ultra.");
+    expect(result?.text).toContain("Options: default, off, low, medium, high, max, ultra.");
   });
 
-  it("uses catalog reasoning metadata for provider-owned thinking levels", async () => {
+  it("rejects thinking levels forbidden by the concrete runtime policy", async () => {
     setDirectiveTestProviders([
       {
-        id: "ollama",
-        label: "Ollama",
-        auth: [],
-        resolveThinkingProfile: ({ reasoning }) => ({
-          levels:
-            reasoning === true
-              ? [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }]
-              : [{ id: "off" }],
+        id: "anthropic",
+        resolveThinkingProfile: () => ({
+          levels: [{ id: "minimal" }, { id: "medium" }, { id: "adaptive" }],
+          defaultLevel: "adaptive",
+          preserveWhenCatalogReasoningFalse: true,
+        }),
+      },
+      {
+        id: "claude-cli",
+        resolveThinkingProfile: () => ({
+          levels: [{ id: "off" }],
           defaultLevel: "off",
         }),
       },
     ]);
     const sessionEntry = createSessionEntry();
-    const sessionStore = { [sessionKey]: sessionEntry };
-
-    const result = await handleDirectiveOnly(
-      createHandleParams({
-        directives: parseInlineDirectives("/think medium"),
-        provider: "ollama",
-        model: "qwen3.6:35b-a3b-mxfp8",
-        allowedModelCatalog: [
-          {
-            provider: "ollama",
-            id: "qwen3.6:35b-a3b-mxfp8",
-            name: "qwen3.6:35b-a3b-mxfp8",
-            reasoning: true,
-          },
-        ],
-        thinkingCatalog: [
-          {
-            provider: "ollama",
-            id: "qwen3.6:35b-a3b-mxfp8",
-            name: "qwen3.6:35b-a3b-mxfp8",
-            reasoning: true,
-          },
-        ],
-        sessionEntry,
-        sessionStore,
-      }),
-    );
-
-    expect(result?.text).toContain("Thinking level set to medium.");
-    expect(sessionEntry.thinkingLevel).toBe("medium");
-  });
-
-  it.each([
-    ["openai", "gpt-5.5"],
-    ["openai", "gpt-5.5"],
-  ])("accepts xhigh for %s/%s when catalog marks reasoning support", async (provider, model) => {
-    setDirectiveTestProviders([
-      {
-        id: provider,
-        label: provider,
-        auth: [],
-        resolveThinkingProfile: ({ modelId }) => ({
-          levels:
-            modelId === "gpt-5.5"
-              ? [
-                  { id: "off" },
-                  { id: "minimal" },
-                  { id: "low" },
-                  { id: "medium" },
-                  { id: "high" },
-                  { id: "xhigh" },
-                ]
-              : [{ id: "off" }],
-        }),
-      },
-    ]);
-    const sessionEntry = createSessionEntry();
-    const sessionStore = { [sessionKey]: sessionEntry };
     const catalogEntry = {
-      provider,
-      id: model,
-      name: model,
-      reasoning: true,
+      provider: "anthropic",
+      id: "claude-mythos-5",
+      name: "Claude Mythos 5",
+      reasoning: false,
+      thinkingPolicyProvider: "claude-cli",
     };
 
-    const result = await handleDirectiveOnly(
-      createHandleParams({
-        directives: parseInlineDirectives("/think xhigh"),
-        provider,
-        model,
-        allowedModelCatalog: [catalogEntry],
-        thinkingCatalog: [catalogEntry],
-        sessionEntry,
-        sessionStore,
-      }),
-    );
+    const result = await runHandleCommand("/think medium", {
+      provider: "anthropic",
+      model: "claude-mythos-5",
+      allowedModelKeys: new Set(["anthropic/claude-mythos-5"]),
+      allowedModelCatalog: [catalogEntry],
+      thinkingCatalog: [catalogEntry],
+      sessionEntry,
+    });
 
-    expect(result?.text).toContain("Thinking level set to xhigh.");
-    expect(sessionEntry.thinkingLevel).toBe("xhigh");
+    expect(result?.text).toContain('Thinking level "medium" is not supported');
+    expect(sessionEntry.thinkingLevel).toBeUndefined();
   });
 
   it("persists verbose on and off directives", async () => {
     const sessionEntry = createSessionEntry();
-    const sessionStore = { [sessionKey]: sessionEntry };
 
-    const enabled = await handleDirectiveOnly(
-      createHandleParams({
-        directives: parseInlineDirectives("/verbose on"),
-        sessionEntry,
-        sessionStore,
-      }),
-    );
+    const enabled = await runHandleCommand("/verbose on", { sessionEntry });
     expect(enabled?.text).toMatch(/^⚙️ Verbose logging enabled\./);
     expect(sessionEntry.verboseLevel).toBe("on");
 
-    const disabled = await handleDirectiveOnly(
-      createHandleParams({
-        directives: parseInlineDirectives("/verbose off"),
-        sessionEntry,
-        sessionStore,
-      }),
-    );
+    const disabled = await runHandleCommand("/verbose off", { sessionEntry });
     expect(disabled?.text).toMatch(/Verbose logging disabled\./);
     expect(sessionEntry.verboseLevel).toBe("off");
   });
 
   it("persists and reports fast-mode directives", async () => {
     const sessionEntry = createSessionEntry();
-    const sessionStore = { [sessionKey]: sessionEntry };
 
-    const onReply = await handleDirectiveOnly(
-      createHandleParams({
-        directives: parseInlineDirectives("/fast on"),
-        sessionEntry,
-        sessionStore,
-      }),
-    );
+    const onReply = await runHandleCommand("/fast on", { sessionEntry });
     expect(onReply?.text).toContain("Fast mode enabled");
     expect(sessionEntry.fastMode).toBe(true);
 
-    const statusReply = await handleDirectiveOnly(
-      createHandleParams({
-        directives: parseInlineDirectives("/fast"),
-        sessionEntry,
-        sessionStore,
-        currentFastMode: sessionEntry.fastMode,
-      }),
-    );
+    const statusReply = await runHandleCommand("/fast", {
+      sessionEntry,
+      currentFastMode: sessionEntry.fastMode,
+    });
     expect(statusReply?.text).toContain("Current fast mode: on");
 
-    const offReply = await handleDirectiveOnly(
-      createHandleParams({
-        directives: parseInlineDirectives("/fast off"),
-        sessionEntry,
-        sessionStore,
-        currentFastMode: sessionEntry.fastMode,
-      }),
+    const ultrafastReply = await runHandleCommand("/fast ultrafast", { sessionEntry });
+    expect(ultrafastReply?.text).toContain("Ultrafast mode enabled.");
+    expect(sessionEntry.fastMode).toBe("ultrafast");
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      "Ultrafast mode enabled.",
+      expect.objectContaining({ contextKey: "fast:ultrafast" }),
     );
+
+    const offReply = await runHandleCommand("/fast off", {
+      sessionEntry,
+      currentFastMode: sessionEntry.fastMode,
+    });
     expect(offReply?.text).toContain("Fast mode disabled");
     expect(sessionEntry.fastMode).toBe(false);
 
-    const defaultReply = await handleDirectiveOnly(
-      createHandleParams({
-        directives: parseInlineDirectives("/fast default"),
-        sessionEntry,
-        sessionStore,
-        currentFastMode: sessionEntry.fastMode,
-      }),
-    );
+    const defaultReply = await runHandleCommand("/fast default", {
+      sessionEntry,
+      currentFastMode: sessionEntry.fastMode,
+    });
     expect(defaultReply?.text).toContain("Fast mode reset to default");
     expect(sessionEntry.fastMode).toBeUndefined();
   });
 
   it("persists and reports elevated-mode directives when allowed", async () => {
     const sessionEntry = createSessionEntry();
-    const sessionStore = { [sessionKey]: sessionEntry };
     const base = {
       elevatedAllowed: true,
       elevatedEnabled: true,
       sessionEntry,
-      sessionStore,
     } satisfies Partial<HandleParams>;
 
-    const onReply = await handleDirectiveOnly(
-      createHandleParams({
-        ...base,
-        directives: parseInlineDirectives("/elevated on"),
-      }),
-    );
+    const onReply = await runHandleCommand("/elevated on", base);
     expect(onReply?.text).toContain("Elevated mode set to ask");
     expect(sessionEntry.elevatedLevel).toBe("on");
 
-    const statusReply = await handleDirectiveOnly(
-      createHandleParams({
-        ...base,
-        directives: parseInlineDirectives("/elevated"),
-        currentElevatedLevel: sessionEntry.elevatedLevel as ElevatedLevel | undefined,
-      }),
-    );
+    const statusReply = await runHandleCommand("/elevated", {
+      ...base,
+      currentElevatedLevel: sessionEntry.elevatedLevel as ElevatedLevel | undefined,
+    });
     expect(statusReply?.text).toContain("Current elevated level: on");
 
-    const offReply = await handleDirectiveOnly(
-      createHandleParams({
-        ...base,
-        directives: parseInlineDirectives("/elevated off"),
-        currentElevatedLevel: sessionEntry.elevatedLevel as ElevatedLevel | undefined,
-      }),
-    );
+    const offReply = await runHandleCommand("/elevated off", {
+      ...base,
+      currentElevatedLevel: sessionEntry.elevatedLevel as ElevatedLevel | undefined,
+    });
     expect(offReply?.text).toContain("Elevated mode disabled");
     expect(sessionEntry.elevatedLevel).toBe("off");
   });
 
   it("queues system events for elevated and reasoning mode directives", async () => {
     const sessionEntry = createSessionEntry();
-    const sessionStore = { [sessionKey]: sessionEntry };
 
-    await handleDirectiveOnly(
-      createHandleParams({
-        directives: parseInlineDirectives("/elevated on"),
-        elevatedAllowed: true,
-        elevatedEnabled: true,
-        sessionEntry,
-        sessionStore,
-      }),
-    );
+    await runHandleCommand("/elevated on", {
+      elevatedAllowed: true,
+      elevatedEnabled: true,
+      sessionEntry,
+    });
 
     expect(enqueueSystemEvent).toHaveBeenCalledWith(
       "Elevated ASK - exec runs on host; approvals may still apply.",
@@ -2431,13 +1341,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
 
     vi.mocked(enqueueSystemEvent).mockClear();
 
-    await handleDirectiveOnly(
-      createHandleParams({
-        directives: parseInlineDirectives("/reasoning stream"),
-        sessionEntry,
-        sessionStore,
-      }),
-    );
+    await runHandleCommand("/reasoning stream", { sessionEntry });
 
     expect(enqueueSystemEvent).toHaveBeenCalledWith("Reasoning STREAM - emit live <think>.", {
       sessionKey,
@@ -2446,90 +1350,67 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
   });
 
   it("blocks internal operator.write exec persistence in directive-only handling", async () => {
-    const directives = parseInlineDirectives(
-      "/exec host=node security=allowlist ask=always node=worker-1",
-    );
     const sessionEntry = createSessionEntry();
-    const sessionStore = { [sessionKey]: sessionEntry };
-    const result = await handleDirectiveOnly(
-      createHandleParams({
-        directives,
-        sessionEntry,
-        sessionStore,
-        surface: "webchat",
-        gatewayClientScopes: ["operator.write"],
-      }),
+    const result = await runHandleCommand(
+      "/exec host=node security=allowlist ask=always node=worker-1",
+      { sessionEntry, surface: "webchat", gatewayClientScopes: ["operator.write"] },
     );
 
     expect(result?.text).toContain("operator.admin");
+    expect(result?.text).toContain(
+      "Exec policy for this run only (security=allowlist, ask=always).",
+    );
     expect(sessionEntry.execHost).toBeUndefined();
-    expect(sessionEntry.execSecurity).toBeUndefined();
-    expect(sessionEntry.execAsk).toBeUndefined();
     expect(sessionEntry.execNode).toBeUndefined();
   });
 
   it("blocks internal operator.write verbose persistence in directive-only handling", async () => {
-    const directives = parseInlineDirectives("/verbose full");
     const sessionEntry = createSessionEntry();
-    const sessionStore = { [sessionKey]: sessionEntry };
-    const result = await handleDirectiveOnly(
-      createHandleParams({
-        directives,
-        sessionEntry,
-        sessionStore,
-        surface: "webchat",
-        gatewayClientScopes: ["operator.write"],
-      }),
-    );
+    const result = await runHandleCommand("/verbose full", {
+      sessionEntry,
+      surface: "webchat",
+      gatewayClientScopes: ["operator.write"],
+    });
 
     expect(result?.text).toContain("Verbose logging set for the current reply only.");
     expect(result?.text).toContain("operator.admin");
     expect(sessionEntry.verboseLevel).toBeUndefined();
   });
 
-  it("allows internal operator.admin verbose persistence in directive-only handling", async () => {
-    const directives = parseInlineDirectives("/verbose full");
-    const sessionEntry = createSessionEntry();
-    const sessionStore = { [sessionKey]: sessionEntry };
-    const result = await handleDirectiveOnly(
-      createHandleParams({
-        directives,
+  it.each([
+    {
+      options: "host=node security=allowlist ask=always node=worker-1",
+      policy: "security=allowlist, ask=always",
+      placement: { execHost: "node", execNode: "worker-1" },
+      scope: "operator.admin",
+    },
+  ])(
+    "acknowledges /exec $options policy for this run only",
+    async ({ options, policy, placement, scope }) => {
+      const sessionEntry = createSessionEntry();
+      const initialEntry = { ...sessionEntry };
+      const result = await runHandleCommand(`/exec ${options}`, {
         sessionEntry,
-        sessionStore,
         surface: "webchat",
-        gatewayClientScopes: ["operator.admin"],
-      }),
-    );
+        gatewayClientScopes: [scope],
+      });
 
-    expect(result?.text).toContain("Verbose logging set to full.");
-    expect(sessionEntry.verboseLevel).toBe("full");
-  });
-
-  it("allows internal operator.admin exec persistence in directive-only handling", async () => {
-    const directives = parseInlineDirectives(
-      "/exec host=node security=allowlist ask=always node=worker-1",
-    );
-    const sessionEntry = createSessionEntry();
-    const sessionStore = { [sessionKey]: sessionEntry };
-    const result = await handleDirectiveOnly(
-      createHandleParams({
-        directives,
-        sessionEntry,
-        sessionStore,
-        surface: "webchat",
-        gatewayClientScopes: ["operator.admin"],
-      }),
-    );
-
-    expect(result?.text).toContain("Exec defaults set");
-    expect(sessionEntry.execHost).toBe("node");
-    expect(sessionEntry.execSecurity).toBe("allowlist");
-    expect(sessionEntry.execAsk).toBe("always");
-    expect(sessionEntry.execNode).toBe("worker-1");
-  });
+      expect(result?.text).toContain(`Exec policy for this run only (${policy}).`);
+      if (placement) {
+        expect(result?.text).toContain("Exec defaults set (host=node, node=worker-1).");
+      } else {
+        expect(result?.text).not.toContain("operator.admin");
+      }
+      expect(sessionEntry).toEqual({
+        ...initialEntry,
+        ...placement,
+        updatedAt: expect.any(Number),
+      });
+    },
+  );
 });
 
-describe("persistInlineDirectives session directive persistence policy", () => {
+describe("canonical session directive persistence policy", () => {
   it("checks an explicit same-value model selection against persisted state", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-inline-model-race-"));
     const storePath = path.join(tempRoot, "sessions.json");
@@ -2545,34 +1426,26 @@ describe("persistInlineDirectives session directive persistence policy", () => {
       modelOverride: "gpt-5.5",
     };
     await replaceSessionEntry({ sessionKey, storePath }, concurrentEntry);
-    const directives = parseInlineDirectives("hello /model openai/gpt-4o");
+    const directives = parseInlineSessionDirectives("hello /model openai/gpt-4o");
 
     try {
-      const result = await persistInlineDirectives({
-        directives,
-        effectiveModelDirective: directives.rawModelDirective,
-        cfg: baseConfig(),
-        agentDir: TEST_AGENT_DIR,
-        sessionEntry,
-        sessionStore: { [sessionKey]: sessionEntry },
-        sessionKey,
-        storePath,
-        elevatedEnabled: false,
-        elevatedAllowed: false,
-        defaultProvider: "anthropic",
-        defaultModel: "claude-opus-4-6",
-        aliasIndex: baseAliasIndex(),
-        allowedModelKeys: new Set(["openai/gpt-4o"]),
-        modelCatalog: [{ provider: "openai", id: "gpt-4o", name: "GPT-4o" }],
-        provider: "openai",
-        model: "gpt-4o",
-        initialModelLabel: "openai/gpt-4o",
-        formatModelSwitchEvent: (label) => `Switched to ${label}`,
-        agentCfg: undefined,
-      });
+      const result = await handleDirectiveOnly(
+        createDirectiveHandlingParams({
+          directives,
+          sessionEntry,
+          sessionStore: { [sessionKey]: sessionEntry },
+          sessionKey,
+          storePath,
+          allowedModelKeys: new Set(["openai/gpt-4o"]),
+          allowedModelCatalog: [{ provider: "openai", id: "gpt-4o", name: "GPT-4o" }],
+          provider: "openai",
+          model: "gpt-4o",
+          initialModelLabel: "openai/gpt-4o",
+        }),
+      );
 
-      expect(result.sessionChangesApplied).toBe(false);
-      expect(result).toMatchObject({ provider: "openai", model: "gpt-5.5" });
+      expect(result?.text).toContain("Model change was not applied");
+      expect(result?.isError).toBe(true);
       expect(sessionEntry).toMatchObject({
         providerOverride: "openai",
         modelOverride: "gpt-5.5",
@@ -2582,253 +1455,30 @@ describe("persistInlineDirectives session directive persistence policy", () => {
     }
   });
 
-  it("returns the concurrent model winner without emitting switch side effects", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-inline-model-race-"));
-    const storePath = path.join(tempRoot, "sessions.json");
-    const sessionKey = "agent:main:dm:race";
-    const sessionEntry = createSessionEntry({
-      providerOverride: "anthropic",
-      modelOverride: "claude-opus-4-6",
-      modelOverrideSource: "user",
-    });
-    const concurrentEntry: SessionEntry = {
-      ...sessionEntry,
-      updatedAt: sessionEntry.updatedAt + 1,
-      providerOverride: "openai",
-      modelOverride: "gpt-5.5",
-    };
-    await replaceSessionEntry({ sessionKey, storePath }, concurrentEntry);
-    const sessionStore = { [sessionKey]: sessionEntry };
-    const directives = parseInlineDirectives("hello /model openai/gpt-4o");
-    const patchEvents: InternalHookEvent[] = [];
-    registerInternalHook("session:patch", async (event) => {
-      patchEvents.push(event);
-    });
-
-    try {
-      const result = await persistInlineDirectives({
-        directives,
-        effectiveModelDirective: directives.rawModelDirective,
-        cfg: baseConfig(),
-        agentDir: TEST_AGENT_DIR,
-        sessionEntry,
-        sessionStore,
-        sessionKey,
-        storePath,
-        elevatedEnabled: false,
-        elevatedAllowed: false,
-        defaultProvider: "anthropic",
-        defaultModel: "claude-opus-4-6",
-        aliasIndex: baseAliasIndex(),
-        allowedModelKeys: new Set(["anthropic/claude-opus-4-6", "openai/gpt-4o"]),
-        modelCatalog: [
-          { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus 4.5" },
-          { provider: "openai", id: "gpt-4o", name: "GPT-4o" },
-        ],
-        provider: "anthropic",
-        model: "claude-opus-4-6",
-        initialModelLabel: "anthropic/claude-opus-4-6",
-        formatModelSwitchEvent: (label) => `Switched to ${label}`,
-        agentCfg: undefined,
-      });
-
-      expect(result).toMatchObject({ provider: "openai", model: "gpt-5.5" });
-      expect(result.sessionChangesApplied).toBe(false);
-      expect(enqueueSystemEvent).not.toHaveBeenCalledWith(
-        expect.stringContaining("openai/gpt-4o"),
-        expect.anything(),
-      );
-      expect(patchEvents).toEqual([]);
-      expect(sessionStore[sessionKey]).toMatchObject({
-        providerOverride: "openai",
-        modelOverride: "gpt-5.5",
-      });
-      expect(sessionEntry).toEqual(sessionStore[sessionKey]);
-    } finally {
-      fs.rmSync(tempRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("skips exec persistence for internal operator.write callers", async () => {
-    const sessionEntry = await persistInternalOperatorWriteDirective(
-      "/exec host=node security=allowlist ask=always node=worker-1",
-    );
-
-    expect(sessionEntry.execHost).toBeUndefined();
-    expect(sessionEntry.execSecurity).toBeUndefined();
-    expect(sessionEntry.execAsk).toBeUndefined();
-    expect(sessionEntry.execNode).toBeUndefined();
-  });
-
-  it("skips verbose persistence for internal operator.write callers", async () => {
-    const sessionEntry = await persistInternalOperatorWriteDirective("/verbose full");
-
-    expect(sessionEntry.verboseLevel).toBeUndefined();
-  });
-
   it("skips exec persistence for unauthorized external callers even when gateway scopes are empty", async () => {
     const sessionEntry = await persistInternalOperatorWriteDirective(
-      "/exec host=node security=allowlist ask=always node=worker-1",
-      {
-        messageProvider: "telegram",
-        surface: "telegram",
-        gatewayClientScopes: [],
-      },
+      EXEC_DEFAULTS_DIRECTIVE,
+      externalChannelPolicy({ gatewayClientScopes: [] }),
     );
 
-    expect(sessionEntry.execHost).toBeUndefined();
-    expect(sessionEntry.execSecurity).toBeUndefined();
-    expect(sessionEntry.execAsk).toBeUndefined();
-    expect(sessionEntry.execNode).toBeUndefined();
-  });
-
-  it("skips verbose persistence for unauthorized external callers even when gateway scopes are empty", async () => {
-    const sessionEntry = await persistInternalOperatorWriteDirective("/verbose full", {
-      messageProvider: "telegram",
-      surface: "telegram",
-      gatewayClientScopes: [],
-    });
-
-    expect(sessionEntry.verboseLevel).toBeUndefined();
-  });
-
-  it("allows authorized external callers with empty gateway scopes to persist exec defaults", async () => {
-    const sessionEntry = await persistInternalOperatorWriteDirective(
-      "/exec host=node security=allowlist ask=always node=worker-1",
-      {
-        messageProvider: "telegram",
-        surface: "telegram",
-        gatewayClientScopes: [],
-        commandAuthorized: true,
-      },
-    );
-
-    expect(sessionEntry.execHost).toBe("node");
-    expect(sessionEntry.execSecurity).toBe("allowlist");
-    expect(sessionEntry.execAsk).toBe("always");
-    expect(sessionEntry.execNode).toBe("worker-1");
-  });
-
-  it("allows authorized external callers with empty gateway scopes to persist verbose defaults", async () => {
-    const sessionEntry = await persistInternalOperatorWriteDirective("/verbose full", {
-      messageProvider: "telegram",
-      surface: "telegram",
-      gatewayClientScopes: [],
-      commandAuthorized: true,
-    });
-
-    expect(sessionEntry.verboseLevel).toBe("full");
-  });
-
-  it("skips exec persistence for non-webchat channel callers without gateway scopes", async () => {
-    const sessionEntry = await persistInternalOperatorWriteDirective(
-      "/exec host=node security=allowlist ask=always node=worker-1",
-      {
-        messageProvider: "telegram",
-        surface: "telegram",
-        gatewayClientScopes: undefined,
-      },
-    );
-
-    expect(sessionEntry.execHost).toBeUndefined();
-    expect(sessionEntry.execSecurity).toBeUndefined();
-    expect(sessionEntry.execAsk).toBeUndefined();
-    expect(sessionEntry.execNode).toBeUndefined();
-  });
-
-  it("skips verbose persistence for non-webchat channel callers without gateway scopes", async () => {
-    const sessionEntry = await persistInternalOperatorWriteDirective("/verbose full", {
-      messageProvider: "telegram",
-      surface: "telegram",
-      gatewayClientScopes: undefined,
-    });
-
-    expect(sessionEntry.verboseLevel).toBeUndefined();
-  });
-
-  it("allows exec persistence for authorized non-webchat channel callers without gateway scopes", async () => {
-    const sessionEntry = await persistInternalOperatorWriteDirective(
-      "/exec host=node security=allowlist ask=always node=worker-1",
-      {
-        messageProvider: "telegram",
-        surface: "telegram",
-        gatewayClientScopes: undefined,
-        commandAuthorized: true,
-      },
-    );
-
-    expect(sessionEntry.execHost).toBe("node");
-    expect(sessionEntry.execSecurity).toBe("allowlist");
-    expect(sessionEntry.execAsk).toBe("always");
-    expect(sessionEntry.execNode).toBe("worker-1");
-  });
-
-  it("allows verbose persistence for authorized non-webchat channel callers without gateway scopes", async () => {
-    const sessionEntry = await persistInternalOperatorWriteDirective("/verbose full", {
-      messageProvider: "telegram",
-      surface: "telegram",
-      gatewayClientScopes: undefined,
-      commandAuthorized: true,
-    });
-
-    expect(sessionEntry.verboseLevel).toBe("full");
+    expectExecDefaults(sessionEntry, false);
   });
 
   it("allows authorized external provider callers when surface carries webchat metadata", async () => {
     const sessionEntry = await persistInternalOperatorWriteDirective(
-      "/exec host=node security=allowlist ask=always node=worker-1",
-      {
-        messageProvider: "telegram",
+      EXEC_DEFAULTS_DIRECTIVE,
+      externalChannelPolicy({
         surface: "webchat",
         gatewayClientScopes: ["operator.write"],
         commandAuthorized: true,
-      },
+      }),
     );
 
-    expect(sessionEntry.execHost).toBe("node");
-    expect(sessionEntry.execSecurity).toBe("allowlist");
-    expect(sessionEntry.execAsk).toBe("always");
-    expect(sessionEntry.execNode).toBe("worker-1");
-  });
-
-  it("allows authorized external provider verbose callers when surface carries webchat metadata", async () => {
-    const sessionEntry = await persistInternalOperatorWriteDirective("/verbose full", {
-      messageProvider: "telegram",
-      surface: "webchat",
-      gatewayClientScopes: ["operator.write"],
-      commandAuthorized: true,
-    });
-
-    expect(sessionEntry.verboseLevel).toBe("full");
-  });
-
-  it("allows exec persistence for local callers without channel context", async () => {
-    const sessionEntry = await persistInternalOperatorWriteDirective(
-      "/exec host=node security=allowlist ask=always node=worker-1",
-      {
-        messageProvider: undefined,
-        surface: undefined,
-        gatewayClientScopes: undefined,
-      },
-    );
-
-    expect(sessionEntry.execHost).toBe("node");
-    expect(sessionEntry.execSecurity).toBe("allowlist");
-    expect(sessionEntry.execAsk).toBe("always");
-    expect(sessionEntry.execNode).toBe("worker-1");
-  });
-
-  it("treats internal provider context as authoritative over external surface metadata", async () => {
-    const sessionEntry = await persistInternalOperatorWriteDirective("/verbose full", {
-      messageProvider: "webchat",
-      surface: "forum",
-    });
-
-    expect(sessionEntry.verboseLevel).toBeUndefined();
+    expectExecDefaults(sessionEntry, true);
   });
 
   it("keeps internal provider authoritative over authorized external surface metadata", async () => {
-    const sessionEntry = await persistInternalOperatorWriteDirective("/verbose full", {
+    const sessionEntry = await persistInternalOperatorWriteDirective(VERBOSE_DEFAULT_DIRECTIVE, {
       messageProvider: "webchat",
       surface: "telegram",
       gatewayClientScopes: ["operator.write"],

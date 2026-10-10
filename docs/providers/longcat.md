@@ -8,7 +8,7 @@ read_when:
 
 [LongCat](https://longcat.ai) provides a hosted API for LongCat-2.0, a
 reasoning model built for coding and agentic workloads. OpenClaw provides the
-official `longcat` plugin for LongCat's OpenAI-compatible endpoint.
+official LongCat plugin for LongCat's OpenAI-compatible endpoint.
 
 | Property   | Value                              |
 | ---------- | ---------------------------------- |
@@ -23,12 +23,14 @@ official `longcat` plugin for LongCat's OpenAI-compatible endpoint.
 
 ## Install plugin
 
-Install the official package, then restart Gateway:
+Install the official package:
 
 ```bash
 openclaw plugins install @openclaw/longcat-provider
-openclaw gateway restart
 ```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 ## Getting started
 
@@ -56,7 +58,7 @@ primary model is already configured.
 ### Non-interactive setup
 
 ```bash
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --mode local \
   --auth-choice longcat-api-key \
   --longcat-api-key "$LONGCAT_API_KEY"
@@ -66,8 +68,8 @@ openclaw onboard --non-interactive \
 
 LongCat exposes binary thinking control. OpenClaw maps enabled thinking levels
 to `thinking: { type: "enabled" }` and `/think off` to
-`thinking: { type: "disabled" }`. LongCat does not currently document
-`reasoning_effort`, so OpenClaw does not send it.
+`thinking: { type: "disabled" }`. OpenClaw removes `reasoning_effort`
+from LongCat requests.
 
 LongCat returns reasoning in `reasoning_content`. OpenClaw preserves that field
 when replaying assistant tool-call turns so multi-turn agent sessions retain
@@ -77,7 +79,7 @@ the provider's expected message shape.
 
 The built-in catalog uses LongCat's pay-as-you-go list prices in USD per million
 tokens: $0.75 uncached input, $0.015 cached input, and $2.95 output. LongCat may
-offer temporary discounts; the [pricing page](https://longcat.chat/platform/docs/Pricing/LongCat-2.0.html)
+offer temporary discounts; the [pricing page](https://longcat.chat/platform/docs/pricing/long-cat-2.0)
 and your billing records are authoritative.
 
 ## Self-hosted LongCat-2.0

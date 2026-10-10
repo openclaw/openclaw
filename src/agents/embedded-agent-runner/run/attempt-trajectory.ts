@@ -1,13 +1,19 @@
-/** Creates and seeds the attempt-local trajectory recorder. */
+import type { OwnedSessionTranscriptWriteContext } from "../../../config/sessions/transcript-write-context.js";
 import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
 import { buildTrajectoryRunMetadata } from "../../../trajectory/metadata.js";
 import { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
+import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { resolveAttemptTrajectorySessionFile } from "./attempt-transcript-helpers.js";
+import { projectTrajectorySessionTarget } from "./shared-run-context.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 export async function prepareEmbeddedAttemptTrajectory(input: {
   activeSession: Pick<AgentSession, "sessionId">;
+  transcriptOwner?: Pick<
+    OwnedSessionTranscriptWriteContext,
+    "sessionTarget" | "assertCommitAllowed" | "initialWriter"
+  >;
   attempt: EmbeddedRunAttemptParams;
   clientToolCount: number;
   effectiveToolCount: number;
@@ -15,30 +21,69 @@ export async function prepareEmbeddedAttemptTrajectory(input: {
   localModelLeanEnabled: boolean;
   sessionAgentId: string;
   systemPromptReport?: SessionSystemPromptReport;
-}): Promise<ReturnType<typeof createTrajectoryRuntimeRecorder> | null> {
+}): Promise<Awaited<ReturnType<typeof createTrajectoryRuntimeRecorder>>> {
   const { activeSession, attempt } = input;
-  const trajectorySessionFile = await resolveAttemptTrajectorySessionFile({
-    agentId: input.sessionAgentId,
-    config: attempt.config,
-    sessionFile: attempt.sessionFile,
-    sessionId: activeSession.sessionId,
-    sessionKey: attempt.sessionKey,
-    sessionTarget: attempt.sessionTarget,
-  });
-  const recorder = attempt.disableTrajectory
-    ? null
-    : createTrajectoryRuntimeRecorder({
-        cfg: attempt.config,
-        env: process.env,
-        runId: attempt.runId,
+  const candidate = input.transcriptOwner?.sessionTarget;
+  const sessionKey = candidate?.sessionKey;
+  const assertCommitAllowed = input.transcriptOwner?.assertCommitAllowed;
+  const initialWriter = input.transcriptOwner?.initialWriter;
+  // Reuse only the lock owner's descriptive key; recorder persistence retains its own authority.
+  const retained =
+    candidate &&
+    sessionKey &&
+    assertCommitAllowed &&
+    candidate.agentId === input.sessionAgentId &&
+    candidate.sessionId === activeSession.sessionId &&
+    sessionKey === attempt.sessionKey &&
+    candidate.storePath &&
+    candidate.storePath === attempt.sessionTarget?.storePath
+      ? {
+          sessionKey,
+          assertCurrent() {
+            assertCommitAllowed();
+            initialWriter?.assertActive();
+          },
+        }
+      : undefined;
+  retained?.assertCurrent();
+  const trajectorySessionFile = retained
+    ? retained.sessionKey
+    : await resolveAttemptTrajectorySessionFile({
+        agentId: input.sessionAgentId,
+        config: attempt.config,
+        sessionFile: attempt.sessionFile,
         sessionId: activeSession.sessionId,
         sessionKey: attempt.sessionKey,
-        sessionFile: trajectorySessionFile,
-        provider: attempt.provider,
-        modelId: attempt.modelId,
-        modelApi: attempt.model.api,
-        workspaceDir: attempt.workspaceDir,
+        sessionTarget: attempt.sessionTarget,
       });
+  if (attempt.disableTrajectory || attempt.sessionPersistence === "detached") {
+    return null;
+  }
+  const assertActive = resolveAdmittedRunActiveAssertion(
+    attempt.admittedRunContext,
+    attempt.abortSignal,
+  );
+  if (!assertActive) {
+    throw new Error("trajectory preparation requires an active admitted run");
+  }
+  assertActive();
+  retained?.assertCurrent();
+  const { sessionTarget } = projectTrajectorySessionTarget(attempt.sessionTarget);
+  const recorder = await createTrajectoryRuntimeRecorder({
+    cfg: attempt.config,
+    env: process.env,
+    runId: attempt.runId,
+    sessionId: activeSession.sessionId,
+    sessionKey: attempt.sessionKey,
+    sessionFile: trajectorySessionFile,
+    sessionTarget,
+    provider: attempt.provider,
+    modelId: attempt.modelId,
+    modelApi: attempt.model.api,
+    workspaceDir: attempt.workspaceDir,
+  });
+  assertActive();
+  retained?.assertCurrent();
   recorder?.recordEvent("session.started", {
     trigger: attempt.trigger,
     sessionFile: attempt.sessionFile,
@@ -56,6 +101,9 @@ export async function prepareEmbeddedAttemptTrajectory(input: {
     buildTrajectoryRunMetadata({
       env: process.env,
       config: attempt.config,
+      ...(attempt.preparedModelRuntime?.metadataSnapshot
+        ? { pluginMetadataSnapshot: attempt.preparedModelRuntime.metadataSnapshot }
+        : {}),
       workspaceDir: input.effectiveWorkspace,
       sessionFile: attempt.sessionFile,
       sessionKey: attempt.sessionKey,

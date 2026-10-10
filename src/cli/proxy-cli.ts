@@ -1,19 +1,9 @@
-// Commander registration for debug proxy capture, validation, query, and blob commands.
+import { parseStrictInteger } from "@openclaw/normalization-core/number-coercion";
 import { InvalidArgumentError, type Command } from "commander";
-import { parseStrictInteger } from "../infra/parse-finite-number.js";
 import type { CaptureQueryPreset } from "../proxy-capture/types.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
-
-type ProxyCliRuntime = typeof import("./proxy-cli.runtime.js");
-
-const proxyCliRuntimeLoader = createLazyImportLoader<ProxyCliRuntime>(
-  () => import("./proxy-cli.runtime.js"),
-);
-
-async function loadProxyCliRuntime(): Promise<ProxyCliRuntime> {
-  // Keep proxy CA/server/sqlite dependencies out of normal CLI startup.
-  return await proxyCliRuntimeLoader.load();
-}
+import { collectOption } from "./program/helpers.js";
+import { setCommandJsonMode } from "./program/json-mode.js";
+import { isProxyMachineOutput } from "./proxy-output-mode.js";
 
 function parseIntegerOption(value: string | undefined, flag: string): number {
   const parsed = parseStrictInteger(value);
@@ -39,14 +29,11 @@ function parsePositiveIntegerOption(value: string | undefined, flag: string): nu
   return parsed;
 }
 
-function collectOption(value: string, previous: string[] | undefined): string[] {
-  return [...(previous ?? []), value];
-}
-
 export function registerProxyCli(program: Command) {
   const proxy = program
     .command("proxy")
     .description("Run the OpenClaw debug proxy and inspect captured traffic");
+  setCommandJsonMode(proxy, "output", ({ argv }) => isProxyMachineOutput(argv));
 
   proxy
     .command("start")
@@ -54,7 +41,7 @@ export function registerProxyCli(program: Command) {
     .option("--host <host>", "Bind host", "127.0.0.1")
     .option("--port <port>", "Bind port", parsePortOption)
     .action(async (opts: { host?: string; port?: number }) => {
-      const runtime = await loadProxyCliRuntime();
+      const runtime = await import("./proxy-cli.runtime.js");
       await runtime.runDebugProxyStartCommand(opts);
     });
 
@@ -67,7 +54,7 @@ export function registerProxyCli(program: Command) {
     .option("--port <port>", "Bind port", parsePortOption)
     .argument("[cmd...]", "Command to run after --")
     .action(async (cmd: string[], opts: { host?: string; port?: number }) => {
-      const runtime = await loadProxyCliRuntime();
+      const runtime = await import("./proxy-cli.runtime.js");
       await runtime.runDebugProxyRunCommand({
         host: opts.host,
         port: opts.port,
@@ -88,7 +75,7 @@ export function registerProxyCli(program: Command) {
     )
     .option("--denied-url <url>", "Destination expected to be blocked by the proxy", collectOption)
     .option("--apns-reachable", "Also verify sandbox APNs HTTP/2 is reachable through the proxy")
-    .option("--apns-authority <url>", "APNs authority to probe with --apns-reachable")
+    .option("--apns-authority <url>", "APNs authority to check with --apns-reachable")
     .option("--timeout-ms <ms>", "Per-request timeout in milliseconds", (value) =>
       parsePositiveIntegerOption(value, "--timeout-ms"),
     )
@@ -103,7 +90,7 @@ export function registerProxyCli(program: Command) {
         apnsAuthority?: string;
         timeoutMs?: number;
       }) => {
-        const runtime = await loadProxyCliRuntime();
+        const runtime = await import("./proxy-cli.runtime.js");
         await runtime.runProxyValidateCommand({
           json: opts.json,
           proxyUrl: opts.proxyUrl,
@@ -120,19 +107,21 @@ export function registerProxyCli(program: Command) {
   proxy
     .command("coverage")
     .description("Report current debug proxy transport coverage and remaining gaps")
+    .option("--json", "Print machine-readable JSON")
     .action(async () => {
-      const runtime = await loadProxyCliRuntime();
+      const runtime = await import("./proxy-cli.runtime.js");
       await runtime.runDebugProxyCoverageCommand();
     });
 
   proxy
     .command("sessions")
     .description("List recent capture sessions")
+    .option("--json", "Print machine-readable JSON")
     .option("--limit <count>", "Maximum sessions to show", (value) =>
       parsePositiveIntegerOption(value, "--limit"),
     )
-    .action(async (opts: { limit?: number }) => {
-      const runtime = await loadProxyCliRuntime();
+    .action(async (opts: { json?: boolean; limit?: number }) => {
+      const runtime = await import("./proxy-cli.runtime.js");
       await runtime.runDebugProxySessionsCommand(opts);
     });
 
@@ -143,10 +132,12 @@ export function registerProxyCli(program: Command) {
       "--preset <name>",
       "Query preset: double-sends, retry-storms, cache-busting, ws-duplicate-frames, missing-ack, error-bursts",
     )
+    .option("--json", "Print machine-readable JSON")
     .option("--session <id>", "Restrict to a capture session id")
-    .action(async (opts: { preset: CaptureQueryPreset; session?: string }) => {
-      const runtime = await loadProxyCliRuntime();
+    .action(async (opts: { json?: boolean; preset: CaptureQueryPreset; session?: string }) => {
+      const runtime = await import("./proxy-cli.runtime.js");
       await runtime.runDebugProxyQueryCommand({
+        json: opts.json,
         preset: opts.preset,
         sessionId: opts.session,
       });
@@ -157,7 +148,7 @@ export function registerProxyCli(program: Command) {
     .description("Read a captured payload blob by id")
     .requiredOption("--id <blobId>", "Blob id")
     .action(async (opts: { id: string }) => {
-      const runtime = await loadProxyCliRuntime();
+      const runtime = await import("./proxy-cli.runtime.js");
       await runtime.readDebugProxyBlobCommand({ blobId: opts.id });
     });
 
@@ -165,7 +156,7 @@ export function registerProxyCli(program: Command) {
     .command("purge")
     .description("Delete all captured traffic metadata and blobs")
     .action(async () => {
-      const runtime = await loadProxyCliRuntime();
+      const runtime = await import("./proxy-cli.runtime.js");
       await runtime.runDebugProxyPurgeCommand();
     });
 }

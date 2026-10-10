@@ -28,6 +28,20 @@ Context is _not the same thing_ as "memory": memory can be stored on disk and re
 
 See also: [Slash commands](/tools/slash-commands), [Token use & costs](/reference/token-use), [Compaction](/concepts/compaction).
 
+`/context` and `openclaw sessions list` can reuse the last verified model budget
+when catalog metadata is unavailable and the selected model and runtime still
+match. A qualifying turn refreshes this value. Current model metadata and
+configured limits take precedence; generic fallback windows and removable caps
+are not saved as verified model budgets.
+
+The Control UI context meter uses the last run's prompt budget when it still
+matches the selected model and effective context cap. This budget leaves room
+for the runtime's compaction reserve. Its label is **Prompt budget (last run)**:
+it is an estimate, and crossing it can trigger tool-result reduction or compaction.
+After a model or context-cap change, the meter shows **Context window** until a
+new run supplies a matching estimate. Stale token totals remain approximate and
+do not trigger the context warning.
+
 ## Example output
 
 Values vary by model, provider, tool policy, and what's in your workspace.
@@ -37,17 +51,15 @@ Values vary by model, provider, tool policy, and what's in your workspace.
 ```text
 🧠 Context breakdown
 Workspace: <workspaceDir>
-Bootstrap max/file: 12,000 chars
+Bootstrap max/file: 20,000 chars
 Sandbox: mode=non-main sandboxed=false
 System prompt (run): 38,412 chars (~9,603 tok) (Project Context 23,901 chars (~5,976 tok))
 
 Injected workspace files:
 - AGENTS.md: OK | raw 1,742 chars (~436 tok) | injected 1,742 chars (~436 tok)
 - SOUL.md: OK | raw 912 chars (~228 tok) | injected 912 chars (~228 tok)
-- TOOLS.md: TRUNCATED | raw 54,210 chars (~13,553 tok) | injected 20,962 chars (~5,241 tok)
 - IDENTITY.md: OK | raw 211 chars (~53 tok) | injected 211 chars (~53 tok)
 - USER.md: OK | raw 388 chars (~97 tok) | injected 388 chars (~97 tok)
-- HEARTBEAT.md: MISSING | raw 0 | injected 0
 - BOOTSTRAP.md: OK | raw 0 chars (~0 tok) | injected 0 chars (~0 tok)
 
 Skills list (system prompt text): 2,184 chars (~546 tok) (12 skills)
@@ -102,7 +114,7 @@ Everything the model receives counts, including:
 
 ## How OpenClaw builds the system prompt
 
-The system prompt is **OpenClaw-owned** and rebuilt each run. It includes:
+The system prompt is **OpenClaw-owned** and rendered each run. It includes:
 
 - Tool list + short descriptions.
 - Skills list (metadata only; see below).
@@ -113,25 +125,32 @@ The system prompt is **OpenClaw-owned** and rebuilt each run. It includes:
 
 Full breakdown: [System Prompt](/concepts/system-prompt).
 
+On supported direct Anthropic API-key routes and native OpenAI Responses routes,
+OpenClaw pins the complete system prompt for the session. Changed sections,
+including skills, workspace memory, and temporal context, arrive as instruction
+messages after the current user turn. Existing skill and memory refresh rules
+still apply. Changing the route or selected personal profile, resetting, or
+compacting history starts a new series; ordinary turn teardown and Gateway restarts restore the saved series.
+
 ## Injected workspace files (Project Context)
 
 By default, OpenClaw injects a fixed set of workspace files (if present):
 
 - `AGENTS.md`
 - `SOUL.md`
-- `TOOLS.md`
 - `IDENTITY.md`
 - `USER.md`
-- `HEARTBEAT.md`
 - `BOOTSTRAP.md` (first-run only)
 
 Large files are truncated per-file using `agents.defaults.bootstrapMaxChars` (default `20000` chars). OpenClaw also enforces a total bootstrap injection cap across files with `agents.defaults.bootstrapTotalMaxChars` (default `60000` chars). `/context` shows **raw vs injected** sizes and whether truncation happened.
 
-When truncation occurs, the runtime can inject an in-prompt warning block under Project Context. Configure this with `agents.defaults.bootstrapPromptTruncationWarning` (`off`, `once`, `always`; default `always`).
+When truncation occurs, the runtime injects a concise in-prompt notice under Project Context saying some bootstrap files were truncated; per-file names and sizes stay in `/context` and other diagnostics. This notice is built in and not configurable.
 
 ## Skills: injected vs loaded on-demand
 
 The system prompt includes a compact **skills list** (name + description + location). This list has real overhead.
+
+`/context` counts the catalog included in the rendered system prompt, not every installed skill. In the embedded runtime without Code Mode, denying both `read` and `skills_read` omits the catalog and reports zero skills.
 
 Skill instructions are _not_ included by default. The model is expected to `read` the skill's `SKILL.md` **only when needed**.
 
@@ -163,6 +182,32 @@ What persists across messages depends on the mechanism:
 - **Normal history** persists in the session transcript until compacted/pruned by policy.
 - **Compaction** persists a summary into the transcript and keeps recent messages intact.
 - **Pruning** drops old tool results from the _in-memory_ prompt to free context-window space, but does not rewrite the session transcript - the full history is still inspectable on disk.
+
+For embedded Responses requests, current request metadata stays after the user
+message or compaction checkpoint and before its tool calls. This lets supported transports reuse the
+previous response across tool rounds without dropping live context. A later user
+turn in an OpenAI Responses-family session preserves hidden runtime-context
+carriers append-only, so the previous turn, including tool calls and results,
+remains an unchanged cached prefix. Retained carriers count toward the context
+window until compaction, which does not split a user message from its carrier.
+Carriers contain only the delimited context body; interpretation guidance lives
+once in the stable system prompt.
+
+Supported direct Anthropic API-key routes also preserve runtime context
+append-only, using system messages after the user turn and its other queued
+context. These messages need no delimiters and clear at the next user message:
+they remain in the transcript but no longer consume input tokens. Persistent
+system-prompt updates use the same system-message channel without clearing.
+Tool results and queued extension context also clear earlier copies; OpenClaw
+renews the current user turn's runtime context after those continuations.
+Other prefix-binding Claude routes retain their delimited user-role carriers.
+See [Anthropic retained thinking](/providers/anthropic#tool-calls-and-retained-thinking)
+for supported models and route limits.
+
+Transient carriers remain the cheaper shape on routes without this capability
+when thinking does not bind the prefix. Those routes keep metadata at the
+request tail and remove it on the next user turn, preserving the cached history
+without retaining old context or repeated cache-read charges.
 
 Docs: [Session](/concepts/session), [Compaction](/concepts/compaction), [Session pruning](/concepts/session-pruning).
 

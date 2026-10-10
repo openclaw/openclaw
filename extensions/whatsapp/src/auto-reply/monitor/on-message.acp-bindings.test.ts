@@ -263,12 +263,6 @@ function createHandler(warn = vi.fn(), cfg: Record<string, unknown> = createCfg(
       groupHistoryLimit: 20,
       groupHistories,
       groupMemberNames: new Map(),
-      echoTracker: {
-        has: () => false,
-        forget: () => {},
-        rememberText: () => {},
-        buildCombinedKey: ({ combinedBody }: { combinedBody: string }) => combinedBody,
-      },
       backgroundTasks: new Set(),
       replyResolver: vi.fn() as never,
       replyLogger: {
@@ -277,8 +271,6 @@ function createHandler(warn = vi.fn(), cfg: Record<string, unknown> = createCfg(
         debug: () => {},
         error: () => {},
       } as never,
-      baseMentionConfig: {} as never,
-      account: { authDir: "/tmp/whatsapp-auth", accountId: "work" },
     }),
   };
 }
@@ -342,10 +334,11 @@ function createGroupAudioMessage() {
       },
     },
     payload: {
-      body: "<media:audio>",
+      body: "",
       media: {
         type: "audio/ogg; codecs=opus",
         path: "/tmp/voice.ogg",
+        kind: "audio",
       },
     },
     platform: {
@@ -376,6 +369,38 @@ describe("createWebOnMessageHandler configured ACP bindings", () => {
     ensureConfiguredBindingRouteReadyMock.mockResolvedValue({ ok: true });
     resolveConfiguredBindingRouteMock.mockReset();
     resolveConfiguredBindingRouteMock.mockImplementation(resolvedConfiguredRoute());
+  });
+
+  it("dispatches two same-content messages with distinct native ids in order", async () => {
+    const sentConversation = "15550001111@s.whatsapp.net";
+    resolveConfiguredBindingRouteMock.mockImplementation(({ route }) => ({
+      bindingResolution: null,
+      route,
+    }));
+    const { handler } = createHandler(vi.fn(), createCfg());
+
+    const messageForId = (id: string) =>
+      createTestWebInboundMessage({
+        admission: {
+          accountId: "work",
+          conversation: { kind: "direct", id: sentConversation },
+          sender: { id: sentConversation },
+        },
+        event: { id },
+        payload: { body: "Done." },
+        platform: {
+          chatJid: sentConversation,
+          recipientJid: "15559876543@s.whatsapp.net",
+        },
+      });
+
+    await handler(messageForId("in-2"));
+    await handler(messageForId("in-3"));
+
+    expect(processMessageMock.mock.calls.map(([params]) => params.msg.event.id)).toEqual([
+      "in-2",
+      "in-3",
+    ]);
   });
 
   it("rewrites matching WhatsApp inbound turns to the configured ACP session key", async () => {

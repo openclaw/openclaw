@@ -1,4 +1,3 @@
-// Googlechat plugin module implements doctor behavior.
 import {
   buildMutableAllowEntryDetector,
   collectStandardAllowlistLists,
@@ -16,8 +15,6 @@ export const collectGoogleChatMutableAllowlistWarnings =
     detector: isGoogleChatMutableAllowEntry,
     collectLists: (scope) =>
       collectStandardAllowlistLists(scope, {
-        includeAllowFrom: false,
-        includeDm: true,
         includeGroups: true,
         groupField: "users",
       }),

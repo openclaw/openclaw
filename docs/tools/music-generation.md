@@ -14,12 +14,12 @@ OpenRouter.
 
 <Note>
 `music_generate` only appears when at least one music-generation provider is
-available: an explicit `agents.defaults.musicGenerationModel` config, or an
+available: an explicit `agents.defaults.mediaModels.music` config, or an
 auth-configured provider (a set API key, for example).
 </Note>
 
 For session-backed agent runs, `music_generate` starts as a background task,
-tracks progress in the task ledger, then wakes the agent when the track is
+tracks progress in its media runtime, then wakes the agent when the track is
 ready so it can tell the user and attach the finished audio. The completion
 agent follows the session's visible-reply contract: automatic final reply
 when configured, or `message(action="send")` when the session requires the
@@ -41,8 +41,10 @@ idempotent direct fallback with just the missing audio.
         {
           agents: {
             defaults: {
-              musicGenerationModel: {
-                primary: "google/lyria-3-clip-preview",
+              mediaModels: {
+                music: {
+                  primary: "google/lyria-3-clip-preview",
+                },
               },
             },
           },
@@ -182,7 +184,7 @@ captures any requested-to-applied mapping.
 </Note>
 
 Provider request timeouts are operator configuration only. OpenClaw uses
-`agents.defaults.musicGenerationModel.timeoutMs` when configured, raises
+`agents.defaults.mediaModels.music.timeoutMs` when configured, raises
 values below 120000ms to 120000ms, and otherwise defaults provider requests
 to 300000ms.
 
@@ -194,11 +196,12 @@ Session-backed music generation runs as a background task:
   started/task response immediately, and posts the finished track later in
   a follow-up agent message.
 - **Duplicate prevention:** while a task is `queued` or `running`, later
-  `music_generate` calls in the same session return task status instead of
+  `music_generate` calls in the same chat return task status instead of
   starting another generation. Use `action: "status"` to check explicitly.
   A recently completed matching request is also deduplicated for 2 minutes.
-- **Status lookup:** `openclaw tasks list` or `openclaw tasks show <taskId>`
-  inspects queued, running, and terminal status.
+  Direct chats keep separate tasks even when they share the main session
+  transcript; completion returns to the requesting peer.
+- **Status lookup:** use `music_generate` with `action: "status"`.
 - **Completion wake:** OpenClaw injects an internal completion event back
   into the same session so the model can write the user-facing follow-up
   itself.
@@ -210,10 +213,7 @@ Session-backed music generation runs as a background task:
 
 ### Task lifecycle
 
-The music task surfaces the same states as the general task registry (see
-[Background tasks](/automation/tasks#task-lifecycle) for the full state
-machine, including `timed_out`, `cancelled`, and `lost`). Most music runs
-move through:
+The media runtime reports generation progress:
 
 | State       | Meaning                                                                                        |
 | ----------- | ---------------------------------------------------------------------------------------------- |
@@ -221,14 +221,6 @@ move through:
 | `running`   | Provider is processing (typically 30 seconds to 3 minutes depending on provider and duration). |
 | `succeeded` | Track ready; the agent wakes and posts it to the conversation.                                 |
 | `failed`    | Provider error or timeout; the agent wakes with error details.                                 |
-
-Check status from the CLI:
-
-```bash
-openclaw tasks list
-openclaw tasks show <taskId>
-openclaw tasks cancel <taskId>
-```
 
 ## Configuration
 
@@ -238,9 +230,11 @@ openclaw tasks cancel <taskId>
 {
   agents: {
     defaults: {
-      musicGenerationModel: {
-        primary: "google/lyria-3-clip-preview",
-        fallbacks: ["fal/fal-ai/minimax-music/v2.6", "minimax/music-2.6"],
+      mediaModels: {
+        music: {
+          primary: "google/lyria-3-clip-preview",
+          fallbacks: ["fal/fal-ai/minimax-music/v2.6", "minimax/music-2.6"],
+        },
       },
     },
   },
@@ -249,12 +243,13 @@ openclaw tasks cancel <taskId>
 
 ### Provider selection order
 
-OpenClaw tries providers in this order:
+For `music_generate`, OpenClaw tries providers in this order:
 
-1. `model` parameter from the tool call (if the agent specifies one).
-2. `musicGenerationModel.primary` from config.
-3. `musicGenerationModel.fallbacks` in order.
-4. Auto-detection using auth-backed provider defaults only:
+1. `model` parameter from the tool call. When set, only this model is tried.
+2. `agents.defaults.mediaModels.music.primary` from config.
+3. `agents.defaults.mediaModels.music.fallbacks` in order.
+4. When neither a primary nor fallback model is configured, auto-detection using
+   configured provider defaults:
    - current default text-model provider first, if it also offers music
      generation;
    - remaining registered music-generation providers, alphabetically by
@@ -262,18 +257,20 @@ OpenClaw tries providers in this order:
 
 If a provider fails, the next candidate is tried automatically. If all
 fail, the error includes details from each attempt.
+Each failed candidate logs its provider, model, and error at `warn`.
+For reference-image requests, candidates that cannot use images or accept
+the supplied reference count are skipped.
 
-Set `agents.defaults.mediaGenerationAutoProviderFallback: false` to use only
-explicit `model`, `primary`, and `fallbacks` entries.
+Explicit music model configuration limits fallback to the configured list;
+OpenClaw does not append auto-detected providers.
 
 ## Provider notes
 
 <AccordionGroup>
   <Accordion title="ComfyUI">
     Workflow-driven and depends on the configured graph plus node mapping
-    for prompt/output fields. The bundled `comfy` plugin plugs into the
-    shared `music_generate` tool through the music-generation provider
-    registry.
+    for prompt/output fields. The `comfy` plugin plugs into the shared
+    `music_generate` tool through the music-generation provider registry.
   </Accordion>
   <Accordion title="fal">
     Uses fal model endpoints through the shared provider auth path. The
@@ -381,10 +378,10 @@ sections are configured.
 
 ## Related
 
-- [Background tasks](/automation/tasks) — task tracking for detached `music_generate` runs
 - [ComfyUI](/providers/comfy)
-- [Configuration reference](/gateway/config-agents#agent-defaults) — `musicGenerationModel` config
+- [Configuration reference](/gateway/config-agents#agent-defaults) — `agents.defaults.mediaModels.music` config
 - [Google (Gemini)](/providers/google)
 - [MiniMax](/providers/minimax)
 - [Models](/concepts/models) — model configuration and failover
 - [Tools overview](/tools)
+- [Media overview](/tools/media-overview) — how the media tools fit together

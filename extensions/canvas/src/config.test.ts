@@ -1,13 +1,7 @@
-// Canvas tests cover config plugin behavior.
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  isCanvasHostEnabled,
-  isCanvasPluginEnabled,
-  parseCanvasPluginConfig,
-  resolveCanvasHostConfig,
-} from "./config.js";
+import { isCanvasHostEnabled, parseCanvasPluginConfig, resolveCanvasHostConfig } from "./config.js";
 
-describe("Canvas plugin config", () => {
+describe("Canvas presenter config", () => {
   const originalSkipCanvasHost = process.env.OPENCLAW_SKIP_CANVAS_HOST;
 
   afterEach(() => {
@@ -18,71 +12,23 @@ describe("Canvas plugin config", () => {
     }
   });
 
-  it("parses host config from the plugin entry", () => {
+  it("parses and resolves only host.enabled", () => {
     expect(
       parseCanvasPluginConfig({
-        host: {
-          enabled: false,
-          root: "~/canvas",
-          port: 18793,
-          liveReload: false,
-          ignored: true,
-        },
+        host: { enabled: false, root: "~/canvas", port: 18793, liveReload: true },
       }),
-    ).toEqual({
-      host: {
-        enabled: false,
-        root: "~/canvas",
-        port: 18793,
-        liveReload: false,
-      },
-    });
-  });
-
-  it("resolves host config from the plugin entry only", () => {
+    ).toEqual({ host: { enabled: false } });
     expect(
       resolveCanvasHostConfig({
         config: {
-          plugins: {
-            entries: {
-              canvas: {
-                config: {
-                  host: {
-                    enabled: false,
-                    root: "/plugin",
-                    liveReload: false,
-                  },
-                },
-              },
-            },
-          },
+          plugins: { entries: { canvas: { config: { host: { enabled: false } } } } },
         },
       }),
-    ).toEqual({
-      enabled: false,
-      root: "/plugin",
-      liveReload: false,
-    });
+    ).toEqual({ enabled: false });
   });
 
-  it("disables the host when the bundled Canvas plugin is disabled", () => {
-    const config = {
-      plugins: {
-        entries: {
-          canvas: {
-            enabled: false,
-          },
-        },
-      },
-    };
-    expect(isCanvasPluginEnabled(config)).toBe(false);
-    expect(isCanvasHostEnabled(config)).toBe(false);
-  });
-
-  it("honors truthy skip-canvas env values before host registration", () => {
-    for (const value of ["1", "true", " yes ", "ON"]) {
-      process.env.OPENCLAW_SKIP_CANVAS_HOST = value;
-      expect(isCanvasHostEnabled()).toBe(false);
-    }
+  it("honors the internal skip-host test switch", () => {
+    process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
+    expect(isCanvasHostEnabled()).toBe(false);
   });
 });

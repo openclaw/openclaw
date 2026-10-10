@@ -1,49 +1,58 @@
+import {
+  inferToolMetaFromArgs,
+  projectAgentToolActivity,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { onInternalDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
+import { terminateCodexBackgroundTerminals } from "./attempt-client-cleanup.js";
 import { isCodexAppServerApprovalRequest } from "./client.js";
 import { shouldAutoApproveCodexAppServerApprovals } from "./config.js";
-import {
-  emitDynamicToolErrorDiagnostic,
-  emitDynamicToolStartedDiagnostic,
-  emitDynamicToolTerminalDiagnostic,
-} from "./dynamic-tool-diagnostics.js";
+import { createCodexDynamicToolDiagnostics } from "./dynamic-tool-diagnostics.js";
 import {
   handleDynamicToolCallWithTimeout,
-  hasPendingDynamicToolTerminalDiagnostic,
-  isDynamicToolTerminalDiagnosticEvent,
-  isMatchingDynamicToolTerminalDiagnostic,
   resolveDynamicToolCallTimeoutMs,
-  shouldBlockTerminalReleaseForNonTerminalDynamicToolResult,
   toCodexDynamicToolProgressResponse,
   toCodexDynamicToolProtocolResponse,
 } from "./dynamic-tool-execution.js";
 import { recordCodexDynamicToolResult } from "./dynamic-tool-result-projection.js";
-import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
-import { shouldEmitTranscriptToolProgress } from "./event-projector.js";
+import { routeCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
+import { shouldEmitTranscriptToolProgress } from "./event-projector-tool-progress.js";
 import { readCodexDynamicToolCallParams } from "./protocol-validators.js";
 import type { JsonValue } from "./protocol.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import { emitCodexAppServerEvent } from "./run-attempt-lifecycle.js";
+import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
-import { handleApprovalRequest, toTranscriptToolResult } from "./run-attempt-tools.js";
+import { toTranscriptToolResult } from "./run-attempt-tools.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import {
-  inferCodexDynamicToolMeta,
+  isCodexCommandBearingToolCall,
   resolveCodexToolProgressDetailMode,
   sanitizeCodexToolArguments,
 } from "./tool-progress-normalization.js";
 import type { CodexAppServerServerRequest, CodexThreadRouteScope } from "./turn-router.js";
 
+const DYNAMIC_TOOL_TERMINAL_DIAGNOSTIC_TYPES = [
+  "tool.execution.completed",
+  "tool.execution.error",
+  "tool.execution.blocked",
+] as const;
+
 export function createCodexAttemptServerRequestController(
   resources: CodexAttemptResources,
   turnRuntime: CodexAttemptTurnState,
   lifecycle: CodexAttemptLifecycleController,
+  waitForNativeItems: CodexAttemptNotificationController["waitForNativeTerminalItems"],
 ) {
   const { prompt, state: resourceState, projectorRef, trajectoryRecorder } = resources;
   const { context } = prompt;
   const { runtime, attemptTools } = context;
   const { connection } = runtime;
   const { params, computerUseConfig, runAbortController, appServer, sessionAgentId } = connection;
+  const autoApprove = shouldAutoApproveCodexAppServerApprovals(appServer);
   const {
+    compactionPlanState,
     toolBridge,
     toolOutcomeOrdinals,
     suppressedDynamicToolOutcomeOrdinals,
@@ -55,28 +64,59 @@ export function createCodexAttemptServerRequestController(
     userInputBridgeRef,
     openClawDynamicToolExecutions,
     pendingOpenClawDynamicToolCompletionIds,
-    postToolRawAssistantCompletionIdleTimeoutMs,
-    turnWatches,
+    noteProgress,
   } = turnRuntime;
   const {
     emitExecutionPhaseOnce,
-    scheduleTurnReleaseAfterTerminalDynamicTool,
+    recordDynamicToolResult,
     scheduleTerminalDynamicToolReleaseCheck,
   } = lifecycle;
+  let refreshDrain: ReturnType<typeof createDeferred<void>> | undefined;
+  let refreshStopping = false;
+  const settlePluginRuntimeRefresh = async (turnId: string) => {
+    if (!params.pluginRuntimeRefreshPending?.()) {
+      return;
+    }
+    refreshDrain ??= createDeferred<void>();
+    state.pluginRuntimeRefreshStop = refreshDrain.promise;
+    if (!refreshStopping && pendingOpenClawDynamicToolCompletionIds.size === 0) {
+      refreshStopping = true;
+      state.pendingTerminalDynamicToolRelease = undefined;
+      turnRuntime.steeringQueueRef.current?.cancel();
+      // Replies resume the old model. Persist every admitted result before stopping;
+      // Codex's interrupt completion does not depend on receiving these replies.
+      void turnRuntime
+        .interruptTurn(turnId, { locallyCompleted: true })
+        .then(async (confirmed) => {
+          if (!confirmed) {
+            throw new Error("Plugin reload could not confirm the previous Codex turn stopped.");
+          }
+          await terminateCodexBackgroundTerminals(
+            resourceState.client,
+            resourceState.thread.threadId,
+            params.oneShotCliRun === true,
+            waitForNativeItems,
+          );
+        })
+        .then(refreshDrain.resolve, refreshDrain.reject)
+        .finally(turnRuntime.completeTurn);
+    }
+    await refreshDrain.promise;
+  };
   const handleServerRequest = async (
     request: CodexAppServerServerRequest,
     scope: CodexThreadRouteScope,
+    requestSignal: AbortSignal = new AbortController().signal,
+    setExecutionTimeoutMs?: (timeoutMs: number) => void,
   ) => {
+    const signal = AbortSignal.any([runAbortController.signal, requestSignal]);
     const turnId = turnIdRef.current;
     const projector = projectorRef.current;
-    let armCompletionWatchOnResponse = false;
     let requestCountsAsTurnActivity = false;
     const markCurrentTurnRequestProgress = () => {
       state.activeAppServerTurnRequests += 1;
-      turnWatches.clearCompletionIdleTimer();
-      turnWatches.disarmAssistantCompletionIdleWatch();
       requestCountsAsTurnActivity = true;
-      turnWatches.touchActivity(`request:${request.method}:start`, { attemptProgress: true });
+      noteProgress(`request:${request.method}:start`);
     };
     try {
       if (!turnId) {
@@ -84,48 +124,49 @@ export function createCodexAttemptServerRequestController(
       }
       if (request.method === "mcpServer/elicitation/request") {
         if (!scope.turnId || scope.turnId === turnId) {
-          armCompletionWatchOnResponse = true;
           markCurrentTurnRequestProgress();
         }
-        return await handleCodexAppServerElicitationRequest({
+        const approvalResult = await routeCodexAppServerElicitationRequest({
           requestParams: request.params,
           paramsForRun: params,
           threadId: resourceState.thread.threadId,
           turnId,
+          autoApproveMcpTools: autoApprove,
+          projectedMcpServers: runtime.bundleMcpThreadConfig.configPatch?.mcp_servers,
+          getActiveMcpToolCall: (serverName) => projector?.getActiveMcpToolCall(serverName),
           pluginAppPolicyContext: resourceState.thread.pluginAppPolicyContext,
           ...(computerUseConfig.enabled
             ? { computerUseMcpServerName: computerUseConfig.mcpServerName }
             : {}),
-          signal: runAbortController.signal,
+          signal,
         });
+        if (approvalResult.kind === "handled") {
+          return approvalResult.response;
+        }
+        return await userInputBridgeRef.current?.handleElicitationRequest(request, signal);
       }
       if (request.method === "item/tool/requestUserInput") {
         if (scope.turnId === turnId) {
-          armCompletionWatchOnResponse = true;
           markCurrentTurnRequestProgress();
         }
-        return userInputBridgeRef.current?.handleRequest({
-          id: request.id,
-          params: request.params,
-        });
+        return await userInputBridgeRef.current?.handleRequest(request, signal);
       }
       if (request.method !== "item/tool/call") {
         if (isCodexAppServerApprovalRequest(request.method)) {
           if (scope.turnId === turnId) {
-            armCompletionWatchOnResponse = true;
             markCurrentTurnRequestProgress();
           }
-          return handleApprovalRequest({
+          return await handleCodexAppServerApprovalRequest({
             method: request.method,
-            params: request.params,
+            requestParams: request.params,
             paramsForRun: params,
             threadId: resourceState.thread.threadId,
             turnId,
             nativeHookRelay: resourceState.nativeHookRelay,
-            autoApprove: shouldAutoApproveCodexAppServerApprovals(appServer),
-            signal: runAbortController.signal,
-            onNativeToolFailureDisposition: (itemId, disposition) =>
-              projector?.recordNativeToolApprovalFailure(itemId, disposition),
+            autoApprove,
+            signal,
+            onNativeToolFailureDisposition: (itemId, disposition, approvalKind) =>
+              projector?.recordNativeToolApprovalFailure(itemId, disposition, approvalKind),
           });
         }
         return undefined;
@@ -136,15 +177,13 @@ export function createCodexAttemptServerRequestController(
       }
       const replayedExecution = openClawDynamicToolExecutions.get(call);
       if (replayedExecution) {
-        armCompletionWatchOnResponse = true;
         markCurrentTurnRequestProgress();
-        state.turnCrossedToolHandoff = true;
-        return toCodexDynamicToolProtocolResponse(await replayedExecution) as JsonValue;
+        const response = await replayedExecution;
+        await settlePluginRuntimeRefresh(turnId);
+        return toCodexDynamicToolProtocolResponse(response) as JsonValue;
       }
       const toolCallOrdinal = allocateCodexToolOutcomeOrdinal?.(call.callId);
-      armCompletionWatchOnResponse = true;
       markCurrentTurnRequestProgress();
-      state.turnCrossedToolHandoff = true;
       pendingOpenClawDynamicToolCompletionIds.add(call.callId);
       trajectoryRecorder?.recordEvent("tool.call", {
         threadId: call.threadId,
@@ -155,6 +194,7 @@ export function createCodexAttemptServerRequestController(
       });
       projector?.recordDynamicToolCall({
         callId: call.callId,
+        namespace: call.namespace,
         tool: call.tool,
         arguments: call.arguments,
       });
@@ -163,54 +203,67 @@ export function createCodexAttemptServerRequestController(
         tool: call.tool,
         toolCallId: call.callId,
       });
-      emitDynamicToolStartedDiagnostic({
+      const toolMeta = inferToolMetaFromArgs(call.tool, call.arguments, {
+        detailMode: resolveCodexToolProgressDetailMode(params.toolProgressDetail),
+      });
+      const toolArgs = sanitizeCodexToolArguments(call.arguments);
+      const commandBearing = isCodexCommandBearingToolCall(call.tool, toolArgs);
+      const shouldEmitDynamicToolProgress = shouldEmitTranscriptToolProgress(call.tool);
+      if (shouldEmitDynamicToolProgress) {
+        const activity = projectAgentToolActivity({
+          toolCallId: call.callId,
+          name: call.tool,
+          phase: "start",
+          args: toolArgs,
+          meta: toolMeta,
+        });
+        void emitCodexAppServerEvent(params, { stream: "item", data: activity });
+        void emitCodexAppServerEvent(params, {
+          stream: "tool",
+          data: {
+            phase: "start",
+            name: call.tool,
+            itemId: call.callId,
+            toolCallId: call.callId,
+            ...(toolMeta ? { meta: toolMeta } : {}),
+            ...(toolArgs ? { args: toolArgs } : {}),
+            ...(commandBearing ? { commandBearing: true } : {}),
+          },
+        });
+      }
+      const dynamicToolTimeoutMs = resolveDynamicToolCallTimeoutMs({
+        call,
+        config: params.config,
+        toolBridge,
+      });
+      setExecutionTimeoutMs?.(dynamicToolTimeoutMs);
+      const toolStartedAt = Date.now();
+      const diagnostics = createCodexDynamicToolDiagnostics({
         call,
         agentId: sessionAgentId,
         runId: params.runId,
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
       });
-      const toolMeta = inferCodexDynamicToolMeta(
-        call,
-        resolveCodexToolProgressDetailMode(params.toolProgressDetail),
-      );
-      const toolArgs = sanitizeCodexToolArguments(call.arguments);
-      const shouldEmitDynamicToolProgress = shouldEmitTranscriptToolProgress(call.tool, toolArgs);
-      if (shouldEmitDynamicToolProgress) {
-        void emitCodexAppServerEvent(params, {
-          stream: "tool",
-          data: {
-            phase: "start",
-            name: call.tool,
-            toolCallId: call.callId,
-            ...(toolMeta ? { meta: toolMeta } : {}),
-            ...(toolArgs ? { args: toolArgs } : {}),
-          },
-        });
-      }
-      const dynamicToolTimeoutMs = resolveDynamicToolCallTimeoutMs({ call, config: params.config });
-      const toolStartedAt = Date.now();
       let terminalDiagnosticObserved = false;
-      const unsubscribeToolDiagnosticObserver = onInternalDiagnosticEvent((event) => {
-        if (
-          isDynamicToolTerminalDiagnosticEvent(event) &&
-          isMatchingDynamicToolTerminalDiagnostic({
-            event,
-            call,
-            runId: params.runId,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-          })
-        ) {
-          terminalDiagnosticObserved = true;
-        }
-      });
+      const unsubscribeToolDiagnosticObserver = onInternalDiagnosticEvent(
+        (event) => {
+          if (diagnostics.matchesTerminal(event)) {
+            terminalDiagnosticObserved = true;
+          }
+        },
+        { include: DYNAMIC_TOOL_TERMINAL_DIAGNOSTIC_TYPES },
+      );
       try {
-        const { execution } = openClawDynamicToolExecutions.claim(call, () =>
-          handleDynamicToolCallWithTimeout({
+        const { execution } = openClawDynamicToolExecutions.claim(call, async () => {
+          // Publish the execution claim before persistence yields, so a replay
+          // cannot become another owner of this call's progress or result.
+          await projector?.transcriptCheckpoint.flush();
+          diagnostics.started();
+          const response = await handleDynamicToolCallWithTimeout({
             call,
             toolBridge,
-            signal: runAbortController.signal,
+            signal,
             timeoutMs: dynamicToolTimeoutMs,
             toolMeta,
             toolCallOrdinal,
@@ -230,8 +283,16 @@ export function createCodexAttemptServerRequestController(
                 timeoutMs: dynamicToolTimeoutMs,
               });
             },
-          }),
-        );
+          });
+          recordCodexDynamicToolResult(
+            projector,
+            call,
+            response,
+            toCodexDynamicToolProtocolResponse(response),
+          );
+          await projector?.transcriptCheckpoint.flush();
+          return response;
+        });
         const response = await execution;
         const protocolResponse = toCodexDynamicToolProtocolResponse(response);
         if (!protocolResponse.success && toolCallOrdinal !== undefined) {
@@ -254,74 +315,57 @@ export function createCodexAttemptServerRequestController(
           success: protocolResponse.success,
           contentItems: protocolResponse.contentItems,
         });
-        recordCodexDynamicToolResult(projector, call, response, protocolResponse);
+        if (protocolResponse.success && call.tool === "progress_card") {
+          const progressCardInput = response.executedArguments ?? call.arguments;
+          await projector?.recordDynamicProgressCardUpdate(progressCardInput);
+          compactionPlanState.recordProgressCardInput(progressCardInput);
+        }
         if (shouldEmitDynamicToolProgress) {
           const progressResponse = toCodexDynamicToolProgressResponse(response, protocolResponse);
+          const activity = projectAgentToolActivity({
+            toolCallId: call.callId,
+            name: call.tool,
+            phase: "result",
+            args: response.executedArguments ?? call.arguments,
+            result: toTranscriptToolResult(progressResponse),
+            isError: !protocolResponse.success,
+          });
           void emitCodexAppServerEvent(params, {
             stream: "tool",
             data: {
               phase: "result",
               name: call.tool,
+              itemId: call.callId,
               toolCallId: call.callId,
               ...(toolMeta ? { meta: toolMeta } : {}),
+              ...(commandBearing ? { commandBearing: true } : {}),
               isError: !protocolResponse.success,
               result: toTranscriptToolResult(progressResponse),
             },
           });
+          void emitCodexAppServerEvent(params, { stream: "item", data: activity });
         }
-        if (
-          !terminalDiagnosticObserved &&
-          !hasPendingDynamicToolTerminalDiagnostic({
-            call,
-            runId: params.runId,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-          })
-        ) {
-          emitDynamicToolTerminalDiagnostic({
-            response,
-            call,
-            agentId: sessionAgentId,
-            runId: params.runId,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-            durationMs: toolDurationMs,
-          });
+        if (!terminalDiagnosticObserved && !diagnostics.hasPendingTerminal()) {
+          diagnostics.terminal(response, toolDurationMs);
         }
         pendingOpenClawDynamicToolCompletionIds.delete(call.callId);
-        if (response.terminate === true && response.success) {
-          scheduleTurnReleaseAfterTerminalDynamicTool({
-            call,
-            response,
-            durationMs: toolDurationMs,
-          });
-        } else if (!shouldBlockTerminalReleaseForNonTerminalDynamicToolResult(response)) {
-          scheduleTerminalDynamicToolReleaseCheck();
+        if (params.pluginRuntimeRefreshPending?.()) {
+          await settlePluginRuntimeRefresh(turnId);
         } else {
-          state.currentTurnHadNonTerminalDynamicToolResult = true;
-          state.pendingTerminalDynamicToolRelease = undefined;
+          recordDynamicToolResult({ call, response, durationMs: toolDurationMs });
         }
         return protocolResponse as JsonValue;
       } catch (error) {
         pendingOpenClawDynamicToolCompletionIds.delete(call.callId);
-        if (
-          !terminalDiagnosticObserved &&
-          !hasPendingDynamicToolTerminalDiagnostic({
-            call,
-            runId: params.runId,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-          })
-        ) {
-          emitDynamicToolErrorDiagnostic({
-            call,
-            agentId: sessionAgentId,
-            runId: params.runId,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-            durationMs: Math.max(0, Date.now() - toolStartedAt),
-          });
+        recordDynamicToolResult({
+          call,
+          response: { contentItems: [], success: false },
+          durationMs: Math.max(0, Date.now() - toolStartedAt),
+        });
+        if (!terminalDiagnosticObserved && !diagnostics.hasPendingTerminal()) {
+          diagnostics.error(Math.max(0, Date.now() - toolStartedAt));
         }
+        await settlePluginRuntimeRefresh(turnId);
         throw error;
       } finally {
         toolOutcomeOrdinals.delete(call.callId);
@@ -329,24 +373,9 @@ export function createCodexAttemptServerRequestController(
       }
     } finally {
       if (requestCountsAsTurnActivity) {
-        state.activeAppServerTurnRequests = Math.max(0, state.activeAppServerTurnRequests - 1);
-        const postToolContinuationTimeoutMs =
-          request.method === "item/tool/call" && state.turnCrossedToolHandoff
-            ? postToolRawAssistantCompletionIdleTimeoutMs
-            : undefined;
-        turnWatches.touchActivity(`request:${request.method}:response`, {
-          arm: armCompletionWatchOnResponse,
-          attemptProgress: true,
-          ...(postToolContinuationTimeoutMs !== undefined
-            ? { attemptTimeoutMs: postToolContinuationTimeoutMs }
-            : {}),
-        });
-        if (armCompletionWatchOnResponse && postToolContinuationTimeoutMs !== undefined) {
-          turnWatches.armCompletionIdleWatch({ timeoutMs: postToolContinuationTimeoutMs });
-        }
+        state.activeAppServerTurnRequests -= 1;
+        noteProgress(`request:${request.method}:response`);
         scheduleTerminalDynamicToolReleaseCheck();
-      } else {
-        turnWatches.scheduleProgressWatches();
       }
     }
   };

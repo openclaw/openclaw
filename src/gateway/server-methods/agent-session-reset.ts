@@ -1,6 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import type { AgentCommandOpts } from "../../agents/command/types.js";
 import { agentCommandFromIngress } from "../../commands/agent.js";
 import {
   resolveAgentIdFromSessionKey,
@@ -11,34 +9,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveAgentDeliveryPlanWithSessionRoute } from "../../infra/outbound/agent-delivery.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import { performGatewaySessionReset } from "../session-reset-service.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { loadSessionEntry } from "../session-utils.js";
-import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
-
-export async function runSessionResetFromAgent(params: {
-  key: string;
-  agentId?: string;
-  reason: "new" | "reset";
-  assertCurrent?: () => void;
-  onCommitted?: (commit: { key: string; sessionId: string }) => void;
-}) {
-  const result = await performGatewaySessionReset({
-    key: params.key,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    reason: params.reason,
-    commandSource: "gateway:agent",
-    assertCurrent: params.assertCurrent,
-    onCommitted: params.onCommitted,
-  });
-  if (!result.ok) {
-    return result;
-  }
-  return {
-    ok: true as const,
-    key: result.key,
-    sessionId: result.entry.sessionId,
-  };
-}
+import type { AgentRunRequest } from "./agent-request-types.js";
+import type { GatewayRequestHandlerOptions } from "./types.js";
 
 export function sessionResetAckText(reason: "new" | "reset"): string {
   return reason === "new" ? "✅ New session started." : "✅ Session reset.";
@@ -49,8 +23,9 @@ export function buildBareSessionResetResult(params: {
   sessionId?: string;
   ackText?: string;
 }) {
+  const text = params.ackText ?? sessionResetAckText(params.reason);
   return {
-    payloads: [{ text: params.ackText ?? sessionResetAckText(params.reason) }],
+    payloads: [{ text, isStatusNotice: true }],
     meta: {
       durationMs: 0,
       ...(params.sessionId
@@ -78,75 +53,6 @@ export function buildBareSessionResetResponse(params: {
   };
 }
 
-async function deliverBareSessionResetResult(params: {
-  cfg: OpenClawConfig;
-  context: GatewayRequestHandlerOptions["context"];
-  reason: "new" | "reset";
-  sessionId?: string;
-  sessionKey: string;
-  agentId?: string;
-  sessionEntry?: SessionEntry;
-  request: {
-    replyTo?: string;
-    to?: string;
-    replyChannel?: string;
-    channel?: string;
-    replyAccountId?: string;
-    accountId?: string;
-    threadId?: string | number;
-    bestEffortDeliver?: boolean;
-  };
-  bestEffortDeliver?: boolean;
-  deliveryTargetMode?: AgentCommandOpts["deliveryTargetMode"];
-  originMessageChannel?: string;
-  runId: string;
-  assertCurrent?: () => void;
-  ackText?: string;
-}) {
-  const { deliverAgentCommandResult } = await import("../../agents/command/delivery.runtime.js");
-  params.assertCurrent?.();
-  const result = buildBareSessionResetResult({
-    reason: params.reason,
-    sessionId: params.sessionId,
-    ackText: params.ackText,
-  });
-  return await deliverAgentCommandResult({
-    cfg: params.cfg,
-    deps: params.context.deps,
-    runtime: defaultRuntime,
-    opts: {
-      message: params.ackText ?? sessionResetAckText(params.reason),
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      ...(params.sessionId ? { sessionId: params.sessionId } : {}),
-      sessionKey: params.sessionKey,
-      deliver: true,
-      replyTo: params.request.replyTo,
-      to: params.request.to,
-      replyChannel: params.request.replyChannel,
-      channel: params.request.channel,
-      replyAccountId: params.request.replyAccountId,
-      accountId: params.request.accountId,
-      threadId: params.request.threadId,
-      deliveryTargetMode: params.deliveryTargetMode,
-      bestEffortDeliver: params.bestEffortDeliver,
-      runId: params.runId,
-      messageChannel: params.originMessageChannel,
-      runContext: {
-        messageChannel: params.originMessageChannel,
-        accountId: params.request.replyAccountId ?? params.request.accountId,
-        currentThreadTs:
-          params.request.threadId != null ? String(params.request.threadId) : undefined,
-      },
-      allowModelOverride: false,
-    },
-    outboundSession: undefined,
-    sessionEntry: params.sessionEntry,
-    result: result as never,
-    payloads: result.payloads as never,
-    assertDeliveryCurrent: params.assertCurrent,
-  });
-}
-
 export async function resolveBareSessionResetResult(params: {
   cfg: OpenClawConfig;
   context: GatewayRequestHandlerOptions["context"];
@@ -155,7 +61,18 @@ export async function resolveBareSessionResetResult(params: {
   sessionKey: string;
   agentId?: string;
   sessionEntry?: SessionEntry;
-  request: Parameters<GatewayRequestHandlers["agent"]>[0]["params"];
+  request: Pick<
+    AgentRunRequest,
+    | "deliver"
+    | "replyTo"
+    | "to"
+    | "replyChannel"
+    | "channel"
+    | "replyAccountId"
+    | "accountId"
+    | "threadId"
+    | "bestEffortDeliver"
+  >;
   originMessageChannel?: string;
   runId: string;
   assertCurrent?: () => void;
@@ -163,17 +80,13 @@ export async function resolveBareSessionResetResult(params: {
 }) {
   params.assertCurrent?.();
   if (params.request.deliver !== true) {
-    return buildBareSessionResetResult({
-      reason: params.reason,
-      sessionId: params.sessionId,
-      ackText: params.ackText,
-    });
+    return buildBareSessionResetResult(params);
   }
   const sendPolicy = resolveSendPolicy({
     cfg: params.cfg,
     entry: params.sessionEntry,
     sessionKey: params.sessionKey,
-    channel: params.sessionEntry?.channel,
+    channel: sessionDeliveryChannel(params.sessionEntry),
     chatType: params.sessionEntry?.chatType,
   });
   if (sendPolicy === "deny") {
@@ -211,32 +124,55 @@ export async function resolveBareSessionResetResult(params: {
       : params.sessionKey === mainSessionKey || params.sessionKey === "global"
         ? true
         : undefined;
-  return await deliverBareSessionResetResult({
+  const request = {
+    ...params.request,
+    channel: deliveryPlan.resolvedChannel,
+    to: deliveryPlan.resolvedTo ?? deliveryPlan.baseDelivery.to,
+    accountId: deliveryPlan.resolvedAccountId ?? deliveryPlan.baseDelivery.accountId,
+    threadId: deliveryPlan.resolvedThreadId,
+  };
+  const originMessageChannel = params.originMessageChannel ?? deliveryPlan.resolvedChannel;
+  const { deliverAgentCommandResult } = await import("../../agents/command/delivery.runtime.js");
+  params.assertCurrent?.();
+  const result = buildBareSessionResetResult(params);
+  return await deliverAgentCommandResult({
     cfg: params.cfg,
-    context: params.context,
-    reason: params.reason,
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    sessionEntry: params.sessionEntry,
-    request: {
-      ...params.request,
-      channel: deliveryPlan.resolvedChannel,
-      to: deliveryPlan.resolvedTo ?? deliveryPlan.baseDelivery.to,
-      accountId: deliveryPlan.resolvedAccountId ?? deliveryPlan.baseDelivery.accountId,
-      threadId: deliveryPlan.resolvedThreadId,
+    deps: params.context.deps,
+    runtime: defaultRuntime,
+    opts: {
+      message: params.ackText ?? sessionResetAckText(params.reason),
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+      sessionKey: params.sessionKey,
+      deliver: true,
+      replyTo: request.replyTo,
+      to: request.to,
+      replyChannel: request.replyChannel,
+      channel: request.channel,
+      replyAccountId: request.replyAccountId,
+      accountId: request.accountId,
+      threadId: request.threadId,
+      deliveryTargetMode: deliveryPlan.deliveryTargetMode ?? deliveryPlan.baseDelivery.mode,
+      bestEffortDeliver,
+      runId: params.runId,
+      messageChannel: originMessageChannel,
+      runContext: {
+        messageChannel: originMessageChannel,
+        accountId: request.replyAccountId ?? request.accountId,
+        currentThreadTs: request.threadId != null ? String(request.threadId) : undefined,
+      },
+      allowModelOverride: false,
     },
-    bestEffortDeliver,
-    deliveryTargetMode: deliveryPlan.deliveryTargetMode ?? deliveryPlan.baseDelivery.mode,
-    originMessageChannel: params.originMessageChannel ?? deliveryPlan.resolvedChannel,
-    runId: params.runId,
-    assertCurrent: params.assertCurrent,
-    ackText: params.ackText,
+    outboundSession: undefined,
+    sessionEntry: params.sessionEntry,
+    result: result as never,
+    payloads: result.payloads,
+    preparedPlugin: deliveryPlan.plugin,
+    assertDeliveryCurrent: params.assertCurrent,
   });
 }
 
 export function loadBareSessionResetDeliverySession(params: {
-  cfg: OpenClawConfig;
   sessionKey: string;
   agentId?: string;
 }): {
@@ -244,20 +180,14 @@ export function loadBareSessionResetDeliverySession(params: {
   entry?: SessionEntry;
   agentId: string;
 } {
-  const selectedGlobalAgentId =
-    params.sessionKey === "global" && params.agentId ? params.agentId : undefined;
   const loaded = loadSessionEntry(params.sessionKey, {
     clone: false,
-    ...(selectedGlobalAgentId ? { agentId: selectedGlobalAgentId } : {}),
+    ...(params.agentId ? { agentId: params.agentId } : {}),
   });
-  const loadedCfg = loaded?.cfg ?? params.cfg;
   return {
-    cfg: loadedCfg,
-    entry: loaded?.entry,
-    agentId:
-      selectedGlobalAgentId ??
-      resolveAgentIdFromSessionKey(params.sessionKey) ??
-      resolveDefaultAgentId(loadedCfg),
+    cfg: loaded.cfg,
+    entry: loaded.entry,
+    agentId: resolveAgentIdFromSessionKey(params.sessionKey, params.agentId),
   };
 }
 

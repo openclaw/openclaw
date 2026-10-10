@@ -1,8 +1,6 @@
-/**
- * Browser control HTTP server startup and shutdown entrypoints.
- */
-import type { Server } from "node:http";
 import express from "express";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   createBrowserControlContext,
   ensureBrowserControlRuntime,
@@ -18,16 +16,14 @@ import {
   resolveBrowserControlAuth,
   shouldAutoGenerateBrowserAuth,
 } from "./browser/control-auth.js";
+import { listenBrowserHttpServer } from "./browser/http-listen.js";
 import { registerBrowserRoutes } from "./browser/routes/index.js";
-import type { BrowserRouteRegistrar } from "./browser/routes/types.js";
 import type { BrowserServerState } from "./browser/server-context.js";
 import {
   installBrowserAuthMiddleware,
   installBrowserCommonMiddleware,
 } from "./browser/server-middleware.js";
-import { getRuntimeConfig } from "./config/config.js";
-import { createSubsystemLogger } from "./logging/subsystem.js";
-import { isDefaultBrowserPluginEnabled } from "./plugin-enabled.js";
+import { resolveBrowserPluginEnableState } from "./plugin-enabled.js";
 
 const log = createSubsystemLogger("browser");
 const logServer = log.child("server");
@@ -40,7 +36,7 @@ async function startBrowserControlServerUnlocked(): Promise<BrowserServerState |
 
   const cfg = getRuntimeConfig();
   const browserCfg = loadBrowserConfigForRuntimeRefresh();
-  if (!isDefaultBrowserPluginEnabled(browserCfg)) {
+  if (!resolveBrowserPluginEnableState(cfg).enabled) {
     return null;
   }
   const resolved = resolveBrowserConfig(browserCfg.browser, browserCfg);
@@ -82,13 +78,10 @@ async function startBrowserControlServerUnlocked(): Promise<BrowserServerState |
   installBrowserAuthMiddleware(app, browserAuth);
 
   const ctx = createBrowserControlContext();
-  registerBrowserRoutes(app as unknown as BrowserRouteRegistrar, ctx);
+  registerBrowserRoutes(app, ctx);
 
   const port = resolved.controlPort;
-  const server = await new Promise<Server>((resolve, reject) => {
-    const s = app.listen(port, "127.0.0.1", () => resolve(s));
-    s.once("error", reject);
-  }).catch((err: unknown) => {
+  const server = await listenBrowserHttpServer(app, port, "127.0.0.1").catch((err: unknown) => {
     logServer.error(`openclaw browser server failed to bind 127.0.0.1:${port}: ${String(err)}`);
     return null;
   });
@@ -103,8 +96,6 @@ async function startBrowserControlServerUnlocked(): Promise<BrowserServerState |
       server,
       port,
       resolved,
-      owner: "server",
-      onWarn: (message) => logServer.warn(message),
     });
   } catch (err) {
     await new Promise<void>((resolve) => {
@@ -119,12 +110,10 @@ async function startBrowserControlServerUnlocked(): Promise<BrowserServerState |
   return state;
 }
 
-/** Starts the Browser control HTTP server from runtime config. */
 export async function startBrowserControlServerFromConfig(): Promise<BrowserServerState | null> {
   return await withBrowserControlStart(startBrowserControlServerUnlocked);
 }
 
-/** Stops the Browser control HTTP server and unregisters bridge auth. */
 export async function stopBrowserControlServer(): Promise<void> {
   const stopped = await stopBrowserControlRuntime({
     requestedBy: "server",

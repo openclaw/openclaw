@@ -1,4 +1,3 @@
-// Qa Lab Matrix plugin module implements fault proxy behavior.
 import {
   createServer,
   type IncomingHttpHeaders,
@@ -82,11 +81,35 @@ export type MatrixQaFaultProxyHit = {
   ruleId: string;
 };
 
+export type MatrixQaFaultProxyRuleHandle = {
+  hits(): MatrixQaFaultProxyHit[];
+  remove(): void;
+};
+
 type MatrixQaFaultProxy = {
   baseUrl: string;
   hits(): MatrixQaFaultProxyHit[];
+  installRule(rule: MatrixQaFaultProxyRule): MatrixQaFaultProxyRuleHandle;
+  setTargetBaseUrl(targetBaseUrl: string): void;
   stop(): Promise<void>;
 };
+
+type MatrixQaRegisteredFaultProxyRule = {
+  registrationId: number;
+  rule: MatrixQaFaultProxyRule;
+};
+
+type MatrixQaRegisteredFaultProxyHit = MatrixQaFaultProxyHit & {
+  registrationId: number;
+};
+
+function toMatrixQaFaultProxyHit(hit: MatrixQaRegisteredFaultProxyHit): MatrixQaFaultProxyHit {
+  return {
+    method: hit.method,
+    path: hit.path,
+    ruleId: hit.ruleId,
+  };
+}
 
 function normalizeHeaderValue(value: string | string[] | undefined) {
   if (Array.isArray(value)) {
@@ -113,10 +136,6 @@ function buildFetchHeaders(headers: IncomingHttpHeaders) {
     }
   }
   return result;
-}
-
-function normalizeByteChunk(chunk: string | Buffer): Buffer {
-  return typeof chunk === "string" ? Buffer.from(chunk) : chunk;
 }
 
 function rejectOversizedRequestBody(maxBytes: number, size: number) {
@@ -158,7 +177,6 @@ async function readRequestBody(req: IncomingMessage, maxBytes: number) {
   return await new Promise<Buffer>((resolve, reject) => {
     const chunks: Buffer[] = [];
     let total = 0;
-    let settled = false;
 
     const cleanup = () => {
       req.off("data", onData);
@@ -167,26 +185,15 @@ async function readRequestBody(req: IncomingMessage, maxBytes: number) {
       req.off("aborted", onAborted);
       req.off("close", onClose);
     };
-    const stopReading = () => {
-      req.off("data", onData);
-      req.off("end", onEnd);
-      req.off("aborted", onAborted);
-    };
     const settleReject = (error: Error, options?: { drain?: boolean }) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
+      cleanup();
       if (options?.drain) {
-        stopReading();
-        req.resume();
-      } else {
-        cleanup();
+        drainRejectedRequestBody(req);
       }
       reject(error);
     };
     const onData = (chunk: string | Buffer) => {
-      const buffer = normalizeByteChunk(chunk);
+      const buffer = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
       const nextTotal = total + buffer.byteLength;
       if (nextTotal > maxBytes) {
         settleReject(rejectOversizedRequestBody(maxBytes, nextTotal), { drain: true });
@@ -196,28 +203,14 @@ async function readRequestBody(req: IncomingMessage, maxBytes: number) {
       total = nextTotal;
     };
     const onEnd = () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
       cleanup();
       resolve(Buffer.concat(chunks, total));
     };
-    const onError = (error: Error) => {
-      if (settled) {
-        cleanup();
-        return;
-      }
-      settleReject(error);
-    };
+    const onError = (error: Error) => settleReject(error);
     const onAborted = () => {
       settleReject(rejectAbortedRequestBody());
     };
     const onClose = () => {
-      if (settled) {
-        cleanup();
-        return;
-      }
       if (!req.complete) {
         settleReject(rejectAbortedRequestBody());
         return;
@@ -308,8 +301,7 @@ function writeForwardedResponse(
       options.preserveConnectionClose && normalizedKey === "connection" && value === "close";
     if (
       (!HOP_BY_HOP_HEADERS.has(normalizedKey) || isIntentionalConnectionClose) &&
-      normalizedKey !== "content-encoding" &&
-      normalizedKey !== "content-length"
+      normalizedKey !== "content-encoding"
     ) {
       headers[key] = value;
     }
@@ -326,10 +318,15 @@ export async function startMatrixQaFaultProxy(
     targetBaseUrl: string;
   },
 ): Promise<MatrixQaFaultProxy> {
-  const targetBaseUrl = new URL(params.targetBaseUrl);
+  let targetBaseUrl = new URL(params.targetBaseUrl);
   const maxRequestBytes = params.maxRequestBytes ?? DEFAULT_FAULT_PROXY_REQUEST_MAX_BYTES;
   const maxResponseBytes = params.maxResponseBytes ?? DEFAULT_FAULT_PROXY_RESPONSE_MAX_BYTES;
-  const hits: MatrixQaFaultProxyHit[] = [];
+  let nextRuleRegistrationId = 0;
+  const registeredRules: MatrixQaRegisteredFaultProxyRule[] = params.rules.map((rule) => ({
+    registrationId: nextRuleRegistrationId++,
+    rule,
+  }));
+  const hits: MatrixQaRegisteredFaultProxyHit[] = [];
   const activeAbortControllers = new Set<AbortController>();
   const server = createServer((req, res) => {
     const abortController = new AbortController();
@@ -337,6 +334,22 @@ export async function startMatrixQaFaultProxy(
     void (async () => {
       let observedRequest: MatrixQaFaultProxyRequest | undefined;
       let observedContext: unknown;
+      let observerNotified = false;
+      const observeExchange = async (
+        request: MatrixQaFaultProxyRequest,
+        response: MatrixQaFaultProxyForwardedResponse,
+        context?: unknown,
+      ) => {
+        if (!params.onExchange) {
+          return;
+        }
+        observerNotified = true;
+        await params.onExchange({
+          ...(context !== undefined ? { context } : {}),
+          request,
+          response,
+        });
+      };
       try {
         const requestTarget = req.url ?? "/";
         if (!requestTarget.startsWith("/") || requestTarget.startsWith("//")) {
@@ -368,20 +381,18 @@ export async function startMatrixQaFaultProxy(
         observedRequest = request;
         const context = params.createExchangeContext?.(request);
         observedContext = context;
-        const rule = params.rules.find((candidate) => candidate.match(request));
-        if (rule) {
+        const registeredRule = registeredRules.find((candidate) => candidate.rule.match(request));
+        const rule = registeredRule?.rule;
+        if (rule && registeredRule) {
           hits.push({
             method: request.method,
             path: request.path,
+            registrationId: registeredRule.registrationId,
             ruleId: rule.id,
           });
           if (rule.response) {
             const response = normalizeJsonResponse(rule.response(request));
-            await params.onExchange?.({
-              ...(context !== undefined ? { context } : {}),
-              request,
-              response,
-            });
+            await observeExchange(request, response, context);
             writeForwardedResponse(res, response);
             return;
           }
@@ -400,43 +411,28 @@ export async function startMatrixQaFaultProxy(
                 response: forwarded,
               })
             : forwarded;
-        await params.onExchange?.({
-          ...(context !== undefined ? { context } : {}),
-          request,
-          response,
-        });
+        await observeExchange(request, response, context);
         writeForwardedResponse(res, response);
       } catch (error) {
-        const failure =
-          error instanceof MatrixQaFaultProxyHttpError
-            ? {
-                body: {
-                  errcode: error.code,
-                  error: error.message,
-                },
-                ...(error.status === 413 ? { headers: { connection: "close" } } : {}),
-                status: error.status,
-              }
-            : {
-                body: {
-                  errcode: "MATRIX_QA_FAULT_PROXY_ERROR",
-                  error: error instanceof Error ? error.message : String(error),
-                },
-                status: 502,
-              };
-        const response = normalizeJsonResponse(failure);
-        if (observedRequest) {
-          await params.onExchange?.({
-            ...(observedContext !== undefined ? { context: observedContext } : {}),
-            request: observedRequest,
-            response,
-          });
+        const httpError = error instanceof MatrixQaFaultProxyHttpError ? error : undefined;
+        const preserveConnectionClose = httpError?.status === 413;
+        const response = normalizeJsonResponse({
+          body: {
+            errcode: httpError?.code ?? "MATRIX_QA_FAULT_PROXY_ERROR",
+            error: error instanceof Error ? error.message : String(error),
+          },
+          ...(preserveConnectionClose ? { headers: { connection: "close" } } : {}),
+          status: httpError?.status ?? 502,
+        });
+        if (observedRequest && !observerNotified) {
+          try {
+            await observeExchange(observedRequest, response, observedContext);
+          } catch {
+            // Capture is diagnostic; its failure must not strand the original HTTP response.
+          }
         }
         if (!res.destroyed) {
-          writeForwardedResponse(res, response, {
-            preserveConnectionClose:
-              error instanceof MatrixQaFaultProxyHttpError && error.status === 413,
-          });
+          writeForwardedResponse(res, response, { preserveConnectionClose });
         }
       } finally {
         activeAbortControllers.delete(abortController);
@@ -460,7 +456,25 @@ export async function startMatrixQaFaultProxy(
 
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
-    hits: () => [...hits],
+    hits: () => hits.map(toMatrixQaFaultProxyHit),
+    installRule(rule) {
+      const registrationId = nextRuleRegistrationId++;
+      const registeredRule = { registrationId, rule };
+      registeredRules.push(registeredRule);
+      return {
+        hits: () =>
+          hits.filter((hit) => hit.registrationId === registrationId).map(toMatrixQaFaultProxyHit),
+        remove() {
+          const index = registeredRules.indexOf(registeredRule);
+          if (index !== -1) {
+            registeredRules.splice(index, 1);
+          }
+        },
+      };
+    },
+    setTargetBaseUrl(nextTargetBaseUrl) {
+      targetBaseUrl = new URL(nextTargetBaseUrl);
+    },
     stop: async () => {
       const closePromise = new Promise<void>((resolve, reject) => {
         server.close((error) => {

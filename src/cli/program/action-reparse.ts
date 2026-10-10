@@ -1,35 +1,31 @@
-// Reparse support for lazy commands after their placeholder has been replaced.
 import type { Command, Option } from "commander";
 import { buildParseArgv } from "../argv.js";
-
-function getCommandPathFromRoot(command: Command | undefined): Command[] {
-  const path: Command[] = [];
-  let current = command;
-  while (current?.parent) {
-    if (current.name()) {
-      path.unshift(current);
-    }
-    current = current.parent;
-  }
-  return path;
-}
-
-function findRootCommand(cmd: Command): Command {
-  let current: Command = cmd;
-  while (current.parent) {
-    current = current.parent;
-  }
-  return current;
-}
+import { getCommandHierarchy, getRootCommand } from "./command-tree.js";
 
 function findOption(command: Command, token: string): Option | undefined {
   const equalsIndex = token.indexOf("=");
   const flag = equalsIndex === -1 ? token : token.slice(0, equalsIndex);
-  return command.options.find(
+  const exactOption = command.options.find(
     (candidate) =>
       (candidate.short === flag || candidate.long === flag) &&
       (equalsIndex === -1 || candidate.required || candidate.optional),
   );
+  if (exactOption || !token.startsWith("-") || token.startsWith("--") || token.length <= 2) {
+    return exactOption;
+  }
+  // Once a child claims a short group, preserve its unknown suffix for Commander.
+  let claimedOption: Option | undefined;
+  for (let index = 1; index < token.length; index += 1) {
+    const option = command.options.find((candidate) => candidate.short === `-${token[index]}`);
+    if (!option) {
+      return claimedOption;
+    }
+    claimedOption ??= option;
+    if (option.required || option.optional || index === token.length - 1) {
+      return option;
+    }
+  }
+  return undefined;
 }
 
 function findNearestOption(commands: readonly Command[], token: string): Option | undefined {
@@ -50,7 +46,12 @@ function matchesCommandName(command: Command, token: string): boolean {
 // Returns 0 for a missing required value, otherwise the number of consumed tokens.
 function optionTokenCount(option: Option, argv: readonly string[], index: number): number {
   const token = argv[index] ?? "";
-  if (token.includes("=") || (!option.required && !option.optional)) {
+  const shortFlagIndex =
+    option.short !== undefined && !token.startsWith("--")
+      ? token.indexOf(option.short.slice(1), 1)
+      : -1;
+  const hasAttachedShortValue = shortFlagIndex !== -1 && shortFlagIndex < token.length - 1;
+  if (token.includes("=") || hasAttachedShortValue || (!option.required && !option.optional)) {
     return 1;
   }
   const next = argv[index + 1];
@@ -62,7 +63,9 @@ function optionTokenCount(option: Option, argv: readonly string[], index: number
 }
 
 function findCommandPathEnd(argv: readonly string[], command: Command): number {
-  const path = getCommandPathFromRoot(command);
+  const path = getCommandHierarchy(command)
+    .slice(1)
+    .filter((current) => current.name());
   const root = path[0]?.parent;
   if (!root) {
     return -1;
@@ -167,12 +170,11 @@ function hoistLazyParentOptions(
     : [...argv.slice(0, lazyCommandIndex), ...hoisted, lazyCommandName, ...remaining];
 }
 
-/** Re-run parsing after replacing a lazy command placeholder. */
 export async function reparseProgramFromActionCommand(
   program: Command,
   actionCommand: Command,
 ): Promise<void> {
-  const rootProgram = findRootCommand(actionCommand) as Command & { rawArgs: string[] };
+  const rootProgram = getRootCommand(actionCommand) as Command & { rawArgs: string[] };
   // Commander 15 snapshots the full parse input on the root before actions run.
   const parseArgv = buildParseArgv(rootProgram.rawArgs, rootProgram.name());
   const normalizedArgv = hoistLazyParentOptions(parseArgv, program, actionCommand.name());

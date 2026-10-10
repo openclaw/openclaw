@@ -10,6 +10,7 @@ import {
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import * as activationCheck from "../../plugin-sdk/facade-activation-check.runtime.js";
 import * as facadeRuntime from "../../plugin-sdk/facade-runtime.js";
+import { captureEnv } from "../../test-utils/env.js";
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: ({ config }: { config?: unknown }) => ({
@@ -18,9 +19,9 @@ vi.mock("../../config/plugin-auto-enable.js", () => ({
   }),
 }));
 
-const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+const originalBundledEnv = captureEnv(["OPENCLAW_BUNDLED_PLUGINS_DIR"]);
 const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
-const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+const originalStateEnv = captureEnv(["OPENCLAW_STATE_DIR"]);
 const originalGlobalFetch = globalThis.fetch;
 const tempDirs: string[] = [];
 
@@ -51,6 +52,7 @@ function createInstalledRuntimePluginDir(
     JSON.stringify({
       name: `@openclaw/${pluginId}`,
       version: "0.0.0",
+      type: "module",
       openclaw: {
         extensions: ["./runtime-api.js"],
         channel: { id: pluginId },
@@ -79,16 +81,8 @@ afterEach(() => {
   facadeRuntime.resetFacadeRuntimeStateForTest();
   vi.restoreAllMocks();
   Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
-  if (originalBundledPluginsDir === undefined) {
-    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-  } else {
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledPluginsDir;
-  }
-  if (originalStateDir === undefined) {
-    delete process.env.OPENCLAW_STATE_DIR;
-  } else {
-    process.env.OPENCLAW_STATE_DIR = originalStateDir;
-  }
+  originalBundledEnv.restore();
+  originalStateEnv.restore();
   if (originalGlobalFetch) {
     (globalThis as Record<string, unknown>).fetch = originalGlobalFetch;
   } else {
@@ -129,7 +123,6 @@ describe("shared runtime seam contracts", () => {
         artifactBasename: "runtime-api.js",
         location,
         sourceExtensionsRoot: bundledDir,
-        resolutionKey: `test:${pluginId}`,
       }).allowed,
     ).toBe(true);
     expect(

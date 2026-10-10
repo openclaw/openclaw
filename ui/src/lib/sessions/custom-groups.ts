@@ -1,35 +1,89 @@
-// Pure helpers for the gateway-owned custom session group catalog.
+// Pure helpers for custom session groups and their sidebar section tokens.
 // Catalog storage and member updates live on the gateway (sessions.groups.*);
 // the SessionCapability mirrors the catalog into state.groups.
+import type {
+  SessionGroup,
+  SessionGroupDefaults,
+} from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 
-export function readSessionCustomGroupNames(payload: unknown): string[] {
-  const groups = (payload as { groups?: Array<{ name?: unknown }> } | null)?.groups;
+const BUILT_IN_SESSION_SECTION_IDS = new Set(["ungrouped", "groups", "work"]);
+
+export type SessionGroupSettings = SessionGroup & SessionGroupDefaults;
+
+export function readSessionCustomGroups(payload: unknown): SessionGroupSettings[] {
+  const groups = (payload as { groups?: unknown } | null)?.groups;
   if (!Array.isArray(groups)) {
     return [];
   }
-  return groups.flatMap((group) =>
-    typeof group?.name === "string" && group.name.trim() ? [group.name.trim()] : [],
+  return groups.flatMap((entry, index) => {
+    const group = entry as Record<string, unknown> | null;
+    const name = typeof group?.name === "string" ? group.name.trim() : "";
+    if (!name) {
+      return [];
+    }
+    return [
+      {
+        name,
+        position:
+          typeof group?.position === "number" && Number.isSafeInteger(group.position)
+            ? group.position
+            : index,
+      },
+    ];
+  });
+}
+
+/** Replace defaults from a complete snapshot, retaining only catalog names and positions. */
+export function mergeSessionGroupDefaults(
+  groups: readonly SessionGroupSettings[],
+  payload: unknown,
+): SessionGroupSettings[] {
+  const values = (payload as { defaults?: unknown } | null)?.defaults;
+  const defaults = new Map<string, { cwd?: string; worktree?: boolean }>();
+  if (Array.isArray(values)) {
+    for (const value of values) {
+      const record = value as Record<string, unknown> | null;
+      const name = typeof record?.name === "string" ? record.name.trim() : "";
+      if (!name) {
+        continue;
+      }
+      const cwd = typeof record?.cwd === "string" ? record.cwd.trim() : "";
+      defaults.set(name, {
+        ...(cwd ? { cwd } : {}),
+        ...(typeof record?.worktree === "boolean" ? { worktree: record.worktree } : {}),
+      });
+    }
+  }
+  return groups.map(({ name, position }) => ({ name, position, ...defaults.get(name) }));
+}
+
+export function readSidebarSectionOrder(payload: unknown): string[] {
+  return (
+    normalizeSessionSectionOrderTokens(
+      (payload as { sectionOrder?: unknown } | null)?.sectionOrder,
+    ) ?? []
   );
 }
 
-/** Move one custom group before another while preserving every other group. */
-export function reorderSessionCustomGroups(
-  groups: readonly string[],
-  source: string,
-  target: string,
-  position: "before" | "after" = "before",
-): string[] {
-  const ordered = [...new Set(groups.map((name) => name.trim()).filter(Boolean))];
-  const sourceIndex = ordered.indexOf(source);
-  const targetIndex = ordered.indexOf(target);
-  if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) {
-    return ordered;
+/** Validate and deduplicate a persisted partial section order. */
+export function normalizeSessionSectionOrderTokens(value: unknown): string[] | null {
+  if (!Array.isArray(value)) {
+    return null;
   }
-  const [moved] = ordered.splice(sourceIndex, 1);
-  if (!moved) {
-    return ordered;
+  const normalized: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    const trimmed = entry.trim();
+    const prefix = ["catalog:", "category:"].find((candidate) => trimmed.startsWith(candidate));
+    const name = prefix ? trimmed.slice(prefix.length).trim() : "";
+    const token = prefix
+      ? name && `${prefix}${name}`
+      : BUILT_IN_SESSION_SECTION_IDS.has(trimmed) && trimmed;
+    if (token && !normalized.includes(token)) {
+      normalized.push(token);
+    }
   }
-  const targetInsertionIndex = ordered.indexOf(target) + (position === "after" ? 1 : 0);
-  ordered.splice(targetInsertionIndex, 0, moved);
-  return ordered;
+  return normalized;
 }

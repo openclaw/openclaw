@@ -1,10 +1,10 @@
-// Slack data-visualization Block Kit contract, projection, and text fallback.
 import type { Block } from "@slack/web-api";
 import {
   normalizeMessagePresentation,
   renderMessagePresentationChartFallbackText,
   type MessagePresentationChartBlock,
 } from "openclaw/plugin-sdk/interactive-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 import { renderSlackMessagePresentationChartFallbackText } from "./presentation-fallback.js";
 
@@ -40,15 +40,9 @@ type SlackDataVisualizationBlock = Block & {
   chart: SlackPieChart | SlackSeriesChart;
 };
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 /** Detect native chart blocks without depending on unreleased Slack SDK types. */
 export function hasSlackDataVisualizationBlock(blocks?: readonly unknown[]): boolean {
-  return blocks?.some((block) => asRecord(block)?.type === "data_visualization") ?? false;
+  return blocks?.some((block) => asOptionalRecord(block)?.type === "data_visualization") ?? false;
 }
 
 function isStringWithin(value: unknown, maxLength: number): value is string {
@@ -61,22 +55,33 @@ function hasUniqueStrings(values: readonly string[]): boolean {
   return new Set(values).size === values.length;
 }
 
-/** True when a portable chart satisfies Slack's complete native-block contract. */
-export function canRenderSlackDataVisualization(block: MessagePresentationChartBlock): boolean {
+export function buildSlackDataVisualizationBlock(
+  block: MessagePresentationChartBlock,
+): SlackDataVisualizationBlock | undefined {
   if (!isStringWithin(block.title, SLACK_CHART_TITLE_MAX)) {
-    return false;
+    return undefined;
   }
   if (block.chartType === "pie") {
-    return (
-      block.segments.length >= 1 &&
-      block.segments.length <= SLACK_CHART_SERIES_MAX &&
-      block.segments.every(
+    if (
+      block.segments.length < 1 ||
+      block.segments.length > SLACK_CHART_SERIES_MAX ||
+      !block.segments.every(
         (segment) =>
           isStringWithin(segment.label, SLACK_CHART_LABEL_MAX) &&
           Number.isFinite(segment.value) &&
           segment.value > 0,
       )
-    );
+    ) {
+      return undefined;
+    }
+    return {
+      type: "data_visualization",
+      title: block.title,
+      chart: {
+        type: "pie",
+        segments: block.segments.map((segment) => ({ ...segment })),
+      },
+    };
   }
   if (
     block.categories.length < 1 ||
@@ -87,34 +92,15 @@ export function canRenderSlackDataVisualization(block: MessagePresentationChartB
     block.series.length > SLACK_CHART_SERIES_MAX ||
     !hasUniqueStrings(block.series.map((series) => series.name)) ||
     (block.xLabel !== undefined && !isStringWithin(block.xLabel, SLACK_CHART_AXIS_LABEL_MAX)) ||
-    (block.yLabel !== undefined && !isStringWithin(block.yLabel, SLACK_CHART_AXIS_LABEL_MAX))
+    (block.yLabel !== undefined && !isStringWithin(block.yLabel, SLACK_CHART_AXIS_LABEL_MAX)) ||
+    !block.series.every(
+      (series) =>
+        isStringWithin(series.name, SLACK_CHART_LABEL_MAX) &&
+        series.values.length === block.categories.length &&
+        series.values.every((value) => Number.isFinite(value)),
+    )
   ) {
-    return false;
-  }
-  return block.series.every(
-    (series) =>
-      isStringWithin(series.name, SLACK_CHART_LABEL_MAX) &&
-      series.values.length === block.categories.length &&
-      series.values.every((value) => Number.isFinite(value)),
-  );
-}
-
-/** Map a validated portable chart to Slack's app-facing Block Kit shape. */
-export function buildSlackDataVisualizationBlock(
-  block: MessagePresentationChartBlock,
-): SlackDataVisualizationBlock | undefined {
-  if (!canRenderSlackDataVisualization(block)) {
     return undefined;
-  }
-  if (block.chartType === "pie") {
-    return {
-      type: "data_visualization",
-      title: block.title,
-      chart: {
-        type: "pie",
-        segments: block.segments.map((segment) => ({ ...segment })),
-      },
-    };
   }
   return {
     type: "data_visualization",
@@ -138,7 +124,7 @@ export function buildSlackDataVisualizationBlock(
 }
 
 function readSlackChartDatum(value: unknown): SlackChartDatum | undefined {
-  const record = asRecord(value);
+  const record = asOptionalRecord(value);
   const label = record?.label;
   const datumValue = record?.value;
   return typeof label === "string" && typeof datumValue === "number"
@@ -146,13 +132,10 @@ function readSlackChartDatum(value: unknown): SlackChartDatum | undefined {
     : undefined;
 }
 
-function parseSlackDataVisualizationBlock(
-  value: unknown,
-): MessagePresentationChartBlock | undefined {
-  const block = asRecord(value);
-  const title = block?.title;
-  const chart = asRecord(block?.chart);
-  if (block?.type !== "data_visualization" || typeof title !== "string" || !chart) {
+function parseSlackDataVisualizationBlock(block: Record<string, unknown>) {
+  const title = block.title;
+  const chart = asOptionalRecord(block.chart);
+  if (typeof title !== "string" || !chart) {
     return undefined;
   }
   if (chart.type === "pie") {
@@ -163,16 +146,12 @@ function parseSlackDataVisualizationBlock(
     if (segments.some((segment) => !segment)) {
       return undefined;
     }
-    const normalized = normalizeMessagePresentation({
-      blocks: [{ type: "chart", chartType: "pie", title, segments }],
-    });
-    const normalizedBlock = normalized?.blocks[0];
-    return normalizedBlock?.type === "chart" ? normalizedBlock : undefined;
+    return { type: "chart", chartType: "pie", title, segments };
   }
   if (chart.type !== "bar" && chart.type !== "area" && chart.type !== "line") {
     return undefined;
   }
-  const axisConfig = asRecord(chart.axis_config);
+  const axisConfig = asOptionalRecord(chart.axis_config);
   const categories = axisConfig?.categories;
   if (!Array.isArray(categories) || !categories.every((category) => typeof category === "string")) {
     return undefined;
@@ -181,7 +160,7 @@ function parseSlackDataVisualizationBlock(
     return undefined;
   }
   const series = chart.series.map((rawSeries) => {
-    const seriesRecord = asRecord(rawSeries);
+    const seriesRecord = asOptionalRecord(rawSeries);
     if (typeof seriesRecord?.name !== "string" || !Array.isArray(seriesRecord.data)) {
       return undefined;
     }
@@ -204,47 +183,34 @@ function parseSlackDataVisualizationBlock(
   if (series.some((entry) => !entry)) {
     return undefined;
   }
-  const normalized = normalizeMessagePresentation({
-    blocks: [
-      {
-        type: "chart",
-        chartType: chart.type,
-        title,
-        categories,
-        series,
-        xLabel: axisConfig?.x_label,
-        yLabel: axisConfig?.y_label,
-      },
-    ],
-  });
-  const normalizedBlock = normalized?.blocks[0];
-  return normalizedBlock?.type === "chart" ? normalizedBlock : undefined;
+  return {
+    type: "chart",
+    chartType: chart.type,
+    title,
+    categories,
+    series,
+    xLabel: axisConfig?.x_label,
+    yLabel: axisConfig?.y_label,
+  };
 }
 
-/** Extract a deterministic accessible summary from a native Slack chart block. */
-export function renderSlackDataVisualizationFallbackText(value: unknown): string | undefined {
-  const block = asRecord(value);
+/** Extract an accessible summary, escaping mrkdwn control tokens when requested. */
+export function renderSlackDataVisualizationFallbackText(
+  value: unknown,
+  mrkdwnSafe = false,
+): string | undefined {
+  const block = asOptionalRecord(value);
   if (block?.type !== "data_visualization") {
     return undefined;
   }
-  const parsed = parseSlackDataVisualizationBlock(block);
-  if (parsed) {
-    return renderMessagePresentationChartFallbackText(parsed);
+  const parsed = normalizeMessagePresentation({
+    blocks: [parseSlackDataVisualizationBlock(block)],
+  })?.blocks[0];
+  if (parsed?.type === "chart") {
+    return mrkdwnSafe
+      ? renderSlackMessagePresentationChartFallbackText(parsed)
+      : renderMessagePresentationChartFallbackText(parsed);
   }
-  return typeof block.title === "string" && block.title.trim() ? block.title.trim() : undefined;
-}
-
-/** Render a native chart as mrkdwn without activating raw data control tokens. */
-export function renderSlackDataVisualizationMrkdwnFallbackText(value: unknown): string | undefined {
-  const block = asRecord(value);
-  if (block?.type !== "data_visualization") {
-    return undefined;
-  }
-  const parsed = parseSlackDataVisualizationBlock(block);
-  if (parsed) {
-    return renderSlackMessagePresentationChartFallbackText(parsed);
-  }
-  return typeof block.title === "string" && block.title.trim()
-    ? escapeSlackMrkdwn(block.title.trim())
-    : undefined;
+  const title = typeof block.title === "string" ? block.title.trim() : "";
+  return title ? (mrkdwnSafe ? escapeSlackMrkdwn(title) : title) : undefined;
 }

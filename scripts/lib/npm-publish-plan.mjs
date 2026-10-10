@@ -1,31 +1,29 @@
-// Parses OpenClaw monthly patch release versions and npm dist-tag publish plans.
-const STABLE_VERSION_REGEX = /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<patch>[1-9]\d*)$/;
-const ALPHA_VERSION_REGEX =
-  /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<patch>[1-9]\d*)-alpha\.(?<alpha>[1-9]\d*)$/;
-const BETA_VERSION_REGEX =
-  /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<patch>[1-9]\d*)-beta\.(?<beta>[1-9]\d*)$/;
-const CORRECTION_VERSION_REGEX =
-  /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<patch>[1-9]\d*)-(?<correction>[1-9]\d*)$/;
-const JUNE_2026_PATCH_FLOOR = 5;
+import { setTimeout as delay } from "node:timers/promises";
+import {
+  createBoundedResponseTooLargeError,
+  readBoundedResponseBytes,
+} from "./bounded-response.mjs";
+import {
+  classifyReleaseTrain,
+  compareReleaseVersions,
+  parseReleaseVersion,
+} from "./release-version.mjs";
 
-/**
- * @typedef {object} ParsedReleaseVersion
- * @property {string} version
- * @property {string} baseVersion
- * @property {"stable" | "alpha" | "beta"} channel
- * @property {number} year
- * @property {number} month
- * @property {number} patch
- * @property {number | undefined} [alphaNumber]
- * @property {number | undefined} [betaNumber]
- * @property {number | undefined} [correctionNumber]
- */
+// npm may accept a publish before its exact version becomes readable. Publication
+// callers keep their one-shot probes; only postpublish readback uses this budget.
+export function npmRegistryReadbackDeadline() {
+  const timeoutMs = Number(process.env.OPENCLAW_NPM_READBACK_TIMEOUT_MS ?? 15 * 60_000);
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2_147_483_647) {
+    throw new Error("OPENCLAW_NPM_READBACK_TIMEOUT_MS must be a positive integer <= 2147483647.");
+  }
+  return Date.now() + timeoutMs;
+}
 
 /**
  * @typedef {object} NpmPublishPlan
- * @property {"stable" | "alpha" | "beta"} channel
- * @property {"latest" | "alpha" | "beta" | "extended-stable"} publishTag
- * @property {("latest" | "alpha" | "beta")[]} mirrorDistTags
+ * @property {"stable" | "beta"} channel
+ * @property {"latest" | "beta" | "extended-stable"} publishTag
+ * @property {("latest" | "beta")[]} mirrorDistTags
  */
 
 /**
@@ -62,246 +60,244 @@ async function cancelNpmRegistryResponseBody(response) {
 }
 
 /**
- * Fetches and consumes an npm packument within one timeout per attempt. Keeping
- * body transfer inside the retry loop prevents a headers-only success from
- * bypassing the retry budget when the registry stream stalls or truncates.
- *
- * @param {{
+ * @typedef {{
  *   packageName: string;
  *   packageUrl: string;
  *   attempts?: number;
  *   timeoutMs?: number;
+ *   deadlineMs?: number;
  *   fetchImpl?: (input: string, init: RequestInit) => Promise<Response>;
  *   sleep?: (delayMs: number) => Promise<void>;
  *   createSignal?: (timeoutMs: number) => AbortSignal;
- * }} params
- * @returns {Promise<NpmRegistryPackumentResult>}
+ *   signal?: AbortSignal;
+ * }} NpmRegistryReadOptions
  */
-export async function fetchNpmRegistryPackumentWithRetry(params) {
-  const attempts = params.attempts ?? 3;
-  const timeoutMs = params.timeoutMs ?? 20_000;
+
+export class NpmRegistryUnavailableError extends Error {}
+
+class RetryableNpmRegistryError extends Error {
+  constructor(message, retryAfterMs = 0) {
+    super(message);
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
+function boundedReadLimit(value, fallback, maximum, label) {
+  const result = value ?? fallback;
+  if (!Number.isSafeInteger(result) || result <= 0 || result > maximum) {
+    throw new Error(`Invalid npm ${label}.`);
+  }
+  return result;
+}
+
+function retryAfterMilliseconds(response) {
+  const value = response.headers?.get("retry-after")?.trim();
+  if (!value) {
+    return 0;
+  }
+  if (/^[0-9]+$/u.test(value)) {
+    return Number(value) * 1000;
+  }
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? Math.max(0, timestamp - Date.now()) : 0;
+}
+
+/**
+ * Both headers and body belong to one attempt. Successful byte/identity
+ * comparisons stay with callers and never enter this transport retry loop.
+ * @template T
+ * @param {NpmRegistryReadOptions} params
+ * @param {{ label: string; headers?: Record<string, string>; redirect?: RequestRedirect;
+ *   read: (response: Response, signal: AbortSignal) => Promise<T> }} reader
+ * @returns {Promise<{ status: number; ok: boolean; body: T | null }>}
+ */
+async function fetchNpmRegistryWithRetry(params, reader) {
+  const endpoint = new URL(params.packageUrl);
+  const label = `${reader.label} (${endpoint.origin}${endpoint.pathname})`;
+  const attempts = boundedReadLimit(params.attempts, 3, 5, "read attempts");
+  const timeoutMs = boundedReadLimit(params.timeoutMs, 20_000, 60_000, "read timeout");
+  const deadlineMs = Math.min(
+    boundedReadLimit(
+      params.deadlineMs,
+      Date.now() + 180_000,
+      Number.MAX_SAFE_INTEGER,
+      "read deadline",
+    ),
+    Date.now() + 180_000,
+  );
   const fetchImpl = params.fetchImpl ?? globalThis.fetch;
-  const sleep =
-    params.sleep ??
-    ((delayMs) =>
-      new Promise((resolve) => {
-        setTimeout(resolve, delayMs);
-      }));
+  const sleep = params.sleep ?? delay;
   const createSignal = params.createSignal ?? ((delayMs) => AbortSignal.timeout(delayMs));
   let lastError;
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    params.signal?.throwIfAborted();
     let response;
+    const remainingMs = deadlineMs - Date.now();
+    if (remainingMs <= 0) {
+      throw new NpmRegistryUnavailableError(
+        `${label} deadline exceeded. Retry readback, not publication.`,
+      );
+    }
     try {
+      const attemptSignal = createSignal(Math.min(timeoutMs, remainingMs));
+      const signal = params.signal
+        ? AbortSignal.any([params.signal, attemptSignal])
+        : attemptSignal;
       response = await fetchImpl(params.packageUrl, {
-        headers: { accept: "application/vnd.npm.install-v1+json" },
-        signal: createSignal(timeoutMs),
+        headers: reader.headers,
+        redirect: reader.redirect,
+        signal,
       });
+      if (Date.now() >= deadlineMs) {
+        await cancelNpmRegistryResponseBody(response);
+        throw new NpmRegistryUnavailableError(
+          `${label} deadline exceeded. Retry readback, not publication.`,
+        );
+      }
+      if ([408, 429, 500, 502, 503, 504].includes(response.status)) {
+        await cancelNpmRegistryResponseBody(response);
+        throw new RetryableNpmRegistryError(
+          `HTTP ${response.status}`,
+          retryAfterMilliseconds(response),
+        );
+      }
+      if (!response.ok) {
+        await cancelNpmRegistryResponseBody(response);
+        return { status: response.status, ok: false, body: null };
+      }
+      const body = await reader.read(response, signal);
+      params.signal?.throwIfAborted();
+      if (Date.now() >= deadlineMs) {
+        throw new NpmRegistryUnavailableError(
+          `${label} deadline exceeded. Retry readback, not publication.`,
+        );
+      }
+      return { status: response.status, ok: true, body };
     } catch (error) {
+      if (response?.ok) {
+        await cancelNpmRegistryResponseBody(response);
+      }
+      // An owning collection's cancellation is not a transient attempt timeout.
+      params.signal?.throwIfAborted();
+      if (
+        !(error instanceof RetryableNpmRegistryError) &&
+        !["AbortError", "TimeoutError"].includes(error?.name) &&
+        ![
+          "ECONNRESET",
+          "ECONNREFUSED",
+          "ETIMEDOUT",
+          "EAI_AGAIN",
+          "UND_ERR_SOCKET",
+          "UND_ERR_CONNECT_TIMEOUT",
+          "UND_ERR_HEADERS_TIMEOUT",
+          "UND_ERR_BODY_TIMEOUT",
+        ].some((code) => code === error?.code || code === error?.cause?.code)
+      ) {
+        throw error;
+      }
       lastError = error;
     }
-
-    if (response) {
-      if (response.status === 429 || response.status >= 500) {
-        await cancelNpmRegistryResponseBody(response);
-        lastError = new Error(`HTTP ${response.status}`);
-      } else if (!response.ok) {
-        await cancelNpmRegistryResponseBody(response);
-        return { status: response.status, ok: false, packument: null };
-      } else {
-        let body;
-        try {
-          body = await response.text();
-        } catch (error) {
-          await cancelNpmRegistryResponseBody(response);
-          lastError = error;
-          body = undefined;
-        }
-        if (body !== undefined) {
-          try {
-            return {
-              status: response.status,
-              ok: true,
-              packument: JSON.parse(body),
-            };
-          } catch (error) {
-            await cancelNpmRegistryResponseBody(response);
-            const message = error instanceof Error ? error.message : String(error);
-            lastError = new Error(
-              `${params.packageName}: npm publication-route probe returned invalid JSON: ${message}.`,
-            );
-          }
-        }
-      }
-    }
-
     if (attempt < attempts) {
-      await sleep(attempt * 1000);
+      const retryDelayMs = Math.max(attempt * 1000, lastError?.retryAfterMs ?? 0);
+      if (retryDelayMs >= deadlineMs - Date.now()) {
+        throw new NpmRegistryUnavailableError(
+          `${label} deadline would be exceeded before the permitted retry. Retry readback, not publication.`,
+          {
+            cause: lastError,
+          },
+        );
+      }
+      if (params.signal && !params.sleep) {
+        await delay(retryDelayMs, undefined, { signal: params.signal });
+      } else {
+        await sleep(retryDelayMs);
+      }
+      params.signal?.throwIfAborted();
     }
   }
 
   const message = lastError instanceof Error ? lastError.message : String(lastError);
-  throw new Error(
-    `${params.packageName}: npm publication-route probe did not return a stable response: ${message}.`,
+  throw new NpmRegistryUnavailableError(
+    `${label} did not return a stable response: ${message}. Retry readback, not publication.`,
+    {
+      cause: lastError,
+    },
   );
 }
 
 /**
- * @param {string} version
- * @param {Record<string, string | undefined>} groups
- * @param {"stable" | "alpha" | "beta"} channel
- * @returns {ParsedReleaseVersion | null}
+ * @param {NpmRegistryReadOptions & { maxBytes?: number; redirect?: RequestRedirect }} params
+ * @returns {Promise<NpmRegistryPackumentResult>}
  */
-function parseVersionParts(version, groups, channel) {
-  const year = parseSafeIntegerPart(groups.year);
-  const month = parseSafeIntegerPart(groups.month);
-  const patch = parseSafeIntegerPart(groups.patch);
-  const alphaNumber = channel === "alpha" ? parseSafeIntegerPart(groups.alpha) : undefined;
-  const betaNumber = channel === "beta" ? parseSafeIntegerPart(groups.beta) : undefined;
-
-  if (
-    !Number.isSafeInteger(year) ||
-    !Number.isSafeInteger(month) ||
-    !Number.isSafeInteger(patch) ||
-    month < 1 ||
-    month > 12 ||
-    patch < 1
-  ) {
-    return null;
-  }
-  if (channel === "beta" && (!Number.isSafeInteger(betaNumber) || (betaNumber ?? 0) < 1)) {
-    return null;
-  }
-  if (channel === "alpha" && (!Number.isSafeInteger(alphaNumber) || (alphaNumber ?? 0) < 1)) {
-    return null;
-  }
-
-  return {
-    version,
-    baseVersion: `${year}.${month}.${patch}`,
-    channel,
-    year,
-    month,
-    patch,
-    alphaNumber,
-    betaNumber,
-  };
+export async function fetchNpmRegistryPackumentWithRetry(params) {
+  const maxBytes =
+    params.maxBytes === undefined
+      ? undefined
+      : boundedReadLimit(params.maxBytes, undefined, 16 * 1024 * 1024, "packument byte limit");
+  const result = await fetchNpmRegistryWithRetry(params, {
+    label: `${params.packageName}: npm publication-route probe`,
+    headers: { accept: "application/vnd.npm.install-v1+json" },
+    redirect: params.redirect,
+    read: async (response, signal) => {
+      const body =
+        maxBytes === undefined
+          ? await response.text()
+          : (
+              await readBoundedResponseBytes(
+                response,
+                `${params.packageName}: npm packument`,
+                maxBytes,
+                {
+                  signal,
+                  createTooLargeError: createBoundedResponseTooLargeError,
+                },
+              )
+            ).toString("utf8");
+      try {
+        return JSON.parse(body);
+      } catch (error) {
+        // A completed response with invalid content is not registry propagation
+        // or a transport failure; never turn it into deferred publication success.
+        throw new Error(
+          `${params.packageName}: npm publication-route probe returned invalid JSON.`,
+          { cause: error },
+        );
+      }
+    },
+  });
+  return { status: result.status, ok: result.ok, packument: result.body };
 }
 
-function parseSafeIntegerPart(value) {
-  const raw = value ?? "";
-  if (!/^[0-9]+$/.test(raw)) {
-    return null;
+/** @param {NpmRegistryReadOptions & { maxBytes: number }} params */
+export async function fetchNpmRegistryTarballWithRetry(params) {
+  const maxBytes = boundedReadLimit(
+    params.maxBytes,
+    undefined,
+    256 * 1024 * 1024,
+    "tarball byte limit",
+  );
+  const label = `${params.packageName}: npm tarball readback`;
+  const result = await fetchNpmRegistryWithRetry(
+    { ...params, timeoutMs: params.timeoutMs ?? 60_000 },
+    {
+      label,
+      // Redirects cannot change the registry owner selected by the verified packument.
+      redirect: "manual",
+      read: (response, signal) =>
+        readBoundedResponseBytes(response, label, maxBytes, {
+          signal,
+          createTooLargeError: createBoundedResponseTooLargeError,
+        }),
+    },
+  );
+  if (result.status === 404) {
+    throw new NpmRegistryUnavailableError(`${label} returned HTTP 404.`);
   }
-  const parsed = Number(raw);
-  return Number.isSafeInteger(parsed) ? parsed : null;
-}
-
-/**
- * @param {string} version
- * @returns {ParsedReleaseVersion | null}
- */
-export function parseReleaseVersion(version) {
-  const trimmed = version.trim();
-  if (!trimmed) {
-    return null;
+  if (!result.ok || result.body === null) {
+    throw new Error(`${label} returned HTTP ${result.status}.`);
   }
-
-  const stableMatch = STABLE_VERSION_REGEX.exec(trimmed);
-  if (stableMatch?.groups) {
-    return parseVersionParts(trimmed, stableMatch.groups, "stable");
-  }
-
-  const alphaMatch = ALPHA_VERSION_REGEX.exec(trimmed);
-  if (alphaMatch?.groups) {
-    return parseVersionParts(trimmed, alphaMatch.groups, "alpha");
-  }
-
-  const betaMatch = BETA_VERSION_REGEX.exec(trimmed);
-  if (betaMatch?.groups) {
-    return parseVersionParts(trimmed, betaMatch.groups, "beta");
-  }
-
-  const correctionMatch = CORRECTION_VERSION_REGEX.exec(trimmed);
-  if (correctionMatch?.groups) {
-    const parsedCorrection = parseVersionParts(trimmed, correctionMatch.groups, "stable");
-    const correctionNumber = parseSafeIntegerPart(correctionMatch.groups.correction);
-    if (
-      parsedCorrection === null ||
-      !Number.isSafeInteger(correctionNumber) ||
-      correctionNumber < 1
-    ) {
-      return null;
-    }
-
-    return {
-      ...parsedCorrection,
-      correctionNumber,
-    };
-  }
-
-  return null;
-}
-
-/**
- * @param {string | ParsedReleaseVersion | null} version
- * @returns {string[]}
- */
-export function collectReleaseVersionFloorErrors(version) {
-  const parsedVersion =
-    typeof version === "string" ? parseReleaseVersion(version) : (version ?? null);
-  if (parsedVersion === null) {
-    return [];
-  }
-  if (
-    parsedVersion.year === 2026 &&
-    parsedVersion.month === 6 &&
-    parsedVersion.patch < JUNE_2026_PATCH_FLOOR &&
-    parsedVersion.channel !== "alpha"
-  ) {
-    return [
-      `June 2026 stable and beta release trains must use patch ${JUNE_2026_PATCH_FLOOR} or higher because 2026.6.5-beta.1 is already published; found "${parsedVersion.version}".`,
-    ];
-  }
-  return [];
-}
-
-/**
- * @param {string} left
- * @param {string} right
- * @returns {number | null}
- */
-export function compareReleaseVersions(left, right) {
-  const parsedLeft = parseReleaseVersion(left);
-  const parsedRight = parseReleaseVersion(right);
-  if (parsedLeft === null || parsedRight === null) {
-    return null;
-  }
-
-  if (parsedLeft.year !== parsedRight.year) {
-    return Math.sign(parsedLeft.year - parsedRight.year);
-  }
-  if (parsedLeft.month !== parsedRight.month) {
-    return Math.sign(parsedLeft.month - parsedRight.month);
-  }
-  if (parsedLeft.patch !== parsedRight.patch) {
-    return Math.sign(parsedLeft.patch - parsedRight.patch);
-  }
-
-  if (parsedLeft.channel !== parsedRight.channel) {
-    const rank = { alpha: 0, beta: 1, stable: 2 };
-    return Math.sign(rank[parsedLeft.channel] - rank[parsedRight.channel]);
-  }
-
-  if (parsedLeft.channel === "alpha" && parsedRight.channel === "alpha") {
-    return Math.sign((parsedLeft.alphaNumber ?? 0) - (parsedRight.alphaNumber ?? 0));
-  }
-
-  if (parsedLeft.channel === "beta" && parsedRight.channel === "beta") {
-    return Math.sign((parsedLeft.betaNumber ?? 0) - (parsedRight.betaNumber ?? 0));
-  }
-
-  return Math.sign((parsedLeft.correctionNumber ?? 0) - (parsedRight.correctionNumber ?? 0));
+  return result.body;
 }
 
 /**
@@ -315,6 +311,10 @@ export function resolveNpmPublishPlan(version, currentBetaVersion, publishTagOve
   if (parsedVersion === null) {
     throw new Error(`Unsupported release version "${version}".`);
   }
+  if (parsedVersion.channel === "alpha" || publishTagOverride?.trim() === "alpha") {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
+  const releaseTrain = classifyReleaseTrain(parsedVersion);
 
   const normalizedOverride = publishTagOverride?.trim();
   if (normalizedOverride && normalizedOverride !== "extended-stable") {
@@ -323,11 +323,7 @@ export function resolveNpmPublishPlan(version, currentBetaVersion, publishTagOve
     );
   }
   if (normalizedOverride === "extended-stable") {
-    if (
-      parsedVersion.channel !== "stable" ||
-      parsedVersion.correctionNumber !== undefined ||
-      parsedVersion.patch < 33
-    ) {
+    if (releaseTrain !== "extended-stable") {
       throw new Error(
         `Extended-stable npm publication requires a final YYYY.M.PATCH version with PATCH >= 33; found "${version}".`,
       );
@@ -343,13 +339,6 @@ export function resolveNpmPublishPlan(version, currentBetaVersion, publishTagOve
     return {
       channel: "beta",
       publishTag: "beta",
-      mirrorDistTags: [],
-    };
-  }
-  if (parsedVersion.channel === "alpha") {
-    return {
-      channel: "alpha",
-      publishTag: "alpha",
       mirrorDistTags: [],
     };
   }
@@ -374,6 +363,12 @@ export function resolveNpmPublishPlan(version, currentBetaVersion, publishTagOve
 }
 
 /**
+ * @typedef {object} NpmVersionPublicationDecision
+ * @property {PublishedNpmVersionRoute | null} route Registry route for a published version; null when publication is still planned.
+ * @property {string | null} supersededBy The newer version the primary dist-tag keeps when the published target is skipped.
+ */
+
+/**
  * @param {{
  *   packageVersion: string;
  *   publishPlan: NpmPublishPlan;
@@ -382,15 +377,46 @@ export function resolveNpmPublishPlan(version, currentBetaVersion, publishTagOve
  * @returns {PublishedNpmVersionRoute}
  */
 export function resolvePublishedNpmVersionRoute(params) {
-  const primaryState = classifyNpmDistTagVersion(
-    params.distTags[params.publishPlan.publishTag],
-    params.packageVersion,
+  return /** @type {PublishedNpmVersionRoute} */ (
+    resolveNpmVersionPublicationDecision({ ...params, published: true }).route
   );
+}
+
+/**
+ * A published target whose primary dist-tag already points past it was
+ * superseded by a later release: nothing is published and no selector moves.
+ * An unpublished target behind an ahead selector would publish inconsistently.
+ * @param {{
+ *   packageVersion: string;
+ *   publishPlan: NpmPublishPlan;
+ *   distTags: Record<string, unknown>;
+ *   published: boolean;
+ * }} params
+ * @returns {NpmVersionPublicationDecision}
+ */
+export function resolveNpmVersionPublicationDecision(params) {
+  const primaryVersion = params.distTags[params.publishPlan.publishTag];
+  const primaryState = classifyNpmDistTagVersion(primaryVersion, params.packageVersion);
+  if (primaryState === "ahead" && params.published) {
+    return { route: "npm-readback", supersededBy: /** @type {string} */ (primaryVersion) };
+  }
+  if (!params.published) {
+    // Placeholder selectors (0.0.0) are expected before a first real publication.
+    if (primaryState === "ahead") {
+      throwUnsafeNpmDistTag(
+        params.publishPlan.publishTag,
+        primaryVersion,
+        params.packageVersion,
+        primaryState,
+      );
+    }
+    return { route: null, supersededBy: null };
+  }
   const needsPrimaryRepair = primaryState === "missing" || primaryState === "lagging";
   if (!needsPrimaryRepair && primaryState !== "match") {
     throwUnsafeNpmDistTag(
       params.publishPlan.publishTag,
-      params.distTags[params.publishPlan.publishTag],
+      primaryVersion,
       params.packageVersion,
       primaryState,
     );
@@ -408,9 +434,9 @@ export function resolvePublishedNpmVersionRoute(params) {
     }
   }
   if (needsPrimaryRepair) {
-    return "npm-tag-repair";
+    return { route: "npm-tag-repair", supersededBy: null };
   }
-  return needsMirrorRepair ? "npm-mirror" : "npm-readback";
+  return { route: needsMirrorRepair ? "npm-mirror" : "npm-readback", supersededBy: null };
 }
 
 /**
@@ -418,7 +444,7 @@ export function resolvePublishedNpmVersionRoute(params) {
  * @param {string} targetVersion
  * @returns {NpmDistTagVersionState}
  */
-function classifyNpmDistTagVersion(currentVersion, targetVersion) {
+export function classifyNpmDistTagVersion(currentVersion, targetVersion) {
   if (currentVersion === undefined) {
     return "missing";
   }

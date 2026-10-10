@@ -3,22 +3,13 @@
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type {
-  MigrationDetection,
   MigrationItem,
   MigrationPlan,
   MigrationProviderContext,
-  MigrationProviderPlugin,
   MigrationSummary,
-} from "../plugins/types.js";
+} from "./plugin-entry.js";
 
-export type {
-  MigrationDetection,
-  MigrationItem,
-  MigrationPlan,
-  MigrationProviderContext,
-  MigrationProviderPlugin,
-  MigrationSummary,
-};
+export type { MigrationItem, MigrationPlan, MigrationProviderContext, MigrationSummary };
 
 /** Shared migration failure reason when an item lacks required paths. */
 export const MIGRATION_REASON_MISSING_SOURCE_OR_TARGET = "missing source or target";
@@ -278,6 +269,11 @@ export function readMigrationConfigPatchDetails(
   return { path, value: item.details?.value };
 }
 
+/** Resolves the host-owned config mutation target for migration apply. */
+export function resolveMigrationConfigRuntime(ctx: MigrationProviderContext) {
+  return ctx.configRuntime ?? ctx.runtime?.config;
+}
+
 /** Applies one planned config patch through the runtime config writer and returns its final status. */
 export async function applyMigrationConfigPatchItem(
   ctx: MigrationProviderContext,
@@ -293,7 +289,7 @@ export async function applyMigrationConfigPatchItem(
   if (!isSafeMigrationConfigPath(details.path)) {
     return markMigrationItemError(item, MIGRATION_REASON_UNSAFE_CONFIG_PATCH_PATH);
   }
-  const configApi = ctx.runtime?.config;
+  const configApi = resolveMigrationConfigRuntime(ctx);
   if (!configApi?.current || !configApi.mutateConfigFile) {
     return markMigrationItemError(item, "config runtime unavailable");
   }
@@ -352,9 +348,6 @@ function redactMigrationValueInternal(value: unknown, seen: WeakSet<object>): un
   if (typeof value === "string") {
     return redactString(value);
   }
-  if (Array.isArray(value)) {
-    return value.map((entry) => redactMigrationValueInternal(entry, seen));
-  }
   if (!value || typeof value !== "object") {
     return value;
   }
@@ -362,6 +355,14 @@ function redactMigrationValueInternal(value: unknown, seen: WeakSet<object>): un
     return REDACTED_MIGRATION_VALUE;
   }
   seen.add(value);
+  if (Array.isArray(value)) {
+    try {
+      return value.map((entry) => redactMigrationValueInternal(entry, seen));
+    } finally {
+      // Repeated arrays remain independently rendered; only active cycles are redacted.
+      seen.delete(value);
+    }
+  }
   const record = value as Record<string, unknown>;
   const next: Record<string, unknown> = {};
   const redactSensitiveDetailsValue =
@@ -386,11 +387,6 @@ function redactMigrationValueInternal(value: unknown, seen: WeakSet<object>): un
 /** Redacts likely secret values while preserving SecretRef-like objects for operator context. */
 export function redactMigrationValue(value: unknown): unknown {
   return redactMigrationValueInternal(value, new WeakSet<object>());
-}
-
-/** Redacts sensitive fields from one migration item before report/output serialization. */
-export function redactMigrationItem(item: MigrationItem): MigrationItem {
-  return redactMigrationValue(item) as MigrationItem;
 }
 
 /** Redacts sensitive fields from a full migration plan before report/output serialization. */

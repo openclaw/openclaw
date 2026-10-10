@@ -1,4 +1,5 @@
-// Workboard contract declarations define the plugin and Control UI data model.
+import type { WorkboardSessionsBoardSpec } from "./sessions-board.js";
+
 export const WORKBOARD_STATUSES = [
   "triage",
   "backlog",
@@ -71,6 +72,7 @@ export const WORKBOARD_DIAGNOSTIC_KINDS = [
   "repeated_failures",
   "missing_proof",
   "orphaned_session",
+  "archived_but_active",
 ] as const;
 export const WORKBOARD_DIAGNOSTIC_SEVERITIES = ["warning", "error", "critical"] as const;
 export const WORKBOARD_NOTIFICATION_KINDS = ["completed", "failed", "stale"] as const;
@@ -79,6 +81,11 @@ export const WORKBOARD_BOARD_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,79}$/;
 export function isValidWorkboardBoardId(value: unknown): value is string {
   return typeof value === "string" && WORKBOARD_BOARD_ID_PATTERN.test(value);
 }
+
+export type WorkboardDeleteResult = {
+  deleted: boolean;
+  referenceUpdates?: Array<{ id: string; previousUpdatedAt: number; updatedAt: number }>;
+};
 
 export type WorkboardStatus = (typeof WORKBOARD_STATUSES)[number];
 export type WorkboardPriority = (typeof WORKBOARD_PRIORITIES)[number];
@@ -235,6 +242,8 @@ export const WORKBOARD_CHANGED_EVENT = "plugin.workboard.changed";
 export type WorkboardChange = {
   epoch: string;
   revision: number;
+  cardsRevision?: number;
+  sessionsRevision?: number;
 };
 
 export type WorkboardWorkspace = {
@@ -248,6 +257,26 @@ export type WorkboardWorkspace = {
 export type WorkboardWorkspaceAccess =
   | { unrestricted: true }
   | { unrestricted: false; roots: string[]; writable: boolean };
+
+type WorkboardLaunchIdentity = {
+  requestedSessionKey: string;
+  provisionalRunId: string;
+  preparedAt: number;
+};
+
+export type WorkboardLaunchState =
+  | (WorkboardLaunchIdentity & { phase: "prepared" })
+  | (WorkboardLaunchIdentity & {
+      phase: "accepted";
+      acceptedAt: number;
+      acceptedSessionKey: string;
+      acceptedRunId?: string;
+    })
+  | (WorkboardLaunchIdentity & {
+      phase: "failed";
+      failedAt: number;
+      reason: string;
+    });
 
 export type WorkboardAutomation = {
   tenant?: string;
@@ -264,14 +293,18 @@ export type WorkboardAutomation = {
   createdCardIds?: string[];
   dispatchCount?: number;
   lastDispatchAt?: number;
+  launch?: WorkboardLaunchState;
 };
 
 export type WorkboardBoardMetadata = {
   id: string;
+  kind?: "cards" | "sessions";
+  sessions?: WorkboardSessionsBoardSpec;
   name?: string;
   description?: string;
   icon?: string;
   color?: string;
+  automationJobId?: string;
   defaultWorkspace?: WorkboardWorkspace;
   orchestration?: WorkboardOrchestrationSettings;
   createdAt: number;
@@ -279,20 +312,12 @@ export type WorkboardBoardMetadata = {
   archivedAt?: number;
 };
 
-export type WorkboardBoardSummary = {
-  id: string;
-  name?: string;
-  description?: string;
-  icon?: string;
-  color?: string;
-  defaultWorkspace?: WorkboardWorkspace;
-  orchestration?: WorkboardOrchestrationSettings;
+export type WorkboardBoardSummary = Omit<WorkboardBoardMetadata, "createdAt" | "updatedAt"> & {
   total: number;
   active: number;
   archived: number;
   byStatus: Partial<Record<WorkboardStatus, number>>;
   updatedAt?: number;
-  archivedAt?: number;
 };
 
 export type WorkboardOrchestrationSettings = {
@@ -348,7 +373,6 @@ export type WorkboardCard = {
   agentId?: string;
   sessionKey?: string;
   runId?: string;
-  taskId?: string;
   sourceUrl?: string;
   execution?: WorkboardExecution;
   position: number;
@@ -364,3 +388,20 @@ export type WorkboardListResult = {
   cards: WorkboardCard[];
   statuses: readonly WorkboardStatus[];
 };
+export {
+  createDefaultWorkboardSessionsBoardSpec,
+  normalizeWorkboardSessionsBoardSpec,
+  patchWorkboardSessionsBoardSpec,
+} from "./sessions-board.js";
+export type {
+  WorkboardSessionFacts,
+  WorkboardSessionPlacement,
+  WorkboardSessionsBoard,
+  WorkboardSessionsBoardRead,
+  WorkboardSessionsBoardRevision,
+  WorkboardSessionsBoardSpec,
+  WorkboardSessionsBoardView,
+  WorkboardSessionsColumn,
+  WorkboardSessionsColumnMatch,
+  WorkboardSessionsObserverHealth,
+} from "./sessions-board.js";

@@ -24,12 +24,28 @@ export async function storeSessionLearning(params: {
     maxEntries: MAX_LEARNING_ENTRIES,
   });
   const key = learningStoreKey(params.storePath, params.sessionKey);
-  if (!store.update) {
-    throw new Error("plugin state atomic update is unavailable");
+  if (!store.observe || !store.compareAndApply) {
+    throw new Error("plugin state atomic comparison is unavailable");
   }
-  await store.update(key, (existing) => ({
+  const prepared = {
     sessionKey: params.sessionKey,
-    learnings: [...(existing?.learnings ?? []), params.learning].slice(-10),
+    learning: params.learning,
     updatedAt: Date.now(),
-  }));
+  };
+  let observed = await store.observe(key);
+  while (true) {
+    const result = await store.compareAndApply(key, observed.comparison, {
+      operation: "update",
+      action: "set",
+      value: {
+        sessionKey: prepared.sessionKey,
+        learnings: [...(observed.value?.learnings ?? []), prepared.learning].slice(-10),
+        updatedAt: prepared.updatedAt,
+      },
+    });
+    if (result.status !== "conflict") {
+      return;
+    }
+    observed = result.current;
+  }
 }

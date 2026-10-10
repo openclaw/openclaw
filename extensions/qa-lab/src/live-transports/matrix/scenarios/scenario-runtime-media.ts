@@ -1,10 +1,9 @@
-// QA Lab Matrix plugin module implements scenario runtime media behavior.
+import { createQaVoicePreflightWav } from "../../../voice-preflight.fixture.js";
 import type { MatrixQaObservedEvent } from "../substrate/events.js";
 import { MATRIX_QA_MEDIA_ROOM_KEY, resolveMatrixQaScenarioRoomId } from "./scenario-contract.js";
 import {
   buildMatrixQaImageGenerationPrompt,
   buildMatrixQaImageUnderstandingPrompt,
-  createMatrixQaVoicePreflightWav,
   createMatrixQaSplitColorImagePng,
   hasMatrixQaExpectedColorReply,
   MATRIX_QA_IMAGE_ATTACHMENT_FILENAME,
@@ -20,75 +19,50 @@ import {
   buildMatrixReplyDetails,
   isMatrixQaExactMarkerReply,
   isMatrixQaMessageLikeKind,
-  primeMatrixQaActorCursor,
+  primeMatrixQaDriverScenarioClient,
   truncateMatrixQaPreview,
   type MatrixQaScenarioContext,
 } from "./scenario-runtime-shared.js";
 import type { MatrixQaScenarioExecution } from "./scenario-types.js";
 
-function requireMatrixQaImageAttachment(event: MatrixQaObservedEvent, scenarioLabel: string) {
-  if (event.msgtype !== "m.image" || event.attachment?.kind !== "image") {
-    throw new Error(
-      `${scenarioLabel} expected an m.image attachment but saw ${event.msgtype ?? "<none>"}`,
-    );
-  }
-  return event.attachment;
-}
-
-function buildMatrixQaAttachmentDetailLines(params: {
-  attachmentEvent: MatrixQaObservedEvent;
-  label: string;
-}) {
-  return [
-    `${params.label} event: ${params.attachmentEvent.eventId}`,
-    `${params.label} msgtype: ${params.attachmentEvent.msgtype ?? "<none>"}`,
-    `${params.label} attachment kind: ${params.attachmentEvent.attachment?.kind ?? "<none>"}`,
-    `${params.label} attachment filename: ${params.attachmentEvent.attachment?.filename ?? "<none>"}`,
-    `${params.label} body preview: ${truncateMatrixQaPreview(params.attachmentEvent.body) ?? "<none>"}`,
-  ];
-}
-
-async function primeMatrixQaDriverMediaClient(context: MatrixQaScenarioContext) {
-  return await primeMatrixQaActorCursor({
-    accessToken: context.driverAccessToken,
-    actorId: "driver",
-    baseUrl: context.baseUrl,
-    observedEvents: context.observedEvents,
-    syncState: context.syncState,
-    syncStreams: context.syncStreams,
-  });
-}
-
-function buildMatrixQaMediaTypeCoveragePrompt(params: {
-  label: string;
-  sutUserId: string;
-  token: string;
-}) {
-  return `${params.sutUserId} Matrix media type coverage (${params.label}): ignore the attachment content and reply with only this exact marker: ${params.token}`;
+function describeRecentRoomEvents(context: MatrixQaScenarioContext, roomId: string) {
+  return context.observedEvents
+    .filter((event) => event.roomId === roomId)
+    .slice(-8)
+    .map((event) => ({
+      body: truncateMatrixQaPreview(event.body),
+      eventId: event.eventId,
+      kind: event.kind,
+      msgtype: event.msgtype,
+      sender: event.sender,
+      type: event.type,
+    }));
 }
 
 function normalizeMatrixQaVoiceReply(value: string | undefined) {
-  return (value ?? "")
-    .toUpperCase()
-    .replace(/[^A-Z0-9]+/g, " ")
-    .trim();
+  return (value ?? "").toUpperCase().replace(/[^A-Z0-9]+/g, "");
 }
 
 function hasMatrixQaVoicePreflightReply(body: string | undefined) {
-  return normalizeMatrixQaVoiceReply(body).includes(MATRIX_QA_VOICE_PREFLIGHT_REPLY_MARKER);
+  return normalizeMatrixQaVoiceReply(body).includes(
+    normalizeMatrixQaVoiceReply(MATRIX_QA_VOICE_PREFLIGHT_REPLY_MARKER),
+  );
 }
 
-export async function runImageUnderstandingAttachmentScenario(context: MatrixQaScenarioContext) {
+export const testing = { hasMatrixQaVoicePreflightReply };
+
+async function sendMatrixQaImageAttachment(context: MatrixQaScenarioContext, mention: boolean) {
   const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_MEDIA_ROOM_KEY);
-  const { client, startSince } = await primeMatrixQaDriverMediaClient(context);
-  const triggerBody = buildMatrixQaImageUnderstandingPrompt(context.sutUserId);
+  const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
+  const triggerBody = mention
+    ? buildMatrixQaImageUnderstandingPrompt(context.sutUserId)
+    : undefined;
   const driverEventId = await client.sendMediaMessage({
-    body: triggerBody,
+    ...(mention ? { body: triggerBody, mentionUserIds: [context.sutUserId] } : {}),
     buffer: createMatrixQaSplitColorImagePng(),
     contentType: "image/png",
     fileName: MATRIX_QA_IMAGE_ATTACHMENT_FILENAME,
     kind: "image",
-    mentionUserIds: [context.sutUserId],
     roomId,
   });
   const attachmentEvent = await client.waitForRoomEvent({
@@ -103,6 +77,12 @@ export async function runImageUnderstandingAttachmentScenario(context: MatrixQaS
     since: startSince,
     timeoutMs: context.timeoutMs,
   });
+  return { attachmentEvent, client, driverEventId, roomId, startSince, triggerBody };
+}
+
+export async function runImageUnderstandingAttachmentScenario(context: MatrixQaScenarioContext) {
+  const { attachmentEvent, client, driverEventId, roomId, startSince, triggerBody } =
+    await sendMatrixQaImageAttachment(context, true);
   const matched = await client.waitForRoomEvent({
     observedEvents: context.observedEvents,
     predicate: (event) =>
@@ -144,7 +124,7 @@ export async function runImageUnderstandingAttachmentScenario(context: MatrixQaS
 
 export async function runMediaTypeCoverageScenario(context: MatrixQaScenarioContext) {
   const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_MEDIA_ROOM_KEY);
-  const { client, startSince } = await primeMatrixQaDriverMediaClient(context);
+  const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
   const attachments: NonNullable<MatrixQaScenarioExecution["artifacts"]>["attachments"] = [];
   const replies: NonNullable<MatrixQaScenarioExecution["artifacts"]>["replies"] = [];
   const details = [`room id: ${roomId}`];
@@ -152,11 +132,7 @@ export async function runMediaTypeCoverageScenario(context: MatrixQaScenarioCont
 
   for (const mediaCase of MATRIX_QA_MEDIA_TYPE_COVERAGE_CASES) {
     const token = buildMatrixQaToken(mediaCase.tokenPrefix);
-    const triggerBody = buildMatrixQaMediaTypeCoveragePrompt({
-      label: mediaCase.label,
-      sutUserId: context.sutUserId,
-      token,
-    });
+    const triggerBody = `${context.sutUserId} Matrix media type coverage (${mediaCase.label}): ignore the attachment content and reply with only this exact marker: ${token}`;
     const driverEventId = await client.sendMediaMessage({
       body: triggerBody,
       buffer: mediaCase.createBuffer(),
@@ -234,29 +210,36 @@ export async function runMediaTypeCoverageScenario(context: MatrixQaScenarioCont
 
 export async function runVoicePreflightMentionScenario(context: MatrixQaScenarioContext) {
   const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_MEDIA_ROOM_KEY);
-  const { client, startSince } = await primeMatrixQaDriverMediaClient(context);
+  const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
   const driverEventId = await client.sendMediaMessage({
-    buffer: createMatrixQaVoicePreflightWav(),
+    buffer: createQaVoicePreflightWav(),
     contentType: "audio/wav",
     fileName: MATRIX_QA_VOICE_PREFLIGHT_FILENAME,
     kind: "audio",
     roomId,
   });
-  const attachmentEvent = await client.waitForRoomEvent({
-    observedEvents: context.observedEvents,
-    predicate: (event) =>
-      event.roomId === roomId &&
-      event.eventId === driverEventId &&
-      event.sender === context.driverUserId &&
-      event.msgtype === "m.audio" &&
-      event.attachment?.kind === "audio" &&
-      event.attachment.filename === MATRIX_QA_VOICE_PREFLIGHT_FILENAME &&
-      event.attachment.caption === undefined,
-    roomId,
-    since: startSince,
-    timeoutMs: context.timeoutMs,
-  });
-  const matched = await client.waitForRoomEvent({
+  const attachmentEvent = await client
+    .waitForRoomEvent({
+      observedEvents: context.observedEvents,
+      predicate: (event) =>
+        event.roomId === roomId &&
+        event.eventId === driverEventId &&
+        event.sender === context.driverUserId &&
+        event.msgtype === "m.audio" &&
+        event.attachment?.kind === "audio" &&
+        event.attachment.filename === MATRIX_QA_VOICE_PREFLIGHT_FILENAME &&
+        event.attachment.caption === undefined,
+      roomId,
+      since: startSince,
+      timeoutMs: context.timeoutMs,
+    })
+    .catch((error: unknown) => {
+      throw new Error(
+        `Matrix voice-preflight scenario failed while waiting for the driver audio event: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
+      );
+    });
+  const matched = await client.waitForOptionalRoomEvent({
     observedEvents: context.observedEvents,
     predicate: (event) =>
       event.roomId === roomId &&
@@ -269,6 +252,11 @@ export async function runVoicePreflightMentionScenario(context: MatrixQaScenario
     since: attachmentEvent.since,
     timeoutMs: context.timeoutMs,
   });
+  if (!matched.matched) {
+    throw new Error(
+      `Matrix voice-preflight scenario failed while waiting for the transcript echo; recent room events: ${JSON.stringify(describeRecentRoomEvents(context, roomId))}`,
+    );
+  }
   advanceMatrixQaActorCursor({
     actorId: "driver",
     syncState: context.syncState,
@@ -285,6 +273,7 @@ export async function runVoicePreflightMentionScenario(context: MatrixQaScenario
       expectedMarker: MATRIX_QA_VOICE_PREFLIGHT_REPLY_MARKER,
     },
     details: [
+      "post-gate transcript echo proved captionless audio satisfied mention gating",
       `room id: ${roomId}`,
       `driver voice event: ${driverEventId}`,
       `voice filename: ${MATRIX_QA_VOICE_PREFLIGHT_FILENAME}`,
@@ -294,27 +283,8 @@ export async function runVoicePreflightMentionScenario(context: MatrixQaScenario
 }
 
 export async function runAttachmentOnlyIgnoredScenario(context: MatrixQaScenarioContext) {
-  const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_MEDIA_ROOM_KEY);
-  const { client, startSince } = await primeMatrixQaDriverMediaClient(context);
-  const driverEventId = await client.sendMediaMessage({
-    buffer: createMatrixQaSplitColorImagePng(),
-    contentType: "image/png",
-    fileName: MATRIX_QA_IMAGE_ATTACHMENT_FILENAME,
-    kind: "image",
-    roomId,
-  });
-  const attachmentEvent = await client.waitForRoomEvent({
-    observedEvents: context.observedEvents,
-    predicate: (event) =>
-      event.roomId === roomId &&
-      event.eventId === driverEventId &&
-      event.sender === context.driverUserId &&
-      event.attachment?.kind === "image" &&
-      event.attachment.caption === undefined,
-    roomId,
-    since: startSince,
-    timeoutMs: context.timeoutMs,
-  });
+  const { attachmentEvent, client, driverEventId, roomId, startSince } =
+    await sendMatrixQaImageAttachment(context, false);
   const { noReplyWindowMs } = await assertNoSutReplyWindow({
     actorId: "driver",
     client,
@@ -341,7 +311,7 @@ export async function runAttachmentOnlyIgnoredScenario(context: MatrixQaScenario
 
 export async function runUnsupportedMediaSafeScenario(context: MatrixQaScenarioContext) {
   const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_MEDIA_ROOM_KEY);
-  const { client, startSince } = await primeMatrixQaDriverMediaClient(context);
+  const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
   const token = buildMatrixQaToken("MATRIX_QA_UNSUPPORTED_MEDIA");
   const triggerBody = `${context.sutUserId} Unsupported media QA check: ignore the attached text file and reply with only this exact marker: ${token}`;
   const driverEventId = await client.sendMediaMessage({
@@ -392,43 +362,34 @@ export async function runUnsupportedMediaSafeScenario(context: MatrixQaScenarioC
 
 export async function runGeneratedImageDeliveryScenario(context: MatrixQaScenarioContext) {
   const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_MEDIA_ROOM_KEY);
-  const { client, startSince } = await primeMatrixQaDriverMediaClient(context);
+  const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
   const triggerBody = buildMatrixQaImageGenerationPrompt(context.sutUserId);
-  const driverEventIds: string[] = [];
+  const triggerSentAt = Date.now();
+  const driverEventId = await client.sendTextMessage({
+    body: triggerBody,
+    mentionUserIds: [context.sutUserId],
+    roomId,
+  });
   const isGeneratedImageEvent = (event: MatrixQaObservedEvent) =>
     event.roomId === roomId &&
     event.sender === context.sutUserId &&
     event.type === "m.room.message" &&
     event.relatesTo === undefined &&
     event.msgtype === "m.image" &&
-    event.attachment?.kind === "image";
-  let matched: Awaited<ReturnType<typeof client.waitForOptionalRoomEvent>> | undefined;
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
-    const triggerSentAt = Date.now();
-    const driverEventId = await client.sendTextMessage({
-      body: triggerBody,
-      mentionUserIds: [context.sutUserId],
-      roomId,
-    });
-    driverEventIds.push(driverEventId);
-    matched = await client.waitForOptionalRoomEvent({
-      observedEvents: context.observedEvents,
-      // The start cursor can still receive delayed images from an earlier run.
-      predicate: (event) =>
-        isGeneratedImageEvent(event) &&
-        typeof event.originServerTs === "number" &&
-        event.originServerTs >= triggerSentAt,
-      roomId,
-      since: matched?.since ?? startSince,
-      timeoutMs: context.timeoutMs,
-    });
-    if (matched.matched) {
-      break;
-    }
-  }
-  if (!matched?.matched) {
+    event.attachment?.kind === "image" &&
+    typeof event.originServerTs === "number" &&
+    event.originServerTs >= triggerSentAt;
+  const matched = await client.waitForOptionalRoomEvent({
+    observedEvents: context.observedEvents,
+    // The start cursor can still receive delayed images from an earlier run.
+    predicate: isGeneratedImageEvent,
+    roomId,
+    since: startSince,
+    timeoutMs: context.timeoutMs,
+  });
+  if (!matched.matched) {
     throw new Error(
-      `timed out after ${context.timeoutMs}ms waiting for Matrix generated image after ${driverEventIds.length} attempt(s)`,
+      `timed out after ${context.timeoutMs}ms waiting for Matrix generated image; recent room events: ${JSON.stringify(describeRecentRoomEvents(context, roomId))}`,
     );
   }
   const matchedEvent = matched.event;
@@ -438,10 +399,12 @@ export async function runGeneratedImageDeliveryScenario(context: MatrixQaScenari
     nextSince: matched.since,
     startSince,
   });
-  const attachment = requireMatrixQaImageAttachment(
-    matchedEvent,
-    "Matrix generated image delivery scenario",
-  );
+  const attachment = matchedEvent.attachment;
+  if (matchedEvent.msgtype !== "m.image" || attachment?.kind !== "image") {
+    throw new Error(
+      `Matrix generated image delivery scenario expected an m.image attachment but saw ${matchedEvent.msgtype ?? "<none>"}`,
+    );
+  }
   return {
     artifacts: {
       attachmentBodyPreview: truncateMatrixQaPreview(matchedEvent.body),
@@ -449,18 +412,18 @@ export async function runGeneratedImageDeliveryScenario(context: MatrixQaScenari
       attachmentFilename: attachment.filename,
       attachmentKind: attachment.kind,
       attachmentMsgtype: matchedEvent.msgtype,
-      driverEventId: driverEventIds[0],
-      driverEventIds,
+      driverEventId,
       roomId,
       triggerBody,
     },
     details: [
       `room id: ${roomId}`,
-      `driver events: ${driverEventIds.join(", ")}`,
-      ...buildMatrixQaAttachmentDetailLines({
-        attachmentEvent: matchedEvent,
-        label: "generated image",
-      }),
+      `driver event: ${driverEventId}`,
+      `generated image event: ${matchedEvent.eventId}`,
+      `generated image msgtype: ${matchedEvent.msgtype ?? "<none>"}`,
+      `generated image attachment kind: ${attachment.kind ?? "<none>"}`,
+      `generated image attachment filename: ${attachment.filename ?? "<none>"}`,
+      `generated image body preview: ${truncateMatrixQaPreview(matchedEvent.body) ?? "<none>"}`,
     ].join("\n"),
   } satisfies MatrixQaScenarioExecution;
 }

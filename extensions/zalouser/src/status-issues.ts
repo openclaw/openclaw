@@ -1,4 +1,3 @@
-// Zalouser plugin module implements status issues behavior.
 import type {
   ChannelAccountSnapshot,
   ChannelStatusIssue,
@@ -16,6 +15,7 @@ const ZALOUSER_STATUS_FIELDS = [
   "accountId",
   "enabled",
   "configured",
+  "linked",
   "dmPolicy",
   "lastError",
 ] as const;
@@ -35,9 +35,7 @@ export function collectZalouserStatusIssues(
       continue;
     }
 
-    const configured = account.configured === true;
-
-    if (!configured) {
+    if (account.configured !== true || account.linked === false) {
       issues.push(
         standardNotConfiguredIssue({
           channel: "zalouser",

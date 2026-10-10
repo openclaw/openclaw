@@ -6,20 +6,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import java.util.concurrent.atomic.AtomicInteger
 
-internal class VisibleActivityTracker {
-  private val count = AtomicInteger()
-
-  fun onStarted() {
-    count.incrementAndGet()
-  }
-
-  fun onStopped() {
-    count.updateAndGet { current -> (current - 1).coerceAtLeast(0) }
-  }
-
-  fun isVisible(): Boolean = count.get() > 0
-}
-
 class WearApplication : Application() {
   internal val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -31,15 +17,15 @@ class WearApplication : Application() {
     WearGatewayRepository(proxyClient)
   }
 
-  internal val realtimeTalkClient: WearRealtimeTalkClient by lazy {
-    WearRealtimeTalkClient(this, gatewayRepository)
+  private val visibleActivities = AtomicInteger()
+
+  internal fun onActivityStarted() {
+    visibleActivities.incrementAndGet()
   }
 
-  private val visibleActivities = VisibleActivityTracker()
+  internal fun onActivityStopped() {
+    visibleActivities.updateAndGet { current -> (current - 1).coerceAtLeast(0) }
+  }
 
-  internal fun onActivityStarted() = visibleActivities.onStarted()
-
-  internal fun onActivityStopped() = visibleActivities.onStopped()
-
-  internal fun isActivityVisible(): Boolean = visibleActivities.isVisible()
+  internal fun isActivityVisible(): Boolean = visibleActivities.get() > 0
 }

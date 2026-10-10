@@ -1,386 +1,199 @@
-// Control UI chat module renders provider-neutral question cards.
-import { LitElement, html, nothing } from "lit";
-import { property, state } from "lit/decorators.js";
-import type { QuestionPrompt } from "../../../app/question-prompt.ts";
+import { html, nothing } from "lit";
+import { property } from "lit/decorators.js";
+import {
+  isOptionalElementDefined,
+  LazyCustomElementRequestController,
+} from "../../../app/lazy-custom-element.ts";
+import type { QuestionDraft, QuestionPrompt } from "../../../app/question-prompt.ts";
+import { renderLazyViewError } from "../../../components/lazy-view-error.ts";
+import { renderLoadingState } from "../../../components/loading-state.ts";
 import { t } from "../../../i18n/index.ts";
-import type { QuestionStatus } from "../tool-stream.ts";
+import { OpenClawLightDomContentsElement } from "../../../lit/openclaw-element.ts";
 
-type QuestionCardQuestion = {
-  id: string;
-  header: string;
-  question: string;
-  options: Array<{ label: string; description?: string }>;
-  multiSelect?: boolean;
-  isOther?: boolean;
-};
+type QuestionPanelQuestion = QuestionPrompt["questions"][number];
 
-type QuestionCardTerminalState = "answered" | "answered-elsewhere" | "expired" | "cancelled";
-
-type QuestionCardViewModel = {
+type QuestionPanelViewModel = {
   requestKey: string;
   title: string;
-  questions: QuestionCardQuestion[];
-  terminalState?: QuestionCardTerminalState;
+  questions: QuestionPanelQuestion[];
+  agentId?: string;
+  sessionKey?: string;
+  secretStoreAllowedHostsDraft?: string;
+  collapsed: boolean;
+  autoFocus?: boolean;
+  nonBlocking?: boolean;
+  collapsedLabel?: string;
   disabled: boolean;
   submitting?: boolean;
-  countdown?: string;
-  answersById?: Record<string, string[]>;
+  drafts: Map<string, QuestionDraft>;
   error?: string | null;
+  notice?: string;
+  requestPosition?: { current: number; total: number };
 };
 
-type QuestionCardProps = {
-  model: QuestionCardViewModel;
-  onSubmit: (answersById: Record<string, string[]>) => void | Promise<void>;
-  onAnswersChange?: (answersById: Record<string, string[]>) => void;
+export type QuestionPanelProps = {
+  model: QuestionPanelViewModel;
+  onSubmit?: (answersById: Record<string, string[]>) => void | Promise<void>;
+  onSkip?: () => void | Promise<void>;
+  onChange?: () => void;
+  onSecretStoreAllowedHostsChange?: (allowedHosts: string) => void;
   onDismissError?: () => void;
+  onCollapsedChange?: (collapsed: boolean) => void;
+  onPreviousRequest?: () => void;
+  onNextRequest?: () => void;
 };
 
-type CodexQuestionCardOptions = {
-  disabled: boolean;
-  onSubmit: (answers: Record<string, string>, onRejected: () => void) => void;
+export type QuestionPanelOptions = Pick<
+  QuestionPanelProps,
+  "onChange" | "onSubmit" | "onSkip" | "onCollapsedChange" | "onPreviousRequest" | "onNextRequest"
+> & {
+  collapsed?: boolean;
+  requestPosition?: QuestionPanelViewModel["requestPosition"];
 };
 
-type GatewayQuestionCardOptions = {
-  nowMs: number;
-  onChange: () => void;
-  onSubmit: (answers: Record<string, string[]>) => void | Promise<void>;
-};
-
-function formatRemaining(expiresAtMs: number, nowMs: number): string {
-  const seconds = Math.max(0, Math.ceil((expiresAtMs - nowMs) / 1_000));
-  const minutes = Math.floor(seconds / 60);
-  return `${minutes}:${String(seconds % 60).padStart(2, "0")}`;
-}
-
-function terminalStateForPrompt(prompt: QuestionPrompt): QuestionCardTerminalState | undefined {
-  if (prompt.status === "answered") {
-    return prompt.answeredElsewhere ? "answered-elsewhere" : "answered";
-  }
-  return prompt.status === "pending" ? undefined : prompt.status;
-}
-
-function promptDraftAnswers(prompt: QuestionPrompt): Record<string, string[]> {
-  if (prompt.status === "answered") {
-    return Object.fromEntries(
-      prompt.questions.map((question) => [
-        question.id,
-        prompt.answers?.answers[question.id]?.answers ?? [],
-      ]),
-    );
-  }
-  return Object.fromEntries(
-    prompt.questions.map((question) => {
-      const draft = prompt.drafts.get(question.id);
-      return [
-        question.id,
-        [...(draft?.selected ?? []), ...(draft?.freeText.trim() ? [draft.freeText.trim()] : [])],
-      ];
-    }),
-  );
-}
-
-function updatePromptDrafts(prompt: QuestionPrompt, answersById: Record<string, string[]>): void {
-  for (const question of prompt.questions) {
-    const values = answersById[question.id] ?? [];
-    const optionLabels = new Set(question.options.map((option) => option.label));
-    prompt.drafts.set(question.id, {
-      selected: new Set(values.filter((value) => optionLabels.has(value))),
-      freeText: values.find((value) => !optionLabels.has(value)) ?? "",
-    });
-  }
-}
-
-export function createCodexQuestionCardProps(
-  status: QuestionStatus,
-  options: CodexQuestionCardOptions,
-): QuestionCardProps {
-  return {
-    model: {
-      requestKey: `${status.itemId}:${status.actionToken}`,
-      title: t("chat.questions.title"),
-      questions: status.questions,
-      disabled: options.disabled,
-    },
-    onSubmit: (answersById) =>
-      new Promise<void>((_resolve, reject) => {
-        const answers = Object.fromEntries(
-          Object.entries(answersById).map(([id, values]) => [id, values[0] ?? ""]),
-        );
-        options.onSubmit(answers, () => reject(new Error("question submission rejected")));
-      }),
-  };
-}
-
-export function renderChatQuestionCard(
+export function createGatewayQuestionPanelProps(
   prompt: QuestionPrompt,
-  options: GatewayQuestionCardOptions,
-) {
-  const pending = prompt.status === "pending";
-  const props: QuestionCardProps = {
+  options: QuestionPanelOptions,
+): QuestionPanelProps {
+  const { onChange, onSubmit, onSkip } = options;
+  const checkedAction = <Args extends unknown[]>(
+    action: ((...args: Args) => void | Promise<void>) | undefined,
+  ) =>
+    action
+      ? async (...args: Args) => {
+          await action(...args);
+          if (prompt.status === "pending" && prompt.error) {
+            throw new Error(prompt.error);
+          }
+        }
+      : undefined;
+  return {
     model: {
       requestKey: prompt.id,
       title: t("chat.questions.eyebrow"),
       questions: prompt.questions,
-      terminalState: terminalStateForPrompt(prompt),
-      disabled: !pending || prompt.submitting,
+      agentId: prompt.agentId,
+      sessionKey: prompt.sessionKey,
+      secretStoreAllowedHostsDraft: prompt.secretStoreAllowedHostsDraft,
+      collapsed: options.collapsed ?? false,
+      disabled: prompt.status !== "pending",
       submitting: prompt.submitting,
-      countdown: pending ? formatRemaining(prompt.expiresAtMs, options.nowMs) : undefined,
-      answersById: promptDraftAnswers(prompt),
+      drafts: prompt.drafts,
       error: prompt.error,
+      requestPosition: options.requestPosition,
     },
-    onAnswersChange: (answersById) => {
-      updatePromptDrafts(prompt, answersById);
-      options.onChange();
+    onChange,
+    onSecretStoreAllowedHostsChange: (allowedHosts) => {
+      prompt.secretStoreAllowedHostsDraft = allowedHosts;
+      onChange?.();
     },
-    onSubmit: async (answersById) => {
-      await options.onSubmit(answersById);
-      if (prompt.status === "pending" && prompt.error) {
-        throw new Error(prompt.error);
-      }
-    },
-    onDismissError: prompt.error
-      ? () => {
-          prompt.error = null;
-          options.onChange();
-        }
-      : undefined,
+    onSubmit: checkedAction(onSubmit),
+    onSkip: checkedAction(onSkip),
+    onDismissError:
+      prompt.error && onChange
+        ? () => {
+            prompt.error = null;
+            onChange();
+          }
+        : undefined,
+    onCollapsedChange: options.onCollapsedChange,
+    onPreviousRequest: options.onPreviousRequest,
+    onNextRequest: options.onNextRequest,
   };
-  return html`<openclaw-chat-question .props=${props}></openclaw-chat-question>`;
 }
 
-function answersSignature(answersById: Record<string, string[]>): string {
-  return JSON.stringify(
-    Object.entries(answersById)
-      .toSorted(([left], [right]) => left.localeCompare(right))
-      .map(([id, values]) => [id, values]),
+function terminalAnswer(prompt: QuestionPrompt, question: QuestionPanelQuestion): string {
+  if (prompt.status === "cancelled") {
+    return t("chat.questions.skipped");
+  }
+  if (prompt.status === "expired") {
+    return t("chat.questions.expired");
+  }
+  if (prompt.status === "unavailable") {
+    return t("chat.questions.unavailable");
+  }
+  if (question.isSecret) {
+    return t("chat.questions.answered");
+  }
+  const answer = prompt.answers?.answers[question.questionId]?.join(", ");
+  return (
+    answer ||
+    t(prompt.answeredElsewhere ? "chat.questions.answeredElsewhere" : "chat.questions.answered")
   );
 }
 
-class ChatQuestionCard extends LitElement {
-  override createRenderRoot() {
-    return this;
+export function renderChatQuestionSummary(prompt: QuestionPrompt) {
+  if (prompt.status === "pending") {
+    return nothing;
   }
+  return html`
+    <div class="chat-question-summary" aria-label=${t("chat.questions.summaryLabel")}>
+      ${prompt.questions.map(
+        (question) => html`
+          <div class="chat-question-summary__item">
+            <div class="chat-question-summary__prompt">${question.question}</div>
+            <div class="chat-question-summary__line">
+              <strong>${question.header}:</strong>
+              <span>${terminalAnswer(prompt, question)}</span>
+            </div>
+          </div>
+        `,
+      )}
+    </div>
+  `;
+}
 
-  @property({ attribute: false }) props?: QuestionCardProps;
-  @state() private selectedById = new Map<string, string[]>();
-  @state() private freeTextById = new Map<string, string>();
-  @state() private submitted = false;
-  private requestKey: string | null = null;
-  private syncedAnswersSignature: string | null = null;
+// Summaries and panel props are needed during chat boot; interactive controls are not.
+const questionPanelElement = {
+  tagName: "openclaw-chat-question-panel",
+  get label() {
+    return t("chat.questions.eyebrow");
+  },
+  loadModule: () => import("./chat-question-panel.ts"),
+};
 
-  override willUpdate() {
-    const model = this.props?.model;
-    const nextRequestKey = model?.requestKey ?? null;
-    if (nextRequestKey !== this.requestKey) {
-      this.requestKey = nextRequestKey;
-      this.selectedById = new Map();
-      this.freeTextById = new Map();
-      this.submitted = false;
-      this.syncedAnswersSignature = null;
-    }
-    if (!model?.answersById) {
-      return;
-    }
-    const signature = answersSignature(model.answersById);
-    if (signature === this.syncedAnswersSignature) {
-      return;
-    }
-    this.syncedAnswersSignature = signature;
-    const selectedById = new Map<string, string[]>();
-    const freeTextById = new Map<string, string>();
-    for (const question of model.questions) {
-      const optionLabels = new Set(question.options.map((option) => option.label));
-      const values = model.answersById[question.id] ?? [];
-      selectedById.set(
-        question.id,
-        values.filter((value) => optionLabels.has(value)),
-      );
-      const custom = values.filter((value) => !optionLabels.has(value)).join(", ");
-      if (custom) {
-        freeTextById.set(question.id, custom);
-      }
-    }
-    this.selectedById = selectedById;
-    this.freeTextById = freeTextById;
-  }
+export class ChatQuestionCard extends OpenClawLightDomContentsElement {
+  @property({ attribute: false }) props?: QuestionPanelProps;
+  private readonly panelLoader = new LazyCustomElementRequestController(this);
 
-  private answerValues(question: QuestionCardQuestion): string[] {
-    const selected = this.selectedById.get(question.id) ?? [];
-    const freeText = this.freeTextById.get(question.id)?.trim();
-    return [...selected, ...(freeText ? [freeText] : [])];
-  }
-
-  private buildAnswers(model: QuestionCardViewModel): Record<string, string[]> {
-    return Object.fromEntries(
-      model.questions.map((question) => [question.id, this.answerValues(question)]),
+  override willUpdate(): void {
+    this.panelLoader.requestWhileActive(
+      questionPanelElement,
+      this.isConnected && Boolean(this.props),
     );
   }
 
-  private answersChanged(model: QuestionCardViewModel): void {
-    const answersById = this.buildAnswers(model);
-    this.syncedAnswersSignature = answersSignature(answersById);
-    this.props?.onAnswersChange?.(answersById);
+  override connectedCallback(): void {
+    super.connectedCallback();
+    this.requestUpdate();
   }
 
-  private toggleOption(
-    model: QuestionCardViewModel,
-    question: QuestionCardQuestion,
-    label: string,
-  ) {
-    const selectedById = new Map(this.selectedById);
-    const current = selectedById.get(question.id) ?? [];
-    selectedById.set(
-      question.id,
-      question.multiSelect
-        ? current.includes(label)
-          ? current.filter((value) => value !== label)
-          : [...current, label]
-        : [label],
-    );
-    this.selectedById = selectedById;
-    if (!question.multiSelect) {
-      const freeTextById = new Map(this.freeTextById);
-      freeTextById.delete(question.id);
-      this.freeTextById = freeTextById;
-    }
-    this.answersChanged(model);
-  }
-
-  private setFreeText(model: QuestionCardViewModel, question: QuestionCardQuestion, value: string) {
-    this.freeTextById = new Map(this.freeTextById).set(question.id, value);
-    if (!question.multiSelect && value.trim()) {
-      this.selectedById = new Map(this.selectedById).set(question.id, []);
-    }
-    this.answersChanged(model);
-  }
-
-  private async submit(model: QuestionCardViewModel): Promise<void> {
-    if (!model.questions.every((question) => this.answerValues(question).length > 0)) {
-      return;
-    }
-    const requestKey = model.requestKey;
-    this.submitted = true;
-    try {
-      await this.props?.onSubmit(this.buildAnswers(model));
-    } catch {
-      if (this.requestKey === requestKey) {
-        this.submitted = false;
-      }
-    }
+  override disconnectedCallback(): void {
+    this.panelLoader.requestWhileActive(questionPanelElement, false);
+    super.disconnectedCallback();
   }
 
   override render() {
-    const props = this.props;
-    if (!props) {
+    if (!this.props) {
       return nothing;
     }
-    const { model } = props;
-    const disabled = model.disabled || this.submitted || Boolean(model.terminalState);
-    const complete = model.questions.every((question) => this.answerValues(question).length > 0);
-    return html`
-      <section class="chat-question" role="group" aria-label=${model.title}>
-        <div class="chat-question__topline">
-          <div class="chat-question__title">${model.title}</div>
-          ${model.countdown
-            ? html`<span class="chat-question__countdown" title=${t("chat.questions.timeRemaining")}
-                >${model.countdown}</span
-              >`
-            : nothing}
-        </div>
-        ${model.questions.map(
-          (question) => html`
-            <fieldset class="chat-question__field" ?disabled=${disabled}>
-              <legend>${question.header}</legend>
-              <div class="chat-question__prompt">${question.question}</div>
-              ${question.options.map((option) => {
-                const selected = (this.selectedById.get(question.id) ?? []).includes(option.label);
-                return html`
-                  <label class="chat-question__option">
-                    <input
-                      type=${question.multiSelect ? "checkbox" : "radio"}
-                      name=${`${model.requestKey}-${question.id}`}
-                      .checked=${selected}
-                      ?disabled=${disabled}
-                      @change=${() => this.toggleOption(model, question, option.label)}
-                    />
-                    <span>
-                      <strong>${option.label}</strong>
-                      ${option.description ? html`<small>${option.description}</small>` : nothing}
-                    </span>
-                  </label>
-                `;
-              })}
-              ${question.isOther || question.options.length === 0
-                ? html`
-                    <input
-                      class="chat-question__other"
-                      type="text"
-                      autocomplete="off"
-                      placeholder=${t("chat.questions.other")}
-                      aria-label=${t("chat.questions.ownAnswerFor", { header: question.header })}
-                      .value=${this.freeTextById.get(question.id) ?? ""}
-                      ?disabled=${disabled}
-                      @input=${(event: Event) =>
-                        this.setFreeText(model, question, (event.target as HTMLInputElement).value)}
-                      @keydown=${(event: KeyboardEvent) => {
-                        if (
-                          event.key === "Enter" &&
-                          !event.isComposing &&
-                          event.keyCode !== 229 &&
-                          complete &&
-                          !disabled
-                        ) {
-                          event.preventDefault();
-                          void this.submit(model);
-                        }
-                      }}
-                    />
-                  `
-                : nothing}
-            </fieldset>
-          `,
-        )}
-        <div class="chat-question__footer">
-          ${model.terminalState
-            ? html`<span class="chat-question__status"
-                >${t(
-                  `chat.questions.${model.terminalState === "answered-elsewhere" ? "answeredElsewhere" : model.terminalState}`,
-                )}</span
-              >`
-            : nothing}
-          ${model.error
-            ? html`<span class="chat-question__error" role="status">
-                ${t("chat.questions.submitFailed", { error: model.error })}
-                ${props.onDismissError
-                  ? html`<button
-                      type="button"
-                      class="chat-question__error-dismiss"
-                      aria-label=${t("chat.actions.dismissError")}
-                      @click=${props.onDismissError}
-                    >
-                      ×
-                    </button>`
-                  : nothing}
-              </span>`
-            : nothing}
-          ${model.terminalState
-            ? nothing
-            : html`<button
-                class="btn btn--sm primary chat-question__submit"
-                type="button"
-                ?disabled=${disabled || !complete}
-                @click=${() => void this.submit(model)}
-              >
-                ${this.submitted || model.submitting
-                  ? t("chat.questions.submitting")
-                  : t("chat.questions.submit")}
-              </button>`}
-        </div>
-      </section>
-    `;
+    if (isOptionalElementDefined(questionPanelElement)) {
+      return html`<openclaw-chat-question-panel
+        .props=${this.props}
+      ></openclaw-chat-question-panel>`;
+    }
+    const state = this.panelLoader.visibleState;
+    return state?.status === "error"
+      ? renderLazyViewError({
+          error: state.error,
+          stale: state.stale,
+          subtitle: questionPanelElement.label,
+          onRetry: () => this.panelLoader.retry(),
+        })
+      : renderLoadingState();
   }
 }
 
-if (!customElements.get("openclaw-chat-question")) {
-  customElements.define("openclaw-chat-question", ChatQuestionCard);
+if (!customElements.get("openclaw-chat-question-card")) {
+  customElements.define("openclaw-chat-question-card", ChatQuestionCard);
 }

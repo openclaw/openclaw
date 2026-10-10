@@ -1,4 +1,5 @@
-// Googlechat plugin module implements setup core behavior.
+import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
+import type { ChannelSetupInput } from "openclaw/plugin-sdk/channel-setup";
 import {
   createPatchedAccountSetupAdapter,
   createSetupInputPresenceValidator,
@@ -6,7 +7,14 @@ import {
 
 const channel = "googlechat" as const;
 
-export const googlechatSetupAdapter = createPatchedAccountSetupAdapter({
+type GoogleChatSetupInput = ChannelSetupInput & {
+  audienceType?: string;
+  audience?: string;
+  webhookPath?: string;
+  webhookUrl?: string;
+};
+
+export const googlechatSetupAdapter = createPatchedAccountSetupAdapter<GoogleChatSetupInput>({
   channelKey: channel,
   validateInput: createSetupInputPresenceValidator({
     defaultAccountOnlyEnvError:
@@ -18,18 +26,18 @@ export const googlechatSetupAdapter = createPatchedAccountSetupAdapter({
       },
     ],
   }),
-  buildPatch: (input) => {
-    const patch = input.useEnv
+  buildPatch: (setupInput) => {
+    const patch = setupInput.useEnv
       ? {}
-      : input.tokenFile
-        ? { serviceAccountFile: input.tokenFile }
-        : input.token
-          ? { serviceAccount: input.token }
+      : setupInput.tokenFile
+        ? { serviceAccountFile: setupInput.tokenFile }
+        : setupInput.token
+          ? { serviceAccount: setupInput.token }
           : {};
-    const audienceType = input.audienceType?.trim();
-    const audience = input.audience?.trim();
-    const webhookPath = input.webhookPath?.trim();
-    const webhookUrl = input.webhookUrl?.trim();
+    const audienceType = setupInput.audienceType?.trim();
+    const audience = setupInput.audience?.trim();
+    const webhookPath = setupInput.webhookPath?.trim();
+    const webhookUrl = setupInput.webhookUrl?.trim();
     return {
       ...patch,
       ...(audienceType ? { audienceType } : {}),
@@ -38,4 +46,43 @@ export const googlechatSetupAdapter = createPatchedAccountSetupAdapter({
       ...(webhookUrl ? { webhookUrl } : {}),
     };
   },
+});
+
+export const googlechatSetupContract = defineChannelSetupContract({
+  fields: {
+    token: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--token <json>", description: "Google Chat service account JSON" },
+    },
+    tokenFile: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--token-file <path>", description: "Google Chat service account file" },
+    },
+    audienceType: {
+      kind: "choice",
+      choices: ["app-url", "project-number"],
+      cli: { flags: "--audience-type <type>", description: "Google Chat audience type" },
+    },
+    audience: {
+      kind: "string",
+      cli: { flags: "--audience <value>", description: "Google Chat audience value" },
+    },
+    webhookPath: {
+      kind: "string",
+      cli: { flags: "--webhook-path <path>", description: "Google Chat webhook path" },
+    },
+    webhookUrl: {
+      kind: "string",
+      cli: { flags: "--webhook-url <url>", description: "Google Chat webhook URL" },
+    },
+    useEnv: {
+      kind: "boolean",
+      cli: { flags: "--use-env", description: "Use Google Chat environment credentials" },
+      envVars: ["GOOGLE_CHAT_SERVICE_ACCOUNT", "GOOGLE_CHAT_SERVICE_ACCOUNT_FILE"],
+      envVarMode: "any",
+    },
+  },
+  legacyAdapter: googlechatSetupAdapter,
 });

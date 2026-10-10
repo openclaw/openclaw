@@ -3,15 +3,18 @@ scenario:
   id: whatsapp-approval-plugin-native
   surface: channels
   coverage:
-    primary: [channels.group-messages]
+    primary:
+      - whatsapp.native-exec
   execution:
     kind: flow
     channel: whatsapp
     timeoutMs: 60000
     retryCount: 1
     suiteIsolation: isolated
-    config: { whatsappScenarioId: whatsapp-approval-plugin-native }
+    config:
+      whatsappScenario: whatsappQaApprovalPluginNativeScenario
 flow:
   module: ./live-transports/whatsapp/scenario-runtime.js
-  call: runWhatsAppApprovalPluginNativeScenario
-  args: [{ expr: whatsappScenarioContext }]
+  call: runWhatsAppScenario
+  args:
+    - { expr: whatsappScenarioContext }

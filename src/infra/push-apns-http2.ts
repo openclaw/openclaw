@@ -1,7 +1,7 @@
-// Opens APNs HTTP/2 sessions with optional managed proxy tunneling.
 import { once } from "node:events";
 import http2 from "node:http2";
 import tls from "node:tls";
+import { decodeTextPrefix } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { openProxyConnectTunnel } from "@openclaw/proxyline";
 import { toErrorObject } from "./errors.js";
@@ -11,8 +11,7 @@ import {
   type ActiveManagedProxyUrl,
 } from "./net/proxy/active-proxy-state.js";
 import type { ManagedProxyTlsOptions } from "./net/proxy/proxy-tls.js";
-
-const APNS_DEFAULT_PORT = "443";
+import { apnsSendInvalidatedError } from "./push-apns-send-current.js";
 
 const APNS_AUTHORITIES = new Set([
   "https://api.push.apple.com",
@@ -26,8 +25,8 @@ const APNS_RESPONSE_BODY_MAX_BYTES = 8192;
 const APNS_HTTP2_MIN_TIMEOUT_MS = 1000;
 
 type ApnsResponseBodyCapture = {
-  text: string;
-  bytes: number;
+  chunks: Buffer[];
+  capturedBytes: number;
   truncated: boolean;
 };
 
@@ -35,6 +34,7 @@ type ApnsResponseBodyCapture = {
 type ConnectApnsHttp2SessionParams = {
   authority: string;
   timeoutMs: number;
+  signal?: AbortSignal;
 };
 
 /** Parameters for validating APNs reachability through an explicit proxy. */
@@ -65,18 +65,14 @@ function assertApnsAuthority(authority: string): ApnsAuthority {
     parsed.password ||
     parsed.pathname !== "/" ||
     parsed.search ||
-    parsed.hash
+    parsed.hash ||
+    !APNS_AUTHORITIES.has(parsed.origin)
   ) {
-    throw new Error(`Unsupported APNs authority: ${authority}`);
-  }
-  const port = parsed.port && parsed.port !== APNS_DEFAULT_PORT ? `:${parsed.port}` : "";
-  const normalized = `${parsed.protocol}//${parsed.hostname}${port}`;
-  if (!APNS_AUTHORITIES.has(normalized)) {
     throw new Error(`Unsupported APNs authority: ${authority}`);
   }
   // Return a normalized origin only. APNs paths are created by callers and
   // should never be accepted from user/config authority input.
-  return normalized as ApnsAuthority;
+  return parsed.origin as ApnsAuthority;
 }
 
 function normalizeConnectProxyUrl(proxyUrl: URL): URL {
@@ -90,10 +86,9 @@ function normalizeConnectProxyUrl(proxyUrl: URL): URL {
     decodeURIComponent(normalized.username);
     decodeURIComponent(normalized.password);
   } catch (err) {
-    throw new Error(
-      `Proxy CONNECT failed via ${normalized.origin}: ${err instanceof Error ? err.message : String(err)}`,
-      { cause: err },
-    );
+    const detail =
+      err instanceof URIError ? "URI malformed" : err instanceof Error ? err.message : String(err);
+    throw new Error(`Proxy CONNECT failed via ${normalized.origin}: ${detail}`, { cause: err });
   }
   return normalized;
 }
@@ -104,6 +99,7 @@ async function openApnsTlsTunnel(params: {
   targetHost: string;
   targetPort: number;
   timeoutMs: number;
+  signal?: AbortSignal;
 }): Promise<tls.TLSSocket> {
   // CONNECT ignores URL paths. Strip path metadata before Proxyline sees it so
   // tokens embedded in a configured proxy URL cannot surface in errors.
@@ -115,9 +111,19 @@ async function openApnsTlsTunnel(params: {
     targetHost: params.targetHost,
     targetPort: params.targetPort,
     timeoutMs: params.timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
   });
 
   const abortController = new AbortController();
+  const abortFromCaller = () => {
+    if (params.signal) {
+      abortController.abort(apnsSendInvalidatedError(params.signal));
+    }
+  };
+  params.signal?.addEventListener("abort", abortFromCaller, { once: true });
+  if (params.signal?.aborted) {
+    abortFromCaller();
+  }
   let targetTlsSocket: tls.TLSSocket | undefined;
   let timeout: NodeJS.Timeout | undefined;
   try {
@@ -155,6 +161,7 @@ async function openApnsTlsTunnel(params: {
     if (timeout) {
       clearTimeout(timeout);
     }
+    params.signal?.removeEventListener("abort", abortFromCaller);
     abortController.abort();
   }
 }
@@ -164,6 +171,7 @@ async function openProxiedApnsHttp2Session(params: {
   proxyUrl: ActiveManagedProxyUrl;
   proxyTls?: ManagedProxyTlsOptions;
   timeoutMs: number;
+  signal?: AbortSignal;
 }): Promise<http2.ClientHttp2Session> {
   const apnsHost = new URL(params.authority).hostname;
   const tlsSocket = await openApnsTlsTunnel({
@@ -172,7 +180,13 @@ async function openProxiedApnsHttp2Session(params: {
     targetHost: apnsHost,
     targetPort: 443,
     timeoutMs: params.timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
   });
+
+  if (params.signal?.aborted) {
+    tlsSocket.destroy();
+    throw apnsSendInvalidatedError(params.signal);
+  }
 
   // The CONNECT helper already completed the target TLS handshake; reuse that
   // socket so the session cannot open a separate direct route.
@@ -189,6 +203,9 @@ export async function connectApnsHttp2Session(
   const timeoutMs = resolveApnsHttp2TimeoutMs(params.timeoutMs);
   const proxyUrl = getActiveManagedProxyUrl();
   if (!proxyUrl) {
+    if (params.signal?.aborted) {
+      throw apnsSendInvalidatedError(params.signal);
+    }
     return http2.connect(authority);
   }
 
@@ -197,6 +214,7 @@ export async function connectApnsHttp2Session(
     proxyUrl,
     proxyTls: getActiveManagedProxyTlsOptions(),
     timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
   });
 }
 
@@ -205,7 +223,7 @@ function resolveApnsHttp2TimeoutMs(timeoutMs: number): number {
 }
 
 export function createApnsResponseBodyCapture(): ApnsResponseBodyCapture {
-  return { text: "", bytes: 0, truncated: false };
+  return { chunks: [], capturedBytes: 0, truncated: false };
 }
 
 export function appendApnsResponseBodyCapture(
@@ -213,18 +231,24 @@ export function appendApnsResponseBodyCapture(
   chunk: unknown,
   maxBytes = APNS_RESPONSE_BODY_MAX_BYTES,
 ): void {
-  const buffer = Buffer.from(String(chunk));
-  capture.bytes += buffer.byteLength;
-  const remaining = maxBytes - Buffer.byteLength(capture.text);
+  const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+  const remaining = maxBytes - capture.capturedBytes;
   if (remaining <= 0) {
     capture.truncated = capture.truncated || buffer.byteLength > 0;
     return;
   }
   const slice = buffer.byteLength > remaining ? buffer.subarray(0, remaining) : buffer;
-  capture.text += slice.toString("utf8");
+  capture.chunks.push(Buffer.from(slice));
+  capture.capturedBytes += slice.byteLength;
   if (slice.byteLength < buffer.byteLength) {
     capture.truncated = true;
   }
+}
+
+export function getApnsResponseBodyCaptureText(capture: ApnsResponseBodyCapture): string {
+  return decodeTextPrefix(Buffer.concat(capture.chunks, capture.capturedBytes), {
+    truncated: capture.truncated,
+  });
 }
 
 /** Sends an intentionally invalid APNs push through a proxy to prove HTTP/2 reachability. */
@@ -247,7 +271,7 @@ export async function probeApnsHttp2ReachabilityViaProxy(
       let status: number | undefined;
       let responseHeaders: Record<string, string> = {};
       const timeout = setTimeout(() => {
-        fail(new Error(`APNs reachability probe timed out after ${timeoutMs}ms`));
+        fail(new Error(`APNs reachability check timed out after ${timeoutMs}ms`));
       }, timeoutMs);
       timeout.unref?.();
 
@@ -278,7 +302,6 @@ export async function probeApnsHttp2ReachabilityViaProxy(
       });
 
       session.once("error", fail);
-      request.setEncoding("utf8");
       request.on("response", (headers) => {
         const rawStatus = headers[":status"];
         status = typeof rawStatus === "number" ? rawStatus : Number(rawStatus);
@@ -299,10 +322,10 @@ export async function probeApnsHttp2ReachabilityViaProxy(
         settled = true;
         cleanup();
         if (status === undefined || !Number.isFinite(status)) {
-          reject(new Error("APNs reachability probe ended without an HTTP/2 status"));
+          reject(new Error("APNs reachability check ended without an HTTP/2 status"));
           return;
         }
-        resolve({ status, body: body.text, responseHeaders });
+        resolve({ status, body: getApnsResponseBodyCaptureText(body), responseHeaders });
       });
       request.end(JSON.stringify({ aps: { alert: "OpenClaw APNs proxy validation" } }));
     });

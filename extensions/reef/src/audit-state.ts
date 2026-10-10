@@ -3,12 +3,14 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { randomBytes } from "@noble/hashes/utils.js";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+// Import from the defining module, not the protocol barrel: index.js re-exports
+// guard-adapters, whose provider-http graph doctor enumeration must not cold-load.
 import {
   createAuditEntry,
   verifyChainSegment,
   type AuditEntry,
   type AuditStore,
-} from "../protocol/index.js";
+} from "../protocol/audit.js";
 
 export const REEF_AUDIT_NAMESPACE = "audit";
 export const REEF_AUDIT_HEAD_NAMESPACE = "audit-head";
@@ -88,6 +90,29 @@ function parseAuditStateRecord(value: ReefAuditStateRecord | undefined): ReefAud
     throw new Error("invalid Reef audit next pointer");
   }
   return value!;
+}
+
+export function verifyReefAuditWindow(
+  reversed: AuditEntry[],
+  head: ReefAuditHeadRecord,
+  maxEntries: number,
+): AuditEntry[] {
+  if (reversed.length !== Math.min(head.seq, maxEntries)) {
+    throw new Error("Reef audit chain is shorter than its committed retention window");
+  }
+  const entries = reversed.toReversed();
+  const first = entries[0];
+  if (
+    !first ||
+    !verifyChainSegment(entries, {
+      previousHash: first.prevHash,
+      previousSeq: first.event.seq - 1,
+      head: head.hash,
+    })
+  ) {
+    throw new Error("invalid Reef audit chain state");
+  }
+  return entries;
 }
 
 class ReefSqliteAuditStore implements AuditStore {
@@ -257,13 +282,10 @@ class ReefSqliteAuditStore implements AuditStore {
             if (latestHead.pending?.owner !== owner) {
               throw new Error("Reef audit append lease was lost before linking");
             }
-            const replacesStaleLink =
-              previous.nextHash !== undefined &&
-              staleEntryKey === reefAuditEntryKey(previous.nextHash);
             if (previous.nextHash === entry.entryHash) {
               return previous;
             }
-            if (previous.nextHash !== undefined && !replacesStaleLink) {
+            if (previous.nextHash !== undefined) {
               throw new Error("Reef audit head already links a committed successor");
             }
             return { ...previous, nextHash: entry.entryHash };
@@ -383,23 +405,7 @@ class ReefSqliteAuditStore implements AuditStore {
       reversed.push(entry);
       hash = entry.prevHash;
     }
-    const expectedEntries = Math.min(head.seq, this.#maxEntries);
-    if (reversed.length !== expectedEntries) {
-      throw new Error("Reef audit chain is shorter than its committed retention window");
-    }
-    const entries = reversed.toReversed();
-    const first = entries[0];
-    if (
-      !first ||
-      !verifyChainSegment(entries, {
-        previousHash: first.prevHash,
-        previousSeq: first.event.seq - 1,
-        head: head.hash,
-      })
-    ) {
-      throw new Error("invalid Reef audit chain state");
-    }
-    return structuredClone(entries);
+    return structuredClone(verifyReefAuditWindow(reversed, head, this.#maxEntries));
   }
 }
 

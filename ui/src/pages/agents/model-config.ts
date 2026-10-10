@@ -1,100 +1,95 @@
-// Agent model selection staged against the runtime config form, split out of
-// agents-page.ts to keep that page inside the TS LOC ratchet.
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { ApplicationContext } from "../../app/context.ts";
-import {
-  resolveAgentConfig,
-  resolveEffectiveModelFallbacks,
-  resolveModelPrimary,
-} from "../../lib/agents/display.ts";
-import { currentConfigObject, findAgentConfigEntryIndex } from "../../lib/config/index.ts";
-import { normalizeStringEntries } from "../../lib/string-coerce.ts";
 
 type RuntimeConfig = ApplicationContext["runtimeConfig"];
 
-function findAgentIndex(runtimeConfig: RuntimeConfig, agentId: string) {
-  return findAgentConfigEntryIndex(currentConfigObject(runtimeConfig.state), agentId);
+export function createAgentModelActions(params: {
+  getRuntimeConfig: () => RuntimeConfig;
+  canUpdate: (agentId: string) => boolean;
+  onPrimaryChanged: () => void;
+}) {
+  return {
+    onModelChange: (agentId: string, modelId: string | null) => {
+      if (params.canUpdate(agentId)) {
+        const runtimeConfig = params.getRuntimeConfig();
+        const target = runtimeConfig.agentEntry(agentId, { ensure: Boolean(modelId) });
+        if (target) {
+          // Clearing the primary must preserve authored agent fallbacks.
+          stageModelShape(
+            runtimeConfig,
+            [...target.path, "model"],
+            modelId,
+            existingModelParts(target.entry.model).fallbacks,
+          );
+        }
+        params.onPrimaryChanged();
+      }
+    },
+    onDecisionModelChange: (agentId: string, modelId: string | null) => {
+      if (params.canUpdate(agentId)) {
+        const runtimeConfig = params.getRuntimeConfig();
+        const target = runtimeConfig.agentEntry(agentId, { ensure: modelId !== null });
+        if (target) {
+          const path = [...target.path, "decisionModel"];
+          // Null inherits; an empty string explicitly disables the per-agent model.
+          if (modelId === null) {
+            runtimeConfig.removeFormValue(path);
+          } else {
+            runtimeConfig.patchForm(path, modelId);
+          }
+        }
+      }
+    },
+    onModelFallbacksChange: (agentId: string, fallbacks: string[]) => {
+      if (params.canUpdate(agentId)) {
+        const runtimeConfig = params.getRuntimeConfig();
+        const target = runtimeConfig.agentEntry(agentId, { ensure: true });
+        if (target) {
+          stageModelShape(
+            runtimeConfig,
+            [...target.path, "model"],
+            existingModelParts(target.entry.model).primary,
+            normalizeStringEntries(fallbacks),
+          );
+        }
+      }
+    },
+  };
 }
 
-function modelEntry(runtimeConfig: RuntimeConfig, index: number) {
-  const list = (
-    currentConfigObject(runtimeConfig.state) as {
-      agents?: { list?: unknown[] };
-    } | null
-  )?.agents?.list;
-  const existing = Array.isArray(list)
-    ? (list[index] as { model?: unknown } | undefined)?.model
-    : undefined;
-  return { path: ["agents", "list", index, "model"] as Array<string | number>, existing };
-}
-
-/** Stage a primary-model change; clearing falls back to the inherited default. */
-export function stageAgentPrimaryModel(
+// Stage the smallest config shape that expresses the selection. The gateway
+// resolver honors a bare string, { primary, fallbacks }, and { fallbacks }
+// with no primary (agent-scope.ts); staging must write all three or an
+// authored piece of the selection silently disappears.
+function stageModelShape(
   runtimeConfig: RuntimeConfig,
-  agentId: string,
-  modelId: string | null,
+  path: Array<string | number>,
+  primary: string | null,
+  fallbacks: string[] | null,
 ) {
-  const index = modelId
-    ? runtimeConfig.ensureAgentEntry(agentId)
-    : findAgentIndex(runtimeConfig, agentId);
-  if (index < 0) {
-    return;
-  }
-  const entry = modelEntry(runtimeConfig, index);
-  if (!modelId) {
-    runtimeConfig.removeFormValue(entry.path);
-  } else if (entry.existing && typeof entry.existing === "object") {
-    const fallbacks = (entry.existing as { fallbacks?: unknown }).fallbacks;
-    runtimeConfig.patchForm(entry.path, {
-      primary: modelId,
-      ...(Array.isArray(fallbacks) ? { fallbacks } : {}),
-    });
+  if (!primary && !fallbacks) {
+    runtimeConfig.removeFormValue(path);
   } else {
-    runtimeConfig.patchForm(entry.path, modelId);
+    runtimeConfig.patchForm(
+      path,
+      primary && fallbacks ? { primary, fallbacks } : primary || { fallbacks },
+    );
   }
 }
 
-/** Stage fallback-list edits, preserving the effective primary model shape. */
-export function stageAgentModelFallbacks(
-  runtimeConfig: RuntimeConfig,
-  agentId: string,
-  fallbacks: string[],
-) {
-  const config = currentConfigObject(runtimeConfig.state);
-  const normalized = normalizeStringEntries(fallbacks);
-  const resolved = resolveAgentConfig(config, agentId);
-  const primary =
-    resolveModelPrimary(resolved.entry?.model) ?? resolveModelPrimary(resolved.defaults?.model);
-  const effective = resolveEffectiveModelFallbacks(resolved.entry?.model, resolved.defaults?.model);
-  const index =
-    normalized.length > 0
-      ? primary
-        ? runtimeConfig.ensureAgentEntry(agentId)
-        : -1
-      : (effective?.length ?? 0) > 0 || findAgentIndex(runtimeConfig, agentId) >= 0
-        ? runtimeConfig.ensureAgentEntry(agentId)
-        : -1;
-  if (index < 0) {
-    return;
+function existingModelParts(existing: unknown): {
+  primary: string | null;
+  fallbacks: string[] | null;
+} {
+  if (typeof existing === "string") {
+    return { primary: existing.trim() || null, fallbacks: null };
   }
-  const entry = modelEntry(runtimeConfig, index);
-  const currentPrimary =
-    typeof entry.existing === "string"
-      ? entry.existing.trim()
-      : entry.existing &&
-          typeof entry.existing === "object" &&
-          typeof (entry.existing as { primary?: unknown }).primary === "string"
-        ? (entry.existing as { primary: string }).primary.trim()
-        : "";
-  if (normalized.length === 0) {
-    if (currentPrimary || primary) {
-      runtimeConfig.patchForm(entry.path, currentPrimary || primary);
-    } else {
-      runtimeConfig.removeFormValue(entry.path);
-    }
-  } else if (currentPrimary || primary) {
-    runtimeConfig.patchForm(entry.path, {
-      primary: currentPrimary || primary,
-      fallbacks: normalized,
-    });
+  if (existing && typeof existing === "object") {
+    const record = existing as { primary?: unknown; fallbacks?: unknown };
+    return {
+      primary: typeof record.primary === "string" ? record.primary.trim() || null : null,
+      fallbacks: Array.isArray(record.fallbacks) ? (record.fallbacks as string[]) : null,
+    };
   }
+  return { primary: null, fallbacks: null };
 }

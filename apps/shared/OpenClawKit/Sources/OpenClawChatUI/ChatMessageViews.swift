@@ -2,6 +2,112 @@ import Foundation
 import OpenClawKit
 import SwiftUI
 
+struct ChatSystemNoticeRow: View {
+    let notice: ChatTranscriptRow.SystemNotice
+    // periphery:ignore - Read and written through $isExpanded; Xcode 27 omits the projected-binding reference.
+    @State private var isExpanded = false
+
+    var body: some View {
+        if self.notice.collapsesBody {
+            DisclosureGroup(isExpanded: self.$isExpanded) {
+                Text(self.notice.body)
+                    .font(OpenClawChatTypography.footnote)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 8)
+            } label: {
+                ChatSystemLine(
+                    systemImage: self.notice.systemImage,
+                    label: self.notice.label,
+                    metric: nil)
+            }
+            .foregroundStyle(.secondary)
+            .tint(.secondary)
+            .padding(.vertical, 4)
+        } else {
+            VStack(spacing: 8) {
+                ChatSystemLine(
+                    systemImage: self.notice.systemImage,
+                    label: self.notice.label,
+                    metric: nil)
+                Text(self.notice.body)
+                    .font(OpenClawChatTypography.footnote)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+            }
+            .foregroundStyle(.secondary)
+            .padding(.vertical, 4)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text(verbatim: "\(self.notice.label), \(self.notice.body)"))
+        }
+    }
+}
+
+struct ChatHistoryDividerRow: View {
+    let divider: ChatTranscriptRow.HistoryDivider
+
+    var body: some View {
+        VStack(spacing: 6) {
+            ChatSystemLine(
+                systemImage: self.divider.systemImage,
+                label: self.divider.label,
+                metric: self.divider.metric)
+            if let description = self.divider.description {
+                Text(description)
+                    .font(OpenClawChatTypography.caption)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+            }
+        }
+        .foregroundStyle(.secondary)
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(self.accessibilityLabel)
+    }
+
+    private var accessibilityLabel: String {
+        [self.divider.label, self.divider.metric, self.divider.description]
+            .compactMap(\.self)
+            .joined(separator: ", ")
+    }
+}
+
+private struct ChatSystemLine: View {
+    let systemImage: String
+    let label: String
+    let metric: String?
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Rectangle()
+                .fill(OpenClawChatTheme.divider)
+                .frame(height: 1)
+            HStack(spacing: 5) {
+                Image(systemName: self.systemImage)
+                    .font(.system(size: 11, weight: .medium))
+                    .accessibilityHidden(true)
+                Text(self.label.uppercased())
+                    .font(OpenClawChatTypography.captionSemiBold)
+                    .tracking(0.5)
+                if let metric {
+                    Text("·")
+                        .font(OpenClawChatTypography.caption)
+                        .accessibilityHidden(true)
+                    Text(metric)
+                        .font(OpenClawChatTypography.caption)
+                        .monospacedDigit()
+                }
+            }
+            .lineLimit(1)
+            .minimumScaleFactor(0.75)
+            // The rules take what the label leaves; equal thirds truncated any label longer than a third of the row.
+            .layoutPriority(1)
+            Rectangle()
+                .fill(OpenClawChatTheme.divider)
+                .frame(height: 1)
+        }
+    }
+}
+
 private enum ChatUIConstants {
     static let bubbleMaxWidth: CGFloat = 560
     static let bubbleCorner: CGFloat = 18
@@ -70,6 +176,8 @@ private struct ChatBubbleShape: InsettableShape {
     let cornerRadius: CGFloat
     let tail: Tail
     var insetAmount: CGFloat = 0
+    /// The messaging-app tail at the bottom corner, in place of the small side notch.
+    var cornerTail = false
 
     private let tailWidth: CGFloat = 7
     private let tailBaseHeight: CGFloat = 9
@@ -83,140 +191,141 @@ private struct ChatBubbleShape: InsettableShape {
     func path(in rect: CGRect) -> Path {
         let rect = rect.insetBy(dx: self.insetAmount, dy: self.insetAmount)
         switch self.tail {
-        case .left:
-            return self.leftTailPath(in: rect, radius: self.cornerRadius)
-        case .right:
-            return self.rightTailPath(in: rect, radius: self.cornerRadius)
+        case .left, .right:
+            return self.cornerTail
+                ? self.cornerTailPath(in: rect, radius: self.cornerRadius)
+                : self.tailPath(in: rect, radius: self.cornerRadius)
         case .none:
             return Path(roundedRect: rect, cornerRadius: self.cornerRadius)
         }
     }
 
-    private func rightTailPath(in rect: CGRect, radius r: CGFloat) -> Path {
+    static let cornerTailWidth: CGFloat = 7
+
+    /// The side of the bubble sweeps out to a point at the bottom corner on the sender's side; the underside of
+    /// that point curves up to a notch and back down to the bottom edge. Drawn for the left, mirrored for the right.
+    private func cornerTailPath(in rect: CGRect, radius: CGFloat) -> Path {
+        let bodyMinX = rect.minX + Self.cornerTailWidth
+        // A very small bubble gets smaller corners and a shorter tail, so the outline never crosses itself.
+        let r = max(0, min(radius, (rect.maxX - bodyMinX) / 2, rect.height / 2))
+        let rise = min(15, max(0, rect.height - r))
+        let flatX = min(bodyMinX + 21, rect.maxX - r)
+        let notch = CGPoint(x: min(bodyMinX + 9, flatX), y: rect.maxY - min(4, rect.height / 2))
         var path = Path()
-        let bubbleMinX = rect.minX
-        let bubbleMaxX = rect.maxX - self.tailWidth
+        path.move(to: CGPoint(x: bodyMinX + r, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX - r, y: rect.minY))
+        path.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.minY + r), control: CGPoint(x: rect.maxX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - r))
+        path.addQuadCurve(to: CGPoint(x: rect.maxX - r, y: rect.maxY), control: CGPoint(x: rect.maxX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: flatX, y: rect.maxY))
+        path.addQuadCurve(to: notch, control: CGPoint(x: notch.x + (flatX - notch.x) * 0.45, y: rect.maxY))
+        path.addQuadCurve(
+            to: CGPoint(x: rect.minX, y: rect.maxY),
+            control: CGPoint(x: bodyMinX + (notch.x - bodyMinX) * 0.45, y: rect.maxY))
+        path.addQuadCurve(
+            to: CGPoint(x: bodyMinX, y: rect.maxY - rise),
+            control: CGPoint(x: bodyMinX, y: rect.maxY - rise * 0.22))
+        path.addLine(to: CGPoint(x: bodyMinX, y: rect.minY + r))
+        path.addQuadCurve(to: CGPoint(x: bodyMinX + r, y: rect.minY), control: CGPoint(x: bodyMinX, y: rect.minY))
+        path.closeSubpath()
+        guard self.tail == .right else { return path }
+        return path.applying(CGAffineTransform(translationX: rect.minX + rect.maxX, y: 0).scaledBy(x: -1, y: 1))
+    }
+
+    private func tailPath(in rect: CGRect, radius r: CGFloat) -> Path {
+        let isRight = self.tail == .right
+        let bubbleMinX = rect.minX + (isRight ? 0 : self.tailWidth)
+        let bubbleMaxX = rect.maxX - (isRight ? self.tailWidth : 0)
         let bubbleMinY = rect.minY
         let bubbleMaxY = rect.maxY
-
         let available = max(4, bubbleMaxY - bubbleMinY - 2 * r)
-        let baseH = min(tailBaseHeight, available)
+        let baseH = min(self.tailBaseHeight, available)
         let baseBottomY = bubbleMaxY - max(r * 0.45, 6)
         let baseTopY = baseBottomY - baseH
         let midY = (baseTopY + baseBottomY) / 2
 
-        let baseTop = CGPoint(x: bubbleMaxX, y: baseTopY)
-        let baseBottom = CGPoint(x: bubbleMaxX, y: baseBottomY)
-        let tip = CGPoint(x: bubbleMaxX + self.tailWidth, y: midY)
+        func addTail(to path: inout Path) {
+            let edgeX = isRight ? bubbleMaxX : bubbleMinX
+            let direction: CGFloat = isRight ? 1 : -1
+            let startY = isRight ? baseTopY : baseBottomY
+            let endY = isRight ? baseBottomY : baseTopY
+            path.addLine(to: CGPoint(x: edgeX, y: startY))
+            path.addCurve(
+                to: CGPoint(x: edgeX + direction * self.tailWidth, y: midY),
+                control1: CGPoint(x: edgeX + direction * self.tailWidth * 0.2, y: startY + direction * baseH * 0.05),
+                control2: CGPoint(x: edgeX + direction * self.tailWidth * 0.95, y: midY - direction * baseH * 0.15))
+            path.addCurve(
+                to: CGPoint(x: edgeX, y: endY),
+                control1: CGPoint(x: edgeX + direction * self.tailWidth * 0.95, y: midY + direction * baseH * 0.15),
+                control2: CGPoint(x: edgeX + direction * self.tailWidth * 0.2, y: endY - direction * baseH * 0.05))
+        }
 
+        var path = Path()
         path.move(to: CGPoint(x: bubbleMinX + r, y: bubbleMinY))
         path.addLine(to: CGPoint(x: bubbleMaxX - r, y: bubbleMinY))
         path.addQuadCurve(
             to: CGPoint(x: bubbleMaxX, y: bubbleMinY + r),
             control: CGPoint(x: bubbleMaxX, y: bubbleMinY))
-        path.addLine(to: baseTop)
-        path.addCurve(
-            to: tip,
-            control1: CGPoint(x: bubbleMaxX + self.tailWidth * 0.2, y: baseTopY + baseH * 0.05),
-            control2: CGPoint(x: bubbleMaxX + self.tailWidth * 0.95, y: midY - baseH * 0.15))
-        path.addCurve(
-            to: baseBottom,
-            control1: CGPoint(x: bubbleMaxX + self.tailWidth * 0.95, y: midY + baseH * 0.15),
-            control2: CGPoint(x: bubbleMaxX + self.tailWidth * 0.2, y: baseBottomY - baseH * 0.05))
-        self.addBottomEdge(
-            path: &path,
-            bubbleMinX: bubbleMinX,
-            bubbleMaxX: bubbleMaxX,
-            bubbleMaxY: bubbleMaxY,
-            radius: r)
-        path.addLine(to: CGPoint(x: bubbleMinX, y: bubbleMinY + r))
+        if isRight {
+            addTail(to: &path)
+        } else {
+            path.addLine(to: CGPoint(x: bubbleMaxX, y: bubbleMaxY - r))
+        }
         path.addQuadCurve(
-            to: CGPoint(x: bubbleMinX + r, y: bubbleMinY),
-            control: CGPoint(x: bubbleMinX, y: bubbleMinY))
-
-        return path
-    }
-
-    private func leftTailPath(in rect: CGRect, radius r: CGFloat) -> Path {
-        var path = Path()
-        let bubbleMinX = rect.minX + self.tailWidth
-        let bubbleMaxX = rect.maxX
-        let bubbleMinY = rect.minY
-        let bubbleMaxY = rect.maxY
-
-        let available = max(4, bubbleMaxY - bubbleMinY - 2 * r)
-        let baseH = min(tailBaseHeight, available)
-        let baseBottomY = bubbleMaxY - max(r * 0.45, 6)
-        let baseTopY = baseBottomY - baseH
-        let midY = (baseTopY + baseBottomY) / 2
-
-        let baseTop = CGPoint(x: bubbleMinX, y: baseTopY)
-        let baseBottom = CGPoint(x: bubbleMinX, y: baseBottomY)
-        let tip = CGPoint(x: bubbleMinX - self.tailWidth, y: midY)
-
-        path.move(to: CGPoint(x: bubbleMinX + r, y: bubbleMinY))
-        path.addLine(to: CGPoint(x: bubbleMaxX - r, y: bubbleMinY))
-        path.addQuadCurve(
-            to: CGPoint(x: bubbleMaxX, y: bubbleMinY + r),
-            control: CGPoint(x: bubbleMaxX, y: bubbleMinY))
-        path.addLine(to: CGPoint(x: bubbleMaxX, y: bubbleMaxY - r))
-        self.addBottomEdge(
-            path: &path,
-            bubbleMinX: bubbleMinX,
-            bubbleMaxX: bubbleMaxX,
-            bubbleMaxY: bubbleMaxY,
-            radius: r)
-        path.addLine(to: baseBottom)
-        path.addCurve(
-            to: tip,
-            control1: CGPoint(x: bubbleMinX - self.tailWidth * 0.2, y: baseBottomY - baseH * 0.05),
-            control2: CGPoint(x: bubbleMinX - self.tailWidth * 0.95, y: midY + baseH * 0.15))
-        path.addCurve(
-            to: baseTop,
-            control1: CGPoint(x: bubbleMinX - self.tailWidth * 0.95, y: midY - baseH * 0.15),
-            control2: CGPoint(x: bubbleMinX - self.tailWidth * 0.2, y: baseTopY + baseH * 0.05))
-        path.addLine(to: CGPoint(x: bubbleMinX, y: bubbleMinY + r))
-        path.addQuadCurve(
-            to: CGPoint(x: bubbleMinX + r, y: bubbleMinY),
-            control: CGPoint(x: bubbleMinX, y: bubbleMinY))
-
-        return path
-    }
-
-    private func addBottomEdge(
-        path: inout Path,
-        bubbleMinX: CGFloat,
-        bubbleMaxX: CGFloat,
-        bubbleMaxY: CGFloat,
-        radius: CGFloat)
-    {
-        path.addQuadCurve(
-            to: CGPoint(x: bubbleMaxX - radius, y: bubbleMaxY),
+            to: CGPoint(x: bubbleMaxX - r, y: bubbleMaxY),
             control: CGPoint(x: bubbleMaxX, y: bubbleMaxY))
-        path.addLine(to: CGPoint(x: bubbleMinX + radius, y: bubbleMaxY))
+        path.addLine(to: CGPoint(x: bubbleMinX + r, y: bubbleMaxY))
         path.addQuadCurve(
-            to: CGPoint(x: bubbleMinX, y: bubbleMaxY - radius),
+            to: CGPoint(x: bubbleMinX, y: bubbleMaxY - r),
             control: CGPoint(x: bubbleMinX, y: bubbleMaxY))
+        if !isRight {
+            addTail(to: &path)
+        }
+        path.addLine(to: CGPoint(x: bubbleMinX, y: bubbleMinY + r))
+        path.addQuadCurve(
+            to: CGPoint(x: bubbleMinX + r, y: bubbleMinY),
+            control: CGPoint(x: bubbleMinX, y: bubbleMinY))
+        return path
     }
 }
 
 @MainActor
 struct ChatMessageBubble: View {
+    @Environment(\.openClawAssistantUsesReadingColumn) private var usesReadingColumn
+    @Environment(\.openClawAssistantRunContent) private var isRunContent
+    @Environment(\.openClawAssistantBubblesInCleanChrome) private var assistantBubblesInClean
+    @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     let message: OpenClawChatMessage
+    var liveToolCalls: [OpenClawChatPendingToolCall] = []
+    var metadata: ChatMessageMetadata?
+    var sourcePreviews: [ChatSourcePreview] = []
+    var sourceContextRevision = UUID()
+    var sourceFaviconsEnabled = false
+    var loadSourceFavicon: @MainActor @Sendable (String) async -> Data? = { _ in nil }
     let style: OpenClawChatView.Style
     let markdownVariant: ChatMarkdownVariant
     let userAccent: Color?
-    let showsAssistantTrace: Bool
+    let displayOptions: OpenClawChatDisplayOptions
     let assistantName: String?
     let assistantAvatarText: String?
     let assistantAvatarTint: Color?
     let showsAssistantAvatar: Bool
     let isClean: Bool
     let contextWindowTokens: Int?
+    let userMessageExpanded: Bool
+    let onToggleUserMessageExpanded: @MainActor () -> Void
     let inlineWidgetResolverReady: Bool
     let inlineWidgetResourceResolver: @MainActor @Sendable (
         String,
         OpenClawChatWidgetResource?) async -> OpenClawChatWidgetResource?
+    let mediaArtifactResolverReady: Bool
+    let mediaPlaybackAllowed: @MainActor @Sendable () -> Bool
+    let loadMediaArtifact: @MainActor @Sendable (
+        String,
+        OpenClawChatMediaKind,
+        OpenClawChatPlaybackMode?) async throws -> OpenClawChatLoadedMedia?
 
     var body: some View {
         if self.isUser {
@@ -226,7 +335,7 @@ struct ChatMessageBubble: View {
                 .padding(.horizontal, 2)
         } else {
             HStack(alignment: .top, spacing: 8) {
-                if self.showsAssistantAvatar {
+                if self.showsAssistantAvatar, !self.isRunContent {
                     ChatAgentAvatar(
                         text: self.assistantAvatarText,
                         name: self.assistantName,
@@ -235,7 +344,15 @@ struct ChatMessageBubble: View {
                 }
 
                 self.messageBody
-                    .frame(maxWidth: ChatUIConstants.bubbleMaxWidth, alignment: .leading)
+                    .frame(
+                        maxWidth: self.usesReadingColumn ? .infinity : ChatUIConstants.bubbleMaxWidth,
+                        alignment: .leading)
+                    .contentShape(.accessibility, Rectangle())
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("chat-assistant-message-body")
+                    .assistantSpeakerLabel(
+                        self.assistantName,
+                        avatarHidden: !self.showsAssistantAvatar && !self.isRunContent)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 2)
@@ -245,94 +362,140 @@ struct ChatMessageBubble: View {
     private var isUser: Bool {
         self.message.role.lowercased() == "user"
     }
+}
 
-    private var messageBody: some View {
-        ChatMessageBody(
-            message: self.message,
-            isUser: self.isUser,
-            style: self.style,
-            markdownVariant: self.markdownVariant,
-            userAccent: self.userAccent,
-            showsAssistantTrace: self.showsAssistantTrace,
-            isClean: self.isClean,
-            contextWindowTokens: self.contextWindowTokens,
-            inlineWidgetResolverReady: self.inlineWidgetResolverReady,
-            inlineWidgetResourceResolver: self.inlineWidgetResourceResolver)
+enum ChatUserMessageDisclosurePolicy {
+    static let collapsedLineLimit = 12
+    static let collapsedCharacterLimit = 700
+
+    static func collapsedPreview(_ text: String) -> String? {
+        var end = Self.stringIndex(atUTF16Offset: min(text.utf16.count, Self.collapsedCharacterLimit), in: text)
+        var lineCount = 1
+        for index in text.indices where index < end {
+            guard text[index] == "\n" else { continue }
+            if lineCount == Self.collapsedLineLimit {
+                end = index
+                break
+            }
+            lineCount += 1
+        }
+        guard end < text.endIndex else { return nil }
+        return String(text[..<end]).trimmingCharacters(in: .whitespacesAndNewlines) + "…"
+    }
+
+    private static func stringIndex(atUTF16Offset offset: Int, in text: String) -> String.Index {
+        var safeOffset = offset
+        while safeOffset > 0 {
+            let utf16Index = text.utf16.index(text.utf16.startIndex, offsetBy: safeOffset)
+            if let index = String.Index(utf16Index, within: text) {
+                return index
+            }
+            safeOffset -= 1
+        }
+        return text.startIndex
     }
 }
 
-@MainActor
-private struct ChatMessageBody: View {
-    @Environment(\.openClawAssistantBubblesInCleanChrome) private var assistantBubblesInClean
-    let message: OpenClawChatMessage
-    let isUser: Bool
-    let style: OpenClawChatView.Style
-    let markdownVariant: ChatMarkdownVariant
-    let userAccent: Color?
-    let showsAssistantTrace: Bool
-    let isClean: Bool
-    let contextWindowTokens: Int?
-    let inlineWidgetResolverReady: Bool
-    let inlineWidgetResourceResolver: @MainActor @Sendable (
-        String,
-        OpenClawChatWidgetResource?) async -> OpenClawChatWidgetResource?
-
-    var body: some View {
+extension ChatMessageBubble {
+    @ViewBuilder
+    private var messageBody: some View {
         let text = self.primaryText
-        let textColor = self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText
+        let textColor = self.textColor
+        let shouldRenderBubble = self.shouldRenderBubble
+        let toolActivityItems = self.toolActivityItems
+        let hasOnboardingShadow = self.style == .onboarding && !self.isUser
 
-        if self.usesBubble {
-            self.messageContent(text: text, textColor: textColor)
-                .padding(.vertical, 10)
-                .padding(.horizontal, 12)
-                .background(self.bubbleBackground)
-                .clipShape(self.bubbleShape)
-                .overlay(self.bubbleBorder)
-                .shadow(
-                    color: self.bubbleShadowColor,
-                    radius: self.bubbleShadowRadius,
-                    y: self.bubbleShadowYOffset)
-                .padding(.leading, self.tailPaddingLeading)
-                .padding(.trailing, self.tailPaddingTrailing)
-        } else {
-            self.messageContent(text: text, textColor: textColor)
-                .padding(.vertical, 5)
-                .padding(.horizontal, 4)
+        VStack(alignment: .leading, spacing: 6) {
+            if shouldRenderBubble {
+                if self.usesBubble {
+                    self.messageContent(text: text, textColor: textColor)
+                        .padding(.vertical, 10)
+                        .padding(.horizontal, 12)
+                        .padding(self.isUser ? .trailing : .leading, self.tailInset)
+                        .background(AnyShapeStyle(self.bubbleFillColor))
+                        .clipShape(self.bubbleShape)
+                        // A round join keeps the outline of the tail's point inside the bubble's bounds.
+                        .overlay(self.bubbleShape.strokeBorder(
+                            self.bubbleBorderColor,
+                            style: StrokeStyle(
+                                lineWidth: self.bubbleBorderWidth,
+                                lineJoin: self.style == .onboarding ? .miter : .round)))
+                        .shadow(
+                            color: hasOnboardingShadow ? Color.black.opacity(0.28) : .clear,
+                            radius: hasOnboardingShadow ? 6 : 0,
+                            y: hasOnboardingShadow ? 2 : 0)
+                        .padding(.leading, self.tailPaddingLeading)
+                        .padding(.trailing, self.tailPaddingTrailing)
+                } else {
+                    self.messageContent(text: text, textColor: textColor)
+                        .padding(.vertical, 5)
+                        .padding(.horizontal, 4)
+                }
+            }
+
+            if !toolActivityItems.isEmpty {
+                ChatToolActivityList(items: toolActivityItems)
+                    .padding(.horizontal, 4)
+            }
+
+            if !shouldRenderBubble {
+                self.footer
+                    .padding(.horizontal, 4)
+            }
         }
+    }
+
+    private var textColor: Color {
+        if self.isDesktopLayout {
+            return OpenClawChatTheme.desktopText(in: self.colorScheme, contrast: self.colorSchemeContrast)
+        }
+        return self.isUser
+            ? OpenClawChatTheme.userText(on: self.userAccent)
+            : OpenClawChatTheme.assistantText
     }
 
     private func messageContent(text: String, textColor: Color) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            if self.isToolResultMessage, self.showsAssistantTrace {
-                if !text.isEmpty {
-                    ToolResultCard(
-                        title: self.toolResultTitle,
-                        text: text,
-                        isUser: self.isUser,
-                        toolName: self.message.toolName)
-                }
-            } else if self.isUser {
-                ChatMarkdownRenderer(
-                    text: text,
-                    context: .user,
-                    variant: self.markdownVariant,
-                    font: OpenClawChatTypography.body,
-                    textColor: textColor)
+            if self.isUser {
+                self.userMessageText(text: text, textColor: textColor)
             } else {
                 ChatAssistantTextBody(
                     text: text,
                     markdownVariant: self.markdownVariant,
-                    includesThinking: self.showsAssistantTrace)
+                    includesThinking: self.displayOptions.contains(.reasoning),
+                    textColor: textColor)
             }
 
-            if self.showsLinkPreview, let previewURL = chatFirstPreviewURL(in: text) {
+            if !self.sourcePreviews.isEmpty {
+                ChatSourcePreviewsView(
+                    sources: self.sourcePreviews,
+                    contextRevision: self.sourceContextRevision,
+                    faviconsEnabled: self.sourceFaviconsEnabled,
+                    loadFavicon: self.loadSourceFavicon)
+            }
+
+            if let previewURL = self.linkPreviewURL {
                 ChatLinkPreview(url: previewURL)
             }
 
-            if !self.inlineAttachments.isEmpty {
-                ForEach(self.inlineAttachments.indices, id: \.self) { idx in
-                    AttachmentRow(att: self.inlineAttachments[idx], isUser: self.isUser)
+            if !self.visibleInlineAttachments.isEmpty {
+                ForEach(self.visibleInlineAttachments.indices, id: \.self) { idx in
+                    AttachmentRow(
+                        att: self.visibleInlineAttachments[idx],
+                        isUser: self.isUser,
+                        textColor: textColor,
+                        resolverReady: self.mediaArtifactResolverReady,
+                        playbackAllowed: self.mediaPlaybackAllowed,
+                        loadMedia: self.loadMediaArtifact)
                 }
+            }
+
+            if self.omittedImageAttachmentCount > 0 {
+                Text(String(
+                    format: String(localized: "Additional images hidden: %lld"),
+                    Int64(self.omittedImageAttachmentCount)))
+                    .font(OpenClawChatTypography.footnote)
+                    .foregroundStyle(.secondary)
             }
 
             ForEach(self.inlineWidgets.indices, id: \.self) { idx in
@@ -342,73 +505,151 @@ private struct ChatMessageBody: View {
                     resolveResource: self.inlineWidgetResourceResolver)
             }
 
-            if self.showsAssistantTrace, !self.toolCalls.isEmpty {
-                ForEach(self.toolCalls.indices, id: \.self) { idx in
-                    ToolCallCard(
-                        content: self.toolCalls[idx])
-                }
-            }
-
-            if self.showsAssistantTrace, !self.inlineToolResults.isEmpty {
-                ForEach(self.inlineToolResults.indices, id: \.self) { idx in
-                    let toolResult = self.inlineToolResults[idx]
-                    let display = ToolDisplayRegistry.resolve(name: toolResult.name ?? "tool", args: nil)
-                    ToolResultCard(
-                        title: "\(display.emoji) \(display.title)",
-                        text: toolResult.text ?? "",
-                        isUser: self.isUser,
-                        toolName: toolResult.name)
-                }
-            }
-
-            if let usagePresentation = self.usagePresentation {
-                Text(usagePresentation.text)
-                    .font(OpenClawChatTypography.caption2)
-                    .monospacedDigit()
-                    .foregroundStyle(self.usageTint(usagePresentation.pressure))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(String(localized: "Message usage"))
-                    .accessibilityValue(usagePresentation.accessibilityValue)
-            }
+            self.footer
         }
         .textSelection(.enabled)
         .foregroundStyle(textColor)
     }
 
+    @ViewBuilder
+    private func userMessageText(text: String, textColor: Color) -> some View {
+        let preview = ChatUserMessageDisclosurePolicy.collapsedPreview(text)
+
+        if let preview, !self.userMessageExpanded {
+            Text(preview)
+                .font(OpenClawChatTypography.body)
+                .foregroundStyle(textColor)
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            ChatMarkdownRenderer(
+                text: text,
+                context: .user,
+                variant: self.markdownVariant,
+                textColor: textColor)
+        }
+
+        if preview != nil {
+            Button {
+                withAnimation(.easeOut(duration: 0.16)) {
+                    self.onToggleUserMessageExpanded()
+                }
+            } label: {
+                Text(String(localized: self.userMessageExpanded ? "Show less" : "Show more"))
+                    .font(OpenClawChatTypography.caption)
+                    .foregroundStyle(textColor.opacity(self.isDesktopLayout ? 1 : 0.78))
+                    .padding(.horizontal, 10)
+                    .frame(minHeight: 30)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color.white.opacity(self.isDesktopLayout ? 0.04 : 0.14)))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(Color.white.opacity(0.12), lineWidth: 0.5))
+            }
+            .buttonStyle(.plain)
+            .accessibilityValue(String(
+                localized: self.userMessageExpanded ? "Expanded" : "Collapsed"))
+            .accessibilityIdentifier("chat-user-message-disclosure-toggle")
+        }
+    }
+
+    @ViewBuilder
+    private var footer: some View {
+        if self.metadata != nil || self.usagePresentation != nil {
+            HStack(spacing: 8) {
+                if let metadata = self.metadata {
+                    ChatMessageMetadataView(metadata: metadata)
+                }
+                if let usage = self.usagePresentation {
+                    self.usageLine(usage)
+                }
+            }
+            .lineLimit(1)
+        }
+    }
+
+    private func usageLine(_ presentation: ChatMessageUsagePresentation) -> some View {
+        Text(presentation.text)
+            .font(OpenClawChatTypography.caption2)
+            .monospacedDigit()
+            .foregroundStyle(self.usageTint(presentation.pressure))
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(String(localized: "Message usage"))
+            .accessibilityValue(presentation.accessibilityValue)
+    }
+
     private var usesBubble: Bool {
         // Keep the guarded base condition; iOS additionally opts assistant
         // messages into bubbles via the clean-chrome environment flag.
-        self.isUser || self.style == .onboarding || !self.isClean || self.assistantBubblesInClean
+        if self.isUser { return true }
+        return !self.isRunContent && (self.style == .onboarding || !self.isClean || self.assistantBubblesInClean)
     }
 
-    private var showsLinkPreview: Bool {
+    private var shouldRenderBubble: Bool {
+        guard !self.message.isToolResult else { return false }
+        return !self.primaryText.isEmpty ||
+            !self.inlineAttachments.isEmpty ||
+            !self.inlineWidgets.isEmpty ||
+            self.linkPreviewURL != nil
+    }
+
+    private var toolActivityItems: [ChatToolActivityItem] {
+        guard self.displayOptions.contains(.toolActivity) else { return [] }
+        // Results normally reach us merged into the calling assistant message
+        // (ChatTranscriptRow.mergeToolResults); this branch is the orphan
+        // fallback for results whose call is not in the preceding message.
+        if self.message.isToolResult {
+            return [ChatToolActivityItem(
+                id: self.message.content.first?.id ?? "result-0",
+                name: self.message.toolName,
+                arguments: nil,
+                details: self.message.details,
+                resultText: self.primaryText,
+                state: ChatToolActivity
+                    .resultIsError(self.message.isError, text: self.primaryText) ? .failed : .finished,
+                liveDiffStat: nil,
+                activity: self.message.activity?.first,
+                activityPrepared: self.message.activity != nil)]
+        }
+        guard self.message.role.lowercased() == "assistant" else { return [] }
+        return ChatToolActivity.items(
+            calls: self.message.content.filter(\.isToolCall),
+            results: self.message.content.filter(\.isToolResult),
+            activity: self.message.activity,
+            liveTools: self.liveToolCalls)
+    }
+
+    private var linkPreviewURL: URL? {
         let role = self.message.role.lowercased()
-        return role == "user" || role == "assistant"
+        guard role == "user" || role == "assistant",
+              let url = chatFirstPreviewURL(in: self.primaryText),
+              role != "assistant" || !self.sourcePreviews.contains(where: { $0.represents(url) })
+        else { return nil }
+        return url
     }
 
     private var primaryText: String {
-        let parts = self.message.content.compactMap { content -> String? in
-            let kind = (content.type ?? "text").lowercased()
-            guard kind == "text" || kind.isEmpty else { return nil }
-            return content.text
-        }
-        return OpenClawChatMessage.displayText(
-            contentText: parts.joined(separator: "\n"),
-            role: self.message.role,
-            stopReason: self.message.stopReason,
-            errorMessage: self.message.errorMessage)
+        ChatMessageVisibleText.displayText(
+            in: self.message,
+            includeThinking: self.displayOptions.contains(.reasoning))
     }
 
     private var inlineAttachments: [OpenClawChatMessageContent] {
-        self.message.content.filter { content in
-            switch content.type ?? "text" {
-            case "file", "attachment":
-                true
-            default:
-                false
-            }
+        self.message.content.filter(\.isInlineAttachment)
+    }
+
+    private var visibleInlineAttachments: [OpenClawChatMessageContent] {
+        var imageCount = 0
+        return self.inlineAttachments.filter { attachment in
+            guard attachment.mediaKind == .image else { return true }
+            defer { imageCount += 1 }
+            return imageCount < 4
         }
+    }
+
+    private var omittedImageAttachmentCount: Int {
+        max(0, self.inlineAttachments.filter { $0.mediaKind == .image }.count - 4)
     }
 
     private var inlineWidgets: [OpenClawChatCanvasPreview] {
@@ -420,28 +661,6 @@ private struct ChatMessageBody: View {
             else { return nil }
             return content.preview
         }
-    }
-
-    private var toolCalls: [OpenClawChatMessageContent] {
-        self.message.content.filter { content in
-            let kind = (content.type ?? "").lowercased()
-            if ["toolcall", "tool_call", "tooluse", "tool_use"].contains(kind) {
-                return true
-            }
-            return content.name != nil && content.arguments != nil
-        }
-    }
-
-    private var inlineToolResults: [OpenClawChatMessageContent] {
-        self.message.content.filter { content in
-            let kind = (content.type ?? "").lowercased()
-            return kind == "toolresult" || kind == "tool_result"
-        }
-    }
-
-    private var isToolResultMessage: Bool {
-        let role = self.message.role.lowercased()
-        return role == "toolresult" || role == "tool_result"
     }
 
     private var usagePresentation: ChatMessageUsagePresentation? {
@@ -461,27 +680,17 @@ private struct ChatMessageBody: View {
         }
     }
 
-    private var toolResultTitle: String {
-        if let name = self.message.toolName, !name.isEmpty {
-            let display = ToolDisplayRegistry.resolve(name: name, args: nil)
-            return "\(display.emoji) \(display.title)"
-        }
-        let display = ToolDisplayRegistry.resolve(name: "tool", args: nil)
-        return "\(display.emoji) \(display.title)"
-    }
-
     private var bubbleFillColor: Color {
         if self.isUser {
+            if self.isDesktopLayout {
+                return OpenClawChatTheme.desktopUserBubble(in: self.colorScheme, accent: self.userAccent)
+            }
             return self.userAccent ?? OpenClawChatTheme.userBubble
         }
         if self.style == .onboarding {
             return OpenClawChatTheme.onboardingAssistantBubble
         }
         return OpenClawChatTheme.assistantBubble
-    }
-
-    private var bubbleBackground: AnyShapeStyle {
-        AnyShapeStyle(self.bubbleFillColor)
     }
 
     private var bubbleBorderColor: Color {
@@ -500,17 +709,26 @@ private struct ChatMessageBody: View {
         return 1
     }
 
-    private var bubbleBorder: some View {
-        self.bubbleShape.strokeBorder(self.bubbleBorderColor, lineWidth: self.bubbleBorderWidth)
-    }
-
     private var bubbleShape: ChatBubbleShape {
-        ChatBubbleShape(cornerRadius: ChatUIConstants.bubbleCorner, tail: self.bubbleTail)
+        // SwiftUI already mirrors Shape paths in RTL on the supported OS versions.
+        ChatBubbleShape(
+            cornerRadius: ChatUIConstants.bubbleCorner,
+            tail: self.usesTail ? (self.isUser ? .right : .left) : .none,
+            cornerTail: self.style != .onboarding)
     }
 
-    private var bubbleTail: ChatBubbleShape.Tail {
-        guard self.style == .onboarding else { return .none }
-        return self.isUser ? .right : .left
+    /// Without an avatar beside it, the tail is what says whose bubble it is.
+    private var usesTail: Bool {
+        #if os(iOS)
+        self.style == .onboarding || !self.showsAssistantAvatar
+        #else
+        self.style == .onboarding
+        #endif
+    }
+
+    /// The tail is drawn inside the bubble's frame; keep the text clear of it.
+    private var tailInset: CGFloat {
+        self.usesTail && self.style != .onboarding ? ChatBubbleShape.cornerTailWidth : 0
     }
 
     private var tailPaddingLeading: CGFloat {
@@ -520,163 +738,125 @@ private struct ChatMessageBody: View {
     private var tailPaddingTrailing: CGFloat {
         self.style == .onboarding && self.isUser ? 8 : 0
     }
-
-    private var bubbleShadowColor: Color {
-        self.style == .onboarding && !self.isUser ? Color.black.opacity(0.28) : .clear
-    }
-
-    private var bubbleShadowRadius: CGFloat {
-        self.style == .onboarding && !self.isUser ? 6 : 0
-    }
-
-    private var bubbleShadowYOffset: CGFloat {
-        self.style == .onboarding && !self.isUser ? 2 : 0
-    }
 }
 
 private struct AttachmentRow: View {
+    @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
+
     let att: OpenClawChatMessageContent
     let isUser: Bool
+    let textColor: Color
+    let resolverReady: Bool
+    let playbackAllowed: @MainActor @Sendable () -> Bool
+    let loadMedia: @MainActor @Sendable (
+        String,
+        OpenClawChatMediaKind,
+        OpenClawChatPlaybackMode?) async throws -> OpenClawChatLoadedMedia?
 
     var body: some View {
+        if let artifactId = self.fetchableArtifactId, let kind = self.att.mediaKind {
+            switch kind {
+            case .file:
+                ChatFileAttachment(
+                    artifactId: artifactId,
+                    label: self.attachmentLabel,
+                    fileName: self.att.fileName ?? self.attachmentLabel,
+                    resolverReady: self.resolverReady,
+                    load: { try await self.loadMedia($0, .file, nil) })
+            case .image:
+                ChatMediaImageAttachment(
+                    artifactId: artifactId,
+                    label: self.attachmentLabel,
+                    resolverReady: self.resolverReady,
+                    load: { try await self.loadMedia($0, .image, nil) })
+            case .audio:
+                ChatMediaAudioAttachment(
+                    artifactId: artifactId,
+                    label: self.attachmentLabel,
+                    durationSeconds: self.att.durationSeconds,
+                    resolverReady: self.resolverReady,
+                    playbackAllowed: self.playbackAllowed,
+                    load: { try await self.loadMedia($0, .audio, self.att.playback) })
+            case .video:
+                ChatMediaVideoAttachment(
+                    artifactId: artifactId,
+                    label: self.attachmentLabel,
+                    width: self.att.width,
+                    height: self.att.height,
+                    resolverReady: self.resolverReady,
+                    playbackAllowed: self.playbackAllowed,
+                    load: { try await self.loadMedia($0, .video, self.att.playback) })
+            }
+        } else {
+            self.fallbackRow
+        }
+    }
+
+    private var fallbackRow: some View {
         HStack(spacing: 8) {
-            Image(systemName: self.isAudio ? "waveform" : "paperclip")
-            Text(self.isAudio ? "Voice note" : (self.att.fileName ?? "Attachment"))
-                .font(OpenClawChatTypography.footnote)
-                .lineLimit(1)
-                .foregroundStyle(self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText)
+            Image(systemName: OpenClawChatPickerAttachmentMetadata.fileIcon(
+                mimeType: self.att.mimeType ?? "",
+                fileName: self.att.fileName ?? ""))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(self.isAudio && self.att.durationSeconds != nil && self.att.url == nil
+                    ? String(localized: "Voice note") : self.attachmentLabel)
+                    .font(OpenClawChatTypography.footnote)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .foregroundStyle(self.textColor)
+                if let sizeBytes = self.att.sizeBytes {
+                    Text(ByteCountFormatter.string(fromByteCount: Int64(sizeBytes), countStyle: .file))
+                        .font(OpenClawChatTypography.caption)
+                        .foregroundStyle(self.textColor.opacity(self.isDesktopLayout ? 0.9 : 0.72))
+                }
+            }
             if self.isAudio, let durationSeconds = self.att.durationSeconds {
                 Text(openClawVoiceNoteDurationLabel(durationSeconds))
                     .font(OpenClawChatTypography.footnote)
-                    .foregroundStyle(
-                        self.isUser
-                            ? OpenClawChatTheme.userText.opacity(0.72)
-                            : OpenClawChatTheme.assistantText.opacity(0.72))
+                    .foregroundStyle(self.textColor.opacity(self.isDesktopLayout ? 0.9 : 0.72))
             }
             Spacer()
         }
         .padding(10)
-        .background(self.isUser ? Color.white.opacity(0.2) : Color.black.opacity(0.04))
+        .background(self.isUser
+            ? Color.white.opacity(self.isDesktopLayout ? 0.04 : 0.2)
+            : Color.black.opacity(0.04))
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     private var isAudio: Bool {
-        self.att.mimeType?.hasPrefix("audio/") == true
-    }
-}
-
-private struct ToolCallCard: View {
-    let content: OpenClawChatMessageContent
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Text(self.toolName)
-                    .font(OpenClawChatTypography.footnoteSemiBold)
-                Spacer(minLength: 0)
-            }
-
-            if let summary = self.summary, !summary.isEmpty {
-                Text(summary)
-                    .font(OpenClawChatTypography.mono(size: 13, relativeTo: .footnote))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-        }
-        .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(OpenClawChatTheme.subtleCard)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)))
+        self.att.mediaKind == .audio
     }
 
-    private var toolName: String {
-        "\(self.display.emoji) \(self.display.title)"
+    private var fetchableArtifactId: String? {
+        guard let kind = self.att.mediaKind else { return nil }
+        let value = self.att.artifactId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return !value.isEmpty && kind.acceptsManagedArtifactID(value) ? value : nil
     }
 
-    private var summary: String? {
-        self.display.detailLine
-    }
-
-    private var display: ToolDisplaySummary {
-        ToolDisplayRegistry.resolve(name: self.content.name ?? "tool", args: self.content.arguments)
-    }
-}
-
-private struct ToolResultCard: View {
-    let title: String
-    let text: String
-    let isUser: Bool
-    let toolName: String?
-    @State private var expanded = false
-
-    var body: some View {
-        if !self.displayContent.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 6) {
-                    Text(self.title)
-                        .font(OpenClawChatTypography.footnoteSemiBold)
-                    Spacer(minLength: 0)
-                }
-
-                Text(self.displayText)
-                    .font(OpenClawChatTypography.mono(size: 13, relativeTo: .footnote))
-                    .foregroundStyle(self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText)
-                    .lineLimit(self.expanded ? nil : Self.previewLineLimit)
-
-                if self.shouldShowToggle {
-                    Button(self.expanded ? "Show less" : "Show full output") {
-                        self.expanded.toggle()
-                    }
-                    .buttonStyle(.plain)
-                    .font(OpenClawChatTypography.caption)
-                    .foregroundStyle(.secondary)
-                }
-            }
-            .padding(10)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(OpenClawChatTheme.subtleCard)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)))
-        }
-    }
-
-    private static let previewLineLimit = 8
-
-    private var displayContent: String {
-        ToolResultTextFormatter.format(text: self.text, toolName: self.toolName)
-    }
-
-    private var lines: [Substring] {
-        self.displayContent.components(separatedBy: .newlines).map { Substring($0) }
-    }
-
-    private var displayText: String {
-        guard !self.expanded, self.lines.count > Self.previewLineLimit else { return self.displayContent }
-        return self.lines.prefix(Self.previewLineLimit).joined(separator: "\n") + "\n…"
-    }
-
-    private var shouldShowToggle: Bool {
-        self.lines.count > Self.previewLineLimit
+    private var attachmentLabel: String {
+        let values = [self.att.alt, self.att.fileName]
+        return values.lazy
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty } ?? String(localized: "Attachment")
     }
 }
 
 @MainActor
 struct ChatTypingIndicatorBubble: View {
+    @Environment(\.openClawAssistantRunContent) private var isRunContent
     let style: OpenClawChatView.Style
     let assistantName: String?
     let assistantAvatarText: String?
     let assistantAvatarTint: Color?
     let showsAssistantAvatar: Bool
     let isClean: Bool
+    let runIdentity: String
+    let outputTokens: Int?
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
-            if self.showsAssistantAvatar {
+            if self.showsAssistantAvatar, !self.isRunContent {
                 ChatAgentAvatar(
                     text: self.assistantAvatarText,
                     name: self.assistantName,
@@ -685,10 +865,10 @@ struct ChatTypingIndicatorBubble: View {
             }
 
             HStack(spacing: 9) {
-                TypingDots()
-                Text("Writing")
-                    .font(OpenClawChatTypography.captionSemiBold)
-                    .foregroundStyle(.secondary)
+                ChatWorkingIndicatorContent(
+                    runIdentity: self.runIdentity,
+                    outputTokens: self.outputTokens)
+                    .id(self.runIdentity)
             }
             .padding(.vertical, self.isClean ? 5 : (self.style == .standard ? 10 : 9))
             .padding(.horizontal, self.isClean ? 4 : (self.style == .standard ? 12 : 14))
@@ -697,6 +877,32 @@ struct ChatTypingIndicatorBubble: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .focusable(false)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(
+            Text("Writing")
+                .font(OpenClawChatTypography.caption))
+    }
+}
+
+private struct ChatWorkingIndicatorContent: View {
+    @State private var startedAt: Date
+    let seed: String
+    let outputTokens: Int?
+
+    init(runIdentity: String, outputTokens: Int?) {
+        _startedAt = State(initialValue: Date())
+        self.seed = runIdentity
+        self.outputTokens = outputTokens
+    }
+
+    var body: some View {
+        HStack(spacing: 9) {
+            ChatWorkingClawView(seed: self.seed)
+            ChatWorkingStatusText(
+                startedAt: self.startedAt,
+                seed: self.seed,
+                outputTokens: self.outputTokens)
+        }
     }
 }
 
@@ -734,61 +940,36 @@ struct ChatOutboxStatusLabel: View {
     let state: OpenClawChatOutboxMessageState
 
     var body: some View {
+        let presentation = self.presentation
         HStack(spacing: 4) {
-            Image(systemName: self.iconName)
+            Image(systemName: presentation.iconName)
                 .font(.system(size: 10, weight: .semibold))
-            Text(self.title)
+            Text(presentation.title)
                 .font(OpenClawChatTypography.caption)
         }
         .foregroundStyle(self.state.isFailed ? AnyShapeStyle(OpenClawChatTheme.danger) : AnyShapeStyle(.secondary))
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
-            Text(self.accessibilityText)
+            Text(presentation.accessibilityText)
                 .font(OpenClawChatTypography.caption))
     }
 
-    private var title: LocalizedStringResource {
+    private var presentation: (
+        title: LocalizedStringResource,
+        iconName: String,
+        accessibilityText: LocalizedStringResource)
+    {
         switch self.state {
         case .queued:
-            "Queued"
+            ("Queued", "clock", "Queued, sends when reconnected")
         case .sending:
-            "Sending…"
+            ("Sending…", "arrow.up.circle", "Sending")
         case .confirming:
-            "Confirming…"
+            ("Confirming…", "checkmark.circle", "Sent, waiting for chat history confirmation")
         case let .failed(reason) where reason == OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError:
-            "Delivery unknown"
+            ("Delivery unknown", "questionmark.circle", "Delivery unconfirmed, touch and hold to retry or delete")
         case .failed:
-            "Not sent"
-        }
-    }
-
-    private var iconName: String {
-        switch self.state {
-        case .queued:
-            "clock"
-        case .sending:
-            "arrow.up.circle"
-        case .confirming:
-            "checkmark.circle"
-        case let .failed(reason) where reason == OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError:
-            "questionmark.circle"
-        case .failed:
-            "exclamationmark.circle"
-        }
-    }
-
-    private var accessibilityText: LocalizedStringResource {
-        switch self.state {
-        case .queued:
-            "Queued, sends when reconnected"
-        case .sending:
-            "Sending"
-        case .confirming:
-            "Sent, waiting for chat history confirmation"
-        case let .failed(reason) where reason == OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError:
-            "Delivery unconfirmed, touch and hold to retry or delete"
-        case .failed:
-            "Not sent, touch and hold to retry or delete"
+            ("Not sent", "exclamationmark.circle", "Not sent, touch and hold to retry or delete")
         }
     }
 }
@@ -798,18 +979,31 @@ extension ChatTypingIndicatorBubble: @MainActor Equatable {
         lhs.style == rhs.style &&
             lhs.assistantName == rhs.assistantName &&
             lhs.assistantAvatarText == rhs.assistantAvatarText &&
+            lhs.assistantAvatarTint == rhs.assistantAvatarTint &&
             lhs.showsAssistantAvatar == rhs.showsAssistantAvatar &&
-            lhs.isClean == rhs.isClean
+            lhs.isClean == rhs.isClean &&
+            lhs.runIdentity == rhs.runIdentity &&
+            lhs.outputTokens == rhs.outputTokens
     }
 }
 
 // Keep this explicit for SwiftPM toolchains where SwiftUI macro plugins are unavailable.
 // swiftformat:disable environmentEntry
+private struct OpenClawAssistantUsesReadingColumnKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
 private struct OpenClawAssistantBubblesInCleanChromeKey: EnvironmentKey {
     static let defaultValue = false
 }
 
 extension EnvironmentValues {
+    /// The chat column owns tablet width for both streaming and completed answers.
+    var openClawAssistantUsesReadingColumn: Bool {
+        get { self[OpenClawAssistantUsesReadingColumnKey.self] }
+        set { self[OpenClawAssistantUsesReadingColumnKey.self] = newValue }
+    }
+
     /// Clients that want iMessage-style assistant bubbles in the clean chrome
     /// (the iOS app) opt in; the default keeps the plain clean look elsewhere.
     public var openClawAssistantBubblesInCleanChrome: Bool {
@@ -821,41 +1015,70 @@ extension EnvironmentValues {
 // swiftformat:enable environmentEntry
 
 private struct AssistantBubbleContainerStyle: ViewModifier {
+    @Environment(\.openClawAssistantRunContent) private var isRunContent
     let isClean: Bool
     let cornerRadius: CGFloat
 
     @Environment(\.openClawAssistantBubblesInCleanChrome) private var bubblesInClean
+    @Environment(\.openClawAssistantUsesReadingColumn) private var usesReadingColumn
 
     func body(content: Content) -> some View {
-        if self.isClean, !self.bubblesInClean {
-            content
-        } else {
-            content
-                // Clean call sites pre-pad only ~4pt; bubbles need room to breathe.
-                    .padding(self.isClean ? 8 : 0)
-                    .background(
-                        RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
-                            .fill(OpenClawChatTheme.assistantBubble))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
+        Group {
+            if self.isRunContent || (self.isClean && !self.bubblesInClean) {
+                content
+            } else {
+                content
+                    // Clean call sites pre-pad only ~4pt; bubbles need room to breathe.
+                        .padding(self.isClean ? 8 : 0)
+                        .background(
+                            RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
+                                .fill(OpenClawChatTheme.assistantBubble))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
+                                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
+            }
         }
+        .frame(maxWidth: self.usesReadingColumn ? .infinity : ChatUIConstants.bubbleMaxWidth, alignment: .leading)
     }
 }
 
 extension View {
-    fileprivate func assistantBubbleContainerStyle(isClean: Bool, cornerRadius: CGFloat = 16) -> some View {
-        self.modifier(AssistantBubbleContainerStyle(isClean: isClean, cornerRadius: cornerRadius))
-            .frame(maxWidth: ChatUIConstants.bubbleMaxWidth, alignment: .leading)
+    func assistantBubbleContainerStyle(isClean: Bool, cornerRadius: CGFloat = 16) -> some View {
+        modifier(AssistantBubbleContainerStyle(isClean: isClean, cornerRadius: cornerRadius))
             .focusable(false)
+    }
+}
+
+/// Defers action construction until SwiftUI evaluates this body, instead of eagerly assembling actions
+/// in every parent-row update. SwiftUI owns when menu content is evaluated.
+struct ChatDeferredContent<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        self.content()
+    }
+}
+
+struct ChatStreamingAssistantText {
+    let sourceText: String
+    let includesThinking: Bool
+    let segments: [AssistantTextSegment]
+
+    init(sourceText: String, includesThinking: Bool) {
+        self.sourceText = sourceText
+        self.includesThinking = includesThinking
+        self.segments = AssistantTextParser.segments(from: sourceText, includeThinking: includesThinking)
     }
 }
 
 @MainActor
 struct ChatStreamingAssistantBubble: View {
-    let text: String
+    @Environment(\.openClawAssistantRunContent) private var isRunContent
+    @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    let text: ChatStreamingAssistantText
     let markdownVariant: ChatMarkdownVariant
-    let showsAssistantTrace: Bool
     let assistantName: String?
     let assistantAvatarText: String?
     let assistantAvatarTint: Color?
@@ -864,7 +1087,7 @@ struct ChatStreamingAssistantBubble: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            if self.showsAssistantAvatar {
+            if self.showsAssistantAvatar, !self.isRunContent {
                 ChatAgentAvatar(
                     text: self.assistantAvatarText,
                     name: self.assistantName,
@@ -873,100 +1096,45 @@ struct ChatStreamingAssistantBubble: View {
             }
 
             VStack(alignment: .leading, spacing: 10) {
-                ChatAssistantTextBody(
+                ChatStreamingAssistantTextBody(
                     text: self.text,
                     markdownVariant: self.markdownVariant,
-                    includesThinking: self.showsAssistantTrace,
-                    isComplete: false)
+                    textColor: self.isDesktopLayout
+                        ? OpenClawChatTheme.desktopText(in: self.colorScheme, contrast: self.colorSchemeContrast)
+                        : OpenClawChatTheme.assistantText)
             }
             .padding(self.isClean ? 4 : 12)
             .assistantBubbleContainerStyle(isClean: self.isClean)
+            .contentShape(.accessibility, Rectangle())
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("chat-streaming-assistant-body")
+            .assistantSpeakerLabel(
+                self.assistantName,
+                avatarHidden: !self.showsAssistantAvatar && !self.isRunContent)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
-@MainActor
-struct ChatPendingToolsBubble: View {
-    let toolCalls: [OpenClawChatPendingToolCall]
-    let isClean: Bool
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label("Running tools…", systemImage: "hammer")
-                .font(OpenClawChatTypography.caption)
-                .foregroundStyle(.secondary)
-
-            ForEach(self.toolCalls) { call in
-                let display = ToolDisplayRegistry.resolve(name: call.name, args: call.args)
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(verbatim: "\(display.emoji) \(display.label)")
-                            .font(OpenClawChatTypography.mono(size: 13, relativeTo: .footnote))
-                            .lineLimit(1)
-                        Spacer(minLength: 0)
-                        ProgressView().controlSize(.mini)
-                    }
-                    if let detail = display.detailLine, !detail.isEmpty {
-                        Text(detail)
-                            .font(OpenClawChatTypography.mono(size: 12, relativeTo: .caption))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                    }
-                }
-                .padding(10)
-                .background(Color.white.opacity(0.06))
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            }
-        }
-        .padding(self.isClean ? 4 : 12)
-        .assistantBubbleContainerStyle(isClean: self.isClean)
-    }
-}
-
-extension ChatPendingToolsBubble: @MainActor Equatable {
+extension ChatStreamingAssistantBubble: @MainActor Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.toolCalls == rhs.toolCalls && lhs.isClean == rhs.isClean
+        lhs.text.sourceText == rhs.text.sourceText &&
+            lhs.text.includesThinking == rhs.text.includesThinking &&
+            lhs.markdownVariant == rhs.markdownVariant &&
+            lhs.assistantName == rhs.assistantName &&
+            lhs.assistantAvatarText == rhs.assistantAvatarText &&
+            lhs.assistantAvatarTint == rhs.assistantAvatarTint &&
+            lhs.showsAssistantAvatar == rhs.showsAssistantAvatar &&
+            lhs.isClean == rhs.isClean
     }
 }
 
-@MainActor
-private struct TypingDots: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.scenePhase) private var scenePhase
-    @State private var animate = false
-
-    var body: some View {
-        HStack(spacing: 5) {
-            ForEach(0..<3, id: \.self) { idx in
-                Circle()
-                    .fill(Color.secondary.opacity(0.55))
-                    .frame(width: 7, height: 7)
-                    .scaleEffect(self.reduceMotion ? 0.85 : (self.animate ? 1.05 : 0.70))
-                    .opacity(self.reduceMotion ? 0.55 : (self.animate ? 0.95 : 0.30))
-                    .animation(
-                        self.reduceMotion ? nil : .easeInOut(duration: 0.55)
-                            .repeatForever(autoreverses: true)
-                            .delay(Double(idx) * 0.16),
-                        value: self.animate)
-            }
+extension AssistantTextSegment.Kind {
+    var markdownTypography: ChatMarkdownRenderer.Typography {
+        switch self {
+        case .response: .response
+        case .thinking: .thinking
         }
-        .onAppear { self.updateAnimationState() }
-        .onDisappear { self.animate = false }
-        .onChange(of: self.scenePhase) { _, _ in
-            self.updateAnimationState()
-        }
-        .onChange(of: self.reduceMotion) { _, _ in
-            self.updateAnimationState()
-        }
-    }
-
-    private func updateAnimationState() {
-        guard !self.reduceMotion, self.scenePhase == .active else {
-            self.animate = false
-            return
-        }
-        self.animate = true
     }
 }
 
@@ -974,37 +1142,19 @@ private struct ChatAssistantTextBody: View {
     let text: String
     let markdownVariant: ChatMarkdownVariant
     let includesThinking: Bool
-    var isComplete: Bool = true
+    let textColor: Color
 
     var body: some View {
-        if self.isComplete {
-            self.completeBody
-        } else {
-            ChatStreamingAssistantTextBody(
-                text: self.text,
-                markdownVariant: self.markdownVariant,
-                includesThinking: self.includesThinking)
-        }
-    }
-
-    private var completeBody: some View {
         let segments = AssistantTextParser.segments(from: self.text, includeThinking: self.includesThinking)
         return VStack(alignment: .leading, spacing: 10) {
             ForEach(segments) { segment in
-                let font = segment.kind == .thinking
-                    ? OpenClawChatTypography.callout.italic()
-                    : OpenClawChatTypography.body
-                let inlineMathTypography: ChatMarkdownRenderer.InlineMathTypography = segment.kind == .thinking
-                    ? .callout
-                    : .body
                 ChatMarkdownRenderer(
                     text: segment.text,
                     context: .assistant,
                     variant: self.markdownVariant,
-                    font: font,
-                    textColor: OpenClawChatTheme.assistantText,
-                    inlineMathTypography: inlineMathTypography,
-                    isComplete: self.isComplete)
+                    typography: segment.kind.markdownTypography,
+                    textColor: self.textColor,
+                    isComplete: true)
             }
         }
     }
@@ -1012,9 +1162,9 @@ private struct ChatAssistantTextBody: View {
 
 @MainActor
 private struct ChatStreamingAssistantTextBody: View {
-    let text: String
+    private let inputSnapshot: Snapshot
     let markdownVariant: ChatMarkdownVariant
-    let includesThinking: Bool
+    let textColor: Color
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var snapshot: Snapshot
@@ -1022,13 +1172,15 @@ private struct ChatStreamingAssistantTextBody: View {
     @State private var revealLocation: Snapshot.ProseLocation?
     @State private var pendingUntil: TimeInterval?
 
-    init(text: String, markdownVariant: ChatMarkdownVariant, includesThinking: Bool) {
-        self.text = text
+    init(text: ChatStreamingAssistantText, markdownVariant: ChatMarkdownVariant, textColor: Color) {
         self.markdownVariant = markdownVariant
-        self.includesThinking = includesThinking
+        self.textColor = textColor
 
         let now = Date.timeIntervalSinceReferenceDate
-        let snapshot = Snapshot(text: text, includesThinking: includesThinking)
+        let snapshot = Snapshot(text: text)
+        // State retains its old value across updates. Reuse this prepared input
+        // when applying the delta instead of parsing the same Markdown again.
+        self.inputSnapshot = snapshot
         let location = snapshot.lastProseLocation
         let revealState = location.map {
             step(state: ChatStreamingRevealState(), newText: snapshot.prose(at: $0).plainText, now: now)
@@ -1049,17 +1201,19 @@ private struct ChatStreamingAssistantTextBody: View {
                 }
             }
         }
-        .onChange(of: self.text) { _, _ in
+        .onChange(of: self.inputSnapshot.sourceText) { _, _ in
             self.updateSnapshot()
         }
-        .onChange(of: self.includesThinking) { _, _ in
+        .onChange(of: self.inputSnapshot.includesThinking) { _, _ in
             self.updateSnapshot()
         }
         .onChange(of: self.reduceMotion) { _, reduceMotion in
             self.pendingUntil = reduceMotion ? nil : self.futureDeadline()
         }
         .onAppear {
-            if self.snapshot.sourceText != self.text || self.snapshot.includesThinking != self.includesThinking {
+            if self.snapshot.sourceText != self.inputSnapshot.sourceText ||
+                self.snapshot.includesThinking != self.inputSnapshot.includesThinking
+            {
                 self.updateSnapshot()
             }
         }
@@ -1078,12 +1232,6 @@ private struct ChatStreamingAssistantTextBody: View {
         VStack(alignment: .leading, spacing: 10) {
             ForEach(Array(self.snapshot.segments.enumerated()), id: \.offset) { entry in
                 let segment = entry.element
-                let font = segment.kind == .thinking
-                    ? OpenClawChatTypography.callout.italic()
-                    : OpenClawChatTypography.body
-                let inlineMathTypography: ChatMarkdownRenderer.InlineMathTypography = segment.kind == .thinking
-                    ? .callout
-                    : .body
                 let reveal = self.reveal(
                     segmentIndex: entry.offset,
                     now: now)
@@ -1091,9 +1239,8 @@ private struct ChatStreamingAssistantTextBody: View {
                     snapshot: segment.markdown,
                     context: .assistant,
                     variant: self.markdownVariant,
-                    font: font,
-                    textColor: OpenClawChatTheme.assistantText,
-                    inlineMathTypography: inlineMathTypography,
+                    typography: segment.kind.markdownTypography,
+                    textColor: self.textColor,
                     reveal: reveal)
             }
         }
@@ -1112,19 +1259,14 @@ private struct ChatStreamingAssistantTextBody: View {
 
     private func updateSnapshot() {
         let now = Date.timeIntervalSinceReferenceDate
-        let nextSnapshot = Snapshot(text: self.text, includesThinking: self.includesThinking)
+        let nextSnapshot = self.inputSnapshot
         let nextLocation = nextSnapshot.lastProseLocation
-        let nextRevealState: ChatStreamingRevealState
-        if let nextLocation {
-            let nextText = nextSnapshot.prose(at: nextLocation).plainText
-            if nextLocation == self.revealLocation {
-                nextRevealState = step(state: self.revealState, newText: nextText, now: now)
-            } else {
-                nextRevealState = step(state: ChatStreamingRevealState(), newText: nextText, now: now)
-            }
-        } else {
-            nextRevealState = ChatStreamingRevealState()
-        }
+        let nextRevealState = nextLocation.map { location in
+            step(
+                state: location == self.revealLocation ? self.revealState : ChatStreamingRevealState(),
+                newText: nextSnapshot.prose(at: location).plainText,
+                now: now)
+        } ?? ChatStreamingRevealState()
 
         self.snapshot = nextSnapshot
         self.revealLocation = nextLocation
@@ -1159,10 +1301,8 @@ private struct ChatStreamingAssistantTextBody: View {
         let sourceText: String
         let includesThinking: Bool
 
-        init(text: String, includesThinking: Bool) {
-            let segments = AssistantTextParser.segments(
-                from: text,
-                includeThinking: includesThinking).map {
+        init(text: ChatStreamingAssistantText) {
+            let segments = text.segments.map {
                 Segment(
                     kind: $0.kind,
                     markdown: ChatMarkdownRenderSnapshot(
@@ -1171,8 +1311,8 @@ private struct ChatStreamingAssistantTextBody: View {
                         preparesReveal: true))
             }
             self.segments = segments
-            self.sourceText = text
-            self.includesThinking = includesThinking
+            self.sourceText = text.sourceText
+            self.includesThinking = text.includesThinking
             self.lastProseLocation = segments.indices.reversed().compactMap { segmentIndex in
                 segments[segmentIndex].markdown.lastProseIndex.map {
                     ProseLocation(segmentIndex: segmentIndex, blockIndex: $0)
@@ -1188,5 +1328,13 @@ private struct ChatStreamingAssistantTextBody: View {
             }
             return prose
         }
+    }
+}
+
+extension View {
+    /// Without an avatar beside it, the reply's own container names the assistant for VoiceOver.
+    /// The label is empty where the avatar is shown, so a size-class change keeps the view's identity.
+    func assistantSpeakerLabel(_ name: String?, avatarHidden: Bool) -> some View {
+        self.accessibilityLabel(Text(verbatim: avatarHidden ? name ?? "" : ""))
     }
 }

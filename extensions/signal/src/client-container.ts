@@ -1,16 +1,15 @@
-/**
- * Signal client for bbernhard/signal-cli-rest-api container.
- * Uses WebSocket for receiving messages and REST API for sending.
- *
- * This is a separate implementation from client.ts (native signal-cli)
- * to keep the two modes cleanly isolated.
- */
-
-import nodePath from "node:path";
-import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
-import { detectMime, parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
+import { coerceErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { captureEffectAuthority, resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import {
+  detectMime,
+  extractOriginalFilename,
+  parseMediaContentLength,
+} from "openclaw/plugin-sdk/media-runtime";
+import {
+  asNonNegativeFiniteNumber,
+  asPositiveFiniteNumber,
   parseStrictNonNegativeInteger,
+  resolvePositiveTimerTimeoutMs,
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import {
@@ -18,38 +17,12 @@ import {
   readResponseWithLimit,
 } from "openclaw/plugin-sdk/response-limit-runtime";
 import { readRegularFile } from "openclaw/plugin-sdk/security-runtime";
-import WebSocket from "ws";
+import type { SignalRpcOptions } from "./client-types.js";
+import type { SignalReceivePayload } from "./monitor/event-handler.types.js";
+import { WebSocket } from "./ws-runtime.js";
 
-type ContainerRpcOptions = {
-  baseUrl: string;
-  timeoutMs?: number;
-  maxResponseBytes?: number;
+type ContainerRpcOptions = SignalRpcOptions & {
   maxAttachmentBytes?: number;
-};
-
-type ContainerWebSocketMessage = {
-  envelope?: {
-    syncMessage?: unknown;
-    dataMessage?: {
-      message?: string;
-      groupInfo?: { groupId?: string; groupName?: string };
-      attachments?: Array<{
-        id?: string;
-        contentType?: string;
-        filename?: string;
-        size?: number;
-      }>;
-      quote?: { text?: string };
-      reaction?: unknown;
-    };
-    editMessage?: { dataMessage?: unknown };
-    reactionMessage?: unknown;
-    sourceNumber?: string;
-    sourceUuid?: string;
-    sourceName?: string;
-    timestamp?: number;
-  };
-  exception?: { message?: string };
 };
 
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -59,6 +32,7 @@ const SIGNAL_REST_SUCCESS_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 // Receive envelopes contain metadata only; cap frames, and do not let upgrades block reconnect.
 const WS_MAX_PAYLOAD = 1024 * 1024;
 const WS_HANDSHAKE_MS = 30_000;
+const WS_SHUTDOWN_DRAIN_TIMEOUT_MS = 1_500;
 // Outbound file paths are converted to base64 before posting to the container. Cap
 // reads to the same default the native signal send path uses (8 MiB) so a path to a
 // huge or symlinked file cannot OOM the gateway before encoding.
@@ -88,83 +62,58 @@ function normalizeBaseUrl(url: string): string {
   return `${parsed.protocol}//${parsed.host}${pathname}`;
 }
 
-async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number) {
-  const fetchImpl = resolveFetch();
-  if (!fetchImpl) {
-    throw new Error("fetch is not available");
+class SignalRestTimeoutError extends Error {
+  constructor() {
+    super("Signal REST request timed out");
+    this.name = "SignalRestTimeoutError";
   }
+}
+
+function signalRestRequestTimeoutError(): SignalRestTimeoutError {
+  return new SignalRestTimeoutError();
+}
+
+type SignalRestDeadline = {
+  signal: AbortSignal;
+  timeoutMs: () => number;
+};
+
+/** Keep one absolute deadline across headers and every bounded body reader. */
+async function withSignalRestDeadline<T>(
+  timeoutMs: number,
+  run: (deadline: SignalRestDeadline) => Promise<T>,
+): Promise<T> {
   const safeTimeoutMs = resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS);
+  const deadlineAtMs = Date.now() + safeTimeoutMs;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), safeTimeoutMs);
+  const timer = setTimeout(() => controller.abort(signalRestRequestTimeoutError()), safeTimeoutMs);
+  timer.unref?.();
   try {
-    return await fetchImpl(url, { ...init, signal: controller.signal });
+    return await run({
+      signal: controller.signal,
+      timeoutMs: () => {
+        const remainingMs = deadlineAtMs - Date.now();
+        if (remainingMs <= 0) {
+          throw signalRestRequestTimeoutError();
+        }
+        return Math.max(1, Math.min(safeTimeoutMs, remainingMs));
+      },
+    });
   } finally {
     clearTimeout(timer);
   }
-}
-
-function normalizeMaxResponseBytes(value: number | undefined): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return DEFAULT_ATTACHMENT_RESPONSE_MAX_BYTES;
-  }
-  return Math.floor(value);
-}
-
-function readContentLength(res: Response): number | undefined {
-  return parseMediaContentLength(res.headers?.get("content-length") ?? null) ?? undefined;
 }
 
 function signalRestIdleTimeoutError({ chunkTimeoutMs }: { chunkTimeoutMs: number }): Error {
   return new Error(`Signal REST response body stalled after ${chunkTimeoutMs}ms`);
 }
 
-function signalAttachmentIdleTimeoutError({ chunkTimeoutMs }: { chunkTimeoutMs: number }): Error {
-  return new Error(`Signal REST attachment response body stalled after ${chunkTimeoutMs}ms`);
-}
-
-async function readSignalRestText(res: Response, bodyIdleTimeoutMs: number): Promise<string> {
-  const bytes = await readResponseWithLimit(res, SIGNAL_REST_SUCCESS_RESPONSE_MAX_BYTES, {
-    chunkTimeoutMs: bodyIdleTimeoutMs,
-    onIdleTimeout: signalRestIdleTimeoutError,
-    onOverflow: ({ maxBytes }) => new Error(`Signal REST: text response exceeds ${maxBytes} bytes`),
-  });
-  return new TextDecoder().decode(bytes);
-}
-
-async function readSignalRestErrorText(res: Response, bodyIdleTimeoutMs: number): Promise<string> {
-  return (
-    await readResponseTextPrefix(res, SIGNAL_REST_ERROR_RESPONSE_MAX_BYTES, {
-      chunkTimeoutMs: bodyIdleTimeoutMs,
-      onIdleTimeout: signalRestIdleTimeoutError,
-    })
-  ).text;
-}
-
-async function readCappedResponseBuffer(
-  res: Response,
-  maxResponseBytes: number,
-  bodyIdleTimeoutMs: number,
-): Promise<Buffer> {
-  const contentLength = readContentLength(res);
-  if (contentLength !== undefined && contentLength > maxResponseBytes) {
-    throw new Error("Signal REST attachment exceeded size limit");
-  }
-  return await readResponseWithLimit(res, maxResponseBytes, {
-    chunkTimeoutMs: bodyIdleTimeoutMs,
-    onIdleTimeout: signalAttachmentIdleTimeoutError,
-    onOverflow: () => new Error("Signal REST attachment exceeded size limit"),
-  });
-}
-
-async function releaseUnreadResponseBody(res: Response | undefined): Promise<void> {
+function releaseUnreadResponseBody(res: Response | undefined): void {
   if (res?.bodyUsed !== true) {
-    await res?.body?.cancel().catch(() => undefined);
+    void res?.body?.cancel().catch(() => undefined);
   }
 }
 
-/**
- * Check if bbernhard container REST API is available.
- */
 export async function containerCheck(
   baseUrl: string,
   timeoutMs = DEFAULT_TIMEOUT_MS,
@@ -173,7 +122,13 @@ export async function containerCheck(
   const normalized = normalizeBaseUrl(baseUrl);
   let res: Response | undefined;
   try {
-    res = await fetchWithTimeout(`${normalized}/v1/about`, { method: "GET" }, timeoutMs);
+    const fetchImpl = resolveFetch();
+    if (!fetchImpl) {
+      throw new Error("fetch is not available");
+    }
+    res = await withSignalRestDeadline(timeoutMs, ({ signal }) =>
+      fetchImpl(`${normalized}/v1/about`, { method: "GET", signal }),
+    );
     if (!res.ok) {
       return { ok: false, status: res.status, error: `HTTP ${res.status}` };
     }
@@ -186,10 +141,10 @@ export async function containerCheck(
     return {
       ok: false,
       status: null,
-      error: err instanceof Error ? err.message : String(err),
+      error: coerceErrorMessage(err),
     };
   } finally {
-    await releaseUnreadResponseBody(res);
+    releaseUnreadResponseBody(res);
   }
 }
 
@@ -222,7 +177,7 @@ function containerReceiveCheck(
       settle({
         ok: false,
         status: null,
-        error: err instanceof Error ? err.message : String(err),
+        error: coerceErrorMessage(err),
       });
       return;
     }
@@ -244,7 +199,7 @@ function containerReceiveCheck(
       settle({
         ok: false,
         status: null,
-        error: err instanceof Error ? err.message : String(err),
+        error: coerceErrorMessage(err),
       });
     });
     ws.once("close", (code, reason) => {
@@ -258,15 +213,13 @@ function containerReceiveCheck(
   });
 }
 
-/**
- * Make a REST API request to bbernhard container.
- */
 async function containerRestRequest<T = unknown>(
   endpoint: string,
   opts: ContainerRpcOptions,
   method: "GET" | "POST" | "PUT" | "DELETE" = "GET",
   body?: unknown,
 ): Promise<T> {
+  const effect = captureEffectAuthority();
   const baseUrl = normalizeBaseUrl(opts.baseUrl);
   const url = `${baseUrl}${endpoint}`;
 
@@ -281,62 +234,109 @@ async function containerRestRequest<T = unknown>(
 
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const bodyIdleTimeoutMs = resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS);
-  const res = await fetchWithTimeout(url, init, timeoutMs);
-
-  if (res.status === 204) {
-    return undefined as T;
+  const fetchImpl = resolveFetch();
+  if (!fetchImpl) {
+    throw new Error("fetch is not available");
   }
 
-  if (!res.ok) {
-    // Bound the error body: signal-cli-rest-api is an untrusted external container,
-    // and a hostile/buggy response must not let an error path buffer an unbounded body.
-    const errorText = await readSignalRestErrorText(res, bodyIdleTimeoutMs).catch(() => "");
-    throw new Error(`Signal REST ${res.status}: ${errorText || res.statusText}`);
-  }
+  return await withSignalRestDeadline(timeoutMs, async ({ signal, timeoutMs: bodyTimeoutMs }) => {
+    const res = await effect.initiate(() => {
+      opts.assertDirectAdapterHandoff?.();
+      return fetchImpl(url, { ...init, signal });
+    });
+    if (res.status === 204) {
+      return undefined as T;
+    }
 
-  // Bound the success body under the shared 16 MiB provider cap before JSON.parse so a
-  // malicious/runaway container response cannot OOM the runtime (send/typing/version all
-  // funnel through here). Reuse the same bounded reader family as the attachment path.
-  const text = await readSignalRestText(res, bodyIdleTimeoutMs);
-  if (!text) {
-    return undefined as T;
-  }
+    if (!res.ok) {
+      // Bound the error body: signal-cli-rest-api is an untrusted external container,
+      // and a hostile/buggy response must not let an error path buffer an unbounded body.
+      let errorText = "";
+      try {
+        errorText = (
+          await readResponseTextPrefix(res, SIGNAL_REST_ERROR_RESPONSE_MAX_BYTES, {
+            chunkTimeoutMs: bodyIdleTimeoutMs,
+            onIdleTimeout: signalRestIdleTimeoutError,
+            timeoutMs: bodyTimeoutMs,
+            onTimeout: signalRestRequestTimeoutError,
+          })
+        ).text;
+      } catch (error) {
+        if (error instanceof SignalRestTimeoutError) {
+          throw error;
+        }
+      }
+      throw new Error(`Signal REST ${res.status}: ${errorText || res.statusText}`);
+    }
 
-  try {
-    return JSON.parse(text) as T;
-  } catch {
-    throw new Error("Signal REST returned malformed JSON");
-  }
+    // Bound the success body under the shared 16 MiB provider cap before JSON.parse so a
+    // malicious/runaway container response cannot OOM the runtime (send/typing/version all
+    // funnel through here). timeoutMs stays a total request+body deadline (localhost
+    // container, 10s default), so a slow-drip body cannot outlive it even while the idle
+    // chunk guard keeps resetting.
+    const bytes = await readResponseWithLimit(res, SIGNAL_REST_SUCCESS_RESPONSE_MAX_BYTES, {
+      chunkTimeoutMs: bodyIdleTimeoutMs,
+      onIdleTimeout: signalRestIdleTimeoutError,
+      timeoutMs: bodyTimeoutMs,
+      onTimeout: signalRestRequestTimeoutError,
+      onOverflow: ({ maxBytes }) =>
+        new Error(`Signal REST: text response exceeds ${maxBytes} bytes`),
+    });
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    if (!text) {
+      return undefined as T;
+    }
+
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      throw new Error("Signal REST returned malformed JSON");
+    }
+  });
 }
 
-/**
- * Fetch attachment binary from bbernhard container.
- */
 async function containerFetchAttachment(
   attachmentId: string,
   opts: ContainerRpcOptions,
 ): Promise<Buffer | null> {
   const baseUrl = normalizeBaseUrl(opts.baseUrl);
   const url = `${baseUrl}/v1/attachments/${encodeURIComponent(attachmentId)}`;
-  let res: Response | undefined;
-
-  try {
-    const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    const bodyIdleTimeoutMs = resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS);
-    res = await fetchWithTimeout(url, { method: "GET" }, timeoutMs);
-
-    if (!res.ok) {
-      return null;
-    }
-
-    return await readCappedResponseBuffer(
-      res,
-      normalizeMaxResponseBytes(opts.maxResponseBytes),
-      bodyIdleTimeoutMs,
-    );
-  } finally {
-    await releaseUnreadResponseBody(res);
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const bodyIdleTimeoutMs = resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS);
+  const fetchImpl = resolveFetch();
+  if (!fetchImpl) {
+    throw new Error("fetch is not available");
   }
+
+  return await withSignalRestDeadline(timeoutMs, async ({ signal, timeoutMs: bodyTimeoutMs }) => {
+    let res: Response | undefined;
+    try {
+      const fetched = await fetchImpl(url, { method: "GET", signal });
+      res = fetched;
+
+      if (!fetched.ok) {
+        return null;
+      }
+
+      const maxResponseBytes = Math.floor(
+        asPositiveFiniteNumber(opts.maxResponseBytes) ?? DEFAULT_ATTACHMENT_RESPONSE_MAX_BYTES,
+      );
+      const contentLength = parseMediaContentLength(fetched.headers?.get("content-length") ?? null);
+      if (contentLength !== null && contentLength > maxResponseBytes) {
+        throw new Error("Signal REST attachment exceeded size limit");
+      }
+      return await readResponseWithLimit(fetched, maxResponseBytes, {
+        chunkTimeoutMs: bodyIdleTimeoutMs,
+        onIdleTimeout: ({ chunkTimeoutMs }) =>
+          new Error(`Signal REST attachment response body stalled after ${chunkTimeoutMs}ms`),
+        timeoutMs: bodyTimeoutMs,
+        onTimeout: signalRestRequestTimeoutError,
+        onOverflow: () => new Error("Signal REST attachment exceeded size limit"),
+      });
+    } finally {
+      releaseUnreadResponseBody(res);
+    }
+  });
 }
 
 /**
@@ -349,7 +349,8 @@ export async function streamContainerEvents(params: {
   account?: string;
   abortSignal?: AbortSignal;
   timeoutMs?: number;
-  onEvent: (event: ContainerWebSocketMessage) => unknown;
+  onEvent: (event: SignalReceivePayload) => unknown;
+  onStreamOpen?: () => void;
   logger?: { log?: (msg: string) => void; error?: (msg: string) => void };
 }): Promise<void> {
   const normalized = normalizeBaseUrl(params.baseUrl);
@@ -365,8 +366,13 @@ export async function streamContainerEvents(params: {
     let settled = false;
     let eventChain = Promise.resolve();
     let abortHandler: (() => void) | undefined;
+    let shutdownDrainTimer: ReturnType<typeof setTimeout> | undefined;
 
     const cleanup = () => {
+      if (shutdownDrainTimer) {
+        clearTimeout(shutdownDrainTimer);
+        shutdownDrainTimer = undefined;
+      }
       if (abortHandler) {
         params.abortSignal?.removeEventListener("abort", abortHandler);
         abortHandler = undefined;
@@ -386,21 +392,23 @@ export async function streamContainerEvents(params: {
       }
       settled = true;
       cleanup();
-      reject(toLintErrorObject(error, "Signal WebSocket receive handler failed"));
+      reject(toErrorObject(error, "Signal WebSocket receive handler failed"));
     };
 
     try {
-      ws = new WebSocket(wsUrl, { maxPayload: WS_MAX_PAYLOAD, handshakeTimeout: WS_HANDSHAKE_MS });
+      ws = new WebSocket(wsUrl, {
+        maxPayload: WS_MAX_PAYLOAD,
+        handshakeTimeout: resolvePositiveTimerTimeoutMs(params.timeoutMs, WS_HANDSHAKE_MS),
+      });
     } catch (err) {
-      logError(
-        `[signal-ws] failed to create WebSocket: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      reject(toLintErrorObject(err, "Non-Error rejection"));
+      logError(`[signal-ws] failed to create WebSocket: ${coerceErrorMessage(err)}`);
+      reject(toErrorObject(err, "Non-Error rejection"));
       return;
     }
 
     ws.on("open", () => {
       log("[signal-ws] connected");
+      params.onStreamOpen?.();
     });
 
     ws.on("message", (data: Buffer) => {
@@ -409,7 +417,7 @@ export async function streamContainerEvents(params: {
       }
       try {
         const text = data.toString();
-        const envelope = JSON.parse(text) as ContainerWebSocketMessage;
+        const envelope = JSON.parse(text) as SignalReceivePayload;
         if (envelope) {
           // WebSocket callbacks are synchronous. Chain async durable appends so
           // transport delivery order and receive-handler failures are preserved.
@@ -417,20 +425,18 @@ export async function streamContainerEvents(params: {
             await params.onEvent(envelope);
           });
           void eventChain.catch((err: unknown) => {
-            logError(
-              `[signal-ws] receive handler failed: ${err instanceof Error ? err.message : String(err)}`,
-            );
+            logError(`[signal-ws] receive handler failed: ${coerceErrorMessage(err)}`);
             rejectOnce(err);
             ws.close();
           });
         }
       } catch (err) {
-        logError(`[signal-ws] parse error: ${err instanceof Error ? err.message : String(err)}`);
+        logError(`[signal-ws] parse error: ${coerceErrorMessage(err)}`);
       }
     });
 
     ws.on("error", (err) => {
-      logError(`[signal-ws] error: ${err instanceof Error ? err.message : String(err)}`);
+      logError(`[signal-ws] error: ${coerceErrorMessage(err)}`);
       // Don't resolve here - the close event will fire next
     });
 
@@ -451,10 +457,22 @@ export async function streamContainerEvents(params: {
     if (params.abortSignal) {
       abortHandler = () => {
         log("[signal-ws] aborted, closing connection");
+        // Arm before close: ws can synchronously flush buffered messages and emit
+        // close, whose final eventChain owns every accepted durable admission.
+        shutdownDrainTimer = setTimeout(() => {
+          logError(
+            "[signal-ws] shutdown timed out draining accepted receive events; messages may be lost",
+          );
+          ws.terminate();
+          resolveOnce();
+        }, WS_SHUTDOWN_DRAIN_TIMEOUT_MS);
+        shutdownDrainTimer.unref?.();
         ws.close();
-        resolveOnce();
       };
       params.abortSignal.addEventListener("abort", abortHandler, { once: true });
+      if (params.abortSignal.aborted) {
+        abortHandler();
+      }
     }
   });
 }
@@ -478,7 +496,8 @@ async function filesToBase64DataUris(
     });
     remainingBytes -= buffer.byteLength;
     const mime = (await detectMime({ buffer, filePath })) ?? "application/octet-stream";
-    const filename = nodePath.basename(filePath);
+    // Signal splits on semicolons; commas and fragments break RFC 2397 attachment data.
+    const filename = extractOriginalFilename(filePath).replace(/[,;#]/g, "_");
     const b64 = buffer.toString("base64");
     results.push(`data:${mime};filename=${filename};base64,${b64}`);
   }
@@ -546,184 +565,6 @@ function parseContainerSendTimestamp(raw: unknown): number | undefined {
   return timestamp;
 }
 
-function normalizeContainerQuoteTimestamp(raw: unknown): number | undefined {
-  return parseStrictNonNegativeInteger(raw) ?? undefined;
-}
-
-function normalizeContainerQuoteText(raw: unknown): string | undefined {
-  return typeof raw === "string" ? raw : undefined;
-}
-
-/**
- * Send message via bbernhard container REST API.
- */
-async function containerSendMessage(params: {
-  baseUrl: string;
-  account: string;
-  recipients: string[];
-  message: string;
-  textStyles?: Array<{ start: number; length: number; style: string }>;
-  attachments?: string[];
-  maxAttachmentBytes?: number;
-  quoteTimestamp?: number;
-  quoteAuthor?: string;
-  quoteMessage?: string;
-  timeoutMs?: number;
-}): Promise<{ timestamp?: number }> {
-  const payload: Record<string, unknown> = {
-    message: params.message,
-    number: params.account,
-    recipients: params.recipients,
-  };
-
-  if (params.textStyles && params.textStyles.length > 0) {
-    payload.message = renderContainerStyledText(params.message, params.textStyles);
-    payload["text_mode"] = "styled";
-  }
-
-  if (params.attachments && params.attachments.length > 0) {
-    // Container API only accepts base64-encoded attachments, not file paths.
-    const configuredMaxBytes = params.maxAttachmentBytes;
-    const maxAttachmentBytes =
-      typeof configuredMaxBytes === "number" &&
-      Number.isFinite(configuredMaxBytes) &&
-      configuredMaxBytes >= 0
-        ? Math.floor(configuredMaxBytes)
-        : DEFAULT_SIGNAL_CONTAINER_MAX_ATTACHMENT_BYTES;
-    payload.base64_attachments = await filesToBase64DataUris(
-      params.attachments,
-      maxAttachmentBytes,
-    );
-  }
-  if (params.quoteTimestamp !== undefined && params.quoteAuthor) {
-    payload.quote_timestamp = params.quoteTimestamp;
-    payload.quote_author = params.quoteAuthor;
-    payload.quote_message = params.quoteMessage ?? "";
-  }
-
-  const result = await containerRestRequest<{ timestamp?: unknown }>(
-    "/v2/send",
-    { baseUrl: params.baseUrl, timeoutMs: params.timeoutMs },
-    "POST",
-    payload,
-  );
-
-  const timestamp = parseContainerSendTimestamp(result?.timestamp);
-  return timestamp === undefined ? {} : { timestamp };
-}
-
-/**
- * Send typing indicator via bbernhard container REST API.
- */
-async function containerSendTyping(params: {
-  baseUrl: string;
-  account: string;
-  recipient: string;
-  stop?: boolean;
-  timeoutMs?: number;
-}): Promise<boolean> {
-  const method = params.stop ? "DELETE" : "PUT";
-  await containerRestRequest(
-    `/v1/typing-indicator/${encodeURIComponent(params.account)}`,
-    { baseUrl: params.baseUrl, timeoutMs: params.timeoutMs },
-    method,
-    { recipient: params.recipient },
-  );
-  return true;
-}
-
-/**
- * Send read receipt via bbernhard container REST API.
- */
-async function containerSendReceipt(params: {
-  baseUrl: string;
-  account: string;
-  recipient: string;
-  timestamp: number;
-  type?: "read" | "viewed";
-  timeoutMs?: number;
-}): Promise<boolean> {
-  await containerRestRequest(
-    `/v1/receipts/${encodeURIComponent(params.account)}`,
-    { baseUrl: params.baseUrl, timeoutMs: params.timeoutMs },
-    "POST",
-    {
-      recipient: params.recipient,
-      timestamp: params.timestamp,
-      receipt_type: params.type ?? "read",
-    },
-  );
-  return true;
-}
-
-/**
- * Send a reaction to a message via bbernhard container REST API.
- */
-async function containerSendReaction(params: {
-  baseUrl: string;
-  account: string;
-  recipient: string;
-  emoji: string;
-  targetAuthor: string;
-  targetTimestamp: number;
-  groupId?: string;
-  timeoutMs?: number;
-}): Promise<{ timestamp?: number }> {
-  const payload: Record<string, unknown> = {
-    recipient: params.recipient,
-    reaction: params.emoji,
-    target_author: params.targetAuthor,
-    timestamp: params.targetTimestamp,
-  };
-
-  if (params.groupId) {
-    payload.group_id = params.groupId;
-  }
-
-  const result = await containerRestRequest<{ timestamp?: number }>(
-    `/v1/reactions/${encodeURIComponent(params.account)}`,
-    { baseUrl: params.baseUrl, timeoutMs: params.timeoutMs },
-    "POST",
-    payload,
-  );
-
-  return result ?? {};
-}
-
-/**
- * Remove a reaction from a message via bbernhard container REST API.
- */
-async function containerRemoveReaction(params: {
-  baseUrl: string;
-  account: string;
-  recipient: string;
-  emoji: string;
-  targetAuthor: string;
-  targetTimestamp: number;
-  groupId?: string;
-  timeoutMs?: number;
-}): Promise<{ timestamp?: number }> {
-  const payload: Record<string, unknown> = {
-    recipient: params.recipient,
-    reaction: params.emoji,
-    target_author: params.targetAuthor,
-    timestamp: params.targetTimestamp,
-  };
-
-  if (params.groupId) {
-    payload.group_id = params.groupId;
-  }
-
-  const result = await containerRestRequest<{ timestamp?: number }>(
-    `/v1/reactions/${encodeURIComponent(params.account)}`,
-    { baseUrl: params.baseUrl, timeoutMs: params.timeoutMs },
-    "DELETE",
-    payload,
-  );
-
-  return result ?? {};
-}
-
 /**
  * Strip the "uuid:" prefix that native signal-cli accepts but the container API rejects.
  */
@@ -778,24 +619,46 @@ export async function containerRpcRequest<T = unknown>(
         return [{ start: Number(start), length: Number(length), style }];
       });
 
-      const quoteTimestamp = normalizeContainerQuoteTimestamp(
+      const message = (p.message as string) ?? "";
+      const payload: Record<string, unknown> = {
+        message,
+        number: (p.account as string) ?? "",
+        recipients: finalRecipients,
+      };
+      if (textStyles?.length) {
+        payload.message = renderContainerStyledText(message, textStyles);
+        payload.text_mode = "styled";
+      }
+      const attachments = p.attachments as string[] | undefined;
+      if (attachments?.length) {
+        // Container API only accepts base64-encoded attachments, not file paths.
+        const maxAttachmentBytes = Math.floor(
+          asNonNegativeFiniteNumber(opts.maxAttachmentBytes) ??
+            DEFAULT_SIGNAL_CONTAINER_MAX_ATTACHMENT_BYTES,
+        );
+        payload.base64_attachments = await filesToBase64DataUris(attachments, maxAttachmentBytes);
+      }
+      const quoteTimestamp = parseStrictNonNegativeInteger(
         p.quoteTimestamp ?? p["quote-timestamp"],
       );
-      const quoteAuthor = normalizeContainerQuoteText(p.quoteAuthor ?? p["quote-author"]);
-      const result = await containerSendMessage({
-        baseUrl: opts.baseUrl,
-        account: (p.account as string) ?? "",
-        recipients: finalRecipients,
-        message: (p.message as string) ?? "",
-        textStyles,
-        attachments: p.attachments as string[] | undefined,
-        maxAttachmentBytes: opts.maxAttachmentBytes,
-        quoteTimestamp,
-        quoteAuthor: quoteAuthor ? stripUuidPrefix(quoteAuthor) : undefined,
-        quoteMessage: normalizeContainerQuoteText(p.quoteMessage ?? p["quote-message"]),
-        timeoutMs: opts.timeoutMs,
-      });
-      return result as T;
+      const quoteAuthor = p.quoteAuthor ?? p["quote-author"];
+      if (quoteTimestamp !== undefined && typeof quoteAuthor === "string" && quoteAuthor) {
+        const author = stripUuidPrefix(quoteAuthor);
+        if (author) {
+          const quoteMessage = p.quoteMessage ?? p["quote-message"];
+          payload.quote_timestamp = quoteTimestamp;
+          payload.quote_author = author;
+          payload.quote_message = typeof quoteMessage === "string" ? quoteMessage : "";
+        }
+      }
+      const result = await containerRestRequest<{ timestamp?: unknown }>(
+        "/v2/send",
+        opts,
+        "POST",
+        payload,
+      );
+      const timestamp = parseContainerSendTimestamp(result?.timestamp);
+      return (timestamp === undefined ? {} : { timestamp }) as T;
     }
 
     case "sendTyping": {
@@ -803,48 +666,47 @@ export async function containerRpcRequest<T = unknown>(
         (p.recipient as string[] | undefined)?.[0] ??
           ((p.groupId as string | undefined) ? formatGroupIdForContainer(p.groupId as string) : ""),
       );
-      await containerSendTyping({
-        baseUrl: opts.baseUrl,
-        account: (p.account as string) ?? "",
-        recipient,
-        stop: p.stop as boolean | undefined,
-        timeoutMs: opts.timeoutMs,
-      });
+      await containerRestRequest(
+        `/v1/typing-indicator/${encodeURIComponent((p.account as string) ?? "")}`,
+        opts,
+        p.stop ? "DELETE" : "PUT",
+        { recipient },
+      );
       return undefined as T;
     }
 
     case "sendReceipt": {
-      const recipient = stripUuidPrefix((p.recipient as string[] | undefined)?.[0] ?? "");
-      await containerSendReceipt({
-        baseUrl: opts.baseUrl,
-        account: (p.account as string) ?? "",
-        recipient,
-        timestamp: p.targetTimestamp as number,
-        type: p.type as "read" | "viewed" | undefined,
-        timeoutMs: opts.timeoutMs,
-      });
+      await containerRestRequest(
+        `/v1/receipts/${encodeURIComponent((p.account as string) ?? "")}`,
+        opts,
+        "POST",
+        {
+          recipient: stripUuidPrefix((p.recipient as string[] | undefined)?.[0] ?? ""),
+          timestamp: p.targetTimestamp,
+          receipt_type: p.type ?? "read",
+        },
+      );
       return undefined as T;
     }
 
     case "sendReaction": {
       const recipient = stripUuidPrefix((p.recipients as string[] | undefined)?.[0] ?? "");
-      const groupId = (p.groupIds as string[] | undefined)?.[0] ?? undefined;
+      const groupId = (p.groupIds as string[] | undefined)?.[0];
       const formattedGroupId = groupId ? formatGroupIdForContainer(groupId) : undefined;
-      // Container API uses `recipient` for both DMs and groups.
-      // For groups, pass the formatted group ID as recipient.
-      const effectiveRecipient = formattedGroupId || recipient || "";
-      const reactionParams = {
-        baseUrl: opts.baseUrl,
-        account: (p.account as string) ?? "",
-        recipient: effectiveRecipient,
-        emoji: (p.emoji as string) ?? "",
-        targetAuthor: stripUuidPrefix((p.targetAuthor as string) ?? recipient),
-        targetTimestamp: p.targetTimestamp as number,
-        groupId: formattedGroupId,
-        timeoutMs: opts.timeoutMs,
-      };
-      const fn = p.remove ? containerRemoveReaction : containerSendReaction;
-      return (await fn(reactionParams)) as T;
+      const result = await containerRestRequest<{ timestamp?: number }>(
+        `/v1/reactions/${encodeURIComponent((p.account as string) ?? "")}`,
+        opts,
+        p.remove ? "DELETE" : "POST",
+        {
+          // Container API uses recipient for both DMs and groups.
+          recipient: formattedGroupId || recipient || "",
+          reaction: (p.emoji as string) ?? "",
+          target_author: stripUuidPrefix((p.targetAuthor as string) ?? recipient),
+          timestamp: p.targetTimestamp,
+          ...(formattedGroupId ? { group_id: formattedGroupId } : {}),
+        },
+      );
+      return (result ?? {}) as T;
     }
 
     case "getAttachment": {
@@ -854,7 +716,6 @@ export async function containerRpcRequest<T = unknown>(
         timeoutMs: opts.timeoutMs,
         maxResponseBytes: opts.maxResponseBytes,
       });
-      // Convert to native format: { data: base64String }
       if (!buffer) {
         return { data: undefined } as T;
       }
@@ -873,18 +734,3 @@ export async function containerRpcRequest<T = unknown>(
       throw new Error(`Unsupported container RPC method: ${method}`);
   }
 }
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,37 +1,43 @@
 // Imessage tests cover catchup plugin behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getIMessageRuntime } from "../runtime.js";
-import { installIMessageStateRuntimeForTest } from "../test-support/runtime.js";
 import {
-  advanceIMessageCatchupCursor,
   capFailureRetriesMap,
   IMESSAGE_CATCHUP_CURSOR_MAX_ENTRIES,
   IMESSAGE_CATCHUP_CURSOR_NAMESPACE,
+  resolveIMessageCatchupCursorKey,
+  type IMessageCatchupCursor,
+} from "../state-contract.js";
+import { installIMessageStateRuntimeForTest } from "../test-support/runtime.js";
+import {
+  advanceIMessageCatchupCursor,
   performIMessageCatchup,
   resolveCatchupConfig,
-  resolveIMessageCatchupCursorKey,
   type CatchupDispatchFn,
   type CatchupFetchFn,
-  type IMessageCatchupCursor,
   type IMessageCatchupRow,
 } from "./catchup.js";
 
 function openCatchupCursorStore() {
-  return getIMessageRuntime().state.openSyncKeyedStore<IMessageCatchupCursor>({
+  return getIMessageRuntime().state.openKeyedStore<IMessageCatchupCursor>({
     namespace: IMESSAGE_CATCHUP_CURSOR_NAMESPACE,
     maxEntries: IMESSAGE_CATCHUP_CURSOR_MAX_ENTRIES,
   });
 }
 
 async function loadIMessageCatchupCursor(accountId: string): Promise<IMessageCatchupCursor | null> {
-  return openCatchupCursorStore().lookup(resolveIMessageCatchupCursorKey(accountId)) ?? null;
+  return (
+    (await openCatchupCursorStore().lookup(resolveIMessageCatchupCursorKey(accountId))) ?? null
+  );
 }
 
 async function saveIMessageCatchupCursor(
   accountId: string,
   cursor: Omit<IMessageCatchupCursor, "updatedAt">,
 ): Promise<void> {
-  openCatchupCursorStore().register(resolveIMessageCatchupCursorKey(accountId), {
+  await openCatchupCursorStore().register(resolveIMessageCatchupCursorKey(accountId), {
     ...cursor,
     updatedAt: Date.now(),
   });
@@ -79,8 +85,13 @@ describe("resolveCatchupConfig", () => {
 });
 
 describe("advanceIMessageCatchupCursor", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     installIMessageStateRuntimeForTest();
+  });
+
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
   });
 
   it("advances monotonically from a live-handled row and preserves given-up retry state", async () => {
@@ -193,8 +204,13 @@ describe("capFailureRetriesMap", () => {
 });
 
 describe("performIMessageCatchup", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     installIMessageStateRuntimeForTest();
+  });
+
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
   });
 
   const config = resolveCatchupConfig({ enabled: true });
@@ -545,5 +561,133 @@ describe("performIMessageCatchup", () => {
 
     const cursor = await loadIMessageCatchupCursor("primary");
     expect(cursor?.lastSeenRowid).toBe(7);
+  });
+});
+
+describe("iMessage catchup cursor comparisons", () => {
+  beforeEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    installIMessageStateRuntimeForTest();
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await closeOpenClawStateDatabaseAsync();
+  });
+
+  const config = resolveCatchupConfig({ enabled: true, maxFailureRetries: 3 });
+  const now = 1_700_001_000_000;
+
+  function interceptCursorStore() {
+    const state = getIMessageRuntime().state;
+    const store = state.openKeyedStore<unknown>({
+      namespace: IMESSAGE_CATCHUP_CURSOR_NAMESPACE,
+      maxEntries: IMESSAGE_CATCHUP_CURSOR_MAX_ENTRIES,
+    });
+    vi.spyOn(state, "openKeyedStore").mockReturnValue(store);
+    if (!store.compareAndApply) {
+      throw new Error("Test runtime requires plugin-state comparison support.");
+    }
+    return { store, compareAndApply: store.compareAndApply.bind(store) };
+  }
+
+  it.each([{ lastSeenRowid: 60 }, { lastSeenRowid: 10, failureRetries: { RETRYING: 1 } }])(
+    "rechecks a conflicting live cursor before reporting advancement: %j",
+    async (concurrent) => {
+      const { store, compareAndApply } = interceptCursorStore();
+      vi.spyOn(store, "compareAndApply").mockImplementationOnce(async (...args) => {
+        await saveIMessageCatchupCursor("primary", { lastSeenMs: now, ...concurrent });
+        return await compareAndApply(...args);
+      });
+
+      await expect(
+        advanceIMessageCatchupCursor("primary", { lastSeenMs: now, lastSeenRowid: 50 }, config),
+      ).resolves.toBe(false);
+      expect(await loadIMessageCatchupCursor("primary")).toMatchObject(concurrent);
+    },
+  );
+
+  it("holds the live cursor queue until its comparison settles", async () => {
+    const { store, compareAndApply } = interceptCursorStore();
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    vi.spyOn(store, "compareAndApply").mockImplementationOnce(async (...args) => {
+      entered.resolve();
+      await release.promise;
+      return await compareAndApply(...args);
+    });
+    let settled = false;
+    const first = advanceIMessageCatchupCursor(
+      "primary",
+      { lastSeenMs: now, lastSeenRowid: 50 },
+      config,
+    ).then((advanced) => {
+      settled = true;
+      return advanced;
+    });
+    await Promise.race([
+      entered.promise,
+      first.then(() => {
+        throw new Error("Cursor advancement settled before the pending comparison.");
+      }),
+    ]);
+    const second = advanceIMessageCatchupCursor(
+      "primary",
+      { lastSeenMs: now, lastSeenRowid: 40 },
+      config,
+    );
+    try {
+      expect(settled).toBe(false);
+      expect(await loadIMessageCatchupCursor("primary")).toBeNull();
+    } finally {
+      release.resolve();
+      await Promise.allSettled([first, second]);
+    }
+    await expect(Promise.all([first, second])).resolves.toEqual([true, false]);
+    expect((await loadIMessageCatchupCursor("primary"))?.lastSeenRowid).toBe(50);
+  });
+
+  it("merges retry state after a save conflict without replaying fetch or dispatch", async () => {
+    const { store, compareAndApply } = interceptCursorStore();
+    vi.spyOn(store, "compareAndApply").mockImplementationOnce(async (...args) => {
+      await saveIMessageCatchupCursor("primary", {
+        lastSeenMs: now,
+        lastSeenRowid: 50,
+        failureRetries: { "GIVEN-UP": 3 },
+      });
+      return await compareAndApply(...args);
+    });
+    const fetch = vi.fn<CatchupFetchFn>(async () => ({
+      resolved: true,
+      rows: [{ guid: "RETRYING", rowid: 10, date: now - 1000 }],
+    }));
+    const dispatch = vi.fn<CatchupDispatchFn>(async () => ({ ok: false }));
+
+    await performIMessageCatchup({ accountId: "primary", config, now, fetch, dispatch });
+
+    expect(await loadIMessageCatchupCursor("primary")).toMatchObject({
+      lastSeenRowid: 9,
+      failureRetries: { "GIVEN-UP": 3, RETRYING: 1 },
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("propagates uncertain persistence without retrying a dispatched catchup pass", async () => {
+    const { store } = interceptCursorStore();
+    const failure = new Error("SQLite worker outcome unknown");
+    const compare = vi.spyOn(store, "compareAndApply").mockRejectedValue(failure);
+    const fetch = vi.fn<CatchupFetchFn>(async () => ({
+      resolved: true,
+      rows: [{ guid: "A", rowid: 10, date: now - 1000 }],
+    }));
+    const dispatch = vi.fn<CatchupDispatchFn>(async () => ({ ok: true }));
+
+    await expect(
+      performIMessageCatchup({ accountId: "primary", config, now, fetch, dispatch }),
+    ).rejects.toBe(failure);
+    expect(compare).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledTimes(1);
   });
 });

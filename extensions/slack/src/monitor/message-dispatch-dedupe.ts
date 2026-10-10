@@ -7,6 +7,7 @@
 // still run the same gate without ever producing a second visible reply.
 import {
   createChannelReplayGuard,
+  runClaimableDedupeClaimLoop,
   type ChannelReplayClaimHandle,
 } from "openclaw/plugin-sdk/persistent-dedupe";
 
@@ -20,6 +21,12 @@ const SLACK_MESSAGE_DISPATCH_DEDUPE_NAMESPACE_PREFIX = "slack.message-dispatch-d
 const SLACK_MESSAGE_DISPATCH_DEDUPE_STATE_PLUGIN_ID = "slack-message-dispatch-dedupe";
 
 export type SlackMessageDispatchReplayClaim = ChannelReplayClaimHandle;
+
+export class SlackMessageDispatchRetryError extends Error {
+  constructor(cause: unknown) {
+    super("Slack dispatch owner released while its twin was waiting", { cause });
+  }
+}
 
 type SlackMessageDispatchClaimResult =
   | { kind: "claimed"; handle: SlackMessageDispatchReplayClaim }
@@ -67,24 +74,26 @@ export type SlackMessageDispatchReplayGuard = ReturnType<
 export async function claimSlackMessageDispatchReplay(params: {
   guard: SlackMessageDispatchReplayGuard;
   key: string;
+  onWaiting?: () => void;
 }): Promise<SlackMessageDispatchClaimResult> {
-  let releaseRetries = 0;
-  while (true) {
-    const claim = await params.guard.claim({ keys: [params.key] });
-    if (claim.kind === "claimed") {
-      return { kind: "claimed", handle: claim.handle };
-    }
-    if (claim.kind === "duplicate" || claim.kind === "invalid") {
-      return { kind: "duplicate" };
-    }
-    try {
-      await claim.pending;
-      return { kind: "duplicate" };
-    } catch {
-      releaseRetries += 1;
-      if (releaseRetries > 1) {
-        return { kind: "duplicate" };
+  const claim = await runClaimableDedupeClaimLoop(
+    async () => {
+      const next = await params.guard.claim({ keys: [params.key] });
+      if (next.kind === "inflight") {
+        params.onWaiting?.();
       }
-    }
-  }
+      return next;
+    },
+    (error, rejectionCount) => {
+      if (params.onWaiting) {
+        // Admission was released for the wait. Re-enter through the retry owner
+        // to regain ordering and the adoption watchdog before claiming again.
+        throw new SlackMessageDispatchRetryError(error);
+      }
+      return rejectionCount <= 1;
+    },
+  );
+  return claim.kind === "claimed"
+    ? { kind: "claimed", handle: claim.handle }
+    : { kind: "duplicate" };
 }

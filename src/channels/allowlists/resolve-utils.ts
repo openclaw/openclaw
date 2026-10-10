@@ -1,14 +1,9 @@
-/**
- * Channel allowlist resolution helpers.
- *
- * Dedupes allowFrom entries and canonicalizes user lookups into stable id additions.
- */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
 import type { RuntimeEnv } from "../../runtime.js";
+import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import { summarizeStringEntries } from "../../shared/string-sample.js";
 
 export type AllowlistUserResolutionLike = {
@@ -17,32 +12,20 @@ export type AllowlistUserResolutionLike = {
   id?: string;
 };
 
-function dedupeAllowlistEntries(entries: string[]): string[] {
-  const seen = new Set<string>();
-  const deduped: string[] = [];
-  for (const entry of entries) {
-    const normalized = entry.trim();
-    if (!normalized) {
-      continue;
-    }
-    const key = normalizeLowercaseStringOrEmpty(normalized);
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    deduped.push(normalized);
-  }
-  return deduped;
+function dedupeAllowlistEntries(
+  entries: string[],
+  entryKey: (entry: string) => string = normalizeLowercaseStringOrEmpty,
+): string[] {
+  return dedupeByKey(entries.map((entry) => entry.trim()).filter(Boolean), entryKey);
 }
 
 export function mergeAllowlist(params: {
   existing?: Array<string | number>;
   additions: string[];
 }): string[] {
-  return dedupeAllowlistEntries([...mapAllowFromEntries(params.existing), ...params.additions]);
+  return dedupeAllowlistEntries([...(params.existing ?? []).map(String), ...params.additions]);
 }
 
-/** Splits lookup results into resolved mappings, unresolved display text, and id additions. */
 export function buildAllowlistResolutionSummary<T extends AllowlistUserResolutionLike>(
   resolvedUsers: T[],
   opts?: {
@@ -94,7 +77,11 @@ function resolveAllowlistIdAdditions<T extends AllowlistUserResolutionLike>(para
 /** Replaces resolvable user entries with canonical ids while preserving unresolved entries and `*`. */
 export function canonicalizeAllowlistWithResolvedIds<
   T extends AllowlistUserResolutionLike,
->(params: { existing?: Array<string | number>; resolvedMap: Map<string, T> }): string[] {
+>(params: {
+  existing?: Array<string | number>;
+  resolvedMap: Map<string, T>;
+  entryKey?: (entry: string) => string;
+}): string[] {
   const canonicalized: string[] = [];
   for (const entry of params.existing ?? []) {
     const trimmed = normalizeOptionalString(entry) ?? "";
@@ -109,10 +96,9 @@ export function canonicalizeAllowlistWithResolvedIds<
     const resolved = params.resolvedMap.get(trimmed);
     canonicalized.push(resolved?.resolved && resolved.id ? resolved.id : trimmed);
   }
-  return dedupeAllowlistEntries(canonicalized);
+  return dedupeAllowlistEntries(canonicalized, params.entryKey);
 }
 
-/** Updates nested `{ users }` allowlist entries using merge or canonicalize semantics. */
 export function patchAllowlistUsersInConfigEntries<
   T extends AllowlistUserResolutionLike,
   TEntries extends Record<string, unknown>,
@@ -120,6 +106,7 @@ export function patchAllowlistUsersInConfigEntries<
   entries: TEntries;
   resolvedMap: Map<string, T>;
   strategy?: "merge" | "canonicalize";
+  entryKey?: (entry: string) => string;
 }): TEntries {
   const nextEntries: Record<string, unknown> = { ...params.entries };
   for (const [entryKey, entryConfig] of Object.entries(params.entries)) {
@@ -136,6 +123,7 @@ export function patchAllowlistUsersInConfigEntries<
         ? canonicalizeAllowlistWithResolvedIds({
             existing: users,
             resolvedMap: params.resolvedMap,
+            entryKey: params.entryKey,
           })
         : mergeAllowlist({
             existing: users,
@@ -169,7 +157,6 @@ export function addAllowlistUserEntriesFromConfigEntry(target: Set<string>, entr
   }
 }
 
-/** Logs a compact resolved/unresolved allowlist lookup summary when there is anything to report. */
 export function summarizeMapping(
   label: string,
   mapping: string[],

@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'r=\"$(git rev-parse --show-toplevel 2>/dev/null)\"; [ -n \"$r\" ] && cd \"$r\" || exit 0; node scripts/worktree-setup.mjs source'",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

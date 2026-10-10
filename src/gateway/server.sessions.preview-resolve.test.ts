@@ -1,93 +1,212 @@
-/**
- * Gateway session preview resolve tests.
- */
+import { once } from "node:events";
+import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, test } from "vitest";
-import { clearSessionStoreCacheForTest } from "../config/sessions.js";
+import { expect, onTestFinished, test, vi } from "vitest";
+import * as sessionAccessor from "../config/sessions/session-accessor.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
 import {
-  applySessionEntryLifecycleMutation,
-  listSessionEntries,
-  loadSessionEntry,
-} from "../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+  closeOpenClawAgentDatabaseByPath,
+  resolveIncognitoOpenClawAgentSqlitePath,
+} from "../state/openclaw-agent-db.js";
+import type { ControlUiSessionPreview } from "./control-ui-contract.js";
+import type { GatewayClient } from "./server-methods/types.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
+import * as sessionRows from "./session-row-projection-record.js";
+import { readSessionPreviewItemsFromTranscriptAsync } from "./session-transcript-preview.js";
+import type { SessionsListResult } from "./session-utils.types.js";
 import { rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   sessionStoreEntry,
-  getMainPreviewEntry,
   directSessionReq,
-  loadSeededTranscriptEvents,
-  seedLinearSessionTranscript,
+  getGatewayConfigModule,
   seedSessionTranscript,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
+const { createSessionStoreDir, createSelectedGlobalSessionStore, openClient } =
+  setupGatewaySessionsTestHarness();
 
-async function replaceSessionEntries(
-  storePath: string,
-  entries: Record<string, Partial<SessionEntry>>,
-  agentId = "main",
-): Promise<void> {
-  clearSessionStoreCacheForTest();
-  await applySessionEntryLifecycleMutation({
-    agentId,
-    storePath,
-    removals: listSessionEntries({ agentId, storePath }).map(({ sessionKey }) => ({ sessionKey })),
-    upserts: Object.entries(entries).map(([sessionKey, entry]) => ({
-      sessionKey,
-      entry: {
-        updatedAt: 0,
-        ...entry,
-        sessionId: entry.sessionId ?? sessionKey,
-      },
-    })),
-    skipMaintenance: true,
-  });
-  clearSessionStoreCacheForTest();
-}
-
-async function previewMainAliasFromStore(params: {
-  transcripts: Record<string, string>;
-  store: Record<string, { sessionId: string; updatedAt: number }>;
-}): Promise<Awaited<ReturnType<typeof getMainPreviewEntry>>> {
-  const { dir } = await createSessionStoreDir();
-  const storePath = path.join(dir, "agents", "ops", "sessions", "sessions.json");
-  testState.sessionStorePath = storePath;
-  testState.agentsConfig = { list: [{ id: "ops", default: true }] };
-  testState.sessionConfig = { mainKey: "work" };
-
-  await writeSessionStore({ agentId: "ops", entries: {} });
-  await replaceSessionEntries(storePath, params.store, "ops");
-  for (const [sessionKey, entry] of Object.entries(params.store)) {
-    const content = params.transcripts[entry.sessionId];
-    if (content) {
-      await seedSessionTranscript({
-        agentId: "ops",
-        sessionId: entry.sessionId,
-        sessionKey,
-        storePath,
-        messages: [{ role: "assistant", content }],
-      });
+test("lists and previews the selected aggregate global owner over WebSocket", async () => {
+  const config = await getGatewayConfigModule();
+  const runtime = config.getRuntimeConfigSnapshot();
+  const source = config.getRuntimeConfigSourceSnapshot();
+  const previous = {
+    agentsConfig: testState.agentsConfig,
+    sessionConfig: testState.sessionConfig,
+    sessionStorePath: testState.sessionStorePath,
+  };
+  const configPaths = new Set([config.CONFIG_PATH]);
+  if (process.env.OPENCLAW_CONFIG_PATH) {
+    configPaths.add(process.env.OPENCLAW_CONFIG_PATH);
+  }
+  if (process.env.OPENCLAW_STATE_DIR) {
+    configPaths.add(path.join(process.env.OPENCLAW_STATE_DIR, "openclaw.json"));
+  }
+  const files = new Map<string, Buffer | undefined>();
+  for (const configPath of configPaths) {
+    try {
+      files.set(configPath, await fs.readFile(configPath));
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+        throw error;
+      }
+      files.set(configPath, undefined);
     }
   }
-
+  onTestFinished(async () => {
+    Object.assign(testState, previous);
+    // The connected fixture publishes both config paths as well as its runtime snapshot.
+    for (const [configPath, contents] of files) {
+      if (contents === undefined) {
+        await fs.rm(configPath, { force: true });
+      } else {
+        await fs.writeFile(configPath, contents);
+      }
+    }
+    if (runtime) {
+      config.setRuntimeConfigSnapshot(runtime, source ?? undefined);
+    } else {
+      config.clearRuntimeConfigSnapshot();
+    }
+  });
+  const { workStorePath } = await createSelectedGlobalSessionStore();
+  testState.agentsConfig = {
+    entries: {
+      main: { model: { primary: "openai/gpt-5.4" } },
+      work: { model: { primary: "openai/gpt-5.5" } },
+    },
+  };
+  const sessionId = "aggregate-work-global";
+  const workSqlitePath = resolveUnsuffixedSqliteTargetFromSessionStorePath(workStorePath).path;
+  const backfilled = Promise.withResolvers<void>();
+  const publishTranscriptFields = sessionRows.publishTranscriptFields;
+  const publication = vi
+    .spyOn(sessionRows, "publishTranscriptFields")
+    .mockImplementation((row, ...args) => {
+      const changed = publishTranscriptFields(row, ...args);
+      if (
+        row.key === "global" &&
+        row.agentId === "work" &&
+        row.storeTarget.storePath === workSqlitePath &&
+        row.entry.sessionId === sessionId &&
+        row.lastMessagePreview === "Work global conversation"
+      ) {
+        backfilled.resolve();
+      }
+      return changed;
+    });
+  onTestFinished(() => publication.mockRestore());
+  await writeSessionStore({
+    agentId: "work",
+    storePath: workStorePath,
+    entries: { global: sessionStoreEntry(sessionId, { label: "Work global conversation" }) },
+  });
+  // The suite Gateway is already running, so publish the transcript to its projection.
+  await sessionAccessor.persistSessionTranscriptTurn(
+    { agentId: "work", sessionId, sessionKey: "global", storePath: workStorePath },
+    {
+      updateMode: "file-only",
+      messages: [{ message: { role: "user", content: "Work global conversation" } }],
+    },
+  );
   const { ws } = await openClient();
   try {
-    return await getMainPreviewEntry(ws);
+    await backfilled.promise;
+    for (const search of [undefined, "gpt-5.5"]) {
+      const listed = await rpcReq<SessionsListResult>(ws, "sessions.list", {
+        includeGlobal: true,
+        includeDerivedTitles: true,
+        includeLastMessage: true,
+        ...(search ? { search } : {}),
+      });
+      expect(listed.ok).toBe(true);
+      expect(listed.payload?.sessions).toMatchObject([
+        {
+          key: "global",
+          sessionId,
+          agentId: "work",
+          model: "gpt-5.5",
+          derivedTitle: "Work global conversation",
+        },
+      ]);
+    }
+    const preview = await rpcReq<ControlUiSessionPreview>(ws, "controlUi.sessionPreview", {
+      sessionKey: "agent:work:main",
+    });
+    expect(preview, JSON.stringify(preview)).toMatchObject({
+      ok: true,
+      payload: {
+        status: "ok",
+        agentId: "work",
+        derivedTitle: "Work global conversation",
+        lastMessagePreview: "Work global conversation",
+      },
+    });
+    const resolved = await rpcReq(ws, "sessions.resolve", {
+      label: "Work global conversation",
+      includeGlobal: true,
+    });
+    expect(resolved).toMatchObject({
+      ok: true,
+      payload: { ok: true, key: "global", agentId: "work" },
+    });
   } finally {
-    ws.close();
+    if (ws.readyState !== ws.CLOSED) {
+      const closed = once(ws, "close");
+      ws.close();
+      await closed;
+    }
   }
+});
+
+async function seedPreviewTail(
+  sessionId: string,
+  messages: Array<{ role: string; content: string }>,
+) {
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({
+    entries: { "agent:main:main": sessionStoreEntry(sessionId) },
+  });
+  const scope = { agentId: "main", sessionId, sessionKey: "agent:main:main", storePath };
+  await sessionAccessor.persistSessionTranscriptTurn(scope, {
+    messages: messages.map((message) => ({ message })),
+    touchSessionEntry: false,
+  });
+  return { ...scope, sessionEntry: { sessionId } };
 }
 
-test("sessions.preview returns transcript previews", async () => {
+function identifiedClient(profileId: string, scopes: string[] = ["operator.read"]): GatewayClient {
+  return {
+    connect: {
+      minProtocol: 1,
+      maxProtocol: 1,
+      client: {
+        id: "openclaw-control-ui",
+        version: "test",
+        platform: "test",
+        mode: "webchat",
+      },
+      role: "operator",
+      scopes,
+    },
+    authenticatedUserId: `${profileId}@example.com`,
+    authenticatedUserProfile: {
+      profileId,
+      displayName: profileId,
+      hasAvatar: false,
+      updatedAt: 1,
+    },
+  };
+}
+
+test("sessions.preview returns transcript previews within the requested text budget", async () => {
   const { storePath } = await createSessionStoreDir();
   const sessionId = "sess-preview";
   const lines = createToolSummaryPreviewTranscriptLines(sessionId);
 
   await writeSessionStore({
     entries: {
-      main: sessionStoreEntry(sessionId),
+      "agent:main:main": sessionStoreEntry(sessionId),
     },
   });
   await seedSessionTranscript({
@@ -98,7 +217,15 @@ test("sessions.preview returns transcript previews", async () => {
       .map((line) => JSON.parse(line) as { message?: Record<string, unknown> })
       .map((record) => record.message)
       .filter((message): message is Record<string, unknown> => Boolean(message))
-      .map((message) => Object.assign({ role: String(message.role) }, message)),
+      .map((message) =>
+        Object.assign(
+          { role: String(message.role) },
+          message,
+          message.role === "user"
+            ? { content: "Long preview input crosses the requested character budget." }
+            : {},
+        ),
+      ),
   });
 
   const preview = await directSessionReq<{
@@ -107,143 +234,36 @@ test("sessions.preview returns transcript previews", async () => {
       status: string;
       items: Array<{ role: string; text: string }>;
     }>;
-  }>("sessions.preview", { keys: ["main"], limit: 3, maxChars: 120 });
+  }>("sessions.preview", { keys: ["main"], limit: 3, maxChars: 24 });
   expect(preview.ok).toBe(true);
   const entry = preview.payload?.previews[0];
   expect(entry?.key).toBe("main");
   expect(entry?.status).toBe("ok");
-  expect(entry?.items.map((item) => item.role)).toEqual(["assistant", "tool", "assistant"]);
-  expect(entry?.items[1]?.text).toContain("call weather");
+  expect(entry?.items).toEqual([
+    { role: "user", text: "Long preview input cr..." },
+    { role: "assistant", text: "Hi" },
+    { role: "assistant", text: "Forecast ready" },
+  ]);
 });
 
-test("sessions.preview resolves legacy main alias with custom mainKey", async () => {
-  const sessionId = "sess-legacy-main";
-
-  const entry = await previewMainAliasFromStore({
-    transcripts: {
-      [sessionId]: "Legacy alias transcript",
-    },
-    store: {
-      "agent:ops:main": {
-        sessionId,
-        updatedAt: Date.now(),
-      },
-    },
-  });
-  expect(entry?.items[0]?.text).toContain("Legacy alias transcript");
-});
-
-test("sessions.preview prefers the freshest duplicate row for a legacy main alias", async () => {
-  const entry = await previewMainAliasFromStore({
-    transcripts: {
-      "sess-stale-main": "stale preview",
-      "sess-fresh-main": "fresh preview",
-    },
-    store: {
-      "agent:ops:work": {
-        sessionId: "sess-stale-main",
-        updatedAt: 1,
-      },
-      "agent:ops:main": {
-        sessionId: "sess-fresh-main",
-        updatedAt: 2,
-      },
-    },
-  });
-  expect(entry?.items[0]?.text).toContain("fresh preview");
-});
-
-test("sessions.resolve and mutators clean legacy main-alias ghost keys", async () => {
-  const { dir } = await createSessionStoreDir();
-  const storePath = path.join(dir, "agents", "ops", "sessions", "sessions.json");
-  testState.sessionStorePath = storePath;
-  testState.agentsConfig = { list: [{ id: "ops", default: true }] };
-  testState.sessionConfig = { mainKey: "work" };
-  const sessionId = "sess-alias-cleanup";
-  await writeSessionStore({ agentId: "ops", entries: {} });
-  await seedLinearSessionTranscript({
-    agentId: "ops",
-    contents: Array.from({ length: 8 }, (_, index) => `line ${index}`),
-    sessionId,
-    sessionKey: "agent:ops:work",
-    storePath,
-  });
-
-  const writeRawStore = async (store: Record<string, Partial<SessionEntry>>) => {
-    await replaceSessionEntries(storePath, store, "ops");
-  };
-  const readStoreKeys = () =>
-    listSessionEntries({ agentId: "ops", storePath }).map(({ sessionKey }) => sessionKey);
-  const readWorkEntry = () =>
-    loadSessionEntry({
-      agentId: "ops",
-      sessionKey: "agent:ops:work",
-      storePath,
-    });
-
-  await writeRawStore({
-    "agent:ops:main": { sessionId, updatedAt: Date.now() - 1_000 },
-  });
-
-  const { ws } = await openClient();
-
-  const resolved = await rpcReq<{ ok: true; key: string }>(ws, "sessions.resolve", {
-    key: "main",
-  });
-  expect(resolved.ok).toBe(true);
-  expect(resolved.payload?.key).toBe("agent:ops:work");
-  expect(readStoreKeys().toSorted()).toEqual(["agent:ops:work"]);
-
-  await writeRawStore({
-    "agent:ops:work": readWorkEntry() ?? { sessionId },
-    "agent:ops:main": readWorkEntry() ?? { sessionId },
-  });
-  const patched = await rpcReq<{ ok: true; key: string }>(ws, "sessions.patch", {
-    key: "main",
-    thinkingLevel: "medium",
-  });
-  expect(patched.ok).toBe(true);
-  expect(patched.payload?.key).toBe("agent:ops:work");
-  expect(readStoreKeys().toSorted()).toEqual(["agent:ops:work"]);
-  expect(readWorkEntry()?.thinkingLevel).toBe("medium");
-
-  await writeRawStore({
-    "agent:ops:work": readWorkEntry() ?? { sessionId },
-    "agent:ops:main": readWorkEntry() ?? { sessionId },
-  });
-  const compacted = await rpcReq<{ ok: true; compacted: boolean }>(ws, "sessions.compact", {
-    key: "main",
-    maxLines: 3,
-  });
-  expect(compacted.ok).toBe(true);
-  expect(compacted.payload?.compacted).toBe(true);
-  expect(readStoreKeys().toSorted()).toEqual(["agent:ops:work"]);
-  const compactedEvents = await loadSeededTranscriptEvents({
-    agentId: "ops",
-    sessionId,
-    sessionKey: "agent:ops:work",
-    storePath,
-  });
-  expect(
-    compactedEvents
-      .map((event) =>
-        event && typeof event === "object" && "message" in event
-          ? (event as { message?: { content?: unknown } }).message?.content
-          : undefined,
-      )
-      .filter((content) => content !== undefined),
-  ).toEqual(["line 6", "line 7"]);
-
-  await writeRawStore({
-    "agent:ops:work": readWorkEntry() ?? { sessionId },
-    "agent:ops:main": readWorkEntry() ?? { sessionId },
-  });
-  const reset = await rpcReq<{ ok: true; key: string }>(ws, "sessions.reset", { key: "main" });
-  expect(reset.ok).toBe(true);
-  expect(reset.payload?.key).toBe("agent:ops:work");
-  expect(readStoreKeys().toSorted()).toEqual(["agent:ops:work"]);
-
-  ws.close();
+test("session preview reader widens its bounded tail past filtered tool-result rows", async () => {
+  const scope = await seedPreviewTail("sess-preview-sparse-tail", [
+    ...Array.from({ length: 64 }, (_, index) => ({
+      role: "assistant",
+      content: `visible ${String(index)}`,
+    })),
+    ...Array.from({ length: 320 }, (_, index) => ({
+      role: "toolResult",
+      content: `tool ${String(index)}`,
+    })),
+  ]);
+  const items = await readSessionPreviewItemsFromTranscriptAsync(scope, 12, 120);
+  expect(items).toEqual(
+    Array.from({ length: 12 }, (_, index) => ({
+      role: "assistant",
+      text: `visible ${String(52 + index)}`,
+    })),
+  );
 });
 
 test("sessions.resolve by sessionId ignores fuzzy-search list limits and returns the exact match", async () => {
@@ -273,17 +293,133 @@ test("sessions.resolve by sessionId ignores fuzzy-search list limits and returns
   expect(resolved.payload?.key).toBe("agent:main:subagent:target");
 });
 
-test("sessions.resolve can probe a missing selector without returning an RPC error", async () => {
+test("sessions.resolve filters discovery selectors with sessions.list visibility", async () => {
   await createSessionStoreDir();
-  const { ws } = await openClient();
+  const visibleKey = "agent:main:thread:12345678-0aaa-4000-8000-000000000001";
+  const secondVisibleKey = "agent:main:thread:12345678-0ccc-4000-8000-000000000005";
+  const hiddenCollisionKey = "agent:main:thread:12345678-0bbb-4000-8000-000000000002";
+  const hiddenOnlyKey = "agent:main:thread:deadbeef-0aaa-4000-8000-000000000003";
+  const incognitoKey = "agent:main:dashboard:incognito-cafebabe-0aaa-4000-8000-000000000004";
+  await writeSessionStore({
+    entries: {
+      [visibleKey]: {
+        sessionId: "sess-collision",
+        label: "collision-label",
+        displayName: "Visible session",
+        updatedAt: 40,
+        visibility: "shared",
+        createdActor: { type: "human", source: "profile", id: "owner" },
+      },
+      [hiddenCollisionKey]: {
+        sessionId: "sess-collision",
+        label: "collision-label",
+        displayName: "Hidden collision",
+        updatedAt: 30,
+        visibility: "draft",
+        createdActor: { type: "human", source: "profile", id: "owner" },
+      },
+      [secondVisibleKey]: {
+        sessionId: "sess-second-visible",
+        label: "second-visible",
+        displayName: "Second visible session",
+        updatedAt: 35,
+        visibility: "shared",
+        createdActor: { type: "human", source: "profile", id: "owner" },
+      },
+      [hiddenOnlyKey]: {
+        sessionId: "sess-hidden-only",
+        label: "hidden-only",
+        displayName: "Hidden only",
+        updatedAt: 20,
+        visibility: "draft",
+        createdActor: { type: "human", source: "profile", id: "owner" },
+      },
+    },
+  });
+  const incognitoPath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
+  onTestFinished(() => {
+    closeOpenClawAgentDatabaseByPath(incognitoPath);
+  });
+  await sessionAccessor.upsertSessionEntryCore(
+    { agentId: "main", sessionKey: incognitoKey, storePath: incognitoPath },
+    {
+      sessionId: "sess-incognito",
+      label: "incognito-only",
+      displayName: "Incognito only",
+      updatedAt: 10,
+      visibility: "shared",
+      incognito: true,
+      createdActor: { type: "human", source: "profile", id: "viewer" },
+    },
+  );
+  const client = identifiedClient("viewer");
 
-  const resolved = await rpcReq<{ ok: false }>(ws, "sessions.resolve", {
-    key: "agent:main:missing",
-    allowMissing: true,
+  for (const params of [
+    { shortId: "deadbeef" },
+    { shortId: "cafebabe" },
+    { sessionId: "sess-hidden-only" },
+    { label: "hidden-only" },
+  ]) {
+    const hidden = await directSessionReq("sessions.resolve", params, { client });
+    expect(hidden.ok).toBe(false);
+    expect(hidden.error?.message).toContain("No session found");
+  }
+
+  const ambiguous = await directSessionReq<{
+    ok: false;
+    candidates: Array<{ key: string; displayName?: string }>;
+  }>("sessions.resolve", { shortId: "12345678" }, { client });
+  expect(ambiguous).toMatchObject({
+    ok: true,
+    payload: {
+      ok: false,
+      candidates: [{ key: visibleKey }, { key: secondVisibleKey }],
+    },
   });
 
-  expect(resolved.ok).toBe(true);
-  expect(resolved.payload).toEqual({ ok: false });
+  for (const params of [{ sessionId: "sess-collision" }, { label: "collision-label" }]) {
+    const resolved = await directSessionReq<{ ok: true; key: string }>("sessions.resolve", params, {
+      client,
+    });
+    expect(resolved).toMatchObject({ ok: true, payload: { ok: true, key: visibleKey } });
+  }
+
+  const exactKey = await directSessionReq<{ ok: true; key: string }>(
+    "sessions.resolve",
+    { key: hiddenOnlyKey },
+    { client },
+  );
+  expect(exactKey).toMatchObject({ ok: true, payload: { ok: true, key: hiddenOnlyKey } });
+
+  for (const key of [hiddenOnlyKey, "agent:main:hidden-only"]) {
+    const reference = await directSessionReq(
+      "sessions.resolve",
+      { reference: { key, slug: "hidden-only" }, agentId: "main", allowMissing: true },
+      { client },
+    );
+    expect(reference).toMatchObject({ ok: true, payload: { ok: false } });
+  }
+
+  const ownerDraft = await directSessionReq<{ ok: true; key: string }>(
+    "sessions.resolve",
+    { shortId: "deadbeef" },
+    { client: identifiedClient("owner") },
+  );
+  expect(ownerDraft).toMatchObject({ ok: true, payload: { ok: true, key: hiddenOnlyKey } });
+
+  const adminIncognitoDiscovery = await directSessionReq(
+    "sessions.resolve",
+    { shortId: "cafebabe" },
+    { client: identifiedClient("admin", ["operator.admin"]) },
+  );
+  expect(adminIncognitoDiscovery.ok).toBe(false);
+  expect(adminIncognitoDiscovery.error?.message).toContain("No session found");
+  const adminIncognito = await directSessionReq<{ ok: true; key: string }>(
+    "sessions.resolve",
+    { key: incognitoKey },
+    { client: identifiedClient("admin", ["operator.admin"]) },
+  );
+  expect(adminIncognito).toMatchObject({ ok: true, payload: { ok: true, key: incognitoKey } });
 });
 
 test("sessions.resolve by key respects spawnedBy visibility filters", async () => {

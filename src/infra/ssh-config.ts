@@ -1,9 +1,9 @@
-// Reads effective SSH target config from the local ssh client.
 import { runCommandWithTimeout } from "../process/exec.js";
-import { parseStrictPositiveInteger } from "./parse-finite-number.js";
+import { resolveSshClient } from "./ssh-client.js";
 import type { SshParsedTarget } from "./ssh-tunnel.js";
+import { parseTcpPort } from "./tcp-port.js";
 
-export const SSH_CONFIG_OUTPUT_MAX_CHARS = 64 * 1024;
+const SSH_CONFIG_OUTPUT_MAX_CHARS = 64 * 1024;
 
 export type SshResolvedConfig = {
   user?: string;
@@ -12,18 +12,7 @@ export type SshResolvedConfig = {
   identityFiles: string[];
 };
 
-function parsePort(value: string | undefined): number | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const parsed = parseStrictPositiveInteger(value);
-  if (parsed === undefined || parsed > 65535) {
-    return undefined;
-  }
-  return parsed;
-}
-
-export function parseSshConfigOutput(output: string): SshResolvedConfig {
+function parseSshConfigOutput(output: string): SshResolvedConfig {
   const result: SshResolvedConfig = { identityFiles: [] };
   const lines = output.split("\n");
   for (const raw of lines) {
@@ -44,7 +33,7 @@ export function parseSshConfigOutput(output: string): SshResolvedConfig {
         result.host = value;
         break;
       case "port":
-        result.port = parsePort(value);
+        result.port = parseTcpPort(value) ?? undefined;
         break;
       case "identityfile":
         if (value !== "none") {
@@ -62,7 +51,10 @@ export async function resolveSshConfig(
   target: SshParsedTarget,
   opts: { identity?: string; timeoutMs?: number } = {},
 ): Promise<SshResolvedConfig | null> {
-  const sshPath = "/usr/bin/ssh";
+  const sshPath = resolveSshClient();
+  if (!sshPath) {
+    return null;
+  }
   const args = ["-G"];
   if (target.port > 0 && target.port !== 22) {
     args.push("-p", String(target.port));

@@ -1,5 +1,4 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-// Minimax provider module implements model/runtime integration.
 import {
   createWebSearchProviderContractFields,
   type WebSearchProviderPlugin,
@@ -52,9 +51,10 @@ export function createMiniMaxWebSearchProvider(): WebSearchProviderPlugin {
       description:
         "Search the web using MiniMax Search API. Returns titles, URLs, snippets, and related search suggestions.",
       parameters: MiniMaxSearchSchema,
-      execute: async (args) => {
+      execute: async (args, context) => {
+        context?.signal?.throwIfAborted();
         const { executeMiniMaxWebSearchProviderTool } = await loadMiniMaxWebSearchRuntime();
-        return await executeMiniMaxWebSearchProviderTool(ctx, args);
+        return await executeMiniMaxWebSearchProviderTool(ctx, args, context?.signal);
       },
     }),
   };

@@ -1,14 +1,17 @@
-// Control UI tests cover question-card placement in live and terminal chat runs.
+/* @vitest-environment jsdom */
+
+import { render } from "lit";
 import { afterEach, describe, expect, it } from "vitest";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import { buildCachedChatItems, coalesceStreamRuns, resetChatThreadState } from "./chat-thread.ts";
+import { renderChatQuestionSummary } from "./components/chat-question-card.ts";
 
 function prompt(status: QuestionPrompt["status"]): QuestionPrompt {
   return {
     id: "question-1",
     questions: [
       {
-        id: "format",
+        questionId: "format",
         header: "Format",
         question: "Which format?",
         options: [{ label: "Compact" }, { label: "Detailed" }],
@@ -16,6 +19,7 @@ function prompt(status: QuestionPrompt["status"]): QuestionPrompt {
       },
     ],
     sessionKey: "agent:main:main",
+    runId: "run-question",
     createdAtMs: 1_000,
     expiresAtMs: 60_000,
     status,
@@ -29,22 +33,17 @@ function prompt(status: QuestionPrompt["status"]): QuestionPrompt {
   };
 }
 
-function items(question: QuestionPrompt, runActive: boolean) {
+function items(question: QuestionPrompt, runActive: boolean, messages: unknown[] = []) {
   return buildCachedChatItems({
     paneId: `pane-${question.status}`,
     sessionKey: "agent:main:main",
-    messages: [],
+    messages,
     toolMessages: [],
     streamSegments: [],
     stream: null,
     streamStartedAt: null,
-    queue: [],
     showToolCalls: true,
     runWorking: runActive,
-    runActive,
-    planStatus: runActive
-      ? { steps: [{ step: "Wait for the answer", status: "in_progress" }] }
-      : null,
     questionPrompts: [question],
   });
 }
@@ -52,28 +51,75 @@ function items(question: QuestionPrompt, runActive: boolean) {
 afterEach(() => resetChatThreadState());
 
 describe("question chat items", () => {
-  it("groups a pending question with the active run and plan", () => {
+  it("keeps a pending question out of the message stream", () => {
     const result = coalesceStreamRuns(items(prompt("pending"), true));
     const run = result.find((item) => item.kind === "stream-run");
 
     expect(run?.kind).toBe("stream-run");
     expect(run?.kind === "stream-run" ? run.parts.map((part) => part.kind) : []).toEqual([
-      "question",
       "reading-indicator",
-      "plan",
     ]);
   });
 
-  it("keeps a terminal question as a stable transcript item", () => {
-    const result = coalesceStreamRuns(items(prompt("expired"), false));
+  it("keeps a terminal question between the surrounding transcript turns", () => {
+    const result = items(prompt("answered"), false, [
+      {
+        role: "user",
+        content: "First prompt",
+        timestamp: 900,
+        __openclaw: { idempotencyKey: "run-question:user" },
+      },
+      { role: "assistant", content: "First reply", timestamp: 1_300 },
+      { role: "user", content: "Next prompt", timestamp: 2_000 },
+    ]);
 
-    expect(result).toMatchObject([{ kind: "question", questionId: "question-1", pending: false }]);
+    expect(result.map((item) => (item.kind === "group" ? item.role : item.kind))).toEqual([
+      "user",
+      "question",
+      "assistant",
+      "user",
+    ]);
   });
 
-  it("omits questions belonging to another session", () => {
-    const other = prompt("pending");
-    other.sessionKey = "agent:other:main";
+  it.each([
+    ["answered", "Compact"],
+    ["cancelled", "Skipped"],
+    ["expired", "Expired"],
+    ["unavailable", "Unavailable"],
+  ] as const)("keeps the full question with its %s outcome", (status, outcome) => {
+    const question = prompt(status);
+    question.answeredElsewhere = true;
+    question.answers = { answers: { format: ["Compact"] } };
+    const container = document.createElement("div");
 
-    expect(items(other, false)).toEqual([]);
+    render(renderChatQuestionSummary(question), container);
+    expect(
+      container.querySelector(".chat-question-summary")?.textContent?.replace(/\s+/g, " "),
+    ).toContain(`Which format? Format: ${outcome}`);
+    expect(container.querySelector(".chat-question-panel")).toBeNull();
+  });
+
+  it("never echoes a secret answer in the terminal transcript summary", () => {
+    const answered = prompt("answered");
+    answered.questions = [
+      {
+        questionId: "api_key",
+        header: "API key",
+        question: "Provide the deployment API key",
+        options: [],
+        isSecret: true,
+        secretStore: { name: "FAKE_DEPLOYMENT_API_KEY", kind: "secret" },
+      },
+    ];
+    answered.answeredElsewhere = true;
+    answered.answers = { answers: { api_key: ["fake-secret-never-render"] } };
+    const container = document.createElement("div");
+
+    render(renderChatQuestionSummary(answered), container);
+
+    expect(container.textContent?.replace(/\s+/g, " ")).toContain("API key: Answered");
+    expect(container.textContent).toContain("Provide the deployment API key");
+    expect(container.textContent).not.toContain("fake-secret-never-render");
+    expect(container.innerHTML).not.toContain("fake-secret-never-render");
   });
 });

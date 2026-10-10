@@ -1,20 +1,16 @@
 /** macOS Chrome-family cookie database decryption and Playwright mapping. */
 import crypto from "node:crypto";
-import { DatabaseSync } from "node:sqlite";
 import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
+import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
+import type { Cookie } from "playwright-core";
 
 export type SystemBrowser = "chrome" | "brave" | "edge" | "chromium";
 
-type PlaywrightCookie = {
-  name: string;
-  value: string;
-  domain: string;
-  path: string;
-  expires?: number;
-  httpOnly: boolean;
-  secure: boolean;
-  sameSite?: "Strict" | "Lax" | "None";
-};
+export type PlaywrightCookie = Pick<
+  Cookie,
+  "name" | "value" | "domain" | "path" | "httpOnly" | "secure"
+> &
+  Partial<Pick<Cookie, "expires" | "sameSite">>;
 
 type ChromeCookieRow = {
   host_key: string;
@@ -30,7 +26,7 @@ type ChromeCookieRow = {
   samesite: number | bigint;
 };
 
-type CookieImportCounts = {
+export type CookieImportCounts = {
   total: number;
   imported: number;
   failed: number;
@@ -110,6 +106,23 @@ async function readKeychainSecret(entry: KeychainEntry, signal?: AbortSignal): P
   return secret;
 }
 
+/** Read and retain one Safe Storage secret for a long-running cookie sync session. */
+export async function cacheKeychainSecret(
+  browser: SystemBrowser,
+  signal?: AbortSignal,
+): Promise<KeychainSecretReader> {
+  const entry = KEYCHAIN_ENTRIES[browser];
+  const secret = await readKeychainSecret(entry, signal);
+  return async (requestedEntry, requestedSignal) => {
+    requestedSignal?.throwIfAborted();
+    if (requestedEntry.service !== entry.service || requestedEntry.account !== entry.account) {
+      throw new Error("cached Keychain secret does not match the selected system browser");
+    }
+    // The decryptor zeroes caller-owned secret buffers, so retain only this private copy.
+    return Buffer.from(secret);
+  };
+}
+
 /** Convert Chromium's Windows-epoch microseconds to Unix seconds. */
 function chromeFiletimeToUnixSeconds(value: number | bigint): number | undefined {
   if (typeof value === "bigint") {
@@ -123,7 +136,6 @@ function chromeFiletimeToUnixSeconds(value: number | bigint): number | undefined
   return seconds > 0 && seconds <= 9_999_999_999 ? seconds : undefined;
 }
 
-/** Map Chrome SameSite storage values to Playwright's cookie contract. */
 function mapChromeSameSite(
   value: number | bigint,
   secure: boolean,
@@ -141,8 +153,11 @@ function mapChromeSameSite(
   return undefined;
 }
 
-function decryptCookieValue(row: ChromeCookieRow, key: Buffer): string | undefined {
-  const encrypted = Buffer.from(row.encrypted_value);
+function decryptCookieValue(
+  row: ChromeCookieRow,
+  encrypted: Buffer,
+  key: Buffer,
+): string | undefined {
   if (encrypted.length === 0) {
     return row.value;
   }
@@ -233,12 +248,8 @@ async function decryptChromeCookieRows(params: {
     for (const row of selected) {
       params.signal?.throwIfAborted();
       const encrypted = Buffer.from(row.encrypted_value);
-      if (encrypted.length > 0 && !encrypted.subarray(0, 3).equals(V10_PREFIX)) {
-        counts.skipped += 1;
-        continue;
-      }
       try {
-        const value = decryptCookieValue(row, decryptionKey);
+        const value = decryptCookieValue(row, encrypted, decryptionKey);
         if (value === undefined) {
           counts.skipped += 1;
           continue;
@@ -265,7 +276,7 @@ export async function readChromeCookiesDatabase(params: {
   readSecret?: KeychainSecretReader;
   signal?: AbortSignal;
 }) {
-  const database = new DatabaseSync(params.databasePath, { readOnly: true });
+  const database = openNodeSqliteDatabase(params.databasePath, { readOnly: true });
   try {
     const statement = database.prepare(COOKIE_QUERY);
     statement.setReadBigInts(true);

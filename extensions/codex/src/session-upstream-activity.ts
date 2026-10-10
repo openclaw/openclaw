@@ -6,42 +6,21 @@ import type {
   SessionUpstreamProbe,
 } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { CodexAppServerRpcError } from "./app-server/client.js";
+import type { CodexTurn, CodexUserInput } from "./app-server/protocol.js";
+import { CodexAppServerRpcError, isCodexThreadReadMissingError } from "./app-server/rpc-error.js";
+import { sessionBindingIdentity } from "./app-server/session-binding-record.js";
+import type { CodexAppServerBindingStore } from "./app-server/session-binding.js";
 import type {
-  CodexThread,
-  CodexThreadTurnsListParams,
-  CodexThreadTurnsListResponse,
-  CodexTurn,
-  CodexUserInput,
-} from "./app-server/protocol.js";
-import {
-  sessionBindingIdentity,
-  type CodexAppServerBindingStore,
-} from "./app-server/session-binding.js";
-import type { CodexSessionCatalogControl } from "./session-catalog-types.js";
+  CodexSessionCatalogControl,
+  CodexSessionCatalogControlFactory,
+} from "./session-catalog-types.js";
 
 const CODEX_UPSTREAM_TURN_LIMIT = 100;
-// codex-rs app-server thread/read maps a gone rollout to JSON-RPC invalid_request
-// with exactly this message prefix (read_thread_view "thread not loaded"). The code
-// alone is generic (other store validation reuses it), so both must match; a harness
-// message rename degrades to the old silent gap instead of unlinking live threads.
-const CODEX_APP_SERVER_INVALID_REQUEST_CODE = -32600;
-const CODEX_THREAD_NOT_LOADED_MESSAGE_PREFIX = "thread not loaded:";
 
-function isCodexThreadGoneError(error: unknown): boolean {
-  return (
-    error instanceof CodexAppServerRpcError &&
-    error.code === CODEX_APP_SERVER_INVALID_REQUEST_CODE &&
-    error.message.startsWith(CODEX_THREAD_NOT_LOADED_MESSAGE_PREFIX)
-  );
-}
-
-type CodexUpstreamControl = {
-  connectionFingerprint?: string;
-  withPinnedConnection<T>(run: (control: CodexUpstreamControl) => Promise<T>): Promise<T>;
-  listTurnPage(params: CodexThreadTurnsListParams): Promise<CodexThreadTurnsListResponse>;
-  readThread(threadId: string, includeTurns?: boolean): Promise<CodexThread>;
-};
+type CodexUpstreamControl = Pick<
+  CodexSessionCatalogControl,
+  "connectionFingerprint" | "listTurnPage" | "readThread" | "withPinnedConnection"
+>;
 
 type CodexUpstreamMarker = {
   turnId: string | null;
@@ -57,12 +36,15 @@ function readMarker(probe: SessionUpstreamProbe): CodexUpstreamMarker | undefine
     return undefined;
   }
   const count = probe.marker.userMessageCount;
-  if (count !== undefined && (!Number.isSafeInteger(count) || (count as number) < 0)) {
+  if (
+    count !== undefined &&
+    (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0)
+  ) {
     return undefined;
   }
   return {
     turnId,
-    ...(count === undefined ? {} : { userMessageCount: count as number }),
+    ...(count === undefined ? {} : { userMessageCount: count }),
   };
 }
 
@@ -75,7 +57,6 @@ function upstreamConnectionFingerprint(probe: SessionUpstreamProbe): string | un
 function classifyCodexUpstreamTurns(params: {
   probe: SessionUpstreamProbe;
   turns: CodexTurn[];
-  now?: number;
 }): SessionUpstreamActivity | undefined {
   const marker = readMarker(params.probe);
   if (!marker) {
@@ -88,7 +69,7 @@ function classifyCodexUpstreamTurns(params: {
   const markerIndex =
     marker.turnId === null ? -1 : params.turns.findIndex((turn) => turn.id === marker.turnId);
   const candidateTurns = markerIndex < 0 ? params.turns : params.turns.slice(0, markerIndex + 1);
-  const newestUserMessageCount = countUserMessages(newest);
+  const newestUserMessageCount = newest.items.filter((item) => item.type === "userMessage").length;
   const markerAdvanced =
     marker.turnId !== newest.id ||
     marker.userMessageCount === undefined ||
@@ -117,7 +98,7 @@ function classifyCodexUpstreamTurns(params: {
         occurredAt =
           typeof timestampSeconds === "number" && Number.isFinite(timestampSeconds)
             ? timestampSeconds * 1000
-            : (params.now ?? Date.now());
+            : Date.now();
       }
     }
   }
@@ -127,14 +108,8 @@ function classifyCodexUpstreamTurns(params: {
     sessionKey: params.probe.sessionKey,
     humanTurns,
     nextMarker: { turnId: newest.id, userMessageCount: newestUserMessageCount },
-    ...(humanTurns > 0
-      ? { occurredAt: occurredAt ?? params.now ?? Date.now(), dedupeId: activityId }
-      : {}),
+    ...(humanTurns > 0 ? { occurredAt: occurredAt ?? Date.now(), dedupeId: activityId } : {}),
   };
-}
-
-function countUserMessages(turn: CodexTurn): number {
-  return turn.items.filter((item) => item.type === "userMessage").length;
 }
 
 function normalizeUserMessageTexts(item: CodexTurn["items"][number]): string[] {
@@ -152,8 +127,7 @@ function normalizeUserMessageTexts(item: CodexTurn["items"][number]): string[] {
 async function checkCodexUpstreamActivity(
   probes: SessionUpstreamProbe[],
   control: CodexUpstreamControl,
-  resolveThreadId: (probe: SessionUpstreamProbe) => Promise<string> = async (probe) =>
-    probe.threadId,
+  resolveThreadId: (probe: SessionUpstreamProbe) => Promise<string>,
 ): Promise<SessionUpstreamActivity[]> {
   return await control.withPinnedConnection(async (pinned) => {
     const activities: SessionUpstreamActivity[] = [];
@@ -168,28 +142,32 @@ async function checkCodexUpstreamActivity(
       }
       try {
         const threadId = await resolveThreadId(probe);
-        const page = await pinned.listTurnPage({
-          threadId,
-          limit: CODEX_UPSTREAM_TURN_LIMIT,
-          sortDirection: "desc",
-          itemsView: "full",
-        });
-        const marker = readMarker(probe);
-        if (page.data.length === 0 && marker) {
-          // Deleted threads do NOT reject turns/list: codex-rs load_thread_turns_list_history
-          // swallows ThreadNotFound/no-rollout and returns an empty page, and rollback can
-          // empty a live thread too. thread/read is the existence oracle: it still succeeds
-          // after rollback and rejects "thread not loaded" only once the rollout is gone.
+        const page = await pinned
+          .listTurnPage({
+            threadId,
+            limit: CODEX_UPSTREAM_TURN_LIMIT,
+            sortDirection: "desc",
+            itemsView: "full",
+          })
+          .catch((error: unknown) => {
+            if (error instanceof CodexAppServerRpcError && error.code === -32_600) {
+              return undefined;
+            }
+            throw error;
+          });
+        if (!page?.data.length && readMarker(probe)) {
+          // Both missing and rolled-back threads can lack readable turns.
+          // Only the exact native metadata read establishes that the thread is gone.
           try {
             await pinned.readThread(threadId, false);
           } catch (error) {
-            if (isCodexThreadGoneError(error)) {
+            if (isCodexThreadReadMissingError(error, threadId)) {
               activities.push({ kind: "missing", sessionKey: probe.sessionKey });
             }
           }
           continue;
         }
-        const activity = classifyCodexUpstreamTurns({ probe, turns: page.data });
+        const activity = page && classifyCodexUpstreamTurns({ probe, turns: page.data });
         if (activity) {
           activities.push(activity);
         }
@@ -204,27 +182,59 @@ async function checkCodexUpstreamActivity(
 export function createChecker(params: {
   api: OpenClawPluginApi;
   bindingStore: CodexAppServerBindingStore;
-  control: CodexSessionCatalogControl;
+  control: CodexSessionCatalogControlFactory;
   getRuntimeConfig: () => OpenClawConfig | undefined;
 }): NonNullable<SessionCatalogProvider["checkUpstreamActivity"]> {
-  return async (probes) =>
-    await checkCodexUpstreamActivity(probes, params.control, async (probe) => {
-      const config = params.getRuntimeConfig();
-      const entry = params.api.runtime.agent.session.getSessionEntry({
-        agentId: probe.agentId,
-        sessionKey: probe.sessionKey,
-        readConsistency: "latest",
-      });
-      const sessionId = entry?.sessionId?.trim();
-      if (!sessionId) {
-        return probe.threadId;
-      }
-      const binding = await params.bindingStore.read(
-        sessionBindingIdentity({ sessionId, sessionKey: probe.sessionKey, config }),
-      );
-      return binding?.connectionScope === "supervision" &&
-        binding.supervisionSourceThreadId === probe.threadId
-        ? binding.threadId
-        : probe.threadId;
+  const resolveThreadId = async (probe: SessionUpstreamProbe) => {
+    const config = params.getRuntimeConfig();
+    const storePath = params.api.runtime.agent.session.resolveStorePath(config?.session?.store, {
+      agentId: probe.agentId,
     });
+    const entry = await params.api.runtime.agent.session.getSessionEntryAsync({
+      agentId: probe.agentId,
+      storePath,
+      sessionKey: probe.sessionKey,
+      readConsistency: "latest",
+    });
+    const sessionId = entry?.sessionId?.trim();
+    if (!sessionId) {
+      return probe.threadId;
+    }
+    const binding = params.bindingStore.read(
+      sessionBindingIdentity({ sessionId, sessionKey: probe.sessionKey, config }),
+    );
+    return binding?.connectionScope === "supervision" &&
+      binding.supervisionSourceThreadId === probe.threadId
+      ? binding.threadId
+      : probe.threadId;
+  };
+  return async (probes) => {
+    const groups = new Map<
+      string,
+      { control: CodexSessionCatalogControl; probes: SessionUpstreamProbe[] }
+    >();
+    for (const probe of probes) {
+      const fingerprint = upstreamConnectionFingerprint(probe);
+      if (!fingerprint) {
+        continue;
+      }
+      const control = await params.control.forUpstream(probe.agentId, fingerprint);
+      if (!control) {
+        continue;
+      }
+      const key = `${probe.agentId}\0${fingerprint}`;
+      const group = groups.get(key) ?? {
+        control,
+        probes: [],
+      };
+      group.probes.push(probe);
+      groups.set(key, group);
+    }
+    const batches = await Promise.all(
+      [...groups.values()].map((group) =>
+        checkCodexUpstreamActivity(group.probes, group.control, resolveThreadId),
+      ),
+    );
+    return batches.flat();
+  };
 }

@@ -1,0 +1,551 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import type { ReactiveController, ReactiveControllerHost } from "lit";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import type { AgentCapability } from "../../lib/agents/index.ts";
+import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
+import {
+  CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
+  CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
+} from "./chat-history-events.ts";
+import { requestChatSessionSnapshot } from "./chat-history-request.ts";
+import type { ChatPaneElement } from "./route-draft-focus-handoff.ts";
+import { MAX_CACHED_CHAT_SESSIONS } from "./session-cache.ts";
+import {
+  appendChatMessageToCache,
+  cacheChatSessionSnapshot,
+  projectChatTranscriptMetadata,
+  readChatSessionSnapshot,
+  type ChatMessageCache,
+  type ChatSessionSnapshot,
+} from "./session-message-cache.ts";
+import { resolveChatSnapshotKey, resolveChatSnapshotSessionKey } from "./session-snapshot-key.ts";
+import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
+
+// Coalesce row sweeps for 75 ms while leaving time to warm history before a click.
+const SESSION_PREFETCH_INTENT_DELAY_MS = 75;
+const SESSION_PREFETCH_COOLDOWN_MS = 30_000;
+const SESSION_PREFETCH_LOCK_NAME = "openclaw-chat-prefetch";
+
+type ChatSnapshotKeyHost = Parameters<typeof resolveChatSnapshotKey>[0];
+
+type SessionPrefetchContext = {
+  readonly gateway: {
+    readonly connection?: { gatewayUrl: string };
+    readonly snapshot: Pick<ApplicationGatewaySnapshot, "assistantAgentId" | "hello"> &
+      Partial<Pick<ApplicationGatewaySnapshot, "client">>;
+    subscribe: (listener: () => void) => () => void;
+  };
+  readonly agents: { readonly state: Pick<AgentCapability["state"], "agentsList"> };
+  readonly sessions: Pick<
+    SessionCapability,
+    "captureConnectionScope" | "isConnectionScopeCurrent" | "canonicalListRevision"
+  > & {
+    readonly state: { readonly result: { readonly sessions: readonly GatewaySessionRow[] } | null };
+    subscribe: (listener: () => void) => () => void;
+  };
+};
+
+type SessionPrefetchSnapshot = {
+  client: GatewayBrowserClient | null;
+  isCurrent: () => boolean;
+  listRevision: number;
+  openSessionKeys: readonly string[];
+  intentSessionKey: string | null;
+  /** False while a presented pane is still fetching its transcript. */
+  presentedTranscriptsReady: boolean;
+  rows: readonly GatewaySessionRow[] | null;
+  snapshotHost: ChatSnapshotKeyHost;
+};
+
+type SessionPrefetchCandidate = {
+  activityAt: number;
+  sessionKey: string;
+  snapshotKey: string;
+  canonicalSessionKey: string;
+  sessionId: GatewaySessionRow["sessionId"];
+  activeLeafEntryId: GatewaySessionRow["activeLeafEntryId"];
+  updatedAt: GatewaySessionRow["updatedAt"];
+};
+
+function mayPrefetchHistory(
+  snapshot: SessionPrefetchSnapshot | null,
+  sessionKey?: string,
+): boolean {
+  return (
+    snapshot?.presentedTranscriptsReady === true &&
+    Boolean(snapshot.intentSessionKey && (!sessionKey || snapshot.intentSessionKey === sessionKey))
+  );
+}
+
+function sessionActivityAt(row: GatewaySessionRow): number {
+  return row.lastActivityAt ?? row.updatedAt ?? 0;
+}
+
+class SessionPrefetcher {
+  private connected = false;
+  private snapshot: SessionPrefetchSnapshot | null = null;
+  private readonly lastAttemptAt = new Map<string, number>();
+  private delayTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  private delayDeadline: number | null = null;
+  private running = false;
+  private rescheduleDelayMs: number | null = null;
+
+  constructor(
+    private readonly cache: ChatMessageCache,
+    private readonly snapshotStore: SessionSnapshotStore,
+  ) {}
+
+  connect(): void {
+    if (this.connected) {
+      return;
+    }
+    this.connected = true;
+    document.addEventListener("visibilitychange", this.handleVisibilityChange);
+    this.schedule();
+  }
+
+  disconnect(): void {
+    this.connected = false;
+    this.rescheduleDelayMs = null;
+    document.removeEventListener("visibilitychange", this.handleVisibilityChange);
+    this.cancelScheduledWork();
+  }
+
+  update(snapshot: SessionPrefetchSnapshot): void {
+    const previous = this.snapshot;
+    this.snapshot = snapshot;
+    if (
+      !previous ||
+      previous.client !== snapshot.client ||
+      previous.listRevision !== snapshot.listRevision ||
+      previous.intentSessionKey !== snapshot.intentSessionKey ||
+      previous.presentedTranscriptsReady !== snapshot.presentedTranscriptsReady ||
+      previous.openSessionKeys.length !== snapshot.openSessionKeys.length ||
+      previous.openSessionKeys.some((key, index) => key !== snapshot.openSessionKeys[index])
+    ) {
+      this.schedule();
+    }
+  }
+
+  private readonly handleVisibilityChange = () => {
+    if (document.visibilityState === "visible") {
+      this.schedule();
+    }
+  };
+
+  private schedule(delayMs = SESSION_PREFETCH_INTENT_DELAY_MS): void {
+    if (!this.connected || !mayPrefetchHistory(this.snapshot)) {
+      this.cancelScheduledWork();
+      this.rescheduleDelayMs = null;
+      return;
+    }
+    if (this.running) {
+      this.rescheduleDelayMs =
+        this.rescheduleDelayMs === null ? delayMs : Math.min(this.rescheduleDelayMs, delayMs);
+      return;
+    }
+    const deadline = Date.now() + delayMs;
+    if (this.delayDeadline !== null && this.delayDeadline <= deadline) {
+      return;
+    }
+    this.cancelScheduledWork();
+    this.delayDeadline = deadline;
+    this.delayTimer = globalThis.setTimeout(() => {
+      this.delayTimer = null;
+      this.delayDeadline = null;
+      void this.runCycle();
+    }, delayMs);
+  }
+
+  private async runCycle(): Promise<void> {
+    if (!this.connected || this.running || document.visibilityState === "hidden") {
+      return;
+    }
+    this.running = true;
+    try {
+      const locks = typeof navigator === "undefined" ? undefined : navigator.locks;
+      if (locks) {
+        await locks.request(SESSION_PREFETCH_LOCK_NAME, { ifAvailable: true }, async (lock) => {
+          // ifAvailable must skip instead of queueing so one visible tab owns the cycle.
+          if (lock) {
+            await this.prefetchIntendedSession();
+          }
+        });
+      } else {
+        await this.prefetchIntendedSession();
+      }
+    } catch (error) {
+      console.debug("[chat-session-prefetch] cycle failed", error);
+    } finally {
+      this.running = false;
+      if (this.rescheduleDelayMs !== null) {
+        const delayMs = this.rescheduleDelayMs;
+        this.rescheduleDelayMs = null;
+        this.schedule(delayMs);
+      }
+    }
+  }
+
+  private async prefetchIntendedSession(): Promise<void> {
+    const snapshot = this.snapshot;
+    // A presented transcript still in flight owns the socket; the pane's
+    // loading-changed event reschedules this cycle, so waiting costs no polling.
+    if (
+      !snapshot?.client ||
+      !snapshot.rows ||
+      !mayPrefetchHistory(snapshot) ||
+      document.visibilityState === "hidden" ||
+      !this.connected
+    ) {
+      return;
+    }
+    const { client } = snapshot;
+    await this.snapshotStore.loadSavedAtIndex();
+    if (!this.isCurrent(snapshot)) {
+      return;
+    }
+    // Refresh presented snapshots through their LRU owner before background writes
+    // so a full cache evicts stale entries instead of visible conversation panes.
+    for (const sessionKey of snapshot.openSessionKeys) {
+      const presented = readChatSessionSnapshot(this.cache, snapshot.snapshotHost, { sessionKey });
+      if (presented && this.cache.size === MAX_CACHED_CHAT_SESSIONS) {
+        this.snapshotStore.write(
+          resolveChatSnapshotKey(snapshot.snapshotHost, { sessionKey }),
+          presented,
+        );
+      }
+    }
+    const candidate = this.selectCandidate(snapshot);
+    if (candidate) {
+      await this.prefetchCandidate(snapshot, client, candidate);
+    }
+  }
+
+  private async prefetchCandidate(
+    snapshot: SessionPrefetchSnapshot,
+    client: GatewayBrowserClient,
+    candidate: SessionPrefetchCandidate,
+  ): Promise<void> {
+    // Hydration and cursor removal are synchronous owned writes. Renew
+    // only after checking the previous claim, before another await.
+    let ownsCache = this.snapshotStore.captureReadScope(candidate.snapshotKey);
+    const isCurrent = () => this.isCurrent(snapshot, candidate) && ownsCache();
+    // Every network request re-reads readiness: a presented pane can start
+    // loading during the persisted snapshot read or between history pages.
+    const mayRequest = () => isCurrent() && mayPrefetchHistory(this.snapshot, candidate.sessionKey);
+    if (!mayRequest() || this.isOpen(candidate.snapshotKey)) {
+      return;
+    }
+    const target = { sessionKey: candidate.canonicalSessionKey };
+    const readSnapshot = () => readChatSessionSnapshot(this.cache, snapshot.snapshotHost, target);
+    const cacheSnapshot = (value: ChatSessionSnapshot) =>
+      cacheChatSessionSnapshot(this.cache, snapshot.snapshotHost, target, value);
+    try {
+      let existing = readSnapshot();
+      if (!existing && this.snapshotStore.readSavedAt(candidate.snapshotKey) !== null) {
+        existing = await this.snapshotStore.read(candidate.snapshotKey);
+        if (!mayRequest()) {
+          return;
+        }
+        if (existing) {
+          cacheSnapshot(existing);
+          ownsCache = this.snapshotStore.captureReadScope(candidate.snapshotKey);
+        }
+      }
+      // The cooldown counts network attempts; a candidate yielded before its
+      // request stays eligible for the cycle after the presented transcript commits.
+      this.lastAttemptAt.set(candidate.snapshotKey, Date.now());
+      let result = await requestChatSessionSnapshot(
+        client,
+        candidate.canonicalSessionKey,
+        this,
+        mayRequest,
+        existing?.deltaCursor,
+      );
+      if (!isCurrent()) {
+        return;
+      }
+      if (result.kind === "reset") {
+        if (existing?.deltaCursor !== undefined) {
+          const { deltaCursor: _deltaCursor, ...withoutCursor } = existing;
+          cacheSnapshot(withoutCursor);
+          existing = withoutCursor;
+          ownsCache = this.snapshotStore.captureReadScope(candidate.snapshotKey);
+        }
+        if (!mayRequest()) {
+          return;
+        }
+        result = await requestChatSessionSnapshot(
+          client,
+          candidate.canonicalSessionKey,
+          this,
+          mayRequest,
+        );
+        if (!isCurrent()) {
+          return;
+        }
+      }
+      if (this.isOpen(candidate.snapshotKey)) {
+        return;
+      }
+      let cached: ChatSessionSnapshot;
+      if (result.kind === "delta") {
+        for (const payload of result.messages) {
+          const event = asOptionalRecord(payload);
+          if (!event || !Object.hasOwn(event, "message")) {
+            continue;
+          }
+          appendChatMessageToCache(this.cache, snapshot.snapshotHost, target, event.message, event);
+        }
+        const updated = readSnapshot();
+        if (!updated) {
+          return;
+        }
+        cached = {
+          ...updated,
+          // Prefetch does not own transient run replay. Keep the prior cursor
+          // so the opening pane can consume the same authoritative snapshot.
+          ...(result.inFlightRun ? {} : { deltaCursor: result.deltaCursor }),
+          ...(Object.hasOwn(result.sessionInfo, "activeLeafEntryId")
+            ? { displayedLeafEntryId: result.sessionInfo.activeLeafEntryId?.trim() || null }
+            : {}),
+          sessionId: result.sessionInfo.sessionId?.trim() || updated.sessionId,
+          transcriptMetadata: projectChatTranscriptMetadata(result.sessionInfo),
+        };
+      } else if (result.kind === "snapshot") {
+        cached = result.snapshot;
+      } else {
+        throw new Error("chat history page request returned a cursor reset");
+      }
+      cacheSnapshot(cached);
+    } catch (error) {
+      console.debug(
+        `[chat-session-prefetch] history fetch failed for ${candidate.canonicalSessionKey}`,
+        error,
+      );
+    }
+  }
+
+  private selectCandidate(snapshot: SessionPrefetchSnapshot): SessionPrefetchCandidate | null {
+    const row = snapshot.rows?.find((candidate) => candidate.key === snapshot.intentSessionKey);
+    // The presented pane owns transient run adoption and replay. Prefetch only
+    // warms durable history after navigation intent.
+    if (!row || isSessionRunActive(row)) {
+      return null;
+    }
+    const openKeys = new Set(
+      snapshot.openSessionKeys.map((sessionKey) =>
+        resolveChatSnapshotKey(snapshot.snapshotHost, { sessionKey }),
+      ),
+    );
+    const snapshotKey = resolveChatSnapshotKey(snapshot.snapshotHost, {
+      sessionKey: row.key,
+      agentId: row.agentId,
+    });
+    if (openKeys.has(snapshotKey) || openKeys.size >= MAX_CACHED_CHAT_SESSIONS) {
+      return null;
+    }
+    const activityAt = sessionActivityAt(row);
+    const savedAt = this.snapshotStore.readSavedAt(snapshotKey);
+    if (savedAt !== null && savedAt >= activityAt) {
+      return null;
+    }
+    const elapsed = Date.now() - (this.lastAttemptAt.get(snapshotKey) ?? 0);
+    if (elapsed < SESSION_PREFETCH_COOLDOWN_MS) {
+      this.schedule(SESSION_PREFETCH_COOLDOWN_MS - elapsed);
+      return null;
+    }
+    return {
+      activityAt,
+      sessionKey: row.key,
+      canonicalSessionKey: resolveChatSnapshotSessionKey(snapshot.snapshotHost, {
+        sessionKey: row.key,
+        agentId: row.agentId,
+      }),
+      snapshotKey,
+      sessionId: row.sessionId,
+      activeLeafEntryId: row.activeLeafEntryId,
+      updatedAt: row.updatedAt,
+    };
+  }
+
+  private isCurrent(
+    snapshot: SessionPrefetchSnapshot,
+    candidate?: SessionPrefetchCandidate,
+  ): boolean {
+    const current = this.snapshot;
+    if (
+      !this.connected ||
+      document.visibilityState === "hidden" ||
+      !snapshot.isCurrent() ||
+      !current ||
+      current.client !== snapshot.client
+    ) {
+      return false;
+    }
+    if (!candidate) {
+      return true;
+    }
+    // Unrelated roster refreshes cannot retire this read, but every row sharing
+    // its snapshot key must agree: an unchanged alias cannot hide newer history.
+    let found = false;
+    for (const row of current.rows ?? []) {
+      if (
+        resolveChatSnapshotKey(current.snapshotHost, {
+          sessionKey: row.key,
+          agentId: row.agentId,
+        }) !== candidate.snapshotKey
+      ) {
+        continue;
+      }
+      const activityAt = sessionActivityAt(row);
+      if (
+        row.sessionId !== candidate.sessionId ||
+        row.activeLeafEntryId !== candidate.activeLeafEntryId ||
+        (row.updatedAt ?? 0) > (candidate.updatedAt ?? 0) ||
+        activityAt > candidate.activityAt ||
+        isSessionRunActive(row)
+      ) {
+        return false;
+      }
+      found ||= row.updatedAt === candidate.updatedAt && activityAt === candidate.activityAt;
+    }
+    return found;
+  }
+
+  private isOpen(snapshotKey: string): boolean {
+    const snapshot = this.snapshot;
+    return Boolean(
+      snapshot?.openSessionKeys.some(
+        (sessionKey) =>
+          resolveChatSnapshotKey(snapshot.snapshotHost, { sessionKey }) === snapshotKey,
+      ),
+    );
+  }
+
+  private cancelScheduledWork(): void {
+    this.delayDeadline = null;
+    if (this.delayTimer !== null) {
+      globalThis.clearTimeout(this.delayTimer);
+      this.delayTimer = null;
+    }
+  }
+}
+
+type SessionPrefetchHost = ReactiveControllerHost & HTMLElement;
+
+export class SessionPrefetchController implements ReactiveController {
+  private readonly prefetcher: SessionPrefetcher;
+  private context: SessionPrefetchContext | undefined;
+  private subscriptions: Array<() => void> = [];
+  private intentSessionKey: string | null = null;
+  private paneRoot: Element;
+
+  constructor(
+    private readonly host: SessionPrefetchHost,
+    cache: ChatMessageCache,
+    snapshotStore: SessionSnapshotStore,
+    private readonly readContext: () => SessionPrefetchContext | undefined,
+  ) {
+    this.paneRoot = host;
+    this.prefetcher = new SessionPrefetcher(cache, snapshotStore);
+  }
+
+  hostConnected(): void {
+    // Home is a sibling of the page. Observe every pane on this socket through
+    // its shell, including lifecycle edges that cannot bubble after removal.
+    this.paneRoot = this.host.closest("openclaw-app-shell") ?? this.host;
+    this.paneRoot.addEventListener(CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT, this.sync);
+    this.paneRoot.addEventListener(CHAT_PANE_LIFECYCLE_CHANGED_EVENT, this.sync);
+    this.paneRoot.addEventListener("pointerover", this.handleNavigationIntent);
+    this.paneRoot.addEventListener("focusin", this.handleNavigationIntent);
+    this.prefetcher.connect();
+    this.sync();
+  }
+
+  hostUpdated(): void {
+    this.sync();
+  }
+
+  hostDisconnected(): void {
+    this.paneRoot.removeEventListener(CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT, this.sync);
+    this.paneRoot.removeEventListener(CHAT_PANE_LIFECYCLE_CHANGED_EVENT, this.sync);
+    this.paneRoot.removeEventListener("pointerover", this.handleNavigationIntent);
+    this.paneRoot.removeEventListener("focusin", this.handleNavigationIntent);
+    this.clearSubscriptions();
+    this.prefetcher.disconnect();
+  }
+
+  private readonly handleNavigationIntent = (event: Event) => {
+    const row = event
+      .composedPath()
+      .find(
+        (target): target is HTMLElement =>
+          target instanceof HTMLElement && target.hasAttribute("data-session-key"),
+      );
+    if (row && row.closest("openclaw-app-shell") !== this.paneRoot.closest("openclaw-app-shell")) {
+      return;
+    }
+    const sessionKey = row?.dataset.sessionKey ?? null;
+    if (sessionKey !== this.intentSessionKey) {
+      this.intentSessionKey = sessionKey;
+      this.sync();
+    }
+  };
+
+  private readonly sync = () => {
+    const context = this.readContext();
+    if (context !== this.context) {
+      this.clearSubscriptions();
+      this.context = context;
+      if (context) {
+        this.subscriptions = [
+          context.gateway.subscribe(this.sync),
+          context.sessions.subscribe(this.sync),
+        ];
+      }
+    }
+    if (!context) {
+      return;
+    }
+    const panes = [...this.paneRoot.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")].filter(
+      (pane) => pane.closest("openclaw-app-shell") === this.paneRoot.closest("openclaw-app-shell"),
+    );
+    const openSessionKeys = panes.flatMap((pane) => (pane.sessionKey ? [pane.sessionKey] : []));
+    const sessions = context.sessions;
+    const connection = sessions.captureConnectionScope();
+    this.prefetcher.update({
+      client: connection?.client ?? null,
+      isCurrent: () =>
+        this.context === context &&
+        context.sessions === sessions &&
+        connection !== null &&
+        sessions.isConnectionScopeCurrent(connection),
+      listRevision: context.sessions.canonicalListRevision,
+      openSessionKeys,
+      intentSessionKey: this.intentSessionKey,
+      presentedTranscriptsReady: !panes.some(
+        (pane) => pane.presented !== false && pane.transcriptLoading === true,
+      ),
+      rows: context.sessions.state.result?.sessions ?? null,
+      snapshotHost: {
+        settings: context.gateway.connection,
+        client: context.gateway.snapshot.client,
+        assistantAgentId: context.gateway.snapshot.assistantAgentId,
+        agentsList: context.agents.state.agentsList,
+        hello: context.gateway.snapshot.hello,
+      },
+    });
+  };
+
+  private clearSubscriptions(): void {
+    for (const unsubscribe of this.subscriptions) {
+      unsubscribe();
+    }
+    this.subscriptions = [];
+    this.context = undefined;
+  }
+}

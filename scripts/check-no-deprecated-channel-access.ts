@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { collectFilesSync, isCodeFile, relativeToCwd } from "./check-file-utils.js";
-import { classifyBundledExtensionSourcePath } from "./lib/extension-source-classifier.mjs";
+import { classifyBundledExtensionSourcePath } from "./lib/extension-source-classifier.mts";
 
 type Rule = {
   label: string;
@@ -14,6 +14,15 @@ const RULES: Rule[] = [
     label: "deprecated channel runtime",
     pattern:
       /\.channel\.(?:reply\.(?:createReplyDispatcherWithTyping|resolveHumanDelayConfig|dispatchReplyFromConfig|finalizeInboundContext|formatInboundEnvelope)|session\.(?:resolveStorePath|recordInboundSession)|inbound\.(?:runPreparedReply|dispatchReply)|media\.fetchRemoteMedia)\b/u,
+  },
+  {
+    label: "caller-owned prepared channel dispatch",
+    pattern: /\b(?:runDispatch|onPreDispatchFailure)\b/u,
+  },
+  {
+    label: "caller-owned reply dispatcher lifecycle",
+    pattern:
+      /\b(?:createReplyDispatcherWithTyping|dispatchInboundMessage(?:WithBufferedDispatcher|WithDispatcher)?|settleReplyDispatcher)\s*\(/u,
   },
   {
     label: "deprecated channel ingress resolver aliases",

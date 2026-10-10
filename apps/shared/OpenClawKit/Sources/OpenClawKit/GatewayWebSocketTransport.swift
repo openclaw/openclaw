@@ -1,7 +1,9 @@
 import Foundation
+import Synchronization
 
 public protocol WebSocketTasking: AnyObject {
     var state: URLSessionTask.State { get }
+    var response: URLResponse? { get }
     func resume()
     func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?)
     func send(_ message: URLSessionWebSocketTask.Message) async throws
@@ -10,25 +12,61 @@ public protocol WebSocketTasking: AnyObject {
     func receive(completionHandler: @escaping @Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)
 }
 
-extension URLSessionWebSocketTask: WebSocketTasking {}
-
-private final class WebSocketPingContinuationGate: @unchecked Sendable {
-    private let lock = NSLock()
-    private var didResume = false
-
-    func resumeOnce(_ resume: () -> Void) {
-        self.lock.lock()
-        if self.didResume {
-            self.lock.unlock()
-            return
-        }
-        self.didResume = true
-        self.lock.unlock()
-        resume()
+extension WebSocketTasking {
+    public var response: URLResponse? {
+        nil
     }
 }
 
+extension URLSessionWebSocketTask: WebSocketTasking {}
+
+/// Carries the native request owner's completion across transports that retain their own RPC state.
+public final class WebSocketRequestLifetime: @unchecked Sendable {
+    private let lock = NSLock()
+    private var finished = false
+    private var onFinish: (@Sendable () -> Void)?
+
+    public init() {}
+
+    // periphery:ignore - External transports use this to order send admission with cancellation.
+    /// Enqueue the request while holding the same lock that orders its retirement.
+    /// The actions must only enqueue work; running I/O here would block cancellation.
+    public func performIfActive(
+        _ action: () -> Void,
+        onFinish: @escaping @Sendable () -> Void) -> Bool
+    {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        guard !self.finished else { return false }
+        action()
+        self.onFinish = onFinish
+        return true
+    }
+
+    public func finish() {
+        self.lock.lock()
+        guard !self.finished else { self.lock.unlock()
+            return
+        }
+        self.finished = true
+        let action = self.onFinish
+        self.onFinish = nil
+        self.lock.unlock()
+        action?()
+    }
+}
+
+// periphery:ignore - Native transports implement caller-owned request lifetime handling.
+public protocol WebSocketRequestSending: WebSocketTasking {
+    // periphery:ignore - The erased request adapter dispatches through this optional transport seam.
+    func sendRequest(_ message: URLSessionWebSocketTask.Message, lifetime: WebSocketRequestLifetime) async throws
+}
+
 public struct WebSocketTaskBox: @unchecked Sendable {
+    /// Bounds a ping whose pong handler URLSession may never invoke. Long enough that a
+    /// slow-but-live link still pongs, short enough that a wedged keepalive recovers.
+    public static let pingTimeout: Duration = .seconds(10)
+
     public let task: any WebSocketTasking
     public init(task: any WebSocketTasking) {
         self.task = task
@@ -38,16 +76,36 @@ public struct WebSocketTaskBox: @unchecked Sendable {
         self.task.state
     }
 
+    public var response: URLResponse? {
+        self.task.response
+    }
+
     public func resume() {
         self.task.resume()
     }
 
+    /// URLSessionWebSocketTask cancellation can lose a race with its HTTP 101: the task completes
+    /// as canceled, then Foundation opens the upgraded socket anyway. Nothing in URLSession (task
+    /// cancel, session invalidation or reset) reclaims that socket, and its descriptor outlives
+    /// the peer's close. Callers keep it unused through socket generations and admission; the
+    /// Gateway closes its end at the preauth handshake timeout.
     public func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
         self.task.cancel(with: closeCode, reason: reason)
     }
 
     public func send(_ message: URLSessionWebSocketTask.Message) async throws {
         try await self.task.send(message)
+    }
+
+    public func sendRequest(
+        _ message: URLSessionWebSocketTask.Message,
+        lifetime: WebSocketRequestLifetime) async throws
+    {
+        if let transport = self.task as? any WebSocketRequestSending {
+            try await transport.sendRequest(message, lifetime: lifetime)
+        } else {
+            try await self.task.send(message)
+        }
     }
 
     public func receive() async throws -> URLSessionWebSocketTask.Message {
@@ -60,15 +118,37 @@ public struct WebSocketTaskBox: @unchecked Sendable {
         self.task.receive(completionHandler: completionHandler)
     }
 
-    public func sendPing() async throws {
+    public func sendPing(timeout: Duration = WebSocketTaskBox.pingTimeout) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let gate = WebSocketPingContinuationGate()
+            let didResume = Mutex(false)
+            let finish: @Sendable (Error?) -> Void = { error in
+                let first = didResume.withLock { resumed in
+                    guard !resumed else { return false }
+                    resumed = true
+                    return true
+                }
+                if first { ThrowingContinuationSupport.resumeVoid(continuation, error: error) }
+            }
+            // URLSession drops the pong handler entirely when the task is cancelled or
+            // closed mid-flight, which orphans this continuation and wedges the keepalive
+            // loop forever on an await that can never return. The deadline guarantees the
+            // continuation always resumes; the gate keeps that resume exactly once.
+            let deadline = Task {
+                do {
+                    try await Task.sleep(for: timeout)
+                } catch {
+                    // Cancelled because a pong arrived first; that callback owns the resume.
+                    // Swallowing this error instead would race the gate and report a healthy
+                    // ping as timed out.
+                    return
+                }
+                finish(URLError(.timedOut))
+            }
             self.task.sendPing { error in
+                deadline.cancel()
                 // URLSession can race ping callbacks with cancellation; only the first
                 // pong result owns this checked continuation or Swift traps the app.
-                gate.resumeOnce {
-                    ThrowingContinuationSupport.resumeVoid(continuation, error: error)
-                }
+                finish(error)
             }
         }
     }

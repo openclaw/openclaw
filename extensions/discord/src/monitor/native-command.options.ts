@@ -1,6 +1,8 @@
-// Discord plugin module implements native command.options behavior.
 import { ApplicationCommandOptionType } from "discord-api-types/v10";
-import { loadModelCatalog } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  getPreparedModelCatalogSnapshot,
+  resolveAgentDir,
+} from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   resolveCommandArgChoices,
@@ -25,7 +27,7 @@ export function truncateDiscordCommandDescription(params: {
   if (value.length <= DISCORD_COMMAND_DESCRIPTION_MAX) {
     return value;
   }
-  log.warn(
+  log.debug(
     `discord: truncating native command description (${label}) from ${value.length} to ${DISCORD_COMMAND_DESCRIPTION_MAX}: ${JSON.stringify(value)}`,
   );
   return truncateUtf16Safe(value, DISCORD_COMMAND_DESCRIPTION_MAX);
@@ -50,11 +52,8 @@ export function truncateDiscordCommandDescriptionLocalizations(params: {
   );
 }
 
-function resolveDiscordCommandLogLabel(command: ChatCommandDefinition): string {
-  if (typeof command.nativeName === "string" && command.nativeName.trim().length > 0) {
-    return command.nativeName;
-  }
-  return command.key;
+function buildDiscordChoiceOptions(choices: ReturnType<typeof resolveCommandArgChoices>) {
+  return choices.slice(0, 25).map((choice) => ({ name: choice.label, value: choice.value }));
 }
 
 export function buildDiscordCommandOptions(params: {
@@ -62,39 +61,32 @@ export function buildDiscordCommandOptions(params: {
   cfg: OpenClawConfig;
   resolveConfig?: () => OpenClawConfig;
   authorizeChoiceContext?: (interaction: AutocompleteInteraction) => Promise<boolean>;
-  resolveChoiceContext?: (
-    interaction: AutocompleteInteraction,
-  ) => Promise<{ provider?: string; model?: string; agentRuntime?: string } | null>;
+  resolveChoiceContext?: (interaction: AutocompleteInteraction) => Promise<{
+    provider?: string;
+    model?: string;
+    agentRuntime?: string;
+    agentId?: string;
+  } | null>;
 }): CommandOptions | undefined {
   const { command, cfg, resolveConfig, authorizeChoiceContext, resolveChoiceContext } = params;
-  const commandLabel = resolveDiscordCommandLogLabel(command);
+  const commandLabel = command.nativeName?.trim() ? command.nativeName : command.key;
   const args = command.args;
   if (!args || args.length === 0) {
     return undefined;
   }
-  return args.map((arg) => {
-    const required = arg.required ?? false;
-    if (arg.type === "number") {
-      return {
-        name: arg.name,
-        description: truncateDiscordCommandDescription({
-          value: arg.description,
-          label: `command:${commandLabel} arg:${arg.name}`,
-        }),
-        type: ApplicationCommandOptionType.Number,
-        required,
-      };
-    }
-    if (arg.type === "boolean") {
-      return {
-        name: arg.name,
-        description: truncateDiscordCommandDescription({
-          value: arg.description,
-          label: `command:${commandLabel} arg:${arg.name}`,
-        }),
-        type: ApplicationCommandOptionType.Boolean,
-        required,
-      };
+  return args.map((arg): CommandOptions[number] => {
+    const base = {
+      name: arg.name,
+      description: truncateDiscordCommandDescription({
+        value: arg.description,
+        label: `command:${commandLabel} arg:${arg.name}`,
+      }),
+      required: arg.required ?? false,
+    };
+    if (arg.type === "number" || arg.type === "boolean") {
+      return arg.type === "number"
+        ? Object.assign(base, { type: ApplicationCommandOptionType.Number as const })
+        : Object.assign(base, { type: ApplicationCommandOptionType.Boolean as const });
     }
     const resolvedChoices = resolveCommandArgChoices({ command, arg, cfg });
     const shouldAutocomplete =
@@ -119,10 +111,18 @@ export function buildDiscordCommandOptions(params: {
               ? await resolveChoiceContext(interaction)
               : null;
           const currentCfg = resolveConfig?.() ?? cfg;
-          // Autocomplete cannot defer beyond Discord's three-second deadline.
-          // Cache-only catalog reads never start discovery or filesystem work.
           const choiceCatalog =
-            command.key === "think" ? await loadModelCatalog({ cacheOnly: true }) : undefined;
+            command.key === "think"
+              ? getPreparedModelCatalogSnapshot({
+                  config: currentCfg,
+                  ...(context?.agentId
+                    ? {
+                        agentId: context.agentId,
+                        agentDir: resolveAgentDir(currentCfg, context.agentId),
+                      }
+                    : {}),
+                })?.entries
+              : undefined;
           const choices = resolveCommandArgChoices({
             command,
             arg,
@@ -130,40 +130,24 @@ export function buildDiscordCommandOptions(params: {
             provider: context?.provider,
             model: context?.model,
             agentRuntime: context?.agentRuntime,
-            ...(choiceCatalog?.length ? { catalog: choiceCatalog } : {}),
+            catalog: choiceCatalog,
           });
           const filtered = focusValue
             ? choices.filter((choice) =>
                 normalizeLowercaseStringOrEmpty(choice.label).includes(focusValue),
               )
             : choices;
-          await interaction.respond(
-            filtered.slice(0, 25).map((choice) => ({ name: choice.label, value: choice.value })),
-          );
-          if (command.key === "think" && !choiceCatalog?.length) {
-            // The interaction is acknowledged now, so a failed startup warmup can retry
-            // discovery without risking Discord's response deadline.
-            void loadModelCatalog({ config: currentCfg });
-          }
+          await interaction.respond(buildDiscordChoiceOptions(filtered));
         }
       : undefined;
-    const choices =
-      resolvedChoices.length > 0 && !autocomplete
-        ? resolvedChoices.slice(0, 25).map((choice) => ({
-            name: choice.label,
-            value: choice.value,
-          }))
-        : undefined;
-    return {
-      name: arg.name,
-      description: truncateDiscordCommandDescription({
-        value: arg.description,
-        label: `command:${commandLabel} arg:${arg.name}`,
-      }),
-      type: ApplicationCommandOptionType.String,
-      required,
-      choices,
-      autocomplete,
-    };
+    return Object.assign(base, {
+      type: ApplicationCommandOptionType.String as const,
+      ...(autocomplete
+        ? { autocomplete }
+        : {
+            choices:
+              resolvedChoices.length > 0 ? buildDiscordChoiceOptions(resolvedChoices) : undefined,
+          }),
+    });
   }) satisfies CommandOptions;
 }

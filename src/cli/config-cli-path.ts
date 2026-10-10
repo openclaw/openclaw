@@ -1,0 +1,580 @@
+import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
+import JSON5 from "json5";
+import { normalizeConfigModelSelectionParent } from "../config/model-input-normalization.js";
+import { rejectConfigNonFiniteNumbers } from "../config/value-tree.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import {
+  formatConcreteConfigPath,
+  toDotPath,
+  type ConcreteConfigPathSegment,
+} from "../shared/dot-path.js";
+import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
+import { formatCliCommand } from "./command-format.js";
+import { formatStrictJsonParseFailure } from "./error-format.js";
+import { quoteCliArg, quotePowerShellArg } from "./quote-cli-arg.js";
+
+export { parseConcreteConfigPath as parseConfigSetPath } from "../shared/dot-path.js";
+
+export type PathSegment = string;
+
+export function formatConfigSetPath(
+  path: readonly PathSegment[],
+  pathTokens?: readonly ConcreteConfigPathSegment[],
+  source?: unknown,
+): string {
+  return formatConcreteConfigPath(pathTokens ?? path, source);
+}
+
+export type JsonSchemaRecord = {
+  type?: unknown;
+  properties?: unknown;
+  additionalProperties?: unknown;
+  items?: unknown;
+  anyOf?: unknown;
+  oneOf?: unknown;
+  allOf?: unknown;
+};
+
+/** Subcommand that hit a replacement guard; it may only recommend flags that subcommand registers. */
+export type ConfigMutationCommand = "set" | "patch";
+
+/** Patch prints this path as its `--replace-path` argument, so a literal dot in a key needs brackets to re-parse. */
+function refusalPathLabel(command: ConfigMutationCommand, path: PathSegment[]): string {
+  return command === "patch" ? formatConfigSetPath(path) : toDotPath(path);
+}
+
+/**
+ * A copied retry crosses a shell, and once a key holds a quote no single spelling survives both
+ * the POSIX and the PowerShell convention. The host platform is no proxy for the interactive
+ * shell - Git Bash on Windows needs the POSIX form - so the advice names both when they differ.
+ */
+function replacePathArgument(pathLabel: string): string {
+  const posix = quoteCliArg(pathLabel);
+  const powershell = quotePowerShellArg(pathLabel);
+  // Bare and plainly quoted arguments read identically in both shells; only escaping makes them diverge.
+  if (posix === pathLabel || posix === powershell) {
+    return `--replace-path ${posix}`;
+  }
+  return `--replace-path ${posix} in bash and zsh, or --replace-path ${powershell} in PowerShell`;
+}
+
+type SetAtPathOptions = {
+  numericObjectKeys?: boolean;
+  pathTokens?: readonly ConcreteConfigPathSegment[];
+  quotedNumericSegments?: ReadonlySet<number>;
+  schema?: JsonSchemaRecord;
+  command?: ConfigMutationCommand;
+};
+
+export function parseConfigSetValue(raw: string, strictJson: boolean): unknown {
+  const trimmed = raw.trim();
+  let parsed: unknown;
+  try {
+    parsed = strictJson ? JSON.parse(trimmed) : JSON5.parse(trimmed);
+  } catch (err) {
+    if (strictJson) {
+      throw new Error(formatStrictJsonParseFailure({ value: raw, cause: err }), { cause: err });
+    }
+    return raw;
+  }
+  rejectConfigNonFiniteNumbers(parsed);
+  return parsed;
+}
+
+export function validatePathSegments(path: PathSegment[]): void {
+  for (const segment of path) {
+    if (isBlockedObjectKey(segment)) {
+      throw new Error(`Invalid path segment: ${segment}`);
+    }
+  }
+}
+
+export function getAtPath(
+  root: unknown,
+  path: readonly PathSegment[],
+): { found: boolean; value?: unknown } {
+  let current: unknown = root;
+  for (const segment of path) {
+    if (!current || typeof current !== "object") {
+      return { found: false };
+    }
+    if (Array.isArray(current)) {
+      const index = parseConfigPathArrayIndex(segment);
+      if (index === undefined || index >= current.length) {
+        return { found: false };
+      }
+      current = current[index];
+      continue;
+    }
+    const record = current as Record<string, unknown>;
+    if (!Object.hasOwn(record, segment)) {
+      return { found: false };
+    }
+    current = record[segment];
+  }
+  return { found: true, value: current };
+}
+
+export function formatConfigUnsetMissingPathMessage(params: {
+  path: string;
+  runtimeOnly: boolean;
+}): string {
+  if (params.runtimeOnly) {
+    return `Config path not found in authored config: ${params.path}. It only exists after runtime defaults are applied, so there is nothing for config unset to remove. Use ${formatCliCommand("openclaw config set <path> <value>")} to override the inherited value.`;
+  }
+  return `Config path not found: ${params.path}. Nothing was changed. Run ${formatCliCommand("openclaw config get <path>")} first if you are unsure of the path.`;
+}
+
+function schemaHasType(schema: JsonSchemaRecord, type: string): boolean {
+  return schema.type === type || (Array.isArray(schema.type) && schema.type.includes(type));
+}
+
+function schemaAlternatives(
+  schema: JsonSchemaRecord,
+  seen = new Set<JsonSchemaRecord>(),
+): JsonSchemaRecord[] {
+  if (seen.has(schema)) {
+    return [];
+  }
+  seen.add(schema);
+  const alternatives: JsonSchemaRecord[] = [schema];
+  for (const key of ["anyOf", "oneOf", "allOf"] as const) {
+    const entries = schema[key];
+    if (!Array.isArray(entries)) {
+      continue;
+    }
+    for (const entry of entries) {
+      if (isPlainRecord(entry)) {
+        alternatives.push(...schemaAlternatives(entry, seen));
+      }
+    }
+  }
+  return alternatives;
+}
+
+function schemaLooksArray(schema: JsonSchemaRecord): boolean {
+  return (
+    schemaHasType(schema, "array") || isPlainRecord(schema.items) || Array.isArray(schema.items)
+  );
+}
+
+function schemaLooksObject(schema: JsonSchemaRecord): boolean {
+  return (
+    schemaHasType(schema, "object") ||
+    isPlainRecord(schema.properties) ||
+    schema.additionalProperties === true ||
+    isPlainRecord(schema.additionalProperties)
+  );
+}
+
+function propertySchema(schema: JsonSchemaRecord, segment: PathSegment): JsonSchemaRecord[] {
+  const schemas: JsonSchemaRecord[] = [];
+  for (const alternative of schemaAlternatives(schema)) {
+    if (Object.keys(alternative).length === 0) {
+      schemas.push(alternative);
+      continue;
+    }
+    if (schemaLooksArray(alternative)) {
+      const index = parseConfigPathArrayIndex(segment);
+      if (index !== undefined) {
+        const indexedItem = Array.isArray(alternative.items)
+          ? alternative.items[index]
+          : alternative.items;
+        if (isPlainRecord(indexedItem)) {
+          schemas.push(indexedItem);
+        }
+      }
+      continue;
+    }
+    const properties = isPlainRecord(alternative.properties) ? alternative.properties : undefined;
+    const explicit = properties?.[segment];
+    if (isPlainRecord(explicit)) {
+      schemas.push(explicit);
+    } else if (alternative.additionalProperties === true) {
+      schemas.push({});
+    } else if (isPlainRecord(alternative.additionalProperties)) {
+      schemas.push(alternative.additionalProperties);
+    }
+  }
+  return schemas;
+}
+
+function schemasAtPath(
+  schema: JsonSchemaRecord | undefined,
+  path: readonly PathSegment[],
+): JsonSchemaRecord[] {
+  if (!schema) {
+    return [];
+  }
+  let schemas = [schema];
+  for (const segment of path) {
+    schemas = schemas.flatMap((candidate) => propertySchema(candidate, segment));
+    if (schemas.length === 0) {
+      return [];
+    }
+  }
+  return schemas;
+}
+
+export function isConfigSchemaPath(
+  schema: JsonSchemaRecord | undefined,
+  path: readonly PathSegment[],
+): boolean {
+  // Editor metadata is valid at the root but deliberately hidden from the UI schema.
+  if (path.length === 1 && path[0] === "$schema") {
+    return true;
+  }
+  return schemasAtPath(schema, path).length > 0;
+}
+
+function schemaPrefersArrayAtPath(
+  schema: JsonSchemaRecord | undefined,
+  path: readonly PathSegment[],
+): boolean | undefined {
+  const candidates = schemasAtPath(schema, path).flatMap((candidate) =>
+    schemaAlternatives(candidate),
+  );
+  if (candidates.length === 0) {
+    return undefined;
+  }
+  const hasArray = candidates.some((candidate) => schemaLooksArray(candidate));
+  const hasObject = candidates.some((candidate) => schemaLooksObject(candidate));
+  return hasArray === hasObject ? undefined : hasArray;
+}
+
+function shouldCreateArrayForMissingPathSegment(params: {
+  path: readonly PathSegment[];
+  segmentIndex: number;
+  next?: PathSegment;
+  options?: SetAtPathOptions;
+}): boolean {
+  if (
+    !params.next ||
+    params.options?.numericObjectKeys ||
+    parseConfigPathArrayIndex(params.next) === undefined
+  ) {
+    return false;
+  }
+  const nextToken = params.options?.pathTokens?.[params.segmentIndex + 1];
+  if (typeof nextToken === "number") {
+    return true;
+  }
+  if (params.options?.quotedNumericSegments?.has(params.segmentIndex + 1)) {
+    return false;
+  }
+  const parentPath = params.path.slice(0, params.segmentIndex + 1);
+  return schemaPrefersArrayAtPath(params.options?.schema, parentPath) ?? true;
+}
+
+export function setAtPath(
+  root: Record<string, unknown>,
+  path: PathSegment[],
+  value: unknown,
+  options?: SetAtPathOptions,
+): void {
+  const last = path.at(-1);
+  if (last === undefined) {
+    throw new Error("Config path must contain at least one segment");
+  }
+  let current: unknown = root;
+  for (const [i, segment] of path.slice(0, -1).entries()) {
+    const nextIsIndex = shouldCreateArrayForMissingPathSegment({
+      path,
+      segmentIndex: i,
+      next: path[i + 1],
+      options,
+    });
+    if (Array.isArray(current)) {
+      const index = parseConfigPathArrayIndex(segment);
+      if (index === undefined) {
+        throw new Error(`Expected numeric index for array segment "${segment}"`);
+      }
+      const existing = current[index];
+      if (!existing || typeof existing !== "object") {
+        current[index] = nextIsIndex ? [] : {};
+      }
+      current = current[index];
+      continue;
+    }
+    if (!current || typeof current !== "object") {
+      throw new Error(`Cannot traverse into "${segment}" (not an object)`);
+    }
+    const record = current as Record<string, unknown>;
+    const existing = Object.hasOwn(record, segment) ? record[segment] : undefined;
+    if (!existing || typeof existing !== "object") {
+      record[segment] =
+        normalizeConfigModelSelectionParent(existing, path, i) ?? (nextIsIndex ? [] : {});
+    }
+    current = record[segment];
+  }
+
+  if (Array.isArray(current)) {
+    const index = parseConfigPathArrayIndex(last);
+    if (index === undefined) {
+      throw new Error(`Expected numeric index for array segment "${last}"`);
+    }
+    current[index] = value;
+    return;
+  }
+  if (!current || typeof current !== "object") {
+    throw new Error(`Cannot set "${last}" (parent is not an object)`);
+  }
+  (current as Record<string, unknown>)[last] = value;
+}
+
+function modelArrayIds(value: unknown): Set<string> | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const ids = new Set<string>();
+  for (const entry of value) {
+    if (!isPlainRecord(entry) || typeof entry.id !== "string" || !entry.id.trim()) {
+      return null;
+    }
+    ids.add(entry.id.trim());
+  }
+  return ids;
+}
+
+type ConfigMergeResult = { value: unknown; suppliedPaths: PathSegment[][] };
+
+function mergeModelArrays(
+  existing: unknown[],
+  patch: unknown[],
+  path: PathSegment[],
+): ConfigMergeResult {
+  const merged = [...existing];
+  const suppliedPaths: PathSegment[][] = [];
+  const indexById = new Map<string, number>();
+  for (const [index, entry] of merged.entries()) {
+    if (isPlainRecord(entry) && typeof entry.id === "string" && entry.id.trim()) {
+      indexById.set(entry.id.trim(), index);
+    }
+  }
+  for (const entry of patch) {
+    if (isPlainRecord(entry) && typeof entry.id === "string" && entry.id.trim()) {
+      const id = entry.id.trim();
+      const existingIndex = indexById.get(id);
+      if (existingIndex !== undefined) {
+        const existingEntry = merged[existingIndex];
+        merged[existingIndex] = isPlainRecord(existingEntry)
+          ? { ...existingEntry, ...entry }
+          : entry;
+        for (const key of Object.keys(entry)) {
+          suppliedPaths.push([...path, String(existingIndex), key]);
+        }
+        continue;
+      }
+      indexById.set(id, merged.length);
+    }
+    suppliedPaths.push([...path, String(merged.length)]);
+    merged.push(entry);
+  }
+  return { value: merged, suppliedPaths };
+}
+
+function isProviderModelListPath(path: PathSegment[]): boolean {
+  return (
+    path.length === 4 && path[0] === "models" && path[1] === "providers" && path[3] === "models"
+  );
+}
+
+type MergePath = {
+  parent?: MergePath;
+  segment: PathSegment;
+};
+
+function toMergePath(path: PathSegment[]): MergePath | undefined {
+  let current: MergePath | undefined;
+  for (const segment of path) {
+    current = { parent: current, segment };
+  }
+  return current;
+}
+
+function mergePathSegments(path: MergePath): PathSegment[] {
+  const segments: PathSegment[] = [];
+  for (let current: MergePath | undefined = path; current; current = current.parent) {
+    segments.push(current.segment);
+  }
+  return segments.toReversed();
+}
+
+function isProviderModelListMergePath(path: MergePath): boolean {
+  const provider = path.parent;
+  const providers = provider?.parent;
+  const models = providers?.parent;
+  return (
+    path.segment === "models" &&
+    providers?.segment === "providers" &&
+    models?.segment === "models" &&
+    models.parent === undefined
+  );
+}
+
+function mergeConfigValue(
+  existing: unknown,
+  patch: unknown,
+  path: PathSegment[],
+  command: ConfigMutationCommand,
+): ConfigMergeResult {
+  if (isProviderModelListPath(path) && Array.isArray(existing) && Array.isArray(patch)) {
+    return mergeModelArrays(existing, patch, path);
+  }
+  if (isPlainRecord(existing) && isPlainRecord(patch)) {
+    const next: Record<string, unknown> = { ...existing };
+    const suppliedPaths: PathSegment[][] = [];
+    // Linked paths keep deep merges linear while preserving descendant-specific merge policy.
+    const pending = [{ target: next, patch, path: toMergePath(path) }];
+    while (pending.length > 0) {
+      const frame = pending.pop()!;
+      for (const [key, value] of Object.entries(frame.patch)) {
+        const current = frame.target[key];
+        const childPath: MergePath = { parent: frame.path, segment: key };
+        if (
+          Object.hasOwn(frame.target, key) &&
+          isProviderModelListMergePath(childPath) &&
+          Array.isArray(current) &&
+          Array.isArray(value)
+        ) {
+          const merged = mergeModelArrays(current, value, mergePathSegments(childPath));
+          frame.target[key] = merged.value;
+          suppliedPaths.push(...merged.suppliedPaths);
+        } else if (
+          Object.hasOwn(frame.target, key) &&
+          isPlainRecord(current) &&
+          isPlainRecord(value)
+        ) {
+          const child = { ...current };
+          frame.target[key] = child;
+          pending.push({ target: child, patch: value, path: childPath });
+        } else {
+          frame.target[key] = value;
+          suppliedPaths.push(mergePathSegments(childPath));
+        }
+      }
+    }
+    return { value: next, suppliedPaths };
+  }
+  const label = refusalPathLabel(command, path);
+  throw new Error(
+    `Cannot merge ${label}; use ${
+      command === "patch" ? replacePathArgument(label) : "--replace"
+    } to replace intentionally.`,
+  );
+}
+
+export function mergeAtPath(
+  root: Record<string, unknown>,
+  path: PathSegment[],
+  value: unknown,
+  options?: SetAtPathOptions,
+): PathSegment[][] {
+  const existing = getAtPath(root, path);
+  const merged = existing.found
+    ? mergeConfigValue(existing.value, value, path, options?.command ?? "set")
+    : { value, suppliedPaths: [path] };
+  setAtPath(root, path, merged.value, options);
+  return merged.suppliedPaths;
+}
+
+function isProtectedMapReplacementPath(path: PathSegment[]): boolean {
+  const joined = path.join(".");
+  return (
+    joined === "agents.defaults.models" ||
+    joined === "models.providers" ||
+    (path.length === 3 && path[0] === "models" && path[1] === "providers") ||
+    joined === "agents.entries" ||
+    joined === "plugins.entries" ||
+    joined === "auth.profiles"
+  );
+}
+
+function formatRemovedEntries(entries: string[]): string {
+  const visible = entries.slice(0, 6);
+  const suffix =
+    entries.length > visible.length ? `, ... ${entries.length - visible.length} more` : "";
+  return `${visible.join(", ")}${suffix}`;
+}
+
+function replacementAdvice(
+  command: ConfigMutationCommand,
+  pathLabel: string,
+  mergeSubject: string,
+): string {
+  // `config patch` has no --merge/--replace; --replace-path is its way out of the guard.
+  if (command === "patch") {
+    return `Use ${replacePathArgument(pathLabel)} to replace intentionally.`;
+  }
+  return `Use --merge to merge ${mergeSubject} or --replace to replace intentionally.`;
+}
+
+export function assertNonDestructiveReplacement(params: {
+  root: Record<string, unknown>;
+  path: PathSegment[];
+  value: unknown;
+  allowReplace?: boolean;
+  command: ConfigMutationCommand;
+}): void {
+  if (params.allowReplace) {
+    return;
+  }
+  const existing = getAtPath(params.root, params.path);
+  if (!existing.found) {
+    return;
+  }
+  const pathLabel = refusalPathLabel(params.command, params.path);
+  let removed: string[];
+  let mergeHint: string;
+  if (isProtectedMapReplacementPath(params.path) && isPlainRecord(existing.value)) {
+    if (!isPlainRecord(params.value)) {
+      return;
+    }
+    const nextKeys = new Set(Object.keys(params.value));
+    removed = Object.keys(existing.value).filter((key) => !nextKeys.has(key));
+    mergeHint = "object values";
+  } else if (isProviderModelListPath(params.path)) {
+    const existingIds = modelArrayIds(existing.value);
+    const nextIds = modelArrayIds(params.value);
+    if (!existingIds || !nextIds) {
+      return;
+    }
+    removed = [...existingIds].filter((id) => !nextIds.has(id));
+    mergeHint = "by id";
+  } else {
+    return;
+  }
+  if (removed.length > 0) {
+    throw new Error(
+      `Refusing to replace ${pathLabel}; it would remove existing entries: ${formatRemovedEntries(removed)}. ${replacementAdvice(params.command, pathLabel, mergeHint)}`,
+    );
+  }
+}
+
+type UnsetAtPathResult = { removed: true; leafContainer: "array" | "object" } | { removed: false };
+
+export function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]): UnsetAtPathResult {
+  const last = path.at(-1);
+  if (last === undefined) {
+    return { removed: false };
+  }
+  const current = getAtPath(root, path.slice(0, -1)).value;
+
+  if (Array.isArray(current)) {
+    const index = parseConfigPathArrayIndex(last);
+    if (index === undefined || index >= current.length) {
+      return { removed: false };
+    }
+    current.splice(index, 1);
+    return { removed: true, leafContainer: "array" };
+  }
+  if (!current || typeof current !== "object") {
+    return { removed: false };
+  }
+  const record = current as Record<string, unknown>;
+  if (!Object.hasOwn(record, last)) {
+    return { removed: false };
+  }
+  delete record[last];
+  return { removed: true, leafContainer: "object" };
+}

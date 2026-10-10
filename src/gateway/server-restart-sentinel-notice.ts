@@ -1,29 +1,56 @@
+import { withTimeout } from "@openclaw/fs-safe/advanced";
+import { sleepWithAbort } from "@openclaw/retry";
+import { sendDurableMessageBatchCore } from "../channels/message/runtime.js";
 // Durable outbound notice ownership for restart-sentinel recovery.
-import { sendDurableMessageBatch } from "../channels/message/runtime.js";
+import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  captureDeliveryQueueStateContext,
+  type DeliveryQueueStateContext,
+} from "../infra/delivery-queue-sqlite.js";
 import {
   findPlatformMessageRejectedError,
   isProvenDeliveryNotSentError,
 } from "../infra/delivery-recovery.shared.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { OUTBOUND_DELIVERY_LOG_SCOPE } from "../infra/outbound/deliver-log.js";
+import { prepareOutboundPayloadBatch } from "../infra/outbound/deliver-prepare.js";
+import { stageAndEnqueueOutboundDelivery } from "../infra/outbound/deliver-queue-admission.js";
+import { createQueuedDeliveryOwner } from "../infra/outbound/deliver-queue-state.js";
+import type { OutboundDeliveryResult } from "../infra/outbound/deliver-types.js";
 import { deliverOutboundPayloadsInternal } from "../infra/outbound/deliver.js";
+import { runOutboundDeliveryCommitHooks } from "../infra/outbound/delivery-commit-hooks.js";
+import { failPendingDelivery } from "../infra/outbound/delivery-queue-ack.js";
 import {
-  failPendingDelivery,
+  withStableDeliveryPreparation,
+  type StableDeliveryPreparationOwner,
+} from "../infra/outbound/delivery-queue-preparation.js";
+import {
+  drainPendingDeliveriesCore,
+  withActiveDeliveryClaim,
+} from "../infra/outbound/delivery-queue-recovery.js";
+import {
+  failDelivery,
+  failDeliveryAfterPlatformSend,
+  failDeliveryBeforePlatformSend,
+  findDeliveryIntentOwner,
   loadPendingDelivery,
   reserveDeliveryAttempt,
 } from "../infra/outbound/delivery-queue-storage.js";
 import {
-  ackDelivery,
-  drainPendingDeliveries,
-  enqueueDeliveryOnce,
-  failDelivery,
-  failDeliveryAfterPlatformSend,
-  failDeliveryBeforePlatformSend,
-  withActiveDeliveryClaim,
-} from "../infra/outbound/delivery-queue.js";
+  createMessageSentEmitter,
+  type MessageSentEvent,
+} from "../infra/outbound/message-sent-hook.js";
+import { acceptedPreparedOutboundEntries } from "../infra/outbound/prepared-batch.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
+import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import type { DeliveryContext } from "../utils/delivery-context.shared.js";
 
 const log = createSubsystemLogger("gateway/restart-sentinel");
 const RESTART_NOTICE_RECOVERY_DELAY_MS = process.env.VITEST ? 1 : 1_000;
@@ -38,51 +65,221 @@ type RestartSentinelNoticeRoute = {
   threadId?: string;
 };
 
+type GatewayLifecycleNotice = RestartSentinelNoticeRoute & {
+  cfg: OpenClawConfig;
+  message: string;
+  sessionKey?: string;
+};
+
+/** Resolve once before an update can replace lazily loaded channel modules. */
+export function resolveGatewayLifecycleNoticeRoute(params: {
+  cfg: OpenClawConfig;
+  deliveryContext?: DeliveryContext;
+  threadId?: string;
+}): RestartSentinelNoticeRoute | undefined {
+  const origin = params.deliveryContext;
+  const channel = origin?.channel ? normalizeChannelId(origin.channel) : null;
+  if (!channel || !origin?.to) {
+    return undefined;
+  }
+  const resolved = resolveOutboundTarget({
+    cfg: params.cfg,
+    channel,
+    to: origin.to,
+    accountId: origin.accountId,
+    mode: "implicit",
+  });
+  if (!resolved.ok) {
+    return undefined;
+  }
+  const threadId = params.threadId ?? stringifyRouteThreadId(origin.threadId);
+  const transport = getChannelPlugin(channel)?.threading?.resolveReplyTransport?.({
+    cfg: params.cfg,
+    accountId: origin.accountId,
+    threadId,
+  });
+  return {
+    channel,
+    to: resolved.to,
+    accountId: origin.accountId,
+    replyToId: transport?.replyToId ?? undefined,
+    threadId:
+      transport && Object.hasOwn(transport, "threadId")
+        ? stringifyRouteThreadId(transport.threadId)
+        : threadId,
+  };
+}
+
+/** Return bounded delivery status while managed scopes retain the complete attempt. */
+export async function sendGatewayLifecycleNotice(
+  params: GatewayLifecycleNotice & {
+    deps: CliDeps;
+    deliveryIntentId: string;
+  },
+  capturedContext?: DeliveryQueueStateContext,
+): Promise<boolean> {
+  let delivered = false;
+  try {
+    const context = capturedContext ?? captureDeliveryQueueStateContext();
+    await withTimeout(
+      // The response deadline does not end transport or commit-hook ownership.
+      trackAsyncWork(async () => {
+        const queued = await enqueueGatewayLifecycleNotice(
+          params,
+          params.deliveryIntentId,
+          context,
+        );
+        if (!queued.created) {
+          return;
+        }
+        await deliverGatewayLifecycleNoticeAttempt(
+          {
+            ...params,
+            summary: "update.run notice",
+            queueId: queued.id,
+          },
+          () => {
+            delivered = true;
+          },
+          context,
+        );
+      }),
+      10_000,
+      "update.run notice",
+    );
+  } catch (error) {
+    log.warn(`update.run notice failed: ${formatErrorMessage(error)}`);
+  }
+  return delivered;
+}
+
+type RestartSentinelNoticeEnqueueResult = { id: string; created: boolean };
+
+// Duplicate gateway startup paths share the same producer outcome. A caller
+// must not report durable custody while the first producer has no queue row.
+const activeRestartNoticeEnqueues = new Map<string, Promise<RestartSentinelNoticeEnqueueResult>>();
+
 export async function enqueueRestartSentinelNotice(
-  params: RestartSentinelNoticeRoute & {
-    message: string;
+  params: GatewayLifecycleNotice & {
     sessionKey: string;
     revision: number;
+    deliveryIntentId?: string;
   },
-): Promise<{ id: string; created: boolean }> {
-  return await enqueueDeliveryOnce(
-    {
-      channel: params.channel,
-      to: params.to,
-      accountId: params.accountId,
-      replyToId: params.replyToId,
-      threadId: params.threadId,
-      payloads: [{ text: params.message }],
-      bestEffort: false,
-      completionRetention: "permanent",
-      maxRetries: RESTART_NOTICE_MAX_ATTEMPTS,
-    },
-    `restart-sentinel-notice:${params.sessionKey}:${params.revision}`,
+  context = captureDeliveryQueueStateContext(),
+): Promise<RestartSentinelNoticeEnqueueResult> {
+  return await enqueueGatewayLifecycleNotice(
+    params,
+    params.deliveryIntentId ?? `restart-sentinel-notice:${params.sessionKey}:${params.revision}`,
+    context,
   );
 }
 
-async function waitForRecoveryDrain(): Promise<void> {
-  await new Promise<void>((resolve) => {
-    const timer = setTimeout(resolve, RESTART_NOTICE_RECOVERY_DELAY_MS);
-    timer.unref?.();
-  });
+async function enqueueGatewayLifecycleNotice(
+  params: GatewayLifecycleNotice,
+  deliveryIntentId: string,
+  context: DeliveryQueueStateContext,
+): Promise<RestartSentinelNoticeEnqueueResult> {
+  const active = activeRestartNoticeEnqueues.get(deliveryIntentId);
+  if (active) {
+    await active;
+    return { id: deliveryIntentId, created: false };
+  }
+  return await getOrCreatePromise(
+    activeRestartNoticeEnqueues,
+    deliveryIntentId,
+    () => enqueueRestartSentinelNoticeOwned(params, deliveryIntentId, context),
+    { evictOnSettled: true },
+  );
 }
 
-async function drainFailedRestartSentinelNotice(params: {
-  cfg: OpenClawConfig;
-  queueId: string;
-  sessionKey: string;
-  summary: string;
-}): Promise<void> {
+async function enqueueRestartSentinelNoticeOwned(
+  params: GatewayLifecycleNotice,
+  deliveryIntentId: string,
+  context: DeliveryQueueStateContext,
+): Promise<RestartSentinelNoticeEnqueueResult> {
+  const claim = await withActiveDeliveryClaim(deliveryIntentId, async () => {
+    const preparation = await withStableDeliveryPreparation(
+      {
+        id: deliveryIntentId,
+        run: async (owner) =>
+          await enqueueRestartSentinelNoticeClaimed(params, deliveryIntentId, owner, context),
+      },
+      context,
+    );
+    if (preparation.status === "claimed") {
+      return preparation.value;
+    }
+    if (await findDeliveryIntentOwner(deliveryIntentId, undefined, context)) {
+      return { id: deliveryIntentId, created: false };
+    }
+    throw new Error(`Restart sentinel notice has an active producer without durable custody`);
+  });
+  if (claim.status === "claimed") {
+    return claim.value;
+  }
+  if (await findDeliveryIntentOwner(deliveryIntentId, undefined, context)) {
+    return { id: deliveryIntentId, created: false };
+  }
+  throw new Error(`Restart sentinel notice has an active producer without durable custody`);
+}
+
+async function enqueueRestartSentinelNoticeClaimed(
+  params: GatewayLifecycleNotice,
+  deliveryIntentId: string,
+  preparationOwner: StableDeliveryPreparationOwner,
+  context: DeliveryQueueStateContext,
+): Promise<RestartSentinelNoticeEnqueueResult> {
+  const delivery = {
+    cfg: params.cfg,
+    channel: params.channel,
+    to: params.to,
+    accountId: params.accountId,
+    replyToId: params.replyToId,
+    threadId: params.threadId,
+    payloads: [{ text: params.message }],
+    session: buildOutboundSessionContext({ cfg: params.cfg, sessionKey: params.sessionKey }),
+    bestEffort: false,
+    queuePolicy: "required" as const,
+    completionRetention: "permanent" as const,
+    maxRetries: RESTART_NOTICE_MAX_ATTEMPTS,
+    deliveryIntentId,
+    deliveryQueueStateContext: context,
+    deliveryQueueStateDir: context.stateDir,
+  };
+  const preparedBatch = await prepareOutboundPayloadBatch(delivery, {
+    onBeforeFirstModifier: preparationOwner.beforeFirstModifier,
+  });
+  await preparationOwner.markPrepared();
+  const queued = await stageAndEnqueueOutboundDelivery(delivery, preparedBatch, {
+    getStablePreparation: preparationOwner.current,
+  });
+  if (!queued?.created) {
+    throw new Error("Restart sentinel notice could not acquire durable queue custody");
+  }
+  preparationOwner.markPublished();
+  return queued;
+}
+
+async function drainFailedRestartSentinelNotice(
+  params: {
+    cfg: OpenClawConfig;
+    queueId: string;
+    sessionKey: string;
+    summary: string;
+  },
+  context: DeliveryQueueStateContext,
+): Promise<void> {
   for (let cycle = 1; cycle <= RESTART_NOTICE_RECOVERY_MAX_CYCLES; cycle += 1) {
-    const beforeDrain = await loadPendingDelivery(params.queueId).catch((error: unknown) => {
-      log.warn(`${params.summary}: restart notice recovery reload failed: ${String(error)}`, {
-        queueId: params.queueId,
-        sessionKey: params.sessionKey,
-        cycle,
-      });
-      return undefined;
-    });
+    const beforeDrain = await loadPendingDelivery(params.queueId, undefined, context).catch(
+      (error: unknown) => {
+        log.warn(`${params.summary}: restart notice recovery reload failed: ${String(error)}`, {
+          queueId: params.queueId,
+          sessionKey: params.sessionKey,
+          cycle,
+        });
+        return undefined;
+      },
+    );
     if (beforeDrain === null) {
       return;
     }
@@ -92,21 +289,25 @@ async function drainFailedRestartSentinelNotice(params: {
     // Atomic queue reservation blocks attempt 46. Exhausted rows get an
     // immediate terminal drain; live retry attempts retain one-second spacing.
     if (attemptCount < RESTART_NOTICE_MAX_ATTEMPTS) {
-      await waitForRecoveryDrain();
+      await sleepWithAbort(RESTART_NOTICE_RECOVERY_DELAY_MS, undefined, { ref: false });
     }
-    await drainPendingDeliveries({
-      drainKey: `restart-recovery:${params.queueId}`,
-      logLabel: `${params.summary}: restart notice recovery`,
-      cfg: params.cfg,
-      log,
-      deliver: deliverOutboundPayloadsInternal,
-      selectEntry: (entry) => ({
-        match: entry.id === params.queueId,
-        // The caller already waits between attempts. Recovery still reconciles
-        // send-attempt evidence before it permits recipient-visible replay.
-        bypassBackoff: true,
-      }),
-    }).catch((error: unknown) => {
+    await drainPendingDeliveriesCore(
+      {
+        drainKey: `restart-recovery:${params.queueId}`,
+        logLabel: `${params.summary}: restart notice recovery`,
+        cfg: params.cfg,
+        log,
+        deliver: deliverOutboundPayloadsInternal,
+        selectEntry: (entry) => ({
+          match: entry.id === params.queueId,
+          // The caller already waits between attempts. Recovery still reconciles
+          // send-attempt evidence before it permits recipient-visible replay.
+          bypassBackoff: true,
+        }),
+      },
+      deliverOutboundPayloadsInternal,
+      context,
+    ).catch((error: unknown) => {
       log.warn(`${params.summary}: restart notice recovery drain failed: ${String(error)}`, {
         queueId: params.queueId,
         sessionKey: params.sessionKey,
@@ -114,13 +315,15 @@ async function drainFailedRestartSentinelNotice(params: {
       });
     });
   }
-  const pending = await loadPendingDelivery(params.queueId).catch((error: unknown) => {
-    log.warn(`${params.summary}: restart notice terminal reload failed: ${String(error)}`, {
-      queueId: params.queueId,
-      sessionKey: params.sessionKey,
-    });
-    return undefined;
-  });
+  const pending = await loadPendingDelivery(params.queueId, undefined, context).catch(
+    (error: unknown) => {
+      log.warn(`${params.summary}: restart notice terminal reload failed: ${String(error)}`, {
+        queueId: params.queueId,
+        sessionKey: params.sessionKey,
+      });
+      return undefined;
+    },
+  );
   if (pending === null) {
     return;
   }
@@ -134,65 +337,141 @@ async function drainFailedRestartSentinelNotice(params: {
 }
 
 export async function deliverRestartSentinelNotice(
-  params: RestartSentinelNoticeRoute & {
+  params: GatewayLifecycleNotice & {
     deps: CliDeps;
-    cfg: OpenClawConfig;
     sessionKey: string;
     summary: string;
-    message: string;
     queueId: string;
   },
-): Promise<void> {
-  const claim = await withActiveDeliveryClaim(params.queueId, async () => {
+  context = captureDeliveryQueueStateContext(),
+): Promise<boolean> {
+  let delivered = false;
+  const claim = await deliverGatewayLifecycleNoticeAttempt(
+    params,
+    () => {
+      delivered = true;
+    },
+    context,
+  );
+  if (claim.status === "claimed-by-other-owner") {
+    log.info(`${params.summary}: durable restart notice claimed by recovery`, {
+      sessionKey: params.sessionKey,
+    });
+  }
+  if (claim.status === "claimed-by-other-owner" || !claim.value) {
+    await drainFailedRestartSentinelNotice(params, context);
+  }
+  // Only the observed platform send proves delivery; recovery owns its own receipts.
+  return delivered;
+}
+
+async function deliverGatewayLifecycleNoticeAttempt(
+  params: GatewayLifecycleNotice & { deps: CliDeps; summary: string; queueId: string },
+  onDelivered?: () => void,
+  context = captureDeliveryQueueStateContext(),
+) {
+  const warn = (message: string) =>
+    log.warn(message, {
+      channel: params.channel,
+      to: params.to,
+      sessionKey: params.sessionKey,
+    });
+  const messageSentEvents: MessageSentEvent[] = [];
+  const flushTerminalObservers = async (
+    results: readonly OutboundDeliveryResult[],
+    runId?: string,
+  ): Promise<void> => {
+    const { emitMessageSent } = createMessageSentEmitter({
+      hookRunner: getGlobalHookRunner(),
+      channel: params.channel,
+      to: params.to,
+      accountId: params.accountId,
+      sessionKeyForInternalHooks: params.sessionKey,
+      runId,
+      logPrefix: OUTBOUND_DELIVERY_LOG_SCOPE,
+    });
+    for (const event of messageSentEvents) {
+      emitMessageSent(event);
+    }
+    messageSentEvents.length = 0;
+    if (results.length > 0) {
+      await runOutboundDeliveryCommitHooks(results);
+    }
+  };
+  return await withActiveDeliveryClaim(params.queueId, async () => {
+    const owner = createQueuedDeliveryOwner({ queueId: params.queueId }, context);
     try {
-      const reservation = await reserveDeliveryAttempt(params.queueId, RESTART_NOTICE_MAX_ATTEMPTS);
+      const reservation = await reserveDeliveryAttempt(
+        params.queueId,
+        RESTART_NOTICE_MAX_ATTEMPTS,
+        undefined,
+        undefined,
+        context,
+      );
       if (reservation.status === "exhausted") {
         return false;
       }
     } catch (err) {
-      log.warn(
+      warn(
         `${params.summary}: outbound delivery attempt reservation failed; queued for recovery: ${formatErrorMessage(err)}`,
-        {
-          channel: params.channel,
-          to: params.to,
-          sessionKey: params.sessionKey,
-        },
       );
       return false;
     }
     try {
-      const send = await sendDurableMessageBatch({
+      const pending = await loadPendingDelivery(params.queueId, undefined, context);
+      if (!pending) {
+        return true;
+      }
+      const session = buildOutboundSessionContext({
         cfg: params.cfg,
-        channel: params.channel,
-        to: params.to,
-        accountId: params.accountId,
-        replyToId: params.replyToId,
-        threadId: params.threadId,
-        payloads: [{ text: params.message }],
-        session: buildOutboundSessionContext({ cfg: params.cfg, sessionKey: params.sessionKey }),
-        deps: params.deps,
-        bestEffort: false,
-        skipQueue: true,
-        deliveryQueueId: params.queueId,
+        sessionKey: params.sessionKey,
       });
+      const send = await sendDurableMessageBatchCore(
+        {
+          cfg: params.cfg,
+          channel: params.channel,
+          to: params.to,
+          accountId: params.accountId,
+          replyToId: params.replyToId,
+          threadId: params.threadId,
+          payloads: acceptedPreparedOutboundEntries(pending.preparedBatch).map(
+            (entry) => entry.payload,
+          ),
+          preparedBatch: pending.preparedBatch,
+          session,
+          deps: params.deps,
+          bestEffort: false,
+          skipQueue: true,
+          deliveryQueueId: params.queueId,
+          deliveryQueueOwner: owner,
+          deferCommitHooks: true,
+          onMessageSentEvent: (event) => messageSentEvents.push(event),
+        },
+        undefined,
+        context,
+      );
       if (send.status === "failed" || send.status === "partial_failed") {
         throw send.error;
       }
       const results = send.status === "sent" ? send.results : [];
-      if (results.length === 0) {
+      if (send.status === "sent" && results.length === 0) {
         throw new Error("outbound delivery returned no results");
       }
+      // Capture the platform fact before queue settlement or hooks can stall.
+      // A bounded caller must still report a sent acknowledgement on timeout.
+      if (results.length > 0) {
+        onDelivered?.();
+      }
       try {
-        await ackDelivery(params.queueId);
+        await owner.ack();
+        await flushTerminalObservers(results, pending.preparedBatch.runId);
         return true;
       } catch (err) {
         const error = formatErrorMessage(err);
-        await failDeliveryAfterPlatformSend(params.queueId, error).catch(() => undefined);
-        log.warn(`${params.summary}: outbound delivery ack failed; queued for recovery: ${error}`, {
-          channel: params.channel,
-          to: params.to,
-          sessionKey: params.sessionKey,
-        });
+        await owner
+          .fail(results.length > 0 ? failDeliveryAfterPlatformSend : failDelivery, error)
+          .catch(() => undefined);
+        warn(`${params.summary}: outbound delivery ack failed; queued for recovery: ${error}`);
         return false;
       }
     } catch (err) {
@@ -203,58 +482,35 @@ export async function deliverRestartSentinelNotice(
       const permanentRejection = findPlatformMessageRejectedError(err);
       if (permanentRejection) {
         try {
-          const pending = await loadPendingDelivery(params.queueId);
+          const pending = await loadPendingDelivery(params.queueId, undefined, context);
           if (pending) {
-            await failPendingDelivery({
-              id: params.queueId,
-              expectedStatus: "pending",
-              lastError: error,
-              entry: pending,
-            });
+            const settled = await failPendingDelivery(
+              {
+                id: params.queueId,
+                entry: pending,
+              },
+              undefined,
+              context,
+            );
+            if (settled.status === "failed") {
+              await flushTerminalObservers([], pending.preparedBatch.runId);
+            }
           }
         } catch (persistError) {
-          log.warn(
+          warn(
             `${params.summary}: permanent rejection persistence failed; queued for recovery: ${formatErrorMessage(persistError)}`,
-            {
-              channel: params.channel,
-              to: params.to,
-              sessionKey: params.sessionKey,
-            },
           );
           return false;
         }
-        log.warn(`${params.summary}: outbound delivery permanently rejected: ${error}`, {
-          channel: params.channel,
-          to: params.to,
-          sessionKey: params.sessionKey,
-        });
+        warn(`${params.summary}: outbound delivery permanently rejected: ${error}`);
         return true;
       }
       const recordFailure = isProvenDeliveryNotSentError(err)
         ? failDeliveryBeforePlatformSend
         : failDelivery;
-      await recordFailure(params.queueId, error).catch(() => undefined);
-      log.warn(`${params.summary}: outbound delivery failed; queued for recovery: ${String(err)}`, {
-        channel: params.channel,
-        to: params.to,
-        sessionKey: params.sessionKey,
-      });
+      await owner.fail(recordFailure, error).catch(() => undefined);
+      warn(`${params.summary}: outbound delivery failed; queued for recovery: ${String(err)}`);
       return false;
     }
   });
-  if (claim.status === "claimed-by-other-owner") {
-    log.info(`${params.summary}: durable restart notice claimed by recovery`, {
-      sessionKey: params.sessionKey,
-    });
-  }
-  const needsRecovery =
-    claim.status === "claimed-by-other-owner" || (claim.status === "claimed" && !claim.value);
-  if (needsRecovery) {
-    await drainFailedRestartSentinelNotice({
-      cfg: params.cfg,
-      queueId: params.queueId,
-      sessionKey: params.sessionKey,
-      summary: params.summary,
-    });
-  }
 }

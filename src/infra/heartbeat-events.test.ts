@@ -37,14 +37,44 @@ describe("heartbeat events", () => {
     vi.useRealTimers();
   });
 
-  it("stores the last event and timestamps emitted payloads", () => {
-    emitHeartbeatEvent({ status: "sent", to: "+123", preview: "ping" });
+  it("adds a delivery-disabled message to target-none events without changing the reason", () => {
+    const listener = vi.fn();
+    const unsubscribe = onHeartbeatEvent(listener);
 
-    expect(getLastHeartbeatEvent()).toEqual({
+    emitHeartbeatEvent({ status: "skipped", reason: "target-none" });
+
+    const expected = {
       ts: 1767960000000,
-      status: "sent",
-      to: "+123",
-      preview: "ping",
+      status: "skipped",
+      reason: "target-none",
+      message: "Heartbeat delivery is disabled by configuration (target: none).",
+    };
+    expect(getLastHeartbeatEvent()).toEqual(expected);
+    expect(listener).toHaveBeenCalledWith(expected);
+
+    unsubscribe();
+  });
+
+  it("preserves an explicit message for target-none events", () => {
+    emitHeartbeatEvent({
+      status: "skipped",
+      reason: "target-none",
+      message: "custom diagnostic",
+    });
+
+    expect(getLastHeartbeatEvent()).toMatchObject({
+      reason: "target-none",
+      message: "custom diagnostic",
+    });
+  });
+
+  it("adds route setup guidance to no-route events", () => {
+    emitHeartbeatEvent({ status: "skipped", reason: "no-route" });
+
+    expect(getLastHeartbeatEvent()).toMatchObject({
+      reason: "no-route",
+      message:
+        "Heartbeat has no delivery route yet. Message your bot once, or set agents.defaults.heartbeat.target.",
     });
   });
 

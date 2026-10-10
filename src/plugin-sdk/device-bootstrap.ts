@@ -1,6 +1,8 @@
 // Shared bootstrap/pairing helpers for plugins that provision remote devices.
+import { createLazyRuntimeMethod } from "../shared/lazy-runtime.js";
 
-export { approveDevicePairing, listDevicePairing } from "../infra/device-pairing.js";
+export { approveDevicePairing } from "../infra/device-pairing-approval.js";
+export { listDevicePairing } from "../infra/device-pairing.js";
 export {
   clearDeviceBootstrapTokens,
   issueDeviceBootstrapToken,
@@ -14,3 +16,8 @@ export {
   type DeviceBootstrapProfileInput,
   type DeviceBootstrapPurpose,
 } from "../shared/device-bootstrap-profile.js";
+
+export const resolvePairingGatewayUrl = createLazyRuntimeMethod(
+  () => import("../pairing/setup-code.js"),
+  (pairing) => pairing.resolvePairingGatewayUrl,
+);

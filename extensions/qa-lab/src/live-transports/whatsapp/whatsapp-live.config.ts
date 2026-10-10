@@ -1,16 +1,11 @@
-// QA Lab WhatsApp credential, config, and channel setup.
 import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
+import { buildLiveQaApprovalForwardingConfig } from "../shared/live-approval-config.js";
+import { requireLiveQaEnv } from "../shared/live-credential-env.js";
 import type { WhatsAppQaConfigOverrides, WhatsAppQaRuntimeEnv } from "./whatsapp-live.contracts.js";
 
-const WHATSAPP_QA_ENV_KEYS = [
-  "OPENCLAW_QA_WHATSAPP_DRIVER_PHONE_E164",
-  "OPENCLAW_QA_WHATSAPP_SUT_PHONE_E164",
-  "OPENCLAW_QA_WHATSAPP_DRIVER_AUTH_ARCHIVE_BASE64",
-  "OPENCLAW_QA_WHATSAPP_SUT_AUTH_ARCHIVE_BASE64",
-] as const;
 const whatsappQaCredentialPayloadSchema = z.object({
   driverPhoneE164: z.string().trim().min(1),
   sutPhoneE164: z.string().trim().min(1),
@@ -18,14 +13,6 @@ const whatsappQaCredentialPayloadSchema = z.object({
   sutAuthArchiveBase64: z.string().trim().min(1),
   groupJid: z.string().trim().min(1).optional(),
 });
-
-function resolveEnvValue(env: NodeJS.ProcessEnv, key: (typeof WHATSAPP_QA_ENV_KEYS)[number]) {
-  const value = env[key]?.trim();
-  if (!value) {
-    throw new Error(`Missing ${key}.`);
-  }
-  return value;
-}
 
 function normalizePhone(value: string, label: string) {
   const normalized = normalizeE164(value);
@@ -56,13 +43,13 @@ export function resolveWhatsAppQaRuntimeEnv(
 ): WhatsAppQaRuntimeEnv {
   return validateWhatsAppQaRuntimeEnv(
     {
-      driverPhoneE164: resolveEnvValue(env, "OPENCLAW_QA_WHATSAPP_DRIVER_PHONE_E164"),
-      sutPhoneE164: resolveEnvValue(env, "OPENCLAW_QA_WHATSAPP_SUT_PHONE_E164"),
-      driverAuthArchiveBase64: resolveEnvValue(
+      driverPhoneE164: requireLiveQaEnv(env, "OPENCLAW_QA_WHATSAPP_DRIVER_PHONE_E164"),
+      sutPhoneE164: requireLiveQaEnv(env, "OPENCLAW_QA_WHATSAPP_SUT_PHONE_E164"),
+      driverAuthArchiveBase64: requireLiveQaEnv(
         env,
         "OPENCLAW_QA_WHATSAPP_DRIVER_AUTH_ARCHIVE_BASE64",
       ),
-      sutAuthArchiveBase64: resolveEnvValue(env, "OPENCLAW_QA_WHATSAPP_SUT_AUTH_ARCHIVE_BASE64"),
+      sutAuthArchiveBase64: requireLiveQaEnv(env, "OPENCLAW_QA_WHATSAPP_SUT_AUTH_ARCHIVE_BASE64"),
       groupJid: env.OPENCLAW_QA_WHATSAPP_GROUP_JID?.trim() || undefined,
     },
     "OPENCLAW_QA_WHATSAPP",
@@ -89,41 +76,45 @@ function buildNonMatchingWhatsAppQaAllowFrom(existingAllowFrom: string[]) {
   throw new Error("Unable to derive a WhatsApp QA groupAllowFrom entry outside allowFrom.");
 }
 
-type WhatsAppQaAgentConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
-
-function buildWhatsAppQaScenarioAgent(agentId: string): WhatsAppQaAgentConfig {
-  const identityName =
-    agentId === "main"
-      ? "Main WhatsApp QA"
-      : agentId === "qa-second"
-        ? "Second WhatsApp QA"
-        : `WhatsApp QA ${agentId}`;
-  return {
-    id: agentId,
-    identity: {
-      name: identityName,
-    },
-  };
-}
-
 function appendWhatsAppQaAgents(
   agents: OpenClawConfig["agents"],
   agentIds: readonly string[],
 ): OpenClawConfig["agents"] {
-  if (agentIds.length === 0) {
-    return agents;
-  }
-  const list = [...(agents?.list ?? [])];
-  const existingIds = new Set(list.map((agent) => agent.id));
+  const entries = { ...agents?.entries };
+  const originalIds = Object.keys(entries);
   for (const agentId of agentIds) {
-    if (!existingIds.has(agentId)) {
-      list.push(buildWhatsAppQaScenarioAgent(agentId));
-      existingIds.add(agentId);
+    if (!Object.hasOwn(entries, agentId)) {
+      entries[agentId] = {
+        identity: {
+          name:
+            agentId === "main"
+              ? "Main WhatsApp QA"
+              : agentId === "qa-second"
+                ? "Second WhatsApp QA"
+                : `WhatsApp QA ${agentId}`,
+        },
+      };
     }
+  }
+  const needsExplicitOwnership = Object.keys(entries).length > 1;
+  const soleAgentId = originalIds.length === 1 ? originalIds[0] : undefined;
+  const defaults = { ...agents?.defaults };
+  if (needsExplicitOwnership && soleAgentId) {
+    // Expanding the roster must preserve the original QA route and seeded workspace.
+    defaults.systemAgent = {
+      ...defaults.systemAgent,
+      agentId: defaults.systemAgent?.agentId ?? soleAgentId,
+    };
+    entries[soleAgentId] = {
+      ...entries[soleAgentId],
+      workspace: entries[soleAgentId]?.workspace ?? defaults.workspace,
+    };
   }
   return {
     ...agents,
-    list,
+    ...(needsExplicitOwnership ? { ownership: "explicit" as const } : {}),
+    defaults,
+    entries,
   };
 }
 
@@ -163,6 +154,7 @@ export function buildWhatsAppQaConfig(
     authDir: string;
     dmPolicy: "allowlist" | "disabled" | "open" | "pairing";
     groupJid?: string;
+    ownerAllowFrom: string[];
     overrides?: WhatsAppQaConfigOverrides;
     sutAccountId: string;
   },
@@ -174,10 +166,6 @@ export function buildWhatsAppQaConfig(
     ? buildNonMatchingWhatsAppQaAllowFrom(params.allowFrom)
     : undefined;
   const groupHistoryLimit = params.overrides?.groupHistoryLimit;
-  const statusReactionOverride =
-    typeof params.overrides?.statusReactions === "object"
-      ? params.overrides.statusReactions
-      : undefined;
   const statusReactionsEnabled = Boolean(params.overrides?.statusReactions);
   const whatsappHistoryLimit =
     typeof groupHistoryLimit === "number" && groupHistoryLimit > 0
@@ -189,66 +177,77 @@ export function buildWhatsAppQaConfig(
     broadcast: params.overrides?.broadcast,
     groupJid: params.groupJid,
   });
-  const audioPreflightConfig = params.overrides?.audioPreflight
-    ? {
-        tools: {
-          ...baseCfg.tools,
-          media: {
-            ...baseCfg.tools?.media,
-            audio: {
-              ...baseCfg.tools?.media?.audio,
-              enabled: true,
-              models: [
-                {
-                  provider: "openai",
-                  model: "gpt-4o-transcribe",
-                },
-              ],
+  let tools = baseCfg.tools;
+  if (params.overrides?.audioPreflight) {
+    tools = {
+      ...tools,
+      media: {
+        ...tools?.media,
+        models: [
+          { provider: "openai", model: "gpt-4o-transcribe", capabilities: ["audio"] },
+          ...(tools?.media?.models ?? []),
+        ],
+        audio: { ...tools?.media?.audio, enabled: true },
+      },
+    };
+  }
+  const approvalForwardingConfig = buildLiveQaApprovalForwardingConfig(baseCfg, approvalOverrides);
+  if (params.overrides?.actions) {
+    tools = {
+      ...baseCfg.tools,
+      alsoAllow: uniqueStrings([...(baseCfg.tools?.alsoAllow ?? []), "message"]),
+    };
+  }
+  const messagesConfig = {
+    ...baseCfg.messages,
+    ...(params.overrides?.inboundDebounceMs !== undefined
+      ? {
+          inbound: {
+            ...baseCfg.messages?.inbound,
+            byChannel: {
+              ...baseCfg.messages?.inbound?.byChannel,
+              whatsapp: params.overrides.inboundDebounceMs,
             },
           },
-        },
-      }
-    : {};
-  const approvalForwardingConfig =
-    approvalOverrides?.exec || approvalOverrides?.plugin
+        }
+      : {}),
+    ...(params.groupJid
       ? {
-          approvals: {
-            ...baseCfg.approvals,
-            ...(approvalOverrides.exec
-              ? {
-                  exec: {
-                    ...baseCfg.approvals?.exec,
-                    enabled: true,
-                    mode: "session" as const,
-                  },
-                }
-              : {}),
-            ...(approvalOverrides.plugin
-              ? {
-                  plugin: {
-                    ...baseCfg.approvals?.plugin,
-                    enabled: true,
-                    mode: "session" as const,
-                  },
-                }
-              : {}),
+          groupChat: {
+            ...baseCfg.messages?.groupChat,
+            visibleReplies: "automatic" as const,
+            mentionPatterns: [
+              ...new Set([
+                ...(baseCfg.messages?.groupChat?.mentionPatterns ?? []),
+                "\\bopenclawqa\\b",
+              ]),
+            ],
           },
         }
-      : {};
-  const actionToolConfig = params.overrides?.actions
-    ? {
-        tools: {
-          ...baseCfg.tools,
-          alsoAllow: uniqueStrings([...(baseCfg.tools?.alsoAllow ?? []), "message"]),
-        },
-      }
-    : {};
+      : {}),
+    ...(statusReactionsEnabled
+      ? {
+          ackReaction: "👀",
+          ackReactionScope: "direct" as const,
+          statusReactions: {
+            ...baseCfg.messages?.statusReactions,
+            enabled: true,
+          },
+        }
+      : {}),
+  };
   return {
     ...baseCfg,
     ...approvalForwardingConfig,
-    ...audioPreflightConfig,
     ...broadcastConfig,
-    ...actionToolConfig,
+    ...(params.overrides?.audioPreflight || params.overrides?.actions ? { tools } : {}),
+    commands: {
+      ...baseCfg.commands,
+      ownerAllowFrom: uniqueStrings([
+        ...normalizeStringEntries(baseCfg.commands?.ownerAllowFrom),
+        ...params.ownerAllowFrom,
+      ]),
+    },
     plugins: {
       ...baseCfg.plugins,
       allow: pluginAllow,
@@ -257,6 +256,7 @@ export function buildWhatsAppQaConfig(
         whatsapp: { enabled: true },
       },
     },
+    messages: messagesConfig,
     channels: {
       ...baseCfg.channels,
       whatsapp: {
@@ -264,15 +264,6 @@ export function buildWhatsAppQaConfig(
         enabled: true,
         defaultAccount: params.sutAccountId,
         ...whatsappHistoryLimit,
-        ...(statusReactionsEnabled
-          ? {
-              ackReaction: {
-                ...baseCfg.channels?.whatsapp?.ackReaction,
-                direct: true,
-                emoji: "👀",
-              },
-            }
-          : {}),
         ...(params.overrides?.actions
           ? {
               actions: {
@@ -293,11 +284,6 @@ export function buildWhatsAppQaConfig(
             ...(params.overrides?.replyToMode
               ? {
                   replyToMode: params.overrides.replyToMode,
-                }
-              : {}),
-            ...(params.overrides?.inboundDebounceMs !== undefined
-              ? {
-                  debounceMs: params.overrides.inboundDebounceMs,
                 }
               : {}),
             ...(params.groupJid
@@ -325,47 +311,5 @@ export function buildWhatsAppQaConfig(
         },
       },
     },
-    ...(params.groupJid || statusReactionsEnabled
-      ? {
-          messages: {
-            ...baseCfg.messages,
-            ...(params.groupJid
-              ? {
-                  groupChat: {
-                    ...baseCfg.messages?.groupChat,
-                    visibleReplies: "automatic",
-                    mentionPatterns: [
-                      ...new Set([
-                        ...(baseCfg.messages?.groupChat?.mentionPatterns ?? []),
-                        "\\bopenclawqa\\b",
-                      ]),
-                    ],
-                  },
-                }
-              : {}),
-            ...(statusReactionsEnabled
-              ? {
-                  ...(statusReactionOverride?.removeAckAfterReply !== undefined
-                    ? {
-                        removeAckAfterReply: statusReactionOverride.removeAckAfterReply,
-                      }
-                    : {}),
-                  statusReactions: {
-                    ...baseCfg.messages?.statusReactions,
-                    enabled: true,
-                    ...(statusReactionOverride?.timing
-                      ? {
-                          timing: {
-                            ...baseCfg.messages?.statusReactions?.timing,
-                            ...statusReactionOverride.timing,
-                          },
-                        }
-                      : {}),
-                  },
-                }
-              : {}),
-          },
-        }
-      : {}),
   };
 }

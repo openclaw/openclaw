@@ -48,8 +48,10 @@ The bundled `alibaba` plugin registers a video-generation provider for Wan model
     {
       agents: {
         defaults: {
-          videoGenerationModel: {
-            primary: "alibaba/wan2.6-t2v",
+          mediaModels: {
+            video: {
+              primary: "alibaba/wan2.6-t2v",
+            },
           },
         },
       },
@@ -82,19 +84,33 @@ The bundled `alibaba` plugin registers a video-generation provider for Wan model
 
 ## Capabilities and limits
 
-All three modes share the same per-request video count and duration cap; only the input shape differs.
+With exactly one reference image and no video, `wan2.6-t2v` automatically
+uses `wan2.6-i2v`; the result reports the resolved model. This routing applies
+only when a same-generation image-to-video sibling exists in the known model
+catalog. Other requests use the selected model's mode. Geometry follows the
+vendor protocol for that model family.
 
-| Mode               | Max output videos | Max input images | Max input videos | Max duration | Supported controls                                        |
-| ------------------ | ----------------- | ---------------- | ---------------- | ------------ | --------------------------------------------------------- |
-| Text-to-video      | 1                 | n/a              | n/a              | 10 s         | `size`, `aspectRatio`, `resolution`, `audio`, `watermark` |
-| Image-to-video     | 1                 | 1                | n/a              | 10 s         | `size`, `aspectRatio`, `resolution`, `audio`, `watermark` |
-| Reference-to-video | 1                 | n/a              | 4                | 10 s         | `size`, `aspectRatio`, `resolution`, `audio`, `watermark` |
+| Mode                         | Max output videos | Reference limits                      | Max duration | Supported controls                                                   |
+| ---------------------------- | ----------------- | ------------------------------------- | ------------ | -------------------------------------------------------------------- |
+| Text-to-video                | 1                 | n/a                                   | 15 s         | `size`, `aspectRatio`, `resolution`, `audio`, `watermark`            |
+| Image-to-video               | 1                 | 1 image                               | 15 s         | `resolution`, `audio`, `watermark`                                   |
+| Reference-to-video (Wan 2.6) | 1                 | 5 total images/videos; up to 3 videos | 10 s         | `size`, `aspectRatio`, `resolution`, `audio`, `watermark`            |
+| Reference-to-video (Wan 2.7) | 1                 | 5 total images/videos; up to 3 videos | 10 s         | `size`, `aspectRatio`, `resolution`, `watermark`; audio is always on |
 
-A request that omits `durationSeconds` gets DashScope's accepted default of **5 seconds**. Set `durationSeconds` explicitly on the [video generation tool](/tools/video-generation) to extend up to 10 s.
+Wan 2.6 text/reference models translate `resolution` plus `aspectRatio` to the
+documented exact `size`. Wan 2.6 image-to-video sends the `resolution` tier and
+uses the input image's aspect ratio. Wan 2.7 reference-to-video sends the newer
+`media`, `resolution`, and `ratio` fields and always generates audio.
 
-<Warning>
-  Reference image and video inputs must be remote `http(s)` URLs; DashScope's reference modes reject local file paths. Upload to object storage first, or use the [media tool](/tools/media-overview) flow that already produces a public URL.
-</Warning>
+A request that omits `durationSeconds` gets DashScope's accepted default of **5 seconds**.
+
+Image-to-video and Wan 2.7 reference images accept local files or remote
+`http(s)` URLs. OpenClaw sends local images as base64 data URIs, with a maximum
+of 20 MB per image before encoding. See the Model Studio references for
+[image-to-video](https://www.alibabacloud.com/help/en/model-studio/image-to-video-api-reference)
+and [Wan 2.7 reference-to-video](https://www.alibabacloud.com/help/en/model-studio/wan-video-to-video-api-reference).
+Reference videos and Wan 2.6 reference-to-video images still require remote
+`http(s)` URLs.
 
 ## Advanced configuration
 

@@ -4,15 +4,19 @@ import type {
   WorkboardArtifact,
   WorkboardCard,
   WorkboardClaim,
-  WorkboardNotification,
+  WorkboardMetadata,
   WorkboardRunAttempt,
 } from "@openclaw/workboard-contract";
-import { isFutureDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
-import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import {
-  appendEvent,
+  isFutureDateTimestampMs,
+  resolveOptionalIntegerOption,
+} from "openclaw/plugin-sdk/number-runtime";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  appendComment,
   assertCanMutateClaimedCard,
-  capText,
+  cardBoardId,
   cardChildIds,
   cardParentIds,
   cardRunId,
@@ -23,37 +27,34 @@ import {
 import {
   addWorkboardDurationMs,
   DEFAULT_CLAIM_TTL_MS,
+  isWorkboardClaimReclaimable,
   MAX_CARD_ARTIFACTS,
-  MAX_CARD_COMMENTS,
-  MAX_CARD_NOTIFICATIONS,
-  MAX_CARD_PROOF,
   secondsToDurationMs,
 } from "./store-constants.js";
 import type {
   WorkboardBlockInput,
+  WorkboardCardPatch,
   WorkboardClaimInput,
   WorkboardClaimOptions,
   WorkboardCompleteInput,
-  WorkboardDecomposeChildInput,
   WorkboardDecomposeInput,
   WorkboardHeartbeatInput,
   WorkboardMutationScope,
-  WorkboardProofInput,
   WorkboardReassignInput,
   WorkboardReclaimInput,
   WorkboardSpecifyInput,
 } from "./store-inputs.js";
 import {
+  appendCompletionProof,
+  capText,
   clearDiagnostics,
   deriveChildIdempotencyKey,
   normalizeArtifact,
   normalizeAutomation,
   normalizeBoundedString,
-  normalizeOptionalString,
   normalizeProofInput,
   normalizeStatus,
   normalizeStringList,
-  removeUndefinedMetadataFields,
 } from "./store-normalizers.js";
 import { WorkboardPromoteStore } from "./store-promote.js";
 
@@ -78,10 +79,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
     if (!ownerId) {
       throw new Error("claim ownerId is required.");
     }
-    const ttlSeconds =
-      typeof input.ttlSeconds === "number" && Number.isFinite(input.ttlSeconds)
-        ? Math.max(1, Math.trunc(input.ttlSeconds))
-        : undefined;
+    const ttlSeconds = resolveOptionalIntegerOption(input.ttlSeconds, { min: 1 });
     const token =
       normalizeBoundedString(input.token, undefined, 160, "claim token") ?? randomUUID();
     return await this.enqueueMutation(async () => {
@@ -91,10 +89,15 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
         ttlSeconds ? secondsToDurationMs(ttlSeconds) : DEFAULT_CLAIM_TTL_MS,
       );
       const guarded = await this.promoteDependencyReady(id, now);
+      if (guarded.metadata?.archivedAt) {
+        throw new Error("card is archived.");
+      }
       const expectedAuthority = options.expectedAuthority;
       if (
         expectedAuthority &&
-        (guarded.agentId !== expectedAuthority.agentId ||
+        (guarded.status !== expectedAuthority.status ||
+          cardBoardId(guarded) !== expectedAuthority.boardId ||
+          guarded.agentId !== expectedAuthority.agentId ||
           !isDeepStrictEqual(
             guarded.metadata?.automation?.workspace,
             expectedAuthority.workspace,
@@ -108,11 +111,19 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       }
       const existingClaim = guarded.metadata?.claim;
       const activeClaim =
-        existingClaim && isFutureDateTimestampMs(existingClaim.expiresAt, { nowMs: now })
+        existingClaim &&
+        (isFutureDateTimestampMs(existingClaim.expiresAt, { nowMs: now }) ||
+          // Direct claims must honor the same running-worker heartbeat grace
+          // as dispatcher recovery; otherwise they silently steal live tokens.
+          (guarded.status === "running" && !isWorkboardClaimReclaimable(existingClaim, now)))
           ? existingClaim
           : undefined;
       if (cardParentIds(guarded).length > 0 && guarded.status !== "ready" && !activeClaim) {
-        throw new Error("card dependencies are not done.");
+        throw new Error(
+          guarded.status === "blocked"
+            ? "card is blocked; use workboard_unblock before claiming."
+            : "card dependencies are not done.",
+        );
       }
       if (guarded.status === "scheduled") {
         throw new Error("card is scheduled for later.");
@@ -123,31 +134,34 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       if (activeClaim) {
         throw new Error(`card already claimed by ${activeClaim.ownerId}.`);
       }
-      const claimable =
-        options.adoptWorkspaceAccess && !guarded.metadata?.automation?.workspaceAccess
-          ? await this.updateCard(id, { workspaceAccess: options.adoptWorkspaceAccess })
-          : guarded;
-      const metadata = clearDiagnostics(claimable.metadata, ["stranded_ready"]);
-      const card = await this.updateCard(id, {
-        metadata: {
-          ...metadata,
-          claim: { ownerId, token, claimedAt: now, lastHeartbeatAt: now, expiresAt },
+      const metadata = clearDiagnostics(guarded.metadata, ["stranded_ready"]);
+      const card = await this.updateCard(
+        await this.requireCard(id),
+        {
+          status:
+            guarded.status === "backlog" || guarded.status === "todo" || guarded.status === "ready"
+              ? "running"
+              : guarded.status,
+          ...(options.adoptWorkspaceAccess && !guarded.metadata?.automation?.workspaceAccess
+            ? { workspaceAccess: options.adoptWorkspaceAccess }
+            : {}),
+          metadata: {
+            ...metadata,
+            claim: { ownerId, token, claimedAt: now, lastHeartbeatAt: now, expiresAt },
+          },
         },
-      });
-      const next = await this.updateCard(card.id, {
-        status:
-          card.status === "backlog" || card.status === "todo" || card.status === "ready"
-            ? "running"
-            : card.status,
-        agentId: card.agentId ?? ownerId,
-      });
-      return { card: next, token };
-    });
+        {
+          expectedUpdatedAt: guarded.updatedAt,
+          ownerSlot: { ownerId, now },
+        },
+      );
+      return { card, token };
+    }, options.assertOwnerCurrent);
   }
 
   async heartbeat(id: string, input: WorkboardHeartbeatInput): Promise<WorkboardCard> {
     const note = normalizeBoundedString(input.note, undefined, 400, "heartbeat note");
-    const card = await this.updateMetadata(id, (existing) => {
+    return await this.updateMetadata(id, (existing) => {
       const claim = existing.metadata?.claim;
       if (!claim) {
         throw new Error("card is not claimed.");
@@ -172,15 +186,10 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       const metadata = clearDiagnostics(existing.metadata, ["running_without_heartbeat"]);
       return {
         ...metadata,
-        claim: removeUndefinedMetadataFields({ claim: nextClaim }).claim,
-        comments: note
-          ? [...(metadata.comments ?? []), { id: randomUUID(), body: note, createdAt: now }].slice(
-              -MAX_CARD_COMMENTS,
-            )
-          : metadata.comments,
+        claim: nextClaim,
+        comments: appendComment(metadata.comments, note, now),
       };
     });
-    return card;
   }
 
   async releaseClaim(
@@ -188,20 +197,14 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
     input: WorkboardHeartbeatInput & { status?: unknown } = {},
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(async () => {
-      const existing = await this.get(id);
-      if (!existing) {
-        throw new Error(`card not found: ${id}`);
-      }
-      const status =
-        input.status === undefined
-          ? existing.status
-          : normalizeStatus(input.status, existing.status);
+      const existing = await this.requireCard(id);
+      const status = normalizeStatus(input.status, existing.status);
       const claim = existing.metadata?.claim;
       if (claim) {
         assertClaimIdentity(claim, input);
       }
       return await this.updateCard(
-        id,
+        await this.requireCard(id),
         {
           status,
           metadata: { ...existing.metadata, claim: undefined },
@@ -216,7 +219,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
     input: WorkboardCompleteInput = {},
     scope: WorkboardMutationScope | null | undefined = input,
   ): Promise<WorkboardCard> {
-    return await this.enqueueMutation(async () => await this.completeDirect(id, input, scope));
+    return await this.enqueueMutation(() => this.completeDirect(id, input, scope));
   }
 
   private async completeDirect(
@@ -224,10 +227,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
     input: WorkboardCompleteInput = {},
     scope: WorkboardMutationScope | null | undefined = input,
   ): Promise<WorkboardCard> {
-    const existing = await this.get(id);
-    if (!existing) {
-      throw new Error(`card not found: ${id}`);
-    }
+    const existing = await this.requireCard(id);
     assertCanMutateClaimedCard(existing, scope === null ? undefined : scope);
     const now = Date.now();
     const createdCardIds = normalizeStringList(input.createdCardIds, "created card ids", 120);
@@ -244,10 +244,11 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       }
     }
     const summary = normalizeBoundedString(input.summary, undefined, 2000, "summary");
-    const proofInput =
-      input.proof && typeof input.proof === "object" && !Array.isArray(input.proof)
-        ? (input.proof as WorkboardProofInput)
-        : undefined;
+    const proofInput = isRecord(input.proof) ? input.proof : undefined;
+    const proofId = normalizeBoundedString(input.proofId, undefined, 120, "proof id");
+    if (input.proofId !== undefined && !proofId) {
+      throw new Error("proofId must be a non-empty string.");
+    }
     const proof = proofInput ? normalizeProofInput(proofInput, now) : undefined;
     const artifacts = Array.isArray(input.artifacts)
       ? input.artifacts
@@ -255,30 +256,20 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
           .filter((artifact): artifact is WorkboardArtifact => artifact !== null)
           .slice(-MAX_CARD_ARTIFACTS)
       : [];
-    const metadata = clearDiagnostics(existing.metadata, ["missing_proof"]);
-    const notification: WorkboardNotification = {
-      id: randomUUID(),
+    const finished = this.finishRun(existing, "done", now);
+    const metadata = clearDiagnostics(finished.metadata, ["missing_proof"]);
+    const notifications = this.appendNotification(metadata, now, {
       kind: "completed",
-      createdAt: now,
-      sequence: this.nextNotificationSequence(now),
       message: capText(summary, 240) ?? "Workboard card completed.",
       ...(cardSessionKey(existing) ? { sessionKey: cardSessionKey(existing) } : {}),
       ...(cardRunId(existing) ? { runId: cardRunId(existing) } : {}),
-    };
-    const execution =
-      existing.execution?.status === "running"
-        ? { ...existing.execution, status: "done" as const, updatedAt: now }
-        : existing.execution;
+    });
     return await this.updateCard(
-      id,
+      await this.requireCard(id),
       {
-        status: "done",
-        ...(execution ? { execution } : {}),
+        ...finished,
         metadata: {
           ...metadata,
-          claim: undefined,
-          attempts: closeRunningAttempts(metadata.attempts, now, "succeeded"),
-          failureCount: 0,
           automation: normalizeAutomation(
             {
               ...metadata.automation,
@@ -287,83 +278,77 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
             },
             metadata.automation,
           ),
-          comments: summary
-            ? [
-                ...(metadata.comments ?? []),
-                { id: randomUUID(), body: summary, createdAt: now },
-              ].slice(-MAX_CARD_COMMENTS)
-            : metadata.comments,
-          proof: proof ? [...(metadata.proof ?? []), proof].slice(-MAX_CARD_PROOF) : metadata.proof,
+          comments: appendComment(metadata.comments, summary, now),
+          proof: appendCompletionProof(metadata.proof, proof, proofId),
           artifacts: artifacts.length
             ? [...(metadata.artifacts ?? []), ...artifacts].slice(-MAX_CARD_ARTIFACTS)
             : metadata.artifacts,
-          notifications: [...(metadata.notifications ?? []), notification].slice(
-            -MAX_CARD_NOTIFICATIONS,
-          ),
+          notifications,
         },
       },
-      { enforceStatusHolds: true },
+      {
+        enforceStatusHolds: true,
+        preserveProofId: proofId ?? proof?.id,
+      },
     );
+  }
+
+  protected buildBlockedCardPatch(
+    existing: WorkboardCard,
+    reason: string,
+    now: number,
+    options: { clearExecutionAssociation?: boolean } = {},
+  ): WorkboardCardPatch & { metadata: WorkboardMetadata } {
+    const finished = this.finishRun(existing, "blocked", now, reason);
+    const metadata = finished.metadata;
+    const notifications = this.appendNotification(metadata, now, {
+      kind: "failed",
+      message: capText(reason, 240) ?? "Workboard card blocked.",
+      ...(cardSessionKey(existing) ? { sessionKey: cardSessionKey(existing) } : {}),
+      ...(cardRunId(existing) ? { runId: cardRunId(existing) } : {}),
+    });
+    return {
+      ...finished,
+      ...(options.clearExecutionAssociation
+        ? { sessionKey: null, runId: null, execution: null }
+        : {}),
+      metadata: {
+        ...metadata,
+        comments: appendComment(metadata.comments, reason, now),
+        notifications,
+      },
+    };
   }
 
   async block(
     id: string,
     input: WorkboardBlockInput = {},
     scope: WorkboardMutationScope | null | undefined = input,
+    options: { clearExecutionAssociation?: boolean } = {},
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(async () => {
-      const existing = await this.get(id);
-      if (!existing) {
-        throw new Error(`card not found: ${id}`);
-      }
+      const existing = await this.requireCard(id);
       assertCanMutateClaimedCard(existing, scope === null ? undefined : scope);
       const now = Date.now();
       const reason =
         normalizeBoundedString(input.reason, undefined, 2000, "block reason") ??
         "Workboard card blocked.";
-      const metadata = existing.metadata ?? {};
-      const notification: WorkboardNotification = {
-        id: randomUUID(),
-        kind: "failed",
-        createdAt: now,
-        sequence: this.nextNotificationSequence(now),
-        message: capText(reason, 240) ?? "Workboard card blocked.",
-        ...(cardSessionKey(existing) ? { sessionKey: cardSessionKey(existing) } : {}),
-        ...(cardRunId(existing) ? { runId: cardRunId(existing) } : {}),
-      };
-      const execution =
-        existing.execution?.status === "running"
-          ? { ...existing.execution, status: "blocked" as const, updatedAt: now }
-          : existing.execution;
-      return await this.updateCard(id, {
-        status: "blocked",
-        ...(execution ? { execution } : {}),
-        metadata: {
-          ...metadata,
-          claim: undefined,
-          attempts: closeRunningAttempts(metadata.attempts, now, "blocked", reason),
-          failureCount: (metadata.failureCount ?? 0) + 1,
-          comments: [
-            ...(metadata.comments ?? []),
-            { id: randomUUID(), body: reason, createdAt: now },
-          ].slice(-MAX_CARD_COMMENTS),
-          notifications: [...(metadata.notifications ?? []), notification].slice(
-            -MAX_CARD_NOTIFICATIONS,
-          ),
-        },
-      });
+      return await this.updateCard(
+        await this.requireCard(id),
+        this.buildBlockedCardPatch(existing, reason, now, options),
+      );
     });
   }
 
   async unblock(id: string, scope?: WorkboardMutationScope): Promise<WorkboardCard> {
     return await this.enqueueMutation(async () => {
-      const existing = await this.get(id);
-      if (!existing) {
-        throw new Error(`card not found: ${id}`);
-      }
+      const existing = await this.requireCard(id);
       assertCanMutateClaimedCard(existing, scope);
       const metadata = clearDiagnostics(existing.metadata, ["blocked_too_long"]);
-      return await this.updateCard(id, { status: "todo", metadata: { ...metadata, stale: null } });
+      return await this.updateCard(await this.requireCard(id), {
+        status: "todo",
+        metadata: { ...metadata, stale: null },
+      });
     });
   }
 
@@ -373,17 +358,11 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
     scope?: WorkboardMutationScope | null,
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(async () => {
-      const existing = await this.get(id);
-      if (!existing) {
-        throw new Error(`card not found: ${id}`);
-      }
+      const existing = await this.requireCard(id);
       assertCanMutateClaimedCard(existing, scope === null ? undefined : scope);
       const agentId =
         input.agentId === undefined ? existing.agentId : normalizeOptionalString(input.agentId);
-      const status =
-        input.status === undefined
-          ? existing.status
-          : normalizeStatus(input.status, existing.status);
+      const status = normalizeStatus(input.status, existing.status);
       const reason = normalizeBoundedString(input.reason, undefined, 1000, "reassign reason");
       const shouldResetFailures = input.resetFailures !== false;
       const baseMetadata = shouldResetFailures
@@ -392,14 +371,13 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       const metadata = {
         ...baseMetadata,
         ...(shouldResetFailures ? { failureCount: 0 } : {}),
-        comments: reason
-          ? [
-              ...(baseMetadata?.comments ?? []),
-              { id: randomUUID(), body: reason, createdAt: Date.now() },
-            ].slice(-MAX_CARD_COMMENTS)
-          : baseMetadata?.comments,
+        comments: appendComment(baseMetadata?.comments, reason),
       };
-      return await this.updateCard(id, { agentId, status, metadata }, { enforceStatusHolds: true });
+      return await this.updateCard(
+        await this.requireCard(id),
+        { agentId, status, metadata },
+        { enforceStatusHolds: true },
+      );
     });
   }
 
@@ -409,10 +387,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
     scope?: WorkboardMutationScope | null,
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(async () => {
-      const existing = await this.get(id);
-      if (!existing) {
-        throw new Error(`card not found: ${id}`);
-      }
+      const existing = await this.requireCard(id);
       assertCanMutateClaimedCard(existing, scope === null ? undefined : scope);
       const now = Date.now();
       const reason =
@@ -425,7 +400,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
             : existing.status
           : normalizeStatus(input.status, existing.status);
       const reclaimed = await this.updateCard(
-        id,
+        await this.requireCard(id),
         {
           status: targetStatus,
           execution: existing.execution?.status === "running" ? null : existing.execution,
@@ -433,10 +408,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
             ...existing.metadata,
             claim: undefined,
             attempts: closeRunningAttempts(existing.metadata?.attempts, now, "stopped", reason),
-            comments: [
-              ...(existing.metadata?.comments ?? []),
-              { id: randomUUID(), body: reason, createdAt: now },
-            ].slice(-MAX_CARD_COMMENTS),
+            comments: appendComment(existing.metadata?.comments, reason, now),
             stale: null,
           },
         },
@@ -447,10 +419,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
   }
 
   async runs(id: string): Promise<{ card: WorkboardCard; attempts: WorkboardRunAttempt[] }> {
-    const card = await this.get(id);
-    if (!card) {
-      throw new Error(`card not found: ${id}`);
-    }
+    const card = await this.requireCard(id);
     return { card, attempts: card.metadata?.attempts ?? [] };
   }
 
@@ -460,10 +429,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
     scope?: WorkboardMutationScope | null,
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(async () => {
-      const existing = await this.get(id);
-      if (!existing) {
-        throw new Error(`card not found: ${id}`);
-      }
+      const existing = await this.requireCard(id);
       assertCanMutateClaimedCard(existing, scope === null ? undefined : scope);
       if (
         existing.status !== "triage" &&
@@ -480,12 +446,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       const summary = normalizeBoundedString(input.summary, undefined, 2000, "spec summary");
       const metadata = {
         ...existing.metadata,
-        comments: summary
-          ? [
-              ...(existing.metadata?.comments ?? []),
-              { id: randomUUID(), body: summary, createdAt: now },
-            ].slice(-MAX_CARD_COMMENTS)
-          : existing.metadata?.comments,
+        comments: appendComment(existing.metadata?.comments, summary, now),
         automation: normalizeAutomation(
           {
             ...existing.metadata?.automation,
@@ -495,21 +456,15 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
         ),
       };
       const { summary: _summary, status: _status, ...cardPatch } = input;
-      const updated = await this.updateCard(
-        id,
+      return await this.updateCard(
+        await this.requireCard(id),
         {
           ...cardPatch,
           status: "todo",
           metadata,
         },
-        { enforceStatusHolds: true },
+        { enforceStatusHolds: true, event: { kind: "specified" }, eventAt: now },
       );
-      const specified = {
-        ...updated,
-        events: appendEvent(updated, { kind: "specified" }, now),
-      };
-      await this.store.register(specified.id, { version: 1, card: specified });
-      return specified;
     });
   }
 
@@ -518,106 +473,93 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
     input: WorkboardDecomposeInput = {},
     scope?: WorkboardMutationScope | null,
   ): Promise<{ parent: WorkboardCard; children: WorkboardCard[] }> {
-    return await this.enqueueMutation(async () => {
-      const parent = await this.get(id);
-      if (!parent) {
-        throw new Error(`card not found: ${id}`);
-      }
-      assertCanMutateClaimedCard(parent, scope === null ? undefined : scope);
-      const childrenInput = Array.isArray(input.children) ? input.children : [];
-      if (childrenInput.length === 0) {
-        throw new Error("children are required.");
-      }
-      if (childrenInput.length > 20) {
-        throw new Error("at most 20 children can be created at once.");
-      }
-      const parentAutomation = parent.metadata?.automation;
-      const existingCardIds = new Set((await this.list()).map((card) => card.id));
-      const children: WorkboardCard[] = [];
-      const reusedChildSnapshots = new Map<string, WorkboardCard>();
-      try {
-        for (const rawChild of childrenInput) {
-          if (!rawChild || typeof rawChild !== "object" || Array.isArray(rawChild)) {
-            throw new Error("children must be objects.");
+    return await this.enqueueMutation(
+      async () =>
+        await this.withCardCompensation(async () => {
+          const parent = await this.requireCard(id);
+          assertCanMutateClaimedCard(parent, scope === null ? undefined : scope);
+          const childrenInput = Array.isArray(input.children) ? input.children : [];
+          if (childrenInput.length === 0) {
+            throw new Error("children are required.");
           }
-          const child = rawChild as WorkboardDecomposeChildInput;
-          const created = await this.createDirect(
-            {
-              ...child,
-              parents: [parent.id],
-              boardId: child.boardId ?? parentAutomation?.boardId,
-              tenant: child.tenant ?? parentAutomation?.tenant,
-              createdByCardId: parent.id,
-              idempotencyKey:
-                child.idempotencyKey ??
-                deriveChildIdempotencyKey(parentAutomation?.idempotencyKey, children.length + 1),
-            },
-            scope === null ? undefined : scope,
-          );
-          const reusedUnlinkedChild =
-            existingCardIds.has(created.id) && !cardParentIds(created).includes(parent.id);
-          if (reusedUnlinkedChild) {
-            reusedChildSnapshots.set(created.id, created);
+          if (childrenInput.length > 20) {
+            throw new Error("at most 20 children can be created at once.");
           }
-          children.push(
-            cardParentIds(created).includes(parent.id)
-              ? created
-              : await this.linkCardsDirect(parent.id, created.id, Date.now(), {
-                  allowStatusOnlyActiveChild: true,
-                  scope: scope === null ? undefined : scope,
-                }),
+          const parentAutomation = parent.metadata?.automation;
+          const children: WorkboardCard[] = [];
+          for (const child of childrenInput) {
+            if (!isRecord(child)) {
+              throw new Error("children must be objects.");
+            }
+            const created = await this.createDirect(
+              {
+                ...child,
+                parents: [parent.id],
+                boardId: child.boardId ?? parentAutomation?.boardId,
+                tenant: child.tenant ?? parentAutomation?.tenant,
+                createdByCardId: parent.id,
+                idempotencyKey:
+                  child.idempotencyKey ??
+                  deriveChildIdempotencyKey(parentAutomation?.idempotencyKey, children.length + 1),
+              },
+              scope === null ? undefined : scope,
+            );
+            children.push(
+              cardParentIds(created).includes(parent.id)
+                ? created
+                : await this.linkCardsDirect(parent.id, created.id, Date.now(), {
+                    allowStatusOnlyActiveChild: true,
+                    scope: scope === null ? undefined : scope,
+                  }),
+            );
+          }
+          const summary = normalizeBoundedString(
+            input.summary,
+            undefined,
+            2000,
+            "decompose summary",
           );
-        }
-        const summary = normalizeBoundedString(input.summary, undefined, 2000, "decompose summary");
-        const completeParent = input.completeParent !== false;
-        const updatedParent = completeParent
-          ? await this.completeDirect(
-              parent.id,
-              { summary, createdCardIds: children.map((child) => child.id) },
-              scope,
-            )
-          : await (async () => {
-              const latestParent = (await this.get(parent.id)) ?? parent;
-              return await this.updateCard(
+          const completeParent = input.completeParent !== false;
+          const updatedParent = completeParent
+            ? await this.completeDirect(
                 parent.id,
-                {
-                  status:
-                    latestParent.status === "triage" || latestParent.status === "backlog"
-                      ? "todo"
-                      : latestParent.status,
-                  metadata: {
-                    ...latestParent.metadata,
-                    automation: normalizeAutomation(
-                      {
-                        ...latestParent.metadata?.automation,
-                        summary,
-                        createdCardIds: children.map((child) => child.id),
-                      },
-                      latestParent.metadata?.automation,
-                    ),
+                { summary, createdCardIds: children.map((child) => child.id) },
+                scope,
+              )
+            : await (async () => {
+                const latestParent = (await this.get(parent.id)) ?? parent;
+                return await this.updateCard(
+                  await this.requireCard(parent.id),
+                  {
+                    status:
+                      latestParent.status === "triage" || latestParent.status === "backlog"
+                        ? "todo"
+                        : latestParent.status,
+                    metadata: {
+                      ...latestParent.metadata,
+                      automation: normalizeAutomation(
+                        {
+                          ...latestParent.metadata?.automation,
+                          summary,
+                          createdCardIds: children.map((child) => child.id),
+                        },
+                        latestParent.metadata?.automation,
+                      ),
+                    },
                   },
-                },
-                { enforceStatusHolds: true },
-              );
-            })();
-        const decomposedParent = {
-          ...updatedParent,
-          events: appendEvent(updatedParent, { kind: "decomposed" }),
-        };
-        await this.store.register(decomposedParent.id, { version: 1, card: decomposedParent });
-        return { parent: decomposedParent, children };
-      } catch (error) {
-        for (const child of children.toReversed()) {
-          if (!existingCardIds.has(child.id)) {
-            await this.deleteDirect(child.id);
-          }
-        }
-        for (const child of reusedChildSnapshots.values()) {
-          await this.store.register(child.id, { version: 1, card: child });
-        }
-        await this.store.register(parent.id, { version: 1, card: parent });
-        throw error;
-      }
-    });
+                  { enforceStatusHolds: true },
+                );
+              })();
+          const decomposedParent = await this.updateCard(
+            await this.requireCard(updatedParent.id),
+            {},
+            {
+              event: { kind: "decomposed" },
+              expectedUpdatedAt: updatedParent.updatedAt,
+            },
+          );
+          return { parent: decomposedParent, children };
+        }),
+    );
   }
 }

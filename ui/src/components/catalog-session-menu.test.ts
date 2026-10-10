@@ -21,7 +21,10 @@ describe("catalog session menu", () => {
     const container = document.createElement("div");
     containers.push(container);
     document.body.append(container);
-    render(html`<openclaw-catalog-session-menu></openclaw-catalog-session-menu>`, container);
+    render(
+      html`<openclaw-catalog-session-menu .lastActive=${"57d"}></openclaw-catalog-session-menu>`,
+      container,
+    );
     const menu = container.querySelector("openclaw-catalog-session-menu") as CatalogMenuElement;
     await menu.updateComplete;
     const dropdown = menu.querySelector<HTMLElement & { open: boolean }>("wa-dropdown");
@@ -31,12 +34,10 @@ describe("catalog session menu", () => {
     expect(dropdown?.open).toBe(true);
     expect(document.activeElement).toBe(items[0]);
     expect(items.map((item) => item.getAttribute("value"))).toEqual(["viewer", "terminal"]);
+    expect(menu.querySelector(".session-menu__info")?.textContent?.trim()).toBe("Last active 57d");
   });
 
-  it.each([
-    [0, "viewer"],
-    [1, "terminal"],
-  ] as const)("dispatches item %s before synchronous close", async (index, expected) => {
+  it("dispatches the selected action before synchronous close", async () => {
     const container = document.createElement("div");
     containers.push(container);
     document.body.append(container);
@@ -58,10 +59,10 @@ describe("catalog session menu", () => {
     const menu = container.querySelector("openclaw-catalog-session-menu") as CatalogMenuElement;
     await menu.updateComplete;
 
-    menu.querySelectorAll<CatalogMenuItem>("wa-dropdown-item")[index]?.click();
+    menu.querySelector<CatalogMenuItem>('wa-dropdown-item[value="terminal"]')?.click();
 
-    expect(onAction).toHaveBeenCalledWith(expected);
-    expect(order).toEqual([expected, "close"]);
+    expect(onAction).toHaveBeenCalledWith("terminal");
+    expect(order).toEqual(["terminal", "close"]);
     expect(backingState).toBeNull();
   });
 

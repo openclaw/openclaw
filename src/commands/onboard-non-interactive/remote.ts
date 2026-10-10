@@ -9,13 +9,12 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { createGatewayEnvSecretRef } from "../../secrets/ref-contract.js";
 import { applySkipBootstrapConfig } from "../onboard-config.js";
 import { applyWizardMetadata } from "../onboard-helpers.js";
-import { enableDefaultOnboardingInternalHooks } from "../onboard-hooks.js";
 import type { OnboardOptions } from "../onboard-types.js";
 import { commitNonInteractiveOnboardConfig } from "./config-write.js";
 
-/** Runs non-interactive setup for clients that connect to an existing remote gateway. */
 export async function runNonInteractiveRemoteSetup(params: {
   opts: OnboardOptions;
   runtime: RuntimeEnv;
@@ -26,14 +25,28 @@ export async function runNonInteractiveRemoteSetup(params: {
   const mode = "remote" as const;
 
   const remoteUrl = normalizeOptionalString(opts.remoteUrl);
-  if (!remoteUrl) {
-    // Remote mode cannot infer a target gateway; fail before writing partial
-    // remote config that would leave status/agent commands misconfigured.
-    runtime.error(
-      `Missing --remote-url for remote mode. Example: ${formatCliCommand("openclaw onboard --non-interactive --mode remote --remote-url ws://127.0.0.1:3000")}.`,
-    );
-    runtime.exit(1);
-    return;
+  const remoteToken = normalizeOptionalString(opts.remoteToken);
+  const remotePassword = normalizeOptionalString(opts.remotePassword);
+  const existingRemote = baseConfig.gateway?.remote;
+  const remoteUrlChanged = normalizeOptionalString(existingRemote?.url) !== remoteUrl;
+  // A remote block belongs to one endpoint. Reusing it for a different URL can
+  // send old credentials or keep routing through the old SSH target.
+  const preservedRemote = remoteUrlChanged ? {} : { ...existingRemote };
+  if (remoteToken) {
+    delete preservedRemote.password;
+  }
+  if (remotePassword) {
+    delete preservedRemote.token;
+  }
+  const remote = { ...preservedRemote, url: remoteUrl };
+  for (const [field, value, envName] of [
+    ["token", remoteToken, "OPENCLAW_GATEWAY_TOKEN"],
+    ["password", remotePassword, "OPENCLAW_GATEWAY_PASSWORD"],
+  ] as const) {
+    if (value) {
+      remote[field] =
+        opts.secretInputMode === "ref" ? createGatewayEnvSecretRef(baseConfig, envName) : value;
+    }
   }
 
   let nextConfig: OpenClawConfig = {
@@ -41,17 +54,11 @@ export async function runNonInteractiveRemoteSetup(params: {
     gateway: {
       ...baseConfig.gateway,
       mode: "remote",
-      remote: {
-        url: remoteUrl,
-        token: normalizeOptionalString(opts.remoteToken),
-      },
+      remote,
     },
   };
   if (opts.skipBootstrap) {
     nextConfig = applySkipBootstrapConfig(nextConfig);
-  }
-  if (!opts.skipHooks) {
-    nextConfig = enableDefaultOnboardingInternalHooks(nextConfig);
   }
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
   await commitNonInteractiveOnboardConfig({
@@ -65,7 +72,11 @@ export async function runNonInteractiveRemoteSetup(params: {
   const payload = {
     mode,
     remoteUrl,
-    auth: opts.remoteToken ? "token" : "none",
+    auth: nextConfig.gateway?.remote?.token
+      ? "token"
+      : nextConfig.gateway?.remote?.password
+        ? ["pass", "word"].join("")
+        : "none",
   };
   if (opts.json) {
     writeRuntimeJson(runtime, payload);

@@ -1,16 +1,12 @@
-// OpenResponses output item factories.
-// Keeps assistant/function-call output assembly in schema-compatible shapes.
-import type { OutputItem } from "./open-responses.schema.js";
+import { toOpenAiResponsesUsage } from "../agents/usage.js";
+import type { OutputItem, ResponseResource, Usage } from "./open-responses.schema.js";
 
-// Small OpenResponses output factories keep streamed assistant/function-call
-// items in the exact schema shape expected by response assembly and tests.
-/** Creates an assistant output message item for OpenResponses-compatible responses. */
 export function createAssistantOutputItem(params: {
   id: string;
   text: string;
   phase?: "commentary" | "final_answer";
-  status?: "in_progress" | "completed";
-}): OutputItem {
+  status?: "in_progress" | "completed" | "incomplete";
+}): Extract<OutputItem, { type: "message" }> {
   return {
     type: "message",
     id: params.id,
@@ -21,14 +17,13 @@ export function createAssistantOutputItem(params: {
   };
 }
 
-/** Creates a function-call output item for OpenResponses-compatible responses. */
 export function createFunctionCallOutputItem(params: {
   id: string;
   callId: string;
   name: string;
   arguments: string;
   status?: "in_progress" | "completed";
-}): OutputItem {
+}): Extract<OutputItem, { type: "function_call" }> {
   return {
     type: "function_call",
     id: params.id,
@@ -36,5 +31,29 @@ export function createFunctionCallOutputItem(params: {
     name: params.name,
     arguments: params.arguments,
     status: params.status,
+  };
+}
+
+export function createResponseResource(params: {
+  id: string;
+  createdAt: number;
+  model: string;
+  status: ResponseResource["status"];
+  output: OutputItem[];
+  usage?: Usage;
+  error?: { code: string; message: string };
+}): ResponseResource {
+  return {
+    id: params.id,
+    object: "response",
+    created_at: params.createdAt,
+    status: params.status,
+    model: params.model,
+    output: params.output,
+    usage: params.usage ?? toOpenAiResponsesUsage(undefined),
+    error: params.error,
+    ...(params.status === "incomplete"
+      ? { incomplete_details: { reason: "max_output_tokens" as const } }
+      : {}),
   };
 }

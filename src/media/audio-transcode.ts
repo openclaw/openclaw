@@ -1,8 +1,7 @@
-// Audio transcode helpers run ffmpeg to convert audio for provider requirements.
 import path from "node:path";
+import { tempWorkspaceSync, withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { basenameFromAnyPath } from "@openclaw/media-core/file-name";
 import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
-import { tempWorkspaceSync, withTempWorkspace } from "../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { runFfmpeg } from "./ffmpeg-exec.js";
@@ -43,6 +42,16 @@ function normalizeOutputFileName(value?: string): string {
   return DEFAULT_OUTPUT_FILE_NAME;
 }
 
+function resolveMaxDurationSeconds(value?: number): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error("maxDurationSeconds must be a positive finite number");
+  }
+  return value;
+}
+
 /** Transcodes arbitrary audio input into mono Opus using a scoped temp workspace. */
 export async function transcodeAudioBufferToOpus(params: {
   audioBuffer: Buffer;
@@ -54,7 +63,10 @@ export async function transcodeAudioBufferToOpus(params: {
   sampleRateHz?: number;
   bitrate?: string;
   channels?: number;
+  /** Maximum output duration passed to ffmpeg's `-t` option. */
+  maxDurationSeconds?: number;
 }): Promise<Buffer> {
+  const maxDurationSeconds = resolveMaxDurationSeconds(params.maxDurationSeconds);
   return await withTempWorkspace(
     {
       rootDir: resolvePreferredOpenClawTmpDir(),
@@ -81,6 +93,7 @@ export async function transcodeAudioBufferToOpus(params: {
               "-vn",
               "-sn",
               "-dn",
+              ...(maxDurationSeconds === undefined ? [] : ["-t", String(maxDurationSeconds)]),
               "-c:a",
               "libopus",
               "-b:a",
@@ -131,8 +144,7 @@ export async function transcodeAudioBuffer(params: {
   if (source === target) {
     return { ok: false, reason: "noop-same-container" };
   }
-  const recipe = pickAfconvertRecipe(source, target);
-  if (!recipe) {
+  if (target !== "caf") {
     return { ok: false, reason: "no-recipe" };
   }
   if (process.platform !== "darwin") {
@@ -144,15 +156,16 @@ export async function transcodeAudioBuffer(params: {
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "tts-transcode-",
   });
-  const inPath = tmp.write(`in.${source}`, params.audioBuffer);
-  const outPath = tmp.path(`out.${target}`);
   try {
-    const result = await runAfconvert({
-      args: [...recipe, inPath, outPath],
-      timeoutMs: params.timeoutMs ?? 5000,
-    });
-    if (!result.ok) {
-      return { ok: false, reason: "transcoder-failed", detail: result.detail };
+    const inPath = tmp.write(`in.${source}`, params.audioBuffer);
+    const outPath = tmp.path(`out.${target}`);
+    const failure = await runAfconvert(
+      // Opus-in-CAF matches native Messages voice memo attachments.
+      ["-f", "caff", "-d", "opus@24000", "-c", "1", inPath, outPath],
+      params.timeoutMs ?? 5000,
+    );
+    if (failure !== undefined) {
+      return { ok: false, reason: "transcoder-failed", detail: failure };
     }
     return { ok: true, buffer: tmp.read(`out.${target}`) };
   } catch (err) {
@@ -167,30 +180,17 @@ function normalizeContainerExt(ext: string): string | undefined {
   return /^[a-z0-9]{1,12}$/.test(trimmed) ? trimmed : undefined;
 }
 
-function pickAfconvertRecipe(_source: string, target: string): string[] | undefined {
-  if (target === "caf") {
-    // Opus-in-CAF matches native Messages voice memo attachments.
-    return ["-f", "caff", "-d", "opus@24000", "-c", "1"];
-  }
-  return undefined;
-}
-
-async function runAfconvert(params: {
-  args: string[];
-  timeoutMs: number;
-}): Promise<{ ok: true } | { ok: false; detail: string }> {
+async function runAfconvert(args: string[], timeoutMs: number): Promise<string | undefined> {
   try {
-    const result = await runCommandWithTimeout(["/usr/bin/afconvert", ...params.args], {
+    const result = await runCommandWithTimeout(["/usr/bin/afconvert", ...args], {
       maxOutputBytes: 1024,
-      timeoutMs: params.timeoutMs,
+      timeoutMs,
     });
     if (result.termination === "timeout") {
-      return { ok: false, detail: `timeout-${params.timeoutMs}ms` };
+      return `timeout-${timeoutMs}ms`;
     }
-    return result.code === 0
-      ? { ok: true }
-      : { ok: false, detail: `exit-${result.code ?? "unknown"}` };
+    return result.code === 0 ? undefined : `exit-${result.code ?? "unknown"}`;
   } catch (err) {
-    return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    return err instanceof Error ? err.message : String(err);
   }
 }

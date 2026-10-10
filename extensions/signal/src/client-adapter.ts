@@ -1,17 +1,7 @@
-/**
- * Signal client adapter - unified interface for both native signal-cli and bbernhard container.
- *
- * This adapter provides a single API that routes to the appropriate implementation
- * based on the configured API mode. Exports mirror client.ts names so consumers
- * only need to change their import path.
- */
-
-import {
-  asDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { SignalTransportConfig } from "./account-types.js";
 import { containerCheck, containerRpcRequest, streamContainerEvents } from "./client-container.js";
-import type { SignalRpcOptions } from "./client.js";
+import type { SignalRpcOptions, SignalSseEvent } from "./client-types.js";
 import {
   signalCheck as nativeCheck,
   signalRpcRequest as nativeRpcRequest,
@@ -19,203 +9,39 @@ import {
 } from "./client.js";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
-const MODE_CACHE_TTL_MS = 30_000;
-const NATIVE_PREFERENCE_GRACE_MS = 50;
 
-export type SignalSseEvent = {
-  event?: string;
-  data?: string;
-};
+export type { SignalSseEvent } from "./client-types.js";
 
-export type SignalApiMode = "native" | "container" | "auto";
+export type SignalTransportKind = SignalTransportConfig["kind"];
 
-// Cache auto-detected modes per baseUrl to avoid repeated network probes.
-const detectedModeCache = new Map<
-  string,
-  { mode: "native" | "container"; expiresAt: number; receiveAccount?: string }
->();
-
-function resolveConfiguredApiMode(configured?: SignalApiMode): SignalApiMode {
-  if (configured === "native" || configured === "container") {
-    return configured;
-  }
-  return "auto";
-}
-
-function formatErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function resolveAutoProbeTimeoutMs(timeoutMs: number | undefined): number {
-  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
-    ? timeoutMs
-    : DEFAULT_TIMEOUT_MS;
-}
-
-function waitForNativePreferenceGrace(
-  nativeResultPromise: Promise<{ ok: boolean }>,
-): Promise<{ ok: boolean }> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve({ ok: false }), NATIVE_PREFERENCE_GRACE_MS);
-    timer.unref?.();
-    void nativeResultPromise.then((result) => {
-      clearTimeout(timer);
-      resolve(result);
-    });
-  });
-}
-
-async function resolveAutoApiMode(
-  baseUrl: string,
-  timeoutMs = DEFAULT_TIMEOUT_MS,
-  options: { account?: string; requireContainerReceive?: boolean } = {},
-): Promise<"native" | "container"> {
-  const rawNow = Date.now();
-  const now = asDateTimestampMs(rawNow);
-  const cached = detectedModeCache.get(baseUrl);
-  if (cached) {
-    if (now !== undefined && cached.expiresAt > now) {
-      if (
-        cached.mode !== "container" ||
-        !options.requireContainerReceive ||
-        (Boolean(options.account?.trim()) && cached.receiveAccount === options.account?.trim())
-      ) {
-        return cached.mode;
-      }
-    } else {
-      detectedModeCache.delete(baseUrl);
-    }
-  }
-  const detected = await detectSignalApiMode(baseUrl, timeoutMs, options);
-  const expiresAt = resolveExpiresAtMsFromDurationMs(MODE_CACHE_TTL_MS, { nowMs: rawNow });
-  if (expiresAt !== undefined) {
-    detectedModeCache.set(baseUrl, {
-      mode: detected,
-      expiresAt,
-      ...(detected === "container" && options.requireContainerReceive && options.account
-        ? { receiveAccount: options.account }
-        : {}),
-    });
-  }
-  return detected;
-}
-
-async function resolveApiModeForOperation(params: {
-  baseUrl: string;
-  accountId?: string;
-  account?: string;
-  requireContainerReceive?: boolean;
-  timeoutMs?: number;
-  apiMode?: SignalApiMode;
-}): Promise<"native" | "container"> {
-  const configured = resolveConfiguredApiMode(params.apiMode);
-
-  if (configured === "native" || configured === "container") {
-    return configured;
-  }
-
-  return resolveAutoApiMode(params.baseUrl, params.timeoutMs ?? DEFAULT_TIMEOUT_MS, {
-    account: params.account,
-    requireContainerReceive: params.requireContainerReceive,
-  });
-}
-
-/**
- * Detect which Signal API mode is available by probing endpoints.
- * Native wins when both APIs are healthy because it preserves the richer JSON-RPC contract.
- */
-async function detectSignalApiMode(
-  baseUrl: string,
-  timeoutMs = DEFAULT_TIMEOUT_MS,
-  options: { account?: string; requireContainerReceive?: boolean } = {},
-): Promise<"native" | "container"> {
-  const containerAccount = options.requireContainerReceive ? options.account?.trim() : undefined;
-  const nativeResultPromise = nativeCheck(baseUrl, timeoutMs).catch(() => ({ ok: false }));
-  const containerResultPromise = containerAccount
-    ? containerCheck(baseUrl, timeoutMs, containerAccount).catch(() => ({ ok: false }))
-    : options.requireContainerReceive
-      ? Promise.resolve({ ok: false })
-      : containerCheck(baseUrl, timeoutMs).catch(() => ({ ok: false }));
-
-  const nativeHealthyPromise = nativeResultPromise.then((result) => {
-    if (result.ok) {
-      return "native" as const;
-    }
-    throw new Error("native not ok");
-  });
-  const containerHealthyPromise = containerResultPromise.then((result) => {
-    if (result.ok) {
-      return "container" as const;
-    }
-    throw new Error("container not ok");
-  });
-
-  try {
-    const firstHealthy = await Promise.any([nativeHealthyPromise, containerHealthyPromise]);
-    if (firstHealthy === "native") {
-      return "native";
-    }
-    const nativeResult = await waitForNativePreferenceGrace(nativeResultPromise);
-    return nativeResult.ok ? "native" : "container";
-  } catch {
-    throw new Error(`Signal API not reachable at ${baseUrl}`);
-  }
-}
-
-/**
- * Drop-in replacement for native signalRpcRequest.
- * Routes to native JSON-RPC or container REST based on config.
- */
 export async function signalRpcRequest<T = unknown>(
   method: string,
   params: Record<string, unknown> | undefined,
   opts: SignalRpcOptions & {
     accountId?: string;
-    apiMode?: SignalApiMode;
+    transportKind?: SignalTransportKind;
     maxAttachmentBytes?: number;
   },
 ): Promise<T> {
-  const mode = await resolveApiModeForOperation({
-    baseUrl: opts.baseUrl,
-    accountId: opts.accountId,
-    account: typeof params?.account === "string" ? params.account : undefined,
-    timeoutMs: opts.timeoutMs,
-    apiMode: opts.apiMode,
-  });
-  if (mode === "native") {
-    return nativeRpcRequest<T>(method, params, opts);
-  }
-  return containerRpcRequest<T>(method, params, opts);
+  return opts.transportKind === "container"
+    ? containerRpcRequest<T>(method, params, opts)
+    : nativeRpcRequest<T>(method, params, opts);
 }
 
-/**
- * Drop-in replacement for native signalCheck.
- */
 export async function signalCheck(
   baseUrl: string,
   timeoutMs = DEFAULT_TIMEOUT_MS,
-  options: { apiMode?: SignalApiMode } = {},
+  options: { transportKind?: SignalTransportKind; account?: string } = {},
 ): Promise<{ ok: boolean; status?: number | null; error?: string | null }> {
-  const configured = resolveConfiguredApiMode(options.apiMode);
-  const mode =
-    configured === "auto"
-      ? await resolveAutoApiMode(baseUrl, timeoutMs).catch((error: unknown) => {
-          return { ok: false, status: null, error: formatErrorMessage(error) } as const;
-        })
-      : configured;
-  if (typeof mode !== "string") {
-    return mode;
+  try {
+    return options.transportKind === "container"
+      ? await containerCheck(baseUrl, timeoutMs, options.account)
+      : await nativeCheck(baseUrl, timeoutMs);
+  } catch (error) {
+    return { ok: false, status: null, error: formatErrorMessage(error) };
   }
-  if (mode === "container") {
-    return containerCheck(baseUrl, timeoutMs);
-  }
-  return nativeCheck(baseUrl, timeoutMs);
 }
 
-/**
- * Drop-in replacement for native streamSignalEvents.
- * Container mode uses WebSocket; native uses SSE.
- */
 export async function streamSignalEvents(params: {
   baseUrl: string;
   account?: string;
@@ -223,34 +49,16 @@ export async function streamSignalEvents(params: {
   abortSignal?: AbortSignal;
   timeoutMs?: number;
   onEvent: (event: SignalSseEvent) => unknown;
+  onStreamOpen?: () => void;
   logger?: { log?: (msg: string) => void; error?: (msg: string) => void };
-  apiMode?: SignalApiMode;
+  transportKind?: SignalTransportKind;
 }): Promise<void> {
-  const mode = await resolveApiModeForOperation({
-    baseUrl: params.baseUrl,
-    accountId: params.accountId,
-    account: params.account,
-    requireContainerReceive: true,
-    timeoutMs: resolveAutoProbeTimeoutMs(params.timeoutMs),
-    apiMode: params.apiMode,
-  });
-
-  if (mode === "container") {
+  if (params.transportKind === "container") {
     return streamContainerEvents({
-      baseUrl: params.baseUrl,
-      account: params.account,
-      abortSignal: params.abortSignal,
-      timeoutMs: params.timeoutMs,
+      ...params,
       onEvent: (event) => params.onEvent({ event: "receive", data: JSON.stringify(event) }),
-      logger: params.logger,
     });
   }
 
-  return nativeStreamEvents({
-    baseUrl: params.baseUrl,
-    account: params.account,
-    abortSignal: params.abortSignal,
-    timeoutMs: params.timeoutMs,
-    onEvent: (event) => params.onEvent(event),
-  });
+  return nativeStreamEvents(params);
 }

@@ -1,8 +1,19 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
-// Defines shared TUI state, backend, and event types.
+import type { SessionProjectionState } from "../../packages/gateway-client/src/session-projection.js";
+import type { AgentSummary as GatewayAgentSummary } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import type { SessionGoal } from "../config/sessions/types.js";
+import type { SessionScope } from "../config/types.base.js";
 import type { GatewayAgentRuntime } from "../shared/session-types.js";
 import type { TuiPendingSubmit } from "./tui-submit-state.js";
+
+/** Exact pre-probed Gateway target and its selection provenance for an in-process handoff. */
+export type TuiBoundGateway = {
+  url: string;
+  configuredRemote?: boolean;
+  token?: string;
+  password?: string;
+  tlsFingerprint?: string;
+};
 
 export type TuiOptions = {
   local?: boolean;
@@ -16,11 +27,21 @@ export type TuiOptions = {
   timeoutMs?: number;
   historyLimit?: number;
   message?: string;
+  /** Overrides timeoutMs only for the message sent automatically at startup. */
+  initialMessageTimeoutMs?: number;
   /**
    * Internal CLI guard: after the standalone TUI returns, force the child
    * process out if imported runtime handles keep the event loop alive.
    */
   forceProcessExitOnReturn?: boolean;
+};
+
+export type TuiGatewayConnectionOptions = Pick<
+  TuiOptions,
+  "url" | "token" | "password" | "tlsFingerprint"
+> & {
+  allowConfiguredAuthForExactTarget?: boolean;
+  suppressEnvAuthFallback?: boolean;
 };
 
 type TuiExitReason = "exit" | "return-to-system-agent";
@@ -30,16 +51,24 @@ export type TuiResult = {
   systemAgentMessage?: string;
 };
 
+export type TuiHistoryRunOutcome =
+  | { state: "active"; runId: string }
+  | { state: "completed" | "interrupted" }
+  | { state: "failed"; errorMessage: string };
+
 export type TuiHistoryLoadResult =
-  | { loaded: true; inFlightRunId: string | null }
+  | { loaded: true; runOutcome: TuiHistoryRunOutcome; activeRunIds?: string[] }
   | { loaded: false };
 
 export type ChatEvent = {
   runId: string;
   sessionKey: string;
   agentId?: string;
+  seq?: number;
   state: "delta" | "final" | "aborted" | "error";
   message?: unknown;
+  deltaText?: string;
+  replace?: boolean;
   errorMessage?: string;
 };
 
@@ -61,8 +90,21 @@ export type SessionChangedEvent = {
   reason?: string;
   phase?: string;
   runId?: string;
+  clientRunId?: string;
   sessionId?: string;
   updatedAt?: number | null;
+  activeRunIds?: string[] | null;
+};
+
+export type SessionMessageEvent = {
+  sessionKey?: string;
+  agentId?: string;
+  sessionId?: string;
+  updatedAt?: number | null;
+  clientRunId?: string;
+  message?: unknown;
+  messageId?: string;
+  messageSeq?: number;
 };
 
 export type AgentEvent = {
@@ -76,7 +118,7 @@ export type AgentEvent = {
   agentId?: string;
 };
 
-export type ResponseUsageMode = "on" | "off" | "tokens" | "full";
+type ResponseUsageMode = "on" | "off" | "tokens" | "full";
 
 export type SessionInfo = {
   thinkingLevel?: string;
@@ -106,20 +148,9 @@ export type SessionInfo = {
   displayName?: string;
 };
 
-export type SessionScope = "per-sender" | "global";
+export type { SessionScope } from "../config/types.base.js";
 
-export type AgentSummary = {
-  id: string;
-  name?: string;
-};
-
-type QueuedMessageMode = "steer" | "followUp";
-
-type QueuedMessage = {
-  runId: string;
-  text: string;
-  mode: QueuedMessageMode;
-};
+export type AgentSummary = Pick<GatewayAgentSummary, "id" | "kind" | "name">;
 
 export type GatewayStatusSummary = {
   runtimeVersion?: string | null;
@@ -138,7 +169,7 @@ export type GatewayStatusSummary = {
       everyMs?: number | null;
     }>;
   };
-  providerSummary?: string[];
+  channelSummary?: string[];
   queuedSystemEvents?: string[];
   sessions?: {
     paths?: string[];
@@ -168,9 +199,10 @@ export type TuiStateAccess = {
   currentAgentId: string;
   currentSessionKey: string;
   currentSessionId: string | null;
+  sessionGeneration?: number;
+  sessionProjection?: SessionProjectionState;
   activeChatRunId: string | null;
   pendingSubmit: TuiPendingSubmit | null;
-  queuedMessages?: QueuedMessage[];
   historyLoaded: boolean;
   sessionInfo: SessionInfo;
   initialSessionApplied: boolean;

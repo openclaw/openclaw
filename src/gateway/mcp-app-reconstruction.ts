@@ -1,301 +1,209 @@
-import { type CallToolResult, ContentBlockSchema } from "@modelcontextprotocol/sdk/types.js";
-import { getOrCreateSessionMcpRuntime } from "../agents/agent-bundle-mcp-runtime.js";
+import type { BoardMcpAppDescriptor } from "../../packages/gateway-protocol/src/index.js";
+import { acquireSessionMcpRuntime } from "../agents/agent-bundle-mcp-manager-api.js";
+import { releaseSessionMcpRuntime } from "../agents/agent-bundle-mcp-manager-cleanup.js";
 import type { SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import {
   fetchMcpAppView,
   getMcpAppViewLease,
+  releaseMcpAppView,
   type McpAppViewLease,
 } from "../agents/mcp-ui-resource.js";
+import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
+import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
-import { visitSessionMessagesAsync } from "./session-transcript-readers.js";
-import { loadSessionEntry } from "./session-utils.js";
+import { resolveGlobalMap } from "../shared/global-singleton.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import type { McpAppTranscriptLookup } from "./mcp-app-transcript.js";
+import { readSessionTranscriptSummaryAsync } from "./session-transcript-readers.js";
+import { withGatewaySessionEntryReadOnly } from "./session-utils-read-lifetime.js";
+import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 
 const MCP_APP_RESTORE_IN_FLIGHT_KEY = Symbol.for("openclaw.mcpAppRestoreInFlight");
-
-type McpAppDescriptor = {
-  viewId: string;
-  serverName: string;
-  toolName: string;
-  uiResourceUri: string;
-  toolCallId: string;
-  resultMetaState?: "unavailable";
-};
-
-type ReconstructionData = {
-  descriptor: McpAppDescriptor;
-  toolInput: unknown;
-  toolResult: CallToolResult;
-};
 
 type ReconstructionResult = {
   runtime: SessionMcpRuntime;
   view: McpAppViewLease;
 };
 
-type TranscriptVisit = (visit: (message: unknown) => void) => Promise<void>;
-type TranscriptResult = Omit<ReconstructionData, "toolInput"> & { modelToolName: string };
-type TranscriptResultRead =
-  | { kind: "restorable"; value: TranscriptResult }
-  | { kind: "unavailable" };
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function readString(record: Record<string, unknown> | undefined, key: string): string | undefined {
-  const value = record?.[key];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function readDescriptor(value: unknown): McpAppDescriptor | undefined {
-  const record = asRecord(value);
-  const viewId = readString(record, "viewId");
-  const serverName = readString(record, "serverName");
-  const toolName = readString(record, "toolName");
-  const uiResourceUri = readString(record, "uiResourceUri");
-  const toolCallId = readString(record, "toolCallId");
-  const rawResultMetaState = record?.resultMetaState;
-  const resultMetaState = rawResultMetaState === "unavailable" ? rawResultMetaState : undefined;
-  if (
-    !viewId ||
-    viewId.length > 128 ||
-    !serverName ||
-    serverName.length > 256 ||
-    !toolName ||
-    toolName.length > 256 ||
-    !uiResourceUri?.startsWith("ui://") ||
-    uiResourceUri.length > 2048 ||
-    !toolCallId ||
-    toolCallId.length > 512 ||
-    (rawResultMetaState !== undefined && resultMetaState === undefined)
-  ) {
-    return undefined;
-  }
-  return {
-    viewId,
-    serverName,
-    toolName,
-    uiResourceUri,
-    toolCallId,
-    ...(resultMetaState ? { resultMetaState } : {}),
-  };
-}
-
-function readToolInputFromMessage(
-  value: unknown,
-  toolCallId: string,
-  modelToolName: string,
-): { found: true; input: unknown } | undefined {
-  const message = asRecord(value);
-  if (readString(message, "role")?.toLowerCase() !== "assistant") {
-    return undefined;
-  }
-  const content = Array.isArray(message?.content) ? message.content : [];
-  for (const blockValue of content) {
-    const block = asRecord(blockValue);
-    if ((readString(block, "id") ?? readString(block, "toolCallId")) !== toolCallId) {
-      continue;
-    }
-    const type = readString(block, "type")?.toLowerCase();
-    if (type !== "toolcall" && type !== "tool_call" && type !== "tooluse" && type !== "tool_use") {
-      continue;
-    }
-    const blockToolName =
-      readString(block, "name") ?? readString(block, "toolName") ?? readString(block, "tool_name");
-    if (blockToolName !== modelToolName) {
-      continue;
-    }
-    return { found: true, input: block?.arguments ?? block?.input ?? block?.args ?? {} };
-  }
-  return undefined;
-}
-
-function readCallToolResult(message: Record<string, unknown>, details: Record<string, unknown>) {
-  const content = Array.isArray(message.content)
-    ? message.content.flatMap((value) => {
-        const parsed = ContentBlockSchema.safeParse(value);
-        return parsed.success ? [parsed.data] : [];
-      })
-    : [];
-  return {
-    content,
-    ...(details.structuredContent !== undefined
-      ? { structuredContent: details.structuredContent }
-      : {}),
-    ...(message.isError === true || details.status === "error" ? { isError: true } : {}),
-  } as CallToolResult;
-}
-
-function readTranscriptResult(value: unknown, viewId: string): TranscriptResultRead | undefined {
-  const message = asRecord(value);
-  if (!message || readString(message, "role")?.toLowerCase() !== "toolresult") {
-    return undefined;
-  }
-  const details = asRecord(message.details);
-  if (!details) {
-    return undefined;
-  }
-  const preview = asRecord(details.mcpAppPreview);
-  const rawDescriptor = asRecord(preview?.mcpApp);
-  if (readString(rawDescriptor, "viewId") !== viewId) {
-    return undefined;
-  }
-  const descriptor = readDescriptor(rawDescriptor);
-  const modelToolName = readString(message, "toolName") ?? readString(message, "tool_name");
-  if (!descriptor || !modelToolName) {
-    return { kind: "unavailable" };
-  }
-  if (
-    readString(message, "toolCallId") !== descriptor.toolCallId ||
-    readString(details, "mcpServer") !== descriptor.serverName ||
-    readString(details, "mcpTool") !== descriptor.toolName ||
-    descriptor.resultMetaState === "unavailable"
-  ) {
-    return { kind: "unavailable" };
-  }
-  return {
-    kind: "restorable",
-    value: { descriptor, modelToolName, toolResult: readCallToolResult(message, details) },
-  };
-}
-
-/** Searches the full active transcript without retaining its messages in memory. */
-async function findMcpAppReconstructionDataByVisit(
-  visitTranscript: TranscriptVisit,
-  viewId: string,
-): Promise<ReconstructionData | undefined> {
-  let resultRead: TranscriptResultRead | undefined;
-  let resultIndex = -1;
-  let messageIndex = 0;
-  await visitTranscript((message) => {
-    const read = readTranscriptResult(message, viewId);
-    if (read) {
-      resultRead = read;
-      resultIndex = messageIndex;
-    }
-    messageIndex += 1;
-  });
-  if (!resultRead || resultRead.kind === "unavailable") {
-    return undefined;
-  }
-  const resolvedResult = resultRead.value;
-  let toolInput: unknown;
-  let foundInput = false;
-  messageIndex = 0;
-  await visitTranscript((message) => {
-    if (messageIndex >= resultIndex) {
-      messageIndex += 1;
-      return;
-    }
-    const input = readToolInputFromMessage(
-      message,
-      resolvedResult.descriptor.toolCallId,
-      resolvedResult.modelToolName,
-    );
-    if (input) {
-      foundInput = true;
-      toolInput = input.input;
-    }
-    messageIndex += 1;
-  });
-  if (!foundInput) {
-    return undefined;
-  }
-  const { modelToolName: _modelToolName, ...reconstruction } = resolvedResult;
-  return { ...reconstruction, toolInput };
-}
-
-function getRestoreInFlight(): Map<string, Promise<ReconstructionResult | undefined>> {
-  const state = globalThis as Record<PropertyKey, unknown>;
-  const existing = state[MCP_APP_RESTORE_IN_FLIGHT_KEY] as
-    | Map<string, Promise<ReconstructionResult | undefined>>
-    | undefined;
-  if (existing) {
-    return existing;
-  }
-  const created = new Map<string, Promise<ReconstructionResult | undefined>>();
-  state[MCP_APP_RESTORE_IN_FLIGHT_KEY] = created;
-  return created;
-}
-
-async function restoreMcpAppViewOnce(params: {
+async function reconstructMcpAppView(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   sessionKey: string;
-  viewId: string;
+  lookup: McpAppTranscriptLookup;
+  allowedAppToolNames: ReadonlySet<string>;
+  authorizeAppInteraction?: () => boolean | Promise<boolean>;
+  readOnly: boolean;
+  viewId?: string;
 }): Promise<ReconstructionResult | undefined> {
-  if (!params.viewId.startsWith("mcp-app-") || params.viewId.length > 128) {
-    return undefined;
-  }
-  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
-  const loaded = loadSessionEntry(params.sessionKey, { agentId });
-  const sessionId = loaded.entry?.sessionId;
-  if (!sessionId) {
-    return undefined;
-  }
-  const transcriptScope = {
-    agentId,
-    sessionId,
-    sessionKey: loaded.canonicalKey,
-    storePath: loaded.storePath,
-    sessionEntry: loaded.entry,
-  };
-  const data = await findMcpAppReconstructionDataByVisit(async (visit) => {
-    await visitSessionMessagesAsync(transcriptScope, (message) => visit(message), {
-      mode: "full",
-      reason: "MCP App restart reconstruction",
-      cache: "reuse",
+  const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
+  const metadata = captureSessionEntryMetadataRead({ sessionKey: params.sessionKey, agentId });
+  const reconstruct = async (
+    loaded: ReturnType<typeof loadGatewaySessionEntryReadOnly>,
+    assertCurrent: () => void,
+  ): Promise<ReconstructionResult | undefined> => {
+    const sessionId = loaded.entry?.sessionId;
+    if (!sessionId) {
+      return undefined;
+    }
+    const transcriptScope = {
+      agentId,
+      sessionId,
+      sessionKey: loaded.canonicalKey,
+      storePath: loaded.storePath,
+      sessionEntry: loaded.entry,
+    };
+    const { data } = await readSessionTranscriptSummaryAsync(transcriptScope, {
+      kind: "mcp-app",
+      lookup: params.lookup,
     });
-  }, params.viewId);
-  if (!data) {
-    return undefined;
+    assertCurrent();
+    if (!data) {
+      return undefined;
+    }
+    const acquisition = await acquireSessionMcpRuntime({
+      sessionId,
+      sessionKey: loaded.canonicalKey,
+      workspaceDir: resolveAgentWorkspaceDir(params.cfg, agentId),
+      agentDir: resolveAgentDir(params.cfg, agentId),
+      cfg: params.cfg,
+    });
+    const { runtime } = acquisition;
+    try {
+      assertCurrent();
+      if (runtime.mcpAppsEnabled !== true) {
+        return undefined;
+      }
+      const fetched = await fetchMcpAppView({
+        runtime,
+        agentId,
+        serverName: data.descriptor.serverName,
+        toolName: data.descriptor.toolName,
+        uiResourceUri: data.descriptor.uiResourceUri,
+        toolCallId: data.descriptor.toolCallId,
+        toolInput: data.toolInput,
+        toolResult: data.toolResult,
+        ...(params.viewId ? { viewId: params.viewId } : {}),
+        allowedAppToolNames: params.allowedAppToolNames,
+        ...(metadata
+          ? {
+              authorizeAppInteraction: () => {
+                assertCurrent();
+                const allowed = params.authorizeAppInteraction?.() ?? true;
+                return allowed instanceof Promise
+                  ? allowed.then((value) => {
+                      assertCurrent();
+                      return value;
+                    })
+                  : allowed;
+              },
+            }
+          : params.authorizeAppInteraction
+            ? { authorizeAppInteraction: params.authorizeAppInteraction }
+            : {}),
+        ...(params.readOnly ? { readOnly: true as const } : {}),
+      });
+      try {
+        assertCurrent();
+      } catch (error) {
+        if (fetched) {
+          releaseMcpAppView(fetched.viewId, runtime);
+        }
+        throw error;
+      }
+      const view = fetched ? getMcpAppViewLease(fetched.viewId, runtime) : undefined;
+      return view ? { runtime, view } : undefined;
+    } finally {
+      await releaseSessionMcpRuntime(acquisition);
+    }
+  };
+  if (metadata) {
+    return withGatewaySessionEntryReadOnly(
+      { cfg: params.cfg, key: params.sessionKey, agentId },
+      async (loaded, assertSourceCurrent) => {
+        const assertCurrent = () => {
+          assertSourceCurrent();
+          const current = metadata.readCurrent();
+          if (
+            current?.sessionId !== loaded.entry?.sessionId ||
+            current?.lifecycleRevision !== loaded.entry?.lifecycleRevision ||
+            current?.archivedAt !== loaded.entry?.archivedAt
+          ) {
+            throw new Error("MCP App reconstruction session changed");
+          }
+        };
+        const result = await reconstruct(loaded, assertCurrent);
+        try {
+          assertCurrent();
+        } catch (error) {
+          if (result) {
+            releaseMcpAppView(result.view.viewId, result.runtime);
+          }
+          throw error;
+        }
+        return result;
+      },
+    );
   }
-  const runtime = await getOrCreateSessionMcpRuntime({
-    sessionId,
-    sessionKey: loaded.canonicalKey,
-    workspaceDir: resolveAgentWorkspaceDir(params.cfg, agentId),
-    agentDir: resolveAgentDir(params.cfg, agentId),
-    cfg: params.cfg,
+  return reconstruct(loadGatewaySessionEntryReadOnly(params.sessionKey, { agentId }), () => {});
+}
+
+export async function mintMcpAppViewFromTranscript(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  sessionKey: string;
+  descriptor: BoardMcpAppDescriptor;
+  allowedAppToolNames: ReadonlySet<string>;
+  authorizeAppInteraction?: () => boolean | Promise<boolean>;
+  readOnly: boolean;
+}): Promise<ReconstructionResult | undefined> {
+  const { descriptor, ...request } = params;
+  return await reconstructMcpAppView({
+    ...request,
+    lookup: { descriptor },
   });
-  if (runtime.mcpAppsEnabled !== true) {
-    return undefined;
-  }
-  await fetchMcpAppView({
-    runtime,
-    serverName: data.descriptor.serverName,
-    toolName: data.descriptor.toolName,
-    uiResourceUri: data.descriptor.uiResourceUri,
-    toolCallId: data.descriptor.toolCallId,
-    toolInput: data.toolInput,
-    toolResult: data.toolResult,
-    viewId: data.descriptor.viewId,
-    // A reconstructed preview can render and read its owning server resources,
-    // but cannot call tools without a fresh run carrying current effective policy.
-    allowedAppToolNames: new Set(),
-  });
-  const view = getMcpAppViewLease(params.viewId, runtime);
-  return view ? { runtime, view } : undefined;
 }
 
 export async function restoreMcpAppView(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   sessionKey: string;
   viewId: string;
 }): Promise<ReconstructionResult | undefined> {
-  const key = `${params.sessionKey}\0${params.viewId}`;
-  const inFlight = getRestoreInFlight();
-  const existing = inFlight.get(key);
-  if (existing) {
-    return await existing;
-  }
-  const pending = restoreMcpAppViewOnce(params).finally(() => {
-    if (inFlight.get(key) === pending) {
-      inFlight.delete(key);
+  const source = captureIncognitoSessionSource(params);
+  const sourceId = source
+    ? "kind" in source
+      ? `absent:${source.path}`
+      : source.actor.identity.incarnation
+    : "native";
+  const key = `${params.agentId ?? ""}\0${params.sessionKey}\0${params.viewId}\0${sourceId}`;
+  const inFlight = resolveGlobalMap<string, Promise<ReconstructionResult | undefined>>(
+    MCP_APP_RESTORE_IN_FLIGHT_KEY,
+  );
+  const result = await getOrCreatePromise(
+    inFlight,
+    key,
+    async () => {
+      if (!params.viewId.startsWith("mcp-app-") || params.viewId.length > 128) {
+        return undefined;
+      }
+      return reconstructMcpAppView({
+        ...params,
+        lookup: { viewId: params.viewId },
+        // Restored previews need a fresh run grant before they can call tools.
+        allowedAppToolNames: new Set(),
+        readOnly: true,
+      });
+    },
+    { evictOnSettled: true },
+  );
+  if (source) {
+    if ("kind" in source) {
+      source.assertCurrent();
+    } else {
+      source.actor.assertReadable();
     }
-  });
-  inFlight.set(key, pending);
-  return await pending;
+  }
+  return result;
 }

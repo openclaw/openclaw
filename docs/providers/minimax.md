@@ -6,7 +6,7 @@ read_when:
 title: "MiniMax"
 ---
 
-The bundled `minimax` plugin registers two providers plus five capabilities: chat, image generation, music generation, video generation, image understanding, speech (T2A v2), and web search.
+The bundled `minimax` plugin registers two chat providers plus six capabilities: image generation, music generation, video generation, image understanding, speech (T2A v2), and web search.
 
 | Provider ID      | Auth    | Capabilities                                                                                        |
 | ---------------- | ------- | --------------------------------------------------------------------------------------------------- |
@@ -19,17 +19,22 @@ Referral link for MiniMax Coding Plan (10% off): [MiniMax Coding Plan](https://p
 
 ## Built-in catalog
 
-| Model                    | Type             | Description                              |
-| ------------------------ | ---------------- | ---------------------------------------- |
-| `MiniMax-M3`             | Chat (reasoning) | Default hosted reasoning model           |
-| `MiniMax-M2.7`           | Chat (reasoning) | Previous hosted reasoning model          |
-| `MiniMax-M2.7-highspeed` | Chat (reasoning) | Faster M2.7 reasoning tier               |
-| `MiniMax-VL-01`          | Vision           | Image understanding model                |
-| `image-01`               | Image generation | Text-to-image and image-to-image editing |
-| `music-2.6`              | Music generation | Default music model                      |
-| `MiniMax-Hailuo-2.3`     | Video generation | Text-to-video and image-to-video flows   |
+| Model                        | Type             | Description                               |
+| ---------------------------- | ---------------- | ----------------------------------------- |
+| `MiniMax-M3`                 | Chat (reasoning) | Default hosted reasoning model            |
+| `MiniMax-M3.1-Flash-Preview` | Chat (reasoning) | Token Plan preview with adjustable effort |
+| `MiniMax-M2.7`               | Chat (reasoning) | Previous hosted reasoning model           |
+| `MiniMax-M2.7-highspeed`     | Chat (reasoning) | Faster M2.7 reasoning tier                |
+| `MiniMax-VL-01`              | Vision           | Image understanding model                 |
+| `image-01`                   | Image generation | Text-to-image and image-to-image editing  |
+| `music-2.6`                  | Music generation | Default music model                       |
+| `MiniMax-Hailuo-2.3`         | Video generation | Text-to-video and image-to-video flows    |
 
 Model refs follow the auth path: `minimax/<model>` for API-key setups, `minimax-portal/<model>` for OAuth setups.
+
+`MiniMax-M3.1-Flash-Preview` supports text and image input with a 1,000,000-token context window. MiniMax currently offers it only through Token Plan and MiniMax Code; availability depends on your account. Its bundled cost fields are zero because MiniMax has not published per-token pricing for the preview, not because the service is free. `MiniMax-M3` remains the default model.
+
+MiniMax M3 and M3.1 Flash Preview are preferred [Code Mode](/tools/code-mode) models on both API-key and OAuth routes. With no global Code Mode setting, the automatic tier can engage it; explicit agent or model settings still take precedence.
 
 ## Getting started
 
@@ -120,7 +125,7 @@ Model refs follow the auth path: `minimax/<model>` for API-key setups, `minimax-
 
     ```json5
     {
-      env: { MINIMAX_API_KEY: "sk-..." },
+      env: { vars: { MINIMAX_API_KEY: "sk-..." } },
       agents: { defaults: { model: { primary: "minimax/MiniMax-M3" } } },
       models: {
         mode: "merge",
@@ -135,6 +140,7 @@ Model refs follow the auth path: `minimax/<model>` for API-key setups, `minimax-
                 name: "MiniMax M3",
                 reasoning: true,
                 input: ["text", "image"],
+                compat: { codeMode: "preferred" },
                 cost: { input: 0.6, output: 2.4, cacheRead: 0.12, cacheWrite: 0 },
                 contextWindow: 1000000,
                 maxTokens: 131072,
@@ -213,7 +219,7 @@ The MiniMax plugin registers the `image-01` model for the `image_generate` tool 
 {
   agents: {
     defaults: {
-      imageGenerationModel: { primary: "minimax/image-01" },
+      mediaModels: { image: { primary: "minimax/image-01" } },
     },
   },
 }
@@ -227,24 +233,24 @@ See [Image Generation](/tools/image-generation) for shared tool parameters, prov
 
 ### Text-to-speech
 
-The bundled `minimax` plugin registers MiniMax T2A v2 as a speech provider for `messages.tts`.
+The bundled `minimax` plugin registers MiniMax T2A v2 as a speech provider for `tts`.
 
 - Default TTS model: `speech-2.8-hd`
 - Default voice: `English_expressive_narrator`
 - Bundled model ids: `speech-2.8-hd`, `speech-2.8-turbo`, `speech-2.6-hd`, `speech-2.6-turbo`, `speech-02-hd`, `speech-02-turbo`, `speech-01-hd`, `speech-01-turbo`
-- Auth resolution order: `messages.tts.providers.minimax.apiKey`, then `minimax-portal` OAuth/token auth profiles, then Token Plan environment keys (`MINIMAX_OAUTH_TOKEN`, `MINIMAX_CODE_PLAN_KEY`, `MINIMAX_CODING_API_KEY`), then `MINIMAX_API_KEY`
+- Auth resolution order: `tts.providers.minimax.apiKey`, then `minimax-portal` OAuth/token auth profiles, then Token Plan environment keys (`MINIMAX_OAUTH_TOKEN`, `MINIMAX_CODE_PLAN_KEY`, `MINIMAX_CODING_API_KEY`), then `MINIMAX_API_KEY`
 - If no TTS host is configured, OpenClaw reuses the configured `minimax-portal` OAuth host and strips Anthropic-compatible path suffixes such as `/anthropic`
 - Normal audio attachments stay MP3. Voice-note targets (Feishu, Telegram, and other channels that request a voice-note-compatible attachment) are transcoded from MiniMax MP3 to 48kHz Opus with `ffmpeg`, because e.g. the Feishu/Lark file API only accepts `file_type: "opus"` for native audio messages
 - MiniMax T2A accepts fractional `speed` and `vol`, but `pitch` is sent as an integer; OpenClaw truncates fractional `pitch` values before the API request
 
-| Setting                                  | Env var                | Default                       | Description                      |
-| ---------------------------------------- | ---------------------- | ----------------------------- | -------------------------------- |
-| `messages.tts.providers.minimax.baseUrl` | `MINIMAX_API_HOST`     | `https://api.minimax.io`      | MiniMax T2A API host.            |
-| `messages.tts.providers.minimax.model`   | `MINIMAX_TTS_MODEL`    | `speech-2.8-hd`               | TTS model id.                    |
-| `messages.tts.providers.minimax.voiceId` | `MINIMAX_TTS_VOICE_ID` | `English_expressive_narrator` | Voice id used for speech output. |
-| `messages.tts.providers.minimax.speed`   |                        | `1.0`                         | Playback speed, `0.5..2.0`.      |
-| `messages.tts.providers.minimax.vol`     |                        | `1.0`                         | Volume, `(0, 10]`.               |
-| `messages.tts.providers.minimax.pitch`   |                        | `0`                           | Integer pitch shift, `-12..12`.  |
+| Setting                         | Env var                | Default                       | Description                      |
+| ------------------------------- | ---------------------- | ----------------------------- | -------------------------------- |
+| `tts.providers.minimax.baseUrl` | `MINIMAX_API_HOST`     | `https://api.minimax.io`      | MiniMax T2A API host.            |
+| `tts.providers.minimax.model`   | `MINIMAX_TTS_MODEL`    | `speech-2.8-hd`               | TTS model id.                    |
+| `tts.providers.minimax.voiceId` | `MINIMAX_TTS_VOICE_ID` | `English_expressive_narrator` | Voice id used for speech output. |
+| `tts.providers.minimax.speed`   |                        | `1.0`                         | Playback speed, `0.5..2.0`.      |
+| `tts.providers.minimax.vol`     |                        | `1.0`                         | Volume, `(0, 10]`.               |
+| `tts.providers.minimax.pitch`   |                        | `0`                           | Integer pitch shift, `-12..12`.  |
 
 ### Music generation
 
@@ -260,7 +266,7 @@ The bundled MiniMax plugin registers music generation through the shared `music_
 {
   agents: {
     defaults: {
-      musicGenerationModel: { primary: "minimax/music-2.6" },
+      mediaModels: { music: { primary: "minimax/music-2.6" } },
     },
   },
 }
@@ -283,7 +289,7 @@ The bundled MiniMax plugin registers video generation through the shared `video_
 {
   agents: {
     defaults: {
-      videoGenerationModel: { primary: "minimax/MiniMax-Hailuo-2.3" },
+      mediaModels: { video: { primary: "minimax/MiniMax-Hailuo-2.3" } },
     },
   },
 }
@@ -332,20 +338,24 @@ See [MiniMax Search](/tools/minimax-search) for full web search configuration an
     | `models.providers.minimax.api` | Prefer `anthropic-messages`; `openai-completions` is optional for OpenAI-compatible payloads |
     | `models.providers.minimax.apiKey` | MiniMax API key (`MINIMAX_API_KEY`) |
     | `models.providers.minimax.models` | Define `id`, `name`, `reasoning`, `contextWindow`, `maxTokens`, `cost` |
-    | `agents.defaults.models` | Alias models you want in the allowlist |
+    | `agents.defaults.models` | Per-model aliases, parameters, and metadata |
+    | `agents.defaults.modelPolicy.allow` | Optional explicit model allowlist |
     | `models.mode` | Keep `merge` if you want to add MiniMax alongside built-ins |
   </Accordion>
 
   <Accordion title="Thinking defaults">
     On `api: "anthropic-messages"`, OpenClaw injects `thinking: { type: "disabled" }` for MiniMax M2.x models unless an earlier wrapper already set the `thinking` field in the payload. This prevents M2.x's streaming endpoint from emitting `reasoning_content` in OpenAI-style delta chunks, which would leak internal reasoning into visible output.
 
-    MiniMax-M3 (and M3.x) is exempt: M3 returns an empty `content` array with `stop_reason: "end_turn"` when thinking is disabled, so OpenClaw removes the implicit disabled default for M3 and, when a thinking level is set, forces `thinking: { type: "adaptive" }` instead.
+    MiniMax-M3 is exempt: M3 returns an empty `content` array with `stop_reason: "end_turn"` when thinking is disabled, so OpenClaw removes the implicit disabled default for M3 and, when a thinking level is set, forces `thinking: { type: "adaptive" }` instead.
+
+    `MiniMax-M3.1-Flash-Preview` requires adaptive thinking. OpenClaw sends the selected level as `output_config.effort`; `/think low` through `/think max` select its five supported efforts. The default is `max`, and `off` is not offered because MiniMax rejects disabled thinking with HTTP 400. See [MiniMax's Anthropic API contract](https://platform.minimax.io/docs/api-reference/text-anthropic-api).
 
     Available thinking levels per model family:
 
     | Model family   | Levels                                   | Default    |
     | -------------- | ----------------------------------------- | ---------- |
     | `MiniMax-M3`   | `off`, `adaptive`                        | `adaptive` |
+    | `MiniMax-M3.1-Flash-Preview` | `low`, `medium`, `high`, `xhigh`, `max` | `max` |
     | `MiniMax-M2.x` | `off`, `minimal`, `low`, `medium`, `high` | `off`      |
 
   </Accordion>
@@ -359,7 +369,7 @@ See [MiniMax Search](/tools/minimax-search) for full web search configuration an
 
     ```json5
     {
-      env: { MINIMAX_API_KEY: "sk-..." },
+      env: { vars: { MINIMAX_API_KEY: "sk-..." } },
       agents: {
         defaults: {
           models: {
@@ -389,7 +399,7 @@ See [MiniMax Search](/tools/minimax-search) for full web search configuration an
 
 ## Notes
 
-- Default chat model: `MiniMax-M3`. Alternate chat models: `MiniMax-M2.7`, `MiniMax-M2.7-highspeed`
+- Default chat model: `MiniMax-M3`. Alternate chat models: `MiniMax-M3.1-Flash-Preview`, `MiniMax-M2.7`, `MiniMax-M2.7-highspeed`
 - Onboarding and direct API-key setup write model definitions for M3 and both M2.7 variants
 - Image understanding uses the plugin-owned `MiniMax-VL-01` media provider
 - Update pricing values in `models.json` if you need exact cost tracking

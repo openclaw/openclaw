@@ -1,26 +1,14 @@
-// Protocol Gen Kotlin script supports OpenClaw repository automation.
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { ProtocolSchemas } from "../packages/gateway-protocol/src/schema/protocol-schemas.js";
 import {
   MIN_NODE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
-  ProtocolSchemas,
-} from "../packages/gateway-protocol/src/schema.js";
-import { listCoreGatewayMethodNames } from "../src/gateway/methods/core-descriptors.js";
-import { extractGatewayEventNames } from "./check-protocol-event-coverage.mjs";
-
-type JsonSchema = {
-  type?: string | string[];
-  const?: boolean | number | string | null;
-  properties?: Record<string, JsonSchema>;
-  required?: string[];
-  items?: JsonSchema;
-  enum?: Array<boolean | number | string | null>;
-  patternProperties?: Record<string, JsonSchema>;
-  anyOf?: JsonSchema[];
-  oneOf?: JsonSchema[];
-};
+} from "../packages/gateway-protocol/src/version.js";
+import { listCoreGatewayMethodNames } from "../src/gateway/methods/core-method-policy.js";
+import { extractGatewayEventNames } from "./check-protocol-event-coverage.mts";
+import { lowerCamel, upperCamel } from "./lib/protocol-codegen-names.mts";
+import { type JsonSchema, schemaSignature } from "./lib/protocol-codegen-schema.js";
 
 type EnumSpec = {
   name: string;
@@ -28,17 +16,7 @@ type EnumSpec = {
   namespacePrefix?: string;
 };
 
-const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(scriptDir, "..");
-const gatewayOutputPath = path.join(
-  repoRoot,
-  "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewayProtocol.kt",
-);
-const constantsOutputPath = path.join(
-  repoRoot,
-  "apps/android/app/src/main/java/ai/openclaw/app/protocol/OpenClawProtocolConstants.kt",
-);
-const protocolSchemas = ProtocolSchemas as unknown as Record<string, JsonSchema>;
+const protocolSchemas = ProtocolSchemas as Record<string, JsonSchema>;
 
 const schemaNames = new Map<string, string>([
   ["ErrorShape", "GatewayProtocolError"],
@@ -48,6 +26,53 @@ const schemaNames = new Map<string, string>([
   ["NodeEventParams", "GatewayNodeEventParams"],
   ["NodeInvokeResultParams", "GatewayNodeInvokeResultParams"],
   ["NodeInvokeRequestEvent", "GatewayNodeInvokeRequest"],
+  ["QuestionOption", "QuestionOption"],
+  ["Question", "Question"],
+  ["QuestionAnswers", "QuestionAnswers"],
+  ["QuestionRecord", "QuestionRecord"],
+  ["QuestionGetResult", "QuestionGetResult"],
+  ["QuestionListResult", "QuestionListResult"],
+  ["MessageReactionSummary", "MessageReactionSummary"],
+  ["SessionReactionsListParams", "SessionReactionsListParams"],
+  ["SessionReactionsSetParams", "SessionReactionsSetParams"],
+  ["SessionReactionsListResult", "SessionReactionsListResult"],
+  ["SessionReactionsSetResult", "SessionReactionsSetResult"],
+  ["SessionReactionEvent", "SessionReactionEvent"],
+  ["SessionObserverPlanProgress", "SessionObserverPlanProgress"],
+  ["SessionObserverDigest", "SessionObserverDigest"],
+  ["WorkerDesktopObserveParams", "WorkerDesktopObserveParams"],
+  ["WorkerDesktopObserveResult", "WorkerDesktopObserveResult"],
+  ["WorkerDesktopLaunchParams", "WorkerDesktopLaunchParams"],
+  ["WorkerDesktopLaunchResult", "WorkerDesktopLaunchResult"],
+  ["ProjectsListResult", "ProjectsListResult"],
+  ["GitHubIdentityFacts", "GitHubIdentityFacts"],
+  ["GitHubSelectedIdentity", "GitHubSelectedIdentity"],
+  ["ToolsGitHubStatusParams", "ToolsGitHubStatusParams"],
+  ["ToolsGitHubStatusResult", "ToolsGitHubStatusResult"],
+  ["ToolsGitHubAuthorizeStartParams", "ToolsGitHubAuthorizeStartParams"],
+  ["ToolsGitHubAuthorizeStartResult", "ToolsGitHubAuthorizeStartResult"],
+  ["ToolsGitHubAuthorizePollParams", "ToolsGitHubAuthorizePollParams"],
+  ["ToolsGitHubAuthorizePendingResult", "ToolsGitHubAuthorizePendingResult"],
+  ["ToolsGitHubAuthorizeSlowDownResult", "ToolsGitHubAuthorizeSlowDownResult"],
+  ["ToolsGitHubAuthorizeAccessDeniedResult", "ToolsGitHubAuthorizeAccessDeniedResult"],
+  ["ToolsGitHubAuthorizeExpiredResult", "ToolsGitHubAuthorizeExpiredResult"],
+  [
+    "ToolsGitHubAuthorizeIncorrectDeviceCodeResult",
+    "ToolsGitHubAuthorizeIncorrectDeviceCodeResult",
+  ],
+  ["ToolsGitHubAuthorizeNetworkErrorResult", "ToolsGitHubAuthorizeNetworkErrorResult"],
+  ["ToolsGitHubAuthorizeFailedResult", "ToolsGitHubAuthorizeFailedResult"],
+  ["ToolsGitHubAuthorizeSuccessResult", "ToolsGitHubAuthorizeSuccessResult"],
+  ["ToolsGitHubAuthorizePollResult", "ToolsGitHubAuthorizePollResult"],
+  ["ToolsGitHubAuthorizeCancelParams", "ToolsGitHubAuthorizeCancelParams"],
+  ["ToolsGitHubAuthorizeCancelResult", "ToolsGitHubAuthorizeCancelResult"],
+  ["SessionGitHubPublicationRequested", "SessionGitHubPublicationRequested"],
+  ["SessionGitHubPublicationPublishing", "SessionGitHubPublicationPublishing"],
+  ["SessionGitHubPublicationPublished", "SessionGitHubPublicationPublished"],
+  ["SessionGitHubPublicationFailed", "SessionGitHubPublicationFailed"],
+  ["SessionGitHubPublicationNeedsConfirmation", "SessionGitHubPublicationNeedsConfirmation"],
+  ["SessionGitHubPublicationResult", "SessionGitHubPublicationResult"],
+  ["TalkSessionCancelOutputResult", "TalkSessionCancelOutputResult"],
 ]);
 
 const androidEnums: EnumSpec[] = [
@@ -66,18 +91,7 @@ const androidEnums: EnumSpec[] = [
     ["Motion", "motion"],
     ["CallLog", "callLog"],
     ["VoiceWake", "voiceWake"],
-  ]),
-  enumSpec("OpenClawCanvasCommand", "canvas.", [
-    ["Present", "present"],
-    ["Hide", "hide"],
-    ["Navigate", "navigate"],
-    ["Eval", "eval"],
-    ["Snapshot", "snapshot"],
-  ]),
-  enumSpec("OpenClawCanvasA2UICommand", "canvas.a2ui.", [
-    ["Push", "push"],
-    ["PushJSONL", "pushJSONL"],
-    ["Reset", "reset"],
+    ["MobileUI", "mobileUI"],
   ]),
   enumSpec("OpenClawCameraCommand", "camera.", [
     ["List", "list"],
@@ -121,6 +135,10 @@ const androidEnums: EnumSpec[] = [
     ["Pedometer", "pedometer"],
   ]),
   enumSpec("OpenClawCallLogCommand", "callLog.", [["Search", "search"]]),
+  enumSpec("OpenClawMobileUiCommand", "mobile.ui.", [
+    ["Observe", "observe"],
+    ["Act", "act"],
+  ]),
 ];
 
 function enumSpec(
@@ -138,45 +156,6 @@ function enumSpec(
   };
 }
 
-function words(value: string): string[] {
-  return (
-    value.match(/[A-Z]+(?=[A-Z][a-z]|\d|$)|[A-Z]?[a-z]+|\d+/g)?.map((part) => part.toLowerCase()) ??
-    []
-  );
-}
-
-function upperCamel(value: string): string {
-  const parts = words(value);
-  if (parts.length === 0) {
-    throw new Error(`Cannot create Kotlin identifier from ${JSON.stringify(value)}`);
-  }
-  return parts.map((part) => part[0]!.toUpperCase() + part.slice(1)).join("");
-}
-
-function lowerCamel(value: string): string {
-  const name = upperCamel(value);
-  return name[0]!.toLowerCase() + name.slice(1);
-}
-
-function stableJson(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(stableJson);
-  }
-  if (value && typeof value === "object") {
-    const record = value as Record<string, unknown>;
-    return Object.fromEntries(
-      Object.keys(record)
-        .toSorted()
-        .map((key) => [key, stableJson(record[key])]),
-    );
-  }
-  return value;
-}
-
-function schemaSignature(schema: JsonSchema): string {
-  return JSON.stringify(stableJson(schema));
-}
-
 function literalValue(schema: JsonSchema): boolean | number | string | null | undefined {
   if ("const" in schema) {
     return schema.const;
@@ -187,9 +166,6 @@ function literalValue(schema: JsonSchema): boolean | number | string | null | un
 function kotlinLiteral(value: boolean | number | string | null): string {
   if (typeof value === "string") {
     return JSON.stringify(value);
-  }
-  if (value === null) {
-    return "null";
   }
   return String(value);
 }
@@ -221,10 +197,49 @@ function emitWireModels(): string[] {
   }
 
   const nestedModels = new Map<string, JsonSchema>();
+  const unionVariants = new Map<
+    string,
+    { discriminator: string; literal: string; unionName: string }
+  >();
+  const discriminatedUnions = new Map<string, string>();
+  for (const [schemaName, kotlinName] of schemaNames) {
+    const schema = protocolSchemas[schemaName];
+    const branches = schema?.oneOf ?? schema?.anyOf;
+    if (!branches || branches.length < 2 || branches.some((branch) => branch.type !== "object")) {
+      continue;
+    }
+    const discriminator = Object.keys(branches[0]?.properties ?? {}).find((property) =>
+      branches.every(
+        (branch) => typeof literalValue(branch.properties?.[property] ?? {}) === "string",
+      ),
+    );
+    if (!discriminator) {
+      continue;
+    }
+    discriminatedUnions.set(kotlinName, discriminator);
+    for (const branch of branches) {
+      const signature = schemaSignature(branch);
+      const literal = literalValue(branch.properties?.[discriminator] ?? {}) as string;
+      if (!selectedSignatures.has(signature)) {
+        throw new Error(
+          `${schemaName} variant ${JSON.stringify(literal)} must be selected for Kotlin generation`,
+        );
+      }
+      unionVariants.set(signature, {
+        discriminator,
+        literal,
+        unionName: kotlinName,
+      });
+    }
+  }
   const kotlinType = (schema: JsonSchema, nestedName: string): string => {
     const selected = selectedSchemas.get(schema) ?? selectedSignatures.get(schemaSignature(schema));
     if (selected) {
       return selected;
+    }
+    const stringUnion = schema.anyOf?.map(literalValue);
+    if (stringUnion?.length && stringUnion.every((value) => typeof value === "string")) {
+      return "String";
     }
     if (schema.type === "string" || typeof schema.const === "string") {
       return "String";
@@ -257,28 +272,56 @@ function emitWireModels(): string[] {
       throw new Error(`${name} must remain an object schema for Kotlin generation`);
     }
     const required = new Set(schema.required ?? []);
-    const properties = Object.entries(schema.properties).map(([wireName, propertySchema]) => {
-      const propertyName = lowerCamel(wireName);
-      const type = kotlinType(propertySchema, `${name}${upperCamel(wireName)}`);
-      const literal = literalValue(propertySchema);
-      const optional = !required.has(wireName);
-      return {
-        annotation: propertyName === wireName ? [] : [`  @SerialName(${JSON.stringify(wireName)})`],
-        declaration: `  val ${propertyName}: ${type}${optional ? "?" : ""}${
-          literal !== undefined ? ` = ${kotlinLiteral(literal)}` : optional ? " = null" : ""
-        },`,
-      };
-    });
-    const fields: string[] = [];
-    for (const property of properties) {
-      fields.push(...property.annotation, property.declaration);
+    const variant = unionVariants.get(schemaSignature(schema));
+    const fields = Object.entries(schema.properties)
+      .filter(([wireName]) => wireName !== variant?.discriminator)
+      .flatMap(([wireName, propertySchema]) => {
+        const propertyName = lowerCamel(wireName);
+        const type = kotlinType(propertySchema, `${name}${upperCamel(wireName)}`);
+        const literal = literalValue(propertySchema);
+        const optional = !required.has(wireName);
+        const useLiteralDefault =
+          literal !== undefined && !optional && typeof literal !== "boolean";
+        const lines = [
+          `  val ${propertyName}: ${type}${optional ? "?" : ""}${
+            useLiteralDefault ? ` = ${kotlinLiteral(literal)}` : optional ? " = null" : ""
+          },`,
+        ];
+        if (propertyName !== wireName) {
+          lines.unshift(`  @SerialName(${JSON.stringify(wireName)})`);
+        }
+        return lines;
+      });
+    if (fields.length === 0 && variant) {
+      return [
+        `@SerialName(${JSON.stringify(variant.literal)})`,
+        "@Serializable",
+        `data object ${name} : ${variant.unionName}`,
+      ].join("\n");
     }
-    return ["@Serializable", `data class ${name}(`, ...fields, ")"].join("\n");
+    return [
+      ...(variant ? [`@SerialName(${JSON.stringify(variant.literal)})`] : []),
+      "@Serializable",
+      `data class ${name}(`,
+      ...fields,
+      `)${variant ? ` : ${variant.unionName}` : ""}`,
+    ].join("\n");
   };
+
+  const emitUnion = (name: string, discriminator: string): string =>
+    [
+      "@OptIn(ExperimentalSerializationApi::class)",
+      "@Serializable",
+      `@JsonClassDiscriminator(${JSON.stringify(discriminator)})`,
+      `sealed interface ${name}`,
+    ].join("\n");
 
   const output: string[] = [];
   for (const [schemaName, kotlinName] of schemaNames) {
-    output.push(emitModel(kotlinName, protocolSchemas[schemaName]!));
+    const union = discriminatedUnions.get(kotlinName);
+    output.push(
+      union ? emitUnion(kotlinName, union) : emitModel(kotlinName, protocolSchemas[schemaName]!),
+    );
   }
   for (const [nestedName, schema] of nestedModels) {
     if (!output.some((model) => model.startsWith(`@Serializable\ndata class ${nestedName}(`))) {
@@ -304,7 +347,7 @@ function emitGatewayCatalogEnum(name: string, values: readonly string[]): string
   return emitEnum({ name, values: entries });
 }
 
-async function generate(): Promise<void> {
+export async function generateKotlinProtocol(repoRoot: string): Promise<Record<string, string>> {
   const gatewayEventSource = await fs.readFile(
     path.join(repoRoot, "src/gateway/server-methods-list.ts"),
     "utf8",
@@ -322,8 +365,10 @@ async function generate(): Promise<void> {
     "// Generated by scripts/protocol-gen-kotlin.ts — do not edit by hand.",
     "package ai.openclaw.app.gateway",
     "",
+    "import kotlinx.serialization.ExperimentalSerializationApi",
     "import kotlinx.serialization.SerialName",
     "import kotlinx.serialization.Serializable",
+    "import kotlinx.serialization.json.JsonClassDiscriminator",
     "import kotlinx.serialization.json.JsonElement",
     "",
     `const val GATEWAY_PROTOCOL_VERSION = ${PROTOCOL_VERSION}`,
@@ -343,13 +388,8 @@ async function generate(): Promise<void> {
     ...androidEnums.flatMap((spec) => [emitEnum(spec), ""]),
   ].join("\n");
 
-  await fs.writeFile(gatewayOutputPath, gatewayContent);
-  await fs.writeFile(constantsOutputPath, constantsContent);
-  console.log(`wrote ${path.relative(repoRoot, gatewayOutputPath)}`);
-  console.log(`wrote ${path.relative(repoRoot, constantsOutputPath)}`);
+  return {
+    "ai/openclaw/app/gateway/GatewayProtocol.kt": gatewayContent,
+    "ai/openclaw/app/protocol/OpenClawProtocolConstants.kt": constantsContent,
+  };
 }
-
-generate().catch((error: unknown) => {
-  console.error(error);
-  process.exit(1);
-});

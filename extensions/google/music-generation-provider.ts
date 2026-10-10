@@ -1,5 +1,5 @@
-// Google provider module implements model/runtime integration.
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
+import { generatedMusicAssetFromBase64 } from "openclaw/plugin-sdk/music-generation";
 import type {
   GeneratedMusicAsset,
   MusicGenerationProvider,
@@ -11,7 +11,8 @@ import {
   resolveProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveGoogleGenerativeAiApiOrigin } from "./api.js";
+import { toStandardGoogleProviderBase64 } from "./base64.js";
+import type { GoogleGenerateContentResponse } from "./generate-content-response.js";
 import {
   createGoogleMusicGenerationProviderMetadata,
   DEFAULT_GOOGLE_MUSIC_MODEL,
@@ -19,30 +20,9 @@ import {
   GOOGLE_PRO_MUSIC_MODEL,
 } from "./generation-provider-metadata.js";
 import { createGoogleGenAI } from "./google-genai-runtime.js";
+import { resolveGoogleGenerativeAiApiOrigin } from "./provider-policy.js";
 
 const DEFAULT_TIMEOUT_MS = 180_000;
-
-type GoogleInlineDataPart = {
-  mimeType?: string;
-  mime_type?: string;
-  data?: string;
-};
-
-type GoogleGenerateMusicResponse = {
-  candidates?: Array<{
-    finishReason?: string;
-    content?: {
-      parts?: Array<{
-        text?: string;
-        inlineData?: GoogleInlineDataPart;
-        inline_data?: GoogleInlineDataPart;
-      }>;
-    };
-  }>;
-  promptFeedback?: {
-    blockReason?: string;
-  };
-};
 
 function resolveConfiguredGoogleMusicBaseUrl(req: MusicGenerationRequest): string | undefined {
   const configured = normalizeOptionalString(req.cfg?.models?.providers?.google?.baseUrl);
@@ -72,7 +52,7 @@ function resolveTrackFileName(params: { index: number; mimeType: string; model: 
   return `track-${params.index + 1}.${ext}`;
 }
 
-function extractTracks(params: { payload: GoogleGenerateMusicResponse; model: string }): {
+function extractTracks(params: { payload: GoogleGenerateContentResponse; model: string }): {
   tracks: GeneratedMusicAsset[];
   lyrics: string[];
 } {
@@ -94,21 +74,27 @@ function extractTracks(params: { payload: GoogleGenerateMusicResponse; model: st
         normalizeOptionalString(inline?.mimeType) ||
         normalizeOptionalString(inline?.mime_type) ||
         "audio/mpeg";
-      tracks.push({
-        buffer: Buffer.from(data, "base64"),
-        mimeType,
-        fileName: resolveTrackFileName({
-          index: tracks.length,
+      const standardAudio = toStandardGoogleProviderBase64(data);
+      if (!standardAudio) {
+        throw new Error("Generated music asset contains malformed base64 audio data");
+      }
+      tracks.push(
+        generatedMusicAssetFromBase64({
+          base64: standardAudio,
           mimeType,
-          model: params.model,
+          fileName: resolveTrackFileName({
+            index: tracks.length,
+            mimeType,
+            model: params.model,
+          }),
         }),
-      });
+      );
     }
   }
   return { tracks, lyrics };
 }
 
-function resolveTerminalNoAudioReason(payload: GoogleGenerateMusicResponse): string | undefined {
+function resolveTerminalNoAudioReason(payload: GoogleGenerateContentResponse): string | undefined {
   const blockReason = normalizeOptionalString(payload.promptFeedback?.blockReason);
   if (blockReason && !blockReason.endsWith("_UNSPECIFIED")) {
     return `prompt blocked (${blockReason})`;
@@ -185,7 +171,7 @@ export function buildGoogleMusicGenerationProvider(): MusicGenerationProvider {
           config: {
             responseModalities: ["AUDIO", "TEXT"],
           },
-        })) as GoogleGenerateMusicResponse;
+        })) as GoogleGenerateContentResponse;
         generated = extractTracks({ payload: response, model });
         if (generated.tracks.length > 0) {
           break;

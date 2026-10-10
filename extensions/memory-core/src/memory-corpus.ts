@@ -1,0 +1,273 @@
+import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
+import { extractErrorCode, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  createMemorySearchDeadlineControl,
+  type MemorySearchDeadlineControl,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  listMemoryCorpusSupplements,
+  type MemoryCorpusSearchResult,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
+import { createPausedDeadline } from "./memory/paused-deadline.js";
+import {
+  createMemorySearchDeadlineError,
+  DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
+  isMemorySearchDeadlineError,
+  resolveMemorySearchAbortError,
+} from "./memory/search-deadline.js";
+
+type MemoryCorpus = "memory" | "wiki";
+const memoryCorpusDeadlineChecks = new WeakMap<AbortSignal, () => void>();
+type MemorySupplement = ReturnType<typeof listMemoryCorpusSupplements>[number];
+type MemorySupplementGetResult = NonNullable<
+  Awaited<ReturnType<MemorySupplement["supplement"]["get"]>>
+>;
+type MemorySupplementReadResult = Omit<MemorySupplementGetResult, "content"> & {
+  status: "ok";
+  text: string;
+};
+
+export type MemoryCorpusFailure = { error: string; code?: string; deadline: boolean };
+type UnavailableMemoryCorpus<T> = {
+  corpus: MemoryCorpus;
+  outcome: "unavailable";
+  value: T;
+} & MemoryCorpusFailure;
+
+export type MemoryCorpusAttempt<T> =
+  | { corpus: MemoryCorpus; outcome: "ok"; value: T }
+  | UnavailableMemoryCorpus<T>
+  | (Omit<UnavailableMemoryCorpus<T>, "outcome"> & { outcome: "partial" })
+  | { corpus: MemoryCorpus; outcome: "not-registered" };
+
+// Derive deadline provenance before flattening: provider errors may have identical text.
+export function unavailableMemoryCorpus<T>(
+  corpus: MemoryCorpus,
+  value: T,
+  error: unknown,
+): UnavailableMemoryCorpus<T> {
+  const code = extractErrorCode(error);
+  return {
+    corpus,
+    outcome: "unavailable",
+    value,
+    error: formatErrorMessage(error),
+    deadline: isMemorySearchDeadlineError(error),
+    ...(code ? { code } : {}),
+  };
+}
+
+async function raceMemoryCorpusSignal<T>(signal: AbortSignal, run: () => Promise<T>): Promise<T> {
+  if (signal.aborted) {
+    throw resolveMemorySearchAbortError(signal);
+  }
+  const result = await racePromiseWithAbortSignal(
+    Promise.resolve().then(run),
+    signal,
+    resolveMemorySearchAbortError,
+  );
+  memoryCorpusDeadlineChecks.get(signal)?.();
+  if (signal.aborted) {
+    throw resolveMemorySearchAbortError(signal);
+  }
+  return result;
+}
+
+export async function attemptMemoryCorpus<T>(params: {
+  signal: AbortSignal;
+  getPartialValue?: () => T | null;
+  run: () => Promise<T>;
+}): Promise<MemoryCorpusAttempt<T | null>> {
+  try {
+    return {
+      corpus: "memory",
+      outcome: "ok",
+      value: await raceMemoryCorpusSignal(params.signal, params.run),
+    };
+  } catch (error) {
+    const partial = isMemorySearchDeadlineError(error) ? params.getPartialValue?.() : null;
+    if (partial != null) {
+      return { ...unavailableMemoryCorpus("memory", partial, error), outcome: "partial" };
+    }
+    return unavailableMemoryCorpus("memory", null, error);
+  }
+}
+
+export async function runMemoryCorpusDeadline<T>(params: {
+  operation: "memory_search" | "memory_get";
+  parentSignal?: AbortSignal;
+  run: (signal: AbortSignal, deadlineControl: MemorySearchDeadlineControl) => Promise<T>;
+}): Promise<T> {
+  if (params.parentSignal?.aborted) {
+    throw resolveMemorySearchAbortError(params.parentSignal);
+  }
+  const controller = new AbortController();
+  const timeoutError = createMemorySearchDeadlineError(
+    `${params.operation} timed out after ${DEFAULT_MEMORY_SEARCH_TIMEOUT_MS / 1000}s`,
+  );
+  const expire = () => controller.abort(timeoutError);
+  // Managed readiness has its own deadline; preserve the remaining search budget.
+  const control = createMemorySearchDeadlineControl();
+  const deadline = createPausedDeadline({
+    kind: "corpus",
+    timeoutMs: DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
+    signal: controller.signal,
+    control,
+    expire,
+  });
+  const checkDeadline = () => {
+    // A synchronous database operation can finish before an overdue timer is serviced.
+    if (!controller.signal.aborted && deadline.isExpired()) {
+      expire();
+    }
+  };
+  memoryCorpusDeadlineChecks.set(controller.signal, checkDeadline);
+  deadline.start();
+  const onParentAbort = () => controller.abort(resolveMemorySearchAbortError(params.parentSignal!));
+  params.parentSignal?.addEventListener("abort", onParentAbort, { once: true });
+  try {
+    const result = await params.run(controller.signal, control);
+    if (params.parentSignal?.aborted) {
+      throw resolveMemorySearchAbortError(params.parentSignal);
+    }
+    const alreadyAborted = controller.signal.aborted;
+    checkDeadline();
+    if (!alreadyAborted && controller.signal.aborted) {
+      throw timeoutError;
+    }
+    return result;
+  } finally {
+    deadline.close();
+    memoryCorpusDeadlineChecks.delete(controller.signal);
+    params.parentSignal?.removeEventListener("abort", onParentAbort);
+  }
+}
+
+export function composeMemoryCorpusMetadata(
+  attempts: readonly MemoryCorpusAttempt<unknown>[],
+  extraWarnings: readonly string[] = [],
+) {
+  const ordered = attempts.toSorted(
+    (left, right) => Number(left.corpus === "wiki") - Number(right.corpus === "wiki"),
+  );
+  const warnings = ordered.flatMap((attempt) => {
+    const label = attempt.corpus === "memory" ? "Memory" : "Wiki";
+    if ("error" in attempt) {
+      return [`${label} corpus ${attempt.outcome}: ${attempt.error}`];
+    }
+    return attempt.outcome === "not-registered" && ordered.length === 1
+      ? [`${label} corpus is not registered; results do not cover that requested corpus.`]
+      : [];
+  });
+  warnings.push(...extraWarnings);
+  const errors = ordered.flatMap((attempt) => ("error" in attempt ? [attempt.error] : []));
+  return {
+    corpora: ordered.map((attempt) =>
+      "error" in attempt
+        ? { corpus: attempt.corpus, outcome: attempt.outcome, error: attempt.error }
+        : { corpus: attempt.corpus, outcome: attempt.outcome },
+    ),
+    ...(warnings.length > 0 ? { warning: warnings.join(" ") } : {}),
+    ...(errors.length > 0 ? { error: errors.join("; ") } : {}),
+    ...(ordered.some((attempt) => "deadline" in attempt && attempt.deadline)
+      ? { timedOut: true, timeoutMs: DEFAULT_MEMORY_SEARCH_TIMEOUT_MS }
+      : {}),
+  };
+}
+
+async function settleMemorySupplements<T>(params: {
+  signal: AbortSignal;
+  run: (registration: MemorySupplement) => Promise<T>;
+  merge: (results: T[]) => T;
+}): Promise<MemoryCorpusAttempt<T>> {
+  const supplements = listMemoryCorpusSupplements().toSorted((left, right) =>
+    left.pluginId.localeCompare(right.pluginId),
+  );
+  if (supplements.length === 0) {
+    return { corpus: "wiki", outcome: "not-registered" };
+  }
+  const failures: Array<{ pluginId: string; error: string }> = [];
+  const completed: Array<T | undefined> = Array.from({ length: supplements.length });
+  try {
+    await raceMemoryCorpusSignal(params.signal, () =>
+      runTasksWithConcurrency({
+        tasks: supplements.map((registration, index) => async () => {
+          const result = await params.run(registration);
+          completed[index] = result;
+          return result;
+        }),
+        limit: Math.min(4, supplements.length),
+        onTaskError: (error, index) => {
+          failures.push({
+            pluginId: supplements[index]!.pluginId,
+            error: formatErrorMessage(error),
+          });
+        },
+      }),
+    );
+  } catch (error) {
+    return unavailableMemoryCorpus(
+      "wiki",
+      params.merge(completed.filter((result): result is T => result !== undefined)),
+      error,
+    );
+  }
+  const value = params.merge(completed.filter((result): result is T => result !== undefined));
+  if (failures.length === 0) {
+    return { corpus: "wiki", outcome: "ok", value };
+  }
+  const orderedFailures = failures.toSorted((left, right) =>
+    left.pluginId.localeCompare(right.pluginId),
+  );
+  const error =
+    orderedFailures.length === 1
+      ? orderedFailures[0]!.error
+      : orderedFailures.map((entry) => `${entry.pluginId}: ${entry.error}`).join("; ");
+  // Individual supplement failures are the plugin's, never this tool's deadline.
+  return { corpus: "wiki", outcome: "unavailable", value, error, deadline: false };
+}
+
+export async function searchMemoryCorpusSupplements(params: {
+  query: string;
+  maxResults?: number;
+  agentId?: string;
+  agentSessionKey?: string;
+  sandboxed?: boolean;
+  signal: AbortSignal;
+}): Promise<MemoryCorpusAttempt<MemoryCorpusSearchResult[]>> {
+  const { signal, ...query } = params;
+  return await settleMemorySupplements({
+    signal,
+    run: async ({ supplement }) => await supplement.search(query),
+    merge: (results) =>
+      results
+        .flat()
+        .toSorted((left, right) => right.score - left.score || left.path.localeCompare(right.path))
+        .slice(0, Math.max(1, params.maxResults ?? 10)),
+  });
+}
+
+export async function readMemoryCorpusSupplements(params: {
+  lookup: string;
+  fromLine?: number;
+  lineCount?: number;
+  agentId?: string;
+  agentSessionKey?: string;
+  sandboxed?: boolean;
+  signal: AbortSignal;
+}): Promise<MemoryCorpusAttempt<MemorySupplementReadResult | null>> {
+  const { signal, ...query } = params;
+  return await settleMemorySupplements({
+    signal,
+    run: async ({ supplement }) => {
+      const result = await supplement.get(query);
+      if (!result) {
+        return null;
+      }
+      const { content, ...details } = result;
+      return { ...details, status: "ok", text: content };
+    },
+    merge: (results) => results.find((result) => result !== null) ?? null,
+  });
+}

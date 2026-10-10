@@ -1,7 +1,7 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Browser tests cover plugin service plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "./config/config.js";
-import { isDefaultBrowserPluginEnabled } from "./plugin-enabled.js";
+import { resolveBrowserPluginEnableState } from "./plugin-enabled.js";
 import { createBrowserPluginService } from "./plugin-service.js";
 
 const SERVICE_CONTEXT = {
@@ -22,7 +22,7 @@ const runtimeMocks = vi.hoisted(() => ({
   stopBrowserControlService: vi.fn(async () => undefined),
 }));
 
-vi.mock("./sdk-node-runtime.js", () => ({
+vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
   startLazyPluginServiceModule: runtimeMocks.startLazyPluginServiceModule,
 }));
 
@@ -52,28 +52,29 @@ describe("createBrowserPluginService", () => {
     return { validateOverrideSpecifier: params.validateOverrideSpecifier };
   }
 
+  const createService = () =>
+    createBrowserPluginService({ stopOnDemand: runtimeMocks.stopBrowserControlService });
+
   it("does not start the control server during gateway startup by default", async () => {
-    const service = createBrowserPluginService();
+    const service = createService();
 
     await service.start(SERVICE_CONTEXT);
 
     expect(runtimeMocks.startLazyPluginServiceModule).not.toHaveBeenCalled();
   });
 
-  for (const value of ["0", "", "disabled"]) {
-    it(`does not start the control server for eager env value ${JSON.stringify(value)}`, async () => {
-      vi.stubEnv("OPENCLAW_EAGER_BROWSER_CONTROL_SERVER", value);
-      const service = createBrowserPluginService();
+  it("does not start the control server when eager startup is disabled", async () => {
+    vi.stubEnv("OPENCLAW_EAGER_BROWSER_CONTROL_SERVER", "0");
+    const service = createService();
 
-      await service.start(SERVICE_CONTEXT);
+    await service.start(SERVICE_CONTEXT);
 
-      expect(runtimeMocks.startLazyPluginServiceModule).not.toHaveBeenCalled();
-    });
-  }
+    expect(runtimeMocks.startLazyPluginServiceModule).not.toHaveBeenCalled();
+  });
 
   it("passes a browser override validator to the eager service loader", async () => {
     vi.stubEnv("OPENCLAW_EAGER_BROWSER_CONTROL_SERVER", "1");
-    const service = createBrowserPluginService();
+    const service = createService();
 
     await service.start(SERVICE_CONTEXT);
 
@@ -83,7 +84,7 @@ describe("createBrowserPluginService", () => {
 
   it("rejects unsafe browser override specifiers", async () => {
     vi.stubEnv("OPENCLAW_EAGER_BROWSER_CONTROL_SERVER", "1");
-    const service = createBrowserPluginService();
+    const service = createService();
 
     await service.start(SERVICE_CONTEXT);
 
@@ -100,7 +101,7 @@ describe("createBrowserPluginService", () => {
   });
 
   it("stops an on-demand browser runtime even when startup stayed lazy", async () => {
-    const service = createBrowserPluginService();
+    const service = createService();
 
     await service.stop?.(SERVICE_CONTEXT);
 
@@ -109,7 +110,7 @@ describe("createBrowserPluginService", () => {
 
   it("propagates on-demand cleanup failures", async () => {
     runtimeMocks.stopBrowserControlService.mockRejectedValueOnce(new Error("cleanup failed"));
-    const service = createBrowserPluginService();
+    const service = createService();
 
     await expect(service.stop?.(SERVICE_CONTEXT)).rejects.toThrow("cleanup failed");
   });
@@ -121,7 +122,7 @@ describe("createBrowserPluginService", () => {
       .mockRejectedValueOnce(new Error("loaded cleanup failed"))
       .mockResolvedValue(undefined);
     runtimeMocks.startLazyPluginServiceModule.mockResolvedValue({ stop } as never);
-    const service = createBrowserPluginService();
+    const service = createService();
     await service.start(SERVICE_CONTEXT);
 
     await expect(service.stop?.(SERVICE_CONTEXT)).rejects.toThrow("loaded cleanup failed");
@@ -132,14 +133,14 @@ describe("createBrowserPluginService", () => {
   });
 });
 
-describe("isDefaultBrowserPluginEnabled", () => {
+describe("resolveBrowserPluginEnableState", () => {
   it("defaults to enabled", () => {
-    expect(isDefaultBrowserPluginEnabled({} as OpenClawConfig)).toBe(true);
+    expect(resolveBrowserPluginEnableState({} as OpenClawConfig)).toEqual({ enabled: true });
   });
 
   it("respects explicit plugin disablement", () => {
     expect(
-      isDefaultBrowserPluginEnabled({
+      resolveBrowserPluginEnableState({
         plugins: {
           entries: {
             browser: {
@@ -148,6 +149,6 @@ describe("isDefaultBrowserPluginEnabled", () => {
           },
         },
       } as OpenClawConfig),
-    ).toBe(false);
+    ).toEqual({ enabled: false, reason: "disabled in config" });
   });
 });

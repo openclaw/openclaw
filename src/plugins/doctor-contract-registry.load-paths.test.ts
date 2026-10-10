@@ -1,28 +1,20 @@
 // Covers doctor contract registry load paths for plugins.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { findLegacyConfigIssues } from "../config/legacy.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { runPostSessionPluginDoctorStateRepairs } from "../infra/state-migrations.plugin-doctor.js";
 import {
   applyPluginDoctorCompatibilityMigrations,
   listPluginDoctorLegacyConfigRules,
   listPluginDoctorSessionRouteStateOwners,
-  listPluginDoctorSessionStoreAgentIds,
+  listPluginDoctorStateMigrationEntries,
 } from "./doctor-contract-registry.js";
 import { clearPluginDoctorContractRegistryCache } from "./doctor-contract-registry.test-fixtures.js";
 
-const tempDirs: string[] = [];
-const repoRoot = path.resolve(import.meta.dirname, "../..");
-
-function makeTempDir(): string {
-  const dir = fs.mkdtempSync(
-    path.join(fs.realpathSync(os.tmpdir()), "openclaw-doctor-contract-load-paths-"),
-  );
-  tempDirs.push(dir);
-  return dir;
-}
+const tempDirs = createTempDirTracker();
 
 function makeHermeticDoctorEnv(stateDir: string): NodeJS.ProcessEnv {
   return {
@@ -35,26 +27,31 @@ function makeHermeticDoctorEnv(stateDir: string): NodeJS.ProcessEnv {
   };
 }
 
+function writeDoctorFixture(
+  pluginRoot: string,
+  files: Record<string, string | Record<string, unknown>>,
+): void {
+  for (const [relativePath, contents] of Object.entries(files)) {
+    const filePath = path.join(pluginRoot, relativePath);
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(
+      filePath,
+      typeof contents === "string" ? contents : JSON.stringify(contents),
+      "utf8",
+    );
+  }
+}
+
 function writeDoctorPlugin(pluginRoot: string, pluginId: string): void {
-  fs.mkdirSync(pluginRoot, { recursive: true });
-  fs.writeFileSync(
-    path.join(pluginRoot, "openclaw.plugin.json"),
-    JSON.stringify(
-      {
-        id: pluginId,
-        name: "Load Path Doctor",
-        version: "0.0.0-test",
-        configSchema: {},
-      },
-      null,
-      2,
-    ),
-    "utf8",
-  );
-  fs.writeFileSync(path.join(pluginRoot, "index.cjs"), "module.exports = {};\n", "utf8");
-  fs.writeFileSync(
-    path.join(pluginRoot, "doctor-contract-api.cjs"),
-    `
+  writeDoctorFixture(pluginRoot, {
+    "openclaw.plugin.json": {
+      id: pluginId,
+      name: "Load Path Doctor",
+      version: "0.0.0-test",
+      configSchema: {},
+    },
+    "index.cjs": "module.exports = {};\n",
+    "doctor-contract-api.cjs": `
 const pluginId = ${JSON.stringify(pluginId)};
 
 function isRecord(value) {
@@ -93,46 +90,27 @@ module.exports = {
   },
 };
 `,
-    "utf8",
-  );
+  });
 }
 
 function writeDistDoctorPlugin(pluginRoot: string, pluginId: string): void {
-  fs.mkdirSync(path.join(pluginRoot, "dist"), { recursive: true });
-  fs.writeFileSync(
-    path.join(pluginRoot, "openclaw.plugin.json"),
-    JSON.stringify(
-      {
-        id: pluginId,
-        name: "Dist Doctor",
-        version: "0.0.0-test",
-        configSchema: {},
+  writeDoctorFixture(pluginRoot, {
+    "openclaw.plugin.json": {
+      id: pluginId,
+      name: "Dist Doctor",
+      version: "0.0.0-test",
+      configSchema: {},
+    },
+    "package.json": {
+      name: `@openclaw/${pluginId}`,
+      version: "0.0.0-test",
+      type: "module",
+      openclaw: {
+        extensions: ["./dist/index.js"],
       },
-      null,
-      2,
-    ),
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(pluginRoot, "package.json"),
-    JSON.stringify(
-      {
-        name: `@openclaw/${pluginId}`,
-        version: "0.0.0-test",
-        type: "module",
-        openclaw: {
-          extensions: ["./dist/index.js"],
-        },
-      },
-      null,
-      2,
-    ),
-    "utf8",
-  );
-  fs.writeFileSync(path.join(pluginRoot, "dist", "index.js"), "export {};\n", "utf8");
-  fs.writeFileSync(
-    path.join(pluginRoot, "dist", "doctor-contract-api.cjs"),
-    `
+    },
+    "dist/index.js": "export {};\n",
+    "dist/doctor-contract-api.cjs": `
 module.exports = {
   legacyConfigRules: [
     {
@@ -142,45 +120,192 @@ module.exports = {
   ],
 };
 `,
-    "utf8",
-  );
+  });
+}
+
+function writeLegacyRuntimeDoctorPlugin(params: {
+  pluginRoot: string;
+  pluginId: string;
+  importedSymbols: readonly string[];
+}): void {
+  writeDoctorFixture(params.pluginRoot, {
+    "openclaw.plugin.json": {
+      id: params.pluginId,
+      doctorContract: { configRepair: true },
+      configSchema: {},
+    },
+    "package.json": {
+      name: `@openclaw/${params.pluginId}`,
+      version: "2026.7.2-beta.7",
+      type: "module",
+      openclaw: { extensions: ["./dist/index.js"] },
+    },
+    "dist/index.js": "export {};\n",
+    "dist/doctor-contract-api.js": `import { ${params.importedSymbols.join(", ")} } from "openclaw/plugin-sdk/runtime-doctor";
+const importedHelpers = [${params.importedSymbols.join(", ")}];
+if (importedHelpers.some((helper) => typeof helper !== "function")) {
+  throw new Error("legacy runtime-doctor helper missing");
+}
+export const legacyConfigRules = [{
+  path: ["plugins", "entries", ${JSON.stringify(params.pluginId)}, "config", "legacyDoctor"],
+  message: ${JSON.stringify(`${params.pluginId} legacy doctor contract loaded`)},
+}];
+`,
+  });
+}
+
+function writeLegacyChannelMigrationPlugin(params: {
+  pluginRoot: string;
+  pluginId: string;
+  namespace: string;
+  sourceFile: string;
+  stateKey: string;
+  label?: string;
+}): void {
+  writeDoctorFixture(params.pluginRoot, {
+    "openclaw.plugin.json": { id: params.pluginId, channels: [params.pluginId], configSchema: {} },
+    "package.json": {
+      name: `@openclaw/${params.pluginId}`,
+      version: "2026.7.1",
+      type: "commonjs",
+      openclaw: {
+        extensions: ["./index.cjs"],
+        setupEntry: "./setup-entry.cjs",
+        setupFeatures: { legacyStateMigrations: true },
+      },
+    },
+    "index.cjs": "throw new Error('legacy discovery loaded the channel runtime');\n",
+    "doctor-contract-api.cjs": "module.exports = { legacyConfigRules: [] };\n",
+    "setup-entry.cjs": `const fs = require('node:fs');
+const path = require('node:path');
+const pluginId = ${JSON.stringify(params.pluginId)};
+const namespace = ${JSON.stringify(params.namespace)};
+const sourceFile = ${JSON.stringify(params.sourceFile)};
+const stateKey = ${JSON.stringify(params.stateKey)};
+const label = ${JSON.stringify(params.label ?? `${params.pluginId} preserved channel state`)};
+module.exports = {
+  kind: 'bundled-channel-setup-entry',
+  features: { legacyStateMigrations: true },
+  loadSetupPlugin() {
+    throw new Error('direct detector activated the setup plugin');
+  },
+  loadLegacyStateMigrationDetector() {
+    return ({ stateDir }) => {
+      const sourcePath = path.join(stateDir, pluginId, sourceFile);
+      if (!fs.existsSync(sourcePath)) return [];
+      return [{
+        kind: 'plugin-state-import',
+        label,
+        sourcePath,
+        targetPath: 'plugin state:' + namespace,
+        pluginId,
+        namespace,
+        maxEntries: 1000,
+        scopeKey: '',
+        cleanupSource: 'rename',
+        readEntries: () => [{ key: stateKey, value: JSON.parse(fs.readFileSync(sourcePath, 'utf8')) }],
+      }];
+    };
+  },
+};\n`,
+  });
+}
+
+function writeModernBundledChannelMigrationPlugin(params: {
+  pluginRoot: string;
+  pluginId: string;
+}): void {
+  writeDoctorFixture(params.pluginRoot, {
+    "openclaw.plugin.json": {
+      id: params.pluginId,
+      channels: [params.pluginId],
+      doctorContract: { stateMigrations: true },
+      configSchema: {},
+    },
+    "package.json": {
+      name: `@openclaw/${params.pluginId}`,
+      version: "2026.7.1",
+      type: "commonjs",
+      openclaw: {
+        extensions: ["./index.cjs"],
+        setupEntry: "./setup-entry.cjs",
+      },
+    },
+    "index.cjs": "throw new Error('shadowed bundled channel runtime loaded');\n",
+    "setup-entry.cjs": `module.exports = {
+  kind: 'bundled-channel-setup-entry',
+  loadSetupPlugin() { return {}; },
+};\n`,
+    "doctor-contract-api.cjs": `module.exports = { stateMigrations: [{
+  id: 'bundled-modern-state',
+  label: 'Bundled modern state',
+  detectLegacyState: () => null,
+  migrateLegacyState: () => ({ changes: [], warnings: [] }),
+}] };\n`,
+  });
 }
 
 function writeDoctorSessionOwnerPlugin(pluginRoot: string, pluginId: string): void {
-  fs.mkdirSync(pluginRoot, { recursive: true });
-  fs.writeFileSync(
-    path.join(pluginRoot, "openclaw.plugin.json"),
-    JSON.stringify(
-      {
-        id: pluginId,
-        name: "Load Path Session Owner",
-        version: "0.0.0-test",
-        configSchema: {},
-      },
-      null,
-      2,
-    ),
-    "utf8",
-  );
-  fs.writeFileSync(path.join(pluginRoot, "index.cjs"), "module.exports = {};\n", "utf8");
-  fs.writeFileSync(
-    path.join(pluginRoot, "doctor-contract-api.cjs"),
-    `
-module.exports = {
-  sessionRouteStateOwners: [
-    {
-      id: "load-path-session-owner",
-      label: "Load Path Session Owner",
-      providerIds: ["load-path-provider"],
-      runtimeIds: ["load-path-runtime"],
-      cliSessionKeys: ["load-path-cli"],
-      authProfilePrefixes: ["load-path:"],
+  writeDoctorFixture(pluginRoot, {
+    "openclaw.plugin.json": {
+      id: pluginId,
+      name: "Load Path Session Owner",
+      version: "0.0.0-test",
+      configSchema: {},
+      sessionRouteStateOwners: [
+        {
+          id: "load-path-session-owner",
+          label: "Load Path Session Owner",
+          providerIds: ["load-path-provider"],
+          runtimeIds: ["load-path-runtime"],
+          cliSessionKeys: ["load-path-cli"],
+          authProfilePrefixes: ["load-path:"],
+        },
+      ],
     },
-  ],
+    "index.cjs": "module.exports = {};\n",
+  });
+}
+
+function writeLegacyDoctorSessionOwnerPlugin(pluginRoot: string, pluginId: string): void {
+  writeDoctorFixture(pluginRoot, {
+    "openclaw.plugin.json": { id: pluginId, configSchema: {} },
+    "index.cjs": "module.exports = {};\n",
+    "doctor-contract-api.cjs": `module.exports = {
+  sessionRouteStateOwners: [{
+    id: "legacy-load-path-owner",
+    label: "Legacy Load Path Owner",
+    providerIds: ["legacy-provider"],
+  }],
 };
 `,
-    "utf8",
-  );
+  });
+}
+
+function writeLegacyPostSessionMigrationPlugin(pluginRoot: string, pluginId: string): void {
+  writeDoctorFixture(pluginRoot, {
+    "openclaw.plugin.json": {
+      id: pluginId,
+      configSchema: {},
+      doctorContract: { stateMigrations: true },
+    },
+    "index.cjs": "module.exports = {};\n",
+    "doctor-contract-api.cjs": `module.exports = {
+  stateMigrations: [{
+    id: "legacy-post-session-state",
+    label: "Legacy post-session state",
+    doctorOnly: true,
+    phase: "after-session-repair",
+    detectLegacyState() {
+      return { preview: ["legacy external post-session state is pending"] };
+    },
+    migrateLegacyState() {
+      return { changes: ["migrated legacy external post-session state"], warnings: [] };
+    },
+  }],
+};
+`,
+  });
 }
 
 function createDoctorPluginConfig(pluginRoot: string, pluginId: string): OpenClawConfig {
@@ -212,15 +337,148 @@ beforeEach(() => {
 
 afterEach(() => {
   clearPluginDoctorContractRegistryCache();
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+  tempDirs.cleanup();
 });
 
 describe("doctor contract registry load-path plugins", () => {
+  it.each([
+    {
+      pluginId: "telegram",
+      namespace: "telegram.update-offsets",
+      sourceFile: "update-offset-default.json",
+      stateKey: "default",
+      state: { version: 3, lastUpdateId: 731, botId: null, tokenFingerprint: null },
+    },
+    {
+      pluginId: "discord",
+      namespace: "thread-bindings",
+      sourceFile: "thread-bindings.json",
+      stateKey: "default:thread-123",
+      state: {
+        accountId: "default",
+        threadId: "thread-123",
+        channelId: "channel-123",
+        targetSessionKey: "agent:main:discord:channel:thread-123",
+      },
+    },
+  ])(
+    "migrates real $pluginId state through a released external setup-entry contract",
+    async ({ pluginId, namespace, sourceFile, stateKey, state }) => {
+      const stateDir = tempDirs.make("openclaw-doctor-contract-load-paths-");
+      const pluginRoot = tempDirs.make("openclaw-doctor-contract-load-paths-");
+      writeLegacyChannelMigrationPlugin({ pluginRoot, pluginId, namespace, sourceFile, stateKey });
+      const bundledPluginsDir = path.join(stateDir, "bundled");
+      const shadowedBundledRoot = path.join(bundledPluginsDir, pluginId);
+      writeModernBundledChannelMigrationPlugin({
+        pluginRoot: shadowedBundledRoot,
+        pluginId,
+      });
+      const config = createDoctorPluginConfig(pluginRoot, pluginId);
+      const env = {
+        ...makeHermeticDoctorEnv(stateDir),
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
+        OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+      };
+      const sourcePath = path.join(stateDir, pluginId, sourceFile);
+      fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+      fs.writeFileSync(sourcePath, JSON.stringify(state), "utf8");
+
+      const entries = listPluginDoctorStateMigrationEntries({ config, env, pluginIds: [pluginId] });
+      expect(entries.map((entry) => entry.pluginId)).toEqual([pluginId]);
+      const entry = entries[0];
+      if (!entry) {
+        throw new Error(`missing ${pluginId} released migration contract`);
+      }
+      expect(entry.migration.id).toBe(`${pluginId}-legacy-channel-state`);
+      const input = {
+        config,
+        env,
+        stateDir,
+        oauthDir: path.join(stateDir, "credentials"),
+        context: {
+          openPluginStateKeyedStore: () => {
+            throw new Error("plan-based migration should use its canonical state owner");
+          },
+        },
+      };
+      await expect(entry.migration.detectLegacyState(input)).resolves.toEqual({
+        preview: [`- ${pluginId} preserved channel state: ${sourcePath}`],
+      });
+
+      const { createPluginStateKeyedStore, resetPluginStateStoreForTests } =
+        await import("../plugin-state/plugin-state-store.js");
+      try {
+        const result = await entry.migration.migrateLegacyState(input);
+        expect(result.warnings).toEqual([]);
+        expect(result.changes.length).toBeGreaterThan(0);
+        expect(fs.existsSync(sourcePath)).toBe(false);
+        expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
+        const store = createPluginStateKeyedStore(pluginId, { namespace, maxEntries: 1000, env });
+        await expect(store.lookup(stateKey)).resolves.toEqual(state);
+      } finally {
+        resetPluginStateStoreForTests();
+      }
+    },
+  );
+
+  it("reloads a selected legacy setup entry after the plugin metadata lifecycle clears", async () => {
+    const stateDir = tempDirs.make("openclaw-doctor-contract-load-paths-");
+    const pluginRoot = tempDirs.make("openclaw-doctor-contract-load-paths-");
+    const pluginId = "legacy-refresh";
+    const sourceFile = "refresh.json";
+    const config = createDoctorPluginConfig(pluginRoot, pluginId);
+    const env = makeHermeticDoctorEnv(stateDir);
+    const sourcePath = path.join(stateDir, pluginId, sourceFile);
+    fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+    fs.writeFileSync(sourcePath, "{}", "utf8");
+    const writePlugin = (label: string) =>
+      writeLegacyChannelMigrationPlugin({
+        pluginRoot,
+        pluginId,
+        namespace: "legacy-refresh",
+        sourceFile,
+        stateKey: "default",
+        label,
+      });
+    const detectPreview = async () => {
+      const [entry] = listPluginDoctorStateMigrationEntries({
+        config,
+        env,
+        pluginIds: [pluginId],
+      });
+      if (!entry) {
+        throw new Error("missing selected legacy setup-entry migration");
+      }
+      return entry.migration.detectLegacyState({
+        config,
+        env,
+        stateDir,
+        oauthDir: path.join(stateDir, "credentials"),
+        context: {
+          openPluginStateKeyedStore: () => {
+            throw new Error("legacy detection should not open plugin state");
+          },
+        },
+      });
+    };
+
+    writePlugin("Legacy refresh v1");
+    await expect(detectPreview()).resolves.toEqual({
+      preview: [`- Legacy refresh v1: ${sourcePath}`],
+    });
+
+    writePlugin("Legacy refresh v2");
+    clearPluginDoctorContractRegistryCache();
+
+    await expect(detectPreview()).resolves.toEqual({
+      preview: [`- Legacy refresh v2: ${sourcePath}`],
+    });
+  });
+
   it("discovers doctor warning rules from plugins.load.paths", () => {
-    const stateDir = makeTempDir();
-    const pluginRoot = makeTempDir();
+    const stateDir = tempDirs.make("openclaw-doctor-contract-load-paths-");
+    const pluginRoot = tempDirs.make("openclaw-doctor-contract-load-paths-");
     const pluginId = "load-path-doctor";
     writeDoctorPlugin(pluginRoot, pluginId);
     const config = createDoctorPluginConfig(pluginRoot, pluginId);
@@ -245,8 +503,8 @@ describe("doctor contract registry load-path plugins", () => {
   });
 
   it("discovers doctor warning rules from package dist contracts", () => {
-    const stateDir = makeTempDir();
-    const pluginRoot = makeTempDir();
+    const stateDir = tempDirs.make("openclaw-doctor-contract-load-paths-");
+    const pluginRoot = tempDirs.make("openclaw-doctor-contract-load-paths-");
     const pluginId = "dist-doctor";
     writeDistDoctorPlugin(pluginRoot, pluginId);
     const config = createDoctorPluginConfig(pluginRoot, pluginId);
@@ -264,9 +522,47 @@ describe("doctor contract registry load-path plugins", () => {
     ]);
   });
 
+  it.each([
+    {
+      pluginId: "codex-legacy-doctor",
+      importedSymbols: ["archiveLegacyStateSource", "legacyStateFileExists"],
+    },
+    {
+      pluginId: "discord-legacy-doctor",
+      importedSymbols: [
+        "asObjectRecord",
+        "collectChannelAccountScopes",
+        "collectProviderDangerousNameMatchingScopes",
+        "defineChannelAliasMigration",
+        "defineKeyMoveMigration",
+        "hasLegacyAccountStreamingAliases",
+        "normalizeChannelAccounts",
+        "stripRetiredChannelKeys",
+      ],
+    },
+  ])("loads the preserved $pluginId package contract", ({ pluginId, importedSymbols }) => {
+    const stateDir = tempDirs.make("openclaw-doctor-contract-legacy-package-");
+    const pluginRoot = tempDirs.make("openclaw-doctor-contract-legacy-package-");
+    writeLegacyRuntimeDoctorPlugin({ pluginRoot, pluginId, importedSymbols });
+    const config = createDoctorPluginConfig(pluginRoot, pluginId);
+
+    expect(
+      listPluginDoctorLegacyConfigRules({
+        config,
+        env: makeHermeticDoctorEnv(stateDir),
+        pluginIds: [pluginId],
+      }),
+    ).toEqual([
+      {
+        path: ["plugins", "entries", pluginId, "config", "legacyDoctor"],
+        message: `${pluginId} legacy doctor contract loaded`,
+      },
+    ]);
+  });
+
   it("applies compatibility normalizers from plugins.load.paths", () => {
-    const stateDir = makeTempDir();
-    const pluginRoot = makeTempDir();
+    const stateDir = tempDirs.make("openclaw-doctor-contract-load-paths-");
+    const pluginRoot = tempDirs.make("openclaw-doctor-contract-load-paths-");
     const pluginId = "load-path-doctor";
     writeDoctorPlugin(pluginRoot, pluginId);
     const config = createDoctorPluginConfig(pluginRoot, pluginId);
@@ -286,8 +582,8 @@ describe("doctor contract registry load-path plugins", () => {
   });
 
   it("discovers session route-state owners from plugins.load.paths", () => {
-    const stateDir = makeTempDir();
-    const pluginRoot = makeTempDir();
+    const stateDir = tempDirs.make("openclaw-doctor-contract-load-paths-");
+    const pluginRoot = tempDirs.make("openclaw-doctor-contract-load-paths-");
     const pluginId = "load-path-session-owner";
     writeDoctorSessionOwnerPlugin(pluginRoot, pluginId);
     const config = createDoctorPluginConfig(pluginRoot, pluginId);
@@ -309,39 +605,57 @@ describe("doctor contract registry load-path plugins", () => {
     ]);
   });
 
-  describe("real Voice Call contract", () => {
-    let agentIds: string[];
+  it("keeps the deprecated module owner route for external load-path plugins", () => {
+    const stateDir = tempDirs.make("openclaw-doctor-contract-load-paths-");
+    const pluginRoot = tempDirs.make("openclaw-doctor-contract-load-paths-");
+    const pluginId = "legacy-load-path-owner";
+    writeLegacyDoctorSessionOwnerPlugin(pluginRoot, pluginId);
+    const config = createDoctorPluginConfig(pluginRoot, pluginId);
 
-    beforeAll(() => {
-      const stateDir = makeTempDir();
-      const pluginRoot = path.join(repoRoot, "extensions", "voice-call");
-      const config = {
-        plugins: {
-          load: { paths: [pluginRoot] },
-          entries: {
-            "voice-call": {
-              enabled: true,
-              config: {
-                agentId: "Voice",
-                numbers: {
-                  "+15550001111": { agentId: "Cards" },
-                  "+15550002222": {},
-                },
-              },
-            },
-          },
-        },
-      } as OpenClawConfig;
-
-      agentIds = listPluginDoctorSessionStoreAgentIds({
+    expect(
+      listPluginDoctorSessionRouteStateOwners({
         config,
         env: makeHermeticDoctorEnv(stateDir),
-        pluginIds: ["voice-call"],
-      });
-    });
+      }),
+    ).toEqual([
+      {
+        id: "legacy-load-path-owner",
+        label: "Legacy Load Path Owner",
+        providerIds: ["legacy-provider"],
+        runtimeIds: [],
+        cliSessionKeys: [],
+        authProfilePrefixes: [],
+      },
+    ]);
+  });
 
-    it("loads session-store agent IDs from the real Voice Call doctor contract", () => {
-      expect(agentIds).toEqual(["cards", "voice"]);
+  it("validates frozen live post-session actions without applying candidate-only refusal", async () => {
+    const stateDir = tempDirs.make("openclaw-doctor-contract-post-session-");
+    const pluginRoot = tempDirs.make("openclaw-doctor-contract-post-session-");
+    const pluginId = "legacy-post-session-owner";
+    writeLegacyPostSessionMigrationPlugin(pluginRoot, pluginId);
+    const config = createDoctorPluginConfig(pluginRoot, pluginId);
+    const env = makeHermeticDoctorEnv(stateDir);
+
+    const unplanned = await runPostSessionPluginDoctorStateRepairs({ config, env });
+    expect(unplanned.warnings).toContain("legacy external post-session state is pending");
+
+    const planBound = await runPostSessionPluginDoctorStateRepairs({
+      config,
+      env,
+      plannedActions: [],
     });
+    expect(planBound).toMatchObject({
+      changes: [],
+      warnings: [expect.stringContaining("immutable action order")],
+    });
+    expect(planBound.warnings).not.toContain("legacy external post-session state is pending");
+    const matchingPlan = await runPostSessionPluginDoctorStateRepairs({
+      config,
+      env,
+      plannedActions: [{ pluginId, id: "legacy-post-session-state" }],
+    });
+    expect(matchingPlan.changes).toEqual([]);
+    expect(matchingPlan.warnings).toContain("legacy external post-session state is pending");
   });
 });

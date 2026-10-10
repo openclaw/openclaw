@@ -1,10 +1,5 @@
-// Covers plugin install record normalization and config interactions.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  buildNpmResolutionInstallFields,
-  recordPluginInstall,
-  resolveNpmInstallRecordSpec,
-} from "./installs.js";
+import { recordPluginInstall, resolveNpmInstallRecordSpec } from "./installs.js";
 
 function expectRecordedInstall(pluginId: string, next: ReturnType<typeof recordPluginInstall>) {
   expect(next).toEqual({
@@ -20,67 +15,8 @@ function expectRecordedInstall(pluginId: string, next: ReturnType<typeof recordP
   });
 }
 
-function createExpectedResolutionFields(
-  overrides: Partial<ReturnType<typeof buildNpmResolutionInstallFields>>,
-) {
-  return {
-    resolvedName: undefined,
-    resolvedVersion: undefined,
-    resolvedSpec: undefined,
-    integrity: undefined,
-    shasum: undefined,
-    resolvedAt: undefined,
-    ...overrides,
-  };
-}
-
-function expectResolutionFieldsCase(params: {
-  input: Parameters<typeof buildNpmResolutionInstallFields>[0];
-  expected: ReturnType<typeof buildNpmResolutionInstallFields>;
-}) {
-  expect(buildNpmResolutionInstallFields(params.input)).toEqual(params.expected);
-}
-
 afterEach(() => {
   vi.useRealTimers();
-});
-
-describe("buildNpmResolutionInstallFields", () => {
-  it.each([
-    {
-      name: "maps npm resolution metadata into install record fields",
-      input: {
-        name: "@openclaw/demo",
-        version: "1.2.3",
-        resolvedSpec: "@openclaw/demo@1.2.3",
-        integrity: "sha512-abc",
-        shasum: "deadbeef",
-        resolvedAt: "2026-02-22T00:00:00.000Z",
-      },
-      expected: createExpectedResolutionFields({
-        resolvedName: "@openclaw/demo",
-        resolvedVersion: "1.2.3",
-        resolvedSpec: "@openclaw/demo@1.2.3",
-        integrity: "sha512-abc",
-        shasum: "deadbeef",
-        resolvedAt: "2026-02-22T00:00:00.000Z",
-      }),
-    },
-    {
-      name: "returns undefined fields when resolution is missing",
-      input: undefined,
-      expected: createExpectedResolutionFields({}),
-    },
-    {
-      name: "keeps missing partial resolution fields undefined",
-      input: {
-        name: "@openclaw/demo",
-      },
-      expected: createExpectedResolutionFields({
-        resolvedName: "@openclaw/demo",
-      }),
-    },
-  ] as const)("$name", expectResolutionFieldsCase);
 });
 
 describe("resolveNpmInstallRecordSpec", () => {
@@ -229,5 +165,68 @@ describe("recordPluginInstall", () => {
       resolvedSpec: "@openclaw/diffs@1.1.0",
       installedAt: "2026-05-15T00:00:03.000Z",
     });
+  });
+
+  it("moves an exact prior npm load path on same-version reinstall", () => {
+    const previousInstallPath = "/tmp/openclaw/npm/projects/alpha-v1/node_modules/alpha";
+    const nextInstallPath = "/tmp/openclaw/npm/projects/alpha-v2/node_modules/alpha";
+    const customPath = `${previousInstallPath}/custom-child`;
+    const adjacentPath = "/tmp/openclaw/npm/projects/beta/node_modules/beta";
+    const existing = {
+      plugins: {
+        load: { paths: [customPath, previousInstallPath, adjacentPath] },
+        installs: {
+          alpha: {
+            source: "npm" as const,
+            spec: "alpha@1.0.0",
+            installPath: previousInstallPath,
+          },
+          beta: {
+            source: "npm" as const,
+            spec: "beta@1.0.0",
+            installPath: adjacentPath,
+          },
+        },
+      },
+    };
+
+    const next = recordPluginInstall(existing, {
+      pluginId: "alpha",
+      source: "npm",
+      spec: "alpha@1.0.0",
+      installPath: nextInstallPath,
+    });
+
+    expect(next.plugins?.load?.paths).toEqual([customPath, nextInstallPath, adjacentPath]);
+    expect(next.plugins?.installs?.beta).toBe(existing.plugins.installs.beta);
+  });
+
+  it("preserves an existing replacement path position while removing stale managed paths", () => {
+    const previousInstallPath = "/tmp/openclaw/npm/projects/alpha-v1/node_modules/alpha";
+    const nextInstallPath = "/tmp/openclaw/npm/projects/alpha-v2/node_modules/alpha";
+    const adjacentPath = "/tmp/openclaw/npm/projects/beta/node_modules/beta";
+    const existing = {
+      plugins: {
+        load: {
+          paths: [nextInstallPath, adjacentPath, previousInstallPath, nextInstallPath],
+        },
+        installs: {
+          alpha: {
+            source: "npm" as const,
+            spec: "alpha@1.0.0",
+            installPath: previousInstallPath,
+          },
+        },
+      },
+    };
+
+    const next = recordPluginInstall(existing, {
+      pluginId: "alpha",
+      source: "npm",
+      spec: "alpha@1.0.0",
+      installPath: nextInstallPath,
+    });
+
+    expect(next.plugins?.load?.paths).toEqual([nextInstallPath, adjacentPath]);
   });
 });

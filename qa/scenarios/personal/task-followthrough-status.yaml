@@ -6,10 +6,10 @@ scenario:
   category: followthrough
   coverage:
     primary:
-      - personal.task-followthrough
+      - agent-runtime.tool-task-followthrough
     secondary:
-      - tools.followthrough
-      - workspace.artifacts
+      - agent-runtime.tool-followthrough
+      - agent-runtime.tool-fs-write
   risk: medium
   capabilities:
     - tools.read
@@ -22,7 +22,7 @@ scenario:
     - Final reply includes pending, blocked, and done status labels.
     - Final reply does not claim completion before the status artifact exists.
   docsRefs:
-    - docs/automation/tasks.md
+    - docs/concepts/personal-agent-benchmark-pack.md
     - docs/automation/standing-orders.md
   codeRefs:
     - extensions/qa-lab/src/providers/mock-openai/server.ts

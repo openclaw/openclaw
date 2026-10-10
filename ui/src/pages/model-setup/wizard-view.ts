@@ -1,10 +1,34 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { renderCopyButton } from "../../components/copy-button.ts";
+import { renderWizardStepControls } from "../../components/wizard-step-controls.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/modal-dialog.ts";
 import type { ModelSetupWizardState } from "./state.ts";
 
+const WIZARD_COPY = {
+  auth: {
+    dialog: "modelSetup.wizard.dialogLabel",
+    titleKey: "modelSetup.wizard.title",
+    starting: "modelSetup.wizard.starting",
+  },
+  prepare: {
+    dialog: "modelSetup.wizard.prepareDialogLabel",
+    titleKey: "modelSetup.wizard.prepareTitle",
+    starting: "modelSetup.wizard.prepareStarting",
+  },
+  activate: {
+    dialog: "modelSetup.heading",
+    titleKey: "modelSetup.heading",
+    starting: "modelSetup.wizard.checking",
+  },
+};
+
 type WizardViewProps = {
+  mode: "auth" | "prepare" | "activate";
   state: ModelSetupWizardState;
+  refreshWarning: string | null;
+  doneMessage?: string;
+  cancellationNotice?: string | null;
   value: unknown;
   onValueChange: (value: unknown) => void;
   onAnswer: (value: unknown, includeValue?: boolean) => void;
@@ -12,266 +36,100 @@ type WizardViewProps = {
   onClose: () => void;
 };
 
-function renderDeviceCode(step: Extract<ModelSetupWizardState, { phase: "step" }>["step"]) {
-  if (!step.deviceCode) {
-    return nothing;
-  }
-  return html`
-    <div class="model-setup-wizard__device-code">
-      ${step.deviceCode.message
-        ? html`<div class="muted">${step.deviceCode.message}</div>`
-        : nothing}
-      <code>${step.deviceCode.code}</code>
-      <button
-        type="button"
-        class="btn btn--sm"
-        @click=${() => void navigator.clipboard?.writeText(step.deviceCode!.code)}
-      >
-        ${t("modelSetup.wizard.copy")}
-      </button>
-      ${step.deviceCode.expiresInMinutes
-        ? html`<div class="muted">
-            ${t("modelSetup.wizard.expires", {
-              count: String(step.deviceCode.expiresInMinutes),
-            })}
-          </div>`
-        : nothing}
-    </div>
-  `;
-}
-
-function renderContinueStep(props: WizardViewProps) {
-  if (props.state.phase !== "step") {
-    return nothing;
-  }
-  const step = props.state.step;
-  return html`
-    ${step.message ? html`<div class="model-setup-wizard__message">${step.message}</div>` : nothing}
-    ${step.externalUrl
-      ? html`<a class="btn btn--sm" href=${step.externalUrl} target="_blank" rel="noreferrer">
-          ${t("modelSetup.wizard.openSignIn")}
-        </a>`
-      : nothing}
-    ${renderDeviceCode(step)}
-    <button
-      type="button"
-      class="btn primary"
-      ?disabled=${props.state.busy}
-      @click=${() => props.onAnswer(undefined, false)}
-    >
-      ${t("modelSetup.wizard.continue")}
-    </button>
-  `;
-}
-
-function renderTextStep(props: WizardViewProps) {
-  if (props.state.phase !== "step") {
-    return nothing;
-  }
-  const step = props.state.step;
-  return html`
-    <form
-      @submit=${(event: Event) => {
-        event.preventDefault();
-        props.onAnswer(typeof props.value === "string" ? props.value : "");
-      }}
-    >
-      ${step.message
-        ? html`<div class="model-setup-wizard__message">${step.message}</div>`
-        : nothing}
-      <input
-        class="input"
-        name="wizard-text"
-        type=${step.sensitive ? "password" : "text"}
-        autocomplete=${step.sensitive ? "off" : "on"}
-        placeholder=${step.placeholder ?? ""}
-        .value=${typeof props.value === "string" ? props.value : ""}
-        ?disabled=${props.state.busy}
-        @input=${(event: Event) =>
-          props.onValueChange((event.currentTarget as HTMLInputElement).value)}
-      />
-      <button type="submit" class="btn primary" ?disabled=${props.state.busy}>
-        ${t("modelSetup.wizard.submit")}
-      </button>
-    </form>
-  `;
-}
-
-function renderSelectStep(props: WizardViewProps) {
-  if (props.state.phase !== "step") {
-    return nothing;
-  }
-  const step = props.state.step;
-  return html`
-    ${step.message ? html`<div class="model-setup-wizard__message">${step.message}</div>` : nothing}
-    <div class="model-setup-wizard__options" role="radiogroup">
-      ${(step.options ?? []).map(
-        (option) => html`
-          <label class="model-setup-wizard__option">
-            <input
-              type="radio"
-              name="wizard-option"
-              .checked=${Object.is(props.value, option.value)}
-              @change=${() => props.onValueChange(option.value)}
-            />
-            <span>
-              <strong>${option.label}</strong>
-              ${option.hint ? html`<small>${option.hint}</small>` : nothing}
-            </span>
-          </label>
-        `,
-      )}
-    </div>
-    <button
-      type="button"
-      class="btn primary"
-      ?disabled=${props.state.busy || props.value === undefined}
-      @click=${() => props.onAnswer(props.value)}
-    >
-      ${t("modelSetup.wizard.continue")}
-    </button>
-  `;
-}
-
-function renderConfirmStep(props: WizardViewProps) {
-  if (props.state.phase !== "step") {
-    return nothing;
-  }
-  return html`
-    ${props.state.step.message
-      ? html`<div class="model-setup-wizard__message">${props.state.step.message}</div>`
-      : nothing}
-    <div class="model-setup-wizard__actions">
-      <button
-        type="button"
-        class="btn"
-        ?disabled=${props.state.busy}
-        @click=${() => props.onAnswer(false)}
-      >
-        ${t("common.no")}
-      </button>
-      <button
-        type="button"
-        class="btn primary"
-        ?disabled=${props.state.busy}
-        @click=${() => props.onAnswer(true)}
-      >
-        ${t("common.yes")}
-      </button>
-    </div>
-  `;
-}
-
-function renderMultiselectStep(props: WizardViewProps) {
-  if (props.state.phase !== "step") {
-    return nothing;
-  }
-  const selected = Array.isArray(props.value) ? props.value : [];
-  return html`
-    ${props.state.step.message
-      ? html`<div class="model-setup-wizard__message">${props.state.step.message}</div>`
-      : nothing}
-    <div class="model-setup-wizard__options">
-      ${(props.state.step.options ?? []).map(
-        (option) => html`
-          <label class="model-setup-wizard__option">
-            <input
-              type="checkbox"
-              .checked=${selected.some((value) => Object.is(value, option.value))}
-              @change=${(event: Event) => {
-                const checked = (event.currentTarget as HTMLInputElement).checked;
-                props.onValueChange(
-                  checked
-                    ? [...selected, option.value]
-                    : selected.filter((value) => !Object.is(value, option.value)),
-                );
-              }}
-            />
-            <span>
-              <strong>${option.label}</strong>
-              ${option.hint ? html`<small>${option.hint}</small>` : nothing}
-            </span>
-          </label>
-        `,
-      )}
-    </div>
-    <button
-      type="button"
-      class="btn primary"
-      ?disabled=${props.state.busy}
-      @click=${() => props.onAnswer(selected)}
-    >
-      ${t("modelSetup.wizard.continue")}
-    </button>
-  `;
-}
-
-function renderStep(props: WizardViewProps) {
-  if (props.state.phase !== "step") {
-    return nothing;
-  }
-  switch (props.state.step.type) {
-    case "text":
-      return renderTextStep(props);
-    case "select":
-      return renderSelectStep(props);
-    case "confirm":
-      return renderConfirmStep(props);
-    case "multiselect":
-      return renderMultiselectStep(props);
-    case "note":
-    case "progress":
-    case "action":
-      return renderContinueStep(props);
-  }
-  return nothing;
-}
-
 export function renderModelSetupWizard(props: WizardViewProps): TemplateResult | typeof nothing {
-  if (props.state.phase === "idle") {
+  const { state } = props;
+  if (state.phase === "idle") {
     return nothing;
   }
-  const canCancel =
-    props.state.phase === "starting" ||
-    props.state.phase === "step" ||
-    props.state.phase === "done";
+  const canCancel = state.phase === "starting" || state.phase === "step";
+  const copy = WIZARD_COPY[props.mode];
+  let content: TemplateResult;
+  if (state.phase === "starting") {
+    content = html`<div role="status">${t(copy.starting)}</div>`;
+  } else if (state.phase === "done") {
+    content = html`<div role="status">
+      ${props.doneMessage ?? t(props.mode === "auth" ? "modelSetup.wizard.connected" : "modelSetup.wizard.checking")}
+    </div>`;
+  } else if (state.phase === "error" && props.mode === "auth") {
+    content = html`<div class="callout danger model-setup-wizard__error" role="alert">
+      <p class="model-setup-wizard__error-text">${state.message}</p>
+      <div class="model-setup-wizard__error-copy">
+        ${renderCopyButton(state.message, t("modelSetup.wizard.copy"))}
+      </div>
+    </div>`;
+  } else if (state.phase === "error" || state.phase === "cancelled") {
+    content = html`<div class="callout danger" role="alert">${state.message}</div>`;
+  } else {
+    content = html`
+      ${
+        state.validationError
+          ? html`<div id="model-setup-wizard-validation-error" class="callout danger" role="alert">
+              ${state.validationError}
+            </div>`
+          : nothing
+      }
+      ${renderWizardStepControls({
+        step: state.step,
+        externalAuthInput: state.externalAuthInput,
+        value: props.value,
+        busy: state.busy,
+        inputId: "model-setup-wizard-text-input",
+        validationErrorId: state.validationError
+          ? "model-setup-wizard-validation-error"
+          : undefined,
+        confirmAffirmativeLabel:
+          props.mode === "prepare" && state.step.type === "confirm"
+            ? t("modelSetup.wizard.continue")
+            : undefined,
+        leadingAction: html`<button type="button" class="btn" @click=${props.onCancel}>
+          ${t("common.cancel")}
+        </button>`,
+        onValueChange: props.onValueChange,
+        onAnswer: props.onAnswer,
+      })}
+      ${
+        state.busy && !state.step.externalUrl && !state.step.deviceCode
+          ? html`<div role="status">${t("modelSetup.wizard.working")}</div>`
+          : nothing
+      }
+    `;
+  }
   return html`
     <openclaw-modal-dialog
-      label=${t("modelSetup.wizard.dialogLabel")}
+      label=${t(copy.dialog)}
       @modal-cancel=${canCancel ? props.onCancel : props.onClose}
     >
       <div class="model-setup-wizard">
         <div class="model-setup-wizard__header">
           <h2>
-            ${props.state.phase === "step" && props.state.step.title
-              ? props.state.step.title
-              : t("modelSetup.wizard.title")}
+            ${state.authLabel || (state.phase === "step" && state.step.title) || t(copy.titleKey)}
           </h2>
         </div>
         <div class="model-setup-wizard__body">
-          ${props.state.phase === "starting"
-            ? html`<div role="status">${t("modelSetup.wizard.starting")}</div>`
-            : props.state.phase === "done"
-              ? html`<div role="status">${t("modelSetup.wizard.checking")}</div>`
-              : props.state.phase === "error" || props.state.phase === "cancelled"
-                ? html`<div class="callout danger" role="alert">${props.state.message}</div>`
-                : html`
-                    ${props.state.validationError
-                      ? html`<div class="callout danger" role="alert">
-                          ${props.state.validationError}
-                        </div>`
-                      : nothing}
-                    ${renderStep(props)}
-                    ${props.state.busy
-                      ? html`<div role="status">${t("modelSetup.wizard.working")}</div>`
-                      : nothing}
-                  `}
+          ${[
+            props.refreshWarning,
+            props.cancellationNotice,
+            state.phase === "starting" ? state.notice : undefined,
+          ].map((warning) =>
+            warning ? html`<div class="callout warning" role="alert">${warning}</div>` : nothing,
+          )}
+          ${content}
         </div>
-        <div class="model-setup-wizard__footer">
-          <button type="button" class="btn" @click=${canCancel ? props.onCancel : props.onClose}>
-            ${canCancel ? t("common.cancel") : t("common.close")}
-          </button>
-        </div>
+        ${
+          state.phase === "step"
+            ? nothing
+            : html`
+                <div class="model-setup-wizard__footer">
+                  <button
+                    type="button"
+                    class="btn"
+                    @click=${canCancel ? props.onCancel : props.onClose}
+                  >
+                    ${t(canCancel ? "common.cancel" : "common.close")}
+                  </button>
+                </div>
+              `
+        }
       </div>
     </openclaw-modal-dialog>
   `;

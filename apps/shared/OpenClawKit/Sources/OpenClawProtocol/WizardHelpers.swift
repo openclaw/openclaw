@@ -57,6 +57,13 @@ public func wizardStepType(_ step: WizardStep) -> String {
     (step.type.value as? String) ?? ""
 }
 
+/// `"gateway"` marks a step the Gateway runs itself (download/install progress).
+/// Those steps carry no answer, so clients must poll for the next frame instead
+/// of waiting for input that will never come.
+public func wizardStepExecutor(_ step: WizardStep) -> String {
+    (step.executor?.value as? String) ?? ""
+}
+
 public func anyCodableString(_ value: AnyCodable?) -> String {
     switch value?.value {
     case let string as String:
@@ -109,14 +116,10 @@ public func anyCodableEqual(_ lhs: AnyCodable?, _ rhs: AnyCodable?) -> Bool {
         l == r
     case let (l as Bool, r as Bool):
         l == r
-    case let (l as String, r as Int):
-        l == String(r)
-    case let (l as Int, r as String):
-        String(l) == r
-    case let (l as String, r as Double):
-        l == String(r)
-    case let (l as Double, r as String):
-        String(l) == r
+    case let (string as String, number as Int), let (number as Int, string as String):
+        string == String(number)
+    case let (string as String, number as Double), let (number as Double, string as String):
+        string == String(number)
     default:
         false
     }

@@ -1,51 +1,1062 @@
+import Darwin
 import Foundation
-import OpenClawKit
+import Observation
+import OpenClawNativeState
+import Synchronization
 import Testing
 @testable import OpenClaw
+@testable import OpenClawKit
+
+@MainActor
+struct GatewayReadinessDeadlinePolicyTests {
+    private let epoch = ContinuousClock.now
+
+    @Test(arguments: [
+        (true, false, false),
+        (false, true, false),
+        (false, false, true),
+    ])
+    func `migration extension requires fresh proof only without progress or prior grace`(
+        responsiveProgress: Bool,
+        priorGrace: Bool,
+        requiresLaunchdProof: Bool) throws
+    {
+        let policy = GatewayProcessManager.GatewayReadinessDeadlinePolicy.migration(window: 6, tolerance: 120)
+        let decision = try #require(policy.extensionDecision(
+            deadline: self.epoch.advanced(by: .seconds(6)),
+            finalProbeDeadline: self.epoch.advanced(by: .seconds(120)),
+            responsiveStartupProgressObserved: responsiveProgress,
+            freshInstallGraceAuthorized: priorGrace))
+
+        #expect(decision.deadline == self.epoch.advanced(by: .seconds(12)))
+        #expect(decision.requiresLaunchdProof == requiresLaunchdProof)
+    }
+
+    @Test func `migration extension is capped at the final deadline`() throws {
+        let policy = GatewayProcessManager.GatewayReadinessDeadlinePolicy.migration(window: 6, tolerance: 120)
+        let decision = try #require(policy.extensionDecision(
+            deadline: self.epoch.advanced(by: .seconds(116)),
+            finalProbeDeadline: self.epoch.advanced(by: .seconds(120)),
+            responsiveStartupProgressObserved: true,
+            freshInstallGraceAuthorized: false))
+
+        #expect(decision.deadline == self.epoch.advanced(by: .seconds(120)))
+    }
+
+    @Test(arguments: [120.0, 126.0])
+    func `exhausted migration budget cannot extend despite progress and prior grace`(deadline: TimeInterval) {
+        let policy = GatewayProcessManager.GatewayReadinessDeadlinePolicy.migration(window: 6, tolerance: 120)
+        #expect(policy.extensionDecision(
+            deadline: self.epoch.advanced(by: .seconds(deadline)),
+            finalProbeDeadline: self.epoch.advanced(by: .seconds(120)),
+            responsiveStartupProgressObserved: true,
+            freshInstallGraceAuthorized: true) == nil)
+    }
+
+    @Test func `fixed readiness policy refuses migration extensions`() {
+        let policy = GatewayProcessManager.GatewayReadinessDeadlinePolicy.fixed(timeout: 6)
+        #expect(policy.extensionDecision(
+            deadline: self.epoch.advanced(by: .seconds(6)),
+            finalProbeDeadline: self.epoch.advanced(by: .seconds(120)),
+            responsiveStartupProgressObserved: true,
+            freshInstallGraceAuthorized: true) == nil)
+    }
+}
 
 @Suite(.serialized)
 @MainActor
 struct GatewayProcessManagerTests {
+    /// Recovery integration suites exercise the app singleton concurrently. Each
+    /// unit test owns its manager so readiness state cannot leak into their requests.
+    private let manager = GatewayProcessManager()
+
+    @Test func `colliding profile ports cannot attach another profile gateway`() {
+        let first = AppProfile(environment: ["OPENCLAW_PROFILE": "p1402"])
+        let second = AppProfile(environment: ["OPENCLAW_PROFILE": "p2380"])
+        #expect(first.defaultGatewayPort == 55636)
+        #expect(second.defaultGatewayPort == 55636)
+        #expect(GatewayProcessManager.profileAllowsExistingGatewayAttachment(
+            profile: first,
+            listenerPID: 1402,
+            managedServicePID: 1402))
+        #expect(!GatewayProcessManager.profileAllowsExistingGatewayAttachment(
+            profile: second,
+            listenerPID: 1402,
+            managedServicePID: 2380))
+        #expect(!GatewayProcessManager.profileAllowsExistingGatewayAttachment(
+            profile: second,
+            listenerPID: 1402,
+            managedServicePID: nil))
+        #expect(GatewayProcessManager.profileAllowsExistingGatewayAttachment(
+            profile: AppProfile(environment: [:]),
+            listenerPID: 1402,
+            managedServicePID: nil))
+    }
+
+    @Test(arguments: [(false, false), (false, true), (true, true)])
+    func `transport recovery cannot activate an inactive or paused Gateway`(
+        desiredActive: Bool,
+        paused: Bool) async throws
+    {
+        try await self.withLaunchAgentEnvironment(port: AppProfile.current.defaultGatewayPort) {
+            let appState = AppStateStore.shared
+            let previousPause = appState.isPaused
+            let previousHosting = AppDefaults.standard.object(forKey: GatewayHosting.defaultsKey)
+            let manager = self.manager
+            appState.isPaused = paused
+            manager.desiredActive = desiredActive
+            defer {
+                manager._testResetGatewayStartTask()
+                appState.isPaused = previousPause
+                AppDefaults.standard.set(previousHosting, forKey: GatewayHosting.defaultsKey)
+            }
+
+            manager.setActive(true, source: .recovery)
+
+            #expect(manager.desiredActive == desiredActive)
+            #expect(manager.status == .stopped)
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+        }
+    }
+
+    @Test(arguments: ["request", "recovery", "failed-recovery", "paused", "quit", "generation", "operator"])
+    func `prepared runtime activation preserves intent until explicit Retry and valid custody`(
+        scenario: String) async throws
+    {
+        let port = AppProfile.current.defaultGatewayPort
+        try await self.withLaunchAgentEnvironment(port: port) {
+            let manager = GatewayProcessManager()
+            let appState = AppStateStore.shared
+            let priorPause = appState.isPaused
+            let priorMode = appState.connectionMode
+            appState.connectionMode = .local
+            appState.isPaused = false
+            defer {
+                appState.isPaused = priorPause
+                appState.connectionMode = priorMode
+            }
+            manager.desiredActive = true
+            let generation = manager.gatewayStartGeneration
+            let custody = try await ManagedNodeGatewayMigration.captureServiceCustody(requireService: false)
+            let selection = (manager.gatewayHosting, port, manager.hostsLocalGatewayWithRemotePrimary)
+            let failure = "child exhausted restart budget"
+            manager.handleChildEvent(.failed(failure), port: port)
+            switch scenario {
+            case "failed-recovery":
+                let claim = try manager.prepareHostingRecoveryActivation(generation: generation, restoring: .service)
+                manager.finishHostingRecoveryActivation(
+                    claim, generation: generation, healthy: false, failure: "previous service recovery failed")
+            case "paused": appState.isPaused = true
+            case "quit": manager.isTerminating = true
+            case "generation": manager.gatewayStartGeneration &+= 1
+            case "operator":
+                let plist = GatewayLaunchAgentManager.plistURL(
+                    homeDirectory: LaunchAgentPlist.homeDirectoryURL, profile: .current)
+                try FileManager.default.createDirectory(
+                    at: plist.deletingLastPathComponent(),
+                    withIntermediateDirectories: true)
+                try Data("operator replacement".utf8).write(to: plist)
+            default: break
+            }
+            if ["quit", "generation", "operator"].contains(scenario) {
+                await #expect(throws: (any Error).self) {
+                    try await manager.activatePreparedBundledRuntime(
+                        source: .request,
+                        generation: generation,
+                        selection: selection,
+                        expectedService: custody)
+                }
+                #expect(!manager.desiredActive)
+            } else {
+                let activation = try await manager.activatePreparedBundledRuntime(
+                    source: ["recovery", "failed-recovery"].contains(scenario) ? .recovery : .request,
+                    generation: generation, selection: selection, expectedService: custody)
+                let expected: CLIInstaller.LocalGatewayActivation? = switch scenario {
+                case "recovery": .failed(reason: failure)
+                case "failed-recovery": .failed(reason: "previous service recovery failed")
+                case "paused": .deferred
+                default: nil
+                }
+                #expect(activation == expected)
+                #expect(manager.desiredActive == (scenario == "request"))
+            }
+            #expect(manager.gatewayStartTask == nil)
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+        }
+    }
+
+    @Test(arguments: ["ready", "paused", "quit", "generation"])
+    func `joined runtime preparation never publishes readiness from a retired lifecycle`(
+        scenario: String) async throws
+    {
+        let entered = AsyncTestGate()
+        let finish = AsyncTestGate()
+        defer { finish.open() }
+        try await self.withLaunchAgentEnvironment(port: AppProfile.current.defaultGatewayPort) {
+            let manager = GatewayProcessManager()
+            let appState = AppStateStore.shared
+            let priorPause = appState.isPaused
+            appState.isPaused = false
+            defer { appState.isPaused = priorPause }
+            manager.desiredActive = true
+            let generation = manager.gatewayStartGeneration
+            manager.bundledUpdateTask = Task {
+                entered.open()
+                await finish.wait()
+                return .init(activation: .ready, generation: generation, source: .request)
+            }
+            let request = Task { try await manager.prepareBundledRuntimeAfterUpdate() }
+            await entered.wait()
+            switch scenario {
+            case "paused": appState.isPaused = true
+            case "quit": manager.isTerminating = true
+            case "generation":
+                manager.stop()
+                await manager.waitForStartupAttempt()
+            default: break
+            }
+            finish.open()
+            if ["quit", "generation"].contains(scenario) {
+                await #expect(throws: CancellationError.self) { try await request.value }
+            } else {
+                let activation = try await request.value
+                #expect(activation == (scenario == "paused" ? .deferred : .ready))
+            }
+            manager.bundledUpdateTask = nil
+            #expect(!GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().contains { $0.first == "install" })
+        }
+    }
+
+    @Test func `explicit runtime Retry advances beyond a joined passive giveup`() async throws {
+        try await self.withLaunchAgentEnvironment(port: AppProfile.current.defaultGatewayPort) {
+            let manager = GatewayProcessManager()
+            let appState = AppStateStore.shared
+            let priorPause = appState.isPaused
+            appState.isPaused = false
+            defer { appState.isPaused = priorPause }
+            manager.desiredActive = true
+            manager.handleChildEvent(.failed("passive child failure"), port: AppProfile.current.defaultGatewayPort)
+            let generation = manager.gatewayStartGeneration
+            manager.bundledUpdateTask = Task {
+                .init(activation: .failed(reason: "passive child failure"), generation: generation, source: .recovery)
+            }
+            // There is no seeded selection here. Retry must reach the current owner check,
+            // rather than returning the already-finished passive task's failure forever.
+            await #expect(throws: GatewayHostingError.self) {
+                try await manager.prepareBundledRuntimeAfterUpdate(source: .request)
+            }
+            #expect(manager.bundledUpdateTask == nil)
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+        }
+    }
+
+    @Test(arguments: ["hosting", "startup"], [false, true])
+    func `queued runtime Retry retains arrival generation across prior hosting and startup waits`(
+        priorWork: String, stopped: Bool) async throws
+    {
+        let entered = AsyncTestGate()
+        let release = AsyncTestGate()
+        defer { release.open() }
+        let port = AppProfile.current.defaultGatewayPort
+        try await self.withLaunchAgentEnvironment(port: port) {
+            let manager = GatewayProcessManager()
+            let appState = AppStateStore.shared
+            let priorPause = appState.isPaused
+            appState.isPaused = false
+            defer { appState.isPaused = priorPause }
+            try #require(!manager.usesSeededGateway)
+            let generation = manager.gatewayStartGeneration
+            if priorWork == "hosting" {
+                manager.hostingChangeTask = Task {
+                    entered.open()
+                    await release.wait()
+                }
+            } else {
+                manager.beginGatewayStartTask(generation: generation) {
+                    entered.open()
+                    await release.wait()
+                }
+            }
+            let interruption = Task { @MainActor in
+                await entered.wait()
+                if stopped { manager.stop() }
+                release.open()
+                await manager.waitForPendingLaunchAgentDisable()
+            }
+            do {
+                _ = try await manager.prepareBundledRuntimeAfterUpdate(source: .request)
+                Issue.record("Fixture has no seeded runtime")
+            } catch {
+                // Without Stop, preparation must still reach its current installation owner.
+                // Stop during either prior wait must cancel before adopting that newer lifecycle.
+                if stopped {
+                    #expect(error is CancellationError)
+                } else {
+                    #expect(error is GatewayHostingError)
+                    #expect(error.localizedDescription ==
+                        "This Gateway is no longer hosted by OpenClaw.app. Update it with its installation owner.")
+                }
+            }
+            await interruption.value
+            await manager.waitForStartupAttempt()
+            manager.hostingChangeTask = nil
+            #expect(!manager.desiredActive)
+            #expect(manager.bundledUpdateTask == nil)
+            #expect(manager.gatewayStartGeneration == generation + (stopped ? 1 : 0))
+            #expect(!GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().contains { $0.first == "install" })
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func `queued explicit runtime Retry cannot cross Stop through a retired or replaced passive task`(
+        newerPassiveTask: Bool) async throws
+    {
+        let port = AppProfile.current.defaultGatewayPort
+        try await self.withLaunchAgentEnvironment(port: port) {
+            let manager = GatewayProcessManager()
+            let appState = AppStateStore.shared
+            let priorPause = appState.isPaused
+            appState.isPaused = false
+            defer { appState.isPaused = priorPause }
+            manager.desiredActive = true
+            manager.handleChildEvent(.failed("passive child failure"), port: port)
+            let generation = manager.gatewayStartGeneration
+            manager.bundledUpdateTaskID = UUID()
+            manager.bundledUpdateTask = Task { @MainActor in
+                // This task can run only after the direct owner call below awaits its result.
+                manager.stop()
+                await manager.waitForStartupAttempt()
+                if newerPassiveTask {
+                    manager.bundledUpdateTaskID = UUID()
+                    manager.bundledUpdateTask = Task {
+                        .init(activation: .deferred, generation: manager.gatewayStartGeneration, source: .recovery)
+                    }
+                } else {
+                    manager.bundledUpdateTask = nil
+                    manager.bundledUpdateTaskID = nil
+                }
+                return .init(
+                    activation: .failed(reason: "passive child failure"),
+                    generation: generation,
+                    source: .recovery)
+            }
+            do {
+                _ = try await manager.prepareBundledRuntimeAfterUpdate(source: .request)
+                Issue.record("A queued Retry crossed newer Stop intent")
+            } catch {
+                #expect(error is CancellationError)
+            }
+            #expect(!manager.desiredActive)
+            #expect(manager.gatewayStartTask == nil)
+            #expect(!GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().contains { $0.first == "install" })
+            manager.bundledUpdateTask = nil
+            manager.bundledUpdateTaskID = nil
+        }
+    }
+
+    @Test func `runtime preparation refuses lost seeded ownership instead of reporting ready`() async throws {
+        try await self.withLaunchAgentEnvironment(port: AppProfile.current.defaultGatewayPort) {
+            let manager = GatewayProcessManager()
+            try #require(!manager.usesSeededGateway)
+            await #expect(throws: GatewayHostingError.self) {
+                try await manager.prepareBundledRuntimeAfterUpdate()
+            }
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+        }
+    }
+
+    @Test func `terminal child failure stays stopped until an explicit request`() async throws {
+        let port = AppProfile.current.defaultGatewayPort
+        try await self.withLaunchAgentEnvironment(port: port) {
+            let appState = AppStateStore.shared
+            let previousPause = appState.isPaused
+            let previousHosting = AppDefaults.standard.object(forKey: GatewayHosting.defaultsKey)
+            let manager = self.manager
+            appState.isPaused = false
+            manager.desiredActive = true
+            defer {
+                manager._testResetGatewayStartTask()
+                appState.isPaused = previousPause
+                AppDefaults.standard.set(previousHosting, forKey: GatewayHosting.defaultsKey)
+            }
+            let failure = "Gateway exited five times before becoming stable."
+
+            manager.hostingChangeInProgress = true
+            manager.handleChildEvent(.failed(failure), port: port)
+            #expect(!manager.desiredActive)
+            manager.setActive(true, source: .recovery)
+            #expect(!manager.desiredActive)
+            #expect(manager.status == .failed(failure))
+
+            manager.hostingChangeInProgress = false
+            manager.setActive(true, source: .request)
+            #expect(manager.desiredActive)
+            #expect(manager.status == .starting)
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+        }
+    }
+
+    private func availableGatewayPort() throws -> Int {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        defer { _ = Darwin.close(fd) }
+
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = 0
+        address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+        let bound = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { socketAddress in
+                Darwin.bind(fd, socketAddress, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        guard bound == 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+
+        var assigned = sockaddr_in()
+        var assignedLength = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let resolved = withUnsafeMutablePointer(to: &assigned) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { socketAddress in
+                getsockname(fd, socketAddress, &assignedLength)
+            }
+        }
+        guard resolved == 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        return Int(UInt16(bigEndian: assigned.sin_port))
+    }
+
     private func withGatewayConfig<T>(
         mode: String,
+        port: Int? = nil,
+        homeDirectory: URL? = nil,
         _ body: () async throws -> T) async throws -> T
     {
+        let isolatedHome = try homeDirectory ?? makeTempDirForTests()
+        defer {
+            if homeDirectory == nil { try? FileManager.default.removeItem(at: isolatedHome) }
+        }
         let configPath = TestIsolation.tempConfigPath()
-        try Data(#"{"gateway":{"mode":"\#(mode)"}}"#.utf8)
+        let portFragment = port.map { ",\"port\":\($0)" } ?? ""
+        let config = #"{"gateway":{"mode":"\#(mode)""# + portFragment + "}}"
+        try Data(config.utf8)
             .write(to: URL(fileURLWithPath: configPath))
         defer { try? FileManager.default.removeItem(atPath: configPath) }
-        return try await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": configPath], body)
+        let environment: [String: String?] = [
+            "OPENCLAW_CONFIG_PATH": configPath,
+            "OPENCLAW_GATEWAY_PORT": nil,
+        ]
+        return try await TestIsolation.withIsolatedState(
+            launchAgentHomeDirectory: isolatedHome,
+            env: environment)
+        {
+            // Service ownership reads must stay inside this fixture's home, even without an explicit plist.
+            try #require(LaunchAgentPlist.homeDirectoryURL.standardizedFileURL == isolatedHome
+                .standardizedFileURL)
+            return try await body()
+        }
     }
 
-    private func withLocalGatewayConfig<T>(
+    private func withLaunchAgentEnvironment<T>(
+        mode: String = "local",
+        port: Int? = nil,
+        homeDirectory: URL? = nil,
+        statusPayload: String? = #"{"ok":true,"service":{"loaded":false}}"#,
+        statusPayloads: [String]? = nil,
+        commandDelayNanoseconds: UInt64 = 0,
+        commandHook: (@Sendable ([String]) async -> Void)? = nil,
         _ body: () async throws -> T) async throws -> T
     {
-        try await self.withGatewayConfig(mode: "local", body)
-    }
-
-    @Test func `coalesces concurrent launch agent enable requests`() async throws {
-        let port = 19081
         let marker = FileManager.default.temporaryDirectory
             .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
-        try await self.withLocalGatewayConfig {
+        return try await self.withGatewayConfig(mode: mode, port: port, homeDirectory: homeDirectory) {
             GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
-            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
-            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
-                #"{"ok":true,"service":{"loaded":false}}"#)
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true) { arguments in
+                if commandDelayNanoseconds > 0 {
+                    try? await Task.sleep(nanoseconds: commandDelayNanoseconds)
+                }
+                await commandHook?(arguments)
+            }
+            if let statusPayloads {
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayloads(statusPayloads)
+            } else {
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(statusPayload)
+            }
             GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
             defer {
                 GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
                 GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
                 GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
                 GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+                self.manager.desiredActive = false
+                self.manager._testClearLaunchAgentReadinessFailure()
+                self.manager._testClearLaunchAgentInstallEvidence()
             }
+            return try await body()
+        }
+    }
 
-            let manager = GatewayProcessManager.shared
+    private func writeManagedLaunchAgent(port: Int = 29871) throws {
+        let runtime = AppProfile.current.stateDirectoryURL().appendingPathComponent("runtime/build-one")
+        let plist = GatewayLaunchAgentManager.plistURL(
+            homeDirectory: LaunchAgentPlist.homeDirectoryURL, profile: .current)
+        try FileManager.default.createDirectory(
+            at: plist.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let arguments = [
+            runtime.appendingPathComponent("bin/bun").path,
+            runtime.appendingPathComponent("lib/node_modules/openclaw/openclaw.mjs").path,
+            "gateway", "--port", String(port),
+        ]
+        try PropertyListSerialization.data(
+            fromPropertyList: ["ProgramArguments": arguments], format: .xml, options: 0).write(to: plist)
+    }
+
+    private func makeGatewayReadinessFixture(
+        url: URL,
+        clock: any Clock<Duration> = ContinuousClock(),
+        taskFactory: @escaping GatewayTestWebSocketSession.TaskFactory)
+        -> (session: GatewayTestWebSocketSession, connection: GatewayConnection, manager: GatewayProcessManager)
+    {
+        let session = GatewayTestWebSocketSession(taskFactory: taskFactory)
+        let connection = GatewayConnection(
+            configProvider: { (url: url, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+        // Keep fixture dependencies private for the manager's whole lifetime;
+        // late probe cleanup must not fall back to shared app services.
+        let manager = GatewayProcessManager(readinessClock: clock)
+        manager.setTestingConnection(connection)
+        manager.setTestingSkipControlChannelRefresh(true)
+        return (session, connection, manager)
+    }
+
+    private func gatewayDescriptor(
+        pid: Int32,
+        command: String = "openclaw-gateway",
+        executablePath: String = "/tmp/openclaw-gateway") -> PortGuardian.Descriptor
+    {
+        PortGuardian.Descriptor(pid: pid, command: command, executablePath: executablePath)
+    }
+
+    private func attachFailureReason(
+        errorProvider: @escaping @Sendable () async throws -> GatewayConnection.Config) async throws -> String
+    {
+        let port = try self.availableGatewayPort()
+        let connection = GatewayConnection(configProvider: errorProvider)
+        let manager = GatewayProcessManager()
+        manager.setTestingConnection(connection)
+        manager.setTestingSkipControlChannelRefresh(true)
+        let listener = self.gatewayDescriptor(pid: 4242)
+        await PortGuardian.shared.setTestingDescriptor(listener, forPort: port)
+
+        let attached = await manager._testAttachExistingGatewayIfAvailable(port: port)
+        manager.desiredActive = false
+        await connection.shutdown()
+        await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+
+        #expect(attached)
+        guard case let .failed(reason) = manager.status else {
+            Issue.record("expected attach failure")
+            return ""
+        }
+        return reason
+    }
+
+    private nonisolated func gatewayTask(
+        healthSucceedsAfter unavailableResponses: Int?,
+        stallsFirstHealthResponse: Bool = false,
+        healthResponseGates: [AsyncTestGate] = [],
+        firstHealthRequest: AsyncTestGate? = nil) -> GatewayTestWebSocketTask
+    {
+        let healthRequests = Mutex(0)
+        return GatewayTestWebSocketTask(
+            sendHook: { task, message, sendIndex in
+                guard sendIndex > 0 else { return }
+                guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
+                guard GatewayWebSocketTestSupport.requestMethod(from: message) == "health" else {
+                    task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+                    return
+                }
+                let healthIndex = healthRequests.withLock {
+                    $0 += 1
+                    return $0
+                }
+                if healthIndex == 1 { firstHealthRequest?.open() }
+                if healthResponseGates.indices.contains(healthIndex - 1) {
+                    await healthResponseGates[healthIndex - 1].wait()
+                }
+                if stallsFirstHealthResponse, healthIndex == 1 { return }
+                if unavailableResponses.map({ healthIndex <= $0 }) ?? true {
+                    let response = Data(
+                        """
+                        {"type":"res","id":"\(id)","ok":false,
+                         "error":{"code":"UNAVAILABLE","message":"gateway awaiting authorization"}}
+                        """.utf8)
+                    task.emitReceiveSuccess(.data(response))
+                    return
+                }
+                task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+            })
+    }
+
+    private func loadedGatewayStatus(
+        port: Int,
+        pid: Int32 = 4242,
+        configAudit: String = #"{"ok":true,"issues":[]}"#) -> String
+    {
+        """
+        {"ok":true,"service":{
+          "loaded":true,
+          "runtime":{"status":"running","pid":\(pid)},
+          "command":{"programArguments":["openclaw","gateway","--port","\(port)"]},
+          "configAudit":\(configAudit)
+        }}
+        """
+    }
+
+    private func waitForCondition(
+        attempts: Int = 100,
+        _ condition: () -> Bool) async
+    {
+        for _ in 0..<attempts {
+            if condition() { break }
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+    }
+
+    @Test(arguments: [false, true], ["exact", "unset", "beta", "dev"])
+    func `published paused Node install retains service hosting without daemon work`(
+        packageOnly: Bool, policy: String) async throws
+    {
+        try await self.withLaunchAgentEnvironment {
+            let defaults = AppDefaults.standard
+            let keys = [
+                onboardingSeenKey,
+                pauseDefaultsKey,
+                cliInstallPolicyKey,
+                GatewayHosting.defaultsKey,
+                GatewayLaunchAgentManager.resumeCommandKey,
+            ]
+            let saved = keys.map { ($0, defaults.object(forKey: $0)) }
+            defer {
+                for (key, value) in saved {
+                    if let value { defaults.set(value, forKey: key) } else { defaults.removeObject(forKey: key) }
+                }
+            }
+            defaults.set(true, forKey: onboardingSeenKey)
+            defaults.set(true, forKey: pauseDefaultsKey)
+            for key in [cliInstallPolicyKey, GatewayHosting.defaultsKey, GatewayLaunchAgentManager.resumeCommandKey] {
+                defaults.removeObject(forKey: key)
+            }
+            if policy != "unset" { defaults.set(policy, forKey: cliInstallPolicyKey) }
+            let managed = ["exact", "unset"].contains(policy)
+            let (state, node, entry, wrapper) = try self.makeLegacyNodeInstall(packageOnly: packageOnly)
+            let manager = GatewayProcessManager()
+            if !BundledRuntime.isBundledApp {
+                try manager.initializeGatewayHosting()
+                #expect(defaults.object(forKey: GatewayHosting.defaultsKey) == nil)
+                defaults.set(false, forKey: pauseDefaultsKey)
+                #expect(try manager.serviceCLIForResume() == nil)
+                return
+            }
+            let appState = AppStateStore.shared
+            let previousMode = appState.connectionMode
+            appState.connectionMode = .local
+            defer { appState.connectionMode = previousMode }
+            manager.stop()
+            await manager.waitForStartupAttempt()
+            #expect(defaults.string(forKey: GatewayHosting.defaultsKey) == (managed ? "service" : nil))
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+            #expect(manager.installation == (managed ? .managed : .external))
+            #expect(defaults.object(forKey: GatewayLaunchAgentManager.resumeCommandKey) == nil)
+            #expect(manager.retainedServiceCLI == nil)
+            #expect(!FileManager.default.fileExists(atPath: state.appendingPathComponent("runtime").path))
+            #expect(try manager.serviceCLIForResume() == nil)
+            try #require(appState.connectionMode == .local)
+            #expect(try manager.shouldDeferLegacyServiceWhilePaused() == managed)
+            #expect(!manager.keepGatewayRunningAvailable)
+            defaults.set(false, forKey: pauseDefaultsKey)
+            let resumed = GatewayProcessManager()
+            if managed {
+                let cli = try #require(try resumed.serviceCLIForResume())
+                let expectedPrefix = [node, entry].map { $0.resolvingSymlinksInPath().path }
+                #expect(cli.prefix == expectedPrefix)
+                #expect(!cli.hadRuntimePin)
+                #expect(await resumed._testEnableLaunchAgentIfNeededInstalled(port: 29871))
+                let install = try #require(GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot()
+                    .first { $0.contains("install") })
+                #expect(Array(install.prefix(2)) == expectedPrefix)
+                #expect(!install.contains("bun"))
+                defaults.removeObject(forKey: GatewayLaunchAgentManager.resumeCommandKey)
+                defaults.removeObject(forKey: GatewayHosting.defaultsKey)
+                let plist = GatewayLaunchAgentManager.plistURL(
+                    homeDirectory: LaunchAgentPlist.homeDirectoryURL, profile: .current)
+                try FileManager.default.createDirectory(
+                    at: plist.deletingLastPathComponent(),
+                    withIntermediateDirectories: true)
+                try PropertyListSerialization.data(fromPropertyList: [
+                    "ProgramArguments": [node.path, entry.path, "gateway", "--port", "29871"],
+                ], format: .xml, options: 0).write(to: plist)
+                let registered = GatewayProcessManager()
+                try registered.initializeGatewayHosting()
+                #expect(defaults.string(forKey: GatewayHosting.defaultsKey) == "service")
+                try FileManager.default.removeItem(at: plist)
+            } else {
+                #expect(try resumed.serviceCLIForResume() == nil)
+            }
+            defaults.removeObject(forKey: GatewayLaunchAgentManager.resumeCommandKey)
+            defaults.removeObject(forKey: GatewayHosting.defaultsKey)
+            try Data("#!/bin/sh\nexec /operator/openclaw \"$@\"\n".utf8).write(to: wrapper)
+            let external = GatewayProcessManager()
+            try external.initializeGatewayHosting()
+            #expect(external.installation == .external)
+            #expect(defaults.object(forKey: GatewayHosting.defaultsKey) == nil)
+            #expect(try external.serviceCLIForResume() == nil)
+        }
+    }
+
+    private func makeLegacyNodeInstall(packageOnly: Bool = false) throws -> (URL, URL, URL, URL) {
+        let state = AppProfile.current.stateDirectoryURL(homeDirectory: LaunchAgentPlist.homeDirectoryURL)
+        setenv("OPENCLAW_STATE_DIR", state.path, 1)
+        let node = state.appendingPathComponent("tools/node/bin/node")
+        let package = state.appendingPathComponent("tools/node/lib/node_modules/openclaw")
+        let entry = package.appendingPathComponent("dist/entry.js")
+        let wrapper = state.appendingPathComponent("bin/openclaw")
+        for directory in [
+            node.deletingLastPathComponent(),
+            entry.deletingLastPathComponent(),
+            wrapper.deletingLastPathComponent(),
+        ] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        try Data("#!/bin/sh\nexit 91\n".utf8).write(to: node)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: node.path)
+        try Data("// legacy package fixture\n".utf8).write(to: entry)
+        try Data(#"{"name":"openclaw","version":"2026.9.7"}"#.utf8)
+            .write(to: package.appendingPathComponent("package.json"))
+        if !packageOnly {
+            try Data(("#!/usr/bin/env bash\nset -euo pipefail\nexec \"" + node.path + "\" \"" + entry
+                    .path + "\" \"$@\"\n").utf8)
+                .write(to: wrapper)
+        }
+        return (state, node, entry, wrapper)
+    }
+
+    @Test(arguments: ["operator-wrapper", "runtime-alias"])
+    func `legacy resume rejects changed file authority during status inspection`(_ change: String) async throws {
+        guard BundledRuntime.isBundledApp else { return }
+        let port = AppProfile.current.defaultGatewayPort
+        try await self.withLaunchAgentEnvironment(port: port) {
+            let defaults = AppDefaults.standard
+            let keys = [
+                onboardingSeenKey,
+                pauseDefaultsKey,
+                cliInstallPolicyKey,
+                GatewayHosting.defaultsKey,
+                GatewayLaunchAgentManager.resumeCommandKey,
+            ]
+            let saved = keys.map { ($0, defaults.object(forKey: $0)) }
+            defer {
+                for (key, value) in saved {
+                    if let value { defaults.set(value, forKey: key) } else { defaults.removeObject(forKey: key) }
+                }
+            }
+            defaults.set(true, forKey: onboardingSeenKey)
+            defaults.set(false, forKey: pauseDefaultsKey)
+            defaults.set("exact", forKey: cliInstallPolicyKey)
+            defaults.removeObject(forKey: GatewayHosting.defaultsKey)
+            defaults.removeObject(forKey: GatewayLaunchAgentManager.resumeCommandKey)
+            let (state, _, _, wrapper) = try self.makeLegacyNodeInstall(packageOnly: change == "runtime-alias")
+            let alias = state.appendingPathComponent("tools/node")
+            if change == "runtime-alias" {
+                let original = state.appendingPathComponent("tools/node-v26.1.0")
+                try FileManager.default.moveItem(at: alias, to: original)
+                try FileManager.default.copyItem(at: original, to: state.appendingPathComponent("tools/node-v26.2.0"))
+                try FileManager.default.createSymbolicLink(atPath: alias.path, withDestinationPath: "node-v26.1.0")
+            }
+            let inferred = try #require(try GatewayProcessManager().serviceCLIForResume())
+            // Inferred authority must remain distinguishable after an app relaunch.
+            let persisted = try GatewayLaunchAgentManager.resumeData(for: inferred)
+            let manager = GatewayProcessManager()
+            manager.retainedServiceCLI = try GatewayLaunchAgentManager.resumeCLI(from: persisted, stateDirectory: state)
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true, beforeReturning: { arguments in
+                if arguments.first == "status" {
+                    do {
+                        if change == "runtime-alias" {
+                            try FileManager.default.removeItem(at: alias)
+                            try FileManager.default.createSymbolicLink(
+                                atPath: alias.path,
+                                withDestinationPath: "node-v26.2.0")
+                        } else {
+                            try Data("#!/bin/sh\nexec /operator/openclaw \"$@\"\n".utf8).write(to: wrapper)
+                        }
+                    } catch { Issue.record(error) }
+                }
+            })
+            let error = await manager._testEnableLaunchAgentIfNeeded(port: port)
+            #expect(error?.contains("legacy Gateway installation changed") == true)
+            #expect(!GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().contains { $0.first == "install" })
+            if change == "runtime-alias" {
+                #expect(try FileManager.default.destinationOfSymbolicLink(atPath: alias.path) == "node-v26.2.0")
+            } else {
+                #expect(try String(contentsOf: wrapper, encoding: .utf8).contains("/operator/openclaw"))
+            }
+        }
+    }
+
+    @Test(arguments: ["outside-entrypoint", "unsupported-command", "malformed-plist", "absent"])
+    func `pause preserves unretainable services and distinguishes absence`(_ definition: String) async throws {
+        try await self.withLaunchAgentEnvironment(port: AppProfile.current.defaultGatewayPort) {
+            let manager = self.manager
+            let state = AppProfile.current.stateDirectoryURL()
+            let priorHosting = AppDefaults.standard.object(forKey: GatewayHosting.defaultsKey)
+            AppDefaults.standard.set(GatewayHosting.service.rawValue, forKey: GatewayHosting.defaultsKey)
+            defer {
+                manager.retainedServiceCLI = nil
+                AppDefaults.standard.set(priorHosting, forKey: GatewayHosting.defaultsKey)
+            }
+            let plist = GatewayLaunchAgentManager.plistURL(
+                homeDirectory: LaunchAgentPlist.homeDirectoryURL, profile: .current)
+            try FileManager.default.createDirectory(
+                at: plist.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            let prefix = definition == "unsupported-command"
+                ? [state.appendingPathComponent("bin/openclaw").path]
+                : [
+                    state.appendingPathComponent("tools/node-version/bin/node").path,
+                    LaunchAgentPlist.homeDirectoryURL.appendingPathComponent("outside-package/openclaw.mjs").path,
+                ]
+            let original = try definition == "malformed-plist" ? Data("invalid plist".utf8) :
+                PropertyListSerialization.data(fromPropertyList: [
+                    "ProgramArguments": prefix + ["gateway", "--port", String(AppProfile.current.defaultGatewayPort)],
+                ], format: .xml, options: 0)
+            if definition != "absent" { try original.write(to: plist) }
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true, beforeReturning: { arguments in
+                if arguments.first == "uninstall" { try? FileManager.default.removeItem(at: plist) }
+            })
+
+            manager.stop()
+            await manager.waitForStartupAttempt()
+
+            if definition == "absent" {
+                #expect(manager.status == .stopped)
+                #expect(!GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                    .contains { $0.first == "uninstall" })
+                #expect(AppDefaults.standard.object(forKey: GatewayLaunchAgentManager.resumeCommandKey) == nil)
+                return
+            }
+            #expect((try? Data(contentsOf: plist)) == original)
+            #expect(!GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().contains { $0.first == "uninstall" })
+            #expect(AppDefaults.standard.object(forKey: GatewayLaunchAgentManager.resumeCommandKey) == nil)
+            guard case .failed = manager.status else { Issue.record("Pause must explain why the service was preserved")
+                return
+            }
+        }
+    }
+
+    @Test(
+        arguments: [false, true],
+        ["managed-node", "pinned-managed-node", "operator-node", "operator-bun", "seeded-bun"])
+    func `pausing an app managed service preserves its runtime through resume and relaunch`(
+        relaunch: Bool,
+        runtimeLocation: String) async throws
+    {
+        try await self.withLaunchAgentEnvironment {
+            let manager = self.manager
+            defer { manager.retainedServiceCLI = nil }
+            let state = AppProfile.current.stateDirectoryURL()
+            // This fixture models the app's fixed profile state; the enclosing isolation restores the env.
+            setenv("OPENCLAW_STATE_DIR", state.path, 1)
+            let executable = switch runtimeLocation {
+            case "managed-node", "pinned-managed-node": state.appendingPathComponent("tools/node/bin/node").path
+            case "operator-node": "/operator/node"
+            case "operator-bun": "/operator/bun"
+            default: state.appendingPathComponent("runtime/build-one/bin/bun").path
+            }
+            let package = runtimeLocation.hasSuffix("bun")
+                ? "runtime/build-one/lib/node_modules/openclaw/openclaw.mjs"
+                : "lib/node_modules/openclaw/openclaw.mjs"
+            let prefix = [executable, state.appendingPathComponent(package).path]
+            let databaseURL = state.appendingPathComponent("state/openclaw.sqlite")
+            let hadRuntimePin = runtimeLocation == "pinned-managed-node"
+            if hadRuntimePin {
+                try Self.writeRuntimePinFixture(
+                    databaseURL: databaseURL,
+                    key: GatewayLaunchAgentManager.runtimePinKey(
+                        profile: .current, configPath: state.appendingPathComponent("openclaw.json").path),
+                    executable: executable)
+            }
+            defer {
+                if hadRuntimePin {
+                    for path in [databaseURL.path, databaseURL.path + "-wal", databaseURL.path + "-shm"] {
+                        try? FileManager.default.removeItem(atPath: path)
+                    }
+                }
+            }
+            let sqlite = state.appendingPathComponent("tools/sqlite/libsqlite3.dylib").path
+            let artifacts = GatewayLaunchAgentManager.generatedEnvironmentArtifacts(
+                directory: state.appendingPathComponent("service-env"), profile: .current)
+            try FileManager.default.createDirectory(
+                at: artifacts.environment.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            try Data("#!/bin/sh\nexec \"$@\"\n".utf8).write(to: artifacts.wrapper)
+            try Data(("export CHANNEL_FIXTURE='synthetic'\nexport OPENCLAW_SQLITE_LIBRARY='" + sqlite + "'\n").utf8)
+                .write(to: artifacts.environment)
+            let plist = GatewayLaunchAgentManager.plistURL(
+                homeDirectory: LaunchAgentPlist.homeDirectoryURL,
+                profile: .current)
+            try FileManager.default.createDirectory(
+                at: plist.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            try PropertyListSerialization.data(fromPropertyList: [
+                "ProgramArguments": ["/bin/sh", artifacts.wrapper.path, artifacts.environment.path] + prefix + [
+                    "gateway",
+                    "--port",
+                    "29871",
+                ],
+            ], format: .xml, options: 0).write(to: plist)
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true, beforeReturning: { arguments in
+                if arguments.first == "uninstall" {
+                    try? FileManager.default.removeItem(at: plist)
+                    if hadRuntimePin {
+                        let database = try? OpenClawNativeStateSQLite(databaseURL: databaseURL, createIfMissing: false)
+                        try? database?.execute("DELETE FROM config_machine_state")
+                    }
+                }
+            })
+            manager.stop()
+            await manager.waitForStartupAttempt()
+            #expect(!FileManager.default.fileExists(atPath: plist.path))
+            #expect(try await !GatewayLaunchAgentManager.hasRuntimePin(stateDirectory: state, profile: .current))
+            let receipt = try #require(AppDefaults.standard.data(forKey: GatewayLaunchAgentManager.resumeCommandKey))
+            #expect(!String(decoding: receipt, as: UTF8.self).contains("synthetic"))
+            let resumed = relaunch ? GatewayProcessManager() : manager
+            #expect(await resumed._testEnableLaunchAgentIfNeededInstalled(port: 29871))
+            #expect(resumed.gatewayHosting == .service)
+            #expect(resumed.retainedServiceCLI?.environment["CHANNEL_FIXTURE"] == "synthetic")
+            #expect(resumed.retainedServiceCLI?.sqliteLibrary == sqlite)
+            #expect(resumed.retainedServiceCLI?.hadRuntimePin == hadRuntimePin)
+            let calls = GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot()
+            let install = try #require(calls.first { $0.contains("install") })
+            #expect(Array(install.prefix(2)) == prefix)
+            let runtime = try #require(install.firstIndex(of: "--runtime"))
+            #expect(install[runtime + 1] == URL(fileURLWithPath: executable).lastPathComponent)
+            if runtimeLocation == "managed-node" {
+                #expect(!install.contains("--runtime-path"))
+            } else {
+                let runtimePath = try #require(install.firstIndex(of: "--runtime-path"))
+                #expect(install[runtimePath + 1] == executable)
+            }
+            #expect(GatewayLaunchAgentManager.isManagedNode(executable, stateDirectory: state)
+                == ["managed-node", "pinned-managed-node"].contains(runtimeLocation))
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func `paused bundled update refreshes resume paths and preserves operator runtimes`(
+        operatorRuntime: Bool) async throws
+    {
+        try await self.withLaunchAgentEnvironment {
+            let state = AppProfile.current.stateDirectoryURL()
+            setenv("OPENCLAW_STATE_DIR", state.path, 1)
+            defer { AppDefaults.standard.removeObject(forKey: GatewayLaunchAgentManager.resumeCommandKey) }
+            let old = BundledRuntime(root: state.appendingPathComponent("runtime/previous-build"))
+            let replacement = BundledRuntime(root: state.appendingPathComponent("runtime/new-build"))
+            let original = GatewayLaunchAgentManager.InstalledServiceCLI(
+                prefix: [operatorRuntime ? "/operator/bun" : old.bun.path, old.cliCommand[1]],
+                sqliteLibrary: old.sqliteLibrary.path,
+                environment: ["FIXTURE_SERVICE": "retained", "OPENCLAW_SQLITE_LIBRARY": old.sqliteLibrary.path],
+                usesGeneratedEnvironment: true,
+                hadRuntimePin: true)
+            let artifacts = GatewayLaunchAgentManager.generatedEnvironmentArtifacts(
+                directory: state.appendingPathComponent("service-env"), profile: .current)
+            try FileManager.default.createDirectory(
+                at: artifacts.environment.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            try Data("#!/bin/sh\n".utf8).write(to: artifacts.wrapper)
+            try Data(("export FIXTURE_SERVICE='retained'\nexport OPENCLAW_SQLITE_LIBRARY='" + old.sqliteLibrary
+                    .path + "'\n").utf8)
+                .write(to: artifacts.environment)
+            try AppDefaults.standard.set(
+                GatewayLaunchAgentManager.resumeData(for: original),
+                forKey: GatewayLaunchAgentManager.resumeCommandKey)
+            let manager = GatewayProcessManager()
+            #expect(manager.retainedServiceCLI == nil)
+            let update = try #require(try manager.preparePausedServiceUpdate())
+            #expect(GatewayHosting.usesSeededGateway(
+                hasService: false, installedCLI: nil, hasCurrentSeed: true, stateDirectory: state,
+                hasRetainedService: true, retainedCLI: manager.retainedServiceCLI))
+            if operatorRuntime {
+                do {
+                    try await manager.completePausedServiceUpdate(update, runtime: replacement, checkCurrent: {})
+                    Issue.record("Expected the operator runtime warning")
+                } catch {
+                    #expect(error
+                        .localizedDescription == "Gateway service uses an operator-pinned runtime; update it yourself")
+                }
+                #expect(AppDefaults.standard.data(forKey: GatewayLaunchAgentManager.resumeCommandKey) == update.record)
+            } else {
+                try await manager.completePausedServiceUpdate(update, runtime: replacement, checkCurrent: {})
+                #expect(manager.retainedServiceCLI?.environment["FIXTURE_SERVICE"] == "retained")
+                #expect(manager.retainedServiceCLI?.usesGeneratedEnvironment == true)
+                #expect(manager.retainedServiceCLI?.hadRuntimePin == true)
+            }
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+            let resumed = GatewayProcessManager()
+            #expect(await resumed._testEnableLaunchAgentIfNeededInstalled(port: 29871))
+            let command = try #require(GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot()
+                .first { $0.contains("install") })
+            let expected = operatorRuntime ? original : GatewayLaunchAgentManager.InstalledServiceCLI(
+                prefix: replacement.cliCommand, sqliteLibrary: replacement.sqliteLibrary.path)
+            #expect(Array(command.prefix(2)) == expected.prefix)
+            #expect(resumed.retainedServiceCLI?.sqliteLibrary == expected.sqliteLibrary)
+            #expect(resumed.retainedServiceCLI?.environment["OPENCLAW_SQLITE_LIBRARY"] == expected.sqliteLibrary)
+        }
+    }
+
+    private static func writeRuntimePinFixture(databaseURL: URL, key: String, executable: String) throws {
+        let database = try OpenClawNativeStateSQLite(databaseURL: databaseURL)
+        try database.execute("""
+        PRAGMA user_version = 1;
+        CREATE TABLE schema_meta (meta_key TEXT PRIMARY KEY, role TEXT, schema_version INTEGER);
+        INSERT INTO schema_meta VALUES ('primary', 'global', 1);
+        CREATE TABLE config_machine_state (state_key TEXT PRIMARY KEY, value_json TEXT, updated_at_ms INTEGER);
+        """)
+        let value = try JSONSerialization.data(withJSONObject: [
+            "version": 1, "pin": ["runtime": "node", "path": executable], "definition": "fixture",
+        ])
+        let insert = try database.prepare("INSERT INTO config_machine_state VALUES (?, ?, 1)")
+        try insert.bindText(key, at: 1)
+        try insert.bindText(String(decoding: value, as: UTF8.self), at: 2)
+        _ = try insert.step()
+    }
+
+    @Test func `invalid retained service command prevents a missing service Bun install`() async throws {
+        try await self.withLaunchAgentEnvironment {
+            defer { AppDefaults.standard.removeObject(forKey: GatewayLaunchAgentManager.resumeCommandKey) }
+            let data = try JSONSerialization.data(withJSONObject: ["prefix": [
+                "/operator/node",
+                "/operator/openclaw.mjs",
+            ]])
+            AppDefaults.standard.set(data, forKey: GatewayLaunchAgentManager.resumeCommandKey)
+            let error = await self.manager._testEnableLaunchAgentIfNeeded(port: 29871)
+            #expect(error?.contains("retained Gateway command is invalid") == true)
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+        }
+    }
+
+    @Test func `coalesces concurrent launch agent enable requests`() async throws {
+        let port = 19081
+        try await self.withLaunchAgentEnvironment(
+            statusPayload: #"{"ok":true,"service":{"loaded":false}}"#)
+        {
+            let manager = self.manager
             async let first: String? = manager._testEnableLaunchAgentIfNeeded(
-                bundlePath: "/Applications/OpenClaw.app",
                 port: port)
             async let second: String? = manager._testEnableLaunchAgentIfNeeded(
-                bundlePath: "/Applications/OpenClaw.app",
                 port: port)
             _ = await (first, second)
 
@@ -55,43 +1066,543 @@ struct GatewayProcessManagerTests {
         }
     }
 
+    @Test func `pause clears migration failure and resumes through the retained Node install`() async throws {
+        try await self.withLaunchAgentEnvironment {
+            let manager = self.manager
+            let prefix = ["/fixture/tools/node/bin/node", "/fixture/lib/node_modules/openclaw/openclaw.mjs"]
+            manager.retainedServiceCLI = .init(prefix: prefix, sqliteLibrary: nil)
+            defer { manager.retainedServiceCLI = nil }
+            manager.nodeMigrationFailure = "The core version update is offline."
+            manager.desiredActive = true
+            manager.stop()
+            manager.desiredActive = true
+            #expect(manager.nodeMigrationFailure == nil)
+            #expect(await manager._testEnableLaunchAgentIfNeededInstalled(port: 29871))
+            let installs = GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot()
+                .filter { $0.contains("install") }
+            #expect(installs.count == 1)
+            #expect(installs.first?.prefix(prefix.count) == prefix[...])
+        }
+    }
+
+    @Test func `pause drains an owned child when a managed service appeared after startup`() async throws {
+        let root = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try await self.withLaunchAgentEnvironment(homeDirectory: root) {
+            let manager = self.manager
+            defer { manager.retainedServiceCLI = nil }
+            try "trap 'exit 0' TERM\nIFS= read -r value\n".write(
+                to: root.appendingPathComponent("openclaw.mjs"), atomically: true, encoding: .utf8)
+            let pid = try await manager.childSupervisor.start(configuration: .init(
+                bun: URL(fileURLWithPath: "/bin/sh"),
+                packageRoot: root,
+                environment: [:],
+                logPath: root.appendingPathComponent("gateway.log").path,
+                port: 29871,
+                allowUnconfigured: false), onEvent: { _ in })
+            do {
+                let runtime = AppProfile.current.stateDirectoryURL().appendingPathComponent("runtime/build-one")
+                let plist = GatewayLaunchAgentManager.plistURL(homeDirectory: root, profile: .current)
+                try FileManager.default.createDirectory(
+                    at: plist.deletingLastPathComponent(), withIntermediateDirectories: true)
+                let arguments = [
+                    runtime.appendingPathComponent("bin/bun").path,
+                    runtime.appendingPathComponent("lib/node_modules/openclaw/openclaw.mjs").path,
+                    "gateway", "--port", "29871",
+                ]
+                try PropertyListSerialization.data(
+                    fromPropertyList: ["ProgramArguments": arguments], format: .xml, options: 0).write(to: plist)
+                try #require(manager.gatewayHosting == .service)
+                try #require(manager.childSupervisor.isActive)
+
+                manager.stop()
+                await manager.waitForStartupAttempt()
+
+                #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().contains(["uninstall"]))
+                #expect(!manager.childSupervisor.isActive)
+                #expect(kill(pid, 0) == -1 && errno == ESRCH)
+            } catch {
+                await manager.childSupervisor.stop()
+                throw error
+            }
+            await manager.childSupervisor.stop()
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func `app hosting refuses settings that cannot survive relaunch before changing the service`(
+        generatedEnvironment: Bool) async throws
+    {
+        guard BundledRuntime.isBundledApp else { return }
+        let port = AppProfile.current.defaultGatewayPort
+        try await self.withLaunchAgentEnvironment(port: port) {
+            let appState = AppStateStore.shared
+            let previousMode = appState.connectionMode
+            appState.connectionMode = .local
+            defer { appState.connectionMode = previousMode }
+            let state = AppProfile.current.stateDirectoryURL()
+            setenv("OPENCLAW_STATE_DIR", state.path, 1)
+            let serviceEnvironment = state.appendingPathComponent("service-env")
+            try #require(!FileManager.default.fileExists(atPath: serviceEnvironment.path))
+            defer { try? FileManager.default.removeItem(at: serviceEnvironment) }
+            let runtime = BundledRuntime(root: state.appendingPathComponent("runtime/installed"))
+            let plist = GatewayLaunchAgentManager.plistURL(
+                homeDirectory: LaunchAgentPlist.homeDirectoryURL, profile: .current)
+            try FileManager.default.createDirectory(
+                at: plist.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            var arguments = runtime.cliCommand + ["gateway", "--port", String(port)]
+            if generatedEnvironment {
+                let artifacts = GatewayLaunchAgentManager.generatedEnvironmentArtifacts(
+                    directory: state.appendingPathComponent("service-env"), profile: .current)
+                try FileManager.default.createDirectory(
+                    at: artifacts.wrapper.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try Data("#!/bin/sh\n".utf8).write(to: artifacts.wrapper)
+                try Data("export DURABLE_FIXTURE='durable'\n".utf8).write(to: artifacts.environment)
+                arguments = ["/bin/sh", artifacts.wrapper.path, artifacts.environment.path] + arguments
+            }
+            let definition = try PropertyListSerialization.data(fromPropertyList: [
+                "ProgramArguments": arguments,
+                "EnvironmentVariables": ["INLINE_FIXTURE": "must-survive-relaunch"],
+            ], format: .xml, options: 0)
+            try definition.write(to: plist)
+            let manager = GatewayProcessManager()
+            try #require(manager.keepGatewayRunningAvailable)
+            do {
+                try await manager.setKeepGatewayRunning(false)
+                Issue.record("loss-prone hosting change was accepted")
+            } catch {
+                #expect(error.localizedDescription.contains("Gateway settings exist only in its service definition"))
+                #expect(error.localizedDescription.contains("openclaw gateway install --force"))
+            }
+            #expect(manager.gatewayHosting == .service)
+            #expect(try Data(contentsOf: plist) == definition)
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+            #expect(!FileManager.default.fileExists(atPath: state.appendingPathComponent("runtime").path))
+        }
+    }
+
+    @Test func `hosting request retired during prior work dispatches no daemon command`() async throws {
+        let requested = AsyncTestGate()
+        let finishUpdate = AsyncTestGate()
+        defer { finishUpdate.open() }
+        try await self.withLaunchAgentEnvironment {
+            let manager = GatewayProcessManager()
+            manager.bundledUpdateTask = Task {
+                await finishUpdate.wait()
+                return .init(activation: .ready, generation: manager.gatewayStartGeneration, source: .request)
+            }
+            var authorized = true
+            let request = Task {
+                try await manager.setKeepGatewayRunning(true) {
+                    requested.open()
+                    return authorized
+                }
+            }
+            await requested.wait()
+            authorized = false
+            finishUpdate.open()
+            await #expect(throws: CancellationError.self) { try await request.value }
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+            #expect(manager.hostingChangeTask == nil)
+            manager.bundledUpdateTask = nil
+        }
+    }
+
+    @Test func `hosting changes retain resume intent across failed service removal`() async throws {
+        try await self.withLaunchAgentEnvironment(
+            statusPayload: #"{"ok":false,"message":"fixture uninstall failed"}"#)
+        {
+            let previousHosting = AppDefaults.standard.object(forKey: GatewayHosting.defaultsKey)
+            AppDefaults.standard.set(GatewayHosting.service.rawValue, forKey: GatewayHosting.defaultsKey)
+            defer { AppDefaults.standard.set(previousHosting, forKey: GatewayHosting.defaultsKey) }
+            let manager = self.manager
+            try self.writeManagedLaunchAgent()
+            defer { manager.retainedServiceCLI = nil }
+            manager.hostingChangeInProgress = true
+            defer { manager.hostingChangeInProgress = false }
+            manager.desiredActive = false
+            manager.setActive(true)
+            #expect(manager.desiredActive)
+            #expect(manager.status != .starting)
+
+            manager.stop(preservingActivationIntent: true)
+            await manager.waitForStartupAttempt()
+            #expect(manager.desiredActive)
+            #expect(manager.lastFailureReason == "fixture uninstall failed")
+
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(#"{"ok":true}"#)
+            manager.stop(preservingActivationIntent: true)
+            await manager.waitForStartupAttempt()
+            #expect(manager.desiredActive)
+            #expect(manager.lastFailureReason == nil)
+            manager.setActive(false)
+            await manager.waitForStartupAttempt()
+            #expect(!manager.desiredActive)
+        }
+    }
+
+    @Test func `hosting stop rechecks custody after asynchronous CLI resolution`() async throws {
+        let resolving = AsyncTestGate()
+        let finishResolution = AsyncTestGate()
+        defer { finishResolution.open() }
+        try await self.withLaunchAgentEnvironment {
+            try self.writeManagedLaunchAgent()
+            defer { self.manager.retainedServiceCLI = nil }
+            let defaults = AppDefaults.standard
+            let previousHosting = defaults.object(forKey: GatewayHosting.defaultsKey)
+            defaults.set(GatewayHosting.service.rawValue, forKey: GatewayHosting.defaultsKey)
+            defer {
+                if let previousHosting {
+                    defaults.set(previousHosting, forKey: GatewayHosting.defaultsKey)
+                } else {
+                    defaults.removeObject(forKey: GatewayHosting.defaultsKey)
+                }
+            }
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true, resolveCLI: { _, _ in
+                resolving.open()
+                await finishResolution.wait()
+                return .executable(["openclaw"])
+            })
+            let manager = self.manager
+            manager.desiredActive = true
+            var current = true
+            manager.stop(preservingActivationIntent: true, mutationCheck: {
+                guard current else { throw GatewayHostingError(message: "operator changed the service") }
+            })
+            await resolving.wait()
+            current = false
+            finishResolution.open()
+            await manager.waitForPendingLaunchAgentDisable()
+            #expect(manager.lastFailureReason == "operator changed the service")
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+        }
+    }
+
+    @Test func `hosting stop rechecks custody after waiting for admitted service work`() async throws {
+        let enteredDrain = AsyncTestGate()
+        let finishDrain = AsyncTestGate()
+        defer { finishDrain.open() }
+        try await self.withLaunchAgentEnvironment {
+            let manager = self.manager
+            manager.desiredActive = true
+            var current = true
+            manager.launchAgentEnableTask = Task {
+                enteredDrain.open()
+                await finishDrain.wait()
+                return [:]
+            }
+            manager.stop(preservingActivationIntent: true, mutationCheck: {
+                guard current else { throw GatewayHostingError(message: "operator changed the service") }
+            })
+            await enteredDrain.wait()
+            current = false
+            finishDrain.open()
+            await manager.waitForPendingLaunchAgentDisable()
+            manager.launchAgentEnableTask = nil
+            #expect(manager.lastFailureReason == "operator changed the service")
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+        }
+    }
+
+    @Test(arguments: ["healthy", "operator-replacement", "install-failure"])
+    func `terminal child failure permits captured service rollback without reviving failed recovery`(
+        outcome: String) async throws
+    {
+        let port = AppProfile.current.defaultGatewayPort
+        try await self.withLaunchAgentEnvironment(port: port, statusPayload: """
+        {"ok":true,"service":{"runtimeIntent":{"status":"known","revision":"before-restore"}}}
+        """, commandHook: { args in
+            if args.first == "status", outcome == "install-failure" {
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(#"{"ok":false,"message":"install failed"}"#)
+            }
+        }) {
+            let manager = self.manager
+            let appState = AppStateStore.shared
+            let previousPause = appState.isPaused
+            appState.isPaused = false
+            defer { appState.isPaused = previousPause }
+            manager.desiredActive = true
+            let generation = manager.gatewayStartGeneration
+            let authority = try GatewayLaunchAgentManager.gatewayServiceAuthority()
+            manager.handleChildEvent(.failed("replacement child exhausted its restart budget"), port: port)
+            #expect(!manager.desiredActive)
+            let rearmed = try manager.prepareHostingRecoveryActivation(generation: generation, restoring: .service)
+            #expect(manager.desiredActive)
+            if outcome == "operator-replacement" {
+                try FileManager.default.createDirectory(
+                    at: authority.plist.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try Data("operator-owned replacement".utf8).write(to: authority.plist)
+            }
+            let bun = "/fixture/runtime/previous-build/bin/bun"
+            let entrypoint = "/fixture/runtime/previous-build/lib/node_modules/openclaw/dist/index.js"
+            let cli = GatewayLaunchAgentManager.InstalledServiceCLI(
+                prefix: [bun, entrypoint], sqliteLibrary: "/fixture/runtime/previous-build/lib/libsqlite3.dylib",
+                environment: ["CHANNEL_FIXTURE": "synthetic"])
+            let installer = BundledRuntime(root: URL(fileURLWithPath: "/fixture/runtime/current-build"))
+            var checked = false
+            let result = await manager.enableLaunchAgentIfNeeded(
+                port: port,
+                serviceForRestoration: .init(retained: cli, installer: installer),
+                expectedServiceAuthority: authority,
+                mutationCheck: { checked = true })
+            let recoveryFailure = result.installed ? nil : "Child failed. Previous Gateway recovery: " +
+                (result.error ?? "service unavailable")
+            manager.finishHostingRecoveryActivation(
+                rearmed, generation: generation, healthy: result.installed, failure: recoveryFailure)
+            if let recoveryFailure {
+                #expect(manager.status == .failed(recoveryFailure))
+                #expect(manager.lastFailureReason == recoveryFailure)
+            }
+            #expect(result.installed == (outcome == "healthy"))
+            #expect(manager.desiredActive == (outcome == "healthy"))
+            #expect(checked)
+            let commands = GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot()
+            if outcome == "operator-replacement" {
+                #expect(commands.count == 1)
+                #expect(commands.allSatisfy { $0.contains("status") })
+                #expect(try Data(contentsOf: authority.plist) == Data("operator-owned replacement".utf8))
+                return
+            }
+            let install = try #require(commands.first { $0.contains("install") })
+            #expect(commands.allSatisfy { Array($0.prefix(2)) == installer.cliCommand })
+            let runtimeIndex = try #require(install.firstIndex(of: "--runtime"))
+            let pathIndex = try #require(install.firstIndex(of: "--runtime-path"))
+            #expect(install[runtimeIndex + 1] == "bun")
+            #expect(install[pathIndex + 1] == bun)
+            #expect(Array(install.suffix(5)) == [
+                "--restore-service-cli",
+                #"{"entrypoint":"/fixture/runtime/previous-build/lib/node_modules/openclaw/dist/index.js","executable":"/fixture/runtime/previous-build/bin/bun","sqliteLibrary":"/fixture/runtime/previous-build/lib/libsqlite3.dylib"}"#,
+                "--expected-runtime-pin", #"{"definition":null,"revision":"before-restore"}"#, "--json",
+            ])
+        }
+    }
+
+    @Test(arguments: ["pause", "quit", "generation", "previous-child"])
+    func `terminal child recovery cannot override a newer lifecycle or rearm a failed child rollback`(
+        interruption: String) async throws
+    {
+        let port = AppProfile.current.defaultGatewayPort
+        try await self.withLaunchAgentEnvironment(port: port) {
+            let manager = GatewayProcessManager()
+            let appState = AppStateStore.shared
+            let previousPause = appState.isPaused
+            appState.isPaused = false
+            defer { appState.isPaused = previousPause }
+            manager.desiredActive = true
+            let generation = manager.gatewayStartGeneration
+            manager.handleChildEvent(.failed("terminal fixture failure"), port: port)
+            switch interruption {
+            case "pause": appState.isPaused = true
+            case "quit": manager.isTerminating = true
+            case "generation": manager.gatewayStartGeneration &+= 1
+            default: break
+            }
+            #expect(throws: CancellationError.self) {
+                try manager.prepareHostingRecoveryActivation(
+                    generation: generation, restoring: interruption == "previous-child" ? .app : .service)
+            }
+            #expect(!manager.desiredActive)
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+        }
+    }
+
+    @Test(arguments: ["request", "generation", "failed-child-rollback"])
+    func `failed hosting recovery cleanup preserves later activation and child failure ownership`(
+        newerOwner: String) async throws
+    {
+        let port = AppProfile.current.defaultGatewayPort
+        try await self.withLaunchAgentEnvironment(port: port) {
+            let manager = GatewayProcessManager()
+            let appState = AppStateStore.shared
+            let previousPause = appState.isPaused
+            appState.isPaused = false
+            defer { appState.isPaused = previousPause }
+            manager.desiredActive = true
+            let generation = manager.gatewayStartGeneration
+            manager.handleChildEvent(.failed("replacement failed"), port: port)
+            let rearmed = try manager.prepareHostingRecoveryActivation(generation: generation, restoring: .service)
+            manager.hostingChangeInProgress = true
+            if newerOwner == "request" {
+                manager.setActive(true, source: .request)
+            } else {
+                manager.gatewayStartGeneration &+= 1
+                if newerOwner == "failed-child-rollback" {
+                    manager.handleChildEvent(.failed("rollback child failed"), port: port)
+                }
+            }
+            let laterStatus = manager.status
+            manager.finishHostingRecoveryActivation(
+                rearmed, generation: generation, healthy: false, failure: "Superseded recovery failure")
+            #expect(manager.status == laterStatus)
+            #expect(manager.desiredActive == (newerOwner != "failed-child-rollback"))
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+        }
+    }
+
+    @Test func `operator repin before prior-build restoration dispatch is preserved, not overwritten`() async throws {
+        try await self.withLaunchAgentEnvironment {
+            let state = AppProfile.current.stateDirectoryURL()
+            let databaseURL = state.appendingPathComponent("state/openclaw.sqlite")
+            try #require(!FileManager.default.fileExists(atPath: databaseURL.path))
+            defer {
+                for path in [databaseURL.path, databaseURL.path + "-wal", databaseURL.path + "-shm"] {
+                    try? FileManager.default.removeItem(atPath: path)
+                }
+            }
+            let key = try GatewayLaunchAgentManager.runtimePinKey(
+                profile: .current, configPath: state.appendingPathComponent("openclaw.json").path)
+            let refusal = GatewayLaunchAgentManager.runtimePinSelectionChanged
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload("""
+            {"ok":true,"service":{"loaded":false,
+            "runtimeIntent":{"status":"known","revision":"before-restore","definition":"failed-service"}}}
+            """)
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true) { args in
+                if args.first == "status" {
+                    GatewayLaunchAgentManager.setTestingDaemonStatusPayload("""
+                    {"ok":false,"error":"\(refusal)"}
+                    """)
+                } else if args.first == "install" {
+                    do {
+                        try await Self.writeRuntimePinFixture(
+                            databaseURL: databaseURL, key: key, executable: "/operator/bin/node")
+                        if !args.contains("--expected-runtime-pin") {
+                            let database = try OpenClawNativeStateSQLite(databaseURL: databaseURL)
+                            try database.execute("DELETE FROM config_machine_state")
+                        }
+                    } catch { Issue.record(error) }
+                }
+            }
+            let previous = BundledRuntime(root: URL(fileURLWithPath: "/fixture/runtime/previous-build"))
+            let cli = GatewayLaunchAgentManager.InstalledServiceCLI(
+                prefix: [previous.bun.path, previous.packageRoot.appendingPathComponent("dist/index.js").path],
+                sqliteLibrary: previous.sqliteLibrary.path,
+                environment: ["CHANNEL_FIXTURE": "synthetic"])
+            let installer = BundledRuntime(root: URL(fileURLWithPath: "/fixture/runtime/current-build"))
+            let manager = self.manager
+            manager.desiredActive = true
+            let authority = try GatewayLaunchAgentManager.gatewayServiceAuthority()
+            var healthChecks = 0
+            do {
+                try await GatewayProcessManager.changeHosting(operations: .init(
+                    prepare: {},
+                    isAuthorized: { true },
+                    replace: { admit in
+                        try admit()
+                        throw GatewayHostingError(message: "replacement child failed")
+                    },
+                    recover: {
+                        let result = await manager.enableLaunchAgentIfNeeded(
+                            port: 29871,
+                            serviceForRestoration: .init(retained: cli, installer: installer),
+                            expectedServiceAuthority: authority)
+                        if let failure = result.error { throw GatewayHostingError(message: failure) }
+                    },
+                    verifyHealth: { healthChecks += 1 }))
+                Issue.record("Expected the prior-build restoration custody refusal")
+            } catch {
+                #expect(error.localizedDescription.contains("Previous Gateway recovery: " + refusal))
+            }
+            #expect(healthChecks == 0)
+            #expect(try await GatewayLaunchAgentManager
+                .runtimePinRecord(stateDirectory: state, profile: .current) != nil)
+            let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+            #expect(calls == [
+                ["status", "--deep", "--json", "--no-probe"],
+                [
+                    "install",
+                    "--force",
+                    "--port",
+                    "29871",
+                    "--runtime",
+                    "bun",
+                    "--runtime-path",
+                    previous.bun.path,
+                    "--restore-service-cli",
+                    #"{"entrypoint":"/fixture/runtime/previous-build/lib/node_modules/openclaw/dist/index.js","executable":"/fixture/runtime/previous-build/bin/bun","sqliteLibrary":"/fixture/runtime/previous-build/lib/libsqlite3.dylib"}"#,
+                    "--expected-runtime-pin",
+                    #"{"definition":"failed-service","revision":"before-restore"}"#,
+                ],
+            ])
+            #expect(GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot()
+                .allSatisfy { Array($0.prefix(2)) == installer.cliCommand })
+        }
+    }
+
+    @Test func `hosting rollback rechecks custody inside the serialized install drain`() async throws {
+        try await self.withLaunchAgentEnvironment {
+            let manager = self.manager
+            manager.desiredActive = true
+            let cli = GatewayLaunchAgentManager.InstalledServiceCLI(
+                prefix: ["/fixture/runtime/previous/bin/bun", "/fixture/openclaw.mjs"], sqliteLibrary: nil)
+            let result = await manager.enableLaunchAgentIfNeeded(
+                port: 29871,
+                serviceForRestoration: .init(
+                    retained: cli, installer: BundledRuntime(root: URL(fileURLWithPath: "/fixture/runtime/current"))),
+                mutationCheck: { throw GatewayHostingError(message: "operator changed the runtime pin") })
+            #expect(result.error == "operator changed the runtime pin")
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+        }
+    }
+
+    @Test func `quit joins a pending service pause before completing`() async throws {
+        let uninstallStarted = AsyncTestGate()
+        let finishUninstall = AsyncTestGate()
+        let shutdownObserved = AsyncTestGate()
+        defer { finishUninstall.open() }
+        try await self.withLaunchAgentEnvironment(commandHook: { arguments in
+            if arguments.first == "uninstall" {
+                uninstallStarted.open()
+                await finishUninstall.wait()
+            }
+        }) {
+            let manager = self.manager
+            try self.writeManagedLaunchAgent()
+            defer { manager.retainedServiceCLI = nil }
+            manager.desiredActive = true
+            manager.stop()
+            await uninstallStarted.wait()
+            #expect(manager.gatewayOperationShutdownTimeout >= GatewayLaunchAgentManager.startupMigrationTolerance)
+            var joinedPause = false
+            var finished = false
+            manager._testSetLaunchAgentDisableWaitHook {
+                joinedPause = true
+                shutdownObserved.open()
+            }
+            defer { manager._testSetLaunchAgentDisableWaitHook(nil) }
+            let shutdown = Task {
+                await manager.shutdownAppHostedGateway()
+                finished = true
+                shutdownObserved.open()
+            }
+            await shutdownObserved.wait()
+            #expect(joinedPause)
+            #expect(!finished)
+            finishUninstall.open()
+            await shutdown.value
+            #expect(finished)
+        }
+    }
+
     @Test func `queues a changed launch agent request behind an in-flight request`() async throws {
         let firstPort = 19091
         let secondPort = 19092
-        let marker = FileManager.default.temporaryDirectory
-            .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
-        try await self.withLocalGatewayConfig {
-            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
-            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
-            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
-                #"{"ok":true,"service":{"loaded":false}}"#)
-            GatewayLaunchAgentManager.setTestingDaemonCommandDelayNanoseconds(100_000_000)
-            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-            defer {
-                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
-                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
-                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
-                GatewayLaunchAgentManager.setTestingDaemonCommandDelayNanoseconds(0)
-                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-            }
-
-            let manager = GatewayProcessManager.shared
+        try await self.withLaunchAgentEnvironment(
+            statusPayload: #"{"ok":true,"service":{"loaded":false}}"#,
+            commandDelayNanoseconds: 100_000_000)
+        {
+            let manager = self.manager
             let first = Task { @MainActor in
                 await manager._testEnableLaunchAgentIfNeeded(
-                    bundlePath: "/Applications/OpenClaw.app",
                     port: firstPort)
             }
-            for _ in 0..<100 {
-                if !GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty {
-                    break
-                }
-                try? await Task.sleep(nanoseconds: 1_000_000)
+            await self.waitForCondition {
+                !GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty
             }
             #expect(!GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
 
             let second = Task { @MainActor in
                 await manager._testEnableLaunchAgentIfNeeded(
-                    bundlePath: "/Applications/OpenClaw.app",
                     port: secondPort)
             }
             #expect(await first.value == nil)
@@ -114,34 +1625,25 @@ struct GatewayProcessManagerTests {
             let stalePort = 19094
             let current = Task { @MainActor in
                 await manager._testEnableLaunchAgentIfNeeded(
-                    bundlePath: "/Applications/OpenClaw.app",
                     port: newestPort)
             }
-            for _ in 0..<100 {
-                if !GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty {
-                    break
-                }
-                try? await Task.sleep(nanoseconds: 1_000_000)
+            await self.waitForCondition {
+                !GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty
             }
             let stale = Task { @MainActor in
-                await manager._testEnableLaunchAgentIfNeeded(
-                    bundlePath: "/Applications/OpenClaw.app",
+                await manager._testEnableLaunchAgentIfNeededInstalled(
                     port: stalePort)
             }
-            for _ in 0..<100 {
-                if manager._testPendingLaunchAgentPort() == stalePort {
-                    break
-                }
-                try? await Task.sleep(nanoseconds: 1_000_000)
+            await self.waitForCondition {
+                manager._testPendingLaunchAgentPort() == stalePort
             }
             #expect(manager._testPendingLaunchAgentPort() == stalePort)
             let newest = Task { @MainActor in
                 await manager._testEnableLaunchAgentIfNeeded(
-                    bundlePath: "/Applications/OpenClaw.app",
                     port: newestPort)
             }
             #expect(await current.value == nil)
-            #expect(await stale.value == nil)
+            #expect(await stale.value == false)
             #expect(await newest.value == nil)
 
             let finalInstallPorts = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
@@ -161,113 +1663,78 @@ struct GatewayProcessManagerTests {
     @Test func `coalesced drain returns each request installation result`() async throws {
         let firstPort = 19107
         let secondPort = 19108
-        let marker = FileManager.default.temporaryDirectory
-            .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
-        try await self.withLocalGatewayConfig {
-            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
-            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
-            GatewayLaunchAgentManager.setTestingDaemonStatusPayloads([
+        let installStarted = AsyncTestGate()
+        let finishInstall = AsyncTestGate()
+        let secondQueued = AsyncTestGate()
+        defer { finishInstall.open() }
+        try await self.withLaunchAgentEnvironment(
+            statusPayloads: [
                 #"{"ok":true,"service":{"loaded":false}}"#,
-                """
-                {"ok":true,"service":{
-                  "loaded":true,
-                  "runtime":{"status":"running","pid":4242},
-                  "command":{"programArguments":["openclaw","gateway","--port","\(secondPort)"]},
-                  "configAudit":{"ok":true,"issues":[]}
-                }}
-                """,
-            ])
-            GatewayLaunchAgentManager.setTestingDaemonCommandDelayNanoseconds(100_000_000)
-            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-            defer {
-                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
-                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
-                GatewayLaunchAgentManager.setTestingDaemonStatusPayloads([])
-                GatewayLaunchAgentManager.setTestingDaemonCommandDelayNanoseconds(0)
-                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-                GatewayProcessManager.shared._testClearLaunchAgentReadinessFailure()
-            }
-
-            let manager = GatewayProcessManager.shared
-            let first = Task { @MainActor in
-                await manager._testEnableLaunchAgentIfNeededInstalled(
-                    bundlePath: "/Applications/OpenClaw.app",
-                    port: firstPort)
-            }
-            for _ in 0..<1000 {
-                if GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
-                    .contains(where: { $0.first == "install" })
-                {
-                    break
+                self.loadedGatewayStatus(port: secondPort),
+            ],
+            commandHook: { arguments in
+                if arguments.first == "install" {
+                    installStarted.open()
+                    await finishInstall.wait()
                 }
-                try? await Task.sleep(nanoseconds: 1_000_000)
-            }
-            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
-                .contains(where: { $0.first == "install" }))
+            }, {
+                let manager = self.manager
+                let first = Task { @MainActor in
+                    await manager._testEnableLaunchAgentIfNeededInstalled(
+                        port: firstPort)
+                }
+                await installStarted.wait()
+                withObservationTracking {
+                    _ = manager._testPendingLaunchAgentPort()
+                } onChange: {
+                    secondQueued.open()
+                }
 
-            let second = Task { @MainActor in
-                await manager._testEnableLaunchAgentIfNeededInstalled(
-                    bundlePath: "/Applications/OpenClaw.app",
-                    port: secondPort)
-            }
+                let second = Task { @MainActor in
+                    await manager._testEnableLaunchAgentIfNeededInstalled(
+                        port: secondPort)
+                }
+                await secondQueued.wait()
+                #expect(manager._testPendingLaunchAgentPort() == secondPort)
+                finishInstall.open()
 
-            #expect(await first.value)
-            #expect(await second.value == false)
-            let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
-            #expect(calls.filter { $0.first == "install" }.count == 1)
-        }
+                #expect(await first.value)
+                #expect(await second.value == false)
+                let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                #expect(calls.filter { $0.first == "install" }.count == 1)
+            })
     }
 
     @Test func `stop discards queued enables and disables after the active request`() async throws {
         let firstPort = 19095
         let secondPort = 19096
-        let marker = FileManager.default.temporaryDirectory
-            .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
-        try await self.withLocalGatewayConfig {
-            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
-            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
-            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
-                #"{"ok":true,"service":{"loaded":false}}"#)
-            GatewayLaunchAgentManager.setTestingDaemonCommandDelayNanoseconds(100_000_000)
-            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-            defer {
-                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
-                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
-                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
-                GatewayLaunchAgentManager.setTestingDaemonCommandDelayNanoseconds(0)
-                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-                GatewayProcessManager.shared.setTestingDesiredActive(false)
-            }
-
-            let manager = GatewayProcessManager.shared
-            manager.setTestingDesiredActive(true)
+        try await self.withLaunchAgentEnvironment(
+            statusPayload: #"{"ok":true,"service":{"loaded":false}}"#,
+            commandDelayNanoseconds: 100_000_000)
+        {
+            let manager = self.manager
+            try self.writeManagedLaunchAgent(port: firstPort)
+            defer { manager.retainedServiceCLI = nil }
+            manager.desiredActive = true
             let first = Task { @MainActor in
                 await manager._testEnableLaunchAgentIfNeeded(
-                    bundlePath: "/Applications/OpenClaw.app",
                     port: firstPort)
             }
-            for _ in 0..<100 {
-                if !GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty {
-                    break
-                }
-                try? await Task.sleep(nanoseconds: 1_000_000)
+            await self.waitForCondition {
+                !GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty
             }
             let second = Task { @MainActor in
                 await manager._testEnableLaunchAgentIfNeeded(
-                    bundlePath: "/Applications/OpenClaw.app",
                     port: secondPort)
             }
-            for _ in 0..<100 {
-                if manager._testPendingLaunchAgentPort() == secondPort {
-                    break
-                }
-                try? await Task.sleep(nanoseconds: 1_000_000)
+            await self.waitForCondition {
+                manager._testPendingLaunchAgentPort() == secondPort
             }
             #expect(manager._testPendingLaunchAgentPort() == secondPort)
 
             manager.stop()
             _ = await (first.value, second.value)
-            try? await Task.sleep(nanoseconds: 150_000_000)
+            await manager.waitForStartupAttempt()
 
             let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
             let installPorts = calls.compactMap { arguments -> String? in
@@ -288,107 +1755,96 @@ struct GatewayProcessManagerTests {
 
     @Test func `restart waits for an in-progress disable`() async throws {
         let port = 19098
-        let marker = FileManager.default.temporaryDirectory
-            .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
-        try await self.withLocalGatewayConfig {
-            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
-            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
-            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
-                #"{"ok":true,"service":{"loaded":false}}"#)
-            GatewayLaunchAgentManager.setTestingDaemonCommandDelayNanoseconds(100_000_000)
-            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-            defer {
-                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
-                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
-                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
-                GatewayLaunchAgentManager.setTestingDaemonCommandDelayNanoseconds(0)
-                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-                GatewayProcessManager.shared.setTestingDesiredActive(false)
-            }
-
-            let manager = GatewayProcessManager.shared
-            manager.setTestingDesiredActive(true)
-            manager.stop()
-            for _ in 0..<100 {
-                if GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
-                    .contains(where: { $0.first == "uninstall" })
-                {
-                    break
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let plist = GatewayLaunchAgentManager.plistURL(homeDirectory: home, profile: .current)
+        try await self.withLaunchAgentEnvironment(
+            homeDirectory: home,
+            statusPayload: #"{"ok":true,"service":{"loaded":false}}"#,
+            commandDelayNanoseconds: 100_000_000,
+            commandHook: { arguments in
+                if arguments.first == "uninstall" { try? FileManager.default.removeItem(at: plist) }
+            }, {
+                let manager = self.manager
+                try self.writeManagedLaunchAgent(port: port)
+                defer { manager.retainedServiceCLI = nil }
+                manager.desiredActive = true
+                manager.stop()
+                await self.waitForCondition {
+                    GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                        .contains(where: { $0.first == "uninstall" })
                 }
-                try? await Task.sleep(nanoseconds: 1_000_000)
-            }
-            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
-                .contains(where: { $0.first == "uninstall" }))
+                #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                    .contains(where: { $0.first == "uninstall" }))
 
-            manager._testBeginGatewayStartGeneration()
-            _ = await manager._testEnableLaunchAgentIfNeeded(
-                bundlePath: "/Applications/OpenClaw.app",
-                port: port)
+                manager._testBeginGatewayStartGeneration()
+                _ = await manager._testEnableLaunchAgentIfNeeded(
+                    port: port)
 
-            let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
-            #expect(calls.map(\.first) == ["uninstall", "status", "install"])
-        }
+                let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                #expect(calls.map(\.first) == ["uninstall", "status", "install"])
+            })
     }
 
     @Test func `restart waits for disable before attaching`() async throws {
         let port = 19099
-        let marker = FileManager.default.temporaryDirectory
-            .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
-        let session = GatewayTestWebSocketSession(
-            taskFactory: {
-                GatewayTestWebSocketTask(
-                    sendHook: { task, message, sendIndex in
-                        guard sendIndex > 0 else { return }
-                        guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
-                        task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
-                    })
-            })
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let plist = GatewayLaunchAgentManager.plistURL(homeDirectory: home, profile: .current)
         let url = try #require(URL(string: "ws://example.invalid"))
-        let connection = GatewayConnection(
-            configProvider: { (url: url, token: nil, password: nil) },
-            sessionBox: WebSocketSessionBox(session: session))
-        let descriptor = PortGuardian.Descriptor(
-            pid: 4242,
-            command: "openclaw-gateway",
-            executablePath: "/tmp/openclaw-gateway")
+        let finishDisable = AsyncTestGate()
+        let events = AsyncStream<String>.makeStream()
+        defer {
+            finishDisable.open()
+            events.continuation.finish()
+        }
+        let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+            events.continuation.yield("attach")
+            return self.gatewayTask(healthSucceedsAfter: 0)
+        }
+        let descriptor = self.gatewayDescriptor(pid: 4242)
 
-        try await self.withLocalGatewayConfig {
-            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
-            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
-            GatewayLaunchAgentManager.setTestingDaemonCommandDelayNanoseconds(100_000_000)
-            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-            let manager = GatewayProcessManager.shared
-            manager.setTestingConnection(connection)
-            manager.setTestingSkipControlChannelRefresh(true)
-            manager.setTestingDesiredActive(true)
+        try await self.withLaunchAgentEnvironment(homeDirectory: home, commandHook: { arguments in
+            guard arguments == ["uninstall"] else { return }
+            events.continuation.yield("disable-started")
+            await finishDisable.wait()
+            try? FileManager.default.removeItem(at: plist)
+            events.continuation.yield("disable-finished")
+        }) {
+            try self.writeManagedLaunchAgent(port: port)
+            manager.desiredActive = true
             await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: port)
             defer {
-                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
-                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
-                GatewayLaunchAgentManager.setTestingDaemonCommandDelayNanoseconds(0)
-                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-                manager.setTestingConnection(nil)
-                manager.setTestingSkipControlChannelRefresh(false)
-                manager.setTestingDesiredActive(false)
+                manager.desiredActive = false
+                manager.retainedServiceCLI = nil
+                manager._testSetLaunchAgentDisableWaitHook(nil)
+            }
+            manager._testSetLaunchAgentDisableWaitHook {
+                events.continuation.yield("disable-wait")
             }
 
+            var iterator = events.stream.makeAsyncIterator()
             manager.stop()
-            for _ in 0..<100 {
-                if GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
-                    .contains(where: { $0.first == "uninstall" })
-                {
-                    break
-                }
-                try? await Task.sleep(nanoseconds: 1_000_000)
-            }
+            #expect(await iterator.next() == "disable-started")
             manager._testBeginGatewayStartGeneration()
 
-            let startedAt = Date()
-            let attached = await manager._testAttachExistingGatewayAfterPendingDisable(port: port)
-            let elapsed = Date().timeIntervalSince(startedAt)
+            let attachment = Task { @MainActor in
+                await manager._testAttachExistingGatewayAfterPendingDisable(port: port)
+            }
+            // Either the owner registers its wait or a broken restart admits a socket first.
+            #expect(await iterator.next() == "disable-wait")
+            #expect(session.snapshotMakeCount() == 0)
+            finishDisable.open()
+            let attached = await attachment.value
+            manager._testSetLaunchAgentDisableWaitHook(nil)
+            events.continuation.finish()
+            var order: [String] = []
+            while let event = await iterator.next() {
+                order.append(event)
+            }
 
             #expect(attached)
-            #expect(elapsed >= 0.05)
+            #expect(order == ["disable-finished", "attach"])
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
                 .filter { $0.first == "uninstall" }.count == 1)
             guard case .attachedExisting = manager.status else {
@@ -403,30 +1859,13 @@ struct GatewayProcessManagerTests {
     }
 
     @Test func `remote mode still removes the local launch agent`() async throws {
-        let marker = FileManager.default.temporaryDirectory
-            .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
-        try await self.withGatewayConfig(mode: "remote") {
-            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
-            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
-            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-            defer {
-                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
-                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
-                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-                GatewayProcessManager.shared.setTestingDesiredActive(false)
-            }
-
-            let manager = GatewayProcessManager.shared
-            manager.setTestingDesiredActive(true)
+        try await self.withLaunchAgentEnvironment(mode: "remote") {
+            let manager = self.manager
+            try self.writeManagedLaunchAgent()
+            defer { manager.retainedServiceCLI = nil }
+            manager.desiredActive = true
             manager.stop()
-            for _ in 0..<100 {
-                if GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
-                    .contains(where: { $0.first == "uninstall" })
-                {
-                    break
-                }
-                try? await Task.sleep(nanoseconds: 1_000_000)
-            }
+            await manager.waitForStartupAttempt()
 
             let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
             #expect(calls.filter { $0.first == "uninstall" }.count == 1)
@@ -435,55 +1874,151 @@ struct GatewayProcessManagerTests {
     }
 
     @Test func `inactive lifecycle skips persistence ensure`() async throws {
-        let marker = FileManager.default.temporaryDirectory
-            .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
-        try await self.withLocalGatewayConfig {
-            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
-            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
-            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-            defer {
-                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
-                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
-                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-            }
-
-            let manager = GatewayProcessManager.shared
-            manager.setTestingDesiredActive(false)
+        try await self.withLaunchAgentEnvironment {
+            let manager = self.manager
+            manager.desiredActive = false
             _ = await manager.ensureLaunchAgentEnabledIfNeeded()
 
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
         }
     }
 
-    @Test func `newer inactive lifecycle retains the pending disable`() async throws {
-        let marker = FileManager.default.temporaryDirectory
-            .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
-        try await self.withLocalGatewayConfig {
-            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
-            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
-            GatewayLaunchAgentManager.setTestingDaemonCommandDelayNanoseconds(100_000_000)
-            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-            defer {
-                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
-                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
-                GatewayLaunchAgentManager.setTestingDaemonCommandDelayNanoseconds(0)
-                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-                GatewayProcessManager.shared.setTestingDesiredActive(false)
-            }
+    @Test(arguments: [
+        (
+            """
+            {"service":{"loaded":null,"loadState":{"status":"unknown"},
+            "runtime":{"status":"unknown"}}}
+            """,
+            false),
+        (
+            """
+            {"service":{"loaded":true,"loadState":{"status":"loaded"},
+            "runtime":{"status":"unknown","inspectionFailure":{
+              "code":"service-runtime-inspection-failed","detail":"launchctl print failed"}}}}
+            """,
+            false),
+        (#"{"ok":false,"error":"Gateway service inspection failed."}"#, false),
+        (
+            """
+            {"service":{"loaded":false,"loadState":{"status":"not-loaded"},
+            "runtime":{"status":"unknown","missingUnit":true}}}
+            """,
+            true),
+    ])
+    func `persistence ensure distinguishes unknown inspection from a missing service`(
+        statusPayload: String,
+        shouldInstall: Bool) async throws
+    {
+        let port = try self.availableGatewayPort()
+        // Queue status alone so an erroneous install still receives the fixture's success response.
+        try await self.withLaunchAgentEnvironment(port: port, statusPayloads: [statusPayload]) {
+            try #require(GatewayEnvironment.gatewayPort() == port)
+            let manager = self.manager
+            manager.desiredActive = true
 
-            let manager = GatewayProcessManager.shared
-            manager.setTestingDesiredActive(true)
-            manager.stop()
-            manager.stop()
-            for _ in 0..<200 {
-                if GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
-                    .contains(where: { $0.first == "uninstall" })
-                {
-                    break
-                }
-                try? await Task.sleep(nanoseconds: 1_000_000)
+            let installed = await manager.ensureLaunchAgentEnabledIfNeeded()
+
+            var expectedCalls = [["status", "--json", "--no-probe"]]
+            if shouldInstall {
+                expectedCalls.append(["install", "--force", "--port", String(port)])
             }
-            try? await Task.sleep(nanoseconds: 150_000_000)
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot() == expectedCalls)
+            #expect(installed == shouldInstall)
+        }
+    }
+
+    @Test(arguments: ["unresolved", "healthy", "responsive-error"])
+    func `startup readiness preserves the most specific failure`(_ outcome: String) async throws {
+        let port = try self.availableGatewayPort()
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let inspectedService = Mutex(false)
+        let inspectionError = "launchctl inspection failed"
+        let guidance = "openclaw gateway status --deep"
+        let healthError = "fixture health rejected"
+        let statusPayload = """
+        {"ok":false,"error":"\(inspectionError)","hints":["\(guidance)"]}
+        """
+
+        try await self.withLaunchAgentEnvironment(
+            port: port,
+            statusPayload: statusPayload,
+            commandHook: { arguments in
+                if arguments.first == "status" {
+                    inspectedService.withLock { $0 = true }
+                }
+            }) {
+                try #require(GatewayEnvironment.gatewayPort() == port)
+                let session = GatewayTestWebSocketSession {
+                    GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
+                        guard sendIndex > 0,
+                              let id = GatewayWebSocketTestSupport.requestID(from: message)
+                        else { return }
+                        if outcome == "responsive-error",
+                           GatewayWebSocketTestSupport.requestMethod(from: message) == "health"
+                        {
+                            task.emitReceiveSuccess(.data(Data("""
+                            {"type":"res","id":"\(id)","ok":false,
+                            "error":{"code":"INVALID_REQUEST","message":"\(healthError)"}}
+                            """.utf8)))
+                        } else {
+                            task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+                        }
+                    })
+                }
+                let connection = GatewayConnection(
+                    configProvider: {
+                        // Keep the initial attach unavailable until startup inspects the service.
+                        guard inspectedService.withLock({ $0 }), outcome != "unresolved" else {
+                            throw URLError(.cannotConnectToHost)
+                        }
+                        return (url: url, token: nil, password: nil)
+                    },
+                    sessionBox: WebSocketSessionBox(session: session))
+                let manager = GatewayProcessManager()
+                manager.setTestingConnection(connection)
+                manager.setTestingSkipControlChannelRefresh(true)
+                manager.desiredActive = true
+                defer { manager.desiredActive = false }
+
+                manager.startIfNeeded()
+                await manager.waitForStartupAttempt()
+                await connection.shutdown()
+
+                let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                #expect(!calls.isEmpty)
+                #expect(calls.allSatisfy { $0 == ["status", "--json", "--no-probe"] })
+                if outcome == "healthy" {
+                    guard case .running = manager.status else {
+                        Issue.record("expected healthy startup after the deferred service inspection")
+                        return
+                    }
+                    #expect(manager.lastFailureReason == nil)
+                } else {
+                    guard case let .failed(reason) = manager.status else {
+                        Issue.record("expected terminal startup failure")
+                        return
+                    }
+                    let expected = outcome == "unresolved" ? inspectionError : healthError
+                    #expect(reason.contains(expected))
+                    #expect(manager.lastFailureReason == reason)
+                    #expect(reason.contains(guidance) == (outcome == "unresolved"))
+                }
+            }
+    }
+
+    @Test func `newer inactive lifecycle retains the pending disable`() async throws {
+        try await self.withLaunchAgentEnvironment(commandDelayNanoseconds: 100_000_000) {
+            let manager = self.manager
+            try self.writeManagedLaunchAgent()
+            defer { manager.retainedServiceCLI = nil }
+            manager.desiredActive = true
+            manager.stop()
+            manager.stop()
+            await self.waitForCondition(attempts: 200) {
+                GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                    .contains(where: { $0.first == "uninstall" })
+            }
+            await manager.waitForStartupAttempt()
 
             let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
             #expect(calls.filter { $0.first == "uninstall" }.count == 1)
@@ -493,67 +2028,31 @@ struct GatewayProcessManagerTests {
 
     @Test func `keeps a reusable launch agent running`() async throws {
         let port = 19082
-        let marker = FileManager.default.temporaryDirectory
-            .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
-        try await self.withLocalGatewayConfig {
-            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
-            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
-            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
-                """
-                {"ok":true,"service":{
-                  "loaded":true,
-                  "runtime":{"status":"running","pid":4242},
-                  "command":{"programArguments":["openclaw","gateway","--port","\(port)"]},
-                  "configAudit":{"ok":true,"issues":[]}
-                }}
-                """)
-            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-            defer {
-                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
-                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
-                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+        try await self.withLaunchAgentEnvironment {
+            let reusableAudits = [
+                #"{"ok":true,"issues":[]}"#,
+                #"{"ok":false,"issues":[{"code":"gateway-path-nonminimal","level":"recommended"}]}"#,
+            ]
+            for configAudit in reusableAudits {
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
+                    self.loadedGatewayStatus(port: port, configAudit: configAudit))
                 GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-                GatewayProcessManager.shared._testClearLaunchAgentReadinessFailure()
+
+                _ = await self.manager._testEnableLaunchAgentIfNeeded(
+                    port: port)
+
+                let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                #expect(calls.filter { $0.first == "status" }.count == 1)
+                #expect(calls.allSatisfy { $0.first != "install" })
             }
-
-            _ = await GatewayProcessManager.shared._testEnableLaunchAgentIfNeeded(
-                bundlePath: "/Applications/OpenClaw.app",
-                port: port)
-
-            let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
-            #expect(calls.filter { $0.first == "status" }.count == 1)
-            #expect(calls.allSatisfy { $0.first != "install" })
         }
     }
 
     @Test func `repairs only a stable launch agent PID after readiness fails`() async throws {
         let port = 19085
-        let marker = FileManager.default.temporaryDirectory
-            .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
-        try await self.withLocalGatewayConfig {
-            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
-            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
-            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
-                """
-                {"ok":true,"service":{
-                  "loaded":true,
-                  "runtime":{"status":"running","pid":4242},
-                  "command":{"programArguments":["openclaw","gateway","--port","\(port)"]},
-                  "configAudit":{"ok":true,"issues":[]}
-                }}
-                """)
-            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-            defer {
-                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
-                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
-                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
-                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-                GatewayProcessManager.shared._testClearLaunchAgentReadinessFailure()
-            }
-
-            let manager = GatewayProcessManager.shared
+        try await self.withLaunchAgentEnvironment(statusPayload: self.loadedGatewayStatus(port: port)) {
+            let manager = self.manager
             _ = await manager._testEnableLaunchAgentIfNeeded(
-                bundlePath: "/Applications/OpenClaw.app",
                 port: port)
             var calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
             #expect(calls.filter { $0.first == "install" }.isEmpty)
@@ -563,46 +2062,25 @@ struct GatewayProcessManagerTests {
             GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
 
             _ = await manager._testEnableLaunchAgentIfNeeded(
-                bundlePath: "/Applications/OpenClaw.app",
                 port: port)
 
             calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
             #expect(calls.filter { $0.first == "status" }.count == 1)
             #expect(calls.filter { $0.first == "install" }.count == 1)
+            #expect(!manager._testHasLaunchAgentFreshInstallEvidence())
         }
     }
 
     @Test func `gives a replacement launch agent PID a full readiness cycle`() async throws {
         let port = 19086
-        let marker = FileManager.default.temporaryDirectory
-            .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
-        try await self.withLocalGatewayConfig {
-            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
-            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
-            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
-                """
-                {"ok":true,"service":{
-                  "loaded":true,
-                  "runtime":{"status":"running","pid":4243},
-                  "command":{"programArguments":["openclaw","gateway","--port","\(port)"]},
-                  "configAudit":{"ok":true,"issues":[]}
-                }}
-                """)
-            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-            defer {
-                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
-                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
-                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
-                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-                GatewayProcessManager.shared._testClearLaunchAgentReadinessFailure()
-            }
-
-            let manager = GatewayProcessManager.shared
+        try await self.withLaunchAgentEnvironment(
+            statusPayload: self.loadedGatewayStatus(port: port, pid: 4243))
+        {
+            let manager = self.manager
             await manager._testRecordLaunchAgentReadinessFailure(port: port, startingPID: 4242)
             GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
 
             _ = await manager._testEnableLaunchAgentIfNeeded(
-                bundlePath: "/Applications/OpenClaw.app",
                 port: port)
 
             let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
@@ -613,46 +2091,20 @@ struct GatewayProcessManagerTests {
 
     @Test func `stop wins while a readiness failure audit is pending`() async throws {
         let port = 19089
-        let marker = FileManager.default.temporaryDirectory
-            .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
-        try await self.withLocalGatewayConfig {
-            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
-            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
-            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
-                """
-                {"ok":true,"service":{
-                  "loaded":true,
-                  "runtime":{"status":"running","pid":4242},
-                  "command":{"programArguments":["openclaw","gateway","--port","\(port)"]},
-                  "configAudit":{"ok":true,"issues":[]}
-                }}
-                """)
-            GatewayLaunchAgentManager.setTestingDaemonCommandDelayNanoseconds(100_000_000)
-            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-            defer {
-                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
-                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
-                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
-                GatewayLaunchAgentManager.setTestingDaemonCommandDelayNanoseconds(0)
-                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-                GatewayProcessManager.shared.setTestingDesiredActive(false)
-                GatewayProcessManager.shared._testClearLaunchAgentReadinessFailure()
-            }
-
-            let manager = GatewayProcessManager.shared
-            manager.setTestingDesiredActive(true)
+        try await self.withLaunchAgentEnvironment(
+            statusPayload: self.loadedGatewayStatus(port: port),
+            commandDelayNanoseconds: 100_000_000)
+        {
+            let manager = self.manager
+            manager.desiredActive = true
             let finish = Task { @MainActor in
                 await manager._testFinishLaunchAgentReadinessFailure(
                     port: port,
                     startingPID: 4242)
             }
-            for _ in 0..<100 {
-                if GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+            await self.waitForCondition {
+                GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
                     .contains(where: { $0.first == "status" })
-                {
-                    break
-                }
-                try? await Task.sleep(nanoseconds: 1_000_000)
             }
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
                 .contains(where: { $0.first == "status" }))
@@ -668,51 +2120,25 @@ struct GatewayProcessManagerTests {
 
     @Test func `stale readiness audit cannot clear a restarted generation`() async throws {
         let port = 19090
-        let marker = FileManager.default.temporaryDirectory
-            .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
-        try await self.withLocalGatewayConfig {
-            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
-            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
-            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
-                """
-                {"ok":true,"service":{
-                  "loaded":true,
-                  "runtime":{"status":"running","pid":4242},
-                  "command":{"programArguments":["openclaw","gateway","--port","\(port)"]},
-                  "configAudit":{"ok":true,"issues":[]}
-                }}
-                """)
-            GatewayLaunchAgentManager.setTestingDaemonCommandDelayNanoseconds(200_000_000)
-            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-            defer {
-                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
-                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
-                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
-                GatewayLaunchAgentManager.setTestingDaemonCommandDelayNanoseconds(0)
-                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-                GatewayProcessManager.shared.setTestingDesiredActive(false)
-                GatewayProcessManager.shared._testClearLaunchAgentReadinessFailure()
-            }
-
-            let manager = GatewayProcessManager.shared
-            manager.setTestingDesiredActive(true)
+        try await self.withLaunchAgentEnvironment(
+            statusPayload: self.loadedGatewayStatus(port: port),
+            commandDelayNanoseconds: 200_000_000)
+        {
+            let manager = self.manager
+            manager.desiredActive = true
             let staleFinish = Task { @MainActor in
                 await manager._testFinishLaunchAgentReadinessFailure(
                     port: port,
                     startingPID: 4242)
             }
-            for _ in 0..<100 {
-                if GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+            await self.waitForCondition {
+                GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
                     .contains(where: { $0.first == "status" })
-                {
-                    break
-                }
-                try? await Task.sleep(nanoseconds: 1_000_000)
             }
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
                 .contains(where: { $0.first == "status" }))
 
-            GatewayLaunchAgentManager.setTestingDaemonCommandDelayNanoseconds(0)
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
             manager.stop()
             manager._testBeginGatewayStartGeneration()
             await manager._testFinishLaunchAgentReadinessFailure(
@@ -729,40 +2155,14 @@ struct GatewayProcessManagerTests {
 
     @Test func `repairs a stable launch agent PID with a wedged listener`() async throws {
         let port = 19087
-        let marker = FileManager.default.temporaryDirectory
-            .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
-        try await self.withLocalGatewayConfig {
-            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
-            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
-            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
-                """
-                {"ok":true,"service":{
-                  "loaded":true,
-                  "runtime":{"status":"running","pid":4242},
-                  "command":{"programArguments":["openclaw","gateway","--port","\(port)"]},
-                  "configAudit":{"ok":true,"issues":[]}
-                }}
-                """)
-            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-            defer {
-                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
-                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
-                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
-                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-                GatewayProcessManager.shared._testClearLaunchAgentReadinessFailure()
-            }
-
-            let manager = GatewayProcessManager.shared
-            let listener = PortGuardian.Descriptor(
-                pid: 4242,
-                command: "openclaw-gateway",
-                executablePath: "/tmp/openclaw-gateway")
+        try await self.withLaunchAgentEnvironment(statusPayload: self.loadedGatewayStatus(port: port)) {
+            let manager = self.manager
+            let listener = self.gatewayDescriptor(pid: 4242)
             await PortGuardian.shared.setTestingDescriptor(listener, forPort: port)
             await manager._testRecordLaunchAgentReadinessFailure(port: port, startingPID: 4242)
             GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
 
             _ = await manager._testEnableLaunchAgentIfNeeded(
-                bundlePath: "/Applications/OpenClaw.app",
                 port: port)
 
             let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
@@ -774,32 +2174,10 @@ struct GatewayProcessManagerTests {
 
     @Test func `protects a foreign listener after launch agent readiness fails`() async throws {
         let port = 19088
-        let marker = FileManager.default.temporaryDirectory
-            .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
-        try await self.withLocalGatewayConfig {
-            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
-            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
-            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
-                """
-                {"ok":true,"service":{
-                  "loaded":true,
-                  "runtime":{"status":"running","pid":4242},
-                  "command":{"programArguments":["openclaw","gateway","--port","\(port)"]},
-                  "configAudit":{"ok":true,"issues":[]}
-                }}
-                """)
-            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-            defer {
-                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
-                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
-                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
-                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-                GatewayProcessManager.shared._testClearLaunchAgentReadinessFailure()
-            }
-
-            let manager = GatewayProcessManager.shared
+        try await self.withLaunchAgentEnvironment(statusPayload: self.loadedGatewayStatus(port: port)) {
+            let manager = self.manager
             await manager._testRecordLaunchAgentReadinessFailure(port: port, startingPID: 4242)
-            let listener = PortGuardian.Descriptor(
+            let listener = self.gatewayDescriptor(
                 pid: 4243,
                 command: "foreign-listener",
                 executablePath: "/tmp/foreign-listener")
@@ -807,7 +2185,6 @@ struct GatewayProcessManagerTests {
             GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
 
             _ = await manager._testEnableLaunchAgentIfNeeded(
-                bundlePath: "/Applications/OpenClaw.app",
                 port: port)
 
             let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
@@ -819,29 +2196,16 @@ struct GatewayProcessManagerTests {
 
     @Test func `protects an unmanaged listener during persistence ensure`() async throws {
         let port = 19100
-        let marker = FileManager.default.temporaryDirectory
-            .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
-        try await self.withLocalGatewayConfig {
-            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
-            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
-            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
-                #"{"ok":true,"service":{"loaded":false}}"#)
-            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-            defer {
-                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
-                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
-                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
-                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-            }
-
-            let listener = PortGuardian.Descriptor(
+        try await self.withLaunchAgentEnvironment(
+            statusPayload: #"{"ok":true,"service":{"loaded":false}}"#)
+        {
+            let listener = self.gatewayDescriptor(
                 pid: 4243,
                 command: "manual-gateway",
                 executablePath: "/tmp/manual-gateway")
             await PortGuardian.shared.setTestingDescriptor(listener, forPort: port)
 
-            _ = await GatewayProcessManager.shared._testEnableLaunchAgentIfNeeded(
-                bundlePath: "/Applications/OpenClaw.app",
+            _ = await self.manager._testEnableLaunchAgentIfNeeded(
                 port: port)
 
             let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
@@ -853,38 +2217,15 @@ struct GatewayProcessManagerTests {
 
     @Test func `does not force install when launchd starts during ownership inspection`() async throws {
         let port = 19102
-        let marker = FileManager.default.temporaryDirectory
-            .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
-        try await self.withLocalGatewayConfig {
-            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
-            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
-            GatewayLaunchAgentManager.setTestingDaemonStatusPayloads([
-                #"{"ok":true,"service":{"loaded":false}}"#,
-                """
-                {"ok":true,"service":{
-                  "loaded":true,
-                  "runtime":{"status":"running","pid":4242},
-                  "command":{"programArguments":["openclaw","gateway","--port","\(port)"]},
-                  "configAudit":{"ok":true,"issues":[]}
-                }}
-                """,
-            ])
-            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-            defer {
-                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
-                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
-                GatewayLaunchAgentManager.setTestingDaemonStatusPayloads([])
-                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-            }
-
-            let listener = PortGuardian.Descriptor(
-                pid: 4242,
-                command: "openclaw-gateway",
-                executablePath: "/tmp/openclaw-gateway")
+        let statuses = [
+            #"{"ok":true,"service":{"loaded":false}}"#,
+            self.loadedGatewayStatus(port: port),
+        ]
+        try await self.withLaunchAgentEnvironment(statusPayloads: statuses) {
+            let listener = self.gatewayDescriptor(pid: 4242)
             await PortGuardian.shared.setTestingDescriptor(listener, forPort: port)
 
-            _ = await GatewayProcessManager.shared._testEnableLaunchAgentIfNeeded(
-                bundlePath: "/Applications/OpenClaw.app",
+            _ = await self.manager._testEnableLaunchAgentIfNeeded(
                 port: port)
 
             let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
@@ -896,18 +2237,7 @@ struct GatewayProcessManagerTests {
 
     @Test func `repairs loaded launch agents that are not reusable`() async throws {
         let port = 19083
-        let marker = FileManager.default.temporaryDirectory
-            .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
-        try await self.withLocalGatewayConfig {
-            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
-            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
-            defer {
-                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
-                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
-                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
-                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-            }
-
+        try await self.withLaunchAgentEnvironment {
             let staleStatuses = [
                 """
                 {"ok":true,"service":{
@@ -930,7 +2260,7 @@ struct GatewayProcessManagerTests {
                   "loaded":true,
                   "runtime":{"status":"running","pid":4242},
                   "command":{"programArguments":["openclaw","gateway","--port","\(port)"]},
-                  "configAudit":{"ok":false,"issues":[{"code":"gateway-service-version-mismatch"}]}
+                  "configAudit":{"ok":false,"issues":[{"code":"gateway-entrypoint-mismatch"}]}
                 }}
                 """,
             ]
@@ -939,8 +2269,7 @@ struct GatewayProcessManagerTests {
                 GatewayLaunchAgentManager.setTestingDaemonStatusPayload(status)
                 GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
 
-                _ = await GatewayProcessManager.shared._testEnableLaunchAgentIfNeeded(
-                    bundlePath: "/Applications/OpenClaw.app",
+                _ = await self.manager._testEnableLaunchAgentIfNeeded(
                     port: port)
 
                 let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
@@ -950,100 +2279,113 @@ struct GatewayProcessManagerTests {
         }
     }
 
-    @Test func `clears last failure when health succeeds`() async throws {
-        let session = GatewayTestWebSocketSession(
-            taskFactory: {
-                GatewayTestWebSocketTask(
-                    sendHook: { task, message, sendIndex in
-                        guard sendIndex > 0 else { return }
-                        guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
-                        task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
-                    })
-            })
+    @Test func `readiness fixtures preserve other gateway owners`() async throws {
         let url = try #require(URL(string: "ws://example.invalid"))
-        let connection = GatewayConnection(
-            configProvider: { (url: url, token: nil, password: nil) },
-            sessionBox: WebSocketSessionBox(session: session))
+        try await self.withLaunchAgentEnvironment {
+            let port = GatewayEnvironment.gatewayPort()
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(self.loadedGatewayStatus(port: port))
+            let shared = GatewayProcessManager.shared
+            shared._testResetGatewayStartTask()
+            shared.setTestingStatus(.stopped)
+            defer {
+                shared._testResetGatewayStartTask()
+                shared.setTestingStatus(.stopped)
+                shared.setTestingConnection(nil)
+                shared.setTestingSkipControlChannelRefresh(false)
+            }
 
-        let manager = GatewayProcessManager.shared
-        manager.setTestingConnection(connection)
-        manager.setTestingDesiredActive(true)
-        manager.setTestingSkipControlChannelRefresh(true)
-        manager.setTestingLastFailureReason("health failed")
-        manager.setTestingStatus(.failed("Gateway did not start in time"))
-        let readinessPort = GatewayEnvironment.gatewayPort()
-        manager._testSetLaunchAgentReadinessFailure(port: readinessPort, pid: 4242)
-        let descriptor = PortGuardian.Descriptor(
-            pid: 4343,
-            command: "openclaw-gateway",
-            executablePath: "/tmp/openclaw-gateway")
-        await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: readinessPort)
-        defer {
-            manager.setTestingConnection(nil)
-            manager.setTestingDesiredActive(false)
-            manager.setTestingSkipControlChannelRefresh(false)
-            manager.setTestingLastFailureReason(nil)
-            manager._testClearLaunchAgentReadinessFailure()
+            let first = self.makeGatewayReadinessFixture(url: url) {
+                self.gatewayTask(healthSucceedsAfter: 0)
+            }
+            first.manager.desiredActive = true
+            first.manager.setTestingStatus(.starting)
+            #expect(shared.status == .stopped)
+
+            // Another test can construct its fixture before the first readiness probe runs.
+            let second = self.makeGatewayReadinessFixture(url: url) {
+                self.gatewayTask(healthSucceedsAfter: 0)
+            }
+            second.manager.setTestingStatus(.stopped)
+            await PortGuardian.shared.setTestingDescriptor(self.gatewayDescriptor(pid: 4242), forPort: port)
+
+            #expect(await first.manager.waitForGatewayReady(timeout: 0.5))
+            #expect(first.session.snapshotMakeCount() == 1)
+            #expect(second.session.snapshotMakeCount() == 0)
+            #expect(first.manager.status == .running(details: "pid 4242"))
+            #expect(second.manager.status == .stopped)
+            #expect(shared.status == .stopped)
+            let expectedDaemonCalls = AppProfile.current.isActive ? [["status", "--json", "--no-probe"]] : []
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot() == expectedDaemonCalls)
+
+            await first.connection.shutdown()
+            await second.connection.shutdown()
+            await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
         }
+    }
 
-        let ready = await manager.waitForGatewayReady(timeout: 0.5)
-        #expect(ready)
-        #expect(manager.lastFailureReason == nil)
-        #expect(!manager._testHasLaunchAgentReadinessFailure())
-        #expect(manager.status == .running(details: "pid 4343"))
-        await PortGuardian.shared.setTestingDescriptor(nil, forPort: readinessPort)
+    @Test func `routine readiness preserves an attached gateway and control channel`() async throws {
+        try await self.withLaunchAgentEnvironment {
+            let url = try #require(URL(string: "ws://127.0.0.1:9"))
+            let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+                self.gatewayTask(healthSucceedsAfter: 0)
+            }
+            manager.desiredActive = true
+            manager.lastFailureReason = "health failed"
+            manager.setTestingStatus(.attachedExisting(details: "pid 4343"))
+            manager._testClearControlChannelRefreshForces()
+            manager._testClearLaunchAgentInstallEvidence()
+            manager._testSetLastObservedGatewayPID(4343)
+            let readinessPort = GatewayEnvironment.gatewayPort()
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
+                self.loadedGatewayStatus(port: readinessPort, pid: 4343))
+            manager._testSetLaunchAgentReadinessFailure(port: readinessPort, pid: 4242)
+            let descriptor = self.gatewayDescriptor(pid: 4343)
+            await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: readinessPort)
+            defer {
+                manager.desiredActive = false
+                manager.lastFailureReason = nil
+                manager._testClearControlChannelRefreshForces()
+                manager._testClearLaunchAgentInstallEvidence()
+                manager._testSetLastObservedGatewayPID(nil)
+                manager._testClearLaunchAgentReadinessFailure()
+            }
+
+            let ready = await manager.waitForGatewayReady(timeout: 0.5)
+            #expect(ready)
+            #expect(manager.lastFailureReason == nil)
+            #expect(!manager._testHasLaunchAgentReadinessFailure())
+            #expect(manager.status == .attachedExisting(details: "pid 4343"))
+            #expect(manager._testControlChannelRefreshForces().last == false)
+            await connection.shutdown()
+            await PortGuardian.shared.setTestingDescriptor(nil, forPort: readinessPort)
+        }
     }
 
     @Test func `startup install forces the recovered control channel refresh`() async throws {
-        let marker = FileManager.default.temporaryDirectory
-            .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
-        let session = GatewayTestWebSocketSession(
-            taskFactory: {
-                GatewayTestWebSocketTask(
-                    sendHook: { task, message, sendIndex in
-                        guard sendIndex > 0 else { return }
-                        guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
-                        task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
-                    })
-            })
+        let port = try self.availableGatewayPort()
         let url = try #require(URL(string: "ws://example.invalid"))
-        let connection = GatewayConnection(
-            configProvider: { (url: url, token: nil, password: nil) },
-            sessionBox: WebSocketSessionBox(session: session))
+        let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+            self.gatewayTask(healthSucceedsAfter: 0)
+        }
 
-        try await self.withLocalGatewayConfig {
-            let port = GatewayEnvironment.gatewayPort()
-            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
-            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
-            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
-                #"{"ok":true,"service":{"loaded":false}}"#)
-            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-            let manager = GatewayProcessManager.shared
-            manager.setTestingConnection(connection)
-            manager.setTestingDesiredActive(true)
+        try await self.withLaunchAgentEnvironment(
+            port: port,
+            statusPayload: #"{"ok":true,"service":{"loaded":false}}"#)
+        {
+            #expect(GatewayEnvironment.gatewayPort() == port)
+            manager.desiredActive = true
             manager.setTestingStatus(.attachedExisting(details: "old pid"))
-            manager.setTestingSkipControlChannelRefresh(true)
             manager._testClearControlChannelRefreshForces()
             manager._testClearLaunchAgentReadinessFailure()
             defer {
-                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
-                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
-                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
-                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-                manager.setTestingConnection(nil)
-                manager.setTestingDesiredActive(false)
-                manager.setTestingSkipControlChannelRefresh(false)
+                manager.desiredActive = false
                 manager._testClearControlChannelRefreshForces()
                 manager._testClearLaunchAgentReadinessFailure()
             }
 
             #expect(await manager._testEnableLaunchAgentIfNeededInstalled(
-                bundlePath: "/Applications/OpenClaw.app",
                 port: port))
-            let descriptor = PortGuardian.Descriptor(
-                pid: 4242,
-                command: "openclaw-gateway",
-                executablePath: "/tmp/openclaw-gateway")
+            let descriptor = self.gatewayDescriptor(pid: 4242)
             await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: port)
 
             #expect(await manager.waitForGatewayReady(timeout: 0.5))
@@ -1056,9 +2398,11 @@ struct GatewayProcessManagerTests {
     }
 
     @Test func `readiness refreshes when the endpoint pid changes during the probe`() async throws {
-        let port = GatewayEnvironment.gatewayPort()
-        let session = GatewayTestWebSocketSession(
-            taskFactory: {
+        try await self.withLaunchAgentEnvironment {
+            let port = GatewayEnvironment.gatewayPort()
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(self.loadedGatewayStatus(port: port, pid: 4343))
+            let url = try #require(URL(string: "ws://example.invalid"))
+            let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
                 GatewayTestWebSocketTask(
                     sendHook: { task, message, sendIndex in
                         guard sendIndex > 0 else { return }
@@ -1070,145 +2414,100 @@ struct GatewayProcessManagerTests {
                         await PortGuardian.shared.setTestingDescriptor(replacement, forPort: port)
                         task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
                     })
-            })
-        let url = try #require(URL(string: "ws://example.invalid"))
-        let connection = GatewayConnection(
-            configProvider: { (url: url, token: nil, password: nil) },
-            sessionBox: WebSocketSessionBox(session: session))
-
-        let manager = GatewayProcessManager.shared
-        manager.setTestingConnection(connection)
-        manager.setTestingDesiredActive(true)
-        manager.setTestingStatus(.running(details: "pid 4242"))
-        manager.setTestingSkipControlChannelRefresh(true)
-        manager._testClearControlChannelRefreshForces()
-        manager._testClearLaunchAgentReadinessFailure()
-        manager._testClearLaunchAgentInstallEvidence()
-        manager._testSetLastObservedGatewayPID(4242)
-        defer {
-            manager.setTestingConnection(nil)
-            manager.setTestingDesiredActive(false)
-            manager.setTestingSkipControlChannelRefresh(false)
+            }
+            manager.desiredActive = true
+            manager.setTestingStatus(.attachedExisting(details: "pid 4242"))
             manager._testClearControlChannelRefreshForces()
             manager._testClearLaunchAgentReadinessFailure()
             manager._testClearLaunchAgentInstallEvidence()
-            manager._testSetLastObservedGatewayPID(nil)
+            manager._testSetLastObservedGatewayPID(4242)
+            defer {
+                manager.desiredActive = false
+                manager._testClearControlChannelRefreshForces()
+                manager._testClearLaunchAgentReadinessFailure()
+                manager._testClearLaunchAgentInstallEvidence()
+                manager._testSetLastObservedGatewayPID(nil)
+            }
+
+            let stateDir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("openclaw-gateway-pid-refresh-\(UUID().uuidString)", isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: stateDir) }
+            let ready = await DeviceIdentityStore.withStateDirectory(stateDir) {
+                await manager.waitForGatewayReady(timeout: 0.5)
+            }
+            #expect(ready)
+            #expect(manager._testControlChannelRefreshForces().last == true)
+            #expect(manager.status == .running(details: "pid 4343"))
+
+            await connection.shutdown()
+            await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
         }
-
-        #expect(await manager.waitForGatewayReady(timeout: 0.5))
-        #expect(manager._testControlChannelRefreshForces().last == true)
-        #expect(manager.status == .running(details: "pid 4343"))
-
-        await connection.shutdown()
-        await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
     }
 
     @Test func `readiness retains the endpoint pid from before a launchd candidate`() async throws {
-        let port = GatewayEnvironment.gatewayPort()
-        let session = GatewayTestWebSocketSession(
-            taskFactory: {
-                GatewayTestWebSocketTask(
-                    sendHook: { task, message, sendIndex in
-                        guard sendIndex > 0 else { return }
-                        guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
-                        task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
-                    })
-            })
-        let url = try #require(URL(string: "ws://example.invalid"))
-        let connection = GatewayConnection(
-            configProvider: { (url: url, token: nil, password: nil) },
-            sessionBox: WebSocketSessionBox(session: session))
-        let descriptor = PortGuardian.Descriptor(
-            pid: 4242,
-            command: "openclaw-gateway",
-            executablePath: "/tmp/openclaw-gateway")
+        try await self.withLaunchAgentEnvironment {
+            let port = GatewayEnvironment.gatewayPort()
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(self.loadedGatewayStatus(port: port, pid: 4242))
+            let url = try #require(URL(string: "ws://127.0.0.1:9"))
+            let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+                self.gatewayTask(healthSucceedsAfter: 0)
+            }
+            let descriptor = self.gatewayDescriptor(pid: 4242)
 
-        let manager = GatewayProcessManager.shared
-        manager.setTestingConnection(connection)
-        manager.setTestingDesiredActive(true)
-        manager.setTestingStatus(.running(details: "pid 4141"))
-        manager.setTestingSkipControlChannelRefresh(true)
-        manager._testClearControlChannelRefreshForces()
-        manager._testClearLaunchAgentReadinessFailure()
-        manager._testClearLaunchAgentInstallEvidence()
-        manager._testSetLastObservedGatewayPID(4141)
-        manager._testSetLaunchAgentReadinessCandidate(port: port, pid: 4242)
-        await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: port)
-        defer {
-            manager.setTestingConnection(nil)
-            manager.setTestingDesiredActive(false)
-            manager.setTestingSkipControlChannelRefresh(false)
+            manager.desiredActive = true
+            manager.setTestingStatus(.running(details: "pid 4141"))
             manager._testClearControlChannelRefreshForces()
             manager._testClearLaunchAgentReadinessFailure()
             manager._testClearLaunchAgentInstallEvidence()
-            manager._testSetLastObservedGatewayPID(nil)
+            manager._testSetLastObservedGatewayPID(4141)
+            manager._testSetLaunchAgentReadinessCandidate(port: port, pid: 4242)
+            await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: port)
+            defer {
+                manager.desiredActive = false
+                manager._testClearControlChannelRefreshForces()
+                manager._testClearLaunchAgentReadinessFailure()
+                manager._testClearLaunchAgentInstallEvidence()
+                manager._testSetLastObservedGatewayPID(nil)
+            }
+
+            #expect(await manager.waitForGatewayReady(timeout: 0.5))
+            #expect(manager._testControlChannelRefreshForces().last == true)
+            #expect(manager.status == .running(details: "pid 4242"))
+
+            await connection.shutdown()
+            await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
         }
-
-        #expect(await manager.waitForGatewayReady(timeout: 0.5))
-        #expect(manager._testControlChannelRefreshForces().last == true)
-        #expect(manager.status == .running(details: "pid 4242"))
-
-        await connection.shutdown()
-        await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
     }
 
     @Test func `responsive health rejection does not arm launchd repair`() async throws {
         let port = 19105
-        let marker = FileManager.default.temporaryDirectory
-            .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
-        let session = GatewayTestWebSocketSession(
-            taskFactory: {
-                GatewayTestWebSocketTask(
-                    sendHook: { task, message, sendIndex in
-                        guard sendIndex > 0 else { return }
-                        guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
-                        let response = Data(
-                            """
-                            {"type":"res","id":"\(id)","ok":false,
-                             "error":{"code":"INVALID_REQUEST","message":"health rejected"}}
-                            """.utf8)
-                        task.emitReceiveSuccess(.data(response))
-                    })
-            })
         let url = try #require(URL(string: "ws://example.invalid"))
-        let connection = GatewayConnection(
-            configProvider: { (url: url, token: nil, password: nil) },
-            sessionBox: WebSocketSessionBox(session: session))
+        let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+            GatewayTestWebSocketTask(
+                sendHook: { task, message, sendIndex in
+                    guard sendIndex > 0 else { return }
+                    guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
+                    let response = Data(
+                        """
+                        {"type":"res","id":"\(id)","ok":false,
+                         "error":{"code":"INVALID_REQUEST","message":"health rejected"}}
+                        """.utf8)
+                    task.emitReceiveSuccess(.data(response))
+                })
+        }
 
-        try await self.withLocalGatewayConfig {
-            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
-            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
-            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
-                """
-                {"ok":true,"service":{
-                  "loaded":true,
-                  "runtime":{"status":"running","pid":4242},
-                  "command":{"programArguments":["openclaw","gateway","--port","\(port)"]},
-                  "configAudit":{"ok":true,"issues":[]}
-                }}
-                """)
-            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-            let manager = GatewayProcessManager.shared
-            manager.setTestingConnection(connection)
-            manager.setTestingDesiredActive(true)
+        try await self.withLaunchAgentEnvironment(statusPayload: self.loadedGatewayStatus(port: port)) {
+            manager.desiredActive = true
             manager.setTestingStatus(.attachedExisting(details: "pid 4242"))
             manager._testClearLaunchAgentReadinessFailure()
             manager._testSetLaunchAgentReadinessCandidate(port: port, pid: 4242)
             defer {
-                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
-                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
-                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
-                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-                manager.setTestingConnection(nil)
-                manager.setTestingDesiredActive(false)
-                manager.setTestingLastFailureReason(nil)
+                manager.desiredActive = false
+                manager.lastFailureReason = nil
                 manager._testClearLaunchAgentReadinessFailure()
             }
 
-            let descriptor = PortGuardian.Descriptor(
-                pid: 4242,
-                command: "openclaw-gateway",
-                executablePath: "/tmp/openclaw-gateway")
+            let descriptor = self.gatewayDescriptor(pid: 4242)
             await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: port)
 
             #expect(await manager.waitForGatewayReady(timeout: 0.5) == false)
@@ -1223,7 +2522,6 @@ struct GatewayProcessManagerTests {
 
             GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
             _ = await manager._testEnableLaunchAgentIfNeeded(
-                bundlePath: "/Applications/OpenClaw.app",
                 port: port)
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
                 .filter { $0.first == "install" }.isEmpty)
@@ -1233,93 +2531,701 @@ struct GatewayProcessManagerTests {
         }
     }
 
-    @Test func `transient unavailable health response retries until ready`() async throws {
-        let port = GatewayEnvironment.gatewayPort()
-        let session = GatewayTestWebSocketSession(
-            taskFactory: {
-                GatewayTestWebSocketTask(
-                    sendHook: { task, message, sendIndex in
-                        guard sendIndex > 0 else { return }
-                        guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
-                        if sendIndex == 1 {
-                            let response = Data(
-                                """
-                                {"type":"res","id":"\(id)","ok":false,
-                                 "error":{"code":"UNAVAILABLE","message":"gateway restarting"}}
-                                """.utf8)
-                            task.emitReceiveSuccess(.data(response))
-                            return
-                        }
-                        task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
-                    })
-            })
-        let url = try #require(URL(string: "ws://example.invalid"))
-        let connection = GatewayConnection(
-            configProvider: { (url: url, token: nil, password: nil) },
-            sessionBox: WebSocketSessionBox(session: session))
-        let descriptor = PortGuardian.Descriptor(
-            pid: 4242,
-            command: "openclaw-gateway",
-            executablePath: "/tmp/openclaw-gateway")
+    @Test(arguments: [
+        (Duration.zero, Duration.milliseconds(300), true),
+        (.milliseconds(600), .milliseconds(300), true),
+        (.milliseconds(900), .milliseconds(100), false),
+    ])
+    func `transient unavailable health response retries within its budget`(
+        responseDelay: Duration,
+        retryDelay: Duration,
+        becomesReady: Bool) async throws
+    {
+        let stateDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-gateway-ready-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: stateDir) }
+        try await self.withLaunchAgentEnvironment {
+            try await DeviceIdentityStore.withStateDirectory(stateDir) {
+                let port = GatewayEnvironment.gatewayPort()
+                // Named profiles require the healthy listener to match their managed service.
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(self.loadedGatewayStatus(port: port))
+                let url = try #require(URL(string: "ws://example.invalid"))
+                let clock = ManualTestClock()
+                let startedAt = clock.now
+                let firstHealthRequest = AsyncTestGate()
+                let responseGate = AsyncTestGate()
+                defer { responseGate.open() }
+                let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url, clock: clock) {
+                    self.gatewayTask(
+                        healthSucceedsAfter: 1,
+                        healthResponseGates: [responseGate],
+                        firstHealthRequest: firstHealthRequest)
+                }
+                let descriptor = self.gatewayDescriptor(pid: 4242)
 
-        let manager = GatewayProcessManager.shared
-        manager.setTestingConnection(connection)
-        manager.setTestingDesiredActive(true)
-        manager.setTestingStatus(.starting)
-        manager._testClearLaunchAgentReadinessFailure()
-        await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: port)
-        defer {
-            manager.setTestingConnection(nil)
-            manager.setTestingDesiredActive(false)
-            manager.setTestingLastFailureReason(nil)
-            manager._testClearLaunchAgentReadinessFailure()
-            manager._testSetLastObservedGatewayPID(nil)
+                manager.desiredActive = true
+                manager.setTestingStatus(.starting)
+                manager._testClearLaunchAgentReadinessFailure()
+                manager._testSetLaunchAgentReadinessCandidate(port: port, pid: 4242)
+                await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: port)
+                defer {
+                    manager.desiredActive = false
+                    manager.lastFailureReason = nil
+                    manager._testClearLaunchAgentReadinessFailure()
+                    manager._testSetLastObservedGatewayPID(nil)
+                }
+
+                _ = try await connection.request(method: "status", params: nil, retryTransportFailures: false)
+                let readiness = Task { await manager.waitForGatewayReady(timeout: 1) }
+                await clock.waitForSleep(until: startedAt.advanced(by: .seconds(1)))
+                await firstHealthRequest.wait()
+                clock.advance(by: responseDelay)
+                let probeRegistration = clock.sleepRegistrations
+                responseGate.open()
+                // A clipped retry shares the old probe's deadline, but must own a new timer.
+                await clock.waitForSleep(until: clock.now.advanced(by: retryDelay), after: probeRegistration)
+                #expect(session.latestTask()?.snapshotSendCount() == 3)
+                #expect(manager.status == .starting)
+                #expect(!manager._testHasLaunchAgentReadinessFailure())
+                clock.advance(by: retryDelay)
+
+                #expect(await readiness.value == becomesReady)
+                #expect(session.snapshotMakeCount() == 1)
+                #expect(session.latestTask()?.snapshotSendCount() == (becomesReady ? 4 : 3))
+                #expect(manager.status == (becomesReady ? .running(details: "pid 4242") : .starting))
+                #expect(!manager._testHasLaunchAgentReadinessFailure())
+
+                await connection.shutdown()
+                await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+            }
+        }
+    }
+
+    @Test(arguments: [
+        ("UNAVAILABLE", "startup-sidecars", true, true),
+        ("UNAVAILABLE", "startup-sidecars", false, false),
+        ("UNAUTHORIZED", "auth-token-mismatch", true, false),
+        ("UNAVAILABLE", "other", true, false),
+    ])
+    func `startup handshake retries without repairing while auth rejections remain terminal`(
+        code: String,
+        reason: String,
+        retryable: Bool,
+        schedulesRetry: Bool) async throws
+    {
+        let stateDir = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: stateDir) }
+        try await self.withLaunchAgentEnvironment {
+            try await DeviceIdentityStore.withStateDirectory(stateDir) {
+                let port = GatewayEnvironment.gatewayPort()
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(self.loadedGatewayStatus(port: port))
+                let url = try #require(URL(string: "ws://example.invalid"))
+                let clock = ManualTestClock()
+                let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url, clock: clock) {
+                    GatewayTestWebSocketTask(receiveHook: { task, index in
+                        if index == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
+                        let id = task.snapshotConnectRequestID() ?? "connect"
+                        return .data(Data("""
+                        {"type":"res","id":"\(id)","ok":false,"error":{
+                          "code":"\(code)","message":"fixture connect rejected","retryable":\(retryable),
+                          "details":{"reason":"\(reason)"}}}
+                        """.utf8))
+                    })
+                }
+                manager.desiredActive = true
+                manager.setTestingStatus(.starting)
+                manager._testSetLaunchAgentReadinessCandidate(port: port, pid: 4242)
+                await PortGuardian.shared.setTestingDescriptor(self.gatewayDescriptor(pid: 4242), forPort: port)
+                defer {
+                    manager.desiredActive = false
+                    manager._testClearLaunchAgentReadinessFailure()
+                    manager._testSetLastObservedGatewayPID(nil)
+                }
+                let retryAt = clock.now.advanced(by: .milliseconds(300))
+                let observed = AsyncTestGate()
+                var retryScheduled = false
+                let retryObserver = Task {
+                    await clock.waitForSleep(until: retryAt)
+                    guard !Task.isCancelled else { return }
+                    retryScheduled = true
+                    observed.open()
+                }
+                let readiness = Task {
+                    let ready = await manager.waitForGatewayReady(timeout: 1)
+                    observed.open()
+                    return ready
+                }
+                await observed.wait()
+                #expect(retryScheduled == schedulesRetry)
+                if schedulesRetry {
+                    #expect(manager.status == .starting)
+                } else if case .failed = manager.status {
+                    // Authentication and unrelated refusals terminate the first probe.
+                } else {
+                    Issue.record("expected a terminal handshake rejection")
+                }
+                // End this lifecycle before a second connection can enter the transport's backoff.
+                manager.desiredActive = false
+                retryObserver.cancel()
+                clock.advance(by: .milliseconds(300))
+                #expect(await readiness.value == false)
+                await retryObserver.value
+                #expect(session.snapshotMakeCount() == 1)
+                #expect(!manager._testHasLaunchAgentReadinessFailure())
+                #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                    .allSatisfy { $0.first != "install" })
+
+                await connection.shutdown()
+                await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+            }
+        }
+    }
+
+    @Test func `readiness waiter rechecks after current owner fails past its timeout`() async throws {
+        let port = 19114
+        let waiterTimeout: TimeInterval = 6
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let ownerReachedFailure = AsyncTestGate()
+        let finishOwner = AsyncTestGate()
+        let waiterStarted = AsyncTestGate()
+        let readinessFinished = Mutex(false)
+        let healthMaySucceed = Mutex(false)
+        let recoveryHealthRequests = Mutex(0)
+        defer { finishOwner.open() }
+        let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+            GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
+                guard sendIndex > 0,
+                      let id = GatewayWebSocketTestSupport.requestID(from: message)
+                else { return }
+                if GatewayWebSocketTestSupport.requestMethod(from: message) == "health" {
+                    guard healthMaySucceed.withLock({ $0 }) else { return }
+                    recoveryHealthRequests.withLock { $0 += 1 }
+                }
+                task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+            })
         }
 
-        #expect(await manager.waitForGatewayReady(timeout: 1))
-        #expect(manager.status == .running(details: "pid 4242"))
-        #expect(!manager._testHasLaunchAgentReadinessFailure())
+        try await self.withLaunchAgentEnvironment(
+            port: port,
+            statusPayload: self.loadedGatewayStatus(port: port),
+            commandHook: { arguments in
+                guard arguments.first == "status" else { return }
+                ownerReachedFailure.open()
+                await finishOwner.wait()
+            }) {
+                manager.lastFailureReason = nil
+                manager._testClearLaunchAgentReadinessFailure()
+                let descriptor = self.gatewayDescriptor(pid: 4242)
+                await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: port)
+                defer {
+                    manager.desiredActive = false
+                    manager.lastFailureReason = nil
+                    manager._testClearLaunchAgentReadinessFailure()
+                }
 
-        await connection.shutdown()
-        await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+                _ = try await connection.request(method: "status", params: nil, retryTransportFailures: false)
+                manager._testStartLaunchdGatewayReadiness(
+                    port: port,
+                    pid: 4242,
+                    readinessWindow: 0.5,
+                    firstInstallReadinessBudget: 0.5)
+                let readiness = Task { @MainActor in
+                    waiterStarted.open()
+                    let ready = await manager.waitForGatewayReady(timeout: waiterTimeout)
+                    readinessFinished.withLock { $0 = true }
+                    return ready
+                }
+
+                await waiterStarted.wait()
+                await ownerReachedFailure.wait()
+                // Keep the owner pending beyond the waiter's audit budget.
+                // Recovery then gets its own budget, independent of this wait.
+                do {
+                    try await Task.sleep(for: .seconds(waiterTimeout))
+                } catch {
+                    readiness.cancel()
+                    finishOwner.open()
+                    await manager.waitForStartupAttempt()
+                    _ = await readiness.value
+                    await connection.shutdown()
+                    await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+                    throw error
+                }
+                #expect(!readinessFinished.withLock { $0 })
+                #expect(manager.status == .starting)
+                #expect(manager.lastFailureReason == nil)
+                #expect(!manager._testHasLaunchAgentReadinessFailure())
+                healthMaySucceed.withLock { $0 = true }
+                finishOwner.open()
+
+                #expect(await readiness.value)
+                #expect(manager.status == .running(details: "pid 4242"))
+                #expect(recoveryHealthRequests.withLock { $0 } == 1)
+                #expect(manager.lastFailureReason == nil)
+                #expect(!manager._testHasLaunchAgentReadinessFailure())
+
+                await connection.shutdown()
+                await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+            }
+    }
+
+    @Test func `cancelling an owner readiness waiter preserves startup state`() async throws {
+        let port = 19115
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+            self.gatewayTask(healthSucceedsAfter: nil)
+        }
+
+        try await self.withLaunchAgentEnvironment(
+            port: port,
+            statusPayload: self.loadedGatewayStatus(port: port))
+        {
+            manager.lastFailureReason = nil
+            manager._testClearLaunchAgentReadinessFailure()
+            let descriptor = self.gatewayDescriptor(pid: 4242)
+            await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: port)
+
+            manager._testStartLaunchdGatewayReadiness(
+                port: port,
+                pid: 4242,
+                readinessWindow: 0.5,
+                firstInstallReadinessBudget: 1)
+            let readiness = Task { @MainActor in
+                await manager.waitForGatewayReady(timeout: 0.01)
+            }
+            await self.waitForCondition { session.snapshotMakeCount() > 0 }
+            #expect(session.snapshotMakeCount() > 0)
+
+            let cancelledAt = Date()
+            readiness.cancel()
+            #expect(await readiness.value == false)
+            #expect(Date().timeIntervalSince(cancelledAt) < 0.5)
+            #expect(manager.status == .starting)
+            #expect(manager.lastFailureReason == nil)
+            #expect(!manager._testHasLaunchAgentReadinessFailure())
+
+            manager.stop()
+            await manager.waitForStartupAttempt()
+            await connection.shutdown()
+            await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+        }
+    }
+
+    @Test func `new launchd gateway can cross multiple readiness deadlines`() async throws {
+        let port = 19116
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let responseGates = [AsyncTestGate(), AsyncTestGate()]
+        let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+            self.gatewayTask(
+                healthSucceedsAfter: 2,
+                healthResponseGates: responseGates)
+        }
+
+        try await self.withLaunchAgentEnvironment(
+            port: port,
+            statusPayload: self.loadedGatewayStatus(port: port, pid: 4243))
+        {
+            manager._testClearControlChannelRefreshForces()
+            manager._testClearLaunchAgentReadinessFailure()
+            let descriptor = self.gatewayDescriptor(pid: 4243)
+            await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: port)
+            defer {
+                manager._testClearControlChannelRefreshForces()
+                manager._testClearLaunchAgentReadinessFailure()
+            }
+
+            manager._testStartLaunchdGatewayReadiness(
+                port: port,
+                pid: 4242,
+                readinessWindow: 0.2,
+                firstInstallReadinessBudget: 5)
+            // Release each response only after its 200 ms window so the test owns
+            // both deadline crossings instead of depending on runner scheduling.
+            await self.waitForCondition { session.latestTask()?.snapshotSendCount() ?? 0 >= 2 }
+            #expect(session.latestTask()?.snapshotSendCount() ?? 0 >= 2)
+            try await Task.sleep(for: .milliseconds(250))
+            responseGates[0].open()
+            await self.waitForCondition { session.latestTask()?.snapshotSendCount() ?? 0 >= 3 }
+            #expect(session.latestTask()?.snapshotSendCount() ?? 0 >= 3)
+            try await Task.sleep(for: .milliseconds(250))
+            responseGates[1].open()
+            await manager.waitForStartupAttempt()
+
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                .filter { $0.first == "status" }.count == 1)
+            #expect(manager.status == .running(details: "pid 4243"))
+            #expect(manager.lastFailureReason == nil)
+            #expect(!manager._testHasLaunchAgentReadinessFailure())
+            #expect(manager._testControlChannelRefreshForces().last == true)
+
+            await connection.shutdown()
+            await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+        }
+    }
+
+    @Test func `delayed fresh install authorization cannot restart readiness budget`() async throws {
+        let port = 19118
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+            GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
+                guard sendIndex == 1,
+                      let id = GatewayWebSocketTestSupport.requestID(from: message)
+                else { return }
+                task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+            })
+        }
+
+        try await self.withLaunchAgentEnvironment(
+            port: port,
+            statusPayload: self.loadedGatewayStatus(port: port),
+            commandDelayNanoseconds: 100_000_000)
+        {
+            manager.lastFailureReason = nil
+            manager._testClearLaunchAgentReadinessFailure()
+            let descriptor = self.gatewayDescriptor(pid: 4242)
+            await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: port)
+            defer {
+                manager.lastFailureReason = nil
+                manager._testClearLaunchAgentReadinessFailure()
+            }
+
+            // Establish the socket before the short probe budget. This test owns
+            // delayed launchd authorization, not cold-handshake scheduling.
+            _ = try await connection.request(method: "status", params: nil, retryTransportFailures: false)
+            manager._testStartLaunchdGatewayReadiness(
+                port: port,
+                pid: 4242,
+                readinessWindow: 0.01,
+                firstInstallReadinessBudget: 0.02)
+            await manager.waitForStartupAttempt()
+
+            #expect(manager.status == .failed("Gateway did not start in time"))
+            #expect(manager.lastFailureReason == "launchd start timeout")
+            #expect(manager._testHasLaunchAgentReadinessFailure())
+            #expect(session.latestTask()?.snapshotSendCount() == 3)
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                .filter { $0.first == "status" }.count == 2)
+
+            await connection.shutdown()
+            await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+        }
+    }
+
+    @Test func `new launchd gateway fails after bounded readiness grace`() async throws {
+        let port = 19117
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+            GatewayTestWebSocketTask()
+        }
+
+        try await self.withLaunchAgentEnvironment(
+            port: port,
+            statusPayload: self.loadedGatewayStatus(port: port))
+        {
+            manager.lastFailureReason = nil
+            manager._testClearLaunchAgentReadinessFailure()
+            manager._testClearLaunchAgentInstallEvidence()
+            let descriptor = self.gatewayDescriptor(pid: 4242)
+            await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: port)
+            defer {
+                manager.lastFailureReason = nil
+                manager._testClearLaunchAgentReadinessFailure()
+                manager._testClearLaunchAgentInstallEvidence()
+            }
+
+            manager._testStartLaunchdGatewayReadiness(
+                port: port,
+                pid: 4242,
+                readinessWindow: 0.05,
+                firstInstallReadinessBudget: 0.1)
+            await manager.waitForStartupAttempt()
+            guard case .failed("Gateway did not start in time") = manager.status else {
+                Issue.record("fresh launchd readiness did not fail within its bounded grace")
+                await connection.shutdown()
+                await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+                return
+            }
+
+            #expect(manager.lastFailureReason == "launchd start timeout")
+            #expect(manager._testHasLaunchAgentReadinessFailure())
+
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            _ = await manager._testEnableLaunchAgentIfNeeded(
+                port: port)
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                .filter { $0.first == "install" }.count == 1)
+
+            await connection.shutdown()
+            await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+        }
+    }
+
+    @Test func `reused launchd gateway gets the cold-start budget before repair`() async throws {
+        let port = 19119
+        let url = try #require(URL(string: "ws://example.invalid"))
+        // The first health probe never answers while readiness runs, as a cold start after reboot.
+        let firstHealthResponse = AsyncTestGate()
+        let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+            self.gatewayTask(healthSucceedsAfter: 0, healthResponseGates: [firstHealthResponse])
+        }
+
+        try await self.withLaunchAgentEnvironment(
+            port: port,
+            statusPayload: self.loadedGatewayStatus(port: port))
+        {
+            manager.lastFailureReason = nil
+            manager._testClearLaunchAgentReadinessFailure()
+            manager._testClearLaunchAgentInstallEvidence()
+            let descriptor = self.gatewayDescriptor(pid: 4242)
+            await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: port)
+            defer {
+                manager.lastFailureReason = nil
+                manager._testClearLaunchAgentReadinessFailure()
+                manager._testClearLaunchAgentInstallEvidence()
+            }
+
+            _ = try await connection.request(method: "status", params: nil, retryTransportFailures: false)
+            manager._testStartLaunchdGatewayReadiness(
+                port: port,
+                pid: 4242,
+                readinessWindow: 0.2,
+                firstInstallReadinessBudget: 5,
+                hasFreshInstallEvidence: false)
+            // launchd is first inspected only after the first probe has timed out at the window, so
+            // answering after that point means ready can only come from an extension.
+            await self.waitForCondition(attempts: 3000) {
+                GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                    .contains { $0.first == "status" }
+            }
+            firstHealthResponse.open()
+            await manager.waitForStartupAttempt()
+
+            #expect(manager.status == .running(details: "pid 4242"))
+            #expect(manager.lastFailureReason == nil)
+            #expect(!manager._testHasLaunchAgentReadinessFailure())
+
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            _ = await manager._testEnableLaunchAgentIfNeeded(
+                port: port)
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                .filter { $0.first == "install" }.isEmpty)
+
+            await connection.shutdown()
+            await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+        }
+    }
+
+    @Test func `reused launchd gateway outlasting the first-run budget is not repaired`() async throws {
+        let port = 19123
+        let url = try #require(URL(string: "ws://example.invalid"))
+        // Every health probe hangs until the gate opens, as a reboot cold start slower than a first run.
+        let healthResponse = AsyncTestGate()
+        let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+            self.gatewayTask(
+                healthSucceedsAfter: 0,
+                healthResponseGates: Array(repeating: healthResponse, count: 200))
+        }
+
+        try await self.withLaunchAgentEnvironment(
+            port: port,
+            statusPayload: self.loadedGatewayStatus(port: port))
+        {
+            manager.lastFailureReason = nil
+            manager._testClearLaunchAgentReadinessFailure()
+            manager._testClearLaunchAgentInstallEvidence()
+            let descriptor = self.gatewayDescriptor(pid: 4242)
+            await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: port)
+            defer {
+                manager.lastFailureReason = nil
+                manager._testClearLaunchAgentReadinessFailure()
+                manager._testClearLaunchAgentInstallEvidence()
+            }
+
+            _ = try await connection.request(method: "status", params: nil, retryTransportFailures: false)
+            manager._testStartLaunchdGatewayReadiness(
+                port: port,
+                pid: 4242,
+                readinessWindow: 0.05,
+                firstInstallReadinessBudget: 0.2,
+                reusedLaunchdReadinessBudget: 5,
+                hasFreshInstallEvidence: false)
+            // launchd is inspected once per extended deadline, so the sixth inspection is at 0.3s:
+            // past the first-run budget. With that budget the attempt would already have failed.
+            await self.waitForCondition(attempts: 3000) {
+                GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                    .count(where: { $0.first == "status" }) >= 6
+            }
+            healthResponse.open()
+            await manager.waitForStartupAttempt()
+
+            #expect(manager.status == .running(details: "pid 4242"))
+            #expect(manager.lastFailureReason == nil)
+            #expect(!manager._testHasLaunchAgentReadinessFailure())
+
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            _ = await manager._testEnableLaunchAgentIfNeeded(
+                port: port)
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                .filter { $0.first == "install" }.isEmpty)
+
+            await connection.shutdown()
+            await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+        }
+    }
+
+    @Test func `reused launchd gateway still repairs after its bounded budget`() async throws {
+        let port = 19120
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+            GatewayTestWebSocketTask()
+        }
+
+        try await self.withLaunchAgentEnvironment(
+            port: port,
+            statusPayload: self.loadedGatewayStatus(port: port))
+        {
+            manager.lastFailureReason = nil
+            manager._testClearLaunchAgentReadinessFailure()
+            manager._testClearLaunchAgentInstallEvidence()
+            let descriptor = self.gatewayDescriptor(pid: 4242)
+            await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: port)
+            defer {
+                manager.lastFailureReason = nil
+                manager._testClearLaunchAgentReadinessFailure()
+                manager._testClearLaunchAgentInstallEvidence()
+            }
+
+            manager._testStartLaunchdGatewayReadiness(
+                port: port,
+                pid: 4242,
+                readinessWindow: 0.05,
+                firstInstallReadinessBudget: 0.1,
+                hasFreshInstallEvidence: false)
+            await manager.waitForStartupAttempt()
+
+            #expect(manager.status == .failed("Gateway did not start in time"))
+            #expect(manager.lastFailureReason == "launchd start timeout")
+            #expect(manager._testHasLaunchAgentReadinessFailure())
+
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            _ = await manager._testEnableLaunchAgentIfNeeded(
+                port: port)
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                .filter { $0.first == "install" }.count == 1)
+
+            await connection.shutdown()
+            await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+        }
+    }
+
+    @Test func `changed launchd PID does not inherit the cold-start budget`() async throws {
+        let port = 19121
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+            GatewayTestWebSocketTask()
+        }
+
+        // launchd now reports 4243 and nothing owns the port, so 4242 is gone.
+        try await self.withLaunchAgentEnvironment(
+            port: port,
+            statusPayload: self.loadedGatewayStatus(port: port, pid: 4243))
+        {
+            manager.lastFailureReason = nil
+            manager._testClearLaunchAgentReadinessFailure()
+            manager._testClearLaunchAgentInstallEvidence()
+            await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+            defer {
+                manager.lastFailureReason = nil
+                manager._testClearLaunchAgentReadinessFailure()
+                manager._testClearLaunchAgentInstallEvidence()
+            }
+
+            manager._testStartLaunchdGatewayReadiness(
+                port: port,
+                pid: 4242,
+                readinessWindow: 0.05,
+                firstInstallReadinessBudget: 5,
+                hasFreshInstallEvidence: false)
+            await manager.waitForStartupAttempt()
+
+            // An extension would adopt 4243 and time out with repair evidence after the budget.
+            #expect(manager.status == .failed("Gateway did not become ready in time"))
+            #expect(!manager._testHasLaunchAgentReadinessFailure())
+
+            await connection.shutdown()
+        }
+    }
+
+    @Test func `reused launchd PID replaced during its grace loses the grace`() async throws {
+        let port = 19122
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+            GatewayTestWebSocketTask()
+        }
+
+        // 4242 earns the first extension; launchd then reports its replacement 4243.
+        try await self.withLaunchAgentEnvironment(
+            port: port,
+            statusPayloads: [
+                self.loadedGatewayStatus(port: port, pid: 4242),
+                self.loadedGatewayStatus(port: port, pid: 4243),
+                self.loadedGatewayStatus(port: port, pid: 4243),
+            ]) {
+                manager.lastFailureReason = nil
+                manager._testClearLaunchAgentReadinessFailure()
+                manager._testClearLaunchAgentInstallEvidence()
+                await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+                defer {
+                    manager.lastFailureReason = nil
+                    manager._testClearLaunchAgentReadinessFailure()
+                    manager._testClearLaunchAgentInstallEvidence()
+                }
+
+                manager._testStartLaunchdGatewayReadiness(
+                    port: port,
+                    pid: 4242,
+                    readinessWindow: 0.05,
+                    firstInstallReadinessBudget: 5,
+                    hasFreshInstallEvidence: false)
+                await manager.waitForStartupAttempt()
+
+                // Standing grace would skip the second check and probe 4242 until the 5s budget.
+                #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                    .filter { $0.first == "status" }.count == 3)
+                #expect(manager.status == .failed("Gateway did not become ready in time"))
+                #expect(!manager._testHasLaunchAgentReadinessFailure())
+
+                await connection.shutdown()
+            }
     }
 
     @Test func `cancelled readiness probe preserves lifecycle state`() async throws {
-        let session = GatewayTestWebSocketSession(
-            taskFactory: {
-                GatewayTestWebSocketTask(
-                    receiveHook: { _, receiveIndex in
-                        if receiveIndex == 0 {
-                            try await Task.sleep(nanoseconds: 30 * 1_000_000_000)
-                        }
-                        throw URLError(.cancelled)
-                    })
-            })
         let url = try #require(URL(string: "ws://example.invalid"))
-        let connection = GatewayConnection(
-            configProvider: { (url: url, token: nil, password: nil) },
-            sessionBox: WebSocketSessionBox(session: session))
-
-        let manager = GatewayProcessManager.shared
-        manager.setTestingConnection(connection)
-        manager.setTestingDesiredActive(true)
+        let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+            GatewayTestWebSocketTask(
+                receiveHook: { _, receiveIndex in
+                    if receiveIndex == 0 {
+                        try await Task.sleep(nanoseconds: 30 * 1_000_000_000)
+                    }
+                    throw URLError(.cancelled)
+                })
+        }
+        manager.desiredActive = true
         manager.setTestingStatus(.running(details: "pid 4242"))
-        manager.setTestingLastFailureReason("keep newer state")
+        manager.lastFailureReason = "keep newer state"
         manager._testClearLaunchAgentReadinessFailure()
         manager._testSetLaunchAgentReadinessCandidate(port: 19106, pid: 4242)
         defer {
-            manager.setTestingConnection(nil)
-            manager.setTestingDesiredActive(false)
-            manager.setTestingLastFailureReason(nil)
+            manager.desiredActive = false
+            manager.lastFailureReason = nil
             manager._testClearLaunchAgentReadinessFailure()
         }
 
         let readiness = Task { @MainActor in
             await manager.waitForGatewayReady(timeout: 0.5)
         }
-        for _ in 0..<100 {
-            if session.snapshotMakeCount() > 0 { break }
-            try? await Task.sleep(nanoseconds: 1_000_000)
+        await self.waitForCondition {
+            session.snapshotMakeCount() > 0
         }
         #expect(session.snapshotMakeCount() == 1)
         readiness.cancel()
@@ -1332,35 +3238,28 @@ struct GatewayProcessManagerTests {
     }
 
     @Test func `transport cancellation does not publish readiness failure`() async throws {
-        let session = GatewayTestWebSocketSession(
-            taskFactory: {
-                GatewayTestWebSocketTask(
-                    receiveHook: { _, _ in
-                        throw URLError(.cancelled)
-                    })
-            })
         let url = try #require(URL(string: "ws://example.invalid"))
-        let connection = GatewayConnection(
-            configProvider: { (url: url, token: nil, password: nil) },
-            sessionBox: WebSocketSessionBox(session: session))
-
-        let manager = GatewayProcessManager.shared
-        manager.setTestingConnection(connection)
-        manager.setTestingDesiredActive(true)
+        let cancellationThrows = Mutex(0)
+        let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+            GatewayTestWebSocketTask(
+                receiveHook: { _, _ in
+                    cancellationThrows.withLock { $0 += 1 }
+                    throw URLError(.cancelled)
+                })
+        }
+        manager.desiredActive = true
         manager.setTestingStatus(.running(details: "pid 4242"))
-        manager.setTestingLastFailureReason("keep current state")
+        manager.lastFailureReason = "keep current state"
         manager._testClearLaunchAgentReadinessFailure()
         manager._testSetLaunchAgentReadinessCandidate(port: 19113, pid: 4242)
         defer {
-            manager.setTestingConnection(nil)
-            manager.setTestingDesiredActive(false)
-            manager.setTestingLastFailureReason(nil)
+            manager.desiredActive = false
+            manager.lastFailureReason = nil
             manager._testClearLaunchAgentReadinessFailure()
         }
 
-        let startedAt = Date()
         #expect(await manager.waitForGatewayReady(timeout: 0.5) == false)
-        #expect(Date().timeIntervalSince(startedAt) < 1.5)
+        #expect(cancellationThrows.withLock { $0 } > 0)
         #expect(manager.status == .running(details: "pid 4242"))
         #expect(manager.lastFailureReason == "keep current state")
         #expect(manager._testHasLaunchAgentReadinessCandidate())
@@ -1368,7 +3267,7 @@ struct GatewayProcessManagerTests {
     }
 
     @Test func `only endpoint reachability failures arm launchd repair`() {
-        let manager = GatewayProcessManager.shared
+        let manager = self.manager
         #expect(manager._testProbeFailureMayNeedLaunchAgentRepair(.timedOut))
         #expect(manager._testProbeFailureMayNeedLaunchAgentRepair(.cannotConnectToHost))
         #expect(manager._testProbeFailureMayNeedLaunchAgentRepair(.networkConnectionLost))
@@ -1380,41 +3279,32 @@ struct GatewayProcessManagerTests {
     }
 
     @Test func `stale readiness wait cannot clear a newer launch failure`() async throws {
-        let session = GatewayTestWebSocketSession(
-            taskFactory: {
-                GatewayTestWebSocketTask(
-                    sendHook: { task, message, sendIndex in
-                        guard sendIndex > 0 else { return }
-                        guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
-                        task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
-                    },
-                    receiveHook: { _, receiveIndex in
-                        if receiveIndex == 0 {
-                            try await Task.sleep(nanoseconds: 100_000_000)
-                        }
-                        return .data(GatewayWebSocketTestSupport.connectChallengeData())
-                    })
-            })
         let url = try #require(URL(string: "ws://example.invalid"))
-        let connection = GatewayConnection(
-            configProvider: { (url: url, token: nil, password: nil) },
-            sessionBox: WebSocketSessionBox(session: session))
-
-        let manager = GatewayProcessManager.shared
-        manager.setTestingConnection(connection)
+        let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+            GatewayTestWebSocketTask(
+                sendHook: { task, message, sendIndex in
+                    guard sendIndex > 0 else { return }
+                    guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
+                    task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+                },
+                receiveHook: { _, receiveIndex in
+                    // Challenge late, then park the unanswered connect like a real socket; an
+                    // immediate reply on every receive spins the handshake until cancellation.
+                    try await Task.sleep(nanoseconds: receiveIndex == 0 ? 100_000_000 : 30 * 1_000_000_000)
+                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                })
+        }
         manager._testBeginGatewayStartGeneration()
         defer {
-            manager.setTestingConnection(nil)
-            manager.setTestingDesiredActive(false)
+            manager.desiredActive = false
             manager._testClearLaunchAgentReadinessFailure()
         }
 
         let staleWait = Task { @MainActor in
             await manager.waitForGatewayReady(timeout: 0.5)
         }
-        for _ in 0..<100 {
-            if session.snapshotMakeCount() > 0 { break }
-            try? await Task.sleep(nanoseconds: 1_000_000)
+        await self.waitForCondition {
+            session.snapshotMakeCount() > 0
         }
         #expect(session.snapshotMakeCount() == 1)
         manager._testBeginGatewayStartGeneration()
@@ -1426,43 +3316,34 @@ struct GatewayProcessManagerTests {
     }
 
     @Test func `same generation stale probe preserves a newer readiness candidate`() async throws {
-        let session = GatewayTestWebSocketSession(
-            taskFactory: {
-                GatewayTestWebSocketTask(
-                    sendHook: { task, message, sendIndex in
-                        guard sendIndex > 0 else { return }
-                        guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
-                        task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
-                    },
-                    receiveHook: { _, receiveIndex in
-                        if receiveIndex == 0 {
-                            try await Task.sleep(nanoseconds: 100_000_000)
-                        }
-                        return .data(GatewayWebSocketTestSupport.connectChallengeData())
-                    })
-            })
         let url = try #require(URL(string: "ws://example.invalid"))
-        let connection = GatewayConnection(
-            configProvider: { (url: url, token: nil, password: nil) },
-            sessionBox: WebSocketSessionBox(session: session))
-
-        let manager = GatewayProcessManager.shared
-        manager.setTestingConnection(connection)
-        manager.setTestingDesiredActive(true)
+        let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+            GatewayTestWebSocketTask(
+                sendHook: { task, message, sendIndex in
+                    guard sendIndex > 0 else { return }
+                    guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
+                    task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+                },
+                receiveHook: { _, receiveIndex in
+                    // Challenge late, then park the unanswered connect like a real socket; an
+                    // immediate reply on every receive spins the handshake until cancellation.
+                    try await Task.sleep(nanoseconds: receiveIndex == 0 ? 100_000_000 : 30 * 1_000_000_000)
+                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                })
+        }
+        manager.desiredActive = true
         manager._testClearLaunchAgentReadinessFailure()
         manager._testSetLaunchAgentReadinessCandidate(port: 19109, pid: 4242)
         defer {
-            manager.setTestingConnection(nil)
-            manager.setTestingDesiredActive(false)
+            manager.desiredActive = false
             manager._testClearLaunchAgentReadinessFailure()
         }
 
         let staleWait = Task { @MainActor in
             await manager.waitForGatewayReady(timeout: 0.5)
         }
-        for _ in 0..<100 {
-            if session.snapshotMakeCount() > 0 { break }
-            try? await Task.sleep(nanoseconds: 1_000_000)
+        await self.waitForCondition {
+            session.snapshotMakeCount() > 0
         }
         #expect(session.snapshotMakeCount() == 1)
         manager._testSetLaunchAgentReadinessCandidate(port: 19109, pid: 4243)
@@ -1473,42 +3354,33 @@ struct GatewayProcessManagerTests {
     }
 
     @Test func `same generation stale timeout preserves a newer readiness failure`() async throws {
-        let session = GatewayTestWebSocketSession(
-            taskFactory: {
-                GatewayTestWebSocketTask(
-                    receiveHook: { _, receiveIndex in
-                        if receiveIndex == 0 {
-                            try await Task.sleep(nanoseconds: 30 * 1_000_000_000)
-                        }
-                        return .data(GatewayWebSocketTestSupport.connectChallengeData())
-                    })
-            })
         let url = try #require(URL(string: "ws://example.invalid"))
-        let connection = GatewayConnection(
-            configProvider: { (url: url, token: nil, password: nil) },
-            sessionBox: WebSocketSessionBox(session: session))
-
-        let manager = GatewayProcessManager.shared
-        manager.setTestingConnection(connection)
-        manager.setTestingDesiredActive(true)
-        manager.setTestingLastFailureReason(nil)
+        let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+            GatewayTestWebSocketTask(
+                receiveHook: { _, receiveIndex in
+                    if receiveIndex == 0 {
+                        try await Task.sleep(nanoseconds: 30 * 1_000_000_000)
+                    }
+                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                })
+        }
+        manager.desiredActive = true
+        manager.lastFailureReason = nil
         manager._testClearLaunchAgentReadinessFailure()
         defer {
-            manager.setTestingConnection(nil)
-            manager.setTestingDesiredActive(false)
-            manager.setTestingLastFailureReason(nil)
+            manager.desiredActive = false
+            manager.lastFailureReason = nil
             manager._testClearLaunchAgentReadinessFailure()
         }
 
         let staleWait = Task { @MainActor in
             await manager.waitForGatewayReady(timeout: 0.2)
         }
-        for _ in 0..<100 {
-            if session.snapshotMakeCount() > 0 { break }
-            try? await Task.sleep(nanoseconds: 1_000_000)
+        await self.waitForCondition {
+            session.snapshotMakeCount() > 0
         }
         #expect(session.snapshotMakeCount() == 1)
-        manager.setTestingLastFailureReason("newer same-generation failure")
+        manager.lastFailureReason = "newer same-generation failure"
         manager._testSetLaunchAgentReadinessFailure(port: 19110, pid: 4244)
 
         #expect(await staleWait.value == false)
@@ -1518,41 +3390,32 @@ struct GatewayProcessManagerTests {
     }
 
     @Test func `stale readiness timeout cannot replace a newer launch failure`() async throws {
-        let session = GatewayTestWebSocketSession(
-            taskFactory: {
-                GatewayTestWebSocketTask(
-                    receiveHook: { _, receiveIndex in
-                        if receiveIndex == 0 {
-                            try await Task.sleep(nanoseconds: 30 * 1_000_000_000)
-                        }
-                        return .data(GatewayWebSocketTestSupport.connectChallengeData())
-                    })
-            })
         let url = try #require(URL(string: "ws://example.invalid"))
-        let connection = GatewayConnection(
-            configProvider: { (url: url, token: nil, password: nil) },
-            sessionBox: WebSocketSessionBox(session: session))
-
-        let manager = GatewayProcessManager.shared
-        manager.setTestingConnection(connection)
+        let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+            GatewayTestWebSocketTask(
+                receiveHook: { _, receiveIndex in
+                    if receiveIndex == 0 {
+                        try await Task.sleep(nanoseconds: 30 * 1_000_000_000)
+                    }
+                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                })
+        }
         manager._testBeginGatewayStartGeneration()
         defer {
-            manager.setTestingConnection(nil)
-            manager.setTestingDesiredActive(false)
-            manager.setTestingLastFailureReason(nil)
+            manager.desiredActive = false
+            manager.lastFailureReason = nil
             manager._testClearLaunchAgentReadinessFailure()
         }
 
         let staleWait = Task { @MainActor in
             await manager.waitForGatewayReady(timeout: 0.5)
         }
-        for _ in 0..<100 {
-            if session.snapshotMakeCount() > 0 { break }
-            try? await Task.sleep(nanoseconds: 1_000_000)
+        await self.waitForCondition {
+            session.snapshotMakeCount() > 0
         }
         #expect(session.snapshotMakeCount() == 1)
         manager._testBeginGatewayStartGeneration()
-        manager.setTestingLastFailureReason("newer command resolution failure")
+        manager.lastFailureReason = "newer command resolution failure"
         manager._testSetLaunchAgentReadinessFailure(port: 19103, pid: 4243)
 
         #expect(await staleWait.value == false)
@@ -1562,42 +3425,41 @@ struct GatewayProcessManagerTests {
     }
 
     @Test func `readiness timeout includes a stalled socket connect`() async throws {
-        let session = GatewayTestWebSocketSession(
-            taskFactory: {
-                GatewayTestWebSocketTask(
-                    receiveHook: { _, receiveIndex in
-                        if receiveIndex == 0 {
-                            try await Task.sleep(nanoseconds: 30 * 1_000_000_000)
-                        }
-                        return .data(GatewayWebSocketTestSupport.connectChallengeData())
-                    })
-            })
         let url = try #require(URL(string: "ws://example.invalid"))
-        let connection = GatewayConnection(
-            configProvider: { (url: url, token: nil, password: nil) },
-            sessionBox: WebSocketSessionBox(session: session))
-
-        let manager = GatewayProcessManager.shared
-        manager.setTestingConnection(connection)
-        manager.setTestingDesiredActive(true)
+        let receiveGate = AsyncTestGate()
+        defer { receiveGate.open() }
+        let socket = GatewayTestWebSocketTask(
+            receiveHook: { _, receiveIndex in
+                if receiveIndex == 0 {
+                    await receiveGate.wait()
+                    try Task.checkCancellation()
+                }
+                return .data(GatewayWebSocketTestSupport.connectChallengeData())
+            })
+        let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+            socket
+        }
+        manager.desiredActive = true
         manager.setTestingStatus(.attachedExisting(details: "pid 3131"))
-        manager.setTestingLastFailureReason(nil)
+        manager.lastFailureReason = nil
         manager._testClearLaunchAgentReadinessFailure()
         manager._testSetLaunchAgentReadinessFailure(port: 19111, pid: 4245)
         defer {
-            manager.setTestingConnection(nil)
-            manager.setTestingDesiredActive(false)
-            manager.setTestingLastFailureReason(nil)
+            manager.desiredActive = false
+            manager.lastFailureReason = nil
             manager._testClearLaunchAgentReadinessFailure()
         }
 
-        let startedAt = Date()
         let ready = await manager.waitForGatewayReady(timeout: 0.1)
-        let elapsed = Date().timeIntervalSince(startedAt)
+        // The readiness deadline must return before the shared handshake's own timeout.
+        // Capture its state before shutdown supplies cancellation during cleanup.
+        let socketState = socket.state
+        let socketCancelCount = socket.snapshotCancelCount()
         await connection.shutdown()
 
         #expect(!ready)
-        #expect(elapsed < 1)
+        #expect(socketState == .running)
+        #expect(socketCancelCount == 0)
         #expect(session.snapshotMakeCount() == 1)
         #expect(manager.status == .failed("Gateway did not start in time"))
         #expect(manager.lastFailureReason == "gateway readiness timeout")
@@ -1605,35 +3467,28 @@ struct GatewayProcessManagerTests {
     }
 
     @Test func `readiness timeout preserves a concrete launch failure`() async throws {
-        let session = GatewayTestWebSocketSession(
-            taskFactory: {
-                GatewayTestWebSocketTask(
-                    receiveHook: { _, receiveIndex in
-                        if receiveIndex == 0 {
-                            try await Task.sleep(nanoseconds: 30 * 1_000_000_000)
-                        }
-                        return .data(GatewayWebSocketTestSupport.connectChallengeData())
-                    })
-            })
         let url = try #require(URL(string: "ws://example.invalid"))
-        let connection = GatewayConnection(
-            configProvider: { (url: url, token: nil, password: nil) },
-            sessionBox: WebSocketSessionBox(session: session))
-
-        let manager = GatewayProcessManager.shared
-        manager.setTestingConnection(connection)
-        manager.setTestingDesiredActive(true)
+        let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+            GatewayTestWebSocketTask(
+                receiveHook: { _, receiveIndex in
+                    if receiveIndex == 0 {
+                        try await Task.sleep(nanoseconds: 30 * 1_000_000_000)
+                    }
+                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                })
+        }
+        manager.desiredActive = true
         manager.setTestingStatus(.failed("launchd install denied"))
-        manager.setTestingLastFailureReason("launchd install denied")
+        manager.lastFailureReason = "launchd install denied"
         manager._testClearLaunchAgentReadinessFailure()
         defer {
-            manager.setTestingConnection(nil)
-            manager.setTestingDesiredActive(false)
-            manager.setTestingLastFailureReason(nil)
+            manager.desiredActive = false
+            manager.lastFailureReason = nil
             manager._testClearLaunchAgentReadinessFailure()
         }
 
         #expect(await manager.waitForGatewayReady(timeout: 0.1) == false)
+        #expect(session.snapshotMakeCount() == 0)
         #expect(manager.status == .failed("launchd install denied"))
         #expect(manager.lastFailureReason == "launchd install denied")
         await connection.shutdown()
@@ -1641,75 +3496,270 @@ struct GatewayProcessManagerTests {
 
     @Test func `replacement readiness timeout records the pid for the next repair`() async throws {
         let port = 19104
-        let marker = FileManager.default.temporaryDirectory
-            .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
-        let session = GatewayTestWebSocketSession(
-            taskFactory: {
-                GatewayTestWebSocketTask(
-                    receiveHook: { _, receiveIndex in
-                        if receiveIndex == 0 {
-                            try await Task.sleep(nanoseconds: 30 * 1_000_000_000)
-                        }
-                        return .data(GatewayWebSocketTestSupport.connectChallengeData())
-                    })
-            })
         let url = try #require(URL(string: "ws://example.invalid"))
-        let connection = GatewayConnection(
-            configProvider: { (url: url, token: nil, password: nil) },
-            sessionBox: WebSocketSessionBox(session: session))
+        let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+            GatewayTestWebSocketTask()
+        }
 
-        try await self.withLocalGatewayConfig {
-            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
-            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
-            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
-                """
-                {"ok":true,"service":{
-                  "loaded":true,
-                  "runtime":{"status":"running","pid":4242},
-                  "command":{"programArguments":["openclaw","gateway","--port","\(port)"]},
-                  "configAudit":{"ok":true,"issues":[]}
-                }}
-                """)
-            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-            let manager = GatewayProcessManager.shared
-            manager.setTestingConnection(connection)
-            manager.setTestingDesiredActive(true)
+        try await self.withLaunchAgentEnvironment(statusPayload: self.loadedGatewayStatus(port: port)) {
+            manager.desiredActive = true
             manager._testClearLaunchAgentReadinessFailure()
             defer {
-                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
-                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
-                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
-                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-                manager.setTestingConnection(nil)
-                manager.setTestingDesiredActive(false)
-                manager.setTestingLastFailureReason(nil)
+                manager.desiredActive = false
+                manager.lastFailureReason = nil
                 manager._testClearLaunchAgentReadinessFailure()
             }
 
-            let listener = PortGuardian.Descriptor(
-                pid: 4242,
-                command: "openclaw-gateway",
-                executablePath: "/tmp/openclaw-gateway")
+            let listener = self.gatewayDescriptor(pid: 4242)
             await PortGuardian.shared.setTestingDescriptor(listener, forPort: port)
 
             _ = await manager._testEnableLaunchAgentIfNeeded(
-                bundlePath: "/Applications/OpenClaw.app",
                 port: port)
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
                 .filter { $0.first == "install" }.isEmpty)
+            #expect(manager._testHasLaunchAgentReadinessCandidate())
 
-            #expect(await manager.waitForGatewayReady(timeout: 0.1) == false)
+            #expect(await manager.waitForGatewayReady(timeout: 0.05) == false)
             #expect(manager._testHasLaunchAgentReadinessFailure())
 
             GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
             _ = await manager._testEnableLaunchAgentIfNeeded(
-                bundlePath: "/Applications/OpenClaw.app",
                 port: port)
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
                 .filter { $0.first == "install" }.count == 1)
 
             await connection.shutdown()
             await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func `readiness without a service record uses actual installation evidence`(_ installed: Bool) async throws {
+        let port = try self.availableGatewayPort()
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+            self.gatewayTask(healthSucceedsAfter: 0)
+        }
+        defer { manager.desiredActive = false }
+        try await self.withLaunchAgentEnvironment(port: port) {
+            manager.setTestingStatus(.starting)
+            manager._testBeginGatewayStartGeneration()
+            try #require(GatewayLaunchAgentManager.launchdProgramArguments() == [])
+            #expect(await manager.waitForGatewayReady(timeout: 0.5, launchAgentInstalled: installed))
+            #expect(manager.installation == (installed ? .managed : .external))
+            await connection.shutdown()
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func `pause preserves established installation after service removal`(_ managed: Bool) async throws {
+        let root = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let port = try AppProfile.current.isActive ? GatewayEnvironment.gatewayPort() : self.availableGatewayPort()
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+            self.gatewayTask(healthSucceedsAfter: 0)
+        }
+        defer { manager.desiredActive = false }
+        try await self.withLaunchAgentEnvironment(
+            port: port, homeDirectory: root, statusPayload: self.loadedGatewayStatus(port: port))
+        {
+            let previousResume = AppDefaults.standard.object(forKey: GatewayLaunchAgentManager.resumeCommandKey)
+            let previousHosting = AppDefaults.standard.object(forKey: GatewayHosting.defaultsKey)
+            defer {
+                manager.retainedServiceCLI = nil
+                AppDefaults.standard.set(previousResume, forKey: GatewayLaunchAgentManager.resumeCommandKey)
+                AppDefaults.standard.set(previousHosting, forKey: GatewayHosting.defaultsKey)
+            }
+            let plist = GatewayLaunchAgentManager.plistURL(homeDirectory: root, profile: .current)
+            if managed {
+                try FileManager.default.createDirectory(
+                    at: plist.deletingLastPathComponent(), withIntermediateDirectories: true)
+                let node = AppProfile.current.stateDirectoryURL().appendingPathComponent("tools/node")
+                let data = try PropertyListSerialization.data(
+                    fromPropertyList: ["ProgramArguments": [
+                        node.appendingPathComponent("bin/node").path,
+                        node.appendingPathComponent("lib/node_modules/openclaw/openclaw.mjs").path,
+                        "gateway",
+                    ]], format: .xml, options: 0)
+                try data.write(to: plist)
+            }
+            await PortGuardian.shared.setTestingDescriptor(self.gatewayDescriptor(pid: 4242), forPort: port)
+            do {
+                #expect(await manager._testAttachExistingGatewayIfAvailable(port: port))
+                #expect(manager.installation == (managed ? .managed : .external))
+                manager.stop()
+                _ = await manager._testAttachExistingGatewayAfterPendingDisable(port: port)
+                #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                    .contains(["uninstall"]) == managed)
+                if managed {
+                    // Match uninstallLaunchAgent's filesystem effect without touching launchd.
+                    try FileManager.default.moveItem(at: plist, to: root.appendingPathComponent("uninstalled.plist"))
+                }
+                #expect(!FileManager.default.fileExists(atPath: plist.path))
+                #expect(manager.status == .stopped)
+                #expect(manager.installation == (managed ? .managed : .external))
+            } catch {
+                await connection.shutdown()
+                await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+                throw error
+            }
+            await connection.shutdown()
+            await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+        }
+    }
+
+    @Test func `failed reattachment releases departed independent Gateway ownership`() async throws {
+        let port = try self.availableGatewayPort()
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+            self.gatewayTask(healthSucceedsAfter: 0)
+        }
+        defer { manager.desiredActive = false }
+        try await self.withLaunchAgentEnvironment(port: port) {
+            let hasNoServiceRecord = GatewayLaunchAgentManager.launchdProgramArguments() == []
+            try #require(hasNoServiceRecord)
+            #expect(await manager._testAttachExistingGatewayIfAvailable(port: port))
+            #expect(manager.installation == .external)
+
+            manager.stop()
+            #expect(manager.installation == .external)
+            _ = await manager._testAttachExistingGatewayAfterPendingDisable(port: port)
+            await connection.shutdown()
+
+            let configPath = try #require(ProcessInfo.processInfo.environment["OPENCLAW_CONFIG_PATH"])
+            try Data(#"{"gateway":{"mode":"remote"}}"#.utf8)
+                .write(to: URL(fileURLWithPath: configPath))
+            manager.stop()
+            _ = await manager._testAttachExistingGatewayAfterPendingDisable(port: port)
+            try Data("{\"gateway\":{\"mode\":\"local\",\"port\":\(port)}}".utf8)
+                .write(to: URL(fileURLWithPath: configPath))
+
+            let unavailable = GatewayConnection(configProvider: { throw URLError(.cannotConnectToHost) })
+            manager.setTestingConnection(unavailable)
+            manager._testBeginGatewayStartGeneration()
+            #expect(await manager._testAttachExistingGatewayAfterPendingDisable(port: port) == false)
+            #expect(manager.installation == .managed)
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                .allSatisfy { $0.first != "install" })
+            await unavailable.shutdown()
+        }
+    }
+
+    @Test func `identity conflict paths cannot select Gateway auth guidance`() async throws {
+        let conflict =
+            "Legacy device identity sources conflict across " +
+            "[/tmp/author-profile/device.json (deviceId: device-a)]; all sources preserved."
+        let reason = try await self.attachFailureReason {
+            throw NSError(
+                domain: "ai.openclaw.device-identity-store",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: conflict])
+        }
+
+        #expect(reason.contains(conflict))
+        #expect(!reason.contains("rejected auth"))
+        #expect(!reason.contains("gateway.auth.token"))
+    }
+
+    @Test(arguments: [
+        GatewayConnectAuthDetailCode.authTokenMissing,
+        .authTokenMismatch,
+        .authTokenNotConfigured,
+    ])
+    func `token auth rejection retains token guidance`(
+        detail: GatewayConnectAuthDetailCode) async throws
+    {
+        let reason = try await self.attachFailureReason {
+            throw GatewayConnectAuthError(
+                message: detail.rawValue,
+                detailCode: detail.rawValue,
+                canRetryWithDeviceToken: false)
+        }
+
+        #expect(reason.contains("rejected auth"))
+        #expect(reason.contains("gateway.auth.token"))
+    }
+
+    @Test func `non-token Gateway rejections preserve their diagnostics`() async throws {
+        let cases: [(GatewayConnectAuthDetailCode?, String)] = [
+            (.pairingRequired, "pairing required"),
+            (.authPasswordMismatch, "password mismatch"),
+            (.deviceIdentityRequired, "device identity required"),
+            (.authTailscaleIdentityMismatch, "Tailscale identity mismatch"),
+            (.authUnauthorized, "unauthorized"),
+            (nil, "unstructured rejection"),
+        ]
+
+        for (detail, message) in cases {
+            let reason = try await self.attachFailureReason {
+                throw GatewayConnectAuthError(
+                    message: message,
+                    detailCode: detail?.rawValue,
+                    canRetryWithDeviceToken: false)
+            }
+
+            #expect(reason.contains(message))
+            #expect(!reason.contains("rejected auth"))
+            #expect(!reason.contains("gateway.auth.token"))
+        }
+    }
+
+    @Test func `legacy transport failures preserve their diagnostics`() async throws {
+        let expectedURLMessage = URLError(.dataNotAllowed).localizedDescription
+        let urlReason = try await self.attachFailureReason {
+            throw URLError(.dataNotAllowed)
+        }
+        let closeReason = try await self.attachFailureReason {
+            throw NSError(
+                domain: "Gateway",
+                code: 1008,
+                userInfo: [NSLocalizedDescriptionKey: "policy violation"])
+        }
+
+        #expect(urlReason.contains(expectedURLMessage))
+        #expect(closeReason.contains("policy violation"))
+        for reason in [urlReason, closeReason] {
+            #expect(!reason.contains("rejected auth"))
+            #expect(!reason.contains("gateway.auth.token"))
+        }
+    }
+
+    @Test func `protocol mismatch retains compatibility guidance`() async throws {
+        let reason = try await self.attachFailureReason {
+            throw GatewayConnectAuthError(
+                message: "protocol mismatch",
+                detailCode: GatewayConnectAuthDetailCode.protocolMismatch.rawValue,
+                canRetryWithDeviceToken: false,
+                expectedProtocol: 999)
+        }
+
+        #expect(reason.localizedCaseInsensitiveContains("protocol"))
+        #expect(!reason.contains("rejected auth"))
+        #expect(!reason.contains("gateway.auth.token"))
+    }
+
+    @Test func `Gateway authorization failures preserve their diagnostics`() async throws {
+        let missingScope = try await self.attachFailureReason {
+            throw GatewayResponseError(
+                method: "health",
+                code: "FORBIDDEN",
+                message: "missing scope: operator.admin",
+                details: nil)
+        }
+        let unauthorizedRole = try await self.attachFailureReason {
+            throw GatewayResponseError(
+                method: "health",
+                code: "INVALID_REQUEST",
+                message: "unauthorized role: operator",
+                details: nil)
+        }
+
+        #expect(missingScope.contains("missing scope: operator.admin"))
+        #expect(unauthorizedRole.contains("unauthorized role: operator"))
+        for reason in [missingScope, unauthorizedRole] {
+            #expect(!reason.contains("rejected auth"))
+            #expect(!reason.contains("gateway.auth.token"))
         }
     }
 
@@ -1741,62 +3791,51 @@ struct GatewayProcessManagerTests {
                   }
                 }
                 """.utf8)
-            let session = GatewayTestWebSocketSession(
-                taskFactory: {
-                    GatewayTestWebSocketTask(
-                        sendHook: { task, message, sendIndex in
-                            guard sendIndex > 0 else { return }
-                            guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
-                            if sendIndex == 1 {
-                                let response = Data(
-                                    """
-                                    {"type":"res","id":"\(id)","ok":false,
-                                     "error":{"code":"UNAVAILABLE","message":"gateway restarting"}}
-                                    """.utf8)
-                                task.emitReceiveSuccess(.data(response))
-                                return
-                            }
-                            let replacement = PortGuardian.Descriptor(
-                                pid: 4343,
-                                command: "openclaw-gateway",
-                                executablePath: "/tmp/openclaw-gateway")
-                            await PortGuardian.shared.setTestingDescriptor(replacement, forPort: port)
-                            let json = """
-                            {
-                              "type": "res",
-                              "id": "\(id)",
-                              "ok": true,
-                              "payload": \(String(decoding: healthData, as: UTF8.self))
-                            }
-                            """
-                            task.emitReceiveSuccess(.data(Data(json.utf8)))
-                        })
-                })
             let url = try #require(URL(string: "ws://example.invalid"))
-            let connection = GatewayConnection(
-                configProvider: { (url: url, token: nil, password: nil) },
-                sessionBox: WebSocketSessionBox(session: session))
-            let descriptor = PortGuardian.Descriptor(
-                pid: 4242,
-                command: "openclaw-gateway",
-                executablePath: "/tmp/openclaw-gateway")
+            let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+                GatewayTestWebSocketTask(
+                    sendHook: { task, message, sendIndex in
+                        guard sendIndex > 0 else { return }
+                        guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
+                        if sendIndex == 1 {
+                            let response = Data(
+                                """
+                                {"type":"res","id":"\(id)","ok":false,
+                                 "error":{"code":"UNAVAILABLE","message":"gateway restarting"}}
+                                """.utf8)
+                            task.emitReceiveSuccess(.data(response))
+                            return
+                        }
+                        let replacement = PortGuardian.Descriptor(
+                            pid: 4343,
+                            command: "openclaw-gateway",
+                            executablePath: "/tmp/openclaw-gateway")
+                        await PortGuardian.shared.setTestingDescriptor(replacement, forPort: port)
+                        let json = """
+                        {
+                          "type": "res",
+                          "id": "\(id)",
+                          "ok": true,
+                          "payload": \(String(decoding: healthData, as: UTF8.self))
+                        }
+                        """
+                        task.emitReceiveSuccess(.data(Data(json.utf8)))
+                    })
+            }
+            let descriptor = self.gatewayDescriptor(pid: 4242)
 
-            let manager = GatewayProcessManager.shared
             await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: port)
-            manager.setTestingConnection(connection)
-            manager.setTestingSkipControlChannelRefresh(true)
-            manager.setTestingLastFailureReason("stale")
+            manager.lastFailureReason = "stale"
             manager._testClearControlChannelRefreshForces()
             manager._testSetLastObservedGatewayPID(4242)
 
             @MainActor
             func cleanup() async {
-                manager.setTestingConnection(nil)
-                manager.setTestingSkipControlChannelRefresh(false)
-                manager.setTestingDesiredActive(false)
-                manager.setTestingLastFailureReason(nil)
+                manager.desiredActive = false
+                manager.lastFailureReason = nil
                 manager._testClearControlChannelRefreshForces()
                 manager._testSetLastObservedGatewayPID(nil)
+                await connection.shutdown()
                 await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
             }
 

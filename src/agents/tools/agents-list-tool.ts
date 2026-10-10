@@ -1,35 +1,18 @@
-/**
- * agents_list built-in tool.
- *
- * Lists configured or allowed agent ids plus model/runtime metadata for subagent spawn decisions.
- */
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
+import { GatewayAgentRuntimeSchema } from "../../../packages/gateway-protocol/src/schema/model-runtime-options.js";
 import { getRuntimeConfig } from "../../config/config.js";
-import {
-  DEFAULT_AGENT_ID,
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "../../routing/session-key.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { resolveModelAgentRuntimeMetadata } from "../agent-runtime-metadata.js";
-import { listAgentIds } from "../agent-scope-config.js";
-import { resolveAgentConfig, resolveAgentEffectiveModelPrimary } from "../agent-scope.js";
+import { listAgentEntries, listAgentIds } from "../agent-scope-config.js";
+import { resolveAgentConfig, resolveSessionAgentIds } from "../agent-scope.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
-import { resolveSubagentAllowedTargetIds } from "../subagent-target-policy.js";
+import { resolveSubagentAllowedTargetIds } from "../subagents/spawn/subagent-target-policy.js";
+import { describeAgentsListTool } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult } from "./common.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
 
 const AgentsListToolSchema = Type.Object({});
-const AgentRuntimeSourceSchema = Type.Union([
-  Type.Literal("env"),
-  Type.Literal("agent"),
-  Type.Literal("defaults"),
-  Type.Literal("model"),
-  Type.Literal("provider"),
-  Type.Literal("implicit"),
-  Type.Literal("session"),
-  Type.Literal("session-key"),
-]);
 const AgentsListOutputSchema = Type.Object(
   {
     requester: Type.String(),
@@ -45,7 +28,7 @@ const AgentsListOutputSchema = Type.Object(
             Type.Object(
               {
                 id: Type.String(),
-                source: AgentRuntimeSourceSchema,
+                source: GatewayAgentRuntimeSchema.properties.source,
               },
               { additionalProperties: false },
             ),
@@ -58,24 +41,7 @@ const AgentsListOutputSchema = Type.Object(
   { additionalProperties: false },
 );
 
-type AgentListEntry = {
-  id: string;
-  name?: string;
-  configured: boolean;
-  model?: string;
-  agentRuntime?: {
-    id: string;
-    source:
-      | "env"
-      | "agent"
-      | "defaults"
-      | "model"
-      | "provider"
-      | "implicit"
-      | "session"
-      | "session-key";
-  };
-};
+type AgentListEntry = Static<typeof AgentsListOutputSchema>["agents"][number];
 
 export function createAgentsListTool(opts?: {
   agentSessionKey?: string;
@@ -85,31 +51,27 @@ export function createAgentsListTool(opts?: {
   return {
     label: "Agents",
     name: "agents_list",
-    description: 'List ids allowed for `sessions_spawn(runtime:"subagent")`.',
+    description: describeAgentsListTool(false),
     parameters: AgentsListToolSchema,
     outputSchema: AgentsListOutputSchema,
     execute: async () => {
       const cfg = getRuntimeConfig();
-      const { mainKey, alias } = resolveMainSessionAlias(cfg);
+      const { alias } = resolveMainSessionAlias(cfg);
       const requesterInternalKey =
         typeof opts?.agentSessionKey === "string" && opts.agentSessionKey.trim()
-          ? resolveInternalSessionKey({
-              key: opts.agentSessionKey,
-              alias,
-              mainKey,
-            })
+          ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias })
           : alias;
-      const requesterAgentId = normalizeAgentId(
-        opts?.requesterAgentIdOverride ??
-          parseAgentSessionKey(requesterInternalKey)?.agentId ??
-          DEFAULT_AGENT_ID,
-      );
+      const requesterAgentId = resolveSessionAgentIds({
+        config: cfg,
+        sessionKey: requesterInternalKey,
+        agentId: opts?.requesterAgentIdOverride,
+      }).sessionAgentId;
 
       const allowAgents =
         resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ??
         cfg?.agents?.defaults?.subagents?.allowAgents;
 
-      const configuredAgents = Array.isArray(cfg.agents?.list) ? cfg.agents?.list : [];
+      const configuredAgents = listAgentEntries(cfg);
       const configuredIds = listAgentIds(cfg);
       const configuredNameMap = new Map<string, string>();
       for (const entry of configuredAgents) {
@@ -131,8 +93,10 @@ export function createAgentsListTool(opts?: {
         .toSorted((a, b) => a.localeCompare(b));
       const ordered = all.includes(requesterAgentId) ? [requesterAgentId, ...rest] : rest;
       const agents: AgentListEntry[] = ordered.map((id) => {
-        const model = resolveAgentEffectiveModelPrimary(cfg, id);
         const resolvedModel = resolveDefaultModelForAgent({ cfg, agentId: id });
+        // Publish the resolved identity (aliases are routing-only) so the model
+        // field matches the agentRuntime derived from the same resolvedModel.
+        const model = `${resolvedModel.provider}/${resolvedModel.model}`;
         const agentRuntime = resolveModelAgentRuntimeMetadata({
           cfg,
           agentId: id,

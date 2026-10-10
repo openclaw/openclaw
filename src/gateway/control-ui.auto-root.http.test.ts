@@ -1,112 +1,68 @@
-/**
- * Control UI auto-root HTTP routing tests.
- */
 import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-
-const { resolveControlUiRootSyncMock, isPackageProvenControlUiRootSyncMock } = vi.hoisted(() => ({
-  resolveControlUiRootSyncMock: vi.fn(),
-  isPackageProvenControlUiRootSyncMock: vi.fn().mockReturnValue(true),
-}));
-
-vi.mock("../infra/control-ui-assets.js", async () => {
-  const actual = await vi.importActual<typeof import("../infra/control-ui-assets.js")>(
-    "../infra/control-ui-assets.js",
-  );
-  return {
-    ...actual,
-    resolveControlUiRootSync: resolveControlUiRootSyncMock,
-    isPackageProvenControlUiRootSync: isPackageProvenControlUiRootSyncMock,
-  };
-});
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
 const { handleControlUiHttpRequest } = await import("./control-ui.js");
 const { makeMockHttpResponse } = await import("./test-http-response.js");
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-async function withControlUiRoot<T>(fn: (tmp: string) => Promise<T>) {
-  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-auto-root-"));
-  try {
-    await fs.writeFile(path.join(tmp, "index.html"), "<html>fallback</html>\n");
-    return await fn(tmp);
-  } finally {
-    await fs.rm(tmp, { recursive: true, force: true });
-  }
-}
-
-function responseBody(end: ReturnType<typeof makeMockHttpResponse>["end"]) {
-  return String(end.mock.calls[0]?.[0] ?? "");
-}
-
-afterEach(() => {
-  resolveControlUiRootSyncMock.mockReset();
-  isPackageProvenControlUiRootSyncMock.mockReset();
-  isPackageProvenControlUiRootSyncMock.mockReturnValue(true);
-});
-
-describe("handleControlUiHttpRequest auto-detected root", () => {
-  it("serves hardlinked asset files for bundled auto-detected roots", async () => {
-    await withControlUiRoot(async (tmp) => {
-      const assetsDir = path.join(tmp, "assets");
-      await fs.mkdir(assetsDir, { recursive: true });
-      await fs.writeFile(path.join(assetsDir, "app.js"), "console.log('hi');");
-      await fs.link(path.join(assetsDir, "app.js"), path.join(assetsDir, "app.hl.js"));
-      resolveControlUiRootSyncMock.mockReturnValue(tmp);
-
+describe("handleControlUiHttpRequest prepared root lifecycle", () => {
+  it.each([
+    { kind: "bundled", file: "assets/app.js", url: "/assets/app.js", code: 200 },
+    { kind: "bundled", file: "index.html", url: "/dashboard", code: 200 },
+    { kind: "resolved", file: "assets/app.js", url: "/assets/app.js", code: 404 },
+  ] as const)(
+    "serves $file only with bundled hardlink provenance ($kind)",
+    async ({ kind, file, url, code }) => {
+      const root = tempDirs.make("openclaw-ui-auto-root-");
+      await fs.mkdir(path.join(root, "assets"));
+      const source = path.join(root, "source");
+      await fs.writeFile(
+        source,
+        file === "index.html" ? "<html>fallback-hardlink</html>\n" : "console.log('hi');",
+      );
+      await fs.link(source, path.join(root, file));
       const { res, end } = makeMockHttpResponse();
       const handled = await handleControlUiHttpRequest(
-        { url: "/assets/app.hl.js", method: "GET" } as IncomingMessage,
+        {
+          url,
+          method: "GET",
+          headers: { host: "gateway.example.test" },
+          headersDistinct: {},
+        } as IncomingMessage,
         res,
+        { root: { kind, path: root, realPath: await fs.realpath(root) } },
       );
-
       expect(handled).toBe(true);
-      expect(res.statusCode).toBe(200);
-      expect(responseBody(end)).toBe("console.log('hi');");
-    });
-  });
-
-  it("serves hardlinked SPA fallback index.html for bundled auto-detected roots", async () => {
-    await withControlUiRoot(async (tmp) => {
-      const sourceIndex = path.join(tmp, "index.source.html");
-      const indexPath = path.join(tmp, "index.html");
-      await fs.writeFile(sourceIndex, "<html>fallback-hardlink</html>\n");
-      await fs.rm(indexPath);
-      await fs.link(sourceIndex, indexPath);
-      resolveControlUiRootSyncMock.mockReturnValue(tmp);
-
-      const { res, end } = makeMockHttpResponse();
-      const handled = await handleControlUiHttpRequest(
-        { url: "/dashboard", method: "GET" } as IncomingMessage,
-        res,
+      expect(res.statusCode).toBe(code);
+      expect(String(end.mock.calls[0]?.[0] ?? "")).toBe(
+        code === 404
+          ? "Not Found"
+          : file === "index.html"
+            ? '<html data-openclaw-control-ui-base-path="" data-openclaw-terminal-enabled="true">fallback-hardlink</html>\n'
+            : "console.log('hi');",
       );
+    },
+  );
 
-      expect(handled).toBe(true);
-      expect(res.statusCode).toBe(200);
-      expect(responseBody(end)).toBe(
-        '<html data-openclaw-terminal-enabled="false">fallback-hardlink</html>\n',
-      );
-    });
-  });
-
-  it("rejects hardlinked assets for non-package-proven auto-detected roots", async () => {
-    isPackageProvenControlUiRootSyncMock.mockReturnValue(false);
-    await withControlUiRoot(async (tmp) => {
-      const assetsDir = path.join(tmp, "assets");
-      await fs.mkdir(assetsDir, { recursive: true });
-      await fs.writeFile(path.join(assetsDir, "app.js"), "console.log('hi');");
-      await fs.link(path.join(assetsDir, "app.js"), path.join(assetsDir, "app.hl.js"));
-      resolveControlUiRootSyncMock.mockReturnValue(tmp);
-
-      const { res } = makeMockHttpResponse();
-      const handled = await handleControlUiHttpRequest(
-        { url: "/assets/app.hl.js", method: "GET" } as IncomingMessage,
-        res,
-      );
-
-      expect(handled).toBe(true);
-      expect(res.statusCode).toBe(404);
-    });
+  it("keeps failed requests terminal without exposing build diagnostics", async () => {
+    const { res, end, setHeader } = makeMockHttpResponse();
+    const failedRoot = {
+      kind: "failed" as const,
+      message: "private-credential from /home/operator/private",
+    };
+    const handled = await handleControlUiHttpRequest(
+      { url: "/", method: "GET" } as IncomingMessage,
+      res,
+      { root: failedRoot },
+    );
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(503);
+    expect(setHeader).not.toHaveBeenCalledWith("Retry-After", expect.anything());
+    expect(String(end.mock.calls[0]?.[0] ?? "")).toBe(
+      "Control UI assets could not be prepared. Check the Gateway logs or run `openclaw doctor --fix`.",
+    );
   });
 });

@@ -1,9 +1,5 @@
-/** Shared option types for the migrate command family. */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MigrationPlan } from "../../plugins/types.js";
-
-/** Embedded migration mode that returns config patch details instead of persisting them. */
-type MigrationConfigPatchMode = "return";
 
 /** Common options accepted by migrate list, plan, apply, and default flows. */
 export type MigrateCommonOptions = {
@@ -26,12 +22,12 @@ export type MigrateCommonOptions = {
   configOverride?: OpenClawConfig;
   // Internal embedded mode for config patch items. Default CLI behavior persists
   // patches when this is omitted; onboarding can request returned patch details.
-  configPatchMode?: MigrationConfigPatchMode;
+  configPatchMode?: "return";
   // Internal embedded target. Standalone CLI migrations use the configured default agent.
   targetAgentId?: string;
   // Internal embedded scope. Providers may skip unrelated discovery when this is set.
   itemKinds?: string[];
-  // Internal exact item selection used by reviewed UI migration plans.
+  // Exact item selection used by reviewed UI plans and the standalone CLI.
   itemIds?: string[];
 };
 

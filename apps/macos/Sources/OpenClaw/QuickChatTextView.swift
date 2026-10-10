@@ -3,8 +3,10 @@ import SwiftUI
 
 struct QuickChatTextView: NSViewRepresentable {
     @Binding var text: String
+    let selectionRange: NSRange?
     let onSubmit: (Bool) -> Void
     let onEscape: () -> Void
+    let onUserEdit: () -> Void
     let onHeightChange: (CGFloat) -> Void
     let onTextViewReady: (NSTextView) -> Void
 
@@ -19,34 +21,16 @@ struct QuickChatTextView: NSViewRepresentable {
         textView.isRichText = false
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
-        textView.font = .systemFont(ofSize: 13.5)
+        textView.font = .systemFont(ofSize: 16)
         textView.textColor = .labelColor
         textView.insertionPointColor = .controlAccentColor
-        textView.textContainer?.lineBreakMode = .byWordWrapping
-        textView.textContainer?.lineFragmentPadding = 0
-        textView.textContainerInset = NSSize(width: 2, height: 6)
-        textView.minSize = .zero
-        textView.maxSize = NSSize(
-            width: CGFloat.greatestFiniteMagnitude,
-            height: CGFloat.greatestFiniteMagnitude)
-        textView.isHorizontallyResizable = false
-        textView.isVerticallyResizable = true
-        textView.autoresizingMask = [.width]
-        textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
-        textView.textContainer?.widthTracksTextView = true
+        ComposerTextViewSupport.configureWrapping(textView)
         textView.focusRingType = .none
         textView.string = self.text
         textView.onSubmit = self.onSubmit
         textView.onEscape = self.onEscape
 
-        let scrollView = NSScrollView()
-        scrollView.drawsBackground = false
-        scrollView.borderType = .noBorder
-        scrollView.hasVerticalScroller = false
-        scrollView.autohidesScrollers = true
-        scrollView.scrollerStyle = .overlay
-        scrollView.hasHorizontalScroller = false
-        scrollView.documentView = textView
+        let scrollView = ComposerTextViewSupport.scrollView(for: textView, verticalScroller: false)
         context.coordinator.scrollView = scrollView
 
         DispatchQueue.main.async {
@@ -61,10 +45,27 @@ struct QuickChatTextView: NSViewRepresentable {
         guard let textView = scrollView.documentView as? QuickChatNSTextView else { return }
         textView.onSubmit = self.onSubmit
         textView.onEscape = self.onEscape
-        if textView.string != self.text, !textView.hasMarkedText() {
+        let textChanged = textView.string != self.text && !textView.hasMarkedText()
+        if textChanged {
             context.coordinator.isProgrammaticUpdate = true
             textView.string = self.text
-            textView.setSelectedRange(NSRange(location: textView.string.utf16.count, length: 0))
+        }
+        if !textView.hasMarkedText(), let selectionRange = self.selectionRange {
+            let selection = NSRange(
+                location: min(selectionRange.location, textView.string.utf16.count),
+                length: 0)
+            if context.coordinator.lastAppliedSelectionRange != selection {
+                textView.setSelectedRange(selection)
+                context.coordinator.lastAppliedSelectionRange = selection
+            }
+        } else if textChanged {
+            let selection = NSRange(location: textView.string.utf16.count, length: 0)
+            textView.setSelectedRange(selection)
+            context.coordinator.lastAppliedSelectionRange = nil
+        } else if self.selectionRange == nil {
+            context.coordinator.lastAppliedSelectionRange = nil
+        }
+        if textChanged {
             context.coordinator.isProgrammaticUpdate = false
         }
         DispatchQueue.main.async {
@@ -77,6 +78,7 @@ struct QuickChatTextView: NSViewRepresentable {
         var parent: QuickChatTextView
         weak var scrollView: NSScrollView?
         var isProgrammaticUpdate = false
+        var lastAppliedSelectionRange: NSRange?
         private var lastHeight: CGFloat = 0
 
         init(_ parent: QuickChatTextView) {
@@ -86,6 +88,7 @@ struct QuickChatTextView: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? QuickChatNSTextView else { return }
             if !self.isProgrammaticUpdate {
+                self.parent.onUserEdit()
                 self.parent.text = textView.string
             }
             self.updateHeight(for: textView)
@@ -95,7 +98,7 @@ struct QuickChatTextView: NSViewRepresentable {
             guard let layoutManager = textView.layoutManager,
                   let textContainer = textView.textContainer else { return }
             layoutManager.ensureLayout(for: textContainer)
-            let font = textView.font ?? .systemFont(ofSize: 13.5)
+            let font = textView.font ?? .systemFont(ofSize: 16)
             let lineHeight = ceil(layoutManager.defaultLineHeight(for: font))
             let naturalHeight = ceil(layoutManager.usedRect(for: textContainer).height + 12)
             let minHeight = lineHeight + 12
@@ -109,26 +112,45 @@ struct QuickChatTextView: NSViewRepresentable {
     }
 }
 
+@MainActor
+enum ComposerTextViewSupport {
+    static func configureWrapping(_ textView: NSTextView) {
+        textView.textContainer?.lineBreakMode = .byWordWrapping
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainerInset = NSSize(width: 2, height: 6)
+        textView.minSize = .zero
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.isHorizontallyResizable = false
+        textView.isVerticallyResizable = true
+        textView.autoresizingMask = [.width]
+        textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
+        textView.textContainer?.widthTracksTextView = true
+    }
+
+    static func scrollView(for textView: NSTextView, verticalScroller: Bool) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+        scrollView.hasVerticalScroller = verticalScroller
+        scrollView.autohidesScrollers = true
+        scrollView.scrollerStyle = .overlay
+        scrollView.hasHorizontalScroller = false
+        scrollView.documentView = textView
+        return scrollView
+    }
+}
+
 private final class QuickChatNSTextView: NSTextView {
     var onSubmit: ((Bool) -> Void)?
     var onEscape: (() -> Void)?
 
     override func keyDown(with event: NSEvent) {
+        guard !self.hasMarkedText(), [36, 53, 76].contains(event.keyCode) else {
+            super.keyDown(with: event)
+            return
+        }
         if event.keyCode == 53 {
-            guard !self.hasMarkedText() else {
-                super.keyDown(with: event)
-                return
-            }
             self.onEscape?()
-            return
-        }
-
-        guard event.keyCode == 36 || event.keyCode == 76 else {
-            super.keyDown(with: event)
-            return
-        }
-        guard !self.hasMarkedText() else {
-            super.keyDown(with: event)
             return
         }
 

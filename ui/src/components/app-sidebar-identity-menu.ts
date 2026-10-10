@@ -1,0 +1,279 @@
+import { html, nothing } from "lit";
+import { ref } from "lit/directives/ref.js";
+import { titleForRoute, type NavigationRouteId } from "../app-navigation.ts";
+import type { ApplicationNavigationOptions } from "../app/context.ts";
+import { nativeGatewaysCapability } from "../app/native-gateways.runtime.ts";
+import type { ThemeMode } from "../app/theme.ts";
+import { t } from "../i18n/index.ts";
+import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
+import type { PresenceViewer } from "../lib/presence-users.ts";
+import { requestDebugOverlayToggle } from "../pages/debug/debug-overlay-contract.ts";
+import {
+  closeMenuAfterOwnDropdownHide,
+  COMMAND_VALUE_PREFIX,
+  consumeSidebarMenuSelection,
+  moveSidebarMenuFocus,
+  renderSidebarHelpMenu,
+} from "./app-sidebar-agent-menu.ts";
+import { renderSidebarMenuAction } from "./app-sidebar-nav-menus.ts";
+import { icons } from "./icons.ts";
+import { renderKbd, renderKeyboardShortcut } from "./kbd.ts";
+import { renderMenuTrigger } from "./menu-surface.ts";
+import "./sidebar-build-chip.ts";
+import "./viewer-facepile.ts";
+import { syncDropdownItemRadio, trackDropdownKeyboardDismissal } from "./web-awesome.ts";
+
+type SidebarIdentityMenuParams = {
+  position: { x: number; bottom: number; width: number };
+  canPairDevice: boolean;
+  basePath: string;
+  gatewayVersion: string | null;
+  updateAttentionDismissed: boolean;
+  profileViewer?: PresenceViewer;
+  canRetryConnection: boolean;
+  themeMode: ThemeMode;
+  triggerWidth: number;
+  onTabAway: () => void;
+  onClose: (restoreFocus?: boolean) => void;
+  onNavigate: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
+  onPairMobile: () => void;
+  onRetryConnect?: () => void;
+};
+
+function renderIdentityGateways(onClose: SidebarIdentityMenuParams["onClose"]) {
+  const capability = nativeGatewaysCapability();
+  if (!capability) {
+    return nothing;
+  }
+  const snapshot = capability.snapshot;
+  const current = snapshot?.gateways.find((gateway) => gateway.id === snapshot.currentId);
+  return html`
+    <div class="sidebar-customize-menu__title">${t("nav.gateway.sectionLabel")}</div>
+    ${snapshot?.gateways.map((gateway, index) => {
+      const selected = gateway.id === snapshot.currentId;
+      const healthLabel = {
+        ok: t("nav.gateway.connected"),
+        error: t("nav.gateway.unreachable"),
+        unknown: t("nav.gateway.unknown"),
+      }[gateway.health];
+      const openWindow = (event: MouseEvent) => {
+        if (event.metaKey || event.ctrlKey) {
+          event.preventDefault();
+          event.stopPropagation();
+          capability.openWindow(gateway.id);
+          onClose(false);
+        }
+      };
+      return html`<wa-dropdown-item
+        class="sidebar-customize-menu__item"
+        value=${`gateway:${encodeURIComponent(gateway.id)}`}
+        role="menuitemradio"
+        aria-checked=${String(selected)}
+        ${ref((element) => syncDropdownItemRadio(element, selected))}
+        @click=${openWindow}
+        @contextmenu=${openWindow}
+      >
+        <span
+          slot="icon"
+          class="sidebar-gateway-health"
+          data-health=${gateway.health}
+          role="img"
+          aria-label=${healthLabel}
+        ></span>
+        <span class="sidebar-customize-menu__text">${gateway.name}</span>
+        <span slot="details" class="sidebar-gateway-details">
+          ${
+            gateway.isPrimary
+              ? html`<span class="sidebar-gateway-primary">${t("nav.gateway.primaryTag")}</span>`
+              : nothing
+          }
+          ${
+            !selected && index < 9
+              ? renderKbd(["⌘", String(index + 1)], {
+                  className: "session-menu__shortcut",
+                  ariaHidden: true,
+                })
+              : nothing
+          }
+          ${
+            selected
+              ? html`<span class="sidebar-gateway-check" aria-hidden="true">${icons.check}</span>`
+              : nothing
+          }
+        </span>
+      </wa-dropdown-item>`;
+    })}
+    ${
+      current?.canPromote
+        ? renderSidebarMenuAction(
+            "command:gateway-set-primary",
+            t("nav.gateway.setPrimary"),
+            "star",
+          )
+        : nothing
+    }
+    ${renderSidebarMenuAction("command:gateway-settings", t("nav.gateway.openSettings"), "server")}
+    <div class="sidebar-customize-menu__separator" role="separator"></div>
+  `;
+}
+
+export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
+  const position = params.position;
+  const profileName = params.profileViewer?.name ?? params.profileViewer?.email ?? t("nav.owner");
+  const avatarUser = {
+    id: "owner",
+    watchedSessions: [],
+    ...params.profileViewer,
+    name: profileName,
+  };
+  const profileEmail =
+    params.profileViewer?.email && params.profileViewer.email !== profileName
+      ? params.profileViewer.email
+      : null;
+  return html`
+    <wa-dropdown
+      class="sidebar-customize-menu sidebar-identity-menu"
+      style=${`--sidebar-identity-menu-min-width: ${params.triggerWidth}px`}
+      .open=${true}
+      placement="top-start"
+      .distance=${0}
+      aria-label=${t("profilePage.identity.menuLabel")}
+      @wa-select=${(event: CustomEvent<{ item: HTMLElement & { value?: string } }>) => {
+        const value = consumeSidebarMenuSelection(event, params.onClose);
+        if (!value) {
+          return;
+        }
+        const capability = nativeGatewaysCapability();
+        if (value.startsWith("gateway:")) {
+          const id = decodeURIComponent(value.slice("gateway:".length));
+          if (id !== capability?.snapshot?.currentId) {
+            capability?.select(id);
+          }
+          return;
+        }
+        switch (value) {
+          case `${COMMAND_VALUE_PREFIX}gateway-set-primary`: {
+            const current = capability?.snapshot?.gateways.find(
+              (gateway) => gateway.id === capability.snapshot?.currentId,
+            );
+            if (current?.canPromote) {
+              capability?.setPrimary(current.id);
+            }
+            break;
+          }
+          case `${COMMAND_VALUE_PREFIX}gateway-settings`:
+            capability?.openSettings();
+            break;
+          case `${COMMAND_VALUE_PREFIX}profile`:
+            params.onNavigate("profile", { hash: "#settings-profile-identity" });
+            break;
+          case `${COMMAND_VALUE_PREFIX}settings`:
+            params.onNavigate("appearance");
+            break;
+          case `${COMMAND_VALUE_PREFIX}usage`:
+            params.onNavigate("usage");
+            break;
+          case `${COMMAND_VALUE_PREFIX}pair-mobile`:
+            params.onPairMobile();
+            break;
+          case `${COMMAND_VALUE_PREFIX}apps`:
+            params.onNavigate("apps");
+            break;
+          case `${COMMAND_VALUE_PREFIX}debug-overlay`:
+            requestDebugOverlayToggle();
+            break;
+          case `${COMMAND_VALUE_PREFIX}retry-connect`:
+            params.onRetryConnect?.();
+            break;
+        }
+      }}
+      @keydown=${(event: KeyboardEvent) => {
+        if (!moveSidebarMenuFocus(event)) {
+          trackDropdownKeyboardDismissal(event, params.onTabAway);
+        }
+      }}
+      @wa-after-hide=${(event: Event) => closeMenuAfterOwnDropdownHide(event, params.onClose)}
+    >
+      ${renderMenuTrigger(
+        { x: position.x, y: position.bottom },
+        t("profilePage.identity.menuLabel"),
+        "bottom",
+      )}
+      <wa-dropdown-item
+        class="sidebar-customize-menu__item sidebar-identity-menu__header"
+        value="command:profile"
+      >
+        <span slot="icon" class="sidebar-identity-menu__avatar" aria-hidden="true">
+          <openclaw-viewer-avatar .user=${avatarUser} variant="footer"></openclaw-viewer-avatar>
+        </span>
+        <span class="sidebar-identity-menu__identity">
+          <span class="sidebar-identity-menu__name" title=${profileName}>${profileName}</span>
+          ${
+            profileEmail
+              ? html`<span class="sidebar-identity-menu__email" title=${profileEmail}
+                  >${profileEmail}</span
+                >`
+              : nothing
+          }
+        </span>
+      </wa-dropdown-item>
+      <div class="sidebar-customize-menu__separator" role="separator"></div>
+      ${renderIdentityGateways(params.onClose)}
+      ${renderSidebarMenuAction("command:settings", t("nav.settings"), "settings", {
+        details: renderKeyboardShortcut(KEYBOARD_SHORTCUT_COMBOS.appearanceSettings, {
+          slot: "details",
+          className: "session-menu__shortcut",
+          ariaHidden: true,
+        }),
+      })}
+      ${renderSidebarMenuAction("command:usage", titleForRoute("usage"), "coins")}
+      <div class="sidebar-customize-menu__separator" role="separator"></div>
+      ${renderSidebarMenuAction("command:pair-mobile", t("devices.pairing.button"), "smartphone", {
+        className: "sidebar-pair-mobile",
+        disabled: !params.canPairDevice,
+        title: params.canPairDevice ? undefined : t("devices.pairing.adminRequired"),
+      })}
+      ${renderSidebarMenuAction("command:apps", t("agentChip.getApps"), "layoutGrid")}
+      ${renderSidebarMenuAction("command:debug-overlay", t("debug.overlay.title"), "activity", {
+        details: renderKeyboardShortcut(KEYBOARD_SHORTCUT_COMBOS.debugOverlay, {
+          slot: "details",
+          className: "session-menu__shortcut",
+          ariaHidden: true,
+        }),
+      })}
+
+      <div class="sidebar-customize-menu__separator" role="separator"></div>
+      ${renderSidebarHelpMenu()}
+      ${
+        params.canRetryConnection
+          ? html`<div class="sidebar-customize-menu__separator" role="separator"></div>
+              <wa-dropdown-item
+                class="sidebar-customize-menu__item sidebar-identity-menu__retry"
+                value="command:retry-connect"
+              >
+                <span class="sidebar-customize-menu__text">${t("connection.retryNow")}</span>
+              </wa-dropdown-item>`
+          : nothing
+      }
+      <div class="sidebar-customize-menu__separator" role="separator"></div>
+      <div class="sidebar-identity-menu__footer">
+        <openclaw-sidebar-build-chip
+          .variant=${"identity"}
+          .basePath=${params.basePath}
+          .gatewayVersion=${params.gatewayVersion}
+          .updateAttentionDismissed=${params.updateAttentionDismissed}
+          .onNavigate=${(routeId: "about") => {
+            params.onClose();
+            params.onNavigate(routeId);
+          }}
+        ></openclaw-sidebar-build-chip>
+        <span class="sidebar-mode-switch">
+          <openclaw-theme-mode-toggle
+            .mode=${params.themeMode}
+            .menuItem=${true}
+          ></openclaw-theme-mode-toggle>
+        </span>
+      </div>
+    </wa-dropdown>
+  `;
+}

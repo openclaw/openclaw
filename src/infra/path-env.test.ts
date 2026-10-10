@@ -13,34 +13,8 @@ const abs = (p: string) => path.resolve(p);
 const setDir = (p: string) => state.dirs.add(abs(p));
 const setExe = (p: string) => state.executables.add(abs(p));
 
-vi.mock("node:fs", async () => {
-  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
-  const pathMod = await import("node:path");
-  const absInMock = (p: string) => pathMod.resolve(p);
-
-  const wrapped = {
-    ...actual,
-    constants: { ...actual.constants, X_OK: actual.constants.X_OK ?? 1 },
-    accessSync: (p: string, mode?: number) => {
-      const resolved = absInMock(p);
-      if (state.executables.has(resolved)) {
-        return;
-      }
-      actual.accessSync(p, mode);
-    },
-    statSync: (p: string) => {
-      const resolved = absInMock(p);
-      if (state.dirs.has(resolved)) {
-        return {
-          isDirectory: () => true,
-        };
-      }
-      return actual.statSync(p);
-    },
-  };
-
-  return { ...wrapped, default: wrapped };
-});
+const actualAccessSync = fs.accessSync;
+const actualStatSync = fs.statSync;
 
 vi.mock("./env.js", () => ({
   isTruthyEnvValue: (value?: string) => value === "1" || value === "true",
@@ -52,6 +26,8 @@ describe("ensureOpenClawCliOnPath", () => {
     "OPENCLAW_PATH_BOOTSTRAPPED",
     "OPENCLAW_ALLOW_PROJECT_LOCAL_BIN",
     "MISE_DATA_DIR",
+    "XDG_DATA_HOME",
+    "LOCALAPPDATA",
     "PNPM_HOME",
     "NPM_CONFIG_PREFIX",
     "HOMEBREW_PREFIX",
@@ -64,6 +40,17 @@ describe("ensureOpenClawCliOnPath", () => {
     envSnapshot = Object.fromEntries(envKeys.map((k) => [k, process.env[k]])) as typeof envSnapshot;
     state.dirs.clear();
     state.executables.clear();
+    vi.spyOn(fs, "accessSync").mockImplementation((pathname, mode) => {
+      if (!state.executables.has(abs(String(pathname)))) {
+        actualAccessSync(pathname, mode);
+      }
+    });
+    vi.spyOn(fs, "statSync").mockImplementation((pathname, options) =>
+      actualStatSync(
+        state.dirs.has(abs(String(pathname))) ? import.meta.dirname : pathname,
+        options,
+      ),
+    );
 
     setDir("/usr/bin");
     setDir("/bin");
@@ -71,6 +58,7 @@ describe("ensureOpenClawCliOnPath", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     for (const k of envKeys) {
       const value = envSnapshot[k];
       if (value === undefined) {
@@ -96,7 +84,6 @@ describe("ensureOpenClawCliOnPath", () => {
     cwd: string;
     homeDir: string;
     platform: NodeJS.Platform;
-    allowProjectLocalBin?: boolean;
   }) {
     ensureOpenClawCliOnPath(params);
     return (process.env.PATH ?? "").split(path.delimiter);
@@ -111,6 +98,9 @@ describe("ensureOpenClawCliOnPath", () => {
     delete process.env.XDG_BIN_HOME;
     delete process.env.PNPM_HOME;
     delete process.env.NPM_CONFIG_PREFIX;
+    delete process.env.MISE_DATA_DIR;
+    delete process.env.XDG_DATA_HOME;
+    delete process.env.LOCALAPPDATA;
   }
 
   function expectPathsAfter(parts: string[], anchor: string, expectedPaths: string[]) {
@@ -169,73 +159,99 @@ describe("ensureOpenClawCliOnPath", () => {
     expect(process.env.PATH).toBe("/bin");
   });
 
-  it("appends mise shims after system dirs", () => {
+  it.each([
+    {
+      name: "MISE_DATA_DIR before all platform defaults",
+      platform: "win32",
+      env: {
+        MISE_DATA_DIR: "mise-override",
+        XDG_DATA_HOME: "xdg-data",
+        LOCALAPPDATA: "local-app-data",
+      },
+      expected: "mise-override/shims",
+      absent: ["xdg-data/mise/shims", "local-app-data/mise/shims", "AppData/Local/mise/shims"],
+    },
+    {
+      name: "XDG_DATA_HOME before Windows platform defaults",
+      platform: "win32",
+      env: { XDG_DATA_HOME: "xdg-data", LOCALAPPDATA: "local-app-data" },
+      expected: "xdg-data/mise/shims",
+      absent: ["local-app-data/mise/shims", "AppData/Local/mise/shims"],
+    },
+    {
+      name: "LOCALAPPDATA before the Windows HOME fallback",
+      platform: "win32",
+      env: { LOCALAPPDATA: "local-app-data" },
+      expected: "local-app-data/mise/shims",
+      absent: ["AppData/Local/mise/shims"],
+    },
+    {
+      name: "HOME/AppData/Local when Windows overrides are absent",
+      platform: "win32",
+      env: {},
+      expected: "AppData/Local/mise/shims",
+      absent: [],
+    },
+    {
+      name: "XDG_DATA_HOME before the Unix HOME fallback",
+      platform: "linux",
+      env: { XDG_DATA_HOME: "xdg-data" },
+      expected: "xdg-data/mise/shims",
+      absent: [".local/share/mise/shims"],
+    },
+    {
+      name: "HOME/.local/share when Unix overrides are absent",
+      platform: "darwin",
+      env: {},
+      expected: ".local/share/mise/shims",
+      absent: [],
+    },
+  ] as const)("uses $name", ({ platform, env, expected, absent }) => {
     const { tmp, appCli } = setupAppCliRoot("case-mise");
-    const miseDataDir = path.join(tmp, "mise");
-    const shimsDir = path.join(miseDataDir, "shims");
-    setDir(miseDataDir);
-    setDir(shimsDir);
+    for (const dir of [expected, ...absent]) {
+      setDir(path.join(tmp, dir));
+    }
+    resetBootstrapEnv();
+    for (const [key, value] of Object.entries(env)) {
+      process.env[key] = path.join(tmp, value);
+    }
 
-    process.env.MISE_DATA_DIR = miseDataDir;
+    const updated = bootstrapPath({ execPath: appCli, cwd: tmp, homeDir: tmp, platform });
+    expectPathsAfter(updated, "/usr/bin", [path.join(tmp, expected)]);
+    for (const dir of absent) {
+      expect(updated).not.toContain(path.join(tmp, dir));
+    }
+  });
+
+  it("only appends project-local node_modules/.bin when enabled via the environment", () => {
+    const { tmp, appCli } = setupAppCliRoot("case-project-local");
+    const localBinDir = path.join(tmp, "node_modules", ".bin");
+    const localCli = path.join(localBinDir, "openclaw");
+    setDir(path.join(tmp, "node_modules"));
+    setDir(localBinDir);
+    setExe(localCli);
+
     resetBootstrapEnv();
 
-    const updated = bootstrapPath({
+    const withoutOptIn = bootstrapPath({
       execPath: appCli,
       cwd: tmp,
       homeDir: tmp,
       platform: "darwin",
     });
-    expectPathsAfter(updated, "/usr/bin", [shimsDir]);
+    expect(withoutOptIn.includes(localBinDir)).toBe(false);
+
+    resetBootstrapEnv();
+    process.env.OPENCLAW_ALLOW_PROJECT_LOCAL_BIN = "1";
+
+    const withOptIn = bootstrapPath({
+      execPath: appCli,
+      cwd: tmp,
+      homeDir: tmp,
+      platform: "darwin",
+    });
+    expectPathsAfter(withOptIn, "/usr/bin", [localBinDir]);
   });
-
-  it.each([
-    {
-      name: "explicit option",
-      envValue: undefined,
-      allowProjectLocalBin: true,
-    },
-    {
-      name: "truthy env",
-      envValue: "1",
-      allowProjectLocalBin: undefined,
-    },
-  ])(
-    "only appends project-local node_modules/.bin when enabled via $name",
-    ({ envValue, allowProjectLocalBin }) => {
-      const { tmp, appCli } = setupAppCliRoot("case-project-local");
-      const localBinDir = path.join(tmp, "node_modules", ".bin");
-      const localCli = path.join(localBinDir, "openclaw");
-      setDir(path.join(tmp, "node_modules"));
-      setDir(localBinDir);
-      setExe(localCli);
-
-      resetBootstrapEnv();
-
-      const withoutOptIn = bootstrapPath({
-        execPath: appCli,
-        cwd: tmp,
-        homeDir: tmp,
-        platform: "darwin",
-      });
-      expect(withoutOptIn.includes(localBinDir)).toBe(false);
-
-      resetBootstrapEnv();
-      if (envValue === undefined) {
-        delete process.env.OPENCLAW_ALLOW_PROJECT_LOCAL_BIN;
-      } else {
-        process.env.OPENCLAW_ALLOW_PROJECT_LOCAL_BIN = envValue;
-      }
-
-      const withOptIn = bootstrapPath({
-        execPath: appCli,
-        cwd: tmp,
-        homeDir: tmp,
-        platform: "darwin",
-        ...(allowProjectLocalBin === undefined ? {} : { allowProjectLocalBin }),
-      });
-      expectPathsAfter(withOptIn, "/usr/bin", [localBinDir]);
-    },
-  );
 
   it("skips project-local bins when the working directory was deleted", () => {
     const { tmp, appCli } = setupAppCliRoot("case-deleted-cwd");
@@ -275,23 +291,6 @@ describe("ensureOpenClawCliOnPath", () => {
       platform: "linux",
     });
     expect(updated.indexOf(xdgBinHome)).toBeLessThan(updated.indexOf(localBin));
-  });
-
-  it("places ~/.local/bin AFTER /usr/bin to prevent PATH hijack", () => {
-    const { tmp, appCli } = setupAppCliRoot("case-path-hijack");
-    const localBin = path.join(tmp, ".local", "bin");
-    setDir(path.join(tmp, ".local"));
-    setDir(localBin);
-
-    resetBootstrapEnv("/usr/bin:/bin");
-
-    const updated = bootstrapPath({
-      execPath: appCli,
-      cwd: tmp,
-      homeDir: tmp,
-      platform: "linux",
-    });
-    expectPathsAfter(updated, "/usr/bin", [localBin]);
   });
 
   it("places all user-writable home dirs after system dirs", () => {
@@ -398,33 +397,43 @@ describe("ensureOpenClawCliOnPath", () => {
     expect(updated).not.toContain(path.join("npm-prefix", "bin"));
   });
 
-  it("ignores package-manager env roots derived from the active workspace", () => {
-    const homeDir = abs("/tmp/openclaw-path/home");
-    const cwd = path.join(homeDir, "workspace");
-    const appBinDir = path.join(homeDir, "app-bin");
-    const appCli = path.join(appBinDir, "openclaw");
-    const pnpmHome = path.join(cwd, ".pnpm");
-    const npmPrefix = path.join(cwd, ".npm-prefix");
-    for (const dir of [homeDir, cwd, appBinDir, pnpmHome, path.join(pnpmHome, "bin"), npmPrefix]) {
-      setDir(dir);
-    }
-    setDir(path.join(npmPrefix, "bin"));
-    setExe(appCli);
-    resetBootstrapEnv("/usr/bin:/bin");
-    process.env.PNPM_HOME = pnpmHome;
-    process.env.NPM_CONFIG_PREFIX = npmPrefix;
+  it.each([".pnpm", "..cache"])(
+    "ignores package-manager env roots derived from the active workspace (%s)",
+    (packageManagerDir) => {
+      const homeDir = abs("/tmp/openclaw-path/home");
+      const cwd = path.join(homeDir, "workspace");
+      const appBinDir = path.join(homeDir, "app-bin");
+      const appCli = path.join(appBinDir, "openclaw");
+      const pnpmHome = path.join(cwd, packageManagerDir);
+      const npmPrefix = path.join(cwd, ".npm-prefix");
+      for (const dir of [
+        homeDir,
+        cwd,
+        appBinDir,
+        pnpmHome,
+        path.join(pnpmHome, "bin"),
+        npmPrefix,
+      ]) {
+        setDir(dir);
+      }
+      setDir(path.join(npmPrefix, "bin"));
+      setExe(appCli);
+      resetBootstrapEnv("/usr/bin:/bin");
+      process.env.PNPM_HOME = pnpmHome;
+      process.env.NPM_CONFIG_PREFIX = npmPrefix;
 
-    const updated = bootstrapPath({
-      execPath: appCli,
-      cwd,
-      homeDir,
-      platform: "linux",
-    });
+      const updated = bootstrapPath({
+        execPath: appCli,
+        cwd,
+        homeDir,
+        platform: "linux",
+      });
 
-    expect(updated).not.toContain(pnpmHome);
-    expect(updated).not.toContain(path.join(pnpmHome, "bin"));
-    expect(updated).not.toContain(path.join(npmPrefix, "bin"));
-  });
+      expect(updated).not.toContain(pnpmHome);
+      expect(updated).not.toContain(path.join(pnpmHome, "bin"));
+      expect(updated).not.toContain(path.join(npmPrefix, "bin"));
+    },
+  );
 
   it("ignores package-manager env roots whose existing parent resolves into the workspace", () => {
     const homeDir = abs("/tmp/openclaw-path/home");

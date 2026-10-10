@@ -5,8 +5,9 @@ import { pathToFileURL } from "node:url";
 import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
-} from "../../../../extensions/qa-lab/api.js";
-import { spawnPnpmRunner as _spawnPnpmRunner } from "../../../../scripts/pnpm-runner.mjs";
+} from "../../../../extensions/qa-lab/test-api.js";
+import { coerceErrorMessage as formatErrorMessage } from "../../../../scripts/lib/error-format.mts";
+import { spawnPnpmRunner as _spawnPnpmRunner } from "../../../../scripts/pnpm-runner.mts";
 import {
   createQaScriptBlockedStatusTracker,
   createQaScriptEvidenceWriter,
@@ -50,28 +51,34 @@ export const MEDIA_SUITES: Record<MediaSuiteId, MediaSuiteConfig> = {
       "deepinfra",
       "fal",
       "google",
+      "kie",
       "minimax",
-      "openai",
+      "novita",
       "openrouter",
+      "pixverse",
       "qwen",
       "runway",
       "together",
       "vydra",
       "xai",
+      "zai",
     ],
     defaultProviders: [
       "alibaba",
       "byteplus",
       "deepinfra",
       "google",
+      "kie",
       "minimax",
-      "openai",
+      "novita",
       "openrouter",
+      "pixverse",
       "qwen",
       "runway",
       "together",
       "vydra",
       "xai",
+      "zai",
     ],
   },
 };
@@ -121,8 +128,6 @@ type HostedMediaOptions = {
 type HostedMediaSuiteDefinition = {
   codeRefs: string[];
   docsRefs: string[];
-  primaryCoverageIds: string[];
-  secondaryCoverageIds?: string[];
   scenarioId: string;
   title: string;
   videoFullModes?: boolean;
@@ -139,7 +144,6 @@ const EVIDENCE_SUITES: Record<EvidenceSuiteId, HostedMediaSuiteDefinition> = {
   image: {
     scenarioId: "hosted-image-generation-providers-live",
     title: "Hosted image generation providers live",
-    primaryCoverageIds: ["hosted-providers.image-generation-providers"],
     docsRefs: [
       "docs/help/testing.md",
       "docs/tools/image-generation.md",
@@ -154,11 +158,6 @@ const EVIDENCE_SUITES: Record<EvidenceSuiteId, HostedMediaSuiteDefinition> = {
   video: {
     scenarioId: "hosted-video-generation-providers-live",
     title: "Hosted video generation providers live",
-    primaryCoverageIds: [
-      "hosted-providers.video-generation-providers",
-      "media.reference-image-video-and-audio-inputs",
-    ],
-    secondaryCoverageIds: ["media.video-generation-tool-invocation"],
     docsRefs: [
       "docs/help/testing.md",
       "docs/tools/video-generation.md",
@@ -178,10 +177,6 @@ function formatProviderList(providers: Iterable<string>): string {
   return [...providers].toSorted().join(", ");
 }
 
-function formatErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
-
 function spawnLivePnpm(params: { pnpmArgs: string[]; env: NodeJS.ProcessEnv }) {
   return _spawnPnpmRunner({
     pnpmArgs: params.pnpmArgs,
@@ -196,8 +191,8 @@ async function collectProviderApiKeysForLiveMedia(provider: string): Promise<unk
 }
 
 async function getProviderEnvVarsForLiveMedia(provider: string): Promise<string[]> {
-  const { getProviderEnvVars } = await import("../../../../src/secrets/provider-env-vars.js");
-  return getProviderEnvVars(provider);
+  const { getProviderEnvVarsCore } = await import("../../../../src/secrets/provider-env-vars.js");
+  return getProviderEnvVarsCore(provider);
 }
 
 async function loadShellEnvFallbackForLiveMedia(params: {
@@ -414,7 +409,7 @@ async function selectProviders(params: {
   const candidates = explicit
     ? params.suite.providers
     : (params.suite.defaultProviders ?? params.suite.providers);
-  let providers = candidates.filter((provider) => (explicit ? explicit.has(provider) : true));
+  const providers = candidates.filter((provider) => (explicit ? explicit.has(provider) : true));
   if (!params.requireAuth) {
     return providers;
   }
@@ -481,14 +476,14 @@ export async function buildRunPlan(
   );
 }
 
-export function formatHelp(): string {
+function formatHelp(): string {
   return `Media live harness
 
 Usage:
   pnpm test:live:media
   pnpm test:live:media image
-  pnpm test:live:media image video --providers openai,google,minimax
-  pnpm test:live:media video --video-providers openai,runway --all-providers
+  pnpm test:live:media image video --providers google,minimax,xai
+  pnpm test:live:media video --video-providers runway,xai --all-providers
 
 QA evidence mode:
   node --import tsx ${SOURCE_PATH} --qa-evidence --suite image --artifact-base <dir>
@@ -499,7 +494,7 @@ Defaults:
   - auto-loads missing provider env vars from ~/.profile
   - narrows each suite to providers that currently have usable auth
   - skips the slow fal video smoke by default; pass --video-providers fal to run it
-  - forwards extra args to scripts/test-live.mjs
+  - forwards extra args to scripts/test-live.mts
 
 Flags:
   --providers <csv>         global provider filter
@@ -728,8 +723,6 @@ function createHostedMediaEvidenceWriter(options: HostedMediaOptions) {
       id: definition.scenarioId,
       title: definition.title,
       sourcePath: SOURCE_PATH,
-      primaryCoverageIds: definition.primaryCoverageIds,
-      secondaryCoverageIds: definition.secondaryCoverageIds,
       docsRefs: definition.docsRefs,
       codeRefs: definition.codeRefs,
     },

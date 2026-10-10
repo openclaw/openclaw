@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 
 usage() {
@@ -118,12 +118,6 @@ plist_value() {
   "${PLIST_BUDDY_BIN}" -c "Print:${key_path}" "${plist}" 2>/dev/null || true
 }
 
-plist_has_key() {
-  local plist="$1"
-  local key_path="$2"
-  "${PLIST_BUDDY_BIN}" -c "Print:${key_path}" "${plist}" >/dev/null 2>&1
-}
-
 assert_plist_string() {
   local plist="$1"
   local key_path="$2"
@@ -149,23 +143,11 @@ assert_plist_nonempty_string() {
   fi
 }
 
-assert_plist_true() {
-  local plist="$1"
-  local key_path="$2"
-  local label="$3"
-  local actual
-  actual="$(plist_value "${plist}" "${key_path}")"
-  if [[ "${actual}" != "true" ]]; then
-    echo "Invalid IPA: ${label}; expected true, got ${actual:-missing}." >&2
-    exit 1
-  fi
-}
-
 assert_plist_key_absent() {
   local plist="$1"
   local key_path="$2"
   local label="$3"
-  if plist_has_key "${plist}" "${key_path}"; then
+  if "${PLIST_BUDDY_BIN}" -c "Print:${key_path}" "${plist}" >/dev/null 2>&1; then
     echo "Invalid IPA: ${label} must not be present in App Store builds." >&2
     exit 1
   fi
@@ -219,11 +201,28 @@ assert_build_provenance() {
   fi
 }
 
+assert_localized_plists_resolve_build_settings() {
+  local localized_plist
+  local rendered
+  while IFS= read -r -d '' localized_plist; do
+    if ! rendered="$("${PLUTIL_BIN}" -convert xml1 -o - "${localized_plist}" 2>/dev/null)"; then
+      echo "Invalid IPA: could not read localized plist ${localized_plist#"${app_path}/"}." >&2
+      exit 1
+    fi
+    if grep -Eq '\$\([A-Za-z0-9_.-]+\)|\$\{[A-Za-z0-9_.-]+\}' <<<"${rendered}"; then
+      echo "Invalid IPA: unresolved build setting in localized plist ${localized_plist#"${app_path}/"}." >&2
+      exit 1
+    fi
+  done < <(find "${app_path}" -type f -path "*.lproj/InfoPlist.strings" -print0)
+}
+
 assert_plist_string "${info_plist}" "CFBundleIdentifier" "${EXPECTED_BUNDLE_ID}" "bundle identifier mismatch"
+assert_plist_string "${info_plist}" "CFBundleDisplayName" "OpenClaw" "display name mismatch"
 assert_plist_string "${info_plist}" "OpenClawPushMode" "${EXPECTED_PUSH_MODE}" "push mode mismatch"
 assert_plist_nonempty_string "${info_plist}" "NSHealthShareUsageDescription" "Health share usage description"
 assert_plist_nonempty_string "${info_plist}" "NSHealthUpdateUsageDescription" "Health update usage description"
 assert_build_provenance
+assert_localized_plists_resolve_build_settings
 assert_plist_empty_or_absent "${info_plist}" "OpenClawPushRelayBaseURL" "push relay URL override"
 assert_plist_key_absent "${info_plist}" "OpenClawPushTransport" "legacy push transport"
 assert_plist_key_absent "${info_plist}" "OpenClawPushDistribution" "legacy push distribution"
@@ -241,7 +240,7 @@ assert_plist_string "${entitlements_plist}" "application-identifier" "${EXPECTED
 assert_plist_string "${entitlements_plist}" "com.apple.developer.team-identifier" "${EXPECTED_TEAM_ID}" "signed team identifier mismatch"
 assert_plist_string "${entitlements_plist}" "aps-environment" "production" "signed APNs entitlement mismatch"
 assert_plist_string "${entitlements_plist}" "com.apple.developer.devicecheck.appattest-environment" "production" "signed App Attest entitlement mismatch"
-assert_plist_true "${entitlements_plist}" "com.apple.developer.healthkit" "signed HealthKit entitlement mismatch"
+assert_plist_string "${entitlements_plist}" "com.apple.developer.healthkit" "true" "signed HealthKit entitlement mismatch"
 assert_plist_array_contains "${entitlements_plist}" "com.apple.security.application-groups" "${EXPECTED_APP_GROUP}" "signed App Group entitlement mismatch"
 
 if ! "${SECURITY_BIN}" cms -D -i "${embedded_profile}" >"${profile_plist}" 2>"${tmp_dir}/security.err"; then
@@ -255,7 +254,7 @@ assert_plist_array_contains "${profile_plist}" "TeamIdentifier" "${EXPECTED_TEAM
 assert_plist_string "${profile_plist}" "Entitlements:application-identifier" "${EXPECTED_TEAM_ID}.${EXPECTED_BUNDLE_ID}" "embedded profile application identifier mismatch"
 assert_plist_string "${profile_plist}" "Entitlements:aps-environment" "production" "embedded profile APNs entitlement mismatch"
 assert_plist_array_contains "${profile_plist}" "Entitlements:com.apple.developer.devicecheck.appattest-environment" "production" "embedded profile App Attest entitlement mismatch"
-assert_plist_true "${profile_plist}" "Entitlements:com.apple.developer.healthkit" "embedded profile HealthKit entitlement mismatch"
+assert_plist_string "${profile_plist}" "Entitlements:com.apple.developer.healthkit" "true" "embedded profile HealthKit entitlement mismatch"
 assert_plist_array_contains "${profile_plist}" "Entitlements:com.apple.security.application-groups" "${EXPECTED_APP_GROUP}" "embedded profile App Group entitlement mismatch"
 
 echo "Validated iOS App Store IPA: ${IPA_PATH}"

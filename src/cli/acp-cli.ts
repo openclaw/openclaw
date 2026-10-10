@@ -1,14 +1,10 @@
-// Commander registration for ACP bridge and interactive ACP client commands.
 import type { Command } from "commander";
-import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
-import { theme } from "../../packages/terminal-core/src/theme.js";
-import { runAcpClientInteractive } from "../acp/client.js";
-import { serveAcpGateway } from "../acp/server.js";
 import { normalizeAcpProvenanceMode } from "../acp/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import { inheritOptionFromParent } from "./command-options.js";
 import { resolveGatewayAuthOptions } from "./gateway-secret-options.js";
+import { formatDocsHelp } from "./help-format.js";
 
 export function registerAcpCli(program: Command) {
   const acp = program.command("acp").description("Run an ACP bridge backed by the Gateway");
@@ -26,10 +22,7 @@ export function registerAcpCli(program: Command) {
     .option("--no-prefix-cwd", "Do not prefix prompts with the working directory")
     .option("--provenance <mode>", "ACP provenance mode: off, meta, or meta+receipt")
     .option("-v, --verbose", "Verbose logging to stderr", false)
-    .addHelpText(
-      "after",
-      () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/acp", "docs.openclaw.ai/cli/acp")}\n`,
-    )
+    .addHelpText("after", () => formatDocsHelp("/cli/acp"))
     .action(async (opts) => {
       try {
         const { gatewayToken, gatewayPassword } = resolveGatewayAuthOptions(opts);
@@ -37,6 +30,7 @@ export function registerAcpCli(program: Command) {
         if (opts.provenance && !provenanceMode) {
           throw new Error('Invalid --provenance. Use "off", "meta", or "meta+receipt".');
         }
+        const { serveAcpGateway } = await import("../acp/server.js");
         await serveAcpGateway({
           gatewayUrl: opts.url as string | undefined,
           gatewayToken,
@@ -66,6 +60,7 @@ export function registerAcpCli(program: Command) {
     .action(async (opts, command) => {
       const inheritedVerbose = inheritOptionFromParent<boolean>(command, "verbose");
       try {
+        const { runAcpClientInteractive } = await import("../acp/client.js");
         await runAcpClientInteractive({
           cwd: opts.cwd as string | undefined,
           serverCommand: opts.server as string | undefined,

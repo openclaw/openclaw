@@ -1,19 +1,25 @@
-// Discord plugin module implements gateway rate limit behavior.
 const GATEWAY_SEND_LIMIT = 120;
 const GATEWAY_SEND_WINDOW_MS = 60_000;
+const GATEWAY_SEND_QUEUE_LIMIT = GATEWAY_SEND_LIMIT;
 
-type QueuedGatewaySend = {
-  payload: string;
+type GatewaySendQueueOverflow = {
+  droppedEvents: number;
+  maxQueuedEvents: number;
+  policy: "drop-oldest";
+  queuedEvents: number;
 };
 
 export class GatewaySendLimiter {
   private outboundSendTimestamps: number[] = [];
-  private outboundQueue: QueuedGatewaySend[] = [];
+  private outboundQueue: string[] = [];
   private outboundFlushTimer?: NodeJS.Timeout;
+  private droppedEvents = 0;
+  private overflowWarningEmitted = false;
 
   constructor(
     private sendNow: (payload: string) => void,
     private emitError: (error: Error) => void,
+    private emitOverflowWarning: (warning: GatewaySendQueueOverflow) => void,
   ) {}
 
   send(serialized: string, options?: { critical?: boolean }): void {
@@ -21,7 +27,26 @@ export class GatewaySendLimiter {
       this.sendSerialized(serialized);
       return;
     }
-    this.outboundQueue.push({ payload: serialized });
+    let shouldEmitOverflowWarning = false;
+    // Keep the newest deferred state within one additional send window. Warn once per
+    // saturation episode so an overload cannot turn into a synchronous log flood.
+    if (this.outboundQueue.length >= GATEWAY_SEND_QUEUE_LIMIT) {
+      this.outboundQueue.shift();
+      this.droppedEvents += 1;
+      if (!this.overflowWarningEmitted) {
+        this.overflowWarningEmitted = true;
+        shouldEmitOverflowWarning = true;
+      }
+    }
+    this.outboundQueue.push(serialized);
+    if (shouldEmitOverflowWarning) {
+      this.emitOverflowWarning({
+        droppedEvents: this.droppedEvents,
+        maxQueuedEvents: GATEWAY_SEND_QUEUE_LIMIT,
+        policy: "drop-oldest",
+        queuedEvents: this.outboundQueue.length,
+      });
+    }
     this.scheduleFlush();
   }
 
@@ -31,6 +56,8 @@ export class GatewaySendLimiter {
       this.outboundFlushTimer = undefined;
     }
     this.outboundQueue = [];
+    this.droppedEvents = 0;
+    this.overflowWarningEmitted = false;
   }
 
   getStatus() {
@@ -39,12 +66,10 @@ export class GatewaySendLimiter {
     const oldest = this.outboundSendTimestamps[0] ?? now;
     return {
       remainingEvents: Math.max(0, GATEWAY_SEND_LIMIT - this.outboundSendTimestamps.length),
-      resetTime:
-        this.outboundSendTimestamps.length > 0
-          ? oldest + GATEWAY_SEND_WINDOW_MS
-          : now + GATEWAY_SEND_WINDOW_MS,
+      resetTime: oldest + GATEWAY_SEND_WINDOW_MS,
       currentEventCount: this.outboundSendTimestamps.length,
       queuedEvents: this.outboundQueue.length,
+      droppedEvents: this.droppedEvents,
     };
   }
 
@@ -89,16 +114,19 @@ export class GatewaySendLimiter {
   private flush(): void {
     while (this.outboundQueue.length > 0 && this.canSend(Date.now())) {
       const queued = this.outboundQueue.shift();
-      if (!queued) {
+      if (queued === undefined) {
         continue;
       }
       try {
-        this.sendSerialized(queued.payload);
+        this.sendSerialized(queued);
       } catch (error) {
         this.emitError(error instanceof Error ? error : new Error(String(error), { cause: error }));
         this.clear();
         return;
       }
+    }
+    if (this.outboundQueue.length < GATEWAY_SEND_QUEUE_LIMIT) {
+      this.overflowWarningEmitted = false;
     }
     this.scheduleFlush();
   }

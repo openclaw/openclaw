@@ -1,47 +1,80 @@
 import {
   type WorkerAdmissionFailureReason,
-  type WorkerAdmissionHandshake,
   type WorkerConnectParams,
   type WorkerProtocolCloseReason,
   WORKER_RPC_SET_VERSION,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { safeEqualSecret } from "../../security/secret-equal.js";
+import {
+  sameWorkerProtocolFeatures,
+  supportsCurrentWorkerLaunch,
+  type ExpectedWorkerBuild,
+} from "../../worker/worker-build-identity.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { hashWorkerCredential } from "./credential.js";
+import type {
+  WorkerEnvironmentBootstrapReceipt,
+  WorkerEnvironmentRecord,
+} from "./environment-record.js";
+import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerEnvironmentStore } from "./store.js";
 
 export type { WorkerConnectionIdentity } from "./connection-identity.js";
+export type { ExpectedWorkerBuild } from "../../worker/worker-build-identity.js";
 
-export type ExpectedWorkerBuild = {
-  bundleHash: string;
-  openclawVersion: string;
-  protocolFeatures: readonly string[];
-};
+export const STALE_WORKER_BUILD_REASON =
+  "Worker build does not match the current Gateway build; redispatch the session so its worker can bootstrap the current build before retrying.";
+
+export class StaleWorkerBuildError extends Error {
+  readonly code = "invalid_state";
+
+  constructor() {
+    super(STALE_WORKER_BUILD_REASON);
+  }
+}
+
+export function requireCurrentWorkerTurnEnvironment(params: {
+  environments: {
+    get(environmentId: string): (WorkerEnvironmentRecord & { error?: string }) | undefined;
+  };
+  placement: {
+    environmentId: string;
+    activeOwnerEpoch: number;
+    workerBundleHash: string;
+    sessionId: string;
+  };
+}): {
+  environment: WorkerEnvironmentRecord;
+  bootstrapReceipt: WorkerEnvironmentBootstrapReceipt;
+} {
+  const { placement } = params;
+  const environment = params.environments.get(placement.environmentId);
+  const bootstrapReceipt = environment?.bootstrapReceipt;
+  if (environment?.error === STALE_WORKER_BUILD_REASON) {
+    throw new StaleWorkerBuildError();
+  }
+  if (
+    !environment ||
+    environment.state !== "attached" ||
+    environment.ownerEpoch !== placement.activeOwnerEpoch ||
+    !bootstrapReceipt ||
+    bootstrapReceipt.bundleHash !== placement.workerBundleHash ||
+    environment.attachedSessionIds.length !== 1 ||
+    environment.attachedSessionIds[0] !== placement.sessionId
+  ) {
+    throw new Error("Active worker placement does not match its attached environment");
+  }
+  if (!supportsCurrentWorkerLaunch(bootstrapReceipt)) {
+    throw new Error(
+      "Active worker bundle lacks the current launch capability; reprovision the worker before launch",
+    );
+  }
+  return { environment, bootstrapReceipt };
+}
 
 type WorkerConnectionAdmissionResult =
   | { ok: true; identity: WorkerConnectionIdentity }
   | { ok: false; reason: WorkerAdmissionFailureReason };
-
-function sameStrings(left: readonly string[], right: readonly string[]): boolean {
-  const normalizedLeft = left.toSorted();
-  const normalizedRight = right.toSorted();
-  return (
-    normalizedLeft.length === normalizedRight.length &&
-    normalizedLeft.every((value, index) => value === normalizedRight[index])
-  );
-}
-
-/** Admits only the exact build selected for this worker environment. */
-export function verifyWorkerAdmissionHandshake(
-  handshake: WorkerAdmissionHandshake,
-  expected: ExpectedWorkerBuild,
-): boolean {
-  return (
-    handshake.bundleHash === expected.bundleHash &&
-    handshake.openclawVersion === expected.openclawVersion &&
-    sameStrings(handshake.protocolFeatures, expected.protocolFeatures)
-  );
-}
 
 /** Validate an opaque credential and every server-owned worker admission binding. */
 export function admitWorkerConnection(params: {
@@ -49,9 +82,13 @@ export function admitWorkerConnection(params: {
   admission: WorkerConnectParams["admission"];
   expectedBuild: ExpectedWorkerBuild;
   nowMs: number;
+  turnClaim?: WorkerSessionTurnClaim;
+  /** Service-only: exact durable turn validation must follow before admission succeeds. */
+  allowExpiredCredential?: boolean;
 }): WorkerConnectionAdmissionResult {
   const { admission, store } = params;
-  const credentialHash = hashWorkerCredential(admission.credential);
+  const turnClaim = params.turnClaim;
+  const credentialHash = hashWorkerCredential(admission.credential, turnClaim);
   const credential = store.getCredential(admission.environmentId);
   if (!credential || !safeEqualSecret(credentialHash, credential.credentialHash)) {
     const otherEnvironmentCredential = store.findCredentialByHash(credentialHash);
@@ -63,7 +100,21 @@ export function admitWorkerConnection(params: {
   if (credential.environmentId !== admission.environmentId) {
     return { ok: false, reason: "environment-mismatch" };
   }
-  if (params.nowMs >= credential.expiresAtMs) {
+  if (admission.sessionId !== null) {
+    if (
+      !turnClaim ||
+      turnClaim.owner.kind !== "worker" ||
+      turnClaim.sessionId !== admission.sessionId ||
+      turnClaim.runId !== admission.runId ||
+      turnClaim.owner.environmentId !== admission.environmentId ||
+      turnClaim.owner.ownerEpoch !== admission.ownerEpoch
+    ) {
+      return { ok: false, reason: "placement-mismatch" };
+    }
+  } else if (turnClaim || admission.runId !== null) {
+    return { ok: false, reason: "session-mismatch" };
+  }
+  if (params.nowMs >= credential.expiresAtMs && params.allowExpiredCredential !== true) {
     return { ok: false, reason: "credential-expired" };
   }
   const environment = store.get(admission.environmentId);
@@ -93,9 +144,6 @@ export function admitWorkerConnection(params: {
   if (admission.sessionId !== credential.sessionId) {
     return { ok: false, reason: "session-mismatch" };
   }
-  if ((admission.sessionId === null) !== (admission.runId === null)) {
-    return { ok: false, reason: "session-mismatch" };
-  }
   if (
     admission.ownerEpoch !== credential.ownerEpoch ||
     admission.ownerEpoch !== environment.ownerEpoch
@@ -109,11 +157,14 @@ export function admitWorkerConnection(params: {
     return { ok: false, reason: "rpc-set-mismatch" };
   }
   if (
-    !sameStrings(
+    !sameWorkerProtocolFeatures(
       admission.handshake.protocolFeatures,
       environment.bootstrapReceipt.protocolFeatures,
     ) ||
-    !sameStrings(admission.handshake.protocolFeatures, params.expectedBuild.protocolFeatures)
+    !sameWorkerProtocolFeatures(
+      admission.handshake.protocolFeatures,
+      params.expectedBuild.protocolFeatures,
+    )
   ) {
     return { ok: false, reason: "protocol-features-mismatch" };
   }
@@ -125,6 +176,7 @@ export function admitWorkerConnection(params: {
       bundleHash: credential.bundleHash,
       sessionId: credential.sessionId,
       runId: admission.runId,
+      turnClaim: turnClaim ?? null,
       ownerEpoch: credential.ownerEpoch,
       rpcSetVersion: credential.rpcSetVersion,
       protocolFeatures: [...environment.bootstrapReceipt.protocolFeatures],

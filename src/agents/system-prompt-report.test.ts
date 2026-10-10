@@ -1,7 +1,10 @@
+import { createHash } from "node:crypto";
 // System prompt report tests cover prompt accounting, bootstrap injection
 // matching, and hash output used to compare prompt/tool parity.
 import { describe, expect, it } from "vitest";
+import { buildBootstrapInjectionStats } from "./bootstrap-budget.js";
 import { buildSystemPromptReport } from "./system-prompt-report.js";
+import { buildAgentSystemPrompt } from "./system-prompt.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 function makeBootstrapFile(overrides: Partial<WorkspaceBootstrapFile>): WorkspaceBootstrapFile {
@@ -15,195 +18,64 @@ function makeBootstrapFile(overrides: Partial<WorkspaceBootstrapFile>): Workspac
 }
 
 describe("buildSystemPromptReport", () => {
-  const makeReport = (params: {
-    file: WorkspaceBootstrapFile;
-    injectedPath: string;
-    injectedContent: string;
-    bootstrapMaxChars?: number;
-    bootstrapTotalMaxChars?: number;
-  }) =>
+  const makeReport = (overrides: Partial<Parameters<typeof buildSystemPromptReport>[0]> = {}) =>
     buildSystemPromptReport({
       source: "run",
       generatedAt: 0,
-      bootstrapMaxChars: params.bootstrapMaxChars ?? 20_000,
-      bootstrapTotalMaxChars: params.bootstrapTotalMaxChars,
+      bootstrapMaxChars: 20_000,
       systemPrompt: "system",
-      bootstrapFiles: [params.file],
-      injectedFiles: [{ path: params.injectedPath, content: params.injectedContent }],
+      injectedWorkspaceFiles: [],
       skillsPrompt: "",
       tools: [],
+      ...overrides,
     });
-
-  it("counts injected chars when injected file paths are absolute", () => {
-    const file = makeBootstrapFile({ path: "/tmp/workspace/policies/AGENTS.md" });
-    const report = makeReport({
-      file,
-      injectedPath: "/tmp/workspace/policies/AGENTS.md",
-      injectedContent: "trimmed",
-    });
-
-    expect(report.injectedWorkspaceFiles[0]?.injectedChars).toBe("trimmed".length);
-  });
-
-  it("keeps legacy basename matching for injected files", () => {
-    const file = makeBootstrapFile({ path: "/tmp/workspace/policies/AGENTS.md" });
-    const report = makeReport({
-      file,
-      injectedPath: "AGENTS.md",
-      injectedContent: "trimmed",
-    });
-
-    expect(report.injectedWorkspaceFiles[0]?.injectedChars).toBe("trimmed".length);
-  });
-
-  it("marks workspace files truncated when injected chars are smaller than raw chars", () => {
-    const file = makeBootstrapFile({
-      path: "/tmp/workspace/policies/AGENTS.md",
-      content: "abcdefghijklmnopqrstuvwxyz",
-    });
-    const report = makeReport({
-      file,
-      injectedPath: "/tmp/workspace/policies/AGENTS.md",
-      injectedContent: "trimmed",
-    });
-
-    expect(report.injectedWorkspaceFiles[0]?.truncated).toBe(true);
-  });
-
-  it("includes both bootstrap caps in the report payload", () => {
-    const file = makeBootstrapFile({ path: "/tmp/workspace/policies/AGENTS.md" });
-    const report = makeReport({
-      file,
-      injectedPath: "AGENTS.md",
-      injectedContent: "trimmed",
-      bootstrapMaxChars: 11_111,
-      bootstrapTotalMaxChars: 22_222,
-    });
-
-    expect(report.bootstrapMaxChars).toBe(11_111);
-    expect(report.bootstrapTotalMaxChars).toBe(22_222);
-  });
-
-  it("reports zero in-band tool list chars when tool info stays structured", () => {
-    const file = makeBootstrapFile({ path: "/tmp/workspace/policies/AGENTS.md" });
-    const report = makeReport({
-      file,
-      injectedPath: "AGENTS.md",
-      injectedContent: "trimmed",
-    });
-
-    expect(report.tools.listChars).toBe(0);
-  });
-
-  it("reports injectedChars=0 when injected file does not match by path or basename", () => {
-    const file = makeBootstrapFile({ path: "/tmp/workspace/policies/AGENTS.md" });
-    const report = makeReport({
-      file,
-      injectedPath: "/tmp/workspace/policies/OTHER.md",
-      injectedContent: "trimmed",
-    });
-
-    expect(report.injectedWorkspaceFiles[0]?.injectedChars).toBe(0);
-    expect(report.injectedWorkspaceFiles[0]?.truncated).toBe(true);
-  });
 
   it("ignores malformed injected file paths and still matches valid entries", () => {
     const file = makeBootstrapFile({ path: "/tmp/workspace/policies/AGENTS.md" });
-    const report = buildSystemPromptReport({
-      source: "run",
-      generatedAt: 0,
-      bootstrapMaxChars: 20_000,
-      systemPrompt: "system",
-      bootstrapFiles: [file],
-      injectedFiles: [
-        { path: 123 as unknown as string, content: "bad" },
-        { path: "/tmp/workspace/policies/AGENTS.md", content: "trimmed" },
-      ],
-      skillsPrompt: "",
-      tools: [],
+    const report = makeReport({
+      injectedWorkspaceFiles: buildBootstrapInjectionStats({
+        bootstrapFiles: [file],
+        injectedFiles: [
+          { path: 123 as unknown as string, content: "bad" },
+          { path: "/tmp/workspace/policies/AGENTS.md", content: "trimmed" },
+        ],
+      }),
     });
 
     expect(report.injectedWorkspaceFiles[0]?.injectedChars).toBe("trimmed".length);
   });
 
-  it("does not count injected files as project context when the rendered prompt omits them", () => {
-    const file = makeBootstrapFile({
-      path: "/tmp/workspace/AGENTS.md",
-      content: "raw bootstrap context",
+  it("accounts for project context with LF markers and UTF-16 content", () => {
+    const systemPrompt = "lead\n# Project Context\n汉🦞\n## Silent Replies\ntail";
+    const report = makeReport({ systemPrompt });
+    expect(report.systemPrompt).toMatchObject({
+      chars: systemPrompt.length,
+      projectContextChars: 22,
+      nonProjectContextChars: systemPrompt.length - 22,
     });
-    const report = buildSystemPromptReport({
-      source: "run",
-      generatedAt: 0,
-      bootstrapMaxChars: 20_000,
-      systemPrompt: "custom override",
-      bootstrapFiles: [file],
-      injectedFiles: [{ path: "/tmp/workspace/AGENTS.md", content: "rendered context" }],
-      skillsPrompt: "",
-      tools: [],
-    });
-
-    expect(report.systemPrompt.chars).toBe("custom override".length);
-    expect(report.systemPrompt.projectContextChars).toBe(0);
-    expect(report.systemPrompt.nonProjectContextChars).toBe("custom override".length);
   });
 
-  it("emits content hashes for prompt and tool parity checks", () => {
-    // Hashes catch same-length prompt/tool drift that plain character counts
-    // would miss when comparing runtime payloads.
-    const file = makeBootstrapFile({ path: "/tmp/workspace/AGENTS.md" });
-    const report = buildSystemPromptReport({
-      source: "run",
-      generatedAt: 0,
-      bootstrapMaxChars: 20_000,
-      systemPrompt: "system",
-      bootstrapFiles: [file],
-      injectedFiles: [],
-      skillsPrompt: "<skill><name>docs</name></skill>",
-      tools: [
-        {
-          name: "read",
-          description: "Read files",
-          parameters: {
-            type: "object",
-            properties: { path: { type: "string" } },
-          },
-        },
-      ] as never,
+  it("reports unnamed complete skill blocks in order", () => {
+    const skillsPrompt = "<skill></skill><skill><name> </name></skill>";
+    const report = makeReport({
+      systemPrompt: `## Skills\n${skillsPrompt.trim()}`,
+      skillsPrompt,
     });
-    const sameLengthChangedPrompt = buildSystemPromptReport({
-      source: "run",
-      generatedAt: 0,
-      bootstrapMaxChars: 20_000,
-      systemPrompt: "systen",
-      bootstrapFiles: [file],
-      injectedFiles: [],
-      skillsPrompt: "<skill><name>docs</name></skill>",
-      tools: [],
-    });
-
-    expect(report.systemPrompt.hash).toMatch(/^[a-f0-9]{64}$/u);
-    expect(report.skills.hash).toMatch(/^[a-f0-9]{64}$/u);
-    expect(report.tools.entries[0]?.summaryHash).toMatch(/^[a-f0-9]{64}$/u);
-    expect(report.tools.entries[0]?.schemaHash).toMatch(/^[a-f0-9]{64}$/u);
-    expect(sameLengthChangedPrompt.systemPrompt.hash).not.toBe(report.systemPrompt.hash);
+    expect(report.skills.promptChars).toBe(skillsPrompt.trim().length);
+    expect(report.skills.entries).toEqual([
+      { name: "(unknown)", blockChars: "<skill></skill>".length },
+      { name: "(unknown)", blockChars: "<skill><name> </name></skill>".length },
+    ]);
   });
 
   it("keeps reporting when a tool schema cannot be stringified", () => {
-    const file = makeBootstrapFile({ path: "/tmp/workspace/AGENTS.md" });
     const circularSchema: Record<string, unknown> = {
       type: "object",
       properties: { count: { type: "integer" } },
     };
     circularSchema.self = circularSchema;
 
-    const report = buildSystemPromptReport({
-      source: "run",
-      generatedAt: 0,
-      bootstrapMaxChars: 20_000,
-      systemPrompt: "system",
-      bootstrapFiles: [file],
-      injectedFiles: [],
-      skillsPrompt: "",
+    const report = makeReport({
       tools: [
         {
           name: "broken",
@@ -219,5 +91,99 @@ describe("buildSystemPromptReport", () => {
       propertiesCount: 1,
     });
     expect(report.tools.entries[0]?.schemaHash).toMatch(/^[a-f0-9]{64}$/u);
+  });
+});
+
+const catalog = [
+  "<available_skills>",
+  "<skill><name>weather</name><description>Weather reports</description><location>/skills/weather/SKILL.md</location></skill>",
+  "</available_skills>",
+].join("\n");
+
+function reportSkills(systemPrompt: string, skillsPrompt = catalog) {
+  return buildSystemPromptReport({
+    source: "run",
+    generatedAt: 0,
+    bootstrapMaxChars: 20_000,
+    systemPrompt,
+    injectedWorkspaceFiles: [],
+    skillsPrompt,
+    tools: [],
+  }).skills;
+}
+
+describe("rendered skills diagnostics", () => {
+  it.each([
+    { name: "visible skills_read", params: { toolNames: ["skills_read"] }, included: true },
+    {
+      name: "Code Mode exec",
+      params: { codeModeActive: true, toolNames: ["exec"] },
+      included: true,
+    },
+    { name: "CLI native tools", params: { promptSurface: "cli_backend" }, included: true },
+    {
+      name: "minimal prompt with read",
+      params: { promptMode: "minimal", toolNames: ["read"] },
+      included: true,
+    },
+    {
+      name: "no prompt sections",
+      params: { promptMode: "none", toolNames: ["read"] },
+      included: false,
+    },
+  ] satisfies Array<{
+    name: string;
+    params: Partial<Parameters<typeof buildAgentSystemPrompt>[0]>;
+    included: boolean;
+  }>)("reports the catalog actually rendered for $name", ({ params, included }) => {
+    const systemPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/workspace",
+      skillsPrompt: catalog,
+      ...params,
+    });
+    expect(systemPrompt.includes(catalog)).toBe(included);
+
+    const report = reportSkills(systemPrompt);
+    const rendered = included ? catalog : "";
+    expect(report.promptChars).toBe(rendered.length);
+    expect(report.hash).toBe(createHash("sha256").update(rendered).digest("hex"));
+    expect(report.entries.map(({ name }) => name)).toEqual(included ? ["weather"] : []);
+  });
+
+  it("measures the trimmed catalog that the renderer includes", () => {
+    const skillsPrompt = `\n  ${catalog}\n\n`;
+    const systemPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/workspace",
+      toolNames: ["read"],
+      skillsPrompt,
+    });
+    const report = reportSkills(systemPrompt, skillsPrompt);
+    expect(report.promptChars).toBe(catalog.length);
+    expect(report.hash).toBe(createHash("sha256").update(catalog).digest("hex"));
+    expect(report.entries.map(({ name }) => name)).toEqual(["weather"]);
+  });
+
+  it("ignores a workspace catalog copy when read is unavailable", () => {
+    const systemPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/workspace",
+      toolNames: ["message"],
+      skillsPrompt: catalog,
+      contextFiles: [{ path: "/workspace/AGENTS.md", content: `## Skills\n${catalog}` }],
+    });
+    expect(systemPrompt).toContain(catalog);
+    expect(reportSkills(systemPrompt).promptChars).toBe(0);
+    expect(reportSkills(systemPrompt).entries.map(({ name }) => name)).toEqual([]);
+  });
+
+  it("finds the rendered catalog after provider Project Context guidance", () => {
+    const systemPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/workspace",
+      toolNames: ["read"],
+      skillsPrompt: catalog,
+      promptContribution: { stablePrefix: "# Project Context\nProvider guidance." },
+    });
+    expect(systemPrompt).toContain(catalog);
+    expect(reportSkills(systemPrompt).promptChars).toBe(catalog.length);
+    expect(reportSkills(systemPrompt).entries.map(({ name }) => name)).toEqual(["weather"]);
   });
 });

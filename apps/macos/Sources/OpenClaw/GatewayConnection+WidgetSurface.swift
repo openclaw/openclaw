@@ -57,9 +57,7 @@ extension GatewayConnection {
     {
         guard !Task.isCancelled else { return nil }
         var params = ["surface": AnyCodable("canvas")]
-        if let observedURL {
-            params["observedUrl"] = AnyCodable(observedURL)
-        }
+        params["observedUrl"] = observedURL.map { AnyCodable($0) }
         do {
             let data = try await self.request(
                 method: "plugin.surface.refresh",
@@ -87,9 +85,9 @@ extension GatewayConnection {
 
     private func currentCanvasPluginSurfaceRoute() -> GatewayCanvasHostRoute? {
         guard let url = self.canvasPluginSurfaceURL else { return nil }
-        // The operator channel uses platform trust. Pinned remote routes belong
-        // to MacNodeModeCoordinator and arrive through its node session.
-        return GatewayCanvasHostRoute(url: url, tlsFingerprintSHA256: nil)
+        return GatewayCanvasHostRoute(
+            url: url,
+            tlsFingerprintSHA256: self.configuredTLSFingerprintSHA256())
     }
 
     func installCanvasPluginSurfaceURL(from snapshot: HelloOk) {

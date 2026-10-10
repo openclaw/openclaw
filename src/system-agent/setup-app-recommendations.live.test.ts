@@ -1,11 +1,21 @@
-import { describe, expect, it } from "vitest";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveRunWorkspaceDir } from "../agents/workspace-run.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { redactToolPayloadText } from "../logging/redact.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
 import { getSetupAppRecommendations } from "./setup-app-recommendations.js";
-import { completeSetupInferenceConfig } from "./setup-inference.js";
+import * as inference from "./setup-inference.js";
+import {
+  completeSetupInferenceConfig,
+  type CompleteSetupInferenceResult,
+} from "./setup-inference.js";
 
 const LIVE = process.env.OPENCLAW_LIVE_TEST === "1" && Boolean(process.env.OPENAI_API_KEY?.trim());
 const describeLive = LIVE ? describe : describe.skip;
+afterEach(() => vi.restoreAllMocks());
+
 const modelId = process.env.OPENCLAW_LIVE_APP_RECOMMENDATIONS_MODEL ?? "gpt-5.6-luna";
 
 const config: OpenClawConfig = {
@@ -33,6 +43,8 @@ const config: OpenClawConfig = {
     },
   },
   agents: {
+    // Config-injected inference bypasses load-time roster materialization.
+    entries: { main: {} },
     defaults: {
       model: { primary: `openai/${modelId}` },
       models: {
@@ -51,8 +63,32 @@ const runtime: RuntimeEnv = {
   exit: () => undefined,
 };
 
+describe("setup app recommendations fixture", () => {
+  it("admits the selected inference owner without provider credentials", async () => {
+    const route = await resolveSystemAgentConfiguredRouteFromConfig(config);
+    expect(route).not.toBeNull();
+    expect(
+      resolveRunWorkspaceDir({
+        workspaceDir: undefined,
+        agentId: route!.agentId,
+        config: route!.runConfig,
+      }).agentId,
+    ).toBe("main");
+  });
+});
+
 describeLive("setup app recommendations live", () => {
   it("uses real ClawHub search and OpenAI while rejecting substring traps", async () => {
+    let completion: CompleteSetupInferenceResult | undefined;
+    vi.spyOn(inference, "completeSetupInference").mockImplementation(async ({ prompt }) => {
+      completion = await completeSetupInferenceConfig({
+        config,
+        prompt,
+        runtime,
+        timeoutMs: 240_000,
+      });
+      return completion;
+    });
     const result = await getSetupAppRecommendations({
       inventorySource: async () => [
         { label: "Notion", bundleId: "notion.id" },
@@ -66,21 +102,16 @@ describeLive("setup app recommendations live", () => {
         { label: "ChatGPT", bundleId: "com.openai.codex" },
       ],
       runtime,
-      deps: {
-        complete: async (prompt) => {
-          const completion = await completeSetupInferenceConfig({
-            config,
-            prompt,
-            runtime,
-            timeoutMs: 240_000,
-          });
-          return completion.ok ? { ok: true, text: completion.text } : { ok: false };
-        },
-      },
     });
 
     const status = result.status === "ok" ? "ok" : `skipped:${result.reason}`;
-    expect(status).toBe("ok");
+    const diagnostic = truncateUtf16Safe(
+      redactToolPayloadText(
+        JSON.stringify(completion) ?? "Inference completion did not return a result.",
+      ),
+      2_000,
+    );
+    expect(status, `Setup inference: ${diagnostic}`).toBe("ok");
     if (result.status !== "ok") {
       return;
     }

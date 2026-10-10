@@ -1,56 +1,47 @@
-// Builds structured context reports for context command responses.
+import { estimateTokensFromChars } from "@openclaw/normalization-core/cjk-chars";
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
-import { analyzeBootstrapBudget } from "../../agents/bootstrap-budget.js";
-import { isRealConversationMessage } from "../../agents/compaction-real-conversation.js";
+import {
+  analyzeBootstrapBudget,
+  buildBootstrapInjectionStats,
+} from "../../agents/bootstrap-budget.js";
+import { createRealConversationClassifier } from "../../agents/compaction-real-conversation.js";
 import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
 } from "../../agents/embedded-agent-helpers/bootstrap.js";
-import {
-  createMessageCharEstimateCache,
-  estimateMessageCharsCached,
-} from "../../agents/embedded-agent-runner/tool-result-char-estimator.js";
+import { estimateMessageChars } from "../../agents/embedded-agent-runner/tool-result-char-estimator.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { buildSystemPromptReport } from "../../agents/system-prompt-report.js";
+import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
+import { resolveProjectedSessionContextTokens } from "../../config/sessions/context-token-provenance.js";
+import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import {
   resolveFreshSessionTotalTokens,
   type SessionEntry,
   type SessionSystemPromptReport,
 } from "../../config/sessions/types.js";
-import { readSessionMessages } from "../../gateway/session-utils.fs.js";
-import { estimateTokensFromChars } from "../../utils/cjk-chars.js";
+import { readSessionMessagesWithSourceAsync } from "../../gateway/session-transcript-readers.js";
+import { iterateSessionTranscriptSourcePages } from "../../gateway/session-transcript-source-pages.js";
 import type { ReplyPayload } from "../types.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { renderContextTreemapPng } from "./context-treemap.js";
 
-function formatInt(n: number): string {
-  return new Intl.NumberFormat("en-US").format(n);
-}
+const numberFormat = new Intl.NumberFormat("en-US");
+const formatInt = (value: number) => numberFormat.format(value);
 
 function formatCharsAndTokens(chars: number): string {
   return `${formatInt(chars)} chars (~${formatInt(estimateTokensFromChars(chars))} tok)`;
 }
 
-function parseContextArgs(commandBodyNormalized: string): string {
-  if (commandBodyNormalized === "/context") {
-    return "";
-  }
-  if (commandBodyNormalized.startsWith("/context ")) {
-    return commandBodyNormalized.slice(8).trim();
-  }
-  return "";
-}
-
-function formatListTop(
-  entries: Array<{ name: string; value: number }>,
-  cap: number,
-): { lines: string[]; omitted: number } {
-  const sorted = [...entries].toSorted((a, b) => b.value - a.value);
-  const top = sorted.slice(0, cap);
-  const omitted = Math.max(0, sorted.length - top.length);
-  const lines = top.map((e) => `- ${e.name}: ${formatCharsAndTokens(e.value)}`);
-  return { lines, omitted };
+function formatListTop(entries: Array<{ name: string; value: number }>, noun = "tools"): string[] {
+  const top = entries.toSorted((a, b) => b.value - a.value).slice(0, 30);
+  const omitted = entries.length - top.length;
+  return [
+    ...top.map((entry) => `- ${entry.name}: ${formatCharsAndTokens(entry.value)}`),
+    ...(omitted ? [`… (+${omitted} more ${noun})`] : []),
+  ];
 }
 
 function resolveRunContextReport(params: HandleCommandsParams): SessionSystemPromptReport | null {
@@ -67,45 +58,58 @@ function resolveContextReportAgentId(params: HandleCommandsParams): string {
   }).sessionAgentId;
 }
 
-type TranscriptCompactabilityReport =
-  | {
-      available: true;
-      totalMessages: number;
-      realConversationMessages: number;
-    }
-  | {
-      available: false;
-      reason: string;
-    };
-
-function resolveTranscriptCompactabilityReport(
+async function* readContextTranscriptPages(
   params: HandleCommandsParams,
   targetSessionEntry: SessionEntry | undefined,
-): TranscriptCompactabilityReport {
+): AsyncGenerator<AgentMessage[]> {
   const sessionId = targetSessionEntry?.sessionId?.trim();
   if (!sessionId) {
-    return { available: false, reason: "no active transcript session" };
+    return;
   }
-
-  const messages = readSessionMessages(
+  const agentId = resolveContextReportAgentId(params);
+  for await (const page of iterateSessionTranscriptSourcePages(readSessionMessagesWithSourceAsync, {
+    agentId,
     sessionId,
-    params.storePath,
-    targetSessionEntry?.sessionFile,
-  ) as AgentMessage[];
-  if (!messages.length) {
-    return { available: false, reason: "no transcript messages found" };
+    sessionKey: params.sessionKey,
+    storePath: resolveSessionStorePathForScope({
+      agentId,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    }),
+  })) {
+    yield page.messages as AgentMessage[];
+  }
+}
+
+async function buildTranscriptCompactabilityLines(
+  params: HandleCommandsParams,
+  targetSessionEntry: SessionEntry | undefined,
+): Promise<string[]> {
+  if (!targetSessionEntry?.sessionId?.trim()) {
+    return ["Compactable transcript: unavailable (no active transcript session)"];
   }
 
-  const realConversationMessages = messages.reduce(
-    (count, message, index) =>
-      count + (isRealConversationMessage(message, messages, index) ? 1 : 0),
-    0,
-  );
-  return {
-    available: true,
-    totalMessages: messages.length,
-    realConversationMessages,
-  };
+  const isRealConversation = createRealConversationClassifier();
+  let totalMessages = 0;
+  let realConversationMessages = 0;
+  for await (const messages of readContextTranscriptPages(params, targetSessionEntry)) {
+    totalMessages += messages.length;
+    for (const message of messages) {
+      realConversationMessages += isRealConversation(message) ? 1 : 0;
+    }
+  }
+  if (!totalMessages) {
+    return ["Compactable transcript: unavailable (no transcript messages found)"];
+  }
+
+  return [
+    `Compactable transcript: ${formatInt(realConversationMessages)} real conversation message(s) / ${formatInt(totalMessages)} transcript message(s)`,
+    ...(realConversationMessages === 0
+      ? [
+          "Compaction note: prompt/cache usage may be high even when there are no compactable conversation messages.",
+        ]
+      : []),
+  ];
 }
 
 async function resolveContextReport(
@@ -124,6 +128,7 @@ async function resolveContextReport(
   const { systemPrompt, tools, skillsPrompt, bootstrapFiles, injectedFiles, sandboxRuntime } =
     await resolveCommandsSystemPromptBundle(params);
 
+  const injectedWorkspaceFiles = buildBootstrapInjectionStats({ bootstrapFiles, injectedFiles });
   return buildSystemPromptReport({
     source: "estimate",
     generatedAt: Date.now(),
@@ -136,8 +141,7 @@ async function resolveContextReport(
     bootstrapTotalMaxChars,
     sandbox: { mode: sandboxRuntime.mode, sandboxed: sandboxRuntime.sandboxed },
     systemPrompt,
-    bootstrapFiles,
-    injectedFiles,
+    injectedWorkspaceFiles,
     skillsPrompt,
     tools,
   });
@@ -145,7 +149,8 @@ async function resolveContextReport(
 
 export async function buildContextReply(params: HandleCommandsParams): Promise<ReplyPayload> {
   const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
-  const args = parseContextArgs(params.command.commandBodyNormalized);
+  const commandBody = params.command.commandBodyNormalized;
+  const args = commandBody.startsWith("/context ") ? commandBody.slice(8).trim() : "";
   const sub = normalizeLowercaseStringOrEmpty(args.split(/\s+/).find(Boolean));
 
   if (!sub || sub === "help") {
@@ -168,11 +173,28 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
 
   const cachedContextUsageTokens = resolveFreshSessionTotalTokens(targetSessionEntry);
   const session = {
-    totalTokens: targetSessionEntry?.totalTokens ?? null,
-    totalTokensFresh: targetSessionEntry?.totalTokensFresh ?? null,
+    totalTokens: cachedContextUsageTokens ?? null,
+    totalTokensFresh: targetSessionEntry ? cachedContextUsageTokens !== undefined : null,
     inputTokens: targetSessionEntry?.inputTokens ?? null,
     outputTokens: targetSessionEntry?.outputTokens ?? null,
-    contextTokens: params.contextTokens ?? null,
+    contextTokens:
+      resolveProjectedSessionContextTokens({
+        entry: targetSessionEntry,
+        provider: params.provider,
+        model: params.model,
+        agentHarnessId: resolveEffectiveAgentRuntime({
+          cfg: params.cfg,
+          agentId: resolveContextReportAgentId(params),
+          sessionKey: params.sessionKey,
+          sessionEntry: targetSessionEntry,
+          provider: params.provider,
+          modelId: params.model,
+        }),
+        resolvedContextTokens: params.contextTokenProjection?.contextTokens,
+        authoredContextTokens: params.contextTokenProjection?.authoredContextTokens,
+      }) ??
+      params.contextTokens ??
+      null,
   } as const;
 
   if (sub === "map") {
@@ -186,20 +208,12 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         ].join("\n"),
       };
     }
-    const sessionId = targetSessionEntry?.sessionId?.trim();
-    const messages = sessionId
-      ? (readSessionMessages(
-          sessionId,
-          params.storePath,
-          targetSessionEntry?.sessionFile,
-        ) as AgentMessage[])
-      : [];
-    const estimateCache = createMessageCharEstimateCache();
-    const conversationTotals = messages.reduce(
-      (totals, message) => {
-        const chars = estimateMessageCharsCached(message, estimateCache);
+    const totals = { user: 0, assistant: 0, toolResults: 0, summaries: 0, other: 0 };
+    for await (const messages of readContextTranscriptPages(params, targetSessionEntry)) {
+      for (const message of messages) {
+        const chars = estimateMessageChars(message);
         if (chars === 0) {
-          return totals;
+          continue;
         }
         if (message.role === "user") {
           totals.user += chars;
@@ -212,16 +226,14 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         } else {
           totals.other += chars;
         }
-        return totals;
-      },
-      { user: 0, assistant: 0, toolResults: 0, summaries: 0, other: 0 },
-    );
+      }
+    }
     const conversation = [
-      { name: "User", value: conversationTotals.user },
-      { name: "Assistant", value: conversationTotals.assistant },
-      { name: "Tool results", value: conversationTotals.toolResults },
-      { name: "Summaries", value: conversationTotals.summaries },
-      { name: "Other", value: conversationTotals.other },
+      { name: "User", value: totals.user },
+      { name: "Assistant", value: totals.assistant },
+      { name: "Tool results", value: totals.toolResults },
+      { name: "Summaries", value: totals.summaries },
+      { name: "Other", value: totals.other },
       // Runtime context and hook prompt additions reach only the model, never
       // the transcript; without these leaves the map undercounts model-visible
       // context. The persisted turn prompt is already counted above.
@@ -260,92 +272,96 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
   }
 
   const fileLines = report.injectedWorkspaceFiles.map((f) => {
-    const status = f.missing ? "MISSING" : f.truncated ? "TRUNCATED" : "OK";
+    const nativeUnverified = f.injectionStatus === "native_unverified";
+    const status = nativeUnverified
+      ? "NATIVE/UNVERIFIED"
+      : f.missing
+        ? "MISSING"
+        : f.truncated
+          ? "TRUNCATED"
+          : "OK";
     const raw = f.missing ? "0" : formatCharsAndTokens(f.rawChars);
-    const injected = f.missing ? "0" : formatCharsAndTokens(f.injectedChars);
-    return `- ${f.name}: ${status} | raw ${raw} | injected ${injected}`;
+    const injected = nativeUnverified
+      ? "unknown"
+      : f.missing
+        ? "0"
+        : formatCharsAndTokens(f.injectedChars);
+    return `- ${f.name}: ${status} | raw${nativeUnverified ? "(local)" : ""} ${raw} | injected ${injected}`;
   });
 
   const sandboxLine = `Sandbox: mode=${report.sandbox?.mode ?? "unknown"} sandboxed=${report.sandbox?.sandboxed ?? false}`;
   const toolSchemaLine = `Tool schemas (JSON): ${formatCharsAndTokens(report.tools.schemaChars)} (counts toward context; not shown as text)`;
   const toolListLine = `Tool list (system prompt text): ${formatCharsAndTokens(report.tools.listChars)}`;
-  const skillNameSet = new Set(report.skills.entries.map((s) => s.name));
-  const skillNames = Array.from(skillNameSet);
+  const skillNames = [...new Set(report.skills.entries.map((s) => s.name))];
   const toolNames = report.tools.entries.map((t) => t.name);
   const formatNameList = (names: string[], cap: number) =>
-    names.length <= cap
-      ? names.join(", ")
-      : `${names.slice(0, cap).join(", ")}, … (+${names.length - cap} more)`;
-  const skillsLine = `Skills list (system prompt text): ${formatCharsAndTokens(report.skills.promptChars)} (${skillNameSet.size} skills)`;
-  const skillsNamesLine = skillNameSet.size
-    ? `Skills: ${formatNameList(skillNames, 20)}`
-    : "Skills: (none)";
-  const toolsNamesLine = toolNames.length
-    ? `Tools: ${formatNameList(toolNames, 30)}`
-    : "Tools: (none)";
+    names.length === 0
+      ? "(none)"
+      : names.length <= cap
+        ? names.join(", ")
+        : `${names.slice(0, cap).join(", ")}, … (+${names.length - cap} more)`;
+  const skillsLine = `Skills list (system prompt text): ${formatCharsAndTokens(report.skills.promptChars)} (${skillNames.length} skills)`;
+  const skillsNamesLine = `Skills: ${formatNameList(skillNames, 20)}`;
+  const toolsNamesLine = `Tools: ${formatNameList(toolNames, 30)}`;
   const systemPromptLine = `System prompt (${report.source}): ${formatCharsAndTokens(report.systemPrompt.chars)} (Project Context ${formatCharsAndTokens(report.systemPrompt.projectContextChars)})`;
   const workspaceLabel = report.workspaceDir ?? params.workspaceDir;
   const sessionAgentId = resolveContextReportAgentId(params);
   const bootstrapMaxChars =
-    typeof report.bootstrapMaxChars === "number" &&
-    Number.isFinite(report.bootstrapMaxChars) &&
-    report.bootstrapMaxChars > 0
-      ? report.bootstrapMaxChars
-      : resolveBootstrapMaxChars(params.cfg, sessionAgentId);
+    asPositiveFiniteNumber(report.bootstrapMaxChars) ??
+    resolveBootstrapMaxChars(params.cfg, sessionAgentId);
   const bootstrapTotalMaxChars =
-    typeof report.bootstrapTotalMaxChars === "number" &&
-    Number.isFinite(report.bootstrapTotalMaxChars) &&
-    report.bootstrapTotalMaxChars > 0
-      ? report.bootstrapTotalMaxChars
-      : resolveBootstrapTotalMaxChars(params.cfg, sessionAgentId);
+    asPositiveFiniteNumber(report.bootstrapTotalMaxChars) ??
+    resolveBootstrapTotalMaxChars(params.cfg, sessionAgentId);
   const bootstrapMaxLabel = `${formatInt(bootstrapMaxChars)} chars`;
   const bootstrapTotalLabel = `${formatInt(bootstrapTotalMaxChars)} chars`;
   const bootstrapAnalysis = analyzeBootstrapBudget({
-    files: report.injectedWorkspaceFiles,
+    files: report.injectedWorkspaceFiles.filter(
+      (file) => file.injectionStatus !== "native_unverified",
+    ),
     bootstrapMaxChars,
     bootstrapTotalMaxChars,
   });
   const truncatedBootstrapFiles = bootstrapAnalysis.truncatedFiles;
-  const truncationCauseCounts = truncatedBootstrapFiles.reduce(
-    (acc, file) => {
-      for (const cause of file.causes) {
-        if (cause === "per-file-limit") {
-          acc.perFile += 1;
-        } else if (cause === "total-limit") {
-          acc.total += 1;
-        }
-      }
-      return acc;
-    },
-    { perFile: 0, total: 0 },
-  );
+  const perFile = truncatedBootstrapFiles.filter((file) =>
+    file.causes.includes("per-file-limit"),
+  ).length;
+  const total = truncatedBootstrapFiles.filter((file) =>
+    file.causes.includes("total-limit"),
+  ).length;
   const truncationCauseParts = [
-    truncationCauseCounts.perFile > 0
-      ? `${truncationCauseCounts.perFile} file(s) exceeded max/file`
-      : null,
-    truncationCauseCounts.total > 0 ? `${truncationCauseCounts.total} file(s) hit max/total` : null,
+    perFile > 0 ? `${perFile} file(s) exceeded max/file` : null,
+    total > 0 ? `${total} file(s) hit max/total` : null,
   ].filter(Boolean);
   const bootstrapWarningLines =
     truncatedBootstrapFiles.length > 0
       ? [
           `⚠ Bootstrap context is over configured limits: ${truncatedBootstrapFiles.length} file(s) truncated (${formatInt(bootstrapAnalysis.totals.rawChars)} raw chars -> ${formatInt(bootstrapAnalysis.totals.injectedChars)} injected chars).`,
           ...(truncationCauseParts.length ? [`Causes: ${truncationCauseParts.join("; ")}.`] : []),
-          "Tip: increase this agent's `agents.list[].bootstrapMaxChars` / `agents.list[].bootstrapTotalMaxChars` override, or the matching `agents.defaults.*` fallback, if this truncation is not intentional.",
+          "Tip: increase this agent's `agents.entries.*.bootstrapMaxChars` / `agents.entries.*.bootstrapTotalMaxChars` override, or the matching `agents.defaults.*` fallback, if this truncation is not intentional.",
         ]
       : [];
+  const hasNativeUnverifiedFiles = report.injectedWorkspaceFiles.some(
+    (file) => file.injectionStatus === "native_unverified",
+  );
+  const nativeUnverifiedWarningLines = hasNativeUnverifiedFiles
+    ? [
+        "⚠ Native Codex project instructions are unverified: Codex applies one aggregate root-to-CWD byte budget, and app-server does not report exact per-file retained bytes, so later AGENTS.md files can be partial.",
+        "Keep earlier/root files concise and read the relevant scoped file directly if guidance appears missing.",
+      ]
+    : [];
 
   const contextWindowLabel = session.contextTokens != null ? formatInt(session.contextTokens) : "?";
-  const totalsLine =
-    cachedContextUsageTokens != null
-      ? `Session tokens (cached): ${formatInt(cachedContextUsageTokens)} total / ctx=${contextWindowLabel}`
-      : `Session tokens (cached): unknown / ctx=${contextWindowLabel}`;
-  const sharedContextLines = [
+  const totalsLine = `Session tokens (cached): ${cachedContextUsageTokens != null ? `${formatInt(cachedContextUsageTokens)} total` : "unknown"} / ctx=${contextWindowLabel}`;
+  const detailed = sub === "detail" || sub === "deep";
+  const lines = [
+    detailed ? "🧠 Context breakdown (detailed)" : "🧠 Context breakdown",
     `Workspace: ${workspaceLabel}`,
     `Bootstrap max/file: ${bootstrapMaxLabel}`,
     `Bootstrap max/total: ${bootstrapTotalLabel}`,
     sandboxLine,
     systemPromptLine,
     ...(bootstrapWarningLines.length ? ["", ...bootstrapWarningLines] : []),
+    ...(nativeUnverifiedWarningLines.length ? ["", ...nativeUnverifiedWarningLines] : []),
     "",
     "Injected workspace files:",
     ...fileLines,
@@ -354,18 +370,16 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     skillsNamesLine,
   ];
 
-  if (sub === "detail" || sub === "deep") {
+  if (detailed) {
     const perSkill = formatListTop(
       report.skills.entries.map((s) => ({ name: s.name, value: s.blockChars })),
-      30,
+      "skills",
     );
     const perToolSchema = formatListTop(
       report.tools.entries.map((t) => ({ name: t.name, value: t.schemaChars })),
-      30,
     );
     const perToolSummary = formatListTop(
       report.tools.entries.map((t) => ({ name: t.name, value: t.summaryChars })),
-      30,
     );
     const toolPropsLines = report.tools.entries
       .filter((t) => t.propertiesCount != null)
@@ -395,65 +409,40 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         : overheadTokens > 0
           ? `Untracked provider/runtime overhead: ~${formatInt(overheadTokens)} tok`
           : "Untracked provider/runtime overhead: not observed in cached usage";
-    const transcriptCompactability = resolveTranscriptCompactabilityReport(
+    const transcriptCompactabilityLines = await buildTranscriptCompactabilityLines(
       params,
       targetSessionEntry,
     );
-    const transcriptCompactabilityLines = transcriptCompactability.available
-      ? [
-          `Compactable transcript: ${formatInt(transcriptCompactability.realConversationMessages)} real conversation message(s) / ${formatInt(transcriptCompactability.totalMessages)} transcript message(s)`,
-          ...(transcriptCompactability.realConversationMessages === 0
-            ? [
-                "Compaction note: prompt/cache usage may be high even when there are no compactable conversation messages.",
-              ]
-            : []),
-        ]
-      : [`Compactable transcript: unavailable (${transcriptCompactability.reason})`];
 
-    return {
-      text: [
-        "🧠 Context breakdown (detailed)",
-        ...sharedContextLines,
-        ...(perSkill.lines.length ? ["Top skills (prompt entry size):", ...perSkill.lines] : []),
-        ...(perSkill.omitted ? [`… (+${perSkill.omitted} more skills)`] : []),
-        "",
-        toolListLine,
-        toolSchemaLine,
-        toolsNamesLine,
-        "Top tools (schema size):",
-        ...perToolSchema.lines,
-        ...(perToolSchema.omitted ? [`… (+${perToolSchema.omitted} more tools)`] : []),
-        "",
-        "Top tools (summary text size):",
-        ...perToolSummary.lines,
-        ...(perToolSummary.omitted ? [`… (+${perToolSummary.omitted} more tools)`] : []),
-        ...(toolPropsLines.length ? ["", "Tools (param count):", ...toolPropsLines] : []),
-        "",
-        trackedPromptLine,
-        actualContextLine,
-        ...(overheadLine ? [overheadLine] : []),
-        ...transcriptCompactabilityLines,
-        "",
-        totalsLine,
-        "",
-        "Inline shortcut: a command token inside normal text (e.g. “hey /status”) that runs immediately (allowlisted senders only) and is stripped before the model sees the remaining message.",
-      ]
-        .filter(Boolean)
-        .join("\n"),
-    };
-  }
-
-  return {
-    text: [
-      "🧠 Context breakdown",
-      ...sharedContextLines,
+    lines.push(
+      ...(perSkill.length ? ["Top skills (prompt entry size):", ...perSkill] : []),
+      "",
       toolListLine,
       toolSchemaLine,
       toolsNamesLine,
+      "Top tools (schema size):",
+      ...perToolSchema,
       "",
-      totalsLine,
+      "Top tools (summary text size):",
+      ...perToolSummary,
+      ...(toolPropsLines.length ? ["", "Tools (param count):", ...toolPropsLines] : []),
       "",
-      "Inline shortcut: a command token inside normal text (e.g. “hey /status”) that runs immediately (allowlisted senders only) and is stripped before the model sees the remaining message.",
-    ].join("\n"),
+      trackedPromptLine,
+      actualContextLine,
+      ...(overheadLine ? [overheadLine] : []),
+      ...transcriptCompactabilityLines,
+    );
+  } else {
+    lines.push(toolListLine, toolSchemaLine, toolsNamesLine);
+  }
+
+  lines.push(
+    "",
+    totalsLine,
+    "",
+    "Inline shortcut: a command token inside normal text (e.g. “hey /status”) that runs immediately (allowlisted senders only) and is stripped before the model sees the remaining message.",
+  );
+  return {
+    text: (detailed ? lines.filter(Boolean) : lines).join("\n"),
   };
 }

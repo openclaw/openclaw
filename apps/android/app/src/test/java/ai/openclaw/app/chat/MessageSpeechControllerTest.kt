@@ -1,6 +1,7 @@
 package ai.openclaw.app.chat
 
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.voice.LocalSpeechSpeaking
 import ai.openclaw.app.voice.TalkAudioPlaying
 import ai.openclaw.app.voice.TalkSpeakAudio
 import kotlinx.coroutines.CompletableDeferred
@@ -10,6 +11,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -19,9 +21,7 @@ import org.robolectric.RobolectricTestRunner
 private fun speechClip(bytes: ByteArray = byteArrayOf(1, 2, 3)): TalkSpeakAudio =
   TalkSpeakAudio(
     bytes = bytes,
-    provider = "openai",
     outputFormat = "mp3",
-    voiceCompatible = null,
     mimeType = "audio/mpeg",
     fileExtension = ".mp3",
   )
@@ -51,9 +51,11 @@ private class FakePlayer : TalkAudioPlaying {
 private class FakeLocalSpeech : LocalSpeechSpeaking {
   val spoken = mutableListOf<String>()
   var stopCount = 0
+  var failure: Throwable? = null
 
   override suspend fun speak(text: String) {
     spoken += text
+    failure?.let { throw it }
   }
 
   override fun stop() {
@@ -91,7 +93,6 @@ class MessageSpeechControllerTest {
       assertEquals("""{"text":"Hello"}""", params)
       assertEquals(60_000L, timeoutMs)
       assertArrayEquals(byteArrayOf(1, 2, 3), audio.bytes)
-      assertEquals("openai", audio.provider)
       assertEquals("mp3", audio.outputFormat)
       assertEquals("audio/mpeg", audio.mimeType)
       assertEquals(".mp3", audio.fileExtension)
@@ -191,6 +192,42 @@ class MessageSpeechControllerTest {
       advanceUntilIdle()
       assertNull(controller.state.value)
       assertTrue(local.spoken.isEmpty())
+    }
+
+  @Test
+  fun localSpeechFailureIsInactiveAndTheSameMessageCanRetry() =
+    runTest {
+      val player = FakePlayer()
+      val local = FakeLocalSpeech().also { it.failure = IllegalStateException("TextToSpeech start failed") }
+      val controller = controller(player = player, local = local, synthesizer = { null })
+
+      controller.toggle(messageId = "m1", text = " Read me aloud ")
+      advanceUntilIdle()
+
+      val failed = checkNotNull(controller.state.value)
+      assertEquals(MessageSpeechState("m1", MessageSpeechPhase.Failed), failed)
+      assertFalse(failed.isActive)
+      local.failure = null
+      controller.toggle(messageId = "m1", text = " Read me aloud ")
+      assertTrue(checkNotNull(controller.state.value).isActive)
+      advanceUntilIdle()
+
+      assertEquals(listOf("Read me aloud", "Read me aloud"), local.spoken)
+      assertNull(controller.state.value)
+    }
+
+  @Test
+  fun stoppingClearsARecordedSpeechFailure() =
+    runTest {
+      val local = FakeLocalSpeech().also { it.failure = IllegalStateException("TextToSpeech init failed") }
+      val controller = controller(player = FakePlayer(), local = local, synthesizer = { null })
+      controller.toggle(messageId = "m1", text = "Read me aloud")
+      advanceUntilIdle()
+      assertEquals(MessageSpeechPhase.Failed, controller.state.value?.phase)
+
+      controller.stop()
+
+      assertNull(controller.state.value)
     }
 
   @Test

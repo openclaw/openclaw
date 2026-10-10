@@ -1,7 +1,17 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Signal tests cover retry behavior for reply session initialization conflicts.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import {
+  closeOpenClawStateDatabaseForTest,
+  createChannelIngressQueueForTests,
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } from "openclaw/plugin-sdk/channel-outbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SignalEventHandlerDeps } from "./event-handler.types.js";
+import { startSignalIngressMonitor } from "../signal-ingress.js";
 
 const [
   { createBaseSignalEventHandlerDeps, createSignalReceiveEvent },
@@ -24,7 +34,8 @@ const {
   recordInboundSessionMock: vi.fn(),
 }));
 
-vi.mock("node:timers/promises", () => ({
+vi.mock("node:timers/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:timers/promises")>()),
   setTimeout: <T>(delayMs: number, value?: T, options?: { signal?: AbortSignal }) =>
     new Promise<T | undefined>((resolve, reject) => {
       const signal = options?.signal;
@@ -69,6 +80,29 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
+    "openclaw/plugin-sdk/channel-inbound",
+  );
+  const { createSignalPreparedDispatchRunner } = await import("./event-handler.test-harness.js");
+  return {
+    ...actual,
+    // Retry timing must not depend on filesystem or worker scheduling.
+    resolveInboundSessionEnvelopeContextAsync: vi
+      .fn<typeof actual.resolveInboundSessionEnvelopeContextAsync>()
+      .mockImplementation(async ({ cfg }) => ({
+        storePath: "/tmp/openclaw/signal-sessions.json",
+        envelopeOptions: actual.resolveEnvelopeFormatOptions(cfg),
+        previousTimestamp: undefined,
+      })),
+    runChannelInboundEvent: createSignalPreparedDispatchRunner(
+      actual.runChannelInboundEvent,
+      recordInboundSessionMock,
+      async (resolved) => await dispatchInboundMessageMock({ ctx: resolved.ctxPayload }),
+    ),
+  };
+});
+
 vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/conversation-runtime")>(
     "openclaw/plugin-sdk/conversation-runtime",
@@ -104,46 +138,6 @@ describe("signal reply session init conflict retry", () => {
     removeReactionSignalMock.mockReset().mockResolvedValue({ ok: true });
     recordInboundSessionMock.mockReset().mockResolvedValue(undefined);
     dispatchInboundMessageMock.mockReset();
-  });
-
-  it("retries a debounced flush that fails with a reply session init conflict", async () => {
-    dispatchInboundMessageMock
-      .mockRejectedValueOnce(
-        new Error("dispatch wrapper failed", {
-          cause: { error: CONFLICT_ERROR },
-        }),
-      )
-      .mockResolvedValueOnce({ queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } });
-
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: { messages: { inbound: { debounceMs: 10 } } },
-      }),
-    );
-
-    vi.useFakeTimers();
-    try {
-      const handled = handler(
-        createSignalReceiveEvent({
-          dataMessage: {
-            message: "hello after prior turn",
-            attachments: [],
-          },
-        }),
-      );
-      await vi.advanceTimersByTimeAsync(10);
-      await handled;
-
-      // Initial flush fails and enters the retry backoff.
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-
-      await vi.advanceTimersByTimeAsync(1_000);
-
-      // The same failed batch is dispatched again.
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   it("cancels a pending retry when the Signal monitor aborts", async () => {
@@ -230,54 +224,137 @@ describe("signal reply session init conflict retry", () => {
     }
   });
 
-  it("gives up after the configured number of retry attempts", async () => {
+  it("preserves durable abandon accounting through backoff, threshold, and restart", async () => {
+    vi.useFakeTimers();
+    const now = Date.UTC(2026, 0, 2);
+    vi.setSystemTime(now);
+    const created = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-signal-abandon-"));
+    const stateDir = await fs.realpath(created);
+    type Queue = NonNullable<Parameters<typeof startSignalIngressMonitor>[0]["queue"]>;
+    type Payload = Parameters<Queue["enqueue"]>[1];
+    const queue = createChannelIngressQueueForTests<Payload>({
+      channelId: "signal",
+      accountId: "default",
+      stateDir,
+      now: () => Date.now(),
+    });
+    const timestamp = 1_700_000_000_777;
+    const event = createSignalReceiveEvent({
+      timestamp,
+      dataMessage: { timestamp, message: "retry through durable ingress", attachments: [] },
+    });
+    const eventId = JSON.stringify(["number:+15550001111", timestamp]);
     dispatchInboundMessageMock.mockRejectedValue(CONFLICT_ERROR);
 
-    const errorLogs: string[] = [];
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: { messages: { inbound: { debounceMs: 10 } } },
-        runtime: {
-          log: () => {},
-          error: (msg: string) => {
-            errorLogs.push(msg);
-          },
-        } as SignalEventHandlerDeps["runtime"],
-      }),
-    );
-
-    vi.useFakeTimers();
-    try {
-      const handled = handler(
-        createSignalReceiveEvent({
-          dataMessage: {
-            message: "hello after prior turn",
-            attachments: [],
-          },
+    const createIntegratedMonitor = async () => {
+      const tracked = createTrackedTaskHarness();
+      const handler = createSignalEventHandler(
+        createBaseSignalEventHandlerDeps({
+          cfg: { messages: { inbound: { debounceMs: 10 } } },
+          runTrackedTask: tracked.runTrackedTask,
         }),
       );
+      const dispatched = createDeferred<Awaited<ReturnType<typeof handler>>>();
+      const monitor = await startSignalIngressMonitor({
+        accountId: "default",
+        queue,
+        dispatch: (incoming, lifecycle) => {
+          const handling = handler(incoming, lifecycle);
+          dispatched.resolve(handling);
+          return handling;
+        },
+        runtime: { error: vi.fn(), log: vi.fn() },
+      });
+      return { monitor, tracked, dispatched };
+    };
+    const finishOuterAttempt = async ({
+      tracked,
+      dispatched,
+    }: Awaited<ReturnType<typeof createIntegratedMonitor>>) => {
+      await dispatched.promise;
       await vi.advanceTimersByTimeAsync(10);
-      await handled;
+      expect(tracked.tasks).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(7_000);
+      await Promise.all(tracked.tasks);
+    };
+    const pendingAttempt = async (attempts: number) => {
+      const pending = await queue.listPending({ limit: "all" });
+      expect(pending).toEqual([
+        expect.objectContaining({
+          id: eventId,
+          attempts,
+          lastAttemptAt: expect.any(Number),
+          lastError: "turn-abandoned",
+        }),
+      ]);
+      const record = pending[0];
+      const lastAttemptAt = record?.lastAttemptAt;
+      if (lastAttemptAt === undefined) {
+        throw new Error(`Missing Signal retry timestamp for attempt ${attempts}`);
+      }
+      return { ...record, lastAttemptAt };
+    };
 
-      // Initial attempt.
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
-
-      await vi.advanceTimersByTimeAsync(2_000);
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(3);
-
-      await vi.advanceTimersByTimeAsync(4_000);
+    try {
+      const first = await createIntegratedMonitor();
+      await first.monitor.receive(event);
+      await finishOuterAttempt(first);
+      const firstAttempt = await pendingAttempt(1);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(4);
+      await first.monitor.stop();
 
-      // No further retries should be scheduled; advancing again does nothing.
-      await vi.advanceTimersByTimeAsync(10_000);
+      vi.setSystemTime(firstAttempt.lastAttemptAt + 999);
+      const blocked = await createIntegratedMonitor();
+      await blocked.monitor.waitForIdle();
+      await vi.advanceTimersByTimeAsync(10);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(4);
+      expect(blocked.tracked.tasks).toHaveLength(0);
+      await blocked.monitor.stop();
 
-      expect(errorLogs.some((msg) => msg.includes("signal debounce flush failed"))).toBe(true);
+      vi.setSystemTime(firstAttempt.lastAttemptAt + 1_001);
+      const second = await createIntegratedMonitor();
+      await finishOuterAttempt(second);
+      const secondAttempt = await pendingAttempt(2);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(8);
+      await second.monitor.stop();
+
+      for (let attempt = 3; attempt < DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS; attempt += 1) {
+        const claim = await queue.claim(eventId, { ownerId: `seed-${attempt}` });
+        if (!claim) {
+          throw new Error(`Expected Signal seed claim ${attempt}`);
+        }
+        await queue.release(claim, {
+          lastError: "turn-abandoned",
+          releasedAt: secondAttempt.lastAttemptAt,
+        });
+      }
+
+      vi.setSystemTime(secondAttempt.lastAttemptAt + 64_001);
+      const threshold = await createIntegratedMonitor();
+      await finishOuterAttempt(threshold);
+      const thresholdAttempt = await pendingAttempt(DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(12);
+      await threshold.monitor.stop();
+
+      vi.setSystemTime(thresholdAttempt.lastAttemptAt + 128_001);
+      const beyond = await createIntegratedMonitor();
+      await finishOuterAttempt(beyond);
+      const beyondAttempt = await pendingAttempt(DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS + 1);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(16);
+      await beyond.monitor.stop();
+
+      vi.setSystemTime(beyondAttempt.lastAttemptAt + 1_000);
+      const blockedRestart = await createIntegratedMonitor();
+      await blockedRestart.monitor.waitForIdle();
+      await vi.advanceTimersByTimeAsync(10);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(16);
+      expect(blockedRestart.tracked.tasks).toHaveLength(0);
+      await blockedRestart.monitor.stop();
     } finally {
       vi.useRealTimers();
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+      await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
 
@@ -308,7 +385,9 @@ describe("signal reply session init conflict retry", () => {
 
   it("retries a failed batch as one ordered dispatch", async () => {
     dispatchInboundMessageMock
-      .mockRejectedValueOnce(CONFLICT_ERROR)
+      .mockRejectedValueOnce(
+        new Error("dispatch wrapper failed", { cause: { error: CONFLICT_ERROR } }),
+      )
       .mockResolvedValueOnce({ queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } });
 
     const handler = createSignalEventHandler(

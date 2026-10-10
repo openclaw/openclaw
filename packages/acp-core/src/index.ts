@@ -1,10 +1,5 @@
-// Public barrel for shared ACP session, metadata, and runtime helper contracts.
-
 export * from "./error-format.js";
 export * from "./meta.js";
-export * from "./normalize-text.js";
-export * from "./numeric-options.js";
-export * from "./record-shared.js";
 export * from "./session-interaction-mode.js";
 export * from "./session-lineage-meta.js";
 export * from "./session.js";

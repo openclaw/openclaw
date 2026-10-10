@@ -1,4 +1,3 @@
-// Shared skill status rendering and classification helpers.
 import { html, nothing } from "lit";
 import type { SkillStatusEntry } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
@@ -6,6 +5,9 @@ import { t } from "../i18n/index.ts";
 export function computeSkillMissing(skill: SkillStatusEntry): string[] {
   return [
     ...skill.missing.bins.map((b) => `bin:${b}`),
+    ...(skill.missing.anyBins.length > 0
+      ? [`bin:any of (${skill.missing.anyBins.join(", ")})`]
+      : []),
     ...skill.missing.env.map((e) => `env:${e}`),
     ...skill.missing.config.map((c) => `config:${c}`),
     ...skill.missing.os.map((o) => `os:${o}`),
@@ -13,21 +15,21 @@ export function computeSkillMissing(skill: SkillStatusEntry): string[] {
 }
 
 export function computeSkillReasons(skill: SkillStatusEntry): string[] {
-  const reasons: string[] = [];
-  if (skill.disabled) {
-    reasons.push(t("skillStatus.disabled"));
-  }
-  if (skill.blockedByAllowlist) {
-    reasons.push(t("skillStatus.blockedAllowlist"));
-  }
-  if (skill.blockedByAgentFilter) {
-    reasons.push(t("skillStatus.blockedAgentFilter"));
-  }
-  return reasons;
+  const reasons = [
+    [skill.disabled, "skillStatus.disabled"],
+    [skill.blockedByAllowlist, "skillStatus.blockedAllowlist"],
+    [skill.blockedByAgentFilter, "skillStatus.blockedAgentFilter"],
+  ] as const;
+  return reasons.flatMap(([blocked, key]) => (blocked ? [t(key)] : []));
 }
 
 export function isSkillAvailable(skill: SkillStatusEntry): boolean {
   return skill.eligible && !skill.blockedByAgentFilter;
+}
+
+/** Learned Workshop skills bypass agent allowlists; archiving in the Workshop hides one. */
+export function isWorkshopSkill(skill: Pick<SkillStatusEntry, "source">): boolean {
+  return skill.source === "openclaw-workshop";
 }
 
 export function renderSkillStatusChips(params: {
@@ -44,9 +46,11 @@ export function renderSkillStatusChips(params: {
       <span class="chip ${available ? "chip-ok" : "chip-warn"}">
         ${available ? t("skillStatus.eligible") : t("skillStatus.blocked")}
       </span>
-      ${skill.disabled
-        ? html` <span class="chip chip-warn">${t("skillStatus.disabled")}</span> `
-        : nothing}
+      ${
+        skill.disabled
+          ? html` <span class="chip chip-warn">${t("skillStatus.disabled")}</span> `
+          : nothing
+      }
     </div>
   `;
 }

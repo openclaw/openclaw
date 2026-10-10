@@ -1,100 +1,53 @@
-// Duckduckgo tests cover ddg search provider plugin behavior.
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
-import { createDuckDuckGoWebSearchProvider as createDuckDuckGoWebSearchContractProvider } from "../web-search-contract-api.js";
+import { createDuckDuckGoWebSearchProvider } from "../web-search-contract-api.js";
 import { resolveDdgRegion, resolveDdgSafeSearch } from "./config.js";
-
-const { runDuckDuckGoSearch } = vi.hoisted(() => ({
-  runDuckDuckGoSearch: vi.fn(async (params: Record<string, unknown>) => params),
-}));
-
-vi.mock("./ddg-client.js", () => ({
-  runDuckDuckGoSearch,
-}));
+import { runDuckDuckGoSearch } from "./ddg-client.js";
 
 describe("duckduckgo web search provider", () => {
-  let createDuckDuckGoWebSearchProvider: typeof import("./ddg-search-provider.js").createDuckDuckGoWebSearchProvider;
-  let ddgClientTesting: typeof import("./ddg-client.js").testing;
-
-  afterAll(() => {
-    vi.doUnmock("./ddg-client.js");
-    vi.resetModules();
-  });
-
   beforeAll(async () => {
-    ({ createDuckDuckGoWebSearchProvider } = await import("./ddg-search-provider.js"));
-    ({ testing: ddgClientTesting } =
-      await vi.importActual<typeof import("./ddg-client.js")>("./ddg-client.js"));
     await import("../index.js");
   });
 
-  beforeEach(() => {
-    runDuckDuckGoSearch.mockReset();
-    runDuckDuckGoSearch.mockImplementation(async (params: Record<string, unknown>) => params);
-  });
+  afterEach(() => vi.restoreAllMocks());
 
-  it("exposes keyless metadata and enables the plugin in config", () => {
-    const provider = createDuckDuckGoWebSearchProvider();
-    if (!provider.applySelectionConfig) {
-      throw new Error("Expected applySelectionConfig to be defined");
-    }
-    const applied = provider.applySelectionConfig({});
-
-    expect(provider.id).toBe("duckduckgo");
-    expect(provider.label).toBe("DuckDuckGo Search (experimental)");
-    expect(provider.onboardingScopes).toEqual(["text-inference"]);
-    expect(createDuckDuckGoWebSearchContractProvider().onboardingScopes).toEqual([
-      "text-inference",
-    ]);
-    expect(provider.requiresCredential).toBe(false);
-    expect(provider.credentialPath).toBe("");
-    const pluginEntry = applied.plugins?.entries?.duckduckgo;
-    if (!pluginEntry) {
-      throw new Error("expected DuckDuckGo plugin entry");
-    }
-    expect(pluginEntry.enabled).toBe(true);
-  });
-
-  it("maps generic tool arguments into DuckDuckGo search params", async () => {
-    const provider = createDuckDuckGoWebSearchProvider();
-    const tool = provider.createTool({
-      config: { test: true },
-    } as never);
+  function createSearchTool(config: OpenClawConfig = {}) {
+    const tool = createDuckDuckGoWebSearchProvider().createTool({ config });
     if (!tool) {
       throw new Error("Expected tool definition");
     }
+    return tool;
+  }
 
-    const result = await tool.execute({
-      query: "openclaw docs",
-      count: 4,
-      region: "us-en",
-      safeSearch: "off",
-    });
+  function pluginConfig(webSearch: { region?: string; safeSearch?: string }) {
+    return { plugins: { entries: { duckduckgo: { config: { webSearch } } } } };
+  }
 
-    expect(runDuckDuckGoSearch).toHaveBeenCalledWith({
-      config: { test: true },
-      query: "openclaw docs",
-      count: 4,
-      region: "us-en",
-      safeSearch: "off",
-    });
-    expect(result).toEqual({
-      config: { test: true },
-      query: "openclaw docs",
-      count: 4,
-      region: "us-en",
-      safeSearch: "off",
-    });
-  });
+  async function runHtmlSearch(query: string, html: string) {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(html, {
+        headers: { "content-type": "text/html" },
+      }),
+    );
+    return await runDuckDuckGoSearch({ query, cacheTtlMinutes: 0 });
+  }
+
+  function readSearchResults(payload: Record<string, unknown>) {
+    if (!Array.isArray(payload.results)) {
+      throw new Error("Expected DuckDuckGo search results");
+    }
+    return payload.results as Array<{
+      title: string;
+      url: string;
+      snippet: string;
+      siteName?: string;
+    }>;
+  }
 
   it("rejects fractional and out-of-range counts before searching", async () => {
-    const provider = createDuckDuckGoWebSearchProvider();
-    const tool = provider.createTool({
-      config: { test: true },
-    } as never);
-    if (!tool) {
-      throw new Error("Expected tool definition");
-    }
+    const tool = createSearchTool();
+    const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected search"));
 
     await expect(tool.execute({ query: "openclaw docs", count: 4.5 })).rejects.toThrow(
       "count must be an integer from 1 to 10.",
@@ -102,7 +55,66 @@ describe("duckduckgo web search provider", () => {
     await expect(tool.execute({ query: "openclaw docs", count: 11 })).rejects.toThrow(
       "count must be an integer from 1 to 10.",
     );
-    expect(runDuckDuckGoSearch).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects an already canceled search without fetching", async () => {
+    const tool = createSearchTool();
+    const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected search"));
+    const canceled = new AbortController();
+    canceled.abort(new Error("DuckDuckGo caller canceled"));
+
+    await expect(
+      tool.execute({ query: "duckduckgo pre-canceled" }, { signal: canceled.signal }),
+    ).rejects.toThrow("DuckDuckGo caller canceled");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("aborts an in-flight DuckDuckGo request without caching its result", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async (_url, init) =>
+        await new Promise<Response>((_resolve, reject) => {
+          if (!init?.signal) {
+            reject(new Error("DuckDuckGo request lost caller cancellation"));
+            return;
+          }
+          init.signal.addEventListener("abort", () => reject(init.signal?.reason as Error), {
+            once: true,
+          });
+        }),
+    );
+    const controller = new AbortController();
+    const tool = createSearchTool();
+    const result = tool.execute(
+      { query: "duckduckgo in-flight cancellation" },
+      { signal: controller.signal },
+    );
+
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    controller.abort(new Error("DuckDuckGo request canceled in flight"));
+    await expect(result).rejects.toThrow("DuckDuckGo request canceled in flight");
+    expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+    fetchMock.mockResolvedValueOnce(
+      new Response('<a class="result__a" href="https://example.com">Example</a>', {
+        headers: { "content-type": "text/html" },
+      }),
+    );
+
+    await tool.execute({ query: "duckduckgo in-flight cancellation" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves HTTP status for search failure guidance", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("rate limited", { status: 429 }));
+
+    await expect(
+      runDuckDuckGoSearch({ query: "duckduckgo rate limited", cacheTtlMinutes: 0 }),
+    ).rejects.toMatchObject({
+      status: 429,
+      statusCode: 429,
+      message: "DuckDuckGo search error (429): rate limited",
+    });
   });
 
   it("bounds successful DuckDuckGo HTML bodies without using response.text()", async () => {
@@ -113,10 +125,14 @@ describe("duckduckgo web search provider", () => {
       headers: { "Content-Type": "text/html" },
     });
     const textSpy = vi.spyOn(streamed.response, "text").mockRejectedValue(new Error("unbounded"));
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(streamed.response);
 
-    await expect(ddgClientTesting.readDuckDuckGoHtmlResponse(streamed.response)).rejects.toThrow(
-      "DuckDuckGo search: text response exceeds 16777216 bytes",
-    );
+    await expect(
+      runDuckDuckGoSearch({
+        query: "duckduckgo bounded response",
+        cacheTtlMinutes: 0,
+      }),
+    ).rejects.toThrow("DuckDuckGo search: text response exceeds 16777216 bytes");
 
     expect(streamed.getReadCount()).toBeLessThan(32);
     expect(streamed.wasCanceled()).toBe(true);
@@ -124,161 +140,129 @@ describe("duckduckgo web search provider", () => {
   });
 
   it("reads region from plugin config and normalizes empty values away", () => {
-    expect(
-      resolveDdgRegion({
-        plugins: {
-          entries: {
-            duckduckgo: {
-              config: {
-                webSearch: {
-                  region: "de-de",
-                },
-              },
-            },
-          },
-        },
-      } as never),
-    ).toBe("de-de");
-
-    expect(
-      resolveDdgRegion({
-        plugins: {
-          entries: {
-            duckduckgo: {
-              config: {
-                webSearch: {
-                  region: "   ",
-                },
-              },
-            },
-          },
-        },
-      } as never),
-    ).toBeUndefined();
+    expect(resolveDdgRegion(pluginConfig({ region: "de-de" }))).toBe("de-de");
+    expect(resolveDdgRegion(pluginConfig({ region: "   " }))).toBeUndefined();
   });
 
   it("defaults safeSearch to moderate and accepts strict and off", () => {
     expect(resolveDdgSafeSearch(undefined)).toBe("moderate");
 
-    expect(
-      resolveDdgSafeSearch({
-        plugins: {
-          entries: {
-            duckduckgo: {
-              config: {
-                webSearch: {
-                  safeSearch: "strict",
-                },
-              },
-            },
-          },
-        },
-      } as never),
-    ).toBe("strict");
-
-    expect(
-      resolveDdgSafeSearch({
-        plugins: {
-          entries: {
-            duckduckgo: {
-              config: {
-                webSearch: {
-                  safeSearch: "off",
-                },
-              },
-            },
-          },
-        },
-      } as never),
-    ).toBe("off");
+    expect(resolveDdgSafeSearch(pluginConfig({ safeSearch: "strict" }))).toBe("strict");
+    expect(resolveDdgSafeSearch(pluginConfig({ safeSearch: "off" }))).toBe("off");
   });
 
-  it("decodes direct and redirect urls plus common html entities", () => {
-    expect(
-      ddgClientTesting.decodeDuckDuckGoUrl(
-        "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fsearch%3Fq%3Dclaw",
-      ),
-    ).toBe("https://example.com/search?q=claw");
-    expect(ddgClientTesting.decodeDuckDuckGoUrl("https://example.com")).toBe("https://example.com");
-    expect(ddgClientTesting.decodeHtmlEntities("Fish &amp; Chips&nbsp;&hellip; &#39;ok&#39;")).toBe(
-      "Fish & Chips ... 'ok'",
+  it("parses href-before-class results without splitting highlighted words", async () => {
+    const payload = await runHtmlSearch(
+      "duckduckgo href ordering",
+      `
+        <a href="https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com" class="result__a">
+          Example &#38; Co Caf<b>é</b> guide
+        </a>
+        <a class="result__snippet">Fast&nbsp;search &hellip; with caf<b>é</b> details</a>
+        <a class="result__a" href="https://example.org/direct">Direct result</a>
+        <a class="result__snippet">Second snippet</a>
+      `,
     );
+    const results = readSearchResults(payload);
+
+    expect(results).toHaveLength(2);
+    expect(results[0]).toMatchObject({ url: "https://example.com", siteName: "example.com" });
+    expect(results[0]?.title).toContain("Example & Co Café guide");
+    expect(results[0]?.title).not.toContain("Caf é");
+    expect(results[0]?.snippet).toContain("Fast search ... with café details");
+    expect(results[1]).toMatchObject({
+      url: "https://example.org/direct",
+      siteName: "example.org",
+    });
+    expect(results[1]?.title).toContain("Direct result");
+    expect(results[1]?.snippet).toContain("Second snippet");
   });
 
-  it("leaves out-of-range numeric html entities intact instead of throwing", () => {
-    expect(() => ddgClientTesting.decodeHtmlEntities("Result &#99999999; end")).not.toThrow();
-    expect(ddgClientTesting.decodeHtmlEntities("Result &#99999999; end")).toBe(
-      "Result &#99999999; end",
-    );
-    expect(ddgClientTesting.decodeHtmlEntities("Hex &#x110000; tail")).toBe("Hex &#x110000; tail");
-    // Surrogate-range entities would decode to lone UTF-16 surrogates; keep them intact.
-    expect(ddgClientTesting.decodeHtmlEntities("Bad &#55296; end")).toBe("Bad &#55296; end");
-    expect(ddgClientTesting.decodeHtmlEntities("Bad &#xD800; end")).toBe("Bad &#xD800; end");
-    expect(ddgClientTesting.decodeHtmlEntities("Bad &#xDFFF; end")).toBe("Bad &#xDFFF; end");
-    // A valid supplementary-plane entity still decodes.
-    expect(ddgClientTesting.decodeHtmlEntities("Smile &#128512;")).toBe("Smile 😀");
-  });
-
-  it("does not double-decode escaped entities (decodes &amp; last)", () => {
-    // A result whose text literally shows "&lt;" arrives double-encoded as
-    // "&amp;lt;". Decoding &amp; first would re-decode it into "<", corrupting
-    // the snippet; &amp; must be decoded last.
-    expect(ddgClientTesting.decodeHtmlEntities("How to escape &amp;lt; in HTML")).toBe(
-      "How to escape &lt; in HTML",
-    );
-    expect(ddgClientTesting.decodeHtmlEntities("a&amp;#39;b")).toBe("a&#39;b");
-    expect(ddgClientTesting.decodeHtmlEntities("a&#x26;amp;b")).toBe("a&amp;b");
-  });
-
-  it("parses results when href appears before class", () => {
-    const html = `
-      <a href="https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com" class="result__a">
-        Example &amp; Co
-      </a>
-      <a class="result__snippet">Fast&nbsp;search &hellip; with details</a>
-      <a class="result__a" href="https://example.org/direct">Direct result</a>
-      <a class="result__snippet">Second snippet</a>
-    `;
-
-    expect(ddgClientTesting.parseDuckDuckGoHtml(html)).toEqual([
-      {
-        title: "Example & Co",
-        url: "https://example.com",
-        snippet: "Fast search ... with details",
-      },
-      {
-        title: "Direct result",
-        url: "https://example.org/direct",
-        snippet: "Second snippet",
-      },
-    ]);
-  });
-
-  it("detects bot challenge pages without flagging ordinary result snippets", () => {
-    const challengeHtml = `
-      <html>
-        <body>
-          <form>
-            <h1>Are you a human?</h1>
-            <div class="g-recaptcha">captcha</div>
-          </form>
-        </body>
-      </html>
-    `;
+  it("rejects bot challenge pages without flagging ordinary result snippets", async () => {
+    const challengeHtml = '<form>Are you a human?<div class="g-recaptcha">captcha</div></form>';
     const normalHtml = `
       <a class="result__a" href="https://example.com/challenge">Coding Challenge</a>
       <a class="result__snippet">A fun coding challenge for interview prep.</a>
     `;
 
-    expect(ddgClientTesting.isBotChallenge(challengeHtml)).toBe(true);
-    expect(ddgClientTesting.parseDuckDuckGoHtml(challengeHtml)).toStrictEqual([]);
-    expect(ddgClientTesting.isBotChallenge(normalHtml)).toBe(false);
-    expect(ddgClientTesting.parseDuckDuckGoHtml(normalHtml)).toEqual([
-      {
-        title: "Coding Challenge",
-        url: "https://example.com/challenge",
-        snippet: "A fun coding challenge for interview prep.",
-      },
-    ]);
+    await expect(runHtmlSearch("duckduckgo bot challenge", challengeHtml)).rejects.toThrow(
+      "DuckDuckGo returned a bot-detection challenge.",
+    );
+    const normalPayload = await runHtmlSearch("duckduckgo ordinary challenge result", normalHtml);
+    const [result] = readSearchResults(normalPayload);
+    expect(result?.url).toBe("https://example.com/challenge");
+    expect(result?.title).toContain("Coding Challenge");
+    expect(result?.snippet).toContain("A fun coding challenge for interview prep.");
+  });
+
+  it.each([0, 1])(
+    "applies the current %s-minute TTL to cached results",
+    async (cacheTtlMinutes) => {
+      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+      let requests = 0;
+      const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+        requests += 1;
+        return new Response(
+          `<a class="result__a" href="https://example.com/${requests}">Result ${requests}</a>`,
+          { headers: { "content-type": "text/html" } },
+        );
+      });
+      const search = async (ttl: number) => {
+        const searchConfig = { cacheTtlMinutes: ttl };
+        const tool = createSearchTool({ tools: { web: { search: searchConfig } } });
+        return await tool.execute({ query: `DuckDuckGo current TTL ${cacheTtlMinutes}` });
+      };
+
+      const original = await search(15);
+      expect(await search(15)).toEqual({ ...original, cached: true });
+      expect(fetch).toHaveBeenCalledTimes(1);
+
+      if (cacheTtlMinutes > 0) {
+        clock.mockReturnValue(Date.now() + 60_000);
+      }
+      const fresh = await search(cacheTtlMinutes);
+      expect(fresh.cached).toBeUndefined();
+      expect(fresh.results).toEqual([expect.objectContaining({ url: "https://example.com/2" })]);
+      expect(fetch).toHaveBeenCalledTimes(2);
+
+      if (cacheTtlMinutes === 0) {
+        const next = await search(0);
+        expect(next.cached).toBeUndefined();
+        expect(next.results).toEqual([expect.objectContaining({ url: "https://example.com/3" })]);
+        expect(await search(15)).toEqual({ ...original, cached: true });
+        expect(fetch).toHaveBeenCalledTimes(3);
+      } else {
+        expect(await search(1)).toEqual({ ...fresh, cached: true });
+        expect(fetch).toHaveBeenCalledTimes(2);
+      }
+    },
+  );
+
+  it("returns the first two valid results with their own snippets", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        `
+          <a class="result__a" href="https://example.com/empty-title"></a>
+          <a class="result__snippet">Discarded empty-title snippet</a>
+          <a class="result__a" href="https://example.com/first">First</a>
+          <a class="result__snippet">First snippet</a>
+          <a class="result__a" href="">Missing URL</a>
+          <a class="result__snippet">Discarded missing-URL snippet</a>
+          <a class="result__a" href="https://example.com/second">Second</a>
+          <a class="result__a" href="https://example.com/third">Third</a>
+          <a class="result__snippet">Third snippet</a>
+        `,
+        { headers: { "content-type": "text/html" } },
+      ),
+    );
+    const tool = createSearchTool({ tools: { web: { search: { cacheTtlMinutes: 0 } } } });
+    const result = await tool.execute({ query: "DuckDuckGo valid result count", count: 2 });
+
+    const expected = [
+      { url: "https://example.com/first", snippet: expect.stringContaining("First snippet") },
+      { url: "https://example.com/second", snippet: "" },
+    ];
+    expect(result).toMatchObject({ count: expected.length, results: expected });
+    expect(JSON.stringify(result)).not.toContain("Discarded");
   });
 });

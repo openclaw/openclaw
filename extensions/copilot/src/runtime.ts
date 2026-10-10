@@ -1,12 +1,7 @@
-// Copilot plugin module implements runtime behavior.
-import { normalize, resolve, sep } from "node:path";
+import { resolve, sep } from "node:path";
 import type { CopilotClient, CopilotClientOptions } from "@github/copilot-sdk";
+import { toStringifiedError as toCopilotRuntimeError } from "openclaw/plugin-sdk/error-runtime";
 import { loadCopilotSdk } from "./sdk-loader.js";
-
-// SAFETY: The pool reuses CopilotClient instances per normalized PoolKey and does not
-// serialize concurrent client.createSession() calls. attempt-bridge MUST treat shared
-// CopilotClients as having safe concurrent multi-session semantics that are NOT YET PROVEN;
-// if probe q4 reveals concurrency hazards, attempt-bridge must add per-key serialization.
 
 const DEFAULT_IDLE_TTL_MS = 5 * 60 * 1000;
 const POOL_DISPOSED_MESSAGE = "[copilot-pool] pool disposed";
@@ -17,6 +12,8 @@ export interface PoolKey {
   readonly authMode: "useLoggedInUser" | "gitHubToken" | "byok";
   readonly authProfileId?: string;
   readonly authProfileVersion?: string;
+  /** Distinguishes hardened empty-mode clients from normal Copilot CLI clients. */
+  readonly clientMode?: CopilotClientOptions["mode"];
 }
 
 export interface ClientCreateOptions extends Omit<
@@ -36,15 +33,9 @@ export interface PooledClient {
 export interface CopilotClientPoolOptions {
   readonly sdkFactory?: (opts: CopilotClientOptions) => CopilotClient | Promise<CopilotClient>;
   readonly idleTtlMs?: number;
-  readonly now?: () => number;
 }
 
-export interface CopilotClientPool {
-  acquire(key: PoolKey, options: ClientCreateOptions): Promise<PooledClient>;
-  release(handle: PooledClient): Promise<void>;
-  dispose(): Promise<Error[]>;
-  size(): number;
-}
+export type CopilotClientPool = ReturnType<typeof createCopilotClientPool>;
 
 type EntryState =
   | { kind: "creating"; promise: Promise<CopilotClient> }
@@ -53,7 +44,6 @@ type EntryState =
       kind: "idle";
       client: CopilotClient;
       idleTimer: ReturnType<typeof setTimeout>;
-      idleSinceMs: number;
     }
   | { kind: "stopping"; client: CopilotClient; promise: Promise<Error[]> }
   | { kind: "stopped" };
@@ -62,24 +52,18 @@ interface PoolEntry {
   readonly key: PoolKey;
   readonly cacheKey: string;
   refCount: number;
-  stopRan: boolean;
   state: EntryState;
 }
 
-export function createCopilotClientPool(options: CopilotClientPoolOptions = {}): CopilotClientPool {
+export function createCopilotClientPool(options: CopilotClientPoolOptions = {}) {
   const sdkFactory =
     options.sdkFactory ??
     (async (clientOptions: CopilotClientOptions) => {
-      // Lazy-load the SDK so packaged installs without @github/copilot-sdk
-      // (the default; see sdk-loader.ts for rationale) crash with an
-      // actionable install message instead of a generic MODULE_NOT_FOUND
-      // at import time. The loader caches the resolved module after the
-      // first successful load.
+      // The loader reports install guidance when the optional SDK is missing.
       const sdk = await loadCopilotSdk();
       return new sdk.CopilotClient(clientOptions);
     });
   const idleTtlMs = options.idleTtlMs ?? DEFAULT_IDLE_TTL_MS;
-  const now = options.now ?? Date.now;
   const entries = new Map<string, PoolEntry>();
   const releasedHandles = new WeakSet<PooledClient>();
   let disposed = false;
@@ -102,21 +86,11 @@ export function createCopilotClientPool(options: CopilotClientPoolOptions = {}):
     if (idleTimer) {
       clearTimeout(idleTimer);
     }
-    if (entry.stopRan) {
-      if (entry.state.kind === "stopping") {
-        return entry.state.promise;
-      }
-      if (entry.state.kind === "stopped") {
-        return Promise.resolve([]);
-      }
-    }
-
-    entry.stopRan = true;
     const stopPromise = (async () => {
       try {
         return await client.stop();
       } catch (error: unknown) {
-        return [toError(error)];
+        return [toCopilotRuntimeError(error)];
       } finally {
         entry.state = { kind: "stopped" };
         maybeDeleteEntry(entry);
@@ -134,7 +108,7 @@ export function createCopilotClientPool(options: CopilotClientPoolOptions = {}):
           await entry.state.promise;
         } catch (error: unknown) {
           maybeDeleteEntry(entry);
-          return [toError(error)];
+          return [toCopilotRuntimeError(error)];
         }
         return stopEntry(entry);
       }
@@ -161,23 +135,12 @@ export function createCopilotClientPool(options: CopilotClientPoolOptions = {}):
       kind: "idle",
       client,
       idleTimer,
-      idleSinceMs: now(),
     };
   };
 
   const createEntry = (key: PoolKey, cacheKey: string, clientOptions: CopilotClientOptions) => {
-    const entry: PoolEntry = {
-      key,
-      cacheKey,
-      refCount: 1,
-      stopRan: false,
-      state: {
-        kind: "creating",
-        promise: Promise.resolve(undefined as unknown as CopilotClient),
-      },
-    };
-
-    const createPromise = (async () => {
+    // Register the entry before invoking a factory that may throw synchronously.
+    const createPromise = Promise.resolve().then(async () => {
       try {
         const client = await sdkFactory(clientOptions);
         entry.state = { kind: "ready", client };
@@ -185,11 +148,18 @@ export function createCopilotClientPool(options: CopilotClientPoolOptions = {}):
       } catch (error: unknown) {
         entry.state = { kind: "stopped" };
         maybeDeleteEntry(entry);
-        throw toError(error);
+        throw toCopilotRuntimeError(error);
       }
-    })();
-
-    entry.state = { kind: "creating", promise: createPromise };
+    });
+    const entry: PoolEntry = {
+      key,
+      cacheKey,
+      refCount: 1,
+      state: {
+        kind: "creating",
+        promise: createPromise,
+      },
+    };
     entries.set(cacheKey, entry);
     return { entry, createPromise };
   };
@@ -198,7 +168,7 @@ export function createCopilotClientPool(options: CopilotClientPoolOptions = {}):
     inputKey: PoolKey,
     optionsForCreate: ClientCreateOptions,
   ): Promise<PooledClient> => {
-    const key = normalizePoolKey(inputKey, optionsForCreate.copilotHome);
+    const key = normalizePoolKey(inputKey, optionsForCreate.copilotHome, optionsForCreate.mode);
     const cacheKey = JSON.stringify(key);
     const clientOptions = normalizeClientCreateOptions(optionsForCreate, key.copilotHome);
 
@@ -210,31 +180,23 @@ export function createCopilotClientPool(options: CopilotClientPoolOptions = {}):
       const existing = entries.get(cacheKey);
       if (!existing) {
         const created = createEntry(key, cacheKey, clientOptions);
-        try {
-          const client = await created.createPromise;
-          if (disposed) {
-            await stopEntry(created.entry);
-            throw createDisposedError();
-          }
-          return { key: created.entry.key, client };
-        } catch (error: unknown) {
-          throw toError(error);
+        const client = await created.createPromise;
+        if (disposed) {
+          await stopEntry(created.entry);
+          throw createDisposedError();
         }
+        return { key: created.entry.key, client };
       }
 
       switch (existing.state.kind) {
         case "creating": {
           existing.refCount += 1;
-          try {
-            const client = await existing.state.promise;
-            if (disposed) {
-              await stopEntry(existing);
-              throw createDisposedError();
-            }
-            return { key: existing.key, client };
-          } catch (error: unknown) {
-            throw toError(error);
+          const client = await existing.state.promise;
+          if (disposed) {
+            await stopEntry(existing);
+            throw createDisposedError();
           }
+          return { key: existing.key, client };
         }
         case "ready":
           existing.refCount += 1;
@@ -294,15 +256,10 @@ export function createCopilotClientPool(options: CopilotClientPoolOptions = {}):
       return;
     }
 
-    if (entry.state.kind === "ready") {
-      scheduleIdleStop(entry, entry.state.client);
-      return;
-    }
-
     if (entry.state.kind === "idle") {
       clearTimeout(entry.state.idleTimer);
-      scheduleIdleStop(entry, entry.state.client);
     }
+    scheduleIdleStop(entry, entry.state.client);
   };
 
   const dispose = async (): Promise<Error[]> => {
@@ -348,13 +305,20 @@ export function createCopilotClientPool(options: CopilotClientPoolOptions = {}):
   };
 }
 
-function normalizePoolKey(key: PoolKey, rawCopilotHome: string): PoolKey {
+function normalizePoolKey(
+  key: PoolKey,
+  rawCopilotHome: string,
+  clientMode: CopilotClientOptions["mode"],
+): PoolKey {
   return {
     agentId: key.agentId,
     copilotHome: normalizeCopilotHome(rawCopilotHome),
     authMode: key.authMode,
     authProfileId: key.authProfileId,
     authProfileVersion: key.authProfileVersion,
+    // Undefined and `copilot-cli` are equivalent SDK defaults. Preserve the
+    // existing cache identity while keeping empty-mode finalizers isolated.
+    ...(clientMode === "empty" ? { clientMode } : {}),
   };
 }
 
@@ -371,7 +335,6 @@ function normalizeClientCreateOptions(
 
 function normalizeCopilotHome(copilotHome: string): string {
   let normalizedHome = resolve(copilotHome);
-  normalizedHome = normalize(normalizedHome);
   if (normalizedHome.endsWith(sep) && normalizedHome.length > 1) {
     normalizedHome = normalizedHome.slice(0, -1);
   }
@@ -379,11 +342,4 @@ function normalizeCopilotHome(copilotHome: string): string {
     normalizedHome = normalizedHome.toLowerCase();
   }
   return normalizedHome;
-}
-
-function toError(error: unknown): Error {
-  if (error instanceof Error) {
-    return error;
-  }
-  return new Error(String(error));
 }

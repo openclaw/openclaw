@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements inbound media MIME normalization.
 import type { proto } from "baileys";
 
 /**
@@ -9,6 +8,7 @@ export function resolveInboundMediaMimetype(message: proto.IMessage): string | u
   const explicit =
     message.imageMessage?.mimetype ??
     message.videoMessage?.mimetype ??
+    message.ptvMessage?.mimetype ??
     message.documentMessage?.mimetype ??
     message.audioMessage?.mimetype ??
     message.stickerMessage?.mimetype ??
@@ -23,7 +23,7 @@ export function resolveInboundMediaMimetype(message: proto.IMessage): string | u
   if (message.imageMessage) {
     return "image/jpeg";
   }
-  if (message.videoMessage) {
+  if (message.videoMessage || message.ptvMessage) {
     return "video/mp4";
   }
   if (message.stickerMessage) {

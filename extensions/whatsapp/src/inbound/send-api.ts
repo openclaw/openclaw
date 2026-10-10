@@ -1,23 +1,19 @@
-// Whatsapp API module exposes the plugin public contract.
-import type {
-  AnyMessageContent,
-  MiscMessageGenerationOptions,
-  WAMessage,
-  WAPresence,
-} from "baileys";
-import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
+import type { AnyMessageContent, WAMessage } from "baileys";
 import { resolveWhatsAppDocumentFileName } from "../document-filename.js";
 import { addWhatsAppImagePreviewFields } from "../image-preview.js";
-import { isWhatsAppNewsletterJid } from "../normalize.js";
+import { isWhatsAppNewsletterJid } from "../normalize-target.js";
 import { buildQuotedMessageOptions } from "../quoted-message.js";
-import { toWhatsappJid, toWhatsappJidWithLid } from "../text-runtime.js";
+import type { WhatsAppSocketOperationAdapter } from "../socket-timing.js";
+import { toWhatsappJid, toWhatsappJidWithLid } from "../targets-runtime.js";
 import {
   addWhatsAppOutboundMentionsToContent,
   type WhatsAppOutboundMentionResolution,
 } from "./outbound-mentions.js";
 import {
   combineWhatsAppSendResults,
+  mergeWhatsAppAcceptedSendError,
   normalizeWhatsAppSendResult,
+  rememberWhatsAppAcceptedSend,
   type WhatsAppSendKind,
   type WhatsAppSendResult,
 } from "./send-result.js";
@@ -39,27 +35,8 @@ type StructuredStickerSendOptions = {
   mimetype?: string;
 };
 
-function recordWhatsAppOutbound(accountId: string) {
-  recordChannelActivity({
-    channel: "whatsapp",
-    accountId,
-    direction: "outbound",
-  });
-}
-
-function supportsForcedDocumentMediaType(mediaType: string): boolean {
-  return mediaType.startsWith("image/") || mediaType.startsWith("video/");
-}
-
 export function createWebSendApi(params: {
-  sock: {
-    sendMessage: (
-      jid: string,
-      content: AnyMessageContent,
-      options?: MiscMessageGenerationOptions,
-    ) => Promise<WAMessage | undefined>;
-    sendPresenceUpdate: (presence: WAPresence, jid?: string) => Promise<unknown>;
-  };
+  sock: WhatsAppSocketOperationAdapter;
   defaultAccountId: string;
   resolveOutboundMentions?: (params: {
     jid: string;
@@ -82,15 +59,37 @@ export function createWebSendApi(params: {
     params.resolveOutboundMentions
       ? await params.resolveOutboundMentions({ jid, text })
       : { text, mentionedJids: [] };
+  const runAcceptedSend = async (
+    kind: WhatsAppSendKind,
+    accountId: string,
+    send: (
+      capture: (result: WAMessage | undefined, kind: WhatsAppSendKind) => void,
+    ) => Promise<void>,
+  ): Promise<WhatsAppSendResult> => {
+    const results: WhatsAppSendResult[] = [];
+    try {
+      // Baileys resolves only after relay acceptance; capture that fact before any later work.
+      await send((result, sendKind) => {
+        rememberWhatsAppAcceptedSend({
+          accountId,
+          result: normalizeWhatsAppSendResult(result, sendKind),
+          results,
+        });
+      });
+      return combineWhatsAppSendResults(kind, results);
+    } catch (error) {
+      throw mergeWhatsAppAcceptedSendError({ error, kind, results });
+    }
+  };
   const sendStructuredMessage = async (
     to: string,
     content: AnyMessageContent,
     kind: WhatsAppSendKind,
   ): Promise<WhatsAppSendResult> => {
     const jid = resolveOutboundJid(to);
-    const result = await params.sock.sendMessage(jid, content);
-    recordWhatsAppOutbound(params.defaultAccountId);
-    return normalizeWhatsAppSendResult(result, kind);
+    return await runAcceptedSend(kind, params.defaultAccountId, async (capture) => {
+      capture(await params.sock.sendMessage(jid, content), kind);
+    });
   };
 
   return {
@@ -114,31 +113,19 @@ export function createWebSendApi(params: {
         ? { text, mentionedJids: [] }
         : await resolveMentions(jid, text);
       if (mediaBuffer && mediaType) {
-        if (sendOptions?.asDocument === true && supportsForcedDocumentMediaType(mediaType)) {
-          const fileName = resolveWhatsAppDocumentFileName({
-            fileName: sendOptions?.fileName,
-            mimetype: mediaType,
-          });
-          payload = {
-            document: mediaBuffer,
-            fileName,
-            caption: resolvedPayloadText.text || undefined,
-            mimetype: mediaType,
-          };
-        } else if (mediaType.startsWith("image/")) {
+        const mediaFields = { caption: resolvedPayloadText.text || undefined, mimetype: mediaType };
+        if (mediaType.startsWith("image/") && sendOptions?.asDocument !== true) {
           payload = await addWhatsAppImagePreviewFields({
             image: mediaBuffer,
-            caption: resolvedPayloadText.text || undefined,
-            mimetype: mediaType,
+            ...mediaFields,
           });
         } else if (mediaType.startsWith("audio/")) {
           payload = { audio: mediaBuffer, ptt: true, mimetype: mediaType };
-        } else if (mediaType.startsWith("video/")) {
+        } else if (mediaType.startsWith("video/") && sendOptions?.asDocument !== true) {
           const gifPlayback = sendOptions?.gifPlayback;
           payload = {
             video: mediaBuffer,
-            caption: resolvedPayloadText.text || undefined,
-            mimetype: mediaType,
+            ...mediaFields,
             ...(gifPlayback ? { gifPlayback: true } : {}),
           };
         } else {
@@ -149,8 +136,7 @@ export function createWebSendApi(params: {
           payload = {
             document: mediaBuffer,
             fileName,
-            caption: resolvedPayloadText.text || undefined,
-            mimetype: mediaType,
+            ...mediaFields,
           };
         }
       } else {
@@ -158,36 +144,34 @@ export function createWebSendApi(params: {
       }
       payload = addWhatsAppOutboundMentionsToContent(payload, resolvedPayloadText.mentionedJids);
       const quotedOpts = buildQuotedMessageOptions({
+        ...sendOptions?.quotedMessageKey,
         messageId: sendOptions?.quotedMessageKey?.id,
-        remoteJid: sendOptions?.quotedMessageKey?.remoteJid,
-        fromMe: sendOptions?.quotedMessageKey?.fromMe,
-        participant: sendOptions?.quotedMessageKey?.participant,
-        messageText: sendOptions?.quotedMessageKey?.messageText,
+        destinationJid: jid,
+        requestedJid: toWhatsappJid(to),
       });
-      const result = quotedOpts
-        ? await params.sock.sendMessage(jid, payload, quotedOpts)
-        : await params.sock.sendMessage(jid, payload);
-      const results = [normalizeWhatsAppSendResult(result, mediaBuffer ? "media" : "text")];
-      if (shouldSendAudioText) {
-        const resolvedAudioText = await resolveMentions(jid, text);
-        const textPayload = addWhatsAppOutboundMentionsToContent(
-          { text: resolvedAudioText.text },
-          resolvedAudioText.mentionedJids,
-        );
-        const textResult = quotedOpts
-          ? await params.sock.sendMessage(jid, textPayload, quotedOpts)
-          : await params.sock.sendMessage(jid, textPayload);
-        results.push(normalizeWhatsAppSendResult(textResult, "text"));
-      }
+      const kind = mediaBuffer ? "media" : "text";
       const accountId = sendOptions?.accountId ?? params.defaultAccountId;
-      recordWhatsAppOutbound(accountId);
-      return combineWhatsAppSendResults(mediaBuffer ? "media" : "text", results);
+      return await runAcceptedSend(kind, accountId, async (capture) => {
+        const sendPayload = async (content: AnyMessageContent) =>
+          quotedOpts
+            ? await params.sock.sendMessage(jid, content, quotedOpts)
+            : await params.sock.sendMessage(jid, content);
+        capture(await sendPayload(payload), kind);
+        if (shouldSendAudioText) {
+          const resolvedAudioText = await resolveMentions(jid, text);
+          const textPayload = addWhatsAppOutboundMentionsToContent(
+            { text: resolvedAudioText.text },
+            resolvedAudioText.mentionedJids,
+          );
+          capture(await sendPayload(textPayload), "text");
+        }
+      });
     },
     sendPoll: async (
       to: string,
       poll: { question: string; options: string[]; maxSelections?: number },
-    ): Promise<WhatsAppSendResult> => {
-      return await sendStructuredMessage(
+    ) =>
+      await sendStructuredMessage(
         to,
         {
           poll: {
@@ -195,15 +179,11 @@ export function createWebSendApi(params: {
             values: poll.options,
             selectableCount: poll.maxSelections ?? 1,
           },
-        } as AnyMessageContent,
+        },
         "poll",
-      );
-    },
-    sendContact: async (
-      to: string,
-      contact: StructuredContactSend,
-    ): Promise<WhatsAppSendResult> => {
-      return await sendStructuredMessage(
+      ),
+    sendContact: async (to: string, contact: StructuredContactSend) =>
+      await sendStructuredMessage(
         to,
         {
           contacts: {
@@ -215,15 +195,11 @@ export function createWebSendApi(params: {
               },
             ],
           },
-        } as AnyMessageContent,
+        },
         "contact",
-      );
-    },
-    sendLocation: async (
-      to: string,
-      location: StructuredLocationSend,
-    ): Promise<WhatsAppSendResult> => {
-      return await sendStructuredMessage(
+      ),
+    sendLocation: async (to: string, location: StructuredLocationSend) =>
+      await sendStructuredMessage(
         to,
         {
           location: {
@@ -232,24 +208,22 @@ export function createWebSendApi(params: {
             name: location.name,
             address: location.address,
           },
-        } as AnyMessageContent,
+        },
         "location",
-      );
-    },
+      ),
     sendSticker: async (
       to: string,
       stickerBuffer: Buffer,
       options?: StructuredStickerSendOptions,
-    ): Promise<WhatsAppSendResult> => {
-      return await sendStructuredMessage(
+    ) =>
+      await sendStructuredMessage(
         to,
         {
           sticker: stickerBuffer,
           mimetype: options?.mimetype ?? "image/webp",
-        } as AnyMessageContent,
+        },
         "sticker",
-      );
-    },
+      ),
     sendReaction: async (
       chatJid: string,
       messageId: string,
@@ -270,7 +244,7 @@ export function createWebSendApi(params: {
             participant: participant ? toWhatsappJid(participant) : undefined,
           },
         },
-      } as AnyMessageContent);
+      });
       return normalizeWhatsAppSendResult(result, "reaction");
     },
     sendComposingTo: async (to: string): Promise<void> => {

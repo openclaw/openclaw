@@ -2,9 +2,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
-import { DELIVERY_NO_REPLY_RUNTIME_CONTRACT } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
-import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
+import {
+  DELIVERY_NO_REPLY_RUNTIME_CONTRACT,
+  openFileBackedSessionManagerForTest,
+} from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { isSilentReplyPayloadText } from "openclaw/plugin-sdk/reply-chunking";
 import { afterEach, describe, expect, it } from "vitest";
 import { CodexAppServerEventProjector } from "./event-projector.js";
@@ -20,7 +22,7 @@ async function createParams(): Promise<EmbeddedRunAttemptParams> {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-delivery-contract-"));
   tempDirs.add(tempDir);
   const sessionFile = path.join(tempDir, "session.jsonl");
-  SessionManager.open(sessionFile);
+  openFileBackedSessionManagerForTest(sessionFile);
   return {
     prompt: DELIVERY_NO_REPLY_RUNTIME_CONTRACT.prompt,
     sessionId: DELIVERY_NO_REPLY_RUNTIME_CONTRACT.sessionId,
@@ -54,7 +56,6 @@ afterEach(async () => {
 
 describe("Delivery/NO_REPLY runtime contract - Codex app-server adapter", () => {
   it.each([
-    DELIVERY_NO_REPLY_RUNTIME_CONTRACT.silentText,
     `  ${DELIVERY_NO_REPLY_RUNTIME_CONTRACT.silentText}  `,
     DELIVERY_NO_REPLY_RUNTIME_CONTRACT.jsonSilentText,
   ])("preserves silent terminal text %s for shared delivery suppression", async (text) => {

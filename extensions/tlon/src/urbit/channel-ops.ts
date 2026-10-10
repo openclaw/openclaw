@@ -1,4 +1,3 @@
-// Tlon plugin module implements channel ops behavior.
 import {
   readProviderJsonResponse,
   readResponseTextLimited,
@@ -17,9 +16,14 @@ type UrbitChannelDeps = {
   fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 };
 
-async function putUrbitChannel(
+export async function putUrbitChannel(
   deps: UrbitChannelDeps,
-  params: { body: unknown; auditContext: string },
+  params: {
+    body: unknown;
+    auditContext: string;
+    timeoutMs?: number;
+    beforeRequest?: () => void;
+  },
 ) {
   return await urbitFetch({
     baseUrl: deps.baseUrl,
@@ -35,8 +39,9 @@ async function putUrbitChannel(
     ssrfPolicy: deps.ssrfPolicy,
     lookupFn: deps.lookupFn,
     fetchImpl: deps.fetchImpl,
-    timeoutMs: 30_000,
+    timeoutMs: params.timeoutMs,
     auditContext: params.auditContext,
+    beforeRequest: params.beforeRequest,
   });
 }
 
@@ -59,6 +64,7 @@ export async function pokeUrbitChannel(
   const { response, release } = await putUrbitChannel(deps, {
     body: [pokeData],
     auditContext: params.auditContext,
+    timeoutMs: 30_000,
   });
 
   try {
@@ -66,7 +72,11 @@ export async function pokeUrbitChannel(
       const errorText = await readResponseTextLimited(response, TLON_ERROR_BODY_LIMIT_BYTES).catch(
         () => "",
       );
-      throw new Error(`Poke failed: ${response.status}${errorText ? ` - ${errorText}` : ""}`);
+      throw new UrbitHttpError({
+        operation: "Poke",
+        status: response.status,
+        bodyText: errorText || undefined,
+      });
     }
     return pokeId;
   } finally {
@@ -75,7 +85,9 @@ export async function pokeUrbitChannel(
 }
 
 export async function scryUrbitPath(
-  deps: Pick<UrbitChannelDeps, "baseUrl" | "cookie" | "ssrfPolicy" | "lookupFn" | "fetchImpl">,
+  deps: Pick<UrbitChannelDeps, "baseUrl" | "cookie" | "ssrfPolicy" | "lookupFn" | "fetchImpl"> & {
+    beforeRequest?: () => void;
+  },
   params: { path: string; auditContext: string },
 ): Promise<unknown> {
   const scryPath = `/~/scry${params.path}`;
@@ -89,13 +101,17 @@ export async function scryUrbitPath(
     ssrfPolicy: deps.ssrfPolicy,
     lookupFn: deps.lookupFn,
     fetchImpl: deps.fetchImpl,
+    beforeRequest: deps.beforeRequest,
     timeoutMs: 30_000,
     auditContext: params.auditContext,
   });
 
   try {
     if (!response.ok) {
-      throw new Error(`Scry failed: ${response.status} for path ${params.path}`);
+      throw new UrbitHttpError({
+        operation: `Scry for path ${params.path}`,
+        status: response.status,
+      });
     }
     // Successful scry bodies come from a remote Urbit and have no protocol size bound.
     // Keep the shared JSON ceiling while retaining the path needed to identify the endpoint.
@@ -105,23 +121,31 @@ export async function scryUrbitPath(
   }
 }
 
-async function createUrbitChannel(
+async function openUrbitChannelStep(
   deps: UrbitChannelDeps,
-  params: { body: unknown; auditContext: string },
+  params: { body: unknown; auditContext: string; operation: string },
 ): Promise<void> {
-  const { response, release } = await putUrbitChannel(deps, params);
+  const { response, release } = await putUrbitChannel(deps, { ...params, timeoutMs: 30_000 });
 
   try {
     if (!response.ok && response.status !== 204) {
-      throw new UrbitHttpError({ operation: "Channel creation", status: response.status });
+      throw new UrbitHttpError({ operation: params.operation, status: response.status });
     }
   } finally {
     await release();
   }
 }
 
-async function wakeUrbitChannel(deps: UrbitChannelDeps): Promise<void> {
-  const { response, release } = await putUrbitChannel(deps, {
+export async function ensureUrbitChannelOpen(
+  deps: UrbitChannelDeps,
+  params: { createBody: unknown; createAuditContext: string },
+): Promise<void> {
+  await openUrbitChannelStep(deps, {
+    body: params.createBody,
+    auditContext: params.createAuditContext,
+    operation: "Channel creation",
+  });
+  await openUrbitChannelStep(deps, {
     body: [
       {
         id: Date.now(),
@@ -133,24 +157,6 @@ async function wakeUrbitChannel(deps: UrbitChannelDeps): Promise<void> {
       },
     ],
     auditContext: "tlon-urbit-channel-wake",
+    operation: "Channel activation",
   });
-
-  try {
-    if (!response.ok && response.status !== 204) {
-      throw new UrbitHttpError({ operation: "Channel activation", status: response.status });
-    }
-  } finally {
-    await release();
-  }
-}
-
-export async function ensureUrbitChannelOpen(
-  deps: UrbitChannelDeps,
-  params: { createBody: unknown; createAuditContext: string },
-): Promise<void> {
-  await createUrbitChannel(deps, {
-    body: params.createBody,
-    auditContext: params.createAuditContext,
-  });
-  await wakeUrbitChannel(deps);
 }

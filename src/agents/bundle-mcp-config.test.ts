@@ -1,5 +1,6 @@
 /** Tests merging bundled MCP defaults with OpenClaw user MCP configuration. */
 import { describe, expect, it, vi } from "vitest";
+import type { loadEnabledBundleMcpConfig } from "../plugins/bundle-mcp.js";
 import { loadMergedBundleMcpConfig, toCliBundleMcpServerConfig } from "./bundle-mcp-config.js";
 
 const mocks = vi.hoisted(() => ({
@@ -13,7 +14,11 @@ const mocks = vi.hoisted(() => ({
       },
     },
     diagnostics: [],
-  },
+    pluginIdsByServer: { bundleProbe: "bundle-probe" },
+    prepareDataDirsByServer: {
+      bundleProbe: { pluginId: "bundle-probe", dataDir: "/state/plugin-data/bundle-probe" },
+    },
+  } satisfies ReturnType<typeof loadEnabledBundleMcpConfig>,
 }));
 
 vi.mock("../plugins/bundle-mcp.js", () => ({
@@ -45,6 +50,8 @@ describe("loadMergedBundleMcpConfig", () => {
       transport: "streamable-http",
       url: "https://mcp.example.com/mcp",
     });
+    expect(merged.prepareDataDirsByServer).toStrictEqual({});
+    expect(merged.pluginIdsByServer).toStrictEqual({});
   });
 
   it("maps OpenClaw transports to downstream CLI types when requested", () => {
@@ -58,43 +65,33 @@ describe("loadMergedBundleMcpConfig", () => {
       url: "https://mcp.example.com/mcp",
     });
     expect(toCliBundleMcpServerConfig({ type: "sse", transport: "streamable-http" })).toEqual({
-      type: "sse",
+      type: "http",
+    });
+    expect(toCliBundleMcpServerConfig({ type: " CuStOm ", transport: "custom" })).toEqual({
+      type: " CuStOm ",
     });
   });
 
-  it("keeps disabled OpenClaw MCP servers out of embedded runtimes", () => {
+  it.each([
+    {
+      name: "includes a disabled server",
+      override: true,
+      enabled: false,
+      expected: true,
+    },
+  ])("$name", ({ override, enabled, expected }) => {
     const merged = loadMergedBundleMcpConfig({
       workspaceDir: "/workspace",
       cfg: {
         mcp: {
           servers: {
-            disabledDocs: {
-              enabled: false,
-              command: "node",
-              args: ["docs.mjs"],
-            },
+            docs: { enabled, command: "node", args: ["docs.mjs"] },
           },
         },
       },
+      ...(override === undefined ? {} : { toolOverrides: { mcpServers: { docs: override } } }),
     });
 
-    expect(merged.config.mcpServers).not.toHaveProperty("disabledDocs");
-  });
-
-  it("lets disabled OpenClaw MCP servers tombstone bundle defaults with the same name", () => {
-    const merged = loadMergedBundleMcpConfig({
-      workspaceDir: "/workspace",
-      cfg: {
-        mcp: {
-          servers: {
-            bundleProbe: {
-              enabled: false,
-            },
-          },
-        },
-      },
-    });
-
-    expect(merged.config.mcpServers).not.toHaveProperty("bundleProbe");
+    expect(Object.hasOwn(merged.config.mcpServers, "docs")).toBe(expected);
   });
 });

@@ -1,19 +1,33 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { matchPluginCommand } from "../../plugins/commands.js";
+import type { PluginCommandReplyOptions } from "../../plugins/plugin-command-dispatch-contract.js";
+import {
+  createPluginCommandRuntime,
+  matchPluginCommandInvocation,
+  PLUGIN_COMMAND_DISPATCH,
+} from "../../plugins/plugin-command-runtime.js";
 import { isNativeCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
+import { isExplicitCommandTurnContext } from "../command-turn-detection.js";
 import {
   findCommandByNativeName,
   normalizeCommandBody,
   resolveTextCommand,
 } from "../commands-registry.js";
-import type { FinalizedMsgContext } from "../templating.js";
-import { isExplicitSourceReplyCommand } from "./source-reply-delivery-mode.js";
+import { shouldHandleTextCommands } from "../commands-text-routing.js";
+import type { FinalizedRuntimeMsgContext } from "../templating.js";
+import { resolveCommandChannel } from "./commands-context.js";
+import { resolveCommandContextText } from "./context-text.js";
 
 export function shouldBypassPluginOwnedBindingForCommand(
-  ctx: FinalizedMsgContext,
+  ctx: FinalizedRuntimeMsgContext,
   cfg: OpenClawConfig,
+  replyOptions?: PluginCommandReplyOptions,
 ): boolean {
+  // Command authorization is a trust boundary. Reject malformed runtime context
+  // before command-turn normalization can coerce a truthy value.
+  if (ctx.CommandAuthorized !== undefined && typeof ctx.CommandAuthorized !== "boolean") {
+    return false;
+  }
   const commandTurn = resolveCommandTurnContext(ctx);
   if (
     (commandTurn.kind === "native" || commandTurn.kind === "text-slash") &&
@@ -24,30 +38,52 @@ export function shouldBypassPluginOwnedBindingForCommand(
   if (isNativeCommandTurn(commandTurn) && commandTurn.authorized) {
     return true;
   }
-  if (!isExplicitSourceReplyCommand(ctx, cfg)) {
+  const isAuthorizedTextCommand =
+    (commandTurn.kind === "text-slash" && commandTurn.authorized) ||
+    (commandTurn.kind === "normal" &&
+      typeof ctx.CommandAuthorized === "boolean" &&
+      ctx.CommandAuthorized);
+  if (
+    !isAuthorizedTextCommand ||
+    !shouldHandleTextCommands({
+      cfg,
+      surface: ctx.Surface ?? ctx.Provider ?? "",
+      commandSource: ctx.CommandSource,
+    })
+  ) {
     return false;
   }
-  const commandBody = normalizeCommandBody(commandTurn.body ?? ctx.CommandBody ?? "", {
+  const commandBody = normalizeCommandBody(commandTurn.body ?? resolveCommandContextText(ctx), {
     botUsername: ctx.BotUsername,
   });
   if (!commandBody.startsWith("/")) {
+    return false;
+  }
+  const planned = replyOptions?.[PLUGIN_COMMAND_DISPATCH];
+  if (planned) {
+    return true;
+  }
+  const channel = resolveCommandChannel(ctx);
+  const match = matchPluginCommandInvocation(createPluginCommandRuntime(), commandBody, {
+    channel,
+  });
+  if (match) {
+    if (replyOptions) {
+      Object.assign(replyOptions, { [PLUGIN_COMMAND_DISPATCH]: match.dispatch });
+    }
+    return true;
+  }
+  if (!isExplicitCommandTurnContext(ctx, cfg)) {
     return false;
   }
   if (resolveTextCommand(commandBody)) {
     return true;
   }
   const provider = normalizeOptionalString(ctx.Provider ?? ctx.Surface);
-  if (
+  return Boolean(
     commandTurn.commandName &&
     findCommandByNativeName(commandTurn.commandName, provider, {
       includeBundledChannelFallback: true,
-    })
-  ) {
-    return true;
-  }
-  return Boolean(
-    matchPluginCommand(commandBody, {
-      channel: normalizeOptionalString(ctx.Surface ?? ctx.Provider),
     }),
   );
 }

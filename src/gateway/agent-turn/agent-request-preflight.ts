@@ -1,0 +1,289 @@
+import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { GATEWAY_CLIENT_MODES } from "../../../packages/gateway-protocol/src/client-info.js";
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { readAcpSessionMetaForEntry } from "../../acp/runtime/session-meta-readonly.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../../agents/agent-scope.js";
+import { parseExecApprovalFollowupApprovalId } from "../../agents/bash-tools.exec-approval-followup-state.js";
+import { normalizeSpawnedRunMetadata } from "../../agents/spawned-context.js";
+import {
+  findAuthorizedSwarmCollectorRequest,
+  findSwarmCollectorSession,
+} from "../../agents/subagents/registry/subagent-registry-memory.js";
+import { isSubagentSessionFromEntry } from "../../agents/subagents/spawn/subagent-depth-policy.js";
+import { resolveSwarmConfig } from "../../agents/subagents/swarm/swarm-config.js";
+import { validateStructuredOutputSchema } from "../../agents/subagents/swarm/swarm-output-schema.js";
+import { getSwarmRunExecutionLane } from "../../agents/subagents/swarm/swarm-scheduler.js";
+import { resolveSessionStorePathCore } from "../../config/sessions.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { CommandLaneConfiguration } from "../../process/lanes.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
+import {
+  isMainSessionRestartRecoveryInputProvenance,
+  isProgressCardRefreshInputProvenance,
+  normalizeInputProvenance,
+  shouldPreserveUserFacingSessionStateForInputProvenance,
+} from "../../sessions/input-provenance.js";
+import { isSubagentSessionKey } from "../../sessions/session-key-utils.js";
+import {
+  createAgentDatabaseAdmissionErrorShape,
+  readAgentDatabaseAdmissionRefusal,
+} from "../../state/agent-database-admission.js";
+import { hasGatewayAdminScope } from "../operator-scopes.js";
+import { resolveExpectedExistingSessionConstraint } from "../server-methods/agent-expected-session.js";
+import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { resolveGatewaySessionStoreTargetWithStore } from "../session-utils-store-lookup.js";
+import { readGatewayDedupeEntry, resolveAgentDedupeKeys } from "./agent-dedupe.js";
+import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "./types.js";
+
+export type AgentRequestPreflight = NonNullable<ReturnType<typeof prepareAgentRequestPreflight>>;
+
+export function prepareAgentRequestPreflight(params: {
+  request: AgentRunRequest;
+  context: AgentTurnContext;
+  client: AgentTurnPrincipal | null;
+  io: AgentTurnIo;
+}) {
+  const { request } = params;
+  const rejectInvalidRequest = (message: string): undefined => {
+    params.io.emitAcceptance([false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message)]);
+    return undefined;
+  };
+  const cfg = params.context.getRuntimeConfig();
+  const canUseInternalRuntimeHandoff =
+    params.client?.connect?.client?.mode === GATEWAY_CLIENT_MODES.BACKEND;
+  const requestSessionKey = request.sessionKey?.trim();
+  const parsedRequestSessionKey = requestSessionKey
+    ? parseAgentSessionKey(requestSessionKey)
+    : undefined;
+  const bareSessionAgent =
+    requestSessionKey && !parsedRequestSessionKey
+      ? resolveRequestedSessionAgentId(cfg, requestSessionKey, request.agentId)
+      : undefined;
+  if (bareSessionAgent && !bareSessionAgent.ok) {
+    params.io.emitAcceptance([false, undefined, bareSessionAgent.error]);
+    return undefined;
+  }
+  const selectedAgentId =
+    parsedRequestSessionKey?.agentId ??
+    bareSessionAgent?.agentId ??
+    normalizeOptionalString(request.agentId) ??
+    tryResolveLegacyCompatibilityAgentId(cfg);
+  const refusal = selectedAgentId ? readAgentDatabaseAdmissionRefusal(selectedAgentId) : undefined;
+  if (refusal) {
+    params.io.emitAcceptance([false, undefined, createAgentDatabaseAdmissionErrorShape(refusal)]);
+    return undefined;
+  }
+  const collectorSession = findSwarmCollectorSession(requestSessionKey, selectedAgentId);
+  let swarmExecutionLane: CommandLaneConfiguration | undefined;
+  // Collector children always use subagent session keys, so ordinary traffic
+  // must never pay the persisted-store read. The store fallback only covers a
+  // freshly restarted gateway whose in-memory registry has not reloaded yet.
+  const persistedCollectorSession =
+    !collectorSession && requestSessionKey && isSubagentSessionKey(requestSessionKey)
+      ? loadSessionEntry({
+          ...(selectedAgentId ? { agentId: selectedAgentId } : {}),
+          storePath: resolveSessionStorePathCore(cfg.session?.store, {
+            agentId: selectedAgentId,
+          }),
+          sessionKey: requestSessionKey,
+        })?.swarmCollector === true
+      : false;
+  if (
+    collectorSession ||
+    persistedCollectorSession ||
+    request.swarmCollector === true ||
+    request.swarmOutputSchema !== undefined
+  ) {
+    const schemaError = request.swarmOutputSchema
+      ? validateStructuredOutputSchema(request.swarmOutputSchema)
+      : undefined;
+    if (request.swarmCollector !== true || schemaError) {
+      return rejectInvalidRequest(
+        schemaError ?? "active swarm collector sessions require swarmCollector=true",
+      );
+    }
+    const registeredCollector = findAuthorizedSwarmCollectorRequest({
+      childSessionKey: request.sessionKey,
+      childAgentId: selectedAgentId,
+      idempotencyKey: request.idempotencyKey,
+      outputSchema: request.swarmOutputSchema,
+    });
+    const collectorDedupe = readGatewayDedupeEntry({
+      dedupe: params.context.dedupe,
+      keys: resolveAgentDedupeKeys({ idempotencyKey: request.idempotencyKey }),
+    });
+    const swarmRequesterSessionKey =
+      registeredCollector?.swarmRequesterSessionKey ?? registeredCollector?.requesterSessionKey;
+    const swarmEnabled = resolveSwarmConfig(
+      cfg,
+      registeredCollector?.requesterAgentId ??
+        (swarmRequesterSessionKey
+          ? (parseAgentSessionKey(swarmRequesterSessionKey)?.agentId ?? selectedAgentId)
+          : selectedAgentId),
+    ).enabled;
+    const pendingCollectorLaunch =
+      registeredCollector?.swarmLaunchPending === true &&
+      !registeredCollector.collectorCompletion &&
+      typeof registeredCollector.execution.endedAt !== "number";
+    if (
+      (!swarmEnabled && !collectorDedupe) ||
+      !canUseInternalRuntimeHandoff ||
+      request.lane !== "subagent" ||
+      !registeredCollector ||
+      (!pendingCollectorLaunch && !collectorDedupe)
+    ) {
+      return rejectInvalidRequest(
+        "swarm collector fields require an enabled, host-registered collector run",
+      );
+    }
+    swarmExecutionLane = getSwarmRunExecutionLane(
+      registeredCollector.schedulerSlotId ?? registeredCollector.runId,
+    );
+  }
+  if (request.cwd && !path.isAbsolute(request.cwd)) {
+    return rejectInvalidRequest("cwd must be absolute");
+  }
+  if (request.cwd && !normalizeOptionalString(params.client?.internal?.pluginRuntimeOwnerId)) {
+    return rejectInvalidRequest("cwd is reserved for plugin-owned subagent runs");
+  }
+  const allowModelOverride =
+    hasGatewayAdminScope(params.client) || params.client?.internal?.allowModelOverride === true;
+  const canUseCronRunContinuation = params.client?.internal?.cronRunContinuation === true;
+  const expectedSessionResult = resolveExpectedExistingSessionConstraint({
+    canUseInternalRuntimeHandoff,
+    expectedExistingSessionId: request.expectedExistingSessionId,
+    expectedExistingSessionLifecycleRevision: request.expectedExistingSessionLifecycleRevision,
+    internalRuntimeHandoffId: request.internalRuntimeHandoffId,
+  });
+  if (!expectedSessionResult.ok) {
+    return rejectInvalidRequest(expectedSessionResult.error);
+  }
+  const requestedPromptPersistenceSuppression = request.suppressPromptPersistence === true;
+  const requestedInternalSessionEffects = request.sessionEffects === "internal";
+  const requestedModelOverride = Boolean(request.provider || request.model);
+  const isOneShotModelRun = request.modelRun === true;
+  const isRawModelRun = isOneShotModelRun || request.promptMode === "none";
+  if (request.promptMode === "none" && !isOneShotModelRun) {
+    return rejectInvalidRequest(
+      'promptMode="none" requires modelRun=true so the run cannot mutate a durable session.',
+    );
+  }
+  if (requestedModelOverride && !allowModelOverride) {
+    return rejectInvalidRequest("provider/model overrides are not authorized for this caller.");
+  }
+  if (
+    (requestedInternalSessionEffects || requestedPromptPersistenceSuppression) &&
+    !canUseInternalRuntimeHandoff
+  ) {
+    return rejectInvalidRequest(
+      "internal session-effect controls are reserved for backend callers.",
+    );
+  }
+  const runId = request.idempotencyKey;
+  const execApprovalFollowupApprovalId = parseExecApprovalFollowupApprovalId(runId);
+  if (execApprovalFollowupApprovalId && !canUseInternalRuntimeHandoff) {
+    return rejectInvalidRequest(
+      "exec approval followup idempotency keys are reserved for backend callers.",
+    );
+  }
+  const inputProvenance = normalizeInputProvenance(request.inputProvenance);
+  if (isProgressCardRefreshInputProvenance(inputProvenance) && !canUseInternalRuntimeHandoff) {
+    return rejectInvalidRequest("Progress refresh input is reserved for progressCard.refresh.");
+  }
+  if (inputProvenance?.kind === "inter_session" && inputProvenance.sourceTool === "sessions_send") {
+    const sourceSessionKey = inputProvenance.sourceSessionKey;
+    const sourceAgentId = parseAgentSessionKey(sourceSessionKey)?.agentId;
+    const sourceTarget =
+      sourceSessionKey && sourceAgentId
+        ? resolveGatewaySessionStoreTargetWithStore({
+            cfg,
+            key: sourceSessionKey,
+            agentId: sourceAgentId,
+            readOnly: true,
+            exactRead: true,
+            clone: false,
+            projection: "full",
+          })
+        : undefined;
+    const sourceEntry = sourceTarget ? sourceTarget.store[sourceTarget.canonicalKey] : undefined;
+    let sourceIsSubagent = Boolean(
+      sourceTarget && isSubagentSessionFromEntry(sourceTarget.canonicalKey, sourceEntry),
+    );
+    if (
+      !sourceIsSubagent &&
+      sourceTarget &&
+      sourceEntry &&
+      (sourceEntry.parentSessionKey || sourceEntry.spawnedBy)
+    ) {
+      sourceIsSubagent = isSubagentSessionFromEntry(
+        sourceTarget.canonicalKey,
+        sourceEntry,
+        readAcpSessionMetaForEntry({
+          sessionKey: sourceTarget.canonicalKey,
+          agentId: sourceTarget.agentId,
+          cfg,
+          entry: sourceEntry,
+        }),
+      );
+    }
+    if (sourceIsSubagent) {
+      inputProvenance.sourceRole = "subagent";
+    } else {
+      delete inputProvenance.sourceRole;
+    }
+  }
+  const isRestartRecoveryResumeRun =
+    canUseInternalRuntimeHandoff && isMainSessionRestartRecoveryInputProvenance(inputProvenance);
+  if (
+    (request.internalExecutionIdentityRetry !== undefined ||
+      request.internalExecutionIdentityRecoveryAttempt !== undefined) &&
+    !isRestartRecoveryResumeRun
+  ) {
+    return rejectInvalidRequest(
+      "internal execution identity recovery fields are reserved for main-session restart recovery.",
+    );
+  }
+  if (request.forceCodeModeTools === true && !isRestartRecoveryResumeRun) {
+    return rejectInvalidRequest(
+      "forceCodeModeTools is reserved for main-session restart recovery.",
+    );
+  }
+  const sessionEffects =
+    isOneShotModelRun || requestedInternalSessionEffects ? "internal" : request.sessionEffects;
+  const agentDedupeKeys = resolveAgentDedupeKeys({
+    idempotencyKey: runId,
+    execApprovalFollowupApprovalId,
+  });
+  return {
+    request,
+    cfg,
+    runId,
+    allowModelOverride,
+    canUseInternalRuntimeHandoff,
+    canUseCronRunContinuation,
+    expectedSession: expectedSessionResult.constraint,
+    expectedExistingSessionId: expectedSessionResult.constraint?.sessionId,
+    providerOverride: allowModelOverride ? request.provider : undefined,
+    modelOverride: allowModelOverride ? request.model : undefined,
+    execApprovalFollowupApprovalId,
+    normalizedSpawned: normalizeSpawnedRunMetadata({
+      groupId: request.groupId,
+      groupChannel: request.groupChannel,
+      groupSpace: request.groupSpace,
+    }),
+    inputProvenance,
+    isRestartRecoveryResumeRun,
+    preserveUserFacingSessionModelState:
+      canUseInternalRuntimeHandoff &&
+      shouldPreserveUserFacingSessionStateForInputProvenance(inputProvenance),
+    sessionEffects,
+    suppressVisibleSessionEffects: sessionEffects === "internal",
+    requestedPromptPersistenceSuppression,
+    isOneShotModelRun,
+    isRawModelRun,
+    agentDedupeKeys,
+    swarmExecutionLane,
+  };
+}

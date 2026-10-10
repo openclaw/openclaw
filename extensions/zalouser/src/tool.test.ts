@@ -1,18 +1,20 @@
 // Zalouser tests cover tool plugin behavior.
+import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { sendImageZalouser, sendLinkZalouser, sendMessageZalouser } from "./send.js";
+import { createZalouserSendReceipt } from "./send-receipt.js";
+import { sendImageZalouser, sendMessageZalouser } from "./send.js";
 import { createZalouserTool } from "./tool.js";
 import {
   checkZaloAuthenticated,
   getZaloUserInfo,
   listZaloFriendsMatching,
   listZaloGroupsMatching,
+  sendZaloLink,
 } from "./zalo-js.js";
 
 vi.mock("./send.js", () => ({
   sendMessageZalouser: vi.fn(),
   sendImageZalouser: vi.fn(),
-  sendLinkZalouser: vi.fn(),
   sendReactionZalouser: vi.fn(),
 }));
 
@@ -21,11 +23,12 @@ vi.mock("./zalo-js.js", () => ({
   getZaloUserInfo: vi.fn(),
   listZaloFriendsMatching: vi.fn(),
   listZaloGroupsMatching: vi.fn(),
+  sendZaloLink: vi.fn(),
 }));
 
 const mockSendMessage = vi.mocked(sendMessageZalouser);
 const mockSendImage = vi.mocked(sendImageZalouser);
-const mockSendLink = vi.mocked(sendLinkZalouser);
+const mockSendLink = vi.mocked(sendZaloLink);
 const mockCheckAuth = vi.mocked(checkZaloAuthenticated);
 const mockGetUserInfo = vi.mocked(getZaloUserInfo);
 const mockListFriends = vi.mocked(listZaloFriendsMatching);
@@ -52,13 +55,6 @@ describe("executeZalouserTool", () => {
     mockGetUserInfo.mockReset();
     mockListFriends.mockReset();
     mockListGroups.mockReset();
-  });
-
-  it("returns error when send action is missing required fields", async () => {
-    const result = await executeZalouserTool("tool-1", { action: "send" });
-    expect(extractDetails(result)).toEqual({
-      error: "threadId and message required for send action",
-    });
   });
 
   it("sends text message for send action", async () => {
@@ -150,6 +146,31 @@ describe("executeZalouserTool", () => {
     expect(extractDetails(result)).toEqual({ error: "blocked" });
   });
 
+  it("reports accepted receipts when a later send chunk fails", async () => {
+    const deliveryResult = {
+      messageIds: ["mid-accepted"],
+      receipt: createZalouserSendReceipt({ messageId: "mid-accepted", threadId: "t-1" }),
+      visibleReplySent: true as const,
+    };
+    mockSendMessage.mockRejectedValueOnce(
+      createChannelPartialDeliveryError(new Error("later chunk refused"), deliveryResult),
+    );
+
+    const result = await executeZalouserTool("tool-1", {
+      action: "send",
+      threadId: "t-1",
+      message: "long message",
+    });
+
+    expect(extractDetails(result)).toEqual({
+      ok: false,
+      deliveryStatus: "partial_failed",
+      sentBeforeError: true,
+      error: "later chunk refused",
+      result: deliveryResult,
+    });
+  });
+
   it("routes image and link actions to correct helpers", async () => {
     mockSendImage.mockResolvedValueOnce({ ok: true, messageId: "img-1" } as never);
     const imageResult = await executeZalouserTool("tool-1", {
@@ -161,6 +182,7 @@ describe("executeZalouserTool", () => {
     });
     expect(mockSendImage).toHaveBeenCalledWith("g-1", "https://example.com/image.jpg", {
       profile: undefined,
+      mediaMaxBytes: undefined,
       caption: "caption",
       isGroup: true,
     });
@@ -180,6 +202,67 @@ describe("executeZalouserTool", () => {
     });
     expect(extractDetails(linkResult)).toEqual({ success: true, messageId: "lnk-1" });
   });
+
+  it.each([
+    { name: "no route", deliveryContext: undefined, profile: "work", bytes: 1024 },
+    {
+      name: "matching credential profile with different case",
+      deliveryContext: { channel: "zalouser", accountId: "support" },
+      profile: " WORK ",
+      bytes: 2048,
+    },
+    {
+      name: "other profile",
+      deliveryContext: { channel: "zalouser", accountId: "support" },
+      profile: "personal",
+      bytes: 1024,
+    },
+    {
+      name: "native default profile",
+      deliveryContext: { channel: "zalouser", accountId: "support" },
+      profile: undefined,
+      bytes: 1024,
+    },
+    {
+      name: "other channel",
+      deliveryContext: { channel: "sms", accountId: "support" },
+      profile: "work",
+      bytes: 1024,
+    },
+  ])(
+    "uses only the authoritative matching media account: $name",
+    async ({ deliveryContext, profile, bytes }) => {
+      mockSendImage.mockResolvedValueOnce({ ok: true, messageId: "cap" } as never);
+      const tool = createZalouserTool({
+        runtimeConfig: {
+          channels: {
+            zalouser: {
+              mediaMaxMb: 1 / 1024,
+              accounts: {
+                support: { profile: "work", mediaMaxMb: 2 / 1024 },
+                duplicate: { profile: "work", mediaMaxMb: 1 / 1048576 },
+              },
+            },
+          },
+        },
+        deliveryContext,
+      });
+      await tool.execute("cap", {
+        action: "image",
+        threadId: "123",
+        url: "https://example.com/image.png",
+        profile,
+      });
+      expect(mockSendImage).toHaveBeenCalledWith(
+        "123",
+        "https://example.com/image.png",
+        expect.objectContaining({
+          profile,
+          mediaMaxBytes: bytes,
+        }),
+      );
+    },
+  );
 
   it("returns friends/groups lists", async () => {
     mockListFriends.mockResolvedValueOnce([{ userId: "1", displayName: "Alice" }]);

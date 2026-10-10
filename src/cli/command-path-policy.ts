@@ -1,18 +1,14 @@
 import { expectDefined } from "@openclaw/normalization-core";
-// Resolves CLI command path policy from the declarative command catalog.
-import { isGatewayConfigBypassCommandPath } from "../gateway/explicit-connection-policy.js";
 import { getCommandPathWithRootOptions } from "./argv.js";
-import {
-  cliCommandCatalog,
-  type CliCommandPathPolicy,
-  type CliNetworkProxyPolicy,
-} from "./command-catalog.js";
+import type { CliCommandPathPolicy, CliNetworkProxyPolicy } from "./command-catalog-types.js";
+import { cliCommandCatalog } from "./command-catalog.js";
 import { matchesCommandPath } from "./command-path-matches.js";
 import { resolveGatewayCatalogCommandPath } from "./gateway-run-argv.js";
+import { resolveCliParentCommandPath } from "./parent-command-path.js";
 
 const DEFAULT_CLI_COMMAND_PATH_POLICY: CliCommandPathPolicy = {
-  bypassConfigGuard: false,
-  routeConfigGuard: "never",
+  configGuard: "run",
+  stateStoreGuard: "skip",
   loadPlugins: "never",
   pluginRegistry: { scope: "all" },
   ownsProtocolStdout: false,
@@ -33,26 +29,21 @@ export function resolveCliCommandPathPolicy(commandPath: string[]): CliCommandPa
     }
     Object.assign(resolvedPolicy, entry.policy);
   }
-  if (isGatewayConfigBypassCommandPath(commandPath)) {
-    resolvedPolicy.bypassConfigGuard = true;
-  }
   return resolvedPolicy;
-}
-
-function isCommandPathPrefix(commandPath: string[], pattern: readonly string[]): boolean {
-  return pattern.every((segment, index) => commandPath[index] === segment);
 }
 
 function resolveCliCatalogCommandPath(argv: string[]): string[] {
   // Gateway `run openclaw ...` argv needs catalog routing against the embedded command path.
   const tokens =
-    resolveGatewayCatalogCommandPath(argv) ?? getCommandPathWithRootOptions(argv, argv.length);
+    resolveGatewayCatalogCommandPath(argv) ??
+    resolveCliParentCommandPath(argv) ??
+    getCommandPathWithRootOptions(argv, argv.length);
   if (tokens.length === 0) {
     return [];
   }
   let bestMatch: readonly string[] | null = null;
   for (const entry of cliCommandCatalog) {
-    if (!isCommandPathPrefix(tokens, entry.commandPath)) {
+    if (!matchesCommandPath(tokens, entry.commandPath)) {
       continue;
     }
     if (!bestMatch || entry.commandPath.length > bestMatch.length) {

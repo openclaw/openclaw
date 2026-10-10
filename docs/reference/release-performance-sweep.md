@@ -3,7 +3,7 @@ summary: "Visual summary and technical evidence for the May 2026 performance, pa
 read_when:
   - You are validating the May 2026 performance and package-size cleanup
   - You need the numbers behind the OpenClaw performance and dependency blog post
-  - You are changing release gates, package shrinkwrap, or plugin dependency boundaries
+  - You need historical context before changing current policy at /gateway/security/dependency-locking
 title: "Release performance sweep"
 ---
 
@@ -205,13 +205,15 @@ Supplied sweep:
 | `v2026.5.27`        | PASS |   2,231ms |   2,226ms |        649.0MB |
 | `v2026.5.28`        | PASS |   1,908ms |   1,870ms |        581.0MB |
 
-## Source probes
+<a id="source-probes" />
 
-Source probes were skipped for 17 successful older refs because those source
-trees did not yet have the required probe entry points. Agent-turn metrics still
+## Source checks
+
+Source checks were skipped for 17 successful older refs because those source
+trees did not yet have the required check entry points. Agent-turn metrics still
 exist for those refs.
 
-Representative source-probe points:
+Representative source-check points:
 
 | Release             | Default `readyz` p50 | 50 plugins `readyz` p50 | CLI health p50 | Plugin max RSS |
 | ------------------- | -------------------: | ----------------------: | -------------: | -------------: |
@@ -227,7 +229,7 @@ Representative source-probe points:
 | `v2026.5.28`        |              1,457ms |                 1,474ms |          623ms |        386.1MB |
 
 The `v2026.5.22` CLI health spike is visible in this table even though the
-agent-turn lane still passed. Keep the source probes when investigating
+agent-turn lane still passed. Keep the source checks when investigating
 targeted CLI or gateway regressions.
 
 ## Install footprint audit
@@ -274,8 +276,8 @@ that made npm materialize a large nested OpenClaw dependency tree and all 12
 `@napi-rs/canvas` platform packages. The nested tree is smaller in `v2026.5.28`,
 and the canvas platform fanout no longer lands in the local audit.
 
-For a plain-English explanation of shrinkwrap and the maintainer-level package
-checks, see [npm shrinkwrap](/gateway/security/shrinkwrap).
+For the current dependency review and package policy, see
+[dependency locking](/gateway/security/dependency-locking).
 
 ## Supply-chain interpretation
 

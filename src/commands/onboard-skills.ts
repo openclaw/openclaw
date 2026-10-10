@@ -1,9 +1,3 @@
-/**
- * Interactive skill dependency setup for onboarding.
- *
- * It reports workspace skill readiness, offers safe dependency installs, and
- * leaves per-skill credentials to the agent when a skill actually needs them.
- */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -11,6 +5,7 @@ import { resolveBrewExecutable } from "../infra/brew.js";
 import { isContainerEnvironment } from "../infra/container-environment.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { buildWorkspaceSkillStatus } from "../skills/discovery/status.js";
+import type { SkillStatusEntry } from "../skills/discovery/status.types.js";
 import {
   installSkill,
   MIN_AUTO_GO_VERSION,
@@ -23,24 +18,13 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 import { detectBinary } from "./onboard-helpers.js";
 import type { NodeManagerChoice } from "./onboard-types.js";
 
-const HOMEBREW_PROMPT_PLATFORMS = new Set(["darwin", "linux"]);
 const SKIPPED_INSTALL_NAME_LIMIT = 8;
 
-type OnboardInstallSkill = {
-  name: string;
-  description?: string;
-  install: Array<{ kind: string; label: string }>;
-};
-
 type SkippedInstall = {
-  skill: OnboardInstallSkill;
+  skill: Pick<SkillStatusEntry, "name">;
   reason: SkillInstallSkipReason;
   detail?: string;
 };
-
-function supportsHomebrewPrompt(platform: NodeJS.Platform): boolean {
-  return HOMEBREW_PROMPT_PLATFORMS.has(platform);
-}
 
 function summarizeInstallFailure(message: string): string | undefined {
   const cleaned = message.replace(/^Install failed(?:\s*\([^)]*\))?\s*:?\s*/i, "").trim();
@@ -51,10 +35,7 @@ function summarizeInstallFailure(message: string): string | undefined {
   return cleaned.length > maxLen ? `${truncateUtf16Safe(cleaned, maxLen - 1)}…` : cleaned;
 }
 
-function formatSkillHint(skill: {
-  description?: string;
-  install: Array<{ label: string }>;
-}): string {
+function formatSkillHint(skill: Pick<SkillStatusEntry, "description" | "install">): string {
   const desc = skill.description?.trim();
   const installLabel = skill.install[0]?.label?.trim();
   const combined = desc && installLabel ? `${desc} — ${installLabel}` : desc || installLabel;
@@ -63,13 +44,6 @@ function formatSkillHint(skill: {
   }
   const maxLen = 90;
   return combined.length > maxLen ? `${truncateUtf16Safe(combined, maxLen - 1)}…` : combined;
-}
-
-const testing = { formatSkillHint, summarizeInstallFailure };
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.onboardSkillsTestApi")] =
-    testing;
 }
 
 const SKIP_REASON_LABELS = {
@@ -85,19 +59,12 @@ function formatSkillNames(names: string[]): string {
 }
 
 function formatSkippedInstallNote(skipped: SkippedInstall[]): string {
-  const byReason = new Map<SkillInstallSkipReason, string[]>();
-  for (const item of skipped) {
-    const names = byReason.get(item.reason) ?? [];
-    names.push(item.skill.name);
-    byReason.set(item.reason, names);
-  }
   const lines = [t("wizard.skills.manualPrereqsIntro")];
   for (const reason of ["brew", "go", "uv"] as const) {
-    const names = byReason.get(reason);
-    if (!names || names.length === 0) {
-      continue;
+    const names = skipped.filter((item) => item.reason === reason).map((item) => item.skill.name);
+    if (names.length > 0) {
+      lines.push(`${SKIP_REASON_LABELS[reason]}: ${formatSkillNames(names)}`);
     }
-    lines.push(`${SKIP_REASON_LABELS[reason]}: ${formatSkillNames(names)}`);
   }
   for (const item of skipped.filter((entry) => entry.detail).slice(0, SKIPPED_INSTALL_NAME_LIMIT)) {
     lines.push(`${item.skill.name}: ${item.detail}`);
@@ -106,51 +73,16 @@ function formatSkippedInstallNote(skipped: SkippedInstall[]): string {
   return lines.join("\n");
 }
 
-function isBrewOnlyInstallableSkill(skill: {
-  install: Array<{ kind: string }>;
-  missing: { bins: string[] };
-}): boolean {
-  return (
-    skill.install.length > 0 &&
-    skill.missing.bins.length > 0 &&
-    skill.install.every((option) => option.kind === "brew")
-  );
-}
-
-function isTrustedAutoInstallableSkill(skill: { bundled: boolean; source: string }): boolean {
-  // Onboarding can auto-run bundled recipes without another prompt. Workspace
-  // skill metadata is mutable project input, so those installs stay explicit.
-  return skill.bundled && skill.source === "openclaw-bundled";
-}
-
-function isNodeManagerChoice(value: unknown): value is NodeManagerChoice {
-  return value === "npm" || value === "pnpm" || value === "bun";
-}
-
-function resolveDefaultNodeManager(
-  config: OpenClawConfig,
-  requested: NodeManagerChoice | undefined,
-  runtime: RuntimeEnv,
-): NodeManagerChoice {
-  if (requested !== undefined) {
-    if (!isNodeManagerChoice(requested)) {
-      runtime.error('Invalid --node-manager. Use "npm", "pnpm", or "bun".');
-      runtime.exit(1);
-      return "npm";
-    }
-    return requested;
-  }
-  const existing = config.skills?.install?.nodeManager;
-  return existing === "npm" || existing === "pnpm" || existing === "bun" ? existing : "npm";
-}
-
 /** Runs the interactive skills setup step and returns the updated config. */
 export async function setupSkills(
   cfg: OpenClawConfig,
   workspaceDir: string,
   runtime: RuntimeEnv,
   prompter: WizardPrompter,
-  options: { nodeManager?: NodeManagerChoice } = {},
+  options: {
+    nodeManager?: NodeManagerChoice;
+    beforePersistentEffect?: () => Promise<void>;
+  } = {},
 ): Promise<OpenClawConfig> {
   const report = buildWorkspaceSkillStatus(workspaceDir, { config: cfg });
   const eligible = report.skills.filter((s) => s.eligible);
@@ -172,19 +104,15 @@ export async function setupSkills(
     t("wizard.skills.statusTitle"),
   );
 
+  // Only bundled recipes belong in onboarding's explicit consent prompt;
+  // workspace skill metadata is mutable project input.
   const baseInstallable = missing.filter(
     (skill) =>
       skill.install.length > 0 &&
       skill.missing.bins.length > 0 &&
-      isTrustedAutoInstallableSkill(skill),
+      skill.bundled &&
+      skill.source === "openclaw-bundled",
   );
-  let brewAvailable: boolean | undefined;
-  const detectBrewOnce = async () => {
-    // Brew detection can shell out; cache it for the whole skills step because
-    // install filtering and prompts both need the same answer.
-    brewAvailable ??= (await detectBinary("brew")) || resolveBrewExecutable() !== undefined;
-    return brewAvailable;
-  };
   const readinessByKind = new Map<string, SkillInstallReadiness>();
   const resolveKindReadinessOnce = async (kind: string) => {
     // The lifecycle preflight can shell out (go version, sudo probe); resolve
@@ -199,12 +127,18 @@ export async function setupSkills(
   };
   const inLinuxContainer = process.platform === "linux" && isContainerEnvironment();
   let installable = baseInstallable;
-  if (inLinuxContainer && baseInstallable.length > 0 && !(await detectBrewOnce())) {
+  if (
+    inLinuxContainer &&
+    baseInstallable.length > 0 &&
+    !(await detectBinary("brew")) &&
+    resolveBrewExecutable() === undefined
+  ) {
     // Linux containers without brew cannot use brew-only recipes reliably; hide
     // them from install selection and leave manual instructions in the note.
-    const hiddenBrewOnly = baseInstallable.filter(isBrewOnlyInstallableSkill);
-    installable = baseInstallable.filter((skill) => !isBrewOnlyInstallableSkill(skill));
-    if (hiddenBrewOnly.length > 0) {
+    installable = baseInstallable.filter((skill) =>
+      skill.install.some((option) => option.kind !== "brew"),
+    );
+    if (installable.length < baseInstallable.length) {
       await prompter.note(
         [t("wizard.skills.containerBrewHidden"), t("wizard.skills.containerBrewManual")].join("\n"),
         t("wizard.skills.containerInstallsTitle"),
@@ -212,12 +146,7 @@ export async function setupSkills(
     }
   }
   const candidateInstallable = installable;
-  const needsBrewPrompt =
-    supportsHomebrewPrompt(process.platform) &&
-    candidateInstallable.some((skill) => skill.install.some((option) => option.kind === "brew")) &&
-    !(await detectBrewOnce());
-  const readyInstallable: typeof installable = [];
-  const skippedInstallable: SkippedInstall[] = [];
+  const readinessBySkillName = new Map<string, SkillInstallReadiness>();
   for (const skill of candidateInstallable) {
     // Onboarding intentionally executes only the primary recipe below. Keep
     // readiness aligned with that recipe instead of silently changing methods.
@@ -226,33 +155,10 @@ export async function setupSkills(
       continue;
     }
     const readiness = await resolveKindReadinessOnce(primaryInstall.kind);
-    if (readiness.ready) {
-      readyInstallable.push(skill);
-    } else {
-      skippedInstallable.push({ skill, reason: readiness.reason });
-    }
-  }
-  installable = readyInstallable;
-  if (needsBrewPrompt) {
-    await prompter.note(
-      [
-        "Many skill dependencies are shipped via Homebrew.",
-        "Without brew, you'll need to build from source or download releases manually.",
-        "",
-        "Install Homebrew:",
-        '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"',
-      ].join("\n"),
-      t("wizard.skills.homebrewRecommendedTitle"),
-    );
-  }
-  if (skippedInstallable.length > 0) {
-    await prompter.note(
-      formatSkippedInstallNote(skippedInstallable),
-      t("wizard.skills.manualPrereqsTitle"),
-    );
+    readinessBySkillName.set(skill.name, readiness);
   }
   let next: OpenClawConfig = cfg;
-  if (installable.length === 0 && missing.length === 0) {
+  if (candidateInstallable.length === 0 && missing.length === 0) {
     await prompter.note(
       [
         "No missing skill dependencies to install.",
@@ -263,20 +169,44 @@ export async function setupSkills(
     );
     return next;
   }
-  if (installable.length > 0) {
-    await prompter.note(
-      installable.map((skill) => `${skill.name}: ${formatSkillHint(skill)}`).join("\n"),
-      t("wizard.skills.installDeps"),
-    );
-    const selectedSkills = installable;
+  if (candidateInstallable.length > 0) {
+    const selected = await prompter.multiselect({
+      message: t("wizard.skills.installDeps"),
+      options: [
+        {
+          value: "__skip__",
+          label: t("common.skipForNow"),
+          hint: t("wizard.skills.skipDepsHint"),
+        },
+        ...candidateInstallable.map((skill) => ({
+          value: skill.name,
+          label: `${skill.emoji ?? "🧩"} ${skill.name}`,
+          hint: formatSkillHint(skill),
+        })),
+      ],
+    });
+    const selectedNames = selected.filter((name) => name !== "__skip__");
+    const selectedSkills = selectedNames
+      .map((name) => candidateInstallable.find((skill) => skill.name === name))
+      .filter((skill): skill is (typeof candidateInstallable)[number] => skill !== undefined);
+    const selectedReadySkills: typeof selectedSkills = [];
+    const selectedSkippedInstallable: SkippedInstall[] = [];
+    for (const skill of selectedSkills) {
+      const readiness = readinessBySkillName.get(skill.name);
+      if (readiness?.ready !== false) {
+        selectedReadySkills.push(skill);
+      } else {
+        selectedSkippedInstallable.push({ skill, reason: readiness.reason });
+      }
+    }
 
-    const needsNodeManagerPrompt = selectedSkills.some((skill) =>
+    const needsNodeManagerPrompt = selectedReadySkills.some((skill) =>
       skill.install.some((option) => option.kind === "node"),
     );
     if (needsNodeManagerPrompt) {
       // Persist the package manager before invoking installers so node recipes
       // and later skill lifecycle commands agree on the selected tool.
-      const nodeManager = resolveDefaultNodeManager(next, options.nodeManager, runtime);
+      const nodeManager = options.nodeManager ?? next.skills?.install?.nodeManager ?? "npm";
       next = {
         ...next,
         skills: {
@@ -289,17 +219,14 @@ export async function setupSkills(
       };
     }
 
-    const deferredSkippedInstallable: SkippedInstall[] = [];
-    for (const target of selectedSkills) {
-      if (target.install.length === 0) {
-        continue;
-      }
+    for (const target of selectedReadySkills) {
       const installId = target.install[0]?.id;
       if (!installId) {
         continue;
       }
       // Onboarding installs the primary recipe only; alternative recipes remain
       // visible through `openclaw skills list --verbose`.
+      await options.beforePersistentEffect?.();
       const spin = prompter.progress(t("wizard.skills.installing", { name: target.name }));
       const result = await installSkill({
         workspaceDir,
@@ -314,35 +241,30 @@ export async function setupSkills(
             ? t("wizard.skills.installedWithWarnings", { name: target.name })
             : t("wizard.skills.installed", { name: target.name }),
         );
-        for (const warning of warnings) {
-          runtime.log(warning);
-        }
-        continue;
-      }
-      if (result.skipReason) {
+      } else if (result.skipReason) {
         spin.stop(t("wizard.skills.installSkipped", { name: target.name }));
         const detail = summarizeInstallFailure(result.message);
-        deferredSkippedInstallable.push({
+        selectedSkippedInstallable.push({
           skill: target,
           reason: result.skipReason,
           ...(detail ? { detail } : {}),
         });
-        for (const warning of warnings) {
-          runtime.log(warning);
-        }
-        continue;
+      } else {
+        const code = result.code == null ? "" : ` (exit ${result.code})`;
+        const detail = summarizeInstallFailure(result.message);
+        spin.stop(
+          t("wizard.skills.installFailed", {
+            name: target.name,
+            code,
+            detail: detail ? ` - ${detail}` : "",
+          }),
+        );
       }
-      const code = result.code == null ? "" : ` (exit ${result.code})`;
-      const detail = summarizeInstallFailure(result.message);
-      spin.stop(
-        t("wizard.skills.installFailed", {
-          name: target.name,
-          code,
-          detail: detail ? ` - ${detail}` : "",
-        }),
-      );
       for (const warning of warnings) {
         runtime.log(warning);
+      }
+      if (result.ok || result.skipReason) {
+        continue;
       }
       if (result.stderr) {
         runtime.log(result.stderr.trim());
@@ -354,9 +276,24 @@ export async function setupSkills(
       );
       runtime.log(t("wizard.skills.docsLine"));
     }
-    if (deferredSkippedInstallable.length > 0) {
+    if (
+      (process.platform === "darwin" || process.platform === "linux") &&
+      selectedSkippedInstallable.some((item) => item.reason === "brew")
+    ) {
       await prompter.note(
-        formatSkippedInstallNote(deferredSkippedInstallable),
+        [
+          "Many skill dependencies are shipped via Homebrew.",
+          "Without brew, you'll need to build from source or download releases manually.",
+          "",
+          "Install Homebrew:",
+          '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"',
+        ].join("\n"),
+        t("wizard.skills.homebrewRecommendedTitle"),
+      );
+    }
+    if (selectedSkippedInstallable.length > 0) {
+      await prompter.note(
+        formatSkippedInstallNote(selectedSkippedInstallable),
         t("wizard.skills.manualPrereqsTitle"),
       );
     }

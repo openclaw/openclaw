@@ -4,11 +4,12 @@ import path from "node:path";
 import {
   buildScriptEvidenceSummary,
   QA_EVIDENCE_FILENAME,
+  readQaScenarioById,
   type QaEvidencePackageSource,
   type QaEvidenceStatus,
   type QaEvidenceSummaryJson,
   type QaProviderMode,
-} from "../../../../extensions/qa-lab/api.js";
+} from "../../../../extensions/qa-lab/test-api.js";
 import { readLoggingConfig } from "../../../../src/logging/config.js";
 import { redactToolPayloadTextWithConfig } from "../../../../src/logging/redact.js";
 import { withFullContextToolPayloadRedaction } from "../../../../src/logging/redact.test-support.js";
@@ -29,8 +30,6 @@ type QaScriptEvidenceTarget = {
   codeRefs?: readonly string[];
   docsRefs?: readonly string[];
   id: string;
-  primaryCoverageIds?: readonly string[];
-  secondaryCoverageIds?: readonly string[];
   sourcePath: string;
   title: string;
 };
@@ -46,6 +45,7 @@ type QaScriptEvidenceResult = {
 
 type QaScriptEvidenceWriterOptions = {
   artifactBase: string;
+  coverageBinding?: "catalog" | "none";
   env?: NodeJS.ProcessEnv;
   evidenceMode?: "full" | "slim";
   logFileName: string;
@@ -53,6 +53,7 @@ type QaScriptEvidenceWriterOptions = {
   maxLogBytes?: number;
   packageSource?: QaEvidencePackageSource;
   primaryModel: string;
+  providerId?: string;
   providerMode: QaProviderMode;
   repoRoot: string;
   target: QaScriptEvidenceTarget;
@@ -148,6 +149,18 @@ export function createQaScriptBlockedStatusTracker(blockedPatterns: readonly Reg
 }
 
 export function createQaScriptEvidenceWriter(options: QaScriptEvidenceWriterOptions) {
+  const coverage =
+    options.coverageBinding === "none" ? undefined : readQaScenarioById(options.target.id).coverage;
+  // The catalog owns semantic coverage; producers own execution facts only.
+  const evidenceTarget = {
+    codeRefs: options.target.codeRefs,
+    docsRefs: options.target.docsRefs,
+    id: options.target.id,
+    primaryCoverageIds: coverage?.primary ?? [],
+    secondaryCoverageIds: coverage?.secondary ?? [],
+    sourcePath: options.target.sourcePath,
+    title: options.target.title,
+  };
   const maxLogBytes = resolveByteLimit(options.maxLogBytes, DEFAULT_CHILD_OUTPUT_TAIL_BYTES);
   const logFile = resolveArtifactPath(options.artifactBase, options.logFileName);
   const maxDetailsBytes = resolveByteLimit(
@@ -200,10 +213,11 @@ export function createQaScriptEvidenceWriter(options: QaScriptEvidenceWriterOpti
       generatedAt: new Date().toISOString(),
       packageSource: options.packageSource,
       primaryModel: options.primaryModel,
+      providerId: options.providerId,
       providerMode: options.providerMode,
       repoRoot: options.repoRoot,
       runner: "script",
-      targets: [options.target],
+      targets: [evidenceTarget],
       results: [
         {
           id: options.target.id,
@@ -214,6 +228,12 @@ export function createQaScriptEvidenceWriter(options: QaScriptEvidenceWriterOpti
       ],
     });
 
+  const writeLog = async () => {
+    await fs.mkdir(options.artifactBase, { recursive: true });
+    await fs.writeFile(logFile.absoluteFilePath, boundedLogText(), "utf8");
+    return { kind: "log", path: logFile.relativePath };
+  };
+
   return {
     appendLog(chunk: unknown) {
       log.append(String(chunk));
@@ -222,10 +242,10 @@ export function createQaScriptEvidenceWriter(options: QaScriptEvidenceWriterOpti
     logText() {
       return boundedLogText();
     },
+    writeLog,
     async write(result: QaScriptEvidenceResult) {
       const evidence = build(result);
-      await fs.mkdir(options.artifactBase, { recursive: true });
-      await fs.writeFile(logFile.absoluteFilePath, boundedLogText(), "utf8");
+      await writeLog();
       await writeJson(path.join(options.artifactBase, QA_EVIDENCE_FILENAME), evidence);
       await writeJson(path.join(options.artifactBase, "latest-run.json"), {
         qaEvidence: QA_EVIDENCE_FILENAME,

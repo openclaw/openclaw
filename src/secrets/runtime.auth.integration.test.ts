@@ -64,11 +64,16 @@ vi.mock("./runtime-prepare.runtime.js", () => ({
       diagnostics: [],
     },
     degradedOwners: [],
+    secretOwners: [],
   }),
 }));
 
 vi.mock("./runtime-owner-assignments.js", () => ({
-  resolveAndApplySecretAssignments: async () => [],
+  listSecretAssignmentOwners: () => [],
+  resolveAndApplySecretAssignments: async () => ({
+    degradedOwners: [],
+    resolvedValues: new Map(),
+  }),
 }));
 
 function loadAuthStoreFromTestFile(agentDir?: string): AuthProfileStore {
@@ -157,7 +162,7 @@ describe("secrets runtime snapshot auth integration", () => {
       const refreshed = await prepareSecretsRuntimeSnapshot({
         config: asConfig({
           agents: {
-            list: [{ id: "ops", agentDir: opsAgentDir }],
+            entries: { ops: { agentDir: opsAgentDir } },
           },
         }),
         env: {

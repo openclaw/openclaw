@@ -1,0 +1,169 @@
+import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { withTelegramApiContext, type TelegramApiContext } from "./send-context.js";
+import type { TelegramApiCallOpts, TelegramMessageActionOpts } from "./send-message-types.js";
+import { prepareTelegramOutbound, withTelegramMessageAction } from "./send-outbound.js";
+import { resolveTelegramBotUserIdFromToken } from "./token-fingerprint.js";
+import { recordTopicCreation } from "./topic-name-cache.js";
+
+type TelegramCreateForumTopicParams = NonNullable<
+  Parameters<TelegramApiContext["api"]["createForumTopic"]>[2]
+>;
+
+type TelegramEditForumTopicOpts = TelegramMessageActionOpts & {
+  name?: string;
+  iconCustomEmojiId?: string;
+};
+
+export async function editForumTopicTelegram(
+  chatIdInput: string | number,
+  messageThreadIdInput: string | number,
+  opts: TelegramEditForumTopicOpts,
+): Promise<{
+  ok: true;
+  chatId: string;
+  messageThreadId: number;
+  name?: string;
+  iconCustomEmojiId?: string;
+}> {
+  const trimmedName = opts.name?.trim();
+  if (opts.name !== undefined && !trimmedName) {
+    throw new Error("Telegram forum topic name is required");
+  }
+  if (trimmedName && Array.from(trimmedName).length > 128) {
+    throw new Error("Telegram forum topic name must be 128 characters or fewer");
+  }
+  const trimmedIconCustomEmojiId = opts.iconCustomEmojiId?.trim();
+  if (opts.iconCustomEmojiId !== undefined && !trimmedIconCustomEmojiId) {
+    throw new Error("Telegram forum topic icon custom emoji ID is required");
+  }
+  if (!trimmedName && !trimmedIconCustomEmojiId) {
+    throw new Error("Telegram forum topic update requires a name or iconCustomEmojiId");
+  }
+
+  return withTelegramMessageAction(
+    chatIdInput,
+    messageThreadIdInput,
+    opts,
+    async ({ api, chatId, messageId: messageThreadId, request }) => {
+      const payload = {
+        ...(trimmedName ? { name: trimmedName } : {}),
+        ...(trimmedIconCustomEmojiId ? { icon_custom_emoji_id: trimmedIconCustomEmojiId } : {}),
+      };
+      await request(() => api.editForumTopic(chatId, messageThreadId, payload), "editForumTopic");
+      logVerbose(`[telegram] Edited forum topic ${messageThreadId} in chat ${chatId}`);
+      return {
+        ok: true as const,
+        chatId,
+        messageThreadId,
+        ...(trimmedName ? { name: trimmedName } : {}),
+        ...(trimmedIconCustomEmojiId ? { iconCustomEmojiId: trimmedIconCustomEmojiId } : {}),
+      };
+    },
+  );
+}
+
+export async function renameForumTopicTelegram(
+  chatIdInput: string | number,
+  messageThreadIdInput: string | number,
+  name: string,
+  opts: TelegramMessageActionOpts,
+): Promise<{ ok: true; chatId: string; messageThreadId: number; name: string }> {
+  const result = await editForumTopicTelegram(chatIdInput, messageThreadIdInput, {
+    ...opts,
+    name,
+  });
+  return {
+    ok: true,
+    chatId: result.chatId,
+    messageThreadId: result.messageThreadId,
+    name: result.name ?? name.trim(),
+  };
+}
+
+type TelegramCreateForumTopicOpts = TelegramApiCallOpts &
+  Pick<TelegramMessageActionOpts, "assertPlatformSendAuthorized"> & {
+    /** Icon color for the topic (must be one of 0x6FB9F0, 0xFFD67E, 0xCB86DB, 0x8EEE98, 0xFF93B2, 0xFB6F5F). */
+    iconColor?: TelegramCreateForumTopicParams["icon_color"];
+    /** Custom emoji ID for the topic icon. */
+    iconCustomEmojiId?: string;
+  };
+
+type TelegramCreateForumTopicResult = {
+  topicId: number;
+  name: string;
+  chatId: string;
+};
+
+/** Requires the bot's can_manage_topics permission. */
+export async function createForumTopicTelegram(
+  chatId: string,
+  name: string,
+  opts: TelegramCreateForumTopicOpts,
+): Promise<TelegramCreateForumTopicResult> {
+  const assertPlatformSendAuthorized = opts.assertPlatformSendAuthorized;
+  if (!name?.trim()) {
+    throw new Error("Forum topic name is required");
+  }
+  const trimmedName = name.trim();
+  if (Array.from(trimmedName).length > 128) {
+    throw new Error("Forum topic name must be 128 characters or fewer");
+  }
+
+  return withTelegramApiContext(
+    { ...opts, assertPlatformSendAuthorized },
+    async (context): Promise<TelegramCreateForumTopicResult> => {
+      const { cfg, account, api, ownerAgentId } = context;
+      // Creating a topic always targets the base chat and retains raw Bot API errors.
+      const { chatId: normalizedChatId, request: requestWithDiag } = await prepareTelegramOutbound({
+        to: chatId,
+        context,
+        opts,
+        wrapChatNotFound: false,
+      });
+
+      const extra: TelegramCreateForumTopicParams = {};
+      if (opts.iconColor != null) {
+        extra.icon_color = opts.iconColor;
+      }
+      if (opts.iconCustomEmojiId?.trim()) {
+        extra.icon_custom_emoji_id = opts.iconCustomEmojiId.trim();
+      }
+
+      const hasExtra = Object.keys(extra).length > 0;
+      const result = await requestWithDiag(() => {
+        assertPlatformSendAuthorized?.();
+        return api.createForumTopic(normalizedChatId, trimmedName, hasExtra ? extra : undefined);
+      }, "createForumTopic");
+
+      const topicId = result.message_thread_id;
+
+      await recordTopicCreation(
+        normalizedChatId,
+        topicId,
+        {
+          name: result.name ?? trimmedName,
+          creatorUserId: resolveTelegramBotUserIdFromToken(opts.token || account.token),
+          iconColor: result.icon_color ?? opts.iconColor,
+          iconCustomEmojiId: result.icon_custom_emoji_id ?? opts.iconCustomEmojiId,
+        },
+        resolveStorePath(cfg.session?.store, { agentId: ownerAgentId }),
+      ).catch((err: unknown) => {
+        logVerbose(`telegram: topic metadata persistence failed after creation: ${String(err)}`);
+      });
+
+      recordChannelActivity({
+        channel: "telegram",
+        accountId: account.accountId,
+        direction: "outbound",
+      });
+
+      return {
+        topicId,
+        name: result.name ?? trimmedName,
+        chatId: normalizedChatId,
+      };
+    },
+  );
+}

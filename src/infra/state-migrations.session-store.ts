@@ -1,14 +1,17 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { isWithinDir } from "@openclaw/fs-safe/path";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
+import { listAgentEntries, toAgentEntriesRecord } from "../agents/agent-scope-config.js";
+import { normalizePersistedSessionEntryShape } from "../commands/doctor/shared/session-entry-shape.js";
+import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { SessionEntry } from "../config/sessions.js";
-import { saveSessionStore } from "../config/sessions.js";
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
 import { resolveAgentsDirFromSessionStorePath } from "../config/sessions/paths.js";
-import { normalizePersistedSessionEntryShape } from "../config/sessions/store-entry-shape.js";
+import { resolvePersistedSessionStoreOwner } from "../config/sessions/session-store-owner.js";
+import { assertSupportedSessionStoreEntry } from "../config/sessions/supported-session-store.js";
 import {
   listConfiguredSessionStoreAgentIds,
   resolveAllAgentSessionStoreTargetsSync,
@@ -18,66 +21,65 @@ import type { SessionScope } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   collectRelevantDoctorPluginIds,
+  isPluginDoctorMigrationDeferred,
   listPluginDoctorSessionStoreAgentIds,
 } from "../plugins/doctor-contract-registry.js";
 import {
-  DEFAULT_AGENT_ID,
+  LEGACY_IMPLICIT_AGENT_ID as DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
-  isValidAgentId,
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
-import { sameFileIdentity } from "./fs-safe-advanced.js";
+import {
+  withArtifactPreservingStateReads,
+  withOpenClawStateDatabaseReadSnapshot,
+} from "../state/openclaw-state-db-readonly.js";
+import { readDeferredPluginMigrations } from "./deferred-plugin-migrations.js";
+import {
+  deferredPluginSessionStoreIds,
+  prepareDeferredPluginSessionImportReader,
+  preserveDeferredPluginSessionSource,
+} from "./deferred-plugin-session-sources.js";
 import { expandHomePrefix } from "./home-dir.js";
-import { isWithinDir } from "./path-safety.js";
+import { importLegacyAcpSessionMetadata } from "./state-migrations.acp-session-metadata.js";
 import {
   existsDir,
-  fileExists,
+  migrationFileExists,
   parseSessionStoreJson5,
   readSessionStoreJson5,
   safeReadDir,
   type SessionEntryLike,
 } from "./state-migrations.fs.js";
+import { saveLegacySessionStore } from "./state-migrations.legacy-session-store.js";
 import {
-  getLegacySessionSurfaces,
-  isLegacyGroupKey,
-  isSurfaceGroupKey,
+  resolveSessionStoreAliasPlan,
+  sessionStorePathsMatch,
+} from "./state-migrations.session-store-paths.js";
+import {
+  isLegacyDefaultMainAliasKey,
+  resolveCanonicalAgentSessionOwner,
+  type PreparedLegacySessionSurfaces,
 } from "./state-migrations.session-surfaces.js";
-import type { SessionStoreAliasPlan } from "./state-migrations.types.js";
+import type { MigrationMessages, SessionStoreAliasPlan } from "./state-migrations.types.js";
 
-export function isLegacyDefaultMainAliasKey(key: string, mainKey: string): boolean {
-  const lower = normalizeLowercaseStringOrEmpty(key.trim());
-  const canonicalMainKey = normalizeMainKey(mainKey);
-  return (
-    lower === `agent:${DEFAULT_AGENT_ID}:${DEFAULT_MAIN_KEY}` ||
-    lower === `agent:${DEFAULT_AGENT_ID}:${canonicalMainKey}`
-  );
-}
-
-function resolveCanonicalAgentSessionOwner(key: string): string | undefined {
-  const parsed = parseAgentSessionKey(key);
-  if (
-    parsed === null ||
-    !isValidAgentId(parsed.agentId) ||
-    normalizeAgentId(parsed.agentId) !== parsed.agentId
-  ) {
-    return undefined;
-  }
-  return parsed.agentId;
-}
-
-function canonicalizeSessionKeyForAgent(params: {
-  key: string;
+type SessionKeyCanonicalizationOptions = {
   agentId: string;
   mainKey: string;
   scope?: SessionScope;
-  skipCrossAgentRemap?: boolean;
-  preserveCanonicalAgentOwner?: boolean;
   preserveAmbiguousKeys?: boolean;
   preserveForeignMainAliases?: boolean;
-}): string {
+  legacySessionSurfaces?: PreparedLegacySessionSurfaces["surfaces"];
+};
+
+function canonicalizeSessionKeyForAgent(
+  params: SessionKeyCanonicalizationOptions & {
+    key: string;
+    skipCrossAgentRemap?: boolean;
+    preserveCanonicalAgentOwner?: boolean;
+  },
+): string {
   const raw = params.key.trim();
   if (!raw) {
     return raw;
@@ -180,7 +182,7 @@ function canonicalizeSessionKeyForAgent(params: {
   // Channel-owned legacy shapes must win before the generic group/channel
   // fallback so plugin-specific legacy group keys can canonicalize to their
   // owning channel instead of the generic `...:unknown:group:...` bucket.
-  for (const surface of getLegacySessionSurfaces()) {
+  for (const surface of params.legacySessionSurfaces ?? []) {
     const canonicalized = surface.canonicalizeLegacySessionKey?.({
       key: raw,
       agentId,
@@ -193,149 +195,61 @@ function canonicalizeSessionKeyForAgent(params: {
   if (rawLower.startsWith("group:") || rawLower.startsWith("channel:")) {
     return normalizeLowercaseStringOrEmpty(`agent:${agentId}:unknown:${raw}`);
   }
-  if (isSurfaceGroupKey(raw)) {
+  if (raw.includes(":group:") || raw.includes(":channel:")) {
     return `agent:${agentId}:${normalized}`;
   }
   return normalizeSessionKeyPreservingOpaquePeerIds(`agent:${agentId}:${raw}`);
 }
 
-export function pickLatestLegacyDirectEntry(
-  store: Record<string, SessionEntryLike>,
-): SessionEntryLike | null {
-  let best: SessionEntryLike | null = null;
-  let bestUpdated = -1;
-  for (const [key, entry] of Object.entries(store)) {
-    if (!entry || typeof entry !== "object") {
-      continue;
-    }
-    const normalized = key.trim();
-    if (!normalized) {
-      continue;
-    }
-    const normalizedLower = normalizeLowercaseStringOrEmpty(normalized);
-    if (normalizedLower === "global") {
-      continue;
-    }
-    if (normalizedLower.startsWith("agent:")) {
-      continue;
-    }
-    if (normalizedLower.startsWith("subagent:")) {
-      continue;
-    }
-    if (isLegacyGroupKey(normalized) || isSurfaceGroupKey(normalized)) {
-      continue;
-    }
-    const updatedAt = typeof entry.updatedAt === "number" ? entry.updatedAt : 0;
-    if (updatedAt > bestUpdated) {
-      bestUpdated = updatedAt;
-      best = entry;
-    }
-  }
-  return best;
-}
-
-export function normalizeSessionEntry(entry: SessionEntryLike): SessionEntry | null {
-  const shaped = normalizePersistedSessionEntryShape(entry);
+export function normalizeSessionEntry(
+  entry: SessionEntryLike,
+  sessionKey?: string,
+): SessionEntry | null {
+  assertSupportedSessionStoreEntry(entry);
+  const shaped = normalizePersistedSessionEntryShape(entry, { sessionKey });
   if (!shaped) {
     return null;
   }
   const normalized = { ...shaped };
   if (typeof normalized.sessionId === "string") {
-    normalized.updatedAt =
-      typeof normalized.updatedAt === "number" && Number.isFinite(normalized.updatedAt)
-        ? normalized.updatedAt
-        : Date.now();
+    normalized.updatedAt = asFiniteNumber(normalized.updatedAt) ?? Date.now();
   }
-  const rec = normalized as unknown as Record<string, unknown>;
-  if (typeof rec.groupChannel !== "string" && typeof rec.room === "string") {
-    rec.groupChannel = rec.room;
-  }
-  delete rec.room;
   return normalized;
 }
 
-function resolveUpdatedAt(entry: SessionEntryLike): number {
-  return typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt)
-    ? entry.updatedAt
-    : 0;
-}
-
-export function mergeSessionEntry(params: {
-  existing: SessionEntryLike | undefined;
-  incoming: SessionEntryLike;
-  preferIncomingOnTie?: boolean;
-}): SessionEntryLike {
-  if (!params.existing) {
-    return params.incoming;
-  }
-  const existingUpdated = resolveUpdatedAt(params.existing);
-  const incomingUpdated = resolveUpdatedAt(params.incoming);
-  if (incomingUpdated > existingUpdated) {
-    return params.incoming;
-  }
-  if (incomingUpdated < existingUpdated) {
-    return params.existing;
-  }
-  return params.preferIncomingOnTie ? params.incoming : params.existing;
-}
-
-export function canonicalizeSessionStore(params: {
+export function canonicalizeSessionStore({
+  store,
+  ...options
+}: SessionKeyCanonicalizationOptions & {
   store: Record<string, SessionEntryLike>;
-  agentId: string;
-  mainKey: string;
-  scope?: SessionScope;
-  skipCrossAgentRemap?: boolean;
-  preserveCanonicalAgentOwner?: boolean;
-  preserveAmbiguousKeys?: boolean;
-  preserveForeignMainAliases?: boolean;
 }): { store: Record<string, SessionEntryLike>; legacyKeys: string[] } {
   const canonical = Object.create(null) as Record<string, SessionEntryLike>;
   const meta = new Map<string, { isCanonical: boolean; updatedAt: number }>();
   const legacyKeys: string[] = [];
 
-  for (const [key, entry] of Object.entries(params.store)) {
+  for (const [key, entry] of Object.entries(store)) {
     if (!entry || typeof entry !== "object") {
       continue;
     }
     const canonicalKey = canonicalizeSessionKeyForAgent({
+      ...options,
       key,
-      agentId: params.agentId,
-      mainKey: params.mainKey,
-      scope: params.scope,
-      skipCrossAgentRemap: params.skipCrossAgentRemap,
-      preserveCanonicalAgentOwner: params.preserveCanonicalAgentOwner,
-      preserveAmbiguousKeys: params.preserveAmbiguousKeys,
-      preserveForeignMainAliases: params.preserveForeignMainAliases,
+      skipCrossAgentRemap: options.preserveAmbiguousKeys,
+      preserveCanonicalAgentOwner: true,
     });
     const isCanonical = canonicalKey === key;
     if (!isCanonical) {
       legacyKeys.push(key);
     }
-    const existing = canonical[canonicalKey];
-    if (!existing) {
-      canonical[canonicalKey] = entry;
-      meta.set(canonicalKey, { isCanonical, updatedAt: resolveUpdatedAt(entry) });
-      continue;
-    }
-
     const existingMeta = meta.get(canonicalKey);
-    const incomingUpdated = resolveUpdatedAt(entry);
-    const existingUpdated = existingMeta?.updatedAt ?? resolveUpdatedAt(existing);
-    if (incomingUpdated > existingUpdated) {
+    const incomingUpdated = asFiniteNumber(entry.updatedAt) ?? 0;
+    if (
+      !existingMeta ||
+      incomingUpdated > existingMeta.updatedAt ||
+      (incomingUpdated === existingMeta.updatedAt && isCanonical && !existingMeta.isCanonical)
+    ) {
       canonical[canonicalKey] = entry;
       meta.set(canonicalKey, { isCanonical, updatedAt: incomingUpdated });
-      continue;
-    }
-    if (incomingUpdated < existingUpdated) {
-      continue;
-    }
-    if (existingMeta?.isCanonical && !isCanonical) {
-      continue;
-    }
-    if (!existingMeta?.isCanonical && isCanonical) {
-      canonical[canonicalKey] = entry;
-      meta.set(canonicalKey, { isCanonical, updatedAt: incomingUpdated });
-      continue;
     }
   }
 
@@ -381,235 +295,16 @@ export function distinctSessionStoreAliasWarning(subject: string, storePath: str
   return `Deferred ${subject} in aliased store ${storePath}; atomic replacement cannot update distinct filesystem aliases as one operation. Remove filesystem aliases or configure one canonical session.store path, then rerun openclaw doctor --fix`;
 }
 
-export function resolveStaleLegacySessionFile(params: {
-  entry: unknown;
-  legacyDir: string;
-  targetDir: string;
-}): string | undefined {
-  if (!params.entry || typeof params.entry !== "object" || Array.isArray(params.entry)) {
-    return undefined;
-  }
-  const entry = params.entry as SessionEntryLike;
-  const rawSessionFile = entry.sessionFile;
-  if (typeof rawSessionFile !== "string") {
-    return undefined;
-  }
-  const legacySessionFile = path.isAbsolute(rawSessionFile)
-    ? path.resolve(rawSessionFile)
-    : path.resolve(params.legacyDir, rawSessionFile);
-  const relative = path.relative(path.resolve(params.legacyDir), legacySessionFile);
-  if (relative.startsWith("..") || path.isAbsolute(relative) || fileExists(legacySessionFile)) {
-    return undefined;
-  }
-  const legacyBackupHasTranscript = safeReadDir(path.dirname(params.legacyDir)).some(
-    (dirent) =>
-      dirent.isDirectory() &&
-      dirent.name.startsWith(`${path.basename(params.legacyDir)}.legacy-`) &&
-      fileExists(
-        path.join(path.dirname(params.legacyDir), dirent.name, path.basename(legacySessionFile)),
-      ),
-  );
-  if (legacyBackupHasTranscript) {
-    return undefined;
-  }
-  const parsed = path.parse(path.basename(legacySessionFile));
-  const hasCollisionRename = safeReadDir(params.targetDir).some(
-    (dirent) =>
-      dirent.isFile() &&
-      dirent.name.startsWith(`${parsed.name}.legacy-`) &&
-      dirent.name.endsWith(parsed.ext),
-  );
-  if (hasCollisionRename) {
-    return undefined;
-  }
-  const targetSessionFile = path.join(params.targetDir, path.basename(legacySessionFile));
-  if (!fileExists(targetSessionFile) || typeof entry.sessionId !== "string") {
-    return undefined;
-  }
-  const readFirstLine = () => {
-    const fd = fs.openSync(targetSessionFile, "r");
-    try {
-      const buffer = Buffer.alloc(8192);
-      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
-      if (bytesRead <= 0) {
-        return undefined;
-      }
-      const chunk = buffer.subarray(0, bytesRead).toString("utf8");
-      const newline = chunk.indexOf("\n");
-      return newline >= 0 ? chunk.slice(0, newline) : chunk;
-    } finally {
-      fs.closeSync(fd);
-    }
-  };
-  try {
-    const firstLine = readFirstLine();
-    const header = firstLine ? (JSON.parse(firstLine) as unknown) : undefined;
-    if (!header || typeof header !== "object" || Array.isArray(header)) {
-      return undefined;
-    }
-    if ((header as { type?: unknown }).type === "session") {
-      return (header as { id?: unknown }).id === entry.sessionId ? targetSessionFile : undefined;
-    }
-    const canonicalFileName =
-      path.basename(entry.sessionId) === entry.sessionId ? `${entry.sessionId}.jsonl` : undefined;
-    return canonicalFileName === path.basename(targetSessionFile) ? targetSessionFile : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function skipJson5Trivia(raw: string, index: number): number {
-  let i = index;
-  while (i < raw.length) {
-    const ch = raw[i];
-    if (ch === " " || ch === "\n" || ch === "\r" || ch === "\t") {
-      i++;
-      continue;
-    }
-    if (ch === "/" && raw[i + 1] === "/") {
-      i += 2;
-      while (i < raw.length && raw[i] !== "\n") {
-        i++;
-      }
-      continue;
-    }
-    if (ch === "/" && raw[i + 1] === "*") {
-      i += 2;
-      while (i < raw.length && !(raw[i] === "*" && raw[i + 1] === "/")) {
-        i++;
-      }
-      return i < raw.length ? i + 2 : i;
-    }
-    break;
-  }
-  return i;
-}
-
-function readJson5String(raw: string, index: number): { value: string; next: number } | null {
-  const quote = raw[index];
-  if (quote !== '"' && quote !== "'") {
-    return null;
-  }
-  let i = index + 1;
-  let value = "";
-  while (i < raw.length) {
-    const ch = raw[i];
-    if (ch === quote) {
-      return { value, next: i + 1 };
-    }
-    if (ch === "\\") {
-      return null;
-    }
-    value += ch;
-    i++;
-  }
-  return null;
-}
-
-function readJson5BareKey(raw: string, index: number): { value: string; next: number } | null {
-  let i = index;
-  while (i < raw.length) {
-    const ch = raw[i];
-    if (
-      ch === ":" ||
-      ch === " " ||
-      ch === "\n" ||
-      ch === "\r" ||
-      ch === "\t" ||
-      ch === "," ||
-      ch === "}" ||
-      ch === "{" ||
-      ch === "[" ||
-      ch === "]"
-    ) {
-      break;
-    }
-    i++;
-  }
-  if (i === index) {
-    return null;
-  }
-  return { value: raw.slice(index, i), next: i };
-}
-
-function listTopLevelSessionStoreKeys(raw: string): string[] | null {
-  let i = skipJson5Trivia(raw, 0);
-  if (raw[i] !== "{") {
-    return null;
-  }
-  i++;
-  const keys: string[] = [];
-  let depth = 1;
-  let expectingKey = true;
-
-  while (i < raw.length) {
-    i = skipJson5Trivia(raw, i);
-    const ch = raw[i];
-    if (ch === undefined) {
-      return null;
-    }
-    if (depth === 1 && ch === "}") {
-      return keys;
-    }
-    if (depth === 1 && expectingKey) {
-      const key = ch === '"' || ch === "'" ? readJson5String(raw, i) : readJson5BareKey(raw, i);
-      if (!key) {
-        return null;
-      }
-      i = skipJson5Trivia(raw, key.next);
-      if (raw[i] !== ":") {
-        return null;
-      }
-      keys.push(key.value);
-      i++;
-      expectingKey = false;
-      continue;
-    }
-    if (ch === '"' || ch === "'") {
-      const str = readJson5String(raw, i);
-      if (!str) {
-        return null;
-      }
-      i = str.next;
-      continue;
-    }
-    if (ch === "{" || ch === "[") {
-      depth++;
-      i++;
-      continue;
-    }
-    if (ch === "}" || ch === "]") {
-      depth--;
-      i++;
-      if (depth < 1) {
-        return keys;
-      }
-      continue;
-    }
-    if (depth === 1 && ch === ",") {
-      expectingKey = true;
-      i++;
-      continue;
-    }
-    i++;
-  }
-  return null;
-}
-
-function sessionStoreTextMayNeedCanonicalization(params: {
-  raw: string;
+function sessionStoreMayNeedCanonicalization(params: {
+  store: Record<string, SessionEntryLike>;
   storeAgentIds: Iterable<string>;
   mainKey: string;
   scope?: SessionScope;
   preserveForeignMainAliases?: boolean;
 }): boolean {
-  const keys = listTopLevelSessionStoreKeys(params.raw);
-  if (!keys) {
-    return true;
-  }
   const storeAgentIds = new Set([...params.storeAgentIds].map((id) => normalizeAgentId(id)));
   const hasNonMainAgent = [...storeAgentIds].some((id) => id !== DEFAULT_AGENT_ID);
-  for (const key of keys) {
+  for (const key of Object.keys(params.store)) {
     const rawKey = key.trim();
     if (rawKey !== key) {
       return true;
@@ -631,12 +326,6 @@ function sessionStoreTextMayNeedCanonicalization(params: {
       return true;
     }
     if (lowerKey === DEFAULT_MAIN_KEY || lowerKey === params.mainKey) {
-      return true;
-    }
-    if (lowerKey.startsWith("subagent:")) {
-      return true;
-    }
-    if (lowerKey.startsWith("group:") || lowerKey.startsWith("channel:")) {
       return true;
     }
     if (!lowerKey.startsWith("agent:")) {
@@ -674,45 +363,25 @@ function sessionStoreTextMayNeedCanonicalization(params: {
   return false;
 }
 
-export function listLegacySessionKeys(params: {
+export function listLegacySessionKeys({
+  store,
+  ...options
+}: SessionKeyCanonicalizationOptions & {
   store: Record<string, SessionEntryLike>;
-  agentId: string;
-  mainKey: string;
-  scope?: SessionScope;
-  preserveAmbiguousKeys?: boolean;
-  preserveForeignMainAliases?: boolean;
 }): string[] {
-  const legacy: string[] = [];
-  for (const key of Object.keys(params.store)) {
-    const canonical = canonicalizeSessionKeyForAgent({
-      key,
-      agentId: params.agentId,
-      mainKey: params.mainKey,
-      scope: params.scope,
-      skipCrossAgentRemap: params.preserveAmbiguousKeys,
-      preserveCanonicalAgentOwner: params.preserveAmbiguousKeys,
-      preserveAmbiguousKeys: params.preserveAmbiguousKeys,
-      preserveForeignMainAliases: params.preserveForeignMainAliases,
-    });
-    if (canonical !== key) {
-      legacy.push(key);
-    }
-  }
-  return legacy;
-}
-
-export function emptyDirOrMissing(dir: string): boolean {
-  if (!existsDir(dir)) {
-    return true;
-  }
-  return safeReadDir(dir).length === 0;
+  return Object.keys(store).filter(
+    (key) =>
+      canonicalizeSessionKeyForAgent({
+        ...options,
+        key,
+        skipCrossAgentRemap: options.preserveAmbiguousKeys,
+        preserveCanonicalAgentOwner: options.preserveAmbiguousKeys,
+      }) !== key,
+  );
 }
 
 export function removeDirIfEmpty(dir: string) {
-  if (!existsDir(dir)) {
-    return;
-  }
-  if (!emptyDirOrMissing(dir)) {
+  if (!existsDir(dir) || safeReadDir(dir).length > 0) {
     return;
   }
   try {
@@ -726,14 +395,34 @@ export async function migrateOrphanedSessionKeys(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   additionalAgentIds?: readonly string[];
-}): Promise<{ changes: string[]; warnings: string[] }> {
+  legacySessionSurfaces: PreparedLegacySessionSurfaces | (() => PreparedLegacySessionSurfaces);
+}): Promise<MigrationMessages> {
   const changes: string[] = [];
   const warnings: string[] = [];
-  const env = params.env ?? process.env;
+  const recoverableWarnings: string[] = [];
+  const env = cloneEnvWithPlatformSemantics(params.env ?? process.env);
+  let preparedLegacySessionSurfaces: PreparedLegacySessionSurfaces | undefined;
+  const resolveLegacySessionSurfaces = () =>
+    (preparedLegacySessionSurfaces ??=
+      typeof params.legacySessionSurfaces === "function"
+        ? params.legacySessionSurfaces()
+        : params.legacySessionSurfaces);
   const stateDir = resolveStateDir(env);
   const mainKey = normalizeMainKey(params.cfg.session?.mainKey);
   const scope = params.cfg.session?.scope as SessionScope | undefined;
   const storeConfig = params.cfg.session?.store;
+  const persistedStoreOwner = resolvePersistedSessionStoreOwner(params.cfg);
+  const pendingPluginMigrations = await withArtifactPreservingStateReads(() =>
+    withOpenClawStateDatabaseReadSnapshot(async () => readDeferredPluginMigrations({ env }), {
+      env,
+    }),
+  );
+  const persistedStoreAgentId =
+    persistedStoreOwner.kind === "configured" ? persistedStoreOwner.agentId : undefined;
+  const persistedStorePath =
+    persistedStoreAgentId && storeConfig
+      ? resolveStorePathFromTemplate(storeConfig, persistedStoreAgentId, env)
+      : undefined;
   const pluginAgentIds =
     params.additionalAgentIds ??
     listPluginDoctorSessionStoreAgentIds({
@@ -743,12 +432,24 @@ export async function migrateOrphanedSessionKeys(params: {
     });
   const pluginAgentIdSet = new Set(pluginAgentIds.map((id) => normalizeAgentId(id)));
 
-  // Collect all known agent store paths with their owning agentIds.
-  // A single path may be shared by multiple agents when session.store
-  // does not contain {agentId}.
+  // Fixed session.store paths can be shared by several agent owners.
   const storeMap = new Map<string, Set<string>>();
   const storeAliasCandidates = new Map<string, Set<string>>();
   const addToStoreMap = (p: string, id: string) => {
+    try {
+      // Exact SQLite locators are canonical databases, never legacy JSON sources.
+      if (p.endsWith(".sqlite") || !fs.statSync(p, { throwIfNoEntry: false })?.isFile()) {
+        return;
+      }
+    } catch {
+      // Inaccessible paths must stay in their fail-closed alias group.
+    }
+    // A fixed-store owner is durable migration provenance. Keep other configured
+    // agents from making that store's unscoped rows look ambiguous.
+    const ownerId =
+      persistedStoreAgentId && persistedStorePath && sessionStorePathsMatch(p, persistedStorePath)
+        ? persistedStoreAgentId
+        : id;
     // Existing aliases are one ownership surface. Group them before any atomic
     // rewrite can replace one pathname and hide their original identity.
     const storePath =
@@ -756,25 +457,11 @@ export async function migrateOrphanedSessionKeys(params: {
     const aliasCandidates = storeAliasCandidates.get(storePath) ?? new Set([storePath]);
     aliasCandidates.add(p);
     storeAliasCandidates.set(storePath, aliasCandidates);
-    const existing = storeMap.get(storePath);
-    if (existing) {
-      existing.add(id);
-    } else {
-      storeMap.set(storePath, new Set([id]));
-    }
+    storeMap.set(storePath, (storeMap.get(storePath) ?? new Set<string>()).add(ownerId));
   };
-  // Configured ownership includes normal agents plus ACP runtime/default hints.
-  for (const configuredAgentId of listConfiguredSessionStoreAgentIds(params.cfg)) {
-    const id = normalizeAgentId(configuredAgentId);
-    const p = storeConfig
-      ? resolveStorePathFromTemplate(storeConfig, id, env)
-      : path.join(stateDir, "agents", id, "sessions", "sessions.json");
-    addToStoreMap(p, id);
-  }
-  // Plugins can route core sessions to agents that are not declared in
-  // agents.list. A templated path proves ownership for those stores too.
-  for (const pluginAgentId of pluginAgentIds) {
-    const id = normalizeAgentId(pluginAgentId);
+  // Plugin-owned agents can be absent from config; retain configured-owner order.
+  for (const agentId of [...listConfiguredSessionStoreAgentIds(params.cfg), ...pluginAgentIds]) {
+    const id = normalizeAgentId(agentId);
     const p = storeConfig
       ? resolveStorePathFromTemplate(storeConfig, id, env)
       : path.join(stateDir, "agents", id, "sessions", "sessions.json");
@@ -798,27 +485,40 @@ export async function migrateOrphanedSessionKeys(params: {
   }
 
   for (const [mappedStorePath, storeAgentIds] of storeMap) {
+    if (
+      [...storeAgentIds].some((agentId) =>
+        preserveDeferredPluginSessionSource({
+          cfg: params.cfg,
+          env,
+          target: { agentId, storePath: mappedStorePath },
+          pending: pendingPluginMigrations,
+        }),
+      )
+    ) {
+      continue;
+    }
     const storePaths = storeAliasCandidates.get(mappedStorePath) ?? new Set([mappedStorePath]);
     // An unknown relationship may have grouped a readable store behind an
     // inaccessible pathname. Read from a usable alias so the group still gets
     // the unresolved-identity warning before any rewrite is attempted.
-    const storePath = [...storePaths].find((candidate) => fileExists(candidate));
+    const storePath = [...storePaths].find((candidate) => migrationFileExists(candidate));
     if (!storePath) {
       continue;
     }
     const pluginForeignMainAliasRisk = [...storeAgentIds].some(
       (id) => pluginAgentIdSet.has(id) && id !== DEFAULT_AGENT_ID,
     );
-    let raw: string;
+    let parsed: ReturnType<typeof parseSessionStoreJson5>;
     try {
-      raw = fs.readFileSync(storePath, "utf-8");
+      parsed = parseSessionStoreJson5(fs.readFileSync(storePath, "utf-8"));
     } catch (err) {
       warnings.push(`Could not read ${storePath}: ${String(err)}`);
       continue;
     }
     if (
-      !sessionStoreTextMayNeedCanonicalization({
-        raw,
+      !parsed.ok ||
+      !sessionStoreMayNeedCanonicalization({
+        store: parsed.store,
         storeAgentIds,
         mainKey,
         scope,
@@ -827,17 +527,13 @@ export async function migrateOrphanedSessionKeys(params: {
     ) {
       continue;
     }
-    let parsed: ReturnType<typeof readSessionStoreJson5>;
-    try {
-      parsed = parseSessionStoreJson5(raw);
-    } catch (err) {
-      warnings.push(`Could not read ${storePath}: ${String(err)}`);
-      continue;
+    const legacySessionSurfaces = resolveLegacySessionSurfaces();
+    if (legacySessionSurfaces.failures.length > 0) {
+      return {
+        changes,
+        warnings: [...warnings, ...recoverableWarnings, ...legacySessionSurfaces.failures],
+      };
     }
-    if (!parsed.ok) {
-      continue;
-    }
-
     // A physical store can have several owners. Canonicalize valid scoped rows
     // within their declared owner on every pass so iteration order cannot move
     // one agent's history into another namespace.
@@ -881,10 +577,9 @@ export async function migrateOrphanedSessionKeys(params: {
         agentId: storeAgentId,
         mainKey,
         scope,
-        skipCrossAgentRemap: preserveAmbiguousKeys,
-        preserveCanonicalAgentOwner: true,
         preserveAmbiguousKeys,
         preserveForeignMainAliases: pluginForeignMainAliasRisk,
+        legacySessionSurfaces: legacySessionSurfaces.surfaces,
       });
       working = canonicalized;
       // Each pass only counts keys it changed from the current working store, so
@@ -892,7 +587,7 @@ export async function migrateOrphanedSessionKeys(params: {
       totalLegacy += legacyKeys.length;
     }
     if (preservedAmbiguousKeyCount > 0) {
-      warnings.push(
+      recoverableWarnings.push(
         `Preserved ${preservedAmbiguousKeyCount} ambiguous session key(s) in potentially shared store ${storePath}`,
       );
     }
@@ -901,7 +596,7 @@ export async function migrateOrphanedSessionKeys(params: {
     }
     const normalized = Object.create(null) as Record<string, SessionEntry>;
     for (const [key, entry] of Object.entries(working)) {
-      const ne = normalizeSessionEntry(entry);
+      const ne = normalizeSessionEntry(entry, key);
       if (ne) {
         normalized[key] = ne;
       }
@@ -914,7 +609,13 @@ export async function migrateOrphanedSessionKeys(params: {
     }
   }
 
-  return { changes, warnings };
+  return {
+    changes,
+    warnings: [...warnings, ...recoverableWarnings],
+    ...(warnings.length === 0 && recoverableWarnings.length > 0
+      ? { warningDisposition: "recoverable" as const }
+      : {}),
+  };
 }
 
 export async function migrateLegacyAcpSessionMetadata(params: {
@@ -922,11 +623,23 @@ export async function migrateLegacyAcpSessionMetadata(params: {
   env?: NodeJS.ProcessEnv;
   now?: () => number;
   pluginSessionStoreAgentIds?: readonly string[];
+  legacySessionSurfaces: PreparedLegacySessionSurfaces;
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const changes: string[] = [];
   const warnings: string[] = [];
-  const env = params.env ?? process.env;
+  const env = cloneEnvWithPlatformSemantics(params.env ?? process.env);
+  if (params.legacySessionSurfaces.failures.length > 0) {
+    return {
+      changes,
+      warnings: [...params.legacySessionSurfaces.failures],
+    };
+  }
   const now = params.now ?? (() => Date.now());
+  const pending = await withArtifactPreservingStateReads(() =>
+    withOpenClawStateDatabaseReadSnapshot(async () => readDeferredPluginMigrations({ env }), {
+      env,
+    }),
+  );
   const stateDir = resolveStateDir(env);
   const storeConfig = params.cfg.session?.store;
   const pluginAgentIds =
@@ -950,23 +663,23 @@ export async function migrateLegacyAcpSessionMetadata(params: {
   const pluginTargets = declaredTargets.filter(
     ({ agentId }) => agentId !== DEFAULT_AGENT_ID && normalizedPluginAgentIds.has(agentId),
   );
-  const configuredAgents = Array.isArray(params.cfg.agents?.list) ? params.cfg.agents.list : [];
+  const configuredAgents = listAgentEntries(params.cfg);
   const configuredAgentIds = new Set(
     configuredAgents.flatMap((entry) => (entry?.id ? [normalizeAgentId(entry.id)] : [])),
   );
   const discoveryCfg = [...declaredAgentIds].some((agentId) => !configuredAgentIds.has(agentId))
-    ? ({
+    ? {
         ...params.cfg,
         agents: {
           ...params.cfg.agents,
-          list: [
+          entries: toAgentEntriesRecord([
             ...configuredAgents,
             ...[...declaredAgentIds]
               .filter((agentId) => !configuredAgentIds.has(agentId))
               .map((id) => ({ id })),
-          ],
+          ]),
         },
-      } as OpenClawConfig)
+      }
     : params.cfg;
   // Reuse the validated resolver for every declared owner. Owner multiplicity
   // is restored below as metadata without re-adding rejected raw paths.
@@ -980,50 +693,43 @@ export async function migrateLegacyAcpSessionMetadata(params: {
   }> = [];
 
   for (const target of targets) {
-    if (!fileExists(target.storePath)) {
+    if (!migrationFileExists(target.storePath)) {
       continue;
     }
-    const group = storeGroups.find(({ target: existing }) =>
+    let group = storeGroups.find(({ target: existing }) =>
       sessionStorePathsMatch(existing.storePath, target.storePath),
     );
     const matchingDeclaredTargets = declaredTargets.filter((declaredTarget) =>
       sessionStorePathsMatch(target.storePath, declaredTarget.storePath),
     );
-    if (group) {
-      group.agentIds.add(normalizeAgentId(target.agentId));
-      group.aliasCandidates.add(target.storePath);
-      for (const declaredTarget of matchingDeclaredTargets) {
-        group.agentIds.add(declaredTarget.agentId);
-        group.aliasCandidates.add(declaredTarget.storePath);
-      }
-      continue;
+    if (!group) {
+      group = { target, agentIds: new Set(), aliasCandidates: new Set() };
+      storeGroups.push(group);
     }
-    storeGroups.push({
-      target,
-      agentIds: new Set([
-        normalizeAgentId(target.agentId),
-        ...matchingDeclaredTargets.map((declaredTarget) => declaredTarget.agentId),
-      ]),
-      aliasCandidates: new Set([
-        target.storePath,
-        ...matchingDeclaredTargets.map((declaredTarget) => declaredTarget.storePath),
-      ]),
-    });
+    group.agentIds.add(normalizeAgentId(target.agentId));
+    group.aliasCandidates.add(target.storePath);
+    for (const declaredTarget of matchingDeclaredTargets) {
+      group.agentIds.add(declaredTarget.agentId);
+      group.aliasCandidates.add(declaredTarget.storePath);
+    }
   }
 
   for (const { target, agentIds, aliasCandidates } of storeGroups) {
     const storePath = target.storePath;
+    if (deferredPluginSessionStoreIds({ target, pending }).some(isPluginDoctorMigrationDeferred)) {
+      continue;
+    }
+    const preserveSource = preserveDeferredPluginSessionSource({
+      cfg: params.cfg,
+      env,
+      target,
+      pending,
+    });
     const storeAliases = resolveSessionStoreAliasPlan(storePath, aliasCandidates);
     const pluginForeignMainAliasRisk = pluginTargets.some((pluginTarget) =>
       sessionStorePathsMatch(storePath, pluginTarget.storePath),
     );
-    let parsed: ReturnType<typeof readSessionStoreJson5>;
-    try {
-      parsed = readSessionStoreJson5(storePath);
-    } catch (err) {
-      warnings.push(`Could not read ${storePath}: ${String(err)}`);
-      continue;
-    }
+    const parsed = readSessionStoreJson5(storePath);
     if (!parsed.ok) {
       continue;
     }
@@ -1032,8 +738,8 @@ export async function migrateLegacyAcpSessionMetadata(params: {
         isAmbiguousSharedStoreKey(key, mainKey, scope) ||
         (pluginForeignMainAliasRisk && isLegacyDefaultMainAliasKey(key, mainKey)),
     ).length;
-    const hasLegacyAcpMetadata = Object.values(parsed.store).some(
-      (entry) => normalizeSessionEntry(entry)?.acp !== undefined,
+    const hasLegacyAcpMetadata = Object.entries(parsed.store).some(
+      ([sessionKey, entry]) => normalizeSessionEntry(entry, sessionKey)?.acp !== undefined,
     );
     if (hasLegacyAcpMetadata && storeAliases.hasUnresolvedIdentity) {
       warnings.push(unresolvedSessionStoreIdentityWarning("ACP metadata migration", storePath));
@@ -1059,11 +765,16 @@ export async function migrateLegacyAcpSessionMetadata(params: {
       continue;
     }
 
+    const readVerifiedCoreImport = prepareDeferredPluginSessionImportReader({
+      target,
+      env,
+    });
     const normalized = Object.create(null) as Record<string, SessionEntry>;
     let migrated = 0;
+    let consumed = 0;
     let preserved = 0;
     for (const [sessionKey, entry] of Object.entries(parsed.store)) {
-      const normalizedEntry = normalizeSessionEntry(entry);
+      const normalizedEntry = normalizeSessionEntry(entry, sessionKey);
       if (!normalizedEntry) {
         continue;
       }
@@ -1084,16 +795,27 @@ export async function migrateLegacyAcpSessionMetadata(params: {
           mainKey,
           scope,
           skipCrossAgentRemap: true,
+          legacySessionSurfaces: params.legacySessionSurfaces.surfaces,
         });
-        writeAcpSessionMetaForMigration({
+        const imported = importLegacyAcpSessionMetadata({
+          sourcePath: storePath,
+          sourceSessionKey: sessionKey,
+          preserveSource,
+          cfg: params.cfg,
+          agentId: rowAgentId,
+          readVerifiedCoreImport,
           sessionKey: canonicalSessionKey,
           sessionId: normalizedEntry.sessionId,
+          lifecycleRevision: normalizedEntry.lifecycleRevision,
           meta: normalizedEntry.acp,
           env,
           now,
         });
         delete normalizedEntry.acp;
-        migrated++;
+        consumed++;
+        if (imported) {
+          migrated++;
+        }
       }
       normalized[sessionKey] = normalizedEntry;
     }
@@ -1102,13 +824,17 @@ export async function migrateLegacyAcpSessionMetadata(params: {
         `Preserved ACP metadata for ${preserved} ambiguous session key(s) in potentially shared store ${storePath}`,
       );
     }
-    if (migrated === 0) {
+    if (consumed === 0 || (preserveSource && migrated === 0)) {
       continue;
     }
     try {
-      await saveSessionStoreStrict(storePath, normalized);
+      if (!preserveSource) {
+        await saveSessionStoreStrict(storePath, normalized);
+      }
       changes.push(
-        `Migrated ${migrated} ACP session metadata ${migrated === 1 ? "row" : "rows"} → shared SQLite state`,
+        migrated > 0
+          ? `Migrated ${migrated} ACP session metadata ${migrated === 1 ? "row" : "rows"} → shared SQLite state`
+          : `Removed previously imported ACP metadata from ${storePath}`,
       );
     } catch (err) {
       warnings.push(`Failed to write ACP metadata migration source ${storePath}: ${String(err)}`);
@@ -1128,7 +854,7 @@ function resolveLegacyAcpMetadataSessionStoreTargets(
   const agentsDirs = new Set<string>([path.join(stateDir, "agents")]);
   const targets = new Map<string, { agentId: string; storePath: string }>();
   const addTarget = (agentId: string, storePath: string) => {
-    if (!isManagedLegacySessionStorePathSafe(storePath)) {
+    if (storePath.endsWith(".sqlite") || !isManagedLegacySessionStorePathSafe(storePath)) {
       return;
     }
     const agentsDir = resolveAgentsDirFromSessionStorePath(storePath);
@@ -1172,7 +898,7 @@ function isManagedLegacySessionStorePathSafe(storePath: string): boolean {
   if (!agentsDir) {
     return true;
   }
-  if (!fileExists(resolvedStorePath)) {
+  if (!migrationFileExists(resolvedStorePath)) {
     return true;
   }
 
@@ -1193,126 +919,9 @@ function isManagedLegacySessionStorePathSafe(storePath: string): boolean {
 function resolveStorePathFromTemplate(
   template: string,
   agentId: string,
-  env?: NodeJS.ProcessEnv,
+  env: NodeJS.ProcessEnv,
 ): string {
-  const expand = (s: string) =>
-    s.startsWith("~") ? expandHomePrefix(s, { env: env ?? process.env, homedir: os.homedir }) : s;
-  if (template.includes("{agentId}")) {
-    return path.resolve(expand(template.replaceAll("{agentId}", agentId)));
-  }
-  return path.resolve(expand(template));
-}
-
-type SessionStorePathRelationship = "same" | "different" | "unknown";
-
-function resolveSessionStorePathRelationship(
-  left: string,
-  right: string,
-): SessionStorePathRelationship {
-  if (left === right) {
-    return "same";
-  }
-  try {
-    return sameFileIdentity(fs.statSync(left), fs.statSync(right)) ? "same" : "different";
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT" && code !== "ENOTDIR") {
-      return "unknown";
-    }
-    const resolvedLeft = resolvePathThroughExistingParents(left);
-    const resolvedRight = resolvePathThroughExistingParents(right);
-    if (resolvedLeft === undefined || resolvedRight === undefined) {
-      return "unknown";
-    }
-    return resolvedLeft === resolvedRight ? "same" : "different";
-  }
-}
-
-function sessionStorePathsMatch(left: string, right: string): boolean {
-  // Ownership checks must fail closed: an inaccessible path may still alias the
-  // readable store, so preserve shared-owner policy until identity is known.
-  return resolveSessionStorePathRelationship(left, right) !== "different";
-}
-
-function resolvePathThroughExistingParents(filePath: string): string | undefined {
-  const resolvedPath = path.resolve(filePath);
-  const suffix = [path.basename(resolvedPath)];
-  let parentPath = path.dirname(resolvedPath);
-  while (true) {
-    try {
-      return path.join(fs.realpathSync.native(parentPath), ...suffix);
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code !== "ENOENT" && code !== "ENOTDIR") {
-        return undefined;
-      }
-      const nextParent = path.dirname(parentPath);
-      if (nextParent === parentPath) {
-        return undefined;
-      }
-      suffix.unshift(path.basename(parentPath));
-      parentPath = nextParent;
-    }
-  }
-}
-
-function sessionStorePathIsFinalSymlink(storePath: string): boolean {
-  try {
-    return fs.lstatSync(storePath).isSymbolicLink();
-  } catch {
-    return false;
-  }
-}
-
-function sessionStorePathsHaveDistinctEntries(left: string, right: string): boolean {
-  if (left === right) {
-    return false;
-  }
-  try {
-    // Replacing a final-component symlink splits it from its target. Parent
-    // symlink spellings are safe because both names still address one entry.
-    if (fs.lstatSync(left).isSymbolicLink() || fs.lstatSync(right).isSymbolicLink()) {
-      return true;
-    }
-    // Hard links resolve to distinct pathnames and split on replacement.
-    return fs.realpathSync.native(left) !== fs.realpathSync.native(right);
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT" && code !== "ENOTDIR") {
-      return true;
-    }
-    const resolvedLeft = resolvePathThroughExistingParents(left);
-    const resolvedRight = resolvePathThroughExistingParents(right);
-    return resolvedLeft === undefined || resolvedLeft !== resolvedRight;
-  }
-}
-
-function resolveSessionStoreAliasPlan(
-  storePath: string,
-  candidatePaths: Iterable<string>,
-): SessionStoreAliasPlan {
-  let hasDistinctEntries = false;
-  let hasFinalSymlink = sessionStorePathIsFinalSymlink(storePath);
-  let hasUnresolvedIdentity = false;
-  for (const candidatePath of candidatePaths) {
-    const relationship = resolveSessionStorePathRelationship(storePath, candidatePath);
-    if (relationship === "different") {
-      continue;
-    }
-    if (relationship === "unknown") {
-      hasUnresolvedIdentity = true;
-      continue;
-    }
-    hasFinalSymlink ||= sessionStorePathIsFinalSymlink(candidatePath);
-    if (sessionStorePathsHaveDistinctEntries(storePath, candidatePath)) {
-      hasDistinctEntries = true;
-    }
-  }
-  return {
-    hasDistinctAliases: hasFinalSymlink || hasDistinctEntries || hasUnresolvedIdentity,
-    hasFinalSymlink,
-    hasUnresolvedIdentity,
-  };
+  return path.resolve(expandHomePrefix(template.replaceAll("{agentId}", agentId), { env }));
 }
 
 export function mergeSessionStoreAliasPlans(
@@ -1333,9 +942,8 @@ export async function saveSessionStoreStrict(
   storePath: string,
   store: Record<string, SessionEntry>,
 ): Promise<void> {
-  await saveSessionStore(storePath, store, {
+  await saveLegacySessionStore(storePath, store, {
     skipMaintenance: true,
-    requireWriteSuccess: true,
   });
 }
 

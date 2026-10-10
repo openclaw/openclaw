@@ -1,43 +1,50 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
-import {
-  appendAssistantMessageToSessionTranscript,
-  type SessionTranscriptDeliveryMirror,
-} from "../../config/sessions/transcript.js";
+import type { SessionTranscriptDeliveryMirror } from "../../config/sessions/transcript-mirror.js";
+import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { getReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
-import { appendReplyDispatcherBeforeDeliverCancelled } from "./reply-dispatcher.js";
-import type { DispatcherOutcomeCountsView, ReplyDispatcher } from "./reply-dispatcher.types.js";
-import { readDispatcherFailedCounts } from "./reply-dispatcher.types.js";
+import {
+  getReplyPayloadMetadata,
+  type ReplyPayload,
+  type ReplyPayloadMetadata,
+} from "../reply-payload.js";
+import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 
-type SourceReplyTranscriptMirror = NonNullable<
-  NonNullable<ReturnType<typeof getReplyPayloadMetadata>>["sourceReplyTranscriptMirror"]
->;
-
-type TranscriptMirror = SourceReplyTranscriptMirror & {
-  expectedSessionId?: string;
+type TranscriptMirror = NonNullable<ReplyPayloadMetadata["sourceReplyTranscriptMirror"]> & {
+  expectedLifecycleRevision?: string;
+  expectedWriterRunId?: string;
   storePath?: string;
   preferText?: boolean;
   deliveryMirror?: SessionTranscriptDeliveryMirror;
-  transcriptOwner?: boolean;
 };
+
+function transcriptMirrorExpectations(mirror: TranscriptMirror) {
+  return {
+    ...(mirror.expectedSessionId ? { expectedSessionId: mirror.expectedSessionId } : {}),
+    ...(mirror.expectedLifecycleRevision !== undefined
+      ? { expectedLifecycleRevision: mirror.expectedLifecycleRevision }
+      : {}),
+    ...(mirror.expectedWriterRunId !== undefined
+      ? { expectedWriterRunId: mirror.expectedWriterRunId }
+      : {}),
+  };
+}
 
 export async function mirrorDeliveredReplyToTranscript(params: {
   metadata?: TranscriptMirror;
   cfg: OpenClawConfig;
 }): Promise<void> {
   const mirror = params.metadata;
-  if (!mirror) {
+  if (!mirror || mirror.transcriptOwner) {
     return;
   }
   try {
     const result = await appendAssistantMessageToSessionTranscript({
       sessionKey: mirror.sessionKey,
       agentId: mirror.agentId,
-      ...(mirror.expectedSessionId ? { expectedSessionId: mirror.expectedSessionId } : {}),
+      ...transcriptMirrorExpectations(mirror),
       text: mirror.text,
       mediaUrls: mirror.preferText && mirror.text ? undefined : mirror.mediaUrls,
       idempotencyKey: mirror.idempotencyKey,
@@ -57,17 +64,6 @@ export async function mirrorDeliveredReplyToTranscript(params: {
   }
 }
 
-/** Reads final outcome counters from dispatchers that expose them. */
-export function getDispatcherFinalOutcomeCounts(dispatcher: DispatcherOutcomeCountsView): {
-  cancelled: number;
-  failed: number;
-} {
-  return {
-    cancelled: dispatcher.getCancelledCounts?.().final ?? 0,
-    failed: readDispatcherFailedCounts(dispatcher).final,
-  };
-}
-
 export function transcriptMirrorForDeliveredPayload(
   metadata: TranscriptMirror,
   payload: ReplyPayload,
@@ -83,49 +79,9 @@ export function transcriptMirrorForDeliveredPayload(
   };
 }
 
-const STALE_FOREGROUND_SUPPRESSED_FINAL_TEXT =
-  "Channel final suppressed before delivery: stale foreground";
-
-function captureSuppressedTranscriptMirror(params: {
-  metadata: TranscriptMirror;
-  payload: ReplyPayload;
-  deliveryId?: string | number;
-}): TranscriptMirror | undefined {
-  const payloadMetadata = getReplyPayloadMetadata(params.payload);
-  if (
-    !params.metadata.transcriptOwner ||
-    payloadMetadata?.foregroundDeliverySuppression?.reason !== "stale-foreground"
-  ) {
-    return undefined;
-  }
-  const deliveryMirror = params.metadata.deliveryMirror;
-  if (!deliveryMirror) {
-    return undefined;
-  }
-  const sourceMessageId = normalizeOptionalString(deliveryMirror.sourceMessageId);
-  if (!sourceMessageId) {
-    return undefined;
-  }
-  const { transcriptOwner: _transcriptOwner, ...metadata } = params.metadata;
-  return {
-    ...metadata,
-    // The transcript owner already persisted the answer; this row records only delivery state.
-    text: STALE_FOREGROUND_SUPPRESSED_FINAL_TEXT,
-    mediaUrls: undefined,
-    preferText: true,
-    idempotencyKey: `channel-final-suppressed:${sourceMessageId}:${params.deliveryId ?? "single"}`,
-    deliveryMirror: {
-      kind: "channel-final-suppressed",
-      reason: "stale-foreground",
-      sourceMessageId,
-    },
-  };
-}
-
 export function captureDeliveredTranscriptMirror(params: {
   dispatcher: ReplyDispatcher;
   metadata?: TranscriptMirror;
-  deliveryId?: string | number;
   captureToken?: object;
 }): () => TranscriptMirror | undefined {
   if (!params.metadata || !params.dispatcher.appendBeforeDeliver) {
@@ -133,18 +89,17 @@ export function captureDeliveredTranscriptMirror(params: {
   }
   const metadata = params.metadata;
   let deliveredMetadata: TranscriptMirror | undefined;
-  let suppressedMetadata: TranscriptMirror | undefined;
   let observedFinal = false;
   const { idempotencyKey, sessionKey } = metadata;
   params.dispatcher.appendBeforeDeliver((payload, info) => {
     if (info.kind !== "final") {
       return payload;
     }
-    if (getReplyPayloadMetadata(payload)?.finalDeliveryCapture !== params.captureToken) {
+    const payloadMetadata = getReplyPayloadMetadata(payload);
+    if (payloadMetadata?.finalDeliveryCapture !== params.captureToken) {
       return payload;
     }
     observedFinal = true;
-    const payloadMetadata = getReplyPayloadMetadata(payload);
     const payloadMirror = payloadMetadata?.sourceReplyTranscriptMirror;
     if (
       payloadMirror &&
@@ -154,7 +109,7 @@ export function captureDeliveredTranscriptMirror(params: {
       deliveredMetadata = transcriptMirrorForDeliveredPayload(
         {
           ...payloadMirror,
-          ...(metadata.expectedSessionId ? { expectedSessionId: metadata.expectedSessionId } : {}),
+          ...transcriptMirrorExpectations(metadata),
           storePath: metadata.storePath,
         },
         payload,
@@ -168,48 +123,6 @@ export function captureDeliveredTranscriptMirror(params: {
     }
     return payload;
   });
-  appendReplyDispatcherBeforeDeliverCancelled(params.dispatcher, (payload, info) => {
-    if (info.kind !== "final") {
-      return;
-    }
-    if (getReplyPayloadMetadata(payload)?.finalDeliveryCapture !== params.captureToken) {
-      return;
-    }
-    observedFinal = true;
-    suppressedMetadata = captureSuppressedTranscriptMirror({
-      metadata,
-      payload,
-      deliveryId: params.deliveryId,
-    });
-  });
   return () =>
-    observedFinal
-      ? (suppressedMetadata ?? deliveredMetadata)
-      : metadata.transcriptOwner
-        ? undefined
-        : metadata;
-}
-
-export async function mirrorTranscriptAfterDispatcherSettled(params: {
-  dispatcher: ReplyDispatcher;
-  before: { cancelled: number; failed: number };
-  metadata: () => TranscriptMirror | undefined;
-  cfg: OpenClawConfig;
-}): Promise<void> {
-  const after = getDispatcherFinalOutcomeCounts(params.dispatcher);
-  const metadata = params.metadata();
-  if (!metadata) {
-    return;
-  }
-  const suppressedFinal = metadata.deliveryMirror?.kind === "channel-final-suppressed";
-  if (
-    !suppressedFinal &&
-    (after.cancelled > params.before.cancelled || after.failed > params.before.failed)
-  ) {
-    return;
-  }
-  await mirrorDeliveredReplyToTranscript({
-    metadata,
-    cfg: params.cfg,
-  });
+    observedFinal ? deliveredMetadata : metadata.transcriptOwner ? undefined : metadata;
 }

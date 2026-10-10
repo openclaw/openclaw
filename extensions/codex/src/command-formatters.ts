@@ -1,92 +1,55 @@
-/**
- * Formats Codex command responses for safe chat display, including status,
- * lists, account summaries, and user-facing help text.
- */
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexComputerUseStatus } from "./app-server/computer-use.js";
 import type { CodexAppServerModelListResult } from "./app-server/models.js";
-import { isJsonObject, type JsonObject, type JsonValue } from "./app-server/protocol.js";
+import { isJsonObject, type JsonValue } from "./app-server/protocol.js";
 import {
   hasCodexRateLimitSnapshots,
   summarizeCodexAccountRateLimits,
   summarizeCodexRateLimits,
 } from "./app-server/rate-limits.js";
+import { isLikelyEmailAddress } from "./command-account-email.js";
 import type { CodexAccountAuthOverview } from "./command-account.js";
-import type { SafeValue } from "./command-rpc.js";
+import type { readCodexStatusProbes, SafeValue } from "./command-rpc.js";
 
-type CodexStatusProbes = {
-  models: SafeValue<CodexAppServerModelListResult>;
-  account: SafeValue<JsonValue | undefined>;
-  limits: SafeValue<JsonValue | undefined>;
-  mcps: SafeValue<JsonValue | undefined>;
-  skills: SafeValue<JsonValue | undefined>;
-};
+type CodexStatusProbes = Awaited<ReturnType<typeof readCodexStatusProbes>>;
 
-/** Formats the combined `/codex status` probe result. */
 export function formatCodexStatus(probes: CodexStatusProbes): string {
   const connected =
     probes.models.ok || probes.account.ok || probes.limits.ok || probes.mcps.ok || probes.skills.ok;
-  const lines = [`Codex app-server: ${connected ? "connected" : "unavailable"}`];
-  if (probes.models.ok) {
-    lines.push(
-      `Models: ${
-        probes.models.value.models
+  return [
+    `Codex app-server: ${connected ? "connected" : "unavailable"}`,
+    `Models: ${formatProbe(
+      probes.models,
+      ({ models }) =>
+        models
           .map((model) => formatCodexDisplayText(model.id))
           .slice(0, 8)
-          .join(", ") || "none"
-      }`,
-    );
-  } else {
-    lines.push(`Models: ${formatCodexDisplayText(probes.models.error)}`);
-  }
-  lines.push(
-    `Account: ${
-      probes.account.ok
-        ? formatCodexAccountSummary(probes.account.value)
-        : formatCodexDisplayText(probes.account.error)
-    }`,
-  );
-  lines.push(
-    `Rate limits: ${
-      probes.limits.ok
-        ? formatCodexRateLimitSummary(probes.limits.value)
-        : formatCodexDisplayText(probes.limits.error)
-    }`,
-  );
-  lines.push(
-    `MCP servers: ${
-      probes.mcps.ok
-        ? summarizeArrayLike(probes.mcps.value)
-        : formatCodexDisplayText(probes.mcps.error)
-    }`,
-  );
-  lines.push(
-    `Skills: ${
-      probes.skills.ok
-        ? summarizeCodexSkills(probes.skills.value)
-        : formatCodexDisplayText(probes.skills.error)
-    }`,
-  );
-  return lines.join("\n");
+          .join(", ") || "none",
+    )}`,
+    `Account: ${formatProbe(probes.account, formatCodexAccountSummary)}`,
+    `Rate limits: ${formatProbe(probes.limits, formatCodexRateLimitSummary)}`,
+    `MCP servers: ${formatProbe(probes.mcps, summarizeArrayLike)}`,
+    `Skills: ${formatProbe(probes.skills, summarizeCodexSkills)}`,
+  ].join("\n");
 }
 
-/** Formats Codex model-list results for `/codex models`. */
+function formatProbe<T>(probe: SafeValue<T>, format: (value: T) => string): string {
+  return probe.ok ? format(probe.value) : formatCodexDisplayText(probe.error);
+}
+
 export function formatModels(result: CodexAppServerModelListResult): string {
   if (result.models.length === 0) {
     return "No Codex app-server models returned.";
   }
-  const lines = [
+  return [
     "Codex models:",
     ...result.models.map(
       (model) => `- ${formatCodexDisplayText(model.id)}${model.isDefault ? " (default)" : ""}`,
     ),
-  ];
-  if (result.truncated) {
-    lines.push("- More models available; output truncated.");
-  }
-  return lines.join("\n");
+    ...(result.truncated ? ["- More models available; output truncated."] : []),
+  ].join("\n");
 }
 
-/** Formats Codex thread-list responses with safe resume hints. */
 export function formatThreads(response: JsonValue | undefined): string {
   const threads = extractArray(response);
   if (threads.length === 0) {
@@ -96,13 +59,18 @@ export function formatThreads(response: JsonValue | undefined): string {
     "Codex threads:",
     ...threads.slice(0, 10).map((thread) => {
       const record = isJsonObject(thread) ? thread : {};
-      const id = readString(record, "threadId") ?? readString(record, "id") ?? "<unknown>";
+      const id =
+        normalizeOptionalString(record.threadId) ??
+        normalizeOptionalString(record.id) ??
+        "<unknown>";
       const title =
-        readString(record, "title") ?? readString(record, "name") ?? readString(record, "summary");
+        normalizeOptionalString(record.title) ??
+        normalizeOptionalString(record.name) ??
+        normalizeOptionalString(record.summary);
       const details = [
-        readString(record, "model"),
-        readString(record, "cwd"),
-        readString(record, "updatedAt") ?? readString(record, "lastUpdatedAt"),
+        normalizeOptionalString(record.model),
+        normalizeOptionalString(record.cwd),
+        normalizeOptionalString(record.updatedAt) ?? normalizeOptionalString(record.lastUpdatedAt),
       ].filter((value): value is string => Boolean(value));
       return `- ${formatCodexDisplayText(id)}${title ? ` - ${formatCodexDisplayText(title)}` : ""}${
         details.length > 0 ? ` (${details.map(formatCodexDisplayText).join(", ")})` : ""
@@ -111,13 +79,12 @@ export function formatThreads(response: JsonValue | undefined): string {
   ].join("\n");
 }
 
-/** Formats account and rate-limit output for `/codex account`. */
 export function formatAccount(
   account: SafeValue<JsonValue | undefined>,
   limits: SafeValue<JsonValue | undefined>,
   authOverview?: CodexAccountAuthOverview,
 ): string {
-  if (authOverview) {
+  if (authOverview?.rows.some((row) => row.active)) {
     return formatAccountAuthOverview(authOverview);
   }
   const formattedLimits = limits.ok
@@ -131,6 +98,7 @@ export function formatAccount(
   return [
     `Account: ${account.ok ? formatCodexAccountSummary(account.value) : formatCodexDisplayText(account.error)}`,
     rateLimitBlock,
+    ...(authOverview ? [formatAccountAuthOverview(authOverview)] : []),
   ].join("\n\n");
 }
 
@@ -149,7 +117,9 @@ function formatAccountAuthOverview(overview: CodexAccountAuthOverview): string {
   if (overview.rows.length > 0) {
     lines.push(overview.orderTitle);
     for (const [index, row] of overview.rows.entries()) {
-      lines.push(`  ${index + 1}. ${row.label}   ${row.kind}   — ${formatAuthRowStatus(row)}`);
+      lines.push(
+        `  ${index + 1}. ${row.label}   ${row.kind}   — ${row.billingNote ? `${row.status} · ${row.billingNote}` : row.status}`,
+      );
     }
   }
   while (lines.at(-1) === "") {
@@ -158,32 +128,17 @@ function formatAccountAuthOverview(overview: CodexAccountAuthOverview): string {
   return lines.map(formatCodexAccountLine).join("\n");
 }
 
-function formatAuthRowStatus(row: CodexAccountAuthOverview["rows"][number]): string {
-  return row.billingNote ? `${row.status} · ${row.billingNote}` : row.status;
-}
-
-/** Formats Codex Computer Use readiness and plugin/MCP availability. */
 export function formatComputerUseStatus(status: CodexComputerUseStatus): string {
   const lines = [
     `Computer Use: ${status.ready ? "ready" : status.enabled ? "not ready" : "disabled"}`,
-  ];
-  lines.push(
     `Plugin: ${formatCodexDisplayText(status.pluginName)} (${computerUsePluginState(status)})`,
-  );
-  lines.push(
     `Installation: ${formatCodexDisplayText(status.installation.status)} (${status.installation.ok ? "ok" : "not ok"})`,
-  );
-  lines.push(
     `MCP server: ${formatCodexDisplayText(status.mcpServerName)}${
       status.mcpServerAvailable ? ` (${status.tools.length} tools)` : " (unavailable)"
     }`,
-  );
-  lines.push(
     `Exposure: ${formatCodexDisplayText(status.exposure.status)} (${status.exposure.ok ? "ok" : "not ok"})`,
-  );
-  lines.push(
     `Live test: ${formatCodexDisplayText(status.liveTest.status)} (${status.liveTest.attempted ? `${status.liveTest.attempts} attempt${status.liveTest.attempts === 1 ? "" : "s"}, ${status.liveTest.timeoutMs}ms` : "not run"})`,
-  );
+  ];
   if (status.liveTest.retried || status.liveTest.repaired) {
     lines.push(
       `Live test recovery: retried=${status.liveTest.retried ? "yes" : "no"}, repaired=${
@@ -205,13 +160,15 @@ export function formatComputerUseStatus(status: CodexComputerUseStatus): string 
 }
 
 function computerUsePluginState(status: CodexComputerUseStatus): string {
+  if (status.installed === null) {
+    return "installation unchecked";
+  }
   if (!status.installed) {
     return "not installed";
   }
   return status.pluginEnabled ? "installed" : "installed, disabled";
 }
 
-/** Formats generic array-like Codex app-server responses. */
 export function formatList(response: JsonValue | undefined, label: string): string {
   const entries = extractArray(response);
   if (entries.length === 0) {
@@ -222,56 +179,28 @@ export function formatList(response: JsonValue | undefined, label: string): stri
     ...entries.slice(0, 25).map((entry) => {
       const record = isJsonObject(entry) ? entry : {};
       return `- ${formatCodexDisplayText(
-        readString(record, "name") ?? readString(record, "id") ?? JSON.stringify(entry),
+        normalizeOptionalString(record.name) ??
+          normalizeOptionalString(record.id) ??
+          JSON.stringify(entry),
       )}`;
     }),
   ].join("\n");
 }
 
-/** Formats Codex skills grouped by scope, omitting disabled entries. */
 export function formatSkills(response: JsonValue | undefined): string {
-  const groups = isJsonObject(response) && Array.isArray(response.data) ? response.data : [];
-  if (groups.length === 0) {
-    return "Codex skills: none returned.";
-  }
-  const lines = ["Codex skills:"];
-  let renderedSkills = 0;
-  let loadErrors = 0;
-  for (const group of groups) {
-    const record = isJsonObject(group) ? group : {};
-    if (Array.isArray(record.errors)) {
-      loadErrors += record.errors.length;
-    }
-    const skills = Array.isArray(record.skills) ? record.skills : [];
-    if (skills.length === 0) {
-      continue;
-    }
-    for (const skill of skills) {
-      if (isJsonObject(skill) && skill.enabled === false) {
-        continue;
-      }
-      lines.push(`- ${formatCodexSkillEntry(skill)}`);
-      renderedSkills += 1;
-    }
-  }
-  if (renderedSkills === 0) {
-    if (loadErrors > 0) {
-      return `Codex skills: none returned (${loadErrors} load ${
-        loadErrors === 1 ? "error" : "errors"
-      }).`;
-    }
-    return "Codex skills: none returned.";
-  }
-  return lines.join("\n");
+  const { skills, emptySummary } = readEnabledCodexSkills(response);
+  return skills.length > 0
+    ? ["Codex skills:", ...skills.map((skill) => `- ${formatCodexSkillEntry(skill)}`)].join("\n")
+    : `Codex skills: ${emptySummary}.`;
 }
 
 function formatCodexSkillEntry(entry: JsonValue): string {
   const record = isJsonObject(entry) ? entry : {};
-  const name = readString(record, "name") ?? "<unknown>";
+  const name = normalizeOptionalString(record.name) ?? "<unknown>";
   return `\`${formatCodexDisplayText(name)}\``;
 }
 
-const CODEX_RESUME_SAFE_THREAD_ID_PATTERN = /^[A-Za-z0-9._:-]+$/;
+export const CODEX_RESUME_SAFE_THREAD_ID_PATTERN = /^[A-Za-z0-9._:-]+$/;
 
 function formatCodexResumeHint(threadId: string): string {
   const safe = formatCodexTextForDisplay(threadId);
@@ -293,21 +222,19 @@ function formatCodexAccountSummary(value: JsonValue | undefined): string {
     : escapeCodexChatText(safe);
 }
 
-function formatCodexTextForDisplay(value: string): string {
+export function formatCodexTextForDisplay(value: string): string {
   const safe = sanitizeCodexTextForDisplay(value).trim();
   return safe || "<unknown>";
 }
 
 function sanitizeCodexTextForDisplay(value: string): string {
-  let safe = "";
-  for (const character of value) {
-    const codePoint = character.codePointAt(0);
-    safe += codePoint != null && isUnsafeDisplayCodePoint(codePoint) ? "?" : character;
-  }
-  return safe;
+  return value.replace(
+    /[\p{Cc}\u00ad\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff\ufff9-\ufffb\u{e0000}-\u{e007f}]/gu,
+    "?",
+  );
 }
 
-function escapeCodexChatText(value: string): string {
+export function escapeCodexChatText(value: string): string {
   // Command output is public chat text. Escape markdown/control triggers and
   // mention characters so Codex data cannot ping users or inject formatting.
   return value
@@ -330,7 +257,7 @@ function escapeCodexChatTextPreservingAt(value: string): string {
   return escapeCodexChatText(value).replaceAll("\uff20", "@");
 }
 
-function formatCodexAccountLine(value: string): string {
+export function formatCodexAccountLine(value: string): string {
   if (value === "") {
     return "";
   }
@@ -338,40 +265,14 @@ function formatCodexAccountLine(value: string): string {
   if (!safe.trim()) {
     return "";
   }
-  const emailPattern = /[^\s@<>()[\]`]+@[^\s@<>()[\]`]+\.[^\s@<>()[\]`]+/gu;
-  let formatted = "";
-  let lastIndex = 0;
-  for (const match of safe.matchAll(emailPattern)) {
-    const index = match.index ?? 0;
-    formatted += escapeCodexChatText(safe.slice(lastIndex, index));
-    formatted += escapeCodexChatTextPreservingAt(match[0]);
-    lastIndex = index + match[0].length;
-  }
-  formatted += escapeCodexChatText(safe.slice(lastIndex));
-  return formatted;
+  return safe
+    .split(/([^\s@<>()[\]`]+@[^\s@<>()[\]`]+\.[^\s@<>()[\]`]+)/gu)
+    .map((part, index) =>
+      index % 2 === 1 ? escapeCodexChatTextPreservingAt(part) : escapeCodexChatText(part),
+    )
+    .join("");
 }
 
-function isLikelyEmailAddress(value: string): boolean {
-  return /^[^\s@<>()[\]`]+@[^\s@<>()[\]`]+\.[^\s@<>()[\]`]+$/.test(value);
-}
-
-function isUnsafeDisplayCodePoint(codePoint: number): boolean {
-  return (
-    codePoint <= 0x001f ||
-    (codePoint >= 0x007f && codePoint <= 0x009f) ||
-    codePoint === 0x00ad ||
-    codePoint === 0x061c ||
-    codePoint === 0x180e ||
-    (codePoint >= 0x200b && codePoint <= 0x200f) ||
-    (codePoint >= 0x202a && codePoint <= 0x202e) ||
-    (codePoint >= 0x2060 && codePoint <= 0x206f) ||
-    codePoint === 0xfeff ||
-    (codePoint >= 0xfff9 && codePoint <= 0xfffb) ||
-    (codePoint >= 0xe0000 && codePoint <= 0xe007f)
-  );
-}
-
-/** Builds the portable `/codex` command help text. */
 export function buildHelp(): string {
   return [
     "Codex commands:",
@@ -395,6 +296,7 @@ export function buildHelp(): string {
     "- /codex diagnostics [note]",
     "- /codex computer-use [status|install]",
     "- /codex account",
+    "- /codex plugins refresh                   refresh hosted inventory for the current Codex account/runtime",
     "- /codex mcp",
     "- /codex skills",
     "- /codex plugins [list|enable|disable]",
@@ -406,33 +308,30 @@ function summarizeAccount(value: JsonValue | undefined): string {
     return "unavailable";
   }
   const account = isJsonObject(value.account) ? value.account : value;
-  const accountType = readString(account, "type");
+  const accountType = normalizeOptionalString(account.type);
   if (accountType === "amazonBedrock") {
     return "Amazon Bedrock";
   }
   return (
-    readString(account, "email") ??
-    readString(account, "accountEmail") ??
-    readString(account, "planType") ??
-    readString(account, "id") ??
+    normalizeOptionalString(account.email) ??
+    normalizeOptionalString(account.accountEmail) ??
+    normalizeOptionalString(account.planType) ??
+    normalizeOptionalString(account.id) ??
     "available"
   );
 }
 
 function summarizeArrayLike(value: JsonValue | undefined): string {
   const entries = extractArray(value);
-  if (entries.length === 0) {
-    return "none returned";
-  }
-  return `${entries.length}`;
+  return entries.length === 0 ? "none returned" : `${entries.length}`;
 }
 
-function summarizeCodexSkills(value: JsonValue | undefined): string {
+function readEnabledCodexSkills(value: JsonValue | undefined): {
+  skills: JsonValue[];
+  emptySummary: string;
+} {
   const groups = isJsonObject(value) && Array.isArray(value.data) ? value.data : [];
-  if (groups.length === 0) {
-    return "none returned";
-  }
-  let enabledSkills = 0;
+  const skills: JsonValue[] = [];
   let loadErrors = 0;
   for (const group of groups) {
     if (!isJsonObject(group)) {
@@ -441,20 +340,24 @@ function summarizeCodexSkills(value: JsonValue | undefined): string {
     if (Array.isArray(group.errors)) {
       loadErrors += group.errors.length;
     }
-    if (!Array.isArray(group.skills)) {
-      continue;
+    for (const skill of Array.isArray(group.skills) ? group.skills : []) {
+      if (!isJsonObject(skill) || skill.enabled !== false) {
+        skills.push(skill);
+      }
     }
-    enabledSkills += group.skills.filter(
-      (skill) => !isJsonObject(skill) || skill.enabled !== false,
-    ).length;
   }
-  if (enabledSkills > 0) {
-    return `${enabledSkills}`;
-  }
-  if (loadErrors > 0) {
-    return `none returned (${loadErrors} load ${loadErrors === 1 ? "error" : "errors"})`;
-  }
-  return "none returned";
+  return {
+    skills,
+    emptySummary:
+      loadErrors > 0
+        ? `none returned (${loadErrors} load ${loadErrors === 1 ? "error" : "errors"})`
+        : "none returned",
+  };
+}
+
+function summarizeCodexSkills(value: JsonValue | undefined): string {
+  const { skills, emptySummary } = readEnabledCodexSkills(value);
+  return skills.length > 0 ? `${skills.length}` : emptySummary;
 }
 
 function formatCodexRateLimitSummary(value: JsonValue | undefined): string {
@@ -501,7 +404,8 @@ function isMeaningfulRateLimitSnapshot(value: JsonValue | undefined): boolean {
     return false;
   }
   const reachedType =
-    readString(value, "rateLimitReachedType") ?? readString(value, "rate_limit_reached_type");
+    normalizeOptionalString(value.rateLimitReachedType) ??
+    normalizeOptionalString(value.rate_limit_reached_type);
   if (reachedType) {
     return true;
   }
@@ -525,10 +429,4 @@ function extractArray(value: JsonValue | undefined): JsonValue[] {
     }
   }
   return [];
-}
-
-/** Reads and trims a non-empty string field from a JSON object. */
-export function readString(record: JsonObject, key: string): string | undefined {
-  const value = record[key];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }

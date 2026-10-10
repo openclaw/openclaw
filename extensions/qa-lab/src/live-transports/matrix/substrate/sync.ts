@@ -1,6 +1,6 @@
-// Qa Lab Matrix module implements sync behavior.
 import {
   findMatrixQaObservedEventMatch,
+  inheritMatrixQaReplacementRelation,
   normalizeMatrixQaObservedEvent,
   type MatrixQaObservedEvent,
   type MatrixQaRoomEvent,
@@ -57,6 +57,7 @@ export type MatrixQaRoomObserver = {
 
 type MatrixQaRoomObserverState = {
   cursorIndexes: Map<string, number>;
+  eventsById: Map<string, MatrixQaObservedEvent>;
   events: MatrixQaObservedEvent[];
   pollPromise?: Promise<void>;
   since?: string;
@@ -89,18 +90,29 @@ async function pollMatrixQaRoomObserver(
   }
 
   params.roomObserver.pollPromise = (async () => {
-    const response = await requestMatrixJson<MatrixQaSyncResponse>({
-      accessToken: params.accessToken,
-      baseUrl: params.baseUrl,
-      endpoint: "/_matrix/client/v3/sync",
-      fetchImpl,
-      method: "GET",
-      query: {
-        ...(params.roomObserver.since ? { since: params.roomObserver.since } : {}),
-        timeout: Math.min(10_000, params.timeoutMs),
-      },
-      timeoutMs: Math.min(15_000, params.timeoutMs + 5_000),
-    });
+    const deadlineSignal = AbortSignal.timeout(Math.min(15_000, params.timeoutMs + 5_000));
+    let response;
+    try {
+      response = await requestMatrixJson<MatrixQaSyncResponse>({
+        accessToken: params.accessToken,
+        baseUrl: params.baseUrl,
+        endpoint: "/_matrix/client/v3/sync",
+        fetchImpl,
+        method: "GET",
+        query: {
+          ...(params.roomObserver.since ? { since: params.roomObserver.since } : {}),
+          timeout: Math.min(10_000, params.timeoutMs),
+        },
+        signal: deadlineSignal,
+      });
+    } catch (error) {
+      // An empty long-poll is expected at this observer-owned boundary. Other
+      // request failures stay terminal so auth and protocol defects remain visible.
+      if (deadlineSignal.aborted && error === deadlineSignal.reason) {
+        return;
+      }
+      throw error;
+    }
     params.roomObserver.since = response.body.next_batch?.trim() || params.roomObserver.since;
     for (const [roomId, joinedRoom] of Object.entries(response.body.rooms?.join ?? {})) {
       for (const event of joinedRoom.timeline?.events ?? []) {
@@ -108,8 +120,15 @@ async function pollMatrixQaRoomObserver(
         if (!normalized) {
           continue;
         }
-        params.observedEvents.push(normalized);
-        params.roomObserver.events.push(normalized);
+        const observed = inheritMatrixQaReplacementRelation({
+          event: normalized,
+          replacedEvent: normalized.replacesEventId
+            ? params.roomObserver.eventsById.get(normalized.replacesEventId)
+            : undefined,
+        });
+        params.roomObserver.eventsById.set(observed.eventId, observed);
+        params.observedEvents.push(observed);
+        params.roomObserver.events.push(observed);
       }
     }
   })();
@@ -129,6 +148,7 @@ export function createMatrixQaRoomObserver(
 ): MatrixQaRoomObserver {
   const roomObserver: MatrixQaRoomObserverState = {
     cursorIndexes: new Map(),
+    eventsById: new Map(),
     events: [],
     since: params.since,
   };
@@ -202,36 +222,4 @@ export function createMatrixQaRoomObserver(
       throw new Error(`timed out after ${waitParams.timeoutMs}ms waiting for Matrix room event`);
     },
   };
-}
-
-export async function waitForOptionalMatrixQaRoomEvent(
-  params: MatrixQaSyncParams & {
-    observedEvents: MatrixQaObservedEvent[];
-    predicate: (event: MatrixQaObservedEvent) => boolean;
-    roomId: string;
-    since?: string;
-    timeoutMs: number;
-  },
-): Promise<MatrixQaRoomEventWaitResult> {
-  return await createMatrixQaRoomObserver(params).waitForOptionalRoomEvent({
-    predicate: params.predicate,
-    roomId: params.roomId,
-    timeoutMs: params.timeoutMs,
-  });
-}
-
-export async function waitForMatrixQaRoomEvent(
-  params: MatrixQaSyncParams & {
-    observedEvents: MatrixQaObservedEvent[];
-    predicate: (event: MatrixQaObservedEvent) => boolean;
-    roomId: string;
-    since?: string;
-    timeoutMs: number;
-  },
-) {
-  const result = await waitForOptionalMatrixQaRoomEvent(params);
-  if (result.matched) {
-    return { event: result.event, since: result.since };
-  }
-  throw new Error(`timed out after ${params.timeoutMs}ms waiting for Matrix room event`);
 }

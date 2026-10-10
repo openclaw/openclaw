@@ -1,8 +1,7 @@
 /** Tests inbound dispatch hook composition, diagnostics, and dispatcher integration. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
-import { registerReplyDispatcherSettledTask } from "./dispatch-dispatcher.js";
+import { registerReplyDispatcherSettledTask, withReplyDispatcher } from "./dispatch-dispatcher.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "./reply-payload.js";
 import type { ReplyDispatchBeforeDeliver } from "./reply/reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply/reply-dispatcher.types.js";
@@ -13,6 +12,8 @@ type DispatchReplyFromConfigFn =
 type FinalizeInboundContextFn = typeof import("./reply/inbound-context.js").finalizeInboundContext;
 type DeriveInboundMessageHookContextFn =
   typeof import("../hooks/message-hook-mappers.js").deriveInboundMessageHookContext;
+type ResolveInboundReplyHookTargetFn =
+  typeof import("../hooks/message-hook-mappers.js").resolveInboundReplyHookTarget;
 type GetGlobalHookRunnerFn = typeof import("../plugins/hook-runner-global.js").getGlobalHookRunner;
 type CreateReplyDispatcherFn = typeof import("./reply/reply-dispatcher.js").createReplyDispatcher;
 type CreateReplyDispatcherWithTypingFn =
@@ -49,6 +50,10 @@ vi.mock("../hooks/message-hook-mappers.js", () => ({
     accountId: canonical.accountId,
     conversationId: canonical.conversationId,
   }),
+  resolveInboundReplyHookTarget: (...args: Parameters<ResolveInboundReplyHookTargetFn>) => {
+    const [finalized, hookCtx] = args;
+    return finalized.OriginatingTo || hookCtx.from || hookCtx.conversationId || hookCtx.to || "";
+  },
 }));
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
@@ -73,7 +78,7 @@ const {
   dispatchInboundMessage,
   dispatchInboundMessageWithDispatcher,
   dispatchInboundMessageWithBufferedDispatcher,
-  withReplyDispatcher,
+  dispatchInboundMessageWithProjectedDispatcher,
 } = await import("./dispatch.js");
 const { recordReplyUsageState } = await import("./reply/reply-usage-state.js");
 
@@ -108,6 +113,24 @@ function requireReplyDispatcherOptions(index = 0): Parameters<CreateReplyDispatc
     throw new Error(`expected createReplyDispatcher call ${index}`);
   }
   return call[0] as Parameters<CreateReplyDispatcherFn>[0];
+}
+
+async function installProjectedBeforeDeliver(
+  overrides: Partial<Parameters<typeof dispatchInboundMessageWithProjectedDispatcher>[0]> = {},
+): Promise<ReplyDispatchBeforeDeliver> {
+  hoisted.createReplyDispatcherMock.mockReturnValueOnce(createDispatcher([]));
+  hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
+  await dispatchInboundMessageWithProjectedDispatcher({
+    ctx: buildTestCtx({ Surface: "webchat", SessionKey: "agent:test:main" }),
+    cfg: {} as OpenClawConfig,
+    dispatcherOptions: { deliver: async () => undefined },
+    ...overrides,
+  });
+  const beforeDeliver = requireReplyDispatcherOptions().beforeDeliver;
+  if (!beforeDeliver) {
+    throw new Error("expected projected beforeDeliver hook");
+  }
+  return beforeDeliver;
 }
 
 describe("withReplyDispatcher", () => {
@@ -166,118 +189,90 @@ describe("withReplyDispatcher", () => {
     expect(order).toEqual(["sendFinalReply", "markComplete", "waitForIdle", "onSettled"]);
   });
 
-  it("emits message.received diagnostics before dispatch", async () => {
-    const events: Array<{ type: string; channel?: string; sessionKey?: string; source?: string }> =
-      [];
-    const stop = onDiagnosticEvent((event) => events.push(event));
-    const dispatcher = createDispatcher([]);
+  it.each(["run", "waitForIdle"])(
+    "runs every cleanup and preserves the original %s failure",
+    async (failedStage) => {
+      const order: string[] = [];
+      const failure = new Error(`${failedStage} failed`);
+      const laterFailure = new Error("later cleanup failed");
+      const visit = (stage: string) => {
+        order.push(stage);
+        if (stage === failedStage) {
+          throw failure;
+        }
+      };
+      const dispatcher = createDispatcher(order);
+      dispatcher.waitForIdle = async () => {
+        visit("waitForIdle");
+      };
+      registerReplyDispatcherSettledTask(dispatcher, () => {
+        visit("settledTask");
+      });
+      registerReplyDispatcherSettledTask(dispatcher, () => {
+        order.push("laterTask");
+        throw laterFailure;
+      });
+      registerReplyDispatcherSettledTask(dispatcher, () => {
+        order.push("lastTask");
+      });
+
+      await expect(
+        withReplyDispatcher({
+          dispatcher,
+          run: async () => {
+            visit("run");
+          },
+          onSettled: () => {
+            order.push("onSettled");
+            throw laterFailure;
+          },
+        }),
+      ).rejects.toBe(failure);
+
+      expect(order).toEqual([
+        "run",
+        "markComplete",
+        "waitForIdle",
+        "settledTask",
+        "laterTask",
+        "lastTask",
+        "onSettled",
+      ]);
+      dispatcher.waitForIdle = async () => undefined;
+      await withReplyDispatcher({
+        dispatcher,
+        run: async () => undefined,
+      });
+      expect(order.filter((stage) => stage === "settledTask")).toHaveLength(1);
+    },
+  );
+
+  it("composes channel and dispatcher typing-controller observers", async () => {
+    const dispatcherObserver = vi.fn();
+    const channelObserver = vi.fn();
+    hoisted.createReplyDispatcherWithTypingMock.mockReturnValueOnce({
+      dispatcher: createDispatcher([]),
+      replyOptions: { onTypingController: dispatcherObserver },
+      markDispatchIdle: vi.fn(),
+      markRunComplete: vi.fn(),
+    });
     hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({
       queuedFinal: false,
       counts: { tool: 0, block: 0, final: 0 },
     });
 
-    try {
-      await dispatchInboundMessage({
-        ctx: buildTestCtx({
-          Provider: "signal",
-          Surface: "signal",
-          SessionKey: "agent:main:signal:direct:u1",
-        }),
-        cfg: {} as OpenClawConfig,
-        dispatcher,
-      });
-    } finally {
-      stop();
-      resetDiagnosticEventsForTest();
-    }
-
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        type: "message.received",
-        channel: "signal",
-        sessionKey: "agent:main:signal:direct:u1",
-        source: "dispatchInboundMessage",
-      }),
-    );
-  });
-
-  it("always marks complete and waits for idle after success", async () => {
-    const order: string[] = [];
-    const dispatcher = createDispatcher(order);
-    registerReplyDispatcherSettledTask(dispatcher, () => {
-      order.push("settledTask");
-    });
-
-    const result = await withReplyDispatcher({
-      dispatcher,
-      run: async () => {
-        order.push("run");
-        return "ok";
-      },
-      onSettled: () => {
-        order.push("onSettled");
-      },
-    });
-
-    expect(result).toBe("ok");
-    expect(order).toEqual(["run", "markComplete", "waitForIdle", "settledTask", "onSettled"]);
-  });
-
-  it("still drains dispatcher after run throws", async () => {
-    const order: string[] = [];
-    const dispatcher = createDispatcher(order);
-    const onSettled = vi.fn(() => {
-      order.push("onSettled");
-    });
-
-    await expect(
-      withReplyDispatcher({
-        dispatcher,
-        run: async () => {
-          order.push("run");
-          throw new Error("boom");
-        },
-        onSettled,
-      }),
-    ).rejects.toThrow("boom");
-
-    expect(onSettled).toHaveBeenCalledTimes(1);
-    expect(order).toEqual(["run", "markComplete", "waitForIdle", "onSettled"]);
-  });
-
-  it("dispatchInboundMessageWithBufferedDispatcher cleans up typing after a resolver starts it", async () => {
-    const typing = {
-      onReplyStart: vi.fn(async () => {}),
-      startTypingLoop: vi.fn(async () => {}),
-      startTypingOnText: vi.fn(async () => {}),
-      refreshTypingTtl: vi.fn(),
-      isActive: vi.fn(() => true),
-      markRunComplete: vi.fn(),
-      markDispatchIdle: vi.fn(),
-      cleanup: vi.fn(),
-    };
-    hoisted.createReplyDispatcherWithTypingMock.mockReturnValueOnce({
-      dispatcher: createDispatcher([]),
-      replyOptions: {},
-      markDispatchIdle: typing.markDispatchIdle,
-      markRunComplete: typing.markRunComplete,
-    });
-    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
-
     await dispatchInboundMessageWithBufferedDispatcher({
       ctx: buildTestCtx(),
       cfg: {} as OpenClawConfig,
-      dispatcherOptions: {
-        deliver: async () => undefined,
-      },
-      replyResolver: async (_ctx, opts) => {
-        opts?.onTypingController?.(typing);
-        return { text: "ok" };
-      },
+      dispatcherOptions: { deliver: async () => undefined },
+      replyOptions: { onTypingController: channelObserver },
     });
 
-    expect(typing.markRunComplete).toHaveBeenCalledTimes(1);
-    expect(typing.markDispatchIdle).toHaveBeenCalledTimes(1);
+    const typingController = {} as never;
+    const dispatchParams = hoisted.dispatchReplyFromConfigMock.mock.calls[0]?.[0];
+    dispatchParams?.replyOptions?.onTypingController?.(typingController);
+    expect(dispatcherObserver).toHaveBeenCalledWith(typingController);
+    expect(channelObserver).toHaveBeenCalledWith(typingController);
   });
 
   it("passes runtime toolsAllow from buffered dispatch into reply resolution", async () => {
@@ -303,134 +298,6 @@ describe("withReplyDispatcher", () => {
 
     const params = hoisted.dispatchReplyFromConfigMock.mock.calls[0]?.[0];
     expect(params?.replyOptions?.toolsAllow).toEqual(["message"]);
-  });
-
-  it("runs message_sending hooks before inbound dispatcher delivery", async () => {
-    const runMessageSending = vi.fn(async () => ({ content: "sanitized reply" }));
-    hoisted.getGlobalHookRunnerMock.mockReturnValue({
-      hasHooks: vi.fn((hookName?: string) => hookName === "message_sending"),
-      runMessageSending,
-    });
-    hoisted.createReplyDispatcherMock.mockReturnValueOnce(createDispatcher([]));
-    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
-
-    await dispatchInboundMessageWithDispatcher({
-      ctx: buildTestCtx({
-        From: "whatsapp:+15551234567",
-        To: "whatsapp:+15557654321",
-        OriginatingTo: "whatsapp:+15551234567",
-      }),
-      cfg: {} as OpenClawConfig,
-      dispatcherOptions: {
-        deliver: async () => undefined,
-      },
-      replyResolver: async () => ({ text: "ok" }),
-    });
-
-    const dispatcherOptions = requireReplyDispatcherOptions();
-    if (!dispatcherOptions?.beforeDeliver) {
-      throw new Error("expected beforeDeliver hook");
-    }
-
-    const payload = await dispatcherOptions.beforeDeliver(
-      { text: "original reply" },
-      { kind: "final" },
-    );
-
-    expect(payload).toEqual({ text: "sanitized reply" });
-    const payloadWithMetadata = await dispatcherOptions.beforeDeliver(
-      setReplyPayloadMetadata({ text: "original reply" }, { assistantMessageIndex: 3 }),
-      { kind: "block" },
-    );
-    expect(payloadWithMetadata ? getReplyPayloadMetadata(payloadWithMetadata) : undefined).toEqual({
-      assistantMessageIndex: 3,
-    });
-    expect(runMessageSending).toHaveBeenCalledWith(
-      { content: "original reply", to: "whatsapp:+15551234567" },
-      {
-        channelId: "threads",
-        accountId: "acct-1",
-        conversationId: "conv-1",
-      },
-    );
-  });
-
-  it("runs reply_payload_sending hooks before inbound dispatcher delivery", async () => {
-    const runReplyPayloadSending = vi.fn(async ({ payload }: { payload: { text?: string } }) => ({
-      payload: {
-        ...payload,
-        text: `${payload.text ?? ""} + buttons`,
-        presentation: {
-          blocks: [
-            {
-              type: "buttons",
-              buttons: [{ label: "Proceed", value: "action:proceed" }],
-            },
-          ],
-        },
-      },
-    }));
-    hoisted.getGlobalHookRunnerMock.mockReturnValue({
-      hasHooks: vi.fn((hookName?: string) => hookName === "reply_payload_sending"),
-      runMessageSending: vi.fn(async () => undefined),
-      runReplyPayloadSending,
-    });
-    hoisted.createReplyDispatcherMock.mockReturnValueOnce(createDispatcher([]));
-    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
-
-    await dispatchInboundMessageWithDispatcher({
-      ctx: buildTestCtx({ Surface: "telegram", SessionKey: "agent:test:session" }),
-      cfg: {} as OpenClawConfig,
-      dispatcherOptions: {
-        deliver: async () => undefined,
-      },
-      replyOptions: { runId: "run-123" },
-      replyResolver: async () => ({ text: "ok" }),
-    });
-
-    const dispatcherOptions = requireReplyDispatcherOptions();
-    if (!dispatcherOptions?.beforeDeliver) {
-      throw new Error("expected beforeDeliver hook");
-    }
-
-    const payload = await dispatcherOptions.beforeDeliver(
-      { text: "original reply" },
-      { kind: "final" },
-    );
-
-    expect(payload).toEqual({
-      text: "original reply + buttons",
-      presentation: {
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [{ label: "Proceed", value: "action:proceed" }],
-          },
-        ],
-      },
-    });
-    const payloadWithMetadata = await dispatcherOptions.beforeDeliver(
-      setReplyPayloadMetadata({ text: "original reply" }, { assistantMessageIndex: 4 }),
-      { kind: "block" },
-    );
-    expect(payloadWithMetadata ? getReplyPayloadMetadata(payloadWithMetadata) : undefined).toEqual({
-      assistantMessageIndex: 4,
-    });
-    expect(runReplyPayloadSending).toHaveBeenCalledWith(
-      {
-        payload: { text: "original reply" },
-        kind: "final",
-        channel: "telegram",
-        sessionKey: "agent:test:session",
-        runId: "run-123",
-      },
-      {
-        channelId: "threads",
-        accountId: "acct-1",
-        conversationId: "conv-1",
-        runId: "run-123",
-      },
-    );
   });
 
   it("correlates reply_payload_sending usageState with the generated run id", async () => {
@@ -484,14 +351,29 @@ describe("withReplyDispatcher", () => {
     );
   });
 
-  it("runs message_sending after reply_payload_sending for inbound dispatcher delivery", async () => {
-    const runReplyPayloadSending = vi.fn(async ({ payload }: { payload: { text?: string } }) => ({
-      payload: {
-        ...payload,
-        text: `${payload.text ?? ""} + plugin`,
-      },
-    }));
-    const runMessageSending = vi.fn(async () => ({ content: "sanitized plugin reply" }));
+  it("runs media-aware projected modifiers once in order", async () => {
+    const order: string[] = [];
+    const runReplyPayloadSending = vi.fn(async ({ payload }: { payload: { text?: string } }) => {
+      order.push("reply_payload_sending");
+      return {
+        payload: {
+          ...payload,
+          text: "reply rewrite",
+          mediaUrls: ["media://reply.png"],
+        },
+      };
+    });
+    const runMessageSending = vi.fn(async () => {
+      order.push("message_sending");
+      return { content: "message rewrite" };
+    });
+    hoisted.deriveInboundMessageHookContextMock.mockReturnValue({
+      channelId: "webchat",
+      accountId: "acct-web",
+      conversationId: "main",
+      isGroup: false,
+      from: "main",
+    });
     hoisted.getGlobalHookRunnerMock.mockReturnValue({
       hasHooks: vi.fn(
         (hookName?: string) =>
@@ -500,80 +382,68 @@ describe("withReplyDispatcher", () => {
       runMessageSending,
       runReplyPayloadSending,
     });
-    hoisted.createReplyDispatcherMock.mockReturnValueOnce(createDispatcher([]));
-    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
-
-    await dispatchInboundMessageWithDispatcher({
+    const onSessionMetadataChanges = vi.fn();
+    const beforeDeliver = await installProjectedBeforeDeliver({
       ctx: buildTestCtx({
-        Surface: "telegram",
-        SessionKey: "agent:test:session",
-        OriginatingTo: "telegram:chat-1",
+        Surface: "webchat",
+        SessionKey: "agent:test:main",
+        OriginatingTo: "main",
       }),
       cfg: {} as OpenClawConfig,
-      dispatcherOptions: {
-        deliver: async () => undefined,
-      },
+      dispatcherOptions: { deliver: async () => undefined },
+      onSessionMetadataChanges,
+      replyOptions: { runId: "run-web" },
       replyResolver: async () => ({ text: "ok" }),
     });
-
-    const dispatcherOptions = requireReplyDispatcherOptions();
-    if (!dispatcherOptions?.beforeDeliver) {
-      throw new Error("expected beforeDeliver hook");
-    }
-
-    const payload = await dispatcherOptions.beforeDeliver(
-      { text: "original reply" },
+    const payload = await beforeDeliver(
+      setReplyPayloadMetadata({ text: "original" }, { assistantMessageIndex: 7 }),
       { kind: "final" },
     );
 
-    expect(payload).toEqual({ text: "sanitized plugin reply" });
-    expect(runReplyPayloadSending).toHaveBeenCalledWith(
-      expect.objectContaining({
-        payload: { text: "original reply" },
-      }),
-      expect.anything(),
-    );
+    expect(order).toEqual(["reply_payload_sending", "message_sending"]);
+    expect(runReplyPayloadSending).toHaveBeenCalledOnce();
+    expect(runMessageSending).toHaveBeenCalledOnce();
     expect(runMessageSending).toHaveBeenCalledWith(
-      { content: "original reply + plugin", to: "telegram:chat-1" },
-      expect.objectContaining({ channelId: "threads" }),
+      {
+        to: "main",
+        content: "reply rewrite",
+        replyToId: undefined,
+        threadId: undefined,
+        metadata: {
+          channel: "webchat",
+          accountId: "acct-web",
+          mediaUrls: ["media://reply.png"],
+        },
+      },
+      {
+        channelId: "webchat",
+        accountId: "acct-web",
+        conversationId: "main",
+        sessionKey: "agent:test:main",
+      },
+    );
+    expect(payload).toEqual({
+      text: "message rewrite",
+      mediaUrls: ["media://reply.png"],
+    });
+    expect(payload ? getReplyPayloadMetadata(payload) : undefined).toMatchObject({
+      assistantMessageIndex: 7,
+    });
+    expect(hoisted.dispatchReplyFromConfigMock.mock.calls[0]?.[0]?.onSessionMetadataChanges).toBe(
+      onSessionMetadataChanges,
     );
   });
 
-  it("suppresses inbound dispatcher delivery when reply_payload_sending empties the payload", async () => {
-    const runReplyPayloadSending = vi.fn(async ({ payload }: { payload: { text?: string } }) => ({
-      payload: {
-        ...payload,
-        text: "",
-      },
-    }));
+  it("stops projected delivery before message hooks when reply hooks cancel", async () => {
+    const runMessageSending = vi.fn(async () => ({ content: "unreachable" }));
     hoisted.getGlobalHookRunnerMock.mockReturnValue({
-      hasHooks: vi.fn((hookName?: string) => hookName === "reply_payload_sending"),
-      runMessageSending: vi.fn(async () => undefined),
-      runReplyPayloadSending,
+      hasHooks: vi.fn(() => true),
+      runMessageSending,
+      runReplyPayloadSending: vi.fn(async () => ({ cancel: true })),
     });
-    hoisted.createReplyDispatcherMock.mockReturnValueOnce(createDispatcher([]));
-    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
-
-    await dispatchInboundMessageWithDispatcher({
-      ctx: buildTestCtx({ Surface: "telegram", SessionKey: "agent:test:session" }),
-      cfg: {} as OpenClawConfig,
-      dispatcherOptions: {
-        deliver: async () => undefined,
-      },
-      replyResolver: async () => ({ text: "ok" }),
-    });
-
-    const dispatcherOptions = requireReplyDispatcherOptions();
-    if (!dispatcherOptions?.beforeDeliver) {
-      throw new Error("expected beforeDeliver hook");
-    }
-
-    const payload = await dispatcherOptions.beforeDeliver(
-      { text: "original reply" },
-      { kind: "final" },
-    );
-
-    expect(payload).toBeNull();
+    const beforeDeliver = await installProjectedBeforeDeliver();
+    await expect(beforeDeliver({ text: "original" }, { kind: "final" })).resolves.toBeNull();
+    expect(runMessageSending).not.toHaveBeenCalled();
   });
 
   it("installs reply_payload_sending hooks on prebuilt dispatchers", async () => {
@@ -630,88 +500,6 @@ describe("withReplyDispatcher", () => {
     );
   });
 
-  it("installs reply_payload_sending hooks before lazy plugin availability is known", async () => {
-    hoisted.getGlobalHookRunnerMock.mockReturnValue({
-      hasHooks: vi.fn(() => false),
-      runMessageSending: vi.fn(async () => undefined),
-      runReplyPayloadSending: vi.fn(async () => undefined),
-    });
-    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
-    const dispatcher = {
-      ...createDispatcher([]),
-      appendBeforeDeliver: vi.fn(),
-    };
-
-    await dispatchInboundMessage({
-      ctx: buildTestCtx({ Surface: "discord", SessionKey: "agent:test:session" }),
-      cfg: {} as OpenClawConfig,
-      dispatcher,
-      replyOptions: { runId: "run-789" },
-      replyResolver: async () => ({ text: "ok" }),
-    });
-
-    expect(dispatcher.appendBeforeDeliver).toHaveBeenCalledTimes(1);
-  });
-
-  it("reconciles queuedFinal and counts after dispatcher-side cancellation", async () => {
-    const dispatcher = {
-      sendToolResult: () => true,
-      sendBlockReply: () => true,
-      sendFinalReply: () => true,
-      getQueuedCounts: () => ({ tool: 0, block: 0, final: 0 }),
-      getCancelledCounts: () => ({ tool: 0, block: 0, final: 1 }),
-      getFailedCounts: () => ({ tool: 0, block: 0, final: 0 }),
-      markComplete: () => undefined,
-      waitForIdle: async () => undefined,
-    } satisfies ReplyDispatcher;
-    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({
-      queuedFinal: true,
-      counts: { tool: 0, block: 0, final: 1 },
-    });
-
-    const result = await dispatchInboundMessage({
-      ctx: buildTestCtx(),
-      cfg: {} as OpenClawConfig,
-      dispatcher,
-      replyResolver: async () => ({ text: "ok" }),
-    });
-
-    expect(result).toEqual({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
-  });
-
-  it("reconciles queuedFinal and counts after dispatcher-side delivery failure", async () => {
-    const dispatcher = {
-      sendToolResult: () => true,
-      sendBlockReply: () => true,
-      sendFinalReply: () => true,
-      getQueuedCounts: () => ({ tool: 0, block: 0, final: 0 }),
-      getCancelledCounts: () => ({ tool: 0, block: 0, final: 0 }),
-      getFailedCounts: () => ({ tool: 0, block: 0, final: 1 }),
-      markComplete: () => undefined,
-      waitForIdle: async () => undefined,
-    } satisfies ReplyDispatcher;
-    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({
-      queuedFinal: true,
-      counts: { tool: 0, block: 0, final: 1 },
-    });
-
-    const result = await dispatchInboundMessage({
-      ctx: buildTestCtx(),
-      cfg: {} as OpenClawConfig,
-      dispatcher,
-      replyResolver: async () => ({ text: "ok" }),
-    });
-
-    expect(result).toEqual({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-      failedCounts: { tool: 0, block: 0, final: 1 },
-    });
-  });
-
   it("uses CommandTargetSessionKey for silent-reply policy on native command turns", async () => {
     hoisted.createReplyDispatcherWithTypingMock.mockReturnValueOnce({
       dispatcher: createDispatcher([]),
@@ -726,6 +514,7 @@ describe("withReplyDispatcher", () => {
         SessionKey: "agent:test:telegram:slash:8231046597",
         CommandSource: "native",
         CommandTargetSessionKey: "agent:test:telegram:direct:8231046597",
+        ChatType: "group",
         Surface: "telegram",
       }),
       cfg: {} as OpenClawConfig,
@@ -740,34 +529,7 @@ describe("withReplyDispatcher", () => {
       "agent:test:telegram:direct:8231046597",
     );
     expect(dispatcherOptions.silentReplyContext?.surface).toBe("telegram");
-  });
-
-  it("passes explicit direct conversation type for generic silent-reply policy keys", async () => {
-    hoisted.createReplyDispatcherWithTypingMock.mockReturnValueOnce({
-      dispatcher: createDispatcher([]),
-      replyOptions: {},
-      markDispatchIdle: vi.fn(),
-      markRunComplete: vi.fn(),
-    });
-    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
-
-    await dispatchInboundMessageWithBufferedDispatcher({
-      ctx: buildTestCtx({
-        SessionKey: "agent:test:main",
-        ChatType: "dm",
-        Surface: "discord",
-      }),
-      cfg: {} as OpenClawConfig,
-      dispatcherOptions: {
-        deliver: async () => undefined,
-      },
-      replyResolver: async () => ({ text: "ok" }),
-    });
-
-    const dispatcherOptions = lastTypingDispatcherOptions();
-    expect(dispatcherOptions.silentReplyContext?.sessionKey).toBe("agent:test:main");
-    expect(dispatcherOptions.silentReplyContext?.surface).toBe("discord");
-    expect(dispatcherOptions.silentReplyContext?.conversationType).toBe("direct");
+    expect(dispatcherOptions.silentReplyContext?.conversationType).not.toBe("group");
   });
 
   it("composes custom beforeDeliver with reply_payload_sending hooks", async () => {
@@ -836,35 +598,5 @@ describe("withReplyDispatcher", () => {
     expect(payloadWithMetadata ? getReplyPayloadMetadata(payloadWithMetadata) : undefined).toEqual({
       assistantMessageIndex: 5,
     });
-  });
-
-  it("does not copy source conversation type onto cross-session native silent-reply targets", async () => {
-    hoisted.createReplyDispatcherWithTypingMock.mockReturnValueOnce({
-      dispatcher: createDispatcher([]),
-      replyOptions: {},
-      markDispatchIdle: vi.fn(),
-      markRunComplete: vi.fn(),
-    });
-    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
-
-    await dispatchInboundMessageWithBufferedDispatcher({
-      ctx: buildTestCtx({
-        SessionKey: "agent:test:main",
-        CommandSource: "native",
-        CommandTargetSessionKey: "agent:test:direct:user",
-        ChatType: "group",
-        Surface: "telegram",
-      }),
-      cfg: {} as OpenClawConfig,
-      dispatcherOptions: {
-        deliver: async () => undefined,
-      },
-      replyResolver: async () => ({ text: "ok" }),
-    });
-
-    const dispatcherOptions = lastTypingDispatcherOptions();
-    expect(dispatcherOptions.silentReplyContext?.sessionKey).toBe("agent:test:direct:user");
-    expect(dispatcherOptions.silentReplyContext?.surface).toBe("telegram");
-    expect(dispatcherOptions.silentReplyContext?.conversationType).not.toBe("group");
   });
 });

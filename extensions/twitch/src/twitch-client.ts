@@ -1,43 +1,61 @@
-// Twitch plugin module implements twitch client behavior.
 import { RefreshingAuthProvider, StaticAuthProvider } from "@twurple/auth";
 import { ChatClient, LogLevel } from "@twurple/chat";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-resolution";
+import {
+  createChannelPartialDeliveryError,
+  isChannelPartialDeliveryError,
+} from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
+import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { TWITCH_CHAT_MESSAGE_LIMIT } from "./constants.js";
 import { resolveTwitchToken } from "./token.js";
-import type { ChannelLogSink, TwitchAccountConfig, TwitchChatMessage } from "./types.js";
+import type {
+  ChannelAccountSnapshot,
+  ChannelLogSink,
+  TwitchAccountConfig,
+  TwitchChatMessage,
+} from "./types.js";
 import { normalizeToken } from "./utils/twitch.js";
 
 const TWITCH_CHAT_AUTH_INTENTS = ["chat"];
 
-/**
- * Manages Twitch chat client connections
- */
 export class TwitchClientManager {
   private clients = new Map<string, ChatClient>();
   private pendingClients = new Map<string, ChatClient>();
   private connectionPromises = new Map<string, Promise<ChatClient>>();
-  private messageHandlers = new Map<string, (message: TwitchChatMessage) => void>();
-  private messageHandlerTokens = new Map<string, symbol>();
+  private messageHandlers = new Map<string, { handler: (message: TwitchChatMessage) => void }>();
 
-  constructor(private logger: ChannelLogSink) {}
+  constructor(
+    private logger: ChannelLogSink,
+    private statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void,
+  ) {}
 
-  /**
-   * Create an auth provider for the account.
-   */
+  setStatusSink(statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void): void {
+    if (statusSink) {
+      this.statusSink = statusSink;
+    }
+  }
+
+  private publishReady(): void {
+    this.statusSink?.(channelReadyPatch());
+  }
+
+  private publishRecovering(lastError: string): void {
+    this.statusSink?.({ connected: false, lifecycle: "recovering", lastError });
+  }
+
   private async createAuthProvider(
     account: TwitchAccountConfig,
     normalizedToken: string,
+    clientId: string,
   ): Promise<StaticAuthProvider | RefreshingAuthProvider> {
-    if (!account.clientId) {
-      throw new Error("Missing Twitch client ID");
-    }
-
     if (account.clientSecret) {
       const authProvider = new RefreshingAuthProvider({
-        clientId: account.clientId,
+        clientId,
         clientSecret: account.clientSecret,
       });
 
@@ -80,12 +98,9 @@ export class TwitchClientManager {
     }
 
     this.logger.info(`Using StaticAuthProvider for ${account.username} (no clientSecret provided)`);
-    return new StaticAuthProvider(account.clientId, normalizedToken);
+    return new StaticAuthProvider(clientId, normalizedToken);
   }
 
-  /**
-   * Get or create a chat client for an account
-   */
   async getClient(
     account: TwitchAccountConfig,
     cfg?: OpenClawConfig,
@@ -102,7 +117,13 @@ export class TwitchClientManager {
       return pending;
     }
 
-    const connection = this.createConnectedClient(key, account, cfg, accountId);
+    const connection: Promise<ChatClient> = this.createConnectedClient(
+      key,
+      account,
+      () => this.connectionPromises.get(key) === connection,
+      cfg,
+      accountId,
+    );
     this.connectionPromises.set(key, connection);
     try {
       return await connection;
@@ -116,6 +137,7 @@ export class TwitchClientManager {
   private async createConnectedClient(
     key: string,
     account: TwitchAccountConfig,
+    ownsConnection: () => boolean,
     cfg?: OpenClawConfig,
     accountId?: string,
   ): Promise<ChatClient> {
@@ -124,10 +146,13 @@ export class TwitchClientManager {
     });
 
     if (!tokenResolution.token) {
-      this.logger.error(
-        `Missing Twitch token for account ${account.username} (set channels.twitch.accounts.${account.username}.token or OPENCLAW_TWITCH_ACCESS_TOKEN for default)`,
+      const resolvedAccountId = accountId ?? DEFAULT_ACCOUNT_ID;
+      const tokenConfigPath = cfg?.channels?.twitch?.accounts
+        ? `channels.twitch.accounts.${resolvedAccountId}.accessToken`
+        : "channels.twitch.accessToken";
+      throw new Error(
+        `Missing Twitch token for account ${resolvedAccountId} (set ${tokenConfigPath} or OPENCLAW_TWITCH_ACCESS_TOKEN for default)`,
       );
-      throw new Error("Missing Twitch token");
     }
 
     this.logger.debug?.(`Using ${tokenResolution.source} token source for ${account.username}`);
@@ -139,7 +164,10 @@ export class TwitchClientManager {
 
     const normalizedToken = normalizeToken(tokenResolution.token);
 
-    const authProvider = await this.createAuthProvider(account, normalizedToken);
+    const authProvider = await this.createAuthProvider(account, normalizedToken, account.clientId);
+    if (!ownsConnection()) {
+      throw new Error(`Twitch connection cancelled for ${account.username}`);
+    }
 
     const client = new ChatClient({
       authProvider,
@@ -152,8 +180,6 @@ export class TwitchClientManager {
           log: (level, message) => {
             switch (level) {
               case LogLevel.CRITICAL:
-                this.logger.error(message);
-                break;
               case LogLevel.ERROR:
                 this.logger.error(message);
                 break;
@@ -164,8 +190,6 @@ export class TwitchClientManager {
                 this.logger.info(message);
                 break;
               case LogLevel.DEBUG:
-                this.logger.debug?.(message);
-                break;
               case LogLevel.TRACE:
                 this.logger.debug?.(message);
                 break;
@@ -175,8 +199,6 @@ export class TwitchClientManager {
       },
     });
 
-    this.setupClientHandlers(client, account);
-
     this.pendingClients.set(key, client);
     try {
       await this.connectClient(client, account);
@@ -184,14 +206,13 @@ export class TwitchClientManager {
         client.quit();
         throw new Error(`Twitch connection cancelled for ${account.username}`);
       }
-      this.pendingClients.delete(key);
-    } catch (error) {
+    } finally {
       if (this.pendingClients.get(key) === client) {
         this.pendingClients.delete(key);
       }
-      throw error;
     }
 
+    this.setupClientHandlers(client, account);
     this.clients.set(key, client);
     this.logger.info(`Connected to Twitch as ${account.username}`);
 
@@ -209,9 +230,7 @@ export class TwitchClientManager {
           return;
         }
         settled = true;
-        if (timeout) {
-          clearTimeout(timeout);
-        }
+        clearTimeout(timeout);
         for (const listener of listeners) {
           listener.unbind();
         }
@@ -227,14 +246,21 @@ export class TwitchClientManager {
         resolve();
       };
       listeners.push(
-        client.onAuthenticationSuccess(() => finish()),
+        client.onAuthenticationSuccess(() => {
+          this.publishReady();
+          finish();
+        }),
         client.onAuthenticationFailure((text) => {
           authRetryPending = true;
+          this.publishRecovering(text);
           this.logger.warn(
             `Twitch authentication failed for ${account.username}; waiting for retry, disconnect, or timeout: ${text}`,
           );
         }),
         client.onDisconnect((manual, reason) => {
+          if (!manual) {
+            this.publishRecovering(reason ? formatErrorMessage(reason) : "Twitch connection lost");
+          }
           if (authRetryPending && !manual) {
             this.logger.debug?.(
               `Twitch disconnected during auth retry for ${account.username}: ${formatErrorMessage(reason)}`,
@@ -251,7 +277,7 @@ export class TwitchClientManager {
           );
         }),
       );
-      const timeout: NodeJS.Timeout | undefined = setTimeout(
+      const timeout = setTimeout(
         () => finish(new Error(`Timed out connecting to Twitch as ${account.username}`)),
         connectTimeoutMs,
       );
@@ -264,21 +290,16 @@ export class TwitchClientManager {
     });
   }
 
-  /**
-   * Set up message and event handlers for a client
-   */
   private setupClientHandlers(client: ChatClient, account: TwitchAccountConfig): void {
     const key = this.getAccountKey(account);
 
-    // Handle incoming messages
     client.onMessage((channelName, _user, messageText, msg) => {
-      const handler = this.messageHandlers.get(key);
+      const handler = this.messageHandlers.get(key)?.handler;
       if (handler) {
-        const normalizedChannel = channelName.startsWith("#") ? channelName.slice(1) : channelName;
         const from = `twitch:${msg.userInfo.userName}`;
         const preview = sliceUtf16Safe(messageText, 0, 100).replace(/\n/g, "\\n");
         this.logger.debug?.(
-          `twitch inbound: channel=${normalizedChannel} from=${from} len=${messageText.length} preview="${preview}"`,
+          `twitch inbound: channel=${channelName} from=${from} len=${messageText.length} preview="${preview}"`,
         );
 
         handler({
@@ -286,9 +307,10 @@ export class TwitchClientManager {
           displayName: msg.userInfo.displayName,
           userId: msg.userInfo.userId,
           message: messageText,
-          channel: normalizedChannel,
+          // Preserve the raw callback channel; durable dispatch normalizes it.
+          channel: channelName,
           id: msg.id,
-          timestamp: new Date(),
+          timestamp: Date.now(),
           isMod: msg.userInfo.isMod,
           isOwner: msg.userInfo.isBroadcaster,
           isVip: msg.userInfo.isVip,
@@ -297,63 +319,57 @@ export class TwitchClientManager {
         });
       }
     });
+    client.onAuthenticationSuccess(() => this.publishReady());
+    client.onAuthenticationFailure((text) => {
+      this.publishRecovering(text);
+    });
+    client.onDisconnect((manual, reason) => {
+      if (!manual) {
+        this.publishRecovering(reason ? formatErrorMessage(reason) : "Twitch connection lost");
+      }
+    });
 
     this.logger.info(`Set up handlers for ${key}`);
   }
 
-  /**
-   * Set a message handler for an account
-   * @returns A function that removes the handler when called
-   */
   onMessage(
     account: TwitchAccountConfig,
     handler: (message: TwitchChatMessage) => void,
   ): () => void {
     const key = this.getAccountKey(account);
-    const token = Symbol(key);
-    this.messageHandlers.set(key, handler);
-    this.messageHandlerTokens.set(key, token);
+    const registration = { handler };
+    this.messageHandlers.set(key, registration);
     return () => {
       // Only remove the exact registration this cleanup closure owns. A later
       // onMessage() may reuse the same callback function for the same account.
-      if (this.messageHandlerTokens.get(key) === token) {
+      if (this.messageHandlers.get(key) === registration) {
         this.messageHandlers.delete(key);
-        this.messageHandlerTokens.delete(key);
       }
     };
   }
 
-  private clearMessageHandler(key: string): void {
-    this.messageHandlers.delete(key);
-    this.messageHandlerTokens.delete(key);
-  }
-
-  /**
-   * Disconnect a client
-   */
   async disconnect(account: TwitchAccountConfig): Promise<void> {
     const key = this.getAccountKey(account);
     const client = this.clients.get(key);
     const pendingClient = this.pendingClients.get(key);
+    const pendingConnection = this.connectionPromises.delete(key);
 
     if (pendingClient) {
       pendingClient.quit();
       this.pendingClients.delete(key);
-      this.connectionPromises.delete(key);
-      this.clearMessageHandler(key);
     }
 
     if (client) {
       client.quit();
       this.clients.delete(key);
-      this.clearMessageHandler(key);
       this.logger.info(`Disconnected ${key}`);
+    }
+
+    if (pendingConnection || pendingClient || client) {
+      this.messageHandlers.delete(key);
     }
   }
 
-  /**
-   * Disconnect all clients
-   */
   async disconnectAll(): Promise<void> {
     this.pendingClients.forEach((client) => client.quit());
     this.clients.forEach((client) => client.quit());
@@ -361,55 +377,56 @@ export class TwitchClientManager {
     this.connectionPromises.clear();
     this.clients.clear();
     this.messageHandlers.clear();
-    this.messageHandlerTokens.clear();
     this.logger.info(" Disconnected all clients");
   }
 
-  /**
-   * Send a message to a channel
-   */
   async sendMessage(
     account: TwitchAccountConfig,
     channel: string,
     message: string,
     cfg?: OpenClawConfig,
     accountId?: string,
-  ): Promise<{ ok: boolean; error?: string; messageId?: string }> {
+  ): Promise<{ ok: true; messageId: string } | { ok: false; error: string }> {
+    const effect = captureEffectAuthority();
+    let preparingUse = false;
     try {
       const client = await this.getClient(account, cfg, accountId);
 
-      // Generate a message ID (Twurple's say() doesn't return the message ID, so we generate one)
+      // Twurple say() does not return a provider message ID.
       const messageId = crypto.randomUUID();
 
-      // Pre-chunk so Twurple's raw UTF-16 fallback cannot split surrogate pairs.
-      for (const chunk of chunkTextForOutbound(message, TWITCH_CHAT_MESSAGE_LIMIT)) {
-        await client.say(channel, chunk);
+      // Prechunk before Twurple's raw UTF-16 fallback can split surrogate pairs.
+      const chunks = chunkTextForOutbound(message, TWITCH_CHAT_MESSAGE_LIMIT);
+      preparingUse = true;
+      const results = await effect.initiate(() => {
+        preparingUse = false;
+        // Admit the whole prechunked message before any SDK call. Twurple owns
+        // rate limiting after these synchronous handoffs; responses do not hold authority.
+        return Promise.allSettled(chunks.map(async (chunk) => client.say(channel, chunk)));
+      });
+      const failure = results.find((result) => result.status === "rejected");
+      if (failure) {
+        if (results.some((result) => result.status === "fulfilled")) {
+          throw createChannelPartialDeliveryError(failure.reason, {
+            messageIds: [messageId],
+            visibleReplySent: true,
+          });
+        }
+        throw failure.reason;
       }
 
       return { ok: true, messageId };
     } catch (error) {
-      this.logger.error(`Failed to send message: ${formatErrorMessage(error)}`);
-      return {
-        ok: false,
-        error: formatErrorMessage(error),
-      };
+      if (preparingUse || isChannelPartialDeliveryError(error)) {
+        throw error;
+      }
+      const errorMessage = formatErrorMessage(error);
+      this.logger.error(`Failed to send message: ${errorMessage}`);
+      return { ok: false, error: errorMessage };
     }
   }
 
-  /**
-   * Generate a unique key for an account
-   */
   public getAccountKey(account: TwitchAccountConfig): string {
     return `${account.username}:${account.channel}`;
-  }
-
-  /**
-   * Clear all clients and handlers (for testing)
-   */
-  clearForTest(): void {
-    this.clients.clear();
-    this.pendingClients.clear();
-    this.connectionPromises.clear();
-    this.messageHandlers.clear();
   }
 }

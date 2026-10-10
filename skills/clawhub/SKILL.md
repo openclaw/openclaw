@@ -1,24 +1,40 @@
 ---
 name: clawhub
-description: "Search ClawHub for skills when a requested capability is not already available; install, verify, update, publish, or sync skills."
+description: "Search ClawHub for plugins by default, or skills when explicitly requested; install, verify, update, uninstall, publish, or sync skills."
 ---
 
 # ClawHub
 
-Use `openclaw skills` to discover and manage skills for the current OpenClaw
-agent. Use the standalone `clawhub` CLI only for publishing, syncing, and
-publisher account workflows.
+Prefer searching ClawHub for plugins unless the user explicitly asks for a skill.
+Search before claiming that a requested capability is unavailable.
 
-## Discover skills
+Use `openclaw skills` for explicitly requested skill discovery and for managing
+skills for the current OpenClaw agent. Use the standalone `clawhub` CLI to uninstall
+installed ClawHub skills and for publishing, syncing, and publisher account
+workflows.
 
-Search before claiming that a requested capability is unavailable:
+## Discover plugins (default)
+
+Use the `plugins` tool when available, with `action: "search"` and `query` set to
+the requested capability, to return native plugin search results. If the tool is
+unavailable, use the CLI:
+
+```bash
+openclaw plugins search "notion"
+```
+
+A discovery request does not authorize installation. Install only when the user
+asks.
+
+## Discover skills (explicit requests)
+
+When the user explicitly asks for a skill, search skills instead of plugins:
 
 ```bash
 openclaw skills search "postgres backups"
 ```
 
-Before installing, verify the selected skill and treat third-party skills as
-untrusted. Obtain user approval before installation.
+Install when the user asks. Verify the selected skill first and report the result.
 
 ```bash
 openclaw skills verify my-skill
@@ -37,6 +53,34 @@ openclaw skills update --all
 
 Use `--global` with `install` or `update` to manage skills shared by all local
 agents.
+
+## Remove an installed skill
+
+Uninstall when the user asks. If the standalone ClawHub CLI is not
+installed, install it explicitly:
+
+```bash
+npm i -g clawhub
+clawhub uninstall @owner/my-skill
+```
+
+The CLI asks for confirmation before removing the skill and its lockfile entry.
+Use the original agent workspace for agent-specific skills or the OpenClaw
+state directory for skills installed with `--global`:
+
+```bash
+clawhub --workdir /path/to/agent-workspace uninstall @owner/my-skill
+clawhub --workdir ~/.openclaw uninstall @owner/my-skill
+```
+
+If `OPENCLAW_STATE_DIR` is set, use its value instead of `~/.openclaw`:
+
+```bash
+clawhub --workdir "$OPENCLAW_STATE_DIR" uninstall @owner/my-skill
+```
+
+The default skills watcher refreshes the available skills on the next agent
+turn. If watching is disabled, start a new session.
 
 ## Publish skills
 

@@ -1,18 +1,54 @@
+import { requireActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { clearPersistedContextEngineQuarantineForProcess } from "./quarantine-health.js";
+import {
+  clearPersistedContextEngineQuarantineForProcess,
+  recordPersistedContextEngineQuarantine,
+} from "./quarantine-health.js";
+
+type ContextEngineRuntimeQuarantineForTests = {
+  engineId: string;
+  owner?: string;
+  operation: string;
+  reason: string;
+  failedAt: Date;
+};
 
 type ContextEngineRegistryStateForTests = {
-  engines: Map<string, unknown>;
-  quarantinedEngines: Map<string, unknown>;
+  quarantinedEngines: Map<string, ContextEngineRuntimeQuarantineForTests>;
 };
 
 const CONTEXT_ENGINE_REGISTRY_STATE = Symbol.for("openclaw.contextEngineRegistryState");
 
-export function resetContextEngineRuntimeQuarantineForTests(): void {
-  const state = resolveGlobalSingleton<ContextEngineRegistryStateForTests>(
+function getContextEngineRegistryStateForTests(): ContextEngineRegistryStateForTests {
+  return resolveGlobalSingleton<ContextEngineRegistryStateForTests>(
     CONTEXT_ENGINE_REGISTRY_STATE,
-    () => ({ engines: new Map(), quarantinedEngines: new Map() }),
+    () => ({ quarantinedEngines: new Map() }),
   );
+}
+
+export function captureContextEngineRegistryStateForTests(): () => Promise<void> {
+  const state = getContextEngineRegistryStateForTests();
+  const registry = requireActivePluginRegistry();
+  const engines = new Map(registry.contextEngines);
+  const quarantinedEngines = new Map(state.quarantinedEngines);
+
+  return async () => {
+    registry.contextEngines.clear();
+    for (const [engineId, registration] of engines) {
+      registry.contextEngines.set(engineId, registration as never);
+    }
+
+    state.quarantinedEngines.clear();
+    await clearPersistedContextEngineQuarantineForProcess(undefined, process.pid);
+    for (const [engineId, quarantine] of quarantinedEngines) {
+      state.quarantinedEngines.set(engineId, quarantine);
+      await recordPersistedContextEngineQuarantine(quarantine);
+    }
+  };
+}
+
+export async function resetContextEngineRuntimeQuarantineForTests(): Promise<void> {
+  const state = getContextEngineRegistryStateForTests();
   state.quarantinedEngines.clear();
-  clearPersistedContextEngineQuarantineForProcess(undefined, process.pid);
+  await clearPersistedContextEngineQuarantineForProcess(undefined, process.pid);
 }

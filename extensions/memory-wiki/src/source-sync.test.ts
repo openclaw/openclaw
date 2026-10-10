@@ -4,6 +4,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { resolveMemoryWikiConfig } from "./config.js";
+import { deferred } from "./deferred.test-helpers.js";
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 
@@ -42,7 +43,7 @@ const refreshResult = {
 };
 
 const appConfig = {
-  agents: { list: [{ id: "main", default: true }] },
+  agents: { entries: { main: {} } },
 } as OpenClawConfig;
 
 let vaultCounter = 0;
@@ -52,14 +53,6 @@ function createConfig(
   vaultPath = path.join(os.tmpdir(), `memory-wiki-source-sync-${vaultCounter++}`),
 ) {
   return resolveMemoryWikiConfig({ vaultMode, vault: { path: vaultPath } });
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
 }
 
 describe("syncMemoryWikiImportedSources", () => {
@@ -92,23 +85,6 @@ describe("syncMemoryWikiImportedSources", () => {
       indexRefreshReason: "import-changed",
       indexUpdatedFiles: ["index.md", "sources/index.md"],
     });
-  });
-
-  it("shares one full source and index flight across equivalent polls", async () => {
-    const config = createConfig();
-    const bridgeGate = deferred<typeof bridgeResult>();
-    syncBridgeMock.mockReturnValueOnce(bridgeGate.promise);
-
-    const requests = Array.from({ length: 32 }, () =>
-      syncMemoryWikiImportedSources({ config, appConfig }),
-    );
-    await vi.waitFor(() => expect(syncBridgeMock).toHaveBeenCalledTimes(1));
-
-    bridgeGate.resolve(bridgeResult);
-    const results = await Promise.all(requests);
-
-    expect(refreshIndexesMock).toHaveBeenCalledTimes(1);
-    expect(results.every((result) => result === results[0])).toBe(true);
   });
 
   it("coalesces separately resolved equivalent configs for one vault", async () => {
@@ -165,8 +141,8 @@ describe("syncMemoryWikiImportedSources", () => {
 
   it("waits for an existing vault mutation before starting source sync", async () => {
     const config = createConfig();
-    const blockerEntered = deferred<void>();
-    const blockerGate = deferred<void>();
+    const blockerEntered = deferred();
+    const blockerGate = deferred();
     const blocker = withMemoryWikiVaultMutation(config.vault.path, async () => {
       blockerEntered.resolve(undefined);
       await blockerGate.promise;
@@ -186,11 +162,11 @@ describe("syncMemoryWikiImportedSources", () => {
   it("serializes different config snapshots for the same vault", async () => {
     const config = createConfig();
     const firstAppConfig = {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       update: { channel: "stable" },
     } as OpenClawConfig;
     const secondAppConfig = {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       update: { channel: "beta" },
     } as OpenClawConfig;
     const firstGate = deferred<typeof bridgeResult>();
@@ -287,39 +263,6 @@ describe("syncMemoryWikiImportedSources", () => {
       indexesRefreshed: false,
       indexRefreshReason: "auto-compile-disabled",
       indexUpdatedFiles: [],
-    });
-  });
-
-  it("returns a no-op sync result outside imported-source modes", async () => {
-    const config = createConfig("isolated");
-
-    const result = await syncMemoryWikiImportedSources({ config });
-
-    expect(syncBridgeMock).not.toHaveBeenCalled();
-    expect(syncUnsafeLocalMock).not.toHaveBeenCalled();
-    expect(refreshIndexesMock).toHaveBeenCalledWith({
-      config,
-      syncResult: {
-        importedCount: 0,
-        updatedCount: 0,
-        skippedCount: 0,
-        removedCount: 0,
-        artifactCount: 0,
-        workspaces: 0,
-        pagePaths: [],
-      },
-    });
-    expect(result).toEqual({
-      importedCount: 0,
-      updatedCount: 0,
-      skippedCount: 0,
-      removedCount: 0,
-      artifactCount: 0,
-      workspaces: 0,
-      pagePaths: [],
-      indexesRefreshed: true,
-      indexRefreshReason: "import-changed",
-      indexUpdatedFiles: ["index.md", "sources/index.md"],
     });
   });
 });

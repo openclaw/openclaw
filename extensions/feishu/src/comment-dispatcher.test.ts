@@ -6,8 +6,20 @@ const createFeishuClientMock = vi.hoisted(() => vi.fn());
 const createReplyPrefixContextMock = vi.hoisted(() => vi.fn());
 const createCommentTypingReactionLifecycleMock = vi.hoisted(() => vi.fn());
 const deliverCommentThreadTextMock = vi.hoisted(() => vi.fn());
-const createReplyDispatcherWithTypingMock = vi.hoisted(() => vi.fn());
 const getFeishuRuntimeMock = vi.hoisted(() => vi.fn());
+const resolvePinnedHostnameWithPolicyMock = vi.hoisted(() =>
+  vi.fn(async (hostname: string) => {
+    if (hostname === "private.example.test") {
+      throw new Error("Blocked: resolves to private/internal/special-use IP address");
+    }
+    return { hostname, addresses: ["93.184.216.34"], lookup: vi.fn() };
+  }),
+);
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  resolvePinnedHostnameWithPolicy: resolvePinnedHostnameWithPolicyMock,
+}));
 
 vi.mock("./accounts.js", () => ({
   resolveFeishuRuntimeAccount: resolveFeishuRuntimeAccountMock,
@@ -17,7 +29,8 @@ vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
 }));
 
-vi.mock("./comment-dispatcher-runtime-api.js", () => ({
+vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-outbound")>()),
   createReplyPrefixContext: createReplyPrefixContextMock,
 }));
 
@@ -32,14 +45,6 @@ vi.mock("./drive.js", () => ({
 vi.mock("./runtime.js", () => ({
   getFeishuRuntime: getFeishuRuntimeMock,
 }));
-vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
-  return {
-    ...actual,
-    createReplyDispatcherWithTyping: createReplyDispatcherWithTypingMock,
-  };
-});
-
 import { createFeishuCommentReplyDispatcher } from "./comment-dispatcher.js";
 
 async function raceWithNextMacrotask<T>(promise: Promise<T>): Promise<T | "pending"> {
@@ -55,16 +60,16 @@ describe("createFeishuCommentReplyDispatcher", () => {
   afterAll(() => {
     vi.doUnmock("./accounts.js");
     vi.doUnmock("./client.js");
-    vi.doUnmock("./comment-dispatcher-runtime-api.js");
+    vi.doUnmock("openclaw/plugin-sdk/channel-outbound");
     vi.doUnmock("./comment-reaction.js");
     vi.doUnmock("./drive.js");
     vi.doUnmock("./runtime.js");
-    vi.doUnmock("openclaw/plugin-sdk/reply-runtime");
+    vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
     vi.resetModules();
   });
 
   function createTestCommentReplyDispatcher() {
-    createFeishuCommentReplyDispatcher({
+    return createFeishuCommentReplyDispatcher({
       cfg: {} as never,
       agentId: "main",
       runtime: { log: vi.fn(), error: vi.fn() } as never,
@@ -77,13 +82,12 @@ describe("createFeishuCommentReplyDispatcher", () => {
     });
   }
 
-  function latestReplyDispatcherOptions() {
-    const options = createReplyDispatcherWithTypingMock.mock.calls.at(-1)?.[0];
-    if (!options) {
-      throw new Error("expected reply dispatcher options");
-    }
-    return options as {
-      deliver: (payload: { text: string }, phase: { kind: string }) => Promise<void> | void;
+  function replyDispatcherOptions(created: ReturnType<typeof createFeishuCommentReplyDispatcher>) {
+    return {
+      ...created.dispatcherOptions,
+      deliver: created.delivery.deliver,
+    } as {
+      deliver: (payload: { text: string }, phase: { kind: string }) => Promise<unknown>;
       onCleanup?: () => Promise<void> | void;
       onReplyStart?: () => Promise<void> | void;
     };
@@ -111,15 +115,6 @@ describe("createFeishuCommentReplyDispatcher", () => {
       start: vi.fn(async () => {}),
       cleanup: vi.fn(async () => {}),
     });
-    createReplyDispatcherWithTypingMock.mockImplementation(() => ({
-      dispatcher: {
-        markComplete: vi.fn(),
-        waitForIdle: vi.fn(async () => {}),
-      },
-      replyOptions: {},
-      markDispatchIdle: vi.fn(),
-      markRunComplete: vi.fn(),
-    }));
     getFeishuRuntimeMock.mockReturnValue({
       channel: {
         text: {
@@ -127,10 +122,7 @@ describe("createFeishuCommentReplyDispatcher", () => {
           resolveChunkMode: vi.fn(() => "line"),
           chunkTextWithMode: vi.fn((text: string) => [text]),
         },
-        reply: {
-          createReplyDispatcherWithTyping: createReplyDispatcherWithTypingMock,
-          resolveHumanDelayConfig: vi.fn(() => undefined),
-        },
+        reply: { resolveHumanDelayConfig: vi.fn(() => undefined) },
       },
     });
   });
@@ -148,9 +140,8 @@ describe("createFeishuCommentReplyDispatcher", () => {
       cleanup,
     });
 
-    createTestCommentReplyDispatcher();
-
-    const options = latestReplyDispatcherOptions();
+    const created = createTestCommentReplyDispatcher();
+    const options = replyDispatcherOptions(created);
     const deliverPromise = Promise.resolve(
       options.deliver({ text: "hello world" }, { kind: "final" }),
     );
@@ -177,18 +168,155 @@ describe("createFeishuCommentReplyDispatcher", () => {
     await deliverPromise;
   });
 
-  it("starts the typing reaction from dispatcher onReplyStart", async () => {
-    const start = vi.fn(async () => {});
-    createCommentTypingReactionLifecycleMock.mockReturnValue({
-      start,
-      cleanup: vi.fn(async () => {}),
+  it("does not send whitespace-only comment replies without attachments", async () => {
+    const created = createTestCommentReplyDispatcher();
+
+    const result = await created.delivery.deliver({ text: "  \n\t " }, { kind: "final" });
+
+    expect(deliverCommentThreadTextMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ visibleReplySent: false });
+  });
+
+  it.each([
+    [
+      "caption, actionable presentation, and safe attachment",
+      {
+        text: "Review this",
+        mediaUrl: "https://example.com/attachment.png",
+        presentation: {
+          blocks: [
+            {
+              type: "buttons" as const,
+              buttons: [
+                {
+                  label: "Approve",
+                  action: { type: "command" as const, command: "/approve req_1" },
+                },
+              ],
+            },
+          ],
+        },
+      },
+      "Review this\n\n- Approve: `/approve req_1`\n\n> Interactive buttons are unavailable in Feishu document comments. You can type the command shown above manually.\n\nhttps://example.com/attachment.png",
+    ],
+    [
+      "legacy interactive command",
+      {
+        interactive: {
+          blocks: [
+            {
+              type: "buttons" as const,
+              buttons: [
+                {
+                  label: "Approve",
+                  action: { type: "command" as const, command: "/approve req_1" },
+                },
+              ],
+            },
+          ],
+        },
+      },
+      "- Approve: `/approve req_1`\n\n> Interactive buttons are unavailable in Feishu document comments. You can type the command shown above manually.",
+    ],
+    [
+      "select option with an actionable command",
+      {
+        presentation: {
+          blocks: [
+            {
+              type: "select" as const,
+              placeholder: "Choose deployment",
+              options: [
+                {
+                  label: "Deploy",
+                  action: { type: "command" as const, command: "/deploy staging" },
+                },
+              ],
+            },
+          ],
+        },
+      },
+      "Choose deployment:\n- Deploy: `/deploy staging`\n\n> Interactive buttons are unavailable in Feishu document comments. You can type the command shown above manually.",
+    ],
+    [
+      "URL-only button without actionable guidance",
+      {
+        presentation: {
+          blocks: [
+            {
+              type: "buttons" as const,
+              buttons: [
+                {
+                  label: "Open",
+                  action: { type: "url" as const, url: "https://example.com/action" },
+                },
+              ],
+            },
+          ],
+        },
+      },
+      "- Open: https://example.com/action",
+    ],
+  ])("delivers %s as safe plain-text comment links", async (_label, payload, expected) => {
+    const created = createTestCommentReplyDispatcher();
+
+    const result = await created.delivery.deliver(payload, { kind: "final" });
+
+    expect(deliverCommentThreadTextMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ content: expected }),
+    );
+    expect(result).toMatchObject({ content: expected, visibleReplySent: true });
+  });
+
+  it.each([
+    ["local path", "/private/tmp/voice.mp3"],
+    ["loopback URL", "http://127.0.0.1:3000/voice.mp3"],
+    ["private DNS", "https://private.example.test/voice.mp3"],
+    ["credentialed URL", "https://operator:secret@example.com/voice.mp3"],
+  ])("does not disclose a %s in comment reply media fallbacks", async (_label, mediaUrl) => {
+    const created = createTestCommentReplyDispatcher();
+
+    const result = await created.delivery.deliver({ mediaUrl }, { kind: "final" });
+
+    expect(deliverCommentThreadTextMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ content: "Media upload failed. Please try again." }),
+    );
+    expect(result).toMatchObject({
+      content: "Media upload failed. Please try again.",
+      visibleReplySent: true,
     });
+    expect(deliverCommentThreadTextMock.mock.calls[0]?.[1]?.content).not.toContain(mediaUrl);
+  });
 
-    createTestCommentReplyDispatcher();
+  it("retains the accepted comment reply id and text when a later chunk fails", async () => {
+    getFeishuRuntimeMock.mockReturnValue({
+      channel: {
+        text: {
+          resolveTextChunkLimit: vi.fn(() => 4),
+          resolveChunkMode: vi.fn(() => "line"),
+          chunkTextWithMode: vi.fn(() => ["first", "second"]),
+        },
+        reply: { resolveHumanDelayConfig: vi.fn(() => undefined) },
+      },
+    });
+    deliverCommentThreadTextMock
+      .mockResolvedValueOnce({ delivery_mode: "reply_comment", reply_id: "reply_native_1" })
+      .mockRejectedValueOnce(new Error("second comment send failed"));
+    const created = createTestCommentReplyDispatcher();
 
-    const options = latestReplyDispatcherOptions();
-    await options.onReplyStart?.();
+    const error = await created.delivery
+      .deliver({ text: "firstsecond" }, { kind: "final" })
+      .catch((caught: unknown) => caught);
 
-    expect(start).toHaveBeenCalledTimes(1);
+    expect(error).toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      deliveryResult: {
+        messageIds: ["reply_native_1"],
+        content: "first",
+        visibleReplySent: true,
+      },
+    });
   });
 });

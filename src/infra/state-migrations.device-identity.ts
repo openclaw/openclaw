@@ -1,0 +1,473 @@
+// Owner-authorized import for the retired primary device identity JSON.
+import { root, type Root } from "@openclaw/fs-safe";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
+import {
+  normalizeLegacyDeviceIdentity,
+  type NormalizedLegacyDeviceIdentity,
+} from "./device-identity-legacy.js";
+import {
+  readStoredDeviceIdentityReadOnly,
+  validateStoredDeviceIdentity,
+  type DeviceIdentity,
+} from "./device-identity-store.js";
+import { deriveEd25519PrivateKeyRaw, deriveEd25519PublicKeyRaw } from "./ed25519-signature.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "./kysely-sync.js";
+import {
+  hasLegacyDeviceIdentityPath,
+  repairInvalidCanonicalIdentity,
+} from "./state-migrations.device-identity-repair.js";
+import type { LegacyDeviceIdentityDetection } from "./state-migrations.device-identity.types.js";
+import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
+import {
+  markLegacyMigrationSourceRemoved,
+  readLegacyMigrationReceipt,
+  readLegacyMigrationReceiptFromDatabase,
+  recordLegacyMigrationReceipt,
+  resolveLegacyMigrationSourceKey,
+  type LegacyMigrationReceipt,
+} from "./state-migrations.receipts.js";
+import {
+  LegacyMigrationSourceClaim,
+  legacyMigrationSourceSnapshotsMatch as snapshotsMatch,
+  readLegacyMigrationSourceSnapshot,
+  resolveLegacyMigrationRelativePath,
+  type LegacyMigrationSourceSnapshot,
+} from "./state-migrations.source-snapshot.js";
+import type { MigrationMessages } from "./state-migrations.types.js";
+
+const IDENTITY_KEY = "primary";
+const MIGRATION_KIND = "legacy-device-identity-json";
+const MAX_LEGACY_IDENTITY_BYTES = 128 * 1024;
+const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
+
+function isValidCreatedAtMs(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function deviceIdentityKeyMaterialMatches(left: DeviceIdentity, right: DeviceIdentity): boolean {
+  try {
+    return (
+      deriveEd25519PublicKeyRaw(left.publicKeyPem).equals(
+        deriveEd25519PublicKeyRaw(right.publicKeyPem),
+      ) &&
+      deriveEd25519PrivateKeyRaw(left.privateKeyPem).equals(
+        deriveEd25519PrivateKeyRaw(right.privateKeyPem),
+      )
+    );
+  } catch {
+    return false;
+  }
+}
+
+type DeviceIdentityMigrationDatabase = Pick<OpenClawStateKyselyDatabase, "device_identities">;
+
+type LegacySourceSnapshot = LegacyMigrationSourceSnapshot & {
+  identity: NormalizedLegacyDeviceIdentity;
+};
+
+export { detectLegacyDeviceIdentity } from "./state-migrations.device-identity-repair.js";
+
+function relativeLegacyPath(stateDir: string, filePath: string): string {
+  return resolveLegacyMigrationRelativePath(stateDir, filePath, "device identity", false);
+}
+
+async function readLegacySourceSnapshot(params: {
+  stateRoot: Root;
+  stateDir: string;
+  sourcePath: string;
+}): Promise<LegacySourceSnapshot> {
+  const snapshot = await readLegacyMigrationSourceSnapshot({
+    ...params,
+    maxBytes: MAX_LEGACY_IDENTITY_BYTES,
+    label: "device identity",
+  });
+  const identity = normalizeLegacyDeviceIdentity(JSON.parse(utf8Decoder.decode(snapshot.buffer)));
+  if (!identity) {
+    throw new Error("legacy device identity is invalid or unsupported");
+  }
+  return { ...snapshot, identity };
+}
+
+function classifyCanonicalRow(
+  row: NonNullable<ReturnType<typeof readCanonicalIdentity>>,
+  identity: NormalizedLegacyDeviceIdentity,
+): "same" | "different" | "invalid" {
+  if (!isValidCreatedAtMs(row.updated_at_ms)) {
+    return "invalid";
+  }
+  let canonical: DeviceIdentity;
+  try {
+    canonical = validateStoredDeviceIdentity(
+      {
+        deviceId: row.device_id,
+        publicKeyPem: row.public_key_pem,
+        privateKeyPem: row.private_key_pem,
+        createdAtMs: row.created_at_ms,
+      },
+      row.identity_key,
+    );
+  } catch {
+    return "invalid";
+  }
+  // Valid identities are equal by key fingerprint. PEM text and timestamps are
+  // serialization metadata, not a reason to rotate an already-canonical key.
+  return row.identity_key === IDENTITY_KEY &&
+    row.device_id === identity.deviceId &&
+    deviceIdentityKeyMaterialMatches(canonical, identity)
+    ? "same"
+    : "different";
+}
+
+function readCanonicalIdentity(db: ReturnType<typeof openOpenClawStateDatabase>["db"]) {
+  return executeSqliteQueryTakeFirstSync(
+    db,
+    getNodeSqliteKysely<DeviceIdentityMigrationDatabase>(db)
+      .selectFrom("device_identities")
+      .selectAll()
+      .where("identity_key", "=", IDENTITY_KEY),
+  );
+}
+
+function verifyCanonicalIdentity(
+  identity: NormalizedLegacyDeviceIdentity,
+  env: NodeJS.ProcessEnv,
+): void {
+  const { db } = openOpenClawStateDatabase({ env });
+  const row = readCanonicalIdentity(db);
+  if (!row || classifyCanonicalRow(row, identity) !== "same") {
+    throw new Error("canonical SQLite device identity no longer matches the legacy source");
+  }
+}
+
+function importAndRecordReceipt(params: {
+  env: NodeJS.ProcessEnv;
+  sourcePath: string;
+  snapshot: LegacySourceSnapshot;
+}): { sourceKey: string; imported: boolean } {
+  const sourceKey = resolveLegacyMigrationSourceKey("device-identity-json", params.sourcePath);
+  const runId = `${sourceKey}:${params.snapshot.sha256.slice(0, 16)}`;
+  const now = Date.now();
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const stateDb = getNodeSqliteKysely<DeviceIdentityMigrationDatabase>(db);
+      const existingReceipt = readLegacyMigrationReceiptFromDatabase(db, sourceKey);
+      if (existingReceipt) {
+        if (existingReceipt.sourceSha256 !== params.snapshot.sha256) {
+          throw new Error("migration receipt belongs to different device identity bytes");
+        }
+        const existing = readCanonicalIdentity(db);
+        if (!existing || classifyCanonicalRow(existing, params.snapshot.identity) !== "same") {
+          throw new Error("migration receipt does not match the canonical device identity");
+        }
+        return { sourceKey, imported: false };
+      }
+
+      const existing = readCanonicalIdentity(db);
+      const existingState = existing
+        ? classifyCanonicalRow(existing, params.snapshot.identity)
+        : undefined;
+      if (existingState === "different") {
+        throw new Error("canonical SQLite device identity differs from the legacy identity");
+      }
+      const imported = !existing || existingState === "invalid";
+      const repaired = existingState === "invalid";
+      if (imported) {
+        const row = {
+          device_id: params.snapshot.identity.deviceId,
+          public_key_pem: params.snapshot.identity.publicKeyPem,
+          private_key_pem: params.snapshot.identity.privateKeyPem,
+          created_at_ms: params.snapshot.identity.createdAtMs,
+          updated_at_ms: now,
+        };
+        if (existing) {
+          executeSqliteQuerySync(
+            db,
+            stateDb
+              .updateTable("device_identities")
+              .set(row)
+              .where("identity_key", "=", IDENTITY_KEY),
+          );
+        } else {
+          executeSqliteQuerySync(
+            db,
+            stateDb.insertInto("device_identities").values({ identity_key: IDENTITY_KEY, ...row }),
+          );
+        }
+      }
+
+      const verified = readCanonicalIdentity(db);
+      if (!verified || classifyCanonicalRow(verified, params.snapshot.identity) !== "same") {
+        throw new Error("SQLite verification failed for the primary device identity");
+      }
+
+      const reportJson = JSON.stringify({
+        source: MIGRATION_KIND,
+        target: "device_identities",
+        identityKey: IDENTITY_KEY,
+        deviceId: params.snapshot.identity.deviceId,
+        sourceSha256: params.snapshot.sha256,
+        importedRecordCount: imported ? 1 : 0,
+        preservedSqliteRecordCount: existing ? 1 : 0,
+        repairedSqliteRecordCount: repaired ? 1 : 0,
+      });
+      recordLegacyMigrationReceipt(db, {
+        sourceKey,
+        migrationKind: MIGRATION_KIND,
+        sourcePath: params.sourcePath,
+        targetTable: "device_identities",
+        sourceSha256: params.snapshot.sha256,
+        sourceSizeBytes: params.snapshot.size,
+        sourceRecordCount: 1,
+        runId,
+        now,
+        reportJson,
+      });
+      return { sourceKey, imported };
+    },
+    { env: params.env },
+  );
+}
+
+async function cleanupReceiptSources(params: {
+  stateRoot: Root;
+  stateDir: string;
+  detected: LegacyDeviceIdentityDetection;
+  receipt: LegacyMigrationReceipt;
+  env: NodeJS.ProcessEnv;
+  removeSource?: (sourcePath: string) => Promise<void> | void;
+}): Promise<MigrationMessages> {
+  if (
+    await params.stateRoot.exists(
+      relativeLegacyPath(params.stateDir, params.detected.nativeClaimPath),
+    )
+  ) {
+    return {
+      changes: [],
+      warnings: [
+        "Native device identity import is pending; restart the native app before running Doctor cleanup.",
+      ],
+    };
+  }
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  const notices: string[] = [];
+  let removed = 0;
+  for (const candidate of [params.detected.sourcePath, params.detected.claimPath]) {
+    if (!(await params.stateRoot.exists(relativeLegacyPath(params.stateDir, candidate)))) {
+      continue;
+    }
+    let snapshot: LegacySourceSnapshot;
+    try {
+      snapshot = await readLegacySourceSnapshot({
+        stateRoot: params.stateRoot,
+        stateDir: params.stateDir,
+        sourcePath: candidate,
+      });
+    } catch (error) {
+      warnings.push(`Retired device identity cleanup refused ${candidate}: ${String(error)}`);
+      continue;
+    }
+    if (snapshot.sha256 !== params.receipt.sourceSha256) {
+      // SQLite owns runtime identity; warning about inert retired bytes would
+      // make startup refuse an otherwise healthy gateway.
+      try {
+        if (readStoredDeviceIdentityReadOnly({ env: params.env, identityKey: IDENTITY_KEY })) {
+          notices.push(
+            `Preserved retired device identity ${candidate}: bytes differ from the migration receipt; the canonical SQLite identity remains authoritative. Archive or delete the file to clear this notice.`,
+          );
+          continue;
+        }
+      } catch {
+        // Invalid canonical identity must retain its readiness-blocking warning.
+      }
+      warnings.push(
+        `Retired device identity cleanup preserved ${candidate}: bytes differ from the migration receipt.`,
+      );
+      continue;
+    }
+    try {
+      verifyCanonicalIdentity(snapshot.identity, params.env);
+      if (params.removeSource) {
+        await params.removeSource(candidate);
+      } else {
+        await params.stateRoot.remove(relativeLegacyPath(params.stateDir, candidate));
+      }
+      removed += 1;
+    } catch (error) {
+      warnings.push(`Retired device identity cleanup failed for ${candidate}: ${String(error)}`);
+    }
+  }
+  // A divergent preserved claim cannot complete its interrupted receipt unless
+  // receipt-covered original bytes were actually removed during this pass.
+  if (
+    warnings.length === 0 &&
+    (!params.receipt.removedSource || removed > 0) &&
+    (notices.length === 0 || removed > 0)
+  ) {
+    markLegacyMigrationSourceRemoved(params.receipt.sourceKey, params.env);
+  }
+  if (removed > 0) {
+    changes.push("Removed retired device identity JSON covered by its SQLite receipt.");
+  }
+  return { changes, warnings, notices };
+}
+
+/** Import a verified retired primary identity under explicit Doctor authority. */
+export async function migrateLegacyDeviceIdentity(params: {
+  detected: LegacyDeviceIdentityDetection;
+  stateDir: string;
+  env?: NodeJS.ProcessEnv;
+  doctorOnlyStateMigrations?: boolean;
+  beforeClaim?: (sourcePath: string) => void;
+  beforeCleanup?: () => void;
+  removeSource?: (sourcePath: string) => Promise<void> | void;
+}): Promise<MigrationMessages> {
+  if (!params.detected.hasLegacy && !params.detected.hasInvalidCanonical) {
+    return { changes: [], warnings: [] };
+  }
+  if (params.doctorOnlyStateMigrations !== true) {
+    return { changes: [], warnings: [] };
+  }
+  return await withLegacyMigrationStateLock({
+    stateDir: params.stateDir,
+    env: params.env,
+    label: "legacy device identity",
+    releaseLabel: "Device identity",
+    errorLabel: "Failed reading legacy device identity state",
+    run: async (env) => {
+      if (!hasLegacyDeviceIdentityPath(params.detected)) {
+        return params.detected.hasInvalidCanonical
+          ? repairInvalidCanonicalIdentity(env)
+          : { changes: [], warnings: [] };
+      }
+      const stateRoot = await root(params.stateDir, {
+        hardlinks: "reject",
+        maxBytes: MAX_LEGACY_IDENTITY_BYTES,
+        symlinks: "reject",
+      });
+      const receipt = readLegacyMigrationReceipt(
+        resolveLegacyMigrationSourceKey("device-identity-json", params.detected.sourcePath),
+        env,
+      );
+      if (receipt) {
+        return await cleanupReceiptSources({ ...params, env, stateRoot, receipt });
+      }
+
+      if (
+        await stateRoot.exists(relativeLegacyPath(params.stateDir, params.detected.nativeClaimPath))
+      ) {
+        return {
+          changes: [],
+          warnings: [
+            "Native device identity import is pending; restart the native app before running Doctor.",
+          ],
+        };
+      }
+
+      const source = new LegacyMigrationSourceClaim<LegacySourceSnapshot>({
+        stateRoot,
+        stateDir: params.stateDir,
+        sourcePath: params.detected.sourcePath,
+        label: "device identity",
+        includeFilePath: false,
+        readSnapshot: (candidate) =>
+          readLegacySourceSnapshot({
+            stateRoot,
+            stateDir: params.stateDir,
+            sourcePath: candidate,
+          }),
+      });
+
+      await source.recoverLinkedMove();
+
+      const hasSource = await source.exists();
+      const hasClaim = await source.exists(true);
+      if (hasSource && hasClaim) {
+        return {
+          changes: [],
+          warnings: [
+            "Failed migrating legacy device identity: source and interrupted claim both exist.",
+          ],
+        };
+      }
+      if (!hasSource && !hasClaim) {
+        return { changes: [], warnings: [] };
+      }
+
+      let snapshot: LegacySourceSnapshot;
+      try {
+        snapshot = await source.read(!hasSource);
+      } catch (error) {
+        return {
+          changes: [],
+          warnings: [`Failed reading legacy device identity: ${String(error)}`],
+        };
+      }
+
+      let result: ReturnType<typeof importAndRecordReceipt>;
+      try {
+        if (hasSource) {
+          snapshot = await source.claim({
+            snapshot,
+            mismatchMessage: "legacy device identity changed before Doctor could claim it",
+            beforeClaim: () => params.beforeClaim?.(params.detected.sourcePath),
+          });
+        }
+        result = importAndRecordReceipt({
+          env,
+          sourcePath: params.detected.sourcePath,
+          snapshot,
+        });
+      } catch (error) {
+        const restoreError = await source.restore();
+        return {
+          changes: [],
+          warnings: [
+            `Failed migrating legacy device identity: ${String(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
+          ],
+        };
+      }
+
+      try {
+        params.beforeCleanup?.();
+        if (await source.exists()) {
+          throw new Error("legacy device identity source reappeared during import");
+        }
+        const finalSnapshot = await source.read(true);
+        if (!snapshotsMatch(snapshot, finalSnapshot)) {
+          throw new Error("legacy device identity claim changed after SQLite import");
+        }
+        verifyCanonicalIdentity(finalSnapshot.identity, env);
+        await source.remove({
+          removeSource: params.removeSource,
+          sourceReappearedMessage: "legacy device identity source reappeared during import",
+          claimRemainingMessage: "legacy device identity Doctor claim remains after cleanup",
+        });
+        markLegacyMigrationSourceRemoved(result.sourceKey, env);
+      } catch (error) {
+        return {
+          changes: [],
+          warnings: [`Device identity is in SQLite, but legacy cleanup failed: ${String(error)}`],
+        };
+      }
+
+      return {
+        changes: [
+          result.imported
+            ? "Migrated primary device identity to SQLite."
+            : "Preserved identical primary device identity already in SQLite.",
+        ],
+        warnings: [],
+        notices: ["Removed retired device identity JSON after verified SQLite import."],
+      };
+    },
+  });
+}

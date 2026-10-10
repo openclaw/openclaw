@@ -7,37 +7,16 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { resolveExecApprovalsFromFile, type ExecCommandSegment } from "../infra/exec-approvals.js";
 import { planShellAuthorization } from "../infra/exec-authorization-plan.js";
-import { buildAuthorizedShellCommandFromPlan } from "../infra/exec-authorization-render.js";
-import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   evaluateSystemRunAllowlist,
   resolveSystemRunExecArgv,
 } from "./invoke-system-run-allowlist.js";
-
-function resolveAllowlistApprovals() {
-  return resolveExecApprovalsFromFile({
-    file: {
-      version: 1,
-      defaults: {
-        security: "allowlist",
-        ask: "off",
-        askFallback: "deny",
-      },
-    },
-  });
-}
 
 function resolveWindowsShellExecArgv(segment: ExecCommandSegment) {
   return resolveSystemRunExecArgv({
     plannedAllowlistArgv: undefined,
     argv: ["powershell.exe", "-Command", "safe --version"],
     security: "allowlist",
-    approvals: resolveAllowlistApprovals(),
-    safeBins: new Set(),
-    safeBinProfiles: {},
-    trustedSafeBinDirs: new Set(),
-    skillBins: [],
-    autoAllowSkills: false,
     isWindows: true,
     policy: {
       approvedByAsk: false,
@@ -48,8 +27,6 @@ function resolveWindowsShellExecArgv(segment: ExecCommandSegment) {
     segments: [segment],
     segmentSatisfiedBy: ["allowlist"],
     authorizationPlan: undefined,
-    cwd: "C:\\workspace",
-    env: undefined,
   });
 }
 
@@ -85,12 +62,15 @@ describe("resolveSystemRunExecArgv", () => {
       raw: "safe --version",
       argv: ["safe", "--version"],
       resolution: {
+        kind: "command",
         execution: {
+          kind: "executable",
           rawExecutable: "safe",
           resolvedPath: trustedExecutable,
           executableName: "safe.exe",
         },
         policy: {
+          kind: "executable",
           rawExecutable: "safe",
           resolvedPath: trustedExecutable,
           executableName: "safe.exe",
@@ -111,17 +91,61 @@ describe("resolveSystemRunExecArgv", () => {
     expect(result).toEqual(["safe", "--version"]);
   });
 
+  it("fails closed for Windows opaque shell transports before inner argv rewrite", async () => {
+    const trustedExecutable = "C:\\trusted-bin\\safe-tool.exe";
+    const result = await resolveSystemRunExecArgv({
+      plannedAllowlistArgv: undefined,
+      argv: ["nu.exe", "--commands", "safe-tool arg"],
+      security: "allowlist",
+      isWindows: true,
+      policy: {
+        approvedByAsk: false,
+        analysisOk: true,
+        allowlistSatisfied: true,
+      },
+      shellCommand: "safe-tool arg",
+      segments: [
+        {
+          raw: "safe-tool arg",
+          argv: ["safe-tool", "arg"],
+          resolution: {
+            kind: "command",
+            execution: {
+              kind: "executable",
+              rawExecutable: "safe-tool",
+              resolvedPath: trustedExecutable,
+              executableName: "safe-tool.exe",
+            },
+            policy: {
+              kind: "executable",
+              rawExecutable: "safe-tool",
+              resolvedPath: trustedExecutable,
+              executableName: "safe-tool.exe",
+            },
+          },
+        },
+      ],
+      segmentSatisfiedBy: ["allowlist"],
+      authorizationPlan: undefined,
+    });
+
+    expect(result).toBeNull();
+  });
+
   it("fails closed when the Windows shell execution plan is blocked", async () => {
     const result = await resolveWindowsShellExecArgv({
       raw: "safe --version",
       argv: ["safe", "--version"],
       resolution: {
+        kind: "command",
         policyBlocked: true,
         execution: {
+          kind: "executable",
           rawExecutable: "safe",
           executableName: "safe",
         },
         policy: {
+          kind: "executable",
           rawExecutable: "safe",
           executableName: "safe",
         },
@@ -162,6 +186,7 @@ describe("resolveSystemRunExecArgv", () => {
         expect(bareResult.stdout).not.toContain("TRUSTED_EXECUTABLE");
 
         const approvals = resolveExecApprovalsFromFile({
+          agentId: "main",
           file: {
             version: 1,
             defaults: { security: "allowlist", ask: "off", askFallback: "deny" },
@@ -188,12 +213,6 @@ describe("resolveSystemRunExecArgv", () => {
           plannedAllowlistArgv: undefined,
           argv: ["powershell.exe", "-Command", shellCommand],
           security: "allowlist",
-          approvals,
-          safeBins: new Set(),
-          safeBinProfiles: {},
-          trustedSafeBinDirs: new Set(),
-          skillBins: [],
-          autoAllowSkills: false,
           isWindows: true,
           policy: {
             approvedByAsk: false,
@@ -204,8 +223,6 @@ describe("resolveSystemRunExecArgv", () => {
           segments: analysis.segments,
           segmentSatisfiedBy: analysis.segmentSatisfiedBy,
           authorizationPlan: analysis.authorizationPlan,
-          cwd: workspace,
-          env,
         });
         expect(execArgv?.[0]).toBe(fs.realpathSync(trustedExecutable));
 
@@ -221,18 +238,10 @@ describe("resolveSystemRunExecArgv", () => {
   it.runIf(process.platform !== "win32")(
     "fails closed when shell rewriting has no authorization plan",
     async () => {
-      const env = { PATH: "/usr/bin:/bin" };
-
       const result = await resolveSystemRunExecArgv({
         plannedAllowlistArgv: undefined,
         argv: ["/bin/sh", "-lc", "head -c 16"],
         security: "allowlist",
-        approvals: resolveAllowlistApprovals(),
-        safeBins: new Set(),
-        safeBinProfiles: {},
-        trustedSafeBinDirs: new Set(),
-        skillBins: [],
-        autoAllowSkills: false,
         isWindows: false,
         policy: {
           approvedByAsk: false,
@@ -243,8 +252,6 @@ describe("resolveSystemRunExecArgv", () => {
         segments: [],
         segmentSatisfiedBy: ["safeBins"],
         authorizationPlan: undefined,
-        cwd: undefined,
-        env,
       });
 
       expect(result).toBeNull();
@@ -252,7 +259,7 @@ describe("resolveSystemRunExecArgv", () => {
   );
 
   it.runIf(process.platform !== "win32")(
-    "returns rebuilt shell argv when the authorization plan supports rewriting",
+    "fails closed when opaque shell transports use inner allowlist authorization",
     async () => {
       const env = { PATH: "/usr/bin:/bin" };
       const authorizationPlan = await planShellAuthorization({
@@ -264,30 +271,11 @@ describe("resolveSystemRunExecArgv", () => {
       if (!authorizationPlan.ok) {
         throw new Error(authorizationPlan.reason);
       }
-      const safeBinPolicy = resolveExecSafeBinRuntimePolicy({
-        global: { safeBins: ["head"] },
-      });
-      const segmentSatisfiedBy: ["safeBins"] = ["safeBins"];
-      const expectedCommand = buildAuthorizedShellCommandFromPlan({
-        plan: authorizationPlan,
-        mode: "safeBins",
-        segmentSatisfiedBy,
-      });
-      expect(expectedCommand.ok).toBe(true);
-      if (!expectedCommand.ok) {
-        throw new Error(expectedCommand.reason);
-      }
 
       const result = await resolveSystemRunExecArgv({
         plannedAllowlistArgv: undefined,
-        argv: ["/bin/sh", "-lc", "head -c 16"],
+        argv: ["nu", "--commands", "head -c 16"],
         security: "allowlist",
-        approvals: resolveAllowlistApprovals(),
-        safeBins: safeBinPolicy.safeBins,
-        safeBinProfiles: safeBinPolicy.safeBinProfiles,
-        trustedSafeBinDirs: safeBinPolicy.trustedSafeBinDirs,
-        skillBins: [],
-        autoAllowSkills: false,
         isWindows: false,
         policy: {
           approvedByAsk: false,
@@ -298,15 +286,11 @@ describe("resolveSystemRunExecArgv", () => {
         segments: authorizationPlan.groups.flatMap((group) =>
           group.candidates.map((candidate) => candidate.sourceSegment),
         ),
-        segmentSatisfiedBy,
+        segmentSatisfiedBy: ["allowlist"],
         authorizationPlan,
-        cwd: undefined,
-        env,
       });
 
-      expect(result).not.toBeNull();
-      expect(result?.[0]).toBe("/bin/sh");
-      expect(result?.[2]).toBe(expectedCommand.command);
+      expect(result).toBeNull();
     },
   );
 });

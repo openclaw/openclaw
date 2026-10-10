@@ -1,16 +1,15 @@
-// Discord tests cover probe.intents plugin behavior.
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   fetchDiscordApplicationId,
   fetchDiscordApplicationSummary,
+  probeDiscordApplicationId,
   probeDiscord,
   resolveDiscordPrivilegedIntentsFromFlags,
 } from "./probe.js";
 import { jsonResponse } from "./test-http-helpers.js";
 
 const DISCORD_PROBE_JSON_CAP_BYTES = 16 * 1024 * 1024;
-
 function oversizedDiscordProbeJsonResponse(onCancel: () => void): Response {
   const response = new Response(
     new ReadableStream<Uint8Array>({
@@ -104,10 +103,6 @@ function trackedStalledDiscordJsonResponse(
 }
 
 describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
-  beforeEach(() => {
-    vi.useRealTimers();
-  });
-
   afterEach(() => {
     vi.useRealTimers();
   });
@@ -168,6 +163,37 @@ describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
     expect(calls).toBe(2);
   });
 
+  it.each([
+    { status: 401, kind: "rejected" },
+    { status: 403, kind: "rejected" },
+    { status: 503, kind: "unavailable" },
+  ] as const)("classifies application id HTTP $status as $kind", async ({ status, kind }) => {
+    vi.useFakeTimers();
+    const fetcher = withFetchPreconnect(
+      async () =>
+        new Response(JSON.stringify({ message: "probe failed" }), {
+          status,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    const probe = probeDiscordApplicationId("unparseable.token", 1_000, fetcher);
+    await vi.runAllTimersAsync();
+
+    await expect(probe).resolves.toMatchObject({ kind, status });
+  });
+
+  it("preserves application id network failure as unavailable without an HTTP status", async () => {
+    vi.useFakeTimers();
+    const error = new Error("fetch failed");
+    const fetcher = withFetchPreconnect(async () => {
+      throw error;
+    });
+    const probe = probeDiscordApplicationId("unparseable.token", 1_000, fetcher);
+    await vi.runAllTimersAsync();
+
+    await expect(probe).resolves.toEqual({ kind: "unavailable", status: null, error });
+  });
+
   it("does not retry Cloudflare HTML rate limits during application summary probes", async () => {
     let calls = 0;
     const fetcher = withFetchPreconnect(async () => {
@@ -198,6 +224,27 @@ describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
     expect(cancel).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects invalid UTF-8 in getMe probe JSON responses", async () => {
+    const prefix = new TextEncoder().encode('{"id":"bot-1","username":"bad');
+    const suffix = new TextEncoder().encode('"}');
+    const body = new Uint8Array(prefix.length + 1 + suffix.length);
+    body.set(prefix);
+    body[prefix.length] = 0xff;
+    body.set(suffix, prefix.length + 1);
+    const fetcher = withFetchPreconnect(
+      async () =>
+        new Response(body, {
+          headers: { "content-type": "application/json" },
+          status: 200,
+        }),
+    );
+
+    await expect(probeDiscord("MTIz.abc.def", 1_000, { fetcher })).resolves.toMatchObject({
+      ok: false,
+      error: expect.stringContaining("discord.probe.getMe: malformed JSON response"),
+    });
+  });
+
   it("bounds oversized getMe probe JSON responses and cancels the stream", async () => {
     let cancelCount = 0;
     const fetcher = withFetchPreconnect(async () =>
@@ -215,113 +262,97 @@ describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
 
   it("times out and cancels stalled getMe probe JSON response bodies", async () => {
     vi.useFakeTimers();
-    try {
-      let terminationCount = 0;
-      const fetcher = withFetchPreconnect(async (_input, init) =>
-        trackedStalledDiscordJsonResponse(init?.signal, () => {
-          terminationCount += 1;
-        }),
-      );
+    let terminationCount = 0;
+    const fetcher = withFetchPreconnect(async (_input, init) =>
+      trackedStalledDiscordJsonResponse(init?.signal, () => {
+        terminationCount += 1;
+      }),
+    );
 
-      const probe = probeDiscord("MTIz.abc.def", 50, { fetcher });
-      const assertion = expect(probe).resolves.toMatchObject({
-        ok: false,
-        error: "discord.probe.getMe: JSON response timed out after 50ms",
-      });
+    const probe = probeDiscord("MTIz.abc.def", 50, { fetcher });
+    const assertion = expect(probe).resolves.toMatchObject({
+      ok: false,
+      error: "discord.probe.getMe: JSON response timed out after 50ms",
+    });
 
-      await vi.advanceTimersByTimeAsync(0);
-      await vi.advanceTimersByTimeAsync(50);
-      await assertion;
-      expect(terminationCount).toBe(1);
-    } finally {
-      vi.useRealTimers();
-    }
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(50);
+    await assertion;
+    expect(terminationCount).toBe(1);
   });
 
   it("uses one total deadline across getMe headers and a trickling JSON body", async () => {
     vi.useFakeTimers();
-    try {
-      let terminationCount = 0;
-      const fetcher = withFetchPreconnect(async (_input, init) => {
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 30);
-        });
-        return trackedTricklingDiscordProbeJsonResponse(init?.signal, () => {
-          terminationCount += 1;
-        });
+    let terminationCount = 0;
+    const fetcher = withFetchPreconnect(async (_input, init) => {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 30);
       });
-
-      const probe = probeDiscord("MTIz.abc.def", 50, { fetcher });
-      const assertion = expect(probe).resolves.toMatchObject({
-        ok: false,
-        error: "discord.probe.getMe: JSON response timed out after 50ms",
+      return trackedTricklingDiscordProbeJsonResponse(init?.signal, () => {
+        terminationCount += 1;
       });
+    });
 
-      await vi.advanceTimersByTimeAsync(50);
-      await assertion;
-      expect(terminationCount).toBe(1);
-    } finally {
-      vi.useRealTimers();
-    }
+    const probe = probeDiscord("MTIz.abc.def", 50, { fetcher });
+    const assertion = expect(probe).resolves.toMatchObject({
+      ok: false,
+      error: "discord.probe.getMe: JSON response timed out after 50ms",
+    });
+
+    await vi.advanceTimersByTimeAsync(50);
+    await assertion;
+    expect(terminationCount).toBe(1);
   });
 
   it("bounds stalled application-summary response bodies during probes", async () => {
     vi.useFakeTimers();
-    try {
-      let terminationCount = 0;
-      const fetcher = withFetchPreconnect(async (input, init) => {
-        const url =
-          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-        if (url.endsWith("/users/@me")) {
-          return jsonResponse({ id: "bot-1", username: "openclaw" });
-        }
-        return trackedStalledDiscordJsonResponse(init?.signal, () => {
-          terminationCount += 1;
-        });
+    let terminationCount = 0;
+    const fetcher = withFetchPreconnect(async (input, init) => {
+      const url =
+        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.endsWith("/users/@me")) {
+        return jsonResponse({ id: "bot-1", username: "openclaw" });
+      }
+      return trackedStalledDiscordJsonResponse(init?.signal, () => {
+        terminationCount += 1;
       });
+    });
 
-      const probe = probeDiscord("MTIz.abc.def", 50, {
-        fetcher,
-        includeApplication: true,
-      });
-      const outerStatusResult = Promise.race([
-        probe,
-        new Promise<{ ok: false; timedOut: true }>((resolve) => {
-          setTimeout(() => resolve({ ok: false, timedOut: true }), 50);
-        }),
-      ]);
-      await vi.advanceTimersByTimeAsync(0);
-      await vi.advanceTimersByTimeAsync(50);
+    const probe = probeDiscord("MTIz.abc.def", 50, {
+      fetcher,
+      includeApplication: true,
+    });
+    const outerStatusResult = Promise.race([
+      probe,
+      new Promise<{ ok: false; timedOut: true }>((resolve) => {
+        setTimeout(() => resolve({ ok: false, timedOut: true }), 50);
+      }),
+    ]);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(50);
 
-      await expect(outerStatusResult).resolves.toMatchObject({
-        ok: true,
-        bot: { id: "bot-1", username: "openclaw" },
-      });
-      expect(terminationCount).toBe(1);
-    } finally {
-      vi.useRealTimers();
-    }
+    await expect(outerStatusResult).resolves.toMatchObject({
+      ok: true,
+      bot: { id: "bot-1", username: "openclaw" },
+    });
+    expect(terminationCount).toBe(1);
   });
 
   it("bounds stalled application-id response bodies", async () => {
     vi.useFakeTimers();
-    try {
-      let terminationCount = 0;
-      const fetcher = withFetchPreconnect(async (_input, init) =>
-        trackedStalledDiscordJsonResponse(init?.signal, () => {
-          terminationCount += 1;
-        }),
-      );
+    let terminationCount = 0;
+    const fetcher = withFetchPreconnect(async (_input, init) =>
+      trackedStalledDiscordJsonResponse(init?.signal, () => {
+        terminationCount += 1;
+      }),
+    );
 
-      const lookup = fetchDiscordApplicationId("unparseable.token", 50, fetcher);
-      await vi.advanceTimersByTimeAsync(0);
-      await vi.advanceTimersByTimeAsync(50);
+    const lookup = fetchDiscordApplicationId("unparseable.token", 50, fetcher);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(50);
 
-      await expect(lookup).resolves.toBeUndefined();
-      expect(terminationCount).toBe(1);
-    } finally {
-      vi.useRealTimers();
-    }
+    await expect(lookup).resolves.toBeUndefined();
+    expect(terminationCount).toBe(1);
   });
 
   it("derives application id from parseable tokens before probing REST", async () => {

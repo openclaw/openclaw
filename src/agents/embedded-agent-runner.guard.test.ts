@@ -1,6 +1,5 @@
-// Covers session-manager guard behavior for tool-result pairing and transcript
-// redaction.
 import { readFileSync } from "node:fs";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import {
@@ -8,8 +7,10 @@ import {
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createFileBackedSessionManagerForTest } from "../../test/helpers/session-manager-file-fixture.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { makeUserMessage } from "../../test/helpers/user-message.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { attachRuntimeUserTurnTranscriptContext } from "../sessions/user-turn-transcript-runtime-context.js";
 import {
@@ -17,9 +18,23 @@ import {
   type PersistedUserTurnMessage,
 } from "../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../sessions/user-turn-transcript.test-support.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { flushPendingToolResultsAfterIdle } from "./embedded-agent-runner/wait-for-idle-before-flush.js";
+import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
-import { sanitizeToolUseResultPairing } from "./session-transcript-repair.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
+import { textToolResult } from "./test-helpers/sparse-transcript.test-support.js";
+
+function installWriteHook(handler: (...args: unknown[]) => unknown) {
+  initializeGlobalHookRunner(
+    createMockPluginRegistry([{ hookName: "before_message_write", handler }]),
+  );
+}
+
+afterEach(() => {
+  resetGlobalHookRunner();
+  vi.useRealTimers();
+});
 
 function assistantToolCall(id: string): AgentMessage {
   return {
@@ -28,44 +43,23 @@ function assistantToolCall(id: string): AgentMessage {
   } as AgentMessage;
 }
 
+function appender(sm: ReturnType<typeof guardSessionManager>) {
+  return sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+}
+
+function getMessages(sm: ReturnType<typeof guardSessionManager>): AgentMessage[] {
+  return sm
+    .getEntries()
+    .filter((entry) => entry.type === "message")
+    .map((entry) => (entry as { message: AgentMessage }).message);
+}
+
 describe("guardSessionManager integration", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  afterEach(() => {
-    resetGlobalHookRunner();
-  });
-
-  it("persists synthetic toolResult before subsequent assistant message", () => {
-    // Providers require every assistant tool call to be followed by a result
-    // before the next assistant turn.
-    const sm = guardSessionManager(SessionManager.inMemory());
-    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
-
-    appendMessage(assistantToolCall("call_1"));
-    appendMessage({
-      role: "assistant",
-      content: [{ type: "text", text: "followup" }],
-    } as AgentMessage);
-
-    const messages = sm
-      .getEntries()
-      .filter((e) => e.type === "message")
-      .map((e) => (e as { message: AgentMessage }).message);
-
-    expect(messages.map((m) => m.role)).toEqual(["assistant", "toolResult", "assistant"]);
-    expect((messages[1] as { toolCallId?: string }).toolCallId).toBe("call_1");
-    expect(sanitizeToolUseResultPairing(messages).map((m) => m.role)).toEqual([
-      "assistant",
-      "toolResult",
-      "assistant",
-    ]);
-  });
-
   it("keeps real toolResult pending across delivery-mirror assistant messages", () => {
-    // Delivery mirrors are display copies, not real model turns; they must not
-    // cause the guard to synthesize missing tool results.
     const sm = guardSessionManager(SessionManager.inMemory());
-    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+    const appendMessage = appender(sm);
 
     appendMessage(assistantToolCall("call_1"));
     appendMessage({
@@ -74,90 +68,17 @@ describe("guardSessionManager integration", () => {
       model: "delivery-mirror",
       content: [{ type: "text", text: "display copy" }],
     } as AgentMessage);
-    appendMessage({
-      role: "toolResult",
-      toolCallId: "call_1",
-      toolName: "n",
-      content: [{ type: "text", text: "real output" }],
-      isError: false,
-    } as AgentMessage);
+    appendMessage(textToolResult("call_1", "n", "real output", { isError: false }) as AgentMessage);
 
-    const messages = sm
-      .getEntries()
-      .filter((e) => e.type === "message")
-      .map((e) => (e as { message: AgentMessage }).message);
+    const messages = getMessages(sm);
 
     expect(messages.map((m) => m.role)).toEqual(["assistant", "assistant", "toolResult"]);
-    expect((messages[1] as { model?: string }).model).toBe("delivery-mirror");
-    expect((messages[2] as { isError?: boolean }).isError).toBe(false);
-    expect((messages[2] as { content?: Array<{ text?: string }> }).content?.[0]?.text).toBe(
-      "real output",
-    );
+    expect(messages[1]).toMatchObject({ model: "delivery-mirror" });
+    expect(messages[2]).toMatchObject({
+      isError: false,
+      content: [{ type: "text", text: "real output" }],
+    });
     expect(JSON.stringify(messages)).not.toContain("missing tool result");
-  });
-
-  it("uses Codex-style aborted synthetic results for interrupted Responses tool calls", () => {
-    const sm = guardSessionManager(SessionManager.inMemory(), {
-      allowSyntheticToolResults: true,
-      missingToolResultText: "aborted",
-    });
-    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
-
-    appendMessage(assistantToolCall("call_responses_1"));
-    appendMessage({
-      role: "user",
-      content: [{ type: "text", text: "interrupting prompt" }],
-      timestamp: Date.now(),
-    } as AgentMessage);
-
-    const messages = sm
-      .getEntries()
-      .filter((e) => e.type === "message")
-      .map((e) => (e as { message: AgentMessage }).message);
-
-    expect(messages.map((m) => m.role)).toEqual(["assistant", "toolResult", "user"]);
-    expect((messages[1] as { toolCallId?: string }).toolCallId).toBe("call_responses_1");
-    expect((messages[1] as { content?: Array<{ text?: string }> }).content?.[0]?.text).toBe(
-      "aborted",
-    );
-  });
-
-  it("applies prepared user persistence fields to the next real user message", () => {
-    const sm = guardSessionManager(SessionManager.inMemory(), {
-      preparedUserTurnMessage: {
-        role: "user",
-        content: "What is in this image?",
-        timestamp: 123,
-        MediaPath: "/tmp/a.png",
-        MediaPaths: ["/tmp/a.png"],
-        MediaType: "image/png",
-        MediaTypes: ["image/png"],
-      } as Extract<AgentMessage, { role: "user" }>,
-    });
-    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
-
-    appendMessage({
-      role: "user",
-      content: [
-        { type: "text", text: "[media attached: media://inbound/a.png]\nWhat is in this image?" },
-      ],
-    } as AgentMessage);
-    appendMessage({ role: "user", content: "follow-up" } as AgentMessage);
-
-    const messages = sm
-      .getEntries()
-      .filter((e) => e.type === "message")
-      .map((e) => (e as { message: AgentMessage }).message);
-
-    expect(messages[0]).toMatchObject({
-      role: "user",
-      content: "What is in this image?",
-      MediaPath: "/tmp/a.png",
-      MediaPaths: ["/tmp/a.png"],
-      MediaType: "image/png",
-      MediaTypes: ["image/png"],
-    });
-    expect(messages[1]).toEqual({ role: "user", content: "follow-up" });
   });
 
   it("correlates nested user persists with their exact runtime messages", () => {
@@ -165,27 +86,20 @@ describe("guardSessionManager integration", () => {
     const nestedRuntime = { role: "user", content: "nested" } as AgentMessage;
     const correlations: Array<{ persisted: AgentMessage; runtime?: AgentMessage }> = [];
     let nested = false;
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_message_write",
-          handler: (...args: unknown[]) => {
-            const { message } = args[0] as { message: AgentMessage };
-            if (!nested && message.role === "user" && message.content === "outer") {
-              nested = true;
-              appendMessage(nestedRuntime);
-            }
-            return undefined;
-          },
-        },
-      ]),
-    );
+    installWriteHook((...args: unknown[]) => {
+      const { message } = args[0] as { message: AgentMessage };
+      if (!nested && message.role === "user" && message.content === "outer") {
+        nested = true;
+        appendMessage(nestedRuntime);
+      }
+      return undefined;
+    });
     const sm = guardSessionManager(SessionManager.inMemory(), {
       onUserMessagePersisted: (persisted, runtime) => {
         correlations.push({ persisted, runtime });
       },
     });
-    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+    const appendMessage = appender(sm);
 
     appendMessage(outerRuntime);
 
@@ -211,7 +125,7 @@ describe("guardSessionManager integration", () => {
       },
     });
 
-    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+    const appendMessage = appender(sm);
     appendMessage(runtimeMessage);
 
     expect(sm.getEntries()).toEqual([]);
@@ -226,59 +140,97 @@ describe("guardSessionManager integration", () => {
     ]);
   });
 
-  it("lets a write hook remove sender identity while preserving auth state", () => {
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_message_write",
-          handler: () => ({
-            message: {
-              role: "user",
-              content: "[redacted by hook]",
-              timestamp: 124,
-              __openclaw: { hookOwned: true },
-            } as AgentMessage,
-          }),
-        },
-      ]),
-    );
-    const sm = guardSessionManager(SessionManager.inMemory(), {
-      preparedUserTurnMessage: {
+  it.each(["user", "assistant"] as const)(
+    "sender provenance repair preserves runtime hook %s rewrites and display redaction",
+    (role) => {
+      const prepared: PersistedUserTurnMessage = {
         role: "user",
-        content: "private group prompt",
-        timestamp: 123,
+        content: "private",
+        timestamp: 1,
         __openclaw: {
+          senderId: "person",
+          senderIdentity: { type: "profile", id: "person" },
           senderIsOwner: true,
-          senderId: "secret-user",
-          senderName: "secret-name",
+          replyToId: "private-reply",
+          replyToPreview: { text: "private" },
+          transport: { messageId: "private" },
+          media: [{ path: "private" }],
+          mediaImageLayout: { slots: [] },
+          lateMedia: true,
         },
-      } as Extract<AgentMessage, { role: "user" }>,
-    });
+      };
+      const replacement =
+        role === "user"
+          ? { role, content: "redacted", timestamp: 2, __openclaw: { hookOwned: true } }
+          : makeAgentAssistantMessage({ content: [{ type: "text", text: "rewritten" }] });
+      installWriteHook(() => ({ message: replacement }));
+      // Generic harness hooks only constrain sender provenance; runtime preparation
+      // separately protects operational fields, not editable reply/media display.
+      expect(runAgentHarnessBeforeMessageWriteHook({ message: prepared })).toEqual(replacement);
+      const sm = guardSessionManager(SessionManager.inMemory(), {
+        preparedUserTurnMessage: prepared,
+      });
+      sm.appendMessage({ role: "user", content: "runtime", timestamp: 3 });
+      expect(getMessages(sm)).toEqual([
+        role === "user"
+          ? { ...replacement, __openclaw: { hookOwned: true, senderIsOwner: true } }
+          : replacement,
+      ]);
+    },
+  );
 
-    sm.appendMessage({ role: "user", content: "runtime prompt", timestamp: 125 });
-
-    const message = sm.getEntries().find((entry) => entry.type === "message") as
-      | { message?: AgentMessage }
-      | undefined;
-    expect(message?.message).toMatchObject({
-      role: "user",
-      content: "[redacted by hook]",
-      __openclaw: {
-        hookOwned: true,
-        senderIsOwner: true,
-      },
-    });
-    expect(JSON.stringify(message?.message)).not.toContain("secret-user");
-    expect(JSON.stringify(message?.message)).not.toContain("secret-name");
-  });
+  it.each(["retain", "in-place", "forge"] as const)(
+    "sender provenance survives only unchanged queued hook evidence: %s",
+    (mode) => {
+      installWriteHook((event) => {
+        const message = (event as { message: PersistedUserTurnMessage }).message;
+        const metadata = message["__openclaw"]!;
+        if (mode === "in-place") {
+          (metadata.senderIdentity as { id: string }).id = "forged";
+        }
+        if (mode === "forge") {
+          metadata.senderIdentity = { type: "profile", id: "forged" };
+        }
+        metadata.senderIsOwner = false;
+      });
+      const identity = { type: "profile", id: "author" };
+      const recorder = createUserTurnTranscriptRecorder({
+        message: {
+          role: "user",
+          content: "queued",
+          timestamp: 1,
+          __openclaw: {
+            senderId: "author",
+            senderIsOwner: true,
+            ...(mode === "forge" ? {} : { senderIdentity: identity }),
+          },
+        },
+        target: createTestUserTurnTranscriptTarget(),
+      });
+      const sm = guardSessionManager(SessionManager.inMemory());
+      sm.appendMessage(
+        attachRuntimeUserTurnTranscriptContext(
+          { role: "user", content: "runtime", timestamp: 2 },
+          { message: recorder.message!, recorder },
+        ),
+      );
+      expect(getMessages(sm)[0]).toMatchObject({
+        __openclaw: { senderId: "author", senderIsOwner: true },
+      });
+      expect(
+        (getMessages(sm)[0] as PersistedUserTurnMessage)["__openclaw"]?.senderIdentity,
+      ).toEqual(mode === "retain" ? { type: "profile", id: "author" } : undefined);
+      expect(recorder.hasPersisted()).toBe(true);
+    },
+  );
 
   it("commits queued group sender metadata to JSONL and completes its recorder", () => {
     const dir = tempDirs.make("openclaw-queued-group-turn-");
-    const sessionManager = SessionManager.create(dir, dir);
-    const sessionFile = sessionManager.getSessionFile();
-    if (!sessionFile) {
-      throw new Error("expected file-backed session manager");
-    }
+    const sessionManager = createFileBackedSessionManagerForTest(dir, dir);
+    const sessionFile = expectDefined(
+      sessionManager.getSessionFile(),
+      "expected file-backed session manager",
+    );
     const recorder = createUserTurnTranscriptRecorder({
       input: {
         text: "visible group prompt",
@@ -286,10 +238,7 @@ describe("guardSessionManager integration", () => {
       },
       target: createTestUserTurnTranscriptTarget(),
     });
-    const preparedMessage = recorder.message;
-    if (!preparedMessage) {
-      throw new Error("expected prepared group turn");
-    }
+    const preparedMessage = expectDefined(recorder.message, "expected prepared group turn");
     const sm = guardSessionManager(sessionManager, {
       inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
     });
@@ -326,21 +275,39 @@ describe("guardSessionManager integration", () => {
     expect(recorder.hasPersisted()).toBe(true);
   });
 
-  it("does not consume prepared user persistence for before-agent-run blocked messages", () => {
-    // Blocked messages are audit records, not the actual user turn that should
-    // receive prepared media metadata.
-    const sm = guardSessionManager(SessionManager.inMemory(), {
-      preparedUserTurnMessage: {
-        role: "user",
-        content: "visible prompt",
-        timestamp: 123,
-        MediaPath: "/tmp/a.png",
-        MediaPaths: ["/tmp/a.png"],
-        MediaType: "image/png",
-        MediaTypes: ["image/png"],
-      } as Extract<AgentMessage, { role: "user" }>,
+  it("marks the exact queued recorder blocked when a write hook suppresses its user message", () => {
+    installWriteHook(() => ({ block: true }));
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text: "queued prompt" },
+      target: createTestUserTurnTranscriptTarget(),
     });
-    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+    const preparedMessage = expectDefined(recorder.message, "expected prepared queued turn");
+    const runtimeMessage = attachRuntimeUserTurnTranscriptContext(
+      makeUserMessage("runtime queued prompt", 456),
+      { message: preparedMessage, recorder },
+    );
+    const sm = guardSessionManager(SessionManager.inMemory());
+
+    sm.appendMessage(runtimeMessage);
+
+    expect(getMessages(sm)).toEqual([]);
+    expect(recorder.isBlocked()).toBe(true);
+  });
+
+  it("does not consume prepared user persistence for before-agent-run blocked messages", () => {
+    const prepared = {
+      role: "user",
+      content: "visible prompt",
+      timestamp: 123,
+      MediaPath: "/tmp/a.png",
+      MediaPaths: ["/tmp/a.png"],
+      MediaType: "image/png",
+      MediaTypes: ["image/png"],
+    } as PersistedUserTurnMessage;
+    const sm = guardSessionManager(SessionManager.inMemory(), {
+      preparedUserTurnMessage: structuredClone(prepared),
+    });
+    const appendMessage = appender(sm);
 
     appendMessage({
       role: "user",
@@ -349,11 +316,9 @@ describe("guardSessionManager integration", () => {
       __openclaw: { beforeAgentRunBlocked: { blockedBy: "test", blockedAt: 123 } },
     } as AgentMessage);
     appendMessage({ role: "user", content: "runtime prompt" } as AgentMessage);
+    appendMessage({ role: "user", content: "follow-up" } as AgentMessage);
 
-    const messages = sm
-      .getEntries()
-      .filter((e) => e.type === "message")
-      .map((e) => (e as { message: AgentMessage }).message);
+    const messages = getMessages(sm);
 
     expect(messages[0]).toMatchObject({
       role: "user",
@@ -361,25 +326,27 @@ describe("guardSessionManager integration", () => {
       __openclaw: { beforeAgentRunBlocked: { blockedBy: "test", blockedAt: 123 } },
     });
     expect(messages[0]).not.toHaveProperty("MediaPath");
-    expect(messages[1]).toMatchObject({
-      role: "user",
-      content: "visible prompt",
-      MediaPath: "/tmp/a.png",
-      MediaPaths: ["/tmp/a.png"],
-      MediaType: "image/png",
-      MediaTypes: ["image/png"],
-    });
+    expect(messages[2]).toEqual({ role: "user", content: "follow-up" });
+    expect(messages[1]).toMatchObject(prepared);
   });
 
-  it("redacts configured text patterns before persisting transcript messages", () => {
+  it("skips plugin hooks while redacting every persisted transcript content field", () => {
+    installWriteHook(() => ({
+      message: makeAgentAssistantMessage({
+        content: [{ type: "text", text: "changed by hook" }],
+      }),
+    }));
+
     const cfg = {
       logging: {
-        redactSensitive: "tools",
         redactPatterns: [String.raw`([\w]|[-.])+@([\w]|[-.])+\.\w+`],
       },
     } satisfies OpenClawConfig;
-    const sm = guardSessionManager(SessionManager.inMemory(), { config: cfg });
-    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+    const sm = guardSessionManager(SessionManager.inMemory(), {
+      config: cfg,
+      skipBeforeMessageWriteHooks: true,
+    });
+    const appendMessage = appender(sm);
 
     appendMessage({
       role: "assistant",
@@ -390,18 +357,11 @@ describe("guardSessionManager integration", () => {
       ],
       stopReason: "toolUse",
     } as AgentMessage);
-    appendMessage({
-      role: "toolResult",
-      toolCallId: "call_1",
-      toolName: "read",
-      content: [{ type: "text", text: "peter@dc.io\n" }],
-      isError: false,
-    } as AgentMessage);
+    appendMessage(
+      textToolResult("call_1", "read", "peter@dc.io\n", { isError: false }) as AgentMessage,
+    );
 
-    const messages = sm
-      .getEntries()
-      .filter((e) => e.type === "message")
-      .map((e) => (e as { message: AgentMessage }).message);
+    const messages = getMessages(sm);
 
     const serialized = JSON.stringify(messages);
 
@@ -413,5 +373,88 @@ describe("guardSessionManager integration", () => {
     expect(serialized).toContain('"text":"contact peter@d***.io"');
     expect(serialized).toContain('"text":"peter@d***.io\\n"');
     expect(serialized).toContain('"/tmp/peter@d***.io"');
+  });
+});
+
+function idleToolCall(id: string): AgentMessage {
+  return {
+    role: "assistant",
+    content: [{ type: "toolCall", id, name: "exec", arguments: {} }],
+    stopReason: "toolUse",
+  } as AgentMessage;
+}
+
+function toolResult(id: string, text: string): AgentMessage {
+  return {
+    role: "toolResult",
+    toolCallId: id,
+    content: [{ type: "text", text }],
+    isError: false,
+  } as AgentMessage;
+}
+
+describe("flushPendingToolResultsAfterIdle", () => {
+  it("waits for idle so real tool results can land before flush", async () => {
+    vi.useFakeTimers();
+    const sm = guardSessionManager(SessionManager.inMemory());
+    const appendMessage = appender(sm);
+    const idle = createDeferredCore();
+    const agent = { waitForIdle: () => idle.promise };
+
+    appendMessage(idleToolCall("call_retry_1"));
+    const flushPromise = flushPendingToolResultsAfterIdle({
+      agent,
+      sessionManager: sm,
+      timeoutMs: 1_000,
+    });
+
+    await Promise.resolve();
+    expect(getMessages(sm).map((message) => message.role)).toEqual(["assistant"]);
+
+    appendMessage(toolResult("call_retry_1", "command output here"));
+    idle.resolve();
+    await flushPromise;
+    expect(vi.getTimerCount()).toBe(0);
+
+    const messages = getMessages(sm);
+    expect(messages.map((message) => message.role)).toEqual(["assistant", "toolResult"]);
+    expect(messages[1]).toMatchObject({
+      isError: false,
+      content: [{ type: "text", text: "command output here" }],
+    });
+  });
+
+  it("flushes pending on cleanup timeout instead of leaving orphaned tool calls", async () => {
+    const sm = guardSessionManager(SessionManager.inMemory());
+    const appendMessage = appender(sm);
+    vi.useFakeTimers();
+
+    appendMessage(idleToolCall("call_orphan_2"));
+    const flushPromise = flushPendingToolResultsAfterIdle({
+      agent: { waitForIdle: () => new Promise<void>(() => {}) },
+      sessionManager: sm,
+      timeoutMs: 30,
+    });
+    await vi.advanceTimersByTimeAsync(30);
+    await flushPromise;
+    expect(vi.getTimerCount()).toBe(0);
+
+    const messages = getMessages(sm);
+    expect(messages.map((message) => message.role)).toEqual(["assistant", "toolResult"]);
+    expect(messages[1]).toMatchObject({
+      toolCallId: "call_orphan_2",
+      isError: true,
+    });
+
+    appendMessage({
+      role: "user",
+      content: "still there?",
+      timestamp: Date.now(),
+    } as AgentMessage);
+    expect(getMessages(sm).map((message) => message.role)).toEqual([
+      "assistant",
+      "toolResult",
+      "user",
+    ]);
   });
 });

@@ -1,0 +1,25 @@
+import { isCloudWorkerPlacementState } from "../../../packages/gateway-protocol/src/schema/session-placement-state.js";
+import type { GatewaySessionRow } from "../api/types.ts";
+
+export type CloudWorkerStopAction = {
+  method: "sessions.reclaim";
+  requiredScope: "operator.write";
+  blocksActiveRun: boolean;
+};
+
+export function resolveCloudWorkerStopAction(
+  placement: GatewaySessionRow["placement"],
+): CloudWorkerStopAction | null {
+  if (
+    !placement ||
+    !isCloudWorkerPlacementState(placement.state) ||
+    (placement.state === "failed" && placement.recoveryAction === "restart")
+  ) {
+    return null;
+  }
+  return {
+    method: "sessions.reclaim",
+    requiredScope: "operator.write",
+    blocksActiveRun: placement.state === "active",
+  };
+}

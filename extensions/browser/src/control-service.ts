@@ -1,6 +1,5 @@
-/**
- * Browser control service lifecycle for plugin-managed, in-process operation.
- */
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   createBrowserControlContext,
   ensureBrowserControlRuntime,
@@ -11,11 +10,13 @@ import {
 import { loadBrowserConfigForRuntimeRefresh } from "./browser/config-refresh-source.js";
 import { resolveBrowserConfig, resolveProfile } from "./browser/config.js";
 import { ensureBrowserControlAuth } from "./browser/control-auth.js";
-import { getExtensionRelayModule } from "./browser/extension-relay.runtime.js";
+import {
+  getExtensionRelayModule,
+  getGatewayExtensionRelayModule,
+} from "./browser/extension-relay.runtime.js";
+import { stopBrowserScreencasts } from "./browser/screencast/session.js";
 import type { BrowserServerState } from "./browser/server-context.js";
-import { getRuntimeConfig } from "./config/config.js";
-import { createSubsystemLogger } from "./logging/subsystem.js";
-import { isDefaultBrowserPluginEnabled } from "./plugin-enabled.js";
+import { resolveBrowserPluginEnableState } from "./plugin-enabled.js";
 
 const log = createSubsystemLogger("browser");
 const logService = log.child("service");
@@ -28,10 +29,10 @@ async function startBrowserControlServiceUnlocked(): Promise<BrowserServerState 
 
   const cfg = getRuntimeConfig();
   const browserCfg = loadBrowserConfigForRuntimeRefresh();
-  if (!isDefaultBrowserPluginEnabled(browserCfg)) {
+  if (!resolveBrowserPluginEnableState(cfg).enabled) {
     return null;
   }
-  let resolved = resolveBrowserConfig(browserCfg.browser, browserCfg);
+  const resolved = resolveBrowserConfig(browserCfg.browser, browserCfg);
   if (!resolved.enabled) {
     return null;
   }
@@ -44,25 +45,20 @@ async function startBrowserControlServiceUnlocked(): Promise<BrowserServerState 
     logService.warn(`failed to auto-configure browser auth: ${String(err)}`);
   }
 
-  // Ensure the host-local relay secret exists before profiles are consumed so
-  // the extension cdpUrl carries auth. Works identically on the gateway host
-  // and on a browser node host — each owns its own secret.
+  // Ensure the host-local HMAC key exists before relay startup. Gateway hosts
+  // and browser node hosts each own an independent key.
   const hasExtensionProfiles = Object.values(resolved.profiles).some(
     (profile) => profile.driver === "extension",
   );
   if (hasExtensionProfiles) {
     const { ensureExtensionRelayToken } = await import("./browser/extension-relay/relay-auth.js");
-    ensureExtensionRelayToken();
-    const refreshed = loadBrowserConfigForRuntimeRefresh();
-    resolved = resolveBrowserConfig(refreshed.browser, refreshed);
+    await ensureExtensionRelayToken();
   }
 
   const state = await ensureBrowserControlRuntime({
     server: null,
     port: resolved.controlPort,
     resolved,
-    owner: "service",
-    onWarn: (message) => logService.warn(message),
   });
 
   // Extension relays listen from service start so the Chrome extension can
@@ -82,18 +78,23 @@ async function startBrowserControlServiceUnlocked(): Promise<BrowserServerState 
   return state;
 }
 
-/** Starts Browser control without binding the HTTP server when config enables it. */
 export async function startBrowserControlServiceFromConfig(): Promise<BrowserServerState | null> {
   return await withBrowserControlStart(startBrowserControlServiceUnlocked);
 }
 
-/** Stops the in-process Browser control service runtime. */
 export async function stopBrowserControlService(): Promise<void> {
-  await stopBrowserControlRuntime({
-    requestedBy: "service",
-    onWarn: (message) => logService.warn(message),
-  });
+  try {
+    await stopBrowserControlRuntime({
+      requestedBy: "service",
+      onWarn: (message) => logService.warn(message),
+    });
+  } finally {
+    // Direct Gateway auth sockets can exist before Browser control lazy-starts,
+    // so plugin shutdown must close them even when there is no runtime state.
+    const gatewayRelay = await getGatewayExtensionRelayModule.peek();
+    gatewayRelay?.disposeGatewayExtensionRelay();
+    await stopBrowserScreencasts();
+  }
 }
 
-/** Re-export Browser control context accessors for gateway-local dispatch. */
 export { createBrowserControlContext, getBrowserControlState };

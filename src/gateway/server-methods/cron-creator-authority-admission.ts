@@ -1,0 +1,214 @@
+import type { CronCreatorAuthorityCapability } from "../../agents/cron-creator-authority-context.js";
+import {
+  consumeRequesterCronAuthorityAdmission,
+  revokeRequesterCronAuthority,
+} from "../../agents/subagents/requester-cron-authority.js";
+import type { InputProvenance } from "../../sessions/input-provenance.js";
+import { readGatewayOperatorRecoverySource } from "../operator-run-recovery.js";
+import { hasGatewayAdminScope } from "../operator-scopes.js";
+import type { AgentRunRequest } from "./agent-request-types.js";
+import type { GatewayClient } from "./shared-types.js";
+
+export type GatewayCronCreatorAuthorityAdmission = Readonly<{
+  runId: string;
+  callerOrigin: { kind: "local" } | { kind: "unknown" };
+  managementEntitlement?: CronCreatorAuthorityCapability["managementEntitlement"];
+  requesterOwner?: CronCreatorAuthorityCapability["requesterOwner"];
+  /** Fresh remote user input may create under its existing caller restrictions. */
+  callerScopedCreation?: true;
+  isCurrent?: () => boolean;
+  bindRunScope?: (scope: CronCreatorAuthorityCapability) => void;
+  /** Retires accepted continuation custody even when dispatch never starts. */
+  release?: () => void;
+}>;
+
+type DirectOperatorAuthorityParams = {
+  runId: string;
+  resolvedSessionKey?: string;
+  spawnedBy?: string;
+  client?: GatewayClient | null;
+  isCurrent?: () => boolean;
+  inputProvenance?: InputProvenance;
+  disallowed: boolean;
+};
+
+/** Classifies a direct operator connection without granting any capability. */
+export function isDirectGatewayUserClient(client: GatewayClient | null | undefined): boolean {
+  const internal = client?.internal;
+  return (
+    client != null &&
+    internal?.syntheticClient !== true &&
+    internal?.senderAttribution === undefined &&
+    internal?.approvalRuntime !== true &&
+    internal?.cronRunContinuation !== true &&
+    internal?.agentRuntimeIdentity === undefined &&
+    internal?.pluginRuntimeOwnerId === undefined &&
+    internal?.agentRunTracking === undefined &&
+    internal?.pluginSubagentRequester === undefined &&
+    internal?.runtimePluginToolGrant === undefined &&
+    internal?.delegatedToolPolicyHandoffId === undefined
+  );
+}
+
+function isDirectGatewayUserTurn(params: DirectOperatorAuthorityParams): boolean {
+  return (
+    params.runId.trim().length > 0 &&
+    isDirectGatewayUserClient(params.client) &&
+    Boolean(params.resolvedSessionKey?.trim()) &&
+    !params.spawnedBy?.trim() &&
+    params.inputProvenance === undefined &&
+    !params.disallowed
+  );
+}
+
+function resolveDirectOperatorAuthority(
+  params: DirectOperatorAuthorityParams,
+): GatewayCronCreatorAuthorityAdmission | undefined {
+  const internal = params.client?.internal;
+  const runId = params.runId.trim();
+  const isDirectTurn = isDirectGatewayUserTurn(params);
+  if (isDirectTurn && params.resolvedSessionKey) {
+    // A new user admission replaces pending task authority, including for a non-admin caller.
+    revokeRequesterCronAuthority(params.resolvedSessionKey);
+  }
+  const isDirectOperator =
+    isDirectTurn &&
+    hasGatewayAdminScope(params.client) &&
+    (internal?.isLocalClient === true || internal?.controlUiAdmin === true);
+  return isDirectOperator
+    ? Object.freeze({
+        runId,
+        // Remote management admission does not confer the direct-local creator/operator capability.
+        callerOrigin:
+          internal?.isLocalClient === true
+            ? { kind: "local" as const }
+            : { kind: "unknown" as const },
+        ...(internal?.controlUiAdmin === true
+          ? { managementEntitlement: { source: "control-ui-admin" as const } }
+          : {}),
+        ...(internal?.isLocalClient !== true ? { callerScopedCreation: true as const } : {}),
+        ...(params.isCurrent ? { isCurrent: params.isCurrent } : {}),
+      })
+    : undefined;
+}
+
+/** Mints cron authority for an admitted local operator or authenticated Control UI admin turn. */
+export function resolveGatewayCronCreatorAuthorityAdmission(params: {
+  runId: string;
+  resolvedSessionKey?: string;
+  sessionId?: string;
+  spawnedBy?: string;
+  client?: GatewayClient | null;
+  isCurrent?: () => boolean;
+  request: AgentRunRequest;
+  inputProvenance?: InputProvenance;
+  hasRestoredCronContinuation: boolean;
+  isOneShotModelRun: boolean;
+  isRestartRecoveryResumeRun: boolean;
+}): GatewayCronCreatorAuthorityAdmission | undefined {
+  const request = params.request;
+  if (
+    params.isRestartRecoveryResumeRun &&
+    params.resolvedSessionKey &&
+    params.sessionId &&
+    !params.spawnedBy &&
+    !params.hasRestoredCronContinuation &&
+    !params.isOneShotModelRun &&
+    hasGatewayAdminScope(params.client)
+  ) {
+    const restored = readGatewayOperatorRecoverySource(
+      params.client?.internal?.operatorRunAuthority,
+      { runId: params.runId, sessionKey: params.resolvedSessionKey, sessionId: params.sessionId },
+    );
+    if (restored && (restored.localOperator || restored.controlUiAdmin)) {
+      return Object.freeze({
+        runId: params.runId,
+        callerOrigin: restored.localOperator
+          ? { kind: "local" as const }
+          : { kind: "unknown" as const },
+        ...(restored.controlUiAdmin
+          ? { managementEntitlement: { source: "control-ui-admin" as const } }
+          : {}),
+        ...(!restored.localOperator ? { callerScopedCreation: true as const } : {}),
+        isCurrent: () => {
+          params.client?.internal?.operatorRunAuthority?.assertCurrent();
+          return params.isCurrent?.() !== false;
+        },
+      });
+    }
+  }
+  if (
+    params.client?.internal?.syntheticClient === true &&
+    !params.hasRestoredCronContinuation &&
+    !params.isOneShotModelRun &&
+    !params.isRestartRecoveryResumeRun
+  ) {
+    const continuation = consumeRequesterCronAuthorityAdmission({
+      runId: params.runId,
+      sessionKey: params.resolvedSessionKey,
+      sessionId: params.sessionId,
+      inputProvenance: params.inputProvenance,
+    });
+    if (continuation) {
+      return continuation;
+    }
+  }
+  return resolveDirectOperatorAuthority({
+    ...params,
+    disallowed:
+      params.hasRestoredCronContinuation ||
+      params.isOneShotModelRun ||
+      params.isRestartRecoveryResumeRun ||
+      request.modelRun === true ||
+      request.acpTurnSource !== undefined ||
+      request.internalRuntimeHandoffId !== undefined ||
+      request.internalExecutionIdentityRetry === true ||
+      request.internalExecutionIdentityRecoveryAttempt !== undefined ||
+      request.execApprovalFollowupExpectedSessionId !== undefined ||
+      request.internalEvents !== undefined ||
+      request.sessionEffects === "internal" ||
+      request.suppressPromptPersistence === true ||
+      request.swarmCollector === true ||
+      request.lane === "subagent",
+  });
+}
+
+type GatewayChatUserTurn = {
+  runId: string;
+  resolvedSessionKey?: string;
+  spawnedBy?: string;
+  client?: GatewayClient | null;
+  isCurrent?: () => boolean;
+  inputProvenance?: InputProvenance;
+  hasExplicitOrigin: boolean;
+  hasRestoredCronContinuation: boolean;
+  isIncognito: boolean;
+  isReconnectResume: boolean;
+  isSystemGenerated: boolean;
+  turnKind: "btw" | "main";
+  isDirectExternalUser: boolean;
+};
+
+/** Current external user input, independently of the permission being admitted. */
+export function isDirectGatewayChatUserTurn(params: GatewayChatUserTurn): boolean {
+  return isDirectGatewayUserTurn({
+    ...params,
+    disallowed:
+      !params.isDirectExternalUser ||
+      params.hasExplicitOrigin ||
+      params.hasRestoredCronContinuation ||
+      params.isSystemGenerated ||
+      params.turnKind !== "main",
+  });
+}
+
+/** Mints the same authority for an admitted ordinary operator chat.send turn. */
+export function resolveGatewayChatCronCreatorAuthorityAdmission(
+  params: GatewayChatUserTurn,
+): GatewayCronCreatorAuthorityAdmission | undefined {
+  return resolveDirectOperatorAuthority({
+    ...params,
+    disallowed:
+      params.isIncognito || params.isReconnectResume || !isDirectGatewayChatUserTurn(params),
+  });
+}

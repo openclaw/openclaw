@@ -7,7 +7,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTestWebInboundMessage } from "../inbound/test-message.test-helper.js";
 import type { AdmittedWebInboundMessage } from "../inbound/types.js";
 import { buildMentionConfig } from "./mentions.js";
-import { applyGroupGating, type GroupHistoryEntry } from "./monitor/group-gating.js";
+import { applyGroupGating } from "./monitor/group-gating.js";
+import type { GroupHistoryEntry } from "./monitor/inbound-context.js";
 import { formatWhatsAppInboundListeningLog } from "./monitor/listener-log.js";
 import { buildInboundLine } from "./monitor/message-line.js";
 
@@ -199,13 +200,6 @@ function makeOwnerGroupConfig() {
       },
     },
   });
-}
-
-function makeInboundCfg(messagePrefix = "") {
-  return {
-    agents: { defaults: { workspace: "/tmp/openclaw" } },
-    channels: { whatsapp: { messagePrefix } },
-  } as never;
 }
 
 describe("WhatsApp listener diagnostics", () => {
@@ -575,11 +569,13 @@ describe("applyGroupGating", () => {
       messages: { groupChat: { mentionPatterns: ["@openclaw"] } },
     });
 
+    // Third-party @-mention and no configured-pattern match: still dropped
+    // (the self-chat suppression path must not swallow the identity check).
     const { result, groupHistories } = await runGroupGating({
       cfg,
       msg: createGroupMessage({
         id: "g-other-mention",
-        body: "@openclaw please check this",
+        body: "please check this out",
         mentionedJids: ["15550000000@s.whatsapp.net"],
         selfE164: "+15551234567",
         selfJid: "15551234567@s.whatsapp.net",
@@ -588,6 +584,33 @@ describe("applyGroupGating", () => {
 
     expect(result.shouldProcess).toBe(false);
     expect(groupHistories.get("whatsapp:default:group:123@g.us")?.length).toBe(1);
+  });
+
+  it("processes a pattern-matching message that also @-mentions another member (#109488)", async () => {
+    const cfg = makeConfig({
+      channels: {
+        whatsapp: {
+          groups: { "*": { requireMention: true } },
+        },
+      },
+      messages: { groupChat: { mentionPatterns: ["@openclaw"] } },
+    });
+
+    // Previously the native third-party @-mention short-circuited gating to
+    // false before mentionPatterns were evaluated and the message was
+    // silently dropped.
+    const { result } = await runGroupGating({
+      cfg,
+      msg: createGroupMessage({
+        id: "g-other-mention-pattern",
+        body: "@openclaw please check this",
+        mentionedJids: ["15550000000@s.whatsapp.net"],
+        selfE164: "+15551234567",
+        selfJid: "15551234567@s.whatsapp.net",
+      }),
+    });
+
+    expect(result.shouldProcess).toBe(true);
   });
 
   it.each([
@@ -643,12 +666,11 @@ describe("applyGroupGating", () => {
         groupChat: { mentionPatterns: ["@global"] },
       },
       agents: {
-        list: [
-          {
-            id: "work",
+        entries: {
+          work: {
             groupChat: { mentionPatterns: ["@workbot"] },
           },
-        ],
+        },
       },
       bindings: [
         {
@@ -743,8 +765,6 @@ describe("applyGroupGating", () => {
 describe("buildInboundLine", () => {
   it("prefixes group messages with sender", () => {
     const line = buildInboundLine({
-      cfg: makeInboundCfg(""),
-      agentId: "main",
       msg: createGroupMessage({
         admission: { accountId: "default" },
         body: "ping",
@@ -761,8 +781,6 @@ describe("buildInboundLine", () => {
 
   it("includes reply-to context blocks when replyToBody is present", () => {
     const line = buildInboundLine({
-      cfg: makeInboundCfg(""),
-      agentId: "main",
       msg: createDirectMessage({
         admission: {
           conversation: {
@@ -782,29 +800,8 @@ describe("buildInboundLine", () => {
     expect(line).toContain("[/Replying]");
   });
 
-  it("applies the WhatsApp messagePrefix when configured", () => {
-    const line = buildInboundLine({
-      cfg: makeInboundCfg("[PFX]"),
-      agentId: "main",
-      msg: createDirectMessage({
-        admission: {
-          conversation: {
-            id: "+1555",
-          },
-        },
-        body: "ping",
-        to: "+2666",
-      }),
-      envelope: { includeTimestamp: false },
-    });
-
-    expect(line).toContain("[PFX] ping");
-  });
-
   it("normalizes direct from labels by stripping whatsapp: prefix", () => {
     const line = buildInboundLine({
-      cfg: makeInboundCfg(""),
-      agentId: "main",
       msg: createDirectMessage({
         admission: {
           conversation: {
@@ -825,8 +822,6 @@ describe("buildInboundLine", () => {
 describe("buildInboundLine reply context", () => {
   it("omits reply context when replyToBody is missing", () => {
     const line = buildInboundLine({
-      cfg: makeInboundCfg(""),
-      agentId: "main",
       msg: createDirectMessage({ body: "ping" }),
       envelope: { includeTimestamp: false },
     });
@@ -835,8 +830,6 @@ describe("buildInboundLine reply context", () => {
 
   it("uses unknown sender label when reply sender is absent", () => {
     const line = buildInboundLine({
-      cfg: makeInboundCfg(""),
-      agentId: "main",
       msg: createDirectMessage({ body: "ping", replyToBody: "original" }),
       envelope: { includeTimestamp: false },
     });

@@ -1,0 +1,395 @@
+import type { LookupAddress } from "node:dns";
+import type { IncomingMessage, Server, ServerResponse } from "node:http";
+import { createDeferredCore } from "../shared/deferred.js";
+import { oauthErrorHtml, renderOAuthPage } from "../shared/oauth-page.js";
+import { racePromiseWithAbortSignal } from "./abort-signal.js";
+import { OAUTH_PAGE_CSP } from "./oauth-page-csp.js";
+
+type OAuthLoopbackCallbackResult =
+  | { type: "authorization_code"; code: string; state: string; parameters: URLSearchParams }
+  | { type: "oauth_error"; error: string; errorDescription?: string };
+
+export type OAuthLoopbackCallbackServer = {
+  waitForCallback: () => Promise<OAuthLoopbackCallbackResult>;
+  complete: (response: RenderedResponse & { status: number }) => Promise<void>;
+  close: () => Promise<void>;
+};
+
+type RenderedResponse = { body: string; contentType: string };
+type CorsOriginResolver = (originHeader: string | string[] | undefined) => string | undefined;
+type LoopbackLookup = (
+  hostname: string,
+  options: { all: true; verbatim: true },
+) => Promise<LookupAddress[]>;
+
+function unbracket(hostname: string): string {
+  return hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
+}
+
+function isLoopbackAddress(address: string): boolean {
+  if (address === "::1") {
+    return true;
+  }
+  const octets = address.split(".").map(Number);
+  return (
+    octets.length === 4 && octets[0] === 127 && octets.every((octet) => octet >= 0 && octet <= 255)
+  );
+}
+
+function resolveLoopbackHostname(
+  hostname: string,
+  lookupOverride?: LoopbackLookup,
+): string[] | Promise<string[]> {
+  if (hostname === "127.0.0.1" || hostname === "::1") {
+    return [hostname];
+  }
+  if (hostname !== "localhost") {
+    throw new Error("OAuth callback redirect must use localhost, 127.0.0.1, or ::1");
+  }
+  const loadLookup: Promise<LoopbackLookup> = lookupOverride
+    ? Promise.resolve(lookupOverride)
+    : import("node:dns/promises").then(({ lookup }) => lookup as LoopbackLookup);
+  return loadLookup.then(async (lookup) => {
+    const addresses = [
+      ...new Set(
+        (await lookup("localhost", { all: true, verbatim: true })).map(({ address }) => address),
+      ),
+    ];
+    if (addresses.length === 0 || addresses.some((address) => !isLoopbackAddress(address))) {
+      throw new Error("localhost did not resolve exclusively to loopback addresses");
+    }
+    return addresses;
+  });
+}
+
+function resolveBindAddresses(
+  redirectUrl: URL,
+  bindHostname?: string,
+  lookup?: LoopbackLookup,
+  bindOnlyHostname?: string,
+): string[] | Promise<string[]> {
+  if (bindOnlyHostname !== undefined) {
+    const hostname = unbracket(bindOnlyHostname);
+    if (!["localhost", "127.0.0.1", "::1"].includes(hostname)) {
+      throw new Error("OAuth callback bind must use localhost, 127.0.0.1, or ::1");
+    }
+    return [hostname];
+  }
+  const redirectHostname = unbracket(redirectUrl.hostname);
+  const redirectAddresses = resolveLoopbackHostname(redirectHostname, lookup);
+  const requestedHostname = bindHostname ? unbracket(bindHostname) : redirectHostname;
+  if (requestedHostname === redirectHostname) {
+    return redirectAddresses;
+  }
+  const requestedAddresses = resolveLoopbackHostname(requestedHostname, lookup);
+  return Promise.all([redirectAddresses, requestedAddresses]).then(([redirect, requested]) => [
+    ...new Set([...requested, ...redirect]),
+  ]);
+}
+
+function resolveOAuthLoopbackPort(redirectUrl: URL): number {
+  const port = redirectUrl.port ? Number(redirectUrl.port) : 80;
+  if (!Number.isInteger(port) || port <= 0 || port > 65_535) {
+    throw new Error("OAuth callback redirect must use a valid TCP port");
+  }
+  return port;
+}
+
+function prepareResponse(
+  request: IncomingMessage,
+  response: ServerResponse,
+  resolveCorsOrigin?: CorsOriginResolver,
+): void {
+  response.setHeader("Connection", "close");
+  response.setHeader("Cache-Control", "no-store");
+  response.setHeader("Content-Security-Policy", OAUTH_PAGE_CSP);
+  response.setHeader("Referrer-Policy", "no-referrer");
+  response.setHeader("X-Content-Type-Options", "nosniff");
+  const origin = resolveCorsOrigin?.(request.headers.origin);
+  if (!origin) {
+    return;
+  }
+  response.setHeader("Access-Control-Allow-Origin", origin);
+  response.setHeader(
+    "Vary",
+    "Origin, Access-Control-Request-Method, Access-Control-Request-Headers",
+  );
+  response.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  response.setHeader(
+    "Access-Control-Allow-Headers",
+    typeof request.headers["access-control-request-headers"] === "string"
+      ? request.headers["access-control-request-headers"]
+      : "content-type",
+  );
+  response.setHeader("Access-Control-Allow-Private-Network", "true");
+  response.setHeader("Access-Control-Max-Age", "600");
+}
+
+async function closeServers(servers: readonly Server[]): Promise<void> {
+  await Promise.all(
+    servers.map(
+      (server) =>
+        new Promise<void>((resolve) => {
+          if (!server.listening) {
+            resolve();
+            return;
+          }
+          server.close(() => resolve());
+          server.closeAllConnections?.();
+        }),
+    ),
+  );
+}
+
+/** Binds the authoritative loopback redirect before returning, then waits separately. */
+export async function startOAuthLoopbackCallbackServer(params: {
+  redirectUrl: string | URL;
+  expectedState: string;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  bindHostname?: string;
+  bindOnlyHostname?: string;
+  deferResponse?: boolean;
+  lookup?: LoopbackLookup;
+  createServer?: typeof import("node:http").createServer;
+  resolveCorsOrigin?: CorsOriginResolver;
+  renderSuccess?: () => RenderedResponse;
+  renderError?: (message: string) => RenderedResponse;
+}): Promise<OAuthLoopbackCallbackServer> {
+  const redirectUrl = new URL(params.redirectUrl);
+  const redirectHostname = unbracket(redirectUrl.hostname);
+  if (
+    redirectUrl.protocol !== "http:" ||
+    !["localhost", "127.0.0.1", "::1"].includes(redirectHostname)
+  ) {
+    throw new Error("OAuth callback redirect must use HTTP on a loopback address");
+  }
+  if (
+    !params.expectedState ||
+    (params.timeoutMs !== undefined &&
+      (!Number.isFinite(params.timeoutMs) || params.timeoutMs <= 0))
+  ) {
+    throw new Error("OAuth callback requires state and a positive timeout");
+  }
+  if (params.signal?.aborted) {
+    throw new Error("OAuth callback cancelled");
+  }
+
+  if (params.bindHostname !== undefined && params.bindOnlyHostname !== undefined) {
+    throw new Error("Choose either an additional or an exact OAuth callback bind host");
+  }
+  const resolvedAddresses = resolveBindAddresses(
+    redirectUrl,
+    params.bindHostname,
+    params.lookup,
+    params.bindOnlyHostname,
+  );
+  const addresses = Array.isArray(resolvedAddresses)
+    ? resolvedAddresses
+    : await racePromiseWithAbortSignal(
+        resolvedAddresses,
+        params.signal,
+        () => new Error("OAuth callback cancelled"),
+      );
+  const port = resolveOAuthLoopbackPort(redirectUrl);
+  const callbackPath = redirectUrl.pathname || "/";
+  const createServer = params.createServer ?? (await import("node:http")).createServer;
+  const servers: Server[] = [];
+  let received = false;
+  let settled = false;
+  let pendingResponse: ServerResponse | undefined;
+  let binding = true;
+  let timeout: NodeJS.Timeout | undefined;
+  let closePromise: Promise<void> | undefined;
+  const callback = createDeferredCore<OAuthLoopbackCallbackResult>();
+  void callback.promise.catch(() => undefined);
+  const close = () => (binding ? Promise.resolve() : (closePromise ??= closeServers(servers)));
+  const cleanup = () => {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+    params.signal?.removeEventListener("abort", onAbort);
+  };
+  const settleError = (error: unknown) => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    pendingResponse = undefined;
+    cleanup();
+    callback.reject(error instanceof Error ? error : new Error("OAuth callback failed"));
+    void close();
+  };
+  const onAbort = () => settleError(new Error("OAuth callback cancelled"));
+  const settleResult = (result: OAuthLoopbackCallbackResult, response: ServerResponse) => {
+    received = true;
+    if (params.deferResponse) {
+      // Admission consumes the callback, but cancellation owns the socket until verification ends.
+      pendingResponse = response;
+      response.once("close", () => {
+        if (!response.writableFinished) {
+          settleError(new Error("OAuth callback disconnected"));
+        }
+      });
+      callback.resolve(result);
+      return;
+    }
+    settled = true;
+    cleanup();
+    let finished = false;
+    const finish = () => {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      callback.resolve(result);
+      void close();
+    };
+    response.once("finish", finish);
+    response.once("close", finish);
+  };
+  const renderSuccess =
+    params.renderSuccess ??
+    (() => ({
+      body: renderOAuthPage({
+        title: "Authorization received",
+        heading: "Authorization received",
+        message: "Return to the terminal while OpenClaw finishes.",
+      }),
+      contentType: "text/html; charset=utf-8",
+    }));
+  const renderError =
+    params.renderError ??
+    ((message: string) => ({
+      body: oauthErrorHtml(message),
+      contentType: "text/html; charset=utf-8",
+    }));
+  const respond = (response: ServerResponse, status: number, rendered: RenderedResponse) => {
+    response.writeHead(status, { "Content-Type": rendered.contentType });
+    response.end(rendered.body);
+  };
+  const complete = async (rendered: RenderedResponse & { status: number }) => {
+    if (settled || !pendingResponse) {
+      return;
+    }
+    const response = pendingResponse;
+    if (response.destroyed || response.writableFinished) {
+      settleError(new Error("OAuth callback disconnected"));
+      await close();
+      return;
+    }
+    pendingResponse = undefined;
+    const finished = new Promise<void>((resolve) => {
+      response.once("finish", resolve);
+      response.once("close", resolve);
+    });
+    respond(response, rendered.status, rendered);
+    await finished;
+    settled = true;
+    cleanup();
+    await close();
+  };
+  const handleRequest = (request: IncomingMessage, response: ServerResponse) => {
+    try {
+      prepareResponse(request, response, params.resolveCorsOrigin);
+      if (received || settled) {
+        respond(response, 409, renderError("OAuth callback was already received."));
+      } else if (request.method === "OPTIONS") {
+        response.writeHead(204).end();
+      } else {
+        let url: URL;
+        try {
+          url = new URL(request.url ?? "/", redirectUrl.origin);
+        } catch {
+          respond(response, 400, renderError("Invalid OAuth callback."));
+          return;
+        }
+        if (url.pathname !== callbackPath) {
+          respond(response, 404, renderError("Callback route not found."));
+        } else if (request.method !== "GET") {
+          response.setHeader("Allow", "GET, OPTIONS");
+          respond(response, 405, renderError("Method not allowed."));
+        } else if (
+          url.searchParams.getAll("state").length !== 1 ||
+          url.searchParams.get("state") !== params.expectedState
+        ) {
+          respond(response, 400, renderError("Invalid OAuth state."));
+        } else if (url.searchParams.has("error")) {
+          const error = url.searchParams.get("error")!;
+          const errorDescription = url.searchParams.get("error_description") ?? undefined;
+          settleResult(
+            { type: "oauth_error", error, ...(errorDescription ? { errorDescription } : {}) },
+            response,
+          );
+          if (!params.deferResponse) {
+            respond(response, 400, renderError("Authorization was not completed."));
+          }
+        } else {
+          const code = url.searchParams.get("code")?.trim();
+          if (!code || url.searchParams.getAll("code").length !== 1) {
+            respond(response, 400, renderError("Missing OAuth authorization code."));
+          } else {
+            settleResult(
+              {
+                type: "authorization_code",
+                code,
+                state: params.expectedState,
+                parameters: url.searchParams,
+              },
+              response,
+            );
+            if (!params.deferResponse) {
+              respond(response, 200, renderSuccess());
+            }
+          }
+        }
+      }
+    } catch (error) {
+      if (!response.headersSent) {
+        respond(response, 500, renderError("OAuth callback failed."));
+      }
+      settleError(error);
+    }
+  };
+
+  params.signal?.addEventListener("abort", onAbort, { once: true });
+  if (params.signal?.aborted) {
+    onAbort();
+    throw new Error("OAuth callback cancelled");
+  }
+  try {
+    // A partial localhost bind lets browsers choose an unserved family, so fail as one unit.
+    for (const address of addresses) {
+      const server = createServer(handleRequest);
+      servers.push(server);
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(port, address, resolve);
+      });
+      server.removeAllListeners("error");
+      server.on("error", settleError);
+      if (settled) {
+        throw new Error("OAuth callback cancelled");
+      }
+    }
+  } catch (error) {
+    binding = false;
+    cleanup();
+    await closeServers(servers);
+    throw error;
+  }
+  binding = false;
+  if (params.timeoutMs !== undefined) {
+    timeout = setTimeout(() => settleError(new Error("OAuth callback timeout")), params.timeoutMs);
+  }
+  return {
+    waitForCallback: () => callback.promise,
+    complete,
+    close: async () => {
+      if (!settled) {
+        settleError(new Error("OAuth callback cancelled"));
+      }
+      await close();
+    },
+  };
+}

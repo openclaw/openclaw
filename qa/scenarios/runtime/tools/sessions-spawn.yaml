@@ -3,16 +3,17 @@ title: "Runtime tool fixture — sessions_spawn"
 scenario:
   id: runtime-tool-sessions-spawn
   surface: runtime-tools
-  runtimeParityTier: standard
+  runtimePairLane: core
   coverage:
     primary:
-      - tools.sessions-spawn
-  objective: Verify sessions_spawn preserves arguments and result shape across OpenClaw and Codex.
+      - agent-runtime.subagent-turns-sessions-spawn
+  objective: Verify sessions_spawn executes successfully across OpenClaw and Codex.
   successCriteria:
     - Effective tools expose sessions_spawn.
-    - The mock provider plans exactly one happy-path sessions_spawn call.
-    - The mock provider plans one denied-input failure-path sessions_spawn call.
-    - Runtime parity coverage hard-fails call/result drift in the standard direct-loading gate.
+    - Codex prompt snapshots and live execution keep sessions_spawn always direct with no deferred discovery requirement.
+    - The happy path retains a linked successful sessions_spawn call and result.
+    - The denied-input path retains a linked sessions_spawn failure result.
+    - Runtime parity hard-fails missing call/result evidence in either runtime.
   docsRefs:
     - qa/scenarios/index.yaml
   codeRefs:
@@ -20,9 +21,27 @@ scenario:
     - extensions/qa-lab/src/runtime-tool-fixture.ts
   execution:
     kind: flow
-    summary: Exercise the sessions_spawn runtime tool family.
+    liveConfiguredRuntime:
+      id: codex
+      model: openai/gpt-5.5
+    summary: >-
+      For native Codex discovery proof, select --provider-mode live-frontier --model openai/gpt-5.5 --alt-model openai/gpt-5.5.
+      Other model selections retain their general runtime route.
+      Exercise the sessions_spawn runtime tool family.
     config:
       toolName: sessions_spawn
+      happyPrompt: >-
+        QA routing marker: tool search qa check target=sessions_spawn. Call
+        sessions_spawn directly exactly once with task="Runtime tool fixture
+        subagent: reply exactly RUNTIME-TOOL-FIXTURE.",
+        label="runtime-tool-fixture", mode="run", thread=false, and
+        expectsCompletionMessage=false. Do not call tool_search. Summarize the
+        actual acceptance result.
+      failurePrompt: >-
+        QA routing marker: tool search qa failure target=sessions_spawn. Call
+        sessions_spawn directly exactly once with task="". Do not repair,
+        omit, replace, or retry the empty task. Do not call tool_search.
+        Summarize the actual rejection.
       toolCoverage:
         family: sessions_spawn
         actualTool: sessions_spawn
@@ -32,10 +51,8 @@ scenario:
         required: true
         codexDefaultImpact: P4
         qaImpact: P1
-        action: hard gate in the standard direct-loading tier
-        reason: sessions_spawn is an OpenClaw integration tool and must stay visible and callable under OpenClaw and Codex direct runtime parity.
-      knownHarnessGap:
-        reason: Live failure-path injection for sessions_spawn can be refused safely in prose before the model calls the tool; happy-path visibility and execution still run in this fixture.
+        action: hard gate in the core runtime-pair lane
+        reason: Canonical fixture session-key capture retains the parent call/result when spawning creates a newer child session, so this OpenClaw integration tool must hard-gate both runtimes.
       promptSnippet: "target=sessions_spawn"
       failurePromptSnippet: "failure target=sessions_spawn"
 

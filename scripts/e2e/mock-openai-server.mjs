@@ -1,8 +1,12 @@
 // Mock OpenAI-compatible server for broader E2E scenarios.
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import http from "node:http";
+import { setTimeout as delay } from "node:timers/promises";
 import { escapeRegExp } from "../lib/regexp.mjs";
-import { readTcpPortEnv } from "./lib/env-limits.mjs";
+import { resolveAgentPluginBundleResponse } from "./lib/agent-plugin-bundle-response.mjs";
+import { readPositiveIntEnv, readTcpPortEnv } from "./lib/env-limits.mjs";
+import { readMockUserText, summarizeMockInferenceRequest } from "./lib/mock-inference-facts.ts";
 import {
   boundedRequestLogBody,
   isRequestBodyTooLargeError,
@@ -11,74 +15,407 @@ import {
   writeJson,
   writeSse,
 } from "./lib/mock-openai-http.mjs";
+import { createTelegramBindingScenario } from "./lib/telegram-binding-scenario.mjs";
 
 const port =
-  process.env.MOCK_PORT != null
-    ? readTcpPortEnv("MOCK_PORT")
-    : readTcpPortEnv("OPENCLAW_MOCK_OPENAI_PORT");
+  process.env.MOCK_PORT?.trim() === "0"
+    ? 0
+    : process.env.MOCK_PORT != null
+      ? readTcpPortEnv("MOCK_PORT")
+      : readTcpPortEnv("OPENCLAW_MOCK_OPENAI_PORT");
+const bindHost = process.env.MOCK_BIND_HOST ?? "127.0.0.1";
 const successMarker = process.env.SUCCESS_MARKER ?? "OPENCLAW_E2E_OK";
 const requestLog = process.env.MOCK_REQUEST_LOG;
+// Absolute record ordinal, stamped at the producer: consumers expose a bounded
+// tail of the log, so entries must carry their own position. The server starts
+// once per run, so the counter spans the whole session.
+let requestLogSeq = 0;
+// Fixed producer counters exclude health/catalog reads. Ingress includes rejected
+// bodies; selections are later events, not response completion or the same cohort.
+const requests = {
+  id: randomUUID(),
+  ingress: { responses: 0, chatCompletions: 0, embeddings: 0, other: 0 },
+  selections: { model: 0, global: 0, automaticTool: 0, automaticText: 0 },
+};
+const initialResponseChunkDelayMs = process.env.MOCK_RESPONSE_CHUNK_DELAY_MS
+  ? readPositiveIntEnv("MOCK_RESPONSE_CHUNK_DELAY_MS", undefined)
+  : 0;
+const responseControl = process.env.MOCK_RESPONSE_CONTROL;
+const MAX_CONTENT_FACTS = 128;
+const MAX_CONTENT_FACT_FILENAME_LENGTH = 1024;
+const LEGACY_MEDIA_PATTERN =
+  /\[media attached: ([^\]\r\n]+?) \(([a-z][a-z0-9.+-]*\/[a-z0-9.+-]+)\)(?: \| [^\]\r\n]+)?\]/giu;
+const MEDIA_DATA_URL_PATTERN =
+  /^data:([a-z][a-z0-9.+-]*\/[a-z0-9.+-]+)(?:;[^,]*)*;base64,([\s\S]*)$/iu;
+let scriptState;
+const telegramBindingScenario = createTelegramBindingScenario();
 
-function responseEvents(text) {
-  const itemId = "msg_e2e_1";
+function parseMediaDataUrl(value) {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const match = MEDIA_DATA_URL_PATTERN.exec(value);
+  if (!match) {
+    return undefined;
+  }
+  const encoded = (match[2] ?? "").replace(/\s/gu, "");
+  const valid = /^[A-Za-z0-9+/]*={0,2}$/u.test(encoded) && encoded.length % 4 !== 1;
+  const padding = encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0;
+  return {
+    byteLength: valid ? Math.floor((encoded.length * 3) / 4) - padding : undefined,
+    mimeType: match[1]?.toLowerCase(),
+  };
+}
+
+function requestContentFact(item) {
+  const type = typeof item.type === "string" ? item.type.slice(0, 64) : undefined;
+  if (!type) {
+    return undefined;
+  }
+  const fact = { type };
+  if (type !== "input_file" && type !== "input_image") {
+    return fact;
+  }
+  const imageUrl =
+    typeof item.image_url === "string"
+      ? item.image_url
+      : item.image_url && typeof item.image_url === "object"
+        ? item.image_url.url
+        : undefined;
+  const dataUrl = parseMediaDataUrl(type === "input_file" ? item.file_data : imageUrl);
+  const filename =
+    typeof item.filename === "string"
+      ? item.filename.slice(0, MAX_CONTENT_FACT_FILENAME_LENGTH)
+      : undefined;
+  const mimeType =
+    (typeof item.mimeType === "string" ? item.mimeType.slice(0, 128) : undefined) ??
+    (typeof item.mime_type === "string" ? item.mime_type.slice(0, 128) : undefined) ??
+    dataUrl?.mimeType;
+  return {
+    ...fact,
+    ...(filename ? { filename } : {}),
+    ...(mimeType ? { mimeType } : {}),
+    ...(dataUrl?.byteLength === undefined ? {} : { byteLength: dataUrl.byteLength }),
+  };
+}
+
+function summarizeRequestContent(body) {
+  const facts = [];
+  let firstFact = 0;
+  let truncated = false;
+  const appendFact = (fact) => {
+    if (facts.length < MAX_CONTENT_FACTS) {
+      facts.push(fact);
+      return;
+    }
+    facts[firstFact] = fact;
+    firstFact = (firstFact + 1) % MAX_CONTENT_FACTS;
+    truncated = true;
+  };
+  const appendLegacyMediaFacts = (text) => {
+    for (const match of text.matchAll(LEGACY_MEDIA_PATTERN)) {
+      appendFact({
+        type: "legacy_media",
+        filename: match[1].trim().slice(0, MAX_CONTENT_FACT_FILENAME_LENGTH),
+        mimeType: match[2].toLowerCase(),
+      });
+    }
+  };
+  const visit = (value) => {
+    if (typeof value === "string") {
+      appendFact({ type: "input_text" });
+      appendLegacyMediaFacts(value);
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        visit(item);
+      }
+      return;
+    }
+    if (!value || typeof value !== "object") {
+      return;
+    }
+    if (value.type === "message" || typeof value.type !== "string") {
+      visit(value.content);
+      return;
+    }
+    const fact = requestContentFact(value);
+    if (!fact) {
+      return;
+    }
+    appendFact(fact);
+    if (
+      (fact.type === "input_text" || fact.type === "output_text") &&
+      typeof value.text === "string"
+    ) {
+      appendLegacyMediaFacts(value.text);
+    }
+  };
+
+  visit(body?.input ?? body?.messages);
+  const contentFacts = truncated
+    ? [...facts.slice(firstFact), ...facts.slice(0, firstFact)]
+    : facts;
+  return { contentFacts, ...(truncated ? { contentFactsTruncated: true } : {}) };
+}
+
+function redactRequestLogMedia(body, bodyText) {
+  let redacted = false;
+  const sanitized = JSON.stringify(body, (_key, value) => {
+    const dataUrl = parseMediaDataUrl(value);
+    if (!dataUrl) {
+      return value;
+    }
+    redacted = true;
+    const bytes = dataUrl.byteLength === undefined ? "unknown" : dataUrl.byteLength;
+    return `data:${dataUrl.mimeType};base64,[redacted:${bytes} bytes]`;
+  });
+  return redacted ? sanitized : bodyText;
+}
+
+function readResponseEntry(value, label) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} is invalid`);
+  }
+  const chunkDelayMs = value.chunkDelayMs ?? 0;
+  if (!Number.isInteger(chunkDelayMs) || chunkDelayMs < 0 || chunkDelayMs > 15 * 60_000) {
+    throw new Error(`${label} chunkDelayMs is invalid`);
+  }
+  if (value.fail !== undefined) {
+    if (!value.fail || typeof value.fail !== "object" || Array.isArray(value.fail)) {
+      throw new Error(`${label} fail is invalid`);
+    }
+    const status = value.fail.status ?? 500;
+    if (!Number.isInteger(status) || status < 400 || status > 599) {
+      throw new Error(`${label} fail status is invalid`);
+    }
+    if (value.fail.mode !== undefined && value.fail.mode !== "drop") {
+      throw new Error(`${label} fail mode is invalid`);
+    }
+    if (value.fail.mode === "drop" && value.fail.status !== undefined) {
+      throw new Error(`${label} fail cannot combine status and drop`);
+    }
+    const message = value.fail.message ?? "mantis injected fault";
+    if (typeof message !== "string" || !message.trim() || message.length > 2_000) {
+      throw new Error(`${label} fail message is invalid`);
+    }
+    return {
+      fail: value.fail.mode === "drop" ? { mode: "drop" } : { status, message },
+      chunkDelayMs,
+    };
+  }
+  if (Array.isArray(value.events) && value.events.length > 0) {
+    return { events: value.events, chunkDelayMs };
+  }
+  if (typeof value.text !== "string" || value.text.length === 0 || value.text.length > 100_000) {
+    throw new Error(`${label} text is invalid`);
+  }
+  return { text: value.text, chunkDelayMs };
+}
+
+function readResponseControl() {
+  if (!responseControl) {
+    return {
+      hold: false,
+      response: { text: successMarker, chunkDelayMs: initialResponseChunkDelayMs },
+    };
+  }
+  const value = JSON.parse(readFileSync(responseControl, "utf8"));
+  if (value.hold !== undefined && typeof value.hold !== "boolean") {
+    throw new Error("mock response control hold is invalid");
+  }
+  if (value.models !== undefined) {
+    if (
+      !value.models ||
+      typeof value.models !== "object" ||
+      Array.isArray(value.models) ||
+      Object.keys(value.models).length === 0 ||
+      Object.keys(value).some((key) => key !== "models" && key !== "hold")
+    ) {
+      throw new Error("mock response control models must be an exclusive nonempty map");
+    }
+    return {
+      hold: value.hold ?? false,
+      models: Object.fromEntries(
+        Object.entries(value.models).map(([model, entry]) => [
+          model,
+          readResponseEntry(entry, `mock response control models[${JSON.stringify(model)}]`),
+        ]),
+      ),
+    };
+  }
+  if (value.responses !== undefined) {
+    if (!Array.isArray(value.responses) || value.responses.length === 0) {
+      throw new Error("mock response control responses are invalid");
+    }
+    const responses = value.responses.map((entry, index) =>
+      readResponseEntry(entry, `mock response control responses[${index}]`),
+    );
+    const defaultResponse =
+      value.default === undefined
+        ? undefined
+        : readResponseEntry(value.default, "mock response control default");
+    const version =
+      typeof value.scriptVersion === "string" && value.scriptVersion
+        ? value.scriptVersion
+        : createHash("sha256")
+            .update(JSON.stringify({ default: value.default, responses: value.responses }))
+            .digest("hex");
+    return { defaultResponse, hold: value.hold ?? false, responses, version };
+  }
+  return {
+    hold: value.hold ?? false,
+    response: readResponseEntry(value, "mock response control"),
+  };
+}
+
+function selectCurrentResponse() {
+  const control = readResponseControl();
+  if (control.models) {
+    return { models: control.models };
+  }
+  if (!control.responses) {
+    return { response: control.response };
+  }
+  if (scriptState?.version !== control.version) {
+    scriptState = { nextIndex: 0, version: control.version };
+  }
+  const requestIndex = scriptState.nextIndex;
+  scriptState.nextIndex += 1;
+  if (requestIndex < control.responses.length) {
+    return {
+      response: control.responses[requestIndex],
+      scriptEntry: { entryIndex: requestIndex, requestIndex, source: "responses" },
+    };
+  }
+  if (control.defaultResponse) {
+    return {
+      response: control.defaultResponse,
+      scriptEntry: { requestIndex, source: "default" },
+    };
+  }
+  return {
+    response: control.responses.at(-1),
+    scriptEntry: {
+      entryIndex: control.responses.length - 1,
+      requestIndex,
+      source: "last",
+    },
+  };
+}
+
+async function waitForResponseRelease() {
+  while (readResponseControl().hold) {
+    await delay(25);
+  }
+}
+
+function writeInjectedFailure(res, fail) {
+  if (fail.mode === "drop") {
+    res.destroy();
+    return;
+  }
+  writeJson(res, fail.status, { error: { message: fail.message } });
+}
+
+function splitResponseText(text) {
+  if (text.length < 2) {
+    return [text];
+  }
+  const midpoint = Math.floor(text.length / 2);
+  const whitespace = text.lastIndexOf(" ", midpoint);
+  const splitAt = whitespace > 0 ? whitespace : Math.max(1, midpoint);
+  return [text.slice(0, splitAt), text.slice(splitAt)];
+}
+
+function messageEvents(item, text, deltas) {
   return [
     {
       type: "response.output_item.added",
+      output_index: 0,
       item: {
         type: "message",
-        id: itemId,
+        id: item.id,
         role: "assistant",
         content: [],
         status: "in_progress",
       },
     },
-    {
+    ...deltas.map((delta) => ({
       type: "response.output_text.delta",
-      item_id: itemId,
+      item_id: item.id,
       output_index: 0,
       content_index: 0,
-      delta: text,
-    },
+      delta,
+    })),
     {
       type: "response.output_text.done",
-      item_id: itemId,
+      item_id: item.id,
       output_index: 0,
       content_index: 0,
       text,
     },
-    {
-      type: "response.output_item.done",
-      item: {
-        type: "message",
-        id: itemId,
-        role: "assistant",
-        status: "completed",
-        content: [{ type: "output_text", text, annotations: [] }],
-      },
-    },
-    {
-      type: "response.completed",
-      response: {
-        id: "resp_e2e",
-        status: "completed",
-        output: [
-          {
-            type: "message",
-            id: itemId,
-            role: "assistant",
-            status: "completed",
-            content: [{ type: "output_text", text, annotations: [] }],
-          },
-        ],
-        usage: {
-          input_tokens: 11,
-          output_tokens: 7,
-          total_tokens: 18,
-          input_tokens_details: { cached_tokens: 0 },
-        },
-      },
-    },
+    { type: "response.output_item.done", output_index: 0, item },
   ];
+}
+
+function completedResponseEvent(id, output, inputTokens, outputTokens) {
+  return {
+    type: "response.completed",
+    response: {
+      id,
+      status: "completed",
+      output,
+      usage: {
+        input_tokens: inputTokens,
+        output_tokens: outputTokens,
+        total_tokens: inputTokens + outputTokens,
+        input_tokens_details: { cached_tokens: 0 },
+      },
+    },
+  };
+}
+
+function assistantMessage(text, phase, id = "msg_e2e_1") {
+  return {
+    type: "message",
+    id,
+    role: "assistant",
+    status: "completed",
+    ...(phase ? { phase } : {}),
+    content: [{ type: "output_text", text, annotations: [] }],
+  };
+}
+
+function responseEvents(text, deltas = [text]) {
+  const item = assistantMessage(text);
+  return [...messageEvents(item, text, deltas), completedResponseEvent("resp_e2e", [item], 11, 7)];
+}
+
+async function writeDefaultResponseEvents(res, text, chunkDelayMs) {
+  if (chunkDelayMs === 0) {
+    writeSse(res, responseEvents(text));
+    return;
+  }
+  const events = responseEvents(text, splitResponseText(text));
+  res.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-store",
+    connection: "keep-alive",
+  });
+  let deltaCount = 0;
+  for (const event of events) {
+    if (event.type === "response.output_text.delta" && deltaCount > 0) {
+      await delay(chunkDelayMs);
+    }
+    res.write(`data: ${JSON.stringify(event)}\n\n`);
+    if (event.type === "response.output_text.delta") {
+      deltaCount += 1;
+    }
+  }
+  res.write("data: [DONE]\n\n");
+  res.end();
 }
 
 function buildMockFunctionCall(name, args) {
@@ -106,35 +443,69 @@ function buildMockFunctionCall(name, args) {
   };
 }
 
-function toolCallEvents(name, args) {
-  const call = buildMockFunctionCall(name, args);
+function functionCallEvents(call) {
   return [
     {
       type: "response.output_item.added",
-      item: {
-        type: "function_call",
-        id: call.itemId,
-        call_id: call.item.call_id,
-        name,
-        arguments: "",
-      },
+      item: { ...call.item, arguments: "" },
     },
     { type: "response.function_call_arguments.delta", delta: call.serialized },
     { type: "response.output_item.done", item: call.item },
-    {
-      type: "response.completed",
-      response: {
-        id: call.responseId,
-        status: "completed",
-        output: [call.item],
-        usage: {
-          input_tokens: 64,
-          output_tokens: 16,
-          total_tokens: 80,
-          input_tokens_details: { cached_tokens: 0 },
-        },
-      },
-    },
+  ];
+}
+
+// Progress-draft proof: assistant text emitted BEFORE a tool call is tagged as
+// commentary, which channels render as the draft's status headline. Streaming
+// text and then a call in one response is the only way to exercise
+// headline-plus-tool-line composition without a live model.
+// The Responses API carries that tag as `phase` on the message item, and the
+// transport reads it straight off the item, so an untagged item produces no
+// preamble at all and the scenario silently proves nothing.
+function preambleThenToolCallEvents(preamble, name, args) {
+  const item = assistantMessage(preamble, "commentary", "msg_e2e_preamble");
+  const call = buildMockFunctionCall(name, args);
+  return [
+    ...messageEvents(item, preamble, splitResponseText(preamble)),
+    ...functionCallEvents(call),
+    completedResponseEvent(call.responseId, [item, call.item], 64, 24),
+  ];
+}
+
+function hasCurrentTurnToolOutput(messages) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (readMockUserText(message) !== undefined) {
+      return false;
+    }
+    if (message?.role === "tool" || message?.type === "function_call_output") {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Draft scenario: preamble + shell call, then a final answer for each user turn. */
+function progressDraftEvents(body, bodyText) {
+  const allText = collectText(body).join("\n");
+  if (!allText.includes("OPENCLAW_E2E_DRAFTPROOF")) {
+    return null;
+  }
+  if (!hasCurrentTurnToolOutput(Array.isArray(body.input) ? body.input : [])) {
+    if (!hasDeclaredTool(bodyText, "exec")) {
+      return null;
+    }
+    return preambleThenToolCallEvents("Checking the workspace before answering.", "exec", {
+      command: "sleep 2 && echo openclaw-draft-proof",
+    });
+  }
+  return responseEvents("OPENCLAW_E2E_DRAFTPROOF");
+}
+
+function toolCallEvents(name, args) {
+  const call = buildMockFunctionCall(name, args);
+  return [
+    ...functionCallEvents(call),
+    completedResponseEvent(call.responseId, [call.item], 64, 16),
   ];
 }
 
@@ -157,28 +528,69 @@ function writeResponsesEvents(res, stream, events) {
   writeSse(res, events);
 }
 
-function writeChatCompletion(res, stream, text = successMarker) {
-  if (stream) {
-    writeSse(res, [
-      {
-        id: "chatcmpl_e2e",
-        object: "chat.completion.chunk",
-        choices: [{ index: 0, delta: { role: "assistant", content: text } }],
-      },
-      {
-        id: "chatcmpl_e2e",
-        object: "chat.completion.chunk",
-        choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-      },
-    ]);
-    return;
-  }
+function writeChatCompletionChunks(res, choices) {
+  writeSse(
+    res,
+    choices.map((choice) => ({
+      id: "chatcmpl_e2e",
+      object: "chat.completion.chunk",
+      choices: [{ index: 0, ...choice }],
+    })),
+  );
+}
+
+function writeChatCompletionMessage(res, message, finishReason, promptTokens, completionTokens) {
   writeJson(res, 200, {
     id: "chatcmpl_e2e",
     object: "chat.completion",
-    choices: [{ index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" }],
-    usage: { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 },
+    choices: [{ index: 0, message, finish_reason: finishReason }],
+    usage: {
+      prompt_tokens: promptTokens,
+      completion_tokens: completionTokens,
+      total_tokens: promptTokens + completionTokens,
+    },
   });
+}
+
+function writeChatCompletion(res, stream, text = successMarker) {
+  const message = { role: "assistant", content: text };
+  if (stream) {
+    writeChatCompletionChunks(res, [{ delta: message }, { delta: {}, finish_reason: "stop" }]);
+    return;
+  }
+  writeChatCompletionMessage(res, message, "stop", 11, 7);
+}
+
+/** Streams assistant content, then a tool call, in one chat-completions turn. */
+function writeChatCompletionPreambleToolCall(res, stream, preamble, name, args) {
+  const serialized = JSON.stringify(args);
+  const callId = `call_mock_${name}_${createHash("sha256").update(name).update(serialized).digest("hex").slice(0, 10)}`;
+  if (!stream) {
+    writeChatCompletionMessage(
+      res,
+      {
+        role: "assistant",
+        content: preamble,
+        tool_calls: [{ id: callId, type: "function", function: { name, arguments: serialized } }],
+      },
+      "tool_calls",
+      24,
+      18,
+    );
+    return;
+  }
+  writeChatCompletionChunks(res, [
+    { delta: { role: "assistant", content: "" } },
+    ...splitResponseText(preamble).map((content) => ({ delta: { content } })),
+    {
+      delta: {
+        tool_calls: [
+          { index: 0, id: callId, type: "function", function: { name, arguments: serialized } },
+        ],
+      },
+    },
+    { delta: {}, finish_reason: "tool_calls" },
+  ]);
 }
 
 function writeImageGeneration(res) {
@@ -195,8 +607,31 @@ function writeImageGeneration(res) {
   });
 }
 
-function resolveResponseText(bodyText) {
-  const matches = Array.from(bodyText.matchAll(/\bOPENCLAW_E2E_[A-Z0-9]+(?:_[A-Z0-9]+)*\b/gu));
+function resolveResponseText(bodyText, body) {
+  let markerBody;
+  for (const key of ["input", "messages"]) {
+    if (!Array.isArray(body?.[key])) {
+      continue;
+    }
+    const messages = body[key].filter(
+      (message) => message?.role !== "user" || readMockUserText(message) !== undefined,
+    );
+    if (messages.length !== body[key].length) {
+      markerBody ??= { ...body };
+      markerBody[key] = messages;
+    }
+  }
+  // Runtime carriers can quote older markers after the user's current request.
+  const markerText = markerBody ? JSON.stringify(markerBody) : bodyText;
+  const servingChecks = Array.from(
+    markerText.matchAll(
+      /This is an OpenClaw update serving check\. Do not use tools\. Reply with exactly: (update-verified-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/gu,
+    ),
+  );
+  if (servingChecks.length > 0) {
+    return servingChecks.at(-1)[1];
+  }
+  const matches = Array.from(markerText.matchAll(/\bOPENCLAW_E2E_[A-Z0-9]+(?:_[A-Z0-9]+)*\b/gu));
   return matches.at(-1)?.[0] ?? successMarker;
 }
 
@@ -225,14 +660,7 @@ function collectText(value) {
 }
 
 function stringifyFunctionCallOutput(output) {
-  if (typeof output === "string") {
-    return output;
-  }
-  try {
-    return JSON.stringify(output);
-  } catch {
-    return "";
-  }
+  return typeof output === "string" ? output : JSON.stringify(output);
 }
 
 function collectFunctionCallOutputText(body) {
@@ -253,13 +681,16 @@ function mcpCodeModeApiFileEvents(body, bodyText) {
   if (!/mcp code mode api file qa check/i.test(allText)) {
     return null;
   }
-  const toolOutput = collectFunctionCallOutputText(body);
-  if (!toolOutput) {
+  const input = Array.isArray(body?.input) ? body.input : [];
+  const latestOutput = input.findLast((item) => item?.type === "function_call_output");
+  const toolOutput = stringifyFunctionCallOutput(latestOutput?.output) ?? "";
+  if (!latestOutput) {
     if (!hasDeclaredTool(bodyText, "exec")) {
       return null;
     }
+    const catalogExpression = "catalog.all().some((tool) => tool.source === 'mcp')";
     return toolCallEvents("exec", {
-      language: "javascript",
+      title: "Read the MCP fixture note",
       code: [
         'const files = await API.list("mcp");',
         'const root = await API.read("mcp/index.d.ts");',
@@ -271,14 +702,28 @@ function mcpCodeModeApiFileEvents(body, bodyText) {
         "  rootHasFixture: root.content.includes('fixture'),",
         "  headerHasLookup: api.content.includes('function lookupNote'),",
         "  resultText: result.content?.[0]?.text,",
-        "  allHasMcp: ALL_TOOLS.some((tool) => tool.source === 'mcp'),",
+        `  allHasMcp: ${catalogExpression},`,
         "};",
       ].join("\n"),
     });
   }
+  let toolJson;
+  try {
+    toolJson = JSON.parse(toolOutput);
+  } catch {
+    // Non-JSON output still follows the fixture's failure checks below.
+  }
   if (
-    !/MCP_CODE_MODE_FILE_TOOL_RESULT/.test(toolOutput) ||
-    !/fixture-note-alpha/.test(toolOutput)
+    toolJson?.status === "waiting" &&
+    typeof toolJson.runId === "string" &&
+    toolJson.runId.length > 0 &&
+    hasDeclaredTool(bodyText, "wait")
+  ) {
+    return toolCallEvents("wait", { runId: toolJson.runId });
+  }
+  if (
+    !toolOutput.includes("MCP_CODE_MODE_FILE_TOOL_RESULT") ||
+    !toolOutput.includes("fixture-note-alpha")
   ) {
     return responseEvents(
       "MCP_CODE_MODE_FILE_FAIL unclear=code-mode-exec-did-not-return-fixture-note",
@@ -289,11 +734,58 @@ function mcpCodeModeApiFileEvents(body, bodyText) {
   );
 }
 
+function mcpAppConformanceEvents(body, bodyText) {
+  const allText = collectText(body).join("\n");
+  if (!/mcp app conformance qa check/i.test(allText)) {
+    return null;
+  }
+  const toolOutput = collectFunctionCallOutputText(body);
+  if (!toolOutput) {
+    if (!hasDeclaredTool(bodyText, "fixture__show")) {
+      return null;
+    }
+    return toolCallEvents("fixture__show", {});
+  }
+  return /initial-result/.test(toolOutput)
+    ? responseEvents("MCP_APP_CONFORMANCE_READY")
+    : responseEvents("MCP_APP_CONFORMANCE_FAIL");
+}
+
+function agentPluginBundleEvents(body, inferenceFacts) {
+  if (inferenceFacts?.purpose === "activity-recap") {
+    return null;
+  }
+  const input = Array.isArray(body?.input) ? body.input : [];
+  const userText = input.map(readMockUserText).findLast((text) => text !== undefined) ?? "";
+  if (!/agent plugin bundle qa check/i.test(userText)) {
+    return null;
+  }
+  const response = resolveAgentPluginBundleResponse(body);
+  return response.tool
+    ? toolCallEvents(response.tool.name, response.tool.args)
+    : responseEvents(response.text);
+}
+
+function telegramBindingEvents(body) {
+  const response = telegramBindingScenario(body);
+  if (!response) {
+    return null;
+  }
+  return response.spawn
+    ? toolCallEvents("sessions_spawn", response.spawn)
+    : responseEvents(response.text);
+}
+
+function countAutomaticSelection(events) {
+  const tool = events.some((event) => event.item?.type === "function_call");
+  requests.selections[tool ? "automaticTool" : "automaticText"] += 1;
+}
+
 const server = http.createServer((req, res) => {
   void (async () => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
-    if (req.method === "GET" && url.pathname === "/health") {
-      writeJson(res, 200, { ok: true });
+    if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/health") {
+      writeJson(res, 200, { ok: true, requests });
       return;
     }
     if (req.method === "GET" && url.pathname === "/v1/models") {
@@ -303,6 +795,22 @@ const server = http.createServer((req, res) => {
       });
       return;
     }
+
+    const route =
+      req.method !== "POST"
+        ? "other"
+        : url.pathname === "/v1/responses"
+          ? "responses"
+          : url.pathname === "/v1/chat/completions"
+            ? "chatCompletions"
+            : url.pathname === "/v1/embeddings"
+              ? "embeddings"
+              : "other";
+    requests.ingress[route] += 1;
+    const scriptedRoute = route === "responses" || route === "chatCompletions";
+    // Reserve before body reads or hold waits so concurrent turns consume the script
+    // in arrival order. The explicit version survives hold-only control rewrites.
+    const controlSelection = responseControl && scriptedRoute ? selectCurrentResponse() : undefined;
 
     let bodyText;
     try {
@@ -314,61 +822,128 @@ const server = http.createServer((req, res) => {
       }
       throw error;
     }
-    let body;
+    let body = {};
+    let requestLogBody;
     try {
       body = bodyText ? JSON.parse(bodyText) : {};
+      requestLogBody = redactRequestLogMedia(body, bodyText);
     } catch {
-      body = {};
+      // Redaction walks the parsed JSON, so an unparseable body would bypass it
+      // and leak raw base64 media into the provider record. Log a bounded
+      // marker instead of the text.
+      requestLogBody = `[unparseable request body redacted: ${Buffer.byteLength(bodyText)} bytes]`;
     }
+    // A model map does not reserve global script slots or override unmatched
+    // automatic scenarios. Capture the map at arrival, select after parsing.
+    const selectedResponse = controlSelection?.models
+      ? typeof body?.model === "string" && Object.hasOwn(controlSelection.models, body.model)
+        ? { response: controlSelection.models[body.model] }
+        : undefined
+      : controlSelection;
+    const inferenceFacts = scriptedRoute ? summarizeMockInferenceRequest(body) : undefined;
     if (
       writeRequestLogEntryOrFail(res, {
         requestLog,
         entry: {
+          seq: (requestLogSeq += 1),
           method: req.method,
           path: url.pathname,
-          body: boundedRequestLogBody(bodyText, bodyText),
+          requestBytes: Buffer.byteLength(bodyText),
+          body: boundedRequestLogBody(requestLogBody, requestLogBody),
+          ...summarizeRequestContent(body),
+          ...(inferenceFacts ? { inferenceFacts } : {}),
+          ...(selectedResponse?.scriptEntry ? { scriptEntry: selectedResponse.scriptEntry } : {}),
         },
       })
     ) {
       return;
     }
-
-    if (req.method === "POST" && url.pathname === "/v1/responses") {
-      const codeModeEvents = mcpCodeModeApiFileEvents(body, bodyText);
-      if (codeModeEvents) {
-        writeResponsesEvents(res, body.stream, codeModeEvents);
+    if (requestLog) {
+      process.send?.({ type: "mock-openai:request-logged", seq: requestLogSeq });
+    }
+    if (selectedResponse) {
+      requests.selections[controlSelection.models ? "model" : "global"] += 1;
+      await waitForResponseRelease();
+      if (selectedResponse.response.fail) {
+        writeInjectedFailure(res, selectedResponse.response.fail);
         return;
       }
-      const responseText = resolveResponseText(bodyText);
+    }
+
+    if (route === "responses") {
+      if (!selectedResponse) {
+        const events =
+          agentPluginBundleEvents(body, inferenceFacts) ??
+          mcpAppConformanceEvents(body, bodyText) ??
+          mcpCodeModeApiFileEvents(body, bodyText) ??
+          progressDraftEvents(body, bodyText) ??
+          telegramBindingEvents(body);
+        if (events) {
+          countAutomaticSelection(events);
+          writeResponsesEvents(res, body.stream, events);
+          return;
+        }
+      }
+      const response = selectedResponse?.response ?? { chunkDelayMs: initialResponseChunkDelayMs };
+      if (!selectedResponse) {
+        requests.selections.automaticText += 1;
+      }
+      if (response.events) {
+        writeResponsesEvents(res, body.stream, response.events);
+        return;
+      }
+      const responseText = selectedResponse ? response.text : resolveResponseText(bodyText, body);
       if (body.stream === false) {
         writeJson(res, 200, {
           id: "resp_e2e",
           object: "response",
           status: "completed",
-          output: [
-            {
-              type: "message",
-              id: "msg_e2e_1",
-              role: "assistant",
-              status: "completed",
-              content: [{ type: "output_text", text: responseText, annotations: [] }],
-            },
-          ],
+          output: [assistantMessage(responseText)],
           usage: { input_tokens: 11, output_tokens: 7, total_tokens: 18 },
         });
         return;
       }
-      writeSse(res, responseEvents(responseText));
+      await writeDefaultResponseEvents(res, responseText, response.chunkDelayMs);
       return;
     }
 
-    if (req.method === "POST" && url.pathname === "/v1/chat/completions") {
-      const responseText = resolveResponseText(bodyText);
+    if (route === "chatCompletions") {
+      // Progress-draft proof needs assistant content followed by a tool call in
+      // one streamed turn: the completions transport tags that leading text as
+      // commentary, which channels render as the draft status headline.
+      if (!selectedResponse && bodyText.includes("OPENCLAW_E2E_DRAFTPROOF")) {
+        const messages = Array.isArray(body.messages) ? body.messages : [];
+        const toolTurnDone = hasCurrentTurnToolOutput(messages);
+        if (!toolTurnDone) {
+          requests.selections.automaticTool += 1;
+          writeChatCompletionPreambleToolCall(
+            res,
+            body.stream !== false,
+            "Checking the workspace before answering.",
+            "exec",
+            { command: "sleep 2 && echo openclaw-draft-proof" },
+          );
+          return;
+        }
+        // Hold the final answer so the turn outlives the progress-draft start
+        // gate. Without this the whole turn finishes in well under a second and
+        // no draft is created, which is correct behavior but proves nothing.
+        requests.selections.automaticText += 1;
+        await delay(readPositiveIntEnv("MOCK_DRAFTPROOF_FINAL_DELAY_MS", 6000));
+        writeChatCompletion(res, body.stream !== false, "OPENCLAW_E2E_DRAFTPROOF");
+        return;
+      }
+      if (!selectedResponse) {
+        requests.selections.automaticText += 1;
+      }
+      const responseText = selectedResponse
+        ? selectedResponse.response.text
+        : resolveResponseText(bodyText, body);
       writeChatCompletion(res, body.stream !== false, responseText);
       return;
     }
 
-    if (req.method === "POST" && url.pathname === "/v1/embeddings") {
+    if (route === "embeddings") {
       const input = Array.isArray(body.input) ? body.input : [body.input ?? ""];
       writeJson(res, 200, {
         object: "list",
@@ -405,6 +980,10 @@ const server = http.createServer((req, res) => {
   });
 });
 
-server.listen(port, "127.0.0.1", () => {
-  console.log(`mock-openai listening on ${port}`);
+server.listen(port, bindHost, () => {
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("mock OpenAI did not bind a TCP listener");
+  }
+  console.log(`mock-openai listening on ${address.port}`);
 });

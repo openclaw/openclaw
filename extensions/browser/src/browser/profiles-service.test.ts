@@ -2,10 +2,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { BrowserProfileConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test-support.js";
-import { getRuntimeConfig } from "../config/config.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { resolveOpenClawUserDataDir } from "./chrome.js";
 import type { BrowserRouteContext, BrowserServerState } from "./server-context.js";
 import {
@@ -63,16 +63,22 @@ const writeConfigFile = configMocks.writeConfigFile;
 const lifecycleMocks = vi.hoisted(() => ({
   closeChromeMcpSession: vi.fn(async () => false),
   stopOpenClawChrome: vi.fn(async () => {}),
+  stopOwnedOpenClawChrome: vi.fn<typeof import("./chrome.js").stopOwnedOpenClawChrome>(),
 }));
 
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+vi.mock("openclaw/plugin-sdk/config-mutation", async (importOriginal) => {
   return {
-    ...actual,
+    ...(await importOriginal<typeof import("openclaw/plugin-sdk/config-mutation")>()),
     replaceConfigFile: vi.fn(async ({ nextConfig }: { nextConfig: OpenClawConfig }) => {
       await configMocks.writeConfigFile(nextConfig);
     }),
     mutateConfigFile: configMocks.mutateConfigFile,
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => {
+  return {
+    ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
     getRuntimeConfig: configMocks.getRuntimeConfig,
     getRuntimeConfigSourceSnapshot: configMocks.getRuntimeConfigSourceSnapshot,
   };
@@ -82,10 +88,8 @@ vi.mock("./trash.js", () => ({
   movePathToTrash: vi.fn(async (targetPath: string) => targetPath),
 }));
 
-vi.mock("./chrome-mcp.runtime.js", () => ({
-  getChromeMcpModule: async () => ({
-    closeChromeMcpSession: lifecycleMocks.closeChromeMcpSession,
-  }),
+vi.mock("./chrome-mcp.js", () => ({
+  closeChromeMcpSession: lifecycleMocks.closeChromeMcpSession,
 }));
 
 vi.mock("./pw-ai-module.js", () => ({
@@ -96,12 +100,27 @@ vi.mock("./pw-ai-module.js", () => ({
 vi.mock("./chrome.js", () => ({
   resolveOpenClawUserDataDir: vi.fn(() => "/tmp/openclaw-test/openclaw/user-data"),
   stopOpenClawChrome: lifecycleMocks.stopOpenClawChrome,
+  stopOwnedOpenClawChrome: lifecycleMocks.stopOwnedOpenClawChrome,
 }));
 
-const [{ resolveBrowserConfig, resolveProfile }, { createBrowserProfilesService }] =
-  await Promise.all([import("./config.js"), import("./profiles-service.js")]);
-const { deleteBrowserProfileConfig, setDefaultBrowserProfile } =
-  await import("./config-mutations.js");
+const [
+  { resolveBrowserConfig, resolveProfile },
+  { createBrowserProfilesService },
+  { getChromeMcpModule },
+] = await Promise.all([
+  import("./config.js"),
+  import("./profiles-service.js"),
+  import("./chrome-mcp.runtime.js"),
+]);
+const { setDefaultBrowserProfile } = await import("./config-mutations.js");
+
+afterEach(() => {
+  getChromeMcpModule.clear();
+});
+
+afterAll(() => {
+  getChromeMcpModule.clear();
+});
 
 function createCtx(resolved: BrowserServerState["resolved"]) {
   const state: BrowserServerState = {
@@ -153,13 +172,37 @@ function writtenBrowserConfig(): Record<string, unknown> {
   return cfg.browser;
 }
 
+const OPENCLAW_PROFILE = { cdpPort: 18800, color: "#FF4500" } as const;
+
+function createDeletionFixture(params: {
+  name?: string;
+  resolvedProfile: BrowserProfileConfig;
+  persistedProfile?: BrowserProfileConfig;
+}) {
+  const name = params.name ?? "work";
+  const resolved = resolveBrowserConfig({ profiles: { [name]: params.resolvedProfile } });
+  const { ctx, state } = createCtx(resolved);
+  vi.mocked(getRuntimeConfig).mockReturnValue({
+    browser: {
+      defaultProfile: "openclaw",
+      profiles: {
+        openclaw: OPENCLAW_PROFILE,
+        [name]: params.persistedProfile ?? params.resolvedProfile,
+      },
+    },
+  });
+  return { ctx, state, service: createBrowserProfilesService(ctx) };
+}
+
 describe("BrowserProfilesService", () => {
   beforeEach(() => {
+    getChromeMcpModule.clear();
     vi.clearAllMocks();
     configMocks.getRuntimeConfigSourceSnapshot.mockReset().mockReturnValue(null);
     configMocks.writeConfigFile.mockReset().mockResolvedValue(undefined);
     lifecycleMocks.closeChromeMcpSession.mockReset().mockResolvedValue(false);
     lifecycleMocks.stopOpenClawChrome.mockReset().mockResolvedValue(undefined);
+    lifecycleMocks.stopOwnedOpenClawChrome.mockReset().mockResolvedValue({ status: "not-running" });
     vi.mocked(resolveOpenClawUserDataDir)
       .mockReset()
       .mockReturnValue("/tmp/openclaw-test/openclaw/user-data");
@@ -234,36 +277,13 @@ describe("BrowserProfilesService", () => {
     expect(writtenBrowserConfig().defaultProfile).toBe("imported");
   });
 
-  it("rechecks default-profile ownership inside the delete config mutation", async () => {
-    vi.mocked(getRuntimeConfig).mockReturnValue({
-      browser: {
-        defaultProfile: "work",
-        profiles: { work: { cdpPort: 18801, color: "#0066CC" } },
-      },
-    });
-
-    await expect(
-      deleteBrowserProfileConfig({
-        name: "work",
-        expected: { cdpPort: 18801, color: "#0066CC" },
-      }),
-    ).rejects.toThrow('cannot delete the default profile "work"');
-    expect(writeConfigFile).not.toHaveBeenCalled();
-  });
-
-  it("falls back to derived CDP range when resolved CDP range is missing", async () => {
-    const base = resolveBrowserConfig({});
-    const baseWithoutRange = { ...base } as {
-      [key: string]: unknown;
-      cdpPortRangeStart?: unknown;
-      cdpPortRangeEnd?: unknown;
-    };
-    delete baseWithoutRange.cdpPortRangeStart;
-    delete baseWithoutRange.cdpPortRangeEnd;
+  it("allocates from the active resolved range without a configured gateway port", async () => {
     const resolved = {
-      ...baseWithoutRange,
+      ...resolveBrowserConfig({}),
       controlPort: 30000,
-    } as BrowserServerState["resolved"];
+      cdpPortRangeStart: 30009,
+      cdpPortRangeEnd: 30012,
+    };
     const { result, state } = await createWorkProfileWithConfig({
       resolved,
       browserConfig: { profiles: {} },
@@ -271,18 +291,6 @@ describe("BrowserProfilesService", () => {
 
     expect(result.cdpPort).toBe(30009);
     expect(state.resolved.profiles.work?.cdpPort).toBe(30009);
-    expect(writeConfigFile).toHaveBeenCalled();
-  });
-
-  it("allocates from configured cdpPortRangeStart for new local profiles", async () => {
-    const { result, state } = await createWorkProfileWithConfig({
-      resolved: resolveBrowserConfig({ cdpPortRangeStart: 19000 }),
-      browserConfig: { cdpPortRangeStart: 19000, profiles: {} },
-    });
-
-    expect(result.cdpPort).toBe(19001);
-    expect(result.isRemote).toBe(false);
-    expect(state.resolved.profiles.work?.cdpPort).toBe(19001);
     expect(writeConfigFile).toHaveBeenCalled();
   });
 
@@ -309,51 +317,29 @@ describe("BrowserProfilesService", () => {
     expect(profiles.work?.cdpPort).toBe(18802);
   });
 
-  it("allocates local ports from the rebased CDP range end", async () => {
-    const resolved = resolveBrowserConfig({ cdpPortRangeStart: 19000 });
+  it("allocates local ports from a gateway port changed during config rebase", async () => {
+    const resolved = resolveBrowserConfig({});
     const { ctx, state } = createCtx(resolved);
     vi.mocked(getRuntimeConfig)
       .mockReturnValueOnce({
         browser: {
-          cdpPortRangeStart: 19000,
           profiles: {},
         },
-      } as OpenClawConfig)
+      })
       .mockReturnValue({
+        gateway: { port: 30000 },
         browser: {
-          cdpPortRangeEnd: 18801,
           profiles: {},
         },
-      } as unknown as OpenClawConfig);
+      });
 
     const service = createBrowserProfilesService(ctx);
     const result = await service.createProfile({ name: "work" });
 
-    expect(result.cdpPort).toBe(18801);
-    expect(state.resolved.profiles.work?.cdpPort).toBe(18801);
+    expect(result.cdpPort).toBe(30012);
+    expect(state.resolved.profiles.work?.cdpPort).toBe(30012);
     const profiles = writtenBrowserConfig().profiles as Record<string, { cdpPort?: number }>;
-    expect(profiles.work?.cdpPort).toBe(18801);
-  });
-
-  it("accepts per-profile cdpUrl for remote Chrome", async () => {
-    const resolved = resolveBrowserConfig({
-      ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
-    });
-    const { ctx } = createCtx(resolved);
-
-    vi.mocked(getRuntimeConfig).mockReturnValue({ browser: { profiles: {} } });
-
-    const service = createBrowserProfilesService(ctx);
-    const result = await service.createProfile({
-      name: "remote",
-      cdpUrl: "http://10.0.0.42:9222",
-    });
-
-    expect(result.cdpUrl).toBe("http://10.0.0.42:9222");
-    expect(result.cdpPort).toBe(9222);
-    expect(result.isRemote).toBe(true);
-    const profiles = writtenBrowserConfig().profiles as Record<string, { cdpUrl?: string }>;
-    expect(profiles.remote?.cdpUrl).toBe("http://10.0.0.42:9222");
+    expect(profiles.work?.cdpPort).toBe(30012);
   });
 
   it("redacts CDP credentials from create responses while preserving profile auth", async () => {
@@ -376,103 +362,13 @@ describe("BrowserProfilesService", () => {
     expect(profiles.remote?.cdpUrl).toBe(cdpUrl);
   });
 
-  it("rejects private-network cdpUrl when strict SSRF mode is enabled", async () => {
-    const resolved = resolveBrowserConfig({
-      ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
-    });
-    const { ctx } = createCtx(resolved);
-
-    vi.mocked(getRuntimeConfig).mockReturnValue({
-      browser: {
-        ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
-        profiles: {},
-      },
-    });
-
-    const service = createBrowserProfilesService(ctx);
+  it("rejects private-network cdpUrl before creating an existing-session profile", async () => {
+    const strictConfig = { ssrfPolicy: { dangerouslyAllowPrivateNetwork: false } };
+    const { ctx } = createCtx(resolveBrowserConfig(strictConfig));
+    vi.mocked(getRuntimeConfig).mockReturnValue({ browser: { ...strictConfig, profiles: {} } });
 
     await expect(
-      service.createProfile({
-        name: "remote",
-        cdpUrl: "http://10.0.0.42:9222",
-      }),
-    ).rejects.toThrow(/private\/internal\/special-use ip address/i);
-    expect(writeConfigFile).not.toHaveBeenCalled();
-  });
-
-  it("creates existing-session profiles as attach-only local entries", async () => {
-    const resolved = resolveBrowserConfig({});
-    const { ctx, state } = createCtx(resolved);
-    vi.mocked(getRuntimeConfig).mockReturnValue({ browser: { profiles: {} } });
-
-    const service = createBrowserProfilesService(ctx);
-    const result = await service.createProfile({
-      name: "chrome-live",
-      driver: "existing-session",
-    });
-
-    expect(result.transport).toBe("chrome-mcp");
-    expect(result.cdpPort).toBeNull();
-    expect(result.cdpUrl).toBeNull();
-    expect(result.userDataDir).toBeNull();
-    expect(result.isRemote).toBe(false);
-    const resolvedProfile = state.resolved.profiles["chrome-live"];
-    expect(resolvedProfile?.driver).toBe("existing-session");
-    expect(resolvedProfile?.attachOnly).toBe(true);
-    expect(typeof resolvedProfile?.color).toBe("string");
-    const profiles = writtenBrowserConfig().profiles as Record<
-      string,
-      { attachOnly?: boolean; driver?: string }
-    >;
-    expect(profiles["chrome-live"]?.driver).toBe("existing-session");
-    expect(profiles["chrome-live"]?.attachOnly).toBe(true);
-  });
-
-  it("accepts driver=existing-session with cdpUrl", async () => {
-    const resolved = resolveBrowserConfig({});
-    const { ctx, state } = createCtx(resolved);
-    vi.mocked(getRuntimeConfig).mockReturnValue({ browser: { profiles: {} } });
-
-    const service = createBrowserProfilesService(ctx);
-    const result = await service.createProfile({
-      name: "chrome-live",
-      driver: "existing-session",
-      cdpUrl: "http://127.0.0.1:9222/",
-    });
-
-    expect(result.transport).toBe("chrome-mcp");
-    expect(result.cdpPort).toBeNull();
-    expect(result.cdpUrl).toBe("http://127.0.0.1:9222");
-    expect(result.userDataDir).toBeNull();
-    const resolvedProfile = state.resolved.profiles["chrome-live"];
-    expect(resolvedProfile?.driver).toBe("existing-session");
-    expect(resolvedProfile?.attachOnly).toBe(true);
-    expect(resolvedProfile?.cdpUrl).toBe("http://127.0.0.1:9222");
-    const profiles = writtenBrowserConfig().profiles as Record<
-      string,
-      { cdpUrl?: string; driver?: string }
-    >;
-    expect(profiles["chrome-live"]?.driver).toBe("existing-session");
-    expect(profiles["chrome-live"]?.cdpUrl).toBe("http://127.0.0.1:9222");
-  });
-
-  it("rejects private-network cdpUrl for existing-session when strict SSRF mode is enabled", async () => {
-    const resolved = resolveBrowserConfig({
-      ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
-    });
-    const { ctx } = createCtx(resolved);
-
-    vi.mocked(getRuntimeConfig).mockReturnValue({
-      browser: {
-        ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
-        profiles: {},
-      },
-    });
-
-    const service = createBrowserProfilesService(ctx);
-
-    await expect(
-      service.createProfile({
+      createBrowserProfilesService(ctx).createProfile({
         name: "chrome-live",
         driver: "existing-session",
         cdpUrl: "http://10.0.0.42:9222",
@@ -481,75 +377,82 @@ describe("BrowserProfilesService", () => {
     expect(writeConfigFile).not.toHaveBeenCalled();
   });
 
-  it("creates existing-session profiles with an explicit userDataDir", async () => {
-    const resolved = resolveBrowserConfig({});
-    const { ctx, state } = createCtx(resolved);
-    vi.mocked(getRuntimeConfig).mockReturnValue({ browser: { profiles: {} } });
+  it.each([
+    ["creates existing-session profiles as attach-only local entries", undefined, null],
+    [
+      "accepts driver=existing-session with cdpUrl",
+      "http://127.0.0.1:9222/",
+      "http://127.0.0.1:9222",
+    ],
+  ] as Array<[string, string | undefined, string | null]>)(
+    "%s",
+    async (_name, cdpUrl, expectedCdpUrl) => {
+      const { ctx, state } = createCtx(resolveBrowserConfig({}));
+      vi.mocked(getRuntimeConfig).mockReturnValue({ browser: { profiles: {} } });
 
-    const tempDir = tempDirs.make("openclaw-profile-");
-    const userDataDir = path.join(tempDir, "BraveSoftware", "Brave-Browser");
-    fs.mkdirSync(userDataDir, { recursive: true });
+      const result = await createBrowserProfilesService(ctx).createProfile({
+        name: "chrome-live",
+        driver: "existing-session",
+        cdpUrl,
+      });
+      expect(result).toMatchObject({
+        transport: "chrome-mcp",
+        cdpPort: null,
+        cdpUrl: expectedCdpUrl,
+        userDataDir: null,
+        isRemote: false,
+      });
+      const expectedProfile = {
+        driver: "existing-session",
+        attachOnly: true,
+        ...(expectedCdpUrl ? { cdpUrl: expectedCdpUrl } : {}),
+      };
+      expect(state.resolved.profiles["chrome-live"]).toMatchObject(expectedProfile);
+      const profiles = writtenBrowserConfig().profiles as Record<string, BrowserProfileConfig>;
+      expect(profiles["chrome-live"]).toMatchObject(expectedProfile);
+    },
+  );
 
-    const service = createBrowserProfilesService(ctx);
-    const result = await service.createProfile({
-      name: "brave-live",
-      driver: "existing-session",
-      userDataDir,
-    });
-
-    expect(result.transport).toBe("chrome-mcp");
-    expect(result.userDataDir).toBe(userDataDir);
-    const resolvedProfile = state.resolved.profiles["brave-live"];
-    expect(resolvedProfile?.driver).toBe("existing-session");
-    expect(resolvedProfile?.attachOnly).toBe(true);
-    expect(resolvedProfile?.userDataDir).toBe(userDataDir);
-    expect(typeof resolvedProfile?.color).toBe("string");
-  });
-
-  it("rejects userDataDir for non-existing-session profiles", async () => {
-    const resolved = resolveBrowserConfig({});
-    const { ctx } = createCtx(resolved);
-    vi.mocked(getRuntimeConfig).mockReturnValue({ browser: { profiles: {} } });
-
-    const tempDir = tempDirs.make("openclaw-profile-");
-    const userDataDir = path.join(tempDir, "BraveSoftware", "Brave-Browser");
-    fs.mkdirSync(userDataDir, { recursive: true });
-
-    const service = createBrowserProfilesService(ctx);
-
-    await expect(
-      service.createProfile({
-        name: "brave-live",
-        userDataDir,
-      }),
-    ).rejects.toThrow(/driver=existing-session is required/i);
-  });
-
-  it("deletes remote profiles without stopping or removing local data", async () => {
-    const resolved = resolveBrowserConfig({
-      profiles: {
-        remote: { cdpUrl: "http://10.0.0.42:9222", color: "#0066CC" },
+  it.each([
+    [
+      "deletes remote profiles without stopping or removing local data",
+      "remote",
+      { cdpUrl: "http://10.0.0.42:9222", color: "#0066CC" },
+      undefined,
+    ],
+    [
+      "deletes existing-session profiles without touching local browser data",
+      "chrome-live",
+      {
+        cdpPort: 18801,
+        color: "#0066CC",
+        driver: "existing-session",
+        attachOnly: true,
       },
-    });
-    const { ctx } = createCtx(resolved);
+      undefined,
+    ],
+    [
+      "deletes attach-only openclaw profiles without touching local browser data",
+      "work",
+      { cdpPort: 18801, color: "#0066CC" },
+      { cdpPort: 18801, color: "#0066CC", driver: "openclaw", attachOnly: true },
+    ],
+  ] as Array<[string, string, BrowserProfileConfig, BrowserProfileConfig | undefined]>)(
+    "%s",
+    async (_name, profileName, resolvedProfile, persistedProfile) => {
+      const { ctx, service } = createDeletionFixture({
+        name: profileName,
+        resolvedProfile,
+        persistedProfile,
+      });
+      const result = await service.deleteProfile(profileName);
 
-    vi.mocked(getRuntimeConfig).mockReturnValue({
-      browser: {
-        defaultProfile: "openclaw",
-        profiles: {
-          openclaw: { cdpPort: 18800, color: "#FF4500" },
-          remote: { cdpUrl: "http://10.0.0.42:9222", color: "#0066CC" },
-        },
-      },
-    });
-
-    const service = createBrowserProfilesService(ctx);
-    const result = await service.deleteProfile("remote");
-
-    expect(result.deleted).toBe(false);
-    expect(ctx.forProfile).not.toHaveBeenCalled();
-    expect(movePathToTrash).not.toHaveBeenCalled();
-  });
+      expect(result.deleted).toBe(false);
+      expect(ctx.forProfile).not.toHaveBeenCalled();
+      expect(resolveOpenClawUserDataDir).not.toHaveBeenCalled();
+      expect(movePathToTrash).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects deletion when the profile became default before persistence", async () => {
     const resolved = resolveBrowserConfig({
@@ -592,48 +495,56 @@ describe("BrowserProfilesService", () => {
   });
 
   it("deletes local profiles and moves data to Trash", async () => {
-    const resolved = resolveBrowserConfig({
-      profiles: {
-        work: { cdpPort: 18801, color: "#0066CC" },
-      },
+    const { service } = createDeletionFixture({
+      resolvedProfile: { cdpPort: 18801, color: "#0066CC" },
     });
-    const { ctx } = createCtx(resolved);
-
-    vi.mocked(getRuntimeConfig).mockReturnValue({
-      browser: {
-        defaultProfile: "openclaw",
-        profiles: {
-          openclaw: { cdpPort: 18800, color: "#FF4500" },
-          work: { cdpPort: 18801, color: "#0066CC" },
-        },
-      },
-    });
-
     const tempDir = tempDirs.make("openclaw-profile-");
     const userDataDir = path.join(tempDir, "work", "user-data");
     fs.mkdirSync(path.dirname(userDataDir), { recursive: true });
     vi.mocked(resolveOpenClawUserDataDir).mockReturnValue(userDataDir);
 
-    const service = createBrowserProfilesService(ctx);
+    const order: string[] = [];
+    lifecycleMocks.stopOwnedOpenClawChrome.mockImplementationOnce(async () => {
+      order.push("stop");
+      return { status: "stopped" };
+    });
+    configMocks.writeConfigFile.mockImplementationOnce(async () => {
+      order.push("config");
+    });
+    vi.mocked(movePathToTrash).mockImplementationOnce(async (targetPath) => {
+      order.push("trash");
+      return targetPath;
+    });
+
     const result = await service.deleteProfile("work");
 
     expect(result.deleted).toBe(true);
+    expect(order).toEqual(["stop", "config", "trash"]);
     expect(movePathToTrash).toHaveBeenCalledWith(path.dirname(userDataDir));
   });
 
-  it("keeps local data and reports deleted=false when Trash rejects", async () => {
-    const resolved = resolveBrowserConfig({
-      profiles: { work: { cdpPort: 18801, color: "#0066CC" } },
+  it("preserves profile config and data when a live browser cannot be safely stopped", async () => {
+    const { service, state } = createDeletionFixture({
+      resolvedProfile: { cdpPort: 18801, color: "#0066CC" },
     });
-    const { ctx, state } = createCtx(resolved);
-    vi.mocked(getRuntimeConfig).mockReturnValue({
-      browser: {
-        defaultProfile: "openclaw",
-        profiles: {
-          openclaw: { cdpPort: 18800, color: "#FF4500" },
-          work: { cdpPort: 18801, color: "#0066CC" },
-        },
-      },
+    lifecycleMocks.stopOwnedOpenClawChrome.mockResolvedValueOnce({
+      status: "unverified",
+      reason: "managed process identity changed",
+    });
+
+    await expect(service.deleteProfile("work")).rejects.toThrow("managed process identity changed");
+
+    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(movePathToTrash).not.toHaveBeenCalled();
+    expect(state.resolved.profiles).toHaveProperty("work");
+
+    await expect(service.deleteProfile("work")).resolves.toMatchObject({ ok: true });
+    expect(writeConfigFile).toHaveBeenCalledOnce();
+  });
+
+  it("keeps local data and reports deleted=false when Trash rejects", async () => {
+    const { service, state } = createDeletionFixture({
+      resolvedProfile: { cdpPort: 18801, color: "#0066CC" },
     });
     const tempDir = tempDirs.make("openclaw-trash-failure-");
     const userDataDir = path.join(tempDir, "work", "user-data");
@@ -641,7 +552,7 @@ describe("BrowserProfilesService", () => {
     vi.mocked(resolveOpenClawUserDataDir).mockReturnValue(userDataDir);
     vi.mocked(movePathToTrash).mockRejectedValueOnce(new Error("Trash unavailable"));
 
-    const result = await createBrowserProfilesService(ctx).deleteProfile("work");
+    const result = await service.deleteProfile("work");
 
     expect(result.deleted).toBe(false);
     expect(state.resolved.profiles).not.toHaveProperty("work");
@@ -650,19 +561,10 @@ describe("BrowserProfilesService", () => {
   });
 
   it("cleans a pending managed start before persisting deletion", async () => {
-    const resolved = resolveBrowserConfig({
-      profiles: { work: { cdpPort: 18801, color: "#0066CC" } },
+    const { service, state } = createDeletionFixture({
+      resolvedProfile: { cdpPort: 18801, color: "#0066CC" },
     });
-    const { ctx, state } = createCtx(resolved);
-    vi.mocked(getRuntimeConfig).mockReturnValue({
-      browser: {
-        profiles: {
-          openclaw: { cdpPort: 18800, color: "#FF4500" },
-          work: { cdpPort: 18801, color: "#0066CC" },
-        },
-      },
-    });
-    const profile = resolveProfile(resolved, "work");
+    const profile = resolveProfile(state.resolved, "work");
     if (!profile) {
       throw new Error("Expected work profile");
     }
@@ -678,7 +580,6 @@ describe("BrowserProfilesService", () => {
       exe: { kind: "chromium", path: "/usr/bin/chromium" },
       userDataDir,
       cdpPort: 18801,
-      startedAt: Date.now(),
       proc: { on: vi.fn(), exitCode: null, signalCode: null },
     } as unknown as import("./chrome.js").RunningChrome;
     const starting = enqueueProfileStart({
@@ -707,7 +608,7 @@ describe("BrowserProfilesService", () => {
       return targetPath;
     });
 
-    const deleting = createBrowserProfilesService(ctx).deleteProfile("work");
+    const deleting = service.deleteProfile("work");
     launch.resolve();
     await Promise.all([startExpectation, deleting]);
 
@@ -716,28 +617,17 @@ describe("BrowserProfilesService", () => {
   });
 
   it("rolls back a delete tombstone when config persistence fails after cleanup", async () => {
-    const resolved = resolveBrowserConfig({
-      profiles: { work: { cdpPort: 18801, color: "#0066CC" } },
+    const { service, state } = createDeletionFixture({
+      resolvedProfile: { cdpPort: 18801, color: "#0066CC" },
     });
-    const { ctx, state } = createCtx(resolved);
-    vi.mocked(getRuntimeConfig).mockReturnValue({
-      browser: {
-        profiles: {
-          openclaw: { cdpPort: 18800, color: "#FF4500" },
-          work: { cdpPort: 18801, color: "#0066CC" },
-        },
-      },
-    });
-    const profile = resolveProfile(resolved, "work");
+    const profile = resolveProfile(state.resolved, "work");
     if (!profile) {
       throw new Error("Expected work profile");
     }
     const runtime = getOrCreateProfileRuntime(state, profile);
     configMocks.writeConfigFile.mockRejectedValueOnce(new Error("config write failed"));
 
-    await expect(createBrowserProfilesService(ctx).deleteProfile("work")).rejects.toThrow(
-      "config write failed",
-    );
+    await expect(service.deleteProfile("work")).rejects.toThrow("config write failed");
 
     expect(getProfileLifecycle(runtime).terminal).toBeNull();
     expect(getProfileLifecycle(runtime).blockedReason).toBeNull();
@@ -752,74 +642,6 @@ describe("BrowserProfilesService", () => {
         run: async () => {},
       }),
     ).resolves.toBeUndefined();
-  });
-
-  it("deletes existing-session profiles without touching local browser data", async () => {
-    const resolved = resolveBrowserConfig({
-      profiles: {
-        "chrome-live": {
-          cdpPort: 18801,
-          color: "#0066CC",
-          driver: "existing-session",
-          attachOnly: true,
-        },
-      },
-    });
-    const { ctx } = createCtx(resolved);
-
-    vi.mocked(getRuntimeConfig).mockReturnValue({
-      browser: {
-        defaultProfile: "openclaw",
-        profiles: {
-          openclaw: { cdpPort: 18800, color: "#FF4500" },
-          "chrome-live": {
-            cdpPort: 18801,
-            color: "#0066CC",
-            driver: "existing-session",
-            attachOnly: true,
-          },
-        },
-      },
-    });
-
-    const service = createBrowserProfilesService(ctx);
-    const result = await service.deleteProfile("chrome-live");
-
-    expect(result.deleted).toBe(false);
-    expect(ctx.forProfile).not.toHaveBeenCalled();
-    expect(movePathToTrash).not.toHaveBeenCalled();
-  });
-
-  it("deletes attach-only openclaw profiles without touching local browser data", async () => {
-    const resolved = resolveBrowserConfig({
-      profiles: {
-        work: {
-          cdpPort: 18801,
-          color: "#0066CC",
-        },
-      },
-    });
-    const { ctx } = createCtx(resolved);
-    vi.mocked(getRuntimeConfig).mockReturnValue({
-      browser: {
-        defaultProfile: "openclaw",
-        profiles: {
-          openclaw: { cdpPort: 18800, color: "#FF4500" },
-          work: {
-            cdpPort: 18801,
-            color: "#0066CC",
-            driver: "openclaw",
-            attachOnly: true,
-          },
-        },
-      },
-    });
-
-    const result = await createBrowserProfilesService(ctx).deleteProfile("work");
-
-    expect(result.deleted).toBe(false);
-    expect(resolveOpenClawUserDataDir).not.toHaveBeenCalled();
-    expect(movePathToTrash).not.toHaveBeenCalled();
   });
 
   it("preserves a same-name replacement config that appears during lifecycle drain", async () => {

@@ -1,3 +1,4 @@
+import type { TurnAdoptionLifecycle } from "../auto-reply/get-reply-options.types.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -5,13 +6,19 @@ import {
   type OutboundReplyPayload,
 } from "../plugin-sdk/reply-payload.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
+import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { buildChannelInboundEventContext } from "./inbound-event/context.js";
 import {
-  resolveChannelInboundRouteEnvelope,
+  createChannelInboundEnvelopeBuilderAsync,
   resolveInboundRouteEnvelopeBuilderWithRuntime,
 } from "./inbound-event/envelope.js";
+import type {
+  ChannelIngressContextBinding,
+  ResolvedChannelMessageIngress,
+} from "./message-access/runtime-types.js";
 import { createChannelReplyPipeline } from "./message/reply-pipeline.js";
-import { dispatchChannelInboundTurn, runPreparedInboundReply } from "./turn/kernel.js";
+import { dispatchRoutedChannelTurn } from "./turn/lifecycle.js";
+import type { ChannelTurnPlan } from "./turn/types.js";
 export {
   createPreCryptoDirectDmAuthorizer,
   resolveInboundDirectDmAccessWithRuntime,
@@ -42,6 +49,15 @@ type DispatchInboundDirectDmParams = {
   messageId: string;
   timestamp?: number;
   commandAuthorized?: boolean;
+  turnAdoptionLifecycle?: TurnAdoptionLifecycle;
+  /** Shipped SDK callers may omit provenance; bundled callers must classify it explicitly. */
+  channelIngress?: ResolvedChannelMessageIngress | "unsupported";
+  /** Resolve the exact admitted result after this helper owns the final route. */
+  resolveChannelIngress?: (
+    contextBinding: ChannelIngressContextBinding,
+  ) => Promise<ResolvedChannelMessageIngress>;
+  /** Opaque record-scoped runtime injected by a registered native channel. */
+  channelRuntime?: { inbound?: { buildContext?: unknown } };
   /** Set only after the channel's sender/pairing guard admits this event. */
   inboundAccessAuthorized?: boolean;
   bodyForAgent?: string;
@@ -56,13 +72,18 @@ type DispatchInboundDirectDmParams = {
   onDispatchError: (err: unknown, info: { kind: string }) => void;
 };
 
-function buildDirectDmContext(
+async function buildDirectDmContext(
   params: DispatchInboundDirectDmParams,
   route: DirectDmRoute,
   body: string,
-): FinalizedMsgContext {
+): Promise<FinalizedMsgContext> {
   const accountId = route.accountId ?? params.accountId;
-  return buildChannelInboundEventContext({
+  const injectedBuilder = params.channelRuntime?.inbound?.buildContext;
+  const buildContext =
+    typeof injectedBuilder === "function"
+      ? (injectedBuilder as typeof buildChannelInboundEventContext)
+      : buildChannelInboundEventContext;
+  return buildContext({
     channel: params.channel,
     accountId,
     provider: params.provider,
@@ -72,7 +93,12 @@ function buildDirectDmContext(
     timestamp: params.timestamp,
     from: params.senderAddress,
     sender: { id: params.senderId, name: params.conversationLabel },
-    conversation: { kind: "direct", id: params.peer.id, label: params.conversationLabel },
+    conversation: {
+      kind: "direct",
+      id: params.peer.id,
+      routePeer: params.peer,
+      label: params.conversationLabel,
+    },
     route: {
       agentId: route.agentId,
       accountId: route.accountId,
@@ -81,7 +107,7 @@ function buildDirectDmContext(
     },
     reply: {
       to: params.recipientAddress,
-      originatingTo: params.originatingTo ?? params.recipientAddress,
+      originatingTo: params.originatingTo ?? params.senderAddress,
     },
     message: {
       body,
@@ -90,6 +116,7 @@ function buildDirectDmContext(
       commandBody: params.commandBody ?? params.rawBody,
     },
     access: { commands: { authorized: params.commandAuthorized === true } },
+    channelIngress: params.channelIngress,
     extra: {
       NativeDirectUserId: params.peer.id,
       OriginatingChannel: params.originatingChannel ?? params.channel,
@@ -102,14 +129,25 @@ export async function dispatchInboundDirectDm(params: DispatchInboundDirectDmPar
   route: DirectDmRoute;
   ctxPayload: FinalizedMsgContext;
 }> {
-  const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope({
+  const route = resolveAgentRoute({
     cfg: params.cfg,
     channel: params.channel,
     accountId: params.accountId,
     peer: params.peer,
   });
-  const ctxPayload = buildDirectDmContext(
-    params,
+  const channelIngress = params.resolveChannelIngress
+    ? await params.resolveChannelIngress({
+        agentId: route.agentId,
+        sessionKey: route.sessionKey,
+        messageId: params.messageId,
+        inboundEventKind: "user_request",
+      })
+    : params.channelIngress;
+  const boundParams =
+    channelIngress === params.channelIngress ? params : { ...params, channelIngress };
+  const buildEnvelope = await createChannelInboundEnvelopeBuilderAsync({ cfg: params.cfg, route });
+  const ctxPayload = await buildDirectDmContext(
+    boundParams,
     route,
     buildEnvelope({
       channel: params.channelLabel,
@@ -118,6 +156,16 @@ export async function dispatchInboundDirectDm(params: DispatchInboundDirectDmPar
       timestamp: params.timestamp,
     }),
   );
+  await dispatchRoutedChannelTurn(buildDirectDmTurnPlan(boundParams, route, ctxPayload));
+
+  return { route, ctxPayload };
+}
+
+function buildDirectDmTurnPlan(
+  params: DispatchInboundDirectDmParams,
+  route: DirectDmRoute,
+  ctxPayload: FinalizedMsgContext,
+): ChannelTurnPlan {
   const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
     cfg: params.cfg,
     agentId: route.agentId,
@@ -125,7 +173,7 @@ export async function dispatchInboundDirectDm(params: DispatchInboundDirectDmPar
     accountId: route.accountId ?? params.accountId,
   });
 
-  await dispatchChannelInboundTurn({
+  return {
     cfg: params.cfg,
     channel: params.channel,
     accountId: route.accountId ?? params.accountId,
@@ -139,14 +187,20 @@ export async function dispatchInboundDirectDm(params: DispatchInboundDirectDmPar
       onError: params.onDispatchError,
     },
     replyPipeline,
-    replyOptions: { onModelSelected },
-  });
-
-  return { route, ctxPayload };
+    replyOptions: {
+      onModelSelected,
+      ...(params.turnAdoptionLifecycle
+        ? { turnAdoptionLifecycle: params.turnAdoptionLifecycle }
+        : {}),
+    },
+  };
 }
 
+/** @deprecated Use dispatchInboundDirectDm. Retained for released SDK runtime callbacks until the next major. */
 export async function dispatchInboundDirectDmWithRuntime(
-  params: DispatchInboundDirectDmParams & { runtime: PluginRuntime },
+  params: Omit<DispatchInboundDirectDmParams, "resolveChannelIngress"> & {
+    runtime: PluginRuntime;
+  },
 ): Promise<{
   route: DirectDmRoute;
   storePath: string;
@@ -184,42 +238,31 @@ export async function dispatchInboundDirectDmWithRuntime(
     MessageSidFull: params.messageId,
     Timestamp: params.timestamp,
     CommandAuthorized: params.commandAuthorized,
-    ...(params.inboundAccessAuthorized === true ? { InboundAccessAuthorized: true } : {}),
+    ...(params.inboundAccessAuthorized === true
+      ? { InboundAccessAuthorized: true, ConversationRouteContextObserved: true as const }
+      : {}),
+    ConversationRoutePeerId: params.peer.id,
     OriginatingChannel: params.originatingChannel ?? params.channel,
-    OriginatingTo: params.originatingTo ?? params.recipientAddress,
+    OriginatingTo: params.originatingTo ?? params.senderAddress,
     NativeDirectUserId: params.peer.id,
     ...params.extraContext,
   });
-  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
-    cfg: params.cfg,
-    agentId: route.agentId,
+  const plan = buildDirectDmTurnPlan(params, route, ctxPayload);
+  await params.runtime.channel.inbound.run({
     channel: params.channel,
     accountId: route.accountId ?? params.accountId,
-  });
-  await runPreparedInboundReply({
-    channel: params.channel,
-    accountId: route.accountId ?? params.accountId,
-    routeSessionKey: route.sessionKey,
-    storePath,
-    ctxPayload,
-    recordInboundSession: params.runtime.channel.session.recordInboundSession,
-    record: { onRecordError: params.onRecordError },
-    runDispatch: () =>
-      params.runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-        ctx: ctxPayload,
-        cfg: params.cfg,
-        dispatcherOptions: {
-          ...replyPipeline,
-          deliver: (payload: unknown) =>
-            params.deliver(
-              payload && typeof payload === "object"
-                ? normalizeOutboundReplyPayload(payload as Record<string, unknown>)
-                : {},
-            ),
-          onError: params.onDispatchError,
-        },
-        replyOptions: { onModelSelected },
+    raw: ctxPayload,
+    adapter: {
+      ingest: () => ({
+        id: params.messageId,
+        timestamp: params.timestamp,
+        rawText: params.rawBody,
+        textForAgent: params.bodyForAgent,
+        textForCommands: params.commandBody,
+        raw: ctxPayload,
       }),
+      resolveTurn: () => plan,
+    },
   });
   return { route, storePath, ctxPayload };
 }

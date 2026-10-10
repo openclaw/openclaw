@@ -1,27 +1,19 @@
 import { fork, type ChildProcess } from "node:child_process";
 import { setImmediate as delayImmediate, setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { requireNodeSqlite } from "../../src/infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../../src/infra/node-sqlite.js";
 import {
   COMMITTED_WAL_SENTINEL,
+  formatReliabilityStderr,
   STRESS_TABLE_SQL,
   type ProfileConfig,
 } from "./sqlite-reliability-contract.js";
-
-type WriterReadyMessage = {
-  kind: "ready";
-};
-
-type WriterPartialMessage = {
-  batch: number;
-  kind: "partial";
-  rows: number;
-};
-
-type WriterReleasedMessage = {
-  batch: number;
-  kind: "released";
-};
+import {
+  waitForReliabilityWorkerExit,
+  waitForReliabilityWorkerMessage,
+  type ReliabilityWorkerExit,
+} from "./sqlite-reliability-process.js";
+import { resolveForwardedNodeCompilerArgs } from "./tsx-cli-shim.mjs";
 
 type WriterResultMessage = {
   batchesCommitted: number;
@@ -29,17 +21,18 @@ type WriterResultMessage = {
   rowsCommitted: number;
 };
 
-type WriterErrorMessage = {
-  error: string;
-  kind: "error";
-};
-
 type WriterMessage =
-  | WriterReadyMessage
-  | WriterPartialMessage
-  | WriterReleasedMessage
+  | { kind: "ready" }
+  | {
+      batch: number;
+      batchesCommitted: number;
+      kind: "partial";
+      rows: number;
+      rowsCommitted: number;
+    }
+  | { batch: number; kind: "released" }
   | WriterResultMessage
-  | WriterErrorMessage;
+  | { error: string; kind: "error" };
 
 export type WriterHandle = {
   child: ChildProcess;
@@ -48,6 +41,8 @@ export type WriterHandle = {
 };
 
 const WRITER_MESSAGE_TIMEOUT_MS = 30_000;
+const WORKER_EXIT_TIMEOUT_MESSAGE =
+  "SQLite reliability writer did not exit after termination was requested.";
 
 export function startWriter(databasePath: string, profile: ProfileConfig): WriterHandle {
   const child = fork(
@@ -62,16 +57,14 @@ export function startWriter(databasePath: string, profile: ProfileConfig): Write
       String(profile.writerPauseMs),
     ],
     {
-      execArgv: ["--import", "tsx"],
+      execArgv: [...resolveForwardedNodeCompilerArgs(), "--import", "tsx"],
       serialization: "json",
       stdio: ["ignore", "ignore", "pipe", "ipc"],
     },
   );
   const stderr: string[] = [];
   child.stderr?.setEncoding("utf8");
-  child.stderr?.on("data", (chunk: string) => {
-    stderr.push(chunk);
-  });
+  child.stderr?.on("data", (chunk: string) => stderr.push(chunk));
   return { child, stderr, stopped: false };
 }
 
@@ -80,55 +73,22 @@ export async function waitForWriterMessage<T extends WriterMessage["kind"]>(
   kind: T,
   action?: () => void,
 ): Promise<Extract<WriterMessage, { kind: T }>> {
-  return await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      cleanup();
-      reject(
-        new Error(
-          `SQLite reliability writer timed out waiting for ${kind}.${formatWriterStderr(writer)}`,
-        ),
-      );
-    }, WRITER_MESSAGE_TIMEOUT_MS);
-    const onMessage = (message: WriterMessage) => {
+  const result = await waitForReliabilityWorkerMessage({
+    action,
+    child: writer.child,
+    matches: (message: WriterMessage) => {
       if (message.kind === "error") {
-        cleanup();
-        reject(new Error(`SQLite reliability writer failed: ${message.error}`));
-        return;
+        throw new Error(`SQLite reliability writer failed: ${message.error}`);
       }
-      if (message.kind !== kind) {
-        return;
-      }
-      cleanup();
-      resolve(message as Extract<WriterMessage, { kind: T }>);
-    };
-    const onError = (error: Error) => {
-      cleanup();
-      reject(error);
-    };
-    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-      cleanup();
-      reject(
-        new Error(
-          `SQLite reliability writer exited before ${kind}: code=${String(code)} signal=${String(signal)}.${formatWriterStderr(writer)}`,
-        ),
-      );
-    };
-    const cleanup = () => {
-      clearTimeout(timeout);
-      writer.child.off("message", onMessage);
-      writer.child.off("error", onError);
-      writer.child.off("exit", onExit);
-    };
-    writer.child.on("message", onMessage);
-    writer.child.on("error", onError);
-    writer.child.on("exit", onExit);
-    action?.();
+      return message.kind === kind;
+    },
+    timeoutMs: WRITER_MESSAGE_TIMEOUT_MS,
+    timeoutMessage: () =>
+      `SQLite reliability writer timed out waiting for ${kind}.${formatReliabilityStderr(writer.stderr.join(""))}`,
+    exitMessage: (code, signal) =>
+      `SQLite reliability writer exited before ${kind}: code=${String(code)} signal=${String(signal)}.${formatReliabilityStderr(writer.stderr.join(""))}`,
   });
-}
-
-function formatWriterStderr(writer: WriterHandle): string {
-  const text = writer.stderr.join("").trim();
-  return text ? ` stderr=${JSON.stringify(text)}` : "";
+  return result as Extract<WriterMessage, { kind: T }>;
 }
 
 export async function stopWriter(writer: WriterHandle): Promise<WriterResultMessage> {
@@ -138,55 +98,36 @@ export async function stopWriter(writer: WriterHandle): Promise<WriterResultMess
   const result = await waitForWriterMessage(writer, "result", () => {
     writer.child.send?.({ kind: "stop" });
   });
-  await waitForChildExit(writer.child);
+  await waitForReliabilityWorkerExit(writer.child, WORKER_EXIT_TIMEOUT_MESSAGE);
   writer.stopped = true;
   return result;
 }
 
-async function waitForChildExit(child: ChildProcess): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return;
+export async function crashWriter(writer: WriterHandle): Promise<ReliabilityWorkerExit> {
+  if (writer.stopped) {
+    throw new Error("SQLite reliability writer was already stopped.");
   }
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      cleanup();
-      reject(new Error("SQLite reliability writer did not exit after stopping."));
-    }, WRITER_MESSAGE_TIMEOUT_MS);
-    const onExit = () => {
-      cleanup();
-      resolve();
-    };
-    const onError = (error: Error) => {
-      cleanup();
-      reject(error);
-    };
-    const cleanup = () => {
-      clearTimeout(timeout);
-      child.off("exit", onExit);
-      child.off("error", onError);
-    };
-    child.on("exit", onExit);
-    child.on("error", onError);
-  });
+  if (!writer.child.kill("SIGKILL")) {
+    throw new Error("SQLite reliability writer exited before the crash signal was delivered.");
+  }
+  const exit = await waitForReliabilityWorkerExit(writer.child, WORKER_EXIT_TIMEOUT_MESSAGE);
+  writer.stopped = true;
+  return exit;
 }
 
 export async function terminateWriter(writer: WriterHandle): Promise<void> {
   if (writer.child.exitCode !== null || writer.child.signalCode !== null) {
+    writer.stopped = true;
     return;
   }
   writer.child.kill();
-  await waitForChildExit(writer.child).catch(() => undefined);
+  await waitForReliabilityWorkerExit(writer.child, WORKER_EXIT_TIMEOUT_MESSAGE).catch(
+    () => undefined,
+  );
+  writer.stopped = true;
 }
 
-function parseWriterChildArgs(argv: string[]): {
-  databasePath: string;
-  payloadBytes: number;
-  retainedBatches: number;
-  rowsPerBatch: number;
-  walAutoCheckpointPages: number;
-  walSizeLimitBytes: number;
-  writerPauseMs: number;
-} {
+function parseWriterChildArgs(argv: string[]) {
   const [
     databasePath,
     rowsRaw,
@@ -206,18 +147,16 @@ function parseWriterChildArgs(argv: string[]): {
   if (
     !databasePath ||
     extra.length > 0 ||
-    !Number.isSafeInteger(rowsPerBatch) ||
-    rowsPerBatch < 2 ||
-    !Number.isSafeInteger(payloadBytes) ||
-    payloadBytes < 1 ||
-    !Number.isSafeInteger(retainedBatches) ||
-    retainedBatches < 1 ||
-    !Number.isSafeInteger(walAutoCheckpointPages) ||
-    walAutoCheckpointPages < 1 ||
-    !Number.isSafeInteger(walSizeLimitBytes) ||
-    walSizeLimitBytes < 1 ||
-    !Number.isSafeInteger(writerPauseMs) ||
-    writerPauseMs < 0
+    (
+      [
+        [rowsPerBatch, 2],
+        [payloadBytes, 1],
+        [retainedBatches, 1],
+        [walAutoCheckpointPages, 1],
+        [walSizeLimitBytes, 1],
+        [writerPauseMs, 0],
+      ] as const
+    ).some(([value, minimum]) => !Number.isSafeInteger(value) || value < minimum)
   ) {
     throw new Error("invalid SQLite reliability writer arguments");
   }
@@ -234,9 +173,7 @@ function parseWriterChildArgs(argv: string[]): {
 
 async function runWriterChild(argv: string[]): Promise<void> {
   const options = parseWriterChildArgs(argv);
-  const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(options.databasePath);
-  let nextBatch = 0;
+  const database = openNodeSqliteDatabase(options.databasePath);
   let batchesCommitted = 0;
   let rowsCommitted = 0;
   let stopping = false;
@@ -263,13 +200,14 @@ async function runWriterChild(argv: string[]): Promise<void> {
         "SELECT COALESCE(MAX(batch), -1) + 1 AS next_batch FROM openclaw_reliability_entries",
       )
       .get() as { next_batch?: number | bigint };
-    nextBatch = Number(next.next_batch ?? 0);
+    let nextBatch = Number(next.next_batch ?? 0);
     const insert = database.prepare(
       "INSERT INTO openclaw_reliability_entries (batch, ordinal, payload) VALUES (?, ?, ?)",
     );
-    const insertSentinel = database.prepare(
-      "INSERT INTO openclaw_reliability_sentinel (id, payload) VALUES (1, ?)",
-    );
+    const upsertSentinel = database.prepare(`
+      INSERT INTO openclaw_reliability_sentinel (id, payload) VALUES (1, ?)
+      ON CONFLICT(id) DO UPDATE SET payload = excluded.payload
+    `);
     const deleteExpired = database.prepare(
       "DELETE FROM openclaw_reliability_entries WHERE batch < ?",
     );
@@ -300,7 +238,7 @@ async function runWriterChild(argv: string[]): Promise<void> {
       database.exec("BEGIN IMMEDIATE;");
       try {
         if (includeSentinel) {
-          insertSentinel.run(COMMITTED_WAL_SENTINEL);
+          upsertSentinel.run(COMMITTED_WAL_SENTINEL);
         }
         for (let ordinal = 0; ordinal < options.rowsPerBatch; ordinal += 1) {
           insert.run(nextBatch, ordinal, `${nextBatch}:${ordinal}:${payload}`);
@@ -317,7 +255,7 @@ async function runWriterChild(argv: string[]): Promise<void> {
     };
 
     commitBatch(true);
-    sendMessage({ kind: "ready" } satisfies WriterReadyMessage);
+    sendMessage({ kind: "ready" });
     while (!shouldStop()) {
       if (holdPartial) {
         holdPartial = false;
@@ -330,9 +268,11 @@ async function runWriterChild(argv: string[]): Promise<void> {
           }
           sendMessage({
             batch: heldBatch,
+            batchesCommitted,
             kind: "partial",
             rows: heldRows,
-          } satisfies WriterPartialMessage);
+            rowsCommitted,
+          });
           while (!shouldReleasePartial()) {
             await delay(1);
           }
@@ -348,7 +288,7 @@ async function runWriterChild(argv: string[]): Promise<void> {
             database.exec("ROLLBACK;");
           }
           releasePartial = undefined;
-          sendMessage({ batch: heldBatch, kind: "released" } satisfies WriterReleasedMessage);
+          sendMessage({ batch: heldBatch, kind: "released" });
         } catch (error) {
           database.exec("ROLLBACK;");
           throw error;
@@ -366,12 +306,12 @@ async function runWriterChild(argv: string[]): Promise<void> {
       batchesCommitted,
       kind: "result",
       rowsCommitted,
-    } satisfies WriterResultMessage);
+    });
   } catch (error) {
     sendMessage({
       error: error instanceof Error ? (error.stack ?? error.message) : String(error),
       kind: "error",
-    } satisfies WriterErrorMessage);
+    });
     process.exitCode = 1;
   } finally {
     database.close();

@@ -1,20 +1,56 @@
-// Control UI shared Gateway error helpers.
-import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
-import { GatewayRequestError, resolveGatewayErrorDetailCode } from "../api/gateway.ts";
+import {
+  ErrorCodes,
+  GatewayErrorDetailCodes,
+  readMissingScopeError,
+} from "@openclaw/gateway-client/browser";
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 
-export function isMissingOperatorReadScopeError(err: unknown): boolean {
-  if (!(err instanceof GatewayRequestError)) {
+function hasGatewayErrorDetail(err: unknown, expectedCode: string, detailCode: string): boolean {
+  const error = asRecord(err);
+  if (!error) {
     return false;
   }
-  const detailCode = resolveGatewayErrorDetailCode(err);
-  // AUTH_UNAUTHORIZED is the current server signal for scope failures in RPC responses.
-  // The message-based branch catches responses that do not include a structured detail code yet.
+  const code =
+    typeof error.gatewayCode === "string"
+      ? error.gatewayCode
+      : typeof error.code === "string"
+        ? error.code
+        : null;
+  return code === expectedCode && asRecord(error.details)?.code === detailCode;
+}
+
+/** Identifies an expired process-local wizard session without parsing public copy. */
+export function isWizardNotFoundError(err: unknown): boolean {
+  return hasGatewayErrorDetail(
+    err,
+    ErrorCodes.INVALID_REQUEST,
+    GatewayErrorDetailCodes.WIZARD_NOT_FOUND,
+  );
+}
+
+export function isSetupAdmissionBusyError(err: unknown): boolean {
+  return hasGatewayErrorDetail(
+    err,
+    ErrorCodes.UNAVAILABLE,
+    GatewayErrorDetailCodes.SETUP_ADMISSION_BUSY,
+  );
+}
+
+export function isMissingOperatorReadScopeError(err: unknown): boolean {
+  // Retained custom elements can hold an earlier client error class.
   return (
-    detailCode === ConnectErrorDetailCodes.AUTH_UNAUTHORIZED ||
-    err.message.includes("missing scope: operator.read")
+    err instanceof Error &&
+    err.name === "GatewayRequestError" &&
+    readMissingScopeError(err)?.missingScope === "operator.read"
+  );
+}
+
+export function isArchiveAccessDeniedError(err: unknown): boolean {
+  return (
+    asRecord(err)?.gatewayCode === ErrorCodes.FORBIDDEN || isMissingOperatorReadScopeError(err)
   );
 }
 
 export function formatMissingOperatorReadScopeMessage(feature: string): string {
-  return `This connection is missing operator.read, so ${feature} cannot be loaded yet.`;
+  return `You don't have permission to view ${feature}. Ask the person who manages OpenClaw for access.`;
 }

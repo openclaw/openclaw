@@ -6,7 +6,6 @@ export type CodexRouteHit = {
   path: string;
   model: string;
   canonicalModel: string;
-  runtime?: string;
 };
 
 export type CompactionOverrideKey = "model" | "provider";
@@ -18,27 +17,20 @@ export type UnsupportedCodexCompactionOverride = {
 };
 
 export type LegacyLosslessCompactionConfig = {
-  path: string;
-  compactionPath: string;
   providerPath: string;
   providerValue: string;
   modelPath?: string;
   modelValue?: string;
 };
 
-export type DisabledCodexPluginRouteHit = {
+export type CodexRuntimeRouteHit = {
   path: string;
   modelRef: string;
   canonicalModel: string;
+  agentId?: string;
 };
 
-export type DisabledCodexPluginRouteIssue = {
-  /** Config path that selects a model requiring the Codex plugin runtime. */
-  path: string;
-  /** Original model reference from config. */
-  modelRef: string;
-  /** Canonical OpenAI model reference that should remain after migration. */
-  canonicalModel: string;
+export type DisabledCodexPluginRouteIssue = Omit<CodexRuntimeRouteHit, "agentId"> & {
   /** True when explicit plugin policy blocks auto-enabling the Codex plugin. */
   repairBlocked: boolean;
 };
@@ -48,14 +40,8 @@ export type SharedDefaultCompactionOverrideConsumers = Record<CompactionOverride
 export type ConfigRouteRepairResult = {
   cfg: OpenClawConfig;
   changes: CodexRouteHit[];
-  runtimePinChanges: string[];
   runtimePolicyChanges: string[];
   unsupportedCompactionChanges: string[];
-};
-
-export type SessionRouteRepairResult = {
-  changed: boolean;
-  sessionKeys: string[];
 };
 
 export type CodexSessionRouteRepairSummary = {

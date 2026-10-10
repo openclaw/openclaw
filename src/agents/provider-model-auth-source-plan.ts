@@ -1,3 +1,5 @@
+import type { ProviderModelRouteAuthRequirement } from "../plugin-sdk/provider-model-types.js";
+
 type ProviderModelAuthReadiness = "ready" | "unknown" | "unavailable";
 
 export type ProviderModelAuthEvidence =
@@ -14,22 +16,60 @@ export type ProviderModelAuthProfileSource = {
   profileId: string;
   provider?: string;
   mode?: string;
+  authFlow?: string;
+  /** Provider-owned route classification; null explicitly excludes inference. */
+  authRequirement?: ProviderModelRouteAuthRequirement | null;
   readiness: ProviderModelAuthReadiness;
   cooldown: "active" | "clear";
 };
+
+/**
+ * Whether config authorizes this credential, as opposed to where it was found.
+ *
+ * `evidence` is provenance and is reported as such by status/probe surfaces; it
+ * cannot carry authorization, because a *declared* credential can legitimately
+ * be discovered in the environment (a `${VAR}` marker or a SecretRef naming a
+ * canonical variable). `"ambient"` means the opposite: the credential appears in
+ * neither the provider entry nor `auth.profiles`/`auth.order`, so nothing in
+ * config points at it and it may bill an account the operator never named here.
+ */
+export type ProviderModelAuthAuthorization = "declared" | "ambient";
 
 export type ProviderModelAuthDirectSource = {
   kind: "direct";
   mode?: string;
   readiness: ProviderModelAuthReadiness;
   evidence: ProviderModelAuthEvidence;
+  authorization: ProviderModelAuthAuthorization;
 };
 
 export type ProviderModelAuthSource =
   | ProviderModelAuthProfileSource
   | ProviderModelAuthDirectSource;
 
-type ProviderModelAuthRequiredReason = "configured-auth" | "provider-binding" | "user-lock";
+/** Secret-free credential-source fact safe to carry across request boundaries. */
+export type ProviderModelAuthSourceClassification =
+  | { kind: "profile" }
+  | {
+      kind: "direct";
+      evidence: ProviderModelAuthEvidence;
+      authorization: ProviderModelAuthAuthorization;
+    };
+
+/** Drops profile ids, modes, readiness, and cooldown state from a selected source. */
+export function classifyProviderModelAuthSource(
+  source: ProviderModelAuthSource,
+): ProviderModelAuthSourceClassification {
+  return source.kind === "profile"
+    ? { kind: "profile" }
+    : {
+        kind: "direct",
+        evidence: source.evidence,
+        authorization: source.authorization,
+      };
+}
+
+type ProviderModelAuthRequiredReason = "configured-auth" | "provider-binding" | "runtime-binding";
 
 type ProviderModelAuthAutomaticProfiles =
   | { kind: "empty"; explicitOrder: boolean }
@@ -59,8 +99,18 @@ export type ProviderModelAuthSourcePlan =
       kind: "automatic";
       profiles: ProviderModelAuthAutomaticProfiles;
       orderedProfiles: readonly ProviderModelAuthProfileSource[];
+      /** An authored preferred profile keeps priority without becoming an explicit auth-order list. */
+      preserveProfilePriority?: boolean;
       allowCooldown: boolean;
       fallback?: ProviderModelAuthDirectSource;
+      /**
+       * How many profiles the operator declared for this provider, before any
+       * readiness, cooldown or route-compatibility filtering. Route filtering
+       * rebuilds the plan from a narrowed profile list, so `profiles.kind` alone
+       * cannot distinguish "operator declared nothing" (zero-config) from
+       * "everything the operator declared was filtered out".
+       */
+      declaredProfileCount: number;
     };
 
 export function toProviderModelAuthReadiness(
@@ -80,12 +130,19 @@ export function buildProviderModelAuthDirectSource(params: {
   mode?: string;
   availability?: boolean;
   evidence: ProviderModelAuthEvidence;
+  /**
+   * Required, not defaulted: a permissive default would silently give every
+   * unaudited construction site full standing, which is exactly how a source
+   * escapes the ambient-credential rule. Make each caller state it.
+   */
+  authorization: ProviderModelAuthAuthorization;
 }): ProviderModelAuthDirectSource {
   return {
     kind: "direct",
     mode: params.mode,
     readiness: toProviderModelAuthReadiness(params.availability),
     evidence: params.evidence,
+    authorization: params.authorization,
   };
 }
 
@@ -110,25 +167,26 @@ export function buildProviderModelAuthSourcePlan(params: {
   };
   profiles: readonly ProviderModelAuthProfileSource[];
   preferredProfileId?: string;
+  preserveProfilePriority?: boolean;
   explicitOrder?: boolean;
   fallback?: ProviderModelAuthDirectSource;
   allowCooldown?: boolean;
+  /** Overrides the declared count when rebuilding a plan from filtered profiles. */
+  declaredProfileCount?: number;
 }): ProviderModelAuthSourcePlan {
   if (params.ownership) {
     return { kind: "required", ...params.ownership };
   }
   const explicitOrder = params.explicitOrder === true;
   const ordered = reorderPreferredProfile(params.profiles, params.preferredProfileId);
-  let profiles: ProviderModelAuthAutomaticProfiles;
-  if (ordered.length === 0) {
-    profiles = { kind: "empty", explicitOrder };
-  } else {
+  let profiles: ProviderModelAuthAutomaticProfiles = { kind: "empty", explicitOrder };
+  if (ordered.length > 0) {
     const available = ordered.filter((profile) => profile.readiness !== "unavailable");
     if (available.length === 0) {
       const [firstOrdered] = ordered;
-      profiles = firstOrdered
-        ? { kind: "all-unavailable", explicitOrder, first: firstOrdered }
-        : { kind: "empty", explicitOrder };
+      if (firstOrdered) {
+        profiles = { kind: "all-unavailable", explicitOrder, first: firstOrdered };
+      }
     } else {
       const outsideCooldown = available.filter((profile) => profile.cooldown === "clear");
       if (outsideCooldown.length > 0) {
@@ -137,9 +195,9 @@ export function buildProviderModelAuthSourcePlan(params: {
         profiles = { kind: "usable", explicitOrder, profiles: available.slice(0, 1) };
       } else {
         const [firstAvailable] = available;
-        profiles = firstAvailable
-          ? { kind: "all-cooldown", explicitOrder, first: firstAvailable }
-          : { kind: "empty", explicitOrder };
+        if (firstAvailable) {
+          profiles = { kind: "all-cooldown", explicitOrder, first: firstAvailable };
+        }
       }
     }
   }
@@ -147,7 +205,9 @@ export function buildProviderModelAuthSourcePlan(params: {
     kind: "automatic",
     profiles,
     orderedProfiles: ordered,
+    ...(params.preserveProfilePriority ? { preserveProfilePriority: true } : {}),
     allowCooldown: params.allowCooldown === true,
+    declaredProfileCount: params.declaredProfileCount ?? ordered.length,
     ...(params.fallback ? { fallback: params.fallback } : {}),
   };
 }

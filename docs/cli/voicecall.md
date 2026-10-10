@@ -9,22 +9,42 @@ title: "Voicecall"
 # `openclaw voicecall`
 
 `voicecall` is a plugin-provided command. It only appears when the voice-call
-plugin is installed and enabled.
+plugin is installed and enabled. If `openclaw voicecall` is not recognized,
+install and enable the plugin on the Gateway host:
+
+```bash
+openclaw plugins install @openclaw/voice-call
+openclaw plugins enable voice-call
+```
+
+The commands apply to a running Gateway automatically; start it if it is offline.
+See [Voice call plugin](/plugins/voice-call) for provider credentials and
+webhook configuration, and [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect)
+for runtime verification.
 
 When the Gateway is running, operational commands (`call`, `start`,
 `continue`, `speak`, `dtmf`, `end`, `status`) route to that Gateway's
 voice-call runtime. If no Gateway is reachable, they fall back to a standalone
-CLI runtime.
+CLI runtime. `status` uses the persisted call store instead of starting that
+runtime.
+
+Fallback is limited to transport-level absence. If the Gateway responds with a
+request or authentication error, or does not answer before the timeout, the
+command exits nonzero and points to `openclaw gateway status`; it does not start
+a second webhook server. If standalone fallback cannot bind the configured
+`serve.port`, the error identifies the likely running Gateway instead of
+printing a raw `EADDRINUSE` failure.
 
 ## Subcommands
 
 ```bash
 openclaw voicecall setup    [--json]
 openclaw voicecall smoke    [-t <phone>] [--message <text>] [--mode <m>] [--yes] [--json]
-openclaw voicecall call     -m <text> [-t <phone>] [--mode <m>]
-openclaw voicecall start    --to <phone> [--message <text>] [--mode <m>]
+openclaw voicecall call     -m <text> [-t <phone>] [--mode <m>] [--brief <text-or-json> | --brief-file <path>]
+openclaw voicecall start    --to <phone> [--message <text>] [--mode <m>] [--brief <text-or-json> | --brief-file <path>]
 openclaw voicecall continue --call-id <id> --message <text>
 openclaw voicecall speak    --call-id <id> --message <text>
+openclaw voicecall steer    --call-id <id> --message <text> [--mode say|guidance]
 openclaw voicecall dtmf     --call-id <id> --digits <digits>
 openclaw voicecall end      --call-id <id>
 openclaw voicecall status   [--call-id <id>] [--json]
@@ -44,8 +64,8 @@ openclaw voicecall expose   [--mode <m>] [--path <p>] [--port <port>] [--serve-p
 | `dtmf`     | Send DTMF digits to an active call.                             |
 | `end`      | Hang up an active call.                                         |
 | `status`   | Inspect active calls (or one by `--call-id`).                   |
-| `tail`     | Tail `calls.jsonl` (useful during provider tests).              |
-| `latency`  | Summarize turn-latency metrics from `calls.jsonl`.              |
+| `tail`     | Tail persisted call records or an explicit custom JSONL log.    |
+| `latency`  | Summarize turn latency from call history or a custom JSONL log. |
 | `expose`   | Toggle Tailscale serve/funnel for the webhook endpoint.         |
 
 ## Setup and smoke
@@ -99,6 +119,11 @@ openclaw voicecall call --to "+15555550123" --message "Hello"
 openclaw voicecall call -m "Heads up" --mode notify
 ```
 
+Use `--brief` for a task in plain text or a JSON object. `--brief-file` reads a
+JSON object from a file; the flags are mutually exclusive. The opening message
+is still spoken verbatim first. See [Per-call briefs](/plugins/voice-call/realtime-and-streaming#per-call-briefs-and-errands)
+for the schema, permissions, and duration cap.
+
 ### `start`
 
 Alias for `call` with a different default flag shape.
@@ -126,6 +151,20 @@ Speak a message without waiting for a response.
 | ------------------ | -------- | ----------------- |
 | `--call-id <id>`   | yes      | Call ID.          |
 | `--message <text>` | yes      | Message to speak. |
+
+### `steer`
+
+Send a new owner instruction to an active realtime call:
+
+```bash
+openclaw voicecall steer --call-id "<call-id>" --message "Ask for Tuesday morning"
+openclaw voicecall steer --call-id "<call-id>" --mode say --message "Tuesday morning works for us."
+```
+
+`guidance` is the default. `say` requests the exact words now. The instruction is
+also included in later agent consults. Messages are limited to 500 characters.
+The CLI uses the running Gateway's operator authorization; an unavailable
+Gateway is an error because a standalone process cannot steer its live bridge.
 
 ### `dtmf`
 
@@ -163,8 +202,13 @@ openclaw voicecall status --call-id <id>
 
 ### `tail`
 
-Tail the voice-call JSONL log. Prints the last `--since` lines on start, then
-streams new lines as they are written.
+Tail persisted voice-call records from SQLite: print the last `--since` records
+initially, then only new snapshots (`--since 0` starts with new snapshots only).
+With an existing custom `--file`
+whose basename is not `calls.jsonl`, prints the last `--since` nonempty complete
+lines on start, then streams new complete lines. Partial lines wait for a newline;
+file replacement or observed truncation starts a fresh stream. Slow output pipes
+pause reading instead of accumulating the rest of the log in memory.
 
 | Flag            | Default                    | Description                    |
 | --------------- | -------------------------- | ------------------------------ |
@@ -174,8 +218,15 @@ streams new lines as they are written.
 
 ### `latency`
 
-Summarize turn-latency and listen-wait metrics from `calls.jsonl`. Output is
-JSON with `recordsScanned`, `turnLatency`, and `listenWait` summaries.
+Summarize turn-latency and listen-wait metrics from SQLite or an existing custom
+log selected with `--file`. Output is JSON with `recordsScanned`, `turnLatency`,
+and `listenWait` summaries.
+
+Custom logs are scanned incrementally without a byte cap on requested history.
+`latency` selects the last N nonempty records, skips malformed JSON, and accepts
+a final JSON record without a newline. It parses one selected record at a time;
+memory still scales with the largest selected JSON record and the requested
+number of metric samples.
 
 | Flag            | Default                    | Description                          |
 | --------------- | -------------------------- | ------------------------------------ |
@@ -187,7 +238,10 @@ JSON with `recordsScanned`, `turnLatency`, and `listenWait` summaries.
 ### `expose`
 
 Enable, disable, or change the Tailscale serve/funnel configuration for the
-voice webhook.
+voice webhook. When realtime or streaming audio is enabled, the command also
+exposes or clears that mode's WebSocket stream path. The external HTTPS port
+comes from `tailscale.port` (default `443`); Funnel supports `443`, `8443`, or
+`10000`.
 
 | Flag                  | Default                                   | Description                                     |
 | --------------------- | ----------------------------------------- | ----------------------------------------------- |

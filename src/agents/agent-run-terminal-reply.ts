@@ -1,0 +1,92 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
+import { stripInternalMetadataForDisplay } from "../auto-reply/reply/display-text-sanitize.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { normalizeAgentRunRouteChange } from "./agent-run-terminal-receipt.js";
+import type { AgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.types.js";
+
+const AGENT_RUN_TERMINAL_REPLY_MAX_CHARS = 4_096;
+
+function isMessageToolNotCalledTerminalReply(
+  reply: AgentRunTerminalReplySnapshot | undefined,
+): boolean {
+  return reply?.disposition === "empty" && reply.code === "message-tool-not-called";
+}
+
+/** Sanitizes and caps producer-owned text before it enters lifecycle or durable state. */
+export function sanitizeAgentRunTerminalReplyText(text: string): string {
+  return truncateWithMarker(
+    stripInternalMetadataForDisplay(text).trim(),
+    AGENT_RUN_TERMINAL_REPLY_MAX_CHARS,
+    {
+      marker: "…",
+      reserve: 1,
+      trimEnd: true,
+    },
+  );
+}
+
+/** Builds the authoritative terminal reply fact while raw assistant text is still available. */
+export function buildAgentRunTerminalReplySnapshot(params: {
+  visibleText?: string;
+  rawText?: string;
+  terminalReplyKind?: "silent-empty";
+}): AgentRunTerminalReplySnapshot {
+  if (
+    params.terminalReplyKind === "silent-empty" ||
+    isSilentReplyText(params.rawText ?? params.visibleText, SILENT_REPLY_TOKEN)
+  ) {
+    return { disposition: "silent" };
+  }
+  const text = sanitizeAgentRunTerminalReplyText(params.visibleText ?? "");
+  return text ? { disposition: "visible", text } : { disposition: "empty" };
+}
+
+/** Normalizes lifecycle/RPC evidence without allowing raw or unbounded text through. */
+export function normalizeAgentRunTerminalReplySnapshot(
+  value: unknown,
+): AgentRunTerminalReplySnapshot | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const disposition = value.disposition;
+  if (disposition === "silent") {
+    return { disposition };
+  }
+  if (disposition === "empty") {
+    if (value.code === "message-tool-not-called") {
+      return { disposition, code: "message-tool-not-called" };
+    }
+    return { disposition };
+  }
+  if (disposition !== "visible") {
+    return undefined;
+  }
+  const rawText = value.text;
+  if (typeof rawText !== "string") {
+    return undefined;
+  }
+  const text = sanitizeAgentRunTerminalReplyText(rawText);
+  const modelRouteChange = normalizeAgentRunRouteChange(value.modelRouteChange);
+  return text
+    ? { disposition: "visible", text, ...(modelRouteChange ? { modelRouteChange } : {}) }
+    : { disposition: "empty" };
+}
+
+/** Reply evidence merges independently from sticky timeout/cancellation precedence. */
+export function mergeAgentRunTerminalReplySnapshot(
+  existing: AgentRunTerminalReplySnapshot | undefined,
+  incoming: AgentRunTerminalReplySnapshot | undefined,
+): AgentRunTerminalReplySnapshot | undefined {
+  if (!incoming || isMessageToolNotCalledTerminalReply(existing)) {
+    return existing;
+  }
+  if (
+    !existing ||
+    isMessageToolNotCalledTerminalReply(incoming) ||
+    existing.disposition === "empty"
+  ) {
+    return incoming;
+  }
+  return incoming.disposition === "empty" ? existing : incoming;
+}

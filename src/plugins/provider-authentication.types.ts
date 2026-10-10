@@ -4,15 +4,30 @@ import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import type { PluginManifestOnboardingScope } from "./manifest-types.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
 import type { ProviderAuthOptionBag } from "./provider-external-auth.types.js";
 import type { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
 
-export type ProviderAuthKind = "oauth" | "api_key" | "token" | "device_code" | "custom";
+type ProviderAuthKind = "oauth" | "api_key" | "token" | "device_code" | "custom";
+
+type ProviderAuthSecretStorage = {
+  /** Final persistence target. The inline credential remains available for staged validation. */
+  kind: "store";
+  /** Environment-style prefix used for the host-owned secret-store entry. */
+  namePrefix: string;
+};
+
+export type ProviderAuthProfile = {
+  profileId: string;
+  credential: AuthProfileCredential;
+  /** Request host-owned SecretRef materialization at the final persistence boundary. */
+  secretStorage?: ProviderAuthSecretStorage;
+};
 
 /** Standard result payload returned by provider auth methods. */
 export type ProviderAuthResult = {
-  profiles: Array<{ profileId: string; credential: AuthProfileCredential }>;
+  profiles: ProviderAuthProfile[];
   /**
    * Optional config patch to merge after credentials are written.
    *
@@ -34,6 +49,10 @@ export type ProviderAuthResult = {
 /** Interactive auth context passed to provider login/setup methods. */
 export type ProviderAuthContext = {
   config: OpenClawConfig;
+  /** Host-authorized profiles available for reconnect; personal flows supply only their owner's selection. */
+  existingProfiles?: readonly ProviderAuthProfile[];
+  /** Save connection credentials without discovering or selecting a starter model. */
+  credentialOnly?: boolean;
   env?: NodeJS.ProcessEnv;
   agentDir?: string;
   workspaceDir?: string;
@@ -41,6 +60,8 @@ export type ProviderAuthContext = {
   runtime: RuntimeEnv;
   /** Cancels browser callbacks, device polling, and other app-owned auth work. */
   signal?: AbortSignal;
+  /** Personal-account methods must recheck live caller authority immediately before external effects. */
+  assertCurrent?: () => void;
   /**
    * Optional onboarding CLI options that triggered this auth flow.
    *
@@ -54,7 +75,7 @@ export type ProviderAuthContext = {
    * Onboarding secret persistence preference.
    *
    * Interactive wizard flows set this when the caller explicitly requested
-   * plaintext or env/file/exec ref storage. Ad-hoc `models auth login` flows
+   * plaintext or env/file/exec/store ref storage. Ad-hoc `models auth login` flows
    * usually leave it undefined.
    */
   secretInputMode?: SecretInputMode;
@@ -71,6 +92,11 @@ export type ProviderAuthContext = {
   openUrl: (url: string) => Promise<void>;
   oauth: {
     createVpsAwareHandlers: typeof createVpsAwareOAuthHandlers;
+    authorize?: (params: {
+      state: string;
+      timeoutMs: number;
+      buildAuthorizationUrl: (redirectUrl: string) => string;
+    }) => Promise<{ code: string; state: string }>;
   };
 };
 
@@ -113,6 +139,11 @@ export type ProviderAuthMethodNonInteractiveContext = {
   ) => ApiKeyCredential | null;
 };
 
+type ProviderAuthMethodNonInteractiveValidationContext = Omit<
+  ProviderAuthMethodNonInteractiveContext,
+  "toApiKeyCredential"
+>;
+
 /** Read-only context for app-guided discovery of already available inference. */
 export type ProviderAppGuidedSetupContext = {
   config: OpenClawConfig;
@@ -129,6 +160,11 @@ export type ProviderAppGuidedSetupCandidate = {
 };
 
 export type ProviderAppGuidedSetup = {
+  /**
+   * Report whether the provider's local service is reachable, even when no
+   * model is suitable for automatic activation. This probe must be read-only.
+   */
+  detectAvailability?: (ctx: ProviderAppGuidedSetupContext) => Promise<boolean>;
   /** Detection is read-only: no model pull, download, login, or config write. */
   detect: (ctx: ProviderAppGuidedSetupContext) => Promise<ProviderAppGuidedSetupCandidate | null>;
   /** Recheck one detected model and return the config required for a live probe. */
@@ -144,6 +180,12 @@ export type ProviderAuthMethod = {
   kind: ProviderAuthKind;
   /** Provider-owned model used to validate app-guided secret setup. */
   starterModel?: string;
+  /** One-time import attempted only after the user starts this login method. */
+  credentialImport?: {
+    migrationProviderId: string;
+    itemId: string;
+    credentialKind: "oauth" | "api_key" | "token";
+  };
   /**
    * Optional wizard/onboarding metadata for this specific auth method.
    *
@@ -152,20 +194,30 @@ export type ProviderAuthMethod = {
    * method-specific auth choices while keeping the provider id stable.
    */
   wizard?: ProviderPluginWizardSetup;
+  /** Proven provider identity for reconnecting an owned personal account; absent means a new slot. */
+  matchesPersonalAccount?: (
+    credential: AuthProfileCredential,
+    existing: AuthProfileCredential,
+  ) => boolean;
   run: (ctx: ProviderAuthContext) => Promise<ProviderAuthResult>;
   runNonInteractive?: (
     ctx: ProviderAuthMethodNonInteractiveContext,
   ) => Promise<OpenClawConfig | null>;
+  /** Side-effect-free prerequisite validation used before destructive reset handling. */
+  validateNonInteractive?: (
+    ctx: ProviderAuthMethodNonInteractiveValidationContext,
+  ) => Promise<boolean>;
   /** Provider-owned local model discovery for the shared guided setup ladder. */
   appGuidedSetup?: ProviderAppGuidedSetup;
 };
 
 export type ProviderPluginWizardSetup = {
+  modelTarget?: "utility";
   choiceId?: string;
   choiceLabel?: string;
   choiceHint?: string;
   assistantPriority?: number;
-  assistantVisibility?: "visible" | "manual-only";
+  assistantVisibility?: "visible" | "manual-only" | "detected-only";
   onboardingFeatured?: boolean;
   groupId?: string;
   groupLabel?: string;
@@ -175,7 +227,7 @@ export type ProviderPluginWizardSetup = {
    * Interactive onboarding surfaces where this auth choice should appear.
    * Defaults to `["text-inference"]` when omitted.
    */
-  onboardingScopes?: Array<"text-inference" | "image-generation" | "music-generation">;
+  onboardingScopes?: PluginManifestOnboardingScope[];
   /**
    * Optional model-allowlist prompt policy applied after this auth choice is
    * selected in configure/onboarding flows.
@@ -255,7 +307,7 @@ export type ProviderSystemPromptContributionContext = {
   runtimeChannel?: string;
   runtimeCapabilities?: string[];
   agentId?: string;
-  trigger?: "cron" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
+  trigger?: "cron" | "event" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
 };
 
 export type ProviderTransformSystemPromptContext = ProviderSystemPromptContributionContext & {

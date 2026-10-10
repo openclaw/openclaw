@@ -3,28 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { BUNDLED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_ENTRIES } from "./official-external-plugin-bundled-catalogs.js";
-
-type StaticProvider = {
-  id?: string;
-  aliases?: readonly string[];
-  envVars?: readonly string[];
-};
-
-type StaticWebProvider = {
-  id?: string;
-  envVars?: readonly string[];
-};
-
-type StaticManifest = {
-  channel?: { id?: string; envVars?: readonly string[] };
-  contracts?: Record<string, readonly string[]>;
-  providers?: readonly StaticProvider[];
-  webSearchProviders?: readonly StaticWebProvider[];
-};
-
-type StaticEntry = { openclaw?: StaticManifest };
-
-const STATIC_ENTRIES = BUNDLED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_ENTRIES as readonly StaticEntry[];
+import type { OfficialExternalPluginCatalogManifest } from "./official-external-plugin-catalog.types.js";
 
 function normalizeIds(values: Iterable<string>): Set<string> {
   return new Set(
@@ -43,7 +22,7 @@ export function hasOfficialExternalProviderTarget(params: {
   env: NodeJS.ProcessEnv;
 }): boolean {
   const providerIds = normalizeIds(params.providerIds);
-  return STATIC_ENTRIES.some((entry) =>
+  return BUNDLED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_ENTRIES.some((entry) =>
     entry.openclaw?.providers?.some(
       (provider) =>
         envHasAny(params.env, provider.envVars) ||
@@ -56,14 +35,14 @@ export function hasOfficialExternalProviderTarget(params: {
 }
 
 export function hasOfficialExternalContractTarget(params: {
-  contract: string;
+  contract: keyof NonNullable<OfficialExternalPluginCatalogManifest["contracts"]>;
   providerIds: Iterable<string>;
 }): boolean {
   const providerIds = normalizeIds(params.providerIds);
   if (providerIds.size === 0) {
     return false;
   }
-  return STATIC_ENTRIES.some((entry) =>
+  return BUNDLED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_ENTRIES.some((entry) =>
     entry.openclaw?.contracts?.[params.contract]?.some((providerId) => {
       const normalized = normalizeOptionalLowercaseString(providerId);
       return normalized ? providerIds.has(normalized) : false;
@@ -72,10 +51,10 @@ export function hasOfficialExternalContractTarget(params: {
 }
 
 export function hasOfficialExternalWebContractEnvTarget(params: {
-  contract: string;
+  contract: keyof NonNullable<OfficialExternalPluginCatalogManifest["contracts"]>;
   env: NodeJS.ProcessEnv;
 }): boolean {
-  return STATIC_ENTRIES.some((entry) => {
+  return BUNDLED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_ENTRIES.some((entry) => {
     const manifest = entry.openclaw;
     const contractIds = normalizeIds(manifest?.contracts?.[params.contract] ?? []);
     return manifest?.webSearchProviders?.some((provider) => {
@@ -92,7 +71,7 @@ export function hasOfficialExternalChannelTarget(params: {
   env: NodeJS.ProcessEnv;
 }): boolean {
   const channels = isRecord(params.config.channels) ? params.config.channels : undefined;
-  return STATIC_ENTRIES.some((entry) => {
+  return BUNDLED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_ENTRIES.some((entry) => {
     const channel = entry.openclaw?.channel;
     const channelId = normalizeOptionalLowercaseString(channel?.id);
     if (!channelId) {
@@ -101,7 +80,11 @@ export function hasOfficialExternalChannelTarget(params: {
     const channelConfig = channels?.[channelId];
     return (
       (isRecord(channelConfig) && channelConfig.enabled !== false) ||
-      envHasAny(params.env, channel?.envVars)
+      envHasAny(params.env, [
+        ...(channel?.envVars ?? []),
+        ...(channel?.configuredState?.env?.allOf ?? []),
+        ...(channel?.configuredState?.env?.anyOf ?? []),
+      ])
     );
   });
 }
@@ -111,7 +94,7 @@ export function hasOfficialExternalWebSearchTarget(params: {
   env: NodeJS.ProcessEnv;
 }): boolean {
   const configuredId = normalizeOptionalLowercaseString(params.providerId);
-  return STATIC_ENTRIES.some((entry) =>
+  return BUNDLED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_ENTRIES.some((entry) =>
     entry.openclaw?.webSearchProviders?.some((provider) => {
       const providerId = normalizeOptionalLowercaseString(provider.id);
       return (

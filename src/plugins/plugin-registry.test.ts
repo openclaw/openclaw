@@ -1,18 +1,13 @@
-// Covers plugin registry assembly, contribution lookup, and reset behavior.
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  closeOpenClawStateDatabaseForTest,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+// Covers plugin registry assembly, contribution lookup, and reset behavior.
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import type { PluginCandidate } from "./discovery.js";
-import {
-  readPersistedInstalledPluginIndex,
-  writePersistedInstalledPluginIndex,
-} from "./installed-plugin-index-store.js";
+import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import {
   resolveInstalledPluginIndexPolicyHash,
   type InstalledPluginIndex,
@@ -21,27 +16,33 @@ import { loadPluginLookUpTable } from "./plugin-lookup-table.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import {
   createPluginRegistryIdNormalizer,
-  getPluginRecord,
-  inspectPluginRegistry,
-  isPluginEnabled,
   listPluginContributionIds,
   loadPluginRegistrySnapshot,
   loadPluginRegistrySnapshotWithMetadata,
   normalizePluginsConfigWithRegistry,
-  refreshPluginRegistry,
-  resolveManifestContractOwnerPluginId,
-  resolveManifestContractPluginIds,
-  resolveManifestContractPluginIdsByCompatibilityRuntimePath,
   resolvePluginContributionOwners,
-  resolveProviderOwners,
 } from "./plugin-registry.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
-const DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV = "OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY";
 
-function listPluginRecords(params: { index: InstalledPluginIndex }) {
-  return params.index.plugins;
+beforeEach(() => {
+  clearPluginMetadataLifecycleCaches();
+});
+
+function resolveProviderOwners(
+  params: Omit<
+    Parameters<typeof resolvePluginContributionOwners>[0],
+    "contribution" | "matches"
+  > & { providerId: string },
+) {
+  const providerId = params.providerId.trim().toLowerCase();
+  const { providerId: _providerId, ...options } = params;
+  return resolvePluginContributionOwners({
+    ...options,
+    contribution: "providers",
+    matches: (candidate) => candidate.trim().toLowerCase() === providerId,
+  });
 }
 
 afterEach(() => {
@@ -57,17 +58,21 @@ function makeTempDir() {
 function hermeticEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
     OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: overrides.OPENCLAW_BUNDLED_PLUGINS_DIR?.trim()
+      ? undefined
+      : "1",
     OPENCLAW_VERSION: "2026.4.25",
     VITEST: "true",
     ...overrides,
   };
 }
 
-function hashFile(filePath: string): string {
-  return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
-}
-
-function createCandidate(rootDir: string, pluginId = "demo"): PluginCandidate {
+function createCandidate(
+  rootDir: string,
+  pluginId = "demo",
+  installOwner?: string,
+  manifestOverrides: Record<string, unknown> = {},
+): PluginCandidate {
   fs.writeFileSync(
     path.join(rootDir, "index.ts"),
     "throw new Error('runtime entry should not load while reading plugin registry');\n",
@@ -109,17 +114,21 @@ function createCandidate(rootDir: string, pluginId = "demo"): PluginCandidate {
         webSearchProviders: [`${pluginId}-search`],
       },
       configContracts: {
-        compatibilityRuntimePaths: [`tools.web.search.${pluginId}-search.apiKey`],
+        compatibilityRuntimePaths: [`legacyProvider.${pluginId}-search.webhook`],
       },
+      ...manifestOverrides,
     }),
     "utf8",
   );
-  return {
-    idHint: pluginId,
-    source: path.join(rootDir, "index.ts"),
-    rootDir,
-    origin: "global",
-  };
+  return recordPluginCandidateInstallOwner(
+    {
+      idHint: pluginId,
+      source: path.join(rootDir, "index.ts"),
+      rootDir,
+      origin: "global",
+    },
+    installOwner,
+  );
 }
 
 function createIndex(
@@ -146,7 +155,6 @@ function createIndex(
         startup: {
           sidecar: false,
           memory: false,
-          deferConfiguredChannelFullLoadUntilAfterListen: false,
           agentHarnesses: [],
         },
         compat: [],
@@ -157,234 +165,127 @@ function createIndex(
   };
 }
 
-function createPersistableIndex(pluginId: string): InstalledPluginIndex {
-  const index = createIndex(pluginId);
-  const plugins = index.plugins.map((plugin) => Object.assign({}, plugin, { enabled: false }));
-  return {
-    ...index,
-    plugins,
-  };
-}
-
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function requireArray(value: unknown, label: string): Array<unknown> {
-  expect(Array.isArray(value), label).toBe(true);
-  return value as Array<unknown>;
-}
-
-function expectFields(record: Record<string, unknown>, expected: Record<string, unknown>) {
-  for (const [key, value] of Object.entries(expected)) {
-    expect(record[key], key).toEqual(value);
-  }
-}
-
-function expectPluginRecordFields(record: unknown, expected: Record<string, unknown>) {
-  expectFields(requireRecord(record, "plugin record"), expected);
-}
-
-function expectDiagnosticCodes(diagnostics: unknown, expectedCodes: string[]) {
-  const codes: Array<unknown> = [];
-  for (const diagnostic of requireArray(diagnostics, "diagnostics")) {
-    codes.push(requireRecord(diagnostic, "diagnostic").code);
-  }
-  expect(codes).toEqual(expectedCodes);
-}
-
-function expectInstallRecord(
-  installRecords: unknown,
-  pluginId: string,
-  expected: Record<string, unknown>,
-) {
-  const records = requireRecord(installRecords, "install records");
-  expectFields(requireRecord(records[pluginId], `${pluginId} install record`), expected);
-}
-
 function expectSnapshotPluginIds(snapshot: InstalledPluginIndex, expectedPluginIds: string[]) {
-  expect(listPluginRecords({ index: snapshot }).map((plugin) => plugin.pluginId)).toEqual(
-    expectedPluginIds,
-  );
+  expect(snapshot.plugins.map((plugin) => plugin.pluginId)).toEqual(expectedPluginIds);
 }
 
 describe("plugin registry facade", () => {
-  it("resolves cold plugin records and contribution owners without loading runtime", () => {
+  it("keeps missing disabled records inspectable from the persisted registry", async () => {
+    const stateDir = makeTempDir();
     const rootDir = makeTempDir();
-    const candidate = createCandidate(rootDir);
-    const index = loadPluginRegistrySnapshot({
-      candidates: [candidate],
-      env: hermeticEnv(),
+    const config = { plugins: { entries: { demo: { enabled: false } } } };
+    const env = hermeticEnv();
+    const persisted = loadPluginRegistrySnapshot({
+      candidates: [createCandidate(rootDir)],
+      config,
+      env,
       preferPersisted: false,
     });
+    await writePersistedInstalledPluginIndex(persisted, { stateDir });
+    fs.rmSync(rootDir, { recursive: true });
 
-    expect(listPluginRecords({ index }).map((plugin) => plugin.pluginId)).toEqual(["demo"]);
-    expectPluginRecordFields(getPluginRecord({ index, pluginId: "demo" }), {
-      pluginId: "demo",
-      enabled: true,
-    });
-    expect(isPluginEnabled({ index, pluginId: "demo" })).toBe(true);
-    expect(listPluginContributionIds({ index, contribution: "providers" })).toEqual(["demo"]);
-    expect(listPluginContributionIds({ index, contribution: "modelCatalogProviders" })).toEqual([
-      "demo",
-      "demo-alias",
-    ]);
-    expect(resolveProviderOwners({ index, providerId: "demo" })).toEqual(["demo"]);
-    expect(
-      resolvePluginContributionOwners({
-        index,
-        contribution: "modelCatalogProviders",
-        matches: "demo-alias",
-      }),
-    ).toEqual(["demo"]);
-    expect(
-      resolvePluginContributionOwners({
-        index,
-        contribution: "channels",
-        matches: "demo-chat",
-      }),
-    ).toEqual(["demo"]);
-    expect(
-      resolvePluginContributionOwners({
-        index,
-        contribution: "cliBackends",
-        matches: "demo-cli",
-      }),
-    ).toEqual(["demo"]);
-    expect(
-      resolvePluginContributionOwners({
-        index,
-        contribution: "cliBackends",
-        matches: (contributionId) => contributionId === "demo-cli",
-      }),
-    ).toEqual(["demo"]);
-    expect(
-      resolvePluginContributionOwners({
-        index,
-        contribution: "setupProviders",
-        matches: "demo-setup",
-      }),
-    ).toEqual(["demo"]);
-    expect(resolveManifestContractPluginIds({ index, contract: "webSearchProviders" })).toEqual([
-      "demo",
-    ]);
-    expect(
-      resolveManifestContractOwnerPluginId({
-        index,
-        contract: "webSearchProviders",
-        value: "demo-search",
-      }),
-    ).toBe("demo");
-    expect(
-      resolveManifestContractPluginIdsByCompatibilityRuntimePath({
-        index,
-        contract: "webSearchProviders",
-        path: "tools.web.search.demo-search.apiKey",
-      }),
-    ).toEqual(["demo"]);
-  });
+    const result = loadPluginRegistrySnapshotWithMetadata({ stateDir, config, env });
 
-  it("keeps disabled records inspectable while excluding owners by default", () => {
-    const rootDir = makeTempDir();
-    const candidate = createCandidate(rootDir);
-    const index = loadPluginRegistrySnapshot({
-      candidates: [candidate],
-      config: {
-        plugins: {
-          entries: {
-            demo: {
-              enabled: false,
-            },
-          },
-        },
-      },
-      env: hermeticEnv(),
-      preferPersisted: false,
-    });
-
-    expectPluginRecordFields(getPluginRecord({ index, pluginId: "demo" }), {
+    expect(result.source).toBe("persisted");
+    expect(result.snapshot.plugins.find((plugin) => plugin.pluginId === "demo")).toMatchObject({
       pluginId: "demo",
       enabled: false,
     });
-    const config = {
-      plugins: {
-        entries: {
-          demo: {
-            enabled: false,
-          },
-        },
-      },
-    };
-    expect(isPluginEnabled({ index, pluginId: "demo", config })).toBe(false);
-    expect(resolveProviderOwners({ index, providerId: "demo", config })).toStrictEqual([]);
-    expect(
-      resolveProviderOwners({ index, providerId: "demo", config, includeDisabled: true }),
-    ).toEqual(["demo"]);
   });
 
-  it("resolves contribution owners from a plugin lookup table without rereading manifests", () => {
+  it("preserves raw declarations and indexed owners without rereading manifests", () => {
     const rootDir = makeTempDir();
-    const candidate = createCandidate(rootDir);
+    const candidate = createCandidate(rootDir, "demo", undefined, {
+      providers: [" Demo "],
+      cliBackends: [" DEMO-CLI ", "DEMO-CLI"],
+      setup: {
+        providers: [{ id: "demo-setup" }],
+        cliBackends: ["DEMO-CLI", "Other-CLI"],
+      },
+      providerAuthAliases: { " ALIAS ": " dEmO ", BAD: "absent" },
+      contracts: { tools: [], webSearchProviders: ["demo-search"] },
+    });
     const env = hermeticEnv();
     const index = loadPluginRegistrySnapshot({
       candidates: [candidate],
       env,
       preferPersisted: false,
     });
-    const lookUpTable = loadPluginLookUpTable({
-      config: {},
-      env,
-      index,
-    });
-    fs.unlinkSync(path.join(rootDir, "openclaw.plugin.json"));
-
-    expect(listPluginContributionIds({ lookUpTable, contribution: "providers" })).toEqual(["demo"]);
+    const lookUpTable = loadPluginLookUpTable({ config: {}, env, index });
+    for (const indexed of [false, true]) {
+      if (indexed) {
+        fs.unlinkSync(path.join(rootDir, "openclaw.plugin.json"));
+      }
+      const source = indexed ? { lookUpTable } : { index };
+      for (const [contribution, ids] of [
+        ["providers", ["Demo"]],
+        ["cliBackends", ["DEMO-CLI", "Other-CLI"]],
+        ["contracts", ["webSearchProviders"]],
+      ] as const) {
+        expect(listPluginContributionIds({ ...source, contribution })).toEqual(ids);
+      }
+      for (const [contribution, id, indexedOwner, rawOwner] of [
+        ["providers", "Demo", true, true],
+        ["providers", "demo", false, false],
+        ["providers", "alias", true, false],
+        ["providers", "ALIAS", false, false],
+        ["providers", "bad", false, false],
+        ["channels", "demo-chat", true, true],
+        ["channelConfigs", "demo-chat", true, true],
+        ["cliBackends", "demo-cli", true, false],
+        ["cliBackends", "DEMO-CLI", false, true],
+        ["cliBackends", "other-cli", true, false],
+        ["setupProviders", "demo-setup", true, true],
+        ["modelCatalogProviders", "demo-alias", true, true],
+        ["commandAliases", "demo-command", true, true],
+        ["contracts", "tools", false, false],
+        ["contracts", "webSearchProviders", true, true],
+      ] as const) {
+        const query = { ...source, contribution };
+        expect(resolvePluginContributionOwners({ ...query, matches: id })).toEqual(
+          (indexed ? indexedOwner : rawOwner) ? ["demo"] : [],
+        );
+        expect(
+          resolvePluginContributionOwners({ ...query, matches: (value) => value === id }),
+        ).toEqual(rawOwner ? ["demo"] : []);
+        expect(resolvePluginContributionOwners({ ...query, matches: "missing" })).toEqual([]);
+      }
+    }
     expect(resolveProviderOwners({ lookUpTable, providerId: "DEMO" })).toEqual(["demo"]);
-    expect(
-      resolvePluginContributionOwners({
-        lookUpTable,
-        contribution: "channels",
-        matches: "demo-chat",
-      }),
-    ).toEqual(["demo"]);
-    expect(
-      resolvePluginContributionOwners({
-        lookUpTable,
-        contribution: "cliBackends",
-        matches: "demo-cli",
-      }),
-    ).toEqual(["demo"]);
-    expect(
-      resolvePluginContributionOwners({
-        lookUpTable,
-        contribution: "setupProviders",
-        matches: "demo-setup",
-      }),
-    ).toEqual(["demo"]);
-    expect(
-      resolvePluginContributionOwners({
-        lookUpTable,
-        contribution: "commandAliases",
-        matches: "demo-command",
-      }),
-    ).toEqual(["demo"]);
-    expect(
-      resolvePluginContributionOwners({
-        lookUpTable,
-        contribution: "cliBackends",
-        matches: "demo-setup-cli",
-      }),
-    ).toEqual(["demo"]);
-    expect(
-      resolvePluginContributionOwners({
-        lookUpTable,
-        contribution: "contracts",
-        matches: "tools",
-      }),
-    ).toEqual(["demo"]);
+
+    const policies: Array<[OpenClawConfig["plugins"], boolean]> = [
+      [undefined, true],
+      [{ enabled: false }, false],
+      [{ deny: ["demo"] }, false],
+      [{ allow: ["other"] }, false],
+      [{ allow: ["demo"] }, true],
+      [{ entries: { demo: { enabled: false } } }, false],
+      [{ entries: { demo: { enabled: true } } }, true],
+    ];
+    for (const matches of ["demo-alias", (id: string) => id === "demo-alias"]) {
+      for (const [plugins, enabled] of policies) {
+        const params = {
+          lookUpTable,
+          ...(plugins ? { config: { plugins } } : {}),
+          contribution: "modelCatalogProviders" as const,
+          matches,
+        };
+        expect(resolvePluginContributionOwners(params)).toEqual(enabled ? ["demo"] : []);
+        expect(resolvePluginContributionOwners({ ...params, includeDisabled: true })).toEqual([
+          "demo",
+        ]);
+      }
+    }
+
+    const withoutInstalledOwners = {
+      lookUpTable: { ...lookUpTable, index: { ...index, plugins: [] } },
+      contribution: "modelCatalogProviders" as const,
+      includeDisabled: true,
+    };
+    expect(listPluginContributionIds(withoutInstalledOwners)).toEqual([]);
+    for (const matches of ["demo-alias", (id: string) => id === "demo-alias"]) {
+      expect(resolvePluginContributionOwners({ ...withoutInstalledOwners, matches })).toEqual([]);
+    }
   });
 
   it("normalizes plugin config ids through registry contribution aliases", () => {
@@ -466,187 +367,121 @@ describe("plugin registry facade", () => {
     expect(normalizedConfig.allow).toEqual(["demo"]);
   });
 
-  it("reads the persisted registry before deriving from discovered candidates", async () => {
+  it("keeps content-equivalent timestamp changes on the persisted path", async () => {
     const stateDir = makeTempDir();
     const rootDir = makeTempDir();
-    const persistedRootDir = makeTempDir();
-    const candidate = createCandidate(rootDir);
-    const config = {} as const;
-    fs.writeFileSync(path.join(persistedRootDir, "index.ts"), "", "utf8");
-    fs.writeFileSync(
-      path.join(persistedRootDir, "openclaw.plugin.json"),
-      JSON.stringify({ id: "persisted", configSchema: { type: "object" } }),
-      "utf8",
-    );
+    const env = hermeticEnv();
+    const persisted = loadPluginRegistrySnapshot({
+      candidates: [createCandidate(rootDir)],
+      env,
+      preferPersisted: false,
+    });
     await writePersistedInstalledPluginIndex(
-      createIndex("persisted", {
-        policyHash: resolveInstalledPluginIndexPolicyHash(config),
+      {
+        ...persisted,
         plugins: [
           {
-            ...expectDefined(
-              createIndex("persisted").plugins[0],
-              'createIndex("persisted").plugins[0] test invariant',
-            ),
-            manifestPath: path.join(persistedRootDir, "openclaw.plugin.json"),
-            manifestHash: hashFile(path.join(persistedRootDir, "openclaw.plugin.json")),
-            source: path.join(persistedRootDir, "index.ts"),
-            rootDir: persistedRootDir,
+            ...expectDefined(persisted.plugins[0], "persisted plugin test invariant"),
+            syntheticAuthRefs: ["demo"],
           },
+          ...persisted.plugins.slice(1),
         ],
-      }),
+      },
       { stateDir },
     );
+    const manifestPath = path.join(rootDir, "openclaw.plugin.json");
+    const future = new Date(Date.now() + 1_000);
+    fs.utimesSync(manifestPath, future, future);
 
-    const result = loadPluginRegistrySnapshotWithMetadata({
-      stateDir,
-      candidates: [candidate],
-      config,
-      env: hermeticEnv(),
-    });
+    const result = loadPluginRegistrySnapshotWithMetadata({ stateDir, env });
 
     expect(result.source).toBe("persisted");
-    expect(result.diagnostics).toStrictEqual([]);
-    expect(listPluginRecords({ index: result.snapshot }).map((plugin) => plugin.pluginId)).toEqual([
-      "persisted",
-    ]);
+    expect(result.snapshot.plugins[0]?.syntheticAuthRefs).toEqual(["demo"]);
   });
 
-  it("falls back to the derived registry when persisted source paths are missing", async () => {
-    const stateDir = makeTempDir();
+  it("reads install records from a custom SQLite registry path", async () => {
+    const tempDir = makeTempDir();
     const rootDir = makeTempDir();
-    const candidate = createCandidate(rootDir);
-    const config = {} as const;
-    await writePersistedInstalledPluginIndex(
-      createIndex("persisted", {
-        policyHash: resolveInstalledPluginIndexPolicyHash(config),
-      }),
-      { stateDir },
-    );
-
-    const result = loadPluginRegistrySnapshotWithMetadata({
-      stateDir,
-      candidates: [candidate],
-      config,
-      env: hermeticEnv(),
+    const filePath = path.join(tempDir, "custom-registry.sqlite");
+    const env = hermeticEnv({
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: tempDir,
     });
-
-    expect(result.source).toBe("derived");
-    expectDiagnosticCodes(result.diagnostics, ["persisted-registry-stale-source"]);
-    expectSnapshotPluginIds(result.snapshot, ["demo"]);
-  });
-
-  it("falls back to the derived registry when persisted manifest metadata is stale", async () => {
-    const stateDir = makeTempDir();
-    const rootDir = makeTempDir();
-    const candidate = createCandidate(rootDir);
-    const config = {} as const;
+    const installRecords = {
+      demo: { source: "npm" as const, spec: "demo@1.0.0", installPath: rootDir },
+    };
     const persisted = loadPluginRegistrySnapshot({
-      candidates: [candidate],
-      config,
-      env: hermeticEnv(),
+      candidates: [createCandidate(rootDir, "demo", "demo")],
+      installRecords,
+      env,
       preferPersisted: false,
     });
-    await writePersistedInstalledPluginIndex(persisted, { stateDir });
-    fs.writeFileSync(
-      path.join(rootDir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: "demo",
-        name: "Demo",
-        configSchema: { type: "object" },
-        providers: ["demo", "demo-next"],
-      }),
-      "utf8",
-    );
+    await writePersistedInstalledPluginIndex(persisted, { filePath });
 
-    const result = loadPluginRegistrySnapshotWithMetadata({
-      stateDir,
-      candidates: [candidate],
-      config,
-      env: hermeticEnv(),
+    const result = loadPluginRegistrySnapshotWithMetadata({ filePath, env });
+
+    expect(result.source).toBe("persisted");
+    expect(result.snapshot.installRecords?.demo).toMatchObject({
+      source: "npm",
+      spec: "demo@1.0.0",
+      installPath: rootDir,
     });
-
-    expect(result.source).toBe("derived");
-    expectDiagnosticCodes(result.diagnostics, ["persisted-registry-stale-source"]);
-    expect(result.snapshot.plugins[0]?.manifestHash).not.toBe(persisted.plugins[0]?.manifestHash);
   });
 
-  it("falls back to the derived registry when persisted package metadata is stale", async () => {
-    const stateDir = makeTempDir();
-    const rootDir = makeTempDir();
-    fs.writeFileSync(
-      path.join(rootDir, "package.json"),
-      JSON.stringify({ name: "demo-plugin", version: "1.0.0" }),
-      "utf8",
-    );
-    const candidate = {
-      ...createCandidate(rootDir),
-      packageDir: rootDir,
-      packageName: "demo-plugin",
-      packageVersion: "1.0.0",
-    } satisfies PluginCandidate;
-    const config = {} as const;
-    const persisted = loadPluginRegistrySnapshot({
-      candidates: [candidate],
-      config,
-      env: hermeticEnv(),
-      preferPersisted: false,
-    });
-    await writePersistedInstalledPluginIndex(persisted, { stateDir });
-    fs.writeFileSync(
-      path.join(rootDir, "package.json"),
-      JSON.stringify({ name: "demo-plugin", version: "1.0.1" }),
-      "utf8",
-    );
+  it.each(["changes", "disappears"])(
+    "falls back to the derived registry when persisted package metadata %s",
+    async (change) => {
+      const stateDir = makeTempDir();
+      const rootDir = makeTempDir();
+      fs.writeFileSync(
+        path.join(rootDir, "package.json"),
+        JSON.stringify({ name: "demo-plugin", version: "1.0.0" }),
+        "utf8",
+      );
+      const candidate = {
+        ...createCandidate(rootDir),
+        packageDir: rootDir,
+        packageName: "demo-plugin",
+        packageVersion: "1.0.0",
+      } satisfies PluginCandidate;
+      const config = {} as const;
+      const persisted = loadPluginRegistrySnapshot({
+        candidates: [candidate],
+        config,
+        env: hermeticEnv(),
+        preferPersisted: false,
+      });
+      await writePersistedInstalledPluginIndex(persisted, { stateDir });
+      if (change === "disappears") {
+        fs.rmSync(path.join(rootDir, "package.json"));
+      } else {
+        fs.writeFileSync(
+          path.join(rootDir, "package.json"),
+          JSON.stringify({ name: "demo-plugin", version: "1.0.1" }),
+          "utf8",
+        );
+      }
 
-    const result = loadPluginRegistrySnapshotWithMetadata({
-      stateDir,
-      candidates: [candidate],
-      config,
-      env: hermeticEnv(),
-    });
+      const result = loadPluginRegistrySnapshotWithMetadata({
+        stateDir,
+        candidates: [candidate],
+        config,
+        env: hermeticEnv(),
+      });
 
-    expect(result.source).toBe("derived");
-    expectDiagnosticCodes(result.diagnostics, ["persisted-registry-stale-source"]);
-    expect(result.snapshot.plugins[0]?.packageJson?.hash).not.toBe(
-      persisted.plugins[0]?.packageJson?.hash,
-    );
-  });
-
-  it("falls back to the derived registry when persisted package metadata disappears", async () => {
-    const stateDir = makeTempDir();
-    const rootDir = makeTempDir();
-    fs.writeFileSync(
-      path.join(rootDir, "package.json"),
-      JSON.stringify({ name: "demo-plugin", version: "1.0.0" }),
-      "utf8",
-    );
-    const candidate = {
-      ...createCandidate(rootDir),
-      packageDir: rootDir,
-      packageName: "demo-plugin",
-      packageVersion: "1.0.0",
-    } satisfies PluginCandidate;
-    const config = {} as const;
-    const persisted = loadPluginRegistrySnapshot({
-      candidates: [candidate],
-      config,
-      env: hermeticEnv(),
-      preferPersisted: false,
-    });
-    await writePersistedInstalledPluginIndex(persisted, { stateDir });
-    fs.rmSync(path.join(rootDir, "package.json"));
-
-    const result = loadPluginRegistrySnapshotWithMetadata({
-      stateDir,
-      candidates: [candidate],
-      config,
-      env: hermeticEnv(),
-    });
-
-    expect(result.source).toBe("derived");
-    expectDiagnosticCodes(result.diagnostics, ["persisted-registry-stale-source"]);
-    expect(result.snapshot.plugins[0]?.packageJson).toBeUndefined();
-  });
+      expect(result.source).toBe("derived");
+      expect(result.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+        "persisted-registry-stale-source",
+      ]);
+      if (change === "disappears") {
+        expect(result.snapshot.plugins[0]?.packageJson).toBeUndefined();
+      } else {
+        expect(result.snapshot.plugins[0]?.packageJson?.hash).not.toBe(
+          persisted.plugins[0]?.packageJson?.hash,
+        );
+      }
+    },
+  );
 
   it("falls back to the derived registry when persisted bundled roots point at another checkout", async () => {
     const stateDir = makeTempDir();
@@ -679,7 +514,9 @@ describe("plugin registry facade", () => {
     });
 
     expect(result.source).toBe("derived");
-    expectDiagnosticCodes(result.diagnostics, ["persisted-registry-stale-source"]);
+    expect(result.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+      "persisted-registry-stale-source",
+    ]);
     expectSnapshotPluginIds(result.snapshot, ["demo"]);
   });
 
@@ -740,7 +577,9 @@ describe("plugin registry facade", () => {
       env,
     });
     expect(migrated.source).toBe("derived");
-    expectDiagnosticCodes(migrated.diagnostics, ["persisted-registry-stale-source"]);
+    expect(migrated.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+      "persisted-registry-stale-source",
+    ]);
 
     const staleBuiltIndex = structuredClone(freshIndex);
     for (const plugin of staleBuiltIndex.plugins) {
@@ -756,7 +595,9 @@ describe("plugin registry facade", () => {
       env,
     });
     expect(refreshed.source).toBe("derived");
-    expectDiagnosticCodes(refreshed.diagnostics, ["persisted-registry-stale-source"]);
+    expect(refreshed.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+      "persisted-registry-stale-source",
+    ]);
     expect(refreshed.snapshot.plugins[0]?.rootDir).toBe(sourceRoot);
   });
 
@@ -790,68 +631,17 @@ describe("plugin registry facade", () => {
     });
 
     expect(result.source).toBe("derived");
-    expectDiagnosticCodes(result.diagnostics, ["persisted-registry-stale-policy"]);
+    expect(result.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+      "persisted-registry-stale-policy",
+    ]);
     expectSnapshotPluginIds(result.snapshot, ["demo"]);
-    expectInstallRecord(result.snapshot.installRecords, "persisted", {
+    expect(result.snapshot.installRecords?.persisted).toMatchObject({
       source: "npm",
       spec: "persisted-plugin@1.0.0",
     });
   });
 
-  it("falls back to the derived registry when the persisted registry is missing", () => {
-    const stateDir = makeTempDir();
-    const rootDir = makeTempDir();
-    const candidate = createCandidate(rootDir);
-
-    const result = loadPluginRegistrySnapshotWithMetadata({
-      stateDir,
-      candidates: [candidate],
-      env: hermeticEnv(),
-    });
-
-    expect(result.source).toBe("derived");
-    expectDiagnosticCodes(result.diagnostics, ["persisted-registry-missing"]);
-    expectSnapshotPluginIds(result.snapshot, ["demo"]);
-  });
-
-  it("reuses config-scoped derived registries within the process", () => {
-    const stateDir = makeTempDir();
-    const workspaceDir = makeTempDir();
-    const bundledRoot = makeTempDir();
-    const rootDir = path.join(bundledRoot, "demo");
-    fs.mkdirSync(rootDir, { recursive: true });
-    createCandidate(rootDir);
-    const env = hermeticEnv({ OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot });
-    const config = { plugins: { entries: { demo: { enabled: true } } } } as const;
-    const readFileSyncSpy = vi.spyOn(fs, "readFileSync");
-
-    const first = loadPluginRegistrySnapshotWithMetadata({
-      stateDir,
-      workspaceDir,
-      config,
-      env,
-    });
-    const manifestReadsAfterFirst = readFileSyncSpy.mock.calls.filter((call) =>
-      String(call[0]).endsWith("openclaw.plugin.json"),
-    ).length;
-
-    const second = loadPluginRegistrySnapshotWithMetadata({
-      stateDir,
-      workspaceDir,
-      config,
-      env,
-    });
-    const manifestReadsAfterSecond = readFileSyncSpy.mock.calls.filter((call) =>
-      String(call[0]).endsWith("openclaw.plugin.json"),
-    ).length;
-
-    expect(first.source).toBe("derived");
-    expect(second.source).toBe("derived");
-    expect(manifestReadsAfterFirst).toBeGreaterThan(0);
-    expect(manifestReadsAfterSecond).toBe(manifestReadsAfterFirst);
-  });
-
-  it("does not reuse the process registry memo after profile extensions change", () => {
+  it("reloads profile extensions after the metadata lifecycle is cleared", () => {
     const stateDir = makeTempDir();
     const configDir = makeTempDir();
     const extensionsDir = path.join(configDir, "extensions");
@@ -867,196 +657,12 @@ describe("plugin registry facade", () => {
     const secondRoot = path.join(extensionsDir, "second");
     fs.mkdirSync(secondRoot, { recursive: true });
     createCandidate(secondRoot, "second");
+    clearPluginMetadataLifecycleCaches();
     const second = loadPluginRegistrySnapshotWithMetadata({ stateDir, env });
 
     expect(first.source).toBe("derived");
     expect(second.source).toBe("derived");
     expectSnapshotPluginIds(first.snapshot, ["first"]);
     expectSnapshotPluginIds(second.snapshot, ["first", "second"]);
-  });
-
-  it("keys the process registry memo by resolved host contract version", () => {
-    const stateDir = makeTempDir();
-    const bundledRoot = makeTempDir();
-    const rootDir = path.join(bundledRoot, "demo");
-    fs.mkdirSync(rootDir, { recursive: true });
-    createCandidate(rootDir);
-    const config = { plugins: { entries: { demo: { enabled: true } } } } as const;
-
-    const first = loadPluginRegistrySnapshotWithMetadata({
-      stateDir,
-      config,
-      env: hermeticEnv({ OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot }),
-    });
-    const second = loadPluginRegistrySnapshotWithMetadata({
-      stateDir,
-      config,
-      env: hermeticEnv({
-        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
-        OPENCLAW_VERSION: "2026.4.26",
-      }),
-    });
-
-    expect(first.snapshot.hostContractVersion).toBe("2026.4.25");
-    expect(second.snapshot.hostContractVersion).toBe("2026.4.26");
-  });
-
-  it("clears the process registry memo after persisted registry writes", async () => {
-    const stateDir = makeTempDir();
-    const env = hermeticEnv();
-    await writePersistedInstalledPluginIndex(createPersistableIndex("first"), { stateDir });
-
-    const first = loadPluginRegistrySnapshotWithMetadata({ stateDir, env });
-    await writePersistedInstalledPluginIndex(createPersistableIndex("second"), { stateDir });
-    const second = loadPluginRegistrySnapshotWithMetadata({ stateDir, env });
-
-    expect(first.source).toBe("persisted");
-    expect(second.source).toBe("persisted");
-    expectSnapshotPluginIds(first.snapshot, ["first"]);
-    expectSnapshotPluginIds(second.snapshot, ["second"]);
-  });
-
-  it("does not reuse the process registry memo after the persisted registry file changes", async () => {
-    const stateDir = makeTempDir();
-    const env = hermeticEnv();
-    await writePersistedInstalledPluginIndex(createPersistableIndex("first"), { stateDir });
-    const first = loadPluginRegistrySnapshotWithMetadata({ stateDir, env });
-    const external = createPersistableIndex("second-external");
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        db.prepare(
-          `
-            UPDATE installed_plugin_index
-               SET plugins_json = ?,
-                   install_records_json = ?,
-                   diagnostics_json = ?,
-                   updated_at_ms = ?
-             WHERE index_key = 'installed-plugin-index'
-          `,
-        ).run(
-          JSON.stringify(external.plugins),
-          JSON.stringify(external.installRecords),
-          JSON.stringify(external.diagnostics),
-          Date.now(),
-        );
-      },
-      { env: { ...env, OPENCLAW_STATE_DIR: stateDir } },
-    );
-    const second = loadPluginRegistrySnapshotWithMetadata({ stateDir, env });
-
-    expect(first.source).toBe("persisted");
-    expect(second.source).toBe("persisted");
-    expectSnapshotPluginIds(first.snapshot, ["first"]);
-    expectSnapshotPluginIds(second.snapshot, ["second-external"]);
-  });
-
-  it("falls back to the derived registry when persisted reads are disabled", async () => {
-    const stateDir = makeTempDir();
-    const rootDir = makeTempDir();
-    const candidate = createCandidate(rootDir);
-    await writePersistedInstalledPluginIndex(createIndex("persisted"), { stateDir });
-
-    const result = loadPluginRegistrySnapshotWithMetadata({
-      stateDir,
-      candidates: [candidate],
-      env: hermeticEnv({ [DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV]: "1" }),
-    });
-
-    expect(result.source).toBe("derived");
-    expectDiagnosticCodes(result.diagnostics, ["persisted-registry-disabled"]);
-    expect(String(requireRecord(result.diagnostics[0], "diagnostic").message)).toContain(
-      "deprecated break-glass compatibility switch",
-    );
-    expectSnapshotPluginIds(result.snapshot, ["demo"]);
-  });
-
-  it("derives a fresh registry without persisted install records when caller disables persisted reads", async () => {
-    const stateDir = makeTempDir();
-    const rootDir = makeTempDir();
-    const candidate = createCandidate(rootDir);
-    await writePersistedInstalledPluginIndex(
-      createIndex("persisted", {
-        installRecords: {
-          persisted: {
-            source: "npm",
-            spec: "persisted-plugin@1.0.0",
-            installPath: path.join(stateDir, "plugins", "persisted"),
-          },
-        },
-      }),
-      { stateDir },
-    );
-
-    const result = loadPluginRegistrySnapshotWithMetadata({
-      stateDir,
-      candidates: [candidate],
-      env: hermeticEnv(),
-      preferPersisted: false,
-    });
-
-    expect(result.source).toBe("derived");
-    expectSnapshotPluginIds(result.snapshot, ["demo"]);
-    expect(result.snapshot.installRecords).not.toHaveProperty("persisted");
-  });
-
-  it("exposes explicit persisted registry inspect and refresh operations", async () => {
-    const stateDir = makeTempDir();
-    const pluginDir = path.join(stateDir, "plugins", "demo");
-    fs.mkdirSync(pluginDir, { recursive: true });
-    const candidate = createCandidate(pluginDir);
-    const env = hermeticEnv();
-
-    const missingInspect = await inspectPluginRegistry({ stateDir, candidates: [candidate], env });
-    expect(missingInspect.state).toBe("missing");
-    expect(missingInspect.refreshReasons).toEqual(["missing"]);
-    expect(missingInspect.persisted).toBeNull();
-    expect(missingInspect.current.plugins.map((plugin) => plugin.pluginId)).toEqual(["demo"]);
-
-    await refreshPluginRegistry({
-      reason: "manual",
-      stateDir,
-      candidates: [candidate],
-      env,
-    });
-
-    const freshInspect = await inspectPluginRegistry({ stateDir, candidates: [candidate], env });
-    expect(freshInspect.state).toBe("fresh");
-    expect(freshInspect.refreshReasons).toEqual([]);
-    expect(freshInspect.persisted?.plugins.map((plugin) => plugin.pluginId)).toEqual(["demo"]);
-  });
-
-  it("preserves install records when refreshing the persisted registry", async () => {
-    const stateDir = makeTempDir();
-    await writePersistedInstalledPluginIndex(
-      createIndex("missing", {
-        installRecords: {
-          missing: {
-            source: "npm",
-            spec: "missing-plugin@1.0.0",
-            installPath: path.join(stateDir, "plugins", "missing"),
-          },
-        },
-        plugins: [],
-      }),
-      { stateDir },
-    );
-
-    await refreshPluginRegistry({
-      reason: "manual",
-      stateDir,
-      candidates: [],
-      env: hermeticEnv(),
-    });
-
-    const persisted = await readPersistedInstalledPluginIndex({ stateDir });
-    if (!persisted) {
-      throw new Error("Expected persisted plugin index");
-    }
-    expectInstallRecord(persisted.installRecords, "missing", {
-      source: "npm",
-      spec: "missing-plugin@1.0.0",
-      installPath: path.join(stateDir, "plugins", "missing"),
-    });
-    expect(persisted.plugins).toEqual([]);
   });
 });

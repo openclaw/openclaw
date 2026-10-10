@@ -1,4 +1,5 @@
 // SQLite schema test support reads schema files for shape assertions.
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 
@@ -58,6 +59,10 @@ type SqliteMasterRow = {
   name: string;
 };
 
+type NamedIndexRow = SqliteMasterRow & {
+  tbl_name: string;
+};
+
 type IndexSqlRow = {
   sql?: unknown;
 };
@@ -69,6 +74,18 @@ type IndexXInfoRow = {
   desc: number;
   key: number;
 };
+
+export function hashSqliteSchema(database: DatabaseSync): string {
+  const schema = database
+    .prepare(
+      `SELECT type, name, tbl_name, sql
+         FROM sqlite_schema
+        WHERE name NOT LIKE 'sqlite_%'
+        ORDER BY type, name`,
+    )
+    .all();
+  return createHash("sha256").update(JSON.stringify(schema)).digest("hex");
+}
 
 /** Execute schema SQL in memory and return its comparable shape. */
 export function createSqliteSchemaShapeFromSql(schemaUrl: URL): SqliteSchemaShape {
@@ -105,6 +122,63 @@ export function collectSqliteSchemaShape(db: DatabaseSync): SqliteSchemaShape {
       },
     ]),
   );
+}
+
+/** Normalize only DDL whitespace while preserving the full structured shape. */
+export function normalizeSqliteSchemaShapeSql(shape: SqliteSchemaShape): SqliteSchemaShape {
+  return Object.fromEntries(
+    Object.entries(shape).map(([tableName, table]) => [
+      tableName,
+      {
+        ...table,
+        indexes: table.indexes.map((index) => ({
+          ...index,
+          sql: index.sql?.replace(/\s+/gu, " ").trim() ?? null,
+        })),
+      },
+    ]),
+  );
+}
+
+/**
+ * Replace every explicit named index with a same-name noncanonical index.
+ *
+ * Startup repair tests use this to prove the repair registry covers the whole
+ * canonical schema rather than only a hand-picked index.
+ */
+export function replaceNamedIndexesWithNoncanonicalIndexes(db: DatabaseSync): string[] {
+  const indexes = db
+    .prepare(
+      `
+        SELECT name, tbl_name
+        FROM sqlite_schema
+        WHERE type = 'index'
+          AND sql IS NOT NULL
+        ORDER BY name ASC
+      `,
+    )
+    .all() as NamedIndexRow[];
+
+  for (const index of indexes) {
+    const firstColumn = (
+      db
+        .prepare(`PRAGMA table_info(${quoteSqliteIdentifier(index.tbl_name)})`)
+        .all() as TableInfoRow[]
+    )[0];
+    if (!firstColumn) {
+      throw new Error(`SQLite table ${index.tbl_name} has no columns`);
+    }
+    db.exec(`
+      DROP INDEX main.${quoteSqliteIdentifier(index.name)};
+      CREATE INDEX main.${quoteSqliteIdentifier(index.name)}
+        ON ${quoteSqliteIdentifier(index.tbl_name)}(
+          ${quoteSqliteIdentifier(firstColumn.name)},
+          ${quoteSqliteIdentifier(firstColumn.name)}
+        );
+    `);
+  }
+
+  return indexes.map((index) => index.name);
 }
 
 function collectStrictFlag(db: DatabaseSync, tableName: string): number {

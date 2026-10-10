@@ -4,44 +4,27 @@
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { runExec } from "openclaw/plugin-sdk/process-runtime";
+import { asFiniteNumber, asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-
-type LogbookSnapshotParams = {
-  screenIndex?: number;
-  maxWidth?: number;
-  quality?: number;
-};
 
 type LogbookSnapshotPayload = { format: "jpeg"; base64: string } | { error: string };
 
-function readParams(value: unknown): LogbookSnapshotParams {
-  if (!value || typeof value !== "object") {
-    return {};
-  }
-  const record = value as Record<string, unknown>;
-  const num = (key: string) => {
-    const candidate = record[key];
-    return typeof candidate === "number" && Number.isFinite(candidate) ? candidate : undefined;
-  };
-  return { screenIndex: num("screenIndex"), maxWidth: num("maxWidth"), quality: num("quality") };
-}
+const LOGBOOK_SNAPSHOT_EXEC_TIMEOUT_MS = 25_000;
 
 export async function handleLogbookSnapshot(rawParams: unknown): Promise<LogbookSnapshotPayload> {
   if (process.platform !== "darwin") {
     return { error: `logbook.snapshot is not supported on ${process.platform}` };
   }
-  const params = readParams(rawParams);
-  const screenIndex = Math.max(0, Math.round(params.screenIndex ?? 0));
-  const maxWidth = params.maxWidth && params.maxWidth >= 480 ? Math.round(params.maxWidth) : 1440;
+  const params = asRecord(rawParams);
+  const screenIndex = Math.max(0, Math.round(asFiniteNumber(params.screenIndex) ?? 0));
+  const width = asFiniteNumber(params.maxWidth);
+  const maxWidth = width && width >= 480 ? Math.round(width) : 1440;
+  const quality = asFiniteNumber(params.quality);
   const qualityPct = Math.min(
     100,
-    Math.max(
-      10,
-      Math.round(
-        (params.quality && params.quality > 0 && params.quality <= 1 ? params.quality : 0.6) * 100,
-      ),
-    ),
+    Math.max(10, Math.round((quality && quality > 0 && quality <= 1 ? quality : 0.6) * 100)),
   );
   // The shared helper rejects unsafe temp roots; the private subdirectory
   // keeps captures out of the broader OpenClaw temp namespace.
@@ -53,11 +36,14 @@ export async function handleLogbookSnapshot(rawParams: unknown): Promise<Logbook
     // Pre-create owner-only: screencapture truncates the existing inode, so
     // the capture never becomes world-readable even if the dir mode drifts.
     await writeFile(filePath, "", { mode: 0o600 });
+    // node.invoke stops waiting after 30 seconds but cannot reap node-host children.
+    // Share an earlier deadline so both commands terminate before that outer boundary.
+    const execSignal = AbortSignal.timeout(LOGBOOK_SNAPSHOT_EXEC_TIMEOUT_MS);
     // -x: no capture sound; -C: include cursor; -D is 1-based display index.
     await runExec(
       "screencapture",
       ["-x", "-C", "-D", String(screenIndex + 1), "-t", "jpg", filePath],
-      { logOutput: false },
+      { logOutput: false, signal: execSignal },
     );
     await runExec(
       "sips",
@@ -72,12 +58,12 @@ export async function handleLogbookSnapshot(rawParams: unknown): Promise<Logbook
         String(qualityPct),
         filePath,
       ],
-      { logOutput: false },
+      { logOutput: false, signal: execSignal },
     );
     const buffer = await readFile(filePath);
     return { format: "jpeg", base64: buffer.toString("base64") };
   } catch (err) {
-    return { error: err instanceof Error ? err.message : String(err) };
+    return { error: coerceErrorMessage(err) };
   } finally {
     await rm(filePath, { force: true });
   }

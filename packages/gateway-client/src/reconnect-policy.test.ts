@@ -11,14 +11,9 @@ function shouldPause(details?: unknown): boolean {
 
 describe("shouldPauseGatewayReconnect", () => {
   it.each([
-    ConnectErrorDetailCodes.AUTH_TOKEN_MISSING,
-    ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID,
-    ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING,
-    ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH,
-    ConnectErrorDetailCodes.AUTH_RATE_LIMITED,
-    ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH,
-    ConnectErrorDetailCodes.AUTH_SCOPE_MISMATCH,
-    ConnectErrorDetailCodes.PAIRING_REQUIRED,
+    "AUTH_IDENTITY_HEADER_REQUIRED",
+    ConnectErrorDetailCodes.AUTH_VERIFIED_USER_REQUIRED,
+    ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH,
     ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
   ])("pauses reconnect for %s", (code) => {
     expect(shouldPause({ code })).toBe(true);
@@ -37,6 +32,19 @@ describe("shouldPauseGatewayReconnect", () => {
 
   it("leaves token mismatch to the caller's bounded retry policy", () => {
     expect(shouldPause({ code: ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH })).toBe(false);
+  });
+
+  it("keeps the identity-header pause behind a pending device-token retry", () => {
+    expect(
+      shouldPauseGatewayReconnect({
+        details: { code: "AUTH_IDENTITY_HEADER_REQUIRED" },
+        deviceTokenRetryPending: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps generic unauthorized failures reconnecting", () => {
+    expect(shouldPause({ code: ConnectErrorDetailCodes.AUTH_UNAUTHORIZED })).toBe(false);
   });
 
   it.each([undefined, {}, { code: "SOME_FUTURE_CODE" }])(

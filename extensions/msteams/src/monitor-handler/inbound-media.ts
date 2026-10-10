@@ -1,5 +1,7 @@
-// Msteams plugin module implements inbound media behavior.
-import { formatInboundMediaUnavailableText } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  formatInboundMediaUnavailableText,
+  type MediaPlaceholderTextFact,
+} from "openclaw/plugin-sdk/channel-inbound";
 import {
   buildMSTeamsGraphMessageUrl,
   downloadMSTeamsAttachments,
@@ -31,24 +33,90 @@ export function shouldAttemptMSTeamsGraphMediaFallback(params: {
 
 export function resolveMSTeamsInboundMediaBody(params: {
   body: string;
-  mediaPlaceholder: string;
-  materializedMediaPlaceholder: string;
-  expectedMediaCount: number;
-  mediaCount: number;
+  nativeMedia: readonly MediaPlaceholderTextFact[];
+  materializedMedia: readonly MediaPlaceholderTextFact[];
 }): string {
-  const unavailableCount = Math.max(0, params.expectedMediaCount - params.mediaCount);
+  const unavailableCount =
+    params.materializedMedia.filter((media) => !media.path).length +
+    Math.max(0, params.nativeMedia.length - params.materializedMedia.length);
   if (unavailableCount === 0) {
     return params.body;
   }
-  const body =
-    params.mediaCount > 0 && params.body === params.mediaPlaceholder
-      ? params.materializedMediaPlaceholder
-      : params.body;
   return formatInboundMediaUnavailableText({
-    body,
-    mediaPlaceholder: params.mediaCount === 0 ? params.mediaPlaceholder : undefined,
+    body: params.body,
     notice: `[msteams ${unavailableCount > 1 ? `${unavailableCount} attachments` : "attachment"} unavailable]`,
   });
+}
+
+function hasDefinitiveContentType(media: MSTeamsInboundMedia): boolean {
+  const contentType = media.contentType?.split(";", 1)[0]?.trim().toLowerCase();
+  return Boolean(
+    contentType &&
+    contentType !== "application/octet-stream" &&
+    contentType !== "binary/octet-stream",
+  );
+}
+
+export function mergeMSTeamsMediaFacts(
+  nativeMedia: readonly MSTeamsInboundMedia[],
+  materializedMedia: readonly MSTeamsInboundMedia[],
+  options: { positionallyAligned?: boolean } = {},
+): MSTeamsInboundMedia[] {
+  // Direct downloads share advertised order; Graph/Bot Framework subsets do not.
+  // Fallback results may replace only their matching transport resource identity.
+  const merged = [...nativeMedia];
+  const nativeSlotCount = nativeMedia.length;
+  const nativeIndexBySourceId = new Map<string, number>();
+  nativeMedia.forEach((media, index) => {
+    if (media.sourceId && !nativeIndexBySourceId.has(media.sourceId)) {
+      nativeIndexBySourceId.set(media.sourceId, index);
+    }
+  });
+  for (const [index, materialized] of materializedMedia.entries()) {
+    const sourceIndex = materialized.sourceId
+      ? nativeIndexBySourceId.get(materialized.sourceId)
+      : undefined;
+    const positionalIndex =
+      options.positionallyAligned === false || index >= nativeMedia.length ? undefined : index;
+    const unresolvedIndexes =
+      options.positionallyAligned === false
+        ? merged
+            .slice(0, nativeSlotCount)
+            .flatMap((media, mediaIndex) => (!media.path && !media.sourceId ? [mediaIndex] : []))
+        : [];
+    const fallbackIndex =
+      unresolvedIndexes.find((mediaIndex) => merged[mediaIndex]?.kind === materialized.kind) ??
+      (unresolvedIndexes.length === 1 ? unresolvedIndexes[0] : undefined);
+    const targetIndex = sourceIndex ?? positionalIndex ?? fallbackIndex;
+    if (targetIndex === undefined) {
+      if (materialized.sourceId) {
+        nativeIndexBySourceId.set(materialized.sourceId, merged.length);
+      }
+      merged.push(materialized);
+    } else {
+      if (materialized.sourceId) {
+        nativeIndexBySourceId.set(materialized.sourceId, targetIndex);
+      }
+      const current = merged[targetIndex];
+      if (materialized.path) {
+        merged[targetIndex] = materialized;
+      } else if (!current?.path) {
+        merged[targetIndex] = {
+          ...current,
+          ...materialized,
+          kind:
+            hasDefinitiveContentType(materialized) || !current?.kind
+              ? materialized.kind
+              : current.kind,
+        };
+      }
+    }
+  }
+  return merged;
+}
+
+function hasMaterializedMedia(media: readonly MSTeamsInboundMedia[]): boolean {
+  return media.some((entry) => Boolean(entry.path));
 }
 
 export async function resolveMSTeamsInboundMedia(params: {
@@ -70,8 +138,6 @@ export async function resolveMSTeamsInboundMedia(params: {
   deadline?: MSTeamsRequestDeadline;
   /** Opt into Graph lookup when Teams strips file markers from channel/group HTML. */
   graphMediaFallback?: boolean;
-  /** When true, embeds original filename in stored path for later extraction. */
-  preserveFilenames?: boolean;
 }): Promise<MSTeamsInboundMedia[]> {
   const {
     attachments,
@@ -86,7 +152,6 @@ export async function resolveMSTeamsInboundMedia(params: {
     serviceUrl,
     activity,
     log,
-    preserveFilenames,
   } = params;
 
   let mediaList = await downloadMSTeamsAttachments({
@@ -95,12 +160,11 @@ export async function resolveMSTeamsInboundMedia(params: {
     tokenProvider,
     allowHosts,
     authAllowHosts: params.authAllowHosts,
-    preserveFilenames,
     deadline: params.deadline,
     logger: log,
   });
 
-  if (mediaList.length === 0) {
+  if (!hasMaterializedMedia(mediaList)) {
     // Explicit attachment markers remain the fallback gate for personal chats.
     // Channel and group-chat activities can omit them while Graph holds a file.
     const attachmentIds = extractMSTeamsHtmlAttachmentIds(attachments);
@@ -131,12 +195,14 @@ export async function resolveMSTeamsInboundMedia(params: {
           maxBytes,
           allowHosts,
           authAllowHosts: params.authAllowHosts,
-          preserveFilenames,
           deadline: params.deadline,
         });
         if (bfMedia.media.length > 0) {
-          mediaList = bfMedia.media;
-        } else {
+          mediaList = mergeMSTeamsMediaFacts(mediaList, bfMedia.media, {
+            positionallyAligned: false,
+          });
+        }
+        if (!hasMaterializedMedia(bfMedia.media)) {
           log.debug?.("bot framework attachments fetch empty", {
             conversationType,
             attachmentCount: bfMedia.attachmentCount ?? attachmentIds.length,
@@ -145,7 +211,11 @@ export async function resolveMSTeamsInboundMedia(params: {
       }
     }
 
-    if (shouldFetchGraphMessage && mediaList.length === 0 && !isBotFrameworkPersonalChat) {
+    if (
+      shouldFetchGraphMessage &&
+      !hasMaterializedMedia(mediaList) &&
+      !isBotFrameworkPersonalChat
+    ) {
       const graphTeamAadGroupId =
         conversationType.trim().toLowerCase() === "channel" && !teamAadGroupId
           ? await params.resolveTeamAadGroupId?.()
@@ -172,14 +242,15 @@ export async function resolveMSTeamsInboundMedia(params: {
           maxBytes,
           allowHosts,
           authAllowHosts: params.authAllowHosts,
-          preserveFilenames,
           deadline: params.deadline,
           logger: log,
         });
         if (graphMedia.media.length > 0) {
-          mediaList = graphMedia.media;
+          mediaList = mergeMSTeamsMediaFacts(mediaList, graphMedia.media, {
+            positionallyAligned: false,
+          });
         }
-        if (mediaList.length === 0) {
+        if (!hasMaterializedMedia(mediaList)) {
           log.debug?.("graph media fetch empty", {
             messageUrl,
             hostedStatus: graphMedia.hostedStatus,
@@ -194,8 +265,9 @@ export async function resolveMSTeamsInboundMedia(params: {
     }
   }
 
-  if (mediaList.length > 0) {
-    log.debug?.("downloaded attachments", { count: mediaList.length });
+  const materializedCount = mediaList.filter((media) => Boolean(media.path)).length;
+  if (materializedCount > 0) {
+    log.debug?.("downloaded attachments", { count: materializedCount });
   } else if (htmlSummary?.imgTags) {
     log.debug?.("inline images detected but none downloaded", {
       imgTags: htmlSummary.imgTags,

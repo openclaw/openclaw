@@ -1,77 +1,84 @@
-import {
-  normalizeLowercaseStringOrEmpty,
-  readStringValue,
-} from "@openclaw/normalization-core/string-coerce";
+import { asFiniteNumber as readFiniteNumberValue } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord as readRecordValue } from "@openclaw/normalization-core/record-coerce";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import { stripOpenClawMcpToolPrefix } from "../../agents/cli-runner/tool-policy.js";
+import type { EmbeddedAgentEvent } from "../../agents/embedded-agent-subscribe.shared-types.js";
+import { inferToolMetaFromArgsCore, isShellToolDisplayName } from "../../agents/tool-display.js";
 import type { GetReplyOptions } from "../types.js";
 
-function readRecordValue(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function readFiniteNumberValue(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function readNullableNumberValue(value: unknown): number | null | undefined {
-  if (value === null) {
-    return null;
+/** CLI outcomes use raw strings/text blocks; structured runners supply records. */
+function readToolResultText(value: unknown): string | undefined {
+  const direct = readStringValue(value);
+  if (direct !== undefined) {
+    return direct;
   }
-  return readFiniteNumberValue(value);
-}
-
-function isCommandToolName(name: string | undefined): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(name);
-  return normalized === "exec" || normalized === "bash" || normalized === "shell";
-}
-
-/** Projects a completed command-tool event into the channel command-output contract. */
-export function buildCommandOutputFromToolResultEvent(evt: {
-  stream: string;
-  data: Record<string, unknown>;
-}): Parameters<NonNullable<GetReplyOptions["onCommandOutput"]>>[0] | undefined {
-  if (evt.stream !== "tool" || readStringValue(evt.data.phase) !== "result") {
+  if (!Array.isArray(value)) {
     return undefined;
   }
-  const name = readStringValue(evt.data.name);
-  if (!isCommandToolName(name)) {
+  const text = value
+    .map((block) => readStringValue(readRecordValue(block)?.text))
+    .filter((part): part is string => part !== undefined)
+    .join("\n")
+    .trim();
+  return text || undefined;
+}
+
+export function buildCommandOutputFromToolResultEvent(
+  evt: EmbeddedAgentEvent,
+): Parameters<NonNullable<GetReplyOptions["onCommandOutput"]>>[0] | undefined {
+  if (evt.stream !== "tool" || evt.data.phase !== "result") {
+    return undefined;
+  }
+  const name = evt.data.name;
+  const commandBearing = evt.data.commandBearing === true;
+  if (!name || (!commandBearing && !isShellToolDisplayName(name))) {
     return undefined;
   }
   const result = readRecordValue(evt.data.result);
   const details = readRecordValue(result?.details);
   const output =
-    readStringValue(evt.data.output) ??
+    evt.data.output ??
     readStringValue(result?.output) ??
-    readStringValue(details?.output);
+    readStringValue(details?.output) ??
+    readToolResultText(evt.data.result);
   const explicitStatus =
-    readStringValue(evt.data.status) ??
-    readStringValue(result?.status) ??
-    readStringValue(details?.status);
-  const exitCode = readNullableNumberValue(
-    result?.exitCode ?? details?.exitCode ?? evt.data.exitCode,
-  );
+    evt.data.status ?? readStringValue(result?.status) ?? readStringValue(details?.status);
+  const rawExitCode = result?.exitCode ?? details?.exitCode ?? evt.data.exitCode;
+  const exitCode = rawExitCode === null ? null : readFiniteNumberValue(rawExitCode);
   const durationMs = readFiniteNumberValue(
     result?.durationMs ?? details?.durationMs ?? evt.data.durationMs,
   );
-  const cwd = readStringValue(evt.data.cwd);
+  const cwd = evt.data.cwd;
+  const errorStatus =
+    evt.data.isError === true ? "failed" : evt.data.isError === false ? "completed" : undefined;
+  // A bare result carries no outcome of its own: runners that report one send a
+  // separate command_output event, and synthesizing here would duplicate it.
+  // A CLI result is different because its content *is* the outcome, which
+  // readToolResultText surfaces as output above.
   const hasConcreteCommandResult =
     output !== undefined ||
     explicitStatus !== undefined ||
     exitCode !== undefined ||
     durationMs !== undefined ||
     cwd !== undefined ||
+    (commandBearing && typeof evt.data.isError === "boolean") ||
     (result !== undefined && Object.keys(result).length > 0);
   if (!hasConcreteCommandResult) {
     return undefined;
   }
-  const errorStatus =
-    evt.data.isError === true ? "failed" : evt.data.isError === false ? "completed" : undefined;
+  // Keep the line describing the command, not its output: without a title the
+  // terminal line would replace the request with whatever the tool printed.
+  const args = evt.data.args;
+  const title =
+    evt.data.title ??
+    (args
+      ? inferToolMetaFromArgsCore(stripOpenClawMcpToolPrefix(name), args, { detailMode: "explain" })
+      : undefined);
   return {
-    itemId: readStringValue(evt.data.itemId),
+    itemId: evt.data.itemId,
     phase: "end",
-    title: readStringValue(evt.data.title),
-    toolCallId: readStringValue(evt.data.toolCallId),
+    title,
+    toolCallId: evt.data.toolCallId,
     name,
     output,
     status: explicitStatus ?? errorStatus,

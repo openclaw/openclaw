@@ -1,5 +1,5 @@
+import type { Model } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
-import type { Model } from "../../llm-core/src/index.js";
 import { resolveAgentReasoningOption } from "./reasoning.js";
 
 function makeModel(
@@ -27,39 +27,38 @@ describe("resolveAgentReasoningOption", () => {
     expect(resolveAgentReasoningOption(makeModel({ off: "low" }), "off")).toBe("low");
   });
 
-  it.each([undefined, null, "none"])("disables reasoning when off maps to %s", (offFallback) => {
-    expect(resolveAgentReasoningOption(makeModel({ off: offFallback }), "off")).toBeUndefined();
+  it.each([undefined, "none"])("preserves explicit off when off maps to %s", (offFallback) => {
+    expect(resolveAgentReasoningOption(makeModel({ off: offFallback }), "off")).toBe("off");
+  });
+
+  it("leaves unsupported off mapping to the transport", () => {
+    expect(resolveAgentReasoningOption(makeModel({ off: null }), "off")).toBeUndefined();
   });
 
   it("preserves enabled thinking levels", () => {
     expect(resolveAgentReasoningOption(makeModel({ off: "low" }), "high")).toBe("high");
   });
 
-  it("preserves explicit off for Sonnet 5 on Anthropic Messages routes", () => {
-    expect(
-      resolveAgentReasoningOption(makeModel(undefined, { id: "claude-sonnet-5" }), "off"),
-    ).toBe("off");
-  });
-
-  it("uses the route-owned Sonnet 5 off mapping when provided", () => {
-    expect(
-      resolveAgentReasoningOption(
-        makeModel({ off: "low" }, { id: "anthropic.claude-sonnet-5" }),
-        "off",
-      ),
-    ).toBe("low");
-  });
+  it.each(["claude-sonnet-5", "anthropic.claude-opus-5"])(
+    "retains the native %s exception for unsupported off",
+    (id) => {
+      expect(resolveAgentReasoningOption(makeModel({ off: null }, { id }), "off")).toBe("off");
+    },
+  );
 
   it.each(["anthropic-messages", "bedrock-converse-stream"] as const)(
     "maps explicit off to low for canonical Fable aliases on %s",
     (api) => {
       expect(
         resolveAgentReasoningOption(
-          makeModel(undefined, {
-            id: "production-deployment",
-            api,
-            params: { canonicalModelId: "claude-fable-5" },
-          }),
+          makeModel(
+            { off: null },
+            {
+              id: "production-deployment",
+              api,
+              params: { canonicalModelId: "claude-fable-5" },
+            },
+          ),
           "off",
         ),
       ).toBe("low");

@@ -1,53 +1,27 @@
-/**
- * Channel outbound adapter types.
- *
- * Defines text/media/payload/poll contexts, presentation capabilities, and send results.
- */
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
-import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ChannelApprovalKind } from "../../infra/approval-types.js";
 import type { OutboundDeliveryResult } from "../../infra/outbound/deliver-types.js";
 import type { OutboundDeliveryFormattingOptions } from "../../infra/outbound/formatting.js";
 import type { OutboundIdentity } from "../../infra/outbound/identity-types.js";
-import type { OutboundSendDeps } from "../../infra/outbound/send-deps.js";
 import type { MessagePresentation, ReplyPayloadDeliveryPin } from "../../interactive/payload.js";
-import type { OutboundMediaAccess } from "../../media/load-options.js";
+import type {
+  ChannelMessageSendMediaContext,
+  DurableFinalDeliveryRequirementMap,
+} from "../message/types.js";
 import type {
   ChannelOutboundTargetMode,
   ChannelPollContext,
   ChannelPollResult,
 } from "./types.core.js";
 
-export type ChannelOutboundContext = {
-  cfg: OpenClawConfig;
-  to: string;
-  text: string;
+export type ChannelOutboundContext = Omit<
+  ChannelMessageSendMediaContext,
+  "mediaUrl" | "onDeliveryResult"
+> & {
   mediaUrl?: string;
-  audioAsVoice?: boolean;
-  mediaAccess?: OutboundMediaAccess;
-  mediaLocalRoots?: readonly string[];
-  mediaReadFile?: (filePath: string) => Promise<Buffer>;
-  gifPlayback?: boolean;
-  /** Send image, GIF, or video as document to avoid channel compression. */
-  forceDocument?: boolean;
-  replyToId?: string | null;
-  replyToIdSource?: "explicit" | "implicit";
-  replyToMode?: ReplyToMode;
   formatting?: OutboundDeliveryFormattingOptions;
-  threadId?: string | number | null;
-  accountId?: string | null;
   identity?: OutboundIdentity;
-  deps?: OutboundSendDeps;
-  silent?: boolean;
-  gatewayClientScopes?: readonly string[];
-  /** @internal Opaque durable intent id for exact provider-side send reconciliation. */
-  deliveryQueueId?: string;
-  /** @internal Stable platform-send index within one durable payload. */
-  deliveryPartIndex?: number;
-  /** @internal Channel-valid id reserved before a correlated conversation turn is sent. */
-  preparedMessageId?: string;
-  /** @internal Refresh durable timing before recipient-visible or finalizing platform I/O. */
-  onPlatformSendDispatch?: () => Promise<void>;
   /** @internal Report each completed platform sub-send before starting another fallible step. */
   onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
 };
@@ -114,30 +88,16 @@ export type ChannelPresentationCapabilities = {
 
 export type ChannelDeliveryCapabilities = {
   pin?: boolean;
-  durableFinal?: {
-    text?: boolean;
-    media?: boolean;
-    poll?: boolean;
-    payload?: boolean;
-    silent?: boolean;
-    replyTo?: boolean;
-    thread?: boolean;
-    nativeQuote?: boolean;
-    messageSendingHooks?: boolean;
-    batch?: boolean;
-    reconcileUnknownSend?: boolean;
-    afterSendSuccess?: boolean;
-    afterCommit?: boolean;
-  };
+  durableFinal?: DurableFinalDeliveryRequirementMap;
 };
 
 export type ChannelOutboundPayloadHint =
   | {
       kind: "approval-pending";
-      approvalKind: "exec" | "plugin";
+      approvalKind: ChannelApprovalKind;
       nativeRouteActive?: boolean;
     }
-  | { kind: "approval-resolved"; approvalKind: "exec" | "plugin" };
+  | { kind: "approval-resolved"; approvalKind: ChannelApprovalKind };
 
 export type ChannelOutboundTargetRef = {
   channel: string;
@@ -146,18 +106,23 @@ export type ChannelOutboundTargetRef = {
   threadId?: string | number | null;
 };
 
-export type ChannelOutboundFormattedContext = ChannelOutboundContext & {
+type ChannelOutboundFormattedContext = ChannelOutboundContext & {
   abortSignal?: AbortSignal;
 };
 
-export type ChannelOutboundChunkContext = {
-  formatting?: OutboundDeliveryFormattingOptions;
-};
+type ChannelOutboundChunkContext = Pick<ChannelOutboundContext, "formatting">;
 
 type ChannelOutboundNormalizePayloadParams = {
   payload: ReplyPayload;
   cfg: OpenClawConfig;
   accountId?: string | null;
+};
+
+type ChannelOutboundNormalizePayloadBatchParams = Omit<
+  ChannelOutboundNormalizePayloadParams,
+  "payload"
+> & {
+  payloads: readonly { index: number; payload: ReplyPayload }[];
 };
 
 export type ChannelOutboundAdapter = {
@@ -167,18 +132,16 @@ export type ChannelOutboundAdapter = {
   chunkedTextFormatting?: OutboundDeliveryFormattingOptions;
   /** Lift remote Markdown image syntax in text into outbound media attachments. */
   extractMarkdownImages?: boolean;
+  /** Preserve model-authored Markdown details blocks for a native channel renderer. */
+  preserveMarkdownDetails?: (params: { cfg: OpenClawConfig; accountId?: string | null }) => boolean;
   textChunkLimit?: number;
   /**
    * Reserve the exact provider id used by the next single-message send.
    * Presence opts the channel into conversations_turn reply correlation.
    */
-  prepareConversationTurnMessageId?: (params: {
-    cfg: OpenClawConfig;
-    to: string;
-    text: string;
-    accountId?: string | null;
-    threadId?: string | number | null;
-  }) => string;
+  prepareConversationTurnMessageId?: (
+    params: Pick<ChannelOutboundContext, "cfg" | "to" | "text" | "accountId" | "threadId">,
+  ) => string;
   sanitizeText?: (params: {
     text: string;
     payload: ReplyPayload;
@@ -189,19 +152,26 @@ export type ChannelOutboundAdapter = {
   supportsPollDurationSeconds?: boolean;
   supportsAnonymousPolls?: boolean;
   normalizePayload?: (params: ChannelOutboundNormalizePayloadParams) => ReplyPayload | null;
+  /** Normalize an ordered batch in place. Return one entry per input; null suppresses that send. */
+  normalizePayloadBatch?: (
+    params: ChannelOutboundNormalizePayloadBatchParams,
+  ) => ReadonlyArray<ReplyPayload | null>;
   sendTextOnlyErrorPayloads?: boolean;
+  /**
+   * Route ordinary multi-media payloads intact to sendPayload for native grouping.
+   * The adapter must check cancellation and revalidate authority before every physical send.
+   */
+  sendPayloadGroupsMedia?: boolean;
   shouldSkipPlainTextSanitization?: (params: { payload: ReplyPayload }) => boolean;
   resolveEffectiveTextChunkLimit?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
     fallbackLimit?: number;
+    formatting?: OutboundDeliveryFormattingOptions;
   }) => number | undefined;
-  shouldSuppressLocalPayloadPrompt?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    payload: ReplyPayload;
-    hint?: ChannelOutboundPayloadHint;
-  }) => boolean;
+  shouldSuppressLocalPayloadPrompt?: (
+    params: ChannelOutboundNormalizePayloadParams & { hint?: ChannelOutboundPayloadHint },
+  ) => boolean;
   beforeDeliverPayload?: (params: {
     cfg: OpenClawConfig;
     target: ChannelOutboundTargetRef;
@@ -214,13 +184,30 @@ export type ChannelOutboundAdapter = {
     payload: ReplyPayload;
     results: readonly OutboundDeliveryResult[];
   }) => Promise<void> | void;
+  /** Adopt a provider-created thread for later payloads in the same durable batch. */
+  adoptTargetFromDelivery?: (params: {
+    cfg: OpenClawConfig;
+    target: ChannelOutboundTargetRef;
+    result: OutboundDeliveryResult;
+  }) => { threadId: string | number } | null | undefined;
   /** Channel-advertised presentation features and limits used by core adaptation. */
   presentationCapabilities?: ChannelPresentationCapabilities;
+  /**
+   * Account- and formatting-aware capability resolution; takes precedence over
+   * the static declaration. Formatting is the delivery's outbound formatting
+   * options, so capabilities that only apply to one text funnel (for example
+   * rich tables on the markdown path) can turn off for HTML-mode sends.
+   */
+  resolvePresentationCapabilities?: (
+    params: Pick<ChannelOutboundContext, "cfg" | "accountId" | "formatting">,
+  ) => ChannelPresentationCapabilities;
   deliveryCapabilities?: ChannelDeliveryCapabilities;
   /** Render an adapted portable presentation into channel-native payload data. */
   renderPresentation?: (params: {
     payload: ReplyPayload;
     presentation: MessagePresentation;
+    /** Normalized original for readable fallbacks; native rendering uses presentation. */
+    sourcePresentation?: MessagePresentation;
     ctx: ChannelOutboundPayloadContext;
   }) => Promise<ReplyPayload | null> | ReplyPayload | null;
   pinDeliveredMessage?: (params: {
@@ -229,14 +216,15 @@ export type ChannelOutboundAdapter = {
     messageId: string;
     pin: ReplyPayloadDeliveryPin;
     gatewayClientScopes?: readonly string[];
+    /** @internal Revalidate the delivery owner after preparation and before each provider request. */
+    assertDirectAdapterHandoff?: () => void;
   }) => Promise<void> | void;
   /**
    * @deprecated Use shouldTreatDeliveredTextAsVisible instead.
    */
-  shouldTreatRoutedTextAsVisible?: (params: {
-    kind: "tool" | "block" | "final";
-    text?: string;
-  }) => boolean;
+  shouldTreatRoutedTextAsVisible?: NonNullable<
+    ChannelOutboundAdapter["shouldTreatDeliveredTextAsVisible"]
+  >;
   shouldTreatDeliveredTextAsVisible?: (params: {
     kind: "tool" | "block" | "final";
     text?: string;

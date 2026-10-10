@@ -1,5 +1,10 @@
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  rethrowIncognitoSessionError,
+  type SessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeActiveMemoryFastMode } from "./config.js";
 import { getModelRef } from "./query.js";
 import { runRecallSubagent } from "./recall-run.js";
@@ -10,16 +15,17 @@ import {
   isCircuitBreakerOpen,
   recordCircuitBreakerTimeout,
   resetCircuitBreaker,
+  resolveActiveRecallForRun,
   scheduleMemorySearchCleanupAfterTimeout,
   setCachedResult,
   shouldCacheResult,
+  toSingleLineErrorMessage,
   toSingleLineLogValue,
 } from "./recall-state.js";
 import {
   buildPersistedDebugSummary,
   buildPluginStatusLine,
   persistPluginStatusLines,
-  resolveCanonicalSessionKeyFromSessionId,
 } from "./session.js";
 import {
   buildSubagentRecallResult,
@@ -32,9 +38,27 @@ import type {
   ActiveMemoryFastMode,
   ActiveMemoryTranscriptSource,
   ActiveRecallResult,
+  ConversationRecallContext,
   ResolvedActiveRecallPluginConfig,
   TerminalMemorySearchWatch,
 } from "./types.js";
+
+function buildRecallDoneLogLine(logPrefix: string, result: ActiveRecallResult): string {
+  const reason =
+    result.status === "unavailable"
+      ? result.searchDebug?.error
+        ? "search-error"
+        : "search-unavailable"
+      : undefined;
+  return [
+    logPrefix,
+    "done",
+    `status=${result.status}`,
+    ...(reason ? [`reason=${reason}`] : []),
+    `elapsedMs=${String(result.elapsedMs)}`,
+    `summaryChars=${String(result.summary?.length ?? 0)}`,
+  ].join(" ");
+}
 
 function formatActiveMemoryFastMode(fastMode: ActiveMemoryFastMode | undefined): string {
   return fastMode === undefined
@@ -46,74 +70,91 @@ function formatActiveMemoryFastMode(fastMode: ActiveMemoryFastMode | undefined):
         : "auto";
 }
 
-function prepareRecallRunContext(params: {
+type ActiveRecallParams = {
   api: OpenClawPluginApi;
+  runtimeConfig: OpenClawConfig;
   config: ResolvedActiveRecallPluginConfig;
   agentId: string;
   sessionKey?: string;
   sessionId?: string;
-}): {
-  parentSessionKey?: string;
+  sessionEntry: SessionEntry | undefined;
   storePath: string;
-  fastMode?: ActiveMemoryFastMode;
-} {
-  const parentSessionKey =
-    params.sessionKey ??
-    resolveCanonicalSessionKeyFromSessionId({
-      api: params.api,
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-    });
-  const storePath = params.api.runtime.agent.session.resolveStorePath(
-    params.api.config.session?.store,
-    { agentId: params.agentId },
-  );
-  if (params.config.fastMode !== undefined) {
-    return { parentSessionKey, storePath, fastMode: params.config.fastMode };
-  }
-  const sessionFastMode = parentSessionKey
-    ? params.api.runtime.agent.session.getSessionEntry({
-        agentId: params.agentId,
-        sessionKey: parentSessionKey,
-        storePath,
-        readConsistency: "latest",
-      })?.fastMode
-    : undefined;
-  const fastMode =
-    normalizeActiveMemoryFastMode(sessionFastMode) ??
-    normalizeActiveMemoryFastMode(
-      resolveAgentConfig(params.api.config, params.agentId)?.fastModeDefault,
-    );
-  return { parentSessionKey, storePath, fastMode };
-}
-
-async function maybeResolveActiveRecall(params: {
-  api: OpenClawPluginApi;
-  config: ResolvedActiveRecallPluginConfig;
-  agentId: string;
-  sessionKey?: string;
-  sessionId?: string;
   messageProvider?: string;
   channelId?: string;
   query: string;
+  /** Undefined uses legacy query identity; null disables request-local reuse. */
+  requestKey?: string | null;
   searchQuery: string;
   currentModelProviderId?: string;
   currentModelId?: string;
+  conversationRecall?: ConversationRecallContext;
   abortSignal?: AbortSignal;
-}): Promise<ActiveRecallResult> {
+  runId?: string;
+  authorityFingerprint: string;
+  memorySlot?: string;
+  activeProjectKeys?: string[];
+  memoryAudience?: Parameters<
+    OpenClawPluginApi["runtime"]["agent"]["runEmbeddedAgent"]
+  >[0]["memoryAudience"];
+  /** Host check for the parent turn's audience; recall state is never retained once it lapses. */
+  assertMemoryAudienceCurrent?: () => void;
+};
+
+async function recordRecallResult(
+  params: Pick<
+    ActiveRecallParams,
+    "abortSignal" | "agentId" | "api" | "assertMemoryAudienceCurrent" | "config" | "sessionKey"
+  > & {
+    logPrefix: string;
+    result: ActiveRecallResult;
+  },
+): Promise<void> {
+  if (params.config.logging) {
+    params.api.logger.info?.(buildRecallDoneLogLine(params.logPrefix, params.result));
+  }
   params.abortSignal?.throwIfAborted();
-  const startedAt = Date.now();
-  const cacheKey = buildCacheKey({
+  params.assertMemoryAudienceCurrent?.();
+  await persistPluginStatusLines({
+    api: params.api,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-    query: params.query,
+    statusLine: buildPluginStatusLine({ result: params.result, config: params.config }),
+    debugSummary: buildPersistedDebugSummary(params.result),
+    searchDebug: params.result.searchDebug,
   });
-  const cached = getCachedResult(cacheKey);
-  const resolvedModelRef = getModelRef(params.api, params.agentId, params.config, {
+  params.abortSignal?.throwIfAborted();
+  params.assertMemoryAudienceCurrent?.();
+}
+
+async function resolveActiveRecall(
+  params: Omit<ActiveRecallParams, "runId"> & {
+    onTimeoutCleanup?: (cleanup: Promise<void>) => void;
+  },
+): Promise<ActiveRecallResult> {
+  params.abortSignal?.throwIfAborted();
+  const startedAt = Date.now();
+  const resolvedModelRef = getModelRef(params.runtimeConfig, params.agentId, params.config, {
     modelProviderId: params.currentModelProviderId,
     modelId: params.currentModelId,
   });
+  // Memory Core re-authorizes every conversation-recall request against live
+  // session state. Never replay a cached private summary after eligibility changes.
+  const cacheKey = params.conversationRecall
+    ? undefined
+    : buildCacheKey({
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+        query: params.query,
+        authorityFingerprint: params.authorityFingerprint,
+        memoryAudience: params.memoryAudience,
+        memorySlot: params.memorySlot,
+        activeProjectKeys: params.activeProjectKeys,
+        modelProviderId: resolvedModelRef?.provider,
+        modelId: resolvedModelRef?.model,
+        recallToolNames: params.config.toolsAllow,
+      });
+  const cached = cacheKey ? getCachedResult(cacheKey) : undefined;
   const buildLogPrefix = (fastMode: ActiveMemoryFastMode | undefined) =>
     [
       `active-memory: agent=${toSingleLineLogValue(params.agentId)}`,
@@ -130,6 +171,7 @@ async function maybeResolveActiveRecall(params: {
   let logPrefix = buildLogPrefix(params.config.fastMode);
   if (cached) {
     params.abortSignal?.throwIfAborted();
+    params.assertMemoryAudienceCurrent?.();
     await persistPluginStatusLines({
       api: params.api,
       agentId: params.agentId,
@@ -160,13 +202,14 @@ async function maybeResolveActiveRecall(params: {
       return;
     }
     timeoutCleanupScheduled = true;
-    scheduleMemorySearchCleanupAfterTimeout(params.api, logPrefix, params.agentId);
+    const cleanup = scheduleMemorySearchCleanupAfterTimeout(params.api, logPrefix, params.agentId);
+    params.onTimeoutCleanup?.(cleanup);
   };
   let circuitBreakerTimeoutRecorded = false;
   const recordRecallTimeout = () => {
     if (!circuitBreakerTimeoutRecorded) {
       circuitBreakerTimeoutRecorded = true;
-      recordCircuitBreakerTimeout(cbKey);
+      recordCircuitBreakerTimeout(cbKey, params.config.circuitBreakerCooldownMs);
     }
     scheduleTimeoutCleanup();
   };
@@ -197,8 +240,15 @@ async function maybeResolveActiveRecall(params: {
     return result;
   }
 
-  const runContext = prepareRecallRunContext(params);
-  logPrefix = buildLogPrefix(runContext.fastMode);
+  const fastMode =
+    params.config.fastMode ??
+    normalizeActiveMemoryFastMode(params.sessionEntry?.fastMode) ??
+    normalizeActiveMemoryFastMode(
+      resolveAgentConfig(params.runtimeConfig, params.agentId)?.fastModeDefault,
+    );
+  params.abortSignal?.throwIfAborted();
+  params.assertMemoryAudienceCurrent?.();
+  logPrefix = buildLogPrefix(fastMode);
 
   if (params.config.logging) {
     params.api.logger.info?.(
@@ -244,13 +294,16 @@ async function maybeResolveActiveRecall(params: {
     const subagentPromise = runRecallSubagent({
       ...params,
       modelRef: resolvedModelRef,
-      parentSessionKey: runContext.parentSessionKey,
-      storePath: runContext.storePath,
-      fastMode: runContext.fastMode,
+      parentSessionKey: params.sessionKey,
+      parentSessionEntry: params.sessionEntry,
+      fastMode,
       abortSignal: controller.signal,
       onTranscriptSources: (sources) => {
         transcriptSources = sources;
       },
+      // Completed execution owns the result; transcript recovery and cleanup
+      // must not let a later poll replace it with terminal unavailability.
+      onEmbeddedRunSettled: () => terminalMemorySearchWatch?.stop(),
     });
     terminalMemorySearchWatch = watchTerminalMemorySearchResult({
       getTranscriptSources: () => transcriptSources,
@@ -291,35 +344,16 @@ async function maybeResolveActiveRecall(params: {
         scheduleTimeoutCleanup();
       }
       const elapsedMs = Date.now() - startedAt;
-      const result: ActiveRecallResult = fallbackHasUsableMemoryResult
-        ? {
-            status: "timeout",
-            elapsedMs,
-            summary: null,
-            searchDebug: fallbackSearchDebug,
-          }
-        : await buildTimeoutRecallResult({
-            elapsedMs,
-            maxSummaryChars: params.config.maxSummaryChars,
-            transcriptSources,
-            subagentPromise,
-            toolsAllow: params.config.toolsAllow,
-          });
-      if (params.config.logging) {
-        params.api.logger.info?.(
-          `${logPrefix} done status=${result.status} elapsedMs=${String(result.elapsedMs)} summaryChars=${String(result.summary?.length ?? 0)}`,
-        );
-      }
-      params.abortSignal?.throwIfAborted();
-      await persistPluginStatusLines({
-        api: params.api,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-        statusLine: buildPluginStatusLine({ result, config: params.config }),
-        debugSummary: buildPersistedDebugSummary(result),
-        searchDebug: result.searchDebug,
+      const result = await buildTimeoutRecallResult({
+        elapsedMs,
+        maxSummaryChars: params.config.maxSummaryChars,
+        transcriptSources,
+        subagentPromise,
+        hasUsableMemoryResult: fallbackHasUsableMemoryResult,
+        searchDebug: fallbackSearchDebug,
+        toolsAllow: params.config.toolsAllow,
       });
-      params.abortSignal?.throwIfAborted();
+      await recordRecallResult({ ...params, logPrefix, result });
       return result;
     }
 
@@ -331,24 +365,8 @@ async function maybeResolveActiveRecall(params: {
         summary: null,
         searchDebug: raceResult.searchDebug,
       };
-      if (params.config.logging) {
-        params.api.logger.info?.(
-          `${logPrefix} done status=${result.status} elapsedMs=${String(result.elapsedMs)} summaryChars=${String(result.summary?.length ?? 0)}`,
-        );
-      }
       resetCircuitBreaker(cbKey);
-      params.abortSignal?.throwIfAborted();
-      await persistPluginStatusLines({
-        api: params.api,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-        statusLine: buildPluginStatusLine({ result, config: params.config }),
-        searchDebug: result.searchDebug,
-      });
-      params.abortSignal?.throwIfAborted();
-      if (shouldCacheResult(result)) {
-        setCachedResult(cacheKey, result, params.config.cacheTtlMs);
-      }
+      await recordRecallResult({ ...params, logPrefix, result });
       return result;
     }
 
@@ -363,27 +381,15 @@ async function maybeResolveActiveRecall(params: {
       elapsedMs: Date.now() - startedAt,
       maxSummaryChars: params.config.maxSummaryChars,
     });
-    if (params.config.logging) {
-      params.api.logger.info?.(
-        `${logPrefix} done status=${result.status} elapsedMs=${String(result.elapsedMs)} summaryChars=${String(result.summary?.length ?? 0)}`,
-      );
-    }
     resetCircuitBreaker(cbKey);
-    params.abortSignal?.throwIfAborted();
-    await persistPluginStatusLines({
-      api: params.api,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      statusLine: buildPluginStatusLine({ result, config: params.config }),
-      debugSummary: buildPersistedDebugSummary(result),
-      searchDebug: result.searchDebug,
-    });
-    params.abortSignal?.throwIfAborted();
-    if (shouldCacheResult(result)) {
+    await recordRecallResult({ ...params, logPrefix, result });
+    if (cacheKey && shouldCacheResult(result)) {
+      params.assertMemoryAudienceCurrent?.();
       setCachedResult(cacheKey, result, params.config.cacheTtlMs);
     }
     return result;
   } catch (error) {
+    rethrowIncognitoSessionError(error);
     if (params.abortSignal?.aborted) {
       if (recallTimedOut) {
         recordRecallTimeout();
@@ -401,29 +407,13 @@ async function maybeResolveActiveRecall(params: {
         elapsedMs: Date.now() - startedAt,
         maxSummaryChars: params.config.maxSummaryChars,
         transcriptSources,
-        rawReply: partialTimeoutData.rawReply,
-        searchDebug: partialTimeoutData.searchDebug,
-        hasUnavailableMemorySearchResult: partialTimeoutData.hasUnavailableMemorySearchResult,
+        ...partialTimeoutData,
         toolsAllow: params.config.toolsAllow,
       });
-      if (params.config.logging) {
-        params.api.logger.info?.(
-          `${logPrefix} done status=${result.status} elapsedMs=${String(result.elapsedMs)} summaryChars=${String(result.summary?.length ?? 0)}`,
-        );
-      }
-      params.abortSignal?.throwIfAborted();
-      await persistPluginStatusLines({
-        api: params.api,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-        statusLine: buildPluginStatusLine({ result, config: params.config }),
-        debugSummary: buildPersistedDebugSummary(result),
-        searchDebug: result.searchDebug,
-      });
-      params.abortSignal?.throwIfAborted();
+      await recordRecallResult({ ...params, logPrefix, result });
       return result;
     }
-    const message = toSingleLineLogValue(error instanceof Error ? error.message : String(error));
+    const message = toSingleLineErrorMessage(error);
     if (params.config.logging) {
       params.api.logger.warn?.(`${logPrefix} failed error=${message}; skipping recall`);
     }
@@ -432,14 +422,7 @@ async function maybeResolveActiveRecall(params: {
       elapsedMs: Date.now() - startedAt,
       summary: null,
     };
-    params.abortSignal?.throwIfAborted();
-    await persistPluginStatusLines({
-      api: params.api,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      statusLine: buildPluginStatusLine({ result, config: params.config }),
-      searchDebug: result.searchDebug,
-    });
+    await recordRecallResult({ ...params, logPrefix, result });
     return result;
   } finally {
     params.abortSignal?.removeEventListener("abort", abortFromParent);
@@ -448,4 +431,33 @@ async function maybeResolveActiveRecall(params: {
   }
 }
 
-export { maybeResolveActiveRecall };
+export async function maybeResolveActiveRecall(
+  params: ActiveRecallParams,
+): Promise<ActiveRecallResult> {
+  const { runId, ...recallParams } = params;
+  if (!runId || params.requestKey === null) {
+    return await resolveActiveRecall(recallParams);
+  }
+  const model = getModelRef(params.runtimeConfig, params.agentId, params.config, {
+    modelProviderId: params.currentModelProviderId,
+    modelId: params.currentModelId,
+  });
+  const scopeFingerprint = buildCacheKey({
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    // Run-local reuse follows request identity; the cross-turn content cache stays query-based.
+    query: params.requestKey ?? params.query,
+    authorityFingerprint: params.authorityFingerprint,
+    memoryAudience: params.memoryAudience,
+    memorySlot: params.memorySlot,
+    activeProjectKeys: params.activeProjectKeys,
+    modelProviderId: model?.provider,
+    modelId: model?.model,
+    recallToolNames: params.config.toolsAllow,
+    resourceScope: JSON.stringify(params.conversationRecall ?? null),
+  });
+  return await resolveActiveRecallForRun(`${runId}:${scopeFingerprint}`, (onTimeoutCleanup) =>
+    resolveActiveRecall({ ...recallParams, onTimeoutCleanup }),
+  );
+}

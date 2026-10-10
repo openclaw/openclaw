@@ -1,11 +1,12 @@
 {
   "id": "voyage",
+  "categories": ["memory"],
   "activation": {
     "onStartup": false
   },
   "enabledByDefault": true,
   "contracts": {
-    "memoryEmbeddingProviders": ["voyage"]
+    "embeddingProviders": ["voyage"]
   },
   "setup": {
     "providers": [

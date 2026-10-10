@@ -1,0 +1,220 @@
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
+import { isPathInside } from "../infra/path-guards.js";
+import { normalizePluginId, normalizePluginTargetConfig } from "./config-state.js";
+import { resetPluginSlotsToDefaults } from "./slots.js";
+
+export type PluginConfigUninstallActions = {
+  entry: boolean;
+  install: boolean;
+  allowlist: boolean;
+  denylist: boolean;
+  loadPath: boolean;
+  memorySlot: boolean;
+  contextEngineSlot: boolean;
+  channelConfig: boolean;
+};
+
+const SHARED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
+
+export function mergePluginConfigUninstallActions(
+  ...sources: PluginConfigUninstallActions[]
+): PluginConfigUninstallActions {
+  const actions = createEmptyConfigUninstallActions();
+  // SAFETY: The constructor supplies exactly the declared config-action keys.
+  for (const key of Object.keys(actions) as Array<keyof PluginConfigUninstallActions>) {
+    actions[key] = sources.some((source) => source[key]);
+  }
+  return actions;
+}
+
+function createEmptyConfigUninstallActions(): PluginConfigUninstallActions {
+  return {
+    entry: false,
+    install: false,
+    allowlist: false,
+    denylist: false,
+    loadPath: false,
+    memorySlot: false,
+    contextEngineSlot: false,
+    channelConfig: false,
+  };
+}
+
+/** Resolve canonically when present, otherwise preserve an absolute lexical path. */
+export { resolveRealpathOrAbsolute as resolveComparableUninstallPath };
+
+/** Check whether a managed uninstall target stays inside its owning root. */
+export function isUninstallPathInsideOrEqual(parent: string, child: string): boolean {
+  return isPathInside(resolveRealpathOrAbsolute(parent), resolveRealpathOrAbsolute(child));
+}
+
+/** Resolve channel config keys owned by a plugin during uninstall. */
+export function resolveUninstallChannelConfigKeys(
+  pluginId: string,
+  opts?: { channelIds?: string[] },
+): string[] {
+  return uniqueStrings(
+    (opts?.channelIds ?? [pluginId]).filter((key) => !SHARED_CHANNEL_CONFIG_KEYS.has(key)),
+  );
+}
+
+function loadPathMatchesInstallPath(loadPath: string, installPath: string): boolean {
+  return (
+    loadPath === installPath ||
+    resolveRealpathOrAbsolute(loadPath) === resolveRealpathOrAbsolute(installPath)
+  );
+}
+
+export function hasMatchingPluginLoadPath(
+  config: OpenClawConfig,
+  ownedPaths: readonly string[],
+): boolean {
+  return Boolean(
+    config.plugins?.load?.paths?.some((candidate) =>
+      ownedPaths.some((ownedPath) => loadPathMatchesInstallPath(candidate, ownedPath)),
+    ),
+  );
+}
+
+function removeMatchingLoadPaths(
+  load: NonNullable<OpenClawConfig["plugins"]>["load"],
+  ownedPaths: readonly string[],
+): { load: NonNullable<OpenClawConfig["plugins"]>["load"] | undefined; changed: boolean } {
+  const loadPaths = load?.paths;
+  if (ownedPaths.length === 0 || !Array.isArray(loadPaths)) {
+    return { load, changed: false };
+  }
+  const nextLoadPaths = loadPaths.filter(
+    (candidate) =>
+      !ownedPaths.some((ownedPath) => loadPathMatchesInstallPath(candidate, ownedPath)),
+  );
+  return nextLoadPaths.length === loadPaths.length
+    ? { load, changed: false }
+    : {
+        load: nextLoadPaths.length > 0 ? { ...load, paths: nextLoadPaths } : undefined,
+        changed: true,
+      };
+}
+
+export function removePluginRuntimePolicyFromConfig(
+  cfg: OpenClawConfig,
+  pluginId: string,
+  opts?: { channelIds?: string[]; loadPaths?: string[] },
+): { config: OpenClawConfig; actions: PluginConfigUninstallActions } {
+  const actions = createEmptyConfigUninstallActions();
+  const policyPluginId = normalizePluginId(pluginId);
+  const pluginsConfig = normalizePluginTargetConfig(cfg, pluginId).plugins ?? {};
+
+  let entries = cfg.plugins?.entries ? pluginsConfig.entries : undefined;
+  if (entries && Object.hasOwn(entries, policyPluginId)) {
+    const { [policyPluginId]: _, ...rest } = entries;
+    entries = Object.keys(rest).length > 0 ? rest : undefined;
+    actions.entry = true;
+  }
+
+  let allow = pluginsConfig.allow;
+  if (Array.isArray(allow) && allow.includes(policyPluginId)) {
+    allow = allow.filter((id) => id !== policyPluginId);
+    allow = allow.length > 0 ? allow : undefined;
+    actions.allowlist = true;
+  }
+
+  let deny = pluginsConfig.deny;
+  if (Array.isArray(deny) && deny.includes(policyPluginId)) {
+    deny = deny.filter((id) => id !== policyPluginId);
+    deny = deny.length > 0 ? deny : undefined;
+    actions.denylist = true;
+  }
+
+  const loadResult = removeMatchingLoadPaths(pluginsConfig.load, opts?.loadPaths ?? []);
+  actions.loadPath = loadResult.changed;
+
+  let slots = pluginsConfig.slots;
+  if (slots?.memory === pluginId) {
+    actions.memorySlot = true;
+  }
+  if (slots?.contextEngine === pluginId) {
+    actions.contextEngineSlot = true;
+  }
+  slots = resetPluginSlotsToDefaults(slots, pluginId);
+  if (slots && Object.keys(slots).length === 0) {
+    slots = undefined;
+  }
+
+  const cleanedPlugins = {
+    ...pluginsConfig,
+    entries,
+    allow,
+    deny,
+    load: loadResult.load,
+    slots,
+  };
+  for (const key of ["entries", "allow", "deny", "load", "slots"] as const) {
+    if (cleanedPlugins[key] === undefined) {
+      delete cleanedPlugins[key];
+    }
+  }
+
+  let channels = cfg.channels as Record<string, unknown> | undefined;
+  for (const key of resolveUninstallChannelConfigKeys(pluginId, opts)) {
+    if (!channels || !Object.hasOwn(channels, key)) {
+      continue;
+    }
+    const { [key]: _removed, ...rest } = channels;
+    channels = Object.keys(rest).length > 0 ? rest : undefined;
+    actions.channelConfig = true;
+  }
+
+  if (!Object.values(actions).some(Boolean)) {
+    return { config: cfg, actions };
+  }
+  return {
+    config: {
+      ...cfg,
+      plugins: Object.keys(cleanedPlugins).length > 0 ? cleanedPlugins : undefined,
+      ...(actions.channelConfig ? { channels: channels as OpenClawConfig["channels"] } : {}),
+    },
+    actions,
+  };
+}
+
+export function removePluginInstallOwnerFromConfig(
+  cfg: OpenClawConfig,
+  installOwner: string,
+): { config: OpenClawConfig; actions: PluginConfigUninstallActions } {
+  const actions = createEmptyConfigUninstallActions();
+  const pluginsConfig = cfg.plugins ?? {};
+  let installs = pluginsConfig.installs;
+  const installRecord = Object.hasOwn(installs ?? {}, installOwner)
+    ? installs?.[installOwner]
+    : undefined;
+  if (installs && installRecord) {
+    const { [installOwner]: _, ...rest } = installs;
+    installs = Object.keys(rest).length > 0 ? rest : undefined;
+    actions.install = true;
+  }
+  const trackedPaths = [
+    installRecord?.installPath,
+    installRecord?.source === "path" ? installRecord.sourcePath : undefined,
+  ].filter((value): value is string => Boolean(value));
+  const loadResult = removeMatchingLoadPaths(pluginsConfig.load, trackedPaths);
+  actions.loadPath = loadResult.changed;
+  const cleanedPlugins = { ...pluginsConfig, installs, load: loadResult.load };
+  for (const key of ["installs", "load"] as const) {
+    if (cleanedPlugins[key] === undefined) {
+      delete cleanedPlugins[key];
+    }
+  }
+  if (!Object.values(actions).some(Boolean)) {
+    return { config: cfg, actions };
+  }
+  return {
+    config: {
+      ...cfg,
+      plugins: Object.keys(cleanedPlugins).length > 0 ? cleanedPlugins : undefined,
+    },
+    actions,
+  };
+}

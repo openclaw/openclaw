@@ -121,28 +121,128 @@ describe("runGitHubCopilotDeviceFlow — normal flow", () => {
   });
 });
 
-describe("runGitHubCopilotDeviceFlow — HTTP error propagation", () => {
-  it("throws with failureLabel on non-OK device code response", async () => {
-    mocks.fetchWithSsrFGuard.mockImplementation(async () => guardResponse({}, 401));
+describe("runGitHubCopilotDeviceFlow — live authority", () => {
+  it("does not dispatch the initial request after authority is revoked", async () => {
+    const dispatch = vi.fn();
+    mocks.fetchWithSsrFGuard.mockImplementation(async (params) => {
+      params.beforeRequest?.();
+      dispatch();
+      throw new Error("Request dispatched after authority was revoked");
+    });
 
-    await expect(runGitHubCopilotDeviceFlow({ showCode: vi.fn() })).rejects.toThrow(
-      "GitHub device code failed: HTTP 401",
-    );
+    await expect(
+      runGitHubCopilotDeviceFlow({
+        showCode: vi.fn(),
+        assertCurrent: () => {
+          throw new Error("Login revoked");
+        },
+      }),
+    ).rejects.toThrow("Login revoked");
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
-  it("throws with failureLabel on non-OK access token response", async () => {
-    let callIdx = 0;
-    mocks.fetchWithSsrFGuard.mockImplementation(async () => {
-      callIdx += 1;
-      if (callIdx === 1) {
+  it("does not poll after authority is revoked while presenting the device code", async () => {
+    vi.useFakeTimers();
+    let current = true;
+    let tokenPolls = 0;
+    mocks.fetchWithSsrFGuard.mockImplementation(async (params) => {
+      params.beforeRequest?.();
+      if (params.url === DEVICE_CODE_URL) {
+        return guardResponse({ ...VALID_DEVICE_CODE_BODY, interval: 0 });
+      }
+      tokenPolls += 1;
+      return guardResponse(
+        { access_token: "ghu_tok_xyz", token_type: "bearer" },
+        200,
+        ACCESS_TOKEN_URL,
+      );
+    });
+
+    const rejection = expect(
+      runGitHubCopilotDeviceFlow({
+        showCode: async () => {
+          current = false;
+        },
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("Login revoked");
+          }
+        },
+      }),
+    ).rejects.toThrow("Login revoked");
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await rejection;
+    expect(tokenPolls).toBe(0);
+  });
+
+  it("does not issue another poll after a pending response loses authority", async () => {
+    vi.useFakeTimers();
+    let current = true;
+    let tokenPolls = 0;
+    mocks.fetchWithSsrFGuard.mockImplementation(async (params) => {
+      params.beforeRequest?.();
+      if (params.url === DEVICE_CODE_URL) {
+        return guardResponse({ ...VALID_DEVICE_CODE_BODY, interval: 1 });
+      }
+      tokenPolls += 1;
+      if (tokenPolls === 1) {
+        current = false;
+        return guardResponse({ error: "authorization_pending" }, 200, ACCESS_TOKEN_URL);
+      }
+      return guardResponse(
+        { access_token: "ghu_tok_xyz", token_type: "bearer" },
+        200,
+        ACCESS_TOKEN_URL,
+      );
+    });
+
+    const rejection = expect(
+      runGitHubCopilotDeviceFlow({
+        showCode: vi.fn(async () => {}),
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("Login revoked");
+          }
+        },
+      }),
+    ).rejects.toThrow("Login revoked");
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    await rejection;
+    expect(tokenPolls).toBe(1);
+  });
+});
+
+describe("runGitHubCopilotDeviceFlow — HTTP error propagation", () => {
+  it.each([
+    { stage: "device code", url: DEVICE_CODE_URL, status: 502 },
+    { stage: "device token", url: ACCESS_TOKEN_URL, status: 401 },
+  ])("cancels the unread $stage body before throwing on non-OK", async ({ stage, url, status }) => {
+    let canceled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(JSON.stringify({ error: "server_error" })));
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+    mocks.fetchWithSsrFGuard.mockImplementation(async (params) => {
+      if (url === ACCESS_TOKEN_URL && params.url === DEVICE_CODE_URL) {
         return guardResponse(VALID_DEVICE_CODE_BODY);
       }
-      return guardResponse({}, 500, ACCESS_TOKEN_URL);
+      return {
+        response: new Response(body, { status, headers: { "Content-Type": "application/json" } }),
+        finalUrl: url,
+        release: vi.fn(async () => {}),
+      };
     });
 
     await expect(runDeviceFlowAfterFirstPoll({ showCode: vi.fn(async () => {}) })).rejects.toThrow(
-      "GitHub device token failed: HTTP 500",
+      `GitHub ${stage} failed: HTTP ${status}`,
     );
+    expect(canceled).toBe(true);
   });
 
   it("rejects a malformed access token response", async () => {
@@ -162,11 +262,14 @@ describe("runGitHubCopilotDeviceFlow — HTTP error propagation", () => {
 });
 
 describe("postGitHubDeviceFlowForm — response size bound", () => {
-  it("bounds oversized device code body and cancels the stream", async () => {
-    const chunk = new Uint8Array(1024 * 1024); // 1 MiB
+  it.each([
+    { stage: "device code", url: DEVICE_CODE_URL },
+    { stage: "access token", url: ACCESS_TOKEN_URL },
+  ])("bounds oversized $stage bodies and cancels the stream", async ({ url }) => {
+    const chunk = new Uint8Array(1024 * 1024);
     let readCount = 0;
     let canceled = false;
-    // 64 chunks × 1 MiB = 64 MiB — far exceeds the 16 MiB cap
+    // Stop well before consuming the 64 MiB source body.
     const oversizedBody = new ReadableStream<Uint8Array>({
       pull(controller) {
         if (readCount >= 64) {
@@ -180,57 +283,16 @@ describe("postGitHubDeviceFlowForm — response size bound", () => {
         canceled = true;
       },
     });
-
-    mocks.fetchWithSsrFGuard.mockImplementation(async () => ({
-      response: new Response(oversizedBody, {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
-      finalUrl: DEVICE_CODE_URL,
-      release: async () => {},
-    }));
-
-    await expect(runGitHubCopilotDeviceFlow({ showCode: vi.fn() })).rejects.toThrow(
-      "github-copilot.device-flow",
-    );
-
-    // Stream must be cancelled before all 64 MiB are consumed
-    expect(readCount).toBeLessThan(64);
-    expect(canceled).toBe(true);
-  });
-
-  it("bounds oversized access token body and cancels the stream", async () => {
-    const chunk = new Uint8Array(1024 * 1024); // 1 MiB
-    let readCount = 0;
-    let canceled = false;
-    let callIdx = 0;
-
-    mocks.fetchWithSsrFGuard.mockImplementation(async () => {
-      callIdx += 1;
-      if (callIdx === 1) {
+    mocks.fetchWithSsrFGuard.mockImplementation(async (params) => {
+      if (url === ACCESS_TOKEN_URL && params.url === DEVICE_CODE_URL) {
         return guardResponse(VALID_DEVICE_CODE_BODY);
       }
-
-      const oversizedBody = new ReadableStream<Uint8Array>({
-        pull(controller) {
-          if (readCount >= 64) {
-            controller.close();
-            return;
-          }
-          readCount += 1;
-          controller.enqueue(chunk);
-        },
-        cancel() {
-          canceled = true;
-        },
-      });
-
       return {
         response: new Response(oversizedBody, {
           status: 200,
           headers: { "Content-Type": "application/json" },
         }),
-        finalUrl: ACCESS_TOKEN_URL,
+        finalUrl: url,
         release: async () => {},
       };
     });
@@ -238,8 +300,6 @@ describe("postGitHubDeviceFlowForm — response size bound", () => {
     await expect(runDeviceFlowAfterFirstPoll({ showCode: vi.fn(async () => {}) })).rejects.toThrow(
       "github-copilot.device-flow",
     );
-
-    // Stream must be cancelled before all 64 MiB are consumed
     expect(readCount).toBeLessThan(64);
     expect(canceled).toBe(true);
   });
@@ -307,7 +367,7 @@ describe("runGitHubCopilotDeviceFlow — polling intervals", () => {
     const pollTimes: number[] = [];
     const pollResponses = [
       { error: "authorization_pending" },
-      { error: "slow_down" },
+      { error: "slow_down", interval: 7 },
       { error: "slow_down" },
       { access_token: "test-access-token", token_type: "bearer" },
     ];

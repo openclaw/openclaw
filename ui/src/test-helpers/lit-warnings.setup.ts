@@ -1,3 +1,5 @@
+import { installSafeLocalStorageForTesting } from "./storage.ts";
+
 // Lit emits a one-time dev-mode warning in test builds. Pre-mark it as issued
 // so broad UI suites stay signal-heavy instead of repeating the same console.warn.
 const issuedWarnings = ((globalThis as { litIssuedWarnings?: Set<string> }).litIssuedWarnings ??=
@@ -39,7 +41,8 @@ if (typeof Element !== "undefined" && !("getAnimations" in Element.prototype)) {
 
 // JSDOM exposes partial ElementInternals. Web Awesome form controls require
 // the form-associated methods even when tests do not mount them in a form.
-if (typeof HTMLElement !== "undefined") {
+// Browser tests need native CustomStateSet so CSS :state() observes real state.
+if (typeof HTMLElement !== "undefined" && !("__vitest_browser__" in globalThis)) {
   Object.defineProperty(HTMLElement.prototype, "attachInternals", {
     configurable: true,
     value() {
@@ -76,4 +79,30 @@ if (typeof HTMLDialogElement !== "undefined" && !("close" in HTMLDialogElement.p
       this.removeAttribute("open");
     },
   });
+}
+
+// Node 25+ exposes accessor-backed WebStorage that can be disabled or inert.
+// Vitest intentionally rejects all storage accessors, so jsdom needs an owned
+// value descriptor even when invoking the original getter appears to work.
+function globalLocalStorageIsUsable(): boolean {
+  try {
+    const existing = globalThis.localStorage;
+    if (!existing) {
+      return false;
+    }
+    existing.setItem("__openclaw_probe__", "1");
+    const roundTrips = existing.getItem("__openclaw_probe__") === "1";
+    existing.removeItem("__openclaw_probe__");
+    return roundTrips;
+  } catch {
+    return false;
+  }
+}
+
+if (
+  typeof window !== "undefined" &&
+  ((typeof process !== "undefined" && Boolean(process.env?.VITEST)) ||
+    !globalLocalStorageIsUsable())
+) {
+  installSafeLocalStorageForTesting(window);
 }

@@ -1,5 +1,6 @@
 /**
- * Strict plain-object guard (excludes arrays and host objects).
+ * Config merge/patch uses the object tag, not prototype identity: class instances
+ * and custom prototypes remain accepted, while Date/Map/Set values are excluded.
  */
 export function isPlainObject(value: unknown): value is Record<string, unknown> {
   return (

@@ -1,19 +1,25 @@
 // Shared sessions_spawn test harness for gateway, registry, and lifecycle mocks.
-import { vi, type Mock } from "vitest";
+import os from "node:os";
+import path from "node:path";
+import { onTestFinished, vi, type Mock } from "vitest";
+import type { SessionRunStatus } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
-import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
+import { configureMockSubagentRegistryPersistence } from "./subagent-test-fixtures.test-helpers.js";
+import { resolveRequesterStoreKey } from "./subagents/announce/subagent-requester-store-key.js";
+import { supportedSpawnModelChoice } from "./subagents/spawn/subagent-spawn.test-helpers.js";
 
 type SessionsSpawnTestConfig = ReturnType<
   (typeof import("../config/config.js"))["getRuntimeConfig"]
 >;
 type SessionsSpawnHookRunner = SubagentLifecycleHookRunner | null;
 type CaptureSubagentCompletionReply =
-  (typeof import("./subagent-announce.js"))["captureSubagentCompletionReply"];
-type RunSubagentAnnounceFlow = (typeof import("./subagent-announce.js"))["runSubagentAnnounceFlow"];
+  (typeof import("./subagents/announce/subagent-announce.js"))["captureSubagentCompletionReply"];
+type RunSubagentAnnounceFlow =
+  (typeof import("./subagents/announce/subagent-announce.js"))["runSubagentAnnounceFlow"];
 type CreateSessionsSpawnTool =
   (typeof import("./tools/sessions-spawn-tool.js"))["createSessionsSpawnTool"];
-type SubagentRegistryTesting = (typeof import("./subagent-registry.test-helpers.js"))["testing"];
-type SubagentSpawnTesting = (typeof import("./subagent-spawn.test-support.js"))["testing"];
+type SubagentSpawnTesting =
+  (typeof import("./subagents/spawn/subagent-spawn.test-support.js"))["testing"];
 type CreateOpenClawToolsOpts = Parameters<CreateSessionsSpawnTool>[0];
 type GatewayRequest = { method?: string; params?: unknown; timeoutMs?: number };
 type AgentWaitCall = { runId?: string; timeoutMs?: number };
@@ -22,7 +28,7 @@ type TestSessionEntry = {
   updatedAt: number;
   startedAt?: number;
   endedAt?: number;
-  status?: "running" | "done" | "failed" | "killed" | "timeout";
+  status?: SessionRunStatus;
 };
 type SessionsSpawnGatewayMockOptions = {
   includeSessionsList?: boolean;
@@ -92,7 +98,7 @@ const hoisted = vi.hoisted(() => {
       });
     }
 
-    return true;
+    return "delivered";
   };
   const defaultCaptureSubagentCompletionReply: CaptureSubagentCompletionReply = async () =>
     undefined;
@@ -135,9 +141,13 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
+let persistenceStubInstalled = false;
 let cachedCreateSessionsSpawnTool: CreateSessionsSpawnTool | null = null;
-let cachedSubagentRegistryTesting: SubagentRegistryTesting | null = null;
 let cachedSubagentSpawnTesting: SubagentSpawnTesting | null = null;
+const sessionStorePath = path.join(
+  os.tmpdir(),
+  `openclaw-sessions-spawn-test-store-${process.pid}-${process.env.VITEST_POOL_ID ?? "0"}.json`,
+);
 
 export function getCallGatewayMock(): Mock {
   return hoisted.callGatewayMock;
@@ -190,16 +200,13 @@ export function setSessionsSpawnAnnounceFlowOverride(next: RunSubagentAnnounceFl
 
 export async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
   // Lazily installs test deps before constructing the real sessions_spawn tool.
-  if (!cachedSubagentSpawnTesting || !cachedSubagentRegistryTesting) {
-    const [{ testing: subagentSpawnTesting }, { testing: subagentRegistryTesting }] =
-      await Promise.all([
-        import("./subagent-spawn.test-support.js"),
-        import("./subagent-registry.test-helpers.js"),
-      ]);
+  if (!cachedSubagentSpawnTesting) {
+    const { testing: subagentSpawnTesting } =
+      await import("./subagents/spawn/subagent-spawn.test-support.js");
     cachedSubagentSpawnTesting = subagentSpawnTesting;
-    cachedSubagentRegistryTesting = subagentRegistryTesting;
   }
   cachedSubagentSpawnTesting.setDepsForTest({
+    prepareModelChoice: supportedSpawnModelChoice,
     callGateway: (optsUnknown) => hoisted.callGatewayMock(optsUnknown),
     getGlobalHookRunner: () => hoisted.state.hookRunnerOverride,
     getRuntimeConfig: () => hoisted.state.configOverride,
@@ -231,29 +238,21 @@ export async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
       },
     }),
   });
-  cachedSubagentRegistryTesting.setDepsForTest({
-    callGateway: (optsUnknown) => hoisted.callGatewayMock(optsUnknown),
-    getRuntimeConfig: () => hoisted.state.configOverride,
-    cleanupBrowserSessionsForLifecycleEnd: async () => {},
-    ensureContextEnginesInitialized: () => {},
-    ensureRuntimePluginsLoaded: () => {},
-    persistSubagentRunsToDisk: () => {
-      hoisted.notifyEventWaiters();
-    },
-    persistSubagentRunsToDiskOrThrow: () => {
-      hoisted.notifyEventWaiters();
-    },
-    restoreSubagentRunsFromDisk: () => 0,
-    resolveContextEngine: async () => ({
-      info: { id: "test", name: "Test" },
-      assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
-      compact: async () => ({ ok: true, compacted: false }),
-      ingest: async () => ({ ingested: false }),
-    }),
-    captureSubagentCompletionReply: (sessionKey) =>
-      hoisted.state.captureSubagentCompletionReplyOverride(sessionKey),
-    runSubagentAnnounceFlow: (params) => hoisted.state.runSubagentAnnounceFlowOverride(params),
-  });
+  const persistence = await import("./subagents/registry/subagent-registry-persistence.js");
+  vi.mocked(persistence.restoreSubagentRunsFromDisk).mockResolvedValue(0);
+  if (!persistenceStubInstalled) {
+    await configureMockSubagentRegistryPersistence({ persistRegistryRows: () => {} });
+    persistenceStubInstalled = true;
+    const { subscribeSubagentRunChanges } =
+      await import("./subagents/registry/subagent-registry-publication.js");
+    const unsubscribe = subscribeSubagentRunChanges("persistence", hoisted.notifyEventWaiters);
+    onTestFinished(() => {
+      unsubscribe();
+      persistenceStubInstalled = false;
+    });
+  }
+  // Prepare the async announcement mock before lifecycle assertions start waiting.
+  await import("./subagents/announce/subagent-announce.js");
   if (!cachedCreateSessionsSpawnTool) {
     ({ createSessionsSpawnTool: cachedCreateSessionsSpawnTool } =
       await import("./tools/sessions-spawn-tool.js"));
@@ -362,17 +361,47 @@ export function setupSessionsSpawnGatewayMock(setupOpts: SessionsSpawnGatewayMoc
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => hoisted.callGatewayMock(opts),
 }));
-// Some tools import callGateway via "../../gateway/call.js" (from nested folders). Mock that too.
-vi.mock("../../gateway/call.js", () => ({
-  callGateway: (opts: unknown) => hoisted.callGatewayMock(opts),
-}));
 
+vi.mock("./subagents/registry/subagent-registry-state.js", { spy: true });
+vi.mock("./subagents/registry/subagent-registry-persistence.js", { spy: true });
+vi.mock("../browser-lifecycle-cleanup.js", () => ({
+  cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
+}));
+vi.mock("../context-engine/init.js", () => ({ ensureContextEnginesInitialized: vi.fn() }));
+vi.mock("../context-engine/registry.js", () => ({
+  resolveContextEngine: vi.fn(async () => ({
+    info: { id: "test", name: "Test" },
+    assemble: async ({
+      messages,
+    }: Parameters<import("../context-engine/types.js").ContextEngine["assemble"]>[0]) => ({
+      messages,
+      estimatedTokens: 0,
+    }),
+    compact: async () => ({ ok: true, compacted: false }),
+    ingest: async () => ({ ingested: false }),
+  })),
+}));
+vi.mock("./runtime-plugins.js", async () => {
+  const { createEmptyPluginRegistry } = await import("../plugins/registry-empty.js");
+  return { loadAgentRuntimePluginRegistryHandle: vi.fn(() => createEmptyPluginRegistry()) };
+});
+vi.mock("./subagents/announce/subagent-announce.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./subagents/announce/subagent-announce.js")>()),
+  captureSubagentCompletionReply: (sessionKey: Parameters<CaptureSubagentCompletionReply>[0]) =>
+    hoisted.state.captureSubagentCompletionReplyOverride(sessionKey),
+  runSubagentAnnounceFlow: (params: Parameters<RunSubagentAnnounceFlow>[0]) =>
+    hoisted.state.runSubagentAnnounceFlowOverride(params),
+}));
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => hoisted.state.configOverride,
   resolveGatewayPort: () => 18789,
 }));
 
-vi.mock("../config/sessions.js", () => ({
+vi.mock("../config/sessions.js", async () => ({
+  isPerAgentSessionStoreConfig: (await import("../config/sessions/session-store-config.js"))
+    .isPerAgentSessionStoreConfig,
+  isConfiguredSessionStoreAgentId: (cfg: SessionsSpawnTestConfig, agentId: string) =>
+    agentId === "main" || Object.hasOwn(cfg.agents?.entries ?? {}, agentId),
   loadSessionStore: () => hoisted.sessionStore,
   mergeSessionEntry: (existing: object | undefined, patch: object) => ({
     ...existing,
@@ -384,21 +413,14 @@ vi.mock("../config/sessions.js", () => ({
     cfg?: { session?: { mainKey?: string } };
     agentId: string;
   }) => `agent:${params.agentId}:${params.cfg?.session?.mainKey ?? "main"}`,
-  resolveStorePath: () => "/tmp/openclaw-sessions-spawn-test-store.json",
+  resolveExistingAgentSessionStoreTargetsSync: () => [],
+  resolveSessionStorePathCore: () => sessionStorePath,
   updateSessionStore: async (
     _storePath: string,
     mutator: (store: typeof hoisted.sessionStore) => void | Promise<void>,
   ) => {
     await mutator(hoisted.sessionStore);
   },
-}));
-
-vi.mock("../tasks/detached-task-runtime.js", () => ({
-  completeTaskRunByRunId: vi.fn(),
-  createRunningTaskRun: vi.fn(),
-  failTaskRunByRunId: vi.fn(),
-  findDetachedTaskRun: vi.fn(() => ({ lookup: "available" as const })),
-  setDetachedTaskDeliveryStatusByRunId: vi.fn(),
 }));
 
 // Same module, different specifier (used by tools under src/agents/tools/*).

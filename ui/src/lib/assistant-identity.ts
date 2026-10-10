@@ -1,7 +1,7 @@
-// Control UI module implements assistant identity behavior.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { AgentIdentityResult } from "../../../packages/gateway-protocol/src/schema/agent.js";
 import { isRenderableAvatarImageDataUrl } from "../../../src/shared/avatar-limits.js";
-import { normalizeOptionalString } from "./string-coerce.ts";
 
 // Short text/emoji avatars (e.g. "A", "PS", "🦞"). Anything longer that is not
 // a renderable image URL is dropped during normalization.
@@ -45,18 +45,15 @@ function normalizeAssistantAvatar(value: string | null | undefined): string | nu
   if (isRenderableAvatarImageDataUrl(trimmed) || SAME_ORIGIN_AVATAR_URL_RE.test(trimmed)) {
     return trimmed;
   }
-  if (URI_SCHEME_RE.test(trimmed)) {
-    return null;
-  }
-  if (/[\r\n]/.test(trimmed)) {
+  if (URI_SCHEME_RE.test(trimmed) || /[\r\n]/.test(trimmed)) {
     return null;
   }
   return trimmed.length <= MAX_ASSISTANT_TEXT_AVATAR ? trimmed : null;
 }
 
 export function normalizeAssistantIdentity(
-  input?: Partial<AssistantIdentity> | null,
-): AssistantIdentity {
+  input?: Partial<AssistantIdentity> | AgentIdentityResult | null,
+): Required<AssistantIdentity> {
   const name = normalizeAssistantValue("name", input?.name) ?? DEFAULT_ASSISTANT_NAME;
   const avatar = normalizeAssistantAvatar(input?.avatar);
   const avatarSource = normalizeAssistantValue("avatarSource", input?.avatarSource) ?? null;

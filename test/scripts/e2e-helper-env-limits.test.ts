@@ -105,16 +105,16 @@ async function stopChild(child: ReturnType<typeof spawn>): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) {
     return;
   }
-  child.kill("SIGTERM");
   await new Promise<void>((resolve) => {
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
-      resolve();
     }, 1_000);
     child.once("exit", () => {
       clearTimeout(timer);
       resolve();
     });
+    // Escalation requests termination; only this child's exit completes cleanup.
+    child.kill("SIGTERM");
   });
 }
 
@@ -291,7 +291,7 @@ describe("e2e helper numeric env limits", () => {
       headersSentResolve?.();
     });
     const baseUrl = await listen(server);
-    const realTimeout = AbortSignal.timeout;
+    const realTimeout = AbortSignal.timeout.bind(AbortSignal);
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => realTimeout(200));
     try {
       const result = runScript(clickclackPluginWritePath, [tempDir]);
@@ -328,7 +328,9 @@ describe("e2e helper numeric env limits", () => {
     } finally {
       timeoutSpy.mockRestore();
       server.closeAllConnections();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
       fs.rmSync(tempDir, { force: true, recursive: true });
     }
   });

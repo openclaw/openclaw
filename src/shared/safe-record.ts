@@ -1,4 +1,7 @@
-/** Defensive object guard for values that may have hostile traps. */
+/**
+ * Plugin values may use Proxy traps that throw during `Array.isArray`; keep this guard
+ * exception-safe so untrusted-plugin inspection cannot escape into the host.
+ */
 export function isRecordWithoutThrowing(value: unknown): value is Record<string, unknown> {
   try {
     return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -21,19 +24,13 @@ export function readRecordValue(value: unknown, key: string): unknown {
 
 /** Copy array entries defensively from values that may throw on length/index access. */
 export function copyArrayEntries(value: unknown): unknown[] {
-  let isArray: boolean;
-  try {
-    isArray = Array.isArray(value);
-  } catch {
-    return [];
-  }
-  if (!isArray) {
-    return [];
-  }
-
-  const arrayValue = value as readonly unknown[];
+  let arrayValue: readonly unknown[];
   let length: number;
   try {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+    arrayValue = value;
     length = arrayValue.length;
   } catch {
     return [];

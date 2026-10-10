@@ -1,11 +1,11 @@
 import { logError } from "openclaw/plugin-sdk/logging-core";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import {
   buildDiscordActivityCustomId,
   parseDiscordActivityCustomIdForInteraction,
 } from "../component-custom-id.js";
 import type { ButtonInteraction, ComponentData } from "../internal/discord.js";
 import { Button } from "../internal/discord.js";
-import { resolveAuthorizedComponentInteraction } from "../monitor/agent-components-auth.js";
 import { replySilently } from "../monitor/agent-components-reply.js";
 import type { AgentComponentContext } from "../monitor/agent-components.types.js";
 import { getDiscordActivitiesRuntime } from "./runtime.js";
@@ -22,7 +22,6 @@ class DiscordActivityButton extends Button {
   constructor(
     private readonly ctx: AgentComponentContext,
     private readonly deps: {
-      authorize: typeof resolveAuthorizedComponentInteraction;
       reply: typeof replySilently;
       logError: (message: string) => void;
     },
@@ -48,21 +47,6 @@ class DiscordActivityButton extends Button {
       });
       return;
     }
-    const authorized = await this.deps.authorize({
-      ctx: this.ctx,
-      interaction,
-      label: "discord activity",
-      componentLabel: "widget button",
-      unauthorizedReply: "not allowed",
-      defer: false,
-    });
-    if (!authorized) {
-      return;
-    }
-    if (!authorized.commandAuthorized) {
-      await this.deps.reply(interaction, { content: "not allowed", ephemeral: true });
-      return;
-    }
     const runtime = getDiscordActivitiesRuntime();
     const channelId = interaction.rawData.channel_id;
     const discordUserId = interaction.userId;
@@ -86,11 +70,10 @@ class DiscordActivityButton extends Button {
           this.logPendingLaunchFailure(error);
           return "failed" as const;
         });
-      const timeout = new Promise<"timeout">((resolve) => {
-        const timer = setTimeout(() => resolve("timeout"), PENDING_LAUNCH_WRITE_BUDGET_MS);
-        timer.unref?.();
+      const result = await raceWithTimeout(write, PENDING_LAUNCH_WRITE_BUDGET_MS, () => "timeout", {
+        ref: false,
       });
-      if ((await Promise.race([write, timeout])) === "timeout") {
+      if (result === "timeout") {
         this.logPendingLaunchFailure(
           new Error(`pending launch write exceeded ${PENDING_LAUNCH_WRITE_BUDGET_MS}ms`),
         );
@@ -104,13 +87,12 @@ export function createDiscordActivityButton(
   ctx: AgentComponentContext,
   applicationId?: string,
   deps: {
-    authorize?: typeof resolveAuthorizedComponentInteraction;
     reply?: typeof replySilently;
     logError?: (message: string) => void;
   } = {},
 ): DiscordActivityButton | null {
   const runtime = getDiscordActivitiesRuntime();
-  if (!runtime || !runtime.isAccountEnabled(ctx.accountId, ctx.cfg)) {
+  if (!runtime) {
     return null;
   }
   if (applicationId) {
@@ -120,7 +102,6 @@ export function createDiscordActivityButton(
     return null;
   }
   return new DiscordActivityButton(ctx, {
-    authorize: deps.authorize ?? resolveAuthorizedComponentInteraction,
     reply: deps.reply ?? replySilently,
     logError: deps.logError ?? logError,
   });

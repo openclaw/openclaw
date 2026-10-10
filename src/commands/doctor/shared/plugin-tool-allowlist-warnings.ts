@@ -1,15 +1,20 @@
-// Doctor warnings for plugin allowlists that make configured tool policies ineffective.
-import { isRecord as hasRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  asOptionalRecord,
+  isRecord as hasRecord,
+} from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeArrayBackedTrimmedStringList,
+  normalizeTrimmedStringList,
   sortUniqueStrings,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "../../../agents/agent-bundle-mcp-names.js";
+import { listAgentEntriesWithSource } from "../../../agents/agent-scope-config.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../../../agents/glob-pattern.js";
 import { resolveProviderToolPolicy } from "../../../agents/provider-tool-policy.js";
 import {
   mergeAlsoAllowPolicy,
-  normalizeToolName,
+  normalizeToolPolicyName,
   resolveToolProfilePolicy,
 } from "../../../agents/tool-policy.js";
 import type { AgentModelConfig } from "../../../config/types.agents-shared.js";
@@ -24,50 +29,22 @@ type ToolAllowlistSource = {
   entries: string[];
 };
 
-type ActiveSandboxToolPolicy = {
-  labels: string[];
-  dedupeKey: string;
-  policy: Record<string, unknown>;
-  nonSandboxToolPolicyBlocksMcp: boolean;
-};
-
-type PickedSandboxToolPolicyField = {
-  value: unknown;
-  label?: string;
-  defined: boolean;
-};
-
-type ToolPolicyConfig = {
-  allow?: string[];
-  alsoAllow?: string[];
-  deny?: string[];
-  profile?: string;
-  byProvider?: unknown;
-};
+type ActiveSandboxToolPolicy = ReturnType<typeof buildEffectiveSandboxToolPolicy>;
 
 function normalizePluginIdMaybe(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? normalizePluginId(value) : undefined;
-}
-
-function collectListSource(params: { out: ToolAllowlistSource[]; value: unknown; label: string }) {
-  if (!Array.isArray(params.value)) {
-    return;
-  }
-  const entries = params.value
-    .filter((entry): entry is string => typeof entry === "string")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-  if (entries.length > 0) {
-    params.out.push({ label: params.label, entries });
-  }
 }
 
 function collectToolPolicySources(policy: unknown, label: string, out: ToolAllowlistSource[]) {
   if (!hasRecord(policy)) {
     return;
   }
-  collectListSource({ out, value: policy.allow, label: `${label}.allow` });
-  collectListSource({ out, value: policy.alsoAllow, label: `${label}.alsoAllow` });
+  for (const key of ["allow", "alsoAllow"] as const) {
+    const entries = normalizeTrimmedStringList(policy[key]);
+    if (entries.length > 0) {
+      out.push({ label: `${label}.${key}`, entries });
+    }
+  }
 
   if (hasRecord(policy.byProvider)) {
     for (const [providerId, providerPolicy] of Object.entries(policy.byProvider)) {
@@ -75,30 +52,21 @@ function collectToolPolicySources(policy: unknown, label: string, out: ToolAllow
     }
   }
 
-  const sandboxTools = hasRecord(policy.sandbox) ? policy.sandbox.tools : undefined;
-  collectToolPolicySources(sandboxTools, `${label}.sandbox.tools`, out);
-
-  const subagentTools = hasRecord(policy.subagents) ? policy.subagents.tools : undefined;
-  collectToolPolicySources(subagentTools, `${label}.subagents.tools`, out);
+  for (const key of ["sandbox", "subagents"] as const) {
+    const tools = hasRecord(policy[key]) ? policy[key].tools : undefined;
+    collectToolPolicySources(tools, `${label}.${key}.tools`, out);
+  }
 }
 
 function collectToolAllowlistSources(cfg: OpenClawConfig): ToolAllowlistSource[] {
   const sources: ToolAllowlistSource[] = [];
   collectToolPolicySources(cfg.tools, "tools", sources);
-  const agentList = cfg.agents?.list;
-  if (Array.isArray(agentList)) {
-    agentList.forEach((agent, index) => {
-      if (!hasRecord(agent)) {
-        return;
-      }
-      collectToolPolicySources(agent.tools, `agents.list[${index}].tools`, sources);
-    });
+  for (const { entry: agent, source } of listAgentEntriesWithSource(cfg)) {
+    const label =
+      source.kind === "entries" ? `agents.entries.${source.key}` : `agents.list[${source.index}]`;
+    collectToolPolicySources(agent.tools, `${label}.tools`, sources);
   }
   return sources;
-}
-
-function collectSortedSourceLabels(labels: Iterable<string>): string[] {
-  return sortUniqueStrings(labels);
 }
 
 function formatSortedSourceLabels(sorted: readonly string[]): string {
@@ -109,11 +77,11 @@ function formatSortedSourceLabels(sorted: readonly string[]): string {
 }
 
 function formatSourceLabels(labels: Iterable<string>): string {
-  return formatSortedSourceLabels(collectSortedSourceLabels(labels));
+  return formatSortedSourceLabels(sortUniqueStrings(labels));
 }
 
 function formatSourceLabelSubject(labels: Iterable<string>): { text: string; verb: "does" | "do" } {
-  const sorted = collectSortedSourceLabels(labels);
+  const sorted = sortUniqueStrings(labels);
   return {
     text: formatSortedSourceLabels(sorted),
     verb: sorted.length === 1 ? "does" : "do",
@@ -125,7 +93,7 @@ function collectToolOwners(registry: PluginManifestRegistry): Map<string, string
   for (const plugin of registry.plugins) {
     const pluginId = normalizePluginId(plugin.id);
     for (const toolNameRaw of plugin.contracts?.tools ?? []) {
-      const toolName = normalizeToolName(toolNameRaw);
+      const toolName = normalizeToolPolicyName(toolNameRaw);
       if (!toolName) {
         continue;
       }
@@ -135,24 +103,12 @@ function collectToolOwners(registry: PluginManifestRegistry): Map<string, string
   return owners;
 }
 
-function collectKnownPluginIds(registry: PluginManifestRegistry): Set<string> {
-  return new Set(registry.plugins.map((plugin) => normalizePluginId(plugin.id)));
-}
-
 function collectConfiguredMcpServerNames(cfg: OpenClawConfig): string[] {
-  const servers = cfg.mcp?.servers;
-  if (!hasRecord(servers)) {
-    return [];
-  }
-  return Object.entries(servers)
-    .filter(([, value]) => hasRecord(value))
+  return Object.entries(asOptionalRecord(cfg.mcp?.servers) ?? {})
+    .filter(([, value]) => hasRecord(value) && value.enabled !== false)
     .map(([name]) => name.trim())
     .filter(Boolean)
     .toSorted((left, right) => left.localeCompare(right));
-}
-
-function asToolPolicyConfig(value: unknown): ToolPolicyConfig | undefined {
-  return hasRecord(value) ? (value as ToolPolicyConfig) : undefined;
 }
 
 function isSandboxModeActive(mode: unknown): boolean {
@@ -160,44 +116,7 @@ function isSandboxModeActive(mode: unknown): boolean {
 }
 
 function getList(value: unknown, key: "allow" | "alsoAllow" | "deny"): string[] | undefined {
-  if (!hasRecord(value)) {
-    return undefined;
-  }
-  const raw = value[key];
-  if (!Array.isArray(raw)) {
-    return undefined;
-  }
-  return raw
-    .filter((entry): entry is string => typeof entry === "string")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-}
-
-function pickSandboxToolPolicyField(params: {
-  agentPolicy: unknown;
-  globalPolicy: unknown;
-  key: "allow" | "alsoAllow" | "deny";
-  agentLabel: string;
-}): PickedSandboxToolPolicyField {
-  const agentValue = hasRecord(params.agentPolicy) ? params.agentPolicy[params.key] : undefined;
-  if (Array.isArray(agentValue)) {
-    return {
-      value: agentValue,
-      label: `${params.agentLabel}.${params.key}`,
-      defined: true,
-    };
-  }
-
-  const globalValue = hasRecord(params.globalPolicy) ? params.globalPolicy[params.key] : undefined;
-  if (Array.isArray(globalValue)) {
-    return {
-      value: globalValue,
-      label: `tools.sandbox.tools.${params.key}`,
-      defined: true,
-    };
-  }
-
-  return { value: undefined, defined: false };
+  return hasRecord(value) ? normalizeArrayBackedTrimmedStringList(value[key]) : undefined;
 }
 
 function buildEffectiveSandboxToolPolicy(params: {
@@ -205,44 +124,29 @@ function buildEffectiveSandboxToolPolicy(params: {
   agentLabel?: string;
   globalPolicy: unknown;
   nonSandboxToolPolicyBlocksMcp: boolean;
-}): ActiveSandboxToolPolicy {
-  const agentLabel = params.agentLabel ?? "agents.list[].tools.sandbox.tools";
-  const allow = pickSandboxToolPolicyField({
-    agentPolicy: params.agentPolicy,
-    globalPolicy: params.globalPolicy,
-    key: "allow",
-    agentLabel,
-  });
-  const alsoAllow = pickSandboxToolPolicyField({
-    agentPolicy: params.agentPolicy,
-    globalPolicy: params.globalPolicy,
-    key: "alsoAllow",
-    agentLabel,
-  });
-  const deny = pickSandboxToolPolicyField({
-    agentPolicy: params.agentPolicy,
-    globalPolicy: params.globalPolicy,
-    key: "deny",
-    agentLabel,
-  });
-
+}) {
+  const agentLabel = params.agentLabel ?? "agents.entries.*.tools.sandbox.tools";
   const policy: Record<string, unknown> = {};
-  if (allow.defined) {
-    policy.allow = allow.value;
-  }
-  if (alsoAllow.defined) {
-    policy.alsoAllow = alsoAllow.value;
-  }
-  if (deny.defined) {
-    policy.deny = deny.value;
+  const fieldLabels: Partial<Record<"allow" | "alsoAllow" | "deny", string>> = {};
+  for (const key of ["allow", "alsoAllow", "deny"] as const) {
+    for (const [value, label] of [
+      [params.agentPolicy, agentLabel],
+      [params.globalPolicy, "tools.sandbox.tools"],
+    ] as const) {
+      if (hasRecord(value) && Array.isArray(value[key])) {
+        policy[key] = value[key];
+        fieldLabels[key] = `${label}.${key}`;
+        break;
+      }
+    }
   }
 
-  const allowLabels = [allow.label, alsoAllow.label].filter((label): label is string =>
+  const allowLabels = [fieldLabels.allow, fieldLabels.alsoAllow].filter((label): label is string =>
     Boolean(label),
   );
   const labels = allowLabels.length > 0 ? allowLabels : ["tools.sandbox.tools.alsoAllow (unset)"];
   const dedupeLabels = uniqueStrings(
-    [...labels, deny.label].filter((label): label is string => Boolean(label)),
+    [...labels, fieldLabels.deny].filter((label): label is string => Boolean(label)),
   );
 
   return {
@@ -267,66 +171,51 @@ function collectActiveSandboxToolPolicies(
     }
     out.set(entry.dedupeKey, entry);
   };
-  const addGlobalPolicy = () => {
+
+  const defaultSandboxActive = isSandboxModeActive(cfg.agents?.defaults?.sandbox?.mode);
+  if (defaultSandboxActive) {
     addPolicy(
       buildEffectiveSandboxToolPolicy({
         globalPolicy,
         nonSandboxToolPolicyBlocksMcp: globalToolPolicyBlocksMcp,
       }),
     );
-  };
-
-  const defaultSandboxActive = isSandboxModeActive(cfg.agents?.defaults?.sandbox?.mode);
-  if (defaultSandboxActive) {
-    addGlobalPolicy();
   }
 
-  const agentList = cfg.agents?.list;
-  if (Array.isArray(agentList)) {
-    agentList.forEach((agent, index) => {
-      if (!hasRecord(agent)) {
-        return;
-      }
-      const agentSandbox = hasRecord(agent.sandbox) ? agent.sandbox : undefined;
-      const explicitMode = agentSandbox?.mode;
-      const agentSandboxActive =
-        explicitMode === undefined ? defaultSandboxActive : isSandboxModeActive(explicitMode);
-      if (!agentSandboxActive) {
-        return;
-      }
-      const agentTools = hasRecord(agent.tools) ? agent.tools : undefined;
-      const agentToolsSandbox = hasRecord(agentTools?.sandbox) ? agentTools.sandbox : undefined;
-      const agentPolicy = hasRecord(agentToolsSandbox?.tools) ? agentToolsSandbox.tools : undefined;
-      addPolicy(
-        buildEffectiveSandboxToolPolicy({
-          agentPolicy,
-          agentLabel: `agents.list[${index}].tools.sandbox.tools`,
-          globalPolicy,
-          nonSandboxToolPolicyBlocksMcp: nonSandboxToolPoliciesBlockMcp({
-            cfg,
-            serverNames,
-            agent,
-          }),
+  for (const { entry: agent, source } of listAgentEntriesWithSource(cfg)) {
+    const agentSandbox = asOptionalRecord(agent.sandbox);
+    const explicitMode = agentSandbox?.mode;
+    const agentSandboxActive =
+      explicitMode === undefined ? defaultSandboxActive : isSandboxModeActive(explicitMode);
+    if (!agentSandboxActive) {
+      continue;
+    }
+    const agentToolsSandbox = asOptionalRecord(asOptionalRecord(agent.tools)?.sandbox);
+    const agentPolicy = asOptionalRecord(agentToolsSandbox?.tools);
+    const label =
+      source.kind === "entries" ? `agents.entries.${source.key}` : `agents.list[${source.index}]`;
+    addPolicy(
+      buildEffectiveSandboxToolPolicy({
+        agentPolicy,
+        agentLabel: `${label}.tools.sandbox.tools`,
+        globalPolicy,
+        nonSandboxToolPolicyBlocksMcp: nonSandboxToolPoliciesBlockMcp({
+          cfg,
+          serverNames,
+          agent,
         }),
-      );
-    });
+      }),
+    );
   }
 
   return [...out.values()];
-}
-
-function buildMcpProbeToolNames(serverNames: readonly string[]): string[] {
-  const usedNames = new Set<string>();
-  return serverNames.map(
-    (serverName) => `${sanitizeServerName(serverName, usedNames)}${TOOL_NAME_SEPARATOR}probe`,
-  );
 }
 
 function buildMcpToolNamePrefixes(serverNames: readonly string[]): string[] {
   const usedNames = new Set<string>();
   return serverNames
     .map((serverName) =>
-      normalizeToolName(`${sanitizeServerName(serverName, usedNames)}${TOOL_NAME_SEPARATOR}`),
+      normalizeToolPolicyName(`${sanitizeServerName(serverName, usedNames)}${TOOL_NAME_SEPARATOR}`),
     )
     .filter(Boolean);
 }
@@ -336,7 +225,7 @@ function entriesMatchMcpTool(
   serverNames: readonly string[],
   mode: "any" | "every",
 ): boolean {
-  const normalizedEntries = entries.map(normalizeToolName).filter(Boolean);
+  const normalizedEntries = entries.map(normalizeToolPolicyName).filter(Boolean);
   if (
     normalizedEntries.some(
       (entry) => entry === "*" || entry === "bundle-mcp" || entry === "group:plugins",
@@ -345,73 +234,42 @@ function entriesMatchMcpTool(
     return true;
   }
   const serverPrefixes = buildMcpToolNamePrefixes(serverNames);
-  const patterns = compileGlobPatterns({ raw: normalizedEntries, normalize: normalizeToolName });
-  const probeNames = buildMcpProbeToolNames(serverNames).map(normalizeToolName);
-  const prefixOrPatternMatches = (prefix: string, index: number) =>
+  const patterns = compileGlobPatterns({
+    raw: normalizedEntries,
+    normalize: normalizeToolPolicyName,
+  });
+  const prefixOrPatternMatches = (prefix: string) =>
     normalizedEntries.some((entry) => entry.length > prefix.length && entry.startsWith(prefix)) ||
-    matchesAnyGlobPattern(probeNames[index] ?? "", patterns);
+    matchesAnyGlobPattern(`${prefix}probe`, patterns);
   return mode === "every"
-    ? serverPrefixes.every((prefix, index) => prefixOrPatternMatches(prefix, index))
-    : serverPrefixes.some((prefix, index) => prefixOrPatternMatches(prefix, index));
+    ? serverPrefixes.every(prefixOrPatternMatches)
+    : serverPrefixes.some(prefixOrPatternMatches);
 }
 
-function entriesMatchAnyMcpTool(
-  entries: readonly string[],
-  serverNames: readonly string[],
-): boolean {
-  return entriesMatchMcpTool(entries, serverNames, "any");
-}
-
-function entriesMatchEveryMcpTool(
-  entries: readonly string[],
-  serverNames: readonly string[],
-): boolean {
-  return entriesMatchMcpTool(entries, serverNames, "every");
-}
-
-function sandboxPolicyAllowsAllMcpServers(
+function toolPolicyAllowsMcpServers(
   policy: unknown,
   serverNames: readonly string[],
+  mode: "any" | "every",
+  allowUnspecified = false,
 ): boolean {
   const allow = getList(policy, "allow");
-  if (Array.isArray(allow) && allow.length === 0) {
+  if (allow?.length === 0 || (allow === undefined && allowUnspecified)) {
     return true;
   }
   const entries = [...(allow ?? []), ...(getList(policy, "alsoAllow") ?? [])];
-  return entriesMatchEveryMcpTool(entries, serverNames);
-}
-
-function toolPolicyAllowsAnyMcpServer(policy: unknown, serverNames: readonly string[]): boolean {
-  const allow = getList(policy, "allow");
-  if (Array.isArray(allow) && allow.length === 0) {
-    return true;
-  }
-  const entries = [...(allow ?? []), ...(getList(policy, "alsoAllow") ?? [])];
-  return entriesMatchAnyMcpTool(entries, serverNames);
+  return entriesMatchMcpTool(entries, serverNames, mode);
 }
 
 function toolPolicyDeniesAllMcpServers(policy: unknown, serverNames: readonly string[]): boolean {
   const deny = getList(policy, "deny") ?? [];
-  return entriesMatchEveryMcpTool(deny, serverNames);
-}
-
-function sandboxPolicyIntentionallyDeniesAllMcpServers(
-  policy: unknown,
-  serverNames: readonly string[],
-): boolean {
-  return toolPolicyDeniesAllMcpServers(policy, serverNames);
+  return entriesMatchMcpTool(deny, serverNames, "every");
 }
 
 function nonSandboxToolPolicyBlocksMcp(policy: unknown, serverNames: readonly string[]): boolean {
-  if (toolPolicyDeniesAllMcpServers(policy, serverNames)) {
-    return true;
-  }
-  const allow = getList(policy, "allow");
-  if (!Array.isArray(allow) || allow.length === 0) {
-    return false;
-  }
-  const entries = [...allow, ...(getList(policy, "alsoAllow") ?? [])];
-  return !entriesMatchAnyMcpTool(entries, serverNames);
+  return (
+    toolPolicyDeniesAllMcpServers(policy, serverNames) ||
+    !toolPolicyAllowsMcpServers(policy, serverNames, "any", true)
+  );
 }
 
 function profileToolPolicyBlocksMcp(policy: unknown, serverNames: readonly string[]): boolean {
@@ -420,7 +278,7 @@ function profileToolPolicyBlocksMcp(policy: unknown, serverNames: readonly strin
     resolveToolProfilePolicy(profile),
     getList(policy, "alsoAllow"),
   );
-  return Boolean(profilePolicy && !toolPolicyAllowsAnyMcpServer(profilePolicy, serverNames));
+  return Boolean(profilePolicy && !toolPolicyAllowsMcpServers(profilePolicy, serverNames, "any"));
 }
 
 function nonSandboxToolPoliciesBlockMcp(params: {
@@ -429,21 +287,21 @@ function nonSandboxToolPoliciesBlockMcp(params: {
   agent?: Record<string, unknown>;
 }): boolean {
   const globalTools = params.cfg.tools;
-  const agentTools = asToolPolicyConfig(params.agent?.tools);
+  const agentTools = asOptionalRecord(params.agent?.tools);
   const modelRef = resolveDoctorPrimaryModelRef(
     params.cfg,
     params.agent?.model as AgentModelConfig,
   );
-  const globalProviderPolicy = resolveProviderToolPolicy({
-    byProvider: globalTools?.byProvider,
-    modelProvider: modelRef.provider,
-    modelId: modelRef.model,
-  });
-  const agentProviderPolicy = resolveProviderToolPolicy({
-    byProvider: hasRecord(agentTools?.byProvider) ? agentTools.byProvider : undefined,
-    modelProvider: modelRef.provider,
-    modelId: modelRef.model,
-  });
+  const [globalProviderPolicy, agentProviderPolicy] = [
+    globalTools?.byProvider,
+    asOptionalRecord(agentTools?.byProvider),
+  ].map((byProvider) =>
+    resolveProviderToolPolicy({
+      byProvider,
+      modelProvider: modelRef.provider,
+      modelId: modelRef.model,
+    }),
+  );
   const profilePolicy = {
     profile: agentTools?.profile ?? globalTools?.profile,
     alsoAllow: agentTools?.alsoAllow ?? globalTools?.alsoAllow,
@@ -456,10 +314,9 @@ function nonSandboxToolPoliciesBlockMcp(params: {
   return (
     profileToolPolicyBlocksMcp(profilePolicy, params.serverNames) ||
     profileToolPolicyBlocksMcp(providerProfilePolicy, params.serverNames) ||
-    nonSandboxToolPolicyBlocksMcp(globalTools, params.serverNames) ||
-    nonSandboxToolPolicyBlocksMcp(globalProviderPolicy, params.serverNames) ||
-    nonSandboxToolPolicyBlocksMcp(agentTools, params.serverNames) ||
-    nonSandboxToolPolicyBlocksMcp(agentProviderPolicy, params.serverNames)
+    [globalTools, globalProviderPolicy, agentTools, agentProviderPolicy].some((policy) =>
+      nonSandboxToolPolicyBlocksMcp(policy, params.serverNames),
+    )
   );
 }
 
@@ -479,18 +336,12 @@ function collectSandboxMcpAllowlistWarnings(cfg: OpenClawConfig): string[] {
     return [];
   }
   const sandboxPolicies = collectActiveSandboxToolPolicies(cfg, serverNames);
-  if (sandboxPolicies.length === 0) {
-    return [];
-  }
   const issueSources = sandboxPolicies
     .filter(
-      ({ policy }) =>
-        !sandboxPolicyAllowsAllMcpServers(policy, serverNames) &&
-        !sandboxPolicyIntentionallyDeniesAllMcpServers(policy, serverNames),
-    )
-    .filter(
-      ({ nonSandboxToolPolicyBlocksMcp: nonSandboxToolPolicyBlocksMcpLocal }) =>
-        !nonSandboxToolPolicyBlocksMcpLocal,
+      ({ policy, nonSandboxToolPolicyBlocksMcp: blocked }) =>
+        !toolPolicyAllowsMcpServers(policy, serverNames, "every") &&
+        !toolPolicyDeniesAllMcpServers(policy, serverNames) &&
+        !blocked,
     )
     .flatMap(({ labels }) => labels);
   if (issueSources.length === 0) {
@@ -503,9 +354,6 @@ function collectSandboxMcpAllowlistWarnings(cfg: OpenClawConfig): string[] {
 }
 
 function formatPluginList(pluginIds: readonly string[]): string {
-  if (pluginIds.length === 1) {
-    return `"${pluginIds[0]}"`;
-  }
   return pluginIds.map((pluginId) => `"${pluginId}"`).join(", ");
 }
 
@@ -539,7 +387,7 @@ export function collectPluginToolAllowlistWarnings(params: {
   }
 
   const wildcardSources = sources
-    .filter((source) => source.entries.some((entry) => normalizeToolName(entry) === "*"))
+    .filter((source) => source.entries.some((entry) => normalizeToolPolicyName(entry) === "*"))
     .map((source) => source.label);
   if (wildcardSources.length > 0) {
     warnings.push(
@@ -549,7 +397,7 @@ export function collectPluginToolAllowlistWarnings(params: {
 
   const exactEntries = sources.flatMap((source) =>
     source.entries
-      .map((entry) => ({ source: source.label, entry: normalizeToolName(entry) }))
+      .map((entry) => ({ source: source.label, entry: normalizeToolPolicyName(entry) }))
       .filter(({ entry }) => entry && entry !== "*" && entry !== "group:plugins"),
   );
   if (exactEntries.length === 0) {
@@ -562,7 +410,7 @@ export function collectPluginToolAllowlistWarnings(params: {
       config: params.cfg,
       env: params.env ?? process.env,
     }).manifestRegistry;
-  const knownPluginIds = collectKnownPluginIds(registry);
+  const knownPluginIds = new Set(registry.plugins.map((plugin) => normalizePluginId(plugin.id)));
   const toolOwners = collectToolOwners(registry);
   const missingPluginIssues = new Map<string, Set<string>>();
   const missingToolOwnerIssues = new Map<string, Set<string>>();
@@ -574,10 +422,8 @@ export function collectPluginToolAllowlistWarnings(params: {
       continue;
     }
 
-    const owners = (toolOwners.get(entry) ?? []).filter(
-      (ownerPluginId) => !allowedPlugins.has(ownerPluginId),
-    );
-    if (owners.length > 0 && owners.length === (toolOwners.get(entry) ?? []).length) {
+    const owners = toolOwners.get(entry) ?? [];
+    if (owners.length > 0 && owners.every((ownerPluginId) => !allowedPlugins.has(ownerPluginId))) {
       addIssue(missingToolOwnerIssues, `${entry}\u0000${owners.join("\u0000")}`, source);
     }
   }

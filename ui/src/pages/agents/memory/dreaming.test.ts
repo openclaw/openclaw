@@ -1,18 +1,16 @@
 // Control UI tests cover dreaming behavior.
-import { describe, expect, it, vi } from "vitest";
-import type { RuntimeConfigCapability } from "../../../lib/config/index.ts";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
+import { i18n } from "../../../i18n/index.ts";
+import type { TranslationMap } from "../../../i18n/lib/types.ts";
+import { en } from "../../../i18n/locales/en.ts";
+import type { RuntimeConfigCapability } from "../../../lib/config/runtime-config-capability.ts";
+import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import {
-  backfillDreamDiary,
   copyDreamingArchivePath,
   createDreamingState,
-  dedupeDreamDiary,
-  loadDreamDiary,
-  loadDreamingStatus,
-  loadWikiImportInsights,
-  loadWikiMemoryPalace,
-  repairDreamingArtifacts,
-  resetGroundedShortTerm,
-  resetDreamDiary,
+  loadDreamingResource,
+  runDreamDiaryAction,
   resolveConfiguredDreaming,
   updateDreamingEnabled,
   type DreamingState,
@@ -24,10 +22,57 @@ type DreamingConfigCapability = Pick<
   "lookupSchemaPath" | "patch" | "state"
 >;
 
+let restoreTranslations = () => {};
+
+function asTranslationMap(value: string | TranslationMap | undefined): TranslationMap {
+  return value && typeof value === "object" ? value : {};
+}
+
+beforeAll(() => {
+  const dreaming = asTranslationMap(en.dreaming);
+  i18n.registerTranslation("en", {
+    ...en,
+    dreaming: {
+      ...dreaming,
+      actions: {
+        dedupeRemovedOneAndKept: "Removed {removed} duplicate dream entry and kept {kept}.",
+        dedupeRemovedManyAndKept: "Removed {removed} duplicate dream entries and kept {kept}.",
+        dedupeRemovedOne: "Removed {removed} duplicate dream entry.",
+        dedupeRemovedMany: "Removed {removed} duplicate dream entries.",
+        repairArchivedThreadCorpus: "archived session corpus",
+        repairArchivedIngestionState: "archived ingestion state",
+        repairArchivedDreamDiary: "archived dream diary",
+        repairNoChanges: "Dream cache repair finished with no changes.",
+        repairCompleteWithArchive: "Dream cache repair complete: {actions}. Archive: {archiveDir}",
+        repairComplete: "Dream cache repair complete: {actions}.",
+        backfillComplete: "Backfilled {count} dream diary entries.",
+        resetDiaryComplete: "Removed {count} backfilled dream diary entries.",
+        clearReplayedComplete: "Cleared {count} replayed short-term entries.",
+        complete: "Dream diary action complete.",
+        confirmRepairDescription:
+          "This archives derived dream cache files and rebuilds them from clean inputs. Your dream diary stays untouched.",
+        confirmDedupeDescription:
+          "This rewrites DREAMS.md and removes only exact duplicate diary entries.",
+        archivePathCopied: "Archive path copied.",
+        archivePathCopyFailed: "Could not copy archive path.",
+        updateFailed: "Could not update dreaming settings.",
+        unsupportedPlugin:
+          'Selected memory plugin "{pluginId}" does not support dreaming settings.',
+        configHashMissing: "Config hash missing; refresh and retry.",
+      },
+    },
+  });
+  restoreTranslations = () => i18n.registerTranslation("en", en);
+});
+
+afterAll(() => {
+  restoreTranslations();
+});
+
 function createState(): { state: DreamingState; request: ReturnType<typeof vi.fn<TestRequest>> } {
   const request = vi.fn<TestRequest>();
   const state: DreamingState = {
-    ...createDreamingState(),
+    ...createDreamingState({ selectedAgentId: "main" }),
     client: {
       request,
     } as unknown as DreamingState["client"],
@@ -35,6 +80,21 @@ function createState(): { state: DreamingState; request: ReturnType<typeof vi.fn
     configSnapshot: { hash: "hash-1" },
   };
   return { state, request };
+}
+
+function createMemoryWikiConfigSnapshot() {
+  return {
+    hash: "hash-1",
+    config: {
+      plugins: {
+        entries: {
+          "memory-wiki": {
+            enabled: true,
+          },
+        },
+      },
+    },
+  };
 }
 
 function createConfig(state: DreamingState): DreamingConfigCapability {
@@ -50,19 +110,6 @@ function createConfig(state: DreamingState): DreamingConfigCapability {
   };
 }
 
-function createDeferred<T>() {
-  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
-  let reject: ((reason?: unknown) => void) | undefined;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred promise callbacks to be initialized");
-  }
-  return { promise, resolve, reject };
-}
-
 function getConfigPatchRawPayload(config: DreamingConfigCapability): Record<string, unknown> {
   const patch = vi.mocked(config.patch).mock.calls[0]?.[0]?.raw;
   if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
@@ -71,186 +118,67 @@ function getConfigPatchRawPayload(config: DreamingConfigCapability): Record<stri
   return patch;
 }
 
+const wikiResources = [
+  {
+    label: "import insights",
+    key: "wikiImportInsights",
+    method: "wiki.importInsights",
+    payload: () => ({
+      sourceType: "chatgpt" as const,
+      totalItems: 0,
+      totalClusters: 0,
+      clusters: [],
+    }),
+  },
+  {
+    label: "overview",
+    key: "wikiOverview",
+    method: "wiki.overview",
+    payload: () => ({
+      totalItems: 0,
+      totalPages: 0,
+      pageCounts: { source: 0, synthesis: 0, report: 0, entity: 0, concept: 0 },
+      totalClaims: 0,
+      totalQuestions: 0,
+      totalContradictions: 0,
+      clusters: [],
+    }),
+  },
+] as const;
+
 describe("dreaming controller", () => {
-  it("loads and normalizes dreaming status from doctor.memory.status", async () => {
+  it("retains the authoritative dreaming status from doctor.memory.status", async () => {
     const { state, request } = createState();
-    request.mockResolvedValue({
-      dreaming: {
-        enabled: true,
-        timezone: "America/Los_Angeles",
-        verboseLogging: false,
-        storageMode: "inline",
-        separateReports: false,
-        shortTermCount: 8,
-        recallSignalCount: 14,
-        dailySignalCount: 6,
-        groundedSignalCount: 5,
-        totalSignalCount: 20,
-        phaseSignalCount: 11,
-        lightPhaseHitCount: 7,
-        remPhaseHitCount: 4,
-        promotedTotal: 21,
-        promotedToday: 2,
-        shortTermEntries: [
-          {
-            key: "memory:memory/2026-04-05.md:1:2",
-            path: "memory/2026-04-05.md",
-            startLine: 1,
-            endLine: 2,
-            snippet: "Emma prefers shorter, lower-pressure check-ins.",
-            recallCount: 2,
-            dailyCount: 1,
-            groundedCount: 1,
-            totalSignalCount: 3,
-            lightHits: 1,
-            remHits: 2,
-            phaseHitCount: 3,
-            lastRecalledAt: "2026-04-05T01:02:03.000Z",
-          },
-        ],
-        signalEntries: [
-          {
-            key: "memory:memory/2026-04-05.md:1:2",
-            path: "memory/2026-04-05.md",
-            startLine: 1,
-            endLine: 2,
-            snippet: "Emma prefers shorter, lower-pressure check-ins.",
-            recallCount: 2,
-            dailyCount: 1,
-            groundedCount: 1,
-            totalSignalCount: 3,
-            lightHits: 1,
-            remHits: 2,
-            phaseHitCount: 3,
-          },
-        ],
-        promotedEntries: [
-          {
-            key: "memory:memory/2026-04-04.md:4:5",
-            path: "memory/2026-04-04.md",
-            startLine: 4,
-            endLine: 5,
-            snippet: "Use the Happy Together calendar for flights.",
-            recallCount: 3,
-            dailyCount: 2,
-            groundedCount: 0,
-            totalSignalCount: 5,
-            lightHits: 0,
-            remHits: 0,
-            phaseHitCount: 0,
-            promotedAt: "2026-04-05T04:00:00.000Z",
-          },
-        ],
-        phases: {
-          light: {
-            enabled: true,
-            cron: "0 */6 * * *",
-            lookbackDays: 2,
-            limit: 100,
-            managedCronPresent: true,
-            nextRunAtMs: 12345,
-          },
-          deep: {
-            enabled: true,
-            cron: "0 3 * * *",
-            limit: 10,
-            minScore: 0.8,
-            minRecallCount: 3,
-            minUniqueQueries: 3,
-            recencyHalfLifeDays: 14,
-            maxAgeDays: 30,
-            managedCronPresent: true,
-            nextRunAtMs: 23456,
-          },
-          rem: {
-            enabled: true,
-            cron: "0 5 * * 0",
-            lookbackDays: 7,
-            limit: 10,
-            minPatternStrength: 0.75,
-            managedCronPresent: true,
-            nextRunAtMs: 34567,
-          },
-        },
-      },
-    });
+    const payload = { dreaming: { enabled: true, shortTermCount: 8 } };
+    request.mockResolvedValue(payload);
 
-    await loadDreamingStatus(state);
+    await loadDreamingResource(state, "dreamingStatus");
 
-    expect(request).toHaveBeenCalledWith("doctor.memory.status", {});
-    const status = state.dreamingStatus;
-    expect(status?.enabled).toBe(true);
-    expect(status?.shortTermCount).toBe(8);
-    expect(status?.groundedSignalCount).toBe(5);
-    expect(status?.totalSignalCount).toBe(20);
-    expect(status?.phaseSignalCount).toBe(11);
-    expect(status?.promotedToday).toBe(2);
-    expect(status?.shortTermEntries).toHaveLength(1);
-    expect(status?.shortTermEntries[0]?.snippet).toBe(
-      "Emma prefers shorter, lower-pressure check-ins.",
-    );
-    expect(status?.shortTermEntries[0]?.totalSignalCount).toBe(3);
-    expect(status?.shortTermEntries[0]?.groundedCount).toBe(1);
-    expect(status?.shortTermEntries[0]?.phaseHitCount).toBe(3);
-    expect(status?.promotedEntries).toHaveLength(1);
-    expect(status?.promotedEntries[0]?.snippet).toBe(
-      "Use the Happy Together calendar for flights.",
-    );
-    expect(status?.phases?.deep?.minScore).toBe(0.8);
-    expect(status?.phases?.deep?.nextRunAtMs).toBe(23456);
+    expect(request).toHaveBeenCalledWith("doctor.memory.status", { agentId: "main" });
+    expect(state.dreamingStatus).toBe(payload.dreaming);
     expect(state.dreamingStatusLoading).toBe(false);
     expect(state.dreamingStatusError).toBeNull();
   });
 
-  it("loads dreaming status for the selected agent", async () => {
+  it("does not request agent-scoped resources or actions without a selected agent", async () => {
     const { state, request } = createState();
-    state.selectedAgentId = "research-analyst";
-    request.mockResolvedValue({
-      dreaming: {
-        enabled: true,
-        shortTermCount: 1,
-      },
-    });
+    state.selectedAgentId = null;
+    state.hello = gatewayHelloForMethods(
+      ["wiki.importInsights", "wiki.overview", "doctor.memory.backfillDreamDiary"],
+      ["operator.write"],
+    );
 
-    await loadDreamingStatus(state);
+    await Promise.all([
+      loadDreamingResource(state, "dreamingStatus"),
+      loadDreamingResource(state, "dreamDiary"),
+      loadDreamingResource(state, "wikiImportInsights"),
+      loadDreamingResource(state, "wikiOverview"),
+    ]);
 
-    expect(request).toHaveBeenCalledWith("doctor.memory.status", {
-      agentId: "research-analyst",
-    });
-  });
-
-  it("starts a new selected-agent status load and ignores stale completions", async () => {
-    const { state, request } = createState();
-    const agentA = createDeferred<unknown>();
-    const agentB = createDeferred<unknown>();
-    request.mockImplementation(async (_method: string, payload?: unknown) => {
-      const agentId =
-        typeof payload === "object" && payload !== null && "agentId" in payload
-          ? payload.agentId
-          : undefined;
-      return agentId === "agent-b" ? agentB.promise : agentA.promise;
-    });
-
-    state.selectedAgentId = "agent-a";
-    const firstLoad = loadDreamingStatus(state);
-    state.selectedAgentId = "agent-b";
-    const secondLoad = loadDreamingStatus(state);
-
-    expect(request).toHaveBeenCalledWith("doctor.memory.status", { agentId: "agent-a" });
-    expect(request).toHaveBeenCalledWith("doctor.memory.status", { agentId: "agent-b" });
-
-    agentB.resolve({ dreaming: { enabled: true, shortTermCount: 2 } });
-    await secondLoad;
-
-    expect(state.dreamingStatus?.shortTermCount).toBe(2);
-    expect(state.dreamingStatusLoading).toBe(false);
-
-    agentA.resolve({ dreaming: { enabled: true, shortTermCount: 1 } });
-    await firstLoad;
-
-    expect(state.dreamingStatus?.shortTermCount).toBe(2);
-    expect(state.dreamingStatusLoading).toBe(false);
-    expect(state.dreamingStatusError).toBeNull();
+    await expect(runDreamDiaryAction(state, "doctor.memory.backfillDreamDiary")).resolves.toBe(
+      false,
+    );
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("ignores older same-agent status completions after switching back", async () => {
@@ -264,11 +192,11 @@ describe("dreaming controller", () => {
       .mockImplementationOnce(async () => secondAgentA.promise);
 
     state.selectedAgentId = "agent-a";
-    const firstLoad = loadDreamingStatus(state);
+    const firstLoad = loadDreamingResource(state, "dreamingStatus");
     state.selectedAgentId = "agent-b";
-    const secondLoad = loadDreamingStatus(state);
+    const secondLoad = loadDreamingResource(state, "dreamingStatus");
     state.selectedAgentId = "agent-a";
-    const thirdLoad = loadDreamingStatus(state);
+    const thirdLoad = loadDreamingResource(state, "dreamingStatus");
 
     expect(request).toHaveBeenCalledWith("doctor.memory.status", { agentId: "agent-a" });
     expect(request).toHaveBeenCalledWith("doctor.memory.status", { agentId: "agent-b" });
@@ -290,170 +218,68 @@ describe("dreaming controller", () => {
     expect(state.dreamingStatusError).toBeNull();
   });
 
-  it("preserves unknown phase state when status omits phase metadata", async () => {
-    const { state, request } = createState();
-    request.mockResolvedValue({
-      dreaming: {
-        enabled: true,
-        shortTermCount: 1,
-        recallSignalCount: 0,
-        dailySignalCount: 0,
-        groundedSignalCount: 0,
-        totalSignalCount: 1,
-        phaseSignalCount: 0,
-        lightPhaseHitCount: 0,
-        remPhaseHitCount: 0,
-        promotedTotal: 0,
-        promotedToday: 0,
-        shortTermEntries: [],
-        signalEntries: [],
-        promotedEntries: [],
-      },
-    });
+  it.each(wikiResources)(
+    "keeps the newest $label response across an A-to-B-to-A agent switch",
+    async ({ key, method, payload }) => {
+      const { state, request } = createState();
+      const firstAgentA = createDeferred<unknown>();
+      const agentB = createDeferred<unknown>();
+      const secondAgentA = createDeferred<unknown>();
+      state.hello = gatewayHelloForMethods([method], []);
+      request
+        .mockImplementationOnce(async () => firstAgentA.promise)
+        .mockImplementationOnce(async () => agentB.promise)
+        .mockImplementationOnce(async () => secondAgentA.promise);
 
-    await loadDreamingStatus(state);
+      state.selectedAgentId = "agent-a";
+      const staleA = loadDreamingResource(state, key);
+      state.selectedAgentId = "agent-b";
+      const staleB = loadDreamingResource(state, key);
+      state.selectedAgentId = "agent-a";
+      const latest = loadDreamingResource(state, key);
+      const latestPayload = payload();
 
-    expect(state.dreamingStatus?.enabled).toBe(true);
-    expect(state.dreamingStatus?.phases).toBeUndefined();
-    expect(state.dreamingStatusError).toBeNull();
-  });
+      secondAgentA.resolve(latestPayload);
+      await latest;
+      expect(state[key]).toBe(latestPayload);
 
-  it("loads and normalizes wiki import insights", async () => {
-    const { state, request } = createState();
-    state.hello = {
-      type: "hello-ok",
-      protocol: 4,
-      auth: { role: "operator", scopes: [] },
-      features: { methods: ["wiki.importInsights"] },
-    };
-    state.configSnapshot = {
-      hash: "hash-1",
-      config: {
-        plugins: {
-          entries: {
-            "memory-wiki": {
-              enabled: true,
-            },
-          },
-        },
-      },
-    };
-    request.mockResolvedValue({
-      sourceType: "chatgpt",
-      totalItems: 2,
-      totalClusters: 1,
-      clusters: [
-        {
-          key: "topic/travel",
-          label: "Travel",
-          itemCount: 2,
-          highRiskCount: 1,
-          withheldCount: 1,
-          preferenceSignalCount: 1,
-          items: [
-            {
-              pagePath: "sources/chatgpt-2026-04-10-alpha.md",
-              title: "BA flight receipts process",
-              riskLevel: "low",
-              riskReasons: [],
-              labels: ["topic/travel"],
-              topicKey: "topic/travel",
-              topicLabel: "Travel",
-              digestStatus: "available",
-              activeBranchMessages: 4,
-              userMessageCount: 2,
-              assistantMessageCount: 2,
-              firstUserLine: "how do i get receipts?",
-              lastUserLine: "that option does not exist",
-              assistantOpener: "Use the BA request-a-receipt flow first.",
-              summary: "Use the BA request-a-receipt flow first.",
-              candidateSignals: ["prefers airline receipts"],
-              correctionSignals: [],
-              preferenceSignals: ["prefers airline receipts"],
-            },
-          ],
-        },
-      ],
-    });
+      firstAgentA.resolve(payload());
+      agentB.resolve(payload());
+      await Promise.all([staleA, staleB]);
 
-    await loadWikiImportInsights(state);
+      expect(request).toHaveBeenCalledWith(method, { agentId: "agent-a" });
+      expect(request).toHaveBeenCalledWith(method, { agentId: "agent-b" });
+      expect(state[key]).toBe(latestPayload);
+      expect(state.resourceRequests[key]).toBeUndefined();
+      expect(request).toHaveBeenCalledTimes(3);
+    },
+  );
 
-    expect(request).toHaveBeenCalledWith("wiki.importInsights", {});
-    expect(state.wikiImportInsights?.totalItems).toBe(2);
-    expect(state.wikiImportInsights?.totalClusters).toBe(1);
-    expect(state.wikiImportInsights?.clusters).toHaveLength(1);
-    expect(state.wikiImportInsights?.clusters[0]?.key).toBe("topic/travel");
-    expect(state.wikiImportInsights?.clusters[0]?.itemCount).toBe(2);
-    expect(state.wikiImportInsights?.clusters[0]?.withheldCount).toBe(1);
-    expect(state.wikiImportInsightsError).toBeNull();
-    expect(state.wikiImportInsightsLoading).toBe(false);
-  });
+  it.each(wikiResources)(
+    "invalidates an in-flight $label request when its gateway capability disappears",
+    async ({ key, method, payload }) => {
+      const { state, request } = createState();
+      const deferred = createDeferred<unknown>();
+      state.hello = gatewayHelloForMethods([method], []);
+      request.mockImplementationOnce(async () => deferred.promise);
 
-  it("loads wiki import insights for the selected agent", async () => {
-    const { state, request } = createState();
-    state.selectedAgentId = "support";
-    state.hello = {
-      type: "hello-ok",
-      protocol: 4,
-      auth: { role: "operator", scopes: [] },
-      features: { methods: ["wiki.importInsights"] },
-    };
-    request.mockResolvedValue({ sourceType: "chatgpt", totalItems: 1, clusters: [] });
+      const stale = loadDreamingResource(state, key);
+      state.hello = { ...state.hello, features: { methods: [] } };
+      await loadDreamingResource(state, key);
+      expect(state[key]).toBeNull();
 
-    await loadWikiImportInsights(state);
+      deferred.resolve(payload());
+      await stale;
 
-    expect(request).toHaveBeenCalledWith("wiki.importInsights", { agentId: "support" });
-  });
-
-  it("starts a new selected-agent import load and ignores stale completions", async () => {
-    const { state, request } = createState();
-    const agentA = createDeferred<unknown>();
-    const agentB = createDeferred<unknown>();
-    state.hello = {
-      type: "hello-ok",
-      protocol: 4,
-      auth: { role: "operator", scopes: [] },
-      features: { methods: ["wiki.importInsights"] },
-    };
-    request.mockImplementation(async (_method: string, payload?: unknown) => {
-      const agentId =
-        typeof payload === "object" && payload !== null && "agentId" in payload
-          ? payload.agentId
-          : undefined;
-      return agentId === "agent-b" ? agentB.promise : agentA.promise;
-    });
-
-    state.selectedAgentId = "agent-a";
-    const firstLoad = loadWikiImportInsights(state);
-    state.selectedAgentId = "agent-b";
-    const secondLoad = loadWikiImportInsights(state);
-
-    agentB.resolve({ sourceType: "chatgpt", totalItems: 2, clusters: [] });
-    await secondLoad;
-    agentA.resolve({ sourceType: "chatgpt", totalItems: 1, clusters: [] });
-    await firstLoad;
-
-    expect(request).toHaveBeenCalledWith("wiki.importInsights", { agentId: "agent-a" });
-    expect(request).toHaveBeenCalledWith("wiki.importInsights", { agentId: "agent-b" });
-    expect(state.wikiImportInsights?.totalItems).toBe(2);
-    expect(state.wikiImportInsightsLoading).toBe(false);
-    expect(state.wikiImportInsightsError).toBeNull();
-  });
+      expect(state[key]).toBeNull();
+      expect(state.resourceRequests[key]).toBeUndefined();
+      expect(request).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("falls back to config gating for wiki import insights when methods are not advertised", async () => {
     const { state, request } = createState();
-    state.configSnapshot = {
-      hash: "hash-1",
-      config: {
-        plugins: {
-          entries: {
-            "memory-wiki": {
-              enabled: true,
-            },
-          },
-        },
-      },
-    };
+    state.configSnapshot = createMemoryWikiConfigSnapshot();
     request.mockResolvedValue({
       sourceType: "chatgpt",
       totalItems: 1,
@@ -461,9 +287,9 @@ describe("dreaming controller", () => {
       clusters: [],
     });
 
-    await loadWikiImportInsights(state);
+    await loadDreamingResource(state, "wikiImportInsights");
 
-    expect(request).toHaveBeenCalledWith("wiki.importInsights", {});
+    expect(request).toHaveBeenCalledWith("wiki.importInsights", { agentId: "main" });
     expect(state.wikiImportInsights?.totalItems).toBe(1);
     expect(state.wikiImportInsights?.totalClusters).toBe(1);
     expect(state.wikiImportInsightsError).toBeNull();
@@ -482,11 +308,12 @@ describe("dreaming controller", () => {
       sourceType: "chatgpt",
       totalItems: 1,
       totalClusters: 1,
+      truncated: false,
       clusters: [],
     };
     state.wikiImportInsightsError = "unknown method: wiki.importInsights";
 
-    await loadWikiImportInsights(state);
+    await loadDreamingResource(state, "wikiImportInsights");
 
     expect(request).not.toHaveBeenCalled();
     expect(state.wikiImportInsights).toBeNull();
@@ -496,33 +323,18 @@ describe("dreaming controller", () => {
 
   it("skips wiki import insights when the gateway does not advertise the method", async () => {
     const { state, request } = createState();
-    state.hello = {
-      type: "hello-ok",
-      protocol: 4,
-      auth: { role: "operator", scopes: [] },
-      features: { methods: ["doctor.memory.status"] },
-    };
-    state.configSnapshot = {
-      hash: "hash-1",
-      config: {
-        plugins: {
-          entries: {
-            "memory-wiki": {
-              enabled: true,
-            },
-          },
-        },
-      },
-    };
+    state.hello = gatewayHelloForMethods(["doctor.memory.status"], []);
+    state.configSnapshot = createMemoryWikiConfigSnapshot();
     state.wikiImportInsights = {
       sourceType: "chatgpt",
       totalItems: 1,
       totalClusters: 1,
+      truncated: false,
       clusters: [],
     };
     state.wikiImportInsightsError = "unknown method: wiki.importInsights";
 
-    await loadWikiImportInsights(state);
+    await loadDreamingResource(state, "wikiImportInsights");
 
     expect(request).not.toHaveBeenCalled();
     expect(state.wikiImportInsights).toBeNull();
@@ -530,305 +342,9 @@ describe("dreaming controller", () => {
     expect(state.wikiImportInsightsLoading).toBe(false);
   });
 
-  it("loads and normalizes the wiki memory palace", async () => {
-    const { state, request } = createState();
-    state.hello = {
-      type: "hello-ok",
-      protocol: 4,
-      auth: { role: "operator", scopes: [] },
-      features: { methods: ["wiki.palace"] },
-    };
-    state.configSnapshot = {
-      hash: "hash-1",
-      config: {
-        plugins: {
-          entries: {
-            "memory-wiki": {
-              enabled: true,
-            },
-          },
-        },
-      },
-    };
-    request.mockResolvedValue({
-      totalItems: 1,
-      totalPages: 2,
-      pageCounts: {
-        synthesis: 1,
-        entity: 0,
-        concept: 0,
-        source: 1,
-        report: 0,
-      },
-      totalClaims: 2,
-      totalQuestions: 1,
-      totalContradictions: 1,
-      clusters: [
-        {
-          key: "synthesis",
-          label: "Syntheses",
-          itemCount: 1,
-          claimCount: 2,
-          questionCount: 1,
-          contradictionCount: 0,
-          items: [
-            {
-              pagePath: "syntheses/travel-system.md",
-              title: "Travel system",
-              kind: "synthesis",
-              claimCount: 2,
-              questionCount: 1,
-              contradictionCount: 0,
-              claims: ["prefers direct receipts"],
-              questions: ["should this become a playbook?"],
-              contradictions: [],
-              snippet: "Recurring travel admin friction.",
-            },
-          ],
-        },
-      ],
-    });
-
-    await loadWikiMemoryPalace(state);
-
-    expect(request).toHaveBeenCalledWith("wiki.palace", {});
-    expect(state.wikiMemoryPalace?.totalItems).toBe(1);
-    expect(state.wikiMemoryPalace?.totalPages).toBe(2);
-    expect(state.wikiMemoryPalace?.pageCounts.source).toBe(1);
-    expect(state.wikiMemoryPalace?.pageCounts.synthesis).toBe(1);
-    expect(state.wikiMemoryPalace?.totalClaims).toBe(2);
-    expect(state.wikiMemoryPalace?.clusters).toHaveLength(1);
-    expect(state.wikiMemoryPalace?.clusters[0]?.key).toBe("synthesis");
-    expect(state.wikiMemoryPalace?.clusters[0]?.label).toBe("Syntheses");
-    expect(state.wikiMemoryPalace?.clusters[0]?.items).toHaveLength(1);
-    expect(state.wikiMemoryPalace?.clusters[0]?.items[0]?.title).toBe("Travel system");
-    expect(state.wikiMemoryPalace?.clusters[0]?.items[0]?.claims).toEqual([
-      "prefers direct receipts",
-    ]);
-    expect(state.wikiMemoryPalaceError).toBeNull();
-    expect(state.wikiMemoryPalaceLoading).toBe(false);
-  });
-
-  it("loads the wiki memory palace for the selected agent", async () => {
-    const { state, request } = createState();
-    state.selectedAgentId = "marketing";
-    state.hello = {
-      type: "hello-ok",
-      protocol: 4,
-      auth: { role: "operator", scopes: [] },
-      features: { methods: ["wiki.palace"] },
-    };
-    request.mockResolvedValue({ totalItems: 1, clusters: [] });
-
-    await loadWikiMemoryPalace(state);
-
-    expect(request).toHaveBeenCalledWith("wiki.palace", { agentId: "marketing" });
-  });
-
-  it("starts a new selected-agent palace load and ignores stale completions", async () => {
-    const { state, request } = createState();
-    const agentA = createDeferred<unknown>();
-    const agentB = createDeferred<unknown>();
-    state.hello = {
-      type: "hello-ok",
-      protocol: 4,
-      auth: { role: "operator", scopes: [] },
-      features: { methods: ["wiki.palace"] },
-    };
-    request.mockImplementation(async (_method: string, payload?: unknown) => {
-      const agentId =
-        typeof payload === "object" && payload !== null && "agentId" in payload
-          ? payload.agentId
-          : undefined;
-      return agentId === "agent-b" ? agentB.promise : agentA.promise;
-    });
-
-    state.selectedAgentId = "agent-a";
-    const firstLoad = loadWikiMemoryPalace(state);
-    state.selectedAgentId = "agent-b";
-    const secondLoad = loadWikiMemoryPalace(state);
-
-    agentB.resolve({ totalItems: 2, clusters: [] });
-    await secondLoad;
-    agentA.resolve({ totalItems: 1, clusters: [] });
-    await firstLoad;
-
-    expect(request).toHaveBeenCalledWith("wiki.palace", { agentId: "agent-a" });
-    expect(request).toHaveBeenCalledWith("wiki.palace", { agentId: "agent-b" });
-    expect(state.wikiMemoryPalace?.totalItems).toBe(2);
-    expect(state.wikiMemoryPalaceLoading).toBe(false);
-    expect(state.wikiMemoryPalaceError).toBeNull();
-  });
-
-  it("derives legacy wiki memory palace page counts from clusters", async () => {
-    const { state, request } = createState();
-    state.hello = {
-      type: "hello-ok",
-      protocol: 4,
-      auth: { role: "operator", scopes: [] },
-      features: { methods: ["wiki.palace"] },
-    };
-    state.configSnapshot = {
-      hash: "hash-1",
-      config: {
-        plugins: {
-          entries: {
-            "memory-wiki": {
-              enabled: true,
-            },
-          },
-        },
-      },
-    };
-    request.mockResolvedValue({
-      totalItems: 1,
-      totalClaims: 2,
-      totalQuestions: 1,
-      totalContradictions: 0,
-      clusters: [
-        {
-          key: "synthesis",
-          label: "Syntheses",
-          itemCount: 1,
-          claimCount: 2,
-          questionCount: 1,
-          contradictionCount: 0,
-          items: [],
-        },
-      ],
-    });
-
-    await loadWikiMemoryPalace(state);
-
-    expect(state.wikiMemoryPalace?.totalPages).toBe(1);
-    expect(state.wikiMemoryPalace?.pageCounts).toEqual({
-      synthesis: 1,
-      entity: 0,
-      concept: 0,
-      source: 0,
-      report: 0,
-    });
-  });
-
-  it("falls back to config gating for wiki memory palace when methods are not advertised", async () => {
-    const { state, request } = createState();
-    state.configSnapshot = {
-      hash: "hash-1",
-      config: {
-        plugins: {
-          entries: {
-            "memory-wiki": {
-              enabled: true,
-            },
-          },
-        },
-      },
-    };
-    request.mockResolvedValue({
-      totalItems: 1,
-      totalClaims: 2,
-      totalQuestions: 0,
-      totalContradictions: 0,
-      clusters: [],
-    });
-
-    await loadWikiMemoryPalace(state);
-
-    expect(request).toHaveBeenCalledWith("wiki.palace", {});
-    expect(state.wikiMemoryPalace?.totalItems).toBe(1);
-    expect(state.wikiMemoryPalace?.totalPages).toBe(1);
-    expect(state.wikiMemoryPalace?.pageCounts).toEqual({
-      synthesis: 0,
-      entity: 0,
-      concept: 0,
-      source: 0,
-      report: 0,
-    });
-    expect(state.wikiMemoryPalace?.totalClaims).toBe(2);
-    expect(state.wikiMemoryPalaceError).toBeNull();
-    expect(state.wikiMemoryPalaceLoading).toBe(false);
-  });
-
-  it("skips wiki memory palace when memory-wiki is not enabled", async () => {
-    const { state, request } = createState();
-    state.configSnapshot = {
-      hash: "hash-1",
-      config: {
-        plugins: {},
-      },
-    };
-    state.wikiMemoryPalace = {
-      totalItems: 1,
-      totalPages: 1,
-      pageCounts: {
-        synthesis: 1,
-        entity: 0,
-        concept: 0,
-        source: 0,
-        report: 0,
-      },
-      totalClaims: 1,
-      totalQuestions: 0,
-      totalContradictions: 0,
-      clusters: [],
-    };
-    state.wikiMemoryPalaceError = "unknown method: wiki.palace";
-
-    await loadWikiMemoryPalace(state);
-
-    expect(request).not.toHaveBeenCalled();
-    expect(state.wikiMemoryPalace).toBeNull();
-    expect(state.wikiMemoryPalaceError).toBeNull();
-    expect(state.wikiMemoryPalaceLoading).toBe(false);
-  });
-
-  it("skips wiki memory palace when the gateway does not advertise the method", async () => {
-    const { state, request } = createState();
-    state.hello = {
-      type: "hello-ok",
-      protocol: 4,
-      auth: { role: "operator", scopes: [] },
-      features: { methods: ["doctor.memory.status"] },
-    };
-    state.configSnapshot = {
-      hash: "hash-1",
-      config: {
-        plugins: {
-          entries: {
-            "memory-wiki": {
-              enabled: true,
-            },
-          },
-        },
-      },
-    };
-    state.wikiMemoryPalace = {
-      totalItems: 1,
-      totalPages: 1,
-      pageCounts: {
-        synthesis: 1,
-        entity: 0,
-        concept: 0,
-        source: 0,
-        report: 0,
-      },
-      totalClaims: 1,
-      totalQuestions: 0,
-      totalContradictions: 0,
-      clusters: [],
-    };
-    state.wikiMemoryPalaceError = "unknown method: wiki.palace";
-
-    await loadWikiMemoryPalace(state);
-
-    expect(request).not.toHaveBeenCalled();
-    expect(state.wikiMemoryPalace).toBeNull();
-    expect(state.wikiMemoryPalaceError).toBeNull();
-    expect(state.wikiMemoryPalaceLoading).toBe(false);
-  });
-
   it("patches config to update global dreaming enablement", async () => {
     const { state, request } = createState();
+    state.hello = gatewayHelloForMethods(["config.patch"]);
     state.configSnapshot = {
       hash: "hash-1",
       config: {
@@ -857,6 +373,7 @@ describe("dreaming controller", () => {
     expect(config.patch).toHaveBeenCalledWith({
       note: "Dreaming settings updated from the Dreaming tab.",
       raw: expect.any(Object),
+      canDispatch: expect.any(Function),
     });
     expect(getConfigPatchRawPayload(config)).toEqual({
       plugins: {
@@ -875,8 +392,28 @@ describe("dreaming controller", () => {
     expect(state.dreamingStatusError).toBeNull();
   });
 
+  it("does not patch after the caller lifecycle expires during schema lookup", async () => {
+    const { state } = createState();
+    const config = createConfig(state);
+    const lookup = createDeferred<unknown>();
+    let canDispatch = true;
+    vi.mocked(config.lookupSchemaPath).mockReturnValue(lookup.promise);
+
+    const update = updateDreamingEnabled(state, config, false, () => canDispatch);
+    await vi.waitFor(() => expect(config.lookupSchemaPath).toHaveBeenCalledOnce());
+    canDispatch = false;
+    lookup.resolve({
+      schema: { type: "object", additionalProperties: true },
+      children: [],
+    });
+
+    await expect(update).resolves.toBe(false);
+    expect(config.patch).not.toHaveBeenCalled();
+  });
+
   it("falls back to memory-core when selected memory slot is blank", async () => {
     const { state, request } = createState();
+    state.hello = gatewayHelloForMethods(["config.patch"]);
     state.configSnapshot = {
       hash: "hash-1",
       config: {
@@ -970,10 +507,12 @@ describe("dreaming controller", () => {
     ).toEqual({
       pluginId: "memos-local-openclaw-plugin",
       enabled: true,
+      overridden: true,
+      engineOff: false,
     });
   });
 
-  it('falls back to memory-core when selected memory slot is "none"', () => {
+  it('falls back to memory-core config but stays operationally off when the slot is "none"', () => {
     expect(
       resolveConfiguredDreaming({
         plugins: {
@@ -993,7 +532,27 @@ describe("dreaming controller", () => {
       }),
     ).toEqual({
       pluginId: "memory-core",
+      enabled: false,
+      overridden: true,
+      engineOff: true,
+    });
+  });
+
+  it("keeps the default enabled while the default engine is active", () => {
+    expect(resolveConfiguredDreaming({ plugins: { slots: {} } })).toEqual({
+      pluginId: "memory-core",
       enabled: true,
+      overridden: false,
+      engineOff: false,
+    });
+  });
+
+  it("uses the runtime enabled default when config omits the override", () => {
+    expect(resolveConfiguredDreaming(null)).toEqual({
+      pluginId: "memory-core",
+      enabled: true,
+      overridden: false,
+      engineOff: false,
     });
   });
 
@@ -1018,61 +577,11 @@ describe("dreaming controller", () => {
       content: "## Dream Diary\n- recurring glacier thoughts",
     });
 
-    await loadDreamDiary(state);
+    await loadDreamingResource(state, "dreamDiary");
 
-    expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", {});
+    expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", { agentId: "main" });
     expect(state.dreamDiaryPath).toBe("DREAMS.md");
     expect(state.dreamDiaryContent).toBe("## Dream Diary\n- recurring glacier thoughts");
-    expect(state.dreamDiaryError).toBeNull();
-  });
-
-  it("loads dream diary content for the selected agent", async () => {
-    const { state, request } = createState();
-    state.selectedAgentId = "infra-sre";
-    request.mockResolvedValue({
-      found: true,
-      path: "DREAMS.md",
-      content: "infra dreams",
-    });
-
-    await loadDreamDiary(state);
-
-    expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", {
-      agentId: "infra-sre",
-    });
-  });
-
-  it("starts a new selected-agent diary load and ignores stale completions", async () => {
-    const { state, request } = createState();
-    const agentA = createDeferred<unknown>();
-    const agentB = createDeferred<unknown>();
-    request.mockImplementation(async (_method: string, payload?: unknown) => {
-      const agentId =
-        typeof payload === "object" && payload !== null && "agentId" in payload
-          ? payload.agentId
-          : undefined;
-      return agentId === "agent-b" ? agentB.promise : agentA.promise;
-    });
-
-    state.selectedAgentId = "agent-a";
-    const firstLoad = loadDreamDiary(state);
-    state.selectedAgentId = "agent-b";
-    const secondLoad = loadDreamDiary(state);
-
-    expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", { agentId: "agent-a" });
-    expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", { agentId: "agent-b" });
-
-    agentB.resolve({ found: true, path: "DREAMS.md", content: "agent-b diary" });
-    await secondLoad;
-
-    expect(state.dreamDiaryContent).toBe("agent-b diary");
-    expect(state.dreamDiaryLoading).toBe(false);
-
-    agentA.resolve({ found: true, path: "DREAMS.md", content: "agent-a diary" });
-    await firstLoad;
-
-    expect(state.dreamDiaryContent).toBe("agent-b diary");
-    expect(state.dreamDiaryLoading).toBe(false);
     expect(state.dreamDiaryError).toBeNull();
   });
 
@@ -1087,11 +596,11 @@ describe("dreaming controller", () => {
       .mockImplementationOnce(async () => secondAgentA.promise);
 
     state.selectedAgentId = "agent-a";
-    const firstLoad = loadDreamDiary(state);
+    const firstLoad = loadDreamingResource(state, "dreamDiary");
     state.selectedAgentId = "agent-b";
-    const secondLoad = loadDreamDiary(state);
+    const secondLoad = loadDreamingResource(state, "dreamDiary");
     state.selectedAgentId = "agent-a";
-    const thirdLoad = loadDreamDiary(state);
+    const thirdLoad = loadDreamingResource(state, "dreamDiary");
 
     expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", { agentId: "agent-a" });
     expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", { agentId: "agent-b" });
@@ -1120,7 +629,7 @@ describe("dreaming controller", () => {
       path: "DREAMS.md",
     });
 
-    await loadDreamDiary(state);
+    await loadDreamingResource(state, "dreamDiary");
 
     expect(state.dreamDiaryPath).toBe("DREAMS.md");
     expect(state.dreamDiaryContent).toBeNull();
@@ -1131,82 +640,25 @@ describe("dreaming controller", () => {
     const { state, request } = createState();
     request.mockRejectedValue(new Error("dream diary read failed"));
 
-    await loadDreamDiary(state);
+    await loadDreamingResource(state, "dreamDiary");
 
-    expect(state.dreamDiaryError).toBe("Error: dream diary read failed");
+    expect(state.dreamDiaryError).toBe("dream diary read failed");
     expect(state.dreamDiaryLoading).toBe(false);
   });
 
-  it("backfills and reloads dream diary state", async () => {
+  it("does not run a write action with read-only operator access", async () => {
     const { state, request } = createState();
-    request.mockImplementation(async (method: string) => {
-      if (method === "doctor.memory.backfillDreamDiary") {
-        return { action: "backfill", written: 79, replaced: 79 };
-      }
-      if (method === "doctor.memory.dreamDiary") {
-        return { found: true, path: "DREAMS.md", content: "backfilled diary" };
-      }
-      if (method === "doctor.memory.status") {
-        return {
-          dreaming: {
-            enabled: true,
-            shortTermCount: 1,
-            recallSignalCount: 0,
-            dailySignalCount: 0,
-            totalSignalCount: 1,
-            phaseSignalCount: 0,
-            lightPhaseHitCount: 0,
-            remPhaseHitCount: 0,
-            promotedTotal: 0,
-            promotedToday: 0,
-            shortTermEntries: [],
-            signalEntries: [],
-            promotedEntries: [],
-            phases: {
-              light: {
-                enabled: false,
-                cron: "",
-                managedCronPresent: false,
-                lookbackDays: 0,
-                limit: 0,
-              },
-              deep: {
-                enabled: false,
-                cron: "",
-                managedCronPresent: false,
-                limit: 0,
-                minScore: 0,
-                minRecallCount: 0,
-                minUniqueQueries: 0,
-                recencyHalfLifeDays: 0,
-              },
-              rem: {
-                enabled: false,
-                cron: "",
-                managedCronPresent: false,
-                lookbackDays: 0,
-                limit: 0,
-                minPatternStrength: 0,
-              },
-            },
-          },
-        };
-      }
-      return {};
-    });
+    state.hello = gatewayHelloForMethods(["doctor.memory.backfillDreamDiary"], ["operator.read"]);
 
-    const ok = await backfillDreamDiary(state);
-
-    expect(ok).toBe(true);
-    expect(request).toHaveBeenCalledWith("doctor.memory.backfillDreamDiary", {});
-    expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", {});
-    expect(request).toHaveBeenCalledWith("doctor.memory.status", {});
-    expect(state.dreamDiaryContent).toBe("backfilled diary");
-    expect(state.dreamDiaryActionLoading).toBe(false);
+    await expect(runDreamDiaryAction(state, "doctor.memory.backfillDreamDiary")).resolves.toBe(
+      false,
+    );
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("runs dream diary actions and reloads state for the selected agent", async () => {
     const { state, request } = createState();
+    state.hello = gatewayHelloForMethods(["doctor.memory.backfillDreamDiary"], ["operator.write"]);
     state.selectedAgentId = "fishing-bot";
     request.mockImplementation(async (method: string) => {
       if (method === "doctor.memory.backfillDreamDiary") {
@@ -1221,7 +673,7 @@ describe("dreaming controller", () => {
       return {};
     });
 
-    const ok = await backfillDreamDiary(state);
+    const ok = await runDreamDiaryAction(state, "doctor.memory.backfillDreamDiary");
 
     expect(ok).toBe(true);
     expect(request).toHaveBeenCalledWith("doctor.memory.backfillDreamDiary", {
@@ -1233,10 +685,13 @@ describe("dreaming controller", () => {
     expect(request).toHaveBeenCalledWith("doctor.memory.status", {
       agentId: "fishing-bot",
     });
+    expect(state.dreamDiaryContent).toBe("fish dreams");
+    expect(state.dreamDiaryActionLoading).toBe(false);
   });
 
   it("resets and reloads dream diary state", async () => {
     const { state, request } = createState();
+    state.hello = gatewayHelloForMethods(["doctor.memory.resetDreamDiary"], ["operator.write"]);
     request.mockImplementation(async (method: string) => {
       if (method === "doctor.memory.resetDreamDiary") {
         return { action: "reset", removedEntries: 79 };
@@ -1250,18 +705,22 @@ describe("dreaming controller", () => {
       return {};
     });
 
-    const ok = await resetDreamDiary(state);
+    const ok = await runDreamDiaryAction(state, "doctor.memory.resetDreamDiary");
 
     expect(ok).toBe(true);
-    expect(request).toHaveBeenCalledWith("doctor.memory.resetDreamDiary", {});
-    expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", {});
-    expect(request).toHaveBeenCalledWith("doctor.memory.status", {});
+    expect(request).toHaveBeenCalledWith("doctor.memory.resetDreamDiary", { agentId: "main" });
+    expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", { agentId: "main" });
+    expect(request).toHaveBeenCalledWith("doctor.memory.status", { agentId: "main" });
     expect(state.dreamDiaryContent).toBeNull();
     expect(state.dreamDiaryActionLoading).toBe(false);
   });
 
   it("clears grounded staged entries and reloads only dreaming status", async () => {
     const { state, request } = createState();
+    state.hello = gatewayHelloForMethods(
+      ["doctor.memory.resetGroundedShortTerm"],
+      ["operator.write"],
+    );
     state.dreamDiaryContent = "keep existing diary";
     request.mockImplementation(async (method: string) => {
       if (method === "doctor.memory.resetGroundedShortTerm") {
@@ -1273,20 +732,25 @@ describe("dreaming controller", () => {
       return {};
     });
 
-    const ok = await resetGroundedShortTerm(state);
+    const ok = await runDreamDiaryAction(state, "doctor.memory.resetGroundedShortTerm");
 
     expect(ok).toBe(true);
-    expect(request).toHaveBeenCalledWith("doctor.memory.resetGroundedShortTerm", {});
-    expect(request).toHaveBeenCalledWith("doctor.memory.status", {});
-    expect(request).not.toHaveBeenCalledWith("doctor.memory.dreamDiary", {});
+    expect(request).toHaveBeenCalledWith("doctor.memory.resetGroundedShortTerm", {
+      agentId: "main",
+    });
+    expect(request).toHaveBeenCalledWith("doctor.memory.status", { agentId: "main" });
+    expect(request).not.toHaveBeenCalledWith("doctor.memory.dreamDiary", { agentId: "main" });
     expect(state.dreamDiaryContent).toBe("keep existing diary");
     expect(state.dreamDiaryActionLoading).toBe(false);
   });
 
   it("repairs dreaming artifacts and reloads only dreaming status", async () => {
     const { state, request } = createState();
+    state.hello = gatewayHelloForMethods(
+      ["doctor.memory.repairDreamingArtifacts"],
+      ["operator.write"],
+    );
     state.dreamDiaryContent = "keep existing diary";
-    const confirmSpy = vi.spyOn(globalThis, "confirm").mockReturnValue(true);
     request.mockImplementation(async (method: string) => {
       if (method === "doctor.memory.repairDreamingArtifacts") {
         return {
@@ -1303,13 +767,14 @@ describe("dreaming controller", () => {
       return {};
     });
 
-    const ok = await repairDreamingArtifacts(state);
+    const ok = await runDreamDiaryAction(state, "doctor.memory.repairDreamingArtifacts");
 
     expect(ok).toBe(true);
-    expect(confirmSpy).toHaveBeenCalled();
-    expect(request).toHaveBeenCalledWith("doctor.memory.repairDreamingArtifacts", {});
-    expect(request).toHaveBeenCalledWith("doctor.memory.status", {});
-    expect(request).not.toHaveBeenCalledWith("doctor.memory.dreamDiary", {});
+    expect(request).toHaveBeenCalledWith("doctor.memory.repairDreamingArtifacts", {
+      agentId: "main",
+    });
+    expect(request).toHaveBeenCalledWith("doctor.memory.status", { agentId: "main" });
+    expect(request).not.toHaveBeenCalledWith("doctor.memory.dreamDiary", { agentId: "main" });
     expect(state.dreamDiaryContent).toBe("keep existing diary");
     expect(state.dreamDiaryActionMessage).toEqual({
       kind: "success",
@@ -1323,7 +788,7 @@ describe("dreaming controller", () => {
 
   it("dedupes dream diary entries and reloads diary plus status", async () => {
     const { state, request } = createState();
-    const confirmSpy = vi.spyOn(globalThis, "confirm").mockReturnValue(true);
+    state.hello = gatewayHelloForMethods(["doctor.memory.dedupeDreamDiary"], ["operator.write"]);
     request.mockImplementation(async (method: string) => {
       if (method === "doctor.memory.dedupeDreamDiary") {
         return {
@@ -1341,13 +806,12 @@ describe("dreaming controller", () => {
       return {};
     });
 
-    const ok = await dedupeDreamDiary(state);
+    const ok = await runDreamDiaryAction(state, "doctor.memory.dedupeDreamDiary");
 
     expect(ok).toBe(true);
-    expect(confirmSpy).toHaveBeenCalled();
-    expect(request).toHaveBeenCalledWith("doctor.memory.dedupeDreamDiary", {});
-    expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", {});
-    expect(request).toHaveBeenCalledWith("doctor.memory.status", {});
+    expect(request).toHaveBeenCalledWith("doctor.memory.dedupeDreamDiary", { agentId: "main" });
+    expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", { agentId: "main" });
+    expect(request).toHaveBeenCalledWith("doctor.memory.status", { agentId: "main" });
     expect(state.dreamDiaryContent).toBe("deduped diary");
     expect(state.dreamDiaryActionMessage).toEqual({
       kind: "success",
@@ -1376,15 +840,19 @@ describe("dreaming controller", () => {
     });
   });
 
-  it("does not run repair when confirmation is cancelled", async () => {
-    const { state, request } = createState();
-    vi.spyOn(globalThis, "confirm").mockReturnValue(false);
+  it("reports when the dreaming repair archive path cannot be copied", async () => {
+    const { state } = createState();
+    state.dreamDiaryActionArchivePath = "/tmp/openclaw/archive";
+    vi.stubGlobal("navigator", {
+      clipboard: { writeText: vi.fn().mockRejectedValue(new Error("denied")) },
+    } as unknown as Navigator);
 
-    const ok = await repairDreamingArtifacts(state);
+    const ok = await copyDreamingArchivePath(state);
 
     expect(ok).toBe(false);
-    expect(request).not.toHaveBeenCalled();
-    expect(state.dreamDiaryActionMessage).toBeNull();
+    expect(state.dreamDiaryActionMessage).toEqual({
+      kind: "error",
+      text: "Could not copy archive path.",
+    });
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

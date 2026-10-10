@@ -1,20 +1,17 @@
-// Gateway WebSocket paired-device connects enforce pinned metadata and approved access.
 import { getBoundDeviceBootstrapProfile } from "../../../infra/device-bootstrap.js";
 import {
   getPairedDevice,
   listEffectivePairedDeviceRoles,
   updatePairedDeviceMetadata,
+  type PairedDevice,
 } from "../../../infra/device-pairing.js";
-import {
-  isMobilePairingSetupBootstrapProfile,
-  resolveBootstrapProfileScopesForRole,
-} from "../../../shared/device-bootstrap-profile.js";
+import { resolveBootstrapProfileScopesForRole } from "../../../shared/device-bootstrap-profile.js";
 import type { DeviceBootstrapProfile } from "../../../shared/device-bootstrap-profile.js";
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import {
   isMobileNodeBootstrapConnect,
-  isSetupCodeMobileBootstrapClient,
-  pairedDeviceAllowsBootstrapOperator,
+  isSetupCodeHandoffBootstrapClient,
+  pairedDeviceAllowsBootstrapProfile,
   resolvePairedAccessScopes,
   resolvePinnedClientMetadata,
 } from "./connect-device-metadata.js";
@@ -24,7 +21,6 @@ import type {
   GatewayConnectPhaseContext,
 } from "./message-handler-types.js";
 
-type PairedDevice = NonNullable<Awaited<ReturnType<typeof getPairedDevice>>>;
 type PairingReason = "metadata-upgrade" | "role-upgrade" | "scope-upgrade";
 
 export async function authorizeExistingGatewayDevice(params: {
@@ -38,13 +34,7 @@ export async function authorizeExistingGatewayDevice(params: {
     lastSeenAtMs: number;
     lastSeenReason: string;
   };
-  handoffBootstrapProfile: DeviceBootstrapProfile | null;
   requirePairing: (reason: PairingReason, paired: PairedDevice) => Promise<boolean>;
-  logUpgradeAudit: (
-    reason: "role-upgrade" | "scope-upgrade",
-    currentRoles: string[] | undefined,
-    currentScopes: string[] | undefined,
-  ) => void;
 }): Promise<{ ok: boolean; handoffBootstrapProfile: DeviceBootstrapProfile | null }> {
   const { context, state, paired, devicePublicKey, clientAccessMetadata, requirePairing } = params;
   const { connectParams, hasBrowserOriginHeader, reportedClientIp } = context;
@@ -62,7 +52,7 @@ export async function authorizeExistingGatewayDevice(params: {
     isWebchat,
     isNativeAppUi,
   } = state;
-  let { handoffBootstrapProfile } = params;
+  let { handoffBootstrapProfile } = state;
   const claimedPlatform = connectParams.client.platform;
   const pairedPlatform = paired.platform;
   const claimedDeviceFamily = connectParams.client.deviceFamily;
@@ -83,6 +73,7 @@ export async function authorizeExistingGatewayDevice(params: {
       isControlUi,
       isWebchat,
       isNativeAppUi,
+      authMethod,
       reason: "metadata-upgrade",
     });
     if (!allowSilentMetadataUpgrade) {
@@ -103,23 +94,16 @@ export async function authorizeExistingGatewayDevice(params: {
   }
   const pairedRoles = listEffectivePairedDeviceRoles(paired);
   const pairedScopes = resolvePairedAccessScopes(paired);
-  const allowedRoles = new Set(pairedRoles);
-  if (allowedRoles.size === 0 || !allowedRoles.has(role)) {
-    params.logUpgradeAudit("role-upgrade", pairedRoles, pairedScopes);
-    if (!(await requirePairing("role-upgrade", paired))) {
-      return { ok: false, handoffBootstrapProfile };
-    }
+  if (!pairedRoles.includes(role) && !(await requirePairing("role-upgrade", paired))) {
+    return { ok: false, handoffBootstrapProfile };
   }
 
   if (scopes.length > 0) {
     const scopesAllowed =
       pairedScopes.length > 0 &&
       roleScopesAllow({ role, requestedScopes: scopes, allowedScopes: pairedScopes });
-    if (!scopesAllowed) {
-      params.logUpgradeAudit("scope-upgrade", pairedRoles, pairedScopes);
-      if (!(await requirePairing("scope-upgrade", paired))) {
-        return { ok: false, handoffBootstrapProfile };
-      }
+    if (!scopesAllowed && !(await requirePairing("scope-upgrade", paired))) {
+      return { ok: false, handoffBootstrapProfile };
     }
   }
 
@@ -141,41 +125,41 @@ export async function authorizeExistingGatewayDevice(params: {
           publicKey: devicePublicKey,
         })
       : null;
-  if (retryBootstrapHandoffProfile) {
+  if (
+    retryBootstrapHandoffProfile &&
+    isSetupCodeHandoffBootstrapClient({
+      profile: retryBootstrapHandoffProfile,
+      client: connectParams.client,
+    })
+  ) {
     const retryBootstrapOperatorScopes = resolveBootstrapProfileScopesForRole(
       "operator",
       retryBootstrapHandoffProfile.scopes,
       retryBootstrapHandoffProfile.purpose,
     );
+    const pairedAllowsHandoff =
+      pairedRoles.includes("operator") &&
+      roleScopesAllow({
+        role: "operator",
+        requestedScopes: retryBootstrapOperatorScopes,
+        allowedScopes: pairedScopes,
+      });
+    if (!pairedAllowsHandoff && !(await requirePairing("scope-upgrade", paired))) {
+      return { ok: false, handoffBootstrapProfile };
+    }
     if (
-      isMobilePairingSetupBootstrapProfile(retryBootstrapHandoffProfile) &&
-      isSetupCodeMobileBootstrapClient(connectParams.client)
-    ) {
-      const pairedAllowsHandoff =
-        pairedRoles.includes("operator") &&
-        roleScopesAllow({
-          role: "operator",
-          requestedScopes: retryBootstrapOperatorScopes,
-          allowedScopes: pairedScopes,
-        });
-      if (!pairedAllowsHandoff) {
-        params.logUpgradeAudit("scope-upgrade", pairedRoles, pairedScopes);
-        if (!(await requirePairing("scope-upgrade", paired))) {
-          return { ok: false, handoffBootstrapProfile };
-        }
-      }
-      const pairedAfterBootstrapUpgrade = device ? await getPairedDevice(device.id) : null;
-      if (
-        pairedDeviceAllowsBootstrapOperator({
-          device: pairedAfterBootstrapUpgrade,
+      pairedDeviceAllowsBootstrapProfile(
+        {
+          device: device ? await getPairedDevice(device.id) : null,
           devicePublicKey,
           profile: retryBootstrapHandoffProfile,
-        })
-      ) {
-        // The setup code is the owner-approved upgrade artifact. Reuse the
-        // same handoff after retrying or promoting an existing mobile pairing.
-        handoffBootstrapProfile = retryBootstrapHandoffProfile;
-      }
+        },
+        ["operator"],
+      )
+    ) {
+      // The setup code is the owner-approved upgrade artifact. Reuse the
+      // same handoff after retrying or promoting an existing mobile pairing.
+      handoffBootstrapProfile = retryBootstrapHandoffProfile;
     }
   }
 

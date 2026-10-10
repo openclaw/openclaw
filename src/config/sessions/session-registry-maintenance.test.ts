@@ -1,10 +1,21 @@
 // Session registry maintenance tests cover the task-owned cron-run pruning seam.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
-import { loadSessionEntry, replaceSessionEntry } from "./session-accessor.js";
+import { readSessionArchiveContentSync } from "./archive-compression.js";
+import { isRetainedSessionTranscriptArchiveName } from "./artifacts.js";
+import {
+  appendTranscriptEventSync,
+  loadSessionEntry,
+  loadTranscriptEvents,
+  replaceSessionEntry,
+} from "./session-accessor.js";
+import * as lifecycleProjection from "./session-accessor.sqlite-projection.js";
+import * as entryReadRuntime from "./session-entry-read-maintenance.js";
 import { runSessionRegistryMaintenanceForStore } from "./session-registry-maintenance.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import type { SessionEntry } from "./types.js";
@@ -17,11 +28,13 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
   await fixtureSuite.cleanup();
 });
 
 function sessionEntry(sessionId: string, updatedAt: number): SessionEntry {
-  return { sessionId, updatedAt };
+  return { sessionId, updatedAt, delivery: { kind: "none" } };
 }
 
 async function createStore(entries: Record<string, SessionEntry>): Promise<string> {
@@ -42,13 +55,105 @@ function resolveRequiredSqlitePath(storePath: string): string {
   return sqlitePath;
 }
 
+async function listDeletedArchiveFiles(root: string): Promise<string[]> {
+  const archives: string[] = [];
+  const walk = async (dir: string) => {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await walk(fullPath);
+      } else if (isRetainedSessionTranscriptArchiveName(entry.name)) {
+        archives.push(fullPath);
+      }
+    }
+  };
+  await walk(root);
+  return archives;
+}
+
 describe("runSessionRegistryMaintenanceForStore", () => {
+  it("rechecks caller authority inside the removal transaction after planning", async () => {
+    const sessionKey = "agent:main:cron:authority:run:old";
+    const storePath = await createStore({
+      [sessionKey]: sessionEntry("authority-old", Date.now() - 8 * DAY_MS),
+    });
+    let current = true;
+    const apply = lifecycleProjection.applySessionEntryLifecycleMutation;
+    const mutation = vi
+      .spyOn(lifecycleProjection, "applySessionEntryLifecycleMutation")
+      .mockImplementation((params) => {
+        current = false;
+        return apply(params);
+      });
+    try {
+      await expect(
+        runSessionRegistryMaintenanceForStore({
+          agentId: "main",
+          storePath,
+          apply: true,
+          retentionMs: 7 * DAY_MS,
+          runningCronJobIds: new Set(),
+          assertCurrent() {
+            if (!current) {
+              throw new Error("maintenance owner retired");
+            }
+          },
+        }),
+      ).rejects.toThrow("maintenance owner retired");
+      expect(mutation).toHaveBeenCalledOnce();
+      expect(loadSessionEntry({ sessionKey, storePath })?.sessionId).toBe("authority-old");
+    } finally {
+      mutation.mockRestore();
+    }
+  });
+  it("retains a cron session whose cold snapshot changes after pruning was planned", async () => {
+    const sessionKey = "agent:main:cron:changed:run:old";
+    const sessionId = "changed-old";
+    const originalEntry: SessionEntry = {
+      ...sessionEntry(sessionId, Date.now() - 8 * DAY_MS),
+      skillsSnapshot: { prompt: "Original saved instructions", skills: [] },
+    };
+    const changedEntry: SessionEntry = {
+      ...originalEntry,
+      skillsSnapshot: { prompt: "Changed saved instructions", skills: [] },
+    };
+    const storePath = await createStore({ [sessionKey]: originalEntry });
+    const scope = { sessionKey, sessionId, storePath };
+    const event = { type: "proof-event", data: "changed cron history survives" };
+    appendTranscriptEventSync(scope, event);
+    const apply = lifecycleProjection.applySessionEntryLifecycleMutation;
+    const mutation = vi
+      .spyOn(lifecycleProjection, "applySessionEntryLifecycleMutation")
+      .mockImplementationOnce(async (params) => {
+        await replaceSessionEntry(scope, changedEntry);
+        return apply(params);
+      });
+    try {
+      const result = await runSessionRegistryMaintenanceForStore({
+        agentId: "main",
+        storePath,
+        apply: true,
+        retentionMs: 7 * DAY_MS,
+        runningCronJobIds: new Set(),
+      });
+      expect(mutation).toHaveBeenCalledOnce();
+      expect(result).toEqual({ preservedRunning: 0, pruned: 0 });
+      expect(loadSessionEntry(scope)).toEqual(changedEntry);
+      await expect(loadTranscriptEvents(scope)).resolves.toEqual([event]);
+      expect(await listDeletedArchiveFiles(path.dirname(storePath))).toEqual([]);
+    } finally {
+      mutation.mockRestore();
+    }
+  });
+
   it("summarizes a missing store without creating it", async () => {
     const dir = await fixtureSuite.createCaseDir("missing-store");
     const storePath = path.join(dir, "sessions.json");
     const sqlitePath = resolveRequiredSqlitePath(storePath);
 
     const result = await runSessionRegistryMaintenanceForStore({
+      agentId: "main",
       apply: true,
       retentionMs: 7 * DAY_MS,
       runningCronJobIds: new Set(),
@@ -56,8 +161,6 @@ describe("runSessionRegistryMaintenanceForStore", () => {
     });
 
     expect(result).toEqual({
-      beforeCount: 0,
-      afterCount: 0,
       preservedRunning: 0,
       pruned: 0,
     });
@@ -65,61 +168,122 @@ describe("runSessionRegistryMaintenanceForStore", () => {
     await expect(fs.stat(sqlitePath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("previews a missing store without creating SQLite state", async () => {
-    const dir = await fixtureSuite.createCaseDir("missing-store-preview");
-    const storePath = path.join(dir, "sessions.json");
-    const sqlitePath = resolveRequiredSqlitePath(storePath);
-
-    const result = await runSessionRegistryMaintenanceForStore({
-      apply: false,
-      retentionMs: 7 * DAY_MS,
-      runningCronJobIds: new Set(),
-      storePath,
-    });
-
-    expect(result).toEqual({
-      beforeCount: 0,
-      afterCount: 0,
-      preservedRunning: 0,
-      pruned: 0,
-    });
-    await expect(fs.stat(sqlitePath)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("previews stale cron-run pruning without mutating the store", async () => {
+  it("archives the transcript when pruning stale cron-run sessions", async () => {
     const now = Date.now();
+    const sessionKey = "agent:main:cron:done-job:run:old-run";
+    const sessionId = "run-1";
     const storePath = await createStore({
-      "agent:main:cron:done-job:run:old-run": sessionEntry("old-run", now - 8 * DAY_MS),
-      "agent:main:cron:done-job:run:recent-run": sessionEntry("recent-run", now),
+      [sessionKey]: {
+        ...sessionEntry(sessionId, now - 8 * DAY_MS),
+        skillsSnapshot: { prompt: "Cron instructions retained for the deletion guard", skills: [] },
+      },
     });
+    appendTranscriptEventSync(
+      { sessionKey, sessionId, storePath },
+      { type: "proof-event", data: "cron transcript must survive pruning" },
+    );
 
     const result = await runSessionRegistryMaintenanceForStore({
-      apply: false,
+      agentId: "main",
+      apply: true,
       retentionMs: 7 * DAY_MS,
       runningCronJobIds: new Set(),
       storePath,
     });
 
     expect(result).toEqual({
-      beforeCount: 2,
-      afterCount: 1,
       preservedRunning: 0,
       pruned: 1,
     });
-    expect(
-      loadSessionEntry({ sessionKey: "agent:main:cron:done-job:run:old-run", storePath }),
-    ).toEqual(sessionEntry("old-run", now - 8 * DAY_MS));
+    expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
+    const archives = await listDeletedArchiveFiles(path.dirname(storePath));
+    expect(archives).toHaveLength(1);
+    expect(readSessionArchiveContentSync(archives[0] ?? "")).toContain(
+      "cron transcript must survive pruning",
+    );
+    await expect(loadTranscriptEvents({ sessionKey, sessionId, storePath })).resolves.toEqual([]);
   });
 
-  it("applies one store-sized pruning transaction and preserves running cron rows", async () => {
+  it("previews pruning without transferring or changing ordinary entries", async () => {
     const now = Date.now();
+    const sessionKey = "agent:main:cron:done-job:run:old-run";
+    const sessionId = "run-1";
+    const ordinaryKey = "agent:main:dashboard:ordinary";
+    const ordinaryEntry: SessionEntry = {
+      ...sessionEntry("ordinary", now - 40 * DAY_MS),
+      sessionDiffBaseline: {
+        version: 1,
+        sessionId: "ordinary",
+        root: "/synthetic",
+        files: [{ path: "README.md", fingerprint: "original" }],
+      },
+      skillsSnapshot: { prompt: "Ordinary saved instructions", skills: [] },
+      systemPromptReport: {
+        source: "run",
+        generatedAt: now,
+        sessionId: "ordinary",
+        systemPrompt: { chars: 27, projectContextChars: 0, nonProjectContextChars: 27 },
+        injectedWorkspaceFiles: [],
+        skills: { promptChars: 27, entries: [] },
+        tools: { listChars: 0, schemaChars: 0, entries: [] },
+      },
+    };
     const storePath = await createStore({
-      "agent:main:cron:done-job:run:old-run": sessionEntry("done-run", now - 8 * DAY_MS),
-      "agent:main:cron:running-job:run:old-run": sessionEntry("running-run", now - 8 * DAY_MS),
-      "agent:main:cron:done-job:run:recent-run": sessionEntry("recent-run", now),
+      [sessionKey]: sessionEntry(sessionId, now - 8 * DAY_MS),
+      [ordinaryKey]: ordinaryEntry,
+    });
+    appendTranscriptEventSync(
+      { sessionKey, sessionId, storePath },
+      { type: "proof-event", data: "cron transcript must survive preview" },
+    );
+
+    const readRegistry = entryReadRuntime.withSessionRegistryEntriesInWorker;
+    const reader = vi
+      .spyOn(entryReadRuntime, "withSessionRegistryEntriesInWorker")
+      .mockImplementation((scope, consume) =>
+        readRegistry(scope, async (entries, assertCurrent) => {
+          expect(entries.map(({ sessionKey: key }) => key)).toEqual([sessionKey]);
+          return await consume(entries, assertCurrent);
+        }),
+      );
+    const result = await runSessionRegistryMaintenanceForStore({
+      agentId: "main",
+      apply: false,
+      retentionMs: 7 * DAY_MS,
+      runningCronJobIds: new Set(),
+      storePath,
+    }).finally(() => reader.mockRestore());
+
+    expect(result).toEqual({ preservedRunning: 0, pruned: 1 });
+    expect(loadSessionEntry({ sessionKey, storePath })).toEqual(
+      sessionEntry(sessionId, now - 8 * DAY_MS),
+    );
+    expect(loadSessionEntry({ sessionKey: ordinaryKey, storePath })).toEqual(ordinaryEntry);
+    await expect(loadTranscriptEvents({ sessionKey, sessionId, storePath })).resolves.toHaveLength(
+      1,
+    );
+    expect(await listDeletedArchiveFiles(path.dirname(storePath))).toStrictEqual([]);
+  });
+
+  it("applies pruning to stale cron-run descendant rows", async () => {
+    const now = Date.now();
+    const staleParentKey = "agent:main:cron:done-job:run:old-run";
+    const staleChildKey = "agent:main:cron:done-job:run:old-run:subagent:worker";
+    const runningParentKey = "agent:main:cron:running-job:run:old-run";
+    const runningChildKey = "agent:main:cron:running-job:run:old-run:thread:reply";
+    const ordinaryKey = "agent:main:subagent:ordinary-worker";
+    const recentKey = "agent:main:cron:done-job:run:recent-run";
+    const storePath = await createStore({
+      [staleParentKey]: sessionEntry("done-run", now - 8 * DAY_MS),
+      [staleChildKey]: sessionEntry("done-run-child", now - 8 * DAY_MS),
+      [runningParentKey]: sessionEntry("running-run", now - 8 * DAY_MS),
+      [runningChildKey]: sessionEntry("running-run-child", now - 8 * DAY_MS),
+      [ordinaryKey]: sessionEntry("ordinary-worker", now - 40 * DAY_MS),
+      [recentKey]: sessionEntry("recent-run", now),
     });
 
     const result = await runSessionRegistryMaintenanceForStore({
+      agentId: "main",
       apply: true,
       retentionMs: 7 * DAY_MS,
       runningCronJobIds: new Set(["running-job"]),
@@ -127,43 +291,22 @@ describe("runSessionRegistryMaintenanceForStore", () => {
     });
 
     expect(result).toEqual({
-      beforeCount: 3,
-      afterCount: 2,
-      preservedRunning: 1,
-      pruned: 1,
+      preservedRunning: 2,
+      pruned: 2,
     });
-    expect(
-      loadSessionEntry({ sessionKey: "agent:main:cron:done-job:run:old-run", storePath }),
-    ).toBeUndefined();
-    expect(
-      loadSessionEntry({ sessionKey: "agent:main:cron:running-job:run:old-run", storePath }),
-    ).toEqual(sessionEntry("running-run", now - 8 * DAY_MS));
-    expect(
-      loadSessionEntry({ sessionKey: "agent:main:cron:done-job:run:recent-run", storePath }),
-    ).toEqual(sessionEntry("recent-run", now));
-  });
-
-  it("skips generic session maintenance while applying task registry pruning", async () => {
-    const now = Date.now();
-    const oldOrdinaryKey = "agent:main:subagent:old-worker";
-    const storePath = await createStore({
-      "agent:main:cron:done-job:run:old-run": sessionEntry("done-run", now - 8 * DAY_MS),
-      [oldOrdinaryKey]: sessionEntry("old-worker", now - 40 * DAY_MS),
-    });
-
-    const result = await runSessionRegistryMaintenanceForStore({
-      apply: true,
-      retentionMs: 7 * DAY_MS,
-      runningCronJobIds: new Set(),
-      storePath,
-    });
-
-    expect(result.pruned).toBe(1);
-    expect(
-      loadSessionEntry({ sessionKey: "agent:main:cron:done-job:run:old-run", storePath }),
-    ).toBeUndefined();
-    expect(loadSessionEntry({ sessionKey: oldOrdinaryKey, storePath })).toEqual(
-      sessionEntry("old-worker", now - 40 * DAY_MS),
+    expect(loadSessionEntry({ sessionKey: staleParentKey, storePath })).toBeUndefined();
+    expect(loadSessionEntry({ sessionKey: staleChildKey, storePath })).toBeUndefined();
+    expect(loadSessionEntry({ sessionKey: runningParentKey, storePath })).toEqual(
+      sessionEntry("running-run", now - 8 * DAY_MS),
+    );
+    expect(loadSessionEntry({ sessionKey: runningChildKey, storePath })).toEqual(
+      sessionEntry("running-run-child", now - 8 * DAY_MS),
+    );
+    expect(loadSessionEntry({ sessionKey: ordinaryKey, storePath })).toEqual(
+      sessionEntry("ordinary-worker", now - 40 * DAY_MS),
+    );
+    expect(loadSessionEntry({ sessionKey: recentKey, storePath })).toEqual(
+      sessionEntry("recent-run", now),
     );
   });
 
@@ -182,6 +325,7 @@ describe("runSessionRegistryMaintenanceForStore", () => {
 
     try {
       const activeResult = await runSessionRegistryMaintenanceForStore({
+        agentId: "main",
         apply: true,
         retentionMs: 7 * DAY_MS,
         runningCronJobIds: new Set(),
@@ -194,6 +338,7 @@ describe("runSessionRegistryMaintenanceForStore", () => {
     }
 
     const releasedResult = await runSessionRegistryMaintenanceForStore({
+      agentId: "main",
       apply: true,
       retentionMs: 7 * DAY_MS,
       runningCronJobIds: new Set(),

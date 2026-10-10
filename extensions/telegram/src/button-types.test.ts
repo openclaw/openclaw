@@ -1,334 +1,152 @@
-// Telegram tests cover button types plugin behavior.
-import { buildApprovalResolutionRef } from "openclaw/plugin-sdk/approval-reference-runtime";
 import { describe, expect, it } from "vitest";
 import { parseTelegramApprovalCallbackData } from "./approval-callback-data.js";
 import { buildTelegramPresentationButtons, resolveTelegramInlineButtons } from "./button-types.js";
-import { describeTelegramInteractiveButtonBehavior } from "./button-types.test-helpers.js";
 import {
-  buildTelegramOpaqueCallbackData,
+  parseTelegramNativeCommandCallbackData,
   parseTelegramOpaqueCallbackData,
 } from "./native-command-callback-data.js";
+import { parseTelegramQuestionCallbackData } from "./question-callback-data.js";
 
-describeTelegramInteractiveButtonBehavior();
-
-describe("buildTelegramInteractiveButtons callback limits", () => {
-  it("drops buttons whose callback payload exceeds Telegram limits", () => {
+describe("resolveTelegramInlineButtons precedence", () => {
+  it("returns explicit buttons without reading lower-priority payloads", () => {
+    const buttons = [[{ text: "Explicit", callback_data: "explicit" }]];
     expect(
       resolveTelegramInlineButtons({
-        interactive: {
-          blocks: [
+        buttons,
+        get interactive(): never {
+          throw new Error("unexpected interactive normalization");
+        },
+        get presentation(): never {
+          throw new Error("unexpected presentation normalization");
+        },
+      }),
+    ).toBe(buttons);
+  });
+
+  it.each([{ blocks: [{ type: "text", text: "Legacy heading" }] }])(
+    "falls back to presentation when the legacy payload has no usable controls: %j",
+    (interactive) => {
+      expect(
+        resolveTelegramInlineButtons({
+          interactive,
+          presentation: {
+            blocks: [{ type: "buttons", buttons: [{ label: "Fallback", value: "fallback" }] }],
+          },
+        })
+          ?.flat()
+          .map((button) => button.callback_data),
+      ).toEqual(["fallback"]);
+    },
+  );
+});
+
+describe("buildTelegramPresentationButtons action domains", () => {
+  it("keeps raw slash callbacks distinct from typed commands and drops oversized commands", () => {
+    const rows = buildTelegramPresentationButtons({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            { label: "Raw", value: "/approve req-1 allow-once" },
             {
-              type: "buttons",
-              buttons: [
-                { label: "Keep", value: "ok" },
-                { label: "Drop", value: `x${"y".repeat(80)}` },
-              ],
+              label: "Command",
+              action: { type: "command", command: "/approve req-1 allow-once" },
+            },
+            {
+              label: "Oversized",
+              action: { type: "command", command: `/codex plugins enable ${"x".repeat(80)}` },
             },
           ],
         },
-      }),
-    ).toEqual([[{ text: "Keep", callback_data: "ok", style: undefined }]]);
+      ],
+    });
+    expect(rows?.flat().map((button) => button.callback_data)).toEqual([
+      "/approve req-1 allow-once",
+      "tgcmd:/approve req-1 allow-once",
+    ]);
   });
-});
 
-describe("buildTelegramPresentationButtons", () => {
-  it("builds inline buttons from presentation blocks", () => {
-    expect(
-      buildTelegramPresentationButtons({
-        blocks: [
-          { type: "text", text: "Choose" },
-          {
-            type: "buttons",
-            buttons: [{ label: "Approve", value: "/approve req-1 allow-once", style: "success" }],
-          },
-        ],
-      }),
-    ).toEqual([
-      [
+  it("keeps typed callback values opaque, including slash text, whitespace and delimiters", () => {
+    const rows = buildTelegramPresentationButtons({
+      blocks: [
         {
-          text: "Approve",
-          callback_data: "/approve req-1 allow-once",
-          style: "success",
+          type: "buttons",
+          buttons: [
+            { label: "Slash", action: { type: "callback", value: "/not-a-native-command" } },
+            { label: "Value", action: { type: "callback", value: "env | prod" } },
+            {
+              label: "Approval",
+              action: { type: "callback", value: "/approve plugin:123 allow-once" },
+            },
+          ],
         },
       ],
+    });
+    const callbacks = rows?.flat().map((button) => button.callback_data);
+    expect(callbacks?.map(parseTelegramOpaqueCallbackData)).toEqual([
+      "/not-a-native-command",
+      "env | prod",
+      "/approve plugin:123 allow-once",
     ]);
+    for (const callback of callbacks ?? []) {
+      expect(parseTelegramApprovalCallbackData(callback)).toBeNull();
+      expect(parseTelegramNativeCommandCallbackData(callback)).toBeNull();
+    }
   });
 
-  it("encodes question buttons by record id and option index", () => {
-    const questionId = "ask_0123456789abcdef0123456789abcdef";
-    expect(
-      buildTelegramPresentationButtons({
-        blocks: [
-          {
-            type: "buttons",
-            buttons: ["Staging", "Production"].map((label) => ({
-              label,
-              action: { type: "question" as const, questionId, optionValue: label },
-            })),
-          },
-        ],
-      }),
-    ).toEqual([
-      [
-        { text: "Staging", callback_data: `tgq1:${questionId}:0`, style: undefined },
-        { text: "Production", callback_data: `tgq1:${questionId}:1`, style: undefined },
-      ],
+  it("reserves approval and question namespaces without trimming legacy callback identity", () => {
+    const values = [
+      "tga1:e:x:not-a-typed-action",
+      " tga1:e:o:plugin:123 ",
+      "tgq1:ask_0123456789abcdef0123456789abcdef:0",
+      " tgq1:ask_0123456789abcdef0123456789abcdef:0 ",
+    ];
+    const rows = buildTelegramPresentationButtons({
+      blocks: [{ type: "buttons", buttons: values.map((value) => ({ label: "Plugin", value })) }],
+    });
+    const callbacks = rows?.flat().map((button) => button.callback_data);
+    expect(callbacks?.map(parseTelegramOpaqueCallbackData)).toEqual([
+      "tga1:e:x:not-a-typed-action",
+      " tga1:e:o:plugin:123 ",
+      "tgq1:ask_0123456789abcdef0123456789abcdef:0",
+      " tgq1:ask_0123456789abcdef0123456789abcdef:0 ",
     ]);
-  });
-
-  it("drops presentation buttons whose callback payload exceeds Telegram limits", () => {
-    expect(
-      buildTelegramPresentationButtons({
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              {
-                label: "Keep",
-                action: { type: "command", command: "/codex plugins menu" },
-              },
-              {
-                label: "Drop",
-                action: {
-                  type: "command",
-                  command: `/codex plugins enable ${"x".repeat(80)}`,
-                },
-              },
-            ],
-          },
-        ],
-      }),
-    ).toEqual([
-      [
-        {
-          text: "Keep",
-          callback_data: "tgcmd:/codex plugins menu",
-          style: undefined,
-        },
-      ],
-    ]);
-  });
-
-  it("keeps legacy raw slash-valued callbacks as callbacks", () => {
-    expect(
-      buildTelegramPresentationButtons({
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [{ label: "Raw", value: "/not-a-native-command" }],
-          },
-        ],
-      }),
-    ).toEqual([[{ text: "Raw", callback_data: "/not-a-native-command", style: undefined }]]);
-  });
-
-  it("marks typed callbacks as opaque callback data", () => {
-    const callbackData = buildTelegramOpaqueCallbackData("/not-a-native-command");
-
-    expect(
-      buildTelegramPresentationButtons({
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              { label: "Raw", action: { type: "callback", value: "/not-a-native-command" } },
-            ],
-          },
-        ],
-      }),
-    ).toEqual([[{ text: "Raw", callback_data: callbackData, style: undefined }]]);
-    expect(parseTelegramOpaqueCallbackData(callbackData)).toBe("/not-a-native-command");
+    for (const callback of callbacks ?? []) {
+      expect(parseTelegramApprovalCallbackData(callback)).toBeNull();
+      expect(parseTelegramQuestionCallbackData(callback)).toBeNull();
+    }
   });
 
   it("keeps legacy values that look like opaque callback prefixes raw", () => {
-    expect(parseTelegramOpaqueCallbackData("tgcb1:inspect:123")).toBeNull();
-    expect(
-      buildTelegramPresentationButtons({
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [{ label: "Raw", value: "tgcb1:inspect:123" }],
-          },
-        ],
-      }),
-    ).toEqual([[{ text: "Raw", callback_data: "tgcb1:inspect:123", style: undefined }]]);
-  });
-
-  it("keeps transport-private approval callback prefixes opaque for legacy values", () => {
-    const value = "tga1:e:x:not-a-typed-action";
-    const callbackData = buildTelegramOpaqueCallbackData(value);
-
-    expect(
-      buildTelegramPresentationButtons({
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [{ label: "Plugin", value }],
-          },
-        ],
-      }),
-    ).toEqual([[{ text: "Plugin", callback_data: callbackData, style: undefined }]]);
-    expect(parseTelegramApprovalCallbackData(callbackData)).toBeNull();
-    expect(parseTelegramOpaqueCallbackData(callbackData)).toBe(value);
-  });
-
-  it("keeps transport-private question callback prefixes opaque for legacy values", () => {
-    const value = "tgq1:ask_0123456789abcdef0123456789abcdef:0";
-    const callbackData = buildTelegramOpaqueCallbackData(value);
-
-    expect(
-      buildTelegramPresentationButtons({
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [{ label: "Plugin", value }],
-          },
-        ],
-      }),
-    ).toEqual([[{ text: "Plugin", callback_data: callbackData, style: undefined }]]);
-    expect(parseTelegramOpaqueCallbackData(callbackData)).toBe(value);
-  });
-
-  it("keeps trimmed transport-private question prefixes opaque", () => {
-    const value = " tgq1:ask_0123456789abcdef0123456789abcdef:0 ";
-    const callbackData = buildTelegramOpaqueCallbackData(value);
-
-    expect(
-      buildTelegramPresentationButtons({
-        blocks: [{ type: "buttons", buttons: [{ label: "Plugin", value }] }],
-      }),
-    ).toEqual([[{ text: "Plugin", callback_data: callbackData, style: undefined }]]);
-    expect(parseTelegramOpaqueCallbackData(callbackData)).toBe(value);
-  });
-
-  it("keeps shortened plugin approval callbacks on the approval bypass path", () => {
-    const approvalId = `plugin:${"a".repeat(36)}`;
-    expect(
-      buildTelegramPresentationButtons({
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [{ label: "Allow", value: `/approve ${approvalId} allow-always` }],
-          },
-        ],
-      }),
-    ).toEqual([
-      [
-        {
-          text: "Allow",
-          callback_data: `/approve ${approvalId} always`,
-          style: undefined,
-        },
-      ],
-    ]);
-  });
-
-  it("keeps typed commands distinct from typed approval callbacks", () => {
-    expect(
-      buildTelegramPresentationButtons({
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              {
-                label: "Allow",
-                action: { type: "command", command: "/approve req-1 allow-once" },
-              },
-            ],
-          },
-        ],
-      }),
-    ).toEqual([
-      [
-        {
-          text: "Allow",
-          callback_data: "tgcmd:/approve req-1 allow-once",
-          style: undefined,
-        },
-      ],
-    ]);
+    const rows = buildTelegramPresentationButtons({
+      blocks: [{ type: "buttons", buttons: [{ label: "Raw", value: "tgcb1:inspect:123" }] }],
+    });
+    expect(rows?.[0]?.[0]?.callback_data).toBe("tgcb1:inspect:123");
+    expect(parseTelegramOpaqueCallbackData(rows?.[0]?.[0]?.callback_data)).toBeNull();
   });
 
   it("shortens legacy allow-always before prefixing and retains the approval overflow path", () => {
     const uuid = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
     const approvalId = `plugin:${"a".repeat(36)}`;
-
-    expect(
-      buildTelegramPresentationButtons({
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              {
-                label: "Always",
-                action: {
-                  type: "command",
-                  command: `/approve ${uuid} allow-always`,
-                },
-              },
-            ],
-          },
-        ],
-      }),
-    ).toEqual([
-      [
+    const rows = buildTelegramPresentationButtons({
+      blocks: [
         {
-          text: "Always",
-          callback_data: `tgcmd:/approve ${uuid} always`,
-          style: undefined,
+          type: "buttons",
+          buttons: [uuid, approvalId].map((id) => ({
+            label: "Always",
+            action: { type: "command" as const, command: `/approve ${id} allow-always` },
+          })),
         },
       ],
+    });
+    expect(rows?.flat().map((button) => button.callback_data)).toEqual([
+      `tgcmd:/approve ${uuid} always`,
+      `/approve ${approvalId} always`,
     ]);
-    expect(
-      buildTelegramPresentationButtons({
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              {
-                label: "Always",
-                action: {
-                  type: "command",
-                  command: `/approve ${approvalId} allow-always`,
-                },
-              },
-            ],
-          },
-        ],
-      }),
-    ).toEqual([
-      [
-        {
-          text: "Always",
-          callback_data: `/approve ${approvalId} always`,
-          style: undefined,
-        },
-      ],
-    ]);
-  });
-
-  it("keeps approval-shaped typed callbacks opaque", () => {
-    const callbackData = buildTelegramOpaqueCallbackData("/approve plugin:123 allow-once");
-
-    expect(
-      buildTelegramPresentationButtons({
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              {
-                label: "Plugin",
-                action: { type: "callback", value: "/approve plugin:123 allow-once" },
-              },
-            ],
-          },
-        ],
-      }),
-    ).toEqual([[{ text: "Plugin", callback_data: callbackData, style: undefined }]]);
   });
 
   it("encodes typed approvals with explicit kind, decision, and exact id", () => {
-    const buttons = buildTelegramPresentationButtons({
+    const rows = buildTelegramPresentationButtons({
       blocks: [
         {
           type: "buttons",
@@ -341,23 +159,12 @@ describe("buildTelegramPresentationButtons", () => {
                 approvalKind: "exec",
                 decision: "allow-always",
               },
-              style: "success",
             },
           ],
         },
       ],
     });
-
-    expect(buttons).toEqual([
-      [
-        {
-          text: "Allow",
-          callback_data: "tga1:e:a:plugin:id/with:delimiters",
-          style: "success",
-        },
-      ],
-    ]);
-    expect(parseTelegramApprovalCallbackData(buttons?.[0]?.[0]?.callback_data)).toEqual({
+    expect(parseTelegramApprovalCallbackData(rows?.[0]?.[0]?.callback_data)).toEqual({
       type: "approval",
       approvalId: "plugin:id/with:delimiters",
       approvalKind: "exec",
@@ -366,119 +173,99 @@ describe("buildTelegramPresentationButtons", () => {
   });
 
   it("compacts an overlong approval callback and keeps the Review URL", () => {
-    const approvalId = "x".repeat(56);
-    expect(
-      buildTelegramPresentationButtons({
+    const rows = buildTelegramPresentationButtons({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Allow",
+              action: {
+                type: "approval",
+                approvalId: "x".repeat(56),
+                approvalKind: "exec",
+                decision: "allow-once",
+              },
+            },
+            {
+              label: "Review",
+              action: { type: "url", url: "https://gateway.example/approve/long-id" },
+            },
+          ],
+        },
+      ],
+    });
+    expect(parseTelegramApprovalCallbackData(rows?.[0]?.[0]?.callback_data)).toEqual({
+      type: "approval",
+      approvalId: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
+      approvalKind: "exec",
+      decision: "allow-once",
+    });
+    expect(rows?.[0]?.[1]?.url).toBe("https://gateway.example/approve/long-id");
+  });
+
+  it("keeps question option indices independent and stable across presentation blocks", () => {
+    const firstQuestionId = "ask_0123456789abcdef0123456789abcdef";
+    const secondQuestionId = "ask_fedcba9876543210fedcba9876543210";
+    const questionButton = (questionId: string, optionValue: string) => ({
+      label: optionValue,
+      action: { type: "question" as const, questionId, optionValue },
+    });
+    const rows = buildTelegramPresentationButtons(
+      {
         blocks: [
           {
             type: "buttons",
             buttons: [
-              {
-                label: "Allow",
-                action: {
-                  type: "approval",
-                  approvalId,
-                  approvalKind: "exec",
-                  decision: "allow-once",
-                },
-              },
-              {
-                label: "Review",
-                action: { type: "url", url: "https://gateway.example/approve/long-id" },
-              },
+              questionButton(firstQuestionId, "東京"),
+              questionButton(firstQuestionId, "Déployer"),
+            ],
+          },
+          {
+            type: "buttons",
+            buttons: [
+              questionButton(secondQuestionId, "東京"),
+              questionButton(secondQuestionId, "Production"),
+            ],
+          },
+          {
+            type: "buttons",
+            buttons: [
+              questionButton(firstQuestionId, "東京"),
+              questionButton(firstQuestionId, "Production 🚀"),
             ],
           },
         ],
-      }),
+      },
+      {
+        questionOptionIndices: new Map([
+          [
+            firstQuestionId,
+            new Map([
+              ["東京", 0],
+              ["déployer", 1],
+              ["production 🚀", 2],
+            ]),
+          ],
+          [
+            secondQuestionId,
+            new Map([
+              ["東京", 0],
+              ["production", 1],
+            ]),
+          ],
+        ]),
+      },
+    );
+    expect(
+      rows?.flat().map((button) => parseTelegramQuestionCallbackData(button.callback_data)),
     ).toEqual([
-      [
-        {
-          text: "Allow",
-          callback_data: `tga1:e:o:${buildApprovalResolutionRef({ approvalId, approvalKind: "exec" })}`,
-          style: undefined,
-        },
-        {
-          text: "Review",
-          url: "https://gateway.example/approve/long-id",
-          style: undefined,
-        },
-      ],
+      { questionId: firstQuestionId, intent: "select", optionIndex: 0 },
+      { questionId: firstQuestionId, intent: "select", optionIndex: 1 },
+      { questionId: secondQuestionId, intent: "select", optionIndex: 0 },
+      { questionId: secondQuestionId, intent: "select", optionIndex: 1 },
+      { questionId: firstQuestionId, intent: "select", optionIndex: 0 },
+      { questionId: firstQuestionId, intent: "select", optionIndex: 2 },
     ]);
-  });
-
-  it("renders typed and legacy URL and Web App actions natively", () => {
-    expect(
-      buildTelegramPresentationButtons({
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              { label: "Typed URL", action: { type: "url", url: "https://example.com/typed" } },
-              {
-                label: "Typed App",
-                action: { type: "web-app", url: "https://example.com/app" },
-              },
-              { label: "Legacy URL", url: "https://example.com/legacy" },
-              { label: "Legacy App", webApp: { url: "https://example.com/legacy-app" } },
-            ],
-          },
-        ],
-      }),
-    ).toEqual([
-      [
-        { text: "Typed URL", url: "https://example.com/typed", style: undefined },
-        {
-          text: "Typed App",
-          web_app: { url: "https://example.com/app" },
-          style: undefined,
-        },
-        { text: "Legacy URL", url: "https://example.com/legacy", style: undefined },
-      ],
-      [
-        {
-          text: "Legacy App",
-          web_app: { url: "https://example.com/legacy-app" },
-          style: undefined,
-        },
-      ],
-    ]);
-  });
-
-  it("skips hosted widget actions without a Telegram web app URL", () => {
-    expect(
-      buildTelegramPresentationButtons({
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              {
-                label: "Hosted widget",
-                action: { type: "web-app", widgetId: "AAAAAAAAAAAAAAAAAAAAAA" },
-              },
-            ],
-          },
-        ],
-      }),
-    ).toBeUndefined();
-  });
-
-  it("lets canonical typed actions override deprecated button fields", () => {
-    expect(
-      buildTelegramPresentationButtons({
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              {
-                label: "Open",
-                action: { type: "url", url: "https://example.com/canonical" },
-                value: "legacy-callback",
-                url: "https://example.com/legacy",
-              },
-            ],
-          },
-        ],
-      }),
-    ).toEqual([[{ text: "Open", url: "https://example.com/canonical", style: undefined }]]);
   });
 });

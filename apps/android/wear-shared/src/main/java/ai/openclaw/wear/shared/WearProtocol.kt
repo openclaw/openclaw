@@ -2,7 +2,6 @@ package ai.openclaw.wear.shared
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -12,13 +11,15 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import java.nio.charset.CharacterCodingException
+import java.security.MessageDigest
 
 object WearProtocol {
   const val VERSION = 1
   const val REQUEST_PATH = "/openclaw/wear/v1/request"
   const val RESPONSE_PATH = "/openclaw/wear/v1/response"
   const val EVENT_PATH = "/openclaw/wear/v1/event"
-  const val REALTIME_AUDIO_CHANNEL_PATH = "/openclaw/wear/v1/realtime/audio"
+  const val LEGACY_REALTIME_AUDIO_CHANNEL_PATH = "/openclaw/wear/v1/realtime/audio"
+  const val REALTIME_AUDIO_CHANNEL_PATH_PREFIX = "/openclaw/wear/v1/realtime/audio/"
   const val PHONE_CAPABILITY = "openclaw_phone_proxy_v1"
   const val WATCH_CAPABILITY = "openclaw_wear_companion_v1"
 
@@ -28,9 +29,67 @@ object WearProtocol {
   const val MAX_REALTIME_AUDIO_FRAME_BYTES = 8 * 1024
   const val REALTIME_AUDIO_SAMPLE_RATE_HZ = 24_000
   const val REALTIME_AUDIO_FRAME_MILLIS = 20
+  const val RPC_REQUEST_TIMEOUT_MILLIS = 10_000L
+
+  // The Watch opens the audio channel before sending talk.start. Keep the
+  // pending phone-side channel through that RPC deadline plus setup margin.
+  const val REALTIME_AUDIO_PENDING_CHANNEL_TIMEOUT_MILLIS = RPC_REQUEST_TIMEOUT_MILLIS + 5_000L
 
   // Bound recursive JSON parsing at the untrusted Data Layer boundary.
   const val MAX_JSON_DEPTH = 32
+
+  fun realtimeAudioChannelPath(attemptId: String): String {
+    require(attemptId.isNotBlank())
+    return REALTIME_AUDIO_CHANNEL_PATH_PREFIX + wearSha256Hex(attemptId)
+  }
+
+  fun isRealtimeAudioChannelPath(path: String): Boolean = path == LEGACY_REALTIME_AUDIO_CHANNEL_PATH || isAttemptScopedRealtimeAudioChannelPath(path)
+
+  fun isAttemptScopedRealtimeAudioChannelPath(path: String): Boolean {
+    if (!path.startsWith(REALTIME_AUDIO_CHANNEL_PATH_PREFIX)) return false
+    val token = path.substring(REALTIME_AUDIO_CHANNEL_PATH_PREFIX.length)
+    return token.length == REALTIME_AUDIO_ATTEMPT_TOKEN_CHARS &&
+      token.all { char -> char in '0'..'9' || char in 'a'..'f' }
+  }
+
+  private const val REALTIME_AUDIO_ATTEMPT_TOKEN_CHARS = 64
+}
+
+fun wearSha256Hex(value: String): String {
+  val digest = MessageDigest.getInstance("SHA-256").digest(value.encodeToByteArray())
+  return digest.joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+}
+
+enum class WearProxyCapability(
+  val wireValue: String,
+) {
+  ReplyText(wireValue = "reply-text"),
+  AgentControls(wireValue = "agent-controls"),
+  GatewayControls(wireValue = "gateway-controls"),
+  ModelControls(wireValue = "model-controls"),
+  ModelCatalogSearch(wireValue = "model-catalog-search"),
+  SessionScopedModelCatalog(wireValue = "session-scoped-model-catalog"),
+  SessionSelectionLookup(wireValue = "session-selection-lookup"),
+  SessionSearchPagination(wireValue = "session-search-pagination"),
+  AgentPulse(wireValue = "agent-pulse"),
+  AttemptScopedRealtimeAudio(wireValue = "attempt-scoped-realtime-audio"),
+  ;
+
+  companion object {
+    fun fromWireValue(value: String): WearProxyCapability? = entries.firstOrNull { capability -> capability.wireValue == value }
+  }
+}
+
+enum class WearConnectionFailure(
+  val wireValue: String,
+) {
+  GatewayOffline(wireValue = "gateway_offline"),
+  Incompatible(wireValue = "incompatible"),
+  ;
+
+  companion object {
+    fun fromWireValue(value: String?): WearConnectionFailure? = entries.firstOrNull { failure -> failure.wireValue == value }
+  }
 }
 
 @Serializable
@@ -38,8 +97,32 @@ enum class WearRpcMethod {
   @SerialName("proxy.status")
   ProxyStatus,
 
+  @SerialName("agent.pulse")
+  AgentPulse,
+
   @SerialName("sessions.list")
   SessionsList,
+
+  @SerialName("agents.list")
+  AgentsList,
+
+  @SerialName("agents.select")
+  AgentsSelect,
+
+  @SerialName("models.list")
+  ModelsList,
+
+  @SerialName("models.select")
+  ModelsSelect,
+
+  @SerialName("gateway.connect")
+  GatewayConnect,
+
+  @SerialName("gateway.disconnect")
+  GatewayDisconnect,
+
+  @SerialName("reply.text")
+  ReplyText,
 
   @SerialName("chat.history")
   ChatHistory,
@@ -134,7 +217,7 @@ sealed interface WearDecodeResult {
 }
 
 object WearProtocolCodec {
-  private val json =
+  internal val json =
     Json {
       classDiscriminator = "type"
       encodeDefaults = true
@@ -143,7 +226,8 @@ object WearProtocolCodec {
     }
 
   fun encode(message: WearMessage): ByteArray {
-    requireValid(message)
+    require(message.version == WearProtocol.VERSION) { "Unsupported Wear protocol version: ${message.version}" }
+    require(isValid(message)) { "Invalid Wear protocol envelope" }
     require(hasValidPayloadDepth(message)) {
       "Wear message exceeds JSON depth ${WearProtocol.MAX_JSON_DEPTH}"
     }
@@ -160,21 +244,14 @@ object WearProtocolCodec {
   }
 
   private fun hasValidPayloadDepth(message: WearMessage): Boolean {
-    val payloads =
+    val payload =
       when (message) {
-        is WearMessage.Request -> listOf(message.params)
-        is WearMessage.Response -> listOfNotNull(message.result)
-        is WearMessage.Event -> listOfNotNull(message.payload)
+        is WearMessage.Request -> message.params
+        is WearMessage.Response -> message.result
+        is WearMessage.Event -> message.payload
       }
-    return payloads.all { element -> hasValidElementDepth(element, parentDepth = 1) }
-  }
-
-  private fun hasValidElementDepth(
-    element: JsonElement,
-    parentDepth: Int,
-  ): Boolean {
     val pending = ArrayDeque<Pair<JsonElement, Int>>()
-    pending.addLast(element to parentDepth)
+    pending.addLast((payload ?: return true) to 1)
     while (pending.isNotEmpty()) {
       val (current, parent) = pending.removeLast()
       val children =
@@ -196,41 +273,29 @@ object WearProtocolCodec {
       return WearDecodeResult.Failure(WearDecodeFailureReason.TooLarge)
     }
 
-    val text =
-      try {
-        bytes.decodeToString(throwOnInvalidSequence = true)
-      } catch (_: CharacterCodingException) {
-        return WearDecodeResult.Failure(WearDecodeFailureReason.Malformed)
+    return try {
+      val text = bytes.decodeToString(throwOnInvalidSequence = true)
+      if (exceedsJsonDepth(text)) {
+        return WearDecodeResult.Failure(WearDecodeFailureReason.TooDeep)
       }
-    if (exceedsJsonDepth(text)) {
-      return WearDecodeResult.Failure(WearDecodeFailureReason.TooDeep)
-    }
-    val root =
-      try {
-        json.parseToJsonElement(text).jsonObject
-      } catch (_: SerializationException) {
-        return WearDecodeResult.Failure(WearDecodeFailureReason.Malformed)
-      } catch (_: IllegalArgumentException) {
-        return WearDecodeResult.Failure(WearDecodeFailureReason.Malformed)
+      val root = json.parseToJsonElement(text).jsonObject
+      val version =
+        (root["version"] as? JsonPrimitive)?.intOrNull
+          ?: return WearDecodeResult.Failure(WearDecodeFailureReason.Malformed)
+      if (version != WearProtocol.VERSION) {
+        return WearDecodeResult.Failure(WearDecodeFailureReason.UnsupportedVersion)
       }
-    val version =
-      (root["version"] as? JsonPrimitive)?.intOrNull
-        ?: return WearDecodeResult.Failure(WearDecodeFailureReason.Malformed)
-    if (version != WearProtocol.VERSION) {
-      return WearDecodeResult.Failure(WearDecodeFailureReason.UnsupportedVersion)
-    }
-    val message =
-      try {
-        json.decodeFromJsonElement(WearMessage.serializer(), root)
-      } catch (_: SerializationException) {
-        return WearDecodeResult.Failure(WearDecodeFailureReason.Malformed)
-      } catch (_: IllegalArgumentException) {
-        return WearDecodeResult.Failure(WearDecodeFailureReason.Malformed)
+      val message = json.decodeFromJsonElement(WearMessage.serializer(), root)
+      if (isValid(message)) {
+        WearDecodeResult.Success(message)
+      } else {
+        WearDecodeResult.Failure(WearDecodeFailureReason.InvalidEnvelope)
       }
-    if (!isValid(message)) {
-      return WearDecodeResult.Failure(WearDecodeFailureReason.InvalidEnvelope)
+    } catch (_: CharacterCodingException) {
+      WearDecodeResult.Failure(WearDecodeFailureReason.Malformed)
+    } catch (_: IllegalArgumentException) {
+      WearDecodeResult.Failure(WearDecodeFailureReason.Malformed)
     }
-    return WearDecodeResult.Success(message)
   }
 
   private fun exceedsJsonDepth(text: String): Boolean {
@@ -248,26 +313,30 @@ object WearProtocolCodec {
       }
 
       when (character) {
-        '"' -> inString = true
+        '"' -> {
+          inString = true
+        }
+
         '{', '[' -> {
           depth += 1
           if (depth > WearProtocol.MAX_JSON_DEPTH) return true
         }
-        '}', ']' -> depth -= 1
+
+        '}', ']' -> {
+          depth -= 1
+        }
       }
     }
     return false
   }
 
-  private fun requireValid(message: WearMessage) {
-    require(message.version == WearProtocol.VERSION) { "Unsupported Wear protocol version: ${message.version}" }
-    require(isValid(message)) { "Invalid Wear protocol envelope" }
-  }
-
   private fun isValid(message: WearMessage): Boolean =
     when (message) {
-      is WearMessage.Request -> message.requestId.isNotBlank()
-      is WearMessage.Response ->
+      is WearMessage.Request -> {
+        message.requestId.isNotBlank()
+      }
+
+      is WearMessage.Response -> {
         message.requestId.isNotBlank() &&
           (message.eventStreamId == null || message.eventStreamId.isNotBlank()) &&
           (message.eventSequence == null || message.eventSequence >= 0) &&
@@ -276,8 +345,11 @@ object WearProtocolCodec {
           } else {
             message.error != null && message.result == null && message.error.code.isNotBlank()
           }
-      is WearMessage.Event ->
+      }
+
+      is WearMessage.Event -> {
         (message.streamId == null || message.streamId.isNotBlank()) &&
           message.sequence >= 0
+      }
     }
 }

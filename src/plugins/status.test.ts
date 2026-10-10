@@ -1,1072 +1,326 @@
-// Covers plugin status reporting from config, discovery, and registry state.
-
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PluginMemoryEmbeddingProviderRegistration } from "./registry.test-fixtures.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import * as status from "./status.js";
 import {
+  createAutoEnabledStatusConfig,
+  createCompatChainFixture,
   createCompatibilityNotice,
   createCustomHook,
+  createInstalledPluginIndexSnapshot,
   createPluginLoadResult,
   createPluginRecord,
-  createTypedHook,
-  DEPRECATED_MEMORY_EMBEDDING_PROVIDER_API_MESSAGE,
   HOOK_ONLY_MESSAGE,
-  LEGACY_BEFORE_AGENT_START_MESSAGE,
   REMOVED_SESSION_TRANSCRIPT_FILE_API_MESSAGE,
 } from "./status.test-fixtures.js";
 
-const loadConfigMock = vi.fn();
-const loadOpenClawPluginsMock = vi.fn();
-const loadPluginMetadataRegistrySnapshotMock = vi.fn();
-const loadPluginManifestRegistryForPluginRegistryMock = vi.fn();
-const loadPluginRegistrySnapshotWithMetadataMock = vi.fn();
-const loadPluginManifestRegistryForInstalledIndexMock = vi.fn();
-const isPluginMetadataSnapshotCompatibleMock = vi.fn<
-  typeof import("./plugin-metadata-snapshot.js").isPluginMetadataSnapshotCompatible
->(() => true);
-const loadPluginMetadataSnapshotMock = vi.fn((rawParams: unknown = {}) => {
-  const params = rawParams as { index?: unknown };
-  const manifestRegistry = loadPluginManifestRegistryForInstalledIndexMock(params) ?? {
-    plugins: [],
-    diagnostics: [],
-  };
-  return {
-    index: params.index ?? createInstalledPluginIndexSnapshot([]),
-    manifestRegistry,
-    plugins: manifestRegistry.plugins,
-    byPluginId: new Map(
-      manifestRegistry.plugins.map((plugin: { id: string }) => [plugin.id, plugin]),
-    ),
-  };
-});
-const applyPluginAutoEnableMock = vi.fn();
-const resolveBundledProviderCompatPluginIdsMock = vi.fn();
-const withBundledPluginEnablementCompatMock = vi.fn();
-const listImportedBundledPluginFacadeIdsMock = vi.fn();
-const listImportedRuntimePluginIdsMock = vi.fn();
-let buildPluginSnapshotReport: typeof import("./status.js").buildPluginSnapshotReport;
-let buildPluginRegistrySnapshotReport: typeof import("./status.js").buildPluginRegistrySnapshotReport;
-let buildPluginDiagnosticsReport: typeof import("./status.js").buildPluginDiagnosticsReport;
-let buildPluginInspectReport: typeof import("./status.js").buildPluginInspectReport;
-let buildAllPluginInspectReports: typeof import("./status.js").buildAllPluginInspectReports;
-let buildPluginCompatibilityNotices: typeof import("./status.js").buildPluginCompatibilityNotices;
-let buildPluginCompatibilityWarnings: typeof import("./status.js").buildPluginCompatibilityWarnings;
-let formatPluginCompatibilityNotice: typeof import("./status.js").formatPluginCompatibilityNotice;
-let summarizePluginCompatibility: typeof import("./status.js").summarizePluginCompatibility;
+const mocks = vi.hoisted(() => ({
+  config: vi.fn(),
+  load: vi.fn(),
+  runtimeRegistry: vi.fn(),
+  metadataRegistry: vi.fn(),
+  metadataSnapshot: vi.fn(),
+  autoEnable: vi.fn(),
+  compatIds: vi.fn(),
+  compatConfig: vi.fn(),
+  facadeIds: vi.fn(),
+  runtimeIds: vi.fn(),
+}));
 
 vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: () => loadConfigMock(),
-  loadConfig: () => loadConfigMock(),
+  getRuntimeConfig: mocks.config,
+  loadConfig: mocks.config,
 }));
-
-vi.mock("../config/plugin-auto-enable.js", () => ({
-  applyPluginAutoEnable: (...args: unknown[]) => applyPluginAutoEnableMock(...args),
+vi.mock("../config/io.plugin-metadata.js", () => ({
+  resolveConfigWidePluginMetadataSnapshot: mocks.metadataSnapshot,
 }));
-
+vi.mock("../config/plugin-auto-enable.js", () => ({ applyPluginAutoEnable: mocks.autoEnable }));
 vi.mock("./loader.js", () => ({
-  loadOpenClawPlugins: (...args: unknown[]) => loadOpenClawPluginsMock(...args),
+  loadOpenClawPlugins: mocks.load,
+  loadPluginRegistryHandle: (options: Record<string, unknown> = {}) =>
+    mocks.load({ ...options, activate: false }),
+  resolveCompatibleRuntimePluginRegistry: mocks.runtimeRegistry,
 }));
-
 vi.mock("./runtime/metadata-registry-loader.js", () => ({
-  loadPluginMetadataRegistrySnapshot: (...args: unknown[]) =>
-    loadPluginMetadataRegistrySnapshotMock(...args),
+  loadPluginMetadataRegistrySnapshot: mocks.metadataRegistry,
 }));
-
-vi.mock("./plugin-registry.js", () => ({
-  loadPluginManifestRegistryForPluginRegistry: (...args: unknown[]) =>
-    loadPluginManifestRegistryForPluginRegistryMock(...args),
-  loadPluginRegistrySnapshotWithMetadata: (...args: unknown[]) =>
-    loadPluginRegistrySnapshotWithMetadataMock(...args),
-}));
-
-vi.mock("./manifest-registry-installed.js", () => ({
-  loadPluginManifestRegistryForInstalledIndex: (...args: unknown[]) =>
-    loadPluginManifestRegistryForInstalledIndexMock(...args),
-  resolveInstalledManifestRegistryIndexFingerprint: () => "test-installed-index",
-}));
-
-vi.mock("./plugin-metadata-snapshot.js", () => ({
-  isPluginMetadataSnapshotCompatible: isPluginMetadataSnapshotCompatibleMock,
-  loadPluginMetadataSnapshot: (params?: unknown) => loadPluginMetadataSnapshotMock(params),
-  resolvePluginMetadataSnapshot: (params?: { pluginMetadataSnapshot?: unknown }) =>
-    params?.pluginMetadataSnapshot ?? loadPluginMetadataSnapshotMock(params),
-}));
-
-vi.mock("./providers.js", () => ({
-  resolveBundledProviderCompatPluginIds: (...args: unknown[]) =>
-    resolveBundledProviderCompatPluginIdsMock(...args),
-}));
-
-vi.mock("./bundled-compat.js", () => ({
-  withBundledPluginEnablementCompat: (...args: unknown[]) =>
-    withBundledPluginEnablementCompatMock(...args),
-}));
-
+vi.mock("./plugin-metadata-snapshot.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./plugin-metadata-snapshot.js")>();
+  return {
+    loadPluginMetadataSnapshot: mocks.metadataSnapshot,
+    projectPluginMetadataSnapshot: actual.projectPluginMetadataSnapshot,
+    resolvePluginMetadataSnapshot: (params?: { pluginMetadataSnapshot?: unknown }) =>
+      params?.pluginMetadataSnapshot ?? mocks.metadataSnapshot(params),
+  };
+});
+vi.mock("./providers.js", () => ({ resolveBundledProviderCompatPluginIds: mocks.compatIds }));
+vi.mock("./bundled-compat.js", () => ({ withBundledPluginEnablementCompat: mocks.compatConfig }));
 vi.mock("../plugin-sdk/facade-runtime.js", () => ({
-  listImportedBundledPluginFacadeIds: (...args: unknown[]) =>
-    listImportedBundledPluginFacadeIdsMock(...args),
+  listImportedBundledPluginFacadeIds: mocks.facadeIds,
 }));
-
 vi.mock("./runtime.js", () => ({
   getActivePluginChannelRegistry: () => null,
-  listImportedRuntimePluginIds: (...args: unknown[]) => listImportedRuntimePluginIdsMock(...args),
+  listImportedRuntimePluginIds: mocks.runtimeIds,
 }));
-
 vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: () => undefined,
   resolveDefaultAgentId: () => "default",
+  tryResolveConfiguredAgentWorkspaceDir: () => undefined,
+  tryResolveSystemAgentWorkspaceDir: () => undefined,
 }));
-
 vi.mock("../agents/workspace.js", () => ({
   resolveDefaultAgentWorkspaceDir: () => "/default-workspace",
 }));
 
-function setPluginLoadResult(overrides: Partial<ReturnType<typeof createPluginLoadResult>>) {
-  const result = createPluginLoadResult({
-    plugins: [],
-    ...overrides,
-  });
-  loadOpenClawPluginsMock.mockReturnValue(result);
-  loadPluginMetadataRegistrySnapshotMock.mockReturnValue(result);
+function setReport(overrides: Partial<ReturnType<typeof createPluginLoadResult>> = {}) {
+  const report = createPluginLoadResult({ plugins: [], ...overrides });
+  mocks.load.mockReturnValue(report);
+  mocks.metadataRegistry.mockReturnValue(report);
+  return report;
 }
 
-function setSinglePluginLoadResult(
-  plugin: ReturnType<typeof createPluginRecord>,
-  overrides: Omit<Partial<ReturnType<typeof createPluginLoadResult>>, "plugins"> = {},
-) {
-  setPluginLoadResult({
-    plugins: [plugin],
-    ...overrides,
-  });
-}
-
-function createInstalledPluginIndexSnapshot(
-  plugins: Array<Record<string, unknown>>,
-): Record<string, unknown> {
-  return {
-    version: 1,
-    warning: "test",
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash: "test",
-    generatedAtMs: 0,
-    installRecords: {},
-    plugins,
-    diagnostics: [],
-  };
-}
-
-function expectInspectReport(
-  pluginId: string,
-  options: Omit<Parameters<typeof buildPluginInspectReport>[0], "id"> = {},
-): NonNullable<ReturnType<typeof buildPluginInspectReport>> {
-  const inspect = buildPluginInspectReport({ id: pluginId, ...options });
-  if (inspect === null) {
-    throw new Error(`expected inspect report for ${pluginId}`);
-  }
-  return inspect;
-}
-
-function mockInput(mock: { mock: { calls: unknown[][] } }, index = 0): Record<string, unknown> {
-  const input = mock.mock.calls[index]?.[0];
-  if (!input || typeof input !== "object") {
-    throw new Error(`expected mock input ${index}`);
-  }
-  return input as Record<string, unknown>;
-}
-
-function expectMockCalledWithFields(
-  mock: { mock: { calls: unknown[][] } },
-  fields: Record<string, unknown>,
-) {
-  const input = mockInput(mock, mock.mock.calls.length - 1);
-  for (const [key, expected] of Object.entries(fields)) {
-    expect(input[key]).toEqual(expected);
-  }
-}
-
-function expectPluginLoaderCall(params: {
-  config?: unknown;
-  activationSourceConfig?: unknown;
-  autoEnabledReasons?: Record<string, string[]>;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  logger?: unknown;
-  loadModules?: boolean;
-}) {
-  expectMockCalledWithFields(loadOpenClawPluginsMock, {
-    ...(params.config !== undefined ? { config: params.config } : {}),
-    ...(params.activationSourceConfig !== undefined
-      ? { activationSourceConfig: params.activationSourceConfig }
-      : {}),
-    ...(params.autoEnabledReasons !== undefined
-      ? { autoEnabledReasons: params.autoEnabledReasons }
-      : {}),
-    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-    ...(params.env ? { env: params.env } : {}),
-    ...(params.logger !== undefined ? { logger: params.logger } : {}),
-    ...(params.loadModules !== undefined ? { loadModules: params.loadModules } : {}),
-  });
-}
-
-function expectMetadataSnapshotLoaderCall(params: {
-  config?: unknown;
-  activationSourceConfig?: unknown;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  logger?: unknown;
-  loadModules?: boolean;
-}) {
-  expectMockCalledWithFields(loadPluginMetadataRegistrySnapshotMock, {
-    ...(params.config !== undefined ? { config: params.config } : {}),
-    ...(params.activationSourceConfig !== undefined
-      ? { activationSourceConfig: params.activationSourceConfig }
-      : {}),
-    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-    ...(params.env ? { env: params.env } : {}),
-    ...(params.logger !== undefined ? { logger: params.logger } : {}),
-    ...(params.loadModules !== undefined ? { loadModules: params.loadModules } : {}),
-  });
-}
-
-function expectAutoEnabledStatusLoad(params: { rawConfig: unknown }) {
-  expectMockCalledWithFields(applyPluginAutoEnableMock, {
-    config: params.rawConfig,
-    env: process.env,
-  });
-}
-
-function createCompatChainFixture() {
-  const config = { plugins: { allow: ["telegram"] } };
-  const pluginIds = ["anthropic", "openai"];
-  const enabledConfig = {
-    plugins: {
-      allow: ["telegram"],
-      entries: {
-        anthropic: { enabled: true },
-        openai: { enabled: true },
-      },
-    },
-  };
-  return { config, pluginIds, enabledConfig };
-}
-
-function expectBundledCompatChainApplied(params: {
-  config: unknown;
-  pluginIds: string[];
-  enabledConfig: unknown;
-  loadModules: boolean;
-}) {
-  expect(withBundledPluginEnablementCompatMock).toHaveBeenCalledWith({
-    config: params.config,
-    pluginIds: params.pluginIds,
-  });
-  if (params.loadModules) {
-    expectPluginLoaderCall({ config: params.enabledConfig, loadModules: true });
-    return;
-  }
-  expectMetadataSnapshotLoaderCall({ config: params.enabledConfig, loadModules: false });
-}
-
-function createAutoEnabledStatusConfig(
-  entries: Record<string, unknown>,
-  rawConfigOverrides?: Record<string, unknown>,
-) {
-  const rawConfig = {
-    plugins: {},
-    ...rawConfigOverrides,
-  };
-  const autoEnabledConfig = {
-    ...rawConfig,
-    plugins: {
-      entries,
-    },
-  };
-  return { rawConfig, autoEnabledConfig };
-}
-
-function expectAutoEnabledDemoCompatibilityNoticesPreserveRawConfig() {
-  const { rawConfig, autoEnabledConfig } = createAutoEnabledStatusConfig(
-    {
-      demo: { enabled: true },
-    },
-    { channels: { demo: { enabled: true } } },
-  );
-  const autoEnabledReasons = {
-    demo: ["demo configured"],
-  };
-  applyPluginAutoEnableMock.mockReturnValue({
-    config: autoEnabledConfig,
-    changes: [],
-    autoEnabledReasons,
-  });
-  setSinglePluginLoadResult(
-    createPluginRecord({
-      id: "demo",
-      name: "Demo",
-      description: "Auto-enabled plugin",
-      origin: "bundled",
-      hookCount: 1,
-    }),
-    {
-      typedHooks: [createTypedHook({ pluginId: "demo", hookName: "before_agent_start" })],
-    },
-  );
-
-  expect(buildPluginCompatibilityNotices({ config: rawConfig })).toEqual([
-    createCompatibilityNotice({ pluginId: "demo", code: "legacy-before-agent-start" }),
-    createCompatibilityNotice({ pluginId: "demo", code: "hook-only" }),
-  ]);
-
-  expectAutoEnabledStatusLoad({
-    rawConfig,
-  });
-  expectPluginLoaderCall({
-    config: autoEnabledConfig,
-    activationSourceConfig: rawConfig,
-    autoEnabledReasons,
-    loadModules: true,
-  });
-}
-
-function expectNoCompatibilityWarnings() {
-  expect(buildPluginCompatibilityNotices()).toStrictEqual([]);
-  expect(buildPluginCompatibilityWarnings()).toStrictEqual([]);
-}
-
-function expectCompatibilityOutput(params: { notices?: unknown[]; warnings?: string[] }) {
-  if (params.notices) {
-    expect(buildPluginCompatibilityNotices()).toEqual(params.notices);
-  }
-  if (params.warnings) {
-    expect(buildPluginCompatibilityWarnings()).toEqual(params.warnings);
-  }
-}
-
-function expectCapabilityKinds(
-  inspect: NonNullable<ReturnType<typeof buildPluginInspectReport>>,
-  kinds: readonly string[],
-) {
-  expect(inspect.capabilities.map((entry) => entry.kind)).toEqual(kinds);
-}
-
-function expectInspectShape(
-  inspect: NonNullable<ReturnType<typeof buildPluginInspectReport>>,
-  params: {
-    shape: string;
-    capabilityMode: string;
-    capabilityKinds: readonly string[];
-  },
-) {
-  expect(inspect.shape).toBe(params.shape);
-  expect(inspect.capabilityMode).toBe(params.capabilityMode);
-  expectCapabilityKinds(inspect, params.capabilityKinds);
-}
-
-function expectInspectPolicy(
-  inspect: NonNullable<ReturnType<typeof buildPluginInspectReport>>,
-  expected: Record<string, unknown>,
-) {
-  expect(inspect.policy).toEqual(expected);
-}
-
-function expectBundleInspectState(
-  inspect: NonNullable<ReturnType<typeof buildPluginInspectReport>>,
-  params: {
-    bundleCapabilities: readonly string[];
-    shape: string;
-  },
-) {
-  expect(inspect.bundleCapabilities).toEqual(params.bundleCapabilities);
-  expect(inspect.mcpServers).toStrictEqual([]);
-  expect(inspect.shape).toBe(params.shape);
+function inspect(id: string, report: ReturnType<typeof createPluginLoadResult>) {
+  return expectDefined(status.buildPluginInspectReport({ id, report }), `inspect ${id}`);
 }
 
 describe("plugin status reports", () => {
-  beforeAll(async () => {
-    ({
-      buildAllPluginInspectReports,
-      buildPluginCompatibilityNotices,
-      buildPluginDiagnosticsReport,
-      buildPluginCompatibilityWarnings,
-      buildPluginInspectReport,
-      buildPluginRegistrySnapshotReport,
-      buildPluginSnapshotReport,
-      formatPluginCompatibilityNotice,
-      summarizePluginCompatibility,
-    } = await import("./status.js"));
-  });
-
   beforeEach(() => {
-    loadConfigMock.mockReset();
-    loadOpenClawPluginsMock.mockReset();
-    loadPluginMetadataRegistrySnapshotMock.mockReset();
-    loadPluginManifestRegistryForPluginRegistryMock.mockReset();
-    loadPluginRegistrySnapshotWithMetadataMock.mockReset();
-    loadPluginManifestRegistryForInstalledIndexMock.mockReset();
-    isPluginMetadataSnapshotCompatibleMock.mockReset();
-    isPluginMetadataSnapshotCompatibleMock.mockReturnValue(true);
-    loadPluginMetadataSnapshotMock.mockClear();
-    applyPluginAutoEnableMock.mockReset();
-    resolveBundledProviderCompatPluginIdsMock.mockReset();
-    withBundledPluginEnablementCompatMock.mockReset();
-    listImportedBundledPluginFacadeIdsMock.mockReset();
-    listImportedRuntimePluginIdsMock.mockReset();
-    loadConfigMock.mockReturnValue({});
-    loadPluginRegistrySnapshotWithMetadataMock.mockReturnValue({
-      snapshot: createInstalledPluginIndexSnapshot([]),
-      source: "derived",
-      diagnostics: [],
+    clearPluginMetadataLifecycleCaches();
+    for (const mock of Object.values(mocks)) {
+      mock.mockReset();
+    }
+    mocks.config.mockReturnValue({});
+    mocks.metadataSnapshot.mockImplementation(() => {
+      const manifestRegistry = { plugins: [], diagnostics: [] };
+      return {
+        index: createInstalledPluginIndexSnapshot([]),
+        manifestRegistry,
+        plugins: manifestRegistry.plugins,
+        byPluginId: new Map(),
+        diagnostics: [],
+      };
     });
-    loadPluginManifestRegistryForPluginRegistryMock.mockReturnValue({
-      plugins: [],
-      diagnostics: [],
-    });
-    loadPluginManifestRegistryForInstalledIndexMock.mockReturnValue({
-      plugins: [],
-      diagnostics: [],
-    });
-    applyPluginAutoEnableMock.mockImplementation((params: { config: unknown }) => ({
+    mocks.autoEnable.mockImplementation((params: { config: unknown }) => ({
       config: params.config,
       changes: [],
       autoEnabledReasons: {},
     }));
-    resolveBundledProviderCompatPluginIdsMock.mockReturnValue([]);
-    withBundledPluginEnablementCompatMock.mockImplementation(
-      (params: { config: unknown }) => params.config,
-    );
-    listImportedBundledPluginFacadeIdsMock.mockReturnValue([]);
-    listImportedRuntimePluginIdsMock.mockReturnValue([]);
-    setPluginLoadResult({ plugins: [] });
-  });
-
-  it("forwards an explicit env to plugin loading", () => {
-    const env = { HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv;
-
-    buildPluginSnapshotReport({
-      config: {},
-      workspaceDir: "/workspace",
-      env,
-    });
-
-    expectMetadataSnapshotLoaderCall({
-      config: {},
-      workspaceDir: "/workspace",
-      env,
-      loadModules: false,
-    });
-  });
-
-  it("forwards an explicit logger to plugin loading", () => {
-    const logger = {
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-    };
-
-    buildPluginSnapshotReport({
-      config: {},
-      logger,
-      workspaceDir: "/workspace",
-    });
-
-    expectMetadataSnapshotLoaderCall({
-      config: {},
-      logger,
-      workspaceDir: "/workspace",
-      loadModules: false,
-    });
-  });
-
-  it("carries installed-index compatibility metadata into registry snapshot reports", () => {
-    loadPluginRegistrySnapshotWithMetadataMock.mockReturnValue({
-      snapshot: createInstalledPluginIndexSnapshot([
-        {
-          pluginId: "provider-env-plugin",
-          manifestPath: "/tmp/provider-env-plugin/openclaw.plugin.json",
-          manifestHash: "manifest-hash",
-          rootDir: "/tmp/provider-env-plugin",
-          origin: "workspace",
-          enabled: true,
-          startup: {
-            sidecar: false,
-            memory: false,
-            deferConfiguredChannelFullLoadUntilAfterListen: false,
-            agentHarnesses: [],
-          },
-          compat: ["provider-auth-env-vars"],
-        },
-      ]),
-      source: "derived",
-      diagnostics: [],
-    });
-    loadPluginManifestRegistryForInstalledIndexMock.mockReturnValue({
-      plugins: [{ id: "provider-env-plugin", name: "Provider Env Plugin" }],
-      diagnostics: [],
-    });
-
-    const report = buildPluginRegistrySnapshotReport({ config: {} });
-
-    expect(report.plugins[0]?.id).toBe("provider-env-plugin");
-    expect(report.plugins[0]?.compat).toEqual(["provider-auth-env-vars"]);
-  });
-
-  it("uses a metadata snapshot load for snapshot reports", () => {
-    buildPluginSnapshotReport({ config: {}, workspaceDir: "/workspace" });
-
-    expect(mockInput(loadPluginMetadataRegistrySnapshotMock).loadModules).toBe(false);
-    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
-  });
-
-  it("loads plugin status from the auto-enabled config snapshot", () => {
-    const { rawConfig, autoEnabledConfig } = createAutoEnabledStatusConfig(
-      {
-        demo: { enabled: true },
-      },
-      { channels: { demo: { enabled: true } } },
-    );
-    applyPluginAutoEnableMock.mockReturnValue({
-      config: autoEnabledConfig,
-      changes: [],
-      autoEnabledReasons: {
-        demo: ["demo configured"],
-      },
-    });
-
-    buildPluginSnapshotReport({ config: rawConfig });
-
-    expectAutoEnabledStatusLoad({
-      rawConfig,
-    });
-    expectMetadataSnapshotLoaderCall({
-      config: autoEnabledConfig,
-      activationSourceConfig: rawConfig,
-      loadModules: false,
-    });
-  });
-
-  it("uses the auto-enabled config snapshot for inspect policy summaries", () => {
-    const { rawConfig, autoEnabledConfig } = createAutoEnabledStatusConfig(
-      {
-        demo: {
-          enabled: true,
-          subagent: {
-            allowModelOverride: true,
-            allowedModels: ["openai/gpt-5.5"],
-            hasAllowedModelsConfig: true,
-          },
-        },
-      },
-      { channels: { demo: { enabled: true } } },
-    );
-    applyPluginAutoEnableMock.mockReturnValue({
-      config: autoEnabledConfig,
-      changes: [],
-      autoEnabledReasons: {
-        demo: ["demo configured"],
-      },
-    });
-    setSinglePluginLoadResult(
-      createPluginRecord({
-        id: "demo",
-        name: "Demo",
-        description: "Auto-enabled plugin",
-        origin: "bundled",
-        providerIds: ["demo"],
-      }),
-    );
-
-    const inspect = expectInspectReport("demo", { config: rawConfig });
-
-    expectInspectPolicy(inspect, {
-      allowPromptInjection: undefined,
-      allowConversationAccess: undefined,
-      hookTimeoutMs: undefined,
-      hookTimeouts: undefined,
-      allowModelOverride: true,
-      allowedModels: ["openai/gpt-5.5"],
-      hasAllowedModelsConfig: true,
-    });
-    expectPluginLoaderCall({ loadModules: true });
-  });
-
-  it("preserves raw config activation context when compatibility notices build their own report", () => {
-    expectAutoEnabledDemoCompatibilityNoticesPreserveRawConfig();
+    mocks.compatIds.mockReturnValue([]);
+    mocks.compatConfig.mockImplementation((params: { config: unknown }) => params.config);
+    mocks.facadeIds.mockReturnValue([]);
+    mocks.runtimeIds.mockReturnValue([]);
+    setReport();
   });
 
   it("applies the full bundled provider compat chain before loading plugins", () => {
     const { config, pluginIds, enabledConfig } = createCompatChainFixture();
-    loadConfigMock.mockReturnValue(config);
-    resolveBundledProviderCompatPluginIdsMock.mockReturnValue(pluginIds);
-    withBundledPluginEnablementCompatMock.mockReturnValue(enabledConfig);
-
-    buildPluginSnapshotReport({ config });
-
-    expectBundledCompatChainApplied({
-      config,
-      pluginIds,
-      enabledConfig,
-      loadModules: false,
-    });
-  });
-
-  it("preserves raw config activation context for compatibility-derived reports", () => {
-    expectAutoEnabledDemoCompatibilityNoticesPreserveRawConfig();
-  });
-
-  it("normalizes bundled plugin versions to the core base release", () => {
-    setSinglePluginLoadResult(
-      createPluginRecord({
-        id: "whatsapp",
-        name: "WhatsApp",
-        description: "Bundled channel plugin",
-        version: "2026.3.22",
-        origin: "bundled",
-        channelIds: ["whatsapp"],
+    mocks.compatIds.mockReturnValue(pluginIds);
+    mocks.compatConfig.mockReturnValue(enabledConfig);
+    status.buildPluginSnapshotReport({ config });
+    expect(mocks.compatConfig).toHaveBeenCalledWith({ config, pluginIds, activation: "defaults" });
+    expect(mocks.metadataRegistry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: enabledConfig,
+        loadModules: false,
       }),
     );
-
-    const report = buildPluginDiagnosticsReport({
-      config: {},
-      env: {
-        OPENCLAW_VERSION: "2026.3.23-1",
-      } as NodeJS.ProcessEnv,
-    });
-
-    expect(report.plugins[0]?.version).toBe("2026.3.23");
   });
 
-  it("marks plugins as imported when runtime or facade state has loaded them", () => {
-    setPluginLoadResult({
-      plugins: [
-        createPluginRecord({ id: "runtime-loaded" }),
-        createPluginRecord({ id: "facade-loaded" }),
-        createPluginRecord({ id: "bundle-loaded", format: "bundle" }),
-        createPluginRecord({ id: "cold-plugin" }),
-      ],
-    });
-    listImportedRuntimePluginIdsMock.mockReturnValue(["runtime-loaded", "bundle-loaded"]);
-    listImportedBundledPluginFacadeIdsMock.mockReturnValue(["facade-loaded"]);
-
-    const report = buildPluginSnapshotReport({ config: {} });
-
-    const pluginsById = new Map(report.plugins.map((plugin) => [plugin.id, plugin]));
-    expect(pluginsById.get("runtime-loaded")?.imported).toBe(true);
-    expect(pluginsById.get("facade-loaded")?.imported).toBe(true);
-    expect(pluginsById.get("bundle-loaded")?.imported).toBe(false);
-    expect(pluginsById.get("cold-plugin")?.imported).toBe(false);
-  });
-
-  it("marks snapshot-loaded plugin modules as imported during full report loads", () => {
-    setPluginLoadResult({
-      plugins: [
-        createPluginRecord({ id: "runtime-loaded" }),
-        createPluginRecord({ id: "bundle-loaded", format: "bundle" }),
-      ],
-    });
-
-    const report = buildPluginDiagnosticsReport({ config: {} });
-
-    const pluginsById = new Map(report.plugins.map((plugin) => [plugin.id, plugin]));
-    expect(pluginsById.get("runtime-loaded")?.imported).toBe(true);
-    expect(pluginsById.get("bundle-loaded")?.imported).toBe(false);
-  });
-
-  it("marks errored plugin modules as imported when full diagnostics already evaluated them", () => {
-    setPluginLoadResult({
-      plugins: [createPluginRecord({ id: "broken-plugin", status: "error" })],
-    });
-    listImportedRuntimePluginIdsMock.mockReturnValue(["broken-plugin"]);
-
-    const report = buildPluginDiagnosticsReport({ config: {} });
-
-    const plugin = report.plugins.find((entry) => entry.id === "broken-plugin");
-    expect(plugin?.status).toBe("error");
-    expect(plugin?.imported).toBe(true);
-  });
-
-  it("builds an inspect report with capability shape and policy", () => {
-    loadConfigMock.mockReturnValue({
-      plugins: {
-        entries: {
-          google: {
-            hooks: { allowPromptInjection: false, allowConversationAccess: true },
-            subagent: {
-              allowModelOverride: true,
-              allowedModels: ["openai/gpt-5.5"],
-            },
+  it("inspects registered capabilities and normalized policy from auto-enabled config", () => {
+    const { rawConfig, autoEnabledConfig } = createAutoEnabledStatusConfig(
+      {
+        google: {
+          enabled: true,
+          hooks: {
+            allowPromptInjection: false,
+            allowConversationAccess: true,
+            timeoutMs: 1700,
+            timeouts: { gateway_stop: 1300 },
           },
+          subagent: { allowModelOverride: true, allowedModels: ["openai/gpt-5.5"] },
         },
       },
+      { channels: { google: { enabled: true } } },
+    );
+    mocks.config.mockReturnValue(rawConfig);
+    mocks.autoEnable.mockReturnValue({
+      config: autoEnabledConfig,
+      changes: [],
+      autoEnabledReasons: {},
     });
-    setPluginLoadResult({
+    const id = "GoOgLe";
+    const report = setReport({
       plugins: [
         createPluginRecord({
-          id: "google",
-          name: "Google",
-          description: "Google provider plugin",
+          id,
           origin: "bundled",
-          providerIds: ["google"],
-          mediaUnderstandingProviderIds: ["google"],
-          imageGenerationProviderIds: ["google"],
-          webSearchProviderIds: ["google"],
+          kind: "context-engine",
+          contextEngineIds: ["context"],
+          contracts: { webContentExtractors: ["readability"] },
+          webFetchProviderIds: ["fetch"],
+          webSearchProviderIds: ["search"],
+          migrationProviderIds: ["importer"],
         }),
       ],
-      diagnostics: [{ level: "warn", pluginId: "google", message: "watch this surface" }],
-      typedHooks: [createTypedHook({ pluginId: "google", hookName: "before_agent_start" })],
+      hooks: [createCustomHook({ pluginId: id, events: ["message"] })],
+      diagnostics: [{ level: "warn", pluginId: id, message: "watch this surface" }],
     });
-
-    const inspect = expectInspectReport("google");
-
-    expectInspectShape(inspect, {
+    const result = inspect(id, report);
+    expect(result).toMatchObject({
       shape: "hybrid-capability",
       capabilityMode: "hybrid",
-      capabilityKinds: ["text-inference", "media-understanding", "image-generation", "web-search"],
+      compatibility: [],
     });
-    expect(inspect.usesLegacyBeforeAgentStart).toBe(true);
-    expect(inspect.compatibility).toEqual([
-      createCompatibilityNotice({ pluginId: "google", code: "legacy-before-agent-start" }),
+    expect(result.capabilities).toEqual([
+      { kind: "web-content-extractors", ids: ["readability"] },
+      { kind: "web-fetch", ids: ["fetch"] },
+      { kind: "web-search", ids: ["search"] },
+      { kind: "migration-provider", ids: ["importer"] },
+      { kind: "context-engine", ids: ["context"] },
     ]);
-    expectInspectPolicy(inspect, {
+    expect(result.policy).toEqual({
       allowPromptInjection: false,
       allowConversationAccess: true,
-      hookTimeoutMs: undefined,
-      hookTimeouts: undefined,
+      hookTimeoutMs: 1700,
+      hookTimeouts: { gateway_stop: 1300 },
       allowModelOverride: true,
       allowedModels: ["openai/gpt-5.5"],
       hasAllowedModelsConfig: true,
     });
-    expect(inspect.diagnostics).toEqual([
-      { level: "warn", pluginId: "google", message: "watch this surface" },
+    expect(result.diagnostics).toEqual(report.diagnostics);
+    expect(result.plugin.id).toBe(id);
+    expect(status.buildAllPluginInspectReports({ report })).toEqual([result]);
+    expect(mocks.load).not.toHaveBeenCalled();
+  });
+
+  it("prefers exact plugin ids over display names in individual and all inspect reports", () => {
+    const report = setReport({
+      plugins: [
+        createPluginRecord({ id: "lca", name: "microsoft" }),
+        createPluginRecord({ id: "microsoft", name: "Microsoft" }),
+      ],
+    });
+    expect(inspect("microsoft", report).plugin.id).toBe("microsoft");
+    expect(inspect("Microsoft", report).plugin.id).toBe("microsoft");
+    const results = status.buildAllPluginInspectReports({ report });
+    expect(results.map((entry) => entry.plugin.id)).toEqual(["lca", "microsoft"]);
+  });
+
+  it("projects imported state before and after diagnostics evaluate native modules", async () => {
+    setReport({
+      plugins: [
+        createPluginRecord({ id: "runtime-loaded", origin: "bundled", version: "2026.3.22" }),
+        createPluginRecord({ id: "facade-loaded" }),
+        createPluginRecord({ id: "broken-plugin", status: "error" }),
+        createPluginRecord({ id: "bundle-loaded", format: "bundle" }),
+        createPluginRecord({ id: "cold-plugin" }),
+      ],
+    });
+    mocks.runtimeIds.mockReturnValue(["runtime-loaded", "broken-plugin", "bundle-loaded"]);
+    mocks.facadeIds.mockReturnValue(["facade-loaded"]);
+    const snapshot = status.buildPluginSnapshotReport({ config: {} });
+    expect(snapshot.plugins.map(({ id, imported }) => [id, imported])).toEqual([
+      ["runtime-loaded", true],
+      ["facade-loaded", true],
+      ["broken-plugin", true],
+      ["bundle-loaded", false],
+      ["cold-plugin", false],
     ]);
-  });
-
-  it("builds inspect reports for every loaded plugin", () => {
-    setPluginLoadResult({
-      plugins: [
-        createPluginRecord({
-          id: "lca",
-          name: "LCA",
-          description: "Legacy hook plugin",
-          hookCount: 1,
-        }),
-        createPluginRecord({
-          id: "microsoft",
-          name: "Microsoft",
-          description: "Hybrid capability plugin",
-          origin: "bundled",
-          providerIds: ["microsoft"],
-          webSearchProviderIds: ["microsoft"],
-        }),
-      ],
-      hooks: [createCustomHook({ pluginId: "lca", events: ["message"] })],
-      typedHooks: [createTypedHook({ pluginId: "lca", hookName: "before_agent_start" })],
-    });
-
-    const inspect = buildAllPluginInspectReports();
-
-    expect(inspect.map((entry) => entry.plugin.id)).toEqual(["lca", "microsoft"]);
-    expect(inspect.map((entry) => entry.shape)).toEqual(["hook-only", "hybrid-capability"]);
-    expect(inspect[0]?.usesLegacyBeforeAgentStart).toBe(true);
-    expectCapabilityKinds(expectDefined(inspect[1], "inspect[1] test invariant"), [
-      "text-inference",
-      "web-search",
-    ]);
-  });
-
-  it("treats a CLI-command-only plugin as a plain capability", () => {
-    setSinglePluginLoadResult(
-      createPluginRecord({
-        id: "anthropic",
-        name: "Anthropic",
-        cliBackendIds: ["claude-cli"],
-      }),
-    );
-
-    const inspect = expectInspectReport("anthropic");
-
-    expectInspectShape(inspect, {
-      shape: "plain-capability",
-      capabilityMode: "plain",
-      capabilityKinds: ["cli-backend"],
-    });
-    expect(inspect.capabilities).toEqual([{ kind: "cli-backend", ids: ["claude-cli"] }]);
-  });
-
-  it("treats a context-engine plugin as a plain capability", () => {
-    setPluginLoadResult({
-      plugins: [
-        createPluginRecord({
-          id: "moon",
-          name: "Moon",
-          kind: "context-engine",
-          contextEngineIds: ["moon-engine"],
-          hookCount: 1,
-        }),
-      ],
-      hooks: [createCustomHook({ pluginId: "moon", events: ["message"] })],
-    });
-
-    const inspect = expectInspectReport("moon");
-
-    expectInspectShape(inspect, {
-      shape: "plain-capability",
-      capabilityMode: "plain",
-      capabilityKinds: ["context-engine"],
-    });
-    expect(inspect.capabilities).toEqual([{ kind: "context-engine", ids: ["moon-engine"] }]);
-    expect(inspect.compatibility).toStrictEqual([]);
-    expectNoCompatibilityWarnings();
-  });
-
-  it("builds compatibility warnings for legacy compatibility paths", () => {
-    setPluginLoadResult({
-      plugins: [
-        createPluginRecord({
-          id: "lca",
-          name: "LCA",
-          description: "Legacy hook plugin",
-          hookCount: 1,
-        }),
-      ],
-      typedHooks: [createTypedHook({ pluginId: "lca", hookName: "before_agent_start" })],
-    });
-
-    expectCompatibilityOutput({
-      warnings: [`lca ${LEGACY_BEFORE_AGENT_START_MESSAGE}`, `lca ${HOOK_ONLY_MESSAGE}`],
-    });
-  });
-
-  it("warns external plugins off deprecated memory embedding provider registration", () => {
-    setSinglePluginLoadResult(
-      createPluginRecord({
-        id: "legacy-memory-provider",
-        name: "Legacy Memory Provider",
-        memoryEmbeddingProviderIds: ["legacy-memory-provider"],
-        contracts: { memoryEmbeddingProviders: ["legacy-memory-provider"] },
-      }),
-    );
-
-    expectCompatibilityOutput({
-      notices: [
-        createCompatibilityNotice({
-          pluginId: "legacy-memory-provider",
-          code: "deprecated-memory-embedding-provider-api",
-        }),
-      ],
-      warnings: [`legacy-memory-provider ${DEPRECATED_MEMORY_EMBEDDING_PROVIDER_API_MESSAGE}`],
-    });
-  });
-
-  it("warns when external plugins register memory embedding providers at runtime only", () => {
-    const runtimeProviderRegistration: PluginMemoryEmbeddingProviderRegistration = {
-      pluginId: "runtime-only-legacy-memory-provider",
-      pluginName: "Runtime Only Legacy Memory Provider",
-      provider: {
-        id: "runtime-only-legacy-memory-provider",
-        create: async () => ({ provider: null }),
+    await status.withPluginDiagnosticsReport(
+      { config: {}, env: { OPENCLAW_VERSION: "2026.3.23-1" } },
+      (report) => {
+        expect(report.plugins[0]?.version).toBe("2026.3.23");
+        expect(report.plugins.map(({ id, imported }) => [id, imported])).toEqual([
+          ["runtime-loaded", true],
+          ["facade-loaded", true],
+          ["broken-plugin", true],
+          ["bundle-loaded", false],
+          ["cold-plugin", true],
+        ]);
+        expect(report.plugins.find((plugin) => plugin.id === "broken-plugin")?.status).toBe(
+          "error",
+        );
       },
-      source: "/tmp/runtime-only-legacy-memory-provider/index.ts",
-    };
-    setPluginLoadResult({
-      plugins: [
-        createPluginRecord({
-          id: "runtime-only-legacy-memory-provider",
-          name: "Runtime Only Legacy Memory Provider",
-        }),
-      ],
-      memoryEmbeddingProviders: [runtimeProviderRegistration],
-    });
-
-    expectCompatibilityOutput({
-      notices: [
-        createCompatibilityNotice({
-          pluginId: "runtime-only-legacy-memory-provider",
-          code: "deprecated-memory-embedding-provider-api",
-        }),
-      ],
-      warnings: [
-        `runtime-only-legacy-memory-provider ${DEPRECATED_MEMORY_EMBEDDING_PROVIDER_API_MESSAGE}`,
-      ],
-    });
-  });
-
-  it("does not surface bundled memory embedding migration debt as user warnings", () => {
-    setSinglePluginLoadResult(
-      createPluginRecord({
-        id: "bundled-memory-provider",
-        name: "Bundled Memory Provider",
-        origin: "bundled",
-        memoryEmbeddingProviderIds: ["bundled-memory-provider"],
-        contracts: { memoryEmbeddingProviders: ["bundled-memory-provider"] },
-      }),
     );
-
-    expectNoCompatibilityWarnings();
   });
 
-  it("warns external plugins when load diagnostics reference removed session file APIs", () => {
-    setPluginLoadResult({
+  it("orders compatibility notices by plugin without attributing unrelated load failures", () => {
+    const report = setReport({
       plugins: [
+        createPluginRecord({ id: "old", hookCount: 1 }),
         createPluginRecord({
-          id: "file-backed-session-plugin",
-          name: "File-backed Session Plugin",
-          error: "The requested module does not provide an export named 'saveSessionStore'",
+          id: "api",
+          providerIds: ["api"],
           status: "error",
+          error: "saveSessionStore missing",
         }),
+        createPluginRecord({ id: "bundled", origin: "bundled", error: "sessionFile missing" }),
+        createPluginRecord({ id: "unrelated" }),
       ],
+      hooks: [createCustomHook({ pluginId: "old", events: ["message"] })],
       diagnostics: [
-        {
-          level: "error",
-          pluginId: "file-backed-session-plugin",
-          message: "Plugin import failed before SessionTranscriptUpdate.sessionFile migration",
-        },
+        { level: "error", pluginId: "api", message: "SessionTranscriptUpdate.sessionFile missing" },
+        { level: "error", message: "sessionFile missing" },
+        { level: "error", pluginId: "old", message: "sessionFile missing" },
       ],
     });
-
-    expectCompatibilityOutput({
-      notices: [
-        createCompatibilityNotice({
-          pluginId: "file-backed-session-plugin",
-          code: "removed-session-transcript-file-api",
-        }),
-      ],
-      warnings: [`file-backed-session-plugin ${REMOVED_SESSION_TRANSCRIPT_FILE_API_MESSAGE}`],
+    const notices = status.buildPluginCompatibilityNotices({ report });
+    expect(notices).toEqual([
+      createCompatibilityNotice({ pluginId: "old", code: "hook-only" }),
+      createCompatibilityNotice({ pluginId: "old", code: "removed-session-transcript-file-api" }),
+      createCompatibilityNotice({ pluginId: "api", code: "removed-session-transcript-file-api" }),
+    ]);
+    expect(status.buildPluginCompatibilityWarnings({ report })).toEqual([
+      `old ${HOOK_ONLY_MESSAGE}`,
+      `old ${REMOVED_SESSION_TRANSCRIPT_FILE_API_MESSAGE}`,
+      `api ${REMOVED_SESSION_TRANSCRIPT_FILE_API_MESSAGE}`,
+    ]);
+    expect(status.summarizePluginCompatibility(notices)).toEqual({
+      noticeCount: 3,
+      pluginCount: 2,
     });
-  });
-
-  it("does not surface bundled session file API migration debt as user warnings", () => {
-    setPluginLoadResult({
-      plugins: [
-        createPluginRecord({
-          id: "bundled-session-plugin",
-          name: "Bundled Session Plugin",
-          origin: "bundled",
-          error: "The requested module does not provide an export named 'sessionFile'",
-          status: "error",
-        }),
-      ],
-      diagnostics: [
-        {
-          level: "error",
-          pluginId: "bundled-session-plugin",
-          message: "resolveSessionFilePath failed to load",
-        },
-      ],
-    });
-
-    expectNoCompatibilityWarnings();
-  });
-
-  it("builds structured compatibility notices with deterministic ordering", () => {
-    setPluginLoadResult({
-      plugins: [
-        createPluginRecord({
-          id: "hook-only",
-          name: "Hook Only",
-          hookCount: 1,
-        }),
-        createPluginRecord({
-          id: "legacy-only",
-          name: "Legacy Only",
-          providerIds: ["legacy-only"],
-          hookCount: 1,
-        }),
-      ],
-      hooks: [createCustomHook({ pluginId: "hook-only", events: ["message"] })],
-      typedHooks: [createTypedHook({ pluginId: "legacy-only", hookName: "before_agent_start" })],
-    });
-
-    expectCompatibilityOutput({
-      notices: [
-        createCompatibilityNotice({ pluginId: "hook-only", code: "hook-only" }),
-        createCompatibilityNotice({ pluginId: "legacy-only", code: "legacy-before-agent-start" }),
-      ],
-    });
-  });
-
-  it("does not warn for explicit startup-lazy metadata", () => {
-    setSinglePluginLoadResult(
-      createPluginRecord({
-        id: "modern-startup-lazy",
-        name: "Modern Startup Lazy",
-        compat: [],
-      }),
-    );
-
-    expectNoCompatibilityWarnings();
-  });
-
-  it("returns no compatibility warnings for modern capability plugins", () => {
-    setSinglePluginLoadResult(
-      createPluginRecord({
-        id: "modern",
-        name: "Modern",
-        providerIds: ["modern"],
-      }),
-    );
-
-    expectNoCompatibilityWarnings();
   });
 
   it.each([
     {
-      name: "populates bundleCapabilities from plugin record",
       plugin: createPluginRecord({
-        id: "claude-bundle",
-        name: "Claude Bundle",
-        description: "A bundle plugin with skills and commands",
-        source: "/tmp/claude-bundle/.claude-plugin/plugin.json",
+        id: "bundle",
         format: "bundle",
         bundleFormat: "claude",
-        bundleCapabilities: ["skills", "commands", "agents", "settings"],
         rootDir: "/tmp/claude-bundle",
+        bundleCapabilities: ["skills", "commands", "agents", "settings"],
       }),
-      expectedId: "claude-bundle",
-      expectedBundleCapabilities: ["skills", "commands", "agents", "settings"],
-      expectedShape: "non-capability",
+      bundleCapabilities: ["skills", "commands", "agents", "settings"],
+      mcpServers: [],
     },
     {
-      name: "returns empty bundleCapabilities and mcpServers for non-bundle plugins",
       plugin: createPluginRecord({
-        id: "plain-plugin",
-        name: "Plain Plugin",
-        description: "A regular plugin",
-        providerIds: ["plain"],
+        id: "native-mcp",
+        rootDir: "/tmp/native-mcp",
+        mcpServers: {
+          app: { transport: "stdio", command: "node", args: ["./mcp-server.js"] },
+          remote: { type: "http", url: "https://example.test/mcp" },
+          incomplete: { transport: "streamable-http" },
+          invalidScheme: { transport: "streamable-http", url: "ftp://example.test/mcp" },
+          invalidTransport: { transport: "http", url: "https://example.test/mcp" },
+        },
       }),
-      expectedId: "plain-plugin",
-      expectedBundleCapabilities: [],
-      expectedShape: "plain-capability",
+      bundleCapabilities: [],
+      mcpServers: [
+        { name: "app", hasStdioTransport: true },
+        { name: "remote", hasStdioTransport: false },
+        { name: "incomplete", hasStdioTransport: false, unsupported: true },
+        { name: "invalidScheme", hasStdioTransport: false, unsupported: true },
+        { name: "invalidTransport", hasStdioTransport: false, unsupported: true },
+      ],
     },
-  ])("$name", ({ plugin, expectedId, expectedBundleCapabilities, expectedShape }) => {
-    setSinglePluginLoadResult(plugin);
-
-    const inspect = expectInspectReport(expectedId);
-
-    expectBundleInspectState(inspect, {
-      bundleCapabilities: expectedBundleCapabilities,
-      shape: expectedShape,
-    });
-  });
-
-  it("formats and summarizes compatibility notices", () => {
-    const notice = createCompatibilityNotice({
-      pluginId: "legacy-plugin",
-      code: "legacy-before-agent-start",
-    });
-
-    expect(formatPluginCompatibilityNotice(notice)).toBe(
-      `legacy-plugin ${LEGACY_BEFORE_AGENT_START_MESSAGE}`,
-    );
-    expect(
-      summarizePluginCompatibility([
-        notice,
-        createCompatibilityNotice({ pluginId: "legacy-plugin", code: "hook-only" }),
-      ]),
-    ).toEqual({
-      noticeCount: 2,
-      pluginCount: 1,
-    });
-  });
+  ])(
+    "projects $plugin.id bundle and MCP inspection metadata",
+    ({ plugin, bundleCapabilities, mcpServers }) => {
+      const result = inspect(plugin.id, setReport({ plugins: [plugin] }));
+      expect(result.bundleCapabilities).toEqual(bundleCapabilities);
+      expect(result.mcpServers).toStrictEqual(mcpServers);
+      expect(result.shape).toBe("non-capability");
+    },
+  );
 });

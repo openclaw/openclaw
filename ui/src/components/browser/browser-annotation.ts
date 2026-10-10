@@ -1,9 +1,10 @@
-// Annotation model for the browser panel: freehand strokes drawn over a page
-// screenshot, plus the prepackaged prompt handed to the chat composer so the
-// agent knows what was marked up.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { t } from "../../i18n/index.ts";
+import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import type { BrowserInspectedNode } from "./browser-client.ts";
+import type { BrowserTabTarget } from "./browser-target.ts";
+
+registerBrowserEnglish();
 
 /** Point in normalized [0..1] coordinates of the captured screenshot. */
 type AnnotationPoint = { x: number; y: number };
@@ -15,26 +16,39 @@ export type AnnotationRegion = { x: number; y: number; width: number; height: nu
 
 /** Payload delivered to the active chat pane when an annotation is sent. */
 export type BrowserAnnotationDraft = {
-  text: string;
+  modelContext: string;
+  card: {
+    title: string;
+    displayUrl: string;
+    markedRegionCount: number;
+    inspectedElement: boolean;
+  };
   /** PNG data URL of the screenshot with the markup composited in. */
   dataUrl: string;
   fileName: string;
 };
 
+export type BrowserAnnotationDispatchResult = "accepted" | "rejected" | "unhandled";
+export type BrowserAnnotationEvent = CustomEvent<BrowserAnnotationDraft> & {
+  /** Synchronous consumer rejection keeps capture state retryable in the browser panel. */
+  rejection?: "limit";
+};
+
 export const BROWSER_ANNOTATION_EVENT = "openclaw:browser-annotation";
 
 /**
- * Hands an annotation to whichever chat pane is active. Returns false when no
- * pane consumed it (chat not mounted), so the panel can surface a hint instead
- * of silently dropping the user's markup.
+ * Hands an annotation to whichever chat pane is active. The result distinguishes
+ * a retryable admission rejection from the absence of a mounted chat target.
  */
-export function dispatchBrowserAnnotation(draft: BrowserAnnotationDraft): boolean {
+export function dispatchBrowserAnnotation(
+  draft: BrowserAnnotationDraft,
+): BrowserAnnotationDispatchResult {
   const event = new CustomEvent<BrowserAnnotationDraft>(BROWSER_ANNOTATION_EVENT, {
     detail: draft,
     cancelable: true,
-  });
+  }) as BrowserAnnotationEvent;
   window.dispatchEvent(event);
-  return event.defaultPrevented;
+  return event.defaultPrevented ? "accepted" : event.rejection ? "rejected" : "unhandled";
 }
 
 function clamp01(value: number): number {
@@ -63,19 +77,44 @@ function percent(value: number): string {
 }
 
 /**
- * Page-controlled strings (title, element names) enter the prompt as quoted
- * data only. Collapse whitespace and cap the length so a hostile page cannot
- * smuggle multi-line directives that read as the user's own instructions; the
- * prompt template additionally labels these values as page-reported.
+ * Collapse whitespace and cap page-controlled text before it enters the prompt
+ * or card so a hostile page cannot smuggle multi-line directives that read as
+ * the user's own instructions. The prompt additionally labels the title and
+ * element descriptor as page-reported data.
  */
-function sanitizePageText(value: string, maxLength = 80): string {
+function sanitizePageText(value: string, maxLength: number): string {
   return truncateUtf16Safe(value.replace(/\s+/g, " ").trim(), maxLength);
+}
+
+const ANNOTATION_TITLE_MAX_LENGTH = 80;
+const ANNOTATION_CONTEXT_URL_MAX_LENGTH = 500;
+const ANNOTATION_DISPLAY_URL_MAX_LENGTH = 160;
+
+function sanitizePageUrl(value: string): string {
+  const normalized = sanitizePageText(value, ANNOTATION_CONTEXT_URL_MAX_LENGTH);
+  const parsed = URL.parse(normalized);
+  if (!parsed) {
+    return normalized.replace(/^([a-z][a-z\d+.-]*:\/\/)[^/?#\s]*@/i, "$1");
+  }
+  if (!parsed.username && !parsed.password) {
+    return normalized;
+  }
+  parsed.username = "";
+  parsed.password = "";
+  return truncateUtf16Safe(parsed.href, ANNOTATION_CONTEXT_URL_MAX_LENGTH);
+}
+
+function annotationDisplayUrl(url: string): string {
+  const hostname = URL.parse(url)?.hostname;
+  return hostname
+    ? sanitizePageText(hostname, ANNOTATION_DISPLAY_URL_MAX_LENGTH)
+    : truncateUtf16Safe(url, ANNOTATION_DISPLAY_URL_MAX_LENGTH);
 }
 
 /** Selector fragments (tag/id/class) are page-controlled too: keep only
  * word characters and dashes so they cannot carry quotes or directives. */
-function sanitizeSelectorToken(value: string, maxLength = 40): string {
-  return value.replace(/[^\w-]/g, "").slice(0, maxLength);
+function sanitizeSelectorToken(value: string): string {
+  return value.replace(/[^\w-]/g, "").slice(0, 40);
 }
 
 /** Compact human/agent-readable element descriptor, e.g. `button#save.btn "Save"`. */
@@ -89,7 +128,7 @@ function describeInspectedNode(node: BrowserInspectedNode): string {
   const tag = sanitizeSelectorToken(node.tag) || "element";
   const id = sanitizeSelectorToken(node.id);
   const selector = `${tag}${id ? `#${id}` : ""}${classes}`;
-  const sanitizedName = sanitizePageText(node.name);
+  const sanitizedName = sanitizePageText(node.name, ANNOTATION_TITLE_MAX_LENGTH);
   const name = sanitizedName ? ` "${sanitizedName}"` : "";
   const role = node.role ? ` (role=${sanitizePageText(node.role, 40)})` : "";
   return `${selector}${name}${role}`;
@@ -102,19 +141,36 @@ const MAX_PROMPT_REGIONS = 8;
  * viewport percentages so the agent can relate them to the attached screenshot
  * without knowing the capture resolution.
  */
-export function buildAnnotationPrompt(params: {
+export function buildBrowserAnnotationContent(params: {
   url: string;
   title: string;
   strokes: AnnotationStroke[];
   element?: BrowserInspectedNode | null;
-}): string {
-  const title = sanitizePageText(params.title);
+  browserTab?: BrowserTabTarget;
+}): Pick<BrowserAnnotationDraft, "modelContext" | "card"> {
+  const url = sanitizePageUrl(params.url);
+  const title = sanitizePageText(params.title, ANNOTATION_TITLE_MAX_LENGTH);
+  const displayUrl = annotationDisplayUrl(url);
+  const regions = params.strokes.flatMap((stroke) => strokeBoundingRegion(stroke) ?? []);
+  const element = params.element
+    ? {
+        descriptor: describeInspectedNode(params.element),
+        width: String(Math.round(params.element.rect.width)),
+        height: String(Math.round(params.element.rect.height)),
+        x: String(Math.round(params.element.rect.x)),
+        y: String(Math.round(params.element.rect.y)),
+      }
+    : null;
   const lines: string[] = [
     title
-      ? t("browser.annotatePrompt.introTitled", { url: params.url, title })
-      : t("browser.annotatePrompt.introUntitled", { url: params.url }),
+      ? t("browser.annotatePrompt.introTitled", { url, title })
+      : t("browser.annotatePrompt.introUntitled", { url }),
   ];
-  const regions = params.strokes.flatMap((stroke) => strokeBoundingRegion(stroke) ?? []);
+  if (params.browserTab) {
+    lines.push(
+      t("browser.annotatePrompt.browserTarget", { target: JSON.stringify(params.browserTab) }),
+    );
+  }
   regions.slice(0, MAX_PROMPT_REGIONS).forEach((region, index) => {
     lines.push(
       t("browser.annotatePrompt.region", {
@@ -133,26 +189,22 @@ export function buildAnnotationPrompt(params: {
       }),
     );
   }
-  if (params.element) {
-    lines.push(
-      t("browser.annotatePrompt.elementDetail", {
-        descriptor: describeInspectedNode(params.element),
-        width: String(Math.round(params.element.rect.width)),
-        height: String(Math.round(params.element.rect.height)),
-        x: String(Math.round(params.element.rect.x)),
-        y: String(Math.round(params.element.rect.y)),
-      }),
-    );
+  if (element) {
+    lines.push(t("browser.annotatePrompt.elementDetail", element));
   }
   lines.push(t("browser.annotatePrompt.outro"));
-  return lines.join("\n");
+  return {
+    modelContext: lines.join("\n"),
+    card: {
+      title: title || truncateUtf16Safe(displayUrl, ANNOTATION_TITLE_MAX_LENGTH),
+      displayUrl,
+      markedRegionCount: regions.length,
+      inspectedElement: element !== null,
+    },
+  };
 }
 
 const ANNOTATION_STROKE_COLOR = "#e0442d";
-
-function annotationStrokeWidth(imageWidth: number): number {
-  return Math.max(4, Math.round(imageWidth * 0.005));
-}
 
 /**
  * Draws the strokes (and optional element highlight, both in normalized
@@ -172,7 +224,7 @@ export function paintAnnotations(
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
   ctx.strokeStyle = ANNOTATION_STROKE_COLOR;
-  ctx.lineWidth = annotationStrokeWidth(params.width);
+  ctx.lineWidth = Math.max(4, Math.round(params.width * 0.005));
   for (const stroke of params.strokes) {
     if (stroke.points.length === 0) {
       continue;
@@ -208,19 +260,15 @@ export function paintAnnotations(
 }
 
 /** Composites the screenshot and markup into a PNG data URL for the chat attachment. */
-export function composeAnnotatedImage(params: {
-  image: CanvasImageSource;
-  width: number;
-  height: number;
-  strokes: AnnotationStroke[];
-  highlight?: AnnotationRegion | null;
-}): string {
+export function composeAnnotatedImage(
+  params: Parameters<typeof paintAnnotations>[1] & { image: CanvasImageSource },
+): string {
   const canvas = document.createElement("canvas");
   canvas.width = params.width;
   canvas.height = params.height;
   const ctx = canvas.getContext("2d");
   if (!ctx) {
-    throw new Error("canvas 2d context unavailable");
+    throw new Error(t("browser.errors.canvasUnavailable"));
   }
   ctx.drawImage(params.image, 0, 0, params.width, params.height);
   paintAnnotations(ctx, params);

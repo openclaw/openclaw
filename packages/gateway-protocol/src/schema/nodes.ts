@@ -1,7 +1,9 @@
-// Gateway Protocol schema module defines protocol validation shapes.
 import { type Static, Type } from "typebox";
+import { NODE_PRESENCE_ALIVE_REASONS } from "../node-presence.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+
+export { NODE_PRESENCE_ALIVE_REASONS } from "../node-presence.js";
 
 const NodePluginToolNameSchema = Type.String({
   minLength: 1,
@@ -15,26 +17,17 @@ const NodeSkillNameSchema = Type.String({
   pattern: "^(?!.*--)[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$",
 });
 
-/** Pending node work classes that the gateway may queue for paired devices. */
 const NodePendingWorkTypeSchema = Type.String({
   enum: ["status.request", "location.request"],
 });
 
-/** Queue priority accepted when operators enqueue node work. */
 const NodePendingWorkPrioritySchema = Type.String({
   enum: ["normal", "high"],
 });
 
 /** Reasons a node can report itself alive without implying an operator action. */
-export const NodePresenceAliveReasonSchema = Type.String({
-  enum: [
-    "background",
-    "silent_push",
-    "bg_app_refresh",
-    "significant_location",
-    "manual",
-    "connect",
-  ],
+export const NodePresenceAliveReasonSchema = Type.Enum(NODE_PRESENCE_ALIVE_REASONS, {
+  type: "string",
 });
 
 /** Presence heartbeat payload sent by remote nodes to refresh gateway state. */
@@ -50,12 +43,38 @@ export const NodePresenceAlivePayloadSchema = closedObject({
 });
 
 /** Recent operator input activity reported by an interactive node. */
-export const NodePresenceActivityPayloadSchema = closedObject({
-  idleSeconds: Type.Integer({ minimum: 0, maximum: 2_592_000 }),
-  saturated: Type.Optional(Type.Boolean()),
-});
+export const NodePresenceActivityPayloadSchema = Type.Union([
+  closedObject({
+    idleSeconds: Type.Integer({ minimum: 0, maximum: 2_592_000 }),
+    source: Type.Optional(Type.Union([Type.Literal("app"), Type.Literal("system")])),
+    saturated: Type.Optional(Type.Boolean()),
+  }),
+  closedObject({
+    action: Type.Literal("clear"),
+  }),
+]);
 
-/** Normalized result for node-originated events after gateway dispatch. */
+const NodeLoadAverageSchema = Type.Number({ minimum: 0, maximum: 100_000 });
+
+export const NodeHostStatsPayloadSchema = Type.Refine(
+  closedObject({
+    cpuCount: Type.Integer({ minimum: 1, maximum: 4_096 }),
+    loadAverage: Type.Optional(
+      Type.Tuple([NodeLoadAverageSchema, NodeLoadAverageSchema, NodeLoadAverageSchema]),
+    ),
+    memoryTotalBytes: Type.Integer({ minimum: 0 }),
+    memoryFreeBytes: Type.Integer({ minimum: 0 }),
+    diskTotalBytes: Type.Optional(Type.Integer({ minimum: 0 })),
+    diskAvailableBytes: Type.Optional(Type.Integer({ minimum: 0 })),
+  }),
+  (stats) =>
+    stats.memoryFreeBytes <= stats.memoryTotalBytes &&
+    (stats.diskTotalBytes === undefined
+      ? stats.diskAvailableBytes === undefined
+      : stats.diskAvailableBytes !== undefined && stats.diskAvailableBytes <= stats.diskTotalBytes),
+  () => "free resources must not exceed totals and disk values must be paired",
+);
+
 export const NodeEventResultSchema = closedObject({
   ok: Type.Boolean(),
   event: NonEmptyString,
@@ -63,13 +82,10 @@ export const NodeEventResultSchema = closedObject({
   reason: Type.Optional(NonEmptyString),
 });
 
-/** Lists pending node-pairing requests. */
 export const NodePairListParamsSchema = closedObject({});
 
-/** Approves a pending node-pairing request by request id. */
 export const NodePairApproveParamsSchema = closedObject({ requestId: NonEmptyString });
 
-/** Rejects a pending node-pairing request by request id. */
 export const NodePairRejectParamsSchema = closedObject({ requestId: NonEmptyString });
 
 /** Removes an already paired node from the gateway trust set. */
@@ -81,7 +97,6 @@ export const NodeRenameParamsSchema = closedObject({
   displayName: NonEmptyString,
 });
 
-/** Lists paired nodes known to the gateway. */
 export const NodeListParamsSchema = closedObject({});
 
 /** Agent-visible tool descriptor advertised by a connected node. */
@@ -129,7 +144,6 @@ export const NodePendingAckParamsSchema = closedObject({
   ids: Type.Array(NonEmptyString, { minItems: 1 }),
 });
 
-/** Requests detailed metadata for one paired node. */
 export const NodeDescribeParamsSchema = closedObject({ nodeId: NonEmptyString });
 
 /** Invokes a command on a paired node; idempotency allows safe retries. */
@@ -148,7 +162,6 @@ export const NodeInvokeParamsSchema = closedObject({
   turnSourceThreadId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
 });
 
-/** Result callback payload for a node command invocation. */
 export const NodeInvokeResultParamsSchema = closedObject({
   id: NonEmptyString,
   nodeId: NonEmptyString,
@@ -164,18 +177,14 @@ export const NodeInvokeResultParamsSchema = closedObject({
 });
 
 /** Ordered UTF-8 output emitted while a node command invocation is running. */
-export const NodeInvokeProgressParamsSchema = Type.Object(
-  {
-    invokeId: NonEmptyString,
-    nodeId: NonEmptyString,
-    seq: Type.Integer({ minimum: 0 }),
-    // Empty chunks are liveness heartbeats for captured stderr or capped stdout.
-    chunk: Type.String({ maxLength: 16 * 1024 }),
-  },
-  { additionalProperties: false },
-);
+export const NodeInvokeProgressParamsSchema = closedObject({
+  invokeId: NonEmptyString,
+  nodeId: NonEmptyString,
+  seq: Type.Integer({ minimum: 0 }),
+  // Empty chunks are liveness heartbeats for captured stderr or capped stdout.
+  chunk: Type.String({ maxLength: 16 * 1024 }),
+});
 
-/** Generic node event envelope accepted by the gateway. */
 export const NodeEventParamsSchema = closedObject({
   event: NonEmptyString,
   payload: Type.Optional(Type.Unknown()),
@@ -187,8 +196,7 @@ export const NodePendingDrainParamsSchema = closedObject({
   maxItems: Type.Optional(Type.Integer({ minimum: 1, maximum: 10 })),
 });
 
-/** One queued node-work item returned by pending-work drain calls. */
-export const NodePendingDrainItemSchema = closedObject({
+const NodePendingDrainItemSchema = closedObject({
   id: NonEmptyString,
   type: NodePendingWorkTypeSchema,
   priority: Type.String({ enum: ["default", "normal", "high"] }),
@@ -197,7 +205,6 @@ export const NodePendingDrainItemSchema = closedObject({
   payload: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
 });
 
-/** Drain response with a revision marker for node queue state. */
 export const NodePendingDrainResultSchema = closedObject({
   nodeId: NonEmptyString,
   revision: Type.Integer({ minimum: 0 }),
@@ -205,7 +212,6 @@ export const NodePendingDrainResultSchema = closedObject({
   hasMore: Type.Boolean(),
 });
 
-/** Enqueues gateway-initiated work for a paired node. */
 export const NodePendingEnqueueParamsSchema = closedObject({
   nodeId: NonEmptyString,
   type: NodePendingWorkTypeSchema,
@@ -214,7 +220,6 @@ export const NodePendingEnqueueParamsSchema = closedObject({
   wake: Type.Optional(Type.Boolean()),
 });
 
-/** Enqueue result echoes queue revision and whether wake delivery was attempted. */
 export const NodePendingEnqueueResultSchema = closedObject({
   nodeId: NonEmptyString,
   revision: Type.Integer({ minimum: 0 }),
@@ -222,7 +227,6 @@ export const NodePendingEnqueueResultSchema = closedObject({
   wakeTriggered: Type.Boolean(),
 });
 
-/** Event payload used by the gateway to ask a node to run a command. */
 export const NodeInvokeRequestEventSchema = closedObject({
   id: NonEmptyString,
   nodeId: NonEmptyString,
@@ -240,6 +244,11 @@ export const NodeInvokeInputEventSchema = closedObject({
   payloadJSON: Type.String({ maxLength: 16 * 1024 }),
 });
 
+export const NodeInvokeCancelEventSchema = closedObject({
+  invokeId: NonEmptyString,
+  nodeId: NonEmptyString,
+});
+
 // Wire types derive directly from local schema consts so public d.ts graphs never
 // pull in the ProtocolSchemas registry.
 export type NodePairListParams = Static<typeof NodePairListParamsSchema>;
@@ -254,11 +263,13 @@ export type NodeInvokeParams = Static<typeof NodeInvokeParamsSchema>;
 export type NodeInvokeResultParams = Static<typeof NodeInvokeResultParamsSchema>;
 export type NodeInvokeProgressParams = Static<typeof NodeInvokeProgressParamsSchema>;
 export type NodeInvokeInputEvent = Static<typeof NodeInvokeInputEventSchema>;
+export type NodeInvokeCancelEvent = Static<typeof NodeInvokeCancelEventSchema>;
 export type NodeEventParams = Static<typeof NodeEventParamsSchema>;
 export type NodeEventResult = Static<typeof NodeEventResultSchema>;
 export type NodePresenceAlivePayload = Static<typeof NodePresenceAlivePayloadSchema>;
 export type NodePresenceAliveReason = Static<typeof NodePresenceAliveReasonSchema>;
 export type NodePresenceActivityPayload = Static<typeof NodePresenceActivityPayloadSchema>;
+export type NodeHostStatsPayload = Static<typeof NodeHostStatsPayloadSchema>;
 export type NodePendingDrainParams = Static<typeof NodePendingDrainParamsSchema>;
 export type NodePendingDrainResult = Static<typeof NodePendingDrainResultSchema>;
 export type NodePendingEnqueueParams = Static<typeof NodePendingEnqueueParamsSchema>;

@@ -1,45 +1,41 @@
 /**
- * Path extraction for the apply_patch envelope grammar.
+ * Input resolution, path extraction, and display for the apply_patch envelope grammar.
  * Used by pre-execution policy hooks that only need destination paths, not the
  * full strict patch parser.
  */
 import path from "node:path";
-import { resolveSandboxInputPath } from "./sandbox-paths.js";
+import { extractApplyPatchTargets } from "./apply-patch-targets.js";
+import { preserveAtPrefixedRelativePath, resolvePathFromInput } from "./path-policy.js";
+import { normalizeFileReferencePrefix, resolveSandboxInputPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 
-/**
- * Lightweight path extractor for the `apply_patch` envelope grammar.
- *
- * The full parser in `apply-patch.ts` validates and applies a patch end-to-end.
- * Plugins running inside `before_tool_call` only need the destination paths so
- * they can compute path policy decisions before the patch is applied. This
- * helper walks the input lines and collects every path mentioned by:
- *
- *   - `*** Add File: <path>`
- *   - `*** Update File: <path>`         (and the optional `*** Move to: <new>`
- *                                         sub-marker that immediately follows)
- *   - `*** Delete File: <path>`
- *
- * Unlike the strict parser, this helper is forgiving: it does not require the
- * `*** Begin Patch` / `*** End Patch` envelope, it ignores non-marker lines
- * while scanning the full input, and it may therefore still pick up marker-like
- * lines that appear later in malformed input. Top-level hunk headers are matched
- * after trimming leading whitespace, like the executor parser; marker-like patch
- * body lines remain ignored while scanning an update hunk. Empty paths are dropped.
- *
- * The shape of the input mirrors how `apply_patch` receives it: either a
- * string (the full patch text) or an object with an `input` field carrying the
- * patch text. Anything else returns an empty array.
- */
+function relativePathEscapesRoot(relativePath: string): boolean {
+  return (
+    relativePath === ".." ||
+    relativePath.startsWith("../") ||
+    relativePath.startsWith("..\\") ||
+    path.isAbsolute(relativePath)
+  );
+}
 
-const ADD_FILE_MARKER = "*** Add File: ";
-const DELETE_FILE_MARKER = "*** Delete File: ";
-const UPDATE_FILE_MARKER = "*** Update File: ";
-const MOVE_TO_MARKER = "*** Move to: ";
+export function toDisplayPath(resolved: string, cwd: string): string {
+  const relative = path.relative(cwd, resolved);
+  if (!relative) {
+    return path.basename(resolved);
+  }
+  if (relativePathEscapesRoot(relative)) {
+    return resolved;
+  }
+  return relative;
+}
 
+// Policy hooks accept malformed envelopes; the executor owns strict validation.
+// Target scanning still follows its header/body rules and keeps first-seen order.
 export type ApplyPatchPathExtractionOptions = {
   /** Tool execution cwd. Defaults to process.cwd(), matching createApplyPatchTool. */
   cwd?: string;
+  /** Run cancellation propagated to remote path disambiguation. */
+  signal?: AbortSignal;
   /** Sandbox bridge used by apply_patch execution, when the tool runs in a sandbox. */
   sandbox?: {
     root: string;
@@ -47,17 +43,25 @@ export type ApplyPatchPathExtractionOptions = {
   };
 };
 
-function readPatchText(input: unknown): string | undefined {
-  if (typeof input === "string") {
-    return input;
+/** Resolve a patch input through the same literal-@ policy used by execution. */
+export async function resolveApplyPatchInputPath(
+  raw: string,
+  options: ApplyPatchPathExtractionOptions = {},
+): Promise<string> {
+  const cwd = options.cwd ?? options.sandbox?.root ?? process.cwd();
+  const preserved = await preserveAtPrefixedRelativePath(
+    raw,
+    cwd,
+    options.sandbox?.bridge,
+    options.signal,
+  );
+  if (!raw.startsWith("@") || preserved !== raw) {
+    return preserved;
   }
-  if (input && typeof input === "object" && "input" in input) {
-    const candidate = (input as { input?: unknown }).input;
-    if (typeof candidate === "string") {
-      return candidate;
-    }
-  }
-  return undefined;
+  const referenced = normalizeFileReferencePrefix(raw);
+  return referenced === "~" || referenced.startsWith("~/") || referenced.startsWith("~\\")
+    ? resolvePathFromInput(raw, cwd)
+    : referenced;
 }
 
 function normalizePatchPath(
@@ -69,14 +73,17 @@ function normalizePatchPath(
   }
   const cwd = options.cwd ?? options.sandbox?.root ?? process.cwd();
   try {
+    const filePath = preserveAtPrefixedRelativePath(raw, cwd);
     const resolved = options.sandbox
       ? options.sandbox.bridge.resolvePath({
-          filePath: raw,
+          filePath,
           cwd,
         })
       : undefined;
     const normalized = path.normalize(
-      resolved ? (resolved.hostPath ?? resolved.containerPath) : resolveSandboxInputPath(raw, cwd),
+      resolved
+        ? (resolved.hostPath ?? resolved.containerPath)
+        : resolveSandboxInputPath(filePath, cwd),
     );
     return normalized && normalized !== "." ? normalized : undefined;
   } catch {
@@ -84,119 +91,44 @@ function normalizePatchPath(
   }
 }
 
-function pushPath(
-  target: string[],
-  seen: Set<string>,
-  raw: string,
-  options: ApplyPatchPathExtractionOptions,
-): void {
-  const normalized = normalizePatchPath(raw, options);
-  if (!normalized) {
-    return;
-  }
-  if (seen.has(normalized)) {
-    return;
-  }
-  seen.add(normalized);
-  target.push(normalized);
-}
-
-function readMarkerPath(line: string | undefined, marker: string): string | undefined {
-  const candidate = normalizeMarkerHeaderLine(line);
-  if (!candidate?.startsWith(marker)) {
-    return undefined;
-  }
-  return candidate.slice(marker.length);
-}
-
-function normalizeMarkerHeaderLine(
-  line: string | undefined,
-  options?: { allowSingleSpaceIndent?: boolean },
-): string | undefined {
-  if (line === undefined) {
-    return undefined;
-  }
-  const startTrimmed = line.trimStart();
-  if (!startTrimmed.startsWith("***")) {
-    return undefined;
-  }
-  const leadingWhitespace = line.length - startTrimmed.length;
-  if (
-    options?.allowSingleSpaceIndent === false &&
-    leadingWhitespace === 1 &&
-    line.startsWith(" ")
-  ) {
-    return undefined;
-  }
-  return startTrimmed.trimEnd();
-}
-
-/**
- * Walk an apply_patch envelope and return every destination path found, in
- * the order they appear. Duplicates are de-duplicated (the same file may be
- * referenced multiple times within a single envelope). Returns `[]` for any
- * input that is not a recognised envelope.
- */
+/** Resolve distinct target paths without admitting or executing the patch. */
 export function extractApplyPatchTargetPaths(
   input: unknown,
   options: ApplyPatchPathExtractionOptions = {},
 ): string[] {
-  const text = readPatchText(input);
-  if (text === undefined || text.length === 0) {
-    return [];
-  }
-  const lines = text.split(/\r?\n/);
-  const paths: string[] = [];
-  const seen = new Set<string>();
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines.at(index);
-    if (line === undefined) {
-      break;
-    }
-    const addPath = readMarkerPath(line, ADD_FILE_MARKER);
-    if (addPath !== undefined) {
-      pushPath(paths, seen, addPath, options);
-      while (index + 1 < lines.length && lines.at(index + 1)?.startsWith("+")) {
-        index += 1;
-      }
-      continue;
-    }
-    const deletePath = readMarkerPath(line, DELETE_FILE_MARKER);
-    if (deletePath !== undefined) {
-      pushPath(paths, seen, deletePath, options);
-      continue;
-    }
-    const updatePath = readMarkerPath(line, UPDATE_FILE_MARKER);
-    if (updatePath !== undefined) {
-      pushPath(paths, seen, updatePath, options);
-      // The Update header may be immediately followed by a `*** Move to:`
-      // sub-marker that names the new path. Skip leading blank lines so
-      // human-edited patches with extra spacing still pick it up.
-      let lookahead = index + 1;
-      while (lookahead < lines.length && lines.at(lookahead)?.trim() === "") {
-        lookahead += 1;
-      }
-      const movePath = readMarkerPath(lines.at(lookahead), MOVE_TO_MARKER);
-      if (movePath !== undefined) {
-        pushPath(paths, seen, movePath, options);
-        lookahead += 1;
-      }
-      while (lookahead < lines.length) {
-        const lookaheadLine = lines.at(lookahead);
-        if (lookaheadLine === undefined) {
-          break;
-        }
-        if (lookaheadLine.trim() === "") {
-          lookahead += 1;
-          continue;
-        }
-        if (lookaheadLine.startsWith("***")) {
-          break;
-        }
-        lookahead += 1;
-      }
-      index = lookahead - 1;
+  const paths = new Set<string>();
+  for (const target of extractApplyPatchTargets(input)) {
+    const normalized = normalizePatchPath(target.path, options);
+    if (normalized) {
+      paths.add(normalized);
     }
   }
-  return paths;
+  return [...paths];
+}
+
+/** Derive policy-visible paths using the asynchronous resolver used by execution. */
+export async function extractResolvedApplyPatchTargetPaths(
+  input: unknown,
+  options: ApplyPatchPathExtractionOptions = {},
+): Promise<string[]> {
+  const paths = new Set<string>();
+  const cwd = options.cwd ?? options.sandbox?.root ?? process.cwd();
+  for (const target of extractApplyPatchTargets(input)) {
+    try {
+      const filePath = await resolveApplyPatchInputPath(target.path, options);
+      const resolved = options.sandbox?.bridge.resolvePath({ filePath, cwd });
+      const normalized = resolved?.hostPath
+        ? path.normalize(resolved.hostPath)
+        : resolved
+          ? path.posix.normalize(resolved.containerPath)
+          : path.normalize(resolveSandboxInputPath(filePath, cwd));
+      if (normalized && normalized !== ".") {
+        paths.add(normalized);
+      }
+    } catch {
+      options.signal?.throwIfAborted();
+      // Derived paths are best-effort metadata; execution remains authoritative.
+    }
+  }
+  return [...paths];
 }

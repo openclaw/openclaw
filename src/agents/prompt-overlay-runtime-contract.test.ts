@@ -31,11 +31,23 @@ describe("GPT-5 prompt overlay runtime contract", () => {
     );
   });
 
-  it("adds heartbeat philosophy only for heartbeat-triggered GPT-5 turns", () => {
+  it("does not automatically add heartbeat philosophy to scheduled GPT-5 turns", () => {
     const contribution = resolveGpt5SystemPromptContribution({
       providerId: OPENAI_CONTRACT_PROVIDER_ID,
       modelId: GPT5_CONTRACT_MODEL_ID,
       trigger: "heartbeat",
+    });
+
+    expect(contribution?.sectionOverrides?.interaction_style).not.toContain(
+      "Heartbeat = useful proactive progress",
+    );
+  });
+
+  it("preserves explicit heartbeat guidance for existing plugin SDK consumers", () => {
+    const contribution = resolveGpt5SystemPromptContribution({
+      providerId: OPENAI_CONTRACT_PROVIDER_ID,
+      modelId: GPT5_CONTRACT_MODEL_ID,
+      includeHeartbeatGuidance: true,
     });
 
     expect(contribution?.sectionOverrides?.interaction_style).toContain(
@@ -43,7 +55,7 @@ describe("GPT-5 prompt overlay runtime contract", () => {
     );
   });
 
-  it("lets the shared GPT-5 overlay config disable friendly style without removing the behavior contract", () => {
+  it("ignores the retired shared overlay switch and keeps friendly style", () => {
     const contribution = resolveGpt5SystemPromptContribution({
       providerId: NON_OPENAI_CONTRACT_PROVIDER_ID,
       modelId: GPT5_PREFIXED_CONTRACT_MODEL_ID,
@@ -51,7 +63,9 @@ describe("GPT-5 prompt overlay runtime contract", () => {
     });
 
     expect(contribution?.stablePrefix).toContain("<persona_latch>");
-    expect(contribution?.sectionOverrides).toStrictEqual({});
+    expect(contribution?.sectionOverrides?.interaction_style).toContain(
+      "Live chat: short, natural, human.",
+    );
   });
 
   it("scopes OpenAI plugin personality fallback to OpenAI-family GPT-5 providers", () => {
@@ -85,12 +99,12 @@ describe("GPT-5 prompt overlay runtime contract", () => {
     expect(contribution?.sectionOverrides).toStrictEqual({});
   });
 
-  it("does not apply GPT-5 overlays to non-GPT-5 models", () => {
-    expect(
-      resolveGpt5SystemPromptContribution({
-        providerId: OPENAI_CONTRACT_PROVIDER_ID,
-        modelId: NON_GPT5_CONTRACT_MODEL_ID,
-      }),
-    ).toBeUndefined();
-  });
+  it.each([NON_GPT5_CONTRACT_MODEL_ID, "gpt-oss-120b", "o3", "codex-mini-latest"])(
+    "does not apply GPT-5 overlays to %s",
+    (modelId) => {
+      expect(
+        resolveGpt5SystemPromptContribution({ providerId: OPENAI_CONTRACT_PROVIDER_ID, modelId }),
+      ).toBeUndefined();
+    },
+  );
 });

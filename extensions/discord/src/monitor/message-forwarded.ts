@@ -1,4 +1,3 @@
-// Discord plugin module implements message forwarded behavior.
 import type { APIAttachment, APIStickerItem } from "discord-api-types/v10";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Message } from "../internal/discord.js";
@@ -52,7 +51,8 @@ export function resolveDiscordMessageStickers(message: Message): APIStickerItem[
 }
 
 export function resolveDiscordSnapshotStickers(snapshot: DiscordSnapshotMessage): APIStickerItem[] {
-  return normalizeDiscordStickerItems(snapshot.stickers ?? snapshot.sticker_items);
+  const stickers = normalizeDiscordStickerItems(snapshot.stickers);
+  return stickers.length > 0 ? stickers : normalizeDiscordStickerItems(snapshot.sticker_items);
 }
 
 export function hasDiscordMessageStickers(message: Message): boolean {
@@ -91,6 +91,18 @@ export function resolveDiscordReferencedReplyMessage(message: Message): Message 
     : (message.referencedMessage ?? null);
 }
 
+export function resolveDiscordReferencedReplyMessageId(message: Message): string | null {
+  const referenceType = message.messageReference?.type;
+  if (Number(referenceType) === FORWARD_MESSAGE_REFERENCE_TYPE) {
+    return null;
+  }
+  return (
+    normalizeOptionalString(message.messageReference?.message_id) ??
+    normalizeOptionalString(message.referencedMessage?.id) ??
+    null
+  );
+}
+
 export function formatDiscordSnapshotAuthor(
   author: DiscordSnapshotAuthor | null | undefined,
 ): string | undefined {
@@ -101,15 +113,9 @@ export function formatDiscordSnapshotAuthor(
   const username = normalizeOptionalString(author.username) ?? undefined;
   const name = normalizeOptionalString(author.name) ?? undefined;
   const discriminator = normalizeOptionalString(author.discriminator) ?? undefined;
-  const base = globalName || username || name;
+  const base = globalName || username || name || author.id;
   if (username && discriminator && discriminator !== "0") {
     return `@${username}#${discriminator}`;
   }
-  if (base) {
-    return `@${base}`;
-  }
-  if (author.id) {
-    return `@${author.id}`;
-  }
-  return undefined;
+  return base ? `@${base}` : undefined;
 }

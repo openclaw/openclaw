@@ -14,21 +14,30 @@ export type MessagingToolSend = {
   text?: string;
   mediaUrls?: string[];
   hasRichContent?: true;
-  /** Present only when Codex classified this current-source delivery intent. */
+  /** Current-source progress (`false`) or completed reply (`true`). */
   sourceReplyFinal?: boolean;
 };
 
 export type MessagingToolSourceReplyPayload = Pick<
   ReplyPayload,
   | "audioAsVoice"
+  | "attachments"
   | "channelData"
   | "interactive"
   | "mediaUrl"
   | "mediaUrls"
   | "presentation"
   | "text"
+  | "trustedLocalMedia"
 > & {
   idempotencyKey?: string;
-  /** Present only when Codex classified this current-source delivery intent. */
+  transcriptOwner?: true;
+  /** Current-source progress (`false`) or completed reply (`true`). */
   sourceReplyFinal?: boolean;
+  /** Authored by a `canDeliverSourceReply` tool: the host sends it, so the turn is complete. */
+  toolAuthored?: true;
+  /** Exact originating direct call; prevents suppression of another input's answer. */
+  toolAuthoredForToolCallId?: string;
+  /** Canonical assistant response/turn identity, or the native harness turn identity. */
+  toolAuthoredForTurnId?: string;
 };

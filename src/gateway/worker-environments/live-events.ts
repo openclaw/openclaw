@@ -4,28 +4,46 @@ import type {
   WorkerLiveEventParams,
   WorkerLiveEventResult,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { normalizeToolPolicyName } from "../../agents/tool-policy.js";
+import { projectAgentToolActivity } from "../../infra/agent-activity-events.js";
 import {
-  capLiveExecResult,
-  sanitizeToolArgs,
-  sanitizeToolResult,
-} from "../../agents/embedded-agent-subscribe.tools.js";
-import { normalizeToolName } from "../../agents/tool-policy.js";
-import {
-  onSessionIdentityMutation,
-  type SessionIdentityMutation,
-} from "../../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  claimAgentRunContext,
+  emitAgentEventIfCurrent,
   emitAgentEventForOwner,
   getAgentEventLifecycleGeneration,
-  getAgentRunContext,
-  getAgentRunContextOwnerStatus,
-  registerAgentRunContext,
-  releaseAgentRunContext,
 } from "../../infra/agent-events.js";
+import {
+  claimAgentRunContext,
+  getAgentRunContext,
+  getAgentRunContextOwnership,
+  getAgentRunContextOwnerStatus,
+} from "../../infra/agent-run-registry.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
-import { resolveWorkerSessionTarget } from "./session-target.js";
+import {
+  createWorkerLiveTrajectoryRecorder,
+  isDefinitiveWorkerTerminalEvent,
+  prepareWorkerLiveEventData,
+  recordWorkerLiveTrajectoryEvent,
+} from "./live-event-projection.js";
+import {
+  fenceReleasedWorkerLiveRun,
+  hasReachableBufferedTerminal,
+  releaseWorkerLiveRun,
+  rotateWorkerLiveEventCredential,
+  type LiveEventWindow,
+  type OwnedLiveRun,
+  type PendingLiveEvent,
+  type WorkerLiveCredentialRotation,
+} from "./live-event-window.js";
+import {
+  captureWorkerTurnFinishing,
+  captureWorkerReplyMedia,
+  type WorkerTurnTranscriptSource,
+} from "./placement-turn-claim-events.js";
+import {
+  captureWorkerTurnLiveEventOwner,
+  type WorkerTurnLiveEventOwner,
+} from "./worker-turn-run-owner.js";
 
 const DEFAULT_WINDOW_SIZE = 128;
 const DEFAULT_MAX_PENDING_BYTES = 512 * 1024;
@@ -33,65 +51,17 @@ const DEFAULT_MAX_SESSIONS = 128;
 const DEFAULT_MAX_ACTIVE_RUNS = 32;
 const MAX_FENCED_ENVIRONMENTS = 4096;
 
-type PendingLiveEvent = {
-  request: WorkerLiveEventParams;
-  sizeBytes: number;
-};
-
-type OwnedLiveRun = {
-  claimId: string;
-  controlUiVisible: boolean;
-  lifecycleGeneration: string;
-};
-
-type LiveEventTarget = {
-  agentId?: string;
-  sessionId: string;
-  sessionKey: string;
-};
-
-type WorkerLiveSessionBinding = Readonly<{
-  environmentId: string;
-  runEpoch: number;
-  sessionId: string;
-}>;
-
-type BoundLiveSession = WorkerLiveSessionBinding & { target: LiveEventTarget };
-
-type WorkerLiveCredentialRotation = Readonly<{
-  credentialHash: string;
-  environmentId: string;
-  previousCredentialHash: string;
-  runEpoch: number;
-  sessionId: string;
-}>;
-
-type LiveEventWindow = {
-  activeRuns: Map<string, OwnedLiveRun>;
-  ackedSeq: number;
-  credentialHash: string;
-  environmentId: string;
-  pending: Map<number, PendingLiveEvent>;
-  pendingBytes: number;
-  runEpoch: number;
-  sessionId: string;
-  target: LiveEventTarget;
-  terminalRuns: Map<string, number>;
-};
-
 export type WorkerLiveEventApplicationResult =
   | { ok: true; result: WorkerLiveEventResult }
   | { ok: false; details: WorkerLiveEventErrorDetails };
 
 type WorkerLiveEventFailure = Extract<WorkerLiveEventApplicationResult, { ok: false }>;
+type WorkerLiveEventPublication = Omit<PendingLiveEvent, "sizeBytes">;
 
 type WorkerLiveEventReceiverOptions = {
-  getConfig: () => OpenClawConfig;
   maxActiveRuns?: number;
   maxPendingBytes?: number;
   maxSessions?: number;
-  startupBindings: readonly WorkerLiveSessionBinding[];
-  startupOwners: ReadonlyMap<string, number>;
   windowSize?: number;
 };
 
@@ -103,116 +73,9 @@ function capacityExceeded(): WorkerLiveEventFailure {
   return { ok: false, details: { reason: "capacity-exceeded" } };
 }
 
-function resolveLiveEventTarget(
-  config: OpenClawConfig,
-  sessionId: string,
-): LiveEventTarget | undefined {
-  const target = resolveWorkerSessionTarget(config, sessionId);
-  if (!target) {
-    return undefined;
-  }
-  return {
-    ...(target.agentId ? { agentId: target.agentId } : {}),
-    sessionId: target.sessionId,
-    sessionKey: target.sessionKey,
-  };
-}
-
-function prepareBoundLiveSession(
-  config: OpenClawConfig,
-  binding: WorkerLiveSessionBinding,
-): BoundLiveSession | undefined {
-  if (!isValidLiveSessionBinding(binding)) {
-    return undefined;
-  }
-  const target = resolveLiveEventTarget(config, binding.sessionId);
-  return target ? { ...binding, target } : undefined;
-}
-
-function isValidLiveSessionBinding(binding: WorkerLiveSessionBinding): boolean {
-  return (
-    binding.environmentId.length > 0 &&
-    binding.sessionId.length > 0 &&
-    Number.isSafeInteger(binding.runEpoch) &&
-    binding.runEpoch >= 0
-  );
-}
-
-function prepareBoundLiveSessionSafely(
-  config: OpenClawConfig,
-  binding: WorkerLiveSessionBinding,
-): BoundLiveSession | undefined {
-  try {
-    return prepareBoundLiveSession(config, binding);
-  } catch {
-    return undefined;
-  }
-}
-
-function matchesSessionIdentityMutation(
-  binding: WorkerLiveSessionBinding,
-  prepared: BoundLiveSession | undefined,
-  mutation: SessionIdentityMutation,
-): boolean {
-  const targets =
-    "current" in mutation ? [mutation.previous, mutation.current] : [mutation.previous];
-  return targets.some(
-    (target) =>
-      target.sessionId === binding.sessionId ||
-      (prepared ? target.sessionKeys.includes(prepared.target.sessionKey) : false),
-  );
-}
-
-function prepareLiveEventData(event: WorkerLiveEventParams["event"]): Record<string, unknown> {
-  const payload = structuredClone(event.payload) as Record<string, unknown>;
-  if (event.kind !== "tool") {
-    return payload;
-  }
-  const toolName = normalizeToolName(event.payload.name);
-  payload.name = toolName;
-  if (event.payload.phase === "start") {
-    payload.args = sanitizeToolArgs(event.payload.args);
-  } else if (event.payload.phase === "update") {
-    const partialResult = sanitizeToolResult(event.payload.partialResult);
-    payload.partialResult = toolName === "exec" ? capLiveExecResult(partialResult) : partialResult;
-  } else {
-    const result = sanitizeToolResult(event.payload.result);
-    payload.result = toolName === "exec" ? capLiveExecResult(result) : result;
-  }
-  return payload;
-}
-
-function isDefinitiveTerminal(event: WorkerLiveEventParams["event"]): boolean {
-  return (
-    event.kind === "lifecycle" &&
-    (event.payload.phase === "end" ||
-      (event.payload.phase === "error" &&
-        (event.payload.aborted === true || event.payload.fallbackExhaustedFailure === true)))
-  );
-}
-
-export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOptions) {
-  const boundSessions = new Map<string, BoundLiveSession>();
-  const sessionBindings = new Map<string, WorkerLiveSessionBinding>();
+export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOptions = {}) {
   const fencedEnvironmentEpochs = new Map<string, number>();
-  const staleSessions = new Set<string>();
   const windows = new Map<string, LiveEventWindow>();
-  const startupBindingOwners = new Map(
-    options.startupBindings
-      .filter(isValidLiveSessionBinding)
-      .map(({ environmentId, runEpoch }) => [environmentId, runEpoch]),
-  );
-  // Only an owner corroborated by the same persisted binding may seed a
-  // post-restart ACK. Unmatched owner rows must restart from zero.
-  const startupOwners = new Map(
-    [...options.startupOwners].filter(
-      ([environmentId, ownerEpoch]) =>
-        environmentId.length > 0 &&
-        Number.isSafeInteger(ownerEpoch) &&
-        ownerEpoch >= 0 &&
-        startupBindingOwners.get(environmentId) === ownerEpoch,
-    ),
-  );
   const windowSize = Math.max(1, Math.floor(options.windowSize ?? DEFAULT_WINDOW_SIZE));
   const maxActiveRuns = Math.max(1, Math.floor(options.maxActiveRuns ?? DEFAULT_MAX_ACTIVE_RUNS));
   const maxPendingBytes = Math.max(
@@ -220,180 +83,17 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     Math.floor(options.maxPendingBytes ?? DEFAULT_MAX_PENDING_BYTES),
   );
   const maxSessions = Math.max(1, Math.floor(options.maxSessions ?? DEFAULT_MAX_SESSIONS));
-  let committedConfig = options.getConfig();
-  for (const binding of options.startupBindings) {
-    if (!isValidLiveSessionBinding(binding)) {
-      continue;
-    }
-    const existing = sessionBindings.get(binding.sessionId);
-    if (
-      !existing ||
-      binding.runEpoch > existing.runEpoch ||
-      (binding.runEpoch === existing.runEpoch && binding.environmentId === existing.environmentId)
-    ) {
-      sessionBindings.set(binding.sessionId, { ...binding });
-    }
-  }
-  for (const binding of sessionBindings.values()) {
-    const prepared = prepareBoundLiveSessionSafely(committedConfig, binding);
-    if (prepared) {
-      boundSessions.set(binding.sessionId, prepared);
-    } else {
-      staleSessions.add(binding.sessionId);
-    }
-  }
-
-  // Durable credential renewal keeps the same owner epoch and replay cursor.
-  const rotateCredential = (rotation: WorkerLiveCredentialRotation): boolean => {
-    if (
-      !rotation.credentialHash ||
-      !rotation.environmentId ||
-      !rotation.previousCredentialHash ||
-      !rotation.sessionId ||
-      !Number.isSafeInteger(rotation.runEpoch) ||
-      rotation.runEpoch < 0
-    ) {
-      return false;
-    }
-    const window = windows.get(rotation.sessionId);
-    if (
-      window?.credentialHash === rotation.previousCredentialHash &&
-      window.environmentId === rotation.environmentId &&
-      window.runEpoch === rotation.runEpoch
-    ) {
-      window.credentialHash = rotation.credentialHash;
-      return true;
-    }
-    return false;
-  };
-
-  const releaseRun = (window: LiveEventWindow, runId: string): void => {
-    const owned = window.activeRuns.get(runId);
-    if (!owned) {
-      return;
-    }
-    window.activeRuns.delete(runId);
-    releaseAgentRunContext(runId, owned.claimId);
-  };
-
-  const fenceReleasedRun = (window: LiveEventWindow, runId: string): void => {
-    if (!window.terminalRuns.has(runId)) {
-      window.terminalRuns.set(runId, window.ackedSeq);
-    }
-    releaseRun(window, runId);
-  };
+  const rotateCredential = (rotation: WorkerLiveCredentialRotation): boolean =>
+    rotateWorkerLiveEventCredential(windows.get(rotation.sessionId), rotation);
 
   const clearWindow = (window: LiveEventWindow): void => {
     windows.delete(window.sessionId);
     for (const runId of window.activeRuns.keys()) {
-      releaseRun(window, runId);
+      releaseWorkerLiveRun(window, runId);
     }
     window.pending.clear();
     window.pendingBytes = 0;
     window.terminalRuns.clear();
-  };
-
-  const bindSessionWithConfig = (
-    binding: WorkerLiveSessionBinding,
-    config: OpenClawConfig,
-  ): boolean => {
-    if (!isValidLiveSessionBinding(binding)) {
-      return false;
-    }
-    const existing = sessionBindings.get(binding.sessionId);
-    if (
-      (existing && binding.runEpoch < existing.runEpoch) ||
-      (existing &&
-        binding.runEpoch === existing.runEpoch &&
-        binding.environmentId !== existing.environmentId)
-    ) {
-      return false;
-    }
-    const prepared = prepareBoundLiveSessionSafely(config, binding);
-    if (!prepared) {
-      if (
-        existing?.environmentId === binding.environmentId &&
-        existing.runEpoch === binding.runEpoch
-      ) {
-        // Retain the last target for key-based identity matching, but gate delivery
-        // as stale until target resolution succeeds again.
-        staleSessions.add(binding.sessionId);
-      }
-      return false;
-    }
-    const window = windows.get(binding.sessionId);
-    if (
-      window &&
-      (window.environmentId !== binding.environmentId || window.runEpoch !== binding.runEpoch)
-    ) {
-      clearWindow(window);
-    }
-    sessionBindings.set(binding.sessionId, { ...binding });
-    boundSessions.set(binding.sessionId, prepared);
-    staleSessions.delete(binding.sessionId);
-    const retainedWindow = windows.get(binding.sessionId);
-    if (retainedWindow) {
-      retainedWindow.target = prepared.target;
-      for (const [runId, owned] of retainedWindow.activeRuns) {
-        if (
-          getAgentRunContextOwnerStatus(runId, owned.claimId, owned.lifecycleGeneration) ===
-          "active"
-        ) {
-          registerAgentRunContext(
-            runId,
-            {
-              ...(prepared.target.agentId ? { agentId: prepared.target.agentId } : {}),
-              isControlUiVisible: owned.controlUiVisible,
-              lifecycleGeneration: owned.lifecycleGeneration,
-              projectSessionActive: true,
-              sessionId: binding.sessionId,
-              sessionKey: prepared.target.sessionKey,
-            },
-            owned.claimId,
-          );
-        }
-      }
-    }
-    return true;
-  };
-
-  const bindSession = (binding: WorkerLiveSessionBinding): boolean =>
-    bindSessionWithConfig(binding, committedConfig);
-
-  const rebindAll = (config: OpenClawConfig): void => {
-    committedConfig = config;
-    for (const binding of sessionBindings.values()) {
-      bindSessionWithConfig(binding, committedConfig);
-    }
-  };
-
-  let unsubscribeSessionIdentityMutation: (() => void) | undefined;
-  const start = (): void => {
-    if (unsubscribeSessionIdentityMutation) {
-      return;
-    }
-    unsubscribeSessionIdentityMutation = onSessionIdentityMutation((mutation) => {
-      for (const binding of sessionBindings.values()) {
-        if (
-          matchesSessionIdentityMutation(binding, boundSessions.get(binding.sessionId), mutation)
-        ) {
-          if (!bindSessionWithConfig(binding, committedConfig)) {
-            // Keep stale binding after identity invalidates its cursor and claims.
-            startupOwners.delete(binding.environmentId);
-            const window = windows.get(binding.sessionId);
-            if (window) {
-              clearWindow(window);
-            }
-          }
-        }
-      }
-    });
-    // Re-resolve targets after subscribing to close the startup mutation gap.
-    for (const binding of sessionBindings.values()) {
-      if (!bindSessionWithConfig(binding, committedConfig)) {
-        startupOwners.delete(binding.environmentId);
-      }
-    }
   };
 
   const resyncRequired = (ackedSeq: number): WorkerLiveEventFailure => ({
@@ -414,59 +114,74 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     params: {
       identity: WorkerConnectionIdentity;
       request: WorkerLiveEventParams;
+      source: WorkerTurnTranscriptSource;
+      readAckedSeq: () => number;
     },
-  ): WorkerLiveEventApplicationResult | LiveEventWindow => {
-    const binding = boundSessions.get(sessionId);
-    if (!binding) {
-      return { ok: false, details: { reason: "session-not-attached" } };
-    }
-    if (
-      binding.environmentId !== params.identity.environmentId ||
-      binding.runEpoch !== params.request.runEpoch
-    ) {
-      return { ok: false, details: { reason: "epoch-mismatch" } };
-    }
-    if (staleSessions.has(sessionId)) {
-      return { ok: false, details: { reason: "session-not-attached" } };
-    }
+  ): WorkerLiveEventFailure | LiveEventWindow => {
     let window = windows.get(sessionId);
+    if (
+      window &&
+      (window.environmentId !== params.identity.environmentId ||
+        window.runEpoch !== params.request.runEpoch)
+    ) {
+      if (params.request.runEpoch <= window.runEpoch) {
+        return { ok: false, details: { reason: "epoch-mismatch" } };
+      }
+      clearWindow(window);
+      window = undefined;
+    }
     if (window) {
-      if (
-        params.request.runEpoch !== window.runEpoch ||
-        params.identity.credentialHash !== window.credentialHash ||
-        params.identity.environmentId !== window.environmentId
-      ) {
+      if (params.identity.credentialHash !== window.credentialHash) {
         return { ok: false, details: { reason: "epoch-mismatch" } };
       }
     } else {
-      const startupOwnerEpoch = startupOwners.get(params.identity.environmentId);
-      if (startupOwnerEpoch !== params.request.runEpoch && params.request.lastAckedSeq !== 0) {
-        return resyncRequired(0);
+      const ackedSeq = params.readAckedSeq();
+      if (params.request.lastAckedSeq > ackedSeq) {
+        return resyncRequired(ackedSeq);
       }
       if (windows.size >= maxSessions) {
-        return capacityExceeded();
+        // Evict the oldest settled, registry-quiescent window; it rebinds via
+        // resync. Stale activeRuns entries alone do not imply live ownership.
+        let evicted = false;
+        for (const candidate of windows.values()) {
+          const busy =
+            candidate.activeApplications > 0 ||
+            [...candidate.activeRuns.entries()].some(
+              ([runId, owned]) =>
+                getAgentRunContextOwnerStatus(runId, owned.claimId, owned.lifecycleGeneration) ===
+                "active",
+            );
+          if (!busy) {
+            clearWindow(candidate);
+            evicted = true;
+            break;
+          }
+        }
+        if (!evicted) {
+          return capacityExceeded();
+        }
       }
       window = {
+        activeApplications: 0,
         activeRuns: new Map(),
-        ackedSeq: params.request.lastAckedSeq,
+        ackedSeq,
         credentialHash: params.identity.credentialHash,
         environmentId: params.identity.environmentId,
         pending: new Map(),
         pendingBytes: 0,
+        trajectoryWrites: new Set(),
         runEpoch: params.request.runEpoch,
         sessionId,
-        target: binding.target,
+        source: params.source,
         terminalRuns: new Map(),
       };
       windows.set(sessionId, window);
-      // Seed one process-lost window; later windows for this owner start at zero.
-      startupOwners.delete(params.identity.environmentId);
     }
-    if (params.request.seq <= window.ackedSeq) {
-      return { ok: true, result: { ackedSeq: window.ackedSeq } };
-    }
-    if (params.request.lastAckedSeq > window.ackedSeq) {
-      return resyncWindow(window);
+    if (window.source !== params.source) {
+      if (window.activeRuns.size > 0 || window.pending.size > 0 || window.activeApplications > 0) {
+        return invalidEvent();
+      }
+      window.source = params.source;
     }
     return window;
   };
@@ -483,37 +198,10 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
         return resyncRequired(0);
       }
       if (ownerStatus !== "active") {
-        fenceReleasedRun(window, runId);
+        fenceReleasedWorkerLiveRun(window, runId);
       }
     }
     return undefined;
-  };
-
-  const hasReachableBufferedTerminal = (
-    window: LiveEventWindow,
-    admittedRunId: string,
-    countedRunIds: ReadonlySet<string>,
-  ): boolean => {
-    // Borrow one source-ended slot only when this ordered drain can reach that
-    // active run's terminal without claiming another new run first.
-    for (let seq = window.ackedSeq + 2; seq <= window.ackedSeq + windowSize; seq += 1) {
-      const pending = window.pending.get(seq);
-      if (!pending) {
-        return false;
-      }
-      const pendingRunId = pending.request.runId;
-      if (countedRunIds.has(pendingRunId)) {
-        if (isDefinitiveTerminal(pending.request.event)) {
-          return true;
-        }
-        continue;
-      }
-      if (pendingRunId !== admittedRunId) {
-        // Another new run would consume the borrowed slot before the terminal.
-        return false;
-      }
-    }
-    return false;
   };
 
   const claimRun = (
@@ -540,12 +228,12 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       if (
         ownerStatus !== "active" ||
         context?.sessionId !== window.sessionId ||
-        context.sessionKey !== window.target.sessionKey ||
-        context.agentId !== window.target.agentId ||
+        context.sessionKey !== window.source.sessionTarget.sessionKey ||
+        context.agentId !== window.source.sessionTarget.agentId ||
         context.lifecycleGeneration !== owned.lifecycleGeneration ||
         context.isControlUiVisible !== owned.controlUiVisible
       ) {
-        fenceReleasedRun(window, runId);
+        fenceReleasedWorkerLiveRun(window, runId);
         return invalidEvent();
       }
       return owned;
@@ -563,47 +251,51 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     }
     if (
       countedRunIds.size >= maxActiveRuns &&
-      !(allowBufferedTerminalCapacity && hasReachableBufferedTerminal(window, runId, countedRunIds))
+      !(
+        allowBufferedTerminalCapacity &&
+        hasReachableBufferedTerminal(window, runId, countedRunIds, windowSize)
+      )
     ) {
       return capacityExceeded();
     }
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const existingContext = getAgentRunContext(runId);
-    // A dispatch-owned turn context (e.g. a worker-routed turn) owns the run's
-    // Control UI visibility; adopt it so worker live events keep reaching the
-    // visible clients that started the turn. Identity still has to match, so a
-    // foreign run is rejected; only the visibility preference is inherited. With
-    // no pre-existing turn context we scope live events to this session.
+    // Existing dispatch contexts must admit their outer terminal. Ownerless contexts still need
+    // worker-owned cleanup so a definitive worker terminal cannot leave the session active.
     const controlUiVisible = existingContext?.isControlUiVisible ?? false;
-    const adoptExistingUnowned = existingContext !== undefined;
     if (
       existingContext &&
       (existingContext.sessionId !== window.sessionId ||
-        existingContext.sessionKey !== window.target.sessionKey ||
-        existingContext.agentId !== window.target.agentId ||
+        existingContext.sessionKey !== window.source.sessionTarget.sessionKey ||
+        (existingContext.agentId !== undefined &&
+          existingContext.agentId !== window.source.sessionTarget.agentId) ||
         existingContext.lifecycleGeneration !== lifecycleGeneration)
     ) {
       return invalidEvent();
     }
+    const hasExistingTrackedOwner =
+      getAgentRunContextOwnership(runId)?.lifecycleGeneration === lifecycleGeneration;
+    const emissionMode: OwnedLiveRun["emissionMode"] = existingContext ? "shared" : "exclusive";
     const claimId = claimAgentRunContext(
       runId,
       {
-        ...(window.target.agentId ? { agentId: window.target.agentId } : {}),
+        ...(window.source.sessionTarget.agentId
+          ? { agentId: window.source.sessionTarget.agentId }
+          : {}),
         isControlUiVisible: controlUiVisible,
         lifecycleGeneration,
         projectSessionActive: true,
         sessionId: window.sessionId,
-        sessionKey: window.target.sessionKey,
+        sessionKey: window.source.sessionTarget.sessionKey,
       },
       {
-        adoptExistingUnowned,
-        exclusive: true,
+        exclusive: existingContext === undefined,
         onClearRequested: (clearedClaimId) => {
           if (window.activeRuns.get(runId)?.claimId === clearedClaimId) {
-            fenceReleasedRun(window, runId);
+            fenceReleasedWorkerLiveRun(window, runId);
           }
         },
-        ownsContext: true,
+        ownsContext: !hasExistingTrackedOwner,
         trackOwner: true,
       },
     );
@@ -613,71 +305,150 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     const claimed = {
       claimId,
       controlUiVisible,
+      emissionMode,
       lifecycleGeneration,
+      trajectoryRecorder: createWorkerLiveTrajectoryRecorder({ runId, source: window.source }),
+      toolArgsByCallId: new Map<string, unknown>(),
     };
     window.activeRuns.set(runId, claimed);
     return claimed;
   };
 
-  const publish = (
+  const publish = async (
     window: LiveEventWindow,
-    request: WorkerLiveEventParams,
+    publication: WorkerLiveEventPublication,
     allowBufferedTerminalCapacity: boolean,
-  ): WorkerLiveEventFailure | undefined => {
+  ): Promise<WorkerLiveEventFailure | undefined> => {
+    const { request, recordApplied, runOwner, source, prepareReplyMedia } = publication;
+    if (runOwner?.isCancelled()) {
+      if (!runOwner.isCancelledFinishing(request)) {
+        return invalidEvent();
+      }
+      // Cancellation retires live publication before the worker finishes.
+      // Its exact owner can still settle the ACK without recreating a run claim.
+      window.terminalRuns.set(request.runId, request.seq);
+      releaseWorkerLiveRun(window, request.runId);
+      return undefined;
+    }
+    try {
+      source.receiptAuthority();
+    } catch {
+      return invalidEvent();
+    }
     const owned = claimRun(window, request.runId, allowBufferedTerminalCapacity);
     if ("ok" in owned) {
       return owned;
     }
-    const definitiveTerminal = isDefinitiveTerminal(request.event);
+    const definitiveTerminal = isDefinitiveWorkerTerminalEvent(request.event);
     if (definitiveTerminal) {
       // Emission runs synchronous listeners that can clear this claim reentrantly.
       // Fence first so terminal delivery cannot reopen the run ID.
       window.terminalRuns.set(request.runId, request.seq);
     }
-    emitAgentEventForOwner(
-      {
-        runId: request.runId,
-        stream: request.event.kind,
-        data: prepareLiveEventData(request.event),
-      },
-      owned.claimId,
-    );
+    const event = {
+      runId: request.runId,
+      stream: request.event.kind,
+      data: prepareWorkerLiveEventData(request.event),
+    };
+    if (
+      request.event.kind === "assistant" &&
+      request.event.payload.mediaUrls?.length &&
+      prepareReplyMedia
+    ) {
+      const payload = await prepareReplyMedia(request.event.payload);
+      event.data = { ...event.data, ...payload };
+      if (payload.text !== request.event.payload.text) {
+        event.data.replace = true;
+        event.data.delta = payload.text ?? "";
+      }
+    }
+    let activity;
+    if (request.event.kind === "tool") {
+      const tool = request.event.payload;
+      if (tool.phase === "start") {
+        owned.toolArgsByCallId.set(tool.toolCallId, tool.args);
+      }
+      activity = projectAgentToolActivity({
+        ...tool,
+        name: normalizeToolPolicyName(tool.name),
+        args: owned.toolArgsByCallId.get(tool.toolCallId),
+      });
+      if (tool.phase === "result") {
+        owned.toolArgsByCallId.delete(tool.toolCallId);
+      }
+    }
+    const itemEvent = activity
+      ? { runId: request.runId, stream: "item", data: activity }
+      : undefined;
+    const emissions = itemEvent
+      ? activity?.phase === "start"
+        ? [itemEvent, event]
+        : [event, itemEvent]
+      : [event];
+    const ownsPublication = () => {
+      try {
+        source.receiptAuthority();
+      } catch {
+        return false;
+      }
+      return (
+        window.activeRuns.get(request.runId) === owned &&
+        getAgentRunContextOwnerStatus(request.runId, owned.claimId, owned.lifecycleGeneration) ===
+          "active"
+      );
+    };
+    for (const emission of emissions) {
+      if (!ownsPublication()) {
+        return invalidEvent();
+      }
+      if (owned.emissionMode === "shared") {
+        if (!emitAgentEventIfCurrent(emission)) {
+          if (definitiveTerminal) {
+            window.terminalRuns.delete(request.runId);
+          }
+          return invalidEvent();
+        }
+      } else {
+        emitAgentEventForOwner(emission, owned.claimId);
+      }
+    }
+    if (activity && !ownsPublication()) {
+      return invalidEvent();
+    }
+    const write = recordWorkerLiveTrajectoryEvent(owned.trajectoryRecorder, request.event);
+    window.trajectoryWrites.add(write);
+    void write.then(() => window.trajectoryWrites.delete(write));
+    recordApplied?.(request.event);
     // Gateway handler owns cleanup so detach can revoke deferred terminal delivery.
     return undefined;
   };
 
-  const drain = (
+  const drain = async (
     window: LiveEventWindow,
-    first: WorkerLiveEventParams,
+    first: WorkerLiveEventPublication,
     firstPending?: PendingLiveEvent,
-  ): WorkerLiveEventApplicationResult => {
-    let request: WorkerLiveEventParams | undefined = first;
+  ): Promise<WorkerLiveEventApplicationResult> => {
     let buffered = firstPending;
     let publishedPrefix = false;
-    while (request) {
-      const failed = publish(window, request, buffered !== undefined);
+    while (true) {
+      const publication = buffered ?? first;
+      const { request } = publication;
+      const failed = await publish(window, publication, buffered !== undefined);
+      if (failed?.details.reason === "capacity-exceeded" && buffered) {
+        // Keep the ordered tail retryable while the active prefix claim drains.
+        // Later gaps still hit windowSize/maxPendingBytes and force normal resync.
+        return { ok: true, result: { ackedSeq: window.ackedSeq } };
+      }
+      if (buffered && window.pending.delete(request.seq)) {
+        window.pendingBytes -= buffered.sizeBytes;
+      }
       if (failed) {
-        if (failed.details.reason === "capacity-exceeded" && buffered) {
-          // Keep the ordered tail retryable while the active prefix claim drains.
-          // Later gaps still hit windowSize/maxPendingBytes and force normal resync.
-          return { ok: true, result: { ackedSeq: window.ackedSeq } };
-        }
-        if (buffered) {
-          if (window.pending.delete(request.seq)) {
-            window.pendingBytes -= buffered.sizeBytes;
-          }
-        }
         if (failed.details.reason === "capacity-exceeded" && !publishedPrefix) {
           // A fresh head cannot advance. Reset its cursor and release every claim.
           clearWindow(window);
           return failed;
         }
         return publishedPrefix ? { ok: true, result: { ackedSeq: window.ackedSeq } } : failed;
-      }
-      if (buffered) {
-        if (window.pending.delete(request.seq)) {
-          window.pendingBytes -= buffered.sizeBytes;
-        }
       }
       window.ackedSeq = request.seq;
       publishedPrefix = true;
@@ -689,20 +460,70 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
           window.terminalRuns.delete(runId);
         }
       }
-      const next = window.pending.get(window.ackedSeq + 1);
-      if (!next) {
+      buffered = window.pending.get(window.ackedSeq + 1);
+      if (!buffered) {
         break;
       }
-      request = next.request;
-      buffered = next;
     }
     return { ok: true, result: { ackedSeq: window.ackedSeq } };
   };
 
-  const apply = (params: {
+  const applyToWindow = async (
+    window: LiveEventWindow,
+    params: {
+      identity: WorkerConnectionIdentity;
+      request: WorkerLiveEventParams;
+      source: WorkerTurnTranscriptSource;
+    },
+    runOwner: WorkerTurnLiveEventOwner | undefined,
+  ): Promise<WorkerLiveEventApplicationResult> => {
+    if (params.request.seq <= window.ackedSeq) {
+      return { ok: true, result: { ackedSeq: window.ackedSeq } };
+    }
+    if (params.request.lastAckedSeq > window.ackedSeq) {
+      return resyncWindow(window);
+    }
+    const recordFinishing = captureWorkerTurnFinishing(params.identity, params.request);
+    const recordApplied: PendingLiveEvent["recordApplied"] = (event) => {
+      runOwner?.record(event);
+      recordFinishing?.();
+    };
+    const publication = {
+      request: params.request,
+      recordApplied,
+      runOwner,
+      source: params.source,
+      prepareReplyMedia: captureWorkerReplyMedia(params.identity),
+    };
+    const { seq } = params.request;
+    const expectedSeq = window.ackedSeq + 1;
+    if (seq > window.ackedSeq + windowSize) {
+      return resyncWindow(window);
+    }
+    if (seq === expectedSeq) {
+      return drain(window, publication, window.pending.get(seq));
+    }
+    if (window.pending.has(seq)) {
+      return { ok: true, result: { ackedSeq: window.ackedSeq } };
+    }
+    const sizeBytes = Buffer.byteLength(JSON.stringify(params.request.event), "utf8");
+    if (window.pendingBytes + sizeBytes > maxPendingBytes) {
+      return resyncWindow(window);
+    }
+    window.pending.set(seq, {
+      ...publication,
+      sizeBytes,
+    });
+    window.pendingBytes += sizeBytes;
+    return { ok: true, result: { ackedSeq: window.ackedSeq } };
+  };
+
+  const apply = async (params: {
     identity: WorkerConnectionIdentity;
     request: WorkerLiveEventParams;
-  }): WorkerLiveEventApplicationResult => {
+    source: WorkerTurnTranscriptSource;
+    readAckedSeq: () => number;
+  }): Promise<WorkerLiveEventApplicationResult> => {
     if (!params.identity.sessionId) {
       return { ok: false, details: { reason: "session-not-attached" } };
     }
@@ -719,38 +540,40 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     if ("ok" in window) {
       return window;
     }
-    const { seq } = params.request;
-    const expectedSeq = window.ackedSeq + 1;
-    if (seq > window.ackedSeq + windowSize) {
-      return resyncWindow(window);
+    const runOwner = captureWorkerTurnLiveEventOwner(params.identity);
+    window.activeApplications += 1;
+    try {
+      let result: WorkerLiveEventApplicationResult;
+      try {
+        result = await applyToWindow(window, params, runOwner);
+      } finally {
+        // Snapshot this accepted prefix, including duplicate ACKs, even if a later
+        // callback throws. Later requests own their own writes.
+        await Promise.all(window.trajectoryWrites);
+      }
+      if (result.ok) {
+        if (!runOwner?.isCancelledFinishing(params.request)) {
+          try {
+            params.source.receiptAuthority();
+          } catch {
+            return invalidEvent();
+          }
+        }
+        if (windows.get(sessionId) !== window) {
+          return { ok: false, details: { reason: "session-not-attached" } };
+        }
+        if (window.credentialHash !== params.identity.credentialHash) {
+          return { ok: false, details: { reason: "epoch-mismatch" } };
+        }
+      }
+      return result;
+    } finally {
+      window.activeApplications -= 1;
     }
-    if (seq === expectedSeq) {
-      const pending = window.pending.get(seq);
-      return drain(window, pending?.request ?? params.request, pending);
-    }
-    if (window.pending.has(seq)) {
-      return { ok: true, result: { ackedSeq: window.ackedSeq } };
-    }
-    const sizeBytes = Buffer.byteLength(JSON.stringify(params.request.event), "utf8");
-    if (window.pendingBytes + sizeBytes > maxPendingBytes) {
-      return resyncWindow(window);
-    }
-    window.pending.set(seq, { request: params.request, sizeBytes });
-    window.pendingBytes += sizeBytes;
-    return { ok: true, result: { ackedSeq: window.ackedSeq } };
   };
 
-  const clearEnvironment = (environmentId: string): void => {
-    startupOwners.delete(environmentId);
-    let fencedEpoch = fencedEnvironmentEpochs.get(environmentId) ?? -1;
-    for (const [sessionId, binding] of sessionBindings) {
-      if (binding.environmentId === environmentId) {
-        fencedEpoch = Math.max(fencedEpoch, binding.runEpoch);
-        sessionBindings.delete(sessionId);
-        boundSessions.delete(sessionId);
-        staleSessions.delete(sessionId);
-      }
-    }
+  const clearEnvironment = (environmentId: string, ownerEpoch: number): void => {
+    let fencedEpoch = Math.max(fencedEnvironmentEpochs.get(environmentId) ?? -1, ownerEpoch);
     for (const window of windows.values()) {
       if (window.environmentId === environmentId) {
         fencedEpoch = Math.max(fencedEpoch, window.runEpoch);
@@ -762,30 +585,18 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       // Refresh recency first so a re-fenced environment keeps its newest stale-owner epoch.
       fencedEnvironmentEpochs.delete(environmentId);
       fencedEnvironmentEpochs.set(environmentId, fencedEpoch);
-      if (fencedEnvironmentEpochs.size > MAX_FENCED_ENVIRONMENTS) {
-        const oldestEnvironmentId = fencedEnvironmentEpochs.keys().next().value;
-        if (oldestEnvironmentId) {
-          fencedEnvironmentEpochs.delete(oldestEnvironmentId);
-        }
-      }
+      pruneMapToMaxSize(fencedEnvironmentEpochs, MAX_FENCED_ENVIRONMENTS);
     }
   };
 
   const clear = (): void => {
-    unsubscribeSessionIdentityMutation?.();
-    unsubscribeSessionIdentityMutation = undefined;
     for (const window of windows.values()) {
       clearWindow(window);
     }
-    boundSessions.clear();
-    sessionBindings.clear();
     fencedEnvironmentEpochs.clear();
-    staleSessions.clear();
-    startupOwners.clear();
   };
 
-  return { apply, bindSession, clear, clearEnvironment, rebindAll, rotateCredential, start };
+  return { apply, clear, clearEnvironment, rotateCredential };
 }
 
 export type WorkerLiveEventReceiver = ReturnType<typeof createWorkerLiveEventReceiver>;
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

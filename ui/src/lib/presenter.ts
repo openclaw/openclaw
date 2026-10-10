@@ -1,14 +1,15 @@
+import { resolveExactDurationParts } from "../../../src/infra/format-time/format-duration-exact.ts";
 import type { CronJob, GatewaySessionRow } from "../api/types.ts";
-// Control UI module implements presenter behavior.
 import { t } from "../i18n/index.ts";
 import { resolveCronJobLastRunStatus } from "../lib/cron-status.ts";
 import {
   formatDateMs,
   formatRelativeTimestamp,
-  formatDurationHuman,
+  formatUnit,
   formatMs,
   formatUnknownText,
 } from "../lib/format.ts";
+import { resolveSessionContextLimit } from "./sessions/context-budget.ts";
 
 export function formatNextRun(ms?: number | null) {
   if (!ms) {
@@ -26,7 +27,7 @@ export function formatSessionTokens(row: GatewaySessionRow) {
     return t("common.na");
   }
   const total = row.totalTokens ?? 0;
-  const ctx = row.contextTokens ?? 0;
+  const ctx = resolveSessionContextLimit(row).tokens;
   return ctx ? `${total} / ${ctx}` : String(total);
 }
 
@@ -49,19 +50,23 @@ export function formatCronState(job: CronJob) {
   return `${status} · next ${next} · last ${last}`;
 }
 
-export function formatCronSchedule(job: CronJob) {
+export function formatCronSchedule(job: Pick<CronJob, "schedule">) {
   const s = job.schedule;
   if (s.kind === "at") {
     const atMs = Date.parse(s.at);
     return Number.isFinite(atMs) ? `At ${formatMs(atMs)}` : `At ${s.at}`;
   }
   if (s.kind === "every") {
-    return `Every ${formatDurationHuman(s.everyMs)}`;
+    const duration = resolveExactDurationParts(s.everyMs)?.map(formatUnit).join(" ");
+    return `Every ${duration ?? t("common.na")}`;
   }
   if (s.kind === "on-exit") {
     // on-exit jobs carry a watched command (+ optional cwd), not a cron expr;
     // without this branch they fall through and render "Cron undefined".
     return `On exit: ${s.command}${s.cwd ? ` (cwd: ${s.cwd})` : ""}`;
+  }
+  if (s.kind === "stream") {
+    return `Stream: ${s.command.join(" ")}${s.cwd ? ` (cwd: ${s.cwd})` : ""}`;
   }
   return `Cron ${s.expr}${s.tz ? ` (${s.tz})` : ""}`;
 }
@@ -73,6 +78,12 @@ export function formatCronPayload(job: CronJob) {
   }
   if (p.kind === "command") {
     return `Command: ${p.argv.join(" ")}`;
+  }
+  if (p.kind === "script") {
+    return `Script: ${p.script}`;
+  }
+  if (p.kind === "heartbeat") {
+    return "Heartbeat monitor";
   }
   const base = `Agent: ${p.message}`;
   const delivery = job.delivery;

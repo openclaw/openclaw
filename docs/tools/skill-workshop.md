@@ -1,412 +1,282 @@
 ---
-summary: "Create and update workspace skills through Skill Workshop review"
+summary: "Skills your agent learns on its own: how they are saved, undo, unused-skill cleanup, /learn, config, storage, and operator surfaces"
 read_when:
-  - You want the agent to create or update a skill from chat
-  - You need to review, apply, reject, or quarantine a generated skill draft
-  - You are configuring Skill Workshop approval, autonomy, storage, or limits
-  - You want to understand where self-learning proposals are reviewed
+  - You want to know how your agent saves and updates its own skills
+  - You want to undo, archive, or restore a learned skill
+  - You are turning Skill Workshop learning on or off
 title: "Skill Workshop"
 sidebarTitle: "Skill Workshop"
 ---
 
-Skill Workshop is OpenClaw's governed path for creating and updating workspace
-skills. Agents and operators never write `SKILL.md` directly through this
-path — they create a **proposal** (pending draft with content, target
-binding, scanner state, hashes, and rollback metadata) that becomes a live
-skill only when applied.
+Skill Workshop holds the skills an agent writes for itself, called **learned
+skills**. The agent saves a procedure after hard multi-step work and fixes a
+learned skill that misled it; skills nobody uses for 30 days are archived. Every
+change applies immediately, saves the previous version first, and can be undone.
 
-Skill Workshop writes workspace skills only. It never touches bundled,
-plugin, ClawHub, extra-root, managed, personal-agent, or system skills.
+Learned skills are procedures, not memory: the method for a task the user
+repeats, so the agent does not work it out again each time. Facts about the
+user or the world belong in [memory](/concepts/memory). Knowledge about one
+codebase, such as its conventions, build commands, or architecture, belongs in
+that repository's docs or `AGENTS.md`, where every agent working there reads it,
+so the agent does not save it as a learned skill.
 
-## How it works
+Learned skills belong to one agent and are always visible to it: they bypass
+`agents.defaults.skills` and `agents.entries.<id>.skills` allowlists. To hide
+one, archive it.
 
-- **Proposal first:** generated content is stored as `PROPOSAL.md`, not
-  `SKILL.md`.
-- **Apply is the only live write:** create, update, and revise never change
-  active skills.
-- **Workspace scoped:** creates target the workspace `skills/` root; updates
-  are allowed only for writable workspace skills.
-- **No clobber:** create fails if the target skill already exists.
-- **Hash bound:** update proposals bind to the current target hash and go
-  `stale` if the live skill changes before apply.
-- **Scanner gated:** apply reruns the security scanner before writing.
-- **Recoverable:** apply writes rollback metadata before touching live files.
-- **Consistent surfaces:** chat, CLI, and Gateway all call the same service.
+Skills you write yourself (workspace, project, managed, ClawHub, plugin, and
+bundled skills) are not Workshop skills. Edit them at their source; see
+[Creating skills](/tools/creating-skills). For profile-owned skills on a shared
+Gateway, see [Personal library authoring](/tools/skill-workshop/personal-library).
 
-## Lifecycle
+## How the agent learns
+
+- **During a turn:** when a learned skill the agent used turns out wrong or
+  incomplete, it views the skill and patches the misleading step. After hard
+  multi-step work you are likely to repeat, it saves the working procedure,
+  patching the skill that covers that kind of task or creating one when none does.
+- **Background review:** after enough model work in a conversation, or right
+  after a turn that used a learned skill, a background run reviews it and saves
+  anything worth keeping. See [Self-learning](/tools/self-learning).
+- **`/learn [request]`:** asks the agent to save a skill now, from the current
+  conversation or from sources you name. See [`/learn`](#learn).
+- **Learn from history:** the Control UI button opens a normal chat
+  in which the agent reviews earlier conversations and saves what it finds.
+- **Unused-skill cleanup:** learned skills nobody used for 30 days are archived.
+  See [Unused-skill cleanup](#unused-skill-cleanup).
+
+Changed skills load in new sessions. A running session keeps the skill snapshot
+it started with.
+
+<a id="changes-and-recovery" />
+
+## Undo
+
+When a background run changes a skill, OpenClaw posts one line to the
+conversation that triggered it:
 
 ```text
-create/update -> pending
-revise        -> pending
-apply         -> applied
-reject        -> rejected
-quarantine    -> quarantined
-target change -> stale
+💾 Learned: updated `deploy-staging` (tightened the rollback step). Say "undo" to revert this skill change.
 ```
 
-Only a `pending` proposal can be revised, applied, rejected, or quarantined.
+Reply "undo" and the agent restores the previous version with `skill_workshop`.
+Nothing is posted when the review changed nothing. Channel-less Control UI
+sessions get the same line as a transcript entry.
 
-## Lifecycle curation
-
-The Gateway tracks aggregate skill usage in the shared state database. Once a
-day, it reviews skills created and applied by Skill Workshop. Skills unused for
-more than 30 days become `stale`; after 90 days they become `archived` and are
-left out of new agent skill snapshots. Archived skill files remain unchanged on
-disk. Manually authored skills are never curated; only skills created by Skill
-Workshop proposals enter lifecycle curation.
-
-Pinned skills bypass lifecycle transitions. A stale skill returns to `active`
-after it is used and the next sweep runs. Archived skills return only through an
-explicit restore:
-
-Lifecycle transitions and restores apply to new sessions; running sessions keep
-their current skill snapshot.
+You can also undo from the Control UI (**Undo** on the skill's latest change or
+in its History tab) or the
+CLI:
 
 ```bash
-openclaw skills curator status
-openclaw skills curator pin <skill>
-openclaw skills curator unpin <skill>
-openclaw skills curator restore <skill>
+openclaw skills workshop restore deploy-staging
+openclaw skills workshop restore deploy-staging --version <version-id>
 ```
 
-All curator commands accept `--json`. Status also reports deterministic overlap
-candidates as suggestions only; it never merges skills or calls a model.
+Restore saves the current copy before replacing it, so an undo can itself be
+undone. A skill that was just created has no earlier version; archive it instead.
 
-## Chat
+<a id="collection-review" />
+<a id="weekly-curator" />
 
-Ask the agent for the skill you want; it calls `skill_workshop` and returns a
-proposal id.
+## Unused-skill cleanup
 
-### Learn from recent work
+When learning is on, OpenClaw archives a learned skill with no activity for 30
+days, with the reason `unused for 30 days` and actor `curator` in the change
+feed. Activity is the latest of: a recorded read of its `SKILL.md`, a
+foreground `skill_workshop` `view`, and its last change (create, patch,
+restore). A skill younger than 30 days is never archived. The check runs at
+most once a day per agent, after a finished turn, and never delays the turn.
+Archive is the normal versioned archive: restore it any time.
 
-Use `/learn` to turn the current conversation or named sources into one
-standards-guided skill proposal:
+Cleanup only runs for agents whose default runtime is the embedded OpenClaw
+harness, in the Gateway process. The Codex app-server harness reads skills with
+its native shell, which OpenClaw cannot attribute to a skill, so cleanup stays
+off for Codex agents rather than archiving skills that are in use.
+
+Earlier versions ran a weekly curator automation
+(`skill-collection-review:<agentId>`). It is retired: the Gateway deletes those
+cron rows on upgrade and creates no replacement.
+
+<a id="learn" />
+
+## `/learn`
 
 ```text
 /learn
-/learn docs/runbook.md and https://example.com/guide; focus on recovery
+/learn docs/runbook.md; focus on recovery
 ```
 
-With no request, `/learn` asks the agent to distill the reusable workflow from
-the current conversation. With a request, the agent treats paths, URLs, pasted
-notes, and conversation references as sources while honoring focus, scope, and
-naming requirements. It gathers the sources with its existing tools, then calls
-`skill_workshop` with `action: "create"`.
+`/learn` is a normal foreground turn. With no request, the agent saves the
+reusable workflow from the current conversation. With a request, it gathers the
+named paths, URLs, notes, or conversation references with its normal tools and
+honors any focus, scope, or naming you give. It views related skills first,
+patches the one that covers the task, and creates a new skill only when none
+does. Related skills that cover the same class of task get merged into one
+umbrella skill: it patches the survivor and archives the rest with
+`absorbed_into`. Then it tells you which skill changed. If there is nothing
+durable to learn, it changes nothing.
 
-The resulting proposal stays `pending`; `/learn` never applies it. Review and
-apply it through the normal approval flow or with `openclaw skills workshop`.
-
-Create:
-
-```text
-Make a skill called morning-catchup that runs my Monday inbox routine.
-```
-
-Update an existing workspace skill:
-
-```text
-Update trip-planning to also check seat maps before booking.
-```
-
-Iterate on a pending proposal:
-
-```text
-Show me the morning-catchup proposal.
-Revise it to also flag anything marked urgent.
-Apply the morning-catchup proposal.
-```
-
-Agent-initiated `apply`, `reject`, and `quarantine` run without an additional
-approval prompt by default. Set `skills.workshop.approvalPolicy` to `"pending"`
-to require operator approval before those actions.
-
-When approval is required, the prompt identifies the proposal id and target
-skill, and shows the proposal description, support-file count, and body size.
-Approval requests are bounded to finish before the agent tool watchdog. If no
-decision arrives before the prompt expires, the lifecycle action does not run:
-the proposal stays pending and unchanged. Decide later in the Skill Workshop UI or run
-`openclaw skills workshop apply|reject|quarantine <proposal-id>`. Agents should
-not retry an expired lifecycle action in a loop.
-
-## CLI
-
-```bash
-# Create
-openclaw skills workshop propose-create \
-  --name morning-catchup \
-  --description "Daily inbox catch-up: triage, archive, surface, draft, plan" \
-  --proposal ./PROPOSAL.md
-
-# Update an existing workspace skill
-openclaw skills workshop propose-update trip-planning --proposal ./PROPOSAL.md
-
-# List and inspect
-openclaw skills workshop list
-openclaw skills workshop inspect <proposal-id>
-
-# Revise before approval
-openclaw skills workshop revise <proposal-id> --proposal ./PROPOSAL.md
-
-# Close out
-openclaw skills workshop apply <proposal-id>
-openclaw skills workshop reject <proposal-id> --reason "Duplicate"
-openclaw skills workshop quarantine <proposal-id> --reason "Needs security review"
-```
-
-Every subcommand takes `--agent <id>` (target workspace; defaults to
-cwd-inferred, then the default agent) and `--json` (structured output).
-`propose-create`, `propose-update`, and `revise` also take `--goal <text>` and
-`--evidence <text>` to record proposal context alongside `--proposal`.
-
-## Proposal content
-
-While pending, the proposal is stored as `PROPOSAL.md` with proposal-only
-frontmatter:
-
-```markdown
----
-name: "morning-catchup"
-description: "Daily inbox catch-up: triage, archive, surface, draft, plan"
-status: proposal
-version: "v1"
-date: "2026-05-30T00:00:00.000Z"
----
-```
-
-On apply, Skill Workshop writes the active `SKILL.md` and removes the
-proposal-only fields: `status`, proposal `version`, and proposal `date`.
-
-## Support files
-
-Use `--proposal-dir` when the proposed skill needs files beside
-`PROPOSAL.md`:
-
-```bash
-openclaw skills workshop propose-create \
-  --name weekly-update \
-  --description "Friday wrap-up: stats, highlights, next week's top three" \
-  --proposal-dir ./weekly-update-proposal
-```
-
-The directory must contain `PROPOSAL.md`. Support files must live under
-`assets/`, `examples/`, `references/`, `scripts/`, or `templates/`. Skill
-Workshop scans, hashes, and stores them with the proposal, then writes them
-beside the live `SKILL.md` only on apply.
-
-Rejected support-file paths: absolute paths, hidden path segments, path
-traversal, overlapping paths, executable files, non-UTF-8 text, null bytes,
-and paths outside the standard support folders.
+`/learn` works in both learning modes. It replies with an explanation instead
+when `skill_workshop` is unavailable, for example in a sandboxed session or
+when tool policy hides the tool.
 
 ## Agent tool
 
-The model uses `skill_workshop` with one required `action`:
-`create | update | revise | list | inspect | apply | reject | quarantine`.
-Other parameters apply depending on the action:
+The built-in `skill_workshop` tool is how every learned-skill change is made.
+It is part of `tools.profile: "coding"`; with a stricter policy, add it to
+`tools.allow` or `tools.alsoAllow`.
 
-| Parameter                  | Used by                                              | Notes                                                                |
-| -------------------------- | ---------------------------------------------------- | -------------------------------------------------------------------- |
-| `name`                     | `create`, `inspect`, `revise`                        | Required for `create`; resolves a pending proposal by name otherwise |
-| `description`              | `create`, `update`, `revise`                         | Max 160 bytes                                                        |
-| `skill_name`               | `update`                                             | Existing skill name or key                                           |
-| `proposal_content`         | `create`, `update`, `revise`                         | Stored as `PROPOSAL.md`; capped by `skills.workshop.maxSkillBytes`   |
-| `support_files`            | `create`, `update`, `revise`                         | Array of `{ path, content }`                                         |
-| `goal`, `evidence`         | `create`, `update`, `revise`                         | Free-text context                                                    |
-| `proposal_id`              | `inspect`, `revise`, `apply`, `reject`, `quarantine` | Target proposal                                                      |
-| `reason`                   | `apply`, `reject`, `quarantine`                      | Optional                                                             |
-| `query`, `status`, `limit` | `list`                                               | Filter/paginate; `limit` max 50, default 20                          |
+| Action        | Parameters                                           | Effect                                                                   |
+| ------------- | ---------------------------------------------------- | ------------------------------------------------------------------------ |
+| `list`        | —                                                    | Lists live skills and archived skills                                    |
+| `view`        | `name`, optional `file_path`, `version`              | Reads a file, current or from a saved version                            |
+| `create`      | `name`, `content` (full `SKILL.md`)                  | Creates a new skill                                                      |
+| `patch`       | `name`, `old_text`, `new_text`, optional `file_path` | Replaces one exact, unique span                                          |
+| `write_file`  | `name`, `file_path`, `content`                       | Writes a support file, or rewrites `SKILL.md`                            |
+| `remove_file` | `name`, `file_path`                                  | Deletes one support file; `SKILL.md` goes only through `archive`         |
+| `archive`     | `name`, optional `absorbed_into`, `reason`           | Hides the skill; `absorbed_into` names the live skill that now covers it |
+| `restore`     | `name`, optional `version`                           | Restores the newest saved version, or the one named                      |
 
-Agents must use `skill_workshop` for generated skill work. They must not
-create or change proposal files through `write`, `edit`, `exec`, shell
-commands, or direct filesystem operations.
+Every mutating action accepts `reason`, one short line that appears in the
+change feed and the chat notice. Every change saves the previous version first.
 
-<Note>
-`skill_workshop` is a built-in agent tool and is included in
-`tools.profile: "coding"`. If a stricter policy hides it, add
-`skill_workshop` to the active `tools.allow` list, or use
-`tools.alsoAllow: ["skill_workshop"]` when the scope uses a profile without an
-explicit `tools.allow`. Sandboxed runs do not construct the host-side
-Skill Workshop tool, so run proposal review actions from a normal host-side
-agent session or the CLI.
-</Note>
+Writes are validated before they land:
 
-## Suggested skills
+- New names use 1-63 lowercase letters, digits, or hyphens and start with a letter
+  or digit. Longer names saved by earlier releases stay listed and manageable.
+- `SKILL.md` needs frontmatter whose `name` matches the skill directory and a
+  `description` of 1-1024 bytes (aim for about 160). It must fit within `skills.workshop.maxSkillBytes`.
+- Support files go under `references/`, `templates/`, `scripts/`, or `assets/`,
+  up to 256 KiB each. Absolute paths, traversal, and symlinks are refused.
+- A critical security-scanner finding, including a literal secret, refuses the
+  write and names the file, line, and rule.
 
-OpenClaw detects durable instructions such as “next time,” “remember to,” and reactive corrections
-when an interactive turn ends, including failed turns. On the next turn, the agent offers to save
-the most recent detected workflow through `skill_workshop`; the user decides whether to create a
-proposal. This built-in suggestion does not create or change a skill by itself. Enable
-`skills.workshop.autonomous.enabled` to create pending proposals directly instead. In the Control
-UI, the Workshop tab offers the same setting as a **Self-learning** toggle in the page header, and
-as an enable button on the empty proposal board.
+The background review must `view` an existing skill before it can `patch`,
+`write_file`, `remove_file`, or `archive` it, and its archives need
+`absorbed_into` or `reason`. A foreground `view` counts as using the skill.
 
-### Scan past sessions
+A successful `create`, `patch`, or `write_file` of `SKILL.md` may end with up to
+three `Advisory (not blocking)` lines: authoring issues the write introduced (a
+description over 160 bytes or opening with "This skill", a body over 250 lines
+or 12 KB, emphasis words, three or more Never/Don't steps, update notes or
+dates). The write has already landed. A `create` also lists the agent's other
+learned skills, so the agent itself decides whether the new skill duplicates
+one and should be merged.
 
-The Control UI can review older work without enabling autonomous self-learning.
-Open **Plugins → Workshop** and select **Find skill ideas**. The scan starts with
-the newest eligible sessions and reviews a bounded window of substantial work.
-It skips cron, heartbeat, hook, subagent, ACP, plugin-owned, and internal review
-sessions, plus conversations with fewer than six model turns.
-
-The reviewer uses the selected agent's configured model and receives a
-secret-redacted, size-bounded transcript bundle. It applies the same conservative
-bar as experience review: a concrete recovery pattern or a stable procedure that
-would remove at least two future model or tool calls. Routine work and one-off
-facts should produce no proposal.
-
-One scan can create or revise at most three pending proposals. It cannot apply,
-reject, quarantine, or edit a live skill. The Workshop shows cumulative coverage,
-for example **20 sessions reviewed · Jun 18–today · 2 ideas found**. Select
-**Scan earlier work** to continue from the persisted oldest-session cursor. After
-the available history is exhausted, the action becomes **Scan new work**.
-
-Historical review is manual even when
-`skills.workshop.autonomous.enabled` is `false`. Each click starts a model run,
-so provider pricing and data-handling terms apply. The cursor and coverage counts
-are stored in the shared OpenClaw state database; transcript content is not copied
-into scan state.
-
-With autonomous capture enabled, OpenClaw can also perform a conservative review after successful,
-substantial work and after the whole agent system becomes idle. That isolated review can create or
-revise at most one pending proposal. It cannot update a live skill or apply, reject, or quarantine a
-proposal, even when `approvalPolicy` is `"auto"`.
-
-See [Self-learning](/tools/self-learning) for enablement, eligibility, privacy and cost details,
-the proposal threshold, and troubleshooting.
-
-## Approval and autonomy
+## Configuration
 
 ```json5
 {
   skills: {
     workshop: {
-      autonomous: {
-        enabled: false,
-      },
-      allowSymlinkTargetWrites: false,
-      approvalPolicy: "auto",
-      maxPending: 50,
+      autonomous: { mode: "auto" },
       maxSkillBytes: 40000,
     },
   },
 }
 ```
 
-| Setting                    | Default  | Effect                                                                                                                                                              |
-| -------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `autonomous.enabled`       | `false`  | Creates pending proposals from explicit corrections and, after an idle delay, substantial completed work with reusable recovery or meaningful round-trip savings.   |
-| `allowSymlinkTargetWrites` | `false`  | Lets apply write through workspace skill symlinks whose real target is listed in `skills.load.allowSymlinkTargets`.                                                 |
-| `approvalPolicy`           | `"auto"` | `"auto"` skips an additional prompt for agent-initiated `apply`, `reject`, or `quarantine` (the agent still has to call the action). `"pending"` requires approval. |
-| `maxPending`               | `50`     | Caps pending and quarantined proposals per workspace (1-200).                                                                                                       |
-| `maxSkillBytes`            | `40000`  | Caps proposal body size in bytes (1024-200000).                                                                                                                     |
+| Setting                           | Default  | Effect                                                                                  |
+| --------------------------------- | -------- | --------------------------------------------------------------------------------------- |
+| `skills.workshop.autonomous.mode` | `"auto"` | `"auto"` enables the background review and unused-skill cleanup. `"off"` disables both. |
+| `skills.workshop.maxSkillBytes`   | `40000`  | Maximum `SKILL.md` size in bytes (1024-200000).                                         |
 
-Autonomous capture recognizes prospective rules (for example, “from now on”) and reactive
-corrections (for example, “that’s not what I asked”). It groups new instructions by topic into up
-to three proposals per turn, routes vocabulary matches to existing writable workspace skills, and
-revises its own pending proposal when another correction targets the same skill.
-
-For successful substantial work without an explicit correction, an isolated run of the selected
-model decides whether the completed trajectory clears the conservative proposal bar. The
-foreground model is not prompted to learn before it replies. The background reviewer preserves the
-foreground run as proposal provenance, cannot access general agent tools, and cannot make lifecycle
-decisions. The review starts only when the foreground runtime reports both its exact resolved model
-and that `skill_workshop` was actually available. Restrictive or unknown tool policy therefore
-fails closed and creates no proposal.
-
-See [Self-learning](/tools/self-learning) for the complete autonomous review behavior and safety
-model.
-
-Proposal descriptions are always capped at 160 bytes, independent of
-`maxSkillBytes`.
-
-## Gateway methods
-
-| Method                             | Scope            |
-| ---------------------------------- | ---------------- |
-| `skills.proposals.list`            | `operator.read`  |
-| `skills.proposals.inspect`         | `operator.read`  |
-| `skills.proposals.historyStatus`   | `operator.read`  |
-| `skills.proposals.historyScan`     | `operator.admin` |
-| `skills.proposals.create`          | `operator.admin` |
-| `skills.proposals.update`          | `operator.admin` |
-| `skills.proposals.revise`          | `operator.admin` |
-| `skills.proposals.requestRevision` | `operator.admin` |
-| `skills.proposals.apply`           | `operator.admin` |
-| `skills.proposals.reject`          | `operator.admin` |
-| `skills.proposals.quarantine`      | `operator.admin` |
-| `skills.curator.status`            | `operator.read`  |
-| `skills.curator.pin`               | `operator.admin` |
-| `skills.curator.unpin`             | `operator.admin` |
-| `skills.curator.restore`           | `operator.admin` |
-
-`requestRevision` is Gateway-only (no CLI or agent-tool equivalent): it
-forwards free-text revision instructions to the owning agent's chat session
-instead of replacing `PROPOSAL.md` directly, for UIs that ask the agent to
-revise rather than submit literal new content.
-
-`historyStatus` and `historyScan` are Control UI support methods. `historyScan`
-accepts `direction: "older" | "newer"`; it always leaves results as pending
-proposals.
-
-## Storage
-
-```text
-<OPENCLAW_STATE_DIR>/skill-workshop/
-  proposals.json
-  proposals/<proposal-id>/
-    proposal.json
-    PROPOSAL.md
-    rollback.json
-    assets/
-    examples/
-    references/
-    scripts/
-    templates/
+```bash
+openclaw config set skills.workshop.autonomous.mode off
+openclaw config set skills.workshop.autonomous.mode auto
 ```
 
-Default state directory: `~/.openclaw`.
+With `off`, the agent can still create and update learned skills when you ask,
+through `/learn`, or in a **Learn from past conversations** session. See
+[Skills config](/tools/skills-config#workshop-skills-workshop) for the schema.
 
-- `proposal.json`: canonical proposal record.
-- `proposals.json`: fast listing index, rebuildable from proposal folders.
-- `PROPOSAL.md`: pending skill proposal.
-- `rollback.json`: recovery metadata written before apply changes live files.
+## Where files live
 
-## Limits
+```text
+<agentDir>/workshop-skills/
+  <name>/
+    SKILL.md
+    references/  templates/  scripts/  assets/
+  .archive/
+    <name>/<versionId>/     # full copy of the skill before each change
+```
 
-| Limit                           | Value                                                                |
-| ------------------------------- | -------------------------------------------------------------------- |
-| Description                     | 160 bytes                                                            |
-| Proposal body                   | `skills.workshop.maxSkillBytes` (default 40,000; hard ceiling 1 MiB) |
-| Support files                   | 64 per proposal                                                      |
-| Support file size               | 256 KiB each, 2 MiB total                                            |
-| Pending + quarantined proposals | `skills.workshop.maxPending` per workspace (default 50)              |
+`<agentDir>` defaults to `<state-dir>/agents/<agentId>/agent`, or
+`agents.entries.<id>.agentDir` when set. `<state-dir>` is `~/.openclaw` unless
+`OPENCLAW_STATE_DIR` overrides it.
+
+A version is saved before every change, including archive and restore. The
+newest 10 versions per skill are kept. An archived skill has no live directory;
+its newest version restores it. The change feed (who changed which skill, when,
+and why) lives in the state database and keeps the newest 500 entries per agent.
+
+## Operator surfaces
+
+- **Control UI:** open **Plugins → Skill workshop**. Learned skills are listed
+  most used first (or by recent activity or name), each with its latest change
+  and **Undo**; skills idle for two weeks are flagged, since
+  [unused-skill cleanup](#unused-skill-cleanup) may archive them at 30 days.
+  Selecting a skill shows its instructions, support files, and history.
+  From the history you can compare an earlier version with today's, restore it,
+  or undo a change. **Archive** and **Restore** switch a skill between the
+  Active and Archived lists. The page header holds the learning mode switch and
+  **Learn from history**. If the learning configuration cannot be loaded, the
+  page shows the error and a **Retry** button while keeping the skill library available.
+- **CLI:** `openclaw skills workshop list | changes | show | archive | restore`.
+  See [Skills CLI](/cli/skills#skill-workshop).
+- **Plugins:** the [`skill_changed`](/plugins/hooks/reference#skill-lifecycle)
+  hook observes each committed Workshop change.
+
+Gateway methods take an optional `agentId` (default agent when omitted):
+
+| Method                    | Scope            | Params                          | Returns                                                                                         |
+| ------------------------- | ---------------- | ------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `skills.workshop.list`    | `operator.read`  | —                               | `agentId`, `mode`, `root`, live `skills` (with `useCount`, `lastUsedAtMs`), `archived` versions |
+| `skills.workshop.changes` | `operator.read`  | `limit` (up to 500), `beforeMs` | `changes`, newest first                                                                         |
+| `skills.workshop.read`    | `operator.read`  | `name`, `filePath`, `versionId` | `name`, `filePath`, `content`, `files`                                                          |
+| `skills.workshop.archive` | `operator.admin` | `name`, `reason`                | `change`                                                                                        |
+| `skills.workshop.restore` | `operator.admin` | `name`, `versionId`             | `change`                                                                                        |
+
+Archive and restore from the CLI, Control UI, or Gateway are recorded as `user`
+changes.
+
+<a id="when-an-older-backup-cannot-be-restored-automatically" />
+
+## Upgrading from earlier releases
+
+Earlier releases staged learned skills as drafts for review. `openclaw doctor
+--fix` exports any pending drafts and removes the old settings; see
+[State migrations](/cli/doctor/state-migrations) and
+[Skills config](/tools/skills-config#workshop-skills-workshop). Exported drafts
+are not loaded. Ask the agent to save one with `/learn` if you still want it.
+
+The earlier `skills.proposals.*` and `skills.curator.*` Gateway methods stay
+registered but return an error that points to the methods above. The
+`skill_proposal_evaluate` and `skill_proposal_changed` plugin hooks were removed;
+see [Removed surfaces](/plugins/sdk-migration/removed-surfaces#skill-workshop-proposal-hooks).
+
+Backups written by the earlier weekly review under
+`<agentDir>/skill-workshop/collection-backups/` are no longer read. Copy any
+files you need from them by hand; OpenClaw does not restore them.
 
 ## Troubleshooting
 
-| Problem                                        | Resolution                                                                                                                                                                                                  |
-| ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Skill proposal description is too large`      | Shorten `description` to 160 bytes or less.                                                                                                                                                                 |
-| `Skill proposal content is too large`          | Shorten the proposal body or raise `skills.workshop.maxSkillBytes`.                                                                                                                                         |
-| `Target skill changed after proposal creation` | Revise the proposal against the current target, or create a new proposal.                                                                                                                                   |
-| `Proposal scan failed`                         | Inspect scanner findings, then revise or quarantine the proposal.                                                                                                                                           |
-| `untrusted symlink target`                     | Configure `skills.load.allowSymlinkTargets` and enable `skills.workshop.allowSymlinkTargetWrites` only for intentional shared skill roots.                                                                  |
-| `Support file paths must be under one of...`   | Move support files under `assets/`, `examples/`, `references/`, `scripts/`, or `templates/`.                                                                                                                |
-| Proposal does not show in list                 | Check the selected `--agent` workspace and `OPENCLAW_STATE_DIR`.                                                                                                                                            |
-| Agent cannot call `skill_workshop`             | Check the active tool policy and run mode. `coding` includes the tool; restrictive `tools.allow` policies must list it explicitly, and sandboxed runs must use a normal host-side agent session or the CLI. |
+| Problem                            | Check                                                                                                                                                                          |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Nothing is ever learned            | `skills.workshop.autonomous.mode` is `auto`, the conversation is eligible, and tool policy allows `skill_workshop`. See [Self-learning](/tools/self-learning#troubleshooting). |
+| Agent cannot call `skill_workshop` | Sandboxed runs do not get the tool. Use a non-sandboxed session or the CLI. Otherwise add the tool to `tools.allow` or `tools.alsoAllow`.                                      |
+| A write is refused                 | The error names the fix: rename the skill, correct the frontmatter, shorten the description or `SKILL.md`, or remove the flagged line.                                         |
+| An unwanted change was made        | Say "undo", press **Undo** in the Control UI, or run `openclaw skills workshop restore <name>`.                                                                                |
+| A skill was archived unexpectedly  | Unused-skill cleanup archives skills with no activity for 30 days. Run `openclaw skills workshop restore <name>`.                                                              |
 
-### Tool-policy diagnostic
-
-When autonomous capture is enabled, `openclaw doctor` runs the
-`core/doctor/skill-workshop-tool-policy` check for the default agent. If policy
-hides `skill_workshop`, the warning names the first excluding config layer and
-the exact `allow` or `alsoAllow` change to make. Older runbooks may still use
-`openclaw plugins inspect skill-workshop`; that command now explains that Skill
-Workshop is built in and prints the same policy hint when applicable.
+In `auto` mode, `openclaw doctor` runs the `core/doctor/skill-workshop-tool-policy`
+check for each agent. It names the sandbox setting or the config layer that
+hides `skill_workshop` and the exact `allow` or `alsoAllow` change to make.
 
 ## Related
 
-- [Skills](/tools/skills) for load order, precedence, and visibility
-- [Self-learning](/tools/self-learning) for conservative post-run skill proposals
+- [Self-learning](/tools/self-learning) for the background review
+- [Skills](/tools/skills) for load order and visibility
 - [Creating skills](/tools/creating-skills) for hand-written `SKILL.md`
-  basics
-- [Skills config](/tools/skills-config) for the full `skills.workshop` schema
-- [Skills CLI](/cli/skills) for `openclaw skills` commands
+- [Skills config](/tools/skills-config#workshop-skills-workshop) for the `skills.workshop` schema
+- [Skills CLI](/cli/skills#skill-workshop) for `openclaw skills workshop`

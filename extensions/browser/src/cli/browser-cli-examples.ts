@@ -1,7 +1,3 @@
-/**
- * Help examples shown by the Browser CLI root command.
- */
-/** Core Browser CLI examples for lifecycle and inspection commands. */
 export const browserCoreExamples = [
   "openclaw browser status",
   "openclaw browser start",
@@ -20,7 +16,6 @@ export const browserCoreExamples = [
   "openclaw browser snapshot --labels",
 ];
 
-/** Browser CLI examples for interaction/action commands. */
 export const browserActionExamples = [
   "openclaw browser navigate https://example.com",
   "openclaw browser resize 1280 720",
@@ -40,4 +35,7 @@ export const browserActionExamples = [
   "openclaw browser evaluate --fn 'const title = document.title; return title;'",
   "openclaw browser console --level error",
   "openclaw browser pdf",
+  "openclaw browser batch --actions-file plan.json",
+  'openclaw browser batch --actions \'[{"kind":"wait","timeMs":500},{"kind":"click","ref":"12"},{"kind":"type","ref":"23","text":"hello"}]\'',
+  "openclaw browser batch --actions-file plan.json --continue",
 ];

@@ -1,6 +1,5 @@
-// Discord plugin module implements components.base behavior.
-import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { BaseComponentInteraction } from "./interactions.js";
+export { stripUndefinedFields as clean } from "./undefined-fields.js";
 
 export type ComponentParserResult = {
   key: string;
@@ -14,13 +13,9 @@ export type ComponentData<
 type ConditionalComponentOption = (interaction: BaseComponentInteraction) => boolean;
 
 export function parseCustomId(id: string): ComponentParserResult {
-  const [rawKeyValue, ...parts] = id.split(";");
-  const rawKey = expectDefined(rawKeyValue, "custom id split first segment");
-  const [keyPart, firstValue] = rawKey.split("=");
-  const definedKeyPart = expectDefined(keyPart, "custom id key segment");
-  const key = definedKeyPart.includes(":")
-    ? expectDefined(definedKeyPart.split(":").at(0), "namespaced custom id key")
-    : definedKeyPart;
+  const [rawKey = "", ...parts] = id.split(";");
+  const [keyPart = "", firstValue] = rawKey.split("=");
+  const key = keyPart.split(":", 1)[0] ?? "";
   const data: ComponentParserResult["data"] = {};
   const entries = firstValue === undefined ? parts : [rawKey.slice(key.length + 1), ...parts];
   for (const entry of entries) {
@@ -33,10 +28,6 @@ export function parseCustomId(id: string): ComponentParserResult {
     data[name] = raw === "true" ? true : raw === "false" ? false : raw;
   }
   return { key, data };
-}
-
-export function clean<T extends Record<string, unknown>>(value: T): T {
-  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as T;
 }
 
 export function colorToNumber(value: string | number | undefined): number | undefined {

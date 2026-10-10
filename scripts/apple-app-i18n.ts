@@ -1,35 +1,18 @@
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { decodeXml } from "../src/shared/xml.ts";
+import { selectDeterministicTranslation } from "./android-app-i18n.ts";
+import { compareAscii as compareCodeUnits } from "./lib/canonical-json.mjs";
+import {
+  type NativeI18nInventoryEntry,
+  parseNativeI18nInventory,
+} from "./native-i18n-inventory.ts";
+import { NATIVE_I18N_LOCALES } from "./native-i18n-locales.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
-// Keep this script independent from the translation client loaded by native-app-i18n.
-// Artifact locale assertions below make drift fail instead of silently dropping a language.
-export const APPLE_I18N_LOCALES = [
-  "zh-CN",
-  "zh-TW",
-  "pt-BR",
-  "de",
-  "es",
-  "ja-JP",
-  "ko",
-  "fr",
-  "hi",
-  "ar",
-  "it",
-  "tr",
-  "uk",
-  "id",
-  "pl",
-  "th",
-  "vi",
-  "nl",
-  "fa",
-  "ru",
-  "sv",
-] as const;
-const REQUIRED_LOCALES = ["en", ...APPLE_I18N_LOCALES];
+const REQUIRED_LOCALES = ["en", ...NATIVE_I18N_LOCALES];
 const FORMAT_RE = /%(?:%|(?:\d+\$)?(?:lld|ld|[@a-z]))/giu;
 const INFLECTED_COUNT_INTERPOLATION_RE = /\\\([A-Za-z_][A-Za-z0-9_]*\)/gu;
 const INFLECTED_COUNT_INTERPOLATION_EXACT_RE = /^\\\([A-Za-z_][A-Za-z0-9_]*\)$/u;
@@ -37,28 +20,31 @@ const INFLECTED_COUNT_SEGMENT_RE =
   /\^\[[^\]]*\\\([A-Za-z_][A-Za-z0-9_]*\)[^\]]*\]\(inflect: true\)/gu;
 const INFLECTED_COUNT_MARKER = "](inflect: true)";
 const IOS_CATALOG_PATH = "apps/ios/Resources/Localizable.xcstrings";
-const IOS_CONTRADICTIONS_PATH = "apps/.i18n/apple-translation-contradictions.json";
+const MACOS_CATALOG_PATH = "apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings";
+const MACOS_INFO_PLIST_PATH = "apps/macos/Sources/OpenClaw/Resources/Info.plist";
 const NATIVE_SOURCE_PATH = "apps/.i18n/native-source.json";
 const NATIVE_TRANSLATIONS_DIR = "apps/.i18n/native";
+const SHARED_CHAT_UI_SOURCE_PREFIX = "apps/shared/OpenClawKit/Sources/OpenClawChatUI/";
+const SHARED_GATEWAY_DISCOVERY_STATUS_SOURCE =
+  "apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayDiscoveryStatusText.swift";
 const IOS_SOURCE_PREFIXES = [
   "apps/ios/",
-  "apps/shared/OpenClawKit/Sources/OpenClawChatUI/",
+  SHARED_CHAT_UI_SOURCE_PREFIX,
   "apps/shared/OpenClawKit/Sources/OpenClawKit/",
 ] as const;
-const IOS_CATALOG_KINDS = new Set([
-  "conditional-branch",
-  "ui-call",
-  "ui-call-multiline",
-  "ui-localized-call",
-  "ui-localized-call-multiline",
-  "ui-modifier",
-  "ui-named-argument",
-  "ui-named-argument-multiline",
-]);
 const IOS_CATALOG_EXCLUSIONS = new Set([
   // Product names and preview-only single-character fixtures are intentionally verbatim.
   "OpenClaw",
   "z",
+]);
+const MACOS_SOURCE_PREFIXES = [
+  "apps/macos/Sources/OpenClaw/",
+  SHARED_CHAT_UI_SOURCE_PREFIX,
+  SHARED_GATEWAY_DISCOVERY_STATUS_SOURCE,
+] as const;
+const MACOS_CATALOG_EXCLUSIONS = new Set([
+  // Product names are intentionally verbatim.
+  "OpenClaw",
 ]);
 const IOS_INFO_PLIST_TARGETS = [
   {
@@ -78,6 +64,7 @@ const IOS_INFO_PLIST_TARGETS = [
     sourcePath: "apps/ios/ActivityWidget/Info.plist",
   },
 ] as const;
+const INFO_PLIST_LOCALIZABLE_KEYS = new Set(["NSScreenCaptureDescription"]);
 const AMBIGUOUS_RUNTIME_INTERPOLATIONS = [
   {
     label: "interpolated localized resource",
@@ -143,15 +130,21 @@ const APPLE_LOCALE_DIRECTORIES: Record<string, string> = {
   "zh-TW": "zh-Hant",
 };
 const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
+  "apps/macos/Sources/OpenClaw/DeviceSettingsPanels.swift": [
+    'String(localized: "Quick Chat shortcut")',
+    'String(localized: "Microphone Test")',
+    'Button("Done")',
+  ],
+  "apps/macos/Sources/OpenClaw/DeviceMicrophonePanel.swift": [
+    'String(localized: "Stopped")',
+    'String(localized: "Timeout: no trigger heard")',
+    "Text(verbatim: meterError)",
+  ],
   "apps/ios/Sources/Design/OpenClawProComponents.swift": [
     "enum OpenClawTextValue: ExpressibleByStringLiteral",
-    "struct ProSectionHeader: View {\n    let title: OpenClawTextValue",
     "struct OpenClawNoticeBanner: View {\n    let icon: String\n    let title: OpenClawTextValue\n    let message: OpenClawTextValue",
     "struct OpenClawAdaptiveHeaderRow<Leading: View, Accessory: View>: View {\n    let title: OpenClawTextValue\n    let subtitle: OpenClawTextValue?",
     "struct OpenClawStatusBadge: View {\n    @Environment(\\.colorScheme) private var colorScheme\n    let label: OpenClawTextValue",
-    "struct ProMetricTile: View {\n    @Environment(\\.colorScheme) private var colorScheme\n    let title: OpenClawTextValue",
-    "struct ProPanelHeader: View {\n    let title: OpenClawTextValue",
-    "struct ProStatusRow: View {\n    let icon: String\n    let title: OpenClawTextValue\n    let detail: OpenClawTextValue",
   ],
   "apps/ios/Sources/Design/SettingsProTabSupport.swift": [
     "struct SettingsDetailRow: View {\n    let label: LocalizedStringKey\n    let value: OpenClawTextValue",
@@ -162,13 +155,6 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
     "self.item.detail.text",
     "self.item.priority.text",
   ],
-  "apps/ios/Sources/Design/SettingsChannelsDestination.swift": [
-    "Text(verbatim: self.summaryDetail)",
-    "Text(verbatim: self.entry.label)",
-    "Text(verbatim: self.entry.detailText)",
-    "Text(verbatim: account.displayName)",
-    "Text(verbatim: account.detailText)",
-  ],
   "apps/ios/Sources/Design/SettingsProTabActions.swift": [
     "func detailStatusCard(\n        icon: String,\n        title: OpenClawTextValue,\n        detail: OpenClawTextValue,\n        value: OpenClawTextValue",
     "func diagnosticCheckRow(\n        icon: String,\n        title: OpenClawTextValue,\n        detail: OpenClawTextValue,\n        value: OpenClawTextValue",
@@ -178,7 +164,6 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
   "apps/ios/Sources/Design/SettingsProTabSections.swift": [
     "func settingsListRow(\n        icon: String,\n        iconColor: Color,\n        title: LocalizedStringKey",
     "func aboutLinkRow(\n        title: LocalizedStringKey",
-    "func toggleCard(title: LocalizedStringKey",
     "func gatewaySecureField(\n        _ placeholder: LocalizedStringKey",
     "func settingsToggle(\n        _ title: LocalizedStringKey",
     ".accessibilityLabel(Text(placeholder))",
@@ -206,32 +191,13 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
     'format: String(localized: "Recognizer error: %@")',
     'self.statusText = String(localized: "Triggered")',
   ],
-  "apps/ios/Sources/Design/AgentProTab+Overview.swift": [
-    "subtitle: .verbatim(self.agentTotalText)",
-    'AttributedString(localized: "^[\\(count) agent](inflect: true) total")',
-    "func agentMenuRow(\n        icon: String,\n        title: OpenClawTextValue,\n        detail: OpenClawTextValue",
-    "func metricTile(\n        icon: String,\n        title: OpenClawTextValue,\n        value: String,\n        detail: OpenClawTextValue",
-  ],
-  "apps/ios/Sources/Design/AgentProNodesDestination.swift": [
-    "private func nodeDetailRow(\n        _ title: OpenClawTextValue,\n        copyLabel: LocalizedStringKey",
-    "private func nodeListCard(title: OpenClawTextValue, values: [String])",
-    "private func detailMetric(label: OpenClawTextValue, value: String)",
-    "title: OpenClawTextValue,\n        detail: OpenClawTextValue",
-  ],
   "apps/ios/Sources/Design/CommandCenterSupport.swift": [
     "Text(verbatim: self.item.title)",
-    "Text(verbatim: self.item.trailing)",
+    'Text(verbatim: "chat")',
     "Text(verbatim: self.item.detail)",
     "struct CommandEmptyStateRow: View {\n    let icon: String\n    let title: OpenClawTextValue\n    let detail: OpenClawTextValue",
     "private func actionButton(\n        _ title: OpenClawTextValue",
     "self.actionButton(.verbatim(category)",
-  ],
-  "apps/ios/Sources/Design/IPadSkillWorkshopScreen.swift": [
-    'format: String(localized: "No proposals in %@")',
-  ],
-  "apps/ios/Sources/Design/IPadWorkboardScreen.swift": [
-    'format: String(localized: "No cards in %@")',
-    'format: String(localized: "Move to %@")',
   ],
   "apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift": [
     "fullRowToggle(_ title: LocalizedStringKey",
@@ -243,19 +209,6 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
     "title: .verbatim(self.problem.localizedTitle)",
     "message: .verbatim(self.problem.localizedMessage)",
     "Text(verbatim: primaryActionTitle)",
-  ],
-  "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift": [
-    "detail: LocalizedStringResource",
-    "statusLabel: LocalizedStringResource? = nil",
-    "actionTitle: LocalizedStringResource?",
-  ],
-  "apps/ios/Sources/Permissions/DevicePermissionRow.swift": [
-    "title: LocalizedStringResource",
-    "detail: LocalizedStringResource",
-    "statusLabel: LocalizedStringResource?",
-    "actionTitle: LocalizedStringResource?",
-    "Text(self.title)",
-    "Text(actionTitle)",
   ],
   "apps/ios/Sources/LiveActivity/LiveActivityManager.swift": [
     'String(localized: "Connecting...")',
@@ -286,7 +239,6 @@ const RAW_LOCALIZATION_BYPASSES: Record<string, readonly string[]> = {
   "apps/ios/Sources/Design/SettingsProTabSections.swift": [
     "func settingsListRow(\n        icon: String,\n        iconColor: Color,\n        title: String",
     "func aboutLinkRow(title: String",
-    "func toggleCard(title: String",
     "func gatewayActionButton(\n        title: String",
     "func gatewaySecureField(_ placeholder: String",
     "func settingsToggle(\n        _ title: String",
@@ -314,37 +266,12 @@ const RAW_LOCALIZATION_BYPASSES: Record<string, readonly string[]> = {
     "Text(self.item.detail)",
     "Text(self.item.priority)",
   ],
-  "apps/ios/Sources/Design/SettingsChannelsDestination.swift": [
-    "Text(self.summaryDetail)",
-    "Text(self.entry.label)",
-    "Text(self.entry.detailText)",
-    "Text(account.displayName)",
-    "Text(account.detailText)",
-  ],
-  "apps/ios/Sources/Design/AgentProTab+Overview.swift": [
-    'subtitle: .verbatim("\\(self.sortedAgents.count) total")',
-    "func agentMenuRow(\n        icon: String,\n        title: String",
-    "func metricTile(\n        icon: String,\n        title: String",
-  ],
-  "apps/ios/Sources/Design/AgentProNodesDestination.swift": [
-    "private func nodeDetailRow(_ title: String",
-    "private func nodeListCard(title: String",
-    "private func detailMetric(label: String",
-    "private func emptyRow(icon: String, title: String",
-  ],
   "apps/ios/Sources/Design/CommandCenterSupport.swift": [
     "Text(self.item.title)",
-    "Text(self.item.trailing)",
+    'Text("chat")',
     "Text(self.item.detail)",
     "struct CommandEmptyStateRow: View {\n    let icon: String\n    let title: String",
     "private func actionButton(\n        _ title: String",
-  ],
-  "apps/ios/Sources/Design/IPadSkillWorkshopScreen.swift": [
-    '"No \\(IPadSkillWorkshopScreen.proposalLaneLabel(self.status).lowercased()) proposals"',
-  ],
-  "apps/ios/Sources/Design/IPadWorkboardScreen.swift": [
-    '"No \\(IPadWorkboardDefaults.label(for: self.status).lowercased()) cards"',
-    'Text("Move to \\(IPadWorkboardDefaults.label(for: status))")',
   ],
   "apps/ios/Sources/Design/SettingsProTabActions.swift": [
     "func detailStatusCard(\n        icon: String,\n        title: String",
@@ -372,25 +299,17 @@ const RAW_LOCALIZATION_BYPASSES: Record<string, readonly string[]> = {
   ],
 };
 
-const MACOS_CATALOG = {
-  path: "apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings",
-  coverage: {
-    "apps/macos/Sources/OpenClaw/ChannelsSettings+ChannelSections.swift": [
-      "Logout",
-      "Refresh",
-      "Save",
-    ],
-    "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift": ["Run now"],
-  },
-} as const;
-
 type StringUnit = {
   state?: string;
   value?: string;
 };
 
-type CatalogEntry = {
-  localizations?: Record<string, { stringUnit?: StringUnit }>;
+type CatalogLocalization = Record<string, unknown> & {
+  stringUnit?: StringUnit;
+};
+
+type CatalogEntry = Record<string, unknown> & {
+  localizations?: Record<string, CatalogLocalization>;
 };
 
 type Catalog = {
@@ -399,23 +318,9 @@ type Catalog = {
   version?: string;
 };
 
-type NativeSourceEntry = {
-  id: string;
-  kind: string;
-  line: number;
-  path: string;
-  source: string;
-  surface: string;
-};
-
-type NativeSourceArtifact = {
-  entries: NativeSourceEntry[];
-  version: number;
-};
-
 type NativeTranslationArtifact = {
-  entries: Array<{ id: string; source: string; translated: string }>;
   locale: string;
+  translations: Record<string, string>;
   version: number;
 };
 
@@ -434,29 +339,28 @@ function formatTokens(value: string): string[] {
   return [...value.matchAll(FORMAT_RE)].map((match) => match[0]).toSorted();
 }
 
-function stringsLiteral(value: string): string {
-  return JSON.stringify(value);
-}
+export function serializeAppleCatalog(catalog: Catalog): string {
+  const topLevelEntries = Object.entries(catalog);
+  const lines = ["{"];
 
-function compareCodeUnits(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
+  for (const [topLevelIndex, [key, value]] of topLevelEntries.entries()) {
+    const comma = topLevelIndex === topLevelEntries.length - 1 ? "" : ",";
+    if (key !== "strings" || !value || typeof value !== "object" || Array.isArray(value)) {
+      lines.push(`  ${JSON.stringify(key)}: ${JSON.stringify(value)}${comma}`);
+      continue;
+    }
 
-function serializeCatalog(catalog: Catalog): string {
-  return `${JSON.stringify(catalog, null, 2)}\n`;
-}
+    const entries = Object.entries(value);
+    lines.push(`  ${JSON.stringify(key)}: {`);
+    for (const [entryIndex, [entryKey, entry]] of entries.entries()) {
+      const entryComma = entryIndex === entries.length - 1 ? "" : ",";
+      lines.push(`    ${JSON.stringify(entryKey)}: ${JSON.stringify(entry)}${entryComma}`);
+    }
+    lines.push(`  }${comma}`);
+  }
 
-function serializeContradictions(contradictions: AppleTranslationContradiction[]): string {
-  return `${JSON.stringify({ version: 1, contradictions }, null, 2)}\n`;
-}
-
-function decodeXml(value: string): string {
-  return value
-    .replaceAll("&quot;", '"')
-    .replaceAll("&apos;", "'")
-    .replaceAll("&lt;", "<")
-    .replaceAll("&gt;", ">")
-    .replaceAll("&amp;", "&");
+  lines.push("}", "");
+  return lines.join("\n");
 }
 
 function parseInfoPlistStrings(source: string): Array<{ key: string; source: string }> {
@@ -466,7 +370,8 @@ function parseInfoPlistStrings(source: string): Array<{ key: string; source: str
       source: decodeXml(match[2] ?? ""),
     }))
     .filter(
-      (entry) => entry.key === "CFBundleDisplayName" || entry.key.endsWith("UsageDescription"),
+      (entry) =>
+        entry.key.endsWith("UsageDescription") || INFO_PLIST_LOCALIZABLE_KEYS.has(entry.key),
     );
 }
 
@@ -497,7 +402,7 @@ export function selectInfoPlistTranslation(
     (candidate) => candidate.trim() && candidate.trim() !== source.trim(),
   );
   if (translatedCandidates.length > 0) {
-    return chooseTranslation(source, translatedCandidates);
+    return selectDeterministicTranslation(source, translatedCandidates);
   }
   return existing?.source === source && existing.value.trim() ? existing.value : source;
 }
@@ -505,13 +410,43 @@ export function selectInfoPlistTranslation(
 export function infoPlistTranslationCandidates(
   artifact: NativeTranslationArtifact | undefined,
   sourceId: string,
-  source: string,
 ): string[] {
-  return (
-    artifact?.entries
-      .filter((entry) => entry.id === sourceId && entry.source === source)
-      .map((entry) => entry.translated) ?? []
+  const translated = artifact?.translations[sourceId];
+  return typeof translated === "string" ? [translated] : [];
+}
+
+function infoPlistSourceIds(
+  nativeSource: readonly NativeI18nInventoryEntry[],
+): Map<string, string> {
+  return new Map(
+    nativeSource.flatMap((entry) =>
+      entry.sites
+        .filter((site) => site.kind === "plist-string")
+        .map((site) => [[site.path, entry.source].join("\u0000"), entry.id] as const),
+    ),
   );
+}
+
+function renderInfoPlistStrings(
+  sourcePath: string,
+  sourceEntries: ReadonlyArray<{ key: string; source: string }>,
+  sourceIds: ReadonlyMap<string, string>,
+  artifact: NativeTranslationArtifact | undefined,
+  existing: ReadonlyMap<string, InfoPlistTranslation> = new Map(),
+): string {
+  const lines = sourceEntries.map(({ key, source }) => {
+    const sourceId = sourceIds.get([sourcePath, source].join("\u0000"));
+    if (!sourceId) {
+      throw new Error(`missing native InfoPlist source id for ${sourcePath}:${key}`);
+    }
+    const candidates = infoPlistTranslationCandidates(artifact, sourceId);
+    const value = selectInfoPlistTranslation(source, candidates, existing.get(key));
+    return [
+      `/* OpenClaw source: ${JSON.stringify(source)} */`,
+      `${JSON.stringify(key)} = ${JSON.stringify(value)};`,
+    ].join("\n");
+  });
+  return `${lines.join("\n")}\n`;
 }
 
 async function readOptionalFile(filePath: string): Promise<string | null> {
@@ -525,13 +460,24 @@ async function readOptionalFile(filePath: string): Promise<string | null> {
   }
 }
 
-function isIosCatalogEntry(entry: NativeSourceEntry): boolean {
+function isAppleCatalogKind(kind: string): boolean {
+  return kind === "conditional-branch" || kind.startsWith("ui-");
+}
+
+function isAppleCatalogEntry(
+  entry: NativeI18nInventoryEntry,
+  sourcePrefixes: readonly string[],
+  exclusions: ReadonlySet<string>,
+): boolean {
   return (
     entry.surface === "apple" &&
-    IOS_SOURCE_PREFIXES.some((prefix) => entry.path.startsWith(prefix)) &&
-    IOS_CATALOG_KINDS.has(entry.kind) &&
+    entry.sites.some(
+      (site) =>
+        sourcePrefixes.some((prefix) => site.path.startsWith(prefix)) &&
+        isAppleCatalogKind(site.kind),
+    ) &&
     (!entry.source.includes("\\(") || isInflectedCountSource(entry.source)) &&
-    !IOS_CATALOG_EXCLUSIONS.has(entry.source)
+    !exclusions.has(entry.source)
   );
 }
 
@@ -562,54 +508,32 @@ function appleCatalogValue(value: string): string {
   );
 }
 
-function chooseTranslation(source: string, translations: readonly string[]): string {
-  // Apple catalogs key by source, so duplicate native contexts must converge.
-  // Preserve shipped values first; otherwise choose deterministically and report every conflict.
-  const counts = new Map<string, number>();
-  for (const translation of translations) {
-    counts.set(translation, (counts.get(translation) ?? 0) + 1);
-  }
-  return (
-    [...counts].toSorted(([leftValue, leftCount], [rightValue, rightCount]) => {
-      const sourcePenalty = Number(leftValue === source) - Number(rightValue === source);
-      return sourcePenalty || rightCount - leftCount || compareCodeUnits(leftValue, rightValue);
-    })[0]?.[0] ?? source
-  );
-}
-
-export function buildIosCatalog(
+function buildAppleCatalog(
   existingCatalog: Catalog,
-  nativeSource: NativeSourceArtifact,
+  nativeSource: readonly NativeI18nInventoryEntry[],
   translations: readonly NativeTranslationArtifact[],
+  includesEntry: (entry: NativeI18nInventoryEntry) => boolean,
 ): AppleCatalogBuild {
-  const iosEntries = nativeSource.entries.filter(isIosCatalogEntry);
-  const catalogEntries = iosEntries.map(
-    (entry) => [entry, appleCatalogValue(entry.source)] as const,
-  );
+  const catalogEntries = nativeSource
+    .filter(includesEntry)
+    .map((entry) => [entry, appleCatalogValue(entry.source)] as const);
   const sources = [...new Set(catalogEntries.map(([, source]) => source))].toSorted(
     compareCodeUnits,
   );
-  const appleIdsBySource = new Map<string, Set<string>>();
-  for (const [entry, source] of catalogEntries) {
-    const ids = appleIdsBySource.get(source) ?? new Set<string>();
-    ids.add(entry.id);
-    appleIdsBySource.set(source, ids);
-  }
+  const catalogIds = new Set(catalogEntries.map(([entry]) => entry.id));
   const existingStrings = existingCatalog.strings ?? {};
+  const nativeEntryById = new Map(nativeSource.map((entry) => [entry.id, entry]));
   const translationsByLocale = new Map(
     translations.map((artifact) => {
       const bySource = new Map<string, string[]>();
-      for (const entry of artifact.entries) {
+      for (const [id, translated] of Object.entries(artifact.translations)) {
+        const entry = nativeEntryById.get(id);
+        if (!entry || !catalogIds.has(id)) {
+          continue;
+        }
         const source = appleCatalogValue(entry.source);
-        if (!sources.includes(source)) {
-          continue;
-        }
-        const appleIds = appleIdsBySource.get(source);
-        if (appleIds && !appleIds.has(entry.id)) {
-          continue;
-        }
         const values = bySource.get(source) ?? [];
-        values.push(appleCatalogValue(entry.translated));
+        values.push(appleCatalogValue(translated));
         bySource.set(source, values);
       }
       return [artifact.locale, bySource] as const;
@@ -641,7 +565,8 @@ export function buildIosCatalog(
         };
         continue;
       }
-      const value = chooseTranslation(source, candidates);
+      const value =
+        candidates.length === 0 ? source : selectDeterministicTranslation(source, candidates);
       localizations[locale] = {
         stringUnit: {
           state: value === source ? "new" : "translated",
@@ -665,6 +590,26 @@ export function buildIosCatalog(
   };
 }
 
+export function buildIosCatalog(
+  existingCatalog: Catalog,
+  nativeSource: readonly NativeI18nInventoryEntry[],
+  translations: readonly NativeTranslationArtifact[],
+): AppleCatalogBuild {
+  return buildAppleCatalog(existingCatalog, nativeSource, translations, (entry) =>
+    isAppleCatalogEntry(entry, IOS_SOURCE_PREFIXES, IOS_CATALOG_EXCLUSIONS),
+  );
+}
+
+export function buildMacosCatalog(
+  existingCatalog: Catalog,
+  nativeSource: readonly NativeI18nInventoryEntry[],
+  translations: readonly NativeTranslationArtifact[],
+): AppleCatalogBuild {
+  return buildAppleCatalog(existingCatalog, nativeSource, translations, (entry) =>
+    isAppleCatalogEntry(entry, MACOS_SOURCE_PREFIXES, MACOS_CATALOG_EXCLUSIONS),
+  );
+}
+
 async function listSwiftFiles(directory: string): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
   const nested = await Promise.all(
@@ -686,10 +631,21 @@ async function listSwiftFiles(directory: string): Promise<string[]> {
 }
 
 async function validateRuntimeInterpolationPaths(): Promise<void> {
-  const roots = IOS_SOURCE_PREFIXES.map((prefix) => path.join(ROOT, prefix));
-  const files = (await Promise.all(roots.map(listSwiftFiles))).flat();
+  const roots = [...new Set([...IOS_SOURCE_PREFIXES, ...MACOS_SOURCE_PREFIXES])];
+  const files = new Set(
+    (
+      await Promise.all(
+        roots.map((prefix) => {
+          const sourcePath = path.join(ROOT, prefix);
+          return prefix.endsWith(".swift")
+            ? Promise.resolve([sourcePath])
+            : listSwiftFiles(sourcePath);
+        }),
+      )
+    ).flat(),
+  );
   const violations: string[] = [];
-  for (const file of files) {
+  for (const file of [...files].toSorted()) {
     const source = await readFile(file, "utf8");
     for (const label of findAmbiguousRuntimeInterpolations(source)) {
       violations.push(`${path.relative(ROOT, file)}: ${label}`);
@@ -703,7 +659,7 @@ async function validateRuntimeInterpolationPaths(): Promise<void> {
 }
 
 async function readNativeTranslations(): Promise<NativeTranslationArtifact[]> {
-  const expectedFiles = APPLE_I18N_LOCALES.map((locale) => `${locale}.json`).toSorted();
+  const expectedFiles = NATIVE_I18N_LOCALES.map((locale) => `${locale}.json`).toSorted();
   const actualFiles = (
     await readdir(path.join(ROOT, NATIVE_TRANSLATIONS_DIR), {
       withFileTypes: true,
@@ -718,7 +674,7 @@ async function readNativeTranslations(): Promise<NativeTranslationArtifact[]> {
     );
   }
   return Promise.all(
-    APPLE_I18N_LOCALES.map(async (locale) => {
+    NATIVE_I18N_LOCALES.map(async (locale) => {
       const artifact = JSON.parse(
         await readFile(path.join(ROOT, NATIVE_TRANSLATIONS_DIR, `${locale}.json`), "utf8"),
       ) as NativeTranslationArtifact;
@@ -732,23 +688,63 @@ async function readNativeTranslations(): Promise<NativeTranslationArtifact[]> {
   );
 }
 
-async function readIosCatalogBuild(): Promise<AppleCatalogBuild> {
+async function readAppleCatalogBuild(
+  catalogPath: string,
+  buildCatalog: typeof buildIosCatalog,
+): Promise<AppleCatalogBuild> {
   const existingCatalog = JSON.parse(
-    await readFile(path.join(ROOT, IOS_CATALOG_PATH), "utf8"),
+    await readFile(path.join(ROOT, catalogPath), "utf8"),
   ) as Catalog;
-  const nativeSource = JSON.parse(
+  const nativeSource = parseNativeI18nInventory(
     await readFile(path.join(ROOT, NATIVE_SOURCE_PATH), "utf8"),
-  ) as NativeSourceArtifact;
+  );
   const translations = await readNativeTranslations();
-  return buildIosCatalog(existingCatalog, nativeSource, translations);
+  return buildCatalog(existingCatalog, nativeSource, translations);
 }
 
-function validateCatalog(pathName: string, catalog: Catalog): number {
+function isCatalogDictionary(
+  value: unknown,
+  fields?: readonly string[],
+): value is Record<string, unknown> {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    (!fields || Object.keys(value).every((key) => fields.includes(key)))
+  );
+}
+
+function validateCatalog(
+  pathName: string,
+  catalog: Catalog,
+  activeKeys?: ReadonlySet<string>,
+): number {
   if (catalog.sourceLanguage !== "en" || catalog.version !== "1.0" || !catalog.strings) {
     throw new Error(`invalid Apple string catalog: ${pathName}`);
   }
   let checked = 0;
   for (const [key, entry] of Object.entries(catalog.strings)) {
+    if (activeKeys && !activeKeys.has(key)) {
+      // Retired rows still reach Xcode. Admit only valid plain generator shapes, without
+      // requiring inactive locales, translated state, nonempty copy or matching placeholders.
+      const valid =
+        isCatalogDictionary(entry, ["localizations"]) &&
+        (entry.localizations === undefined ||
+          (isCatalogDictionary(entry.localizations) &&
+            Object.values(entry.localizations).every(
+              (localization) =>
+                isCatalogDictionary(localization, ["stringUnit"]) &&
+                isCatalogDictionary(localization.stringUnit, ["state", "value"]) &&
+                typeof localization.stringUnit.state === "string" &&
+                typeof localization.stringUnit.value === "string",
+            )));
+      if (!valid) {
+        throw new Error(
+          `Apple catalog ${pathName} has an unsupported obsolete row for ${JSON.stringify(key)}; run native-app-i18n.ts sync --write`,
+        );
+      }
+      continue;
+    }
     const sourceTokens = formatTokens(key);
     for (const locale of REQUIRED_LOCALES) {
       const unit = entry.localizations?.[locale]?.stringUnit;
@@ -776,20 +772,16 @@ function validateCatalog(pathName: string, catalog: Catalog): number {
 
 async function syncIosInfoPlist(write: boolean): Promise<number> {
   const translations = await readNativeTranslations();
-  const nativeSource = JSON.parse(
+  const nativeSource = parseNativeI18nInventory(
     await readFile(path.join(ROOT, NATIVE_SOURCE_PATH), "utf8"),
-  ) as NativeSourceArtifact;
-  const sourceIds = new Map(
-    nativeSource.entries
-      .filter((entry) => entry.kind === "plist-string")
-      .map((entry) => [[entry.path, entry.source].join("\u0000"), entry.id]),
   );
+  const sourceIds = infoPlistSourceIds(nativeSource);
   let checked = 0;
   for (const target of IOS_INFO_PLIST_TARGETS) {
     const sourceEntries = parseInfoPlistStrings(
       await readFile(path.join(ROOT, target.sourcePath), "utf8"),
     );
-    for (const locale of APPLE_I18N_LOCALES) {
+    for (const locale of NATIVE_I18N_LOCALES) {
       const localeDir = APPLE_LOCALE_DIRECTORIES[locale] ?? locale;
       const outputPath = path.join(
         ROOT,
@@ -800,22 +792,13 @@ async function syncIosInfoPlist(write: boolean): Promise<number> {
       const existingSource = await readOptionalFile(outputPath);
       const existing = parseStringsFile(existingSource ?? "");
       const artifact = translations.find((candidate) => candidate.locale === locale);
-      const lines = sourceEntries.map(({ key, source }) => {
-        if (key === "CFBundleDisplayName") {
-          return `${stringsLiteral(key)} = ${stringsLiteral(source)};`;
-        }
-        const sourceId = sourceIds.get([target.sourcePath, source].join("\u0000"));
-        if (!sourceId) {
-          throw new Error(`missing native InfoPlist source id for ${target.sourcePath}:${key}`);
-        }
-        const candidates = infoPlistTranslationCandidates(artifact, sourceId, source);
-        const value = selectInfoPlistTranslation(source, candidates, existing.get(key));
-        return [
-          `/* OpenClaw source: ${stringsLiteral(source)} */`,
-          `${stringsLiteral(key)} = ${stringsLiteral(value)};`,
-        ].join("\n");
-      });
-      const expected = `${lines.join("\n")}\n`;
+      const expected = renderInfoPlistStrings(
+        target.sourcePath,
+        sourceEntries,
+        sourceIds,
+        artifact,
+        existing,
+      );
       if (existingSource !== expected) {
         if (!write) {
           throw new Error(
@@ -831,34 +814,65 @@ async function syncIosInfoPlist(write: boolean): Promise<number> {
   return checked;
 }
 
-export async function syncIosCatalog(write: boolean): Promise<AppleCatalogBuild> {
-  const build = await readIosCatalogBuild();
-  const catalogPath = path.join(ROOT, IOS_CATALOG_PATH);
-  const expected = serializeCatalog(build.catalog);
+async function syncAppleCatalog(
+  catalogName: string,
+  buildCatalog: typeof buildIosCatalog,
+  write: boolean,
+  reportObsolete?: (message: string) => void,
+): Promise<AppleCatalogBuild> {
+  const build = await readAppleCatalogBuild(catalogName, buildCatalog);
+  const catalogPath = path.join(ROOT, catalogName);
+  const expected = serializeAppleCatalog(build.catalog);
   const actual = await readFile(catalogPath, "utf8");
-  if (actual !== expected) {
-    if (!write) {
-      throw new Error(
-        `Apple catalog ${IOS_CATALOG_PATH} is stale; run apple-app-i18n.ts sync-ios --write`,
-      );
-    }
+  if (actual === expected) {
+    return build;
+  }
+  if (write) {
     await writeFile(catalogPath, expected, "utf8");
+    return build;
   }
-  const contradictionsPath = path.join(ROOT, IOS_CONTRADICTIONS_PATH);
-  const expectedContradictions = serializeContradictions(build.contradictions);
-  const actualContradictions = await readOptionalFile(contradictionsPath);
-  if (actualContradictions !== expectedContradictions) {
-    if (!write) {
-      throw new Error(
-        `Apple contradiction report ${IOS_CONTRADICTIONS_PATH} is stale; run apple-app-i18n.ts sync-ios --write`,
-      );
+  if (reportObsolete) {
+    const catalog = JSON.parse(actual) as Catalog;
+    const strings = catalog.strings;
+    if (isCatalogDictionary(strings) && actual === serializeAppleCatalog(catalog)) {
+      const active = build.catalog.strings ?? {};
+      const obsolete = Object.keys(strings).filter((key) => !Object.hasOwn(active, key));
+      // Ignore only complete obsolete rows; active values, metadata and formatting stay exact.
+      const filtered = {
+        ...catalog,
+        strings: Object.fromEntries(
+          Object.entries(strings).filter(([key]) => Object.hasOwn(active, key)),
+        ),
+      };
+      if (obsolete.length > 0 && serializeAppleCatalog(filtered) === expected) {
+        validateCatalog(catalogName, catalog, new Set(Object.keys(active)));
+        reportObsolete(`Apple obsolete catalog rows: ${catalogName} (keys=${obsolete.length})`);
+        return build;
+      }
     }
-    await writeFile(contradictionsPath, expectedContradictions, "utf8");
   }
-  return build;
+  throw new Error(`Apple catalog ${catalogName} is stale; run native-app-i18n.ts sync --write`);
 }
 
-export async function checkAppleAppI18n() {
+/**
+ * Regenerates every Apple derived artifact (app catalogs and InfoPlist strings).
+ * Shared by this CLI and native-app-i18n's sync so the inventory can never be
+ * rewritten without its derived catalogs.
+ */
+export async function syncAppleAppI18n(): Promise<{
+  build: AppleCatalogBuild;
+  infoPlistFiles: number;
+  macosBuild: AppleCatalogBuild;
+}> {
+  const [build, macosBuild] = await Promise.all([
+    syncAppleCatalog(IOS_CATALOG_PATH, buildIosCatalog, true),
+    syncAppleCatalog(MACOS_CATALOG_PATH, buildMacosCatalog, true),
+  ]);
+  const infoPlistFiles = await syncIosInfoPlist(true);
+  return { build, infoPlistFiles, macosBuild };
+}
+
+export async function verifyAppleAppI18n() {
   await validateRuntimeInterpolationPaths();
   for (const [sourcePath, contracts] of Object.entries(LOCALIZED_WRAPPER_CONTRACTS)) {
     const source = await readFile(path.join(ROOT, sourcePath), "utf8");
@@ -879,37 +893,23 @@ export async function checkAppleAppI18n() {
     }
   }
 
-  const iosBuild = await syncIosCatalog(false);
-  const iosKeys = validateCatalog(IOS_CATALOG_PATH, iosBuild.catalog);
-  const infoPlistFiles = await syncIosInfoPlist(false);
+  const macosBuild = await readAppleCatalogBuild(MACOS_CATALOG_PATH, buildMacosCatalog);
+  const macosKeys = validateCatalog(MACOS_CATALOG_PATH, macosBuild.catalog);
 
-  const macosCatalog = JSON.parse(
-    await readFile(path.join(ROOT, MACOS_CATALOG.path), "utf8"),
-  ) as Catalog;
-  if (!macosCatalog.strings) {
-    throw new Error(`invalid Apple string catalog: ${MACOS_CATALOG.path}`);
-  }
-  const expectedMacosKeys: Set<string> = new Set(Object.values(MACOS_CATALOG.coverage).flat());
-  const actualMacosKeys = new Set(Object.keys(macosCatalog.strings));
-  const missingMacosKeys = [...expectedMacosKeys].filter((key) => !actualMacosKeys.has(key));
-  const extraMacosKeys = [...actualMacosKeys].filter((key) => !expectedMacosKeys.has(key));
-  if (missingMacosKeys.length || extraMacosKeys.length) {
-    throw new Error(
-      [
-        `Apple catalog ${MACOS_CATALOG.path} does not match its phased source coverage.`,
-        `missing=${missingMacosKeys.join(",") || "none"}`,
-        `extra=${extraMacosKeys.join(",") || "none"}`,
-      ].join("\n"),
-    );
-  }
-  for (const [sourcePath, keys] of Object.entries(MACOS_CATALOG.coverage)) {
-    const source = await readFile(path.join(ROOT, sourcePath), "utf8");
-    const absent = keys.filter((key) => !source.includes(key));
-    if (absent.length) {
-      throw new Error(`Apple i18n coverage ${sourcePath} no longer contains: ${absent.join(", ")}`);
-    }
-  }
-  const macosKeys = validateCatalog(MACOS_CATALOG.path, macosCatalog);
+  process.stdout.write(`apple-app-i18n: sourceMacosKeys=${macosKeys}\n`);
+}
+
+export async function checkAppleAppI18n(
+  options: { reportObsolete?: (message: string) => void } = {},
+) {
+  await verifyAppleAppI18n();
+  const [iosBuild, macosBuild] = await Promise.all([
+    syncAppleCatalog(IOS_CATALOG_PATH, buildIosCatalog, false, options.reportObsolete),
+    syncAppleCatalog(MACOS_CATALOG_PATH, buildMacosCatalog, false, options.reportObsolete),
+  ]);
+  const iosKeys = validateCatalog(IOS_CATALOG_PATH, iosBuild.catalog);
+  const macosKeys = validateCatalog(MACOS_CATALOG_PATH, macosBuild.catalog);
+  const infoPlistFiles = await syncIosInfoPlist(false);
 
   process.stdout.write(
     [
@@ -917,20 +917,29 @@ export async function checkAppleAppI18n() {
       `macosKeys=${macosKeys}`,
       `infoPlistFiles=${infoPlistFiles}`,
       `translationContradictions=${iosBuild.contradictions.length}`,
-      `locales=${APPLE_I18N_LOCALES.join(",")}`,
+      `macosTranslationContradictions=${macosBuild.contradictions.length}`,
+      `locales=${NATIVE_I18N_LOCALES.join(",")}`,
       "\n",
     ].join(" "),
   );
 }
 
 export async function compileMacosLocalizations(outputDir: string) {
-  await checkAppleAppI18n();
-  const catalog = JSON.parse(
-    await readFile(path.join(ROOT, MACOS_CATALOG.path), "utf8"),
-  ) as Catalog;
+  // Source PRs intentionally leave generated Apple catalogs for the serialized
+  // post-merge refresh. Package from the derived catalog so source changes
+  // cannot ship stale localization coverage before that refresh lands.
+  await verifyAppleAppI18n();
+  const catalog = (await readAppleCatalogBuild(MACOS_CATALOG_PATH, buildMacosCatalog)).catalog;
   if (!catalog.strings) {
-    throw new Error(`invalid Apple string catalog: ${MACOS_CATALOG.path}`);
+    throw new Error(`invalid Apple string catalog: ${MACOS_CATALOG_PATH}`);
   }
+  const [nativeSource, translations, infoPlistSource] = await Promise.all([
+    readFile(path.join(ROOT, NATIVE_SOURCE_PATH), "utf8").then(parseNativeI18nInventory),
+    readNativeTranslations(),
+    readFile(path.join(ROOT, MACOS_INFO_PLIST_PATH), "utf8"),
+  ]);
+  const sourceIds = infoPlistSourceIds(nativeSource);
+  const infoPlistEntries = parseInfoPlistStrings(infoPlistSource);
 
   for (const locale of REQUIRED_LOCALES) {
     const localeDir = APPLE_LOCALE_DIRECTORIES[locale] ?? locale;
@@ -941,13 +950,23 @@ export async function compileMacosLocalizations(outputDir: string) {
         const value = entry.localizations?.[locale]?.stringUnit?.value;
         if (!value) {
           throw new Error(
-            `Apple catalog ${MACOS_CATALOG.path} is missing ${locale} for ${JSON.stringify(key)}`,
+            `Apple catalog ${MACOS_CATALOG_PATH} is missing ${locale} for ${JSON.stringify(key)}`,
           );
         }
-        return `${stringsLiteral(key)} = ${stringsLiteral(value)};`;
+        return `${JSON.stringify(key)} = ${JSON.stringify(value)};`;
       });
     await mkdir(lprojDir, { recursive: true });
     await writeFile(path.join(lprojDir, "Localizable.strings"), `${lines.join("\n")}\n`, "utf8");
+    if (locale !== "en") {
+      const artifact = translations.find((candidate) => candidate.locale === locale);
+      const infoPlistStrings = renderInfoPlistStrings(
+        MACOS_INFO_PLIST_PATH,
+        infoPlistEntries,
+        sourceIds,
+        artifact,
+      );
+      await writeFile(path.join(lprojDir, "InfoPlist.strings"), infoPlistStrings, "utf8");
+    }
   }
 }
 
@@ -956,10 +975,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   if (command === "check") {
     await checkAppleAppI18n();
   } else if (command === "sync-ios" && flag === "--write") {
-    const build = await syncIosCatalog(true);
-    const infoPlistFiles = await syncIosInfoPlist(true);
+    const { build, infoPlistFiles, macosBuild } = await syncAppleAppI18n();
     process.stdout.write(
-      `apple-app-i18n: synced iOS catalog and ${infoPlistFiles} InfoPlist files; contradictions=${build.contradictions.length}\n`,
+      `apple-app-i18n: synced Apple catalogs and ${infoPlistFiles} InfoPlist files; contradictions=${build.contradictions.length + macosBuild.contradictions.length}\n`,
     );
   } else if (command === "compile-macos" && flag === "--output" && value) {
     await compileMacosLocalizations(path.resolve(value));

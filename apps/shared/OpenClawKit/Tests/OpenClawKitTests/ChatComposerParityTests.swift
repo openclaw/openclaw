@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import UniformTypeIdentifiers
 @testable import OpenClawChatUI
 
 private final class ComposerParityTransport: @unchecked Sendable, OpenClawChatTransport {
@@ -80,6 +81,120 @@ struct ChatReplyQuoteTests {
 
 @MainActor
 struct ChatComposerStateTests {
+    enum ComposerRouteTransition: CaseIterable {
+        case contract
+        case canonicalContract
+        case pinnedContract
+        case refresh
+        case pinnedQuestionRetirement
+        case detached
+    }
+
+    @Test(arguments: ComposerRouteTransition.allCases)
+    func `captured composer input follows only its admitted route`(_ transition: ComposerRouteTransition) {
+        let vm = OpenClawChatViewModel(
+            sessionKey: transition == .canonicalContract ? "agent:main:thread" : "main",
+            transport: ComposerParityTransport(),
+            activeAgentId: "main",
+            sessionRoutingContract: "global|main|main")
+        defer { vm.detachTransport() }
+        vm.input = "existing draft"
+        let resolveInputModel = vm.composerModelResolver()
+
+        switch transition {
+        case .contract, .canonicalContract:
+            vm.syncSessionRoutingContract("per-sender|main|main")
+        case .pinnedContract:
+            vm.beginAttachmentStaging()
+            vm.syncSessionRoutingContract("per-sender|main|main")
+        case .refresh:
+            vm.refresh()
+        case .pinnedQuestionRetirement:
+            vm.beginAttachmentStaging()
+            vm.retireQuestionAuthority()
+        case .detached:
+            vm.detachTransport()
+        }
+
+        resolveInputModel()?.input = "typed after transition"
+        let rejectsInput = transition == .contract || transition == .detached
+        #expect(vm.input == (rejectsInput ? "existing draft" : "typed after transition"))
+
+        if transition == .pinnedContract {
+            vm.endAttachmentStaging()
+            resolveInputModel()?.input = "stale editor callback"
+            #expect(vm.input == "typed after transition")
+        }
+        if transition == .contract || transition == .pinnedContract {
+            let resolveNewInputModel = vm.composerModelResolver()
+            resolveNewInputModel()?.input = "new route draft"
+            #expect(vm.input == "new route draft")
+        }
+        if transition == .pinnedQuestionRetirement {
+            vm.endAttachmentStaging()
+        }
+    }
+
+    @Test func `model selection target describes only gateway owned values`() {
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: ComposerParityTransport())
+        let expectations: [(String?, String?)] = [
+            ("session", "Changes this session only"),
+            ("agent", "Changes this agent's default"),
+            ("global", "Changes the global default"),
+            ("future-target", nil),
+            (nil, nil),
+        ]
+
+        for (target, expected) in expectations {
+            viewModel.sessionDefaults = OpenClawChatSessionsDefaults(
+                model: nil,
+                contextTokens: nil,
+                modelSelectionTarget: target)
+            #expect(viewModel.modelSelectionTargetDescription == expected)
+        }
+    }
+
+    @Test func `model selection matches qualified choices after gateway readback`() {
+        let choices = [
+            OpenClawChatModelChoice(
+                modelID: "claude-opus-4-1",
+                name: "Claude Opus 4.1",
+                provider: "anthropic",
+                contextWindow: 200_000),
+        ]
+
+        #expect(OpenClawChatViewModel.modelSelectionMatches(
+            selectionID: "anthropic/claude-opus-4-1",
+            currentSelectionID: "claude-opus-4-1",
+            choices: choices))
+        #expect(!OpenClawChatViewModel.modelSelectionMatches(
+            selectionID: OpenClawChatViewModel.defaultModelSelectionID,
+            currentSelectionID: "claude-opus-4-1",
+            choices: choices))
+    }
+
+    @Test func `tagless movie metadata stages as video`() async throws {
+        let metadata = OpenClawChatPickerAttachmentMetadata.resolve(contentType: .movie)
+        #expect(metadata.fileExtension == "mov")
+        #expect(metadata.mimeType == "video/quicktime")
+
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tagless-movie-\(UUID().uuidString)")
+            .appendingPathExtension(metadata.fileExtension)
+        try Data("tagless-movie".utf8).write(to: fileURL)
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: ComposerParityTransport())
+
+        await vm.addVideoAttachment(
+            url: fileURL,
+            fileName: "video.\(metadata.fileExtension)",
+            mimeType: metadata.mimeType)
+
+        let attachment = try #require(vm.attachments.first)
+        #expect(attachment.fileName.hasSuffix(".mov"))
+        #expect(attachment.mimeType.hasPrefix("video/"))
+    }
+
     @Test func `late send does not consume newer reply selection for same message`() {
         let vm = OpenClawChatViewModel(sessionKey: "main", transport: ComposerParityTransport())
         let messageID = UUID()
@@ -165,14 +280,30 @@ struct ChatComposerStateTests {
         vm.input = "continue"
         vm.setReplyTarget(messageID: UUID(), text: "quoted body", senderLabel: "Assistant")
 
-        vm.send()
-        try await waitUntil("quoted send accepted") { transport.sentMessages.count == 1 }
-        try await waitUntil("reply consumed") { await MainActor.run { vm.replyTarget == nil && vm.input.isEmpty } }
+        try await #require(vm.send()).value
 
         #expect(transport.sentMessages == ["> **Assistant:** quoted body\n\ncontinue"])
+        #expect(vm.replyTarget == nil && vm.input.isEmpty)
         vm.switchSession(to: "other")
         vm.switchSession(to: "main")
         #expect(vm.input.isEmpty)
+    }
+
+    @Test func `attachment staging blocks UI and programmatic sends`() async throws {
+        let transport = ComposerParityTransport()
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        vm.healthOK = true
+        vm.input = "send with selected image"
+        vm.beginAttachmentStaging()
+
+        #expect(!vm.canSend)
+        await vm.send()?.value
+        #expect(transport.sentMessages.isEmpty)
+
+        vm.endAttachmentStaging()
+        #expect(vm.canSend)
+        try await #require(vm.send()).value
+        #expect(transport.sentMessages.count == 1)
     }
 
     @Test func `slash send ignores and preserves reply target`() async throws {
@@ -183,8 +314,7 @@ struct ChatComposerStateTests {
         vm.input = "/remote-command"
         vm.setReplyTarget(messageID: targetID, text: "quoted body", senderLabel: "Assistant")
 
-        vm.send()
-        try await waitUntil("slash send accepted") { transport.sentMessages.count == 1 }
+        try await #require(vm.send()).value
 
         #expect(transport.sentMessages == ["/remote-command"])
         #expect(vm.replyTarget?.messageID == targetID)
@@ -202,10 +332,9 @@ struct ChatComposerStateTests {
             preview: nil)]
         vm.setReplyTarget(messageID: UUID(), text: "quoted body", senderLabel: "User")
 
-        vm.send()
-        try await waitUntil("attachment reply accepted") { transport.sentMessages.count == 1 }
-        try await waitUntil("attachment reply consumed") { await MainActor.run { vm.replyTarget == nil } }
+        try await #require(vm.send()).value
 
         #expect(transport.sentMessages == ["> **User:** quoted body\n\n"])
+        #expect(vm.replyTarget == nil)
     }
 }

@@ -1,5 +1,7 @@
 // Defines the bounded retry contract shared by ClawHub runtime and release reads.
-import { parseRetryAfterHttpDateMs } from "../../packages/ai/src/internal/retry-after.js";
+// Release harnesses run before workspace dist exists; keep classification source-owned.
+import { isTransientNetworkError } from "../../packages/ai/src/utils/retryable-network-errors.js";
+import { parseRetryAfterHeaderSeconds } from "./retry-after.js";
 import { retryAsync } from "./retry.js";
 
 const CLAWHUB_RETRY_DELAYS_MS = [1_000, 3_000, 10_000] as const;
@@ -22,37 +24,16 @@ class RetryableClawHubResponse<T extends ClawHubResponseHandle> extends Error {
 }
 
 function isRetryableClawHubStatus(status: number, retryRateLimit: boolean): boolean {
-  return (
-    (retryRateLimit && status === 429) ||
-    status === 500 ||
-    status === 502 ||
-    status === 503 ||
-    status === 504
-  );
+  return (retryRateLimit && status === 429) || [500, 502, 503, 504].includes(status);
 }
 
 function parseRetryAfterMs(headers: Headers): number | undefined {
-  const retryAfter = headers.get("retry-after")?.trim();
-  if (!retryAfter) {
+  const retryAfterSeconds = parseRetryAfterHeaderSeconds(headers.get("retry-after"));
+  if (retryAfterSeconds === undefined) {
     return undefined;
   }
-  if (/^\d+$/.test(retryAfter)) {
-    const seconds = Number(retryAfter);
-    const delayMs = Math.round(seconds * 1_000);
-    return delayMs <= CLAWHUB_MAX_RETRY_AFTER_MS ? delayMs : undefined;
-  }
-  const retryAt = parseRetryAfterHttpDateMs(retryAfter);
-  if (retryAt === undefined) {
-    return undefined;
-  }
-  const delayMs = Math.max(0, retryAt - Date.now());
-  return delayMs <= CLAWHUB_MAX_RETRY_AFTER_MS ? delayMs : undefined;
-}
-
-async function defaultSleep(ms: number): Promise<void> {
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, ms);
-  });
+  const delayMs = retryAfterSeconds * 1_000;
+  return delayMs;
 }
 
 /**
@@ -81,12 +62,20 @@ export async function retryClawHubRead<T extends ClawHubResponseHandle>(
           error instanceof RetryableClawHubResponse
             ? parseRetryAfterMs(error.result.response.headers)
             : undefined,
+        shouldRetry: (error) =>
+          error instanceof RetryableClawHubResponse
+            ? // A server delay outside our budget stops recovery; never send an
+              // earlier request merely to fit the bounded retry schedule.
+              (parseRetryAfterMs(error.result.response.headers) ?? 0) <= CLAWHUB_MAX_RETRY_AFTER_MS
+            : // Undici wraps permanent TLS and transient socket failures alike;
+              // classify the cause, not the generic outer "fetch failed" message.
+              isTransientNetworkError(error instanceof Error && error.cause ? error.cause : error),
         onRetry: async ({ err }) => {
           if (err instanceof RetryableClawHubResponse) {
             await options.disposeRetry(err.result);
           }
         },
-        sleep: options.sleep ?? defaultSleep,
+        sleep: options.sleep,
       },
     );
   } catch (error) {

@@ -1,4 +1,3 @@
-// Firecrawl provider module implements model/runtime integration.
 import type { WebFetchProviderPlugin } from "openclaw/plugin-sdk/provider-web-fetch-contract";
 
 function ensureRecord(target: Record<string, unknown>, key: string): Record<string, unknown> {
@@ -23,10 +22,7 @@ export const FIRECRAWL_WEB_FETCH_PROVIDER_SHARED = {
   docsUrl: "https://docs.firecrawl.dev",
   autoDetectOrder: 50,
   credentialPath: "plugins.entries.firecrawl.config.webFetch.apiKey",
-  inactiveSecretPaths: [
-    "plugins.entries.firecrawl.config.webFetch.apiKey",
-    "tools.web.fetch.firecrawl.apiKey",
-  ],
+  inactiveSecretPaths: ["plugins.entries.firecrawl.config.webFetch.apiKey"],
   getCredentialValue: (fetchConfig) => {
     if (!fetchConfig || typeof fetchConfig !== "object") {
       return undefined;
@@ -61,10 +57,10 @@ export const FIRECRAWL_WEB_FETCH_PROVIDER_SHARED = {
         };
   },
   setConfiguredCredentialValue: (configTarget, value) => {
-    const plugins = ensureRecord(configTarget as unknown as Record<string, unknown>, "plugins");
-    const entries = ensureRecord(plugins, "entries");
-    const firecrawlEntry = ensureRecord(entries, "firecrawl");
-    const pluginConfig = ensureRecord(firecrawlEntry, "config");
+    const plugins = (configTarget.plugins ??= {});
+    const entries = (plugins.entries ??= {});
+    const firecrawlEntry = (entries.firecrawl ??= {});
+    const pluginConfig = (firecrawlEntry.config ??= {});
     const webFetch = ensureRecord(pluginConfig, "webFetch");
     webFetch.apiKey = value;
   },

@@ -1,9 +1,3 @@
-/**
- * Realtime voice consult-question extraction and result summarization helpers.
- *
- * These utilities connect Talk tool calls to spoken follow-up answers by
- * pulling human-readable questions/results out of provider-owned payloads.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { readTrimmedStringAlias } from "../utils/string-readers.js";
@@ -51,8 +45,6 @@ export type RealtimeVoiceSpeakableToolResultOptions = {
   keys?: readonly string[];
   /** Maximum spoken result length before appending a truncation marker. */
   maxChars?: number;
-  /** Whether a raw string result is allowed as speakable output. */
-  stringResult?: boolean;
 };
 
 /** Read the consult question from a raw string or selected object keys. */
@@ -69,10 +61,7 @@ export function readRealtimeVoiceConsultQuestion(
   return readTrimmedStringAlias(args as Record<string, unknown>, keys);
 }
 
-/** Normalize consult questions for stable matching across punctuation/casing. */
-export function normalizeRealtimeVoiceConsultQuestion(
-  value: string | undefined,
-): string | undefined {
+function normalizeRealtimeVoiceConsultQuestion(value: string | undefined): string | undefined {
   return (
     value
       ?.toLowerCase()
@@ -82,7 +71,6 @@ export function normalizeRealtimeVoiceConsultQuestion(
   );
 }
 
-/** Compare two consult questions with exact, containment, and token-overlap matching. */
 export function matchRealtimeVoiceConsultQuestions(
   left: string | undefined,
   right: string | undefined,
@@ -126,11 +114,8 @@ export function readSpeakableRealtimeVoiceToolResult(
   result: unknown,
   options: RealtimeVoiceSpeakableToolResultOptions = {},
 ): string | undefined {
-  const stringResult = options.stringResult ?? true;
   if (typeof result === "string") {
-    return stringResult
-      ? limitSpeakableRealtimeVoiceToolResult(result, options.maxChars)
-      : undefined;
+    return limitSpeakableRealtimeVoiceToolResult(result, options.maxChars);
   }
   if (!result || typeof result !== "object" || Array.isArray(result)) {
     return undefined;

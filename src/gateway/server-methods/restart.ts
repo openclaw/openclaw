@@ -1,19 +1,19 @@
-// Gateway RPC handlers for safe gateway restart requests and preflight state.
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
 import {
   createSafeGatewayRestartPreflight,
-  requestSafeGatewayRestart,
+  scheduleSafeGatewayRestart,
 } from "../../infra/restart-coordinator.js";
-import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { requestGatewayRestartWithSignalAdmission } from "../../infra/restart.js";
-import type { GatewayRequestHandlers } from "./types.js";
-
-function isRestartRequestParams(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+import {
+  parseTargetedGatewayRestart,
+  parseTargetedGatewayRestartIntent,
+} from "./restart-request.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
+import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 function normalizeReason(value: unknown): string | undefined {
   // Restart reasons are operator-visible log context, not payload storage.
@@ -23,120 +23,72 @@ function normalizeReason(value: unknown): string | undefined {
     : undefined;
 }
 
-function normalizeSkipDeferral(value: unknown): boolean {
-  // Only an explicit boolean may bypass deferral; truthy strings from loose
-  // clients must not skip the safe-restart preflight queue.
-  return value === true;
+function rejectRestartRequest(respond: RespondFn, message: string): void {
+  respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
 }
 
-type TargetedGatewayRestart = {
-  pid: number;
-  ownerId: string;
-  port: number;
-};
-
-function parseTargetedGatewayRestart(value: unknown): TargetedGatewayRestart | null | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  const target = value as { pid?: unknown; ownerId?: unknown; port?: unknown };
-  if (
-    typeof target.pid !== "number" ||
-    !Number.isSafeInteger(target.pid) ||
-    target.pid <= 0 ||
-    typeof target.ownerId !== "string" ||
-    !target.ownerId.trim() ||
-    typeof target.port !== "number" ||
-    !Number.isInteger(target.port) ||
-    target.port <= 0 ||
-    target.port > 65_535
-  ) {
-    return null;
-  }
-  return {
-    pid: target.pid,
-    ownerId: target.ownerId.trim(),
-    port: target.port,
-  };
-}
-
-function parseTargetedRestartIntent(
-  value: unknown,
-  reason: string | undefined,
-): GatewayRestartIntent | null {
-  if (value !== undefined && (!value || typeof value !== "object" || Array.isArray(value))) {
-    return null;
-  }
-  const raw = (value ?? {}) as { force?: unknown; waitMs?: unknown };
-  const force = raw.force === true;
-  const waitMs =
-    typeof raw.waitMs === "number" &&
-    Number.isSafeInteger(raw.waitMs) &&
-    raw.waitMs >= 0 &&
-    raw.waitMs <= MAX_TIMER_TIMEOUT_MS
-      ? raw.waitMs
-      : undefined;
-  if (
-    (raw.force !== undefined && typeof raw.force !== "boolean") ||
-    (raw.waitMs !== undefined && waitMs === undefined) ||
-    (force && waitMs !== undefined)
-  ) {
-    return null;
-  }
-  return {
-    ...(reason ? { reason } : {}),
-    ...(force ? { force: true } : {}),
-    ...(waitMs !== undefined ? { waitMs } : {}),
-  };
-}
-
-/** Gateway request handlers for safe restart coordination. */
 export const restartHandlers: GatewayRequestHandlers = {
+  "gateway.stop.request": async (options) => {
+    const { params, respond, context } = options;
+    const target = isRecord(params) ? parseTargetedGatewayRestart(params.target) : null;
+    if (!target) {
+      return rejectRestartRequest(respond, "invalid targeted gateway stop");
+    }
+    const { assertCurrent } = readGatewayRequestMutationAuthority(options);
+    try {
+      assertCurrent();
+      const activeLock = await readActiveGatewayLockIdentity();
+      assertCurrent();
+      if (
+        activeLock?.pid !== process.pid ||
+        activeLock.pid !== target.pid ||
+        activeLock.ownerId !== target.ownerId ||
+        activeLock.port !== target.port
+      ) {
+        return rejectRestartRequest(respond, "target gateway no longer owns the active lock");
+      }
+      const result = await context.hostLifecycle?.request("stop", assertCurrent);
+      if (!result?.ok) {
+        throw new Error(result?.error ?? "Gateway host does not own process exit");
+      }
+      respond(true, { ok: true, pid: process.pid, status: "scheduled" });
+    } catch (error) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
+    }
+  },
   "gateway.restart.request": async ({ respond, params }) => {
-    if (!isRestartRequestParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "invalid gateway.restart.request params"),
-      );
+    if (!isRecord(params)) {
+      rejectRestartRequest(respond, "invalid gateway.restart.request params");
       return;
     }
     const reason = normalizeReason(params.reason);
     const target = parseTargetedGatewayRestart(params.target);
     if (target === null) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "invalid targeted gateway restart"),
-      );
+      rejectRestartRequest(respond, "invalid targeted gateway restart");
       return;
     }
-    if (target) {
-      const intent = parseTargetedRestartIntent(params.restartIntent, reason);
+    if (target && params.safe !== undefined && typeof params.safe !== "boolean") {
+      rejectRestartRequest(respond, "invalid safe targeted restart mode");
+      return;
+    }
+    if (target && params.safe === true && params.restartIntent !== undefined) {
+      rejectRestartRequest(respond, "safe targeted restart does not accept intent");
+      return;
+    }
+    if (target && params.safe !== true) {
+      const intent = parseTargetedGatewayRestartIntent(params.restartIntent, reason);
       if (!intent) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "invalid targeted gateway restart intent"),
-        );
+        rejectRestartRequest(respond, "invalid targeted gateway restart intent");
         return;
       }
       const activeLock = await readActiveGatewayLockIdentity().catch(() => undefined);
       if (
-        !activeLock ||
-        activeLock.pid !== process.pid ||
+        activeLock?.pid !== process.pid ||
         activeLock.pid !== target.pid ||
         activeLock.ownerId !== target.ownerId ||
         activeLock.port !== target.port
       ) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "target gateway no longer owns the active lock"),
-        );
+        rejectRestartRequest(respond, "target gateway no longer owns the active lock");
         return;
       }
       const result = requestGatewayRestartWithSignalAdmission(reason, intent);
@@ -155,13 +107,15 @@ export const restartHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    const result = requestSafeGatewayRestart({
+    const result = scheduleSafeGatewayRestart({
       reason,
       delayMs: 0,
-      skipDeferral: normalizeSkipDeferral(params.skipDeferral),
+      skipDeferral: params.skipDeferral === true,
     });
     respond(true, result);
   },
+  // Deprecated compatibility preview for shipped read-only clients. This is
+  // restart-specific information, not the atomic fence owned by suspend.prepare.
   "gateway.restart.preflight": async ({ respond }) => {
     respond(true, createSafeGatewayRestartPreflight());
   },

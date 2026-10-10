@@ -1,22 +1,31 @@
-// Qa Channel plugin module implements bus client behavior.
 import http from "node:http";
 import https from "node:https";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
-import { parseQaTarget, type QaTargetParts } from "openclaw/plugin-sdk/qa-channel-protocol";
+import {
+  buildQaTarget,
+  parseQaTarget,
+  type QaTargetParts,
+  type QaBusCreateThreadInput,
+  type QaBusDeleteMessageInput,
+  type QaBusEditMessageInput,
+  type QaBusReactToMessageInput,
+  type QaBusReadMessageInput,
+  type QaBusOutboundMessageInput,
+  type QaBusInboundMessageInput,
+  type QaBusMessage,
+  type QaBusPollResult,
+  type QaBusSearchMessagesInput,
+  type QaBusStateSnapshot,
+  type QaBusThread,
+} from "openclaw/plugin-sdk/qa-channel-protocol";
 import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import type {
-  QaBusInboundMessageInput,
-  QaBusMessage,
-  QaBusPollResult,
-  QaBusSearchMessagesInput,
-  QaBusStateSnapshot,
-  QaBusThread,
-  QaBusToolCall,
-} from "./protocol.js";
+export { normalizeOptionalString as normalizeQaTarget } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export { parseQaTarget };
+export { buildQaTarget, parseQaTarget };
 
 export type {
   QaBusAttachment,
@@ -38,12 +47,19 @@ export type {
   QaBusThread,
   QaBusToolCall,
   QaBusWaitForInput,
-} from "./protocol.js";
+} from "openclaw/plugin-sdk/qa-channel-protocol";
 
-type JsonResult<T> = Promise<T>;
+type QaBusAccountRequest<T> = Omit<T, "accountId" | "timestamp"> & {
+  baseUrl: string;
+  accountId: string;
+};
 const QA_BUS_JSON_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 /** Total deadline for local qa-bus POST requests and long-poll response grace. */
 const QA_BUS_REQUEST_TIMEOUT_MS = 10_000;
+// Final replies can contend with CPU-heavy QA lanes on the shared release
+// runner. Keep delivery inside the outer turn budget without treating a brief
+// local scheduling stall as a channel failure.
+const QA_BUS_MESSAGE_REQUEST_TIMEOUT_MS = 30_000;
 /** Total deadline for local qa-bus state requests. */
 const QA_BUS_STATE_TIMEOUT_MS = 10_000;
 
@@ -81,7 +97,18 @@ async function postJson<T>(
   path: string,
   body: unknown,
   options: QaBusPostOptions = {},
-): JsonResult<T> {
+): Promise<T> {
+  return captureEffectAuthority().initiate(() =>
+    initiateQaBusPost<T>(baseUrl, path, body, options),
+  );
+}
+
+async function initiateQaBusPost<T>(
+  baseUrl: string,
+  path: string,
+  body: unknown,
+  options: QaBusPostOptions,
+): Promise<T> {
   const url = buildQaBusUrl(baseUrl, path);
   const payload = JSON.stringify(body);
   const client = url.protocol === "https:" ? https : http;
@@ -116,7 +143,7 @@ async function postJson<T>(
             resolve(parsed as T);
           },
           (error: unknown) => {
-            reject(toLintErrorObject(error, "Non-Error rejection"));
+            reject(toErrorObject(error, "Non-Error rejection"));
           },
         );
         response.on("error", reject);
@@ -126,14 +153,6 @@ async function postJson<T>(
     request.on("error", reject);
     request.end(payload);
   });
-}
-
-export function normalizeQaTarget(raw: string): string | undefined {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  return trimmed;
 }
 
 export function resolveQaTargetThread(params: {
@@ -152,21 +171,11 @@ export function resolveQaTargetThread(params: {
   };
 }
 
-export function buildQaTarget(params: {
-  chatType: "direct" | "channel" | "group";
-  conversationId: string;
-  threadId?: string | null;
-}) {
-  if (params.threadId) {
-    return `thread:${params.conversationId}/${params.threadId}`;
-  }
-  return `${params.chatType === "direct" ? "dm" : params.chatType}:${params.conversationId}`;
-}
-
 export async function pollQaBus(params: {
   baseUrl: string;
   accountId: string;
   cursor: number;
+  acknowledgedCursor: number;
   timeoutMs: number;
   signal?: AbortSignal;
 }): Promise<QaBusPollResult> {
@@ -176,6 +185,7 @@ export async function pollQaBus(params: {
     {
       accountId: params.accountId,
       cursor: params.cursor,
+      acknowledgedCursor: params.acknowledgedCursor,
       timeoutMs: params.timeoutMs,
     },
     {
@@ -185,28 +195,13 @@ export async function pollQaBus(params: {
   );
 }
 
-export async function sendQaBusMessage(params: {
-  baseUrl: string;
-  accountId: string;
-  to: string;
-  text: string;
-  senderId?: string;
-  senderName?: string;
-  threadId?: string;
-  replyToId?: string;
-  attachments?: import("./protocol.js").QaBusAttachment[];
-  toolCalls?: QaBusToolCall[];
-}) {
-  return await postJson<{ message: QaBusMessage }>(params.baseUrl, "/v1/outbound/message", params);
+export async function sendQaBusMessage(params: QaBusAccountRequest<QaBusOutboundMessageInput>) {
+  return await postJson<{ message: QaBusMessage }>(params.baseUrl, "/v1/outbound/message", params, {
+    timeoutMs: QA_BUS_MESSAGE_REQUEST_TIMEOUT_MS,
+  });
 }
 
-export async function createQaBusThread(params: {
-  baseUrl: string;
-  accountId: string;
-  conversationId: string;
-  title: string;
-  createdBy?: string;
-}) {
+export async function createQaBusThread(params: QaBusAccountRequest<QaBusCreateThreadInput>) {
   return await postJson<{ thread: QaBusThread }>(
     params.baseUrl,
     "/v1/actions/thread-create",
@@ -214,38 +209,19 @@ export async function createQaBusThread(params: {
   );
 }
 
-export async function reactToQaBusMessage(params: {
-  baseUrl: string;
-  accountId: string;
-  messageId: string;
-  emoji: string;
-  senderId?: string;
-}) {
+export async function reactToQaBusMessage(params: QaBusAccountRequest<QaBusReactToMessageInput>) {
   return await postJson<{ message: QaBusMessage }>(params.baseUrl, "/v1/actions/react", params);
 }
 
-export async function editQaBusMessage(params: {
-  baseUrl: string;
-  accountId: string;
-  messageId: string;
-  text: string;
-}) {
+export async function editQaBusMessage(params: QaBusAccountRequest<QaBusEditMessageInput>) {
   return await postJson<{ message: QaBusMessage }>(params.baseUrl, "/v1/actions/edit", params);
 }
 
-export async function deleteQaBusMessage(params: {
-  baseUrl: string;
-  accountId: string;
-  messageId: string;
-}) {
+export async function deleteQaBusMessage(params: QaBusAccountRequest<QaBusDeleteMessageInput>) {
   return await postJson<{ message: QaBusMessage }>(params.baseUrl, "/v1/actions/delete", params);
 }
 
-export async function readQaBusMessage(params: {
-  baseUrl: string;
-  accountId: string;
-  messageId: string;
-}) {
+export async function readQaBusMessage(params: QaBusAccountRequest<QaBusReadMessageInput>) {
   return await postJson<{ message: QaBusMessage }>(params.baseUrl, "/v1/actions/read", params);
 }
 
@@ -286,18 +262,4 @@ export async function getQaBusState(baseUrl: string): Promise<QaBusStateSnapshot
   } finally {
     await release();
   }
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

@@ -31,34 +31,25 @@ function expectPolicyFields(
 }
 
 describe("resolveSourceReplyDeliveryMode", () => {
-  it("defaults source replies to automatic delivery outside ambient room events", () => {
-    expect(resolveSourceReplyDeliveryMode({ cfg: emptyConfig, ctx: { ChatType: "channel" } })).toBe(
-      "automatic",
-    );
-    expect(resolveSourceReplyDeliveryMode({ cfg: emptyConfig, ctx: { ChatType: "group" } })).toBe(
-      "automatic",
-    );
-    expect(resolveSourceReplyDeliveryMode({ cfg: emptyConfig, ctx: { ChatType: "direct" } })).toBe(
-      "automatic",
-    );
+  it("keeps progress refresh replies, hooks and typing silent without changing session reply mode", () => {
+    const policy = resolveSourceReplyVisibilityPolicy({
+      cfg: emptyConfig,
+      ctx: {
+        Provider: "webchat",
+        Surface: "webchat",
+        InputProvenance: { kind: "internal_system", sourceTool: "progress_card_refresh" },
+      },
+      sendPolicy: "allow",
+    });
+    expect(policy).toMatchObject({
+      sourceReplyDeliveryMode: "automatic",
+      sessionStableSourceReplyDeliveryMode: "automatic",
+      suppressDelivery: true,
+      suppressHookUserDelivery: true,
+      suppressHookReplyLifecycle: true,
+      suppressTyping: true,
+    });
   });
-
-  it("honors config and explicit requested mode", () => {
-    expect(
-      resolveSourceReplyDeliveryMode({
-        cfg: automaticGroupReplyConfig,
-        ctx: { ChatType: "group" },
-      }),
-    ).toBe("automatic");
-    expect(
-      resolveSourceReplyDeliveryMode({
-        cfg: emptyConfig,
-        ctx: { ChatType: "channel" },
-        requested: "automatic",
-      }),
-    ).toBe("automatic");
-  });
-
   it("keeps room events message-tool-only even when group replies are automatic", () => {
     expect(
       resolveSourceReplyDeliveryMode({
@@ -128,19 +119,6 @@ describe("resolveSourceReplyDeliveryMode", () => {
     ).toBe("message_tool_only");
   });
 
-  it("keeps implicit internal WebChat direct turns automatic", () => {
-    expect(
-      resolveSourceReplyDeliveryMode({
-        cfg: emptyConfig,
-        ctx: {
-          ChatType: "direct",
-          Provider: "webchat",
-          Surface: "webchat",
-        },
-      }),
-    ).toBe("automatic");
-  });
-
   it("preserves explicit internal WebChat message-tool opt-ins", () => {
     expect(
       resolveSourceReplyDeliveryMode({
@@ -163,14 +141,6 @@ describe("resolveSourceReplyDeliveryMode", () => {
         requested: "message_tool_only",
       }),
     ).toBe("message_tool_only");
-  });
-
-  it("allows message-tool-only delivery for any source chat via global config", () => {
-    for (const ChatType of ["direct", "group", "channel"] as const) {
-      expect(
-        resolveSourceReplyDeliveryMode({ cfg: globalToolOnlyReplyConfig, ctx: { ChatType } }),
-      ).toBe("message_tool_only");
-    }
   });
 
   it("allows harnesses to default direct chats to message-tool-only delivery", () => {
@@ -200,26 +170,6 @@ describe("resolveSourceReplyDeliveryMode", () => {
           },
         },
         ctx: { ChatType: "channel" },
-      }),
-    ).toBe("automatic");
-  });
-
-  it("treats native and authorized text commands as explicit replies in groups", () => {
-    expect(
-      resolveSourceReplyDeliveryMode({
-        cfg: emptyConfig,
-        ctx: { ChatType: "group", CommandSource: "native" },
-      }),
-    ).toBe("automatic");
-    expect(
-      resolveSourceReplyDeliveryMode({
-        cfg: emptyConfig,
-        ctx: {
-          ChatType: "group",
-          CommandSource: "text",
-          CommandAuthorized: true,
-          CommandBody: "/status",
-        },
       }),
     ).toBe("automatic");
   });
@@ -261,35 +211,20 @@ describe("resolveSourceReplyDeliveryMode", () => {
     ).toBe("message_tool_only");
   });
 
-  it("uses structured command-turn context for cross-channel visible command replies", () => {
-    const entries: Array<{ surface: string; commandTurn: CommandTurnContext }> = [
-      {
-        surface: "whatsapp",
-        commandTurn: { kind: "text-slash", source: "text", authorized: true, body: "/status" },
-      },
-      {
-        surface: "telegram",
-        commandTurn: { kind: "native", source: "native", authorized: true, body: "/status" },
-      },
-      {
-        surface: "discord",
-        commandTurn: { kind: "text-slash", source: "text", authorized: true, body: "/status" },
-      },
-      {
-        surface: "webchat",
-        commandTurn: { kind: "text-slash", source: "text", authorized: true, body: "/status" },
-      },
+  it("uses structured native and text command context for visible replies", () => {
+    const commandTurns: CommandTurnContext[] = [
+      { kind: "text-slash", source: "text", authorized: true, body: "/status" },
+      { kind: "native", source: "native", authorized: true, body: "/status" },
     ];
-    for (const entry of entries) {
+    for (const CommandTurn of commandTurns) {
       expect(
         resolveSourceReplyDeliveryMode({
           cfg: emptyConfig,
           ctx: {
             ChatType: "group",
-            CommandTurn: entry.commandTurn,
+            CommandTurn,
           },
         }),
-        entry.surface,
       ).toBe("automatic");
     }
   });
@@ -307,67 +242,6 @@ describe("resolveSourceReplyDeliveryMode", () => {
             body: "/status",
           },
         },
-      }),
-    ).toBe("message_tool_only");
-  });
-
-  it("falls back to automatic when message-tool-only delivery cannot use the message tool", () => {
-    expect(
-      resolveSourceReplyDeliveryMode({
-        cfg: globalToolOnlyReplyConfig,
-        ctx: { ChatType: "group" },
-        messageToolAvailable: false,
-      }),
-    ).toBe("automatic");
-    expect(
-      resolveSourceReplyDeliveryMode({
-        cfg: globalToolOnlyReplyConfig,
-        ctx: { ChatType: "direct" },
-        messageToolAvailable: false,
-      }),
-    ).toBe("automatic");
-    expect(
-      resolveSourceReplyDeliveryMode({
-        cfg: emptyConfig,
-        ctx: { ChatType: "channel" },
-        requested: "message_tool_only",
-        messageToolAvailable: false,
-      }),
-    ).toBe("automatic");
-  });
-
-  it("keeps strict message-tool-only delivery when the message tool is unavailable", () => {
-    expect(
-      resolveSourceReplyDeliveryMode({
-        cfg: emptyConfig,
-        ctx: { ChatType: "channel" },
-        requested: "message_tool_only",
-        strictMessageToolOnly: true,
-        messageToolAvailable: false,
-      }),
-    ).toBe("message_tool_only");
-    expect(
-      resolveSourceReplyDeliveryMode({
-        cfg: automaticGroupReplyConfig,
-        ctx: { ChatType: "channel" },
-        requested: "automatic",
-        strictMessageToolOnly: true,
-      }),
-    ).toBe("message_tool_only");
-  });
-
-  it("keeps message-tool-only delivery when message tool availability is unknown", () => {
-    expect(
-      resolveSourceReplyDeliveryMode({
-        cfg: globalToolOnlyReplyConfig,
-        ctx: { ChatType: "group" },
-        messageToolAvailable: true,
-      }),
-    ).toBe("message_tool_only");
-    expect(
-      resolveSourceReplyDeliveryMode({
-        cfg: globalToolOnlyReplyConfig,
-        ctx: { ChatType: "channel" },
       }),
     ).toBe("message_tool_only");
   });
@@ -436,6 +310,40 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
     },
   );
 
+  it("keeps the stable mode tool-only under a sender-scoped message denial", () => {
+    // A sender-scoped denial downgrades the sender's effective delivery, but
+    // the session-stable mode feeds CLI binding facts shared by sender-less
+    // synthetic turns; downgrading it too splits the policy hash and resets
+    // the CLI session on chat<->heartbeat transitions.
+    expectPolicyFields(
+      resolveSourceReplyVisibilityPolicy({
+        cfg: globalToolOnlyReplyConfig,
+        ctx: { ChatType: "direct" },
+        sendPolicy: "allow",
+        messageToolAvailable: false,
+        sessionStableMessageToolAvailable: true,
+      }),
+      {
+        sourceReplyDeliveryMode: "automatic",
+        sessionStableSourceReplyDeliveryMode: "message_tool_only",
+      },
+    );
+    // Without a sender-independent verdict, the stable mode still follows the
+    // turn's availability (session-wide denials downgrade both).
+    expectPolicyFields(
+      resolveSourceReplyVisibilityPolicy({
+        cfg: globalToolOnlyReplyConfig,
+        ctx: { ChatType: "direct" },
+        sendPolicy: "allow",
+        messageToolAvailable: false,
+      }),
+      {
+        sourceReplyDeliveryMode: "automatic",
+        sessionStableSourceReplyDeliveryMode: "automatic",
+      },
+    );
+  });
+
   it("suppresses automatic source delivery for opted-in message-tool group turns without suppressing typing", () => {
     expectPolicyFields(
       resolveSourceReplyVisibilityPolicy({
@@ -484,24 +392,6 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
     }
   });
 
-  it("keeps configured automatic group delivery visible", () => {
-    expectPolicyFields(
-      resolveSourceReplyVisibilityPolicy({
-        cfg: automaticGroupReplyConfig,
-        ctx: { ChatType: "channel" },
-        sendPolicy: "allow",
-      }),
-      {
-        sourceReplyDeliveryMode: "automatic",
-        sessionStableSourceReplyDeliveryMode: "automatic",
-        suppressAutomaticSourceDelivery: false,
-        suppressDelivery: false,
-        suppressHookReplyLifecycle: false,
-        suppressTyping: false,
-      },
-    );
-  });
-
   it("supports explicit message-tool-only delivery for direct chats without suppressing typing", () => {
     expectPolicyFields(
       resolveSourceReplyVisibilityPolicy({
@@ -518,6 +408,44 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
         suppressHookReplyLifecycle: false,
         suppressTyping: false,
         deliverySuppressionReason: "sourceReplyDeliveryMode: message_tool_only",
+      },
+    );
+  });
+
+  it.each([
+    {
+      name: "inter-session handoff",
+      ctx: {
+        ChatType: "direct",
+        InputProvenance: { kind: "inter_session" as const, sourceTool: "sessions_send" },
+      },
+    },
+    {
+      name: "internal lifecycle handoff",
+      ctx: {
+        ChatType: "direct",
+        InputProvenance: { kind: "internal_system" as const, sourceTool: "restart-sentinel" },
+      },
+    },
+    {
+      name: "heartbeat handoff",
+      ctx: { ChatType: "direct" },
+      isHeartbeat: true,
+    },
+  ])("keeps $name overrides out of session-stable policy", ({ ctx, isHeartbeat }) => {
+    expectPolicyFields(
+      resolveSourceReplyVisibilityPolicy({
+        cfg: emptyConfig,
+        ctx,
+        requested: "message_tool_only",
+        isHeartbeat,
+        sendPolicy: "allow",
+      }),
+      {
+        sourceReplyDeliveryMode: "message_tool_only",
+        sessionStableSourceReplyDeliveryMode: "automatic",
+        suppressAutomaticSourceDelivery: true,
+        suppressDelivery: true,
       },
     );
   });

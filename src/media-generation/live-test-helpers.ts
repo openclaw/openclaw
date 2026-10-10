@@ -1,9 +1,6 @@
-// Provides live-test helpers for media-generation provider checks.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 
-// Helpers shared by live media-generation tests. They keep provider/model/env
-// parsing deterministic without exposing raw API keys in test output.
 type LiveProviderModelConfig =
   | string
   | {
@@ -12,16 +9,13 @@ type LiveProviderModelConfig =
     }
   | undefined;
 
-/** Redacts live API keys while preserving enough shape for diagnostics. */
+/** Redacts live API keys without retaining credential-derived text in test output. */
 export function redactLiveApiKey(value: string | undefined): string {
   const trimmed = value?.trim();
   if (!trimmed) {
     return "none";
   }
-  if (trimmed.length <= 12) {
-    return trimmed;
-  }
-  return `${trimmed.slice(0, 8)}...${trimmed.slice(-4)}`;
+  return "<redacted>";
 }
 
 /** Parses comma-separated live-test filters; null means "all". */
@@ -44,9 +38,13 @@ export function parseLiveCsvFilter(
 
 /** Parses provider/model refs keyed by normalized provider id. */
 export function parseProviderModelMap(raw?: string): Map<string, string> {
+  return parseProviderModelRefs(raw?.split(",") ?? []);
+}
+
+function parseProviderModelRefs(refs: readonly (string | undefined)[]): Map<string, string> {
   const entries = new Map<string, string>();
-  for (const token of raw?.split(",") ?? []) {
-    const trimmed = token.trim();
+  for (const token of refs) {
+    const trimmed = token?.trim();
     if (!trimmed) {
       continue;
     }
@@ -67,31 +65,11 @@ export function parseProviderModelMap(raw?: string): Map<string, string> {
 export function resolveConfiguredLiveProviderModels(
   configured: LiveProviderModelConfig,
 ): Map<string, string> {
-  const resolved = new Map<string, string>();
-  const add = (value: string | undefined) => {
-    const trimmed = value?.trim();
-    if (!trimmed) {
-      return;
-    }
-    const slash = trimmed.indexOf("/");
-    if (slash <= 0 || slash === trimmed.length - 1) {
-      return;
-    }
-    const providerId = normalizeOptionalLowercaseString(trimmed.slice(0, slash));
-    if (!providerId) {
-      return;
-    }
-    resolved.set(providerId, trimmed);
-  };
-  if (typeof configured === "string") {
-    add(configured);
-    return resolved;
-  }
-  add(configured?.primary);
-  for (const fallback of configured?.fallbacks ?? []) {
-    add(fallback);
-  }
-  return resolved;
+  return parseProviderModelRefs(
+    typeof configured === "string"
+      ? [configured]
+      : [configured?.primary, ...(configured?.fallbacks ?? [])],
+  );
 }
 
 /** Returns an empty auth store only when live env keys may be used directly. */

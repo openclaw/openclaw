@@ -19,9 +19,9 @@ import type { ReefDeliveryRejection, ReefRejectionNoticeState, RelayFriend } fro
 export const REEF_TRUST_STORE_MAX_ENTRIES = 4_096;
 export const REEF_TRUST_STORE_NAMESPACE = "peer-state";
 const REEF_OUTBOUND_DELIVERY_STORE_NAMESPACE = "outbound-deliveries";
-export const REEF_OUTBOUND_DELIVERY_MAX_ENTRIES = 32_768;
+const REEF_OUTBOUND_DELIVERY_MAX_ENTRIES = 32_768;
 const REEF_RELAY_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
-export const REEF_OUTBOUND_DELIVERY_TTL_MS = REEF_RELAY_RETENTION_MS * 2 + 24 * 60 * 60 * 1_000;
+const REEF_OUTBOUND_DELIVERY_TTL_MS = REEF_RELAY_RETENTION_MS * 2 + 24 * 60 * 60 * 1_000;
 const REEF_PAIRING_APPROVAL_PREFIX = "reef-approval-v1:";
 const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/;
 const MESSAGE_ID_PATTERN = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
@@ -48,6 +48,10 @@ const ReefOutboundDeliveryBindingSchema = z
 const ReefOutboundDeliverySchema = ReefOutboundDeliveryBindingSchema.extend({
   resendDisabled: z.literal(true).optional(),
   rejection: ReefOutboundRejectionSchema.optional(),
+  // sentAt is absent on records written before overdue notices shipped; those
+  // legacy sends age out via TTL without an overdue follow-up.
+  sentAt: z.number().int().positive().optional(),
+  overdueNotifiedAt: z.number().int().positive().optional(),
 }).strict();
 const ReefPeerStateSchema = z
   .object({
@@ -134,8 +138,7 @@ export class ReefTrustStore {
   }
 
   snapshot(peer: string): ReefPeerStateSnapshot {
-    const value = this.stores.peers.lookup(this.#key(peer));
-    return value === undefined ? { revision: 0 } : ReefPeerStateSchema.parse(value);
+    return this.#parseState(this.stores.peers.lookup(this.#key(peer)));
   }
 
   get(peer: string): ReefPeerTrust | undefined {
@@ -335,10 +338,60 @@ export class ReefTrustStore {
     options: { resendDisabled?: true } = {},
   ): void {
     const key = this.#deliveryKey(peer, id);
-    const value = ReefOutboundDeliverySchema.parse({ ...binding, ...options });
+    const value = ReefOutboundDeliverySchema.parse({ ...binding, ...options, sentAt: Date.now() });
     if (!this.stores.deliveries.registerIfAbsent(key, value)) {
       throw new Error(`Duplicate outbound Reef delivery id ${id}`);
     }
+  }
+
+  /**
+   * Sends that never produced any receipt. Rejections have their own notice
+   * path, and each delivery is reported overdue at most once.
+   */
+  overdueOutboundDeliveries(
+    olderThanMs: number,
+    now: number = Date.now(),
+  ): Array<{ peer: string; id: string; sentAt: number }> {
+    const peers = new Map<string, ReefPeerTrust | undefined>();
+    return this.stores.deliveries
+      .entries()
+      .filter((entry) => entry.key.startsWith(this.#prefix))
+      .flatMap((entry) => {
+        const parsed = ReefOutboundDeliverySchema.safeParse(entry.value);
+        if (
+          !parsed.success ||
+          parsed.data.rejection ||
+          parsed.data.overdueNotifiedAt !== undefined ||
+          parsed.data.sentAt === undefined ||
+          parsed.data.sentAt + olderThanMs > now
+        ) {
+          return [];
+        }
+        const separator = entry.key.lastIndexOf(":");
+        const peer = requirePeer(entry.key.slice(this.#prefix.length, separator));
+        const id = entry.key.slice(separator + 1);
+        if (
+          !MESSAGE_ID_PATTERN.test(id) ||
+          !matchesReefPeerIdentity(this.#peerForScan(peer, peers), parsed.data.recipient)
+        ) {
+          return [];
+        }
+        return [{ peer, id, sentAt: parsed.data.sentAt }];
+      });
+  }
+
+  markOutboundDeliveryOverdueNotified(peer: string, id: string): boolean {
+    const update = this.stores.deliveries.update;
+    if (!update) {
+      throw new Error("Reef outbound delivery state requires atomic plugin-state updates");
+    }
+    return update(this.#deliveryKey(peer, id), (value) => {
+      const parsed = ReefOutboundDeliverySchema.safeParse(value);
+      if (!parsed.success || parsed.data.rejection || parsed.data.overdueNotifiedAt !== undefined) {
+        return undefined;
+      }
+      return { ...parsed.data, overdueNotifiedAt: Date.now() };
+    });
   }
 
   outboundDelivery(
@@ -413,6 +466,7 @@ export class ReefTrustStore {
   }
 
   pendingOutboundRejections(): ReefDeliveryRejection[] {
+    const peers = new Map<string, ReefPeerTrust | undefined>();
     return this.stores.deliveries
       .entries()
       .filter((entry) => entry.key.startsWith(this.#prefix))
@@ -426,7 +480,7 @@ export class ReefTrustStore {
         const id = entry.key.slice(separator + 1);
         if (
           !MESSAGE_ID_PATTERN.test(id) ||
-          !matchesReefPeerIdentity(this.get(peer), delivery.recipient)
+          !matchesReefPeerIdentity(this.#peerForScan(peer, peers), delivery.recipient)
         ) {
           return [];
         }
@@ -524,6 +578,16 @@ export class ReefTrustStore {
 
   rejectionNoticeState(peer: string): ReefRejectionNoticeState | undefined {
     return this.snapshot(peer).rejectionNotice;
+  }
+
+  #peerForScan(
+    peer: string,
+    peers: Map<string, ReefPeerTrust | undefined>,
+  ): ReefPeerTrust | undefined {
+    if (!peers.has(peer)) {
+      peers.set(peer, this.get(peer));
+    }
+    return peers.get(peer);
   }
 
   #key(peer: string): string {

@@ -13,9 +13,20 @@ enum class AndroidScreenshotScene(
 ) {
   Home("home", HomeDestination.Connect),
   Chat("chat", HomeDestination.Chat),
-  Voice("voice", HomeDestination.Voice),
+  Browser("browser", HomeDestination.Chat),
+  Attention("attention", HomeDestination.Chat),
+  AttentionExpiry("attention-expiry", HomeDestination.Chat),
+  Snooze("snooze", HomeDestination.Connect),
+  Sources("sources", HomeDestination.Chat),
+  CompletedWork("completed-work", HomeDestination.Chat),
+  ActiveWork("active-work", HomeDestination.Chat),
+  WorkBoundaries("work-boundaries", HomeDestination.Chat),
+  Branches("branches", HomeDestination.Chat),
+  Swarm("swarm", HomeDestination.Chat),
   Settings("settings", HomeDestination.Settings),
   Gateway("gateway", HomeDestination.Settings, SettingsRoute.Gateway),
+  OpenClaw("openclaw", HomeDestination.Settings, SettingsRoute.SystemAgent),
+  Desktop("desktop", HomeDestination.Settings, SettingsRoute.Desktop),
   VoiceWake("voice-wake", HomeDestination.Settings, SettingsRoute.Voice),
   ;
 

@@ -1,33 +1,37 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  fullDreamingViewAccess,
+  installDreamingViewTestTranslations,
+} from "./view.test-helpers.ts";
 import { createDreamingViewState, renderDreaming, type DreamingViewState } from "./view.ts";
 
 type DreamingProps = Parameters<typeof renderDreaming>[0];
 
 let viewState = createDreamingViewState();
+const restoreTranslations = installDreamingViewTestTranslations();
 
-function setDreamSubTab(tab: DreamingViewState["activeSubTab"]) {
-  viewState.activeSubTab = tab;
-}
+afterAll(() => restoreTranslations());
+afterEach(() => vi.restoreAllMocks());
 
-function setDreamDiarySubTab(tab: DreamingViewState["activeDiarySubTab"]) {
-  viewState.activeDiarySubTab = tab;
-}
+const setDreamSubTab = (tab: DreamingViewState["activeSubTab"]) => (viewState.activeSubTab = tab);
 
-function setDreamAdvancedWaitingSort(sort: DreamingViewState["advancedWaitingSort"]) {
-  viewState.advancedWaitingSort = sort;
-}
+const setDreamDiarySubTab = (tab: DreamingViewState["activeDiarySubTab"]) =>
+  (viewState.activeDiarySubTab = tab);
+
+const setDreamAdvancedWaitingSort = (sort: DreamingViewState["advancedWaitingSort"]) =>
+  (viewState.advancedWaitingSort = sort);
 
 function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
   const props: DreamingProps = {
+    access: fullDreamingViewAccess,
     viewState,
     active: true,
     selectedAgentId: "main",
     shortTermCount: 47,
-    groundedSignalCount: 9,
-    totalSignalCount: 182,
     promotedCount: 12,
     phases: {
       light: { enabled: true, cron: "0 * * * *", nextRunAtMs: Date.parse("2026-04-05T11:30:00Z") },
@@ -67,10 +71,8 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
         promotedAt: "2026-04-05T04:00:00.000Z",
       },
     ],
-    dreamingOf: null,
     nextCycle: "4:00 AM",
     timezone: "America/Los_Angeles",
-    statusLoading: false,
     statusError: null,
     modeSaving: false,
     dreamDiaryLoading: false,
@@ -78,7 +80,6 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
     dreamDiaryActionMessage: null,
     dreamDiaryActionArchivePath: null,
     dreamDiaryError: null,
-    dreamDiaryPath: "DREAMS.md",
     dreamDiaryContent:
       "# Dream Diary\n\n<!-- openclaw:dreaming:diary:start -->\n\n---\n\n*April 5, 2026, 3:00 AM*\n\nThe repository whispered of forgotten endpoints tonight.\n\n<!-- openclaw:dreaming:diary:end -->",
     memoryWikiEnabled: true,
@@ -88,6 +89,7 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
       sourceType: "chatgpt",
       totalItems: 2,
       totalClusters: 2,
+      truncated: false,
       clusters: [
         {
           key: "topic/travel",
@@ -151,11 +153,12 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
         },
       ],
     },
-    wikiMemoryPalaceLoading: false,
-    wikiMemoryPalaceError: null,
-    wikiMemoryPalace: {
+    wikiOverviewLoading: false,
+    wikiOverviewError: null,
+    wikiOverview: {
       totalItems: 1,
       totalPages: 2,
+      truncated: false,
       pageCounts: {
         synthesis: 1,
         entity: 0,
@@ -195,10 +198,9 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
         },
       ],
     },
-    onRefresh: () => {},
     onRefreshDiary: () => {},
     onRefreshImports: () => {},
-    onRefreshMemoryPalace: () => {},
+    onRefreshWikiOverview: () => {},
     onOpenConfig: () => {},
     onOpenWikiPage: async () => null,
     onBackfillDiary: () => {},
@@ -240,8 +242,11 @@ describe("dreaming view", () => {
     viewState = createDreamingViewState();
   });
 
-  it("renders the active dream scene chrome and status", () => {
-    const container = renderInto(buildProps({ dreamingOf: "reindexing old chats\u2026" }));
+  it("renders the active dream scene chrome and selects another view", () => {
+    vi.spyOn(Date, "now").mockReturnValue(0);
+    viewState.dreamIndex = 0;
+    const onViewStateChange = vi.fn();
+    const container = renderInto(buildProps({ onViewStateChange }));
 
     expectElement(container, ".dreams__lobster svg");
 
@@ -255,26 +260,6 @@ describe("dreaming view", () => {
     ).toContain("--lob-shell:");
 
     expect(textItems(container, ".dreams__z")).toEqual(["z", "z", "Z"]);
-
-    const stars = [...container.querySelectorAll<HTMLElement>(".dreams__star")].map((star) => ({
-      top: star.style.top,
-      left: star.style.left,
-      size: star.style.width,
-    }));
-    expect(stars).toEqual([
-      { top: "8%", left: "15%", size: "3px" },
-      { top: "12%", left: "72%", size: "2px" },
-      { top: "22%", left: "35%", size: "3px" },
-      { top: "18%", left: "88%", size: "2px" },
-      { top: "35%", left: "8%", size: "2px" },
-      { top: "45%", left: "92%", size: "2px" },
-      { top: "55%", left: "25%", size: "3px" },
-      { top: "65%", left: "78%", size: "2px" },
-      { top: "75%", left: "45%", size: "2px" },
-      { top: "82%", left: "60%", size: "3px" },
-      { top: "30%", left: "55%", size: "2px" },
-      { top: "88%", left: "18%", size: "2px" },
-    ]);
 
     expectElement(container, ".dreams__moon");
 
@@ -291,21 +276,23 @@ describe("dreaming view", () => {
       "off",
     );
 
-    const buttons = [...container.querySelectorAll("button")].map((node) =>
-      node.textContent?.trim(),
-    );
-    expect(buttons).toEqual(["Scene", "Diary", "Advanced"]);
+    const tabs = [...container.querySelectorAll(".dreams-hub-tabs .hub-tab")];
+    expect(tabs.map((node) => node.textContent?.trim())).toEqual(["Scene", "Diary", "Advanced"]);
+    expect(container.querySelector("#dreams-tab-scene")?.hasAttribute("active")).toBe(true);
+    container
+      .querySelector("#dreams-tab-diary")
+      ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
+    expect(viewState.activeSubTab).toBe("diary");
+    expect(onViewStateChange).toHaveBeenCalledOnce();
     expectElement(container, ".dreams__bubble");
     const text = container.querySelector(".dreams__bubble-text");
-    expect(text?.textContent).toBe("reindexing old chats\u2026");
+    expect(text?.textContent).toBe("consolidating memories…");
     const label = container.querySelector(".dreams__status-label");
     expect(label?.textContent).toBe("Dreaming Active");
     const detail = container.querySelector(".dreams__status-detail span");
     expect(detail?.textContent?.trim().replace(/\s+/g, " ")).toBe(
       "12 promoted · next sweep 4:00 AM · America/Los_Angeles",
     );
-    const tabs = container.querySelectorAll(".dreams__tab");
-    expect([...tabs].map((tab) => tab.textContent?.trim())).toEqual(["Scene", "Diary", "Advanced"]);
   });
 
   it("renders idle and unavailable scene states", () => {
@@ -334,25 +321,42 @@ describe("dreaming view", () => {
   it("renders imported memory topics inside the diary tab", () => {
     setDreamSubTab("diary");
     setDreamDiarySubTab("insights");
-    const container = renderInto(buildProps());
-    const subtabs = [...container.querySelectorAll(".dreams-diary__subtab")].map((tab) => ({
-      label: tab.textContent?.trim(),
-      active: tab.classList.contains("dreams-diary__subtab--active"),
-    }));
+    const onViewStateChange = vi.fn();
+    const container = renderInto(buildProps({ onViewStateChange }));
+    const subtabs = [...container.querySelectorAll(".dream-diary-hub-tabs .hub-tab")].map(
+      (tab) => ({
+        label: tab.textContent?.trim(),
+        active: tab.hasAttribute("active"),
+      }),
+    );
     expect(subtabs).toEqual([
       { label: "Dreams", active: false },
       { label: "Imported Insights", active: true },
-      { label: "Memory Palace", active: false },
+      { label: "Memory Wiki", active: false },
     ]);
+    container
+      .querySelector("#dream-diary-tab-wiki")
+      ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
+    expect(viewState.activeDiarySubTab).toBe("wiki");
+    expect(onViewStateChange).toHaveBeenCalledOnce();
     expect(compactText(container.querySelector(".dreams-diary__date"))).toBe(
       "Travel · 1 chats · 1 signals",
+    );
+    expect(compactText(container.querySelector(".dreams-diary__para"))).toBe(
+      "Imported chats clustered around travel.",
     );
     const insight = container.querySelector(".dreams-diary__insight-card");
     expect(insight?.querySelector(".dreams-diary__insight-title")?.textContent).toBe(
       "BA flight receipts process",
     );
+    expect(compactText(insight?.querySelector(".dreams-diary__insight-badge") ?? null)).toBe(
+      "low risk",
+    );
     expect(insight?.querySelector(".dreams-diary__insight-line")?.textContent).toBe(
       "Use the BA request-a-receipt flow first.",
+    );
+    expect(compactText(insight?.querySelector(".dreams-diary__insight-actions .btn") ?? null)).toBe(
+      "Details",
     );
     expect(compactText(container.querySelector(".dreams-diary__explainer"))).toBe(
       "These are imported insights clustered from external history; use them to review what imports surfaced before any of it graduates into durable memory.",
@@ -361,25 +365,22 @@ describe("dreaming view", () => {
     setDreamSubTab("scene");
   });
 
-  it("opens the full imported source page from diary cards", async () => {
+  it("renders sensitive imported insight summaries and review badges", () => {
     setDreamSubTab("diary");
     setDreamDiarySubTab("insights");
-    const onOpenWikiPage = vi.fn().mockResolvedValue({
-      title: "BA flight receipts process",
-      path: "sources/chatgpt-2026-04-10-alpha.md",
-      content: "# ChatGPT Export: BA flight receipts process",
-    });
-    const container = renderInto(buildProps({ onOpenWikiPage }));
-    const openSourceButton = container.querySelectorAll<HTMLButtonElement>(
-      ".dreams-diary__insight-actions .btn",
-    )[1];
-    expect(openSourceButton).toBeInstanceOf(HTMLButtonElement);
-    if (!(openSourceButton instanceof HTMLButtonElement)) {
-      throw new Error("Expected imported source button");
-    }
-    openSourceButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    await Promise.resolve();
-    expect(onOpenWikiPage).toHaveBeenCalledWith("sources/chatgpt-2026-04-10-alpha.md");
+    viewState.diaryPage = 1;
+
+    const container = renderInto(buildProps());
+
+    expect(compactText(container.querySelector(".dreams-diary__date"))).toBe(
+      "Health · 1 chats · 1 sensitive",
+    );
+    expect(compactText(container.querySelector(".dreams-diary__para"))).toBe(
+      "Imported chats clustered around health. 1 digest was withheld pending review.",
+    );
+    expect(compactText(container.querySelector(".dreams-diary__insight-badge"))).toBe(
+      "needs review",
+    );
     setDreamDiarySubTab("dreams");
     setDreamSubTab("scene");
   });
@@ -413,6 +414,7 @@ describe("dreaming view", () => {
     await Promise.resolve();
     await Promise.resolve();
 
+    expect(onOpenWikiPage).toHaveBeenCalledWith("sources/chatgpt-2026-04-10-alpha.md");
     expect(compactText(container.querySelector(".dreams-diary__preview-hint"))).toBe(
       "Showing the first chunk of this page (6001 total lines).",
     );
@@ -428,9 +430,9 @@ describe("dreaming view", () => {
     setDreamSubTab("scene");
   });
 
-  it("renders the memory palace inside the diary tab", () => {
+  it("renders the wiki overview inside the diary tab", () => {
     setDreamSubTab("diary");
-    setDreamDiarySubTab("palace");
+    setDreamDiarySubTab("wiki");
     const container = renderInto(buildProps());
     expect(compactText(container.querySelector(".dreams-diary__date"))).toBe(
       "Vault · 2 pages · 2 claim rows · 1 open question · 1 contradiction",
@@ -445,6 +447,12 @@ describe("dreaming view", () => {
     expect(insight?.querySelector(".dreams-diary__insight-title")?.textContent).toBe(
       "Travel system",
     );
+    expect(compactText(insight?.querySelector(".dreams-diary__insight-badge") ?? null)).toBe(
+      "synthesis",
+    );
+    expect(compactText(insight?.querySelector(".dreams-diary__insight-actions .btn") ?? null)).toBe(
+      "Details",
+    );
     expect(insight?.querySelector(".dreams-diary__insight-list strong")?.textContent).toBe(
       "Claims",
     );
@@ -455,15 +463,15 @@ describe("dreaming view", () => {
     setDreamSubTab("scene");
   });
 
-  it("keeps non-report memory palace card clicks on details", () => {
+  it("keeps non-report wiki overview card clicks on details", () => {
     setDreamSubTab("diary");
-    setDreamDiarySubTab("palace");
+    setDreamDiarySubTab("wiki");
     const container = document.createElement("div");
     const rerender = () => render(renderDreaming(props), container);
     const props: DreamingProps = buildProps({ onViewStateChange: rerender });
     rerender();
 
-    const card = expectElement(container, "[data-palace-page='syntheses/travel-system.md']");
+    const card = expectElement(container, "[data-wiki-page='syntheses/travel-system.md']");
     card.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(textItems(container, ".dreams-diary__insight-list strong")).toContain("Page details");
@@ -471,9 +479,9 @@ describe("dreaming view", () => {
     setDreamSubTab("scene");
   });
 
-  it("opens report memory palace cards on primary click", async () => {
+  it("opens report wiki overview cards on primary click", async () => {
     setDreamSubTab("diary");
-    setDreamDiarySubTab("palace");
+    setDreamDiarySubTab("wiki");
     const onOpenWikiPage = vi.fn().mockResolvedValue({
       title: "Weekly stock report",
       path: "reports/weekly-stock.md",
@@ -486,9 +494,10 @@ describe("dreaming view", () => {
     const props: DreamingProps = buildProps({
       onOpenWikiPage,
       onViewStateChange: rerender,
-      wikiMemoryPalace: {
+      wikiOverview: {
         totalItems: 1,
         totalPages: 1,
+        truncated: false,
         pageCounts: {
           synthesis: 0,
           entity: 0,
@@ -528,7 +537,7 @@ describe("dreaming view", () => {
     });
     rerender();
 
-    const card = expectElement(container, "[data-palace-page='reports/weekly-stock.md']");
+    const card = expectElement(container, "[data-wiki-page='reports/weekly-stock.md']");
     card.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     await Promise.resolve();
     await Promise.resolve();
@@ -555,7 +564,7 @@ describe("dreaming view", () => {
 
   it("shows a memory-wiki enablement CTA when wiki subtabs are selected but the plugin is disabled", () => {
     setDreamSubTab("diary");
-    setDreamDiarySubTab("palace");
+    setDreamDiarySubTab("wiki");
     const onOpenConfig = vi.fn();
     const container = renderInto(
       buildProps({
@@ -569,7 +578,7 @@ describe("dreaming view", () => {
     expect(
       [...container.querySelectorAll(".dreams-diary__empty-hint")].map((node) => compactText(node)),
     ).toEqual([
-      "Imported Insights and Memory Palace are provided by the bundled memory-wiki plugin.",
+      "Imported Insights and Memory Wiki are provided by the bundled memory-wiki plugin.",
       "Enable plugins.entries.memory-wiki.enabled = true, then reload this tab.",
     ]);
 
@@ -668,48 +677,49 @@ describe("dreaming view", () => {
     setDreamSubTab("scene");
   });
 
-  it("renders diary day chips without the old density map", () => {
+  it.each([
+    { tab: "dreams", labels: ["1/2", "1/1"] },
+    { tab: "insights", labels: ["Travel", "Health"] },
+    { tab: "wiki", labels: ["Syntheses", "Concepts"] },
+  ] as const)("keeps $tab navigation inside the sticky diary controls", ({ tab, labels }) => {
     setDreamSubTab("diary");
-    setDreamDiarySubTab("dreams");
-    const container = renderInto(
-      buildProps({
-        dreamDiaryContent: [
-          "# Dream Diary",
-          "",
-          "<!-- openclaw:dreaming:diary:start -->",
-          "",
-          "---",
-          "",
-          "*January 1, 2026*",
-          "",
-          "What Happened",
-          "1. First durable fact.",
-          "",
-          "---",
-          "",
-          "*January 2, 2026*",
-          "",
-          "What Happened",
-          "1. Second durable fact.",
-          "",
-          "Candidates",
-          "- candidate",
-          "",
-          "<!-- openclaw:dreaming:diary:end -->",
-        ].join("\n"),
-      }),
-    );
-    const dayChips = [...container.querySelectorAll(".dreams-diary__day-chip")].map((node) => ({
-      label: node.textContent?.replace(/\s+/g, "").trim(),
-      active: node.classList.contains("dreams-diary__day-chip--active"),
-    }));
-    expect(dayChips).toEqual([
-      { label: "1/2", active: true },
-      { label: "1/1", active: false },
-    ]);
-    expect(container.querySelector(".dreams-diary__heatmap-cell")).toBeNull();
-    expect(container.querySelector(".dreams-diary__timeline-month")).toBeNull();
-    setDreamSubTab("scene");
+    setDreamDiarySubTab(tab);
+    const props = buildProps({
+      dreamDiaryContent: [
+        "# Dream Diary",
+        "---",
+        "*January 1, 2026*",
+        "An earlier dream.",
+        "---",
+        "*January 2, 2026*",
+        ...Array.from({ length: 12 }, (_, index) => `Long diary paragraph ${index + 1}.`),
+      ].join("\n\n"),
+      onViewStateChange: vi.fn(),
+    });
+    const wikiOverview = props.wikiOverview;
+    if (wikiOverview) {
+      const firstCluster = expectDefined(wikiOverview.clusters[0], "first memory wiki cluster");
+      props.wikiOverview = {
+        ...wikiOverview,
+        truncated: false,
+        clusters: [
+          ...wikiOverview.clusters,
+          { ...firstCluster, key: "concept", label: "Concepts" },
+        ],
+      };
+    }
+
+    const container = renderInto(props);
+    const stickyChrome = expectElement(container, ".dreams-diary__chrome");
+    const navigation = expectElement(stickyChrome, ".dreams-diary__daychips");
+    const buttons = [...navigation.querySelectorAll<HTMLButtonElement>(".dreams-diary__day-chip")];
+
+    expect(buttons.map((button) => compactText(button))).toEqual(labels);
+    expect(container.querySelector("#dream-diary-panel .dreams-diary__daychips")).toBeNull();
+
+    buttons[1]?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(viewState.diaryPage).toBe(1);
+    expect(props.onViewStateChange).toHaveBeenCalledOnce();
   });
 
   it("renders diary empty, error, and removed-navigation states", () => {

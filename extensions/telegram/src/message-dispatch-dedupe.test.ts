@@ -3,16 +3,18 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Message } from "grammy/types";
-import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  createChannelReplayGuard,
+  type ChannelReplayClaimHandle,
+} from "openclaw/plugin-sdk/persistent-dedupe";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  buildTelegramMessageDispatchAccountReplayKey,
   claimTelegramMessageDispatchReplay,
   commitTelegramMessageDispatchReplay,
   createTelegramMessageDispatchReplayGuard,
   releaseTelegramMessageDispatchReplay,
-  TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE,
 } from "./message-dispatch-dedupe.js";
 
 type TelegramMessageDispatchReplayGuard = Parameters<
@@ -20,6 +22,12 @@ type TelegramMessageDispatchReplayGuard = Parameters<
 >[0]["guard"];
 
 const tempDirs: string[] = [];
+const DEFAULT_BOT_USER_ID = 99;
+const CURRENT_NAMESPACE = "global";
+const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE_PREFIX = "telegram.message-dispatch-dedupe";
+const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_PLUGIN_ID = "telegram-message-dispatch-dedupe";
+const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_MAX_ENTRIES = 50_000;
 let previousStateDir: string | undefined;
 
 function createStateDir(): string {
@@ -36,9 +44,23 @@ function message(params?: { chatId?: number; messageId?: number }): Message {
   } as Message;
 }
 
-function storedReplayKey(accountId: string, msg: Message): string {
+function legacyStoredReplayKey(accountId: string, msg: Message): string {
   const key = JSON.stringify(["message", String(msg.chat.id), msg.message_id]);
-  return buildTelegramMessageDispatchAccountReplayKey({ accountId, key });
+  return JSON.stringify(["account", accountId, key]);
+}
+
+function createLegacyReplayGuard() {
+  return createChannelReplayGuard<{ accountId: string; msg: Message }>({
+    dedupe: {
+      ttlMs: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_TTL_MS,
+      memoryMaxSize: 50_000,
+      pluginId: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_PLUGIN_ID,
+      namespacePrefix: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE_PREFIX,
+      stateMaxEntries: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_MAX_ENTRIES,
+    },
+    buildReplayKey: (event) => legacyStoredReplayKey(event.accountId, event.msg),
+    namespace: () => CURRENT_NAMESPACE,
+  });
 }
 
 function createTestReplayGuard(
@@ -74,14 +96,6 @@ function createTestClaim(params: {
   };
 }
 
-function createDeferred(): { promise: Promise<void>; resolve: () => void } {
-  let resolve!: () => void;
-  const promise = new Promise<void>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
-
 beforeEach(() => {
   previousStateDir = process.env.OPENCLAW_STATE_DIR;
   process.env.OPENCLAW_STATE_DIR = createStateDir();
@@ -101,65 +115,69 @@ afterEach(() => {
 });
 
 describe("Telegram message dispatch replay guard", () => {
-  it("persists committed dispatches across guard recreation", async () => {
+  it("isolates identical message coordinates across bot identities", async () => {
     const writer = createTelegramMessageDispatchReplayGuard();
     const first = await claimTelegramMessageDispatchReplay({
       guard: writer,
       accountId: "default",
+      botUserId: 101,
       msg: message(),
     });
-
     if (first.kind !== "claimed") {
-      throw new Error("expected initial claim");
+      throw new Error("expected first bot claim");
     }
-    expect(first.handle.keys).toEqual([storedReplayKey("default", message())]);
-    await commitTelegramMessageDispatchReplay({
+    await first.handle.commit();
+
+    const second = await claimTelegramMessageDispatchReplay({
       guard: writer,
-      claims: [first.handle],
+      accountId: "default",
+      botUserId: 202,
+      msg: message(),
     });
+    expect(second.kind).toBe("claimed");
+    if (second.kind === "claimed") {
+      await second.handle.commit();
+    }
 
     const reader = createTelegramMessageDispatchReplayGuard();
-    await expect(
-      claimTelegramMessageDispatchReplay({
-        guard: reader,
-        accountId: "default",
-        msg: message(),
-      }),
-    ).resolves.toEqual({ kind: "duplicate" });
+    for (const botUserId of [101, 202]) {
+      await expect(
+        claimTelegramMessageDispatchReplay({
+          guard: reader,
+          accountId: "default",
+          botUserId,
+          msg: message(),
+        }),
+      ).resolves.toEqual({ kind: "duplicate" });
+    }
   });
 
-  it("preserves concurrent commits", async () => {
-    const writer = createTelegramMessageDispatchReplayGuard();
-    const claims = await Promise.all(
-      Array.from({ length: 400 }, async (_, index) => {
-        const claim = await claimTelegramMessageDispatchReplay({
-          guard: writer,
-          accountId: "default",
-          msg: message({ messageId: index + 1 }),
-        });
-        if (claim.kind !== "claimed") {
-          throw new Error(`expected claim ${index + 1}`);
-        }
-        return claim.handle;
-      }),
-    );
+  it("starts a fresh dedupe window when legacy rows lack bot identity", async () => {
+    const legacy = createLegacyReplayGuard();
+    const legacyClaim = await legacy.claim({ accountId: "default", msg: message() });
+    if (legacyClaim.kind !== "claimed") {
+      throw new Error("expected legacy claim");
+    }
+    await legacyClaim.handle.commit();
 
-    await commitTelegramMessageDispatchReplay({
-      guard: writer,
-      claims,
+    const current = createTelegramMessageDispatchReplayGuard();
+    const currentClaim = await claimTelegramMessageDispatchReplay({
+      guard: current,
+      accountId: "default",
+      botUserId: DEFAULT_BOT_USER_ID,
+      msg: message(),
     });
-
-    const reader = createTelegramMessageDispatchReplayGuard();
-    await expect(reader.warmup(TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE)).resolves.toBe(
-      claims.length,
-    );
+    expect(currentClaim.kind).toBe("claimed");
+    if (currentClaim.kind === "claimed") {
+      currentClaim.handle.release();
+    }
   });
 
   it("commits replay keys serially before starting the next write", async () => {
     const events: string[] = [];
-    const firstGate = createDeferred();
-    const secondGate = createDeferred();
-    const secondStarted = createDeferred();
+    const firstGate = createDeferred<void>();
+    const secondGate = createDeferred<void>();
+    const secondStarted = createDeferred<void>();
     const guard = createTestReplayGuard();
     const claims = ["first", "second", "third"].map((key) =>
       createTestClaim({
@@ -198,33 +216,6 @@ describe("Telegram message dispatch replay guard", () => {
       "start:third",
       "finish:third",
     ]);
-  });
-
-  it("propagates per-key disk errors and stops the commit sequence", async () => {
-    const diskError = new Error("dedupe disk write failed");
-    const commitCalls: string[] = [];
-    const guard = createTestReplayGuard();
-    const claims = ["first", "second", "third"].map((key) =>
-      createTestClaim({
-        key,
-        commit: async (keyLocal, options) => {
-          commitCalls.push(keyLocal);
-          if (keyLocal === "second") {
-            options?.onDiskError?.(diskError);
-          }
-          return true;
-        },
-      }),
-    );
-
-    await expect(
-      commitTelegramMessageDispatchReplay({
-        guard,
-        claims,
-        requirePersistent: true,
-      }),
-    ).rejects.toBe(diskError);
-    expect(commitCalls).toEqual(["first", "second"]);
   });
 
   it("keeps live dispatch commits fail-open on dedupe disk errors", async () => {
@@ -292,11 +283,13 @@ describe("Telegram message dispatch replay guard", () => {
     const first = await claimTelegramMessageDispatchReplay({
       guard: writer,
       accountId: "default",
+      botUserId: DEFAULT_BOT_USER_ID,
       msg: message(),
     });
     const second = await claimTelegramMessageDispatchReplay({
       guard: writer,
       accountId: "work",
+      botUserId: DEFAULT_BOT_USER_ID,
       msg: message(),
     });
     if (first.kind !== "claimed" || second.kind !== "claimed") {
@@ -309,8 +302,18 @@ describe("Telegram message dispatch replay guard", () => {
     });
 
     const reader = createTelegramMessageDispatchReplayGuard();
-    await expect(reader.warmup(TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE)).resolves.toBe(2);
+    await expect(reader.warmup(CURRENT_NAMESPACE)).resolves.toBe(2);
     await expect(reader.warmup("default")).resolves.toBe(0);
+    for (const accountId of ["default", "work"]) {
+      await expect(
+        claimTelegramMessageDispatchReplay({
+          guard: reader,
+          accountId,
+          botUserId: DEFAULT_BOT_USER_ID,
+          msg: message(),
+        }),
+      ).resolves.toMatchObject({ kind: "duplicate" });
+    }
   });
 
   it("keeps accounts isolated and releases retryable pre-dispatch claims", async () => {
@@ -318,6 +321,7 @@ describe("Telegram message dispatch replay guard", () => {
     const first = await claimTelegramMessageDispatchReplay({
       guard,
       accountId: "default",
+      botUserId: DEFAULT_BOT_USER_ID,
       msg: message(),
     });
     if (first.kind !== "claimed") {
@@ -327,12 +331,10 @@ describe("Telegram message dispatch replay guard", () => {
     const work = await claimTelegramMessageDispatchReplay({
       guard,
       accountId: "work",
+      botUserId: DEFAULT_BOT_USER_ID,
       msg: message(),
     });
     expect(work.kind).toBe("claimed");
-    if (work.kind === "claimed") {
-      expect(work.handle.keys).toEqual([storedReplayKey("work", message())]);
-    }
 
     releaseTelegramMessageDispatchReplay({
       claims: [first.handle],
@@ -340,12 +342,10 @@ describe("Telegram message dispatch replay guard", () => {
     const retry = await claimTelegramMessageDispatchReplay({
       guard,
       accountId: "default",
+      botUserId: DEFAULT_BOT_USER_ID,
       msg: message(),
     });
     expect(retry.kind).toBe("claimed");
-    if (retry.kind === "claimed") {
-      expect(retry.handle.keys).toEqual(first.handle.keys);
-    }
   });
 
   it("lets an in-flight duplicate retry after the first claim is released", async () => {
@@ -353,6 +353,7 @@ describe("Telegram message dispatch replay guard", () => {
     const first = await claimTelegramMessageDispatchReplay({
       guard,
       accountId: "default",
+      botUserId: DEFAULT_BOT_USER_ID,
       msg: message(),
     });
     if (first.kind !== "claimed") {
@@ -362,6 +363,7 @@ describe("Telegram message dispatch replay guard", () => {
     const duplicate = claimTelegramMessageDispatchReplay({
       guard,
       accountId: "default",
+      botUserId: DEFAULT_BOT_USER_ID,
       msg: message(),
     });
     releaseTelegramMessageDispatchReplay({

@@ -1,19 +1,12 @@
-// Discord ask_user component dispatch and ephemeral feedback.
 import { ButtonStyle } from "discord-api-types/v10";
-import {
-  resolveQuestionOverGateway,
-  type ResolveQuestionOverGatewayParams,
-} from "openclaw/plugin-sdk/question-gateway-runtime";
+import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import { Button, type ButtonInteraction, type ComponentData } from "../internal/discord.js";
 import { parseDiscordQuestionData } from "../question-custom-id.js";
-import {
-  type AgentComponentContext,
-  resolveAuthorizedComponentInteraction,
-} from "./agent-components-helpers.js";
+import { resolveAuthorizedComponentInteraction } from "./agent-components-guild-auth.js";
+import type { AgentComponentContext } from "./agent-components.types.js";
 
-type QuestionResolver = (
-  params: ResolveQuestionOverGatewayParams,
-) => ReturnType<typeof resolveQuestionOverGateway>;
+type ResolveQuestionParams = Parameters<typeof questionGatewayRuntime.resolveOption>[0];
+type QuestionResolver = typeof questionGatewayRuntime.resolveOption;
 
 class QuestionButton extends Button {
   override label = "question";
@@ -22,7 +15,7 @@ class QuestionButton extends Button {
 
   constructor(
     private readonly ctx: {
-      cfg: ResolveQuestionOverGatewayParams["cfg"];
+      cfg: ResolveQuestionParams["cfg"];
       accountId: string;
       resolveQuestion: QuestionResolver;
       authorizeQuestion: (interaction: ButtonInteraction) => Promise<boolean>;
@@ -43,37 +36,34 @@ class QuestionButton extends Button {
     try {
       await interaction.acknowledge();
     } catch {}
-    let result: Awaited<ReturnType<QuestionResolver>>;
+    let content: string;
     try {
-      result = await this.ctx.resolveQuestion({
+      const result = await this.ctx.resolveQuestion({
         cfg: this.ctx.cfg,
         questionId: callback.questionId,
         optionIndex: callback.optionIndex,
         senderId: interaction.userId,
         clientDisplayName: `Discord question (${this.ctx.accountId})`,
       });
+      content =
+        result.status === "answered" ? "Answer submitted." : "This question was already answered.";
     } catch {
-      try {
-        await interaction.followUp({ content: "Could not submit this answer.", ephemeral: true });
-      } catch {}
-      return;
+      content = "Could not submit this answer.";
     }
     try {
-      await interaction.followUp({
-        content:
-          result.status === "answered"
-            ? "Answer submitted."
-            : "This question was already answered.",
-        ephemeral: true,
-      });
+      const feedback = { content, ephemeral: true };
+      // A rejected acknowledgement leaves the initial callback available, not the webhook.
+      await (interaction.responseState === "unacknowledged"
+        ? interaction.reply(feedback)
+        : interaction.followUp(feedback));
     } catch {
-      // Gateway state already committed; receipt delivery is best-effort.
+      // Gateway state may already be committed; receipt delivery is best-effort.
     }
   }
 }
 
 export function createDiscordQuestionButton(params: {
-  cfg: ResolveQuestionOverGatewayParams["cfg"];
+  cfg: ResolveQuestionParams["cfg"];
   accountId: string;
   authContext?: AgentComponentContext;
   authorizeQuestion?: (interaction: ButtonInteraction) => Promise<boolean>;
@@ -83,7 +73,7 @@ export function createDiscordQuestionButton(params: {
   return new QuestionButton({
     cfg: params.cfg,
     accountId: params.accountId,
-    resolveQuestion: params.resolveQuestion ?? resolveQuestionOverGateway,
+    resolveQuestion: params.resolveQuestion ?? questionGatewayRuntime.resolveOption,
     authorizeQuestion:
       params.authorizeQuestion ??
       (async (interaction) =>
@@ -94,7 +84,6 @@ export function createDiscordQuestionButton(params: {
             label: "discord question",
             componentLabel: "button",
             unauthorizedReply: "You are not authorized to answer this question.",
-            defer: false,
           }),
         )),
   });

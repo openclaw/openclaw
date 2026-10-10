@@ -13,7 +13,6 @@ public struct OpenClawChatVoiceNoteControl {
 
 struct OpenClawVoiceNoteButton: View {
     let control: OpenClawChatVoiceNoteControl
-    let compact: Bool
     let isComposerEnabled: Bool
     let isAttachmentInputEnabled: Bool
 
@@ -39,7 +38,7 @@ struct OpenClawVoiceNoteButton: View {
         .help("Record Voice Note")
         .accessibilityLabel("Record voice note")
         .accessibilityIdentifier("chat-voice-note-record")
-        .modifier(VoiceNoteButtonChrome(compact: self.compact))
+        .buttonStyle(.bordered)
         .controlSize(.small)
         .foregroundStyle(.secondary)
         .contentShape(Rectangle())
@@ -49,6 +48,7 @@ struct OpenClawVoiceNoteButton: View {
 
 struct OpenClawVoiceNoteRecordingRow: View {
     let recorder: OpenClawVoiceNoteRecorder
+    var embedded = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -83,28 +83,20 @@ struct OpenClawVoiceNoteRecordingRow: View {
                 Image(systemName: "checkmark")
             }
             .buttonStyle(.borderedProminent)
+            .tint(OpenClawChatTheme.accent)
             .controlSize(.small)
             .accessibilityLabel("Finish voice note")
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(OpenClawChatTheme.composerField)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(OpenClawChatTheme.composerBorder)))
-    }
-}
-
-private struct VoiceNoteButtonChrome: ViewModifier {
-    let compact: Bool
-
-    func body(content: Content) -> some View {
-        if self.compact {
-            content.buttonStyle(.plain)
-        } else {
-            content.buttonStyle(.bordered)
+        .padding(.horizontal, self.embedded ? 2 : 14)
+        .padding(.vertical, self.embedded ? 2 : 10)
+        .background {
+            if !self.embedded {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(OpenClawChatTheme.composerField)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .strokeBorder(OpenClawChatTheme.composerBorder))
+            }
         }
     }
 }

@@ -4,21 +4,17 @@
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeAgentId } from "../routing/session-key.js";
 import {
   hasAvatarUriScheme,
   isAvatarDataUrl,
   isAvatarHttpUrl,
   isWindowsAbsolutePath,
 } from "../shared/avatar-policy.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
+import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { resolveLocalAgentAvatarPath } from "./identity-avatar-file.js";
 import { loadAgentIdentityFromWorkspace } from "./identity-file.js";
 import { resolveAgentIdentity } from "./identity.js";
 
-// Agent avatar resolution for UI/public surfaces. Remote/data sources are
-// allowed directly; local files must stay inside the agent workspace and satisfy
-// shared avatar policy limits.
 export type AgentAvatarResolution =
   | { kind: "none"; reason: string; source?: string }
   | { kind: "local"; filePath: string; source: string }
@@ -33,42 +29,13 @@ type AgentAvatarPublicSourceInput = {
 const PUBLIC_AVATAR_SOURCE_MAX_CHARS = 256;
 const PUBLIC_DATA_AVATAR_HEADER_MAX_CHARS = 64;
 
-function resolveAvatarSource(
-  cfg: OpenClawConfig,
-  agentId: string,
-  opts?: { includeUiOverride?: boolean },
-): string | null {
-  const normalizedAgentId = normalizeAgentId(agentId);
-  const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
-  const fromUiConfig = normalizeOptionalString(cfg.ui?.assistant?.avatar) ?? null;
-  if (opts?.includeUiOverride) {
-    // UI override only wins for the default agent unless callers explicitly ask
-    // for it as a final fallback for non-default agents.
-    if (normalizedAgentId === defaultAgentId && fromUiConfig) {
-      return fromUiConfig;
-    }
-  }
-  const fromConfig =
-    normalizeOptionalString(resolveAgentIdentity(cfg, normalizedAgentId)?.avatar) ?? null;
-  if (fromConfig) {
-    return fromConfig;
-  }
-  const workspace = resolveAgentWorkspaceDir(cfg, normalizedAgentId);
-  const fromIdentity =
-    normalizeOptionalString(loadAgentIdentityFromWorkspace(workspace)?.avatar) ?? null;
-  if (fromIdentity) {
-    return fromIdentity;
-  }
-  return opts?.includeUiOverride ? fromUiConfig : null;
-}
-
 function isSafeRelativeAvatarSource(source: string): boolean {
   if (
     source.length > PUBLIC_AVATAR_SOURCE_MAX_CHARS ||
     source.startsWith("~") ||
     path.isAbsolute(source) ||
     isWindowsAbsolutePath(source) ||
-    (hasAvatarUriScheme(source) && !isWindowsAbsolutePath(source)) ||
+    hasAvatarUriScheme(source) ||
     source.includes("\0")
   ) {
     return false;
@@ -101,12 +68,12 @@ export function resolvePublicAgentAvatarSource(
 }
 
 /** Resolve the effective avatar for an agent, including config and IDENTITY.md. */
-export function resolveAgentAvatar(
-  cfg: OpenClawConfig,
-  agentId: string,
-  opts?: { includeUiOverride?: boolean },
-): AgentAvatarResolution {
-  const source = resolveAvatarSource(cfg, agentId, opts);
+export function resolveAgentAvatar(cfg: OpenClawConfig, agentId: string): AgentAvatarResolution {
+  const source =
+    normalizeOptionalString(resolveAgentIdentity(cfg, agentId)?.avatar) ??
+    normalizeOptionalString(
+      loadAgentIdentityFromWorkspace(resolveAgentWorkspaceDir(cfg, agentId))?.avatar,
+    );
   if (!source) {
     return { kind: "none", reason: "missing" };
   }

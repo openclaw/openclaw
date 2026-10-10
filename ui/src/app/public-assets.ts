@@ -1,43 +1,36 @@
-// Control UI module implements public assets behavior.
-import { inferBasePathFromPathname, normalizeBasePath } from "../app-route-paths.ts";
-import { resolveControlUiBasePath } from "./browser.ts";
+import {
+  CONTROL_UI_BUILD_ID_ATTRIBUTE,
+  type ControlUiRootPublicAsset,
+} from "../../../src/gateway/control-ui-root-assets.js";
+import { normalizeBasePath } from "../app-route-paths.ts";
+import { resolveControlUiPaths } from "./browser.ts";
 
 type ControlUiPublicAsset =
-  | "apple-touch-icon.png"
-  | "favicon-32.png"
-  | "favicon.ico"
-  | "favicon.svg"
-  | "manifest.webmanifest"
-  | "sw.js"
+  | ControlUiRootPublicAsset
+  | `fonts/${string}.css`
+  | `fonts/${string}.woff2`
+  | `themes/${string}.css`
   | `provider-icons/ProviderIcon-${string}.svg`
-  | `plugin-art/${string}.webp`;
+  | `cloud-provider-icons/${string}.svg`
+  | `file-icons/${string}.svg`
+  | `app-art/${string}.webp`
+  | `community-art/${string}.webp`;
 
 export function controlUiPublicAssetPath(
   asset: ControlUiPublicAsset,
-  basePath: string | null | undefined,
+  resourceBasePath: string | null | undefined,
 ): string {
-  const base = normalizeBasePath(basePath ?? "");
-  return base ? `${base}/${asset}` : `/${asset}`;
+  const buildId =
+    asset !== "sw.js" && typeof document !== "undefined"
+      ? document.documentElement.getAttribute(CONTROL_UI_BUILD_ID_ATTRIBUTE)
+      : null;
+  const version = buildId ? `?v=${encodeURIComponent(buildId)}` : "";
+  return `${normalizeBasePath(resourceBasePath ?? "")}/${asset}${version}`;
 }
 
-export function inferControlUiPublicAssetPath(
-  asset: ControlUiPublicAsset,
-  params?: {
-    basePath?: string | null;
-    pathname?: string;
-  },
-): string {
-  const basePath =
-    params?.basePath ??
-    (params?.pathname === undefined
-      ? resolveControlUiBasePath(currentPathname())
-      : inferBasePathFromPathname(params.pathname));
-  return controlUiPublicAssetPath(asset, basePath);
-}
-
-function currentPathname(): string {
-  if (typeof window === "undefined") {
-    return "/";
-  }
-  return window.location.pathname;
+export function inferControlUiPublicAssetPath(asset: ControlUiPublicAsset): string {
+  const resourceBasePath = resolveControlUiPaths(
+    typeof window === "undefined" ? "/" : window.location.pathname,
+  )[1];
+  return controlUiPublicAssetPath(asset, resourceBasePath);
 }

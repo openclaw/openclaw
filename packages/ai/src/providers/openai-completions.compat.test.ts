@@ -1,5 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AssistantMessage, Context, Model, OpenAICompletionsCompat } from "../types.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  configureAiTransportHost,
+  getAiTransportHost,
+  type AiProviderRequestCapabilities,
+  type AiProviderRequestPolicyInput,
+} from "../host.js";
+import type { AssistantMessage, Context, Model } from "../types.js";
 
 const mockOpenAI = vi.hoisted(() => ({
   chunks: [] as unknown[],
@@ -20,20 +26,17 @@ vi.mock("openai", () => {
         create: (payload: unknown, requestOptions: unknown) => {
           mockOpenAI.payloads.push(payload);
           mockOpenAI.requestOptions.push(requestOptions);
-          return {
-            withResponse: async () => {
+          async function* stream() {
+            yield* mockOpenAI.chunks;
+          }
+          return Object.assign(Promise.resolve(stream()), {
+            asResponse: async () => {
               if (mockOpenAI.nextError !== undefined) {
                 throw mockOpenAI.nextError;
               }
-              async function* stream() {
-                yield* mockOpenAI.chunks;
-              }
-              return {
-                data: stream(),
-                response: { status: 200, headers: new Headers() },
-              };
+              return new Response(null, { status: 200 });
             },
-          };
+          });
         },
       },
     };
@@ -42,6 +45,12 @@ vi.mock("openai", () => {
   return { default: MockOpenAI };
 });
 
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
+import {
+  resolveOpenAICompletionsCompat,
+  type ResolvedOpenAICompletionsCompat,
+} from "../transports/openai-completions-compat.js";
+import { createZeroUsage } from "../usage.test-support.js";
 import { streamOpenAICompletions } from "./openai-completions.js";
 
 const baseModel: Model<"openai-completions"> = {
@@ -59,14 +68,148 @@ const baseModel: Model<"openai-completions"> = {
 
 const userMessage = { role: "user", content: "hello", timestamp: 1 } as const;
 const context: Context = { messages: [userMessage] };
+let previousAiTransportHost: ReturnType<typeof getAiTransportHost>;
 
-function createModel(
-  overrides: Partial<Model<"openai-completions">> & {
-    compat?: OpenAICompletionsCompat;
-  } = {},
-): Model<"openai-completions"> {
+function createModel(overrides: Partial<Model<"openai-completions">> = {}) {
   return { ...baseModel, ...overrides };
 }
+
+function resolveTestEndpointClass(baseUrl: string | undefined): string {
+  if (!baseUrl) {
+    return "default";
+  }
+  const host = new URL(baseUrl).hostname;
+  const exactClasses: Record<string, string> = {
+    "api.openai.com": "openai-public",
+    "api.cerebras.ai": "cerebras-native",
+    "api.x.ai": "xai-native",
+    "api.moonshot.ai": "moonshot-native",
+    "api.moonshot.cn": "moonshot-native",
+    "llm.chutes.ai": "chutes-native",
+    "api.z.ai": "zai-native",
+    "api.deepseek.com": "deepseek-native",
+    "dashscope.aliyuncs.com": "modelstudio-native",
+    "127.0.0.1": "local",
+    localhost: "local",
+  };
+  const exactClass = exactClasses[host];
+  if (exactClass) {
+    return exactClass;
+  }
+  if (host.endsWith(".openai.azure.com")) {
+    return "azure-openai";
+  }
+  if (host.endsWith("openrouter.ai")) {
+    return "openrouter";
+  }
+  if (host.endsWith("opencode.ai")) {
+    return "opencode-native";
+  }
+  if (host.endsWith("xiaomimimo.com")) {
+    return "xiaomi-native";
+  }
+  return "custom";
+}
+
+function resolveTestCapabilities(
+  input: AiProviderRequestPolicyInput,
+): AiProviderRequestCapabilities {
+  const endpointClass = resolveTestEndpointClass(input.baseUrl);
+  const provider = input.provider;
+  const knownProviderFamily =
+    provider === "moonshotai" || provider === "moonshotai-cn"
+      ? "moonshot"
+      : provider === "openai" || provider === "azure-openai"
+        ? "openai-family"
+        : provider === "qwen" || provider === "dashscope"
+          ? "modelstudio"
+          : (provider ?? "unknown");
+  const usesConfiguredBaseUrl = endpointClass !== "default";
+  const usesKnownNativeOpenAIEndpoint =
+    endpointClass === "openai-public" ||
+    endpointClass === "openai" ||
+    endpointClass === "azure-openai";
+  return {
+    endpointClass,
+    knownProviderFamily,
+    supportsNativeStreamingUsageCompat: endpointClass === "moonshot-native",
+    supportsOpenAICompletionsStreamingUsageCompat: false,
+    usesExplicitProxyLikeEndpoint: usesConfiguredBaseUrl && !usesKnownNativeOpenAIEndpoint,
+    allowsAnthropicServiceTier: false,
+  };
+}
+
+type DuplicatedCompatFields = Pick<
+  ResolvedOpenAICompletionsCompat,
+  | "supportsStore"
+  | "supportsDeveloperRole"
+  | "supportsReasoningEffort"
+  | "maxTokensField"
+  | "thinkingFormat"
+  | "supportsStrictMode"
+  | "supportsJsonSchemaResponseFormat"
+>;
+
+const defaultDuplicatedCompat = {
+  supportsStore: true,
+  supportsDeveloperRole: true,
+  supportsReasoningEffort: true,
+  maxTokensField: "max_completion_tokens",
+  thinkingFormat: "openai",
+  supportsStrictMode: true,
+  supportsJsonSchemaResponseFormat: false,
+} satisfies DuplicatedCompatFields;
+
+function duplicatedCompatFields(compat: ResolvedOpenAICompletionsCompat): DuplicatedCompatFields {
+  return {
+    supportsStore: compat.supportsStore,
+    supportsDeveloperRole: compat.supportsDeveloperRole,
+    supportsReasoningEffort: compat.supportsReasoningEffort,
+    maxTokensField: compat.maxTokensField,
+    thinkingFormat: compat.thinkingFormat,
+    supportsStrictMode: compat.supportsStrictMode,
+    supportsJsonSchemaResponseFormat: compat.supportsJsonSchemaResponseFormat,
+  };
+}
+
+const canonicalProxyCompat = {
+  ...defaultDuplicatedCompat,
+  supportsStore: false,
+  supportsDeveloperRole: false,
+  supportsReasoningEffort: false,
+  supportsStrictMode: false,
+} satisfies DuplicatedCompatFields;
+const canonicalOpenRouterCompat = {
+  ...canonicalProxyCompat,
+  thinkingFormat: "openrouter",
+} satisfies DuplicatedCompatFields;
+const canonicalChutesCompat = {
+  ...canonicalProxyCompat,
+  maxTokensField: "max_tokens",
+} satisfies DuplicatedCompatFields;
+const canonicalTogetherCompat = {
+  ...canonicalChutesCompat,
+  thinkingFormat: "together",
+} satisfies DuplicatedCompatFields;
+
+type MatrixParityCase = readonly [
+  name: string,
+  overrides: Partial<Model<"openai-completions">>,
+  expected: DuplicatedCompatFields,
+];
+
+const legacyMatrixParityCases = [
+  [
+    "OpenRouter Anthropic model",
+    { provider: "openrouter", id: "anthropic/claude-sonnet-4.6" },
+    canonicalOpenRouterCompat,
+  ],
+  [
+    "endpoint together.xyz",
+    { provider: "custom", baseUrl: "https://api.together.xyz/v1" },
+    canonicalTogetherCompat,
+  ],
+] satisfies MatrixParityCase[];
 
 function chunk(delta: Record<string, unknown>, finishReason?: string): unknown {
   return {
@@ -76,6 +219,8 @@ function chunk(delta: Record<string, unknown>, finishReason?: string): unknown {
 }
 
 beforeEach(() => {
+  previousAiTransportHost = getAiTransportHost();
+  configureAiTransportHost({ resolveProviderRequestCapabilities: resolveTestCapabilities });
   mockOpenAI.chunks = [chunk({ content: "ok" }), chunk({}, "stop")];
   mockOpenAI.clientOptions = [];
   mockOpenAI.payloads = [];
@@ -83,7 +228,177 @@ beforeEach(() => {
   mockOpenAI.nextError = undefined;
 });
 
+afterEach(() => {
+  configureAiTransportHost(previousAiTransportHost);
+});
+
 describe("OpenAI-compatible completions compatibility", () => {
+  it.each([{ provider: "qwen", baseUrl: "", expected: "anthropic" }])(
+    "defaults cache markers for $provider at $baseUrl",
+    ({ provider, baseUrl, expected }) => {
+      expect(
+        resolveOpenAICompletionsCompat(createModel({ provider, baseUrl })).cacheControlFormat,
+      ).toBe(expected);
+    },
+  );
+
+  it.each([true])(
+    "sends custom-endpoint long TTL only with explicit support: %s",
+    async (supportsLongCacheRetention) => {
+      await streamOpenAICompletions(
+        createModel({ compat: { cacheControlFormat: "anthropic", supportsLongCacheRetention } }),
+        context,
+        { apiKey: "test", cacheRetention: "long" },
+      ).result();
+      expect(mockOpenAI.payloads).toHaveLength(1);
+      const cacheControl = supportsLongCacheRetention
+        ? { type: "ephemeral", ttl: "1h" }
+        : { type: "ephemeral" };
+      expect(JSON.stringify(mockOpenAI.payloads[0])).toContain(
+        `"cache_control":${JSON.stringify(cacheControl)}`,
+      );
+    },
+  );
+
+  it.each(["anthropic"] as const)(
+    "requires explicit cache format %s for Qwen behind a custom endpoint",
+    async (cacheControlFormat) => {
+      const model = createModel({
+        id: "qwen-plus",
+        provider: "qwen",
+        compat: { cacheControlFormat },
+      });
+      await streamOpenAICompletions(
+        model,
+        {
+          systemPrompt: "Follow instructions.",
+          messages: [userMessage],
+          tools: [
+            {
+              name: "lookup",
+              description: "Look up data",
+              parameters: { type: "object", properties: {} },
+            },
+          ],
+        },
+        { apiKey: "test", cacheRetention: "short" },
+      ).result();
+
+      expect(mockOpenAI.payloads).toHaveLength(1);
+      const markers = JSON.stringify(mockOpenAI.payloads[0]).match(/"cache_control":/g) ?? [];
+      expect(markers).toHaveLength(cacheControlFormat === "anthropic" ? 3 : 0);
+      expect(resolveOpenAICompletionsCompat(model).cacheControlFormat).toBe(cacheControlFormat);
+    },
+  );
+
+  it.each(["none"] as const)(
+    "sends Model Studio cache markers without OpenAI cache fields for retention %s",
+    async (cacheRetention) => {
+      const model = createModel({
+        id: "qwen-plus",
+        provider: "custom",
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      });
+      await streamOpenAICompletions(
+        model,
+        {
+          systemPrompt: "Follow instructions.",
+          messages: [userMessage, { ...userMessage, content: "latest", timestamp: 2 }],
+          tools: ["alpha", "zeta"].map((name) => ({
+            name,
+            description: name,
+            parameters: { type: "object", properties: {} },
+          })),
+        },
+        { apiKey: "test", sessionId: "session-test", cacheRetention },
+      ).result();
+
+      const cacheControl = cacheRetention === "none" ? undefined : { type: "ephemeral" };
+      const content = (text: string) =>
+        cacheControl ? [{ type: "text", text, cache_control: cacheControl }] : text;
+      const expectedPayload = {
+        model: "qwen-plus",
+        messages: [
+          { role: "system", content: content("Follow instructions.") },
+          { role: "user", content: "hello" },
+          { role: "user", content: content("latest") },
+        ],
+        stream: true,
+        tools: ["alpha", "zeta"].map((name) => ({
+          type: "function",
+          function: { name, description: name, parameters: { type: "object", properties: {} } },
+        })),
+      };
+      // Compare wire JSON, where undefined cache fields must be omitted.
+      expect(JSON.stringify(mockOpenAI.payloads[0])).toBe(JSON.stringify(expectedPayload));
+    },
+  );
+
+  it.each(legacyMatrixParityCases)(
+    "maps former provider matrix case %s to canonical endpoint policy",
+    (_name, overrides, expected) => {
+      expect(
+        duplicatedCompatFields(resolveOpenAICompletionsCompat(createModel(overrides))),
+      ).toEqual(expected);
+    },
+  );
+
+  it("lets Ollama tools win over JSON Schema response formats", async () => {
+    const model = createModel({
+      id: "gemma4:e4b",
+      provider: "ollama",
+      baseUrl: "http://127.0.0.1:11434/v1",
+      compat: { supportsJsonSchemaResponseFormat: true },
+    });
+
+    await streamOpenAICompletions(
+      model,
+      {
+        messages: [userMessage],
+        tools: [
+          {
+            name: "weather",
+            description: "Get weather",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+      },
+      {
+        apiKey: "test",
+        responseFormat: {
+          type: "object",
+          properties: { reply: { type: "string" } },
+          required: ["reply"],
+          additionalProperties: false,
+        },
+      },
+    ).result();
+
+    expect(mockOpenAI.payloads[0]).toMatchObject({ tools: [expect.any(Object)] });
+    expect(mockOpenAI.payloads[0]).not.toHaveProperty("response_format");
+  });
+
+  it("omits JSON Schema response formats for hosted Ollama Cloud", async () => {
+    const model = createModel({
+      id: "gemma4",
+      provider: "ollama",
+      baseUrl: "https://ollama.com/v1",
+      compat: { supportsJsonSchemaResponseFormat: true },
+    });
+
+    await streamOpenAICompletions(model, context, {
+      apiKey: "test",
+      responseFormat: {
+        type: "object",
+        properties: { reply: { type: "string" } },
+        required: ["reply"],
+        additionalProperties: false,
+      },
+    }).result();
+
+    expect(mockOpenAI.payloads[0]).not.toHaveProperty("response_format");
+  });
+
   it("buffers encrypted reasoning details until their tool call arrives", async () => {
     const reasoningDetail = {
       type: "reasoning.encrypted",
@@ -138,35 +453,34 @@ describe("OpenAI-compatible completions compatibility", () => {
     expect(replayedAssistant?.reasoning_details).toEqual([reasoningDetail]);
   });
 
-  it.each([
-    { modelId: "openai/gpt-5.6-luna", expectedRole: "developer" },
-    { modelId: "anthropic/claude-sonnet-4.6", expectedRole: "developer" },
-    { modelId: "moonshotai/kimi-k2.6", expectedRole: "system" },
-  ])("uses $expectedRole instructions for OpenRouter model $modelId", async (testCase) => {
-    let payload: unknown;
-    const model = createModel({
-      id: testCase.modelId,
-      provider: "openrouter",
-      baseUrl: "https://openrouter.ai/api/v1",
-      reasoning: true,
-    });
+  it.each([{ modelId: "anthropic/claude-sonnet-4.6", expectedRole: "system" }])(
+    "uses $expectedRole instructions for OpenRouter model $modelId",
+    async (testCase) => {
+      let payload: unknown;
+      const model = createModel({
+        id: testCase.modelId,
+        provider: "openrouter",
+        baseUrl: "https://openrouter.ai/api/v1",
+        reasoning: true,
+      });
 
-    await streamOpenAICompletions(
-      model,
-      { ...context, systemPrompt: "Follow instructions." },
-      {
-        apiKey: "test",
-        onPayload(nextPayload) {
-          payload = nextPayload;
-          throw new Error("payload captured");
+      await streamOpenAICompletions(
+        model,
+        { ...context, systemPrompt: "Follow instructions." },
+        {
+          apiKey: "test",
+          onPayload(nextPayload) {
+            payload = nextPayload;
+            throw new Error("payload captured");
+          },
         },
-      },
-    ).result();
+      ).result();
 
-    expect((payload as { messages?: Array<{ role?: string }> }).messages?.[0]?.role).toBe(
-      testCase.expectedRole,
-    );
-  });
+      expect((payload as { messages?: Array<{ role?: string }> }).messages?.[0]?.role).toBe(
+        testCase.expectedRole,
+      );
+    },
+  );
 
   it("sends configured OpenRouter routing through a compatible proxy", async () => {
     let payload: unknown;
@@ -187,21 +501,16 @@ describe("OpenAI-compatible completions compatibility", () => {
   it.each([
     {
       name: "OpenAI",
-      model: createModel({ compat: { sendSessionAffinityHeaders: true } }),
+      model: createModel({
+        headers: { Authorization: "Bearer proxy-key" },
+        compat: { sendSessionAffinityHeaders: true },
+      }),
       expectedHeaders: {
+        Authorization: "Bearer proxy-key",
         session_id: "session-123",
         "x-client-request-id": "session-123",
         "x-session-affinity": "session-123",
       },
-    },
-    {
-      name: "OpenRouter",
-      model: createModel({
-        provider: "openrouter",
-        baseUrl: "https://openrouter.ai/api/v1",
-        compat: { sendSessionAffinityHeaders: true },
-      }),
-      expectedHeaders: { "x-session-id": "session-123" },
     },
     {
       name: "OpenRouter-compatible proxy",
@@ -213,17 +522,28 @@ describe("OpenAI-compatible completions compatibility", () => {
       }),
       expectedHeaders: { "x-session-id": "session-123" },
     },
-  ])("sends exact $name session-affinity headers", async ({ model, expectedHeaders }) => {
-    await streamOpenAICompletions(model, context, {
-      apiKey: "test",
-      sessionId: "session-123",
-    }).result();
+    {
+      name: "OpenCode Zen",
+      model: createModel({ baseUrl: "https://opencode.ai/zen/v1" }),
+      expectedHeaders: { "x-opencode-session": "session-123" },
+    },
+  ])(
+    "sends exact $name session-affinity headers",
+    async ({ model, expectedHeaders, ...testCase }) => {
+      await streamOpenAICompletions(model, context, {
+        apiKey: "test",
+        sessionId: "session-123",
+        ...testCase,
+      }).result();
 
-    const clientOptions = mockOpenAI.clientOptions[0] as {
-      defaultHeaders?: Record<string, string>;
-    };
-    expect(clientOptions.defaultHeaders).toEqual(expectedHeaders);
-  });
+      const clientOptions = mockOpenAI.clientOptions[0] as {
+        defaultHeaders?: Record<string, string>;
+      };
+      expect(mockOpenAI.clientOptions).toHaveLength(1);
+      expect(mockOpenAI.clientOptions[0]).toMatchObject({ apiKey: "test" });
+      expect(clientOptions.defaultHeaders).toEqual(expectedHeaders);
+    },
+  );
 
   it("retains replayed Z.AI thinking when reasoning is enabled", async () => {
     let payload: unknown;
@@ -246,14 +566,7 @@ describe("OpenAI-compatible completions compatibility", () => {
         },
         { type: "toolCall", id: "call_1", name: "lookup", arguments: {} },
       ],
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      usage: createZeroUsage(),
       stopReason: "toolUse",
       timestamp: 2,
     };
@@ -264,14 +577,7 @@ describe("OpenAI-compatible completions compatibility", () => {
         messages: [
           userMessage,
           assistant,
-          {
-            role: "toolResult",
-            toolCallId: "call_1",
-            toolName: "lookup",
-            content: [{ type: "text", text: "done" }],
-            isError: false,
-            timestamp: 3,
-          },
+          makeTextToolResult("call_1", "lookup", "done", false, 3),
         ],
       },
       {
@@ -294,28 +600,24 @@ describe("OpenAI-compatible completions compatibility", () => {
     });
   });
 
-  it.each([
-    { configured: undefined, expected: 0 },
-    { configured: 3, expected: 3 },
-  ])("uses maxRetries=$expected when configured value is $configured", async (testCase) => {
-    await streamOpenAICompletions(baseModel, context, {
-      apiKey: "test",
-      maxRetries: testCase.configured,
-    }).result();
-
-    expect(mockOpenAI.requestOptions[0]).toMatchObject({ maxRetries: testCase.expected });
-  });
-
-  it("surfaces HTTP response body text from OpenAI-compatible errors", async () => {
-    mockOpenAI.nextError = Object.assign(new Error("502 status code (no body)"), {
-      status: 502,
-      body: "gateway maintenance",
+  it("redacts OpenRouter terminal body and raw metadata from one error projection", async () => {
+    const media = "QUJDRA==";
+    mockOpenAI.nextError = Object.assign(new Error("400 status code (no body)"), {
+      status: 400,
+      body: { data: [{ b64_json: media }] },
+      error: {
+        code: "bad_image",
+        type: "invalid_request_error",
+        metadata: { raw: `render failed data:image/png;base64,${media}` },
+      },
     });
 
-    const result = await streamOpenAICompletions(baseModel, context, {
-      apiKey: "test",
-    }).result();
+    const result = await streamOpenAICompletions(baseModel, context, { apiKey: "test" }).result();
 
-    expect(result.errorMessage).toBe("502: gateway maintenance");
+    expect(result).toMatchObject({
+      errorCode: "bad_image",
+      errorType: "invalid_request_error",
+    });
+    expect(JSON.stringify(result)).not.toContain(media);
   });
 });

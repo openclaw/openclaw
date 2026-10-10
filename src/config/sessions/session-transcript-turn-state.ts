@@ -1,17 +1,49 @@
+import { isDeepStrictEqual } from "node:util";
 import {
   mergeRestartRecoveryTerminalRunIds,
   sameRestartRecoveryTerminalRunIds,
 } from "./restart-recovery-state.js";
 import type {
+  SessionLifecycleRevisionExpectation,
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
 } from "./session-transcript-turn-lifecycle.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
+// Metadata timestamps do not fence recovery; writer and lifecycle checks are separate.
+// Keep absent recovery fields explicit so a newly introduced claim fails the commit check.
+export function buildRestartRecoveryExpectedState(
+  entry: SessionEntry,
+  mainRestartRecovery?: { cycleId: string; revision: number },
+): SessionTranscriptTurnExpectedState {
+  const expectedMainRestartRecovery = mainRestartRecovery ?? entry.mainRestartRecovery;
+  return {
+    abortedLastRun: entry.abortedLastRun,
+    mainRestartRecoveryCycleId: expectedMainRestartRecovery?.cycleId,
+    mainRestartRecoveryRevision: expectedMainRestartRecovery?.revision,
+    restartRecoveryBeforeAgentReplyState: entry.restartRecoveryBeforeAgentReplyState,
+    restartRecoveryDeliveryReceiptState: entry.restartRecoveryDeliveryReceiptState,
+    restartRecoveryDeliveryToolCallId: entry.restartRecoveryDeliveryToolCallId,
+    restartRecoveryDeliveryRequestFingerprint: entry.restartRecoveryDeliveryRequestFingerprint,
+    restartRecoveryDeliveryRunId: entry.restartRecoveryDeliveryRunId,
+    restartRecoveryDeliverySourceRunId: entry.restartRecoveryDeliverySourceRunId,
+    restartRecoveryRequesterAccountId: entry.restartRecoveryRequesterAccountId,
+    restartRecoveryRequesterSenderId: entry.restartRecoveryRequesterSenderId,
+    restartRecoverySameChannelThreadRequired: entry.restartRecoverySameChannelThreadRequired,
+    restartRecoveryOperatorSource: entry.restartRecoveryOperatorSource,
+    restartRecoverySourceIngress: entry.restartRecoverySourceIngress,
+    restartRecoverySourceReplyDeliveryMode: entry.restartRecoverySourceReplyDeliveryMode,
+    restartRecoveryTerminalRunIds: entry.restartRecoveryTerminalRunIds,
+    status: entry.status,
+  };
+}
+
 export function sessionMatchesExpectedTranscriptTurn<T extends { entry: SessionEntry }>(
   selected: T | undefined,
   expected: {
-    expectedLifecycleRevision?: string;
+    expectedLifecycleRevision?: SessionLifecycleRevisionExpectation;
+    expectedWriterRunId?: SessionTranscriptTurnExpectedState["expectedWriterRunId"];
+    expectedOwner?: Pick<SessionEntry, "lifecycleRevision" | "activeWriterRunId">;
     expectedSessionState?: SessionTranscriptTurnExpectedState;
     expectedSessionId: string;
   },
@@ -21,15 +53,17 @@ export function sessionMatchesExpectedTranscriptTurn<T extends { entry: SessionE
     selected &&
     selected.entry.sessionId === expected.expectedSessionId &&
     (expected.expectedLifecycleRevision === undefined ||
-      selected.entry.lifecycleRevision === expected.expectedLifecycleRevision) &&
+      selected.entry.lifecycleRevision === (expected.expectedLifecycleRevision ?? undefined)) &&
+    (expected.expectedWriterRunId === undefined ||
+      selected.entry.activeWriterRunId === expected.expectedWriterRunId) &&
+    (expected.expectedOwner === undefined ||
+      (selected.entry.lifecycleRevision === expected.expectedOwner.lifecycleRevision &&
+        selected.entry.activeWriterRunId === expected.expectedOwner.activeWriterRunId)) &&
     (expectedState === undefined ||
       (selected.entry.abortedLastRun === expectedState.abortedLastRun &&
-        (expectedState.mainRestartRecoveryCycleId === undefined ||
-          selected.entry.mainRestartRecovery?.cycleId ===
-            expectedState.mainRestartRecoveryCycleId) &&
-        (expectedState.mainRestartRecoveryRevision === undefined ||
-          selected.entry.mainRestartRecovery?.revision ===
-            expectedState.mainRestartRecoveryRevision) &&
+        selected.entry.mainRestartRecovery?.cycleId === expectedState.mainRestartRecoveryCycleId &&
+        selected.entry.mainRestartRecovery?.revision ===
+          expectedState.mainRestartRecoveryRevision &&
         selected.entry.restartRecoveryBeforeAgentReplyState ===
           expectedState.restartRecoveryBeforeAgentReplyState &&
         selected.entry.restartRecoveryDeliveryReceiptState ===
@@ -48,6 +82,10 @@ export function sessionMatchesExpectedTranscriptTurn<T extends { entry: SessionE
           expectedState.restartRecoveryRequesterSenderId &&
         selected.entry.restartRecoverySameChannelThreadRequired ===
           expectedState.restartRecoverySameChannelThreadRequired &&
+        isDeepStrictEqual(
+          selected.entry.restartRecoveryOperatorSource,
+          expectedState.restartRecoveryOperatorSource,
+        ) &&
         selected.entry.restartRecoverySourceIngress ===
           expectedState.restartRecoverySourceIngress &&
         selected.entry.restartRecoverySourceReplyDeliveryMode ===
@@ -56,8 +94,7 @@ export function sessionMatchesExpectedTranscriptTurn<T extends { entry: SessionE
           selected.entry.restartRecoveryTerminalRunIds,
           expectedState.restartRecoveryTerminalRunIds,
         ) &&
-        selected.entry.status === expectedState.status &&
-        selected.entry.updatedAt === expectedState.updatedAt)),
+        selected.entry.status === expectedState.status)),
   );
 }
 
@@ -65,16 +102,15 @@ export function buildExpectedTranscriptTurnSessionPatch(params: {
   appendedMessages: readonly { appended: boolean }[];
   currentEntry: SessionEntry;
   expectedSessionState?: SessionTranscriptTurnExpectedState;
-  sessionFile: string;
   sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
   touchSessionEntry?: boolean;
 }): Partial<SessionEntry> {
-  const appendedCount = params.appendedMessages.filter((message) => message.appended).length;
+  const hasAppendedMessage = params.appendedMessages.some((message) => message.appended);
   const acceptedMessage =
-    appendedCount > 0 ||
+    hasAppendedMessage ||
     (params.expectedSessionState !== undefined &&
       params.appendedMessages.some((message) => !message.appended));
-  const touchUpdatedAt = params.touchSessionEntry === true && appendedCount > 0 ? Date.now() : 0;
+  const touchUpdatedAt = params.touchSessionEntry === true && hasAppendedMessage ? Date.now() : 0;
   const restartRecoveryTerminalRunIds = params.sessionLifecyclePatch?.restartRecoveryTerminalRunIds
     ? mergeRestartRecoveryTerminalRunIds(
         params.currentEntry.restartRecoveryTerminalRunIds,
@@ -84,9 +120,6 @@ export function buildExpectedTranscriptTurnSessionPatch(params: {
   return {
     ...(acceptedMessage ? params.sessionLifecyclePatch : undefined),
     ...(acceptedMessage && restartRecoveryTerminalRunIds ? { restartRecoveryTerminalRunIds } : {}),
-    ...(params.currentEntry.sessionFile === params.sessionFile
-      ? {}
-      : { sessionFile: params.sessionFile }),
     ...(touchUpdatedAt > 0
       ? {
           updatedAt: Math.max(

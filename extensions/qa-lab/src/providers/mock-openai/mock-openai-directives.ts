@@ -1,12 +1,13 @@
-// QA Lab mock provider prompt directives and tool declarations.
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   type ResponsesInputItem,
   QA_A2A_MESSAGE_TOOL_MIRROR_PROMPT_RE,
-  QA_TOOL_SEARCH_PROMPT_RE,
-  QA_TOOL_SEARCH_FAILURE_PROMPT_RE,
 } from "./mock-openai-contracts.js";
-import { extractInstructionsText } from "./mock-openai-input.js";
+import { extractCurrentRuntimeContextTexts, extractInstructionsText } from "./mock-openai-input.js";
 function extractLastCapture(text: string, pattern: RegExp) {
   let lastMatch: RegExpExecArray | null = null;
   const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
@@ -17,65 +18,62 @@ function extractLastCapture(text: string, pattern: RegExp) {
   return lastMatch?.[1]?.trim() || null;
 }
 
-function extractCaptures(text: string, pattern: RegExp) {
-  const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
-  const globalPattern = new RegExp(pattern.source, flags);
-  return Array.from(text.matchAll(globalPattern), (match) => match[1]?.trim()).filter(Boolean);
-}
-
-export function extractLastMatchingUserText(texts: string[], pattern: RegExp) {
-  for (let index = texts.length - 1; index >= 0; index -= 1) {
-    const text = texts[index] ?? "";
-    if (pattern.test(text)) {
-      return text;
-    }
-  }
-  return "";
-}
-
 export function extractExactReplyDirective(text: string) {
-  const backtickedMatch = extractLastCapture(text, /reply(?: with)? exactly\s+`([^`]+)`/i);
-  if (backtickedMatch) {
-    return backtickedMatch;
-  }
   return (
+    extractLastCapture(text, /reply(?: with)? exactly\s+`([^`]+)`/i) ??
     extractLastCapture(text, /reply(?: with)? exactly:\s*([^\n]+)/i) ??
     extractLastCapture(text, /reply(?: with)? exactly\s+(?!with\b)([^\s`.,;:!?]+)/i)
   );
 }
 
 export function extractFinishExactlyDirective(text: string) {
-  const backtickedMatch = extractLastCapture(text, /finish with exactly\s+`([^`]+)`/i);
-  if (backtickedMatch) {
-    return backtickedMatch;
-  }
-  return extractLastCapture(text, /finish with exactly\s+([^\s`.,;:!?]+)/i);
+  return (
+    extractLastCapture(text, /finish with exactly\s+`([^`]+)`/i) ??
+    extractLastCapture(text, /finish with exactly\s+([^\s`.,;:!?]+)/i)
+  );
 }
 
 export function extractExactMarkerDirective(text: string) {
-  const backtickedMatch = extractLastCapture(text, /exact marker\b[^:\n]{0,120}:\s*`([^`]+)`/i);
-  if (backtickedMatch) {
-    return backtickedMatch;
+  return (
+    extractLastCapture(text, /exact marker\b[^:\n]{0,120}:\s*`([^`]+)`/i) ??
+    extractLastCapture(text, /exact marker\b[^:\n]{0,120}:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i)
+  );
+}
+
+export const QA_SLACK_PROGRESS_COMMENTARY_MARKER_RE =
+  /\bSLACK-QA-COMMENTARY-(?!DONE-)[A-F0-9]{8}\b/u;
+
+export function extractSlackProgressCommentaryDirectives(text: string) {
+  const commentaryMarker = extractLastCapture(
+    text,
+    /\b(SLACK-QA-COMMENTARY-(?!DONE-)[A-F0-9]{8})\b/u,
+  );
+  const toolMarker = extractLastCapture(text, /\b(SLACK-QA-TOOL-[A-F0-9]{8})\b/u);
+  const finalMarker = extractLastCapture(text, /\b(SLACK-QA-COMMENTARY-DONE-[A-F0-9]{8})\b/u);
+  if (!commentaryMarker || !toolMarker || !finalMarker) {
+    return null;
   }
+  const suffix = commentaryMarker.slice("SLACK-QA-COMMENTARY-".length);
+  const execCommand = `printf '%s' 'SLACK-QA-TOOL-${suffix}' >/dev/null; sleep 5; printf '%s\\n' 'SLACK-QA-OUTPUT-${suffix}'`;
+  const commandDirective = extractLastCapture(
+    text.replaceAll("&gt;", ">"),
+    /\b(printf '%s' 'SLACK-QA-TOOL-[A-F0-9]{8}' >\/dev\/null; sleep 5; printf '%s\\n' 'SLACK-QA-OUTPUT-[A-F0-9]{8}')(?=[.`\s]|$)/u,
+  );
+  if (
+    toolMarker !== `SLACK-QA-TOOL-${suffix}` ||
+    finalMarker !== `SLACK-QA-COMMENTARY-DONE-${suffix}` ||
+    commandDirective !== execCommand
+  ) {
+    return null;
+  }
+  return { commentaryMarker, execCommand, finalMarker, toolMarker };
+}
+
+function extractWhatsAppMarkerDirective(text: string, kind: "location" | "contact" | "sticker") {
   return extractLastCapture(
     text,
-    /exact marker\b[^:\n]{0,120}:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i,
+    new RegExp(`WhatsApp ${kind} marker:\\s*([^\\s\`.,;:!?]+(?:-[^\\s\`.,;:!?]+)*)`, "i"),
   );
-}
-
-export function extractWhatsAppLocationMarkerDirective(text: string) {
-  return extractLastCapture(
-    text,
-    /WhatsApp location marker:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i,
-  );
-}
-
-export function extractWhatsAppContactMarkerDirective(text: string) {
-  return extractLastCapture(text, /WhatsApp contact marker:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i);
-}
-
-export function extractWhatsAppStickerMarkerDirective(text: string) {
-  return extractLastCapture(text, /WhatsApp sticker marker:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i);
 }
 
 const QA_TIMESTAMPED_MESSAGE_PREFIX_RE =
@@ -104,16 +102,48 @@ function hasWhatsAppStructuredMessageBody(prompt: string, bodyPattern: RegExp) {
   });
 }
 
-export function shouldUseWhatsAppLocationMarker(prompt: string) {
-  return hasWhatsAppStructuredMessageBody(prompt, /^📍\s*37\.774900,\s*-122\.419400\b/u);
+function shouldUseWhatsAppStickerMarker(input: ResponsesInputItem[]) {
+  const prompt = extractCurrentRuntimeContextTexts(input).join("\n\n");
+  const label = "WhatsApp media:";
+  let searchFrom = 0;
+  for (;;) {
+    const labelIndex = prompt.indexOf(label, searchFrom);
+    if (labelIndex < 0) {
+      return false;
+    }
+    const fenceStart = prompt.indexOf("```json", labelIndex + label.length);
+    const fenceEnd = fenceStart >= 0 ? prompt.indexOf("```", fenceStart + 7) : -1;
+    if (fenceStart >= 0 && fenceEnd >= 0) {
+      try {
+        const value = JSON.parse(prompt.slice(fenceStart + 7, fenceEnd)) as {
+          payload?: { kind?: unknown };
+        };
+        if (value.payload?.kind === "sticker") {
+          return true;
+        }
+      } catch {
+        // Ignore malformed metadata and continue to the next matching block.
+      }
+      searchFrom = fenceEnd + 3;
+      continue;
+    }
+    searchFrom = labelIndex + label.length;
+  }
 }
 
-export function shouldUseWhatsAppContactMarker(prompt: string) {
-  return hasWhatsAppStructuredMessageBody(prompt, /^<contacts?(?::|>)/iu);
-}
-
-export function shouldUseWhatsAppStickerMarker(prompt: string) {
-  return hasWhatsAppStructuredMessageBody(prompt, /^<media:sticker>(?:\s|$)/iu);
+export function resolveWhatsAppStructuredReply(
+  prompt: string,
+  input: ResponsesInputItem[],
+  allInputText: string,
+) {
+  return (
+    (hasWhatsAppStructuredMessageBody(prompt, /^📍\s*37\.774900,\s*-122\.419400\b/u) &&
+      extractWhatsAppMarkerDirective(allInputText, "location")) ||
+    (hasWhatsAppStructuredMessageBody(prompt, /^<contacts?(?::|>)/iu) &&
+      extractWhatsAppMarkerDirective(allInputText, "contact")) ||
+    (shouldUseWhatsAppStickerMarker(input) &&
+      extractWhatsAppMarkerDirective(allInputText, "sticker"))
+  );
 }
 
 function extractLabeledMarkerDirective(text: string, label: string) {
@@ -141,7 +171,9 @@ export function extractBlockStreamingMarkerDirectives(text: string) {
     };
   }
 
-  const markers = extractCaptures(text, /exact marker\b[^:\n]{0,120}:\s*`([^`]+)`/i);
+  const markers = Array.from(text.matchAll(/exact marker\b[^:\n]{0,120}:\s*`([^`]+)`/gi), (match) =>
+    match[1]?.trim(),
+  ).filter(Boolean);
   if (markers.length < 2) {
     return null;
   }
@@ -165,49 +197,53 @@ function extractBareToolArg(text: string, name: string) {
 }
 
 export function hasDeclaredTool(body: Record<string, unknown>, name: string) {
-  const tools = Array.isArray(body.tools) ? body.tools : [];
-  const dynamicTools = Array.isArray(body.dynamicTools) ? body.dynamicTools : [];
-  if (
-    [...tools, ...dynamicTools].some((tool) => toolDefinitionMentionsName(tool, name)) ||
-    instructionTextMentionsToolName(extractInstructionsText(body), name)
-  ) {
-    return true;
-  }
-  return false;
+  return (
+    hasToolDefinition(body, name) ||
+    instructionTextDeclaresTool(extractInstructionsText(body), name)
+  );
 }
 
 export function hasToolDefinition(body: Record<string, unknown>, name: string) {
   const tools = Array.isArray(body.tools) ? body.tools : [];
   const dynamicTools = Array.isArray(body.dynamicTools) ? body.dynamicTools : [];
-  return [...tools, ...dynamicTools].some((tool) => toolDefinitionMentionsName(tool, name));
+  return [...tools, ...dynamicTools].some((tool) => findNamedToolDefinition(tool, name) !== null);
 }
 
-function toolDefinitionMentionsName(value: unknown, name: string, depth = 0): boolean {
+export function findNamedToolDefinition(
+  value: unknown,
+  name: string,
+  depth = 0,
+): Record<string, unknown> | null {
   if (depth > 6 || !value || typeof value !== "object") {
-    return false;
+    return null;
   }
-  if (Array.isArray(value)) {
-    return value.some((item) => toolDefinitionMentionsName(item, name, depth + 1));
-  }
-  const record = value as Record<string, unknown>;
-  for (const key of ["name", "tool", "functionName"]) {
-    if (record[key] === name) {
-      return true;
+  if (!Array.isArray(value)) {
+    const record = value as Record<string, unknown>;
+    if (record.name === name || record.tool === name || record.functionName === name) {
+      return record;
     }
   }
-  return Object.values(record).some((item) => toolDefinitionMentionsName(item, name, depth + 1));
-}
-
-function instructionTextMentionsToolName(text: string, name: string) {
-  if (!text) {
-    return false;
+  for (const item of Array.isArray(value) ? value : Object.values(value)) {
+    const match = findNamedToolDefinition(item, name, depth + 1);
+    if (match) {
+      return match;
+    }
   }
-  const escapedName = escapeRegExp(name);
-  return new RegExp(`(^|[^A-Za-z0-9_])${escapedName}([^A-Za-z0-9_]|$)`).test(text);
+  return null;
 }
 
-export function isQaToolSearchFixture(text: string) {
-  return QA_TOOL_SEARCH_PROMPT_RE.test(text) || QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(text);
+function instructionTextDeclaresTool(text: string, name: string) {
+  // Mirror the policy-filtered list and availability-gated messaging heading
+  // from system-prompt-tool-list.ts / system-prompt-messaging.ts. Ordinary
+  // instructions (including AGENTS.md's Tools notes) do not declare tools.
+  const sections = text.replaceAll("\r\n", "\n").split(/^## /m);
+  const tooling = sections.find((section) => section.startsWith("Tooling\n")) ?? "";
+  const messaging = sections.find((section) => section.startsWith("Messaging\n")) ?? "";
+  const escapedName = escapeRegExp(name);
+  return (
+    new RegExp(`^- ${escapedName}(?:: |$)`, "m").test(tooling) ||
+    new RegExp(`^### ${escapedName} tool$`, "m").test(messaging)
+  );
 }
 
 export function buildExplicitSessionsSpawnArgs(text: string): Record<string, unknown> | null {
@@ -252,24 +288,6 @@ export function buildQaA2aMessageToolMirrorSessionsSendArgs(
   };
 }
 
-export function extractToolErrorForNamedCall(params: {
-  input: ResponsesInputItem[];
-  name: string;
-  toolJson: Record<string, unknown> | null;
-}) {
-  const error = typeof params.toolJson?.error === "string" ? params.toolJson.error.trim() : "";
-  if (!error) {
-    return undefined;
-  }
-  const namedFunctionCall = params.input.some(
-    (item) => item.type === "function_call" && item.name === params.name,
-  );
-  if (namedFunctionCall) {
-    return error;
-  }
-  return undefined;
-}
-
 export function hasToolErrorOutput(toolJson: Record<string, unknown> | null, toolOutput: string) {
   if (typeof toolJson?.error === "string" && toolJson.error.trim()) {
     return true;
@@ -288,53 +306,46 @@ export function extractSessionStatusSessionKey(
   toolOutput: string,
 ) {
   const details = toolJson?.details;
-  if (details && typeof details === "object") {
-    const sessionKey = (details as { sessionKey?: unknown }).sessionKey;
-    if (typeof sessionKey === "string" && sessionKey.trim()) {
-      return sessionKey.trim();
-    }
-  }
-  const topLevelSessionKey = toolJson?.sessionKey;
-  if (typeof topLevelSessionKey === "string" && topLevelSessionKey.trim()) {
-    return topLevelSessionKey.trim();
-  }
-  const statusLineSessionKey = /(?:^|\n)[^\n]*Session:\s*([^\s•\n]+)/u.exec(toolOutput)?.[1];
-  if (statusLineSessionKey?.trim()) {
-    return statusLineSessionKey.trim();
-  }
-  return /"sessionKey"\s*:\s*"([^"]+)"/.exec(toolOutput)?.[1]?.trim() ?? "";
+  return (
+    normalizeOptionalString(
+      details && typeof details === "object"
+        ? (details as { sessionKey?: unknown }).sessionKey
+        : undefined,
+    ) ??
+    normalizeOptionalString(toolJson?.sessionKey) ??
+    normalizeOptionalString(/(?:^|\n)[^\n]*Session:\s*([^\s•\n]+)/u.exec(toolOutput)?.[1]) ??
+    /"sessionKey"\s*:\s*"([^"]+)"/.exec(toolOutput)?.[1]?.trim() ??
+    ""
+  );
 }
 
-export function isHeartbeatPrompt(text: string) {
+export function resolveHeartbeatPromptReply(text: string): "HEARTBEAT_OK" | "NO_REPLY" | undefined {
   const trimmed = text.trim();
   if (!trimmed || /remember this fact/i.test(trimmed)) {
-    return false;
+    return undefined;
   }
-  return /(?:^|\n)Read HEARTBEAT\.md if it exists\b/i.test(trimmed);
+  if (/(?:^|\n)Read HEARTBEAT\.md if it exists\b/i.test(trimmed)) {
+    return "HEARTBEAT_OK";
+  }
+  return /(?:^|[.\n]\s*)If nothing needs attention, reply NO_REPLY\b/i.test(trimmed)
+    ? "NO_REPLY"
+    : undefined;
 }
 
 export function readFirstMediaPath(value: unknown): string {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  const media = asOptionalRecord(value);
+  if (!media) {
     return "";
   }
-  const media = value as {
-    mediaUrl?: unknown;
-    mediaUrls?: unknown;
-    path?: unknown;
-    filePath?: unknown;
-    attachments?: unknown;
-  };
-  for (const candidate of [media.mediaUrl, media.path, media.filePath]) {
-    if (typeof candidate === "string" && candidate.trim()) {
-      return candidate.trim();
-    }
-  }
-  if (Array.isArray(media.mediaUrls)) {
-    const mediaUrl = media.mediaUrls.find(
-      (candidate) => typeof candidate === "string" && candidate.trim(),
-    );
-    if (typeof mediaUrl === "string" && mediaUrl.trim()) {
-      return mediaUrl.trim();
+  for (const candidate of [
+    media.mediaUrl,
+    media.path,
+    media.filePath,
+    ...(Array.isArray(media.mediaUrls) ? media.mediaUrls : []),
+  ]) {
+    const mediaPath = normalizeOptionalString(candidate);
+    if (mediaPath) {
+      return mediaPath;
     }
   }
   if (Array.isArray(media.attachments)) {

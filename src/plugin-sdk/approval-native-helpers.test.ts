@@ -7,11 +7,12 @@ import {
   createChannelNativeOriginTargetResolver,
   createNativeApprovalChannelRouteGates,
   createNativeApprovalForwardingFallbackSuppressor,
+  createNativeApprovalMessagingTargetResolvers,
   type NativeApprovalTarget,
   nativeApprovalTargetsMatch,
   shouldSuppressLocalNativeExecApprovalPrompt,
 } from "./approval-native-helpers.js";
-import type { OpenClawConfig } from "./config-runtime.js";
+import type { OpenClawConfig } from "./config-contracts.js";
 
 const EMPTY_SESSION_CFG = {
   session: {
@@ -79,7 +80,105 @@ const matrixPluginRequest = {
   expiresAtMs: 1000,
 } as const;
 
+describe("createNativeApprovalMessagingTargetResolvers", () => {
+  const resolvers = createNativeApprovalMessagingTargetResolvers({
+    channel: "signal",
+    normalizeTo: (to) => to.trim().toLowerCase() || null,
+  });
+
+  it("normalizes forwarding, turn-source, session, and resolved targets", () => {
+    expect(
+      resolvers.normalizeForwardTarget({
+        channel: " SIGNAL ",
+        to: " OWNER ",
+        accountId: " work ",
+        threadId: 42,
+        source: "target",
+      }),
+    ).toEqual({
+      to: "owner",
+      accountId: "work",
+      threadId: 42,
+    });
+    expect(
+      resolvers.resolveTurnSourceTarget({
+        ...matrixExecRequest,
+        request: {
+          ...matrixExecRequest.request,
+          turnSourceChannel: " SIGNAL ",
+          turnSourceTo: " OWNER ",
+          turnSourceAccountId: " work ",
+        },
+      }),
+    ).toEqual({
+      to: "owner",
+      accountId: "work",
+    });
+    expect(
+      resolvers.resolveSessionTarget({
+        channel: "signal",
+        to: " OWNER ",
+        accountId: " work ",
+      }),
+    ).toEqual({
+      to: "owner",
+      accountId: "work",
+    });
+    expect(resolvers.normalizeTarget({ to: " OWNER ", threadId: 42 })).toEqual({
+      to: "owner",
+      threadId: 42,
+    });
+  });
+
+  it("rejects other channels and invalid destinations", () => {
+    expect(
+      resolvers.normalizeForwardTarget({
+        channel: "slack",
+        to: "owner",
+        source: "target",
+      }),
+    ).toBeNull();
+    expect(
+      resolvers.resolveTurnSourceTarget({
+        ...matrixExecRequest,
+        request: {
+          ...matrixExecRequest.request,
+          turnSourceChannel: "signal",
+          turnSourceTo: " ",
+        },
+      }),
+    ).toBeNull();
+    expect(resolvers.resolveSessionTarget({ channel: "signal", to: " " })).toBeNull();
+    expect(resolvers.normalizeTarget({ to: " " })).toBeNull();
+  });
+});
+
 describe("createNativeApprovalChannelRouteGates", () => {
+  it("reports each eligible account as a raw candidate for unbound session routes", () => {
+    const cfg = {
+      approvals: { exec: { enabled: true, mode: "session" } },
+    } satisfies OpenClawConfig;
+    const request = {
+      ...matrixExecRequest,
+      request: { ...matrixExecRequest.request, turnSourceAccountId: undefined },
+    };
+
+    for (const accountId of ["default", "ops"]) {
+      expect(
+        createMatrixRouteGates({
+          accountIds: ["default", "ops"],
+          enabledAccounts: ["default", "ops"],
+        }).shouldHandleApprovalRequest({ cfg, accountId, request }),
+      ).toBe(true);
+    }
+    expect(
+      createMatrixRouteGates({
+        accountIds: ["default", "ops"],
+        enabledAccounts: ["ops"],
+      }).shouldHandleApprovalRequest({ cfg, accountId: "ops", request }),
+    ).toBe(true);
+  });
+
   it("separates session-native and explicit target routing by approval family", () => {
     const gates = createMatrixRouteGates();
     const cfg = {
@@ -175,7 +274,7 @@ describe("createNativeApprovalChannelRouteGates", () => {
     ).toBe(false);
   });
 
-  it("uses default and single-enabled account fallback for unscoped targets", () => {
+  it("maps unscoped targets only to the default account", () => {
     const cfg = {
       approvals: {
         exec: {
@@ -211,7 +310,7 @@ describe("createNativeApprovalChannelRouteGates", () => {
         request: matrixExecRequest,
         target,
       }),
-    ).toBe(true);
+    ).toBe(false);
 
     expect(
       createMatrixRouteGates({
@@ -413,34 +512,6 @@ describe("createChannelNativeOriginTargetResolver", () => {
         },
       }),
     ).toEqual({ to: "channel:C1", threadId: "171234.567890" });
-  });
-
-  it("keeps custom target matchers generic", () => {
-    type ProviderTarget = { id: string; shard?: string };
-
-    const resolveOriginTarget = createChannelNativeOriginTargetResolver<ProviderTarget>({
-      channel: "custom",
-      resolveTurnSourceTarget: () => ({ id: "room-1", shard: "a" }),
-      resolveSessionTarget: () => ({ id: "room-1", shard: "b" }),
-      targetsMatch: (left, right) => left.id === right.id,
-    });
-
-    expect(
-      resolveOriginTarget({
-        cfg: EMPTY_SESSION_CFG,
-        request: {
-          id: "req-1",
-          request: {
-            command: "echo hi",
-            sessionKey: "agent:main:custom:room-1",
-            turnSourceChannel: "custom",
-            turnSourceTo: "room-1",
-          },
-          createdAtMs: 0,
-          expiresAtMs: 1000,
-        },
-      }),
-    ).toEqual({ id: "room-1", shard: "a" });
   });
 });
 

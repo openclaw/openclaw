@@ -1,16 +1,22 @@
 // Loads state-directory dotenv entries used by config and runtime startup.
 import fs from "node:fs";
 import path from "node:path";
+import { readRegularFileSync } from "@openclaw/fs-safe/advanced";
 import { parse as parseDotEnv } from "dotenv";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
   normalizeEnvVarKey,
 } from "../infra/host-env-security.js";
-import { collectConfigServiceEnvVars } from "./config-env-vars.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { collectConfigRuntimeEnvVars } from "./config-env-vars.js";
 import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "./future-version-guard.js";
 import { resolveStateDir } from "./paths.js";
 import type { OpenClawConfig } from "./types.js";
+
+/** Maximum bytes to read from the state-directory .env file. */
+const MAX_STATE_DIR_DOTENV_BYTES = 1024 * 1024;
+const log = createSubsystemLogger("config/dotenv");
 
 function isBlockedServiceEnvVar(key: string): boolean {
   return (
@@ -96,20 +102,25 @@ function parseStateDirDotEnvContent(content: string | Buffer): ParsedStateDirDot
 export function readStateDirDotEnvFromStateDir(stateDir: string): ParsedStateDirDotEnv {
   const dotEnvPath = path.join(stateDir, ".env");
   try {
-    return parseStateDirDotEnvContent(fs.readFileSync(dotEnvPath));
-  } catch {
+    // Resolve symlinks so a .env file that points to a regular file keeps
+    // working while the bounded read still rejects oversized targets.
+    const resolved = fs.realpathSync(dotEnvPath);
+    const { buffer } = readRegularFileSync({
+      filePath: resolved,
+      maxBytes: MAX_STATE_DIR_DOTENV_BYTES,
+    });
+    return parseStateDirDotEnvContent(buffer);
+  } catch (err) {
+    // Surface oversized files so operators know a configured .env was
+    // skipped — unlike parse or permission errors which mean the file is
+    // genuinely unusable.
+    if (err instanceof Error && err.message.startsWith("File exceeds")) {
+      log.warn(
+        `skipping oversized state-directory .env file (max ${MAX_STATE_DIR_DOTENV_BYTES} bytes): ${dotEnvPath}`,
+      );
+    }
     return { entries: {}, skippedShellReferenceKeys: [] };
   }
-}
-
-/**
- * Read and parse `~/.openclaw/.env` (or `$OPENCLAW_STATE_DIR/.env`), returning
- * a filtered record of key-value pairs suitable for a managed service
- * environment source.
- */
-function readStateDirDotEnvVars(env: Record<string, string | undefined>): Record<string, string> {
-  const stateDir = resolveStateDir(env as NodeJS.ProcessEnv);
-  return readStateDirDotEnvFromStateDir(stateDir).entries;
 }
 
 /** Split view of durable gateway service env sources before precedence is applied. */
@@ -124,8 +135,10 @@ export function collectDurableServiceEnvVarSources(params: {
   env: Record<string, string | undefined>;
   config?: OpenClawConfig;
 }): DurableServiceEnvVarSources {
-  const stateDirDotEnvEnvironment = readStateDirDotEnvVars(params.env);
-  const configEnvironment = collectConfigServiceEnvVars(params.config);
+  const stateDirDotEnvEnvironment = readStateDirDotEnvFromStateDir(
+    resolveStateDir(params.env),
+  ).entries;
+  const configEnvironment = collectConfigRuntimeEnvVars(params.config);
   return {
     stateDirDotEnvEnvironment,
     configEnvironment,

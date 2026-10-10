@@ -1,12 +1,15 @@
 // Assertions for npm onboard channel-agent E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import {
   assertAgentReplyContainsMarker,
   assertOpenAiRequestLogUsed,
 } from "../agent-turn-output.mjs";
-import { assertOpenAiEnvAuthProfileStore } from "../auth-profile-store-assertions.mjs";
+import {
+  assertNoLegacyPrimaryAuthRows,
+  assertOpenAiEnvAuthProfileStore,
+  readCanonicalAuthProfileStoreText,
+} from "../auth-profile-store-assertions.mjs";
 import { readPositiveIntEnv } from "../env-limits.mjs";
 import {
   applyMockOpenAiModelConfig,
@@ -77,38 +80,16 @@ function extractStatusSection(text, title) {
   return stripAnsi(section.join("\n"));
 }
 
-function readAuthProfileStoreText(agentDir) {
-  const dbPath = path.join(agentDir, "openclaw-agent.sqlite");
-  if (!fs.existsSync(dbPath)) {
-    return "";
-  }
-  let db;
-  try {
-    db = new DatabaseSync(dbPath, { readOnly: true });
-    const row = db
-      .prepare("SELECT store_json FROM auth_profile_store WHERE store_key = ?")
-      .get("primary");
-    return typeof row?.store_json === "string" ? row.store_json : "";
-  } catch {
-    return "";
-  } finally {
-    db?.close();
-  }
-}
-
 function assertOnboardState() {
   const home = process.argv[3];
   const stateDir = path.join(home, ".openclaw");
   const configPath = path.join(stateDir, "openclaw.json");
-  const agentDir = path.join(stateDir, "agents", "main", "agent");
 
   if (!fs.existsSync(configPath)) {
     throw new Error("onboard did not write openclaw.json");
   }
-  if (!fs.existsSync(agentDir)) {
-    throw new Error("onboard did not create main agent dir");
-  }
-  const authStoreText = readAuthProfileStoreText(agentDir);
+  assertNoLegacyPrimaryAuthRows(stateDir);
+  const authStoreText = readCanonicalAuthProfileStoreText(stateDir);
   if (!authStoreText) {
     throw new Error("onboard did not persist auth profile store");
   }
@@ -134,13 +115,6 @@ function assertMockModelConfig() {
   const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
   const cfg = readJson(configPath);
   const provider = cfg.models?.providers?.openai;
-  const defaultModel = cfg.agents?.defaults?.model?.primary;
-  const defaultRuntime = cfg.agents?.defaults?.models?.[expectedModelRef]?.agentRuntime?.id;
-  const agent = Array.isArray(cfg.agents?.list)
-    ? (cfg.agents.list.find((entry) => entry?.id === "main") ?? cfg.agents.list[0])
-    : undefined;
-  const agentModel = agent?.model?.primary;
-  const agentRuntime = agent?.models?.[expectedModelRef]?.agentRuntime?.id;
   if (provider?.baseUrl !== expectedBaseUrl) {
     throw new Error(
       `mock OpenAI baseUrl was not preserved; expected ${expectedBaseUrl}, got ${provider?.baseUrl}`,
@@ -152,21 +126,20 @@ function assertMockModelConfig() {
   if (provider?.agentRuntime?.id !== "openclaw") {
     throw new Error(`mock OpenAI runtime was not preserved; got ${provider?.agentRuntime?.id}`);
   }
-  if (defaultModel !== expectedModelRef) {
-    throw new Error(
-      `mock default model was not preserved; expected ${expectedModelRef}, got ${defaultModel}`,
-    );
-  }
-  if (defaultRuntime !== "openclaw") {
-    throw new Error(`mock default runtime was not preserved; got ${defaultRuntime}`);
-  }
-  if (agent && agentModel !== expectedModelRef) {
-    throw new Error(
-      `mock agent model was not preserved; expected ${expectedModelRef}, got ${agentModel}`,
-    );
-  }
-  if (agent && agentRuntime !== "openclaw") {
-    throw new Error(`mock agent runtime was not preserved; got ${agentRuntime}`);
+  for (const [label, agent] of [
+    ["default", cfg.agents?.defaults],
+    ["agent", cfg.agents?.entries?.main],
+  ]) {
+    const model = agent?.model?.primary;
+    const runtime = agent?.models?.[expectedModelRef]?.agentRuntime?.id;
+    if (model !== expectedModelRef) {
+      throw new Error(
+        `mock ${label} model was not preserved; expected ${expectedModelRef}, got ${model}`,
+      );
+    }
+    if (runtime !== "openclaw") {
+      throw new Error(`mock ${label} runtime was not preserved; got ${runtime}`);
+    }
   }
 }
 
@@ -179,38 +152,26 @@ function assertChannelConfig() {
   if (!entry || entry.enabled === false) {
     throw new Error(`${channel} was not enabled`);
   }
-  const assertTokenField = (field, expected) => {
+  const tokenFields = new Map([
+    ["telegram", ["botToken"]],
+    ["discord", ["token"]],
+    ["slack", ["botToken", "appToken"]],
+  ]).get(channel);
+  if (!tokenFields) {
+    throw new Error(`unsupported channel config assertion: ${channel}`);
+  }
+  if (expectedTokens.length !== tokenFields.length) {
+    throw new Error(
+      `${channel} channel config assertion requires ${channel === "slack" ? "bot and app tokens" : "one bot token"}`,
+    );
+  }
+  for (const [index, field] of tokenFields.entries()) {
+    const expected = expectedTokens[index];
     if (entry[field] !== expected) {
       throw new Error(
         `${channel} config did not persist ${field}; expected ${expected}, got ${JSON.stringify(entry[field])}`,
       );
     }
-  };
-  switch (channel) {
-    case "telegram": {
-      if (expectedTokens.length !== 1) {
-        throw new Error("telegram channel config assertion requires one bot token");
-      }
-      assertTokenField("botToken", expectedTokens[0]);
-      return;
-    }
-    case "discord": {
-      if (expectedTokens.length !== 1) {
-        throw new Error("discord channel config assertion requires one bot token");
-      }
-      assertTokenField("token", expectedTokens[0]);
-      return;
-    }
-    case "slack": {
-      if (expectedTokens.length !== 2) {
-        throw new Error("slack channel config assertion requires bot and app tokens");
-      }
-      assertTokenField("botToken", expectedTokens[0]);
-      assertTokenField("appToken", expectedTokens[1]);
-      return;
-    }
-    default:
-      throw new Error(`unsupported channel config assertion: ${channel}`);
   }
 }
 

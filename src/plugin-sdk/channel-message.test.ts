@@ -1,50 +1,38 @@
 /**
  * Tests channel message helper behavior and mocked runtime interactions.
  */
-import { beforeAll, describe, expect, it, vi } from "vitest";
-import { defineChannelMessageAdapter as defineCoreChannelMessageAdapter } from "../channels/message/index.js";
+import { describe, expect, it, vi } from "vitest";
+import * as channelInbound from "./channel-inbound.js";
 import {
   defineChannelMessageAdapter,
   type ChannelMessageDurableFinalAdapter,
 } from "./channel-outbound.js";
 
 describe("defineChannelMessageAdapter", () => {
-  const loadPluginSdkSubpaths = async () =>
-    await Promise.all([
-      import("openclaw/plugin-sdk/channel-outbound"),
-      import("openclaw/plugin-sdk/channel-message"),
-      import("openclaw/plugin-sdk/channel-message-runtime"),
-      import("openclaw/plugin-sdk/channel-reply-pipeline"),
-      import("openclaw/plugin-sdk/compat"),
-    ] as const);
-  let pluginSdkSubpaths: Awaited<ReturnType<typeof loadPluginSdkSubpaths>>;
-
-  beforeAll(async () => {
-    pluginSdkSubpaths = await loadPluginSdkSubpaths();
-  });
-
-  it("keeps new and legacy channel plugin SDK subpaths importable", async () => {
-    const [channelOutbound, channelMessage, channelMessageRuntime, channelReplyPipeline, compat] =
-      pluginSdkSubpaths;
-
-    expect(channelOutbound.createChannelMessageReplyPipeline).toBe(
-      channelReplyPipeline.createChannelReplyPipeline,
-    );
-    expect(channelMessage.createChannelMessageReplyPipeline).toBe(
-      channelOutbound.createChannelMessageReplyPipeline,
-    );
-    expect(channelMessage.createReplyPrefixOptions).toBe(
-      channelReplyPipeline.createReplyPrefixOptions,
-    );
-    expect(channelMessage.createTypingCallbacks).toBe(channelReplyPipeline.createTypingCallbacks);
-    expect(channelMessageRuntime.sendDurableMessageBatch).toBe(
-      channelMessage.sendDurableMessageBatch,
-    );
-    expect(channelMessageRuntime.withDurableMessageSendContext).toBe(
-      channelMessage.withDurableMessageSendContext,
-    );
-    expect(channelOutbound.defineChannelMessageAdapter).toBe(defineCoreChannelMessageAdapter);
-    expect(compat.createChannelReplyPipeline).toBe(channelReplyPipeline.createChannelReplyPipeline);
+  it("preserves legacy count-shaped dispatch projections", () => {
+    const legacyResult = {
+      queuedFinal: false,
+      counts: { tool: 1, block: 2, final: 1 },
+    };
+    expect(channelInbound.resolveInboundReplyDispatchCounts(legacyResult)).toEqual({
+      tool: 1,
+      block: 2,
+      final: 1,
+    });
+    expect(channelInbound.hasVisibleInboundReplyDispatch(legacyResult)).toBe(true);
+    expect(channelInbound.hasFinalInboundReplyDispatch(legacyResult)).toBe(true);
+    const receiptResult = {
+      ...legacyResult,
+      queuedFinal: true,
+      settledReceipt: { anyVisibleDelivered: false, counts: {} },
+    };
+    expect(channelInbound.resolveInboundReplyDispatchCounts(receiptResult)).toEqual({
+      tool: 0,
+      block: 0,
+      final: 0,
+    });
+    expect(channelInbound.hasVisibleInboundReplyDispatch(receiptResult)).toBe(false);
+    expect(channelInbound.hasFinalInboundReplyDispatch(receiptResult)).toBe(false);
   });
 
   it("defaults new message adapters to plugin-owned receive acknowledgement", () => {

@@ -1,264 +1,420 @@
-// Cron session reaper tests cover cleanup of sessions created by scheduled runs.
-import fs from "node:fs";
-import os from "node:os";
+import fsPromises from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import * as mediaGeneration from "../agents/media-generation-activity.js";
+import { resetGeneratedMediaTaskActivityForTests } from "../agents/media-generation-activity.test-support.js";
+import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import { clearSubagentRunsReadCacheForTest } from "../agents/subagents/registry/subagent-registry-state.js";
+import { setRuntimeConfigSnapshot } from "../config/config.js";
+import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combined-store-gateway.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
+import * as maintenanceReads from "../config/sessions/session-entry-read-maintenance.js";
+import * as sessionEntryReader from "../config/sessions/session-entry-read-runtime.js";
+import {
+  maintenanceLane,
+  targetDiscoveryLane,
+} from "../config/sessions/session-transcript-worker-resources.js";
+import {
+  listKnownSessionStoreAgentIds,
+  resolveExistingAgentSessionStoreTargetsSync,
+} from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import type { OpenClawConfig } from "../config/types.js";
+import { initializeSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
-import { createDeferred } from "../test-utils/deferred.js";
+import {
+  listOpenClawRegisteredAgentDatabases,
+  unregisterOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db-registry.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
+import { isSameOpenClawAgentDatabasePath } from "../state/openclaw-agent-db.paths.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { drainSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import type { Logger } from "./service/state.js";
-import { sweepCronRunSessions } from "./session-reaper.js";
-import { resetReaperThrottle } from "./session-reaper.test-support.js";
+import { sweepCronRunSessions as sweepCronRunSessionsImpl } from "./session-reaper.js";
+import { resetReaperThrottle, seedSessionEntries } from "./session-reaper.test-support.js";
 
-const { listSessionEntries, patchSessionEntry, replaceSessionEntry } = sessionAccessor;
+const { listSessionEntriesCore, patchSessionEntryCore, replaceSessionEntry } = sessionAccessor;
+const { explicitSqliteCloseReleasesNativeResources: keepsMaintenanceWorker } =
+  await initializeSqliteRuntimeCapabilities();
 
-const taskStatusMocks = vi.hoisted(() => ({ hasPendingGeneratedMediaTask: vi.fn() }));
-
-vi.mock("../tasks/task-status-access.js", () => ({
-  hasPendingGeneratedMediaTaskForSessionKey: taskStatusMocks.hasPendingGeneratedMediaTask,
-}));
-
-function createTestLogger(): Logger {
-  return {
-    debug: () => {},
-    info: () => {},
-    warn: () => {},
-    error: () => {},
-  };
-}
-
-async function seedSessionEntries(
-  storePath: string,
-  entries: Record<string, SessionEntry>,
-): Promise<void> {
-  for (const [sessionKey, entry] of Object.entries(entries)) {
-    await replaceSessionEntry({ storePath, sessionKey }, entry);
-  }
+function sweepCronRunSessions(
+  params: Omit<Parameters<typeof sweepCronRunSessionsImpl>[0], "agentId">,
+) {
+  return sweepCronRunSessionsImpl({ ...params, agentId: "main" });
 }
 
 function readSessionEntries(storePath: string): Record<string, SessionEntry> {
   return Object.fromEntries(
-    listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+    listSessionEntriesCore({ agentId: "main", storePath }).map(({ sessionKey, entry }) => [
+      sessionKey,
+      entry,
+    ]),
   );
 }
 
-describe("isCronRunSessionKey", () => {
-  it("matches cron run session keys", () => {
-    expect(isCronRunSessionKey("agent:main:cron:abc-123:run:def-456")).toBe(true);
-    expect(isCronRunSessionKey("agent:debugger:cron:249ecf82:run:1102aabb")).toBe(true);
-  });
-
-  it("matches cron run descendant session keys", () => {
-    expect(isCronRunSessionKey("agent:main:cron:abc-123:run:def-456:subagent:worker")).toBe(true);
-    expect(isCronRunSessionKey("agent:main:cron:abc-123:run:def-456:thread:reply")).toBe(true);
-  });
-
-  it("does not match base cron session keys", () => {
-    expect(isCronRunSessionKey("agent:main:cron:abc-123")).toBe(false);
-  });
-
-  it("does not match regular session keys", () => {
-    expect(isCronRunSessionKey("agent:main:telegram:dm:123")).toBe(false);
-  });
-
-  it("does not match non-canonical cron-like keys", () => {
-    expect(isCronRunSessionKey("agent:main:slack:cron:job:run:uuid")).toBe(false);
-    expect(isCronRunSessionKey("cron:job:run:uuid")).toBe(false);
-  });
-});
-
 describe("sweepCronRunSessions", () => {
+  let state: Awaited<ReturnType<typeof createOpenClawTestState>> | undefined;
   let tmpDir: string;
   let storePath: string;
-  const log = createTestLogger();
+  let buildPendingSet: MockInstance<typeof mediaGeneration.buildPendingGeneratedMediaSessionKeySet>;
+  const log = {
+    debug: vi.fn<Logger["debug"]>(),
+    info: vi.fn<Logger["info"]>(),
+    warn: vi.fn<Logger["warn"]>(),
+    error: vi.fn<Logger["error"]>(),
+  } satisfies Logger;
 
   beforeEach(async () => {
-    resetReaperThrottle();
-    taskStatusMocks.hasPendingGeneratedMediaTask.mockReset().mockReturnValue(false);
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cron-reaper-"));
+    state = await createOpenClawTestState({
+      scenario: "minimal",
+      env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" },
+    });
+    tmpDir = state.root;
     storePath = path.join(tmpDir, "sessions.json");
+    resetReaperThrottle();
+    subagentRuns.clear();
+    clearSubagentRunsReadCacheForTest();
+    resetGeneratedMediaTaskActivityForTests();
+    log.warn.mockClear();
+    buildPendingSet = vi.spyOn(mediaGeneration, "buildPendingGeneratedMediaSessionKeySet");
   });
 
-  it("prunes expired cron run sessions", async () => {
+  afterEach(async () => {
+    buildPendingSet?.mockRestore();
+    if (!state) {
+      return;
+    }
+    await drainSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
+    subagentRuns.clear();
+    clearSubagentRunsReadCacheForTest();
+    resetGeneratedMediaTaskActivityForTests();
+    await state.cleanup();
+    state = undefined;
+  });
+
+  it("keeps a candidate whose retained prompt changes after worker discovery", async () => {
     const now = Date.now();
-    const store: Record<string, SessionEntry> = {
-      "agent:main:cron:job1": {
-        sessionId: "base-session",
-        updatedAt: now,
-      },
-      "agent:main:cron:job1:run:old-run": {
-        sessionId: "old-run",
-        updatedAt: now - 25 * 3_600_000, // 25h ago — expired
-      },
-      "agent:main:cron:job1:run:old-run:subagent:worker": {
-        sessionId: "old-run-child",
-        updatedAt: now - 25 * 3_600_000, // expired cron-run descendant
-      },
-      "agent:main:cron:job1:run:recent-run": {
-        sessionId: "recent-run",
-        updatedAt: now - 1 * 3_600_000, // 1h ago — not expired
-      },
-      "agent:main:cron:job1:run:recent-run:thread:reply": {
-        sessionId: "recent-run-thread",
-        updatedAt: now - 1 * 3_600_000, // active cron-run descendant
-      },
-      "agent:main:telegram:dm:123": {
-        sessionId: "regular-session",
-        updatedAt: now - 100 * 3_600_000, // old but not a cron run
-      },
+    const sessionKey = "agent:main:cron:job:run:changed";
+    const entry = {
+      sessionId: "changed",
+      updatedAt: now - 25 * 3_600_000,
+      skillsSnapshot: { prompt: "before", skills: [] },
     };
-    await seedSessionEntries(storePath, store);
-
-    const result = await sweepCronRunSessions({
-      sessionStorePath: storePath,
-      nowMs: now,
-      log,
-      force: true,
-    });
-
-    expect(result.swept).toBe(true);
-    expect(result.pruned).toBe(2);
-
-    const updated = readSessionEntries(storePath);
-    expect(Object.keys(updated).toSorted()).toEqual([
-      "agent:main:cron:job1",
-      "agent:main:cron:job1:run:recent-run",
-      "agent:main:cron:job1:run:recent-run:thread:reply",
-      "agent:main:telegram:dm:123",
-    ]);
-    expect(updated["agent:main:cron:job1"]).toMatchObject({
-      sessionId: "base-session",
-      updatedAt: now,
-    });
-    expect(updated["agent:main:cron:job1:run:recent-run"]).toMatchObject({
-      sessionId: "recent-run",
-      updatedAt: now - 1 * 3_600_000,
-    });
-    expect(updated["agent:main:cron:job1:run:recent-run:thread:reply"]).toMatchObject({
-      sessionId: "recent-run-thread",
-      updatedAt: now - 1 * 3_600_000,
-    });
-    expect(updated["agent:main:telegram:dm:123"]).toMatchObject({
-      sessionId: "regular-session",
-      updatedAt: now - 100 * 3_600_000,
-    });
+    await seedSessionEntries(storePath, { [sessionKey]: entry });
+    const read = maintenanceReads.readExpiredCronRunEntriesInWorker;
+    const intercept = vi
+      .spyOn(maintenanceReads, "readExpiredCronRunEntriesInWorker")
+      .mockImplementationOnce(async (input) => {
+        const candidates = await read(input);
+        expect(candidates[0]?.entry.skillsSnapshot?.prompt).toBe("before");
+        await replaceSessionEntry(
+          { agentId: "main", storePath, sessionKey },
+          {
+            ...entry,
+            skillsSnapshot: { prompt: "after", skills: [] },
+          },
+        );
+        return candidates;
+      });
+    try {
+      expect(
+        (await sweepCronRunSessions({ sessionStorePath: storePath, nowMs: now, log })).pruned,
+      ).toBe(0);
+      expect(readSessionEntries(storePath)[sessionKey]?.skillsSnapshot?.prompt).toBe("after");
+    } finally {
+      intercept.mockRestore();
+    }
   });
 
-  it("falls back to the default retention when the configured duration is invalid", async () => {
+  it("commits expired rows and warns when transcript archive retention cleanup fails", async () => {
     const now = Date.now();
+    const sessionKey = "agent:main:cron:job1:run:cleanup-failure";
+    const sessionId = "cleanup-failure";
+    const staleArchive = path.join(tmpDir, "older.jsonl.deleted.2026-01-01T00-00-00.000Z");
+    const cleanupError = Object.assign(new Error("archive cleanup denied"), { code: "EACCES" });
+    const warn = vi.fn();
+    const failingLog: Logger = { ...log, warn };
+
     await seedSessionEntries(storePath, {
-      "agent:main:cron:job1:run:old-run": {
-        sessionId: "old-run",
-        updatedAt: now - 25 * 3_600_000,
-      },
+      [sessionKey]: { sessionId, updatedAt: now - 25 * 3_600_000 },
     });
-
-    const result = await sweepCronRunSessions({
-      cronConfig: { sessionRetention: "not-a-duration" },
-      sessionStorePath: storePath,
-      nowMs: now,
-      log,
-      force: true,
-    });
-
-    expect(result).toEqual({ swept: true, pruned: 1 });
-  });
-
-  it("preserves expired continuation rows while generated media is pending", async () => {
-    const now = Date.now();
-    const sessionKey = "agent:main:cron:job1:run:pending-run";
-    const store: Record<string, SessionEntry> = {
-      [sessionKey]: {
-        sessionId: "pending-run",
-        updatedAt: now - 25 * 3_600_000,
-        cronRunContinuation: { lifecycleRevision: "revision-1", phase: "ready" },
-      },
-    };
-    await seedSessionEntries(storePath, store);
-    taskStatusMocks.hasPendingGeneratedMediaTask.mockReturnValue(true);
-
-    const result = await sweepCronRunSessions({
-      sessionStorePath: storePath,
-      nowMs: now,
-      log,
-      force: true,
-    });
-
-    expect(result.pruned).toBe(0);
-    expect(readSessionEntries(storePath)).toEqual(store);
-  });
-
-  it("preserves an orphaned gateway continuation while generated media is pending", async () => {
-    const now = Date.now();
-    const sessionKey = "agent:main:cron:job1:run:orphaned-run";
-    await seedSessionEntries(storePath, {
-      [sessionKey]: {
-        sessionId: "orphaned-run",
-        updatedAt: now - 25 * 3_600_000,
-        cronRunContinuation: {
-          lifecycleRevision: "revision-1",
-          phase: "continuing",
-          ownerRunId: "dead-gateway-run",
-          basePersisted: false,
+    await sessionAccessor.appendTranscriptMessage(
+      { agentId: "main", sessionId, sessionKey, storePath },
+      { cwd: tmpDir, message: { role: "user", content: "archive me" } },
+    );
+    await fsPromises.writeFile(staleArchive, "stale archive", "utf8");
+    setRuntimeConfigSnapshot({
+      session: {
+        maintenance: {
+          maxDiskBytes: false,
+          resetArchiveRetention: "1ms",
         },
       },
     });
-    taskStatusMocks.hasPendingGeneratedMediaTask.mockReturnValue(true);
+    const rmSpy = vi.spyOn(fsPromises, "rm").mockRejectedValueOnce(cleanupError);
 
-    const result = await sweepCronRunSessions({
-      sessionStorePath: storePath,
-      nowMs: now,
-      log,
-      force: true,
-    });
+    try {
+      buildPendingSet.mockClear();
+      const result = await sweepCronRunSessions({
+        sessionStorePath: storePath,
+        nowMs: now,
+        log: failingLog,
+      });
 
-    expect(result.pruned).toBe(0);
-    expect(readSessionEntries(storePath)[sessionKey]).toMatchObject({
+      expect(result).toEqual({ swept: true, pruned: 1 });
+      expect(buildPendingSet).not.toHaveBeenCalled();
+      expect(readSessionEntries(storePath)[sessionKey]).toBeUndefined();
+      await expect(fsPromises.access(staleArchive)).resolves.toBeUndefined();
+      expect(warn).toHaveBeenCalledOnce();
+      expect(warn).toHaveBeenCalledWith(
+        { err: expect.stringContaining("archive cleanup denied") },
+        "cron-reaper: transcript cleanup failed",
+      );
+    } finally {
+      rmSpy.mockRestore();
+    }
+  });
+
+  it("discovers, accesses, and reaps a logical owner in one shared exact store", async () => {
+    const now = Date.now();
+    const exactStorePath = path.join(tmpDir, "shared.sqlite");
+    const cfg: OpenClawConfig = {
+      session: { store: exactStorePath },
+      agents: { entries: { main: {} } },
+    };
+    const mainKey = "agent:main:cron:main-job:run:keep";
+    const opsKey = "agent:ops:cron:ops-job:run:expired";
+    await replaceSessionEntry(
+      {
+        agentId: "main",
+        defaultAgentId: "main",
+        storePath: exactStorePath,
+        sessionKey: mainKey,
+      },
+      {
+        sessionId: "main-run",
+        updatedAt: now - 1 * 3_600_000,
+        skillsSnapshot: { prompt: "foreground prompt", skills: [] },
+      },
+    );
+    await replaceSessionEntry(
+      {
+        agentId: "ops",
+        defaultAgentId: "main",
+        storePath: exactStorePath,
+        sessionKey: opsKey,
+      },
+      { sessionId: "ops-run", updatedAt: now - 25 * 3_600_000 },
+    );
+    await closeOpenClawAgentDatabaseByPathAsync(exactStorePath);
+    closeOpenClawAgentDatabasesForTest(exactStorePath);
+    unregisterOpenClawAgentDatabase({ agentId: "main", path: exactStorePath });
+    expect(
+      listOpenClawRegisteredAgentDatabases().filter((entry) =>
+        isSameOpenClawAgentDatabasePath(entry.path, exactStorePath),
+      ),
+    ).toEqual([]);
+
+    expect(listKnownSessionStoreAgentIds(cfg).toSorted()).toEqual(["main", "ops"]);
+    expect(resolveExistingAgentSessionStoreTargetsSync(cfg, "ops")).toEqual([
+      { agentId: "ops", storePath: exactStorePath },
+    ]);
+    expect(Object.keys(loadCombinedSessionStoreForGatewayCore(cfg).store).toSorted()).toEqual([
+      mainKey,
+      opsKey,
+    ]);
+    expect(
+      sessionAccessor.loadSessionEntry({
+        agentId: "ops",
+        defaultAgentId: "main",
+        storePath: exactStorePath,
+        sessionKey: opsKey,
+      }),
+    ).toMatchObject({ sessionId: "ops-run" });
+
+    const hostSql = observeHostDataSql();
+    try {
+      expect(
+        await sweepCronRunSessionsImpl({
+          agentId: "main",
+          sessionStorePath: exactStorePath,
+          nowMs: now,
+          log,
+        }),
+      ).toEqual({ swept: true, pruned: 0 });
+      expect(buildPendingSet).not.toHaveBeenCalled();
+      for (const call of hostSql.calls) {
+        expect(call).not.toHaveBeenCalled();
+      }
+    } finally {
+      hostSql.restore();
+    }
+    const workersCreated = maintenanceLane.pool.getSnapshot().workersCreated;
+    let foregroundRead:
+      | ReturnType<typeof sessionEntryReader.readSessionEntriesFromStoreInWorker>
+      | undefined;
+    const closeResources = targetDiscoveryLane.pool.closeResources.bind(targetDiscoveryLane.pool);
+    const closeObservation = keepsMaintenanceWorker
+      ? vi.spyOn(targetDiscoveryLane.pool, "closeResources").mockImplementationOnce((key) => {
+          const closing = closeResources(key);
+          foregroundRead = sessionEntryReader.readSessionEntriesFromStoreInWorker({
+            agentId: "main",
+            storePath: exactStorePath,
+            sessionKeys: [mainKey],
+          });
+          void foregroundRead.catch(() => {});
+          return closing;
+        })
+      : undefined;
+    try {
+      const result = await sweepCronRunSessionsImpl({
+        agentId: "ops",
+        sessionStorePath: exactStorePath,
+        nowMs: now,
+        log,
+      });
+
+      expect(result).toEqual({ swept: true, pruned: 1 });
+      if (keepsMaintenanceWorker) {
+        expect(foregroundRead).toBeDefined();
+        expect(await foregroundRead).toMatchObject({
+          entries: [
+            {
+              sessionKey: mainKey,
+              entry: {
+                sessionId: "main-run",
+                skillsSnapshot: { prompt: "foreground prompt", skills: [] },
+              },
+            },
+          ],
+        });
+        expect(maintenanceLane.pool.getSnapshot().workersCreated).toBe(workersCreated);
+      }
+    } finally {
+      closeObservation?.mockRestore();
+      await Promise.allSettled([foregroundRead]);
+    }
+    expect(
+      sessionAccessor.loadSessionEntry({
+        agentId: "main",
+        defaultAgentId: "main",
+        storePath: exactStorePath,
+        sessionKey: mainKey,
+      }),
+    ).toMatchObject({ sessionId: "main-run" });
+    expect(
+      sessionAccessor.loadSessionEntry({
+        agentId: "ops",
+        defaultAgentId: "main",
+        storePath: exactStorePath,
+        sessionKey: opsKey,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("retains an expired continuation until its native child and completion settle", async () => {
+    const now = Date.now();
+    const parentKey = "agent:main:cron:job1:run:pending-parent";
+    const idleKey = "agent:main:cron:job1:run:idle-sibling";
+    const parent: SessionEntry = {
+      sessionId: "pending-parent",
+      delivery: { kind: "none" },
       updatedAt: now - 25 * 3_600_000,
       cronRunContinuation: {
-        lifecycleRevision: "revision-1",
-        phase: "continuing",
-        ownerRunId: "dead-gateway-run",
-        basePersisted: false,
+        lifecycleRevision: "revision-parent",
+        phase: "ready",
+        basePersisted: true,
       },
+    };
+    await seedSessionEntries(storePath, {
+      [parentKey]: parent,
+      [idleKey]: { ...parent, sessionId: "idle-sibling" },
     });
+    const child = createSubagentRunRecord({
+      runId: "pending-child",
+      requesterSessionKey: parentKey,
+      expectsCompletionMessage: true,
+      delivery: { status: "pending" },
+    });
+    subagentRuns.set(child.runId, child);
+
+    const first = await sweepCronRunSessions({ sessionStorePath: storePath, nowMs: now, log });
+    expect(first).toEqual({ swept: true, pruned: 1 });
+    expect(readSessionEntries(storePath)).toEqual({ [parentKey]: parent });
+
+    child.execution = { status: "terminal", endedAt: now, outcome: { status: "ok" } };
+    child.delivery = { status: "in_progress", disposition: "session_queued" };
+    const pendingDelivery = await sweepCronRunSessions({
+      sessionStorePath: storePath,
+      nowMs: now + 5 * 60_000,
+      log,
+    });
+    expect(pendingDelivery).toEqual({ swept: true, pruned: 0 });
+    expect(readSessionEntries(storePath)).toEqual({ [parentKey]: parent });
+
+    child.delivery = { status: "delivered", disposition: "delivered" };
+    const settled = await sweepCronRunSessions({
+      sessionStorePath: storePath,
+      nowMs: now + 10 * 60_000,
+      log,
+    });
+    expect(settled).toEqual({ swept: true, pruned: 1 });
+    expect(log.warn).not.toHaveBeenCalled();
+    expect(readSessionEntries(storePath)).toEqual({});
   });
 
-  it("prunes expired orphaned continuation owners", async () => {
+  it("retains a continuation when a child is admitted after retention selection", async () => {
     const now = Date.now();
-    const runningKey = "agent:main:cron:job1:run:running-run";
-    const continuingKey = "agent:main:cron:job1:run:continuing-run";
+    const sessionKey = "agent:main:cron:job1:run:late-child-parent";
+    const writerKey = "agent:main:main";
+    const parent: SessionEntry = {
+      sessionId: "late-child-parent",
+      delivery: { kind: "none" },
+      updatedAt: now - 25 * 3_600_000,
+      cronRunContinuation: {
+        lifecycleRevision: "revision-parent",
+        phase: "ready",
+        basePersisted: true,
+      },
+    };
     await seedSessionEntries(storePath, {
-      [runningKey]: {
-        sessionId: "running-run",
-        updatedAt: now - 25 * 3_600_000,
-        cronRunContinuation: {
-          lifecycleRevision: "revision-1",
-          phase: "running",
-        },
-      },
-      [continuingKey]: {
-        sessionId: "continuing-run",
-        updatedAt: now - 25 * 3_600_000,
-        cronRunContinuation: {
-          lifecycleRevision: "revision-2",
-          phase: "continuing",
-          ownerRunId: "gateway-run",
-        },
-      },
+      [sessionKey]: parent,
+      [writerKey]: { sessionId: "unrelated-writer", updatedAt: now },
     });
-
-    const result = await sweepCronRunSessions({
-      sessionStorePath: storePath,
-      nowMs: now,
-      log,
-      force: true,
+    const writerStarted = createDeferred();
+    const releaseWriter = createDeferred();
+    const writer = patchSessionEntryCore({ storePath, sessionKey: writerKey }, async () => {
+      writerStarted.resolve();
+      await releaseWriter.promise;
+      return {};
     });
+    await writerStarted.promise;
 
-    expect(result.pruned).toBe(2);
-    expect(readSessionEntries(storePath)).toEqual({});
+    const sweep = sweepCronRunSessions({ sessionStorePath: storePath, nowMs: now, log });
+    const child = createSubagentRunRecord({
+      runId: "child-admitted-during-retention",
+      requesterSessionKey: sessionKey,
+      expectsCompletionMessage: true,
+      delivery: { status: "pending" },
+    });
+    subagentRuns.set(child.runId, child);
+    try {
+      releaseWriter.resolve();
+      const result = await sweep;
+      expect(result).toEqual({ swept: true, pruned: 0 });
+      expect(log.warn).not.toHaveBeenCalled();
+      expect(readSessionEntries(storePath)[sessionKey]).toEqual(parent);
+    } finally {
+      releaseWriter.resolve();
+      await Promise.allSettled([writer, sweep]);
+    }
   });
 
   it("preserves an expired run when work is admitted before writer-owned removal", async () => {
@@ -274,7 +430,7 @@ describe("sweepCronRunSessions", () => {
     const writerStarted = createDeferred();
     const releaseWriter = createDeferred();
     const firstValidation = createDeferred();
-    const writer = patchSessionEntry({ storePath, sessionKey }, async () => {
+    const writer = patchSessionEntryCore({ storePath, sessionKey }, async () => {
       writerStarted.resolve();
       await releaseWriter.promise;
       return {};
@@ -285,7 +441,6 @@ describe("sweepCronRunSessions", () => {
       sessionStorePath: storePath,
       nowMs: now,
       log,
-      force: true,
     });
     const admissionPromise = beginSessionWorkAdmission({
       scope: storePath,
@@ -314,92 +469,135 @@ describe("sweepCronRunSessions", () => {
     }
   });
 
-  it("respects custom retention", async () => {
+  it("prunes idle siblings while skipping rows claimed by an in-flight run", async () => {
     const now = Date.now();
-    const store: Record<string, SessionEntry> = {
-      "agent:main:cron:job1:run:run1": {
-        sessionId: "run1",
-        updatedAt: now - 2 * 3_600_000, // 2h ago
+    const busyKey = "agent:main:cron:job1:run:busy-run";
+    const idleKey = "agent:main:cron:job2:run:idle-run";
+    await seedSessionEntries(storePath, {
+      [busyKey]: {
+        sessionId: "busy-run",
+        updatedAt: now - 25 * 3_600_000,
       },
-    };
-    await seedSessionEntries(storePath, store);
-
-    const result = await sweepCronRunSessions({
-      cronConfig: { sessionRetention: "1h" },
-      sessionStorePath: storePath,
-      nowMs: now,
-      log,
-      force: true,
-    });
-
-    expect(result.pruned).toBe(1);
-  });
-
-  it("does nothing when pruning is disabled", async () => {
-    const now = Date.now();
-    const store: Record<string, SessionEntry> = {
-      "agent:main:cron:job1:run:run1": {
-        sessionId: "run1",
-        updatedAt: now - 100 * 3_600_000,
+      [idleKey]: {
+        sessionId: "idle-run",
+        updatedAt: now - 25 * 3_600_000,
       },
-    };
-    await seedSessionEntries(storePath, store);
-
-    const result = await sweepCronRunSessions({
-      cronConfig: { sessionRetention: false },
-      sessionStorePath: storePath,
-      nowMs: now,
-      log,
-      force: true,
     });
 
-    expect(result.swept).toBe(false);
-    expect(result.pruned).toBe(0);
+    const admission = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: ["busy-run"],
+      assertAllowed: () => {},
+    });
+    const warn = vi.fn();
+    const busyLog: Logger = { ...log, warn };
+
+    try {
+      const result = await sweepCronRunSessions({
+        sessionStorePath: storePath,
+        nowMs: now,
+        log: busyLog,
+      });
+
+      expect(result.swept).toBe(true);
+      expect(result.pruned).toBe(1);
+      expect(warn).not.toHaveBeenCalled();
+      const remaining = readSessionEntries(storePath);
+      expect(remaining[busyKey]).toMatchObject({ sessionId: "busy-run" });
+      expect(remaining[idleKey]).toBeUndefined();
+    } finally {
+      admission.release();
+    }
+
+    const retry = await sweepCronRunSessions({
+      sessionStorePath: storePath,
+      nowMs: now + 5 * 60_000,
+      log: busyLog,
+    });
+    expect(retry).toEqual({ swept: true, pruned: 1 });
+    expect(readSessionEntries(storePath)[busyKey]).toBeUndefined();
   });
 
-  it("throttles sweeps without force", async () => {
-    const now = Date.now();
-    // First sweep runs
-    const r1 = await sweepCronRunSessions({
-      sessionStorePath: storePath,
-      nowMs: now,
-      log,
-    });
-    expect(r1.swept).toBe(true);
+  it.each([
+    { sessionRetention: "not-a-duration", ageHours: 25, swept: true, pruned: 1 },
+    { sessionRetention: "1h", ageHours: 2, swept: true, pruned: 1 },
+    { sessionRetention: "0h", ageHours: 100, swept: false, pruned: 0 },
+  ])(
+    "applies retention $sessionRetention",
+    async ({ sessionRetention, ageHours, swept, pruned }) => {
+      const now = Date.now();
+      const sessionKey = "agent:main:cron:job1:run:run1";
+      await seedSessionEntries(storePath, {
+        [sessionKey]: { sessionId: "run1", updatedAt: now - ageHours * 3_600_000 },
+      });
+      expect(
+        await sweepCronRunSessions({
+          cronConfig: { sessionRetention },
+          sessionStorePath: storePath,
+          nowMs: now,
+          log,
+        }),
+      ).toEqual({ swept, pruned });
+      expect(Object.hasOwn(readSessionEntries(storePath), sessionKey)).toBe(!pruned);
+    },
+  );
 
-    // Second sweep (1 second later) is throttled
-    const r2 = await sweepCronRunSessions({
-      sessionStorePath: storePath,
-      nowMs: now + 1000,
-      log,
+  it("sweeps immediately when disabled retention is enabled again", async () => {
+    const now = Date.now();
+    const sessionKey = "agent:main:cron:job1:run:expired-run";
+    await seedSessionEntries(storePath, {
+      [sessionKey]: {
+        sessionId: "expired-run",
+        updatedAt: now - 25 * 3_600_000,
+      },
     });
-    expect(r2.swept).toBe(false);
+
+    expect(
+      await sweepCronRunSessions({
+        cronConfig: { sessionRetention: false },
+        sessionStorePath: storePath,
+        nowMs: now,
+        log,
+      }),
+    ).toEqual({ swept: false, pruned: 0 });
+
+    expect(
+      await sweepCronRunSessions({
+        sessionStorePath: storePath,
+        nowMs: now + 1_000,
+        log,
+      }),
+    ).toEqual({ swept: true, pruned: 1 });
+    expect(readSessionEntries(storePath)[sessionKey]).toBeUndefined();
   });
 
-  it("throttles per store path", async () => {
+  it("resumes retention cleanup after the wall clock moves backward", async () => {
     const now = Date.now();
-    const otherPath = path.join(tmpDir, "sessions-other.json");
+    const rolledBackNow = now - 3_600_000;
+    const sessionKey = "agent:main:cron:job1:run:clock-rollback";
 
-    const r1 = await sweepCronRunSessions({
-      sessionStorePath: storePath,
-      nowMs: now,
-      log,
-    });
-    expect(r1.swept).toBe(true);
+    await expect(
+      sweepCronRunSessions({ sessionStorePath: storePath, nowMs: now, log }),
+    ).resolves.toEqual({ swept: true, pruned: 0 });
 
-    const r2 = await sweepCronRunSessions({
-      sessionStorePath: otherPath,
-      nowMs: now + 1000,
-      log,
+    await seedSessionEntries(storePath, {
+      [sessionKey]: {
+        sessionId: "clock-rollback",
+        updatedAt: rolledBackNow - 25 * 3_600_000,
+      },
     });
-    expect(r2.swept).toBe(true);
 
-    const r3 = await sweepCronRunSessions({
-      sessionStorePath: storePath,
-      nowMs: now + 1000,
-      log,
-    });
-    expect(r3.swept).toBe(false);
+    await expect(
+      sweepCronRunSessions({ sessionStorePath: storePath, nowMs: rolledBackNow, log }),
+    ).resolves.toEqual({ swept: true, pruned: 1 });
+    expect(readSessionEntries(storePath)[sessionKey]).toBeUndefined();
+    await expect(
+      sweepCronRunSessions({
+        sessionStorePath: storePath,
+        nowMs: rolledBackNow + 1_000,
+        log,
+      }),
+    ).resolves.toEqual({ swept: false, pruned: 0 });
   });
 
   it("updates throttle after persistence errors so the next tick does not thrash (#105188)", async () => {
@@ -409,9 +607,9 @@ describe("sweepCronRunSessions", () => {
     const eacces = Object.assign(new Error("EACCES: permission denied, open 'sessions.json'"), {
       code: "EACCES",
     });
-    const listSpy = vi.spyOn(sessionAccessor, "listSessionEntries").mockImplementation(() => {
-      throw eacces;
-    });
+    const listSpy = vi
+      .spyOn(maintenanceReads, "readExpiredCronRunEntriesInWorker")
+      .mockRejectedValue(eacces);
 
     try {
       const first = await sweepCronRunSessions({
@@ -427,8 +625,9 @@ describe("sweepCronRunSessions", () => {
       expect(listSpy).toHaveBeenCalledTimes(1);
 
       warn.mockClear();
-      const immediateRetry = await sweepCronRunSessions({
-        sessionStorePath: storePath,
+      const immediateRetry = await sweepCronRunSessionsImpl({
+        agentId: "MAIN",
+        sessionStorePath: `${tmpDir}${path.sep}.${path.sep}sessions.json`,
         nowMs: now + 1_000,
         log: failingLog,
       });
@@ -447,5 +646,34 @@ describe("sweepCronRunSessions", () => {
     } finally {
       listSpy.mockRestore();
     }
+  });
+
+  it("preserves pending media with one snapshot for orphaned continuations", async () => {
+    const now = Date.now();
+    const keptKey = "agent:main:cron:job1:run:kept";
+    const prunedKey = "agent:main:cron:job1:run:pruned";
+    const kept: SessionEntry = {
+      sessionId: "kept",
+      updatedAt: now - 25 * 3_600_000,
+      delivery: { kind: "none" },
+      cronRunContinuation: {
+        lifecycleRevision: "revision-1",
+        phase: "continuing",
+        ownerRunId: "dead-gateway-run",
+        basePersisted: false,
+      },
+    };
+    await seedSessionEntries(storePath, {
+      [keptKey]: kept,
+      [prunedKey]: { ...kept, sessionId: "pruned" },
+    });
+    mediaGeneration.registerGeneratedMediaTaskActivity("kept-media", keptKey, "main");
+    expect(await sweepCronRunSessions({ sessionStorePath: storePath, nowMs: now, log })).toEqual({
+      swept: true,
+      pruned: 1,
+    });
+    expect(buildPendingSet).toHaveBeenCalledOnce();
+    expect(log.warn).not.toHaveBeenCalled();
+    expect(readSessionEntries(storePath)).toEqual({ [keptKey]: kept });
   });
 });

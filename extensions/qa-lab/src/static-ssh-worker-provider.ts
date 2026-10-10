@@ -68,14 +68,27 @@ function parseStaticSshWorkerSettings(profile: WorkerProfile): WorkerSshEndpoint
 }
 
 export function createStaticSshWorkerProvider(): WorkerProvider {
+  const resolveAllocation: WorkerProvider["resolveAllocation"] = async (_profile, opId) => {
+    if (!opId.trim()) {
+      throw new Error("static-ssh provision operation id must be non-empty");
+    }
+    return { leaseId: `${STATIC_SSH_LEASE_PREFIX}${opId}`, sharedHost: true };
+  };
   return {
     id: STATIC_SSH_WORKER_PROVIDER_ID,
-    async provision(profile, opId) {
-      if (!opId.trim()) {
-        throw new Error("static-ssh provision operation id must be non-empty");
+    supportedExecutionModes: ["remote-exec"],
+    resolveAllocation,
+    async provision(profile, opId, options) {
+      if (!options?.assertCurrent) {
+        throw new WorkerProviderError(
+          "Static SSH provisioning requires current Gateway allocation authority",
+        );
       }
+      options.assertCurrent();
+      const allocation = await resolveAllocation(profile, opId);
+      options.assertCurrent();
       return {
-        leaseId: `${STATIC_SSH_LEASE_PREFIX}${opId}`,
+        ...allocation,
         ssh: parseStaticSshWorkerSettings(profile),
       };
     },
@@ -83,7 +96,7 @@ export function createStaticSshWorkerProvider(): WorkerProvider {
       const active =
         leaseId.startsWith(STATIC_SSH_LEASE_PREFIX) &&
         leaseId.length > STATIC_SSH_LEASE_PREFIX.length;
-      return { status: active ? "active" : "unknown" };
+      return active ? { status: "active", sharedHost: true } : { status: "unknown" };
     },
     // Development-only: a static worker is a shared host, not an isolation boundary.
     // Destroy releases the logical lease; it does not stop or clean the host.
