@@ -159,7 +159,11 @@ export abstract class InworldRealtimeVoiceProtocol {
       bytes: 0,
       generation: this.outputAudioGeneration,
     });
-    this.assistantAudioItem = null;
+    // An added distinct item has no audio yet; the legacy sink may still play
+    // its predecessor. Reused IDs must drop their old timestamp before callbacks.
+    if (this.assistantAudioItem?.itemId === itemId) {
+      this.assistantAudioItem = null;
+    }
   }
 
   protected recordNegotiatedOutputFormat(value: unknown): void {

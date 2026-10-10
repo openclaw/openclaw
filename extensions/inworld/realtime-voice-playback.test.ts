@@ -26,6 +26,53 @@ afterEach(() => {
 
 describe("Inworld response-owned audio truncation", () => {
   it.each([
+    { name: "host barge-in", serverVad: false },
+    { name: "server VAD", serverVad: true },
+  ])("retains distinct pending playback before successor audio on $name", async ({ serverVad }) => {
+    const onClearAudio = vi.fn();
+    const bridge = createTestBridge({ onMark: vi.fn(), onClearAudio });
+    bridges.push(bridge);
+    const socket = await openRealtimeBridge(bridge);
+    socket.emitServer({ type: "response.created", response: { id: "same-response" } });
+    socket.emitServer({
+      type: "response.output_item.added",
+      response_id: "same-response",
+      item: { id: "playing-item", type: "message", role: "assistant" },
+    });
+    bridge.setMediaTimestamp(0);
+    socket.emitServer({
+      type: "response.output_audio.delta",
+      response_id: "same-response",
+      item_id: "playing-item",
+      delta: Buffer.alloc(8000).toString("base64"),
+    });
+    bridge.setMediaTimestamp(250);
+    socket.emitServer({
+      type: "response.output_item.added",
+      response_id: "same-response",
+      item: { id: "next-item", type: "message", role: "assistant" },
+    });
+    if (serverVad) {
+      socket.emitServer({ type: "input_audio_buffer.speech_started" });
+    } else {
+      bridge.handleBargeIn?.({ audioPlaybackActive: true });
+    }
+    const sent = parseSent(socket);
+    expect(onClearAudio).toHaveBeenCalledOnce();
+    expect(sent.filter((event) => event.type === "response.cancel")).toHaveLength(
+      serverVad ? 0 : 1,
+    );
+    expect(sent.filter((event) => event.type === "conversation.item.truncate")).toEqual([
+      {
+        type: "conversation.item.truncate",
+        item_id: "playing-item",
+        content_index: 0,
+        audio_end_ms: 250,
+      },
+    ]);
+  });
+
+  it.each([
     { audioFormat: undefined, bytesPerMs: 8 },
     { audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ, bytesPerMs: 48 },
   ])(
