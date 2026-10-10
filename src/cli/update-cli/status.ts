@@ -164,6 +164,18 @@ async function inspectUpdateStatus(opts: UpdateStatusOptions): Promise<void> {
   const channelLabel = channelInfo.label;
 
   const updateAvailability = resolveUpdateAvailability(update);
+  let immutableCoverage;
+  let immutableCoverageLines: string[] = [];
+  if (update.immutable) {
+    try {
+      const { inspectImmutableUpdateCoverage, formatImmutableUpdateCoverage } =
+        await import("../../infra/update-immutable-inspection.js");
+      immutableCoverage = await inspectImmutableUpdateCoverage({ root: update.immutable.root });
+      immutableCoverageLines = formatImmutableUpdateCoverage(immutableCoverage);
+    } catch (error) {
+      immutableCoverageLines = [`Immutable coverage unavailable: ${formatErrorMessage(error)}`];
+    }
+  }
 
   const runStatus = await readUpdateRunStatus();
   const recoveryStatus = await readUpdateRecoverySetStatus();
@@ -263,6 +275,10 @@ async function inspectUpdateStatus(opts: UpdateStatusOptions): Promise<void> {
         config: configChannel,
       },
       availability: updateAvailability,
+      ...(immutableCoverage ? { immutableCoverage } : {}),
+      ...(update.immutable && !immutableCoverage
+        ? { immutableCoverageError: immutableCoverageLines[0] }
+        : {}),
       ...(runtimeFindings.length > 0 ? { runtimeFindings } : {}),
       ...(serviceDefinition ? { serviceDefinition } : {}),
       ...(lastGatewayInstallationReplacement ? { lastGatewayInstallationReplacement } : {}),
@@ -384,6 +400,10 @@ async function inspectUpdateStatus(opts: UpdateStatusOptions): Promise<void> {
     }).trimEnd(),
   );
   defaultRuntime.log("");
+
+  for (const line of immutableCoverageLines) {
+    defaultRuntime.log(safeMessage(line));
+  }
 
   if (lastGatewayInstallationReplacement) {
     const { reason, completedAtMs } = lastGatewayInstallationReplacement;

@@ -416,6 +416,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       progressCardInitialLoading: this.progressCardInitialLoading,
       progressCardRefresh,
       collapseTaskProgress: state.settings.chatCollapseTaskProgress === true,
+      ...this.captureProgressCardActions(canWriteProgressCard),
       readingHistory: state.chatReadingHistory,
       onProgressManipulate: () => {
         lockChatScroll(state);
@@ -424,7 +425,6 @@ export class ChatPane extends ChatPaneLayoutRender {
       onDismissProgressCard: progressPresentation
         ? (card) => this.hideProgressCard(card)
         : undefined,
-      onClearSavedProgressCard: canWriteProgressCard ? this.clearSavedProgressCard : undefined,
       gatewayQuestionPrompts,
       asyncQuestionStorage:
         !catalogKey && !suggestionViewer ? this.chatState.composerPersistence.durableScope : null,
