@@ -124,16 +124,24 @@ suite.define(() => {
           )
           .toBe(true);
         await page.addInitScript(() => {
-          const frames: Array<{ title: string; welcome: boolean; board: boolean }> = [];
+          const frames: Array<{
+            title: string;
+            welcome: boolean;
+            board: boolean;
+            boardRegion: string | null;
+          }> = [];
           Reflect.set(window, "dashboardPaints", frames);
           const observe = () => {
             const pane = document.querySelector(".chat-pane-cache__pane--visible");
             const heading = pane?.querySelector(".chat-pane__session-title-text");
             if (heading) {
+              const board = pane?.querySelector("[data-panel-skeleton=board]");
+              const bounds = board?.getBoundingClientRect();
               frames.push({
                 title: heading.textContent?.trim() ?? "",
                 welcome: Boolean(pane?.querySelector(".agent-chat__welcome")),
-                board: Boolean(pane?.querySelector("[data-panel-skeleton=board]")),
+                board: Boolean(bounds && bounds.width > 0 && bounds.height > 0),
+                boardRegion: board?.closest("[data-region]")?.getAttribute("data-region") ?? null,
               });
             }
             if (frames.length < 120) {
@@ -159,11 +167,21 @@ suite.define(() => {
           const frames = await page.evaluate(() => Reflect.get(window, "dashboardPaints"));
           console.log("Dashboard reload painted frames", JSON.stringify(frames));
           expect(frames.length).toBeGreaterThan(0);
-          expect(frames).toEqual(expect.arrayContaining([{ title, welcome: false, board: true }]));
+          expect(frames).toEqual(
+            expect.arrayContaining([{ title, welcome: false, board: true, boardRegion: "main" }]),
+          );
           expect(
             frames.every(
-              (frame: { title: string; welcome: boolean; board: boolean }) =>
-                frame.title === title && !frame.welcome && frame.board,
+              (frame: {
+                title: string;
+                welcome: boolean;
+                board: boolean;
+                boardRegion: string | null;
+              }) =>
+                frame.title === title &&
+                !frame.welcome &&
+                frame.board &&
+                frame.boardRegion === "main",
             ),
           ).toBe(true);
           expect(await gateway.getRequests("board.get")).toHaveLength(0);
