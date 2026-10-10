@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
-import { toUSVString } from "node:util";
 import { getEnvironmentData, setEnvironmentData, threadId } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { hasErrnoCode } from "./errno.js";
@@ -26,11 +25,12 @@ import {
   type SqliteDatabaseAdmissionExchange as Exchange,
   type StagedAdmissionFact,
 } from "./sqlite-database-admission-record.js";
+import { createSqliteDatabaseWriteReceipts } from "./sqlite-database-write-receipts.js";
 import {
   getSqliteNativeAdmissionFacts,
   hasSqliteNativeAdmissionOperation,
 } from "./sqlite-native-admission.js";
-import { hasSqlitePostCommitScope, stageSqliteTransactionState } from "./sqlite-post-commit.js";
+import { stageSqliteTransactionState } from "./sqlite-post-commit.js";
 import { isSoleDatabaseFileDescriptor } from "./sqlite-worker-identity.js";
 
 export { readSqliteDatabaseAdmissions } from "./sqlite-database-admission-record.js";
@@ -52,10 +52,6 @@ const state = resolveGlobalSingleton(Symbol.for("openclaw.sqliteDatabaseAdmissio
   schemaWriters: new WeakMap<DatabaseSync, Admission>(),
   dataWriters: new WeakMap<DatabaseSync, Admission | undefined>(),
   localWriteRevisions: new WeakMap<DatabaseSync, number>(),
-  writeScopes: new WeakMap<DatabaseSync, readonly string[]>(),
-  pendingWriteScopes: new WeakMap<DatabaseSync, Set<string> | null>(),
-  localScopeRevisions: new WeakMap<DatabaseSync, Map<string, number>>(),
-  localUnscopedRevisions: new WeakMap<DatabaseSync, number>(),
   ddlRevisions: new WeakMap<DatabaseSync, number>(),
   schemaDirty: new WeakSet<DatabaseSync>(),
   misses: new WeakMap<Admission, Map<string, number>>(),
@@ -64,6 +60,31 @@ const state = resolveGlobalSingleton(Symbol.for("openclaw.sqliteDatabaseAdmissio
   exchanging: false,
   publication: 0,
 }));
+
+const scopedWrites = createSqliteDatabaseWriteReceipts({
+  admission,
+  pathAdmission,
+  readRevision: readSqliteDatabaseWriteRevision,
+  hasWriter: (database) => state.dataWriters.has(database),
+  writer: (database) => state.dataWriters.get(database),
+  suspended: (database) => state.suspended.has(database),
+  exchange,
+  publish() {
+    rememberEnvironment();
+    exchange();
+  },
+});
+export const {
+  withSqliteDatabaseWriteScope,
+  withoutSqliteDatabaseWriteScope,
+  readSqliteDatabaseScopedWriteToken,
+  readSqliteDatabaseScopedWriteTokenForPath,
+  readSqliteDatabasePendingScopedWriteToken,
+  readSqliteDatabaseWriteTokenForPath,
+  readSqliteDatabasePendingWriteRevision,
+  readSqliteDatabasePendingWriteToken,
+} = scopedWrites;
+export { sqliteSessionIdWriteScope } from "./sqlite-database-write-receipts.js";
 
 function rememberEnvironment(): void {
   setEnvironmentData(SQLITE_DATABASE_ADMISSIONS_KEY, captureSqliteDatabaseAdmissions());
@@ -399,18 +420,7 @@ export function prepareSqliteDatabaseWriter(database: DatabaseSync): Admission |
 
 /** Fence native writes through their transaction or implicit-cursor settlement. */
 export function beginSqliteDatabaseWrite(database: DatabaseSync, unscoped = false): void {
-  const scope = unscoped ? undefined : state.writeScopes.get(database);
-  const pending = state.pendingWriteScopes.get(database);
-  if (!scope || pending === null) {
-    // Unscoped native DML, schema work, and reentrant callbacks explicitly fence the database.
-    state.pendingWriteScopes.set(database, null);
-  } else {
-    const keys = pending ?? new Set<string>();
-    for (const key of scope) {
-      keys.add(key);
-    }
-    state.pendingWriteScopes.set(database, keys);
-  }
+  scopedWrites.begin(database, unscoped);
   if (state.dataWriters.has(database)) {
     return;
   }
@@ -429,229 +439,11 @@ export function finishSqliteDatabaseWrite(database: DatabaseSync): void {
   const record = state.dataWriters.get(database);
   state.dataWriters.delete(database);
   state.localWriteRevisions.set(database, (state.localWriteRevisions.get(database) ?? 0) + 1);
-  const keys = state.pendingWriteScopes.get(database);
-  state.pendingWriteScopes.delete(database);
-  if (keys) {
-    const local = state.localScopeRevisions.get(database);
-    for (const key of keys) {
-      if (local?.has(key)) {
-        local.set(key, local.get(key)! + 1);
-      }
-      const revision = record?.writeScopes.get(key);
-      if (revision) {
-        Atomics.add(new Int32Array(revision), 0, 1);
-      }
-    }
-  } else {
-    state.localUnscopedRevisions.set(
-      database,
-      (state.localUnscopedRevisions.get(database) ?? 0) + 1,
-    );
-    if (record) {
-      Atomics.add(new Int32Array(record.generation), 6, 1);
-    }
-  }
+  scopedWrites.finish(database, record);
   if (record) {
     Atomics.add(new Int32Array(record.generation), 5, 1);
     Atomics.sub(new Int32Array(record.writers.get(threadId)!.cell), 2, 1);
   }
-}
-
-type SqliteDatabaseWriteScope = string | { sessionId: string };
-
-/** Shared windows and transcripts can affect several logical keys for one session ID. */
-export function sqliteSessionIdWriteScope(sessionId: string): { sessionId: string } {
-  return { sessionId };
-}
-
-/** A typed owner certifies all session keys affected by this synchronous kernel. */
-export function withSqliteDatabaseWriteScope<T>(
-  database: DatabaseSync,
-  scope: readonly SqliteDatabaseWriteScope[],
-  run: () => T,
-): T {
-  const record = admission(database);
-  const tracked = record
-    ? Atomics.load(new Int32Array(record.generation), 7) > 0
-    : state.localScopeRevisions.has(database);
-  if (!tracked) {
-    const value = run();
-    if (value instanceof Promise) {
-      throw new Error("SQLite write scopes cannot await work");
-    }
-    return value;
-  }
-  const keys = normalizedWriteScopes(scope);
-  if (record && record.writeScopes.size < Atomics.load(new Int32Array(record.generation), 7)) {
-    // Only cold actor-key registration needs metadata exchange. Inactive actors add none.
-    exchange(record.location);
-  }
-  const previous = state.writeScopes.get(database);
-  state.writeScopes.set(database, keys);
-  try {
-    const value = run();
-    if (value instanceof Promise) {
-      throw new Error("SQLite write scopes cannot await work");
-    }
-    return value;
-  } finally {
-    if (previous) {
-      state.writeScopes.set(database, previous);
-    } else {
-      state.writeScopes.delete(database);
-    }
-  }
-}
-
-/** Authority and user callbacks cannot borrow their caller's certified mutation scope. */
-export function withoutSqliteDatabaseWriteScope<T>(database: DatabaseSync, run: () => T): T {
-  const previous = state.writeScopes.get(database);
-  state.writeScopes.delete(database);
-  try {
-    return run();
-  } finally {
-    if (previous) {
-      state.writeScopes.set(database, previous);
-    }
-  }
-}
-
-function ensureWriteScopes(record: Admission, keys: readonly string[]): void {
-  let changed = false;
-  for (const key of keys) {
-    if (!record.writeScopes.has(key)) {
-      record.writeScopes.set(key, new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
-      if (threadId === 0) {
-        Atomics.add(new Int32Array(record.generation), 7, 1);
-      }
-      changed = true;
-    }
-  }
-  if (changed) {
-    // Scope discovery is cold metadata, shared through the existing admission exchange.
-    Atomics.add(new Int32Array(record.generation), 2, 1);
-    rememberEnvironment();
-    exchange();
-  }
-}
-
-function scopedWriteToken(
-  record: Admission,
-  keys: readonly string[],
-  pending?: Set<string> | null,
-): string {
-  const generation = new Int32Array(record.generation);
-  return JSON.stringify([
-    record.identity,
-    record.generationId,
-    Atomics.load(generation, 0),
-    (Atomics.load(generation, 6) + (pending === null ? 1 : 0)) | 0,
-    keys.map((key) => [
-      key,
-      (Atomics.load(new Int32Array(record.writeScopes.get(key)!), 0) +
-        (pending?.has(key) ? 1 : 0)) |
-        0,
-    ]),
-  ]);
-}
-
-function localScopedWriteToken(
-  database: DatabaseSync,
-  keys: readonly string[],
-  pending?: Set<string> | null,
-): string {
-  return JSON.stringify([
-    "memory",
-    (state.localUnscopedRevisions.get(database) ?? 0) + (pending === null ? 1 : 0),
-    keys.map((key) => [
-      key,
-      (state.localScopeRevisions.get(database)?.get(key) ?? 0) + (pending?.has(key) ? 1 : 0),
-    ]),
-  ]);
-}
-
-function normalizedWriteScopes(scope: string | readonly SqliteDatabaseWriteScope[]): string[] {
-  const keys = typeof scope === "string" ? [scope] : scope;
-  return [
-    ...new Set(
-      keys.map((key) =>
-        typeof key === "string"
-          ? JSON.stringify(["key", toUSVString(key)])
-          : JSON.stringify(["session-id", toUSVString(key.sessionId)]),
-      ),
-    ),
-  ].sort();
-}
-
-function ensureLocalWriteScopes(database: DatabaseSync, keys: readonly string[]): void {
-  const revisions = state.localScopeRevisions.get(database) ?? new Map<string, number>();
-  for (const key of keys) {
-    if (!revisions.has(key)) {
-      revisions.set(key, 0);
-    }
-  }
-  state.localScopeRevisions.set(database, revisions);
-}
-
-/** Per-key receipts survive unrelated committed writes; unsettled native writes still fence reads. */
-export function readSqliteDatabaseScopedWriteToken(
-  database: DatabaseSync,
-  scope: string | readonly SqliteDatabaseWriteScope[],
-): string | undefined {
-  const keys = normalizedWriteScopes(scope);
-  const record = admission(database);
-  if (record) {
-    ensureWriteScopes(record, keys);
-  } else {
-    ensureLocalWriteScopes(database, keys);
-  }
-  const before = readSqliteDatabaseWriteRevision(database);
-  if (before === undefined) {
-    return undefined;
-  }
-  const token = record ? scopedWriteToken(record, keys) : localScopedWriteToken(database, keys);
-  return readSqliteDatabaseWriteRevision(database) === before ? token : undefined;
-}
-
-export function readSqliteDatabaseScopedWriteTokenForPath(
-  location: string,
-  scope: string | readonly SqliteDatabaseWriteScope[],
-): string | undefined {
-  const keys = normalizedWriteScopes(scope);
-  const record = pathAdmission(location);
-  if (!record || isRetired(record)) {
-    return undefined;
-  }
-  ensureWriteScopes(record, keys);
-  const before = readWriteRevision(record, 0, exchange);
-  if (before === undefined) {
-    return undefined;
-  }
-  const token = scopedWriteToken(record, keys);
-  return readWriteRevision(record, 0, exchange) === before ? token : undefined;
-}
-
-/** Capture the exact post-commit token before any fallible publication executes. */
-export function readSqliteDatabasePendingScopedWriteToken(
-  database: DatabaseSync,
-  scope: string | readonly SqliteDatabaseWriteScope[],
-): string | undefined {
-  const keys = normalizedWriteScopes(scope);
-  const record = admission(database);
-  if (record) {
-    ensureWriteScopes(record, keys);
-  } else {
-    ensureLocalWriteScopes(database, keys);
-  }
-  const before = readSqliteDatabaseWriteRevision(database);
-  if (before === undefined) {
-    return undefined;
-  }
-  const pending = state.pendingWriteScopes.get(database);
-  const token = record
-    ? scopedWriteToken(record, keys, pending)
-    : localScopedWriteToken(database, keys, pending);
-  return readSqliteDatabaseWriteRevision(database) === before ? token : undefined;
 }
 
 /** A receipt revision is reusable only while no sibling can be publishing a native commit. */
@@ -667,40 +459,6 @@ export function readSqliteDatabaseWriteRevision(database: DatabaseSync): number 
       : undefined;
   }
   return readWriteRevision(record, state.dataWriters.get(database) === record ? 1 : 0, exchange);
-}
-
-/** Host row caches retain a physical identity and receipt without opening SQLite. */
-export function readSqliteDatabaseWriteTokenForPath(location: string): string | undefined {
-  const record = pathAdmission(location);
-  if (!record || isRetired(record)) {
-    return undefined;
-  }
-  const revision = readWriteRevision(record, 0, exchange);
-  return revision === undefined ? undefined : `${record.identity}:${revision}`;
-}
-
-/** The managed writer's next settlement advances its physical revision exactly once. */
-export function readSqliteDatabasePendingWriteRevision(database: DatabaseSync): number | undefined {
-  const revision = readSqliteDatabaseWriteRevision(database);
-  return revision === undefined ? undefined : revision + (state.dataWriters.has(database) ? 1 : 0);
-}
-
-/** Predict a committed token while its native mutation still holds the writer fence. */
-export function readSqliteDatabasePendingWriteToken(database: DatabaseSync): string | undefined {
-  if (
-    !database.isOpen ||
-    !database.isTransaction ||
-    !hasSqlitePostCommitScope(database) ||
-    state.suspended.has(database)
-  ) {
-    return undefined;
-  }
-  const record = state.dataWriters.get(database);
-  if (!record || isRetired(record)) {
-    return undefined;
-  }
-  const revision = readWriteRevision(record, 1, exchange);
-  return revision === undefined ? undefined : `${record.identity}:${(revision + 1) | 0}`;
 }
 
 /** TEMP-trigger owners already see their own writes and only need sibling settlement. */

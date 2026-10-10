@@ -31,6 +31,8 @@ import {
 } from "./session-accessor.sqlite-delete-snapshot.js";
 import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
 import {
+  decodeSessionColdRecords,
+  MAX_COLD_ARCHIVE_BYTES,
   readVerifiedSessionColdArchive,
   resolveSessionColdArchivePath,
   sessionColdRecordSchema,
@@ -77,8 +79,6 @@ import {
 } from "./session-turn.kernel.js";
 import { resolveSessionWorkStartError } from "./session-work-start.js";
 import { prepareTranscriptPayload, transcriptEventJsonSql } from "./transcript-payload.js";
-
-const MAX_COLD_ARCHIVE_BYTES = 64 * 1024 * 1024;
 
 export type SessionColdPreparationWorkerData = {
   type: "sqlite-transcript-archive-v2";
@@ -416,35 +416,6 @@ export async function prepareSessionColdBatchInWorker(
   }
 
   return result;
-}
-
-function decodeSessionColdRecords(
-  bytes: Uint8Array,
-  archive: SessionColdArchive,
-): SessionColdRecord[] {
-  const records = zlib
-    .zstdDecompressSync(bytes, { maxOutputLength: MAX_COLD_ARCHIVE_BYTES })
-    .toString("utf8")
-    .trimEnd()
-    .split("\n")
-    .map((line) => sessionColdRecordSchema.parse(JSON.parse(line)));
-  const header = records[0];
-  const events = records.filter((record) => record.kind === "event");
-  if (
-    header?.kind !== "header" ||
-    header.sessionId !== archive.session_id ||
-    header.generation !== archive.generation ||
-    records.slice(1).some((record) => record.kind === "header") ||
-    events.length !== archive.event_count ||
-    events.at(-1)?.row.seq !== archive.last_seq ||
-    events.reduce((sum, event) => sum + Buffer.byteLength(event.row.event_json), 0) +
-      events.length -
-      1 !==
-      archive.raw_bytes
-  ) {
-    throw new Error("Cold transcript archive metadata does not match its contents");
-  }
-  return records;
 }
 
 export async function prepareSessionColdRestoreInWorker(
